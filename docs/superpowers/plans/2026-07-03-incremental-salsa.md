@@ -43,10 +43,10 @@ under-invalidation.
      deleted (H7); `LastGoodBinary`/`VerifiedFfiInterface`/`WatchedPath` are
      newtypes only constructible through a verifying constructor.
 
-3. **Additional non-negotiables carried from CLAUDE.md / repo:** no eval hole
+3. **Additional non-negotiables carried from AGENTS.md / repo:** no eval hole
    (INV-2: `data-sky-eval` stays forbidden, CSP no-`unsafe-eval` preserved at
    every reload level); last-good binary stays alive on any red build (INV-3);
-   every rebuild+cargo cycle is timeout-bounded (CLAUDE.md §3); the workspace
+   every rebuild+cargo cycle is timeout-bounded (AGENTS.md §3); the workspace
    `deny(unwrap_used, panic, indexing_slicing, unreachable)` lints stay green on
    all new crates; emit only through the typed escaped-literal IR emitter, never
    string-concat source-derived data into `.rs` (H10).
@@ -376,9 +376,9 @@ first-class, timeout-bounded `ipe build` integration test on `tests/golden/basic
 emit → cargo build → run → assert prints `42`. Assert the "cargo built" signal is
 distinct from the "lowering succeeded" signal.
 **Do.** Add the cargo invocation (`CGO`-equivalent path detection is Go-only, N/A
-here) with a hard timeout ceiling (CLAUDE.md §3), against a warm shared target dir
+here) with a hard timeout ceiling (AGENTS.md §3), against a warm shared target dir
 + sccache. Print "cold build (first run)" vs warm distinctly; surface ENOSPC as a
-first-class failure mode (CLAUDE.md §6), not a mis-attributed codegen regression.
+first-class failure mode (AGENTS.md §6), not a mis-attributed codegen regression.
 `ipe watch` composes THIS step — it does not own a divergent private driver.
 
 ### Task 17 — `project_config` field-granular projection firewall
@@ -423,7 +423,7 @@ byte-for-byte across all files.
    dead-fn→live promotion.
 
 **Do.** Wire it into CI as a required check. A divergence **fails the build** and
-files a task (CLAUDE.md "spotted = filed"). This gate also catches interner
+files a task (AGENTS.md "spotted = filed"). This gate also catches interner
 demand-order nondeterminism (Task 3) and metadata under-firewalling (Task 14).
 **Done when.** Green on every fixture + every adversarial edit; CI-required.
 
@@ -517,7 +517,7 @@ unrepresentable; last-good binary stays alive on every red build.
 it captures **artifact path + content hash** (not a live-process handle) so
 recovery survives the old process already being dead. Down-window explicit +
 bounded. Every cycle timeout-bounded; child killed when watcher exits; prefer
-event-driven monitoring over polling wait-loops (CLAUDE.md §2/§3).
+event-driven monitoring over polling wait-loops (AGENTS.md §2/§3).
 
 ### Task 24 — L0+ session continuity: sqlite dev-store default + schema-gated restore (H21, H22, H24)
 

@@ -106,7 +106,7 @@ pub enum ReadinessCheck {
 
 /// Bounded timeouts governing every phase of a restart cycle.
 ///
-/// (design doc "every stage timeout-bounded", CLAUDE.md §3). None of these
+/// (design doc "every stage timeout-bounded", AGENTS.md §3). None of these
 /// is optional — a caller that wants "no timeout" is a caller with a
 /// soundness bug.
 #[derive(Debug, Clone, Copy)]
@@ -318,7 +318,7 @@ impl SupervisorState {
     }
 
     /// Kill whatever is running (used on watcher shutdown — "the child
-    /// process is killed when the watcher exits", CLAUDE.md §3 / design doc
+    /// process is killed when the watcher exits", AGENTS.md §3 / design doc
     /// "Timeout / hang bounding"). No-op on `NotRunning`.
     pub fn shutdown(&mut self, timeouts: RestartTimeouts) {
         if let Self::Running { child, .. } = self {

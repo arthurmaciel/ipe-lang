@@ -674,7 +674,7 @@ pub fn db_decode_optional<
 // pattern (a) churns connections and, on Postgres/MySQL, (b) blows straight
 // through the server's `max_connections` cap — a resource-exhaustion / DoS vector
 // driven purely by unpredictable user code. The runtime MUST absorb that
-// (runtime-rust/CLAUDE.md: consistent, secure, sound, efficient under any
+// (runtime-rust/AGENTS.md: consistent, secure, sound, efficient under any
 // well-typed Ipê program). So `Db.connect <url>` resolves to ONE bounded,
 // shared pool per URL — independent of how often the user calls it.
 

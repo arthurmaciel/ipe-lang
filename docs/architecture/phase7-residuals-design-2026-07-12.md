@@ -548,7 +548,7 @@ are already in place and unchanged) — Stage C touches only `store.rs`.
    leaving a real H24 gap open (§1.3).
 5. **Exhaustive `IrType` match, no catch-all** — mirrors
    `ir_type_display_name`'s existing exhaustive match; a future `IrType`
-   variant becomes a compile error in this file too (§1.3, CLAUDE.md §8's
+   variant becomes a compile error in this file too (§1.3, AGENTS.md §8's
    "New AST nodes require explicit walker arms" non-regression rule).
 6. **Fuel-bounded recursion reusing `emit_model_gate.rs`'s existing `64`**
    — no new cycle-safety mechanism; the type checker already makes

@@ -2,7 +2,7 @@ module State exposing (..)
 
 -- Pure types + same-shape helpers. No Ipe.Ui imports here so the
 -- type-checker stays well below the heap-exhaustion limit
--- (CLAUDE.md Limitation #17).
+-- (AGENTS.md Limitation #17).
 import Ipe.Prelude exposing (..)
 
 

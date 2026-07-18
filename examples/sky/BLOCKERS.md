@@ -78,7 +78,7 @@ Ipe.Css.Length, found () -> Ipe.Css.Length`.
 `zero`/`auto`/`none`/`systemFont` are now bare values matching v0.17 Sky (`monoFont`
 stays `() -> String`, matching upstream). The four first-party examples that used the
 old `(zero ())` call form (`examples/{09,10,12}-*`, `examples/16-skychess`) were
-migrated to the bare form. CLAUDE.md Active Limitation #9 dropped.
+migrated to the bare form. AGENTS.md Active Limitation #9 dropped.
 **SEAL:** mirrored 09/10/12 → `ipe build` exit 0 → emitted `cargo build` exit 0.
 
 ### D2. Value binding shares a name with a record-alias auto-ctor — FIXED

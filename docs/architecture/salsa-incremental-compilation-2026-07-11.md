@@ -739,7 +739,7 @@ Both walkers (`walk_expr` over all 30 `Expr` variants, `walk_pat` over all 11
 `Pat` variants) are EXHAUSTIVE matches — no wildcard arm — so a future IR
 variant cannot be silently under-walked; the compiler forces this file to be
 revisited when `sky_ir::Expr` or `sky_ir::Pat` grows a case (the same
-discipline `CLAUDE.md` §8 requires of the Go/Haskell compiler's AST walkers,
+discipline `AGENTS.md` §8 requires of the Go/Haskell compiler's AST walkers,
 applied here to the Rust IR).
 
 **Wired onto the production path as a forward seam.** `compile_prepared`

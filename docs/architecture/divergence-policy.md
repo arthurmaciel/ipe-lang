@@ -173,7 +173,7 @@ match Go exactly (`unicode.IsDigit`/`Nd`, `IsLower`/`Ll`, `IsUpper`/`Lu`,
   ipe's output cached): (1) the bare arity-0 kernel value `Uuid.v4` / `Uuid.v7`
   evaluates to a fresh `String` call on the Rust backend (the documented
   bare-reference form), whereas the Go reference leaves the bare reference as a
-  kernel function value (CLAUDE.md Limitation #7 — arity-0 kernel codegen), so
+  kernel function value (AGENTS.md Limitation #7 — arity-0 kernel codegen), so
   `uuid_format`'s length/version-nibble checks differ on Go; (2) the Rust
   backend's `Uuid.parse` accepts a canonical hyphenated UUID (`Just`) and rejects
   malformed input (`Nothing`), whereas the Go reference returns `Nothing` for the

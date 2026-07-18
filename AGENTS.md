@@ -1,4 +1,4 @@
-# CLAUDE.md — Ipê language authoring reference
+# AGENTS.md — Ipê language authoring reference
 
 > **Ipê** — Elm-family pure-functional language, compiles to Rust.
 > Compiler + stdlib modules currently `Ipê.*`-prefixed pending rename — use

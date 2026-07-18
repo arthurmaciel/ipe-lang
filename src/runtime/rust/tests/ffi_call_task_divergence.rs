@@ -9,7 +9,7 @@
 //! construction. The Rust backend exists precisely to refuse that risk surface:
 //! mirroring Go's `%v`-string registry would reintroduce the
 //! `Box<dyn Any>`/downcast dynamism this backend is built to design away
-//! (runtime-rust/CLAUDE.md, "NO RUNTIME ERRORS — existential"). So the
+//! (runtime-rust/AGENTS.md, "NO RUNTIME ERRORS — existential"). So the
 //! *dynamic* shape of `Ffi.callTask` / `Ffi.callPure` (non-literal kernel name
 //! or non-literal args list) is deliberately guarded, NOT served — it is
 //! at-parity-by-design, not a deferral.

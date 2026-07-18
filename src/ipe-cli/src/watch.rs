@@ -359,7 +359,7 @@ enum OrchestratorEvent {
 /// [`WatchHandle`]'s `Drop` safety net) will block waiting for the
 /// orchestrator thread to confirm it has actually finished tearing down
 /// (child process killed/reaped, watcher + coalesce threads joined) —
-/// never an unbounded wait (CLAUDE.md §3's "every long-running command MUST
+/// never an unbounded wait (AGENTS.md §3's "every long-running command MUST
 /// be timeout-bounded"). Generously above the realistic worst case: a
 /// `graceful_stop` of [`ipe_watch::RestartTimeouts::default`]'s 3 s, plus
 /// slack for the cargo-kill waiter's poll loop, the compile worker's salsa

@@ -145,7 +145,7 @@ issueToken cfg nowSeconds payload =
             logAndFail "issueToken.failed" e
 
 
--- Two-level error pattern (CLAUDE.md): generate a 4-byte correlation
+-- Two-level error pattern (AGENTS.md): generate a 4-byte correlation
 -- id, log the real error server-side, return only the id to the
 -- client.  Exercises Crypto.randomToken + Log.errorWith.
 logAndFail : String -> Error -> Task Error Response
@@ -168,7 +168,7 @@ logAndFail op e =
 
 
 -- v0.16.3 #467 fix verification — the canonical `|>` chain (per
--- CLAUDE.md / docs/stdlib.md) now works.  Pre-fix this panicked
+-- AGENTS.md / docs/stdlib.md) now works.  Pre-fix this panicked
 -- with `rt.Coerce: expected ..._Response_R, got rt.SkyResponse`.
 -- Closes the workaround documented at Routes.Todos.errorJson.
 errorJson : Int -> String -> Response

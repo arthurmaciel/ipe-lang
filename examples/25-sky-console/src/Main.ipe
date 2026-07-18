@@ -11,7 +11,7 @@ module Main exposing (main)
 -- onClick → Msg → update → re-render via Ipe.Live's framework
 -- wire (SSE + POST /_sky/event). Multi-module split so the
 -- type-checker stays well below the heap-exhaustion limit
--- (CLAUDE.md Limitation #17).
+-- (AGENTS.md Limitation #17).
 import Ipe.Prelude exposing (..)
 import Ipe.Cmd as Cmd
 import Ipe.Sub as Sub

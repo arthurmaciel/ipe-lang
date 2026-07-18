@@ -267,7 +267,7 @@ does not start M-D/M-E against a `KernelFn` enum that has to be re-keyed later.
   `Result<_, String>`.** The Haskell `validateCall :: Either String …` and
   `parseCall`'s `fail String` are stringly-typed error carriers that MUST NOT
   port verbatim — a `Result String a` in a public surface violates the
-  no-`Result String a` non-regression rule (CLAUDE.md §8). The Rust decoder
+  no-`Result String a` non-regression rule (AGENTS.md §8). The Rust decoder
   returns `Result<Call, Diagnostic>` where `Diagnostic` carries the `IPE-F4400`
   code + structured span/reason; the serde error path is adapted into that typed
   `Diagnostic`, never surfaced as a bare `String`.
@@ -286,7 +286,7 @@ does not start M-D/M-E against a `KernelFn` enum that has to be re-keyed later.
   wrapping: `u64` param ← `i64` is `.max(0) as u64`; `u64`/`usize`/`u128` return →
   `i64` is `.min(i64::MAX …) as i64` (`NumCoerce.hs:70,101`); platform widths
   (`usize`/`isize`) route through `try_from` so they are 32-bit-correct by
-  construction. The "no silent numeric coercion" rule (CLAUDE.md) is satisfied
+  construction. The "no silent numeric coercion" rule (AGENTS.md) is satisfied
   because the clamp is *documented and total*, not a `-1 → 3.4e38` sign-flip.
   **Record this as a sanctioned divergence** (`oracle_divergence` + reason) in the
   port: a value above `i64::MAX` saturates rather than wraps or errors. Preserve
@@ -398,7 +398,7 @@ does not start M-D/M-E against a `KernelFn` enum that has to be re-keyed later.
   makes the requirement enforced rather than assumed.
 - **Async result mapping (risk #4).** A foreign async fn returning
   `Result<_, E>` must map to **`Task Error a`**, never `Task String a` /
-  `Result String a` (CLAUDE.md non-regression). The wrapper's error arm constructs
+  `Result String a` (AGENTS.md non-regression). The wrapper's error arm constructs
   a typed `Error`, not a stringified one. `Send`-closure discipline: async
   combinator args need `Box<dyn Fn + Send + 'static>`; the inspector's
   `recv_provably_async_send` / `PROVABLY_SEND_OPAQUE_NAMES` machinery

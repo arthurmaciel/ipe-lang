@@ -563,7 +563,7 @@ Model.
 > path is the required floor, the make-before-break path is the polish that
 > mechanism unlocks. See Q3/Q4 for the `event: reload` frame.
 
-### Timeout / hang bounding (CLAUDE.md §3)
+### Timeout / hang bounding (AGENTS.md §3)
 
 Every rebuild+cargo cycle is **timeout-bounded** with a hard ceiling; the child
 server has a readiness/heartbeat max-wait so a wedged child can't poison the
@@ -595,7 +595,7 @@ Cold `ipe watch` pays a full cargo build of the emitted project + runtime
 (potentially minutes; competes for the shared ~15 GB cargo target — see disk
 hygiene). The user sees an explicit "cold build (first run)" indicator distinct
 from warm 1–3 s rebuilds, so "watch is slow" is never misattributed to the salsa
-layer. **ENOSPC is a first-class watch failure mode** (CLAUDE.md §6): a
+layer. **ENOSPC is a first-class watch failure mode** (AGENTS.md §6): a
 near-full-disk build dies at the file-copy/link step and masquerades as a codegen
 regression; watch checks free space before a cold build and surfaces ENOSPC
 distinctly.
@@ -827,10 +827,10 @@ a v2 argument, and the honest boundary of the L0+ "yes."
 
 A large fraction of the perceived hot-reload need is met by **L0 + pub/sub
 resync**: post-restart, the server can `Cmd.publish` / `Sub.subscribeTopic` fresh
-state to all live sessions (CLAUDE.md notes reload-as-resync is "a missing
+state to all live sessions (AGENTS.md notes reload-as-resync is "a missing
 broadcast"). This stops being sufficient exactly at cases (b)–(e) above.
 
-### Measurement / regression gate (CLAUDE.md "spotted = filed")
+### Measurement / regression gate (AGENTS.md "spotted = filed")
 
 The illusion bar gets a concrete regression test: an e2e that measures
 save→repaint under a fixed budget on a reference Ipe.Live example, so "instant

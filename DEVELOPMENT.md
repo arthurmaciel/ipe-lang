@@ -2,7 +2,7 @@
 
 > Companion to **`PRINCIPLES.md`** (enforcement SSOT: six principles, three
 > fundamental rules, THE SEAL, §0 no-shortcuts, clippy deny-set, two-tier
-> gate, write-boundary, agent-lane rules, doc/code standards) and **CLAUDE.md**
+> gate, write-boundary, agent-lane rules, doc/code standards) and **AGENTS.md**
 > (Ipê *language* authoring reference). This file = operational HOW:
 > infrastructure, commands, checklists — Rust toolchain (`cargo`,
 > `crates/`, `runtime/`, `ipe`). Autonomous-loop lanes follow
@@ -366,5 +366,5 @@ gh run list --branch main --status in_progress --workflow CI --json databaseId -
     | xargs -I{} gh run cancel {} 2>/dev/null
 git push origin main
 ```
-- **`CLAUDE.md` tracks language surface.** When stdlib, syntax, or CLI
-  change, update Ipê authoring reference (`CLAUDE.md`) in same commit.
+- **`AGENTS.md` tracks language surface.** When stdlib, syntax, or CLI
+  change, update Ipê authoring reference (`AGENTS.md`) in same commit.

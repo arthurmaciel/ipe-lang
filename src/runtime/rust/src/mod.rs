@@ -11,7 +11,7 @@
         // all panic vectors a well-typed Ipe program must never reach. `cargo
         // clippy` now FAILS on any of them in non-test runtime code, so risky
         // code cannot be merged (CI security-audit gate + local clippy enforce
-        // it). See `## Settled rules` in CLAUDE.md.
+        // it). See `## Settled rules` in AGENTS.md.
         clippy::todo,
         clippy::unimplemented,
         clippy::panic_in_result_fn

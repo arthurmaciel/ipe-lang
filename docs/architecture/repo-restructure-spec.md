@@ -89,7 +89,7 @@ pure compiler-unit test belongs under `src/compiler/<crate>/tests/` instead.
 - `.github/workflows/*` — build/test paths, `runtime-full-features` job.
 - `tools/*` (ipe-index, refresh-oracle, oracle, parity-matrix) — any indexed
   roots pointing at `crates/`/`runtime/`.
-- CLAUDE.md / DEVELOPMENT.md §0b infra reference — path updates.
+- AGENTS.md / DEVELOPMENT.md §0b infra reference — path updates.
 
 ## Stdlib flatten (deferred to Step C — recorded here)
 

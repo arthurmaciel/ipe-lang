@@ -2,7 +2,7 @@ module Main exposing (main)
 
 -- #108 round 4 (hole 3) regression — `:param` routes with a payload
 -- constructor page builder, the CANONICAL corpus shape
--- (CLAUDE.md: `route "/apps/:slug" AppDetailPage`).
+-- (AGENTS.md: `route "/apps/:slug" AppDetailPage`).
 --
 -- The pre-round-4 `Live.route : String -> page -> LiveRoute page` scheme
 -- shared ONE type variable between the builder argument and the page, so

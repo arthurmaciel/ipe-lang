@@ -49,7 +49,7 @@ Ipê" is nonsense; "ported from Ipê" is a lie. Protect them.
 | Runtime module dir | `runtime/src/sky_runtime/` → `runtime/src/ipe_runtime/` |
 | Stdlib namespace dir | `crates/ipe/stdlib/Ipê/Core/` → `.../Ipe/Core/`; qualifiers `Ipê.Core`, `Ipe.Live`, `Ipe.Http.Server(.Stream/.WebSocket)`, `Ipe.Tui`, `Ipe.Webview`, `Ipe.Test` |
 | Error codes | prefix `IPE-` on ~90 distinct codes (`P/N/L/T/I` series + `F44xx` FFI docs); **90-ish `explain/IPE-*.md`** files + `sky_diagnostics/src/code.rs` enum + `diagnostic.rs`/`render.rs` + ~514 test/doc reference lines |
-| Env vars | `IPE_*` (documented ~50 in `CLAUDE.md` + internal `IPE_E2E`, `IPE_RUNTIME_DIR`, `IPE_DB_URL`, `IPE_DCE`, `IPE_SOLVER_BUDGET*`, `IPE_UI_LAZY_CAP`, `IPE_TUI_QUIET`, `IPE_LIVE_*`, `IPE_CONSOLE_*`, `IPE_AUTH_*`) |
+| Env vars | `IPE_*` (documented ~50 in `AGENTS.md` + internal `IPE_E2E`, `IPE_RUNTIME_DIR`, `IPE_DB_URL`, `IPE_DCE`, `IPE_SOLVER_BUDGET*`, `IPE_UI_LAZY_CAP`, `IPE_TUI_QUIET`, `IPE_LIVE_*`, `IPE_CONSOLE_*`, `IPE_AUTH_*`) |
 | CLI binary | `sky` → `ipe`; compiler binary `ipe` → `ipec` |
 
 Everything is git-tracked, so directory/file renames use **`git mv`** to preserve history.
@@ -105,13 +105,13 @@ project name* is frozen. This is why the list is **line-level**, never file-leve
 | 20 | `scripts/lib/env.sh` | `../sky` sibling-repo path variable (points at upstream checkout) | any `IPE_*` env var WE own that the script exports |
 | 21 | `tools/oracle/src/lib.rs`, `tools/refresh-oracle/src/main.rs` | "Go `sky` version" / the upstream Go binary name captured by the oracle | `MAIN_SKY`/`"Main.ipe"` (OUR extension → `Main.ipe`), crate identifiers |
 | 22 | `runtime/src/sky_runtime/{string,stringify}.rs` | any `../sky` provenance comment pointing at upstream | the module path itself renames (Task 2) |
-| 23 | `CLAUDE.md` (root) | passages describing the **upstream** Haskell→Go Sky compiler/release flow, `SkyDeploy` (upstream product), "Sky release" | our Rust tooling names, our env vars, our extension — **highest-ambiguity file, curate every line** |
+| 23 | `AGENTS.md` (root) | passages describing the **upstream** Haskell→Go Sky compiler/release flow, `SkyDeploy` (upstream product), "Sky release" | our Rust tooling names, our env vars, our extension — **highest-ambiguity file, curate every line** |
 | 24 | `examples/32-sse-relay/{README.md,src/Main.ipe}` | `SkyDeploy` agent-service (upstream product name) | the `.ipe`→`.ipe` extension of the file itself |
 
 **Curation candidates flagged for guardian sign-off (decide during Task 1):**
 - `SkyDeploy` — upstream Go ecosystem product. Likely **stays** (proper product
   name of the other project), even though it starts with `Ipê`. Confirm.
-- Root `CLAUDE.md` — much of it documents the **Go** Ipê project's workflow; only
+- Root `AGENTS.md` — much of it documents the **Go** Ipê project's workflow; only
   the parts describing *this* Rust repo's tooling rename. Split line-by-line.
 - Remote/URL `arthurmaciel/ipe-lang` is already `ipe`; `anzellai/sky` (upstream
   remote) stays.
@@ -129,7 +129,7 @@ this a sanctioned Ipê?" is a lookup, not a judgement call, at verification time
   `rg -l -i 'divergenc|departures-from-sky|reference-audit|\.\./sky|anzellai/sky|ported from|Go reference|SkyDeploy|relation-to-elm-and-sky'`.
 - For each, record the specific **lines/contexts** that name upstream Sky vs. name our artifacts.
 - Write `scripts/rename/upstream-exclusions.txt` (the typed allowlist) + a one-paragraph rationale header.
-- Guardian sign-off on the `SkyDeploy` and root-`CLAUDE.md` ambiguities.
+- Guardian sign-off on the `SkyDeploy` and root-`AGENTS.md` ambiguities.
 - **Green gate:** no build; the artifact exists and every listed line is justified. This is the parse-once boundary for the whole plan.
 
 ### Task 2 — Crate-by-crate rename (ONE crate per sub-task, cargo-green after each)
@@ -286,5 +286,5 @@ its own Tier-3 item.
 | Missed `use sky_X::` / path dep | 2 | Medium | Self-caught: `cargo build` fails to link |
 | Emitted type name ≠ golden fixture | 3 | Medium | Rename emitter + regenerate goldens together |
 | `.ipe` extension missed in one loader path (watch/doc) | 4 | Medium | Enumerate all readers; sweep exercises build path |
-| Root `CLAUDE.md` / `SkyDeploy` mis-classified | 1 | Medium | Guardian sign-off; default `SkyDeploy` stays (upstream product) |
+| Root `AGENTS.md` / `SkyDeploy` mis-classified | 1 | Medium | Guardian sign-off; default `SkyDeploy` stays (upstream product) |
 | Historical `docs/superpowers/plans/*` over-edited | 1/7 | Low | Treat frozen; edit only harness-read paths |
