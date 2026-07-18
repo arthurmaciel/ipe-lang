@@ -17,6 +17,8 @@
 use ipe_intern::Interner;
 
 #[test]
+#[allow(clippy::expect_used)] // test setup: a failed parse IS the failure signal
+#[allow(clippy::panic)] // test assertion: a canon Err IS the failure signal
 fn deep_right_assoc_chain_does_not_crash() {
     // 50_000 `++` operators (right-assoc at precedence 5).
     // Old code: climb_binops recurses 50k deep → ~10 MB of stack → SIGSEGV.

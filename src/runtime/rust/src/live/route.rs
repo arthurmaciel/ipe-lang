@@ -83,10 +83,10 @@ pub fn match_route(pattern: &str, path: &str) -> Option<Vec<String>> {
 /// silently substituting a zero-value default.
 pub fn match_routes<Page: Clone>(routes: &[Route<Page>], not_found: &Page, path: &str) -> Page {
     for rt in routes {
-        if let Some(params) = match_route(&rt.pattern, path) {
-            if let Some(page) = (rt.build)(params) {
-                return page;
-            }
+        if let Some(params) = match_route(&rt.pattern, path)
+            && let Some(page) = (rt.build)(params)
+        {
+            return page;
         }
     }
     not_found.clone()
