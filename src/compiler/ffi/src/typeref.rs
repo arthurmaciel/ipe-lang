@@ -14,7 +14,7 @@ use std::fmt;
 use serde::de::{self, Deserialize, Deserializer, IgnoredAny, MapAccess, Visitor};
 
 use crate::diag::{CallDefect, WireDefect};
-use crate::naming::mangle_tvar;
+use crate::naming::{RustTypeExpr, mangle_tvar};
 
 /// The Rust closure trait a closure-typed wrapper param must satisfy.
 ///
@@ -196,10 +196,11 @@ impl<'de> Deserialize<'de> for WireTypeRef {
 pub enum InnerTypeRef {
     /// The i-th generic param (mangled `a` → `A` at render).
     Param(usize),
-    /// A concrete Rust primitive leaf.
-    Prim(String),
-    /// `Name<args…>`.
-    Ctor(String, Vec<Self>),
+    /// A concrete Rust primitive leaf, validated at decode so it renders
+    /// verbatim without opening a statement.
+    Prim(RustTypeExpr),
+    /// `Name<args…>` — the ctor NAME is a validated path/type expression.
+    Ctor(RustTypeExpr, Vec<Self>),
     /// A serde-reduced node rendering as `serde_json::Value`.
     SerdeValue,
     /// A `&T` serde-Serialize input rendering as `&serde_json::Value`.
@@ -229,13 +230,17 @@ impl TryFrom<WireTypeRef> for InnerTypeRef {
     type Error = CallDefect;
 
     fn try_from(w: WireTypeRef) -> Result<Self, CallDefect> {
+        let to_type = |s: String| -> Result<RustTypeExpr, CallDefect> {
+            RustTypeExpr::parse(&s).map_err(|_| CallDefect::TypeUnrenderable { got: s })
+        };
         match w {
             WireTypeRef::Param(i) => Ok(Self::Param(i)),
-            WireTypeRef::Prim(p) => Ok(Self::Prim(p)),
+            WireTypeRef::Prim(p) => Ok(Self::Prim(to_type(p)?)),
             WireTypeRef::Ctor(nm, args) => {
+                let name = to_type(nm)?;
                 let inner: Result<Vec<Self>, CallDefect> =
                     args.into_iter().map(Self::try_from).collect();
-                Ok(Self::Ctor(nm, inner?))
+                Ok(Self::Ctor(name, inner?))
             }
             WireTypeRef::Closure { .. } => Err(CallDefect::ClosureNestedOrNonDirect),
             WireTypeRef::SerdeValue => Ok(Self::SerdeValue),
@@ -279,13 +284,13 @@ impl InnerTypeRef {
             Self::Param(i) => params
                 .get(*i)
                 .map_or_else(|| "()".to_owned(), |p| mangle_tvar(p)),
-            Self::Prim(p) => p.clone(),
+            Self::Prim(p) => p.as_str().to_owned(),
             Self::Ctor(nm, args) => {
                 if args.is_empty() {
-                    nm.clone()
+                    nm.as_str().to_owned()
                 } else {
                     let rendered: Vec<String> = args.iter().map(|a| a.render(params)).collect();
-                    format!("{nm}<{}>", rendered.join(", "))
+                    format!("{}<{}>", nm.as_str(), rendered.join(", "))
                 }
             }
             Self::SerdeValue => "serde_json::Value".to_owned(),
@@ -320,7 +325,7 @@ impl InnerTypeRef {
     /// The inspector emits `::Vec`; the bare `Vec` is accepted too.
     #[must_use]
     pub fn is_vec_ctor(&self) -> bool {
-        matches!(self, Self::Ctor(nm, _) if nm == "::Vec" || nm == "Vec")
+        matches!(self, Self::Ctor(nm, _) if nm.as_str() == "::Vec" || nm.as_str() == "Vec")
     }
 
     /// Re-serialize to the wire JSON shape. The cached `kernel.json` carries
@@ -331,14 +336,14 @@ impl InnerTypeRef {
         use serde_json::json;
         match self {
             Self::Param(i) => json!({"param": i}),
-            Self::Prim(p) => json!({"prim": p}),
+            Self::Prim(p) => json!({"prim": p.as_str()}),
             Self::Ctor(nm, args) => {
                 if args.is_empty() {
-                    json!({"ctor": nm})
+                    json!({"ctor": nm.as_str()})
                 } else {
                     let rendered: Vec<serde_json::Value> =
                         args.iter().map(Self::to_wire_json).collect();
-                    json!({"ctor": nm, "args": rendered})
+                    json!({"ctor": nm.as_str(), "args": rendered})
                 }
             }
             Self::SerdeValue => json!({"serdeValue": true}),
@@ -405,6 +410,13 @@ mod tests {
 
     fn decode(json: &str) -> Result<WireTypeRef, String> {
         serde_json::from_str::<WireTypeRef>(json).map_err(|e| e.to_string())
+    }
+
+    /// Parse a (test-controlled, always grammar-valid) type expression,
+    /// falling back to the infallible test constructor so the test file stays
+    /// free of the `unwrap`/`expect` deny-set.
+    fn ty(s: &str) -> RustTypeExpr {
+        RustTypeExpr::parse(s).unwrap_or_else(|_| RustTypeExpr::for_test(s))
     }
 
     #[test]
@@ -507,11 +519,11 @@ mod tests {
     fn render_is_total_and_mangles_params() {
         let params = vec!["a".to_owned(), "b".to_owned()];
         let t = InnerTypeRef::Ctor(
-            "::mycrate::Pair".into(),
+            ty("::mycrate::Pair"),
             vec![InnerTypeRef::Param(0), InnerTypeRef::Param(1)],
         );
         assert_eq!(t.render(&params), "::mycrate::Pair<A, B>");
-        assert_eq!(InnerTypeRef::Prim("i64".into()).render(&params), "i64");
+        assert_eq!(InnerTypeRef::Prim(ty("i64")).render(&params), "i64");
         assert_eq!(
             InnerTypeRef::SerdeValue.render(&params),
             "serde_json::Value"
@@ -527,10 +539,10 @@ mod tests {
     #[test]
     fn serde_detection_recurses_into_containers_and_closures() {
         let ret = InnerTypeRef::Ctor(
-            "::core::result::Result".into(),
+            ty("::core::result::Result"),
             vec![
                 InnerTypeRef::SerdeValue,
-                InnerTypeRef::Ctor("::std::string::String".into(), vec![]),
+                InnerTypeRef::Ctor(ty("::std::string::String"), vec![]),
             ],
         );
         assert!(ret.any_serde());
@@ -538,7 +550,7 @@ mod tests {
             kind: ClosureKind::Fn,
             by_ref: false,
             arg_types: vec![InnerTypeRef::SerdeValueRef],
-            ret: InnerTypeRef::Prim("bool".into()),
+            ret: InnerTypeRef::Prim(ty("bool")),
         };
         assert!(clo.any_serde());
         assert!(!ArgTypeRef::Inner(InnerTypeRef::Param(0)).any_serde());
@@ -546,8 +558,8 @@ mod tests {
 
     #[test]
     fn vec_ctor_detection_accepts_both_spellings() {
-        assert!(InnerTypeRef::Ctor("::Vec".into(), vec![]).is_vec_ctor());
-        assert!(InnerTypeRef::Ctor("Vec".into(), vec![]).is_vec_ctor());
-        assert!(!InnerTypeRef::Ctor("VecDeque".into(), vec![]).is_vec_ctor());
+        assert!(InnerTypeRef::Ctor(ty("::Vec"), vec![]).is_vec_ctor());
+        assert!(InnerTypeRef::Ctor(ty("Vec"), vec![]).is_vec_ctor());
+        assert!(!InnerTypeRef::Ctor(ty("VecDeque"), vec![]).is_vec_ctor());
     }
 }

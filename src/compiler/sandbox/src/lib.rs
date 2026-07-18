@@ -5,16 +5,16 @@
 //! by a crate name. This crate confines that RCE surface so the FFI
 //! decode/emit core (`ipe_ffi`) stays process-capability-free:
 //!
-//! * **bubblewrap is the primary jail** — network denied, `/` read-only, one
-//!   scoped writable tempdir, env scrubbed to an allowlist, fresh
-//!   PID/UTS/IPC/cgroup namespaces, rlimit + wall-clock caps.
-//! * **`unshare` is the fallback**, sound ONLY with a post-spawn proof: the
-//!   child must assert every namespace it claimed actually took effect
-//!   before any untrusted code runs ([`prove_isolation`]) — `unshare` can
-//!   partially no-op yet exit 0.
-//! * **Refusal is the default** (`IPE-F4410`) when neither mechanism can
-//!   prove isolation. The only override is `IPE_FFI_ALLOW_UNSANDBOXED=1`,
-//!   which the driver must surface with a printed trust warning.
+//! * **bubblewrap is the jail** — `/` read-only, one scoped writable tempdir,
+//!   env scrubbed to an allowlist, fresh PID/UTS/IPC/cgroup namespaces,
+//!   mandatory rlimit + wall-clock caps. The two-phase driver splits a
+//!   network-on `FetchOnly` phase (trusted `cargo` only, no foreign code)
+//!   from a `Denied` compile/introspect phase (fresh empty net namespace, no
+//!   egress) where the foreign code runs.
+//! * **Refusal is the default** (`IPE-F4410`) when bubblewrap is absent OR the
+//!   `timeout`/`prlimit` cap helpers are absent — an uncapped jail is never
+//!   built. The only override is `IPE_FFI_ALLOW_UNSANDBOXED=1`, which the
+//!   driver must surface with a printed trust warning.
 //!
 //! There is no shell anywhere in this crate: every invocation is a direct
 //! argv (`std::process::Command`), so the quoting/injection class does not
@@ -29,10 +29,15 @@ use ipe_diagnostics::{Code, IPE_F4410};
 /// Why a jail could not be established or a jailed run failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SandboxDefect {
-    /// Neither `bwrap` nor a provable `unshare` fallback is available.
+    /// Bubblewrap is not available.
     NoIsolationMechanism,
-    /// The `unshare` fallback could not prove a namespace took effect.
-    IsolationUnproven(IsolationDefect),
+    /// A mandatory cap helper (`timeout` / `prlimit`) is absent, so a
+    /// jail with a wall clock and rlimits cannot be built — refuse rather
+    /// than run untrusted code uncapped.
+    CapsUnavailable {
+        /// The helper names that were missing.
+        missing: Vec<&'static str>,
+    },
     /// The jailed process could not be spawned or awaited.
     Spawn {
         /// The program that failed to spawn.
@@ -60,14 +65,17 @@ impl fmt::Display for SandboxDefect {
         match self {
             Self::NoIsolationMechanism => write!(
                 f,
-                "{}: cannot establish an isolation jail (bwrap absent, unshare absent or \
-                 unprovable); refusing to compile an untrusted crate unsandboxed",
+                "{}: cannot establish an isolation jail (bwrap absent); \
+                 refusing to compile an untrusted crate unsandboxed",
                 self.code().as_str()
             ),
-            Self::IsolationUnproven(d) => write!(
+            Self::CapsUnavailable { missing } => write!(
                 f,
-                "{}: the unshare fallback could not prove its isolation: {d}",
-                self.code().as_str()
+                "{}: mandatory sandbox cap helper(s) absent ({}); refusing to run \
+                 untrusted code without a wall clock and rlimits — install \
+                 coreutils (timeout) and util-linux (prlimit)",
+                self.code().as_str(),
+                missing.join(", ")
             ),
             Self::Spawn { program, detail } => write!(
                 f,
@@ -85,49 +93,17 @@ impl fmt::Display for SandboxDefect {
 
 impl std::error::Error for SandboxDefect {}
 
-/// Which isolation assertion failed inside the `unshare` fallback child.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum IsolationDefect {
-    /// The child is not PID 1 — the PID namespace did not take effect.
-    NotPidOne,
-    /// A namespace id matches the parent's — that namespace did not detach.
-    NamespaceUnchanged(&'static str),
-    /// A non-loopback network interface is visible in the "new" net ns.
-    NonLoopbackInterface(String),
-    /// A default route exists in the "new" net ns.
-    DefaultRoutePresent,
-    /// A `/proc` read needed for the proof failed (fail closed).
-    ProcUnreadable(String),
-}
-
-impl fmt::Display for IsolationDefect {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NotPidOne => f.write_str("child is not PID 1 in its namespace"),
-            Self::NamespaceUnchanged(ns) => {
-                write!(f, "the {ns} namespace id still matches the host's")
-            }
-            Self::NonLoopbackInterface(name) => {
-                write!(f, "non-loopback interface `{name}` is visible")
-            }
-            Self::DefaultRoutePresent => f.write_str("a default route is present"),
-            Self::ProcUnreadable(detail) => write!(f, "cannot read /proc for the proof: {detail}"),
-        }
-    }
-}
-
 // ── capability probe ────────────────────────────────────────────────────────
 
-/// The host tools the jail can be built from.
+/// The host tools the jail is built from. `timeout` and `prlimit` are
+/// mandatory: an uncapped jail is never constructed.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Capabilities {
-    /// `bwrap` (bubblewrap) — the primary jail.
+    /// `bwrap` (bubblewrap) — the jail.
     pub bwrap: Option<PathBuf>,
-    /// `unshare` — the fallback, requiring the post-spawn proof.
-    pub unshare: Option<PathBuf>,
-    /// `prlimit` — resource caps.
+    /// `prlimit` — resource caps (mandatory).
     pub prlimit: Option<PathBuf>,
-    /// `timeout` — the wall clock.
+    /// `timeout` — the wall clock (mandatory).
     pub timeout: Option<PathBuf>,
 }
 
@@ -136,10 +112,22 @@ pub struct Capabilities {
 pub fn probe() -> Capabilities {
     Capabilities {
         bwrap: find_in_path("bwrap"),
-        unshare: find_in_path("unshare"),
         prlimit: find_in_path("prlimit"),
         timeout: find_in_path("timeout"),
     }
+}
+
+/// The mandatory cap helpers this host is missing (empty ⇒ all present).
+#[must_use]
+pub fn missing_caps(caps: &Capabilities) -> Vec<&'static str> {
+    let mut missing = Vec::new();
+    if caps.timeout.is_none() {
+        missing.push("timeout");
+    }
+    if caps.prlimit.is_none() {
+        missing.push("prlimit");
+    }
+    missing
 }
 
 fn find_in_path(bin: &str) -> Option<PathBuf> {
@@ -154,23 +142,16 @@ fn find_in_path(bin: &str) -> Option<PathBuf> {
 pub enum Mechanism {
     /// Bubblewrap — fails closed by itself.
     Bwrap(PathBuf),
-    /// `unshare` — the child MUST run [`prove_isolation`] before any
-    /// untrusted code.
-    UnshareCandidate(PathBuf),
-    /// Neither is available: refuse (`IPE-F4410`).
+    /// Bubblewrap is not available: refuse (`IPE-F4410`).
     Refused,
 }
 
-/// Select the strongest available mechanism (bwrap > unshare > refusal).
+/// Select the isolation mechanism (bubblewrap-or-refuse).
 #[must_use]
 pub fn select_mechanism(caps: &Capabilities) -> Mechanism {
-    if let Some(b) = &caps.bwrap {
-        return Mechanism::Bwrap(b.clone());
-    }
-    if let Some(u) = &caps.unshare {
-        return Mechanism::UnshareCandidate(u.clone());
-    }
-    Mechanism::Refused
+    caps.bwrap
+        .clone()
+        .map_or(Mechanism::Refused, Mechanism::Bwrap)
 }
 
 /// Whether the operator explicitly opted into unsandboxed execution. The
@@ -254,21 +235,26 @@ pub struct JailSpec {
 /// Pure — no process is spawned — so the exact isolation surface is
 /// unit-testable. The env is scrubbed with `--clearenv`; only the fixed
 /// allowlist re-enters. There is NO shell token anywhere in the result.
+///
+/// `prlimit` and `timeout` are non-optional: an argv that omits the wall
+/// clock or the rlimits is unrepresentable, so untrusted code can never run
+/// uncapped. A host missing either helper is refused upstream
+/// ([`missing_caps`]) before this is reached.
 #[must_use]
 pub fn bwrap_argv(
     bwrap: &Path,
-    prlimit: Option<&Path>,
-    timeout: Option<&Path>,
+    prlimit: &Path,
+    timeout: &Path,
     spec: &JailSpec,
     payload: &[OsString],
 ) -> Vec<OsString> {
-    let mut argv: Vec<OsString> = Vec::new();
-    if let Some(t) = timeout {
-        argv.push(t.into());
-        argv.push("--kill-after=5s".into());
-        argv.push(spec.limits.wall_secs.to_string().into());
-    }
-    argv.push(bwrap.into());
+    // The wall clock wraps everything: `timeout --kill-after=5s <wall> bwrap …`.
+    let mut argv: Vec<OsString> = vec![
+        timeout.into(),
+        "--kill-after=5s".into(),
+        spec.limits.wall_secs.to_string().into(),
+        bwrap.into(),
+    ];
     if spec.network == NetworkPolicy::Denied {
         argv.push("--unshare-net".into());
     }
@@ -343,123 +329,15 @@ pub fn bwrap_argv(
         argv.push(rustup_home.clone().into());
     }
     argv.push("--".into());
-    if let Some(p) = prlimit {
-        argv.push(p.into());
-        argv.push(format!("--as={}", spec.limits.rss_bytes).into());
-        argv.push(format!("--cpu={}", spec.limits.cpu_secs).into());
-        argv.push(format!("--nofile={}", spec.limits.fd_cap).into());
-        argv.push(format!("--nproc={}", spec.limits.proc_cap).into());
-        argv.push(format!("--fsize={}", spec.limits.out_cap_bytes).into());
-        argv.push("--".into());
-    }
+    argv.push(prlimit.into());
+    argv.push(format!("--as={}", spec.limits.rss_bytes).into());
+    argv.push(format!("--cpu={}", spec.limits.cpu_secs).into());
+    argv.push(format!("--nofile={}", spec.limits.fd_cap).into());
+    argv.push(format!("--nproc={}", spec.limits.proc_cap).into());
+    argv.push(format!("--fsize={}", spec.limits.out_cap_bytes).into());
+    argv.push("--".into());
     argv.extend(payload.iter().cloned());
     argv
-}
-
-// ── unshare-fallback isolation proof ────────────────────────────────────────
-
-/// The parent's namespace identities, captured before spawning the fallback
-/// child so the child can prove its own differ.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NsIds {
-    /// `/proc/self/ns/net` link target.
-    pub net: String,
-    /// `/proc/self/ns/mnt` link target.
-    pub mnt: String,
-    /// `/proc/self/ns/uts` link target.
-    pub uts: String,
-    /// `/proc/self/ns/ipc` link target.
-    pub ipc: String,
-}
-
-/// Read the calling process's namespace ids.
-///
-/// # Errors
-///
-/// [`IsolationDefect::ProcUnreadable`] when `/proc/self/ns/*` cannot be
-/// read (fail closed — no proof without the ids).
-pub fn current_ns_ids() -> Result<NsIds, IsolationDefect> {
-    let read = |ns: &str| -> Result<String, IsolationDefect> {
-        std::fs::read_link(format!("/proc/self/ns/{ns}"))
-            .map(|p| p.to_string_lossy().into_owned())
-            .map_err(|e| IsolationDefect::ProcUnreadable(format!("ns/{ns}: {e}")))
-    };
-    Ok(NsIds {
-        net: read("net")?,
-        mnt: read("mnt")?,
-        uts: read("uts")?,
-        ipc: read("ipc")?,
-    })
-}
-
-/// The post-spawn isolation proof the `unshare` fallback child MUST run as
-/// its first action, before any untrusted code.
-///
-/// `unshare` can partially fail or silently no-op yet still exit 0, leaving
-/// a process with full host networking — so nothing is assumed: the child
-/// asserts it is PID 1, that every claimed namespace id differs from the
-/// parent's, and that the net namespace is truly empty (no non-loopback
-/// interface, no default route).
-///
-/// # Errors
-///
-/// The first failed assertion; the caller MUST hard-fail to the refusal
-/// path — never proceed to compile on the assumption `unshare` worked.
-pub fn prove_isolation(parent: &NsIds) -> Result<(), IsolationDefect> {
-    if std::process::id() != 1 {
-        return Err(IsolationDefect::NotPidOne);
-    }
-    let own = current_ns_ids()?;
-    for (name, ours, parents) in [
-        ("net", &own.net, &parent.net),
-        ("mnt", &own.mnt, &parent.mnt),
-        ("uts", &own.uts, &parent.uts),
-        ("ipc", &own.ipc, &parent.ipc),
-    ] {
-        if ours == parents {
-            return Err(IsolationDefect::NamespaceUnchanged(match name {
-                "net" => "net",
-                "mnt" => "mnt",
-                "uts" => "uts",
-                _ => "ipc",
-            }));
-        }
-    }
-    assert_net_namespace_empty()
-}
-
-/// Assert the current net namespace has no non-loopback interface and no
-/// default route.
-///
-/// # Errors
-///
-/// The first visible escape hatch, or [`IsolationDefect::ProcUnreadable`]
-/// when the check itself cannot run (fail closed).
-pub fn assert_net_namespace_empty() -> Result<(), IsolationDefect> {
-    let ifaces = std::fs::read_dir("/sys/class/net")
-        .map_err(|e| IsolationDefect::ProcUnreadable(format!("/sys/class/net: {e}")))?;
-    for entry in ifaces {
-        let entry =
-            entry.map_err(|e| IsolationDefect::ProcUnreadable(format!("/sys/class/net: {e}")))?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name != "lo" {
-            return Err(IsolationDefect::NonLoopbackInterface(name));
-        }
-    }
-    let route = std::fs::read_to_string("/proc/net/route")
-        .map_err(|e| IsolationDefect::ProcUnreadable(format!("/proc/net/route: {e}")))?;
-    // Each data row is `Iface\tDestination\t…`; destination 00000000 is the
-    // default route.
-    for line in route.lines().skip(1) {
-        let mut cols = line.split_whitespace();
-        let (Some(_iface), Some(dest)) = (cols.next(), cols.next()) else {
-            continue;
-        };
-        if dest == "00000000" {
-            return Err(IsolationDefect::DefaultRoutePresent);
-        }
-    }
-    Ok(())
 }
 
 // ── jailed execution ────────────────────────────────────────────────────────
@@ -492,13 +370,15 @@ pub fn run_in_bwrap_jail(
     let Some(bwrap) = &caps.bwrap else {
         return Err(SandboxDefect::NoIsolationMechanism);
     };
-    let argv = bwrap_argv(
-        bwrap,
-        caps.prlimit.as_deref(),
-        caps.timeout.as_deref(),
-        spec,
-        payload,
-    );
+    // Mandatory caps: refuse before building an argv rather than run an
+    // uncapped jail. `bwrap_argv`'s non-optional params make this the only
+    // way to reach it, so an uncapped jail is unrepresentable.
+    let (Some(prlimit), Some(timeout)) = (&caps.prlimit, &caps.timeout) else {
+        return Err(SandboxDefect::CapsUnavailable {
+            missing: missing_caps(caps),
+        });
+    };
+    let argv = bwrap_argv(bwrap, prlimit, timeout, spec, payload);
     let (program, rest) = argv
         .split_first()
         .ok_or(SandboxDefect::NoIsolationMechanism)?;
@@ -514,8 +394,20 @@ pub fn run_in_bwrap_jail(
         .spawn()
         .map_err(spawn_err)?;
     let cap = spec.limits.out_cap_bytes;
-    let stdout = read_bounded(child.stdout.take(), cap).map_err(spawn_err)?;
-    let stderr = read_bounded(child.stderr.take(), cap).map_err(spawn_err)?;
+    // Drain stdout and stderr CONCURRENTLY: a payload that fills the stderr
+    // pipe while stdout stays open (or vice-versa) would wedge a sequential
+    // reader — the wall clock is the only backstop and this removes the hang
+    // independent of it. Each stream is read in its own thread.
+    let out_handle = child.stdout.take();
+    let err_handle = child.stderr.take();
+    let out_thread = std::thread::spawn(move || read_bounded(out_handle, cap));
+    let err_thread = std::thread::spawn(move || read_bounded(err_handle, cap));
+    let join_err = || SandboxDefect::Spawn {
+        program: program.to_string_lossy().into_owned(),
+        detail: "output-drain thread panicked".to_owned(),
+    };
+    let stdout = out_thread.join().map_err(|_| join_err())?.map_err(spawn_err)?;
+    let stderr = err_thread.join().map_err(|_| join_err())?.map_err(spawn_err)?;
     let status = child.wait().map_err(spawn_err)?;
     match (stdout, stderr) {
         (Some(out), Some(err)) => Ok(JailedOutput {
@@ -566,8 +458,8 @@ mod tests {
         let payload: Vec<OsString> = vec!["ipe-ffi-inspector".into(), "semver".into()];
         bwrap_argv(
             Path::new("/usr/bin/bwrap"),
-            Some(Path::new("/usr/bin/prlimit")),
-            Some(Path::new("/usr/bin/timeout")),
+            Path::new("/usr/bin/prlimit"),
+            Path::new("/usr/bin/timeout"),
             spec,
             &payload,
         )
@@ -665,23 +557,14 @@ mod tests {
     }
 
     #[test]
-    fn mechanism_selection_prefers_bwrap_then_unshare_then_refuses() {
-        let both = Capabilities {
+    fn mechanism_selection_is_bwrap_or_refuse() {
+        let with_bwrap = Capabilities {
             bwrap: Some("/usr/bin/bwrap".into()),
-            unshare: Some("/usr/bin/unshare".into()),
             ..Capabilities::default()
         };
         assert_eq!(
-            select_mechanism(&both),
+            select_mechanism(&with_bwrap),
             Mechanism::Bwrap("/usr/bin/bwrap".into())
-        );
-        let only_unshare = Capabilities {
-            unshare: Some("/usr/bin/unshare".into()),
-            ..Capabilities::default()
-        };
-        assert_eq!(
-            select_mechanism(&only_unshare),
-            Mechanism::UnshareCandidate("/usr/bin/unshare".into())
         );
         assert_eq!(
             select_mechanism(&Capabilities::default()),
@@ -690,11 +573,56 @@ mod tests {
     }
 
     #[test]
-    fn isolation_proof_fails_outside_a_jail() {
-        // This test process is neither PID 1 nor in fresh namespaces, so the
-        // proof must fail closed — the exact property the fallback needs.
-        let parent = current_ns_ids().expect("host /proc is readable");
-        assert_eq!(prove_isolation(&parent), Err(IsolationDefect::NotPidOne));
+    fn missing_cap_helpers_are_named_and_the_jail_refuses() {
+        // A host with bwrap but no timeout/prlimit runs untrusted code with
+        // no wall clock and no rlimits — refuse, naming the missing helpers.
+        let caps = Capabilities {
+            bwrap: Some("/usr/bin/bwrap".into()),
+            prlimit: None,
+            timeout: None,
+        };
+        assert_eq!(missing_caps(&caps), vec!["timeout", "prlimit"]);
+        let r = run_in_bwrap_jail(&caps, &spec(), &["x".into()]);
+        assert!(
+            matches!(&r, Err(SandboxDefect::CapsUnavailable { missing }) if *missing == vec!["timeout", "prlimit"]),
+            "{r:?}"
+        );
+        // A partial absence names only the missing one.
+        let only_timeout = Capabilities {
+            bwrap: Some("/usr/bin/bwrap".into()),
+            prlimit: Some("/usr/bin/prlimit".into()),
+            timeout: None,
+        };
+        assert_eq!(missing_caps(&only_timeout), vec!["timeout"]);
+    }
+
+    #[test]
+    fn caps_unavailable_defect_carries_the_refusal_code_and_advice() {
+        let d = SandboxDefect::CapsUnavailable {
+            missing: vec!["timeout"],
+        };
+        assert_eq!(d.code().as_str(), "IPE-F4410");
+        let s = d.to_string();
+        assert!(s.contains("IPE-F4410"), "{s}");
+        assert!(s.contains("timeout"), "{s}");
+        assert!(s.contains("refusing"), "{s}");
+    }
+
+    #[test]
+    fn concurrent_drain_does_not_wedge_on_a_stderr_heavy_stream() {
+        // The real jailed run drains both pipes concurrently; here the two
+        // bounded readers run in parallel over independent streams and both
+        // complete, proving neither blocks the other.
+        let out = b"stdout".to_vec();
+        let err = vec![b'e'; 4096];
+        let cap = 1024_u64;
+        let ot = std::thread::spawn(move || read_bounded(Some(&out[..]), cap));
+        let et = std::thread::spawn(move || read_bounded(Some(&err[..]), cap));
+        let out_r = ot.join().expect("join").expect("read");
+        let err_r = et.join().expect("join").expect("read");
+        assert_eq!(out_r.as_deref(), Some(&b"stdout"[..]));
+        // stderr exceeds the cap → flagged, never a hang.
+        assert_eq!(err_r, None);
     }
 
     #[test]

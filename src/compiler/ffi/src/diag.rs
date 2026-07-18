@@ -361,6 +361,13 @@ pub enum CallDefect {
         /// The adapter index whose slot is not a `Vec`.
         index: usize,
     },
+    /// A type reference carried a string outside the closed renderable type
+    /// grammar — it would render verbatim as unsound (or injection-bearing)
+    /// Rust, so the whole call is refused at decode.
+    TypeUnrenderable {
+        /// The offending type string.
+        got: String,
+    },
 }
 
 impl fmt::Display for CallDefect {
@@ -405,6 +412,10 @@ impl fmt::Display for CallDefect {
                 f,
                 "iterAdapters index {index} targets a non-Vec argType (`.into_iter()` is sound only on a Vec arg)"
             ),
+            Self::TypeUnrenderable { got } => write!(
+                f,
+                "type reference {got:?} is outside the closed renderable type grammar (paths, generics, borrows, tuples, arrays only)"
+            ),
         }
     }
 }
@@ -445,6 +456,24 @@ pub enum WireDefect {
     /// A module path segment that is not a legal Rust identifier path.
     InvalidModulePath {
         /// The offending path.
+        got: String,
+    },
+    /// A type expression that is outside the closed FFI-emitter grammar (a
+    /// byte, unbalanced bracket, or `;` that could open a statement in the
+    /// rendered wrapper).
+    InvalidType {
+        /// The offending type string.
+        got: String,
+    },
+    /// An enum-arm pattern that is not a `RustIdent` head with an optional
+    /// `(..)` / `{..}` suffix.
+    InvalidPattern {
+        /// The offending pattern string.
+        got: String,
+    },
+    /// A field selector that is neither a `RustIdent` nor a decimal index.
+    InvalidSelector {
+        /// The offending selector string.
         got: String,
     },
     /// The document is not the JSON shape the wire contract declares
@@ -493,6 +522,27 @@ impl fmt::Display for WireDefect {
             }
             Self::InvalidModulePath { got } => {
                 write!(f, "{got:?} is not a legal Rust identifier path")
+            }
+            Self::InvalidType { got } => {
+                write!(
+                    f,
+                    "{got:?} is outside the closed FFI type grammar (paths, generics, \
+                     borrows, tuples, arrays only — no statement tokens)"
+                )
+            }
+            Self::InvalidPattern { got } => {
+                write!(
+                    f,
+                    "{got:?} is not a legal enum-arm pattern (a variant identifier with an \
+                     optional (..) or {{..}} suffix)"
+                )
+            }
+            Self::InvalidSelector { got } => {
+                write!(
+                    f,
+                    "{got:?} is not a legal field selector (a field identifier or a decimal \
+                     tuple index)"
+                )
             }
             Self::Json { detail } => write!(f, "{detail}"),
         }
