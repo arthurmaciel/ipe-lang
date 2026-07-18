@@ -19,17 +19,37 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static LCG_STATE: AtomicU64 = AtomicU64::new(0);
 
+/// Wall-clock nanos seed the LCG on native. `SystemTime::now()` COMPILES on
+/// `wasm32-unknown-unknown` (part of std) but TRAPS at runtime — no clock
+/// without the `wasmbind` feature this target does not carry. The M4 browser
+/// substitute (`Random.*` — Q3: "SUBSTITUTE | `crypto.getRandomValues`")
+/// seeds from `getrandom(js)` instead: real entropy, not merely a
+/// platform-safe stand-in, and the same source `crypto_random_bytes` uses.
+#[cfg(not(target_arch = "wasm32"))]
+fn lcg_seed() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64
+}
+
+#[cfg(target_arch = "wasm32")]
+fn lcg_seed() -> u64 {
+    let mut buf = [0u8; 8];
+    // A `getrandom` failure is vanishingly rare (no browser entropy source);
+    // falling back to a fixed non-zero constant keeps `lcg_init` infallible
+    // (its callers are non-Task pure kernels) rather than panicking — the LCG
+    // is documented non-cryptographic regardless, so a degraded-but-total
+    // fallback is sound here specifically.
+    if getrandom::getrandom(&mut buf).is_err() {
+        return 0x9E37_79B9_7F4A_7C15;
+    }
+    u64::from_le_bytes(buf)
+}
+
 pub(crate) fn lcg_init() {
     LCG_STATE
-        .compare_exchange(
-            0,
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos() as u64,
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-        )
+        .compare_exchange(0, lcg_seed(), Ordering::Relaxed, Ordering::Relaxed)
         .ok();
 }
 

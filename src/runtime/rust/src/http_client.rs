@@ -46,6 +46,7 @@ use std::collections::HashMap;
 // SSRF deny-private helpers live in the reqwest-free `ssrf` module (so the
 // WebSocket client can validate URLs without linking reqwest). The reqwest-
 // coupled `ssrf_apply` + the request executor below import the three they use.
+#[cfg(not(target_arch = "wasm32"))]
 use super::ssrf::{resolve_first_non_private_addr, ssrf_check_url, ssrf_deny_private_enabled};
 
 /// Ipe.Http.HttpResponse — field names/types match the Ipê record alias.
@@ -95,9 +96,11 @@ pub struct HttpRequest {
 /// re-resolve). Installed only under IPE_HTTP_DENY_PRIVATE. IP-literal targets
 /// bypass the resolver, so the literal/scheme checks below and the per-hop
 /// redirect `Policy` remain mandatory.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug)]
 struct DenyPrivateResolver;
 
+#[cfg(not(target_arch = "wasm32"))]
 impl reqwest::dns::Resolve for DenyPrivateResolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         let host = name.as_str().to_string();
@@ -134,6 +137,7 @@ impl reqwest::dns::Resolve for DenyPrivateResolver {
 /// in an error message. Used on the parse-FAILURE path where the `url` crate
 /// can't help, so it's a best-effort split (no raw indexing — `indexing_slicing`
 /// is denied crate-wide). Removes the `userinfo@` between `://` and the next `/`.
+#[cfg(not(target_arch = "wasm32"))]
 fn redact_userinfo(url: &str) -> String {
     match url.split_once("://") {
         None => url.to_string(),
@@ -151,6 +155,7 @@ fn redact_userinfo(url: &str) -> String {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn ssrf_apply(
     mut builder: reqwest::ClientBuilder,
     url: &str,
@@ -211,6 +216,7 @@ pub(crate) fn ssrf_apply(
 // Core request executor
 // ---------------------------------------------------------------------------
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn do_request<E: From<String> + Send + 'static>(
     req: HttpRequest,
 ) -> IpeResult<E, HttpResponse> {
@@ -324,8 +330,10 @@ async fn do_request<E: From<String> + Send + 'static>(
 /// read of an attacker- or upstream-controlled response is a memory-exhaustion
 /// (OOM) vector. Override via `IPE_HTTP_MAX_BODY_BYTES` (streaming consumers that
 /// need unbounded bodies use `Ipe.Http.Stream` instead).
+#[cfg(not(target_arch = "wasm32"))]
 const HTTP_BODY_CAP_DEFAULT: usize = 100 * 1024 * 1024;
 
+#[cfg(not(target_arch = "wasm32"))]
 fn http_body_cap() -> usize {
     crate::system::read_env_var("IPE_HTTP_MAX_BODY_BYTES")
         .ok()
@@ -343,6 +351,7 @@ fn http_body_cap() -> usize {
 /// decompressed body to `cap` regardless of encoding or a lying/chunked length —
 /// a bomb is capped at `cap` resident bytes, never unbounded. UTF-8 lossy
 /// (matches `Http.Stream`'s chunk decode; Go reads bytes→string too).
+#[cfg(not(target_arch = "wasm32"))]
 async fn read_body_capped<E: From<String> + Send + 'static>(
     resp: reqwest::Response,
 ) -> IpeResult<E, String> {
@@ -384,6 +393,7 @@ async fn read_body_capped<E: From<String> + Send + 'static>(
 }
 
 /// Http.get : String -> Task Error HttpResponse
+#[cfg(not(target_arch = "wasm32"))]
 pub fn http_get<E: From<String> + Send + 'static>(url: String) -> IpeTask<E, HttpResponse> {
     Box::pin(do_request(HttpRequest {
         method: "GET".to_string(),
@@ -397,6 +407,7 @@ pub fn http_get<E: From<String> + Send + 'static>(url: String) -> IpeTask<E, Htt
 }
 
 /// Http.post : String -> String -> Task Error HttpResponse
+#[cfg(not(target_arch = "wasm32"))]
 pub fn http_post<E: From<String> + Send + 'static>(
     url: String,
     body: String,
@@ -413,6 +424,7 @@ pub fn http_post<E: From<String> + Send + 'static>(
 }
 
 /// Http.request : HttpRequest -> Task Error HttpResponse
+#[cfg(not(target_arch = "wasm32"))]
 pub fn http_request<E: From<String> + Send + 'static>(
     req: HttpRequest,
 ) -> IpeTask<E, HttpResponse> {
@@ -432,6 +444,200 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
         out.entry(k).or_insert(v); // repeated keys keep the first value
     }
     out
+}
+
+// ---------------------------------------------------------------------------
+// wasm32 browser substitute — `fetch` (Open Decision 1, resolved)
+// ---------------------------------------------------------------------------
+//
+// `docs/architecture/wasm-target.md`'s Open Decision 1 asks to settle
+// reqwest-wasm vs raw `web-sys` fetch against the actual `http_client` kernel
+// code. Resolved to raw `web-sys` fetch:
+//
+//   - The native kernel's substantial logic beyond request-building is the
+//     SSRF deny-private guard above (`ssrf_apply`/`DenyPrivateResolver`) — DNS
+//     resolution, address pinning, per-redirect-hop re-checks. None of it has
+//     a browser analogue: a tab cannot open a raw socket or resolve a
+//     hostname itself; CORS/mixed-content/CSP are the browser's OWN network
+//     boundary, already enforced beneath this code with no
+//     `IPE_HTTP_DENY_PRIVATE`-shaped opt-in needed. There is no shared logic
+//     worth reusing from the reqwest path.
+//   - reqwest's wasm32 backend is itself a thin wrapper over `fetch`; taking
+//     it adds a dependency layer (reqwest + its wasm shims) atop the same
+//     browser primitive called directly below, for no behavioural gain and a
+//     real bundle-size cost (efficiency ranks above completeness once the
+//     reuse case is gone — spec's own stated tie-breaker).
+//
+// CORS blocks, network errors, and timeouts all reject the `fetch` Promise
+// rather than trapping the instance; every rejection here routes through the
+// SAME generic `Task.fail` arm — never a panic, never a silent drop.
+
+/// `IPE_HTTP_MAX_BODY_BYTES` cap, mirrored from the native arm's
+/// `http_body_cap` (same env var, same default) — `fetch`'s `.text()` buffers
+/// the whole body itself, so this is a post-hoc size guard rather than a
+/// streamed one, but it keeps the same DoS floor on both targets.
+#[cfg(target_arch = "wasm32")]
+fn wasm_http_body_cap() -> usize {
+    crate::system::read_env_var("IPE_HTTP_MAX_BODY_BYTES")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(100 * 1024 * 1024)
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn do_fetch<E: From<String> + 'static>(req: HttpRequest) -> IpeResult<E, HttpResponse> {
+    use wasm_bindgen::{JsCast, JsValue};
+    use wasm_bindgen_futures::JsFuture;
+
+    let window = match web_sys::window() {
+        Some(w) => w,
+        None => {
+            return IpeResult::Err(
+                "http: no window (not a browser context?)"
+                    .to_string()
+                    .into(),
+            );
+        }
+    };
+
+    let headers = match web_sys::Headers::new() {
+        Ok(h) => h,
+        Err(_) => {
+            return IpeResult::Err("http: failed to build request headers".to_string().into());
+        }
+    };
+    for (k, v) in &req.headers {
+        if headers.set(k, v).is_err() {
+            return IpeResult::Err(format!("http: invalid header {k:?}").into());
+        }
+    }
+
+    let init = web_sys::RequestInit::new();
+    init.set_method(&req.method);
+    init.set_headers(&headers);
+    init.set_mode(web_sys::RequestMode::Cors);
+    init.set_redirect(if req.followRedirects {
+        web_sys::RequestRedirect::Follow
+    } else {
+        web_sys::RequestRedirect::Error
+    });
+    if !req.body.is_empty() {
+        init.set_body(&JsValue::from_str(&req.body));
+    }
+
+    // Timeout via `AbortController` — the browser analogue of the native
+    // request deadline. A fired abort rejects the fetch Promise, routed
+    // through the same generic transport-error arm below (never a trap).
+    let controller = web_sys::AbortController::new().ok();
+    let _timeout_handle = controller.as_ref().map(|ctl| {
+        init.set_signal(Some(&ctl.signal()));
+        let timeout_ms = if req.timeout > 0 { req.timeout } else { 30_000 };
+        let ctl = ctl.clone();
+        gloo_timers::callback::Timeout::new(timeout_ms.max(0) as u32, move || {
+            ctl.abort();
+        })
+    });
+
+    let request = match web_sys::Request::new_with_str_and_init(&req.url, &init) {
+        Ok(r) => r,
+        Err(e) => return IpeResult::Err(format!("http: bad request: {:?}", e).into()),
+    };
+
+    let resp_value = match JsFuture::from(window.fetch_with_request(&request)).await {
+        Ok(v) => v,
+        Err(e) => {
+            return IpeResult::Err(
+                format!(
+                    "http: fetch failed (network error, CORS block, or timeout): {:?}",
+                    e
+                )
+                .into(),
+            );
+        }
+    };
+    let resp: web_sys::Response = match resp_value.dyn_into() {
+        Ok(r) => r,
+        Err(_) => {
+            return IpeResult::Err("http: fetch did not return a Response".to_string().into());
+        }
+    };
+
+    let status = i64::from(resp.status());
+
+    let mut out_headers = HashMap::new();
+    if let Ok(Some(iter)) = js_sys::try_iter(resp.headers().as_ref()) {
+        for entry in iter.flatten() {
+            if let Ok(pair) = entry.dyn_into::<js_sys::Array>() {
+                let k = pair.get(0).as_string().unwrap_or_default();
+                let v = pair.get(1).as_string().unwrap_or_default();
+                if !k.is_empty() {
+                    out_headers.insert(crate::http_header::canonical_header(&k), v);
+                }
+            }
+        }
+    }
+
+    let text_promise = match resp.text() {
+        Ok(p) => p,
+        Err(e) => {
+            return IpeResult::Err(format!("http: failed reading response body: {:?}", e).into());
+        }
+    };
+    let text_value = match JsFuture::from(text_promise).await {
+        Ok(v) => v,
+        Err(e) => {
+            return IpeResult::Err(format!("http: failed reading response body: {:?}", e).into());
+        }
+    };
+    let body = text_value.as_string().unwrap_or_default();
+    let cap = wasm_http_body_cap();
+    if body.len() > cap {
+        return IpeResult::Err(
+            format!("http: response body too large (> {cap} bytes; raise IPE_HTTP_MAX_BODY_BYTES)")
+                .into(),
+        );
+    }
+
+    ok_res(HttpResponse {
+        status,
+        body,
+        headers: out_headers,
+    })
+}
+
+/// Http.get : String -> Task Error HttpResponse (browser substitute)
+#[cfg(target_arch = "wasm32")]
+pub fn http_get<E: From<String> + 'static>(url: String) -> IpeTask<E, HttpResponse> {
+    Box::pin(do_fetch(HttpRequest {
+        method: "GET".to_string(),
+        url,
+        body: String::new(),
+        headers: Vec::new(),
+        timeout: 30000,
+        followRedirects: true,
+        maxRedirects: 10,
+    }))
+}
+
+/// Http.post : String -> String -> Task Error HttpResponse (browser substitute)
+#[cfg(target_arch = "wasm32")]
+pub fn http_post<E: From<String> + 'static>(url: String, body: String) -> IpeTask<E, HttpResponse> {
+    Box::pin(do_fetch(HttpRequest {
+        method: "POST".to_string(),
+        url,
+        body,
+        headers: Vec::new(),
+        timeout: 30000,
+        followRedirects: true,
+        maxRedirects: 10,
+    }))
+}
+
+/// Http.request : HttpRequest -> Task Error HttpResponse (browser substitute)
+#[cfg(target_arch = "wasm32")]
+pub fn http_request<E: From<String> + 'static>(req: HttpRequest) -> IpeTask<E, HttpResponse> {
+    Box::pin(do_fetch(req))
 }
 
 #[cfg(test)]

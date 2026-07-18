@@ -18,9 +18,11 @@
 //! unchecked cast on a foreign node is UB in the glue). A failed cast routes
 //! to the classified console-error path, never a trap.
 //!
-//! Not yet supported (fail loud, never silent): `Cmd.publish` (in-tab
-//! broker), `Sub.every`/`Sub` sources (timer bridge), routed Live apps.
-//! Each logs a classified `console.error` when reached.
+//! `Sub.every`/`Time.every` (via `subs::SubManager`, `gloo-timers`) and
+//! `Cmd.publish`/`PubSub.publish`/`Sub.subscribeTopic` (via `pubsub`, an
+//! in-tab broker) are the M4 Cmd/Sub browser bridge — see each submodule's
+//! doc comment. Routed Live apps stay out of scope (M5's client-entry
+//! reachability closure + router).
 
 #![allow(clippy::type_complexity)] // TEA fn-quadruples are inherent here
 
@@ -36,6 +38,9 @@ use crate::dom::{HandlerIndex, LiveReq, build_index, diff::Patch, diff::diff};
 use crate::html::{FormData, Html, assign_sky_ids, render_html};
 use crate::tea::{IpeCmd, IpeSub};
 
+pub mod pubsub;
+mod subs;
+
 /// Root sky-id path — matches the Live/Webview renderers so a future
 /// SSR-adopt path sees identical ids.
 const ROOT_SKY_ID: &str = "r";
@@ -46,7 +51,10 @@ fn console_fatal(class: &str, detail: &str) {
     web_sys::console::error_1(&JsValue::from_str(&format!("[ipe-wasm:{class}] {detail}")));
 }
 
-fn console_warn(detail: &str) {
+/// Shared non-fatal diagnostic sink — reused by `ws_client.rs`'s
+/// `web_socket_connect_with` (browser platform limitations that degrade
+/// rather than fail, e.g. unsettable custom headers).
+pub(crate) fn console_warn(detail: &str) {
     web_sys::console::warn_1(&JsValue::from_str(&format!("[ipe-wasm] {detail}")));
 }
 
@@ -96,6 +104,23 @@ where
     })
 }
 
+thread_local! {
+    /// Distinct origin token per mounted app instance — the wasm analogue of
+    /// a Live session's sid, used ONLY to scope `Cmd.publish`/`PubSub.publish`
+    /// echo-suppression (`wasm::pubsub`) to the mount instance that owns a
+    /// given `Sub.subscribeTopic`. Monotonic within one wasm module instance
+    /// (a fresh page load always resets it), so two `wasm_app`/`wasm::mount`
+    /// calls on the same page (e.g. multiple embeds) never collide.
+    static NEXT_INSTANCE_ID: Cell<u64> = const { Cell::new(1) };
+}
+fn next_instance_origin() -> String {
+    NEXT_INSTANCE_ID.with(|c| {
+        let id = c.get();
+        c.set(id + 1);
+        format!("wasm-instance-{id}")
+    })
+}
+
 /// The retained application state driving one mounted TEA app.
 struct App<Model, Msg> {
     model: RefCell<Model>,
@@ -105,8 +130,26 @@ struct App<Model, Msg> {
     frame_scheduled: Cell<bool>,
     update: Box<dyn Fn(Msg, Model) -> (Model, IpeCmd<Msg>)>,
     view: Box<dyn Fn(Model) -> Html<Msg>>,
-    #[allow(dead_code)] // wired to the timer bridge when Sub substitutes land
     subscriptions: Box<dyn Fn(Model) -> IpeSub<Msg>>,
+    submgr: RefCell<subs::SubManager<Msg>>,
+    /// This mount instance's `Cmd.publish`/`Sub.subscribeTopic` origin token.
+    origin: String,
+}
+
+/// Recompute `subscriptions(model)` and hand it to the `SubManager`, wrapped
+/// in [`pubsub::with_origin`] so a `Sub.subscribeTopic` materialised during
+/// this call registers against the owning mount instance (mirrors native's
+/// `with_session_sid` around `SubManager::update`).
+fn resync_subscriptions<Model, Msg>(app: &Rc<App<Model, Msg>>)
+where
+    Model: Clone + 'static,
+    Msg: Clone + 'static,
+{
+    let model = app.model.borrow().clone();
+    let sub = pubsub::with_origin(&app.origin, || (app.subscriptions)(model));
+    let app2 = Rc::clone(app);
+    let emit: Rc<dyn Fn(Msg)> = Rc::new(move |msg| enqueue(&app2, msg));
+    app.submgr.borrow_mut().update(sub, &emit);
 }
 
 fn mount_app<Model, Msg, FInit, FUpdate, FView, FSubs>(
@@ -144,18 +187,13 @@ where
         update: Box::new(update),
         view: Box::new(view),
         subscriptions: Box::new(subscriptions),
+        submgr: RefCell::new(subs::SubManager::new()),
+        origin: next_instance_origin(),
     });
 
     attach_delegated_listeners(&body, &app)?;
     run_cmd(&app, cmd0);
-    // Sub bridge lands with the timer substitutes; warn once if the app
-    // declares real subscriptions so silence is never mistaken for support.
-    {
-        let model = app.model.borrow().clone();
-        if !matches!((app.subscriptions)(model), IpeSub::None) {
-            console_warn("subscriptions are not yet supported on the wasm client");
-        }
-    }
+    resync_subscriptions(&app);
     Ok(())
 }
 
@@ -382,10 +420,16 @@ where
     for cmd in cmds {
         run_cmd(app, cmd);
     }
+    // Re-evaluate subscriptions against the new model, exactly like native's
+    // `SubManager::update` call after every `update` — tears down stale
+    // `Sub.every` timers/`Sub.subscribeTopic` registrations and respawns from
+    // the fresh `Sub` tree.
+    resync_subscriptions(app);
 }
 
 /// Fire a Cmd: None/Batch recurse; Perform runs on the microtask queue and
-/// feeds its Msg back through the scheduler; Publish is not yet bridged.
+/// feeds its Msg back through the scheduler; Publish broadcasts through the
+/// in-tab `wasm::pubsub` broker, scoped to this mount instance's origin.
 fn run_cmd<Model, Msg>(app: &Rc<App<Model, Msg>>, cmd: IpeCmd<Msg>)
 where
     Model: Clone + 'static,
@@ -405,11 +449,11 @@ where
                 enqueue(&app, msg);
             });
         }
-        IpeCmd::Publish(_) => {
-            console_fatal(
-                "UnsupportedEffect",
-                "Cmd.publish is not yet bridged on the wasm client",
-            );
+        IpeCmd::Publish(thunk) => {
+            // The thunk closes over the payload + topic (`wasm::pubsub::cmd_publish`/
+            // `cmd_publish_no_echo`); this mount instance's origin scopes
+            // echo-suppression to ITS OWN `Sub.subscribeTopic` listeners.
+            thunk(&app.origin);
         }
     }
 }

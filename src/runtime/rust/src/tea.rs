@@ -40,9 +40,14 @@ pub type PerformThunk<M> = Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = M>>>>
 pub type SubSpawn<M> =
     Box<dyn FnOnce(std::sync::Arc<dyn Fn(M) + Send + Sync>) -> tokio::task::JoinHandle<()> + Send>;
 /// wasm: single-threaded, no tokio — a source registers its emit callback and
-/// owns its own teardown (no `JoinHandle` to abort).
+/// returns a teardown closure the scheduler runs on re-subscribe/unmount (the
+/// wasm analogue of aborting the native `JoinHandle`). The M4 pub/sub broker
+/// (`wasm::pubsub::sub_subscribe_topic`) is the first constructor of this
+/// type on wasm; every source MUST return a real unregister thunk (never a
+/// no-op) so the scheduler's stop-all-then-respawn cycle (mirroring native's
+/// `SubManager::update`) cannot accumulate duplicate listeners.
 #[cfg(target_arch = "wasm32")]
-pub type SubSpawn<M> = Box<dyn FnOnce(std::rc::Rc<dyn Fn(M)>)>;
+pub type SubSpawn<M> = Box<dyn FnOnce(std::rc::Rc<dyn Fn(M)>) -> Box<dyn FnOnce()>>;
 
 /// Ipê `Sub msg`.
 pub enum IpeSub<M> {

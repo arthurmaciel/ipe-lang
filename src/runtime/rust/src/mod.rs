@@ -23,10 +23,22 @@ pub mod config;
 pub mod config_decode;
 pub mod core;
 
-#[cfg(feature = "crypto")]
+// wasm32: `crypto_random_bytes`/`crypto_random_token` (the browser entropy
+// substitute) plus the pure hash family compile without the native-only AEAD
+// deps — those functions are individually `cfg(not(target_arch = "wasm32"))`
+// inside `crypto.rs` (see its module doc).
+#[cfg(any(
+    feature = "crypto",
+    all(target_arch = "wasm32", feature = "wasm-client")
+))]
 pub mod crypto;
 pub mod file;
-#[cfg(feature = "tokio")]
+// wasm32: `Log.*` routes to `console.{debug,info,warn,error}` (see `log.rs`'s
+// `cfg(target_arch = "wasm32")` sink split).
+#[cfg(any(
+    feature = "tokio",
+    all(target_arch = "wasm32", feature = "wasm-client")
+))]
 pub mod log;
 pub mod random;
 // `system` is always compiled (not tokio-gated): it owns the process-global
@@ -37,7 +49,15 @@ pub mod random;
 // Its Ipê-facing helpers return `IpeTask`/`IpeResult` (defined in `core`, no
 // tokio dependency) and otherwise use only std, so it compiles without tokio.
 pub mod system;
-#[cfg(feature = "tokio")]
+// wasm32: the pure future-combinator half of `Task.*` (`map`/`andThen`/
+// `mapError`/`succeed`/`fail`/`fromResult`/`andThenResult`/`onError`/`lazy`/
+// `sequence`) compiles + runs unchanged — no tokio dependency. The
+// tokio-bound half (`block_on`/`Task.run`/`Task.parallel`/`Task.retryWith`)
+// stays `cfg(not(target_arch = "wasm32"))` inside the file (see its doc).
+#[cfg(any(
+    feature = "tokio",
+    all(target_arch = "wasm32", feature = "wasm-client")
+))]
 pub mod task;
 pub mod time;
 #[cfg(feature = "tokio")]
@@ -64,12 +84,18 @@ pub use config_decode::*;
 pub use core::*;
 #[cfg(feature = "json")]
 pub use json::*;
-#[cfg(feature = "tokio")]
+#[cfg(any(
+    feature = "tokio",
+    all(target_arch = "wasm32", feature = "wasm-client")
+))]
 pub use log::*;
 pub use random::*;
 #[cfg(feature = "tokio")]
 pub use system::*;
-#[cfg(feature = "tokio")]
+#[cfg(any(
+    feature = "tokio",
+    all(target_arch = "wasm32", feature = "wasm-client")
+))]
 pub use task::*;
 pub use time::*;
 #[cfg(feature = "tokio")]
@@ -137,7 +163,11 @@ pub use secret::*;
 // build). Gated on the union of its consumers; a default-features build
 // omits it (dead code otherwise). The EMITTED project's `mod.rs` declares it
 // unconditionally (base module set — `http_client` is always emitted).
-#[cfg(any(feature = "server", feature = "http_client"))]
+#[cfg(any(
+    feature = "server",
+    feature = "http_client",
+    all(target_arch = "wasm32", feature = "wasm-client")
+))]
 pub mod http_header;
 #[cfg(feature = "server")]
 pub mod server;
@@ -152,12 +182,23 @@ pub use server_stream::*;
 // and ws_client (no reqwest). Present whenever either compiles. Consumers import
 // via the full `super::ssrf::…` path; the fns are `pub(crate)`, so a
 // `pub use ssrf::*;` glob would reexport nothing — intentionally omitted.
+// wasm32: NOT pulled in — the browser fetch/WebSocket substitutes have no SSRF
+// surface of their own (the sandboxed tab, not app code, owns DNS/socket
+// access; see `http_client.rs`'s wasm32 doc comment for the full rationale).
 #[cfg(any(feature = "http_client", feature = "websocket_client"))]
 pub mod ssrf;
 
-#[cfg(feature = "http_client")]
+// wasm32: `Http.get`/`post`/`request` route to `fetch` (see `http_client.rs`'s
+// `cfg(target_arch = "wasm32")` split) instead of reqwest.
+#[cfg(any(
+    feature = "http_client",
+    all(target_arch = "wasm32", feature = "wasm-client")
+))]
 pub mod http_client;
-#[cfg(feature = "http_client")]
+#[cfg(any(
+    feature = "http_client",
+    all(target_arch = "wasm32", feature = "wasm-client")
+))]
 pub use http_client::*;
 #[cfg(feature = "http_client")]
 pub mod http_stream;
@@ -188,9 +229,18 @@ pub use tea::*;
 #[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
 pub mod wasm;
 
-#[cfg(feature = "websocket_client")]
+// wasm32: `Ipe.WebSocket` client routes to `web_sys::WebSocket` (see
+// `ws_client.rs`'s `cfg(target_arch = "wasm32")` split) instead of
+// tokio-tungstenite.
+#[cfg(any(
+    feature = "websocket_client",
+    all(target_arch = "wasm32", feature = "wasm-client")
+))]
 pub mod ws_client;
-#[cfg(feature = "websocket_client")]
+#[cfg(any(
+    feature = "websocket_client",
+    all(target_arch = "wasm32", feature = "wasm-client")
+))]
 pub use ws_client::*;
 
 // Ipe.Html / Ipe.Ui render surface — the Html/Attribute/Event ADTs + renderer +
