@@ -7,14 +7,14 @@ import Ipe.Db as Db
 import Ipe.Log exposing (println)
 
 
--- BACKLOG #186 FALSE-POSITIVE guard: a wildcard `any` param used ONLY as a Db
--- row (which correctly gains the #177 `SkyRow` bound) must NOT ALSO gain a
--- spurious `Display` bound just because a SIBLING concrete `String` param is
--- `toString`'d in the same body. The Display obligation is decided per-param by
--- the exact `toString` argument position; a `String`-typed sibling never routes
--- Display onto the wildcard `row` generic. A gratuitous `T: std::fmt::Display`
--- on a Dict-shaped row (which is not Display) would be an outright E0277 SEAL
--- violation the moment a caller instantiates it.
+-- FALSE-POSITIVE guard: a wildcard `any` param used ONLY as a Db row (which
+-- correctly gains the `IpeRow` bound) must NOT ALSO gain a spurious
+-- `IpeStringify` bound just because a SIBLING concrete `String` param is
+-- `toString`'d in the same body. The stringify obligation is decided per-param
+-- by the exact `toString` argument position; a `String`-typed sibling never
+-- routes `IpeStringify` onto the wildcard `row` generic. The row generic's real
+-- obligation is `IpeRow` alone — a gratuitous stringify bound would be a bound
+-- the param does not need and does not reflect its use.
 grab : any -> String -> String
 grab row prefix =
     toString prefix ++ ":" ++ Db.getString "k" row

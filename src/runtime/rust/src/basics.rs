@@ -164,24 +164,26 @@ pub fn basics_error_to_string<T: crate::stringify::IpeStringify>(v: T) -> String
 // reuses `basics_error_to_string` above.
 
 /// Ipê `Debug.toString` — the `{{expr}}` string-interpolation stringifier.
-/// Display-based, NOT Debug: a `String` interpolates as itself (no surrounding
-/// quotes) and scalars format like Go's `%v`. Mirrors Go's `Debug_toString`
-/// (`String → s`, else `Sprintf("%v", …)`).
-pub fn debug_to_string<T: std::fmt::Display>(v: T) -> String {
-    format!("{}", v)
+/// Backed by the total `IpeStringify` trait: a `String` interpolates as itself
+/// (no surrounding quotes) and every value renders like Go's `%v`. Mirrors Go's
+/// `Debug_toString` (`String → s`, else `Sprintf("%v", …)`). Identical to
+/// [`basics_to_string`] — the interpolation canonicaliser lowers `{{expr}}` to
+/// the same `Basics.toString` kernel.
+pub fn debug_to_string<T: crate::stringify::IpeStringify>(v: T) -> String {
+    v.ipe_show()
 }
 
-/// Ipê `Basics.toString : a -> String` — Go's `fmt.Sprintf("%v", …)`. Display-
-/// based (NOT Debug, so a `String` renders unquoted and scalars format like Go's
-/// `%v`); same semantics as `Debug.toString`. The `Display` bound is deliberate:
-/// `toString` on a scalar (Int/Float/Bool/String) is the overwhelmingly common
-/// case and matches Go exactly, while `toString` on a composite (record/ADT)
-/// — which has no `Display` impl — fails at COMPILE time (E0277), never at
-/// runtime. That honours the "no runtime errors" rule (Go would reflect at
-/// runtime; Rust catches it before a binary exists). A future type-directed
-/// lowering could route composites to a derived renderer if that case arises.
-pub fn basics_to_string<T: std::fmt::Display>(v: T) -> String {
-    format!("{}", v)
+/// Ipê `Basics.toString : a -> String` — Go's `fmt.Sprintf("%v", …)`. Backed by
+/// the total `IpeStringify` trait (the same path as [`basics_error_to_string`]),
+/// which mirrors Go's `%v` EXACTLY and TOTALLY: a `String` renders unquoted, a
+/// scalar renders like `%v`, and records / ADTs / lists / maps follow Go's
+/// space-separated struct/slice/map layout. Every scalar and every
+/// codegen-emitted record/ADT implements `IpeStringify` (Emitter.hs), so the
+/// bound is satisfiable for scalar, record, ADT, and generic call sites alike —
+/// there is no exit-0-then-cargo-fail composite hole (which a `Display` bound
+/// left open, since a composite has no `Display` impl).
+pub fn basics_to_string<T: crate::stringify::IpeStringify>(v: T) -> String {
+    v.ipe_show()
 }
 
 #[cfg(test)]
