@@ -186,19 +186,19 @@ pub fn auth_verify_token<E: From<String>>(
     // comment for the detailed rationale.
     if let Some(payload) = crate::jwt::decode_payload(&token) {
         let now = crate::jwt::now_unix_seconds();
-        if let Some(exp) = crate::jwt::numeric_date(&payload, "exp") {
-            if now >= exp {
-                return IpeResult::Err("auth.verifyToken: token has expired".to_string().into());
-            }
+        if let Some(exp) = crate::jwt::numeric_date(&payload, "exp")
+            && now >= exp
+        {
+            return IpeResult::Err("auth.verifyToken: token has expired".to_string().into());
         }
-        if let Some(nbf) = crate::jwt::numeric_date(&payload, "nbf") {
-            if now < nbf {
-                return IpeResult::Err(
-                    "auth.verifyToken: token is not yet valid"
-                        .to_string()
-                        .into(),
-                );
-            }
+        if let Some(nbf) = crate::jwt::numeric_date(&payload, "nbf")
+            && now < nbf
+        {
+            return IpeResult::Err(
+                "auth.verifyToken: token is not yet valid"
+                    .to_string()
+                    .into(),
+            );
         }
     }
     let key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());

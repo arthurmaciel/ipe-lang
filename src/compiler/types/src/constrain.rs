@@ -483,8 +483,9 @@ struct Builtins {
     /// and the final `Jwt.encode` call.
     jwt_claims: Symbol,
     /// `"Algorithm"` — JWT signing algorithm descriptor.  Backed at runtime by
-    /// a `String` in the form `"HS256:<secret>"` or `"RS256:<pem>"`.  Built
-    /// by `Jwt.hs256` / `Jwt.rs256` and consumed by `Jwt.encode` / `Jwt.decode`.
+    /// a sealed `Ipe.Secret` wrapping the string `"HS256:<secret>"` or
+    /// `"RS256:<pem>"`.  Built by `Jwt.hs256` / `Jwt.rs256` and consumed by
+    /// `Jwt.encode` / `Jwt.decode`.
     jwt_algorithm: Symbol,
     // ── Ipe.Decimal opaque type constructor symbol ────────────────────────────
     /// `"Decimal"` — the opaque arbitrary-precision decimal type constructor
@@ -3886,8 +3887,10 @@ impl<'a> Builder<'a> {
             args: Vec::new(),
         };
         // `algorithm_ty()` — JWT signing algorithm descriptor.  Backed at
-        // runtime by a `String` in the form `"HS256:<secret>"` or
-        // `"RS256:<pem>"` (maps to `IrType::Str` in the lowerer).
+        // runtime by a sealed `Ipe.Secret` wrapping the string
+        // `"HS256:<secret>"` or `"RS256:<pem>"` (maps to `IrType::Secret` in
+        // the lowerer) — the key material never gets a `Debug`/`Display`/
+        // stringify surface, mirroring `Ipe.Secret` itself.
         let algorithm_ty = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.jwt_algorithm,
