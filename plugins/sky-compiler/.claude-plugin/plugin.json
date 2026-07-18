@@ -1,6 +1,0 @@
-{
-  "name": "sky-compiler",
-  "version": "0.1.0",
-  "description": "Soundness gate + guardian-review workflow for Sky-compiler, Rust-backend, and Rust-runtime development: deterministic checks first (cheap), adversarial reasoning last (expensive).",
-  "author": { "name": "Arthur Maciel" }
-}

@@ -48,6 +48,16 @@ docs/architecture/progdev-cost-ledger.tsv
 .claude
 skills-lock.json
 
+# Agent-orchestration tooling for THIS repo's own development workflow
+# (Claude Code plugin skills, pre-tool-use hooks) — internal dev-time only,
+# not part of the Ipê language/compiler/runtime a contributor or user needs.
+plugins/
+scripts/hooks/
+scripts/guards/
+scripts/merge-lane.sh
+scripts/migrate-golden-harness.sh
+scripts/progressive-development/
+
 scripts/progressive-development/.backlog.lock
 scripts/progressive-development/backlog.svg
 scripts/progressive-development/backlog.png
