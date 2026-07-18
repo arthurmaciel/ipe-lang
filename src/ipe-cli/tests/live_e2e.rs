@@ -1014,7 +1014,7 @@ fn live_pubsub_publish_polymorphic_record_payload_build_only() -> Result<(), Box
     Ok(())
 }
 
-/// Typed-record onSubmit — the CANONICAL CLAUDE.md "forms with passwords" idiom:
+/// Typed-record onSubmit — the CANONICAL AGENTS.md "forms with passwords" idiom:
 /// `Ui.form [Ui.onSubmit DoSignIn] [...]` where `DoSignIn : Creds -> Msg` is a
 /// TYPED-RECORD payload constructor (not a bare Msg). This is the exact shape
 /// `examples/19-skyforum`'s `View/Login.ipe` and `examples/27-multi-session-chat`

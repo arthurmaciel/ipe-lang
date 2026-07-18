@@ -10,9 +10,9 @@ module Main exposing (main)
 --   ./sky-out/app --tui       →  Ipe.Tui   (ANSI cells, full screen)
 --   ./sky-out/app --webview   →  Ipe.Webview (macOS only; stub
 --                                elsewhere returns Err Error at
---                                runtime per CLAUDE.md §Webview).
+--                                runtime per AGENTS.md §Webview).
 --
--- Per CLAUDE.md, `sky build` flips to CGO_ENABLED=1 when it sees
+-- Per AGENTS.md, `sky build` flips to CGO_ENABLED=1 when it sees
 -- `rt.Webview_app` in the emitted Go — so this app builds with
 -- cgo on macOS and falls back to the stub on other platforms.
 import Ipe.Prelude exposing (..)

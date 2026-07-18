@@ -1,7 +1,7 @@
 module View.Login exposing (..)
 
 -- Login form using the Ipe.Live "form + onSubmit" pattern
--- (CLAUDE.md "Forms with passwords"). Three wins over per-keystroke
+-- (AGENTS.md "Forms with passwords"). Three wins over per-keystroke
 -- onInput on the password field:
 --
 --   1. Password manager extensions (1Password, Bitwarden, browser

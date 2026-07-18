@@ -4,7 +4,7 @@ module Main exposing (main)
 -- Ipe.Ui. The view layer is split across multiple modules
 -- (State / Update / View.Common / View.Posts / View.Detail /
 -- View.Compose / View.Login) so each per-module type-check stays
--- well below the heap-exhaustion limit (CLAUDE.md Limitation #17).
+-- well below the heap-exhaustion limit (AGENTS.md Limitation #17).
 -- A single monolithic Main with the same surface OOMs the type-checker
 -- and locked the Mac that birthed scripts/mem-guard.sh — the split
 -- form gives us the full feature surface at zero ergonomics cost

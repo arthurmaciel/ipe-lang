@@ -393,7 +393,7 @@ Fix column: MA = MachineApplicable, MI = MaybeIncorrect, HP = HasPlaceholders,
 
 | Rule | Detects | Inputs | Level | Fix |
 |---|---|---|---|---|
-| `task-string-error` | a binding/region typed `Task String a` or `Result String a` (CLAUDE.md: never `String` as error type) | T | deny | — (points at `Error`) |
+| `task-string-error` | a binding/region typed `Task String a` or `Result String a` (AGENTS.md: never `String` as error type) | T | deny | — (points at `Error`) |
 | `float-money` | `Float`-typed binding whose name matches money vocabulary (`price`, `amount`, `total`, `balance`, …) | C+T | warn (heuristic — honest: name matching can false-positive, so it may never be deny) | — (points at `Ipe.Money`) |
 | `password-oninput` | `onInput` handler attached alongside `type "password"` on the same input attr list | P+C | deny | — (teaches the `onSubmit` pattern) |
 | `secret-in-log` | identifier with secret vocabulary (`password`, `token`, `secret`, `apiKey`) flowing as a `Log.*` / `println` argument | C | warn (heuristic) | — |

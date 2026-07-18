@@ -475,7 +475,7 @@ main =
   builders per the stdlib typed-record convention, so future cfg fields
   (`onQuiesce`, exit-code policy) are additive.
 
-**Shape-matrix delta — one row** (append to CLAUDE.md "App shape matrix"):
+**Shape-matrix delta — one row** (append to AGENTS.md "App shape matrix"):
 
 | User wants… | Use | Entry point shape | Notes |
 |---|---|---|---|
@@ -485,7 +485,7 @@ main =
 (new `Ipe.Worker`, `Cmd.quit`, `Sub.stdin` / `Sub.onSignal`);
 `docs/tooling/cli.md` (the reactive-CLI shape); `docs/sky-toml.md` if any
 `[worker]` keys are added; the "App shape matrix" + "Effect boundary" +
-"Active limitations" sections and their mirrors in `templates/CLAUDE.md`;
+"Active limitations" sections and their mirrors in `templates/AGENTS.md`;
 `README.md` "What's in the box." A worked example
 (`examples/NN-headless-worker`) demonstrating a SIGTERM-graceful daemon +
 a self-terminating stdin processor, the way `30-sse-server-demo`

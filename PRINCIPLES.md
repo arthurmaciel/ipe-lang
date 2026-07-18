@@ -1,7 +1,7 @@
 # PRINCIPLES.md — enforcement SSOT
 
 Every enforced rule of the Rust-backend project lives here, stated once. The
-other governance docs — `CLAUDE.md` (Ipê language authoring reference),
+other governance docs — `AGENTS.md` (Ipê language authoring reference),
 `DEVELOPMENT.md` (dev-ops workflow), `scripts/progressive-development/context.md`
 (autonomous-lane contract) — reference this file rather than restate it.
 

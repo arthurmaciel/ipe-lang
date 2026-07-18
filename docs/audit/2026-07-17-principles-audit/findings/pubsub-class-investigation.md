@@ -2,7 +2,7 @@
 
 Scope: is `class = Tea` on `PubSubPublish` / `PubSubPublishNoEcho`
 (`src/compiler/kernels/src/lib.rs:2129-2132`) a latent dispatch bug for the
-Task-shaped, non-TEA-context (raw server handler / Cli job) call path CLAUDE.md
+Task-shaped, non-TEA-context (raw server handler / Cli job) call path AGENTS.md
 advertises?
 
 ## §0 Honesty ledger
@@ -122,7 +122,7 @@ qualifier-wiring change, not after.
 
 ### Effect-boundary inconsistency (INVESTIGATE-3)
 
-Real but purely taxonomic. CLAUDE.md lists `PubSub.publish` under Task/effects
+Real but purely taxonomic. AGENTS.md lists `PubSub.publish` under Task/effects
 and `Cmd.publish` under TEA; the kernel table collapses both to `class = Tea`.
 Given `class`'s only behavioural consumer is the wasm allowlist (where Tea is
 fine for both), the label is **inconsistent with the documented tier but not
@@ -138,7 +138,7 @@ Two independent, cheap fixes; do them together with the qualifier-wiring:
    qualifier `"PubSub"` is not in the wasm floor allowlist (`kernels/src/lib.rs:
    4934-4957` lists specific Pure qualifiers; `"PubSub"` isn't among them), so it
    stays wasm-denied, matching Tea's outcome. This aligns the class field with
-   the CLAUDE.md effect tier (Task-tier effect, like `Http`/`File` which are also
+   the AGENTS.md effect tier (Task-tier effect, like `Http`/`File` which are also
    `class = Pure`). **This does NOT by itself fix the module pull-in** — see #2.
 
 2. **Decouple the runtime-module pull-in from `is_tea()`.** The right structural

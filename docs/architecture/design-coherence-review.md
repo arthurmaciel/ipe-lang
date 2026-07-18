@@ -334,7 +334,7 @@ separately). Already-overtaken rows to note when refreshing:
   The retry family stays medium.
 - **ex-15 (`Handler` head-alias unfold T0004)** has no owning task in any
   banked doc — upstream closed this class via `unfoldHeadAlias`
-  (CLAUDE.md "Closed in v0.15" — contributor PR #123). File it.
+  (AGENTS.md "Closed in v0.15" — contributor PR #123). File it.
 
 ### 1.10 `parallel-lane-plan.md` — STALE, supersede
 

@@ -559,7 +559,7 @@ runtime change). **Roadmap slot: post-DONE** (additive; sequence with the
 
 **Why.** The 16-dp division-precision boundary between `rust_decimal`
 (`checked_div`, ~28 significant digits) and Go `shopspring` (`DivisionPrecision
-= 16`) is documented in CLAUDE.md Agent-learnings and the ledger notes, **but is
+= 16`) is documented in AGENTS.md Agent-learnings and the ledger notes, **but is
 not filed as a numbered divergence** with a regression that pins it. Per the
 no-deferral principle and `docs/architecture/divergence-policy.md` (which
 records divergences via `oracle_divergence = true` + a `divergence_reason`), an

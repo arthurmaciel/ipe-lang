@@ -47,7 +47,7 @@ pub struct ProjectManifest {
     /// The SQL driver the emitted project targets (from `[database] driver
     /// = "…"`). Defaults to [`ipe_backend_rust::DbDriver::Sqlite`] when the
     /// `[database]` section (or the `driver` key within it) is absent — the
-    /// documented default in `CLAUDE.md`'s `sky.toml` schema table.
+    /// documented default in `AGENTS.md`'s `sky.toml` schema table.
     pub driver: ipe_backend_rust::DbDriver,
     /// The `[rust]` static-build request layer (`static` / `target` /
     /// `allocator` / `allowSlowAllocator`) — the lowest-precedence layer
