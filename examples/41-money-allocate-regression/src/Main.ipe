@@ -1,0 +1,69 @@
+module Main exposing (main)
+
+-- | Regression tests for Money.allocate guard + sign-correct residue.
+--
+-- CO-INCR-001: allocate 0 must return [] (was: divide-by-zero abort, exit 101)
+-- CO-INCR-002: allocate into negative total must distribute cents toward zero
+--              so the parts sum back to the original amount exactly.
+
+import Ipe.Prelude exposing (..)
+import Ipe.Money as Money exposing (Money, Currency(..))
+import Ipe.Decimal as Dec
+import Ipe.Log exposing (println)
+import Ipe.Task as Task
+import Ipe.System as System
+
+
+-- Sum a list of Money values for the same currency.
+sumParts : Currency -> List Money -> Money
+sumParts c xs =
+    List.foldl (\acc x -> Money.add acc x) (Money.zero c) xs
+
+
+-- Render each Money value as its formatted string joined by commas.
+showParts : List Money -> String
+showParts parts =
+    String.join ", " (List.map Money.format parts)
+
+
+main : Task.Task Never ()
+main =
+    let
+        -- CO-INCR-001: parts = 0 must return []
+        zeroResult = Money.allocate 0 (Money.fromMajor USD (Dec.fromInt 100))
+        zeroOk = List.length zeroResult == 0
+
+        -- CO-INCR-001: parts = -1 must also return []
+        negPartsResult = Money.allocate (-1) (Money.fromMajor USD (Dec.fromInt 100))
+        negPartsOk = List.length negPartsResult == 0
+
+        -- CO-INCR-002: negative total, 3 parts
+        -- -$1.00 = -100 cents; base = -33, remainder = -1 → [-34, -33, -33]
+        negTotal = Money.neg (Money.fromMajor USD (Dec.fromInt 1))
+        negParts = Money.allocate 3 negTotal
+        negSum = sumParts USD negParts
+        negSumOk = Money.eq negSum negTotal
+
+        -- Positive 3-way split still correct
+        posParts = Money.allocate 3 (Money.fromMajor USD (Dec.fromInt 100))
+        posSum = sumParts USD posParts
+        posSumOk = Money.eq posSum (Money.fromMajor USD (Dec.fromInt 100))
+
+        allOk = zeroOk && negPartsOk && negSumOk && posSumOk
+
+        report =
+            String.join "\n"
+                [ "allocate 0 -> " ++ String.fromInt (List.length zeroResult) ++ " parts (want 0): " ++ (if zeroOk then "PASS" else "FAIL")
+                , "allocate (-1) -> " ++ String.fromInt (List.length negPartsResult) ++ " parts (want 0): " ++ (if negPartsOk then "PASS" else "FAIL")
+                , "allocate 3 (-$1.00) -> [" ++ showParts negParts ++ "] sum=" ++ Money.format negSum ++ " (want -$1.00): " ++ (if negSumOk then "PASS" else "FAIL")
+                , "allocate 3 ($100.00) sum=" ++ Money.format posSum ++ " (want $100.00): " ++ (if posSumOk then "PASS" else "FAIL")
+                ]
+    in
+    Task.andThen
+        (\_ ->
+            if allOk then
+                Task.succeed ()
+            else
+                System.exit 1
+        )
+        (println report)

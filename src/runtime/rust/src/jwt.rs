@@ -72,31 +72,44 @@ fn payload_json(claims_json: &str) -> Result<String, String> {
     Ok(super::json_enc_encode(0, value))
 }
 
-/// True when the token's payload carries `exp == 0`.
+/// Read a NumericDate claim (RFC 7519 §2: any JSON number, may be fractional)
+/// as a whole-second count, flooring toward −∞ so a token is never accepted
+/// longer than its fractional `exp` states.
 ///
-/// The decoders set `reject_tokens_expiring_in_less_than = 1` so jsonwebtoken's
-/// reject condition becomes `exp - 1 < now` (≡ Go's `now >= exp`). It evaluates
-/// `exp - 1` in `u64`, so an `exp` of `0` underflows — a panic in a debug build,
-/// a wrap to `u64::MAX` (silently accepting an always-expired token) in release.
-/// An `exp` of 0 is 1970-01-01, unconditionally in the past, so Go's `now >= exp`
-/// rejects it; we detect that case here and short-circuit to the same rejection
-/// before the subtraction can run. Reading the unverified payload is safe: the
-/// only action taken is the conservative one (reject).
-pub(crate) fn exp_is_zero(token: &str) -> bool {
-    let mut parts = token.split('.');
-    let payload = match (parts.next(), parts.next()) {
-        (Some(_header), Some(payload)) => payload,
-        _ => return false,
-    };
-    let bytes = match URL_SAFE_NO_PAD.decode(payload) {
-        Ok(b) => b,
-        Err(_) => return false,
-    };
-    let value: JsonValue = match serde_json::from_slice(&bytes) {
-        Ok(v) => v,
-        Err(_) => return false,
-    };
-    matches!(value.get("exp").and_then(JsonValue::as_u64), Some(0))
+/// Returns `None` when the claim is absent or not a number (treated as absent
+/// = accepted, matching Go's behaviour for optional `exp`/`nbf`).
+///
+/// Flooring is the conservative direction for both claims:
+///   - `exp 0.4` → `0`  (already expired at epoch; rejected)
+///   - `nbf 0.4` → `0`  (accepts slightly earlier than the fractional value,
+///     matching integer-second oracle behaviour)
+///   - `exp -0.1` → `-1` (negative, unconditionally in the past; rejected)
+pub(crate) fn numeric_date(value: &JsonValue, claim: &str) -> Option<i64> {
+    match value.get(claim) {
+        Some(JsonValue::Number(n)) => n.as_i64().or_else(|| n.as_f64().map(|f| f.floor() as i64)),
+        _ => None,
+    }
+}
+
+/// Extract and base64url-decode the payload segment of a compact JWS token,
+/// returning the parsed JSON value. Returns `None` on any parse failure.
+/// Reading the unverified payload is safe: every caller only takes the
+/// conservative action (reject) on the parsed value.
+pub(crate) fn decode_payload(token: &str) -> Option<JsonValue> {
+    let mut parts = token.splitn(3, '.');
+    let _header = parts.next()?;
+    let payload_seg = parts.next()?;
+    let bytes = URL_SAFE_NO_PAD.decode(payload_seg).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// Current wall-clock time as Unix seconds (i64). Used by the flat decoders to
+/// pre-reject expired/not-yet-valid tokens before handing off to jsonwebtoken.
+pub(crate) fn now_unix_seconds() -> i64 {
+    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(d) => d.as_secs() as i64,
+        Err(_) => 0,
+    }
 }
 
 /// Ipê `Jwt_encodeHs256 : String -> String -> Result Error String`
@@ -155,11 +168,23 @@ pub fn jwt_decode_hs256<E: From<String>>(secret: String, token: String) -> IpeRe
                 .into(),
         );
     }
-    // Guard the u64 underflow that reject_tokens_expiring_in_less_than = 1
-    // (set below) would hit on an `exp` of 0. See `exp_is_zero` — exp 0 is
-    // always expired, so this matches Go's `now >= exp` rejection.
-    if exp_is_zero(&token) {
-        return IpeResult::Err("jwt-decode: token has expired".to_string().into());
+    // Pre-reject on the full RFC 7519 NumericDate domain (integer, negative,
+    // fractional) before jsonwebtoken's `exp - 1` u64 subtraction can underflow.
+    // `numeric_date` floors fractional values conservatively, so `exp 0.4 → 0`
+    // (already past), `exp -1 → -1` (negative epoch, always past). This
+    // reproduces Go's `now >= exp` / `now < nbf` on every numeric spelling.
+    if let Some(payload) = decode_payload(&token) {
+        let now = now_unix_seconds();
+        if let Some(exp) = numeric_date(&payload, "exp") {
+            if now >= exp {
+                return IpeResult::Err("jwt-decode: token has expired".to_string().into());
+            }
+        }
+        if let Some(nbf) = numeric_date(&payload, "nbf") {
+            if now < nbf {
+                return IpeResult::Err("jwt-decode: token is not yet valid".to_string().into());
+            }
+        }
     }
     let key = DecodingKey::from_secret(secret.as_bytes());
     let mut validation = Validation::new(Algorithm::HS256);
@@ -169,10 +194,10 @@ pub fn jwt_decode_hs256<E: From<String>>(secret: String, token: String) -> IpeRe
     // exact instant `now == exp` it would ACCEPT a token Go rejects. Setting
     // reject_tokens_expiring_in_less_than = 1 shifts the reject condition to
     // `exp - 1 < now` (≡ `now >= exp`), restoring parity. leeway stays 0 so no
-    // other skew is introduced; the exp == 0 underflow of `exp - 1` is guarded
-    // above. nbf parity needs no shift: Go rejects at `now < nbf` (accept at
-    // `now == nbf`), and jsonwebtoken with leeway 0 rejects at `nbf > now`
-    // (accept at `now == nbf`) — already identical.
+    // other skew is introduced; the pre-reject above guards the underflow site for
+    // `exp` values on the full NumericDate domain. nbf parity needs no shift: Go
+    // rejects at `now < nbf` (accept at `now == nbf`), and jsonwebtoken with
+    // leeway 0 rejects at `nbf > now` (accept at `now == nbf`) — already identical.
     validation.leeway = 0;
     validation.reject_tokens_expiring_in_less_than = 1;
     // exp/nbf are OPTIONAL per the JWT spec (RFC 7519 §4.1.4-5) and per Go's
@@ -237,11 +262,20 @@ pub fn jwt_encode_rs256<E: From<String>>(
 
 /// Ipê `Jwt_decodeRs256 : String -> String -> Result Error String`
 pub fn jwt_decode_rs256<E: From<String>>(key_pem: String, token: String) -> IpeResult<E, String> {
-    // Guard the u64 underflow that reject_tokens_expiring_in_less_than = 1
-    // (set below) would hit on an `exp` of 0. See `exp_is_zero` — exp 0 is
-    // always expired, so this matches Go's `now >= exp` rejection.
-    if exp_is_zero(&token) {
-        return IpeResult::Err("jwt-decode-rs: token has expired".to_string().into());
+    // Pre-reject on the full RFC 7519 NumericDate domain — mirrors the HS256
+    // path; see `jwt_decode_hs256` for the detailed rationale.
+    if let Some(payload) = decode_payload(&token) {
+        let now = now_unix_seconds();
+        if let Some(exp) = numeric_date(&payload, "exp") {
+            if now >= exp {
+                return IpeResult::Err("jwt-decode-rs: token has expired".to_string().into());
+            }
+        }
+        if let Some(nbf) = numeric_date(&payload, "nbf") {
+            if now < nbf {
+                return IpeResult::Err("jwt-decode-rs: token is not yet valid".to_string().into());
+            }
+        }
     }
     let key = match DecodingKey::from_rsa_pem(key_pem.as_bytes()) {
         Ok(k) => k,
@@ -269,7 +303,9 @@ pub fn jwt_decode_rs256<E: From<String>>(key_pem: String, token: String) -> IpeR
     // default, which would reject any no-exp token. Clear the set so exp/nbf
     // are not required — but keep validate_exp/validate_nbf = true so that
     // WHEN these claims are present they are still validated (expired → Err,
-    // nbf in the future → Err). This matches Go exactly.
+    // nbf in the future → Err). The pre-reject above already handles the full
+    // NumericDate domain; jsonwebtoken's integer-`u64` path catches any remaining
+    // well-formed integer exp/nbf at the exact-second boundary.
     validation.required_spec_claims = HashSet::new();
     validation.validate_exp = true;
     validation.validate_nbf = true;
@@ -546,15 +582,18 @@ pub fn ipe_jwt_decode(
     };
 
     // 4. Manual time validation matching reference semantics exactly.
+    //    Uses `numeric_date` (the total NumericDate reader) so fractional and
+    //    negative exp/nbf values are honoured, not silently skipped the way
+    //    `as_i64()` would skip a float claim.
     let claims_val: JsonValue = serde_json::from_str(&payload_json).unwrap_or(JsonValue::Null);
 
-    if let Some(exp) = claims_val.get("exp").and_then(|v| v.as_i64()) {
+    if let Some(exp) = numeric_date(&claims_val, "exp") {
         // pastClaim: now >= exp  → expired
         if now >= exp {
             return IpeResult::Err("Jwt.decode: token has expired".into());
         }
     }
-    if let Some(nbf) = claims_val.get("nbf").and_then(|v| v.as_i64()) {
+    if let Some(nbf) = numeric_date(&claims_val, "nbf") {
         // futureClaim: now < nbf  → not yet valid
         if now < nbf {
             return IpeResult::Err("Jwt.decode: token is not yet valid".into());
@@ -962,5 +1001,112 @@ mod tests {
             }
             IpeResult::Err(e) => panic!("unexpected err: {e}"),
         }
+    }
+
+    // ── RT-AUTH-001/002/003 regression tests ─────────────────────────────────
+    //
+    // These tests cover the full RFC 7519 NumericDate domain (negative integer,
+    // fractional-zero, fractional-future) on both the flat HS256 path and the
+    // builder (ipe_jwt_decode) path.
+
+    /// Flat HS256: `exp = -1` (negative epoch) must be rejected.
+    /// Was silently accepted before the `numeric_date` pre-reject because
+    /// `as_u64()` returns None for negatives, bypassing the old `exp_is_zero`
+    /// guard and letting jsonwebtoken's `exp - 1` underflow to `u64::MAX`.
+    #[test]
+    fn test_flat_decode_negative_exp_rejected() {
+        let secret = "neg-exp-test-secret-0123456789abcde".to_string();
+        let claims = r#"{"sub":"x","exp":-1}"#.to_string();
+        let token: IpeResult<String, String> = jwt_encode_hs256(secret.clone(), claims);
+        let token = match token {
+            IpeResult::Ok(t) => t,
+            IpeResult::Err(e) => panic!("encode: {e}"),
+        };
+        let decoded: IpeResult<String, String> = jwt_decode_hs256(secret, token);
+        assert!(
+            matches!(decoded, IpeResult::Err(_)),
+            "flat HS256: exp=-1 (negative epoch) must be rejected"
+        );
+    }
+
+    /// Flat HS256: `exp = 0.4` (fractional, floors to 0, already past) must be
+    /// rejected without triggering a `u64` underflow on `0 - 1`.
+    /// `exp = 0.0` (fractional zero) must also be rejected.
+    #[test]
+    fn test_flat_decode_fractional_exp_zero_rejected() {
+        let secret = "frac-exp-test-secret-0123456789abc".to_string();
+        // Build the token by hand with a fractional exp (serde_json encodes it as
+        // a float literal in the JSON payload).
+        let claims_04 = r#"{"sub":"x","exp":0.4}"#.to_string();
+        let tok04: IpeResult<String, String> = jwt_encode_hs256(secret.clone(), claims_04);
+        let tok04 = match tok04 {
+            IpeResult::Ok(t) => t,
+            IpeResult::Err(e) => panic!("encode 0.4: {e}"),
+        };
+        let dec04: IpeResult<String, String> = jwt_decode_hs256(secret.clone(), tok04);
+        assert!(
+            matches!(dec04, IpeResult::Err(_)),
+            "flat HS256: exp=0.4 must be rejected (floors to 0, already expired)"
+        );
+
+        let claims_00 = r#"{"sub":"x","exp":0.0}"#.to_string();
+        let tok00: IpeResult<String, String> = jwt_encode_hs256(secret.clone(), claims_00);
+        let tok00 = match tok00 {
+            IpeResult::Ok(t) => t,
+            IpeResult::Err(e) => panic!("encode 0.0: {e}"),
+        };
+        let dec00: IpeResult<String, String> = jwt_decode_hs256(secret, tok00);
+        assert!(
+            matches!(dec00, IpeResult::Err(_)),
+            "flat HS256: exp=0.0 must be rejected"
+        );
+    }
+
+    /// Both flat `jwt_decode_hs256` and builder `ipe_jwt_decode` must agree on
+    /// a token with a fractional past exp (e.g. `<past>.5`). Previously the
+    /// flat path accepted it (old guard missed floats) while the builder skipped
+    /// the check (`as_i64()` returns None for floats). Both must now reject.
+    #[test]
+    fn test_flat_vs_builder_fractional_exp_agree() {
+        let secret = "agree-exp-secret-0123456789abcdef0".to_string();
+        // Use exp = 1.5 (past: Unix timestamp 1 is 1970-01-01, always expired).
+        let claims = r#"{"sub":"x","exp":1.5}"#.to_string();
+        let token: IpeResult<String, String> = jwt_encode_hs256(secret.clone(), claims);
+        let token = match token {
+            IpeResult::Ok(t) => t,
+            IpeResult::Err(e) => panic!("encode: {e}"),
+        };
+
+        let flat: IpeResult<String, String> = jwt_decode_hs256(secret.clone(), token.clone());
+        assert!(
+            matches!(flat, IpeResult::Err(_)),
+            "flat HS256: exp=1.5 (past) must be rejected"
+        );
+
+        let desc = format!("HS256:{secret}");
+        let builder = ipe_jwt_decode(desc, now_unix(), token); // now_unix() from test module
+        assert!(
+            matches!(builder, IpeResult::Err(_)),
+            "builder ipe_jwt_decode: exp=1.5 (past) must be rejected"
+        );
+    }
+
+    /// Flat HS256: a token with a fractional but far-FUTURE exp must still be
+    /// ACCEPTED — the `numeric_date` floor must not over-reject valid tokens.
+    #[test]
+    fn test_flat_decode_fractional_future_exp_accepted() {
+        let secret = "future-frac-secret-0123456789abcde".to_string();
+        // Far-future fractional exp: year ~2286, floors to a still-future integer.
+        let claims = r#"{"sub":"x","exp":9999999999.9}"#.to_string();
+        let token: IpeResult<String, String> = jwt_encode_hs256(secret.clone(), claims);
+        let token = match token {
+            IpeResult::Ok(t) => t,
+            IpeResult::Err(e) => panic!("encode: {e}"),
+        };
+        let decoded: IpeResult<String, String> = jwt_decode_hs256(secret, token);
+        assert!(
+            matches!(decoded, IpeResult::Ok(_)),
+            "flat HS256: far-future fractional exp must be accepted"
+        );
     }
 }
