@@ -18,9 +18,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTC_WRAPPER: sccache
-  SCCACHE_GHA_ENABLED: "true"
-  CARGO_INCREMENTAL: "0"       # required by sccache
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   fmt:
@@ -141,6 +139,8 @@ jobs:
           components: miri
       - uses: Swatinem/rust-cache@v2
       - run: cargo +nightly miri test -p ipe_intern -p ipe_ir -p ipe_types -p ipe_lower -p ipe_diagnostics -p ipe_backend_rust
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation
 
   # E2E builds+runs the emitted Rust per golden (THE SEAL — the soundness floor:
   # every `ipe`-exit-0 golden's emitted Cargo project must `cargo build` + run).
