@@ -550,7 +550,9 @@ fn recursive_enum_boxes_self_edges() -> DResult<()> {
     );
     // Pattern unboxes the self-edge binders; rustfmt puts each unbox on its own line.
     assert!(
-        out.contains("MainTree::Node(l, n, r) => {\n            let l = *l;\n            let r = *r;"),
+        out.contains(
+            "MainTree::Node(l, n, r) => {\n            let l = *l;\n            let r = *r;"
+        ),
         "pattern must unbox self-edge binders:\n{out}"
     );
     Ok(())

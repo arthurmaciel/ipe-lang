@@ -646,10 +646,10 @@ mod tests {
             "String { } fn e(){ std::process::exit(1) }",
             "T; std::process::exit(1)",
             "T)//",
-            "Vec<T",       // unbalanced angle
-            "Vec T>",      // unbalanced angle
-            "(A, B",       // unbalanced paren
-            "foo(bar)",    // a call, not a type — paren balanced but see below
+            "Vec<T",    // unbalanced angle
+            "Vec T>",   // unbalanced angle
+            "(A, B",    // unbalanced paren
+            "foo(bar)", // a call, not a type — paren balanced but see below
             "String\n  fn evil(){}",
             "T = 1",
             "std::process::Command::new(\"sh\")",

@@ -800,7 +800,10 @@ fn ffi_injection_bearing_rust_type_is_refused_at_decode() {
 fn ffi_unbalanced_angle_rust_type_rejects_at_decode_not_cargo() {
     let doc = pkg_json_with_param_rust_type("Vec<u64");
     let pkg = PkgInfo::decode_json(&doc).expect("package header survives");
-    assert!(pkg.fns().is_empty(), "the unbalanced type drops its binding");
+    assert!(
+        pkg.fns().is_empty(),
+        "the unbalanced type drops its binding"
+    );
     assert!(
         matches!(
             pkg.dropped().first(),
@@ -827,7 +830,10 @@ fn ffi_planted_bindings_file_is_ignored_on_load() {
     let Some(dir) = write_entry("ffi_planted_cache", "") else {
         return;
     };
-    let root = dir.parent().map(std::path::Path::to_path_buf).unwrap_or(dir);
+    let root = dir
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or(dir);
     let cache = FfiCache::at_project_root(&root);
     let Ok((_pkg, paths)) = ipe_ffi::driver::install_from_inspection(&cache, doc) else {
         return;

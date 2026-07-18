@@ -232,8 +232,7 @@ fn column_to_json(row: &DbRow, i: usize) -> Result<JsonVal, sqlx::Error> {
     }
     if let Ok(opt) = row.try_get::<Option<f64>, _>(i) {
         return Ok(opt.map_or(JsonVal::Null, |f| {
-            serde_json::Number::from_f64(f)
-                .map_or(JsonVal::Null, JsonVal::Number)
+            serde_json::Number::from_f64(f).map_or(JsonVal::Null, JsonVal::Number)
         }));
     }
     if let Ok(opt) = row.try_get::<Option<String>, _>(i) {

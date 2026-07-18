@@ -53,7 +53,10 @@ pub fn keyed_column_<M: Clone>(
 ) -> Element<M> {
     ui_column_(
         attrs,
-        children.into_iter().map(|(k, e)| attach_key(k, e)).collect(),
+        children
+            .into_iter()
+            .map(|(k, e)| attach_key(k, e))
+            .collect(),
     )
 }
 
@@ -67,7 +70,10 @@ pub fn keyed_row_<M: Clone>(
 ) -> Element<M> {
     ui_row_(
         attrs,
-        children.into_iter().map(|(k, e)| attach_key(k, e)).collect(),
+        children
+            .into_iter()
+            .map(|(k, e)| attach_key(k, e))
+            .collect(),
     )
 }
 

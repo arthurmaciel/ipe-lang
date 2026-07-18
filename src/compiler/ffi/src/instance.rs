@@ -1088,9 +1088,9 @@ mod tests {
         );
         // A non-closure slot is never a closure drop.
         assert_eq!(
-            closure_drop_reason(&ArgTypeRef::Inner(InnerTypeRef::Prim(RustTypeExpr::for_test(
-                "i64"
-            )))),
+            closure_drop_reason(&ArgTypeRef::Inner(InnerTypeRef::Prim(
+                RustTypeExpr::for_test("i64")
+            ))),
             None
         );
     }

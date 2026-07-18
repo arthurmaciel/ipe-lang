@@ -729,11 +729,7 @@ impl<'a> WrapperCx<'a> {
     /// The declared inner return type + the coercion into it, from the raw
     /// Rust result (falling back to the Ipê mapping for synthetic bridges).
     fn effective_raw_result(&self) -> String {
-        let raw = self
-            .f
-            .results()
-            .first()
-            .map_or("", Param::rust_type_str);
+        let raw = self.f.results().first().map_or("", Param::rust_type_str);
         if raw.is_empty() {
             let sky = self.f.results().first().map_or("()", |r| {
                 if r.foreign_ty.is_empty() {

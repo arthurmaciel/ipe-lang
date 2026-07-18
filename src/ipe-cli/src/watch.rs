@@ -724,10 +724,7 @@ fn run_inner(
                 // An error logs and skips the cycle (same policy as a
                 // resolution failure above) rather than tearing down the
                 // whole watch session.
-                let ffi_prep = match crate::ffi::prepare_ffi(
-                    &mut sources,
-                    &resolved.blame_path,
-                ) {
+                let ffi_prep = match crate::ffi::prepare_ffi(&mut sources, &resolved.blame_path) {
                     Ok(p) => p,
                     Err(e) => {
                         eprintln!("[ipe watch] FFI catalog error: {e}");
