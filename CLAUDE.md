@@ -916,8 +916,9 @@ Current compiler limitations to work around when writing code.
    Tail-recursive ops (`foldl`, `find`, `any`, `all`, `member`, `drop`) are
    constant-stack. For very large lists (200k+ elements) prefer a
    tail-recursive accumulator pattern.
-9. **Zero-arg `Css.*` keyword constants require `()`** — `Css.zero ()`,
-   `Css.auto ()`, `Css.none ()`. The bare form is a type error.
+9. **`Css.*` keyword constants are bare values** — `margin Css.zero`,
+   `top Css.auto`, `border Css.none`, `fontFamily Css.systemFont` (matching
+   v0.17 Sky). Only `Css.monoFont ()` keeps its unit argument.
 10. **Multi-line function signatures.** `name\n    : T` (`:` on the
     continuation line) parses cleanly. Continuation INSIDE the type body
     (`T1\n    -> T2`) is unsupported — extract a `type alias` for the whole
