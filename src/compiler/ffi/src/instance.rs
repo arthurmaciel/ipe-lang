@@ -23,7 +23,7 @@ use std::collections::BTreeSet;
 
 use crate::call::{ByKind, Call};
 use crate::diag::{ClosedSetViolation, Diagnostic, GenericBindDefect};
-use crate::naming::{mangle_tvar, wrapper_fn_ident};
+use crate::naming::{RustTypeExpr, mangle_tvar, wrapper_fn_ident};
 use crate::num_coerce::num_widen_scalar;
 use crate::pkginfo::{FnInfo, GenericFn};
 use crate::typeref::{ArgTypeRef, ClosureKind, InnerTypeRef};
@@ -500,9 +500,9 @@ fn is_result_ctor(t: &InnerTypeRef) -> bool {
         t,
         InnerTypeRef::Ctor(nm, args)
             if args.len() == 2
-                && (nm == "::core::result::Result"
-                    || nm == "::std::result::Result"
-                    || nm == "Result")
+                && (nm.as_str() == "::core::result::Result"
+                    || nm.as_str() == "::std::result::Result"
+                    || nm.as_str() == "Result")
     )
 }
 
@@ -560,7 +560,7 @@ fn render_generic_wrapper(base_name: &str, g: &GenericFn) -> String {
         InnerTypeRef::Ctor(_, args) if ret_is_result => args
             .first()
             .cloned()
-            .unwrap_or_else(|| InnerTypeRef::Prim("()".into())),
+            .unwrap_or_else(|| InnerTypeRef::Prim(RustTypeExpr::unit())),
         other => other.clone(),
     };
     let ok_is_serde = matches!(
@@ -570,7 +570,9 @@ fn render_generic_wrapper(base_name: &str, g: &GenericFn) -> String {
     // A concrete numeric scalar OK widens to its Ipê carrier; the carriers
     // themselves pass through untouched.
     let ok_num_widen = match &ok_ref {
-        InnerTypeRef::Prim(w) if w != "i64" && w != "f64" => num_widen_scalar(w, "v"),
+        InnerTypeRef::Prim(w) if w.as_str() != "i64" && w.as_str() != "f64" => {
+            num_widen_scalar(w.as_str(), "v")
+        }
         _ => None,
     };
     let ret_inner = if ok_is_serde {
@@ -1086,7 +1088,9 @@ mod tests {
         );
         // A non-closure slot is never a closure drop.
         assert_eq!(
-            closure_drop_reason(&ArgTypeRef::Inner(InnerTypeRef::Prim("i64".into()))),
+            closure_drop_reason(&ArgTypeRef::Inner(InnerTypeRef::Prim(RustTypeExpr::for_test(
+                "i64"
+            )))),
             None
         );
     }
