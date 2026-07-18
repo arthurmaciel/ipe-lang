@@ -4635,6 +4635,11 @@ impl<'a> Builder<'a> {
             // recorded divergence from the Go backend's `Decoder Money`,
             // documented in `docs/divergences-from-sky.md`.
             K::DbDecMoney => fun(string(), dec(tuple2(decimal(), string()))),
+            // `Db.Decode.bytes : String -> Decoder (List Int)` — hex-decodes a
+            // BYTEA/BLOB column. Ipê's `Bytes`/`List Int` representation is a
+            // `List Int`; the runtime returns `Vec<u8>` which lowers identically.
+            // FIRST_SCHEMED (Ipê-new, no legacy oracle).
+            K::DbDecBytes => fun(string(), dec(list(int()))),
 
             // ── Set (base schemes; the `set_elem` obligation is layered in
             //    constrain_var_kernel, keyed off the id) ──
@@ -7905,11 +7910,12 @@ mod registry_phase_c_tests {
             K::SqlLike,
             K::DbFindWhere,
             K::DbDeleteWhere,
-            // `Db.Decode.money` — Ipê-NEW kernel (the ancestor has no
-            // DbDec money route), so it closed a genuine hole rather than
-            // relocating a legacy `kernel_ty` scheme. Its DbDec siblings are
-            // RELOCATED; this one is deliberately not (hole XOR relocation).
+            // `Db.Decode.money` and `Db.Decode.bytes` — Ipê-NEW kernels (the
+            // ancestor has no DbDec money/bytes routes), so they close genuine
+            // holes rather than relocating legacy `kernel_ty` schemes. Their
+            // DbDec siblings are RELOCATED; these are deliberately not.
             K::DbDecMoney,
+            K::DbDecBytes,
             // ── Ipe.Secret (3) ─────────────────────────────
             K::SecretFromString,
             K::SecretReveal,
