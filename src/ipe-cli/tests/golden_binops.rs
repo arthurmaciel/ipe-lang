@@ -17,6 +17,12 @@
 //! `13`. Running the Go toolchain inside `cargo test` is impractical (it needs
 //! the Haskell `sky` binary plus a Go toolchain), so the hand-computed value is
 //! the in-test oracle, documented here against the Go-equivalent command.
+//!
+//! `assoc_reduce_order_*` tests pin the reduce order for mixed-prec and
+//! right-assoc chains, guarding the iterative `climb_binops` rewrite. They
+//! compile small programs and assert the emitted Rust contains the expected
+//! nested call shape — i.e. the tree structure reflects the correct precedence
+//! and associativity.
 
 use std::path::{Path, PathBuf};
 
