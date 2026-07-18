@@ -231,7 +231,11 @@ pub fn prepare_ffi(
     let cache_hint = find_cache_root(blame_path)?.unwrap_or_default();
     let injected = inject_interfaces(sources, &catalog, &cache_hint)?;
     let emit = assemble_emit(&catalog)?;
-    Ok(FfiPrep { catalog, injected, emit })
+    Ok(FfiPrep {
+        catalog,
+        injected,
+        emit,
+    })
 }
 
 /// Locate the `ipe-ffi-inspector` binary: beside the running `ipe`
@@ -276,10 +280,7 @@ fn make_scratch_dir(krate: &str) -> Result<PathBuf, CliError> {
         .unwrap_or(0);
     // The security property is `create_dir`-fails-if-exists, not the name's
     // unguessability; the random suffix only avoids collisions across runs.
-    let dir = base.join(format!(
-        "add-{krate}-{}-{nanos:x}",
-        std::process::id()
-    ));
+    let dir = base.join(format!("add-{krate}-{}-{nanos:x}", std::process::id()));
     std::fs::create_dir(&dir).map_err(|e| {
         CliError::UsageOwned(format!(
             "ipe add: refusing to reuse a pre-existing scratch path `{}`: {e}",
@@ -700,8 +701,7 @@ mod tests {
         std::fs::write(tmp.join("sky.toml"), "name=\"x\"\n").expect("manifest");
         // Make the cache world-writable — the delivery vector for a planted
         // _bindings.rs — and confirm discovery refuses it.
-        std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o777))
-            .expect("chmod");
+        std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o777)).expect("chmod");
         let r = find_cache_root(&tmp);
         assert!(matches!(r, Err(CliError::UsageOwned(_))), "{r:?}");
         let _ = std::fs::remove_dir_all(&tmp);

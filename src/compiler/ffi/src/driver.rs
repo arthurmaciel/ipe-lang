@@ -1030,8 +1030,7 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("ipe-ffi-warm-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let cache = FfiCache::at_project_root(&tmp);
-        let (_pkg, paths) =
-            install_from_inspection(&cache, &semver_json()).expect("installs");
+        let (_pkg, paths) = install_from_inspection(&cache, &semver_json()).expect("installs");
         let on_disk = std::fs::read_to_string(&paths.bindings).expect("readable");
         let catalog = load_catalog(cache.root()).expect("loads");
         let c = catalog.first().expect("one crate");
@@ -1051,13 +1050,15 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("ipe-ffi-legacy-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let cache = FfiCache::at_project_root(&tmp);
-        let (_pkg, paths) =
-            install_from_inspection(&cache, &semver_json()).expect("installs");
+        let (_pkg, paths) = install_from_inspection(&cache, &semver_json()).expect("installs");
         let stored = std::fs::read_to_string(&paths.bindings).expect("readable");
         std::fs::remove_file(&paths.pkg_json).expect("drop pkg.json");
         let catalog = load_catalog(cache.root()).expect("loads legacy layout");
         let c = catalog.first().expect("one crate");
-        assert_eq!(c.bindings_source, stored, "legacy path serves the stored text");
+        assert_eq!(
+            c.bindings_source, stored,
+            "legacy path serves the stored text"
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -1066,8 +1067,7 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("ipe-ffi-plant-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let cache = FfiCache::at_project_root(&tmp);
-        let (_pkg, paths) =
-            install_from_inspection(&cache, &semver_json()).expect("installs");
+        let (_pkg, paths) = install_from_inspection(&cache, &semver_json()).expect("installs");
         // Plant an injected wrapper body into the stored _bindings.rs (door (a)
         // — a hand-edited cache file). It reaches a REACHED wrapper region.
         let planted = std::fs::read_to_string(&paths.bindings)
@@ -1097,8 +1097,7 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("ipe-ffi-badpkg-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let cache = FfiCache::at_project_root(&tmp);
-        let (_pkg, paths) =
-            install_from_inspection(&cache, &semver_json()).expect("installs");
+        let (_pkg, paths) = install_from_inspection(&cache, &semver_json()).expect("installs");
         // Overwrite pkg.json with an inspection doc carrying an injection in a
         // rustType — the re-decode must fail closed (the whole crate refuses,
         // never emits the injection).

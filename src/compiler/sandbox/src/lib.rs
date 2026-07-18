@@ -406,8 +406,14 @@ pub fn run_in_bwrap_jail(
         program: program.to_string_lossy().into_owned(),
         detail: "output-drain thread panicked".to_owned(),
     };
-    let stdout = out_thread.join().map_err(|_| join_err())?.map_err(spawn_err)?;
-    let stderr = err_thread.join().map_err(|_| join_err())?.map_err(spawn_err)?;
+    let stdout = out_thread
+        .join()
+        .map_err(|_| join_err())?
+        .map_err(spawn_err)?;
+    let stderr = err_thread
+        .join()
+        .map_err(|_| join_err())?
+        .map_err(spawn_err)?;
     let status = child.wait().map_err(spawn_err)?;
     match (stdout, stderr) {
         (Some(out), Some(err)) => Ok(JailedOutput {
