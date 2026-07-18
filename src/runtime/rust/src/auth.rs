@@ -180,14 +180,26 @@ pub fn auth_verify_token<E: From<String>>(
                 .into(),
         );
     }
-    // AUD-02 (security): jsonwebtoken's Validation::new leaves `leeway = 60`
-    // by default — Auth.verifyToken was accepting tokens up to 60s PAST their
-    // `exp` (and 60s before `nbf`), an attacker-replayable expired-token
-    // window, and diverging from Go's zero-skew `now >= exp` oracle. The
-    // sibling `Jwt.decode` path (jwt.rs) already closed this exact gap with a
-    // documented fix; mirror it exactly rather than re-deriving it.
-    if crate::jwt::exp_is_zero(&token) {
-        return IpeResult::Err("auth.verifyToken: token has expired".to_string().into());
+    // Pre-reject on the full RFC 7519 NumericDate domain (negative, fractional,
+    // integer) before jsonwebtoken's `exp - 1` u64 subtraction can underflow.
+    // Mirrors jwt.rs's `jwt_decode_hs256` pre-reject; see that function's
+    // comment for the detailed rationale.
+    if let Some(payload) = crate::jwt::decode_payload(&token) {
+        let now = crate::jwt::now_unix_seconds();
+        if let Some(exp) = crate::jwt::numeric_date(&payload, "exp") {
+            if now >= exp {
+                return IpeResult::Err("auth.verifyToken: token has expired".to_string().into());
+            }
+        }
+        if let Some(nbf) = crate::jwt::numeric_date(&payload, "nbf") {
+            if now < nbf {
+                return IpeResult::Err(
+                    "auth.verifyToken: token is not yet valid"
+                        .to_string()
+                        .into(),
+                );
+            }
+        }
     }
     let key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
     let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
@@ -195,9 +207,9 @@ pub fn auth_verify_token<E: From<String>>(
     // native boundary with leeway = 0 is `exp < now` (accepts at the exact
     // instant now == exp); reject_tokens_expiring_in_less_than = 1 shifts the
     // reject condition to `exp - 1 < now` (≡ `now >= exp`), restoring parity.
-    // The `exp == 0` underflow that subtraction would hit is guarded above.
-    // nbf parity needs no shift (already identical at leeway 0). See jwt.rs's
-    // longer comment on this exact mechanism.
+    // The pre-reject above guards the underflow site for the full NumericDate
+    // domain. nbf parity needs no shift (already identical at leeway 0). See
+    // jwt.rs's longer comment on this exact mechanism.
     validation.leeway = 0;
     validation.reject_tokens_expiring_in_less_than = 1;
     validation.validate_exp = true;

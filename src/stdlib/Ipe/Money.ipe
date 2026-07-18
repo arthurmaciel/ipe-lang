@@ -392,6 +392,9 @@ parseCurrency code =
 
 -- ─── Arithmetic (currency-checked) ────────────────────────────────
 
+-- WARNING: same-currency only. Cross-currency `add` returns the left operand
+-- unchanged — the currency mismatch is silently ignored. Convert to a common
+-- currency before calling. See `docs/divergences-from-sky.md`.
 add : Money -> Money -> Money
 add a b =
     if eqCurrency (currency a) (currency b) then
@@ -400,6 +403,9 @@ add a b =
         a
 
 
+-- WARNING: same-currency only. Cross-currency `sub` returns the left operand
+-- unchanged — the currency mismatch is silently ignored. Convert to a common
+-- currency before calling. See `docs/divergences-from-sky.md`.
 sub : Money -> Money -> Money
 sub a b =
     if eqCurrency (currency a) (currency b) then
@@ -427,33 +433,48 @@ abs m =
 -- | Allocate a Money value across N parts as evenly as possible,
 -- with any remainder distributed 1 cent at a time to the front.
 -- The sum of returned parts equals the input exactly.
+-- Returns [] when parts <= 0 (no parts to allocate).
 --
 --   allocate 3 ($100.00)  -> [$33.34, $33.33, $33.33]
+--   allocate 3 (-$1.00)   -> [-$0.34, -$0.33, -$0.33]
+--   allocate 0 ($100.00)  -> []
 allocate : Int -> Money -> List Money
 allocate parts m =
-    let
-        c = currency m
-        dp = minorUnits c
-        totalMinor = Dec.toMinor dp (amount m)
-        base = totalMinor // parts
-        extra = modBy parts totalMinor
-    in
-    List.reverse (allocateHelp c parts base extra [])
+    if parts <= 0 then
+        []
+    else
+        let
+            c = currency m
+            dp = minorUnits c
+            totalMinor = Dec.toMinor dp (amount m)
+            base = totalMinor // parts
+            remainder = totalMinor - base * parts
+        in
+        List.reverse (allocateHelp c parts base remainder [])
 
 
+-- Distributes the residue toward zero, one cent per slot, matching the
+-- sign of the remainder so negative totals step down and positive totals
+-- step up.
 allocateHelp : Currency -> Int -> Int -> Int -> List Money -> List Money
-allocateHelp c remaining base extra acc =
+allocateHelp c remaining base remainder acc =
     if remaining <= 0 then
         acc
     else
         let
-            piece = if extra > 0 then base + 1 else base
-            newExtra = if extra > 0 then extra - 1 else 0
+            step = if remainder < 0 then -1 else 1
+            piece = if remainder /= 0 then base + step else base
+            newRem =
+                if remainder > 0 then remainder - 1
+                else if remainder < 0 then remainder + 1
+                else 0
         in
-        allocateHelp c (remaining - 1) base newExtra (fromMinor c piece :: acc)
+        allocateHelp c (remaining - 1) base newRem (fromMinor c piece :: acc)
 
 
--- | Sum a list of Money values (all should be same currency).
+-- WARNING: same-currency only. `sumOf` uses `add` internally; entries whose
+-- currency does not match `c` are silently skipped (left-operand fallthrough).
+-- See `docs/divergences-from-sky.md`.
 sumOf : Currency -> List Money -> Money
 sumOf c xs =
     sumOfHelp xs (zero c)
@@ -471,6 +492,9 @@ sumOfHelp xs acc =
 
 -- ─── Comparison ───────────────────────────────────────────────────
 
+-- WARNING: `compare`/`lt`/`lte`/`gt`/`gte` compare amounts only and ignore
+-- currency. Cross-currency comparisons silently treat values as same-currency.
+-- See `docs/divergences-from-sky.md`.
 compare : Money -> Money -> Int
 compare a b =
     Dec.compare (amount a) (amount b)
