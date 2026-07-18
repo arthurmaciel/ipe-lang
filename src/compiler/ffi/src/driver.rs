@@ -1015,6 +1015,26 @@ mod tests {
     }
 
     #[test]
+    fn warm_load_re_derives_byte_identical_bindings() {
+        // A normal warm build must produce the SAME src/ffi.rs the install
+        // wrote — the re-derivation from pkg.json is byte-identical to the
+        // emit_bindings output persisted on disk (the SEAL on the warm path).
+        let tmp = std::env::temp_dir().join(format!("ipe-ffi-warm-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let cache = FfiCache::at_project_root(&tmp);
+        let (_pkg, paths) =
+            install_from_inspection(&cache, &semver_json()).expect("installs");
+        let on_disk = std::fs::read_to_string(&paths.bindings).expect("readable");
+        let catalog = load_catalog(cache.root()).expect("loads");
+        let c = catalog.first().expect("one crate");
+        assert_eq!(
+            c.bindings_source, on_disk,
+            "warm re-derivation must be byte-identical to the installed _bindings.rs"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
     fn load_catalog_ignores_a_planted_bindings_file_and_re_derives() {
         let tmp = std::env::temp_dir().join(format!("ipe-ffi-plant-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
