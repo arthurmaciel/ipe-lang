@@ -26,7 +26,7 @@ module Ipe.Money exposing
 import Ipe.Prelude exposing (..)
 import Ipe.Ffi as Ffi
 import Ipe.List as List
-import Ipe.Error exposing (Error)
+import Ipe.Error as Error exposing (Error)
 import Ipe.Decimal as Dec exposing (Decimal)
 
 
@@ -287,26 +287,26 @@ parseCurrency code =
 
 -- ─── Arithmetic (currency-checked) ────────────────────────────────
 
--- WARNING: same-currency only. Cross-currency `add` returns the left operand
--- unchanged — the currency mismatch is silently ignored. Convert to a common
--- currency before calling. See `docs/divergences-from-sky.md`.
-add : Money -> Money -> Money
+-- | Add two Money values. Returns `Err` when the currencies differ — a
+-- mismatch is a typed error, not a silent wrong value. Convert both to a
+-- common currency first (via `Money.convert`) if needed.
+add : Money -> Money -> Result Error Money
 add a b =
     if eqCurrency (currency a) (currency b) then
-        Money (Dec.add (amount a) (amount b)) (currency a)
+        Ok (Money (Dec.add (amount a) (amount b)) (currency a))
     else
-        a
+        Err (Error.unexpected ("Money.add: currency mismatch: " ++ currencyCode (currency a) ++ " vs " ++ currencyCode (currency b)))
 
 
--- WARNING: same-currency only. Cross-currency `sub` returns the left operand
--- unchanged — the currency mismatch is silently ignored. Convert to a common
--- currency before calling. See `docs/divergences-from-sky.md`.
-sub : Money -> Money -> Money
+-- | Subtract two Money values. Returns `Err` when the currencies differ — a
+-- mismatch is a typed error, not a silent wrong value. Convert both to a
+-- common currency first (via `Money.convert`) if needed.
+sub : Money -> Money -> Result Error Money
 sub a b =
     if eqCurrency (currency a) (currency b) then
-        Money (Dec.sub (amount a) (amount b)) (currency a)
+        Ok (Money (Dec.sub (amount a) (amount b)) (currency a))
     else
-        a
+        Err (Error.unexpected ("Money.sub: currency mismatch: " ++ currencyCode (currency a) ++ " vs " ++ currencyCode (currency b)))
 
 
 -- | Multiply by a scalar (Decimal). Currency carries through.
@@ -349,22 +349,27 @@ allocate parts m =
     List.map (\d -> Money d c) decimals
 
 
--- WARNING: same-currency only. `sumOf` uses `add` internally; entries whose
--- currency does not match `c` are silently skipped (left-operand fallthrough).
--- See `docs/divergences-from-sky.md`.
-sumOf : Currency -> List Money -> Money
+-- | Sum a list of Money values for a given currency. Returns `Err` if any
+-- element has a different currency — a mismatch is a typed error. Convert
+-- all elements to the target currency first (via `Money.convert`) if needed.
+sumOf : Currency -> List Money -> Result Error Money
 sumOf c xs =
-    sumOfHelp xs (zero c)
+    sumOfHelp xs (Ok (zero c))
 
 
-sumOfHelp : List Money -> Money -> Money
+sumOfHelp : List Money -> Result Error Money -> Result Error Money
 sumOfHelp xs acc =
     case xs of
         [] ->
             acc
 
         first :: rest ->
-            sumOfHelp rest (add acc first)
+            case acc of
+                Err e ->
+                    Err e
+
+                Ok m ->
+                    sumOfHelp rest (add m first)
 
 
 -- ─── Comparison ───────────────────────────────────────────────────
