@@ -13,6 +13,7 @@ pub mod ast;
 pub mod builtins;
 mod env;
 pub mod link;
+pub mod module_classify;
 mod resolve;
 pub mod target_gate;
 

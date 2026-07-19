@@ -800,6 +800,28 @@ pub fn compile_prepared(
             .unwrap_or_else(|| (entry_src_path.clone(), entry_src.clone()))
     };
 
+    // Layer-2 wasm security gate (IPE-N0030, M5): the client entry's
+    // reachability closure must not transitively reach a server-classified
+    // module. Runs BEFORE Layer 1 so a reachability violation gets the
+    // friendlier exact-chain message; Layer 1 remains the flat,
+    // defense-in-depth backstop for everything this closure does not cover
+    // (e.g. a server kernel named directly in the entry's own module).
+    // `linked.name` is the client entry's module path for today's
+    // single-entry `--target wasm` build (a distinct `[wasm].entry` module
+    // takes the same role once the M6 integration wires a separate client
+    // entry through).
+    if config.target(db) == ipe_ir::Target::WasmClient {
+        let gate_result = {
+            let interner = shared_interner.lock();
+            ipe_canon::module_classify::check_client_reachability(linked, &linked.name, &interner)
+        };
+        gate_result.map_err(|diag| {
+            let span = diag_span(&diag);
+            let (file, src) = source_for_span(span);
+            CliError::Pipeline { file, src, diag }
+        })?;
+    }
+
     // Layer-1 wasm security gate (IPE-N0029): under `--target wasm`, every
     // kernel named anywhere in the linked program must be on the WasmClient
     // allowlist. Runs on the LINKED module (everything linked is emitted, so
