@@ -185,6 +185,7 @@ pub fn assemble_emit(
         foreign_types,
         dep_lines: dep_by_name.into_values().collect(),
         bindings_source,
+        interface_modules: catalog.iter().map(|c| c.module_name.clone()).collect(),
     }))
 }
 
@@ -316,6 +317,33 @@ fn toolchain_binds(inspector: &Path) -> (Vec<PathBuf>, Vec<PathBuf>, Option<Path
     (toolchain_ro_binds, path_prepend, rustup_home)
 }
 
+/// The jail resource caps: the fail-closed defaults, each raisable through an
+/// explicit env override that prints a warning (an SDK-scale dependency
+/// closure — hundreds of crates under one `cargo check`/rustdoc — legitimately
+/// needs more CPU/wall/output than the small-crate defaults).
+fn jail_limits() -> ipe_sandbox::ResourceLimits {
+    let mut limits = ipe_sandbox::ResourceLimits::default();
+    let with_override = |var: &str, slot: &mut u64, scale: u64| {
+        if let Ok(raw) = std::env::var(var) {
+            if let Ok(v) = raw.parse::<u64>().map(|v| v.saturating_mul(scale))
+                && v > 0
+            {
+                eprintln!("WARNING: jail cap override {var}={raw}");
+                *slot = v;
+            } else {
+                eprintln!("WARNING: ignoring non-numeric jail cap override {var}={raw}");
+            }
+        }
+    };
+    with_override("IPE_FFI_RSS_MB", &mut limits.rss_bytes, 1024 * 1024);
+    with_override("IPE_FFI_CPU_SECS", &mut limits.cpu_secs, 1);
+    with_override("IPE_FFI_WALL_SECS", &mut limits.wall_secs, 1);
+    with_override("IPE_FFI_FD_CAP", &mut limits.fd_cap, 1);
+    with_override("IPE_FFI_PROC_CAP", &mut limits.proc_cap, 1);
+    with_override("IPE_FFI_OUT_CAP_MB", &mut limits.out_cap_bytes, 1024 * 1024);
+    limits
+}
+
 /// Run one jailed inspector phase over the shared `scoped_tmp`, returning its
 /// captured stdout.
 fn run_phase(
@@ -336,7 +364,7 @@ fn run_phase(
         toolchain_ro_binds,
         path_prepend,
         rustup_home,
-        limits: ipe_sandbox::ResourceLimits::default(),
+        limits: jail_limits(),
     };
     ipe_sandbox::run_in_bwrap_jail(caps, &spec, payload)
         .map_err(|d| io_err(format!("sandboxed inspection failed: {d}")))

@@ -1262,6 +1262,11 @@ fn assemble_project_files(
         // the handful of wrappers it calls — and keeps a generator gap in some
         // UNUSED wrapper (an exotic lifetime/borrow shape the emitter renders
         // wrong) from breaking a build that never calls it.
+        //
+        // The interface FORWARDER modules must shake FIRST: every forwarder
+        // references its wrapper, so an unshaken forwarder barrel would mark
+        // every wrapper reached and defeat the slice below.
+        shake_interface_forwarder_files(&mut files, &ffi.interface_modules);
         let reached = reached_ffi_idents(&files);
         let shaken = shake_ffi_by_fn_ident(&ffi.bindings_source, &reached);
         files.insert(RelPath::new("src/ffi.rs")?, shaken);
@@ -2175,6 +2180,74 @@ fn email_cargo_toml(base: &str) -> DResult<String> {
     result.push_str(&lettre_dep);
     result.push_str(base.get(anchor_pos..).unwrap_or(""));
     Ok(result)
+}
+
+/// Slice each compiler-generated FFI interface-forwarder module down to the
+/// forwarders the rest of the program references.
+///
+/// The targets are ONLY the modules the driver names in
+/// `FfiEmit::interface_modules` (the reserved `Rust.*` namespace) — a user
+/// module can never be shaken. Within a target file everything before the
+/// first `pub(crate) fn` (the `use crate::*;` header) is kept
+/// unconditionally; each forwarder region (one `pub(crate) fn` to the next)
+/// is kept iff its identifier occurs anywhere OUTSIDE the target files.
+/// Conservative-keep: an unparseable region shape keeps the whole file, so
+/// the shake can never under-keep a called forwarder; over-keep is dead code.
+fn shake_interface_forwarder_files(
+    files: &mut BTreeMap<RelPath, String>,
+    interface_modules: &[String],
+) {
+    const FN_MARK: &str = "pub(crate) fn ";
+    if interface_modules.is_empty() {
+        return;
+    }
+    let target_paths: std::collections::BTreeSet<String> = interface_modules
+        .iter()
+        .map(|m| {
+            let segs: Vec<&str> = m.split('.').collect();
+            format!("src/ipe_mods/{}.rs", rust_file::mod_ident(&segs))
+        })
+        .collect();
+    // The reachability haystack: every emitted file that is NOT a forwarder
+    // module (forwarders reference only `crate::ffi::` wrappers, never each
+    // other, so excluding them is exact).
+    let mut haystack = String::new();
+    for (path, text) in files.iter() {
+        if !target_paths.contains(path.as_str()) {
+            haystack.push_str(text);
+        }
+    }
+    for (path, text) in files.iter_mut() {
+        if !target_paths.contains(path.as_str()) {
+            continue;
+        }
+        let Some(first) = text.find(FN_MARK) else {
+            continue; // no forwarders — keep verbatim
+        };
+        let (header, mut rest) = text.split_at(first);
+        let mut out = String::with_capacity(text.len());
+        out.push_str(header);
+        // Each region starts at a FN_MARK occurrence and runs to the next.
+        while !rest.is_empty() {
+            let region_end = rest
+                .get(FN_MARK.len()..)
+                .and_then(|tail| tail.find(FN_MARK).map(|i| i + FN_MARK.len()))
+                .unwrap_or(rest.len());
+            let (region, next) = rest.split_at(region_end);
+            let ident: String = region
+                .get(FN_MARK.len()..)
+                .unwrap_or("")
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            // Empty ident = unrecognised shape → conservative keep.
+            if ident.is_empty() || haystack.contains(&ident) {
+                out.push_str(region);
+            }
+            rest = next;
+        }
+        *text = out;
+    }
 }
 
 /// The `crate::ffi::<ident>` wrapper identifiers referenced anywhere in the

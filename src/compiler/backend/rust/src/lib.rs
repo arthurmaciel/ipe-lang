@@ -74,6 +74,11 @@ pub struct FfiEmit {
     /// The full `src/ffi.rs` content: every installed crate's wrapper module
     /// (`pub mod <slug> { … }` + `pub use <slug>::*;`).
     pub bindings_source: String,
+    /// The dotted interface-module name (`"Rust.Firestore"`) of every
+    /// installed crate — the compiler-generated forwarder modules the
+    /// used-set shake may slice (user modules are never listed here, so a
+    /// user fn can never be shaken).
+    pub interface_modules: Vec<String>,
 }
 
 /// The Rust code-generation backend.
