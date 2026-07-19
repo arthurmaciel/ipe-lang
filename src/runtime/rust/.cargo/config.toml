@@ -1,0 +1,29 @@
+# Shields `cargo build|test --target wasm32-unknown-unknown` (run from
+# inside this crate — e.g. the `wasm_websocket_bridge.rs`/`wasm_floor_scope.rs`
+# wasm-bindgen-test files) from a host machine's native-linker `build.rustflags`
+# (e.g. a `-fuse-ld=mold` config.toml entry): `rust-lld` — the wasm32 target's
+# linker — rejects `mold`'s link-arg outright, so a global mold rustflag
+# breaks every wasm32 build/test on a machine that has one configured, with no
+# code-level fix possible (the flag never applies to wasm32 code at all).
+# Mirrors the SAME shield the emitted-project manifest template
+# (`crate_specs.rs`'s `WASM_CARGO_CONFIG`) already ships for `ipe build
+# --target wasm`'s generated projects — this file is the source crate's own
+# copy of that guard, since this crate is ALSO built directly for wasm32 (the
+# `wasm-floor` CI job, `wasm_floor_scope.rs`, and this test file), not only
+# vendored into emitted projects.
+#
+# A more specific `[target.wasm32-unknown-unknown]` table always wins over a
+# less specific `[build]` table from a config.toml discovered further up the
+# directory tree (cargo's documented config-merge precedence) — a non-empty
+# array here, not `[]`, is required: an EMPTY array does not override the
+# host config's `build.rustflags`, it merges with it.
+#
+# `runner`: without this, `cargo test --target wasm32-unknown-unknown` tries
+# to EXECUTE the produced `.wasm` file directly as a host binary ("Exec
+# format error") — wasm-bindgen-test's headless-browser harness needs to be
+# the thing that actually runs it (it starts a local HTTP server, drives
+# `chromedriver`, and reports pass/fail back to `cargo test`). Only affects
+# this ONE target — native `cargo test` (no `--target`) is unaffected.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "debuginfo=0"]
+runner = "wasm-bindgen-test-runner"
