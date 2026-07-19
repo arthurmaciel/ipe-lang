@@ -591,6 +591,7 @@ pub fn emit_consumer_json(
         "moduleName": iface.module_name,
         "kernelName": iface.kernel_name,
         "opaqueTypes": iface.opaque_types,
+        "opaqueTypeIds": iface.opaque_type_ids,
         "cargoDeps": cargo_dep_lines(pkg)?,
         "bindings": bindings,
     });
@@ -614,10 +615,22 @@ pub struct InstalledCrate {
     pub bindings_source: String,
     /// Opaque foreign type name → absolute Rust path.
     pub opaque_types: std::collections::BTreeMap<String, String>,
+    /// Opaque foreign type name → canonical defining-path identity (see
+    /// [`crate::interface::CrateInterface::opaque_type_ids`]). Empty for a
+    /// cache written before identities existed — such a crate never unifies.
+    pub opaque_type_ids: std::collections::BTreeMap<String, String>,
     /// Pinned `[dependencies]` lines.
     pub cargo_deps: Vec<String>,
+    /// The structured interface bindings (name, wrapper, arity, signature) —
+    /// the data the catalog unification re-renders a demoted module from.
+    pub bindings: Vec<crate::interface::InterfaceBinding>,
     /// Every wrapper fn identifier the interface forwards to.
     pub wrapper_idents: BTreeSet<String>,
+    /// Rust lib ident → exact resolved version, from the crate's own
+    /// inspection (its jail's lockfile). The unification's version guard
+    /// refuses to collapse two nominals whose defining crate resolved to
+    /// different versions across members. Empty for a legacy cache.
+    pub dep_versions: std::collections::BTreeMap<String, String>,
 }
 
 /// Load every installed crate from a project's FFI artifact cache.
@@ -659,6 +672,23 @@ pub fn load_catalog(cache_root: &Path) -> Result<Vec<InstalledCrate>, Diagnostic
     slugs.sort();
     let mut out = Vec::with_capacity(slugs.len());
     for slug in slugs {
+        out.push(load_installed_crate(cache_root, slug)?);
+    }
+    Ok(out)
+}
+
+/// Load and validate ONE installed crate's artifacts (see [`load_catalog`]).
+///
+/// # Errors
+///
+/// As [`load_catalog`], scoped to this slug's artifacts.
+#[allow(clippy::too_many_lines)] // one linear artifact decode-and-cross-check cascade
+fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrate, Diagnostic> {
+    let io_err = |path: &Path, detail: String| Diagnostic::ArtifactIo {
+        path: path.to_string_lossy().into_owned(),
+        detail,
+    };
+    {
         let cache = FfiCache {
             root: cache_root.to_path_buf(),
         };
@@ -674,9 +704,14 @@ pub fn load_catalog(cache_root: &Path) -> Result<Vec<InstalledCrate>, Diagnostic
         // document to re-derive from; it falls back to the stored text, whose
         // trust then rests on the discovery-time ownership/write-boundary gate
         // (`find_cache_root`) plus the injection-free-by-construction emitter.
+        let mut dep_versions: std::collections::BTreeMap<String, String> =
+            std::collections::BTreeMap::new();
         let bindings_source = if paths.pkg_json.is_file() {
             let pkg_text = read(&paths.pkg_json)?;
             let pkg = PkgInfo::decode_json(&pkg_text)?;
+            for dep in pkg.transitive_deps() {
+                dep_versions.insert(dep.ident.as_str().to_owned(), dep.version.clone());
+            }
             crate::bindings::emit_bindings(&pkg)
         } else {
             read(&paths.bindings)?
@@ -695,15 +730,18 @@ pub fn load_catalog(cache_root: &Path) -> Result<Vec<InstalledCrate>, Diagnostic
         };
         let module_name = str_field("moduleName")?;
         let kernel_name = str_field("kernelName")?;
-        let opaque_types: std::collections::BTreeMap<String, String> = doc
-            .get("opaqueTypes")
-            .and_then(serde_json::Value::as_object)
-            .map(|m| {
-                m.iter()
-                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_owned())))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let decode_str_map = |key: &str| -> std::collections::BTreeMap<String, String> {
+            doc.get(key)
+                .and_then(serde_json::Value::as_object)
+                .map(|m| {
+                    m.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_owned())))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let opaque_types = decode_str_map("opaqueTypes");
+        let opaque_type_ids = decode_str_map("opaqueTypeIds");
         let cargo_deps: Vec<String> = doc
             .get("cargoDeps")
             .and_then(serde_json::Value::as_array)
@@ -713,16 +751,28 @@ pub fn load_catalog(cache_root: &Path) -> Result<Vec<InstalledCrate>, Diagnostic
                     .collect()
             })
             .unwrap_or_default();
-        let wrapper_idents: BTreeSet<String> = doc
+        let bindings: Vec<crate::interface::InterfaceBinding> = doc
             .get("bindings")
             .and_then(serde_json::Value::as_array)
             .map(|a| {
                 a.iter()
-                    .filter_map(|b| b.get("wrapperIdent").and_then(serde_json::Value::as_str))
-                    .map(str::to_owned)
+                    .filter_map(|b| {
+                        let get = |k: &str| b.get(k).and_then(serde_json::Value::as_str);
+                        Some(crate::interface::InterfaceBinding {
+                            ref_name: get("refName")?.to_owned(),
+                            wrapper_ident: get("wrapperIdent")?.to_owned(),
+                            arity: usize::try_from(
+                                b.get("arity").and_then(serde_json::Value::as_u64)?,
+                            )
+                            .ok()?,
+                            sig: get("sig")?.to_owned(),
+                        })
+                    })
                     .collect()
             })
             .unwrap_or_default();
+        let wrapper_idents: BTreeSet<String> =
+            bindings.iter().map(|b| b.wrapper_ident.clone()).collect();
         // Fail-closed cross-check: every forwarded wrapper must exist in the
         // stored bindings source.
         for ident in &wrapper_idents {
@@ -735,18 +785,20 @@ pub fn load_catalog(cache_root: &Path) -> Result<Vec<InstalledCrate>, Diagnostic
                 )));
             }
         }
-        out.push(InstalledCrate {
+        Ok(InstalledCrate {
             slug,
             module_name,
             kernel_name,
             interface_source,
             bindings_source,
             opaque_types,
+            opaque_type_ids,
             cargo_deps,
+            bindings,
             wrapper_idents,
-        });
+            dep_versions,
+        })
     }
-    Ok(out)
 }
 
 // ── coverage report (the over-drop keystone made visible) ───────────────────
