@@ -17318,6 +17318,7 @@ mod tests {
         SolvedTypes {
             env: BTreeMap::new(),
             regions: BTreeMap::new(),
+            expected: BTreeMap::new(),
             bounds: BTreeMap::new(),
             warnings: Vec::new(),
             poly_var_map: BTreeMap::new(),

@@ -62,6 +62,7 @@ fn run_with_regions(
             .into_iter()
             .map(|(span, ty)| ((vec![], span), ty))
             .collect(),
+        expected: BTreeMap::new(),
         bounds: BTreeMap::new(),
         warnings: Vec::new(),
         poly_var_map: BTreeMap::new(),
