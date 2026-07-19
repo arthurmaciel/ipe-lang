@@ -8,7 +8,10 @@ use core::fmt::Write as _;
 
 use ipe_diagnostics::{DResult, Diagnostic, LowerError, Span};
 use ipe_intern::Symbol;
-use ipe_ir::{Arm, BinOp, BoundSet, Callee, Expr, Func, IrType, KernelFn, Match, ModPath, Pat};
+use ipe_ir::{
+    Arm, BinOp, BoundSet, Callee, Expr, Func, IrType, KernelFn, MAX_IR_RENDER_DEPTH, Match,
+    ModPath, Pat,
+};
 
 use crate::EmitCtx;
 use crate::emit_types::{GenericScope, render_type};
@@ -24,7 +27,12 @@ use crate::naming::kernel_name;
 /// well below the native stack ceiling (≤ 2 MB default thread stack), so the
 /// guard fires first. Sized conservatively to leave headroom for the frame size
 /// of `emit_expr_at` in debug builds.
-const MAX_EMIT_DEPTH: u16 = 96;
+///
+/// Shares [`ipe_ir::MAX_IR_RENDER_DEPTH`] rather than a separately-declared
+/// copy of the same value — a `--emit-ir` dev-flag dump and the real emitter
+/// must refuse a program at the identical depth, not two independently
+/// tuned bounds that can drift apart.
+const MAX_EMIT_DEPTH: u16 = MAX_IR_RENDER_DEPTH;
 
 /// One indentation level: four spaces, matching the golden's formatting.
 fn indent_of(level: usize) -> String {
