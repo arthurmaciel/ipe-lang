@@ -778,6 +778,7 @@ mod schema_tag_tests {
             None,
             ipe_ir::Target::Native,
             Vec::new(),
+            false,
         )?;
 
         // Model = { count : Int } (no `page` field → the single-page branch).
