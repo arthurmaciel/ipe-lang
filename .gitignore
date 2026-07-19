@@ -1,4 +1,7 @@
 /target
+# Per-example build + generated FFI artifacts (regeneratable; never source)
+examples/**/target/
+examples/**/.ipe/
 sky-out/
 .ipe-cache/
 .skydeps/
