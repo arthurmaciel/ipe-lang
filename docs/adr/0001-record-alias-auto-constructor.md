@@ -1,5 +1,4 @@
 Status: Accepted
-Date: 2026-07-10
 
 # 0001. Record type-alias auto-constructor is a synthesized typed function
 
@@ -9,16 +8,14 @@ Date: 2026-07-10
 should, per Elm-family semantics, introduce an in-scope **value**
 `UserProfile : String -> Int -> Bool -> { username, age, active }` (positional,
 in *declared* field order). Before this decision the alias was registered only
-in the *type* namespace, so a value use — the dominant sweep shape
+in the *type* namespace, so a value use — the dominant pattern
 `Decode.succeed UserProfile |> required "username" string |> …` — failed name
-resolution with IPE-N0001 ("cannot find this value in scope"). This blocked the
-Live / Http / Db examples in the ipe sweep.
+resolution with IPE-N0001 ("cannot find this value in scope").
 
 The decision was guardian-reviewed against the strict principle order
 **security > correctness > soundness > efficiency > completeness > readability**
 and the two rules *PARSE, DON'T VALIDATE* and *MAKE INVALID STATES
-UNREPRESENTABLE*. It is implemented (`golden_m82_record_ctor.rs`, task #82 /
-IPE-N0001); the code in `sky_canon` is now the source of truth for the *how*.
+UNREPRESENTABLE*. The code in `ipe_canon` is now the source of truth for the *how*.
 This ADR preserves the *why*.
 
 ## Decision
@@ -31,10 +28,9 @@ succeeds. From that point on every downstream stage receives a plain,
 fully-typed top-level function — HM, lowering, and the Rust backend need **zero**
 special-casing and **no new IR node**.
 
-This is the fresh design labelled *"correctness + field-order"* (source A,
-proposal 1), grafted with the genuinely-superior ../sky ADOPT learnings (real
-HM scheme; TRecord-gated value registration; cross-module value forwarding;
-hard collision diagnostic).
+This is the design labelled *"correctness + field-order"*, incorporating a real
+HM scheme, TRecord-gated value registration, cross-module value forwarding, and
+a hard collision diagnostic.
 
 ### Why this beats the alternatives (principle-by-principle)
 
@@ -73,12 +69,11 @@ higher-and-equal principles:
    (`constrain.rs:781` collects `Def::Typed { name, ty, .. }`; `SchemeApp` is
    recorded per reference, lines 597-601). ⇒ the synthesized ctor's declared
    **field types are checked at each call site** — this is the *sound* behaviour
-   upstream Sky omits (see "Rejected").
+   a less sound design omits (see "Rejected").
 2. Canon records are **already** ordered `Vec<(Symbol, _)>`
    (`canon::Expr_::Record`, ast.rs:202; `canon::Type::Record`, ast.rs:305).
-   There is no `Map name (index, type)` to re-sort — the ../sky
-   `_fieldIndex`/Map Haskell-ism is already designed out; declared order is
-   intrinsic.
+   There is no `Map name (index, type)` to re-sort — declared order is
+   intrinsic to the representation.
 3. `Ty::Record` / `FlatType::Record` are **closed** (name-keyed maps, no row
    variable). `FieldAccess` / `RecordUpdate` are deferred *precisely because*
    "closed records carry no row variable" (constrain.rs doc comments). ⇒ the
@@ -143,7 +138,7 @@ name. Therefore the auto-constructor:
   var tied to field var ⇒ mismatch) is a **compile error**, never silent
   acceptance;
 * does **not** interact with the still-open subset/superset question (task
-  #56), which lives only in deferred `FieldAccess` on already-closed records —
+  the still-open subset/superset question, which lives only in deferred `FieldAccess` on already-closed records —
   a surface the constructor never emits.
 
 If open rows are added later, the constructor's result stays the closed anchor
@@ -190,14 +185,13 @@ interning order (`{ zebra : Int, apple : String }`) still binds `T 1 "a"` to
 * **Collision is a hard diagnostic, not a silent skip.** Registering the ctor
   name folds into the existing `seen_values` set (resolve.rs:465-478); a
   user top-level value sharing the alias's exact name surfaces
-  `NameError::DuplicateValue` at canon — **rejecting** upstream Sky's
-  emit-time silent-skip (Compile.hs:9407-9409), which would make the ctor
-  quietly vanish and surface as a confusing downstream error.
+  `NameError::DuplicateValue` at canon, making the ctor-name collision a
+  compile error rather than a confusing downstream failure.
 * **Function-typed fields fail closed.** A config-record alias
   (`{ onSubmit : msg }`) used as a positional auto-ctor builds a record literal
   with a function field ⇒ the pre-existing `FirstClassFunctions` gate
   (IPE-L0107) fires with a clean diagnostic — a pre-existing limitation, **not**
-  a regression, and out of #82's data-record scope. The synthesized ctor must be
+  a regression, and out of this ADR's data-record scope. The synthesized ctor must be
   DCE-eligible so an *unused* cfg-alias ctor is pruned rather than force-lowering
   a function-field body.
 
@@ -217,29 +211,25 @@ re-derived at a second site. The following alternatives were considered and
   machinery. Loses on soundness/completeness/readability. A3's *per-reference
   synthesis at lowering* additionally re-derives field order in lower's zip —
   a second order-threading site where one synthesized def fixes it once.
-* **Leave the ctor UNtyped in HM** (upstream Sky's real behaviour: absent from
-  same-mod annots ⇒ fresh `CLocal` var; field types checked only by the backend
-  compiler — Expression.hs:210-226, 509-527). **Rejected** — the third gate.
+* **Leave the ctor UNtyped in HM** — leaving the alias absent from same-module
+  annotations so its field types are checked only by the backend. **Rejected** —
   `UserProfile 5 True` where fields are `String, Int` would type-check by
-  structural inference and mis-build. Using the backend as the type oracle is a
-  Go-quirk; for us the oracle is rustc (or nobody if the record literal is
-  lenient). Violates PARSE-DON'T-VALIDATE and MAKE-INVALID-STATES-
-  UNREPRESENTABLE. Our synthesized-`Def` inherently supplies the sound scheme.
-* **Map + `_fieldIndex` field representation with `sortFieldsByIndex` sprinkled
-  at every emission site** (Haskell-ism, TypeEmitter.hs:132 / Compile.hs:9331).
-  **Rejected / already-designed-out** — canon records are ordered `Vec`, so
-  "unsorted" is unrepresentable and no consumer can desync.
-* **Emit the ctor as a Go generic `func Foo[T1 any](…) Foo_R[T1]` with TVar
-  fields erased to `any`** (Compile.hs:9343-9389). **Rejected** — a Go-generics
-  workaround; `any`-erasure defeats static typing and adds reflect-style runtime
-  coercion. Parametric aliases map to genuine Rust generics / monomorphised
-  records.
-* **String-concatenation codegen for the ctor body** (ModuleEmitter.hs:104).
-  **Rejected** — the task-#53 anti-pattern; the synthesized `Def` lowers a
-  normal `Expr::Record` through the existing typed emitter, no bespoke string.
-* **Silent skip on name collision** (existingNames guard, ModuleEmitter.hs:111).
-  **Rejected** — a hard `DuplicateValue` canon diagnostic instead (see above).
-* **Hardcoded `markerCfgAliases = {("Ipe.Webview","AppCfg")}` special-case**
-  (ModuleEmitter.hs:82-86). **Rejected** — a Ipê-runtime quirk; if a
-  runtime-owned/zero-field cfg needs suppression, data-drive it from the
-  kernel/runtime registry, never a literal module+name tuple.
+  structural inference and mis-build. Deferring type-checking to the backend
+  violates PARSE-DON'T-VALIDATE and MAKE-INVALID-STATES-UNREPRESENTABLE. The
+  synthesized-`Def` inherently supplies the sound scheme.
+* **Map + per-field index field representation with an index-sort at every
+  emission site.** **Rejected / already-designed-out** — canon records are
+  ordered `Vec`, so "unsorted" is unrepresentable and no consumer can desync.
+* **Emit the ctor as a generic function with type-variable fields erased to a
+  wildcard `any`.** **Rejected** — `any`-erasure defeats static typing and adds
+  reflect-style runtime coercion. Parametric aliases map to genuine Rust
+  generics / monomorphised records.
+* **String-concatenation codegen for the ctor body.** **Rejected** — a
+  bespoke-string anti-pattern; the synthesized `Def` lowers a normal
+  `Expr::Record` through the existing typed emitter.
+* **Silent skip on name collision.** **Rejected** — a hard `DuplicateValue`
+  canon diagnostic instead (see above).
+* **Hardcoded special-case for runtime-owned zero-field cfg aliases.**
+  **Rejected** — if a runtime-owned/zero-field cfg needs suppression,
+  data-drive it from the kernel/runtime registry, never a literal module+name
+  tuple.

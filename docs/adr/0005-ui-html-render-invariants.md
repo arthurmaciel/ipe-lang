@@ -1,36 +1,31 @@
 Status: Accepted
-Date: 2026-07-11
 
 # 0005. UI/HTML render invariants (pseudo-class wire format, CSS escaping, typed onSubmit)
 
 ## Context
 
-Three UI/HTML rendering + event-sink issues (backlog #113, #105, #109/#156) in
-the `Ipe.Ui` → `Ipe.Html` render kernels needed closing. All are implemented
-(`runtime/src/sky_runtime/ui/render.rs`, `ui/element.rs`, `css_safety.rs`,
-`html.rs`, `ui/helpers.rs`). The code is the source of truth for the *how*; this
-ADR records the durable *why* and the invariants a future change must not
-break.
+Three UI/HTML rendering + event-sink issues in the `Ipe.Ui` → `Ipe.Html` render
+kernels needed closing. The code is the source of truth for the *how*; this ADR
+records the durable *why* and the invariants a future change must not break.
 
-Already correct before this work and NOT to be re-touched: the
-`escape_text`/`escape_attr` split in `html.rs` matches Go's `html.EscapeString`
-byte-for-byte (`escape_text`: `& < > '`; `escape_attr`: that plus `"`).
+Already correct and NOT to be re-touched: the `escape_text`/`escape_attr` split
+in `html.rs` (`escape_text`: `& < > '`; `escape_attr`: that plus `"`).
 
 ## Decision
 
-### 1. Pseudo-class rules travel as one `data-sky-pc-rules` marker with a stable wire tag
+### 1. Pseudo-class rules travel as one `data-ipe-pc-rules` marker with a stable wire tag
 
 `Ipe.Ui`'s pseudo-class sugar (`Background.hoverColor`, `Ui.onPseudo`, etc.)
 builds `Attribute::AttrPseudoRule(PseudoClass, css)`. The render pipeline must
 harvest every `AttrPseudoRule` on an element into ONE
-`data-sky-pc-rules` HTML attribute — the marker the already-correct downstream
+`data-ipe-pc-rules` HTML attribute — the marker the downstream
 `live::style_inject::apply_style_injections` pass converts into a `<style>`
 block. (Previously `collect_html_attrs`'s catch-all `_ => {}` silently swallowed
 it, so pseudo-class styling rendered to nothing in *every* backend — Ipe.Live,
 Ipe.Webview, and any bare `render_html` caller.)
 
-The wire format is a fixed contract, ported from the reference and shared with
-the decoder — do not re-invent it:
+The wire format is a fixed contract shared between the encoder and decoder — do
+not re-invent it:
 
 - Tag mapping: `Hover → "h"`, `Focus → "f"`, `FocusVisible → "v"`,
   `Active → "a"`, `Disabled → "d"`.
@@ -39,10 +34,9 @@ the decoder — do not re-invent it:
 
 The encode direction (`PseudoClass::wire_tag()`) lives **colocated with the
 `PseudoClass` type** as the single source of truth, and must stay in lock-step
-with `style_inject::pseudo_selector_for_tag`'s decode mapping and the reference
-`pseudoClassTag`/`pseudoSelectorForTag`. Ipe.Tui has no CSS pseudo-class concept
-and never runs the injection pass; the marker must simply not leak there (it is
-dropped, no behaviour change).
+with `style_inject::pseudo_selector_for_tag`'s decode mapping. Ipe.Tui has no
+CSS pseudo-class concept and never runs the injection pass; the marker must
+simply not leak there (it is dropped, no behaviour change).
 
 ### 2. CSS value safety decodes escapes before scanning (parse, don't validate)
 
@@ -70,17 +64,16 @@ sink); those are documented trusted-author escape hatches otherwise.
 `Arc<dyn Any>`. Two options existed: (A) sanction the `dyn Any` divergence, or
 (B) rework both functions to accept a properly-typed generic closure
 `F: Fn(T) -> M`. **Option B was chosen** — it removes `Arc<dyn Any>` from the
-codebase (the exact thing #156 flags), so a "form payload of the wrong type" is
+codebase, so a "form payload of the wrong type" is
 unrepresentable rather than a runtime downcast. This is the
 make-invalid-states-unrepresentable choice over the parse-at-runtime one.
 
 ## Consequences
 
 - The pseudo-class wire tags (`h`/`f`/`v`/`a`/`d`) and the `|` / `||` framing are
-  a stable contract between `ui::element` (encode), `live::style_inject`
-  (decode), and the reference. Changing one side without the other silently
-  breaks pseudo-class styling — `wire_tag()` and `pseudo_selector_for_tag` must
-  move together.
+  a stable contract between `ui::element` (encode) and `live::style_inject`
+  (decode). Changing one side without the other silently breaks pseudo-class
+  styling — `wire_tag()` and `pseudo_selector_for_tag` must move together.
 - CSS value safety has exactly one pattern list, checked against both raw and
   escape-decoded values. Any new breakout/script-sink pattern is added once;
   any new CSS evasion vector must be handled by extending the *decode* step, not

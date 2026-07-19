@@ -1,25 +1,20 @@
 Status: Accepted
-Date: 2026-07-14
 
 # 0007. Clone-hoist across match/if arms uses per-arm snapshot/restore, not a shared MAX counter
 
 ## Context
 
 ADR 0002 established the non-`Copy` move seal (clone every owned read except the
-last, which moves) via a `remaining` counter. Backlog #193 extended the same
-seal to reused non-`Copy` bindings captured into `move` closures across the
-Task/CLI pipeline, which double-moved to `cargo` E0507/E0382. The general fix
-lives in `crates/sky_lower/src/lower.rs` (`rewrite_multiuse_clones`) plus a
-scoped `emit_expr.rs` change for the `ui_on_input_`/`ui_on_change_` inline-wrap
-sites. It is implemented (the `golden_i193_*` suite:
-`asymmetric_arms_cloneok`, `nonclone_fn_once_per_arm`, `oninput_reused_capture`,
-`update_base_after_move`, `taskseq_reuse`, `nested_capture_outer_arg`). The code
-is the source of truth for the *how*; this ADR records the *why*, and in
-particular why the obvious fix is unsound.
+last, which moves) via a `remaining` counter. The same seal was extended to
+reused non-`Copy` bindings captured into `move` closures across the Task/CLI
+pipeline, which double-moved to `cargo` E0507/E0382. The general fix lives in
+`src/compiler/lower/src/lower.rs` (`rewrite_multiuse_clones`) plus a scoped
+`emit_expr.rs` change for the `ui_on_input_`/`ui_on_change_` inline-wrap sites.
+The code is the source of truth for the *how*; this ADR records the *why*, and
+in particular why the obvious fix is unsound.
 
-A prior design (v1) rested on false claims about the reference and prescribed a
-MAX-seeded shared counter; it was adversarially rejected. This ADR captures the
-corrected v2 decision.
+A prior design (v1) prescribed a MAX-seeded shared counter; it was
+adversarially rejected. This ADR captures the corrected v2 decision.
 
 ## Decision
 
@@ -42,7 +37,7 @@ Counterexample — once-in-arm-A, twice-in-arm-B, MAX seed = `max(1,2) = 2`:
 2. Arm B first read: `remaining` 1 → 0, emits **bare `Var`** (wrong — B has a
    second use coming, this one must clone).
 3. Arm B second read: `remaining == 0` → early-out returns it untouched → bare
-   `Var`. Arm B moves `sym` twice → E0382, the exact #193 class.
+   `Var`. Arm B moves `sym` twice → E0382, the double-move class this decision closes.
 
 MAX is order-dependent: swapping to twice-A/once-B moves the failure to a
 different arm. A shared *spent* counter can never be correct for
@@ -58,10 +53,9 @@ last use becomes a bare move regardless of sibling arms' counts. The counters
 that drive the seed MAX across arms (worst-case path), while the *rewrite* snapshots
 per arm — the two must not be conflated.
 
-This mirrors the reference's deliberate two-function split
-(`collectFreeVarLocalsMulti` SUMs to drive the prelude set membership — a safe
-over-approximation; `collectVarLocalsMulti` MAXes arms to drive the use-site
-clone set), which was the fact v1 got backwards.
+The key insight: the SUM that drives the prelude set membership (a safe
+over-approximation) must not be conflated with the MAX that drives the per-arm
+rewrite — v1 got these backwards.
 
 ## Consequences
 

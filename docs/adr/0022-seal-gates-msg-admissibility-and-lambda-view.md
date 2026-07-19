@@ -1,17 +1,16 @@
 Status: Accepted
-Date: 2026-07-11
 
 # 0022. Msg-admissibility uses derivability (not serde); a lambda-aware extractor closes the view/update gate bypass
 
 ## Context
 
 The exit-0 seal requires `ipe accept ⇒ cargo build`. ADR 0002/0007's move seal
-and the `#91` Model-admissibility gate close part of it, but a well-typed Ipê
-program could still put a non-derivable value (Html, Cmd, Task, function) into
-its Model or Msg — `ipe` accepts, `cargo` fails on the missing trait bound. Two
-gaps remained: the Msg slot had no admissibility gate (#94), and a lambda-bound
-`view`/`update` field bypassed the existing Model gate (#95), because gate
-recovery only handled named `FuncValue`s.
+and the Model-admissibility gate close part of it, but a well-typed Ipê program
+could still put a non-derivable value (Html, Cmd, Task, function) into its Model
+or Msg — `ipe` accepts, `cargo` fails on the missing trait bound. Two gaps
+remained: the Msg slot had no admissibility gate, and a lambda-bound
+`view`/`update` field bypassed the existing Model gate, because gate recovery
+only handled named `FuncValue`s.
 
 ## Decision
 
@@ -27,7 +26,7 @@ recovery only handled named `FuncValue`s.
   whether the field is an `Expr::FuncValue` or an `Expr::Lambda` (lambda params
   carry concrete `IrType`s materialized from the solved region type; curried
   lambdas are flattened so `params[0]` is always the first user parameter),
-  simultaneously closing #95.
+  simultaneously closing the lambda-view bypass.
 
 Rejected alternatives: gating only at `cargo` level (leaves the seal hole open);
 using `ir_type_is_serde` for Msg (false-rejects admissible Live Msgs carrying

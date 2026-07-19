@@ -1,16 +1,15 @@
 Status: Accepted
-Date: 2026-07-11
 
 # 0019. Ui.mediaQuery reuses the shared CSS-safety collector behind a typed SafeCssMediaQuery boundary
 
 ## Context
 
-The infrastructure to *consume* media-query markers (`data-sky-mq-q` +
-`data-sky-mq-rules` → sky-id-scoped `<style>@media …</style>`) already shipped
-in `live/style_inject.rs`. The missing piece was the *producer*: a kernel +
-runtime helper building the wrapper element that carries those markers. The
-design question was whether to invent new media-query compilation machinery or
-reuse the existing CSS collector — and how to make the raw query string safe,
+The infrastructure to *consume* media-query markers (`data-ipe-mq-q` +
+`data-ipe-mq-rules` → element-id-scoped `<style>@media …</style>`) already
+shipped in `live/style_inject.rs`. The missing piece was the *producer*: a
+kernel + runtime helper building the wrapper element that carries those markers.
+The design question was whether to invent new media-query compilation machinery
+or reuse the existing CSS collector — and how to make the raw query string safe,
 since it is spliced into `@media {query} {` inside a raw `<style>` body (an
 attacker could close the prelude, terminate the element, open a comment, or
 smuggle `@import`). This is a new CSS injection boundary distinct from the
@@ -46,5 +45,5 @@ Rejected alternatives:
   one CSS consumer strengthens all of them; the wrapper element is always emitted
   regardless of the gate outcome (structural stability for the diff).
 - `Ui.breakpoint` (which `breakpointToQuery` delegates to) is un-stubbed for
-  free — its Phase-0 eager-passthrough stub becomes a one-line delegation to
-  `ui_media_query_`, closing that backlog row with zero additional mechanism.
+  free — its earlier eager-passthrough stub becomes a one-line delegation to
+  `ui_media_query_`, with zero additional mechanism.

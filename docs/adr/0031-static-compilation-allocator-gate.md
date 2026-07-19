@@ -1,5 +1,4 @@
 Status: Accepted
-Date: 2026-07-03
 
 # 0031. Static compilation and allocator selection
 

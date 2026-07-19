@@ -1,5 +1,4 @@
 Status: Accepted
-Date: 2026-07-10
 
 # 0020. Html/Ui/Live kernels are schemed only when three arity sources agree
 

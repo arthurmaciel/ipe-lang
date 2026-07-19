@@ -1,5 +1,4 @@
 Status: Accepted
-Date: 2026-07-09
 
 # 0010. Pattern & lowering completeness (interp literals, function payloads, nested sub-patterns, local type shadowing)
 
@@ -23,9 +22,9 @@ uniformly to its siblings.
 
 - **B — function payloads in `Maybe`/`Result`/constructor payloads.** Two
   lowering gates rejected function-valued payloads unconditionally, on the stale
-  assumption that a function field can't satisfy the derives set. The `#87`
-  backend `enum_derivable` fixpoint now gracefully degrades non-derivable enums
-  (skip `#[derive]`, hand-write `SkyStringify` rendering `"<fn>"`). So add
+  assumption that a function field can't satisfy the derives set. The backend
+  `enum_derivable` fixpoint gracefully degrades non-derivable enums (skip
+  `#[derive]`, hand-write `IpeStringify` rendering `"<fn>"`). So add
   `Maybe`/`Result` to the opaque-boxed-wrapper exemption and remove the
   declaration-time gate, relying on that machinery. Rejected: re-inventing a
   backend clone gate (already exists), or syntactically inspecting arity

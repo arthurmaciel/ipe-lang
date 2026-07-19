@@ -1,5 +1,4 @@
 Status: Accepted
-Date: 2026-07-09
 
 # 0018. Every record reaching the backend has a fully-pinned concrete field set
 
