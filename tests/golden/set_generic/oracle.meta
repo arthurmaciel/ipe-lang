@@ -1,6 +1,0 @@
-# Cached Go-oracle metadata. Regenerate with the refresh-oracle tool.
-main_ipe_sha256 = cad303f6292312e12958c5668a53d1ecc41b025445e7d63af78e12e3cdf81011
-go_sky_version = sky dev
-exit_code = 0
-oracle_divergence = true
-divergence_reason = Go oracle program exited Some(1) (non-zero); using skyc output as the reference

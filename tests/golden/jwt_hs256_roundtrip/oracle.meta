@@ -1,6 +1,0 @@
-# Cached Go-oracle metadata. Regenerate with the refresh-oracle tool.
-main_ipe_sha256 = 17a235bf866e8021db1d956ff1311fd310e1a1544c2367cf70fe4d01a013c16f
-go_sky_version = sky dev
-exit_code = 0
-oracle_divergence = true
-divergence_reason = divergence: Sky.Core.Jwt flat kernels (encodeHs256/decodeHs256/encodeRs256/decodeRs256) are the Rust-backend M5b interim surface; the Go backend exposes only the builder API (Jwt.encode / hs256 / rs256 / claims / decode), so this exact program does not compile on the Go reference. Token bytes remain byte-identical to Go (see tests/golden/jwt_hs256_bytes and jwt_rs256_bytes, asserted in crates/skyc/tests/golden_m5b_uuid_jwt.rs). Sky-Rust records its own output. Divergence from Sky, rationale: JWT API-surface interim (docs/architecture/divergence-policy.md).

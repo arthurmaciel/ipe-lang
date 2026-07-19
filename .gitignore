@@ -19,9 +19,6 @@ sky.db-wal
 # node_modules/ + any fetched Playwright browser binaries are not.
 scripts/equivalence-checks/node_modules/
 
-# Pinned Go-reference oracle binaries — large, fetched not committed.
-# Pinned version is the SSOT at tools/oracle/README.md, not duplicated here.
-tools/oracle/bin/
 # agent worktrees — never commit
 .claude/worktrees/
 # progressive-development loop runtime artifacts

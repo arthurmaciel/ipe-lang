@@ -12,7 +12,7 @@
 //! 2. Compiles it through `ipe::build` (full pipeline: parse → canon → types →
 //!    lower → emit Rust).
 //! 3. Builds the emitted Cargo project with the shared target via
-//!    `oracle::build_rust_binary` — build-only, returns the binary path so the
+//!    `e2e_support::build_rust_binary` — build-only, returns the binary path so the
 //!    test controls execution.
 //! 4. Launches a raw `TcpListener` fixture server (bound to `127.0.0.1:0` for an
 //!    ephemeral port) in a background thread that handles exactly one HTTP
@@ -51,7 +51,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// the path to the compiled binary.
 ///
 /// Creates a unique temp dir per test name, writes `Main.ipe`, runs the full
-/// ipe pipeline, then delegates the Cargo build to `oracle::build_rust_binary`.
+/// ipe pipeline, then delegates the Cargo build to `e2e_support::build_rust_binary`.
 ///
 /// # Errors
 ///
@@ -76,7 +76,7 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<PathBuf, BoxEr
     ipe::build(&entry, &out_dir, &runtime)
         .map_err(|e| -> BoxError { format!("{test_name}: ipe build failed: {e}").into() })?;
 
-    let exe = oracle::build_rust_binary(test_name, &out_dir)
+    let exe = e2e_support::build_rust_binary(test_name, &out_dir)
         .map_err(|e| -> BoxError { format!("{test_name}: cargo build failed: {e}").into() })?;
 
     Ok(PathBuf::from(exe))

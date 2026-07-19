@@ -337,7 +337,7 @@ fn c06_stream_string_capture_seal() {
     }
     // Build-only: the fixture is a listening server, so it cannot run-to-exit.
     // A successful cargo build is the seal (ipe-0 ⇒ cargo builds).
-    let built_bin = oracle::build_rust_binary("stream_string_capture", &out);
+    let built_bin = e2e_support::build_rust_binary("stream_string_capture", &out);
     assert!(
         built_bin.is_ok(),
         "emitted crate must cargo-build (was 2x E0507 on the stream handler): {}",
