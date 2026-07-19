@@ -4,9 +4,9 @@
 # Ported from ../sky/scripts/fuzz-well-typed.sh (Haskell backend, Go target).
 # KEY ADAPTATIONS — Rust/Ipê backend:
 #
-#   BUILD: ipe build src/Main.ipe --out sky-out/rust
-#          cargo build --manifest-path sky-out/rust/Cargo.toml
-#          (binary: $CARGO_TARGET_DIR/debug/sky-app)
+#   BUILD: ipe build src/Main.ipe --out out/rust
+#          cargo build --manifest-path out/rust/Cargo.toml
+#          (binary: $CARGO_TARGET_DIR/debug/ipe-app)
 #
 #   PANIC DETECTION: Rust/Ipê runtime installs a classify-and-log panic hook
 #   (sky_runtime::core::install_panic_classifier). A runtime fault emits to
@@ -814,20 +814,20 @@ run_iter() {
     # ── Step 1: ipe build → emitted Rust project ──────────────────────────
     local ipe_rc=0
     if ! ( cd "$iterdir" && timeout "$BUILD_TIMEOUT" \
-           "$IPE_BIN" build src/Main.ipe --out sky-out/rust >"$buildlog" 2>&1 ); then
+           "$IPE_BIN" build src/Main.ipe --out out/rust >"$buildlog" 2>&1 ); then
         ipe_rc=$?
         echo "IPE-BUILD-FAILED rc=$ipe_rc kind=$kind"
         return 1
     fi
-    if [[ ! -f "$iterdir/sky-out/rust/Cargo.toml" ]]; then
+    if [[ ! -f "$iterdir/out/rust/Cargo.toml" ]]; then
         echo "IPE-BUILD-FAILED no-cargo-toml kind=$kind"
         return 1
     fi
 
-    # ── Step 2: cargo build → sky-app binary ───────────────────────────────
+    # ── Step 2: cargo build → ipe-app binary ───────────────────────────────
     local cargo_rc=0
     if ! ( cd "$iterdir" && timeout "$BUILD_TIMEOUT" \
-           cargo build --manifest-path sky-out/rust/Cargo.toml >>"$buildlog" 2>&1 ); then
+           cargo build --manifest-path out/rust/Cargo.toml >>"$buildlog" 2>&1 ); then
         cargo_rc=$?
         if has_panic "$buildlog"; then
             echo "CARGO-BUILD-PANIC rc=$cargo_rc kind=$kind"
@@ -840,9 +840,9 @@ run_iter() {
     # ── Step 3: find binary ─────────────────────────────────────────────────
     local bin=""
     for _cand in \
-        "$CARGO_TARGET_DIR/debug/sky-app" \
-        "$CARGO_TARGET_DIR/release/sky-app" \
-        "$iterdir/sky-out/rust/target/debug/sky-app"; do
+        "$CARGO_TARGET_DIR/debug/ipe-app" \
+        "$CARGO_TARGET_DIR/release/ipe-app" \
+        "$iterdir/out/rust/target/debug/ipe-app"; do
         [[ -x "$_cand" ]] && { bin="$_cand"; break; }
     done
     if [[ -z "$bin" ]]; then
@@ -889,8 +889,8 @@ save_failure() {
     cp -f  "$iterdir/build.log" "$dst/"     2>/dev/null || true
     cp -f  "$iterdir/run.log"   "$dst/"     2>/dev/null || true
     # Emitted Rust source (most useful artefact for debugging)
-    [[ -d "$iterdir/sky-out/rust/src" ]] && \
-        cp -rf "$iterdir/sky-out/rust/src" "$dst/emitted-rust-src" 2>/dev/null || true
+    [[ -d "$iterdir/out/rust/src" ]] && \
+        cp -rf "$iterdir/out/rust/src" "$dst/emitted-rust-src" 2>/dev/null || true
     printf 'seed=%s reason=%s\n' "$seed" "$reason" > "$dst/SUMMARY"
     echo "  Forensics: $dst"
 }
@@ -924,7 +924,7 @@ EOF
 
     echo "[1/3] ipe build..."
     if ! ( cd "$tp_dir" && timeout "$BUILD_TIMEOUT" \
-           "$IPE_BIN" build src/Main.ipe --out sky-out/rust >"$buildlog" 2>&1 ); then
+           "$IPE_BIN" build src/Main.ipe --out out/rust >"$buildlog" 2>&1 ); then
         echo "RESULT: FAIL — program did not build (compiler bug)"
         echo "  Build log: $(cat "$buildlog")"
         rm -rf "$tp_dir"; return 1
@@ -933,7 +933,7 @@ EOF
 
     echo "[2/3] cargo build..."
     if ! ( cd "$tp_dir" && timeout "$BUILD_TIMEOUT" \
-           cargo build --manifest-path sky-out/rust/Cargo.toml >>"$buildlog" 2>&1 ); then
+           cargo build --manifest-path out/rust/Cargo.toml >>"$buildlog" 2>&1 ); then
         echo "RESULT: FAIL — cargo build failed"
         rm -rf "$tp_dir"; return 1
     fi
@@ -941,8 +941,8 @@ EOF
 
     local bin=""
     for _cand in \
-        "$CARGO_TARGET_DIR/debug/sky-app" \
-        "$CARGO_TARGET_DIR/release/sky-app"; do
+        "$CARGO_TARGET_DIR/debug/ipe-app" \
+        "$CARGO_TARGET_DIR/release/ipe-app"; do
         [[ -x "$_cand" ]] && { bin="$_cand"; break; }
     done
     if [[ -z "$bin" ]]; then echo "RESULT: FAIL — binary not found"; rm -rf "$tp_dir"; return 1; fi

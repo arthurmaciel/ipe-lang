@@ -12,7 +12,7 @@
 //! (behind `IPE_E2E=1`) the emitted project must build and print `83`.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
-//! `/home/arthur/Documentos/comp/sky/sky-out/sky` compiles + runs the SAME
+//! `/home/arthur/Documentos/comp/sky/out/sky` compiles + runs the SAME
 //! `Main.ipe` to stdout `83\n`, exit 0 — hand-verified in a temp dir. The
 //! hand-computed `3 + 5 + 42 + 33 = 83` is the in-test oracle.
 use std::path::{Path, PathBuf};

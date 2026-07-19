@@ -968,7 +968,7 @@ Current compiler limitations to work around when writing code.
 
 ```bash
 ipe init [name]                    # new project
-sky build src/Main.ipe             # compile → sky-out/app
+sky build src/Main.ipe             # compile → out/app
 ipe build src/Main.ipe --target wasm   # browser-WASM project (cdylib + www/ shell)
 ipe run src/Main.ipe               # build + run
 ipe build|run … --static           # fully-static musl single binary (dlmalloc
@@ -991,13 +991,13 @@ ipe add <package>                  # add an FFI binding
 ipe remove <package>
 ipe install                        # regen missing FFI + deps
 ipe update                         # update deps
-sky clean                          # remove sky-out/ dist/
+sky clean                          # remove out/ dist/
 ipe lsp                            # JSON-RPC LSP server (stdio)
 sky --version
 ```
 
 **Never run `ipe build` from repo root** — overwrites compiler binary in
-`sky-out/`. Always `cd` into project/example dir first:
+`out/`. Always `cd` into project/example dir first:
 
 ```bash
 cd examples/01-hello-world && ipe build src/Main.ipe

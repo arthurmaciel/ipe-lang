@@ -20,7 +20,7 @@
 //! Go reference compiler produces.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
-//! `/home/arthur/Documentos/comp/sky/sky-out/sky` compiles + runs the SAME
+//! `/home/arthur/Documentos/comp/sky/out/sky` compiles + runs the SAME
 //! `Main.ipe` files to the same stdout:
 //!
 //! ```text

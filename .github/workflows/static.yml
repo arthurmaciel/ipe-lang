@@ -93,14 +93,14 @@ jobs:
       - name: ipe build --static (example, ${{ matrix.allocator }})
         run: |
           cd examples/01-hello-world
-          "$CARGO_TARGET_DIR/release/ipe" build ipe.toml --out sky-out/rust \
+          "$CARGO_TARGET_DIR/release/ipe" build ipe.toml --out out/rust \
             --static --allocator ${{ matrix.allocator }}
-          cd sky-out/rust
+          cd out/rust
           cargo build --release --target "$STATIC_TRIPLE"
 
       - name: Assert static-ness (file + ldd)
         run: |
-          BIN="$CARGO_TARGET_DIR/$STATIC_TRIPLE/release/sky-app"
+          BIN="$CARGO_TARGET_DIR/$STATIC_TRIPLE/release/ipe-app"
           file "$BIN"
           file "$BIN" | grep -Eq 'static-pie linked|statically linked'
           LDD_OUT="$(ldd "$BIN" 2>&1 || true)"
@@ -112,8 +112,8 @@ jobs:
       - name: Run in a scratch container
         run: |
           WORK="$(mktemp -d)"
-          cp "$CARGO_TARGET_DIR/$STATIC_TRIPLE/release/sky-app" "$WORK/"
-          printf 'FROM scratch\nCOPY sky-app /sky-app\nENTRYPOINT ["/sky-app"]\n' > "$WORK/Dockerfile"
+          cp "$CARGO_TARGET_DIR/$STATIC_TRIPLE/release/ipe-app" "$WORK/"
+          printf 'FROM scratch\nCOPY ipe-app /ipe-app\nENTRYPOINT ["/ipe-app"]\n' > "$WORK/Dockerfile"
           docker build -t ipe-static-proof "$WORK"
           OUT="$(docker run --rm ipe-static-proof)"
           echo "scratch output: $OUT"
@@ -127,14 +127,14 @@ jobs:
           tool: cargo-audit
 
       - name: cargo audit (emitted lockfile)
-        run: cargo audit --file examples/01-hello-world/sky-out/rust/Cargo.lock
+        run: cargo audit --file examples/01-hello-world/out/rust/Cargo.lock
 
       - name: Upload frozen-deps manifest
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: static-frozen-deps-${{ matrix.allocator }}
-          path: examples/01-hello-world/sky-out/rust/Cargo.lock
+          path: examples/01-hello-world/out/rust/Cargo.lock
           if-no-files-found: warn
 
   # ─── aarch64 static gate ───────────────────────────────────────────────────
@@ -192,9 +192,9 @@ jobs:
       - name: ipe build --static --target aarch64-unknown-linux-musl
         run: |
           cd examples/01-hello-world
-          "$CARGO_TARGET_DIR/release/ipe" build ipe.toml --out sky-out/rust \
+          "$CARGO_TARGET_DIR/release/ipe" build ipe.toml --out out/rust \
             --static --target aarch64-unknown-linux-musl --allocator dlmalloc
-          cd sky-out/rust
+          cd out/rust
           cargo build --release --target "$STATIC_TRIPLE"
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
@@ -202,13 +202,13 @@ jobs:
 
       - name: Assert static-ness (file)
         run: |
-          BIN="$CARGO_TARGET_DIR/$STATIC_TRIPLE/release/sky-app"
+          BIN="$CARGO_TARGET_DIR/$STATIC_TRIPLE/release/ipe-app"
           file "$BIN"
           file "$BIN" | grep -Eq 'static-pie linked|statically linked|ELF 64-bit LSB.*static'
 
       - name: Run via QEMU
         run: |
-          BIN="$CARGO_TARGET_DIR/$STATIC_TRIPLE/release/sky-app"
+          BIN="$CARGO_TARGET_DIR/$STATIC_TRIPLE/release/ipe-app"
           OUT="$(qemu-aarch64-static "$BIN")"
           echo "qemu output: $OUT"
           echo "$OUT" | grep -q 'Hello from Sky!'
@@ -218,5 +218,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: static-frozen-deps-arm64-dlmalloc
-          path: examples/01-hello-world/sky-out/rust/Cargo.lock
+          path: examples/01-hello-world/out/rust/Cargo.lock
           if-no-files-found: warn

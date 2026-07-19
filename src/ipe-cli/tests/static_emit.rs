@@ -452,7 +452,7 @@ fn end_to_end_static_binary_is_static_and_runs() {
     let bin = target_dir
         .join(plan.triple.as_str())
         .join("debug")
-        .join("sky-app");
+        .join("ipe-app");
 
     // Assert static-ness — never assume it. `ldd` exits non-zero for a
     // static binary on some platforms; the message is the contract.
@@ -524,7 +524,7 @@ fn ipe_run_static_builds_and_executes_a_static_binary() {
     let bin = target_dir
         .join("x86_64-unknown-linux-musl")
         .join("debug")
-        .join("sky-app");
+        .join("ipe-app");
     let ldd = std::process::Command::new("ldd")
         .arg(&bin)
         .output()

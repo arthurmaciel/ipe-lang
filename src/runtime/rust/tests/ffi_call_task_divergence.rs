@@ -20,7 +20,7 @@
 //!      dispatch is reflection; that is the one thing this backend must not do.
 //!   2. **Zero `.ipe` source emits `Ffi.callTask`.** Across the whole stdlib +
 //!      every example, `grep -rn 'Ffi\.callTask' --include='*.ipe'` returns 0
-//!      hits outside generated `sky-out/`. The polyfill is statically dead for
+//!      hits outside generated `out/`. The polyfill is statically dead for
 //!      every well-typed Ipê program shipped today.
 //!   3. **Effectful kernels route via `Ffi.kernel`, never `Ffi.callTask`.** The
 //!      stdlib's effectful kernels (`Http.*`, `Task.*`, `Db.*`, `Time.now`, …)

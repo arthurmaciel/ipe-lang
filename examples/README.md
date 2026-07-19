@@ -38,12 +38,12 @@ the sweep. The materialised trees are git-ignored.
 ```sh
 # Build and run a CLI example
 cd examples/41-money-allocate-regression
-ipe build ipe.toml --out sky-out/rust
-cargo run --manifest-path sky-out/rust/Cargo.toml
+ipe build ipe.toml --out out/rust
+cargo run --manifest-path out/rust/Cargo.toml
 
-# Build a WASM example (outputs to sky-out/rust/www/)
+# Build a WASM example (outputs to out/rust/www/)
 cd examples/45-wasm-spa
-ipe build ipe.toml --out sky-out/rust --target wasm
+ipe build ipe.toml --out out/rust --target wasm
 ```
 
 Or use the sweep to build and run all in-scope examples at once:

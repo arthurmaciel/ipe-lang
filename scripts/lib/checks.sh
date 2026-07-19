@@ -10,8 +10,8 @@
 #   • the browser driver / scenarios paths point at this repo's scripts/ (absent
 #     for now → WEB_OK=0 → exercise_live degrades to a server boot check, which
 #     is exactly the BUILD+RUN phase-1 behaviour we want).
-#   • resolve_bin looks under sky-out/rust/target and the shared CARGO_TARGET_DIR
-#     for ipe's emitted `sky-app` binary.
+#   • resolve_bin looks under out/rust/target and the shared CARGO_TARGET_DIR
+#     for ipe's emitted `ipe-app` binary.
 #
 # Depends on lib/env.sh being sourced first (CARGO_TARGET_DIR, PATH, REPO). It is
 # idempotent and side-effect-light at source time (exports + a browser-stack probe).
@@ -74,8 +74,8 @@ free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0)
 # ── reap: kill stray app / driver / Xvfb processes between examples ──────────
 reap() {
   command -v pkill >/dev/null 2>&1 || return 0
-  for p in sky-app app; do pkill -x "$p" 2>/dev/null; done
-  pkill -f "examples/.*/sky-out/" 2>/dev/null; pkill -f web-verify.mjs 2>/dev/null
+  for p in ipe-app app; do pkill -x "$p" 2>/dev/null; done
+  pkill -f "examples/.*/out/" 2>/dev/null; pkill -f web-verify.mjs 2>/dev/null
   pkill -x Xvfb 2>/dev/null
 }
 
@@ -111,36 +111,36 @@ scenario_for() {
 }
 
 # ── resolve_bin <example-dir>: the freshest Rust binary ipe just built ──────
-# ipe emits a Cargo project whose package/binary is `sky-app` (src/ipe-cli emits
-# a fixed `sky-app` bin). Because ~/.cargo/config.toml pins a shared target-dir,
-# each example's `cargo build` writes $CARGO_TARGET_DIR/{debug,release}/sky-app;
+# ipe emits a Cargo project whose package/binary is `ipe-app` (src/ipe-cli emits
+# a fixed `ipe-app` bin). Because ~/.cargo/config.toml pins a shared target-dir,
+# each example's `cargo build` writes $CARGO_TARGET_DIR/{debug,release}/ipe-app;
 # the sweep builds+runs one example at a time (rm -rf between), so overwrite is
 # fine. Probe the shared target first, then the per-example target. The ipe.toml
-# `name` is tried too (harmless first probe; ipe names the bin sky-app regardless).
+# `name` is tried too (harmless first probe; ipe names the bin ipe-app regardless).
 resolve_bin() {
   local d="$1" name b
   # Static sweep (IPE_SWEEP_STATIC=1): the artifact lives under the target
   # triple's subdir. NEVER fall through to the dynamic probes — a stale
-  # dynamic sky-app would silently substitute for the static one.
+  # dynamic ipe-app would silently substitute for the static one.
   if [ "${IPE_SWEEP_STATIC:-0}" = 1 ]; then
     local triple="${IPE_STATIC_TRIPLE:-x86_64-unknown-linux-musl}"
     for b in \
-      "$CARGO_TARGET_DIR/$triple/debug/sky-app" \
-      "$d/sky-out/rust/target/$triple/debug/sky-app"; do
+      "$CARGO_TARGET_DIR/$triple/debug/ipe-app" \
+      "$d/out/rust/target/$triple/debug/ipe-app"; do
       [ -x "$b" ] && [ ! -d "$b" ] && { echo "$b"; return 0; }
     done
     return 1
   fi
   name="$(rg -No '^name\s*=\s*"([^"]+)"' -r '$1' "$d/ipe.toml" 2>/dev/null | head -1)"
   for b in \
-    "$CARGO_TARGET_DIR/debug/sky-app" \
-    "$CARGO_TARGET_DIR/release/sky-app" \
+    "$CARGO_TARGET_DIR/debug/ipe-app" \
+    "$CARGO_TARGET_DIR/release/ipe-app" \
     "$CARGO_TARGET_DIR/debug/$name" \
-    "$d/sky-out/rust/target/debug/sky-app" \
-    "$d/sky-out/rust/target/debug/$name"; do
+    "$d/out/rust/target/debug/ipe-app" \
+    "$d/out/rust/target/debug/$name"; do
     [ -n "$b" ] && [ -x "$b" ] && [ ! -d "$b" ] && { echo "$b"; return 0; }
   done
-  b="$(find "$CARGO_TARGET_DIR/debug" "$d/sky-out/rust/target/debug" -maxdepth 1 -type f -executable 2>/dev/null \
+  b="$(find "$CARGO_TARGET_DIR/debug" "$d/out/rust/target/debug" -maxdepth 1 -type f -executable 2>/dev/null \
         | xargs -r ls -t 2>/dev/null | head -1)"
   [ -n "$b" ] && { echo "$b"; return 0; }
   return 1

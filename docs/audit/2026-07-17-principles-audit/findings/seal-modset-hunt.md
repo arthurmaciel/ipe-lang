@@ -142,7 +142,7 @@ transitive-closure check a build-time assertion over the real runtime source,
 e.g. a test that parses `use crate::X` from every vendored module and verifies
 closure for every reachable flag combination).
 
-## Witnesses (all under /tmp/sealhunt, emitted crates in `<w>/sky-out/rust`)
+## Witnesses (all under /tmp/sealhunt, emitted crates in `<w>/out/rust`)
 
 | witness | shape | ipe exit | cargo | error |
 |---|---|---|---|---|
