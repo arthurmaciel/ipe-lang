@@ -703,14 +703,21 @@ impl<'a> WrapperCx<'a> {
         if raw_ty == "serde_json::Value" && decl_ty == "String" {
             return format!("sv_{j}");
         }
-        if decl_ty == "String" && raw_ty == "String" {
-            return base; // host wants an owned String by value
+        if decl_ty == "String" && (raw_ty == "String" || raw_ty == "str") {
+            // Owned by value. A BARE `str` raw can only be a conversion/
+            // generic-bound substitute (an unsized by-value `str` param is
+            // unrepresentable in a real signature): the host param is generic
+            // (`impl Into<Id>` / `impl AsRef<str>` / `impl Display`), so the
+            // owned `String` satisfies the bound where a `&String` would not
+            // (`String: Into<Id>` via `Id: From<String>`; no such impl for
+            // `&String`).
+            return base;
         }
         if decl_ty == "String" && raw_ty == "&str" {
             return format!("{base}.as_ref()"); // &str/&Path/&OsStr via AsRef
         }
         if decl_ty == "String" {
-            return format!("&{base}"); // borrowed &str / &String
+            return format!("&{base}"); // borrowed &String
         }
         if raw_ty.is_empty() || raw_ty == decl_ty {
             return base;
