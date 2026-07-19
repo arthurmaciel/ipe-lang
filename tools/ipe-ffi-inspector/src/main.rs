@@ -1519,17 +1519,27 @@ fn fetch_dep(manifest_str: &str) -> Result<(), String> {
 /// empty map — the codegen then DROPS any wrapper whose transitive crate it can't
 /// resolve (coverage-drop), never emits an unresolvable / `"*"` dep.
 fn collect_transitive_deps(manifest_str: &str) -> Vec<TransitiveDep> {
-    let output = match Command::new("cargo")
-        .args([
-            "metadata",
-            "--format-version",
-            "1",
-            "--quiet",
-            "--manifest-path",
-            manifest_str,
-        ])
-        .output()
-    {
+    // Filter the graph to the HOST platform: unfiltered `cargo metadata`
+    // lists EVERY platform's conditional deps (`system-configuration` — a
+    // macOS-only reqwest dep), and each listed dep becomes an UNCONDITIONAL
+    // exact pin in the emitted `[dependencies]` — forcing a foreign-platform
+    // crate to build (and fail) on the host. The emitted app builds on this
+    // same host, so the host-filtered graph is the right pin set; a dep only
+    // reachable on another platform stays unpinned there (cargo resolves it
+    // through the direct pins), never force-built here.
+    let mut cmd = Command::new("cargo");
+    cmd.args([
+        "metadata",
+        "--format-version",
+        "1",
+        "--quiet",
+        "--manifest-path",
+        manifest_str,
+    ]);
+    if let Some(host) = host_target_triple() {
+        cmd.args(["--filter-platform", &host]);
+    }
+    let output = match cmd.output() {
         Ok(o) if o.status.success() => o.stdout,
         _ => return Vec::new(),
     };
@@ -1539,6 +1549,21 @@ fn collect_transitive_deps(manifest_str: &str) -> Vec<TransitiveDep> {
         Err(_) => return Vec::new(),
     };
     transitive_deps_from_metadata(&meta)
+}
+
+/// The host target triple (`rustc -vV` `host:` line), for platform-filtering
+/// the metadata graph. `None` on any failure (fail-soft: unfiltered metadata,
+/// the pre-existing behavior).
+fn host_target_triple() -> Option<String> {
+    let out = Command::new("rustc").arg("-vV").output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8(out.stdout).ok()?;
+    text.lines()
+        .find_map(|l| l.strip_prefix("host: "))
+        .map(|h| h.trim().to_owned())
+        .filter(|h| !h.is_empty())
 }
 
 /// WALL-B (#75): the PURE extraction half of `collect_transitive_deps` — given a
@@ -1951,6 +1976,7 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
     STD_TRAIT_BY_ID.with(|c| *c.borrow_mut() = collect_std_trait_ids(doc));
     EXTERNAL_TRAIT_PATH_BY_ID.with(|c| *c.borrow_mut() = collect_external_trait_paths(doc));
     EXTERNAL_TYPE_PATH_BY_ID.with(|c| *c.borrow_mut() = collect_external_type_paths(doc));
+    EXTERNAL_DEFPATH_BY_ID.with(|c| *c.borrow_mut() = collect_external_defpaths(doc));
 
     // Wall #3 coverage accumulators are per-crate — reset so a multi-crate run
     // reports each crate's bind%/drops independently.
@@ -2795,8 +2821,19 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
     // the receiver type can be spelled in the wrapper).  It must NOT filter generic
     // functions whose receiver may carry a synthetic type-token like `Doc<M>` —
     // `ipe_ffi_generics.rs` synthesizes those wrappers differently (UFCS).
-    functions
-        .retain(|f| f.method_name == "to_string" || f.generic.is_some() || fn_types_nameable(f));
+    functions.retain(|f| {
+        let keep = f.method_name == "to_string" || f.generic.is_some() || fn_types_nameable(f);
+        if !keep && std::env::var("IPE_FFI_DBG").is_ok() {
+            eprintln!(
+                "[DBG-NAMEABLE-DROP] name={:?} recv={:?} params={:?} results={:?}",
+                f.name,
+                f.recv_rust_type,
+                f.params.iter().map(|p| p.rust_type.clone()).collect::<Vec<_>>(),
+                f.results.iter().map(|p| p.rust_type.clone()).collect::<Vec<_>>()
+            );
+        }
+        keep
+    });
 
     // Sized gate (P4): drop methods whose RECEIVER type is never produced by
     // value anywhere in the crate — a strong "unsized / un-constructible" signal
@@ -5049,6 +5086,14 @@ thread_local! {
     static EXTERNAL_TYPE_PATH_BY_ID: std::cell::RefCell<HashMap<String, String>> =
         std::cell::RefCell::new(HashMap::new());
 
+    // Rustdoc id -> RAW rustdoc DEFINITION path (joined `::`, no public-path
+    // normalization) for every EXTERNAL-crate TYPE in `doc["paths"]`. The
+    // serde-json claims lift consults this to recognise `serde_json::Value`
+    // by its defining identity even though its public re-export path is
+    // unresolvable through the fail-closed rule set.
+    static EXTERNAL_DEFPATH_BY_ID: std::cell::RefCell<HashMap<String, String>> =
+        std::cell::RefCell::new(HashMap::new());
+
     // [#52] Concrete-impl index for the concrete-impl-monomorphization arm.
     // Maps a CRATE-LOCAL trait's rustdoc id (`item_id_to_str`) → the set of `for`
     // type JSON nodes of every concrete `impl Trait for T` in THIS crate. Used by
@@ -5802,6 +5847,35 @@ fn external_type_public_path(joined: &str) -> Option<String> {
     None
 }
 
+/// RAW rustdoc definition path of every external TYPE id — no public-path
+/// normalization, no fail-closed filtering. Identity queries only (never
+/// emitted as a Rust path).
+fn collect_external_defpaths(doc: &serde_json::Value) -> HashMap<String, String> {
+    let mut out: HashMap<String, String> = HashMap::new();
+    let Some(paths) = doc["paths"].as_object() else {
+        return out;
+    };
+    for (id, entry) in paths {
+        if entry["crate_id"].as_u64().unwrap_or(0) == 0 {
+            continue;
+        }
+        let kind = entry["kind"].as_str().unwrap_or("");
+        if !TYPE_KINDS.contains(&kind) {
+            continue;
+        }
+        if let Some(joined) = entry["path"].as_array().map(|segs| {
+            segs.iter()
+                .filter_map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join("::")
+        }) && !joined.is_empty()
+        {
+            out.insert(id.clone(), joined);
+        }
+    }
+    out
+}
+
 /// [#48-R1] Fully-qualified public path of an external type by its rustdoc id,
 /// if recorded in `EXTERNAL_TYPE_PATH_BY_ID`.  Returns `None` for crate-local
 /// types (their path comes from REACHABLE_PATHS) and for external types absent
@@ -6330,8 +6404,49 @@ fn type_is_nameable(ty: &str) -> bool {
 /// All of a function's param / result / receiver types are nameable.
 fn fn_types_nameable(f: &Function) -> bool {
     f.params.iter().all(|p| type_is_nameable(&p.rust_type))
-        && f.results.iter().all(|p| type_is_nameable(&p.rust_type))
+        && f.results.iter().all(|p| result_type_nameable(f, &p.rust_type))
         && (f.recv_rust_type.is_empty() || type_is_nameable(&f.recv_rust_type))
+}
+
+/// Result-position nameability. The generated wrapper peels a fallible
+/// binding's ONE top-level `Result<Ok, Err>` layer error-name-agnostically —
+/// `Ok(v) => ok_res(v), Err(e) => ipe_error_from_foreign(e)` with inference —
+/// so the wrapper never SPELLS the Err type, and an unnameable foreign error
+/// (`reqwest::Error` rendered bare) must not drop the binding. Only the Ok arm
+/// (which the wrapper's return type spells) needs to be nameable. Everything
+/// that is not a fallible top-level `Result` keeps the full check.
+fn result_type_nameable(f: &Function, ty: &str) -> bool {
+    if matches!(f.effect.as_str(), "fallible" | "effectful")
+        && let Some(ok_arm) = top_level_result_ok_arm(ty)
+    {
+        return type_is_nameable(ok_arm);
+    }
+    type_is_nameable(ty)
+}
+
+/// The Ok arm of a type string that IS a top-level `Result<Ok, Err>` (an
+/// optional `::`-path prefix ending in `Result`, generics spanning the whole
+/// string). `None` for anything else — a nested `Vec<Result<…>>` is spelled in
+/// full by the wrapper and gets the full nameability check.
+fn top_level_result_ok_arm(ty: &str) -> Option<&str> {
+    let ty = ty.trim();
+    let open = ty.find('<')?;
+    let head = &ty[..open];
+    if head.rsplit("::").next()? != "Result" || !ty.ends_with('>') {
+        return None;
+    }
+    let inner = &ty[open + 1..ty.len() - 1];
+    let mut depth = 0_i32;
+    for (i, c) in inner.char_indices() {
+        match c {
+            '<' | '(' | '[' => depth += 1,
+            '>' | ')' | ']' => depth -= 1,
+            ',' if depth == 0 => return Some(inner[..i].trim()),
+            _ => {}
+        }
+    }
+    // A one-arm `Result<T>` alias: the whole inner is the Ok arm.
+    Some(inner.trim())
 }
 
 /// Map every crate-local type's rustdoc item id to a fully-qualified PUBLIC
@@ -8818,6 +8933,61 @@ fn has_const_generic(generics: &serde_json::Value) -> bool {
         .unwrap_or(false)
 }
 
+/// `true` when a rustdoc `resolved_path` node IS `serde_json::Value`, decided
+/// by the id's rustdoc DEFINING path (`serde_json::value::Value` — or its
+/// root re-export spelling), never by bare name.
+fn resolved_path_is_serde_json_value(rp: &serde_json::Value) -> bool {
+    let Some(id) = rp.get("id") else {
+        return false;
+    };
+    let key = item_id_to_str(id);
+    EXTERNAL_DEFPATH_BY_ID.with(|m| {
+        m.borrow().get(&key).is_some_and(|defpath| {
+            defpath == "serde_json::value::Value" || defpath == "serde_json::Value"
+        })
+    })
+}
+
+/// The concrete serde-JSON claims lift (see the call site in
+/// [`type_to_typeref`]): `serde_json::Value` itself, or a string-keyed
+/// `HashMap`/`BTreeMap` whose VALUE is `serde_json::Value`, becomes
+/// [`TypeRef::SerdeValue`] — both are `Serialize`, so the generator's
+/// serde-Value return wrap (`serde_json::to_string`) is sound for the whole
+/// map. Anything else: `None` (normal resolution continues).
+fn serde_json_claims_lift(rp: &serde_json::Value) -> Option<TypeRef> {
+    if resolved_path_is_serde_json_value(rp) {
+        return Some(TypeRef::SerdeValue);
+    }
+    let name = rp["name"].as_str().or_else(|| rp["path"].as_str())?;
+    let last = name.rsplit("::").next().unwrap_or(name);
+    if !matches!(last, "HashMap" | "BTreeMap") {
+        return None;
+    }
+    let args = rp
+        .get("args")?
+        .get("angle_bracketed")?
+        .get("args")?
+        .as_array()?;
+    let [key_arg, value_arg] = args.as_slice() else {
+        return None;
+    };
+    let key_is_string = key_arg
+        .get("type")
+        .and_then(|t| t.get("resolved_path"))
+        .and_then(|krp| krp["name"].as_str().or_else(|| krp["path"].as_str()))
+        .is_some_and(|n| n.rsplit("::").next().unwrap_or(n) == "String")
+        || key_arg
+            .get("type")
+            .and_then(|t| t.get("primitive"))
+            .and_then(|p| p.as_str())
+            == Some("str");
+    let value_is_serde = value_arg
+        .get("type")
+        .and_then(|t| t.get("resolved_path"))
+        .is_some_and(resolved_path_is_serde_json_value);
+    (key_is_string && value_is_serde).then_some(TypeRef::SerdeValue)
+}
+
 /// Map a rustdoc type to a Scheme-A `TypeRef`, given the stub's param-index map.
 /// Returns `Err(NotBindable)` for any shape outside the bindable subset (Q1):
 /// closures, trait-objects/`impl Trait`, borrowed/lifetime returns, tuples,
@@ -8870,6 +9040,17 @@ fn type_to_typeref(
             && let Some(expanded) = expand_generic_alias(rp)
         {
             return type_to_typeref(&expanded, param_idx);
+        }
+        // Concrete serde-JSON claims lift: a bare `serde_json::Value` — or a
+        // `HashMap<String, serde_json::Value>` / `BTreeMap<String,
+        // serde_json::Value>` claims map (the firebase ID-token verdict
+        // shape) — becomes the SAME typed serde-Value node the generic serde
+        // reduction produces: Ipê surface `String` (the JSON text), wrapper
+        // `serde_json::to_string` on the owned result. Recognition is by the
+        // type's rustdoc DEFINING path (`serde_json::value::Value`), never by
+        // last-segment name — a crate-local `Value` does not match.
+        if let Some(lift) = serde_json_claims_lift(rp) {
+            return Ok(lift);
         }
         // The receiver-foreign ctor (or a nested one). Render the `::`-path the
         // SAME way rustdoc_type_to_rust_str does, then recurse into its args.
@@ -13801,6 +13982,7 @@ mod tests {
         STD_TRAIT_BY_ID.with(|c| *c.borrow_mut() = collect_std_trait_ids(doc));
         EXTERNAL_TRAIT_PATH_BY_ID.with(|c| *c.borrow_mut() = collect_external_trait_paths(doc));
         EXTERNAL_TYPE_PATH_BY_ID.with(|c| *c.borrow_mut() = collect_external_type_paths(doc));
+        EXTERNAL_DEFPATH_BY_ID.with(|c| *c.borrow_mut() = collect_external_defpaths(doc));
         let (rp_td, rfp_td) = collect_reachable_paths(doc);
         REACHABLE_PATHS.with(|c| *c.borrow_mut() = rp_td);
         REACHABLE_FN_PATHS.with(|c| *c.borrow_mut() = rfp_td);
@@ -13810,6 +13992,7 @@ mod tests {
         STD_TRAIT_BY_ID.with(|c| c.borrow_mut().clear());
         EXTERNAL_TRAIT_PATH_BY_ID.with(|c| c.borrow_mut().clear());
         EXTERNAL_TYPE_PATH_BY_ID.with(|c| c.borrow_mut().clear());
+        EXTERNAL_DEFPATH_BY_ID.with(|c| c.borrow_mut().clear());
         REACHABLE_PATHS.with(|c| c.borrow_mut().clear());
         REACHABLE_FN_PATHS.with(|c| c.borrow_mut().clear());
         out
@@ -18045,6 +18228,7 @@ mod tests {
         LOCAL_TYPE_IDS.with(|c| c.borrow_mut().clear());
         EXTERNAL_TYPE_IDS.with(|c| c.borrow_mut().clear());
         EXTERNAL_TYPE_PATH_BY_ID.with(|c| c.borrow_mut().clear());
+        EXTERNAL_DEFPATH_BY_ID.with(|c| c.borrow_mut().clear());
         GLOBAL_XC_PUBLIC_PATHS.with(|c| {
             c.borrow_mut().clear();
             c.borrow_mut().insert("stripe_shared::Customer".to_string());
@@ -18193,6 +18377,7 @@ mod tests {
         LOCAL_TYPE_IDS.with(|c| c.borrow_mut().clear());
         EXTERNAL_TYPE_IDS.with(|c| c.borrow_mut().clear());
         EXTERNAL_TYPE_PATH_BY_ID.with(|c| c.borrow_mut().clear());
+        EXTERNAL_DEFPATH_BY_ID.with(|c| c.borrow_mut().clear());
         GLOBAL_XC_PUBLIC_PATHS.with(|c| c.borrow_mut().clear());
         GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| {
             let mut m = c.borrow_mut();
@@ -18944,6 +19129,7 @@ mod tests {
         assert_eq!(rustdoc_type_to_rust_str(&node), "stripe_shared::Customer");
         GLOBAL_XC_PUBLIC_PATHS.with(|c| c.borrow_mut().clear());
         EXTERNAL_TYPE_PATH_BY_ID.with(|c| c.borrow_mut().clear());
+        EXTERNAL_DEFPATH_BY_ID.with(|c| c.borrow_mut().clear());
     }
 
     #[test]
@@ -18965,6 +19151,7 @@ mod tests {
         });
         assert_eq!(rustdoc_type_to_rust_str(&node), "Secret");
         EXTERNAL_TYPE_PATH_BY_ID.with(|c| c.borrow_mut().clear());
+        EXTERNAL_DEFPATH_BY_ID.with(|c| c.borrow_mut().clear());
     }
 
     #[test]
@@ -18980,6 +19167,7 @@ mod tests {
         // walk) supplies the proven-public path so both render paths agree.
         REACHABLE_PATHS.with(|c| c.borrow_mut().clear());
         EXTERNAL_TYPE_PATH_BY_ID.with(|c| c.borrow_mut().clear());
+        EXTERNAL_DEFPATH_BY_ID.with(|c| c.borrow_mut().clear());
         GLOBAL_XC_PUBLIC_PATHS.with(|c| c.borrow_mut().clear());
         GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| {
             let mut m = c.borrow_mut();
