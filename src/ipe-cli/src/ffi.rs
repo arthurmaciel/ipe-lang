@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use ipe_ffi::driver::{CrateName, FfiCache, InstalledCrate};
+use ipe_ffi::driver::{CrateName, CrateSpec, FfiCache, InstalledCrate, VersionPin};
 
 use crate::CliError;
 
@@ -354,7 +354,7 @@ fn run_phase(
 ///      NO network egress, so the crates.io token cannot be exfiltrated even
 ///      if it were reachable (it is not — see [`toolchain_binds`]).
 fn run_inspector(
-    krate: &CrateName,
+    krate: &CrateSpec,
     features: &[String],
     allow_build_scripts: bool,
 ) -> Result<String, CliError> {
@@ -391,7 +391,7 @@ fn run_inspector(
                 missing.join(", ")
             )));
         }
-        let scoped_tmp = make_scratch_dir(krate.as_str())?;
+        let scoped_tmp = make_scratch_dir(krate.name().as_str())?;
         let (toolchain_ro_binds, path_prepend, rustup_home) = toolchain_binds(&inspector);
         // Phase 1 — fetch (network on, no foreign code).
         let fetch_out = run_phase(
@@ -452,7 +452,7 @@ fn run_inspector(
 /// Shared tail of `add` / `install`: inspect one crate + write its artifacts.
 fn add_one(
     cache: &FfiCache,
-    krate: &CrateName,
+    krate: &CrateSpec,
     features: &[String],
     allow_build_scripts: bool,
 ) -> Result<(), CliError> {
@@ -480,7 +480,7 @@ fn add_one(
     Ok(())
 }
 
-/// `ipe add <crate> [--features a,b] [--yes]`.
+/// `ipe add <crate>[@<version>] [--features a,b] [--yes]`.
 ///
 /// # Errors
 /// [`CliError`] on misuse, a refused inspection, or a cache-write failure.
@@ -503,19 +503,22 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
             other if krate.is_none() => krate = Some(other.to_owned()),
             _ => {
                 return Err(CliError::Usage(
-                    "usage: ipe add <crate> [--features a,b] [--yes]",
+                    "usage: ipe add <crate>[@<version>] [--features a,b] [--yes]",
                 ));
             }
         }
     }
     let raw = krate.ok_or(CliError::Usage(
-        "usage: ipe add <crate> [--features a,b] [--yes]",
+        "usage: ipe add <crate>[@<version>] [--features a,b] [--yes]",
     ))?;
-    let krate = CrateName::parse(&raw).map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+    let spec = CrateSpec::parse(&raw).map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
 
     if !assume_yes {
         use std::io::Write as _;
-        println!("{}", ipe_ffi::driver::trust_summary(&krate, "", None, 0));
+        println!(
+            "{}",
+            ipe_ffi::driver::trust_summary(spec.name(), "", None, 0)
+        );
         print!("[y/N] ");
         let _ = std::io::stdout().flush();
         if !crate::read_yes_no() {
@@ -524,7 +527,7 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
     }
 
     let cache = FfiCache::at_project_root(Path::new("."));
-    add_one(&cache, &krate, &features, allow_build_scripts)
+    add_one(&cache, &spec, &features, allow_build_scripts)
 }
 
 /// `ipe remove <crate>`.
@@ -544,17 +547,26 @@ pub fn run_remove(rest: &[String]) -> Result<(), CliError> {
     Ok(())
 }
 
-/// `ipe install [--yes]` — (re)inspect every `[rust.dependencies]` crate in
-/// the project's `sky.toml`.
+/// `ipe install [--yes] [--allow-build-scripts]` — (re)inspect every
+/// `[rust.dependencies]` crate in the project's `sky.toml`, honouring each
+/// entry's version pin and feature list.
 ///
 /// # Errors
 /// [`CliError`] on misuse, a missing manifest, or any per-crate failure.
 pub fn run_install(rest: &[String]) -> Result<(), CliError> {
-    let assume_yes = match rest {
-        [] => false,
-        [flag] if flag == "--yes" => true,
-        _ => return Err(CliError::Usage("usage: ipe install [--yes]")),
-    };
+    let mut assume_yes = false;
+    let mut allow_build_scripts = false;
+    for flag in rest {
+        match flag.as_str() {
+            "--yes" => assume_yes = true,
+            "--allow-build-scripts" => allow_build_scripts = true,
+            _ => {
+                return Err(CliError::Usage(
+                    "usage: ipe install [--yes] [--allow-build-scripts]",
+                ));
+            }
+        }
+    }
     let manifest = Path::new("sky.toml");
     if !manifest.is_file() {
         return Err(CliError::Usage(
@@ -573,7 +585,7 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
     // whole list; reserve the silent path for an explicit `--yes`.
     if !assume_yes {
         use std::io::Write as _;
-        let names: Vec<&str> = deps.iter().map(|(n, _)| n.as_str()).collect();
+        let names: Vec<&str> = deps.iter().map(|d| d.name.as_str()).collect();
         println!(
             "About to fetch and COMPILE untrusted code for {} crate(s): {}",
             names.len(),
@@ -590,17 +602,38 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
         }
     }
     let cache = FfiCache::at_project_root(Path::new("."));
-    for (name, _version) in deps {
-        let krate =
-            CrateName::parse(&name).map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
-        add_one(&cache, &krate, &[], false)?;
+    for dep in deps {
+        let name =
+            CrateName::parse(&dep.name).map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+        // `*` / empty keep the historical latest-stable resolution; anything
+        // else pins the inspector's probe (a prerelease NEEDS an exact `=`).
+        let version = match dep.version.trim() {
+            "" | "*" => None,
+            pin => Some(
+                VersionPin::parse(pin).map_err(|diag| CliError::UsageOwned(diag.to_string()))?,
+            ),
+        };
+        let spec = CrateSpec::new(name, version);
+        add_one(&cache, &spec, &dep.features, allow_build_scripts)?;
     }
     Ok(())
 }
 
-/// Extract `name = "version"` pairs from the manifest's
-/// `[rust.dependencies]` / `["rust.dependencies"]` table.
-fn rust_dependencies_from_manifest(text: &str) -> Vec<(String, String)> {
+/// One `[rust.dependencies]` manifest entry.
+#[derive(Debug, PartialEq, Eq)]
+struct ManifestDep {
+    /// The dependency key (the crates.io package name).
+    name: String,
+    /// The version requirement (empty when unspecified).
+    version: String,
+    /// The requested feature list (empty when unspecified).
+    features: Vec<String>,
+}
+
+/// Extract the manifest's `[rust.dependencies]` / `["rust.dependencies"]`
+/// entries. Values may be a bare version string (`uuid = "1"`) or an inline
+/// table (`stripe = { version = "=1.0.0-rc.6", features = ["a", "b"] }`).
+fn rust_dependencies_from_manifest(text: &str) -> Vec<ManifestDep> {
     let mut in_table = false;
     let mut out = Vec::new();
     for line in text.lines() {
@@ -614,11 +647,82 @@ fn rust_dependencies_from_manifest(text: &str) -> Vec<(String, String)> {
         }
         if let Some((k, v)) = line.split_once('=') {
             let name = k.trim().trim_matches('"').to_owned();
-            let version = v.trim().trim_matches('"').to_owned();
-            out.push((name, version));
+            let value = v.trim();
+            if let Some(body) = value
+                .strip_prefix('{')
+                .and_then(|rest| rest.strip_suffix('}'))
+            {
+                out.push(ManifestDep {
+                    name,
+                    version: inline_table_string(body, "version").unwrap_or_default(),
+                    features: inline_table_string_array(body, "features"),
+                });
+            } else {
+                out.push(ManifestDep {
+                    name,
+                    version: value.trim_matches('"').to_owned(),
+                    features: Vec::new(),
+                });
+            }
         }
     }
     out
+}
+
+/// Read `key = "value"` out of an inline-table body.
+fn inline_table_string(body: &str, key: &str) -> Option<String> {
+    let at = find_inline_key(body, key)?;
+    let rest = body.get(at..)?;
+    let (_, after_eq) = rest.split_once('=')?;
+    let after_quote = after_eq.trim_start().strip_prefix('"')?;
+    after_quote.split_once('"').map(|(v, _)| v.to_owned())
+}
+
+/// Read `key = ["a", "b"]` out of an inline-table body.
+fn inline_table_string_array(body: &str, key: &str) -> Vec<String> {
+    let Some(at) = find_inline_key(body, key) else {
+        return Vec::new();
+    };
+    let Some(rest) = body.get(at..) else {
+        return Vec::new();
+    };
+    let Some((_, after_eq)) = rest.split_once('=') else {
+        return Vec::new();
+    };
+    let Some(after_bracket) = after_eq.trim_start().strip_prefix('[') else {
+        return Vec::new();
+    };
+    let Some((inner, _)) = after_bracket.split_once(']') else {
+        return Vec::new();
+    };
+    inner
+        .split(',')
+        .map(|s| s.trim().trim_matches('"').to_owned())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// The byte offset of `key` as a whole word in an inline-table body (so
+/// `version` never matches inside `some_version_like_name`).
+fn find_inline_key(body: &str, key: &str) -> Option<usize> {
+    let bytes = body.as_bytes();
+    let mut from = 0;
+    while let Some(rel) = body.get(from..)?.find(key) {
+        let at = from + rel;
+        let before_ok = at == 0
+            || bytes
+                .get(at.wrapping_sub(1))
+                .is_none_or(|b| !b.is_ascii_alphanumeric() && *b != b'_');
+        let after = at + key.len();
+        let after_ok = bytes
+            .get(after)
+            .is_none_or(|b| !b.is_ascii_alphanumeric() && *b != b'_');
+        if before_ok && after_ok {
+            return Some(at);
+        }
+        from = at + key.len();
+    }
+    None
 }
 
 #[cfg(test)]
@@ -630,12 +734,48 @@ mod tests {
         let text = "[project]\nname = \"x\"\n\n[\"rust.dependencies\"]\nsemver = \"1\"\n\n[live]\nport = 1\n";
         assert_eq!(
             rust_dependencies_from_manifest(text),
-            vec![("semver".to_owned(), "1".to_owned())]
+            vec![ManifestDep {
+                name: "semver".to_owned(),
+                version: "1".to_owned(),
+                features: Vec::new(),
+            }]
         );
         let text2 = "[rust.dependencies]\nuuid = \"1.10\"\n";
         assert_eq!(
             rust_dependencies_from_manifest(text2),
-            vec![("uuid".to_owned(), "1.10".to_owned())]
+            vec![ManifestDep {
+                name: "uuid".to_owned(),
+                version: "1.10".to_owned(),
+                features: Vec::new(),
+            }]
+        );
+    }
+
+    #[test]
+    fn manifest_rust_dependencies_inline_table_carries_pin_and_features() {
+        let text = "[rust.dependencies]\n\
+                    async-stripe-checkout = { version = \"=1.0.0-rc.6\", features = [\"checkout_session\"] }\n\
+                    firestore = { version = \"0.49\" }\n\
+                    plain = \"2\"\n";
+        assert_eq!(
+            rust_dependencies_from_manifest(text),
+            vec![
+                ManifestDep {
+                    name: "async-stripe-checkout".to_owned(),
+                    version: "=1.0.0-rc.6".to_owned(),
+                    features: vec!["checkout_session".to_owned()],
+                },
+                ManifestDep {
+                    name: "firestore".to_owned(),
+                    version: "0.49".to_owned(),
+                    features: Vec::new(),
+                },
+                ManifestDep {
+                    name: "plain".to_owned(),
+                    version: "2".to_owned(),
+                    features: Vec::new(),
+                },
+            ]
         );
     }
 

@@ -1287,9 +1287,9 @@ const USAGE: &str = "usage:\n  \
      \x20         [--static] [--target <triple>] [--allocator <auto|system|dlmalloc|talc|mimalloc>]\n  \
      \x20         [--allow-slow-allocator] [-- <args>...]\n  \
      ipe watch <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [--port <n>]\n  \
-     ipe add <crate> [--features a,b] [--yes]\n  \
+     ipe add <crate>[@<version>] [--features a,b] [--yes] [--allow-build-scripts]\n  \
      ipe remove <crate>\n  \
-     ipe install [--yes]\n  \
+     ipe install [--yes] [--allow-build-scripts]\n  \
      ipe explain [<CODE>]\n  \
      ipe fix <entry.ipe> [--yes]\n  \
      ipe lsp";
