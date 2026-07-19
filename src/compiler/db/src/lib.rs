@@ -805,6 +805,11 @@ pub struct BuildConfig {
     /// `ipe build --target wasm`) — selects the emitted manifest template,
     /// vendored runtime module set, and entry shape.
     pub target: ipe_ir::Target,
+    /// The `[wasm] publicEnv` allowlist (`sky.toml`, already validated
+    /// against the secret-name denylist at PARSE time). Empty when the
+    /// section/key is absent. See [`ipe_backend_rust::RustBackend::with_wasm_public_env`].
+    #[returns(ref)]
+    pub wasm_public_env: Vec<String>,
 }
 
 /// The memoized result of emitting the linked, lowered program to Rust
@@ -844,11 +849,13 @@ pub fn emit_project(
     let driver = config.db_driver(db);
     let ffi = config.ffi(db).clone();
     let target = config.target(db);
+    let wasm_public_env = config.wasm_public_env(db).clone();
     let interner = db.interner().lock();
     ipe_backend_rust::RustBackend::new(&interner)
         .with_db_driver(driver)
         .with_ffi(ffi)
         .with_target(target)
+        .with_wasm_public_env(wasm_public_env)
         .emit(&program)
         .map(Arc::new)
         .map_err(|d| (d, Vec::new()))
@@ -929,11 +936,13 @@ pub fn emit_spine_file(
     let driver = config.db_driver(db);
     let ffi = config.ffi(db).clone();
     let target = config.target(db);
+    let wasm_public_env = config.wasm_public_env(db).clone();
     let interner = db.interner().lock();
     ipe_backend_rust::RustBackend::new(&interner)
         .with_db_driver(driver)
         .with_ffi(ffi)
         .with_target(target)
+        .with_wasm_public_env(wasm_public_env)
         .emit_spine(&program)
         .map(Arc::new)
         .map_err(|d| (d, Vec::new()))
@@ -1025,11 +1034,13 @@ pub fn emit_manifest(
     let driver = config.db_driver(db);
     let ffi = config.ffi(db).clone();
     let target = config.target(db);
+    let wasm_public_env = config.wasm_public_env(db).clone();
     let interner = db.interner().lock();
     ipe_backend_rust::RustBackend::new(&interner)
         .with_db_driver(driver)
         .with_ffi(ffi)
         .with_target(target)
+        .with_wasm_public_env(wasm_public_env)
         .assemble_split_manifest(&program, &spine, &module_texts)
         .map(Arc::new)
         .map_err(|d| (d, Vec::new()))

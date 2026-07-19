@@ -73,6 +73,7 @@ fn cold_compile(user: &UserSources) -> CompileOutcome {
         ipe_backend_rust::DbDriver::Sqlite,
         None,
         ipe_ir::Target::Native,
+        Vec::new(),
     );
     ipe::compile_prepared(
         &db,
@@ -163,6 +164,7 @@ impl WarmSession {
                 ipe_backend_rust::DbDriver::Sqlite,
                 None,
                 ipe_ir::Target::Native,
+                Vec::new(),
             ));
         }
         self.demand(user)

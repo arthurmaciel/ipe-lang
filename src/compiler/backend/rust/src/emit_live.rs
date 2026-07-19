@@ -767,7 +767,7 @@ mod schema_tag_tests {
                 uses_css: false,
                 uses_auth: false,
                 uses_websocket: false,
-                uses_email: false,
+                uses_email: false, uses_env_public: false,
                 uses_ffi: false,
             }],
         };
@@ -777,6 +777,7 @@ mod schema_tag_tests {
             DbDriver::Sqlite,
             None,
             ipe_ir::Target::Native,
+            Vec::new(),
         )?;
 
         // Model = { count : Int } (no `page` field → the single-page branch).

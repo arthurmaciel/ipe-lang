@@ -1153,6 +1153,14 @@ pub enum StdlibKernel {
     WebSocketClose,         // Int -> Task Error () (arity 1)
     WebSocketCloseWithCode, // Int -> String -> Int -> Task Error () (arity 3)
     SubSubscribeWebSocket,  // Int -> String -> (any -> msg) -> Sub msg (arity 3)
+    // ── Ipe.Env — build-time-embedded public config (wasm M5 residual) ──
+    // `Env.public "KEY"` resolves ONLY for names in the project's `[wasm]
+    // publicEnv` allowlist (`sky.toml`, validated against the secret-name
+    // denylist at PARSE time — `ipe_cli::project::is_denylisted_public_env_name`).
+    // Any other key returns `Nothing`, by construction (the generated match
+    // has no arm for it) — never a live lookup against the raw process/host
+    // environment, on EITHER target.
+    EnvPublic, // String -> Maybe String (arity 1)
     // ── Ipe.Ui.Region ──────────────────────────────────────────────
     RegionMainContent,      // Attribute msg (arity 0)
     RegionNavigation,       // Attribute msg (arity 0)
@@ -2676,6 +2684,7 @@ impl StdlibKernel {
                 Tea,
                 "sub_subscribe_ws_message",
             ),
+            Self::EnvPublic => d("Env", "public", 1, Pure, "env_public"),
             // ── Ipe.Ui.Region ──────────────────────────────────────────────
             Self::RegionMainContent => d("Region", "mainContent", 0, Ui, "ui_region_main_content_"),
             Self::RegionNavigation => d("Region", "navigation", 0, Ui, "ui_region_navigation_"),
@@ -3758,6 +3767,8 @@ impl StdlibKernel {
         Self::WebSocketClose,
         Self::WebSocketCloseWithCode,
         Self::SubSubscribeWebSocket,
+        // ── Ipe.Env — build-time-embedded public config ──────────────
+        Self::EnvPublic,
         // ── Ipe.Ui.Region ──────────────────────────────────────────────
         Self::RegionMainContent,
         Self::RegionNavigation,
@@ -5112,7 +5123,12 @@ impl StdlibKernel {
                         | Self::TaskFromResult
                         | Self::TaskAndThenResult
                         | Self::TaskSequence
-                )
+                ) ||
+                // `Env.public` — build-time-embedded `[wasm] publicEnv`
+                // allowlist (`option_env!` on wasm32; the SAME allowlist via
+                // `std::env::var` natively — `env_public.rs`, backend-
+                // generated per project, never vendored from the source tree).
+                matches!(self, Self::EnvPublic)
             }
             // Server-only surfaces: no browser denotation, ever (Db/Server)
             // or until a dedicated backend exists (Tui/Webview/Cli/Ffi).
@@ -5214,6 +5230,8 @@ mod tests {
             // `onClose`/`onError` via `web_sys::WebSocket`'s `onopen`/
             // `onmessage`/`onclose`/`onerror` handler slots.
             StdlibKernel::SubSubscribeWebSocket,
+            // `Env.public` — build-time-embedded `[wasm] publicEnv` allowlist.
+            StdlibKernel::EnvPublic,
         ] {
             assert!(
                 allowed.available_on(Target::WasmClient),

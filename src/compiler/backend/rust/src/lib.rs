@@ -86,6 +86,7 @@ pub struct RustBackend<'a> {
     db_driver: DbDriver,
     ffi: Option<FfiEmit>,
     target: ipe_ir::Target,
+    wasm_public_env: Vec<String>,
 }
 
 impl<'a> RustBackend<'a> {
@@ -99,6 +100,7 @@ impl<'a> RustBackend<'a> {
             db_driver: DbDriver::Sqlite,
             ffi: None,
             target: ipe_ir::Target::Native,
+            wasm_public_env: Vec::new(),
         }
     }
 
@@ -127,6 +129,18 @@ impl<'a> RustBackend<'a> {
         self
     }
 
+    /// Supply the `[wasm] publicEnv` allowlist (from `sky.toml`, already
+    /// validated against the secret-name denylist at parse time — see
+    /// `ipe_cli::project::is_denylisted_public_env_name`). No-op on programs
+    /// that call no `Env.public`. Threaded through regardless of
+    /// [`Self::target`] so a shared module compiling under both `Native` and
+    /// `WasmClient` gets the SAME allowlist on each.
+    #[must_use]
+    pub fn with_wasm_public_env(mut self, names: Vec<String>) -> Self {
+        self.wasm_public_env = names;
+        self
+    }
+
     /// Render the `Spine` tier's Rust text for `program` — the program-wide
     /// entry file content (see [`project::emit_spine`] for the full
     /// specification). ADDITIVE entry point: NOT on the public
@@ -144,6 +158,7 @@ impl<'a> RustBackend<'a> {
             self.db_driver,
             self.ffi.clone(),
             self.target,
+            self.wasm_public_env.clone(),
         )?;
         project::emit_spine(&ctx, program)
     }
@@ -164,6 +179,7 @@ impl<'a> RustBackend<'a> {
             self.db_driver,
             self.ffi.clone(),
             self.target,
+            self.wasm_public_env.clone(),
         )?;
         project::emit_module_file(
             &ctx,
@@ -199,6 +215,7 @@ impl<'a> RustBackend<'a> {
             self.db_driver,
             self.ffi.clone(),
             self.target,
+            self.wasm_public_env.clone(),
         )?;
         project::assemble_split_manifest(&ctx, program, spine_text, module_texts)
     }
@@ -241,6 +258,7 @@ impl Backend for RustBackend<'_> {
             self.db_driver,
             self.ffi.clone(),
             self.target,
+            self.wasm_public_env.clone(),
         )?;
         project::emit_program(&ctx, program)
     }
@@ -412,6 +430,17 @@ pub(crate) struct EmitCtx<'a> {
     /// The driver-supplied FFI emission inputs. Required (fail-closed) when
     /// [`Self::uses_ffi`] is set; ignored otherwise.
     pub(crate) ffi: Option<FfiEmit>,
+    /// `true` when the program uses the `Ipe.Env` `Env.public` kernel. When
+    /// set, [`crate::project::assemble_project_files`] emits the per-project
+    /// `ipe_runtime/env_public.rs` (built from [`Self::wasm_public_env`]) and
+    /// appends `pub mod env_public; pub use env_public::*;` to the emitted
+    /// `ipe_runtime/mod.rs`, on EITHER target.
+    pub(crate) uses_env_public: bool,
+    /// The `[wasm] publicEnv` allowlist (`sky.toml`, threaded in via
+    /// [`RustBackend::with_wasm_public_env`]) — already validated against the
+    /// secret-name denylist at `sky.toml` parse time. Meaningless / ignored
+    /// when [`Self::uses_env_public`] is `false`.
+    pub(crate) wasm_public_env: Vec<String>,
     /// The Rust type name for the emitted `SqlValue` enum (e.g. `MainSqlValue`).
     /// `None` when `uses_db` is `false`.
     pub(crate) sqlvalue_rust_name: Option<String>,
@@ -476,6 +505,7 @@ impl<'a> EmitCtx<'a> {
         db_driver: DbDriver,
         ffi: Option<FfiEmit>,
         target: ipe_ir::Target,
+        wasm_public_env: Vec<String>,
     ) -> DResult<Self> {
         let mut enum_names: BTreeMap<(ModPath, Symbol), String> = BTreeMap::new();
         let mut variant_fields: BTreeMap<(ModPath, Symbol, Symbol), Vec<IrType>> = BTreeMap::new();
@@ -833,6 +863,8 @@ impl<'a> EmitCtx<'a> {
         let uses_auth = program.modules.iter().any(|m| m.uses_auth);
         // detect Ipe.Email kernel usage.
         let uses_email = program.modules.iter().any(|m| m.uses_email);
+        // detect Ipe.Env `Env.public` kernel usage.
+        let uses_env_public = program.modules.iter().any(|m| m.uses_env_public);
 
         // detect outbound Ipe.WebSocket client usage.
         let uses_websocket = program.modules.iter().any(|m| m.uses_websocket);
@@ -857,6 +889,8 @@ impl<'a> EmitCtx<'a> {
             uses_email,
             uses_ffi,
             ffi,
+            uses_env_public,
+            wasm_public_env,
             sqlvalue_rust_name,
             sqlfield_rust_name,
             enum_names,
@@ -2345,7 +2379,7 @@ mod record_struct_namespace_tests {
                 uses_css: false,
                 uses_auth: false,
                 uses_websocket: false,
-                uses_email: false,
+                uses_email: false, uses_env_public: false,
                 uses_ffi: false,
             }],
         };
@@ -2359,6 +2393,7 @@ mod record_struct_namespace_tests {
             DbDriver::Sqlite,
             None,
             ipe_ir::Target::Native,
+            Vec::new(),
         )?;
         assert_eq!(ctx.record_structs().len(), 1);
         assert_eq!(
@@ -2419,7 +2454,7 @@ mod record_struct_namespace_tests {
                 uses_css: false,
                 uses_auth: false,
                 uses_websocket: false,
-                uses_email: false,
+                uses_email: false, uses_env_public: false,
                 uses_ffi: false,
             }],
         };
@@ -2430,6 +2465,7 @@ mod record_struct_namespace_tests {
             DbDriver::Sqlite,
             None,
             ipe_ir::Target::Native,
+            Vec::new(),
         )?;
         ctx.assert_record_structs_disjoint_from_type_namespace(&BTreeSet::new())
     }

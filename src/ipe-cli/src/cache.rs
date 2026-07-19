@@ -153,6 +153,7 @@ pub fn compute_project_key(
     entry_path: &[String],
     db_driver: DbDriver,
     target: ipe_ir::Target,
+    wasm_public_env: &[String],
 ) -> String {
     let mut hasher = Sha256::new();
     update_len_prefixed(&mut hasher, KEY_TAG);
@@ -171,6 +172,15 @@ pub fn compute_project_key(
         DbDriver::Postgres => 1,
     };
     hasher.update([driver_tag]);
+
+    // `[wasm] publicEnv` only affects the final emit stage (the generated
+    // `env_public.rs`), the same class of input `db_driver` is — see this
+    // fn's sibling [`compute_ir_key`], which deliberately excludes both.
+    let public_env_len = u64::try_from(wasm_public_env.len()).unwrap_or(u64::MAX);
+    hasher.update(public_env_len.to_le_bytes());
+    for name in wasm_public_env {
+        update_str(&mut hasher, name);
+    }
 
     // `BTreeMap` iteration is already sorted by key — deterministic across
     // runs and independent of insertion order.
@@ -500,6 +510,7 @@ mod tests {
             &entry(),
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
+            &[],
         );
         let b = compute_project_key(
             &sources,
@@ -507,6 +518,7 @@ mod tests {
             &entry(),
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
+            &[],
         );
         assert_eq!(a, b, "same inputs must hash to the same key");
     }
@@ -520,6 +532,7 @@ mod tests {
             &entry(),
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
+            &[],
         );
         if let Some(main) = sources.get_mut(&vec!["Main".to_owned()]) {
             main.1.push_str("\n-- comment\n");
@@ -530,6 +543,7 @@ mod tests {
             &entry(),
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
+            &[],
         );
         assert_ne!(base, edited, "a body edit must change the key");
     }
@@ -543,6 +557,7 @@ mod tests {
             &entry(),
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
+            &[],
         );
         let postgres = compute_project_key(
             &sources,
@@ -550,8 +565,39 @@ mod tests {
             &entry(),
             DbDriver::Postgres,
             ipe_ir::Target::Native,
+            &[],
         );
         assert_ne!(sqlite, postgres, "the SQL driver is part of the key");
+    }
+
+    /// `[wasm] publicEnv` only affects the final emit stage (the generated
+    /// `env_public.rs`) — same class of input as `db_driver` (see this
+    /// module's `compute_project_key` doc) — so a cached `EmittedProject`
+    /// entry must never serve a stale `env_public.rs` after a `publicEnv`
+    /// edit; this test is the tier-1 (project-key) proof of that.
+    #[test]
+    fn key_changes_with_wasm_public_env() {
+        let (sources, injected) = sample_sources();
+        let empty_allowlist = compute_project_key(
+            &sources,
+            &injected,
+            &entry(),
+            DbDriver::Sqlite,
+            ipe_ir::Target::Native,
+            &[],
+        );
+        let with_allowlist = compute_project_key(
+            &sources,
+            &injected,
+            &entry(),
+            DbDriver::Sqlite,
+            ipe_ir::Target::Native,
+            &["API_BASE_URL".to_owned()],
+        );
+        assert_ne!(
+            empty_allowlist, with_allowlist,
+            "the [wasm] publicEnv allowlist is part of the key"
+        );
     }
 
     #[test]
@@ -563,6 +609,7 @@ mod tests {
             &["Main".to_owned()],
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
+            &[],
         );
         let b = compute_project_key(
             &sources,
@@ -570,6 +617,7 @@ mod tests {
             &["Other".to_owned()],
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
+            &[],
         );
         assert_ne!(a, b, "the entry module path is part of the key");
     }
@@ -583,6 +631,7 @@ mod tests {
             &entry(),
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
+            &[],
         );
 
         let mut added = sources.clone();
@@ -599,6 +648,7 @@ mod tests {
             &entry(),
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
+            &[],
         );
         assert_ne!(base, with_extra, "adding a module must change the key");
 
@@ -610,6 +660,7 @@ mod tests {
             &entry(),
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
+            &[],
         );
         assert_ne!(
             base, without_prelude,
@@ -634,6 +685,7 @@ mod tests {
             &entry(),
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
+            &[],
         );
         let b = compute_project_key(
             &sources,
@@ -641,6 +693,7 @@ mod tests {
             &entry(),
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
+            &[],
         );
         assert_ne!(a, b, "the trust-origin flag is part of the key");
     }
@@ -660,13 +713,21 @@ mod tests {
             (PathBuf::from("x"), String::new()),
         );
         let empty: BTreeSet<Vec<String>> = BTreeSet::new();
-        let a = compute_project_key(&left, &empty, &[], DbDriver::Sqlite, ipe_ir::Target::Native);
+        let a = compute_project_key(
+            &left,
+            &empty,
+            &[],
+            DbDriver::Sqlite,
+            ipe_ir::Target::Native,
+            &[],
+        );
         let b = compute_project_key(
             &right,
             &empty,
             &[],
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
+            &[],
         );
         assert_ne!(a, b, "differently-segmented module paths must not collide");
     }
@@ -846,6 +907,7 @@ mod tests {
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_env_public: false,
                 uses_ffi: false,
             }],
         })

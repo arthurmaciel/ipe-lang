@@ -115,13 +115,15 @@ impl fmt::Display for CliError {
 
 impl std::error::Error for CliError {}
 
-/// Options modifying how a build is WRITTEN, not what is compiled.
+/// Options modifying a build beyond plain source compilation — some (the
+/// static plan) apply post-emit at write time; others (`target`,
+/// `wasm_public_env`) feed the compile/emit pipeline itself.
 ///
 /// The static plan is applied post-emit at write time — the compile pipeline
 /// and its on-disk caches stay untouched (their keys deliberately exclude
 /// the plan; the transform is a deterministic function of the plan applied
 /// on cache-hit and cache-miss paths alike).
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 pub struct BuildOptions {
     /// `Some` — staticize the emitted project (activate the planned
     /// allocator feature, add the generated `.cargo/config.toml`). `None` —
@@ -131,6 +133,13 @@ pub struct BuildOptions {
     /// `ipe build --target wasm`) — threaded into kernel resolution (the
     /// Layer-1 wasm gate), the emitted manifest, and both cache keys.
     pub target: ipe_ir::Target,
+    /// The `[wasm] publicEnv` allowlist (`sky.toml`, already validated
+    /// against the secret-name denylist at parse time). Empty when the
+    /// project has no `[wasm]` section (or no `sky.toml` at all — the
+    /// sibling-discovery single-file path). Threaded into
+    /// [`ipe_backend_rust::RustBackend::with_wasm_public_env`] /
+    /// [`ipe_db::BuildConfig::wasm_public_env`].
+    pub wasm_public_env: Vec<String>,
 }
 
 /// Build `entry` into a Rust Cargo project under `out_dir`, vendoring the
@@ -406,7 +415,16 @@ fn compile_modules(
 /// materialising the cached [`ipe_backend::EmittedProject`] verbatim. On a
 /// miss, the full pipeline runs, and a successful
 /// result is best-effort stored for the next invocation.
-#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+// `options` is threaded onward by value into the cache-hit / full-pipeline
+// branches below (mirroring every sibling `BuildOptions` consumer in this
+// file); a `&BuildOptions` parameter would just push the clone this struct's
+// `Vec<String>` field (`wasm_public_env`) now needs onto every call site
+// instead of the one place that actually reads it.
+#[allow(
+    clippy::too_many_lines,
+    clippy::too_many_arguments,
+    clippy::needless_pass_by_value
+)]
 fn compile_modules_observed(
     mut sources: BTreeMap<Vec<String>, (PathBuf, String)>,
     mut discovered: Vec<project::DiscoveredModule>,
@@ -453,7 +471,14 @@ fn compile_modules_observed(
     // (see `cache::derive_epoch`'s doc for why this makes
     // "refuse, don't guess" structural rather than a runtime check).
     let cache_key =
-        cache::compute_project_key(&sources, &injected, entry_path, db_driver, options.target);
+        cache::compute_project_key(
+            &sources,
+            &injected,
+            entry_path,
+            db_driver,
+            options.target,
+            &options.wasm_public_env,
+        );
     let epoch = cache_dir.and_then(|_| cache::derive_epoch());
     if let (Some(root), Some(epoch)) = (cache_dir, epoch.as_deref())
         && let Some(emitted) = cache::try_load(root, epoch, &cache_key)
@@ -485,6 +510,7 @@ fn compile_modules_observed(
                 ipe_backend_rust::RustBackend::new(&guard)
                     .with_db_driver(db_driver)
                     .with_target(options.target)
+                    .with_wasm_public_env(options.wasm_public_env.clone())
                     .emit(&program)
             };
             if let Ok(emitted) = emit_result {
@@ -526,7 +552,13 @@ fn compile_modules_observed(
     // fresh `BuildConfig` per one-shot invocation is fine here — unlike the
     // clean-vs-incremental parity gate's warm sequence, this driver never
     // re-demands `emit_project` against a second config instance.
-    let config = ipe_db::BuildConfig::new(&db, db_driver, ffi_emit, options.target);
+    let config = ipe_db::BuildConfig::new(
+        &db,
+        db_driver,
+        ffi_emit,
+        options.target,
+        options.wasm_public_env.clone(),
+    );
 
     let emitted = match compile_prepared(&db, source_root, &sources, entry_path, blame_path, config)
     {
@@ -1220,6 +1252,12 @@ pub fn build_project(
 /// # Errors
 /// As [`build_project`], plus [`CliError::StaticRefusal`] when the emitted
 /// app shape cannot be static.
+// `options` is reconstructed (struct-update syntax) with the parsed
+// manifest's `[wasm] publicEnv` allowlist before threading onward — a
+// genuine consuming use clippy's by-value heuristic doesn't credit; taking
+// `&BuildOptions` here would ripple a lifetime through every call site for
+// no benefit (every caller already owns a fresh `BuildOptions`).
+#[allow(clippy::needless_pass_by_value)]
 pub fn build_project_with_options(
     manifest_path: &Path,
     out_dir: &Path,
@@ -1240,6 +1278,15 @@ pub fn build_project_with_options(
     }
 
     let entry_path = vec!["Main".to_owned()];
+
+    // Fold in the `[wasm] publicEnv` allowlist this manifest declares — the
+    // caller's `options` carries no manifest-derived data (it is built before
+    // the manifest is parsed), so it is completed here, the same way
+    // `manifest.driver` bypasses `options` entirely as its own positional arg.
+    let options = BuildOptions {
+        wasm_public_env: manifest.wasm.public_env.clone(),
+        ..options
+    };
 
     // The manifest is the blame location for an import cycle (no single file
     // owns it); post-link errors are blamed on the entry file inside the core.
@@ -1536,14 +1583,15 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
         } else {
             ipe_ir::Target::Native
         },
+        wasm_public_env: Vec::new(),
     };
 
     // No sky.toml found: compile entry + all sibling .ipe files in the same
     // directory. Byte-identical to `build` when the directory holds only the
     // entry file (regression-covered by the golden suite).
     manifest.map_or_else(
-        || build_with_sibling_discovery_with_options(&entry_path, &out_dir, &runtime_dir, options),
-        |m| build_project_with_options(&m, &out_dir, &runtime_dir, options),
+        || build_with_sibling_discovery_with_options(&entry_path, &out_dir, &runtime_dir, options.clone()),
+        |m| build_project_with_options(&m, &out_dir, &runtime_dir, options.clone()),
     )?;
 
     if wasm_target {
@@ -1620,11 +1668,12 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
     let options = BuildOptions {
         static_plan,
         target: ipe_ir::Target::Native,
+        wasm_public_env: Vec::new(),
     };
 
     manifest.map_or_else(
-        || build_with_sibling_discovery_with_options(&entry_path, &out_dir, &runtime_dir, options),
-        |m| build_project_with_options(&m, &out_dir, &runtime_dir, options),
+        || build_with_sibling_discovery_with_options(&entry_path, &out_dir, &runtime_dir, options.clone()),
+        |m| build_project_with_options(&m, &out_dir, &runtime_dir, options.clone()),
     )?;
 
     // --- Step 2: cargo build the emitted project ---

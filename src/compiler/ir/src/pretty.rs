@@ -1172,6 +1172,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::WebSocketClose => "WebSocket.close",
         KernelFn::WebSocketCloseWithCode => "WebSocket.closeWithCode",
         KernelFn::SubSubscribeWebSocket => "Sub.subscribeWebSocket",
+        KernelFn::EnvPublic => "Env.public",
         // ── Ipe.Ui.Input ───────────────────────────────────────────────
         KernelFn::InputLabelAbove => "Input.labelAbove",
         KernelFn::InputLabelBelow => "Input.labelBelow",
@@ -2064,6 +2065,7 @@ mod tests {
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_env_public: false,
                 uses_ffi: false,
             }],
         })
@@ -2168,6 +2170,7 @@ program
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_env_public: false,
                 uses_ffi: false,
             }],
         };
@@ -2234,6 +2237,7 @@ program
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_env_public: false,
                 uses_ffi: false,
             }],
         };
@@ -2303,6 +2307,7 @@ program
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_env_public: false,
                 uses_ffi: false,
             }],
         };
@@ -2357,6 +2362,7 @@ program
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_env_public: false,
                 uses_ffi: false,
             }],
         };
@@ -2420,6 +2426,7 @@ program
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_env_public: false,
                 uses_ffi: false,
             }],
         };
@@ -2475,6 +2482,7 @@ program
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_env_public: false,
                 uses_ffi: false,
             }],
         };
@@ -2572,6 +2580,7 @@ program
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_env_public: false,
                 uses_ffi: false,
             }],
         };
@@ -2669,6 +2678,7 @@ program
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_env_public: false,
                 uses_ffi: false,
             }],
         };
@@ -2711,6 +2721,7 @@ program
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_env_public: false,
                 uses_ffi: false,
             }],
         };

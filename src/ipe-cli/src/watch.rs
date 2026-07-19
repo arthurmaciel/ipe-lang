@@ -196,6 +196,9 @@ pub(crate) struct ResolvedProject {
     pub(crate) entry_path: Vec<String>,
     pub(crate) blame_path: PathBuf,
     pub(crate) db_driver: ipe_backend_rust::DbDriver,
+    /// The `[wasm] publicEnv` allowlist (empty for the no-manifest / sibling-
+    /// discovery path — there is no `sky.toml` to declare one).
+    pub(crate) wasm_public_env: Vec<String>,
 }
 
 /// Resolve `entry` (a `.ipe` file, a `sky.toml`, or a project directory)
@@ -246,6 +249,7 @@ pub(crate) fn resolve_project_sources(
             entry_path: vec!["Main".to_owned()],
             blame_path: manifest_path,
             db_driver: manifest.driver,
+            wasm_public_env: manifest.wasm.public_env,
         });
     }
 
@@ -300,6 +304,7 @@ pub(crate) fn resolve_project_sources(
         entry_path: entry_module_path,
         blame_path: entry.to_path_buf(),
         db_driver: ipe_backend_rust::DbDriver::Sqlite,
+        wasm_public_env: Vec::new(),
     })
 }
 
@@ -794,6 +799,11 @@ fn run_inner(
                         use salsa::Setter as _;
                         cfg.set_db_driver(&mut db_main).to(resolved.db_driver);
                     }
+                    if cfg.wasm_public_env(&db_main) != &resolved.wasm_public_env {
+                        use salsa::Setter as _;
+                        cfg.set_wasm_public_env(&mut db_main)
+                            .to(resolved.wasm_public_env.clone());
+                    }
                     cfg
                 } else {
                     // Pass ffi_prep.emit so the backend can write FFI
@@ -804,6 +814,7 @@ fn run_inner(
                         resolved.db_driver,
                         ffi_prep.emit,
                         ipe_ir::Target::Native,
+                        resolved.wasm_public_env.clone(),
                     );
                     config = Some(cfg);
                     cfg
