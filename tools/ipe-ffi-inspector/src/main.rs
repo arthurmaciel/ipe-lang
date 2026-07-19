@@ -6119,7 +6119,18 @@ fn resolved_path_is_bindable(id: &serde_json::Value, raw_name: &str) -> bool {
     // always-nameable std containers (`Vec`/`Option`/…) — which rustdoc may not
     // record an id for — may bind via the bare last segment; anything else drops.
     let last = raw_name.rsplit("::").next().unwrap_or(raw_name);
-    ALWAYS_NAMEABLE.contains(&last)
+    if ALWAYS_NAMEABLE.contains(&last) {
+        return true;
+    }
+    // [stripe-send F2] A sibling manifest crate's public type this crate cannot
+    // resolve locally is bindable when the manifest-run proven-public set has a
+    // UNIQUE last-segment match — the renderer will name it by that proven-public
+    // path. Ambiguous / absent → stays unbindable (fail-closed).
+    GLOBAL_XC_PUBLIC_PATHS.with(|c| {
+        let set = c.borrow();
+        let mut hits = set.iter().filter(|p| p.rsplit("::").next() == Some(last));
+        matches!((hits.next(), hits.next()), (Some(_), None))
+    })
 }
 
 /// Register `path` for `id` if it is shorter than any currently stored path.
@@ -8493,7 +8504,28 @@ fn type_to_typeref(
         }
         let qualified = rp.get("id").and_then(reachable_local_path);
         let ext_path = rp.get("id").and_then(reachable_external_type_path);
-        let name: String = match qualified.or(ext_path) {
+        // [stripe-send F2] A sibling manifest crate's public type unresolvable
+        // through THIS crate's own paths (`stripe_shared::Customer`, the
+        // `CustomerCreateCustomer` send Output). Match the raw name's last segment
+        // against the manifest-run proven-public set (each entry is a member
+        // crate's own reachable-walk path); admit ONLY a UNIQUE match (two crates
+        // exposing the same last segment → ambiguous → fall through to the drop,
+        // fail-closed). The private-module trap stays closed: only proven-public
+        // paths ever entered the set.
+        let xc_path = if qualified.is_none() && ext_path.is_none() {
+            let last = raw_name.rsplit("::").next().unwrap_or(raw_name);
+            GLOBAL_XC_PUBLIC_PATHS.with(|c| {
+                let set = c.borrow();
+                let mut hits = set.iter().filter(|p| p.rsplit("::").next() == Some(last));
+                match (hits.next(), hits.next()) {
+                    (Some(p), None) => Some(p.clone()),
+                    _ => None,
+                }
+            })
+        } else {
+            None
+        };
+        let name: String = match qualified.or(ext_path).or(xc_path) {
             Some(full) => full,
             // [#48-R1] Fall back to bare last-segment ONLY for always-nameable
             // containers (Vec, Option, …) — these don't need a qualified path
@@ -17539,6 +17571,41 @@ mod tests {
         assert!(
             type_to_typeref(&by_mut, &pidx).is_err(),
             "&mut serde-Value must drop (no sound mutable-borrow ref-pass)"
+        );
+    }
+
+    #[test]
+    fn xc_send_output_resolves_via_proven_public_set() {
+        // The `CustomerCreateCustomer.send` Output shape: a sibling manifest
+        // crate's public type (`stripe_shared::Customer`) referenced from the
+        // consuming crate, whose own paths cannot name it. `type_to_typeref` (the
+        // send Output path) must resolve it via the manifest-run proven-public set
+        // to the crate-qualified path — else the wrapper drops silently.
+        REACHABLE_PATHS.with(|c| c.borrow_mut().clear());
+        LOCAL_TYPE_IDS.with(|c| c.borrow_mut().clear());
+        EXTERNAL_TYPE_IDS.with(|c| c.borrow_mut().clear());
+        EXTERNAL_TYPE_PATH_BY_ID.with(|c| c.borrow_mut().clear());
+        GLOBAL_XC_PUBLIC_PATHS.with(|c| {
+            c.borrow_mut().clear();
+            c.borrow_mut().insert("stripe_shared::Customer".to_string());
+        });
+        let pidx: HashMap<String, usize> = HashMap::new();
+        let node = serde_json::json!({
+            "resolved_path": { "name": "Customer", "path": "Customer", "id": 900, "args": null }
+        });
+        assert_eq!(
+            type_to_typeref(&node, &pidx),
+            Ok(TypeRef::Ctor(
+                "::stripe_shared::Customer".to_string(),
+                vec![]
+            )),
+            "the send Output must resolve to the proven-public sibling path"
+        );
+        // Without the proven-public entry it drops (fail-closed, pre-fix).
+        GLOBAL_XC_PUBLIC_PATHS.with(|c| c.borrow_mut().clear());
+        assert!(
+            type_to_typeref(&node, &pidx).is_err(),
+            "an unproven cross-crate type must still drop"
         );
     }
 
