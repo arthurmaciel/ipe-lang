@@ -110,8 +110,14 @@ pub struct WatchScope {
     /// tmp-write + rename, so a new file under a watched DIRECTORY is
     /// observed even though its own inode never existed before the rename.
     roots_to_watch: Vec<WatchedPath>,
-    /// Total distinct source files discovered at scope-build time — the
-    /// `DoS`-guard count (H18: "bound watched-file count").
+    /// The canonical root-level `tests/` directory, when one exists —
+    /// scoped so the "any extension is relevant under `tests/`" rule only
+    /// ever matches THIS directory, never an unrelated `tests` component
+    /// nested elsewhere in the tree (e.g. a supervised app's own
+    /// `examples/foo/tests/`).
+    tests_root: Option<PathBuf>,
+    /// Total distinct `.ipe` source files discovered at scope-build time —
+    /// the `DoS`-guard count (H18: "bound watched-file count").
     file_count: usize,
 }
 
@@ -199,9 +205,11 @@ impl WatchScope {
 
         // tests/, if present, directly under the project root.
         let tests_dir = canon_root.join("tests");
+        let mut tests_root = None;
         if tests_dir.is_dir()
             && let Some(w) = WatchedPath::confine(&canon_root, &tests_dir)
         {
+            tests_root = Some(w.as_path().to_path_buf());
             roots_to_watch.push(w);
         }
 
@@ -222,6 +230,7 @@ impl WatchScope {
         Ok(Self {
             root: canon_root,
             roots_to_watch,
+            tests_root,
             file_count,
         })
     }
@@ -271,34 +280,51 @@ impl WatchScope {
         if !canon.starts_with(&self.root) {
             return false;
         }
-        is_watchable_leaf(&canon)
+        is_watchable_leaf(self.tests_root.as_deref(), &canon)
     }
 }
 
 /// Whether a (canonicalised, in-root, non-excluded) leaf path is one of the
 /// file kinds a confined watch actually reacts to: `.ipe` sources,
-/// `sky.toml`, or `tests/**` files (any extension — a fixture asset under
-/// `tests/` still belongs to the allowlist even without a `.ipe` extension,
-/// mirroring the reference project's "tests/ if present" scope).
-fn is_watchable_leaf(path: &Path) -> bool {
+/// `sky.toml`, or a file under the root-level `tests/` watch root (any
+/// extension — a fixture asset under `tests/` still belongs to the
+/// allowlist even without a `.ipe` extension, mirroring the reference
+/// project's "tests/ if present" scope).
+///
+/// `tests_root`, when present, is the ROOT-LEVEL `tests/` directory only
+/// (`WatchScope::build`'s own confinement of `<root>/tests`) — never any
+/// other path component spelled `tests`. A supervised app writing golden
+/// outputs or logs under its OWN nested `tests/` dir (e.g.
+/// `examples/foo/tests/output.log`) must not self-trigger the watch loop by
+/// virtue of a path SEGMENT matching that word.
+fn is_watchable_leaf(tests_root: Option<&Path>, path: &Path) -> bool {
     if path.file_name().and_then(|n| n.to_str()) == Some("sky.toml") {
         return true;
     }
-    if path.extension().and_then(|e| e.to_str()) == Some(SOURCE_EXTENSION) {
+    if is_source_file(path) {
         return true;
     }
-    path.components()
-        .any(|c| c.as_os_str() == std::ffi::OsStr::new("tests"))
+    tests_root.is_some_and(|root| path.starts_with(root))
 }
 
-/// Recursively count `.ipe` files under `dir`, accumulating into `count`.
-/// Bails out (returning early, count left at its last valid value) the
+/// Whether `path`'s extension is the `.ipe` source extension.
+fn is_source_file(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()) == Some(SOURCE_EXTENSION)
+}
+
+/// Recursively count `.ipe` files under `dir`, accumulating into `count` —
+/// ONLY `.ipe` files count toward the [`MAX_WATCHED_FILES`] `DoS` guard, so
+/// a directory full of non-source assets (golden fixtures, logs a
+/// supervised app writes under `tests/`) cannot exhaust the bound on its
+/// own. Bails out (returning early, count left at its last valid value) the
 /// moment `count` exceeds [`MAX_WATCHED_FILES`] — the caller re-checks and
 /// converts that into a hard [`ScopeError::TooManyFiles`], so a pathological
 /// tree cannot make this walk itself unbounded.
 fn count_source_files(dir: &Path, count: &mut usize) -> Result<(), ScopeError> {
     if dir.is_file() {
-        *count += 1;
+        if is_source_file(dir) {
+            *count += 1;
+        }
         return Ok(());
     }
     if !dir.is_dir() {
@@ -323,7 +349,7 @@ fn count_source_files(dir: &Path, count: &mut usize) -> Result<(), ScopeError> {
         })?;
         if file_type.is_dir() {
             count_source_files(&path, count)?;
-        } else {
+        } else if is_source_file(&path) {
             *count += 1;
         }
         if *count > MAX_WATCHED_FILES {
@@ -447,5 +473,89 @@ mod tests {
         // `.ipe` file under the (still-existing) src/ directory — must
         // still be judged relevant so a delete triggers a rebuild.
         assert!(scope.is_relevant(&f));
+    }
+
+    /// CO-INCR-009: a nested `tests` directory OUTSIDE the root-level
+    /// `tests/` watch root (e.g. a supervised app's own
+    /// `examples/foo/tests/`) must not self-trigger the watch loop for its
+    /// non-`.ipe` artifacts — only the extension/`sky.toml` rules, and the
+    /// ACTUAL root-level `tests/`, are watchable.
+    #[test]
+    fn is_relevant_ignores_a_non_root_tests_directory() {
+        let root = tmp_dir("scope_nested_tests");
+        let src = root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(
+            src.join("Main.ipe"),
+            "module Main exposing (main)\nmain = 1\n",
+        )
+        .unwrap();
+        // A nested `tests` dir under the WATCHED entry directory, not at
+        // the project root — an app-written golden output/log here must
+        // not be watch-relevant.
+        let nested_tests = src.join("examples").join("foo").join("tests");
+        fs::create_dir_all(&nested_tests).unwrap();
+        let artifact = nested_tests.join("output.log");
+        fs::write(&artifact, "run 1\n").unwrap();
+
+        let scope = WatchScope::build(&root, &src).unwrap();
+        assert!(
+            !scope.is_relevant(&artifact),
+            "a nested `tests` path component must not make a non-.ipe file watch-relevant"
+        );
+    }
+
+    /// The root-level `tests/` directory keeps its documented "any
+    /// extension" allowance — the fix above must not remove real coverage,
+    /// only scope it to the correct directory.
+    #[test]
+    fn is_relevant_still_accepts_any_extension_under_root_level_tests() {
+        let root = tmp_dir("scope_root_tests");
+        let src = root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(
+            src.join("Main.ipe"),
+            "module Main exposing (main)\nmain = 1\n",
+        )
+        .unwrap();
+        let tests_dir = root.join("tests");
+        fs::create_dir_all(&tests_dir).unwrap();
+        let fixture = tests_dir.join("golden.txt");
+        fs::write(&fixture, "expected\n").unwrap();
+
+        let scope = WatchScope::build(&root, &src).unwrap();
+        assert!(
+            scope.is_relevant(&fixture),
+            "a non-.ipe file directly under the root-level tests/ must stay relevant"
+        );
+    }
+
+    /// CO-INCR-009: `file_count`/`MAX_WATCHED_FILES` count only `.ipe`
+    /// files — a `tests/` directory full of non-source artifacts (golden
+    /// outputs, logs a supervised app writes) must not count against the
+    /// `DoS` guard.
+    #[test]
+    fn file_count_ignores_non_ipe_files_under_tests() {
+        let root = tmp_dir("scope_count_tests");
+        let src = root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(
+            src.join("Main.ipe"),
+            "module Main exposing (main)\nmain = 1\n",
+        )
+        .unwrap();
+        fs::write(root.join("sky.toml"), "name = \"x\"\n").unwrap();
+        let tests_dir = root.join("tests");
+        fs::create_dir_all(&tests_dir).unwrap();
+        for i in 0..10 {
+            fs::write(tests_dir.join(format!("artifact_{i}.log")), "x").unwrap();
+        }
+
+        let scope = WatchScope::build(&root, &src).unwrap();
+        assert_eq!(
+            scope.file_count(),
+            1,
+            "only Main.ipe counts — sky.toml and the 10 tests/ artifacts must not"
+        );
     }
 }
