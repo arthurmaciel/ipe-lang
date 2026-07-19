@@ -146,8 +146,8 @@
 | abort-on-drop guard (Δ1) | done — `AbortOnDrop` in runtime `task.rs`; emitted async bodies arm + defuse; abort-propagation regression in `src/runtime/rust/tests/ffi_async_bridge.rs` |
 | global runtime (H1) | done — `OnceLock` global runtime drives `block_on`; cross-entry reactor-handle regression |
 | crate version pins (prereq) | done — `CrateSpec`/`VersionPin` (`name@version` → inspector); `ipe install` honours manifest inline-table pins + features + `--allow-build-scripts` |
-| firestore bind | in progress |
-| async-stripe build | pending |
+| firestore bind | done — 670 bindings importable; probe SEAL green (ipe 0 → cargo 0 → run folds to structured Err); used-set DCE 670 → 3 |
+| async-stripe build | partial — all four rc.6 crates inspect + bind (17/167/200/1209 bindings; the builder setter/ctor surface incl. `CustomerCreateCustomer.new/email/name` and the full checkout params tree is importable); `send` bound for ONE receiver (`send_from_customerRetrieveCustomer : CustomerRetrieveCustomer -> Client -> Task Error CustomerRetrieveCustomerReturned`) but NOT for the `Create*`/checkout builders — see §6 next steps |
 | firebase bind | pending |
 | skyshop transpose | pending |
 | closure | pending |
@@ -186,11 +186,48 @@
   sig (`Maybe List FirestoreValue`) ICEs the lowerer (`IPE-I0001`, "type
   constructor `List` with empty home") instead of a canon arity/type error —
   root-cause in canon, not FFI.
-- Probe: `~/.cache/ipe/ffi-probe-firestore/src/Main.ipe` (options ctor →
-  `with_options` → `get_obj` chain, `Task.onError` fold) — `ipe build` exit 0;
-  emitted `cargo build` (THE SEAL) in flight at checkpoint.
-- Next: finish SEAL + run probe (structured-Err path without emulator);
-  commit; then async-stripe rc.6 four-crate install (needs the version-pin
-  path: `[rust.dependencies]` inline tables), probe + SEAL; then
-  rs-firebase-admin-sdk 4.3; then skyshop transpose into
-  `examples/13-skyshop/` with checked-in `.ipe/cache/ffi/rust` artifacts.
+- Probe DONE end-to-end: `~/.cache/ipe/ffi-probe-firestore/src/Main.ipe`
+  (options ctor → `with_options` → `get_obj` chain, `Task.onError` fold) —
+  `ipe build` 0 → emitted `cargo build` 0 (THE SEAL) → run prints
+  `ForeignError (ref …)` server-side and the Ipê-side structured-Err message.
+  Used-set DCE proven: emitted `src/ffi.rs` = 3 wrappers of 670.
+- Stripe probe project: `~/.cache/ipe/ffi-probe-stripe/` (four
+  `=1.0.0-rc.6` crates via `[rust.dependencies]` inline tables; ONE-shot
+  manifest install).
+- NEXT STEP (stripe `send` — the ONE remaining wall for the used-set): the
+  provided-method projection (`project_trait_default_methods`,
+  `tools/ipe-ffi-inspector/src/main.rs` ~11313) bound `send` only for
+  `CustomerRetrieveCustomer`. Debug plan: re-run the inspector on
+  `async-stripe-core@=1.0.0-rc.6` keeping the rustdoc JSON, and check
+  (a) whether `impl StripeRequest for CustomerCreateCustomer` reaches the
+  projection arm (`trait_self_concrete` + `trait_node.is_some()` at ~2259),
+  (b) whether the drop is `trait-method-default-where-unsatisfied` or a
+  downstream `route_concrete_method` / Send-gate drop (add temporary drop
+  logging), (c) whether cross-crate `Self::Output = stripe_shared::Customer`
+  resolution fails where the core-local
+  `CustomerRetrieveCustomerReturned` succeeds — if so, extend
+  `impl_assoc_bindings`/nameability to the external-type path map (the
+  types crate IS in the manifest run's xc index).
+- THEN: stripe probe Main.ipe (client builder → create customer →
+  checkout-session create/retrieve via `send`) → SEAL → run (no-network
+  structured Err or stripe-mock via `url_from_clientBuilder`).
+- THEN: `rs-firebase-admin-sdk@4.3` bind (async-trait de-async; mirrors
+  firestore) + probe/SEAL.
+- THEN: skyshop transpose into `examples/13-skyshop/` (`.sky` → `.ipe`,
+  `[rust.dependencies]` = firestore 0.49 + the four stripe crates +
+  rs-firebase-admin-sdk 4.3; check in `.ipe/cache/ffi/rust`; judgment
+  residue per design §9: `_status` dies, env/config in Ipê, emulator token
+  source needs an Ipê-side answer — `TokenSourceType::ExternalSource`
+  is a trait object (unbindable), so the emulator path likely needs a
+  runtime-owned token-source helper, which is runtime code, NOT a shim
+  crate).
+- FILED FOLLOW-UPS (from this session, all pre-existing classes):
+  1. lowerer ICE on ill-formed injected sig (canon should reject);
+  2. private-trait-path UFCS wrappers (`fluent_api` class) should over-drop
+     at admission (currently only unreachable-wrapper DCE keeps builds
+     green);
+  3. `Maybe`-slot params of synthesised closed-instance wrappers take raw
+     `Option<…>` while forwarders pass `IpeMaybe<…>` (E0308 if reached) —
+     needs the owned-coercion layer in `render_generic_wrapper` param/ret
+     positions (`update_obj`'s `Maybe (List String)` args hit this once
+     skyshop reaches them).
