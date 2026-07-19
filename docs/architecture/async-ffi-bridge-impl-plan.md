@@ -212,6 +212,106 @@ Same-named distinct types keep distinct nominals (correct). Old caches
 without `foreignTypeIds` simply see no unification (today's behavior) —
 re-running `ipe install` upgrades them.
 
+### Milestone: param-shape-admission — general type-shape rules for rich builder surfaces
+
+**The structural diagnosis.** The binder's param/field admission grew outward
+from primitives: a parameter is admitted only when its type reduces to a
+closed set of std shapes (numerics, `String`, `Vec`/`Option` of those). But
+the same inspection ALSO binds nominal types as opaque handles — structs,
+enums, typed-ID newtypes — with constructors, accessors, and one canonical
+identity per defining path. The remaining checkout-flow gaps are all one
+symptom: **a parameter or field whose type is a nominal the binder already
+binds elsewhere is still refused, because the admission tables predate the
+opaque-handle surface.** Concretely, on `rustdoc` type structure:
+
+| Gap member | Rust shape | Missing admission class |
+|---|---|---|
+| `CreateCheckoutSession::line_items` | `impl Into<Vec<LocalCloneStruct>>` param | conversion-bound → Vec-of-bound-nominal |
+| `CreateCheckoutSession::mode`, `LineItemsPriceData::new` | `impl Into<CrossCrateEnum>` param | conversion-bound → bound-nominal (identity) |
+| `RetrieveCheckoutSession::new` | `impl Into<NewtypeId>` param, `NewtypeId: From<String>` | conversion-bound → String-convertible target |
+| `CheckoutSessionMode` variant ctors | `#[non_exhaustive]` enum (enum-level) | enum-level non-exhaustive ≠ non-constructible |
+| `CheckoutSession.status` / `.payment_status` | struct field of crate-local Clone enum | enum-typed field in the field closed set |
+
+These are not one crate's quirks — they are the standard shapes of every rich
+Rust API (builder setters over `impl Into<T>`, typed-ID newtypes with
+`From<String>`, enums as params and as struct fields), so each rule below is
+keyed ONLY on rustdoc type structure, never on a crate name.
+
+**Admission classes (the design).**
+
+1. **Identity conversion-bound admission.** A PARAM-position `Into<X>`/`From<X>`
+   bound (named generic or anonymous `impl Trait`) whose target `X` is a
+   *bindable nominal* — crate-local reachable, or cross-crate
+   identity-provable via the defining-path map — or a `Vec` of one,
+   substitutes the target itself. Soundness: `X: Into<X>` and `X: From<X>`
+   hold for every `X` by std's reflexive `From` + blanket `Into`; the wrapper
+   passes the owned Ipê-held value straight through, and every existing
+   nameability / bindability / Send gate still applies downstream. RETURN
+   position is untouched: an anonymous conversion-bound return produces an
+   opaque value that merely *converts to* `X` — claiming `X` in the wrapper
+   signature would be a latent type mismatch at cargo time, so it stays
+   dropped.
+2. **String-convertible target preference.** Checked BEFORE identity: if the
+   target `X` carries a proven `impl From<String>` (std `From` resolved by
+   id, `String` argument, target = a crate-local defined type; proofs are
+   collected per member crate and unioned across the manifest run keyed by
+   the target's defining path, same identity discipline as the Send and
+   public-path maps), substitute `String`: `String: Into<X>` follows from
+   `X: From<String>` via the blanket impl. The Ipê surface takes a plain
+   `String` — exactly how typed-ID newtypes are meant to be called. This is
+   direction-sensitive: it applies ONLY to `Into<X>` bounds (the wrapper
+   *supplies* the String); a `From<X>` bound would need the opposite
+   direction and falls through to identity. Fail-closed: no proof → class 1.
+3. **Enum constructibility matches the language rule.** `#[non_exhaustive]`
+   on an ENUM restricts *exhaustive matching* by downstream crates (already
+   honoured: the tag/extractor wildcard) — it does NOT restrict construction
+   of its variants. Only a variant-level `#[non_exhaustive]` (or a stripped /
+   ineligible field) makes that variant non-constructible. Variant
+   constructors are therefore emitted for enum-level non-exhaustive enums
+   too; the variant-level suppression and the match-wildcard rule stand
+   unchanged. Verified empirically cross-crate before landing (unit + tuple
+   variants of an enum-level non-exhaustive foreign enum compile; the
+   fixture also covers struct-kind variants).
+4. **Enum-typed fields join the field closed set.** A struct field whose type
+   is a crate-local `Clone` ENUM that the enum binder surfaces as an opaque
+   handle (public, non-doc-hidden, non-generic) is getter/setter-eligible
+   under exactly the conditions a `Clone` struct field is. Reading yields the
+   opaque handle (dispatch Ipê-side via the tag accessor / `as_str`);
+   writing assigns an owned handle by value — no numeric narrowing exists on
+   a nominal, so the lossless-setter gate is unaffected.
+
+`Vec`-of-opaque params need no fourth mechanism: the `Vec` arm of
+conversion-bound resolution recurses into class 1, and Ipê `List X` already
+lowers to `Vec<X>` at the wrapper boundary (exercised today by the bound
+`List <opaque>` field setters).
+
+**How this maps beyond the checkout flow.**
+- *axum*: `Router`/`MethodRouter` builder methods pass bound nominals by
+  value (class 1); config enums as params and fields (classes 1/3/4).
+  Handler/extractor trait generics (`impl Handler`, `FromRequest`) are a
+  distinct trait-bound class, out of scope and honestly dropped.
+- *bevy*: app/plugin builders take Component/Resource structs by value
+  (class 1); enums appear pervasively as params and struct fields
+  (classes 1, 3, 4).
+- Any crate with typed-ID newtypes over strings gets class 2 for free.
+
+**What cannot be made general soundly (stays dropped, recorded).**
+- Anonymous conversion-bound RETURNS (identity is unsound there: the callee's
+  value is opaque, not `X`).
+- Conversion targets carrying borrows (`impl Into<Cow<'_, str>>`,
+  `Into<&'static str>`): a runtime-owned value cannot become a borrow.
+- Fallible-conversion IDs (`TryFrom<&str>`-style, e.g. `HeaderName`): no
+  blanket `Into`, and admitting them would need a new fallible-param surface
+  — a recorded follow-up, never a silent admit.
+
+**Filed follow-ups surfaced by this analysis (pre-existing, not blocking):**
+- `FromStr` `from_string` bridges are absent from every generated interface
+  while the sibling `Display` `to_string` bridges emit — the bridge is
+  synthesized but never survives to `.ipei`; root cause not yet located.
+- Cross-crate enum-typed FIELD admission (a field typed by a sibling crate's
+  enum) needs the defining-path identity map at field-eligibility level;
+  crate-local admission (class 4) does not cover it.
+
 ### Step: closure
 - `cargo fmt --all`; full scoped gates; divergence ledger updated (Δ1, Δ2);
   `AGENTS.md` untouched unless surface changed; final report.
