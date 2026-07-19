@@ -35,7 +35,7 @@ KernelId`. Every new kernel must update ALL anti-drift sites simultaneously
 table, `naming.rs`, `ir::pretty`, `stdlib.rs` module registration.
 
 Migration is family-by-family behind a fail-closed transitional path; the build stays
-green and Go-parity is golden-pinned at every commit.
+green and behavioral parity is golden-pinned at every commit.
 
 ## Consequences
 

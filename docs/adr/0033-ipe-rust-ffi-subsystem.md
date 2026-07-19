@@ -6,12 +6,11 @@ Date: 2026-07-04
 ## Context
 
 Ipê programs need to call arbitrary Rust crates without writing hand-authored shims.
-The reference implementation (`../sky` at `feat/runtime-rust`) proved the full async
-FFI path: it binds foreign `async fn` as `Task Error a` natively (since #44,
-2026-06-23), binds firestore 0.49 direct and shim-free (fixture 104), and proved every
-stripe mechanism on synthetic fixtures 93–96. The acceptance metric is `skyshop-rs`
-running with zero manual shims for firestore, firebase, and stripe, plus DCE of unused
-FFI symbols.
+The design target is a fully automatic binding path: a foreign `async fn` binds as
+`Task Error a`, common async SDK crates (firestore, firebase, stripe) bind directly
+and shim-free, and unused FFI symbols are dead-code-eliminated. The acceptance metric
+is the `13-skyshop` example running with zero manual shims across firestore, firebase,
+and stripe.
 
 Two fundamental rules drive every type boundary:
 1. **Parse, don't validate.** Untrusted rustdoc JSON crosses into Ipê at exactly two
@@ -28,13 +27,12 @@ The subsystem has three components, all under `src/compiler/ffi/`:
 - **`ipe-ffi-inspector`** (`tools/ipe-ffi-inspector/`): vendored, working. Runs
   post-macro-expansion rustdoc-JSON analysis in an RCE sandbox (`bwrap` primary,
   `unshare`-with-post-spawn-isolation fallback) and produces typed `PkgInfo` JSON.
-  Ipê is stricter than the reference: argv quoting is explicit, not `quoteShell`; the
+  Ipê enforces strict isolation: argv quoting is explicit, not shell-quoted; the
   inspector binary runs inside a no-network, read-only-filesystem namespace.
-- **`ipe_ffi` generator crate** (`src/compiler/ffi/`): ports the Haskell generator
-  (`src/Ipê/Build/Rust/{Ffi,FfiInstance,FfiCall}.hs` + `NumCoerce.hs`). Produces
+- **`ipe_ffi` generator crate** (`src/compiler/ffi/`): produces
   `.ipei` type-env files and `kernel.json` entries that feed the kernel registry
-  (`KernelId::Ffi(FfiKernelId)`). The async→`Task Error a` boundary shape is
-  faithful-ported; `async fn` bindings are not deferred.
+  (`KernelId::Ffi(FfiKernelId)`). The async→`Task Error a` boundary is explicit;
+  `async fn` bindings are not deferred.
 - **Consumer pipeline**: `ipe add <crate>` → inspect → generate `.ipei` →
   kernel-registry seeding → dynamic `Cargo.toml` injection → cache at
   `~/.cache/ipe/ffi/rust`. Driver command `ipe add/install/remove`.
