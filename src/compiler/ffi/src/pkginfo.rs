@@ -669,8 +669,13 @@ fn decode_shape(w: &WireFunction) -> Result<FnShape, Diagnostic> {
     })
 }
 
-const fn shape_fallibility(shape: &FnShape) -> Fallibility {
+const fn shape_fallibility(shape: &FnShape, effect: Effect) -> Fallibility {
     match shape {
+        // A CHECKED setter (narrowing integer field, wire `effect: fallible`)
+        // renders a `Result`-returning wrapper; the surface signature must
+        // carry the same layer or the interface and the wrapper disagree at
+        // cargo time.
+        FnShape::FieldSet if matches!(effect, Effect::Fallible) => Fallibility::TaskError,
         FnShape::FieldGet
         | FnShape::FieldSet
         | FnShape::EnumCtor { .. }
@@ -719,7 +724,7 @@ impl TryFrom<WireFunction> for FnInfo {
         }
         let effect = decode_effect(&w.name, &w.effect)?;
         let shape = decode_shape(&w)?;
-        let fallibility = shape_fallibility(&shape);
+        let fallibility = shape_fallibility(&shape, effect);
         let generic = match &w.generic {
             None => None,
             Some(g) => {
