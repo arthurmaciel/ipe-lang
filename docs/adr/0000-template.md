@@ -24,6 +24,6 @@ Note any follow-on decisions this enables or forecloses.
 
 ## Conventions
 
-ADRs describe Ipê on its own terms. Do NOT reference a Go / Sky / Haskell
-reference implementation, "go-parity", or project ancestry — state each decision
-as a standalone Ipê decision.
+ADRs describe Ipê on its own terms. Do not reference any prior or external
+implementation, parity with another system, or project ancestry — state each
+decision as a standalone Ipê decision.
