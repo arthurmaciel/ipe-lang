@@ -508,12 +508,12 @@ pub fn ipe_jwt_encode(
     } else if let Some(pem) = algorithm_descriptor.strip_prefix("RS256:") {
         jwt_encode_rs256(pem.to_string(), claims_json)
     } else {
+        // The unknown descriptor is caller-derived data, so it is never
+        // byte-sliced or echoed into the message: slicing by byte offset can
+        // land mid-codepoint on multibyte UTF-8 input and panic, and the tag
+        // namespace is fixed, so the raw content adds no diagnostic value.
         IpeResult::Err(
-            format!(
-                "jwt-encode: unknown algorithm descriptor (expected HS256:… or RS256:…): {}",
-                &algorithm_descriptor[..algorithm_descriptor.len().min(20)]
-            )
-            .into(),
+            "jwt-encode: unknown algorithm descriptor (expected HS256:… or RS256:…)".into(),
         )
     }
 }
@@ -572,12 +572,10 @@ pub fn ipe_jwt_decode(
             return IpeResult::Err("jwt-decode: invalid signature".into());
         }
     } else {
+        // See `ipe_jwt_encode`'s matching arm: never byte-slice or echo the
+        // caller-derived descriptor into the message.
         return IpeResult::Err(
-            format!(
-                "jwt-decode: unknown algorithm descriptor (expected HS256:… or RS256:…): {}",
-                &algorithm_descriptor[..algorithm_descriptor.len().min(20)]
-            )
-            .into(),
+            "jwt-decode: unknown algorithm descriptor (expected HS256:… or RS256:…)".into(),
         );
     }
 
@@ -1130,5 +1128,59 @@ mod tests {
             matches!(decoded, IpeResult::Ok(_)),
             "flat HS256: far-future fractional exp must be accepted"
         );
+    }
+
+    /// An unrecognised descriptor whose byte 20 falls mid-codepoint must not
+    /// panic. 19 ASCII bytes (indices 0..18) followed by 'é' (2 UTF-8 bytes
+    /// at indices 19-20) means a byte-offset slice at `..20` lands on the
+    /// second byte of 'é', which is not a char boundary and used to panic
+    /// with "byte index 20 is not a char boundary".
+    fn multibyte_boundary_descriptor() -> String {
+        format!("{}é{}", "a".repeat(19), "trailing-tag-not-hs256-or-rs256")
+    }
+
+    #[test]
+    fn ipe_jwt_encode_unknown_algorithm_multibyte_boundary_does_not_panic() {
+        let desc = crate::secret::secret_from_string(multibyte_boundary_descriptor());
+        let claims = JsonValue::Null;
+        let result = ipe_jwt_encode(desc, claims);
+        match result {
+            IpeResult::Err(msg) => {
+                let msg = msg.to_string();
+                assert!(
+                    msg.contains("unknown algorithm descriptor"),
+                    "unexpected error message: {msg}"
+                );
+                // Never echo caller-derived descriptor content into the message.
+                assert!(
+                    !msg.contains('é'),
+                    "error message must not echo caller-derived descriptor content: {msg}"
+                );
+            }
+            IpeResult::Ok(_) => panic!("unknown algorithm descriptor must not succeed"),
+        }
+    }
+
+    #[test]
+    fn ipe_jwt_decode_unknown_algorithm_multibyte_boundary_does_not_panic() {
+        let desc = crate::secret::secret_from_string(multibyte_boundary_descriptor());
+        // Any 3-segment string clears the segment-count check so the unknown-
+        // algorithm branch is actually reached.
+        let token = "a.b.c".to_string();
+        let result = ipe_jwt_decode(desc, 0, token);
+        match result {
+            IpeResult::Err(msg) => {
+                let msg = msg.to_string();
+                assert!(
+                    msg.contains("unknown algorithm descriptor"),
+                    "unexpected error message: {msg}"
+                );
+                assert!(
+                    !msg.contains('é'),
+                    "error message must not echo caller-derived descriptor content: {msg}"
+                );
+            }
+            IpeResult::Ok(_) => panic!("unknown algorithm descriptor must not succeed"),
+        }
     }
 }
