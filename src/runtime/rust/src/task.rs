@@ -1,6 +1,52 @@
 // Task combinators — generic over error type E.
 use super::*;
 use std::future::ready;
+use std::sync::OnceLock;
+
+/// Process-global tokio runtime shared by every `block_on` entry.
+///
+/// A reactor-registered value constructed inside one `block_on` (an FFI client
+/// handle held across entries, a pooled connection) is only usable while its
+/// owning reactor lives. A fresh `Runtime` per entry drops that reactor
+/// between entries, so a handle crossing two entries hits a dead reactor. One
+/// shared runtime keeps every reactor-registered handle live for the process
+/// lifetime; a shared reactor is strictly more available than a fresh one.
+static GLOBAL_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+
+fn global_runtime() -> Result<&'static tokio::runtime::Runtime, String> {
+    if let Some(rt) = GLOBAL_RUNTIME.get() {
+        return Ok(rt);
+    }
+    let rt =
+        tokio::runtime::Runtime::new().map_err(|e| format!("tokio runtime init failed: {e}"))?;
+    // A racing initializer's spare runtime is dropped unused (no tasks on it).
+    Ok(GLOBAL_RUNTIME.get_or_init(|| rt))
+}
+
+/// Aborts a spawned foreign task when its owning guard is dropped before
+/// completion (`Task.parallel` early-cancel drops the losing wrapper future),
+/// so a cancelled FFI call cannot keep producing side effects. `defuse`
+/// disarms after a normal join.
+pub struct AbortOnDrop(Option<tokio::task::AbortHandle>);
+
+impl AbortOnDrop {
+    #[must_use]
+    pub fn new(handle: tokio::task::AbortHandle) -> Self {
+        Self(Some(handle))
+    }
+
+    pub fn defuse(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        if let Some(h) = self.0.take() {
+            h.abort();
+        }
+    }
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn block_on<E, A>(future: IpeTask<E, A>) -> IpeResult<E, A>
@@ -8,10 +54,13 @@ where
     E: From<String> + Send + 'static,
     A: Send + 'static,
 {
-    let rt = match tokio::runtime::Runtime::new() {
+    let rt = match global_runtime() {
         Ok(r) => r,
-        Err(e) => return IpeResult::Err(format!("tokio runtime init failed: {}", e).into()),
+        Err(e) => return IpeResult::Err(e.into()),
     };
+    // The spawned OS thread keeps the entry poll outside any runtime context
+    // (a nested `block_on` inside a worker thread would panic) and lets a
+    // panicking future be `.join()`-mapped to `Err` instead of aborting.
     match std::thread::spawn(move || rt.block_on(future)).join() {
         Ok(r) => r,
         Err(_) => IpeResult::Err("async task panicked".to_string().into()),

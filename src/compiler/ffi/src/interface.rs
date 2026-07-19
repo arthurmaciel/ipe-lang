@@ -118,7 +118,15 @@ fn path_tokens(raw: &str) -> Vec<(String, String)> {
                 && !base.is_empty()
                 && base.chars().next().is_some_and(char::is_uppercase)
             {
-                out.push((base.to_owned(), normalized));
+                out.push((base.to_owned(), normalized.clone()));
+                // A SUBMODULE type surfaces under the inspector's
+                // path-derived Ipê head (`checkout_session::ProductData` →
+                // `Checkout_sessionProductData`); the map must answer for
+                // that key too or every submodule type is "unresolvable".
+                let composite = ipe_head_from_rust_path(&normalized);
+                if !composite.is_empty() && composite != *base {
+                    out.push((composite, normalized));
+                }
             }
         }
         token.clear();
@@ -134,6 +142,42 @@ fn path_tokens(raw: &str) -> Vec<(String, String)> {
     out
 }
 
+/// The inspector's path-derived Ipê head for a qualified Rust type path —
+/// submodule segments CamelCase-join ahead of the type name so same-named
+/// types in different submodules stay distinct (`::regex::bytes::Regex` →
+/// `BytesRegex`; `::stripe_checkout::checkout_session::ProductData` →
+/// `Checkout_sessionProductData`); a crate-root type keeps its bare name
+/// unless that name collides with an Ipê builtin carrier, in which case the
+/// crate segment joins too (`::bytes::Bytes` → `BytesBytes`). MUST mirror the
+/// inspector's `ipe_name_from_path` — a drift makes submodule types
+/// "unresolvable" and silently over-drops their whole surface.
+fn ipe_head_from_rust_path(path: &str) -> String {
+    fn camel(s: &str) -> String {
+        let mut c = s.chars();
+        c.next().map_or_else(String::new, |f| {
+            f.to_uppercase().collect::<String>() + c.as_str()
+        })
+    }
+    let segs: Vec<&str> = path.split("::").filter(|s| !s.is_empty()).collect();
+    match segs.as_slice() {
+        [] => String::new(),
+        [one] => (*one).to_owned(),
+        [crate_seg, mods @ .., ty] => {
+            let builtin_collision =
+                mods.is_empty() && matches!(*ty, "Bytes" | "String" | "Int" | "Float" | "Bool");
+            let mut out = String::new();
+            if builtin_collision {
+                out.push_str(&camel(crate_seg));
+            }
+            for m in mods {
+                out.push_str(&camel(m));
+            }
+            out.push_str(ty);
+            out
+        }
+    }
+}
+
 /// Collect every foreign NOMINAL base name reachable from one Rust type
 /// string — the generic HEAD and each generic ARGUMENT, recursively.
 ///
@@ -141,11 +185,20 @@ fn path_tokens(raw: &str) -> Vec<(String, String)> {
 /// `CheckoutSession`; `Vec<semver::Error>` yields `Error`. A base is a
 /// capitalised identifier (a type), never a scalar/lifetime/module segment.
 fn foreign_nominal_bases(raw: &str, out: &mut BTreeSet<String>) {
+    /// Bare (path-less) std heads whose Ipê mapping IS the builtin — `String`
+    /// is the `String` carrier, `Vec` is `List`, … The inspector renders
+    /// crate-local types with a qualified path, so a bare occurrence of one of
+    /// these is std by construction, never a foreign nominal shadowing a
+    /// builtin.
+    const BARE_STD_CARRIERS: &[&str] = &[
+        "String", "Vec", "Option", "Result", "HashMap", "BTreeMap", "HashSet", "BTreeSet",
+    ];
     let mut token = String::new();
     let flush = |token: &mut String, out: &mut BTreeSet<String>| {
         // The last `::`-segment of the token is the type's own name.
         let base = token.rsplit("::").next().unwrap_or(token);
-        if base.chars().next().is_some_and(char::is_uppercase) {
+        let bare_std = !token.contains("::") && BARE_STD_CARRIERS.contains(&base);
+        if base.chars().next().is_some_and(char::is_uppercase) && !bare_std {
             out.insert(base.to_owned());
         }
         token.clear();
@@ -187,11 +240,18 @@ fn result_ok_arm(raw: &str) -> &str {
 
 /// The first foreign nominal in `f`'s parameter / result / receiver types
 /// that collides with an Ipê reserved builtin type name, if any.
+///
+/// Two scans per param: the RAW Rust type through the rust-syntax nominal
+/// tokenizer (catches a foreign type folding onto a builtin HEAD), and the
+/// Ipê-typed rendering through the ipe-syntax opaque scan — there the builtin
+/// heads (`Result`/`Maybe`/`Task`/`Error`, …) are the language's own
+/// containers, never foreign nominals, so tokenizing them as foreign would
+/// over-drop every fallible binding on its own carrier.
 fn foreign_reserved_collision(f: &FnInfo) -> Option<String> {
     let mut bases = BTreeSet::new();
     for p in f.params().iter().chain(f.results().iter()) {
         foreign_nominal_bases(result_ok_arm(p.rust_type_str()), &mut bases);
-        foreign_nominal_bases(result_ok_arm(&p.foreign_ty), &mut bases);
+        opaque_names_in(&p.foreign_ty, &mut bases);
     }
     foreign_nominal_bases(f.recv_rust_type(), &mut bases);
     bases

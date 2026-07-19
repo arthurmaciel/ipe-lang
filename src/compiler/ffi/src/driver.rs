@@ -55,6 +55,97 @@ impl CrateName {
     }
 }
 
+/// A validated crate version requirement.
+///
+/// The only form that can join a `name@version` inspector spec; the charset
+/// mirrors the inspector's own semver gate (the value is spliced into a TOML
+/// value position there).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VersionPin(String);
+
+impl VersionPin {
+    /// Validate and wrap a version requirement (e.g. `0.49`, `=1.0.0-rc.6`).
+    ///
+    /// # Errors
+    ///
+    /// `IPE-F4411` when the requirement is empty or carries a character
+    /// outside `[0-9A-Za-z.*=<>~^,+ -]`.
+    pub fn parse(s: &str) -> Result<Self, Diagnostic> {
+        let legal = !s.is_empty()
+            && s.chars().all(|c| {
+                c.is_ascii_alphanumeric()
+                    || matches!(
+                        c,
+                        '.' | '-' | '+' | '*' | '=' | '>' | '<' | '~' | '^' | ',' | ' '
+                    )
+            });
+        if legal {
+            Ok(Self(s.to_owned()))
+        } else {
+            Err(Diagnostic::SourceRejected {
+                source: s.to_owned(),
+                defect: SourceDefect::VersionReqIllegal { got: s.to_owned() },
+            })
+        }
+    }
+
+    /// The validated requirement text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// A crate plus an optional version pin, as `ipe add <crate>[@<version>]`
+/// accepts (mirrors `cargo add name@version`; a prerelease resolves only
+/// through an exact pin).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CrateSpec {
+    name: CrateName,
+    version: Option<VersionPin>,
+}
+
+impl CrateSpec {
+    /// Parse `name` or `name@version`; both halves go through their gates.
+    ///
+    /// # Errors
+    ///
+    /// `IPE-F4411` from whichever half fails its charset gate.
+    pub fn parse(s: &str) -> Result<Self, Diagnostic> {
+        match s.split_once('@') {
+            Some((n, v)) => Ok(Self {
+                name: CrateName::parse(n)?,
+                version: Some(VersionPin::parse(v)?),
+            }),
+            None => Ok(Self {
+                name: CrateName::parse(s)?,
+                version: None,
+            }),
+        }
+    }
+
+    /// Build from already-validated halves (the `ipe install` manifest path).
+    #[must_use]
+    pub const fn new(name: CrateName, version: Option<VersionPin>) -> Self {
+        Self { name, version }
+    }
+
+    /// The crate name.
+    #[must_use]
+    pub const fn name(&self) -> &CrateName {
+        &self.name
+    }
+
+    /// The single positional inspector argument (`name` or `name@version`).
+    #[must_use]
+    pub fn inspector_arg(&self) -> String {
+        self.version.as_ref().map_or_else(
+            || self.name.as_str().to_owned(),
+            |v| format!("{}@{}", self.name.as_str(), v.as_str()),
+        )
+    }
+}
+
 // ── git-source gate ─────────────────────────────────────────────────────────
 
 /// The raw pin flags as the CLI collects them, before the gate.
@@ -231,7 +322,7 @@ impl GitSource {
 /// caller wraps it in the `ipe_sandbox` jail.
 #[must_use]
 pub fn inspector_argv(
-    krate: &CrateName,
+    krate: &CrateSpec,
     features: &[String],
     git: Option<&GitSource>,
     allow_build_scripts: bool,
@@ -267,7 +358,7 @@ pub fn inspector_argv(
             GitPin::Default => {}
         }
     }
-    argv.push(krate.as_str().into());
+    argv.push(krate.inspector_arg().into());
     argv
 }
 
@@ -401,7 +492,7 @@ impl FfiCache {
             (&paths.ipei, crate::emit::emit_ipei(pkg)),
             (&paths.kernel_json, crate::emit::emit_kernel_json(pkg)),
             (&paths.bindings, crate::bindings::emit_bindings(pkg)),
-            (&paths.coverage, emit_coverage(pkg)),
+            (&paths.coverage, emit_coverage(pkg, &iface.skipped)),
             (&paths.interface, iface.source),
             (&paths.consumer, consumer_json),
             (&paths.pkg_json, inspection_json.to_owned()),
@@ -660,9 +751,14 @@ pub fn load_catalog(cache_root: &Path) -> Result<Vec<InstalledCrate>, Diagnostic
 
 // ── coverage report (the over-drop keystone made visible) ───────────────────
 
-/// The `coverage.md` artifact: what was bound, what was refused, and why.
+/// The `coverage.md` artifact: what was bound, what was refused, and why —
+/// including the per-binding interface skips (the over-drop keystone is only
+/// visible if EVERY drop layer reports).
 #[must_use]
-pub fn emit_coverage(pkg: &PkgInfo) -> String {
+pub fn emit_coverage(
+    pkg: &PkgInfo,
+    interface_skips: &[crate::interface::SkippedBinding],
+) -> String {
     use std::fmt::Write;
     let mut out = format!(
         "# FFI coverage — `{}` {}\n\nBound functions: {}\n",
@@ -678,6 +774,17 @@ pub fn emit_coverage(pkg: &PkgInfo) -> String {
         out.push_str("| Reason |\n|---|\n");
         for d in pkg.dropped() {
             let _ = writeln!(out, "| {d} |");
+        }
+    }
+    if !interface_skips.is_empty() {
+        let _ = writeln!(
+            out,
+            "\n## Interface skips ({} — wrapper exists or was refused; not importable)\n",
+            interface_skips.len()
+        );
+        out.push_str("| Binding | Reason |\n|---|---|\n");
+        for s in interface_skips {
+            let _ = writeln!(out, "| {} | {} |", s.ref_name, s.reason);
         }
     }
     if !pkg.notes().is_empty() {
@@ -896,7 +1003,7 @@ mod tests {
 
     #[test]
     fn inspector_argv_is_typed_and_shell_free() {
-        let krate = CrateName::parse("semver").expect("legal");
+        let krate = CrateSpec::parse("semver").expect("legal");
         let hosts = HostAllowlist::default();
         let git = GitSource::parse(
             "https://github.com/acme/semver",
@@ -934,6 +1041,26 @@ mod tests {
             fetch.last().map(|a| a.to_string_lossy().into_owned()),
             Some("semver".to_owned())
         );
+    }
+
+    #[test]
+    fn crate_spec_carries_an_exact_version_pin_and_gates_its_charset() {
+        let spec = CrateSpec::parse("async-stripe@=1.0.0-rc.6").expect("legal");
+        assert_eq!(spec.name().as_str(), "async-stripe");
+        assert_eq!(spec.inspector_arg(), "async-stripe@=1.0.0-rc.6");
+        let argv = inspector_argv(&spec, &[], None, false, false);
+        assert_eq!(
+            argv.last().map(|a| a.to_string_lossy().into_owned()),
+            Some("async-stripe@=1.0.0-rc.6".to_owned())
+        );
+        // The version half is gated to the semver charset — a shell/TOML
+        // metacharacter cannot reach the argv.
+        for bad in ["stripe@", "stripe@1.0\"", "stripe@$(id)", "@1.0", "a@b@c"] {
+            assert!(CrateSpec::parse(bad).is_err(), "{bad} must be rejected");
+        }
+        // A bare name still parses and renders unversioned.
+        let bare = CrateSpec::parse("uuid").expect("legal");
+        assert_eq!(bare.inspector_arg(), "uuid");
     }
 
     // ── cache + artifacts ───────────────────────────────────────────────

@@ -680,18 +680,24 @@ fn render_generic_wrapper(base_name: &str, g: &GenericFn) -> String {
         // exits the future, not the IpeTask-returning fn.
         let mut lines = vec!["    Box::pin(async move {".to_owned()];
         lines.extend(serde_prelude.iter().map(|p| format!("        {p}")));
+        lines.push(format!(
+            "        let handle = tokio::task::spawn(async move {{ {body_call}.await }});"
+        ));
+        lines.push("        let guard = AbortOnDrop::new(handle.abort_handle());".to_owned());
+        lines.push("        let joined = handle.await;".to_owned());
+        lines.push("        guard.defuse();".to_owned());
         if ret_is_result {
             lines.push(format!(
-                "        match tokio::task::spawn(async move {{ {body_call}.await }}).await \
+                "        match joined \
                  {{ Ok(Ok(v)) => ok_res({ok_lift}), Ok(Err(e)) => \
-                 IpeResult::Err(ipe_error_from_foreign(e)), Err(_) => \
-                 IpeResult::Err(str_err(\"foreign async call panicked\")) }}"
+                 IpeResult::Err(ipe_error_from_foreign(e)), Err(join_err) => \
+                 IpeResult::Err(ipe_error_from_foreign(join_err)) }}"
             ));
         } else {
             lines.push(format!(
-                "        match tokio::task::spawn(async move {{ {body_call}.await }}).await \
-                 {{ Ok(v) => ok_res({ok_lift}), Err(_) => \
-                 IpeResult::Err(str_err(\"foreign async call panicked\")) }}"
+                "        match joined \
+                 {{ Ok(v) => ok_res({ok_lift}), Err(join_err) => \
+                 IpeResult::Err(ipe_error_from_foreign(join_err)) }}"
             ));
         }
         lines.push("    })".to_owned());
@@ -1280,10 +1286,25 @@ match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(move || ::box1::
             "{}",
             w.source
         );
-        // Spawned, three-arm fallible match, serde OK re-serialised.
+        // Spawned with an abort-on-drop guard, three-arm fallible match (the
+        // JoinError arm through the same redaction funnel), serde OK
+        // re-serialised.
         assert!(
             w.source.contains(
-                "match tokio::task::spawn(async move { <::db::Db as ::db::Repo>::get_obj::<serde_json::Value>(&arg0, sv_1).await }).await { Ok(Ok(v)) => ok_res(serde_json::to_string(&(v)).unwrap_or_default()), Ok(Err(e)) => IpeResult::Err(ipe_error_from_foreign(e)), Err(_) => IpeResult::Err(str_err(\"foreign async call panicked\")) }"
+                "let handle = tokio::task::spawn(async move { <::db::Db as ::db::Repo>::get_obj::<serde_json::Value>(&arg0, sv_1).await });"
+            ),
+            "{}",
+            w.source
+        );
+        assert!(
+            w.source
+                .contains("let guard = AbortOnDrop::new(handle.abort_handle());"),
+            "{}",
+            w.source
+        );
+        assert!(
+            w.source.contains(
+                "match joined { Ok(Ok(v)) => ok_res(serde_json::to_string(&(v)).unwrap_or_default()), Ok(Err(e)) => IpeResult::Err(ipe_error_from_foreign(e)), Err(join_err) => IpeResult::Err(ipe_error_from_foreign(join_err)) }"
             ),
             "{}",
             w.source
