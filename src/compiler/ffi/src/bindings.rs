@@ -1037,15 +1037,19 @@ fn plain_lines(cx: &WrapperCx<'_>) -> Vec<String> {
                 preludes = Vec::new(); // moved inside the async block
                 if is_async_fallible {
                     format!(
-                        "Box::pin(async move {{ {prelude_inline}match tokio::task::spawn(async move {{ {call}.await }}).await \
+                        "Box::pin(async move {{ {prelude_inline}let handle = tokio::task::spawn(async move {{ {call}.await }}); \
+                         let guard = AbortOnDrop::new(handle.abort_handle()); let joined = handle.await; guard.defuse(); \
+                         match joined \
                          {{ Ok(Ok(v)) => ok_res({}), Ok(Err(e)) => IpeResult::Err(ipe_error_from_foreign(e)), \
-                         Err(_) => IpeResult::Err(str_err(\"foreign async call panicked\")) }} }})",
+                         Err(join_err) => IpeResult::Err(ipe_error_from_foreign(join_err)) }} }})",
                         ret_coerce("v")
                     )
                 } else {
                     format!(
-                        "Box::pin(async move {{ {prelude_inline}match tokio::task::spawn(async move {{ {call}.await }}).await \
-                         {{ Ok(v) => ok_res({}), Err(_) => IpeResult::Err(str_err(\"foreign async call panicked\")) }} }})",
+                        "Box::pin(async move {{ {prelude_inline}let handle = tokio::task::spawn(async move {{ {call}.await }}); \
+                         let guard = AbortOnDrop::new(handle.abort_handle()); let joined = handle.await; guard.defuse(); \
+                         match joined \
+                         {{ Ok(v) => ok_res({}), Err(join_err) => IpeResult::Err(ipe_error_from_foreign(join_err)) }} }})",
                         ret_coerce("v")
                     )
                 }
@@ -1558,10 +1562,11 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
             out.contains("pub fn db_get_from_db(mut arg0: Db, arg1: String) -> IpeTask<String> {"),
             "{out}"
         );
-        // Fallible async: three arms, typed foreign-error fold, JoinError arm.
+        // Fallible async: abort-on-drop guard, three arms, typed foreign-error
+        // fold, JoinError through the same redaction funnel.
         assert!(
             out.contains(
-                "Box::pin(async move { match tokio::task::spawn(async move { arg0.get(arg1.as_ref()).await }).await { Ok(Ok(v)) => ok_res(v), Ok(Err(e)) => IpeResult::Err(ipe_error_from_foreign(e)), Err(_) => IpeResult::Err(str_err(\"foreign async call panicked\")) } })"
+                "Box::pin(async move { let handle = tokio::task::spawn(async move { arg0.get(arg1.as_ref()).await }); let guard = AbortOnDrop::new(handle.abort_handle()); let joined = handle.await; guard.defuse(); match joined { Ok(Ok(v)) => ok_res(v), Ok(Err(e)) => IpeResult::Err(ipe_error_from_foreign(e)), Err(join_err) => IpeResult::Err(ipe_error_from_foreign(join_err)) } })"
             ),
             "{out}"
         );
@@ -1583,7 +1588,7 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
         let out = emit_bindings(&pkg);
         assert!(
             out.contains(
-                "Box::pin(async move { match tokio::task::spawn(async move { ::svc::ping().await }).await { Ok(v) => ok_res(v), Err(_) => IpeResult::Err(str_err(\"foreign async call panicked\")) } })"
+                "Box::pin(async move { let handle = tokio::task::spawn(async move { ::svc::ping().await }); let guard = AbortOnDrop::new(handle.abort_handle()); let joined = handle.await; guard.defuse(); match joined { Ok(v) => ok_res(v), Err(join_err) => IpeResult::Err(ipe_error_from_foreign(join_err)) } })"
             ),
             "{out}"
         );

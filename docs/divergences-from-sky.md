@@ -1649,6 +1649,46 @@ API-shape review):
 
 ---
 
+### B-FfiAsyncBridge — async-FFI wrapper hardening: JoinError redaction funnel, abort-on-drop cancel guard, process-global runtime
+
+Three upgrades over the reference's async wrapper body
+(`../sky/src/Sky/Build/Rust/Ffi.hs`, the `Box::pin(async move {
+tokio::task::spawn(…).await })` three-arm match), adopted per
+`docs/architecture/async-ffi-bridge-design.md` §1.1/§4:
+
+- **JoinError through the redaction funnel.** The reference's panic arm emits
+  a bare `str_err("foreign async call panicked")` — no correlation id, no
+  server-side detail. ipê routes the `JoinError` through
+  `ipe_error_from_foreign` (same funnel as every foreign `Err(e)`): the raw
+  `Debug` — which carries the panic payload — is logged server-side under a
+  fresh correlation id, and Ipê observes the generic
+  `external operation failed (ref <id>)` message. Strictly better on operator
+  traceability with the same secret-redaction posture. The sync-fallible arm
+  likewise funnels `Err(e)` through `ipe_error_from_foreign` where the
+  reference still embeds `format!("{:?}", e)` verbatim (SDK errors echo URLs /
+  bearer tokens / API keys in their `Debug` output — a secret channel).
+- **Abort-on-drop cancel guard.** The reference's inner spawned task detaches
+  when the outer wrapper future is dropped (`Task.parallel` early-cancel),
+  leaking side effects after failure. ipê arms an `AbortOnDrop` guard
+  (runtime `task.rs`) around the spawn and defuses it after a normal join, so
+  a cancelled foreign call is aborted, preserving the no-side-effect-after-
+  failure contract. Regression:
+  `src/runtime/rust/tests/ffi_async_bridge.rs`.
+- **Process-global tokio runtime.** Both runtimes historically built a fresh
+  `Runtime::new()` per `block_on`, so a reactor-registered handle (FFI
+  client, listener) constructed in one entry died with that entry's reactor.
+  ipê drives every `block_on` on one `OnceLock`-held global runtime
+  (`task.rs::global_runtime`); `block_on_current_thread` (the webview
+  main-thread driver) is unchanged. Behavior-compatible — a shared reactor is
+  strictly more available than a fresh one. Regression:
+  `ffi_async_bridge.rs::reactor_handle_survives_across_two_block_on_entries`.
+- **Sanctioned:** yes, tagged `divergence`. Reference:
+  `src/compiler/ffi/src/bindings.rs` (async arms),
+  `src/compiler/ffi/src/instance.rs` (generic async arm),
+  `src/runtime/rust/src/task.rs` (`GLOBAL_RUNTIME`, `AbortOnDrop`).
+
+---
+
 <a id="planned-future-divergences"></a>
 ## 6. Planned future divergences (filed, not yet implemented)
 
