@@ -152,6 +152,17 @@
 | skyshop transpose | pending |
 | closure | pending |
 
+### 5a. Remaining-spec milestones (`async-ffi-bridge-remaining-spec.md`)
+
+| Milestone | Status |
+|---|---|
+| maybe-coercion | done — `render_generic_wrapper` declares `IpeMaybe<T>` at Maybe-slot params (nested containers preserved) + shadows to host `Option<T>` via `ipe_maybe_to_option` before the call; `Option` OK lifts to `IpeMaybe` in `ok_lift`. `ipe_ffi` emission test + full suite green |
+| canon-arity-gate | done — new IPE-N0031 + explain page; canon rejects a mis-arity built-in container (`List`/`Maybe`/`Set` arity 1, `Dict`/`Result` arity 2) at the empty-home resolution point, ahead of the lowerer ICE. `ipe_canon` + `ipe_diagnostics` + stdlib/negative/parametric goldens green |
+| private-path-admission | done — `collect_external_trait_paths` routes the recorded external-trait def-path through the `external_type_public_path` proven-public / fail-closed gate; a non-std path threading a private module is dropped (→ `TraitUnreachable`), std + root-public kept. Inspector suite green (228) |
+| stripe-send | mechanism landed, live-bind verification pending — DIAGNOSIS: Branch D4 (unnameable Output). `send` binds only for `CustomerRetrieveCustomer` (Output `CustomerRetrieveCustomerReturned` is core-local); the Create*/checkout builders' `send` Output is `stripe_shared::Customer` / `stripe_checkout`-class — types in `async-stripe-shared` / `async-stripe-client-core`, transitive deps NOT inspected, so unnameable from any manifest member → silent drop (coverage ledger "Dropped bindings: none"). FIX F2 = manifest-run proven-public-path set `GLOBAL_XC_PUBLIC_PATHS` (union of every member crate's own reachable walk), consulted in BOTH the string renderer (`rustdoc_type_to_rust_str`) AND the call-AST builder (`type_to_typeref` + `resolved_path_is_bindable`) by UNIQUE last-segment match (ambiguous → fail-closed). ENABLING PRECONDITION: `async-stripe-shared` + `async-stripe-client-core` added as manifest members (real crates.io crates, not shims) so their public paths enter the set. 231 inspector unit tests green (3 new F2 tests). NEXT: rebuild the inspector release binary, re-run the 6-crate manifest install, assert `send_from_customerCreateCustomer` + `send_from_*CreateCheckoutSession` + retrieve now bind in `<slug>.kernel.json`; then the SEAL probe (`~/.cache/ipe/ffi-probe-stripe/src/Main.ipe`: clientBuilder → createCustomer → createCheckoutSession → retrieve, `Task.andThen`-chained) → `ipe build` 0 → emitted `cargo build` 0 → run folds to structured Err. |
+| firebase-bind | pending — `ipe add rs-firebase-admin-sdk@4.3`; expected wall = the `HashMap<String, serde_json::Value>` claims return (extend the JSON-text lift to concrete serde-container returns); emulator security gate relocates into Ipê `Lib/Auth.ipe` (§3.3). |
+| skyshop-transpose (ACCEPTANCE) | pending — new `examples/13-skyshop/` from `../sky/examples/rust/skyshop-rs/src/`; manifest per §4.1 PLUS `async-stripe-shared` + `async-stripe-client-core` members (stripe-send precondition); Lib boundary keeps sync `Result Error` + `|> Task.run` (R1); handle strategy probe (R2); firestore emulator token-source (§4.5); behavior e2e vs emulators. |
+
 ## 6. Session notes (exact next steps if resuming)
 
 - Runtime full-features suite 1047/1047 green after H1/Δ1; `ipe_ffi` 141,
