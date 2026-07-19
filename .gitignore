@@ -42,6 +42,8 @@ docs/architecture/progressive-development-*.log
 docs/architecture/progdev-status.txt
 .claude/settings.local.json
 docs/architecture/progdev-cost-ledger.tsv
+# Local-only history-rewrite proposal — never staged; deleted when the rewrite lands
+docs/architecture/history-rewrite-proposal-DRAFT.md
 /.ipe-index/
 
 # ipe-index standalone crate build artifacts
