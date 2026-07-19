@@ -237,6 +237,22 @@ pub fn is_reserved_builtin_type_name(name: &str) -> bool {
         || KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES.contains(&name)
 }
 
+/// The fixed type-argument arity of a built-in CONTAINER constructor, or
+/// `None` for any other name. Drives the IPE-N0031 canon gate: these are the
+/// closed containers whose lowerer arm (`ir_type_from_canon`) matches on an
+/// exact `args.len()`, so a mis-arity application falls through to the
+/// empty-home ICE catch-all. The async carriers (`Task`/`Cmd`/`Sub`) are
+/// deliberately absent — they carry their own carrier-aware IPE-T0016 arity
+/// gate at the type stage (`ipe_types::constrain`), and duplicating it here
+/// would double-report.
+fn builtin_container_arity(name: Option<&str>) -> Option<usize> {
+    match name? {
+        "List" | "Maybe" | "Set" => Some(1),
+        "Dict" | "Result" => Some(2),
+        _ => None,
+    }
+}
+
 /// The subset of [`RESERVED_BUILTIN_TYPES`] that a trusted
 /// [`ModuleOrigin::EmbeddedStdlib`] module is permitted to DEFINE, while a
 /// [`ModuleOrigin::User`] module stays rejected (IPE-N0026).
@@ -3356,6 +3372,27 @@ fn canonicalise_type(
                     .cloned()
                     .unwrap_or_else(|| ctx.type_home_map.get(&name).cloned().unwrap_or_default())
             };
+            // A built-in container constructor (empty-home sentinel) has a
+            // fixed arity: a mis-application (`Maybe List String` parsed as
+            // `Maybe` over two args, a bare `List`, `Dict String`) would
+            // otherwise reach the lowerer's `ir_type_from_canon` empty-home
+            // catch-all and ICE (IPE-I0001). Fail closed here with a clean
+            // IPE-N0031, the sibling of `AliasArity` for the closed table.
+            // Gating on the empty home keeps a user `type List a b` (which
+            // wins by its real home) unaffected.
+            if home.is_empty()
+                && let Some(expected) = builtin_container_arity(ctx.interner.resolve(name))
+                && can_args.len() != expected
+            {
+                return Err(Diagnostic::Name {
+                    span: ctx.ann_span,
+                    msg: NameError::BuiltinTypeArity {
+                        name: name_str(ctx.interner, name)?,
+                        expected,
+                        found: can_args.len(),
+                    },
+                });
+            }
             Ok(canon::Type::Con {
                 home,
                 name,
