@@ -1,5 +1,4 @@
 Status: Accepted
-Date: 2026-07-19
 
 # 0035. Per-module typecheck behind closed typed interfaces
 

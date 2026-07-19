@@ -1,16 +1,12 @@
 Status: Accepted
-Date: 2026-07-13
 
 # 0021. TEA is a state engine; init signatures are prescriptive per app shape
 
 ## Context
 
-The upstream Sky reference leaves `init`'s argument a free type variable (a
-Go-runtime accommodation for its untyped `map[string]any` request). Ipê carries
-a *typed* `LiveReq`, so that rationale doesn't transfer, and the divergence
-needed a principled justification. The trigger was #180 (`26-ui-showcase`'s
-`init : {}` vs Ipê's `Live.app` scheme requiring `init : LiveReq`). Two deeper
-questions followed: what is TEA, and does `init` belong in every app shape?
+Ipê carries a *typed* `LiveReq` as `init`'s argument, and the design needed a
+principled justification. Two deeper questions followed: what is TEA, and does
+`init` belong in every app shape?
 
 ## Decision
 
@@ -30,9 +26,9 @@ ambient input (env, args, cwd) is reached via `System.*` from anywhere.
 
 Rejected alternatives:
 
-- **The reference's permissive free-tvar** — Ipê's typed `LiveReq` makes the Go
-  rationale inapplicable; being prescriptive is both more Elm-faithful and
-  make-invalid-states-unrepresentable.
+- **A free type variable for `init`'s argument** — Ipê's typed `LiveReq` makes a
+  permissive free-tvar inapplicable; being prescriptive is both more Elm-faithful
+  and make-invalid-states-unrepresentable.
 - **The ocap model** (threading an `Env` capability through `init` exclusively,
   no ambient authority) — filed as post-parity exploration, not adopted; it is a
   language-wide redesign that would kill the ambient `System.*` API.
@@ -44,9 +40,7 @@ flags-as-init-arg is redundant.
 ## Consequences
 
 - **Invariant that must keep holding:** every reactive cfg's `init` signature is
-  fixed by app shape, not inferred. Examples ported from upstream carry
-  Ipê-specific patches (`init : {} ->` becomes `init : LiveReq ->`), tracked in a
-  reviewable layer so upstream examples stay source-faithful.
+  fixed by app shape, not inferred.
 - The architecture keeps the door open for future headless reactive shapes (TEA
   minus `view`) as a clean subtraction — `view` stays an optional field of
   view-bearing shapes rather than core to the engine.

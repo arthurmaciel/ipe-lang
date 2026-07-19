@@ -1,5 +1,4 @@
 Status: Accepted
-Date: 2026-07-02
 
 # 0006. Secret is a sealed newtype that cannot leak or be `==`-compared
 
@@ -8,16 +7,17 @@ Date: 2026-07-02
 The language needs a `Secret` type for auth tokens, API keys, and passwords —
 values that must never leak through logs/`Debug`/`Display` and must never be
 compared in variable time. It is implemented as an opaque built-in primitive
-(`runtime/src/sky_runtime/secret.rs`, `IrType::Secret`, the four `Secret.*`
-kernels, and the IPE-T0014 gate). The code is the source of truth for the *how*;
-this ADR preserves the soundness/security *why*.
+(`IrType::Secret`, the four `Secret.*` kernels, and the IPE-T0014 gate). The
+code is the source of truth for the *how*; this ADR preserves the
+soundness/security *why*.
 
 ## Decision
 
 **`Secret` is modelled exactly like the existing opaque built-in primitives
-`Bytes` and `Db`** — a distinct `IrType` leaf, a runtime type re-exported through
-`pub use sky_runtime::*`, kernels in the closed `sky_kernels` registry, typed in
-`sky_types::constrain`, dispatched in `sky_lower` — with one crucial difference:
+`Bytes` and `Db`** — a distinct `IrType` leaf, a runtime type re-exported from
+the runtime crate, kernels in the closed kernel registry, typed in
+`ipe_types::constrain`, dispatched in `ipe_lower` — with one crucial
+difference:
 
 **Its runtime representation is a sealed newtype `struct Secret(String)`, not a
 transparent alias**, *because a transparent alias would inherit `String`'s

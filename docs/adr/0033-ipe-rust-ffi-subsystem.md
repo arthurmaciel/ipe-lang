@@ -1,5 +1,4 @@
 Status: Accepted
-Date: 2026-07-04
 
 # 0033. Ipê → Rust FFI subsystem — architecture
 
@@ -9,8 +8,8 @@ Ipê programs need to call arbitrary Rust crates without writing hand-authored s
 The design target is a fully automatic binding path: a foreign `async fn` binds as
 `Task Error a`, common async SDK crates (firestore, firebase, stripe) bind directly
 and shim-free, and unused FFI symbols are dead-code-eliminated. The acceptance metric
-is the `13-skyshop` example running with zero manual shims across firestore, firebase,
-and stripe.
+is the FFI e-commerce example running with zero manual shims across firestore,
+firebase, and stripe.
 
 Two fundamental rules drive every type boundary:
 1. **Parse, don't validate.** Untrusted rustdoc JSON crosses into Ipê at exactly two

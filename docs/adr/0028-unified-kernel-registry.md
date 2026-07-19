@@ -1,5 +1,4 @@
 Status: Accepted
-Date: 2026-07-02
 
 # 0028. Unified kernel registry — closed `StdlibKernel` enum + `KernelId`
 

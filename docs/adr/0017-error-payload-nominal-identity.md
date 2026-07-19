@@ -1,5 +1,4 @@
 Status: Accepted
-Date: 2026-07-11
 
 # 0017. Error-constructor payloads have nominal type identity, not anonymous records
 
@@ -8,7 +7,7 @@ Date: 2026-07-11
 The `FfiPanic`/`TypeMismatch` error constructors and the `Error` payload
 argument were registered in the type-checker as *anonymous structural records*
 (`{ message : String, stack : List String }`), but the Rust runtime defines them
-as *nominal* structs (`SkyPanicInfo`, `SkyTypeInfo`, `SkyErrorInfo`). A
+as *nominal* structs (`IpePanicInfo`, `IpeTypeInfo`, `IpeErrorInfo`). A
 structural record literal type-checked, but lowering synthesized a different
 struct than the constructor expected, so the emitted Rust failed to compile —
 an exit-0-then-cargo-fail seal breach.
@@ -25,7 +24,7 @@ Give the three payloads nominal `Ty::Con` identities (`PanicInfo`, `TypeInfo`,
 Rejected alternative: **backend coercion** (`emit_ctor` converts record-typed
 fields to the nominal runtime struct). It fixes construction but not the escape
 direction — a pattern-bound nominal payload flowing into any position typed by
-the structural shape (e.g. an unannotated helper over `p : SkyPanicInfo`)
+the structural shape (e.g. an unannotated helper over `p : IpePanicInfo`)
 re-creates the exit-0-then-cargo-fail without type-directed record-literal
 emission in the lowerer, a much larger change through a concurrent lane.
 

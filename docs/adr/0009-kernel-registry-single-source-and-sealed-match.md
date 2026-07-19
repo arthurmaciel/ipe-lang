@@ -1,5 +1,4 @@
 Status: Accepted
-Date: 2026-07-09
 
 # 0009. Kernel-registry integrity: single-source arity + sealed Match combinators
 

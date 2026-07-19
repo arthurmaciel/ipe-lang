@@ -1,5 +1,4 @@
 Status: Accepted
-Date: 2026-07-01
 
 # 0030. Repository layout — `src/compiler/` crate tree
 
@@ -23,7 +22,7 @@ The acyclic pipeline is now visible as a directory listing:
 `canon → db → diagnostics → intern → ir → kernels → lower → parse → syntax → types → watch → backend`
 
 The runtime lives at `src/runtime/rust/` — separate from the compiler, consumed by the
-backend emitter which copies it into each emitted project as `src/sky_runtime/`.
+backend emitter which copies it into each emitted project as `src/ipe_runtime/`.
 
 `tools/` stays at the repo root for standalone binaries (`ipe-index`, `oracle`,
 `parity-matrix`, `refresh-oracle`, `ipe-ffi-inspector`).

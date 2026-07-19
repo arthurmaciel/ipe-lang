@@ -1,5 +1,4 @@
 Status: Accepted
-Date: 2026-07-11
 
 # 0025. The `any`-return UI-msg injection fires only for named UI constructors
 
@@ -39,6 +38,6 @@ prior art), never a return-only generic.
   return into a return-position-only generic (that shape is the seal breach). A
   non-UI `… -> any` body carrying a free type var fails closed with `IPE-L0102`,
   actionable ("annotate the element type or drop the `any`").
-- **Sanctioned divergence:** the Go backend accepts `w : Int -> any; w n = []`
-  (its `any` erases to `[]any`); post-fix Ipê rejects it — loud-not-silently-
-  wrong, recorded in `docs/divergences-from-sky.md`.
+- **Sanctioned divergence:** a backend that erases `any` to a wildcard accepts
+  `w : Int -> any; w n = []`; Ipê rejects it — loud-not-silently-wrong, recorded
+  in `docs/divergences-from-ipe.md`.

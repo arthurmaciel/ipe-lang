@@ -1,22 +1,18 @@
 Status: Accepted
-Date: 2026-07-10
 
 # 0004. Live / HTTP web-security invariants (CSRF, trusted-proxy, CSWSH, floors)
 
 ## Context
 
-A batch of web-security gaps across the Ipe.Live and Ipe.Http.Server runtime
-surfaces (backlog Security tier #63, AUD-09, #33) needed closing. The fixes are
-implemented (`runtime/src/sky_runtime/live/csrf.rs`, `.../server.rs`
-`MiddlewareWithCsrf` kernel + `golden_m6_middleware_csrf.rs`,
-`.../live/console.rs`, `.../live/mod.rs`). The code is the source of truth for
-the *how*; this ADR preserves the security *why* and the invariants that must
-keep holding, since a stale procedural spec would mislead but the decisions
-below are durable.
+Several web-security gaps across the Ipe.Live and Ipe.Http.Server runtime
+surfaces needed closing. The code is the source of truth for the *how*; this
+ADR preserves the security *why* and the invariants that must keep holding,
+since a stale procedural spec would mislead but the decisions below are
+durable.
 
 Note: Ipe.Live's own CSRF (`live/csrf.rs`) was already complete and wired
 end-to-end (`__Host-` prefixed double-submit cookie, constant-time compare,
-axum middleware layer); #63's Ipe.Live half was never open. What these decisions
+axum middleware layer); Ipe.Live's own CSRF half was already complete and wired end-to-end. What these decisions
 cover is the surrounding surface.
 
 ## Decision
@@ -63,7 +59,7 @@ implications) becomes request-scoped.
 
 ### 3. Same-origin floor for the otherwise-unauthenticated dev ingest
 
-`/_sky/observability/ingest` is CSRF-exempt and open in dev. When it is
+`/_ipe/observability/ingest` is CSRF-exempt and open in dev. When it is
 otherwise unauthenticated (token unset, dev mode), it gets an `Origin`-vs-`Host`
 same-origin floor — this is the ONLY defense available in the no-token case
 (production already fails closed; token-configured mode has real auth).
@@ -81,11 +77,11 @@ the configured allowlist.
 ### 5. Environment byte-count floors must reject `0`
 
 `live_max_body_bytes()` read `IPE_LIVE_MAX_BODY_BYTES` without a `> 0` filter, so
-`IPE_LIVE_MAX_BODY_BYTES=0` made every `/_sky/event` POST 413. It must
+`IPE_LIVE_MAX_BODY_BYTES=0` made every `/_ipe/event` POST 413. It must
 `.filter(|&n| n > 0)` before falling back to the default, matching
-`server.rs::max_body()`. Both read the same env var (Go parity — the var is
-shared between the Ipe.Live event endpoint and the Ipe.Http.Server default), so
-the floor behaviour must be identical on both sides.
+`server.rs::max_body()`. The env var is shared between the Ipe.Live event
+endpoint and the Ipe.Http.Server default, so the floor behaviour must be
+identical on both sides.
 
 ## Consequences
 

@@ -1,5 +1,4 @@
 Status: Accepted
-Date: 2026-07-09
 
 # 0014. Kernel robustness: blocking-work offload, single-pass read-limit, per-frame CLI separator
 
