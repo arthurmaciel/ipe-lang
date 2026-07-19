@@ -295,10 +295,10 @@ fn unknown_request_gets_method_not_found_not_a_hang() {
         .sender
         .send(Message::Request(Request::new(
             RequestId::from(7),
-            "textDocument/rename".to_owned(),
+            "textDocument/unknownIpeMethod".to_owned(),
             serde_json::json!({}),
         )))
-        .expect("send rename");
+        .expect("send unknown method");
     let deadline = Duration::from_secs(30);
     let err = loop {
         let msg = client
@@ -308,7 +308,7 @@ fn unknown_request_gets_method_not_found_not_a_hang() {
         if let Message::Response(response) = msg
             && response.id == RequestId::from(7)
         {
-            break response.error.expect("unadvertised method must error");
+            break response.error.expect("unimplemented method must error");
         }
     };
     assert_eq!(err.code, lsp_server::ErrorCode::MethodNotFound as i32);

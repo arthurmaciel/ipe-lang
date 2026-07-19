@@ -23,10 +23,10 @@ use std::fmt;
 
 use lsp_server::Connection;
 use lsp_types::{
-    DocumentLinkOptions, FoldingRangeProviderCapability, HoverProviderCapability, InitializeParams,
-    InitializeResult, OneOf, PositionEncodingKind, SaveOptions, ServerCapabilities, ServerInfo,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
-    TextDocumentSyncSaveOptions,
+    CompletionOptions, DocumentLinkOptions, FoldingRangeProviderCapability,
+    HoverProviderCapability, InitializeParams, InitializeResult, OneOf, PositionEncodingKind,
+    RenameOptions, SaveOptions, ServerCapabilities, ServerInfo, TextDocumentSyncCapability,
+    TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions,
 };
 
 use ipe_lsp_features::PositionEncoding;
@@ -130,6 +130,18 @@ fn server_capabilities(encoding: PositionEncoding) -> ServerCapabilities {
             work_done_progress_options: lsp_types::WorkDoneProgressOptions::default(),
         }),
         folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+        completion_provider: Some(CompletionOptions {
+            trigger_characters: Some(vec![".".to_owned(), " ".to_owned()]),
+            resolve_provider: Some(false),
+            work_done_progress_options: lsp_types::WorkDoneProgressOptions::default(),
+            ..CompletionOptions::default()
+        }),
+        definition_provider: Some(OneOf::Left(true)),
+        references_provider: Some(OneOf::Left(true)),
+        rename_provider: Some(OneOf::Right(RenameOptions {
+            prepare_provider: Some(true),
+            work_done_progress_options: lsp_types::WorkDoneProgressOptions::default(),
+        })),
         text_document_sync: Some(TextDocumentSyncCapability::Options(
             TextDocumentSyncOptions {
                 open_close: Some(true),
