@@ -176,7 +176,7 @@ fn hover_result(state: &State, params: &serde_json::Value) -> serde_json::Value 
         return serde_json::Value::Null;
     };
     let position = params.text_document_position_params;
-    let Some((module, _file, text)) = state.locate(&position.text_document.uri) else {
+    let Some((_module, file, text)) = state.locate(&position.text_document.uri) else {
         return serde_json::Value::Null;
     };
     let Some(root) = state.root else {
@@ -187,7 +187,7 @@ fn hover_result(state: &State, params: &serde_json::Value) -> serde_json::Value 
     };
     let byte = offset::position_to_offset(&text, position.position, state.encoding);
     let byte = u32::try_from(byte).unwrap_or(u32::MAX);
-    ipe_lsp_features::hover::hover(&state.db, root, entry_file, &module, byte).map_or(
+    ipe_lsp_features::hover::hover(&state.db, root, entry_file, file, byte).map_or(
         serde_json::Value::Null,
         |info| {
             let hover = lsp_types::Hover {
