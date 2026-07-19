@@ -1679,7 +1679,17 @@ fn build_dep_entry(
     // `*` requirement against a prerelease-only crate (every async-stripe rc.6
     // sub-crate). An exact `= "=1.0.0-rc.6"` opts in to the prerelease explicitly.
     // None → the historical `*` (latest stable).
-    let ver_req = version.map(|v| format!("={}", toml_escape(v)));
+    // A requirement that already carries a comparison operator (an explicit
+    // `=1.0.0-rc.6`, a `>=`, a `~`) passes through verbatim — prepending a
+    // second `=` would be a cargo parse error.
+    let ver_req = version.map(|v| {
+        let escaped = toml_escape(v);
+        if escaped.starts_with(['=', '>', '<', '~', '^', '*']) {
+            escaped
+        } else {
+            format!("={escaped}")
+        }
+    });
     // Common fields: features list (rendered as Cargo TOML array).
     let feats_field = if features.is_empty() {
         None

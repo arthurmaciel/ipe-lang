@@ -118,7 +118,15 @@ fn path_tokens(raw: &str) -> Vec<(String, String)> {
                 && !base.is_empty()
                 && base.chars().next().is_some_and(char::is_uppercase)
             {
-                out.push((base.to_owned(), normalized));
+                out.push((base.to_owned(), normalized.clone()));
+                // A SUBMODULE type surfaces under the inspector's
+                // path-derived Ipê head (`checkout_session::ProductData` →
+                // `Checkout_sessionProductData`); the map must answer for
+                // that key too or every submodule type is "unresolvable".
+                let composite = ipe_head_from_rust_path(&normalized);
+                if !composite.is_empty() && composite != *base {
+                    out.push((composite, normalized));
+                }
             }
         }
         token.clear();
@@ -132,6 +140,42 @@ fn path_tokens(raw: &str) -> Vec<(String, String)> {
     }
     flush(&mut token, &mut out);
     out
+}
+
+/// The inspector's path-derived Ipê head for a qualified Rust type path —
+/// submodule segments CamelCase-join ahead of the type name so same-named
+/// types in different submodules stay distinct (`::regex::bytes::Regex` →
+/// `BytesRegex`; `::stripe_checkout::checkout_session::ProductData` →
+/// `Checkout_sessionProductData`); a crate-root type keeps its bare name
+/// unless that name collides with an Ipê builtin carrier, in which case the
+/// crate segment joins too (`::bytes::Bytes` → `BytesBytes`). MUST mirror the
+/// inspector's `ipe_name_from_path` — a drift makes submodule types
+/// "unresolvable" and silently over-drops their whole surface.
+fn ipe_head_from_rust_path(path: &str) -> String {
+    fn camel(s: &str) -> String {
+        let mut c = s.chars();
+        c.next().map_or_else(String::new, |f| {
+            f.to_uppercase().collect::<String>() + c.as_str()
+        })
+    }
+    let segs: Vec<&str> = path.split("::").filter(|s| !s.is_empty()).collect();
+    match segs.as_slice() {
+        [] => String::new(),
+        [one] => (*one).to_owned(),
+        [crate_seg, mods @ .., ty] => {
+            let builtin_collision =
+                mods.is_empty() && matches!(*ty, "Bytes" | "String" | "Int" | "Float" | "Bool");
+            let mut out = String::new();
+            if builtin_collision {
+                out.push_str(&camel(crate_seg));
+            }
+            for m in mods {
+                out.push_str(&camel(m));
+            }
+            out.push_str(ty);
+            out
+        }
+    }
 }
 
 /// Collect every foreign NOMINAL base name reachable from one Rust type
