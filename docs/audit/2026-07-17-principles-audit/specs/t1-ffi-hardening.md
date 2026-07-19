@@ -114,7 +114,7 @@ the proven-namespace tier the crate ships.
 Three low-severity delivery/consent defects that widen the RC-A/RC-B blast
 radius:
 - `find_cache_root` (`ffi.rs:26-40`) walks UP to the filesystem root, returning
-  the FIRST `.ipe/cache/ffi/rust` hit — no stop at `sky.toml`, no ownership
+  the FIRST `.ipe/cache/ffi/rust` hit — no stop at `ipe.toml`, no ownership
   check. A planted ancestor cache is the concrete warm-cache delivery vector
   for RC-A(a). (CLI-002)
 - `run_install` (`ffi.rs:362`) treats bare `ipe install` as `--yes`, skipping
@@ -331,12 +331,12 @@ AND blocks the proof reads — that refuses, which is safe. If deleted:
 unshare-only hosts have no sandboxed path and must use the explicit override or
 install bwrap — a documented, honest limitation.
 
-### F5 — cache root stops at sky.toml + ownership check (closes CLI-002)
+### F5 — cache root stops at ipe.toml + ownership check (closes CLI-002)
 
 **Design.** In `find_cache_root` (`ffi.rs:26-40`), bound the upward walk and
 verify ownership:
 - Stop the walk at the project root — the nearest ancestor containing
-  `sky.toml` (the manifest). Do not walk above it. If no `sky.toml` is found,
+  `ipe.toml` (the manifest). Do not walk above it. If no `ipe.toml` is found,
   there is no project and no cache (return `None`), never a filesystem-root hit.
 - Before trusting a found `.ipe/cache/ffi/rust`, verify it is owned by the
   current uid (and not group/other-writable) via `std::fs::metadata` +
@@ -437,7 +437,7 @@ Steps are grouped by fix; F1 and F2 are the push-blockers and come first.
     remove the dead items + rewrite `lib.rs:11` doc; the existing
     `isolation_proof_fails_outside_a_jail` test is removed with it.
 11. **F5 — bounded cache root + ownership** in `ffi.rs::find_cache_root`: stop
-    at the `sky.toml` ancestor; uid/mode ownership check; typed refusal. Tests:
+    at the `ipe.toml` ancestor; uid/mode ownership check; typed refusal. Tests:
     a cache above the manifest root is NOT found; a non-owned cache dir is
     refused.
 12. **F6 — scratch dir + install prompt**: scratch under `~/.cache/ipe/` with a
@@ -480,6 +480,6 @@ Steps are grouped by fix; F1 and F2 are the push-blockers and come first.
 {"id": "TBD", "priority": 1, "phase": "principles-audit-fix", "task": "F2: two-phase no-egress-while-executing sandbox for ipe add (FetchOnly fetch phase then NetworkPolicy::Denied introspect phase over a scoped registry_cache) and stop mounting ~/.cargo secrets into the jail (bind ~/.cargo/bin only, never credentials.toml)", "notes": "Closes co-ffi-004 (medium) + CLI-001 (high, crates.io token exfil). Shared root RC-B. Steps 7-8. Residual: fetch phase still runs trusted cargo with egress; a build-script that fetches at introspect time now fails closed under Denied (correct, document as limitation).", "spec": "docs/audit/2026-07-17-principles-audit/specs/t1-ffi-hardening.md", "blocked_by": [], "status": "pending"}
 {"id": "TBD", "priority": 2, "phase": "principles-audit-fix", "task": "F3: hard-fail (typed IPE-F4410 refusal) when timeout/prlimit caps are unavailable — make bwrap_argv cap params non-optional so an uncapped jail argv is unrepresentable — plus concurrent stdout/stderr drain to remove the sequential-pipe deadlock", "notes": "Closes co-ffi-002 (medium). Root cause RC-C. Step 9. Residual: hosts lacking coreutils/util-linux now refuse ipe add (deliberate P1>P5 cost); IPE_FFI_ALLOW_UNSANDBOXED=1 remains the single warned override.", "spec": "docs/audit/2026-07-17-principles-audit/specs/t1-ffi-hardening.md", "blocked_by": [], "status": "pending"}
 {"id": "TBD", "priority": 2, "phase": "principles-audit-fix", "task": "F4: wire the proven unshare fallback tier (spawn under unshare, child runs prove_isolation before any untrusted code, refuse on IsolationDefect) — or delete the dead UnshareCandidate/prove_isolation surface and rewrite the module doc to the honest bwrap-or-refuse posture", "notes": "Closes co-ffi-003 (medium). Root cause RC-D. Step 10. Prefer wiring; deletion is the honest fallback if wiring is out of cycle. Residual documented per branch in the spec.", "spec": "docs/audit/2026-07-17-principles-audit/specs/t1-ffi-hardening.md", "blocked_by": [], "status": "pending"}
-{"id": "TBD", "priority": 3, "phase": "principles-audit-fix", "task": "F5: bound find_cache_root at the sky.toml project root and add a uid/mode ownership check so a planted ancestor FFI cache cannot be discovered or loaded", "notes": "Closes CLI-002 (medium) — the concrete warm-cache delivery vector for co-ffi-001(a). Root cause RC-E. Step 11. Defense-in-depth behind F1e; residual is a legitimately shared-ownership checkout now refusing (correct default).", "spec": "docs/audit/2026-07-17-principles-audit/specs/t1-ffi-hardening.md", "blocked_by": [], "status": "pending"}
+{"id": "TBD", "priority": 3, "phase": "principles-audit-fix", "task": "F5: bound find_cache_root at the ipe.toml project root and add a uid/mode ownership check so a planted ancestor FFI cache cannot be discovered or loaded", "notes": "Closes CLI-002 (medium) — the concrete warm-cache delivery vector for co-ffi-001(a). Root cause RC-E. Step 11. Defense-in-depth behind F1e; residual is a legitimately shared-ownership checkout now refusing (correct default).", "spec": "docs/audit/2026-07-17-principles-audit/specs/t1-ffi-hardening.md", "blocked_by": [], "status": "pending"}
 {"id": "TBD", "priority": 3, "phase": "principles-audit-fix", "task": "F6: move the FFI jail scratch dir under ~/.cache/ipe/ with a randomized fail-if-exists name (write-boundary + symlink-race fix) and make bare `ipe install` prompt for trust instead of defaulting to --yes", "notes": "Closes CLI-008 + CLI-007 (low). Root cause RC-E. Step 12. Localised to ffi.rs; amplifies rather than gates the main surface.", "spec": "docs/audit/2026-07-17-principles-audit/specs/t1-ffi-hardening.md", "blocked_by": [], "status": "pending"}
 ```

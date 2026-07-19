@@ -1,8 +1,8 @@
-//! Class 7 §3 regression: `sky.toml`'s `[database] driver = "postgres"` must
+//! Class 7 §3 regression: `ipe.toml`'s `[database] driver = "postgres"` must
 //! actually change what gets emitted — before this fix it was a silent no-op
 //! (`crates/ipe/src/project.rs`'s manifest parser didn't even recognise a
 //! `[database]` section, and `ipe_backend_rust::project::emit_program` always
-//! wrote the sqlite `config.rs` template regardless of what `sky.toml` said).
+//! wrote the sqlite `config.rs` template regardless of what `ipe.toml` said).
 //!
 //! No live Postgres needed: this only proves the STRUCTURAL wiring —
 //! manifest → `RustBackend::with_db_driver` → `EmitCtx::db_driver` →
@@ -38,7 +38,7 @@ main =
         (Db.open \"sqlite\" \"sqlite::memory:\")
 ";
 
-/// Write a minimal project (`sky.toml` + `src/Main.ipe`) under a fresh temp
+/// Write a minimal project (`ipe.toml` + `src/Main.ipe`) under a fresh temp
 /// dir, with the given `[database]` section spliced in verbatim (empty string
 /// → no section at all, i.e. the default driver).
 #[allow(clippy::expect_used)]
@@ -49,26 +49,26 @@ fn write_project(test_name: &str, database_section: &str) -> PathBuf {
     fs::create_dir_all(&src).expect("create src/");
     fs::write(src.join("Main.ipe"), MAIN_SKY).expect("write Main.ipe");
     fs::write(
-        dir.join("sky.toml"),
+        dir.join("ipe.toml"),
         format!("[project]\nname = \"pgtest\"\n{database_section}"),
     )
-    .expect("write sky.toml");
+    .expect("write ipe.toml");
     dir
 }
 
-/// The core structural fix: `driver = "postgres"` in `sky.toml` must cause
+/// The core structural fix: `driver = "postgres"` in `ipe.toml` must cause
 /// the emitted `src/ipe_runtime/config.rs` to declare `sqlx::postgres::PgPool`
 /// / `PgRow` and `DB_USES_RETURNING_ID: bool = true` — NOT the sqlite
 /// template. Before this fix, `RUNTIME_CONFIG_RS_DB` was a single
 /// unconditional `include_str!`, so this assertion would have failed (the
-/// emitted config.rs would be the sqlite template regardless of `sky.toml`).
+/// emitted config.rs would be the sqlite template regardless of `ipe.toml`).
 #[test]
 fn postgres_driver_selects_postgres_config_template() {
     let dir = write_project("postgres_select", "[database]\ndriver = \"postgres\"\n");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("pg_reachability_postgres_select");
     let _ = fs::remove_dir_all(&out);
 
-    let built = ipe::build_project(&dir.join("sky.toml"), &out, &runtime());
+    let built = ipe::build_project(&dir.join("ipe.toml"), &out, &runtime());
     assert!(
         built.is_ok(),
         "build_project must succeed for a postgres-driver db-using project: {:?}",
@@ -131,7 +131,7 @@ fn postgres_driver_project_cargo_builds() {
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("pg_reachability_postgres_cargo_build");
     let _ = fs::remove_dir_all(&out);
 
-    let built = ipe::build_project(&dir.join("sky.toml"), &out, &runtime());
+    let built = ipe::build_project(&dir.join("ipe.toml"), &out, &runtime());
     assert!(
         built.is_ok(),
         "build_project must succeed for a postgres-driver db-using project: {:?}",
@@ -170,7 +170,7 @@ fn no_database_section_still_selects_sqlite_config_template() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("pg_reachability_sqlite_default");
     let _ = fs::remove_dir_all(&out);
 
-    let built = ipe::build_project(&dir.join("sky.toml"), &out, &runtime());
+    let built = ipe::build_project(&dir.join("ipe.toml"), &out, &runtime());
     assert!(
         built.is_ok(),
         "build_project must succeed for the default (no [database] section) project: {:?}",

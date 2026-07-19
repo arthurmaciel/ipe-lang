@@ -130,13 +130,13 @@ is_web_example() {
   _shape_match "$1/src" 'Ipe\.Live|Live\.app|Server\.listen|Ipe\.Http\.Server'
 }
 
-# ── is_wasm_example <dir>: has a [wasm] section in sky.toml ─────────────────
+# ── is_wasm_example <dir>: has a [wasm] section in ipe.toml ─────────────────
 # The wasm shape is the only one detected from the project manifest rather than
 # from source imports, because `Live.app` also appears in wasm examples (the
-# same function emits `wasm_app` under --target wasm). The sky.toml `[wasm]`
+# same function emits `wasm_app` under --target wasm). The ipe.toml `[wasm]`
 # section is the authoritative build-time signal.
 is_wasm_example() {
-  local toml="$1/sky.toml"
+  local toml="$1/ipe.toml"
   [ -f "$toml" ] && rg -q '^\[wasm\]' "$toml" 2>/dev/null
 }
 
@@ -152,7 +152,7 @@ _shape_match() { # $1=src dir  $2=regex
 }
 example_shape() {
   local d="$1" s="$1/src"
-  # wasm: detected from sky.toml [wasm] section, not from source imports,
+  # wasm: detected from ipe.toml [wasm] section, not from source imports,
   # because Live.app also appears in wasm sources (it emits wasm_app under
   # --target wasm). Check this BEFORE the live/server shape match.
   if   is_wasm_example "$d";                                then echo wasm

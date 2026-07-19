@@ -93,7 +93,7 @@ jobs:
       - name: ipe build --static (example, ${{ matrix.allocator }})
         run: |
           cd examples/01-hello-world
-          "$CARGO_TARGET_DIR/release/ipe" build sky.toml --out sky-out/rust \
+          "$CARGO_TARGET_DIR/release/ipe" build ipe.toml --out sky-out/rust \
             --static --allocator ${{ matrix.allocator }}
           cd sky-out/rust
           cargo build --release --target "$STATIC_TRIPLE"
@@ -192,7 +192,7 @@ jobs:
       - name: ipe build --static --target aarch64-unknown-linux-musl
         run: |
           cd examples/01-hello-world
-          "$CARGO_TARGET_DIR/release/ipe" build sky.toml --out sky-out/rust \
+          "$CARGO_TARGET_DIR/release/ipe" build ipe.toml --out sky-out/rust \
             --static --target aarch64-unknown-linux-musl --allocator dlmalloc
           cd sky-out/rust
           cargo build --release --target "$STATIC_TRIPLE"

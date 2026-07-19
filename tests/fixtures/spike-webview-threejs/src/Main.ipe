@@ -9,7 +9,7 @@ module Main exposing (main)
 -- pointing at the spike scene. There's no separate `webview_go`
 -- shim, no separate Ipe.Http.Server: the same Ipe.Webview backend
 -- that powers every other Ipe.Webview example handles loopback
--- asset serving via sky.toml's `[live].static` (bug #370 — the
+-- asset serving via ipe.toml's `[live].static` (bug #370 — the
 -- runtime spawns a 127.0.0.1 http.Server when `static` is set,
 -- and Navigate()s to it so the embedded browser can resolve
 -- relative paths like `/static/three.min.js`).
@@ -68,7 +68,7 @@ subscriptions _ =
 -- View — Three.js HUD + canvas mount + two vendored script tags.
 -- The browser fetches /static/three.min.js + /static/scene.js +
 -- /static/style.css from the loopback http server that Ipe.Webview
--- spawns when sky.toml's `[live].static = "static"` is set.
+-- spawns when ipe.toml's `[live].static = "static"` is set.
 -- ═══════════════════════════════════════════════════════════════════
 -- Webview's renderer expects the same Html-node tree shape Ipe.Live
 -- emits. We use raw Ipe.Html nodes (NOT Ipe.Ui's layout primitives)

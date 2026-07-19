@@ -741,7 +741,7 @@ render_template() {
 setup_project() {
     local dir=$1
     mkdir -p "$dir/src"
-    cat > "$dir/sky.toml" <<'EOF'
+    cat > "$dir/ipe.toml" <<'EOF'
 name = "sky-fuzz-iter"
 version = "0.0.0"
 entry = "src/Main.ipe"
@@ -885,7 +885,7 @@ save_failure() {
     local dst="$FAILURES_DIR/seed-${seed}-${ts}"
     mkdir -p "$dst"
     cp -rf "$iterdir/src"       "$dst/"     2>/dev/null || true
-    cp -f  "$iterdir/sky.toml"  "$dst/"     2>/dev/null || true
+    cp -f  "$iterdir/ipe.toml"  "$dst/"     2>/dev/null || true
     cp -f  "$iterdir/build.log" "$dst/"     2>/dev/null || true
     cp -f  "$iterdir/run.log"   "$dst/"     2>/dev/null || true
     # Emitted Rust source (most useful artefact for debugging)

@@ -1155,7 +1155,7 @@ pub enum StdlibKernel {
     SubSubscribeWebSocket,  // Int -> String -> (any -> msg) -> Sub msg (arity 3)
     // ── Ipe.Env — build-time-embedded public config (wasm M5 residual) ──
     // `Env.public "KEY"` resolves ONLY for names in the project's `[wasm]
-    // publicEnv` allowlist (`sky.toml`, validated against the secret-name
+    // publicEnv` allowlist (`ipe.toml`, validated against the secret-name
     // denylist at PARSE time — `ipe_cli::project::is_denylisted_public_env_name`).
     // Any other key returns `Nothing`, by construction (the generated match
     // has no arm for it) — never a live lookup against the raw process/host

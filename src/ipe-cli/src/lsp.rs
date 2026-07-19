@@ -26,7 +26,7 @@ impl ProjectLoader for DriverLoader {
         // the opened file exactly like `ipe build <file.ipe>` would
         // (manifest walk-up, else sibling discovery).
         let entry = workspace_root
-            .filter(|root| root.join("sky.toml").is_file())
+            .filter(|root| root.join("ipe.toml").is_file())
             .map_or_else(|| open_file.to_path_buf(), Path::to_path_buf);
         let overlay = if entry == open_file { open_text } else { None };
         let resolved = watch::resolve_project_sources(&entry, overlay).map_err(|e| LoadError {

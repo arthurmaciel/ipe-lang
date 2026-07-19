@@ -197,13 +197,13 @@ pub(crate) struct ResolvedProject {
     pub(crate) blame_path: PathBuf,
     pub(crate) db_driver: ipe_backend_rust::DbDriver,
     /// The `[wasm] publicEnv` allowlist (empty for the no-manifest / sibling-
-    /// discovery path — there is no `sky.toml` to declare one).
+    /// discovery path — there is no `ipe.toml` to declare one).
     pub(crate) wasm_public_env: Vec<String>,
 }
 
-/// Resolve `entry` (a `.ipe` file, a `sky.toml`, or a project directory)
+/// Resolve `entry` (a `.ipe` file, a `ipe.toml`, or a project directory)
 /// into a fresh [`ResolvedProject`] by re-reading every relevant file from
-/// disk. Mirrors `run_build`'s dispatch: directory → `sky.toml` inside it;
+/// disk. Mirrors `run_build`'s dispatch: directory → `ipe.toml` inside it;
 /// `.toml` → itself; `.ipe` → walk up for a manifest, else sibling
 /// discovery.
 ///
@@ -221,12 +221,12 @@ pub(crate) fn resolve_project_sources(
     entry_text_override: Option<&str>,
 ) -> Result<ResolvedProject, CliError> {
     let manifest_path = if entry.is_dir() {
-        let candidate = entry.join("sky.toml");
+        let candidate = entry.join("ipe.toml");
         if candidate.is_file() {
             Some(candidate)
         } else {
             return Err(CliError::Usage(
-                "directory supplied but no sky.toml found inside it",
+                "directory supplied but no ipe.toml found inside it",
             ));
         }
     } else if entry.extension().and_then(|e| e.to_str()) == Some("toml") {
@@ -311,7 +311,7 @@ pub(crate) fn resolve_project_sources(
 /// The project root + entry directory a [`ipe_watch::WatchScope`] confines
 /// itself to, derived from one resolved snapshot.
 fn scope_roots(resolved: &ResolvedProject, entry: &Path) -> (PathBuf, PathBuf) {
-    // The manifest's directory when a `sky.toml` is the blame path (its own
+    // The manifest's directory when a `ipe.toml` is the blame path (its own
     // extension is `.toml`); otherwise the blame path IS the entry file, so
     // its parent is the source root — matching `build_with_sibling_discovery`.
     if resolved.blame_path.extension().and_then(|e| e.to_str()) == Some("toml") {

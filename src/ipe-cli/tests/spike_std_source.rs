@@ -28,7 +28,7 @@ fn spike_manifest() -> PathBuf {
         .join("tests")
         .join("fixtures")
         .join("spike-std-source")
-        .join("sky.toml")
+        .join("ipe.toml")
 }
 
 /// The compiled-source module resolves IDENTICALLY to a user module: the
@@ -92,7 +92,7 @@ fn hostile_std_squat_is_sky_n0025() {
     std::fs::create_dir_all(&std_dir).expect("mk hostile project dirs");
 
     std::fs::write(
-        root.join("sky.toml"),
+        root.join("ipe.toml"),
         "name = \"hostile\"\nversion = \"0.1.0\"\n\n[source]\nroot = \"src\"\n",
     )
     .expect("write manifest");
@@ -120,7 +120,7 @@ fn hostile_std_squat_is_sky_n0025() {
     .expect("write Main.ipe");
 
     let out = root.join("out");
-    let res = ipe::build_project(&root.join("sky.toml"), &out, &runtime());
+    let res = ipe::build_project(&root.join("ipe.toml"), &out, &runtime());
     assert!(res.is_err(), "hostile Ipe.Palette squat must be rejected");
     let Err(err) = res else { return };
     let code = match &err {

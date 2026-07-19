@@ -103,10 +103,10 @@ Ask one focused question per ambiguity; no guess heroically.
 | Errors               | `Result Error a` / `Task Error a`.  Never `String` as error type. |
 | No raw HTML / JS     | `Std.Ui` HTML-escapes everything.  `data-sky-eval` forbidden. |
 
-### `sky.toml` shape per decision
+### `ipe.toml` shape per decision
 
 Author configures at most these sections. Precedence: **process env >
-`.env` > `sky.toml`**. Secrets never in `sky.toml` — auth secret from
+`.env` > `ipe.toml`**. Secrets never in `ipe.toml` — auth secret from
 `IPE_AUTH_TOKEN_SECRET` (≥32 bytes).
 
 ```toml
@@ -905,7 +905,7 @@ error — only the reachable subset matters, so a shared `view` module used by
 both a server SSR path and a wasm client type-checks against both targets
 without duplication.
 
-**`[wasm]` `sky.toml` section** (composes with `[live]`):
+**`[wasm]` `ipe.toml` section** (composes with `[live]`):
 
 ```toml
 [wasm]
@@ -918,7 +918,7 @@ optLevel  = "z"
 
 `publicEnv` is a default-deny allowlist gated by a secret-name denylist
 (`*_SECRET`/`*_TOKEN`/`*_KEY`/`*_PASSWORD`/`DATABASE_URL`/the `IPE_*`
-namespace) enforced at `sky.toml` PARSE time — listing `IPE_AUTH_TOKEN_SECRET`
+namespace) enforced at `ipe.toml` PARSE time — listing `IPE_AUTH_TOKEN_SECRET`
 (or any denylisted pattern) in `publicEnv` is a build error, never a silently
 dropped entry and never a runtime-only refusal. `System.getenv` stays a
 DOES-NOT-exist-for-wasm kernel regardless (Layer 1) — public build-time

@@ -39,7 +39,7 @@ pub fn csrf_cookie_name() -> &'static str {
 pub const CSRF_HEADER: &str = "x-sky-csrf";
 
 /// CSRF protection is ON by default; `IPE_CSRF=off|0|false` disables it
-/// (Go parity: the `IPE_CSRF` env switch / sky.toml `[security] csrf`).
+/// (Go parity: the `IPE_CSRF` env switch / ipe.toml `[security] csrf`).
 ///
 /// Snapshotted once into a `OnceLock` on first call (env is stable at process
 /// start; same rationale as `cookies_secure()` — eliminates a per-request

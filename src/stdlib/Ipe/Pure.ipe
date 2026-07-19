@@ -128,7 +128,7 @@ ioReadLine _ =
 
 -- | `Pure.dbConnect ()` — uniform-shape companion for
 -- `Db.connect ()`.  Opens the connection described by
--- `sky.toml`'s `[database]` section.
+-- `ipe.toml`'s `[database]` section.
 dbConnect : () -> Task Error Db
 dbConnect _ =
     Db.connect ()
