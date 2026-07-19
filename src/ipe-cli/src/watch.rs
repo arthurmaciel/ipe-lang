@@ -368,6 +368,27 @@ enum OrchestratorEvent {
 /// shutdown starts.
 const SHUTDOWN_WAIT_BUDGET: Duration = Duration::from_secs(20);
 
+/// Delay before retrying a cycle whose `resolve_project_sources` call
+/// failed. A transient resolve failure (mid-save partial write, a file
+/// momentarily unreadable during an editor's atomic rename) has no
+/// guarantee of a follow-up filesystem event to retry it, so the cycle
+/// schedules its own retry rather than losing the save until the next
+/// unrelated edit.
+const RESOLVE_RETRY_DELAY: Duration = Duration::from_millis(250);
+
+/// Schedule one follow-up [`OrchestratorEvent::FsBatch`] after
+/// [`RESOLVE_RETRY_DELAY`] — the recovery path for a `resolve_project_sources`
+/// failure. Without this, a transient failure has no other route back into
+/// the orchestrator's event loop: the triggering save is lost until an
+/// unrelated future filesystem event happens to arrive.
+fn schedule_resolve_retry(evt_tx: &mpsc::Sender<OrchestratorEvent>) {
+    let retry_tx = evt_tx.clone();
+    thread::spawn(move || {
+        thread::sleep(RESOLVE_RETRY_DELAY);
+        let _ = retry_tx.send(OrchestratorEvent::FsBatch);
+    });
+}
+
 /// A handle to a running [`spawn`]ed watch session.
 ///
 /// Lets the caller request a clean shutdown from another thread — the seam
@@ -711,6 +732,11 @@ fn run_inner(
                     Ok(r) => r,
                     Err(e) => {
                         eprintln!("[ipe watch] {e}");
+                        // This cycle's `generation` bump and cargo-kill
+                        // already happened above, so without a scheduled
+                        // retry the save that triggered this cycle is lost
+                        // until an unrelated future edit.
+                        schedule_resolve_retry(&evt_tx);
                         continue;
                     }
                 };
@@ -1186,4 +1212,44 @@ fn find_executable_path(cargo_json_stdout: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Duration, OrchestratorEvent, RESOLVE_RETRY_DELAY, mpsc, schedule_resolve_retry};
+
+    /// CO-INCR-008: a `resolve_project_sources` failure must not lose the
+    /// rebuild cycle silently. `schedule_resolve_retry` is the orchestrator's
+    /// ONLY route back into its event loop after such a failure (no
+    /// filesystem event is guaranteed to follow), so this pins that a
+    /// `FsBatch` retry actually lands on the channel.
+    #[test]
+    fn schedule_resolve_retry_sends_a_follow_up_fs_batch() {
+        let (evt_tx, evt_rx) = mpsc::channel::<OrchestratorEvent>();
+        schedule_resolve_retry(&evt_tx);
+        let event = evt_rx
+            .recv_timeout(RESOLVE_RETRY_DELAY * 4)
+            .expect("a retry FsBatch must arrive — the save must not be lost");
+        assert!(
+            matches!(event, OrchestratorEvent::FsBatch),
+            "the retry must be a FsBatch, not some other orchestrator event"
+        );
+    }
+
+    /// The retry is delayed, not immediate — an instant re-send would defeat
+    /// the point of a "short delay" retry (hammering a still-broken
+    /// filesystem state) and would also mask a resolve failure that
+    /// self-heals within one debounce window.
+    #[test]
+    fn schedule_resolve_retry_waits_before_sending() {
+        let (evt_tx, evt_rx) = mpsc::channel::<OrchestratorEvent>();
+        schedule_resolve_retry(&evt_tx);
+        assert!(
+            evt_rx.recv_timeout(Duration::from_millis(10)).is_err(),
+            "the retry must not fire immediately"
+        );
+        evt_rx
+            .recv_timeout(RESOLVE_RETRY_DELAY * 4)
+            .expect("the retry must still arrive after the short delay");
+    }
 }
