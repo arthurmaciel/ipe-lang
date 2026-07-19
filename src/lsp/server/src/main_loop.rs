@@ -142,6 +142,11 @@ fn handle_request(state: &State, connection: &Connection, request: Request) {
         "textDocument/documentSymbol" => Some(document_symbols_result(state, &request.params)),
         "textDocument/documentLink" => Some(document_links_result(state, &request.params)),
         "textDocument/foldingRange" => Some(folding_ranges_result(state, &request.params)),
+        "textDocument/completion" => Some(completion_result(state, &request.params)),
+        "textDocument/definition" => Some(definition_result(state, &request.params)),
+        "textDocument/references" => Some(references_result(state, &request.params)),
+        "textDocument/prepareRename" => Some(prepare_rename_result(state, &request.params)),
+        "textDocument/rename" => Some(rename_result(state, &request.params)),
         _ => None,
     };
     let response = match result {
@@ -252,6 +257,207 @@ fn document_symbols_result(state: &State, params: &serde_json::Value) -> serde_j
     let symbols = ipe_lsp_features::symbols::document_symbols(&state.db, file, state.encoding);
     serde_json::to_value(lsp_types::DocumentSymbolResponse::Nested(symbols))
         .unwrap_or(serde_json::Value::Null)
+}
+
+/// `textDocument/completion` — in-scope identifiers at the cursor position.
+fn completion_result(state: &State, params: &serde_json::Value) -> serde_json::Value {
+    let Ok(params) = serde_json::from_value::<lsp_types::CompletionParams>(params.clone()) else {
+        return serde_json::Value::Null;
+    };
+    let position = params.text_document_position;
+    let Some((module, _file, _text)) = state.locate(&position.text_document.uri) else {
+        return serde_json::Value::Null;
+    };
+    let Some(root) = state.root else {
+        return serde_json::Value::Null;
+    };
+    let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
+        return serde_json::Value::Null;
+    };
+    let items = ipe_lsp_features::completion::completions(&state.db, root, entry_file, &module);
+    serde_json::to_value(items).unwrap_or(serde_json::Value::Null)
+}
+
+/// `textDocument/definition` — jump to the defining site of the name under
+/// the cursor.
+fn definition_result(state: &State, params: &serde_json::Value) -> serde_json::Value {
+    let Ok(params) = serde_json::from_value::<lsp_types::GotoDefinitionParams>(params.clone())
+    else {
+        return serde_json::Value::Null;
+    };
+    let position = params.text_document_position_params;
+    let Some((module, _file, text)) = state.locate(&position.text_document.uri) else {
+        return serde_json::Value::Null;
+    };
+    let Some(root) = state.root else {
+        return serde_json::Value::Null;
+    };
+    let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
+        return serde_json::Value::Null;
+    };
+    let byte = offset::position_to_offset(&text, position.position, state.encoding);
+    let byte = u32::try_from(byte).unwrap_or(u32::MAX);
+    let Some(def) =
+        ipe_lsp_features::navigation::goto_definition(&state.db, root, entry_file, &module, byte)
+    else {
+        return serde_json::Value::Null;
+    };
+    let Some(def_uri) = state.uri_for_module(&def.module) else {
+        return serde_json::Value::Null;
+    };
+    // Fetch the target text to convert the byte span to a range.
+    let def_text: String = root
+        .files(&state.db)
+        .get(&def.module)
+        .map(|f| f.text(&state.db).clone())
+        .unwrap_or_default();
+    let range = ipe_lsp_features::offset::span_to_range(&def_text, def.span, state.encoding);
+    let location = lsp_types::Location {
+        uri: def_uri,
+        range,
+    };
+    serde_json::to_value(location).unwrap_or(serde_json::Value::Null)
+}
+
+/// `textDocument/references` — every use site of the name under the cursor.
+fn references_result(state: &State, params: &serde_json::Value) -> serde_json::Value {
+    let Ok(params) = serde_json::from_value::<lsp_types::ReferenceParams>(params.clone()) else {
+        return serde_json::Value::Null;
+    };
+    let position = params.text_document_position;
+    let Some((module, _file, text)) = state.locate(&position.text_document.uri) else {
+        return serde_json::Value::Null;
+    };
+    let Some(root) = state.root else {
+        return serde_json::Value::Null;
+    };
+    let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
+        return serde_json::Value::Null;
+    };
+    let byte = offset::position_to_offset(&text, position.position, state.encoding);
+    let byte = u32::try_from(byte).unwrap_or(u32::MAX);
+    // Resolve via goto_definition to get the canonical (home, name) pair.
+    let Some(def) =
+        ipe_lsp_features::navigation::goto_definition(&state.db, root, entry_file, &module, byte)
+    else {
+        return serde_json::Value::Null;
+    };
+    let def_text = root
+        .files(&state.db)
+        .get(&def.module)
+        .map(|f| f.text(&state.db).clone())
+        .unwrap_or_default();
+    let lo = def.span.lo as usize;
+    let hi = def.span.hi as usize;
+    let Some(def_name) = def_text.get(lo..hi) else {
+        return serde_json::Value::Null;
+    };
+    let refs = ipe_lsp_features::navigation::find_references(
+        &state.db,
+        root,
+        entry_file,
+        &def.module,
+        def_name,
+    );
+    let mut locations: Vec<lsp_types::Location> = Vec::new();
+    // Include definition if requested.
+    if params.context.include_declaration
+        && let Some(def_uri) = state.uri_for_module(&def.module)
+    {
+        let range = ipe_lsp_features::offset::span_to_range(&def_text, def.span, state.encoding);
+        locations.push(lsp_types::Location {
+            uri: def_uri,
+            range,
+        });
+    }
+    for r in refs {
+        let Some(ref_uri) = state.uri_for_module(&r.module) else {
+            continue;
+        };
+        let ref_text = root
+            .files(&state.db)
+            .get(&r.module)
+            .map(|f| f.text(&state.db).clone())
+            .unwrap_or_default();
+        let range = ipe_lsp_features::offset::span_to_range(&ref_text, r.span, state.encoding);
+        locations.push(lsp_types::Location {
+            uri: ref_uri,
+            range,
+        });
+    }
+    serde_json::to_value(locations).unwrap_or(serde_json::Value::Null)
+}
+
+/// `textDocument/prepareRename` — validate the position is renameable and
+/// return the current identifier and its range.
+fn prepare_rename_result(state: &State, params: &serde_json::Value) -> serde_json::Value {
+    let Ok(params) =
+        serde_json::from_value::<lsp_types::TextDocumentPositionParams>(params.clone())
+    else {
+        return serde_json::Value::Null;
+    };
+    let Some((module, _file, text)) = state.locate(&params.text_document.uri) else {
+        return serde_json::Value::Null;
+    };
+    let Some(root) = state.root else {
+        return serde_json::Value::Null;
+    };
+    let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
+        return serde_json::Value::Null;
+    };
+    let byte = offset::position_to_offset(&text, params.position, state.encoding);
+    let byte = u32::try_from(byte).unwrap_or(u32::MAX);
+    let Some(prep) =
+        ipe_lsp_features::rename::prepare_rename(&state.db, root, entry_file, &module, byte)
+    else {
+        return serde_json::Value::Null;
+    };
+    let range = ipe_lsp_features::offset::span_to_range(&text, prep.span, state.encoding);
+    // Return `{ range, placeholder }` — the standard `PrepareRenameResponse`.
+    let response = lsp_types::PrepareRenameResponse::RangeWithPlaceholder {
+        range,
+        placeholder: prep.name,
+    };
+    serde_json::to_value(response).unwrap_or(serde_json::Value::Null)
+}
+
+/// `textDocument/rename` — apply a rename across all references.
+fn rename_result(state: &State, params: &serde_json::Value) -> serde_json::Value {
+    let Ok(params) = serde_json::from_value::<lsp_types::RenameParams>(params.clone()) else {
+        return serde_json::Value::Null;
+    };
+    let position = params.text_document_position;
+    let Some((module, _file, text)) = state.locate(&position.text_document.uri) else {
+        return serde_json::Value::Null;
+    };
+    let Some(root) = state.root else {
+        return serde_json::Value::Null;
+    };
+    let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
+        return serde_json::Value::Null;
+    };
+    let byte = offset::position_to_offset(&text, position.position, state.encoding);
+    let byte = u32::try_from(byte).unwrap_or(u32::MAX);
+    let encoding = state.encoding;
+    let db = &state.db;
+    let uri_of = |m: &[String]| state.uri_for_module(m);
+    let text_of =
+        |m: &[String]| -> Option<String> { root.files(db).get(m).map(|f| f.text(db).clone()) };
+    let req = ipe_lsp_features::rename::RenameRequest {
+        byte,
+        new_name: &params.new_name,
+        encoding,
+    };
+    let resolver = ipe_lsp_features::rename::ModuleResolver {
+        uri_of_module: &uri_of,
+        text_of_module: &text_of,
+    };
+    let Some(ws_edit) =
+        ipe_lsp_features::rename::rename(db, root, entry_file, &module, &req, &resolver)
+    else {
+        return serde_json::Value::Null;
+    };
+    serde_json::to_value(ws_edit).unwrap_or(serde_json::Value::Null)
 }
 
 /// Normalize a path for map keys: canonical when the file exists, verbatim
