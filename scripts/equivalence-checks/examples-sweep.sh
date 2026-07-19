@@ -21,10 +21,13 @@
 # sky.toml> [--out <dir>] [--runtime <dir>]`) + the E2E test in the same file that
 # builds sky-out and runs target/debug/sky-app.
 #
-# PHASED Go-parity: EQUIVALENCE needs a Go reference built by the Haskell `sky`
-# compiler, which this repo does NOT have. The FIRST CI iteration runs BUILD+RUN
-# only (IPE_SWEEP_NO_EQUIV=1). The EQUIVALENCE column + build_go() below are kept intact
-# so parity can be turned on later (see docs/architecture/class2-tier1-sweep-fix-spec-2026-07-09.md §1).
+# PHASED self-regression: EQUIVALENCE now uses self-regression (expected.txt per
+# example, captured from ipe's own output) rather than the old Go-oracle format
+# (expected_go.txt + oracle.meta SHA256 gate). The FIRST CI iteration runs BUILD+RUN
+# only (IPE_SWEEP_NO_EQUIV=1). The EQUIVALENCE column + build_go() below are kept
+# intact so Go≡Rust parity can be turned on later when the Haskell sky reference
+# becomes available. The self-regression path (read_expected / expected.txt) is the
+# default for first-party Ipe examples.
 #
 # GREEN row  = BUILD ok AND RUN ok AND EQUIVALENCE ∈ {equivalence-*, n/a, —, amber go-ref-broken}.
 # RED row    = BUILD/RUN/EQUIVALENCE failure (*-fail / panic / hang / noserve / notty /
@@ -146,6 +149,37 @@ if [ "${IPE_SWEEP_MIRROR_SKY:-0}" = 1 ]; then
   else
     echo "WARN: IPE_SWEEP_MIRROR_SKY=1 but no upstream Sky example source found — mirror set skipped." >&2
     IPE_SWEEP_MIRROR_SKY=0
+  fi
+fi
+
+# ── Fail loud on unpatched new upstream examples ───────────────────────────────
+# After mirroring, any upstream dir that has a Sky entry file but is NOT listed
+# in examples/sky/manifest.toml is an unpatched new example. The sweep emits a
+# RED `unpatched-new-example` row so a new upstream example can never silently
+# slip through — it must be added to the manifest (with a verified patch) first.
+UNPATCHED_NEW_EXAMPLES=()
+if [ "${IPE_SWEEP_MIRROR_SKY:-0}" = 1 ]; then
+  _manifest_names="$(sky_example_names 2>/dev/null)" || _manifest_names=""
+  _src="$(sky_upstream_dir 2>/dev/null)" || _src=""
+  if [ -n "$_src" ]; then
+    while IFS= read -r _udir; do
+      [ -d "$_udir" ] || continue
+      # Only count dirs that actually have a Sky entry point.
+      [ -f "$_udir/src/Main.sky" ] || [ -f "$_udir/src/Main.ipe" ] || continue
+      _uname="$(basename "$_udir")"
+      # Is this name already in the manifest?
+      if ! printf '%s\n' "$_manifest_names" | rg -q "^${_uname}$"; then
+        UNPATCHED_NEW_EXAMPLES+=("$_uname")
+      fi
+    done < <(find "$_src" -mindepth 1 -maxdepth 1 -type d | sort)
+  fi
+  if [ "${#UNPATCHED_NEW_EXAMPLES[@]}" -gt 0 ]; then
+    say ""
+    say "ERROR: upstream Sky has example(s) NOT in examples/sky/manifest.toml — add them with a verified patch:"
+    for _un in "${UNPATCHED_NEW_EXAMPLES[@]}"; do
+      say "  UNPATCHED: $_un"
+    done
+    say ""
   fi
 fi
 
@@ -469,6 +503,18 @@ ROWS="$HIST/rows-$STAMP.tsv"; : >"$ROWS"
 WARNS="$HIST/warnings-$STAMP.tsv"; : >"$WARNS"
 DCUR=""
 
+# Flush any unpatched-new-example RED rows now that $ROWS exists.
+# These are examples present in upstream Sky but absent from manifest.toml;
+# they must be added and patched before they can enter the build set.
+if [ "${#UNPATCHED_NEW_EXAMPLES[@]}" -gt 0 ]; then
+  for _un in "${UNPATCHED_NEW_EXAMPLES[@]}"; do
+    [ -z "$_un" ] && continue
+    printf '%s\t%s\t%s\t%s\t%s\n' "$_un" "unpatched-new-example" "—" "—" \
+      "upstream example not in examples/sky/manifest.toml — add + verify patch first" \
+      >>"$ROWS"
+  done
+fi
+
 # ── Cross-invocation build serialization ─────────────────────────────────────
 # ipe emits a FIXED `sky-app` binary name into the shared $CARGO_TARGET_DIR
 # (see resolve_bin's comment above: "each example's cargo build writes
@@ -560,7 +606,7 @@ RED=0; GREEN=0; SKIP=0; AMBER=0; RED_ROWS=""
 declare -A EQ_COUNT=()
 while IFS=$'\t' read -r n b r e note; do
   row_red=0
-  case "$b" in ipe-fail|cargo-fail|not-static|no-refusal) row_red=1 ;; esac
+  case "$b" in ipe-fail|cargo-fail|not-static|no-refusal|unpatched-new-example) row_red=1 ;; esac
   case "$r" in panic|hang|noserve|notty) row_red=1 ;; esac
   case "$e" in DIFFER) row_red=1 ;; esac
   if [ "$e" = go-ref-broken ]; then AMBER=$((AMBER+1)); row_red=0; fi
