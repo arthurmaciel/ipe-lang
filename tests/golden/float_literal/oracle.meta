@@ -1,5 +1,0 @@
-# Cached Go-oracle metadata. Regenerate with the refresh-oracle tool.
-main_ipe_sha256 = 9512276949ad9d8e6b35e4dd632e5eb65b285f1b2319a3da19d3e9878990dc66
-go_sky_version = sky dev
-exit_code = 0
-oracle_divergence = false

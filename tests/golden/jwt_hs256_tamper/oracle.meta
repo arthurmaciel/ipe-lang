@@ -1,6 +1,0 @@
-# Cached Go-oracle metadata. Regenerate with the refresh-oracle tool.
-main_ipe_sha256 = d1117c92bdf87d73331028a3623c75374c16c6a4e219dc64e965b06e1d1020a0
-go_sky_version = sky dev
-exit_code = 0
-oracle_divergence = true
-divergence_reason = divergence: Sky.Core.Jwt flat kernels (encodeHs256/decodeHs256) are the Rust-backend M5b interim surface; the Go backend exposes only the builder API (Jwt.encode / decode), so this exact program does not compile on the Go reference. Sky-Rust records its own output. Divergence from Sky, rationale: JWT API-surface interim (docs/architecture/divergence-policy.md).

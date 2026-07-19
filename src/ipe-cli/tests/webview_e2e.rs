@@ -9,7 +9,7 @@
 //!
 //! 1. A minimal Ipe.Webview counter program is written to a temp dir.
 //! 2. `ipe::build` compiles it (parse → canon → types → lower → emit Rust).
-//! 3. `oracle::build_rust_binary` runs `cargo build` on the emitted project —
+//! 3. `e2e_support::build_rust_binary` runs `cargo build` on the emitted project —
 //!    the shared Cargo target lets wry/tao/webkit2gtk compile once and be reused.
 //!
 //! ## Test tiers
@@ -118,7 +118,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// the path to the compiled binary.
 ///
 /// The emitted project has `webview` in its default feature list (set by
-/// `project::webview_cargo_toml`) so `oracle::build_rust_binary` — which runs
+/// `project::webview_cargo_toml`) so `e2e_support::build_rust_binary` — which runs
 /// a plain `cargo build` — picks up the `webview` feature without any extra
 /// `--features` flag.
 fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::PathBuf, BoxError> {
@@ -141,7 +141,7 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::Pat
     ipe::build(&entry, &out_dir, &runtime)
         .map_err(|e| -> BoxError { format!("{test_name}: ipe build failed: {e}").into() })?;
 
-    let exe = oracle::build_rust_binary(test_name, &out_dir)
+    let exe = e2e_support::build_rust_binary(test_name, &out_dir)
         .map_err(|e| -> BoxError { format!("{test_name}: cargo build failed: {e}").into() })?;
 
     Ok(std::path::PathBuf::from(exe))
