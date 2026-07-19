@@ -1,8 +1,8 @@
 name: CI
 
-# Public repo → GitHub-hosted runners (4-core/16GB, ephemeral) with matrix
-# parallelism. Cheap gates fail fast; E2E is sharded; sccache (GHA backend) keeps
-# builds warm across runs. See docs/architecture/ci-and-hosting.md.
+# GitHub-hosted runners (4-core/16GB, ephemeral) with matrix parallelism.
+# Cheap gates fail fast; E2E is sharded across 6 runners; sccache (GHA backend)
+# keeps builds warm across runs. See docs/architecture/ci-and-hosting.md.
 
 on:
   push:
@@ -37,7 +37,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - uses: mozilla-actions/sccache-action@v0.0.6
+      - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets --workspace -- -D warnings
 
@@ -56,7 +56,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - uses: mozilla-actions/sccache-action@v0.0.6
+      - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
       # db WITHOUT live — the load-bearing invariant.
       - run: cargo clippy -p ipe-runtime-rust --no-default-features --features db --all-targets -- -D warnings
@@ -73,7 +73,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - uses: mozilla-actions/sccache-action@v0.0.6
+      - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
       - run: cargo build -p ipe-runtime-rust --target wasm32-unknown-unknown
       - run: cargo build -p ipe-runtime-rust --target wasm32-unknown-unknown --features json
@@ -91,11 +91,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: rui314/setup-mold@v1
-      - uses: mozilla-actions/sccache-action@v0.0.6
+      - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
-      - run: cargo nextest run --workspace          # E2E tests no-op without IPE_E2E
-      - run: cargo test --doc --workspace           # nextest doesn't run doctests
+      - run: cargo nextest run --workspace --profile ci   # E2E tests no-op without IPE_E2E
+      - run: cargo test --doc --workspace                 # nextest doesn't run doctests
 
   # `ipe-runtime-rust`'s `default = []` leaves `compression`/`csv`/`config`/
   # `tokio` (and every other optional feature) OFF, so the `test` job above
@@ -118,10 +118,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: mozilla-actions/sccache-action@v0.0.6
+      - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
-      - run: cargo nextest run -p ipe-runtime-rust --features full
+      - run: cargo nextest run -p ipe-runtime-rust --features full --profile ci
 
   # Scoped deliberately, not exhaustively. All 5 targets are
   # `#![forbid(unsafe_code)]`, so Miri's value here is catching UB triggered
@@ -153,27 +153,28 @@ jobs:
 
   # E2E builds+runs the emitted Rust per golden (THE SEAL — the soundness floor:
   # every `ipe`-exit-0 golden's emitted Cargo project must `cargo build` + run).
-  # Sharded across runners via nextest partitioning. Behavioural parity vs the Go
-  # oracle rides the CACHED oracle (committed expected_go.txt — see
-  # docs/architecture/e2e-and-oracle-caching.md), so NO Go toolchain is needed here.
+  # Sharded across 6 runners via nextest partitioning. Behavioural parity vs the
+  # Go oracle rides the CACHED oracle (committed expected_go.txt — see
+  # docs/architecture/e2e-and-oracle-caching.md), so NO Go toolchain is needed.
   #
   # The Ipê runtime lives IN-REPO at src/runtime/rust/src (the `ipe-runtime-rust`
   # crate); `ipe::resolve_runtime()` finds it by walking up from the repo root, so
   # no separate vendoring step is required. IPE_RUNTIME_DIR is set explicitly as a
   # belt-and-braces (CWD-independent under nextest).
   #
+  # Per-test timeout: the `ci` nextest profile (.config/nextest.toml) sets a 600s
+  # terminate budget per test. Tests that drive a real `cargo build` with no shared
+  # target (watch_integration, webview_e2e) need up to 4 minutes for a cold build
+  # on a loaded runner — the default 120s nextest-partition limit kills them on
+  # scheduler contention, not on a real regression.
+  #
   # NON-GATING FOR NOW (`continue-on-error: true`). The prior form gated on a
   # `vendor/upstream-sky/...` path that never landed, so E2E ALWAYS self-skipped —
   # THE SEAL was never enforced in CI. Pointing it at the in-repo runtime turns it
-  # back on, which surfaces a real pre-existing backlog the skip had masked: ~101
-  # of 450 goldens are oracle-stale (their `Main.ipe` sha no longer matches the
-  # cached `oracle.meta` after the `.sky`→`.ipe` + namespace-flatten renames — a
-  # `refresh-oracle` regeneration is owed) and the `adts` enum-stringify emit has
-  # its own red. Those are tracked blockers, not a reason to keep E2E blind, so the
-  # job runs and reports without failing CI. FLIP `continue-on-error` to false once
-  # the oracle backlog is regenerated and the adts red is fixed — then a SEAL
-  # regression (an `ipe`-exit-0 golden whose emit fails `cargo build`, exactly the
-  # `dom`/`html` base-template class fixed here) fails CI as it should.
+  # back on, which surfaces a real pre-existing backlog the skip had masked. Those
+  # are tracked blockers, not a reason to keep E2E blind, so the job runs and
+  # reports without failing CI. FLIP `continue-on-error` to false once the oracle
+  # backlog is regenerated — then a SEAL regression fails CI as it should.
   e2e:
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -182,12 +183,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: rui314/setup-mold@v1
-      - uses: mozilla-actions/sccache-action@v0.0.6
+      - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
       # Reclaim runner disk before the E2E build: each emitted golden crate pulls
@@ -200,7 +201,7 @@ jobs:
           sudo swapoff -a || true; sudo rm -f /swapfile /mnt/swapfile || true
           sudo apt-get clean || true
           df -h /
-      - name: E2E shard ${{ matrix.shard }}/4 (THE SEAL — build+run emitted Rust)
+      - name: E2E shard ${{ matrix.shard }}/6 (THE SEAL — build+run emitted Rust)
         env:
           IPE_E2E: "1"
           IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
@@ -214,4 +215,4 @@ jobs:
           # ONE target, so the dep tree compiles once and every later golden
           # only links its own `main.rs`.
           IPE_ORACLE_SHARED_TARGET: ${{ github.workspace }}/.cache/oracle-shared-target
-        run: cargo nextest run --workspace --partition count:${{ matrix.shard }}/4
+        run: cargo nextest run --workspace --profile ci --no-fail-fast --partition count:${{ matrix.shard }}/6
