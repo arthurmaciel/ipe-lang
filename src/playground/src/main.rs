@@ -302,7 +302,7 @@ fn resolve_runtime_dir() -> Result<PathBuf, String> {
     }
     Err(
         "runtime directory not found; set SKY_RUNTIME_DIR to the \
-         ipe_runtime source directory (src/runtime/rust/src/sky_runtime)"
+         ipe_runtime source directory (src/runtime/rust/src)"
             .to_owned(),
     )
 }
