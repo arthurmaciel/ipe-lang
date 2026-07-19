@@ -1,8 +1,8 @@
--- | Ipe.Regex — RE2 regex helpers (Layer 3 Sky source).
+-- | Ipe.Regex — RE2 regex helpers (Layer 3 Ipe source).
 --
 -- Patterns use Go's RE2 syntax (no backreferences, linear-time
 -- matching).  Pre-Layer-3 these helpers had no kernel-registry HM
--- signatures, so call sites were any-typed; the Sky-source layer
+-- signatures, so call sites were any-typed; the Ipe-source layer
 -- adds proper typing on top of the existing runtime kernels.
 module Ipe.Regex exposing
     ( match

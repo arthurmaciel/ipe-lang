@@ -10,9 +10,9 @@ import Ipe.Log exposing (println)
 -- DIRECTLY to `Csv.encode`, and a `Csv.parse` result is field-accessed via
 -- `.header` / `.rows`.
 --
--- Pre-fix, `sky_lower` synthesised a per-project `RecHeaderRows` struct for
--- the literal while the `csv_encode` kernel takes `sky_runtime::csv::CsvDoc`:
--- `skyc` exited 0, but the emitted `cargo build` failed with E0308
+-- Pre-fix, `ipe_lower` synthesised a per-project `RecHeaderRows` struct for
+-- the literal while the `csv_encode` kernel takes `ipe_runtime::csv::CsvDoc`:
+-- `ipec` exited 0, but the emitted `cargo build` failed with E0308
 -- (`expected CsvDoc, found RecHeaderRows`). The fold to the nominal
 -- `IrType::CsvDoc` (mirroring the `HttpRequest` / `CacheCfg` folds) makes the
 -- literal construct the runtime struct the kernel expects.

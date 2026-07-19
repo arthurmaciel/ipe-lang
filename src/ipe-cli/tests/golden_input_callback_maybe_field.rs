@@ -24,7 +24,7 @@
 //!
 //! ## Oracle provenance
 //!
-//! The Go reference (`sky dev`) does not expose `Html.htmlRender` and exits 1 on
+//! The Go reference (`ipe dev`) does not expose `Html.htmlRender` and exits 1 on
 //! this source, so there is no Go-parity assertion here. The test asserts the
 //! emitted Rust compiles (`cargo build` exit 0 — enforced inside
 //! `build_and_run_emitted`) and the binary runs (exit 0) and renders the four
@@ -56,7 +56,7 @@ fn build_run_input_callback() -> support::RunOutcome {
         .join("golden")
         .join("input_callback_maybe_field");
     let entry = dir.join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_m7_input_callback_maybe_field_e2e");
+    let out = std::env::temp_dir().join("ipec_m7_input_callback_maybe_field_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

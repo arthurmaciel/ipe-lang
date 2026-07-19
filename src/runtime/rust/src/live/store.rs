@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 /// carries. Bumped ONLY when the tag framing / blob encoding itself changes
 /// shape (domain-separation convention), never for a Model change — the
 /// Model's own shape is covered by the structural half of the hash.
-pub const LIVE_MODEL_SCHEMA_WIRE_VERSION: &str = "sky-live-model-schema-v1";
+pub const LIVE_MODEL_SCHEMA_WIRE_VERSION: &str = "ipe-live-model-schema-v1";
 
 /// Encode one Model checkpoint as `base64(schema_tag(32) ++ bincode(model))`
 /// — self-contained (tag travels inside the blob), TEXT-column-safe on every
@@ -485,10 +485,10 @@ where
 /// Namespace session ids under a fixed prefix (Go `redisKey`).
 #[cfg(feature = "redis_store")]
 fn redis_key(sid: &str) -> String {
-    format!("sky:sess:{sid}")
+    format!("ipe:sess:{sid}")
 }
 
-/// Cross-instance store backed by Redis. Sessions live under `sky:sess:<sid>`
+/// Cross-instance store backed by Redis. Sessions live under `ipe:sess:<sid>`
 /// as a HASH (`blob` = the serde-JSON checkpoint, `tag` = the hex Model schema
 /// tag — one key, one native Redis TTL, so the tag and blob can never expire
 /// out of sync). Expiry is the server's job; there's no sweep loop for the
@@ -645,11 +645,11 @@ where
     if kind == "sqlite" {
         match SqliteStore::new(path, ttl, schema_tag).await {
             Ok(s) => {
-                eprintln!("[sky.live] session store: sqlite @ {path}");
+                eprintln!("[ipe.live] session store: sqlite @ {path}");
                 return Arc::new(s);
             }
             Err(e) => {
-                eprintln!("[sky.live] sqlite store unavailable ({e}); falling back to memory")
+                eprintln!("[ipe.live] sqlite store unavailable ({e}); falling back to memory")
             }
         }
     }
@@ -657,11 +657,11 @@ where
     if kind == "postgres" {
         match PostgresStore::new(path, ttl, schema_tag).await {
             Ok(s) => {
-                eprintln!("[sky.live] session store: postgres");
+                eprintln!("[ipe.live] session store: postgres");
                 return Arc::new(s);
             }
             Err(e) => {
-                eprintln!("[sky.live] postgres store unavailable ({e}); falling back to memory")
+                eprintln!("[ipe.live] postgres store unavailable ({e}); falling back to memory")
             }
         }
     }
@@ -669,10 +669,10 @@ where
     if kind == "redis" {
         match RedisStore::new(path, ttl, schema_tag).await {
             Ok(s) => {
-                eprintln!("[sky.live] session store: redis");
+                eprintln!("[ipe.live] session store: redis");
                 return Arc::new(s);
             }
-            Err(e) => eprintln!("[sky.live] redis store unavailable ({e}); falling back to memory"),
+            Err(e) => eprintln!("[ipe.live] redis store unavailable ({e}); falling back to memory"),
         }
     }
     let _ = (kind, path, schema_tag);
@@ -685,13 +685,13 @@ where
     Arc::new(MemoryStore::new(ttl))
 }
 
-/// The exact `[sky.live] session store: memory (ttl=…)` line Go emits, with a
+/// The exact `[ipe.live] session store: memory (ttl=…)` line Go emits, with a
 /// Go `log.LstdFlags` timestamp prefix and a Go-`Duration.String()` ttl. Shared
 /// so the in-process console sub-app mount can emit the SAME second line Go's
 /// console sub-app store init produces (Go prints this line TWICE: root + console).
 pub(crate) fn memory_store_log_line(ttl: Duration) -> String {
     format!(
-        "{} [sky.live] session store: memory (ttl={})",
+        "{} [ipe.live] session store: memory (ttl={})",
         go_log_timestamp(),
         go_duration_string(ttl)
     )
@@ -744,12 +744,12 @@ mod go_format_tests {
         let line = memory_store_log_line(Duration::from_secs(3600));
         // Trailing message exactly as Go (post-timestamp).
         assert!(
-            line.ends_with("[sky.live] session store: memory (ttl=1h0m0s)"),
+            line.ends_with("[ipe.live] session store: memory (ttl=1h0m0s)"),
             "got {line:?}"
         );
         // A `log.LstdFlags` timestamp prefix `YYYY/MM/DD HH:MM:SS ` precedes it.
         let prefix = line
-            .strip_suffix("[sky.live] session store: memory (ttl=1h0m0s)")
+            .strip_suffix("[ipe.live] session store: memory (ttl=1h0m0s)")
             .unwrap_or("");
         assert_eq!(
             prefix.len(),
@@ -817,7 +817,7 @@ mod tests {
     #[cfg(feature = "db")]
     #[tokio::test]
     async fn sqlite_store_checkpoint_survives_restart() {
-        let path = std::env::temp_dir().join(format!("skytest_p5_{}.db", std::process::id()));
+        let path = std::env::temp_dir().join(format!("ipetest_p5_{}.db", std::process::id()));
         let p = path.to_str().unwrap();
         let _ = std::fs::remove_file(p);
         {
@@ -847,7 +847,7 @@ mod tests {
     #[cfg(feature = "db")]
     #[tokio::test]
     async fn sqlite_store_rejects_a_row_written_by_a_different_schema_tag() {
-        let path = std::env::temp_dir().join(format!("skytest_h24_{}.db", std::process::id()));
+        let path = std::env::temp_dir().join(format!("ipetest_h24_{}.db", std::process::id()));
         let p = path.to_str().unwrap();
         let _ = std::fs::remove_file(p);
         {
@@ -874,7 +874,7 @@ mod tests {
     #[cfg(feature = "db")]
     #[tokio::test]
     async fn sqlite_store_accepts_a_row_written_by_the_same_schema_tag() {
-        let path = std::env::temp_dir().join(format!("skytest_h24ok_{}.db", std::process::id()));
+        let path = std::env::temp_dir().join(format!("ipetest_h24ok_{}.db", std::process::id()));
         let p = path.to_str().unwrap();
         let _ = std::fs::remove_file(p);
         {
@@ -955,7 +955,7 @@ mod tests {
     #[cfg(feature = "redis_store")]
     #[test]
     fn redis_key_is_namespaced() {
-        assert_eq!(redis_key("abc"), "sky:sess:abc");
+        assert_eq!(redis_key("abc"), "ipe:sess:abc");
     }
 
     /// Postgres restart survival — gated on `IPE_TEST_PG_URL` (a reachable
@@ -1037,7 +1037,7 @@ mod tests {
     #[cfg(feature = "db")]
     #[tokio::test]
     async fn sqlite_store_live_sessions_excludes_cold_rows() {
-        let path = std::env::temp_dir().join(format!("skytest_lives_{}.db", std::process::id()));
+        let path = std::env::temp_dir().join(format!("ipetest_lives_{}.db", std::process::id()));
         let p = path.to_str().unwrap();
         let _ = std::fs::remove_file(p);
         let s: SqliteStore<i32, ()> = SqliteStore::new(p, Duration::from_secs(60), TEST_TAG)
@@ -1076,7 +1076,7 @@ mod tests {
     #[tokio::test]
     async fn sqlite_store_new_format_round_trips_model_through_bincode() {
         use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
-        let path = std::env::temp_dir().join(format!("skytest_binc_{}.db", std::process::id()));
+        let path = std::env::temp_dir().join(format!("ipetest_binc_{}.db", std::process::id()));
         let p = path.to_str().unwrap();
         let _ = std::fs::remove_file(p);
         let model: i32 = 42;
@@ -1120,7 +1120,7 @@ mod tests {
     #[cfg(feature = "db")]
     #[tokio::test]
     async fn sqlite_store_old_json_row_is_rejected_not_crashed() {
-        let path = std::env::temp_dir().join(format!("skytest_oldjson_{}.db", std::process::id()));
+        let path = std::env::temp_dir().join(format!("ipetest_oldjson_{}.db", std::process::id()));
         let p = path.to_str().unwrap();
         let _ = std::fs::remove_file(p);
         let s: SqliteStore<i32, ()> = SqliteStore::new(p, Duration::from_secs(60), TEST_TAG)

@@ -1,10 +1,10 @@
 //! The embedded Ipê standard-library source (`Ipe.*`).
 //!
 //! `ipe` is self-contained: the foundational `Ipe` modules are compiled
-//! into the binary as their original Sky source (a port of the Haskell
-//! compiler's Template-Haskell embedding of `sky-stdlib/`). The checked-in copies
-//! under `crates/skyc/stdlib/Sky/Core/` are byte-identical to the upstream
-//! `sky-stdlib` sources; embedding a copy (rather than `include_str!`-ing an
+//! into the binary as their original Ipe source (a port of the Haskell
+//! compiler's Template-Haskell embedding of `ipe-stdlib/`). The checked-in copies
+//! under `crates/ipec/stdlib/Ipe/Core/` are byte-identical to the upstream
+//! `ipe-stdlib` sources; embedding a copy (rather than `include_str!`-ing an
 //! out-of-repo path) keeps the build portable and the toolchain hermetic.
 //!
 //! `Ipe.Prelude` resolves to `Basics` (the Prelude re-exports the
@@ -226,7 +226,7 @@ const IPE_TEST: &str = include_str!("../../stdlib/Ipe/Test.ipe");
 
 /// `Ipe.Live.Head` — typed `<head>` helpers for Ipe.Live per-page injection.
 ///
-/// Faithfully ported from `../sky/sky-stdlib/Std/Live/Head.sky`.
+/// Faithfully ported from `../ipe/ipe-stdlib/Std/Live/Head.ipe`.
 /// All helpers delegate to existing kernel qualifiers (`Html` / `Attr`) —
 /// no new kernel variants required.  `Ipe.Live.Head` is NOT in
 /// `STDLIB_MODULE_QUALIFIERS` (that table only has `Ipe.Live` → `"Live"`),
@@ -238,7 +238,7 @@ const STD_LIVE_HEAD: &str = include_str!("../../stdlib/Ipe/Live/Head.ipe");
 /// `Ipe.Ui.Responsive` — device-class helpers for responsive layout branching.
 ///
 /// Pure Ipê source; no kernel calls.  Ported verbatim from
-/// `../sky/sky-stdlib/Std/Ui/Responsive.sky`.
+/// `../ipe/ipe-stdlib/Std/Ui/Responsive.ipe`.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 /// Unblocks `37-composite-live-shop` (N0004: Ipe.Ui.Responsive).
 const STD_UI_RESPONSIVE: &str = include_str!("../../stdlib/Ipe/Ui/Responsive.ipe");
@@ -247,7 +247,7 @@ const STD_UI_RESPONSIVE: &str = include_str!("../../stdlib/Ipe/Ui/Responsive.ipe
 ///
 /// Depends on `Ui.colorCss` (kernel `UiColorCss`) to convert `Color` values to
 /// CSS strings inside SVG attributes.  Ported verbatim from
-/// `../sky/sky-stdlib/Std/Ui/Chart.sky`.
+/// `../ipe/ipe-stdlib/Std/Ui/Chart.ipe`.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 /// Unblocks `38-composite-ui-multibackend` (N0004: Ipe.Ui.Chart).
 const STD_UI_CHART: &str = include_str!("../../stdlib/Ipe/Ui/Chart.ipe");
@@ -257,7 +257,7 @@ const STD_UI_CHART: &str = include_str!("../../stdlib/Ipe/Ui/Chart.ipe");
 /// Pure-Ipê; uses the native `Ui.gridTracksRaw` kernel (`KernelFn::UiGridTracksRaw`)
 /// that constructs `AttrGridTracks(cols, rows)`, rendered as `grid-template-columns`/
 /// `grid-template-rows` by the web renderer and parsed by `tui/layout.rs`.
-/// Ported from `../sky/sky-stdlib/Std/Ui/Grid.sky`; divergence recorded in
+/// Ported from `../ipe/ipe-stdlib/Std/Ui/Grid.ipe`; divergence recorded in
 /// `docs/divergences-from-sky.md` (typed carrier vs reference's sentinel approach).
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 /// Unblocks `26-ui-showcase` (IPE-N0004: Ipe.Ui.Grid — Grid.columns/fr/px).
@@ -269,7 +269,7 @@ const STD_UI_GRID: &str = include_str!("../../stdlib/Ipe/Ui/Grid.ipe");
 /// Pure-Ipê; the `transitionRaw` primitive is a native `Ipe.Ui` kernel
 /// (`KernelFn::UiTransitionRaw`) that constructs `AttrTransition shorthand
 /// respect`, rendered by `src/runtime/rust/src/ui/render.rs`.  Ported from
-/// `../sky/sky-stdlib/Std/Ui/Transition.sky`; the reference's
+/// `../ipe/ipe-stdlib/Std/Ui/Transition.ipe`; the reference's
 /// `import Ipe.Ui exposing (transitionRaw)` is qualified to `Ui.transitionRaw`
 /// (mirrors the `Ipe.Ui.Grid` port's `Ui.style` call).
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
@@ -290,7 +290,7 @@ const STD_UI_TRANSFORM: &str = include_str!("../../stdlib/Ipe/Ui/Transform.ipe")
 /// that constructs `AttrAnimation name shorthand keyframes respect`, rendered
 /// by `src/runtime/rust/src/ui/render.rs` (inline `animation:` property) and
 /// injected as an `@keyframes` block by `live::style_inject::build_anim`.
-/// Ported from `../sky/sky-stdlib/Std/Ui/Animation.sky`; the reference's
+/// Ported from `../ipe/ipe-stdlib/Std/Ui/Animation.ipe`; the reference's
 /// `import Ipe.Ui exposing (animateRaw)` is qualified to `Ui.animateRaw`
 /// (mirrors the `Ipe.Ui.Transition` port's `Ui.transitionRaw` call).
 /// Depends on the sibling `Ipe.Ui.Transition` (`Easing`) and `Ipe.Ui.Transform`
@@ -303,7 +303,7 @@ const STD_UI_ANIMATION: &str = include_str!("../../stdlib/Ipe/Ui/Animation.ipe")
 ///
 /// Compiled pure-Ipê source: defines the `Money` / `Currency` ADTs and
 /// pattern-matches their own constructors.  All `Ffi.callPure` calls from
-/// the upstream Haskell stdlib have been replaced with pure Sky
+/// the upstream Haskell stdlib have been replaced with pure Ipe
 /// case-expressions / recursions.  The FX rate registry is stubbed.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 /// Unblocks `00-standard-libs` (N0004: Ipe.Money).

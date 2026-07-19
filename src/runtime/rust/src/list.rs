@@ -142,7 +142,7 @@ pub fn list_range(lo: i64, hi: i64) -> Vec<i64> {
     let n = (hi as i128) - (lo as i128) + 1;
     if n > CAP as i128 {
         eprintln!(
-            "[sky.list] List.range: span of {n} elements exceeds the {CAP}-element \
+            "[ipe.list] List.range: span of {n} elements exceeds the {CAP}-element \
              allocation cap; returning the first {CAP} only"
         );
         return (lo..=hi).take(CAP).collect();
@@ -219,7 +219,7 @@ fn sort_by_total<T, F: Fn(&T, &T) -> std::cmp::Ordering>(result: &mut [T], cmp: 
     let order = std::panic::AssertUnwindSafe(|| result.sort_by(&cmp));
     if std::panic::catch_unwind(order).is_err() {
         eprintln!(
-            "[sky.list] sort: comparator is not a consistent total order (NaN?); unspecified order"
+            "[ipe.list] sort: comparator is not a consistent total order (NaN?); unspecified order"
         );
     }
 }
@@ -270,7 +270,7 @@ pub fn list_sort_with<A: Clone>(cmp: impl Fn(A, A) -> i64, list: Vec<A>) -> Vec<
     }));
     if outcome.is_err() {
         eprintln!(
-            "[sky.list] List.sortWith: comparator is not a consistent total order; \
+            "[ipe.list] List.sortWith: comparator is not a consistent total order; \
              returning input in unspecified order"
         );
     }

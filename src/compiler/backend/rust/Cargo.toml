@@ -9,7 +9,7 @@ ipe_ir = { path = "../../ir" }
 ipe_intern = { path = "../../intern" }
 ipe_backend = { path = ".." }
 ipe_diagnostics = { path = "../../diagnostics" }
-# Model schema tag (H24) — same pin as ipe_watch/skyc/runtime.
+# Model schema tag (H24) — same pin as ipe_watch/ipec/runtime.
 sha2 = "0.10"
 
 [lints]

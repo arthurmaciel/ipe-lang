@@ -17,10 +17,10 @@ normaliser collapses so a diff shows only behaviourally-meaningful divergences:
     turns into CSS. Same visual; drop both delivery forms.
   * SVG chart coordinates — NUMERICALLY CANONICALISED, not masked. The upstream
     Go bug this used to hide (`Math.min`/`Math.max` truncating Float args to Int,
-    anzellai/sky PR #136) landed a fix in Go `v0.17.1`; the pinned oracle
+    anzellai/ipe PR #136) landed a fix in Go `v0.17.1`; the pinned oracle
     (`tools/oracle/README.md`, currently `v0.17.3`) is newer, so the Go side no
     longer produces truncated coordinates. `Ipe.String.fromFloat` in this
-    repo's Rust runtime (`src/runtime/rust/src/sky_runtime/string.rs`) is a byte-for-byte
+    repo's Rust runtime (`src/runtime/rust/src/ipe_runtime/string.rs`) is a byte-for-byte
     port of Go's `strconv.FormatFloat(f, 'g', -1, 64)`, verified against real
     oracle probes — so there is no float-*formatting* divergence between the two
     backends to paper over either. A blanket `'#'` mask on every SVG coordinate
@@ -45,7 +45,7 @@ import sys
 import re
 from html.parser import HTMLParser
 
-SKYID_KEYS = ('ipe-id', 'data-ipe-hid', 'data-ipe-pc', 'data-ipe-mq',
+IPEID_KEYS = ('ipe-id', 'data-ipe-hid', 'data-ipe-pc', 'data-ipe-mq',
               'data-ipe-anim', 'data-ipe-tr', 'data-ipe-key')
 VOID = {'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
         'link', 'meta', 'param', 'source', 'track', 'wbr'}
@@ -102,7 +102,7 @@ def norm_svg_coord(v):
     return _SVG_NUM_RE.sub(lambda m: _canon_svg_num(m.group(0)), v)
 
 
-def norm_skyid(v):
+def norm_ipeid(v):
     return v.replace('#', '_').replace('.', '_')
 
 
@@ -116,7 +116,7 @@ def esc_attr(v):
 
 
 def norm_style_text(t):
-    return re.sub(r'ipe-id="([^"]*)"', lambda m: 'ipe-id="%s"' % norm_skyid(m.group(1)), t)
+    return re.sub(r'ipe-id="([^"]*)"', lambda m: 'ipe-id="%s"' % norm_ipeid(m.group(1)), t)
 
 
 class Norm(HTMLParser):
@@ -149,11 +149,11 @@ class Norm(HTMLParser):
                 v = ''
             if k in ('data-ipe-on', 'data-ipe-hid') or k in DELIVERY_ATTRS:
                 continue
-            if k.startswith('sky-') and k != 'ipe-id' and k != 'ipe-key':
+            if k.startswith('ipe-') and k != 'ipe-id' and k != 'ipe-key':
                 events.add(k[4:])
                 continue
-            if k in SKYID_KEYS:
-                v = norm_skyid(v)
+            if k in IPEID_KEYS:
+                v = norm_ipeid(v)
             elif in_svg and k in SVG_COORD:
                 v = norm_svg_coord(v)  # tolerance-round, don't mask (BACKLOG #110.1)
             norm.append((k, v))
@@ -261,7 +261,7 @@ class RootExtractor(HTMLParser):
             self.parts.append('&#%s;' % n)
 
 
-def extract_sky_root(html):
+def extract_ipe_root(html):
     """Return the #ipe-root element subtree (the rendered Ipe.Ui view), or '' —
     we compare the VIEW, not the page shell (Go inlines client JS, Rust externalises
     it; the shell legitimately differs)."""
@@ -275,7 +275,7 @@ def extract_sky_root(html):
 
 def normalize(path):
     html = open(path, encoding='utf-8', errors='replace').read()
-    root = extract_sky_root(html)
+    root = extract_ipe_root(html)
     p = Norm()
     p.feed(root)
     p.close()

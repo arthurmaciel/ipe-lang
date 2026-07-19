@@ -83,7 +83,7 @@ pub fn time_diff_millis(later: i64, earlier: i64) -> i64 {
 
 /// `Time.format : String -> Int -> String` — custom Go-style layout.
 /// Go uses `t.UTC().Format(layout)`. We map the Go reference-time layout to
-/// chrono's strftime format. Sky exposes the Go layout directly
+/// chrono's strftime format. Ipe exposes the Go layout directly
 /// ("2006-01-02 15:04:05"), so we translate the Go reference time tokens.
 /// Fallback to a best-effort strftime for unrecognised tokens (matches the
 /// open-ended nature of Go's `t.Format`).

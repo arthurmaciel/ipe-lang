@@ -144,7 +144,7 @@ probe chain could change an *untyped* `db_query` result for a column that used
 to read as String but now reads as Number on sqlite — audit: numbers stringify
 identically (`n.to_string()`), so `HashMap` values are unchanged; JSON bridge
 values change type (String→Number) which is what the typed decoders want. Re-gate:
-`cargo nextest -p sky-runtime-rust --features full` (db tests), the db examples
+`cargo nextest -p ipe-runtime-rust --features full` (db tests), the db examples
 in the sweep. No golden impact (runtime-only).
 
 ---
@@ -395,7 +395,7 @@ Highest-risk item in the theme — it adds a TLS handshake to the client dial pa
 and touches the emitted Cargo.toml (golden-adjacent). Get the `ServerName`
 derivation right (URL host, IDNA) or cert verification breaks. Ensure the
 `MaybeTlsStream::Rustls` variant is available (it is when a rustls feature is on).
-Re-gate: `cargo nextest -p sky-runtime-rust --features full` (ws tests), the
+Re-gate: `cargo nextest -p ipe-runtime-rust --features full` (ws tests), the
 `project.rs` golden/emit tests, a ws example in the sweep, and manual `wss://`
 smoke against a public echo (`wss://echo.websocket.org`-class) behind the
 networked test.
@@ -480,7 +480,7 @@ Small, runtime-only. Existing tests that assert keyed helpers *drop* keys (if
 any) must be updated to the new contract — search first. The extra
 `AttrAttribute` prepend changes rendered HTML (a `ipe-key` attr now appears);
 any golden/snapshot of keyed output updates. Re-gate: `cargo nextest -p
-sky-runtime-rust --features full` (ui tests), a keyed Live example in the sweep.
+ipe-runtime-rust --features full` (ui tests), a keyed Live example in the sweep.
 
 ---
 

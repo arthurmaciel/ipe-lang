@@ -6,12 +6,12 @@ module Main exposing (main)
 --
 --   * `describePanic : PanicInfo -> String` — the nominal names are
 --     annotatable builtins, and a pattern-bound payload agrees with the
---     helper's parameter on ONE Rust type (`SkyPanicInfo`). Before the fix
+--     helper's parameter on ONE Rust type (`IpePanicInfo`). Before the fix
 --     this exact shape was an exit-0-then-cargo-fail (the helper's parameter
 --     lowered to a project-local synthesized record struct).
 --   * `describeInfo info = info.message` — UNANNOTATED helper over the
 --     nominal `ErrorInfo`; field access resolves via the builtin field
---     tables (`sky_types`' `ErrorRecordFields`, the `Request` recipe).
+--     tables (`ipe_types`' `ErrorRecordFields`, the `Request` recipe).
 --   * `info.details` / `p.message` / `p.stack` / `t.expected` / `t.actual`
 --     — every fixed field of the three nominal types is read somewhere.
 

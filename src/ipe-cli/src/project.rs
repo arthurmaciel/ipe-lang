@@ -238,7 +238,7 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
         source: e,
     })?;
 
-    // `ipe.toml` schema: `name` may sit at the top level (Sky's own examples) or
+    // `ipe.toml` schema: `name` may sit at the top level (Ipe's own examples) or
     // under `[project]`; the source root comes from `[source] root = "…"`,
     // defaulting to `src`; the driver comes from `[database] driver = "…"`,
     // defaulting to sqlite. `section` is the empty string at the top level.
@@ -551,7 +551,7 @@ pub fn inject_compiled_std_closure(
 /// `import\tB`) used by the topo-sort driver to build the import graph
 /// before any canonicalisation runs. It recognises:
 ///
-/// ```sky
+/// ```ipe
 /// import Lib.Utils
 /// import Lib.Utils as U
 /// import Lib.Utils exposing (..)
@@ -581,7 +581,7 @@ mod tests {
     /// return the manifest path. `database_section` is spliced in verbatim
     /// (empty string → no `[database]` section at all).
     fn write_manifest(test_name: &str, database_section: &str) -> PathBuf {
-        let tmp = std::env::temp_dir().join(format!("skyc_project_{test_name}"));
+        let tmp = std::env::temp_dir().join(format!("ipec_project_{test_name}"));
         let _ = fs::remove_dir_all(&tmp);
         let src = tmp.join("src");
         fs::create_dir_all(&src).expect("create src/");

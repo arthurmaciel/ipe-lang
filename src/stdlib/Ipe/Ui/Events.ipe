@@ -18,10 +18,10 @@ onClick : msg -> Ui.Attribute msg
 onClick m = Ui.onClick m
 
 
--- Divergence from upstream Sky: the Rust `Ui.onSubmit` kernel is
+-- Divergence from upstream Ipe: the Rust `Ui.onSubmit` kernel is
 -- `(a -> msg) -> Attribute msg` — it takes a form-decoder function
 -- (the typed-record-arg pattern `onSubmit DoSignIn`, where
--- `DoSignIn : LoginForm -> Msg`). Upstream Sky's `onSubmit` is the
+-- `DoSignIn : LoginForm -> Msg`). Upstream Ipe's `onSubmit` is the
 -- permissive `a -> Attribute b`; this re-export mirrors the Rust
 -- kernel's function-arg contract so the wrapper type-checks against
 -- it (recorded in docs/divergences-from-sky.md).
@@ -29,10 +29,10 @@ onSubmit : (a -> msg) -> Ui.Attribute msg
 onSubmit m = Ui.onSubmit m
 
 
--- Divergence from upstream Sky (same rationale as `onSubmit`): the
+-- Divergence from upstream Ipe (same rationale as `onSubmit`): the
 -- Rust `Ui.onInput` kernel is `(String -> msg) -> Attribute msg` — it
 -- takes a handler from the input's String value to a Msg. Upstream
--- Sky's re-export is `msg -> Attribute msg`; this mirrors the Rust
+-- Ipe's re-export is `msg -> Attribute msg`; this mirrors the Rust
 -- kernel's function-arg contract.
 onInput : (String -> msg) -> Ui.Attribute msg
 onInput m = Ui.onInput m

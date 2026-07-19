@@ -55,7 +55,7 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code)
 }
 
 #[test]
-fn ctor_pattern_arity_is_sky_t0013() {
+fn ctor_pattern_arity_is_ipe_t0013() {
     assert_gate(
         "gate_arity",
         "m3a_gate_arity_emit",

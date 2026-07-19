@@ -1014,7 +1014,7 @@ pub fn db_get_int<R: IpeRow>(field: String, row: &R) -> i64 {
 }
 
 /// Lowercase sha256-hex of a migration's SQL text. This value is stored in the
-/// `_sky_migrations` ledger and is a CROSS-BACKEND DB CONTRACT: the Go backend
+/// `_ipe_migrations` ledger and is a CROSS-BACKEND DB CONTRACT: the Go backend
 /// records `fmt.Sprintf("%x", sha256.Sum256([]byte(stmt)))` (db_auth.go), so a
 /// database created/advanced by one backend must hash byte-identically under the
 /// other. Hence sha256, lowercase hex, over the exact statement bytes — never a
@@ -1027,7 +1027,7 @@ fn migrate_checksum(sql: &str) -> String {
 }
 
 /// `migrate : Db -> List (String, String) -> Task Error (List String)` — apply
-/// forward-only schema migrations, recording each in the `_sky_migrations`
+/// forward-only schema migrations, recording each in the `_ipe_migrations`
 /// ledger so re-runs are idempotent. Go parity: `Db_migrateApply`'s library
 /// (Task-return) path in `runtime-go/rt/db_auth.go`.
 ///
@@ -1088,13 +1088,13 @@ pub fn db_migrate_apply<E: Send + From<String> + 'static>(
         // 1. Ensure the ledger exists. `IF NOT EXISTS` → idempotent.
         if let IpeResult::Err(e) = db_exec_raw::<E>(
             db.clone(),
-            "CREATE TABLE IF NOT EXISTS _sky_migrations (name TEXT PRIMARY KEY, \
+            "CREATE TABLE IF NOT EXISTS _ipe_migrations (name TEXT PRIMARY KEY, \
              checksum TEXT NOT NULL, applied_at TEXT NOT NULL)"
                 .to_string(),
         )
         .await
         {
-            db_op_fail!("create _sky_migrations", e);
+            db_op_fail!("create _ipe_migrations", e);
         }
 
         // 2. Snapshot already-applied migrations: name -> (checksum, applied_at).
@@ -1102,13 +1102,13 @@ pub fn db_migrate_apply<E: Send + From<String> + 'static>(
         //    single-deployer so no TOCTOU concern. No interpolation in the SELECT.
         let rows: Vec<HashMap<String, String>> = match db_query::<E>(
             db.clone(),
-            "SELECT name, checksum, applied_at FROM _sky_migrations".to_string(),
+            "SELECT name, checksum, applied_at FROM _ipe_migrations".to_string(),
             Vec::new(),
         )
         .await
         {
             IpeResult::Ok(r) => r,
-            IpeResult::Err(e) => db_op_fail!("read _sky_migrations", e),
+            IpeResult::Err(e) => db_op_fail!("read _ipe_migrations", e),
         };
         let mut applied: HashMap<String, (String, String)> = HashMap::new();
         for row in &rows {
@@ -1219,7 +1219,7 @@ pub fn db_migrate_apply<E: Send + From<String> + 'static>(
                     // Ledger INSERT uses BOUND params — no interpolation.
                     db_exec::<E>(
                         c.clone(),
-                        "INSERT INTO _sky_migrations (name, checksum, applied_at) \
+                        "INSERT INTO _ipe_migrations (name, checksum, applied_at) \
                              VALUES (?, ?, ?)"
                             .to_string(),
                         vec![rec_name, rec_sum, applied_at],
@@ -2716,7 +2716,7 @@ mod tests {
         // Ledger recorded exactly the two migrations.
         let ledger: IpeResult<String, Vec<HashMap<String, String>>> = db_query(
             db.clone(),
-            "SELECT name, checksum FROM _sky_migrations ORDER BY name".to_string(),
+            "SELECT name, checksum FROM _ipe_migrations ORDER BY name".to_string(),
             Vec::new(),
         )
         .await;
@@ -4048,7 +4048,7 @@ mod tests {
             "default URL must not be in-memory: {url}"
         );
         assert!(
-            url.contains("sky.db"),
+            url.contains("ipe.db"),
             "default URL must reference a named file: {url}"
         );
     }

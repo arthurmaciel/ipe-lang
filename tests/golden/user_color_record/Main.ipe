@@ -32,7 +32,7 @@ shade c =
 
 mkPaint : Paint
 mkPaint =
-    { c = Cyan, label = "sky" }
+    { c = Cyan, label = "ipe" }
 
 
 main =

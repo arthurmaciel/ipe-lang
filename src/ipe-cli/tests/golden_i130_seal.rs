@@ -43,7 +43,7 @@ fn repo_root() -> PathBuf {
 /// `CliError::Pipeline` diagnostic.  Runs WITHOUT `IPE_E2E` so the gate
 /// checks remain fast in the default CI pass.
 #[allow(dead_code)] // retained gate helper for env-gated fixtures
-fn assert_skyc_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code) {
+fn assert_ipec_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code) {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -64,7 +64,7 @@ fn assert_skyc_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::
     assert_eq!(
         got,
         Some(expected),
-        "fixture {fixture}: expected skyc-fail {expected:?}, got build result {built:?}"
+        "fixture {fixture}: expected ipec-fail {expected:?}, got build result {built:?}"
     );
 }
 
@@ -89,7 +89,7 @@ fn c01_enum_capture_fix1() {
         .join("golden")
         .join("enum_capture")
         .join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_i130_enum_capture_e2e");
+    let out = std::env::temp_dir().join("ipec_i130_enum_capture_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -136,7 +136,7 @@ fn c02_record_capture_fix1() {
         .join("golden")
         .join("record_capture")
         .join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_i130_record_capture_e2e");
+    let out = std::env::temp_dir().join("ipec_i130_record_capture_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -184,7 +184,7 @@ fn c13_complex_arg_hoist_t4() {
         .join("golden")
         .join("complex_arg_hoist")
         .join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_i130_complex_arg_hoist_e2e");
+    let out = std::env::temp_dir().join("ipec_i130_complex_arg_hoist_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -286,7 +286,7 @@ fn c05_streamwriter_capture_forward() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "StreamWriter capture-forward must pass skyc (was IPE-L0126): {:?}",
+        "StreamWriter capture-forward must pass ipec (was IPE-L0126): {:?}",
         built.err()
     );
 }
@@ -328,7 +328,7 @@ fn c06_stream_string_capture_seal() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "Stream.stream String-capture must pass skyc: {:?}",
+        "Stream.stream String-capture must pass ipec: {:?}",
         built.err()
     );
 

@@ -233,7 +233,7 @@ mod tests {
     }
 
     #[test]
-    fn spine_is_not_a_sky_module() {
+    fn spine_is_not_a_ipe_module() {
         assert_ne!(RustFileId::Spine, RustFileId::IpeModule(ModPath(vec![])));
     }
 

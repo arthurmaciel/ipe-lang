@@ -63,7 +63,7 @@ fn fixture_src_entry(root: &Path, name: &str) -> PathBuf {
 /// Build-only seal: `BroadcastMsg any` — ipe exit 0 AND cargo build green.
 /// Without the fix, IPE-L0102 (`Feature::Polymorphism` in `lower_enum` Gate 1).
 #[test]
-fn any_ctor_payload_skyc_and_cargo_zero() {
+fn any_ctor_payload_ipec_and_cargo_zero() {
     let root = repo_root();
     let entry = fixture_entry(&root, "any_ctor_payload");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("l0102_any_ctor_payload_emit");
@@ -76,7 +76,7 @@ fn any_ctor_payload_skyc_and_cargo_zero() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc must accept `BroadcastMsg any` (was IPE-L0102 pre-fix): {:?}",
+        "ipec must accept `BroadcastMsg any` (was IPE-L0102 pre-fix): {:?}",
         built.err()
     );
 

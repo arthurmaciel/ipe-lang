@@ -20,7 +20,7 @@ import Ipe.Log exposing (println)
 -- `insertRow` only through a DEEPER lambda — never got its pre-clone and
 -- move-captured `insertRow` out of the enclosing `Fn` env → E0507.
 --
--- Pre-fix: skyc-0 but cargo E0507 "cannot move out of `insertRow`, a captured
+-- Pre-fix: ipec-0 but cargo E0507 "cannot move out of `insertRow`, a captured
 -- variable in an `Fn` closure". Post-fix: recurse FIRST, decide on the
 -- processed body — the pre-clone relays outward through every boundary.
 save : String -> Task Error Int

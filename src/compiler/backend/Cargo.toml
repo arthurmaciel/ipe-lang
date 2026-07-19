@@ -8,7 +8,7 @@ license.workspace = true
 ipe_ir = { path = "../ir" }
 ipe_diagnostics = { path = "../diagnostics" }
 # Phase 6 (Task 19): `EmittedProject` / `RelPath` need to round-trip through
-# the on-disk build cache (`skyc::cache`). See `RelPath`'s manual
+# the on-disk build cache (`ipec::cache`). See `RelPath`'s manual
 # `Serialize`/`Deserialize` impls for why `#[derive]` alone would be unsound
 # here (it would bypass `RelPath::new`'s path-traversal validation on load).
 serde = { version = "1", features = ["derive"] }

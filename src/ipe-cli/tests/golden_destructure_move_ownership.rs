@@ -35,10 +35,10 @@ fn entry_path(root: &Path) -> PathBuf {
 /// ipe-0: the compiler accepts the program AND the reused destructure component
 /// `a` is cloned on its non-last consuming read.
 #[test]
-fn i224_destructure_skyc_accepts_and_clones_reused_component() {
+fn i224_destructure_ipec_accepts_and_clones_reused_component() {
     let root = repo_root();
     let entry = entry_path(&root);
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i224_destructure_skyc_out");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i224_destructure_ipec_out");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -75,7 +75,7 @@ fn i224_destructure_cargo_builds_and_runs() {
 
     let root = repo_root();
     let entry = entry_path(&root);
-    let out = std::env::temp_dir().join("skyc_i224_destructure_move_ownership_e2e");
+    let out = std::env::temp_dir().join("ipec_i224_destructure_move_ownership_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {

@@ -61,7 +61,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
     let root = repo_root();
     let dir = golden_dir(&root, name);
     let entry = dir.join("Main.ipe");
-    let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
+    let out = std::env::temp_dir().join(format!("ipec_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -189,7 +189,7 @@ fn json_dec_list_letbound() {
 /// `succeed makeProfile |> required "username" string |> optional "followers" int 0`.
 /// Named `makeProfile` function is a `FuncValue` — the pre-existing passing
 /// shape; confirms Fix A case 1 is not regressed.
-/// Output: `"skydev 0"`.
+/// Output: `"ipedev 0"`.
 #[test]
 fn json_dec_pipeline_record() {
     assert_runs_and_matches_oracle("json_dec_pipeline_record");

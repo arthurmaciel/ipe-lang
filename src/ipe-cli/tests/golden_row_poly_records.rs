@@ -61,9 +61,9 @@ fn diag_code(err: &ipe::CliError) -> Option<ipe_diagnostics::Code> {
 /// A7 exact-sorted-field-set lookup resolves this subset-access shape
 /// without a miss. Checked unconditionally (cheap, no `cargo`).
 #[test]
-fn subset_access_skyc_accepts_and_resolves_superset_struct() {
+fn subset_access_ipec_accepts_and_resolves_superset_struct() {
     let entry = golden_dir("row_poly_subset_access").join("Main.ipe");
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("row_poly_subset_access_skyc_out");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("row_poly_subset_access_ipec_out");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -97,7 +97,7 @@ fn subset_access_skyc_accepts_and_resolves_superset_struct() {
 /// cargo-0 ∧ run-0: the emitted project actually compiles and prints the
 /// field it read. Gated on `IPE_E2E=1` — matches the reference compiler's
 /// own output for the identical shape (proof-matrix row P2: "accept; prints
-/// `Ada`"), hand-verified against `sky v0.16.29`.
+/// `Ada`"), hand-verified against `ipe v0.16.29`.
 #[test]
 fn subset_access_cargo_builds_and_prints_ada() {
     if std::env::var("IPE_E2E").is_err() {
@@ -105,7 +105,7 @@ fn subset_access_cargo_builds_and_prints_ada() {
     }
 
     let entry = golden_dir("row_poly_subset_access").join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_row_poly_subset_access_e2e");
+    let out = std::env::temp_dir().join("ipec_row_poly_subset_access_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -144,9 +144,9 @@ fn subset_access_cargo_builds_and_prints_ada() {
 /// `RecAgeName { age: _, name, .. }` shape the design doc predicts.
 /// Checked unconditionally (cheap, no `cargo`).
 #[test]
-fn subset_pattern_skyc_accepts_and_completes_superset_pattern() {
+fn subset_pattern_ipec_accepts_and_completes_superset_pattern() {
     let entry = golden_dir("row_poly_subset_pattern").join("Main.ipe");
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("row_poly_subset_pattern_skyc_out");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("row_poly_subset_pattern_ipec_out");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -180,7 +180,7 @@ fn subset_pattern_skyc_accepts_and_completes_superset_pattern() {
 /// values read through both subset patterns. Gated on `IPE_E2E=1` — matches
 /// the reference compiler's own output for the identical shapes
 /// (proof-matrix rows P5 "prints (same)" and P7 "prints `Ada, Bo`"),
-/// hand-verified against `sky v0.16.29` for this combined fixture
+/// hand-verified against `ipe v0.16.29` for this combined fixture
 /// (`Iri: Ada, Bo`).
 #[test]
 fn subset_pattern_cargo_builds_and_prints_iri_ada_bo() {
@@ -189,7 +189,7 @@ fn subset_pattern_cargo_builds_and_prints_iri_ada_bo() {
     }
 
     let entry = golden_dir("row_poly_subset_pattern").join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_row_poly_subset_pattern_e2e");
+    let out = std::env::temp_dir().join("ipec_row_poly_subset_pattern_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -227,7 +227,7 @@ fn subset_pattern_cargo_builds_and_prints_iri_ada_bo() {
 /// (`unifyRecords`) rejects it as IPE-T0001, in parity with the reference's
 /// E2001 for the identical shape.
 #[test]
-fn closed_superset_is_sky_t0001() {
+fn closed_superset_is_ipe_t0001() {
     let name = "row_poly_closed_superset_neg";
     let entry = golden_dir(name).join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_out"));
@@ -276,7 +276,7 @@ fn closed_superset_is_sky_t0001() {
 /// tripwire" for the ORIGINAL (broader) framing of that risk — the fixture
 /// here covers only the local-let-binding instance of it.
 #[test]
-fn two_different_supersets_is_sky_t0001() {
+fn two_different_supersets_is_ipe_t0001() {
     let name = "row_poly_two_supersets_neg";
     let entry = golden_dir(name).join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_out"));
@@ -317,7 +317,7 @@ fn two_different_supersets_is_sky_t0001() {
 /// MUST start failing (and force a re-read of that section) the moment the
 /// syntax begins to parse.
 #[test]
-fn row_var_annotation_is_sky_p0001() {
+fn row_var_annotation_is_ipe_p0001() {
     let name = "row_poly_annotation_gap";
     let entry = golden_dir(name).join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_out"));

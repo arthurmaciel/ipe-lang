@@ -1,6 +1,6 @@
 //! Shared `Ipe.Ui` element tree — the general UI abstraction.
 //!
-//! These types mirror `sky-stdlib/Std/Ui.ipe`'s ADTs **variant-for-variant and
+//! These types mirror `ipe-stdlib/Std/Ui.ipe`'s ADTs **variant-for-variant and
 //! field-for-field**. They live in the runtime (not generated per-project) so
 //! that every backend — Ipe.Live (→ HTML), Ipe.Tui (→ ANSI cells), Ipe.Webview
 //! (→ native webview) — renders the SAME structured `Element` tree to its own
@@ -75,7 +75,7 @@ impl PseudoClass {
     /// `ipe_runtime::live::style_inject::pseudo_selector_for_tag` when
     /// decoding the `data-ipe-pc-rules` marker attribute. MUST stay in
     /// lock-step with that function and with `pseudoClassTag` in
-    /// `../sky`'s `Ipe.Ui.sky` (the shared wire-format contract).
+    /// `../ipe`'s `Ipe.Ui.ipe` (the shared wire-format contract).
     #[must_use]
     pub const fn wire_tag(self) -> &'static str {
         match self {

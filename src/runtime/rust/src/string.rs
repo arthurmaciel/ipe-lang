@@ -131,7 +131,7 @@ pub fn string_right(n: i64, s: String) -> String {
 /// `internal/strconv` `formatDigits` applies. Verified against Go 1.26.2
 /// `strconv.FormatFloat(f,'g',-1,64)` == `fmt %v`: `1e6` -> `1e+06`, `1e15` ->
 /// `1e+15`, `999999` -> `999999` (see reference-audit.md item 27 for the oracle
-/// probe). The `../sky` reference uses 21 here, which diverges from the Go
+/// probe). The `../ipe` reference uses 21 here, which diverges from the Go
 /// oracle on every `1e6..1e20` value. Non-finite values take Go's
 /// `+Inf` / `-Inf` / `NaN` spellings.
 ///

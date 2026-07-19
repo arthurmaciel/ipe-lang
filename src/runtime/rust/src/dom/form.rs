@@ -40,7 +40,7 @@ pub fn decode_form_or_warn<T: serde::de::DeserializeOwned>(fd: FormData) -> Opti
             // before logging so embedded CR/LF/control bytes can't forge log
             // lines or inject terminal output.
             eprintln!(
-                "[sky.live] form decode failed, dispatching no Msg: {}",
+                "[ipe.live] form decode failed, dispatching no Msg: {}",
                 crate::telemetry::json_escape(&e)
             );
             None

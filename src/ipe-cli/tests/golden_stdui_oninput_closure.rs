@@ -20,7 +20,7 @@
 //!
 //! ## Oracle provenance
 //!
-//! `oracle_divergence = true`: the Go reference compiler (`sky dev`) does not
+//! `oracle_divergence = true`: the Go reference compiler (`ipe dev`) does not
 //! expose `Html.htmlRender` and exits 1 on this source.  `expected_go.txt` holds
 //! ipe's own correct output — the Rust-backend HTML with the input event wired.
 //!
@@ -57,7 +57,7 @@ fn build_run_oninput_closure() -> (PathBuf, support::RunOutcome) {
         .join("golden")
         .join("stdui_oninput_closure");
     let entry = dir.join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_m7_stdui_oninput_closure_e2e");
+    let out = std::env::temp_dir().join("ipec_m7_stdui_oninput_closure_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

@@ -1,5 +1,5 @@
 //! Constraint generation, ported from the relevant arms of
-//! `Sky.Type.Constrain.Expression` (derivative of elm/compiler's
+//! `Ipe.Type.Constrain.Expression` (derivative of elm/compiler's
 //! `Type.Constrain.Expression`, BSD-3-Clause).
 //!
 //! Walks the canonical module, minting a union-find variable for each
@@ -1833,7 +1833,7 @@ impl<'a> Builder<'a> {
 
     /// Constrain a binary operation by the type discipline of its operator. The
     /// returned [`VarId`] is the result type's variable. Mirrors the core
-    /// subset of `Sky.Type.Constrain.Expression.binopTypes`.
+    /// subset of `Ipe.Type.Constrain.Expression.binopTypes`.
     fn constrain_binop(
         &mut self,
         local: &BTreeMap<Symbol, VarId>,
@@ -2852,7 +2852,7 @@ impl<'a> Builder<'a> {
             // key obligation directly above: only the params-element
             // position is bounded, so a generic wrapper around `Db.exec` /
             // `Db.query` (`Database.exec label queryStr args` in
-            // `examples/17-skymon`) lifts `Into<SqlParam>` onto its own
+            // `examples/17-ipemon`) lifts `Into<SqlParam>` onto its own
             // emitted Rust generic (closing the E0277 half), and an
             // empty-list call site whose element type is otherwise
             // completely unconstrained defaults to `SqlValue` at solve time
@@ -3144,7 +3144,7 @@ impl<'a> Builder<'a> {
             canon::Expr_::If(branches, else_expr) => {
                 // Every condition is `Bool`; every branch and the final `else`
                 // unify to one shared result type, which is the whole `if`'s
-                // type. Mirrors `Sky.Type.Constrain.Expression.constrainIf`.
+                // type. Mirrors `Ipe.Type.Constrain.Expression.constrainIf`.
                 let result = self.flex()?;
                 for (cond, body) in branches {
                     let cond_var = self.constrain_expr(local, cond)?;
@@ -3165,7 +3165,7 @@ impl<'a> Builder<'a> {
             canon::Expr_::Tuple(elems) => {
                 // A tuple's type is the product of its elements' types, each
                 // constrained independently. Mirrors
-                // `Sky.Type.Constrain.Expression`'s tuple arm.
+                // `Ipe.Type.Constrain.Expression`'s tuple arm.
                 let mut elem_vars = Vec::with_capacity(elems.len());
                 for elem in elems {
                     elem_vars.push(self.constrain_expr(local, elem)?);
@@ -3190,7 +3190,7 @@ impl<'a> Builder<'a> {
     /// flexible variable bound in the body's scope; the body is constrained
     /// there. The lambda's type is the right-nested arrow `p0 -> p1 -> … -> body`,
     /// so a surrounding `Call` unifies its callee against exactly this shape.
-    /// Mirrors `Sky.Type.Constrain.Expression`'s lambda arm.
+    /// Mirrors `Ipe.Type.Constrain.Expression`'s lambda arm.
     fn constrain_lambda(
         &mut self,
         local: &BTreeMap<Symbol, VarId>,
@@ -4850,7 +4850,7 @@ impl<'a> Builder<'a> {
 
             // ── Ipe.Live app-entry (open 6-field scheme) ──
             //
-            // Mirrors `../sky/src/Sky/Type/Constrain/Expression.hs:2674-2695`.
+            // Mirrors `../ipe/src/Ipe/Type/Constrain/Expression.hs:2674-2695`.
             // The cfg record is OPEN (row variable `var(3)` = `appExt`) so the
             // user can supply optional extra fields (`head`, `consoleAuth`,
             // `guard`, `status`, `auth`, …) without the type checker rejecting
@@ -4926,7 +4926,7 @@ impl<'a> Builder<'a> {
 
             // ── Ipe.Tui app-entry ──────────────────────────────────────────────
             //
-            // Haskell reference (`Sky/Type/Constrain/Expression.hs`):
+            // Haskell reference (`Ipe/Type/Constrain/Expression.hs`):
             //
             //   Tui.app   – 4 required fields; `onKey` optional via open row.
             //               view : model -> any  (Element for Ipe.Ui, String for

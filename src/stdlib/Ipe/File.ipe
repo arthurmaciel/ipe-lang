@@ -1,4 +1,4 @@
--- | Ipe.File -- filesystem I/O (Layer 3 Sky source).
+-- | Ipe.File -- filesystem I/O (Layer 3 Ipe source).
 --
 -- Every function is effectful (touches the disk) so the return is
 -- always `Task Error _`.

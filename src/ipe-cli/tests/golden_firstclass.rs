@@ -5,11 +5,11 @@
 //! and (behind `IPE_E2E=1`) the emitted project must build and print `51`.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
-//! `/home/arthur/Documentos/comp/sky/out/sky` compiles + runs the SAME
+//! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
 //! `Main.ipe` to stdout `51\n`, exit 0 — verified by running it in a temp dir:
 //!
 //! ```text
-//! $ sky run tests/golden/firstclass/Main.ipe   # Go backend
+//! $ ipe run tests/golden/firstclass/Main.ipe   # Go backend
 //! 51
 //! ```
 //!
@@ -19,7 +19,7 @@
 //! `inc` passed by name — reified into a boxed closure). `makeInc 0` returns the
 //! top-level `inc` as a value, bound to `g`; `g 40` is `41`. The entry's total
 //! is `7 + 3 + 41 = 51`. Running the Go toolchain inside `cargo test` is
-//! impractical (it needs the Haskell `sky` binary plus a Go toolchain), so the
+//! impractical (it needs the Haskell `ipe` binary plus a Go toolchain), so the
 //! hand-computed value is the in-test oracle, documented here against the
 //! Go-equivalent command.
 
@@ -73,7 +73,7 @@ fn end_to_end_builds_and_prints_fifty_one() {
 
     let root = repo_root();
     let entry = example_entry(&root);
-    let out = std::env::temp_dir().join("skyc_m1_firstclass_e2e");
+    let out = std::env::temp_dir().join("ipec_m1_firstclass_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

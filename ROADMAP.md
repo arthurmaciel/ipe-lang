@@ -9,7 +9,7 @@ Where Ipê came from, and where it's going.
 - **THE SEAL** — if `ipe` accepts a program, the generated Rust `cargo build`s.
   Enforced by a golden-fixture suite and a full example sweep.
 - **The stdlib** — Elm-shaped core (String/List/Dict/Maybe/Result/…) plus
-  Sky's batteries: HTTP, Live (SSR + real-time), SQL, auth, email, cache,
+  Ipe's batteries: HTTP, Live (SSR + real-time), SQL, auth, email, cache,
   pub/sub, WebSockets — one `Task Error a` effect boundary.
 - **Five app shapes** — `Ipe.Live`, `Ipe.Http.Server`, `Ipe.Cli`, `Ipe.Tui`,
   `Ipe.Webview` — three of them (Live/Tui/Webview) share one `Ipe.Ui` view.

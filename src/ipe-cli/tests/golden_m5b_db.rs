@@ -9,7 +9,7 @@
 //!
 //! ## Oracle provenance — why this is `oracle_divergence = true`
 //!
-//! The Go reference compiler and ipê (the Rust backend) share the same Sky
+//! The Go reference compiler and ipê (the Rust backend) share the same Ipe
 //! stdlib surface, but the backends diverge at the database layer:
 //!
 //! * Go emits `database/sql` + `mattn/go-sqlite3` (cgo); ipê emits
@@ -110,7 +110,7 @@ fn build_run(name: &str) -> (PathBuf, support::RunOutcome) {
     let root = repo_root();
     let dir = golden_dir(&root, name);
     let entry = dir.join("Main.ipe");
-    let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
+    let out = std::env::temp_dir().join(format!("ipec_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -318,7 +318,7 @@ fn db_sql_decimal_money() {
 /// The fixture exercises three call shapes in one `Db.withTransaction`:
 ///
 /// * `Db.exec … [1]`                     — `List Int`   (as in the job-queue example)
-/// * `Db.exec … ["hello"]`               — `List String` (as in the skymon example)
+/// * `Db.exec … ["hello"]`               — `List String` (as in the ipemon example)
 /// * `Db.exec … [SqlNull …, SqlInt 42, SqlBool True]` — mixed `List SqlValue`
 ///
 /// Compile-only assertion: `ipe::build` must succeed (no `IPE-T0001`).

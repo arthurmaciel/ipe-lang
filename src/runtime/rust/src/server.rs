@@ -739,7 +739,7 @@ pub fn server_listen<E: From<String> + Send + 'static>(
             Ok(l) => l,
             Err(e) => return IpeResult::Err(format!("Server.listen: bind {}: {}", addr, e).into()),
         };
-        eprintln!("[sky.http.server] listening on http://{}", addr);
+        eprintln!("[ipe.http.server] listening on http://{}", addr);
         // with_connect_info so each request carries the peer SocketAddr —
         // populates ServerRequest.remoteAddr (also used by per-IP rate limiting).
         let svc = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
@@ -1300,7 +1300,7 @@ pub fn ws_server_send_to_client<E: From<String> + Send + 'static>(
 }
 
 /// `Ws.sendBinaryToClient` — send a binary frame.  `Bytes = Vec<u8>` (ipe
-/// divergence: upstream Sky uses `Bytes = String`; see divergences doc §D2).
+/// divergence: upstream Ipe uses `Bytes = String`; see divergences doc §D2).
 pub fn ws_server_send_binary_to_client<E: From<String> + Send + 'static>(
     h: WsHandle,
     data: Vec<u8>,
@@ -1586,7 +1586,7 @@ where
                 IpeResult::Err(_) => 500,
             };
             eprintln!(
-                "[sky.http] {} {} {} {}ms",
+                "[ipe.http] {} {} {} {}ms",
                 method,
                 path,
                 status,
@@ -1617,7 +1617,7 @@ where
                 ok_res(plain_resp(
                     401,
                     "Unauthorized",
-                    &[("www-authenticate", "Basic realm=\"Sky\"")],
+                    &[("www-authenticate", "Basic realm=\"Ipe\"")],
                 ))
             })
         }
@@ -2028,8 +2028,8 @@ mod tests {
     async fn to_axum_response_injects_dev_banner_into_html_before_body_close() {
         // Default test env is dev (ENV/IPE_ENV unset), so the banner is emitted.
         // Go parity: injectDevBanner runs on every text/html buffered response.
-        let sky = server_html("<html><body><h1>hi</h1></body></html>".to_string());
-        let out = axum_body_string(to_axum_response(sky)).await;
+        let ipe = server_html("<html><body><h1>hi</h1></body></html>".to_string());
+        let out = axum_body_string(to_axum_response(ipe)).await;
         assert!(
             out.contains(r#"<a id="__ipe-dev-console""#),
             "banner must be injected: {out}"
@@ -2048,8 +2048,8 @@ mod tests {
     async fn to_axum_response_leaves_non_html_untouched() {
         // JSON / plain-text responses never get the banner (Go: the HasPrefix
         // "text/html" gate excludes them).
-        let sky = server_json(r#"{"ok":true}"#.to_string());
-        let out = axum_body_string(to_axum_response(sky)).await;
+        let ipe = server_json(r#"{"ok":true}"#.to_string());
+        let out = axum_body_string(to_axum_response(ipe)).await;
         assert_eq!(out, r#"{"ok":true}"#, "non-html body must be verbatim");
 
         let ipe_text = server_text("plain body</body>".to_string());

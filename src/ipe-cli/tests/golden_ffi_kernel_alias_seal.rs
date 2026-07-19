@@ -45,7 +45,7 @@ fn unknown_kernel_alias_is_rejected_at_compile_time() {
         return; // runtime unavailable in this environment — skip silently
     };
 
-    let tmp = std::env::temp_dir().join("skyc_196_ffi_kernel_alias_unknown");
+    let tmp = std::env::temp_dir().join("ipec_196_ffi_kernel_alias_unknown");
     let wrote = write_project(
         &tmp,
         "module Main exposing (main)\n\
@@ -104,7 +104,7 @@ fn malformed_kernel_alias_string_is_rejected() {
         return;
     };
 
-    let tmp = std::env::temp_dir().join("skyc_196_ffi_kernel_alias_malformed");
+    let tmp = std::env::temp_dir().join("ipec_196_ffi_kernel_alias_malformed");
     let wrote = write_project(
         &tmp,
         "module Main exposing (main)\n\
@@ -146,7 +146,7 @@ fn registered_kernel_alias_resolves_and_builds() {
         return;
     };
 
-    let tmp = std::env::temp_dir().join("skyc_196_ffi_kernel_alias_registered");
+    let tmp = std::env::temp_dir().join("ipec_196_ffi_kernel_alias_registered");
     let wrote = write_project(
         &tmp,
         "module Main exposing (main)\n\

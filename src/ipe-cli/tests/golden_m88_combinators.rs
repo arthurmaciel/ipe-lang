@@ -38,7 +38,7 @@
 //! cannot produce a reference for this exact program — its `Error` module
 //! surface differs (Go requires `import Error`; the Rust port exposes the
 //! `Error.*` constructors as a prelude kernel qualifier) AND
-//! `Result.traverse` is not in the Go reference's `sky-stdlib/Sky/Core/Result.ipe`
+//! `Result.traverse` is not in the Go reference's `ipe-stdlib/Ipe/Core/Result.ipe`
 //! `exposing` list.  Both are pre-existing, sanctioned divergences; the cached
 //! expected output is ipe's own, per `docs/architecture/divergence-policy.md`.
 //! The load-bearing guarantee this gate enforces is the SEAL: well-typed use of
@@ -75,7 +75,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
     let root = repo_root();
     let dir = golden_dir(&root, name);
     let entry = dir.join("Main.ipe");
-    let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
+    let out = std::env::temp_dir().join(format!("ipec_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

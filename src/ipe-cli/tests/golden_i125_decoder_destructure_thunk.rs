@@ -45,10 +45,10 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 }
 
 /// Cheap tier: ipe must accept the fixture (exit 0). Always runs.
-fn assert_skyc_ok(name: &str) -> PathBuf {
+fn assert_ipec_ok(name: &str) -> PathBuf {
     let root = repo_root();
     let entry = golden_dir(&root, name).join("Main.ipe");
-    let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
+    let out = std::env::temp_dir().join(format!("ipec_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
     let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve: {:?}", runtime.err());
@@ -70,7 +70,7 @@ fn assert_e2e_output(name: &str) {
     if std::env::var("IPE_E2E").is_err() {
         return;
     }
-    let out = assert_skyc_ok(name);
+    let out = assert_ipec_ok(name);
     let outcome = support::build_and_run_emitted(name, &out);
     assert_eq!(outcome.exit_code, Some(0), "{name} must run clean");
     assert_eq!(
@@ -84,7 +84,7 @@ fn assert_e2e_output(name: &str) {
 /// twice — `lower_let`'s destructure catch-all (§2.6, tuple binder).
 #[test]
 fn i125_decoder_tuple_destructure_reuse_compiles_and_runs() {
-    let _ = assert_skyc_ok("decoder_tuple_destructure");
+    let _ = assert_ipec_ok("decoder_tuple_destructure");
     assert_e2e_output("decoder_tuple_destructure");
 }
 
@@ -92,7 +92,7 @@ fn i125_decoder_tuple_destructure_reuse_compiles_and_runs() {
 /// — `lower_let`'s destructure catch-all (§2.6, record-field binder).
 #[test]
 fn i125_decoder_record_destructure_reuse_compiles_and_runs() {
-    let _ = assert_skyc_ok("decoder_record_destructure");
+    let _ = assert_ipec_ok("decoder_record_destructure");
     assert_e2e_output("decoder_record_destructure");
 }
 
@@ -101,7 +101,7 @@ fn i125_decoder_record_destructure_reuse_compiles_and_runs() {
 /// destructure wiring, not just `lower_let`'s.
 #[test]
 fn i125_decoder_case_destructure_reuse_compiles_and_runs() {
-    let _ = assert_skyc_ok("decoder_case_destructure");
+    let _ = assert_ipec_ok("decoder_case_destructure");
     assert_e2e_output("decoder_case_destructure");
 }
 
@@ -114,7 +114,7 @@ fn i125_decoder_case_destructure_reuse_compiles_and_runs() {
 /// is untouched, not merely still-running.
 #[test]
 fn i125_non_decoder_destructure_fast_path_byte_identical() {
-    let out = assert_skyc_ok("let_destructure");
+    let out = assert_ipec_ok("let_destructure");
     let root = repo_root();
     let golden_dir = golden_dir(&root, "let_destructure");
     // Seal half: the emitted source must carry no thunk binder. Read the emitted

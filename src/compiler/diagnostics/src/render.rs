@@ -139,10 +139,10 @@ pub fn render(d: &Diagnostic, file: &str, source: &str) -> String {
         {
             footer.push(format!("note: {detail}"));
         }
-        footer.push("note: this is a bug in Sky, please report it".to_string());
+        footer.push("note: this is a bug in Ipe, please report it".to_string());
         footer.push(format!(
             "note: I'm not sure what went wrong here — sorry about that. This is likely a gap \
-             in the Sky Rust compiler. Please report it (with this source + `ipe --version`) \
+             in the Ipe Rust compiler. Please report it (with this source + `ipe --version`) \
              at: {ISSUE_TRACKER_URL}"
         ));
     }
@@ -761,7 +761,7 @@ const fn feature_label(f: Feature) -> &'static str {
             "a `Set Float` / `Dict Float _` has no sound Rust representation: \
              `f64` is neither `Ord` (NaN has no total order) nor `Hash` / `Eq`, \
              which `BTreeSet` / `HashMap` require — use an `Int`, `Char`, or \
-             `String` element / key instead. Divergence from Sky, rationale: \
+             `String` element / key instead. Divergence from Ipe, rationale: \
              Rust backend capability [feature: float-keyed-collection]"
         }
         Feature::RoutedLiveApp => {
@@ -1122,7 +1122,7 @@ mod tests {
             out.contains("= note: no region type"),
             "detail surfaced:\n{out}"
         );
-        assert!(out.contains("= note: this is a bug in Sky, please report it"));
+        assert!(out.contains("= note: this is a bug in Ipe, please report it"));
         assert!(out.contains("= note: run `ipe explain IPE-I0001` for more information"));
         let _ = IPE_I0001;
     }

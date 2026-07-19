@@ -35,7 +35,7 @@ fn out(name: &str) -> PathBuf {
 /// Negative: `f x = (x ++ x) + 1` must be rejected with IPE-T0014,
 /// never accepted at exit 0 (a seal violation).
 #[test]
-fn append_and_number_on_same_var_is_sky_t0014() {
+fn append_and_number_on_same_var_is_ipe_t0014() {
     let Ok(rt) = ipe::resolve_runtime() else {
         return;
     };

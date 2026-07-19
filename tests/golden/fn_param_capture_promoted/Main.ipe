@@ -6,7 +6,7 @@ import Ipe.Prelude exposing (..)
 -- #221 fn-typed PARAM captured by an eta-synthesized closure: `apply f`
 -- (1 of 2 args) synthesizes `\eta_0 -> apply(f, eta_0)`, which forwards the
 -- param `f` in a NON-callee position per call — unsound for a bare
--- `Box<dyn Fn>` (E0507 at cargo, invisible to skyc before this promotion).
+-- `Box<dyn Fn>` (E0507 at cargo, invisible to ipec before this promotion).
 -- The param is shadow-rebound to the `Arc` carrier at function entry and the
 -- read re-dispatched through a fresh closure; the SIGNATURE stays `Box`.
 apply : (Int -> Int) -> Int -> Int

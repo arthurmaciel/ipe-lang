@@ -36,10 +36,10 @@ fn entry_path(root: &Path) -> PathBuf {
 
 /// ipe-0: the compiler must accept the pipeline-reuse program.
 #[test]
-fn i193_taskseq_skyc_accepts() {
+fn i193_taskseq_ipec_accepts() {
     let root = repo_root();
     let entry = entry_path(&root);
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i193_taskseq_reuse_skyc_out");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i193_taskseq_reuse_ipec_out");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -75,7 +75,7 @@ fn i193_taskseq_cargo_builds_and_runs() {
 
     let root = repo_root();
     let entry = entry_path(&root);
-    let out = std::env::temp_dir().join("skyc_i193_taskseq_reuse_e2e");
+    let out = std::env::temp_dir().join("ipec_i193_taskseq_reuse_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

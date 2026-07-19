@@ -29,7 +29,7 @@ fn repo_root() -> PathBuf {
 }
 
 #[test]
-fn cli_program_skyc_cargo_and_run_zero() {
+fn cli_program_ipec_cargo_and_run_zero() {
     if std::env::var("IPE_E2E").is_err() {
         return;
     }
@@ -37,7 +37,7 @@ fn cli_program_skyc_cargo_and_run_zero() {
     let root = repo_root();
     let dir = root.join("tests").join("golden").join("cli_program_seal");
     let entry = dir.join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_i111_cli_program_seal_e2e");
+    let out = std::env::temp_dir().join("ipec_i111_cli_program_seal_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

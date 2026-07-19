@@ -43,7 +43,7 @@ fn record_ctor_end_to_end_field_order() {
         .join("golden")
         .join("record_ctor")
         .join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_m82_record_ctor_e2e");
+    let out = std::env::temp_dir().join("ipec_m82_record_ctor_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -142,7 +142,7 @@ fn seal_fn_field_alias_emits_no_struct() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc must accept a merely-named function-embedding record alias: {:?}",
+        "ipec must accept a merely-named function-embedding record alias: {:?}",
         built.err()
     );
 
@@ -177,7 +177,7 @@ fn seal_fn_field_alias_builds_and_runs() {
         .join("golden")
         .join("record_ctor_fn_field")
         .join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_m82_record_ctor_fn_field_e2e");
+    let out = std::env::temp_dir().join("ipec_m82_record_ctor_fn_field_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -222,7 +222,7 @@ fn seal_opaque_field_alias_emits_no_struct() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc must accept a merely-named opaque-wrapper-field record alias: {:?}",
+        "ipec must accept a merely-named opaque-wrapper-field record alias: {:?}",
         built.err()
     );
 
@@ -258,7 +258,7 @@ fn seal_opaque_field_alias_builds_and_runs() {
         .join("golden")
         .join("record_ctor_opaque_field")
         .join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_m82_record_ctor_opaque_field_e2e");
+    let out = std::env::temp_dir().join("ipec_m82_record_ctor_opaque_field_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -298,7 +298,7 @@ fn seal_opaque_field_used_as_ctor_fails_closed() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_err(),
-        "using an opaque-wrapper-field alias as a ctor must fail CLOSED at skyc, \
+        "using an opaque-wrapper-field alias as a ctor must fail CLOSED at ipec, \
          not ipe-0-then-cargo-fail"
     );
     // Fail-closed at the name-resolution stage: no `main.rs` was emitted.
@@ -319,7 +319,7 @@ fn record_ctor_cross_module_end_to_end() {
         .join("golden")
         .join("record_ctor_xmod")
         .join("ipe.toml");
-    let out = std::env::temp_dir().join("skyc_m82_record_ctor_xmod_e2e");
+    let out = std::env::temp_dir().join("ipec_m82_record_ctor_xmod_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

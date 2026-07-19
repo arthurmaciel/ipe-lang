@@ -42,7 +42,7 @@ fn repo_root() -> PathBuf {
 /// compile check that alone covers the "invalid Rust" seal-breach witnesses
 /// — the string-literal and record-field-collision cases — which otherwise
 /// fail at `cargo build`).
-fn assert_skyc_ok(fixture: &str, out_suffix: &str) {
+fn assert_ipec_ok(fixture: &str, out_suffix: &str) {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -77,7 +77,7 @@ fn assert_e2e_output(fixture: &str, expect_contains: &str) {
         .join("golden")
         .join(fixture)
         .join("Main.ipe");
-    let out = std::env::temp_dir().join(format!("skyc_{fixture}_e2e"));
+    let out = std::env::temp_dir().join(format!("ipec_{fixture}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -108,7 +108,7 @@ fn assert_e2e_output(fixture: &str, expect_contains: &str) {
 /// must render unmolested.
 #[test]
 fn aud04_string_literal_not_corrupted() {
-    assert_skyc_ok("string_literal", "aud04_string_literal_emit");
+    assert_ipec_ok("string_literal", "aud04_string_literal_emit");
     assert_e2e_output("string_literal", "the count is");
     assert_e2e_output("string_literal", "3");
 }
@@ -118,7 +118,7 @@ fn aud04_string_literal_not_corrupted() {
 /// invalid Rust at the struct-literal field-key position).
 #[test]
 fn aud04_record_field_collision_compiles_and_runs() {
-    assert_skyc_ok(
+    assert_ipec_ok(
         "record_field_collision",
         "aud04_record_field_collision_emit",
     );
@@ -132,7 +132,7 @@ fn aud04_record_field_collision_compiles_and_runs() {
 /// string literal that shares the bound name as a word.
 #[test]
 fn aud04_taskseq_list_inlining_not_corrupted() {
-    assert_skyc_ok("taskseq_list", "aud04_taskseq_list_emit");
+    assert_ipec_ok("taskseq_list", "aud04_taskseq_list_emit");
     assert_e2e_output("taskseq_list", "4");
 }
 
@@ -141,6 +141,6 @@ fn aud04_taskseq_list_inlining_not_corrupted() {
 /// out from under the trailing read (E0382 use-after-move at `cargo build`).
 #[test]
 fn aud04_taskseqsync_move_compiles_and_runs() {
-    assert_skyc_ok("taskseqsync_move", "aud04_taskseqsync_move_emit");
+    assert_ipec_ok("taskseqsync_move", "aud04_taskseqsync_move_emit");
     assert_e2e_output("taskseqsync_move", "hello-msg");
 }

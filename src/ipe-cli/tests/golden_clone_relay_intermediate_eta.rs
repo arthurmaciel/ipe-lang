@@ -50,11 +50,11 @@ fn entry_path(root: &Path) -> PathBuf {
 /// ipe-0: the compiler must accept the intermediate-boundary clone-relay
 /// program, and emit a pre-clone for the shared-capture `insertRow` binding.
 #[test]
-fn i218_clone_relay_skyc_accepts() {
+fn i218_clone_relay_ipec_accepts() {
     let root = repo_root();
     let entry = entry_path(&root);
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("i218_clone_relay_intermediate_eta_skyc_out");
+        .join("i218_clone_relay_intermediate_eta_ipec_out");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -90,7 +90,7 @@ fn i218_clone_relay_cargo_builds_and_runs() {
 
     let root = repo_root();
     let entry = entry_path(&root);
-    let out = std::env::temp_dir().join("skyc_i218_clone_relay_intermediate_eta_e2e");
+    let out = std::env::temp_dir().join("ipec_i218_clone_relay_intermediate_eta_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

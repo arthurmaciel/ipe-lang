@@ -7,7 +7,7 @@ import Ipe.Log as Log
 -- backlog #44 golden: logging a `Secret` directly is safe BY CONSTRUCTION —
 -- `Log.infoWith`'s attr-list element carries the Stringify obligation
 -- (`has_show`), which `Secret` satisfies (it is a bare nullary `Ty::Con`, no
--- nested function), and its `SkyStringify` impl ALWAYS renders the fixed
+-- nested function), and its `IpeStringify` impl ALWAYS renders the fixed
 -- "<redacted>" placeholder. A caller who forgets to call `Secret.redacted`
 -- first still gets the safe output automatically — no escape hatch to
 -- remember. Plaintext-grep-guard: the marker "sk_live_LOGGED_SECRET_MARKER"

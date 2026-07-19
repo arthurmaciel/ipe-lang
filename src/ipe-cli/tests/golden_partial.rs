@@ -4,11 +4,11 @@
 //! the emitted project must build and print `15`.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
-//! `/home/arthur/Documentos/comp/sky/out/sky` compiles + runs the SAME
+//! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
 //! `Main.ipe` to stdout `15\n`, exit 0 — verified by hand:
 //!
 //! ```text
-//! $ sky run tests/golden/partial/Main.ipe   # Go backend
+//! $ ipe run tests/golden/partial/Main.ipe   # Go backend
 //! 15
 //! ```
 //!
@@ -19,7 +19,7 @@
 //! returned closure → `3`. `applyTwice (add 1) 5` passes the partial `add 1` as
 //! a first-class function and applies it twice: `add 1 (add 1 5)` → `7`. The
 //! entry prints `p + o + h = 5 + 3 + 7 = 15`. Running the Go toolchain inside
-//! `cargo test` is impractical (it needs the Haskell `sky` binary plus a Go
+//! `cargo test` is impractical (it needs the Haskell `ipe` binary plus a Go
 //! toolchain), so the hand-computed value is the in-test oracle, documented here
 //! against the Go-equivalent command.
 
@@ -74,7 +74,7 @@ fn end_to_end_builds_and_prints_fifteen() {
 
     let root = repo_root();
     let entry = example_entry(&root);
-    let out = std::env::temp_dir().join("skyc_m1_partial_e2e");
+    let out = std::env::temp_dir().join("ipec_m1_partial_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

@@ -18,7 +18,7 @@ import Ipe.Log exposing (println)
 -- top-level function REFERENCE (`Expr::FuncValue`), rendered at the default
 -- `Box<dyn Fn + Send + Sync>` carrier. `Arc` and `Box` are distinct Rust types
 -- even with identical trait bounds, so the two `if` branches cannot unify at
--- one slot → cargo `E0308` AFTER `skyc` exit 0 (SEAL break). This is the exact
+-- one slot → cargo `E0308` AFTER `ipec` exit 0 (SEAL break). This is the exact
 -- reviewer repro that refuted the prior inline-lambda-only fix.
 
 

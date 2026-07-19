@@ -46,10 +46,10 @@ fn entry_path(root: &Path) -> PathBuf {
 /// bound on the wildcard-`any` renderer function's own generic — checked
 /// unconditionally (cheap, no `cargo`), independent of the `IPE_E2E` gate.
 #[test]
-fn i186_skyc_accepts_and_bounds_fn_display() {
+fn i186_ipec_accepts_and_bounds_fn_display() {
     let root = repo_root();
     let entry = entry_path(&root);
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i186_display_bound_skyc_out");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i186_display_bound_ipec_out");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -96,7 +96,7 @@ fn i186_cargo_builds_and_runs() {
 
     let root = repo_root();
     let entry = entry_path(&root);
-    let out = std::env::temp_dir().join("skyc_i186_display_bound_e2e");
+    let out = std::env::temp_dir().join("ipec_i186_display_bound_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

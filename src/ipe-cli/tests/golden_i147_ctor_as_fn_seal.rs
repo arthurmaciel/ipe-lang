@@ -47,7 +47,7 @@ fn repo_root() -> PathBuf {
 
 /// Assert that `ipe::build(fixture)` SUCCEEDS (exit-0 from the lowerer).
 /// Runs without `IPE_E2E` so this check is always fast.
-fn assert_skyc_ok(fixture: &str, out_suffix: &str) {
+fn assert_ipec_ok(fixture: &str, out_suffix: &str) {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -74,7 +74,7 @@ fn assert_skyc_ok(fixture: &str, out_suffix: &str) {
 /// args) must COMPILE SUCCESSFULLY (not surface IPE-L0113).
 #[test]
 fn m3a_gate_partial_now_compiles() {
-    assert_skyc_ok("gate_partial", "i147_m3a_gate_partial_positive");
+    assert_ipec_ok("gate_partial", "i147_m3a_gate_partial_positive");
 }
 
 // ── A1 — bare ctor passed to List.map ────────────────────────────────────────
@@ -84,7 +84,7 @@ fn m3a_gate_partial_now_compiles() {
 /// and joined → `"1, 2, 3"`.
 #[test]
 fn a1_ctor_map_bare() {
-    assert_skyc_ok("ctor_map_bare", "i147_ctor_map_bare_emit");
+    assert_ipec_ok("ctor_map_bare", "i147_ctor_map_bare_emit");
 
     if std::env::var("IPE_E2E").is_err() {
         return;
@@ -96,7 +96,7 @@ fn a1_ctor_map_bare() {
         .join("golden")
         .join("ctor_map_bare")
         .join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_i147_ctor_map_bare_e2e");
+    let out = std::env::temp_dir().join("ipec_i147_ctor_map_bare_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -131,7 +131,7 @@ fn a1_ctor_map_bare() {
 /// Expected output: `"item:10, item:20, item:30"`.
 #[test]
 fn a2_ctor_partial_multiarg_with_clone() {
-    assert_skyc_ok("ctor_partial", "i147_ctor_partial_emit");
+    assert_ipec_ok("ctor_partial", "i147_ctor_partial_emit");
 
     if std::env::var("IPE_E2E").is_err() {
         return;
@@ -143,7 +143,7 @@ fn a2_ctor_partial_multiarg_with_clone() {
         .join("golden")
         .join("ctor_partial")
         .join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_i147_ctor_partial_e2e");
+    let out = std::env::temp_dir().join("ipec_i147_ctor_partial_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -178,7 +178,7 @@ fn a2_ctor_partial_multiarg_with_clone() {
 /// then calls.  Expected output: `"hello"`.
 #[test]
 fn a3_ctor_stored_in_record_field() {
-    assert_skyc_ok("ctor_field", "i147_ctor_field_emit");
+    assert_ipec_ok("ctor_field", "i147_ctor_field_emit");
 
     if std::env::var("IPE_E2E").is_err() {
         return;
@@ -190,7 +190,7 @@ fn a3_ctor_stored_in_record_field() {
         .join("golden")
         .join("ctor_field")
         .join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_i147_ctor_field_e2e");
+    let out = std::env::temp_dir().join("ipec_i147_ctor_field_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

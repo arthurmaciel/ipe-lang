@@ -1,5 +1,5 @@
 //! Name resolution: `ipe_syntax` source tree → canonical AST. Port of the
-//! supported subset of `Sky.Canonicalise.{Module,Expression,Pattern,Type}`.
+//! supported subset of `Ipe.Canonicalise.{Module,Expression,Pattern,Type}`.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -17,7 +17,7 @@ use crate::env::{CtorHome, Env, VarHome, WildcardOrigin};
 const MAX_SUGGESTIONS: usize = 3;
 
 /// The inclusive edit-distance ceiling for a suggestion. Mirrors the Haskell
-/// reference (`Sky.Canonicalise.Module.suggestQualifier`): beyond two edits a
+/// reference (`Ipe.Canonicalise.Module.suggestQualifier`): beyond two edits a
 /// "did you mean" is more misleading than helpful, so silence wins.
 const SUGGESTION_MAX_DISTANCE: usize = 2;
 
@@ -1763,7 +1763,7 @@ fn synthesize_record_alias_ctors(
         // (`Profile name age active = { … }` alongside `type alias Profile`).
         // Decline synthesis — the user's def is the implementation, and letting
         // both through would double-emit the value. Mirrors the upstream Rust
-        // emitter's `existingNames` guard (`Sky.Generate.Rust.Builder.ModuleEmitter`,
+        // emitter's `existingNames` guard (`Ipe.Generate.Rust.Builder.ModuleEmitter`,
         // `synCtor … if Set.member ctorName existingNames then []`).
         if user_value_names.contains(&alias_name) {
             continue;
@@ -1838,10 +1838,10 @@ fn synthesize_record_alias_ctors(
         }
 
         // A record alias whose name coincides with a data constructor is valid
-        // per the upstream Elm / Sky rules: the TYPE namespace (`type alias`) and
+        // per the upstream Elm / Ipe rules: the TYPE namespace (`type alias`) and
         // the CONSTRUCTOR namespace (`type … = Ctor | …`) are distinct.
         //
-        // The upstream Haskell (`Sky.Canonicalise.Module.registerAliases`) inserts
+        // The upstream Haskell (`Ipe.Canonicalise.Module.registerAliases`) inserts
         // the alias name into `_vars` via `Map.insert` without ANY check against
         // `_ctors` — the two occupy separate namespaces and coexist peacefully.
         //
@@ -1856,7 +1856,7 @@ fn synthesize_record_alias_ctors(
         // and broke the `type Tab = Overview | …` + `type alias Overview = { … }`
         // pattern found in examples/25-ipe-console/src/State.ipe.
         //
-        // Ref: `Sky.Canonicalise.Module.registerAliases` upstream, lines 1759–1775.
+        // Ref: `Ipe.Canonicalise.Module.registerAliases` upstream, lines 1759–1775.
         if seen_ctors.contains_key(&alias_name) {
             continue;
         }
@@ -2679,7 +2679,7 @@ fn canonicalise_expr(e: &src::Expr, env: &Env, interner: &mut Interner) -> DResu
         src::Expr_::Float(f) => canon::Expr_::Float(*f),
         src::Expr_::Str(s) => canon::Expr_::Str(s.clone()),
         // Triple-quoted strings: desugar `{{expr}}` interpolation into a `++`
-        // chain at canonicalise time. Mirrors `Sky.Canonicalise.Expression.hs`
+        // chain at canonicalise time. Mirrors `Ipe.Canonicalise.Expression.hs`
         // line 42 (`Src.MultilineStr s -> desugarMultiline env s`).
         src::Expr_::MultilineStr(s) => desugar_multiline(s, span, env, interner)?,
         src::Expr_::Char(c) => canon::Expr_::Char(c.clone()),
@@ -3014,7 +3014,7 @@ fn resolve_qual_var(
     }
 }
 
-/// Operator associativity. Mirrors `Sky.Parse.Symbol.Assoc`.
+/// Operator associativity. Mirrors `Ipe.Parse.Symbol.Assoc`.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Assoc {
     Left,
@@ -3024,7 +3024,7 @@ enum Assoc {
 
 /// The precedence (higher binds tighter) and associativity of `op`.
 ///
-/// Mirror of the Haskell reference `Sky.Parse.Symbol.precedence` for the
+/// Mirror of the Haskell reference `Ipe.Parse.Symbol.precedence` for the
 /// core operator set; any operator outside the set defaults to `9 L` exactly
 /// as the Haskell catch-all does.
 const fn op_precedence(op: &str) -> (i32, Assoc) {
@@ -3049,7 +3049,7 @@ const fn op_precedence(op: &str) -> (i32, Assoc) {
 /// The parser records a chain `e0 op0 e1 op1 … opN-1 eN` as a *flat* list of
 /// `(operand, operator)` pairs plus a trailing operand, without consulting
 /// precedence. Here we re-associate it via precedence climbing (port of
-/// `Sky.Canonicalise.Expression.canonicaliseBinops`), reading each operator's
+/// `Ipe.Canonicalise.Expression.canonicaliseBinops`), reading each operator's
 /// precedence + associativity from [`op_precedence`].
 ///
 /// Unlike the Haskell parser — which nests `Src.Binops` pairwise and so needs a
@@ -3679,7 +3679,7 @@ fn canonicalise_foreign_call(
 
 /// Recognise a Stage-4 kernel-alias binding and resolve it against the kernel
 /// registry — the compiled-source counterpart of the reference compiler's
-/// `collectKernelAliases` (`Sky.Build.Compile`).
+/// `collectKernelAliases` (`Ipe.Build.Compile`).
 ///
 /// A binding qualifies when it takes NO parameters and its body is exactly
 /// `Ffi.kernel "Module_function"`. The string is split at the FIRST `_` into a
@@ -3842,7 +3842,7 @@ const fn name_zero() -> Symbol {
 
 // ── Triple-quoted string interpolation desugar ────────────────────────────────
 //
-// Faithful Rust port of `Sky.Canonicalise.Expression.desugarMultiline` /
+// Faithful Rust port of `Ipe.Canonicalise.Expression.desugarMultiline` /
 // `splitInterpolation` / `chunkToExpr` / `resolveInterpolationRef`.
 //
 // Entry point: `desugar_multiline(raw, span, env, interner)` — called from
@@ -3862,7 +3862,7 @@ enum Chunk {
 }
 
 /// Split a raw triple-quoted string body into alternating literal / expression
-/// chunks. Direct Rust port of `Sky.Canonicalise.Expression.splitInterpolation`.
+/// chunks. Direct Rust port of `Ipe.Canonicalise.Expression.splitInterpolation`.
 ///
 /// Escape grammar (spec from upstream `splitInterpolation` comments):
 ///   `\{{`  → literal `{{`  (no interpolation consumed)
@@ -3928,7 +3928,7 @@ fn split_interpolation(raw: &str) -> Vec<Chunk> {
 }
 
 /// Convert a `Chunk` to a canonical expression.
-/// Port of `Sky.Canonicalise.Expression.chunkToExpr`.
+/// Port of `Ipe.Canonicalise.Expression.chunkToExpr`.
 ///
 /// `Lit` → `Expr_::Str`.
 /// `Interp` → resolve the body as a simple ref, then wrap in `Basics.toString`.
@@ -3965,7 +3965,7 @@ fn chunk_to_expr(
 }
 
 /// Resolve a simple interpolation reference.
-/// Port of `Sky.Canonicalise.Expression.resolveInterpolationRef`.
+/// Port of `Ipe.Canonicalise.Expression.resolveInterpolationRef`.
 ///
 /// Handles four shapes:
 ///   `foo`          — bare identifier → local var (or kernel if in scope)
@@ -4015,7 +4015,7 @@ fn resolve_simple_interp_ref(
     // `String.fromInt 54` and prints "54". This must precede the `.`-split
     // below, else a float like `1.5` is mis-parsed as `Access(1, 5)`.
     //
-    // Divergence from ../sky: `resolveInterpolationRef` lacks literal handling
+    // Divergence from ../ipe: `resolveInterpolationRef` lacks literal handling
     // and would surface `54` as a `VarLocal` → naming error. Recognising the
     // literal is strictly better (a well-typed program compiles instead of
     // ICE-ing). Recorded in docs/divergences-from-sky.md.
@@ -4099,7 +4099,7 @@ fn resolve_simple_interp_ref(
 
 /// Desugar a triple-quoted string into a `++`-chained canonical expression.
 /// Entry point from `canonicalise_expr`. Port of
-/// `Sky.Canonicalise.Expression.desugarMultiline`.
+/// `Ipe.Canonicalise.Expression.desugarMultiline`.
 fn desugar_multiline(
     raw: &str,
     span: Span,

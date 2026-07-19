@@ -8,7 +8,7 @@ module Main exposing (main)
 -- #193 hoisted the OUTER capturing lambda's clone but never descended into its
 -- body, so the inner nested closure moved the shadowed clone out of the outer
 -- `Box<dyn Fn>` closure → E0507 ("cannot move out of a captured variable in an
--- `Fn` closure"). This fixture pins skyc-0 ⇒ cargo-0 ⇒ correct run for every
+-- `Fn` closure"). This fixture pins ipec-0 ⇒ cargo-0 ⇒ correct run for every
 -- sub-shape.
 
 import Ipe.Prelude exposing (..)

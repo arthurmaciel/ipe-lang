@@ -3,7 +3,7 @@
 # already-built binary" logic. SOURCE this (never execute it):
 #   source "$(dirname "$0")/lib/checks.sh"
 #
-# PORTED from ../sky/runtime-rust/scripts/lib/checks.sh. The exercise_* contract
+# PORTED from ../ipe/runtime-rust/scripts/lib/checks.sh. The exercise_* contract
 # is backend-agnostic (it drives a built binary and asks "did it work?"), so it
 # ports almost unchanged. ADAPTATIONS for this repo:
 #   • night_guard is OPT-IN (IPE_SWEEP_NIGHT_GATE=1) so it NEVER blocks GitHub CI.
@@ -20,7 +20,7 @@
 # Server/live examples that use Ipe.Auth refuse to boot without a >=32-byte
 # secret (CORRECT production behaviour). Provide a test secret so those apps boot;
 # honoured only if the caller hasn't set their own.
-export IPE_AUTH_TOKEN_SECRET="${IPE_AUTH_TOKEN_SECRET:-sky-run-sweep-test-secret-0123456789-abcdef}"
+export IPE_AUTH_TOKEN_SECRET="${IPE_AUTH_TOKEN_SECRET:-ipe-run-sweep-test-secret-0123456789-abcdef}"
 
 # ── Panic detection (shared) ────────────────────────────────────────────────
 # A Rust panic / abort string in a binary's output = a soundness failure (the
@@ -174,7 +174,7 @@ _abs_bin() { case "$1" in /*) printf '%s\n' "$1";; *) printf '%s/%s\n' "$(cd "$(
 exercise_cli() {
   local bin="$1" log="$2" tmo="${3:-25}" rc tries=0 abin run_dir
   abin="$bin"; case "$bin" in /*) ;; *) abin="$(cd "$(dirname "$bin")" 2>/dev/null && pwd)/$(basename "$bin")";; esac
-  run_dir="$(mktemp -d "${TMPDIR:-/tmp}/sky-cli.XXXXXX")"
+  run_dir="$(mktemp -d "${TMPDIR:-/tmp}/ipe-cli.XXXXXX")"
   while :; do
     ( cd "$run_dir" && exec timeout "$tmo" "$abin" ) >"$log" 2>&1 </dev/null; rc=$?
     { [ "$rc" = 126 ] || grep -qiE 'text file busy|texto ocupada|ETXTBSY' "$log" 2>/dev/null; } || break
@@ -191,7 +191,7 @@ exercise_cli() {
 exercise_server() {
   local bin="$1" port="$2" log="$3" pid i code lp code2 ok="" run_dir abin
   abin="$(cd "$(dirname "$bin")" && pwd)/$(basename "$bin")"
-  run_dir="$(mktemp -d "${TMPDIR:-/tmp}/sky-serve.XXXXXX")"
+  run_dir="$(mktemp -d "${TMPDIR:-/tmp}/ipe-serve.XXXXXX")"
   ( cd "$run_dir" && exec env IPE_LIVE_PORT="$port" PORT="$port" "$abin" ) >"$log" 2>&1 </dev/null &
   pid=$!
   for i in $(seq 1 30); do
@@ -230,7 +230,7 @@ exercise_live() {
 exercise_tui() {
   local bin="$1" log="$2" abin run_dir
   abin="$(_abs_bin "$bin")"
-  run_dir="$(mktemp -d "${TMPDIR:-/tmp}/sky-tui.XXXXXX")"
+  run_dir="$(mktemp -d "${TMPDIR:-/tmp}/ipe-tui.XXXXXX")"
   case "$IPE_HOST_OS" in
     macos)
       if command -v script >/dev/null 2>&1; then
@@ -261,7 +261,7 @@ exercise_tui() {
 exercise_webview() {
   local bin="$1" log="$2" abin run_dir
   abin="$(_abs_bin "$bin")"
-  run_dir="$(mktemp -d "${TMPDIR:-/tmp}/sky-webview.XXXXXX")"
+  run_dir="$(mktemp -d "${TMPDIR:-/tmp}/ipe-webview.XXXXXX")"
   case "$IPE_HOST_OS" in
     macos)
       ( cd "$run_dir" && timeout 8 "$abin" ) >"$log" 2>&1 </dev/null
@@ -315,7 +315,7 @@ _norm_body_for_equiv() {
   local body="$1" log="${2:-/dev/null}"
   if [[ "$body" == *'id="ipe-root"'* ]]; then
     local tf rc normed
-    tf="$(mktemp "${TMPDIR:-/tmp}/sky-eqvnorm.XXXXXX.html")"
+    tf="$(mktemp "${TMPDIR:-/tmp}/ipe-eqvnorm.XXXXXX.html")"
     printf '%s' "$body" >"$tf"
     normed="$(python3 "$REPO/scripts/lib/equivalence_normalize_html.py" "$tf" 2>>"$log")"
     rc=$?
@@ -348,8 +348,8 @@ exercise_server_equiv() {
     echo "rust-broken"; return 0
   fi
   [ "$gport" = "$rport" ] && rport=$((rport + 1))
-  grun="$(mktemp -d "${TMPDIR:-/tmp}/sky-eqv-go.XXXXXX")"
-  rrun="$(mktemp -d "${TMPDIR:-/tmp}/sky-eqv-rs.XXXXXX")"
+  grun="$(mktemp -d "${TMPDIR:-/tmp}/ipe-eqv-go.XXXXXX")"
+  rrun="$(mktemp -d "${TMPDIR:-/tmp}/ipe-eqv-rs.XXXXXX")"
   : >"$log"
 
   routes=()

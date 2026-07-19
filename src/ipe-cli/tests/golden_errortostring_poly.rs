@@ -66,11 +66,11 @@ fn e2e_enabled() -> bool {
 #[test]
 fn errortostring_polymorphic_compiles() {
     let root = repo_root();
-    let entry = golden_entry(&root, "m_sky_test_stringify");
+    let entry = golden_entry(&root, "m_ipe_test_stringify");
     let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m_sky_test_stringify");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m_ipe_test_stringify");
     let _ = std::fs::remove_dir_all(&out);
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
@@ -87,15 +87,15 @@ fn errortostring_polymorphic_e2e() {
         return;
     }
     let root = repo_root();
-    let entry = golden_entry(&root, "m_sky_test_stringify");
-    let out = std::env::temp_dir().join("skyc_m_sky_test_stringify_e2e");
+    let entry = golden_entry(&root, "m_ipe_test_stringify");
+    let out = std::env::temp_dir().join("ipec_m_ipe_test_stringify_e2e");
     let _ = std::fs::remove_dir_all(&out);
     let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
     let built = ipe::build(&entry, &out, &runtime);
     assert!(built.is_ok(), "must compile: {:?}", built.err());
-    let outcome = support::build_and_run_emitted("m_sky_test_stringify", &out);
+    let outcome = support::build_and_run_emitted("m_ipe_test_stringify", &out);
     assert_eq!(outcome.exit_code, Some(0));
     assert_eq!(outcome.stdout.trim(), "42 equal 1 /= 2");
 }
@@ -126,7 +126,7 @@ fn eqshow_e2e() {
     }
     let root = repo_root();
     let entry = golden_entry(&root, "m_errortostring_eqshow");
-    let out = std::env::temp_dir().join("skyc_m_errortostring_eqshow_e2e");
+    let out = std::env::temp_dir().join("ipec_m_errortostring_eqshow_e2e");
     let _ = std::fs::remove_dir_all(&out);
     let Ok(runtime) = ipe::resolve_runtime() else {
         return;
@@ -150,7 +150,7 @@ fn errortostring_on_function_rejected_at_typecheck() {
     let res = try_build(&entry);
     assert!(
         res.is_err(),
-        "errorToString on a function MUST fail at skyc type-check, \
+        "errorToString on a function MUST fail at ipec type-check, \
          not exit 0 and defer to cargo"
     );
 }

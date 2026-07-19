@@ -10,7 +10,7 @@ pub type DbRow = sqlx::sqlite::SqliteRow;
 #[cfg(feature = "db")]
 pub fn ipe_db_url() -> String {
     crate::system::read_env_var("DATABASE_URL")
-        .unwrap_or_else(|_| "sqlite://sky.db?mode=rwc".to_string())
+        .unwrap_or_else(|_| "sqlite://ipe.db?mode=rwc".to_string())
 }
 
 #[cfg(not(feature = "db"))]

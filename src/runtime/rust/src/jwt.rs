@@ -4,7 +4,7 @@
 //!
 //! Encoding here reproduces, byte-for-byte, the token the Go backend's
 //! `Ipe.Jwt.encode` produces for the same key + claims. The Go module
-//! (sky-stdlib `Ipê/Core/Jwt.ipe`) builds the compact JWS in pure Ipê on top of
+//! (ipe-stdlib `Ipê/Core/Jwt.ipe`) builds the compact JWS in pure Ipê on top of
 //! `Json.Encode`, `Crypto`, and `Encoding`:
 //!
 //! * header  = `Json.Encode.encode 0 (object [("alg", …), ("typ", "JWT")])`

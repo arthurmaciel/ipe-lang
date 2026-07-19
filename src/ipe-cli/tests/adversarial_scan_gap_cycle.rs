@@ -26,7 +26,7 @@ fn scan_invisible_cycle_must_not_panic_the_driver() {
         return;
     };
 
-    let tmp = std::env::temp_dir().join("skyc_review_scan_gap_cycle");
+    let tmp = std::env::temp_dir().join("ipec_review_scan_gap_cycle");
     let src = tmp.join("src");
     let _ = fs::remove_dir_all(&tmp);
     fs::create_dir_all(&src).expect("create src dir");

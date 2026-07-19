@@ -40,7 +40,7 @@ fn distinct_modules_sharing_an_explicit_alias_is_rejected() {
         return; // runtime unavailable in this environment — skip silently
     };
 
-    let tmp = std::env::temp_dir().join("skyc_aud14_duplicate_qualifier");
+    let tmp = std::env::temp_dir().join("ipec_aud14_duplicate_qualifier");
     let wrote = write_project(
         &tmp,
         &[
@@ -97,7 +97,7 @@ fn same_module_reimported_under_same_alias_is_accepted() {
         return;
     };
 
-    let tmp = std::env::temp_dir().join("skyc_aud14_duplicate_qualifier_diamond");
+    let tmp = std::env::temp_dir().join("ipec_aud14_duplicate_qualifier_diamond");
     let wrote = write_project(
         &tmp,
         &[

@@ -52,10 +52,10 @@ fn entry_path(root: &Path, fixture: &str) -> PathBuf {
 // just above MUST have written `src/main.rs`; an unreadable file here means the
 // emitter/fixture is broken, so aborting is the correct failure signal.
 #[allow(clippy::expect_used)]
-fn assert_skyc_bounds_fn_not_struct(fixture: &str) {
+fn assert_ipec_bounds_fn_not_struct(fixture: &str) {
     let root = repo_root();
     let entry = entry_path(&root, fixture);
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{fixture}_skyc_out"));
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{fixture}_ipec_out"));
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -104,7 +104,7 @@ fn assert_cargo_builds_and_runs(fixture: &str) {
 
     let root = repo_root();
     let entry = entry_path(&root, fixture);
-    let out = std::env::temp_dir().join(format!("skyc_{fixture}_e2e"));
+    let out = std::env::temp_dir().join(format!("ipec_{fixture}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -137,8 +137,8 @@ fn assert_cargo_builds_and_runs(fixture: &str) {
 }
 
 #[test]
-fn i177_alias_row_skyc_bounds_fn_not_struct() {
-    assert_skyc_bounds_fn_not_struct("db_get_alias_row");
+fn i177_alias_row_ipec_bounds_fn_not_struct() {
+    assert_ipec_bounds_fn_not_struct("db_get_alias_row");
 }
 
 #[test]
@@ -147,8 +147,8 @@ fn i177_alias_row_cargo_builds_and_runs() {
 }
 
 #[test]
-fn i177_alias_chain_row_skyc_bounds_fn_not_struct() {
-    assert_skyc_bounds_fn_not_struct("db_get_alias_chain_row");
+fn i177_alias_chain_row_ipec_bounds_fn_not_struct() {
+    assert_ipec_bounds_fn_not_struct("db_get_alias_chain_row");
 }
 
 #[test]

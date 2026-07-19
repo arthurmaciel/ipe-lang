@@ -4,7 +4,7 @@ module Main exposing (main)
 -- them reused. `Decoder` is `!Clone` and `decodeString` consumes it by
 -- value, so the pre-fix plain `let (nameDecoder, ageDecoder) = …;` emission
 -- double-moves `nameDecoder` at the second `decodeString` call (rustc
--- E0382, "use of moved value") even though skyc exits 0. The fix thunks
+-- E0382, "use of moved value") even though ipec exits 0. The fix thunks
 -- the WHOLE destructure (spec §2.2) so each read re-derives its component
 -- from a fresh thunk call.
 -- Expected: Alice|Bob

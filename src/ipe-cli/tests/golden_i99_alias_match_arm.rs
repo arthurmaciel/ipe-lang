@@ -31,10 +31,10 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 /// The alias-over-dispatch-free-tuple shape must be ipe-0 (the lowering-side
 /// path accepts it) — cheap tier, always runs.
 #[test]
-fn i99_alias_tuple_match_arm_is_skyc_ok() {
+fn i99_alias_tuple_match_arm_is_ipec_ok() {
     let root = repo_root();
     let entry = golden_dir(&root, "alias_tuple_match_arm").join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_i99_alias_tuple_e2e");
+    let out = std::env::temp_dir().join("ipec_i99_alias_tuple_e2e");
     let _ = std::fs::remove_dir_all(&out);
     let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve");
@@ -57,7 +57,7 @@ fn i99_alias_tuple_match_arm_builds_and_runs() {
     }
     let root = repo_root();
     let entry = golden_dir(&root, "alias_tuple_match_arm").join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_i99_alias_tuple_e2e_run");
+    let out = std::env::temp_dir().join("ipec_i99_alias_tuple_e2e_run");
     let _ = std::fs::remove_dir_all(&out);
     let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve");
@@ -79,10 +79,10 @@ fn i99_alias_tuple_match_arm_builds_and_runs() {
 /// the clone-rebuild re-derivation must unbox the temp — otherwise both the
 /// alias binder and the inner binder stay `Box<Tree>` (ipe-0, cargo-E0308).
 #[test]
-fn i99_alias_over_self_edge_is_skyc_ok() {
+fn i99_alias_over_self_edge_is_ipec_ok() {
     let root = repo_root();
     let entry = golden_dir(&root, "alias_self_edge").join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_i99_self_edge_e2e");
+    let out = std::env::temp_dir().join("ipec_i99_self_edge_e2e");
     let _ = std::fs::remove_dir_all(&out);
     let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve");
@@ -105,7 +105,7 @@ fn i99_alias_over_self_edge_builds_and_runs() {
     }
     let root = repo_root();
     let entry = golden_dir(&root, "alias_self_edge").join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_i99_self_edge_e2e_run");
+    let out = std::env::temp_dir().join("ipec_i99_self_edge_e2e_run");
     let _ = std::fs::remove_dir_all(&out);
     let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve");
@@ -127,10 +127,10 @@ fn i99_alias_over_self_edge_builds_and_runs() {
 /// ipe-accept-then-cargo-fail, and never silently over-broad (the GREEN
 /// fixture above proves the dispatch-free shape still passes).
 #[test]
-fn i99_alias_over_ctor_inner_is_sky_l0128() {
+fn i99_alias_over_ctor_inner_is_ipe_l0128() {
     let root = repo_root();
     let entry = golden_dir(&root, "alias_ctor_rejected").join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_i99_alias_ctor_rejected");
+    let out = std::env::temp_dir().join("ipec_i99_alias_ctor_rejected");
     let _ = std::fs::remove_dir_all(&out);
     let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve");

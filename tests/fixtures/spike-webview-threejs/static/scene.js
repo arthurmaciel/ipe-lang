@@ -213,5 +213,5 @@
 
     requestAnimationFrame(tick);
 
-    console.log("[sky-webview-spike] scene initialised; tick loop running.");
+    console.log("[ipe-webview-spike] scene initialised; tick loop running.");
 })();

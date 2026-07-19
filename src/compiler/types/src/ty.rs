@@ -1,5 +1,5 @@
 //! The two type levels of inference, ported from the supported subset of
-//! `Sky.Type.Type` (derivative of elm/compiler's `Type.Type`, BSD-3-Clause).
+//! `Ipe.Type.Type` (derivative of elm/compiler's `Type.Type`, BSD-3-Clause).
 //!
 //! * [`Ty`] — the *resolved*, immutable, canonical type read back after the
 //!   solver settles. This is what [`crate::SolvedTypes`] hands to the lowerer.
@@ -10,7 +10,7 @@
 //!
 //! # Open records (`RoutedLiveApp` / row-poly)
 //!
-//! Row-polymorphic records mirror `../sky`'s `TRecord (Map …) (Maybe var)` /
+//! Row-polymorphic records mirror `../ipe`'s `TRecord (Map …) (Maybe var)` /
 //! `Record1 map var` / `EmptyRecord1`.
 //!
 //! * [`RowTail::Closed`] — field set is exact (the common case for all
@@ -145,7 +145,7 @@ pub const fn is_solver_var(raw: u32) -> bool {
 /// (field set exact) or open (extra fields flow into a named row variable).
 ///
 /// Mirrors `Maybe String` on `TRecord (Map …) (Maybe String)` in
-/// `../sky/src/Sky/AST/Canonical.hs:159`.
+/// `../ipe/src/Ipe/AST/Canonical.hs:159`.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum RowTail {
     /// Closed record — no extension variable; the field set is exact.
@@ -438,7 +438,7 @@ pub enum FlatType {
     /// resolves to [`FlatType::EmptyRecord`] the record is closed (field set
     /// exact); when it resolves to [`Content::Flex`] the record is open and can
     /// absorb additional fields. This mirrors `Record1 (Map …) Variable` in
-    /// `../sky/src/Sky/Type/Type.hs:75`.
+    /// `../ipe/src/Ipe/Type/Type.hs:75`.
     Record(BTreeMap<Symbol, VarId>, VarId),
     /// The closed-tail sentinel — mirrors `EmptyRecord1` in `Type.hs:75`.
     ///

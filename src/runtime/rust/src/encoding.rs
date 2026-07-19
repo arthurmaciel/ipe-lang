@@ -1,6 +1,6 @@
 //! Encoding kernels for Ipe.Encoding — base64 / url-percent / hex
 //! All fns mirror the Go runtime's `stdlib_extra.go` Encoding kernel behaviour
-//! and the Ipê-side signatures declared in `sky-stdlib/Ipê/Core/Encoding.ipe`.
+//! and the Ipê-side signatures declared in `ipe-stdlib/Ipê/Core/Encoding.ipe`.
 
 use super::IpeResult;
 
@@ -172,7 +172,7 @@ pub fn ipe_encoding_hex_decode(s: String) -> IpeResult<crate::error::IpeError, S
 // `Bytes` is a distinct primitive (`Vec<u8>`); its kernel implementations
 // (`bytes_to_hex`, `bytes_from_hex`, `bytes_to_base64`, `bytes_from_base64`,
 // `bytes_to_string`, `bytes_length`) live in `bytes.rs`, not on a
-// `type alias Bytes = String` convention. The `ipe_bytes` / `bytes_to_sky`
+// `type alias Bytes = String` convention. The `ipe_bytes` / `bytes_to_ipe`
 // helpers below serve the Latin-1 byte-pipeline needs of `encoding.rs`,
 // `compression.rs`, `ws_client.rs`, `server.rs`, and `email.rs`.
 
@@ -182,10 +182,10 @@ mod tests {
 
     #[test]
     fn test_base64_roundtrip() {
-        let encoded = base64_encode("Hello, Sky!".to_string());
+        let encoded = base64_encode("Hello, Ipe!".to_string());
         assert_eq!(encoded, "SGVsbG8sIFNreSE=");
         let decoded: IpeResult<String, String> = base64_decode(encoded);
-        assert!(matches!(decoded, IpeResult::Ok(ref s) if s == "Hello, Sky!"));
+        assert!(matches!(decoded, IpeResult::Ok(ref s) if s == "Hello, Ipe!"));
     }
 
     // non-ASCII goes through UTF-8 (Go parity), not Latin-1 truncation.

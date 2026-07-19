@@ -443,7 +443,7 @@ mod tests {
     }
 
     #[test]
-    fn is_relevant_accepts_sky_toml_and_rejects_unrelated_extension() {
+    fn is_relevant_accepts_ipe_toml_and_rejects_unrelated_extension() {
         let root = tmp_dir("scope_relevant");
         let src = root.join("src");
         fs::create_dir_all(&src).unwrap();

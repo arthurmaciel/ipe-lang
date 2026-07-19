@@ -23,7 +23,7 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 fn compile_golden(name: &str) -> PathBuf {
     let root = repo_root();
     let entry = golden_dir(&root, name).join("Main.ipe");
-    let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
+    let out = std::env::temp_dir().join(format!("ipec_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
     let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
@@ -89,7 +89,7 @@ fn tostring_record_and_adt_run() {
 fn log_info_with_stringify_attrs_compiles() {
     let root = repo_root();
     let entry = golden_dir(&root, "m_log_with").join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_m_log_with_e2e");
+    let out = std::env::temp_dir().join("ipec_m_log_with_e2e");
     let _ = std::fs::remove_dir_all(&out);
     let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve");
@@ -111,7 +111,7 @@ fn log_info_with_stringify_attrs_compiles() {
 fn tostring_on_function_is_rejected_at_typecheck() {
     let root = repo_root();
     let entry = golden_dir(&root, "m_tostring_fn_rejected").join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_m_tostring_fn_rejected_e2e");
+    let out = std::env::temp_dir().join("ipec_m_tostring_fn_rejected_e2e");
     let _ = std::fs::remove_dir_all(&out);
     let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve");
@@ -121,7 +121,7 @@ fn tostring_on_function_is_rejected_at_typecheck() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_err(),
-        "toString on a function MUST fail at skyc type-check (Stringify obligation), \
+        "toString on a function MUST fail at ipec type-check (Stringify obligation), \
          not exit 0 and defer to cargo",
     );
 }

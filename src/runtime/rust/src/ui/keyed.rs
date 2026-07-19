@@ -91,7 +91,7 @@ mod tests {
 
     /// Each child in a `keyed_column_` carries the `ipe-key` attribute.
     #[test]
-    fn keyed_column_attaches_sky_key_to_node_children() {
+    fn keyed_column_attaches_ipe_key_to_node_children() {
         let children = vec![
             (
                 "alpha".to_string(),
@@ -131,7 +131,7 @@ mod tests {
 
     /// `Text` children (no attribute slot) are wrapped in a keyed `el`.
     #[test]
-    fn keyed_column_wraps_text_child_with_sky_key() {
+    fn keyed_column_wraps_text_child_with_ipe_key() {
         let children = vec![("wrap-me".to_string(), Element::Text("hello".to_string()))];
         let col = keyed_column_(vec![], children);
         let kids = match col {
@@ -157,7 +157,7 @@ mod tests {
 
     /// `keyed_row_` also attaches `ipe-key` attributes.
     #[test]
-    fn keyed_row_attaches_sky_key() {
+    fn keyed_row_attaches_ipe_key() {
         let children = vec![(
             "row-key".to_string(),
             Element::Node(

@@ -1412,7 +1412,7 @@ mod tests {
     }
 
     #[test]
-    fn entry_main_is_sky_main() {
+    fn entry_main_is_ipe_main() {
         assert_eq!(module_value(&["Main"], "main"), "ipe_main");
         // `main` outside the `Main` module is NOT the entry.
         assert_eq!(module_value(&["Other"], "main"), "other_main");

@@ -47,7 +47,7 @@ use crate::EmitCtx;
 /// when the tag framing / blob encoding itself changes shape (the
 /// `KEY_TAG`-style domain-separation convention), never for a Model change —
 /// the Model's own shape is covered by the structural hash.
-const WIRE_EPOCH: &str = "sky-live-model-schema-v1";
+const WIRE_EPOCH: &str = "ipe-live-model-schema-v1";
 
 /// SHA-256 structural fingerprint of `model_ty`, folded with the wire-format
 /// epoch constant. Two Models with the same field names, same field order

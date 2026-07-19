@@ -14,7 +14,7 @@
 //! `oracle_divergence = true` — this is a brand-new Rust-only kernel batch
 //! with no Go reference behaviour to diff against structurally (the CSS/HTML
 //! shape is verified by direct assertions below, matching the semantics
-//! documented in `../sky`'s `Ipe.Ui.sky` / `Ipe.Html.sky` source, not a cached
+//! documented in `../ipe`'s `Ipe.Ui.ipe` / `Ipe.Html.ipe` source, not a cached
 //! oracle file).
 //!
 //! ## What is tested
@@ -60,7 +60,7 @@ fn build_run_ui_html_wiring_batch() -> (PathBuf, support::RunOutcome) {
         .join("golden")
         .join("ui_html_wiring_batch");
     let entry = dir.join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_ui_html_wiring_batch_e2e");
+    let out = std::env::temp_dir().join("ipec_ui_html_wiring_batch_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

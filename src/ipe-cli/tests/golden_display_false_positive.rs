@@ -38,11 +38,11 @@ fn entry_path(root: &Path) -> PathBuf {
 /// ipe-0 ∧ the wildcard row generic carries `IpeRow` but NOT `Display` —
 /// checked unconditionally (cheap, no `cargo`).
 #[test]
-fn i186_false_positive_skyc_no_spurious_display() {
+fn i186_false_positive_ipec_no_spurious_display() {
     let root = repo_root();
     let entry = entry_path(&root);
     let out =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i186_display_false_positive_skyc_out");
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i186_display_false_positive_ipec_out");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -90,7 +90,7 @@ fn i186_false_positive_cargo_builds_and_runs() {
 
     let root = repo_root();
     let entry = entry_path(&root);
-    let out = std::env::temp_dir().join("skyc_i186_display_false_positive_e2e");
+    let out = std::env::temp_dir().join("ipec_i186_display_false_positive_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {

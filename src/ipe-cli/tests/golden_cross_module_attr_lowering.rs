@@ -48,7 +48,7 @@ fn try_build(name: &str) -> Result<(), String> {
     if !entry.exists() {
         return Err(format!("fixture not found: {}", entry.display()));
     }
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_skyc_out"));
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_ipec_out"));
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {

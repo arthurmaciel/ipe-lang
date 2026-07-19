@@ -2,10 +2,10 @@ module Main exposing (main)
 
 -- Ipe.Webview spike — Three.js + WebGL2 under a native webview.
 --
--- Validates risk #2 from docs/skywebview/PLAN.md: does WebGL2 +
+-- Validates risk #2 from docs/ipewebview/PLAN.md: does WebGL2 +
 -- Three.js work end-to-end through the system webview engine?
 --
--- Run it with `sky run src/Main.ipe` — a native window opens
+-- Run it with `ipe run src/Main.ipe` — a native window opens
 -- pointing at the spike scene. There's no separate `webview_go`
 -- shim, no separate Ipe.Http.Server: the same Ipe.Webview backend
 -- that powers every other Ipe.Webview example handles loopback
@@ -21,7 +21,7 @@ module Main exposing (main)
 --      serving — no hand-rolled Ipe.Http.Server, no second
 --      process, no `webview_go` shim.
 --
---   2. The same Sky source you'd write for a Ipe.Live page works
+--   2. The same Ipe source you'd write for a Ipe.Live page works
 --      for a Ipe.Webview desktop app — `Ipe.Html.script`,
 --      `Ipe.Html.link`, `Ipe.Html.node "canvas"`, etc all render
 --      identically.

@@ -59,7 +59,7 @@ fn compile_module_probe(slug: &str, main: &str) -> Option<PathBuf> {
         return None; // runtime unavailable in this environment — caller skips
     };
     let uid = PROBE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let tmp = std::env::temp_dir().join(format!("skyc_stdlib_seal_{slug}_{uid}"));
+    let tmp = std::env::temp_dir().join(format!("ipec_stdlib_seal_{slug}_{uid}"));
     assert!(
         write_project(&tmp, main),
         "must write the {slug} fixture project"
@@ -73,7 +73,7 @@ fn compile_module_probe(slug: &str, main: &str) -> Option<PathBuf> {
     if let Err(e) = built {
         assert!(
             false_marker(),
-            "module `{slug}` must resolve + emit through skyc (exit 0), got: {e:?}"
+            "module `{slug}` must resolve + emit through ipec (exit 0), got: {e:?}"
         );
         return None;
     }

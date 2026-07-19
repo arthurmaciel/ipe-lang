@@ -2,7 +2,7 @@ module Main exposing (main)
 
 -- Companion to `dict_adt_gate` for the GENERIC-FUNCTION path with a RECORD key.
 -- `singletonDict` is a generic `a -> v -> Dict a v` forwarder built on `Dict.fromList`.
--- The Dict key variable carries the Sky `comparable`-key obligation
+-- The Dict key variable carries the Ipe `comparable`-key obligation
 -- (`TyBounds::dict_key`, → Rust `Hash + Eq + Ord`), so the forwarder generalises to
 -- a Rust generic bounded by those traits.  Instantiating it at a RECORD — which
 -- Rust cannot hash or order — is rejected at type-check (IPE-T0014) rather than

@@ -91,7 +91,7 @@ fn nested_tuple_str_column_cargo_builds_and_runs() {
     if std::env::var("IPE_E2E").is_err() {
         return;
     }
-    let out = std::env::temp_dir().join("skyc_tuple_nested_coerce_str_e2e");
+    let out = std::env::temp_dir().join("ipec_tuple_nested_coerce_str_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -120,7 +120,7 @@ fn nested_tuple_str_column_cargo_builds_and_runs() {
 /// fail-closed to IPE-L0115 — only the literal-tuple coerced-column path can
 /// lower a slice column soundly.
 #[test]
-fn nested_tuple_cons_column_is_sky_l0115() {
+fn nested_tuple_cons_column_is_ipe_l0115() {
     assert_l0115_gate(
         "i_tuple_nested_coerce_cons",
         "tuple_nested_coerce_cons_emit",

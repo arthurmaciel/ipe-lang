@@ -2,7 +2,7 @@
 //!
 //! TEA-shaped (`Ipe.Tui.app cfg`): the same `view : Model -> Element msg` that
 //! Ipe.Live / Ipe.Webview render, lowered to ANSI cells. See
-//! `docs/superpowers/specs/2026-06-12-s4-sky-tui-design.md`.
+//! `docs/superpowers/specs/2026-06-12-s4-ipe-tui-design.md`.
 
 pub mod app;
 pub mod cell;

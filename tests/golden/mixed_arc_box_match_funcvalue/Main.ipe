@@ -16,7 +16,7 @@ import Ipe.Log exposing (println)
 -- (`Arc`). The `case mode of` scrutinee selects between the promoted `handler`
 -- (one arm) and `signIn`, a top-level function REFERENCE (`Expr::FuncValue`,
 -- another arm). The match arms must unify at one Rust carrier: `Arc` vs `Box` →
--- cargo `E0308` AFTER `skyc` exit 0. Fix: `promote_unification_sibling_lambdas`
+-- cargo `E0308` AFTER `ipec` exit 0. Fix: `promote_unification_sibling_lambdas`
 -- reaches the `Match` group and coerces every arm's function-value leaf to the
 -- `Arc` carrier (the promoted arm to `Arc::clone`, the `FuncValue` arm by
 -- eta-expansion).

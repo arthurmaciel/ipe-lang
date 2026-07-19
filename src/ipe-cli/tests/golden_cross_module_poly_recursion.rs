@@ -50,11 +50,11 @@ fn entry_path(root: &Path) -> PathBuf {
 /// `even_len` as a `Clone`-bounded Rust generic. Checked unconditionally (cheap,
 /// no `cargo`), independent of the `IPE_E2E` gate below.
 #[test]
-fn i201_skyc_accepts_and_emits_clone_bounded_generic() {
+fn i201_ipec_accepts_and_emits_clone_bounded_generic() {
     let root = repo_root();
     let entry = entry_path(&root);
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("i201_cross_module_poly_recursion_skyc_out");
+        .join("i201_cross_module_poly_recursion_ipec_out");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -95,7 +95,7 @@ fn i201_cargo_builds_and_runs() {
 
     let root = repo_root();
     let entry = entry_path(&root);
-    let out = std::env::temp_dir().join("skyc_i201_cross_module_poly_recursion_e2e");
+    let out = std::env::temp_dir().join("ipec_i201_cross_module_poly_recursion_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

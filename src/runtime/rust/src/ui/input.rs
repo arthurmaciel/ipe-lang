@@ -1,6 +1,6 @@
 //! `Ipe.Ui.Input` kernel helpers -- typed form controls.
 //!
-//! Mirrors `sky-stdlib/Std/Ui/Input.ipe` variant-for-variant.
+//! Mirrors `ipe-stdlib/Std/Ui/Input.ipe` variant-for-variant.
 //! Every public function carries a trailing underscore matching
 //! the `naming.rs` convention for kernel helpers.
 

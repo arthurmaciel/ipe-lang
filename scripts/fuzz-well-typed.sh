@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# scripts/fuzz-well-typed.sh — well-typed soundness fuzzer (Ipê/sky-rust port).
+# scripts/fuzz-well-typed.sh — well-typed soundness fuzzer (Ipê/ipe-lang port).
 #
-# Ported from ../sky/scripts/fuzz-well-typed.sh (Haskell backend, Go target).
+# Ported from ../ipe/scripts/fuzz-well-typed.sh (Haskell backend, Go target).
 # KEY ADAPTATIONS — Rust/Ipê backend:
 #
 #   BUILD: ipe build src/Main.ipe --out out/rust
@@ -9,7 +9,7 @@
 #          (binary: $CARGO_TARGET_DIR/debug/ipe-app)
 #
 #   PANIC DETECTION: Rust/Ipê runtime installs a classify-and-log panic hook
-#   (sky_runtime::core::install_panic_classifier). A runtime fault emits to
+#   (ipe_runtime::core::install_panic_classifier). A runtime fault emits to
 #   stderr before the process exits non-zero:
 #
 #     [error] DivisionByZero (ref XXXXXXXX): attempt to divide by zero
@@ -44,7 +44,7 @@
 #   IPE_FUZZ_FULL=1    Shorthand for --iters 10000 (CI full-gate override)
 #
 # Exit: 0 = all iterations green; 1 = first failure (seed + forensics dir
-# under /tmp/sky-fuzz/FAILURES/); 2 = setup error.
+# under /tmp/ipe-fuzz/FAILURES/); 2 = setup error.
 #
 # Reproduce a failure: ./scripts/fuzz-well-typed.sh --seed N --iters 1 --keep
 # Full 10k gate:       IPE_FUZZ_FULL=1 ./scripts/fuzz-well-typed.sh
@@ -103,7 +103,7 @@ fi
 
 # ── Rust/Ipê panic-detection regex ───────────────────────────────────────────
 # Sources:
-#   • sky_runtime::core::install_panic_classifier() plain-text line:
+#   • ipe_runtime::core::install_panic_classifier() plain-text line:
 #       "[error] DivisionByZero (ref XXXXXXXX): ..."
 #       "[error] IndexOutOfRange (ref XXXXXXXX): ..."
 #       "[error] ArithmeticOverflow (ref XXXXXXXX): ..."
@@ -124,7 +124,7 @@ fi
 PANIC_RE='^\[error\] [A-Za-z]+ \(ref |"kind":"[A-Za-z]|thread .* panicked at|RUST_BACKTRACE|async task panicked|Ffi\.kernel.*should not be called|panic:|goroutine [0-9]+ \[|runtime error:|fatal error:|unrecoverable'
 
 # ── Warm shared CARGO_TARGET_DIR (the key to fast iterations) ────────────────
-# The sweep's env.sh already pins CARGO_TARGET_DIR=$HOME/.cache/sky-rust-target.
+# The sweep's env.sh already pins CARGO_TARGET_DIR=$HOME/.cache/ipe-lang-target.
 # Heavy deps (axum/tokio/serde/sqlx/…) compile once and are reused across every
 # fuzz iteration — so after the first cold build each iteration's cargo step is
 # a ~1 s link, not a multi-minute compile.
@@ -742,7 +742,7 @@ setup_project() {
     local dir=$1
     mkdir -p "$dir/src"
     cat > "$dir/ipe.toml" <<'EOF'
-name = "sky-fuzz-iter"
+name = "ipe-fuzz-iter"
 version = "0.0.0"
 entry = "src/Main.ipe"
 EOF
@@ -852,7 +852,7 @@ run_iter() {
 
     # ── Step 4: run ─────────────────────────────────────────────────────────
     local run_dir run_rc
-    run_dir="$(mktemp -d "${TMPDIR:-/tmp}/sky-fuzz-run.XXXXXX")"
+    run_dir="$(mktemp -d "${TMPDIR:-/tmp}/ipe-fuzz-run.XXXXXX")"
     ( cd "$run_dir" && timeout "$RUN_TIMEOUT" "$bin" ) >"$runlog" 2>&1
     run_rc=$?
     rm -rf "$run_dir"
@@ -898,7 +898,7 @@ save_failure() {
 # ── True-positive demo ────────────────────────────────────────────────────────
 # A WELL-TYPED Ipê program that panics at runtime: `42 // 0`.
 # The `//` operator is integer division; divisor 0 triggers the
-# sky_runtime::math::sky_int_div panic path, classified as DivisionByZero,
+# ipe_runtime::math::ipe_int_div panic path, classified as DivisionByZero,
 # exit 101. The detector must flag it.
 run_tp_demo() {
     echo "=== TRUE-POSITIVE DEMO ==="
@@ -906,7 +906,7 @@ run_tp_demo() {
     echo "    Expected: DivisionByZero panic, exit != 0, detector flags it."
     echo ""
 
-    local tp_dir; tp_dir="$(mktemp -d "${TMPDIR:-/tmp}/sky-fuzz-tp.XXXXXX")"
+    local tp_dir; tp_dir="$(mktemp -d "${TMPDIR:-/tmp}/ipe-fuzz-tp.XXXXXX")"
     setup_project "$tp_dir"
     cat > "$tp_dir/src/Main.ipe" <<'EOF'
 module Main exposing (main)
@@ -948,7 +948,7 @@ EOF
     if [[ -z "$bin" ]]; then echo "RESULT: FAIL — binary not found"; rm -rf "$tp_dir"; return 1; fi
 
     echo "[3/3] running (expecting panic)..."
-    local run_dir; run_dir="$(mktemp -d "${TMPDIR:-/tmp}/sky-fuzz-tprun.XXXXXX")"
+    local run_dir; run_dir="$(mktemp -d "${TMPDIR:-/tmp}/ipe-fuzz-tprun.XXXXXX")"
     local run_rc
     ( cd "$run_dir" && timeout 10 "$bin" ) >"$runlog" 2>&1
     run_rc=$?
@@ -998,8 +998,8 @@ EOF
 }
 
 # ── Directories ───────────────────────────────────────────────────────────────
-FUZZ_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sky-fuzz.XXXXXX")"
-FAILURES_DIR="/tmp/sky-fuzz/FAILURES"
+FUZZ_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ipe-fuzz.XXXXXX")"
+FAILURES_DIR="/tmp/ipe-fuzz/FAILURES"
 mkdir -p "$FAILURES_DIR"
 
 cleanup() {
@@ -1014,12 +1014,12 @@ if [[ "$TP_DEMO" -eq 1 ]]; then
 fi
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
-echo "sky-fuzz: mode=$MODE iters=$ITERS start_seed=$SEED"
-echo "sky-fuzz: ipe=$IPE_BIN"
-echo "sky-fuzz: cargo_target=$CARGO_TARGET_DIR"
-echo "sky-fuzz: tempdir=$FUZZ_DIR"
-echo "sky-fuzz: failures_dir=$FAILURES_DIR"
-echo "sky-fuzz: build_timeout=${BUILD_TIMEOUT}s run_timeout=${RUN_TIMEOUT}s"
+echo "ipe-fuzz: mode=$MODE iters=$ITERS start_seed=$SEED"
+echo "ipe-fuzz: ipe=$IPE_BIN"
+echo "ipe-fuzz: cargo_target=$CARGO_TARGET_DIR"
+echo "ipe-fuzz: tempdir=$FUZZ_DIR"
+echo "ipe-fuzz: failures_dir=$FAILURES_DIR"
+echo "ipe-fuzz: build_timeout=${BUILD_TIMEOUT}s run_timeout=${RUN_TIMEOUT}s"
 echo ""
 
 start_ts=$(date +%s)
@@ -1039,8 +1039,8 @@ for (( i = 0; i < ITERS; i++ )); do
         echo "FAIL iter=$i seed=$iter_seed $reason" >&2
         save_failure "$iter_seed" "$iterdir" "$reason"
         echo "" >&2
-        echo "sky-fuzz: ABORTING after first failure (iter $i / $ITERS)." >&2
-        echo "sky-fuzz: reproduce: $0 --seed $iter_seed --iters 1 --keep" >&2
+        echo "ipe-fuzz: ABORTING after first failure (iter $i / $ITERS)." >&2
+        echo "ipe-fuzz: reproduce: $0 --seed $iter_seed --iters 1 --keep" >&2
         exit 1
     fi
     green=$(( green + 1 ))
@@ -1058,12 +1058,12 @@ done
 
 elapsed=$(( $(date +%s) - start_ts ))
 echo ""
-echo "sky-fuzz: DONE iters=$ITERS green=$green failures=$failures elapsed=${elapsed}s"
+echo "ipe-fuzz: DONE iters=$ITERS green=$green failures=$failures elapsed=${elapsed}s"
 if [[ "$failures" -eq 0 ]]; then
     if (( ITERS >= 10000 )); then
-        echo "sky-fuzz: full gate SATISFIED — ran $ITERS iters clean (criterion 8)"
+        echo "ipe-fuzz: full gate SATISFIED — ran $ITERS iters clean (criterion 8)"
     else
-        echo "sky-fuzz: smoke PASS — ran $ITERS iters clean"
+        echo "ipe-fuzz: smoke PASS — ran $ITERS iters clean"
         echo "          (full gate: IPE_FUZZ_FULL=1 ./scripts/fuzz-well-typed.sh)"
     fi
     exit 0

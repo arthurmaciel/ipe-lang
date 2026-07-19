@@ -52,11 +52,11 @@ fn entry_path(root: &Path) -> PathBuf {
 /// the `\f -> f 10` mapper param must be `Box<dyn FnOnce(i64) -> i64 + Send>`
 /// (never a `+ Sync`-stamped `Box<dyn Fn>`).
 #[test]
-fn i198_skyc_accepts_and_renders_send_only_fnonce_param() {
+fn i198_ipec_accepts_and_renders_send_only_fnonce_param() {
     let root = repo_root();
     let entry = entry_path(&root);
     let out =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i198_decoder_payload_mapper_skyc_out");
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i198_decoder_payload_mapper_ipec_out");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -105,7 +105,7 @@ fn i198_cargo_builds_and_runs() {
 
     let root = repo_root();
     let entry = entry_path(&root);
-    let out = std::env::temp_dir().join("skyc_i198_decoder_payload_mapper_e2e");
+    let out = std::env::temp_dir().join("ipec_i198_decoder_payload_mapper_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

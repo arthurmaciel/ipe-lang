@@ -4,7 +4,7 @@ module Main exposing (main)
 -- `JsonDecP.custom` (not `required`) as the pipeline's second step. The
 -- reviewer's minimal repro for the #164 gap: `JsonDecPCustom` was missing
 -- from `is_pipeline_next_decoder_kernel`'s gate list
--- (crates/sky_lower/src/lower.rs), so the `next_decoder` slot lowered to an
+-- (crates/ipe_lower/src/lower.rs), so the `next_decoder` slot lowered to an
 -- ordinary flattened `Fn` bound instead of `IrType::FnOnceChain`, producing
 -- E0308 ("expected trait 'Fn', found trait 'FnOnce'") at the
 -- `decode_pipeline_custom` call site in the emitted Rust.

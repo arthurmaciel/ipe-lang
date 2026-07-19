@@ -7,7 +7,7 @@
 //! [`ast::Module`], or a typed [`ipe_diagnostics::Diagnostic`]. Every variable
 //! reference is classified — local binding, top-level binding, stdlib kernel,
 //! or data constructor — by porting the supported subset of the Haskell compiler's
-//! `Sky.Canonicalise.{Module,Expression,Pattern,Type,Environment}`.
+//! `Ipe.Canonicalise.{Module,Expression,Pattern,Type,Environment}`.
 
 pub mod ast;
 pub mod builtins;
@@ -949,7 +949,7 @@ mod tests {
         for (path, canonical) in crate::env::STDLIB_MODULE_QUALIFIERS {
             assert!(
                 matches!(path.first(), Some(&"Ipe")),
-                "path {path:?} must start with Sky or Std"
+                "path {path:?} must start with Ipe or Std"
             );
             let sym = i.intern(canonical).expect("intern canonical");
             assert!(
@@ -2626,7 +2626,7 @@ mod tests {
         // erroring — achieving the same "ADT ctor wins in expression position"
         // outcome more cleanly.
         //
-        // Ref: upstream `Sky.Canonicalise.Module.registerAliases`.
+        // Ref: upstream `Ipe.Canonicalise.Module.registerAliases`.
         let src = "module Main exposing (main)\n\
                    type alias Foo =\n    { x : Int }\n\
                    type Bar = Foo\n\n\
@@ -3338,14 +3338,14 @@ mod tests {
     #[test]
     fn type_alias_name_coinciding_with_adt_ctor_is_not_a_duplicate_value() {
         // `type Tab = Overview | Metrics | Logs` defines ADT constructors.
-        // `type alias Overview = { skyVersion : String }` defines a type alias
+        // `type alias Overview = { ipeVersion : String }` defines a type alias
         // in a SEPARATE namespace.  Both should coexist without an error.
         //
         // The regression was IPE-N0010 (DuplicateValue) from
         // `synthesize_record_alias_ctors` incorrectly checking `seen_ctors`.
         let src = "module Main exposing (main)\n\n\
                    type Tab = Overview | Metrics | Logs\n\n\
-                   type alias Overview =\n    { skyVersion : String\n    , commit : String\n    }\n\n\
+                   type alias Overview =\n    { ipeVersion : String\n    , commit : String\n    }\n\n\
                    main : Int\n\
                    main = 0\n";
         let mut i = Interner::new();
@@ -3370,7 +3370,7 @@ mod tests {
         // `VarTopLevel`.
         let src = "module Main exposing (main)\n\n\
                    type Tab = Overview | Metrics\n\n\
-                   type alias Overview =\n    { skyVersion : String\n    }\n\n\
+                   type alias Overview =\n    { ipeVersion : String\n    }\n\n\
                    main : Tab\n\
                    main = Overview\n";
         let mut i = Interner::new();

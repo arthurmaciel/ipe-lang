@@ -10,7 +10,7 @@
 //!   expression `()`, and [`IrType::Unit`] renders as `()`.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
-//! `/home/arthur/Documentos/comp/sky/out/sky` compiles + runs the
+//! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the
 //! shape-equivalent program
 //!
 //! ```text
@@ -309,10 +309,10 @@ fn resolve_runtime() -> Option<PathBuf> {
     let mut here: Option<&Path> = Some(cwd.as_path());
     while let Some(dir) = here {
         for candidate in [
-            // In-repo runtime (sky-rust monorepo).
+            // In-repo runtime (ipe-lang monorepo).
             dir.join("src").join("runtime").join("rust").join("src"),
-            // Legacy: sibling `sky` checkout.
-            dir.join("sky")
+            // Legacy: sibling `ipe` checkout.
+            dir.join("ipe")
                 .join("runtime-rust")
                 .join("src")
                 .join("ipe_runtime"),

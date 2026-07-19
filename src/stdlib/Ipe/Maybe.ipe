@@ -1,9 +1,9 @@
 -- | Ipe.Maybe — combinators over the Maybe ADT.
 --
--- v0.13 Layer 3 / Phase B1: Sky source for the user-visible
+-- v0.13 Layer 3 / Phase B1: Ipe source for the user-visible
 -- combinator surface.  The Maybe ADT itself (`Maybe a`, `Just`,
 -- `Nothing` ctors) remains kernel-anchored so the type system +
--- runtime SkyMaybe representation stay in lockstep.  Without
+-- runtime IpeMaybe representation stay in lockstep.  Without
 -- monomorphisation (Phase A4/A5), call-site coercion would
 -- mismatch Go's type inference.  With Phase A5 wired, the call-
 -- site coerceArg gets the call's actual concrete type from

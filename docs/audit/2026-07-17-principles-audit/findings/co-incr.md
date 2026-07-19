@@ -17,7 +17,7 @@ read for reachability only: `src/ipe-cli/src/{lib,watch,cache,stdlib}.rs`,
 - principle: P3 soundness — "a well-typed Ipê program can never trigger a runtime failure"; §0 no shortcuts (guard dropped in port)
 - location: `src/stdlib/Ipe/Money.ipe:432-441` (`base = totalMinor // parts`); panic site `src/runtime/rust/src/math.rs:78-83` (`ipe_int_div` panics on `b == 0`)
 - reachability: `Money.ipe` is embedded stdlib injected into every build (`src/ipe-cli/src/stdlib.rs`). Any app computing `parts` from data — e.g. `Money.allocate (List.length participants) total` with an empty list, where the list derives from a request — calls `totalMinor // 0`, which is the intentional DivisionByZero abort (exit 101). In an Ipe.Live/Http.Server app this kills the entire server process from one request.
-- problem: the pure-Ipê port of `allocate` dropped the `parts <= 0` guard that the runtime kernel it replaced enforces (`money_allocate`, `src/runtime/rust/src/money.rs:272-274`, returns `[]`). Upstream `../sky` routes `allocate` to that guarded kernel (`Money_allocate` via `Ffi.callPure`); the port silently regressed the guard away.
+- problem: the pure-Ipê port of `allocate` dropped the `parts <= 0` guard that the runtime kernel it replaced enforces (`money_allocate`, `src/runtime/rust/src/money.rs:272-274`, returns `[]`). Upstream `../ipe` routes `allocate` to that guarded kernel (`Money_allocate` via `Ffi.callPure`); the port silently regressed the guard away.
 - fix direction: restore the guard in the `.ipe` body — `if parts <= 0 then [] else …` — matching the kernel and upstream behaviour.
 - prior: related surface to runtime-audit-verdict's "guard … allocate residue" (money.rs) — that runtime fix landed; this is a NEW regression in the pure-source port.
 
@@ -37,7 +37,7 @@ read for reachability only: `src/ipe-cli/src/{lib,watch,cache,stdlib}.rs`,
 - principle: P2 correctness — "swallowed errors (present-but-wrong defaulted to a trusted value)"; pinned default "Errors — `Result Error a` … never"
 - location: `src/stdlib/Ipe/Money.ipe:395-408` (`add`, `sub`); amplified by `sumOf` (457-469) and by `compare`/`lt`/`lte`/`gt`/`gte` (474-506) which ignore currency entirely
 - reachability: any app mixing currencies: `Money.add (usd 10) (eur 5)` returns `$10` with no error; `Money.sumOf USD mixedList` silently drops every non-USD entry; `Money.lt (usd 5) (eur 6)` compares raw decimals across currencies.
-- problem: a wrong monetary result is produced silently instead of an error value. This matches upstream (`../sky/sky-stdlib/Std/Money.sky:304-317`), so it is parity — but it is an unflagged silent-wrong-money default in the flagship "never raw Float for currency" module, exactly the swallowed-error class the correctness axis names. No divergence record sanctions keeping it, and no doc warns the caller.
+- problem: a wrong monetary result is produced silently instead of an error value. This matches upstream (`../ipe/ipe-stdlib/Std/Money.ipe:304-317`), so it is parity — but it is an unflagged silent-wrong-money default in the flagship "never raw Float for currency" module, exactly the swallowed-error class the correctness axis names. No divergence record sanctions keeping it, and no doc warns the caller.
 - fix direction: `Result Error Money` arithmetic (or a same-currency witness type); if Go parity is retained short-term, record it in the divergence/limitation ledger and document the mismatch behaviour in the module doc.
 - prior: new.
 

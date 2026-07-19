@@ -73,7 +73,7 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code)
 /// `Set.insert { x = 1 } Set.empty` — a record is not orderable, so the Set
 /// element variable cannot pin to it.
 #[test]
-fn set_record_element_is_sky_t0001() {
+fn set_record_element_is_ipe_t0001() {
     assert_gate(
         "set_record_gate",
         "m4d_set_record_gate_emit",
@@ -83,7 +83,7 @@ fn set_record_element_is_sky_t0001() {
 
 /// `Dict.insert Red 1 Dict.empty` — a user ADT is not a comparable Dict key.
 #[test]
-fn dict_adt_key_is_sky_t0001() {
+fn dict_adt_key_is_ipe_t0001() {
     assert_gate(
         "dict_adt_gate",
         "m4d_dict_adt_gate_emit",
@@ -96,7 +96,7 @@ fn dict_adt_key_is_sky_t0001() {
 /// `Set Float` type-checks (Ipê `Float` is `comparable`) but has no sound Rust
 /// backing (`f64` is not `Ord`), so lowering rejects it.
 #[test]
-fn set_float_element_is_sky_l0117() {
+fn set_float_element_is_ipe_l0117() {
     assert_gate(
         "set_float_gate",
         "m4d_set_float_gate_emit",
@@ -107,7 +107,7 @@ fn set_float_element_is_sky_l0117() {
 /// `Dict Float v` type-checks but `HashMap<f64, _>` cannot exist (`f64` is not
 /// `Hash` / `Eq`), so lowering rejects it.
 #[test]
-fn dict_float_key_is_sky_l0117() {
+fn dict_float_key_is_ipe_l0117() {
     assert_gate(
         "dict_float_gate",
         "m4d_dict_float_gate_emit",
@@ -126,7 +126,7 @@ fn dict_float_key_is_sky_l0117() {
 /// Inline, unannotated `Set.fromList [1.5, 2.5]` — the producing call's region
 /// type (`Set Float`) is the only carrier of the `Float` element.
 #[test]
-fn set_float_inline_is_sky_l0117() {
+fn set_float_inline_is_ipe_l0117() {
     assert_gate(
         "set_float_inline_gate",
         "m4d_set_float_inline_gate_emit",
@@ -137,7 +137,7 @@ fn set_float_inline_is_sky_l0117() {
 /// `let s = Set.fromList [1.5, 2.5]` — a `let`-bound float Set with no
 /// annotation on the binding.
 #[test]
-fn set_float_let_is_sky_l0117() {
+fn set_float_let_is_ipe_l0117() {
     assert_gate(
         "set_float_let_gate",
         "m4d_set_float_let_gate_emit",
@@ -149,7 +149,7 @@ fn set_float_let_is_sky_l0117() {
 /// is a mapped `List Float`) — the float-ness is map-derived, not a literal
 /// float list.
 #[test]
-fn set_float_mapped_is_sky_l0117() {
+fn set_float_mapped_is_ipe_l0117() {
     assert_gate(
         "set_float_mapped_gate",
         "m4d_set_float_mapped_gate_emit",
@@ -160,7 +160,7 @@ fn set_float_mapped_is_sky_l0117() {
 /// `Set.insert 1.5 Set.empty` — a float element introduced via `Set.insert`,
 /// no annotation, type fixed entirely by inference.
 #[test]
-fn set_float_insert_is_sky_l0117() {
+fn set_float_insert_is_ipe_l0117() {
     assert_gate(
         "set_float_insert_gate",
         "m4d_set_float_insert_gate_emit",
@@ -171,7 +171,7 @@ fn set_float_insert_is_sky_l0117() {
 /// Inline, unannotated `Dict.fromList [(1.0, "a")]` — the producing call's
 /// region type (`Dict Float String`) is the only carrier of the `Float` key.
 #[test]
-fn dict_float_inline_is_sky_l0117() {
+fn dict_float_inline_is_ipe_l0117() {
     assert_gate(
         "dict_float_inline_gate",
         "m4d_dict_float_inline_gate_emit",
@@ -182,7 +182,7 @@ fn dict_float_inline_is_sky_l0117() {
 /// `let d = Dict.fromList [(1.5, "cheap")]` — a `let`-bound float Dict with no
 /// annotation on the binding.
 #[test]
-fn dict_float_let_is_sky_l0117() {
+fn dict_float_let_is_ipe_l0117() {
     assert_gate(
         "dict_float_let_gate",
         "m4d_dict_float_let_gate_emit",
@@ -193,7 +193,7 @@ fn dict_float_let_is_sky_l0117() {
 /// `Dict.insert 1.5 "hello" Dict.empty` — a float key introduced via
 /// `Dict.insert`, no annotation, type fixed entirely by inference.
 #[test]
-fn dict_float_insert_is_sky_l0117() {
+fn dict_float_insert_is_ipe_l0117() {
     assert_gate(
         "dict_float_insert_gate",
         "m4d_dict_float_insert_gate_emit",
@@ -216,7 +216,7 @@ fn dict_float_insert_is_sky_l0117() {
 /// a record is not comparable, so the generic is rejected at the call site with
 /// `IPE-T0014`.
 #[test]
-fn set_rec_via_fn_is_sky_t0014() {
+fn set_rec_via_fn_is_ipe_t0014() {
     assert_gate(
         "set_rec_fn_gate",
         "m4d_set_rec_fn_gate_emit",
@@ -228,7 +228,7 @@ fn set_rec_via_fn_is_sky_t0014() {
 /// `Color` — a user ADT is not comparable, so the generic is rejected with
 /// `IPE-T0014`.
 #[test]
-fn set_adt_via_fn_is_sky_t0014() {
+fn set_adt_via_fn_is_ipe_t0014() {
     assert_gate(
         "set_adt_fn_gate",
         "m4d_set_adt_fn_gate_emit",
@@ -240,7 +240,7 @@ fn set_adt_via_fn_is_sky_t0014() {
 /// with a `{ x : Int }` record key — a record is not comparable, so the generic
 /// is rejected with `IPE-T0014`.
 #[test]
-fn dict_rec_via_fn_is_sky_t0014() {
+fn dict_rec_via_fn_is_ipe_t0014() {
     assert_gate(
         "dict_rec_fn_gate",
         "m4d_dict_rec_fn_gate_emit",
@@ -252,7 +252,7 @@ fn dict_rec_via_fn_is_sky_t0014() {
 /// with a user ADT `Color` key — a user ADT is not comparable, so the generic is
 /// rejected with `IPE-T0014`.
 #[test]
-fn dict_adt_via_fn_is_sky_t0014() {
+fn dict_adt_via_fn_is_ipe_t0014() {
     assert_gate(
         "dict_adt_fn_gate",
         "m4d_dict_adt_fn_gate_emit",

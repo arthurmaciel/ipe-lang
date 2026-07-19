@@ -49,7 +49,7 @@ fn build_run_m7() -> (PathBuf, support::RunOutcome) {
     let root = repo_root();
     let dir = root.join("tests").join("golden").join("stdui");
     let entry = dir.join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_m7_stdui_e2e");
+    let out = std::env::temp_dir().join("ipec_m7_stdui_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -76,7 +76,7 @@ fn build_run_m7() -> (PathBuf, support::RunOutcome) {
 
 /// Full E2E smoke test: `Ipe.Ui` + `Ipe.Html.htmlRender` must compile, build,
 /// run, and produce the cached expected HTML.  Divergence golden — the expected
-/// value is skyc's own correct output, not the Go oracle.
+/// value is ipec's own correct output, not the Go oracle.
 #[test]
 fn stdui_layout_column_el_text_renders_html() {
     if std::env::var("IPE_E2E").is_err() {

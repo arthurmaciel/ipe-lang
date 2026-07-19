@@ -1,4 +1,4 @@
--- | Ipe.Char — single-character helpers (Layer 3 Sky source).
+-- | Ipe.Char — single-character helpers (Layer 3 Ipe source).
 --
 -- `Char` is a single Unicode code point.  At runtime the value is
 -- the integer rune (`int32`); functions are aliased to the runtime

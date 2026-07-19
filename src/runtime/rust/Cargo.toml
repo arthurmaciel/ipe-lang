@@ -3,7 +3,7 @@ name = "ipe-runtime-rust"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
-description = "Sky language runtime for Rust — primitives, collections, FFI"
+description = "Ipe language runtime for Rust — primitives, collections, FFI"
 
 [lib]
 name = "ipe_runtime_rust"
@@ -37,7 +37,7 @@ lettre = { version = "0.11", default-features = false, features = ["builder", "h
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"], optional = true }
 futures-util = { version = "0.3", optional = true }
 # NON-optional: the always-compiled `core.rs` derives `serde::Serialize`/`Deserialize`
-# on `SkyMaybe`/`SkyResult` unconditionally, so serde is needed by EVERY feature subset
+# on `IpeMaybe`/`IpeResult` unconditionally, so serde is needed by EVERY feature subset
 # (the `optional = true` was a lie — it left ~12 narrow `--features X` subsets failing
 # with E0433). Matches crate-specs.toml + the generated-project Cargo.toml, which both
 # declare serde non-optional. Generic-bound (`impl<T: Serialize>`) so a non-serde inner
@@ -47,7 +47,7 @@ serde = { version = "1", features = ["derive"] }
 # the browser-WASM sink) decodes typed form records through it. Pure serde.
 serde_urlencoded = "0.7"
 subtle = "2"
-# `Sky.Core.Secret` (backlog #44): zeroizes the backing buffer on `Drop` so a
+# `Ipe.Core.Secret` (backlog #44): zeroizes the backing buffer on `Drop` so a
 # revealed/discarded secret does not linger in freed heap memory. NON-optional
 # (like `subtle`) — `secret.rs` is always compiled, no feature gate.
 zeroize = "1"
@@ -55,7 +55,7 @@ hmac = "0.12"
 sha1 = "0.10"
 md-5 = "0.10"
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "postgres"], optional = true }
-# Sky.Live session-checkpoint body encoding (H24 wire format: base64(tag ++ bincode)).
+# Ipe.Live session-checkpoint body encoding (H24 wire format: base64(tag ++ bincode)).
 bincode = { version = "1", optional = true }
 redis = { version = "0.27", features = ["tokio-comp"], optional = true }
 regex = "1"
@@ -76,7 +76,7 @@ bcrypt = { version = "0.17", optional = true }
 async-trait = { version = "0.1", optional = true }
 unicode-width = { version = "0.1", optional = true }
 crossterm = { version = "0.28", optional = true }
-# Sky.Webview native window. Modern wry/tao (objc2 + current windows-rs) build on
+# Ipe.Webview native window. Modern wry/tao (objc2 + current windows-rs) build on
 # macOS-15/Xcode-16 + Windows-2025; on Linux they target webkit2gtk-4.1 + libsoup-3.0.
 wry = { version = "0.55", optional = true }
 tao = { version = "0.35", optional = true }
@@ -148,7 +148,7 @@ console_error_panic_hook = { version = "0.1", optional = true }
 default = []
 async = ["tokio"]
 json = ["serde_json", "jsonwebtoken"]
-# `sha2` is required by `db_migrate_apply` (the `_sky_migrations` ledger stores a
+# `sha2` is required by `db_migrate_apply` (the `_ipe_migrations` ledger stores a
 # sha256-hex checksum per migration — a cross-backend DB contract that must match
 # the Go backend byte-for-byte). Generated projects always enable `crypto`
 # (which also pulls sha2); listing it here fixes the standalone `--features db`

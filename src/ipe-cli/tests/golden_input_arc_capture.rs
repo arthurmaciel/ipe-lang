@@ -43,10 +43,10 @@ fn entry_path(root: &Path) -> PathBuf {
 /// the E0382 SEAL break cannot recur: the pre-clone must sit before `Arc::new`,
 /// never inside its `move |_x|` body.
 #[test]
-fn i191_skyc_accepts_and_hoists_capture_clone() {
+fn i191_ipec_accepts_and_hoists_capture_clone() {
     let root = repo_root();
     let entry = entry_path(&root);
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i191_input_arc_capture_skyc_out");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i191_input_arc_capture_ipec_out");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -65,7 +65,7 @@ fn i191_skyc_accepts_and_hoists_capture_clone() {
         .expect("emitted main.rs must exist");
 
     // Post-emit rustfmt reflows long lines, so the two statements can land on
-    // separate (indented) lines rather than the single-line span skyc first
+    // separate (indented) lines rather than the single-line span ipec first
     // emits — match on rustfmt-normalized text (`support::
     // normalize_rustfmt_whitespace`) so the check tracks *token adjacency*,
     // not a fixed line layout (same stale-substring class as #269), while
@@ -106,7 +106,7 @@ fn i191_cargo_builds_and_runs() {
 
     let root = repo_root();
     let entry = entry_path(&root);
-    let out = std::env::temp_dir().join("skyc_i191_input_arc_capture_e2e");
+    let out = std::env::temp_dir().join("ipec_i191_input_arc_capture_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

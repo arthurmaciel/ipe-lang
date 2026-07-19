@@ -24,7 +24,7 @@ pub fn basics_mod_by(divisor: i64, n: i64) -> i64 {
 
 /// The result of Ipê's `Basics.compare` — a typed three-way comparison.
 ///
-/// Sanctioned divergence from the Sky/Go backend: Go's `Basics_compareT`
+/// Sanctioned divergence from the Ipe/Go backend: Go's `Basics_compareT`
 /// returns `-1 / 0 / 1` as a plain `int`.  The Rust backend returns a typed
 /// enum so pattern-match on `LT / EQ / GT` is sound and exhaustive without
 /// an extra range-check.  See `docs/divergences-from-sky.md §B-compare`.
@@ -193,7 +193,7 @@ mod tests {
     #[test]
     fn error_to_string_renders_kind_and_message() {
         // `Error.toString` reuses `basics_error_to_string`, dispatching through
-        // `IpeStringify` to `IpeError::to_sky_string`'s `"<Kind>: <message>"`.
+        // `IpeStringify` to `IpeError::to_ipe_string`'s `"<Kind>: <message>"`.
         assert_eq!(
             basics_error_to_string(crate::error::IpeError::io("boom".to_owned())),
             "Io: boom"

@@ -16,7 +16,7 @@
 //!      * `Math.max "b" "a"` → `"b"`
 //!
 //! 2. **Go parity** — the rest. Here Ipê's output is the target, so the cached
-//!    oracle is the Go output (`oracle_divergence = false`) and Sky-Rust must
+//!    oracle is the Go output (`oracle_divergence = false`) and Ipe must
 //!    match it byte-for-byte: `Math.min` / `Math.max` on `Int` (Ipê's `AsInt`
 //!    path gives the correct result for integers), `abs`, `sqrt` (incl. the
 //!    `sqrt (-1.0)` NaN domain edge), `pow`, `round` (half-away-from-zero, both
@@ -54,7 +54,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
     let root = repo_root();
     let dir = golden_dir(&root, name);
     let entry = dir.join("Main.ipe");
-    let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
+    let out = std::env::temp_dir().join(format!("ipec_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -82,7 +82,7 @@ fn math_max_int() {
     assert_runs_and_matches_oracle("math_max_int");
 }
 
-// ── min / max — Float (divergence-from-sky: polymorphic compare, no AsInt coercion) ──
+// ── min / max — Float (divergence-from-ipe: polymorphic compare, no AsInt coercion) ──
 
 /// `Math.min 0.4 1.3` → `0.4`. Ipê's `AsInt` coercion gives `0`; Ipê-Rust
 /// compares `f64`s directly and returns `0.4` unchanged. Divergence from Ipê,
@@ -99,7 +99,7 @@ fn math_max_float_no_truncation() {
     assert_runs_and_matches_oracle("math_max_float");
 }
 
-// ── min / max — String (divergence-from-sky: lexicographic polymorphic compare) ──
+// ── min / max — String (divergence-from-ipe: lexicographic polymorphic compare) ──
 
 /// `Math.min "b" "a"` → `"a"`. Polymorphic compare on `String` (lexicographic).
 /// Ipê's `AsInt` compare is not meaningful on String. Divergence from Ipê,

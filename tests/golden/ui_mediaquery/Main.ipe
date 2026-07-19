@@ -10,7 +10,7 @@ import Ipe.Ui.Background as Background
 -- docs/architecture/ui-mediaquery-design-2026-07-11.md). Also exercises
 -- `Ui.breakpoint`, which now delegates to the same marker-emitting
 -- mechanism instead of the Phase-0 passthrough stub.
--- oracle_divergence = true: skyc's own correct output, not a Go oracle diff.
+-- oracle_divergence = true: ipec's own correct output, not a Go oracle diff.
 -- (Plain Html.render leaves the data-ipe-mq-* markers visible; the Live /
 -- Webview pipelines expand them into the ipe-id-scoped <style> block via
 -- apply_style_injections — pinned by the runtime unit tests.)

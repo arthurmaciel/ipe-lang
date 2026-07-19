@@ -7,7 +7,7 @@ module Main exposing (main)
 -- This program exercises THREE param-list shapes in a single `Db.withTransaction`:
 --
 --   (a) `List Int`      — regression guard for examples/18-job-queue-style calls
---   (b) `List String`   — regression guard for examples/17-skymon-style calls
+--   (b) `List String`   — regression guard for examples/17-ipemon-style calls
 --   (c) mixed `List SqlValue` (SqlString + SqlInt + SqlBool + SqlNull) —
 --       the canonical mixed-type path that triggered the original limitation
 --

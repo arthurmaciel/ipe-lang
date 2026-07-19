@@ -11,7 +11,7 @@ ipe_kernels = { path = "../kernels" }
 # Phase 6.5 (symbol-relocation persistence): every `ipe_ir` type derives
 # `Serialize`/`Deserialize` (relying on `ipe_intern::Symbol`'s ambient-
 # interner impls for the embedded `Symbol` fields) so `ipe_ir::Program` can
-# round-trip through the on-disk lowered-IR cache (`skyc::cache`). `Match`
+# round-trip through the on-disk lowered-IR cache (`ipec::cache`). `Match`
 # gets a hand-written impl instead of `#[derive]` — see its own doc.
 serde = { version = "1", features = ["derive"] }
 

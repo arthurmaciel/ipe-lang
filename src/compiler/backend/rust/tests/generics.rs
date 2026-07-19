@@ -9,7 +9,7 @@
 //! function, which Rust monomorphises.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
-//! `/home/arthur/Documentos/comp/sky/out/sky` compiles + runs the
+//! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the
 //! equivalent program
 //!
 //! ```text
@@ -41,7 +41,7 @@ use ipe_ir::{
 
 /// Build the canonical generic program:
 ///
-/// ```sky
+/// ```ipe
 /// identity : a -> a
 /// identity x = x
 /// main =
@@ -203,7 +203,7 @@ fn emits_generic_function_signature() -> DResult<()> {
 /// Build a program with two super-typed generic functions, exercising the
 /// bound clauses:
 ///
-/// ```sky
+/// ```ipe
 /// double x = x + x          -- Number  → T1: Add<Output = T1> + Copy
 /// max a b = if a > b then a else b  -- Comparable → T1: PartialOrd + Copy
 /// main = println (String.fromInt (double (max 20 21)))
@@ -424,10 +424,10 @@ fn resolve_runtime() -> Option<PathBuf> {
     let mut here: Option<&Path> = Some(cwd.as_path());
     while let Some(dir) = here {
         for candidate in [
-            // In-repo runtime (sky-rust monorepo).
+            // In-repo runtime (ipe-lang monorepo).
             dir.join("src").join("runtime").join("rust").join("src"),
-            // Legacy: sibling `sky` checkout.
-            dir.join("sky")
+            // Legacy: sibling `ipe` checkout.
+            dir.join("ipe")
                 .join("runtime-rust")
                 .join("src")
                 .join("ipe_runtime"),

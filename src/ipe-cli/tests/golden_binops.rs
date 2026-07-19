@@ -3,11 +3,11 @@
 //! the emitted project must build and print `13`.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
-//! `/home/arthur/Documentos/comp/sky/out/sky` compiles + runs the SAME
+//! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
 //! `Main.ipe` to stdout `13\n`, exit 0 — verified by hand:
 //!
 //! ```text
-//! $ sky run tests/golden/binops/Main.ipe   # Go backend
+//! $ ipe run tests/golden/binops/Main.ipe   # Go backend
 //! 13
 //! ```
 //!
@@ -15,7 +15,7 @@
 //! binds tighter than `+`/`-` at 6; `+`/`-` are left-associative). The Rust
 //! `end_to_end_*` test below asserts the Rust backend reaches the identical
 //! `13`. Running the Go toolchain inside `cargo test` is impractical (it needs
-//! the Haskell `sky` binary plus a Go toolchain), so the hand-computed value is
+//! the Haskell `ipe` binary plus a Go toolchain), so the hand-computed value is
 //! the in-test oracle, documented here against the Go-equivalent command.
 //!
 //! `assoc_reduce_order_*` tests pin the reduce order for mixed-prec and
@@ -74,7 +74,7 @@ fn end_to_end_builds_and_prints_thirteen() {
 
     let root = repo_root();
     let entry = example_entry(&root);
-    let out = std::env::temp_dir().join("skyc_m1_binops_e2e");
+    let out = std::env::temp_dir().join("ipec_m1_binops_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

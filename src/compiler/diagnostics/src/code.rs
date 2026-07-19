@@ -16,7 +16,7 @@
 /// Single source of truth: every humble / ICE message and every `IPE-I*` /
 /// `IPE-L*` explain page footer references this one constant. `OWNER` is a
 /// placeholder until the repository's Codeberg home is fixed.
-pub const ISSUE_TRACKER_URL: &str = "https://codeberg.org/OWNER/sky-rust/issues";
+pub const ISSUE_TRACKER_URL: &str = "https://codeberg.org/OWNER/ipe-lang/issues";
 
 /// A stable compiler error code, e.g. `IPE-T0001`.
 ///
@@ -422,7 +422,7 @@ pub fn title(c: Code) -> &'static str {
 ///
 /// Page invariants (enforced by [`tests::every_code_has_a_conforming_explain_page`]):
 /// line 1 is exactly `# <CODE>: <title()>`, and the body carries at least three
-/// ```` ```sky ```` fences.
+/// ```` ```ipe ```` fences.
 #[must_use]
 pub fn explain_page(c: Code) -> Option<&'static str> {
     front_end_explain_page(c).or_else(|| back_end_explain_page(c))
@@ -598,7 +598,7 @@ mod tests {
 
     /// CI coverage gate: every taxonomy code has a conforming explain page.
     /// Line 1 must be exactly `# <CODE>: <title()>` and the body must carry at
-    /// least three ```` ```sky ```` fences. A code without a page, or with a
+    /// least three ```` ```ipe ```` fences. A code without a page, or with a
     /// non-conforming one, fails the suite (and `include_str!` already fails the
     /// build if the file is absent entirely).
     #[test]
@@ -618,10 +618,10 @@ mod tests {
                     "{} page line 1 must be `{expected}`",
                     c.as_str()
                 );
-                let fences = page.matches("```sky").count();
+                let fences = page.matches("```ipe").count();
                 assert!(
                     fences >= 3,
-                    "{} page has {fences} ```sky fences, need >= 3",
+                    "{} page has {fences} ```ipe fences, need >= 3",
                     c.as_str()
                 );
             }

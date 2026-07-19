@@ -27,7 +27,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// Emit `ipe_source` for shape `name` and `cargo build` the emitted crate.
 /// Returns `Ok(())` iff `ipe` exits 0 AND the emitted crate builds — THE SEAL.
 fn emit_and_build(name: &str, ipe_source: &str) -> Result<(), BoxError> {
-    let src_dir = std::env::temp_dir().join(format!("seal_modset_{name}_sky"));
+    let src_dir = std::env::temp_dir().join(format!("seal_modset_{name}_ipe"));
     let _ = std::fs::remove_dir_all(&src_dir);
     std::fs::create_dir_all(&src_dir)
         .map_err(|e| -> BoxError { format!("{name}: cannot create src dir: {e}").into() })?;

@@ -86,7 +86,7 @@ fn ok_out_dir() -> PathBuf {
 /// Compile a fixture into its own out dir; `None` (skip) when the runtime
 /// cannot be resolved.
 fn compile(fixture: &str, tag: &str, out: &PathBuf) -> Option<Result<(), ipe::CliError>> {
-    let ipe_dir = std::env::temp_dir().join(format!("i180_{tag}_sky"));
+    let ipe_dir = std::env::temp_dir().join(format!("i180_{tag}_ipe"));
     let _ = std::fs::remove_dir_all(&ipe_dir);
     std::fs::create_dir_all(&ipe_dir).ok()?;
     let entry = ipe_dir.join("Main.ipe");

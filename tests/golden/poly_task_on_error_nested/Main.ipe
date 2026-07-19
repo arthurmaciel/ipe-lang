@@ -17,8 +17,8 @@ import Ipe.Log exposing (println)
 -- free return-type var straight to `IrType::Json` regardless of whether that
 -- var is ALSO the enclosing `withErrorReporting`'s own quantified `a`.
 --
--- Pre-fix: skyc emits closures typed `Fn(..) -> SkyTask<JsonVal>` at a call
--- site expecting `SkyTask<T1>` — a clean exit-0-then-cargo-fail (2x E0308).
+-- Pre-fix: ipec emits closures typed `Fn(..) -> IpeTask<JsonVal>` at a call
+-- site expecting `IpeTask<T1>` — a clean exit-0-then-cargo-fail (2x E0308).
 --
 -- Post-fix: `ir_type_from_ty_json` checks `current_poly_tvars` first (same
 -- gate `ir_type_from_ty` / `ir_type_from_ty_ui_msg` already apply), routing

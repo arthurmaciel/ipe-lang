@@ -1,6 +1,6 @@
--- | Ipe.String — string combinators (Layer 3 Sky source).
+-- | Ipe.String — string combinators (Layer 3 Ipe source).
 --
--- Every function in this module is declared as a Sky-source binding
+-- Every function in this module is declared as a Ipe-source binding
 -- aliased to a kernel via `Ffi.kernel "String_<name>"`.  The Stage 4
 -- compiler primitive (see docs/V1_TYPED_CODEGEN_FINISH.md) rewrites
 -- every call site to the existing typed kernel dispatch — so
@@ -9,8 +9,8 @@
 -- typed-codegen guarantees that the kernel-direct route already
 -- enjoyed.
 --
--- The Sky-source layer exists for discoverability + Layer 3
--- conformance + so `sky doc` shows a stable source location for
+-- The Ipe-source layer exists for discoverability + Layer 3
+-- conformance + so `ipe doc` shows a stable source location for
 -- every entry.  The runtime bodies live in `runtime-go/rt/rt.go`
 -- (`String_*` helpers).
 module Ipe.String exposing

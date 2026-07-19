@@ -3,7 +3,7 @@
 //! The no-panic fuzzer (`scripts/fuzz-well-typed.sh`, template `multilineinterp`)
 //! built the well-typed program
 //!
-//! ```sky
+//! ```ipe
 //! msg = """item={{tag}} count={{String.fromInt 54}} total={{String.fromInt 51}}"""
 //! ```
 //!
@@ -42,13 +42,13 @@ fn golden_entry(name: &str) -> PathBuf {
 #[test]
 fn interp_int_literal_compiles() {
     let entry = golden_entry("m_interp_int_literal");
-    let out = std::env::temp_dir().join("skyc_m_interp_int_literal");
+    let out = std::env::temp_dir().join("ipec_m_interp_int_literal");
     let _ = std::fs::remove_dir_all(&out);
     let runtime = ipe::resolve_runtime().expect("runtime must resolve");
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc must compile a numeric-literal interpolation arg without an ICE, got: {:?}",
+        "ipec must compile a numeric-literal interpolation arg without an ICE, got: {:?}",
         built.err()
     );
 }
@@ -60,7 +60,7 @@ fn interp_int_literal_runs() {
         return;
     }
     let entry = golden_entry("m_interp_int_literal");
-    let out = std::env::temp_dir().join("skyc_m_interp_int_literal_e2e");
+    let out = std::env::temp_dir().join("ipec_m_interp_int_literal_e2e");
     let _ = std::fs::remove_dir_all(&out);
     let runtime = ipe::resolve_runtime().expect("runtime must resolve");
     ipe::build(&entry, &out, &runtime).expect("build must succeed");

@@ -1,4 +1,4 @@
--- | Ipe.Path — pure filesystem-path helpers (Layer 3 Sky source).
+-- | Ipe.Path — pure filesystem-path helpers (Layer 3 Ipe source).
 --
 -- Operate on `String` paths without touching the filesystem.  Use
 -- `Ipe.File` for the effectful side (read / write / exists).

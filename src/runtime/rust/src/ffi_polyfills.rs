@@ -1,6 +1,6 @@
 // Ffi.* polyfill stubs.
 //
-// The Rust codegen's peephole rewriter (Sky.Generate.Rust.Builder.exprToRustInner)
+// The Rust codegen's peephole rewriter (Ipe.Generate.Rust.Builder.exprToRustInner)
 // handles the static-dispatch shape of `Ffi.callPure "<Kernel>" [args]` —
 // kernel name + args list both literal — by emitting a direct kernel call.
 // These polyfills only get linked when a non-static-dispatch shape appears in
