@@ -10,14 +10,19 @@
 //! touches `std::fs`, `std::env`, or the clock — file text enters through
 //! the `SourceFile` inputs the driver (the LSP server crate) sets.
 
+pub mod code_actions;
 pub mod completion;
 pub mod diagnostics;
 pub mod folding;
+pub mod formatting;
 pub mod hover;
+pub mod inlay_hints;
 pub mod links;
 pub mod navigation;
 pub mod offset;
 pub mod rename;
+pub mod semantic_tokens;
+pub mod signature_help;
 pub mod symbols;
 
 pub use offset::PositionEncoding;
