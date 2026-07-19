@@ -1595,22 +1595,119 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
     )?;
 
     if wasm_target {
-        print_wasm_next_steps(&out_dir);
+        bundle_wasm(&out_dir)?;
     }
     Ok(())
 }
 
-/// The post-emit guidance for a `--target wasm` build: the bundle steps the
-/// driver does not yet run itself (cargo → wasm-bindgen CLI → static serve).
-fn print_wasm_next_steps(out_dir: &Path) {
+/// Run the three post-emit bundle steps for `--target wasm`:
+/// 1. `cargo build --target wasm32-unknown-unknown --release` (THE SEAL cross-target)
+/// 2. `wasm-bindgen` CLI — emits the JS glue + `www/pkg/sky_app_bg.wasm`
+/// 3. `wasm-opt -Oz` — optional; silently skipped when not on PATH
+///
+/// Writes the final `www/pkg/` tree into `out_dir/www/pkg/`. On success the
+/// directory at `out_dir/www/` is a self-contained static SPA ready to serve.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] when cargo or wasm-bindgen fails.
+fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
+    // Step 1: compile to .wasm
+    let cargo_status = std::process::Command::new("cargo")
+        .args(["build", "--target", "wasm32-unknown-unknown", "--release"])
+        .current_dir(out_dir)
+        .status()
+        .map_err(|e| CliError::Io {
+            path: out_dir.to_path_buf(),
+            source: e,
+        })?;
+    if !cargo_status.success() {
+        let code = cargo_status.code().unwrap_or(1);
+        return Err(CliError::UsageOwned(format!(
+            "cargo build --target wasm32-unknown-unknown failed (exit {code})"
+        )));
+    }
+
+    // Step 2: wasm-bindgen — locate the .wasm the cargo build just produced
+    // (`CARGO_TARGET_DIR` may relocate it; probe the env var first, then the
+    // per-project fallback the emitted manifest's `[workspace]` detachment
+    // would use).
+    let wasm_path = {
+        let via_env = std::env::var_os("CARGO_TARGET_DIR")
+            .map(|d| {
+                std::path::PathBuf::from(d)
+                    .join("wasm32-unknown-unknown")
+                    .join("release")
+                    .join("sky_app.wasm")
+            });
+        let via_crate = out_dir
+            .join("target")
+            .join("wasm32-unknown-unknown")
+            .join("release")
+            .join("sky_app.wasm");
+        via_env
+            .filter(|p| p.is_file())
+            .unwrap_or(via_crate)
+    };
+
+    let pkg_dir = out_dir.join("www").join("pkg");
+    fs::create_dir_all(&pkg_dir).map_err(|e| io_err(&pkg_dir, e))?;
+
+    let wb_status = std::process::Command::new("wasm-bindgen")
+        .args([
+            wasm_path.to_string_lossy().as_ref(),
+            "--target",
+            "web",
+            "--no-typescript",
+            "--out-dir",
+            pkg_dir.to_string_lossy().as_ref(),
+        ])
+        .status()
+        .map_err(|e| CliError::Io {
+            path: wasm_path.clone(),
+            source: e,
+        })?;
+    if !wb_status.success() {
+        let code = wb_status.code().unwrap_or(1);
+        return Err(CliError::UsageOwned(format!(
+            "wasm-bindgen failed (exit {code}); ensure wasm-bindgen-cli {ver} is installed: \
+             cargo install wasm-bindgen-cli --version {ver}",
+            ver = "0.2.126"
+        )));
+    }
+
+    // Step 3: wasm-opt -Oz — optional size pass; silently skip when absent
+    let bg_wasm = pkg_dir.join("sky_app_bg.wasm");
+    if bg_wasm.is_file() {
+        if let Ok(status) = std::process::Command::new("wasm-opt")
+            .args([
+                bg_wasm.to_string_lossy().as_ref(),
+                "-Oz",
+                "-o",
+                bg_wasm.to_string_lossy().as_ref(),
+            ])
+            .status()
+        {
+            if !status.success() {
+                // wasm-opt found but failed — non-fatal; the unoptimised bundle
+                // is still correct. Log and continue.
+                eprintln!(
+                    "note: wasm-opt exited {}; bundle is unoptimised but functional",
+                    status.code().unwrap_or(1)
+                );
+            }
+        }
+        // wasm-opt absent → silent skip (returns Err from Command::new)
+    }
+
+    let bundle_kb = bg_wasm.metadata().map(|m| m.len() / 1024).unwrap_or(0);
     eprintln!(
-        "emitted browser-WASM project at {out}\n\
-         next: cd {out} && cargo build --target wasm32-unknown-unknown --release \\\n\
-         \x20     && wasm-bindgen target/wasm32-unknown-unknown/release/sky_app.wasm \\\n\
-         \x20        --target web --no-typescript --out-dir www/pkg\n\
-         then serve {out}/www/ over HTTP.",
-        out = out_dir.display()
+        "wasm bundle ready at {www}/\n\
+         bundle size: {bundle_kb} KB ({bg})\n\
+         serve with: python3 -m http.server -d {www} 8080",
+        www = out_dir.join("www").display(),
+        bg = bg_wasm.display(),
     );
+    Ok(())
 }
 
 /// `ipe run <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [-- <args>...]`
