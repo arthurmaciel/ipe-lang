@@ -33,7 +33,7 @@ isAdmin user =
 
 
 -- ══════════════════════════════════════════════════════
--- VERIFY TOKEN (over Rust.Sky_firebase_auth_shim)
+-- VERIFY TOKEN (over Rust.Rs_firebase_admin_sdk)
 -- ══════════════════════════════════════════════════════
 -- ID-token verification over the REAL `rs-firebase-admin-sdk` crate
 -- (`Rust.Rs_firebase_admin_sdk`, shim-free): a live JWT validator for the
