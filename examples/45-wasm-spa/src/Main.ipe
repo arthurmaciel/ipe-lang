@@ -1,0 +1,113 @@
+module Main exposing (main)
+
+-- M6 Target A MVP: a pure-client SPA that exercises the full TEA loop in the
+-- browser. Uses Ipe.Live.app which emits `wasm_app` under --target wasm.
+--
+-- Verified interactions (see scripts/equivalence-checks/wasm-verify.mjs):
+--   * increment button → counter increments
+--   * decrement button → counter decrements
+--   * reset button    → counter returns to 0
+
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+import Ipe.Live exposing (app)
+import Ipe.Cmd as Cmd
+import Ipe.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Ui.Background as Background
+import Ipe.Ui.Border as Border
+import Ipe.Ui.Font as Font
+
+
+type Page
+    = Main
+
+
+type Msg
+    = Increment
+    | Decrement
+    | Reset
+
+
+type alias Model =
+    { count : Int
+    }
+
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { count = 0 }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+        Decrement ->
+            ( { model | count = model.count - 1 }, Cmd.none )
+
+        Reset ->
+            ( { model | count = 0 }, Cmd.none )
+
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+view : Model -> Html Msg
+view model =
+    Ui.layout []
+        (Ui.column
+            [ Ui.spacing 20, Ui.padding 40, Ui.centerX ]
+            [ Ui.el
+                [ Font.size 24, Font.bold ]
+                (Ui.text "Ipê WASM SPA")
+            , Ui.el
+                [ Font.size 48
+                , Font.bold
+                , Ui.htmlAttribute "data-testid" "counter"
+                ]
+                (Ui.text (String.fromInt model.count))
+            , Ui.row
+                [ Ui.spacing 12 ]
+                [ Ui.button
+                    [ Ui.padding 14
+                    , Background.color (Ui.rgb 37 99 235)
+                    , Font.color (Ui.rgb 255 255 255)
+                    , Border.rounded 8
+                    , Ui.htmlAttribute "data-testid" "decrement"
+                    ]
+                    { onPress = Just Decrement, label = Ui.text "−" }
+                , Ui.button
+                    [ Ui.padding 14
+                    , Background.color (Ui.rgb 37 99 235)
+                    , Font.color (Ui.rgb 255 255 255)
+                    , Border.rounded 8
+                    , Ui.htmlAttribute "data-testid" "increment"
+                    ]
+                    { onPress = Just Increment, label = Ui.text "+" }
+                ]
+            , Ui.button
+                [ Ui.padding 10
+                , Background.color (Ui.rgb 107 114 128)
+                , Font.color (Ui.rgb 255 255 255)
+                , Border.rounded 6
+                , Ui.htmlAttribute "data-testid" "reset"
+                ]
+                { onPress = Just Reset, label = Ui.text "Reset" }
+            ]
+        )
+
+
+main =
+    app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = Main
+        }

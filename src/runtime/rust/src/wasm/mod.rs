@@ -53,8 +53,9 @@ fn console_fatal(class: &str, detail: &str) {
 
 /// Shared non-fatal diagnostic sink — reused by `ws_client.rs`'s
 /// `web_socket_connect_with` (browser platform limitations that degrade
-/// rather than fail, e.g. unsettable custom headers).
-pub(crate) fn console_warn(detail: &str) {
+/// rather than fail, e.g. unsettable custom headers), and by the emitted
+/// `hydrate` wasm export for fault-tolerant SSR takeover.
+pub fn console_warn(detail: &str) {
     web_sys::console::warn_1(&JsValue::from_str(&format!("[ipe-wasm] {detail}")));
 }
 
@@ -98,6 +99,49 @@ where
             Ok(()) => IpeResult::Ok(()),
             Err(e) => {
                 console_fatal("MountFailed", &e);
+                IpeResult::Err(E::from(e))
+            }
+        }
+    })
+}
+
+/// Hydration entry for isomorphic SSR + WASM (M7 mode 2).
+///
+/// The emitted `hydrate(model_json)` wasm-bindgen export calls this function
+/// with the already-parsed `HydrationState` value (converted to the `Model`
+/// type via the app-supplied `from_hydration` projection). On a parse error in
+/// the caller, it falls back to calling `init` instead — this function is
+/// therefore always called with a valid, fully-typed model.
+///
+/// The **adopt path** — unlike `mount_app`, does NOT call `set_inner_html`.
+/// The server-rendered DOM is already correct; we compute the virtual tree
+/// from `view(model)`, build the handler index, and wire delegated event
+/// listeners. The first user interaction triggers the normal diff→patch cycle.
+///
+/// Dev-mode empty-first-diff assertion: after adoption, `diff` of the new
+/// virtual tree against itself must be empty (sky-ids match ↔ SSR and client
+/// view are deterministic). A non-empty diff is a determinism violation — logged
+/// as a classified warning and the DOM is patched to the client's view
+/// (production fallback, never a white-screen).
+pub fn wasm_adopt_app<E, Model, Msg, FUpdate, FView, FSubs>(
+    model: Model,
+    update: FUpdate,
+    view: FView,
+    subscriptions: FSubs,
+) -> IpeTask<E, ()>
+where
+    E: From<String> + 'static,
+    Model: Clone + 'static,
+    Msg: Clone + 'static,
+    FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + 'static,
+    FView: Fn(Model) -> Html<Msg> + 'static,
+    FSubs: Fn(Model) -> IpeSub<Msg> + 'static,
+{
+    Box::pin(async move {
+        match adopt_app(model, update, view, subscriptions) {
+            Ok(()) => IpeResult::Ok(()),
+            Err(e) => {
+                console_fatal("AdoptFailed", &e);
                 IpeResult::Err(E::from(e))
             }
         }
@@ -193,6 +237,79 @@ where
 
     attach_delegated_listeners(&body, &app)?;
     run_cmd(&app, cmd0);
+    resync_subscriptions(&app);
+    Ok(())
+}
+
+/// Adopt the existing server-rendered DOM for an isomorphic SSR + WASM page
+/// (the `hydrate` path, M7 mode 2).
+///
+/// Unlike `mount_app`, this function does NOT overwrite `body.innerHTML`.
+/// The server-rendered DOM is trusted to be byte-identical to what `view(model)`
+/// produces (the hydration-determinism invariant). We:
+/// 1. Compute the virtual tree from `view(model)` and assign sky-ids.
+/// 2. Build the handler index from the virtual tree.
+/// 3. Attach delegated event listeners to `<body>`.
+///
+/// A dev-mode empty-first-diff assertion follows: diffing `tree` against
+/// itself must yield zero patches (the virtual tree IS ground truth for the
+/// diff engine). A non-empty diff signals a sky-id numbering inconsistency —
+/// logged as a classified warning. Production always falls back to a full
+/// diff-and-replace via the normal update loop, never white-screens.
+fn adopt_app<Model, Msg, FUpdate, FView, FSubs>(
+    model: Model,
+    update: FUpdate,
+    view: FView,
+    subscriptions: FSubs,
+) -> Result<(), String>
+where
+    Model: Clone + 'static,
+    Msg: Clone + 'static,
+    FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + 'static,
+    FView: Fn(Model) -> Html<Msg> + 'static,
+    FSubs: Fn(Model) -> IpeSub<Msg> + 'static,
+{
+    let document = document()?;
+    let body: web_sys::HtmlElement = document.body().ok_or("document has no <body>")?;
+
+    let mut tree = view(model.clone());
+    assign_sky_ids(&mut tree, ROOT_SKY_ID);
+
+    // Dev-mode empty-first-diff assertion: `diff(&tree, &tree)` must be empty
+    // (the virtual tree IS the diff engine's ground truth; any non-empty result
+    // means the sky-id assignment is non-deterministic — a determinism
+    // violation). Log a warning and continue: production falls back to a full
+    // diff-and-replace on the first real update, never white-screens.
+    {
+        use crate::dom::diff::diff;
+        let self_patches = diff(&tree, &tree);
+        if !self_patches.is_empty() {
+            console_warn(&format!(
+                "hydration-mismatch: self-diff produced {} patch(es) — \
+                 sky-id assignment is non-deterministic; \
+                 client will patch DOM on first update",
+                self_patches.len()
+            ));
+        }
+    }
+
+    let index = build_index(&tree);
+    let app = Rc::new(App {
+        model: RefCell::new(model),
+        tree: RefCell::new(tree),
+        index: RefCell::new(index),
+        queue: RefCell::new(VecDeque::new()),
+        frame_scheduled: Cell::new(false),
+        update: Box::new(update),
+        view: Box::new(view),
+        subscriptions: Box::new(subscriptions),
+        submgr: RefCell::new(subs::SubManager::new()),
+        origin: next_instance_origin(),
+    });
+
+    attach_delegated_listeners(&body, &app)?;
+    // No cmd0: in hydrate mode there is no `init`-produced command to run.
+    // The first user interaction triggers the normal update→diff→patch cycle.
     resync_subscriptions(&app);
     Ok(())
 }

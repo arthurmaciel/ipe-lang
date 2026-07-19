@@ -815,6 +815,7 @@ fn run_inner(
                         ffi_prep.emit,
                         ipe_ir::Target::Native,
                         resolved.wasm_public_env.clone(),
+                        false,
                     );
                     config = Some(cfg);
                     cfg

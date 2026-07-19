@@ -24,6 +24,7 @@ members = [
     "src/runtime/rust",
     "tools/ipe-ffi-inspector",
     "tools/parity-matrix",
+    "src/playground",
 ]
 
 [workspace.package]

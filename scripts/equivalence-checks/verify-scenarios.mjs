@@ -415,6 +415,16 @@ export const scenarios = {
         await gotoAndSettle(page, baseUrl + '/api/status', 500);
         await gotoAndSettle(page, baseUrl + '/cookie-demo', 500);
     },
+
+    // 45-wasm-spa — WASM SPA counter (TEA: Increment / Decrement / Reset).
+    // The actual browser interaction is implemented as a built-in case in
+    // wasm-verify.mjs (not web-verify.mjs) because wasm examples need a static
+    // file server, not a server-binary boot. This entry exists so `scenario_for`
+    // resolves the key and wasm-verify.mjs routes to its runWasmSpa handler.
+    async 'wasm-spa'(_page, _opts) {
+        // Handled by wasm-verify.mjs's runWasmSpa (increment/decrement/reset).
+        // This entry is never called directly by web-verify.mjs.
+    },
 };
 
 export default scenarios;
