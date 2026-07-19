@@ -1,5 +1,4 @@
 Status: Accepted
-Date: 2026-07-09
 
 # 0012. SqlFragment is a fully-derivable, redacting type — no capability denylist
 

@@ -1,5 +1,4 @@
 Status: Accepted
-Date: 2026-07-03
 
 # 0029. Compiled-source stdlib modules
 

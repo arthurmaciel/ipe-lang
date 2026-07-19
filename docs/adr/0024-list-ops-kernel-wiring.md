@@ -1,5 +1,4 @@
 Status: Accepted
-Date: 2026-07-09
 
 # 0024. The nine unwired list operations are kernels, not pure-Ipê routing
 
@@ -20,10 +19,9 @@ reaches the compiled `Ipe.List` source. Kernel is the only wiring that (a)
 makes the name callable, (b) yields a fail-closed constrain scheme (no
 `Ty::Var(u32::MAX)` fallback, mandatory under the seal), and (c) reuses the
 proven kernel emission path already used by the 10 wired List kernels. For the
-non-HOF ops the runtime fns are new *iterative* Rust implementations (constant
-stack — strictly better than the pure-Sky O(N)-stack recursion the Go backend
-uses, output-identical); the HOF runtime fns (`concatMap`, `indexedMap`) already
-exist. `indexedMap`, missing from canon's member array, is added.
+non-HOF ops the runtime fns are *iterative* Rust implementations (constant
+stack, output-identical to a recursive implementation); the HOF runtime fns
+(`concatMap`, `indexedMap`) already exist. `indexedMap`, missing from canon's member array, is added.
 
 Rejected alternative: **pure-Ipê routing** — it would require re-pointing every
 canon `List` member from `VarHome::Kernel` to `VarHome::TopLevel`, guaranteeing
@@ -36,11 +34,10 @@ security/correctness/soundness benefit.
 
 - **Invariant that must keep holding:** every one of the nine ops has a
   fail-closed scheme; none falls to `Ty::Var(u32::MAX)`. A missing `stdlib_scheme`
-  arm returns `None` → `Diagnostic::Lower` (an SKY error), never
+  arm returns `None` → `Diagnostic::Lower` (an IPE error), never
   exit-0-then-cargo-fail; the `FIRST_SCHEMED` gate catches a future accidental
   drop.
 - The iterative Rust implementations are a recorded efficiency-only divergence
-  (constant stack vs. Go's recursion, output-identical) in
-  `docs/divergences-from-sky.md`.
+  (constant stack, output-identical) in `docs/divergences-from-ipe.md`.
 - Adjacent same-class gaps (`any`, `all`, `find`) are filed as same-family
   follow-up, not left as latent `IPE-L0108`.

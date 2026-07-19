@@ -1,17 +1,16 @@
 Status: Accepted
-Date: 2026-07-10
 
 # 0013. Multi-driver DB: compile-time template selection, typed NULL binds, hub-local tenant gate
 
 ## Context
 
-`[database] driver` in `sky.toml` was parsed but never consumed: the generated
+`[database] driver` in `ipe.toml` was parsed but never consumed: the generated
 Rust `DbPool`/`DbRow` types were sqlite-hardcoded, so a `postgres://…` URL
 failed at runtime with type-mismatch errors. Postgres is strongly typed (sqlx
 sends a type OID per bound parameter), which surfaces two further gaps that only
-manifest once a Postgres path exists. Separately, the Go reference scopes the
-telemetry-console spill DB to an authenticated tenant prefix; the Rust runtime
-had no tenant isolation anywhere.
+manifest once a Postgres path exists. Separately, the telemetry-console spill DB
+needed scoping to an authenticated tenant prefix; the runtime had no tenant
+isolation anywhere.
 
 ## Decision
 
@@ -19,7 +18,7 @@ had no tenant isolation anywhere.
   `DbDriver` enum (Sqlite | Postgres) from manifest parsing into codegen, then
   `include_str!`-select between two config templates — `config.rs` (sqlite) and
   a new `config_postgres.rs` — that export *identical* symbol names
-  (`DbPool`, `DbRow`, `sky_db_url()`, `db_last_insert_id()`, `db_format_sql()`,
+  (`DbPool`, `DbRow`, `ipe_db_url()`, `db_last_insert_id()`, `db_format_sql()`,
   `DB_USES_RETURNING_ID`) with driver-specific bodies. `db.rs` never branches on
   driver, so it compiles once per project. Rejected: runtime reflection /
   feature-flag negotiation — either dynamic dispatch (wrong for a hot data
@@ -35,11 +34,9 @@ had no tenant isolation anywhere.
   gated on Postgres landing *this* release.
 
 - **Tenant scope is a hub-specific concern, not a generic `Db.*` feature.**
-  Build it as task-local scope (`tokio::task_local! TENANT_PREFIX`) mirroring
-  Go's `tenantPrefixForSession`/`rejectCrossTenantSvc`, wired into hub's four
-  `read_*` functions as an optional `AND service_name LIKE ?` clause. Go itself
-  never applies this gate to plain `Db.*`; user-facing data access has no tenant
-  concern.
+  Build it as task-local scope (`tokio::task_local! TENANT_PREFIX`), wired into
+  hub's four `read_*` functions as an optional `AND service_name LIKE ?` clause.
+  Plain `Db.*` user-facing data access has no tenant concern.
 
 ## Consequences
 

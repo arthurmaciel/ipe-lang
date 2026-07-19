@@ -1,5 +1,4 @@
 Status: Accepted
-Date: 2026-06-29
 
 # 0027. GitHub Actions CI and public-repo hosting
 

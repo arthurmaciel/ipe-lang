@@ -1,5 +1,4 @@
 Status: Accepted
-Date: 2026-07-19
 
 # 0034. Language server as a second consumer of the salsa query graph
 

@@ -1,22 +1,18 @@
 Status: Accepted
-Date: 2026-07-09
 
 # 0008. Untyped top-level bindings generalize only at the module boundary
 
 ## Context
 
 An untyped polymorphic top-level binding (no signature) must stay *monomorphic
-within its home module* — this matches the reference compiler (`sky v0.16.29`)
-exactly, which rejects same-module reuse of such a helper at two different
-types. But the reference *accepts* the same helper being instantiated at
-different types across module boundaries, and the Rust type-checker was
-rejecting those valid cross-module cases.
+within its home module* — same-module reuse of such a helper at two different
+types is rejected. The same helper may be instantiated at different types across
+module boundaries, and the type-checker must accept those valid cross-module
+cases.
 
-The forcing constraint is reference parity in the safe direction:
-over-acceptance is ruled out entirely (a program the reference rejects must not
-compile here), and the fix must not open a soundness hole. The relevant prior
-art is the reference's deliberate two-function split for free-variable
-collection.
+The forcing constraint is soundness in the conservative direction: over-acceptance
+is ruled out entirely (a program that should be rejected must not compile), and
+the fix must not open a soundness hole.
 
 ## Decision
 

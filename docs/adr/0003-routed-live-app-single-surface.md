@@ -1,11 +1,10 @@
 Status: Accepted
-Date: 2026-07-04
 
 # 0003. Routed Live.app is one open-record surface with an emit-time branch
 
 ## Context
 
-The example corpus writes the canonical, reference-shaped Ipe.Live entry point:
+The canonical Ipe.Live entry point is:
 
 ```elm
 main =
@@ -16,20 +15,18 @@ main =
         }
 ```
 
-Our port originally rejected it with IPE-T0001 because `Live.app`'s cfg was
+An earlier design rejected this with IPE-T0001 because `Live.app`'s cfg was
 typed as a **closed 4-field record** `{ init, update, view, subscriptions }` and
 the record unifier required **identical field sets** — there was no row variable
 to absorb `routes` / `notFound` (let alone `head` / `consoleAuth` / `guard` /
-`status`). Worse, our port had invented a **separate `Live.appRouted` kernel**
-(`KernelFn::LiveAppRouted`, `Feature::RoutedLiveApp`, gate IPE-L0118) that the
-corpus never calls, so the routed gate at `lower.rs:3305` was effectively dead
-code.
+`status`). Worse, a **separate `Live.appRouted` kernel**
+(`KernelFn::LiveAppRouted`, `Feature::RoutedLiveApp`, gate IPE-L0118) had been
+invented; the corpus never calls it, so the routed gate at `lower.rs:3305` was
+effectively dead code.
 
-The reference (`../sky` — the Haskell compiler *and its already-shipped Rust
-backend + runtime-rust*) is the literal port target, and it does **not** have a
-separate `appRouted` at the type level. This is implemented (T1–T7; example
-`36-composite-server` re-added at HEAD after IPE-L0110 landed); the code is the
-source of truth for the *how*. This ADR records the *why*.
+The correct design has exactly one `Live.app` surface — no separate `appRouted`
+at the type level. The code is the source of truth for the *how*; this ADR
+records the *why*.
 
 ## Decision
 
@@ -49,7 +46,7 @@ source of truth for the *how*. This ADR records the *why*.
   one `Live.app` surface. `LiveAppRouted`/`RoutedLiveApp`/IPE-L0118 are
   vestigial (kept as a defensive alias or deleted).
 
-This **converges toward the reference**, retiring our invented divergence.
+This retires the invented `appRouted` divergence.
 
 ### Round-4 seal fixes (parametric rendering)
 
@@ -64,11 +61,11 @@ page witness replaced the shared-var `Live.route` scheme that false-blocked
 
 ### Typed route-`:param` payloads (sanctioned divergence, IPE-L0119)
 
-The reference emits `ctor(params.get(i).cloned().unwrap_or_default())` — a
-`String` — into every page-constructor slot, silently assuming every payload is
-`String`. That is correct for `AppDetailPage String` but produces E0308 for
-`NumPage : Int -> Page`. We do **better**: param-type-directed conversion at
-emit, driven by the variant's payload field types (which emit already has):
+A simpler approach emits a `String` into every page-constructor slot,
+silently assuming every payload is `String`. That is correct for `AppDetailPage
+String` but produces E0308 for `NumPage : Int -> Page`. The correct design uses
+param-type-directed conversion at emit, driven by the variant's payload field
+types (which emit already has):
 
 | payload type | emitted expression |
 |---|---|
@@ -80,15 +77,14 @@ emit, driven by the variant's payload field types (which emit already has):
 
 The `other` arm is the parse-don't-validate boundary: a `:param` segment is
 inherently a URL string; feeding it to a payload the runtime cannot derive from
-a string is a program error, surfaced as a Ipê diagnostic where the type is
+a string is a program error, surfaced as an Ipê diagnostic where the type is
 known — never an opaque downstream `rustc` E0308. Missing captures and malformed
-numerics degrade to `unwrap_or_default` (`0`/`0.0`/`false`), the same
-never-panic spirit as the reference's String path. (Whether malformed numeric
-segments should instead route to `notFound` is a future refinement, recorded not
-built.)
+numerics degrade to `unwrap_or_default` (`0`/`0.0`/`false`), the never-panic
+spirit of the String path. (Whether malformed numeric segments should instead
+route to `notFound` is a future refinement, recorded not built.)
 
 This is a **sanctioned divergence** (strictly safer, static typing catches the
-mismatch at compile time), recorded in `docs/divergences-from-sky.md`.
+mismatch at compile time), recorded in `docs/divergences-from-ipe.md`.
 
 ### Invariant that must keep holding
 

@@ -1,5 +1,4 @@
 Status: Accepted
-Date: 2026-07-11
 
 # 0016. The andMap curried-payload restriction is a type obligation, not a syntactic check
 
@@ -8,12 +7,12 @@ Date: 2026-07-11
 ADR 0015 narrowed the function-payload ban to two call-site gates; this ADR
 designs one of them — the restriction that `Maybe.andMap`/`Result.andMap`'s
 function payload must be arity-1 (`a -> b`), never a curried arity-≥2 arrow that
-would fail `FnOnce(A) -> B` at runtime. Three earlier implementations that
-matched the `andMap` call *syntactically* were reverted (2026-07-10): a curried
-`andMap` reference can pass through `let`-bindings, bare point-free top-level
-aliases, higher-order arguments, and record fields — an open-ended enumeration.
-The real hazard is a *property of a value's solved type* (arity ≥ 2 arrow), not
-the syntax at any reference point.
+would fail `FnOnce(A) -> B` at runtime. Earlier implementations that matched the
+`andMap` call *syntactically* were reverted: a curried `andMap` reference can
+pass through `let`-bindings, bare point-free top-level aliases, higher-order
+arguments, and record fields — an open-ended enumeration. The real hazard is a
+*property of a value's solved type* (arity ≥ 2 arrow), not the syntax at any
+reference point.
 
 ## Decision
 

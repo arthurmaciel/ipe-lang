@@ -1,5 +1,4 @@
 Status: Accepted
-Date: 2026-07-12
 
 # 0023. Ipe.Http.Server.WebSocket is kernel-only with typed opaque handles and bounded fail-fast send
 
@@ -18,7 +17,7 @@ Kernel-only module: register a `Ws` qualifier + 12 kernels (7 builders,
 `upgrade`, 4 send/broadcast/close ops), with no stdlib `.ipe` port — mirroring
 `Server`/`Stream`. Introduce two new opaque, monomorphic IR types (no phantom
 var): `IrType::WebSocketServer` (renders `WsHandle`, a Copy i64) and
-`IrType::WebSocketServerCfg` (renders `WsServerCfg<SkyError>`). Kernels take the
+`IrType::WebSocketServerCfg` (renders `WsServerCfg<IpeError>`). Kernels take the
 typed `WsHandle` directly, not a raw `Int`. Keep the runtime's bounded
 non-blocking `try_send` (256-frame queue, drop-on-full) — the sound default for
 effect kernels (fail-fast prevents handler-task pileup behind one slow peer),
