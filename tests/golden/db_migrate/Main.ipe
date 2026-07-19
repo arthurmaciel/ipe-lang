@@ -26,22 +26,22 @@ main =
                                         )
                                 )
                                 (Db.migrate txconn
-                                    [ ( "001_create_users"
-                                      , "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)"
-                                      )
-                                    , ( "002_add_email"
-                                      , "ALTER TABLE users ADD COLUMN email TEXT"
-                                      )
+                                    [ { name = "001_create_users"
+                                      , sql = "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)"
+                                      }
+                                    , { name = "002_add_email"
+                                      , sql = "ALTER TABLE users ADD COLUMN email TEXT"
+                                      }
                                     ]
                                 )
                         )
                         (Db.migrate txconn
-                            [ ( "001_create_users"
-                              , "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)"
-                              )
-                            , ( "002_add_email"
-                              , "ALTER TABLE users ADD COLUMN email TEXT"
-                              )
+                            [ { name = "001_create_users"
+                              , sql = "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)"
+                              }
+                            , { name = "002_add_email"
+                              , sql = "ALTER TABLE users ADD COLUMN email TEXT"
+                              }
                             ]
                         )
                 )
