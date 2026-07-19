@@ -373,28 +373,37 @@ fn ensure_project_fresh(state: &mut State, loader: &dyn ProjectLoader, path: &Pa
         }
         Err(err) => {
             eprintln!("[ipe lsp] project load failed: {}", err.detail);
-            // Degrade to a single-file layout so parse diagnostics still
-            // flow for the open buffer; retried on the next edit.
-            if let Some(text) = state.overlays.get(path).cloned() {
-                let module = vec![module_name_fallback(path)];
-                let mut files = BTreeMap::new();
-                files.insert(
-                    module.clone(),
-                    LoadedFile {
-                        path: path.to_path_buf(),
-                        text,
-                        origin: ModuleOrigin::User,
-                    },
-                );
-                adopt(
-                    state,
-                    LoadedProject {
-                        files,
-                        entry_module: module,
-                    },
-                );
-                state.fallback = true;
+            if state.disk.is_empty() {
+                // Never successfully loaded: degrade to a single-file layout
+                // so parse diagnostics still flow for the open buffer;
+                // retried on the next edit.
+                if let Some(text) = state.overlays.get(path).cloned() {
+                    let module = vec![module_name_fallback(path)];
+                    let mut files = BTreeMap::new();
+                    files.insert(
+                        module.clone(),
+                        LoadedFile {
+                            path: path.to_path_buf(),
+                            text,
+                            origin: ModuleOrigin::User,
+                        },
+                    );
+                    adopt(
+                        state,
+                        LoadedProject {
+                            files,
+                            entry_module: module,
+                        },
+                    );
+                    state.fallback = true;
+                }
             }
+            // A previously-good layout exists: keep it rather than degrading
+            // to the single-file fallback, which would drop every other
+            // module from the salsa root and clear their real diagnostics
+            // on the next publish. `DidSaveTextDocument` and
+            // `DidChangeWatchedFiles` retry unconditionally, so the next
+            // settled state re-resolves the full project.
         }
     }
 }
@@ -590,4 +599,152 @@ fn publish(state: &mut State, connection: &Connection, batch: DiagnosticsBatch) 
         .into_iter()
         .filter(|(_, diags)| !diags.is_empty())
         .collect();
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    use crossbeam_channel::RecvTimeoutError;
+
+    use super::{
+        Connection, DiagnosticsBatch, LoadedFile, LoadedProject, Message, ModuleOrigin, Path,
+        PathBuf, PositionEncoding, ProjectLoader, PublishDiagnostics, PublishDiagnosticsParams,
+        State, Url, ensure_project_fresh, normalize, publish, recompute, sync_inputs,
+    };
+    use crate::loader::LoadError;
+    use lsp_types::notification::Notification as _;
+
+    const MAIN_TEXT: &str = "module Main exposing (main)\n\nmain : Int\nmain = 1\n";
+    const LIB_TEXT: &str = "module Lib exposing (bad)\n\nbad : Int\nbad = \"nope\"\n";
+
+    /// A two-module loader (`Main` open buffer + a static `Lib` with a real
+    /// type error) that fails the NEXT `load` call when armed — the
+    /// transient-failure shape `ensure_project_fresh` must survive without
+    /// dropping the previously-good layout.
+    struct TwoModuleLoader {
+        fail_next: Arc<AtomicBool>,
+        lib_path: PathBuf,
+    }
+
+    impl ProjectLoader for TwoModuleLoader {
+        fn load(
+            &self,
+            _workspace_root: Option<&Path>,
+            open_file: &Path,
+            open_text: Option<&str>,
+        ) -> Result<LoadedProject, LoadError> {
+            if self.fail_next.swap(false, Ordering::SeqCst) {
+                return Err(LoadError {
+                    detail: "simulated transient failure".to_owned(),
+                });
+            }
+            let mut files = BTreeMap::new();
+            files.insert(
+                vec!["Main".to_owned()],
+                LoadedFile {
+                    path: open_file.to_path_buf(),
+                    text: open_text.unwrap_or(MAIN_TEXT).to_owned(),
+                    origin: ModuleOrigin::User,
+                },
+            );
+            files.insert(
+                vec!["Lib".to_owned()],
+                LoadedFile {
+                    path: self.lib_path.clone(),
+                    text: LIB_TEXT.to_owned(),
+                    origin: ModuleOrigin::User,
+                },
+            );
+            Ok(LoadedProject {
+                files,
+                entry_module: vec!["Main".to_owned()],
+            })
+        }
+    }
+
+    /// A load failure on an already-well-formed project (CO-INCR-007) must
+    /// not clear `Lib`'s real diagnostics: the prior layout is kept and
+    /// retried later, not replaced by the single-file fallback.
+    #[test]
+    fn transient_load_failure_keeps_prior_layout_diagnostics() {
+        let main_path = normalize(Path::new("/lsp-278-test/Main.ipe"));
+        let lib_path = normalize(Path::new("/lsp-278-test/Lib.ipe"));
+        let lib_uri = Url::from_file_path(&lib_path).expect("lib uri");
+        let fail_next = Arc::new(AtomicBool::new(false));
+        let loader = TwoModuleLoader {
+            fail_next: fail_next.clone(),
+            lib_path,
+        };
+
+        let mut state = State::new(None, PositionEncoding::Utf16);
+        state
+            .overlays
+            .insert(main_path.clone(), MAIN_TEXT.to_owned());
+
+        // First load succeeds: both modules known, Lib carries a real
+        // compiler diagnostic.
+        ensure_project_fresh(&mut state, &loader, &main_path);
+        assert!(!state.fallback, "first load must succeed cleanly");
+        sync_inputs(&mut state);
+
+        let (diag_tx, diag_rx) = crossbeam_channel::unbounded::<DiagnosticsBatch>();
+        recompute(&mut state, &diag_tx);
+        let batch1 = diag_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("first diagnostics batch");
+
+        let (server_side, client) = Connection::memory();
+        publish(&mut state, &server_side, batch1);
+
+        let mut saw_lib_diagnostic = false;
+        while let Ok(msg) = client.receiver.recv_timeout(Duration::from_millis(500)) {
+            if let Message::Notification(note) = msg
+                && note.method == PublishDiagnostics::METHOD
+                && let Ok(params) = serde_json::from_value::<PublishDiagnosticsParams>(note.params)
+                && params.uri == lib_uri
+                && !params.diagnostics.is_empty()
+            {
+                saw_lib_diagnostic = true;
+            }
+        }
+        assert!(
+            saw_lib_diagnostic,
+            "Lib's real diagnostic must publish before the transient failure"
+        );
+
+        // Arm a transient failure on the NEXT load — the shape of a
+        // `didSave`/`DidChangeWatchedFiles` re-resolve racing a momentary
+        // I/O error or a mid-rename tree.
+        fail_next.store(true, Ordering::SeqCst);
+        ensure_project_fresh(&mut state, &loader, &main_path);
+        sync_inputs(&mut state);
+        recompute(&mut state, &diag_tx);
+        let batch2 = diag_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("second diagnostics batch");
+        publish(&mut state, &server_side, batch2);
+
+        // The prior layout must survive: no clearing push for Lib's
+        // diagnostics reaches the client.
+        loop {
+            match client.receiver.recv_timeout(Duration::from_millis(500)) {
+                Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => break,
+                Ok(Message::Notification(note)) if note.method == PublishDiagnostics::METHOD => {
+                    let params: PublishDiagnosticsParams =
+                        serde_json::from_value(note.params).expect("valid params");
+                    if params.uri == lib_uri {
+                        assert!(
+                            !params.diagnostics.is_empty(),
+                            "a transient load failure must not clear Lib's real diagnostics"
+                        );
+                    }
+                }
+                Ok(_) => {}
+            }
+        }
+    }
 }
