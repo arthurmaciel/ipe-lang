@@ -503,12 +503,34 @@ fn main() {
     // the sibling impl'ing `Trait` are different crates). Without it the single global
     // `--git` could not describe two crates from two repos.
     let mut manifest_path: Option<String> = None;
+    // Cross-crate proof-map checkpoint (OPERATOR-TRUSTED files, dev/unsandboxed
+    // convenience only): `--xc-save` runs the populate pass, writes the maps,
+    // and exits before binding; `--xc-load` skips the populate pass and binds
+    // with the loaded maps — the checkpoint must come from a populate pass
+    // over the SAME manifest. Together they split the long two-pass manifest
+    // run into two resumable processes. The `IPE_FFI_XC_{SAVE,LOAD}` env
+    // fallbacks reach an inspector spawned by the driver; the sandbox jail
+    // clears the environment, so a jailed run can never see them.
+    let mut xc_save: Option<String> = std::env::var("IPE_FFI_XC_SAVE").ok();
+    let mut xc_load: Option<String> = std::env::var("IPE_FFI_XC_LOAD").ok();
 
     let mut i = 0;
     while i < raw_args.len() {
         match raw_args[i].as_str() {
             "--audit" => {
                 audit = true;
+            }
+            "--xc-save" => {
+                i += 1;
+                if i < raw_args.len() {
+                    xc_save = Some(raw_args[i].clone());
+                }
+            }
+            "--xc-load" => {
+                i += 1;
+                if i < raw_args.len() {
+                    xc_load = Some(raw_args[i].clone());
+                }
             }
             // AUD-10: explicit opt-in required before any dependency with a
             // build script / proc-macro is allowed to run `cargo +nightly
@@ -646,11 +668,31 @@ fn main() {
     // skips the extra pass — there are no siblings, and the global fallback is inert
     // (the per-crate index already finds any same-crate impl first), so behaviour is
     // byte-identical to pre-WALL-G.
-    if crate_specs.len() > 1 {
+    if let Some(path) = &xc_load {
+        // The loaded checkpoint REPLACES the populate pass; a file that fails
+        // to decode fails the run closed (binding with empty maps would
+        // silently over-drop).
+        if let Err(e) = load_xc_checkpoint(path) {
+            eprintln!("ipe-ffi-inspector: --xc-load {}: {}", path, e);
+            std::process::exit(1);
+        }
+    } else if crate_specs.len() > 1 {
         for spec in &crate_specs {
             // PHASE-1 populate: discarded — skip the #106 stable check (verify_stable=false).
             let _ = inspect_crate(&spec.name, &spec.features, spec.git.as_ref(), false);
         }
+    }
+
+    if let Some(path) = &xc_save {
+        if let Err(e) = save_xc_checkpoint(path) {
+            eprintln!("ipe-ffi-inspector: --xc-save {}: {}", path, e);
+            std::process::exit(1);
+        }
+        eprintln!(
+            "ipe-ffi-inspector: cross-crate maps checkpointed to {}",
+            path
+        );
+        return;
     }
 
     let crate_args: Vec<String> = crate_specs.iter().map(|s| s.name.clone()).collect();
@@ -838,7 +880,7 @@ fn parse_manifest(path: &str) -> Result<Vec<CrateSpec>, String> {
 /// re-resolves a foreign rustdoc id (guardian B2/B3/B6 — illegal states unrepresentable
 /// at emission). An entry exists ⇒ the concrete is nameable, reachable, and its Send
 /// verdict is known; absence ⇒ over-drop (sound).
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct XcImpl {
     /// Synthetic `for` type node — `{"resolved_path":{"__ipe_xc_path":"<public path>",…}}`
     /// — flowing into `subst_generic_json` exactly like a #52 same-crate `for` node,
@@ -941,10 +983,26 @@ fn run_rustdoc(
         ));
     }
 
-    let tmp = tempfile::tempdir().map_err(|e| format!("tempdir: {}", e))?;
-    let dir = tmp.path();
-
     let safe_name = crate_name.replace('-', "_");
+
+    // Probe workspace root. `IPE_FFI_PROBE_DIR` selects a stable per-crate
+    // root so cargo's own fingerprinting reuses dep builds and the rustdoc
+    // JSON across inspection passes and repeated runs (staleness is cargo's
+    // decision, never ours). The jail scrubs the environment, so sandboxed
+    // runs always take the self-deleting tempdir.
+    let (probe_root, _tempdir_guard): (std::path::PathBuf, Option<tempfile::TempDir>) =
+        match std::env::var_os("IPE_FFI_PROBE_DIR") {
+            Some(root) => {
+                let d = std::path::Path::new(&root).join(&safe_name);
+                std::fs::create_dir_all(&d).map_err(|e| format!("probe dir: {}", e))?;
+                (d, None)
+            }
+            None => {
+                let t = tempfile::tempdir().map_err(|e| format!("tempdir: {}", e))?;
+                (t.path().to_path_buf(), Some(t))
+            }
+        };
+    let dir = probe_root.as_path();
 
     // Write the probe manifest with a given dep-feature set. Re-used to rewrite
     // the manifest once the #89 visibility feature set is resolved (and again on
@@ -5428,6 +5486,48 @@ thread_local! {
     // instantiations stay un-admittable (sound — the async method drops).
     static SEND_WHEN_ARGS_SEND_NAMES: std::cell::RefCell<HashSet<String>> =
         std::cell::RefCell::new(HashSet::new());
+}
+
+/// The RUN-SCOPED cross-crate proof maps as one serializable value — exactly
+/// the six maps the manifest driver resets once per run (every other global is
+/// per-crate state the bind pass repopulates while parsing). `--xc-save`
+/// writes it after the populate pass; `--xc-load` restores it in place of the
+/// populate pass, splitting the two-pass manifest run into two resumable
+/// processes. The file is OPERATOR-TRUSTED (the sandboxed driver never passes
+/// the flags).
+#[derive(serde::Serialize, serde::Deserialize)]
+struct XcCheckpoint {
+    xc_impls: HashMap<String, Vec<XcImpl>>,
+    xc_public_paths: HashSet<String>,
+    xc_public_path_by_defid: HashMap<String, HashSet<String>>,
+    xc_send_names: HashSet<String>,
+    xc_nonsend_lastsegs: HashSet<String>,
+    from_string_defpaths: HashSet<String>,
+}
+
+fn save_xc_checkpoint(path: &str) -> Result<(), String> {
+    let cp = XcCheckpoint {
+        xc_impls: GLOBAL_XC_IMPLS.with(|c| c.borrow().clone()),
+        xc_public_paths: GLOBAL_XC_PUBLIC_PATHS.with(|c| c.borrow().clone()),
+        xc_public_path_by_defid: GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| c.borrow().clone()),
+        xc_send_names: GLOBAL_XC_SEND_NAMES.with(|c| c.borrow().clone()),
+        xc_nonsend_lastsegs: GLOBAL_XC_NONSEND_LASTSEGS.with(|c| c.borrow().clone()),
+        from_string_defpaths: GLOBAL_FROM_STRING_DEFPATHS.with(|c| c.borrow().clone()),
+    };
+    let body = serde_json::to_string(&cp).map_err(|e| e.to_string())?;
+    std::fs::write(path, body).map_err(|e| e.to_string())
+}
+
+fn load_xc_checkpoint(path: &str) -> Result<(), String> {
+    let body = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let cp: XcCheckpoint = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+    GLOBAL_XC_IMPLS.with(|c| *c.borrow_mut() = cp.xc_impls);
+    GLOBAL_XC_PUBLIC_PATHS.with(|c| *c.borrow_mut() = cp.xc_public_paths);
+    GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| *c.borrow_mut() = cp.xc_public_path_by_defid);
+    GLOBAL_XC_SEND_NAMES.with(|c| *c.borrow_mut() = cp.xc_send_names);
+    GLOBAL_XC_NONSEND_LASTSEGS.with(|c| *c.borrow_mut() = cp.xc_nonsend_lastsegs);
+    GLOBAL_FROM_STRING_DEFPATHS.with(|c| *c.borrow_mut() = cp.from_string_defpaths);
+    Ok(())
 }
 
 /// [#52 Step 3] Build the all-fields-Send id set. A crate-local struct whose every
