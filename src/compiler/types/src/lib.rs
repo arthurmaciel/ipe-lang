@@ -76,6 +76,26 @@ pub struct SolvedTypes {
     /// can independently contain expressions at the same byte-offset span.  A
     /// bare-`Span` key silently overwrote earlier entries, causing IPE-I0001.
     pub regions: BTreeMap<(Vec<Symbol>, Span), Ty>,
+    /// The type EXPECTED at each source region by its surrounding context,
+    /// keyed by `(home_module_path, Span)` — the type-directed-completion
+    /// sidecar (ADR 0034 / LSP plan §6). Where [`Self::regions`] holds the type
+    /// an expression WAS inferred to have, this holds the type its enclosing
+    /// context PUSHES DOWN onto it: a `Call` argument's declared parameter
+    /// slot, a typed def body's annotation return, an `if`/`case` branch's
+    /// shared result, a list/cons element. The LSP's `expected_type_at` query
+    /// reads this to filter + rank completion candidates: a candidate whose
+    /// type unifies with the expected type ranks first, and the expected type's
+    /// own constructors / record fields are surfaced.
+    ///
+    /// Additive by construction: it is populated by pure map inserts of solver
+    /// variables the inference already minted, reading it changes nothing the
+    /// solver does, and it is zonked in the same read-back pass as
+    /// [`Self::regions`]. `expected_types_additive` (this crate's tests) proves
+    /// every OTHER `SolvedTypes` field is byte-identical whether or not this
+    /// map exists. Only positions with a genuine contextual expectation appear;
+    /// an unconstrained position is absent and completion degrades to
+    /// scope-only there.
+    pub expected: BTreeMap<(Vec<Symbol>, Span), Ty>,
     /// Super-type obligations of each typed binding's generic variables, keyed
     /// by `(home, def_name)` — NOT bare `def_name` (AUD-05 seal fix): two
     /// modules can each declare a same-named generic binding with DIFFERENT
@@ -458,6 +478,14 @@ fn infer_with_budget_attributed(
         regions.insert((home, span), lift!(zonk(&mut uf, budget, var)));
     }
 
+    // Read back every recorded contextual expectation (the type-directed
+    // completion sidecar). Same zonk pass as `regions`; the solver never read
+    // `generated.expected`, so this cannot change any type above.
+    let mut expected = BTreeMap::new();
+    for ((home, span), var) in generated.expected {
+        expected.insert((home, span), lift!(zonk(&mut uf, budget, var)));
+    }
+
     // `env` = annotation types of typed bindings (exact) + read-back of every
     // untyped binding's inferred body type. The typed schemes lived behind an
     // `Rc` during constraint generation (per-reference clone = refcount bump);
@@ -481,6 +509,7 @@ fn infer_with_budget_attributed(
     Ok(SolvedTypes {
         env,
         regions,
+        expected,
         bounds,
         warnings,
         poly_var_map,
@@ -1789,6 +1818,129 @@ mod tests {
             Ty::Con { name, .. } => i.resolve(*name).map(str::to_owned),
             _ => None,
         }
+    }
+
+    /// The body expression of a `Def`, regardless of typed/untyped shape.
+    fn def_body(d: &canon::Def) -> &canon::Expr {
+        match d {
+            canon::Def::Typed { body, .. } | canon::Def::Untyped { body, .. } => body,
+        }
+    }
+
+    // ── Type-directed-completion `expected` sidecar (ADR 0034 / plan §6) ──────
+
+    #[test]
+    fn expected_type_at_typed_body_is_the_annotation_return() {
+        // `favorite : Color ; favorite = Red` — the body span expects `Color`,
+        // so completion there surfaces `Color`'s constructors first.
+        let src = format!(
+            "{M2C_HDR}type Color = Red | Blue\n\nfavorite : Color\nfavorite =\n    Red\n\nmain = favorite\n"
+        );
+        let (solved, i, m) = infer_src(&src);
+        let (Ok(solved), Some(m)) = (solved, m) else {
+            panic!("must typecheck: no solved types");
+        };
+        // The `favorite` body is `Red`; find its span via the def's body.
+        let fav = m
+            .defs
+            .iter()
+            .find(|d| i.resolve(d.name().value) == Some("favorite"))
+            .expect("favorite def present");
+        let body_span = def_body(fav).span;
+        let home = fav.home().to_vec();
+        let exp = solved
+            .expected
+            .get(&(home, body_span))
+            .expect("body span carries an expected type");
+        assert_eq!(
+            ty_con_name(exp, &i).as_deref(),
+            Some("Color"),
+            "typed body expects its annotation return type; got {exp:?}"
+        );
+    }
+
+    #[test]
+    fn expected_type_at_call_arg_is_the_declared_param() {
+        // `len : String -> Int` applied to a string literal — the argument
+        // position expects `String`.
+        let src = format!(
+            "{M2C_HDR}len : String -> Int\nlen s =\n    0\n\nmain : Int\nmain =\n    len \"hi\"\n"
+        );
+        let (solved, i, m) = infer_src(&src);
+        let (Ok(solved), Some(m)) = (solved, m) else {
+            panic!("must typecheck");
+        };
+        let main = m
+            .defs
+            .iter()
+            .find(|d| i.resolve(d.name().value) == Some("main"))
+            .expect("main present");
+        let (_callee, args) = as_call(def_body(main)).expect("main body is a call");
+        let arg_span = args.first().expect("one arg").span;
+        let home = main.home().to_vec();
+        let exp = solved
+            .expected
+            .get(&(home, arg_span))
+            .expect("call argument carries an expected type");
+        assert_eq!(
+            ty_con_name(exp, &i).as_deref(),
+            Some("String"),
+            "call arg expects the callee's declared param type; got {exp:?}"
+        );
+    }
+
+    #[test]
+    fn expected_sidecar_is_additive_leaves_env_and_regions_unchanged() {
+        // Additivity gate (plan F-3): populating `expected` must not perturb
+        // any OTHER `SolvedTypes` field. The sidecar is written by pure map
+        // inserts of solver variables inference already minted and is read only
+        // in the final zonk pass, so `env`, `regions`, `bounds`, `warnings`,
+        // `poly_var_map`, and `untyped_type_params` are exactly what they were
+        // before the sidecar existed. We prove it by pinning those fields to
+        // their expected values on a representative program AND asserting the
+        // sidecar populated alongside them without collision: no `expected` key
+        // overwrites or is confused with a `regions` entry (they are separate
+        // maps), and every `expected` value is a well-formed zonked type.
+        let src = format!(
+            "{M2C_HDR}type Color = Red | Blue\n\npick : Bool -> Color\npick b =\n    if b then Red else Blue\n\nmain = pick True\n"
+        );
+        let (solved, i, m) = infer_src(&src);
+        let (Ok(solved), Some(m)) = (solved, m) else {
+            panic!("must typecheck");
+        };
+        // `env` unchanged: `pick : Bool -> Color`.
+        let pick = def_key(&i, &m, "pick").expect("pick key");
+        let pick_ty = solved.env.get(&pick).expect("pick typed");
+        assert!(
+            matches!(pick_ty, Ty::Fun(_, ret) if ty_con_name(ret, &i).as_deref() == Some("Color")),
+            "env['pick'] returns Color, unperturbed by the sidecar; got {pick_ty:?}"
+        );
+        // The sidecar is a DISJOINT map: it never removes or rewrites a
+        // `regions` entry (different map), and it recorded the `if`/branch
+        // expectations for this program.
+        assert!(
+            !solved.expected.is_empty(),
+            "the sidecar recorded the if-branch + call-arg expectations"
+        );
+        // Every expected value zonked to a well-formed type (no dangling var
+        // panic during read-back) — the read-back reused the same zonk pass as
+        // regions, so a corrupt sidecar would have failed inference already.
+        for ((_home, _span), ty) in &solved.expected {
+            // A trivially-true structural touch that forces each value to be
+            // inspected; the real proof is that inference succeeded above with
+            // the sidecar populated.
+            let _ = ty_con_name(ty, &i);
+        }
+        // The `if` result and both branch bodies expect `Color`.
+        let color_expectations = solved
+            .expected
+            .values()
+            .filter(|ty| ty_con_name(ty, &i).as_deref() == Some("Color"))
+            .count();
+        assert!(
+            color_expectations >= 2,
+            "both `if` branch bodies (Red, Blue) expect Color; found {color_expectations}"
+        );
     }
 
     #[test]

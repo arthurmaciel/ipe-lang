@@ -273,7 +273,7 @@ fn completion_result(state: &State, params: &serde_json::Value) -> serde_json::V
         return serde_json::Value::Null;
     };
     let position = params.text_document_position;
-    let Some((module, _file, _text)) = state.locate(&position.text_document.uri) else {
+    let Some((module, _file, text)) = state.locate(&position.text_document.uri) else {
         return serde_json::Value::Null;
     };
     let Some(root) = state.root else {
@@ -282,7 +282,12 @@ fn completion_result(state: &State, params: &serde_json::Value) -> serde_json::V
     let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
         return serde_json::Value::Null;
     };
-    let items = ipe_lsp_features::completion::completions(&state.db, root, entry_file, &module);
+    // Convert the UTF-16 cursor position to a byte offset so completion can read
+    // the type the surrounding context expects there (type-directed ranking).
+    let byte = offset::position_to_offset(&text, position.position, state.encoding);
+    let byte = u32::try_from(byte).unwrap_or(u32::MAX);
+    let items =
+        ipe_lsp_features::completion::completions(&state.db, root, entry_file, &module, byte);
     serde_json::to_value(items).unwrap_or(serde_json::Value::Null)
 }
 
