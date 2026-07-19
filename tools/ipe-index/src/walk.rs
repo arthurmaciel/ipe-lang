@@ -6,16 +6,16 @@ pub const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024; // 2 MB cap (anti-OOM)
 
 pub struct Tracked { pub path: String, pub lang: Lang, #[allow(dead_code)] pub role: Role }
 
-/// Build-output / VCS / generated path segments skydex must NEVER index, even
+/// Build-output / VCS / generated path segments the index must NEVER touch, even
 /// when `.gitignore` hygiene is imperfect. The `--others` walk only respects
 /// `.gitignore`, so a crate that forgot to ignore its `target/` would otherwise
 /// flood the index with build artifacts (deps/fingerprints/rlibs) — defeating
-/// the bounded-memory guarantee that is skydex's whole reason to exist.
+/// the bounded-memory guarantee that is this tool's whole reason to exist.
 /// Matched as a WHOLE path segment and case-sensitively, so legitimate source
-/// dirs are never hit (e.g. `src/Sky/Build/` keeps its capital `Build`).
+/// dirs are never hit.
 const SKIP_SEGMENTS: &[&str] = &[
     "target", "node_modules", "dist-newstyle",
-    "sky-out", ".skycache", ".skydeps", ".skydex", ".git",
+    "ipe-out", ".ipe-index", ".git",
 ];
 
 fn is_indexable(path: &str) -> bool {
@@ -122,31 +122,31 @@ mod tests {
     use super::*;
     #[test]
     fn parses_ls_files_output() {
-        let out = "src/Sky/Parse/Lexer.hs\nruntime-rust/src/sky_runtime/list.rs\nsky-stdlib/Sky/Core/List.sky\n";
+        let out = "crates/ipe_parse/src/lexer.rs\nruntime/src/list.rs\nIpe/Core/List.ipe\n";
         let v = parse_tracked(out);
         assert_eq!(v.len(), 3);
-        assert_eq!(v[0].path, "src/Sky/Parse/Lexer.hs");
+        assert_eq!(v[0].path, "crates/ipe_parse/src/lexer.rs");
         assert_eq!(v[1].lang, crate::model::Lang::Rust);
-        assert_eq!(v[2].role, crate::model::Role::StdlibSky);
+        assert_eq!(v[2].role, crate::model::Role::StdlibIpe);
     }
 
     #[test]
     fn skips_build_output_dirs() {
         // tracked source survives; untracked build artifacts (target/, deps,
         // node_modules) are dropped even though they appear in the walk output.
-        let out = "runtime-rust/src/sky_runtime/path.rs\n\
-                   tools/skydex/target/release/deps/foo.rs\n\
-                   tools/skydex/target/debug/build/bar/out/baz.rs\n\
+        let out = "runtime/src/path.rs\n\
+                   tools/ipe-index/target/release/deps/foo.rs\n\
+                   tools/ipe-index/target/debug/build/bar/out/baz.rs\n\
                    web/node_modules/pkg/index.ts\n\
-                   examples/01/sky-out/main.rs\n\
-                   src/Sky/Build/Compile.hs\n";
+                   examples/01/ipe-out/main.rs\n\
+                   crates/ipe_lower/src/compile.rs\n";
         let v = parse_tracked(out);
         let paths: Vec<&str> = v.iter().map(|t| t.path.as_str()).collect();
-        assert!(paths.contains(&"runtime-rust/src/sky_runtime/path.rs"));
-        assert!(paths.contains(&"src/Sky/Build/Compile.hs")); // capital Build kept
+        assert!(paths.contains(&"runtime/src/path.rs"));
+        assert!(paths.contains(&"crates/ipe_lower/src/compile.rs"));
         assert!(!paths.iter().any(|p| p.contains("/target/")));
         assert!(!paths.iter().any(|p| p.contains("node_modules")));
-        assert!(!paths.iter().any(|p| p.contains("sky-out")));
+        assert!(!paths.iter().any(|p| p.contains("ipe-out")));
         assert_eq!(v.len(), 2);
     }
 }
