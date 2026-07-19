@@ -946,6 +946,23 @@ pub fn surviving_ref_names(pkg: &PkgInfo) -> std::collections::BTreeSet<String> 
         .collect()
 }
 
+/// The synthesised wrapper for a closed (zero-type-param) generic instance,
+/// or empty when the binding is not one / the synthesiser drops it.
+fn closed_instance_lines(kernel_name: &str, f: &FnInfo) -> Vec<String> {
+    let closed = f.generic().is_some_and(|g| g.params.is_empty());
+    if !closed {
+        return Vec::new();
+    }
+    match crate::instance::synthesise_generic_wrapper(kernel_name, f) {
+        Some(crate::instance::WrapperResult::Emitted(w)) => {
+            w.source.lines().map(str::to_owned).collect()
+        }
+        // A rejection on a closed instance is an over-drop at add time: the
+        // binding is simply absent (no call site exists yet to blame).
+        _ => Vec::new(),
+    }
+}
+
 /// One binding's sentinel-bracketed wrapper region; empty when the binding is
 /// dropped (degenerate method / unresolved-generic receiver / trait fn).
 fn emit_fn_region(krate: &str, kernel_name: &str, f: &FnInfo) -> Vec<String> {
@@ -974,6 +991,16 @@ fn emit_fn_region(krate: &str, kernel_name: &str, f: &FnInfo) -> Vec<String> {
         FnShape::FieldGet => field_get_lines(&cx),
         FnShape::FieldSet => field_set_lines(&cx),
         FnShape::Plain | FnShape::PkgVar => plain_lines(&cx),
+    };
+    // A trait-qualified / turbofished binding with NO open type params is a
+    // CLOSED instance — its one wrapper is fully determined at add time, so
+    // it renders through the instance synthesiser (UFCS, serde reduction,
+    // async spawn) into the same sentinel region the flat tier would own.
+    // Open generics stay demand-driven at the call site.
+    let body = if body.is_empty() {
+        closed_instance_lines(kernel_name, f)
+    } else {
+        body
     };
     if body.is_empty() {
         return Vec::new();
@@ -1916,6 +1943,70 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
         assert!(!out.contains("keyed"), "{out}");
         // The CONCRETE generic receiver (DateTime<Utc>) is kept.
         assert!(out.contains("timestamp_from_dateTime"), "{out}");
+    }
+
+    /// A trait-qualified method with NO open type params (the async-trait
+    /// surface: every param concrete, serde slots turbofished) is a CLOSED
+    /// instance — it renders at add time through the instance synthesiser
+    /// into a sentinel region, so the interface + DCE see a real wrapper.
+    #[test]
+    fn closed_trait_method_synthesises_into_a_sentinel_region() {
+        let pkg = decode(&json!({
+            "pkg": "firestore",
+            "name": "firestore",
+            "functions": [{
+                "name": "get_obj",
+                "params": [
+                    {"name": "self", "type": "Db", "ipeType": "Db", "rustType": "&Db"},
+                    {"name": "collection", "type": "String", "ipeType": "String", "rustType": "&str"},
+                    {"name": "id", "type": "String", "ipeType": "String", "rustType": "&str"}
+                ],
+                "results": [{"name": "", "type": "String", "rustType": "serde_json::Value"}],
+                "effect": "effectful",
+                "recvType": "Db",
+                "recvRustType": "firestore::Db",
+                "methodName": "get_obj",
+                "generic": {
+                    "params": [],
+                    "call": {
+                        "kind": "method",
+                        "path": ["::firestore", "Db"],
+                        "method": "get_obj",
+                        "receiver": {"arg": 0, "by": "ref"},
+                        "args": [1, 2],
+                        "argTypes": [
+                            {"ctor": "::firestore::Db"},
+                            {"prim": "String"},
+                            {"prim": "String"}
+                        ],
+                        "ret": {"serdeValue": true},
+                        "borrowAsRefArgs": [1, 2],
+                        "traitQualifier": ["::firestore::Db", "::firestore::GetByIdSupport"],
+                        "isAsync": true,
+                        "methodTurbofish": [{"serdeValue": true}]
+                    }
+                }
+            }],
+            "errors": []
+        }));
+        let out = emit_bindings(&pkg);
+        assert!(
+            out.contains("// IPE-FFI-WRAPPER BEGIN get_obj_from_db"),
+            "{out}"
+        );
+        assert!(
+            out.contains("<::firestore::Db as ::firestore::GetByIdSupport>::get_obj"),
+            "{out}"
+        );
+        // Async instance body: spawned + abort-guarded.
+        assert!(
+            out.contains("AbortOnDrop::new(handle.abort_handle())"),
+            "{out}"
+        );
+        assert!(
+            surviving_ref_names(&pkg).contains("get_obj_from_db"),
+            "the interface gate must see the synthesised region"
+        );
     }
 
     #[test]
