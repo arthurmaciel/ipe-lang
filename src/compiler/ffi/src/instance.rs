@@ -506,6 +506,26 @@ fn is_result_ctor(t: &InnerTypeRef) -> bool {
     )
 }
 
+/// The element type of a host `Option<T>` node, or `None`. The inspector maps
+/// an Ipê `Maybe` slot to an `Option` ctor (bare or fully-qualified); the Ipê
+/// carrier `IpeMaybe` is what the backend forwarder actually passes/expects, so
+/// this drives the boundary coercion at both param and return positions —
+/// mirroring the flat tier (`bindings.rs`). A path-qualified inner keeps its
+/// nesting (`Option<Vec<String>>` → `T = Vec<String>`).
+fn option_inner(t: &InnerTypeRef) -> Option<&InnerTypeRef> {
+    match t {
+        InnerTypeRef::Ctor(nm, args)
+            if args.len() == 1
+                && (nm.as_str() == "::core::option::Option"
+                    || nm.as_str() == "::std::option::Option"
+                    || nm.as_str() == "Option") =>
+        {
+            args.first()
+        }
+        _ => None,
+    }
+}
+
 /// The generic-param indices that appear as a BORROWED argument inside a
 /// by-ref closure slot. Each reaches the owned-clone bridge's `.clone()` on
 /// a `&A`, so the wrapper must FORCE `+ Clone` onto that param even when the
@@ -553,6 +573,19 @@ fn render_generic_wrapper(base_name: &str, g: &GenericFn) -> String {
         .filter(|&(j, at)| is_serde_slot(at) && Some(j) != recv_arg_idx)
         .map(|(j, _)| j)
         .collect();
+    // Slots whose host type is `Option<T>`: the wrapper declares the Ipê
+    // carrier `IpeMaybe<T>` and a prelude shadows the binding to the host
+    // `Option<T>` before the call — the param-side mirror of the flat tier.
+    let maybe_arg_idxs: Vec<usize> = call
+        .arg_types()
+        .iter()
+        .enumerate()
+        .filter(|&(j, at)| {
+            Some(j) != recv_arg_idx
+                && matches!(at, ArgTypeRef::Inner(t) if option_inner(t).is_some())
+        })
+        .map(|(j, _)| j)
+        .collect();
     // The host return shape: a `Result<Ok, Err>` ctor means a fallible host;
     // the OK arm carries the value the Ipê surface returns.
     let ret_is_result = is_result_ctor(call.ret());
@@ -575,20 +608,30 @@ fn render_generic_wrapper(base_name: &str, g: &GenericFn) -> String {
         }
         _ => None,
     };
+    // A host `Option<T>` OK lifts to the Ipê carrier `IpeMaybe<T>` — the same
+    // boundary contract the flat tier owns (`bindings.rs`); the Ipê-facing
+    // `.ipei` already says `Maybe …`, so a raw `Option` here would be
+    // exit-0-then-cargo-fail against the forwarder.
+    let ok_maybe_inner = option_inner(&ok_ref);
     let ret_inner = if ok_is_serde {
         "String".to_owned()
     } else if let Some(w) = &ok_num_widen {
         w.carrier.to_owned()
+    } else if let Some(inner) = ok_maybe_inner {
+        format!("IpeMaybe<{}>", inner.render(params))
     } else {
         ok_ref.render(params)
     };
     // Lift the host's OK value (bound to the local `v`) into the Ipê-facing
     // return: serde re-serialises to JSON text (total — Value's Serialize
-    // never errs), numerics widen saturating, everything else passes.
+    // never errs), numerics widen saturating, a host `Option` folds into
+    // `IpeMaybe`, everything else passes.
     let ok_lift = if ok_is_serde {
         "serde_json::to_string(&(v)).unwrap_or_default()".to_owned()
     } else if let Some(w) = &ok_num_widen {
         w.expr.clone()
+    } else if ok_maybe_inner.is_some() {
+        "match v { Some(x) => IpeMaybe::Just(x), None => IpeMaybe::Nothing }".to_owned()
     } else {
         "v".to_owned()
     };
@@ -636,9 +679,20 @@ fn render_generic_wrapper(base_name: &str, g: &GenericFn) -> String {
         let parts: Vec<String> = (0..arity)
             .map(|j| {
                 // A serde value-arg's wrapper param is the Ipê-facing String
-                // (JSON text); the prelude binds the deserialised local.
+                // (JSON text); the prelude binds the deserialised local. A
+                // `Maybe` slot declares the Ipê carrier `IpeMaybe<T>`; its
+                // prelude adapts to the host `Option<T>`.
                 let ty = if serde_arg_idxs.contains(&j) {
                     "String".to_owned()
+                } else if maybe_arg_idxs.contains(&j) {
+                    let inner = match call.arg_types().get(j) {
+                        Some(ArgTypeRef::Inner(t)) => option_inner(t),
+                        _ => None,
+                    };
+                    inner.map_or_else(
+                        || call.render_arg_type_at(params, j),
+                        |el| format!("IpeMaybe<{}>", el.render(params)),
+                    )
                 } else {
                     call.render_arg_type_at(params, j)
                 };
@@ -662,6 +716,13 @@ fn render_generic_wrapper(base_name: &str, g: &GenericFn) -> String {
             )
         })
         .collect();
+    // Shadow each `Maybe` arg with its host `Option`, using the single-SSOT
+    // runtime helper (the flat tier's param bridge). `render_body` then names
+    // the shadowed binding, so it needs no change.
+    let maybe_prelude: Vec<String> = maybe_arg_idxs
+        .iter()
+        .map(|j| format!("let arg{j} = ipe_maybe_to_option(arg{j});"))
+        .collect();
     let wrapper_ret = if is_async {
         format!("IpeTask<{ret_inner}>")
     } else {
@@ -680,6 +741,9 @@ fn render_generic_wrapper(base_name: &str, g: &GenericFn) -> String {
         // exits the future, not the IpeTask-returning fn.
         let mut lines = vec!["    Box::pin(async move {".to_owned()];
         lines.extend(serde_prelude.iter().map(|p| format!("        {p}")));
+        // The Maybe→Option shadow runs before the spawn so the spawned
+        // `async move` captures the host `Option`, not the Ipê carrier.
+        lines.extend(maybe_prelude.iter().map(|p| format!("        {p}")));
         lines.push(format!(
             "        let handle = tokio::task::spawn(async move {{ {body_call}.await }});"
         ));
@@ -707,6 +771,7 @@ fn render_generic_wrapper(base_name: &str, g: &GenericFn) -> String {
         // Ipê-closure) panic becomes a typed Err, never a process unwind
         // across the boundary.
         let mut lines: Vec<String> = serde_prelude.iter().map(|p| format!("    {p}")).collect();
+        lines.extend(maybe_prelude.iter().map(|p| format!("    {p}")));
         if ret_is_result {
             lines.push(format!(
                 "    match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(move || \
@@ -1305,6 +1370,77 @@ match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(move || ::box1::
         assert!(
             w.source.contains(
                 "match joined { Ok(Ok(v)) => ok_res(serde_json::to_string(&(v)).unwrap_or_default()), Ok(Err(e)) => IpeResult::Err(ipe_error_from_foreign(e)), Err(join_err) => IpeResult::Err(ipe_error_from_foreign(join_err)) }"
+            ),
+            "{}",
+            w.source
+        );
+    }
+
+    #[test]
+    fn maybe_slot_param_takes_ipe_maybe_and_adapts_to_option() {
+        // A synthesised closed-instance wrapper whose host takes `Option<…>`
+        // params and returns `Option<…>` must speak the Ipê carrier `IpeMaybe`
+        // at BOTH boundaries — the backend forwarder passes `IpeMaybe`, so a
+        // raw `Option` sig is exit-0-then-cargo-fail (E0308). Mirrors the
+        // `update_obj…` shape (`Maybe (List String)` arg) that reaches this
+        // renderer once skyshop calls it.
+        let f = generic_fn_of(&json!({
+            "name": "update_obj",
+            "effect": "effectful",
+            "recvType": "Db",
+            "methodName": "update_obj",
+            "generic": {
+                "params": [],
+                "call": {
+                    "kind": "method",
+                    "path": ["::db", "Db"],
+                    "method": "update_obj",
+                    "receiver": {"arg": 0, "by": "ref"},
+                    "args": [1, 2],
+                    "argTypes": [
+                        {"ctor": "::db::Db"},
+                        {"ctor": "Option", "args": [{"ctor": "String"}]},
+                        {"ctor": "Option", "args": [{"ctor": "Vec", "args": [{"ctor": "String"}]}]}
+                    ],
+                    "ret": {"ctor": "::core::result::Result",
+                            "args": [{"ctor": "Option", "args": [{"ctor": "String"}]},
+                                     {"ctor": "::std::string::String"}]},
+                    "traitQualifier": ["::db::Db", "::db::Repo"],
+                    "isAsync": true
+                }
+            }
+        }));
+        let w = emitted(synthesise_generic_wrapper("Rust_Db", &f));
+        // Param sig carries the Ipê carrier at both slots (nested container
+        // preserved: `IpeMaybe<Vec<String>>`).
+        assert!(
+            w.source
+                .contains("(arg0: ::db::Db, arg1: IpeMaybe<String>, arg2: IpeMaybe<Vec<String>>)"),
+            "{}",
+            w.source
+        );
+        // Return type lifts to the carrier.
+        assert!(
+            w.source.contains("-> IpeTask<IpeMaybe<String>>"),
+            "{}",
+            w.source
+        );
+        // Adapt prelude shadows each Maybe arg to the host `Option` via the
+        // single-SSOT runtime helper, BEFORE the spawned call.
+        assert!(
+            w.source.contains("let arg1 = ipe_maybe_to_option(arg1);"),
+            "{}",
+            w.source
+        );
+        assert!(
+            w.source.contains("let arg2 = ipe_maybe_to_option(arg2);"),
+            "{}",
+            w.source
+        );
+        // The OK lift wraps the host `Option` back into `IpeMaybe`.
+        assert!(
+            w.source.contains(
+                "Ok(Ok(v)) => ok_res(match v { Some(x) => IpeMaybe::Just(x), None => IpeMaybe::Nothing })"
             ),
             "{}",
             w.source
