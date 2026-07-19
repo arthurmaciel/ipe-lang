@@ -133,11 +133,14 @@ fn typecheck_memoized_coarse_floor() {
     );
 }
 
-/// The seam is genuinely PROGRAM-wide, not per-module: editing module C's
-/// body (unrelated to sibling module A — no import edge between them) still
-/// forces a full re-execution of `typecheck`, because both are merged into
-/// the SAME `linked_program`. A true per-module query would leave an
-/// A-only-dependent memo untouched here; this seam does not.
+/// The whole-program `typecheck` seam is genuinely PROGRAM-wide, not
+/// per-module: editing module C's body (unrelated to sibling module A — no
+/// import edge between them) still forces a full re-execution of
+/// `typecheck`, because both are merged into the SAME `linked_program`.
+/// This is the emission path's documented coarseness; the per-module
+/// `typecheck_module` query does NOT share it —
+/// `unrelated_sibling_edit_leaves_module_memo_untouched`
+/// (`per_module_typecheck.rs`) proves the finer granularity.
 #[test]
 fn typecheck_is_program_wide_not_per_module() {
     let (mut db, log) = logged_db();
@@ -237,11 +240,12 @@ fn lower_program_short_circuits_on_typecheck_error() {
 }
 
 // ---------------------------------------------------------------------------
-// typecheck_module — the per-module projection SEAM (the incremental query
-// contract, over the coarse whole-program solve today). These prove the
-// projection is EXACTLY the whole-program result filtered to one module's
-// home — a refactor with no behavior change — so the future per-module solver
-// swaps in as the query BODY with zero consumer changes.
+// typecheck_module — the per-module query. Its scoped body (deps'-typed-
+// interface solve, `per_module_typecheck.rs`) and its whole-program-
+// projection fallback must both slice the program per module home; these
+// tests pin the slicing contract itself: each module gets EXACTLY its own
+// home's entries, the slices partition the whole, and same-named
+// cross-module bindings never conflate.
 // ---------------------------------------------------------------------------
 
 /// Two modules with same-named-but-distinct bindings: `A.shared : Int` and
@@ -274,10 +278,7 @@ fn typecheck_module_projection_matches_whole_program() {
     // Resolve the two home paths so we can filter the whole-program env.
     let (a_home, b_home) = {
         let mut i = db.interner().lock();
-        (
-            vec![i.intern("A").unwrap()],
-            vec![i.intern("B").unwrap()],
-        )
+        (vec![i.intern("A").unwrap()], vec![i.intern("B").unwrap()])
     };
 
     // Each projection equals the whole-program env filtered to that home.
@@ -338,11 +339,9 @@ fn typecheck_module_projection_matches_whole_program() {
     );
 }
 
-/// The projection is memoized and its value backdates: a repeat demand
-/// executes nothing, and (today's coarse floor) a whole-program re-solve still
-/// re-projects — but a module whose slice is byte-equal cuts its own
-/// dependents. This is the incremental contract the future per-module solver
-/// inherits unchanged.
+/// The per-module query is memoized and its value backdates: a repeat
+/// demand executes nothing, and a byte-equal re-save executes nothing
+/// anywhere in the chain.
 #[test]
 fn typecheck_module_is_memoized() {
     let (mut db, log) = logged_db();

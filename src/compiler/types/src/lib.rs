@@ -34,7 +34,10 @@ mod unify;
 mod unionfind;
 
 use std::collections::BTreeMap;
+use std::rc::Rc;
+use std::sync::Arc;
 
+use ipe_canon::ModuleExports;
 use ipe_canon::ast as canon;
 use ipe_diagnostics::{DResult, Diagnostic, Span, TypeError};
 use ipe_intern::{Interner, Symbol};
@@ -46,7 +49,7 @@ pub use ty::{RowTail, Ty, TyBounds, is_solver_var, tag_solver_var, untag_solver_
 
 use constrain::{
     Builder, FieldAccess, RecordUpdate, RouteWitnessCheck, RoutedLiveCheck, SchemeApp,
-    promote_untyped_boundaries, zonk,
+    promote_untyped_boundaries, reify_scheme, zonk,
 };
 use solve::solve_attributed;
 use ty::{Content, FlatType};
@@ -175,6 +178,143 @@ pub fn infer_attributed(
     infer_with_budget_attributed(m, interner, &mut budget)
 }
 
+/// One exported binding's cross-module type contract: its generalized scheme
+/// plus the super-type obligations its generic variables carry.
+///
+/// For a typed binding the scheme is the normalized annotation type (the
+/// exact value every cross-module reference already instantiates in the
+/// whole-program solve); for an untyped binding it is the boundary-promoted
+/// scheme reified with canonical variable ids ([`constrain::reify_scheme`]).
+/// Span-free by construction ([`Ty`] carries no spans), so a body-only edit
+/// that preserves the scheme yields a byte-equal value.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct TypedScheme {
+    /// The generalized scheme.
+    pub ty: Ty,
+    /// Annotation variable symbol → the obligations the binding's body
+    /// imposed on it (empty map for an obligation-free binding).
+    pub bounds: BTreeMap<Symbol, TyBounds>,
+}
+
+/// The typed cross-module interface of one module.
+///
+/// Carries every exported binding's [`TypedScheme`] plus the module's union
+/// definitions (constructor payload types, needed by an importer's
+/// constructor references, patterns, and exhaustiveness analysis). This is
+/// the typed analogue of the canon-level [`ModuleExports`], and the
+/// invalidation firewall of the per-module solve tier: a dependency body
+/// edit that preserves this value lets every importer's scoped solve stand.
+/// Union constructor spans are erased ([`ipe_diagnostics::Span::DUMMY`]) so
+/// a span-shifting edit above a union cannot bust the firewall.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct TypedInterface {
+    /// Exported value name → its scheme. Exported kernel aliases are absent
+    /// (they resolve through the canon kernel route, never through the
+    /// scheme table).
+    pub values: BTreeMap<Symbol, TypedScheme>,
+    /// The module's union definitions, constructor spans erased.
+    pub unions: Vec<canon::Union>,
+}
+
+/// Whether a module's typed interface can stand for it in a dependency-first
+/// scoped solve.
+///
+/// `Open` means at least one exported binding's scheme still reaches a
+/// residual non-quantified solver variable (a shared monomorphic root, a
+/// pending `Super` obligation, a rigid contamination, an open record tail)
+/// — a variable an importer may legitimately pin, so information can flow
+/// AGAINST the import direction and no per-module interface is faithful.
+/// Consumers must fall back to the whole-program solve for the module and
+/// its importers; anything else risks a scoped result the joint solve
+/// disagrees with.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum InterfaceStatus {
+    /// Every exported scheme is closed; the interface is faithful.
+    Closed(TypedInterface),
+    /// Some exported scheme is open; only the whole-program solve is
+    /// faithful for this module and its importers.
+    Open,
+}
+
+/// The result of a scoped per-module solve: the module's own solved types
+/// plus its typed interface (or `Open`).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ModuleInference {
+    /// The module's solved types — same shape as the whole-program result,
+    /// scoped to this module's constraints over its deps' interfaces.
+    pub solved: SolvedTypes,
+    /// The module's own typed interface, for its importers' scoped solves.
+    pub interface: InterfaceStatus,
+}
+
+/// Per-binding super-type obligations, keyed `(home, name)` — the shape of
+/// [`SolvedTypes::bounds`].
+type BoundsTable = BTreeMap<(Vec<Symbol>, Symbol), BTreeMap<Symbol, TyBounds>>;
+
+/// The dependency seeds of a scoped per-module solve, threaded through the
+/// shared inference core.
+struct ScopedContext<'a> {
+    /// The module's own canon-level export surface (which names must appear
+    /// in the produced interface; which are kernel aliases to skip).
+    exports: &'a ModuleExports,
+    /// Resolved dep module path → its CLOSED typed interface.
+    deps: &'a BTreeMap<Vec<Symbol>, Arc<TypedInterface>>,
+}
+
+/// Infer the types of ONE module of a multi-module program, scoped.
+///
+/// The solve covers only `m`'s own constraints, with every cross-module
+/// reference instantiated against the dependency's [`TypedInterface`] scheme
+/// (fresh per use site, exactly as the whole-program solve instantiates a
+/// typed binding's annotation).
+///
+/// The whole-program emission path stays on [`infer_attributed`] over the
+/// linked merge; this scoped entry point exists for the per-module query
+/// tier, and its result is meaningful ONLY under the closed-interface
+/// discipline: every resolved dep of `m` must have produced
+/// [`InterfaceStatus::Closed`] from its own scoped solve. The returned
+/// [`ModuleInference::interface`] reports whether `m` itself sustains that
+/// discipline for its importers.
+///
+/// # Errors
+/// Same conditions as [`infer_attributed`], scoped to this module's
+/// constraints.
+pub fn infer_module(
+    m: &canon::Module,
+    exports: &ModuleExports,
+    deps: &BTreeMap<Vec<Symbol>, Arc<TypedInterface>>,
+    interner: &mut Interner,
+) -> Result<ModuleInference, (Diagnostic, Vec<Symbol>)> {
+    let mut budget = Budget::from_env();
+    let scoped = ScopedContext { exports, deps };
+    let (solved, interface) = infer_core(m, interner, &mut budget, Some(&scoped))?;
+    Ok(ModuleInference {
+        solved,
+        interface: interface.unwrap_or(InterfaceStatus::Open),
+    })
+}
+
+/// A [`canon::Union`] clone with every constructor span erased — interface
+/// identity must not depend on where in the file a union sits.
+fn erase_union_spans(union: &canon::Union) -> canon::Union {
+    canon::Union {
+        home: union.home.clone(),
+        name: union.name,
+        vars: union.vars.clone(),
+        ctors: union
+            .ctors
+            .iter()
+            .map(|c| canon::Ctor {
+                name: c.name,
+                index: c.index,
+                arity: c.arity,
+                args: c.args.clone(),
+                span: Span::DUMMY,
+            })
+            .collect(),
+    }
+}
+
 /// Inference with an explicit solver budget. Exposed for tests that need to
 /// drive the [`ipe_diagnostics::TypeError::BudgetExceeded`] path deterministically
 /// without mutating process-global environment state.
@@ -189,12 +329,26 @@ fn infer_with_budget(
 /// Like [`infer_with_budget`] but on a solver error also returns the failing
 /// constraint's home module path.  Non-solver errors (constraint generation,
 /// post-solve passes) return `Vec::new()` as the home.
-#[allow(clippy::too_many_lines)] // structural mirror of infer_with_budget; split would obscure flow
 fn infer_with_budget_attributed(
     m: &canon::Module,
     interner: &mut Interner,
     budget: &mut Budget,
 ) -> Result<SolvedTypes, (Diagnostic, Vec<Symbol>)> {
+    infer_core(m, interner, budget, None).map(|(solved, _interface)| solved)
+}
+
+/// The ONE inference body behind both the whole-program solve
+/// ([`infer_attributed`], `scoped == None` — byte-identical behaviour) and
+/// the scoped per-module solve ([`infer_module`], `scoped == Some`). A single
+/// code path so the two solves cannot drift; every scoped-only step is gated
+/// on `scoped` and adds nothing to the whole-program run.
+#[allow(clippy::too_many_lines)] // structural mirror of the solve pipeline; split would obscure flow
+fn infer_core(
+    m: &canon::Module,
+    interner: &mut Interner,
+    budget: &mut Budget,
+    scoped: Option<&ScopedContext<'_>>,
+) -> Result<(SolvedTypes, Option<InterfaceStatus>), (Diagnostic, Vec<Symbol>)> {
     // Convenience: wrap a `DResult`-returning expression so `?` works inside
     // this function whose error type is `(Diagnostic, Vec<Symbol>)`.  Non-solver
     // errors (constraint generation, post-solve passes) carry no meaningful home,
@@ -206,7 +360,30 @@ fn infer_with_budget_attributed(
     }
 
     let mut uf = UnionFind::new();
-    let generated = lift!(Builder::run(&mut uf, interner, m));
+    // Dep-interface seeds (scoped solve only): the deps' exported schemes
+    // pre-populate the `(home, name)` scheme table, and the deps' unions are
+    // registered alongside the module's own so cross-module constructor
+    // references, patterns, and exhaustiveness see full definitions. The
+    // union list stays alive past constraint generation — `exhaust::check`
+    // reads it below.
+    let dep_unions: Vec<&canon::Union> = scoped.map_or_else(Vec::new, |ctx| {
+        ctx.deps
+            .values()
+            .flat_map(|iface| iface.unions.iter())
+            .collect()
+    });
+    let generated = match scoped {
+        None => lift!(Builder::run(&mut uf, interner, m)),
+        Some(ctx) => {
+            let mut seed: BTreeMap<(Vec<Symbol>, Symbol), Rc<Ty>> = BTreeMap::new();
+            for (path, iface) in ctx.deps {
+                for (name, scheme) in &iface.values {
+                    seed.insert((path.clone(), *name), Rc::new(scheme.ty.clone()));
+                }
+            }
+            lift!(Builder::run_seeded(&mut uf, interner, m, &dep_unions, seed))
+        }
+    };
 
     solve_attributed(&mut uf, budget, interner, &generated.constraints)?;
 
@@ -300,7 +477,40 @@ fn infer_with_budget_attributed(
     // Redundant-branch warnings (IPE-T0011) are collected rather than returned
     // as errors — they are Severity::Warning and must not abort compilation.
     // They join the same `warnings` sink already carrying any IPE-L0124.
-    lift!(exhaust::check(m, interner, &mut warnings));
+    lift!(exhaust::check(m, &dep_unions, interner, &mut warnings));
+
+    // Scoped solve only: reify every exported UNTYPED binding's promoted
+    // scheme for the module's typed interface. Must run HERE — after the
+    // deferred passes settle, BEFORE numeric/SQL defaulting — because
+    // defaulting pins residual `Super` flexes to concrete types, which would
+    // disguise an OPEN scheme (one an importer can still pin, e.g.
+    // `double x = x + x` whose importer's `double 1.5` makes it
+    // `Float -> Float` in the joint solve) as a closed `Int -> Int`.
+    // `None` from `reify_scheme`, or an exported name with neither a scheme
+    // nor a kernel-alias route, marks the whole interface open — fail closed.
+    let mut reified_untyped: BTreeMap<Symbol, Ty> = BTreeMap::new();
+    let mut interface_open = false;
+    if let Some(ctx) = scoped {
+        for name in &ctx.exports.values {
+            if ctx.exports.kernel_aliases.contains_key(name) {
+                continue;
+            }
+            let key = (m.name.clone(), *name);
+            if generated.top_level.contains_key(&key) {
+                continue; // annotation scheme — closed by construction
+            }
+            let reified = match untyped_schemes.get(&key) {
+                Some(scheme) => lift!(reify_scheme(&mut uf, budget, scheme)),
+                None => None,
+            };
+            if let Some(ty) = reified {
+                reified_untyped.insert(*name, ty);
+            } else {
+                interface_open = true;
+                break;
+            }
+        }
+    }
 
     // Numeric defaulting: a `Number` variable the program never pinned to a
     // concrete type resolves to `Int` (an untyped `\a b -> a + b` is `Int`, not
@@ -464,13 +674,67 @@ fn infer_with_budget_attributed(
     // at a type that actually supports the operations its generic emission
     // requires. Without this, `double True` (where `double` needs Number) would
     // type-check here yet emit Rust that `cargo` rejects.
+    // Scoped solve only: a use of a dep's obligated binding must be checked
+    // against the DEP's recorded obligations — the joint solve reads them
+    // from its program-wide bounds map; the scoped solve merges them in from
+    // the dep interfaces.
+    let merged_bounds: Option<BoundsTable> = scoped.map(|ctx| {
+        let mut merged = bounds.clone();
+        for (path, iface) in ctx.deps {
+            for (name, scheme) in &iface.values {
+                if !scheme.bounds.is_empty() {
+                    merged.insert((path.clone(), *name), scheme.bounds.clone());
+                }
+            }
+        }
+        merged
+    });
+    let bounds_for_apps = merged_bounds.as_ref().unwrap_or(&bounds);
     lift!(check_scheme_applications(
         &mut uf,
         budget,
         interner,
-        &bounds,
+        bounds_for_apps,
         &generated.scheme_apps
     ));
+
+    // Scoped solve only: assemble the module's typed interface — exported
+    // typed bindings carry their normalized annotation scheme + recorded
+    // obligations; exported untyped bindings carry the pre-defaulting
+    // reified scheme built above.
+    let interface = scoped.map(|ctx| {
+        if interface_open {
+            return InterfaceStatus::Open;
+        }
+        let mut values: BTreeMap<Symbol, TypedScheme> = BTreeMap::new();
+        for name in &ctx.exports.values {
+            if ctx.exports.kernel_aliases.contains_key(name) {
+                continue;
+            }
+            let key = (m.name.clone(), *name);
+            if let Some(ty) = generated.top_level.get(&key) {
+                values.insert(
+                    *name,
+                    TypedScheme {
+                        ty: (**ty).clone(),
+                        bounds: bounds.get(&key).cloned().unwrap_or_default(),
+                    },
+                );
+            } else if let Some(ty) = reified_untyped.get(name) {
+                values.insert(
+                    *name,
+                    TypedScheme {
+                        ty: ty.clone(),
+                        bounds: BTreeMap::new(),
+                    },
+                );
+            }
+        }
+        InterfaceStatus::Closed(TypedInterface {
+            values,
+            unions: m.unions.iter().map(erase_union_spans).collect(),
+        })
+    });
 
     // Read back every region's resolved type.
     let mut regions = BTreeMap::new();
@@ -506,15 +770,18 @@ fn infer_with_budget_attributed(
         env.insert(name, lift!(zonk(&mut uf, budget, var)));
     }
 
-    Ok(SolvedTypes {
-        env,
-        regions,
-        expected,
-        bounds,
-        warnings,
-        poly_var_map,
-        untyped_type_params,
-    })
+    Ok((
+        SolvedTypes {
+            env,
+            regions,
+            expected,
+            bounds,
+            warnings,
+            poly_var_map,
+            untyped_type_params,
+        },
+        interface,
+    ))
 }
 
 /// Verify every use of a super-typed binding pins each obligated generic

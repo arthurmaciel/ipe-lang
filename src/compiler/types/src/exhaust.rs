@@ -72,7 +72,11 @@ struct Sigs {
 }
 
 impl Sigs {
-    fn build(module: &canon::Module, interner: &mut Interner) -> DResult<Self> {
+    fn build(
+        module: &canon::Module,
+        extra_unions: &[&canon::Union],
+        interner: &mut Interner,
+    ) -> DResult<Self> {
         let mut ctor_to_union = BTreeMap::new();
         let mut union_ctors = BTreeMap::new();
         let mut ctor_arity = BTreeMap::new();
@@ -101,7 +105,7 @@ impl Sigs {
             union_ctors.insert((ph.clone(), union), ctors.clone());
         }
 
-        for union in &module.unions {
+        for union in module.unions.iter().chain(extra_unions.iter().copied()) {
             // The union's DEFINING module — its nominal identity is `(home, name)`,
             // distinct from a same-short-named type in another module.
             let uhome = union.home.clone();
@@ -317,6 +321,12 @@ fn check_param_irrefutable(pat: &canon::Pattern) -> DResult<()> {
 /// Check every `case` in `module` for exhaustiveness + redundancy, and every
 /// **parameter / binder** pattern for irrefutability (IPE-T0015).
 ///
+/// `extra_unions` supplies union definitions declared outside `module` (a
+/// scoped per-module solve passes its dependencies' interface unions;
+/// the whole-program solve passes none — the linked merge already carries
+/// every union), so a `case` over an imported ADT is analysed against the
+/// full constructor signature instead of being skipped as unknown.
+///
 /// Redundant-branch findings ([`TypeError::RedundantCaseBranch`], IPE-T0011)
 /// are pushed onto `warnings` instead of being returned as errors — they are
 /// severity-Warning and must not abort compilation.
@@ -327,10 +337,11 @@ fn check_param_irrefutable(pat: &canon::Pattern) -> DResult<()> {
 /// * [`Diagnostic::CompilerBug`] if a constructor symbol cannot be resolved.
 pub fn check(
     module: &canon::Module,
+    extra_unions: &[&canon::Union],
     interner: &mut Interner,
     warnings: &mut Vec<Diagnostic>,
 ) -> DResult<()> {
-    let sigs = Sigs::build(module, interner)?;
+    let sigs = Sigs::build(module, extra_unions, interner)?;
     for def in &module.defs {
         let (patterns, body) = match def {
             canon::Def::Untyped { patterns, body, .. }

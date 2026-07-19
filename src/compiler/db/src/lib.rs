@@ -706,7 +706,7 @@ pub fn typecheck(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> TypecheckR
 /// a handler that asks for one module's types reads exactly what the
 /// whole-program solve produced for that module — never a re-analysis, never a
 /// divergent value.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ModuleTypes {
     /// Type of each top-level binding this module declares, keyed by bare name
     /// (the home is fixed to this module, so it drops out of the key).
@@ -722,34 +722,266 @@ pub struct ModuleTypes {
     pub bounds: BTreeMap<Symbol, BTreeMap<Symbol, ipe_types::TyBounds>>,
 }
 
-/// The memoized per-module projection of [`typecheck`], or the whole-program
-/// failure (the same error a whole-program demand surfaces — a module cannot
-/// type-check in isolation while the program does not).
+/// The memoized per-module result of [`typecheck_module`].
+///
+/// On the scoped path the module's own solve; on the fallback path the
+/// whole-program projection, including the whole-program failure (the same
+/// error a whole-program demand surfaces).
 pub type ModuleTypesResult = Result<Arc<ModuleTypes>, (Diagnostic, Vec<Symbol>)>;
 
-/// Type-check `module` (per-module query SEAM).
+/// One module's `(home, _)`-slice of a whole-program
+/// [`ipe_types::SolvedTypes`] — the [`ModuleTypes`] projection.
+#[must_use]
+pub fn project_module_types(solved: &ipe_types::SolvedTypes, home: &[Symbol]) -> ModuleTypes {
+    let env = solved
+        .env
+        .iter()
+        .filter(|((h, _), _)| h == home)
+        .map(|((_, name), ty)| (*name, ty.clone()))
+        .collect();
+    let regions = solved
+        .regions
+        .iter()
+        .filter(|((h, _), _)| h == home)
+        .map(|((_, span), ty)| (*span, ty.clone()))
+        .collect();
+    let expected = solved
+        .expected
+        .iter()
+        .filter(|((h, _), _)| h == home)
+        .map(|((_, span), ty)| (*span, ty.clone()))
+        .collect();
+    let bounds = solved
+        .bounds
+        .iter()
+        .filter(|((h, _), _)| h == home)
+        .map(|((_, name), b)| (*name, b.clone()))
+        .collect();
+    ModuleTypes {
+        env,
+        regions,
+        expected,
+        bounds,
+    }
+}
+
+/// Canonically renumber every TAGGED solver variable in a [`ModuleTypes`]
+/// value.
 ///
-/// **The incremental-per-module query contract, established today over the
-/// coarse whole-program solve.** It is keyed `(root, entry, module)` and its
-/// RESULT is byte-identical to filtering [`typecheck`]'s whole-program
-/// [`ipe_types::SolvedTypes`] to this module's `home` — a pure projection, a
-/// refactor with no behavior change (proven by
-/// `typecheck_module_projection_matches_whole_program` in
-/// `tests/phase4_seams.rs`). Handlers read this by name instead of
-/// whole-program `typecheck`, so the future genuinely-per-module solver (a
-/// scoped solve seeded from deps' TYPED interfaces — the tracked `ipe_types`
-/// redesign specified in `docs/architecture/tbd/per-module-typecheck.md`)
-/// swaps in as this query's BODY with **zero handler changes** and zero
-/// contract change, exactly as the LSP plan §3.2 mandates for the `ProgramView`
-/// seam.
+/// First-encounter order over the deterministic `env` → `regions` →
+/// `expected` iteration; annotation-symbol variables are untouched.
 ///
-/// Today it depends on the whole-program [`typecheck`], so it inherits the
-/// coarse invalidation (an edit anywhere re-projects every module). The
-/// projection itself is cheap and its value backdates: a module whose slice is
-/// byte-equal after an unrelated edit cuts its dependents. When the solver
-/// redesign lands, this query's dependency narrows to the module's own scoped
-/// solve + its deps' typed interfaces, and the coarse floor lifts — without any
-/// consumer noticing.
+/// Residual solver-variable NUMBERING is an artifact of the producing solve
+/// (the whole-program union-find numbers variables across every module; a
+/// scoped solve numbers its own) — no consumer reads the raw id (hover
+/// renders through [`ipe_types::VarNamer`]; completion classifies by type
+/// head). Normalizing at the query boundary makes the scoped result and the
+/// whole-program projection byte-comparable (the scoped-vs-whole parity
+/// gate), and stabilizes this query's memo against joint-solve renumbering
+/// noise after unrelated edits (backdating that the raw ids would defeat).
+#[must_use]
+pub fn normalize_module_types(types: ModuleTypes) -> ModuleTypes {
+    fn renumber(ty: &ipe_types::Ty, map: &mut BTreeMap<u32, u32>) -> ipe_types::Ty {
+        use ipe_types::{RowTail, Ty};
+        let fresh = |raw: u32, map: &mut BTreeMap<u32, u32>| -> u32 {
+            if !ipe_types::is_solver_var(raw) {
+                return raw;
+            }
+            let next = u32::try_from(map.len()).unwrap_or(u32::MAX);
+            ipe_types::tag_solver_var(*map.entry(raw).or_insert(next))
+        };
+        match ty {
+            Ty::Var(raw) => Ty::Var(fresh(*raw, map)),
+            Ty::Unit => Ty::Unit,
+            Ty::Fun(a, b) => Ty::Fun(Box::new(renumber(a, map)), Box::new(renumber(b, map))),
+            Ty::Tuple(elems) => Ty::Tuple(elems.iter().map(|e| renumber(e, map)).collect()),
+            Ty::Record(fields, tail) => Ty::Record(
+                fields
+                    .iter()
+                    .map(|(name, t)| (*name, renumber(t, map)))
+                    .collect(),
+                match tail {
+                    RowTail::Closed => RowTail::Closed,
+                    RowTail::Open(raw) => RowTail::Open(fresh(*raw, map)),
+                },
+            ),
+            Ty::Con { module, name, args } => Ty::Con {
+                module: module.clone(),
+                name: *name,
+                args: args.iter().map(|a| renumber(a, map)).collect(),
+            },
+        }
+    }
+
+    let mut map: BTreeMap<u32, u32> = BTreeMap::new();
+    let env = types
+        .env
+        .iter()
+        .map(|(name, ty)| (*name, renumber(ty, &mut map)))
+        .collect();
+    let regions = types
+        .regions
+        .iter()
+        .map(|(span, ty)| (*span, renumber(ty, &mut map)))
+        .collect();
+    let expected = types
+        .expected
+        .iter()
+        .map(|(span, ty)| (*span, renumber(ty, &mut map)))
+        .collect();
+    ModuleTypes {
+        env,
+        regions,
+        expected,
+        bounds: types.bounds,
+    }
+}
+
+/// The memoized outcome of one module's scoped solve — either a genuinely
+/// per-module result, or the honest verdict that only the whole-program
+/// solve is faithful for this module.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum ScopedModuleTypes {
+    /// The module's scoped solve is green, every dep interface is closed,
+    /// and the module's own interface is closed — the per-module result
+    /// stands for the joint solve's slice (the scoped-vs-whole parity gate
+    /// proves the equivalence over the golden corpus).
+    PerModule {
+        /// The module's [`ModuleTypes`], normalized.
+        types: Arc<ModuleTypes>,
+        /// The module's closed typed interface, for importers' scoped solves.
+        interface: Arc<ipe_types::TypedInterface>,
+    },
+    /// Fall back to the whole-program solve: the module's scoped solve was
+    /// red, a dep's (or its own) interface is open (an importer can pin a
+    /// residual variable — information flows against the import direction),
+    /// or the import graph is cyclic. Under-invalidation outranks latency:
+    /// a scoped result that could disagree with the joint solve is never
+    /// served.
+    WholeProgram,
+}
+
+/// One module's scoped solve over its deps' typed interfaces — the
+/// genuinely-per-module tier behind [`typecheck_module`].
+///
+/// Demands `typed_interface(dep)` for every resolved dep BEFORE running
+/// [`ipe_types::infer_module`] over this module's own canonical AST: the
+/// cross-module generalization order (Boundary Scheme Promotion's
+/// dependency-first `module_order` walk in the joint solve) is expressed as
+/// a salsa dependency EDGE, so the invalidation firewall is structural. A
+/// dep body edit re-runs the dep's scoped solve; when the dep's interface
+/// comes out equal, `typed_interface` backdates and THIS query's memo
+/// stands without re-executing.
+///
+/// Total (never `Err`): every shortfall — cycle, red parse/canon/solve,
+/// open interface anywhere — yields [`ScopedModuleTypes::WholeProgram`],
+/// and [`typecheck_module`] surfaces the joint solve's own result (and its
+/// exact diagnostics) for such modules. The cycle gate reuses [`topo_order`]
+/// with this module as the DFS root, so a cyclic graph resolves as a value
+/// here and never reaches the recursive `typed_interface` demand (salsa's
+/// dependency-cycle panic stays unreachable on this path).
+#[salsa::tracked]
+pub fn infer_module_scoped(db: &dyn Db, root: SourceRoot, module: SourceFile) -> ScopedModuleTypes {
+    if topo_order(db, root, module).is_err() {
+        return ScopedModuleTypes::WholeProgram;
+    }
+    let Ok(canonical) = canonicalize(db, root, module) else {
+        return ScopedModuleTypes::WholeProgram;
+    };
+    let Ok(resolutions) = resolve_imports(db, root, module) else {
+        return ScopedModuleTypes::WholeProgram;
+    };
+
+    // Demand every dep interface BEFORE taking the interner lock: a cold
+    // demand recurses into `infer_module_scoped(dep)`, which locks the
+    // (non-reentrant) interner itself.
+    let mut dep_interfaces: Vec<(Vec<String>, Arc<ipe_types::TypedInterface>)> = Vec::new();
+    for (path, resolution) in resolutions.iter() {
+        if let ImportResolution::Resolved(dep) = resolution {
+            let Some(interface) = typed_interface(db, root, *dep) else {
+                return ScopedModuleTypes::WholeProgram;
+            };
+            dep_interfaces.push((path.clone(), interface));
+        }
+    }
+
+    let mut interner = db.interner().lock();
+    let intern_path =
+        |interner: &mut ipe_intern::Interner, path: &[String]| -> Result<Vec<Symbol>, Diagnostic> {
+            path.iter()
+                .map(|segment| interner.intern(segment))
+                .collect::<Result<_, _>>()
+        };
+    let mut deps: BTreeMap<Vec<Symbol>, Arc<ipe_types::TypedInterface>> = BTreeMap::new();
+    for (path, interface) in dep_interfaces {
+        let Ok(key) = intern_path(&mut interner, &path) else {
+            return ScopedModuleTypes::WholeProgram;
+        };
+        deps.insert(key, interface);
+    }
+    let Ok(home) = intern_path(&mut interner, module.module_path(db)) else {
+        return ScopedModuleTypes::WholeProgram;
+    };
+
+    match ipe_types::infer_module(&canonical.module, &canonical.exports, &deps, &mut interner) {
+        Ok(inference) => match inference.interface {
+            ipe_types::InterfaceStatus::Closed(interface) => {
+                drop(interner);
+                let types = normalize_module_types(project_module_types(&inference.solved, &home));
+                ScopedModuleTypes::PerModule {
+                    types: Arc::new(types),
+                    interface: Arc::new(interface),
+                }
+            }
+            ipe_types::InterfaceStatus::Open => ScopedModuleTypes::WholeProgram,
+        },
+        Err(_) => ScopedModuleTypes::WholeProgram,
+    }
+}
+
+/// The typed cross-module interface of one module, projected out of
+/// [`infer_module_scoped`] — the typed tier's invalidation firewall, the
+/// [`module_interface`] sibling one level up.
+///
+/// `None` means OPEN: no per-module interface is faithful for this module
+/// (see [`ScopedModuleTypes::WholeProgram`]), and every importer's scoped
+/// solve must fall back to the whole-program path. Deliberately a projection
+/// of the scoped solve rather than a second scheme summarizer: one
+/// scheme-computation code path can never drift from what the scoped solve
+/// actually instantiates.
+#[salsa::tracked]
+pub fn typed_interface(
+    db: &dyn Db,
+    root: SourceRoot,
+    module: SourceFile,
+) -> Option<Arc<ipe_types::TypedInterface>> {
+    match infer_module_scoped(db, root, module) {
+        ScopedModuleTypes::PerModule { interface, .. } => Some(interface),
+        ScopedModuleTypes::WholeProgram => None,
+    }
+}
+
+/// Type-check `module` (the per-module query).
+///
+/// Keyed `(root, entry, module)`; consumers read one module's types by name.
+/// Two bodies behind one contract:
+///
+/// - **Scoped path** (the common case): [`infer_module_scoped`] solved this
+///   module over its deps' CLOSED typed interfaces. The result depends on
+///   this module's own canonicalisation and its deps' `typed_interface`
+///   values only — an edit to an unrelated module leaves this memo
+///   untouched, and a dep body edit that preserves the dep's exported
+///   schemes backdates away before reaching it. On this path a red edit
+///   elsewhere in the program does not blank this module's types
+///   (diagnostics still come from the whole-program [`typecheck`]).
+/// - **Fallback path**: the whole-program projection, for modules the
+///   scoped tier cannot faithfully stand for (open interfaces, red scoped
+///   solve, import cycle) — exactly the joint solve's slice, with the joint
+///   solve's own error surfaced verbatim on a red program.
+///
+/// Both paths return NORMALIZED values (see [`normalize_module_types`]);
+/// the scoped-vs-whole parity gate proves them equal wherever the scoped
+/// path engages.
 #[salsa::tracked]
 pub fn typecheck_module(
     db: &dyn Db,
@@ -757,48 +989,24 @@ pub fn typecheck_module(
     entry: SourceFile,
     module: SourceFile,
 ) -> ModuleTypesResult {
-    let solved = typecheck(db, root, entry)?;
-    let home: Vec<Symbol> = {
-        let mut interner = db.interner().lock();
-        module
-            .module_path(db)
-            .iter()
-            .map(|segment| interner.intern(segment))
-            .collect::<Result<_, _>>()
-            .map_err(|d| (d, Vec::new()))?
-    };
-
-    let env = solved
-        .env
-        .iter()
-        .filter(|((h, _), _)| *h == home)
-        .map(|((_, name), ty)| (*name, ty.clone()))
-        .collect();
-    let regions = solved
-        .regions
-        .iter()
-        .filter(|((h, _), _)| *h == home)
-        .map(|((_, span), ty)| (*span, ty.clone()))
-        .collect();
-    let expected = solved
-        .expected
-        .iter()
-        .filter(|((h, _), _)| *h == home)
-        .map(|((_, span), ty)| (*span, ty.clone()))
-        .collect();
-    let bounds = solved
-        .bounds
-        .iter()
-        .filter(|((h, _), _)| *h == home)
-        .map(|((_, name), b)| (*name, b.clone()))
-        .collect();
-
-    Ok(Arc::new(ModuleTypes {
-        env,
-        regions,
-        expected,
-        bounds,
-    }))
+    match infer_module_scoped(db, root, module) {
+        ScopedModuleTypes::PerModule { types, .. } => Ok(types),
+        ScopedModuleTypes::WholeProgram => {
+            let solved = typecheck(db, root, entry)?;
+            let home: Vec<Symbol> = {
+                let mut interner = db.interner().lock();
+                module
+                    .module_path(db)
+                    .iter()
+                    .map(|segment| interner.intern(segment))
+                    .collect::<Result<_, _>>()
+                    .map_err(|d| (d, Vec::new()))?
+            };
+            Ok(Arc::new(normalize_module_types(project_module_types(
+                &solved, &home,
+            ))))
+        }
+    }
 }
 
 /// The memoized result of lowering [`linked_program`]'s whole-program merge

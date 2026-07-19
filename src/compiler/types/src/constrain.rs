@@ -1530,11 +1530,32 @@ impl<'a> Builder<'a> {
     /// [`Diagnostic::CompilerBug`] on an internal invariant violation (e.g. an
     /// arity mismatch between a binding's pattern count and its annotation, or
     /// an unbound local — both ruled out by canonicalisation).
-    #[allow(clippy::too_many_lines)] // declarative registration loops — every case listed explicitly for safety
     pub fn run(
         uf: &'a mut UnionFind<Content>,
         interner: &'a mut Interner,
         module: &canon::Module,
+    ) -> DResult<Generated> {
+        Self::run_seeded(uf, interner, module, &[], BTreeMap::new())
+    }
+
+    /// [`Self::run`] over ONE module of a multi-module program, seeded with
+    /// its dependencies' typed interfaces: `dep_unions` registers the deps'
+    /// constructor schemes (so a cross-module constructor reference or
+    /// pattern instantiates exactly as it does over the linked merge), and
+    /// `seed_top_level` pre-populates the `(home, name)` scheme table with
+    /// the deps' exported binding schemes (so a cross-module `VarTopLevel`
+    /// reference takes the ordinary instantiate-fresh-per-use-site path).
+    /// With empty seeds this IS [`Self::run`] — one code path, no drift.
+    ///
+    /// # Errors
+    /// Same conditions as [`Self::run`].
+    #[allow(clippy::too_many_lines)] // declarative registration loops — every case listed explicitly for safety
+    pub fn run_seeded(
+        uf: &'a mut UnionFind<Content>,
+        interner: &'a mut Interner,
+        module: &canon::Module,
+        dep_unions: &[&canon::Union],
+        seed_top_level: BTreeMap<(Vec<Symbol>, Symbol), Rc<Ty>>,
     ) -> DResult<Generated> {
         let builtins = Builtins::new(interner)?;
         let mut builder = Self {
@@ -1545,8 +1566,8 @@ impl<'a> Builder<'a> {
             expected: BTreeMap::new(),
             current_home: Vec::new(),
             constraints: Vec::new(),
-            top_level: BTreeMap::new(), // (home, name) → Ty
-            untyped: BTreeMap::new(),   // (home, name) → VarId
+            top_level: seed_top_level, // (home, name) → Ty
+            untyped: BTreeMap::new(),  // (home, name) → VarId
             field_accesses: Vec::new(),
             record_updates: Vec::new(),
             routed_live_checks: Vec::new(),
@@ -1572,8 +1593,10 @@ impl<'a> Builder<'a> {
         // constructor `C : field0 -> … -> T vars`; the result type applies the
         // union to its declared type variables (as `Ty::Var`s), and the field
         // types carry those same variables, so one shared instantiation map
-        // alpha-renames a generic constructor per use site.
-        for union in &module.unions {
+        // alpha-renames a generic constructor per use site. Seeded dep unions
+        // register after the module's own, mirroring how the linked merge
+        // carries every module's unions in one list.
+        for union in module.unions.iter().chain(dep_unions.iter().copied()) {
             // Use the union's own `home` (its original defining module path)
             // rather than `module.name`. After `link::link` merges N canonical
             // modules into one, every union retains its source-module path in
@@ -6723,6 +6746,186 @@ pub fn promote_untyped_boundaries(
     }
 
     Ok(schemes)
+}
+
+/// One step of the iterative [`reify_scheme`] work stack — the interface
+/// sibling of [`ZonkTask`], differing in the two places an interface must be
+/// faithful where a display read-back need not be: quantified variables map
+/// to CANONICAL tagged ids (deterministic, union-find-numbering-free), and an
+/// open record tail is PRESERVED as `RowTail::Open` (zonk presents every
+/// settled record as closed, which is fine for display but would silently
+/// close a row-polymorphic exported scheme).
+enum ReifyTask {
+    Visit(VarId),
+    BuildFun,
+    BuildCon {
+        module: Vec<Symbol>,
+        name: Symbol,
+        arity: usize,
+    },
+    BuildTuple {
+        arity: usize,
+    },
+    BuildRecord {
+        names: Vec<Symbol>,
+        tail: RowTail,
+    },
+}
+
+/// Reify one generalized untyped-binding scheme into an owned interface
+/// [`Ty`], or report the scheme OPEN.
+///
+/// A quantified root becomes `Ty::Var(tag_solver_var(k))` where `k` is the
+/// root's first-encounter index in this walk — canonical, so the same scheme
+/// reifies to the same bytes regardless of union-find numbering (the
+/// backdating property a typed interface exists for). A reachable residual
+/// variable that is NOT quantified — a plain `Flex` sharable program-wide, a
+/// `Super` obligation a later defaulting pass would conceal, a `Rigid`
+/// contamination — makes the scheme OPEN (`Ok(None)`): its final type can
+/// legitimately be pinned by an importer, so no per-module interface can
+/// stand for it. Must run BEFORE numeric/SQL defaulting: defaulting pins
+/// residual `Super` flexes to concrete types, which would disguise an open
+/// scheme as closed and let a scoped solve disagree with the joint one.
+///
+/// # Errors
+/// [`Diagnostic::CompilerBug`] on a union-find invariant violation or a
+/// structure over [`ZONK_NODE_LIMIT`] nodes; [`TypeError::StepBudgetExceeded`]
+/// on budget exhaustion.
+#[allow(clippy::too_many_lines)] // one task-stack state machine, mirrors `zonk` — splitting would obscure the Visit/Build pairing
+pub fn reify_scheme(
+    uf: &mut UnionFind<Content>,
+    budget: &mut Budget,
+    scheme: &UntypedScheme,
+) -> DResult<Option<Ty>> {
+    let mut work: Vec<ReifyTask> = vec![ReifyTask::Visit(scheme.root)];
+    let mut results: Vec<Ty> = Vec::new();
+    let mut canonical: BTreeMap<VarId, u32> = BTreeMap::new();
+    let mut nodes_left = ZONK_NODE_LIMIT;
+
+    let canonical_raw = |root: VarId, canonical: &mut BTreeMap<VarId, u32>| -> u32 {
+        let next = u32::try_from(canonical.len()).unwrap_or(u32::MAX);
+        tag_solver_var(*canonical.entry(root).or_insert(next))
+    };
+
+    while let Some(task) = work.pop() {
+        match task {
+            ReifyTask::Visit(v) => {
+                budget.tick()?;
+                nodes_left = nodes_left
+                    .checked_sub(1)
+                    .ok_or_else(|| Diagnostic::CompilerBug {
+                        where_: STAGE,
+                        detail: "type exceeded interface-reification node limit".to_owned(),
+                    })?;
+                let root = uf.find(v)?;
+                match uf.content(root)? {
+                    Content::Flex if scheme.quantified.contains_key(&root) => {
+                        results.push(Ty::Var(canonical_raw(root, &mut canonical)));
+                    }
+                    // A residual non-quantified variable: an importer may
+                    // still pin it, so the scheme is open.
+                    Content::Flex | Content::Rigid | Content::Super { .. } => {
+                        return Ok(None);
+                    }
+                    // `EmptyRecord` is only reachable on a direct call over a
+                    // bare tail — records route tails through `BuildRecord`
+                    // below — and falls back to `Ty::Unit` like `zonk` does.
+                    Content::Structure(FlatType::Unit | FlatType::EmptyRecord) => {
+                        results.push(Ty::Unit);
+                    }
+                    Content::Structure(FlatType::Fun(a, b)) => {
+                        work.push(ReifyTask::BuildFun);
+                        work.push(ReifyTask::Visit(b));
+                        work.push(ReifyTask::Visit(a));
+                    }
+                    Content::Structure(FlatType::Con { module, name, args }) => {
+                        let arity = args.len();
+                        work.push(ReifyTask::BuildCon {
+                            module,
+                            name,
+                            arity,
+                        });
+                        for a in args.into_iter().rev() {
+                            work.push(ReifyTask::Visit(a));
+                        }
+                    }
+                    Content::Structure(FlatType::Tuple(elems)) => {
+                        let arity = elems.len();
+                        work.push(ReifyTask::BuildTuple { arity });
+                        for e in elems.into_iter().rev() {
+                            work.push(ReifyTask::Visit(e));
+                        }
+                    }
+                    Content::Structure(FlatType::Record(fields, ext)) => {
+                        let names: Vec<Symbol> = fields.keys().copied().collect();
+                        let ext_root = uf.find(ext)?;
+                        let tail = match uf.content(ext_root)? {
+                            Content::Structure(FlatType::EmptyRecord) => RowTail::Closed,
+                            Content::Flex if scheme.quantified.contains_key(&ext_root) => {
+                                RowTail::Open(canonical_raw(ext_root, &mut canonical))
+                            }
+                            // A residual open tail an importer could still
+                            // grow — the scheme is open.
+                            _ => return Ok(None),
+                        };
+                        work.push(ReifyTask::BuildRecord { names, tail });
+                        for fv in fields.values().copied().rev() {
+                            work.push(ReifyTask::Visit(fv));
+                        }
+                    }
+                }
+            }
+            ReifyTask::BuildFun => {
+                let (Some(b), Some(a)) = (results.pop(), results.pop()) else {
+                    return Err(reify_underflow());
+                };
+                results.push(Ty::Fun(Box::new(a), Box::new(b)));
+            }
+            ReifyTask::BuildCon {
+                module,
+                name,
+                arity,
+            } => {
+                let split = results
+                    .len()
+                    .checked_sub(arity)
+                    .ok_or_else(reify_underflow)?;
+                let args = results.split_off(split);
+                results.push(Ty::Con { module, name, args });
+            }
+            ReifyTask::BuildTuple { arity } => {
+                let split = results
+                    .len()
+                    .checked_sub(arity)
+                    .ok_or_else(reify_underflow)?;
+                let elems = results.split_off(split);
+                results.push(Ty::Tuple(elems));
+            }
+            ReifyTask::BuildRecord { names, tail } => {
+                let split = results
+                    .len()
+                    .checked_sub(names.len())
+                    .ok_or_else(reify_underflow)?;
+                let tys = results.split_off(split);
+                let fields: BTreeMap<Symbol, Ty> = names.into_iter().zip(tys).collect();
+                results.push(Ty::Record(fields, tail));
+            }
+        }
+    }
+
+    match results.pop() {
+        Some(ty) if results.is_empty() => Ok(Some(ty)),
+        _ => Err(reify_underflow()),
+    }
+}
+
+/// The work-stack invariant was violated (only reachable via a compiler bug
+/// in `reify_scheme` itself, never from input).
+fn reify_underflow() -> Diagnostic {
+    Diagnostic::CompilerBug {
+        where_: STAGE,
+        detail: "reify_scheme result stack underflow".to_owned(),
+    }
 }
 
 /// A single step of the iterative [`zonk`] work stack.
