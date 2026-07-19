@@ -20,7 +20,7 @@ use std::process::{Command, Stdio};
 
 use ipe_backend::{EmittedProject, RelPath};
 use ipe_diagnostics::{DResult, Diagnostic};
-use ipe_ir::{ModPath, Program};
+use ipe_ir::{IrType, ModPath, Program};
 
 use crate::EmitCtx;
 use crate::crate_specs;
@@ -427,8 +427,45 @@ pub fn ipe_start() {
 }
 ";
 
-/// [`epilogue`] with the native `fn main` block replaced by [`WASM_ENTRY`].
-fn epilogue_wasm() -> DResult<String> {
+/// The `[wasm] mode = "hydrate"` second entry: parses island JSON as the
+/// user-declared `HydrationState` type (convention: `MainHydrationState`),
+/// converts via `fromHydrationState` (convention: `main_from_hydration_state`),
+/// and adopts the server-rendered DOM.  On any parse error it falls back to
+/// a clean `ipe_main()` init (fault-tolerant: no white screen on a tampered
+/// or stale island blob).
+const WASM_HYDRATE_ENTRY: &str = "\
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn hydrate(model_json: &str) {
+    match serde_json::from_str::<crate::MainHydrationState>(model_json) {
+        Ok(hs) => {
+            let model = crate::main_from_hydration_state(hs);
+            ipe_runtime::wasm::run_start(ipe_runtime::wasm::wasm_adopt_app::<
+                String, _, _, _, _, _,
+            >(
+                model,
+                crate::main_update,
+                crate::main_view,
+                crate::main_subscriptions,
+            ));
+        }
+        Err(e) => {
+            ipe_runtime::wasm::console_warn(&format!(
+                \"hydrate: island JSON rejected ({e}); falling back to clean init\"
+            ));
+            ipe_runtime::wasm::run_start(ipe_main());
+        }
+    }
+}
+";
+
+/// [`epilogue`] with the native `fn main` block replaced by [`WASM_ENTRY`],
+/// and — when `ctx.wasm_hydrate_mode` — a second `hydrate` wasm-bindgen
+/// export for fault-tolerant SSR takeover (M7 §"Fault-tolerant hydrate").
+///
+/// Convention-based naming: the entry module is always `Main`, so the Rust
+/// names are `MainHydrationState` (the `HydrationState` type alias) and
+/// `main_from_hydration_state` (the `fromHydrationState` projection).
+fn epilogue_wasm(ctx: &EmitCtx) -> DResult<String> {
     const BANNER: &str = "// ===========================================\n// ENTRY POINT\n";
     let full = epilogue()?;
     let head = full
@@ -442,6 +479,9 @@ fn epilogue_wasm() -> DResult<String> {
     out.push_str(BANNER);
     out.push_str("// ===========================================\n\n");
     out.push_str(WASM_ENTRY);
+    if ctx.wasm_hydrate_mode {
+        out.push_str(WASM_HYDRATE_ENTRY);
+    }
     Ok(out)
 }
 
@@ -1103,7 +1143,7 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
 
         match ctx.target {
             ipe_ir::Target::Native => out.push_str(&epilogue()?),
-            ipe_ir::Target::WasmClient => out.push_str(&epilogue_wasm()?),
+            ipe_ir::Target::WasmClient => out.push_str(&epilogue_wasm(ctx)?),
         }
 
         // ── G3: Webview main-thread entry switch ──────────────────────────────
@@ -1460,6 +1500,163 @@ fn assemble_project_files(
     Ok(EmittedProject { files, cargo_toml })
 }
 
+/// Return `true` when `ty` (or any type it structurally contains) is a
+/// server-surface or non-serde opaque type that must not appear as a field in
+/// a `HydrationState` record.
+///
+/// The gate is an **allowlist**: only data-only, serialisable `IrType`s pass.
+/// Function types, runtime handles, secret/SQL-fragment/crypto opaques, UI
+/// element types, and TEA-runtime opaques all fail.
+fn ir_type_contains_non_serde(ty: &IrType) -> bool {
+    match ty {
+        // ── Primitive data types — serialisable, no recursion needed ─────
+        IrType::Int
+        | IrType::Float
+        | IrType::Bool
+        | IrType::Str
+        | IrType::Char
+        | IrType::Unit
+        | IrType::Bytes
+        | IrType::Json
+        | IrType::Order
+        | IrType::Decimal
+        | IrType::Error
+        | IrType::ErrorKind
+        | IrType::ErrorDetails
+        | IrType::ErrorInfo
+        | IrType::PanicInfo
+        | IrType::TypeInfo
+        | IrType::Generic(_) => false,
+
+        // ── Serialisable container types — recurse into inner types ───────
+        IrType::Maybe(inner) | IrType::List(inner) | IrType::Set(inner) => {
+            ir_type_contains_non_serde(inner)
+        }
+        IrType::Result(a, b) => {
+            ir_type_contains_non_serde(a) || ir_type_contains_non_serde(b)
+        }
+        IrType::Dict(k, v) => {
+            ir_type_contains_non_serde(k) || ir_type_contains_non_serde(v)
+        }
+        IrType::Tuple(elems) => elems.iter().any(ir_type_contains_non_serde),
+        IrType::Record(fields) => fields.values().any(ir_type_contains_non_serde),
+        IrType::Enum { args, .. } => args.iter().any(ir_type_contains_non_serde),
+
+        // ── Function types — never serialisable ───────────────────────────
+        IrType::Fun(..) | IrType::FnOnceChain(..) => true,
+
+        // ── UI element types — not serialisable ───────────────────────────
+        IrType::Ui { .. } | IrType::UiPlain(_) => true,
+
+        // ── Non-serde server-surface / runtime-opaque types ───────────────
+        // These are either handles to server resources, async primitives, or
+        // types explicitly documented as non-serde (Secret, SqlFragment).
+        IrType::Task(_)
+        | IrType::Cmd(_)
+        | IrType::Sub(_)
+        | IrType::Decoder(_)
+        | IrType::Db
+        | IrType::ServerRequest
+        | IrType::ServerResponse
+        | IrType::ServerRoute
+        | IrType::ServerCookie
+        | IrType::StreamWriter
+        | IrType::HttpRequest
+        | IrType::WebSocketServer
+        | IrType::WebSocketServerCfg
+        | IrType::LiveReq
+        | IrType::LiveRoute(_)
+        | IrType::Secret
+        | IrType::SqlFragment
+        | IrType::CacheCfg
+        | IrType::CacheStats
+        | IrType::WebSocketClientCfg
+        | IrType::CsvDoc
+        | IrType::EmailMessage
+        | IrType::EmailAttachment
+        | IrType::EmailSesConfig
+        | IrType::EmailSmtpConfig
+        | IrType::EmailProvider => true,
+    }
+}
+
+/// Gate: when `ctx.wasm_hydrate_mode`, find the type named `HydrationState`
+/// in module `Main` and verify that every field is serialisation-safe.
+///
+/// A `HydrationState` with a non-serde field type (e.g. `Secret`, `Db`,
+/// `Task`, a function type) is a compile error — the emitted `hydrate` export
+/// serialises this type as JSON, so any such field would silently leak a
+/// server-side secret or produce a `cargo` type error.
+///
+/// The gate fires at compile time (during backend emission), giving the user
+/// a clear diagnostic rather than a mysterious `serde` bound failure from
+/// `rustc`.
+fn check_hydration_state_fields(ctx: &EmitCtx, program: &Program) -> DResult<()> {
+    if !ctx.wasm_hydrate_mode {
+        return Ok(());
+    }
+
+    // Find the module named `Main` in the program.
+    let main_sym = ctx.interner.lookup("Main");
+    let Some(main_sym) = main_sym else {
+        // No `Main` symbol at all — the program is not a Live app; the
+        // `hydrate` emit path will fail elsewhere with a clearer error.
+        return Ok(());
+    };
+
+    let main_module = program
+        .modules
+        .iter()
+        .find(|m| m.name.0 == [main_sym]);
+    let Some(main_module) = main_module else {
+        return Ok(());
+    };
+
+    // Find the `HydrationState` type def in `Main`.
+    let hs_sym = ctx.interner.lookup("HydrationState");
+    let Some(hs_sym) = hs_sym else {
+        // No `HydrationState` type — also valid (the hydrate path will use
+        // the convention-based name; if it is absent the emitted code will
+        // fail with a rust compile error, not a silent miscompile).
+        return Ok(());
+    };
+
+    let hs_type = main_module
+        .types
+        .iter()
+        .find(|td| {
+            let ipe_ir::TypeDef::Enum(def) = td;
+            def.name == hs_sym
+        });
+    let Some(ipe_ir::TypeDef::Enum(hs_def)) = hs_type else {
+        return Ok(());
+    };
+
+    // Walk every field of every variant.  `HydrationState` is expected to be
+    // a record alias (single unit variant with named fields), but we check all
+    // variants for completeness.
+    for variant in &hs_def.variants {
+        for field_ty in &variant.fields {
+            if ir_type_contains_non_serde(field_ty) {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "ipe_backend_rust::project::check_hydration_state_fields",
+                    detail: format!(
+                        "`HydrationState` has a non-serialisable field type \
+                         `{field_ty:?}`. \
+                         `HydrationState` is serialised as JSON in the WASM \
+                         hydration island; server-surface types (Db, Secret, \
+                         Task, function types, etc.) must not appear as fields. \
+                         Declare a separate client-safe type that contains only \
+                         the data the client needs."
+                    ),
+                });
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Render the `Spine` tier's text for `program` — everything that is
 /// program-wide rather than Ipê-module-owned (design doc §2.1/§2.3):
 /// the preamble banner, the `Spine` bucket's `EnumDef`s (the synthetic
@@ -1484,6 +1681,8 @@ fn assemble_project_files(
 /// `emit_record_struct`/`emit_db_projection_impls`/`runtime_bindings`/
 /// `epilogue` rendering, and the G3 Webview anchor assertion.
 pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
+    check_hydration_state_fields(ctx, program)?;
+
     let mut out = String::with_capacity(GOLDEN.len() + 4096);
     out.push_str(&preamble()?);
 
@@ -1526,7 +1725,7 @@ pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
 
     match ctx.target {
         ipe_ir::Target::Native => out.push_str(&epilogue()?),
-        ipe_ir::Target::WasmClient => out.push_str(&epilogue_wasm()?),
+        ipe_ir::Target::WasmClient => out.push_str(&epilogue_wasm(ctx)?),
     }
 
     // ── G3: Webview main-thread entry switch ──────────────────────────────

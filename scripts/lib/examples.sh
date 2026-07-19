@@ -126,7 +126,17 @@ is_web_example() {
   _shape_match "$1/src" 'Ipe\.Live|Live\.app|Server\.listen|Ipe\.Http\.Server'
 }
 
-# ── example_shape <dir>: tui|webview|fyne|server|live|cli ────────────────────
+# ── is_wasm_example <dir>: has a [wasm] section in sky.toml ─────────────────
+# The wasm shape is the only one detected from the project manifest rather than
+# from source imports, because `Live.app` also appears in wasm examples (the
+# same function emits `wasm_app` under --target wasm). The sky.toml `[wasm]`
+# section is the authoritative build-time signal.
+is_wasm_example() {
+  local toml="$1/sky.toml"
+  [ -f "$toml" ] && rg -q '^\[wasm\]' "$toml" 2>/dev/null
+}
+
+# ── example_shape <dir>: wasm|tui|webview|fyne|server|live|cli ───────────────
 # `_shape_match` strips Ipê comments — both `{- … -}` block/doc comments (which
 # can span lines) AND `--…` line comments — from the whole source before matching,
 # so prose that names a backend (e.g. a `{-| … like Ipe.Live … -}` doc comment on
@@ -137,8 +147,12 @@ _shape_match() { # $1=src dir  $2=regex
     | rg -q -e "$2" 2>/dev/null
 }
 example_shape() {
-  local s="$1/src"
-  if   _shape_match "$s" 'Ipe\.Tui|Tui\.app';               then echo tui
+  local d="$1" s="$1/src"
+  # wasm: detected from sky.toml [wasm] section, not from source imports,
+  # because Live.app also appears in wasm sources (it emits wasm_app under
+  # --target wasm). Check this BEFORE the live/server shape match.
+  if   is_wasm_example "$d";                                then echo wasm
+  elif _shape_match "$s" 'Ipe\.Tui|Tui\.app';               then echo tui
   elif _shape_match "$s" 'Ipe\.Webview|Webview\.app';        then echo webview
   elif _shape_match "$s" 'Fyne';                             then echo fyne
   elif _shape_match "$s" 'Ipe\.Live|Live\.app';              then echo live
@@ -180,6 +194,7 @@ equivalence_mode() {
     tui)     printf 'pty\n'      ;;
     webview) printf 'none\n'     ;;
     fyne)    printf 'none\n'     ;;
+    wasm)    printf 'none\n'     ;;
     *)       printf 'none\n'     ;;
   esac
 }
