@@ -17,7 +17,8 @@ use ipe_backend_rust::RustBackend;
 use ipe_diagnostics::{DResult, Diagnostic, IPE_I0201, IPE_L0200, IPE_N0012};
 use ipe_intern::{Interner, Symbol};
 use ipe_ir::{
-    BinOp, EnumDef, Expr, Func, FuncId, IrType, ModPath, Module, Program, TypeDef, Variant,
+    Arm, BinOp, EnumDef, Expr, Func, FuncId, IrType, Match, ModPath, Module, Pat, Program, TypeDef,
+    Variant,
 };
 
 /// A single-module program with the given types and funcs (no entry needed:
@@ -385,5 +386,97 @@ fn tuple_type_and_expr_emit_as_rust_tuples() -> DResult<()> {
         "tuple return type did not emit:\n{out}"
     );
     assert!(out.contains("(n, 1)"), "tuple expr did not emit:\n{out}");
+    Ok(())
+}
+
+/// CO-BACKEND-005: `Expr::Char` carrying anything but exactly one character
+/// is an internal invariant violation (the lexer's char-literal invariant
+/// broke somewhere upstream) — it must fail closed as a `CompilerBug`, never
+/// silently emit a Rust STRING literal in `char` position (invalid Rust,
+/// `cargo`-fails E0308 — the exit-0-then-cargo-fail shape THE SEAL forbids).
+#[test]
+fn malformed_char_literal_fails_closed_not_invalid_rust() -> DResult<()> {
+    let mut interner = Interner::new();
+    let main_mod = interner.intern("Main")?;
+    let f = interner.intern("bad")?;
+
+    let f_fn = Func {
+        id: FuncId::from_raw(0),
+        name: f,
+        home: ModPath(vec![]),
+        type_params: vec![],
+        params: vec![],
+        ret: IrType::Char,
+        // A malformed char literal — two characters, never producible by the
+        // real lexer, built directly to reach the emitter's fallback arm.
+        body: Expr::Char("ab".to_owned()),
+    };
+
+    let res = emit(&interner, &program(main_mod, vec![], vec![f_fn]));
+    assert!(
+        res.is_err(),
+        "a malformed char literal must fail closed, got {res:?}"
+    );
+    if let Err(err) = res {
+        assert!(
+            matches!(err, Diagnostic::CompilerBug { .. }),
+            "expected a CompilerBug, got {err:?}"
+        );
+    }
+    Ok(())
+}
+
+/// CO-BACKEND-005: a tuple-scrutinee `match` whose arm patterns disagree on
+/// arity (an internal invariant violation the frontend's Maranget check
+/// would never let through — built directly here) must fail closed as a
+/// `CompilerBug` when a later arm's pattern reaches past the column table
+/// sized from an earlier, narrower arm — never silently default the missing
+/// column to `str_mode: false, list_mode: false`, which can emit a binder of
+/// the wrong type (an exit-0-then-cargo-fail THE SEAL forbids).
+#[test]
+fn tuple_arm_wider_than_column_table_fails_closed() -> DResult<()> {
+    let mut interner = Interner::new();
+    let main_mod = interner.intern("Main")?;
+    let func = interner.intern("bad")?;
+    let narrow0 = interner.intern("narrow0")?;
+    let narrow1 = interner.intern("narrow1")?;
+    let wide0 = interner.intern("wide0")?;
+    let wide1 = interner.intern("wide1")?;
+    let wide2 = interner.intern("wide2")?;
+
+    // A 2-element scrutinee tuple; the first arm's arity (2) sizes the
+    // column table, but the second arm's pattern is a 3-element tuple.
+    let arms = vec![
+        Arm::new(
+            Pat::Tuple(vec![Pat::Var(narrow0), Pat::Var(narrow1)]),
+            Expr::Var(narrow0),
+        ),
+        Arm::new(
+            Pat::Tuple(vec![Pat::Var(wide0), Pat::Var(wide1), Pat::Var(wide2)]),
+            Expr::Var(wide0),
+        ),
+    ];
+    let scrutinee = Expr::Tuple(vec![Expr::Int(1), Expr::Int(2)]);
+    let f_fn = Func {
+        id: FuncId::from_raw(0),
+        name: func,
+        home: ModPath(vec![]),
+        type_params: vec![],
+        params: vec![],
+        ret: IrType::Int,
+        body: Expr::Match(Match::new_flat(scrutinee, arms)?),
+    };
+
+    let res = emit(&interner, &program(main_mod, vec![], vec![f_fn]));
+    assert!(
+        res.is_err(),
+        "a wider-than-scrutinee arm must fail closed, got {res:?}"
+    );
+    if let Err(err) = res {
+        assert!(
+            matches!(err, Diagnostic::CompilerBug { .. }),
+            "expected a CompilerBug, got {err:?}"
+        );
+    }
     Ok(())
 }
