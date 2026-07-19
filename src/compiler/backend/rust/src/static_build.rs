@@ -29,15 +29,27 @@ use ipe_diagnostics::{DResult, Diagnostic};
 ///
 /// Parse, don't validate: the CLI parses `--target` into this enum and
 /// refuses anything else, so an unverifiable triple can never reach cargo
-/// and violate the SEAL. Growing the set (aarch64 musl, Windows
-/// `+crt-static`, wasm) means adding a variant alongside a CI lane that
-/// proves it end-to-end.
+/// and violate the SEAL. Growing the set (Windows `+crt-static`, wasm) means
+/// adding a variant alongside a CI lane that proves it end-to-end.
+///
+/// Toolchain requirements per variant:
+/// - [`Self::X8664LinuxMusl`]: `musl-tools` (apt) + `x86_64-unknown-linux-musl`
+///   rustup target. Verified in CI on `ubuntu-latest`.
+/// - [`Self::Aarch64LinuxMusl`]: `gcc-aarch64-linux-gnu` + `musl-cross` (or
+///   `aarch64-linux-musl-gcc` from `musl.cc`) + `aarch64-unknown-linux-musl`
+///   rustup target + `qemu-user-static` for cross-run verification.
+///   CI: `ubuntu-24.04-arm` (native runner) or `ubuntu-latest` with the cross
+///   toolchain installed. See `.github/workflows/static.yml` `linux-static-arm64`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum StaticTriple {
     /// `x86_64-unknown-linux-musl` — fully static ELF, zero runtime deps.
     /// The default when `--static` is given without `--target`.
     #[default]
     X8664LinuxMusl,
+    /// `aarch64-unknown-linux-musl` — fully static AArch64 ELF, zero runtime
+    /// deps. Requires the `aarch64-unknown-linux-musl` rustup target and a
+    /// musl-capable AArch64 C linker (`aarch64-linux-musl-gcc` or equivalent).
+    Aarch64LinuxMusl,
 }
 
 impl StaticTriple {
@@ -46,6 +58,7 @@ impl StaticTriple {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::X8664LinuxMusl => "x86_64-unknown-linux-musl",
+            Self::Aarch64LinuxMusl => "aarch64-unknown-linux-musl",
         }
     }
 
@@ -56,12 +69,14 @@ impl StaticTriple {
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "x86_64-unknown-linux-musl" => Some(Self::X8664LinuxMusl),
+            "aarch64-unknown-linux-musl" => Some(Self::Aarch64LinuxMusl),
             _ => None,
         }
     }
 
     /// Every supported triple, for refusal messages.
-    pub const SUPPORTED: &'static [&'static str] = &["x86_64-unknown-linux-musl"];
+    pub const SUPPORTED: &'static [&'static str] =
+        &["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"];
 }
 
 /// The allocator linked into a static artifact.
@@ -334,9 +349,26 @@ mod tests {
             StaticTriple::parse("x86_64-unknown-linux-musl"),
             Some(StaticTriple::X8664LinuxMusl)
         );
-        assert_eq!(StaticTriple::parse("aarch64-unknown-linux-musl"), None);
+        assert_eq!(
+            StaticTriple::parse("aarch64-unknown-linux-musl"),
+            Some(StaticTriple::Aarch64LinuxMusl)
+        );
         assert_eq!(StaticTriple::parse("x86_64-unknown-linux-gnu"), None);
+        assert_eq!(StaticTriple::parse("aarch64-unknown-linux-gnu"), None);
         assert_eq!(StaticTriple::parse(""), None);
+    }
+
+    #[test]
+    fn aarch64_musl_cargo_config_pins_crt_static() {
+        let cfg = cargo_config(&StaticPlan {
+            triple: StaticTriple::Aarch64LinuxMusl,
+            allocator: StaticAllocator::Dlmalloc,
+        });
+        assert!(cfg.starts_with(CARGO_CONFIG_MARKER));
+        assert!(cfg.contains("[target.aarch64-unknown-linux-musl]"));
+        assert!(cfg.contains(r#""target-feature=+crt-static""#));
+        assert!(!cfg.contains("target-dir"), "must not shadow the user's pin");
+        assert!(!cfg.contains("linker"), "no linker pin — preflight owns tooling checks");
     }
 
     #[test]
