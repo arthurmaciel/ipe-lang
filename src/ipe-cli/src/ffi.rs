@@ -149,7 +149,26 @@ pub fn assemble_emit(
         return Ok(None);
     }
     let mut foreign_types: BTreeMap<String, String> = BTreeMap::new();
-    let mut dep_by_name: BTreeMap<String, String> = BTreeMap::new();
+    // The DIRECT FFI crates (registry names, `_`→`-` as the dep line renders them):
+    // these are the crates the app links against and MUST be pinned exactly; a
+    // version conflict on one of these is a genuine, unbuildable error.
+    let direct_crate_names: BTreeSet<String> = catalog
+        .iter()
+        .map(|c| c.slug.replace('_', "-"))
+        .collect();
+    // name → (version, unioned feature set). Cargo unifies features additively for
+    // one crate+version across the graph, so a multi-crate manifest whose members
+    // pin the SAME dependency (`async-stripe-shared`) at the SAME version but with
+    // DIFFERENT feature requests (bare from one, `serialize`/`deserialize` from
+    // another) is not a conflict — it is a union. A VERSION disagreement on a DIRECT
+    // FFI crate is a genuine conflict (refused); a version disagreement on a
+    // TRANSITIVE dep (e.g. `syn` 2.x from one member, 3.x from another — each member
+    // was inspected in its own jail with its own lockfile) is NOT ours to pin: Cargo
+    // resolves the transitive graph of the direct pins itself and legitimately links
+    // both majors of a build-dep. Such a dep is dropped from the emitted `[dependencies]`
+    // (recorded as unpinned) rather than exact-pinned to one arbitrary version.
+    let mut dep_by_name: BTreeMap<String, (String, BTreeSet<String>)> = BTreeMap::new();
+    let mut unpinned_transitives: BTreeSet<String> = BTreeSet::new();
     let mut bindings_source = String::from(
         "//! Foreign-crate FFI wrappers — one module per installed crate.\n\
          //! Generated from the project's `.ipe/cache/ffi/rust` artifacts.\n",
@@ -159,17 +178,34 @@ pub fn assemble_emit(
             foreign_types.insert(format!("{}.{name}", c.module_name), path.clone());
         }
         for line in &c.cargo_deps {
-            let name = line.split('=').next().unwrap_or(line).trim().to_owned();
-            match dep_by_name.get(&name) {
-                Some(prev) if prev != line => {
-                    return Err(CliError::UsageOwned(format!(
-                        "installed FFI crates pin dependency `{name}` to conflicting \
-                         lines:\n  {prev}\n  {line}\nre-add one of the crates so the \
-                         pins agree"
-                    )));
+            let Some((name, version, features)) = parse_dep_line(line) else {
+                return Err(CliError::UsageOwned(format!(
+                    "installed FFI crate `{}` emitted an unparsable dependency line: {line}",
+                    c.slug
+                )));
+            };
+            if unpinned_transitives.contains(&name) {
+                continue;
+            }
+            match dep_by_name.get_mut(&name) {
+                Some((prev_version, _)) if *prev_version != version => {
+                    if direct_crate_names.contains(&name) {
+                        return Err(CliError::UsageOwned(format!(
+                            "installed FFI crates pin dependency `{name}` to conflicting \
+                             versions:\n  ={prev_version}\n  ={version}\nre-add one of the \
+                             crates so the version pins agree"
+                        )));
+                    }
+                    // Transitive dep resolved to different versions in different member
+                    // jails — defer to Cargo's own transitive resolution.
+                    dep_by_name.remove(&name);
+                    unpinned_transitives.insert(name);
                 }
-                _ => {
-                    dep_by_name.insert(name, line.clone());
+                Some((_, prev_features)) => {
+                    prev_features.extend(features);
+                }
+                None => {
+                    dep_by_name.insert(name, (version, features));
                 }
             }
         }
@@ -181,12 +217,79 @@ pub fn assemble_emit(
             body = c.bindings_source
         );
     }
+    let dep_lines: Vec<String> = dep_by_name
+        .into_iter()
+        .map(|(name, (version, features))| {
+            render_merged_dep_line(&name, &version, &features)
+        })
+        .collect();
     Ok(Some(ipe_backend_rust::FfiEmit {
         foreign_types,
-        dep_lines: dep_by_name.into_values().collect(),
+        dep_lines,
         bindings_source,
         interface_modules: catalog.iter().map(|c| c.module_name.clone()).collect(),
     }))
+}
+
+/// Parse a generated dep line into `(name, version, features)`. Two shapes are
+/// produced by `cargo_dep_lines`:
+///   `name = "=X.Y.Z"`
+///   `name = { version = "=X.Y.Z", features = ["a", "b"] }`
+/// The version is returned WITHOUT the leading `=`. Returns `None` if neither
+/// shape matches (a malformed line the caller refuses).
+fn parse_dep_line(line: &str) -> Option<(String, String, BTreeSet<String>)> {
+    let (name, rest) = line.split_once('=')?;
+    let name = name.trim().to_owned();
+    let rest = rest.trim();
+    if let Some(inner) = rest.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
+        // Inline table: pull `version = "=X"` and `features = [...]`.
+        let version = extract_quoted_after(inner, "version")?
+            .trim_start_matches('=')
+            .to_owned();
+        let features = inner
+            .split_once("features")
+            .and_then(|(_, after)| after.split_once('['))
+            .and_then(|(_, list)| list.split_once(']'))
+            .map(|(list, _)| {
+                list.split(',')
+                    .map(|f| f.trim().trim_matches('"').to_owned())
+                    .filter(|f| !f.is_empty())
+                    .collect::<BTreeSet<String>>()
+            })
+            .unwrap_or_default();
+        Some((name, version, features))
+    } else {
+        // Bare: `"=X.Y.Z"`.
+        let version = rest.trim().trim_matches('"').trim_start_matches('=').to_owned();
+        if version.is_empty() {
+            return None;
+        }
+        Some((name, version, BTreeSet::new()))
+    }
+}
+
+/// Extract the first double-quoted string that follows `key` in `s`
+/// (`key = "value"` → `Some("value")`).
+fn extract_quoted_after(s: &str, key: &str) -> Option<String> {
+    let after = s.split_once(key)?.1;
+    let after = after.split_once('"')?.1;
+    let (value, _) = after.split_once('"')?;
+    Some(value.to_owned())
+}
+
+/// Render the merged dep line, matching `render_dep_line`'s two shapes so the
+/// emitted `Cargo.toml` is byte-identical to the single-crate case when there
+/// are no extra features.
+fn render_merged_dep_line(name: &str, version: &str, features: &BTreeSet<String>) -> String {
+    if features.is_empty() {
+        format!("{name} = \"={version}\"")
+    } else {
+        let quoted: Vec<String> = features.iter().map(|f| format!("\"{f}\"")).collect();
+        format!(
+            "{name} = {{ version = \"={version}\", features = [{}] }}",
+            quoted.join(", ")
+        )
+    }
 }
 
 /// All FFI seam outputs produced from a single project-scoped catalog load.
@@ -1073,9 +1176,91 @@ mod tests {
             cargo_deps: vec![line.to_owned()],
             wrapper_idents: BTreeSet::new(),
         };
+        // Two crates agreeing on a shared dep line dedupe to one.
         let ok = assemble_emit(&[mk("a", "serde = \"=1.0.1\""), mk("b", "serde = \"=1.0.1\"")]);
         assert!(ok.is_ok_and(|e| e.is_some_and(|e| e.dep_lines == vec!["serde = \"=1.0.1\""])));
-        let clash = assemble_emit(&[mk("a", "serde = \"=1.0.1\""), mk("b", "serde = \"=1.0.2\"")]);
+        // A VERSION disagreement on a DIRECT FFI crate (the dep name IS a catalog slug)
+        // is a real, unbuildable conflict → refused. (A transitive-dep version conflict
+        // instead defers to Cargo — see `transitive_version_conflict_defers_to_cargo`.)
+        let clash = assemble_emit(&[
+            mk("serde", "serde = \"=1.0.1\""),
+            mk("other", "serde = \"=1.0.2\""),
+        ]);
         assert!(clash.is_err());
+    }
+
+    #[test]
+    fn same_version_different_features_unify() {
+        // The stripe-manifest shape: `async-stripe-shared` pinned bare by one crate
+        // (as a transitive dep) and with features by another (its own self-line).
+        // Same version → Cargo-style feature union, NOT a conflict.
+        let mk = |slug: &str, line: &str| InstalledCrate {
+            slug: slug.to_owned(),
+            module_name: format!("Rust.{slug}"),
+            kernel_name: format!("Rust_{slug}"),
+            interface_source: String::new(),
+            bindings_source: String::new(),
+            opaque_types: BTreeMap::new(),
+            cargo_deps: vec![line.to_owned()],
+            wrapper_idents: BTreeSet::new(),
+        };
+        let e = assemble_emit(&[
+            mk("a", "async-stripe-shared = \"=1.0.0-rc.6\""),
+            mk(
+                "b",
+                "async-stripe-shared = { version = \"=1.0.0-rc.6\", features = [\"serialize\", \"deserialize\"] }",
+            ),
+        ])
+        .expect("union must not error")
+        .expect("emit present");
+        assert_eq!(
+            e.dep_lines,
+            vec![
+                "async-stripe-shared = { version = \"=1.0.0-rc.6\", features = [\"deserialize\", \"serialize\"] }"
+                    .to_owned()
+            ],
+            "features union into one line at the shared version"
+        );
+    }
+
+    #[test]
+    fn transitive_version_conflict_defers_to_cargo() {
+        // A TRANSITIVE dep (`syn`, not a catalog crate) pinned to two majors by two
+        // members — each inspected in its own jail — must NOT refuse the build and must
+        // NOT be exact-pinned to one arbitrary version. It is dropped so Cargo resolves
+        // the transitive graph of the direct pins itself.
+        let mk = |slug: &str, lines: Vec<&str>| InstalledCrate {
+            slug: slug.to_owned(),
+            module_name: format!("Rust.{slug}"),
+            kernel_name: format!("Rust_{slug}"),
+            interface_source: String::new(),
+            bindings_source: String::new(),
+            opaque_types: BTreeMap::new(),
+            cargo_deps: lines.into_iter().map(str::to_owned).collect(),
+            wrapper_idents: BTreeSet::new(),
+        };
+        let e = assemble_emit(&[
+            mk("a", vec!["a = \"=1.0.0\"", "syn = \"=2.0.119\""]),
+            mk("b", vec!["b = \"=1.0.0\"", "syn = \"=3.0.0\""]),
+        ])
+        .expect("transitive conflict must not error")
+        .expect("emit present");
+        assert!(
+            e.dep_lines.iter().all(|l| !l.starts_with("syn =")),
+            "the conflicting transitive `syn` is dropped, not pinned: {:?}",
+            e.dep_lines
+        );
+        assert!(
+            e.dep_lines.contains(&"a = \"=1.0.0\"".to_owned())
+                && e.dep_lines.contains(&"b = \"=1.0.0\"".to_owned()),
+            "the direct crates stay pinned: {:?}",
+            e.dep_lines
+        );
+        // A DIRECT crate version conflict is still a hard error.
+        let clash = assemble_emit(&[
+            mk("stripe", vec!["stripe = \"=1.0.0\""]),
+            mk("other", vec!["stripe = \"=2.0.0\""]),
+        ]);
+        assert!(clash.is_err(), "a direct-crate version conflict still refuses");
     }
 }
