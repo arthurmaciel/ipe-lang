@@ -46,6 +46,21 @@ fn deny(span: Span, qualifier: &str, name: &str) -> Diagnostic {
 
 /// Walk one expression with an explicit heap work-stack (a view/update body
 /// can nest arbitrarily deep; native recursion would risk the thread stack).
+/// Build a minimal single-def module whose body is `body_expr`.
+#[cfg(test)]
+fn single_def_module(interner: &mut Interner, body_expr: Expr_) -> Module {
+    use ipe_diagnostics::Located;
+    let main = vec![interner.intern("Main").expect("intern")];
+    let entry = interner.intern("main").expect("intern");
+    let def = Def::Untyped {
+        home: main.clone(),
+        name: Located::new(Span::DUMMY, entry),
+        patterns: Vec::new(),
+        body: Located::new(Span::DUMMY, body_expr),
+    };
+    Module { name: main, unions: Vec::new(), defs: vec![def] }
+}
+
 fn check_expr<'e>(root: &'e Expr, interner: &Interner) -> DResult<()> {
     let mut stack: Vec<&'e Expr> = vec![root];
     while let Some(e) = stack.pop() {
@@ -117,4 +132,86 @@ fn check_expr<'e>(root: &'e Expr, interner: &Interner) -> DResult<()> {
         }
     }
     Ok(())
+}
+
+/// Layer-1 red-team tests: the default-deny allowlist BLOCKS server-only
+/// kernels and FFI under `--target wasm`; wasm-available kernels pass.
+#[cfg(test)]
+mod tests {
+    use ipe_diagnostics::NameError;
+    use ipe_kernels::StdlibKernel;
+
+    use super::*;
+
+    fn intern(interner: &mut Interner, s: &str) -> ipe_intern::Symbol {
+        #[allow(clippy::expect_used)]
+        interner.intern(s).expect("intern must succeed in a test")
+    }
+
+    /// A server-only kernel (`Db.query`, `id: None` — unregistered) is denied
+    /// under `--target wasm`: it has no `WasmClient` denotation and must never
+    /// reach the bundle (it would either fail cargo or leak a server secret).
+    #[test]
+    fn server_only_kernel_is_denied() {
+        let mut interner = Interner::new();
+        let ipe_db = intern(&mut interner, "Ipe.Db");
+        let query = intern(&mut interner, "query");
+        let body = Expr_::VarKernel { id: None, module: ipe_db, name: query };
+        let module = single_def_module(&mut interner, body);
+        let err = check_wasm_client(&module, &interner)
+            .expect_err("Ipe.Db.query must be denied under --target wasm");
+        let Diagnostic::Name { msg: NameError::ServerOnlyKernelForWasm { qualifier, name }, .. } =
+            err
+        else {
+            panic!("expected ServerOnlyKernelForWasm, got {err:?}");
+        };
+        assert_eq!(qualifier.as_ref(), "Ipe.Db");
+        assert_eq!(name.as_ref(), "query");
+    }
+
+    /// A wasm-available kernel (`CmdNone`) carries a `WasmClient` denotation
+    /// and must pass the Layer-1 check without error.
+    #[test]
+    fn wasm_available_kernel_passes() {
+        let mut interner = Interner::new();
+        let ipe_cmd = intern(&mut interner, "Ipe.Cmd");
+        let none_sym = intern(&mut interner, "none");
+        let body = Expr_::VarKernel {
+            id: Some(StdlibKernel::CmdNone),
+            module: ipe_cmd,
+            name: none_sym,
+        };
+        let module = single_def_module(&mut interner, body);
+        check_wasm_client(&module, &interner)
+            .expect("Cmd.none is wasm-available and must pass the Layer-1 gate");
+    }
+
+    /// A foreign FFI call is always denied under `--target wasm` — the client's
+    /// only host surface is the fixed web-sys allowlist, not arbitrary crates.
+    #[test]
+    fn ffi_call_is_denied() {
+        let mut interner = Interner::new();
+        let ident = intern(&mut interner, "native_lib_do_something");
+        let body = Expr_::ForeignCall { ident, args: vec![] };
+        let module = single_def_module(&mut interner, body);
+        let err = check_wasm_client(&module, &interner)
+            .expect_err("FFI calls must be denied under --target wasm");
+        assert!(
+            matches!(
+                err,
+                Diagnostic::Name { msg: NameError::ServerOnlyKernelForWasm { .. }, .. }
+            ),
+            "expected ServerOnlyKernelForWasm, got {err:?}"
+        );
+    }
+
+    /// A program with no kernel calls (pure unit body) passes the gate — the
+    /// default-deny allowlist only fires on an EXPLICIT kernel reference.
+    #[test]
+    fn kernel_free_program_passes() {
+        let mut interner = Interner::new();
+        let module = single_def_module(&mut interner, Expr_::Unit);
+        check_wasm_client(&module, &interner)
+            .expect("a kernel-free program must pass the Layer-1 gate unconditionally");
+    }
 }

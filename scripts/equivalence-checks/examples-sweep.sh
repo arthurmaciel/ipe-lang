@@ -173,7 +173,32 @@ build_rust() {
   local d="$1" n="$2" tmo="${IPE_SWEEP_BUILD_TIMEOUT:-900}" tgt attempt ok=0
   local ipelog cargolog; ipelog="$(diag "$n" ipe.log)"; cargolog="$(diag "$n" cargo.log)"
   local staticargs=(); [ "$STATIC" = 1 ] && staticargs=(--static)
+  local shape; shape="$(example_shape "$d")"
   tgt="$(ipe_build_target "$d")"
+
+  # Wasm examples: `ipe build --target wasm` runs the full pipeline internally
+  # (cargo build --target wasm32-unknown-unknown → wasm-bindgen → optional
+  # wasm-opt). No separate `cargo build --manifest-path` step.
+  if [ "$shape" = wasm ]; then
+    for attempt in 1 2 3 4; do
+      if ( cd "$d" && timeout "$tmo" "$IPE_BIN" build "$tgt" --out sky-out/rust --target wasm >"$ipelog" 2>&1 ); then
+        ok=1; break
+      fi
+      if [ "$attempt" -lt 4 ] && \
+         rg -q 'unable to update registry|download of .* failed|curl failed|HTTP2 framing|spurious network error|Connection reset|operation timed out|failed to get response' "$ipelog"; then
+        sleep 5; continue
+      fi
+      break
+    done
+    if [ "$ok" != 1 ]; then BUILD_CELL="ipe-fail"; return 1; fi
+    # Verify the bundle actually landed (wasm-bindgen output).
+    if [ ! -f "$d/sky-out/rust/www/pkg/sky_app_bg.wasm" ]; then
+      BUILD_CELL="cargo-fail"; return 1
+    fi
+    WARN_CELL=0
+    BUILD_CELL="ok"; return 0
+  fi
+
   for attempt in 1 2 3 4; do
     # --runtime is left to ipe's auto-resolve (walks up to $REPO/src/runtime/rust/src/
     # sky_runtime); IPE_RUNTIME_DIR is exported by env.sh as a belt-and-braces.
@@ -182,7 +207,7 @@ build_rust() {
     fi
     # Transient cargo registry / network flake — back off + retry.
     if [ "$attempt" -lt 4 ] && \
-       grep -qiE 'unable to update registry|download of .* failed|curl failed|HTTP2 framing|spurious network error|Connection reset|operation timed out|failed to get response' "$ipelog"; then
+       rg -q 'unable to update registry|download of .* failed|curl failed|HTTP2 framing|spurious network error|Connection reset|operation timed out|failed to get response' "$ipelog"; then
       sleep 5; continue
     fi
     break
@@ -349,6 +374,34 @@ equivalence_for() {
 run_for() {
   local n="$1" shape="$2" bin="$3" rl; rl="$(diag "$n" run.log)"
   case "$shape" in
+    wasm)
+      # Serve the emitted www/ tree with a local static HTTP server, boot headless
+      # Chromium via wasm-verify.mjs, and run the named scenario (or smoke).
+      # $bin is the www/ directory (set by the sweep loop as the wasm sentinel).
+      local www_dir scenario node_bin wasm_log wrc
+      www_dir="$bin"
+      wasm_log="$(diag "$n" wasm.log)"
+      node_bin="${NODE:-node}"
+      if ! command -v "$node_bin" >/dev/null 2>&1; then
+        printf 'skip\twasm RUN: node not found (install Node.js)\n'; return 0
+      fi
+      local verify_mjs="$REPO/scripts/equivalence-checks/wasm-verify.mjs"
+      if [ ! -f "$verify_mjs" ]; then
+        printf 'skip\twasm RUN: wasm-verify.mjs not found\n'; return 0
+      fi
+      scenario="$(scenario_for "$n" 2>/dev/null || echo smoke)"
+      [ -z "$scenario" ] && scenario="smoke"
+      if timeout 60 "$node_bin" "$verify_mjs" "$www_dir" "$scenario" >"$wasm_log" 2>&1; then
+        printf 'ok\t(wasm browser scenario: %s)\n' "$scenario"
+      else
+        wrc=$?
+        if rg -q "did not mount\|WASM app\|timeout" "$wasm_log" 2>/dev/null; then
+          printf 'panic\twasm did not boot (see %s)\n' "$(basename "$wasm_log")"
+        else
+          printf 'panic\twasm scenario %s failed (exit %s; see %s)\n' "$scenario" "$wrc" "$(basename "$wasm_log")"
+        fi
+      fi
+      ;;
     cli)
       if exercise_cli "$bin" "$rl"; then printf 'ok\t\n'
       elif grep -qiE "$PANIC_RE" "$rl"; then printf 'panic\tcli panicked\n'
@@ -464,6 +517,12 @@ for d in "${EXAMPLES[@]}"; do
   build_cell="ok"
   printf '%s\t%s\n' "$n" "${WARN_CELL:-0}" >>"$WARNS"
   rbin="$(resolve_bin "$d")"
+
+  # Wasm examples have no native binary; pass the www/ path as the "bin"
+  # sentinel so run_for can locate the bundle without resolve_bin.
+  if [ "$shape" = wasm ] && [ "$BUILD_ONLY" != 1 ]; then
+    rbin="$d/sky-out/rust/www"
+  fi
 
   if [ "$BUILD_ONLY" = 1 ] || [ -z "$rbin" ]; then
     [ -z "$rbin" ] && { run_cell="noserve"; note="no binary resolved after build"; }
