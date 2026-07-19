@@ -7,7 +7,7 @@ entirely by the Ipê compiler, no hand-rolled glue.
 This example used to be a two-process spike: a Ipe.Http.Server on
 one side + a hand-rolled `webview_go` shim on the other. After
 bug #370 landed (Ipe.Webview now spawns a 127.0.0.1 loopback http
-server when `sky.toml`'s `[live].static` is set), the whole
+server when `ipe.toml`'s `[live].static` is set), the whole
 two-process dance collapses into a single Ipê source file.
 
 > **What this proves**: the same Ipê source you'd write for a
@@ -60,7 +60,7 @@ just escalated — flag in the PR.
 ## Files
 
 ```
-sky.toml                 ← [live].static = "static" — the bug #370 gate
+ipe.toml                 ← [live].static = "static" — the bug #370 gate
 src/Main.ipe             ← Webview.app cfg + view that emits the HUD + canvas + script tags
 static/three.min.js      ← Three.js r158 UMD build (vendored, ~636 KB)
 static/scene.js          ← Animated 3D scene + HUD probes
@@ -80,7 +80,7 @@ still exposes a global `THREE` — perfect for a zero-build spike.
 
 ## How the loopback works (bug #370)
 
-When `sky.toml` declares `[live].static = "static"`, the Sky
+When `ipe.toml` declares `[live].static = "static"`, the Sky
 compiler emits a `SetSkyDefault("LIVE_STATIC_DIR", "static")`
 into the program's `init()`. At runtime, `Ipe.Webview` checks
 that env var:

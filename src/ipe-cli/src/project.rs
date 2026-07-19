@@ -1,15 +1,15 @@
 //! Multi-module project manifest parsing, module discovery, import graph, and
 //! topological sort.
 //!
-//! The `sky.toml` format is a minimal subset: only `[project]` and `name` / the
+//! The `ipe.toml` format is a minimal subset: only `[project]` and `name` / the
 //! source root (`src/`) are significant. No external TOML crate is used —
 //! the relevant structure is simple enough for a line-by-line parser.
 //!
 //! # Discovery
 //!
-//! Given a project directory (containing `sky.toml`), the driver:
+//! Given a project directory (containing `ipe.toml`), the driver:
 //!
-//! 1. Reads `sky.toml` to obtain the project name and confirm the source root
+//! 1. Reads `ipe.toml` to obtain the project name and confirm the source root
 //!    exists (`src/` by default).
 //! 2. Walks `src/` recursively, collecting every `*.ipe` file.
 //! 3. Maps each file path to a module name by:
@@ -35,23 +35,23 @@ use crate::CliError;
 // Public types
 // ---------------------------------------------------------------------------
 
-/// The parsed, validated content of a `sky.toml` manifest.
+/// The parsed, validated content of a `ipe.toml` manifest.
 #[derive(Clone, Debug)]
 pub struct ProjectManifest {
     /// The project name (from `[project] name = "…"`).
     pub name: String,
-    /// Absolute path to the project root directory (where `sky.toml` lives).
+    /// Absolute path to the project root directory (where `ipe.toml` lives).
     pub root: PathBuf,
     /// Absolute path to the source root (`<root>/src` by default).
     pub src_root: PathBuf,
     /// The SQL driver the emitted project targets (from `[database] driver
     /// = "…"`). Defaults to [`ipe_backend_rust::DbDriver::Sqlite`] when the
     /// `[database]` section (or the `driver` key within it) is absent — the
-    /// documented default in `AGENTS.md`'s `sky.toml` schema table.
+    /// documented default in `AGENTS.md`'s `ipe.toml` schema table.
     pub driver: ipe_backend_rust::DbDriver,
     /// The `[rust]` static-build request layer (`static` / `target` /
     /// `allocator` / `allowSlowAllocator`) — the lowest-precedence layer
-    /// (CLI > env > `sky.toml`) of `crate::build_plan::resolve`'s input.
+    /// (CLI > env > `ipe.toml`) of `crate::build_plan::resolve`'s input.
     /// Every field defaults to unset when the section (or key) is absent.
     /// Malformed values (a bad bool, an unknown allocator) are refused at
     /// parse time, never silently ignored.
@@ -62,7 +62,7 @@ pub struct ProjectManifest {
     pub wasm: WasmConfig,
 }
 
-/// `[wasm]` `sky.toml` section (spec: `docs/architecture/wasm-target.md` Q6
+/// `[wasm]` `ipe.toml` section (spec: `docs/architecture/wasm-target.md` Q6
 /// "Opt-in mechanism").
 ///
 /// ```toml
@@ -100,7 +100,7 @@ pub struct WasmConfig {
 /// Denies `*_SECRET`, `*_TOKEN`, `*_KEY`, `*_PASSWORD`, `DATABASE_URL`, and
 /// the internal `IPE_*` namespace. An allowlisted name matching this is a
 /// BUILD error (parse time), forcing the author to confirm — never a silent
-/// drop, never a runtime-only refusal. Case-insensitive (`sky.toml` authors
+/// drop, never a runtime-only refusal. Case-insensitive (`ipe.toml` authors
 /// may write either case; the runtime env-var namespace itself is
 /// case-sensitive POSIX convention, but a same-name-different-case entry is
 /// exactly the kind of "did they mean the secret" ambiguity this gate exists
@@ -124,7 +124,7 @@ fn validate_public_env(names: &[String]) -> Result<(), CliError> {
     for name in names {
         if is_denylisted_public_env_name(name) {
             return Err(CliError::UsageOwned(format!(
-                "sky.toml: [wasm] publicEnv lists {name:?}, which matches the secret-name \
+                "ipe.toml: [wasm] publicEnv lists {name:?}, which matches the secret-name \
                  denylist (*_SECRET / *_TOKEN / *_KEY / *_PASSWORD / DATABASE_URL / the \
                  internal IPE_* namespace) — a secret environment variable can never be \
                  allowlisted into the public wasm bundle, allowlisted or not"
@@ -137,13 +137,13 @@ fn validate_public_env(names: &[String]) -> Result<(), CliError> {
 /// Parse a TOML string array `["a", "b", "c"]` — the one array shape
 /// `[wasm] publicEnv` needs. Each element must be a double-quoted string;
 /// whitespace around commas/brackets is tolerated. Not a general TOML array
-/// parser (this file's `sky.toml` reader is a deliberately minimal line
+/// parser (this file's `ipe.toml` reader is a deliberately minimal line
 /// parser, not a full TOML implementation — see the module doc).
 fn parse_string_array(raw: &str) -> Result<Vec<String>, CliError> {
     let trimmed = raw.trim();
     let Some(inner) = trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']')) else {
         return Err(CliError::UsageOwned(format!(
-            "sky.toml: [wasm] publicEnv must be a `[\"NAME\", …]` array, got: {raw}"
+            "ipe.toml: [wasm] publicEnv must be a `[\"NAME\", …]` array, got: {raw}"
         )));
     };
     let inner = inner.trim();
@@ -157,7 +157,7 @@ fn parse_string_array(raw: &str) -> Result<Vec<String>, CliError> {
             let unquoted = item.strip_prefix('"').and_then(|s| s.strip_suffix('"'));
             unquoted.map(str::to_owned).ok_or_else(|| {
                 CliError::UsageOwned(format!(
-                    "sky.toml: [wasm] publicEnv entry must be a quoted string, got: {item}"
+                    "ipe.toml: [wasm] publicEnv entry must be a quoted string, got: {item}"
                 ))
             })
         })
@@ -203,13 +203,13 @@ fn parse_db_driver(s: &str) -> Result<ipe_backend_rust::DbDriver, CliError> {
         "sqlite" => Ok(ipe_backend_rust::DbDriver::Sqlite),
         "postgres" | "postgresql" => Ok(ipe_backend_rust::DbDriver::Postgres),
         other => Err(CliError::UsageOwned(format!(
-            "sky.toml: [database] driver = {other:?} is not supported \
+            "ipe.toml: [database] driver = {other:?} is not supported \
              (expected \"sqlite\" or \"postgres\")"
         ))),
     }
 }
 
-/// Parse a `sky.toml` file and return a [`ProjectManifest`].
+/// Parse a `ipe.toml` file and return a [`ProjectManifest`].
 ///
 /// The format recognised:
 /// ```toml
@@ -238,7 +238,7 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
         source: e,
     })?;
 
-    // `sky.toml` schema: `name` may sit at the top level (Sky's own examples) or
+    // `ipe.toml` schema: `name` may sit at the top level (Sky's own examples) or
     // under `[project]`; the source root comes from `[source] root = "…"`,
     // defaulting to `src`; the driver comes from `[database] driver = "…"`,
     // defaulting to sqlite. `section` is the empty string at the top level.
@@ -300,12 +300,12 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
         opt_level: wasm_opt_level,
     };
 
-    let name = name.ok_or(CliError::Usage("sky.toml: missing a `name = \"…\"` entry"))?;
+    let name = name.ok_or(CliError::Usage("ipe.toml: missing a `name = \"…\"` entry"))?;
 
     let src_root = root.join(src_rel.as_deref().unwrap_or("src"));
     if !src_root.is_dir() {
         return Err(CliError::Usage(
-            "sky.toml: the source root directory does not exist",
+            "ipe.toml: the source root directory does not exist",
         ));
     }
 
@@ -319,14 +319,14 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
     // time — the same posture as `[database] driver` above.
     let static_request = crate::build_plan::StaticRequestLayer {
         static_build: rust_static
-            .map(|v| crate::build_plan::parse_bool("sky.toml: [rust] static", &v))
+            .map(|v| crate::build_plan::parse_bool("ipe.toml: [rust] static", &v))
             .transpose()?,
         target: rust_target,
         allocator: rust_allocator
             .map(|v| crate::build_plan::AllocatorChoice::parse(&v))
             .transpose()?,
         allow_slow_allocator: rust_allow_slow
-            .map(|v| crate::build_plan::parse_bool("sky.toml: [rust] allowSlowAllocator", &v))
+            .map(|v| crate::build_plan::parse_bool("ipe.toml: [rust] allowSlowAllocator", &v))
             .transpose()?,
     };
 
@@ -590,18 +590,18 @@ mod tests {
             "module Main exposing (main)\nmain = 0\n",
         )
         .expect("write Main.ipe");
-        let toml_path = tmp.join("sky.toml");
+        let toml_path = tmp.join("ipe.toml");
         fs::write(
             &toml_path,
             format!("[project]\nname = \"test\"\n{database_section}"),
         )
-        .expect("write sky.toml");
+        .expect("write ipe.toml");
         toml_path
     }
 
     /// No `[database]` section at all →
     /// the manifest defaults to `DbDriver::Sqlite`, matching the documented
-    /// `sky.toml` schema default.
+    /// `ipe.toml` schema default.
     #[test]
     fn parse_manifest_no_database_section_defaults_to_sqlite() {
         let toml_path = write_manifest("no_db_section", "");
@@ -872,7 +872,7 @@ import String
 
     /// `IPE_AUTH_TOKEN_SECRET` can be neither read (no `System.getenv`
     /// denotation for wasm — Layer 1) nor allowlisted: listing it in
-    /// `[wasm] publicEnv` is a BUILD error at `sky.toml` parse time, never a
+    /// `[wasm] publicEnv` is a BUILD error at `ipe.toml` parse time, never a
     /// silently-dropped entry and never a runtime-only refusal.
     #[test]
     fn public_env_rejects_the_auth_secret_at_parse_time() {

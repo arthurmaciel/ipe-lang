@@ -2073,13 +2073,13 @@ where
                 )
         };
 
-        // sky.toml `[live] static` (baked as IPE_LIVE_STATIC_DIR) → serve files at
+        // ipe.toml `[live] static` (baked as IPE_LIVE_STATIC_DIR) → serve files at
         // /static/* via ServeDir (Go parity: live.go staticURL "/static"). MUST be
         // added before the `/*path` page catch-all so a /static/<file> request hits
         // ServeDir, not the page handler (which would return HTML). ServeDir blocks
         // `..` path traversal by construction (percent-decodes first, so `%2e%2e` is
         // caught too). NOTE: like Go's http.FileServer it FOLLOWS symlinks inside the
-        // dir — the dir is author-controlled (sky.toml [live] static), so that is the
+        // dir — the dir is author-controlled (ipe.toml [live] static), so that is the
         // intended contract + Go-parity, NOT a confinement guarantee. Absent/empty →
         // no static mount.
         if let Some(dir) = crate::system::read_env_var("IPE_LIVE_STATIC_DIR")

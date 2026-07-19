@@ -5617,7 +5617,7 @@ struct KernelUsage {
     /// The `Ipe.Email` `Email.send` kernel.
     email: bool,
     /// The `Ipe.Env` `Env.public` kernel — gates emitting the per-project
-    /// `env_public.rs` (built from `sky.toml`'s `[wasm] publicEnv` allowlist).
+    /// `env_public.rs` (built from `ipe.toml`'s `[wasm] publicEnv` allowlist).
     env_public: bool,
     /// Any foreign-crate FFI wrapper call ([`Callee::Ffi`]) — gates the
     /// emitted `mod ffi;` declaration + bound-crate `Cargo.toml` deps.

@@ -41,7 +41,7 @@ pub use preamble::{epilogue, preamble};
 
 /// Which SQL database driver the emitted project targets.
 ///
-/// Selected by `sky.toml`'s `[database] driver` key
+/// Selected by `ipe.toml`'s `[database] driver` key
 /// (`crates/ipe/src/project.rs::DbDriver`, converted at the `ipe` →
 /// `ipe_backend_rust` boundary via [`RustBackend::with_db_driver`]) — drives
 /// the `ipe_runtime/config.rs` template and `Cargo.toml` sqlx feature
@@ -119,7 +119,7 @@ impl<'a> RustBackend<'a> {
         self
     }
 
-    /// Select the SQL driver the emitted project targets (from `sky.toml`'s
+    /// Select the SQL driver the emitted project targets (from `ipe.toml`'s
     /// `[database] driver`). No-op on programs that don't use any Db kernel.
     #[must_use]
     pub const fn with_db_driver(mut self, driver: DbDriver) -> Self {
@@ -136,7 +136,7 @@ impl<'a> RustBackend<'a> {
         self
     }
 
-    /// Supply the `[wasm] publicEnv` allowlist (from `sky.toml`, already
+    /// Supply the `[wasm] publicEnv` allowlist (from `ipe.toml`, already
     /// validated against the secret-name denylist at parse time — see
     /// `ipe_cli::project::is_denylisted_public_env_name`). No-op on programs
     /// that call no `Env.public`. Threaded through regardless of
@@ -371,7 +371,7 @@ pub(crate) struct EmitCtx<'a> {
     ///   values to the runtime's `SqlParam`.
     pub(crate) uses_db: bool,
     /// Which SQL driver the emitted `Cargo.toml` / `ipe_runtime/config.rs`
-    /// target when [`Self::uses_db`] is set (`sky.toml`'s `[database] driver`,
+    /// target when [`Self::uses_db`] is set (`ipe.toml`'s `[database] driver`,
     /// threaded in via [`RustBackend::with_db_driver`]). Meaningless / ignored
     /// when `uses_db` is `false`.
     pub(crate) db_driver: DbDriver,
@@ -460,12 +460,12 @@ pub(crate) struct EmitCtx<'a> {
     /// appends `pub mod env_public; pub use env_public::*;` to the emitted
     /// `ipe_runtime/mod.rs`, on EITHER target.
     pub(crate) uses_env_public: bool,
-    /// The `[wasm] publicEnv` allowlist (`sky.toml`, threaded in via
+    /// The `[wasm] publicEnv` allowlist (`ipe.toml`, threaded in via
     /// [`RustBackend::with_wasm_public_env`]) — already validated against the
-    /// secret-name denylist at `sky.toml` parse time. Meaningless / ignored
+    /// secret-name denylist at `ipe.toml` parse time. Meaningless / ignored
     /// when [`Self::uses_env_public`] is `false`.
     pub(crate) wasm_public_env: Vec<String>,
-    /// `true` when `[wasm] mode = "hydrate"` was set in `sky.toml`. When set,
+    /// `true` when `[wasm] mode = "hydrate"` was set in `ipe.toml`. When set,
     /// the emitted wasm epilogue includes a `#[wasm_bindgen] pub fn hydrate(…)`
     /// export in addition to the `#[wasm_bindgen(start)] ipe_start` entry —
     /// the fault-tolerant island parse + `wasm_adopt_app` fallback path (M7).

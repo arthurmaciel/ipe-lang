@@ -1,7 +1,7 @@
 # Ipê examples
 
 This directory contains the Ipê-native first-party examples. Each is a
-self-contained Ipê project (a `sky.toml` manifest plus source under `src/`)
+self-contained Ipê project (a `ipe.toml` manifest plus source under `src/`)
 that builds with `ipe build` and targets the Rust backend.
 
 ## First-party examples
@@ -38,12 +38,12 @@ the sweep. The materialised trees are git-ignored.
 ```sh
 # Build and run a CLI example
 cd examples/41-money-allocate-regression
-ipe build sky.toml --out sky-out/rust
+ipe build ipe.toml --out sky-out/rust
 cargo run --manifest-path sky-out/rust/Cargo.toml
 
 # Build a WASM example (outputs to sky-out/rust/www/)
 cd examples/45-wasm-spa
-ipe build sky.toml --out sky-out/rust --target wasm
+ipe build ipe.toml --out sky-out/rust --target wasm
 ```
 
 Or use the sweep to build and run all in-scope examples at once:

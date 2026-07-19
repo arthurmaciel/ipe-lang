@@ -29,7 +29,7 @@ fn css_manifest() -> PathBuf {
         .join("tests")
         .join("fixtures")
         .join("spike-css-source")
-        .join("sky.toml")
+        .join("ipe.toml")
 }
 
 /// The compiled-source `Ipe.Css` resolves + lowers like a user module: the

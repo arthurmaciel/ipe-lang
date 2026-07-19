@@ -26,7 +26,7 @@
 //!   nested `{- {- -} -}` comment; both are skipped and the program prints.
 //!   Output: `"ok"`.
 //!
-//! The multi-module positive uses `ipe::build_project` (a `sky.toml` workspace
+//! The multi-module positive uses `ipe::build_project` (a `ipe.toml` workspace
 //! with a `Lib` module) then runs the emitted binary:
 //!
 //! * `mm_qualtype` — `Lib` exposes `type Box a = Box a`; `Main` annotates a
@@ -128,7 +128,7 @@ fn qualtype_project_builds_and_prints_42() {
     let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
-    let built = ipe::build_project(&dir.join("sky.toml"), &out, &runtime());
+    let built = ipe::build_project(&dir.join("ipe.toml"), &out, &runtime());
     assert!(
         built.is_ok(),
         "build_project failed for {name}: {:?}",
@@ -224,7 +224,7 @@ fn unknown_module_in_annotation_is_sky_n0004() {
     let out = std::env::temp_dir().join(format!("skyc_{name}"));
     let _ = std::fs::remove_dir_all(&out);
 
-    let res = ipe::build_project(&dir.join("sky.toml"), &out, &runtime());
+    let res = ipe::build_project(&dir.join("ipe.toml"), &out, &runtime());
     assert!(res.is_err(), "{name} must fail to compile");
     let Err(err) = res else { return };
     assert_eq!(

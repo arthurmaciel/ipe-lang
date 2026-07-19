@@ -22,16 +22,16 @@ contains no CLI-partition items — all findings below are new.
 - principle: P1 — no foothold from untrusted input; parse-don't-validate at the trust boundary
 - location: `src/ipe-cli/src/ffi.rs:26-40` (`find_cache_root` walks to filesystem root), `src/ipe-cli/src/ffi.rs:126-131` (`bindings_source` spliced verbatim into the emitted `src/ffi.rs`), consumed at `src/ipe-cli/src/lib.rs:429-441`
 - reachability: any `ipe build`/`ipe run` of a project whose directory has an attacker-writable ancestor — e.g. a project checked out under `/tmp/<dir>` on a multi-user host, where another user pre-plants `/tmp/.ipe/cache/ffi/rust`. The walk stops at the FIRST hit, which may be above the project root and above any directory the user considers theirs.
-- problem: the installed-crate catalog is discovered by walking UP from the entry with no stop at the project root (`sky.toml`) and no ownership check. Catalog artifacts are attacker-self-consistent files whose `bindings_source` is concatenated verbatim into the emitted project's Rust source; `ipe run` then compiles and executes it. A directory position alone (not any action by the user on the planted files) silently expands the trusted-code set.
-- fix direction: stop the walk at the project root (the `sky.toml` directory / entry's ancestor chain up to it only), or require the cache dir to be under the manifest root.
+- problem: the installed-crate catalog is discovered by walking UP from the entry with no stop at the project root (`ipe.toml`) and no ownership check. Catalog artifacts are attacker-self-consistent files whose `bindings_source` is concatenated verbatim into the emitted project's Rust source; `ipe run` then compiles and executes it. A directory position alone (not any action by the user on the planted files) silently expands the trusted-code set.
+- fix direction: stop the walk at the project root (the `ipe.toml` directory / entry's ancestor chain up to it only), or require the cache dir to be under the manifest root.
 - prior: new
 
 ## CLI-003 · wasm × static composition gate covers only the CLI flag layer
 - severity: medium
 - axis: correctness
 - principle: P2 + make-invalid-states-unrepresentable — a gate enforced at one of three precedence layers is a bypassable gate
-- location: `src/ipe-cli/src/lib.rs:1464-1473` (refusal checks `static_flags` only), `src/ipe-cli/src/lib.rs:1506` (`resolve_static_plan` still merges env + `sky.toml` layers), `src/ipe-cli/src/lib.rs:938-963` (`write_emitted_project` applies the plan to the wasm project)
-- reachability: documented workflows compose it: a project with `[rust] static = true` in `sky.toml` (or `IPE_STATIC=1` in the environment) built with `ipe build --target wasm`.
+- location: `src/ipe-cli/src/lib.rs:1464-1473` (refusal checks `static_flags` only), `src/ipe-cli/src/lib.rs:1506` (`resolve_static_plan` still merges env + `ipe.toml` layers), `src/ipe-cli/src/lib.rs:938-963` (`write_emitted_project` applies the plan to the wasm project)
+- reachability: documented workflows compose it: a project with `[rust] static = true` in `ipe.toml` (or `IPE_STATIC=1` in the environment) built with `ipe build --target wasm`.
 - problem: `--target wasm` + `--static`/`--allocator` is refused, but only when the static request arrives via CLI flags. When it arrives via env or manifest, `resolve_static_plan` resolves a full musl `StaticPlan` and the build proceeds with `target: WasmClient` + `static_plan: Some(..)`: the musl preflight runs (refusing a perfectly valid wasm build on machines without musl-gcc / the musl std), and on machines that pass it the wasm cdylib `Cargo.toml` gets `staticize_manifest` surgery plus a generated `.cargo/config.toml` — a nonsense artifact configuration (or a `CompilerBug` "manifest anchor drift" error) for a build the user asked nothing static of. `ipe run --target wasm` similarly falls into static-triple resolution with a misleading `TargetRequiresStatic`/`UnknownStaticTarget` message instead of a "run has no wasm denotation" refusal.
 - fix direction: decide the wasm-vs-native axis BEFORE merging static layers and force the merged static request to `None` (or a loud refusal naming the layer) under `Target::WasmClient`.
 - prior: new
@@ -51,7 +51,7 @@ contains no CLI-partition items — all findings below are new.
 - axis: correctness
 - principle: P2 — the CLI accepts an argument then silently does something else; §0 no silent divergence
 - location: `src/ipe-cli/src/lib.rs:1217` (`entry_path = vec!["Main"]` hardcoded in `build_project_with_options`), routing at `src/ipe-cli/src/lib.rs:1504,1519-1522`; misleading fallout at `src/ipe-cli/src/lib.rs:633-635`
-- reachability: any project with a `sky.toml`: `ipe build src/Other.ipe` (a second entry, a scratch module, or a typo'd path — the named file's existence is never even checked) builds `Main` instead, exit 0.
+- reachability: any project with a `ipe.toml`: `ipe build src/Other.ipe` (a second entry, a scratch module, or a typo'd path — the named file's existence is never even checked) builds `Main` instead, exit 0.
 - problem: once the upward walk finds a manifest, the user-supplied `.ipe` path is used only to LOCATE the manifest; compilation always roots at `Main`. Building a non-Main entry silently produces the Main artifact; a project missing `src/Main.ipe` surfaces as the internal-flavoured `"internal: entry module not in source map"` usage error rather than a user-facing "project has no Main module" diagnostic.
 - fix direction: derive the entry module from the named file when one was given (or refuse loudly when it is not the project's entry), and give the missing-Main case a real diagnostic.
 - prior: new
@@ -86,12 +86,12 @@ contains no CLI-partition items — all findings below are new.
 - fix direction: create the scratch dir under `~/.cache/ipe/` with a randomized component (fail if it already exists).
 - prior: new
 
-## CLI-009 · hand-rolled `sky.toml` parser silently mangles quoted values with trailing content
+## CLI-009 · hand-rolled `ipe.toml` parser silently mangles quoted values with trailing content
 - severity: low
 - axis: correctness
 - principle: parse-don't-validate — the manifest boundary accepts malformed input and forwards a mangled value
 - location: `src/ipe-cli/src/project.rs:167-181` (`val.trim().trim_matches('"')`, no inline-comment handling)
-- reachability: any `sky.toml` using an inline comment or unusual quoting on a recognised key, e.g. `name = "my-app"  # prod`.
+- reachability: any `ipe.toml` using an inline comment or unusual quoting on a recognised key, e.g. `name = "my-app"  # prod`.
 - problem: values are extracted by `split_once('=')` + `trim_matches('"')` with no comment stripping: `name = "my-app" # prod` yields the silently-wrong name `my-app" # prod` (accepted, no error). Typed fields (`driver`, `[rust] static`, `allocator`) at least fail loudly — but with a confusing echoed value containing the comment text. Valid-TOML inputs are thus either silently mis-parsed or rejected with misleading messages.
 - fix direction: strip inline comments before value extraction (or parse values with a small quoted-string-aware scanner) so a quoted value is taken exactly and trailing junk is a loud error.
 - prior: new
