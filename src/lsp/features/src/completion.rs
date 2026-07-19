@@ -113,14 +113,19 @@ pub fn completions(
     // the interner is free when we acquire it below.
     let canonical = ipe_db::canonicalize(db, root, file).ok();
     let dep_canonicals = collect_dep_canonicals(db, root, file);
-    let solved_env: Option<BTreeMap<(Vec<Symbol>, Symbol), Ty>> =
-        ipe_db::typecheck(db, root, entry)
-            .ok()
-            .map(|solved| solved.env.clone());
+    // This module's own binding types, from the per-module `typecheck_module`
+    // projection (keyed by bare name — the home is fixed to this module).
+    let module_env: Option<BTreeMap<Symbol, Ty>> = ipe_db::typecheck_module(db, root, entry, file)
+        .ok()
+        .map(|types| types.env.clone());
+    // Dep bindings' types come from the deps' own per-module projections, so a
+    // cross-module value candidate still carries its solved type for ranking.
+    let dep_envs: Vec<(Vec<Symbol>, BTreeMap<Symbol, Ty>)> =
+        collect_dep_envs(db, root, entry, file);
     // The type the surrounding context expects at the cursor, if any. `None`
     // away from an expecting context (or on a non-type-checking program) — the
     // provider then ranks by name only, keeping every candidate.
-    let expected = expected_type_at(db, root, entry, module, byte);
+    let expected = expected_type_at(db, root, entry, file, byte);
 
     // Acquire the interner once — all subsequent work is resolution-only.
     let mut interner = db.interner().lock();
@@ -138,12 +143,24 @@ pub fn completions(
         &dep_canonicals,
     );
 
-    let mut items: Vec<CompletionItem> = render_candidates(
-        &candidates,
-        solved_env.as_ref(),
-        expected.as_ref(),
-        &interner,
-    );
+    // Reassemble the `(home, name) → Ty` lookup the renderer keys on, from the
+    // per-module projections: this module's env under `home_syms`, plus each
+    // dep's env under its own home. This is the same value the whole-program
+    // env carried, sliced and rejoined — the projection loses nothing.
+    let mut solved_env: BTreeMap<(Vec<Symbol>, Symbol), Ty> = BTreeMap::new();
+    if let Some(env) = &module_env {
+        for (name, ty) in env {
+            solved_env.insert((home_syms.clone(), *name), ty.clone());
+        }
+    }
+    for (dep_home, env) in &dep_envs {
+        for (name, ty) in env {
+            solved_env.insert((dep_home.clone(), *name), ty.clone());
+        }
+    }
+
+    let mut items: Vec<CompletionItem> =
+        render_candidates(&candidates, Some(&solved_env), expected.as_ref(), &interner);
 
     drop(interner);
 
@@ -184,6 +201,37 @@ fn collect_dep_canonicals(
             && let Ok(dep_canon) = ipe_db::canonicalize(db, root, *dep_file)
         {
             out.push((dep_path.clone(), (*dep_canon).clone()));
+        }
+    }
+    out
+}
+
+/// Fetch each resolved dep's per-module env (its binding types), keyed by the
+/// dep's interned home path. Demanded before the interner is locked, like
+/// [`collect_dep_canonicals`]. A dep that does not project (its own error) is
+/// skipped — its value candidates simply carry no type detail.
+fn collect_dep_envs(
+    db: &IpeDatabase,
+    root: SourceRoot,
+    entry: ipe_db::SourceFile,
+    file: ipe_db::SourceFile,
+) -> Vec<(Vec<Symbol>, BTreeMap<Symbol, Ty>)> {
+    let Ok(resolutions) = ipe_db::resolve_imports(db, root, file) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (dep_path, resolution) in resolutions.iter() {
+        if let ipe_db::ImportResolution::Resolved(dep_file) = resolution
+            && let Ok(dep_types) = ipe_db::typecheck_module(db, root, entry, *dep_file)
+        {
+            let dep_home: Vec<Symbol> = {
+                let mut interner = db.interner().lock();
+                dep_path
+                    .iter()
+                    .filter_map(|s| interner.intern(s).ok())
+                    .collect()
+            };
+            out.push((dep_home, dep_types.env.clone()));
         }
     }
     out
