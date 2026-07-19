@@ -36,8 +36,12 @@ Where Ipê came from, and where it's going.
 - **WASM, past the floor** — the browser effects bridge (`Cmd`/`Sub`/`Http`/
   timers), module partitioning for client/server code, a client router, and
   SSR hydration.
-- **FFI, past sync crates** — an async bridge so `ipe add` can bind real
-  async crates (Stripe, Firestore, …), not just synchronous ones.
+- **FFI, async SDKs** — the async bridge binds real SDK crates
+  (`async-stripe`, `firestore`, `rs-firebase-admin-sdk`): async methods lower
+  to `Task Error a` call sites, cross-crate builder params admit by resolved
+  type identity, and the full skyshop storefront (`examples/13-skyshop`)
+  builds shim-free through THE SEAL. Remaining: broaden the honest-drop set
+  (trait-generic params, fallible typed IDs).
 - **Static compilation, more targets** — aarch64, and a fully C-free build.
 - **Kernel-wiring pass** — a few stdlib modules still have hand-written pure
   logic that should route through the (already correct) Rust kernels instead.

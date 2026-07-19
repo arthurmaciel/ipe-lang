@@ -362,6 +362,41 @@ mod tests {
     }
 
     #[test]
+    fn fallible_setter_signature_carries_the_result_layer() {
+        // A checked (narrowing-integer) setter renders a `Result`-returning
+        // wrapper; the surface signature must carry the SAME layer, or the
+        // interface and the wrapper disagree at cargo time.
+        let pkg = crate::pkginfo::PkgInfo::decode_json(
+            &serde_json::json!({
+                "pkg": "semver",
+                "name": "semver",
+                "version": "1.0.26",
+                "functions": [{
+                    "name": "patch_set_field",
+                    "params": [
+                        {"name": "value", "type": "Int", "ipeType": "Int", "rustType": "u32"},
+                        {"name": "self", "type": "Version", "ipeType": "Version", "rustType": "semver::Version"}
+                    ],
+                    "results": [{"name": "", "type": "Version", "rustType": "semver::Version"}],
+                    "effect": "fallible",
+                    "recvType": "Version",
+                    "recvRustType": "semver::Version",
+                    "methodName": "patch",
+                    "isFieldSet": true
+                }],
+                "errors": []
+            })
+            .to_string(),
+        )
+        .expect("decodes");
+        let f = pkg.fns().first().expect("one binding");
+        assert_eq!(
+            wrapper_ipe_signature(f),
+            "Int -> Version -> Result Error Version"
+        );
+    }
+
+    #[test]
     fn ipei_seed_declares_every_opaque_type_and_every_binding() {
         let pkg = semver_pkg();
         let ipei = emit_ipei(&pkg);
