@@ -223,6 +223,17 @@ scenario; all three gate layers each have a red-team test; sweep stays green.
 
 ## M7 — Ipe.Live SSR + hydration (MVP+1)
 
+**Status: LANDED** — `island_escape` (XSS-safe JSON embedding for
+`<`/`>`/`&`/U+2028/U+2029), `render_page_hydrate` (SSR page with island
+`<script type="application/sky-model+json">`), `wasm_adopt_app` (hydration
+entry: skips `set_inner_html`, attaches delegated listeners only),
+fault-tolerant `hydrate` wasm-bindgen export (parse → `Result`, fallback to
+clean `init` on tampered/malformed island), `HydrationState` field-type gate
+(`ir_type_contains_non_serde` allowlist — compile error on secret/server-only
+fields), `wasm_hydrate_mode` flag wired from `[wasm] mode = "hydrate"` in
+`sky.toml` through `BuildOptions` → `BuildConfig` → `RustBackend` → `EmitCtx`,
+example `46-wasm-hydration`, 6 gate tests in `wasm_hydration_gate.rs`.
+
 **Scope.** Spec Q6 mode 2: typed `HydrationState` island (never the Model)
 with the field-type gate in `ipe_types`; island serialiser escaping
 (`<`/`>`/`&`/U+2028/U+2029); fault-tolerant `hydrate` (parse →
@@ -240,6 +251,15 @@ diff; tampered-island test falls back cleanly (no trap); a secret-bearing
 field type in `HydrationState` is a compile error.
 
 ## M8 — Playground B1 + docs closure
+
+**Status: LANDED** — `ipe-playground` binary crate (`src/playground/`):
+`POST /compile` handler accepts Ipê source, runs `ipe build --target wasm`
+in a timeout-wrapped subprocess, returns the compiled WASM bundle
+(`pkg_wasm_b64` + `pkg_js`) as JSON; two-pane browser UI
+(`www/index.html`) with Ctrl+Enter compile; hand-rolled base64 encoder
+(no extra dep); CORS via tower-http; optional static-file serving via
+`IPE_PLAYGROUND_STATIC_DIR`. B2 (interpreter-in-WASM) stays gated on the
+interpreter tier and is not built here.
 
 **Scope.** Server-compile-then-ship-WASM playground (pure reuse of A; build
 host isolation per Q7); final docs sync. B2 (interpreter-in-WASM) stays
