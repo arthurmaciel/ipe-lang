@@ -1,4 +1,4 @@
-# 13-skyshop — the FFI acceptance example (IN PROGRESS)
+# 13-skyshop — the FFI acceptance example
 
 The full skyshop storefront transposed from the upstream Sky Rust-backend
 variant, with the three shim crates replaced by the REAL SDK crates through
@@ -6,23 +6,22 @@ the shim-free auto-FFI:
 
 | Was (shim crate)         | Now (real crate, auto-bound)            | State |
 |---|---|---|
-| `sky-firestore-shim`     | `firestore 0.49` (841 bindings)         | de-shimmed — `src/Lib/Db.ipe` |
-| `sky-firebase-auth-shim` | `rs-firebase-admin-sdk 4.3` (304)       | de-shimmed — `src/Lib/Auth.ipe` |
-| `sky-stripe-shim`        | `async-stripe 1.0.0-rc.6` (6 crates)    | BLOCKED — `src/Lib/Stripe.ipe` still names the shim |
+| `sky-firestore-shim`     | `firestore 0.49`                        | de-shimmed — `src/Lib/Db.ipe` |
+| `sky-firebase-auth-shim` | `rs-firebase-admin-sdk 4.3`             | de-shimmed — `src/Lib/Auth.ipe` |
+| `sky-stripe-shim`        | `async-stripe 1.0.0-rc.6` (6 crates)    | de-shimmed — `src/Lib/Stripe.ipe` |
 
-`.ipe/cache/ffi/rust/` holds the verified install artifacts for all 8 crates
-(one `ipe install --yes --allow-build-scripts` manifest run), so the build is
-network-free.
+SHIM-FREE SEAL: `ipe build` exit 0 → the emitted crate `cargo build`s exit 0.
+The checkout flow rides the real builder surface — conversion-bound params
+(`impl Into<Currency>`), Vec-of-opaque `line_items`, the cross-crate
+`CheckoutSessionMode` enum, the typed-ID `RetrieveCheckoutSession::new`
+(surfaced as a plain `String` via its `From<String>` proof), and the
+`status`/`payment_status` enum-typed field accessors. Sentinel DCE keeps only
+the reached wrappers in the emitted `src/ffi.rs` (51 of the ~32.5k catalog
+bindings).
 
-## Why the tree does not build yet
-
-The stripe checkout-session flow needs binding classes that the inspector
-does not admit yet (the `stripe-builder-surface` wall in
-`docs/architecture/async-ffi-bridge-impl-plan.md`):
-`CreateCheckoutSession::line_items` (Vec-of-opaque param), `::mode`
-(cross-crate enum param), `RetrieveCheckoutSession::new` (typed-ID param),
-the `LineItemsPriceData` constructor (cross-crate `Currency` enum param), and
-the `CheckoutSession.status` / `payment_status` accessors (enum-typed
-fields). Everything else — the firestore document/query surface and the
-firebase ID-token verification — binds and SEALs (probe projects verified
-end-to-end, including live error-fold runs).
+`.ipe/cache/ffi/rust/` is regenerable with
+`ipe install --yes --allow-build-scripts`; `<slug>.pkg.json` is the sole
+catalog source the build re-derives every consumer view from. `async-stripe`
+pins `features = ["default-tls"]` in `sky.toml` so the inspection binds the
+default tokio-hyper client surface (all-features surfaces several client
+concretes and drops the async `send`s as ambiguous).
