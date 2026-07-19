@@ -2,7 +2,7 @@
 # Per-example build + generated FFI artifacts (regeneratable; never source)
 examples/**/target/
 examples/**/.ipe/
-sky-out/
+out/
 .ipe-cache/
 .skydeps/
 /tmp-parity/

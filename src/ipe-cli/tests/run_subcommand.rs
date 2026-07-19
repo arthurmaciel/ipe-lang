@@ -113,7 +113,7 @@ fn run_subcommand_builds_and_executes_hello_program() {
     );
 
     // --- Step 3: run the binary, capture stdout ---
-    let bin: PathBuf = out_dir.join("target").join("debug").join("sky-app");
+    let bin: PathBuf = out_dir.join("target").join("debug").join("ipe-app");
     let run = std::process::Command::new(&bin).output();
     let Ok(run) = run else {
         assert!(false_marker(), "failed to run emitted binary: {run:?}");

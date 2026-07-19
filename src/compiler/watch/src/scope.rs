@@ -36,7 +36,7 @@ const EXCLUDED_DIR_NAMES: &[&str] = &[
     ".ipe",
     ".ipe-cache",
     // Generated build output directories a `ipe build`/`ipe watch` produces.
-    "sky-out",
+    "out",
 ];
 
 /// A filesystem path proven, by construction, to be canonical and

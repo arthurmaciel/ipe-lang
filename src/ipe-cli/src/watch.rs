@@ -404,7 +404,7 @@ fn schedule_resolve_retry(evt_tx: &mpsc::Sender<OrchestratorEvent>) {
 /// embedder that lets a `WatchHandle` fall out of scope WITHOUT calling
 /// `stop()` first — a bug in the embedder's own code, a panic unwinding
 /// through a scope that holds one, an early `return`/`?` — must never leak
-/// the supervised child process (a whole spawned `sky-app` server binding a
+/// the supervised child process (a whole spawned `ipe-app` server binding a
 /// real port) as an orphan. `stop()` and `Drop::drop` therefore share one
 /// synchronous, bounded implementation: signal the orchestrator, then block
 /// (up to [`SHUTDOWN_WAIT_BUDGET`]) until it confirms teardown is done —

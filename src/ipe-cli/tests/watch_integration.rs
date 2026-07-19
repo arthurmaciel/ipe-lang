@@ -373,7 +373,7 @@ fn dropping_a_watch_handle_without_stop_still_reaps_the_supervised_child() -> Re
 
     // Simulate the abnormal-exit shape the bug report describes: drop the
     // `WatchHandle` directly, never calling `stop()`. `Drop::drop` is the
-    // ONLY thing standing between this and an orphaned `sky-app` server
+    // ONLY thing standing between this and an orphaned `ipe-app` server
     // holding a real port open forever.
     drop(handle);
 

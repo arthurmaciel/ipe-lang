@@ -12,7 +12,7 @@
 //! project must build and print `42`.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
-//! `/home/arthur/Documentos/comp/sky/sky-out/sky` compiles + runs the SAME
+//! `/home/arthur/Documentos/comp/sky/out/sky` compiles + runs the SAME
 //! `Main.ipe` to stdout `42\n`, exit 0:
 //!
 //! ```text

@@ -51,7 +51,7 @@ incremental DB), `sky_intern`, `sky_watch`; `ipe` = driver + CLI. Runtime
 impls in `runtime/src/sky_runtime/`.
 
 **ipe CLI:** subcommands `build` / `run` / `watch` / `explain` / `fix`.
-`skyc build <src/Main.ipe | ipe.toml> --out sky-out/rust`. Binary =
+`skyc build <src/Main.ipe | ipe.toml> --out out/rust`. Binary =
 `target/release/ipe` (`cargo build --release -p ipe`);
 `source scripts/lib/env.sh` sets `SKYC_BIN` + `IPE_RUNTIME_DIR`.
 
@@ -68,15 +68,15 @@ of `KNOWN_UNBACKED` bucket), `sky_lower` (arity table +
 `.ipe` modules, `ipe.toml`). `build_set` = **disk-derived**
 (`scripts/lib/examples.sh`) — every `examples/NN-*/src/Main.ipe` whose imports
 resolve auto-included; adding dir IS registration.
-`scripts/equivalence-checks/examples-sweep.sh`, per example: `skyc build … --out sky-out/rust` →
-`cargo build --manifest-path sky-out/rust/Cargo.toml` → run
-`sky-out/rust/target/debug/sky-app`. VERDICT PASS iff zero red rows. Modes:
+`scripts/equivalence-checks/examples-sweep.sh`, per example: `skyc build … --out out/rust` →
+`cargo build --manifest-path out/rust/Cargo.toml` → run
+`out/rust/target/debug/ipe-app`. VERDICT PASS iff zero red rows. Modes:
 `IPE_SWEEP_BUILD_ONLY=1` (compile only), `IPE_SWEEP_NO_EQUIV=1` (build+run, no
 Go), default (+ Go≡Rust via cached `expected_go.txt`).
 
-**Emitted project:** `sky-out/rust/` = Cargo project w/ runtime
+**Emitted project:** `out/rust/` = Cargo project w/ runtime
 vendored into `src/sky_runtime/` (ipe copies from `IPE_RUNTIME_DIR`), default
-binary `sky-app`, edition 2024.
+binary `ipe-app`, edition 2024.
 
 **Golden tests** (`crates/ipe/tests/golden_*.rs`): golden =
 `tests/golden/<name>/Main.ipe` + `main.rs` (expected emit, **byte-compared**)
@@ -127,7 +127,7 @@ ps -u $USER -o pid,command | awk '/while pgrep|until ! pgrep/ && /\/bin\/zsh -c/
 # Stray sleeps + verification leftovers
 ps -u $USER -o pid,ppid,command | awk '$3 == "sleep" && $2 != 1 {print $1}' | xargs -n1 kill -9 2>/dev/null
 pkill -f "playwright"; pkill -f "chromium"
-pkill -f "examples/.*/sky-out/app"
+pkill -f "examples/.*/out/app"
 
 # mem-guard alive?
 pgrep -f mem-guard.sh >/dev/null || (nohup ./scripts/guards/mem-guard.sh > /tmp/mem-guard.out 2>&1 & disown)
@@ -238,7 +238,7 @@ user override ships known issue) = `PRINCIPLES.md` §0. Mechanics:
 **Pre-build disk check — BEFORE any full build/test suite/example sweep.**
 `df -h /`; if <~15–20 GB free, reclaim first: `rm -rf "$CARGO_TARGET_DIR"`,
 prune stray targets under `~/.cache/ipe/`, prune per-example artifacts
-(`sky-out/`). Near-full disk dies mid-run w/ ENOSPC *after*
+(`out/`). Near-full disk dies mid-run w/ ENOSPC *after*
 type-check+codegen succeed, surfacing as file-copy/"build failed" error that
 **masquerades as codegen regression** and wastes whole run on
 mis-diagnosis — always read actual build log before blaming code change.
@@ -338,7 +338,7 @@ mid-build leaves half-written artifacts worse than clean rebuild.
    full`, `cargo +nightly test --workspace --doc`, `cargo +nightly clippy
    --workspace --all-targets -- -D warnings`, fuzz.
 3. Example sweep green — `scripts/equivalence-checks/examples-sweep.sh` (per example: ipe build →
-   `cargo build` emitted crate → run `sky-app` → Rust≡Go equivalence). VERDICT
+   `cargo build` emitted crate → run `ipe-app` → Rust≡Go equivalence). VERDICT
    PASS iff zero red rows (THE SEAL end-to-end).
 4. CI parity — `.github/workflows/{ci,examples-sweep,security}.yml` runs
    same gate; cancel superseded in-progress `main` runs before pushing (see
@@ -357,7 +357,7 @@ build or runtime failure.
 - **Never add co-author wording** to commits.
 - **Never tag a release** without explicit user ask.
 - **Run `ipe build` on an example from its own dir** (`cd examples/NN-name`),
-  never from repo root — `--out sky-out/rust` writes relative to cwd.
+  never from repo root — `--out out/rust` writes relative to cwd.
 - **Cancel in-progress CI runs on `main` before pushing** (newer commit
   supersedes them; never cancel release/tag runs):
 

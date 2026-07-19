@@ -4,7 +4,7 @@
 #
 # PORTED from ../sky/runtime-rust/scripts/lib/env.sh and ADAPTED for this repo:
 # the compiler here is `ipe` (a Rust cargo workspace), NOT the Haskell `sky`.
-# There is no GHC/cabal, no `sky-out/sky`; the binary is built by cargo and lives
+# There is no GHC/cabal, no `out/sky`; the binary is built by cargo and lives
 # in the (possibly global) cargo target dir. This file defines REPO + IPE_BIN and
 # does NOT cd (callers `cd "$REPO"` themselves so the failure path stays theirs).
 #
@@ -21,7 +21,7 @@ export PATH="$HOME/.cargo/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin:$PA
 
 # ── Shared cargo target + sccache + CARGO_INCREMENTAL=0 ─────────────────────
 # A shared CARGO_TARGET_DIR compiles the heavy deps (axum/tokio/serde/sqlx/…)
-# ONCE and persists across each example's `rm -rf sky-out`. This repo's global
+# ONCE and persists across each example's `rm -rf out`. This repo's global
 # ~/.cargo/config.toml already pins `target-dir = ~/.cache/sky-rust-target`, so
 # this default AGREES with where a bare `cargo build` of the workspace lands
 # ipe — the same dir the sweep's per-example `cargo build` reuses. Override

@@ -78,7 +78,7 @@ fn json_str(s: &str) -> String {
 /// which PANICS ("failed printing to stdout") when the underlying write errors.
 /// Because Rust ignores SIGPIPE by default, a closed downstream pipe surfaces as
 /// an `EPIPE` write error rather than process termination — so a piped consumer
-/// hanging up (`sky-app | head`) would panic from a well-typed `Log.*` call.
+/// hanging up (`ipe-app | head`) would panic from a well-typed `Log.*` call.
 /// These helpers perform the write fallibly and intentionally drop the `Result`,
 /// turning a broken pipe into a silently-skipped line instead of an abort.
 #[cfg(not(target_arch = "wasm32"))]

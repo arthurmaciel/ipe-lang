@@ -25,7 +25,7 @@
 //! crate builds and runs: `end_to_end_alias_binds_whole_value` (gated on
 //! `IPE_E2E=1`) drives the hand-built IR through the Rust backend and asserts
 //! `7`, matching the Go reference compiler at
-//! `/home/arthur/Documentos/comp/sky/sky-out/sky` on the shape-equivalent
+//! `/home/arthur/Documentos/comp/sky/out/sky` on the shape-equivalent
 //!
 //! ```text
 //! type Wrap = MkWrap Int
@@ -438,7 +438,7 @@ fn build_and_assert(
         "emitted alias-pattern project must build: {status:?}"
     );
 
-    let bin = out.join("target").join("debug").join("sky-app");
+    let bin = out.join("target").join("debug").join("ipe-app");
     let output = Command::new(&bin).output().map_err(|e| io_bug(&bin, &e))?;
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),

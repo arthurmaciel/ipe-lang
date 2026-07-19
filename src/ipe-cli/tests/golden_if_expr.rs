@@ -4,7 +4,7 @@
 //! and print `10`.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
-//! `/home/arthur/Documentos/comp/sky/sky-out/sky` compiles + runs the SAME
+//! `/home/arthur/Documentos/comp/sky/out/sky` compiles + runs the SAME
 //! `Main.ipe` to stdout `10\n`, exit 0 — verified by hand:
 //!
 //! ```text

@@ -11,7 +11,7 @@
 //! `"echo: "`) — start it before running this file, e.g.:
 //!
 //! ```sh
-//! (cd examples/33-websocket-echo && ./sky-out/app &)
+//! (cd examples/33-websocket-echo && ./out/app &)
 //! CHROMEDRIVER=chromedriver cargo test --target wasm32-unknown-unknown \
 //!     --features wasm-client --test wasm_websocket_bridge
 //! ```

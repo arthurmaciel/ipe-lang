@@ -13,7 +13,7 @@
 //! ```
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
-//! `/home/arthur/Documentos/comp/sky/sky-out/sky` compiles + runs the SAME
+//! `/home/arthur/Documentos/comp/sky/out/sky` compiles + runs the SAME
 //! `Main.ipe` to stdout `12\n`, exit 0 — hand-verified in a temp dir. The
 //! hand-computed `12` is the in-test oracle, and this is the soundness-floor
 //! Regression for a value laundered through a boxed-recursive payload.
