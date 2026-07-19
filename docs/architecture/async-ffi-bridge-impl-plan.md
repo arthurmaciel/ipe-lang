@@ -128,6 +128,25 @@
 - `cargo fmt --all`; full scoped gates; divergence ledger updated (Δ1, Δ2);
   `AGENTS.md` untouched unless surface changed; final report.
 
+### Documented residual — live-emulator e2e (NOT RUN this session; no emulator/SDK installs)
+The SEAL (`ipe` exit 0 ⇒ emitted `cargo build` exit 0) is the acceptance gate this
+session pursues; the live round-trips below are an honest residual, to be run only where
+the emulator/mock is available, never faked green:
+- **firestore**: `gcloud emulators firestore start --host-port=localhost:8080`, then
+  `FIRESTORE_EMULATOR_HOST=localhost:8080` + a dev service-account JSON via the
+  `TokenSourceType::Json`/`GOOGLE_APPLICATION_CREDENTIALS` path (§4.5). Offline, the
+  firestore probe already folds to the structured `Err` (verified: `ForeignError (ref …)`).
+- **firebase auth**: `firebase emulators:start --only auth`, then
+  `FIREBASE_AUTH_EMULATOR_HOST=localhost:9099`; mint a token via the emulator signUp REST
+  endpoint (`Ipe.Http` from the probe or curl) and assert `validate` returns the claims
+  JSON (§3.4). The emulator security gate MUST be Ipê-side (`Lib/Auth.ipe`) refusing the
+  emulator host outside dev (§3.3) — a Security-principle review item on the transpose.
+- **stripe**: `stripe-mock` on `:12111`, bound via `url_from_clientBuilder`
+  (`Rust.Async_stripe.url_from_clientBuilder`); offline the send folds to the no-network
+  structured `Err`. The probe chain (create customer → create/retrieve checkout session)
+  is written at `~/.cache/ipe/ffi-probe-stripe/src/Main.ipe` and awaits the cross-crate
+  foreign-type unification wall before it type-checks.
+
 ## 4. Standing constraints (from PRINCIPLES/DEVELOPMENT, non-negotiable here)
 
 - Sandbox untouched; inspector runs ONLY jailed; `--yes` documented.
