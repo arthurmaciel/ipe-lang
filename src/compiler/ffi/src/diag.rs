@@ -476,6 +476,13 @@ pub enum WireDefect {
         /// The offending selector string.
         got: String,
     },
+    /// The `pkg` path carries a control character (a bare newline could
+    /// otherwise close the `//` comment it is emitted into and splice
+    /// compilable Rust source into the generated bindings file).
+    InvalidPkgPath {
+        /// The offending path.
+        got: String,
+    },
     /// The document is not the JSON shape the wire contract declares
     /// (carries the rendered serde error as detail).
     Json {
@@ -542,6 +549,12 @@ impl fmt::Display for WireDefect {
                     f,
                     "{got:?} is not a legal field selector (a field identifier or a decimal \
                      tuple index)"
+                )
+            }
+            Self::InvalidPkgPath { got } => {
+                write!(
+                    f,
+                    "{got:?} is not a legal package path (it carries a control character)"
                 )
             }
             Self::Json { detail } => write!(f, "{detail}"),
