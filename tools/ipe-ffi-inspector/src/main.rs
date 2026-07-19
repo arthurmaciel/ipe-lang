@@ -634,6 +634,8 @@ fn main() {
     // [stripe-send F3] Reset the cross-crate proven-Send opaque-name set once per run.
     GLOBAL_XC_SEND_NAMES.with(|c| c.borrow_mut().clear());
     GLOBAL_XC_NONSEND_LASTSEGS.with(|c| c.borrow_mut().clear());
+    // Reset the cross-crate `From<String>` conversion-target proof set once per run.
+    GLOBAL_FROM_STRING_DEFPATHS.with(|c| c.borrow_mut().clear());
 
     // [WALL-G #84] Cross-crate unique-impl monomorphization needs EVERY project crate's
     // concrete impls indexed BEFORE any crate is bound (the crate defining `op<C: Wire>`
@@ -1856,7 +1858,10 @@ fn collect_foreign_type_ids(
     use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
     let mut cand: HashMap<String, String> = HashMap::new();
     let mut poisoned: HashSet<String> = HashSet::new();
-    let add = |path: &str, defid: String, cand: &mut HashMap<String, String>, poisoned: &mut HashSet<String>| {
+    let add = |path: &str,
+               defid: String,
+               cand: &mut HashMap<String, String>,
+               poisoned: &mut HashSet<String>| {
         if path.is_empty() || path.starts_with("_ipe_ffi_probe") {
             return;
         }
@@ -1977,6 +1982,7 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
     EXTERNAL_TRAIT_PATH_BY_ID.with(|c| *c.borrow_mut() = collect_external_trait_paths(doc));
     EXTERNAL_TYPE_PATH_BY_ID.with(|c| *c.borrow_mut() = collect_external_type_paths(doc));
     EXTERNAL_DEFPATH_BY_ID.with(|c| *c.borrow_mut() = collect_external_defpaths(doc));
+    LOCAL_DEFPATH_BY_ID.with(|c| *c.borrow_mut() = collect_local_defpaths(doc));
 
     // Wall #3 coverage accumulators are per-crate — reset so a multi-crate run
     // reports each crate's bind%/drops independently.
@@ -2020,9 +2026,17 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
         }
     }
 
-    // Crate-local structs that derive/impl `Clone` — needed by the field-getter
-    // walk to decide whether a crate-local opaque field type is eligible (C5).
-    let clone_struct_ids = collect_clone_struct_ids(index);
+    // Crate-local nominals (structs and enums) that impl std `Clone` — needed
+    // by the field-getter walk to decide whether a crate-local opaque field
+    // type is eligible (C5).
+    let clone_nominal_ids = collect_clone_nominal_ids(index);
+
+    // Union this crate's `From<String>` conversion-target proofs into the
+    // manifest-run set (keyed by defining path — visible to sibling crates).
+    {
+        let proofs = collect_from_string_defpaths(doc, index);
+        GLOBAL_FROM_STRING_DEFPATHS.with(|c| c.borrow_mut().extend(proofs));
+    }
 
     // RENDERED names of those clone-deriving structs, for the borrowed-return
     // gate (`&T -> T` via `.to_owned()` is sound only when `T: Clone`). Render
@@ -2031,7 +2045,7 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
     // segment. REACHABLE_PATHS was populated above, so the lookup is consistent
     // with what the gate will see in `p.rust_type`.
     {
-        let names: HashSet<String> = clone_struct_ids
+        let names: HashSet<String> = clone_nominal_ids
             .iter()
             .filter_map(|id| {
                 index.get(id).and_then(|it| it["name"].as_str()).map(|nm| {
@@ -2669,7 +2683,7 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
                 };
 
                 // C1 + C5 closed-type-set gate.
-                if let Err(reason) = field_type_eligible(field_ty, index, &clone_struct_ids) {
+                if let Err(reason) = field_type_eligible(field_ty, index, &clone_nominal_ids) {
                     record_tail_drop(reason, false, &rustdoc_type_to_rust_str(field_ty));
                     continue;
                 }
@@ -2735,16 +2749,18 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
                 // same-named method/getter, so `x` field + `x` getter + `x`
                 // setter + `x()` method yield FOUR non-colliding bindings.
                 //
-                // Wide-int / narrow-numeric SETTER GATE: Ipe `Int` is i64 and
-                // Ipe `Float` is f64. A setter that assigns a Ipe scalar into a
-                // NARROWER field (`i8..i32`, `u8..u32`, `f32`) — or a
-                // wider-than-i64 int field — would silently truncate/reinterpret
-                // out-of-range values, corrupting the foreign object. We DROP the
-                // setter (the getter above stays, since reading widens
-                // losslessly). The setter must stay INFALLIBLE (C6) — dropping it
-                // is the only sound option (a fallible setter breaks the
-                // `FieldTy -> Recv -> Recv` contract).
-                if !setter_receives_losslessly(&field_rust) {
+                // Narrow-numeric SETTER GATE: Ipe `Int` is i64 and Ipe `Float`
+                // is f64, so a field NARROWER than the Ipe scalar (or a
+                // wider-than-i64 int) cannot receive an assignment losslessly.
+                // An INTEGER field of that kind gets a CHECKED, FALLIBLE
+                // setter (`FieldTy -> Recv -> Result Error Recv`; out-of-range
+                // → Err, never a silent truncation — the checked variant is
+                // the project default for numeric coercion). Shapes with no
+                // meaningful check (`f32` precision loss, containers of
+                // narrow ints) stay dropped; the getter above stays in all
+                // cases (reading widens/saturates losslessly).
+                let lossless = setter_receives_losslessly(&field_rust);
+                if !lossless && !checked_narrowing_settable(&field_rust) {
                     record_tail_drop("setter_narrowing", false, &field_rust);
                     continue;
                 }
@@ -2771,7 +2787,7 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
                         rust_type: recv_rust.clone(),
                     }],
                     variadic: false,
-                    effect: "pure".into(),
+                    effect: if lossless { "pure" } else { "fallible" }.into(),
                     exported: true,
                     recv_type: recv_ipe.clone(),
                     recv_rust_type: recv_rust.clone(),
@@ -2800,7 +2816,7 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
                 enum_data,
                 index,
                 &aliases,
-                &clone_struct_ids,
+                &clone_nominal_ids,
             );
         }
     }
@@ -2828,8 +2844,14 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
                 "[DBG-NAMEABLE-DROP] name={:?} recv={:?} params={:?} results={:?}",
                 f.name,
                 f.recv_rust_type,
-                f.params.iter().map(|p| p.rust_type.clone()).collect::<Vec<_>>(),
-                f.results.iter().map(|p| p.rust_type.clone()).collect::<Vec<_>>()
+                f.params
+                    .iter()
+                    .map(|p| p.rust_type.clone())
+                    .collect::<Vec<_>>(),
+                f.results
+                    .iter()
+                    .map(|p| p.rust_type.clone())
+                    .collect::<Vec<_>>()
             );
         }
         keep
@@ -3175,7 +3197,82 @@ fn doc_hidden(item: &serde_json::Value) -> bool {
 /// A field whose type is a crate-local opaque struct is getter-eligible (C5)
 /// ONLY if that struct is in this set — the generated getter clones the field
 /// out of the borrowed receiver (`recv.field.clone()`), which requires `Clone`.
-fn collect_clone_struct_ids(index: &serde_json::Map<String, serde_json::Value>) -> HashSet<String> {
+/// Defining paths of crate-local types with a proven `impl From<String>`.
+/// Every check is by resolved identity, fail-closed:
+///   * the impl'd trait resolves to std `From` (`std_trait_tag`, by id);
+///   * the trait's single type argument's DEFINING path is std/alloc `String`;
+///   * the `for` target is a concrete (generic-free) crate-local type with a
+///     recorded defining path.
+/// The result feeds `GLOBAL_FROM_STRING_DEFPATHS`, so the proof made here in
+/// the defining crate's pass is visible to every sibling crate in the run.
+fn collect_from_string_defpaths(
+    doc: &serde_json::Value,
+    index: &serde_json::Map<String, serde_json::Value>,
+) -> HashSet<String> {
+    let mut out: HashSet<String> = HashSet::new();
+    for (_id, item) in index {
+        if item["crate_id"].as_u64().unwrap_or(1) != 0 {
+            continue;
+        }
+        let Some(impl_data) = item["inner"].get("impl") else {
+            continue;
+        };
+        let Some(trait_node) = impl_data.get("trait") else {
+            continue;
+        };
+        if std_trait_tag(trait_node) != Some("From") {
+            continue;
+        }
+        // Exactly one type argument, identity-confirmed as `String`.
+        let args: Vec<&serde_json::Value> = trait_node
+            .get("args")
+            .and_then(|a| a.get("angle_bracketed"))
+            .and_then(|ab| ab.get("args"))
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|a| a.get("type")).collect())
+            .unwrap_or_default();
+        let [arg] = args.as_slice() else { continue };
+        let arg_is_string = arg
+            .get("resolved_path")
+            .and_then(|rp| rp.get("id"))
+            .map(item_id_to_str)
+            .and_then(|id| rustdoc_defpath(doc, &id))
+            .is_some_and(|dp| dp == "alloc::string::String" || dp == "std::string::String");
+        if !arg_is_string {
+            continue;
+        }
+        // Concrete crate-local target with a recorded defining path.
+        let for_val = impl_data.get("for").or_else(|| impl_data.get("for_"));
+        let Some(for_val) = for_val else { continue };
+        if !self_is_concrete_named(for_val) {
+            continue;
+        }
+        let Some(target_id) = for_val
+            .get("resolved_path")
+            .and_then(|rp| rp.get("id"))
+            .map(item_id_to_str)
+        else {
+            continue;
+        };
+        let target_local = index
+            .get(&target_id)
+            .map(|it| it["crate_id"].as_u64().unwrap_or(1) == 0)
+            .unwrap_or(false);
+        if !target_local {
+            continue;
+        }
+        if let Some(dp) = rustdoc_defpath(doc, &target_id)
+            && !dp.starts_with("_ipe_ffi_probe")
+        {
+            out.insert(dp);
+        }
+    }
+    out
+}
+
+fn collect_clone_nominal_ids(
+    index: &serde_json::Map<String, serde_json::Value>,
+) -> HashSet<String> {
     let mut out = HashSet::new();
     for (_id, item) in index {
         if item["crate_id"].as_u64().unwrap_or(1) != 0 {
@@ -3658,23 +3755,37 @@ fn field_type_eligible(
                 };
             }
             _ => {
-                // Crate-local opaque struct: eligible iff it derives Clone AND is
-                // a generic-free struct we can name. Its id must resolve to a
-                // crate-local struct item in the index.
+                // Crate-local opaque nominal: eligible iff it impls std Clone
+                // (the getter body is `recv.field.clone()`) AND is a
+                // generic-free type we can name, AND is either
+                //   * a struct, or
+                //   * an enum the enum binder surfaces as an opaque handle
+                //     (public, not doc-hidden, non-generic — the same gates
+                //     the enum binder applies), so the field value has a
+                //     usable Ipe surface (tag accessor / extractors / ctors).
                 if !args.is_empty() {
                     return Err("not_in_closed_set"); // generic opaque — out of S1
                 }
                 if let Some(id) = rp.get("id") {
                     let key = item_id_to_str(id);
-                    let is_local_struct = index
-                        .get(&key)
-                        .map(|it| {
-                            it["crate_id"].as_u64().unwrap_or(1) == 0
-                                && it["inner"].get("struct").is_some()
-                        })
-                        .unwrap_or(false);
-                    if is_local_struct && clone_ids.contains(&key) {
-                        return Ok(());
+                    if let Some(it) = index.get(&key)
+                        && it["crate_id"].as_u64().unwrap_or(1) == 0
+                        && clone_ids.contains(&key)
+                    {
+                        if it["inner"].get("struct").is_some() {
+                            return Ok(());
+                        }
+                        if let Some(enum_data) = it["inner"].get("enum") {
+                            let enum_generic = enum_data
+                                .get("generics")
+                                .and_then(|g| g.get("params"))
+                                .and_then(|p| p.as_array())
+                                .map(|p| !p.is_empty())
+                                .unwrap_or(false);
+                            if is_public(it) && !doc_hidden(it) && !enum_generic {
+                                return Ok(());
+                            }
+                        }
                     }
                 }
                 return Err("not_in_closed_set");
@@ -3724,14 +3835,35 @@ fn setter_receives_losslessly(rust_ty: &str) -> bool {
     !narrowing
 }
 
+/// True when a NARROWING numeric field can take a CHECKED, fallible setter:
+/// a bare integer type outside the lossless-receive set, or `Option<>` of one
+/// (exactly one level). The generated body converts with `try_from` and folds
+/// an out-of-range Ipe value to `Err` — never a silent truncation. `f32` is
+/// excluded (precision loss has no meaningful range check), as are containers
+/// of narrow ints (`Vec<u32>` — per-element failure has no clean fold).
+fn checked_narrowing_settable(rust_ty: &str) -> bool {
+    let t = rust_ty.trim();
+    let base = t
+        .strip_prefix("Option<")
+        .and_then(|r| r.strip_suffix('>'))
+        .unwrap_or(t)
+        .trim();
+    matches!(
+        base,
+        "i8" | "i16" | "i32" | "u8" | "u16" | "u32" | "u64" | "u128" | "i128" | "usize" | "isize"
+    )
+}
+
 /// True when a rustdoc item carries `#[non_exhaustive]` (R2). The attribute
 /// appears in the item's `attrs` array as the bare string `"non_exhaustive"`
 /// (verified empirically against rustdoc JSON format v57 on both an enum and a
 /// variant). Two stringy attr shapes are checked (bare string OR a `{"other":
 /// …}` object) to survive format drift. Detection FAILURE must mean "assume
-/// non_exhaustive" at the call sites (losing a ctor is safe; emitting one on a
-/// real non_exhaustive enum is E0639 / cargo-fail) — so callers OR this with a
-/// conservative default, they do NOT treat a parse miss as "exhaustive".
+/// non_exhaustive" at the call sites: at ENUM level that forces the match
+/// wildcard (a spurious wildcard is safe); at VARIANT level it suppresses the
+/// ctor (losing a ctor is safe; naming a real non_exhaustive variant
+/// cross-crate is a cargo-fail). Callers OR this with a conservative default,
+/// they do NOT treat a parse miss as "exhaustive".
 fn non_exhaustive(item: &serde_json::Value) -> bool {
     item.get("attrs")
         .and_then(|a| a.as_array())
@@ -3850,9 +3982,12 @@ fn emit_enum_bindings(
         return;
     }
 
-    // R2 + E2: a non_exhaustive enum is NOT constructible from external code
-    // (E0639). Constructors are suppressed; tag/extract are still emitted but
-    // MUST carry a wildcard (R3). Detection failure → assume non_exhaustive.
+    // R2 + E2: enum-level `#[non_exhaustive]` restricts exhaustive MATCHING by
+    // downstream crates — tag/extract matches MUST carry a wildcard (R3) — but
+    // it does NOT restrict constructing the enum's variants (all three variant
+    // kinds construct cross-crate; only a VARIANT-level `#[non_exhaustive]`
+    // blocks construction, handled per-variant below). Detection failure →
+    // assume non_exhaustive (a spurious wildcard is safe).
     let enum_non_exhaustive = non_exhaustive(enum_item);
 
     // The opaque receiver type (`::crate::E`) — identical resolution to the
@@ -3944,11 +4079,12 @@ fn emit_enum_bindings(
         tag_arms.push(format!("{arm_pat}\t{variant_name}"));
 
         // ── Constructibility (E2) ──────────────────────────────────────
-        // A constructor is emitted ONLY when the enum AND the variant are both
-        // exhaustive-constructible AND every field type is in the S1 closed set
-        // (E4 reuses field_type_eligible). Otherwise the variant is still
-        // tag-reachable but gets no ctor (E2) — which, if it ends up being the
-        // reason a variant lacks an extractor too, contributes to the wildcard.
+        // A constructor is emitted ONLY when every field type is in the S1
+        // closed set (E4 reuses field_type_eligible). A variant-level
+        // `#[non_exhaustive]` was already excluded above; the ENUM-level
+        // attribute does not affect constructibility (it only forces the
+        // match wildcard). An ineligible variant is still tag-reachable but
+        // gets no ctor (E2).
         let resolved_fields = resolve_variant_fields(&field_ids, index, aliases);
 
         // Field eligibility (E4): every field type must pass the S1 gate.
@@ -3959,9 +4095,7 @@ fn emit_enum_bindings(
             None => false, // stripped / unresolvable field → not constructible
         };
 
-        // A non_exhaustive variant has already been `continue`d above, so by
-        // here the variant is exhaustive-constructible iff the ENUM is.
-        let constructible = !enum_non_exhaustive && fields_eligible;
+        let constructible = fields_eligible;
 
         if constructible && let Some(fields) = &resolved_fields {
             pending.push(make_enum_ctor(
@@ -5019,7 +5153,7 @@ thread_local! {
         std::cell::RefCell::new(HashMap::new());
 
     // RENDERED rust-type names of crate-local opaque structs that DERIVE `Clone`
-    // (the S1 `clone_struct_ids` set, mapped through the same name renderer
+    // (the S1 `clone_nominal_ids` set, mapped through the same name renderer
     // `rustdoc_type_to_rust_str` uses).  The borrowed-return gate consults this
     // to decide whether a `&T` return may be owned via `.to_owned()` (sound only
     // when `T: Clone`).  Must be set BEFORE any function is parsed.
@@ -5207,6 +5341,28 @@ thread_local! {
     // with the same last segment (which would make the bare name genuinely ambiguous
     // between a Send and a !Send type). Populated per crate alongside the Send set.
     static GLOBAL_XC_NONSEND_LASTSEGS: std::cell::RefCell<HashSet<String>> =
+        std::cell::RefCell::new(HashSet::new());
+
+    // Rustdoc id -> RAW rustdoc DEFINITION path for every CRATE-LOCAL type in
+    // `doc["paths"]` (the `crate_id == 0` sibling of `EXTERNAL_DEFPATH_BY_ID`).
+    // Identity questions about a crate-local type (e.g. the `From<String>`
+    // conversion-target proof) resolve through this — a defining path is an
+    // identity key, never an emitted path. Reset per crate.
+    static LOCAL_DEFPATH_BY_ID: std::cell::RefCell<HashMap<String, String>> =
+        std::cell::RefCell::new(HashMap::new());
+
+    // Manifest-run set of DEFINING PATHS of types with a proven
+    // `impl From<String>` in their own crate (std `From` resolved by id, the
+    // argument identity-confirmed as std/alloc `String`, the target a
+    // crate-local concrete type). Consulted by the conversion-bound param
+    // admission: an `Into<X>` param whose target's defining path is in this
+    // set soundly takes a plain `String` (`String: Into<X>` follows from
+    // `X: From<String>` via the std blanket impl). Keyed on defining paths so
+    // the proof collected in the defining crate's pass reaches every sibling
+    // that names the type by re-export or foreign id. Fail-closed: no entry →
+    // the param falls through to the identity-target admission. Reset once
+    // per manifest run, unioned in every member crate's `parse_rustdoc`.
+    static GLOBAL_FROM_STRING_DEFPATHS: std::cell::RefCell<HashSet<String>> =
         std::cell::RefCell::new(HashSet::new());
 
     // Set of CRATE-LOCAL trait ids that themselves carry a `Send` supertrait
@@ -5850,6 +6006,34 @@ fn external_type_public_path(joined: &str) -> Option<String> {
 /// RAW rustdoc definition path of every external TYPE id — no public-path
 /// normalization, no fail-closed filtering. Identity queries only (never
 /// emitted as a Rust path).
+/// Rustdoc id -> RAW defining path for every CRATE-LOCAL type recorded in
+/// `doc["paths"]` — the `crate_id == 0` sibling of `collect_external_defpaths`.
+fn collect_local_defpaths(doc: &serde_json::Value) -> HashMap<String, String> {
+    let mut out: HashMap<String, String> = HashMap::new();
+    let Some(paths) = doc["paths"].as_object() else {
+        return out;
+    };
+    for (id, entry) in paths {
+        if entry["crate_id"].as_u64().unwrap_or(1) != 0 {
+            continue;
+        }
+        let kind = entry["kind"].as_str().unwrap_or("");
+        if !TYPE_KINDS.contains(&kind) {
+            continue;
+        }
+        if let Some(joined) = entry["path"].as_array().map(|segs| {
+            segs.iter()
+                .filter_map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join("::")
+        }) && !joined.is_empty()
+        {
+            out.insert(id.clone(), joined);
+        }
+    }
+    out
+}
+
 fn collect_external_defpaths(doc: &serde_json::Value) -> HashMap<String, String> {
     let mut out: HashMap<String, String> = HashMap::new();
     let Some(paths) = doc["paths"].as_object() else {
@@ -6404,7 +6588,9 @@ fn type_is_nameable(ty: &str) -> bool {
 /// All of a function's param / result / receiver types are nameable.
 fn fn_types_nameable(f: &Function) -> bool {
     f.params.iter().all(|p| type_is_nameable(&p.rust_type))
-        && f.results.iter().all(|p| result_type_nameable(f, &p.rust_type))
+        && f.results
+            .iter()
+            .all(|p| result_type_nameable(f, &p.rust_type))
         && (f.recv_rust_type.is_empty() || type_is_nameable(&f.recv_rust_type))
 }
 
@@ -6844,9 +7030,7 @@ fn is_provably_send_opaque_return(rt: &str) -> bool {
     // [stripe-send F3] A SIBLING manifest crate's plain data struct proven Send by ITS
     // OWN inspection (e.g. `stripe_shared::Customer` / `CheckoutSession` — the create/
     // checkout `send` Ok payload), rendered bare here and held by neither per-crate set.
-    in_recv
-        || PROVABLY_SEND_OPAQUE_NAMES.with(|c| c.borrow().contains(s))
-        || xc_send_proven(s)
+    in_recv || PROVABLY_SEND_OPAQUE_NAMES.with(|c| c.borrow().contains(s)) || xc_send_proven(s)
 }
 
 /// [stripe-send F3] True when `name` (bare or crate-qualified) matches the manifest-run
@@ -6868,8 +7052,11 @@ fn xc_send_proven(name: &str) -> bool {
         return true;
     }
     let last = n.rsplit("::").next().unwrap_or(n);
-    let matches_send = GLOBAL_XC_SEND_NAMES
-        .with(|c| c.borrow().iter().any(|p| p.rsplit("::").next() == Some(last)));
+    let matches_send = GLOBAL_XC_SEND_NAMES.with(|c| {
+        c.borrow()
+            .iter()
+            .any(|p| p.rsplit("::").next() == Some(last))
+    });
     if !matches_send {
         return false;
     }
@@ -8188,6 +8375,80 @@ fn is_iterator_trait_name(name: &str) -> bool {
     IterKind::from_trait_name(name).is_some()
 }
 
+/// The DEFINING path of a `resolved_path` type node, when recoverable —
+/// crate-local ids resolve through the local defpath map, external ids
+/// through the external one. An identity key only, never an emitted path.
+fn type_node_defpath(t: &serde_json::Value) -> Option<String> {
+    let id = t
+        .get("resolved_path")
+        .and_then(|rp| rp.get("id"))
+        .map(item_id_to_str)?;
+    LOCAL_DEFPATH_BY_ID
+        .with(|m| m.borrow().get(&id).cloned())
+        .or_else(|| EXTERNAL_DEFPATH_BY_ID.with(|m| m.borrow().get(&id).cloned()))
+}
+
+/// Whether a conversion-bound target carries a manifest-proven
+/// `impl From<String>` (its defining path is in the run-global proof set).
+/// Restricted to a concrete (generic-free) nominal; fail-closed otherwise.
+fn from_string_proven_target(t: &serde_json::Value) -> bool {
+    let Some(rp) = t.get("resolved_path") else {
+        return false;
+    };
+    let has_args = rp
+        .get("args")
+        .and_then(|a| a.get("angle_bracketed"))
+        .and_then(|ab| ab.get("args"))
+        .and_then(|v| v.as_array())
+        .is_some_and(|arr| arr.iter().any(|a| a.get("type").is_some()));
+    if has_args {
+        return false;
+    }
+    type_node_defpath(t)
+        .is_some_and(|dp| GLOBAL_FROM_STRING_DEFPATHS.with(|c| c.borrow().contains(&dp)))
+}
+
+/// Identity admission for a conversion-bound target: substitute the target
+/// ITSELF when it is a bindable nominal — a concrete (generic-free)
+/// `resolved_path` that passes the same bindability gate the renderer uses —
+/// or a `Vec` of one. Sound for `Into`/`From` bounds only: `X: Into<X>` and
+/// `X: From<X>` hold reflexively for every `X` (std blanket + reflexive
+/// `From` impls), so the wrapper passes the owned value straight through.
+/// Downstream nameability / Send gates still apply to the substituted type.
+fn conversion_target_identity(t: &serde_json::Value) -> Option<serde_json::Value> {
+    let rp = t.get("resolved_path")?;
+    let raw = rp
+        .get("name")
+        .or_else(|| rp.get("path"))
+        .and_then(|n| n.as_str())?;
+    let last = raw.rsplit("::").next().unwrap_or(raw);
+    let args: Vec<&serde_json::Value> = rp
+        .get("args")
+        .and_then(|a| a.get("angle_bracketed"))
+        .and_then(|ab| ab.get("args"))
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|a| a.get("type")).collect())
+        .unwrap_or_default();
+    if last == "Vec" {
+        // `Vec<X>` admits iff its single element is itself an admissible
+        // nominal; the whole node is the substituted concrete.
+        let [elem] = args.as_slice() else {
+            return None;
+        };
+        conversion_target_identity(elem)?;
+        return Some(t.clone());
+    }
+    if !args.is_empty() {
+        return None; // generic instantiation — out of scope
+    }
+    let id = rp.get("id")?;
+    if resolved_path_is_bindable(id, raw) {
+        Some(t.clone())
+    } else {
+        None
+    }
+}
+
 /// Map a single trait bound to the concrete type-JSON node to substitute, or
 /// `None` if the bound is not recognised. The arms delegate inner-type
 /// resolution to `concrete_for_inner_type`, which makes the table recursive:
@@ -8287,7 +8548,26 @@ fn bound_to_concrete(bound: &serde_json::Value, pos: BoundPos) -> Option<serde_j
                 if matches!(name, "Into" | "From") && arg.get("borrowed_ref").is_some() {
                     return None;
                 }
-                concrete_for_inner_type(arg)
+                if let Some(c) = concrete_for_inner_type(arg) {
+                    return Some(c);
+                }
+                // Nominal conversion targets, PARAM position only (an
+                // anonymous conversion-bound RETURN yields an opaque value
+                // that merely converts to the target — claiming the target
+                // in the wrapper signature would be a latent cargo-fail):
+                //   * `Into<X>` with a manifest-proven `X: From<String>`
+                //     takes a plain `String` (`String: Into<X>` follows via
+                //     the std blanket impl) — the typed-ID newtype surface;
+                //   * otherwise `Into<X>`/`From<X>` over a bindable nominal
+                //     (or `Vec` of one) substitutes the target itself
+                //     (reflexive conversion).
+                if pos == BoundPos::Param && matches!(name, "Into" | "From") {
+                    if name == "Into" && from_string_proven_target(arg) {
+                        return Some(string_node());
+                    }
+                    return conversion_target_identity(arg);
+                }
+                None
             }
         }
         // `Iterator<Item=X>` is INTENTIONALLY NOT resolved here. This is the
@@ -18293,7 +18573,9 @@ mod tests {
         assert!(xc_send_proven("CheckoutSession"));
         assert!(xc_send_proven("Customer"));
         // The full path matches directly too.
-        assert!(xc_send_proven("stripe_shared::checkout_session::CheckoutSession"));
+        assert!(xc_send_proven(
+            "stripe_shared::checkout_session::CheckoutSession"
+        ));
         // An absent type never matches.
         assert!(!xc_send_proven("PaymentMethod"));
         // Compound / reference / generic shapes never match here.
@@ -18326,7 +18608,9 @@ mod tests {
             "a same-named non-Send type must make the bare reference fail closed"
         );
         // …but naming the FULL Send path is unambiguous and still admitted.
-        assert!(xc_send_proven("stripe_shared::checkout_session::CheckoutSession"));
+        assert!(xc_send_proven(
+            "stripe_shared::checkout_session::CheckoutSession"
+        ));
 
         GLOBAL_XC_SEND_NAMES.with(|c| c.borrow_mut().clear());
         GLOBAL_XC_NONSEND_LASTSEGS.with(|c| c.borrow_mut().clear());
@@ -19898,5 +20182,338 @@ mod tests {
         fnd["sig"]["output"]["qualified_path"]["trait"]["id"] = serde_json::json!(2);
         let for_val = serde_json::json!({ "resolved_path": { "path": "Thing", "id": 5 } });
         assert!(resolve_self_assoc_projections(&fnd, Some(&for_val), &idx).is_none());
+    }
+
+    // ── param-shape admission: conversion-bound nominal targets ─────────────
+
+    /// Reset the thread-local state the conversion-target tests populate.
+    fn reset_conversion_target_state() {
+        REACHABLE_PATHS.with(|c| c.borrow_mut().clear());
+        LOCAL_TYPE_IDS.with(|c| c.borrow_mut().clear());
+        LOCAL_DEFPATH_BY_ID.with(|c| c.borrow_mut().clear());
+        EXTERNAL_DEFPATH_BY_ID.with(|c| c.borrow_mut().clear());
+        GLOBAL_FROM_STRING_DEFPATHS.with(|c| c.borrow_mut().clear());
+    }
+
+    #[test]
+    fn into_bindable_nominal_param_takes_identity() {
+        reset_conversion_target_state();
+        // A crate-local reachable nominal `tm::Widget` (id 100).
+        REACHABLE_PATHS.with(|c| {
+            c.borrow_mut()
+                .insert("100".to_string(), "tm::Widget".to_string())
+        });
+        let widget = serde_json::json!({
+            "resolved_path": { "name": "Widget", "path": "Widget", "id": 100, "args": null }
+        });
+
+        // PARAM position: `Into<Widget>` / `From<Widget>` substitute the target
+        // itself (reflexive conversion).
+        assert_eq!(
+            bound_to_concrete(&trait_bound("Into", vec![widget.clone()]), BoundPos::Param),
+            Some(widget.clone()),
+            "Into<bindable nominal> in PARAM position must identity-substitute"
+        );
+        assert_eq!(
+            bound_to_concrete(&trait_bound("From", vec![widget.clone()]), BoundPos::Param),
+            Some(widget.clone()),
+            "From<bindable nominal> in PARAM position must identity-substitute"
+        );
+
+        // RETURN position: an anonymous conversion-bound return only CONVERTS
+        // to the target — claiming the target would be a latent cargo-fail.
+        assert_eq!(
+            bound_to_concrete(&trait_bound("Into", vec![widget.clone()]), BoundPos::Return),
+            None,
+            "Into<bindable nominal> in RETURN position must stay dropped"
+        );
+
+        // AsRef/Borrow have NO reflexive impl — identity must not leak there.
+        assert_eq!(
+            bound_to_concrete(&trait_bound("AsRef", vec![widget.clone()]), BoundPos::Param),
+            None,
+            "AsRef<nominal> must NOT identity-substitute (no reflexive AsRef)"
+        );
+
+        // `Into<Vec<Widget>>` admits compositionally (the whole Vec node).
+        let vec_widget = serde_json::json!({
+            "resolved_path": { "name": "Vec", "path": "Vec", "id": 0,
+                "args": { "angle_bracketed": { "args": [{ "type": widget.clone() }], "constraints": [] } } }
+        });
+        assert_eq!(
+            bound_to_concrete(
+                &trait_bound("Into", vec![vec_widget.clone()]),
+                BoundPos::Param
+            ),
+            Some(vec_widget),
+            "Into<Vec<bindable nominal>> must admit as the Vec of the nominal"
+        );
+
+        // A crate-local NON-reachable (private) nominal fails closed.
+        LOCAL_TYPE_IDS.with(|c| c.borrow_mut().insert("101".to_string()));
+        let hidden = serde_json::json!({
+            "resolved_path": { "name": "Hidden", "path": "Hidden", "id": 101, "args": null }
+        });
+        assert_eq!(
+            bound_to_concrete(&trait_bound("Into", vec![hidden]), BoundPos::Param),
+            None,
+            "Into<private nominal> must fail closed"
+        );
+        reset_conversion_target_state();
+    }
+
+    #[test]
+    fn into_from_string_proven_target_takes_string() {
+        reset_conversion_target_state();
+        // `tm::WidgetId` (id 200): reachable, defining path recorded, and a
+        // manifest-proven `impl From<String>`.
+        REACHABLE_PATHS.with(|c| {
+            c.borrow_mut()
+                .insert("200".to_string(), "tm::WidgetId".to_string())
+        });
+        LOCAL_DEFPATH_BY_ID.with(|c| {
+            c.borrow_mut()
+                .insert("200".to_string(), "tm::WidgetId".to_string())
+        });
+        GLOBAL_FROM_STRING_DEFPATHS.with(|c| c.borrow_mut().insert("tm::WidgetId".to_string()));
+        let widget_id = serde_json::json!({
+            "resolved_path": { "name": "WidgetId", "path": "WidgetId", "id": 200, "args": null }
+        });
+
+        // `Into<WidgetId>` with the proof takes a plain String.
+        assert_eq!(
+            bound_to_concrete(
+                &trait_bound("Into", vec![widget_id.clone()]),
+                BoundPos::Param
+            ),
+            Some(string_node()),
+            "Into<X> with a proven X: From<String> must take String"
+        );
+        // Direction-sensitive: `From<WidgetId>` needs the OPPOSITE conversion —
+        // the String preference must not apply; identity does.
+        assert_eq!(
+            bound_to_concrete(
+                &trait_bound("From", vec![widget_id.clone()]),
+                BoundPos::Param
+            ),
+            Some(widget_id.clone()),
+            "From<X> must not take String off an X: From<String> proof"
+        );
+        // Without the proof the same target identity-substitutes.
+        GLOBAL_FROM_STRING_DEFPATHS.with(|c| c.borrow_mut().clear());
+        assert_eq!(
+            bound_to_concrete(
+                &trait_bound("Into", vec![widget_id.clone()]),
+                BoundPos::Param
+            ),
+            Some(widget_id),
+            "Into<X> without the From<String> proof falls back to identity"
+        );
+        reset_conversion_target_state();
+    }
+
+    #[test]
+    fn collect_from_string_defpaths_proves_by_identity() {
+        // `impl From<String> for WidgetId` in the crate under inspection: the
+        // trait resolves to std `From`, the argument's DEFINING path is
+        // alloc `String`, the target is a concrete crate-local type.
+        let doc = serde_json::json!({
+            "root": 1,
+            "index": {
+                "7": { "name": "WidgetId", "crate_id": 0, "visibility": "public",
+                    "inner": { "struct": { "kind": "unit",
+                        "generics": { "params": [], "where_predicates": [] } } } },
+                "50": { "name": null, "crate_id": 0, "visibility": "default",
+                    "inner": { "impl": {
+                        "generics": { "params": [], "where_predicates": [] },
+                        "trait": { "id": 42, "name": "From", "path": "From",
+                            "args": { "angle_bracketed": { "args": [
+                                { "type": { "resolved_path": { "name": "String", "path": "String", "id": 55, "args": null } } }
+                            ], "constraints": [] } } },
+                        "for": { "resolved_path": { "name": "WidgetId", "path": "WidgetId", "id": 7, "args": null } },
+                        "items": []
+                    } } },
+                // A LOOK-ALIKE with a non-String argument must NOT prove.
+                "51": { "name": null, "crate_id": 0, "visibility": "default",
+                    "inner": { "impl": {
+                        "generics": { "params": [], "where_predicates": [] },
+                        "trait": { "id": 42, "name": "From", "path": "From",
+                            "args": { "angle_bracketed": { "args": [
+                                { "type": { "primitive": "i64" } }
+                            ], "constraints": [] } } },
+                        "for": { "resolved_path": { "name": "OtherId", "path": "OtherId", "id": 8, "args": null } },
+                        "items": []
+                    } } },
+                "8": { "name": "OtherId", "crate_id": 0, "visibility": "public",
+                    "inner": { "struct": { "kind": "unit",
+                        "generics": { "params": [], "where_predicates": [] } } } }
+            },
+            "paths": {
+                "7":  { "crate_id": 0, "path": ["tm","WidgetId"], "kind": "struct" },
+                "8":  { "crate_id": 0, "path": ["tm","OtherId"],  "kind": "struct" },
+                "42": { "crate_id": 2, "path": ["core","convert","From"], "kind": "trait" },
+                "55": { "crate_id": 2, "path": ["alloc","string","String"], "kind": "struct" }
+            }
+        });
+        STD_TRAIT_BY_ID.with(|c| *c.borrow_mut() = collect_std_trait_ids(&doc));
+        let index = doc["index"].as_object().expect("index");
+        let proofs = collect_from_string_defpaths(&doc, index);
+        assert!(
+            proofs.contains("tm::WidgetId"),
+            "impl From<String> for WidgetId must prove tm::WidgetId"
+        );
+        assert!(
+            !proofs.contains("tm::OtherId"),
+            "impl From<i64> must NOT prove tm::OtherId"
+        );
+        STD_TRAIT_BY_ID.with(|c| c.borrow_mut().clear());
+    }
+
+    // ── param-shape admission: enum ctors + enum-typed fields ───────────────
+
+    /// A doc with a public Clone enum `Color` (unit `Red`, tuple `Code(i64)`,
+    /// and a variant-level non_exhaustive `Hidden`), the enum itself
+    /// `#[non_exhaustive]`, plus a public struct `Holder` with a `color: Color`
+    /// field and a `Clone` impl for both nominals.
+    fn nonexhaustive_enum_doc() -> serde_json::Value {
+        serde_json::json!({
+            "root": 1,
+            "index": {
+                "1": { "name": "tm", "crate_id": 0, "visibility": "public",
+                    "inner": { "module": { "items": [ 7, 30 ], "is_crate": true } } },
+                "7": { "name": "Color", "crate_id": 0, "visibility": "public",
+                    "attrs": ["non_exhaustive"],
+                    "inner": { "enum": {
+                        "generics": { "params": [], "where_predicates": [] },
+                        "variants": [ 10, 11, 12 ]
+                    } } },
+                "10": { "name": "Red", "crate_id": 0, "visibility": "default", "attrs": [],
+                    "inner": { "variant": { "kind": "plain" } } },
+                "11": { "name": "Code", "crate_id": 0, "visibility": "default", "attrs": [],
+                    "inner": { "variant": { "kind": { "tuple": [ 13 ] } } } },
+                "12": { "name": "Hidden", "crate_id": 0, "visibility": "default",
+                    "attrs": ["non_exhaustive"],
+                    "inner": { "variant": { "kind": "plain" } } },
+                "13": { "name": "0", "crate_id": 0, "visibility": "default",
+                    "inner": { "struct_field": { "primitive": "i64" } } },
+                "20": { "name": null, "crate_id": 0, "visibility": "default",
+                    "inner": { "impl": {
+                        "generics": { "params": [], "where_predicates": [] },
+                        "trait": { "id": 90, "name": "Clone", "path": "Clone" },
+                        "for": { "resolved_path": { "name": "Color", "path": "Color", "id": 7, "args": null } },
+                        "items": []
+                    } } },
+                "30": { "name": "Holder", "crate_id": 0, "visibility": "public",
+                    "inner": { "struct": {
+                        "kind": { "plain": { "fields": [ 31, 32, 33 ], "has_stripped_fields": false } },
+                        "generics": { "params": [], "where_predicates": [] }
+                    } } },
+                "31": { "name": "color", "crate_id": 0, "visibility": "public",
+                    "inner": { "struct_field": {
+                        "resolved_path": { "name": "Color", "path": "Color", "id": 7, "args": null } } } },
+                "32": { "name": "count", "crate_id": 0, "visibility": "public",
+                    "inner": { "struct_field": { "primitive": "u64" } } },
+                "33": { "name": "ratio", "crate_id": 0, "visibility": "public",
+                    "inner": { "struct_field": { "primitive": "f32" } } },
+                "40": { "name": null, "crate_id": 0, "visibility": "default",
+                    "inner": { "impl": {
+                        "generics": { "params": [], "where_predicates": [] },
+                        "trait": { "id": 90, "name": "Clone", "path": "Clone" },
+                        "for": { "resolved_path": { "name": "Holder", "path": "Holder", "id": 30, "args": null } },
+                        "items": []
+                    } } }
+            },
+            "paths": {
+                "1":  { "crate_id": 0, "path": ["tm"], "kind": "module" },
+                "7":  { "crate_id": 0, "path": ["tm","Color"], "kind": "enum" },
+                "30": { "crate_id": 0, "path": ["tm","Holder"], "kind": "struct" },
+                "90": { "crate_id": 2, "path": ["core","clone","Clone"], "kind": "trait" }
+            }
+        })
+    }
+
+    #[test]
+    fn nonexhaustive_enum_emits_variant_ctors() {
+        let doc = nonexhaustive_enum_doc();
+        let pkg = parse_rustdoc(&doc, "tm", "0.1.0");
+        // Enum-level non_exhaustive does NOT suppress ctors of nameable variants.
+        assert!(
+            pkg.functions
+                .iter()
+                .any(|f| f.name == "Red_new_variant" && f.recv_type == "Color"),
+            "unit-variant ctor of an enum-level non_exhaustive enum must bind"
+        );
+        assert!(
+            pkg.functions
+                .iter()
+                .any(|f| f.name == "Code_new_variant" && f.recv_type == "Color"),
+            "tuple-variant ctor of an enum-level non_exhaustive enum must bind"
+        );
+        // A VARIANT-level non_exhaustive variant stays non-constructible.
+        assert!(
+            !pkg.functions.iter().any(|f| f.name == "Hidden_new_variant"),
+            "variant-level non_exhaustive must keep suppressing the ctor"
+        );
+    }
+
+    #[test]
+    fn clone_enum_field_binds_getter_and_setter() {
+        let doc = nonexhaustive_enum_doc();
+        let pkg = parse_rustdoc(&doc, "tm", "0.1.0");
+        let getter = pkg
+            .functions
+            .iter()
+            .find(|f| f.name == "color_field" && f.recv_type == "Holder")
+            .expect("a crate-local Clone enum field must bind a getter");
+        assert_eq!(getter.results.first().map(|r| r.ty.as_str()), Some("Color"));
+        assert!(
+            pkg.functions
+                .iter()
+                .any(|f| f.name == "color_set_field" && f.recv_type == "Holder"),
+            "a crate-local Clone enum field must bind a setter"
+        );
+    }
+
+    #[test]
+    fn narrowing_int_field_binds_checked_fallible_setter() {
+        let doc = nonexhaustive_enum_doc();
+        let pkg = parse_rustdoc(&doc, "tm", "0.1.0");
+        // A u64 field: getter stays, setter is CHECKED (fallible).
+        let setter = pkg
+            .functions
+            .iter()
+            .find(|f| f.name == "count_set_field")
+            .expect("a narrowing integer field must bind a checked setter");
+        assert_eq!(
+            setter.effect, "fallible",
+            "the narrowing-int setter must be fallible (checked try_from)"
+        );
+        assert!(
+            pkg.functions.iter().any(|f| f.name == "count_field"),
+            "the u64 getter must stay"
+        );
+        // An f32 field: getter stays, setter stays DROPPED (precision loss
+        // has no meaningful range check).
+        assert!(
+            pkg.functions.iter().any(|f| f.name == "ratio_field"),
+            "the f32 getter must stay"
+        );
+        assert!(
+            !pkg.functions.iter().any(|f| f.name == "ratio_set_field"),
+            "an f32 field must NOT bind a setter"
+        );
+    }
+
+    #[test]
+    fn non_clone_enum_field_drops() {
+        let mut doc = nonexhaustive_enum_doc();
+        // Remove the enum's Clone impl — the getter body clones, so the field
+        // must fail closed.
+        doc["index"].as_object_mut().expect("index").remove("20");
+        let pkg = parse_rustdoc(&doc, "tm", "0.1.0");
+        assert!(
+            !pkg.functions.iter().any(|f| f.name == "color_field"),
+            "an enum field without std Clone must NOT bind a getter"
+        );
     }
 }
