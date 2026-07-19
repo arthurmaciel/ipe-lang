@@ -124,6 +124,94 @@
 - Gate: `ipe build` → emitted `cargo build` → run; behavior exercised as far
   as local emulators permit; every gap honestly recorded, never shimmed.
 
+### Milestone: foreign-type-one-home — the structural model for FFI type identity
+
+**The structural diagnosis.** Every wall so far is one symptom repeated at
+four layers: the SAME Rust type, reached via different crate paths (its
+definer vs a re-exporter), was assigned a DIFFERENT identity —
+- in *visibility* (doc-hidden stripping: the type invisible from every path),
+- in *Send-proof* (the consuming crate could not prove a sibling-owned type),
+- in *nameability* (two proven-public paths for one type → strict-unique
+  fail-closed), and now
+- in the *checker's nominal identity* (two `Rust.*` modules each declaring
+  their own opaque `type Client` → `IPE-T0001` between values of one type).
+
+The first three were fixed one wall at a time, and each fix converged on the
+same key: **the type's canonical DEFINING path — the `doc["paths"]` entry
+rustdoc records identically in every crate that can see the item** (the
+"defid"). That convergence is the structural answer, not a coincidence:
+
+> **A foreign type's identity IS its defining path.** One defid = one type,
+> everywhere: in rendering, in Send-proof, in nameability, and in the Ipê
+> type system. Rust itself works this way (a re-export is not a new type;
+> rustc unifies by DefId), and Elm works this way on the Ipê side (a type
+> has exactly ONE home module; other modules import it, never re-declare it).
+
+**Chosen design (dissolves the nominal wall; pre-empts the next).** Extend
+the defid SSOT from the inspector (where walls 1–3 already consult it) down
+through the artifact chain to the interface layer, and give every foreign
+type ONE Ipê home module — the Elm rule applied to generated modules:
+
+1. **Inspector** emits, per member crate, `foreignTypeIds`: every foreign
+   nominal path it rendered into a binding's type strings → that type's
+   defid. Both sides already exist in memory (`REACHABLE_PATHS` +
+   `EXTERNAL_TYPE_PATH_BY_ID` + `GLOBAL_XC_PUBLIC_PATH_BY_DEFID`, keyed from
+   `doc["paths"]`, never reconstructed — the private-module trap stays
+   closed). Filtered to paths actually used by emitted bindings.
+2. **`PkgInfo`** decodes it; **`crate_interface`** joins it with the
+   existing name→path map into `opaque_type_ids` (Ipê name → defid);
+   **`consumer.json`** round-trips it (plus the structured binding list it
+   already contains, now loaded fully).
+3. **Catalog unification at build time** (new `ipe_ffi::unify`), invoked
+   from `prepare_ffi` between catalog load and interface injection — the
+   single seam `build`/`watch`/`lsp` all share. For each foreign type NAME
+   surfaced by ≥2 member modules: unify iff (a) every surfacing member
+   reports a defid and all defids AGREE (≥2 distinct defids = genuinely
+   distinct same-named types → keep today's distinct nominals, correct
+   as-is), (b) the defining crate resolves to ONE version across those
+   members (checked against each member's recorded transitive-dep versions;
+   disagreement → no unification — never risk an E0308 SEAL break), and
+   (c) the induced interface-module import edge creates no cycle (names
+   processed in sorted order; an edge that would close a cycle skips that
+   name — deterministic, recorded).
+4. **One home per unified type**: the member module whose own crate IS the
+   definer (rendered-path first segment == defid first segment) becomes the
+   type's home; ties/none → lexicographically-first surfacing module. Every
+   OTHER member module stops declaring `type X = X` and instead gains
+   `import <Home> exposing (X)` — its signatures' bare `X` then
+   canonicalises to the home's nominal via the ordinary dep-type injection
+   (`inject_dep_type`), so the checker sees ONE `Con` for the type with no
+   checker change at all. Interface sources for demoted modules are
+   re-rendered from the structured consumer data (never text-patched).
+5. **Backend**: demoted modules' `opaque_types` entries drop; `foreign_types`
+   then carries exactly ONE `Module.X → rust_path` per unified type (the
+   home's own compilable path — the home crate is a direct dep by
+   construction), so emission has a single SSOT too.
+
+**Rejected alternatives.**
+- *Alias re-export* (`type alias X = Home.X` in demoted modules): dep-alias
+  bodies expand against the IMPORTING module's `qual_vars` (tier-1 gate in
+  `canonicalise_type`), so a qualified alias body breaks in any user module
+  that doesn't import the home itself; and the unqualified-alias-shadowing
+  arm expands aliases BEFORE qualified resolution, risking mis-binding of a
+  same-named DISTINCT type. Fragile where the import mechanism is exact.
+- *Checker-level identity keyed on Rust path* (a `Ty::Foreign(defid)` kind):
+  breaks the design's own keystone that FFI signatures flow through the SAME
+  annotation→`Ty` path as user annotations (no second scheme table), and
+  would special-case foreign types in every checker arm. The Elm one-home
+  rule achieves identical unification with zero checker surface.
+- *Post-hoc `IPE-T0001` fold* (checker treats equal-rust-path opaques as
+  equal): same objection — nominal identity would depend on a lookup table
+  outside the type system.
+
+**Consequences.** A unified type is nameable in user annotations ONLY via
+its home module (`import Rust.Async_stripe_client_core exposing (Client)`),
+exactly as an Elm type is — the demoted modules no longer export it. Values
+flow between all member modules' bindings with no annotation friction.
+Same-named distinct types keep distinct nominals (correct). Old caches
+without `foreignTypeIds` simply see no unification (today's behavior) —
+re-running `ipe install` upgrades them.
+
 ### Step: closure
 - `cargo fmt --all`; full scoped gates; divergence ledger updated (Δ1, Δ2);
   `AGENTS.md` untouched unless surface changed; final report.
@@ -170,7 +258,7 @@ the emulator/mock is available, never faked green:
 | firebase bind | pending — probe project scaffolded at `~/.cache/ipe/ffi-probe-firebase/` (`rs-firebase-admin-sdk = "4.3"`); not yet installed (blocked behind the stripe SEAL verification which consumed the session). |
 | skyshop transpose | pending — BLOCKED on the cross-crate foreign-type nominal unification wall above (skyshop's stripe used-set threads the `Client` across `Rust.Async_stripe*` modules exactly like the SEAL probe). Reference source `../sky/examples/rust/skyshop-rs/src/` surveyed (~8.2k lines, Lib/Stripe.sky+Db.sky+Auth.sky thin shim wrappers); `examples/13-skyshop/` slot free. |
 | closure | pending |
-| cross-crate foreign-type nominal unification (NEW WALL, blocks acceptance) | OPEN — see the async-stripe row's NEXT WALL note. Same foreign Rust type exposed by ≥2 installed crates must resolve to ONE Ipê opaque. |
+| foreign-type-one-home (the structural fix; blocks acceptance) | design written (see the named milestone section above) — one defid = one Ipê type with one home module; implementation next. |
 
 ### 5a. Remaining-spec milestones (`async-ffi-bridge-remaining-spec.md`)
 
