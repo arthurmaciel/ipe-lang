@@ -2176,6 +2176,7 @@ dependencies = [
  "ipe_db",
  "ipe_diagnostics",
  "ipe_intern",
+ "ipe_syntax",
  "ipe_types",
  "lsp-types",
 ]
