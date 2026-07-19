@@ -443,7 +443,7 @@ mod process_run_tests {
     #[test]
     fn nonexistent_binary_errs() {
         let res: IpeResult<String, String> = block(process_run::<String>(
-            "sky-does-not-exist-binary-xyz".to_string(),
+            "ipe-does-not-exist-binary-xyz".to_string(),
             vec![],
         ));
         assert!(matches!(res, IpeResult::Err(_)));

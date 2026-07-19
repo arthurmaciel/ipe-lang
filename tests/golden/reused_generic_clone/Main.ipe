@@ -7,7 +7,7 @@ import Ipe.Log exposing (println)
 
 -- BACKLOG #189 regression — a reused-by-value generic param clone gap (SEAL).
 --
--- Pre-fix: `skyc build` exits 0, but the emitted Rust fails `cargo build` with
+-- Pre-fix: `ipec build` exits 0, but the emitted Rust fails `cargo build` with
 -- E0382 (`use of moved value: x`) in the body of a function whose only generic
 -- is used MORE THAN ONCE in a by-value consuming position. `dup x =
 -- toString x ++ toString x` emits `basics_to_string(x)` TWICE with no
@@ -19,7 +19,7 @@ import Ipe.Log exposing (println)
 -- (`ir_contains_fun(Generic) == false`) — so a reused generic silently moved
 -- twice.
 --
--- Fix (`param_is_multiuse_clonable`, `crates/sky_lower/src/lower.rs`): the T5
+-- Fix (`param_is_multiuse_clonable`, `crates/ipe_lower/src/lower.rs`): the T5
 -- loop treats a reused bare `IrType::Generic(_)` param as clonable, inserting
 -- `.clone()` on all-but-last use. Sound because `render_fn_generics` stamps
 -- `T: Clone` on EVERY emitted generic fn type-param unconditionally — the

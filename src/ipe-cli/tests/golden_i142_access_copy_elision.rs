@@ -75,7 +75,7 @@ fn emit_fixture(out_name: &str) -> String {
 /// happens to run (which a no-op fix would also pass).
 #[test]
 fn copy_field_reads_bare_heap_field_keeps_clone() {
-    let emitted = emit_fixture("skyc_i142_copy_field_no_clone_emit");
+    let emitted = emit_fixture("ipec_i142_copy_field_no_clone_emit");
 
     let relevant = || {
         emitted
@@ -115,8 +115,8 @@ fn copy_field_no_clone_compiles_and_runs() {
         return;
     }
 
-    let _ = emit_fixture("skyc_i142_copy_field_no_clone_e2e");
-    let out = std::env::temp_dir().join("skyc_i142_copy_field_no_clone_e2e");
+    let _ = emit_fixture("ipec_i142_copy_field_no_clone_e2e");
+    let out = std::env::temp_dir().join("ipec_i142_copy_field_no_clone_e2e");
 
     let outcome = support::build_and_run_emitted("copy_field_no_clone", &out);
     assert_eq!(

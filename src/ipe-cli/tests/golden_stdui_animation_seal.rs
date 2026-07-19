@@ -33,7 +33,7 @@ fn runtime() -> PathBuf {
 /// exercise `Ui.animateRaw` (name + shorthand tail + empty body + respect flag),
 /// so the seal this test guards — `Ipe.Ui.Animation` resolves and its
 /// `attribute` lowers to the native kernel — is proven without depending on it.
-const MAIN_SKY: &str = r#"module Main exposing (main)
+const MAIN_IPE: &str = r#"module Main exposing (main)
 
 import Ipe.Html as Html
 import Ipe.Ui as Ui
@@ -69,7 +69,7 @@ fn build_animation_project(slot: &str) -> (PathBuf, Result<(), ipe::CliError>) {
     let src = out.join("src");
     std::fs::create_dir_all(&src).expect("mk animation test project dirs");
     let entry = src.join("Main.ipe");
-    std::fs::write(&entry, MAIN_SKY).expect("write Main.ipe");
+    std::fs::write(&entry, MAIN_IPE).expect("write Main.ipe");
     let emit = out.join("emit");
     let res = ipe::build(&entry, &emit, &runtime());
     (emit, res)

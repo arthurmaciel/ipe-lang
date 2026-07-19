@@ -501,7 +501,7 @@ mod tests {
         );
     }
 
-    // Snapshot port of ../sky fixture `70-style-injection`: the exact raw
+    // Snapshot port of ../ipe fixture `70-style-injection`: the exact raw
     // media-query breakout probe must be neutralised — no `</style>` survives and
     // no `</style><script` breakout sequence forms (the injected `<script>` is
     // trapped inert inside the `<style>` block).

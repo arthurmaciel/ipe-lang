@@ -350,14 +350,14 @@ fn render_into_ctx<M>(
                 s.push('"');
             }
             // Browser-client wire markers (live/client.js): the delegated
-            // binder scans for `[sky-<event>]`, reads `data-ipe-hid` for the
-            // ipe-id, and posts the `sky-<event>` value as `msg`. We make that
+            // binder scans for `[ipe-<event>]`, reads `data-ipe-hid` for the
+            // ipe-id, and posts the `ipe-<event>` value as `msg`. We make that
             // value the EVENT NAME so the server can tell click from submit
             // (the client doesn't send the event type otherwise) — the handler
             // resolves by (ipe-id, event). `data-ipe-on` is kept for parity
             // with Go's render.
             // Event names are emitted unescaped as both the `data-ipe-on` value
-            // and the `sky-<ev>` attribute key — an unsafe name injects markup.
+            // and the `ipe-<ev>` attribute key — an unsafe name injects markup.
             // Drop any that aren't valid HTML names.
             events.retain(|e| is_safe_html_name(e));
             if !events.is_empty() {
@@ -370,11 +370,11 @@ fn render_into_ctx<M>(
                     s.push('"');
                 }
                 for ev in &events {
-                    // File/image meta-events arrive already `sky-`-prefixed
+                    // File/image meta-events arrive already `ipe-`-prefixed
                     // (`ipe-image`/`ipe-file`); the client's upload driver reads
                     // them via the `data-ipe-ev-<name>` HTML5 data-attribute
-                    // convention, while plain DOM events keep `sky-<name>` (Go
-                    // live.go:395-405). Emitting `sky-ipe-image` made the driver
+                    // convention, while plain DOM events keep `ipe-<name>` (Go
+                    // live.go:395-405). Emitting `ipe-ipe-image` made the driver
                     // lookup miss, so uploads never fired. `ev` is already
                     // name-gated (events.retain above), so both keys are safe.
                     let key = if ev.starts_with("ipe-") {
@@ -771,7 +771,7 @@ fn set_attr<M>(attrs: &mut Vec<Attribute<M>>, key: &str, val: &str) {
 }
 
 // --- Ipe.Html kernel wrappers (`Ffi.callPure "htmlXxx"`) ---
-// These match the kernel names used in sky-stdlib Ipe.Html.ipe — the Ipê-side
+// These match the kernel names used in ipe-stdlib Ipe.Html.ipe — the Ipê-side
 // helpers (render, escapeHtml, escapeAttr, attrToString) route here on the Rust
 // backend. The codegen converts "htmlRender" → `html_render_()`, etc. Kept in
 // this standalone module (not under live/) so a non-Live Ipe.Html / Ipe.Ui app
@@ -929,7 +929,7 @@ pub fn html_on_raw_<M, T, F: Fn(T) -> M>(_name: String, _payload: F) -> Attribut
 /// `html_on_raw_` (the typed-record decode shape above): the "form fields
 /// are already synced into Model via `onInput`/`onChange`; submit just
 /// triggers a fixed action" idiom (`onSubmit DoSignUp` where `DoSignUp : Msg`
-/// carries no payload — `examples/12-skyvote`'s Auth/Submit/Detail pages).
+/// carries no payload — `examples/12-ipevote`'s Auth/Submit/Detail pages).
 ///
 /// Deliberately does NOT route through `decode_form_or_warn` — there is no
 /// payload type to decode into (the dispatched value is fixed regardless of
@@ -1457,7 +1457,7 @@ mod tests {
         assert!(render_html(&node).contains("if (1 < 2)"));
     }
 
-    // ── Snapshot port of ../sky fixture `69-html-render-parity` (Go parity) ────
+    // ── Snapshot port of ../ipe fixture `69-html-render-parity` (Go parity) ────
     #[test]
     fn fixture69_render_parity() {
         // <select value="b"> flips `selected` onto the matching <option>, NOT the

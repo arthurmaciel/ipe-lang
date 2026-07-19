@@ -68,7 +68,7 @@ fn color_css(c: &Color) -> String {
 ///
 /// `pub(crate)` so `ui::helpers::ui_on_pseudo_` can reuse the identical
 /// style-collection logic to build a pseudo-class rules-string (mirrors the
-/// `../sky` reference's `onPseudo pc attrs = AttrPseudoRule pc
+/// `../ipe` reference's `onPseudo pc attrs = AttrPseudoRule pc
 /// (mediaQueryRulesCss attrs)`, which folds attrs through the SAME collector
 /// used for the main `style=""` attribute — one collector, two call sites).
 pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
@@ -350,7 +350,7 @@ fn collect_html_attrs<M: Clone>(attrs: &[Attribute<M>]) -> Vec<HtmlAttribute<M>>
     // `ipe_runtime::live::style_inject::build_pc` (called post-`assign_ipe_ids`
     // from the Ipe.Live / Ipe.Webview render pipelines), which expands it into
     // a ipe-id-scoped `<style>` block. Multiple entries with the SAME tag are
-    // NOT merged (each keeps its own `tag|css` segment) — matches the `../sky`
+    // NOT merged (each keeps its own `tag|css` segment) — matches the `../ipe`
     // reference's `injectPseudoClassStyles` wire contract.
     let mut pseudo_rules: Vec<String> = Vec::new();
     for attr in attrs {
@@ -984,7 +984,7 @@ mod tests {
     }
 
     #[test]
-    fn ui_on_pseudo_emits_data_sky_pc_rules_marker() {
+    fn ui_on_pseudo_emits_data_ipe_pc_rules_marker() {
         // `Ui.onPseudo Ui.hover [Background.color red]` must attach a
         // `data-ipe-pc-rules="h|background-color:rgba(255,0,0,1)"` marker —
         // the wire format `ipe_runtime::live::style_inject::build_pc` decodes
@@ -1197,7 +1197,7 @@ mod tests {
     fn ui_on_pseudo_all_five_constants_produce_distinct_wire_tags() {
         // hover→h, focus→f, focusVisible→v, active→a, disabled→d — MUST match
         // `ipe_runtime::live::style_inject::pseudo_selector_for_tag` and the
-        // `../sky` reference's `pseudoClassTag`.
+        // `../ipe` reference's `pseudoClassTag`.
         let cases: [(super::super::element::PseudoClass, &str); 5] = [
             (super::super::helpers::ui_hover_(), "h"),
             (super::super::helpers::ui_focus_(), "f"),
@@ -1226,7 +1226,7 @@ mod tests {
     }
 
     #[test]
-    fn ui_on_file_registers_sky_file_wire_event() {
+    fn ui_on_file_registers_ipe_file_wire_event() {
         use crate::html::{Attribute as HtmlAttr, Event};
         let attr =
             super::super::helpers::ui_on_file_::<TestMsg>(std::sync::Arc::new(|_s| TestMsg::Click));

@@ -1,6 +1,6 @@
 //! Parenthesised field-access gate: `(expr).field`.
 //! Field access on a *non-identifier* atom — a parenthesised expression — must
-//! parse as a postfix `.field` access, matching the Go reference. `skyc` must
+//! parse as a postfix `.field` access, matching the Go reference. `ipec` must
 //! emit `main.rs` byte-identical to the checked-in golden, and (behind
 //! `IPE_E2E=1`) the emitted project must build and print `42`.
 //!
@@ -15,12 +15,12 @@
 //! parenthesised-postfix support rejects with IPE-P0011 (`stray '.'`).
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
-//! `/home/arthur/Documentos/comp/sky/out/sky` compiles + runs the SAME
+//! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
 //! `Main.ipe` to stdout `42\n`, exit 0 — hand-verified in a temp dir (so the Go
 //! build artifacts never touch the reference tree):
 //!
 //! ```text
-//! $ cd "$(mktemp -d)" && sky run Main.ipe   # Go backend
+//! $ cd "$(mktemp -d)" && ipe run Main.ipe   # Go backend
 //! 42
 //! ```
 use std::path::{Path, PathBuf};
@@ -74,7 +74,7 @@ fn end_to_end_builds_and_prints_forty_two() {
 
     let root = repo_root();
     let entry = example_entry(&root);
-    let out = std::env::temp_dir().join("skyc_m3b1_dotfield_e2e");
+    let out = std::env::temp_dir().join("ipec_m3b1_dotfield_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

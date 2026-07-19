@@ -24,7 +24,7 @@ fieldOf r =
 -- (`RecCount_R { count: 99 }`), then scanned it for the bare word "count"
 -- and unconditionally appended `.clone()` — including onto the STRUCT
 -- FIELD NAME (`count:` -> `count.clone():`), which is not valid Rust syntax
--- in field-key position. That was a genuine seal breach: a well-typed Sky
+-- in field-key position. That was a genuine seal breach: a well-typed Ipe
 -- program that failed `cargo build`.
 --
 -- Expected output: "99" then "3" (both the record's field read and the

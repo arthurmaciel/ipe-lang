@@ -1,6 +1,6 @@
 //! Class 4 item C — nested-constructor-payload function-argument patterns.
 //!
-//! Two shapes that the reference (../sky) recurses into and compiles are
+//! Two shapes that the reference (../ipe) recurses into and compiles are
 //! ACCEPTED (rather than fail-closing as IPE-L0112 record / IPE-L0116 cons):
 //!
 //! * A RECORD sub-pattern nested in a ctor payload (`Ok { name }`) — the

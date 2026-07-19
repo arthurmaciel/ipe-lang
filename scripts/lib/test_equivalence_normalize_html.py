@@ -116,7 +116,7 @@ class OldMaskWasAFalseGreenHoleTests(unittest.TestCase):
         m.norm_svg_coord = fn
         try:
             p = m.Norm()
-            p.feed(m.extract_sky_root(html))
+            p.feed(m.extract_ipe_root(html))
             p.close()
             return ''.join(p.out)
         finally:

@@ -232,14 +232,14 @@ mod load_from_file_tests {
     #[test]
     fn loads_and_decodes_json() {
         let p = std::env::temp_dir().join(format!("ipe_cfg_json_{}.json", std::process::id()));
-        std::fs::write(&p, r#"{"name": "sky"}"#).unwrap();
+        std::fs::write(&p, r#"{"name": "ipe"}"#).unwrap();
         let res: IpeResult<String, String> = block(config_load_from_file(
             p.to_string_lossy().into_owned(),
             name_decoder(),
         ));
         let _ = std::fs::remove_file(&p);
         match res {
-            IpeResult::Ok(s) => assert_eq!(s, "sky"),
+            IpeResult::Ok(s) => assert_eq!(s, "ipe"),
             IpeResult::Err(e) => panic!("unexpected Err: {e}"),
         }
     }
@@ -247,14 +247,14 @@ mod load_from_file_tests {
     #[test]
     fn loads_and_decodes_toml() {
         let p = std::env::temp_dir().join(format!("ipe_cfg_toml_{}.toml", std::process::id()));
-        std::fs::write(&p, "name = \"sky\"\n").unwrap();
+        std::fs::write(&p, "name = \"ipe\"\n").unwrap();
         let res: IpeResult<String, String> = block(config_load_from_file(
             p.to_string_lossy().into_owned(),
             name_decoder(),
         ));
         let _ = std::fs::remove_file(&p);
         match res {
-            IpeResult::Ok(s) => assert_eq!(s, "sky"),
+            IpeResult::Ok(s) => assert_eq!(s, "ipe"),
             IpeResult::Err(e) => panic!("unexpected Err: {e}"),
         }
     }
@@ -281,7 +281,7 @@ mod load_from_file_tests {
     #[test]
     fn missing_file_errs() {
         let res: IpeResult<String, String> = block(config_load_from_file(
-            "/nonexistent/sky/config/path/does-not-exist.json".to_string(),
+            "/nonexistent/ipe/config/path/does-not-exist.json".to_string(),
             name_decoder(),
         ));
         assert!(matches!(res, IpeResult::Err(_)));

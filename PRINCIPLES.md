@@ -138,12 +138,12 @@ emitted where a concrete was possible passes a mechanical gate but can ship a
 silent runtime bug (e.g. a `TypeId`-keyed broker needs publisher and
 subscriber on the same concrete `T`) — always emit concrete when concrete is
 possible. Sanctioned runtime-internal *container* exceptions (payload itself
-never erased or downcast): `runtime/src/sky_runtime/cache.rs` and
-`runtime/src/sky_runtime/live/pubsub.rs`.
+never erased or downcast): `runtime/src/ipe_runtime/cache.rs` and
+`runtime/src/ipe_runtime/live/pubsub.rs`.
 
 ## Match the reference
 
-Go/Haskell (`../sky`) parity is the default contract; `../sky` is READ-ONLY.
+Go/Haskell (`../ipe`) parity is the default contract; `../ipe` is READ-ONLY.
 Diverge ONLY where the divergence is strictly better under the principle order
 (Rust semantics, Unicode correctness, modern security posture) AND it is
 recorded in `docs/divergences-from-sky.md` with rationale and its own tests. A
@@ -161,7 +161,7 @@ Master only ever advances to a full-gate-certified sha.
   A cheap-green lane lands but stays uncertified.
 - **Full gate — the ONE authoritative run per batch** (every N cycles or when
   pending work drains): `cargo nextest run --workspace`; `cargo nextest run
-  -p sky-runtime-rust --features full` (LOAD-BEARING — the runtime's
+  -p ipe-runtime-rust --features full` (LOAD-BEARING — the runtime's
   `default = []` means the workspace run skips every feature-gated test,
   including the entire `live::*` surface); `cargo test --workspace --doc`;
   `cargo clippy --workspace --all-targets -- -D warnings`; fuzz + full
@@ -180,8 +180,8 @@ Exactly two writable locations, for everyone (agent or human):
   outside this root is invisible to disk-reclaim and fills the disk to 100%.
   Emergency prune is one place: `rm -rf ~/.cache/ipe/*` (rebuilds warm).
 - **Source/doc/test edits → the repo working tree ONLY.** Boundary: `crates/`,
-  `runtime/`, sky-stdlib compiled-source, `examples/` fixtures, `docs/`.
-  `../sky` is READ-ONLY reference — never edit the Haskell/Go backend or
+  `runtime/`, ipe-stdlib compiled-source, `examples/` fixtures, `docs/`.
+  `../ipe` is READ-ONLY reference — never edit the Haskell/Go backend or
   upstream.
 
 ## Agent-lane operational rules
@@ -200,7 +200,7 @@ Every dispatched lane (autopilot or hand-dispatched):
   sub-agents; the orchestrator is the only dispatcher.
 - **Understand before changing — port, don't invent.** Query the indexes
   BEFORE `rg`: `scripts/ipe-index` for our Rust (`def`/`refs`/`kind`/
-  `locate`/`parity`), `skydex` for the `../sky` reference (`locate`/`rdeps`/
+  `locate`/`parity`), `ipedex` for the `../ipe` reference (`locate`/`rdeps`/
   `covers`/`parity`). Learn how the reference handles the construct across
   compiler + backend + runtime before designing the fix.
 

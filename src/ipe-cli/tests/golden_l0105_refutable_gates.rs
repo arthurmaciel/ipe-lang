@@ -1,7 +1,7 @@
 //! IPE-L0105 refutable parameter patterns — the negative surface. A
 //! parameter (or `let` binder) is a BINDING position: it must match every value
 //! of its type. A refutable param must therefore be a clean, span-carrying
-//! compile-time error — never a runtime match failure (upstream Sky's
+//! compile-time error — never a runtime match failure (upstream Ipe's
 //! `panic!("non-exhaustive … function argument")` is REJECTED here as a
 //! soundness + `DoS` hole).
 //!
@@ -57,7 +57,7 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code)
 }
 
 #[test]
-fn ctor_lambda_param_is_sky_t0015() {
+fn ctor_lambda_param_is_ipe_t0015() {
     assert_gate(
         "neg_ctor_lambda",
         "l0105_neg_ctor_lambda_emit",
@@ -66,7 +66,7 @@ fn ctor_lambda_param_is_sky_t0015() {
 }
 
 #[test]
-fn ctor_def_head_param_is_sky_t0015() {
+fn ctor_def_head_param_is_ipe_t0015() {
     assert_gate(
         "neg_ctor_def",
         "l0105_neg_ctor_def_emit",
@@ -75,7 +75,7 @@ fn ctor_def_head_param_is_sky_t0015() {
 }
 
 #[test]
-fn tuple_param_with_refutable_element_is_sky_t0015() {
+fn tuple_param_with_refutable_element_is_ipe_t0015() {
     assert_gate(
         "neg_nested_tuple",
         "l0105_neg_nested_tuple_emit",
@@ -84,7 +84,7 @@ fn tuple_param_with_refutable_element_is_sky_t0015() {
 }
 
 #[test]
-fn cons_lambda_param_is_sky_t0015() {
+fn cons_lambda_param_is_ipe_t0015() {
     assert_gate(
         "neg_cons_lambda",
         "l0105_neg_cons_lambda_emit",
@@ -114,7 +114,7 @@ fn bare_list_lambda_param_is_parse_rejected() {
 /// `amount (Money d _) = d` must still be rejected as IPE-T0015.
 /// Proves the stdlib fix did not relax the irrefutability rule.
 #[test]
-fn single_ctor_union_def_param_is_sky_t0015() {
+fn single_ctor_union_def_param_is_ipe_t0015() {
     assert_gate(
         "neg_money_ctor_param",
         "l0105_neg_money_ctor_param_emit",
@@ -148,7 +148,7 @@ fn single_ctor_case_accessor_compiles() {
 /// Seal remeasure: building examples/00-standard-libs must NOT produce IPE-T0015
 /// on Std/Money or Ipê/Test after the Std/Money.ipe accessor fix.
 #[test]
-fn standard_libs_sky_t0015_money_blocker_gone() {
+fn standard_libs_ipe_t0015_money_blocker_gone() {
     let root = repo_root();
     let manifest = root
         .join("examples")

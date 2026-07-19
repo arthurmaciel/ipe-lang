@@ -63,11 +63,11 @@ fn entry_path(root: &Path) -> PathBuf {
 /// `.clone()`).  A regression to per-arm-seed-without-phantom would make arm A
 /// bare AND the tail a dangling move → E0382 caught by the E2E test.
 #[test]
-fn i193_skyc_accepts_asymmetric_arms() {
+fn i193_ipec_accepts_asymmetric_arms() {
     let root = repo_root();
     let entry = entry_path(&root);
     let out =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i193_asymmetric_arms_cloneok_skyc_out");
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i193_asymmetric_arms_cloneok_ipec_out");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -160,7 +160,7 @@ fn i193_cargo_builds_and_runs() {
 
     let root = repo_root();
     let entry = entry_path(&root);
-    let out = std::env::temp_dir().join("skyc_i193_asymmetric_arms_e2e");
+    let out = std::env::temp_dir().join("ipec_i193_asymmetric_arms_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -177,17 +177,17 @@ fn i193_cargo_builds_and_runs() {
         "asymmetric_arms_cloneok must exit 0 (no E0382); stdout: {:?}",
         outcome.stdout
     );
-    // format_tag True "sky"  → "SKY [sky]"
-    // format_tag False "sky" → "sky (SKY) [sky]"
-    // format_tag2 True "sky" → "sky (SKY) [sky]"
-    // format_tag2 False "sky"→ "SKY [sky]"
+    // format_tag True "ipe"  → "IPE [ipe]"
+    // format_tag False "ipe" → "ipe (IPE) [ipe]"
+    // format_tag2 True "ipe" → "ipe (IPE) [ipe]"
+    // format_tag2 False "ipe"→ "IPE [ipe]"
     let stdout = &outcome.stdout;
     assert!(
-        stdout.contains("SKY [sky]"),
-        "must contain 'SKY [sky]' (once-in-arm-A result); got: {stdout:?}"
+        stdout.contains("IPE [ipe]"),
+        "must contain 'IPE [ipe]' (once-in-arm-A result); got: {stdout:?}"
     );
     assert!(
-        stdout.contains("sky (SKY) [sky]"),
-        "must contain 'sky (SKY) [sky]' (twice-in-arm-B result); got: {stdout:?}"
+        stdout.contains("ipe (IPE) [ipe]"),
+        "must contain 'ipe (IPE) [ipe]' (twice-in-arm-B result); got: {stdout:?}"
     );
 }

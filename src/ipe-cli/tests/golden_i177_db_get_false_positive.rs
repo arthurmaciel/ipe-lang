@@ -51,10 +51,10 @@ fn entry_path(root: &Path, fixture: &str) -> PathBuf {
 // just above MUST have written `src/main.rs`; an unreadable file here means the
 // emitter/fixture is broken, so aborting is the correct failure signal.
 #[allow(clippy::expect_used)]
-fn assert_skyc_accepts_without_sky_row(fixture: &str) {
+fn assert_ipec_accepts_without_ipe_row(fixture: &str) {
     let root = repo_root();
     let entry = entry_path(&root, fixture);
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{fixture}_skyc_out"));
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{fixture}_ipec_out"));
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -89,7 +89,7 @@ fn assert_cargo_builds_and_runs(fixture: &str, expected_stdout: &str) {
 
     let root = repo_root();
     let entry = entry_path(&root, fixture);
-    let out = std::env::temp_dir().join(format!("skyc_{fixture}_e2e"));
+    let out = std::env::temp_dir().join(format!("ipec_{fixture}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -121,8 +121,8 @@ fn assert_cargo_builds_and_runs(fixture: &str, expected_stdout: &str) {
 }
 
 #[test]
-fn i177_false_positive_string_literal_skyc_no_sky_row() {
-    assert_skyc_accepts_without_sky_row("db_get_false_positive_string_literal");
+fn i177_false_positive_string_literal_ipec_no_ipe_row() {
+    assert_ipec_accepts_without_ipe_row("db_get_false_positive_string_literal");
 }
 
 #[test]
@@ -134,8 +134,8 @@ fn i177_false_positive_string_literal_cargo_builds_and_runs() {
 }
 
 #[test]
-fn i177_false_positive_user_symbol_skyc_no_sky_row() {
-    assert_skyc_accepts_without_sky_row("db_get_false_positive_user_symbol");
+fn i177_false_positive_user_symbol_ipec_no_ipe_row() {
+    assert_ipec_accepts_without_ipe_row("db_get_false_positive_user_symbol");
 }
 
 #[test]

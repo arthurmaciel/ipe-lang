@@ -24,7 +24,7 @@ fn repo_root() -> PathBuf {
 }
 
 #[test]
-fn ui_input_and_describe_skyc_and_cargo_zero() {
+fn ui_input_and_describe_ipec_and_cargo_zero() {
     if std::env::var("IPE_E2E").is_err() {
         return;
     }
@@ -32,7 +32,7 @@ fn ui_input_and_describe_skyc_and_cargo_zero() {
     let root = repo_root();
     let dir = root.join("tests").join("golden").join("stdui_input");
     let entry = dir.join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_m7_stdui_input_e2e");
+    let out = std::env::temp_dir().join("ipec_m7_stdui_input_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

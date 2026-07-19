@@ -217,7 +217,7 @@ Rust text and re-derive it from the validated domain value on load.
   diverges from the Go reference's cache contract.
 
 **Go/Elm parity.** The Go reference's FFI is a separate lineage; this is the
-Rust-backend's own trust surface (per `sky-rust-is-ipe-ancestor` memory), so
+Rust-backend's own trust surface (per `ipe-lang-is-ipe-ancestor` memory), so
 there is no upstream contract to match — the newtypes are a strict
 security improvement, no divergence record needed unless the cache-artifact set
 changes shape (then record it).

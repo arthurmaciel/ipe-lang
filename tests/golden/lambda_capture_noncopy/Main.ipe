@@ -6,8 +6,8 @@ module Main exposing (main)
 -- closure is `Fn` (re-usable per `List.map` element), not `FnOnce` (E0525).
 --
 -- F11 shadow-control is embedded: `tag` rebinds `prefix` as a count string.
--- The lambda must capture the PARAMETER prefix ("sky-"), not the shadow ("2").
--- Correct output (`sky-one,sky-two[2]`) proves the shadow-discipline holds.
+-- The lambda must capture the PARAMETER prefix ("ipe-"), not the shadow ("2").
+-- Correct output (`ipe-one,ipe-two[2]`) proves the shadow-discipline holds.
 
 
 tag : String -> List String -> String
@@ -18,4 +18,4 @@ tag prefix items =
 
 
 main =
-    println (tag "sky-" [ "one", "two" ])
+    println (tag "ipe-" [ "one", "two" ])

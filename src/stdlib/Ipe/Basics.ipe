@@ -1,11 +1,11 @@
 -- | Ipe.Basics — non-numeric basics.
 --
--- v0.13 Layer 3 / Phase B4: Sky source for the trivially-
+-- v0.13 Layer 3 / Phase B4: Ipe source for the trivially-
 -- non-recursive basics.  Numeric primitives (add/sub/mul/div,
 -- negate, abs, sqrt, modBy) stay kernel-anchored — they're Go
 -- primitives.  `toString` / `compare` stay kernel because they
 -- need polymorphic dispatch via reflect that's hard to express
--- in Sky source without `Ipe.Ffi.call`.
+-- in Ipe source without `Ipe.Ffi.call`.
 module Ipe.Basics exposing
     ( identity
     , always

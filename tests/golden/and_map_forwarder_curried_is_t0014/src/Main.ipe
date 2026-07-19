@@ -11,7 +11,7 @@ import Ipe.Log exposing (println)
 -- obligation on `andMapAlias`'s own `b` skolem here is checked through
 -- `check_scheme_applications` / `SchemeApp` — the SAME per-external-call-site
 -- re-verification `Math.min`'s forwarder gate uses
--- (`crates/skyc/tests/golden_m4c_math_gate.rs`) — producing the FRIENDLY,
+-- (`crates/ipec/tests/golden_m4c_math_gate.rs`) — producing the FRIENDLY,
 -- specifically-labelled `SuperTypeUnsatisfied` (IPE-T0014) diagnostic naming
 -- the obligation, not a generic type mismatch.
 add3 : Int -> Int -> Int -> Int

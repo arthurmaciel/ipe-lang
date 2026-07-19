@@ -2,11 +2,11 @@
 # scripts/lib/examples.sh — SINGLE SOURCE OF TRUTH for the example manifest.
 # SOURCE this (never execute it).
 #
-# PORTED from ../sky/runtime-rust/scripts/lib/examples.sh. The Go-FFI EXCLUSION
+# PORTED from ../ipe/runtime-rust/scripts/lib/examples.sh. The Go-FFI EXCLUSION
 # LOGIC (is_out_of_scope / build_set) is preserved VERBATIM — it is the authority
 # on which examples belong to the Rust backend. Only two paths are adapted for
-# this repo: the sky-stdlib index scan (this repo's stdlib lives under
-# src/stdlib, not sky-stdlib/) and the equivalence-classification overrides
+# this repo: the ipe-stdlib index scan (this repo's stdlib lives under
+# src/stdlib, not ipe-stdlib/) and the equivalence-classification overrides
 # path (scripts/, not runtime-rust/scripts/).
 #
 # DERIVED, NOT HARDCODED. Every set is computed at call time from the example
@@ -31,16 +31,16 @@
 
 # ── all_examples: every candidate dir on disk, trailing slash stripped ───────
 # The first-party `examples/NN-*` set always. With IPE_SWEEP_MIRROR_SKY=1 the
-# mirrored+patched upstream set under `examples/sky/NN-*` (materialised by
-# lib/sky_mirror.sh before the sweep loop) is included too — same shape/Go-FFI
+# mirrored+patched upstream set under `examples/ipe/NN-*` (materialised by
+# lib/ipe_mirror.sh before the sweep loop) is included too — same shape/Go-FFI
 # derivation applies to both.
 all_examples() {
   # First-party Ipe examples: the numbered dirs (39+) that remain after the
-  # Sky-derived set was moved to examples/sky/. With IPE_SWEEP_MIRROR_SKY=1 the
-  # mirrored+patched upstream set (materialised by lib/sky_mirror.sh into
-  # examples/sky/<name>/) is included too; simple/ and test_pkg/ live there now.
+  # Ipe-derived set was moved to examples/ipe/. With IPE_SWEEP_MIRROR_SKY=1 the
+  # mirrored+patched upstream set (materialised by lib/ipe_mirror.sh into
+  # examples/ipe/<name>/) is included too; simple/ and test_pkg/ live there now.
   local d globs=(examples/[0-9]*/ examples/rust/*/)
-  [ "${IPE_SWEEP_MIRROR_SKY:-0}" = 1 ] && globs+=(examples/sky/[0-9]*/ examples/sky/simple/ examples/sky/test_pkg/)
+  [ "${IPE_SWEEP_MIRROR_SKY:-0}" = 1 ] && globs+=(examples/ipe/[0-9]*/ examples/ipe/simple/ examples/ipe/test_pkg/)
   for d in "${globs[@]}"; do
     [ -d "$d" ] || continue
     d="${d%/}"
@@ -51,12 +51,12 @@ all_examples() {
 
 # ── _build_stdlib_index: ONE-TIME in-memory index of stdlib module paths ──────
 # ADAPTED: this repo's stdlib source lives under src/stdlib (and, once it
-# lands, a top-level sky-stdlib/). IPE_STDLIB_DIRS is a space-separated list of
+# lands, a top-level ipe-stdlib/). IPE_STDLIB_DIRS is a space-separated list of
 # roots to index; both are scanned so a bare/partial stdlib import (`import
 # System` → Ipe.System) resolves regardless of which tree owns it. Every
 # `/`-delimited suffix of each module path (minus `.ipe`) is recorded as an O(1)
 # key. The BUILT flag is the idempotency guard across re-sources.
-IPE_STDLIB_DIRS="${IPE_STDLIB_DIRS:-src/stdlib sky-stdlib}"
+IPE_STDLIB_DIRS="${IPE_STDLIB_DIRS:-src/stdlib ipe-stdlib}"
 declare -gA _SKY_STDLIB_INDEX
 _build_stdlib_index() {
   [ -n "${_SKY_STDLIB_INDEX_BUILT:-}" ] && return 0

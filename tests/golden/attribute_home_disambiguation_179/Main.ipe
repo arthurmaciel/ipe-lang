@@ -5,12 +5,12 @@ module Main exposing (main)
 -- `import Ipe.Html.Attributes as Attr exposing (Attribute)` brings the bare
 -- `Attribute` TYPE into unqualified scope. A polymorphic-msg function annotated
 -- `List (Attribute msg)` whose body produces `Attr.attribute …` (an
--- `sky_runtime::html::Attribute`) MUST lower its return type to
--- `sky_runtime::html::Attribute<msg>`, NOT `sky_runtime::ui::element::Attribute`.
+-- `ipe_runtime::html::Attribute`) MUST lower its return type to
+-- `ipe_runtime::html::Attribute<msg>`, NOT `ipe_runtime::ui::element::Attribute`.
 --
 -- Before the fix the bare `Attribute` resolved to the empty-home sentinel, so
 -- the lowerer's `is_html` check failed and picked `ui::element::Attribute`,
--- while the body produced `html::Attribute` → E0308 at cargo build (skyc still
+-- while the body produced `html::Attribute` → E0308 at cargo build (ipec still
 -- exited 0: a SEAL violation). Feeding the list into an SVG node (`Html.node`,
 -- which takes `List (html::Attribute)`) locks in the html home so a solver
 -- mismatch (`expected Html.Attribute, found Ipe.Html.Attributes.Attribute`)
@@ -26,7 +26,7 @@ module Main exposing (main)
 -- `main` (that would trip the SEPARATE #184 polymorphic-msg `'static`-bound gap,
 -- not the Attribute type-identity this golden targets).
 --
--- oracle_divergence = true: skyc's own correct output, not a Go oracle diff —
+-- oracle_divergence = true: ipec's own correct output, not a Go oracle diff —
 -- this asserts the Attribute newtype identity through a runnable render.
 
 import Ipe.Prelude exposing (..)

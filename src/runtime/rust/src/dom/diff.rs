@@ -39,7 +39,7 @@ impl Patch {
 /// - Tag/kind mismatch, child-count change, or any mixed-child text change:
 ///   whole-subtree `html` replace at the parent.
 /// - Sole text-child change: `SetText` via `p.text` (fast path).
-/// - Event handlers toggled on/off: `sky-<event>` attr set/remove + `data-ipe-hid`.
+/// - Event handlers toggled on/off: `ipe-<event>` attr set/remove + `data-ipe-hid`.
 /// - Keyed identity is carried by `assign_ipe_ids` (the `:{key}` segment) so a
 ///   reordered keyed item keeps its ipe-id and only its moved attrs patch.
 pub fn diff<M>(old: &Html<M>, new: &Html<M>) -> Vec<Patch> {
@@ -205,9 +205,9 @@ fn insert_safe_attr(p: &mut Patch, key: &str, val: &str) {
 }
 
 /// Event-handler delta. Mirrors Go `diffNodes`' Events block: an element gaining
-/// a handler emits `sky-<event>` = `<event>` (the value the client posts back as
+/// a handler emits `ipe-<event>` = `<event>` (the value the client posts back as
 /// `msg`, matching `render_html`) plus a fresh `data-ipe-hid`; an element losing a
-/// handler emits `sky-<event>` = `""` (remove), and clears `data-ipe-hid` once the
+/// handler emits `ipe-<event>` = `""` (remove), and clears `data-ipe-hid` once the
 /// last handler is gone. Without this, toggling a handler leaves a stale listener
 /// marker and the user's gesture is silently dropped.
 fn diff_events<M>(old: &[Attribute<M>], new: &[Attribute<M>], p: &mut Patch) {
@@ -220,9 +220,9 @@ fn diff_events<M>(old: &[Attribute<M>], new: &[Attribute<M>], p: &mut Patch) {
             .collect()
     };
     // Wire-marker key per event name — MUST match render_html's emission
-    // (html.rs): file/image meta-events are already `sky-`-prefixed and the
+    // (html.rs): file/image meta-events are already `ipe-`-prefixed and the
     // client reads them as `data-ipe-ev-<name>`; plain DOM events use
-    // `sky-<name>`. Render and diff disagreeing here = a dead listener or a
+    // `ipe-<name>`. Render and diff disagreeing here = a dead listener or a
     // spurious patch.
     let ev_key = |ev: &str| -> String {
         if ev.starts_with("ipe-") {

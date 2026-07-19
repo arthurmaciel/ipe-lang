@@ -2,7 +2,7 @@ module Main exposing (main)
 
 -- #34 golden: `Db.Decode.money` kernel wiring end-to-end.
 --
--- Before this fix, `db_decode_money` (runtime/src/sky_runtime/db.rs) was fully
+-- Before this fix, `db_decode_money` (runtime/src/ipe_runtime/db.rs) was fully
 -- implemented and unit-tested (`test_db_decode_money_roundtrip`), but had NO
 -- `StdlibKernel` variant, NO constrain scheme, and NO lower/emit arm -- so
 -- `Db.Decode.money` was rejected at canonicalisation as an unknown qualified
@@ -11,8 +11,8 @@ module Main exposing (main)
 --
 -- This golden proves the full kernel-registration recipe closed the gap:
 -- canon `Db.Decode` allowlist, `StdlibKernel::DbDecMoney` decl, constrain.rs
--- scheme (`String -> Decoder (Decimal, String)`), sky_lower arity-1 dispatch,
--- sky_backend_rust standard-path emit, sky_ir pretty-print.
+-- scheme (`String -> Decoder (Decimal, String)`), ipe_lower arity-1 dispatch,
+-- ipe_backend_rust standard-path emit, ipe_ir pretty-print.
 --
 -- `Db.Decode.money` deliberately returns `Decoder (Decimal, String)`, not
 -- `Decoder Money` -- `Money`/`Currency` are project-generated Rust types

@@ -10,7 +10,7 @@ import Ipe.Log exposing (println)
 -- `\a -> …` closure move-captures `name` only because the inner `\b -> …`
 -- closure reads it, so the outer boundary needs a pre-clone relay
 -- (`let name = name.clone()` before the inner lambda) — else it moves `name`
--- out of the enclosing `Fn` env → cargo E0507 after skyc exit 0.
+-- out of the enclosing `Fn` env → cargo E0507 after ipec exit 0.
 --
 -- Pre-fix the 5th binder site (match arms) nested type resolution inside an
 -- `if n > 1` guard, so at `n == 1` the arm var never resolved its type and the

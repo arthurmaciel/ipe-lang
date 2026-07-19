@@ -18,15 +18,15 @@
 //! The pure-Ipê combinators that WERE naively body-recursive in the non-tail
 //! position — `append` / `concat` / `concatMap` / `take` / `zip` /
 //! `indexedMap` — carry accumulator/CPS bodies in
-//! `crates/skyc/stdlib/Sky/Core/List.ipe` (byte-identical to upstream
-//! `sky-stdlib/Ipê/Core/List.ipe`). They are CALLABLE, but as
+//! `crates/ipec/stdlib/Ipe/Core/List.ipe` (byte-identical to upstream
+//! `ipe-stdlib/Ipê/Core/List.ipe`). They are CALLABLE, but as
 //! ITERATIVE Rust KERNELS (not by routing to those pure-Ipê bodies): canon
 //! anchors every `List.x` to `VarHome::Kernel` unconditionally, so the kernel
 //! path is the only exit-0-safe wiring (see
 //! `docs/adr/0024-list-ops-kernel-wiring.md`). Those kernels are constant-
 //! stack too — strictly better than the O(N)-stack pure-Ipê recursion the Go
 //! backend uses — so the soundness thesis holds by a different mechanism. The
-//! pure-Sky `List.ipe` bodies stay as the (currently unreached) upstream-parity
+//! pure-Ipe `List.ipe` bodies stay as the (currently unreached) upstream-parity
 //! reference for the eventual migration once typed-lambda lowering closes the
 //! cross-module `cannot infer T2` hole. Reachable-List E2E coverage now lives in
 //! `golden_list_ops_wiring.rs` (all nine ops + Elm edges); this file keeps the
@@ -53,7 +53,7 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 fn compile_golden(name: &str) -> PathBuf {
     let root = repo_root();
     let entry = golden_dir(&root, name).join("Main.ipe");
-    let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
+    let out = std::env::temp_dir().join(format!("ipec_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

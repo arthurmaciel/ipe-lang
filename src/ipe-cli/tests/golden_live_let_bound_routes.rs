@@ -30,7 +30,7 @@ fn repo_root() -> PathBuf {
 
 /// Run the ipe pipeline on `tests/golden/live_let_bound_routes/Main.ipe`.
 /// Returns `None` when the embedded runtime is unavailable (skip).
-fn run_skyc() -> Option<Result<(), ipe::CliError>> {
+fn run_ipec() -> Option<Result<(), ipe::CliError>> {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -57,7 +57,7 @@ fn run_skyc() -> Option<Result<(), ipe::CliError>> {
 /// `Live.route`, not at the list-collection level.
 #[test]
 fn live_let_bound_routes_compiles_no_ice() {
-    let Some(result) = run_skyc() else {
+    let Some(result) = run_ipec() else {
         return;
     };
     assert!(
@@ -80,7 +80,7 @@ fn live_let_bound_routes_compiles_no_ice() {
 /// in `routeTable`'s signature. Compile-only — always runs.
 #[test]
 fn live_let_bound_routes_renders_route_page() {
-    let Some(result) = run_skyc() else {
+    let Some(result) = run_ipec() else {
         return;
     };
     assert!(result.is_ok(), "must compile: {:?}", result.err());
@@ -102,7 +102,7 @@ fn live_let_bound_routes_cargo_builds() {
     if std::env::var("IPE_E2E").is_err() {
         return;
     }
-    let Some(result) = run_skyc() else {
+    let Some(result) = run_ipec() else {
         return;
     };
     assert!(result.is_ok(), "must compile: {:?}", result.err());

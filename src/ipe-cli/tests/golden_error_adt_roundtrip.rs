@@ -1,5 +1,5 @@
 //! Backlog the — the real `Error ErrorKind ErrorInfo` ADT (ported from
-//! the ancestor Go/Haskell design's `sky-stdlib/Sky/Core/Error.ipe`).
+//! the ancestor Go/Haskell design's `ipe-stdlib/Ipe/Core/Error.ipe`).
 //!
 //! Proves the whole pipeline end-to-end: construction (`Error.io`,
 //! `Error.timeout`), the ctor-scheme fix (pattern matching
@@ -59,7 +59,7 @@ fn error_adt_roundtrip_runs_and_prints_expected_output() {
         .join("golden")
         .join("error_adt_roundtrip")
         .join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_error_adt_roundtrip_e2e");
+    let out = std::env::temp_dir().join("ipec_error_adt_roundtrip_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {

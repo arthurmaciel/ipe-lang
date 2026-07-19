@@ -22,7 +22,7 @@ fn dummy_bcrypt_hash() -> &'static str {
         // bcrypt::hash is infallible for a fixed valid input + cost; on the
         // structurally-unreachable Err, fall back to a static valid cost-12
         // hash literal so the verify still runs the KDF.
-        bcrypt::hash("sky-login-timing-defence", 12).unwrap_or_else(|_| {
+        bcrypt::hash("ipe-login-timing-defence", 12).unwrap_or_else(|_| {
             "$2b$12$R9h/cIPz0gi.URNNX3kh2OPST9/PgBkqquzi.Ss7KIUgO2t0jWMUW".to_string()
         })
     })

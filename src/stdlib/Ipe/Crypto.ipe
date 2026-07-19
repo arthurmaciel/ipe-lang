@@ -1,4 +1,4 @@
--- | Ipe.Crypto — cryptographic primitives (Layer 3 Sky source).
+-- | Ipe.Crypto — cryptographic primitives (Layer 3 Ipe source).
 --
 -- All functions are aliased to the runtime kernel via Stage 4 `Ffi.kernel`.
 -- Security notes:

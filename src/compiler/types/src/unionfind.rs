@@ -1,6 +1,6 @@
 //! `Vec`-backed union-find with weighted union + path compression.
 //!
-//! Rust port of the Haskell compiler's `Sky.Type.UnionFind` (itself a
+//! Rust port of the Haskell compiler's `Ipe.Type.UnionFind` (itself a
 //! derivative of elm/compiler's `Type.UnionFind`, BSD-3-Clause). The Haskell
 //! original threads `IORef`-backed pointers; this port replaces them with a
 //! single arena `Vec` indexed by [`VarId`]. That choice is deliberate: it keeps

@@ -9,7 +9,7 @@ module Main exposing (main)
 -- The solver substitutes it in the CtorScheme; the lowerer skips it in Gate 1
 -- and emits IrType::Dict(Str, Str) in ir_type_from_canon.
 --
--- Seal: skyc exit 0 AND cargo build green.
+-- Seal: ipec exit 0 AND cargo build green.
 
 import Ipe.Prelude exposing (..)
 import Ipe.Log exposing (println)

@@ -8,11 +8,11 @@ import Ipe.Log exposing (println)
 -- ROUND-2 SEAL (#82). A record `type alias` whose field is an OPAQUE
 -- boxed-wrapper (`Decoder Int`). The wrapper VALUE is itself non-derivable as a
 -- struct field: the runtime `Decoder` is a `Box<dyn Fn>` that impls no
--- Clone/Debug/PartialEq/SkyStringify. Round-1's synthesis gate wrongly EXEMPTED
+-- Clone/Debug/PartialEq/IpeStringify. Round-1's synthesis gate wrongly EXEMPTED
 -- the opaque head (mirroring the lowerer's payload-scan) and synthesised a
 -- constructor, so the backend emitted a `#[derive(Clone, Debug, PartialEq)]` +
--- `impl SkyStringify` struct over `Decoder` — skyc exit-0 then cargo-101
--- (E0277 Clone/Debug, E0369 ==, E0599 SkyStringify): the seal hole. The
+-- `impl IpeStringify` struct over `Decoder` — ipec exit-0 then cargo-101
+-- (E0277 Clone/Debug, E0369 ==, E0599 IpeStringify): the seal hole. The
 -- struct-derivability gate now DECLINES synthesis, so merely NAMING this alias
 -- (declared, never constructed) builds clean — no ctor, no struct.
 type alias D =

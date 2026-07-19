@@ -4,19 +4,19 @@
 //! `42`.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
-//! `/home/arthur/Documentos/comp/sky/out/sky` compiles + runs the SAME
+//! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
 //! `Main.ipe` to stdout `42\n`, exit 0 — verified by hand in a temp dir (so the
 //! Go build artifacts never touch the reference tree):
 //!
 //! ```text
-//! $ cd "$(mktemp -d)" && sky run Main.ipe   # Go backend
+//! $ cd "$(mktemp -d)" && ipe run Main.ipe   # Go backend
 //! 42
 //! ```
 //!
 //! `p = { x = 2, y = 40 }`; the entry prints `p.x + p.y = 42`. The
 //! `end_to_end_*` test below asserts the Rust backend reaches the identical
 //! `42`. Running the Go toolchain inside `cargo test` is impractical (it needs
-//! the Haskell `sky` binary plus a Go toolchain), so the hand-verified value is
+//! the Haskell `ipe` binary plus a Go toolchain), so the hand-verified value is
 //! the in-test oracle, documented here against the Go-equivalent command.
 
 use std::path::{Path, PathBuf};
@@ -69,7 +69,7 @@ fn end_to_end_builds_and_prints_forty_two() {
 
     let root = repo_root();
     let entry = example_entry(&root);
-    let out = std::env::temp_dir().join("skyc_m1_records_e2e");
+    let out = std::env::temp_dir().join("ipec_m1_records_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

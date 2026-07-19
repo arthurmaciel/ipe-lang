@@ -5,7 +5,7 @@
 //! `IPE_E2E=1`) the emitted project must build and print `14`.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
-//! `/home/arthur/Documentos/comp/sky/out/sky` compiles + runs the SAME
+//! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
 //! `Main.ipe` to stdout `14\n`, exit 0 — hand-verified in a temp dir.
 use std::path::{Path, PathBuf};
 
@@ -56,7 +56,7 @@ fn end_to_end_builds_and_prints_fourteen() {
 
     let root = repo_root();
     let entry = example_entry(&root);
-    let out = std::env::temp_dir().join("skyc_m3b3_alias_e2e");
+    let out = std::env::temp_dir().join("ipec_m3b3_alias_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

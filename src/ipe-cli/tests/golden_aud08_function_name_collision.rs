@@ -47,7 +47,7 @@ fn distinct_functions_folding_to_the_same_rust_name_are_rejected() {
         return; // runtime unavailable in this environment — skip silently
     };
 
-    let tmp = std::env::temp_dir().join("skyc_aud08_function_name_collision");
+    let tmp = std::env::temp_dir().join("ipec_aud08_function_name_collision");
     let wrote = write_project(
         &tmp,
         &[
@@ -87,7 +87,7 @@ fn distinct_functions_folding_to_the_same_rust_name_are_rejected() {
         assert!(
             false_marker(),
             "expected a DuplicateValue rejection for UiBorder.rounded vs \
-             Ui.borderRounded (both fold to `user_ui_border_rounded`), but skyc \
+             Ui.borderRounded (both fold to `user_ui_border_rounded`), but ipec \
              build SUCCEEDED — the collision would silently emit two Rust \
              fns sharing one name"
         );
@@ -120,7 +120,7 @@ fn distinct_functions_with_distinct_rust_names_are_accepted() {
         return;
     };
 
-    let tmp = std::env::temp_dir().join("skyc_aud08_function_name_collision_control");
+    let tmp = std::env::temp_dir().join("ipec_aud08_function_name_collision_control");
     let wrote = write_project(
         &tmp,
         &[

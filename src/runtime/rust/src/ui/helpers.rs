@@ -134,7 +134,7 @@ pub fn ui_link_<M: Clone>(attrs: Vec<Attribute<M>>, url: String, label: Element<
 /// (the `{ src, description }` record is destructured at the emit site into
 /// two positional args, matching `Ui.link`'s `{ url, label }` handling).
 /// Renders as `<img src=… alt=…>` (a void `TaggedNode`, no children) — mirrors
-/// the `../sky` reference: `AttrAttribute "src" cfg.src :: AttrAttribute "alt"
+/// the `../ipe` reference: `AttrAttribute "src" cfg.src :: AttrAttribute "alt"
 /// cfg.description :: attrs`.
 pub fn ui_image_<M: Clone>(
     attrs: Vec<Attribute<M>>,
@@ -227,7 +227,7 @@ pub fn ui_clip_<M>() -> Attribute<M> {
 /// (not `hidden`) on the X axis: CSS promotes a `visible` off-axis to `auto`
 /// (unwanted scrollbar) when the other axis is `hidden`/`auto`/`scroll` — but
 /// NOT when it is `clip`. So `overflow-x:clip;overflow-y:visible` truly
-/// leaves Y visible (matches the `../sky` reference exactly).
+/// leaves Y visible (matches the `../ipe` reference exactly).
 pub fn ui_clip_x_<M>() -> Attribute<M> {
     Attribute::AttrOverflow("clip".to_owned(), "visible".to_owned())
 }
@@ -244,7 +244,7 @@ pub fn ui_scrollbars_<M>() -> Attribute<M> {
 
 /// `Ui.scrollbarX : Attribute msg` — single-axis scroller. The off-axis is
 /// `hidden`, not `visible`: a `visible` off-axis gets promoted to `auto` by
-/// CSS (an unwanted second scrollbar). Matches the `../sky` reference.
+/// CSS (an unwanted second scrollbar). Matches the `../ipe` reference.
 pub fn ui_scrollbar_x_<M>() -> Attribute<M> {
     Attribute::AttrOverflow("auto".to_owned(), "hidden".to_owned())
 }
@@ -357,7 +357,7 @@ pub fn ui_background_image_<M>(s: String) -> Attribute<M> {
 /// via the existing `AttrBgGradient` runtime variant (already rendered by
 /// `render.rs`'s `build_style_string`). Float formatting matches Go's
 /// `String.fromFloat` via the shared `string_from_float` kernel (parity with
-/// the `../sky` reference's `String.fromFloat angle` / `String.fromFloat pct`).
+/// the `../ipe` reference's `String.fromFloat angle` / `String.fromFloat pct`).
 pub fn ui_background_linear_gradient_<M>(angle: f64, stops: Vec<(f64, Color)>) -> Attribute<M> {
     use crate::string::string_from_float;
     let joined = stops
@@ -655,7 +655,7 @@ pub fn ui_on_bool_<M>(f: std::sync::Arc<dyn Fn(bool) -> M + Send + Sync>) -> Att
 /// `"ipe-file"`. The browser-side driver reads the chosen file,
 /// base64-encodes it as a data URL, and dispatches the URL string to the
 /// handler (mirrors `Ipe.Html.Events.onFile`'s `EventAttr (OnString
-/// "ipe-file" handler)` on the `../sky` reference).
+/// "ipe-file" handler)` on the `../ipe` reference).
 pub fn ui_on_file_<M>(f: std::sync::Arc<dyn Fn(String) -> M + Send + Sync>) -> Attribute<M> {
     Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnString(
         "ipe-file".into(),
@@ -1223,7 +1223,7 @@ pub fn ui_behind_<M: Clone>(elem: Element<M>) -> Attribute<M> {
 // These functions support `Ui.breakpoint` / `Ui.mediaQuery` and the named
 // `Breakpoint` constants (`Ui.mobile`, `Ui.tablet`, …).
 //
-// **Sanctioned divergence from Sky Go**: in the Go runtime `Breakpoint` is an
+// **Sanctioned divergence from Ipe Go**: in the Go runtime `Breakpoint` is an
 // opaque struct that carries the CSS media-query string; in this Rust port we
 // model `Breakpoint` as a plain `String` (the raw CSS query).  Since
 // upstream's `breakpoint bp attrs child = mediaQuery (breakpointToQuery bp)
@@ -1312,7 +1312,7 @@ pub fn ui_disabled_() -> PseudoClass {
 /// style-collection logic used for the main `style=""` attribute
 /// (`render::build_style_string`), and attaches it as `AttrPseudoRule(pc,
 /// css)`. Sub-module helpers (`Background.hoverColor`, `Font.hoverColor`,
-/// etc.) build on this exact primitive on the `../sky` reference; mirrored
+/// etc.) build on this exact primitive on the `../ipe` reference; mirrored
 /// here so both paths render through the identical collector + the
 /// `data-ipe-pc-rules` marker consumed by
 /// `ipe_runtime::live::style_inject::build_pc`.
@@ -1322,7 +1322,7 @@ pub fn ui_on_pseudo_<M: Clone>(pc: PseudoClass, attrs: Vec<Attribute<M>>) -> Att
 
 /// `Ui.mediaQuery : String -> List (Attribute msg) -> Element msg -> Element msg`
 ///
-/// Raw-CSS-media-query escape hatch (mirrors `../sky` `Ipe.Ui.sky`'s
+/// Raw-CSS-media-query escape hatch (mirrors `../ipe` `Ipe.Ui.ipe`'s
 /// `mediaQuery`): wraps `child` in a `<div>` carrying the
 /// `data-ipe-mq-q` (the query) + `data-ipe-mq-rules` (the attrs folded
 /// through the SAME `render::build_style_string` collector as the inline

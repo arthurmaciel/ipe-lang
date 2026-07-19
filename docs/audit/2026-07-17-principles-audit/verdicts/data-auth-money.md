@@ -270,7 +270,7 @@ to ground the JWT parse claims.
   the LEFT operand on currency mismatch (verified — `else a`); `sumOf` (457-469) inherits
   it, silently dropping non-matching entries; `compare`/`lt`/`lte`/`gt`/`gte` (474-506)
   ignore currency and compare raw decimals. Silent-wrong-money default.
-- reasoning: verified. This MATCHES upstream `../sky` (parity), but no divergence record
+- reasoning: verified. This MATCHES upstream `../ipe` (parity), but no divergence record
   sanctions it and no module doc warns the caller — exactly the swallowed-error class the
   correctness axis names, in the "never raw Float for currency" flagship. Medium correct.
 - dup-of: —

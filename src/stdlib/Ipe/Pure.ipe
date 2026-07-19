@@ -19,7 +19,7 @@
 -- @
 --
 -- Inclusion criteria: a stdlib binding belongs here when (a) it
--- takes no real Sky-level argument that disambiguates the call,
+-- takes no real Ipe-level argument that disambiguates the call,
 -- and (b) it returns a `Task Error a` (entropy / clock / env /
 -- I/O / database connection — the surfaces where the inconsistency
 -- bit users most often).  Non-zero-arg helpers like `Random.int`,
@@ -54,7 +54,7 @@ import Ipe.Db as Db exposing (Db)
 --
 -- Implementation note: the `Uuid_v4` kernel is registered directly at
 -- `() -> Task Error String` (entropy is an effect — see the kernel
--- scheme in `sky_types::constrain`, `K::UuidV4 => fun(Unit, task(string))`),
+-- scheme in `ipe_types::constrain`, `K::UuidV4 => fun(Unit, task(string))`),
 -- so `Pure.uuidV4` is a point-free alias to it, exactly like every other
 -- `Ffi.kernel` stdlib binding.  A `uuidV4 _ = uuidV4Kernel` indirection
 -- annotated the kernel as a bare `Task Error String`, which mismatches its

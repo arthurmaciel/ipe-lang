@@ -48,7 +48,7 @@ fn build_run_msg() -> (PathBuf, support::RunOutcome) {
     let root = repo_root();
     let dir = root.join("tests").join("golden").join("stdui_msg");
     let entry = dir.join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_m7_stdui_msg_e2e");
+    let out = std::env::temp_dir().join("ipec_m7_stdui_msg_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

@@ -22,7 +22,7 @@
 //!    binds loopback-only.
 //! 6. Polls for server readiness: retries `TcpStream::connect` every 50 ms for
 //!    up to 10 s.  The ready signal is the appearance of
-//!    `[sky.http.server] listening on` in the child's stderr.
+//!    `[ipe.http.server] listening on` in the child's stderr.
 //! 7. Sends raw HTTP/1.1 requests via `TcpStream` (no extra dependencies) and
 //!    asserts the response body.
 //! 8. A `ProcessGuard` wrapper kills the child process on `Drop`, so the port
@@ -75,10 +75,10 @@ main =
 ///
 /// Returns an error on any pipeline or Cargo build failure.
 fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<PathBuf, BoxError> {
-    let ipe_dir = std::env::temp_dir().join(format!("server_e2e_{test_name}_sky"));
+    let ipe_dir = std::env::temp_dir().join(format!("server_e2e_{test_name}_ipe"));
     let _ = std::fs::remove_dir_all(&ipe_dir);
     std::fs::create_dir_all(&ipe_dir).map_err(|e| -> BoxError {
-        format!("{test_name}: cannot create sky source dir: {e}").into()
+        format!("{test_name}: cannot create ipe source dir: {e}").into()
     })?;
 
     let entry = ipe_dir.join("Main.ipe");
@@ -138,7 +138,7 @@ impl Drop for ProcessGuard {
 /// Spawn the Ipê server binary and wait until it signals readiness.
 ///
 /// Readiness is detected by watching the child's stderr for the line
-/// `[sky.http.server] listening on`.  The `server_listen` runtime emits this
+/// `[ipe.http.server] listening on`.  The `server_listen` runtime emits this
 /// line immediately after `tokio::net::TcpListener::bind` succeeds, so
 /// receiving it means the socket is open and accepts connections.
 ///
@@ -214,7 +214,7 @@ fn spawn_and_wait_ready_with_env(
                 );
             }
             Ok(_) => {
-                if line.contains("[sky.http.server] listening on") {
+                if line.contains("[ipe.http.server] listening on") {
                     // Server is ready.  Detach the reader (it stays alive on
                     // the guard's `stderr` pipe until the guard is dropped).
                     return Ok(ProcessGuard(child));

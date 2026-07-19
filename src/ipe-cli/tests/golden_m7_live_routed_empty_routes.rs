@@ -130,7 +130,7 @@ main =
 ";
 
 /// `Live.app` with a NON-EMPTY `routes` list but Model has
-/// no `page` field.  The Go oracle (`tools/oracle/bin/sky`) compiles this fine
+/// no `page` field.  The Go oracle (`tools/oracle/bin/ipe`) compiles this fine
 /// (Go's `applyRoute` calls `RecordUpdate(model, {"Page": page})` which is a
 /// silent no-op when the `Page` field is absent).  This shape must compile on
 /// the non-routed path, matching the reference.
@@ -164,7 +164,7 @@ main =
 /// Compile `source` through the ipe pipeline (no cargo). Returns `None` to
 /// skip when the embedded runtime cannot be resolved.
 fn compile_src(test_name: &str, source: &str) -> Option<Result<(), ipe::CliError>> {
-    let ipe_dir = std::env::temp_dir().join(format!("live_routed_empty_{test_name}_sky"));
+    let ipe_dir = std::env::temp_dir().join(format!("live_routed_empty_{test_name}_ipe"));
     let _ = std::fs::remove_dir_all(&ipe_dir);
     std::fs::create_dir_all(&ipe_dir).ok()?;
     let entry = ipe_dir.join("Main.ipe");
@@ -184,7 +184,7 @@ fn repo_root() -> PathBuf {
 
 /// Run the ipe pipeline on the named fixture and return the build result.
 /// Returns `None` (skip) when the embedded runtime cannot be resolved.
-fn run_skyc(fixture: &str, out_suffix: &str) -> Option<Result<(), CliError>> {
+fn run_ipec(fixture: &str, out_suffix: &str) -> Option<Result<(), CliError>> {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -205,8 +205,8 @@ fn run_skyc(fixture: &str, out_suffix: &str) -> Option<Result<(), CliError>> {
 /// Before Part B: ipe exited 0 (empty-routes hole), cargo rejected with E0308.
 /// After Part B: ipe rejects with IPE-T0001 at type-check time.
 #[test]
-fn routed_empty_routes_int_notfound_is_sky_t0001() {
-    let Some(result) = run_skyc(
+fn routed_empty_routes_int_notfound_is_ipe_t0001() {
+    let Some(result) = run_ipec(
         "live_routed_empty_routes_int_notfound",
         "m7_live_routed_empty_routes_int_notfound_emit",
     ) else {
@@ -231,8 +231,8 @@ fn routed_empty_routes_int_notfound_is_sky_t0001() {
 /// Before Part B: ipe exited 0, cargo rejected with E0631 / E0308.
 /// After Part B: ipe rejects with IPE-T0001 at type-check time.
 #[test]
-fn routed_empty_routes_wrong_ctor_notfound_is_sky_t0001() {
-    let Some(result) = run_skyc(
+fn routed_empty_routes_wrong_ctor_notfound_is_ipe_t0001() {
+    let Some(result) = run_ipec(
         "live_routed_empty_routes_wrong_ctor_notfound",
         "m7_live_routed_empty_routes_wrong_ctor_notfound_emit",
     ) else {
@@ -258,7 +258,7 @@ fn routed_empty_routes_wrong_ctor_notfound_is_sky_t0001() {
 /// Confirms the Part B hook does NOT trigger on a correctly-typed routed app.
 #[test]
 fn routed_correct_app_compiles() {
-    let Some(result) = run_skyc(
+    let Some(result) = run_ipec(
         "live_let_bound_routes",
         "m7_live_let_bound_routes_partb_control",
     ) else {
@@ -281,7 +281,7 @@ fn routed_correct_app_compiles() {
 /// should produce the same IPE-T0001 (or the Part A constraint fires first —
 /// either way IPE-T0001 is the result).
 #[test]
-fn t4d_nonempty_routes_wrong_notfound_is_sky_t0001() {
+fn t4d_nonempty_routes_wrong_notfound_is_ipe_t0001() {
     let Some(result) = compile_src("t4d", T4D_NONEMPTY_ROUTES_WRONG_NOTFOUND) else {
         return;
     };
@@ -301,7 +301,7 @@ fn t4d_nonempty_routes_wrong_notfound_is_sky_t0001() {
 /// A route ctor `Live.route "/" Increment` forces `var(2) = Msg`.  The correct
 /// `notFound = CounterPage` (Page) then fails unification → IPE-T0001.
 #[test]
-fn t4f_wrong_route_ctor_is_sky_t0001() {
+fn t4f_wrong_route_ctor_is_ipe_t0001() {
     let Some(result) = compile_src("t4f", T4F_WRONG_ROUTE_CTOR_CORRECT_NOTFOUND) else {
         return;
     };
@@ -321,7 +321,7 @@ fn t4f_wrong_route_ctor_is_sky_t0001() {
 /// All route ctors share `var(2)`.  The wrong ctor forces a collision →
 /// IPE-T0001 from the Part A constraint.
 #[test]
-fn mix_mixed_route_ctors_is_sky_t0001() {
+fn mix_mixed_route_ctors_is_ipe_t0001() {
     let Some(result) = compile_src("mix", MIX_MIXED_ROUTE_CTORS) else {
         return;
     };
@@ -445,7 +445,7 @@ fn routed_empty_routes_well_typed_cargo_builds() {
 /// field must compile on the non-routed path (mirrors `examples/24-tui-
 /// kitchen-sink` and `examples/25-ipe-console`).
 ///
-/// Before fix: skyc returned IPE-L0124 (gate was overly strict vs. Go oracle).
+/// Before fix: ipec returned IPE-L0124 (gate was overly strict vs. Go oracle).
 /// After fix: ipe exits 0 and emits `live_app` (not `live_app_routed`).
 #[test]
 fn non_routed_with_nonempty_routes_compiles() {

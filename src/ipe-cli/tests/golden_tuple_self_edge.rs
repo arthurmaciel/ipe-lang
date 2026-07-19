@@ -15,7 +15,7 @@
 //! balanced by `Box::new` at construction and a deref at pattern binding.
 //!
 //! Note: the Go reference parser does NOT accept a tuple type as a constructor
-//! payload, so there is no Go oracle for this exact source — `skyc` accepts a
+//! payload, so there is no Go oracle for this exact source — `ipec` accepts a
 //! superset here. The in-test hand-computed `5` is the oracle, and the gate's
 //! load-bearing assertion is that the emitted crate BUILDS (no E0072) and runs,
 //! pinning the indirect-cycle soundness floor so it can never regress to the
@@ -71,7 +71,7 @@ fn end_to_end_builds_and_prints_five() {
 
     let root = repo_root();
     let entry = example_entry(&root);
-    let out = std::env::temp_dir().join("skyc_m3a_tuple_self_edge_e2e");
+    let out = std::env::temp_dir().join("ipec_m3a_tuple_self_edge_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

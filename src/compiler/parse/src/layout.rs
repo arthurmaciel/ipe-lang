@@ -1,8 +1,8 @@
 //! Column-based layout helpers.
 //!
-//! Sky (like Elm and Haskell) uses indentation-significant layout. Rather than
+//! Ipe (like Elm and Haskell) uses indentation-significant layout. Rather than
 //! splice synthetic `{`/`;`/`}` tokens into the stream (the classic Haskell
-//! layout algorithm in `Sky.Parse.Space`), the parser keeps the raw token
+//! layout algorithm in `Ipe.Parse.Space`), the parser keeps the raw token
 //! stream and decides block membership from each token's column relative to a
 //! *threshold* column established by the enclosing construct.
 //!

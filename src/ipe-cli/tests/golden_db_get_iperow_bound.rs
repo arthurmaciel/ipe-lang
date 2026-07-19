@@ -27,7 +27,7 @@
 //!
 //! Run:
 //! ```text
-//! IPE_E2E=1 cargo test -p skyc --test golden_i177_db_get_skyrow_bound
+//! IPE_E2E=1 cargo test -p ipec --test golden_i177_db_get_iperow_bound
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -42,7 +42,7 @@ fn repo_root() -> PathBuf {
 fn entry_path(root: &Path) -> PathBuf {
     root.join("tests")
         .join("golden")
-        .join("db_get_skyrow_bound")
+        .join("db_get_iperow_bound")
         .join("Main.ipe")
 }
 
@@ -51,21 +51,21 @@ fn entry_path(root: &Path) -> PathBuf {
 /// STRUCT unbounded — checked unconditionally (cheap, no `cargo`), independent
 /// of the `IPE_E2E` gate below.
 #[test]
-fn i177_skyc_accepts_and_bounds_fn_not_struct() {
+fn i177_ipec_accepts_and_bounds_fn_not_struct() {
     let root = repo_root();
     let entry = entry_path(&root);
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i177_db_get_skyrow_bound_skyc_out");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i177_db_get_iperow_bound_ipec_out");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
-        eprintln!("SKIP db_get_skyrow_bound: runtime not available");
+        eprintln!("SKIP db_get_iperow_bound: runtime not available");
         return;
     };
 
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "ipe build must succeed for db_get_skyrow_bound: {:?}",
+        "ipe build must succeed for db_get_iperow_bound: {:?}",
         built.err()
     );
 
@@ -112,7 +112,7 @@ fn i177_cargo_builds_and_runs() {
 
     let root = repo_root();
     let entry = entry_path(&root);
-    let out = std::env::temp_dir().join("skyc_i177_db_get_skyrow_bound_e2e");
+    let out = std::env::temp_dir().join("ipec_i177_db_get_iperow_bound_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -122,15 +122,15 @@ fn i177_cargo_builds_and_runs() {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "ipe build must succeed for db_get_skyrow_bound: {:?}",
+        "ipe build must succeed for db_get_iperow_bound: {:?}",
         built.err()
     );
 
-    let outcome = support::build_and_run_emitted("db_get_skyrow_bound", &out);
+    let outcome = support::build_and_run_emitted("db_get_iperow_bound", &out);
     assert_eq!(
         outcome.exit_code,
         Some(0),
-        "db_get_skyrow_bound binary must exit 0; got {:?} (stdout: {:?})",
+        "db_get_iperow_bound binary must exit 0; got {:?} (stdout: {:?})",
         outcome.exit_code,
         outcome.stdout
     );

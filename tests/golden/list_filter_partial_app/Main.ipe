@@ -10,12 +10,12 @@ import Ipe.Log exposing (println)
 -- — used to fail `cargo build` with E0277: emitted closures always lower to
 -- a boxed `Box<dyn Fn(..) -> .. + Send>` trait object (which can never be
 -- `Clone`, a fundamental Rust limitation on `dyn Fn`), but
--- `sky_runtime::list::list_filter` / `list_any` declared their predicate
+-- `ipe_runtime::list::list_filter` / `list_any` declared their predicate
 -- parameter `impl Fn(T0) -> bool + Clone` — a bound the implementations
 -- never actually needed (each calls the predicate through a shared `&self`
 -- borrow, never cloning it). The fix drops the spurious `Clone` bound from
 -- every affected `Ipe.List` HOF kernel; this fixture pins the
--- partial-application shape end-to-end (skyc accepts it AND the emitted
+-- partial-application shape end-to-end (ipec accepts it AND the emitted
 -- Rust both compiles and runs to the expected output).
 
 isAbove : Int -> Int -> Bool
@@ -29,7 +29,7 @@ main =
             [ 1, 2, 3, 4, 5, 6 ]
 
         -- `isAbove 3` is a partial application: a closure over `threshold`
-        -- that itself closes over another already-boxed Sky function value.
+        -- that itself closes over another already-boxed Ipe function value.
         aboveThree =
             List.filter (isAbove 3) items
 

@@ -74,7 +74,7 @@ fn built_main_rs(root: &Path, out: &Path) -> (Result<(), ipe::CliError>, Option<
 #[test]
 fn name_only_shape_does_not_emit_runtime_http_request_literal() {
     let root = repo_root();
-    let out = std::env::temp_dir().join("skyc_http_request_name_only_fold_seal_emit");
+    let out = std::env::temp_dir().join("ipec_http_request_name_only_fold_seal_emit");
     let (built, main_rs) = built_main_rs(&root, &out);
     assert!(
         built.is_ok(),
@@ -102,7 +102,7 @@ fn name_only_shape_does_not_emit_runtime_http_request_literal() {
 #[test]
 fn name_only_shape_emits_a_synthesised_record_struct() {
     let root = repo_root();
-    let out = std::env::temp_dir().join("skyc_http_request_name_only_fold_seal_struct");
+    let out = std::env::temp_dir().join("ipec_http_request_name_only_fold_seal_struct");
     let (built, main_rs) = built_main_rs(&root, &out);
     assert!(
         built.is_ok(),
@@ -126,7 +126,7 @@ fn name_only_shape_emits_a_synthesised_record_struct() {
             && main_rs.contains("timeout: i64")
             && main_rs.contains("url: i64"),
         "expected a synthesised record struct with all 7 fields typed `i64` \
-         (Sky `Int`) — got:\n--- src/main.rs ---\n{main_rs}"
+         (Ipe `Int`) — got:\n--- src/main.rs ---\n{main_rs}"
     );
 }
 
@@ -137,7 +137,7 @@ fn name_only_shape_emits_a_synthesised_record_struct() {
 #[test]
 fn http_request_name_only_fold_seal_builds_and_runs() {
     let root = repo_root();
-    let out = std::env::temp_dir().join("skyc_http_request_name_only_fold_seal_e2e");
+    let out = std::env::temp_dir().join("ipec_http_request_name_only_fold_seal_e2e");
     let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };

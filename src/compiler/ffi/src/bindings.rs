@@ -738,14 +738,14 @@ impl<'a> WrapperCx<'a> {
     fn effective_raw_result(&self) -> String {
         let raw = self.f.results().first().map_or("", Param::rust_type_str);
         if raw.is_empty() {
-            let sky = self.f.results().first().map_or("()", |r| {
+            let ipe = self.f.results().first().map_or("()", |r| {
                 if r.foreign_ty.is_empty() {
                     "()"
                 } else {
                     r.foreign_ty.as_str()
                 }
             });
-            ipe_type_to_rust(sky)
+            ipe_type_to_rust(ipe)
         } else {
             raw.to_owned()
         }

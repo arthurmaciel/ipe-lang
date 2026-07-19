@@ -57,10 +57,10 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 ///
 /// Returns an error on any pipeline or Cargo build failure.
 fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<PathBuf, BoxError> {
-    let ipe_dir = std::env::temp_dir().join(format!("http_e2e_{test_name}_sky"));
+    let ipe_dir = std::env::temp_dir().join(format!("http_e2e_{test_name}_ipe"));
     let _ = std::fs::remove_dir_all(&ipe_dir);
     std::fs::create_dir_all(&ipe_dir).map_err(|e| -> BoxError {
-        format!("{test_name}: cannot create sky source dir: {e}").into()
+        format!("{test_name}: cannot create ipe source dir: {e}").into()
     })?;
 
     let entry = ipe_dir.join("Main.ipe");

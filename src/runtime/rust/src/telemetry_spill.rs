@@ -112,7 +112,7 @@ pub async fn enable_from_env() {
     let pool = match SqlitePool::connect(&url).await {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("[sky.spill] open {path}: {e}");
+            eprintln!("[ipe.spill] open {path}: {e}");
             return;
         }
     };
@@ -126,7 +126,7 @@ pub async fn enable_from_env() {
     let _ = sqlx::query("PRAGMA busy_timeout=2000").execute(&pool).await;
     for stmt in SPILL_SCHEMA.split(';').filter(|s| !s.trim().is_empty()) {
         if let Err(e) = sqlx::query(stmt).execute(&pool).await {
-            eprintln!("[sky.spill] schema: {e}");
+            eprintln!("[ipe.spill] schema: {e}");
             return;
         }
     }
@@ -192,7 +192,7 @@ async fn write_entry(pool: &SqlitePool, svc: &str, entry: SpillEntry) -> Result<
 async fn batcher(pool: SqlitePool, mut rx: mpsc::Receiver<SpillEntry>, svc: String) {
     while let Some(entry) = rx.recv().await {
         if let Err(e) = write_entry(&pool, &svc, entry).await {
-            eprintln!("[sky.spill] write: {e}");
+            eprintln!("[ipe.spill] write: {e}");
         }
     }
 }
@@ -206,7 +206,7 @@ async fn pruner(pool: SqlitePool) {
         for table in ["telemetry_log", "telemetry_span"] {
             let sql = format!("DELETE FROM {table} WHERE time < ?");
             if let Err(e) = sqlx::query(&sql).bind(&cutoff).execute(&pool).await {
-                eprintln!("[sky.spill] prune {table}: {e}");
+                eprintln!("[ipe.spill] prune {table}: {e}");
             }
         }
         // Bound the -wal file: under sustained writes WAL mode lets the -wal grow
@@ -217,7 +217,7 @@ async fn pruner(pool: SqlitePool) {
             .execute(&pool)
             .await
         {
-            eprintln!("[sky.spill] wal_checkpoint: {e}");
+            eprintln!("[ipe.spill] wal_checkpoint: {e}");
         }
     }
 }

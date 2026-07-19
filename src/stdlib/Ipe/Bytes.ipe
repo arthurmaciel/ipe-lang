@@ -13,13 +13,13 @@ module Ipe.Bytes exposing
     , slice
     )
 
--- Divergence from Sky: Sky defines `type alias Bytes = String` (Go's `string`
+-- Divergence from Ipe: Ipe defines `type alias Bytes = String` (Go's `string`
 -- is a byte sequence, making the alias cost-free and correct).  Rust's
 -- `String` is constrained to valid UTF-8 — mapping `Bytes` to `String` would
--- be unsound for non-UTF-8 binary payloads.  Sky-Rust makes `Bytes` a
+-- be unsound for non-UTF-8 binary payloads.  Ipe makes `Bytes` a
 -- distinct primitive lowering to `Vec<u8>`, providing lossless handling of
 -- arbitrary binary data.  String ↔ Bytes conversions are always explicit:
--- `fromString` UTF-8-encodes a Sky `String` into bytes; `toString` UTF-8-
+-- `fromString` UTF-8-encodes a Ipe `String` into bytes; `toString` UTF-8-
 -- decodes bytes, returning `Just s` on success and `Nothing` when the buffer
 -- is not valid UTF-8.  Rationale: Rust type-system correctness.
 
@@ -42,16 +42,16 @@ isEmpty =
     Ffi.kernel "Bytes_isEmpty"
 
 
--- | UTF-8-encode a Sky `String` into a `Bytes` buffer.
+-- | UTF-8-encode a Ipe `String` into a `Bytes` buffer.
 --
--- Every Sky `String` is valid UTF-8, so this conversion is total (never
+-- Every Ipe `String` is valid UTF-8, so this conversion is total (never
 -- fails).  To go the other way, use `toString`.
 fromString : String -> Bytes
 fromString =
     Ffi.kernel "Bytes_fromString"
 
 
--- | UTF-8-decode a `Bytes` buffer into a Sky `String`.
+-- | UTF-8-decode a `Bytes` buffer into a Ipe `String`.
 --
 -- Returns `Just s` when the entire buffer is valid UTF-8, `Nothing`
 -- otherwise.  Use `Maybe.withDefault` when you need a fallback string.

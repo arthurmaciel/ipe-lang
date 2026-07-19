@@ -2,9 +2,9 @@
 # scripts/lib/env.sh — SINGLE SOURCE OF TRUTH for the ipê examples-sweep command
 # env. SOURCE this (never execute it): `source "$(dirname "$0")/lib/env.sh"`.
 #
-# PORTED from ../sky/runtime-rust/scripts/lib/env.sh and ADAPTED for this repo:
-# the compiler here is `ipe` (a Rust cargo workspace), NOT the Haskell `sky`.
-# There is no GHC/cabal, no `out/sky`; the binary is built by cargo and lives
+# PORTED from ../ipe/runtime-rust/scripts/lib/env.sh and ADAPTED for this repo:
+# the compiler here is `ipe` (a Rust cargo workspace), NOT the Haskell `ipe`.
+# There is no GHC/cabal, no `out/ipe`; the binary is built by cargo and lives
 # in the (possibly global) cargo target dir. This file defines REPO + IPE_BIN and
 # does NOT cd (callers `cd "$REPO"` themselves so the failure path stays theirs).
 #
@@ -22,7 +22,7 @@ export PATH="$HOME/.cargo/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin:$PA
 # ── Shared cargo target + sccache + CARGO_INCREMENTAL=0 ─────────────────────
 # A shared CARGO_TARGET_DIR compiles the heavy deps (axum/tokio/serde/sqlx/…)
 # ONCE and persists across each example's `rm -rf out`. This repo's global
-# ~/.cargo/config.toml already pins `target-dir = ~/.cache/sky-rust-target`, so
+# ~/.cargo/config.toml already pins `target-dir = ~/.cache/ipe-lang-target`, so
 # this default AGREES with where a bare `cargo build` of the workspace lands
 # ipe — the same dir the sweep's per-example `cargo build` reuses. Override
 # CARGO_TARGET_DIR to relocate; we honour a pre-existing value.
@@ -90,6 +90,6 @@ export IPE_BIN="${IPE_BIN:-$CARGO_TARGET_DIR/release/ipe}"
 # (resolve_runtime() in src/ipe-cli/src/lib.rs). We export the explicit path so
 # the sweep is independent of the invocation CWD; callers may override. The tree
 # is the `ipe-runtime-rust` crate's source root — the `.rs` module files sit
-# directly under it (no nested `sky_runtime`/`ipe_runtime` subdir); a wrong path
+# directly under it (no nested `ipe_runtime`/`ipe_runtime` subdir); a wrong path
 # here makes `ipe build` mis-vendor the runtime and the emitted crate cargo-fails.
 export IPE_RUNTIME_DIR="${IPE_RUNTIME_DIR:-$REPO/src/runtime/rust/src}"

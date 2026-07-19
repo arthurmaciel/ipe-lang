@@ -1,7 +1,7 @@
 //! Tail-recursion detection + rewrite units.
 //!
 //! IR is built by hand (no full lower pipeline) so each shape is isolated. The
-//! detection mirrors the reference implementation (`Sky.Build.TailCallOpt`).
+//! detection mirrors the reference implementation (`Ipe.Build.TailCallOpt`).
 
 use ipe_diagnostics::DResult;
 use ipe_intern::{Interner, Symbol};

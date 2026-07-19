@@ -105,7 +105,7 @@ pub(crate) fn scrub_log_controls(s: &str) -> String {
 /// Bake a config-derived default for an env var: set `key=val` ONLY when the
 /// var is unset, so shell env / `.env` still win (precedence: process env >
 /// baked default). Go parity: the generated `init()`'s `rt.SetPortDefault` +
-/// `tomlSkyEnv` family. Routed through the process-global env lock
+/// `tomlIpeEnv` family. Routed through the process-global env lock
 /// (`locked_set_var_if_absent`) so it is sound by construction even if a thread
 /// is already reading the environment.
 pub fn set_env_default(key: &str, val: &str) {
@@ -1127,19 +1127,19 @@ mod tests {
     }
 
     #[test]
-    fn foreign_error_redacts_secret_from_sky_message() {
+    fn foreign_error_redacts_secret_from_ipe_message() {
         let e = SecretBearingError {
             bearer: "Bearer sk_live_SUPERSECRET_KEY",
         };
         let msg: String = ipe_error_from_foreign(e);
         assert!(
             !msg.contains("SUPERSECRET") && !msg.contains("Bearer") && !msg.contains("bearer"),
-            "the foreign Debug detail (with the bearer token) must NOT reach the Sky-visible \
+            "the foreign Debug detail (with the bearer token) must NOT reach the Ipe-visible \
              message — got: {msg:?}"
         );
         assert!(
             msg.starts_with("external operation failed (ref ") && msg.ends_with(')'),
-            "the Sky-visible message must be the fixed generic message + correlation id — \
+            "the Ipe-visible message must be the fixed generic message + correlation id — \
              got: {msg:?}"
         );
         // The 8-hex correlation id is present between the fixed prefix and `)`.

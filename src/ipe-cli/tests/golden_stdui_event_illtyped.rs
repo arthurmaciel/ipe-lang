@@ -34,7 +34,7 @@ fn repo_root() -> PathBuf {
 
 /// Run the ipe pipeline on the named fixture and return the build result.
 /// Returns `None` (skip) when the embedded runtime cannot be resolved.
-fn run_skyc(fixture: &str, out_suffix: &str) -> Option<Result<(), CliError>> {
+fn run_ipec(fixture: &str, out_suffix: &str) -> Option<Result<(), CliError>> {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -59,8 +59,8 @@ fn run_skyc(fixture: &str, out_suffix: &str) -> Option<Result<(), CliError>> {
 /// Post-fix: `Some("Ui" | "Event")` arm unifies `Bool -> msg` with the
 /// expected `String -> msg` → IPE-T0001 at the type-checking stage.
 #[test]
-fn event_oninput_illtyped_bool_handler_is_sky_t0001() {
-    let Some(result) = run_skyc("stdui_event_illtyped", "m7_stdui_event_illtyped_emit") else {
+fn event_oninput_illtyped_bool_handler_is_ipe_t0001() {
+    let Some(result) = run_ipec("stdui_event_illtyped", "m7_stdui_event_illtyped_emit") else {
         return;
     };
 
@@ -82,7 +82,7 @@ fn event_oninput_illtyped_bool_handler_is_sky_t0001() {
 /// break well-typed `Event.onInput` usage.
 #[test]
 fn event_oninput_correct_handler_compiles() {
-    let Some(result) = run_skyc("stdui_event_oninput", "m7_stdui_event_oninput_emit") else {
+    let Some(result) = run_ipec("stdui_event_oninput", "m7_stdui_event_oninput_emit") else {
         return;
     };
 

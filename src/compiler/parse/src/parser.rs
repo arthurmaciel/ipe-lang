@@ -1,6 +1,6 @@
 //! Recursive-descent parser for the supported subset of Ipê.
 //!
-//! Port of `Sky.Parse.{Module,Declaration,Type,Pattern,Expression}` narrowed to
+//! Port of `Ipe.Parse.{Module,Declaration,Type,Pattern,Expression}` narrowed to
 //! the supported grammar: a module header, imports, `type` unions, top-level value
 //! bindings with optional type annotations, `case … of`, function application,
 //! and `+`/`-` binary-operator chains.
@@ -1160,7 +1160,7 @@ impl<'a> Parser<'a> {
     /// at `minus_span`.
     ///
     /// **Faithful port of the Haskell `exprAtom_` `Negate` arm**
-    /// (`Sky.Parse.Expression`, lines 356–367 of the upstream reference):
+    /// (`Ipe.Parse.Expression`, lines 356–367 of the upstream reference):
     ///
     /// ```haskell
     /// do char mkError '-'
@@ -1712,7 +1712,7 @@ impl<'a> Parser<'a> {
     /// at `threshold`, so it extends as far right as the surrounding layout
     /// allows (`\x -> x + 1` captures the whole `x + 1`). A zero-parameter
     /// `\ -> e` and a missing `->` are clean parse errors, never a silently
-    /// reshaped AST. Mirrors the Haskell compiler's `Sky.Parse.Expression.lambda`.
+    /// reshaped AST. Mirrors the Haskell compiler's `Ipe.Parse.Expression.lambda`.
     fn parse_lambda(&mut self, threshold: u32, depth: u32) -> DResult<Expr> {
         if depth > MAX_DEPTH {
             return Err(self.too_deep(Construct::Lambda));

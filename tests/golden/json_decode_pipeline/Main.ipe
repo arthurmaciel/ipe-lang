@@ -4,13 +4,13 @@ module Main exposing (main)
 -- itself a function (`Decoder (a -> b)` curry chain) exercises the OWNED /
 -- linear decoder-payload path.
 --
--- Pre-fix: `skyc build` exits 0, but the emitted Rust fails `cargo build`. The
+-- Pre-fix: `ipec build` exits 0, but the emitted Rust fails `cargo build`. The
 -- backend's `IrType::Fun` renderer stamped `Box<dyn Fn(..) -> R + Send + Sync>`
 -- on the decoder payload, but the runtime represents a `Decoder (a -> b)`
 -- payload as a Send-ONLY curry chain `Box<dyn FnOnce(a) -> b + Send>` (what
 -- `curryN` builds and `decode_succeed`'s `A` is inferred to). Two mismatches
 -- fire: the wrong trait (`Fn` vs `FnOnce`) AND an over-constrained `+ Sync`
--- (a `FnOnce` curry chain is Send but not Sync) → skyc-0-then-cargo-fail
+-- (a `FnOnce` curry chain is Send but not Sync) → ipec-0-then-cargo-fail
 -- (E0308/E0277).
 --
 -- Fix (`emit_types.rs`): a function-typed `Decoder` payload renders as the

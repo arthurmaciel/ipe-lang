@@ -64,11 +64,11 @@ pub fn trace_event<E: Send + 'static>(name: String) -> IpeTask<E, ()> {
 }
 
 // Trace.attr : String -> String -> Task Error ()
-// Keys are namespaced under `sky.trace.` to match the Go runtime.
+// Keys are namespaced under `ipe.trace.` to match the Go runtime.
 pub fn trace_attr<E: Send + 'static>(key: String, value: String) -> IpeTask<E, ()> {
     Box::pin(async move {
         if trace_enabled() {
-            eprintln!("[trace] attr sky.trace.{} = {}", scrub(&key), scrub(&value));
+            eprintln!("[trace] attr ipe.trace.{} = {}", scrub(&key), scrub(&value));
         }
         ok_res(())
     })

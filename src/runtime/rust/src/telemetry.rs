@@ -223,7 +223,7 @@ pub fn dev_console_banner(base: &str) -> String {
         .replace('\'', "&#39;");
     format!(
         "<a id=\"__ipe-dev-console\" href=\"{esc}\" target=\"_blank\" rel=\"noopener\" \
-         title=\"Sky Console (dev only)\" \
+         title=\"Ipe Console (dev only)\" \
          style=\"position:fixed;right:12px;bottom:12px;z-index:2147483646;\
          font:12px/1.4 ui-monospace,Menlo,monospace;\
          background:#1c2027;color:#7eb6ff;\
@@ -584,7 +584,7 @@ fn metric_help(name: &str) -> &'static str {
         "ipe_live_request_seconds" => "HTTP request latency in seconds.",
         "ipe_live_msg_seconds" => "Msg-handling latency in seconds, by Msg variant name.",
         "ipe_live_msg_total" => "Total Msgs handled, by variant name, outcome, and noop.",
-        _ => "Sky runtime metric.",
+        _ => "Ipe runtime metric.",
     }
 }
 
@@ -821,7 +821,7 @@ mod tests {
         // test env is dev (ENV/IPE_ENV unset) → non-empty banner.
         let b = dev_console_banner("");
         let expected = "<a id=\"__ipe-dev-console\" href=\"/_ipe/console\" target=\"_blank\" \
-            rel=\"noopener\" title=\"Sky Console (dev only)\" \
+            rel=\"noopener\" title=\"Ipe Console (dev only)\" \
             style=\"position:fixed;right:12px;bottom:12px;z-index:2147483646;\
             font:12px/1.4 ui-monospace,Menlo,monospace;\
             background:#1c2027;color:#7eb6ff;\

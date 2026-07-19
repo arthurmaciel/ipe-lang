@@ -1,4 +1,4 @@
-//! Sky Console — the operator dashboard mounted at `/_ipe/console`, plus the
+//! Ipe Console — the operator dashboard mounted at `/_ipe/console`, plus the
 //! observability federation receiver. Mirrors Go's `console*.go` in-RAM tier:
 //! a plain-HTML shell that polls JSON `/_ipe/console/api/*` endpoints backed by
 //! the `telemetry` ring buffers, and a `/_ipe/observability/ingest` POST that
@@ -20,14 +20,14 @@ const fn json_ct() -> (header::HeaderName, &'static str) {
 /// deps). Polls the api endpoints below.
 pub async fn console_html() -> impl IntoResponse {
     let body = r#"<!doctype html><html><head><meta charset="utf-8">
-<title>Sky Console</title>
+<title>Ipe Console</title>
 <style>
  body{font-family:ui-monospace,monospace;background:#12141c;color:#dfe3ee;margin:0;padding:16px}
  h1{font-size:16px;color:#8ec8a8} .tab{cursor:pointer;padding:4px 10px;margin-right:6px;border:1px solid #2a2f40;border-radius:4px;display:inline-block}
  .tab.on{background:#2a2f40} pre{background:#0c0e14;padding:10px;border-radius:4px;overflow:auto;max-height:70vh}
  .err{color:#e88} .lvl{color:#7a86a8}
 </style></head><body>
-<h1>Sky Console</h1>
+<h1>Ipe Console</h1>
 <div id="ov"></div>
 <div><span class="tab on" data-t="logs">Logs</span><span class="tab" data-t="errors">Errors</span></div>
 <pre id="out">loading…</pre>
@@ -169,7 +169,7 @@ fn resolve_console_auth_mode() -> ConsoleAuthMode {
 
 /// The console-auth mode label, mirroring Go's `describeConsoleAuthMode`
 /// (`console_auth_v2.go:149`) over `resolveConsoleAuthMode`'s env/production
-/// derivation. Used for the `[sky.console] inline console mounted … mode=<m>`
+/// derivation. Used for the `[ipe.console] inline console mounted … mode=<m>`
 /// startup log (Go parity — `console.go:328`). Total: every branch is explicit.
 ///
 /// Derivation (Go parity): `IPE_CONSOLE_AUTH` (case-insensitive, trimmed) selects
@@ -241,12 +241,12 @@ pub fn gate_blocked(headers: &axum::http::HeaderMap) -> Option<axum::response::R
             "console.auth.denied reason=bad-or-missing-credentials",
         );
         // WWW-Authenticate so a Prometheus `basic_auth` scraper (Go parity:
-        // HandleMetrics realm "sky-metrics") gets a proper challenge instead of a
+        // HandleMetrics realm "ipe-metrics") gets a proper challenge instead of a
         // bare 401 it can't act on.
         Some(
             (
                 StatusCode::UNAUTHORIZED,
-                [(header::WWW_AUTHENTICATE, "Basic realm=\"sky-metrics\"")],
+                [(header::WWW_AUTHENTICATE, "Basic realm=\"ipe-metrics\"")],
                 "console requires a Bearer or Basic admin token in production",
             )
                 .into_response(),

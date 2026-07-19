@@ -1,7 +1,7 @@
 //! Shared end-to-end build/run support for the golden parity gate.
 //!
 //! Every golden's emitted Rust project is built into ONE shared cargo target —
-//! the machine-global `~/.cache/sky-rust-target`, configured in the global
+//! the machine-global `~/.cache/ipe-lang-target`, configured in the global
 //! `~/.cargo/config.toml` (`target-dir = …`). cargo reads that file on every
 //! invocation, including builds launched from an emitted project under
 //! `std::env::temp_dir()`, so heavy dependencies (tokio / rsa / serde / …)
@@ -29,7 +29,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-/// The `sky-rust` workspace root (two levels up from this crate's manifest).
+/// The `ipe-lang` workspace root (two levels up from this crate's manifest).
 ///
 /// Shared so every golden test resolves the golden tree the same way, rather
 /// than each file carrying its own hand-rolled duplicate. Canonicalises the
@@ -478,6 +478,6 @@ pub fn assert_self_regression(golden_name: &str, golden_dir: &Path, ipe_stdout: 
 /// `oracle.meta`). Keeping the name avoids a mass-rename across the ~72 call
 /// sites — the semantics are identical: hard-fail on mismatch or missing file.
 #[allow(dead_code)]
-pub fn assert_go_parity(golden_name: &str, golden_dir: &Path, skyc_stdout: &str) {
-    assert_self_regression(golden_name, golden_dir, skyc_stdout);
+pub fn assert_go_parity(golden_name: &str, golden_dir: &Path, ipec_stdout: &str) {
+    assert_self_regression(golden_name, golden_dir, ipec_stdout);
 }

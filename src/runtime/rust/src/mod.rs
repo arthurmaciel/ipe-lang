@@ -9,7 +9,7 @@
         clippy::unreachable,
         // Promoted from the quality-audit advisory set to a HARD deny: these are
         // all panic vectors a well-typed Ipe program must never reach. `cargo
-        // clippy` now FAILS on any of them in non-test runtime code, so risky
+        // clippy` now FAILS on any of them in non-test runtime code, so riipe
         // code cannot be merged (CI security-audit gate + local clippy enforce
         // it). See `## Settled rules` in AGENTS.md.
         clippy::todo,

@@ -44,7 +44,7 @@ jobs:
   # Guards the ipe-runtime-rust feature graph against silent coupling. The
   # workspace jobs above build the runtime with its DEFAULT features (`[]`), so
   # narrow subsets are otherwise unexercised. In particular a DB-only server /
-  # CLI app must compile WITHOUT `live` (Sky.Live) — if a future change adds an
+  # CLI app must compile WITHOUT `live` (Ipe.Live) — if a future change adds an
   # ungated reference to a `live`-only item (e.g. `super::LiveReq`) from
   # `db`-gated code, or pulls `live` into the `db` feature list, this job fails.
   # Keep `db` and `live` independently buildable; gate cross-feature items with
@@ -104,7 +104,7 @@ jobs:
   # in `file`/`compression`/`config_decode`/`csv`/`system.rs`, which prove a
   # blocking kernel actually offloads onto tokio's blocking pool (a future
   # refactor that silently dropped `spawn_blocking` would pass the default
-  # gate untouched), AND the ENTIRE `sky_runtime::live::*` test surface —
+  # gate untouched), AND the ENTIRE `ipe_runtime::live::*` test surface —
   # the `style_inject` CSS-injection sink-forgery gates, SSE/session/dispatch
   # (gate blind spot, 2026-07-11: `full` ⊇ `live`; a default-only gate shows
   # green while these are red). `full` turns on every optional feature so
@@ -169,7 +169,7 @@ jobs:
   # scheduler contention, not on a real regression.
   #
   # NON-GATING FOR NOW (`continue-on-error: true`). The prior form gated on a
-  # `vendor/upstream-sky/...` path that never landed, so E2E ALWAYS self-skipped —
+  # `vendor/upstream-ipe/...` path that never landed, so E2E ALWAYS self-skipped —
   # THE SEAL was never enforced in CI. Pointing it at the in-repo runtime turns it
   # back on, which surfaces a real pre-existing backlog the skip had masked. Those
   # are tracked blockers, not a reason to keep E2E blind, so the job runs and

@@ -2,7 +2,7 @@ module Main exposing (main)
 
 -- Companion to `set_record_gate` for the GENERIC-FUNCTION path.
 -- `singletonSet` is a generic `a -> Set a` forwarder built on `Set.fromList`.
--- The Set element variable carries the Sky `comparable`-key obligation
+-- The Set element variable carries the Ipe `comparable`-key obligation
 -- (`TyBounds::set_elem`, → Rust `Ord`), so the forwarder generalises to a Rust
 -- generic bounded by `Ord`.  Instantiating it at a RECORD — which Rust cannot
 -- order — is rejected here at type-check (IPE-T0014) rather than emitting an

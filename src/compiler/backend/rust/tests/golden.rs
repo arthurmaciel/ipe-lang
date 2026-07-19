@@ -18,7 +18,7 @@ const GOLDEN_MAIN: &str = include_str!("../../../../../tests/golden/basics/main.
 const GOLDEN_CARGO: &str = include_str!("../../../../../tests/golden/basics/Cargo.toml");
 
 /// Build the golden program:
-/// ```sky
+/// ```ipe
 /// type Msg = Increment | Decrement
 /// update msg count =
 ///     case msg of

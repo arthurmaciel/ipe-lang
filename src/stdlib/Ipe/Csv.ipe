@@ -1,4 +1,4 @@
--- | Ipe.Csv — CSV encode + decode (Layer 3 Sky source).
+-- | Ipe.Csv — CSV encode + decode (Layer 3 Ipe source).
 --
 -- Operates on whole-CSV documents in memory via the `Csv` record:
 -- a `List String` header and a `List (List String)` body.  The

@@ -30,7 +30,7 @@ use crate::css_safety::{SafeCssPropertyName, SafeCssSelector, SafeCssValue, stri
 /// as `String -> Maybe String`, so the emitted call site expects `IpeMaybe`, not
 /// `Option`.
 #[inline]
-fn to_sky_maybe(opt: Option<String>) -> IpeMaybe<String> {
+fn to_ipe_maybe(opt: Option<String>) -> IpeMaybe<String> {
     match opt {
         Some(clean) => IpeMaybe::Just(clean),
         None => IpeMaybe::Nothing,
@@ -43,7 +43,7 @@ fn to_sky_maybe(opt: Option<String>) -> IpeMaybe<String> {
 /// declaration).
 #[must_use]
 pub fn safe_value(v: String) -> IpeMaybe<String> {
-    to_sky_maybe(SafeCssValue::parse(&v).map(|s| s.as_str().to_string()))
+    to_ipe_maybe(SafeCssValue::parse(&v).map(|s| s.as_str().to_string()))
 }
 
 /// `Css.safePropName : String -> Maybe String`.  Parse a CSS property name
@@ -51,7 +51,7 @@ pub fn safe_value(v: String) -> IpeMaybe<String> {
 /// key-injection vector (`background:url(x);y`).
 #[must_use]
 pub fn safe_prop_name(k: String) -> IpeMaybe<String> {
-    to_sky_maybe(SafeCssPropertyName::parse(&k).map(|s| s.as_str().to_string()))
+    to_ipe_maybe(SafeCssPropertyName::parse(&k).map(|s| s.as_str().to_string()))
 }
 
 /// `Css.safeSelector : String -> Maybe String`.  Parse a selector / media-query
@@ -59,7 +59,7 @@ pub fn safe_prop_name(k: String) -> IpeMaybe<String> {
 /// closes `{ } ; @ < / \`-based breakout (`@import`-via-selector included).
 #[must_use]
 pub fn safe_selector(sel: String) -> IpeMaybe<String> {
-    to_sky_maybe(SafeCssSelector::parse(&sel).map(|s| s.as_str().to_string()))
+    to_ipe_maybe(SafeCssSelector::parse(&sel).map(|s| s.as_str().to_string()))
 }
 
 /// `Css.stripStyleClose : String -> String`.  The breakout floor: strip every

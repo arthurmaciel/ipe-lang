@@ -15,7 +15,7 @@
 //! 5. The binary is spawned with `IPE_LIVE_PORT=<port>` and `IPE_CSRF=off`.
 //!    `IPE_CSRF=off` disables the double-submit cookie check so test GETs
 //!    exercise the full page render without cookie plumbing.
-//! 6. Readiness: reads the child's stderr until `[sky.live] listening on`.
+//! 6. Readiness: reads the child's stderr until `[ipe.live] listening on`.
 //! 7. `GET /` is sent via raw `TcpStream`; the response body must contain
 //!    the initial counter value rendered as `>0<`, proving the full Live
 //!    pipeline ran:
@@ -52,7 +52,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 ///
 /// The rendered initial page will contain the text `>0<` (the counter starts at
 /// zero, rendered inside a text element).  No `Ui.button` is used because that
-/// function is not a raw kernel — it is defined in sky-stdlib as a Ipê function.
+/// function is not a raw kernel — it is defined in ipe-stdlib as a Ipê function.
 const IPE_LIVE_COUNTER: &str = r#"module Main exposing (main)
 
 import Ipe.Live as Live
@@ -296,10 +296,10 @@ main =
 ///
 /// Returns an error on any pipeline or Cargo build failure.
 fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<PathBuf, BoxError> {
-    let ipe_dir = std::env::temp_dir().join(format!("live_e2e_{test_name}_sky"));
+    let ipe_dir = std::env::temp_dir().join(format!("live_e2e_{test_name}_ipe"));
     let _ = std::fs::remove_dir_all(&ipe_dir);
     std::fs::create_dir_all(&ipe_dir).map_err(|e| -> BoxError {
-        format!("{test_name}: cannot create sky source dir: {e}").into()
+        format!("{test_name}: cannot create ipe source dir: {e}").into()
     })?;
 
     let entry = ipe_dir.join("Main.ipe");
@@ -352,7 +352,7 @@ impl Drop for ProcessGuard {
 }
 
 /// Spawn the Ipê Live binary and wait until it signals readiness via
-/// `[sky.live] listening on` on stderr.
+/// `[ipe.live] listening on` on stderr.
 ///
 /// # Errors
 ///
@@ -370,13 +370,13 @@ fn spawn_and_wait_ready(
         .env("IPE_CSRF", "off")
         // Disable the dev console proxy. The console child binary is pre-built
         // and cached on this machine; without this gate it is spawned on its
-        // own ephemeral port and emits its own `[sky.live] listening on`
+        // own ephemeral port and emits its own `[ipe.live] listening on`
         // to the inherited stderr pipe before the parent app has bound its
         // port. The test sees that line, declares the server ready, and then
         // immediately tries to connect to the parent's port — which is not
         // bound yet — getting ECONNREFUSED. Setting IPE_CONSOLE_EMBED=off
         // makes gate_allows() return false so no child is spawned and the
-        // only `[sky.live] listening on` line in the stderr pipe is the
+        // only `[ipe.live] listening on` line in the stderr pipe is the
         // parent's own (emitted AFTER the TCP listener is bound).
         .env("IPE_CONSOLE_EMBED", "off")
         .stderr(Stdio::piped())
@@ -400,7 +400,7 @@ fn spawn_and_wait_ready(
             let _ = child.kill();
             let _ = child.wait();
             return Err(
-                format!("{test_name}: Sky Live did not signal readiness within 10 s").into(),
+                format!("{test_name}: Ipe Live did not signal readiness within 10 s").into(),
             );
         }
         line.clear();
@@ -408,13 +408,13 @@ fn spawn_and_wait_ready(
             Ok(0) => {
                 let _ = child.wait();
                 return Err(format!(
-                    "{test_name}: Sky Live process exited before signalling ready"
+                    "{test_name}: Ipe Live process exited before signalling ready"
                 )
                 .into());
             }
             Ok(_) => {
-                // The live runtime emits: `[sky.live] listening on http://0.0.0.0:<port>`
-                if line.contains("[sky.live] listening on") {
+                // The live runtime emits: `[ipe.live] listening on http://0.0.0.0:<port>`
+                if line.contains("[ipe.live] listening on") {
                     return Ok(ProcessGuard(child));
                 }
             }
@@ -448,7 +448,7 @@ fn http_send(
     body: Option<&[u8]>,
 ) -> Result<(String, String), BoxError> {
     let mut stream = TcpStream::connect(addr).map_err(|e| -> BoxError {
-        format!("{test_name}: cannot connect to Sky Live server: {e}").into()
+        format!("{test_name}: cannot connect to Ipe Live server: {e}").into()
     })?;
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
@@ -1017,7 +1017,7 @@ fn live_pubsub_publish_polymorphic_record_payload_build_only() -> Result<(), Box
 /// Typed-record onSubmit — the CANONICAL AGENTS.md "forms with passwords" idiom:
 /// `Ui.form [Ui.onSubmit DoSignIn] [...]` where `DoSignIn : Creds -> Msg` is a
 /// TYPED-RECORD payload constructor (not a bare Msg). This is the exact shape
-/// `examples/19-skyforum`'s `View/Login.ipe` and `examples/27-multi-session-chat`
+/// `examples/19-ipeforum`'s `View/Login.ipe` and `examples/27-multi-session-chat`
 /// use in production.
 ///
 /// Forwarding the codegen's boxed closure value (`Box<dyn Fn(T) -> M + Send +
@@ -1207,7 +1207,7 @@ fn live_onsubmit_typed_record_dispatches_decoded_payload() -> Result<(), BoxErro
 /// Bare-Msg onSubmit — the "ignore form data, always dispatch this fixed
 /// action" idiom: `Ipe.Html.Events.onSubmit Confirm` where `Confirm : Msg`
 /// carries NO payload (a nullary constructor, not a decoder function). This
-/// is the exact shape `examples/12-skyvote`'s `Page/AuthPage.ipe` /
+/// is the exact shape `examples/12-ipevote`'s `Page/AuthPage.ipe` /
 /// `Page/Submit.ipe` / `Page/Detail.ipe` use throughout (`onSubmit
 /// DoSignUp` / `DoSignIn` / `SubmitIdea` / `SubmitComment`) — form fields
 /// are already synced into `Model` via `onInput`/`onChange`; `onSubmit`
@@ -1639,7 +1639,7 @@ fn live_onsubmit_list_literal_build_only() -> Result<(), BoxError> {
 // `m` is `MainMsg::DoSignUp`, a non-callable enum value → `(m)(_x)` is cargo
 // `E0618` ("expected function") AFTER `ipe` exit 0 — a SEAL violation.
 //
-// Classification is TYPE-DIRECTED instead (mirroring `../sky`'s
+// Classification is TYPE-DIRECTED instead (mirroring `../ipe`'s
 // `formTargetRustType`): the lowerer reads the handler's SOLVED type and
 // records `OnFormKind::{Decoder,FixedValue}` on the `Call`. A non-arrow value
 // (this shape) routes to `html_on_raw_fixed_` regardless of its syntax; an
@@ -2007,7 +2007,7 @@ fn live_onsubmit_let_alias_chain_build_only() -> Result<(), BoxError> {
 /// `/` page carries a typed-record `onSubmit` form and whose `notFound` page
 /// does NOT. The two pages must render DIFFERENT trees so a spurious
 /// re-route visibly destroys the form's handler index (same shape as
-/// `examples/12-skyvote`: form at `/auth/signup`, `notFound` = board).
+/// `examples/12-ipevote`: form at `/auth/signup`, `notFound` = board).
 const IPE_ONSUBMIT_ROUTED_FORM: &str = r#"module Main exposing (main)
 
 import Ipe.Live as Live
@@ -2174,7 +2174,7 @@ fn live_unrouted_get_does_not_wipe_form_handlers() -> Result<(), BoxError> {
         body2.contains(">alice<"),
         "{test_name}: the submit after GET /favicon.ico did not dispatch — \
          the unrouted GET wiped the session's handler index (the exact \
-         examples/12-skyvote break)\n--- first 2000 bytes of second GET / ---\n{}",
+         examples/12-ipevote break)\n--- first 2000 bytes of second GET / ---\n{}",
         &body2[..body2.len().min(2000)]
     );
 

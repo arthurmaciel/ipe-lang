@@ -1,6 +1,6 @@
 //! The canonicalisation environment: the name → resolution tables consulted
 //! during name resolution. Port of the supported subset of
-//! `Sky.Canonicalise.Environment`.
+//! `Ipe.Canonicalise.Environment`.
 //!
 //! Iteration order is never observable (lookups only), but the tables are
 //! `BTreeMap`s so the structure is deterministic regardless of insertion order.
@@ -25,7 +25,7 @@ use crate::resolve::ModuleOrigin;
 /// registers a user's `import Ipe.… as Alias` (or the Elm last-segment default)
 /// so the alias resolves to the same kernel members as the canonical qualifier.
 /// It is the Rust-port counterpart of the upstream Haskell
-/// `Sky.Canonicalise.Environment.staticKernelModules` (path → canonical name).
+/// `Ipe.Canonicalise.Environment.staticKernelModules` (path → canonical name).
 ///
 /// Two invariants keep this table from drifting out of sync with the qualifier
 /// registry, both enforced by unit tests:

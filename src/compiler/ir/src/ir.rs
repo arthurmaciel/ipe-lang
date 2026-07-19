@@ -285,7 +285,7 @@ impl BoundSet {
     /// The SQL-bind-parameter bound: realises the type checker's
     /// `TyBounds::sql_param` obligation as Rust `Into<ipe_runtime::db::SqlParam>`
     /// — a generic wrapper around `Db.exec` / `Db.query` / `Db.queryDecode`
-    /// (`Database.exec label sql args` in `examples/17-skymon`'s `Ipe.Db`
+    /// (`Database.exec label sql args` in `examples/17-ipemon`'s `Ipe.Db`
     /// access layer) needs this bound on its own emitted type parameter so its
     /// body's `SqlParam::from`-style projection type-checks for the CALLER's
     /// concrete element type, not just the one instantiation the function
@@ -434,7 +434,7 @@ impl BoundSet {
     /// This set with the `IpeRow` (Db field-accessor row) bound — see
     /// [`Self::IPE_ROW`].
     #[must_use]
-    pub const fn with_sky_row(self) -> Self {
+    pub const fn with_ipe_row(self) -> Self {
         Self(self.0 | Self::IPE_ROW)
     }
 
@@ -1900,7 +1900,7 @@ pub enum CallPin {
     /// A single free error/phantom parameter pinned to the project's canonical
     /// error type — `::<IpeError>`. Used by `decimal_from_string<E: From<String>>`
     /// when the `Err` channel is discarded.
-    ErrSkyError,
+    ErrIpeError,
 }
 
 impl CallPin {
@@ -1922,7 +1922,7 @@ impl CallPin {
             Self::DefaultI64 => "::<i64>",
             Self::DefaultDict => "::<String, i64>",
             Self::DefaultResultMapErr => "::<_, _, i64>",
-            Self::ErrSkyError => "::<IpeError>",
+            Self::ErrIpeError => "::<IpeError>",
         }
     }
 }

@@ -87,7 +87,7 @@ fn record_pattern_in_ctor_payload_accepted() {
 }
 
 #[test]
-fn non_exhaustive_nested_case_is_sky_t0010() {
+fn non_exhaustive_nested_case_is_ipe_t0010() {
     assert_gate(
         "gate_nonexhaustive_nested",
         "m3b2_gate_nonexhaustive_emit",
@@ -100,7 +100,7 @@ fn non_exhaustive_nested_case_is_sky_t0010() {
 /// hard error would be stricter-than-reference and block parity. The build must
 /// SUCCEED — the warning goes to stderr via the collected-warnings channel.
 #[test]
-fn redundant_nested_arm_is_sky_t0011_warning_build_succeeds() {
+fn redundant_nested_arm_is_ipe_t0011_warning_build_succeeds() {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -122,7 +122,7 @@ fn redundant_nested_arm_is_sky_t0011_warning_build_succeeds() {
 }
 
 #[test]
-fn single_arm_refutable_tuple_case_is_sky_l0115() {
+fn single_arm_refutable_tuple_case_is_ipe_l0115() {
     assert_gate(
         "gate_refutable_single",
         "m3b2_gate_refutable_single_emit",
@@ -131,7 +131,7 @@ fn single_arm_refutable_tuple_case_is_sky_l0115() {
 }
 
 #[test]
-fn refutable_let_destructure_is_sky_t0015() {
+fn refutable_let_destructure_is_ipe_t0015() {
     assert_gate(
         "gate_refutable_let",
         "m3b2_gate_refutable_let_emit",

@@ -1,7 +1,7 @@
 //! Layout-aware lexer for the supported subset of Ipê.
 //!
 //! This is a Rust port of the relevant pieces of the Haskell compiler's
-//! `Sky.Parse.{Primitives,Space,Number,Symbol,Variable}` — narrowed to the
+//! `Ipe.Parse.{Primitives,Space,Number,Symbol,Variable}` — narrowed to the
 //! token shapes the supported subset exercises. Rather than emit explicit
 //! layout tokens, each token carries its 1-based `line`/`col`, and the parser
 //! reconstructs block structure from columns (see [`crate::layout`]).
@@ -104,7 +104,7 @@ pub enum Tok {
     /// A triple-quoted string literal `"""..."""`. The carried [`String`] is the
     /// RAW content — escape sequences (`\n`, `\\`) and `{{expr}}` interpolation
     /// markers are NOT resolved here; the canonicaliser handles them downstream,
-    /// mirroring `Sky.Parse.String.findTripleClose` which performs no escape
+    /// mirroring `Ipe.Parse.String.findTripleClose` which performs no escape
     /// resolution. Mirrors the Haskell compiler's `Src.MultilineStr`.
     TripleStr(String),
     /// A character literal `'a'`. The carried [`String`] is the single UNESCAPED
@@ -471,7 +471,7 @@ fn lex_string(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
 ///
 /// Raw content is returned without escape processing: `{{expr}}` interpolation,
 /// `\{{` literal-brace escapes, and `\\` collapse are handled downstream by the
-/// canonicaliser (mirroring `Sky.Parse.String.findTripleClose` in the Haskell
+/// canonicaliser (mirroring `Ipe.Parse.String.findTripleClose` in the Haskell
 /// reference, which performs no escape resolution).
 ///
 /// Reaching end of input before `"""` is [`ParseError::UnterminatedString`].

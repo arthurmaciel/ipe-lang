@@ -16,14 +16,14 @@
 //! `main` — the ONE generic function, monomorphised by Rust at every call site.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
-//! `/home/arthur/Documentos/comp/sky/out/sky` compiles + runs the SAME
+//! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
 //! `Main.ipe` to stdout `42\n`, exit 0 — hand-verified in a temp dir, where the
 //! Go backend emits the matching monomorphisation
 //! `func identity[T1 any](x T1) T1` / `func const_[T1 any, T2 any](x T1, y T2) T1`
 //! / `func apply[T1 any, T2 any](f func(T1) T2, x T1) T2`, confirming the
 //! `a` → `T1` naming convention and the `func(T1) T2` ↔ `Box<dyn Fn(T1) -> T2>`
 //! correspondence. Running the Go toolchain inside `cargo test` is impractical
-//! (it needs the Haskell `sky` binary plus a Go toolchain), so the hand-computed
+//! (it needs the Haskell `ipe` binary plus a Go toolchain), so the hand-computed
 //! `42` is the in-test oracle, documented here against the Go-equivalent command.
 
 use std::path::{Path, PathBuf};
@@ -76,7 +76,7 @@ fn end_to_end_builds_and_prints_forty_two() {
 
     let root = repo_root();
     let entry = example_entry(&root);
-    let out = std::env::temp_dir().join("skyc_m2a_parametric_e2e");
+    let out = std::env::temp_dir().join("ipec_m2a_parametric_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

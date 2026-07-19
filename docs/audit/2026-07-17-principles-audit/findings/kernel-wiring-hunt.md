@@ -10,7 +10,7 @@ For each of the 43 `src/stdlib/**/*.ipe` files:
    (b) pure-Ipê (recursive/case-based body).
 2. For every pure-Ipê binding, queried `scripts/ipe-index locate` and
    `parity --gaps` to detect a corresponding runtime kernel
-   (`src/runtime/rust/src/*.rs` and/or Go `../sky/runtime-go/rt/`).
+   (`src/runtime/rust/src/*.rs` and/or Go `../ipe/runtime-go/rt/`).
 3. For confirmed candidates, diff'd the pure-Ipê body against the kernel
    for dropped guards, edge-case divergence, overflow paths.
 
@@ -23,7 +23,7 @@ the index cannot answer.
 
 ### F-001 — Money: 8 kernel-backed functions replaced by pure-Ipê stubs (CONFIRMED, HIGH)
 
-**File:** `src/stdlib/Ipe/Money.ipe` (entire file — header comment says explicitly "all `Ffi.callPure` calls replaced with pure Sky implementations")
+**File:** `src/stdlib/Ipe/Money.ipe` (entire file — header comment says explicitly "all `Ffi.callPure` calls replaced with pure Ipe implementations")
 
 **Kernel counterparts confirmed via `ipe-index locate`:**
 
@@ -88,7 +88,7 @@ the index cannot answer.
 **Situation:** `List.ipe` contains pure-Ipê implementations of `isEmpty`, `length`, `head`, `tail`, `reverse`, `take`, `drop`, `append`, `concat`, `member`, `range`, `zip`, `map`, `filter`, `any`, `all`, `find`, `foldl`, `foldr`, `concatMap`, `indexedMap`. Every one of these has a confirmed Rust kernel (`list.rs`) with `parity=ok`.
 
 **Key question — which path does the compiler actually use?**
-The `ipe-index parity=ok` verdict for all List kernels means the compiler registers and routes calls to the kernel, NOT the pure-Ipê body. `List.ipe` bodies are stdlib source declarations that give the functions HM type signatures; the emitter routes to `list_*` kernels. This is the intended architecture (the `List.ipe` header comment says HOFs "stay kernel-anchored" but the non-HOF surface was migrated to Sky source).
+The `ipe-index parity=ok` verdict for all List kernels means the compiler registers and routes calls to the kernel, NOT the pure-Ipê body. `List.ipe` bodies are stdlib source declarations that give the functions HM type signatures; the emitter routes to `list_*` kernels. This is the intended architecture (the `List.ipe` header comment says HOFs "stay kernel-anchored" but the non-HOF surface was migrated to Ipe source).
 
 **However, two divergences exist between the pure-Ipê bodies and kernel bodies that matter if the compiler ever routes to the pure-Ipê path (e.g. in-lined expansion, fallback, or future pure-Ipê mode):**
 
@@ -224,7 +224,7 @@ All 43 `src/stdlib/**/*.ipe` files surveyed:
 
 ## §4 Fix directions
 
-**F-001 (Money):** The root fix is to register `Money_*` kernel names in the compiler's kernel table (`src/compiler/kernels/src/lib.rs`) and route the pure-Ipê stdlib bindings to `Ffi.kernel "Money_minorUnits"` etc. — exactly the pattern the upstream `../sky/sky-stdlib/Std/Money.sky` uses. The Rust runtime kernels are already fully implemented in `src/runtime/rust/src/money.rs`. This is a compiler wiring task, not a runtime task.
+**F-001 (Money):** The root fix is to register `Money_*` kernel names in the compiler's kernel table (`src/compiler/kernels/src/lib.rs`) and route the pure-Ipê stdlib bindings to `Ffi.kernel "Money_minorUnits"` etc. — exactly the pattern the upstream `../ipe/ipe-stdlib/Std/Money.ipe` uses. The Rust runtime kernels are already fully implemented in `src/runtime/rust/src/money.rs`. This is a compiler wiring task, not a runtime task.
 
 Short-term mitigations for the pure-Ipê path (in case kernel wiring is deferred):
 - **F-001d**: Add BTC→8, ETH→18, USDT→6, USDC→6 to `minorUnits` case in `Money.ipe:167`.

@@ -33,7 +33,7 @@ fn repo_root() -> PathBuf {
 
 /// Assert that `ipe::build(fixture)` SUCCEEDS (exit-0 from the lowerer).
 /// Runs without `IPE_E2E` so the compile check is always fast.
-fn assert_skyc_ok(fixture: &str, out_suffix: &str) {
+fn assert_ipec_ok(fixture: &str, out_suffix: &str) {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -62,7 +62,7 @@ fn assert_skyc_ok(fixture: &str, out_suffix: &str) {
 /// it compiles and, when run, prints "hello!".
 #[test]
 fn a1_noncl_var_task_and_then_compiles() {
-    assert_skyc_ok("noncl_var_hof", "i149_noncl_var_hof_emit");
+    assert_ipec_ok("noncl_var_hof", "i149_noncl_var_hof_emit");
 
     if std::env::var("IPE_E2E").is_err() {
         return;
@@ -74,7 +74,7 @@ fn a1_noncl_var_task_and_then_compiles() {
         .join("golden")
         .join("noncl_var_hof")
         .join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_i149_noncl_var_hof_e2e");
+    let out = std::env::temp_dir().join("ipec_i149_noncl_var_hof_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

@@ -3,7 +3,7 @@ import Ipe.Prelude exposing (..)
 
 -- IPE-L0110 (#216) seal: partial + over-application of a first-class function
 -- VALUE. The named-callee path already eta-expands (`add 2` -> `\n -> add(2,
--- n)`); this fixture pins the VALUE path the reference (`../sky`) handles by
+-- n)`); this fixture pins the VALUE path the reference (`../ipe`) handles by
 -- emitting curried single-arg closures. Our IR flattens the curried chain into
 -- one multi-parameter closure, so a value applied to too-few args must be
 -- eta-expanded into a residual closure `\eta... -> (value)(supplied..., eta...)`.
@@ -16,7 +16,7 @@ import Ipe.Prelude exposing (..)
 --   3. pipe partial: `100 |> add3 1 2` == `(add3 1 2) 100`, a named partial that
 --      eta-expands and is applied to the piped value.
 --
--- Go oracle (`sky run`): prints `6`, `33`, `103`, exit 0.
+-- Go oracle (`ipe run`): prints `6`, `33`, `103`, exit 0.
 
 
 f : Int -> Int -> Int -> Int

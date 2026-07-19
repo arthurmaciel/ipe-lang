@@ -232,7 +232,7 @@ pub(crate) fn resolve_project_sources(
     } else if entry.extension().and_then(|e| e.to_str()) == Some("toml") {
         Some(entry.to_path_buf())
     } else {
-        crate::find_manifest_for_sky_file(entry)
+        crate::find_manifest_for_ipe_file(entry)
     };
 
     if let Some(manifest_path) = manifest_path {
@@ -878,7 +878,7 @@ fn run_inner(
                             eprintln!("[ipe watch] failed to write emitted project: {e}");
                             continue;
                         }
-                        current_is_live = is_sky_live_project(&emitted);
+                        current_is_live = is_ipe_live_project(&emitted);
                         // Design doc "First-run vs warm-run UX": the cold
                         // (first) build pays the full dependency-compile
                         // cost and can take minutes; every subsequent
@@ -990,7 +990,7 @@ fn run_inner(
 /// argument this driver cannot statically know) falls back to
 /// `AliveGrace` — matching the design doc's own readiness bifurcation
 /// ("`/_ipe/readyz` for Ipe.Live; alive + optional health for CLI").
-fn is_sky_live_project(emitted: &ipe_backend::EmittedProject) -> bool {
+fn is_ipe_live_project(emitted: &ipe_backend::EmittedProject) -> bool {
     emitted
         .files
         .iter()

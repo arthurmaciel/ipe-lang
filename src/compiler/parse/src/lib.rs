@@ -5,7 +5,7 @@
 //! Entry point: [`parse_module`]. It consumes source text plus a mutable
 //! [`Interner`] and produces a [`ipe_syntax::Module`], or a typed
 //! [`ipe_diagnostics::Diagnostic`]. The parser is a hand-written recursive
-//! descent port of the Haskell compiler's `Sky.Parse.*`, narrowed to the
+//! descent port of the Haskell compiler's `Ipe.Parse.*`, narrowed to the
 //! nodes the supported subset exercises. Recursion is bounded by
 //! [`parser::MAX_DEPTH`] so adversarial input cannot overflow the stack.
 
@@ -1932,7 +1932,7 @@ mod tests {
     // -----------------------------------------------------------------------
     // Triple-quoted string regression tests
     // -----------------------------------------------------------------------
-    // Reference: Sky.Parse.String.findTripleClose (Haskell) — the closing
+    // Reference: Ipe.Parse.String.findTripleClose (Haskell) — the closing
     // terminator is exactly `"""`, never a lone `"`.
 
     /// A triple-quoted string containing a lone `"` must not terminate early.

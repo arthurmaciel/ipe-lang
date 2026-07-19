@@ -2,7 +2,7 @@ module Main exposing (main)
 
 -- backlog #44 negative gate: `Secret` does NOT implement the `++` append
 -- obligation (`Appendable a => a -> a -> a`, pinned to `String` / `List _`
--- only, see `sky_types::constrain`'s `BinopClass::Append` arm) — a `Secret`
+-- only, see `ipe_types::constrain`'s `BinopClass::Append` arm) — a `Secret`
 -- concatenated with a `String` is a compile-time type error, never a runtime
 -- concern. This is one of the "every plausible accidental-stringification
 -- path" cases the fix spec's mandatory regression tests call out: string

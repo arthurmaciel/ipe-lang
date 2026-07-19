@@ -663,7 +663,7 @@ TsgxkiXH9sjXrPHT1hXn2tKCv9MkR8MD1Ndh6jo7inBZUK0YG7H6Jx0CAwEAAQ==
 
     #[test]
     fn test_rsa_sign_verify_roundtrip() {
-        let msg = "hello, sky".to_string();
+        let msg = "hello, ipe".to_string();
         let sig: IpeResult<String, String> =
             crypto_rsa_sha256_sign(RSA_PRIV_PEM.to_string(), msg.clone());
         // Sign returns standard base64 (mirrors Go's base64.StdEncoding).

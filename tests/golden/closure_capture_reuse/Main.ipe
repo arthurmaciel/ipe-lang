@@ -9,7 +9,7 @@ module Main exposing (main)
 --   `let prefix = prefix.clone() in Lambda { … }`.
 -- The outer `prefix` survives; the `move` closure captures the inner clone.
 --
--- Expected output: "sky-one,sky-two[sky-]"
+-- Expected output: "ipe-one,ipe-two[ipe-]"
 
 
 format : String -> List String -> String
@@ -22,4 +22,4 @@ format prefix items =
 
 
 main =
-    println (format "sky-" [ "one", "two" ])
+    println (format "ipe-" [ "one", "two" ])

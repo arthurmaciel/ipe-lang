@@ -257,7 +257,7 @@ pub fn task_run<E: From<String> + Send + 'static, A: Send + 'static>(
 // For an effectful Ipê task that means its observable side effect (a second DB
 // write, a duplicate charge, a duplicate email) would still fire AFTER the
 // batch has already been reported as failed — a double-write / double-charge
-// hazard. `abort()` on each survivor closes that hole. (Reference: ../sky's
+// hazard. `abort()` on each survivor closes that hole. (Reference: ../ipe's
 // Go/upstream `Task.parallel` early-cancel shape; adopted here for the Rust
 // runtime.)
 //

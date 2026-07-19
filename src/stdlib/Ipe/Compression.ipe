@@ -1,4 +1,4 @@
--- | Ipe.Compression — gzip + zstd compression (Layer 3 Sky source).
+-- | Ipe.Compression — gzip + zstd compression (Layer 3 Ipe source).
 --
 -- Operate on raw bytes (`Ipe.Bytes` alias = `String`); use
 -- `Bytes.fromString` / `Bytes.toBase64` etc. for transport encoding.
@@ -27,7 +27,7 @@ import Ipe.Bytes exposing (Bytes)
 -- `Vec<u8>` (a documented divergence from the Go backend, where
 -- `Bytes` aliased `String`), so the compression kernels take + return
 -- `Bytes` to line up with the runtime `compression_*(Vec<u8>) ->
--- SkyTask<_, Vec<u8>>` signatures.  Convert to/from `String` at the
+-- IpeTask<_, Vec<u8>>` signatures.  Convert to/from `String` at the
 -- boundary via `Bytes.fromString` / `Bytes.toString` /
 -- `Bytes.toBase64` when transport encoding is needed.
 

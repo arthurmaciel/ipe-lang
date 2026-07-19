@@ -17,7 +17,7 @@
 //! pattern binding.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
-//! `/home/arthur/Documentos/comp/sky/out/sky` compiles + runs the SAME
+//! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
 //! `Main.ipe` to stdout `5\n`, exit 0 — hand-verified in a temp dir. This is
 //! the soundness-floor regression for a value laundered through a boxed
 //! mutually-recursive payload, pinning the indirect-cycle gap so it can never
@@ -74,7 +74,7 @@ fn end_to_end_builds_and_prints_five() {
 
     let root = repo_root();
     let entry = example_entry(&root);
-    let out = std::env::temp_dir().join("skyc_m3a_mutual_recursion_e2e");
+    let out = std::env::temp_dir().join("ipec_m3a_mutual_recursion_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

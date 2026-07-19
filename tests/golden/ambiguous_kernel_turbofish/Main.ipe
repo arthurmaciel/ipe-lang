@@ -3,7 +3,7 @@ module Main exposing (main)
 -- #181 regression: polymorphic kernels whose free result type parameter the HM
 -- solver leaves GENUINELY UNCONSTRAINED (a discarded / empty / phantom position)
 -- must emit a default turbofish so the Rust builds (no E0282/E0283) — the SEAL
--- (skyc-0 ⟹ cargo-0). Each line below is such an ambiguous shape; the printed
+-- (ipec-0 ⟹ cargo-0). Each line below is such an ambiguous shape; the printed
 -- output proves the runtime behaviour is still correct, not just that it builds.
 
 import Ipe.Prelude exposing (..)

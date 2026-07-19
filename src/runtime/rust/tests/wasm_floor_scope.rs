@@ -48,10 +48,10 @@ fn list_kernel_is_pure_and_total() {
 #[test]
 fn string_kernel_is_pure_and_total() {
     // String.append / toUpper / reverse — pure transforms, no I/O.
-    let s = ipe_runtime_rust::string::string_append("sky".to_string(), "wasm".to_string());
+    let s = ipe_runtime_rust::string::string_append("ipe".to_string(), "wasm".to_string());
     assert_eq!(
         ipe_runtime_rust::string::string_to_upper(s.clone()),
-        "SKYWASM"
+        "IPEWASM"
     );
     assert_eq!(ipe_runtime_rust::string::string_reverse(s), "msawyks");
 
@@ -95,7 +95,7 @@ fn json_kernel_encode_is_pure_and_total() {
     let obj = ipe_runtime_rust::json::json_enc_object(vec![
         (
             "name".to_string(),
-            ipe_runtime_rust::json::json_enc_string("sky".to_string()),
+            ipe_runtime_rust::json::json_enc_string("ipe".to_string()),
         ),
         ("n".to_string(), ipe_runtime_rust::json::json_enc_int(42)),
         (
@@ -106,7 +106,7 @@ fn json_kernel_encode_is_pure_and_total() {
     let compact = ipe_runtime_rust::json::json_enc_encode(0, obj);
     // Field order is preserved by the object encoder; assert on stable substrings
     // so the test does not depend on serde map iteration order beyond presence.
-    assert!(compact.contains("\"name\":\"sky\""), "encoded: {compact}");
+    assert!(compact.contains("\"name\":\"ipe\""), "encoded: {compact}");
     assert!(compact.contains("\"n\":42"), "encoded: {compact}");
     assert!(compact.contains("\"ok\":true"), "encoded: {compact}");
 }

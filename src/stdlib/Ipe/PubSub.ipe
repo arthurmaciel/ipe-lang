@@ -18,7 +18,7 @@
 -- raw handler reaches every subscribed Ipe.Live session in the
 -- same process, with identical ordering + echo semantics.
 --
--- See `docs/skylive/pubsub.md` for the decision matrix and
+-- See `docs/ipelive/pubsub.md` for the decision matrix and
 -- `examples/29-task-publish` for the canonical pattern.
 --
 -- The pub/sub fan-out comes in two flavours:

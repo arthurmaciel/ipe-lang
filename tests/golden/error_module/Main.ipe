@@ -7,7 +7,7 @@ import Ipe.Error as Error
 -- the Task error channel; `Task.onError` recovers with a handler whose parameter
 -- `e : Error`; `Error.toString e` renders the error back to its message.
 --
--- With `SkyError = String` the message round-trips verbatim (`boom`). Upstream's
+-- With `IpeError = String` the message round-trips verbatim (`boom`). Upstream's
 -- kind-prefixed rendering (`Unexpected: boom`) awaits the rich `ErrorKind` ADT
 -- (#85) — hence this golden is marked `oracle_divergence`.
 main =

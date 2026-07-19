@@ -1,4 +1,4 @@
-//! `examples/17-skymon`'s `cargo build` failure.
+//! `examples/17-ipemon`'s `cargo build` failure.
 //!
 //! Without the fix, `ipe build` exits 0, but the emitted Rust fails `cargo build`
 //! with 6x E0277 (the trait bound `SqlParam: From<T1>` is not satisfied)
@@ -49,7 +49,7 @@
 //!    before.
 //!
 //! The fixture (`tests/golden/db_wrapper_empty_params_165/src/`) is a genuine
-//! 3-module project, mirroring `examples/17-skymon`'s actual
+//! 3-module project, mirroring `examples/17-ipemon`'s actual
 //! `Lib.Database`/`Lib.Alerts`/`Lib.Monitors` cross-module shape:
 //!
 //! - `Lib1.ipe` — `queryOrLog` / `execOrLog`, the unannotated wrapper
@@ -84,7 +84,7 @@ fn repo_root() -> PathBuf {
 /// generic (the E0277 half of #165) — checked unconditionally (cheap, no
 /// `cargo`), independent of the `IPE_E2E` gate below.
 #[test]
-fn db_wrapper_empty_params_165_skyc_accepts_and_emits_sql_param_bound() {
+fn db_wrapper_empty_params_165_ipec_accepts_and_emits_sql_param_bound() {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -93,7 +93,7 @@ fn db_wrapper_empty_params_165_skyc_accepts_and_emits_sql_param_bound() {
         .join("src")
         .join("Main.ipe");
     let out =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("db_wrapper_empty_params_165_skyc_out");
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("db_wrapper_empty_params_165_ipec_out");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -127,7 +127,7 @@ fn db_wrapper_empty_params_165_skyc_accepts_and_emits_sql_param_bound() {
     // needing `Into<ipe_runtime::db::SqlParam>` on its own emitted generic)
     // is NOT asserted textually here: this fixture's `args` unifies to the
     // concrete `MainSqlValue` at every call site (same as
-    // `examples/17-skymon`'s real wrappers, which likewise lower fully
+    // `examples/17-ipemon`'s real wrappers, which likewise lower fully
     // concrete once every call site — including the empty-list ones —
     // carries real type evidence), so the bound never actually needs to
     // appear on `args`'s own type parameter in THIS fixture. Asserting on
@@ -145,7 +145,7 @@ fn db_wrapper_empty_params_165_skyc_accepts_and_emits_sql_param_bound() {
 /// prints the two rows read back through the empty-params wrapper call.
 /// Gated on `IPE_E2E=1` — a real `cargo build`, the only check that would
 /// have caught the original SEAL violation (9x rustc error on
-/// `examples/17-skymon`, `ipe build` itself was clean).
+/// `examples/17-ipemon`, `ipe build` itself was clean).
 #[test]
 fn db_wrapper_empty_params_165_cargo_builds_and_runs() {
     if std::env::var("IPE_E2E").is_err() {
@@ -159,7 +159,7 @@ fn db_wrapper_empty_params_165_cargo_builds_and_runs() {
         .join("db_wrapper_empty_params_165")
         .join("src")
         .join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_db_wrapper_empty_params_165_e2e");
+    let out = std::env::temp_dir().join("ipec_db_wrapper_empty_params_165_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

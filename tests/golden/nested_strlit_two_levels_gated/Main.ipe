@@ -11,8 +11,8 @@ import Ipe.Log exposing (println)
 -- rewrites that to a fresh `String` binder + an arm guard. A `PStr` reached
 -- via the INNER ctor's payload recursion (`lower_payload_pat`) used to fall
 -- through to an unguarded `PStr(s) => Ok(Pat::Str(s.clone()))`, emitting
--- `SkyMaybe::Just(SkyMaybe::Just("x"))` — a `&str` literal pattern against an
--- owned `String` ctor FIELD, E0308 at `cargo build` despite `skyc` exit 0.
+-- `IpeMaybe::Just(IpeMaybe::Just("x"))` — a `&str` literal pattern against an
+-- owned `String` ctor FIELD, E0308 at `cargo build` despite `ipec` exit 0.
 --
 -- This shape now stays fail-closed with a clean IPE-L0116 diagnostic, mirroring
 -- the sibling PList / PCons gate at the same nested-payload recursion site —

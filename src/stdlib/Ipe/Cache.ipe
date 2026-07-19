@@ -1,4 +1,4 @@
--- | Ipe.Cache — in-memory LRU + TTL cache (Layer 3 Sky source).
+-- | Ipe.Cache — in-memory LRU + TTL cache (Layer 3 Ipe source).
 --
 -- Bounded by entry count (`maxEntries`).  Optional TTL evicts on
 -- read; `0` disables.  Both keys and values are typed via phantom

@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 //! Source AST for the Ipê compiler. This is the raw parse tree the parser
 //! produces and name resolution (`ipe_canon`) consumes. It mirrors the
-//! supported subset of the Haskell compiler's `Sky.AST.Source`.
+//! supported subset of the Haskell compiler's `Ipe.AST.Source`.
 
 mod ast;
 
@@ -115,14 +115,14 @@ mod tests {
         };
 
         let main_mod = i.intern("Main")?;
-        let sky = i.intern("Sky")?;
+        let ipe = i.intern("Ipe")?;
         let core = i.intern("Core")?;
         let prelude = i.intern("Prelude")?;
         Ok(Module {
             name: loc(vec![main_mod]),
             exposing: loc(Exposing::List(vec![loc(Exposed::Value(main))])),
             imports: vec![Import {
-                name: loc(vec![sky, core, prelude]),
+                name: loc(vec![ipe, core, prelude]),
                 alias: None,
                 exposing: loc(Exposing::All),
             }],

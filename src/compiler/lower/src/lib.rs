@@ -4,8 +4,8 @@
 //! Entry point: [`lower`]. It consumes a name-resolved [`ipe_canon::ast::Module`]
 //! together with the [`ipe_types::SolvedTypes`] produced by inference and emits
 //! a backend-agnostic [`ipe_ir::Program`]. This is a faithful but narrowed port
-//! of the Haskell compiler's `Sky.Build.Compile` lowering core plus
-//! `Sky.Build.LowerCtx`:
+//! of the Haskell compiler's `Ipe.Build.Compile` lowering core plus
+//! `Ipe.Build.LowerCtx`:
 //!
 //! * union declarations → [`ipe_ir::TypeDef::Enum`];
 //! * each top-level binding → a [`ipe_ir::Func`] (its `case` body lowered to an

@@ -47,7 +47,7 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code)
 }
 
 #[test]
-fn non_exhaustive_int_case_is_sky_t0010() {
+fn non_exhaustive_int_case_is_ipe_t0010() {
     assert_gate(
         "gate_nonexhaustive_open_int",
         "m3b3_gate_nonexhaustive_emit",
@@ -58,7 +58,7 @@ fn non_exhaustive_int_case_is_sky_t0010() {
 /// `IPE-T0011` is a WARNING (Go-reference parity — see the
 /// matching note in `golden_m3b2_gates`). The build must SUCCEED.
 #[test]
-fn redundant_branch_after_catch_all_is_sky_t0011_warning_build_succeeds() {
+fn redundant_branch_after_catch_all_is_ipe_t0011_warning_build_succeeds() {
     let root = repo_root();
     let entry = root
         .join("tests")

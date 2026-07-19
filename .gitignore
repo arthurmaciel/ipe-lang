@@ -4,20 +4,20 @@ examples/**/target/
 examples/**/.ipe/
 out/
 .ipe-cache/
-.skydeps/
+.ipedeps/
 /tmp-parity/
 
-# Mirrored+patched upstream Sky examples — materialised at sweep time by
-# scripts/lib/sky_mirror.sh (IPE_SWEEP_MIRROR_SKY=1). Regenerated each run, never
-# vendored; only the rename map + README + manifest under examples/sky/ are source.
-/examples/sky/[0-9]*/
-/examples/sky/simple/
-/examples/sky/test_pkg/
+# Mirrored+patched upstream Ipe examples — materialised at sweep time by
+# scripts/lib/ipe_mirror.sh (IPE_SWEEP_MIRROR_SKY=1). Regenerated each run, never
+# vendored; only the rename map + README + manifest under examples/ipe/ are source.
+/examples/ipe/[0-9]*/
+/examples/ipe/simple/
+/examples/ipe/test_pkg/
 # Default SQLite DB written by `Db.connect ()` when an emitted binary is run
 # by the E2E test harness in the crate/repo cwd — a run artifact, never source.
-sky.db
-sky.db-shm
-sky.db-wal
+ipe.db
+ipe.db-shm
+ipe.db-wal
 
 # Playwright browser-scenario stack deps (scripts/equivalence-checks/{package.json,
 # web-verify.mjs}). package-lock.json IS committed (reproducible installs);
@@ -70,7 +70,7 @@ scripts/progressive-development/backlog.mmd
 
 # FFI inspector run artifacts (coverage reports) — run outputs, never source
 tools/ipe-ffi-inspector/.ipe/
-tools/ipe-ffi-inspector/.skycache/
+tools/ipe-ffi-inspector/.ipecache/
 skyshop_core.db
 skyshop_core.db-shm
 skyshop_core.db-wal

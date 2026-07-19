@@ -1,7 +1,7 @@
 -- | Ipe.ToString — naming-consistency surface (v0.15.48+).
 --
 -- Thin aliases to the canonical kernels in their home modules;
--- the purpose is editor + `sky doc` discoverability so callers can
+-- the purpose is editor + `ipe doc` discoverability so callers can
 -- write `ToString.fromInt n` instead of memorising the per-type
 -- kernel sub-namespace.
 --

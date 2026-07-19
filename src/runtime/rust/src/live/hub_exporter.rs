@@ -88,7 +88,7 @@ pub async fn enable_from_env() {
     let token = crate::system::read_env_var(TOKEN_ENV).unwrap_or_default();
     if token.len() < MIN_TOKEN_BYTES {
         eprintln!(
-            "[sky.hub] {TOKEN_ENV} must be ≥{MIN_TOKEN_BYTES} bytes to push to {hub}; exporter disabled"
+            "[ipe.hub] {TOKEN_ENV} must be ≥{MIN_TOKEN_BYTES} bytes to push to {hub}; exporter disabled"
         );
         return;
     }
@@ -112,7 +112,7 @@ pub async fn enable_from_env() {
     };
     if !scheme_ok {
         eprintln!(
-            "[sky.hub] refusing to push bearer token over non-https {HUB_ENV}={hub}; \
+            "[ipe.hub] refusing to push bearer token over non-https {HUB_ENV}={hub}; \
              use https:// (or a localhost loopback); exporter disabled"
         );
         return;
@@ -132,7 +132,7 @@ pub async fn enable_from_env() {
     if SENDER.set(tx).is_err() {
         return;
     }
-    eprintln!("[sky.hub] OTLP push → {base}/v1/{{logs,traces}} every {interval_ms}ms");
+    eprintln!("[ipe.hub] OTLP push → {base}/v1/{{logs,traces}} every {interval_ms}ms");
     tokio::spawn(batcher(rx, base, token, service, interval_ms));
 }
 
@@ -265,7 +265,7 @@ async fn push_one(client: &reqwest::Client, base: &str, token: &str, batch: &Otl
     {
         Ok(r) => r.status().is_success(),
         Err(e) => {
-            eprintln!("[sky.hub] push {url}: {e}");
+            eprintln!("[ipe.hub] push {url}: {e}");
             false
         }
     }
@@ -309,7 +309,7 @@ fn otlp_logs_json(service: &str, logs: &[(u64, String, String)]) -> String {
     serde_json::json!({
         "resourceLogs": [{
             "resource": { "attributes": [service_attr(service)] },
-            "scopeLogs": [{ "scope": { "name": "sky" }, "logRecords": records }],
+            "scopeLogs": [{ "scope": { "name": "ipe" }, "logRecords": records }],
         }]
     })
     .to_string()
@@ -334,7 +334,7 @@ fn otlp_spans_json(service: &str, spans: &[(u64, String, u64, bool)]) -> String 
     serde_json::json!({
         "resourceSpans": [{
             "resource": { "attributes": [service_attr(service)] },
-            "scopeSpans": [{ "scope": { "name": "sky" }, "spans": records }],
+            "scopeSpans": [{ "scope": { "name": "ipe" }, "spans": records }],
         }]
     })
     .to_string()

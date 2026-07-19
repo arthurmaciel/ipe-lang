@@ -13,7 +13,7 @@ use super::element::Element;
 
 /// `Lazy.lazy : (a -> Element msg) -> a -> Element msg`
 ///
-/// Applies `f` to `a` eagerly.  In Sky's Go backend this memoises `f(a)`;
+/// Applies `f` to `a` eagerly.  In Ipe's Go backend this memoises `f(a)`;
 /// ipê v1 evaluates immediately without caching.
 pub fn lazy_lazy_<M, A>(f: impl Fn(A) -> Element<M>, a: A) -> Element<M> {
     f(a)

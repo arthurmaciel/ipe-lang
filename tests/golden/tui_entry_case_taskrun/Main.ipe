@@ -5,7 +5,7 @@ import Ipe.Task as Task
 import Ipe.Log exposing (println)
 
 -- Minimal repro for the `24-tui-kitchen-sink` SEAL violation (BACKLOG "Sweep
--- to green" row): `skyc build` exits 0 but the emitted crate fails `cargo
+-- to green" row): `ipec build` exits 0 but the emitted crate fails `cargo
 -- build` with two INDEPENDENT E0308 errors, both on the entry-point shape
 -- `main = case <Maybe String scrutinee> of Just "literal" -> task |>
 -- Task.run; _ -> task |> Task.run` (the Ipe.Tui `argv`-dispatch idiom:
@@ -15,16 +15,16 @@ import Ipe.Log exposing (println)
 --
 -- Defect 1 — string-literal ctor-payload sub-pattern: `Just "live"` lowered
 -- the nested literal straight to a bare `Pat::Str`, emitted as
--- `SkyMaybe::Just("live")`. Rust cannot match a `&str` literal pattern
+-- `IpeMaybe::Just("live")`. Rust cannot match a `&str` literal pattern
 -- against an owned `String` ctor field (E0308: expected `String`, found
 -- `&str`).
 --
 -- Defect 2 — entry-point `Task.run` tail elision only recognised a FLAT
 -- `main = task |> Task.run` body (`Call(TaskRun, [inner])` as the WHOLE
 -- function body). A `case`-branched body where EVERY arm tail-calls
--- `Task.run` left `sky_main` emitted as returning `SkyResult<E, A>` while
--- the `fn main` epilogue's `block_on(sky_main())` requires `SkyTask<A>`
--- (E0308: expected `Pin<Box<dyn Future…>>`, found `SkyResult<...>`).
+-- `Task.run` left `ipe_main` emitted as returning `IpeResult<E, A>` while
+-- the `fn main` epilogue's `block_on(ipe_main())` requires `IpeTask<A>`
+-- (E0308: expected `Pin<Box<dyn Future…>>`, found `IpeResult<...>`).
 mode : Maybe String
 mode =
     Just "live"

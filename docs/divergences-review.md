@@ -288,7 +288,7 @@ Suggested shape for the public section. Neutral voice throughout.
 
 - **Opening frame.** ipê is an Elm-family functional language whose target is
   native/server/desktop binaries via a typed backend, rather than a browser
-  sandbox. Most departures from Elm and from the upstream Sky reference follow
+  sandbox. Most departures from Elm and from the upstream Ipe reference follow
   directly from that target. State each as *what differs + why*.
 - **Lead paragraph — reach + identity.** One pure `view` → web (server-driven
   TEA over SSE), terminal, and desktop; state and secrets stay server-side;

@@ -8,8 +8,8 @@ import Ipe.Log exposing (println)
 -- SEAL fixture for backlog #210 "Ipe.Email family": a typed `EmailMessage`
 -- built via `defaultMessage` + `with*` builders is fed DIRECTLY to
 -- `Email.send`, and the `EmailProvider` ADT is constructed via its `Resend`
--- ctor. `sky_lower` folds the message / attachment / provider record + ADT
--- shapes to the nominal runtime types (`sky_runtime::email::{EmailMessage,
+-- ctor. `ipe_lower` folds the message / attachment / provider record + ADT
+-- shapes to the nominal runtime types (`ipe_runtime::email::{EmailMessage,
 -- EmailAttachment, EmailProvider}`) the `email_send` kernel takes — a
 -- backend-synthesised `Rec…` struct or a duplicate `StdEmailEmailProvider`
 -- enum would mismatch the kernel boundary with E0308. This exercises the fold

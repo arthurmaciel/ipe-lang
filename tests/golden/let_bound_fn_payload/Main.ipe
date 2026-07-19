@@ -8,16 +8,16 @@ import Ipe.Prelude exposing (..)
 -- The inline pipe form (`Ok (\x -> x + 1) |> Result.andMap (Ok 2)`) works
 -- because the kernel call site supplies the `Box<dyn Fn>` coercion target. A
 -- bare `let f = Ok (\x -> x + 1)` has NO such target at the box site: `Ok`
--- routes to the runtime `SkyResult` enum whose generic argument is inferred
+-- routes to the runtime `IpeResult` enum whose generic argument is inferred
 -- from the constructor arg, so `Box::new(closure)` used to pin the CONCRETE
--- closure type `SkyResult<_, Box<{closure@…}>>` — which never unsize-coerces
--- to `SkyResult<E, Box<dyn Fn(..)->.. + Send>>` across the `let` boundary and
--- reached `cargo build` as E0308 (skyc-accept / cargo-reject seal hole).
+-- closure type `IpeResult<_, Box<{closure@…}>>` — which never unsize-coerces
+-- to `IpeResult<E, Box<dyn Fn(..)->.. + Send>>` across the `let` boundary and
+-- reached `cargo build` as E0308 (ipec-accept / cargo-reject seal hole).
 --
 -- `applyIt`'s param is annotated `Result Error (Int -> Int)` so the fn-carrier
 -- crosses a FUNCTION boundary — Rust's whole-function inference cannot patch
 -- the closure type from the far side. The fix pins the trait-object type at the
--- lambda's own emission site, so `f : SkyResult<_, Box<dyn Fn>>` regardless of
+-- lambda's own emission site, so `f : IpeResult<_, Box<dyn Fn>>` regardless of
 -- where it flows. Must build+run and print 42.
 applyIt : Result Error (Int -> Int) -> Int
 applyIt rfn =

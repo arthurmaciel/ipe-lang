@@ -76,7 +76,7 @@
 //! | **User applicative `map2` via `Result.map`+`andMap`** | `user_map2_via_andmap_stays_gated` | IPE-T0001 (cargo-fails even at a SAFE arity-2 use without the generalized obligation) |
 //! | Annotated `map` forwarder, curried | `map_annotated_forwarder_curried_is_t0014` (+ arity-1 green twin) | IPE-T0014 |
 //! | `Result.andThen` returning `Ok fn` | `and_then_fn_payload_accepted` | n/a — accepted (`andThen` needs NO obligation, Con-headed callback result; a callback legitimately returning `Ok fn` stays ACCEPTED and computes 42) |
-//! | Import alias | *(not constructible)* | n/a (`Result`/`Maybe` are compiler-kernel qualifiers in `sky-rust`, not backed by an importable Sky-source module — `crates/ipe_canon/src/resolve.rs`'s fixed kernel-qualifier list — so there is no module to `import … as …`) |
+//! | Import alias | *(not constructible)* | n/a (`Result`/`Maybe` are compiler-kernel qualifiers in `ipe-lang`, not backed by an importable Ipe-source module — `crates/ipe_canon/src/resolve.rs`'s fixed kernel-qualifier list — so there is no module to `import … as …`) |
 //! | Cross-module annotated wrapper, reused at 2 different arity-1 types | `and_map_cross_module_wrapper_accepted` | design doc's `T3.residual` row — must stay ACCEPTED (proves Tier 2 does not over-reject) | n/a — accepted |
 
 use std::path::{Path, PathBuf};
@@ -323,7 +323,7 @@ fn fn_extracted_called_twice_accepted() {
 /// * `IPE-T0014` (`SuperTypeUnsatisfied`) — reached when the obligated
 ///   variable escapes into an ANNOTATED GENERIC FORWARDER (the
 ///   `check_scheme_applications` / `SchemeApp` path) rather than pinning
-///   directly — see `and_map_curried_forwarder_is_sky_t0014` below for the
+///   directly — see `and_map_curried_forwarder_is_ipe_t0014` below for the
 ///   fixture that exercises this path with the friendly "single-argument
 ///   function" message.
 /// * `IPE-L0114` — the Tier-1 lowering backstop, acceptable defense-in-depth
@@ -442,7 +442,7 @@ fn and_map_cross_module_annotated_wrapper_accepted() {
 /// is re-verified at THIS external call site, exactly like `Math.min`'s
 /// `pickMin` forwarder gate.
 #[test]
-fn and_map_forwarder_curried_is_sky_t0014() {
+fn and_map_forwarder_curried_is_ipe_t0014() {
     let root = repo_root();
     if ipe::resolve_runtime().is_err() {
         return;
@@ -744,9 +744,9 @@ fn user_map2_via_andmap_stays_gated() {
 
 /// Annotated generic forwarder around `Result.map` at a curried callback —
 /// the deferred `SchemeApp` path, map-family mirror of
-/// `and_map_forwarder_curried_is_sky_t0014`.
+/// `and_map_forwarder_curried_is_ipe_t0014`.
 #[test]
-fn map_annotated_forwarder_curried_is_sky_t0014() {
+fn map_annotated_forwarder_curried_is_ipe_t0014() {
     assert_rejected_t0014("map_annotated_forwarder_curried_is_t0014");
 }
 

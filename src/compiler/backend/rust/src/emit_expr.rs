@@ -1627,7 +1627,7 @@ fn emit_db_call(
     //     one of them — no behaviour change for a concrete element type.
     //   • A still-generic `T{n}` (a Ipê wrapper function forwarding its own
     //     `List a` parameter into `Db.exec` / `Db.query` / `Db.queryDecode`,
-    //     e.g. `Database.exec label sql args` in `examples/17-skymon`) can
+    //     e.g. `Database.exec label sql args` in `examples/17-ipemon`) can
     //     only be bounded via the STANDARD `<T{n}: Trait>` generic-parameter
     //     list — a `where SqlParam: From<T{n}>` clause bounds the WRONG type
     //     (`SqlParam`, not `T{n}`) and cannot be expressed that way. The
@@ -1771,7 +1771,7 @@ fn emit_db_call(
             )))
         }
         // ── DbInsertRow: (conn, table, row: Dict String String) ────────────────
-        // The Sky surface is upstream-parity `Dict String String` (bdbc572);
+        // The Ipe surface is upstream-parity `Dict String String` (bdbc572);
         // `Dict String String` already lowers to `HashMap<String, String>`
         // (the runtime function's own parameter type), so `row_s` passes
         // straight through with no conversion.
@@ -5451,7 +5451,7 @@ fn emit_ui_call(
                 // "form fields already synced into Model via onInput/
                 // onChange; submit just triggers a fixed action" idiom
                 // (`onSubmit DoSignUp` with `DoSignUp : Msg` carrying no
-                // payload — `examples/12-skyvote`'s Auth/Submit/Detail
+                // payload — `examples/12-ipevote`'s Auth/Submit/Detail
                 // pages). `payload_s` there renders as the bare enum value
                 // itself (e.g. `MainMsg::DoSignUp`), which is NOT callable —
                 // `(payload_s)(_x)` is E0618 ("expected function, found

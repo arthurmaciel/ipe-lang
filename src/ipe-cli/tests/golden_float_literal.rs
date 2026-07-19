@@ -20,11 +20,11 @@
 //! Go reference compiler produces.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
-//! `/home/arthur/Documentos/comp/sky/out/sky` compiles + runs the SAME
+//! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
 //! `Main.ipe` files to the same stdout:
 //!
 //! ```text
-//! $ sky run Main.ipe   # Go backend
+//! $ ipe run Main.ipe   # Go backend
 //! 1.5            # float_literal
 //! 12.56          # float_area
 //! 1500           # float_compare
@@ -78,7 +78,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
     let root = repo_root();
     let dir = golden_dir(&root, name);
     let entry = dir.join("Main.ipe");
-    let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
+    let out = std::env::temp_dir().join(format!("ipec_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

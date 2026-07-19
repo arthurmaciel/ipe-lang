@@ -51,10 +51,10 @@ fn no_unintended_curried_helpers() {
         curried,
         Vec::<String>::new(),
         "Unexpected curried helper(s) found — the runtime uses the tupled calling \
-         convention (a multi-arg Sky fn lowers to f(a, b), never f(a)(b)). Pipeline \
+         convention (a multi-arg Ipe fn lowers to f(a, b), never f(a)(b)). Pipeline \
          decoders (decode_pipeline_*) are tupled (next_decoder passed as a Box<dyn FnOnce> \
          arg), and middleware that return a Handler (Fn(ServerRequest) -> …) are \
          recognised structurally and exempt. A new name here means a multi-arg helper \
-         leaked a curried `-> impl Fn(<Sky type>)` shape — make it tupled instead."
+         leaked a curried `-> impl Fn(<Ipe type>)` shape — make it tupled instead."
     );
 }

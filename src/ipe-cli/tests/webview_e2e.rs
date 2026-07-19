@@ -122,10 +122,10 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// a plain `cargo build` — picks up the `webview` feature without any extra
 /// `--features` flag.
 fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::PathBuf, BoxError> {
-    let ipe_dir = std::env::temp_dir().join(format!("webview_e2e_{test_name}_sky"));
+    let ipe_dir = std::env::temp_dir().join(format!("webview_e2e_{test_name}_ipe"));
     let _ = std::fs::remove_dir_all(&ipe_dir);
     std::fs::create_dir_all(&ipe_dir).map_err(|e| -> BoxError {
-        format!("{test_name}: cannot create sky source dir: {e}").into()
+        format!("{test_name}: cannot create ipe source dir: {e}").into()
     })?;
 
     let entry = ipe_dir.join("Main.ipe");
@@ -344,10 +344,10 @@ main =
 /// needs no wry/tao toolchain, and it exercises the whole parse → canon → types
 /// → lower pipeline end-to-end (unlike the isolated lower unit test).
 #[test]
-fn let_bound_webview_window_is_sky_l0119_not_ice() {
-    let dir = std::env::temp_dir().join("l0119_webview_window_sky");
+fn let_bound_webview_window_is_ipe_l0119_not_ice() {
+    let dir = std::env::temp_dir().join("l0119_webview_window_ipe");
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("create temp sky dir");
+    std::fs::create_dir_all(&dir).expect("create temp ipe dir");
     let entry = dir.join("Main.ipe");
     std::fs::write(&entry, IPE_WEBVIEW_LET_BOUND_WINDOW).expect("write Main.ipe");
 

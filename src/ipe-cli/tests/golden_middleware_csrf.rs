@@ -16,7 +16,7 @@ fn repo_root() -> PathBuf {
 }
 
 fn out_dir() -> PathBuf {
-    std::env::temp_dir().join("skyc_m6_middleware_csrf")
+    std::env::temp_dir().join("ipec_m6_middleware_csrf")
 }
 
 /// Compile the fixture; `None` (skip) when the runtime cannot be resolved.

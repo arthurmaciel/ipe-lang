@@ -97,7 +97,7 @@ fn reserved_names_are_mangled_in_emitted_output() -> DResult<()> {
     assert!(out.contains("    type_,\n"), "variant not mangled:\n{out}");
     assert!(
         out.contains("MainKw::type_ => \"type\".to_string(),"),
-        "ipe_show must mangle the ident but keep the Sky display name:\n{out}"
+        "ipe_show must mangle the ident but keep the Ipe display name:\n{out}"
     );
     // …and the keyword parameter is mangled too, with a valid body reference.
     assert!(

@@ -6,7 +6,7 @@ ignore = [
     # RUSTSEC-2023-0071 — rsa 0.9.x "Marvin Attack" (PKCS#1 v1.5 timing
     # sidechannel). No fixed upstream release exists (the advisory's own
     # Solution field says "no fixed upgrade available"); pulled in via
-    # `runtime`'s optional `crypto` feature for Sky.Core.Jwt RS256 sign/verify
+    # `runtime`'s optional `crypto` feature for Ipe.Core.Jwt RS256 sign/verify
     # (jsonwebtoken -> rsa). Exposure is limited to SIGN (private key) +
     # VERIFY (public key); the Marvin attack targets the PKCS#1 v1.5
     # DECRYPTION oracle, which this codebase never exercises. Accepted +

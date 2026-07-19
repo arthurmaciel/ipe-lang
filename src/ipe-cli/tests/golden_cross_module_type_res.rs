@@ -32,14 +32,14 @@ fn repo_root() -> PathBuf {
 /// Skips silently when the runtime directory is not present (e.g. a minimal
 /// checkout without the embedded stdlib), so the test never fails in CI
 /// environments that only have the crates but not the full repo layout.
-fn assert_skyc_exit0(label: &str, entry_rel: &str) {
+fn assert_ipec_exit0(label: &str, entry_rel: &str) {
     let root = repo_root();
     let entry = root.join(entry_rel);
     if !entry.exists() {
         eprintln!("SKIP {label}: entry not found at {}", entry.display());
         return;
     }
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{label}_skyc_out"));
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{label}_ipec_out"));
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -51,29 +51,29 @@ fn assert_skyc_exit0(label: &str, entry_rel: &str) {
     let result = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         result.is_ok(),
-        "skyc must compile {label} cleanly (exit 0): {:?}",
+        "ipec must compile {label} cleanly (exit 0): {:?}",
         result.err()
     );
 }
 
-/// Example 17 (skymon) — `Ui/Charts.ipe` uses `(Html Msg)` in annotations
+/// Example 17 (ipemon) — `Ui/Charts.ipe` uses `(Html Msg)` in annotations
 /// without `import State`.  Regression for IPE-I0001 in `ir_type_from_canon`.
 #[test]
-fn ex17_skymon_exits_zero() {
-    assert_skyc_exit0("ex17_skymon", "examples/17-skymon/src/Main.ipe");
+fn ex17_ipemon_exits_zero() {
+    assert_ipec_exit0("ex17_ipemon", "examples/17-ipemon/src/Main.ipe");
 }
 
 /// Example 10 (live-component) — also triggered the constructor-as-callback
 /// `ir_type_from_canon` path.
 #[test]
 fn ex10_live_component_exits_zero() {
-    assert_skyc_exit0(
+    assert_ipec_exit0(
         "ex10_live_component",
         "examples/10-live-component/src/Main.ipe",
     );
 }
 
-/// Example 19 (skyforum) — 8-module Ipe.Live app.
+/// Example 19 (ipeforum) — 8-module Ipe.Live app.
 ///
 /// Two regressions covered by this test:
 ///
@@ -97,6 +97,6 @@ fn ex10_live_component_exits_zero() {
 ///    This mirrors the Haskell compiler's `Instantiate.fromAnnotation` gate
 ///    which filters `"any"` out before treating free vars as polymorphic.
 #[test]
-fn ex19_skyforum_exits_zero() {
-    assert_skyc_exit0("ex19_skyforum", "examples/19-skyforum/src/Main.ipe");
+fn ex19_ipeforum_exits_zero() {
+    assert_ipec_exit0("ex19_ipeforum", "examples/19-ipeforum/src/Main.ipe");
 }

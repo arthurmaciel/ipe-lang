@@ -8,7 +8,7 @@
 //! order — a function, a record — must be rejected here at type-check
 //! (IPE-T0014), never left to emit an unbounded `math_min<T>(…)` call that
 //! `cargo` rejects (the runtime helper requires `T: PartialOrd`). This restores
-//! the sky-build => cargo-build floor for the Math kernels.
+//! the ipe-build => cargo-build floor for the Math kernels.
 //!
 //! These two goldens exercise that gate through the same binding-bound +
 //! scheme-application path the `maxOf` gate uses: a `pickMin : a -> a -> a`
@@ -65,7 +65,7 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code)
 }
 
 #[test]
-fn math_min_on_function_value_is_sky_t0014() {
+fn math_min_on_function_value_is_ipe_t0014() {
     assert_gate(
         "math_min_fn_gate",
         "m4c_math_min_fn_gate_emit",
@@ -74,7 +74,7 @@ fn math_min_on_function_value_is_sky_t0014() {
 }
 
 #[test]
-fn math_min_on_record_value_is_sky_t0014() {
+fn math_min_on_record_value_is_ipe_t0014() {
     assert_gate(
         "math_min_rec_gate",
         "m4c_math_min_rec_gate_emit",

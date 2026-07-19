@@ -1,6 +1,6 @@
 -- | Ipe.Test — lightweight in-process test framework.
 --
--- A port of the Haskell-backend `sky-stdlib/Sky/Test.ipe`.
+-- A port of the Haskell-backend `ipe-stdlib/Ipe/Test.ipe`.
 --
 -- SIMPLIFICATIONS vs the reference:
 --  - `expectErrorKind` / `kindName` OMITTED: they require `Error` /

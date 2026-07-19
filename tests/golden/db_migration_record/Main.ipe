@@ -16,7 +16,7 @@ import Ipe.Log exposing (println)
 -- The `defaultMigration "…"` entry exercises the pure record builder;
 -- `CREATE TABLE IF NOT EXISTS` keeps repeated runs idempotent. The pipeline
 -- recovers any Task error to a fixed marker so the SEAL check (cargo-0 ⇒
--- exit-0) is independent of ambient `sky.db` state — the point of this test
+-- exit-0) is independent of ambient `ipe.db` state — the point of this test
 -- is that the three contract surfaces TYPE-CHECK and EMIT correctly, not the
 -- migration engine's runtime behaviour (covered by the m5b_db goldens).
 migrations : List Db.Migration

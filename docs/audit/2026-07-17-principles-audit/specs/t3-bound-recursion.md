@@ -125,7 +125,7 @@ existing `ok_or_else` idiom in the same function (the pseudocode above elides it
 for brevity).
 
 **Correctness contract**: output must be **byte-identical** to the current
-recursive climb for every chain (this is a port of `Sky.Canonicalise.Expression`
+recursive climb for every chain (this is a port of `Ipe.Canonicalise.Expression`
 — parity-gated). The reduce predicate above reproduces the recursive semantics:
 left/non-assoc restrict the right subtree to strictly-higher precedence
 (`next_min = prec + 1` ⇒ reduce when `top_prec >= prec`); right-assoc admits
@@ -247,7 +247,7 @@ sibling-capped per the finding) likewise thread depth.
 ### Risk / blast radius
 - Runs on every Live commit/update; the cap at 1024 is far above any real UI, so
   no legitimate view changes output. Re-gate:
-  `cargo nextest -p sky-runtime-rust --features full` (the `live::*` surface),
+  `cargo nextest -p ipe-runtime-rust --features full` (the `live::*` surface),
   the render/diff unit tests, and the examples sweep (Live examples render).
 - Truncation is a *behavioural* change only for pathological trees (which
   currently crash) — no divergence-ledger entry needed beyond the existing
@@ -405,7 +405,7 @@ because it matches Go and never truncates a legitimate on-screen layout.
 | Finding | Files | Primary gate | Secondary |
 |---|---|---|---|
 | CO-FRONT-001 | `canon/src/resolve.rs` | `golden_binops.rs` byte-parity | new deep-chain test; examples sweep |
-| RT-UI-001 | `runtime/…/{html,ui/render,dom/diff}.rs` | render/diff unit tests | `-p sky-runtime-rust --features full`; sweep |
+| RT-UI-001 | `runtime/…/{html,ui/render,dom/diff}.rs` | render/diff unit tests | `-p ipe-runtime-rust --features full`; sweep |
 | RT-TUI-001 | `runtime/…/tui/layout.rs` | `tui/layout.rs` fill tests | TUI sweep |
 | RT-TUI-002 | `runtime/…/tui/layout.rs` | `tui/layout.rs` padding tests | TUI sweep |
 
@@ -420,7 +420,7 @@ identical output) → no ledger entry.
 ## Proposed backlog entries
 
 ```json
-{"id": "TBD", "priority": "high", "phase": "principles-audit-fix", "task": "CO-FRONT-001: rewrite canon climb_binops as an explicit-stack precedence climb so call-stack depth is O(1) in operator-chain length (no stack overflow on a long right-associative chain)", "notes": "resolve.rs:2983 climb_binops recurses per right-assoc operator; parser MAX_DEPTH guards nesting not chain length. Mirror target_gate::check_expr's heap work-stack. Output MUST be byte-identical (Sky.Canonicalise parity). Tests: extend golden_binops.rs with mixed prec+assoc cases (byte-parity guard); add src/ipe-cli/tests/deep_binop_chain.rs (~300k-op chain compiles without SIGSEGV). NOT a length cap (rejects valid input).", "spec": "docs/audit/2026-07-17-principles-audit/specs/t3-bound-recursion.md", "blocked_by": [], "status": "pending"}
+{"id": "TBD", "priority": "high", "phase": "principles-audit-fix", "task": "CO-FRONT-001: rewrite canon climb_binops as an explicit-stack precedence climb so call-stack depth is O(1) in operator-chain length (no stack overflow on a long right-associative chain)", "notes": "resolve.rs:2983 climb_binops recurses per right-assoc operator; parser MAX_DEPTH guards nesting not chain length. Mirror target_gate::check_expr's heap work-stack. Output MUST be byte-identical (Ipe.Canonicalise parity). Tests: extend golden_binops.rs with mixed prec+assoc cases (byte-parity guard); add src/ipe-cli/tests/deep_binop_chain.rs (~300k-op chain compiles without SIGSEGV). NOT a length cap (rejects valid input).", "spec": "docs/audit/2026-07-17-principles-audit/specs/t3-bound-recursion.md", "blocked_by": [], "status": "pending"}
 {"id": "TBD", "priority": "medium", "phase": "principles-audit-fix", "task": "RT-UI-001: depth-cap render_element and diff_node at MAX_HTML_DEPTH so an attacker-deep Model-derived Ui tree truncates instead of aborting the process", "notes": "render.rs:501 (render_element/render_node_as) and diff.rs:134 (diff_node) recurse uncapped; sibling html.rs render_into_ctx/assign_ipe_ids_depth already cap at MAX_HTML_DEPTH=1024 and dispatch.rs::walk is iterative. Make MAX_HTML_DEPTH pub(crate); thread depth + truncate. Tests: deep (~5000) Element/Html in render.rs/diff.rs mod tests return without abort, descent stops at cap. Extend divergences B14.", "spec": "docs/audit/2026-07-17-principles-audit/specs/t3-bound-recursion.md", "blocked_by": [], "status": "pending"}
 {"id": "TBD", "priority": "high", "phase": "principles-audit-fix", "task": "RT-TUI-001: clamp Ui.fillPortion weights at MAX_CELLS in fill_spec and saturating-fold the portion totals in distribute_row_fill/distribute_col_fill; clamp Block::set_width repeat count", "notes": "FillSpec i64 portion (layout.rs:263/270) uncapped; total_portion plain sum (layout.rs:2230/2100) wraps -> set_width str::repeat(~9e18) OOM/panic and col-fill ~1e19-row loop. Mirror the fr_total fix (layout.rs:1809-1832): clamp-each-weight + saturating fold. Fix at fill_spec construction so both consumers inherit. Test: Ui.row / fixed-height Ui.column with i64::MAX portions renders bounded (no panic). Record under B14.", "spec": "docs/audit/2026-07-17-principles-audit/specs/t3-bound-recursion.md", "blocked_by": [], "status": "pending"}
 {"id": "TBD", "priority": "medium", "phase": "principles-audit-fix", "task": "RT-TUI-002: bound TUI padding/spacing AREA terminal-proportionally (clamp_pad_rows) so per-axis-clamped dims cannot allocate their ~10-20 GB product", "notes": "apply_padding (layout.rs:906) clamps top/bottom and total_w each at MAX_CELLS but allocates rows*width; same shape in vstack/hstack/apply_self_height. Add PAD_ROW_SLACK + clamp_pad_rows(rows, canvas) = rows.min(canvas.rows*4); route every pad/gap row count through it. Test: paddingEach {top/bottom=3_000_000, left/right=1_600_000} on 80x24 renders bounded Block (lines <= canvas.rows*PAD_ROW_SLACK). Record under B14.", "spec": "docs/audit/2026-07-17-principles-audit/specs/t3-bound-recursion.md", "blocked_by": [], "status": "pending"}
