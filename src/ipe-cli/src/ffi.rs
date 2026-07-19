@@ -152,10 +152,8 @@ pub fn assemble_emit(
     // The DIRECT FFI crates (registry names, `_`→`-` as the dep line renders them):
     // these are the crates the app links against and MUST be pinned exactly; a
     // version conflict on one of these is a genuine, unbuildable error.
-    let direct_crate_names: BTreeSet<String> = catalog
-        .iter()
-        .map(|c| c.slug.replace('_', "-"))
-        .collect();
+    let direct_crate_names: BTreeSet<String> =
+        catalog.iter().map(|c| c.slug.replace('_', "-")).collect();
     // name → (version, unioned feature set). Cargo unifies features additively for
     // one crate+version across the graph, so a multi-crate manifest whose members
     // pin the SAME dependency (`async-stripe-shared`) at the SAME version but with
@@ -219,9 +217,7 @@ pub fn assemble_emit(
     }
     let dep_lines: Vec<String> = dep_by_name
         .into_iter()
-        .map(|(name, (version, features))| {
-            render_merged_dep_line(&name, &version, &features)
-        })
+        .map(|(name, (version, features))| render_merged_dep_line(&name, &version, &features))
         .collect();
     Ok(Some(ipe_backend_rust::FfiEmit {
         foreign_types,
@@ -260,7 +256,11 @@ fn parse_dep_line(line: &str) -> Option<(String, String, BTreeSet<String>)> {
         Some((name, version, features))
     } else {
         // Bare: `"=X.Y.Z"`.
-        let version = rest.trim().trim_matches('"').trim_start_matches('=').to_owned();
+        let version = rest
+            .trim()
+            .trim_matches('"')
+            .trim_start_matches('=')
+            .to_owned();
         if version.is_empty() {
             return None;
         }
@@ -1278,6 +1278,9 @@ mod tests {
             mk("stripe", vec!["stripe = \"=1.0.0\""]),
             mk("other", vec!["stripe = \"=2.0.0\""]),
         ]);
-        assert!(clash.is_err(), "a direct-crate version conflict still refuses");
+        assert!(
+            clash.is_err(),
+            "a direct-crate version conflict still refuses"
+        );
     }
 }
