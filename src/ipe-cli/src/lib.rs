@@ -140,6 +140,15 @@ pub struct BuildOptions {
     /// [`ipe_backend_rust::RustBackend::with_wasm_public_env`] /
     /// [`ipe_db::BuildConfig::wasm_public_env`].
     pub wasm_public_env: Vec<String>,
+    /// `true` when `[wasm] mode = "hydrate"` in the project's `sky.toml`.
+    /// Causes the backend to emit a `#[wasm_bindgen] pub fn hydrate(model_json: &str)`
+    /// export in addition to the `#[wasm_bindgen(start)] pub fn ipe_start()` entry.
+    /// The emitted `hydrate` function parses the island JSON as the user's declared
+    /// `HydrationState` type, converts to `Model` via `fromHydrationState`, and
+    /// calls `ipe_runtime::wasm::wasm_adopt_app`. On parse failure it falls back
+    /// to clean `ipe_main()` with a console warning (fault-tolerant hydrate — see
+    /// spec Q6 §"Fault-tolerant hydrate — parse, don't unwrap").
+    pub wasm_hydrate_mode: bool,
 }
 
 /// Build `entry` into a Rust Cargo project under `out_dir`, vendoring the
@@ -511,6 +520,7 @@ fn compile_modules_observed(
                     .with_db_driver(db_driver)
                     .with_target(options.target)
                     .with_wasm_public_env(options.wasm_public_env.clone())
+                    .with_wasm_hydrate_mode(options.wasm_hydrate_mode)
                     .emit(&program)
             };
             if let Ok(emitted) = emit_result {
@@ -558,6 +568,7 @@ fn compile_modules_observed(
         ffi_emit,
         options.target,
         options.wasm_public_env.clone(),
+        options.wasm_hydrate_mode,
     );
 
     let emitted = match compile_prepared(&db, source_root, &sources, entry_path, blame_path, config)
@@ -1285,6 +1296,7 @@ pub fn build_project_with_options(
     // `manifest.driver` bypasses `options` entirely as its own positional arg.
     let options = BuildOptions {
         wasm_public_env: manifest.wasm.public_env.clone(),
+        wasm_hydrate_mode: manifest.wasm.mode.as_deref() == Some("hydrate"),
         ..options
     };
 
@@ -1584,6 +1596,7 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
             ipe_ir::Target::Native
         },
         wasm_public_env: Vec::new(),
+        wasm_hydrate_mode: false,
     };
 
     // No sky.toml found: compile entry + all sibling .ipe files in the same
@@ -1766,6 +1779,7 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
         static_plan,
         target: ipe_ir::Target::Native,
         wasm_public_env: Vec::new(),
+        wasm_hydrate_mode: false,
     };
 
     manifest.map_or_else(

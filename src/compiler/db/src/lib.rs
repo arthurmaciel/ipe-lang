@@ -810,6 +810,11 @@ pub struct BuildConfig {
     /// section/key is absent. See [`ipe_backend_rust::RustBackend::with_wasm_public_env`].
     #[returns(ref)]
     pub wasm_public_env: Vec<String>,
+    /// `true` when `[wasm] mode = "hydrate"` is set in `sky.toml`. Passed
+    /// through to [`ipe_backend_rust::RustBackend::with_wasm_hydrate_mode`]
+    /// to emit the `#[wasm_bindgen] pub fn hydrate(…)` export (M7 SSR +
+    /// hydration island parse + adopt path).
+    pub wasm_hydrate_mode: bool,
 }
 
 /// The memoized result of emitting the linked, lowered program to Rust
@@ -850,12 +855,14 @@ pub fn emit_project(
     let ffi = config.ffi(db).clone();
     let target = config.target(db);
     let wasm_public_env = config.wasm_public_env(db).clone();
+    let wasm_hydrate_mode = config.wasm_hydrate_mode(db);
     let interner = db.interner().lock();
     ipe_backend_rust::RustBackend::new(&interner)
         .with_db_driver(driver)
         .with_ffi(ffi)
         .with_target(target)
         .with_wasm_public_env(wasm_public_env)
+        .with_wasm_hydrate_mode(wasm_hydrate_mode)
         .emit(&program)
         .map(Arc::new)
         .map_err(|d| (d, Vec::new()))
@@ -937,12 +944,14 @@ pub fn emit_spine_file(
     let ffi = config.ffi(db).clone();
     let target = config.target(db);
     let wasm_public_env = config.wasm_public_env(db).clone();
+    let wasm_hydrate_mode = config.wasm_hydrate_mode(db);
     let interner = db.interner().lock();
     ipe_backend_rust::RustBackend::new(&interner)
         .with_db_driver(driver)
         .with_ffi(ffi)
         .with_target(target)
         .with_wasm_public_env(wasm_public_env)
+        .with_wasm_hydrate_mode(wasm_hydrate_mode)
         .emit_spine(&program)
         .map(Arc::new)
         .map_err(|d| (d, Vec::new()))
@@ -1035,12 +1044,14 @@ pub fn emit_manifest(
     let ffi = config.ffi(db).clone();
     let target = config.target(db);
     let wasm_public_env = config.wasm_public_env(db).clone();
+    let wasm_hydrate_mode = config.wasm_hydrate_mode(db);
     let interner = db.interner().lock();
     ipe_backend_rust::RustBackend::new(&interner)
         .with_db_driver(driver)
         .with_ffi(ffi)
         .with_target(target)
         .with_wasm_public_env(wasm_public_env)
+        .with_wasm_hydrate_mode(wasm_hydrate_mode)
         .assemble_split_manifest(&program, &spine, &module_texts)
         .map(Arc::new)
         .map_err(|d| (d, Vec::new()))
