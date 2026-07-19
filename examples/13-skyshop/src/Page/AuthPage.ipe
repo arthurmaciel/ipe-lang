@@ -23,8 +23,8 @@ import Lib.Translation as Tr
 -- now a no-op), so the OAuth client SDK cannot be injected from the view.
 --
 -- Sign-in is therefore re-expressed as Std.Ui buttons that drive the
--- `FirebaseAuth <token>` Msg directly — the firebase-auth shim
--- (Rust.Sky_firebase_auth_shim) verifies the supplied id token server-side via
+-- `FirebaseAuth <token>` Msg directly — the real `rs-firebase-admin-sdk`
+-- binding verifies the supplied id token server-side via
 -- Lib.Auth.verifyToken. Each provider button submits a canned dev id token so
 -- the sign-in path stays exercisable without a real browser OAuth round-trip.
 -- The page layout (welcome heading, two provider buttons, terms notice, error
@@ -83,7 +83,7 @@ authError model =
             (Ui.text model.authError)
 
 
--- Dev id tokens: the firebase-auth shim verifies these to a flat identity row.
+-- Dev id tokens: the firebase ID-token binding verifies these to a flat identity row.
 googleButton : Element Msg
 googleButton =
     Ui.button
