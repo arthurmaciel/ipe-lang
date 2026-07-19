@@ -6,18 +6,23 @@
 //! broadcast and emits messages into the TEA loop — completing `onMessage`.
 //!
 //! WebSocketMessage/CloseCode are bridged to runtime enums so the runtime can
-//! construct frames/codes for the user's toMsg. The design intent is that all
-//! four event kinds (onOpen/onMessage/onClose/onError) route through their own
-//! typed kernel below — one per heterogeneous toMsg shape, so no bounded fn is
-//! shared and no stdlib override is needed.
+//! construct frames/codes for the user's toMsg. All four event kinds
+//! (onOpen/onMessage/onClose/onError) route through their own typed kernel
+//! below — one per heterogeneous toMsg shape, so no bounded fn is shared and
+//! no stdlib override is needed. `emit_expr.rs`'s `SubSubscribeWebSocket`
+//! peephole splits the single `Sub_subscribeWebSocket` kernel call on its
+//! compile-time-literal `kind` string into a call to one of these four typed
+//! fns, so the surface is reachable on the native target: importing
+//! `Ipe.WebSocket` and calling any of the stdlib `on*` wrappers compiles and
+//! runs end-to-end. `F`'s bound is `Send` (not `Send + Sync`) because `to_msg`
+//! is moved into exactly one detached `tokio::spawn` task per subscription,
+//! never shared behind an `Arc` — the same contract `sub_subscribe_stream`
+//! uses.
 //!
-//! STATUS: this client-side receive surface is NOT yet wired — no `KernelFn`
-//! variant routes codegen to `sub_subscribe_ws_{message,close,error}`, so these
-//! three functions are currently unreachable dead code. Their `F` bound is
-//! `Send` (not `Send + Sync`) defensively, ahead of that wiring, so the
-//! eventual wiring commit cannot ship exit-0-then-cargo-fail (a THE-SEAL
-//! violation) on the generic first-class-function-value render path — the same
-//! contract the reachable `sub_subscribe_stream` uses.
+//! `--target wasm` gets its own substitute (`wasm_client` below, `web_sys`
+//! event-handler slots instead of the broadcast channel this native half
+//! uses) — see `ipe_kernels::StdlibKernel::wasm_client_available`'s
+//! `KernelClass::Tea` arm for the allowlist tag that makes it resolvable.
 
 use super::*;
 #[cfg(not(target_arch = "wasm32"))]
@@ -623,14 +628,9 @@ fn ws_registered(socket_id: i64) -> bool {
 /// rationale. `Send` is therefore the full and correct contract; `Sync` is NOT
 /// required. An over-declared `+ Sync` here is exactly the bound the codegen's
 /// generic first-class-function-value rendering
-/// (`Box<dyn Fn(..) -> .. + Send + 'static>` — deliberately `+Send`-only) could
-/// never satisfy, so it would surface as a THE-SEAL `cargo build` E0277 the day
-/// codegen first routes a client `onMessage` subscription here. The `Send`-only
-/// bound is DEFENSIVE / PRE-WIRING: these three client-side subs
-/// (`_message` / `_close` / `_error`) are currently UNREACHABLE — no `KernelFn`
-/// variant routes codegen to them yet (the whole `Ipe.WebSocket` client
-/// surface is unwired) — so the future wiring commit does not ship
-/// exit-0-then-cargo-fail on day one.
+/// (`Box<dyn Fn(..) -> .. + Send + 'static>` — deliberately `+Send`-only)
+/// requires, matching the reachable `emit_expr.rs::SubSubscribeWebSocket`
+/// peephole's generic first-class-function-value render path.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn sub_subscribe_ws_message<M, F>(socket_id: i64, to_msg: F) -> IpeSub<M>
 where
@@ -677,11 +677,9 @@ where
 
 /// onClose : (CloseCode -> msg) -> Sub msg
 ///
-/// Same defensive pre-wiring `Send`-only bound as
-/// [`sub_subscribe_ws_message`]: `to_msg` is moved into the single detached
-/// `tokio::spawn` below and never shared behind an `Arc`, so `Send + 'static`
-/// is the exact contract and `+ Sync` was over-strict. Currently unreachable
-/// (no `KernelFn` arm routes here yet); relaxing dead code can't regress.
+/// Same `Send`-only bound rationale as [`sub_subscribe_ws_message`]:
+/// `to_msg` is moved into the single detached `tokio::spawn` below and never
+/// shared behind an `Arc`, so `Send + 'static` is the exact contract.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn sub_subscribe_ws_close<M, F>(socket_id: i64, to_msg: F) -> IpeSub<M>
 where
@@ -715,11 +713,9 @@ where
 
 /// onError : (Error -> msg) -> Sub msg. E is the project error (From<String>).
 ///
-/// Same defensive pre-wiring `Send`-only bound as
-/// [`sub_subscribe_ws_message`]: `to_msg` is moved into the single detached
-/// `tokio::spawn` below and never shared behind an `Arc`, so `Send + 'static`
-/// is the exact contract and `+ Sync` was over-strict. Currently unreachable
-/// (no `KernelFn` arm routes here yet); relaxing dead code can't regress.
+/// Same `Send`-only bound rationale as [`sub_subscribe_ws_message`]:
+/// `to_msg` is moved into the single detached `tokio::spawn` below and never
+/// shared behind an `Arc`, so `Send + 'static` is the exact contract.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn sub_subscribe_ws_error<E, M, F>(socket_id: i64, to_msg: F) -> IpeSub<M>
 where
@@ -791,11 +787,14 @@ mod tests {
 // wasm32 browser substitute — `web_sys::WebSocket`
 // ---------------------------------------------------------------------------
 //
-// Task-tier only (connect/connectWith/send/sendBinary/close/closeWithCode) —
-// the native onOpen/onMessage/onClose/onError receive surface
-// (`sub_subscribe_ws_*`) is unreachable on EVERY target today (no `KernelFn`
-// wires codegen to it yet, per this file's module doc); wiring it for wasm is
-// left for the same follow-up that wires it natively, not a wasm-specific gap.
+// Task-tier (connect/connectWith/send/sendBinary/close/closeWithCode) PLUS
+// the Sub-tier receive surface (onOpen/onMessage/onClose/onError), both via
+// `web_sys::WebSocket`. The four `on*` handlers are wired against the
+// browser's own single-slot `onopen`/`onmessage`/`onclose`/`onerror`
+// properties (see the `sub_subscribe_ws_*` fns below) — the `KernelFn`
+// arm that routes codegen here (`emit_expr.rs`'s `SubSubscribeWebSocket`
+// peephole) is target-neutral and was already wired; the wasm side just had
+// no runtime symbol to land on before this.
 //
 // No SSRF guard here (unlike the native `do_connect`, which resolves + pins
 // the host): a browser tab cannot open a raw socket or bypass the browser's
@@ -807,8 +806,12 @@ mod tests {
 // never-opened id — never a panic/trap.
 #[cfg(target_arch = "wasm32")]
 mod wasm_client {
-    use super::{HashMap, IpeResult, IpeTask, ok_res};
+    use super::{HashMap, IpeResult, IpeSub, IpeTask, ok_res};
     use std::cell::{Cell, RefCell};
+    use std::collections::HashSet;
+    use std::rc::Rc;
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen::closure::Closure;
 
     thread_local! {
         static SOCKETS: RefCell<HashMap<i64, web_sys::WebSocket>> = RefCell::new(HashMap::new());
@@ -918,6 +921,12 @@ mod wasm_client {
                 };
             }
         });
+        // Mirrors the native `deregister`'s `ws_subscribed()` cleanup — ids
+        // are monotonic and never reused, so this is hygiene (bounding
+        // `WS_ONCE_OPEN`'s size across a long page session), not correctness.
+        WS_ONCE_OPEN.with(|s| {
+            s.borrow_mut().remove(&id);
+        });
     }
 
     /// `WebSocket.close : Int -> Task Error ()` (idempotent, matches native).
@@ -941,6 +950,212 @@ mod wasm_client {
             close_socket(id, Some((ws_code, &reason)));
             ok_res(())
         })
+    }
+
+    // ── Sub-tier: onOpen / onMessage / onClose / onError ───────────────────
+    //
+    // `web_sys::WebSocket`'s event-handler slots (`onopen`/`onmessage`/
+    // `onclose`/`onerror`) are single-slot — setting one replaces whatever was
+    // there before. `wasm::subs::SubManager::update` tears down every active
+    // `IpeSub::Source` (running its teardown thunk) BEFORE respawning from the
+    // freshly computed `Sub` tree, so the old handler is always cleared before
+    // a new one is installed — no duplicate-delivery risk the native arm's
+    // `ws_subscribed()` re-spawn dedupe exists to prevent.
+    //
+    // `onOpen` is the one exception: it must still fire AT MOST ONCE across the
+    // socket's lifetime (mirrors the native contract + this module's stdlib doc
+    // comment), and the browser's own `open` event only fires once natively —
+    // the wasm-specific hazard is the RACE where the socket is already `OPEN`
+    // by subscribe time (every later re-render respawns every active `Sub`,
+    // including this one, well after the handshake completed) and a naive
+    // "emit immediately if already open" check would refire on every
+    // subsequent re-render. `WS_ONCE_OPEN` is the persistent (never torn down
+    // by `stop_all`) one-shot marker that prevents that.
+    thread_local! {
+        static WS_ONCE_OPEN: RefCell<HashSet<i64>> = RefCell::new(HashSet::new());
+    }
+
+    /// Returns `true` the FIRST time it is called for a given `socket_id`
+    /// (and records it), `false` on every call after — the one-shot gate
+    /// `sub_subscribe_ws_open` uses to guarantee at-most-once delivery.
+    fn ws_mark_open_once(socket_id: i64) -> bool {
+        WS_ONCE_OPEN.with(|s| s.borrow_mut().insert(socket_id))
+    }
+
+    /// Decode a browser `MessageEvent.data()` into the Ipê `WebSocketMessage`
+    /// shape. `open_socket` pins `set_binary_type(Arraybuffer)`, so a binary
+    /// frame always arrives as an `ArrayBuffer`, never a `Blob`; a text frame
+    /// arrives as a JS string. Any other payload shape is unreachable from a
+    /// spec-compliant browser given that pin, so it is dropped rather than
+    /// guessed at — fail-closed, never invents a frame.
+    fn decode_message_event(ev: &web_sys::MessageEvent) -> Option<super::WsClientMessage> {
+        let data = ev.data();
+        if let Some(text) = data.as_string() {
+            return Some(super::WsClientMessage::Text(text));
+        }
+        if let Ok(buf) = data.dyn_into::<js_sys::ArrayBuffer>() {
+            return Some(super::WsClientMessage::Binary(js_sys::Uint8Array::new(&buf).to_vec()));
+        }
+        None
+    }
+
+    /// `onOpen : WebSocket -> msg -> Sub msg` — dispatch `msg` once the
+    /// socket is connected. `M` needs no `Send`/`Sync` bound (wasm32 is
+    /// single-threaded — same relaxation `wasm::pubsub` already uses).
+    pub fn sub_subscribe_ws_open<M: 'static>(socket_id: i64, msg: M) -> IpeSub<M> {
+        IpeSub::Source(Box::new(move |emit: Rc<dyn Fn(M)>| {
+            let already_open = SOCKETS.with(|s| {
+                s.borrow()
+                    .get(&socket_id)
+                    .is_some_and(|ws| ws.ready_state() == web_sys::WebSocket::OPEN)
+            });
+            if already_open {
+                if ws_mark_open_once(socket_id) {
+                    emit(msg);
+                }
+                return Box::new(|| {}) as Box<dyn FnOnce()>;
+            }
+            let sid = socket_id;
+            // `RefCell<Option<M>>` (not a plain move into the closure) so the
+            // handler type-checks as `FnMut` while still only ever handing
+            // `msg` to `emit` once — `.take()` makes the second call (there
+            // never should be one; browsers fire `open` exactly once) a no-op
+            // instead of a double-emit.
+            let msg_cell: Rc<RefCell<Option<M>>> = Rc::new(RefCell::new(Some(msg)));
+            let closure_slot: Rc<RefCell<Option<Closure<dyn FnMut(web_sys::Event)>>>> =
+                Rc::new(RefCell::new(None));
+            SOCKETS.with(|s| {
+                if let Some(ws) = s.borrow().get(&sid) {
+                    let emit = Rc::clone(&emit);
+                    let msg_cell = Rc::clone(&msg_cell);
+                    let closure = Closure::wrap(Box::new(move |_ev: web_sys::Event| {
+                        if ws_mark_open_once(sid)
+                            && let Some(m) = msg_cell.borrow_mut().take()
+                        {
+                            emit(m);
+                        }
+                    }) as Box<dyn FnMut(web_sys::Event)>);
+                    ws.set_onopen(Some(closure.as_ref().unchecked_ref()));
+                    *closure_slot.borrow_mut() = Some(closure);
+                }
+            });
+            Box::new(move || {
+                SOCKETS.with(|s| {
+                    if let Some(ws) = s.borrow().get(&sid) {
+                        ws.set_onopen(None);
+                    }
+                });
+                drop(closure_slot);
+                drop(msg_cell);
+            })
+        }))
+    }
+
+    /// `onMessage : WebSocket -> (WebSocketMessage -> msg) -> Sub msg`.
+    pub fn sub_subscribe_ws_message<M, F>(socket_id: i64, to_msg: F) -> IpeSub<M>
+    where
+        M: 'static,
+        F: Fn(super::WsClientMessage) -> M + 'static,
+    {
+        IpeSub::Source(Box::new(move |emit: Rc<dyn Fn(M)>| {
+            let sid = socket_id;
+            let closure_slot: Rc<RefCell<Option<Closure<dyn FnMut(web_sys::MessageEvent)>>>> =
+                Rc::new(RefCell::new(None));
+            SOCKETS.with(|s| {
+                if let Some(ws) = s.borrow().get(&sid) {
+                    let emit = Rc::clone(&emit);
+                    let closure = Closure::wrap(Box::new(move |ev: web_sys::MessageEvent| {
+                        if let Some(m) = decode_message_event(&ev) {
+                            emit(to_msg(m));
+                        }
+                    }) as Box<dyn FnMut(web_sys::MessageEvent)>);
+                    ws.set_onmessage(Some(closure.as_ref().unchecked_ref()));
+                    *closure_slot.borrow_mut() = Some(closure);
+                }
+            });
+            Box::new(move || {
+                SOCKETS.with(|s| {
+                    if let Some(ws) = s.borrow().get(&sid) {
+                        ws.set_onmessage(None);
+                    }
+                });
+                drop(closure_slot);
+            })
+        }))
+    }
+
+    /// `onClose : WebSocket -> (CloseCode -> msg) -> Sub msg`.
+    pub fn sub_subscribe_ws_close<M, F>(socket_id: i64, to_msg: F) -> IpeSub<M>
+    where
+        M: 'static,
+        F: Fn(super::WsCloseCode) -> M + 'static,
+    {
+        IpeSub::Source(Box::new(move |emit: Rc<dyn Fn(M)>| {
+            let sid = socket_id;
+            let closure_slot: Rc<RefCell<Option<Closure<dyn FnMut(web_sys::CloseEvent)>>>> =
+                Rc::new(RefCell::new(None));
+            SOCKETS.with(|s| {
+                if let Some(ws) = s.borrow().get(&sid) {
+                    let emit = Rc::clone(&emit);
+                    let closure = Closure::wrap(Box::new(move |ev: web_sys::CloseEvent| {
+                        let code = super::ws_close_code(i64::from(ev.code()));
+                        emit(to_msg(code));
+                    }) as Box<dyn FnMut(web_sys::CloseEvent)>);
+                    ws.set_onclose(Some(closure.as_ref().unchecked_ref()));
+                    *closure_slot.borrow_mut() = Some(closure);
+                }
+            });
+            Box::new(move || {
+                SOCKETS.with(|s| {
+                    if let Some(ws) = s.borrow().get(&sid) {
+                        ws.set_onclose(None);
+                    }
+                });
+                drop(closure_slot);
+            })
+        }))
+    }
+
+    /// `onError : WebSocket -> (Error -> msg) -> Sub msg`. `E` is the
+    /// project error type (`From<String>`).
+    ///
+    /// The browser's WebSocket `error` event is a plain `Event` carrying no
+    /// diagnostic detail by spec (a same-origin-policy privacy rule — this is
+    /// not a dropped feature on our side); `close` fires immediately after
+    /// every `error` with a real code/reason, so `WebSocket.onClose` is where
+    /// app code gets the detail. The message here stays generic rather than
+    /// inventing detail the platform never exposes.
+    pub fn sub_subscribe_ws_error<E, M, F>(socket_id: i64, to_msg: F) -> IpeSub<M>
+    where
+        E: From<String> + 'static,
+        M: 'static,
+        F: Fn(E) -> M + 'static,
+    {
+        IpeSub::Source(Box::new(move |emit: Rc<dyn Fn(M)>| {
+            let sid = socket_id;
+            let closure_slot: Rc<RefCell<Option<Closure<dyn FnMut(web_sys::Event)>>>> =
+                Rc::new(RefCell::new(None));
+            SOCKETS.with(|s| {
+                if let Some(ws) = s.borrow().get(&sid) {
+                    let emit = Rc::clone(&emit);
+                    let closure = Closure::wrap(Box::new(move |_ev: web_sys::Event| {
+                        emit(to_msg(E::from(format!(
+                            "WebSocket {sid} error (see the close event for a code/reason)"
+                        ))));
+                    }) as Box<dyn FnMut(web_sys::Event)>);
+                    ws.set_onerror(Some(closure.as_ref().unchecked_ref()));
+                    *closure_slot.borrow_mut() = Some(closure);
+                }
+            });
+            Box::new(move || {
+                SOCKETS.with(|s| {
+                    if let Some(ws) = s.borrow().get(&sid) {
+                        ws.set_onerror(None);
+                    }
+                });
+                drop(closure_slot);
+            })
+        }))
     }
 }
 

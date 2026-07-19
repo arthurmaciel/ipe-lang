@@ -1,0 +1,160 @@
+module Main exposing (main)
+
+-- M4 `Ipe.WebSocket` client substitute, exercised end-to-end in a real
+-- browser: connect / onOpen / send / onMessage / close / onClose against
+-- `examples/33-websocket-echo`'s native server (ws://127.0.0.1:8033/ws,
+-- which echoes every text frame prefixed "echo: "). The M1 target-keyed
+-- gate previously rejected importing Ipe.WebSocket at all under
+-- `--target wasm` (see CLAUDE.md's WASM section / ws_client.rs's module
+-- doc for the fixed bug).
+
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+import Ipe.WebSocket as WS exposing (WebSocketMessage(..))
+import Ipe.Live exposing (app)
+import Ipe.Cmd as Cmd
+import Ipe.Sub as Sub
+import Ipe.Task as Task
+import Ipe.Ui as Ui
+import Ipe.Ui.Background as Background
+import Ipe.Ui.Border as Border
+import Ipe.Ui.Font as Font
+
+
+type Page
+    = SocketPage
+
+
+type Msg
+    = Connect
+    | Connected (Result Error WS.WebSocket)
+    | Opened
+    | GotFrame WS.WebSocketMessage
+    | Closed WS.CloseCode
+    | Errored Error
+    | SendHello
+    | SendDone (Result Error ())
+    | Disconnect
+    | DisconnectDone (Result Error ())
+
+
+type alias Model =
+    { sock : Maybe WS.WebSocket
+    , status : String
+    , lastFrame : String
+    }
+
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { sock = Nothing, status = "disconnected", lastFrame = "(none)" }
+    , Cmd.none
+    )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Connect ->
+            ( { model | status = "connecting..." }
+            , Cmd.perform (WS.connect "ws://127.0.0.1:8033/ws") Connected
+            )
+
+        Connected (Ok sock) ->
+            ( { model | sock = Just sock, status = "connected (waiting for onOpen)" }, Cmd.none )
+
+        Connected (Err e) ->
+            ( { model | status = "connect failed: " ++ errorToString e }, Cmd.none )
+
+        Opened ->
+            ( { model | status = "open" }, Cmd.none )
+
+        GotFrame (Text t) ->
+            ( { model | lastFrame = t }, Cmd.none )
+
+        GotFrame (Binary _) ->
+            ( { model | lastFrame = "<binary frame>" }, Cmd.none )
+
+        Closed _ ->
+            ( { model | status = "closed", sock = Nothing }, Cmd.none )
+
+        Errored e ->
+            ( { model | status = "error: " ++ errorToString e }, Cmd.none )
+
+        SendHello ->
+            case model.sock of
+                Nothing ->
+                    ( model, Cmd.none )
+
+                Just sock ->
+                    ( model, Cmd.perform (WS.send sock "hello-from-browser") SendDone )
+
+        SendDone _ ->
+            ( model, Cmd.none )
+
+        Disconnect ->
+            case model.sock of
+                Nothing ->
+                    ( model, Cmd.none )
+
+                Just sock ->
+                    ( model, Cmd.perform (WS.close sock) DisconnectDone )
+
+        DisconnectDone _ ->
+            ( model, Cmd.none )
+
+
+subscriptions : Model -> Sub Msg
+subscriptions model =
+    case model.sock of
+        Nothing ->
+            Sub.none
+
+        Just sock ->
+            Sub.batch
+                [ WS.onOpen sock Opened
+                , WS.onMessage sock GotFrame
+                , WS.onClose sock Closed
+                , WS.onError sock Errored
+                ]
+
+
+actionButton : Msg -> String -> Ui.Element Msg
+actionButton msg label =
+    Ui.button
+        [ Ui.padding 8, Background.color (Ui.rgb 37 99 235), Font.color (Ui.rgb 255 255 255), Border.rounded 6 ]
+        { onPress = Just msg, label = Ui.text label }
+
+
+view : Model -> Html Msg
+view model =
+    Ui.layout []
+        (Ui.column
+            [ Ui.spacing 14, Ui.padding 32 ]
+            [ Ui.el [ Font.size 20, Font.bold ] (Ui.text "M4 Ipe.WebSocket client substitute")
+            , Ui.row [ Ui.spacing 12 ]
+                [ actionButton Connect "Connect"
+                , actionButton SendHello "Send \"hello-from-browser\""
+                , actionButton Disconnect "Disconnect"
+                ]
+            , Ui.row [ Ui.spacing 12 ]
+                [ Ui.el [ Font.bold ] (Ui.text "status:")
+                , Ui.el [ Ui.htmlAttribute "id" "ws-status" ] (Ui.text model.status)
+                ]
+            , Ui.row [ Ui.spacing 12 ]
+                [ Ui.el [ Font.bold ] (Ui.text "last frame:")
+                , Ui.el [ Ui.htmlAttribute "id" "ws-last-frame" ] (Ui.text model.lastFrame)
+                ]
+            ]
+        )
+
+
+main =
+    app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = SocketPage
+        }

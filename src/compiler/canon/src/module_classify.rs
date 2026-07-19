@@ -3,10 +3,7 @@
 //!
 //! [`crate::target_gate`] (Layer 1) is naming-based over the WHOLE linked
 //! program: a kernel with no `WasmClient` denotation fails wherever it is
-//! named, even inside a def the client entry can never reach (importing
-//! `Ipe.WebSocket` for its `connect`/`send` today also links its
-//! `onOpen`/`onMessage`/`onClose`/`onError`, which are unreachable-by-design
-//! on every target — Layer 1 rejects the whole module regardless). This
+//! named, even inside a def the client entry can never reach. This
 //! module supplies the promised compositional guarantee: it classifies every
 //! module actually linked into the build, then walks ONLY the transitive
 //! import closure from the client entry, so a `server` module the entry
@@ -102,10 +99,8 @@ pub fn check_client_reachability(
                         });
                     }
                 }
-                Expr_::VarTopLevel { module, .. } => {
-                    if module != home {
-                        deps.insert(module.clone());
-                    }
+                Expr_::VarTopLevel { module, .. } if module != home => {
+                    deps.insert(module.clone());
                 }
                 _ => {}
             });
@@ -170,8 +165,7 @@ fn chain_error(path: &[Vec<Symbol>], offending: &ModuleInfo, interner: &Interner
     let cause = offending
         .cause
         .as_ref()
-        .map(|c| format!("{}.{}", c.qualifier, c.name))
-        .unwrap_or_else(|| "?".to_owned());
+        .map_or_else(|| "?".to_owned(), |c| format!("{}.{}", c.qualifier, c.name));
     let mut segments: Vec<String> = Vec::with_capacity(path.len());
     for (i, module) in path.iter().enumerate() {
         let name = module_display_name(module, interner);
