@@ -1,0 +1,19 @@
+# Nextest configuration for the Ipê workspace.
+#
+# Per-test timeout policy:
+# - default profile: warn at 60s, terminate after 2 periods (120s). Individual
+#   golden tests build+run one emitted binary and should never approach 60s on a
+#   warm target; the 120s ceiling catches legitimately hung tests.
+# - ci profile (--profile ci, used in CI jobs): warn at 60s, terminate after
+#   10 periods (600s). Tests that drive a real `cargo build` with no shared
+#   target (watch_integration, webview_e2e, server_e2e, live_e2e) can take
+#   4–6 minutes on a cold CI runner. 120s kills them on scheduler contention,
+#   not on a real regression. 600s is the outer safety net; each test's own
+#   wait-budget (e.g. `wait_for_body(..., Duration::from_mins(4))`) is the
+#   functional guard.
+
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 2 }
+
+[profile.ci]
+slow-timeout = { period = "60s", terminate-after = 10 }
