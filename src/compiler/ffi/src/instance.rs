@@ -526,6 +526,65 @@ fn option_inner(t: &InnerTypeRef) -> Option<&InnerTypeRef> {
     }
 }
 
+fn vec_inner(t: &InnerTypeRef) -> Option<&InnerTypeRef> {
+    match t {
+        InnerTypeRef::Ctor(nm, args)
+            if args.len() == 1
+                && (nm.as_str() == "::std::vec::Vec"
+                    || nm.as_str() == "::alloc::vec::Vec"
+                    || nm.as_str() == "Vec") =>
+        {
+            args.first()
+        }
+        _ => None,
+    }
+}
+
+/// Lift the host OK shape (bound to `val`) into its Ipê-facing carrier,
+/// COMPOSITIONALLY: serde re-serialises to JSON text (total — Value's
+/// `Serialize` never errs), numerics widen saturating, `Option` folds into
+/// `IpeMaybe`, `Vec` maps element-wise, everything else passes through. The
+/// recursion is what keeps a container-nested serde/numeric OK
+/// (`Option<serde_json::Value>`, `Vec<serde_json::Value>`) in agreement with
+/// the `.ipei` surface — a raw inner `serde_json::Value` here would be
+/// exit-0-then-cargo-fail against the forwarder. Returns the declared Rust
+/// carrier and the lift expression.
+fn ok_ref_lift(ok: &InnerTypeRef, params: &[String], val: &str) -> (String, String) {
+    if matches!(ok, InnerTypeRef::SerdeValue | InnerTypeRef::SerdeValueRef) {
+        return (
+            "String".to_owned(),
+            format!("serde_json::to_string(&({val})).unwrap_or_default()"),
+        );
+    }
+    if let InnerTypeRef::Prim(w) = ok
+        && w.as_str() != "i64"
+        && w.as_str() != "f64"
+        && let Some(widen) = num_widen_scalar(w.as_str(), val)
+    {
+        return (widen.carrier.to_owned(), widen.expr);
+    }
+    if let Some(inner) = option_inner(ok) {
+        let (decl, expr) = ok_ref_lift(inner, params, "x");
+        return (
+            format!("IpeMaybe<{decl}>"),
+            format!(
+                "match {val} {{ Some(x) => IpeMaybe::Just({expr}), None => IpeMaybe::Nothing }}"
+            ),
+        );
+    }
+    if let Some(inner) = vec_inner(ok) {
+        let (decl, expr) = ok_ref_lift(inner, params, "x");
+        if expr == "x" {
+            return (format!("Vec<{decl}>"), val.to_owned());
+        }
+        return (
+            format!("Vec<{decl}>"),
+            format!("{val}.into_iter().map(|x| {expr}).collect::<Vec<_>>()"),
+        );
+    }
+    (ok.render(params), val.to_owned())
+}
+
 /// The generic-param indices that appear as a BORROWED argument inside a
 /// by-ref closure slot. Each reaches the owned-clone bridge's `.clone()` on
 /// a `&A`, so the wrapper must FORCE `+ Clone` onto that param even when the
@@ -596,45 +655,7 @@ fn render_generic_wrapper(base_name: &str, g: &GenericFn) -> String {
             .unwrap_or_else(|| InnerTypeRef::Prim(RustTypeExpr::unit())),
         other => other.clone(),
     };
-    let ok_is_serde = matches!(
-        ok_ref,
-        InnerTypeRef::SerdeValue | InnerTypeRef::SerdeValueRef
-    );
-    // A concrete numeric scalar OK widens to its Ipê carrier; the carriers
-    // themselves pass through untouched.
-    let ok_num_widen = match &ok_ref {
-        InnerTypeRef::Prim(w) if w.as_str() != "i64" && w.as_str() != "f64" => {
-            num_widen_scalar(w.as_str(), "v")
-        }
-        _ => None,
-    };
-    // A host `Option<T>` OK lifts to the Ipê carrier `IpeMaybe<T>` — the same
-    // boundary contract the flat tier owns (`bindings.rs`); the Ipê-facing
-    // `.ipei` already says `Maybe …`, so a raw `Option` here would be
-    // exit-0-then-cargo-fail against the forwarder.
-    let ok_maybe_inner = option_inner(&ok_ref);
-    let ret_inner = if ok_is_serde {
-        "String".to_owned()
-    } else if let Some(w) = &ok_num_widen {
-        w.carrier.to_owned()
-    } else if let Some(inner) = ok_maybe_inner {
-        format!("IpeMaybe<{}>", inner.render(params))
-    } else {
-        ok_ref.render(params)
-    };
-    // Lift the host's OK value (bound to the local `v`) into the Ipê-facing
-    // return: serde re-serialises to JSON text (total — Value's Serialize
-    // never errs), numerics widen saturating, a host `Option` folds into
-    // `IpeMaybe`, everything else passes.
-    let ok_lift = if ok_is_serde {
-        "serde_json::to_string(&(v)).unwrap_or_default()".to_owned()
-    } else if let Some(w) = &ok_num_widen {
-        w.expr.clone()
-    } else if ok_maybe_inner.is_some() {
-        "match v { Some(x) => IpeMaybe::Just(x), None => IpeMaybe::Nothing }".to_owned()
-    } else {
-        "v".to_owned()
-    };
+    let (ret_inner, ok_lift) = ok_ref_lift(&ok_ref, params, "v");
     let body_call = call.render_body(params);
     // <T: bound + …> per param; bare param when unbounded. A param borrowed
     // inside a by-ref closure slot gets `+ Clone` forced (deduped against a
