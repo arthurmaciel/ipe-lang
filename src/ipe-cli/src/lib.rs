@@ -470,15 +470,14 @@ fn compile_modules_observed(
     // `ipe` binary's own content hash and the active `rustc`'s fingerprint
     // (see `cache::derive_epoch`'s doc for why this makes
     // "refuse, don't guess" structural rather than a runtime check).
-    let cache_key =
-        cache::compute_project_key(
-            &sources,
-            &injected,
-            entry_path,
-            db_driver,
-            options.target,
-            &options.wasm_public_env,
-        );
+    let cache_key = cache::compute_project_key(
+        &sources,
+        &injected,
+        entry_path,
+        db_driver,
+        options.target,
+        &options.wasm_public_env,
+    );
     let epoch = cache_dir.and_then(|_| cache::derive_epoch());
     if let (Some(root), Some(epoch)) = (cache_dir, epoch.as_deref())
         && let Some(emitted) = cache::try_load(root, epoch, &cache_key)
@@ -1594,7 +1593,14 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
     // directory. Byte-identical to `build` when the directory holds only the
     // entry file (regression-covered by the golden suite).
     manifest.map_or_else(
-        || build_with_sibling_discovery_with_options(&entry_path, &out_dir, &runtime_dir, options.clone()),
+        || {
+            build_with_sibling_discovery_with_options(
+                &entry_path,
+                &out_dir,
+                &runtime_dir,
+                options.clone(),
+            )
+        },
         |m| build_project_with_options(&m, &out_dir, &runtime_dir, options.clone()),
     )?;
 
@@ -1636,21 +1642,18 @@ fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
     // per-project fallback the emitted manifest's `[workspace]` detachment
     // would use).
     let wasm_path = {
-        let via_env = std::env::var_os("CARGO_TARGET_DIR")
-            .map(|d| {
-                std::path::PathBuf::from(d)
-                    .join("wasm32-unknown-unknown")
-                    .join("release")
-                    .join("sky_app.wasm")
-            });
+        let via_env = std::env::var_os("CARGO_TARGET_DIR").map(|d| {
+            std::path::PathBuf::from(d)
+                .join("wasm32-unknown-unknown")
+                .join("release")
+                .join("sky_app.wasm")
+        });
         let via_crate = out_dir
             .join("target")
             .join("wasm32-unknown-unknown")
             .join("release")
             .join("sky_app.wasm");
-        via_env
-            .filter(|p| p.is_file())
-            .unwrap_or(via_crate)
+        via_env.filter(|p| p.is_file()).unwrap_or(via_crate)
     };
 
     let pkg_dir = out_dir.join("www").join("pkg");
@@ -1680,9 +1683,10 @@ fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
     }
 
     // Step 3: wasm-opt -Oz — optional size pass; silently skip when absent
+    // (`Command::new` returns `Err` when the tool is missing).
     let bg_wasm = pkg_dir.join("sky_app_bg.wasm");
-    if bg_wasm.is_file() {
-        if let Ok(status) = std::process::Command::new("wasm-opt")
+    if bg_wasm.is_file()
+        && let Ok(status) = std::process::Command::new("wasm-opt")
             .args([
                 bg_wasm.to_string_lossy().as_ref(),
                 "-Oz",
@@ -1690,20 +1694,17 @@ fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
                 bg_wasm.to_string_lossy().as_ref(),
             ])
             .status()
-        {
-            if !status.success() {
-                // wasm-opt found but failed — non-fatal; the unoptimised bundle
-                // is still correct. Log and continue.
-                eprintln!(
-                    "note: wasm-opt exited {}; bundle is unoptimised but functional",
-                    status.code().unwrap_or(1)
-                );
-            }
-        }
-        // wasm-opt absent → silent skip (returns Err from Command::new)
+        && !status.success()
+    {
+        // wasm-opt found but failed — non-fatal; the unoptimised bundle
+        // is still correct. Log and continue.
+        eprintln!(
+            "note: wasm-opt exited {}; bundle is unoptimised but functional",
+            status.code().unwrap_or(1)
+        );
     }
 
-    let bundle_kb = bg_wasm.metadata().map(|m| m.len() / 1024).unwrap_or(0);
+    let bundle_kb = bg_wasm.metadata().map_or(0, |m| m.len() / 1024);
     eprintln!(
         "wasm bundle ready at {www}/\n\
          bundle size: {bundle_kb} KB ({bg})\n\
@@ -1774,7 +1775,14 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
     };
 
     manifest.map_or_else(
-        || build_with_sibling_discovery_with_options(&entry_path, &out_dir, &runtime_dir, options.clone()),
+        || {
+            build_with_sibling_discovery_with_options(
+                &entry_path,
+                &out_dir,
+                &runtime_dir,
+                options.clone(),
+            )
+        },
         |m| build_project_with_options(&m, &out_dir, &runtime_dir, options.clone()),
     )?;
 
