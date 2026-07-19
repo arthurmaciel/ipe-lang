@@ -106,8 +106,17 @@ Full details (port, timeout, architecture): [`docs/architecture/tbd/playground.m
 ## Editor setup (LSP)
 
 `ipe lsp` speaks JSON-RPC over stdio and works with any LSP-compliant editor.
-Features: completion, go-to-definition, find-references, rename, formatting,
-range formatting, code actions, semantic tokens, signature help, and inlay hints.
+Features: type-directed completion, go-to-definition, find-references, rename,
+formatting, range formatting, code actions, semantic tokens, signature help,
+and inlay hints.
+
+Completion is type-directed: where the surrounding context expects a specific
+type (a function argument, a typed binding's body, an `if`/`case` branch, a
+list element), candidates whose type matches are offered first and the expected
+type's own constructors are surfaced — an `Int` slot never offers a `String`.
+Away from such a context it falls back to every in-scope name. Every suggestion
+comes from the same type-checker `ipe build` runs, so a completion the editor
+offers is one the compiler accepts.
 
 ### Helix
 
