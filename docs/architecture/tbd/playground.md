@@ -39,12 +39,12 @@ The server needs three environment variables:
 | Variable | What it points to |
 |---|---|
 | `IPE_BIN` | absolute path to the `ipe` binary |
-| `SKY_RUNTIME_DIR` | absolute path to `src/runtime/rust/src/sky_runtime` |
+| `IPE_RUNTIME_DIR` | absolute path to `src/runtime/rust/src` |
 | `IPE_PLAYGROUND_STATIC_DIR` | directory that holds `index.html` (the playground UI) |
 
 ```sh
 export IPE_BIN="$(pwd)/target/release/ipe"
-export SKY_RUNTIME_DIR="$(pwd)/src/runtime/rust/src/sky_runtime"
+export IPE_RUNTIME_DIR="$(pwd)/src/runtime/rust/src"
 export IPE_PLAYGROUND_STATIC_DIR="$(pwd)/src/playground/www"
 
 ./target/release/ipe-playground
