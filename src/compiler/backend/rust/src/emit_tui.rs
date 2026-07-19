@@ -258,9 +258,9 @@ fn emit_tui_on_key(
         let inner = emit_tui_fn(ctx, e, indent, child, generics)?;
         let (struct_name, init_body) = on_key_struct_literal(ctx, rec_fields)?;
         return Ok(format!(
-            "{{ let __sky_on_key = {inner}; \
+            "{{ let __ipe_on_key = {inner}; \
              move |kind: String, value: String| \
-             __sky_on_key({struct_name} {{ {init_body} }}) }}"
+             __ipe_on_key({struct_name} {{ {init_body} }}) }}"
         ));
     }
     // Residual (local var / other fn-typed exprs): plain emission; `cargo`

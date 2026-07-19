@@ -1,28 +1,28 @@
-var __skySid = window.__SKY_SID;
-var __skyBase = window.__SKY_BASE || "";
-var __skyCsrfToken = window.__SKY_CSRF_TOKEN || "";
-// Server-templated config (mod.rs render_page_full → window.__SKY_* ; Go parity
+var __ipeSid = window.__IPE_SID;
+var __ipeBase = window.__IPE_BASE || "";
+var __ipeCsrfToken = window.__IPE_CSRF_TOKEN || "";
+// Server-templated config (mod.rs render_page_full → window.__IPE_* ; Go parity
 // live.go ~5993). Each reads the injected window global when present, else the
 // hardcoded default — so IPE_LIVE_RETRY_* / QUEUE_MAX / HELLO_TIMEOUT_MS /
 // HEARTBEAT_TTL_MS / BANNER overrides reach the client. CSP-safe (no eval).
-var __skyBannerEnabled = (window.__SKY_BANNER_ENABLED != null) ? window.__SKY_BANNER_ENABLED : true;
-var __skyRetryBaseMs = (window.__SKY_RETRY_BASE_MS != null) ? window.__SKY_RETRY_BASE_MS : 500;
-var __skyRetryMaxMs = (window.__SKY_RETRY_MAX_MS != null) ? window.__SKY_RETRY_MAX_MS : 16000;
-var __skyRetryMaxAttempts = (window.__SKY_RETRY_MAX_ATTEMPTS != null) ? window.__SKY_RETRY_MAX_ATTEMPTS : 10;
-var __skyEventQueueMax = (window.__SKY_EVENT_QUEUE_MAX != null) ? window.__SKY_EVENT_QUEUE_MAX : 50;
-var __skyMsgReconnecting = (window.__SKY_MSG_RECONNECTING != null) ? window.__SKY_MSG_RECONNECTING : "Reconnecting…";
-var __skyMsgOffline = (window.__SKY_MSG_OFFLINE != null) ? window.__SKY_MSG_OFFLINE : "Connection lost — refresh to retry";
-var __skyHelloTimeoutMs = (window.__SKY_HELLO_TIMEOUT_MS != null) ? window.__SKY_HELLO_TIMEOUT_MS : 8000;
-var __skyHeartbeatTtlMs = (window.__SKY_HEARTBEAT_TTL_MS != null) ? window.__SKY_HEARTBEAT_TTL_MS : 35000;
+var __ipeBannerEnabled = (window.__IPE_BANNER_ENABLED != null) ? window.__IPE_BANNER_ENABLED : true;
+var __ipeRetryBaseMs = (window.__IPE_RETRY_BASE_MS != null) ? window.__IPE_RETRY_BASE_MS : 500;
+var __ipeRetryMaxMs = (window.__IPE_RETRY_MAX_MS != null) ? window.__IPE_RETRY_MAX_MS : 16000;
+var __ipeRetryMaxAttempts = (window.__IPE_RETRY_MAX_ATTEMPTS != null) ? window.__IPE_RETRY_MAX_ATTEMPTS : 10;
+var __ipeEventQueueMax = (window.__IPE_EVENT_QUEUE_MAX != null) ? window.__IPE_EVENT_QUEUE_MAX : 50;
+var __ipeMsgReconnecting = (window.__IPE_MSG_RECONNECTING != null) ? window.__IPE_MSG_RECONNECTING : "Reconnecting…";
+var __ipeMsgOffline = (window.__IPE_MSG_OFFLINE != null) ? window.__IPE_MSG_OFFLINE : "Connection lost — refresh to retry";
+var __ipeHelloTimeoutMs = (window.__IPE_HELLO_TIMEOUT_MS != null) ? window.__IPE_HELLO_TIMEOUT_MS : 8000;
+var __ipeHeartbeatTtlMs = (window.__IPE_HEARTBEAT_TTL_MS != null) ? window.__IPE_HEARTBEAT_TTL_MS : 35000;
 
 // ── Input authority protocol state ───────────────────────────
 // See docs/skylive/input-authority-protocol.md §Client state.
 // Step 2 populates these counters + per-input table on every send
 // and response; Step 3 activates the patch filter that reads them;
-// Step 4 activates the stale-drop test against __skyLastAppliedSeq.
+// Step 4 activates the stale-drop test against __ipeLastAppliedSeq.
 //
 // Cycle 3 P47 (pub/sub global+local seq split — see
-// docs/skylive/pubsub-design.md §3.2): __skyLastGlobalSeq is the
+// docs/skylive/pubsub-design.md §3.2): __ipeLastGlobalSeq is the
 // app-wide broadcast counter. The server stamps it onto every
 // broadcast-derived SSE frame (event:patches OR event:patch); the
 // client dedupes against the largest value already applied so a
@@ -31,15 +31,15 @@ var __skyHeartbeatTtlMs = (window.__SKY_HEARTBEAT_TTL_MS != null) ? window.__SKY
 // from per-session dispatch (the common case) carry globalSeq=0 OR
 // omit the field; the guard treats 0 / missing as "no broadcast
 // ordering constraint" and never blocks.
-var __skyClientSeq = 0;       // monotonic, client-owned; bumped on every __skySend
-var __skyLastAppliedSeq = 0;  // server-owned; largest local seq already applied
-var __skyLastGlobalSeq = 0;   // server-owned; largest broadcast globalSeq already applied (P47)
-var __skyInputs = {};         // sky-id → InputEntry (populated by __skyBindOne)
+var __ipeClientSeq = 0;       // monotonic, client-owned; bumped on every __ipeSend
+var __ipeLastAppliedSeq = 0;  // server-owned; largest local seq already applied
+var __ipeLastGlobalSeq = 0;   // server-owned; largest broadcast globalSeq already applied (P47)
+var __ipeInputs = {};         // ipe-id → InputEntry (populated by __ipeBindOne)
 
-function __skyInputEntry(sid) {
-  var e = __skyInputs[sid];
+function __ipeInputEntry(sid) {
+  var e = __ipeInputs[sid];
   if (!e) {
-    e = __skyInputs[sid] = {
+    e = __ipeInputs[sid] = {
       liveValue: "", lastSentSeq: 0, lastAckedSeq: 0,
       pendingDebounceId: null, pendingSend: null
     };
@@ -47,15 +47,15 @@ function __skyInputEntry(sid) {
   return e;
 }
 
-// __skyInputsSnapshot — dirty-input projection bundled into every
+// __ipeInputsSnapshot — dirty-input projection bundled into every
 // outgoing event. Only entries whose user-typed value is newer than
 // the server's latest ack are included, so the wire stays compact
 // when the client and server agree.
-function __skyInputsSnapshot() {
+function __ipeInputsSnapshot() {
   var out = null;
-  var ids = Object.keys(__skyInputs);
+  var ids = Object.keys(__ipeInputs);
   for (var i = 0; i < ids.length; i++) {
-    var e = __skyInputs[ids[i]];
+    var e = __ipeInputs[ids[i]];
     if (e.lastSentSeq <= e.lastAckedSeq) continue;
     if (!out) out = {};
     out[ids[i]] = {value: e.liveValue, seq: e.lastSentSeq};
@@ -63,11 +63,11 @@ function __skyInputsSnapshot() {
   return out;
 }
 
-// __skyIngestSeq — fold a response or SSE frame's {seq, ackInputs}
-// into client state. seq advances __skyLastAppliedSeq monotonically;
+// __ipeIngestSeq — fold a response or SSE frame's {seq, ackInputs}
+// into client state. seq advances __ipeLastAppliedSeq monotonically;
 // ackInputs retires per-input dirty flags so the next snapshot omits
 // caught-up fields.
-// __skyIsDirty — a typable form field (input / textarea / select)
+// __ipeIsDirty — a typable form field (input / textarea / select)
 // whose DOM state is authoritative over the server's view. The check
 // is scoped to those tags ONLY: buttons, anchors, divs and other
 // focused-but-non-typable elements have no keystrokes to preserve,
@@ -75,36 +75,36 @@ function __skyInputsSnapshot() {
 // their containing subtree (e.g. navigating from a "new game"
 // screen into a board view, where the focused button legitimately
 // disappears). Scope signals: focus, pending debounce keyed by
-// data-sky-hid, or an unacked typed value at the input's sky-id.
-function __skyIsDirty(el) {
+// data-ipe-hid, or an unacked typed value at the input's ipe-id.
+function __ipeIsDirty(el) {
   if (!el || el.nodeType !== 1) return false;
   var tag = el.tagName;
   if (tag !== "INPUT" && tag !== "TEXTAREA" && tag !== "SELECT") return false;
   if (el === document.activeElement) return true;
-  var hid = el.getAttribute && el.getAttribute("data-sky-hid");
-  if (hid && __skyInputPending[hid]) return true;
-  var sid = el.getAttribute && el.getAttribute("sky-id");
+  var hid = el.getAttribute && el.getAttribute("data-ipe-hid");
+  if (hid && __ipeInputPending[hid]) return true;
+  var sid = el.getAttribute && el.getAttribute("ipe-id");
   if (sid) {
-    var e = __skyInputs[sid];
+    var e = __ipeInputs[sid];
     if (e && e.lastSentSeq > e.lastAckedSeq) return true;
   }
   return false;
 }
 
-function __skyIngestSeq(seq, ackInputs, globalSeq) {
-  if (typeof seq === "number" && seq > __skyLastAppliedSeq) {
-    __skyLastAppliedSeq = seq;
+function __ipeIngestSeq(seq, ackInputs, globalSeq) {
+  if (typeof seq === "number" && seq > __ipeLastAppliedSeq) {
+    __ipeLastAppliedSeq = seq;
   }
   // Cycle 3 P47: monotonic-applied semantics on the broadcast counter,
   // mirroring the local-seq path. Missing / zero / non-numeric globalSeq
   // is treated as "no broadcast ordering constraint" and ignored.
-  if (typeof globalSeq === "number" && globalSeq > __skyLastGlobalSeq) {
-    __skyLastGlobalSeq = globalSeq;
+  if (typeof globalSeq === "number" && globalSeq > __ipeLastGlobalSeq) {
+    __ipeLastGlobalSeq = globalSeq;
   }
   if (ackInputs) {
     var ids = Object.keys(ackInputs);
     for (var i = 0; i < ids.length; i++) {
-      var e = __skyInputs[ids[i]];
+      var e = __ipeInputs[ids[i]];
       if (!e) continue;
       var n = ackInputs[ids[i]];
       if (n > e.lastAckedSeq) e.lastAckedSeq = n;
@@ -112,9 +112,9 @@ function __skyIngestSeq(seq, ackInputs, globalSeq) {
   }
 }
 
-// __skyHandleResponse — gate DOM-mutating work behind the monotonic
+// __ipeHandleResponse — gate DOM-mutating work behind the monotonic
 // seq check (Step 4 / I2). An out-of-order or replayed frame with
-// seq ≤ __skyLastAppliedSeq is dropped entirely: a newer frame has
+// seq ≤ __ipeLastAppliedSeq is dropped entirely: a newer frame has
 // already landed with a later view, and applying the stale payload
 // would regress the DOM. Legacy frames that omit seq (or report 0)
 // always apply — pre-upgrade servers keep working.
@@ -122,21 +122,21 @@ function __skyIngestSeq(seq, ackInputs, globalSeq) {
 // Cycle 3 P47 (pub/sub global+local seq split — see
 // docs/skylive/pubsub-design.md §3.2): broadcast-derived frames also
 // carry an OPTIONAL globalSeq. If supplied AND already applied (i.e.
-// globalSeq > 0 && globalSeq <= __skyLastGlobalSeq) the frame is
+// globalSeq > 0 && globalSeq <= __ipeLastGlobalSeq) the frame is
 // dropped — a replayed broadcast (e.g. an SSE reconnect re-delivering
 // buffered frames) would otherwise mutate state twice. Both guards
 // fire independently: a frame is dropped if EITHER counter has already
 // passed it; the localSeq guard alone suffices for the legacy
 // non-broadcast case (globalSeq omitted / 0 → broadcast guard always
 // passes).
-function __skyHandleResponse(seq, ackInputs, applyFn, globalSeq) {
-  if (typeof seq === "number" && seq > 0 && seq <= __skyLastAppliedSeq) {
+function __ipeHandleResponse(seq, ackInputs, applyFn, globalSeq) {
+  if (typeof seq === "number" && seq > 0 && seq <= __ipeLastAppliedSeq) {
     return; // stale — a newer local-seq frame already landed
   }
-  if (typeof globalSeq === "number" && globalSeq > 0 && globalSeq <= __skyLastGlobalSeq) {
+  if (typeof globalSeq === "number" && globalSeq > 0 && globalSeq <= __ipeLastGlobalSeq) {
     return; // stale — a newer broadcast frame already landed
   }
-  __skyIngestSeq(seq, ackInputs, globalSeq);
+  __ipeIngestSeq(seq, ackInputs, globalSeq);
   applyFn();
 }
 
@@ -152,7 +152,7 @@ function __skyHandleResponse(seq, ackInputs, applyFn, globalSeq) {
 //
 // The correct fix is to preserve node identity through the swap:
 // before the replacement, locate the focused INPUT / TEXTAREA /
-// SELECT, find its placeholder in the new HTML (by sky-id → name),
+// SELECT, find its placeholder in the new HTML (by ipe-id → name),
 // then SPLICE the live node into the new tree in place of the
 // placeholder. Server-side attrs (class, type, placeholder, ...)
 // get copied onto the live node, EXCEPT value/checked/selected —
@@ -169,14 +169,14 @@ function __skyHandleResponse(seq, ackInputs, applyFn, globalSeq) {
 // a property of the document). Selection is lost and must be
 // restored too.
 
-// __skyPlaceholderUncontrolled — true when the server-rendered
+// __ipePlaceholderUncontrolled — true when the server-rendered
 // element has no authority attribute set (no value/checked/selected,
 // no textarea content, no option[selected]). For these the user-
 // owned client state is canonical; we splice the live node across
 // the swap so the user's typing isn't blanked. See
 // docs/skylive/input-authority-protocol.md §I6 (full-body
 // preservation).
-function __skyPlaceholderUncontrolled(placeholder) {
+function __ipePlaceholderUncontrolled(placeholder) {
   if (!placeholder) return false;
   if (placeholder.hasAttribute("value")) return false;
   if (placeholder.hasAttribute("checked")) return false;
@@ -194,15 +194,15 @@ function __skyPlaceholderUncontrolled(placeholder) {
   return true;
 }
 
-// __skyFindPlaceholder — locate a live input's slot in the new tree.
-// Prefer sky-id (structurally stable + uniquely keyed). Fall back to
-// tag+name only when the live element has no sky-id AND the new tree
+// __ipeFindPlaceholder — locate a live input's slot in the new tree.
+// Prefer ipe-id (structurally stable + uniquely keyed). Fall back to
+// tag+name only when the live element has no ipe-id AND the new tree
 // has exactly one match — preventing wrong-input collisions when
 // names recur (e.g. multiple address forms with name="line1").
-function __skyFindPlaceholder(tmp, live) {
-  var sid = live.getAttribute && live.getAttribute("sky-id");
+function __ipeFindPlaceholder(tmp, live) {
+  var sid = live.getAttribute && live.getAttribute("ipe-id");
   if (sid) {
-    var bySid = tmp.querySelector('[sky-id="' + sid.replace(/"/g, '\\"') + '"]');
+    var bySid = tmp.querySelector('[ipe-id="' + sid.replace(/"/g, '\\"') + '"]');
     if (bySid) return bySid;
   }
   var name = live.getAttribute && live.getAttribute("name");
@@ -213,7 +213,7 @@ function __skyFindPlaceholder(tmp, live) {
   return null;
 }
 
-// __skyReplaceHTMLPreservingFocus — the authoritative swap.
+// __ipeReplaceHTMLPreservingFocus — the authoritative swap.
 // Drop-in for plain innerHTML assignment that keeps:
 //   1. The currently-focused input (.value, IME state, composition
 //      buffer, selection range, scroll position).
@@ -222,9 +222,9 @@ function __skyFindPlaceholder(tmp, live) {
 //      Without this, an unfocused password field gets recreated by the
 //      innerHTML swap and the user's typed secret is blanked — see
 //      Bug 2 in docs/skylive/architecture.md §Input preservation.
-// Used by both __skyPatch (full body) and __skyApplyPatches (p.html
+// Used by both __ipePatch (full body) and __ipeApplyPatches (p.html
 // and large p.text patches).
-function __skyReplaceHTMLPreservingFocus(container, newHTML) {
+function __ipeReplaceHTMLPreservingFocus(container, newHTML) {
   var focused = document.activeElement;
   var focusedInside = focused && focused !== document.body &&
       container.contains(focused) &&
@@ -253,7 +253,7 @@ function __skyReplaceHTMLPreservingFocus(container, newHTML) {
   // other changes are needed.
   //
   // Repro before this fix: any Sky.Live view that emits an HTML
-  // patch at a sky-id pointing at an <svg> element (the diff does
+  // patch at a ipe-id pointing at an <svg> element (the diff does
   // this whenever the SVG's children-count changes, or a child
   // tag/kind mismatches between renders) leaves the SVG with HTML-
   // namespaced children. Drawing tools, charts, and apps that swap
@@ -288,10 +288,10 @@ function __skyReplaceHTMLPreservingFocus(container, newHTML) {
   var liveNodes = container.querySelectorAll("input, textarea, select");
   for (var i = 0; i < liveNodes.length; i++) {
     var live = liveNodes[i];
-    var placeholder = __skyFindPlaceholder(tmp, live);
+    var placeholder = __ipeFindPlaceholder(tmp, live);
     if (!placeholder) continue; // server unmounted: honour the server
     var isFocused = (live === focused);
-    if (!isFocused && !__skyPlaceholderUncontrolled(placeholder)) {
+    if (!isFocused && !__ipePlaceholderUncontrolled(placeholder)) {
       // Controlled field with a server-supplied value — let the
       // server win. Default innerHTML swap will recreate it from
       // placeholder.
@@ -301,7 +301,7 @@ function __skyReplaceHTMLPreservingFocus(container, newHTML) {
     // aria-*, …) onto the live node — except the three authority
     // attrs the user drives. The user's .value / .checked /
     // .selected DOM property survives untouched.
-    __skyCopyAttrsExceptAuthority(placeholder, live);
+    __ipeCopyAttrsExceptAuthority(placeholder, live);
     // Splice: replace the placeholder in tmp with the live node.
     // After this, the live node lives in tmp at the placeholder's
     // slot; the container still references it too (until the swap
@@ -332,11 +332,11 @@ function __skyReplaceHTMLPreservingFocus(container, newHTML) {
   }
 }
 
-// __skyCopyAttrsExceptAuthority — mirror attrs from src onto dst,
+// __ipeCopyAttrsExceptAuthority — mirror attrs from src onto dst,
 // skipping the three the user drives directly. Removes attrs on
 // dst that aren't in src (same "skip" rule). Used when splicing a
 // live focused input into a server-rendered placeholder.
-function __skyCopyAttrsExceptAuthority(src, dst) {
+function __ipeCopyAttrsExceptAuthority(src, dst) {
   if (!src || !dst || !src.attributes || !dst.attributes) return;
   var isAuthority = function(n) {
     return n === "value" || n === "checked" || n === "selected";
@@ -357,42 +357,42 @@ function __skyCopyAttrsExceptAuthority(src, dst) {
   }
 }
 
-// __skyPatch: full-body replacement for sky-nav clicks, popstate,
+// __ipePatch: full-body replacement for ipe-nav clicks, popstate,
 // and the server's full-HTML fallback path. Routes through the
 // node-preservation splicer so keystrokes never land on a destroyed
 // DOM node.
-function __skyPatch(t) {
-  var root = document.getElementById("sky-root");
+function __ipePatch(t) {
+  var root = document.getElementById("ipe-root");
   if (!root) return;
-  // Strip the full-document envelope when present (sky-nav fetches
+  // Strip the full-document envelope when present (ipe-nav fetches
   // return <!doctype><html>...</html>). The regex captures exactly
   // the rendered body, same as before.
-  var m = t.match(/<div id="sky-root">([\s\S]*?)<\/div><script>/);
+  var m = t.match(/<div id="ipe-root">([\s\S]*?)<\/div><script>/);
   if (m) t = m[1];
   var scrollX = window.scrollX, scrollY = window.scrollY;
-  __skyReplaceHTMLPreservingFocus(root, t);
+  __ipeReplaceHTMLPreservingFocus(root, t);
   window.scrollTo(scrollX, scrollY);
-  __skyBindEvents(document);
-  __skyRunPaths(root);
-  __skyReviveScripts(root);
+  __ipeBindEvents(document);
+  __ipeRunPaths(root);
+  __ipeReviveScripts(root);
 }
 
-// __skyReviveScripts: browsers DO NOT execute <script> tags inserted
+// __ipeReviveScripts: browsers DO NOT execute <script> tags inserted
 // via innerHTML (or any HTML-string assignment). When Sky.Live
-// swaps the body via __skyReplaceHTMLPreservingFocus (sky-nav, full-
+// swaps the body via __ipeReplaceHTMLPreservingFocus (ipe-nav, full-
 // body patches) or applies an attribute/HTML patch via
-// __skyApplyPatches, any <script src=...> or inline <script>
+// __ipeApplyPatches, any <script src=...> or inline <script>
 // element in the new content is added to the DOM but never
 // executed. This breaks any app-level JS bundle injected via the
 // Sky-side Ui.html (Html.node "script" [...]) pattern (notably
-// sky-editor's Editor.scriptTag).
+// ipe-editor's Editor.scriptTag).
 //
 // The fix: walk the new subtree for <script> elements, replace
 // each with a freshly-created one carrying a STRICT ALLOWLIST of
 // attributes. Freshly-created script nodes execute on insertion.
 //
 // Security (Cycle 3 audit gap C9 / cycle 2 plan P31):
-//   - Attribute copy is filtered through __skyScriptAttrAllowlist.
+//   - Attribute copy is filtered through __ipeScriptAttrAllowlist.
 //     Event-handler attrs (onerror, onload, onclick, …) are NEVER
 //     re-emitted — the original unfiltered loop allowed an attacker
 //     who controlled WYSIWYG content rendered back into Ui.html to
@@ -400,24 +400,24 @@ function __skyPatch(t) {
 //     the next patch.
 //   - Inline script bodies (textContent) are DROPPED unless the
 //     element also carries a src= attribute (a same-origin opt-in:
-//     Sky-bundled scripts like sky-editor's Editor.scriptTag set
+//     Sky-bundled scripts like ipe-editor's Editor.scriptTag set
 //     src=; user-supplied inline bodies are silently rejected with
 //     a console.warn so the misuse is visible during dev).
-//   - Rejected scripts STILL get the data-sky-script-revived
+//   - Rejected scripts STILL get the data-ipe-script-revived
 //     marker so a subsequent revival pass doesn't reprocess them
 //     (i.e. silent-drop is idempotent — no infinite warning storm).
 //
-// Idempotency: each revived <script> gets a data-sky-script-revived
+// Idempotency: each revived <script> gets a data-ipe-script-revived
 // attribute; subsequent calls skip it. This prevents the bundle
 // from re-loading on every patch (which would re-run any
 // DOMContentLoaded handlers and re-fire setInterval-driven
 // bootstraps multiple times).
 //
-// Safety: only matches <script> nodes inside root (the sky-root
+// Safety: only matches <script> nodes inside root (the ipe-root
 // container). Top-level page <script> tags (in <head> or outside
-// sky-root) are left alone — they ran on initial load and need
+// ipe-root) are left alone — they ran on initial load and need
 // no revival.
-var __skyScriptAttrAllowlist = {
+var __ipeScriptAttrAllowlist = {
   "src": 1,
   "type": 1,
   "async": 1,
@@ -426,16 +426,16 @@ var __skyScriptAttrAllowlist = {
   "crossorigin": 1,
   "nomodule": 1,
   "referrerpolicy": 1,
-  "data-sky-script-revived": 1
+  "data-ipe-script-revived": 1
 };
-function __skyReviveScripts(root) {
+function __ipeReviveScripts(root) {
   if (!root) return;
-  var scripts = root.querySelectorAll("script:not([data-sky-script-revived])");
+  var scripts = root.querySelectorAll("script:not([data-ipe-script-revived])");
   for (var i = 0; i < scripts.length; i++) {
     var old = scripts[i];
     // Mark the source element revived FIRST so a rejection branch
     // (no-src + inline body) doesn't re-trip on the next pass.
-    try { old.setAttribute("data-sky-script-revived", "1"); } catch (_) {}
+    try { old.setAttribute("data-ipe-script-revived", "1"); } catch (_) {}
     var hasSrc = old.hasAttribute("src");
     var hasInline = !!(old.textContent && old.textContent.length > 0);
     // Reject inline-only scripts (no src) — same-origin opt-in via
@@ -452,12 +452,12 @@ function __skyReviveScripts(root) {
     var fresh = document.createElement("script");
     // Copy ONLY allowlisted attributes. Event-handler attrs (anything
     // starting with "on…") and any non-allowlisted attribute are
-    // silently dropped — see __skyScriptAttrAllowlist.
+    // silently dropped — see __ipeScriptAttrAllowlist.
     var droppedAttrs = null;
     for (var j = 0; j < old.attributes.length; j++) {
       var a = old.attributes[j];
       var n = a.name.toLowerCase();
-      if (__skyScriptAttrAllowlist[n] === 1) {
+      if (__ipeScriptAttrAllowlist[n] === 1) {
         try { fresh.setAttribute(a.name, a.value); } catch (_) {}
       } else {
         // Capture for a single dev-time warn at the end (a single
@@ -482,7 +482,7 @@ function __skyReviveScripts(root) {
     if (hasSrc && hasInline) {
       fresh.textContent = old.textContent;
     }
-    fresh.setAttribute("data-sky-script-revived", "1");
+    fresh.setAttribute("data-ipe-script-revived", "1");
     // Replacing the old node with the fresh one triggers script
     // execution (for src= it fetches + runs; for inline it runs
     // the body).
@@ -491,34 +491,34 @@ function __skyReviveScripts(root) {
 }
 
 // ── Loading indicator ────────────────────────────────────────
-// Call __skyLoaderStart() before network, __skyLoaderEnd() after. An element
-// with id="sky-loader" gets the sky-loading class added/removed. Small
+// Call __ipeLoaderStart() before network, __ipeLoaderEnd() after. An element
+// with id="ipe-loader" gets the ipe-loading class added/removed. Small
 // 80ms delay so fast responses don't flash the indicator.
-var __skyLoaderEl = null;
-var __skyLoaderTimer = null;
-function __skyLoaderStart() {
-  __skyLoaderEl = __skyLoaderEl || document.getElementById("sky-loader");
-  if (!__skyLoaderEl) return;
-  clearTimeout(__skyLoaderTimer);
-  __skyLoaderTimer = setTimeout(function() {
-    __skyLoaderEl.classList.add("sky-loading");
+var __ipeLoaderEl = null;
+var __ipeLoaderTimer = null;
+function __ipeLoaderStart() {
+  __ipeLoaderEl = __ipeLoaderEl || document.getElementById("ipe-loader");
+  if (!__ipeLoaderEl) return;
+  clearTimeout(__ipeLoaderTimer);
+  __ipeLoaderTimer = setTimeout(function() {
+    __ipeLoaderEl.classList.add("ipe-loading");
   }, 80);
 }
-function __skyLoaderEnd() {
-  clearTimeout(__skyLoaderTimer);
-  if (__skyLoaderEl) __skyLoaderEl.classList.remove("sky-loading");
+function __ipeLoaderEnd() {
+  clearTimeout(__ipeLoaderTimer);
+  if (__ipeLoaderEl) __ipeLoaderEl.classList.remove("ipe-loading");
 }
 
 // ── Debounce ─────────────────────────────────────────────────
-var __skyInputTimers = {};
-var __skyInputPending = {};
-function __skyDebouncedSend(msgName, args, hid, delay) {
+var __ipeInputTimers = {};
+var __ipeInputPending = {};
+function __ipeDebouncedSend(msgName, args, hid, delay) {
   var key = hid || msgName;
-  clearTimeout(__skyInputTimers[key]);
-  __skyInputPending[key] = { msgName: msgName, args: args, hid: hid };
-  __skyInputTimers[key] = setTimeout(function() {
-    delete __skyInputPending[key];
-    __skySend(msgName, args, hid, { noLoader: true });
+  clearTimeout(__ipeInputTimers[key]);
+  __ipeInputPending[key] = { msgName: msgName, args: args, hid: hid };
+  __ipeInputTimers[key] = setTimeout(function() {
+    delete __ipeInputPending[key];
+    __ipeSend(msgName, args, hid, { noLoader: true });
   }, delay);
 }
 // Flush pending debounced input on blur (tab away / click elsewhere).
@@ -527,13 +527,13 @@ function __skyDebouncedSend(msgName, args, hid, delay) {
 document.addEventListener("focusout", function(ev) {
   var t = ev.target;
   if (!t) return;
-  var hid = t.getAttribute("data-sky-hid");
-  var key = hid || t.getAttribute("sky-input");
-  if (key && __skyInputPending[key]) {
-    clearTimeout(__skyInputTimers[key]);
-    var p = __skyInputPending[key];
-    delete __skyInputPending[key];
-    __skySend(p.msgName, p.args, p.hid, { noLoader: true });
+  var hid = t.getAttribute("data-ipe-hid");
+  var key = hid || t.getAttribute("ipe-input");
+  if (key && __ipeInputPending[key]) {
+    clearTimeout(__ipeInputTimers[key]);
+    var p = __ipeInputPending[key];
+    delete __ipeInputPending[key];
+    __ipeSend(p.msgName, p.args, p.hid, { noLoader: true });
   }
 }, true);
 
@@ -544,23 +544,23 @@ document.addEventListener("focusout", function(ev) {
 // synchronously so the final keystroke always reaches the server.
 // See docs/skylive/input-authority-protocol.md §I3.
 
-// __skyCollectPendingBatch — snapshot every pending-debounce entry
-// into a batch array, bumping __skyClientSeq per entry so each gets
+// __ipeCollectPendingBatch — snapshot every pending-debounce entry
+// into a batch array, bumping __ipeClientSeq per entry so each gets
 // its own order in the batch processed server-side. Clears the
 // pending map as a side effect so the regular debounce callback
 // can't double-fire after a beacon.
-function __skyCollectPendingBatch() {
-  var keys = Object.keys(__skyInputPending);
+function __ipeCollectPendingBatch() {
+  var keys = Object.keys(__ipeInputPending);
   if (keys.length === 0) return null;
   var batch = [];
   for (var i = 0; i < keys.length; i++) {
     var k = keys[i];
-    clearTimeout(__skyInputTimers[k]);
-    var p = __skyInputPending[k];
-    delete __skyInputPending[k];
-    __skyClientSeq++;
+    clearTimeout(__ipeInputTimers[k]);
+    var p = __ipeInputPending[k];
+    delete __ipeInputPending[k];
+    __ipeClientSeq++;
     batch.push({
-      seq: __skyClientSeq,
+      seq: __ipeClientSeq,
       msg: p.msgName || "",
       args: p.args || [],
       handlerId: p.hid || ""
@@ -569,31 +569,31 @@ function __skyCollectPendingBatch() {
   return batch;
 }
 
-// __skyFlushPendingBeacon — POST pending debounces on page unload so
+// __ipeFlushPendingBeacon — POST pending debounces on page unload so
 // the request survives. Single payload carries the whole batch + the
 // latest inputState snapshot so the server ingests the final DOM
 // values before dispatching. Silent no-op when there's nothing
 // pending.
 //
 // Uses a keepalive fetch (not navigator.sendBeacon) because the CSRF
-// middleware rejects POSTs to /_sky/event without a matching
-// X-Sky-Csrf header — and sendBeacon cannot set request headers, so a
+// middleware rejects POSTs to /_ipe/event without a matching
+// X-Ipe-Csrf header — and sendBeacon cannot set request headers, so a
 // beacon would be silently dropped whenever CSRF is enabled. keepalive
 // fetch survives unload AND carries the header. sendBeacon remains a
 // best-effort fallback only when CSRF is disabled (empty token) or
 // keepalive is unsupported.
-function __skyFlushPendingBeacon() {
-  var batch = __skyCollectPendingBatch();
-  var snapshot = __skyInputsSnapshot();
+function __ipeFlushPendingBeacon() {
+  var batch = __ipeCollectPendingBatch();
+  var snapshot = __ipeInputsSnapshot();
   if (!batch && !snapshot) return;
-  var body = { sessionId: __skySid };
+  var body = { sessionId: __ipeSid };
   if (batch)    body.batch = batch;
   if (snapshot) body.inputState = snapshot;
   var json = JSON.stringify(body);
   try {
     var headers = {"Content-Type":"application/json"};
-    if (__skyCsrfToken) headers["X-Sky-Csrf"] = __skyCsrfToken;
-    fetch(__skyBase + "/_sky/event", {
+    if (__ipeCsrfToken) headers["X-Ipe-Csrf"] = __ipeCsrfToken;
+    fetch(__ipeBase + "/_ipe/event", {
       method: "POST",
       headers: headers,
       body: json,
@@ -608,25 +608,25 @@ function __skyFlushPendingBeacon() {
   if (navigator && typeof navigator.sendBeacon === "function") {
     try {
       var blob = new Blob([json], {type: "application/json"});
-      navigator.sendBeacon(__skyBase + "/_sky/event", blob);
+      navigator.sendBeacon(__ipeBase + "/_ipe/event", blob);
     } catch (_) {}
   }
 }
 
-// __skyFlushPendingSync — synchronous variant for same-page
-// transitions where sendBeacon is overkill. Calls __skySend for
+// __ipeFlushPendingSync — synchronous variant for same-page
+// transitions where sendBeacon is overkill. Calls __ipeSend for
 // each pending entry; the fetch requests are fire-and-forget and
 // the browser keeps them alive across same-origin navigation.
-function __skyFlushPendingSync() {
-  var batch = __skyCollectPendingBatch();
+function __ipeFlushPendingSync() {
+  var batch = __ipeCollectPendingBatch();
   if (!batch) return;
   for (var i = 0; i < batch.length; i++) {
     var b = batch[i];
-    __skySend(b.msg, b.args, b.handlerId, {noLoader: true});
+    __ipeSend(b.msg, b.args, b.handlerId, {noLoader: true});
   }
 }
 
-// Capture-phase click listener inside sky-root: before a link click
+// Capture-phase click listener inside ipe-root: before a link click
 // leaves the current page, drain any pending debounce so the final
 // typed value reaches the server in the same origin as the
 // outgoing navigation. Beacon path handles cross-page; sync path
@@ -634,7 +634,7 @@ function __skyFlushPendingSync() {
 document.addEventListener("click", function(ev) {
   var a = ev.target && ev.target.closest && ev.target.closest("a[href]");
   if (!a) return;
-  var root = document.getElementById("sky-root");
+  var root = document.getElementById("ipe-root");
   if (!root || !root.contains(a)) return;
   var href = a.getAttribute("href") || "";
   // External or cross-origin → beacon (browser will tear down the
@@ -642,17 +642,17 @@ document.addEventListener("click", function(ev) {
   // SPA-style routing → sync flush (fetch survives).
   var isExternal = /^(https?:)?\/\//.test(href) && a.host !== location.host;
   if (isExternal || href === "") {
-    __skyFlushPendingBeacon();
+    __ipeFlushPendingBeacon();
   } else {
-    __skyFlushPendingSync();
+    __ipeFlushPendingSync();
   }
 }, true);
 
 // Tab close / navigate away: sendBeacon is the only path that
 // survives the teardown. Listen on both events because iOS Safari
 // + bfcache fire pagehide instead of beforeunload.
-window.addEventListener("beforeunload", __skyFlushPendingBeacon);
-window.addEventListener("pagehide", __skyFlushPendingBeacon);
+window.addEventListener("beforeunload", __ipeFlushPendingBeacon);
+window.addEventListener("pagehide", __ipeFlushPendingBeacon);
 
 // ── Core send ────────────────────────────────────────────────
 // Wire format (see docs/skylive/input-authority-protocol.md §Request):
@@ -662,57 +662,57 @@ window.addEventListener("pagehide", __skyFlushPendingBeacon);
 //   * inputState carries the user's current DOM values for every
 //     dirty input so the server's diff can align against reality
 //     before emitting patches.
-function __skySend(msgName, args, handlerId, opts) {
+function __ipeSend(msgName, args, handlerId, opts) {
   opts = opts || {};
-  if (!opts.noLoader) __skyLoaderStart();
-  __skyClientSeq++;
-  var mySeq = __skyClientSeq;
+  if (!opts.noLoader) __ipeLoaderStart();
+  __ipeClientSeq++;
+  var mySeq = __ipeClientSeq;
   // Stamp every currently-dirty input with this seq. The server's
   // ack (for a future response) will clear them back to parity.
-  var dirtyIds = Object.keys(__skyInputs);
+  var dirtyIds = Object.keys(__ipeInputs);
   for (var di = 0; di < dirtyIds.length; di++) {
-    var de = __skyInputs[dirtyIds[di]];
+    var de = __ipeInputs[dirtyIds[di]];
     if (de.liveValue !== "" || de.pendingDebounceId !== null) {
       de.lastSentSeq = mySeq;
     }
   }
-  var snapshot = __skyInputsSnapshot();
+  var snapshot = __ipeInputsSnapshot();
   var body = {
-    sessionId: __skySid,
+    sessionId: __ipeSid,
     seq: mySeq,
     msg: msgName || "",
     args: args || [],
     handlerId: handlerId || ""
   };
   if (snapshot) body.inputState = snapshot;
-  __skyPostEvent(body);
+  __ipePostEvent(body);
 }
 
 // ── POST retry queue ─────────────────────────────────────────
 // Wire-protocol POSTs are cheap (small JSON, idempotent on the
 // server's seq-ordered state machine), so a transient network blip
-// shouldn't lose the click. Failures push the body onto __skyEventQueue;
+// shouldn't lose the click. Failures push the body onto __ipeEventQueue;
 // retries fire on exponential backoff (500ms, 1s, 2s, … cap 16s);
 // the SSE 'open' handler drains the queue eagerly when the server
 // comes back. Cap at 50 entries — beyond that the user has been
 // offline so long that replay isn't useful, drop oldest with a
 // console warn so the page doesn't accumulate megabytes of state.
-var __skyEventQueue = [];
-var __skyRetryTimer = null;
-var __skyRetryAttempts = 0;
-// __skyRetryBaseMs / __skyRetryMaxMs / __skyRetryMaxAttempts /
-// __skyEventQueueMax are templated at the top of this script from
+var __ipeEventQueue = [];
+var __ipeRetryTimer = null;
+var __ipeRetryAttempts = 0;
+// __ipeRetryBaseMs / __ipeRetryMaxMs / __ipeRetryMaxAttempts /
+// __ipeEventQueueMax are templated at the top of this script from
 // the IPE_LIVE_RETRY_* / IPE_LIVE_QUEUE_MAX env vars (see
 // loadLiveBannerConfig).
-function __skyPostEvent(body) {
+function __ipePostEvent(body) {
   // Phase 1.2 — attach the per-session CSRF token. The server-side
   // middleware (runtime-go/rt/csrf_middleware.go) rejects POSTs
-  // without a matching X-Sky-Csrf / __sky_csrf cookie pair. Empty
+  // without a matching X-Ipe-Csrf / __ipe_csrf cookie pair. Empty
   // token means CSRF is disabled at the runtime level (ipe.toml
   // [security] csrf = false) — header omitted, middleware skipped.
   var headers = {"Content-Type":"application/json"};
-  if (__skyCsrfToken) headers["X-Sky-Csrf"] = __skyCsrfToken;
-  fetch(__skyBase + "/_sky/event", {
+  if (__ipeCsrfToken) headers["X-Ipe-Csrf"] = __ipeCsrfToken;
+  fetch(__ipeBase + "/_ipe/event", {
     method: "POST",
     headers: headers,
     body: JSON.stringify(body),
@@ -725,7 +725,7 @@ function __skyPostEvent(body) {
       throw new Error("server " + r.status);
     }
     // Reverse-proxy wedge detection: a real Sky.Live response always
-    // carries X-Sky-Live: 1. Without it, we're looking at a proxy-
+    // carries X-Ipe-Live: 1. Without it, we're looking at a proxy-
     // rewritten response (e.g. some edges turn upstream 502 into 200
     // OK with an HTML error page). Applying that as a "patch" would
     // replace the user's DOM with the proxy's error page, so we refuse
@@ -736,10 +736,10 @@ function __skyPostEvent(body) {
     // with seq + patches, structurally indistinguishable from the
     // marked form, so accept it. HTML / text responses without the
     // marker are always rejected — those are the proxy-wedge shape.
-    var skyMark = r.headers.get("X-Sky-Live");
+    var ipeMark = r.headers.get("X-Ipe-Live");
     var ct = r.headers.get("Content-Type") || "";
     var isJson = ct.indexOf("application/json") >= 0;
-    if (skyMark !== "1" && !isJson) {
+    if (ipeMark !== "1" && !isJson) {
       throw new Error("non-sky response " + r.status);
     }
     if (isJson) {
@@ -747,111 +747,111 @@ function __skyPostEvent(body) {
         // Even JSON is rejected if it lacks the protocol shape (no
         // seq field): some proxies (Cloudflare access denied, fly.io
         // edge errors) return JSON error envelopes with 200 OK.
-        if (skyMark !== "1" && (!data || typeof data.seq === "undefined")) {
+        if (ipeMark !== "1" && (!data || typeof data.seq === "undefined")) {
           throw new Error("non-sky json response");
         }
-        __skyLoaderEnd();
-        __skyOnPostSuccess();
+        __ipeLoaderEnd();
+        __ipeOnPostSuccess();
         if (!data) return;
-        __skyHandleResponse(data.seq, data.ackInputs, function() {
-          if (data.patches) __skyApplyPatches(data.patches);
+        __ipeHandleResponse(data.seq, data.ackInputs, function() {
+          if (data.patches) __ipeApplyPatches(data.patches);
         }, data.globalSeq);
       });
     }
     return r.text().then(function(t) {
-      __skyLoaderEnd();
-      __skyOnPostSuccess();
-      var seqStr = r.headers.get("X-Sky-Seq");
+      __ipeLoaderEnd();
+      __ipeOnPostSuccess();
+      var seqStr = r.headers.get("X-Ipe-Seq");
       var seq = seqStr ? parseInt(seqStr, 10) : 0;
-      var ackRaw = r.headers.get("X-Sky-Ack-Inputs");
+      var ackRaw = r.headers.get("X-Ipe-Ack-Inputs");
       var ack = null;
       if (ackRaw) { try { ack = JSON.parse(ackRaw); } catch(_) {} }
-      __skyHandleResponse(seq, ack, function() { __skyPatch(t); });
+      __ipeHandleResponse(seq, ack, function() { __ipePatch(t); });
     });
   }).catch(function() {
-    __skyLoaderEnd();
-    __skyOnPostFailure(body);
+    __ipeLoaderEnd();
+    __ipeOnPostFailure(body);
   });
 }
-function __skyOnPostSuccess() {
+function __ipeOnPostSuccess() {
   // A successful POST proves the server reachable — clear any
   // backoff state and drain queued events behind this one. If the
   // SSE was the trigger that drained the queue, this is a no-op.
-  __skyRetryAttempts = 0;
-  if (__skyRetryTimer !== null) {
-    clearTimeout(__skyRetryTimer);
-    __skyRetryTimer = null;
+  __ipeRetryAttempts = 0;
+  if (__ipeRetryTimer !== null) {
+    clearTimeout(__ipeRetryTimer);
+    __ipeRetryTimer = null;
   }
-  if (__skyStatus !== "connected") {
-    __skySetStatus("connected", "");
+  if (__ipeStatus !== "connected") {
+    __ipeSetStatus("connected", "");
   }
   // SSE recovery: if the watchdog tore down the EventSource (offline
   // terminal state), a successful POST proves the network is back, so
   // reopen the stream too — otherwise subscriptions and Cmd.perform
   // results would silently not arrive even though clicks work. Cancel
   // any pending reopen-with-backoff and bring it forward.
-  if (__skySSE === null) {
-    if (__skySseReopenTimer !== null) {
-      clearTimeout(__skySseReopenTimer);
-      __skySseReopenTimer = null;
+  if (__ipeSSE === null) {
+    if (__ipeSseReopenTimer !== null) {
+      clearTimeout(__ipeSseReopenTimer);
+      __ipeSseReopenTimer = null;
     }
-    __skyOpenSSE();
+    __ipeOpenSSE();
   }
-  __skyDrainQueue();
+  __ipeDrainQueue();
 }
-function __skyOnPostFailure(body) {
+function __ipeOnPostFailure(body) {
   // FIFO drop when the queue is at the cap — bail on the oldest
   // pending event rather than the new one, so the user's most
   // recent intent is preserved.
-  if (__skyEventQueue.length >= __skyEventQueueMax) {
-    var dropped = __skyEventQueue.shift();
+  if (__ipeEventQueue.length >= __ipeEventQueueMax) {
+    var dropped = __ipeEventQueue.shift();
     if (window.console && console.warn) {
       console.warn("[sky.live] event queue at cap; dropped oldest", dropped);
     }
   }
-  __skyEventQueue.push(body);
-  __skyShowReconnecting();
-  __skyScheduleRetry();
+  __ipeEventQueue.push(body);
+  __ipeShowReconnecting();
+  __ipeScheduleRetry();
 }
-function __skyShowReconnecting() {
-  if (__skyStatus === "offline") return;
-  if (__skyStatus === "connected") {
-    __skySetStatus("reconnecting", __skyMsgReconnecting);
+function __ipeShowReconnecting() {
+  if (__ipeStatus === "offline") return;
+  if (__ipeStatus === "connected") {
+    __ipeSetStatus("reconnecting", __ipeMsgReconnecting);
   }
 }
-function __skyScheduleRetry() {
-  if (__skyRetryTimer !== null) return;  // already pending
-  if (__skyRetryAttempts >= __skyRetryMaxAttempts) {
-    __skySetStatus("offline", __skyMsgOffline);
+function __ipeScheduleRetry() {
+  if (__ipeRetryTimer !== null) return;  // already pending
+  if (__ipeRetryAttempts >= __ipeRetryMaxAttempts) {
+    __ipeSetStatus("offline", __ipeMsgOffline);
     return;
   }
-  __skyRetryAttempts++;
+  __ipeRetryAttempts++;
   // 500, 1000, 2000, 4000, 8000, 16000, 16000, … (capped)
-  var delay = Math.min(__skyRetryBaseMs * Math.pow(2, __skyRetryAttempts - 1), __skyRetryMaxMs);
-  __skyRetryTimer = setTimeout(function() {
-    __skyRetryTimer = null;
-    __skyDrainQueue();
+  var delay = Math.min(__ipeRetryBaseMs * Math.pow(2, __ipeRetryAttempts - 1), __ipeRetryMaxMs);
+  __ipeRetryTimer = setTimeout(function() {
+    __ipeRetryTimer = null;
+    __ipeDrainQueue();
   }, delay);
 }
-function __skyDrainQueue() {
-  if (__skyEventQueue.length === 0) return;
-  // Send the head of the queue. If it succeeds, __skyOnPostSuccess
-  // recurses into __skyDrainQueue to send the next one. If it
+function __ipeDrainQueue() {
+  if (__ipeEventQueue.length === 0) return;
+  // Send the head of the queue. If it succeeds, __ipeOnPostSuccess
+  // recurses into __ipeDrainQueue to send the next one. If it
   // fails, the body re-enters the queue and the retry loop kicks
   // back in. Order is preserved (FIFO) — the server's seq matching
-  // tolerates late deliveries via __skyHandleResponse.
-  var head = __skyEventQueue.shift();
-  __skyPostEvent(head);
+  // tolerates late deliveries via __ipeHandleResponse.
+  var head = __ipeEventQueue.shift();
+  __ipePostEvent(head);
 }
 
-// Apply a list of sky-id addressed patches with input authority (I1):
+// Apply a list of ipe-id addressed patches with input authority (I1):
 // value/checked/selected attrs on dirty inputs are dropped so the
 // user's DOM wins; innerHTML patches route through
-// __skyReplaceHTMLPreservingFocus which splices the live focused
+// __ipeReplaceHTMLPreservingFocus which splices the live focused
 // input (same DOM node, same .value, same IME/composition state)
 // through the new HTML so it's never destroyed. Per-attr and
 // textContent updates are fine as-is — they don't regenerate nodes.
-function __skyApplyPatches(patches) {
+function __ipeApplyPatches(patches) {
   if (!patches || patches.length === 0) return;
   // Open <select> defence: native dropdowns close on ANY DOM mutation
   // inside the open select OR any ancestor that would re-mount it.
@@ -866,7 +866,7 @@ function __skyApplyPatches(patches) {
       ? document.activeElement : null;
   for (var i = 0; i < patches.length; i++) {
     var p = patches[i];
-    var el = document.querySelector('[sky-id="' + p.id.replace(/"/g, '\\"') + '"]');
+    var el = document.querySelector('[ipe-id="' + p.id.replace(/"/g, '\\"') + '"]');
     if (!el) continue;
     if (openSel && (el === openSel || el.contains(openSel) || openSel.contains(el))) {
       // Skip: any mutation here would close the dropdown mid-pick.
@@ -876,17 +876,17 @@ function __skyApplyPatches(patches) {
       // textContent on a container that contains the focused input
       // would also wipe the input (replaces all children with one
       // text node). Guard the same way as innerHTML.
-      if (__skyContainsFocusedInput(el)) {
-        __skyReplaceHTMLPreservingFocus(el, __skyEscapeHTML(p.text));
+      if (__ipeContainsFocusedInput(el)) {
+        __ipeReplaceHTMLPreservingFocus(el, __ipeEscapeHTML(p.text));
       } else {
         el.textContent = p.text;
       }
     }
     if (p.html !== undefined && p.html !== null) {
-      __skyReplaceHTMLPreservingFocus(el, p.html);
+      __ipeReplaceHTMLPreservingFocus(el, p.html);
     }
     if (p.attrs) {
-      var dirty = __skyIsDirty(el);
+      var dirty = __ipeIsDirty(el);
       var keys = Object.keys(p.attrs);
       // Cursor preservation: when applying a "value" attr to a
       // focused INPUT or TEXTAREA, snapshot the selection range
@@ -946,20 +946,20 @@ function __skyApplyPatches(patches) {
     if (p.remove) el.remove();
   }
   // Any new sky-* attribute in the patched DOM needs a listener.
-  __skyBindEvents(document);
+  __ipeBindEvents(document);
   // After SSE-driven patches the URL also needs reconciling — without
   // this, programmatic Navigate Msgs would only update the in-memory
   // model and leave the address bar pointing at the previous page.
-  __skyRunPaths(document);
+  __ipeRunPaths(document);
   // Any <script> in newly-patched HTML wouldn't execute via innerHTML
-  // — revive them so JS bundles (e.g. sky-editor) bootstrap correctly
+  // — revive them so JS bundles (e.g. ipe-editor) bootstrap correctly
   // when their host element first appears via a patch (not the initial
-  // SSR).  See __skyReviveScripts above for the full rationale.
-  var skyRootForPatches = document.getElementById("sky-root");
-  if (skyRootForPatches) __skyReviveScripts(skyRootForPatches);
+  // SSR).  See __ipeReviveScripts above for the full rationale.
+  var ipeRootForPatches = document.getElementById("ipe-root");
+  if (ipeRootForPatches) __ipeReviveScripts(ipeRootForPatches);
 }
 
-function __skyContainsFocusedInput(el) {
+function __ipeContainsFocusedInput(el) {
   var a = document.activeElement;
   if (!a || a === document.body) return false;
   var tag = a.tagName;
@@ -967,7 +967,7 @@ function __skyContainsFocusedInput(el) {
   return el === a || el.contains(a);
 }
 
-function __skyEscapeHTML(s) {
+function __ipeEscapeHTML(s) {
   var d = document.createElement("div");
   d.textContent = s == null ? "" : String(s);
   return d.innerHTML;
@@ -977,34 +977,34 @@ function __skyEscapeHTML(s) {
 // Walks the DOM for sky-<event> attributes and binds a native listener
 // that extracts args and dispatches through the TEA update cycle.
 // Re-run after every DOM patch because new sky-* attrs may have appeared.
-function __skyBindEvents(root) {
+function __ipeBindEvents(root) {
   root = root || document;
   var events = ["click", "dblclick", "input", "change", "submit", "focus", "blur",
                 "keydown", "keyup", "keypress", "mouseover", "mouseout",
                 "mousedown", "mouseup"];
   for (var i = 0; i < events.length; i++) {
-    __skyBindOne(root, events[i]);
+    __ipeBindOne(root, events[i]);
   }
 }
 
-// __skyRunPaths: safer, CSP-friendly alternative to data-sky-eval for
+// __ipeRunPaths: safer, CSP-friendly alternative to data-ipe-eval for
 // the specific case of "update the address bar after a render." Looks
-// for [data-sky-path] elements and pushes / replaces history if the
+// for [data-ipe-path] elements and pushes / replaces history if the
 // value differs from location. No new Function(), no eval; the only
 // DOM APIs touched are getAttribute and history.pushState /
 // replaceState. Works under strict CSP (no 'unsafe-eval') and has no
 // XSS surface (the value is a URL path, never executed).
 //
 // The element is intentionally NOT removed after running — Sky.Live's
-// patches identify elements by sky-id and look them up via
-// querySelector; removing the data-sky-path element would orphan its
-// sky-id, and the next attribute patch (when the path changes) would
+// patches identify elements by ipe-id and look them up via
+// querySelector; removing the data-ipe-path element would orphan its
+// ipe-id, and the next attribute patch (when the path changes) would
 // silently skip. The path-check makes the call idempotent, so leaving
 // the element in place is cheap — at most one comparison per patch.
-function __skyRunPaths(root) {
-  var els = (root || document).querySelectorAll("[data-sky-path]");
+function __ipeRunPaths(root) {
+  var els = (root || document).querySelectorAll("[data-ipe-path]");
   for (var i = 0; i < els.length; i++) {
-    var p = els[i].getAttribute("data-sky-path");
+    var p = els[i].getAttribute("data-ipe-path");
     if (!p) continue;
     if (location.pathname !== p) {
       try { history.pushState({}, "", p); } catch (_) {}
@@ -1014,35 +1014,35 @@ function __skyRunPaths(root) {
   }
 }
 
-function __skyBindOne(root, eventName) {
+function __ipeBindOne(root, eventName) {
   var selector = "[sky-" + eventName + "]";
   var nodes = root.querySelectorAll(selector);
   for (var i = 0; i < nodes.length; i++) {
     var el = nodes[i];
-    if (el["__sky_" + eventName]) continue;
-    el["__sky_" + eventName] = true;
+    if (el["__ipe_" + eventName]) continue;
+    el["__ipe_" + eventName] = true;
     el.addEventListener(eventName, function(ev) {
       var target = ev.currentTarget;
-      var msgName = target.getAttribute("sky-" + ev.type);
-      var hid     = target.getAttribute("data-sky-hid");
+      var msgName = target.getAttribute("ipe-" + ev.type);
+      var hid     = target.getAttribute("data-ipe-hid");
       if (!msgName && !hid) return;
       // Some events want preventDefault (submit, form-link navigation);
       // click doesn't (we only intercept when the attribute is set).
       if (ev.type === "submit") ev.preventDefault();
-      var args = __skyExtractArgs(ev);
+      var args = __ipeExtractArgs(ev);
       if (ev.type === "input") {
-        // Track live value against sky-id so the snapshot bundled in
-        // the next __skySend reflects the user's actual DOM state,
+        // Track live value against ipe-id so the snapshot bundled in
+        // the next __ipeSend reflects the user's actual DOM state,
         // and so Step 3's patch filter can recognise dirty inputs.
-        var sid = target.getAttribute("sky-id");
+        var sid = target.getAttribute("ipe-id");
         if (sid) {
-          var e = __skyInputEntry(sid);
+          var e = __ipeInputEntry(sid);
           e.liveValue = args && args.length > 0 ? String(args[0]) : "";
         }
-        __skyDebouncedSend(msgName, args, hid, 150);
+        __ipeDebouncedSend(msgName, args, hid, 150);
         return;
       }
-      __skySend(msgName, args, hid);
+      __ipeSend(msgName, args, hid);
     });
   }
 }
@@ -1053,7 +1053,7 @@ function __skyBindOne(root, eventName) {
 //   * input / change                   → [value]    (typed input value)
 //   * submit                           → [formData] (plain object of [name]=value)
 //   * keydown / keyup / keypress       → [key]      (event.key string)
-function __skyExtractArgs(ev) {
+function __ipeExtractArgs(ev) {
   var t = ev.target;
   switch (ev.type) {
     case "input":
@@ -1098,7 +1098,7 @@ function __skyExtractArgs(ev) {
           if (el.type === "checkbox" || el.type === "radio") {
             if (el.checked) data[el.name] = el.value;
           } else if (el.type === "file") {
-            // File handling via sky-file / sky-image drivers (below).
+            // File handling via ipe-file / ipe-image drivers (below).
           } else {
             data[el.name] = el.value;
           }
@@ -1115,14 +1115,14 @@ function __skyExtractArgs(ev) {
 }
 
 // ── File / Image drivers ─────────────────────────────────────
-// onFile / onImage register via data-sky-ev-sky-file / -sky-image
+// onFile / onImage register via data-ipe-ev-ipe-file / -ipe-image
 // attributes. The client reads the chosen file, optionally resizes
 // (for images), and sends a base64 data URL as the event value.
 document.addEventListener("change", function(ev) {
   var el = ev.target;
   if (!el || el.tagName !== "INPUT" || el.type !== "file") return;
-  var fileId  = el.getAttribute("data-sky-ev-sky-file");
-  var imageId = el.getAttribute("data-sky-ev-sky-image");
+  var fileId  = el.getAttribute("data-ipe-ev-ipe-file");
+  var imageId = el.getAttribute("data-ipe-ev-ipe-image");
   var f = el.files && el.files[0];
   if (!f) return;
   // Client-side size guard via fileMaxSize. Saves the round-trip when
@@ -1130,7 +1130,7 @@ document.addEventListener("change", function(ev) {
   // streaming the bytes server-side just to reject them. Server-side
   // validation should still happen — this is a UX nicety, not a
   // security boundary.
-  var maxSize = parseInt(el.getAttribute("data-sky-ev-sky-file-max-size") || "0");
+  var maxSize = parseInt(el.getAttribute("data-ipe-ev-ipe-file-max-size") || "0");
   if (maxSize > 0 && f.size > maxSize) {
     if (window.console && console.warn) {
       console.warn(
@@ -1143,24 +1143,24 @@ document.addEventListener("change", function(ev) {
   }
   if (fileId) {
     var r = new FileReader();
-    // __skySend's args param is List a on the wire (server expects
+    // __ipeSend's args param is List a on the wire (server expects
     // []json.RawMessage); a bare string would unmarshal-fail. Wrap
     // the data URL in a single-element array — the Sky-side Msg
     // constructor declared as 'String -> Msg' reads args[0].
-    r.onload = function(e) { __skySend(fileId, [e.target.result]); };
+    r.onload = function(e) { __ipeSend(fileId, [e.target.result]); };
     r.readAsDataURL(f);
   }
   if (imageId) {
-    var maxW = parseInt(el.getAttribute("data-sky-ev-sky-file-max-width")  || "1200");
-    var maxH = parseInt(el.getAttribute("data-sky-ev-sky-file-max-height") || "1200");
-    __skyResizeImage(f, maxW, maxH, function(dataUrl) {
+    var maxW = parseInt(el.getAttribute("data-ipe-ev-ipe-file-max-width")  || "1200");
+    var maxH = parseInt(el.getAttribute("data-ipe-ev-ipe-file-max-height") || "1200");
+    __ipeResizeImage(f, maxW, maxH, function(dataUrl) {
       // Same wire-format reason as the onFile branch — wrap in array.
-      __skySend(imageId, [dataUrl]);
+      __ipeSend(imageId, [dataUrl]);
     });
   }
 });
 
-function __skyResizeImage(file, maxW, maxH, cb) {
+function __ipeResizeImage(file, maxW, maxH, cb) {
   var img = new Image();
   var url = URL.createObjectURL(file);
   img.onload = function() {
@@ -1178,8 +1178,8 @@ function __skyResizeImage(file, maxW, maxH, cb) {
 
 // Expose programmatic dispatch for custom JS integrations (e.g. Firebase
 // auth callbacks that need to send a Msg after the SDK resolves).
-window.__sky_send = function(id, value, opts) { __skySend(id, value, opts); };
-// sky-nav: intercept clicks on <a sky-nav ...> links so navigation is a
+window.__ipe_send = function(id, value, opts) { __ipeSend(id, value, opts); };
+// ipe-nav: intercept clicks on <a ipe-nav ...> links so navigation is a
 // client-side fetch + innerHTML swap instead of a full page reload.
 // Falls back to normal navigation on modifier keys (cmd/ctrl/shift/alt),
 // middle-click, and non-GET targets.
@@ -1190,7 +1190,7 @@ document.addEventListener("click", function(ev) {
   var el = ev.target;
   while (el && el.tagName !== "A") el = el.parentElement;
   if (!el) return;
-  if (!el.hasAttribute("sky-nav")) return;
+  if (!el.hasAttribute("ipe-nav")) return;
   var href = el.getAttribute("href");
   if (!href || href.charAt(0) === "#") return;
   // External links are left to the browser.
@@ -1199,18 +1199,18 @@ document.addEventListener("click", function(ev) {
     if (u.origin !== window.location.origin) return;
   } catch (e) { return; }
   ev.preventDefault();
-  fetch(href, { headers: { "X-Sky-Nav": "1" }, credentials: "same-origin" })
+  fetch(href, { headers: { "X-Ipe-Nav": "1" }, credentials: "same-origin" })
     .then(function(r) { return r.text(); })
     .then(function(t) {
-      __skyPatch(t);
+      __ipePatch(t);
       window.history.pushState({}, "", href);
     })
     .catch(function() { window.location.href = href; });
 });
 window.addEventListener("popstate", function() {
-  fetch(window.location.href, { headers: { "X-Sky-Nav": "1" }, credentials: "same-origin" })
+  fetch(window.location.href, { headers: { "X-Ipe-Nav": "1" }, credentials: "same-origin" })
     .then(function(r) { return r.text(); })
-    .then(__skyPatch);
+    .then(__ipePatch);
 });
 // ── Status banner (connection state) ─────────────────────────
 // Single bottom-pinned element rendered by the runtime (NOT by the
@@ -1222,29 +1222,29 @@ window.addEventListener("popstate", function() {
 // the DOM + setter so the rest of the JS can flip states without
 // touching the HTML directly. Hidden via display:none until a real
 // reconnect attempt fires (no flicker on initial page load).
-var __skyStatus = "connected";          // current state
-var __skyStatusEl = null;               // banner root, set on DOMContentLoaded
-var __skyStatusMsgEl = null;            // text node child
-var __skyStatusGraceTimer = null;       // 500ms anti-flicker timer
-function __skySetStatus(state, msg) {
-  __skyStatus = state;
-  if (!__skyStatusEl) return;           // banner not yet injected
+var __ipeStatus = "connected";          // current state
+var __ipeStatusEl = null;               // banner root, set on DOMContentLoaded
+var __ipeStatusMsgEl = null;            // text node child
+var __ipeStatusGraceTimer = null;       // 500ms anti-flicker timer
+function __ipeSetStatus(state, msg) {
+  __ipeStatus = state;
+  if (!__ipeStatusEl) return;           // banner not yet injected
   // Strip the previous state class, add the current one.
-  var classes = __skyStatusEl.className.split(" ").filter(function(c) {
-    return c.indexOf("sky-status--") !== 0;
+  var classes = __ipeStatusEl.className.split(" ").filter(function(c) {
+    return c.indexOf("ipe-status--") !== 0;
   });
-  classes.push("sky-status--" + state);
-  __skyStatusEl.className = classes.join(" ");
-  if (__skyStatusMsgEl && msg !== undefined) {
-    __skyStatusMsgEl.textContent = msg;
+  classes.push("ipe-status--" + state);
+  __ipeStatusEl.className = classes.join(" ");
+  if (__ipeStatusMsgEl && msg !== undefined) {
+    __ipeStatusMsgEl.textContent = msg;
   }
 }
-function __skyInjectStatusBanner() {
-  if (__skyStatusEl) return;            // idempotent
-  if (!__skyBannerEnabled) return;      // IPE_LIVE_BANNER=off
+function __ipeInjectStatusBanner() {
+  if (__ipeStatusEl) return;            // idempotent
+  if (!__ipeBannerEnabled) return;      // IPE_LIVE_BANNER=off
   var el = document.createElement("div");
-  el.id = "__sky-status";
-  el.className = "sky-status sky-status--connected";
+  el.id = "__ipe-status";
+  el.className = "ipe-status ipe-status--connected";
   el.setAttribute("role", "status");
   el.setAttribute("aria-live", "polite");
   // Inline styles — no global stylesheet leak. Max z-index puts the
@@ -1271,18 +1271,18 @@ function __skyInjectStatusBanner() {
   // tiny <style> with the variant rules.
   var style = document.createElement("style");
   style.textContent = "" +
-    "#__sky-status.ipe-status--connected{display:none}" +
-    "#__sky-status.ipe-status--reconnecting{background:#b45309}" +
-    "#__sky-status.ipe-status--offline{background:#b91c1c}";
+    "#__ipe-status.ipe-status--connected{display:none}" +
+    "#__ipe-status.ipe-status--reconnecting{background:#b45309}" +
+    "#__ipe-status.ipe-status--offline{background:#b91c1c}";
   document.head.appendChild(style);
   var msgEl = document.createElement("span");
-  msgEl.className = "sky-status__msg";
+  msgEl.className = "ipe-status__msg";
   el.appendChild(msgEl);
   document.body.appendChild(el);
-  __skyStatusEl = el;
-  __skyStatusMsgEl = msgEl;
+  __ipeStatusEl = el;
+  __ipeStatusMsgEl = msgEl;
   // Replay current state in case it changed before DOM was ready.
-  __skySetStatus(__skyStatus, "");
+  __ipeSetStatus(__ipeStatus, "");
 }
 
 // ── Server-Sent Events ───────────────────────────────────────
@@ -1299,65 +1299,65 @@ function __skyInjectStatusBanner() {
 // watchdog (below) treats absence of either as a wedge and force-
 // reconnects with backoff. See docs/skylive/architecture.md
 // §SSE wedge detection.
-var __skySSE = null;
-var __skyOpenAt = 0;          // ms timestamp of last EventSource.open
-var __skyLastSseAt = 0;       // ms timestamp of any SSE event
-var __skyHelloOk = false;     // server sent its handshake this connection
-var __skyWatchdogTimer = null;
-var __skySseReopenTimer = null;
-var __skyForcedClose = false; // true while we're tearing down to reopen
-function __skyOpenSSE() {
-  __skyForcedClose = false;
-  __skyHelloOk = false;
-  __skyOpenAt = 0;
-  __skySSE = new EventSource(__skyBase + "/_sky/sse");
-  __skySSE.addEventListener("hello", function(e) {
+var __ipeSSE = null;
+var __ipeOpenAt = 0;          // ms timestamp of last EventSource.open
+var __ipeLastSseAt = 0;       // ms timestamp of any SSE event
+var __ipeHelloOk = false;     // server sent its handshake this connection
+var __ipeWatchdogTimer = null;
+var __ipeSseReopenTimer = null;
+var __ipeForcedClose = false; // true while we're tearing down to reopen
+function __ipeOpenSSE() {
+  __ipeForcedClose = false;
+  __ipeHelloOk = false;
+  __ipeOpenAt = 0;
+  __ipeSSE = new EventSource(__ipeBase + "/_ipe/sse");
+  __ipeSSE.addEventListener("hello", function(e) {
     // Handshake received — we know we hit a real Sky.Live v2 server,
     // not a proxy that intercepted with a generic 200. Anything
     // before hello is suspect, so the connected-state flip happens
     // HERE, not on EventSource.open. Remember that THIS page's
     // server speaks v2 so future watchdog cycles can tighten the
     // wedge-detection threshold to the fast 8s hello timeout.
-    __skyServerSpeaksV2 = true;
-    __skyHelloOk = true;
-    __skyLastSseAt = Date.now();
-    if (__skyStatusGraceTimer !== null) {
-      clearTimeout(__skyStatusGraceTimer);
-      __skyStatusGraceTimer = null;
+    __ipeServerSpeaksV2 = true;
+    __ipeHelloOk = true;
+    __ipeLastSseAt = Date.now();
+    if (__ipeStatusGraceTimer !== null) {
+      clearTimeout(__ipeStatusGraceTimer);
+      __ipeStatusGraceTimer = null;
     }
-    if (__skyStatus !== "connected") {
-      __skySetStatus("connected", "");
+    if (__ipeStatus !== "connected") {
+      __ipeSetStatus("connected", "");
     }
-    __skyRetryAttempts = 0;
-    if (__skyRetryTimer !== null) {
-      clearTimeout(__skyRetryTimer);
-      __skyRetryTimer = null;
+    __ipeRetryAttempts = 0;
+    if (__ipeRetryTimer !== null) {
+      clearTimeout(__ipeRetryTimer);
+      __ipeRetryTimer = null;
     }
-    if (__skyEventQueue.length > 0) __skyDrainQueue();
+    if (__ipeEventQueue.length > 0) __ipeDrainQueue();
   });
-  __skySSE.addEventListener("heartbeat", function(e) {
-    __skyLastSseAt = Date.now();
+  __ipeSSE.addEventListener("heartbeat", function(e) {
+    __ipeLastSseAt = Date.now();
   });
-  __skySSE.addEventListener("patch", function(e) {
-    __skyLastSseAt = Date.now();
+  __ipeSSE.addEventListener("patch", function(e) {
+    __ipeLastSseAt = Date.now();
     // Old servers (pre-handshake) only ever send "patch" events.
     // A real patch is itself proof we're talking to a Sky.Live server,
     // not a proxy-rewritten 200-OK, so treat first-patch-without-hello
     // as an implicit handshake. This keeps a new client from trapping
     // itself when a rolling deploy puts it in front of an old server.
-    if (!__skyHelloOk) {
-      __skyHelloOk = true;
-      if (__skyStatusGraceTimer !== null) {
-        clearTimeout(__skyStatusGraceTimer);
-        __skyStatusGraceTimer = null;
+    if (!__ipeHelloOk) {
+      __ipeHelloOk = true;
+      if (__ipeStatusGraceTimer !== null) {
+        clearTimeout(__ipeStatusGraceTimer);
+        __ipeStatusGraceTimer = null;
       }
-      if (__skyStatus !== "connected") {
-        __skySetStatus("connected", "");
+      if (__ipeStatus !== "connected") {
+        __ipeSetStatus("connected", "");
       }
-      __skyRetryAttempts = 0;
-      if (__skyRetryTimer !== null) {
-        clearTimeout(__skyRetryTimer);
-        __skyRetryTimer = null;
+      __ipeRetryAttempts = 0;
+      if (__ipeRetryTimer !== null) {
+        clearTimeout(__ipeRetryTimer);
+        __ipeRetryTimer = null;
       }
     }
     var frame;
@@ -1366,16 +1366,16 @@ function __skyOpenSSE() {
       // Open-<select> defence (Bug 3): same-cycle as the patches path.
       // SSE-pushed full-body re-renders during an open dropdown would
       // collapse it; skip the body, the next user interaction triggers
-      // reconciliation. Active user paths (sky-nav, popstate, POST
+      // reconciliation. Active user paths (ipe-nav, popstate, POST
       // text fallback) are NOT defended — those are user-initiated and
       // dropping them would be worse UX than the dropdown collapsing.
       if (document.activeElement && document.activeElement.tagName === "SELECT") return;
-      return __skyPatch(e.data.replace(/\\n/g, "\n"));
+      return __ipePatch(e.data.replace(/\\n/g, "\n"));
     }
     if (frame && typeof frame === "object") {
-      __skyHandleResponse(frame.seq, frame.ackInputs, function() {
+      __ipeHandleResponse(frame.seq, frame.ackInputs, function() {
         if (document.activeElement && document.activeElement.tagName === "SELECT") return;
-        if (frame.body) __skyPatch(frame.body.replace(/\\n/g, "\n"));
+        if (frame.body) __ipePatch(frame.body.replace(/\\n/g, "\n"));
       }, frame.globalSeq);
     }
   });
@@ -1388,15 +1388,15 @@ function __skyOpenSSE() {
   // handler above stays for first-renders, reconnect-resync,
   // full-replace fallbacks, and any pre-P50a server.
   //
-  // Shape parity with the HTTP /_sky/event reply: frame is
+  // Shape parity with the HTTP /_ipe/event reply: frame is
   // {seq, ackInputs, patches} — identical to writeEventJSON's
-  // envelope, so __skyApplyPatches consumes both routes without
-  // divergence. seq-gating via __skyHandleResponse means out-of-
+  // envelope, so __ipeApplyPatches consumes both routes without
+  // divergence. seq-gating via __ipeHandleResponse means out-of-
   // order frames (a stale patches frame arriving after a fresher
   // patch frame, e.g. across a brief network blip) are dropped at
   // the same monotonic guard the HTTP path uses.
   //
-  // No open-<select> defence at this outer level — __skyApplyPatches
+  // No open-<select> defence at this outer level — __ipeApplyPatches
   // already has its own per-patch focus-restore + open-select skip
   // (live.go:4386+); applying it twice would surface as a no-op
   // either way, but the inner check is the canonical defence.
@@ -1404,26 +1404,26 @@ function __skyOpenSSE() {
   // the same code path as the HTTP-side patches application, so
   // in-flight typing is preserved without server-side clientState
   // alignment (the SSE producer passes nil clientState to diffTrees;
-  // the client's __skyIsDirty filter takes over).
-  __skySSE.addEventListener("patches", function(e) {
-    __skyLastSseAt = Date.now();
+  // the client's __ipeIsDirty filter takes over).
+  __ipeSSE.addEventListener("patches", function(e) {
+    __ipeLastSseAt = Date.now();
     // Same implicit-handshake defence as the legacy patch listener:
     // a real patches frame proves we're talking to a Sky.Live server,
     // so unstick the hello check even if the dedicated 'hello' event
     // got eaten by a misbehaving proxy.
-    if (!__skyHelloOk) {
-      __skyHelloOk = true;
-      if (__skyStatusGraceTimer !== null) {
-        clearTimeout(__skyStatusGraceTimer);
-        __skyStatusGraceTimer = null;
+    if (!__ipeHelloOk) {
+      __ipeHelloOk = true;
+      if (__ipeStatusGraceTimer !== null) {
+        clearTimeout(__ipeStatusGraceTimer);
+        __ipeStatusGraceTimer = null;
       }
-      if (__skyStatus !== "connected") {
-        __skySetStatus("connected", "");
+      if (__ipeStatus !== "connected") {
+        __ipeSetStatus("connected", "");
       }
-      __skyRetryAttempts = 0;
-      if (__skyRetryTimer !== null) {
-        clearTimeout(__skyRetryTimer);
-        __skyRetryTimer = null;
+      __ipeRetryAttempts = 0;
+      if (__ipeRetryTimer !== null) {
+        clearTimeout(__ipeRetryTimer);
+        __ipeRetryTimer = null;
       }
     }
     var frame;
@@ -1431,28 +1431,28 @@ function __skyOpenSSE() {
     catch (_) {
       // Producer guarantees JSON for event:patches; a non-JSON
       // payload is impossible from a P50a+ server. Drop silently
-      // rather than running __skyPatch on garbage.
+      // rather than running __ipePatch on garbage.
       return;
     }
     if (!frame || typeof frame !== "object" || !frame.patches) return;
-    __skyHandleResponse(frame.seq, frame.ackInputs, function() {
-      __skyApplyPatches(frame.patches);
+    __ipeHandleResponse(frame.seq, frame.ackInputs, function() {
+      __ipeApplyPatches(frame.patches);
     }, frame.globalSeq);
   });
-  __skySSE.addEventListener("open", function() {
+  __ipeSSE.addEventListener("open", function() {
     // EventSource fired open — but we don't trust this alone, since a
     // proxy can rewrite a non-SSE 200 OK into something that fires
     // open without ever delivering a frame. Wait for 'hello' to flip
     // to connected. Just record the open timestamp so the watchdog
     // can measure "how long have we been open without a hello".
-    __skyOpenAt = Date.now();
-    __skyLastSseAt = Date.now();
+    __ipeOpenAt = Date.now();
+    __ipeLastSseAt = Date.now();
   });
-  __skySSE.addEventListener("error", function() {
+  __ipeSSE.addEventListener("error", function() {
     // Suppress the banner when we triggered the close ourselves
     // (force-reopen path) — those errors are an artefact of our own
     // teardown, not a real outage signal.
-    if (__skyForcedClose) return;
+    if (__ipeForcedClose) return;
     // CLOSED (2) means the browser failed the connection permanently.
     // Per the EventSource spec, this happens for any non-200 HTTP
     // response (Caddy/Nginx 502 when upstream is down, 504 timeout,
@@ -1461,72 +1461,72 @@ function __skyOpenSSE() {
     // reconnect ourselves. Without this branch the whole reconnect
     // story collapses behind a reverse proxy that returns proper
     // 5xx codes during outages.
-    if (__skySSE && __skySSE.readyState === 2) {
-      __skyForceReopenSSE();
+    if (__ipeSSE && __ipeSSE.readyState === 2) {
+      __ipeForceReopenSSE();
       return;
     }
     // CONNECTING (0): browser is auto-retrying (network blip, no HTTP
     // response received yet). Show the banner only if the situation
     // persists past the grace window — a quick error+reopen burst
     // shouldn't paint chrome.
-    if (__skyStatus !== "connected") return;
-    if (__skyStatusGraceTimer !== null) return;
-    __skyStatusGraceTimer = setTimeout(function() {
-      __skyStatusGraceTimer = null;
-      if (__skySSE && __skySSE.readyState === 1 && __skyHelloOk) return;
-      __skySetStatus("reconnecting", __skyMsgReconnecting);
+    if (__ipeStatus !== "connected") return;
+    if (__ipeStatusGraceTimer !== null) return;
+    __ipeStatusGraceTimer = setTimeout(function() {
+      __ipeStatusGraceTimer = null;
+      if (__ipeSSE && __ipeSSE.readyState === 1 && __ipeHelloOk) return;
+      __ipeSetStatus("reconnecting", __ipeMsgReconnecting);
     }, 500);
   });
 }
 
-// __skyForceReopenSSE — close the current EventSource and queue a
+// __ipeForceReopenSSE — close the current EventSource and queue a
 // fresh open with backoff. Each call bumps the retry counter; once
-// it exceeds __skyRetryMaxAttempts the banner flips to "offline" but
+// it exceeds __ipeRetryMaxAttempts the banner flips to "offline" but
 // reconnect attempts CONTINUE in the background at the max delay so
 // a healed proxy is picked up automatically (otherwise the user is
 // permanently stuck unless they click something or refresh, which is
 // surprising on push-driven UIs like dashboards or chat). Backoff
 // matches the POST retry schedule so the user doesn't see two
 // independent timers.
-function __skyForceReopenSSE() {
-  __skyForcedClose = true;
-  try { if (__skySSE) __skySSE.close(); } catch (_) {}
-  __skySSE = null;
-  if (__skyStatus === "connected") {
-    __skySetStatus("reconnecting", __skyMsgReconnecting);
+function __ipeForceReopenSSE() {
+  __ipeForcedClose = true;
+  try { if (__ipeSSE) __ipeSSE.close(); } catch (_) {}
+  __ipeSSE = null;
+  if (__ipeStatus === "connected") {
+    __ipeSetStatus("reconnecting", __ipeMsgReconnecting);
   }
-  __skyRetryAttempts++;
+  __ipeRetryAttempts++;
   // Session-loss probe: when the SSE is wedged (typically a server
   // restart with the memory store, or a ipe.toml [live] store change
   // wiping the persistent session), no amount of reopen retries can
   // recover the lost session — the only path forward is a full page
   // reload, which fires handleInitial and creates a fresh session.
-  // We probe with a fake POST: a 404 + X-Sky-Live: 1 + body
+  // We probe with a fake POST: a 404 + X-Ipe-Live: 1 + body
   // containing "session not found" is the unambiguous signal that the
   // server is up but doesn't know our cookie. Anything else (network
   // error, 5xx, healthy 200) keeps the normal retry path engaged so
   // we don't reload on a transient blip — full reload destroys
   // uncontrolled-input state that v0.11.7's preservation rules can't
   // bring back.
-  __skyProbeSessionLost();
-  if (__skyRetryAttempts >= __skyRetryMaxAttempts && __skyStatus !== "offline") {
-    __skySetStatus("offline", __skyMsgOffline);
+  __ipeProbeSessionLost();
+  if (__ipeRetryAttempts >= __ipeRetryMaxAttempts && __ipeStatus !== "offline") {
+    __ipeSetStatus("offline", __ipeMsgOffline);
   }
-  if (__skySseReopenTimer !== null) {
-    clearTimeout(__skySseReopenTimer);
+  if (__ipeSseReopenTimer !== null) {
+    clearTimeout(__ipeSseReopenTimer);
   }
-  var delay = Math.min(__skyRetryBaseMs * Math.pow(2, __skyRetryAttempts - 1), __skyRetryMaxMs);
-  __skySseReopenTimer = setTimeout(function() {
-    __skySseReopenTimer = null;
-    __skyOpenSSE();
+  var delay = Math.min(__ipeRetryBaseMs * Math.pow(2, __ipeRetryAttempts - 1), __ipeRetryMaxMs);
+  __ipeSseReopenTimer = setTimeout(function() {
+    __ipeSseReopenTimer = null;
+    __ipeOpenSSE();
   }, delay);
 }
 
-// __skyProbeSessionLost — fire-and-forget POST whose only purpose is
-// to read the server's reaction to our existing sky_sid cookie. If
+// __ipeProbeSessionLost — fire-and-forget POST whose only purpose is
+// to read the server's reaction to our existing ipe_sid cookie. If
 // the server is up AND has lost our session (memory-store restart,
 // store-kind change, session TTL expiry), we get a 404 with the
-// X-Sky-Live marker and a "session not found" body. That's the cue
+// X-Ipe-Live marker and a "session not found" body. That's the cue
 // to hard-reload — every reopen attempt would otherwise loop on the
 // same 404 forever.
 //
@@ -1536,28 +1536,28 @@ function __skyForceReopenSSE() {
 //   session not found → 404 (the case we're probing for)
 //   session found, handler not found → 404 with a different body
 //   (we explicitly check the body string to avoid false positives).
-var __skyProbedReload = false;  // one-shot guard so we don't trigger
+var __ipeProbedReload = false;  // one-shot guard so we don't trigger
                                 // multiple reloads from a burst of
                                 // failed reopen attempts.
-function __skyProbeSessionLost() {
-  if (__skyProbedReload) return;
+function __ipeProbeSessionLost() {
+  if (__ipeProbedReload) return;
   var headers = {"Content-Type": "application/json"};
-  if (__skyCsrfToken) headers["X-Sky-Csrf"] = __skyCsrfToken;
-  fetch(__skyBase + "/_sky/event", {
+  if (__ipeCsrfToken) headers["X-Ipe-Csrf"] = __ipeCsrfToken;
+  fetch(__ipeBase + "/_ipe/event", {
     method: "POST",
     headers: headers,
-    body: JSON.stringify({sessionId: __skySid, msg: "__skySessionPing", args: []}),
+    body: JSON.stringify({sessionId: __ipeSid, msg: "__ipeSessionPing", args: []}),
     credentials: "same-origin"
   }).then(function(r) {
     if (r.status !== 404) return;
-    if (r.headers.get("X-Sky-Live") !== "1") return;
+    if (r.headers.get("X-Ipe-Live") !== "1") return;
     return r.text().then(function(body) {
       // Specifically "session not found" — distinguishes from
       // "handler not found" (which means the session is fine, just
       // our probe Msg name doesn't exist; that's expected and
       // doesn't warrant a reload).
       if (body.indexOf("session not found") < 0) return;
-      __skyProbedReload = true;
+      __ipeProbedReload = true;
       if (window.console && console.warn) {
         console.warn("[sky.live] server lost our session — reloading page to recover");
       }
@@ -1568,8 +1568,8 @@ function __skyProbeSessionLost() {
   });
 }
 
-// __skyWatchdog — runs every 5s. Two wedge detectors layered:
-//   1. Connection has been quiet for longer than __skyHeartbeatTtlMs
+// __ipeWatchdog — runs every 5s. Two wedge detectors layered:
+//   1. Connection has been quiet for longer than __ipeHeartbeatTtlMs
 //      (35s default). Catches every wedge shape — a proxy holding
 //      the socket open with no body, an upstream 502 rewritten to
 //      200 + HTML, mid-stream TCP stalls. The 35s threshold is
@@ -1577,64 +1577,64 @@ function __skyProbeSessionLost() {
 //      server is new we miss at most one heartbeat before reacting.
 //   2. Faster handshake check: once this PAGE has confirmed the
 //      server speaks the v2 protocol (any session received a hello),
-//      tighten the threshold to __skyHelloTimeoutMs (8s) on every
+//      tighten the threshold to __ipeHelloTimeoutMs (8s) on every
 //      subsequent connection. Pre-v2 servers stay on the slower
 //      heartbeat-ttl path so a rolling deploy doesn't wedge new
 //      clients hitting old pods. The page-scoped flag survives SSE
 //      teardowns + reopens within the same tab.
-// Both paths increment the retry counter via __skyForceReopenSSE,
+// Both paths increment the retry counter via __ipeForceReopenSSE,
 // so a wedge that persists reaches "offline" instead of looping
 // forever — but reopen attempts continue at the max delay so a
 // healed proxy reconnects automatically without a refresh.
-var __skyServerSpeaksV2 = false;
-function __skyWatchdog() {
+var __ipeServerSpeaksV2 = false;
+function __ipeWatchdog() {
   // If we have no live EventSource AND no reopen scheduled, the
   // 'error' handler must have missed (rare race) or some path tore
   // it down without re-arming. Drive the reopen here so the page
   // never gets permanently disconnected.
-  if (!__skySSE && __skySseReopenTimer === null) {
-    __skyForceReopenSSE();
+  if (!__ipeSSE && __ipeSseReopenTimer === null) {
+    __ipeForceReopenSSE();
     return;
   }
-  if (!__skySSE) return;
+  if (!__ipeSSE) return;
   // CLOSED (2): browser failed the connection (non-200, wrong CT)
   // and won't retry. The 'error' handler should have caught this,
   // but cover the case where it didn't fire (e.g. error during
   // initial handshake before listeners attached, or a browser
   // implementation quirk). Single source of truth — both paths end
-  // in __skyForceReopenSSE.
-  if (__skySSE.readyState === 2) {
-    if (!__skyForcedClose) {
-      __skyForceReopenSSE();
+  // in __ipeForceReopenSSE.
+  if (__ipeSSE.readyState === 2) {
+    if (!__ipeForcedClose) {
+      __ipeForceReopenSSE();
     }
     return;
   }
-  if (__skySSE.readyState !== 1) return;  // CONNECTING (0): browser is retrying, leave it
+  if (__ipeSSE.readyState !== 1) return;  // CONNECTING (0): browser is retrying, leave it
   var now = Date.now();
   // Effective threshold:
   //   - Brand-new SSE on a v2-confirmed server → fast hello timeout
   //     (8s) since we expect a hello promptly.
   //   - Otherwise → conservative heartbeat ttl (35s) so old servers
   //     and idle dashboards don't false-positive.
-  var quietMs = now - __skyLastSseAt;
-  var threshold = __skyHeartbeatTtlMs;
-  if (__skyServerSpeaksV2 && !__skyHelloOk) {
-    threshold = __skyHelloTimeoutMs;
+  var quietMs = now - __ipeLastSseAt;
+  var threshold = __ipeHeartbeatTtlMs;
+  if (__ipeServerSpeaksV2 && !__ipeHelloOk) {
+    threshold = __ipeHelloTimeoutMs;
   }
   if (quietMs > threshold) {
     if (window.console && console.warn) {
       console.warn("[sky.live] SSE quiet for " + quietMs +
         "ms (threshold " + threshold + "ms) — reopening");
     }
-    __skyForceReopenSSE();
+    __ipeForceReopenSSE();
   }
 }
 
 // Kick off the SSE connection + watchdog. Watchdog interval is short
 // enough (5s) that a wedge is detected within 5s + helloTimeout / ttl
 // of the actual fault, and long enough to not be a measurable CPU cost.
-__skyOpenSSE();
-__skyWatchdogTimer = setInterval(__skyWatchdog, 5000);
+__ipeOpenSSE();
+__ipeWatchdogTimer = setInterval(__ipeWatchdog, 5000);
 
 // On tab visibility change, re-evaluate immediately — when a tab
 // resumes from background the OS may have torn down the underlying
@@ -1642,7 +1642,7 @@ __skyWatchdogTimer = setInterval(__skyWatchdog, 5000);
 // avoids the user staring at a stale UI for the full watchdog cycle.
 document.addEventListener("visibilitychange", function() {
   if (document.visibilityState === "visible") {
-    __skyWatchdog();
+    __ipeWatchdog();
   }
 });
 
@@ -1650,12 +1650,12 @@ document.addEventListener("visibilitychange", function() {
 // Bind initial DOM event listeners + inject the status banner once
 // the HTML is parsed. Banner needs document.body to exist, so it
 // goes through the same gate as event binding.
-function __skyInit() {
-  __skyBindEvents(document);
-  __skyInjectStatusBanner();
+function __ipeInit() {
+  __ipeBindEvents(document);
+  __ipeInjectStatusBanner();
 }
 if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", __skyInit);
+  document.addEventListener("DOMContentLoaded", __ipeInit);
 } else {
-  __skyInit();
+  __ipeInit();
 }

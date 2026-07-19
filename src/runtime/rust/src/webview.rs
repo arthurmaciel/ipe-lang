@@ -85,29 +85,29 @@ mod imp {
 mod imp {
     use super::*;
     use crate::core::{IpeResult, ok_res};
-    use crate::html::{assign_sky_ids, render_html};
+    use crate::html::{assign_ipe_ids, render_html};
     use crate::live::dispatch::build_index;
 
     // Bridge JS: delegated event listeners on the document forward DOM events on
-    // `[sky-id]` elements to the IPC channel as `{skyId, event, args}`. Re-bound
+    // `[ipe-id]` elements to the IPC channel as `{ipeId, event, args}`. Re-bound
     // implicitly via event delegation, so a full innerHTML swap needs no re-bind.
     const BRIDGE_JS: &str = r#"
 (function(){
-  function send(skyId, ev, args){ try{ window.ipc.postMessage(JSON.stringify({skyId:skyId, event:ev, args:args})); }catch(e){} }
-  function idOf(el){ return el && el.getAttribute ? el.getAttribute('sky-id') : null; }
+  function send(ipeId, ev, args){ try{ window.ipc.postMessage(JSON.stringify({ipeId:ipeId, event:ev, args:args})); }catch(e){} }
+  function idOf(el){ return el && el.getAttribute ? el.getAttribute('ipe-id') : null; }
   // Match the wire-event arg table the HandlerIndex consumes: a checkbox/radio
   // reports its toggle STATE (OnBool reads "true"/"false"), not its static
   // `value` attribute (default "on"); everything else reports `value`
   // (OnString) — number/range deliver the numeric value as its string form.
   function valOf(t){ return (t && (t.type==='checkbox'||t.type==='radio')) ? String(!!t.checked) : ((t && t.value)||''); }
-  document.addEventListener('click', function(e){ var id=idOf(e.target.closest('[sky-id]')); if(id) send(id,'click',[]); });
-  document.addEventListener('input', function(e){ var id=idOf(e.target.closest('[sky-id]')); if(id) send(id,'input',[valOf(e.target)]); }, true);
-  document.addEventListener('change', function(e){ var id=idOf(e.target.closest('[sky-id]')); if(id) send(id,'change',[valOf(e.target)]); }, true);
+  document.addEventListener('click', function(e){ var id=idOf(e.target.closest('[ipe-id]')); if(id) send(id,'click',[]); });
+  document.addEventListener('input', function(e){ var id=idOf(e.target.closest('[ipe-id]')); if(id) send(id,'input',[valOf(e.target)]); }, true);
+  document.addEventListener('change', function(e){ var id=idOf(e.target.closest('[ipe-id]')); if(id) send(id,'change',[valOf(e.target)]); }, true);
   // INVARIANT: `html` is produced by `render_html` (the shared Ipe.Live renderer),
   // which HTML-escapes every text + attribute node — so this innerHTML assignment
   // is not an XSS sink for user data. Any future RAW-html node added to the
   // renderer becomes the XSS boundary and must be audited there.
-  window.__skyApply = function(html){ document.body.innerHTML = html; };
+  window.__ipeApply = function(html){ document.body.innerHTML = html; };
 })();
 "#;
 
@@ -136,10 +136,10 @@ mod imp {
         }
     }
 
-    /// Parse `{skyId, event, args}` (from the bridge) without serde.
+    /// Parse `{ipeId, event, args}` (from the bridge) without serde.
     fn parse_ipc(body: &str) -> Option<(String, String, Vec<String>)> {
         let v: serde_json::Value = serde_json::from_str(body).ok()?;
-        let ipe_id = v.get("skyId")?.as_str()?.to_string();
+        let ipe_id = v.get("ipeId")?.as_str()?.to_string();
         let event = v.get("event")?.as_str()?.to_string();
         let args = v
             .get("args")
@@ -153,7 +153,7 @@ mod imp {
         Some((ipe_id, event, args))
     }
 
-    /// Render the view to an `(html_body, HandlerIndex)` pair, stamping sky-ids.
+    /// Render the view to an `(html_body, HandlerIndex)` pair, stamping ipe-ids.
     fn render<Model, Msg, FView>(
         view: &FView,
         model: &Model,
@@ -164,7 +164,7 @@ mod imp {
         FView: Fn(Model) -> Html<Msg>,
     {
         let mut tree = view(model.clone());
-        assign_sky_ids(&mut tree, "r");
+        assign_ipe_ids(&mut tree, "r");
         crate::live::style_inject::apply_style_injections(&mut tree);
         let index = build_index(&tree);
         (render_html(&tree), index)
@@ -285,7 +285,7 @@ mod imp {
                                 model = next;
                                 let (nbody, nindex) = render::<Model, Msg, _>(&view, &model);
                                 index = nindex;
-                                let js = format!("window.__skyApply({})", json_str(&nbody));
+                                let js = format!("window.__ipeApply({})", json_str(&nbody));
                                 let _ = webview.evaluate_script(&js);
                             }
                         }

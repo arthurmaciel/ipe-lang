@@ -240,9 +240,9 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 
 pub fn main_f(a: i64) -> Box<dyn Fn(i64, i64) -> i64 + Send + Sync + 'static> {
     {
-        let __sky_fn: Box<dyn Fn(i64, i64) -> i64 + Send + Sync + 'static> =
+        let __ipe_fn: Box<dyn Fn(i64, i64) -> i64 + Send + Sync + 'static> =
             Box::new(move |b: i64, c: i64| -> i64 { ((a + b) + c) });
-        __sky_fn
+        __ipe_fn
     }
 }
 pub fn ipe_main() -> IpeTask<()> {

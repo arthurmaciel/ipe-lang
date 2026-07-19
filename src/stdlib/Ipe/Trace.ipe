@@ -3,7 +3,7 @@
 -- Tier-1 spans (HTTP request, session load/save, Msg dispatch, DB /
 -- Auth / Http / File operations) are emitted AUTOMATICALLY by the
 -- runtime — you do not need this module to get a useful trace tree
--- in `/_sky/console`.
+-- in `/_ipe/console`.
 --
 -- Reach for `Ipe.Trace` only when you want an APPLICATION-level span
 -- — a named, logical unit of work that groups the auto-spans

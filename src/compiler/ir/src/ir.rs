@@ -516,7 +516,7 @@ impl BoundSet {
     /// Whether the `IpeRow` (Db field-accessor row) bound is set — see
     /// [`Self::IPE_ROW`].
     #[must_use]
-    pub const fn has_sky_row(self) -> bool {
+    pub const fn has_ipe_row(self) -> bool {
         self.0 & Self::IPE_ROW != 0
     }
 

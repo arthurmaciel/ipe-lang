@@ -99,9 +99,9 @@ Ask one focused question per ambiguity; no guess heroically.
 | DB                   | `Ipe.Db` + SQLite for prototypes; PostgreSQL for multi-instance deploys. |
 | Money / decimals     | `Ipe.Money` on `Ipe.Decimal`.  Never raw `Float` for currency. |
 | Concurrency          | `Cmd.batch` / `Task.parallel`.  In-process pub/sub via `Cmd.publish` + `Sub.subscribeTopic`. |
-| Observability        | `Std.Log` structured logs; dev console auto-mounted at `/_sky/console`; `OTEL_EXPORTER_OTLP_ENDPOINT` for external collector. |
+| Observability        | `Std.Log` structured logs; dev console auto-mounted at `/_ipe/console`; `OTEL_EXPORTER_OTLP_ENDPOINT` for external collector. |
 | Errors               | `Result Error a` / `Task Error a`.  Never `String` as error type. |
-| No raw HTML / JS     | `Std.Ui` HTML-escapes everything.  `data-sky-eval` forbidden. |
+| No raw HTML / JS     | `Std.Ui` HTML-escapes everything.  `data-ipe-eval` forbidden. |
 
 ### `ipe.toml` shape per decision
 
@@ -125,7 +125,7 @@ driver = "sqlite"               # sqlite / postgres
 url = "DATABASE_URL"
 
 [auth]                          # auth != none
-cookie = "sky_sid"
+cookie = "ipe_sid"
 ttl = "24h"
 
 [log]
@@ -142,7 +142,7 @@ mentions "deploy"/"production"/"Cloud Run"/"Kubernetes":
 * Confirm `ENV=production` will be set on runtime.
 * Confirm `IPE_AUTH_TOKEN_SECRET` ≥32 bytes.
 * Confirm `IPE_CONSOLE_AUTH` set (`token` or `app`) — production + unset
-  refuses to mount `/_sky/console`.
+  refuses to mount `/_ipe/console`.
 * Confirm session store NOT `memory` when >1 replica.
 
 Production-grade = survives restart, scales horizontally w/o losing state,
@@ -306,10 +306,10 @@ session stores (memory/sqlite/redis/postgres/firestore), type-safe events,
 VNode diffing.
 
 **`init` is per-session, not per-page-reload.** First request from browser
-w/ no `sky_sid` cookie fires `init`. Browser reload while session alive
+w/ no `ipe_sid` cookie fires `init`. Browser reload while session alive
 RESTORES Model from session store — `init` does NOT run. Force fresh `init`
 (demo reset/e2e bootstrap): `Cmd.perform
-(Cookie.expire "sky_sid")` then reload. If goal = "my other tab missed an
+(Cookie.expire "ipe_sid")` then reload. If goal = "my other tab missed an
 update", use `Cmd.publish` instead.
 
 ### init's `req` shape
@@ -329,7 +329,7 @@ Session bootstrap in init = one-line read:
 
 ```elm
 init req =
-    let sid = Maybe.withDefault "" (Dict.get "sky_sid" req.cookies) in
+    let sid = Maybe.withDefault "" (Dict.get "ipe_sid" req.cookies) in
     ( { session = lookupSession sid }, Cmd.none )
 ```
 
@@ -338,9 +338,9 @@ Apps ignoring `req` build unchanged (row-poly extension).
 ### Per-page `<head>` injection
 
 Optional `head : Model -> List (Html msg)` field on `Live.app` cfg.
-Runtime calls once per full GET (initial load + sky-nav navigation),
+Runtime calls once per full GET (initial load + ipe-nav navigation),
 splices returned list into `<head>` after required `<meta charset>`/
-`<meta viewport>`/`<meta sky-base>` tags. HM sig row-open — apps omitting
+`<meta viewport>`/`<meta ipe-base>` tags. HM sig row-open — apps omitting
 field type-check and build unchanged.
 
 ```elm
@@ -415,7 +415,7 @@ notFound = LoginPage
 ```
 
 **URL-from-Page** (address bar in step w/ programmatic `Navigate` Msgs):
-emit sentinel `<div>` w/ `data-sky-path` on every render. Runtime
+emit sentinel `<div>` w/ `data-ipe-path` on every render. Runtime
 pushes/replaces history when value differs from `location.pathname`.
 
 ```elm
@@ -426,27 +426,27 @@ urlSync : Model -> Element msg
 urlSync model =
     Ui.html
         (Html.node "div"
-            [ Attr.attribute "data-sky-path" (currentPath model) ]
+            [ Attr.attribute "data-ipe-path" (currentPath model) ]
             []
         )
 
 -- Place urlSync inside the view's top-level column, next to the shell.
 ```
 
-`data-sky-path` typed (no JS-in-string, works under strict CSP, no XSS
+`data-ipe-path` typed (no JS-in-string, works under strict CSP, no XSS
 surface). Leave element in DOM after runtime processes it — removing
-orphans its `sky-id`. Path-check keeps call idempotent.
+orphans its `ipe-id`. Path-check keeps call idempotent.
 
-For **link navigation**, add `sky-nav` to `<a>` — runtime intercepts click,
+For **link navigation**, add `ipe-nav` to `<a>` — runtime intercepts click,
 fetches URL, full-body-patches, pushes history. No app code needed.
 **Back/Forward** handled by runtime's popstate listener.
 
 ```elm
-Html.a [ Attr.href "/apps", Attr.attribute "sky-nav" "" ] [ Html.text "Dashboard" ]
+Html.a [ Attr.href "/apps", Attr.attribute "ipe-nav" "" ] [ Html.text "Dashboard" ]
 ```
 
-`data-sky-eval` (runs attribute via `new Function()`) CSP-incompatible —
-use `data-sky-path` for URL updates.
+`data-ipe-eval` (runs attribute via `new Function()`) CSP-incompatible —
+use `data-ipe-path` for URL updates.
 
 **Auth gates around routes.** For public-vs-authenticated apps:
 
@@ -602,8 +602,8 @@ Response` still works. Same pattern works for any function-typed alias:
 ### Dev console
 
 Every Ipe.Live/Ipe.Http.Server app auto-mounts `Ipe.Ui` dev console at
-`/_sky/console` in dev mode, alongside structured logging, Prometheus
-`/_sky/metrics` endpoint, distributed tracing. In production (`ENV`≠dev)
+`/_ipe/console` in dev mode, alongside structured logging, Prometheus
+`/_ipe/metrics` endpoint, distributed tracing. In production (`ENV`≠dev)
 console + banner removed and metrics require auth.
 
 ## Ipe.Ui — typed no-CSS layout DSL
@@ -716,7 +716,7 @@ cascade, page background image).
   `<h1..h6>`, `<main>`, `<nav>`, `<aside>`, `<footer>`, aria-*), `Input`
   (button, text, multiline, email, username, search, currentPassword,
   newPassword, checkbox, radio, radioRow, slider), `Lazy` (LRU-cached
-  subtrees, `IPE_UI_LAZY_CAP=N`), `Keyed` (sky-key for diff identity),
+  subtrees, `IPE_UI_LAZY_CAP=N`), `Keyed` (ipe-key for diff identity),
   `Responsive` (classifyDevice, adapt — Model-driven branching needing
   typed Msg dispatch).
 - **Pseudo-classes** (`:hover`/`:focus-visible`/`:active`/`:disabled`) —

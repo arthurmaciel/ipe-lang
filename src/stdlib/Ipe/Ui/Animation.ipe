@@ -229,7 +229,7 @@ easingToCss e =
 --         content
 --
 -- `name` is the user-visible animation name. The runtime
--- auto-suffixes with the element's sky-id so two elements naming
+-- auto-suffixes with the element's ipe-id so two elements naming
 -- their animation `"fadeIn"` with DIFFERENT keyframes don't collide.
 --
 -- `keyframes` is a list of (percent, props) pairs. Percent values
@@ -341,7 +341,7 @@ renderFrame frame =
 
 
 -- Construct an animation Attribute from a Spec. The runtime
--- handles the `prefers-reduced-motion` gate + sky-id-based name
+-- handles the `prefers-reduced-motion` gate + ipe-id-based name
 -- disambiguation.
 attribute : Spec -> Attribute msg
 attribute spec =

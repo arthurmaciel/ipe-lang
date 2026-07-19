@@ -20,5 +20,5 @@ pub mod input;
 /// `Ipe.Ui.Lazy` kernel helpers — eager evaluation in v1.
 pub mod lazy;
 
-/// `Ipe.Ui.Keyed` kernel helpers — sky-key diff identity (key discarded in v1).
+/// `Ipe.Ui.Keyed` kernel helpers — ipe-key diff identity (key discarded in v1).
 pub mod keyed;

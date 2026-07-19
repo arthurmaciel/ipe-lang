@@ -13,9 +13,9 @@ gate) is FIXED — `dom/diff.rs` routes every patch attribute through
 `insert_safe_attr` → `html::safe_patch_attr` (same `SafeAttrName` +
 URL-scheme policy as first paint, with regression tests). The HIGH latent
 `AttrAttribute` XSS is FIXED behaviourally (every HTML sink routes through
-`render_into_ctx`'s `SafeAttrName`/`sanitise_url_attr`; `data-sky-eval`'s
-`__skyRunEvals` sink is deleted — client.js now only references the
-`__skyRunPaths` replacement). Residual type-level gaps are RT-UI-005.
+`render_into_ctx`'s `SafeAttrName`/`sanitise_url_attr`; `data-ipe-eval`'s
+`__ipeRunEvals` sink is deleted — client.js now only references the
+`__ipeRunPaths` replacement). Residual type-level gaps are RT-UI-005.
 
 ## RT-UI-001 · Unbounded native recursion in Ui render + DOM diff (stack-overflow abort)
 - severity: medium
@@ -32,9 +32,9 @@ URL-scheme policy as first paint, with regression tests). The HIGH latent
 - axis: completeness
 - principle: "Match the reference — diverge ONLY where … recorded in docs/divergences-from-sky.md"; P2 correctness (claimed capability silently no-ops)
 - location: `src/runtime/rust/src/ui/keyed.rs:17-32` (+ `html.rs:714-733` `ipe_id_key`, the machinery it fails to use)
-- reachability: any app using `Keyed.column`/`Keyed.row` (advertised in the authoring reference as "Keyed (sky-key for diff identity)") with reorderable lists containing uncontrolled inputs or focus.
-- problem: `keyed_column_`/`keyed_row_` drop the key string entirely instead of attaching the `sky-key` attribute that `assign_sky_ids` already consumes (the `:{key}` sky-id segment exists precisely so keyed items keep identity across reorder — see html.rs test `keyed_items_keep_id_across_reorder`). The module doc claims this is "semantically correct (keys are a performance hint, not a behavioural contract)" — false for this runtime: without keys, reordering shifts positional sky-ids, so the diff patches the wrong elements and uncontrolled-input state / focus attaches to the wrong row. The doc also cites "docs/divergences-from-sky.md §B-Keyed" — no such section exists (only §B-Lazy); the divergence is unrecorded, violating the ledger requirement.
-- fix direction: attach `AttrAttribute("sky-key", key)` to each keyed child (one line each; the downstream machinery is already built and tested), or record the divergence honestly and correct the comment.
+- reachability: any app using `Keyed.column`/`Keyed.row` (advertised in the authoring reference as "Keyed (ipe-key for diff identity)") with reorderable lists containing uncontrolled inputs or focus.
+- problem: `keyed_column_`/`keyed_row_` drop the key string entirely instead of attaching the `ipe-key` attribute that `assign_ipe_ids` already consumes (the `:{key}` ipe-id segment exists precisely so keyed items keep identity across reorder — see html.rs test `keyed_items_keep_id_across_reorder`). The module doc claims this is "semantically correct (keys are a performance hint, not a behavioural contract)" — false for this runtime: without keys, reordering shifts positional ipe-ids, so the diff patches the wrong elements and uncontrolled-input state / focus attaches to the wrong row. The doc also cites "docs/divergences-from-sky.md §B-Keyed" — no such section exists (only §B-Lazy); the divergence is unrecorded, violating the ledger requirement.
+- fix direction: attach `AttrAttribute("ipe-key", key)` to each keyed child (one line each; the downstream machinery is already built and tested), or record the divergence honestly and correct the comment.
 - prior: new
 
 ## RT-UI-003 · wasm patch sink omits `selected` from DOM-property sync (client.js divergence)

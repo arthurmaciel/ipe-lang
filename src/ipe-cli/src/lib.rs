@@ -1612,7 +1612,7 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
 
 /// Run the three post-emit bundle steps for `--target wasm`:
 /// 1. `cargo build --target wasm32-unknown-unknown --release` (THE SEAL cross-target)
-/// 2. `wasm-bindgen` CLI — emits the JS glue + `www/pkg/sky_app_bg.wasm`
+/// 2. `wasm-bindgen` CLI — emits the JS glue + `www/pkg/ipe_app_bg.wasm`
 /// 3. `wasm-opt -Oz` — optional; silently skipped when not on PATH
 ///
 /// Writes the final `www/pkg/` tree into `out_dir/www/pkg/`. On success the
@@ -1646,13 +1646,13 @@ fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
             std::path::PathBuf::from(d)
                 .join("wasm32-unknown-unknown")
                 .join("release")
-                .join("sky_app.wasm")
+                .join("ipe_app.wasm")
         });
         let via_crate = out_dir
             .join("target")
             .join("wasm32-unknown-unknown")
             .join("release")
-            .join("sky_app.wasm");
+            .join("ipe_app.wasm");
         via_env.filter(|p| p.is_file()).unwrap_or(via_crate)
     };
 
@@ -1684,7 +1684,7 @@ fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
 
     // Step 3: wasm-opt -Oz — optional size pass; silently skip when absent
     // (`Command::new` returns `Err` when the tool is missing).
-    let bg_wasm = pkg_dir.join("sky_app_bg.wasm");
+    let bg_wasm = pkg_dir.join("ipe_app_bg.wasm");
     if bg_wasm.is_file()
         && let Ok(status) = std::process::Command::new("wasm-opt")
             .args([

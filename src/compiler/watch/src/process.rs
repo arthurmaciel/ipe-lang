@@ -86,14 +86,14 @@ fn sha256(bytes: &[u8]) -> [u8; 32] {
 /// How readiness is probed for a freshly spawned candidate.
 ///
 /// Chosen by the caller from what it knows about the emitted project
-/// (Ipe.Live apps expose `/_sky/readyz`; everything else falls back to a
+/// (Ipe.Live apps expose `/_ipe/readyz`; everything else falls back to a
 /// plain TCP connect on the configured port, and finally to "did it stay
 /// alive" for a program that binds no port at all — matching the design
-/// doc's own bifurcation: "readiness probe (`/_sky/readyz` for Ipe.Live;
+/// doc's own bifurcation: "readiness probe (`/_ipe/readyz` for Ipe.Live;
 /// alive + optional health for CLI)").
 #[derive(Debug, Clone, Copy)]
 pub enum ReadinessCheck {
-    /// GET `/_sky/readyz` on `127.0.0.1:port`; ready on any 2xx response.
+    /// GET `/_ipe/readyz` on `127.0.0.1:port`; ready on any 2xx response.
     HttpReadyz { port: u16 },
     /// A bare TCP connect to `127.0.0.1:port` succeeding is enough (no
     /// process-level readiness endpoint to ask, e.g. `Ipe.Http.Server`).
@@ -433,7 +433,7 @@ fn spawn_and_await_ready(
 /// the readiness signal for a program with no network surface to ask).
 fn probe_once(readiness: &ReadinessCheck) -> bool {
     match *readiness {
-        ReadinessCheck::HttpReadyz { port } => http_get_ok(port, "/_sky/readyz"),
+        ReadinessCheck::HttpReadyz { port } => http_get_ok(port, "/_ipe/readyz"),
         ReadinessCheck::TcpConnect { port } => tcp_connect_ok(port),
         ReadinessCheck::AliveGrace { .. } => false,
     }

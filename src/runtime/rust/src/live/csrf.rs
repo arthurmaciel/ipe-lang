@@ -2,7 +2,7 @@
 //!
 //! Mirror of Go's `csrf_middleware.go` (double-submit cookie) + `setSecurityHeaders`
 //! (live.go), with a few hardening additions over the Go oracle:
-//!   - the `__sky_csrf` cookie is `SameSite=Strict` + `Secure` (in production /
+//!   - the `__ipe_csrf` cookie is `SameSite=Strict` + `Secure` (in production /
 //!     frame-ancestors mode) — SameSite=Strict is itself a strong CSRF defense,
 //!     the double-submit token is belt-and-suspenders;
 //!   - an OPT-IN `Origin`/`Host` same-origin check (`IPE_LIVE_CSRF_ORIGIN_CHECK=on`)
@@ -11,7 +11,7 @@
 //!   - `X-Content-Type-Options: nosniff` + a restrictive `Permissions-Policy`
 //!     beyond Go's header set.
 //!
-//! The Ipe.Live client POSTs JSON to `/_sky/event` with an `X-Sky-Csrf` header
+//! The Ipe.Live client POSTs JSON to `/_ipe/event` with an `X-Ipe-Csrf` header
 //! (never a form body), so the middleware validates header-vs-cookie WITHOUT
 //! reading the request body — no buffering, no body-consumption hazard.
 
@@ -23,7 +23,7 @@ use axum::response::{IntoResponse, Response};
 /// (production / TLS / frame-ancestors), use the `__Host-` prefix —the browser
 /// then refuses any `Set-Cookie` carrying a `Domain=` attribute, which blocks
 /// the sibling-subdomain cookie-fixation vector (an attacker on
-/// `evil.example.com` with a valid cert can otherwise plant `__sky_csrf` for
+/// `evil.example.com` with a valid cert can otherwise plant `__ipe_csrf` for
 /// `example.com`). `__Host-` MANDATES Secure+Path=/+no-Domain, so it can't be
 /// used over plain-HTTP dev — there we fall back to the bare name (SameSite=Strict
 /// is still the primary guard, and HTTPS-subdomain injection is impossible without
@@ -32,11 +32,11 @@ pub fn csrf_cookie_name() -> &'static str {
     if cookies_secure() {
         "__Host-ipe_csrf"
     } else {
-        "__sky_csrf"
+        "__ipe_csrf"
     }
 }
 /// The header the client echoes the token in (Go parity: `X-Ipê-Csrf`).
-pub const CSRF_HEADER: &str = "x-sky-csrf";
+pub const CSRF_HEADER: &str = "x-ipe-csrf";
 
 /// CSRF protection is ON by default; `IPE_CSRF=off|0|false` disables it
 /// (Go parity: the `IPE_CSRF` env switch / ipe.toml `[security] csrf`).
@@ -139,14 +139,14 @@ pub fn csrf_set_cookie(token: &str) -> String {
 pub fn is_exempt_path(path: &str) -> bool {
     matches!(
         path,
-        "/_sky/healthz"
-            | "/_sky/readyz"
-            | "/_sky/metrics"
-            | "/_sky/buildinfo"
-            | "/_sky/sse"
-            | "/_sky/observability/ingest"
-    ) || path == "/_sky/console"
-        || path.starts_with("/_sky/console/")
+        "/_ipe/healthz"
+            | "/_ipe/readyz"
+            | "/_ipe/metrics"
+            | "/_ipe/buildinfo"
+            | "/_ipe/sse"
+            | "/_ipe/observability/ingest"
+    ) || path == "/_ipe/console"
+        || path.starts_with("/_ipe/console/")
 }
 
 /// Optional same-origin `Origin`/`Host` check (opt-in via

@@ -185,8 +185,8 @@ fn maybe_and_map_fn_payload_accepted() {
 /// from the constructor arg, so `Box::new(closure)` would pin the CONCRETE
 /// closure type and the later use against `Box<dyn Fn>` fail to unsize-coerce
 /// across the `let` boundary. So the trait-object type is pinned at the lambda's
-/// own emission site (`{ let __sky_fn: Box<dyn Fn(..)->..> = Box::new(closure);
-/// __sky_fn }`), the same technique `emit_func_value` uses for a named fn value.
+/// own emission site (`{ let __ipe_fn: Box<dyn Fn(..)->..> = Box::new(closure);
+/// __ipe_fn }`), the same technique `emit_func_value` uses for a named fn value.
 /// Passing the fn-carrier through a type-annotated function boundary
 /// (`applyIt : Result Error (Int -> Int) -> Int`) is what makes the bug
 /// reachable — Rust's whole-function inference cannot patch the closure type

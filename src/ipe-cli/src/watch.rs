@@ -149,7 +149,7 @@ pub struct WatchOptions {
     pub out_dir: PathBuf,
     pub runtime_dir: PathBuf,
     /// The port injected as `IPE_LIVE_PORT` for the spawned child and probed
-    /// for `/_sky/readyz` when the emitted project is detected as a
+    /// for `/_ipe/readyz` when the emitted project is detected as a
     /// Ipe.Live app. Harmless (ignored) for every other app shape.
     pub port: u16,
     pub debounce: ipe_watch::DebounceConfig,
@@ -985,11 +985,11 @@ fn run_inner(
 /// call (`crates/ipe_backend_rust/src/emit_live.rs`) — deterministic,
 /// compiler-controlled text, not user input, so a substring check is sound
 /// here (unlike parsing arbitrary user text). Ipe.Live apps get the
-/// precise `/_sky/readyz` probe; every other shape (Ipe.Http.Server has no
+/// precise `/_ipe/readyz` probe; every other shape (Ipe.Http.Server has no
 /// readiness endpoint yet, and its listen port is a Ipê-source-level
 /// argument this driver cannot statically know) falls back to
 /// `AliveGrace` — matching the design doc's own readiness bifurcation
-/// ("`/_sky/readyz` for Ipe.Live; alive + optional health for CLI").
+/// ("`/_ipe/readyz` for Ipe.Live; alive + optional health for CLI").
 fn is_sky_live_project(emitted: &ipe_backend::EmittedProject) -> bool {
     emitted
         .files

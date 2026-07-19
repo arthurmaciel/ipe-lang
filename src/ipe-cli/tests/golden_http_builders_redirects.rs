@@ -50,9 +50,9 @@ fn redirect_builders_compile_and_run() {
     // `http_with_url(...)` call, which would be a SEAL breach at cargo).
     let emitted = std::fs::read_to_string(out.join("src").join("main.rs")).unwrap_or_default();
     for needle in [
-        "__sky_rec.url = ",
-        "__sky_rec.followRedirects = ",
-        "__sky_rec.maxRedirects = ",
+        "__ipe_rec.url = ",
+        "__ipe_rec.followRedirects = ",
+        "__ipe_rec.maxRedirects = ",
     ] {
         assert!(
             emitted.contains(needle),
@@ -60,7 +60,7 @@ fn redirect_builders_compile_and_run() {
              Relevant lines:\n{}",
             emitted
                 .lines()
-                .filter(|l| l.contains("__sky_rec"))
+                .filter(|l| l.contains("__ipe_rec"))
                 .take(10)
                 .collect::<Vec<_>>()
                 .join("\n")

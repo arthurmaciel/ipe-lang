@@ -7,7 +7,7 @@
 //!
 //! `oracle_divergence = true` — verified by direct assertions against the
 //! semantics documented in `../sky`'s `Ipe.Ui.sky` `mediaQuery` (wrapper
-//! `<div>` carrying `data-sky-mq-q` / `data-sky-mq-rules` markers), not a
+//! `<div>` carrying `data-ipe-mq-q` / `data-ipe-mq-rules` markers), not a
 //! cached oracle file.
 //!
 //! ## What is tested
@@ -26,8 +26,8 @@
 //!   child still renders.
 //!
 //! (Plain `Html.render` keeps the markers visible; the Live/Webview pipelines
-//! expand them via `apply_style_injections` into the sky-id-scoped
-//! `<style data-sky-mq="<sid>">@media <q> { [sky-id="<sid>"] { <rules> } }
+//! expand them via `apply_style_injections` into the ipe-id-scoped
+//! `<style data-ipe-mq="<sid>">@media <q> { [ipe-id="<sid>"] { <rules> } }
 //! </style>` block — that half is pinned by the runtime unit tests in
 //! `src/runtime/rust/src/live/style_inject.rs`.)
 //!
@@ -84,11 +84,11 @@ fn ui_mediaquery_compiles_builds_and_renders_markers() {
 
     // ── Ui.mediaQuery — wrapper with the marker pair ──────────────────────
     assert!(
-        mq.contains("data-sky-mq-q=\"(min-width: 768px)\""),
+        mq.contains("data-ipe-mq-q=\"(min-width: 768px)\""),
         "Ui.mediaQuery must emit the verbatim query marker\n--- mq ---\n{mq}"
     );
     assert!(
-        mq.contains("data-sky-mq-rules=\"background-color:rgba(18,18,24,1)\""),
+        mq.contains("data-ipe-mq-rules=\"background-color:rgba(18,18,24,1)\""),
         "Ui.mediaQuery must emit the collector-built rules marker\n--- mq ---\n{mq}"
     );
     assert!(
@@ -98,17 +98,17 @@ fn ui_mediaquery_compiles_builds_and_renders_markers() {
 
     // ── Ui.breakpoint — delegates to the same mechanism ───────────────────
     assert!(
-        mq.contains("data-sky-mq-q=\"(max-width: 767px)\""),
+        mq.contains("data-ipe-mq-q=\"(max-width: 767px)\""),
         "Ui.breakpoint Ui.mobile must emit the mobile query marker\n--- mq ---\n{mq}"
     );
     assert!(
-        mq.contains("data-sky-mq-rules=\"background-color:rgba(1,2,3,1)\""),
+        mq.contains("data-ipe-mq-rules=\"background-color:rgba(1,2,3,1)\""),
         "Ui.breakpoint rules marker missing\n--- mq ---\n{mq}"
     );
 
     // ── SECURITY: breakout query dropped fail-closed at the producer ──────
     assert!(
-        !evil.contains("data-sky-mq-q") && !evil.contains("data-sky-mq-rules"),
+        !evil.contains("data-ipe-mq-q") && !evil.contains("data-ipe-mq-rules"),
         "breakout query must drop BOTH markers\n--- evil ---\n{evil}"
     );
     assert!(

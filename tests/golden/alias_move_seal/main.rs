@@ -270,9 +270,9 @@ pub fn main_let_pos(pair: (String, String)) -> String {
 }
 pub fn main_nested_pos(arg_1: (String, (String, String))) -> String {
     ({
-        let (__sky_bind_0, __sky_bind_1) = arg_1;
-        let h = __sky_bind_0;
-        let inner = __sky_bind_1;
+        let (__ipe_bind_0, __ipe_bind_1) = arg_1;
+        let h = __ipe_bind_0;
+        let inner = __ipe_bind_1;
         let (c, d) = inner.clone();
         ({
             let (e, f) = inner;

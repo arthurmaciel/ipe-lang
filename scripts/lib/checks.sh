@@ -302,8 +302,8 @@ _boot_server_at() {
 }
 
 # ── _norm_body_for_equiv <body> <logfile>: normalize HTML before body-compare ──
-# Ipe.Live pages carry id="sky-root"; the normaliser collapses the known
-# implementation-freedom surface (sky-id format, attr order, event encoding,
+# Ipe.Live pages carry id="ipe-root"; the normaliser collapses the known
+# implementation-freedom surface (ipe-id format, attr order, event encoding,
 # style delivery child vs data-* attributes) so the diff shows only
 # behaviourally-meaningful divergences. For non-HTML responses (JSON, plain
 # text) the body is returned unmodified.
@@ -313,7 +313,7 @@ _boot_server_at() {
 # an unexpected Python error doesn't silently flip MATCH to DIFFER.
 _norm_body_for_equiv() {
   local body="$1" log="${2:-/dev/null}"
-  if [[ "$body" == *'id="sky-root"'* ]]; then
+  if [[ "$body" == *'id="ipe-root"'* ]]; then
     local tf rc normed
     tf="$(mktemp "${TMPDIR:-/tmp}/sky-eqvnorm.XXXXXX.html")"
     printf '%s' "$body" >"$tf"
@@ -324,7 +324,7 @@ _norm_body_for_equiv() {
       printf '%s' "$normed"
     else
       # normaliser unexpectedly failed — return raw body, log the issue
-      printf 'WARN: equivalence_normalize_html.py exit %s for sky-root page\n' "$rc" >>"$log"
+      printf 'WARN: equivalence_normalize_html.py exit %s for ipe-root page\n' "$rc" >>"$log"
       printf '%s' "$body"
     fi
   else
@@ -334,8 +334,8 @@ _norm_body_for_equiv() {
 
 # ── exercise_server_equiv <go_bin> <rust_bin> <example_dir> <log> ────────────
 # SERVER body-equivalence: boot Go and Rust on separate ports (isolated cwds) and
-# compare comparable GET-route bodies.  HTML bodies containing id="sky-root" are
-# normalized via _norm_body_for_equiv before comparison (collapses sky-id format,
+# compare comparable GET-route bodies.  HTML bodies containing id="ipe-root" are
+# normalized via _norm_body_for_equiv before comparison (collapses ipe-id format,
 # attribute order, event-encoding, style-delivery differences). PRINTS a result:
 #   equivalence-body N · equivalence-serve · DIFFER · go-ref-broken · rust-broken
 # Used only in the PHASED Go≡Rust equivalence step (NO_EQUIV=0); dormant in phase 1.
@@ -400,11 +400,11 @@ exercise_server_equiv() {
   for route in "${!gobody[@]}"; do
     local r1 gcmp rcmp html_norm=0
     r1="$(curl -s -m 2 "http://127.0.0.1:$rp$route" 2>/dev/null)"
-    # Normalize HTML bodies so sky-id format / attr order / event encoding /
+    # Normalize HTML bodies so ipe-id format / attr order / event encoding /
     # style delivery differences don't produce false DIFFERs.
     gcmp="$(_norm_body_for_equiv "${gobody[$route]}" "$log")"
     rcmp="$(_norm_body_for_equiv "$r1" "$log")"
-    [[ "${gobody[$route]}" == *'id="sky-root"'* ]] && html_norm=1
+    [[ "${gobody[$route]}" == *'id="ipe-root"'* ]] && html_norm=1
     if [ "$gcmp" = "$rcmp" ]; then
       n=$((n + 1))
       if [ "$html_norm" = 1 ]; then

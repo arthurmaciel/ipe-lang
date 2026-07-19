@@ -9,8 +9,8 @@
 //!   subprocess, and returns the compiled bundle or a diagnostic on error.
 //!
 //! The bundle response carries the five files the WASM browser runtime needs:
-//! `www/index.html`, `www/boot.js`, `www/pkg/sky_app.js`, and
-//! `www/pkg/sky_app_bg.wasm` (base64-encoded), plus the compile diagnostics
+//! `www/index.html`, `www/boot.js`, `www/pkg/ipe_app.js`, and
+//! `www/pkg/ipe_app_bg.wasm` (base64-encoded), plus the compile diagnostics
 //! string on failure.
 //!
 //! # Isolation
@@ -89,9 +89,9 @@ struct CompileSuccess {
     index_html: String,
     /// `www/boot.js`
     boot_js: String,
-    /// `www/pkg/sky_app.js`  (wasm-bindgen glue)
+    /// `www/pkg/ipe_app.js`  (wasm-bindgen glue)
     pkg_js: String,
-    /// `www/pkg/sky_app_bg.wasm` (binary, base64-encoded)
+    /// `www/pkg/ipe_app_bg.wasm` (binary, base64-encoded)
     pkg_wasm_b64: String,
 }
 
@@ -223,8 +223,8 @@ fn read_bundle(out_dir: &Path) -> Result<CompileSuccess, String> {
 
     let index_html = read_text(&www.join("index.html"))?;
     let boot_js = read_text(&www.join("boot.js"))?;
-    let pkg_js = read_text(&www.join("pkg").join("sky_app.js"))?;
-    let wasm_bytes = read_bytes(&www.join("pkg").join("sky_app_bg.wasm"))?;
+    let pkg_js = read_text(&www.join("pkg").join("ipe_app.js"))?;
+    let wasm_bytes = read_bytes(&www.join("pkg").join("ipe_app_bg.wasm"))?;
     let pkg_wasm_b64 = base64_encode(&wasm_bytes);
 
     Ok(CompileSuccess {

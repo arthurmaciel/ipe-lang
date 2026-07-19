@@ -42,10 +42,10 @@ def old_mask(v):
 
 
 def page_with_bar(x, y, width, height):
-    """A minimal Ipe.Live #sky-root page carrying one SVG <rect> — the shape
+    """A minimal Ipe.Live #ipe-root page carrying one SVG <rect> — the shape
     Ipe.Ui.Chart.bar emits (src/stdlib/Std/Ui/Chart.ipe)."""
     return (
-        '<html><body><div id="sky-root">'
+        '<html><body><div id="ipe-root">'
         '<svg width="480" height="200">'
         '<rect x="%s" y="%s" width="%s" height="%s" fill="#4080e0"></rect>'
         '</svg>'
@@ -157,7 +157,7 @@ class OldMaskWasAFalseGreenHoleTests(unittest.TestCase):
 
 
 class FullPipelineTests(unittest.TestCase):
-    """End-to-end through `normalize()` (file → canonical #sky-root text),
+    """End-to-end through `normalize()` (file → canonical #ipe-root text),
     the same call path `scripts/lib/checks.sh`'s `_norm_body_for_equiv` uses
     in the real sweep."""
 

@@ -185,7 +185,7 @@ wasm-client = []
 [lib]
 # Browser WASM module. Same source layout as the binary targets; the crate
 # root stays `src/main.rs`.
-name = "sky_app"
+name = "ipe_app"
 crate-type = ["cdylib"]
 path = "src/main.rs"
 
@@ -1255,7 +1255,7 @@ fn assemble_project_files(
         );
         files.insert(
             RelPath::new("www/boot.js")?,
-            "import init from \"./pkg/sky_app.js\";\ninit();\n".to_owned(),
+            "import init from \"./pkg/ipe_app.js\";\ninit();\n".to_owned(),
         );
         format_generated_rust_files(&mut files)?;
         return Ok(EmittedProject {

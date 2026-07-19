@@ -246,26 +246,26 @@ pub fn main_inc(n: i64) -> i64 {
 }
 pub fn main_make_inc(base: i64) -> Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> {
     {
-        let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> = Box::new(crate::main_inc);
-        __sky_fn
+        let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> = Box::new(crate::main_inc);
+        __ipe_fn
     }
 }
 pub fn ipe_main() -> IpeTask<()> {
     ({
         let a = crate::main_apply_twice(
             {
-                let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
+                let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
                     Box::new(move |n: i64| -> i64 { (n + 3) });
-                __sky_fn
+                __ipe_fn
             },
             1,
         );
         ({
             let b = crate::main_apply_twice(
                 {
-                    let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
+                    let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
                         Box::new(crate::main_inc);
-                    __sky_fn
+                    __ipe_fn
                 },
                 1,
             );

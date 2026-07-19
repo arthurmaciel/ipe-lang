@@ -11,8 +11,8 @@ import Ipe.Ui.Background as Background
 -- `Ui.breakpoint`, which now delegates to the same marker-emitting
 -- mechanism instead of the Phase-0 passthrough stub.
 -- oracle_divergence = true: skyc's own correct output, not a Go oracle diff.
--- (Plain Html.render leaves the data-sky-mq-* markers visible; the Live /
--- Webview pipelines expand them into the sky-id-scoped <style> block via
+-- (Plain Html.render leaves the data-ipe-mq-* markers visible; the Live /
+-- Webview pipelines expand them into the ipe-id-scoped <style> block via
 -- apply_style_injections — pinned by the runtime unit tests.)
 
 

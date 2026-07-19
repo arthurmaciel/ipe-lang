@@ -522,10 +522,10 @@ fn extract_cookie(raw_headers: &str, name: &str) -> Option<String> {
     None
 }
 
-/// Extract the `data-sky-hid` attribute value from the nearest element that
+/// Extract the `data-ipe-hid` attribute value from the nearest element that
 /// directly contains the given text node.
 ///
-/// Searches backwards from `>TEXT<` for `data-sky-hid="…"` within the
+/// Searches backwards from `>TEXT<` for `data-ipe-hid="…"` within the
 /// element's opening tag — the runtime emits this attribute on every element
 /// that carries at least one event handler, keyed to the handler-index lookup.
 ///
@@ -536,7 +536,7 @@ fn extract_hid_near_text(html: &str, text: &str) -> Option<String> {
     let text_pos = html.find(&marker)?;
     // Everything before the `>` that closes the element's start tag.
     let before = &html[..text_pos];
-    let attr_prefix = "data-sky-hid=\"";
+    let attr_prefix = "data-ipe-hid=\"";
     // `rfind`: take the NEAREST (last) occurrence — the direct parent's id,
     // not an ancestor's.
     let hid_pos = before.rfind(attr_prefix)?;
@@ -545,7 +545,7 @@ fn extract_hid_near_text(html: &str, text: &str) -> Option<String> {
     Some(after[..end].to_string())
 }
 
-/// Extract the `data-sky-hid` attribute value from the FIRST `<tag …>` open
+/// Extract the `data-ipe-hid` attribute value from the FIRST `<tag …>` open
 /// tag in `html` (e.g. `"form"`) — used for elements (like `<form>`) that
 /// don't necessarily wrap a distinguishing text node directly.
 ///
@@ -556,7 +556,7 @@ fn extract_hid_for_open_tag(html: &str, tag: &str) -> Option<String> {
     let after_tag = &html[tag_pos..];
     let tag_end = after_tag.find('>')?;
     let tag_slice = &after_tag[..tag_end];
-    let attr_prefix = "data-sky-hid=\"";
+    let attr_prefix = "data-ipe-hid=\"";
     let hid_pos = tag_slice.find(attr_prefix)?;
     let after = &tag_slice[hid_pos + attr_prefix.len()..];
     let end = after.find('"')?;
@@ -583,7 +583,7 @@ fn extract_hid_for_open_tag(html: &str, tag: &str) -> Option<String> {
 /// ```
 ///
 /// The assertion uses `>0<` rather than the bare character `'0'` to avoid
-/// false positives from CSS values, sky-ids, or other numeric occurrences in
+/// false positives from CSS values, ipe-ids, or other numeric occurrences in
 /// the generated page markup.
 ///
 /// The `live` Cargo feature is injected by `emit_program` when `uses_live` is
@@ -608,10 +608,10 @@ fn live_get_root_contains_initial_count() -> Result<(), BoxError> {
     let addr = format!("127.0.0.1:{port}");
     let body = http_get(test_name, &addr, "/")?;
 
-    // The rendered page wraps every text node in an element with a sky-id.
+    // The rendered page wraps every text node in an element with a ipe-id.
     // The counter is `Ui.text (String.fromInt 0)` → renders text "0" inside
     // an element.  We assert the `>0<` sequence to distinguish the counter
-    // text node from other numeric occurrences in page markup (sky-ids, CSS
+    // text node from other numeric occurrences in page markup (ipe-ids, CSS
     // values, etc.).
     assert!(
         body.contains(">0<"),
@@ -693,7 +693,7 @@ fn live_lambda_subscriptions_build_only() -> Result<(), BoxError> {
 }
 
 /// A click on the `+` element increments the counter: `GET /` → extract
-/// session cookie + sky-id of the `+` element → `POST /_sky/event` (click) →
+/// session cookie + ipe-id of the `+` element → `POST /_ipe/event` (click) →
 /// wait for the async model update → `GET /` with session cookie → body
 /// contains `>1<`.
 ///
@@ -701,12 +701,12 @@ fn live_lambda_subscriptions_build_only() -> Result<(), BoxError> {
 ///
 /// 1. `GET /` → axum sets `ipe_sid=<sid>` in `Set-Cookie`.  The initial model
 ///    (`count = 0`) is rendered with `>0<`.
-/// 2. The rendered HTML carries `data-sky-hid="<sky-id>"` on every element
+/// 2. The rendered HTML carries `data-ipe-hid="<ipe-id>"` on every element
 ///    that has event handlers.  The `Ui.el [ Ui.onClick Increment ]` element
 ///    (containing `+`) is found by searching backwards from `>+<` for the
-///    nearest `data-sky-hid`.
-/// 3. `POST /_sky/event` with body
-///    `{"id":"<sky-id>","msg":"click","args":[],"sessionId":""}` and
+///    nearest `data-ipe-hid`.
+/// 3. `POST /_ipe/event` with body
+///    `{"id":"<ipe-id>","msg":"click","args":[],"sessionId":""}` and
 ///    `Cookie: ipe_sid=<sid>`.  The runtime authenticates via the COOKIE only;
 ///    the body's `sessionId` is ignored per the security policy.
 /// 4. The event is enqueued via `try_send` and processed asynchronously by
@@ -734,7 +734,7 @@ fn live_onclick_increments_counter() -> Result<(), BoxError> {
     let _guard = spawn_and_wait_ready(test_name, &exe, port)?;
     let addr = format!("127.0.0.1:{port}");
 
-    // ── Step 1: GET / — initial page, extract session cookie + sky-id ─────────
+    // ── Step 1: GET / — initial page, extract session cookie + ipe-id ─────────
     let (raw_headers, body) = http_send(test_name, &addr, "GET", "/", &[], None)?;
 
     let sid = extract_cookie(&raw_headers, "ipe_sid").ok_or_else(|| -> BoxError {
@@ -747,14 +747,14 @@ fn live_onclick_increments_counter() -> Result<(), BoxError> {
 
     let hid = extract_hid_near_text(&body, "+").ok_or_else(|| -> BoxError {
         format!(
-            "{test_name}: could not find data-sky-hid near '>+<' in GET / body\n\
+            "{test_name}: could not find data-ipe-hid near '>+<' in GET / body\n\
              --- first 2000 bytes ---\n{}",
             &body[..body.len().min(2000)]
         )
         .into()
     })?;
 
-    // ── Step 2: POST /_sky/event — Increment click ───────────────────────────
+    // ── Step 2: POST /_ipe/event — Increment click ───────────────────────────
     //
     // `msg` carries the event name (the runtime prefers `event`, then `msg`,
     // then defaults to "click").  `sessionId` is retained in the body for
@@ -765,7 +765,7 @@ fn live_onclick_increments_counter() -> Result<(), BoxError> {
         test_name,
         &addr,
         "POST",
-        "/_sky/event",
+        "/_ipe/event",
         &[
             ("Content-Type", "application/json"),
             ("Cookie", &cookie_header),
@@ -775,7 +775,7 @@ fn live_onclick_increments_counter() -> Result<(), BoxError> {
 
     assert!(
         post_body.contains("patches"),
-        "{test_name}: POST /_sky/event did not return a patches ACK\nbody: {post_body}"
+        "{test_name}: POST /_ipe/event did not return a patches ACK\nbody: {post_body}"
     );
 
     // ── Step 3: wait for async model update ─────────────────────────────────
@@ -1112,8 +1112,8 @@ fn live_onsubmit_typed_record_build_only() -> Result<(), BoxError> {
 ///
 /// ## Wire protocol exercised
 ///
-/// 1. `GET /` → session cookie + the `<form>`'s `data-sky-hid`.
-/// 2. `POST /_sky/event` with
+/// 1. `GET /` → session cookie + the `<form>`'s `data-ipe-hid`.
+/// 2. `POST /_ipe/event` with
 ///    `{"id":"<hid>","event":"submit","args":[{"username":"alice","password":"s3cr3t"}],"sessionId":""}`
 ///    — mirrors what the browser's delegated form-submit binder sends
 ///    (`live/mod.rs`'s `event == "submit"` branch treats `args[0]` as the
@@ -1151,14 +1151,14 @@ fn live_onsubmit_typed_record_dispatches_decoded_payload() -> Result<(), BoxErro
 
     let hid = extract_hid_for_open_tag(&body, "form").ok_or_else(|| -> BoxError {
         format!(
-            "{test_name}: could not find data-sky-hid on <form> in GET / body\n\
+            "{test_name}: could not find data-ipe-hid on <form> in GET / body\n\
              --- first 2000 bytes ---\n{}",
             &body[..body.len().min(2000)]
         )
         .into()
     })?;
 
-    // ── Step 2: POST /_sky/event — submit with the typed-record form data ──
+    // ── Step 2: POST /_ipe/event — submit with the typed-record form data ──
     let event_body = format!(
         r#"{{"id":"{hid}","event":"submit","args":[{{"username":"alice","password":"s3cr3t"}}],"sessionId":""}}"#
     );
@@ -1167,7 +1167,7 @@ fn live_onsubmit_typed_record_dispatches_decoded_payload() -> Result<(), BoxErro
         test_name,
         &addr,
         "POST",
-        "/_sky/event",
+        "/_ipe/event",
         &[
             ("Content-Type", "application/json"),
             ("Cookie", &cookie_header),
@@ -1177,7 +1177,7 @@ fn live_onsubmit_typed_record_dispatches_decoded_payload() -> Result<(), BoxErro
 
     assert!(
         post_body.contains("patches"),
-        "{test_name}: POST /_sky/event (submit) did not return a patches ACK\nbody: {post_body}"
+        "{test_name}: POST /_ipe/event (submit) did not return a patches ACK\nbody: {post_body}"
     );
 
     // ── Step 3: wait for async model update ─────────────────────────────────
@@ -1315,8 +1315,8 @@ fn live_onsubmit_bare_msg_build_only() -> Result<(), BoxError> {
 ///
 /// ## Wire protocol exercised
 ///
-/// 1. `GET /` → session cookie + the `<form>`'s `data-sky-hid`.
-/// 2. `POST /_sky/event` with
+/// 1. `GET /` → session cookie + the `<form>`'s `data-ipe-hid`.
+/// 2. `POST /_ipe/event` with
 ///    `{"id":"<hid>","event":"submit","args":[{"name":"alice"}],"sessionId":""}`
 ///    — mirrors what the browser's delegated form-submit binder sends.
 /// 3. A second `GET /` with the session cookie must show the "confirmed:"
@@ -1355,14 +1355,14 @@ fn live_onsubmit_bare_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
 
     let hid = extract_hid_for_open_tag(&body, "form").ok_or_else(|| -> BoxError {
         format!(
-            "{test_name}: could not find data-sky-hid on <form> in GET / body\n\
+            "{test_name}: could not find data-ipe-hid on <form> in GET / body\n\
              --- first 2000 bytes ---\n{}",
             &body[..body.len().min(2000)]
         )
         .into()
     })?;
 
-    // ── Step 2: POST /_sky/event — submit with REAL (but ignored) form data ─
+    // ── Step 2: POST /_ipe/event — submit with REAL (but ignored) form data ─
     let event_body =
         format!(r#"{{"id":"{hid}","event":"submit","args":[{{"name":"alice"}}],"sessionId":""}}"#);
     let cookie_header = format!("ipe_sid={sid}");
@@ -1370,7 +1370,7 @@ fn live_onsubmit_bare_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
         test_name,
         &addr,
         "POST",
-        "/_sky/event",
+        "/_ipe/event",
         &[
             ("Content-Type", "application/json"),
             ("Cookie", &cookie_header),
@@ -1380,7 +1380,7 @@ fn live_onsubmit_bare_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
 
     assert!(
         post_body.contains("patches"),
-        "{test_name}: POST /_sky/event (submit) did not return a patches ACK\nbody: {post_body}"
+        "{test_name}: POST /_ipe/event (submit) did not return a patches ACK\nbody: {post_body}"
     );
 
     // ── Step 3: wait for async model update ─────────────────────────────────
@@ -1773,14 +1773,14 @@ fn live_onsubmit_var_bound_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
 
     let hid = extract_hid_for_open_tag(&body, "form").ok_or_else(|| -> BoxError {
         format!(
-            "{test_name}: could not find data-sky-hid on <form> in GET / body\n\
+            "{test_name}: could not find data-ipe-hid on <form> in GET / body\n\
              --- first 2000 bytes ---\n{}",
             &body[..body.len().min(2000)]
         )
         .into()
     })?;
 
-    // ── Step 2: POST /_sky/event — submit with REAL (but ignored) form data ─
+    // ── Step 2: POST /_ipe/event — submit with REAL (but ignored) form data ─
     let event_body =
         format!(r#"{{"id":"{hid}","event":"submit","args":[{{"name":"alice"}}],"sessionId":""}}"#);
     let cookie_header = format!("ipe_sid={sid}");
@@ -1788,7 +1788,7 @@ fn live_onsubmit_var_bound_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
         test_name,
         &addr,
         "POST",
-        "/_sky/event",
+        "/_ipe/event",
         &[
             ("Content-Type", "application/json"),
             ("Cookie", &cookie_header),
@@ -1798,7 +1798,7 @@ fn live_onsubmit_var_bound_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
 
     assert!(
         post_body.contains("patches"),
-        "{test_name}: POST /_sky/event (submit) did not return a patches ACK\nbody: {post_body}"
+        "{test_name}: POST /_ipe/event (submit) did not return a patches ACK\nbody: {post_body}"
     );
 
     // ── Step 3: wait for async model update ─────────────────────────────────
@@ -2091,7 +2091,7 @@ main =
 ///  1. `GET /`             → session + typed-record form page.
 ///  2. `GET /favicon.ico`  (same cookie) → MUST 404 and leave the session
 ///     untouched (the step that must not wipe the handler index).
-///  3. `POST /_sky/event`  submit with form data → Msg must dispatch.
+///  3. `POST /_ipe/event`  submit with form data → Msg must dispatch.
 ///  4. `GET /`             → re-rendered page must show the decoded value.
 ///
 /// # Errors
@@ -2116,7 +2116,7 @@ fn live_unrouted_get_does_not_wipe_form_handlers() -> Result<(), BoxError> {
     })?;
     let hid = extract_hid_for_open_tag(&body, "form").ok_or_else(|| -> BoxError {
         format!(
-            "{test_name}: could not find data-sky-hid on <form> in GET / body\n\
+            "{test_name}: could not find data-ipe-hid on <form> in GET / body\n\
              --- first 2000 bytes ---\n{}",
             &body[..body.len().min(2000)]
         )
@@ -2140,7 +2140,7 @@ fn live_unrouted_get_does_not_wipe_form_handlers() -> Result<(), BoxError> {
         "{test_name}: GET /favicon.ico must 404 (browser-noise gate), got:\n{noise_headers}"
     );
 
-    // ── Step 3: POST /_sky/event — submit the typed-record form ────────────
+    // ── Step 3: POST /_ipe/event — submit the typed-record form ────────────
     let event_body = format!(
         r#"{{"id":"{hid}","event":"submit","args":[{{"username":"alice","password":"s3cr3t"}}],"sessionId":""}}"#
     );
@@ -2148,7 +2148,7 @@ fn live_unrouted_get_does_not_wipe_form_handlers() -> Result<(), BoxError> {
         test_name,
         &addr,
         "POST",
-        "/_sky/event",
+        "/_ipe/event",
         &[
             ("Content-Type", "application/json"),
             ("Cookie", &cookie_header),
@@ -2157,7 +2157,7 @@ fn live_unrouted_get_does_not_wipe_form_handlers() -> Result<(), BoxError> {
     )?;
     assert!(
         post_body.contains("patches"),
-        "{test_name}: POST /_sky/event (submit) did not return a patches ACK\nbody: {post_body}"
+        "{test_name}: POST /_ipe/event (submit) did not return a patches ACK\nbody: {post_body}"
     );
 
     // ── Step 4: the Msg must have dispatched (model re-rendered) ───────────

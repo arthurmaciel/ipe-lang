@@ -27,7 +27,7 @@ module Main exposing (main)
 --      identically.
 --
 --   3. `<script>` tags in the rendered view bootstrap correctly
---      (the runtime's __skyReviveScripts shim revives them after
+--      (the runtime's __ipeReviveScripts shim revives them after
 --      the initial HTML lands in the document — same hardening
 --      Ipe.Live uses).
 import Ipe.Prelude exposing (..)

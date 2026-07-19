@@ -96,7 +96,7 @@ fn input_callback_bare_ctor_arc_wraps_builds_and_runs() {
         "input placeholder must render (Just Input.placeholder Maybe field)\n--- actual ---\n{html}"
     );
     assert!(
-        html.contains("data-sky-on=\"input\"") || html.contains("sky-input"),
+        html.contains("data-ipe-on=\"input\"") || html.contains("ipe-input"),
         "text/slider input event must be wired\n--- actual ---\n{html}"
     );
     assert!(

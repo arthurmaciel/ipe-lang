@@ -8,7 +8,7 @@ Design + implementation plan for the six T5 findings:
 | RT-DATA-003 | security (low) | `findByConditions` empty conditions → `SELECT *` fail-open (cross-tenant read) |
 | CO-INCR-005 | completeness | `ipe watch` / `ipe lsp` never wire the FFI catalog → FFI projects red-loop |
 | RT-NET-001 | completeness | every production `wss://` client dial fails-closed (no TLS backend) |
-| RT-UI-002 | completeness | `Keyed.column`/`Keyed.row` drop the key instead of attaching `sky-key` |
+| RT-UI-002 | completeness | `Keyed.column`/`Keyed.row` drop the key instead of attaching `ipe-key` |
 | CO-BACKEND-003 | correctness | routed Live `:param` decode `unwrap_or_default` → bad URL becomes `id 0`, not `notFound` |
 
 ## Theme root cause
@@ -402,51 +402,51 @@ networked test.
 
 ---
 
-## RT-UI-002 — `Keyed` attach `sky-key`
+## RT-UI-002 — `Keyed` attach `ipe-key`
 
 ### Root cause
 `keyed_column_`/`keyed_row_` (`src/runtime/rust/src/ui/keyed.rs:21,31`) DROP the
 key with `.map(|(_, e)| e)` and forward bare children to `ui_column_`/`ui_row_`.
-The consuming machinery already exists and is tested: `assign_sky_ids_depth` →
-`ipe_id_key` reads a `sky-key` attribute (`html.rs:703,718-719`) and
+The consuming machinery already exists and is tested: `assign_ipe_ids_depth` →
+`ipe_id_key` reads a `ipe-key` attribute (`html.rs:703,718-719`) and
 `keyed_items_keep_id_across_reorder` (`html.rs:1313`) proves keyed items keep
-sky-id identity across reorder **when the attr is present**. Without it,
-positional sky-ids shift on reorder → the diff patches the wrong elements and
+ipe-id identity across reorder **when the attr is present**. Without it,
+positional ipe-ids shift on reorder → the diff patches the wrong elements and
 uncontrolled-input state / focus attaches to the wrong row. The module doc's
-"semantically correct" claim is FALSE for this positional-sky-id runtime, and it
+"semantically correct" claim is FALSE for this positional-ipe-id runtime, and it
 cites `docs/divergences-from-sky.md §B-Keyed` — which does not exist (only
 `§B-Lazy`): a phantom ledger citation (verified: `rg` finds `§B-Lazy` at
 line 43, no `§B-Keyed`).
 
-### Design — attach the key as `AttrAttribute("sky-key", key)` on each child
+### Design — attach the key as `AttrAttribute("ipe-key", key)` on each child
 The Ui-level attribute `AttrAttribute(k, v)` lowers to `html::Attribute::Attr(k,
 v)` via `collect_html_attrs` (`ui/render.rs:361-364`), which survives the render
-sink because `sky-key` passes `SafeAttrName` (`is_safe_html_name` allows the
+sink because `ipe-key` passes `SafeAttrName` (`is_safe_html_name` allows the
 hyphen, not `is_dangerous_attr_name` — `html.rs:494-511`). So `ipe_id_key` will
 then read it exactly like the `Ipe.Html.keyed` path. The fix: instead of
-dropping the key, push `AttrAttribute("sky-key".into(), key)` onto each child
+dropping the key, push `AttrAttribute("ipe-key".into(), key)` onto each child
 element's attribute list before forwarding.
 
 The child is an arbitrary `Element<M>` — only `Node`/`TaggedNode` carry an
-attribute slot. `Text`/`Empty`/`Raw` cannot hold a `sky-key`. Handle with a
+attribute slot. `Text`/`Empty`/`Raw` cannot hold a `ipe-key`. Handle with a
 small helper:
 
 ```rust
-/// Attach `sky-key` to a child so the sky-id stamper can stabilise it across
+/// Attach `ipe-key` to a child so the ipe-id stamper can stabilise it across
 /// reorder. Text/Empty/Raw children (no attribute slot) are wrapped in a keyed
 /// `el` so the key still lands on a real HElement — mirrors how `Ui.el` renders
 /// a single-child <div>, matching the Go runtime's keyed-wrapper behaviour.
 fn attach_key<M: Clone>(key: String, child: Element<M>) -> Element<M> {
     match child {
         Element::Node(desc, mut attrs, kids) => {
-            attrs.insert(0, Attribute::AttrAttribute("sky-key".into(), key));
+            attrs.insert(0, Attribute::AttrAttribute("ipe-key".into(), key));
             Element::Node(desc, attrs, kids)
         }
         Element::TaggedNode(tag, desc, mut attrs, kids) => {
-            attrs.insert(0, Attribute::AttrAttribute("sky-key".into(), key));
+            attrs.insert(0, Attribute::AttrAttribute("ipe-key".into(), key));
             Element::TaggedNode(tag, desc, attrs, kids)
         }
-        other => ui_el_(vec![Attribute::AttrAttribute("sky-key".into(), key)], other),
+        other => ui_el_(vec![Attribute::AttrAttribute("ipe-key".into(), key)], other),
     }
 }
 ```
@@ -454,11 +454,11 @@ fn attach_key<M: Clone>(key: String, child: Element<M>) -> Element<M> {
 `keyed_column_`/`keyed_row_` map `attach_key` over the `(key, child)` pairs, then
 forward to `ui_column_`/`ui_row_`. This is the minimal, correct fix — it reuses
 the proven stamper path rather than inventing a key-aware differ (which the
-runtime does not need for correctness: stable sky-ids are the whole mechanism).
+runtime does not need for correctness: stable ipe-ids are the whole mechanism).
 
 **Divergence:** the `§B-Keyed` claim in `keyed.rs:7` becomes TRUE (keys now
 attach and behave), so the correct action is to **add the real `§B-Keyed`
-section** to `docs/divergences-from-sky.md` describing the sky-key-stamp approach
+section** to `docs/divergences-from-sky.md` describing the ipe-key-stamp approach
 (vs the reference's VNode-key differ) and correct the module doc's false
 "performance hint, not a behavioural contract" line to state keys ARE
 behaviourally load-bearing for reorder identity.
@@ -469,16 +469,16 @@ behaviourally load-bearing for reorder identity.
    attach-and-stamp semantics and cite the now-real `§B-Keyed`.
 2. **Tests** (in `ui/keyed.rs` or `ui/render.rs` tests): render a
    `keyed_column_` of two `li`-like nodes with keys `"alpha"`/`"beta"`, run
-   `render`+`assign_sky_ids`, assert each rendered element carries
-   `sky-key="alpha"`/`"beta"` and (mirroring `keyed_items_keep_id_across_reorder`)
-   that reordering the input preserves each item's `:key` sky-id. Add a case for
+   `render`+`assign_ipe_ids`, assert each rendered element carries
+   `ipe-key="alpha"`/`"beta"` and (mirroring `keyed_items_keep_id_across_reorder`)
+   that reordering the input preserves each item's `:key` ipe-id. Add a case for
    a `Text` child → asserts it is wrapped and the wrapper carries the key.
 3. `docs/divergences-from-sky.md`: add the real `§B-Keyed`.
 
 ### Risk / blast radius
 Small, runtime-only. Existing tests that assert keyed helpers *drop* keys (if
 any) must be updated to the new contract — search first. The extra
-`AttrAttribute` prepend changes rendered HTML (a `sky-key` attr now appears);
+`AttrAttribute` prepend changes rendered HTML (a `ipe-key` attr now appears);
 any golden/snapshot of keyed output updates. Re-gate: `cargo nextest -p
 sky-runtime-rust --features full` (ui tests), a keyed Live example in the sweep.
 
@@ -602,6 +602,6 @@ is untouched (it does not build `Route`s).
 {"id": "TBD", "priority": "Low", "phase": "principles-audit-fix", "task": "RT-DATA-003: make db_find_by_conditions fail closed on empty conditions (db.rs:1475) — return IpeResult::Err refusing an unscoped SELECT, mirroring the shipped db_update_fields empty-WHERE guard (db.rs:2299), closing the cross-tenant fail-open read. Record the fail-closed divergence in docs/divergences-from-sky.md.", "notes": "Regression: empty IpeDict -> Err; non-empty conditions still return filtered rows. Mirror the existing db_update_fields empty-WHERE test.", "spec": "docs/audit/2026-07-17-principles-audit/specs/t5-data-completeness.md", "blocked_by": [], "status": "pending", "deferred": false}
 {"id": "TBD", "priority": "Medium", "phase": "principles-audit-fix", "task": "CO-INCR-005: wire the FFI catalog into ipe watch + ipe lsp. Factor run_build's inline catalog-load+inject (lib.rs:429-446) into a shared ffi::prepare_ffi helper; call it from watch.rs's FsBatch arm (thread injected set into create_source_root, tag FfiInterface origins, pass ffi_emit into BuildConfig, add a BuildConfig::set_ffi_emit salsa setter for warm-config catalog changes) and from lsp.rs DriverLoader::load (interface injection only — LSP never emits). Closes the FFI-project red-loop under watch/lsp while ipe build succeeds.", "notes": "watch uses no disk cache so the FFI-disables-cache concern is moot; the sharp edge is ipe add/remove while watching (re-set ffi_emit on the warm config). Tests: watch resolution asserts injected Rust.<Crate> module w/ FfiInterface origin + Some(emit); lsp loader test asserts FfiInterface tagging; a red-loop regression (unresolved-import pre-fix, clean post-fix).", "spec": "docs/audit/2026-07-17-principles-audit/specs/t5-data-completeness.md", "blocked_by": [], "status": "pending", "deferred": false}
 {"id": "TBD", "priority": "Medium", "phase": "principles-audit-fix", "task": "RT-NET-001: supply a rustls TLS dialer for the WebSocket client so production wss:// dials work instead of failing closed. Enable tokio-tungstenite's rustls feature (runtime Cargo.toml + emitted ws_dep in project.rs::websocket_cargo_toml); in ws_client.rs do_connect, branch the pinned-addr arm on scheme — TLS-handshake the vetted-addr TcpStream with the URL host as SNI for wss, plain for ws — and use connect_async_tls for the un-pinned path. Remove the wss-unsupported Err. Record a new §B-WS-TLS divergence (rustls backend + hostname-verified pinned dial). Fallback if the dialer proves infeasible: keep Err but record the production-wss-unsupported limitation honestly.", "notes": "reqwest/sqlx/lettre already pull rustls, so no new TLS stack. Highest-risk item (adds TLS to the dial path + touches emitted Cargo.toml goldens). Tests: local self-signed wss echo succeeds under IPE_HTTP_DENY_PRIVATE=1; genuinely-private wss still blocked; project.rs emit test asserts the rustls feature; networked public-wss smoke ignored-by-default.", "spec": "docs/audit/2026-07-17-principles-audit/specs/t5-data-completeness.md", "blocked_by": [], "status": "pending", "deferred": false}
-{"id": "TBD", "priority": "Medium", "phase": "principles-audit-fix", "task": "RT-UI-002: make Ipe.Ui.Keyed attach the key. In ui/keyed.rs, instead of dropping the key (.map(|(_,e)|e)), prepend AttrAttribute(\"sky-key\", key) to each child Element (Node/TaggedNode carry attrs; Text/Empty/Raw children are wrapped in a keyed ui_el_). The sky-key attr survives SafeAttrName and is consumed by ipe_id_key/assign_sky_ids_depth exactly like Html.keyed, stabilising sky-id identity across reorder. Add the real §B-Keyed section to docs/divergences-from-sky.md (the module doc currently cites a phantom one) and correct the false 'performance hint, not a behavioural contract' doc line.", "notes": "Reuses the proven stamper path (keyed_items_keep_id_across_reorder proves it works when the attr is present) — no key-aware differ needed. Tests: render keyed_column_ asserts each child carries sky-key + reorder preserves :key sky-id; a Text-child wrap case. Update any golden of keyed output (sky-key attr now appears).", "spec": "docs/audit/2026-07-17-principles-audit/specs/t5-data-completeness.md", "blocked_by": [], "status": "pending", "deferred": false}
+{"id": "TBD", "priority": "Medium", "phase": "principles-audit-fix", "task": "RT-UI-002: make Ipe.Ui.Keyed attach the key. In ui/keyed.rs, instead of dropping the key (.map(|(_,e)|e)), prepend AttrAttribute(\"ipe-key\", key) to each child Element (Node/TaggedNode carry attrs; Text/Empty/Raw children are wrapped in a keyed ui_el_). The ipe-key attr survives SafeAttrName and is consumed by ipe_id_key/assign_ipe_ids_depth exactly like Html.keyed, stabilising ipe-id identity across reorder. Add the real §B-Keyed section to docs/divergences-from-sky.md (the module doc currently cites a phantom one) and correct the false 'performance hint, not a behavioural contract' doc line.", "notes": "Reuses the proven stamper path (keyed_items_keep_id_across_reorder proves it works when the attr is present) — no key-aware differ needed. Tests: render keyed_column_ asserts each child carries ipe-key + reorder preserves :key ipe-id; a Text-child wrap case. Update any golden of keyed output (ipe-key attr now appears).", "spec": "docs/audit/2026-07-17-principles-audit/specs/t5-data-completeness.md", "blocked_by": [], "status": "pending", "deferred": false}
 {"id": "TBD", "priority": "Medium", "phase": "principles-audit-fix", "task": "CO-BACKEND-003: route a bad Live :param to notFound instead of the type's Default. Change Route<Page>.build to Fn(Vec<String>) -> Option<Page> (route.rs) so match_routes folds a failed payload decode into not_found; rewrite emit_live.rs::route_param_get to emit fallible ?-decoders (Int/Float/Bool early-return None on parse failure; Bool rejects non-true/false) and wrap every builder body (ctor/lambda/named-fn/constant/raw-List-String) in Some(...). Land the runtime + emit change atomically (SEAL). Update the §B-route-param divergence: bad numeric/bool capture now -> notFound (was 0/0.0/false).", "notes": "Type-level fix — the carrier now represents the miss (parse-don't-validate at the route boundary). Tests: route.rs unit /apps/abc(Int)->not_found, /apps/42->AppDetailPage(42); a routed-Live SEAL example exercising /apps/abc->notFound end to end (closes the boot-only-sweep interaction gap). Regenerate routed Live goldens (closure body gains Some(...) + ?). NOT a negative_suite.rs case.", "spec": "docs/audit/2026-07-17-principles-audit/specs/t5-data-completeness.md", "blocked_by": [], "status": "pending", "deferred": false}
 ```

@@ -23,7 +23,7 @@
 //!   `element::Attribute::AttrEvent(EventAttr(OnMsg("click", Bump)))`.
 //! * `UiLayout` emits no turbofish; Rust infers `M = MainMsg`
 //!   bottom-up from the concrete `Attribute<MainMsg>` element.
-//! * The rendered HTML contains `data-sky-on="click"` and the text node `x`.
+//! * The rendered HTML contains `data-ipe-on="click"` and the text node `x`.
 //! * The binary exits 0.
 //!
 //! Run:
@@ -86,7 +86,7 @@ fn onclick_in_non_view_fn_propagates_m_bottom_up() {
 
     // The click event must be rendered — confirms M=MainMsg not M=().
     assert!(
-        html.contains("data-sky-on=\"click\"") || html.contains("sky-click"),
+        html.contains("data-ipe-on=\"click\"") || html.contains("ipe-click"),
         "stdui_onclick: click event must be rendered in HTML output\n--- actual ---\n{html}"
     );
     // The text content must be present.

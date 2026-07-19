@@ -11,8 +11,8 @@ module Main exposing (main)
 -- dangling binding → E0525.
 --
 -- Fix 3 T4 (#130): hoist the complex expression to
---   `let __sky_cap_0 = String.append base suffix`
--- OUTSIDE the lambda.  The lambda body uses `CloneVar(__sky_cap_0)`,
+--   `let __ipe_cap_0 = String.append base suffix`
+-- OUTSIDE the lambda.  The lambda body uses `CloneVar(__ipe_cap_0)`,
 -- making it `Fn` (re-callable).
 
 mk : String -> String -> String

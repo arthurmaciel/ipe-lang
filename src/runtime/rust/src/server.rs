@@ -2031,11 +2031,11 @@ mod tests {
         let sky = server_html("<html><body><h1>hi</h1></body></html>".to_string());
         let out = axum_body_string(to_axum_response(sky)).await;
         assert!(
-            out.contains(r#"<a id="__sky-dev-console""#),
+            out.contains(r#"<a id="__ipe-dev-console""#),
             "banner must be injected: {out}"
         );
         let banner_at = out
-            .find(r#"<a id="__sky-dev-console""#)
+            .find(r#"<a id="__ipe-dev-console""#)
             .expect("banner present");
         let body_close = out.rfind("</body>").expect("</body> present");
         assert!(

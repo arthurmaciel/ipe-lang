@@ -29,7 +29,7 @@
 //! * `KernelFn::UiOnInput` emits `ui_on_input_(Arc::new(move |_x| f(_x)))`
 //!   where `f` is a closure expression (not a top-level fn name).
 //! * The emitted Rust project builds without `E0308` or missing-trait-bound errors.
-//! * The rendered HTML contains `data-sky-on="input"` (event wired) and the
+//! * The rendered HTML contains `data-ipe-on="input"` (event wired) and the
 //!   text node `input here`.
 //! * The binary exits 0.
 //!
@@ -97,7 +97,7 @@ fn oninput_closure_arc_wrap_builds_and_runs() {
     // The input event must be rendered — confirms Arc<dyn Fn(String)->M> was
     // correctly emitted and the type-checker accepted it.
     assert!(
-        html.contains("data-sky-on=\"input\"") || html.contains("sky-input"),
+        html.contains("data-ipe-on=\"input\"") || html.contains("ipe-input"),
         "stdui_oninput_closure: input event must be rendered in HTML output\n--- actual ---\n{html}"
     );
     // The text content must be present.

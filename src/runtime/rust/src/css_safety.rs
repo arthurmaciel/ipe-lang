@@ -175,11 +175,11 @@ impl<'a> SafeCssValue<'a> {
 }
 
 /// Sink-side re-validation of a `;`-joined CSS declaration list — the payload
-/// carried by the `data-sky-mq-rules` / `data-sky-pc-rules` style markers.
+/// carried by the `data-ipe-mq-rules` / `data-ipe-pc-rules` style markers.
 ///
 /// The PRODUCER (`ui_media_query_` / `ui_on_pseudo_`) builds this string from
 /// [`SafeCssValue`]-gated declarations, but a caller can FORGE the marker
-/// directly with `Ui.htmlAttribute "data-sky-mq-rules" "…}[x]{@import url(…)"`,
+/// directly with `Ui.htmlAttribute "data-ipe-mq-rules" "…}[x]{@import url(…)"`,
 /// which never passes through the producer at all. The raw marker String is
 /// therefore the real untrusted boundary — parse, don't validate — so the SINK
 /// must re-validate rather than trust an upstream that a generic `htmlAttribute`
@@ -211,7 +211,7 @@ pub(crate) fn sink_safe_declaration_list(rules: &str) -> Option<&str> {
 }
 
 /// Sink-side re-validation of a `@keyframes` BODY — the `<kfBody>` slot of the
-/// `data-sky-anim-rules` marker (`name||tail||kfBody||respect`). A keyframes
+/// `data-ipe-anim-rules` marker (`name||tail||kfBody||respect`). A keyframes
 /// body legitimately contains `{` `}` `;` (`0% { opacity: 0; … } 100% { … }`),
 /// so the flat declaration-value policy cannot be reused — this validator
 /// parses the keyframe GRAMMAR instead:

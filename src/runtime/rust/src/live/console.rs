@@ -1,7 +1,7 @@
-//! Sky Console — the operator dashboard mounted at `/_sky/console`, plus the
+//! Sky Console — the operator dashboard mounted at `/_ipe/console`, plus the
 //! observability federation receiver. Mirrors Go's `console*.go` in-RAM tier:
-//! a plain-HTML shell that polls JSON `/_sky/console/api/*` endpoints backed by
-//! the `telemetry` ring buffers, and a `/_sky/observability/ingest` POST that
+//! a plain-HTML shell that polls JSON `/_ipe/console/api/*` endpoints backed by
+//! the `telemetry` ring buffers, and a `/_ipe/observability/ingest` POST that
 //! folds a sub-app's batched logs into the same rings.
 //!
 //! Unlike Go (which spawns the console as a child Ipe.Live process and reverse-
@@ -16,7 +16,7 @@ const fn json_ct() -> (header::HeaderName, &'static str) {
     (header::CONTENT_TYPE, "application/json")
 }
 
-/// `GET /_sky/console` — the plain-HTML dashboard shell (no framework, no CSS
+/// `GET /_ipe/console` — the plain-HTML dashboard shell (no framework, no CSS
 /// deps). Polls the api endpoints below.
 pub async fn console_html() -> impl IntoResponse {
     let body = r#"<!doctype html><html><head><meta charset="utf-8">
@@ -34,13 +34,13 @@ pub async fn console_html() -> impl IntoResponse {
 <script>
  let tab="logs";
  async function j(u){try{const r=await fetch(u);return await r.json()}catch(e){return null}}
- async function ov(){const o=await j("/_sky/console/api/overview");if(o)document.getElementById("ov").textContent=
+ async function ov(){const o=await j("/_ipe/console/api/overview");if(o)document.getElementById("ov").textContent=
    "requests="+o.requests+"  errors="+o.errors;}
  function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");}
  function fmt(es){return (es||[]).map(e=>{const d=new Date(e.ts).toISOString().slice(11,19);
    return "<span class='lvl'>"+esc(d)+" "+esc(e.level)+"</span> "+(e.level=="error"?"<span class='err'>":"")+
    esc(e.message)+(e.level=="error"?"</span>":"");}).join("\n");}
- async function refresh(){const es=await j("/_sky/console/api/"+tab);
+ async function refresh(){const es=await j("/_ipe/console/api/"+tab);
    document.getElementById("out").innerHTML=fmt(es);ov();}
  document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
    document.querySelectorAll(".tab").forEach(x=>x.classList.remove("on"));t.classList.add("on");
@@ -54,7 +54,7 @@ pub async fn console_html() -> impl IntoResponse {
     )
 }
 
-/// `GET /_sky/console/api/overview` — request + error counters.
+/// `GET /_ipe/console/api/overview` — request + error counters.
 pub async fn api_overview() -> impl IntoResponse {
     let body = format!(
         r#"{{"requests":{},"errors":{}}}"#,
@@ -64,7 +64,7 @@ pub async fn api_overview() -> impl IntoResponse {
     (StatusCode::OK, [json_ct()], body)
 }
 
-/// `GET /_sky/console/api/logs` — recent log ring (most recent 200).
+/// `GET /_ipe/console/api/logs` — recent log ring (most recent 200).
 pub async fn api_logs() -> impl IntoResponse {
     (
         StatusCode::OK,
@@ -73,7 +73,7 @@ pub async fn api_logs() -> impl IntoResponse {
     )
 }
 
-/// `GET /_sky/console/api/errors` — recent error ring.
+/// `GET /_ipe/console/api/errors` — recent error ring.
 pub async fn api_errors() -> impl IntoResponse {
     (
         StatusCode::OK,
@@ -82,12 +82,12 @@ pub async fn api_errors() -> impl IntoResponse {
     )
 }
 
-/// `GET /_sky/console/api/traces` — recent completed `Ipe.Trace.span`s.
+/// `GET /_ipe/console/api/traces` — recent completed `Ipe.Trace.span`s.
 pub async fn api_traces() -> impl IntoResponse {
     (StatusCode::OK, [json_ct()], telemetry::spans_json(200))
 }
 
-/// `GET /_sky/console/api/metrics-summary` — the parsed counter snapshot the
+/// `GET /_ipe/console/api/metrics-summary` — the parsed counter snapshot the
 /// dashboard renders (mirror of Go's parsed Prometheus summary).
 pub async fn api_metrics_summary() -> impl IntoResponse {
     let body = format!(
@@ -254,7 +254,7 @@ pub fn gate_blocked(headers: &axum::http::HeaderMap) -> Option<axum::response::R
     }
 }
 
-/// `POST /_sky/observability/ingest` — federation receiver. Accepts a JSON array
+/// `POST /_ipe/observability/ingest` — federation receiver. Accepts a JSON array
 /// of `{ "level": "...", "message": "..." }` (a sub-app's batched logs) and folds
 /// them into the local rings. Malformed bodies are accepted as 204 (drop) rather
 /// than erroring — telemetry must never break the caller.
@@ -412,7 +412,7 @@ fn ingest_token_blocked(headers: &axum::http::HeaderMap) -> Option<axum::respons
         }
     };
     let got = headers
-        .get("x-sky-ingest-token")
+        .get("x-ipe-ingest-token")
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
     if bool::from(got.as_bytes().ct_eq(want.as_bytes())) {
@@ -421,7 +421,7 @@ fn ingest_token_blocked(headers: &axum::http::HeaderMap) -> Option<axum::respons
         Some(
             (
                 StatusCode::UNAUTHORIZED,
-                "invalid or missing X-Sky-Ingest-Token",
+                "invalid or missing X-Ipe-Ingest-Token",
             )
                 .into_response(),
         )
@@ -500,12 +500,12 @@ mod tests {
         assert!(ingest_token_blocked(&h).is_some(), "missing header blocked");
         // Wrong token → blocked.
         let mut h = axum::http::HeaderMap::new();
-        h.insert("x-sky-ingest-token", "wrong".parse().unwrap());
+        h.insert("x-ipe-ingest-token", "wrong".parse().unwrap());
         assert!(ingest_token_blocked(&h).is_some(), "wrong token blocked");
         // Correct token → allowed, even cross-origin (bearer-token auth makes
         // the same-origin check redundant once a real token is configured).
         let mut h = axum::http::HeaderMap::new();
-        h.insert("x-sky-ingest-token", "secret123".parse().unwrap());
+        h.insert("x-ipe-ingest-token", "secret123".parse().unwrap());
         h.insert("origin", "https://evil.example".parse().unwrap());
         h.insert("host", "victim.example".parse().unwrap());
         assert!(

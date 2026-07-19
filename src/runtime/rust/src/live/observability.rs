@@ -1,17 +1,17 @@
 //! Ipe.Live observability endpoints — the operator surface mounted on every
 //! Live app, mirroring Go's `runtime-go/rt/observability.go`:
 //!
-//! - `GET /_sky/healthz`  — liveness probe, always `{"status":"ok"}`.
-//! - `GET /_sky/readyz`   — readiness probe, `{"status":"ready"}` (200) or
+//! - `GET /_ipe/healthz`  — liveness probe, always `{"status":"ok"}`.
+//! - `GET /_ipe/readyz`   — readiness probe, `{"status":"ready"}` (200) or
 //!   `{"status":"draining"}` (503) once shutdown is signalled.
-//! - `GET /_sky/buildinfo`— commit / builtAt / skyVersion JSON.
-//! - `GET /_sky/metrics`  — Prometheus text: `ipe_live_requests_total`.
+//! - `GET /_ipe/buildinfo`— commit / builtAt / skyVersion JSON.
+//! - `GET /_ipe/metrics`  — Prometheus text: `ipe_live_requests_total`.
 //!
 //! Requests are counted by the `track` middleware layer. No panic vectors: every
 //! handler returns a static or counter-derived body; nothing can fail.
 //!
-//! Out of scope here (staged for the console mini-app port): `/_sky/console/*`
-//! (the Ipe.Ui dashboard), `/_sky/observability/ingest` (sub-app federation), and
+//! Out of scope here (staged for the console mini-app port): `/_ipe/console/*`
+//! (the Ipe.Ui dashboard), `/_ipe/observability/ingest` (sub-app federation), and
 //! the in-RAM log/span ring buffers the console renders.
 
 use axum::http::{StatusCode, header};
@@ -19,7 +19,7 @@ use axum::response::IntoResponse;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Readiness flag. Starts ready; a graceful-shutdown signal flips it so
-/// `/_sky/readyz` reports `draining` and load balancers stop routing new traffic
+/// `/_ipe/readyz` reports `draining` and load balancers stop routing new traffic
 /// while in-flight requests finish (Go parity: `readinessReady`).
 static READY: AtomicBool = AtomicBool::new(true);
 
@@ -30,12 +30,12 @@ pub fn mark_draining() {
 
 const JSON: (header::HeaderName, &str) = (header::CONTENT_TYPE, "application/json");
 
-/// `GET /_sky/healthz` — liveness. Always OK while the process is up.
+/// `GET /_ipe/healthz` — liveness. Always OK while the process is up.
 pub async fn healthz() -> impl IntoResponse {
     (StatusCode::OK, [JSON], r#"{"status":"ok"}"#)
 }
 
-/// `GET /_sky/readyz` — readiness. 200 `ready`, or 503 `draining` once shutdown
+/// `GET /_ipe/readyz` — readiness. 200 `ready`, or 503 `draining` once shutdown
 /// is signalled.
 pub async fn readyz() -> impl IntoResponse {
     if READY.load(Ordering::SeqCst) {
@@ -49,7 +49,7 @@ pub async fn readyz() -> impl IntoResponse {
     }
 }
 
-/// `GET /_sky/buildinfo` — build provenance. Values come from compile-time env
+/// `GET /_ipe/buildinfo` — build provenance. Values come from compile-time env
 /// (`IPE_BUILD_COMMIT` / `IPE_BUILD_AT` / `IPE_VERSION`), defaulting to `dev`.
 pub async fn buildinfo() -> impl IntoResponse {
     let commit = option_env!("IPE_BUILD_COMMIT").unwrap_or("dev");
@@ -60,7 +60,7 @@ pub async fn buildinfo() -> impl IntoResponse {
     (StatusCode::OK, [JSON], body)
 }
 
-/// `GET /_sky/metrics` — full Prometheus 0.0.4 text exposition.
+/// `GET /_ipe/metrics` — full Prometheus 0.0.4 text exposition.
 pub async fn metrics() -> impl IntoResponse {
     // The whole exposition comes from the labeled registry (Go parity:
     // prometheus.go's WriteProm) — active sessions, SSE connections, 5xx errors,
@@ -89,7 +89,7 @@ pub async fn track(
     // Gate the console + metrics surface (off / production-auth) before serving.
     let path = req.uri().path().to_string();
     let method = req.method().as_str().to_string();
-    if (path == "/_sky/metrics" || path.starts_with("/_sky/console"))
+    if (path == "/_ipe/metrics" || path.starts_with("/_ipe/console"))
         && let Some(blocked) = super::console::gate_blocked(req.headers())
     {
         super::super::telemetry::record_request(blocked.status().as_u16());
@@ -219,14 +219,14 @@ fn is_sub_app() -> bool {
 }
 
 fn is_internal_path(path: &str) -> bool {
-    path == "/_sky/sse"
-        || path == "/_sky/event"
-        || path == "/_sky/metrics"
-        || path == "/_sky/healthz"
-        || path == "/_sky/readyz"
-        || path == "/_sky/buildinfo"
-        || path == "/_sky/observability/ingest"
-        || path.starts_with("/_sky/console")
+    path == "/_ipe/sse"
+        || path == "/_ipe/event"
+        || path == "/_ipe/metrics"
+        || path == "/_ipe/healthz"
+        || path == "/_ipe/readyz"
+        || path == "/_ipe/buildinfo"
+        || path == "/_ipe/observability/ingest"
+        || path.starts_with("/_ipe/console")
 }
 
 #[cfg(test)]
@@ -243,11 +243,11 @@ mod tests {
     #[test]
     fn internal_paths_are_not_auto_instrumented() {
         // SSE long-poll, event transport, console proxy, ops endpoints → skipped.
-        assert!(super::is_internal_path("/_sky/sse"));
-        assert!(super::is_internal_path("/_sky/event"));
-        assert!(super::is_internal_path("/_sky/console"));
-        assert!(super::is_internal_path("/_sky/console/_sky/sse"));
-        assert!(super::is_internal_path("/_sky/healthz"));
+        assert!(super::is_internal_path("/_ipe/sse"));
+        assert!(super::is_internal_path("/_ipe/event"));
+        assert!(super::is_internal_path("/_ipe/console"));
+        assert!(super::is_internal_path("/_ipe/console/_ipe/sse"));
+        assert!(super::is_internal_path("/_ipe/healthz"));
         // User-facing routes → instrumented.
         assert!(!super::is_internal_path("/"));
         assert!(!super::is_internal_path("/api/users"));

@@ -3331,7 +3331,7 @@ mod tests {
     // must NOT produce a DuplicateValue error.  The TYPE namespace (`type alias`)
     // and the CONSTRUCTOR namespace (`type … = Ctor`) are distinct in both
     // Elm and Ipê.  Reproduces the failure seen in
-    // examples/25-sky-console/src/State.ipe where `type Tab = Overview | …`
+    // examples/25-ipe-console/src/State.ipe where `type Tab = Overview | …`
     // and `type alias Overview = { … }` coexist in the same module.
     // ─────────────────────────────────────────────────────────────────────────
 

@@ -1,15 +1,15 @@
 //! Ipe.Ui style-marker injection — Rust port of Go's `applyStyleInjections`
 //! (live.go:872-1110).
 //!
-//! The shared `Ipe.Ui` stdlib emits `data-sky-{mq,pc,tr,anim}-*` marker
+//! The shared `Ipe.Ui` stdlib emits `data-ipe-{mq,pc,tr,anim}-*` marker
 //! *attributes* on elements for `Ui.breakpoint` / `Ui.mediaQuery`,
 //! `Background.hoverColor` / `Ui.onPseudo`, `Transition.attribute`, and
-//! `Animation.attribute`. The Go backend consumes them into sky-id-scoped
+//! `Animation.attribute`. The Go backend consumes them into ipe-id-scoped
 //! `<style>` blocks; without this pass the Rust backend rendered the markers
 //! inert and produced zero CSS, so hover / breakpoint / media-query /
 //! transition / animation were entirely dead.
 //!
-//! Pre-condition: `assign_sky_ids` has stamped a `sky-id` attr on every
+//! Pre-condition: `assign_ipe_ids` has stamped a `ipe-id` attr on every
 //! element. Post-condition: every marker attr is stripped (even on no-match, so
 //! an empty marker never leaks as an inert `data-*`) and a `<style>` child is
 //! prepended (or sibling-hoisted after a void element).
@@ -23,7 +23,7 @@
 //! / `sink_safe_keyframes_body`) and drops the block fail-closed on any
 //! breakout. The close-tag strip applied to EVERY CSS fragment stays as
 //! belt-and-braces and must never be dropped. The selector uses the element's
-//! own already-sanitised sky-id (assign_sky_ids), never a user attr, so the
+//! own already-sanitised ipe-id (assign_ipe_ids), never a user attr, so the
 //! selector cannot be broken out of either.
 //!
 //! Idempotent: a second run finds the markers already stripped and is a no-op
@@ -36,16 +36,16 @@ use crate::html::{Attribute, Html, is_void};
 /// strip a void TREE-ROOT's markers (see `apply_style_injections`). MUST stay in
 /// sync with the per-pass marker lists below.
 const ALL_MARKERS: &[&str] = &[
-    "data-sky-mq-q",
-    "data-sky-mq-rules",
-    "data-sky-pc-rules",
-    "data-sky-tr-rules",
-    "data-sky-tr-respect",
-    "data-sky-anim-rules",
+    "data-ipe-mq-q",
+    "data-ipe-mq-rules",
+    "data-ipe-pc-rules",
+    "data-ipe-tr-rules",
+    "data-ipe-tr-respect",
+    "data-ipe-anim-rules",
 ];
 
 /// Run every style-marker pass over the tree in Go's fixed order. Call
-/// immediately after `assign_sky_ids`, on the SAME tree that becomes both the
+/// immediately after `assign_ipe_ids`, on the SAME tree that becomes both the
 /// render output AND the diff baseline (Go applies it before render + before
 /// storing the tree, so the diff compares two already-injected trees and never
 /// sees a marker-attr-vs-style-child asymmetry → no spurious replace).
@@ -58,29 +58,29 @@ const MAX_STYLE_DEPTH: usize = 1024;
 pub fn apply_style_injections<M>(node: &mut Html<M>) {
     inject_pass(
         node,
-        &["data-sky-mq-q", "data-sky-mq-rules"],
-        "data-sky-mq",
+        &["data-ipe-mq-q", "data-ipe-mq-rules"],
+        "data-ipe-mq",
         &|id, a| build_mq(id, a),
         0,
     );
     inject_pass(
         node,
-        &["data-sky-pc-rules"],
-        "data-sky-pc",
+        &["data-ipe-pc-rules"],
+        "data-ipe-pc",
         &|id, a| build_pc(id, a),
         0,
     );
     inject_pass(
         node,
-        &["data-sky-tr-rules", "data-sky-tr-respect"],
-        "data-sky-tr",
+        &["data-ipe-tr-rules", "data-ipe-tr-respect"],
+        "data-ipe-tr",
         &|id, a| build_tr(id, a),
         0,
     );
     inject_pass(
         node,
-        &["data-sky-anim-rules"],
-        "data-sky-anim",
+        &["data-ipe-anim-rules"],
+        "data-ipe-anim",
         &|id, a| build_anim(id, a),
         0,
     );
@@ -145,14 +145,14 @@ fn inject_pass<M>(
 
 /// Build the `<style>` node for an element's markers and strip those markers
 /// from its attrs. Returns `None` (markers still stripped) when there's no
-/// sky-id, no non-empty marker, or the built CSS is empty.
+/// ipe-id, no non-empty marker, or the built CSS is empty.
 fn build_style_node<M>(
     attrs: &mut Vec<Attribute<M>>,
     markers: &[&str],
     style_attr: &str,
     build: &impl Fn(&str, &[Attribute<M>]) -> String,
 ) -> Option<Html<M>> {
-    let ipe_id = match attr_get(attrs, "sky-id") {
+    let ipe_id = match attr_get(attrs, "ipe-id") {
         Some(s) => s,
         None => {
             strip_markers(attrs, markers);
@@ -202,8 +202,8 @@ use super::super::css_safety::{
 };
 
 fn build_mq<M>(ipe_id: &str, attrs: &[Attribute<M>]) -> String {
-    let query = attr_get(attrs, "data-sky-mq-q").unwrap_or_default();
-    let rules = attr_get(attrs, "data-sky-mq-rules").unwrap_or_default();
+    let query = attr_get(attrs, "data-ipe-mq-q").unwrap_or_default();
+    let rules = attr_get(attrs, "data-ipe-mq-rules").unwrap_or_default();
     if query.is_empty() || rules.is_empty() {
         return String::new();
     }
@@ -219,16 +219,16 @@ fn build_mq<M>(ipe_id: &str, attrs: &[Attribute<M>]) -> String {
         (Some(q), Some(r)) => (q.as_str().to_owned(), strip_style_close(r)),
         _ => return String::new(),
     };
-    let selector = format!("[sky-id=\"{ipe_id}\"]");
+    let selector = format!("[ipe-id=\"{ipe_id}\"]");
     format!("@media {safe_query} {{ {selector} {{ {safe_rules} }} }}")
 }
 
 fn build_pc<M>(ipe_id: &str, attrs: &[Attribute<M>]) -> String {
-    let encoded = attr_get(attrs, "data-sky-pc-rules").unwrap_or_default();
+    let encoded = attr_get(attrs, "data-ipe-pc-rules").unwrap_or_default();
     if encoded.is_empty() {
         return String::new();
     }
-    let selector = format!("[sky-id=\"{ipe_id}\"]");
+    let selector = format!("[ipe-id=\"{ipe_id}\"]");
     let mut out = String::new();
     for entry in encoded.split("||") {
         let (tag, css) = match entry.split_once('|') {
@@ -274,11 +274,11 @@ fn pseudo_selector_for_tag(tag: &str) -> Option<(&'static str, bool)> {
 }
 
 fn build_tr<M>(ipe_id: &str, attrs: &[Attribute<M>]) -> String {
-    let rules = attr_get(attrs, "data-sky-tr-rules").unwrap_or_default();
+    let rules = attr_get(attrs, "data-ipe-tr-rules").unwrap_or_default();
     if rules.is_empty() {
         return String::new();
     }
-    let respect = attr_get(attrs, "data-sky-tr-respect")
+    let respect = attr_get(attrs, "data-ipe-tr-respect")
         .unwrap_or_default()
         .as_str()
         != "0";
@@ -289,7 +289,7 @@ fn build_tr<M>(ipe_id: &str, attrs: &[Attribute<M>]) -> String {
         Some(v) => strip_style_close(v.as_str()),
         None => return String::new(),
     };
-    let selector = format!("[sky-id=\"{ipe_id}\"]");
+    let selector = format!("[ipe-id=\"{ipe_id}\"]");
     if respect {
         format!(
             "@media (prefers-reduced-motion: no-preference) {{ {selector} {{ transition: {safe_rules}; }} }}"
@@ -300,12 +300,12 @@ fn build_tr<M>(ipe_id: &str, attrs: &[Attribute<M>]) -> String {
 }
 
 fn build_anim<M>(ipe_id: &str, attrs: &[Attribute<M>]) -> String {
-    let encoded = attr_get(attrs, "data-sky-anim-rules").unwrap_or_default();
+    let encoded = attr_get(attrs, "data-ipe-anim-rules").unwrap_or_default();
     if encoded.is_empty() {
         return String::new();
     }
     let ident = ipe_id_to_css_ident(ipe_id);
-    let selector = format!("[sky-id=\"{ipe_id}\"]");
+    let selector = format!("[ipe-id=\"{ipe_id}\"]");
     let mut keyframes = String::new();
     let mut gated: Vec<String> = vec![];
     let mut ungated: Vec<String> = vec![];
@@ -367,9 +367,9 @@ fn build_anim<M>(ipe_id: &str, attrs: &[Attribute<M>]) -> String {
     sb.trim().to_string()
 }
 
-/// sky-id (`r.0.2#div`) → CSS-safe ident suffix (`r_0_2_div`) for @keyframes
+/// ipe-id (`r.0.2#div`) → CSS-safe ident suffix (`r_0_2_div`) for @keyframes
 /// names. Structural separators map to `_`; anything else outside the CSS-ident
-/// charset is dropped (Go's `skyIDToCSSIdent`).
+/// charset is dropped (Go's `ipeIDToCSSIdent`).
 fn ipe_id_to_css_ident(s: &str) -> String {
     s.chars()
         .filter_map(|c| match c {
@@ -458,9 +458,9 @@ mod tests {
     #[test]
     fn pc_strips_style_close_breakout() {
         let attrs = vec![
-            attr("sky-id", "r_0_button"),
+            attr("ipe-id", "r_0_button"),
             attr(
-                "data-sky-pc-rules",
+                "data-ipe-pc-rules",
                 "h|color: red } </style><script>alert(1)</script>",
             ),
         ];
@@ -483,9 +483,9 @@ mod tests {
     #[test]
     fn mq_strips_style_close_in_query_and_rules() {
         let attrs = vec![
-            attr("data-sky-mq-q", "(max-width: 600px) </style>"),
+            attr("data-ipe-mq-q", "(max-width: 600px) </style>"),
             attr(
-                "data-sky-mq-rules",
+                "data-ipe-mq-rules",
                 "color: blue </style><script>x</script>",
             ),
         ];
@@ -509,10 +509,10 @@ mod tests {
     fn fixture70_mediaquery_breakout_probe_neutralised() {
         let attrs = vec![
             attr(
-                "data-sky-mq-q",
+                "data-ipe-mq-q",
                 "(min-width: 1px) </style><script>alert(1)</script>",
             ),
-            attr("data-sky-mq-rules", "background-color:rgb(1,2,3)"),
+            attr("data-ipe-mq-rules", "background-color:rgb(1,2,3)"),
         ];
         let css = build_mq("r_2_el", &attrs);
         assert!(!css.to_ascii_lowercase().contains("</style"), "{css}");
@@ -532,7 +532,7 @@ mod tests {
     #[test]
     fn anim_strips_breakout_and_sanitises_name() {
         let attrs = vec![attr(
-            "data-sky-anim-rules",
+            "data-ipe-anim-rules",
             "9bad name!||300ms ease||0% { opacity: 0 } </style>||1",
         )];
         let css = build_anim("r.0#div", &attrs);
@@ -550,9 +550,9 @@ mod tests {
     #[test]
     fn anim_sanitises_name_on_legit_entry() {
         // Name sanitisation (leading digit prefixed, non-ident chars → `_`,
-        // sky-id-derived ident suffix) still applies on the legit path.
+        // ipe-id-derived ident suffix) still applies on the legit path.
         let attrs = vec![attr(
-            "data-sky-anim-rules",
+            "data-ipe-anim-rules",
             "9bad name!||300ms ease||0% { opacity: 0 } 100% { opacity: 1 }||1",
         )];
         let css = build_anim("r.0#div", &attrs);
@@ -566,7 +566,7 @@ mod tests {
     #[test]
     fn build_anim_sink_keeps_legit_entries_byte_identical() {
         let attrs = vec![attr(
-            "data-sky-anim-rules",
+            "data-ipe-anim-rules",
             "fadeIn||300ms ease-out 0ms 1 none||0% { opacity: 0; transform: translateY(10px) } 100% { opacity: 1; transform: translateY(0px) }||0",
         )];
         let css = build_anim("r.0", &attrs);
@@ -592,7 +592,7 @@ mod tests {
         // Forged body: valid first block, then a close-and-inject page-wide
         // rule + at-rule — exactly what `strip_style_close` alone missed.
         let attrs = vec![attr(
-            "data-sky-anim-rules",
+            "data-ipe-anim-rules",
             "x||300ms||0% { opacity: 0 } } body { display:none } @import url(//evil/x.css) {||1",
         )];
         assert_eq!(
@@ -605,7 +605,7 @@ mod tests {
     #[test]
     fn build_anim_sink_drops_forged_tail_breakout() {
         let attrs = vec![attr(
-            "data-sky-anim-rules",
+            "data-ipe-anim-rules",
             "x||300ms; } [y] { color:red||0% { opacity: 0 }||1",
         )];
         assert_eq!(
@@ -620,7 +620,7 @@ mod tests {
         // Per-entry fail-closed posture (same as build_pc): the forged entry
         // drops, the legit sibling animation still renders.
         let attrs = vec![attr(
-            "data-sky-anim-rules",
+            "data-ipe-anim-rules",
             "evil||300ms||0% { opacity: 0 } </style><script>alert(1)</script>||1\
              @@good||200ms linear||0% { opacity: 0 } 100% { opacity: 1 }||1",
         )];
@@ -641,8 +641,8 @@ mod tests {
         let mut tree: Html<()> = Html::HElement(
             "button".to_string(),
             vec![
-                attr("sky-id", "r"),
-                attr("data-sky-pc-rules", "h|color: red"),
+                attr("ipe-id", "r"),
+                attr("data-ipe-pc-rules", "h|color: red"),
             ],
             vec![Html::HText("x".to_string())],
         );
@@ -652,7 +652,7 @@ mod tests {
                 assert!(
                     !attrs
                         .iter()
-                        .any(|a| matches!(a, Attribute::Attr(k, _) if k == "data-sky-pc-rules")),
+                        .any(|a| matches!(a, Attribute::Attr(k, _) if k == "data-ipe-pc-rules")),
                     "marker must be stripped"
                 );
                 assert!(
@@ -670,12 +670,12 @@ mod tests {
         // be hoisted to a sibling slot right after the input.
         let mut tree: Html<()> = Html::HElement(
             "div".to_string(),
-            vec![attr("sky-id", "r")],
+            vec![attr("ipe-id", "r")],
             vec![Html::HElement(
                 "input".to_string(),
                 vec![
-                    attr("sky-id", "r_0_input"),
-                    attr("data-sky-pc-rules", "f|outline: none"),
+                    attr("ipe-id", "r_0_input"),
+                    attr("data-ipe-pc-rules", "f|outline: none"),
                 ],
                 vec![],
             )],
@@ -698,8 +698,8 @@ mod tests {
         let mut tree: Html<()> = Html::HElement(
             "input".to_string(),
             vec![
-                attr("sky-id", "r"),
-                attr("data-sky-pc-rules", "f|outline: none"),
+                attr("ipe-id", "r"),
+                attr("data-ipe-pc-rules", "f|outline: none"),
             ],
             vec![],
         );
@@ -708,7 +708,7 @@ mod tests {
             assert!(
                 !attrs
                     .iter()
-                    .any(|a| matches!(a, Attribute::Attr(k, _) if k == "data-sky-pc-rules")),
+                    .any(|a| matches!(a, Attribute::Attr(k, _) if k == "data-ipe-pc-rules")),
                 "void-root marker must be stripped"
             );
         } else {
@@ -718,13 +718,13 @@ mod tests {
 
     /// #113 spec §1.4 end-to-end: the FULL pipeline from a Rust
     /// `Attribute::AttrPseudoRule` (as `Background.hoverColor` constructs it)
-    /// through `ui_layout` → `assign_sky_ids` → `apply_style_injections` →
-    /// `render_html` must produce a sky-id-scoped `<style>` rule and leave NO
-    /// `data-sky-pc-rules` marker in the final HTML. Composes the whole
+    /// through `ui_layout` → `assign_ipe_ids` → `apply_style_injections` →
+    /// `render_html` must produce a ipe-id-scoped `<style>` rule and leave NO
+    /// `data-ipe-pc-rules` marker in the final HTML. Composes the whole
     /// pipeline, not just each half in isolation.
     #[test]
     fn end_to_end_ui_hover_color_renders_scoped_style_and_leaves_no_marker() {
-        use crate::html::{assign_sky_ids, render_html};
+        use crate::html::{assign_ipe_ids, render_html};
         use crate::ui::element::{Color, Element};
         use crate::ui::helpers::ui_bg_hover_color_;
         use crate::ui::render::ui_layout;
@@ -732,11 +732,11 @@ mod tests {
         let attrs = vec![ui_bg_hover_color_::<()>(Color::Rgba(0, 92, 215, 1.0))];
         let elem: Element<()> = Element::Text("hover me".to_owned());
         let mut html = ui_layout(attrs, elem);
-        assign_sky_ids(&mut html, "r");
+        assign_ipe_ids(&mut html, "r");
         apply_style_injections(&mut html);
         let s = render_html(&html);
         assert!(
-            !s.contains("data-sky-pc-rules"),
+            !s.contains("data-ipe-pc-rules"),
             "marker must be consumed, never leak into final HTML: {s}"
         );
         assert!(
@@ -762,7 +762,7 @@ mod tests {
     /// while the scoped `:hover` rule + `@media (hover: hover)` guard stay.
     #[test]
     fn onpseudo_font_family_breakout_is_neutralised_end_to_end() {
-        use crate::html::{assign_sky_ids, render_html};
+        use crate::html::{assign_ipe_ids, render_html};
         use crate::ui::element::Element;
         use crate::ui::helpers::{ui_hover_, ui_on_pseudo_};
         use crate::ui::render::ui_layout;
@@ -773,7 +773,7 @@ mod tests {
             vec![crate::ui::element::Attribute::AttrFontFamily(evil)],
         );
         let mut html = ui_layout(vec![pseudo], Element::Text("hi".to_owned()));
-        assign_sky_ids(&mut html, "r");
+        assign_ipe_ids(&mut html, "r");
         apply_style_injections(&mut html);
         let out = render_html(&html);
         assert!(
@@ -786,7 +786,7 @@ mod tests {
     /// `Ui.onPseudo` must not reach the emitted `<style>` block.
     #[test]
     fn onpseudo_bg_image_import_breakout_is_neutralised_end_to_end() {
-        use crate::html::{assign_sky_ids, render_html};
+        use crate::html::{assign_ipe_ids, render_html};
         use crate::ui::element::Element;
         use crate::ui::helpers::{ui_hover_, ui_on_pseudo_};
         use crate::ui::render::ui_layout;
@@ -798,7 +798,7 @@ mod tests {
             vec![crate::ui::element::Attribute::AttrBgImage(evil)],
         );
         let mut html = ui_layout(vec![pseudo], Element::Text("hi".to_owned()));
-        assign_sky_ids(&mut html, "r");
+        assign_ipe_ids(&mut html, "r");
         apply_style_injections(&mut html);
         let out = render_html(&html);
         assert!(
@@ -808,8 +808,8 @@ mod tests {
     }
 
     /// `Ui.mediaQuery` exact-output pin at the injector: the marker pair on a
-    /// sky-id-stamped element must expand to EXACTLY the upstream shape
-    /// `<style data-sky-mq="<sid>">@media <q> { [sky-id="<sid>"] { <rules> } }</style>`
+    /// ipe-id-stamped element must expand to EXACTLY the upstream shape
+    /// `<style data-ipe-mq="<sid>">@media <q> { [ipe-id="<sid>"] { <rules> } }</style>`
     /// prepended as the first child, with both markers stripped.
     #[test]
     fn media_query_markers_expand_to_exact_scoped_style_block() {
@@ -818,9 +818,9 @@ mod tests {
         let mut tree: Html<()> = Html::HElement(
             "div".to_string(),
             vec![
-                attr("sky-id", "mq0"),
-                attr("data-sky-mq-q", "(min-width: 768px)"),
-                attr("data-sky-mq-rules", "background-color:rgba(18,18,24,1)"),
+                attr("ipe-id", "mq0"),
+                attr("data-ipe-mq-q", "(min-width: 768px)"),
+                attr("data-ipe-mq-rules", "background-color:rgba(18,18,24,1)"),
             ],
             vec![Html::HText("responsive".to_string())],
         );
@@ -828,26 +828,26 @@ mod tests {
         let s = render_html(&tree);
         assert!(
             s.contains(
-                "<style data-sky-mq=\"mq0\">@media (min-width: 768px) { \
-                 [sky-id=\"mq0\"] { background-color:rgba(18,18,24,1) } }</style>"
+                "<style data-ipe-mq=\"mq0\">@media (min-width: 768px) { \
+                 [ipe-id=\"mq0\"] { background-color:rgba(18,18,24,1) } }</style>"
             ),
-            "exact <style data-sky-mq=…> block must render: {s}"
+            "exact <style data-ipe-mq=…> block must render: {s}"
         );
         assert!(
-            !s.contains("data-sky-mq-q") && !s.contains("data-sky-mq-rules"),
+            !s.contains("data-ipe-mq-q") && !s.contains("data-ipe-mq-rules"),
             "markers must be consumed, never leak into final HTML: {s}"
         );
     }
 
     /// `Ui.mediaQuery` FULL-pipeline end-to-end (producer → consumer): the
     /// runtime helper's wrapper (`ui_media_query_`) through `ui_layout` →
-    /// `assign_sky_ids` → `apply_style_injections` → `render_html` must
-    /// produce a sky-id-scoped `@media` `<style>` block, leave no marker, and
-    /// keep the rule keyed to the wrapper's own sky-id so two media queries
+    /// `assign_ipe_ids` → `apply_style_injections` → `render_html` must
+    /// produce a ipe-id-scoped `@media` `<style>` block, leave no marker, and
+    /// keep the rule keyed to the wrapper's own ipe-id so two media queries
     /// on one page cannot cross-contaminate.
     #[test]
     fn end_to_end_ui_media_query_renders_scoped_style_and_leaves_no_marker() {
-        use crate::html::{assign_sky_ids, render_html};
+        use crate::html::{assign_ipe_ids, render_html};
         use crate::ui::element::{Attribute, Color, Element};
         use crate::ui::helpers::ui_media_query_;
         use crate::ui::render::ui_layout;
@@ -858,20 +858,20 @@ mod tests {
             Element::Text("responsive".to_owned()),
         );
         let mut html = ui_layout(vec![], elem);
-        assign_sky_ids(&mut html, "r");
+        assign_ipe_ids(&mut html, "r");
         apply_style_injections(&mut html);
         let s = render_html(&html);
         assert!(
-            !s.contains("data-sky-mq-q") && !s.contains("data-sky-mq-rules"),
+            !s.contains("data-ipe-mq-q") && !s.contains("data-ipe-mq-rules"),
             "markers must be consumed, never leak into final HTML: {s}"
         );
         assert!(
-            s.contains("<style data-sky-mq=\""),
-            "scoped <style data-sky-mq=…> block must render: {s}"
+            s.contains("<style data-ipe-mq=\""),
+            "scoped <style data-ipe-mq=…> block must render: {s}"
         );
         assert!(
-            s.contains("@media (min-width: 768px) { [sky-id=\""),
-            "@media rule must be sky-id-scoped: {s}"
+            s.contains("@media (min-width: 768px) { [ipe-id=\""),
+            "@media rule must be ipe-id-scoped: {s}"
         );
         assert!(
             s.contains("background-color:rgba(18,18,24,1) } }"),
@@ -885,7 +885,7 @@ mod tests {
     /// `</style` breakout, and NO `<script>`, while the child still renders.
     #[test]
     fn end_to_end_ui_media_query_breakout_is_neutralised() {
-        use crate::html::{assign_sky_ids, render_html};
+        use crate::html::{assign_ipe_ids, render_html};
         use crate::ui::element::{Attribute, Color, Element};
         use crate::ui::helpers::ui_media_query_;
         use crate::ui::render::ui_layout;
@@ -896,7 +896,7 @@ mod tests {
             Element::Text("still here".to_owned()),
         );
         let mut html = ui_layout(vec![], elem);
-        assign_sky_ids(&mut html, "r");
+        assign_ipe_ids(&mut html, "r");
         apply_style_injections(&mut html);
         let s = render_html(&html);
         let low = s.to_ascii_lowercase();
@@ -915,7 +915,7 @@ mod tests {
 
     // ── Sink-side forgery gates ───────────────
     // The style markers are raw String attributes a caller can FORGE via
-    // `Ui.htmlAttribute "data-sky-mq-rules" "…"`, bypassing the producer's
+    // `Ui.htmlAttribute "data-ipe-mq-rules" "…"`, bypassing the producer's
     // SafeCssValue / SafeCssMediaQuery gates entirely. The sink builders must
     // re-validate (parse, don't validate at the real boundary) and drop the
     // block fail-closed. `strip_style_close` alone did NOT catch `{ } ; @import`.
@@ -924,10 +924,10 @@ mod tests {
     fn build_mq_sink_drops_forged_rules_breakout() {
         // Forged rules containing a ruleset breakout + at-rule injection.
         let attrs = vec![
-            attr("data-sky-mq-q", "screen"),
+            attr("data-ipe-mq-q", "screen"),
             attr(
-                "data-sky-mq-rules",
-                "color:red } [sky-id=\"x\"] { } @import url(//evil/x.css)",
+                "data-ipe-mq-rules",
+                "color:red } [ipe-id=\"x\"] { } @import url(//evil/x.css)",
             ),
         ];
         assert_eq!(
@@ -940,8 +940,8 @@ mod tests {
     #[test]
     fn build_mq_sink_drops_forged_query_breakout() {
         let attrs = vec![
-            attr("data-sky-mq-q", "screen { } [x] { }"),
-            attr("data-sky-mq-rules", "color:red"),
+            attr("data-ipe-mq-q", "screen { } [x] { }"),
+            attr("data-ipe-mq-rules", "color:red"),
         ];
         assert_eq!(
             build_mq("r.0", &attrs),
@@ -953,12 +953,12 @@ mod tests {
     #[test]
     fn build_mq_sink_keeps_legit_markers() {
         let attrs = vec![
-            attr("data-sky-mq-q", "(min-width: 768px)"),
-            attr("data-sky-mq-rules", "background-color:rgba(18,18,24,1)"),
+            attr("data-ipe-mq-q", "(min-width: 768px)"),
+            attr("data-ipe-mq-rules", "background-color:rgba(18,18,24,1)"),
         ];
         let out = build_mq("r.0", &attrs);
         assert!(
-            out.contains("@media (min-width: 768px) { [sky-id=\"r.0\"]"),
+            out.contains("@media (min-width: 768px) { [ipe-id=\"r.0\"]"),
             "legit query + selector must survive: {out}"
         );
         assert!(
@@ -970,7 +970,7 @@ mod tests {
     #[test]
     fn build_tr_sink_drops_forged_breakout() {
         let attrs = vec![attr(
-            "data-sky-tr-rules",
+            "data-ipe-tr-rules",
             "x } [y] { color:red } @import url(evil)",
         )];
         assert_eq!(
@@ -983,7 +983,7 @@ mod tests {
     #[test]
     fn build_pc_sink_drops_forged_breakout() {
         let attrs = vec![attr(
-            "data-sky-pc-rules",
+            "data-ipe-pc-rules",
             "h|color:red } [x] { } @import url(evil)",
         )];
         assert_eq!(
@@ -998,8 +998,8 @@ mod tests {
         let mut tree: Html<()> = Html::HElement(
             "div".to_string(),
             vec![
-                attr("sky-id", "r"),
-                attr("data-sky-tr-rules", "color 200ms"),
+                attr("ipe-id", "r"),
+                attr("data-ipe-tr-rules", "color 200ms"),
             ],
             vec![],
         );

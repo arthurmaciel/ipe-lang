@@ -247,30 +247,30 @@ pub fn main_add(a: i64, b: i64) -> i64 {
 pub fn ipe_main() -> IpeTask<()> {
     ({
         let double = {
-            let __sky_fn: ::std::sync::Arc<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
+            let __ipe_fn: ::std::sync::Arc<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
                 ::std::sync::Arc::new(move |n: i64| -> i64 { (n * 2) });
-            __sky_fn
+            __ipe_fn
         };
         ({
             let h1 = {
-                let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
+                let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
                     Box::new(move |eta_0: i64| -> i64 { crate::main_add(1, eta_0) });
-                __sky_fn
+                __ipe_fn
             };
             ({
                 let h2 = {
-                    let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
+                    let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
                         Box::new(move |eta_0: i64| -> i64 { crate::main_add(2, eta_0) });
-                    __sky_fn
+                    __ipe_fn
                 };
                 ({
                     let a = crate::main_apply(
                         ({
                             let double = double.clone();
                             {
-                                let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
+                                let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
                                     Box::new(move |eta_0: i64| -> i64 { (double.clone())(eta_0) });
-                                __sky_fn
+                                __ipe_fn
                             }
                         }),
                         3,
@@ -280,11 +280,11 @@ pub fn ipe_main() -> IpeTask<()> {
                             ({
                                 let double = double.clone();
                                 {
-                                    let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
+                                    let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
                                         Box::new(move |eta_0: i64| -> i64 {
                                             (double.clone())(eta_0)
                                         });
-                                    __sky_fn
+                                    __ipe_fn
                                 }
                             }),
                             4,

@@ -1854,7 +1854,7 @@ fn synthesize_record_alias_ctors(
         //
         // The old code emitted IPE-N0010 (DuplicateValue) here, which was wrong
         // and broke the `type Tab = Overview | …` + `type alias Overview = { … }`
-        // pattern found in examples/25-sky-console/src/State.ipe.
+        // pattern found in examples/25-ipe-console/src/State.ipe.
         //
         // Ref: `Sky.Canonicalise.Module.registerAliases` upstream, lines 1759–1775.
         if seen_ctors.contains_key(&alias_name) {
