@@ -361,6 +361,36 @@ fn canon_alias_wrong_arity() {
     assert_rejected("canon_alias_arity", &src, "IPE-N0013");
 }
 
+/// A diamond alias chain that doubles the expansion work at every level
+/// — 31 levels of `(Prev, Prev)` exceed the node budget (2^31 > 100 000) and
+/// must be rejected at name resolution with IPE-N0032, not a stack overflow,
+/// hang, or OOM. The program is otherwise well-typed; only the alias shape is
+/// pathological.
+#[test]
+fn canon_type_alias_expansion_node_budget() {
+    // Build 31 alias levels: A0 = Int, A1 = (A0, A0), ..., A30 = (A29, A29).
+    // Level n produces 2^n expansion nodes, so A30 alone would need > 1 billion.
+    let mut src = format!("{HEAD}type alias A0 = Int\n");
+    for i in 1..=30_u32 {
+        src.push_str(&format!("type alias A{i} = ( A{}, A{} )\n", i - 1, i - 1));
+    }
+    src.push_str("main : A30\nmain =\n    (1, 1)\n");
+    assert_rejected("canon_alias_node_budget", &src, "IPE-N0032");
+}
+
+/// A straight alias chain of depth 300 — deeper than the 256 recursion-depth
+/// cap — must be rejected with IPE-N0032 (depth limit), not a native-stack
+/// overflow.
+#[test]
+fn canon_type_alias_expansion_depth_limit() {
+    let mut src = format!("{HEAD}type alias A0 = Int\n");
+    for i in 1..=300_u32 {
+        src.push_str(&format!("type alias A{i} = A{}\n", i - 1));
+    }
+    src.push_str("main : A300\nmain =\n    1\n");
+    assert_rejected("canon_alias_depth_limit", &src, "IPE-N0032");
+}
+
 /// A user type that reuses a built-in type name (`Int`).
 #[test]
 fn canon_reserved_builtin_type_name() {
