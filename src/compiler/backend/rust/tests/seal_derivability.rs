@@ -53,7 +53,7 @@ fn program_with_live(
             uses_css: false,
             uses_auth: false,
             uses_websocket: false,
-            uses_email: false,
+            uses_email: false, uses_env_public: false,
             uses_ffi: false,
         }],
     }

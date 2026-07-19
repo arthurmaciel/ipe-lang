@@ -1,0 +1,78 @@
+module Main exposing (main)
+
+-- `Ipe.Env.public` — build-time-embedded public config, exercised end-to-end
+-- in a real browser: `API_BASE_URL` is allowlisted in this project's
+-- `sky.toml` `[wasm] publicEnv` and embedded at `cargo build` time via
+-- `option_env!`; `IPE_AUTH_TOKEN_SECRET` is named directly here (NOT
+-- allowlisted — `sky.toml` would refuse it at parse time if it were) to
+-- prove the kernel returns `Nothing` for any key outside the allowlist,
+-- never a live read of the raw process/host environment.
+
+import Ipe.Prelude exposing (..)
+import Ipe.Env as Env
+import Ipe.Live exposing (app)
+import Ipe.Cmd as Cmd
+import Ipe.Sub as Sub
+import Ipe.Ui as Ui
+
+
+type Page
+    = ConfigPage
+
+
+type Msg
+    = NoOp
+
+
+type alias Model =
+    { apiBaseUrl : String
+    , secretProbe : String
+    }
+
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { apiBaseUrl = Maybe.withDefault "(none)" (Env.public "API_BASE_URL")
+      , secretProbe = Maybe.withDefault "(none)" (Env.public "IPE_AUTH_TOKEN_SECRET")
+      }
+    , Cmd.none
+    )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update _msg model =
+    ( model, Cmd.none )
+
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+view : Model -> Html Msg
+view model =
+    Ui.layout []
+        (Ui.column
+            [ Ui.spacing 14, Ui.padding 32 ]
+            [ Ui.el [ Ui.htmlAttribute "id" "public-env-heading" ] (Ui.text "Ipe.Env.public build-time config")
+            , Ui.row [ Ui.spacing 12 ]
+                [ Ui.el [] (Ui.text "API_BASE_URL:")
+                , Ui.el [ Ui.htmlAttribute "id" "api-base-url" ] (Ui.text model.apiBaseUrl)
+                ]
+            , Ui.row [ Ui.spacing 12 ]
+                [ Ui.el [] (Ui.text "IPE_AUTH_TOKEN_SECRET (must read as none):")
+                , Ui.el [ Ui.htmlAttribute "id" "secret-probe" ] (Ui.text model.secretProbe)
+                ]
+            ]
+        )
+
+
+main =
+    app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = ConfigPage
+        }

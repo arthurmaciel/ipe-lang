@@ -337,6 +337,17 @@ const IPE_CORE_PURE: &str = include_str!("../../stdlib/Ipe/Pure.ipe");
 /// `WebSocket` qualifier stays out of `STDLIB_MODULE_QUALIFIERS`.
 const IPE_CORE_WEBSOCKET: &str = include_str!("../../stdlib/Ipe/WebSocket.ipe");
 
+/// `Ipe.Env` — build-time-embedded public config (compiled source).
+///
+/// Defines `public : String -> Maybe String`, routed through the
+/// `Ffi.kernel "Env_public"` alias to the registered `EnvPublic` kernel. The
+/// generated `env_public.rs` (per-project, keyed on `sky.toml`'s `[wasm]
+/// publicEnv` allowlist) is what actually backs it — see
+/// `ipe_backend_rust::project::render_env_public_rs`. Resolved via the
+/// `Ffi.kernel` alias fast-path, so the `Env` qualifier stays out of
+/// `STDLIB_MODULE_QUALIFIERS`.
+const IPE_CORE_ENV: &str = include_str!("../../stdlib/Ipe/Env.ipe");
+
 /// `Ipe.Cache` — in-memory LRU + TTL cache (compiled source).
 ///
 /// Defines `type Cache k v = Cache Int` ADT.  RESOLVES (ipe-0 AND
@@ -484,6 +495,10 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.WebSocket",
         source: IPE_CORE_WEBSOCKET,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Env",
+        source: IPE_CORE_ENV,
     },
     CompiledStdModule {
         dotted: "Ipe.Cache",

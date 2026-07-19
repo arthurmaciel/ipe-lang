@@ -5616,6 +5616,9 @@ struct KernelUsage {
     websocket: bool,
     /// The `Ipe.Email` `Email.send` kernel.
     email: bool,
+    /// The `Ipe.Env` `Env.public` kernel — gates emitting the per-project
+    /// `env_public.rs` (built from `sky.toml`'s `[wasm] publicEnv` allowlist).
+    env_public: bool,
     /// Any foreign-crate FFI wrapper call ([`Callee::Ffi`]) — gates the
     /// emitted `mod ffi;` declaration + bound-crate `Cargo.toml` deps.
     ffi: bool,
@@ -5635,6 +5638,7 @@ impl KernelUsage {
             && self.webview
             && self.websocket
             && self.email
+            && self.env_public
             && self.ffi
     }
 
@@ -5651,6 +5655,7 @@ impl KernelUsage {
         self.webview |= k.is_webview();
         self.websocket |= k.is_websocket_client();
         self.email |= matches!(k, KernelFn::EmailSend);
+        self.env_public |= matches!(k, KernelFn::EnvPublic);
         // A kernel whose emitted symbol lives in a feature-module its emit-class
         // does not pull in (e.g. `Cmd.publish`'s `cmd_publish` in `live::pubsub`,
         // `HttpStream.chunks`'s `sub_subscribe_stream` in `http_stream`) forces
@@ -7321,6 +7326,11 @@ impl<'a> Lowerer<'a> {
         // append `pub mod email; pub use email::*;` to the emitted
         // `ipe_runtime/mod.rs` and to add the `lettre` dependency.
         let uses_email = kernel_usage.email;
+        // detect `Ipe.Env` `Env.public` usage — the backend uses this flag to
+        // emit the per-project `env_public.rs` and append `pub mod
+        // env_public; pub use env_public::*;` to the emitted
+        // `ipe_runtime/mod.rs`.
+        let uses_env_public = kernel_usage.env_public;
 
         // detect outbound Ipe.WebSocket client usage — the backend adds the
         // `websocket_client` Cargo feature + `ws_client` runtime module.
@@ -7346,6 +7356,7 @@ impl<'a> Lowerer<'a> {
             uses_auth,
             uses_websocket,
             uses_email,
+            uses_env_public,
             uses_ffi,
         };
         Ok(Program {
@@ -14005,7 +14016,9 @@ impl<'a> Lowerer<'a> {
                 // ── Ipe.WebSocket client arity-1 ──────────────────
                 | KernelFn::WebSocketConnect
                 | KernelFn::WebSocketConnectWith
-                | KernelFn::WebSocketClose,
+                | KernelFn::WebSocketClose
+                // ── Ipe.Env arity-1 ──────────────────
+                | KernelFn::EnvPublic,
             ) => Ok(1),
             Callee::Kernel(
                 KernelFn::AuthHashPasswordCost
@@ -17482,6 +17495,11 @@ mod tests {
         KernelFn::WebSocketClose,
         KernelFn::WebSocketCloseWithCode,
         KernelFn::SubSubscribeWebSocket,
+        // Ipe.Env — compiled-source module; resolved exclusively through the
+        // `Ffi.kernel "Env_public"` alias fast-path (the `Env` qualifier is a
+        // compiled-source module name, never a legacy `QUALIFIERS` entry), so
+        // no legacy `lower_callee` arm exists.
+        KernelFn::EnvPublic,
         // Ipe.Email
         KernelFn::EmailSend,
         // Ipe.Money — compiled-source Layer-3 module; every kernel is reached

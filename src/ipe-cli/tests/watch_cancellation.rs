@@ -62,6 +62,7 @@ fn compile_worker_is_cancelled_by_a_concurrent_input_edit() {
         ipe_backend_rust::DbDriver::Sqlite,
         None,
         ipe_ir::Target::Native,
+        Vec::new(),
     );
 
     let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
@@ -132,6 +133,7 @@ fn the_same_fixture_compiles_cleanly_without_a_concurrent_edit() {
         ipe_backend_rust::DbDriver::Sqlite,
         None,
         ipe_ir::Target::Native,
+        Vec::new(),
     );
 
     let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
