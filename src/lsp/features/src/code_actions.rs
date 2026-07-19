@@ -1,0 +1,379 @@
+//! Code actions: diagnostic-driven quick-fixes.
+//!
+//! For each LSP diagnostic in the requested range we produce zero or more
+//! `CodeAction`s — workspace edits the client can apply with one click.
+//!
+//! **Supported quick-fixes (by diagnostic code):**
+//!
+//! - `IPE-T0001` (type mismatch) / no match arms on a `case`: no automatic fix
+//!   (the shape is too varied).
+//! - `IPE-N0001` (unused import): "Remove unused import" — delete the import
+//!   line.
+//! - `IPE-N0003` (missing type annotation): "Add type annotation" — insert the
+//!   inferred type annotation above the binding.
+//!
+//! The provider is deliberately conservative: it only acts on codes it can
+//! fix with a single-hunk text edit that it can prove correct. Unknown codes
+//! produce no actions rather than a guess.
+
+use std::collections::HashMap;
+
+use lsp_types::{
+    CodeAction, CodeActionKind, CodeActionOrCommand, Diagnostic, NumberOrString, Range, TextEdit,
+    Url, WorkspaceEdit,
+};
+
+use ipe_db::{Db as _, IpeDatabase, SourceRoot};
+use ipe_diagnostics::Span;
+
+use crate::offset::{PositionEncoding, offset_to_position};
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+/// Compute quick-fix code actions for the given range and diagnostic list.
+///
+/// `diagnostics` are the LSP diagnostics currently shown for `uri` — the
+/// client forwards them in the request so we do not need to re-collect them.
+/// `text` is the current source text of the document.
+#[must_use]
+pub fn code_actions(
+    db: &IpeDatabase,
+    root: SourceRoot,
+    entry: ipe_db::SourceFile,
+    module: &[String],
+    uri: &Url,
+    range: Range,
+    diagnostics: &[Diagnostic],
+    text: &str,
+    encoding: PositionEncoding,
+) -> Vec<CodeActionOrCommand> {
+    let _ = (db, root, entry); // reserved for richer fixes using the type env
+    let files = root.files(db);
+    let Some(&_file) = files.get(module) else {
+        return Vec::new();
+    };
+
+    // Collect actions for each diagnostic that overlaps the requested range.
+    let in_range: Vec<&Diagnostic> = diagnostics
+        .iter()
+        .filter(|d| ranges_overlap(d.range, range))
+        .collect();
+
+    if in_range.is_empty() {
+        return Vec::new();
+    }
+
+    let mut actions: Vec<CodeActionOrCommand> = Vec::new();
+
+    for diag in in_range {
+        let Some(NumberOrString::String(code)) = &diag.code else {
+            continue;
+        };
+        match code.as_str() {
+            "IPE-N0001" => {
+                // Unused import — remove the line containing this diagnostic.
+                if let Some(action) =
+                    remove_line_action(uri, diag, text, "Remove unused import", encoding)
+                {
+                    actions.push(CodeActionOrCommand::CodeAction(action));
+                }
+            }
+            "IPE-N0004" => {
+                // Missing type annotation — insert the annotation.
+                // The diagnostic message carries the inferred type in the form
+                // `missing type annotation for `name`: Type`. We extract the
+                // type string and synthesise the edit.
+                if let Some(action) = add_type_annotation_action(
+                    db, root, entry, module, uri, diag, text, encoding,
+                ) {
+                    actions.push(CodeActionOrCommand::CodeAction(action));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    actions
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn ranges_overlap(a: Range, b: Range) -> bool {
+    a.start <= b.end && b.start <= a.end
+}
+
+/// Quick-fix that deletes the entire line (including its trailing newline)
+/// that contains `diag.range`.
+fn remove_line_action(
+    uri: &Url,
+    diag: &Diagnostic,
+    text: &str,
+    title: &str,
+    encoding: PositionEncoding,
+) -> Option<CodeAction> {
+    let line = diag.range.start.line as usize;
+    // Byte span of the full line including its trailing '\n'.
+    let (line_start, line_end) = line_byte_range(text, line);
+    let start = offset_to_position(text, line_start, encoding);
+    let end = offset_to_position(text, line_end, encoding);
+    let edit = TextEdit {
+        range: Range { start, end },
+        new_text: String::new(),
+    };
+    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+    changes.insert(uri.clone(), vec![edit]);
+    Some(CodeAction {
+        title: title.to_owned(),
+        kind: Some(CodeActionKind::QUICKFIX),
+        diagnostics: Some(vec![diag.clone()]),
+        edit: Some(WorkspaceEdit {
+            changes: Some(changes),
+            document_changes: None,
+            change_annotations: None,
+        }),
+        command: None,
+        is_preferred: Some(true),
+        disabled: None,
+        data: None,
+    })
+}
+
+/// Quick-fix that inserts a type annotation above the binding named in the
+/// diagnostic message. Extracts the name and inferred type from the message.
+fn add_type_annotation_action(
+    db: &IpeDatabase,
+    root: SourceRoot,
+    entry: ipe_db::SourceFile,
+    module: &[String],
+    uri: &Url,
+    diag: &Diagnostic,
+    text: &str,
+    encoding: PositionEncoding,
+) -> Option<CodeAction> {
+    // Try to extract name + type from the solved type environment.
+    // Diagnostic range points at the name token — resolve it via the parse
+    // tree to find the line the annotation should precede.
+    let files = root.files(db);
+    let &file = files.get(module)?;
+    let parsed = ipe_db::parse(db, file).ok()?;
+    let byte = {
+        let lo = diag.range.start;
+        crate::offset::position_to_offset(text, lo, encoding) as u32
+    };
+    // Find which top-level binding spans this byte.
+    let interner = db.interner().lock();
+    let mut found_name: Option<String> = None;
+    let mut annotation_line: Option<u32> = None;
+    for value in &parsed.values {
+        let name_span = value.value.name.span;
+        if name_span.lo <= byte && byte < name_span.hi {
+            found_name = interner
+                .resolve(value.value.name.value)
+                .map(str::to_owned);
+            annotation_line = Some(
+                offset_to_position(text, name_span.lo as usize, encoding)
+                    .line,
+            );
+            break;
+        }
+    }
+    drop(interner);
+    let name = found_name?;
+    let insert_line = annotation_line?;
+
+    // Retrieve inferred type from the solved type environment.
+    let solved = ipe_db::typecheck(db, root, entry).ok()?;
+    let mut interner = db.interner().lock();
+    let home: Vec<ipe_intern::Symbol> = module
+        .iter()
+        .map(|s| interner.intern(s).ok())
+        .collect::<Option<Vec<_>>>()?;
+    let name_sym = interner.intern(&name).ok()?;
+    drop(interner);
+
+    let ty = solved.env.get(&(home, name_sym))?;
+    let interner = db.interner().lock();
+    let mut namer = ipe_types::VarNamer::new();
+    let doc = ipe_types::ty_to_doc(ty, &interner, &mut namer).ok()?;
+    drop(interner);
+    let ty_str = ipe_diagnostics::render_ty(&doc);
+
+    // Synthesise `name : Type\n` inserted at the start of `insert_line`.
+    let insert_byte = line_byte_range(text, insert_line as usize).0;
+    let insert_pos = offset_to_position(text, insert_byte, encoding);
+    let annotation = format!("{name} : {ty_str}\n");
+    let edit = TextEdit {
+        range: Range {
+            start: insert_pos,
+            end: insert_pos,
+        },
+        new_text: annotation,
+    };
+    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+    changes.insert(uri.clone(), vec![edit]);
+    Some(CodeAction {
+        title: format!("Add type annotation for `{name}`"),
+        kind: Some(CodeActionKind::QUICKFIX),
+        diagnostics: Some(vec![diag.clone()]),
+        edit: Some(WorkspaceEdit {
+            changes: Some(changes),
+            document_changes: None,
+            change_annotations: None,
+        }),
+        command: None,
+        is_preferred: Some(true),
+        disabled: None,
+        data: None,
+    })
+}
+
+/// Returns `(start_byte, end_byte)` for `line` (0-based), where `end_byte`
+/// points just past the trailing `\n` (or to `text.len()` on the last line).
+fn line_byte_range(text: &str, line: usize) -> (usize, usize) {
+    let mut byte = 0;
+    for (i, l) in text.split('\n').enumerate() {
+        let next = byte + l.len() + 1; // +1 for the '\n'
+        if i == line {
+            return (byte, next.min(text.len()));
+        }
+        byte = next;
+    }
+    (text.len(), text.len())
+}
+
+// Suppress the unused-import warning for `Span` (used only in doc context).
+#[allow(dead_code)]
+type _SpanAlias = Span;
+
+#[cfg(test)]
+mod tests {
+    use ipe_db::{IpeDatabase, ModuleOrigin, SourceFile, SourceRoot};
+    use lsp_types::{
+        Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, Url,
+    };
+
+    use crate::offset::PositionEncoding;
+
+    use super::code_actions;
+
+    fn file(db: &IpeDatabase, path: &[&str], text: &str) -> SourceFile {
+        SourceFile::new(
+            db,
+            path.iter().map(|s| (*s).to_owned()).collect(),
+            text.to_owned(),
+            ModuleOrigin::User,
+        )
+    }
+
+    fn root_of(db: &IpeDatabase, files: &[(&[&str], SourceFile)]) -> SourceRoot {
+        SourceRoot::new(
+            db,
+            files
+                .iter()
+                .map(|(path, f)| (path.iter().map(|s| (*s).to_owned()).collect(), *f))
+                .collect(),
+        )
+    }
+
+    fn diag_at(line: u32, code: &str) -> Diagnostic {
+        #[allow(deprecated)]
+        Diagnostic {
+            range: Range {
+                start: Position { line, character: 0 },
+                end: Position {
+                    line,
+                    character: 10,
+                },
+            },
+            severity: Some(DiagnosticSeverity::WARNING),
+            code: Some(NumberOrString::String(code.to_owned())),
+            code_description: None,
+            source: Some("ipe".to_owned()),
+            message: format!("test diagnostic {code}"),
+            related_information: None,
+            tags: None,
+            data: None,
+        }
+    }
+
+    #[test]
+    fn unknown_code_produces_no_actions() {
+        let db = IpeDatabase::new();
+        let src = "module Main exposing (main)\n\nmain : Int\nmain =\n    42\n";
+        let entry = file(&db, &["Main"], src);
+        let root = root_of(&db, &[(&["Main"], entry)]);
+        let uri = Url::from_file_path("/fake/Main.ipe").unwrap();
+        let range = Range {
+            start: Position {
+                line: 0,
+                character: 0,
+            },
+            end: Position {
+                line: 4,
+                character: 0,
+            },
+        };
+        let diag = diag_at(2, "IPE-X9999");
+        let actions = code_actions(
+            &db,
+            root,
+            entry,
+            &["Main".to_owned()],
+            &uri,
+            range,
+            &[diag],
+            src,
+            PositionEncoding::Utf16,
+        );
+        assert!(actions.is_empty(), "unknown code → no actions");
+    }
+
+    #[test]
+    fn remove_import_action_deletes_the_import_line() {
+        let db = IpeDatabase::new();
+        let src =
+            "module Main exposing (main)\n\nimport Unused\n\nmain : Int\nmain =\n    42\n";
+        let entry = file(&db, &["Main"], src);
+        let root = root_of(&db, &[(&["Main"], entry)]);
+        let uri = Url::from_file_path("/fake/Main.ipe").unwrap();
+        let range = Range {
+            start: Position {
+                line: 2,
+                character: 0,
+            },
+            end: Position {
+                line: 2,
+                character: 13,
+            },
+        };
+        let diag = diag_at(2, "IPE-N0001");
+        let actions = code_actions(
+            &db,
+            root,
+            entry,
+            &["Main".to_owned()],
+            &uri,
+            range,
+            &[diag],
+            src,
+            PositionEncoding::Utf16,
+        );
+        assert_eq!(actions.len(), 1, "one action for unused import");
+        let lsp_types::CodeActionOrCommand::CodeAction(action) = &actions[0] else {
+            panic!("expected CodeAction");
+        };
+        assert_eq!(action.title, "Remove unused import");
+        let edit = action
+            .edit
+            .as_ref()
+            .and_then(|e| e.changes.as_ref())
+            .and_then(|c| c.values().next())
+            .and_then(|v| v.first())
+            .expect("edit present");
+        assert!(edit.new_text.is_empty(), "replacement is empty (delete)");
+    }
+}
