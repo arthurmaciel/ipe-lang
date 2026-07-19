@@ -14,8 +14,11 @@
 //! - a member without a defining-path identity for the name (legacy cache);
 //! - two DISTINCT defining paths under one name (genuinely different types —
 //!   today's distinct nominals are already correct);
-//! - the defining crate resolved to different VERSIONS across members (two
-//!   same-named types again — collapsing could break THE SEAL with E0308);
+//! - the defining crate resolved to different VERSIONS across the members
+//!   that resolved it at all, or to none (two same-named types again —
+//!   collapsing could break THE SEAL with E0308; a member with NO resolution
+//!   saw the type only through the manifest-run cross-crate index and is not
+//!   evidence of a second type);
 //! - an import edge that would close a CYCLE among interface modules (the
 //!   module graph must stay compilable; the skipped name keeps its split
 //!   nominals and is reported).
@@ -136,23 +139,22 @@ fn decide(
     let Some(def_crate) = defid.split("::").next() else {
         return Ok(None);
     };
-    // Version guard: the defining crate must have resolved identically in
-    // every surfacing member's own inspection.
-    let mut versions: BTreeSet<&str> = BTreeSet::new();
-    for s in surfacers {
-        match catalog.get(s.idx).and_then(|c| c.dep_versions.get(def_crate)) {
-            Some(v) => {
-                versions.insert(v);
-            }
-            None => {
-                return Err(format!(
-                    "defining crate `{def_crate}` did not resolve to one known version \
-                     across the members surfacing the type — collapsing could emit an \
-                     unbuildable project"
-                ));
-            }
-        }
-    }
+    // Version guard: every member that RESOLVED the defining crate in its own
+    // inspection must agree on its version, and at least one must have. A
+    // member with no entry saw the type only through the manifest-run
+    // cross-crate index — its rendered path resolves in the emitted app to
+    // the ONE pinned version the resolving members agreed on (a textual
+    // `::crate::Type` path can only name the app's single direct-dep
+    // version), so absence is not evidence of a second type.
+    let versions: BTreeSet<&str> = surfacers
+        .iter()
+        .filter_map(|s| {
+            catalog
+                .get(s.idx)
+                .and_then(|c| c.dep_versions.get(def_crate))
+                .map(String::as_str)
+        })
+        .collect();
     if versions.len() != 1 {
         return Err(format!(
             "defining crate `{def_crate}` did not resolve to one known version \
@@ -382,6 +384,30 @@ mod tests {
         assert!(report.skipped.is_empty(), "distinct types are not an over-drop");
         assert!(catalog[0].opaque_types.contains_key("Config"));
         assert!(catalog[1].opaque_types.contains_key("Config"));
+    }
+
+    #[test]
+    fn version_unknown_to_one_member_still_unifies_on_the_known_pin() {
+        // The core member never resolved the umbrella crate in its own jail
+        // (it saw `stripe::Client` only through the cross-crate index) — the
+        // umbrella's own resolution is the one known pin, and it suffices.
+        let mut catalog = vec![
+            member(
+                "Rust.Async_stripe",
+                &[("Client", "::stripe::Client", Some("stripe::hyper::client::Client"))],
+                &[],
+                &[("stripe", "1.0.0-rc.6")],
+            ),
+            member(
+                "Rust.Async_stripe_core",
+                &[("Client", "::stripe::Client", Some("stripe::hyper::client::Client"))],
+                &[],
+                &[("stripe_shared", "1.0.0-rc.6")],
+            ),
+        ];
+        let report = unify_foreign_nominals(&mut catalog);
+        assert_eq!(report.unified.len(), 1, "{report:?}");
+        assert_eq!(report.unified[0].home_module, "Rust.Async_stripe");
     }
 
     #[test]
