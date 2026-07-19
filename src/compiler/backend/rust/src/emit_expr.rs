@@ -5879,14 +5879,23 @@ pub fn emit_expr_at(
         Expr::Str(s) => Ok(format!("{s:?}.to_string()")),
         // A character literal renders as a Rust `char`. The carried text is a
         // single character (lexer invariant); `{:?}` escapes it deterministically.
-        // A malformed (non-single-char) value falls back to a string literal
-        // rather than emitting invalid Rust, staying total.
+        // A malformed (non-single-char) value fails closed as a `CompilerBug`:
+        // a string-literal fallback in `char` position is NOT a safe total
+        // fallback — it emits Rust that `cargo` rejects (E0308), the exact
+        // exit-0-then-cargo-fail shape THE SEAL forbids.
         Expr::Char(c) => {
             let mut chars = c.chars();
-            Ok(match (chars.next(), chars.next()) {
-                (Some(ch), None) => format!("{ch:?}"),
-                _ => format!("{c:?}"),
-            })
+            match (chars.next(), chars.next()) {
+                (Some(ch), None) => Ok(format!("{ch:?}")),
+                _ => Err(Diagnostic::CompilerBug {
+                    where_: "ipe_backend_rust::emit_expr_at(Expr::Char)",
+                    detail: format!(
+                        "Expr::Char carried {} characters ({c:?}), not the single \
+                         character the lexer's char-literal invariant guarantees",
+                        c.chars().count()
+                    ),
+                }),
+            }
         }
         // A boolean value renders as the Rust keyword constant.
         Expr::Bool(b) => Ok(if *b { "true" } else { "false" }.to_owned()),
@@ -6684,10 +6693,24 @@ fn emit_tuple_arm_head(
             let mut prelude = String::new();
             let mut guards = Vec::new();
             for (c, sub) in elems.iter().enumerate() {
-                let col = cols.get(c).copied().unwrap_or(ColMode {
-                    str_mode: false,
-                    list_mode: false,
-                });
+                // `unwrap_or` on a missing column would silently coerce a
+                // wider-than-known tuple pattern to `str_mode: false,
+                // list_mode: false` — the WRONG per-column coercion emits a
+                // binder of the wrong type, an exit-0-then-cargo-fail (E0308)
+                // THE SEAL forbids. Fail closed instead: this is the same
+                // "lowerer only produces columns it schemed" invariant the
+                // wildcard/tuple-only match arm below already enforces.
+                let col = cols.get(c).copied().ok_or_else(|| {
+                    let found = cols.len();
+                    Diagnostic::CompilerBug {
+                        where_: "ipe_backend_rust::emit_tuple_arm_head",
+                        detail: format!(
+                            "tuple-scrutinee match arm has {found} column(s) but the pattern \
+                             reached column {c}; the lowerer's column table drifted from the \
+                             pattern width"
+                        ),
+                    }
+                })?;
                 let (rp, pre, gs) = emit_whole_arm_head(ctx, sub, col.str_mode, col.list_mode)?;
                 rendered.push(rp);
                 prelude.push_str(&pre);
