@@ -95,14 +95,16 @@ pub struct WasmConfig {
 }
 
 /// The `[wasm].publicEnv` secret-name denylist (spec Q5 "Config: default-deny
-/// allowlist (+ layered secret denylist)"): `*_SECRET`, `*_TOKEN`, `*_KEY`,
-/// `*_PASSWORD`, `DATABASE_URL`, and the internal `IPE_*` namespace. An
-/// allowlisted name matching this is a BUILD error (parse time), forcing the
-/// author to confirm — never a silent drop, never a runtime-only refusal.
-/// Case-insensitive (`sky.toml` authors may write either case; the runtime
-/// env-var namespace itself is case-sensitive POSIX convention, but a
-/// same-name-different-case entry is exactly the kind of "did they mean the
-/// secret" ambiguity this gate exists to catch).
+/// allowlist (+ layered secret denylist)").
+///
+/// Denies `*_SECRET`, `*_TOKEN`, `*_KEY`, `*_PASSWORD`, `DATABASE_URL`, and
+/// the internal `IPE_*` namespace. An allowlisted name matching this is a
+/// BUILD error (parse time), forcing the author to confirm — never a silent
+/// drop, never a runtime-only refusal. Case-insensitive (`sky.toml` authors
+/// may write either case; the runtime env-var namespace itself is
+/// case-sensitive POSIX convention, but a same-name-different-case entry is
+/// exactly the kind of "did they mean the secret" ambiguity this gate exists
+/// to catch).
 #[must_use]
 pub fn is_denylisted_public_env_name(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
@@ -260,18 +262,9 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
             continue;
         }
         if line.starts_with('[') {
-            section = if line == "[project]" {
-                "[project]"
-            } else if line == "[source]" {
-                "[source]"
-            } else if line == "[database]" {
-                "[database]"
-            } else if line == "[rust]" {
-                "[rust]"
-            } else if line == "[wasm]" {
-                "[wasm]"
-            } else {
-                "other"
+            section = match line {
+                "[project]" | "[source]" | "[database]" | "[rust]" | "[wasm]" => line,
+                _ => "other",
             };
             continue;
         }
