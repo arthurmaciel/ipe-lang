@@ -151,6 +151,74 @@ fn server_only_kernel_fails_at_compile_time() {
     );
 }
 
+/// M5 Layer 2 (IPE-N0030): a client entry that transitively imports a
+/// server-classified module (never names the server kernel itself) fails
+/// with the EXACT import chain — `Main(client) -> View(shared) ->
+/// Data(server: imports File.readFile)` — not just "not allowed". End-to-end
+/// through the real multi-module build pipeline (not just the
+/// `ipe_canon::module_classify` unit tests).
+#[test]
+#[allow(clippy::panic)] // test assertion: a non-pipeline error variant IS the failure
+fn transitive_server_import_fails_naming_the_exact_chain() {
+    let dir = scratch("wasm_gate_transitive_chain");
+    let srcdir = dir.join("srcdir");
+    std::fs::create_dir_all(&srcdir).expect("mkdir scratch");
+    std::fs::write(
+        srcdir.join("Data.ipe"),
+        "module Data exposing (load)\n\
+         import Ipe.Prelude exposing (..)\n\
+         import Ipe.File as File\n\
+         import Ipe.Task as Task\n\
+         \n\
+         load : Task Error String\n\
+         load = File.readFile \"/etc/passwd\"\n",
+    )
+    .expect("write Data.ipe");
+    std::fs::write(
+        srcdir.join("View.ipe"),
+        "module View exposing (label)\n\
+         import Ipe.Prelude exposing (..)\n\
+         import Data exposing (load)\n\
+         import Ipe.Task as Task\n\
+         \n\
+         label : String\n\
+         label = \"view\"\n\
+         \n\
+         forceLink : Task Error String\n\
+         forceLink = load\n",
+    )
+    .expect("write View.ipe");
+    let entry = write_entry(
+        &srcdir,
+        "module Main exposing (main)\n\
+         import Ipe.Prelude exposing (..)\n\
+         import Ipe.Log as Log\n\
+         import View exposing (label)\n\
+         \n\
+         main =\n\
+         \x20   Log.println label\n",
+    );
+    let out = dir.join("out");
+    let runtime = ipe::resolve_runtime().expect("runtime must resolve");
+    let err =
+        ipe::build_with_sibling_discovery_with_options(&entry, &out, &runtime, wasm_options())
+            .expect_err("View -> Data's File.readFile must be denied transitively");
+    let CliError::Pipeline { diag, .. } = err else {
+        panic!("expected a pipeline diagnostic, got: {err:?}");
+    };
+    let rendered = format!("{diag:?}");
+    assert!(
+        rendered.contains("ServerModuleReachableFromWasmClient"),
+        "expected IPE-N0030 ServerModuleReachableFromWasmClient, got: {rendered}"
+    );
+    assert!(
+        rendered.contains("Main(client)")
+            && rendered.contains("View(shared)")
+            && rendered.contains("Data(server: imports File.readFile)"),
+        "expected the exact import chain naming Main -> View -> Data, got: {rendered}"
+    );
+}
+
 /// The same server-only program builds cleanly for the native target — the
 /// gate is target-keyed, not a global restriction.
 #[test]

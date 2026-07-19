@@ -56,6 +56,110 @@ pub struct ProjectManifest {
     /// Malformed values (a bad bool, an unknown allocator) are refused at
     /// parse time, never silently ignored.
     pub static_request: crate::build_plan::StaticRequestLayer,
+    /// The `[wasm]` section (M5: `mode`/`entry`/`mount`/`publicEnv`/
+    /// `optLevel`) — `WasmConfig::default()` (mode "off") when the section is
+    /// absent.
+    pub wasm: WasmConfig,
+}
+
+/// `[wasm]` `sky.toml` section (spec: `docs/architecture/wasm-target.md` Q6
+/// "Opt-in mechanism").
+///
+/// ```toml
+/// [wasm]
+/// mode      = "spa"              # spa (MVP) | hydrate (MVP+1) | off (default)
+/// entry     = "src/Client.ipe"   # client entry; its reachability closure is the bundle
+/// mount     = "#app"             # SPA mount node
+/// publicEnv = ["API_BASE_URL"]   # default-deny allowlist; rejects IPE_* / secret patterns
+/// optLevel  = "z"
+/// ```
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WasmConfig {
+    /// `"spa"` / `"hydrate"` / `"off"` (default when the key or section is
+    /// absent — `--target wasm` still works without a `[wasm]` section; this
+    /// field is metadata for the eventual SSR+hydration/SPA-shell split, not
+    /// a gate on `ipe build --target wasm` itself).
+    pub mode: Option<String>,
+    /// The client entry module's file, relative to the project root
+    /// (defaults to the build's own entry file when absent — see M6).
+    pub entry: Option<String>,
+    /// The SPA mount selector (e.g. `"#app"`).
+    pub mount: Option<String>,
+    /// The `Ipe.Env.public` default-deny allowlist: environment variable
+    /// names the wasm bundle may read at build time. Validated against the
+    /// secret-name denylist at PARSE time (below) — listing a denylisted
+    /// name here is a build error, never a runtime refusal.
+    pub public_env: Vec<String>,
+    /// `wasm-opt` optimisation level (`"z"`/`"s"`/`"0"`..`"3"`).
+    pub opt_level: Option<String>,
+}
+
+/// The `[wasm].publicEnv` secret-name denylist (spec Q5 "Config: default-deny
+/// allowlist (+ layered secret denylist)"): `*_SECRET`, `*_TOKEN`, `*_KEY`,
+/// `*_PASSWORD`, `DATABASE_URL`, and the internal `IPE_*` namespace. An
+/// allowlisted name matching this is a BUILD error (parse time), forcing the
+/// author to confirm — never a silent drop, never a runtime-only refusal.
+/// Case-insensitive (`sky.toml` authors may write either case; the runtime
+/// env-var namespace itself is case-sensitive POSIX convention, but a
+/// same-name-different-case entry is exactly the kind of "did they mean the
+/// secret" ambiguity this gate exists to catch).
+#[must_use]
+pub fn is_denylisted_public_env_name(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    upper == "DATABASE_URL"
+        || upper.starts_with("IPE_")
+        || upper.ends_with("_SECRET")
+        || upper.ends_with("_TOKEN")
+        || upper.ends_with("_KEY")
+        || upper.ends_with("_PASSWORD")
+}
+
+/// Validate `[wasm] publicEnv` against [`is_denylisted_public_env_name`].
+///
+/// # Errors
+/// [`CliError::UsageOwned`] naming the first denylisted entry found.
+fn validate_public_env(names: &[String]) -> Result<(), CliError> {
+    for name in names {
+        if is_denylisted_public_env_name(name) {
+            return Err(CliError::UsageOwned(format!(
+                "sky.toml: [wasm] publicEnv lists {name:?}, which matches the secret-name \
+                 denylist (*_SECRET / *_TOKEN / *_KEY / *_PASSWORD / DATABASE_URL / the \
+                 internal IPE_* namespace) — a secret environment variable can never be \
+                 allowlisted into the public wasm bundle, allowlisted or not"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Parse a TOML string array `["a", "b", "c"]` — the one array shape
+/// `[wasm] publicEnv` needs. Each element must be a double-quoted string;
+/// whitespace around commas/brackets is tolerated. Not a general TOML array
+/// parser (this file's `sky.toml` reader is a deliberately minimal line
+/// parser, not a full TOML implementation — see the module doc).
+fn parse_string_array(raw: &str) -> Result<Vec<String>, CliError> {
+    let trimmed = raw.trim();
+    let Some(inner) = trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']')) else {
+        return Err(CliError::UsageOwned(format!(
+            "sky.toml: [wasm] publicEnv must be a `[\"NAME\", …]` array, got: {raw}"
+        )));
+    };
+    let inner = inner.trim();
+    if inner.is_empty() {
+        return Ok(Vec::new());
+    }
+    inner
+        .split(',')
+        .map(|item| {
+            let item = item.trim();
+            let unquoted = item.strip_prefix('"').and_then(|s| s.strip_suffix('"'));
+            unquoted.map(str::to_owned).ok_or_else(|| {
+                CliError::UsageOwned(format!(
+                    "sky.toml: [wasm] publicEnv entry must be a quoted string, got: {item}"
+                ))
+            })
+        })
+        .collect()
 }
 
 /// A discovered Ipê source file with its resolved module path.
@@ -144,6 +248,11 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
     let mut rust_target: Option<String> = None;
     let mut rust_allocator: Option<String> = None;
     let mut rust_allow_slow: Option<String> = None;
+    let mut wasm_mode: Option<String> = None;
+    let mut wasm_entry: Option<String> = None;
+    let mut wasm_mount: Option<String> = None;
+    let mut wasm_public_env: Vec<String> = Vec::new();
+    let mut wasm_opt_level: Option<String> = None;
 
     for raw_line in text.lines() {
         let line = raw_line.trim();
@@ -159,6 +268,8 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
                 "[database]"
             } else if line == "[rust]" {
                 "[rust]"
+            } else if line == "[wasm]" {
+                "[wasm]"
             } else {
                 "other"
             };
@@ -168,7 +279,8 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
             continue;
         };
         let key = key.trim();
-        let val = val.trim().trim_matches('"');
+        let raw_val = val.trim();
+        let val = raw_val.trim_matches('"');
         match (section, key) {
             ("" | "[project]", "name") => name = Some(val.to_owned()),
             ("[source]", "root") => src_rel = Some(val.to_owned()),
@@ -177,9 +289,23 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
             ("[rust]", "target") => rust_target = Some(val.to_owned()),
             ("[rust]", "allocator") => rust_allocator = Some(val.to_owned()),
             ("[rust]", "allowSlowAllocator") => rust_allow_slow = Some(val.to_owned()),
+            ("[wasm]", "mode") => wasm_mode = Some(val.to_owned()),
+            ("[wasm]", "entry") => wasm_entry = Some(val.to_owned()),
+            ("[wasm]", "mount") => wasm_mount = Some(val.to_owned()),
+            ("[wasm]", "publicEnv") => wasm_public_env = parse_string_array(raw_val)?,
+            ("[wasm]", "optLevel") => wasm_opt_level = Some(val.to_owned()),
             _ => {}
         }
     }
+
+    validate_public_env(&wasm_public_env)?;
+    let wasm = WasmConfig {
+        mode: wasm_mode,
+        entry: wasm_entry,
+        mount: wasm_mount,
+        public_env: wasm_public_env,
+        opt_level: wasm_opt_level,
+    };
 
     let name = name.ok_or(CliError::Usage("sky.toml: missing a `name = \"…\"` entry"))?;
 
@@ -217,6 +343,7 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
         src_root,
         driver,
         static_request,
+        wasm,
     })
 }
 
@@ -717,5 +844,86 @@ import String
             }
         });
         assert!(result.is_err(), "A ↔ B cycle must be detected");
+    }
+
+    // ── [wasm] section (M5) ──────────────────────────────────────────────
+
+    #[test]
+    fn no_wasm_section_defaults_to_empty_config() {
+        let toml_path = write_manifest("no_wasm_section", "");
+        let manifest = parse_manifest(&toml_path).expect("manifest must parse");
+        assert_eq!(manifest.wasm, WasmConfig::default());
+    }
+
+    #[test]
+    fn wasm_section_parses_every_field() {
+        let toml_path = write_manifest(
+            "wasm_full_section",
+            "[wasm]\n\
+             mode = \"spa\"\n\
+             entry = \"src/Client.ipe\"\n\
+             mount = \"#app\"\n\
+             publicEnv = [\"API_BASE_URL\", \"APP_VERSION\"]\n\
+             optLevel = \"z\"\n",
+        );
+        let manifest = parse_manifest(&toml_path).expect("manifest must parse");
+        assert_eq!(manifest.wasm.mode.as_deref(), Some("spa"));
+        assert_eq!(manifest.wasm.entry.as_deref(), Some("src/Client.ipe"));
+        assert_eq!(manifest.wasm.mount.as_deref(), Some("#app"));
+        assert_eq!(
+            manifest.wasm.public_env,
+            vec!["API_BASE_URL".to_owned(), "APP_VERSION".to_owned()]
+        );
+        assert_eq!(manifest.wasm.opt_level.as_deref(), Some("z"));
+    }
+
+    /// `IPE_AUTH_TOKEN_SECRET` can be neither read (no `System.getenv`
+    /// denotation for wasm — Layer 1) nor allowlisted: listing it in
+    /// `[wasm] publicEnv` is a BUILD error at `sky.toml` parse time, never a
+    /// silently-dropped entry and never a runtime-only refusal.
+    #[test]
+    fn public_env_rejects_the_auth_secret_at_parse_time() {
+        let toml_path = write_manifest(
+            "wasm_secret_denied",
+            "[wasm]\npublicEnv = [\"IPE_AUTH_TOKEN_SECRET\"]\n",
+        );
+        let err = parse_manifest(&toml_path).expect_err("a secret name must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("IPE_AUTH_TOKEN_SECRET"),
+            "error must name the offending entry: {msg}"
+        );
+    }
+
+    #[test]
+    fn public_env_rejects_every_denylisted_pattern() {
+        for denied in [
+            "DATABASE_URL",
+            "STRIPE_SECRET_KEY",
+            "SESSION_TOKEN",
+            "API_KEY",
+            "ADMIN_PASSWORD",
+            "IPE_ANYTHING",
+        ] {
+            assert!(
+                is_denylisted_public_env_name(denied),
+                "{denied} must match the secret-name denylist"
+            );
+        }
+    }
+
+    #[test]
+    fn public_env_allows_ordinary_config_names() {
+        for allowed in ["API_BASE_URL", "APP_VERSION", "FEATURE_FLAG_X"] {
+            assert!(
+                !is_denylisted_public_env_name(allowed),
+                "{allowed} must NOT match the secret-name denylist"
+            );
+        }
+        let toml_path = write_manifest(
+            "wasm_safe_public_env",
+            "[wasm]\npublicEnv = [\"API_BASE_URL\"]\n",
+        );
+        parse_manifest(&toml_path).expect("an ordinary config name must parse cleanly");
     }
 }

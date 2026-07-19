@@ -446,6 +446,9 @@ fn name_label(msg: &NameError) -> Option<String> {
             "`{qualifier}.{name}` is server-only and has no denotation for target `wasm`; \
              run it behind a server route and call it from the client over HTTP"
         )),
+        NameError::ServerModuleReachableFromWasmClient { chain } => Some(format!(
+            "the client entry's reachability closure reaches a server module: {chain}"
+        )),
         NameError::Unknown => None,
     }
 }
