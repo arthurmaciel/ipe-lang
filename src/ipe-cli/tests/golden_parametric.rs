@@ -16,7 +16,7 @@
 //! `main` — the ONE generic function, monomorphised by Rust at every call site.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
-//! `/home/arthur/Documentos/comp/sky/sky-out/sky` compiles + runs the SAME
+//! `/home/arthur/Documentos/comp/sky/out/sky` compiles + runs the SAME
 //! `Main.ipe` to stdout `42\n`, exit 0 — hand-verified in a temp dir, where the
 //! Go backend emits the matching monomorphisation
 //! `func identity[T1 any](x T1) T1` / `func const_[T1 any, T2 any](x T1, y T2) T1`

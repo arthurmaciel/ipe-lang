@@ -1408,7 +1408,7 @@ fn run_watch(rest: &[String]) -> Result<(), CliError> {
         }
     }
 
-    let out_dir = out.map_or_else(|| PathBuf::from("sky-out").join("rust"), PathBuf::from);
+    let out_dir = out.map_or_else(|| PathBuf::from("out").join("rust"), PathBuf::from);
     let runtime_dir = match runtime {
         Some(r) => PathBuf::from(r),
         None => resolve_runtime()?,
@@ -1561,7 +1561,7 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
         return Ok(());
     }
 
-    let out_dir = out.map_or_else(|| PathBuf::from("sky-out").join("rust"), PathBuf::from);
+    let out_dir = out.map_or_else(|| PathBuf::from("out").join("rust"), PathBuf::from);
     let runtime_dir = match runtime {
         Some(r) => PathBuf::from(r),
         None => resolve_runtime()?,
@@ -1719,7 +1719,7 @@ fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
 ///
 /// One-shot build + run: compiles the entry to `out_dir` (same routing as
 /// [`run_build`]), then invokes `cargo build` on the emitted project and
-/// execs the resulting `sky-app` binary, forwarding any arguments supplied
+/// execs the resulting `ipe-app` binary, forwarding any arguments supplied
 /// after `--` and propagating the binary's exit code.
 ///
 /// Build failures (ipe compile step or cargo build step) surface as
@@ -1756,7 +1756,7 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
     let cli_layer = static_flags.layer();
 
     let entry_path = PathBuf::from(&entry);
-    let out_dir = out.map_or_else(|| PathBuf::from("sky-out").join("rust"), PathBuf::from);
+    let out_dir = out.map_or_else(|| PathBuf::from("out").join("rust"), PathBuf::from);
     let runtime_dir = match runtime {
         Some(r) => PathBuf::from(r),
         None => resolve_runtime()?,
@@ -1808,7 +1808,7 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
     }
 
     // --- Step 3: exec the emitted binary, forwarding args and exit code ---
-    // The binary name is always `sky-app` (the default package name used by
+    // The binary name is always `ipe-app` (the default package name used by
     // `write_emitted_project`; see `ipe_backend_rust::EmittedProject`). The
     // target directory is asked of cargo itself (`cargo metadata`) — a
     // `CARGO_TARGET_DIR` env or a user-level `[build] target-dir` pin
@@ -1819,7 +1819,7 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
         bin.push(plan.triple.as_str());
     }
     bin.push("debug");
-    bin.push("sky-app");
+    bin.push("ipe-app");
     let mut cmd = std::process::Command::new(&bin);
     cmd.args(bin_args);
 
@@ -1852,7 +1852,7 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
         if !status.success() {
             let code = status.code().unwrap_or(1);
             return Err(CliError::UsageOwned(format!(
-                "sky-app exited with code {code}"
+                "ipe-app exited with code {code}"
             )));
         }
         Ok(())
@@ -2571,7 +2571,7 @@ mod tests {
             "emitted generic-record crate must compile: {status:?}"
         );
 
-        let bin = out.join("target").join("debug").join("sky-app");
+        let bin = out.join("target").join("debug").join("ipe-app");
         let run = std::process::Command::new(&bin).output();
         let Ok(run) = run else {
             assert!(false_marker(), "run binary: {run:?}");

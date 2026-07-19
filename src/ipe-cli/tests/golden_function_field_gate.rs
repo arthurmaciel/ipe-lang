@@ -18,7 +18,7 @@
 //! NEVER accept the program and then cargo-fail.
 //!
 //! Note on the Go oracle: the Go reference compiler at
-//! `/home/arthur/Documentos/comp/sky/sky-out/sky` ALSO fails this shape today —
+//! `/home/arthur/Documentos/comp/sky/out/sky` ALSO fails this shape today —
 //! its codegen emits Go that `go build` rejects (E5001 "Ipê compiler bug",
 //! `cannot call f ... any is not a function`), hand-verified in a temp dir. So
 //! the Rust clean diagnostic is a strict improvement over the Go reference, not

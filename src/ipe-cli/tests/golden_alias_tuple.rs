@@ -8,7 +8,7 @@
 //! and print `20`.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
-//! `/home/arthur/Documentos/comp/sky/sky-out/sky` compiles + runs the SAME
+//! `/home/arthur/Documentos/comp/sky/out/sky` compiles + runs the SAME
 //! `Main.ipe` to stdout `20\n`, exit 0 — hand-verified in a temp dir:
 //! `combine (10, 3) = (10 + 3) + (10 - 3) = 13 + 7 = 20`.
 use std::path::{Path, PathBuf};

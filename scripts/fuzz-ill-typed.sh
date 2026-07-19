@@ -147,7 +147,7 @@ run_ipe_expect_reject() {
     : > "$log"
     local rc=0
     ( cd "$dir" && timeout "$BUILD_TIMEOUT" \
-      "$IPE_BIN" build src/Main.ipe --out sky-out/rust >"$log" 2>&1 ) || rc=$?
+      "$IPE_BIN" build src/Main.ipe --out out/rust >"$log" 2>&1 ) || rc=$?
     if [[ "$rc" -eq 0 ]]; then
         # FALSE ACCEPTANCE: ipe returned 0 on an ill-typed program.
         echo "FALSE-ACCEPTANCE"
@@ -178,7 +178,7 @@ run_ipe_expect_accept() {
     : > "$log"
     local rc=0
     ( cd "$dir" && timeout "$BUILD_TIMEOUT" \
-      "$IPE_BIN" build src/Main.ipe --out sky-out/rust >"$log" 2>&1 ) || rc=$?
+      "$IPE_BIN" build src/Main.ipe --out out/rust >"$log" 2>&1 ) || rc=$?
     [[ "$rc" -eq 0 ]]
 }
 
@@ -709,7 +709,7 @@ run_cat_demo() {
         : > "$log"
         local rc=0
         ( cd "$ddir" && timeout "$BUILD_TIMEOUT" \
-          "$IPE_BIN" build src/Main.ipe --out sky-out/rust >"$log" 2>&1 ) || rc=$?
+          "$IPE_BIN" build src/Main.ipe --out out/rust >"$log" 2>&1 ) || rc=$?
 
         if [[ "$rc" -eq 0 ]]; then
             printf '  RESULT: FALSE ACCEPTANCE (ipe exit 0) — SOUNDNESS BUG!\n'
@@ -771,7 +771,7 @@ run_iter() {
     : > "$log"
     local rc=0
     ( cd "$iterdir" && timeout "$BUILD_TIMEOUT" \
-      "$IPE_BIN" build src/Main.ipe --out sky-out/rust >"$log" 2>&1 ) || rc=$?
+      "$IPE_BIN" build src/Main.ipe --out out/rust >"$log" 2>&1 ) || rc=$?
 
     if [[ "$rc" -eq 0 ]]; then
         echo "FALSE-ACCEPTANCE label=$label expected=$code"

@@ -16,7 +16,7 @@
 //!   LITERALS are held to), never a silent mis-emit.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
-//! `/home/arthur/Documentos/comp/sky/sky-out/sky` compiles + runs the
+//! `/home/arthur/Documentos/comp/sky/out/sky` compiles + runs the
 //! shape-equivalent programs
 //!
 //! ```text
@@ -310,7 +310,7 @@ fn end_to_end_builds_and_prints_seven() -> DResult<()> {
         "emitted record-pattern project must build: {status:?}"
     );
 
-    let bin = out.join("target").join("debug").join("sky-app");
+    let bin = out.join("target").join("debug").join("ipe-app");
     let output = Command::new(&bin).output().map_err(|e| io_bug(&bin, &e))?;
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),

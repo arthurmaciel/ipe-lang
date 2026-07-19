@@ -16,7 +16,7 @@
 //!   * pipe partial `100 |> add3 1 2`   -> `103` (1 + 2 + 100).
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
-//! `/home/arthur/Documentos/comp/sky/sky-out/sky` compiles + runs the SAME
+//! `/home/arthur/Documentos/comp/sky/out/sky` compiles + runs the SAME
 //! `Main.ipe` to stdout `6\n33\n103\n`, exit 0:
 //!
 //! ```text

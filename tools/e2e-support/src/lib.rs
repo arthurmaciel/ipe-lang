@@ -45,7 +45,7 @@ fn sanitize(name: &str) -> String {
 /// unique to this golden, letting every golden's binary coexist in the one
 /// shared cargo target. Returns the unique package name.
 fn rewrite_package_name(emitted_dir: &Path, golden_name: &str) -> Result<String, String> {
-    const ANCHOR: &str = "name = \"sky-app\"";
+    const ANCHOR: &str = "name = \"ipe-app\"";
 
     let manifest = emitted_dir.join("Cargo.toml");
     let original = std::fs::read_to_string(&manifest)
@@ -56,7 +56,7 @@ fn rewrite_package_name(emitted_dir: &Path, golden_name: &str) -> Result<String,
             manifest.display()
         ));
     }
-    let unique = format!("sky-app-e2e-{}", sanitize(golden_name));
+    let unique = format!("ipe-app-e2e-{}", sanitize(golden_name));
     let rewritten = original.replacen(ANCHOR, &format!("name = \"{unique}\""), 1);
     std::fs::write(&manifest, rewritten)
         .map_err(|e| format!("cannot write {}: {e}", manifest.display()))?;

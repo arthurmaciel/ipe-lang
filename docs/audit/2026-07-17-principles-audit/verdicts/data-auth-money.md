@@ -343,7 +343,7 @@ to ground the JWT parse claims.
 - reachability: a supervised app (or test run) that writes any file under an in-root
   `tests/` directory while `ipe watch` runs. `is_watchable_leaf` (scope.rs:283-292)
   accepts ANY component named `tests`, any extension, anywhere under root; the exclusion
-  list (`target`/`sky-out`/`.ipe`/…) doesn't cover it → write → relevant → rebuild →
+  list (`target`/`out`/`.ipe`/…) doesn't cover it → write → relevant → rebuild →
   restart → app writes again → loop. `count_source_files` (scope.rs:294-334) also counts
   every file, miscounting assets toward MAX_WATCHED_FILES.
 - reasoning: verified the any-component `tests` match with no extension filter. Low

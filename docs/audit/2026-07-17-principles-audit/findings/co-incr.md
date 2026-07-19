@@ -96,7 +96,7 @@ read for reachability only: `src/ipe-cli/src/{lib,watch,cache,stdlib}.rs`,
 - axis: correctness
 - principle: P1/P2 — the watcher must not observe its own (or its child's) output; INV-4 confined scope
 - location: `src/compiler/watch/src/scope.rs:283-292` (`is_watchable_leaf` accepts ANY component named `tests`, any extension, anywhere under root), `:254-275` (`is_relevant`)
-- reachability: a supervised app (or test run) that writes files under any in-root `tests/` directory — e.g. golden outputs, `tests/output.log` — while `ipe watch` runs: write → relevant event → rebuild → restart → app writes again → loop. The exclusion list (`target`, `sky-out`, `.ipe`, …) does not cover it.
+- reachability: a supervised app (or test run) that writes files under any in-root `tests/` directory — e.g. golden outputs, `tests/output.log` — while `ipe watch` runs: write → relevant event → rebuild → restart → app writes again → loop. The exclusion list (`target`, `out`, `.ipe`, …) does not cover it.
 - problem: the "tests/ fixture assets count" intent (root-level `tests/`) is implemented as a global any-component match with no extension filter, so a churning non-source artifact inside any `tests` directory keeps the rebuild loop hot; combined with `count_source_files` counting every file (not just `.ipe`, `scope.rs:294-334`), the H18 bound also miscounts assets as "source files" in its refusal message.
 - fix direction: restrict the `tests` rule to the root-level `tests/` watch root and/or to source extensions; count only `.ipe` files toward `MAX_WATCHED_FILES`.
 - prior: new.

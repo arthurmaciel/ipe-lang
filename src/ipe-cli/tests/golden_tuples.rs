@@ -3,7 +3,7 @@
 //! them, and (behind `IPE_E2E=1`) the emitted project must build and print `1`.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
-//! `/home/arthur/Documentos/comp/sky/sky-out/sky` compiles + runs the SAME
+//! `/home/arthur/Documentos/comp/sky/out/sky` compiles + runs the SAME
 //! `Main.ipe` to stdout `1\n`, exit 0 — verified by hand in a temp dir (so the
 //! Go build artifacts never touch the reference tree):
 //!
