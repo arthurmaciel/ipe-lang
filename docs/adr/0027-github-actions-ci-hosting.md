@@ -19,7 +19,7 @@ self-hosted runners, no local CI agents.
 
 Key properties the public-repo + GHA combination provides:
 - **4-core / 16 GB ephemeral runners** per job; the matrix provides N in parallel.
-- **No disk hygiene**: runners are ephemeral, so the ENOSPC / go-build-bloat class of
+- **No disk hygiene**: runners are ephemeral, so the ENOSPC / build-artifact-bloat class of
   dev-box problems does not exist in CI.
 - **Warm builds** via `sccache` (GitHub Actions cache backend) + `Swatinem/rust-cache`.
 - **Free for public repos**: zero cost.
