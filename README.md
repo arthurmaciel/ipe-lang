@@ -86,7 +86,7 @@ cargo build --release -p ipe-playground
 
 # Run:
 export IPE_BIN="$(pwd)/target/release/ipe"
-export SKY_RUNTIME_DIR="$(pwd)/src/runtime/rust/src/sky_runtime"
+export SKY_RUNTIME_DIR="$(pwd)/src/runtime/rust/src"
 export IPE_PLAYGROUND_STATIC_DIR="$(pwd)/src/playground/www"
 ./target/release/ipe-playground
 ```
