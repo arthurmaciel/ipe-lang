@@ -290,18 +290,18 @@ fn resolve_ipe_bin() -> Result<PathBuf, String> {
     Err("`ipe` binary not found; set IPE_BIN or ensure `ipe` is on PATH".to_owned())
 }
 
-/// Resolve the runtime directory: `SKY_RUNTIME_DIR` env var, or the default
+/// Resolve the runtime directory: `IPE_RUNTIME_DIR` env var, or the default
 /// relative to the workspace root found by walking up from the binary.
 fn resolve_runtime_dir() -> Result<PathBuf, String> {
-    if let Ok(p) = std::env::var("SKY_RUNTIME_DIR") {
+    if let Ok(p) = std::env::var("IPE_RUNTIME_DIR") {
         let path = PathBuf::from(p);
         if path.is_dir() {
             return Ok(path);
         }
-        return Err(format!("SKY_RUNTIME_DIR={path:?} is not a directory"));
+        return Err(format!("IPE_RUNTIME_DIR={path:?} is not a directory"));
     }
     Err(
-        "runtime directory not found; set SKY_RUNTIME_DIR to the \
+        "runtime directory not found; set IPE_RUNTIME_DIR to the \
          ipe_runtime source directory (src/runtime/rust/src)"
             .to_owned(),
     )
