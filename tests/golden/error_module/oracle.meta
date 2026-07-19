@@ -1,6 +1,0 @@
-# Cached Go-oracle metadata. Regenerate with the refresh-oracle tool.
-main_ipe_sha256 = e314a5ac5289037fb8b8f9ff1b3b5132a64db5bcdda9090fbb774b8a95c072f8
-go_sky_version = sky dev
-exit_code = 0
-oracle_divergence = true
-divergence_reason = Minimal Error=String slice (#86): Error.toString echoes the message verbatim (boom); upstream Go renders the kind prefix (Unexpected: boom) via the rich ErrorKind ADT deferred to #85.

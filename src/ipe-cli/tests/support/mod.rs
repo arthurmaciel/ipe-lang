@@ -21,9 +21,9 @@
 //! Rigour: a build failure FAILS the test (the build assert carries cargo's
 //! stderr); it is never skipped and never reported as a false green.
 //!
-//! The build/run plumbing and the cached-oracle format both live in the shared
-//! [`oracle`] crate so the `refresh-oracle` tool and these tests cannot drift —
-//! the tool WRITES the cache via the same code the tests READ it through.
+//! The build/run plumbing lives in the shared [`e2e_support`] crate so every
+//! test binary uses the same cargo-JSON parsing logic to locate the produced
+//! binary.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -275,16 +275,16 @@ pub struct RunOutcome {
 /// cargo's stderr. Used by SEAL goldens whose kernel is network-effectful (e.g.
 /// `Email.send`) so a run has no deterministic stdout — the SEAL proof there is
 /// that ipe-0 ⇒ the emitted crate `cargo build`s. Delegates to
-/// [`oracle::build_rust_binary`].
+/// [`e2e_support::build_rust_binary`].
 #[allow(dead_code)] // not every golden test binary exercises every helper
 pub fn build_emitted(golden_name: &str, emitted_dir: &Path) -> Result<(), String> {
-    oracle::build_rust_binary(golden_name, emitted_dir).map(|_| ())
+    e2e_support::build_rust_binary(golden_name, emitted_dir).map(|_| ())
 }
 
 /// Build the emitted project at `emitted_dir` into the shared target and run the
 /// resulting binary, returning its captured stdout and exit code.
 ///
-/// Delegates to [`oracle::build_and_run_rust`] (the same core the refresh tool
+/// Delegates to [`e2e_support::build_and_run_rust`] (the same core the refresh tool
 /// uses) and wraps its `Result` in a test assertion.
 ///
 /// # Panics
@@ -296,7 +296,7 @@ pub fn build_emitted(golden_name: &str, emitted_dir: &Path) -> Result<(), String
 #[must_use]
 #[allow(dead_code)] // not every golden test binary exercises every helper
 pub fn build_and_run_emitted(golden_name: &str, emitted_dir: &Path) -> RunOutcome {
-    let result = oracle::build_and_run_rust(golden_name, emitted_dir);
+    let result = e2e_support::build_and_run_rust(golden_name, emitted_dir);
     assert!(
         result.is_ok(),
         "{}",
@@ -333,7 +333,7 @@ pub fn build_and_run_emitted_with_stdin(
     emitted_dir: &Path,
     stdin_bytes: &[u8],
 ) -> RunOutcome {
-    let exe = oracle::build_rust_binary(golden_name, emitted_dir);
+    let exe = e2e_support::build_rust_binary(golden_name, emitted_dir);
     assert!(
         exe.is_ok(),
         "{}",
@@ -415,7 +415,7 @@ pub fn build_and_run_stack_limited(
     emitted_dir: &Path,
     stack_kib: u32,
 ) -> RunOutcome {
-    let exe = oracle::build_rust_binary(golden_name, emitted_dir);
+    let exe = e2e_support::build_rust_binary(golden_name, emitted_dir);
     assert!(
         exe.is_ok(),
         "{}",
@@ -451,22 +451,33 @@ pub fn build_and_run_stack_limited(
     }
 }
 
-/// Assert skyc's stdout matches the golden's CACHED Go oracle, with the
-/// staleness gate enforced first.
+/// Assert ipe's stdout matches the golden's captured expected output.
 ///
-/// This is the read side of the cached-oracle infra: it NEVER runs the Go
-/// backend. It re-hashes `tests/golden/<name>/Main.ipe` and, if the hash no
-/// longer matches `oracle.meta`, fails loudly with "run refresh-oracle" rather
-/// than diffing against a stale `expected_go.txt`. A missing oracle is likewise
-/// a hard failure — never a skip. When the golden is marked `oracle_divergence`
-/// (the Go oracle fails on this shape, or we follow a different target), the
-/// comparison is against ipe's own recorded-correct output.
-#[allow(dead_code)] // exercised by the goldens that opt into cached parity
-pub fn assert_go_parity(golden_name: &str, golden_dir: &Path, skyc_stdout: &str) {
-    let outcome = oracle::check_parity(golden_dir, golden_name, skyc_stdout);
+/// Reads `tests/golden/<name>/expected.txt` (the self-regression anchor) and
+/// fails loudly if the file is absent or the output differs. A missing file is
+/// always a hard failure — never a skip — so a golden without a captured
+/// expected output cannot pass silently.
+#[allow(dead_code)] // exercised by goldens with a captured expected output
+pub fn assert_self_regression(golden_name: &str, golden_dir: &Path, ipe_stdout: &str) {
+    let expected = e2e_support::read_expected(golden_dir);
     assert!(
-        outcome.is_ok(),
-        "{}",
-        outcome.err().map_or(String::new(), |e| e.to_string())
+        expected.is_ok(),
+        "{golden_name}: {}",
+        expected.as_ref().err().map_or("", String::as_str)
     );
+    let Ok(expected) = expected else { return };
+    assert_eq!(
+        ipe_stdout,
+        expected,
+        "{golden_name}: stdout does not match expected.txt"
+    );
+}
+
+/// Compatibility alias: callers that previously used `assert_go_parity` now get
+/// the self-regression check (`expected.txt` instead of `expected_go.txt` +
+/// `oracle.meta`). Keeping the name avoids a mass-rename across the ~72 call
+/// sites — the semantics are identical: hard-fail on mismatch or missing file.
+#[allow(dead_code)]
+pub fn assert_go_parity(golden_name: &str, golden_dir: &Path, skyc_stdout: &str) {
+    assert_self_regression(golden_name, golden_dir, skyc_stdout);
 }

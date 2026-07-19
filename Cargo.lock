@@ -975,6 +975,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
+name = "e2e-support"
+version = "0.0.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "either"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1957,6 +1964,7 @@ dependencies = [
 name = "ipe"
 version = "0.0.0"
 dependencies = [
+ "e2e-support",
  "hex",
  "ipe_backend",
  "ipe_backend_rust",
@@ -1973,7 +1981,6 @@ dependencies = [
  "ipe_types",
  "ipe_watch",
  "notify",
- "oracle",
  "salsa",
  "serde_json",
  "sha2",
@@ -3005,15 +3012,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
-name = "oracle"
-version = "0.0.0"
-dependencies = [
- "hex",
- "serde_json",
- "sha2",
-]
-
-[[package]]
 name = "pango"
 version = "0.18.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3037,10 +3035,6 @@ dependencies = [
  "libc",
  "system-deps",
 ]
-
-[[package]]
-name = "parity-matrix"
-version = "0.0.0"
 
 [[package]]
 name = "parking"
@@ -3615,14 +3609,6 @@ dependencies = [
  "getrandom 0.2.17",
  "libredox",
  "thiserror 2.0.18",
-]
-
-[[package]]
-name = "refresh-oracle"
-version = "0.0.0"
-dependencies = [
- "ipe",
- "oracle",
 ]
 
 [[package]]

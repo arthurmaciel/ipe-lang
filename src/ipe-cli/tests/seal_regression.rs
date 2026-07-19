@@ -11,7 +11,7 @@
 //! harness cannot express.
 //!
 //! The cargo build+run step is `IPE_E2E`-gated (it reuses the examples-sweep's
-//! build-and-run core via `oracle::build_and_run_rust`), so the default fast
+//! build-and-run core via `e2e_support::build_and_run_rust`), so the default fast
 //! pass stays emit-only: without `IPE_E2E` the tests assert only `ipe` exit 0.
 //!
 //! Run the full seal (`ipe` + cargo + run):
@@ -87,7 +87,7 @@ fn assert_accepted(name: &str, source: &str, expected_stdout: &str) {
     if std::env::var("IPE_E2E").is_err() {
         return; // emit-only fast pass
     }
-    match oracle::build_and_run_rust(name, &out) {
+    match e2e_support::build_and_run_rust(name, &out) {
         Ok(run) => assert_eq!(
             run.stdout, expected_stdout,
             "{name}: emitted crate built (SEAL held) but ran to the wrong output — \
@@ -155,7 +155,7 @@ fn assert_accepted_project(name: &str, files: &[(&str, &str)], expected_stdout: 
     if std::env::var("IPE_E2E").is_err() {
         return;
     }
-    match oracle::build_and_run_rust(name, &out) {
+    match e2e_support::build_and_run_rust(name, &out) {
         Ok(run) => assert_eq!(
             run.stdout, expected_stdout,
             "{name}: emitted multi-module crate built but ran to the wrong output"
