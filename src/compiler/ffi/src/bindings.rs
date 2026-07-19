@@ -1154,6 +1154,12 @@ fn field_set_lines(cx: &WrapperCx<'_>) -> Vec<String> {
         .first()
         .cloned()
         .unwrap_or_else(|| "String".to_owned());
+    // A FALLIBLE setter carries a narrowing integer field: convert with
+    // `try_from` and fold an out-of-range value to `Err` (the checked
+    // variant), never a silent truncation.
+    if f.effect() == Effect::Fallible {
+        return checked_field_set_lines(cx, &recv_rust, field, &set_val_rust);
+    }
     let expr = owned_value_coercion(cx.raw_param(0), &set_val_rust, "arg0");
     vec![
         format!("// [field-set] {}", cx.label),
@@ -1166,6 +1172,71 @@ fn field_set_lines(cx: &WrapperCx<'_>) -> Vec<String> {
         "    r".to_owned(),
         "}".to_owned(),
     ]
+}
+
+/// CHECKED setter body for a narrowing integer field (bare or `Option<>`):
+/// `try_from` the Ipe `i64`, assign on `Ok`, fold out-of-range to a typed
+/// `Err`. Any other raw shape fails closed (empty region — the binding drops).
+fn checked_field_set_lines(
+    cx: &WrapperCx<'_>,
+    recv_rust: &str,
+    field: &str,
+    set_val_rust: &str,
+) -> Vec<String> {
+    let raw = cx.raw_param(0).trim();
+    let is_checked_int = |t: &str| {
+        matches!(
+            t,
+            "i8" | "i16"
+                | "i32"
+                | "u8"
+                | "u16"
+                | "u32"
+                | "u64"
+                | "u128"
+                | "i128"
+                | "usize"
+                | "isize"
+        )
+    };
+    let sig = format!(
+        "pub fn {}(arg0: {set_val_rust}, arg1: {recv_rust}) -> IpeResult<IpeError, {recv_rust}> {{",
+        cx.rust_name
+    );
+    let assign = |value_expr: &str| {
+        vec![
+            format!(
+                "        Ok(v) => {{ let mut r = arg1; r.{} = {value_expr}; ok_res(r) }}",
+                rust_safe_ident(field)
+            ),
+            "        Err(e) => IpeResult::Err(ipe_error_from_foreign(e)),".to_owned(),
+        ]
+    };
+    if let Some(inner) = strip_generic1("Option", raw).map(str::trim)
+        && is_checked_int(inner)
+    {
+        let mut out = vec![
+            format!("// [field-set checked] {}", cx.label),
+            sig,
+            format!("    match ipe_maybe_to_option(arg0).map({inner}::try_from).transpose() {{"),
+        ];
+        out.extend(assign("v"));
+        out.push("    }".to_owned());
+        out.push("}".to_owned());
+        return out;
+    }
+    if is_checked_int(raw) {
+        let mut out = vec![
+            format!("// [field-set checked] {}", cx.label),
+            sig,
+            format!("    match {raw}::try_from(arg0) {{"),
+        ];
+        out.extend(assign("v"));
+        out.push("    }".to_owned());
+        out.push("}".to_owned());
+        return out;
+    }
+    Vec::new()
 }
 
 /// Owned inbound coercion: lift an Ipê-resolved wrapper value into the exact
@@ -1681,6 +1752,61 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
             "{out}"
         );
         assert!(out.contains("    let mut r = arg1;"), "{out}");
+    }
+
+    #[test]
+    fn fallible_field_setter_renders_checked_conversion() {
+        // A narrowing integer field's setter is FALLIBLE: `try_from` + typed
+        // Err on out-of-range, never a silent truncation. Both the bare and
+        // the `Option<>`-wrapped shapes render checked bodies.
+        let pkg = semver_pkg(&json!([
+            {
+                "name": "patch_set_field",
+                "params": [
+                    {"name": "value", "type": "Int", "ipeType": "Int", "rustType": "u32"},
+                    {"name": "self", "type": "Version", "ipeType": "Version", "rustType": "semver::Version"}
+                ],
+                "results": [{"name": "", "type": "Version", "rustType": "semver::Version"}],
+                "effect": "fallible",
+                "recvType": "Version",
+                "recvRustType": "semver::Version",
+                "methodName": "patch",
+                "isFieldSet": true
+            },
+            {
+                "name": "build_set_field",
+                "params": [
+                    {"name": "value", "type": "Maybe Int", "ipeType": "Maybe Int", "rustType": "Option<u64>"},
+                    {"name": "self", "type": "Version", "ipeType": "Version", "rustType": "semver::Version"}
+                ],
+                "results": [{"name": "", "type": "Version", "rustType": "semver::Version"}],
+                "effect": "fallible",
+                "recvType": "Version",
+                "recvRustType": "semver::Version",
+                "methodName": "build",
+                "isFieldSet": true
+            }
+        ]));
+        let out = emit_bindings(&pkg);
+        assert!(
+            out.contains(
+                "pub fn semver_patch_set_field_from_version(arg0: i64, arg1: ::semver::Version) -> IpeResult<IpeError, ::semver::Version> {"
+            ),
+            "{out}"
+        );
+        assert!(out.contains("match u32::try_from(arg0) {"), "{out}");
+        assert!(
+            out.contains("Ok(v) => { let mut r = arg1; r.patch = v; ok_res(r) }"),
+            "{out}"
+        );
+        assert!(
+            out.contains("Err(e) => IpeResult::Err(ipe_error_from_foreign(e)),"),
+            "{out}"
+        );
+        assert!(
+            out.contains("match ipe_maybe_to_option(arg0).map(u64::try_from).transpose() {"),
+            "{out}"
+        );
     }
 
     #[test]
