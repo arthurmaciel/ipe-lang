@@ -398,10 +398,44 @@ impl PackageName {
     }
 }
 
+/// A validated inspector-reported package path.
+///
+/// The crate name or `--manifest` path the inspector was invoked with,
+/// echoed back on the wire. Free-form text (it may carry `/`, `.`, `@`,
+/// spaces — a manifest path is not a bare identifier), but never a control
+/// character.
+///
+/// This is the only path by which `pkg` reaches emitted code: it is
+/// interpolated verbatim into two `//` comment lines of the unsandboxed
+/// `_bindings.rs` written into the user's crate
+/// ([`crate::bindings::emit_bindings`]). A raw, unvalidated string there
+/// would let an embedded `\n` close the comment and splice compilable Rust
+/// source into it. Every other consumer of `pkg_path` (`rust_module_name`,
+/// `rust_kernel_name`, `pkg_to_crate_import`) already maps non-alphanumerics
+/// to `_`; gating here at the decode boundary keeps the invariant enforced
+/// once, consistent with the rest of this module's parse-don't-validate
+/// newtypes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PkgPath(String);
+
+impl PkgPath {
+    fn parse(s: &str) -> Result<Self, crate::diag::WireDefect> {
+        if s.chars().any(char::is_control) {
+            Err(crate::diag::WireDefect::InvalidPkgPath { got: s.to_owned() })
+        } else {
+            Ok(Self(s.to_owned()))
+        }
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// A fully-validated package inspection result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PkgInfo {
-    pkg_path: String,
+    pkg_path: PkgPath,
     name: PackageName,
     version: String,
     fns: Vec<FnInfo>,
@@ -436,7 +470,7 @@ impl PkgInfo {
     /// The crate path as given to the inspector.
     #[must_use]
     pub fn pkg_path(&self) -> &str {
-        &self.pkg_path
+        self.pkg_path.as_str()
     }
 
     /// The validated crate name.
@@ -708,6 +742,10 @@ impl TryFrom<WirePkgInfo> for PkgInfo {
     type Error = Diagnostic;
 
     fn try_from(w: WirePkgInfo) -> Result<Self, Diagnostic> {
+        let pkg_path = PkgPath::parse(&w.pkg).map_err(|defect| Diagnostic::WireMalformed {
+            context: "package inspection document".to_owned(),
+            defect,
+        })?;
         let name = PackageName::parse(&w.name).map_err(|defect| Diagnostic::WireMalformed {
             context: format!("crate `{}`", w.name),
             defect,
@@ -742,7 +780,7 @@ impl TryFrom<WirePkgInfo> for PkgInfo {
             });
         }
         Ok(Self {
-            pkg_path: w.pkg,
+            pkg_path,
             name,
             version: w.version,
             fns,
@@ -1061,6 +1099,44 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    // `pkg_path` is emitted verbatim into two `//` comment lines of the
+    // unsandboxed `_bindings.rs` (`crate::bindings::emit_bindings`). A `pkg`
+    // carrying a newline could close the comment and splice compilable Rust
+    // source into it. Assert decode refuses the WHOLE package (like the
+    // illegal-crate-name case above) rather than passing the raw string
+    // through.
+    #[test]
+    fn a_newline_bearing_pkg_path_fails_the_whole_package() {
+        let v = json!({
+            "pkg": "semver\n} fn evil() { std::process::exit(1)",
+            "name": "semver",
+            "functions": [],
+            "errors": []
+        });
+        assert!(matches!(
+            decode(&v),
+            Err(Diagnostic::WireMalformed {
+                defect: WireDefect::InvalidPkgPath { .. },
+                ..
+            })
+        ));
+    }
+
+    // `pkg` legitimately carries `/` for a `--manifest`-path invocation
+    // (unlike the crate `name`, which is a bare identifier) — the control-
+    // character gate must not reject ordinary path shapes.
+    #[test]
+    fn a_manifest_path_shaped_pkg_path_decodes() {
+        let v = json!({
+            "pkg": "crates/semver-tool/Cargo.toml",
+            "name": "semver",
+            "functions": [],
+            "errors": []
+        });
+        let pkg = decode(&v).expect("manifest-path-shaped pkg decodes");
+        assert_eq!(pkg.pkg_path(), "crates/semver-tool/Cargo.toml");
     }
 
     #[test]
