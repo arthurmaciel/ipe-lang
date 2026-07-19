@@ -124,9 +124,116 @@
 - Gate: `ipe build` → emitted `cargo build` → run; behavior exercised as far
   as local emulators permit; every gap honestly recorded, never shimmed.
 
+### Milestone: foreign-type-one-home — the structural model for FFI type identity
+
+**The structural diagnosis.** Every wall so far is one symptom repeated at
+four layers: the SAME Rust type, reached via different crate paths (its
+definer vs a re-exporter), was assigned a DIFFERENT identity —
+- in *visibility* (doc-hidden stripping: the type invisible from every path),
+- in *Send-proof* (the consuming crate could not prove a sibling-owned type),
+- in *nameability* (two proven-public paths for one type → strict-unique
+  fail-closed), and now
+- in the *checker's nominal identity* (two `Rust.*` modules each declaring
+  their own opaque `type Client` → `IPE-T0001` between values of one type).
+
+The first three were fixed one wall at a time, and each fix converged on the
+same key: **the type's canonical DEFINING path — the `doc["paths"]` entry
+rustdoc records identically in every crate that can see the item** (the
+"defid"). That convergence is the structural answer, not a coincidence:
+
+> **A foreign type's identity IS its defining path.** One defid = one type,
+> everywhere: in rendering, in Send-proof, in nameability, and in the Ipê
+> type system. Rust itself works this way (a re-export is not a new type;
+> rustc unifies by DefId), and Elm works this way on the Ipê side (a type
+> has exactly ONE home module; other modules import it, never re-declare it).
+
+**Chosen design (dissolves the nominal wall; pre-empts the next).** Extend
+the defid SSOT from the inspector (where walls 1–3 already consult it) down
+through the artifact chain to the interface layer, and give every foreign
+type ONE Ipê home module — the Elm rule applied to generated modules:
+
+1. **Inspector** emits, per member crate, `foreignTypeIds`: every foreign
+   nominal path it rendered into a binding's type strings → that type's
+   defid. Both sides already exist in memory (`REACHABLE_PATHS` +
+   `EXTERNAL_TYPE_PATH_BY_ID` + `GLOBAL_XC_PUBLIC_PATH_BY_DEFID`, keyed from
+   `doc["paths"]`, never reconstructed — the private-module trap stays
+   closed). Filtered to paths actually used by emitted bindings.
+2. **`PkgInfo`** decodes it; **`crate_interface`** joins it with the
+   existing name→path map into `opaque_type_ids` (Ipê name → defid);
+   **`consumer.json`** round-trips it (plus the structured binding list it
+   already contains, now loaded fully).
+3. **Catalog unification at build time** (new `ipe_ffi::unify`), invoked
+   from `prepare_ffi` between catalog load and interface injection — the
+   single seam `build`/`watch`/`lsp` all share. For each foreign type NAME
+   surfaced by ≥2 member modules: unify iff (a) every surfacing member
+   reports a defid and all defids AGREE (≥2 distinct defids = genuinely
+   distinct same-named types → keep today's distinct nominals, correct
+   as-is), (b) the defining crate resolves to ONE version across those
+   members (checked against each member's recorded transitive-dep versions;
+   disagreement → no unification — never risk an E0308 SEAL break), and
+   (c) the induced interface-module import edge creates no cycle (names
+   processed in sorted order; an edge that would close a cycle skips that
+   name — deterministic, recorded).
+4. **One home per unified type**: the member module whose own crate IS the
+   definer (rendered-path first segment == defid first segment) becomes the
+   type's home; ties/none → lexicographically-first surfacing module. Every
+   OTHER member module stops declaring `type X = X` and instead gains
+   `import <Home> exposing (X)` — its signatures' bare `X` then
+   canonicalises to the home's nominal via the ordinary dep-type injection
+   (`inject_dep_type`), so the checker sees ONE `Con` for the type with no
+   checker change at all. Interface sources for demoted modules are
+   re-rendered from the structured consumer data (never text-patched).
+5. **Backend**: demoted modules' `opaque_types` entries drop; `foreign_types`
+   then carries exactly ONE `Module.X → rust_path` per unified type (the
+   home's own compilable path — the home crate is a direct dep by
+   construction), so emission has a single SSOT too.
+
+**Rejected alternatives.**
+- *Alias re-export* (`type alias X = Home.X` in demoted modules): dep-alias
+  bodies expand against the IMPORTING module's `qual_vars` (tier-1 gate in
+  `canonicalise_type`), so a qualified alias body breaks in any user module
+  that doesn't import the home itself; and the unqualified-alias-shadowing
+  arm expands aliases BEFORE qualified resolution, risking mis-binding of a
+  same-named DISTINCT type. Fragile where the import mechanism is exact.
+- *Checker-level identity keyed on Rust path* (a `Ty::Foreign(defid)` kind):
+  breaks the design's own keystone that FFI signatures flow through the SAME
+  annotation→`Ty` path as user annotations (no second scheme table), and
+  would special-case foreign types in every checker arm. The Elm one-home
+  rule achieves identical unification with zero checker surface.
+- *Post-hoc `IPE-T0001` fold* (checker treats equal-rust-path opaques as
+  equal): same objection — nominal identity would depend on a lookup table
+  outside the type system.
+
+**Consequences.** A unified type is nameable in user annotations ONLY via
+its home module (`import Rust.Async_stripe_client_core exposing (Client)`),
+exactly as an Elm type is — the demoted modules no longer export it. Values
+flow between all member modules' bindings with no annotation friction.
+Same-named distinct types keep distinct nominals (correct). Old caches
+without `foreignTypeIds` simply see no unification (today's behavior) —
+re-running `ipe install` upgrades them.
+
 ### Step: closure
 - `cargo fmt --all`; full scoped gates; divergence ledger updated (Δ1, Δ2);
   `AGENTS.md` untouched unless surface changed; final report.
+
+### Documented residual — live-emulator e2e (NOT RUN this session; no emulator/SDK installs)
+The SEAL (`ipe` exit 0 ⇒ emitted `cargo build` exit 0) is the acceptance gate this
+session pursues; the live round-trips below are an honest residual, to be run only where
+the emulator/mock is available, never faked green:
+- **firestore**: `gcloud emulators firestore start --host-port=localhost:8080`, then
+  `FIRESTORE_EMULATOR_HOST=localhost:8080` + a dev service-account JSON via the
+  `TokenSourceType::Json`/`GOOGLE_APPLICATION_CREDENTIALS` path (§4.5). Offline, the
+  firestore probe already folds to the structured `Err` (verified: `ForeignError (ref …)`).
+- **firebase auth**: `firebase emulators:start --only auth`, then
+  `FIREBASE_AUTH_EMULATOR_HOST=localhost:9099`; mint a token via the emulator signUp REST
+  endpoint (`Ipe.Http` from the probe or curl) and assert `validate` returns the claims
+  JSON (§3.4). The emulator security gate MUST be Ipê-side (`Lib/Auth.ipe`) refusing the
+  emulator host outside dev (§3.3) — a Security-principle review item on the transpose.
+- **stripe**: `stripe-mock` on `:12111`, bound via `url_from_clientBuilder`
+  (`Rust.Async_stripe.url_from_clientBuilder`); offline the send folds to the no-network
+  structured `Err`. The probe chain (create customer → create/retrieve checkout session)
+  is written at `~/.cache/ipe/ffi-probe-stripe/src/Main.ipe` and awaits the cross-crate
+  foreign-type unification wall before it type-checks.
 
 ## 4. Standing constraints (from PRINCIPLES/DEVELOPMENT, non-negotiable here)
 
@@ -146,10 +253,13 @@
 | abort-on-drop guard (Δ1) | done — `AbortOnDrop` in runtime `task.rs`; emitted async bodies arm + defuse; abort-propagation regression in `src/runtime/rust/tests/ffi_async_bridge.rs` |
 | global runtime (H1) | done — `OnceLock` global runtime drives `block_on`; cross-entry reactor-handle regression |
 | crate version pins (prereq) | done — `CrateSpec`/`VersionPin` (`name@version` → inspector); `ipe install` honours manifest inline-table pins + features + `--allow-build-scripts` |
-| firestore bind | done — 670 bindings importable; probe SEAL green (ipe 0 → cargo 0 → run folds to structured Err); used-set DCE 670 → 3 |
-| async-stripe build | send now binds for the create/checkout builders (was the last wall). Root cause found + fixed: the `send` Ok-payloads (`Customer`, `CheckoutSession`, …) live in `#[doc(hidden)] pub mod`s of `async-stripe-shared` (re-exported at the root) which DEFAULT rustdoc strips from the JSON entirely — so no crate could name / Send-prove / bind them, and every request builder's `send` silently dropped the async-Send output gate. Fix = (a) `--document-hidden-items` in `run_rustdoc_package` (shared JSON goes 8→17484 fns; `CheckoutSession` now visible with a clean unconditional synthetic Send impl even under `--all-features`), + (b) F3 cross-crate proven-Send set `GLOBAL_XC_SEND_NAMES` (`xc_send_proven`, unique-last-segment, fail-closed) so the sibling-owned payload's Send verdict reaches the consuming crate's C1 gate. STATUS — THREE of FOUR walls fixed; ONE remains (F2 cross-crate re-export ambiguity). The stripe `send` for the create/checkout builders passes through FOUR gates in `parse_fn_item`; each fix exposed the next: (W1) type-visibility — FIXED by `--document-hidden-items` (the payload types `Customer`/`CheckoutSession` live in `#[doc(hidden)] pub mod`s of `async-stripe-shared`, stripped by default rustdoc; the flag surfaces them, shared JSON 8→9150 fns). (W2) C1 async-Send OUTPUT gate cross-crate — FIXED by F3 `GLOBAL_XC_SEND_NAMES` + `xc_send_proven`. (W3) F3 re-export ambiguity — FIXED by `GLOBAL_XC_NONSEND_LASTSEGS` restricted to CRATE-LOCAL (`LOCAL_TYPE_IDS`) definitions (a sibling re-export must not falsely mark a segment non-Send). VERIFIED with a scoped DBG: `[XC-SEND-PROVEN] name="CheckoutSession" matches_send=true nonsend_poisoned=false => true` — the async-Send OUTPUT gate now ADMITS `CheckoutSession`. (W4 — REMAINING) the send STILL drops (authoritative send total = 1, retrieve only) because the RETURN-NAMEABILITY step (`type_to_typeref`, the F2 `GLOBAL_XC_PUBLIC_PATHS` xc_path resolution ~8663) has the SAME re-export ambiguity F3 hit: under doc-hidden, `CheckoutSession` is reachable-public from BOTH `stripe_shared` (definition) AND `stripe_checkout` (re-export), so the bare-last-segment lookup finds TWO proven-public paths → its strict UNIQUE-match fails-closed → the Output can't be named → the send drops. F2 was deliberately LEFT at strict-unique (sound) this session: unlike F3's Send-set (where every member is Send so any match proves Send), F2 must emit a COMPILABLE path, and two same-last-segment proven-public paths could be DIFFERENT types → picking one risks E0308. The proper fix needs a type-IDENTITY check (are the two paths the same defining type, i.e. a genuine re-export, vs two distinct same-named types) before collapsing — a small design that mirrors F3's non-poisoning discipline but keyed on defining-type identity, NOT attempted blind this session. Retrieve's send binds because its Output `RetrieveCustomerReturned` is CORE-LOCAL (nameable directly, no F2 needed). 233 inspector unit tests green (+2 F3, non-Send-guard reflected). GUARDIAN VERDICT on doc-hidden+F3 = SHIP-WITH-REGRESSION-CHECK (firestore 670-SEAL regression + async-stripe emitted-project compile still owed). `List<…>`-Output sends: honest over-drop (not on skyshop's used-set). Backlog item STAYS OPEN — W4 (F2 re-export type-identity) is the single remaining code wall to the create/checkout `send`, then SEAL probe, then skyshop. |
-| firebase bind | pending |
-| skyshop transpose | pending |
+| firestore bind | done — 670 bindings importable; probe SEAL green (ipe 0 → cargo 0 → run folds to structured Err); used-set DCE 670 → 3. REGRESSION RE-CONFIRMED under W1 `--document-hidden-items` + W4: `ipe install` binds 832/836 shim-free (4 honest drops on `FirestoreTransaction<'a>` lifetime-parametric — NOT on skyshop used-set); probe SEAL re-run GREEN (ipe 0 → emitted `cargo build` 0), used-set DCE 832 → 2. |
+| async-stripe build | send now binds for the create/checkout builders (was the last wall). Root cause found + fixed: the `send` Ok-payloads (`Customer`, `CheckoutSession`, …) live in `#[doc(hidden)] pub mod`s of `async-stripe-shared` (re-exported at the root) which DEFAULT rustdoc strips from the JSON entirely — so no crate could name / Send-prove / bind them, and every request builder's `send` silently dropped the async-Send output gate. Fix = (a) `--document-hidden-items` in `run_rustdoc_package` (shared JSON goes 8→17484 fns; `CheckoutSession` now visible with a clean unconditional synthetic Send impl even under `--all-features`), + (b) F3 cross-crate proven-Send set `GLOBAL_XC_SEND_NAMES` (`xc_send_proven`, unique-last-segment, fail-closed) so the sibling-owned payload's Send verdict reaches the consuming crate's C1 gate. STATUS — THREE of FOUR walls fixed; ONE remains (F2 cross-crate re-export ambiguity). The stripe `send` for the create/checkout builders passes through FOUR gates in `parse_fn_item`; each fix exposed the next: (W1) type-visibility — FIXED by `--document-hidden-items` (the payload types `Customer`/`CheckoutSession` live in `#[doc(hidden)] pub mod`s of `async-stripe-shared`, stripped by default rustdoc; the flag surfaces them, shared JSON 8→9150 fns). (W2) C1 async-Send OUTPUT gate cross-crate — FIXED by F3 `GLOBAL_XC_SEND_NAMES` + `xc_send_proven`. (W3) F3 re-export ambiguity — FIXED by `GLOBAL_XC_NONSEND_LASTSEGS` restricted to CRATE-LOCAL (`LOCAL_TYPE_IDS`) definitions (a sibling re-export must not falsely mark a segment non-Send). VERIFIED with a scoped DBG: `[XC-SEND-PROVEN] name="CheckoutSession" matches_send=true nonsend_poisoned=false => true` — the async-Send OUTPUT gate now ADMITS `CheckoutSession`. (W4 — REMAINING) the send STILL drops (authoritative send total = 1, retrieve only) because the RETURN-NAMEABILITY step (`type_to_typeref`, the F2 `GLOBAL_XC_PUBLIC_PATHS` xc_path resolution ~8663) has the SAME re-export ambiguity F3 hit: under doc-hidden, `CheckoutSession` is reachable-public from BOTH `stripe_shared` (definition) AND `stripe_checkout` (re-export), so the bare-last-segment lookup finds TWO proven-public paths → its strict UNIQUE-match fails-closed → the Output can't be named → the send drops. F2 was deliberately LEFT at strict-unique (sound) this session: unlike F3's Send-set (where every member is Send so any match proves Send), F2 must emit a COMPILABLE path, and two same-last-segment proven-public paths could be DIFFERENT types → picking one risks E0308. The proper fix needs a type-IDENTITY check (are the two paths the same defining type, i.e. a genuine re-export, vs two distinct same-named types) before collapsing — a small design that mirrors F3's non-poisoning discipline but keyed on defining-type identity, NOT attempted blind this session. Retrieve's send binds because its Output `RetrieveCustomerReturned` is CORE-LOCAL (nameable directly, no F2 needed). 233 inspector unit tests green (+2 F3, non-Send-guard reflected). GUARDIAN VERDICT on doc-hidden+F3 = SHIP-WITH-REGRESSION-CHECK (firestore 670-SEAL regression + async-stripe emitted-project compile still owed). `List<…>`-Output sends: honest over-drop (not on skyshop's used-set). Backlog item STAYS OPEN — W4 (F2 re-export type-identity) is the single remaining code wall to the create/checkout `send`, then SEAL probe, then skyshop. **W4 NOW LANDED (code + unit-verified):** the F2 strict-unique last-segment match is replaced by a DEFINING-TYPE-IDENTITY check. New `GLOBAL_XC_PUBLIC_PATH_BY_DEFID` maps each type's canonical `doc["paths"]` defining path (identical across a definer and every re-exporter) → its set of proven-public paths; `xc_public_path_for_last_segment` admits a genuine re-export (all candidate paths under ONE defining key → one deterministic path, lexicographically smallest) and fail-closes a real collision (≥2 distinct defining keys → distinct types → drop, no wrong-type pick). Both ambiguity sites (`resolved_path_is_bindable`, `type_to_typeref` xc_path) consult it; site 7289 (`rustdoc_type_to_rust_str` membership check) unchanged. Mirrors W3's non-poisoning discipline keyed on type identity, not Send-ness. Same soundness envelope as F2 (only owning-crate reachable-walk paths enter; defining key read from `doc["paths"]`, never reconstructed → private-module trap stays closed). 235 inspector unit tests green (+2 W4 fixtures: identity re-export admits + distinct-collision fails-closed, at helper and end-to-end `type_to_typeref` sites); scoped clippy clean. Commit `62877534`. END-TO-END `[XC-SEND-PROVEN]` + actual create/checkout `send` binding + stripe SEAL probe: verification pending the 6-crate manifest install completing (in flight). **W4 NOW VERIFIED END-TO-END (commit `41c7a7ff`):** a real 6-crate async-stripe rc.6 install now EMITS the create/checkout `send` bindings — `send_from_customerCreateCustomer : … -> Client -> Task Error Customer`, `send_from_checkout_sessionCreateCheckoutSession : … -> Task Error CheckoutSession`, `send_from_checkout_sessionRetrieveCheckoutSession`, plus Update/Expire/Fund variants (core 345→351, checkout 1211→1215 bindings; the delta is exactly the newly-admitted cross-crate sends). Residual after the first W4 commit: only 2 of the 3 last-segment resolution sites consulted the identity map — the `rust_type` render path (`rustdoc_type_to_rust_str` ~7289, the source the C1 gate + emitter read) still used plain-set membership, so a submodule-defined re-export (`stripe_shared::customer::Customer`, fail-closed out of `EXTERNAL_TYPE_PATH_BY_ID` by `external_type_public_path` rule 5) rendered BARE → emitter absolutized `::Customer` → send dropped while `type_to_typeref` already named it. Fixed: site 7289 falls through to `xc_public_path_for_last_segment` too (all 3 sites agree). Also fixed the multi-crate `assemble_emit` dep-line unification the fully-bound manifest surfaced: (1) feature-union for same-version divergent-feature pins (`async-stripe-shared` bare vs `serialize`/`deserialize`), (2) transitive-version-conflict deferral to Cargo (`syn` 2.0.119 vs 3.0.0 from different member jails → dropped, direct-crate conflict still refused). 236 inspector + 11 ffi unit tests green. **NEXT WALL (blocks stripe SEAL + skyshop): cross-crate foreign-TYPE nominal unification.** `Client` (Rust `stripe::Client`, defined in client-core, re-exported by the umbrella) binds as TWO DISTINCT Ipê opaques — `Rust.Async_stripe_core.Client` (the `send` receiver's 2nd arg) and `Rust.Async_stripe.Client` (`new_from_client`'s result) — because each crate's `crate_interface` (`src/compiler/ffi/src/interface.rs`) declares its own opaque `type X` per module with NO cross-catalog unification. IPE-T0001 type mismatch on the SEAL probe (`Task.fromResult (Stripe.new_from_client …)` feeds `send_from_customerCreateCustomer` whose Client is the CORE nominal). Both map to the SAME `stripe::Client` Rust path, so they'd cargo-unify — the wall is purely the Ipê nominal split. FIX (design, not attempted blind): the interface/emit layer (`assemble_emit` builds `foreign_types` keyed `module.Type → rust_path`; `naming.rs` is the SSOT) must detect foreign types sharing an absolute Rust path across the catalog and canonicalize them to ONE Ipê opaque (declare once in a canonical/shared module + re-export, OR fold all references to a single nominal at type-check). This is the "TWO kernels naming the same foreign type unify nominally" precondition (remaining-spec §2.3). |
+| firebase bind | **DONE, SEAL green + live run.** `rs-firebase-admin-sdk` 4.3 binds 304 shim-free. Three root-cause fixes unlocked the ID-token used-set: (1) the nameability retain no longer requires the FOLDED top-level Result Err arm to be nameable (the wrapper never spells it — `reqwest::Error` no longer drops `LiveValidator::new_jwt_validator`); (2) the CONCRETE serde-JSON claims lift — `serde_json::Value`, and a string-keyed `HashMap`/`BTreeMap` of it, becomes the same typed serde-Value node the generic reduction produces (recognised by DEFINING path via the new raw external-defpath index; Ipê surface = claims JSON `String`); (3) the method-level turbofish now comes ONLY from the explicit per-own-generic list (the legacy infer-from-serde-touch fallback stamped an E0107 turbofish on zero-generic concrete methods). Plus: `cargo metadata --filter-platform <host>` so macOS-only conditional deps (`system-configuration`) are no longer exact-pinned into the emitted manifest. Probe: `validate : JwtLiveValidator -> String -> Task Error String`; ipe 0 → cargo 0; RUN live: JWKS fetch, Invalid-token folds to typed `ForeignError`, exit 0; DCE 304 → 2. The EMULATOR validator's `validate` is shadowed by the duplicate-name interface collapse (only the Live impl's is importable) — emulator-path residual noted below. |
+| foreign-type-one-home (the structural fix) | **LANDED + VERIFIED END-TO-END.** Design per the named milestone section: identity = rustdoc defining path, one Ipê home module per foreign type. Inspector emits `foreignTypeIds` (rendered path → defid, filtered to used paths, conflicting claims fail closed); `PkgInfo`/`CrateInterface`/`consumer.json` round-trip it; new `ipe_ffi::unify` collapses same-name+same-defid nominals at catalog assembly (guards: missing identity, distinct defids, defining-crate version disagreement among members that RESOLVED it — a member with no resolution saw the type only through the manifest-run xc index and is not evidence of a second type —, import-cycle); demoted modules re-render with `import <Home> exposing (T)` from structured consumer data; `run_build` consolidated onto `prepare_ffi` (its divergent inline copy skipped unification). VERIFIED: 6-crate stripe install → `Client` (defid `stripe::hyper::client::Client`) is ONE nominal; stripe SEAL probe green (ipe 0 → cargo 0, DCE → 5 wrappers) and RUNS (live 401 on a dummy key folds to typed `ForeignError`, exit 0). Firestore SEAL re-verified green. |
+| firestore serde surface | **REGRESSION FOUND + FIXED.** The private-path-admission gate had fail-closed `serde::de::Deserialize` (external trait, one intermediate module) OUT of the trait-path map, so `is_serde_trait_bound` no longer recognised serde bounds — the ENTIRE serde document surface (`get_obj`/`update_obj`/`query_obj`/…) silently vanished from re-installs (the "Dropped: none" ledger never saw them — they dropped as `unmodellable-bound Deserialize` on the generic path). Fix: serde-trait identity falls back to the RAW defining path (`EXTERNAL_DEFPATH_BY_ID`) — an identity question, never an emitted path. Fresh install: 841 bindings incl. `get_obj_if_exists : FirestoreDb -> String -> String -> Maybe (List String) -> Task Error (Maybe String)`, `create_obj`/`update_obj`/`query_obj` + the full QueryParams builder. |
+| skyshop transpose | IN PROGRESS — `examples/13-skyshop/` created from `../sky/examples/rust/skyshop-rs/src/` via the global rename-map transform; manifest = the REAL 8 crates; `Lib/Db.ipe` DE-SHIMMED onto `Rust.Firestore` (per-op client via `Task.run`, flat-row JSON codec in Ipê, `queryWhere(+Order)` = fetch + Ipê-side filter/sort — recorded over-restriction: no `FirestoreValue` constructor on the bound surface); `Lib/Auth.ipe` DE-SHIMMED onto `Rust.Rs_firebase_admin_sdk` (live JWT validator → claims JSON → `sub`/`email`/`name` via `Json.Decode`). **BLOCKED at `Lib/Stripe.ipe` on the NEXT WALL — stripe-builder-surface (see below).** |
+| stripe-builder-surface (NEW WALL, blocks skyshop acceptance) | The checkout-session flow needs builder/accessor members that do NOT bind yet, all in PARAM/FIELD-admission classes distinct from the (solved) identity axis: (a) `CreateCheckoutSession::line_items` (`Vec<CreateCheckoutSessionLineItems>` param — Vec-of-opaque), (b) `::mode` (`stripe_shared::CheckoutSessionMode` cross-crate enum param), (c) `RetrieveCheckoutSession::new` (`&stripe_shared::CheckoutSessionId` typed-ID param, `SmolStr`-backed), (d) `LineItemsPriceData` ctor (`stripe_types::Currency` cross-crate enum param), (e) `CheckoutSession.status`/`payment_status` field accessors (shared-crate enum-typed fields). Only 12 of the CreateCheckoutSession builder's methods (the String-typed ones) currently bind. Next session: extend param admission to cross-crate enums (they already have Ipê nominals via one-home + variant ctors), `Vec<local opaque>` params, and enum-typed field accessors; the typed-ID class likely lifts via a `String -> Id` coercion at the wrapper boundary. |
 | closure | pending |
 
 ### 5a. Remaining-spec milestones (`async-ffi-bridge-remaining-spec.md`)

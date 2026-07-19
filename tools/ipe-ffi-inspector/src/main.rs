@@ -472,6 +472,13 @@ struct PkgInfo {
     // correct. The Rust codegen merges this into the primary FFI crate's dep line.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     features: Vec<String>,
+    // [foreign-type-one-home] Rendered foreign-nominal path (`::`-prefixed, as
+    // it appears in this crate's emitted type strings) → the type's DEFINING
+    // path (`doc["paths"]` identity). The generator's catalog unification keys
+    // cross-crate nominal identity on the value: one defining path = one Ipê
+    // type, whether reached through its definer or a re-exporter.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    foreign_type_ids: std::collections::BTreeMap<String, String>,
 }
 
 // ── Entry point ────────────────────────────────────────────────────────
@@ -602,6 +609,7 @@ fn main() {
                     notes: vec![],
                     transitive_deps: vec![],
                     features: vec![],
+                    foreign_type_ids: std::collections::BTreeMap::new(),
                 };
                 println!("{}", serde_json::to_string_pretty(&err).unwrap_or_default());
                 std::process::exit(1);
@@ -621,6 +629,8 @@ fn main() {
     GLOBAL_XC_IMPLS.with(|c| c.borrow_mut().clear());
     // [stripe-send F2] Reset the cross-crate proven-public-path set once per run.
     GLOBAL_XC_PUBLIC_PATHS.with(|c| c.borrow_mut().clear());
+    // [stripe-send W4] Reset the identity-keyed cross-crate public-path map once per run.
+    GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| c.borrow_mut().clear());
     // [stripe-send F3] Reset the cross-crate proven-Send opaque-name set once per run.
     GLOBAL_XC_SEND_NAMES.with(|c| c.borrow_mut().clear());
     GLOBAL_XC_NONSEND_LASTSEGS.with(|c| c.borrow_mut().clear());
@@ -673,6 +683,7 @@ fn main() {
                 notes: vec![],
                 transitive_deps: vec![],
                 features: vec![],
+                foreign_type_ids: std::collections::BTreeMap::new(),
             };
             let body = serde_json::to_string_pretty(&err).unwrap_or_else(|_| {
                 // Last-resort hand-rolled JSON so a serialization failure on the
@@ -1508,17 +1519,27 @@ fn fetch_dep(manifest_str: &str) -> Result<(), String> {
 /// empty map — the codegen then DROPS any wrapper whose transitive crate it can't
 /// resolve (coverage-drop), never emits an unresolvable / `"*"` dep.
 fn collect_transitive_deps(manifest_str: &str) -> Vec<TransitiveDep> {
-    let output = match Command::new("cargo")
-        .args([
-            "metadata",
-            "--format-version",
-            "1",
-            "--quiet",
-            "--manifest-path",
-            manifest_str,
-        ])
-        .output()
-    {
+    // Filter the graph to the HOST platform: unfiltered `cargo metadata`
+    // lists EVERY platform's conditional deps (`system-configuration` — a
+    // macOS-only reqwest dep), and each listed dep becomes an UNCONDITIONAL
+    // exact pin in the emitted `[dependencies]` — forcing a foreign-platform
+    // crate to build (and fail) on the host. The emitted app builds on this
+    // same host, so the host-filtered graph is the right pin set; a dep only
+    // reachable on another platform stays unpinned there (cargo resolves it
+    // through the direct pins), never force-built here.
+    let mut cmd = Command::new("cargo");
+    cmd.args([
+        "metadata",
+        "--format-version",
+        "1",
+        "--quiet",
+        "--manifest-path",
+        manifest_str,
+    ]);
+    if let Some(host) = host_target_triple() {
+        cmd.args(["--filter-platform", &host]);
+    }
+    let output = match cmd.output() {
         Ok(o) if o.status.success() => o.stdout,
         _ => return Vec::new(),
     };
@@ -1528,6 +1549,21 @@ fn collect_transitive_deps(manifest_str: &str) -> Vec<TransitiveDep> {
         Err(_) => return Vec::new(),
     };
     transitive_deps_from_metadata(&meta)
+}
+
+/// The host target triple (`rustc -vV` `host:` line), for platform-filtering
+/// the metadata graph. `None` on any failure (fail-soft: unfiltered metadata,
+/// the pre-existing behavior).
+fn host_target_triple() -> Option<String> {
+    let out = Command::new("rustc").arg("-vV").output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8(out.stdout).ok()?;
+    text.lines()
+        .find_map(|l| l.strip_prefix("host: "))
+        .map(|h| h.trim().to_owned())
+        .filter(|h| !h.is_empty())
 }
 
 /// WALL-B (#75): the PURE extraction half of `collect_transitive_deps` — given a
@@ -1756,6 +1792,145 @@ fn extract_crate_version(json: &str) -> Option<String> {
 
 // ── Parse rustdoc JSON → PkgInfo ───────────────────────────────────────
 
+/// The DEFINING-TYPE identity of a rustdoc item: the canonical path recorded in
+/// `doc["paths"]` for its id — the SAME string in every crate that can see the
+/// item (a re-exporter's `paths` entry for an external item carries the
+/// DEFINING crate's path). Read, never reconstructed, so the proven-public /
+/// private-module discipline of the resolution walk is not bypassed.
+fn rustdoc_defpath(doc: &serde_json::Value, id: &str) -> Option<String> {
+    doc["paths"]
+        .as_object()
+        .and_then(|m| m.get(id))
+        .and_then(|e| e.get("path"))
+        .and_then(|p| p.as_array())
+        .map(|segs| {
+            segs.iter()
+                .filter_map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join("::")
+        })
+        .filter(|s| !s.is_empty())
+}
+
+/// Every `seg::…::Base` path token in a Rust type string (`Base` capitalised),
+/// leading `::` stripped. Mirrors the generator-side `path_tokens` tokenizer so
+/// the identity map answers for exactly the paths the interface layer extracts.
+fn foreign_path_tokens(raw: &str, out: &mut std::collections::BTreeSet<String>) {
+    let mut token = String::new();
+    let mut flush = |token: &mut String| {
+        if token.contains("::") {
+            let norm = token.trim_start_matches("::");
+            if let Some(base) = norm.rsplit("::").next()
+                && !base.is_empty()
+                && base.chars().next().is_some_and(char::is_uppercase)
+            {
+                out.insert(norm.to_string());
+            }
+        }
+        token.clear();
+    };
+    for c in raw.chars() {
+        if c.is_alphanumeric() || c == '_' || c == ':' {
+            token.push(c);
+        } else {
+            flush(&mut token);
+        }
+    }
+    flush(&mut token);
+}
+
+/// [foreign-type-one-home] Rendered-path → defining-path identity map for THIS
+/// crate's emitted bindings.
+///
+/// Keys are the `::`-prefixed foreign nominal paths that appear in the emitted
+/// functions' type strings; values are the defining-type identity
+/// ([`rustdoc_defpath`]) — the ONE key under which the generator's catalog
+/// unification can recognise the same Rust type across member crates
+/// (definer + every re-exporter). A rendered path claimed by two DISTINCT
+/// defining paths is dropped (fail-closed: no identity claim is better than a
+/// wrong one).
+fn collect_foreign_type_ids(
+    doc: &serde_json::Value,
+    functions: &[Function],
+) -> std::collections::BTreeMap<String, String> {
+    use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+    let mut cand: HashMap<String, String> = HashMap::new();
+    let mut poisoned: HashSet<String> = HashSet::new();
+    let add = |path: &str, defid: String, cand: &mut HashMap<String, String>, poisoned: &mut HashSet<String>| {
+        if path.is_empty() || path.starts_with("_ipe_ffi_probe") {
+            return;
+        }
+        match cand.get(path) {
+            Some(prev) if *prev != defid => {
+                poisoned.insert(path.to_string());
+            }
+            Some(_) => {}
+            None => {
+                cand.insert(path.to_string(), defid);
+            }
+        }
+    };
+    // A canonical defining path renders as itself.
+    if let Some(paths_obj) = doc["paths"].as_object() {
+        for entry in paths_obj.values() {
+            if let Some(segs) = entry.get("path").and_then(|p| p.as_array()) {
+                let joined = segs
+                    .iter()
+                    .filter_map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join("::");
+                if !joined.is_empty() {
+                    add(&joined.clone(), joined, &mut cand, &mut poisoned);
+                }
+            }
+        }
+    }
+    // Crate-local reachable-walk renderings.
+    REACHABLE_PATHS.with(|c| {
+        for (id, path) in c.borrow().iter() {
+            if let Some(defid) = rustdoc_defpath(doc, id) {
+                add(path, defid, &mut cand, &mut poisoned);
+            }
+        }
+    });
+    // External-type renderings (dependency types named through this crate).
+    EXTERNAL_TYPE_PATH_BY_ID.with(|c| {
+        for (id, path) in c.borrow().iter() {
+            if let Some(defid) = rustdoc_defpath(doc, id) {
+                add(path, defid, &mut cand, &mut poisoned);
+            }
+        }
+    });
+    // Cross-crate proven-public renderings (manifest-run union) — already
+    // keyed by defining identity.
+    GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| {
+        for (defid, paths) in c.borrow().iter() {
+            for path in paths {
+                add(path, defid.clone(), &mut cand, &mut poisoned);
+            }
+        }
+    });
+    // Keep only the paths the emitted bindings actually mention.
+    let mut used: BTreeSet<String> = BTreeSet::new();
+    for f in functions {
+        foreign_path_tokens(&f.recv_rust_type, &mut used);
+        for p in f.params.iter().chain(f.results.iter()) {
+            foreign_path_tokens(&p.ty, &mut used);
+            foreign_path_tokens(&p.rust_type, &mut used);
+        }
+    }
+    let mut out: BTreeMap<String, String> = BTreeMap::new();
+    for path in used {
+        if poisoned.contains(&path) {
+            continue;
+        }
+        if let Some(defid) = cand.get(&path) {
+            out.insert(format!("::{path}"), defid.clone());
+        }
+    }
+    out
+}
+
 fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> PkgInfo {
     // Make the crate-local public-path map available to
     // rustdoc_type_to_rust_str so it can fully-qualify opaque types.  Must be
@@ -1773,6 +1948,25 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
             }
         }
     });
+    // [stripe-send W4] Index each proven-public path under its DEFINING-TYPE identity —
+    // the canonical path rustdoc records in `doc["paths"]` for that item's id, which is
+    // the SAME string in every member crate (a re-exporting crate's `paths` entry for the
+    // external item carries the DEFINING crate's path). So the defining crate's own entry
+    // and every sibling re-export collapse under one key, and a last-segment lookup can
+    // distinguish a genuine re-export (one key) from a real name collision (many keys).
+    // Fail-closed: an id with no `doc["paths"]` entry (no recoverable identity) is skipped
+    // here — it still lives in the plain set, where strict-unique last-segment applies.
+    GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| {
+        let mut map = c.borrow_mut();
+        for (id, path) in &rp {
+            if path.starts_with("_ipe_ffi_probe") {
+                continue;
+            }
+            if let Some(defpath) = rustdoc_defpath(doc, id) {
+                map.entry(defpath).or_default().insert(path.clone());
+            }
+        }
+    });
     REACHABLE_PATHS.with(|c| *c.borrow_mut() = rp);
     REACHABLE_FN_PATHS.with(|c| *c.borrow_mut() = rfp);
     ALIAS_MAP.with(|c| *c.borrow_mut() = collect_aliases(doc));
@@ -1782,6 +1976,7 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
     STD_TRAIT_BY_ID.with(|c| *c.borrow_mut() = collect_std_trait_ids(doc));
     EXTERNAL_TRAIT_PATH_BY_ID.with(|c| *c.borrow_mut() = collect_external_trait_paths(doc));
     EXTERNAL_TYPE_PATH_BY_ID.with(|c| *c.borrow_mut() = collect_external_type_paths(doc));
+    EXTERNAL_DEFPATH_BY_ID.with(|c| *c.borrow_mut() = collect_external_defpaths(doc));
 
     // Wall #3 coverage accumulators are per-crate — reset so a multi-crate run
     // reports each crate's bind%/drops independently.
@@ -2626,8 +2821,19 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
     // the receiver type can be spelled in the wrapper).  It must NOT filter generic
     // functions whose receiver may carry a synthetic type-token like `Doc<M>` —
     // `ipe_ffi_generics.rs` synthesizes those wrappers differently (UFCS).
-    functions
-        .retain(|f| f.method_name == "to_string" || f.generic.is_some() || fn_types_nameable(f));
+    functions.retain(|f| {
+        let keep = f.method_name == "to_string" || f.generic.is_some() || fn_types_nameable(f);
+        if !keep && std::env::var("IPE_FFI_DBG").is_ok() {
+            eprintln!(
+                "[DBG-NAMEABLE-DROP] name={:?} recv={:?} params={:?} results={:?}",
+                f.name,
+                f.recv_rust_type,
+                f.params.iter().map(|p| p.rust_type.clone()).collect::<Vec<_>>(),
+                f.results.iter().map(|p| p.rust_type.clone()).collect::<Vec<_>>()
+            );
+        }
+        keep
+    });
 
     // Sized gate (P4): drop methods whose RECEIVER type is never produced by
     // value anywhere in the crate — a strong "unsized / un-constructible" signal
@@ -2768,6 +2974,7 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
     // the user which crates to add instead.
     let notes = facade_guidance(crate_name, functions.len(), doc);
 
+    let foreign_type_ids = collect_foreign_type_ids(doc, &functions);
     PkgInfo {
         pkg: crate_name.to_string(),
         name: crate_name.to_string(),
@@ -2780,6 +2987,7 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
         transitive_deps: Vec::new(),
         // Filled in by `inspect_crate` with the rustdoc-succeeded feature set (#100 Part B).
         features: Vec::new(),
+        foreign_type_ids,
     }
 }
 
@@ -4878,6 +5086,14 @@ thread_local! {
     static EXTERNAL_TYPE_PATH_BY_ID: std::cell::RefCell<HashMap<String, String>> =
         std::cell::RefCell::new(HashMap::new());
 
+    // Rustdoc id -> RAW rustdoc DEFINITION path (joined `::`, no public-path
+    // normalization) for every EXTERNAL-crate TYPE in `doc["paths"]`. The
+    // serde-json claims lift consults this to recognise `serde_json::Value`
+    // by its defining identity even though its public re-export path is
+    // unresolvable through the fail-closed rule set.
+    static EXTERNAL_DEFPATH_BY_ID: std::cell::RefCell<HashMap<String, String>> =
+        std::cell::RefCell::new(HashMap::new());
+
     // [#52] Concrete-impl index for the concrete-impl-monomorphization arm.
     // Maps a CRATE-LOCAL trait's rustdoc id (`item_id_to_str`) → the set of `for`
     // type JSON nodes of every concrete `impl Trait for T` in THIS crate. Used by
@@ -4940,6 +5156,25 @@ thread_local! {
     // run, populated in every member crate's `parse_rustdoc`.
     static GLOBAL_XC_PUBLIC_PATHS: std::cell::RefCell<HashSet<String>> =
         std::cell::RefCell::new(HashSet::new());
+
+    // [stripe-send W4] Companion to `GLOBAL_XC_PUBLIC_PATHS`, keyed on DEFINING-TYPE
+    // IDENTITY: canonical defining path (`doc["paths"][id]["path"]`, IDENTICAL across
+    // every member crate that defines OR re-exports the type) → the chosen proven-public
+    // path to emit. A genuine RE-EXPORT (`stripe_shared::checkout_session::CheckoutSession`
+    // defines it; `stripe_checkout` re-exports it at `stripe_checkout::CheckoutSession`)
+    // collapses to ONE entry under the shared defining key — so a last-segment lookup that
+    // finds several candidate public paths can tell "same type re-exported N times" (a
+    // single defining key → admit that path) from "N distinct same-named types" (several
+    // keys → genuinely ambiguous → fail-closed). This is the single wall left after W1–W3:
+    // the plain `GLOBAL_XC_PUBLIC_PATHS` strict-unique last-segment match fails CLOSED on
+    // the `CheckoutSession` re-export (two valid public paths), so the create/checkout
+    // `send` Output could not be named. Keyed on type IDENTITY, NOT Send-ness — mirroring
+    // F3's non-poisoning discipline. SOUNDNESS: only paths PROVEN public by the owning
+    // crate's own reachable walk ever enter (same as the set); the defining key is read
+    // from `doc["paths"]` (the crate's own recorded canonical path), never reconstructed.
+    // Reset once per manifest run alongside the set; populated in every member crate.
+    static GLOBAL_XC_PUBLIC_PATH_BY_DEFID: std::cell::RefCell<HashMap<String, HashSet<String>>> =
+        std::cell::RefCell::new(HashMap::new());
 
     // Manifest-run set of CROSS-CRATE async-Send-proven opaque type names. The C1
     // async-Send gate (`is_provably_send_opaque_return` and the receiver/param
@@ -5612,6 +5847,35 @@ fn external_type_public_path(joined: &str) -> Option<String> {
     None
 }
 
+/// RAW rustdoc definition path of every external TYPE id — no public-path
+/// normalization, no fail-closed filtering. Identity queries only (never
+/// emitted as a Rust path).
+fn collect_external_defpaths(doc: &serde_json::Value) -> HashMap<String, String> {
+    let mut out: HashMap<String, String> = HashMap::new();
+    let Some(paths) = doc["paths"].as_object() else {
+        return out;
+    };
+    for (id, entry) in paths {
+        if entry["crate_id"].as_u64().unwrap_or(0) == 0 {
+            continue;
+        }
+        let kind = entry["kind"].as_str().unwrap_or("");
+        if !TYPE_KINDS.contains(&kind) {
+            continue;
+        }
+        if let Some(joined) = entry["path"].as_array().map(|segs| {
+            segs.iter()
+                .filter_map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join("::")
+        }) && !joined.is_empty()
+        {
+            out.insert(id.clone(), joined);
+        }
+    }
+    out
+}
+
 /// [#48-R1] Fully-qualified public path of an external type by its rustdoc id,
 /// if recorded in `EXTERNAL_TYPE_PATH_BY_ID`.  Returns `None` for crate-local
 /// types (their path comes from REACHABLE_PATHS) and for external types absent
@@ -6140,8 +6404,49 @@ fn type_is_nameable(ty: &str) -> bool {
 /// All of a function's param / result / receiver types are nameable.
 fn fn_types_nameable(f: &Function) -> bool {
     f.params.iter().all(|p| type_is_nameable(&p.rust_type))
-        && f.results.iter().all(|p| type_is_nameable(&p.rust_type))
+        && f.results.iter().all(|p| result_type_nameable(f, &p.rust_type))
         && (f.recv_rust_type.is_empty() || type_is_nameable(&f.recv_rust_type))
+}
+
+/// Result-position nameability. The generated wrapper peels a fallible
+/// binding's ONE top-level `Result<Ok, Err>` layer error-name-agnostically —
+/// `Ok(v) => ok_res(v), Err(e) => ipe_error_from_foreign(e)` with inference —
+/// so the wrapper never SPELLS the Err type, and an unnameable foreign error
+/// (`reqwest::Error` rendered bare) must not drop the binding. Only the Ok arm
+/// (which the wrapper's return type spells) needs to be nameable. Everything
+/// that is not a fallible top-level `Result` keeps the full check.
+fn result_type_nameable(f: &Function, ty: &str) -> bool {
+    if matches!(f.effect.as_str(), "fallible" | "effectful")
+        && let Some(ok_arm) = top_level_result_ok_arm(ty)
+    {
+        return type_is_nameable(ok_arm);
+    }
+    type_is_nameable(ty)
+}
+
+/// The Ok arm of a type string that IS a top-level `Result<Ok, Err>` (an
+/// optional `::`-path prefix ending in `Result`, generics spanning the whole
+/// string). `None` for anything else — a nested `Vec<Result<…>>` is spelled in
+/// full by the wrapper and gets the full nameability check.
+fn top_level_result_ok_arm(ty: &str) -> Option<&str> {
+    let ty = ty.trim();
+    let open = ty.find('<')?;
+    let head = &ty[..open];
+    if head.rsplit("::").next()? != "Result" || !ty.ends_with('>') {
+        return None;
+    }
+    let inner = &ty[open + 1..ty.len() - 1];
+    let mut depth = 0_i32;
+    for (i, c) in inner.char_indices() {
+        match c {
+            '<' | '(' | '[' => depth += 1,
+            '>' | ')' | ']' => depth -= 1,
+            ',' if depth == 0 => return Some(inner[..i].trim()),
+            _ => {}
+        }
+    }
+    // A one-arm `Result<T>` alias: the whole inner is the Ok arm.
+    Some(inner.trim())
 }
 
 /// Map every crate-local type's rustdoc item id to a fully-qualified PUBLIC
@@ -6236,15 +6541,12 @@ fn resolved_path_is_bindable(id: &serde_json::Value, raw_name: &str) -> bool {
     if ALWAYS_NAMEABLE.contains(&last) {
         return true;
     }
-    // [stripe-send F2] A sibling manifest crate's public type this crate cannot
-    // resolve locally is bindable when the manifest-run proven-public set has a
-    // UNIQUE last-segment match — the renderer will name it by that proven-public
-    // path. Ambiguous / absent → stays unbindable (fail-closed).
-    GLOBAL_XC_PUBLIC_PATHS.with(|c| {
-        let set = c.borrow();
-        let mut hits = set.iter().filter(|p| p.rsplit("::").next() == Some(last));
-        matches!((hits.next(), hits.next()), (Some(_), None))
-    })
+    // [stripe-send F2/W4] A sibling manifest crate's public type this crate cannot
+    // resolve locally is bindable when the manifest run proves a UNIQUE-BY-IDENTITY
+    // public path for its last segment — the renderer names it by that path. A genuine
+    // re-export (the `CheckoutSession` wall: one defining type, two public paths) now
+    // admits (W4); two DISTINCT same-named types stay ambiguous → unbindable (fail-closed).
+    xc_public_path_for_last_segment(last).is_some()
 }
 
 /// Register `path` for `id` if it is shorter than any currently stored path.
@@ -6574,6 +6876,56 @@ fn xc_send_proven(name: &str) -> bool {
     // A same-named NON-Send type in any member crate makes the bare reference ambiguous
     // between Send and !Send → fail closed.
     !GLOBAL_XC_NONSEND_LASTSEGS.with(|c| c.borrow().contains(last))
+}
+
+/// [stripe-send W4] Resolve a bare type `last` segment to a UNIQUE cross-crate
+/// proven-public path, tolerating a genuine re-export (the same defining type
+/// exposed at several public paths) while staying fail-closed on a real name
+/// collision (two DISTINCT types sharing a last segment).
+///
+/// `GLOBAL_XC_PUBLIC_PATH_BY_DEFID` keys every proven-public path under its
+/// DEFINING-TYPE identity (the `doc["paths"]` canonical path, identical across a
+/// definer and every re-exporter). So:
+///   - all candidate paths ending in `last` come from ONE defining key → a genuine
+///     re-export → return a single, DETERMINISTIC public path (the lexicographically
+///     smallest, so the choice is stable across runs and independent of hash order);
+///   - candidates span ≥2 defining keys → two distinct same-named types → `None`
+///     (fail-closed; picking one could name the WRONG type → E0308/E0433 at cargo).
+/// A bare `last` absent from every key returns `None`.
+///
+/// This is the identity-keyed successor to the strict-UNIQUE last-segment match on
+/// the plain `GLOBAL_XC_PUBLIC_PATHS` set (which fail-closed on ANY re-export, the
+/// `CheckoutSession` wall). Same soundness envelope: only owning-crate reachable-walk
+/// paths ever populate the map, and only a single defining identity is ever admitted.
+fn xc_public_path_for_last_segment(last: &str) -> Option<String> {
+    if last.is_empty() {
+        return None;
+    }
+    GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| {
+        let map = c.borrow();
+        let mut defining_key: Option<&String> = None;
+        for (defpath, public_paths) in map.iter() {
+            let matched_here = public_paths
+                .iter()
+                .any(|p| p.rsplit("::").next() == Some(last));
+            if matched_here {
+                match defining_key {
+                    // A second, DIFFERENT defining identity shares the segment → two
+                    // distinct same-named types → real ambiguity → fail closed.
+                    Some(prev) if prev != defpath => return None,
+                    _ => defining_key = Some(defpath),
+                }
+            }
+        }
+        // Exactly one defining identity matched (or none). Return that identity's
+        // smallest matching public path for a deterministic, hash-order-independent pick.
+        let defpath = defining_key?;
+        map.get(defpath)?
+            .iter()
+            .filter(|p| p.rsplit("::").next() == Some(last))
+            .min()
+            .cloned()
+    })
 }
 
 /// Async-output sequence variant: `Vec<T>` / `&[T]` / `[T; N]` / `&[T; N]`
@@ -7169,18 +7521,30 @@ fn rustdoc_type_to_rust_str(val: &serde_json::Value) -> String {
         let qualified = rp.get("id").and_then(reachable_local_path);
         let name: String = match qualified {
             Some(full) => full,
-            // [stripe-send F2] A type unnameable through THIS crate's reachable
+            // [stripe-send F2/W4] A type unnameable through THIS crate's reachable
             // paths but defined+public in a SIBLING manifest crate (the
-            // `stripe_shared::Customer` send Output). This crate's own `doc["paths"]`
-            // records the referenced external item's canonical path
-            // (`reachable_external_type_path`); admit it ONLY when the manifest-run
-            // proven-public set — the union of every member crate's own reachable
-            // walk — confirms it (keeping the private-module def-path trap closed:
-            // such a path never entered the set).
+            // `stripe_shared::Customer` / `CheckoutSession` send Output). Two sound
+            // sources, tried in order:
+            //   1. this crate's own `doc["paths"]` canonical path
+            //      (`reachable_external_type_path`), admitted ONLY when the manifest-run
+            //      proven-public SET confirms it (private-module def-path trap stays shut);
+            //   2. failing that (the def path threads a sibling submodule — e.g.
+            //      `stripe_shared::customer::Customer` — so `external_type_public_path`
+            //      fail-closed it out of `EXTERNAL_TYPE_PATH_BY_ID` and step 1 misses),
+            //      the manifest-run UNIQUE-BY-IDENTITY public path keyed on the type's
+            //      last segment. This mirrors the `type_to_typeref` W4 resolution so the
+            //      RENDERED `rust_type` (which the C1 async-Send gate and the emitter read)
+            //      matches the CALL-AST path — without it the Output renders BARE here,
+            //      the emitter absolutizes it to `::Customer`, and the create/checkout
+            //      `send` drops or E0433s while `type_to_typeref` already names it.
             None => rp
                 .get("id")
                 .and_then(reachable_external_type_path)
                 .filter(|p| GLOBAL_XC_PUBLIC_PATHS.with(|c| c.borrow().contains(p)))
+                .or_else(|| {
+                    let last = raw_name.rsplit("::").next().unwrap_or(raw_name);
+                    xc_public_path_for_last_segment(last)
+                })
                 .unwrap_or_else(|| raw_name.rsplit("::").next().unwrap_or(raw_name).to_string()),
         };
         let name = name.as_str();
@@ -7319,6 +7683,7 @@ fn pkg_error(name: &str, msg: &str) -> PkgInfo {
         notes: vec![],
         transitive_deps: vec![],
         features: vec![],
+        foreign_type_ids: std::collections::BTreeMap::new(),
     }
 }
 
@@ -7430,6 +7795,16 @@ fn is_serde_trait_bound(bound: &serde_json::Value) -> bool {
         if let Some(path) = EXTERNAL_TRAIT_PATH_BY_ID.with(|m| m.borrow().get(&key).cloned()) {
             return SERDE_TRAIT_PATHS.contains(&path.as_str());
         }
+        // Identity fallback: the trait's RAW defining path. The public-path
+        // map fail-closes any external path with an intermediate module
+        // (`serde::de::Deserialize` — its `de` module is public, but that is
+        // unprovable without serde's own rustdoc), which silently
+        // de-serde-ified every `T: Deserialize` bound. A serde-trait CHECK is
+        // an identity question — the path is never emitted — so the raw
+        // defining path is the sound source.
+        if let Some(defpath) = EXTERNAL_DEFPATH_BY_ID.with(|m| m.borrow().get(&key).cloned()) {
+            return SERDE_TRAIT_PATHS.contains(&defpath.as_str());
+        }
         // If the id is confirmed crate-local → NOT serde (C-G1).
         let is_local = LOCAL_TYPE_IDS.with(|s| s.borrow().contains(&key))
             || REACHABLE_PATHS.with(|c| c.borrow().contains_key(&key));
@@ -7460,6 +7835,10 @@ fn serde_bound_path(bound: &serde_json::Value) -> Option<&'static str> {
         let key = item_id_to_str(id);
         if let Some(path) = EXTERNAL_TRAIT_PATH_BY_ID.with(|m| m.borrow().get(&key).cloned()) {
             return find(&path);
+        }
+        // Identity fallback by RAW defining path (see is_serde_trait_bound).
+        if let Some(defpath) = EXTERNAL_DEFPATH_BY_ID.with(|m| m.borrow().get(&key).cloned()) {
+            return find(&defpath);
         }
         // Confirmed crate-local → NOT serde (parity with is_serde_trait_bound).
         let is_local = LOCAL_TYPE_IDS.with(|s| s.borrow().contains(&key))
@@ -8568,6 +8947,61 @@ fn has_const_generic(generics: &serde_json::Value) -> bool {
         .unwrap_or(false)
 }
 
+/// `true` when a rustdoc `resolved_path` node IS `serde_json::Value`, decided
+/// by the id's rustdoc DEFINING path (`serde_json::value::Value` — or its
+/// root re-export spelling), never by bare name.
+fn resolved_path_is_serde_json_value(rp: &serde_json::Value) -> bool {
+    let Some(id) = rp.get("id") else {
+        return false;
+    };
+    let key = item_id_to_str(id);
+    EXTERNAL_DEFPATH_BY_ID.with(|m| {
+        m.borrow().get(&key).is_some_and(|defpath| {
+            defpath == "serde_json::value::Value" || defpath == "serde_json::Value"
+        })
+    })
+}
+
+/// The concrete serde-JSON claims lift (see the call site in
+/// [`type_to_typeref`]): `serde_json::Value` itself, or a string-keyed
+/// `HashMap`/`BTreeMap` whose VALUE is `serde_json::Value`, becomes
+/// [`TypeRef::SerdeValue`] — both are `Serialize`, so the generator's
+/// serde-Value return wrap (`serde_json::to_string`) is sound for the whole
+/// map. Anything else: `None` (normal resolution continues).
+fn serde_json_claims_lift(rp: &serde_json::Value) -> Option<TypeRef> {
+    if resolved_path_is_serde_json_value(rp) {
+        return Some(TypeRef::SerdeValue);
+    }
+    let name = rp["name"].as_str().or_else(|| rp["path"].as_str())?;
+    let last = name.rsplit("::").next().unwrap_or(name);
+    if !matches!(last, "HashMap" | "BTreeMap") {
+        return None;
+    }
+    let args = rp
+        .get("args")?
+        .get("angle_bracketed")?
+        .get("args")?
+        .as_array()?;
+    let [key_arg, value_arg] = args.as_slice() else {
+        return None;
+    };
+    let key_is_string = key_arg
+        .get("type")
+        .and_then(|t| t.get("resolved_path"))
+        .and_then(|krp| krp["name"].as_str().or_else(|| krp["path"].as_str()))
+        .is_some_and(|n| n.rsplit("::").next().unwrap_or(n) == "String")
+        || key_arg
+            .get("type")
+            .and_then(|t| t.get("primitive"))
+            .and_then(|p| p.as_str())
+            == Some("str");
+    let value_is_serde = value_arg
+        .get("type")
+        .and_then(|t| t.get("resolved_path"))
+        .is_some_and(resolved_path_is_serde_json_value);
+    (key_is_string && value_is_serde).then_some(TypeRef::SerdeValue)
+}
+
 /// Map a rustdoc type to a Scheme-A `TypeRef`, given the stub's param-index map.
 /// Returns `Err(NotBindable)` for any shape outside the bindable subset (Q1):
 /// closures, trait-objects/`impl Trait`, borrowed/lifetime returns, tuples,
@@ -8621,6 +9055,17 @@ fn type_to_typeref(
         {
             return type_to_typeref(&expanded, param_idx);
         }
+        // Concrete serde-JSON claims lift: a bare `serde_json::Value` — or a
+        // `HashMap<String, serde_json::Value>` / `BTreeMap<String,
+        // serde_json::Value>` claims map (the firebase ID-token verdict
+        // shape) — becomes the SAME typed serde-Value node the generic serde
+        // reduction produces: Ipê surface `String` (the JSON text), wrapper
+        // `serde_json::to_string` on the owned result. Recognition is by the
+        // type's rustdoc DEFINING path (`serde_json::value::Value`), never by
+        // last-segment name — a crate-local `Value` does not match.
+        if let Some(lift) = serde_json_claims_lift(rp) {
+            return Ok(lift);
+        }
         // The receiver-foreign ctor (or a nested one). Render the `::`-path the
         // SAME way rustdoc_type_to_rust_str does, then recurse into its args.
         let raw_name = rp["name"]
@@ -8652,24 +9097,17 @@ fn type_to_typeref(
         }
         let qualified = rp.get("id").and_then(reachable_local_path);
         let ext_path = rp.get("id").and_then(reachable_external_type_path);
-        // [stripe-send F2] A sibling manifest crate's public type unresolvable
-        // through THIS crate's own paths (`stripe_shared::Customer`, the
-        // `CustomerCreateCustomer` send Output). Match the raw name's last segment
-        // against the manifest-run proven-public set (each entry is a member
-        // crate's own reachable-walk path); admit ONLY a UNIQUE match (two crates
-        // exposing the same last segment → ambiguous → fall through to the drop,
-        // fail-closed). The private-module trap stays closed: only proven-public
-        // paths ever entered the set.
+        // [stripe-send F2/W4] A sibling manifest crate's public type unresolvable
+        // through THIS crate's own paths (`stripe_shared::CheckoutSession`, the
+        // `CreateCheckoutSession` send Output). Resolve the raw name's last segment
+        // against the manifest run's UNIQUE-BY-IDENTITY public path: a genuine re-export
+        // (one defining type reachable at several public paths — the `CheckoutSession`
+        // wall) now names it; two DISTINCT same-named types stay ambiguous → drop
+        // (fail-closed). The private-module trap stays closed: only proven-public paths
+        // ever entered the map, keyed on their `doc["paths"]` defining identity.
         let xc_path = if qualified.is_none() && ext_path.is_none() {
             let last = raw_name.rsplit("::").next().unwrap_or(raw_name);
-            GLOBAL_XC_PUBLIC_PATHS.with(|c| {
-                let set = c.borrow();
-                let mut hits = set.iter().filter(|p| p.rsplit("::").next() == Some(last));
-                match (hits.next(), hits.next()) {
-                    (Some(p), None) => Some(p.clone()),
-                    _ => None,
-                }
-            })
+            xc_public_path_for_last_segment(last)
         } else {
             None
         };
@@ -12175,6 +12613,75 @@ mod tests {
         rustdoc_type_to_ipe(val, &HashMap::new())
     }
 
+    // [foreign-type-one-home] The identity map keys every rendered foreign
+    // path used by an emitted binding under the type's `doc["paths"]`
+    // defining path; a path never rendered stays out of the map.
+    #[test]
+    fn foreign_type_ids_map_rendered_paths_to_defining_paths() {
+        let doc = serde_json::json!({
+            "paths": {
+                "1": { "crate_id": 1, "path": ["stripe_shared", "checkout_session", "CheckoutSession"], "kind": "struct" },
+                "2": { "crate_id": 1, "path": ["stripe_shared", "customer", "Customer"], "kind": "struct" }
+            },
+            "index": {}
+        });
+        let functions = vec![Function {
+            name: "send".to_string(),
+            results: vec![Param {
+                name: String::new(),
+                ty: "CheckoutSession".to_string(),
+                ipe_type: String::new(),
+                rust_type: "stripe_shared::checkout_session::CheckoutSession".to_string(),
+            }],
+            ..Function::default()
+        }];
+        let ids = collect_foreign_type_ids(&doc, &functions);
+        assert_eq!(
+            ids.get("::stripe_shared::checkout_session::CheckoutSession")
+                .map(String::as_str),
+            Some("stripe_shared::checkout_session::CheckoutSession"),
+            "{ids:?}"
+        );
+        // `Customer` is in `paths` but no emitted binding mentions it.
+        assert!(
+            !ids.keys().any(|k| k.contains("Customer")),
+            "unused paths stay out: {ids:?}"
+        );
+    }
+
+    // A rendered path claimed by two DISTINCT defining paths is dropped —
+    // no identity claim is sounder than a wrong one.
+    #[test]
+    fn foreign_type_ids_conflicting_identity_fails_closed() {
+        let doc = serde_json::json!({ "paths": {}, "index": {} });
+        GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| {
+            let mut m = c.borrow_mut();
+            m.entry("crate_a::T".to_string())
+                .or_default()
+                .insert("viewer::T".to_string());
+            m.entry("crate_b::T".to_string())
+                .or_default()
+                .insert("viewer::T".to_string());
+        });
+        let functions = vec![Function {
+            name: "get".to_string(),
+            results: vec![Param {
+                name: String::new(),
+                ty: "T".to_string(),
+                ipe_type: String::new(),
+                rust_type: "viewer::T".to_string(),
+            }],
+            ..Function::default()
+        }];
+        let ids = collect_foreign_type_ids(&doc, &functions);
+        GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| {
+            let mut m = c.borrow_mut();
+            m.remove("crate_a::T");
+            m.remove("crate_b::T");
+        });
+        assert!(ids.is_empty(), "{ids:?}");
+    }
+
     // [WALL-G #84] The cross-crate index resolves a trait canonical path to its impl
     // ONLY when exactly one cross-crate impl exists — the same over-drop-is-sound rule
     // as #52's same-crate `concrete_for_unique_impl`. 0 impls → None (the trait has no
@@ -13489,6 +13996,7 @@ mod tests {
         STD_TRAIT_BY_ID.with(|c| *c.borrow_mut() = collect_std_trait_ids(doc));
         EXTERNAL_TRAIT_PATH_BY_ID.with(|c| *c.borrow_mut() = collect_external_trait_paths(doc));
         EXTERNAL_TYPE_PATH_BY_ID.with(|c| *c.borrow_mut() = collect_external_type_paths(doc));
+        EXTERNAL_DEFPATH_BY_ID.with(|c| *c.borrow_mut() = collect_external_defpaths(doc));
         let (rp_td, rfp_td) = collect_reachable_paths(doc);
         REACHABLE_PATHS.with(|c| *c.borrow_mut() = rp_td);
         REACHABLE_FN_PATHS.with(|c| *c.borrow_mut() = rfp_td);
@@ -13498,6 +14006,7 @@ mod tests {
         STD_TRAIT_BY_ID.with(|c| c.borrow_mut().clear());
         EXTERNAL_TRAIT_PATH_BY_ID.with(|c| c.borrow_mut().clear());
         EXTERNAL_TYPE_PATH_BY_ID.with(|c| c.borrow_mut().clear());
+        EXTERNAL_DEFPATH_BY_ID.with(|c| c.borrow_mut().clear());
         REACHABLE_PATHS.with(|c| c.borrow_mut().clear());
         REACHABLE_FN_PATHS.with(|c| c.borrow_mut().clear());
         out
@@ -17733,9 +18242,19 @@ mod tests {
         LOCAL_TYPE_IDS.with(|c| c.borrow_mut().clear());
         EXTERNAL_TYPE_IDS.with(|c| c.borrow_mut().clear());
         EXTERNAL_TYPE_PATH_BY_ID.with(|c| c.borrow_mut().clear());
+        EXTERNAL_DEFPATH_BY_ID.with(|c| c.borrow_mut().clear());
         GLOBAL_XC_PUBLIC_PATHS.with(|c| {
             c.borrow_mut().clear();
             c.borrow_mut().insert("stripe_shared::Customer".to_string());
+        });
+        // [W4] The identity-keyed map is the authority the two ambiguity sites now read:
+        // one defining identity for `Customer`.
+        GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| {
+            let mut m = c.borrow_mut();
+            m.clear();
+            m.entry("stripe_shared::customer::Customer".to_string())
+                .or_default()
+                .insert("stripe_shared::Customer".to_string());
         });
         let pidx: HashMap<String, usize> = HashMap::new();
         let node = serde_json::json!({
@@ -17751,6 +18270,7 @@ mod tests {
         );
         // Without the proven-public entry it drops (fail-closed, pre-fix).
         GLOBAL_XC_PUBLIC_PATHS.with(|c| c.borrow_mut().clear());
+        GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| c.borrow_mut().clear());
         assert!(
             type_to_typeref(&node, &pidx).is_err(),
             "an unproven cross-crate type must still drop"
@@ -17810,6 +18330,106 @@ mod tests {
 
         GLOBAL_XC_SEND_NAMES.with(|c| c.borrow_mut().clear());
         GLOBAL_XC_NONSEND_LASTSEGS.with(|c| c.borrow_mut().clear());
+    }
+
+    #[test]
+    fn xc_public_path_admits_reexport_by_identity_and_fails_closed_on_collision() {
+        // [W4] The return-nameability wall the create/checkout `send` hit. `CheckoutSession`
+        // is DEFINED in `stripe_shared` and RE-EXPORTED by `stripe_checkout`, so the
+        // manifest run has TWO valid public paths ending in `CheckoutSession`. The old
+        // strict-unique last-segment match on the flat set fail-closed here (two hits) and
+        // the Output could not be named. Identity keying collapses both under the SAME
+        // defining path → admit one deterministic public path.
+        GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| {
+            let mut m = c.borrow_mut();
+            m.clear();
+            // One defining identity, two public paths (a genuine re-export).
+            let e = m
+                .entry("stripe_shared::checkout_session::CheckoutSession".to_string())
+                .or_default();
+            e.insert("stripe_shared::CheckoutSession".to_string());
+            e.insert("stripe_checkout::CheckoutSession".to_string());
+        });
+        assert_eq!(
+            xc_public_path_for_last_segment("CheckoutSession"),
+            Some("stripe_checkout::CheckoutSession".to_string()),
+            "a genuine re-export (one defining identity, N public paths) must admit a \
+             deterministic path — the lexicographically smallest"
+        );
+        // An absent last segment never resolves.
+        assert_eq!(xc_public_path_for_last_segment("PaymentMethod"), None);
+        assert_eq!(xc_public_path_for_last_segment(""), None);
+
+        // REAL COLLISION: two DISTINCT defining types share the last segment `Config`
+        // (e.g. `crate_a::Config` and `crate_b::Config` are different types) → naming
+        // either could be the WRONG type → FAIL CLOSED.
+        GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| {
+            let mut m = c.borrow_mut();
+            m.clear();
+            m.entry("crate_a::settings::Config".to_string())
+                .or_default()
+                .insert("crate_a::Config".to_string());
+            m.entry("crate_b::opts::Config".to_string())
+                .or_default()
+                .insert("crate_b::Config".to_string());
+        });
+        assert_eq!(
+            xc_public_path_for_last_segment("Config"),
+            None,
+            "two distinct same-named defining types must fail closed (no wrong-type pick)"
+        );
+        GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| c.borrow_mut().clear());
+    }
+
+    #[test]
+    fn type_to_typeref_names_reexported_send_output_via_identity() {
+        // [W4] End-to-end at the `type_to_typeref` return-nameability site: the
+        // `CreateCheckoutSession.send` Output `CheckoutSession`, reachable from two member
+        // crates as a genuine re-export, must NAME (via the identity map) — the whole
+        // point of W4 (pre-fix it dropped on the two-hit ambiguity).
+        REACHABLE_PATHS.with(|c| c.borrow_mut().clear());
+        LOCAL_TYPE_IDS.with(|c| c.borrow_mut().clear());
+        EXTERNAL_TYPE_IDS.with(|c| c.borrow_mut().clear());
+        EXTERNAL_TYPE_PATH_BY_ID.with(|c| c.borrow_mut().clear());
+        EXTERNAL_DEFPATH_BY_ID.with(|c| c.borrow_mut().clear());
+        GLOBAL_XC_PUBLIC_PATHS.with(|c| c.borrow_mut().clear());
+        GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| {
+            let mut m = c.borrow_mut();
+            m.clear();
+            let e = m
+                .entry("stripe_shared::checkout_session::CheckoutSession".to_string())
+                .or_default();
+            e.insert("stripe_shared::CheckoutSession".to_string());
+            e.insert("stripe_checkout::CheckoutSession".to_string());
+        });
+        let pidx: HashMap<String, usize> = HashMap::new();
+        let node = serde_json::json!({
+            "resolved_path": { "name": "CheckoutSession", "path": "CheckoutSession", "id": 901, "args": null }
+        });
+        assert_eq!(
+            type_to_typeref(&node, &pidx),
+            Ok(TypeRef::Ctor(
+                "::stripe_checkout::CheckoutSession".to_string(),
+                vec![]
+            )),
+            "the re-exported send Output must resolve to a proven-public path (W4)"
+        );
+        // A genuinely colliding pair of distinct types keeps the Output unnameable.
+        GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| {
+            let mut m = c.borrow_mut();
+            m.clear();
+            m.entry("a::x::CheckoutSession".to_string())
+                .or_default()
+                .insert("a::CheckoutSession".to_string());
+            m.entry("b::y::CheckoutSession".to_string())
+                .or_default()
+                .insert("b::CheckoutSession".to_string());
+        });
+        assert!(
+            type_to_typeref(&node, &pidx).is_err(),
+            "two distinct same-named types must still drop (fail-closed)"
+        );
+        GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| c.borrow_mut().clear());
     }
 
     #[test]
@@ -18523,6 +19143,7 @@ mod tests {
         assert_eq!(rustdoc_type_to_rust_str(&node), "stripe_shared::Customer");
         GLOBAL_XC_PUBLIC_PATHS.with(|c| c.borrow_mut().clear());
         EXTERNAL_TYPE_PATH_BY_ID.with(|c| c.borrow_mut().clear());
+        EXTERNAL_DEFPATH_BY_ID.with(|c| c.borrow_mut().clear());
     }
 
     #[test]
@@ -18538,11 +19159,63 @@ mod tests {
                 .insert("778".to_string(), "krate::private_mod::Secret".to_string());
         });
         GLOBAL_XC_PUBLIC_PATHS.with(|c| c.borrow_mut().clear());
+        GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| c.borrow_mut().clear());
         let node = serde_json::json!({
             "resolved_path": { "name": "Secret", "path": "Secret", "id": 778, "args": null }
         });
         assert_eq!(rustdoc_type_to_rust_str(&node), "Secret");
         EXTERNAL_TYPE_PATH_BY_ID.with(|c| c.borrow_mut().clear());
+        EXTERNAL_DEFPATH_BY_ID.with(|c| c.borrow_mut().clear());
+    }
+
+    #[test]
+    fn rust_str_renders_reexported_output_via_identity_when_defpath_fails_closed() {
+        // [W4] The `rust_type` render path (`rustdoc_type_to_rust_str`) — the source the
+        // C1 async-Send gate and the emitter read. The create/checkout `send` Output
+        // `Customer`/`CheckoutSession` is DEFINED in a sibling submodule
+        // (`stripe_shared::customer::Customer`), so `external_type_public_path` fail-closes
+        // it out of EXTERNAL_TYPE_PATH_BY_ID (rule 5: non-std intermediate module). Without
+        // the identity fall-through the render is BARE `Customer` → the emitter absolutizes
+        // it to `::Customer` → E0433 / silent drop, even though `type_to_typeref` already
+        // names it. The identity map (populated from the DEFINING crate's own reachable
+        // walk) supplies the proven-public path so both render paths agree.
+        REACHABLE_PATHS.with(|c| c.borrow_mut().clear());
+        EXTERNAL_TYPE_PATH_BY_ID.with(|c| c.borrow_mut().clear());
+        EXTERNAL_DEFPATH_BY_ID.with(|c| c.borrow_mut().clear());
+        GLOBAL_XC_PUBLIC_PATHS.with(|c| c.borrow_mut().clear());
+        GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| {
+            let mut m = c.borrow_mut();
+            m.clear();
+            let e = m
+                .entry("stripe_shared::customer::Customer".to_string())
+                .or_default();
+            e.insert("stripe_shared::Customer".to_string());
+        });
+        let node = serde_json::json!({
+            "resolved_path": { "name": "Customer", "path": "Customer", "id": 555, "args": null }
+        });
+        assert_eq!(
+            rustdoc_type_to_rust_str(&node),
+            "stripe_shared::Customer",
+            "the render path must qualify a sibling-defined re-exported Output via identity"
+        );
+        // Fail-closed on a genuine collision — two distinct same-named defining types.
+        GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| {
+            let mut m = c.borrow_mut();
+            m.clear();
+            m.entry("a::x::Customer".to_string())
+                .or_default()
+                .insert("a::Customer".to_string());
+            m.entry("b::y::Customer".to_string())
+                .or_default()
+                .insert("b::Customer".to_string());
+        });
+        assert_eq!(
+            rustdoc_type_to_rust_str(&node),
+            "Customer",
+            "a real collision stays bare (fail-closed), never a wrong-type pick"
+        );
+        GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| c.borrow_mut().clear());
     }
 
     #[test]

@@ -60,6 +60,12 @@ pub struct CrateInterface {
     /// Opaque foreign type name → absolute Rust path (`Version` →
     /// `::semver::Version`), for backend type rendering.
     pub opaque_types: BTreeMap<String, String>,
+    /// Opaque foreign type name → the type's canonical DEFINING path (the
+    /// rustdoc `paths` identity). Drives cross-crate nominal unification:
+    /// two member modules whose same-named opaques carry the SAME defining
+    /// path are the SAME Rust type and collapse to one Ipê nominal. A name
+    /// absent here (older cache / no recoverable identity) never unifies.
+    pub opaque_type_ids: BTreeMap<String, String>,
     /// The included bindings.
     pub bindings: Vec<InterfaceBinding>,
     /// The excluded bindings, with reasons.
@@ -402,13 +408,22 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
         .iter()
         .filter_map(|n| path_map.get(n).map(|p| (n.clone(), p.clone())))
         .collect();
+    let opaque_type_ids: BTreeMap<String, String> = opaque_types
+        .iter()
+        .filter_map(|(n, p)| {
+            pkg.foreign_type_ids()
+                .get(p)
+                .map(|defid| (n.clone(), defid.clone()))
+        })
+        .collect();
 
-    let source = render_module(&module_name, &opaque_types, &bindings);
+    let source = render_module(&module_name, &BTreeMap::new(), &opaque_types, &bindings);
     CrateInterface {
         module_name,
         kernel_name,
         source,
         opaque_types,
+        opaque_type_ids,
         bindings,
         skipped,
     }
@@ -419,14 +434,24 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
 /// Opaque types are exported WITHOUT `(..)` so their placeholder constructor
 /// never escapes the module; the lowerer additionally fails closed on any
 /// constructor use of a foreign union.
-fn render_module(
+///
+/// `imports` (home module → type names) renders one
+/// `import <Home> exposing (T, …)` line per entry: the catalog unification
+/// demotes a re-declared foreign type to an import of its ONE home module, so
+/// the importer's bare `T` canonicalises to the home's nominal.
+pub fn render_module(
     module_name: &str,
+    imports: &BTreeMap<String, BTreeSet<String>>,
     opaque_types: &BTreeMap<String, String>,
     bindings: &[InterfaceBinding],
 ) -> String {
     let mut exports: Vec<String> = opaque_types.keys().cloned().collect();
     exports.extend(bindings.iter().map(|b| b.ref_name.clone()));
     let mut out = format!("module {module_name} exposing ({})\n", exports.join(", "));
+    for (home, names) in imports {
+        let joined = names.iter().cloned().collect::<Vec<_>>().join(", ");
+        let _ = write!(out, "\nimport {home} exposing ({joined})\n");
+    }
     for name in opaque_types.keys() {
         // Writing into a String is infallible.
         let _ = write!(out, "\ntype {name} = {name}\n");
@@ -485,7 +510,10 @@ mod tests {
             "errors": [],
             "transitiveDeps": [
                 {"ident": "semver", "name": "semver", "version": "1.0.26"}
-            ]
+            ],
+            "foreignTypeIds": {
+                "::semver::Version": "semver::version::Version"
+            }
         });
         PkgInfo::decode_json(&doc.to_string()).expect("decodes")
     }
@@ -505,6 +533,11 @@ mod tests {
         assert_eq!(
             iface.opaque_types.get("Version").map(String::as_str),
             Some("::semver::Version")
+        );
+        // The defining-path identity rides along for catalog unification.
+        assert_eq!(
+            iface.opaque_type_ids.get("Version").map(String::as_str),
+            Some("semver::version::Version")
         );
         // `Error` is a builtin head — never an opaque decl, and `explain`
         // (whose receiver is the foreign `semver::Error`) is dropped.
