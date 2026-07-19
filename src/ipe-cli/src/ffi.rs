@@ -386,13 +386,90 @@ fn run_inspector(
     features: &[String],
     allow_build_scripts: bool,
 ) -> Result<String, CliError> {
+    run_inspector_job(
+        &InspectorJob::Single { krate, features },
+        allow_build_scripts,
+    )
+}
+
+/// One jailed inspector invocation: either a single crate or a MULTI-crate
+/// manifest. The manifest form matters beyond convenience: the inspector's
+/// cross-crate impl index is process-global, so a trait method defined in one
+/// crate and implemented for a sibling's type (the async-SDK `send` shape)
+/// resolves only when every project crate is inspected in ONE process.
+enum InspectorJob<'a> {
+    /// `ipe add <crate>`.
+    Single {
+        /// The crate (with optional version pin).
+        krate: &'a CrateSpec,
+        /// The requested feature list.
+        features: &'a [String],
+    },
+    /// `ipe install` — every `[rust.dependencies]` entry in one run.
+    Manifest {
+        /// Per-crate (spec, features) pairs.
+        entries: &'a [(CrateSpec, Vec<String>)],
+    },
+}
+
+/// Serialize the inspector's `--manifest` JSON into the scoped scratch dir
+/// (the only jail-writable mount, so the path is visible inside the jail).
+fn write_inspector_manifest(
+    scoped_tmp: &Path,
+    entries: &[(CrateSpec, Vec<String>)],
+) -> Result<PathBuf, CliError> {
+    let arr: Vec<serde_json::Value> = entries
+        .iter()
+        .map(|(spec, feats)| serde_json::json!({ "name": spec.inspector_arg(), "features": feats }))
+        .collect();
+    let path = scoped_tmp.join("ipe-install-manifest.json");
+    let body = serde_json::Value::Array(arr).to_string();
+    std::fs::write(&path, body)
+        .map_err(|e| CliError::UsageOwned(format!("ipe install: manifest write failed: {e}")))?;
+    Ok(path)
+}
+
+/// The full inspector argv (program + flags) for one phase of a job. The
+/// manifest path, when present, was written into the jail-visible scratch.
+fn inspector_payload(
+    inspector: &Path,
+    job: &InspectorJob,
+    manifest_path: Option<&Path>,
+    allow_build_scripts: bool,
+    fetch_only: bool,
+) -> Vec<OsString> {
+    let mut payload: Vec<OsString> = vec![inspector.to_path_buf().into_os_string()];
+    match job {
+        InspectorJob::Single { krate, features } => {
+            payload.extend(ipe_ffi::driver::inspector_argv(
+                krate,
+                features,
+                None,
+                allow_build_scripts,
+                fetch_only,
+            ));
+        }
+        InspectorJob::Manifest { .. } => {
+            if fetch_only {
+                payload.push("--fetch-only".into());
+            }
+            if allow_build_scripts {
+                payload.push("--allow-build-scripts".into());
+            }
+            payload.push("--manifest".into());
+            if let Some(p) = manifest_path {
+                payload.push(p.to_path_buf().into_os_string());
+            }
+        }
+    }
+    payload
+}
+
+fn run_inspector_job(job: &InspectorJob, allow_build_scripts: bool) -> Result<String, CliError> {
     let inspector = inspector_binary()?;
-    let with_payload = |fetch_only: bool| -> Vec<OsString> {
-        let argv =
-            ipe_ffi::driver::inspector_argv(krate, features, None, allow_build_scripts, fetch_only);
-        let mut payload: Vec<OsString> = vec![inspector.clone().into_os_string()];
-        payload.extend(argv);
-        payload
+    let scratch_hint = match job {
+        InspectorJob::Single { krate, .. } => krate.name().as_str(),
+        InspectorJob::Manifest { .. } => "manifest",
     };
 
     let caps = ipe_sandbox::probe();
@@ -419,7 +496,22 @@ fn run_inspector(
                 missing.join(", ")
             )));
         }
-        let scoped_tmp = make_scratch_dir(krate.name().as_str())?;
+        let scoped_tmp = make_scratch_dir(scratch_hint)?;
+        let manifest_path = match job {
+            InspectorJob::Manifest { entries } => {
+                Some(write_inspector_manifest(&scoped_tmp, entries)?)
+            }
+            InspectorJob::Single { .. } => None,
+        };
+        let with_payload = |fetch_only: bool| -> Vec<OsString> {
+            inspector_payload(
+                &inspector,
+                job,
+                manifest_path.as_deref(),
+                allow_build_scripts,
+                fetch_only,
+            )
+        };
         let (toolchain_ro_binds, path_prepend, rustup_home) = toolchain_binds(&inspector);
         // Phase 1 — fetch (network on, no foreign code).
         let fetch_out = run_phase(
@@ -458,14 +550,38 @@ fn run_inspector(
             .map_err(|_| io_err("inspector produced non-UTF-8 output".to_owned()));
     }
 
-    // Explicit unsandboxed override.
+    run_inspector_job_unsandboxed(&inspector, job, scratch_hint, allow_build_scripts)
+}
+
+/// The explicit `IPE_FFI_ALLOW_UNSANDBOXED=1` escape hatch: one direct argv
+/// spawn, loudly labelled.
+fn run_inspector_job_unsandboxed(
+    inspector: &Path,
+    job: &InspectorJob,
+    scratch_hint: &str,
+    allow_build_scripts: bool,
+) -> Result<String, CliError> {
+    let io_err = |detail: String| CliError::UsageOwned(format!("ipe add: {detail}"));
     eprintln!("WARNING: running the FFI inspector UNSANDBOXED (IPE_FFI_ALLOW_UNSANDBOXED=1)");
-    let payload = with_payload(false);
+    let scoped_tmp = make_scratch_dir(scratch_hint)?;
+    let manifest_path = match job {
+        InspectorJob::Manifest { entries } => Some(write_inspector_manifest(&scoped_tmp, entries)?),
+        InspectorJob::Single { .. } => None,
+    };
+    let payload = inspector_payload(
+        inspector,
+        job,
+        manifest_path.as_deref(),
+        allow_build_scripts,
+        false,
+    );
     let (program, rest) = payload.split_first().ok_or(CliError::Usage("ipe add"))?;
     let out = std::process::Command::new(program)
         .args(rest)
         .output()
-        .map_err(|e| io_err(e.to_string()))?;
+        .map_err(|e| io_err(e.to_string()));
+    let _ = std::fs::remove_dir_all(&scoped_tmp);
+    let out = out?;
     if !out.status.success() {
         return Err(io_err(format!(
             "inspector exited with {:?}\n{}",
@@ -630,7 +746,8 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
         }
     }
     let cache = FfiCache::at_project_root(Path::new("."));
-    for dep in deps {
+    let mut entries: Vec<(CrateSpec, Vec<String>)> = Vec::with_capacity(deps.len());
+    for dep in &deps {
         let name =
             CrateName::parse(&dep.name).map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
         // `*` / empty keep the historical latest-stable resolution; anything
@@ -641,8 +758,39 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
                 VersionPin::parse(pin).map_err(|diag| CliError::UsageOwned(diag.to_string()))?,
             ),
         };
-        let spec = CrateSpec::new(name, version);
-        add_one(&cache, &spec, &dep.features, allow_build_scripts)?;
+        entries.push((CrateSpec::new(name, version), dep.features.clone()));
+    }
+    // ONE inspector invocation for the whole list: the cross-crate impl
+    // index is process-global, so a trait method defined in one dependency
+    // and implemented for a sibling's type (the async-SDK `send` shape)
+    // binds only when every crate is inspected together.
+    let json = run_inspector_job(
+        &InspectorJob::Manifest { entries: &entries },
+        allow_build_scripts,
+    )?;
+    let val: serde_json::Value = serde_json::from_str(&json)
+        .map_err(|e| CliError::UsageOwned(format!("ipe install: invalid inspector JSON: {e}")))?;
+    let items: Vec<serde_json::Value> = match val {
+        serde_json::Value::Array(items) => items,
+        one @ serde_json::Value::Object(_) => vec![one],
+        other => {
+            return Err(CliError::UsageOwned(format!(
+                "ipe install: unexpected inspector output shape: {other}"
+            )));
+        }
+    };
+    for item in items {
+        let (pkg, paths) = ipe_ffi::driver::install_from_inspection(&cache, &item.to_string())
+            .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+        let iface = ipe_ffi::interface::crate_interface(&pkg);
+        println!(
+            "added `{}` v{}: {} bindings ({} skipped) -> {}",
+            pkg.name(),
+            pkg.version(),
+            iface.bindings.len(),
+            iface.skipped.len(),
+            paths.interface.display()
+        );
     }
     Ok(())
 }
