@@ -1,86 +1,56 @@
-# ipe-index — Rust code-relation index (ported from skydex)
+# ipe-index — Rust code-relation index
 
-**Status: SHIPPED (Rust port complete).** The Python v0 is retired —
-`scripts/ipe-index` is now a thin wrapper execing the Rust binary at
-`tools/ipe-index/target/release/ipe-index`.
+**Status: SHIPPED.** `scripts/ipe-index` is a thin wrapper execing the Rust
+binary at `tools/ipe-index/target/release/ipe-index`.
 
 ## What it is
 
-A two-repo, six-language, sqlite-backed code-relation index. Adapted from
-`../sky/tools/skydex` (tree-sitter walk/store/parity/query, ~1600 LOC) for the
-Ipê two-repo layout. Agents query it instead of `rg` for "where is X defined /
-who imports Y / which Ipê kernels still need a Rust impl".
+A single-repo, sqlite-backed code-relation index. Agents query it instead of
+`rg` for "where is X defined / who imports Y / which examples exercise a
+module".
 
-### Two-repo, path-prefixed
+### Single-repo, path-prefixed
 
-Every file/symbol path is prefixed with a repo tag so the two repos never
-collide (both have `Cargo.toml`, `README.md`, `scripts/*`, `tools/*`) and parity
-can compare across them:
+Every file/symbol path is prefixed with a repo tag. A single repo is indexed
+today, but the tag keeps results self-describing and leaves room for a future
+multi-repo setup without a schema change:
 
 | Tag  | Repo            | Roles indexed |
 |------|-----------------|---------------|
-| `ipe`| `.` (this repo) | `ipe-compiler-rs` (crates/), `ipe-runtime-rs` (runtime/), `ipe-tool-rs` (tools/), `ipe-stdlib-sky` (*.ipe) |
-| `sky`| `../sky`        | `compiler-hs` (src/Sky/), `runtime-go` (runtime-go/), `runtime-rust` (ancestor), `stdlib-sky`, `console-ts`, `example`, `fixture` |
+| `ipe`| `.` (this repo) | `compiler-rs` (crates/), `runtime-rs` (runtime/), `tool-rs` (tools/), `stdlib-ipe` (*.ipe), `example`, `fixture`, `console-ts`, `script-sh` |
 
-### Six languages
+### Languages
 
-- **tree-sitter defs+imports:** Rust (fn/struct/enum/trait/type/const/static/macro/mod),
-  Go (func/method + string-registered kernels), TypeScript/JS.
-- **line-scan defs+imports:** Haskell (`name ::` sigs + data/newtype/type/class +
-  `import`), Bash (`name()` funcs + `source`/`.`).
-- **custom scan:** Ipê (bindings, imports, `Ffi.kernel` decls).
-
-### Cross-repo kernel parity (the headline feature)
-
-`ipe-index parity --gaps` reconciles Sky-Go kernel impls (`../sky/runtime-go`)
-against Ipê-Rust kernel impls (`crates/`, `runtime/`) in one table, keyed by the
-Ipê `Ffi.kernel` decl set + `Kernel.hs` routes. Classifies each kernel
-`go-only` (real Rust gap) / `rust-only` / `orphan-route` / `ok` — directly feeds
-the kernel-porting backlog. Every row carries `route=` (Haskell), `go=`, `rust=`
-source locations, tag-prefixed.
+- **tree-sitter defs+imports:** Rust (fn/struct/enum/trait/type/const/static/macro/mod
+  + impl targets), TypeScript/JS.
+- **line-scan defs+imports:** Bash (`name()` funcs + `source`/`.`).
+- **custom scan:** Ipê (bindings + imports).
 
 ## Commands
 
 ```
-ipe-index index                 # rebuild across both repos → .ipe-index/index.db
-ipe-index update                # full reindex (alias of index for v1)
-ipe-index locate <name>         # every def site (file:line:col), both repos
-ipe-index parity [--gaps]       # cross-repo kernel parity
+ipe-index index                 # rebuild → .ipe-index/index.db
+ipe-index update                # incremental: git-diff last_sha..HEAD
+ipe-index locate <name>         # every def site (file:line:col)
 ipe-index roles|pipeline|wakeup
-ipe-index deps <m> | rdeps <m> | covers <k>
+ipe-index deps <m> | rdeps <m> | covers <m>
 ```
 
-Default repos: `ipe:.` + `sky:../sky`. Override with repeatable
-`--repo tag:path`. DB defaults to `.ipe-index/index.db` (gitignored).
+Default repos: `ipe:.`. Override with repeatable `--repo tag:path`. DB defaults
+to `.ipe-index/index.db` (gitignored).
 
-## Auto-update on every commit (both repos)
+## Auto-update on every commit
 
-- `.git/hooks/post-commit` (this repo): `ipe-index index` (bg, quiet, no-build).
-- `../sky/.git/hooks/post-commit`: rebuilds the SAME shared index from the Sky
-  side (`--repo sky:. --repo ipe:../sky-rust`, DB in the Ipê repo). Binary + DB
-  live here; the Sky hook points back across the sibling path.
+- `.git/hooks/post-commit`: `ipe-index index` (bg, quiet, no-build).
 
 Hooks are local (`.git/hooks`, not committed). Re-install after a fresh clone.
 
-## Phase gate
-
-Until Ipê goes green + FFI-complete: run BOTH `skydex` (Ipê-Rust ancestor
-reference, used as-is) and `ipe-index`. After: drop `skydex`; `ipe-index` only,
-re-pointed at Sky Haskell+Go as the reference. See memory
-`sky-rust-is-ipe-ancestor-not-upstream`.
-
-## v2 (shipped)
+## Notes
 
 - **Incremental `update`** — per-repo `last_sha:<tag>..HEAD` git diff, re-extract
-  only changed files, re-reconcile parity over the merged store. Falls back to a
-  full `index` when the DB is absent or a repo has no recorded sha. Verified
-  **zero drift** vs a fresh full index (identical file/symbol/kernel counts).
+  only changed files. Falls back to a full `index` when the DB is absent or a
+  repo has no recorded sha. Zero drift vs a fresh full index.
 - **Rust `impl`-target capture** — `impl Foo` / `impl Trait for Foo` (incl.
   `impl Vec<T>`) stored as kind `impl` so `locate Foo` surfaces impl sites.
-- **Haskell equation defs** — top-level `name args… =` / `name = …` bindings,
-  deduped against the signature line (signed fns recorded once at their sig;
-  unsigned fns at their first clause). Keyword + `==`/`::` guarded.
-- Regression tests: `haskell_dedups_sig_and_equations`,
-  `haskell_rejects_keywords_and_comparisons`, `rust_captures_impl_target`.
 
 Usage manual: `README.md`.

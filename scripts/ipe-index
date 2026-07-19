@@ -1,22 +1,19 @@
 #!/usr/bin/env bash
 # ipe-index — thin wrapper execing the Rust binary (tools/ipe-index).
 #
-# The Rust port supersedes the Python v0 that used to live here. It indexes BOTH
-# repos into one sqlite DB (path-prefixed by repo tag):
-#   * ipe:  this repo   — Rust compiler (crates/), runtime (runtime/), tooling (tools/)
-#   * sky:  ../sky       — Haskell compiler (src/Sky/), Go backend+runtime (runtime-go/),
-#                          Sky stdlib (sky-stdlib/), and the Rust ancestor (runtime-rust/)
-# Languages: Rust, Go, TypeScript/JS (tree-sitter) + Sky + Haskell + Bash.
+# Indexes this repo into one sqlite DB (path-prefixed by repo tag):
+#   * ipe:  this repo   — Rust compiler (crates/), runtime (runtime/),
+#                          tooling (tools/), stdlib/examples (*.ipe)
+# Languages: Rust, TypeScript/JS (tree-sitter) + Ipê + Bash.
 #
 # Commands (run `ipe-index` with no args for the full list):
-#   index               (re)build the index from scratch across both repos
-#   update              full reindex (alias of index for v1)
-#   locate <name>       every def site of a symbol (file:line:col), both repos
-#   parity [--gaps]     cross-repo kernel parity: Sky-Go impls vs Ipê-Rust impls
-#   roles | pipeline | wakeup | deps <m> | rdeps <m> | covers <k>
+#   index               (re)build the index from scratch
+#   update              incremental: git-diff last_sha..HEAD, re-extract changed files
+#   locate <name>       every def site of a symbol (file:line:col)
+#   roles | pipeline | wakeup | deps <m> | rdeps <m> | covers <m>
 #
 # DB defaults to .ipe-index/index.db (gitignored). Agents: prefer this over rg
-# for "where is X defined / who imports Y / which kernels still need a Rust impl".
+# for "where is X defined / who imports Y / which examples exercise a module".
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN="$REPO/tools/ipe-index/target/release/ipe-index"
