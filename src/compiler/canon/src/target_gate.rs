@@ -58,7 +58,11 @@ fn single_def_module(interner: &mut Interner, body_expr: Expr_) -> Module {
         patterns: Vec::new(),
         body: Located::new(Span::DUMMY, body_expr),
     };
-    Module { name: main, unions: Vec::new(), defs: vec![def] }
+    Module {
+        name: main,
+        unions: Vec::new(),
+        defs: vec![def],
+    }
 }
 
 fn check_expr<'e>(root: &'e Expr, interner: &Interner) -> DResult<()> {
@@ -156,12 +160,18 @@ mod tests {
         let mut interner = Interner::new();
         let ipe_db = intern(&mut interner, "Ipe.Db");
         let query = intern(&mut interner, "query");
-        let body = Expr_::VarKernel { id: None, module: ipe_db, name: query };
+        let body = Expr_::VarKernel {
+            id: None,
+            module: ipe_db,
+            name: query,
+        };
         let module = single_def_module(&mut interner, body);
         let err = check_wasm_client(&module, &interner)
             .expect_err("Ipe.Db.query must be denied under --target wasm");
-        let Diagnostic::Name { msg: NameError::ServerOnlyKernelForWasm { qualifier, name }, .. } =
-            err
+        let Diagnostic::Name {
+            msg: NameError::ServerOnlyKernelForWasm { qualifier, name },
+            ..
+        } = err
         else {
             panic!("expected ServerOnlyKernelForWasm, got {err:?}");
         };
@@ -192,14 +202,20 @@ mod tests {
     fn ffi_call_is_denied() {
         let mut interner = Interner::new();
         let ident = intern(&mut interner, "native_lib_do_something");
-        let body = Expr_::ForeignCall { ident, args: vec![] };
+        let body = Expr_::ForeignCall {
+            ident,
+            args: vec![],
+        };
         let module = single_def_module(&mut interner, body);
         let err = check_wasm_client(&module, &interner)
             .expect_err("FFI calls must be denied under --target wasm");
         assert!(
             matches!(
                 err,
-                Diagnostic::Name { msg: NameError::ServerOnlyKernelForWasm { .. }, .. }
+                Diagnostic::Name {
+                    msg: NameError::ServerOnlyKernelForWasm { .. },
+                    ..
+                }
             ),
             "expected ServerOnlyKernelForWasm, got {err:?}"
         );

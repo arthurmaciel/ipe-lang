@@ -1635,6 +1635,107 @@ mod tests {
     }
 
     #[test]
+    fn unparenthesised_nested_container_is_a_builtin_arity_error() {
+        // `Maybe List Int` parses as `Maybe` over TWO args (`List`, `Int`) with
+        // `List` itself nullary — the exact shape that ICE'd the lowerer
+        // (IPE-I0001, empty-home `List`). Arguments canonicalise depth-first, so
+        // the bare `List` is caught first: a clean IPE-N0031 pointing straight
+        // at the constructor missing its element type. (Were `List` well-formed,
+        // the over-applied `Maybe` would then be rejected — either way the ICE
+        // is unreachable.)
+        let err = canon_err(
+            "module Main exposing (v)\n\
+             v : Maybe List Int\n\
+             v =\n    Nothing\n",
+        );
+        assert!(
+            matches!(
+                err,
+                Some(Diagnostic::Name {
+                    msg: NameError::BuiltinTypeArity {
+                        ref name,
+                        expected: 1,
+                        found: 0,
+                    },
+                    ..
+                }) if name.as_ref() == "List"
+            ),
+            "expected a BuiltinTypeArity(List, 1, 0) diagnostic, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn over_applied_maybe_is_a_builtin_arity_error() {
+        // Well-formed inner, over-applied outer: `Maybe (List Int) Bool` gives
+        // `Maybe` two arguments. The inner `(List Int)` passes, so the outer
+        // over-application is the caught error.
+        let err = canon_err(
+            "module Main exposing (v)\n\
+             v : Maybe (List Int) Bool\n\
+             v =\n    Nothing\n",
+        );
+        assert!(
+            matches!(
+                err,
+                Some(Diagnostic::Name {
+                    msg: NameError::BuiltinTypeArity {
+                        ref name,
+                        expected: 1,
+                        found: 2,
+                    },
+                    ..
+                }) if name.as_ref() == "Maybe"
+            ),
+            "expected a BuiltinTypeArity(Maybe, 1, 2) diagnostic, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn under_applied_dict_is_a_builtin_arity_error() {
+        // `Dict` takes two arguments; `Dict String` supplies one.
+        let err = canon_err(
+            "module Main exposing (v)\n\
+             v : Dict String\n\
+             v =\n    Nothing\n",
+        );
+        assert!(
+            matches!(
+                err,
+                Some(Diagnostic::Name {
+                    msg: NameError::BuiltinTypeArity {
+                        ref name,
+                        expected: 2,
+                        found: 1,
+                    },
+                    ..
+                }) if name.as_ref() == "Dict"
+            ),
+            "expected a BuiltinTypeArity(Dict, 2, 1) diagnostic, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn parenthesised_nested_container_stays_well_formed() {
+        // The fix must not reject the correct spelling — `Maybe (List Int)` is
+        // `Maybe` over exactly one argument.
+        let err = canon_err(
+            "module Main exposing (v)\n\
+             v : Maybe (List Int)\n\
+             v =\n    Nothing\n",
+        );
+        assert!(
+            !matches!(
+                err,
+                Some(Diagnostic::Name {
+                    msg: NameError::BuiltinTypeArity { .. },
+                    ..
+                })
+            ),
+            "well-formed `Maybe (List Int)` must not trip IPE-N0031, got {err:?}"
+        );
+    }
+
+    #[test]
     fn duplicate_alias_name_is_a_duplicate_type() {
         let err = canon_err(
             "module Main exposing (v)\n\
