@@ -1,6 +1,0 @@
-# Cached Go-oracle metadata. Regenerate with the refresh-oracle tool.
-main_ipe_sha256 = fc45d905ac0cef1eb1a255566623e567e6b0b710f258e6c0cd0cb838dfc5cbec
-go_sky_version = sky dev
-exit_code = 0
-oracle_divergence = true
-divergence_reason = Go oracle failed: Go `sky build` exited Some(1): -- Discovering modules Found 8 module(s) -- Parsing Sky.Core.String: 38 declarations Std.Html.Attributes: 59 declarations Std.Html: 87 declarations Sky.Core.List: 24 declarations Sky.Core.Math: 37 declarations Std.Html.Events: 27 declarations Std.Ui: 205 declarations Main: 2 declarations -- Canonicalising -- NAMING ERROR ────────────────────────────────────── Main.ipe:23:5 [E1001] 21 | staticHtml : String 22 | staticHtml = 23 | Html.htmlRender (Ui.layout [] (Ui.el [ Ui.onClick Bump ] (Ui.text "x"))) | ^ 24 | Undefined name: Html.htmlRender Module `Html` is imported but does not export `htmlRender`. Check the module's `exposing (...)` list, or check for a typo. Canonicalise error; using skyc output as the reference

@@ -1,6 +1,0 @@
-# Cached Go-oracle metadata. Regenerate with the refresh-oracle tool.
-main_ipe_sha256 = b33aa2d4a5fecdbb9d8098f681d954859167b33b712147d5b9725a0e9ebf7257
-go_sky_version = sky dev
-exit_code = 0
-oracle_divergence = true
-divergence_reason = divergence: Sky compares Math.max arguments through AsInt; on String the AsInt compare is not meaningful. Sky-Rust follows Elm's polymorphic comparable (a -> a -> a), comparing lexicographically; Math.max "b" "a" = "b". Divergence from Sky, rationale: Elm-conformance.

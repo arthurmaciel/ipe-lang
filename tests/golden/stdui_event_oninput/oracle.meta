@@ -1,2 +1,0 @@
-oracle_divergence = true
-reason = "Go reference compiler does not expose Html.htmlRender; expected_go.txt holds skyc's own correct output."

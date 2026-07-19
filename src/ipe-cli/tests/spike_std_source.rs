@@ -25,7 +25,8 @@ fn repo_root() -> PathBuf {
 
 fn spike_manifest() -> PathBuf {
     repo_root()
-        .join("examples")
+        .join("tests")
+        .join("fixtures")
         .join("spike-std-source")
         .join("sky.toml")
 }

@@ -1,0 +1,16 @@
+[package]
+name = "e2e-support"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[lib]
+name = "e2e_support"
+path = "src/lib.rs"
+
+[dependencies]
+# Parsing `cargo build --message-format=json` to locate the emitted binary.
+serde_json = "1"
+
+[lints]
+workspace = true

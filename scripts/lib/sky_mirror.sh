@@ -44,10 +44,27 @@ sky_upstream_dir() {
   return 1
 }
 
-# ── sky_example_names: the upstream example basenames (numbered dirs) ─────────
-# Only the NN-name example dirs — skips the upstream `rust/`, `simple/`,
-# `test_pkg/` helper trees (not part of the canonical Sky example set).
+# ── sky_example_names: upstream example basenames covered by the manifest ─────
+# Reads examples/sky/manifest.toml to enumerate the examples to mirror.
+# Includes the numbered dirs, `simple`, and `test_pkg` (all listed in the
+# manifest). Falls back to scanning the upstream numbered dirs only when the
+# manifest is absent (backward-compat for external callers).
 sky_example_names() {
+  local manifest="$REPO/examples/sky/manifest.toml"
+  if [ -f "$manifest" ]; then
+    # Extract name = "..." lines from [[example]] sections (skip go_ffi = true
+    # is NOT done here — the sweep's is_out_of_scope filter handles exclusion).
+    python3 -c "
+import re, sys
+with open('$manifest') as f:
+    for line in f:
+        m = re.match(r'''^\s*name\s*=\s*[\"']([^\"']+)[\"']\s*$''', line)
+        if m:
+            print(m.group(1))
+"
+    return 0
+  fi
+  # Fallback: scan the upstream numbered dirs only.
   local src; src="$(sky_upstream_dir)" || return 1
   local d
   for d in "$src"/[0-9]*/; do

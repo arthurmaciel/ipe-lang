@@ -1,6 +1,0 @@
-# Cached Go-oracle metadata. Regenerate with the refresh-oracle tool.
-main_ipe_sha256 = 49dcbdaaf90ec05fa24d2e4f08bb65285895828526aee81a28044bf5485c855e
-go_sky_version = sky dev
-exit_code = 0
-oracle_divergence = true
-divergence_reason = divergence: Rust backend emits compact inline CSS with no <style> reset block; Go backend emits a different HTML skeleton. Both are semantically correct Flexbox layouts.
