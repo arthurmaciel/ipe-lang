@@ -492,7 +492,7 @@ impl FfiCache {
             (&paths.ipei, crate::emit::emit_ipei(pkg)),
             (&paths.kernel_json, crate::emit::emit_kernel_json(pkg)),
             (&paths.bindings, crate::bindings::emit_bindings(pkg)),
-            (&paths.coverage, emit_coverage(pkg)),
+            (&paths.coverage, emit_coverage(pkg, &iface.skipped)),
             (&paths.interface, iface.source),
             (&paths.consumer, consumer_json),
             (&paths.pkg_json, inspection_json.to_owned()),
@@ -751,9 +751,14 @@ pub fn load_catalog(cache_root: &Path) -> Result<Vec<InstalledCrate>, Diagnostic
 
 // ── coverage report (the over-drop keystone made visible) ───────────────────
 
-/// The `coverage.md` artifact: what was bound, what was refused, and why.
+/// The `coverage.md` artifact: what was bound, what was refused, and why —
+/// including the per-binding interface skips (the over-drop keystone is only
+/// visible if EVERY drop layer reports).
 #[must_use]
-pub fn emit_coverage(pkg: &PkgInfo) -> String {
+pub fn emit_coverage(
+    pkg: &PkgInfo,
+    interface_skips: &[crate::interface::SkippedBinding],
+) -> String {
     use std::fmt::Write;
     let mut out = format!(
         "# FFI coverage — `{}` {}\n\nBound functions: {}\n",
@@ -769,6 +774,17 @@ pub fn emit_coverage(pkg: &PkgInfo) -> String {
         out.push_str("| Reason |\n|---|\n");
         for d in pkg.dropped() {
             let _ = writeln!(out, "| {d} |");
+        }
+    }
+    if !interface_skips.is_empty() {
+        let _ = writeln!(
+            out,
+            "\n## Interface skips ({} — wrapper exists or was refused; not importable)\n",
+            interface_skips.len()
+        );
+        out.push_str("| Binding | Reason |\n|---|---|\n");
+        for s in interface_skips {
+            let _ = writeln!(out, "| {} | {} |", s.ref_name, s.reason);
         }
     }
     if !pkg.notes().is_empty() {

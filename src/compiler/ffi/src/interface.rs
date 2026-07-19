@@ -141,11 +141,20 @@ fn path_tokens(raw: &str) -> Vec<(String, String)> {
 /// `CheckoutSession`; `Vec<semver::Error>` yields `Error`. A base is a
 /// capitalised identifier (a type), never a scalar/lifetime/module segment.
 fn foreign_nominal_bases(raw: &str, out: &mut BTreeSet<String>) {
+    /// Bare (path-less) std heads whose Ipê mapping IS the builtin — `String`
+    /// is the `String` carrier, `Vec` is `List`, … The inspector renders
+    /// crate-local types with a qualified path, so a bare occurrence of one of
+    /// these is std by construction, never a foreign nominal shadowing a
+    /// builtin.
+    const BARE_STD_CARRIERS: &[&str] = &[
+        "String", "Vec", "Option", "Result", "HashMap", "BTreeMap", "HashSet", "BTreeSet",
+    ];
     let mut token = String::new();
     let flush = |token: &mut String, out: &mut BTreeSet<String>| {
         // The last `::`-segment of the token is the type's own name.
         let base = token.rsplit("::").next().unwrap_or(token);
-        if base.chars().next().is_some_and(char::is_uppercase) {
+        let bare_std = !token.contains("::") && BARE_STD_CARRIERS.contains(&base);
+        if base.chars().next().is_some_and(char::is_uppercase) && !bare_std {
             out.insert(base.to_owned());
         }
         token.clear();
@@ -187,11 +196,18 @@ fn result_ok_arm(raw: &str) -> &str {
 
 /// The first foreign nominal in `f`'s parameter / result / receiver types
 /// that collides with an Ipê reserved builtin type name, if any.
+///
+/// Two scans per param: the RAW Rust type through the rust-syntax nominal
+/// tokenizer (catches a foreign type folding onto a builtin HEAD), and the
+/// Ipê-typed rendering through the ipe-syntax opaque scan — there the builtin
+/// heads (`Result`/`Maybe`/`Task`/`Error`, …) are the language's own
+/// containers, never foreign nominals, so tokenizing them as foreign would
+/// over-drop every fallible binding on its own carrier.
 fn foreign_reserved_collision(f: &FnInfo) -> Option<String> {
     let mut bases = BTreeSet::new();
     for p in f.params().iter().chain(f.results().iter()) {
         foreign_nominal_bases(result_ok_arm(p.rust_type_str()), &mut bases);
-        foreign_nominal_bases(result_ok_arm(&p.foreign_ty), &mut bases);
+        opaque_names_in(&p.foreign_ty, &mut bases);
     }
     foreign_nominal_bases(f.recv_rust_type(), &mut bases);
     bases

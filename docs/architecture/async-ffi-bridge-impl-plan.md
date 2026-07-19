@@ -142,10 +142,11 @@
 
 | Step | Status |
 |---|---|
-| join-error funnel (Δ2) | pending |
-| abort-on-drop guard (Δ1) | pending |
-| global runtime (H1) | pending |
-| firestore bind | pending |
+| join-error funnel (Δ2) | done — both async arms (plain + generic-instance) route `JoinError` through `ipe_error_from_foreign`; divergence B-FfiAsyncBridge recorded |
+| abort-on-drop guard (Δ1) | done — `AbortOnDrop` in runtime `task.rs`; emitted async bodies arm + defuse; abort-propagation regression in `src/runtime/rust/tests/ffi_async_bridge.rs` |
+| global runtime (H1) | done — `OnceLock` global runtime drives `block_on`; cross-entry reactor-handle regression |
+| crate version pins (prereq) | done — `CrateSpec`/`VersionPin` (`name@version` → inspector); `ipe install` honours manifest inline-table pins + features + `--allow-build-scripts` |
+| firestore bind | in progress |
 | async-stripe build | pending |
 | firebase bind | pending |
 | skyshop transpose | pending |
@@ -153,4 +154,43 @@
 
 ## 6. Session notes (exact next steps if resuming)
 
-- (updated per step)
+- Runtime full-features suite 1047/1047 green after H1/Δ1; `ipe_ffi` 141,
+  `ipe --lib` 85, seal test 3/3, scoped clippy clean.
+- firestore 0.49 auto-bound: 205 → **670 importable bindings** after the
+  consumer fixes below; the whole skyshop firestore used-set is importable
+  shim-free (`with_options_from_firestoreDb : FirestoreDbOptions -> Task
+  Error FirestoreDb`, `get_obj… -> Task Error String` (JSON text),
+  `update_obj…`, `delete_by_id… -> Task Error ()`,
+  `query_obj… -> Task Error (List String)` + owned QueryParams builder).
+- Consumer fixes that unlocked it:
+  1. closed (zero-type-param) generic instances — the async-trait surface —
+     synthesize at add time into sentinel regions
+     (`bindings.rs::closed_instance_lines`);
+  2. generic Result-alias see-through in the inspector's CALL-AST builder
+     (`type_to_typeref`), so the fallible layer folds instead of surfacing an
+     opaque `FirestoreResult`;
+  3. surface peel of ONE `Result <err>` layer is error-name-agnostic
+     (`emit.rs::peel_result_layer`) — the wrapper always folds the foreign
+     error, so the surface never re-states it;
+  4. reserved-collision scan: ipe-syntax strings scanned with the ipe-aware
+     opaque scan (builtin heads are containers, not foreign nominals); bare
+     std carriers (`String`, `Vec`, …) are never foreign nominals;
+  5. enum-variant extractor sigs parenthesize multi-word payloads
+     (`Maybe (List FirestoreValue)` — a bare application ICE'd the lowerer);
+  6. interface skips now land in `coverage.md` (the over-drop ledger was
+     blind to the interface layer);
+  7. jail caps env-overridable with warning (`IPE_FFI_{RSS_MB,CPU_SECS,
+     WALL_SECS,FD_CAP,PROC_CAP,OUT_CAP_MB}`) — SDK-scale closures exceed the
+     small-crate defaults.
+- FILED FOLLOW-UP (compiler, pre-existing): an ill-formed injected interface
+  sig (`Maybe List FirestoreValue`) ICEs the lowerer (`IPE-I0001`, "type
+  constructor `List` with empty home") instead of a canon arity/type error —
+  root-cause in canon, not FFI.
+- Probe: `~/.cache/ipe/ffi-probe-firestore/src/Main.ipe` (options ctor →
+  `with_options` → `get_obj` chain, `Task.onError` fold) — `ipe build` exit 0;
+  emitted `cargo build` (THE SEAL) in flight at checkpoint.
+- Next: finish SEAL + run probe (structured-Err path without emulator);
+  commit; then async-stripe rc.6 four-crate install (needs the version-pin
+  path: `[rust.dependencies]` inline tables), probe + SEAL; then
+  rs-firebase-admin-sdk 4.3; then skyshop transpose into
+  `examples/13-skyshop/` with checked-in `.ipe/cache/ffi/rust` artifacts.
