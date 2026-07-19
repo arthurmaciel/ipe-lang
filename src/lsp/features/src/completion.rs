@@ -1,16 +1,34 @@
-//! Completion: in-scope identifiers at a cursor position.
+//! Completion: in-scope identifiers at a cursor position, ranked by the type
+//! the surrounding context expects (type-directed completion).
 //!
-//! Reads `canonicalize` (for every in-scope name and its resolved kind) and
-//! `typecheck` (for rendered type strings in completion details) from the same
-//! memoized `ipe_db` queries the compiler runs. A program that does not
+//! Reads `canonicalize` (for every in-scope name and its resolved kind),
+//! `typecheck` (for rendered type strings AND the `expected` sidecar) from the
+//! same memoized `ipe_db` queries the compiler runs. A program that does not
 //! type-check still yields completion items — the provider degrades gracefully
-//! to kind-only items without a type annotation rather than returning nothing.
+//! to kind-only, scope-only items rather than returning nothing.
 //!
-//! Scope model: all top-level names of the current module plus all names
-//! imported into it via `import … exposing (…)` or `import … exposing (..)`.
-//! No positional block-scope narrowing — every in-scope top-level name is
-//! offered regardless of cursor position. Keywords are appended last and
-//! deduplicated against any same-named user identifier.
+//! ## Type-directed ranking (ADR 0034 / LSP plan §6)
+//!
+//! When the cursor sits in a position with a contextual expected type (a call
+//! argument, a typed body, an `if`/`case` branch, a list element — see
+//! `ipe_types`' `expected` sidecar), each candidate is classified against that
+//! type by the closed enum [`Compat`]:
+//!
+//! - [`Compat::ExactType`] — the candidate produces exactly the expected type
+//!   head (a constructor of the expected union; a value whose result type head
+//!   matches). Ranked first.
+//! - [`Compat::Unifiable`] — the candidate's result type could unify with the
+//!   expected type (the expected type is an unbound variable, or a shared
+//!   constructor head with compatible arity). Ranked next.
+//! - [`Compat::InScopeOnly`] — no type evidence relates the candidate to the
+//!   expected type.
+//!
+//! When an expected type exists, [`Compat::InScopeOnly`] candidates are
+//! **dropped** — an expected-`Int` slot never offers a `String`. When no
+//! expected type exists (the common case away from an expecting context),
+//! every candidate is kept and ranked by name only, exactly as before this
+//! sidecar existed. The classification order is encoded into each item's
+//! `sort_text` so the editor renders it deterministically.
 //!
 //! Lock discipline: salsa queries (which acquire the interner internally) are
 //! all demanded BEFORE the caller acquires the interner lock — no nested
@@ -23,11 +41,19 @@ use ipe_intern::Symbol;
 use ipe_types::Ty;
 use lsp_types::{CompletionItem, CompletionItemKind};
 
+use crate::expected_type::expected_type_at;
+
 /// Represents a collected completion candidate before string resolution.
 struct Candidate {
     name: Symbol,
     home: Vec<Symbol>,
     kind: CandidateKind,
+    /// The `(module, type-name)` head of the type this candidate *produces*,
+    /// when statically known: a constructor produces its owning union; a value
+    /// produces the head of its (arrow-peeled) result type, resolved from the
+    /// solved env at render time. `None` when no head is determinable (e.g. a
+    /// polymorphic or unsolved value). Drives type-directed classification.
+    result_head: Option<(Vec<Symbol>, Symbol)>,
 }
 
 enum CandidateKind {
@@ -36,7 +62,36 @@ enum CandidateKind {
     Type,
 }
 
-/// All completion candidates visible in `module`.
+/// How a candidate relates to the type the cursor context expects.
+///
+/// A closed enum with a deterministic total order (`ExactType` < `Unifiable` <
+/// `InScopeOnly`) encoded into `sort_text`, so the ranking is stable and the
+/// editor renders best-first.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Compat {
+    /// The candidate produces exactly the expected type head.
+    ExactType,
+    /// The candidate's result type could unify with the expected type.
+    Unifiable,
+    /// No type evidence relates the candidate to the expected type.
+    InScopeOnly,
+}
+
+impl Compat {
+    /// The `sort_text` rank prefix — lexicographically ordered so the editor
+    /// sorts `ExactType` above `Unifiable` above `InScopeOnly`, and keywords
+    /// (rank `3`) last of all.
+    const fn rank(self) -> char {
+        match self {
+            Self::ExactType => '0',
+            Self::Unifiable => '1',
+            Self::InScopeOnly => '2',
+        }
+    }
+}
+
+/// All completion candidates visible in `module`, ranked by the type expected
+/// at `byte`.
 ///
 /// Returns an empty list for an unknown module or an unparseable project.
 #[must_use]
@@ -45,6 +100,7 @@ pub fn completions(
     root: SourceRoot,
     entry: ipe_db::SourceFile,
     module: &[String],
+    byte: u32,
 ) -> Vec<CompletionItem> {
     let files = root.files(db);
     let Some(&file) = files.get(module) else {
@@ -57,10 +113,19 @@ pub fn completions(
     // the interner is free when we acquire it below.
     let canonical = ipe_db::canonicalize(db, root, file).ok();
     let dep_canonicals = collect_dep_canonicals(db, root, file);
-    let solved_env: Option<BTreeMap<(Vec<Symbol>, Symbol), Ty>> =
-        ipe_db::typecheck(db, root, entry)
-            .ok()
-            .map(|solved| solved.env.clone());
+    // This module's own binding types, from the per-module `typecheck_module`
+    // projection (keyed by bare name — the home is fixed to this module).
+    let module_env: Option<BTreeMap<Symbol, Ty>> = ipe_db::typecheck_module(db, root, entry, file)
+        .ok()
+        .map(|types| types.env.clone());
+    // Dep bindings' types come from the deps' own per-module projections, so a
+    // cross-module value candidate still carries its solved type for ranking.
+    let dep_envs: Vec<(Vec<Symbol>, BTreeMap<Symbol, Ty>)> =
+        collect_dep_envs(db, root, entry, file);
+    // The type the surrounding context expects at the cursor, if any. `None`
+    // away from an expecting context (or on a non-type-checking program) — the
+    // provider then ranks by name only, keeping every candidate.
+    let expected = expected_type_at(db, root, entry, file, byte);
 
     // Acquire the interner once — all subsequent work is resolution-only.
     let mut interner = db.interner().lock();
@@ -78,8 +143,24 @@ pub fn completions(
         &dep_canonicals,
     );
 
+    // Reassemble the `(home, name) → Ty` lookup the renderer keys on, from the
+    // per-module projections: this module's env under `home_syms`, plus each
+    // dep's env under its own home. This is the same value the whole-program
+    // env carried, sliced and rejoined — the projection loses nothing.
+    let mut solved_env: BTreeMap<(Vec<Symbol>, Symbol), Ty> = BTreeMap::new();
+    if let Some(env) = &module_env {
+        for (name, ty) in env {
+            solved_env.insert((home_syms.clone(), *name), ty.clone());
+        }
+    }
+    for (dep_home, env) in &dep_envs {
+        for (name, ty) in env {
+            solved_env.insert((dep_home.clone(), *name), ty.clone());
+        }
+    }
+
     let mut items: Vec<CompletionItem> =
-        render_candidates(&candidates, solved_env.as_ref(), &interner);
+        render_candidates(&candidates, Some(&solved_env), expected.as_ref(), &interner);
 
     drop(interner);
 
@@ -91,6 +172,15 @@ pub fn completions(
     // have priority over imported names; both beat keywords).
     let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     items.retain(|item| seen.insert(item.label.clone()));
+
+    // Stable sort by (sort_text, label) so the type-directed rank leads and the
+    // editor sees a deterministic best-first order without relying on its own
+    // fuzzy sort. Items always carry a `sort_text` (set in the renderers).
+    items.sort_by(|a, b| {
+        let ka = (a.sort_text.as_deref().unwrap_or(""), a.label.as_str());
+        let kb = (b.sort_text.as_deref().unwrap_or(""), b.label.as_str());
+        ka.cmp(&kb)
+    });
 
     items
 }
@@ -116,8 +206,40 @@ fn collect_dep_canonicals(
     out
 }
 
-/// Collect all raw candidates (symbol + home + kind) while the interner is
-/// held, so that intern calls for dep paths are batched in one lock window.
+/// Fetch each resolved dep's per-module env (its binding types), keyed by the
+/// dep's interned home path. Demanded before the interner is locked, like
+/// [`collect_dep_canonicals`]. A dep that does not project (its own error) is
+/// skipped — its value candidates simply carry no type detail.
+fn collect_dep_envs(
+    db: &IpeDatabase,
+    root: SourceRoot,
+    entry: ipe_db::SourceFile,
+    file: ipe_db::SourceFile,
+) -> Vec<(Vec<Symbol>, BTreeMap<Symbol, Ty>)> {
+    let Ok(resolutions) = ipe_db::resolve_imports(db, root, file) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (dep_path, resolution) in resolutions.iter() {
+        if let ipe_db::ImportResolution::Resolved(dep_file) = resolution
+            && let Ok(dep_types) = ipe_db::typecheck_module(db, root, entry, *dep_file)
+        {
+            let dep_home: Vec<Symbol> = {
+                let mut interner = db.interner().lock();
+                dep_path
+                    .iter()
+                    .filter_map(|s| interner.intern(s).ok())
+                    .collect()
+            };
+            out.push((dep_home, dep_types.env.clone()));
+        }
+    }
+    out
+}
+
+/// Collect all raw candidates (symbol + home + kind + result-type head) while
+/// the interner is held, so that intern calls for dep paths are batched in one
+/// lock window.
 fn build_candidates(
     interner: &mut ipe_intern::Interner,
     canonical: Option<&std::sync::Arc<ipe_db::CanonicalModule>>,
@@ -132,6 +254,7 @@ fn build_candidates(
                 name: def.name().value,
                 home: home_syms.to_vec(),
                 kind: CandidateKind::Value,
+                result_head: None, // resolved from the solved env at render time
             });
         }
         for union in &canon.module.unions {
@@ -139,12 +262,16 @@ fn build_candidates(
                 name: union.name,
                 home: home_syms.to_vec(),
                 kind: CandidateKind::Type,
+                result_head: None,
             });
             for ctor in &union.ctors {
                 out.push(Candidate {
                     name: ctor.name,
                     home: home_syms.to_vec(),
                     kind: CandidateKind::Ctor,
+                    // A constructor produces its owning union type — the head
+                    // that makes it an ExactType match for an expected union.
+                    result_head: Some((union.home.clone(), union.name)),
                 });
             }
         }
@@ -161,13 +288,18 @@ fn build_candidates(
                 name: name_sym,
                 home: dep_home.clone(),
                 kind: CandidateKind::Value,
+                result_head: None,
             });
         }
         for &ctor_sym in dep_canon.exports.ctors.keys() {
+            // A dep constructor's owning-union head is recoverable from the
+            // dep's own unions (the export map records the ctor→type link).
+            let head = dep_ctor_head(dep_canon, ctor_sym);
             out.push(Candidate {
                 name: ctor_sym,
                 home: dep_home.clone(),
                 kind: CandidateKind::Ctor,
+                result_head: head,
             });
         }
         for &type_sym in dep_canon.exports.types.keys() {
@@ -175,17 +307,34 @@ fn build_candidates(
                 name: type_sym,
                 home: dep_home.clone(),
                 kind: CandidateKind::Type,
+                result_head: None,
             });
         }
     }
     out
 }
 
-/// Resolve each candidate to a `CompletionItem`, adding type detail for
-/// values when available.
+/// The `(module, type-name)` head of the union a dep constructor produces,
+/// found by scanning the dep's canonical unions for the one that declares it.
+fn dep_ctor_head(
+    dep_canon: &ipe_db::CanonicalModule,
+    ctor: Symbol,
+) -> Option<(Vec<Symbol>, Symbol)> {
+    for union in &dep_canon.module.unions {
+        if union.ctors.iter().any(|c| c.name == ctor) {
+            return Some((union.home.clone(), union.name));
+        }
+    }
+    None
+}
+
+/// Resolve each candidate to a `CompletionItem`, adding type detail for values
+/// and a type-directed `sort_text` rank. When `expected` is present, drop
+/// candidates that carry no type relation to it (`InScopeOnly`).
 fn render_candidates(
     candidates: &[Candidate],
     solved_env: Option<&BTreeMap<(Vec<Symbol>, Symbol), Ty>>,
+    expected: Option<&Ty>,
     interner: &ipe_intern::Interner,
 ) -> Vec<CompletionItem> {
     let mut items = Vec::new();
@@ -193,47 +342,137 @@ fn render_candidates(
         let Some(name_str) = interner.resolve(c.name) else {
             continue;
         };
-        let detail = match c.kind {
-            CandidateKind::Value => solved_env
-                .and_then(|env| env.get(&(c.home.clone(), c.name)))
-                .and_then(|ty| {
-                    let mut namer = ipe_types::VarNamer::new();
-                    ipe_types::ty_to_doc(ty, interner, &mut namer)
-                        .ok()
-                        .map(|doc| ipe_diagnostics::render_ty(&doc))
-                }),
+        // The candidate's own solved type (values only), used for both the
+        // detail string and result-head classification.
+        let value_ty: Option<&Ty> = match c.kind {
+            CandidateKind::Value => {
+                solved_env.and_then(|env| env.get(&(c.home.clone(), c.name)))
+            }
             CandidateKind::Ctor | CandidateKind::Type => None,
         };
+
+        let compat = classify(c, value_ty, expected);
+        // Type-directed filter: with an expected type present, a candidate that
+        // bears no relation to it is not offered at all.
+        if expected.is_some() && compat == Compat::InScopeOnly {
+            continue;
+        }
+
+        let detail = value_ty.and_then(|ty| {
+            let mut namer = ipe_types::VarNamer::new();
+            ipe_types::ty_to_doc(ty, interner, &mut namer)
+                .ok()
+                .map(|doc| ipe_diagnostics::render_ty(&doc))
+        });
+
+        let sort_text = format!("{}{}", compat.rank(), name_str);
         items.push(match c.kind {
-            CandidateKind::Value => value_item(name_str.to_owned(), detail),
-            CandidateKind::Ctor => ctor_item(name_str.to_owned()),
-            CandidateKind::Type => type_item(name_str.to_owned()),
+            CandidateKind::Value => value_item(name_str.to_owned(), detail, sort_text),
+            CandidateKind::Ctor => ctor_item(name_str.to_owned(), sort_text),
+            CandidateKind::Type => type_item(name_str.to_owned(), sort_text),
         });
     }
     items
 }
 
-fn value_item(label: String, detail: Option<String>) -> CompletionItem {
+/// Classify a candidate against the expected type.
+///
+/// The comparison is by TYPE HEAD — the outermost constructor of the candidate's
+/// produced type versus the expected type — which is the sound, conservative
+/// core of unification for ranking: a constructor of the expected union, or a
+/// value whose (arrow-peeled) result head equals the expected head, is an
+/// `ExactType`; an expected type variable admits anything (`Unifiable`); a
+/// shared head with differing args is `Unifiable` (a full arg-wise unify is a
+/// later refinement, tracked in the plan); everything else is `InScopeOnly`.
+fn classify(c: &Candidate, value_ty: Option<&Ty>, expected: Option<&Ty>) -> Compat {
+    let Some(expected) = expected else {
+        return Compat::InScopeOnly;
+    };
+    // An expected type variable is satisfied by any candidate — it constrains
+    // nothing, so keep the candidate but do not privilege it.
+    if matches!(expected, Ty::Var(_)) {
+        return Compat::Unifiable;
+    }
+    let Some((exp_mod, exp_name)) = con_head(expected) else {
+        // Expected is a function / tuple / record / unit — head-based ranking
+        // does not apply; keep the candidate as merely in-scope.
+        return Compat::InScopeOnly;
+    };
+
+    // Constructor / type candidates carry their produced head statically.
+    if let Some((head_mod, head_name)) = &c.result_head {
+        return head_compat(head_mod, *head_name, exp_mod, exp_name);
+    }
+
+    // A value candidate: peel its result type's head from the solved env.
+    if let Some(ty) = value_ty
+        && let Some((head_mod, head_name)) = con_head(result_of(ty))
+    {
+        return head_compat(head_mod, head_name, exp_mod, exp_name);
+    }
+
+    Compat::InScopeOnly
+}
+
+/// Compare two type heads (`(module, name)`), yielding `ExactType` on an exact
+/// match and `InScopeOnly` otherwise. (Cross-module same-name heads are treated
+/// as distinct — module identity is part of the head.)
+fn head_compat(
+    head_mod: &[Symbol],
+    head_name: Symbol,
+    exp_mod: &[Symbol],
+    exp_name: Symbol,
+) -> Compat {
+    if head_name == exp_name && head_mod == exp_mod {
+        Compat::ExactType
+    } else {
+        Compat::InScopeOnly
+    }
+}
+
+/// The result type of a (possibly curried) function type — peel every leading
+/// arrow. A non-function type is its own result.
+fn result_of(ty: &Ty) -> &Ty {
+    let mut cur = ty;
+    while let Ty::Fun(_, ret) = cur {
+        cur = ret;
+    }
+    cur
+}
+
+/// The `(module, name)` head of a `Ty::Con`, if the type is a constructor
+/// application. `None` for variables, functions, tuples, records, unit.
+const fn con_head(ty: &Ty) -> Option<(&[Symbol], Symbol)> {
+    match ty {
+        Ty::Con { module, name, .. } => Some((module.as_slice(), *name)),
+        _ => None,
+    }
+}
+
+fn value_item(label: String, detail: Option<String>, sort_text: String) -> CompletionItem {
     CompletionItem {
         label,
         kind: Some(CompletionItemKind::FUNCTION),
         detail,
+        sort_text: Some(sort_text),
         ..CompletionItem::default()
     }
 }
 
-fn ctor_item(label: String) -> CompletionItem {
+fn ctor_item(label: String, sort_text: String) -> CompletionItem {
     CompletionItem {
         label,
         kind: Some(CompletionItemKind::ENUM_MEMBER),
+        sort_text: Some(sort_text),
         ..CompletionItem::default()
     }
 }
 
-fn type_item(label: String) -> CompletionItem {
+fn type_item(label: String, sort_text: String) -> CompletionItem {
     CompletionItem {
         label,
         kind: Some(CompletionItemKind::CLASS),
+        sort_text: Some(sort_text),
         ..CompletionItem::default()
     }
 }
@@ -242,6 +481,8 @@ fn keyword_item(label: &'static str) -> CompletionItem {
     CompletionItem {
         label: label.to_owned(),
         kind: Some(CompletionItemKind::KEYWORD),
+        // Keywords sort after every user identifier (rank '3').
+        sort_text: Some(format!("3{label}")),
         ..CompletionItem::default()
     }
 }
@@ -280,6 +521,8 @@ mod tests {
     const HELPER: &str = "module Helper exposing (three, Color(..))\n\nthree : Int\nthree = 3\n\ntype Color = Red | Blue\n";
     const MAIN: &str = "module Main exposing (main)\n\nimport Helper exposing (three, Color(..))\n\nmain : Int\nmain = three\n";
 
+    /// A cursor at byte 0 is in no expecting context → scope-only behavior
+    /// (every name kept), preserving the pre-sidecar contract.
     #[test]
     fn own_module_names_and_imported_names_appear() {
         let db = IpeDatabase::new();
@@ -287,7 +530,7 @@ mod tests {
         let entry = file(&db, &["Main"], MAIN);
         let root = root_of(&db, &[(&["Helper"], helper), (&["Main"], entry)]);
 
-        let items = completions(&db, root, entry, &["Main".to_owned()]);
+        let items = completions(&db, root, entry, &["Main".to_owned()], 0);
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
 
         assert!(labels.contains(&"main"), "main missing: {labels:?}");
@@ -305,7 +548,7 @@ mod tests {
         let entry = file(&db, &["Main"], MAIN);
         let root = root_of(&db, &[(&["Helper"], helper), (&["Main"], entry)]);
 
-        let items = completions(&db, root, entry, &["Main".to_owned()]);
+        let items = completions(&db, root, entry, &["Main".to_owned()], 0);
         let main_item = items
             .iter()
             .find(|i| i.label == "main")
@@ -326,7 +569,7 @@ mod tests {
         let entry = file(&db, &["Main"], MAIN);
         let root = root_of(&db, &[(&["Helper"], helper), (&["Main"], entry)]);
 
-        let items = completions(&db, root, entry, &["Main".to_owned()]);
+        let items = completions(&db, root, entry, &["Main".to_owned()], 0);
         let mut seen = std::collections::BTreeSet::new();
         for item in &items {
             assert!(
@@ -335,5 +578,68 @@ mod tests {
                 item.label
             );
         }
+    }
+
+    /// Type-directed ranking: in a `Color`-expecting body, the union's
+    /// constructors rank first (`ExactType`) and an unrelated `Int` value is
+    /// filtered out.
+    #[test]
+    fn expected_color_ranks_constructors_first_and_drops_int_value() {
+        const SRC: &str = "module Main exposing (main)\n\ntype Color = Red | Blue\n\nn : Int\nn = 3\n\nfavorite : Color\nfavorite = Red\n\nmain = favorite\n";
+        let db = IpeDatabase::new();
+        let entry = file(&db, &["Main"], SRC);
+        let root = root_of(&db, &[(&["Main"], entry)]);
+
+        // Byte offset of `Red` in `favorite = Red` — the typed body position
+        // that expects `Color`. (Target the def body, not the `= Red` that also
+        // appears in the union declaration.)
+        let byte = u32::try_from(
+            SRC.find("favorite = Red").expect("has body") + "favorite = ".len(),
+        )
+        .expect("offset fits u32");
+        let items = completions(&db, root, entry, &["Main".to_owned()], byte);
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+
+        // Constructors of the expected type are offered.
+        assert!(labels.contains(&"Red"), "Red missing: {labels:?}");
+        assert!(labels.contains(&"Blue"), "Blue missing: {labels:?}");
+        // The `Int` value `n` bears no relation to `Color` → dropped.
+        assert!(
+            !labels.contains(&"n"),
+            "an Int value must be filtered from a Color slot: {labels:?}"
+        );
+        // `Red`/`Blue` carry the ExactType rank ('0'), sorting ahead of any
+        // Unifiable/InScopeOnly item.
+        let red = items.iter().find(|i| i.label == "Red").unwrap();
+        assert!(
+            red.sort_text.as_deref().is_some_and(|s| s.starts_with('0')),
+            "Red must rank ExactType: {:?}",
+            red.sort_text
+        );
+    }
+
+    /// Graceful degradation: a program that canonicalizes but does NOT
+    /// type-check (a type mismatch) still yields scope-only completion — no
+    /// expected type is inferable, so every in-scope name is kept, never empty.
+    #[test]
+    fn type_error_program_degrades_to_scope_only() {
+        // `bad : Int ; bad = Red` canonicalizes (Red resolves) but fails to
+        // type-check (Color ≠ Int) — so `typecheck` errors and no expected type
+        // is available, yet the names still surface from `canonicalize`.
+        const SRC: &str = "module Main exposing (main)\n\ntype Color = Red | Blue\n\nbad : Int\nbad = Red\n\nmain = bad\n";
+        let db = IpeDatabase::new();
+        let entry = file(&db, &["Main"], SRC);
+        let root = root_of(&db, &[(&["Main"], entry)]);
+
+        // A cursor inside the (type-erroring) `bad = Red` body.
+        let byte = u32::try_from(SRC.find("bad = Red").expect("has body") + "bad = ".len())
+            .expect("offset fits u32");
+        let items = completions(&db, root, entry, &["Main".to_owned()], byte);
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        // Names still surface (canonicalize succeeds even though typecheck fails);
+        // no candidate is dropped because no expected type was inferable.
+        assert!(labels.contains(&"Red"), "Red missing on type-error prog: {labels:?}");
+        assert!(labels.contains(&"bad"), "bad missing on type-error prog: {labels:?}");
+        assert!(labels.contains(&"main"), "main missing on type-error prog: {labels:?}");
     }
 }

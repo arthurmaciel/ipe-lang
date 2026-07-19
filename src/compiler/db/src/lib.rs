@@ -698,6 +698,109 @@ pub fn typecheck(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> TypecheckR
     ipe_types::infer_attributed(&linked.module, &mut interner).map(Arc::new)
 }
 
+/// The type-checker's results for ONE module, projected out of the
+/// whole-program solve — the per-module query SEAM the LSP consumes.
+///
+/// Every map is the `(home, _)`-keyed slice of the corresponding
+/// [`ipe_types::SolvedTypes`] field where `home` equals this module's path, so
+/// a handler that asks for one module's types reads exactly what the
+/// whole-program solve produced for that module — never a re-analysis, never a
+/// divergent value.
+#[derive(Clone, PartialEq, Debug)]
+pub struct ModuleTypes {
+    /// Type of each top-level binding this module declares, keyed by bare name
+    /// (the home is fixed to this module, so it drops out of the key).
+    pub env: BTreeMap<Symbol, ipe_types::Ty>,
+    /// Inferred type of each sub-expression region in this module, keyed by
+    /// span.
+    pub regions: BTreeMap<ipe_diagnostics::Span, ipe_types::Ty>,
+    /// Contextually-expected type at each region in this module (the
+    /// type-directed-completion sidecar), keyed by span.
+    pub expected: BTreeMap<ipe_diagnostics::Span, ipe_types::Ty>,
+    /// Super-type obligations of this module's typed bindings' generic
+    /// variables, keyed by bare def name.
+    pub bounds: BTreeMap<Symbol, BTreeMap<Symbol, ipe_types::TyBounds>>,
+}
+
+/// The memoized per-module projection of [`typecheck`], or the whole-program
+/// failure (the same error a whole-program demand surfaces — a module cannot
+/// type-check in isolation while the program does not).
+pub type ModuleTypesResult = Result<Arc<ModuleTypes>, (Diagnostic, Vec<Symbol>)>;
+
+/// Type-check `module` (per-module query SEAM).
+///
+/// **The incremental-per-module query contract, established today over the
+/// coarse whole-program solve.** It is keyed `(root, entry, module)` and its
+/// RESULT is byte-identical to filtering [`typecheck`]'s whole-program
+/// [`ipe_types::SolvedTypes`] to this module's `home` — a pure projection, a
+/// refactor with no behavior change (proven by
+/// `typecheck_module_projection_matches_whole_program` in
+/// `tests/phase4_seams.rs`). Handlers read this by name instead of
+/// whole-program `typecheck`, so the future genuinely-per-module solver (a
+/// scoped solve seeded from deps' TYPED interfaces — the tracked `ipe_types`
+/// redesign specified in `docs/architecture/tbd/per-module-typecheck.md`)
+/// swaps in as this query's BODY with **zero handler changes** and zero
+/// contract change, exactly as the LSP plan §3.2 mandates for the `ProgramView`
+/// seam.
+///
+/// Today it depends on the whole-program [`typecheck`], so it inherits the
+/// coarse invalidation (an edit anywhere re-projects every module). The
+/// projection itself is cheap and its value backdates: a module whose slice is
+/// byte-equal after an unrelated edit cuts its dependents. When the solver
+/// redesign lands, this query's dependency narrows to the module's own scoped
+/// solve + its deps' typed interfaces, and the coarse floor lifts — without any
+/// consumer noticing.
+#[salsa::tracked]
+pub fn typecheck_module(
+    db: &dyn Db,
+    root: SourceRoot,
+    entry: SourceFile,
+    module: SourceFile,
+) -> ModuleTypesResult {
+    let solved = typecheck(db, root, entry)?;
+    let home: Vec<Symbol> = {
+        let mut interner = db.interner().lock();
+        module
+            .module_path(db)
+            .iter()
+            .map(|segment| interner.intern(segment))
+            .collect::<Result<_, _>>()
+            .map_err(|d| (d, Vec::new()))?
+    };
+
+    let env = solved
+        .env
+        .iter()
+        .filter(|((h, _), _)| *h == home)
+        .map(|((_, name), ty)| (*name, ty.clone()))
+        .collect();
+    let regions = solved
+        .regions
+        .iter()
+        .filter(|((h, _), _)| *h == home)
+        .map(|((_, span), ty)| (*span, ty.clone()))
+        .collect();
+    let expected = solved
+        .expected
+        .iter()
+        .filter(|((h, _), _)| *h == home)
+        .map(|((_, span), ty)| (*span, ty.clone()))
+        .collect();
+    let bounds = solved
+        .bounds
+        .iter()
+        .filter(|((h, _), _)| *h == home)
+        .map(|((_, name), b)| (*name, b.clone()))
+        .collect();
+
+    Ok(Arc::new(ModuleTypes {
+        env,
+        regions,
+        expected,
+        bounds,
+    }))
+}
+
 /// The memoized result of lowering [`linked_program`]'s whole-program merge
 /// against [`typecheck`]'s solved types into the backend-agnostic IR.
 pub type LowerResult = Result<Arc<ipe_ir::Program>, (Diagnostic, Vec<Symbol>)>;

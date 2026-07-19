@@ -13,6 +13,7 @@
 pub mod code_actions;
 pub mod completion;
 pub mod diagnostics;
+pub mod expected_type;
 pub mod folding;
 pub mod formatting;
 pub mod hover;
