@@ -1,6 +1,0 @@
-# Cached Go-oracle metadata. Regenerate with the refresh-oracle tool.
-main_ipe_sha256 = 52b5fe133f17699634927971c57468d9f6e8f2ce2f2c14b1449b578aeaaaddfc
-go_sky_version = sky dev
-exit_code = 0
-oracle_divergence = true
-divergence_reason = sanctioned: soundness regression for task #54 — two `Uuid.v4 ()` calls yield DIFFERENT ids because entropy is typed as an effect (() -> Task Error String), not a memoizable pure String. The Go reference types Uuid.v4 as a bare `String` (Limitation #7) and cannot express this Task-sequenced program, so it is not Go-oracled; Sky-Rust records its own correct output "ok-distinct".

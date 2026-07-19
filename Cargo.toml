@@ -19,11 +19,9 @@ members = [
     "src/lsp/features",
     "src/lsp/server",
     "src/ipe-cli",
-    "tools/oracle",
-    "tools/refresh-oracle",
+    "tools/e2e-support",
     "src/runtime/rust",
     "tools/ipe-ffi-inspector",
-    "tools/parity-matrix",
     "src/playground",
 ]
 

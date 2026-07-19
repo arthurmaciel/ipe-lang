@@ -48,7 +48,7 @@ fn emit_and_build(name: &str, ipe_source: &str) -> Result<(), BoxError> {
 
     // THE real test: the emitted crate must `cargo build` (exit 0). A missing
     // runtime-module append reads as E0425/E0412 in this step.
-    oracle::build_rust_binary(name, &out_dir)
+    e2e_support::build_rust_binary(name, &out_dir)
         .map(|_| ())
         .map_err(|e| -> BoxError { e.into() })
 }

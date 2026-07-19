@@ -1,6 +1,0 @@
-# Cached Go-oracle metadata. Regenerate with the refresh-oracle tool.
-main_ipe_sha256 = f9f1bd3bb0915e6717ffbdbfe866228233015a34016eeac7fef354c2ee4d4c92
-go_sky_version = unknown
-exit_code = 0
-oracle_divergence = true
-divergence_reason = Go oracle failed: cannot spawn Go `sky build`: No such file or directory (os error 2); using skyc output as the reference
