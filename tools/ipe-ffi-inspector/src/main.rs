@@ -2749,16 +2749,18 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
                 // same-named method/getter, so `x` field + `x` getter + `x`
                 // setter + `x()` method yield FOUR non-colliding bindings.
                 //
-                // Wide-int / narrow-numeric SETTER GATE: Ipe `Int` is i64 and
-                // Ipe `Float` is f64. A setter that assigns a Ipe scalar into a
-                // NARROWER field (`i8..i32`, `u8..u32`, `f32`) — or a
-                // wider-than-i64 int field — would silently truncate/reinterpret
-                // out-of-range values, corrupting the foreign object. We DROP the
-                // setter (the getter above stays, since reading widens
-                // losslessly). The setter must stay INFALLIBLE (C6) — dropping it
-                // is the only sound option (a fallible setter breaks the
-                // `FieldTy -> Recv -> Recv` contract).
-                if !setter_receives_losslessly(&field_rust) {
+                // Narrow-numeric SETTER GATE: Ipe `Int` is i64 and Ipe `Float`
+                // is f64, so a field NARROWER than the Ipe scalar (or a
+                // wider-than-i64 int) cannot receive an assignment losslessly.
+                // An INTEGER field of that kind gets a CHECKED, FALLIBLE
+                // setter (`FieldTy -> Recv -> Result Error Recv`; out-of-range
+                // → Err, never a silent truncation — the checked variant is
+                // the project default for numeric coercion). Shapes with no
+                // meaningful check (`f32` precision loss, containers of
+                // narrow ints) stay dropped; the getter above stays in all
+                // cases (reading widens/saturates losslessly).
+                let lossless = setter_receives_losslessly(&field_rust);
+                if !lossless && !checked_narrowing_settable(&field_rust) {
                     record_tail_drop("setter_narrowing", false, &field_rust);
                     continue;
                 }
@@ -2785,7 +2787,7 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
                         rust_type: recv_rust.clone(),
                     }],
                     variadic: false,
-                    effect: "pure".into(),
+                    effect: if lossless { "pure" } else { "fallible" }.into(),
                     exported: true,
                     recv_type: recv_ipe.clone(),
                     recv_rust_type: recv_rust.clone(),
@@ -3831,6 +3833,25 @@ fn setter_receives_losslessly(rust_ty: &str) -> bool {
             )
         });
     !narrowing
+}
+
+/// True when a NARROWING numeric field can take a CHECKED, fallible setter:
+/// a bare integer type outside the lossless-receive set, or `Option<>` of one
+/// (exactly one level). The generated body converts with `try_from` and folds
+/// an out-of-range Ipe value to `Err` — never a silent truncation. `f32` is
+/// excluded (precision loss has no meaningful range check), as are containers
+/// of narrow ints (`Vec<u32>` — per-element failure has no clean fold).
+fn checked_narrowing_settable(rust_ty: &str) -> bool {
+    let t = rust_ty.trim();
+    let base = t
+        .strip_prefix("Option<")
+        .and_then(|r| r.strip_suffix('>'))
+        .unwrap_or(t)
+        .trim();
+    matches!(
+        base,
+        "i8" | "i16" | "i32" | "u8" | "u16" | "u32" | "u64" | "u128" | "i128" | "usize" | "isize"
+    )
 }
 
 /// True when a rustdoc item carries `#[non_exhaustive]` (R2). The attribute
@@ -20384,12 +20405,16 @@ mod tests {
                     } } },
                 "30": { "name": "Holder", "crate_id": 0, "visibility": "public",
                     "inner": { "struct": {
-                        "kind": { "plain": { "fields": [ 31 ], "has_stripped_fields": false } },
+                        "kind": { "plain": { "fields": [ 31, 32, 33 ], "has_stripped_fields": false } },
                         "generics": { "params": [], "where_predicates": [] }
                     } } },
                 "31": { "name": "color", "crate_id": 0, "visibility": "public",
                     "inner": { "struct_field": {
                         "resolved_path": { "name": "Color", "path": "Color", "id": 7, "args": null } } } },
+                "32": { "name": "count", "crate_id": 0, "visibility": "public",
+                    "inner": { "struct_field": { "primitive": "u64" } } },
+                "33": { "name": "ratio", "crate_id": 0, "visibility": "public",
+                    "inner": { "struct_field": { "primitive": "f32" } } },
                 "40": { "name": null, "crate_id": 0, "visibility": "default",
                     "inner": { "impl": {
                         "generics": { "params": [], "where_predicates": [] },
@@ -20446,6 +20471,36 @@ mod tests {
                 .iter()
                 .any(|f| f.name == "color_set_field" && f.recv_type == "Holder"),
             "a crate-local Clone enum field must bind a setter"
+        );
+    }
+
+    #[test]
+    fn narrowing_int_field_binds_checked_fallible_setter() {
+        let doc = nonexhaustive_enum_doc();
+        let pkg = parse_rustdoc(&doc, "tm", "0.1.0");
+        // A u64 field: getter stays, setter is CHECKED (fallible).
+        let setter = pkg
+            .functions
+            .iter()
+            .find(|f| f.name == "count_set_field")
+            .expect("a narrowing integer field must bind a checked setter");
+        assert_eq!(
+            setter.effect, "fallible",
+            "the narrowing-int setter must be fallible (checked try_from)"
+        );
+        assert!(
+            pkg.functions.iter().any(|f| f.name == "count_field"),
+            "the u64 getter must stay"
+        );
+        // An f32 field: getter stays, setter stays DROPPED (precision loss
+        // has no meaningful range check).
+        assert!(
+            pkg.functions.iter().any(|f| f.name == "ratio_field"),
+            "the f32 getter must stay"
+        );
+        assert!(
+            !pkg.functions.iter().any(|f| f.name == "ratio_set_field"),
+            "an f32 field must NOT bind a setter"
         );
     }
 
