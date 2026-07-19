@@ -1,6 +1,6 @@
 # Cached Go-oracle metadata. Regenerate with the refresh-oracle tool.
-main_ipe_sha256 = 045515b4b1a9a9521552f908f5e5f71b0fb417e20712e1a10adc7c0c8d2225e9
-go_sky_version = sky dev
+main_ipe_sha256 = be90dee8bc263ed22600917f6482a1fb346cc1564825f3e4c9d92603df488c35
+go_sky_version = unknown
 exit_code = 0
 oracle_divergence = true
 divergence_reason = sanctioned: this program uses Std.Db kernels (Db.open / Db.withTransaction / Db.exec / Db.query / Db.queryDecode / Db.insertRow / Db.getById / Db.updateById / Db.deleteById / Db.migrate / Db.insertFields / Db.updateFields / Db.Decode.*) — the Go backend emits Go+SQLite (cgo) binaries while ipê emits Rust+sqlx; the SQLite in-memory connection-pool behaviour and row-type representation differ enough that a shared Main.ipe cannot run on both backends. ipê's output is the correct reference.
