@@ -653,7 +653,9 @@ moneySuite =
                 a = Money.fromMajor Money.USD 10
                 b = Money.fromMajor Money.USD 5
             in
-                Test.equal "$15.00" (Money.format (Money.add a b)))
+                case Money.add a b of
+                    Ok result -> Test.equal "$15.00" (Money.format result)
+                    Err _ -> Test.fail "Money.add same-currency unexpectedly returned Err")
         , Test.test "percentOf 10% of $100 = $10" (\_ ->
             let
                 price = Money.fromMajor Money.USD 100
@@ -663,9 +665,10 @@ moneySuite =
         , Test.test "allocate $100 over 3 → sum preserved" (\_ ->
             let
                 parts = Money.allocate 3 (Money.fromMajor Money.USD 100)
-                total = Money.sumOf Money.USD parts
             in
-                Test.equal "$100.00" (Money.format total))
+                case Money.sumOf Money.USD parts of
+                    Ok total -> Test.equal "$100.00" (Money.format total)
+                    Err _ -> Test.fail "Money.sumOf same-currency unexpectedly returned Err")
         , Test.test "allocate $100 over 3 yields 3 parts" (\_ ->
             Test.equal 3
                 (List.length (Money.allocate 3 (Money.fromMajor Money.USD 100))))

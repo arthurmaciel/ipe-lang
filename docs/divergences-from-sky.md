@@ -1044,17 +1044,16 @@ API-shape review):
   `crates/ipe/tests/interp_literal.rs` + golden `m_interp_int_literal`.
   Found by the no-panic fuzzer (`multilineinterp` template).
 
-- **`Money` cross-currency arithmetic returns left operand; comparisons ignore
-  currency** — `Money.add`/`sub`/`sumOf` return the left operand unchanged when
-  the two values have different currencies; `compare`/`lt`/`lte`/`gt`/`gte`
-  compare amounts only and disregard currency. This matches upstream
-  (`../sky/sky-stdlib/Std/Money.sky:304-317`). The safe pattern is to convert
-  both values to a common currency (via `Money.convert`) before arithmetic or
-  comparison. The `add`/`sub`/`sumOf`/`compare`/`lt`/`lte`/`gt`/`gte` functions
-  carry a `-- WARNING:` doc comment stating the same-currency precondition.
-  **Retained pending a typed-`Result Money` redesign** that would make a
-  mismatch a compile-visible `Err` instead of a silent fallthrough. See
-  backlog for the redesign task.
+- **`Money.add`/`sub`/`sumOf` return `Result Error Money`; comparisons ignore
+  currency** — `Money.add`/`sub` return `Err` when the two values have
+  different currencies; `Money.sumOf` returns `Err` if any list element has the
+  wrong currency. This is a **sanctioned divergence** from upstream
+  (`../sky/sky-stdlib/Std/Money.sky:304-317`), which returns the left operand
+  unchanged on mismatch. The principled change makes invalid states
+  unrepresentable: a currency mismatch is a typed `Err`, not a silently wrong
+  money value. `compare`/`lt`/`lte`/`gt`/`gte` still compare amounts only and
+  disregard currency — a separate follow-up. Call sites must handle the `Result`;
+  convert values to a common currency first (via `Money.convert`) if needed.
 
 ---
 
