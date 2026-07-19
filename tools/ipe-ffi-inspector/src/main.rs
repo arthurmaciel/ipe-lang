@@ -5305,6 +5305,23 @@ fn collect_external_trait_paths(doc: &serde_json::Value) -> HashMap<String, Stri
             } else {
                 public_path
             };
+            // [private-path-admission] A trait's rustdoc DEFINITION path can
+            // thread a PRIVATE module of a NON-STD external crate
+            // (`::krate::private_mod::Trait`) whose public re-export is
+            // unprovable without that crate's own rustdoc. Emitting it as the
+            // UFCS qualifier is E0603 the moment the wrapper is reached — today
+            // only unreached-wrapper DCE keeps builds green, which is luck, not
+            // admission. Route the same proven-public / fail-closed gate the
+            // external TYPE path already uses (`external_type_public_path`): a
+            // std/core path (already normalised above) and a root-public
+            // `crate::Trait` pass; a non-std multi-segment path whose
+            // intermediate modules cannot be proven public is DROPPED (absent
+            // from the map → `build_trait_ctx` yields `TraitUnreachable`,
+            // sound over-drop). std/core paths are kept verbatim by that gate,
+            // preserving every existing std-trait binding.
+            let Some(public_path) = external_type_public_path(&public_path) else {
+                continue;
+            };
             out.insert(id.clone(), public_path);
         }
     }
@@ -13475,6 +13492,70 @@ mod tests {
         assert_eq!(
             external_type_public_path("chrono::naive::date::NaiveDate"),
             None
+        );
+    }
+
+    // ── private-path-admission — an external TRAIT def-path threading a
+    //    private module of a NON-std crate must NOT be recorded as a UFCS
+    //    qualifier (E0603 if reached); a root-public external trait still is.
+    #[test]
+    fn external_trait_private_module_path_is_dropped_at_admission() {
+        let doc = serde_json::json!({
+            "index": {
+                "1": { "name": "mycrate", "crate_id": 0, "visibility": "public",
+                       "inner": { "module": { "items": [] } } }
+            },
+            "paths": {
+                // Root-public foreign trait — the public path IS the def path.
+                "200": { "crate_id": 1, "kind": "trait",
+                         "path": ["reqwest", "IntoUrl"] },
+                // Foreign trait whose def path threads a PRIVATE module; the
+                // public re-export lives at an ancestor whose visibility we
+                // cannot read without reqwest's own rustdoc.
+                "201": { "crate_id": 1, "kind": "trait",
+                         "path": ["reqwest", "async_impl", "client", "Fluent"] }
+            },
+        });
+        let paths = collect_external_trait_paths(&doc);
+        assert_eq!(
+            paths.get("200").map(String::as_str),
+            Some("reqwest::IntoUrl"),
+            "a root-public external trait keeps its verbatim public path"
+        );
+        assert!(
+            !paths.contains_key("201"),
+            "a private-module-threading external trait must be DROPPED at admission \
+             (absent from the map → TraitUnreachable), got {:?}",
+            paths.get("201")
+        );
+    }
+
+    #[test]
+    fn external_std_trait_multisegment_still_recorded() {
+        // The fix must NOT regress a legitimate std/core trait whose public path
+        // coincides with its multi-segment def path.
+        let doc = serde_json::json!({
+            "index": {
+                "1": { "name": "mycrate", "crate_id": 0, "visibility": "public",
+                       "inner": { "module": { "items": [] } } }
+            },
+            "paths": {
+                "300": { "crate_id": 1, "kind": "trait",
+                         "path": ["core", "convert", "From"] },
+                // The known private std re-export submodule still collapses.
+                "301": { "crate_id": 1, "kind": "trait",
+                         "path": ["core", "str", "traits", "FromStr"] }
+            },
+        });
+        let paths = collect_external_trait_paths(&doc);
+        assert_eq!(
+            paths.get("300").map(String::as_str),
+            Some("core::convert::From")
+        );
+        assert_eq!(
+            paths.get("301").map(String::as_str),
+            Some("core::str::FromStr"),
+            "the core::str::traits private re-export must still collapse to public"
         );
     }
 
