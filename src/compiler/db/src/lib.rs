@@ -31,8 +31,14 @@
 //! query-demand order; the one-shot `ipe` driver demands queries in a fixed
 //! topological order against a cold database, so emitted bytes are identical
 //! to the non-incremental pipeline (enforced by the golden-oracle suite).
-//! Warm-db reuse stays confined to tests until the clean-vs-incremental
-//! parity gate exists.
+//! Warm-db reuse in production (`ipe watch`, the LSP session) is covered by
+//! the clean-vs-incremental parity gate
+//! (`src/ipe-cli/tests/clean_vs_incremental_parity.rs`), which drives the
+//! same [`sync_source_root`] + `compile_prepared` primitives `ipe watch`
+//! calls and proves warm output byte-identical to a cold build across the
+//! full golden corpus plus a dedicated identifier-adding edit sequence. The
+//! LSP session never reaches emission (diagnostics-only), so the byte-level
+//! hazard this gate guards does not apply to it.
 
 mod metadata;
 
