@@ -134,6 +134,9 @@ pub const IPE_N0027: Code = Code("IPE-N0027");
 pub const IPE_N0028: Code = Code("IPE-N0028");
 /// A server-only kernel named from a `--target wasm` build.
 pub const IPE_N0029: Code = Code("IPE-N0029");
+/// A wasm client-entry's reachability closure transitively reaches a
+/// server-classified module.
+pub const IPE_N0030: Code = Code("IPE-N0030");
 
 // ---------------------------------------------------------------------------
 // Type (IPE-T####)
@@ -336,6 +339,7 @@ pub fn title(c: Code) -> &'static str {
         IPE_N0027 => "duplicate import qualifier",
         IPE_N0028 => "unknown kernel alias",
         IPE_N0029 => "server-only effect in a wasm build",
+        IPE_N0030 => "server module reachable from the wasm client entry",
         IPE_T0001 => "type mismatch",
         IPE_T0002 => "infinite type",
         IPE_T0003 => "type inference exceeded its step budget",
@@ -461,6 +465,7 @@ fn front_end_explain_page(c: Code) -> Option<&'static str> {
         IPE_N0027 => Some(include_str!("../explain/IPE-N0027.md")),
         IPE_N0028 => Some(include_str!("../explain/IPE-N0028.md")),
         IPE_N0029 => Some(include_str!("../explain/IPE-N0029.md")),
+        IPE_N0030 => Some(include_str!("../explain/IPE-N0030.md")),
         IPE_T0001 => Some(include_str!("../explain/IPE-T0001.md")),
         IPE_T0002 => Some(include_str!("../explain/IPE-T0002.md")),
         IPE_T0003 => Some(include_str!("../explain/IPE-T0003.md")),

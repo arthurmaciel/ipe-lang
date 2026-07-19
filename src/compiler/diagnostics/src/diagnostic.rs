@@ -17,11 +17,11 @@ use crate::code::{
     IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127, IPE_L0128, IPE_L0129,
     IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011,
     IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025,
-    IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010,
-    IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0020,
-    IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061,
-    IPE_P0062, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012,
-    IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, Severity,
+    IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029, IPE_N0030, IPE_P0001, IPE_P0002, IPE_P0003,
+    IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017,
+    IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060,
+    IPE_P0061, IPE_P0062, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011,
+    IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, Severity,
 };
 use crate::span::Span;
 
@@ -429,6 +429,14 @@ pub enum NameError {
     /// to run the effect on the server and reach it via an HTTP route.
     /// [IPE-N0029]
     ServerOnlyKernelForWasm { qualifier: Box<str>, name: Box<str> },
+    /// Layer 2 of the wasm security gate (spec Q5): the client entry's
+    /// reachability closure transitively reaches a module classified
+    /// `server` (one of its own defs directly names a kernel with no
+    /// `WasmClient` denotation). `chain` names the exact import path from
+    /// the entry to the offending module, e.g. `Main(client) -> View(shared)
+    /// -> Data(server: imports Ipe.Db.query)` — never just "not allowed".
+    /// [IPE-N0030]
+    ServerModuleReachableFromWasmClient { chain: Box<str> },
 }
 
 /// Class label for the higher-order-kernel callback-result obligation.
@@ -1027,6 +1035,7 @@ const fn name_code(msg: &NameError) -> Code {
         NameError::DuplicateQualifier { .. } => IPE_N0027,
         NameError::UnknownKernelAlias { .. } => IPE_N0028,
         NameError::ServerOnlyKernelForWasm { .. } => IPE_N0029,
+        NameError::ServerModuleReachableFromWasmClient { .. } => IPE_N0030,
     }
 }
 
@@ -1169,7 +1178,8 @@ fn name_help(msg: &NameError, span: Span) -> Vec<HelpLine> {
         | NameError::ReservedNamespace { .. }
         | NameError::ReservedBuiltinType { .. }
         | NameError::UnknownKernelAlias { .. }
-        | NameError::ServerOnlyKernelForWasm { .. } => Vec::new(),
+        | NameError::ServerOnlyKernelForWasm { .. }
+        | NameError::ServerModuleReachableFromWasmClient { .. } => Vec::new(),
     }
 }
 

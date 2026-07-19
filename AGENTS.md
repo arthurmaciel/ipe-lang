@@ -869,14 +869,60 @@ tokio/axum/sqlx) plus static `www/` shell (CSP `script-src 'self'
 CLI (build prints exact commands).
 
 Per-target capability: pure kernels (`String`/`List`/`Dict`/`Math`/`Json`/
-`Decimal`/`Regex`/…) and whole `Ipe.Ui`/`Ipe.Html`/`Ipe.Css` render surface
-compile; `Cmd.none`/`Cmd.batch`/`Cmd.perform`/`Sub.none` run on browser
-scheduler. Server-only effects (`Db.*`, `File.*`, `Auth.*`,
-`System.getenv`, `Server.*`, `Log.*`, `Http.*`, `Time.now`, …) have NO wasm
-denotation — naming one = IPE-N0029 at compile time; route them through
-native server and call over HTTP once fetch substitute lands. Routed apps
-(Model w/ `page` field) = IPE-L0129 until client router ships; use
-`routes = []` + page-free Model.
+`Decimal`/`Regex`/…) and the whole `Ipe.Ui`/`Ipe.Html`/`Ipe.Css` render
+surface compile. The Cmd/Sub browser-effects bridge is live: `Cmd.none`/
+`Cmd.batch`/`Cmd.perform` run on the browser scheduler; `Sub.every`/
+`Time.every` run on `gloo-timers`; `Cmd.publish`/`Cmd.publishNoEcho`/
+`Sub.subscribeTopic`/`PubSub.publish`/`PubSub.publishNoEcho` route through an
+in-tab pub/sub broker (echo/no-echo preserved, scoped per mounted app
+instance); `Log.*` goes to `console.{log,error}`; `Random.int`/`float`/
+`choice` and `Crypto.randomBytes`/`randomToken` draw from
+`crypto.getRandomValues`; `Http.get`/`post`/`request` go through `fetch`; the
+`Ipe.WebSocket` client's Task-tier (`connect`/`connectWith`/`send`/
+`sendBinary`/`close`/`closeWithCode`) AND Sub-tier
+(`onOpen`/`onMessage`/`onClose`/`onError`) both go through
+`web_sys::WebSocket` and are live in the browser;
+`Task.map`/`andThen`/`mapError`/`onError`/`fromResult`/`andThenResult`/
+`succeed`/`fail`/`sequence` all work (the pure future-combinator half of
+`Task.*`). CORS/timeout/connect failures surface as `Task.fail`, never a
+trap. Server-only effects (`Db.*`, `File.*`, `Auth.*`, `System.getenv`,
+`Server.*`, `Task.run`/`parallel`/`retryWith`, …) have NO wasm denotation —
+naming one is IPE-N0029 at compile time; route them through a native server
+and call it over HTTP. Public, non-secret build-time config reaches the
+browser through `Ipe.Env.public` (see `[wasm].publicEnv` below) —
+`System.getenv` itself stays a DOES-NOT-exist-for-wasm kernel. Routed apps
+(Model with a `page` field) are IPE-L0129 until the client router ships;
+use `routes = []` + a page-free Model.
+
+**Module classification + reachability closure (IPE-N0030).** Every module
+linked into a `--target wasm` build is `shared` (default) or `server` (it
+directly names a kernel with no `WasmClient` denotation). The client entry's
+reachability closure — every module transitively reachable via imports — must
+never touch a `server` module; violating this fails naming the EXACT chain,
+e.g. `Main(client) -> View(shared) -> Data(server: imports Db.query)`, not
+just "not allowed". A `server` module the entry never imports is not an
+error — only the reachable subset matters, so a shared `view` module used by
+both a server SSR path and a wasm client type-checks against both targets
+without duplication.
+
+**`[wasm]` `sky.toml` section** (composes with `[live]`):
+
+```toml
+[wasm]
+mode      = "spa"              # spa (MVP) | hydrate (MVP+1) | off (default)
+entry     = "src/Client.ipe"   # client entry file (defaults to the build's own entry)
+mount     = "#app"             # SPA mount selector
+publicEnv = ["API_BASE_URL"]   # default-deny allowlist; rejects IPE_*/secret-pattern names
+optLevel  = "z"
+```
+
+`publicEnv` is a default-deny allowlist gated by a secret-name denylist
+(`*_SECRET`/`*_TOKEN`/`*_KEY`/`*_PASSWORD`/`DATABASE_URL`/the `IPE_*`
+namespace) enforced at `sky.toml` PARSE time — listing `IPE_AUTH_TOKEN_SECRET`
+(or any denylisted pattern) in `publicEnv` is a build error, never a silently
+dropped entry and never a runtime-only refusal. `System.getenv` stays a
+DOES-NOT-exist-for-wasm kernel regardless (Layer 1) — public build-time
+config is a distinct, narrower surface, not a `getenv` backdoor.
 
 ## Active limitations
 
