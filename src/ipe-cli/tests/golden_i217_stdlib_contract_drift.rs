@@ -1,7 +1,7 @@
 //! Stdlib-contract-drift regression — three kernel-backed stdlib
 //! surfaces (`Jwt.withClaim`, `Ipe.Db.Migration`/`Db.migrate`,
 //! `Ipe.Http.Server.Response`) whose compiler contracts had drifted from the
-//! reference `../sky/sky-stdlib` signatures, so `skyc` rejected a
+//! reference `../ipe/ipe-stdlib` signatures, so `ipec` rejected a
 //! verbatim-ported reference program with `IPE-T0001` ("expected String, found
 //! Value" etc.).
 //!
@@ -45,10 +45,10 @@ fn entry_path(root: &Path, name: &str) -> PathBuf {
 
 /// Compile a fixture and assert `ipe` accepts it (the contract now matches the
 /// reference). Returns the emitted output dir for an optional E2E follow-up.
-fn assert_skyc_accepts(name: &str) -> Option<PathBuf> {
+fn assert_ipec_accepts(name: &str) -> Option<PathBuf> {
     let root = repo_root();
     let entry = entry_path(&root, name);
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_skyc_out"));
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_ipec_out"));
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -71,7 +71,7 @@ fn e2e_build_and_run(name: &str, expect_stdout_contains: &str) {
     }
     let root = repo_root();
     let entry = entry_path(&root, name);
-    let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
+    let out = std::env::temp_dir().join(format!("ipec_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -85,14 +85,14 @@ fn e2e_build_and_run(name: &str, expect_stdout_contains: &str) {
     );
 
     // The emitted binary is run by the oracle with the TEST process's cwd
-    // (`crates/ipe`), and `Db.connect ()` writes the default `sky.db` there.
-    // A `sky.db` left by a PRIOR run (or a fixture edit that changed a
+    // (`crates/ipe`), and `Db.connect ()` writes the default `ipe.db` there.
+    // A `ipe.db` left by a PRIOR run (or a fixture edit that changed a
     // migration's SQL) would trip the checksum guard on the next run — a
     // spurious runtime failure unrelated to the contract under test. Clear the
     // stray DB from the likely cwd locations so each run starts clean; the
     // fixture also recovers migration errors to keep the SEAL check robust.
     for dir in [root.join("src").join("ipe-cli"), root.clone()] {
-        for suffix in ["sky.db", "sky.db-shm", "sky.db-wal"] {
+        for suffix in ["ipe.db", "ipe.db-shm", "ipe.db-wal"] {
             let _ = std::fs::remove_file(dir.join(suffix));
         }
     }
@@ -114,7 +114,7 @@ fn e2e_build_and_run(name: &str, expect_stdout_contains: &str) {
 /// `Jwt.withClaim` accepts a `JsonEnc.Value` argument (string AND int claims).
 #[test]
 fn i217_jwt_with_claim_accepts_json_value() {
-    assert_skyc_accepts("jwt_withclaim_value");
+    assert_ipec_accepts("jwt_withclaim_value");
 }
 
 #[test]
@@ -125,7 +125,7 @@ fn i217_jwt_with_claim_e2e() {
 /// `Db.migrate` takes `List Migration`, where `Migration` is the record alias.
 #[test]
 fn i217_db_migration_record_accepted() {
-    assert_skyc_accepts("db_migration_record");
+    assert_ipec_accepts("db_migration_record");
 }
 
 #[test]
@@ -136,7 +136,7 @@ fn i217_db_migration_record_e2e() {
 /// `Response` used as a record — literal construction + field projection.
 #[test]
 fn i217_server_response_record_accepted() {
-    assert_skyc_accepts("server_response_record");
+    assert_ipec_accepts("server_response_record");
 }
 
 #[test]

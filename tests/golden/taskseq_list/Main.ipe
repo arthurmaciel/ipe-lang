@@ -10,7 +10,7 @@ import Ipe.Log as Log exposing (println)
 -- AUD-04 witness 3 (multi-use Task-list let-inlining, near a colliding
 -- string literal).
 --
--- `tasks : List (Task Error String)` is non-Clone (SkyTask has no Clone
+-- `tasks : List (Task Error String)` is non-Clone (IpeTask has no Clone
 -- impl), so the backend inlines the `let tasks = [...]` binding at both
 -- `List.length tasks` use sites rather than sharing it via a Rust `let`
 -- (a shared binding would move `tasks` into the first call and leave the

@@ -52,7 +52,7 @@ fn fresh_dirs(tag: &str) -> Result<(PathBuf, PathBuf), BoxError> {
         std::process::id(),
         Instant::now().elapsed().as_nanos()
     ));
-    let ipe_dir = base.join("sky");
+    let ipe_dir = base.join("ipe");
     let out_dir = base.join("out");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&ipe_dir)

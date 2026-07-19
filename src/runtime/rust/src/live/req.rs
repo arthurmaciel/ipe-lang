@@ -60,14 +60,14 @@ mod tests {
             "ipe_sid=abc; theme=dark".parse().unwrap(),
         );
         h.insert("x-custom", "v".parse().unwrap());
-        let uri: axum::http::Uri = "/apps/sky?q=1".parse().unwrap();
+        let uri: axum::http::Uri = "/apps/ipe?q=1".parse().unwrap();
         let req = live_req(
             &axum::http::Method::GET,
             &uri,
             &h,
             crate::dict::dict_empty(),
         );
-        assert_eq!(req.path, "/apps/sky");
+        assert_eq!(req.path, "/apps/ipe");
         assert_eq!(req.query, "q=1");
         assert_eq!(req.method, "GET");
         assert_eq!(req.cookies.get("ipe_sid").map(String::as_str), Some("abc"));

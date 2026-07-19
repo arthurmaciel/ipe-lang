@@ -50,7 +50,7 @@ fn f1_multiuse_let_clone() {
         .join("golden")
         .join("multiuse_let_clone")
         .join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_i104_multiuse_let_clone_e2e");
+    let out = std::env::temp_dir().join("ipec_i104_multiuse_let_clone_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -79,7 +79,7 @@ fn f1_multiuse_let_clone() {
 
 // ── F2 — lambda capture + post-capture use ─────────────────────────────
 
-/// `format "sky-" ["one","two"]` must print `"sky-one,sky-two[sky-]"`.
+/// `format "ipe-" ["one","two"]` must print `"ipe-one,ipe-two[ipe-]"`.
 /// Without T5 the `move` closure steals `prefix`; the trailing
 /// `++ "[" ++ prefix ++ "]"` is E0382.
 #[test]
@@ -94,7 +94,7 @@ fn f2_closure_capture_reuse() {
         .join("golden")
         .join("closure_capture_reuse")
         .join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_i112_closure_capture_reuse_e2e");
+    let out = std::env::temp_dir().join("ipec_i112_closure_capture_reuse_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -115,8 +115,8 @@ fn f2_closure_capture_reuse() {
         "must exit 0 (was E0382 capture + reuse)"
     );
     assert!(
-        outcome.stdout.contains("sky-one,sky-two[sky-]"),
-        "format must print 'sky-one,sky-two[sky-]'; got:\n{}",
+        outcome.stdout.contains("ipe-one,ipe-two[ipe-]"),
+        "format must print 'ipe-one,ipe-two[ipe-]'; got:\n{}",
         outcome.stdout
     );
 }

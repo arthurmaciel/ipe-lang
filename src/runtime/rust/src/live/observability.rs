@@ -4,7 +4,7 @@
 //! - `GET /_ipe/healthz`  — liveness probe, always `{"status":"ok"}`.
 //! - `GET /_ipe/readyz`   — readiness probe, `{"status":"ready"}` (200) or
 //!   `{"status":"draining"}` (503) once shutdown is signalled.
-//! - `GET /_ipe/buildinfo`— commit / builtAt / skyVersion JSON.
+//! - `GET /_ipe/buildinfo`— commit / builtAt / ipeVersion JSON.
 //! - `GET /_ipe/metrics`  — Prometheus text: `ipe_live_requests_total`.
 //!
 //! Requests are counted by the `track` middleware layer. No panic vectors: every
@@ -56,7 +56,7 @@ pub async fn buildinfo() -> impl IntoResponse {
     let built_at = option_env!("IPE_BUILD_AT").unwrap_or("unknown");
     let version = option_env!("IPE_VERSION").unwrap_or("dev");
     let body =
-        format!(r#"{{"commit":"{commit}","builtAt":"{built_at}","skyVersion":"{version}"}}"#);
+        format!(r#"{{"commit":"{commit}","builtAt":"{built_at}","ipeVersion":"{version}"}}"#);
     (StatusCode::OK, [JSON], body)
 }
 
@@ -267,7 +267,7 @@ mod tests {
         assert_eq!(r.status(), StatusCode::OK);
         let b = body_string(r).await;
         assert!(b.contains("\"commit\""), "{b}");
-        assert!(b.contains("\"skyVersion\""), "{b}");
+        assert!(b.contains("\"ipeVersion\""), "{b}");
     }
 
     #[tokio::test]

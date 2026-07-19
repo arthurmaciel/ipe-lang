@@ -6,7 +6,7 @@
 //! ## Oracle provenance
 //!
 //! `oracle_divergence = true` — verified by direct assertions against the
-//! semantics documented in `../sky`'s `Ipe.Ui.sky` `mediaQuery` (wrapper
+//! semantics documented in `../ipe`'s `Ipe.Ui.ipe` `mediaQuery` (wrapper
 //! `<div>` carrying `data-ipe-mq-q` / `data-ipe-mq-rules` markers), not a
 //! cached oracle file.
 //!
@@ -55,7 +55,7 @@ fn ui_mediaquery_compiles_builds_and_renders_markers() {
     let root = repo_root();
     let dir = root.join("tests").join("golden").join("ui_mediaquery");
     let entry = dir.join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_ui_mediaquery_e2e");
+    let out = std::env::temp_dir().join("ipec_ui_mediaquery_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

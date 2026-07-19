@@ -5,7 +5,7 @@
 //!
 //! The named-callee path already eta-expands a partial application (`add 2` ->
 //! `\n -> add(2, n)`). This fixture pins the VALUE path: the reference
-//! (`../sky`) emits function values as curried single-arg closures, so applying
+//! (`../ipe`) emits function values as curried single-arg closures, so applying
 //! one arg at a time is a plain call; our IR flattens the curried chain into one
 //! multi-parameter closure, so a value applied to too-few args must be
 //! eta-expanded into a residual closure `\eta... -> (value)(supplied..., eta...)`.
@@ -16,17 +16,17 @@
 //!   * pipe partial `100 |> add3 1 2`   -> `103` (1 + 2 + 100).
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
-//! `/home/arthur/Documentos/comp/sky/out/sky` compiles + runs the SAME
+//! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
 //! `Main.ipe` to stdout `6\n33\n103\n`, exit 0:
 //!
 //! ```text
-//! $ sky run tests/golden/partial_app/Main.ipe   # Go backend
+//! $ ipe run tests/golden/partial_app/Main.ipe   # Go backend
 //! 6
 //! 33
 //! 103
 //! ```
 //!
-//! Running the Haskell `sky` toolchain inside `cargo test` is impractical, so
+//! Running the Haskell `ipe` toolchain inside `cargo test` is impractical, so
 //! the hand-computed values are the in-test oracle, documented here against the
 //! Go-equivalent command.
 
@@ -77,7 +77,7 @@ fn end_to_end_builds_and_prints_partial_app_values() {
 
     let root = repo_root();
     let entry = example_entry(&root);
-    let out = std::env::temp_dir().join("skyc_i216_partial_app_e2e");
+    let out = std::env::temp_dir().join("ipec_i216_partial_app_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

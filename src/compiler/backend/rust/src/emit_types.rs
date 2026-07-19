@@ -3,7 +3,7 @@
 //!
 //! Ports the relevant arms of `Ipê/Generate/Rust/Builder/TypeEmitter.hs`
 //! (`unionToRustTypeDef`) and `Emitter.hs` (`typeDefToString` / the enum
-//! `skyStringifyEnumImpl`). The byte target is golden `main.rs` lines 31–43.
+//! `ipeStringifyEnumImpl`). The byte target is golden `main.rs` lines 31–43.
 
 use ipe_diagnostics::{DResult, Diagnostic};
 use ipe_intern::Symbol;
@@ -433,7 +433,7 @@ fn render_fn_once_chain(
 /// A payload-carrying and/or generic enum gains tuple-variant payloads, a
 /// `<T1, …>` clause on the enum and its impl, and `IpeStringify` arms that bind
 /// each payload field and render it through the total autoref dispatch — mirroring
-/// the Go-reference Rust backend's `skyStringifyEnumImpl`:
+/// the Go-reference Rust backend's `ipeStringifyEnumImpl`:
 /// ```text
 /// #[derive(Clone, Debug, PartialEq)]
 /// pub enum MainMaybe<T1> {
@@ -522,7 +522,7 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
             variant_lines.push(format!("    {vn}({}),", field_types.join(", ")));
             let placeholders = vec!["{}"; variant.fields.len()].join(" ");
             // Go `%v`-style: `Vname <f0> <f1> …` (variant name, then space-
-            // separated fields). Matches the Go-reference `skyStringifyEnumImpl`.
+            // separated fields). Matches the Go-reference `ipeStringifyEnumImpl`.
             show_arms.push(format!(
                 "            {name}::{vn}({}) => format!(\"{display} {placeholders}\", {}),",
                 binders.join(", "),

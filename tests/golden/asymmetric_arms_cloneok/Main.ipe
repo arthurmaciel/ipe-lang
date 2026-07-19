@@ -61,10 +61,10 @@ formatTag2 isLong label =
 main : Task Error ()
 main =
     let
-        r1 = formatTag True "sky"
-        r2 = formatTag False "sky"
-        r3 = formatTag2 True "sky"
-        r4 = formatTag2 False "sky"
+        r1 = formatTag True "ipe"
+        r2 = formatTag False "ipe"
+        r3 = formatTag2 True "ipe"
+        r4 = formatTag2 False "ipe"
 
         _ = println r1
         _ = println r2

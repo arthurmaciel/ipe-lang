@@ -47,10 +47,10 @@ fn entry_path(root: &Path) -> PathBuf {
 /// decoder's payload must be `Box<dyn FnOnce(..) -> _ + Send>` (never a
 /// `+ Sync`-stamped `Box<dyn Fn>`).
 #[test]
-fn i195_skyc_accepts_and_renders_send_only_fnonce_payload() {
+fn i195_ipec_accepts_and_renders_send_only_fnonce_payload() {
     let root = repo_root();
     let entry = entry_path(&root);
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i195_json_decode_pipeline_skyc_out");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i195_json_decode_pipeline_ipec_out");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -112,7 +112,7 @@ fn i195_cargo_builds_and_runs() {
 
     let root = repo_root();
     let entry = entry_path(&root);
-    let out = std::env::temp_dir().join("skyc_i195_json_decode_pipeline_e2e");
+    let out = std::env::temp_dir().join("ipec_i195_json_decode_pipeline_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

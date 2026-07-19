@@ -93,7 +93,7 @@ fn built_main_rs(root: &Path, out: &Path) -> (Result<(), ipe::CliError>, Option<
 #[test]
 fn csv_record_literal_emits_runtime_csv_doc_struct() {
     let root = repo_root();
-    let out = std::env::temp_dir().join("skyc_csv_record_nominal_fold_seal_emit");
+    let out = std::env::temp_dir().join("ipec_csv_record_nominal_fold_seal_emit");
     let (built, main_rs) = built_main_rs(&root, &out);
     assert!(
         built.is_ok(),
@@ -125,7 +125,7 @@ fn csv_record_literal_emits_runtime_csv_doc_struct() {
 #[test]
 fn csv_record_nominal_fold_seal_builds_and_runs() {
     let root = repo_root();
-    let out = std::env::temp_dir().join("skyc_csv_record_nominal_fold_seal_e2e");
+    let out = std::env::temp_dir().join("ipec_csv_record_nominal_fold_seal_e2e");
     let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };

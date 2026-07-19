@@ -49,7 +49,7 @@ jobs:
         allocator: [dlmalloc, mimalloc]
 
     env:
-      CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/sky-rust-target
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/ipe-lang-target
       IPE_NO_SCCACHE: '1'
       STATIC_TRIPLE: x86_64-unknown-linux-musl
       CARGO_HTTP_MULTIPLEXING: 'false'
@@ -74,7 +74,7 @@ jobs:
         with:
           path: |
             ~/.cargo/registry
-            ${{ github.workspace }}/.cache/sky-rust-target
+            ${{ github.workspace }}/.cache/ipe-lang-target
           key: ${{ runner.os }}-static-${{ matrix.allocator }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-static-${{ matrix.allocator }}-
@@ -117,7 +117,7 @@ jobs:
           docker build -t ipe-static-proof "$WORK"
           OUT="$(docker run --rm ipe-static-proof)"
           echo "scratch output: $OUT"
-          echo "$OUT" | grep -q 'Hello from Sky!'
+          echo "$OUT" | grep -q 'Hello from Ipe!'
 
       # Advisory gate over the FROZEN dependency set (the emitted lockfile is
       # exactly what is baked into the static artifact).
@@ -154,7 +154,7 @@ jobs:
     timeout-minutes: 45
 
     env:
-      CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/sky-rust-target
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/ipe-lang-target
       IPE_NO_SCCACHE: '1'
       STATIC_TRIPLE: aarch64-unknown-linux-musl
       CARGO_HTTP_MULTIPLEXING: 'false'
@@ -181,7 +181,7 @@ jobs:
         with:
           path: |
             ~/.cargo/registry
-            ${{ github.workspace }}/.cache/sky-rust-target
+            ${{ github.workspace }}/.cache/ipe-lang-target
           key: ${{ runner.os }}-static-arm64-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-static-arm64-
@@ -211,7 +211,7 @@ jobs:
           BIN="$CARGO_TARGET_DIR/$STATIC_TRIPLE/release/ipe-app"
           OUT="$(qemu-aarch64-static "$BIN")"
           echo "qemu output: $OUT"
-          echo "$OUT" | grep -q 'Hello from Sky!'
+          echo "$OUT" | grep -q 'Hello from Ipe!'
 
       - name: Upload frozen-deps manifest (arm64)
         if: always()

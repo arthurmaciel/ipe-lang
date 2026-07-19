@@ -1,6 +1,6 @@
 //! Hub read-side kernels — the bundled console's data plane on Rust.
 //!
-//! The console (`sky-bundled/console`) is itself a `Ipe.Live` app; its
+//! The console (`ipe-bundled/console`) is itself a `Ipe.Live` app; its
 //! `HubStore.ipe` declares twelve `Ffi.kernel "Hub_read*"` bindings that the
 //! Rust codegen lowers to the `hub_*` functions in this module. Each reads the
 //! SQLite telemetry **spill** (`IPE_CONSOLE_HUB_DB` / the `dbPath` arg, written
@@ -39,8 +39,8 @@ use std::time::Duration;
 // ─── Tenant-prefix SQL enforcement ─────────────────────────────────────────
 //
 // Direct port of the Go reference's `HubStoreReaderWithTenant` gate
-// (`../sky/runtime-go/rt/hub_bridge.go`'s `tenantPrefixForSession` /
-// `rejectCrossTenantSvc`, `../sky/runtime-go/rt/hub/store.go`'s
+// (`../ipe/runtime-go/rt/hub_bridge.go`'s `tenantPrefixForSession` /
+// `rejectCrossTenantSvc`, `../ipe/runtime-go/rt/hub/store.go`'s
 // `LogFilter.TenantPrefix` / `escapeLikePrefix`). This module builds the full
 // CONSUMER side (SQL-layer `LIKE`-prefix scoping + the `reject_cross_tenant_svc`
 // gate + the task-local plumbing to carry a tenant prefix through a request) —
@@ -252,7 +252,7 @@ async fn read_logs_value(
     let rows = match q.fetch_all(&pool).await {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("[sky.hub] readLogs: {e}");
+            eprintln!("[ipe.hub] readLogs: {e}");
             return Value::Array(vec![]);
         }
     };
@@ -362,7 +362,7 @@ where
     match serde_json::from_value::<A>(arr) {
         Ok(a) => ok_res(a),
         Err(e) => {
-            eprintln!("[sky.hub] decode_rows: {e}");
+            eprintln!("[ipe.hub] decode_rows: {e}");
             // Fall back to decoding an empty array (List records) — if A is not
             // a list this also fails, in which case surface a structured Err
             // (the value system models it; never a panic).
@@ -402,7 +402,7 @@ async fn read_metrics_value(db_path: &str, service: &str, tenant_prefix: &str) -
     let rows = match q.bind(METRIC_LIMIT).fetch_all(&pool).await {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("[sky.hub] readMetrics: {e}");
+            eprintln!("[ipe.hub] readMetrics: {e}");
             return Value::Array(vec![]);
         }
     };
@@ -469,7 +469,7 @@ async fn read_traces_value(db_path: &str, service: &str, tenant_prefix: &str) ->
     let rows = match q.bind(TRACE_LIMIT).fetch_all(&pool).await {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("[sky.hub] readTraces: {e}");
+            eprintln!("[ipe.hub] readTraces: {e}");
             return Value::Array(vec![]);
         }
     };
@@ -516,7 +516,7 @@ async fn read_errors_value(db_path: &str, service: &str, tenant_prefix: &str) ->
     let rows = match q.bind(ERROR_LIMIT).fetch_all(&pool).await {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("[sky.hub] readErrors: {e}");
+            eprintln!("[ipe.hub] readErrors: {e}");
             return Value::Array(vec![]);
         }
     };
@@ -692,7 +692,7 @@ where
             None => (0, 0, 0),
         };
         let ov = json!({
-            "skyVersion": "hub",
+            "ipeVersion": "hub",
             "commit": "",
             "builtAt": "",
             "uptimeSeconds": 0,
@@ -908,7 +908,7 @@ where
                 .filter(|s| !s.is_empty())
                 .collect(),
             Err(e) => {
-                eprintln!("[sky.hub] serviceStats services: {e}");
+                eprintln!("[ipe.hub] serviceStats services: {e}");
                 return decode_rows(Value::Array(vec![]));
             }
         };
@@ -930,7 +930,7 @@ where
     match serde_json::from_value::<A>(obj) {
         Ok(a) => ok_res(a),
         Err(e) => {
-            eprintln!("[sky.hub] decode_one: {e}");
+            eprintln!("[ipe.hub] decode_one: {e}");
             IpeResult::Err(str_err(&format!("hub.decode: {e}")))
         }
     }
@@ -975,7 +975,7 @@ async fn open_spill(db_path: &str) -> Option<SqlitePool> {
             // `db_path` is Ipê-controlled (and the error may echo it); strip
             // control chars so neither can forge extra log lines.
             eprintln!(
-                "[sky.hub] open_spill {}: {}",
+                "[ipe.hub] open_spill {}: {}",
                 sanitize_log(db_path),
                 sanitize_log(&e.to_string())
             );
@@ -1013,7 +1013,7 @@ pub fn hub_list_services<E: Send + From<String> + 'static>(
                 ok_res(out)
             }
             Err(e) => {
-                eprintln!("[sky.hub] listServices: {e}");
+                eprintln!("[ipe.hub] listServices: {e}");
                 ok_res(Vec::new())
             }
         }
@@ -1362,7 +1362,7 @@ mod tests {
         let res: IpeResult<String, Value> = hub_read_overview(path.clone()).await;
         match res {
             IpeResult::Ok(ov) => {
-                assert_eq!(ov["skyVersion"], "hub");
+                assert_eq!(ov["ipeVersion"], "hub");
                 assert_eq!(ov["bufferLogUsed"], 1);
                 assert_eq!(ov["bufferTraceUsed"], 2);
                 assert_eq!(ov["requestsTotal"], 3); // 1 log + 0 metric + 2 span

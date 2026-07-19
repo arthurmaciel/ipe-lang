@@ -20,6 +20,6 @@ apply3 f =
 
 main =
     let g = mk3 in
-    let r1 = g "sky" 7 False in
+    let r1 = g "ipe" 7 False in
     let r2 = apply3 mk3 in
     println (r1 ++ " " ++ r2)

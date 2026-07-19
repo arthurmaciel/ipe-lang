@@ -27,40 +27,40 @@ Tooling:
 - **`ipe-index` FIRST for our own code** (`crates/` `runtime/` `tools/`) —
   pre-built structural index, not fresh search:
   - `ipe-index locate <Module.function>` — symbol location + kernel-parity
-    route (Sky → Haskell → Go → Rust impl paths).
+    route (Ipe → Haskell → Go → Rust impl paths).
   - `ipe-index def <sym>` / `refs <sym>` / `kind <fn|struct|enum|trait|type|impl>`.
   - `ipe-index parity --gaps` — Go-vs-Rust kernel parity gaps.
   Reserve `rg` for free-text hunts index can't answer.
 - **Learn how reference handles THIS task before designing fix.**
-  `../sky` = READ-ONLY source of truth. For construct you're fixing,
-  read each layer: **Sky compiler** (Haskell, `../sky/src/Sky/` —
-  parse/canon/type/lower), **Go backend** (`../sky/runtime-go/`, byte-diff
-  parity oracle), **Rust backend** (`../sky/src/Sky/Generate/Rust/`),
-  **Rust runtime** (vendored behaviour it emits into). `skydex locate <sym>`
+  `../ipe` = READ-ONLY source of truth. For construct you're fixing,
+  read each layer: **Ipe compiler** (Haskell, `../ipe/src/Ipe/` —
+  parse/canon/type/lower), **Go backend** (`../ipe/runtime-go/`, byte-diff
+  parity oracle), **Rust backend** (`../ipe/src/Ipe/Generate/Rust/`),
+  **Rust runtime** (vendored behaviour it emits into). `ipedex locate <sym>`
   gives cross-lang route.
 - Only once you can state (a) where OUR code handles it and (b) how reference
   handles it, design the change.
 
 ### 0b. Infrastructure at a glance — read this, don't re-learn it
 
-**Compiler pipeline (acyclic crate stages):** `sky_parse` → `sky_canon` (name
-resolve) → `sky_types` (HM infer/constrain) → `sky_lower` (AST→IR) → `sky_ir`
-→ `sky_backend_rust` (emit Rust). Support crates: `sky_kernels` (kernel
-table), `sky_diagnostics` (IPE-* codes + `explain/*.md`), `sky_db` (salsa
-incremental DB), `sky_intern`, `sky_watch`; `ipe` = driver + CLI. Runtime
-impls in `runtime/src/sky_runtime/`.
+**Compiler pipeline (acyclic crate stages):** `ipe_parse` → `ipe_canon` (name
+resolve) → `ipe_types` (HM infer/constrain) → `ipe_lower` (AST→IR) → `ipe_ir`
+→ `ipe_backend_rust` (emit Rust). Support crates: `ipe_kernels` (kernel
+table), `ipe_diagnostics` (IPE-* codes + `explain/*.md`), `ipe_db` (salsa
+incremental DB), `ipe_intern`, `ipe_watch`; `ipe` = driver + CLI. Runtime
+impls in `runtime/src/ipe_runtime/`.
 
 **ipe CLI:** subcommands `build` / `run` / `watch` / `explain` / `fix`.
-`skyc build <src/Main.ipe | ipe.toml> --out out/rust`. Binary =
+`ipec build <src/Main.ipe | ipe.toml> --out out/rust`. Binary =
 `target/release/ipe` (`cargo build --release -p ipe`);
-`source scripts/lib/env.sh` sets `SKYC_BIN` + `IPE_RUNTIME_DIR`.
+`source scripts/lib/env.sh` sets `IPEC_BIN` + `IPE_RUNTIME_DIR`.
 
 **Registering a kernel = update ALL anti-drift sites** (type-checker enforces
-most; miss one → IPE-N0028 / IPE-L0108 / drift test): `sky_kernels` (enum +
-`decl()` + `ALL`), `sky_types::constrain` (type-scheme + `FIRST_SCHEMED`, out
-of `KNOWN_UNBACKED` bucket), `sky_lower` (arity table +
+most; miss one → IPE-N0028 / IPE-L0108 / drift test): `ipe_kernels` (enum +
+`decl()` + `ALL`), `ipe_types::constrain` (type-scheme + `FIRST_SCHEMED`, out
+of `KNOWN_UNBACKED` bucket), `ipe_lower` (arity table +
 `REGISTRY_ONLY_ALLOWLIST` for alias-only kernels),
-`sky_backend_rust/naming.rs`, `sky_ir::pretty`, `crates/ipe/src/stdlib.rs`
+`ipe_backend_rust/naming.rs`, `ipe_ir::pretty`, `crates/ipe/src/stdlib.rs`
 (module registration). Template to seal new stdlib module:
 `crates/ipe/tests/golden_stdlib_module_seal.rs`.
 
@@ -68,14 +68,14 @@ of `KNOWN_UNBACKED` bucket), `sky_lower` (arity table +
 `.ipe` modules, `ipe.toml`). `build_set` = **disk-derived**
 (`scripts/lib/examples.sh`) — every `examples/NN-*/src/Main.ipe` whose imports
 resolve auto-included; adding dir IS registration.
-`scripts/equivalence-checks/examples-sweep.sh`, per example: `skyc build … --out out/rust` →
+`scripts/equivalence-checks/examples-sweep.sh`, per example: `ipec build … --out out/rust` →
 `cargo build --manifest-path out/rust/Cargo.toml` → run
 `out/rust/target/debug/ipe-app`. VERDICT PASS iff zero red rows. Modes:
 `IPE_SWEEP_BUILD_ONLY=1` (compile only), `IPE_SWEEP_NO_EQUIV=1` (build+run, no
 Go), default (+ Go≡Rust via cached `expected_go.txt`).
 
 **Emitted project:** `out/rust/` = Cargo project w/ runtime
-vendored into `src/sky_runtime/` (ipe copies from `IPE_RUNTIME_DIR`), default
+vendored into `src/ipe_runtime/` (ipe copies from `IPE_RUNTIME_DIR`), default
 binary `ipe-app`, edition 2024.
 
 **Golden tests** (`crates/ipe/tests/golden_*.rs`): golden =
@@ -185,7 +185,7 @@ then checks + tests + lints ONLY touched crates:
 `PROGDEV_FULL_GATE_EVERY` cycles (default 10) OR instant pending work
 drains:
 - `cargo +nightly nextest run --workspace` (+ `IPE_ORACLE_SHARED_TARGET` for E2E)
-- `cargo +nightly nextest run -p sky-runtime-rust --features full`
+- `cargo +nightly nextest run -p ipe-runtime-rust --features full`
   (LOAD-BEARING — mirror of CI's `runtime-full-features`)
 - `cargo +nightly test --workspace --doc`
 - `cargo +nightly clippy --workspace --all-targets -- -D warnings`
@@ -310,8 +310,8 @@ mid-build leaves half-written artifacts worse than clean rebuild.
 - **`ipe build` ⇒ emitted Rust `cargo build`s** (THE SEAL — every
   acceptance path fails closed at ipe time, never open at cargo time).
 - **Registering a kernel or new acceptance path updates ALL anti-drift sites**
-  (enumerated in §0b: `sky_kernels`, `sky_types::constrain`, `sky_lower`,
-  `sky_backend_rust/naming.rs`, `sky_ir::pretty`, `crates/ipe/src/stdlib.rs`).
+  (enumerated in §0b: `ipe_kernels`, `ipe_types::constrain`, `ipe_lower`,
+  `ipe_backend_rust/naming.rs`, `ipe_ir::pretty`, `crates/ipe/src/stdlib.rs`).
   Resolved-but-unschemed kernel = compile-time error, never deferred
   cargo failure — never silent `_` catchall.
 
@@ -332,9 +332,9 @@ mid-build leaves half-written artifacts worse than clean rebuild.
 ### Release checklist (non-negotiable)
 
 1. Rebuild driver: `cargo build --release -p ipe`; `source
-   scripts/lib/env.sh` exports `SKYC_BIN` + `IPE_RUNTIME_DIR`.
+   scripts/lib/env.sh` exports `IPEC_BIN` + `IPE_RUNTIME_DIR`.
 2. Full gate green — ONE authoritative run (§3b): `cargo +nightly nextest
-   run --workspace`, `cargo +nightly nextest run -p sky-runtime-rust --features
+   run --workspace`, `cargo +nightly nextest run -p ipe-runtime-rust --features
    full`, `cargo +nightly test --workspace --doc`, `cargo +nightly clippy
    --workspace --all-targets -- -D warnings`, fuzz.
 3. Example sweep green — `scripts/equivalence-checks/examples-sweep.sh` (per example: ipe build →

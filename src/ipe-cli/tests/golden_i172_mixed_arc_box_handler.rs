@@ -67,10 +67,10 @@ fn entry_path(root: &Path, fixture: &str) -> PathBuf {
 // not this shared helper, so the allow is stated here (matching
 // `golden_mm.rs` / `golden_multi_mod_split_pilot.rs`).
 #[allow(clippy::expect_used)]
-fn assert_skyc_unifies_to_arc(fixture: &str) {
+fn assert_ipec_unifies_to_arc(fixture: &str) {
     let root = repo_root();
     let entry = entry_path(&root, fixture);
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{fixture}_skyc_out"));
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{fixture}_ipec_out"));
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -123,7 +123,7 @@ fn assert_cargo_builds_and_runs(fixture: &str) {
 
     let root = repo_root();
     let entry = entry_path(&root, fixture);
-    let out = std::env::temp_dir().join(format!("skyc_{fixture}_e2e"));
+    let out = std::env::temp_dir().join(format!("ipec_{fixture}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -157,8 +157,8 @@ fn assert_cargo_builds_and_runs(fixture: &str) {
 // ── Shape (1): inline-lambda sibling (base case) ──────────────────────────────
 
 #[test]
-fn i172_inline_lambda_skyc_unifies_to_arc() {
-    assert_skyc_unifies_to_arc("mixed_arc_box_inline_lambda");
+fn i172_inline_lambda_ipec_unifies_to_arc() {
+    assert_ipec_unifies_to_arc("mixed_arc_box_inline_lambda");
 }
 
 #[test]
@@ -169,8 +169,8 @@ fn i172_inline_lambda_cargo_builds_and_runs() {
 // ── Shape (2): top-level function reference sibling (Expr::FuncValue) ──────────
 
 #[test]
-fn i172_funcvalue_skyc_unifies_to_arc() {
-    assert_skyc_unifies_to_arc("mixed_arc_box_funcvalue");
+fn i172_funcvalue_ipec_unifies_to_arc() {
+    assert_ipec_unifies_to_arc("mixed_arc_box_funcvalue");
 }
 
 #[test]
@@ -181,8 +181,8 @@ fn i172_funcvalue_cargo_builds_and_runs() {
 // ── Shape (3): let-bound lambda read as a Var sibling ─────────────────────────
 
 #[test]
-fn i172_var_sibling_skyc_unifies_to_arc() {
-    assert_skyc_unifies_to_arc("mixed_arc_box_var_sibling");
+fn i172_var_sibling_ipec_unifies_to_arc() {
+    assert_ipec_unifies_to_arc("mixed_arc_box_var_sibling");
 }
 
 #[test]
@@ -193,8 +193,8 @@ fn i172_var_sibling_cargo_builds_and_runs() {
 // ── Shape (4): case/match with a FuncValue sibling arm ────────────────────────
 
 #[test]
-fn i172_match_funcvalue_skyc_unifies_to_arc() {
-    assert_skyc_unifies_to_arc("mixed_arc_box_match_funcvalue");
+fn i172_match_funcvalue_ipec_unifies_to_arc() {
+    assert_ipec_unifies_to_arc("mixed_arc_box_match_funcvalue");
 }
 
 #[test]

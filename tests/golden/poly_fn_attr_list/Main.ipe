@@ -13,7 +13,7 @@ import Ipe.String as String
 -- — E0308 ×4 at cargo build.
 --
 -- The attribute lists [class ..., onClick (toMsg Inc)] must emit
--- Vec<sky_runtime::html::Attribute<T1>>, not Attribute<()>.
+-- Vec<ipe_runtime::html::Attribute<T1>>, not Attribute<()>.
 
 type InnerMsg
     = Inc

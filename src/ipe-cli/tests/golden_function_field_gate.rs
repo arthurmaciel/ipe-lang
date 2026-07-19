@@ -18,7 +18,7 @@
 //! NEVER accept the program and then cargo-fail.
 //!
 //! Note on the Go oracle: the Go reference compiler at
-//! `/home/arthur/Documentos/comp/sky/out/sky` ALSO fails this shape today —
+//! `/home/arthur/Documentos/comp/ipe/out/ipe` ALSO fails this shape today —
 //! its codegen emits Go that `go build` rejects (E5001 "Ipê compiler bug",
 //! `cannot call f ... any is not a function`), hand-verified in a temp dir. So
 //! the Rust clean diagnostic is a strict improvement over the Go reference, not
@@ -31,7 +31,7 @@ mod support;
 
 use ipe::CliError;
 
-/// The `sky-rust` workspace root (two levels up from this crate's manifest).
+/// The `ipe-lang` workspace root (two levels up from this crate's manifest).
 fn repo_root() -> PathBuf {
     let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
     std::fs::canonicalize(&joined).unwrap_or(joined)

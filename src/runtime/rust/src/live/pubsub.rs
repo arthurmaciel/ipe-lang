@@ -117,7 +117,7 @@ pub(crate) fn broker<T: Clone + Send + 'static>() -> Arc<Broker<T>> {
             // would discard live subscribers, so log a bug report rather than
             // fail silently, then return a fresh broker (never panic).
             eprintln!(
-                "[sky-runtime BUG] pubsub broker downcast mismatch for {:?} — please report",
+                "[ipe-runtime BUG] pubsub broker downcast mismatch for {:?} — please report",
                 TypeId::of::<T>()
             );
             let b = Arc::new(Broker::<T>::new());

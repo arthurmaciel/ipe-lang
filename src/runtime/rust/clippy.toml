@@ -1,5 +1,5 @@
 # The no-runtime-errors rule (runtime-rust/AGENTS.md) bans unwrap/expect in
-# Sky-reachable library code. Tests legitimately use them; CI lints --all-targets,
+# Ipe-reachable library code. Tests legitimately use them; CI lints --all-targets,
 # so exempt test code here.
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true

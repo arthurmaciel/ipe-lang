@@ -10,8 +10,8 @@
 
 | Artifact | Exact path | Status |
 |---|---|---|
-| skyshop Ipê source (Go-deps original) | `../sky/examples/13-skyshop/` (`src/` with `.sky` modules, `src/Lib`, `src/Page`, `src/Ui`, `static/`) | reference, READ-ONLY |
-| skyshop-rs (Rust-backend, SHIMMED) | `../sky/examples/rust/skyshop-rs/` — `ipe.toml` binds `sky-firestore-shim` / `sky-stripe-shim` / `sky-firebase-auth-shim` via `file://` git; shim sources under `wrappers/` | reference, READ-ONLY; the de-shim was never done upstream |
+| skyshop Ipê source (Go-deps original) | `../ipe/examples/13-skyshop/` (`src/` with `.ipe` modules, `src/Lib`, `src/Page`, `src/Ui`, `static/`) | reference, READ-ONLY |
+| skyshop-rs (Rust-backend, SHIMMED) | `../ipe/examples/rust/skyshop-rs/` — `ipe.toml` binds `ipe-firestore-shim` / `ipe-stripe-shim` / `ipe-firebase-auth-shim` via `file://` git; shim sources under `wrappers/` | reference, READ-ONLY; the de-shim was never done upstream |
 | our repo `examples/13-skyshop` | **does not exist** — the `13` slot is free; the transposition target is `examples/13-skyshop/` (new) | to create (skyshop-transpose step) |
 | our partial conversion | `examples/39-ffi-skyshop-core/` — domain core only; sync `uuid` auto-bound (checked-in `.ipe/cache/ffi/rust/`), firestore/firebase stdlib-swapped to `Ipe.Db`/`Ipe.Auth`, stripe absent | keep as the sync-ladder example; NOT the acceptance vehicle |
 | shim-free target crates (from the shim manifests) | `firestore = "0.49"`; `async-stripe`/`async-stripe-types`/`async-stripe-checkout` (feature `checkout_session`)/`async-stripe-core` (feature `customer`) all `=1.0.0-rc.6`; `rs-firebase-admin-sdk = "4.3"` | to auto-bind |
@@ -80,7 +80,7 @@
   Runtime-construction failure keeps the existing structured-`Err` path.
 - Regression test: construct a reactor-owning value inside one `block_on`, use
   it inside a later `block_on` — passes only with a shared reactor.
-- Gate: `cargo nextest run -p sky-runtime-rust` (+ `--features full` locally
+- Gate: `cargo nextest run -p ipe-runtime-rust` (+ `--features full` locally
   for the touched surface).
 
 ### Step: firestore direct bind (de-risk slice; has a reference oracle — the owned-query-builder fixture + upstream direct-bind)
@@ -112,7 +112,7 @@
   de-async keystone). Probe program + SEAL as above.
 
 ### Step: skyshop transposition (`examples/13-skyshop/`, ACCEPTANCE)
-- Transpose `../sky/examples/13-skyshop` (`.sky` → `.ipe`, `Sky.*` → `Ipe.*`
+- Transpose `../ipe/examples/13-skyshop` (`.ipe` → `.ipe`, `Ipe.*` → `Ipe.*`
   per our stdlib surface) with `[rust.dependencies]` naming the REAL crates —
   zero shim crates anywhere in the tree.
 - Judgment residue relocates per the design: `_status` keys die (typed
@@ -371,7 +371,7 @@ the emulator/mock is available, never faked green:
 | private-path-admission | done — `collect_external_trait_paths` routes the recorded external-trait def-path through the `external_type_public_path` proven-public / fail-closed gate; a non-std path threading a private module is dropped (→ `TraitUnreachable`), std + root-public kept. Inspector suite green (228) |
 | stripe-send | TRUE root cause found (two prior diagnoses were WRONG); combined fix F3 + doc-hidden landed, live verification in flight. Diagnosis chain: (1) `send` is an INHERENT method on every request builder (`is_inherent=true`, NOT trait-projected) — flows through normal `parse_fn_item`. (2) The drop is the **C1 async-Send OUTPUT gate** (`is_provably_send_opaque_return`): `parse_fn_item("send", CreateCheckoutSession) => None`, `send(RetrieveCustomer) => Some`; the ONLY difference is the Ok-Output — retrieve returns core-local `RetrieveCustomerReturned`, create/checkout return `Customer` / `CheckoutSession` rendered BARE, unprovable-Send in the consuming crate. (3) **THE REAL WALL** (proven by generating `stripe_shared`'s rustdoc JSON directly): `Customer`/`CheckoutSession`/`PaymentMethod`/… — every `send` Ok-payload — are defined in `#[doc(hidden)] pub mod`s of `async-stripe-shared` and re-exported via `#[doc(inline)] pub use ::*`. **Default rustdoc STRIPS doc-hidden modules and ALL their structs from the JSON** (`stripe_shared.json` has ZERO structs; `CheckoutSession` substring count = 0). So the payload types are invisible to EVERY crate's inspection — not nameable, not Send-provable, not bindable from any manifest member. Neither F2 (nameability) nor a Send-proof-propagation alone can help: the type simply isn't in any JSON. FIX (two parts, both sound): (a) **doc-hidden** — pass `--document-hidden-items` to `run_rustdoc_package`; `#[doc(hidden)]` is a doc-visibility attr, not a privacy boundary, and these `pub` types are genuinely reachable. Verified: with the flag, shared's JSON gains 2053 structs incl. `CheckoutSession` (id 7796, attrs = `CfgAttrTrace` only — NOT individually doc-hidden, so the per-item `doc_hidden` belt-and-braces gate leaves it; synthetic POSITIVE Send impl present; path `stripe_shared::checkout_session::CheckoutSession`). (b) **F3** — manifest-run cross-crate proven-Send set `GLOBAL_XC_SEND_NAMES` (union of every member's own synthetic-/all-fields-/explicit-Send full public paths), consulted by `is_provably_send_opaque_return` + the generic-instantiation arg check via `xc_send_proven` (UNIQUE last-segment match, fail-closed) — needed because the payload type is owned by shared while the `send` is in core/checkout, so the Send verdict must cross crates. 231 inspector unit tests green. VERIFY IN FLIGHT: 6-crate manifest with both fixes → assert create/checkout `send` bind → SEAL probe. RISK/REVIEW: `--document-hidden-items` is a global posture change (guardian sign-off warranted — see review note); the per-item `doc_hidden` gate is the retained safety net. NOTE: `List<…>`-Output sends stay an honest over-drop (generic base `List`/`SearchList` cross-crate — separate larger fix, NOT on the skyshop used-set: skyshop uses only create-checkout-session + retrieve-session). |
 | firebase-bind | pending — `ipe add rs-firebase-admin-sdk@4.3`; expected wall = the `HashMap<String, serde_json::Value>` claims return (extend the JSON-text lift to concrete serde-container returns); emulator security gate relocates into Ipê `Lib/Auth.ipe` (§3.3). |
-| skyshop-transpose (ACCEPTANCE) | pending — new `examples/13-skyshop/` from `../sky/examples/rust/skyshop-rs/src/`; manifest per §4.1 PLUS `async-stripe-shared` + `async-stripe-client-core` members (stripe-send precondition); Lib boundary keeps sync `Result Error` + `|> Task.run` (R1); handle strategy probe (R2); firestore emulator token-source (§4.5); behavior e2e vs emulators. |
+| skyshop-transpose (ACCEPTANCE) | pending — new `examples/13-skyshop/` from `../ipe/examples/rust/skyshop-rs/src/`; manifest per §4.1 PLUS `async-stripe-shared` + `async-stripe-client-core` members (stripe-send precondition); Lib boundary keeps sync `Result Error` + `|> Task.run` (R1); handle strategy probe (R2); firestore emulator token-source (§4.5); behavior e2e vs emulators. |
 
 ## 6. Session notes (exact next steps if resuming)
 
@@ -434,7 +434,7 @@ the emulator/mock is available, never faked green:
   structured Err or stripe-mock via `url_from_clientBuilder`).
 - THEN: `rs-firebase-admin-sdk@4.3` bind (async-trait de-async; mirrors
   firestore) + probe/SEAL.
-- THEN: skyshop transpose into `examples/13-skyshop/` (`.sky` → `.ipe`,
+- THEN: skyshop transpose into `examples/13-skyshop/` (`.ipe` → `.ipe`,
   `[rust.dependencies]` = firestore 0.49 + the four stripe crates +
   rs-firebase-admin-sdk 4.3; check in `.ipe/cache/ffi/rust`; judgment
   residue per design §9: `_status` dies, env/config in Ipê, emulator token

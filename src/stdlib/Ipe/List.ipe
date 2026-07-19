@@ -1,9 +1,9 @@
 -- | Ipe.List — list combinators (subset).
 --
--- v0.13 Layer 3 / Phase B3: Sky source for the non-HOF
+-- v0.13 Layer 3 / Phase B3: Ipe source for the non-HOF
 -- combinators.  HOFs (`map`, `filter`, `foldl`, `foldr`,
 -- `concatMap`, `filterMap`, `indexedMap`, `find`, `any`, `all`,
--- `sortBy`) stay kernel-anchored for now because Sky lambdas
+-- `sortBy`) stay kernel-anchored for now because Ipe lambdas
 -- always lower to `func(any) any` and cross-module HOF param
 -- positions need typed lambda lowering to round-trip cleanly
 -- through `splitInferredSigWithReg`'s rendering (Limitation #18 /
@@ -46,7 +46,7 @@ module Ipe.List exposing
 -- v0.17 step-8 (Limitation #8 starter): CPS / accumulator rewrite.
 -- Forwards `mapHelp` accumulates `fn x :: acc` (reversed) tail-
 -- recursively, then `reverseHelp` flips the result. Both helpers
--- are tail-recursive and auto-TCO'd by `Sky.Build.TailCallOpt` to
+-- are tail-recursive and auto-TCO'd by `Ipe.Build.TailCallOpt` to
 -- a `for { ... continue }` loop, so a 1M-element input runs in
 -- constant Go stack instead of the old O(N) non-TCO recursion.
 map fn list =
@@ -69,7 +69,7 @@ mapHelp fn list acc =
 -- Forwards `filterHelp` accumulates `x :: acc` (reversed) for
 -- elements satisfying pred, then `reverseHelp` flips the result.
 -- Both helpers are tail-recursive and auto-TCO'd by
--- `Sky.Build.TailCallOpt` to a `for { ... continue }` loop, so a
+-- `Ipe.Build.TailCallOpt` to a `for { ... continue }` loop, so a
 -- 1M-element input runs in constant Go stack instead of the old
 -- O(N) non-TCO recursion.
 filter pred list =
@@ -172,7 +172,7 @@ foldr fn acc list =
 -- REVERSE order onto `acc` via `reverseHelp (fn x) acc`, then the
 -- outer `reverseHelp acc []` flips the final accumulator once at
 -- the base for the left-to-right output.  The helper is
--- tail-recursive and auto-TCO'd by `Sky.Build.TailCallOpt` to a
+-- tail-recursive and auto-TCO'd by `Ipe.Build.TailCallOpt` to a
 -- `for { ... continue }` loop.
 --
 -- The natural delegation `concatMap fn list = concat (map fn list)`
@@ -214,12 +214,12 @@ concatMapHelp fn list acc =
 -- accumulator in REVERSE order, then `reverseHelp acc []` flips the
 -- accumulator once at the base for the final left-to-right output.
 -- `indexedMapHelp` is tail-recursive and auto-TCO'd by
--- `Sky.Build.TailCallOpt` to a `for { ... continue }` loop, so a
+-- `Ipe.Build.TailCallOpt` to a `for { ... continue }` loop, so a
 -- 1M-element input runs in constant Go stack.
 --
 -- PUBLIC SHAPE PRESERVED: `indexedMapHelp`'s symbol name is preserved
 -- (it appears in console_app/main.go via the bundled-console
--- generated code at lines referencing `Sky_Core_List_indexedMapHelp`).
+-- generated code at lines referencing `Ipe_Core_List_indexedMapHelp`).
 -- Only the BODY changes — from non-tail-cons to
 -- accumulator-then-reverse — so cross-module callers continue to
 -- resolve the same symbol with no surface-level disruption.
@@ -264,7 +264,7 @@ isEmpty list =
 -- Go ran in O(N) stack; a 1M-element input blew Go's
 -- `maxstacksize`.  Post-rewrite, the count argument is the
 -- accumulator and the recursion is auto-TCO'd by
--- `Sky.Build.TailCallOpt` to a `for { ... continue }` loop.
+-- `Ipe.Build.TailCallOpt` to a `for { ... continue }` loop.
 length list =
     lengthHelp list 0
 
@@ -328,7 +328,7 @@ reverseHelp list acc =
 -- to zero or the input is exhausted; both bases then reverse `acc`
 -- via `reverseHelp` for the final left-to-right output.  The
 -- helper is tail-recursive and auto-TCO'd by
--- `Sky.Build.TailCallOpt` to a `for { ... continue }` loop, so a
+-- `Ipe.Build.TailCallOpt` to a `for { ... continue }` loop, so a
 -- 1M-element input runs in constant Go stack instead of the old
 -- O(N) non-TCO `x :: take (n - 1) rest` shape.
 --
@@ -376,7 +376,7 @@ drop n list =
 -- empty accumulator via `reverseHelp` (already tail-recursive,
 -- already auto-TCO'd), then `appendHelp` walks the reversed
 -- prefix cons'ing each element onto `ys`.  Both phases are
--- tail-recursive so `Sky.Build.TailCallOpt` lowers each to a
+-- tail-recursive so `Ipe.Build.TailCallOpt` lowers each to a
 -- `for { ... continue }` loop.
 --
 -- Output order is preserved: `reverseHelp [a, b, c] []` gives
@@ -413,7 +413,7 @@ appendHelp revXs ys =
 -- exhausted, `reverseHelp acc []` flips the accumulator once for
 -- the final left-to-right result.  Both `concatHelp` and
 -- `appendReverseOnto` are tail-recursive and auto-TCO'd by
--- `Sky.Build.TailCallOpt` to a `for { ... continue }` loop, so a
+-- `Ipe.Build.TailCallOpt` to a `for { ... continue }` loop, so a
 -- 1M-element input runs in constant Go stack instead of the old
 -- O(N) non-TCO recursion (the legacy `append xs (concat rest)`
 -- shape recursed in the non-tail position).
@@ -472,7 +472,7 @@ member x list =
 -- each value onto `acc` in REVERSE order (largest first), then
 -- `reverseHelp acc []` flips the accumulator once at the base
 -- for the final ascending left-to-right output.  `rangeHelp` is
--- tail-recursive and auto-TCO'd by `Sky.Build.TailCallOpt` to a
+-- tail-recursive and auto-TCO'd by `Ipe.Build.TailCallOpt` to a
 -- `for { ... continue }` loop, so a 1M-element range runs in
 -- constant Go stack.
 --
@@ -506,7 +506,7 @@ rangeHelp lo hi acc =
 -- `( x, y )` pair onto `acc` in REVERSE order, then
 -- `reverseHelp acc []` flips the accumulator once at the base for
 -- the final left-to-right output.  `zipHelp` is tail-recursive
--- and auto-TCO'd by `Sky.Build.TailCallOpt` to a
+-- and auto-TCO'd by `Ipe.Build.TailCallOpt` to a
 -- `for { ... continue }` loop, so a 1M-element zip runs in
 -- constant Go stack.
 --

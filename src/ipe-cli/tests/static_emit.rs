@@ -14,7 +14,7 @@ use ipe_backend_rust::static_build::{
     CARGO_CONFIG_MARKER, StaticAllocator, StaticPlan, StaticTriple,
 };
 
-/// The `sky-rust` workspace root (two levels up from this crate's manifest).
+/// The `ipe-lang` workspace root (two levels up from this crate's manifest).
 fn repo_root() -> PathBuf {
     let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
     std::fs::canonicalize(&joined).unwrap_or(joined)
@@ -270,7 +270,7 @@ fn run_subcommand_refuses_like_build() {
 /// `ipe.toml [rust]` parses into the typed request layer; malformed values
 /// are refused at manifest-parse time.
 #[test]
-fn sky_toml_rust_section_parses_and_rejects_typos() {
+fn ipe_toml_rust_section_parses_and_rejects_typos() {
     let scratch = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("static_toml_rust");
     let _ = std::fs::remove_dir_all(&scratch);
     std::fs::create_dir_all(scratch.join("src")).expect("mk src");
@@ -475,7 +475,7 @@ fn end_to_end_static_binary_is_static_and_runs() {
         .output()
         .expect("run binary");
     assert!(run.status.success(), "static binary exited non-zero");
-    assert_eq!(String::from_utf8_lossy(&run.stdout), "Hello from Sky!\n");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "Hello from Ipe!\n");
 }
 
 /// `ipe run --static` end to end: the driver emits, cargo-builds for the
@@ -515,7 +515,7 @@ fn ipe_run_static_builds_and_executes_a_static_binary() {
         String::from_utf8_lossy(&run.stderr)
     );
     assert!(
-        String::from_utf8_lossy(&run.stdout).contains("Hello from Sky!"),
+        String::from_utf8_lossy(&run.stdout).contains("Hello from Ipe!"),
         "expected program output, got: {}",
         String::from_utf8_lossy(&run.stdout)
     );

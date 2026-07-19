@@ -2,12 +2,12 @@ module Main exposing (main)
 
 -- Backlog #85 follow-up — `ErrorInfo.details : Maybe ErrorDetails` + the
 -- 5-variant `ErrorDetails`/`PanicInfo`/`TypeInfo` union (ported alongside the
--- core `Error ErrorKind ErrorInfo` ADT from `crates/skyc/tests/
+-- core `Error ErrorKind ErrorInfo` ADT from `crates/ipec/tests/
 -- golden_error_adt_roundtrip.rs`, backlog #85/#160).
 --
 -- `Error.withDetails` is the sanctioned way to attach `ErrorDetails` to a
 -- live `Error` value (raw record-literal construction of `ErrorInfo` /
--- `PanicInfo` / `TypeInfo` is not supported — see `runtime/src/sky_runtime/
+-- `PanicInfo` / `TypeInfo` is not supported — see `runtime/src/ipe_runtime/
 -- error.rs`'s module doc). Round-trips THREE of the five `ErrorDetails`
 -- variants end to end (`HttpStatus`, `JsonDecode`, `Custom` — none carry a
 -- record payload); `FfiPanic` / `TypeMismatch` appear as exhaustive `case`

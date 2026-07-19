@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# scripts/fuzz-ill-typed.sh — ill-typed (rejection) fuzzer for the Ipê/sky-rust port.
+# scripts/fuzz-ill-typed.sh — ill-typed (rejection) fuzzer for the Ipê/ipe-lang port.
 #
 # INVERSE of fuzz-well-typed.sh. Property:
 #   An ILL-TYPED Ipê program MUST be REJECTED by `ipe` (exit != 0).
 #   A false-acceptance — ipe exits 0 on an ill-typed program — is a
 #   REAL SOUNDNESS BUG. Any such finding is copied to
-#   /tmp/sky-fuzz-neg/FAILURES/ and the script exits non-zero.
+#   /tmp/ipe-fuzz-neg/FAILURES/ and the script exits non-zero.
 #
 # LOAD-BEARING RULE: every mutation is ILL-TYPED BY CONSTRUCTION.
 #   Random mutations of valid programs are NOT necessarily ill-typed, so
@@ -132,7 +132,7 @@ setup_project() {
     local dir=$1
     mkdir -p "$dir/src"
     cat > "$dir/ipe.toml" <<'EOF'
-name = "sky-fuzz-neg"
+name = "ipe-fuzz-neg"
 version = "0.0.0"
 entry = "src/Main.ipe"
 EOF
@@ -599,8 +599,8 @@ catalogue_label() {
 }
 
 # ── Directories ───────────────────────────────────────────────────────────────
-FUZZ_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sky-fuzz-neg.XXXXXX")"
-FAILURES_DIR="/tmp/sky-fuzz-neg/FAILURES"
+FUZZ_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ipe-fuzz-neg.XXXXXX")"
+FAILURES_DIR="/tmp/ipe-fuzz-neg/FAILURES"
 mkdir -p "$FAILURES_DIR"
 
 cleanup() {
@@ -811,11 +811,11 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════════
 # MAIN LOOP
 # ═══════════════════════════════════════════════════════════════════════════════
-echo "sky-fuzz-neg: mode=ill-typed iters=$ITERS start_seed=$SEED"
-echo "sky-fuzz-neg: ipe=$IPE_BIN"
-echo "sky-fuzz-neg: catalogue_size=$CATALOGUE_SIZE build_timeout=${BUILD_TIMEOUT}s"
-echo "sky-fuzz-neg: failures_dir=$FAILURES_DIR"
-echo "sky-fuzz-neg: property: every ill-typed mutant must be REJECTED (exit != 0)"
+echo "ipe-fuzz-neg: mode=ill-typed iters=$ITERS start_seed=$SEED"
+echo "ipe-fuzz-neg: ipe=$IPE_BIN"
+echo "ipe-fuzz-neg: catalogue_size=$CATALOGUE_SIZE build_timeout=${BUILD_TIMEOUT}s"
+echo "ipe-fuzz-neg: failures_dir=$FAILURES_DIR"
+echo "ipe-fuzz-neg: property: every ill-typed mutant must be REJECTED (exit != 0)"
 echo ""
 
 # Track per-category coverage.
@@ -852,8 +852,8 @@ for (( i = 0; i < ITERS; i++ )); do
             save_false_acceptance "$iter_seed" "$iterdir" "$label_name" "$code_part"
             echo "FAIL iter=$i seed=$iter_seed $reason" >&2
             echo "" >&2
-            echo "sky-fuzz-neg: ABORTING — soundness bug found." >&2
-            echo "sky-fuzz-neg: reproduce: $0 --seed $iter_seed --iters 1 --keep" >&2
+            echo "ipe-fuzz-neg: ABORTING — soundness bug found." >&2
+            echo "ipe-fuzz-neg: reproduce: $0 --seed $iter_seed --iters 1 --keep" >&2
             exit 1
         else
             # Timeout: also a bug to investigate (but don't abort the run,
@@ -882,7 +882,7 @@ done
 elapsed=$(( $(date +%s) - start_ts ))
 
 echo ""
-echo "sky-fuzz-neg: DONE"
+echo "ipe-fuzz-neg: DONE"
 echo "  iters=$ITERS rejected=$rejected rejected_with_correct_code=$rejected_ok timeouts=$timeouts false_acceptances=$false_acceptances elapsed=${elapsed}s"
 echo ""
 echo "  Category coverage:"
@@ -892,17 +892,17 @@ done
 echo ""
 
 if [[ "$false_acceptances" -gt 0 ]]; then
-    echo "sky-fuzz-neg: FAILED — $false_acceptances false acceptance(s) found."
+    echo "ipe-fuzz-neg: FAILED — $false_acceptances false acceptance(s) found."
     echo "  Forensics: $FAILURES_DIR"
     exit 1
 fi
 
 if [[ "$timeouts" -gt 0 ]]; then
-    echo "sky-fuzz-neg: WARNING — $timeouts timeout(s). Investigate: ipe hung on some ill-typed programs."
+    echo "ipe-fuzz-neg: WARNING — $timeouts timeout(s). Investigate: ipe hung on some ill-typed programs."
 fi
 
 if [[ "$rejected" -eq "$ITERS" ]]; then
-    echo "sky-fuzz-neg: PASS — all $ITERS mutants correctly rejected."
+    echo "ipe-fuzz-neg: PASS — all $ITERS mutants correctly rejected."
     echo "  0 false acceptances (soundness property holds for this run)."
     if (( ITERS >= 1000 )); then
         echo "  Full gate SATISFIED — 1000+ iters clean."
@@ -912,7 +912,7 @@ if [[ "$rejected" -eq "$ITERS" ]]; then
     exit 0
 else
     # Some iters had timeouts but no false acceptances.
-    echo "sky-fuzz-neg: PARTIAL PASS — $rejected/$ITERS rejected cleanly ($timeouts timeouts, 0 false acceptances)."
+    echo "ipe-fuzz-neg: PARTIAL PASS — $rejected/$ITERS rejected cleanly ($timeouts timeouts, 0 false acceptances)."
     if [[ "$timeouts" -gt 0 ]]; then
         exit 1
     fi

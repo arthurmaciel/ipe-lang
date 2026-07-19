@@ -9,7 +9,7 @@ module Lib1 exposing (getName)
 -- only gets pinned to the concrete field type once `resolve_deferred` fires,
 -- which happens AFTER generalization. See the class-1 fix spec +
 -- BACKLOG.md's "Boundary Scheme Promotion" row for the incident this
--- fixture reproduces (a real SEAL violation: skyc exit-0, `cargo build`
+-- fixture reproduces (a real SEAL violation: ipec exit-0, `cargo build`
 -- fails E0283 on the emitted call site).
 getName r =
     r.name

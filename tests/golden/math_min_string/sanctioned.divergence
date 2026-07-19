@@ -1,1 +1,1 @@
-divergence: Sky compares Math.min arguments through AsInt; on String the AsInt compare is not meaningful. Sky-Rust follows Elm's polymorphic comparable (a -> a -> a), comparing lexicographically; Math.min "b" "a" = "a". Divergence from Sky, rationale: Elm-conformance.
+divergence: Ipe compares Math.min arguments through AsInt; on String the AsInt compare is not meaningful. Ipe follows Elm's polymorphic comparable (a -> a -> a), comparing lexicographically; Math.min "b" "a" = "a". Divergence from Ipe, rationale: Elm-conformance.

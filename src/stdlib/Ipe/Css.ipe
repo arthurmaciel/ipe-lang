@@ -35,9 +35,9 @@ module Ipe.Css exposing
     , renderProp, renderRule, stylesheet, styles
     )
 
--- | Ipe.Css — the typed stylesheet DSL (Layer 3, compiled Sky source #47).
+-- | Ipe.Css — the typed stylesheet DSL (Layer 3, compiled Ipe source #47).
 --
--- 100% pure Sky.  CSS generation is string building; the only Rust surface is
+-- 100% pure Ipe.  CSS generation is string building; the only Rust surface is
 -- the four *leaf* security kernels imported from `Ipe.CssSafety`
 -- (`safeValue` / `safePropName` / `safeSelector` / `stripStyleClose`).  Those
 -- gate every free-string entry point at CONSTRUCTION (PARSE, DON'T VALIDATE),
@@ -68,10 +68,10 @@ module Ipe.Css exposing
 --     script sink.  They still do NOT full value-scan (a `<script>` in a
 --     `<style>` body is inert CSS text); prefer the typed builders over
 --     `raw` for anything not author-controlled.
---   * `stylesheet` folds in pure Sky and finishes through `stripStyleClose`
+--   * `stylesheet` folds in pure Ipe and finishes through `stripStyleClose`
 --     (defence in depth); the `<style>` render sink strips again (belt & braces
 --     with `html_style_node_`).  For benign input the output is byte-identical
---     to the Go oracle (the same pure-Sky render); only an attack string
+--     to the Go oracle (the same pure-Ipe render); only an attack string
 --     diverges (it is neutralised) — a sanctioned security divergence.
 
 import Ipe.Prelude exposing (..)

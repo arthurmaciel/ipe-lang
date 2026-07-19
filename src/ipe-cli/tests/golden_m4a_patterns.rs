@@ -72,7 +72,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
     let root = repo_root();
     let dir = golden_dir(&root, name);
     let entry = dir.join("Main.ipe");
-    let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
+    let out = std::env::temp_dir().join(format!("ipec_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -120,6 +120,6 @@ fn cons_sum_builds_and_prints_six() {
 }
 
 #[test]
-fn non_exhaustive_list_case_is_sky_t0010() {
+fn non_exhaustive_list_case_is_ipe_t0010() {
     assert_gate("gate_list_nonexhaustive", ipe_diagnostics::IPE_T0010);
 }

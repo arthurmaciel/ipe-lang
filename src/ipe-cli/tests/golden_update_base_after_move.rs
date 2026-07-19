@@ -43,11 +43,11 @@ fn entry_path(root: &Path) -> PathBuf {
 /// arm must be cloned (`model.clone()`) because the update base `{ model | … }`
 /// (a `(model).clone()` borrow) is textually later and needs `model` alive.
 #[test]
-fn i193_update_base_skyc_accepts_and_clones_consuming_use() {
+fn i193_update_base_ipec_accepts_and_clones_consuming_use() {
     let root = repo_root();
     let entry = entry_path(&root);
     let out =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i193_update_base_after_move_skyc_out");
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i193_update_base_after_move_ipec_out");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -131,7 +131,7 @@ fn i193_update_base_cargo_builds_and_runs() {
 
     let root = repo_root();
     let entry = entry_path(&root);
-    let out = std::env::temp_dir().join("skyc_i193_update_base_e2e");
+    let out = std::env::temp_dir().join("ipec_i193_update_base_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -148,10 +148,10 @@ fn i193_update_base_cargo_builds_and_runs() {
         "update_base_after_move must exit 0 (no E0382); stdout: {:?}",
         outcome.stdout
     );
-    // bump True {tag=sky, score=41} → ({tag=sky, score=42}, "sky/sky#41")
+    // bump True {tag=ipe, score=41} → ({tag=ipe, score=42}, "ipe/ipe#41")
     // bump False {tag=zzz, score=7} → ({tag=zzz, score=7}, "idle")
     assert!(
-        outcome.stdout.contains("sky 42 sky/sky#41 | zzz idle"),
+        outcome.stdout.contains("ipe 42 ipe/ipe#41 | zzz idle"),
         "unexpected stdout: {:?}",
         outcome.stdout
     );

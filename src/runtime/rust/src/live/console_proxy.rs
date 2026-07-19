@@ -2,7 +2,7 @@
 //!
 //! Replaces the in-process `console.rs` plain-HTML shell with the **real bundled
 //! Ipe.Live console**, spawned as a child process and reverse-proxied at
-//! `/_ipe/console/*`. The console binary is **pre-built at the user's `sky build`
+//! `/_ipe/console/*`. The console binary is **pre-built at the user's `ipe build`
 //! time** into a shared cache — at runtime this module only `exec`s it,
 //! never builds. See `runtime-rust/README.md` §"Rust vs Go — divergent strategies"
 //! for why Rust takes the separate-process path Go abandoned (Go's subprocess
@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use tokio::process::{Child, Command};
 
 /// Override for the pre-built console binary path. When unset, the cache path
-/// (`~/.cache/sky/rust-console/<sky-version>/ipe-console`, written at build time) is used.
+/// (`~/.cache/ipe/rust-console/<ipe-version>/ipe-console`, written at build time) is used.
 const CONSOLE_BIN_ENV: &str = "IPE_CONSOLE_BIN";
 
 /// The mount prefix. The parent proxies everything under this path to the child
@@ -56,15 +56,15 @@ pub fn console_bin_path() -> Option<std::path::PathBuf> {
         let pb = std::path::PathBuf::from(p);
         return if pb.is_file() { Some(pb) } else { None };
     }
-    // Key on the SKY compiler version (same source as `/_ipe/buildinfo`), NOT
+    // Key on the IPE compiler version (same source as `/_ipe/buildinfo`), NOT
     // the generated crate's CARGO_PKG_VERSION (always "0.1.0"). The ipe build
-    // sets IPE_VERSION when compiling this app, and Sky.Build.Rust.Console
+    // sets IPE_VERSION when compiling this app, and Ipe.Build.Rust.Console
     // caches the console binary under the SAME version — so both agree on the
-    // `~/.cache/sky/rust-console/<ver>/ipe-console` path.
+    // `~/.cache/ipe/rust-console/<ver>/ipe-console` path.
     let ver = option_env!("IPE_VERSION").unwrap_or("dev");
     let home = crate::system::read_env_var("HOME").ok()?;
     let pb = std::path::Path::new(&home)
-        .join(".cache/sky/rust-console")
+        .join(".cache/ipe/rust-console")
         .join(ver)
         .join("ipe-console");
     if pb.is_file() { Some(pb) } else { None }
@@ -171,13 +171,13 @@ pub fn spawn_console(child_port: u16, store: &str, child_collects: bool) -> Opti
                 *g = Some(child);
             }
             eprintln!(
-                "[sky.console] spawned console child on :{child_port} (bin {})",
+                "[ipe.console] spawned console child on :{child_port} (bin {})",
                 bin.display()
             );
             Some(())
         }
         Err(e) => {
-            eprintln!("[sky.console] spawn failed ({e}); falling back to in-process console");
+            eprintln!("[ipe.console] spawn failed ({e}); falling back to in-process console");
             None
         }
     }
@@ -453,12 +453,12 @@ pub async fn ensure_console_proxy() -> bool {
         None => return false,
     };
     if spawn_console(port, &store, /* child_collects = */ !parent_writes).is_none() {
-        // Binary absent (not pre-built / different sky version) or spawn error.
+        // Binary absent (not pre-built / different ipe version) or spawn error.
         return false;
     }
     if !wait_ready(port, READY_TIMEOUT).await {
         eprintln!(
-            "[sky.console] child not ready within {READY_TIMEOUT:?}; falling back to in-process console"
+            "[ipe.console] child not ready within {READY_TIMEOUT:?}; falling back to in-process console"
         );
         shutdown_console();
         return false;
@@ -488,7 +488,7 @@ pub async fn ensure_console_proxy() -> bool {
         .is_err()
     {
         // Already initialised once (shouldn't happen — one Live server per process).
-        eprintln!("[sky.console] proxy already initialised; keeping the first mount");
+        eprintln!("[ipe.console] proxy already initialised; keeping the first mount");
     }
     // NOTE: child teardown on shutdown is now owned by the ONE coherent
     // graceful-shutdown path in `live::live_shutdown_signal` (it calls
@@ -497,7 +497,7 @@ pub async fn ensure_console_proxy() -> bool {
     // would race, and that hook's `std::process::exit(130)` would defeat the
     // exit-0-on-clean-shutdown contract. The PR_SET_PDEATHSIG + kill_on_drop on
     // the child remain the defense-in-depth floor for non-graceful parent death.
-    eprintln!("[sky.console] reverse-proxy ready at {CONSOLE_BASE}/* → 127.0.0.1:{port}");
+    eprintln!("[ipe.console] reverse-proxy ready at {CONSOLE_BASE}/* → 127.0.0.1:{port}");
     true
 }
 

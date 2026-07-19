@@ -19,7 +19,7 @@ pub type DbRow = sqlx::postgres::PgRow;
 #[cfg(feature = "db")]
 pub fn ipe_db_url() -> String {
     crate::system::read_env_var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://postgres@localhost/sky".to_string())
+        .unwrap_or_else(|_| "postgres://postgres@localhost/ipe".to_string())
 }
 
 #[cfg(not(feature = "db"))]

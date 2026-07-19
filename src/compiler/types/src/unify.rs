@@ -1,5 +1,5 @@
 //! Unification of two solver variables, ported from the relevant arms of
-//! `Sky.Type.Unify` (derivative of elm/compiler's `Type.Unify`, BSD-3-Clause).
+//! `Ipe.Type.Unify` (derivative of elm/compiler's `Type.Unify`, BSD-3-Clause).
 //!
 //! Eager, in-place unification over the union-find arena. A flexible variable
 //! adopts the other side's content; two structures must agree head-to-head and
@@ -319,7 +319,7 @@ fn unify_flat(
         // ── Open-record unification (row-poly) ───────────────────────────────
         //
         // Faithful port of `unifyRecords` from
-        // `../sky/src/Sky/Type/Unify.hs:468-512`.
+        // `../ipe/src/Ipe/Type/Unify.hs:468-512`.
         //
         // Algorithm (four cases):
         //   1. Unify every field present on BOTH sides pairwise.
@@ -394,7 +394,7 @@ fn unify_flat(
         }
         // Two closed-tail sentinels: identical structures, merge and succeed.
         // Mirrors the Haskell `(EmptyRecord1, EmptyRecord1) -> return ()` arm
-        // in `../sky/src/Sky/Type/Unify.hs`. Without this arm both roots would
+        // in `../ipe/src/Ipe/Type/Unify.hs`. Without this arm both roots would
         // fall through to the wildcard mismatch, producing a spurious
         // "TypeMismatch { expected: Unit, found: Unit }" (zonk renders
         // EmptyRecord as Unit for display purposes).
@@ -426,7 +426,7 @@ fn occurs_guard(
 /// Whether the extension variable `v` resolves to [`FlatType::EmptyRecord`]
 /// (the closed-tail sentinel).
 ///
-/// Mirrors `isClosedRecordExt` from `../sky/src/Sky/Type/Unify.hs:505`.
+/// Mirrors `isClosedRecordExt` from `../ipe/src/Ipe/Type/Unify.hs:505`.
 /// A record is closed iff this returns `true`; open iff it returns `false`
 /// (the extension is still a flex variable or has been merged into another open
 /// record).

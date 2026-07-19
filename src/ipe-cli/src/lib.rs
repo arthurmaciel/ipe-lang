@@ -4,8 +4,8 @@
 //! Wires the pipeline end to end: read a `.ipe` entry file, run it through
 //! [`ipe_parse`] → [`ipe_canon`] → [`ipe_types`] → [`ipe_lower`] → the
 //! [`ipe_backend_rust`] emitter, write the emitted Cargo project, and vendor the
-//! Sky runtime module tree into it (a port of the copy step in the Haskell
-//! compiler's `Sky.Generate.Rust.Project`).
+//! Ipe runtime module tree into it (a port of the copy step in the Haskell
+//! compiler's `Ipe.Generate.Rust.Project`).
 //!
 //! Generated Rust projects do not depend on the runtime as a Cargo path crate;
 //! instead `main.rs` declares `mod ipe_runtime;` and the runtime sources are
@@ -92,7 +92,7 @@ impl fmt::Display for CliError {
             }
             Self::RuntimeNotFound => write!(
                 f,
-                "could not locate the Sky runtime; \
+                "could not locate the Ipe runtime; \
                  set IPE_RUNTIME_DIR to an explicit path or pass --runtime <dir>"
             ),
             Self::StaticRefusal(refusal) => write!(f, "static build refused: {refusal}"),
@@ -228,7 +228,7 @@ pub fn build_with_options(
 /// file-path shorthand (`ipe build src/Main.ipe`).
 ///
 /// This is the faithful port of Haskell's `Graph.discoverModulesMulti
-/// (sourceRoot : ...) entryPath` call in `Sky.Build.Compile.hs`: it probes
+/// (sourceRoot : ...) entryPath` call in `Ipe.Build.Compile.hs`: it probes
 /// the source root recursively and follows imports across sibling files before
 /// running the shared `compile_modules` core.
 ///
@@ -284,7 +284,7 @@ pub fn build_with_sibling_discovery_with_options(
 
     // Discover ALL .ipe files in the source root (recursively). This is the
     // equivalent of `Graph.discoverModulesMulti [srcRoot] entryPath` in
-    // `Sky.Build.Compile.hs`.
+    // `Ipe.Build.Compile.hs`.
     let mut discovered = project::discover_modules(src_root)?;
 
     // Ensure the entry itself is always in the discovered set, even when its
@@ -332,11 +332,11 @@ pub fn build_with_sibling_discovery_with_options(
 /// `ipe.toml` manifest. Returns the manifest path if found, or `None` when
 /// the walk reaches the filesystem root.
 ///
-/// Faithful port of the Haskell `sky build src/Main.ipe` behavior: when
+/// Faithful port of the Haskell `ipe build src/Main.ipe` behavior: when
 /// given a file entry the Haskell driver locates the project root (where
 /// `ipe.toml` lives) before calling `buildProject`, so the full module graph
 /// is compiled instead of just the single entry file.
-fn find_manifest_for_sky_file(ipe_file: &Path) -> Option<PathBuf> {
+fn find_manifest_for_ipe_file(ipe_file: &Path) -> Option<PathBuf> {
     let mut dir = ipe_file.parent()?;
     loop {
         let candidate = dir.join("ipe.toml");
@@ -1221,7 +1221,7 @@ fn prune_orphaned_files(
     Ok(())
 }
 
-/// Build a multi-module Sky project rooted at `manifest_path` (`ipe.toml`) into
+/// Build a multi-module Ipe project rooted at `manifest_path` (`ipe.toml`) into
 /// a Rust Cargo project under `out_dir`, vendoring the runtime from `runtime_dir`.
 ///
 /// The build pipeline:
@@ -1310,9 +1310,9 @@ pub fn build_project_with_options(
 /// 1. `$IPE_RUNTIME_DIR` — explicit override, allows pointing at any tree.
 /// 2. Upward walk from the current directory, checking in order:
 ///    - `src/runtime/rust/src/ipe_runtime` (the in-repo copy — found immediately when
-///      running from anywhere inside the sky-rust workspace)
-///    - `sky/runtime-rust/src/sky_runtime` (sibling sky checkout — legacy)
-///    - `runtime-rust/src/sky_runtime` (legacy sibling path)
+///      running from anywhere inside the ipe-lang workspace)
+///    - `ipe/runtime-rust/src/ipe_runtime` (sibling ipe checkout — legacy)
+///    - `runtime-rust/src/ipe_runtime` (legacy sibling path)
 ///
 /// # Errors
 /// Returns [`CliError::RuntimeNotFound`] when no candidate directory exists, or
@@ -1329,11 +1329,11 @@ pub fn resolve_runtime() -> Result<PathBuf, CliError> {
     let mut here: Option<&Path> = Some(cwd.as_path());
     while let Some(dir) = here {
         for candidate in [
-            // In-repo runtime (sky-rust monorepo): found when CWD is anywhere
+            // In-repo runtime (ipe-lang monorepo): found when CWD is anywhere
             // inside the workspace.
             dir.join("src").join("runtime").join("rust").join("src"),
-            // Legacy: sibling `sky` checkout.
-            dir.join("sky")
+            // Legacy: sibling `ipe` checkout.
+            dir.join("ipe")
                 .join("runtime-rust")
                 .join("src")
                 .join("ipe_runtime"),
@@ -1478,7 +1478,7 @@ fn discover_manifest(entry_path: &Path) -> Result<Option<PathBuf>, CliError> {
     } else if entry_path.extension().and_then(|e| e.to_str()) == Some("toml") {
         Ok(Some(entry_path.to_path_buf()))
     } else {
-        Ok(find_manifest_for_sky_file(entry_path))
+        Ok(find_manifest_for_ipe_file(entry_path))
     }
 }
 
@@ -1574,7 +1574,7 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
     //      to sibling discovery when no ipe.toml exists (fixes IPE-N0020 for
     //      multi-file projects built via the file-path shorthand). This mirrors
     //      the Haskell driver's `Graph.discoverModulesMulti srcRoot entryPath`
-    //      call in `Sky.Build.Compile.hs`.
+    //      call in `Ipe.Build.Compile.hs`.
     let manifest = discover_manifest(&entry_path)?;
 
     let static_plan = resolve_static_plan(cli_layer, manifest.as_deref())?;
@@ -2287,7 +2287,7 @@ fn write_atomic(target: &Path, contents: &str) -> Result<(), CliError> {
         || String::from("source.ipe"),
         |n| n.to_string_lossy().into_owned(),
     );
-    let tmp_name = format!(".{name}.skyc-fix.{}.tmp", std::process::id());
+    let tmp_name = format!(".{name}.ipec-fix.{}.tmp", std::process::id());
     let tmp = match dir {
         Some(d) => d.join(tmp_name),
         None => PathBuf::from(tmp_name),
@@ -2387,7 +2387,7 @@ mod tests {
     }
 
     #[test]
-    fn explain_resolves_sky_t0014() {
+    fn explain_resolves_ipe_t0014() {
         // IPE-T0014 resolves via ALL_CODES from ipe_diagnostics rather than
         // a hand-mirror that could omit it.
         let result = explain_lookup("IPE-T0014");
@@ -2547,7 +2547,7 @@ mod tests {
             return;
         }
 
-        let dir = std::env::temp_dir().join("skyc_generic_record_src_e2e");
+        let dir = std::env::temp_dir().join("ipec_generic_record_src_e2e");
         let _ = fs::remove_dir_all(&dir);
         let entry = dir.join("Main.ipe");
         let created = fs::create_dir_all(&dir).and_then(|()| fs::write(&entry, SRC));
@@ -2593,23 +2593,23 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // find_manifest_for_sky_file tests (IPE-N0020 fix)
+    // find_manifest_for_ipe_file tests (IPE-N0020 fix)
     // -----------------------------------------------------------------------
 
     /// Creates a temp directory with a nested `src/Main.ipe` and a `ipe.toml`
     /// at the project root, confirming the upward walk finds the manifest.
     #[test]
     fn find_manifest_walks_up_to_project_root() {
-        let tmp = std::env::temp_dir().join("skyc_find_manifest_test");
+        let tmp = std::env::temp_dir().join("ipec_find_manifest_test");
         let _ = fs::remove_dir_all(&tmp);
         let src = tmp.join("src");
         fs::create_dir_all(&src).expect("create src/");
         let toml = tmp.join("ipe.toml");
         fs::write(&toml, "name = \"test\"\n").expect("write ipe.toml");
-        let main_sky = src.join("Main.ipe");
-        fs::write(&main_sky, "module Main exposing (main)\nmain = 0\n").expect("write Main.ipe");
+        let main_ipe = src.join("Main.ipe");
+        fs::write(&main_ipe, "module Main exposing (main)\nmain = 0\n").expect("write Main.ipe");
 
-        let found = find_manifest_for_sky_file(&main_sky);
+        let found = find_manifest_for_ipe_file(&main_ipe);
         assert_eq!(
             found.as_deref(),
             Some(toml.as_path()),
@@ -2663,7 +2663,7 @@ main =
         }
         let Ok(runtime) = runtime else { return };
 
-        let dir = std::env::temp_dir().join("skyc_panything_regression");
+        let dir = std::env::temp_dir().join("ipec_panything_regression");
         let _ = fs::remove_dir_all(&dir);
         let entry = dir.join("Main.ipe");
         let created = fs::create_dir_all(&dir).and_then(|()| fs::write(&entry, SRC));
@@ -2699,7 +2699,7 @@ main =
     /// `fn ipe_main() -> IpeTask<` and does NOT contain `task_run(` at the
     /// `ipe_main` definition site.
     #[test]
-    fn task_run_main_emits_skytask_not_skyresult() {
+    fn task_run_main_emits_ipetask_not_iperesult() {
         // A minimal Ipe.Cli-style program: main = task |> Task.run
         // A shape prone to E0308 in the emitted Rust.
         const SRC: &str = "\
@@ -2718,7 +2718,7 @@ main =
         }
         let Ok(runtime) = runtime else { return };
 
-        let dir = std::env::temp_dir().join("skyc_taskrun_elision_regression");
+        let dir = std::env::temp_dir().join("ipec_taskrun_elision_regression");
         let _ = fs::remove_dir_all(&dir);
         let entry = dir.join("Main.ipe");
         let created = fs::create_dir_all(&dir).and_then(|()| fs::write(&entry, SRC));
@@ -2754,17 +2754,17 @@ main =
     /// When no ipe.toml exists in any parent directory, returns None.
     #[test]
     fn find_manifest_returns_none_when_absent() {
-        let tmp = std::env::temp_dir().join("skyc_no_manifest_test");
+        let tmp = std::env::temp_dir().join("ipec_no_manifest_test");
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).expect("create dir");
-        let sky = tmp.join("Standalone.ipe");
-        fs::write(&sky, "module Standalone exposing (f)\nf = 0\n").expect("write sky");
+        let ipe = tmp.join("Standalone.ipe");
+        fs::write(&ipe, "module Standalone exposing (f)\nf = 0\n").expect("write ipe");
         // Deliberately no ipe.toml anywhere under tmp.
         // The walk terminates at the filesystem root without finding one.
         // We cannot guarantee the walk terminates before reaching /tmp or /
         // on all systems, so we only assert non-panicking behaviour and that
         // the returned path (if Some) is a real file.
-        let found = find_manifest_for_sky_file(&sky);
+        let found = find_manifest_for_ipe_file(&ipe);
         if let Some(ref p) = found {
             assert!(p.is_file(), "if Some, the manifest must exist on disk");
         }
@@ -2783,7 +2783,7 @@ main =
         }
         let Ok(runtime) = runtime else { return };
 
-        let tmp = std::env::temp_dir().join("skyc_sibling_disc_test");
+        let tmp = std::env::temp_dir().join("ipec_sibling_disc_test");
         let _ = fs::remove_dir_all(&tmp);
         let src = tmp.join("src");
         fs::create_dir_all(&src).expect("create src/");
@@ -2824,7 +2824,7 @@ main =
     /// Runtime is not reached (infer aborts first), so we pass a dummy path.
     #[test]
     fn infer_error_in_dep_module_names_dep_file() {
-        let tmp = std::env::temp_dir().join("skyc_144_dep_err_test");
+        let tmp = std::env::temp_dir().join("ipec_144_dep_err_test");
         let _ = fs::remove_dir_all(&tmp);
         let src = tmp.join("src");
         fs::create_dir_all(&src).expect("create src/");
@@ -2905,7 +2905,7 @@ main =
     /// would be ambiguous.  The discriminant is the only reliable resolver.
     #[test]
     fn home_discriminant_cross_module_type_error_names_correct_file() {
-        let tmp = std::env::temp_dir().join("skyc_home_disc_test");
+        let tmp = std::env::temp_dir().join("ipec_home_disc_test");
         let _ = fs::remove_dir_all(&tmp);
         let src = tmp.join("src");
         fs::create_dir_all(&src).expect("create src/");
@@ -3159,7 +3159,7 @@ main =
         let Ok(runtime) = resolve_runtime() else {
             return;
         };
-        let tmp = std::env::temp_dir().join(format!("skyc-ir-cache-driver-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("ipec-ir-cache-driver-{}", std::process::id()));
         let cache_dir = tmp.join("cache");
         let out_a = tmp.join("out-a");
         let out_b = tmp.join("out-b");
@@ -3249,7 +3249,7 @@ main =
         let Ok(runtime) = resolve_runtime() else {
             return;
         };
-        let tmp = std::env::temp_dir().join(format!("skyc-ir-cache-tamper-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("ipec-ir-cache-tamper-{}", std::process::id()));
         let cache_dir = tmp.join("cache");
         let out_a = tmp.join("out-a");
         let out_b = tmp.join("out-b");

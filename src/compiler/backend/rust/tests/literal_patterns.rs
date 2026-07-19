@@ -25,7 +25,7 @@
 //! crate builds and runs: `end_to_end_alias_binds_whole_value` (gated on
 //! `IPE_E2E=1`) drives the hand-built IR through the Rust backend and asserts
 //! `7`, matching the Go reference compiler at
-//! `/home/arthur/Documentos/comp/sky/out/sky` on the shape-equivalent
+//! `/home/arthur/Documentos/comp/ipe/out/ipe` on the shape-equivalent
 //!
 //! ```text
 //! type Wrap = MkWrap Int
@@ -468,10 +468,10 @@ fn resolve_runtime() -> Option<PathBuf> {
     let mut here: Option<&Path> = Some(cwd.as_path());
     while let Some(dir) = here {
         for candidate in [
-            // In-repo runtime (sky-rust monorepo).
+            // In-repo runtime (ipe-lang monorepo).
             dir.join("src").join("runtime").join("rust").join("src"),
-            // Legacy: sibling `sky` checkout.
-            dir.join("sky")
+            // Legacy: sibling `ipe` checkout.
+            dir.join("ipe")
                 .join("runtime-rust")
                 .join("src")
                 .join("ipe_runtime"),

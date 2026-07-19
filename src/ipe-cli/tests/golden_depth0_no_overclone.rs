@@ -40,10 +40,10 @@ fn entry_path(root: &Path) -> PathBuf {
 /// `let` value binding (`let eta_0: IpeTask`), never a capturing
 /// `move |eta_0|` closure — the over-clone signature.
 #[test]
-fn i225_depth0_no_overclone_skyc_accepts_lean() {
+fn i225_depth0_no_overclone_ipec_accepts_lean() {
     let root = repo_root();
     let entry = entry_path(&root);
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i225_depth0_no_overclone_skyc_out");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i225_depth0_no_overclone_ipec_out");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -88,7 +88,7 @@ fn i225_depth0_no_overclone_cargo_builds_and_runs() {
 
     let root = repo_root();
     let entry = entry_path(&root);
-    let out = std::env::temp_dir().join("skyc_i225_depth0_no_overclone_e2e");
+    let out = std::env::temp_dir().join("ipec_i225_depth0_no_overclone_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {

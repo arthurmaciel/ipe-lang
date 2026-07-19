@@ -76,7 +76,7 @@ fn built_main_rs(root: &Path, out: &Path) -> (Result<(), ipe::CliError>, Option<
 #[test]
 fn nested_str_literal_ctor_payload_does_not_emit_bare_str_pattern() {
     let root = repo_root();
-    let out = std::env::temp_dir().join("skyc_tui_entry_case_taskrun_strlit");
+    let out = std::env::temp_dir().join("ipec_tui_entry_case_taskrun_strlit");
     let (built, main_rs) = built_main_rs(&root, &out);
     assert!(
         built.is_ok(),
@@ -114,9 +114,9 @@ fn nested_str_literal_ctor_payload_does_not_emit_bare_str_pattern() {
 /// `block_on(ipe_main())` epilogue requires), never `IpeResult<…>` — even
 /// though the body is a `case`, not a flat `task |> Task.run` call.
 #[test]
-fn case_branched_entry_point_elides_task_run_to_skytask() {
+fn case_branched_entry_point_elides_task_run_to_ipetask() {
     let root = repo_root();
-    let out = std::env::temp_dir().join("skyc_tui_entry_case_taskrun_elision");
+    let out = std::env::temp_dir().join("ipec_tui_entry_case_taskrun_elision");
     let (built, main_rs) = built_main_rs(&root, &out);
     assert!(
         built.is_ok(),
@@ -157,7 +157,7 @@ fn case_branched_entry_point_elides_task_run_to_skytask() {
 #[test]
 fn tui_entry_case_taskrun_builds_and_runs() {
     let root = repo_root();
-    let out = std::env::temp_dir().join("skyc_tui_entry_case_taskrun_e2e");
+    let out = std::env::temp_dir().join("ipec_tui_entry_case_taskrun_e2e");
     let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };

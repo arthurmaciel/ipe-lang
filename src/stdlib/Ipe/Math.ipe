@@ -1,7 +1,7 @@
--- | Ipe.Math — pure numeric helpers (Layer 3 Sky source).
+-- | Ipe.Math — pure numeric helpers (Layer 3 Ipe source).
 --
 -- Every function aliased to its runtime kernel via Stage 4
--- `Ffi.kernel`.  See `sky-stdlib/Sky/Core/String.ipe` for the
+-- `Ffi.kernel`.  See `ipe-stdlib/Ipe/Core/String.ipe` for the
 -- migration pattern.
 module Ipe.Math exposing
     ( abs, min, max
@@ -32,7 +32,7 @@ abs = Ffi.kernel "Math_abs"
 
 -- min / max are polymorphic — work on any comparable type at the
 -- runtime level.  The kernel-registry sig is `forall a. a -> a -> a`;
--- Sky-source annotation mirrors that.
+-- Ipe-source annotation mirrors that.
 min : a -> a -> a
 min = Ffi.kernel "Math_min"
 

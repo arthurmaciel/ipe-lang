@@ -109,7 +109,7 @@ fn poly_task_on_error_nested_green() {
     // <4-char token>)" wrapper — proving Task.onError's fallback actually
     // fires with the right (generic, not JsonVal-erased) error type at
     // runtime. `Error.toString` on an `Error.unexpected` payload prefixes
-    // "Unexpected: " (see `ipe_runtime::error::IpeError::to_sky_string`) —
+    // "Unexpected: " (see `ipe_runtime::error::IpeError::to_ipe_string`) —
     // that prefix is genuine runtime behaviour, not part of this fixture's
     // own message text.
     assert!(

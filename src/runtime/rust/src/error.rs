@@ -1,6 +1,6 @@
 //! Ipe.Error: the rich, typed `Error` ADT.
 //!
-//! Ported from the ancestor Go/Haskell design (`sky-stdlib/Sky/Core/Error.ipe`
+//! Ported from the ancestor Go/Haskell design (`ipe-stdlib/Ipe/Core/Error.ipe`
 //! in the reference repo): `Error = Error ErrorKind ErrorInfo`, an 11-variant
 //! `ErrorKind` classification, message-carrying `ErrorInfo`, and the 5-variant
 //! `ErrorDetails` union (`FfiPanic`/`TypeMismatch`/`HttpStatus`/`JsonDecode`/
@@ -184,7 +184,7 @@ impl IpeError {
 
     /// Ipê `Error.toString : Error -> String` — `"<Kind>: <message>"`.
     #[must_use]
-    pub fn to_sky_string(&self) -> String {
+    pub fn to_ipe_string(&self) -> String {
         let Self::Error(kind, info) = self;
         format!("{}: {}", kind.label(), info.message)
     }
@@ -220,7 +220,7 @@ impl IpeError {
 
 impl fmt::Display for IpeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.to_sky_string())
+        write!(f, "{}", self.to_ipe_string())
     }
 }
 
@@ -299,7 +299,7 @@ pub fn ipe_error_with_details(details: IpeErrorDetails, old: IpeError) -> IpeErr
 // instead of the reference design's `"<Kind>: <message>"` format.
 impl crate::stringify::IpeStringify for IpeError {
     fn ipe_show(&self) -> String {
-        self.to_sky_string()
+        self.to_ipe_string()
     }
 }
 
@@ -327,19 +327,19 @@ mod tests {
     #[test]
     fn constructors_carry_kind_and_message() {
         let e = IpeError::io("disk full".to_owned());
-        assert_eq!(e.to_sky_string(), "Io: disk full");
+        assert_eq!(e.to_ipe_string(), "Io: disk full");
         assert!(!e.is_retryable());
     }
 
     #[test]
     fn nullary_constructors_have_fixed_messages() {
         assert_eq!(
-            IpeError::timeout().to_sky_string(),
+            IpeError::timeout().to_ipe_string(),
             "Timeout: operation timed out"
         );
-        assert_eq!(IpeError::not_found().to_sky_string(), "NotFound: not found");
+        assert_eq!(IpeError::not_found().to_ipe_string(), "NotFound: not found");
         assert_eq!(
-            IpeError::permission_denied().to_sky_string(),
+            IpeError::permission_denied().to_ipe_string(),
             "PermissionDenied: permission denied"
         );
     }
@@ -357,13 +357,13 @@ mod tests {
     #[test]
     fn with_message_replaces_message_keeps_kind() {
         let e = IpeError::network("timeout".to_owned()).with_message("retry later".to_owned());
-        assert_eq!(e.to_sky_string(), "Network: retry later");
+        assert_eq!(e.to_ipe_string(), "Network: retry later");
     }
 
     #[test]
     fn from_string_classifies_as_unexpected() {
         let e: IpeError = "legacy bare string error".to_owned().into();
-        assert_eq!(e.to_sky_string(), "Unexpected: legacy bare string error");
+        assert_eq!(e.to_ipe_string(), "Unexpected: legacy bare string error");
     }
 
     #[test]

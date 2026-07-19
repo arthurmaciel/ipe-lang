@@ -1,4 +1,4 @@
--- | Ipe.Io — standard-I/O effect kernels (Layer 3 Sky source, M5a).
+-- | Ipe.Io — standard-I/O effect kernels (Layer 3 Ipe source, M5a).
 module Ipe.Io exposing
     ( readLine, writeStdout, writeStderr
     )

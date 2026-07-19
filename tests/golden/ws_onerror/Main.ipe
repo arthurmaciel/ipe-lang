@@ -6,7 +6,7 @@ module Main exposing (main)
 -- `ws_server_with_on_error` takes `Arc<dyn Fn(WsHandle, E) -> …>`, so the
 -- callback MUST box with `Arc::new`. Before the fix `wants_arc_ctor` /
 -- `render_type` only matched `[WebSocketServer, Str]` (onMessage), so onError
--- fell to the generic `Box<dyn Fn>` arm and skyc-0 then cargo-failed E0308.
+-- fell to the generic `Box<dyn Fn>` arm and ipec-0 then cargo-failed E0308.
 
 import Ipe.Prelude exposing (..)
 import Ipe.Task as Task

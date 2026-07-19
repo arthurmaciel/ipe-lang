@@ -29,7 +29,7 @@ name c =
 
 -- `applyTo` is a HOF; passing a lambda literal forces the argument's
 -- `Color -> String` type through the inferred (ty) lowering path — the exact
--- #101 hijack site (pre-fix: `Box<dyn Fn(sky_runtime::ui::element::Color)>` →
+-- #101 hijack site (pre-fix: `Box<dyn Fn(ipe_runtime::ui::element::Color)>` →
 -- E0433 cargo-101).
 applyTo : (Color -> String) -> Color -> String
 applyTo f c =

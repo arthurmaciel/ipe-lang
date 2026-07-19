@@ -9,7 +9,7 @@
 //! lowerer reads to fill its `IrType` slots.
 //!
 //! The implementation is a faithful but narrowed port of the Haskell compiler's
-//! `Sky.Type.{Type,UnionFind,Unify,Solve}` + `Constrain.Expression`:
+//! `Ipe.Type.{Type,UnionFind,Unify,Solve}` + `Constrain.Expression`:
 //!
 //! * [`unionfind`] — `Vec`-backed weighted union-find (port of `UnionFind`).
 //! * [`constrain`] — constraint generation over the canonical AST (the
@@ -523,7 +523,7 @@ fn infer_core(
     // argument bound into `Db.exec` / `Db.query` / `Db.queryDecode`'s params
     // position that the program never pinned to a concrete type (an empty
     // `[]` literal at that call site, e.g. `Database.queryOrLog label sql []`
-    // in `examples/17-skymon`). Left un-defaulted, the lowerer's wildcard-`any`
+    // in `examples/17-ipemon`). Left un-defaulted, the lowerer's wildcard-`any`
     // convention would resolve it to `IrType::Json` (`serde_json::Value`,
     // which has no `Into<SqlParam>` impl) and the emitted `Vec::new()` call
     // argument would carry zero type evidence — trading today's E0283 for an
@@ -1378,7 +1378,7 @@ enum FieldState {
     Found(VarId),
     /// The base is an OPEN record (Flex tail) that does not yet carry the
     /// field. Row-polymorphic access grows the record with the field rather
-    /// than erroring (Sky's `Access` constrain unifies the target with a fresh
+    /// than erroring (Ipe's `Access` constrain unifies the target with a fresh
     /// open record `{ field : ρ | ext }`). The caller re-reads the root's field
     /// map, inserts `field ↦ result`, and re-seats a fresh open tail.
     GrowOpen,
@@ -1584,8 +1584,8 @@ fn resolve_deferred(
             //
             // A `Flex` base is NOT an error: it is a field access on a parameter
             // no call site constrained (an un-called `viewJob job = … job.running`),
-            // which the reference infers row-polymorphically — Sky's `Access`
-            // constrain (`Sky.Type.Constrain.Expression`) unifies the target with
+            // which the reference infers row-polymorphically — Ipe's `Access`
+            // constrain (`Ipe.Type.Constrain.Expression`) unifies the target with
             // a fresh open record `{ field : ρ | ext }` on the spot. Our deferred
             // pass reproduces that here: settle the first stuck flex base to the
             // singleton open record carrying the accessed field (its result var IS
@@ -2471,7 +2471,7 @@ mod tests {
 
     /// Test matrix item 1: a cross-module untyped helper used at two
     /// DIFFERENT concrete types from two DIFFERENT importers must be
-    /// accepted (empirically matches `sky v0.16.29`'s observable semantics —
+    /// accepted (empirically matches `ipe v0.16.29`'s observable semantics —
     /// see the fix spec's decision record).
     #[test]
     fn untyped_binding_generalizes_across_cross_module_uses() {
@@ -4198,8 +4198,8 @@ mod tests {
     /// inference fix #2): an *un*annotated binding is monomorphic *within its
     /// home module* — every same-module reference shares one variable, so
     /// using it at two different concrete types from within its own module is
-    /// a sound rejection, exactly matching the reference `sky` compiler's
-    /// `CLocal` semantics (empirically verified against `sky v0.16.29`; see
+    /// a sound rejection, exactly matching the reference `ipe` compiler's
+    /// `CLocal` semantics (empirically verified against `ipe v0.16.29`; see
     /// `docs/adr/0008-untyped-binding-module-boundary-generalization.md`). A
     /// CROSS-module use at two different types IS accepted — see
     /// [`untyped_binding_generalizes_across_cross_module_uses`]. To get

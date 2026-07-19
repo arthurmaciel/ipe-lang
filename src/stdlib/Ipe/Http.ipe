@@ -1,7 +1,7 @@
--- | Ipe.Http — outbound HTTP client (Layer 3 Sky source, M5b).
+-- | Ipe.Http — outbound HTTP client (Layer 3 Ipe source, M5b).
 --
 -- `get` / `post` / `request` are effects (Task Error HttpResponse). The
--- runtime (`sky_runtime::http_client`) is the PARSE boundary: it parses
+-- runtime (`ipe_runtime::http_client`) is the PARSE boundary: it parses
 -- the method (reqwest `Method::from_bytes`), the URL, enforces the SSRF
 -- guard, body cap, timeout floor, and error redaction. These records are
 -- transport DTOs carried to that boundary; downstream code MUST NOT
@@ -11,7 +11,7 @@
 -- percent-decodes, first-key-wins, returns a `Dict String String` (no
 -- duplicate keys — the invariant is proven by the HashMap return type).
 --
--- Builders (`defaultRequest` / `with*`) are pure Sky. `withHeader`
+-- Builders (`defaultRequest` / `with*`) are pure Ipe. `withHeader`
 -- PREPENDS the new pair (`(k, v) :: req.headers`) matching the Go
 -- reference compiler's Ipe.Http.ipe behaviour — latest-added header
 -- is first in the list.
@@ -123,7 +123,7 @@ withMaxRedirects n req =
 -- `withHeader k v req` prepends `(k, v)` to `req.headers` — matching the
 -- Go reference compiler's Ipe.Http.withHeader semantics (cons-prepend).
 -- Latest-added header is first in the list.  HTTP allows duplicate header
--- names and order can matter; the Sky `request` kernel passes the list to
+-- names and order can matter; the Ipe `request` kernel passes the list to
 -- reqwest verbatim, which sends all headers to the server.
 withHeader : String -> String -> HttpRequest -> HttpRequest
 withHeader k v req =

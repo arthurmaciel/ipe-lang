@@ -1040,7 +1040,7 @@ pub enum StdlibKernel {
     /// same style-collection logic as `Ui.layout`'s `style=""` attr) and
     /// attaches it as `AttrPseudoRule(pc, css)`. Sub-module helpers
     /// (`Background.hoverColor` etc.) already build on this exact primitive on
-    /// the `../sky` reference; the Rust port backs them the same way.
+    /// the `../ipe` reference; the Rust port backs them the same way.
     UiOnPseudo,
     /// `Ui.hover : PseudoClass` — `PseudoClass::Hover`.
     UiHover,

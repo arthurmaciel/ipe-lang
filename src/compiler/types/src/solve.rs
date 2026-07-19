@@ -1,5 +1,5 @@
 //! The constraint solver, ported from the relevant core of
-//! `Sky.Type.Solve` (derivative of elm/compiler's `Type.Solve`,
+//! `Ipe.Type.Solve` (derivative of elm/compiler's `Type.Solve`,
 //! BSD-3-Clause).
 //!
 //! The reference solver threads ranks / marks / generalisation for full

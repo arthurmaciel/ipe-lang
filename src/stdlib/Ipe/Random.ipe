@@ -1,4 +1,4 @@
--- | Ipe.Random — entropy-driven random helpers (Layer 3 Sky source).
+-- | Ipe.Random — entropy-driven random helpers (Layer 3 Ipe source).
 --
 -- Three tiers:
 --
@@ -51,7 +51,7 @@ range lo hi = int lo hi
 
 
 -- | Pick one element from a list uniformly at random.  Returns
--- `Nothing` only when the list is empty (matches Sky's
+-- `Nothing` only when the list is empty (matches Ipe's
 -- failure-as-Maybe convention for total functions).
 choice : List a -> Task Error (Maybe a)
 choice = Ffi.kernel "Random_choiceMaybe"

@@ -35,7 +35,7 @@ fn repo_root() -> PathBuf {
 /// * build through `cargo build` (exit 0; E0308 without the fix)
 /// * run and print rendered HTML that contains "counter"
 #[test]
-fn poly_fn_attr_list_skyc_and_cargo_zero() {
+fn poly_fn_attr_list_ipec_and_cargo_zero() {
     if std::env::var("IPE_E2E").is_err() {
         return;
     }
@@ -46,7 +46,7 @@ fn poly_fn_attr_list_skyc_and_cargo_zero() {
         .join("golden")
         .join("poly_fn_attr_list")
         .join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_i139_poly_fn_attr_list_e2e");
+    let out = std::env::temp_dir().join("ipec_i139_poly_fn_attr_list_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

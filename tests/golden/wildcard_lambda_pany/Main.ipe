@@ -5,14 +5,14 @@ module Main exposing (main)
 -- Before the fix, the lowerer raised `Feature::Polymorphism` when it
 -- encountered a `PAnything` lambda parameter whose type is a free `Ty::Var`.
 -- The fix maps `Ty::Var(_)` to `IrType::Json` inside `ir_type_from_ty_json`
--- and emits a fresh `_sky_wildcard_N` binder in `lower_lambda` / `eta_expand_partial`.
+-- and emits a fresh `_ipe_wildcard_N` binder in `lower_lambda` / `eta_expand_partial`.
 --
 -- This fixture exercises three shapes:
 --   1. `\_ -> Task.succeed v`  — wildcard ignoring the previous task result
 --   2. `Task.fail e |> Task.andThen (\_ -> Task.succeed "unreachable")`
 --   3. A named helper that takes the discarded argument explicitly
 --
--- Expected: skyc-0 AND cargo-0 on the emitted project; output contains
+-- Expected: ipec-0 AND cargo-0 on the emitted project; output contains
 -- "ok: done" and "err: intentional".
 
 import Ipe.Prelude exposing (..)

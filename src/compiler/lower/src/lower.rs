@@ -1,8 +1,8 @@
 //! The lowering core: a name-resolved [`canon::Module`] plus its
 //! [`SolvedTypes`] become a backend-agnostic [`ipe_ir::Program`].
 //!
-//! This is the narrowed port of the Haskell compiler's `Sky.Build.Compile`
-//! lowering walk and `Sky.Build.LowerCtx`. Every step is total, and failures
+//! This is the narrowed port of the Haskell compiler's `Ipe.Build.Compile`
+//! lowering walk and `Ipe.Build.LowerCtx`. Every step is total, and failures
 //! split into two channels — never a panic, never a guess:
 //!
 //! * an input shape that is *valid Ipê the supported subset does not model yet*
@@ -4201,7 +4201,7 @@ fn apply_kernel_type_param_bounds(
         };
         // IpeRow — wildcard-only.
         if is_wildcard && fires_on(&ipe_row_matcher) {
-            *bounds = bounds.with_sky_row();
+            *bounds = bounds.with_ipe_row();
         }
         // Stringify (`IpeStringify`) — wildcard OR named.
         if fires_on(&stringify_matcher) {
@@ -5266,7 +5266,7 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
 
 // ── TCO: tail-recursion detection + rewrite ────────────────────────────
 //
-// Mirrors the reference implementation (`Sky.Build.TailCallOpt`:
+// Mirrors the reference implementation (`Ipe.Build.TailCallOpt`:
 // `isTailRecursive` / `rewriteTailCalls`), improving the jump transport (a typed
 // `Expr::TailRecur`, never a stringly kernel-name sentinel) and the self-call
 // identity (`FuncId`, not `(module, name)`).
@@ -8325,7 +8325,7 @@ impl<'a> Lowerer<'a> {
         // into `Db.exec` / `Db.query` / `Db.queryDecode`'s params position
         // needs the backend's `Into<ipe_runtime::db::SqlParam>` bound so a
         // generic Ipê wrapper around those kernels (`Database.exec label sql
-        // args` in `examples/17-skymon`) emits a Rust generic `cargo` can
+        // args` in `examples/17-ipemon`) emits a Rust generic `cargo` can
         // actually satisfy at every call site, instead of an unbounded `T1`
         // that only worked by accident for the one instantiation lowering
         // happened to see.
@@ -10606,7 +10606,7 @@ impl<'a> Lowerer<'a> {
                 if let Some(ty) = self.region_ty(e.span)
                     && self.is_concrete_float(ty)?
                 {
-                    #[allow(clippy::cast_precision_loss)] // Sky Int literals are source-text
+                    #[allow(clippy::cast_precision_loss)] // Ipe Int literals are source-text
                     // decimal digits; the round-trip through f64 changes nothing a Ipê
                     // author could have written more precisely — same domain as `Float`
                     // literals parsed directly.
@@ -11654,7 +11654,7 @@ impl<'a> Lowerer<'a> {
             // `decimal_from_string` (e.g. `ipe_test_err (Dec.div a zero)`).
             KernelFn::DecFromString | KernelFn::DecDiv | KernelFn::DecMod => match ty {
                 Ty::Con { name, .. } if self.interner.resolve(*name) == Some("Result") => {
-                    CallPin::ErrSkyError
+                    CallPin::ErrIpeError
                 }
                 _ => CallPin::None,
             },
@@ -11896,7 +11896,7 @@ impl<'a> Lowerer<'a> {
                 //
                 // When the callee's solved type is a known curried arrow whose
                 // arity exceeds the supplied argument count, this is *partial*
-                // application of a first-class value. The reference (`../sky`)
+                // application of a first-class value. The reference (`../ipe`)
                 // emits function values as curried single-arg closures, so
                 // applying one arg at a time is a plain call; our IR flattens the
                 // curried chain into one multi-parameter `Fun`, so the residual
@@ -11944,7 +11944,7 @@ impl<'a> Lowerer<'a> {
     /// backend dispatches the runtime `Event::OnForm` slot correctly without
     /// re-deriving callability from the payload's syntax (the unsound
     /// gate). Mirrors the reference's `formTargetRustType` decision
-    /// (`../sky` `ExprEmitter.hs`): the FIRST param of the handler's arrow type
+    /// (`../ipe` `ExprEmitter.hs`): the FIRST param of the handler's arrow type
     /// is the form-record `T` to decode; a non-arrow handler is a bare `Msg`
     /// value dispatched verbatim.
     ///
@@ -12231,7 +12231,7 @@ impl<'a> Lowerer<'a> {
     /// ```
     ///
     /// This is the function-VALUE counterpart of [`Self::eta_expand_partial`]
-    /// (which handles a NAMED/kernel callee). The reference (`../sky`) emits
+    /// (which handles a NAMED/kernel callee). The reference (`../ipe`) emits
     /// function values as curried single-arg closures, so `g 2` is a plain call
     /// returning another closure; our IR flattens the curried chain into one
     /// multi-parameter [`IrType::Fun`], so the residual must be rebuilt as one

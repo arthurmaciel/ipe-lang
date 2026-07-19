@@ -145,7 +145,7 @@ fn expect_error_code(fixture_name: &str, expected: ipe_diagnostics::Code) {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn mm_neg_missing_is_sky_n0020() {
+fn mm_neg_missing_is_ipe_n0020() {
     expect_error_code("mm_neg_missing", ipe_diagnostics::IPE_N0020);
 }
 
@@ -154,7 +154,7 @@ fn mm_neg_missing_is_sky_n0020() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn mm_neg_cycle_is_sky_n0021() {
+fn mm_neg_cycle_is_ipe_n0021() {
     expect_error_code("mm_neg_cycle", ipe_diagnostics::IPE_N0021);
 }
 
@@ -163,7 +163,7 @@ fn mm_neg_cycle_is_sky_n0021() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn mm_neg_selfimport_is_sky_n0021() {
+fn mm_neg_selfimport_is_ipe_n0021() {
     expect_error_code("mm_neg_selfimport", ipe_diagnostics::IPE_N0021);
 }
 
@@ -172,7 +172,7 @@ fn mm_neg_selfimport_is_sky_n0021() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn mm_neg_notexposed_is_sky_n0022() {
+fn mm_neg_notexposed_is_ipe_n0022() {
     expect_error_code("mm_neg_notexposed", ipe_diagnostics::IPE_N0022);
 }
 
@@ -181,7 +181,7 @@ fn mm_neg_notexposed_is_sky_n0022() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn mm_neg_pathmismatch_is_sky_n0023() {
+fn mm_neg_pathmismatch_is_ipe_n0023() {
     expect_error_code("mm_neg_pathmismatch", ipe_diagnostics::IPE_N0023);
 }
 
@@ -190,7 +190,7 @@ fn mm_neg_pathmismatch_is_sky_n0023() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn mm_neg_ambigval_is_sky_n0024() {
+fn mm_neg_ambigval_is_ipe_n0024() {
     expect_error_code("mm_neg_ambigval", ipe_diagnostics::IPE_N0024);
 }
 
@@ -201,7 +201,7 @@ fn mm_neg_ambigval_is_sky_n0024() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn mm_neg_ambigctor_is_sky_n0024() {
+fn mm_neg_ambigctor_is_ipe_n0024() {
     expect_error_code("mm_neg_ambigctor", ipe_diagnostics::IPE_N0024);
 }
 
@@ -210,7 +210,7 @@ fn mm_neg_ambigctor_is_sky_n0024() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn mm_neg_reserved_is_sky_n0025() {
+fn mm_neg_reserved_is_ipe_n0025() {
     expect_error_code("mm_neg_reserved", ipe_diagnostics::IPE_N0025);
 }
 
@@ -221,7 +221,7 @@ fn mm_neg_reserved_is_sky_n0025() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn mm_neg_samedef_is_sky_n0024() {
+fn mm_neg_samedef_is_ipe_n0024() {
     expect_error_code("mm_neg_samedef", ipe_diagnostics::IPE_N0024);
 }
 
@@ -230,7 +230,7 @@ fn mm_neg_samedef_is_sky_n0024() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn mm_neg_sametype_is_sky_n0012() {
+fn mm_neg_sametype_is_ipe_n0012() {
     expect_error_code("mm_neg_sametype", ipe_diagnostics::IPE_N0012);
 }
 
@@ -247,6 +247,6 @@ fn mm_neg_sametype_is_sky_n0012() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn mm_neg_qualref_sig_is_sky_t0001() {
+fn mm_neg_qualref_sig_is_ipe_t0001() {
     expect_error_code("mm_neg_qualref_sig", ipe_diagnostics::IPE_T0001);
 }

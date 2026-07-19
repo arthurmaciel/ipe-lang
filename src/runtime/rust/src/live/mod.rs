@@ -398,7 +398,7 @@ struct PatchEnvelope<'a> {
 /// Wire shape POSTed by the browser client to `/_ipe/event`
 /// (`live/client.js` __ipeSend): `{sessionId, seq, msg, args, handlerId}`.
 /// `handlerId` is the element's `data-ipe-hid` (== its ipe-id); `msg` is the
-/// `sky-<event>` marker. We resolve handlers server-side by ipe-id + event,
+/// `ipe-<event>` marker. We resolve handlers server-side by ipe-id + event,
 /// so `handlerId` is the authoritative locator; `event` is derived below.
 #[derive(serde::Deserialize)]
 struct EventBody {
@@ -411,7 +411,7 @@ struct EventBody {
     /// Some senders use `id` instead of `handlerId`; accept both.
     #[serde(default)]
     id: String,
-    /// Event name. The client posts the `sky-<event>` marker value as `msg`;
+    /// Event name. The client posts the `ipe-<event>` marker value as `msg`;
     /// `render_html` makes that value the event name (click / input / submit / …),
     /// so `msg` is the authoritative event. `event` is an explicit-override slot
     /// for future senders. Resolution: `event` ?: `msg` ?: "click".
@@ -536,7 +536,7 @@ fn run_cmd<Msg: Send + 'static>(cmd: IpeCmd<Msg>, tx: &Sender<Msg>, sid: &str) {
                 // full (a stalled driver or a burst of fast Perform tasks).
                 if tx.send(m).await.is_err() {
                     eprintln!(
-                        "[sky.live] run_cmd: session msg channel closed; dropping Perform result"
+                        "[ipe.live] run_cmd: session msg channel closed; dropping Perform result"
                     );
                 }
             });
@@ -1929,7 +1929,7 @@ where
                 // choose 429 over silent drop so the browser retry loop fires).
                 if let Err(e) = tx.try_send(m) {
                     eprintln!(
-                        "[sky.live] event_handler: session msg queue full or closed; dropping event ({})",
+                        "[ipe.live] event_handler: session msg queue full or closed; dropping event ({})",
                         e
                     );
                     return (StatusCode::TOO_MANY_REQUESTS, "event queue full").into_response();
@@ -2057,7 +2057,7 @@ where
             if console_proxy::gate_allows() {
                 eprintln!("{}", store::memory_store_log_line(live_ttl()));
                 eprintln!(
-                    "[sky.console] inline console mounted as Ipe.Live sub-app at /_ipe/console mode={}",
+                    "[ipe.console] inline console mounted as Ipe.Live sub-app at /_ipe/console mode={}",
                     console::console_auth_mode_label()
                 );
             }
@@ -2143,7 +2143,7 @@ where
             Err(e) => return IpeResult::Err(format!("Live.app: bind {addr}: {e}").into()),
         };
         // Bind-address line (stderr, Rust-specific — carries the 0.0.0.0 bind).
-        eprintln!("[sky.live] listening on http://{addr}");
+        eprintln!("[ipe.live] listening on http://{addr}");
         // Go-parity user-facing line (stdout, `fmt.Printf("Ipe.Live listening on
         // :%d\n", port)` — live.go:3546).
         println!("Ipe.Live listening on :{port}");
@@ -2236,7 +2236,7 @@ mod reload_push_tests {
     async fn live_shutdown_signal_skips_the_reload_push_in_production() {
         use crate::system::{locked_remove_var, locked_set_var};
         let prior_env = std::env::var("ENV").ok();
-        let prior_sky_env = std::env::var("IPE_ENV").ok();
+        let prior_ipe_env = std::env::var("IPE_ENV").ok();
 
         let store_impl: MemoryStore<(), ()> = MemoryStore::new(Duration::from_secs(60));
         let (sse_tx, mut sse_rx) = sse::channel();
@@ -2261,7 +2261,7 @@ mod reload_push_tests {
             Some(v) => locked_set_var("ENV", &v),
             None => locked_remove_var("ENV"),
         }
-        match prior_sky_env {
+        match prior_ipe_env {
             Some(v) => locked_set_var("IPE_ENV", &v),
             None => locked_remove_var("IPE_ENV"),
         }
@@ -2278,7 +2278,7 @@ mod dev_banner_tests {
         // monospace blue style, `&#128269;` ENTITY (not a literal emoji).
         let b = dev_console_banner("");
         let expected = "<a id=\"__ipe-dev-console\" href=\"/_ipe/console\" target=\"_blank\" \
-            rel=\"noopener\" title=\"Sky Console (dev only)\" \
+            rel=\"noopener\" title=\"Ipe Console (dev only)\" \
             style=\"position:fixed;right:12px;bottom:12px;z-index:2147483646;\
             font:12px/1.4 ui-monospace,Menlo,monospace;\
             background:#1c2027;color:#7eb6ff;\

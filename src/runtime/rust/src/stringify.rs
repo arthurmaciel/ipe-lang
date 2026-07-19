@@ -49,7 +49,7 @@ pub trait IpeStringify {
 // so this can NEVER fail to compile, regardless of field type.
 //
 // Mechanism: codegen emits `(&Wrap(&value)).dispatch()` at a CONCRETE field
-// type. `Wrap<&T>: ViaSkyStringify` (no autoref) is preferred over
+// type. `Wrap<&T>: ViaIpeStringify` (no autoref) is preferred over
 // `&Wrap<T>: ViaDebug` (one autoref) when `T: IpeStringify`; otherwise only the
 // `Debug` impl applies. The dispatch is concrete-type-only by design — a generic
 // `fn<T>` frame can't select either arm (the same method name on both traits is
@@ -71,17 +71,17 @@ pub struct Wrap<T>(pub T);
 /// trait (Go-`%v`-faithful — String unquoted, nested generated types via their
 /// own impl). Selected with ZERO autoref, so it beats the `Debug` fallback.
 #[doc(hidden)]
-pub trait ViaSkyStringify {
+pub trait ViaIpeStringify {
     fn dispatch(&self) -> String;
 }
-impl<T: IpeStringify> ViaSkyStringify for Wrap<&T> {
+impl<T: IpeStringify> ViaIpeStringify for Wrap<&T> {
     fn dispatch(&self) -> String {
         self.0.ipe_show()
     }
 }
 
 /// Lower-priority arm: ANY `Wrap<T>` where `T: Debug` renders via `Debug`.
-/// Reached only by ONE autoref (`&Wrap<T>`), so it loses to `ViaSkyStringify`
+/// Reached only by ONE autoref (`&Wrap<T>`), so it loses to `ViaIpeStringify`
 /// whenever the field type impls `IpeStringify`. Every type derives `Debug`,
 /// so this arm is always available — the dispatch can never E0599.
 #[doc(hidden)]
@@ -142,7 +142,7 @@ impl IpeStringify for f64 {
             // string.rs). Verified against Go 1.26.2 `fmt %v` ==
             // `strconv.FormatFloat(f,'g',-1,64)`: 1e6 -> "1e+06", 1e15 ->
             // "1e+15", 999999 -> "999999" (see reference-audit.md item 27 for
-            // the oracle probe). The `../sky` reference uses 21 here, which
+            // the oracle probe). The `../ipe` reference uses 21 here, which
             // diverges from the Go oracle on every 1e6..1e20 value.
             Some((mantissa, exp_str)) => match exp_str.parse::<i32>() {
                 Ok(exp) if !(-4..6).contains(&exp) => {

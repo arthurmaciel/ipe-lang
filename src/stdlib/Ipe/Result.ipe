@@ -1,9 +1,9 @@
 -- | Ipe.Result — combinators over the Result ADT.
 --
--- v0.13 Layer 3 / Phase B2: Sky source for the user-visible
+-- v0.13 Layer 3 / Phase B2: Ipe source for the user-visible
 -- combinator surface.  The Result ADT itself (`Result e a`, `Ok`,
 -- `Err` ctors) remains kernel-anchored so the type system +
--- runtime SkyResult representation stay in lockstep.
+-- runtime IpeResult representation stay in lockstep.
 --
 -- Partial-resolution at call sites (where surrounding function is
 -- itself polymorphic in `e` or `a`) is handled by `coerceCallArgsAt`

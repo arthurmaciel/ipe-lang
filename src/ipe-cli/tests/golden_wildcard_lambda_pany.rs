@@ -4,7 +4,7 @@
 //! `Ty::Var(_)` — a type variable HM inference leaves unconstrained because the
 //! parameter is discarded — would make the lowerer raise
 //! `Feature::Polymorphism`.  Instead, `ir_type_from_ty_json` maps `Ty::Var(_)`
-//! to `IrType::Json` and emits a fresh `_sky_wildcard_N` binder in
+//! to `IrType::Json` and emits a fresh `_ipe_wildcard_N` binder in
 //! `lower_lambda` / `eta_expand_partial`.
 //!
 //! Root cause: three call sites missed — `lower_lambda` (direct `\_ -> body`),
@@ -35,7 +35,7 @@ fn repo_root() -> PathBuf {
 }
 
 #[test]
-fn wildcard_lambda_pany_skyc_cargo_and_run_zero() {
+fn wildcard_lambda_pany_ipec_cargo_and_run_zero() {
     if std::env::var("IPE_E2E").is_err() {
         return;
     }
@@ -46,7 +46,7 @@ fn wildcard_lambda_pany_skyc_cargo_and_run_zero() {
         .join("golden")
         .join("wildcard_lambda_pany");
     let entry = dir.join("Main.ipe");
-    let out = std::env::temp_dir().join("skyc_l0102_wildcard_lambda_pany_e2e");
+    let out = std::env::temp_dir().join("ipec_l0102_wildcard_lambda_pany_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

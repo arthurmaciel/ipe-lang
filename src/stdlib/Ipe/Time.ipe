@@ -1,4 +1,4 @@
--- | Ipe.Time -- clock + formatting + parsing (Layer 3 Sky source).
+-- | Ipe.Time -- clock + formatting + parsing (Layer 3 Ipe source).
 --
 -- Clock reads (`now`, `unixMillis`) return `Task Error Int` (the
 -- value is the milliseconds since the Unix epoch).  Pure helpers

@@ -12,7 +12,7 @@
 //! ```
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
-//! `/home/arthur/Documentos/comp/sky/out/sky` compiles + runs the SAME
+//! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
 //! `Main.ipe` to stdout `32\n`, exit 0 — hand-verified in a temp dir. The
 //! hand-computed `32` is the in-test oracle.
 use std::path::{Path, PathBuf};
@@ -67,7 +67,7 @@ fn end_to_end_builds_and_prints_thirty_two() {
 
     let root = repo_root();
     let entry = example_entry(&root);
-    let out = std::env::temp_dir().join("skyc_m3a_shape_e2e");
+    let out = std::env::temp_dir().join("ipec_m3a_shape_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

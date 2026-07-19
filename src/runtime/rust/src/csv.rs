@@ -319,7 +319,7 @@ mod tests {
     #[test]
     fn parse_stream_from_file_missing_file_errs() {
         let res: IpeResult<String, Vec<Vec<String>>> = block(csv_parse_stream_from_file(
-            "/nonexistent/sky/csv/path/does-not-exist.csv".to_string(),
+            "/nonexistent/ipe/csv/path/does-not-exist.csv".to_string(),
         ));
         assert!(matches!(res, IpeResult::Err(_)));
     }

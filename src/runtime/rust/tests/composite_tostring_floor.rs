@@ -33,7 +33,7 @@
 //! | map `{ a: 1, b: 2 }`             | `map[a:1 b:2]` | Go-sorted keys                                   |
 //!
 //! A codegen-emitted ADT renders `Vname f0 f1 …` (variant name, space-joined
-//! fields) — the `../sky` Rust backend's `IpeStringify` enum shape — verified by
+//! fields) — the `../ipe` Rust backend's `IpeStringify` enum shape — verified by
 //! the `m_tostring_composite` golden's end-to-end output (`Circle 5` / `Empty`),
 //! not here (this file tests the runtime primitives, not codegen).
 //!

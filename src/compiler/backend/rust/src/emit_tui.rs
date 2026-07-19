@@ -225,7 +225,7 @@ fn emit_tui_inner(
 ///   directly to the runtime parameters.  Any additional String fields receive
 ///   `String::new()` as the default; Bool fields receive `false`; Int fields
 ///   receive `0i64`.  This mirrors the Go runtime's zero-value fill for record
-///   fields not supplied by `tuiKeyToSky`.
+///   fields not supplied by `tuiKeyToIpe`.
 ///
 /// Rationale for the default-fill approach: the Haskell compiler's Go backend
 /// handles the `KeyEvent → Msg` bridge via reflection (`IpeCall`), which

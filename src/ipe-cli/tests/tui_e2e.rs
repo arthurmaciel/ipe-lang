@@ -163,10 +163,10 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// Compile a Ipê program string, build the emitted Rust project, and return
 /// the path to the compiled binary.
 fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::PathBuf, BoxError> {
-    let ipe_dir = std::env::temp_dir().join(format!("tui_e2e_{test_name}_sky"));
+    let ipe_dir = std::env::temp_dir().join(format!("tui_e2e_{test_name}_ipe"));
     let _ = std::fs::remove_dir_all(&ipe_dir);
     std::fs::create_dir_all(&ipe_dir).map_err(|e| -> BoxError {
-        format!("{test_name}: cannot create sky source dir: {e}").into()
+        format!("{test_name}: cannot create ipe source dir: {e}").into()
     })?;
 
     let entry = ipe_dir.join("Main.ipe");
@@ -212,7 +212,7 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::Pat
 fn tui_onkey_record_typechecks() {
     // ── helper: write Ipê source to a temp file, run ipe::build, check ok ──
     fn compile_ok(label: &str, source: &str) -> String {
-        let ipe_dir = std::env::temp_dir().join(format!("tui_onkey_{label}_sky"));
+        let ipe_dir = std::env::temp_dir().join(format!("tui_onkey_{label}_ipe"));
         let _ = std::fs::remove_dir_all(&ipe_dir);
         let created = std::fs::create_dir_all(&ipe_dir);
         assert!(

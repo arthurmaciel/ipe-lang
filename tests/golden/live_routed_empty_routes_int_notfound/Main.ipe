@@ -6,8 +6,8 @@ module Main exposing (main)
 -- (empty list, so no route constructor witnesses `var(2)`) and `notFound = 5`
 -- (Int, which is NOT the Page type).
 --
--- Expected: skyc rejects with IPE-T0001 (type mismatch: Int vs Page).
--- Before Part B: skyc exited 0 (the empty-routes hole let var(2) = Int slip
+-- Expected: ipec rejects with IPE-T0001 (type mismatch: Int vs Page).
+-- Before Part B: ipec exited 0 (the empty-routes hole let var(2) = Int slip
 -- through), then cargo rejected the emitted `set_page` closure with E0308.
 
 import Ipe.Live as Live

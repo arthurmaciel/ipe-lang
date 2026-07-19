@@ -97,7 +97,7 @@ pub struct Union {
 
 /// A `type alias Name = T` declaration.
 ///
-/// Mirrors the Haskell compiler's `Sky.AST.Source.Alias`, narrowed to the
+/// Mirrors the Haskell compiler's `Ipe.AST.Source.Alias`, narrowed to the
 /// supported subset. The aliased type `body` is expanded away at
 /// canonicalisation, so no
 /// stage after name resolution ever observes the alias name.
@@ -152,7 +152,7 @@ pub enum Expr_ {
     /// interpolation markers. The canonicaliser desugars these into a `++` chain
     /// of string literals and `Basics.toString`-wrapped expressions, mirroring
     /// the Haskell compiler's `Src.MultilineStr` → `desugarMultiline` path in
-    /// `Sky.Canonicalise.Expression`.
+    /// `Ipe.Canonicalise.Expression`.
     MultilineStr(String),
     /// A character literal `'a'`. The carried [`String`] is the source character
     /// text — a single grapheme for an ordinary char, or a backslash-escape pair
@@ -224,7 +224,7 @@ pub enum Expr_ {
 /// (`(a, b) = e`, `{ x } = e`) is admitted as a tuple / record pattern. A
 /// refutable binder (a constructor pattern) parses here but is rejected
 /// fail-closed downstream — a `let` binder must always match. Subset of the
-/// Haskell compiler's `Sky.AST.Source.Def`, extended with the destructure
+/// Haskell compiler's `Ipe.AST.Source.Def`, extended with the destructure
 /// form (`DestructDef`).
 // `Eq` is not derived: `body` is an [`Expr`], only `PartialEq` (float literals).
 #[derive(Clone, PartialEq, Debug)]

@@ -226,8 +226,8 @@ mod tests {
     #[test]
     fn shared_absolute_path_overrides_ambient() {
         assert_eq!(
-            resolve_emitted_target(Some("/home/x/.cache/sky-rust-target")),
-            Some("/home/x/.cache/sky-rust-target".to_owned())
+            resolve_emitted_target(Some("/home/x/.cache/ipe-lang-target")),
+            Some("/home/x/.cache/ipe-lang-target".to_owned())
         );
     }
 

@@ -70,7 +70,7 @@ mod imp {
     {
         Box::pin(async move {
             IpeResult::Err(
-                "Webview.app: this Sky build has no native webview backend. Rebuild \
+                "Webview.app: this Ipe build has no native webview backend. Rebuild \
                  with `--features webview` on a machine with the webview dev \
                  libraries (Linux: webkit2gtk + libsoup; macOS: WKWebView; Windows: \
                  the Edge WebView2 runtime)."
@@ -128,7 +128,7 @@ mod imp {
         if !matches!(cmd, IpeCmd::None) {
             WARNED.call_once(|| {
                 eprintln!(
-                    "[sky.webview] warn: a non-`Cmd.none` command was returned but \
+                    "[ipe.webview] warn: a non-`Cmd.none` command was returned but \
                      Ipe.Webview v0.1's synchronous event loop does not run \
                      Cmd.perform/Sub.every yet — the effect was dropped."
                 );

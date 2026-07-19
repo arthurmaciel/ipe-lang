@@ -31,7 +31,7 @@ fn run_no_args_returns_usage_error() {
     let result = ipe::run_cli(&args);
     assert!(
         matches!(result, Err(ipe::CliError::Usage(_))),
-        "expected Usage error for bare `skyc run`, got: {result:?}"
+        "expected Usage error for bare `ipec run`, got: {result:?}"
     );
 }
 
@@ -84,7 +84,7 @@ fn run_subcommand_builds_and_executes_hello_program() {
     };
 
     // Write the source file into a temp directory.
-    let dir = std::env::temp_dir().join("skyc_run_subcommand_e2e");
+    let dir = std::env::temp_dir().join("ipec_run_subcommand_e2e");
     let _ = fs::remove_dir_all(&dir);
     let entry = dir.join("Main.ipe");
     let created = fs::create_dir_all(&dir).and_then(|()| fs::write(&entry, SRC));
@@ -123,7 +123,7 @@ fn run_subcommand_builds_and_executes_hello_program() {
     assert_eq!(
         String::from_utf8_lossy(&run.stdout),
         "hello from run\n",
-        "skyc run e2e: stdout mismatch"
+        "ipec run e2e: stdout mismatch"
     );
 
     // Cleanup heavy cargo artifacts; leave src for post-mortem if needed.

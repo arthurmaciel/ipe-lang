@@ -4,11 +4,11 @@
 //! `IPE_E2E=1`) the emitted project must build and print `62`.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
-//! `/home/arthur/Documentos/comp/sky/out/sky` compiles + runs the SAME
+//! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
 //! `Main.ipe` to stdout `62\n`, exit 0 — verified by hand:
 //!
 //! ```text
-//! $ sky run tests/golden/lambdas/Main.ipe   # Go backend
+//! $ ipe run tests/golden/lambdas/Main.ipe   # Go backend
 //! 62
 //! ```
 //!
@@ -17,7 +17,7 @@
 //! `add 2 3` applies the multi-parameter lambda `\a b -> a + b` → `5`. The
 //! entry's `let r = inc 41 + (\x -> x + n) 5 + add 2 3` is `42 + 15 + 5 = 62`.
 //! Running the Go toolchain inside `cargo test` is impractical (it needs the
-//! Haskell `sky` binary plus a Go toolchain), so the hand-computed value is the
+//! Haskell `ipe` binary plus a Go toolchain), so the hand-computed value is the
 //! in-test oracle, documented here against the Go-equivalent command.
 
 use std::path::{Path, PathBuf};
@@ -70,7 +70,7 @@ fn end_to_end_builds_and_prints_sixty_two() {
 
     let root = repo_root();
     let entry = example_entry(&root);
-    let out = std::env::temp_dir().join("skyc_m1_lambdas_e2e");
+    let out = std::env::temp_dir().join("ipec_m1_lambdas_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

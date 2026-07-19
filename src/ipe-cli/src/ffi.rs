@@ -1081,7 +1081,7 @@ mod tests {
     }
 
     #[test]
-    fn cache_root_walk_stops_at_the_sky_toml_project_root() {
+    fn cache_root_walk_stops_at_the_ipe_toml_project_root() {
         let tmp = std::env::temp_dir().join(format!("ipe-t1-cacheroot-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         // Ancestor cache (a planted vector) ABOVE the project root.

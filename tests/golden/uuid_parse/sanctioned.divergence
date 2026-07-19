@@ -1,1 +1,1 @@
-sanctioned: the Rust backend's Uuid.parse accepts a canonical hyphenated UUID (Just) and rejects malformed input (Nothing); the Go reference returns Nothing for the same canonical UUID on this shape. Sky-Rust records its own (semantically correct) output.
+sanctioned: the Rust backend's Uuid.parse accepts a canonical hyphenated UUID (Just) and rejects malformed input (Nothing); the Go reference returns Nothing for the same canonical UUID on this shape. Ipe records its own (semantically correct) output.

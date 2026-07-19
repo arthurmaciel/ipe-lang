@@ -45,7 +45,7 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code)
 }
 
 #[test]
-fn non_exhaustive_nested_same_ctor_case_is_sky_t0010() {
+fn non_exhaustive_nested_same_ctor_case_is_ipe_t0010() {
     assert_gate(
         "gate_nonexhaustive_nested_same_ctor",
         "m3b4_gate_nonexhaustive_emit",
@@ -61,7 +61,7 @@ fn non_exhaustive_nested_same_ctor_case_is_sky_t0010() {
 /// IPE-T0010 here pins that the soundness floor rests SOLELY on that check now
 /// that the same-top-constructor restriction is lifted.
 #[test]
-fn all_top_ctors_covered_with_nested_literal_gap_is_sky_t0010() {
+fn all_top_ctors_covered_with_nested_literal_gap_is_ipe_t0010() {
     assert_gate(
         "floor_sentinel",
         "m3b4_floor_sentinel_emit",

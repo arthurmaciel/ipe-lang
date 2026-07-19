@@ -27,7 +27,7 @@ fn runtime() -> PathBuf {
 /// `IPE_E2E` gate here) — this test only inspects the EMITTED files, not
 /// runtime behaviour (which needs a live Postgres and is out of scope for the
 /// default `cargo test` gate per the Class 7 spec's two-tier test strategy).
-const MAIN_SKY: &str = "\
+const MAIN_IPE: &str = "\
 module Main exposing (main)
 
 main =
@@ -43,11 +43,11 @@ main =
 /// → no section at all, i.e. the default driver).
 #[allow(clippy::expect_used)]
 fn write_project(test_name: &str, database_section: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("skyc_pg_reachability_{test_name}"));
+    let dir = std::env::temp_dir().join(format!("ipec_pg_reachability_{test_name}"));
     let _ = fs::remove_dir_all(&dir);
     let src = dir.join("src");
     fs::create_dir_all(&src).expect("create src/");
-    fs::write(src.join("Main.ipe"), MAIN_SKY).expect("write Main.ipe");
+    fs::write(src.join("Main.ipe"), MAIN_IPE).expect("write Main.ipe");
     fs::write(
         dir.join("ipe.toml"),
         format!("[project]\nname = \"pgtest\"\n{database_section}"),

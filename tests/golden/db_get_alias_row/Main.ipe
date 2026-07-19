@@ -12,8 +12,8 @@ import Ipe.Log exposing (println)
 -- The structural `body_calls_db_get_on_param` walk originally matched only a
 -- DIRECT `Var`/`CloneVar` of the wildcard param in row-argument position. So a
 -- decoder that let-binds a pure alias of the payload and reads fields off THAT
--- alias dropped the `+ SkyRow` bound: `skyc build` exit 0, then `cargo build`
--- E0277 (`T1: SkyRow is not satisfied`). The base commit's old TEXT scan
+-- alias dropped the `+ IpeRow` bound: `ipec build` exit 0, then `cargo build`
+-- E0277 (`T1: IpeRow is not satisfied`). The base commit's old TEXT scan
 -- happened to bound it (the alias still renders as `db_get_string(_, &r)`), so
 -- the structural rewrite REGRESSED this case.
 --

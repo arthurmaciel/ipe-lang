@@ -43,4 +43,4 @@ main =
     let g = mk in
     let p1 = g "first" "second" in
     let p2 = apply2 mk in
-    println (pageStr p1 ++ "|" ++ pageStr p2 ++ "|" ++ tag "sky-" [ "a", "b" ])
+    println (pageStr p1 ++ "|" ++ pageStr p2 ++ "|" ++ tag "ipe-" [ "a", "b" ])

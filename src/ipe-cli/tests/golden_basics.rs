@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 mod support;
 
-/// The `sky-rust` workspace root (two levels up from this crate's manifest).
+/// The `ipe-lang` workspace root (two levels up from this crate's manifest).
 fn repo_root() -> PathBuf {
     let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
     std::fs::canonicalize(&joined).unwrap_or(joined)
@@ -69,7 +69,7 @@ fn end_to_end_builds_and_prints_one() {
     // Build OUTSIDE the workspace tree: an emitted project under the workspace's
     // own target/ dir is (correctly) rejected by cargo as a non-member package,
     // and the golden Cargo.toml carries no detaching `[workspace]` stanza.
-    let out = std::env::temp_dir().join("skyc_m0_e2e");
+    let out = std::env::temp_dir().join("ipec_m0_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

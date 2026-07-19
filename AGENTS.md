@@ -209,7 +209,7 @@ Ipe.Live → `Cmd.perform task ResultMsg`, dispatch updates
 
 ## Standard library
 
-Source: `sky-stdlib/{Ipê/Core,Std,Ipê/Http}/*.ipe`. `ipe doc Module`
+Source: `ipe-stdlib/{Ipê/Core,Std,Ipê/Http}/*.ipe`. `ipe doc Module`
 surfaces every entry.
 
 Each stdlib binding = pure Ipê (recursive/case-based impl) or
@@ -261,12 +261,12 @@ app code.
 | `Io` | `Ipe.Io` | readLine, writeStdout, writeStderr |
 | `System` | `Ipe.System` | args, getArg, getenv, getenvOr (bare), getenvInt, getenvBool, setenv, unsetenv, cwd, loadEnv, exit |
 | `Process` | `Ipe.Process` | run (subprocess) |
-| `Db` | `Ipe.Db` | open, connect, close, exec, execRaw, query, insertRow, getById, updateById, deleteById, findOneByField, findManyByField, findByConditions, unsafeFindWhere, queryDecode, withTransaction, migrate (versioned forward-only schema migrations + `_sky_migrations` + checksum guard), getField, getString, getInt, getBool. **Typed param binding**: `SqlValue` ADT (`SqlString`/`SqlInt`/`SqlFloat`/`SqlBool`/`SqlBytes`/`SqlDecimal`/`SqlTime`/`SqlMoney`/`SqlNull SqlValue`) — mixed-type SQL params as homogeneous `List SqlValue` for `INSERT … VALUES (?, ?, ?)` mixing `String + Maybe Int + Bool`. 8 `fromMaybe*` helpers for nullable columns. `SqlField` (`SetField SqlValue`/`OmitField`) + `Db.updateFields conn table whereCols setFields` for PATCH w/ column-omit; `Db.insertFields conn table fields` = INSERT counterpart (`OmitField` cols drop from SQL so DB applies DEFAULT; all-omit → `INSERT … DEFAULT VALUES`); `Db.insertFieldsReturning conn table fields projection decoder` appends `RETURNING <projection>`, decodes via `Ipe.Db.Decode`. Money serialises lossless as `"ISO_CODE AMOUNT"` TEXT, paired w/ `Db.Decode.money`. `Maybe a` params bind directly (nil/unwrapped). `nullable : Decoder a -> Decoder (Maybe a)`. |
+| `Db` | `Ipe.Db` | open, connect, close, exec, execRaw, query, insertRow, getById, updateById, deleteById, findOneByField, findManyByField, findByConditions, unsafeFindWhere, queryDecode, withTransaction, migrate (versioned forward-only schema migrations + `_ipe_migrations` + checksum guard), getField, getString, getInt, getBool. **Typed param binding**: `SqlValue` ADT (`SqlString`/`SqlInt`/`SqlFloat`/`SqlBool`/`SqlBytes`/`SqlDecimal`/`SqlTime`/`SqlMoney`/`SqlNull SqlValue`) — mixed-type SQL params as homogeneous `List SqlValue` for `INSERT … VALUES (?, ?, ?)` mixing `String + Maybe Int + Bool`. 8 `fromMaybe*` helpers for nullable columns. `SqlField` (`SetField SqlValue`/`OmitField`) + `Db.updateFields conn table whereCols setFields` for PATCH w/ column-omit; `Db.insertFields conn table fields` = INSERT counterpart (`OmitField` cols drop from SQL so DB applies DEFAULT; all-omit → `INSERT … DEFAULT VALUES`); `Db.insertFieldsReturning conn table fields projection decoder` appends `RETURNING <projection>`, decodes via `Ipe.Db.Decode`. Money serialises lossless as `"ISO_CODE AMOUNT"` TEXT, paired w/ `Db.Decode.money`. `Maybe a` params bind directly (nil/unwrapped). `nullable : Decoder a -> Decoder (Maybe a)`. |
 | `Auth` | `Ipe.Auth` | register, login, setRole (Task) + hashPassword, hashPasswordCost, verifyPassword, passwordStrength, signToken, verifyToken (Result); signTokenWithClaims/verifyTokenWithAlgorithm — typed-builder aliases over `Ipe.Jwt` for fine-grained algorithm+claims control |
 | `Log` | `Ipe.Log` | println, debug, info, warn, error, debugWith, infoWith, warnWith, errorWith |
 | `Trace` | `Ipe.Trace` | span, event, attr — opt-in app-level tracing spans. Tier-1 spans (HTTP/session/Msg/DB/Auth/Http/File) automatic. |
 | `Server` | `Ipe.Http.Server` | param, queryParam, header, getCookie, static (Layer 3 surface); higher-level `get/post/listen/text/json/html` are kernel-only |
-| `Stream` | `Sky.Http.Server.Stream` | stream, emit, finish, withContentType — server-side streaming HTTP responses (SSE/LLM token forwarding/chunked downloads). Mirror of `Sky.Core.Http.Stream`. Sync bridge: `Sky.Core.Http.Stream.forEachChunk hdl body` drains an upstream stream from inside a plain Sky.Http.Server handler (relay shape). |
+| `Stream` | `Ipe.Http.Server.Stream` | stream, emit, finish, withContentType — server-side streaming HTTP responses (SSE/LLM token forwarding/chunked downloads). Mirror of `Ipe.Core.Http.Stream`. Sync bridge: `Ipe.Core.Http.Stream.forEachChunk hdl body` drains an upstream stream from inside a plain Ipe.Http.Server handler (relay shape). |
 | `Middleware` | `Ipe.Http.Middleware` | withCors, withLogging, withBasicAuth, withRateLimit |
 | `Head` | `Ipe.Live.Head` | Per-page `<head>` injection — `title`/`meta`/`metaProperty` (OG)/`link`/`canonical`/`jsonLd`/`themeColor`/`rss`. Opt in via optional `head : Model -> List (Html msg)` field on `Live.app` cfg. |
 | `Console` | `Ipe.Live.Console` | `Identity` type alias (`{ subject, email, claims : Dict String String }`) for optional row-poly `consoleAuth : Request -> Task Error (Maybe Identity)` field on `Live.app` cfg. |
@@ -959,7 +959,7 @@ Current compiler limitations to work around when writing code.
    tail-recursive accumulator pattern.
 9. **`Css.*` keyword constants are bare values** — `margin Css.zero`,
    `top Css.auto`, `border Css.none`, `fontFamily Css.systemFont` (matching
-   v0.17 Sky). Only `Css.monoFont ()` keeps its unit argument.
+   v0.17 Ipe). Only `Css.monoFont ()` keeps its unit argument.
 10. **Multi-line function signatures.** `name\n    : T` (`:` on
     continuation line) parses cleanly. Continuation INSIDE type body
     (`T1\n    -> T2`) unsupported — extract `type alias` for whole arrow type.
@@ -968,7 +968,7 @@ Current compiler limitations to work around when writing code.
 
 ```bash
 ipe init [name]                    # new project
-sky build src/Main.ipe             # compile → out/app
+ipe build src/Main.ipe             # compile → out/app
 ipe build src/Main.ipe --target wasm   # browser-WASM project (cdylib + www/ shell)
 ipe run src/Main.ipe               # build + run
 ipe build|run … --static           # fully-static musl single binary (dlmalloc
@@ -977,7 +977,7 @@ ipe build|run … --static           # fully-static musl single binary (dlmalloc
                                    #  --allow-slow-allocator)
 ipe watch src/Main.ipe             # file-watch rebuild + restart
 ipe check src/Main.ipe             # type-check + build
-ipe fmt src/Main.ipe               # opinionated formatter (run after editing .ipe/.skyi)
+ipe fmt src/Main.ipe               # opinionated formatter (run after editing .ipe/.ipei)
 ipe test tests/MyTest.ipe          # Ipe.Test runner
 ipe db status                      # Ipe.Db migrations: applied / pending / drift
 ipe db migrate                     # apply pending Ipe.Db migrations, then exit
@@ -991,9 +991,9 @@ ipe add <package>                  # add an FFI binding
 ipe remove <package>
 ipe install                        # regen missing FFI + deps
 ipe update                         # update deps
-sky clean                          # remove out/ dist/
+ipe clean                          # remove out/ dist/
 ipe lsp                            # JSON-RPC LSP server (stdio)
-sky --version
+ipe --version
 ```
 
 **Never run `ipe build` from repo root** — overwrites compiler binary in
@@ -1004,4 +1004,4 @@ cd examples/01-hello-world && ipe build src/Main.ipe
 ```
 
 `ipe check` ≡ `ipe build` (both invoke Rust build on emitted code). Run
-`ipe fmt` after editing `.ipe`/`.skyi` files (formatter idempotent).
+`ipe fmt` after editing `.ipe`/`.ipei` files (formatter idempotent).

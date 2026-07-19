@@ -1,4 +1,4 @@
--- | Ipe.Trace — opt-in distributed-tracing spans (Layer 3 Sky source).
+-- | Ipe.Trace — opt-in distributed-tracing spans (Layer 3 Ipe source).
 --
 -- Tier-1 spans (HTTP request, session load/save, Msg dispatch, DB /
 -- Auth / Http / File operations) are emitted AUTOMATICALLY by the
@@ -47,7 +47,7 @@ event = Ffi.kernel "Trace_event"
 
 
 -- | Annotate the current span with a `key = value` string
--- attribute.  Keys are namespaced under `sky.trace.` so they never
+-- attribute.  Keys are namespaced under `ipe.trace.` so they never
 -- collide with the runtime's structural attributes.
 attr : String -> String -> Task Error ()
 attr = Ffi.kernel "Trace_attr"

@@ -1,10 +1,10 @@
--- | Ipe.Task — Task combinator surface (Layer 3 Sky source, M5a).
+-- | Ipe.Task — Task combinator surface (Layer 3 Ipe source, M5a).
 --
 -- All functions are aliased to the runtime kernel via `Ffi.kernel`. The HM
 -- type schemes below govern how the type-checker treats each combinator
 -- when user code calls `Task.<fn>`. `Error` in the type signatures is the
--- implicit error channel — the real `SkyError` enum at the Rust level
--- (`SkyError::Error(kind, info)`, backlog #85/#160), not a plain `String`.
+-- implicit error channel — the real `IpeError` enum at the Rust level
+-- (`IpeError::Error(kind, info)`, backlog #85/#160), not a plain `String`.
 module Ipe.Task exposing
     ( succeed, fail
     , map, andThen

@@ -118,10 +118,10 @@ use sha2::{Digest, Sha256};
 /// Domain-separation tag for the content-address hash — bumped whenever the
 /// key's ingredient set changes shape (never for a value change within the
 /// same shape; that is what the hash itself captures).
-const KEY_TAG: &[u8] = b"skyc-build-cache-key-v1";
+const KEY_TAG: &[u8] = b"ipec-build-cache-key-v1";
 
 /// Domain-separation tag for the version-epoch hash.
-const EPOCH_TAG: &[u8] = b"skyc-build-cache-epoch-v1";
+const EPOCH_TAG: &[u8] = b"ipec-build-cache-epoch-v1";
 
 /// Hash `bytes` into `hasher` with an explicit little-endian length prefix,
 /// so two distinct inputs can never concatenate into the same byte stream
@@ -203,7 +203,7 @@ pub fn compute_project_key(
 /// Domain-separation tag for the lowered-IR content-address key —
 /// distinct from [`KEY_TAG`] because this tier's key excludes `db_driver`
 /// (see [`compute_ir_key`]'s doc for why).
-const IR_KEY_TAG: &[u8] = b"skyc-build-cache-ir-key-v1";
+const IR_KEY_TAG: &[u8] = b"ipec-build-cache-ir-key-v1";
 
 /// Compute the content-address key for the lowered-IR cache tier:
 /// a pure function of every input that determines
@@ -948,7 +948,7 @@ mod tests {
         let program = sample_ir_program(&mut plain)?;
         let interner = Arc::new(Mutex::new(plain));
 
-        let dir = std::env::temp_dir().join(format!("skyc-ir-cache-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("ipec-ir-cache-test-{}", std::process::id()));
         let cache_root = dir.join("cache-root-ir-round-trip");
         let _ = fs::remove_dir_all(&dir);
 
@@ -980,7 +980,7 @@ mod tests {
     /// the reader's own, unrelated interner.
     #[test]
     fn ir_cache_hit_survives_cross_process_symbol_id_drift() -> ipe_diagnostics::DResult<()> {
-        let dir = std::env::temp_dir().join(format!("skyc-ir-cache-drift-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("ipec-ir-cache-drift-{}", std::process::id()));
         let cache_root = dir.join("cache-root-drift");
         let _ = fs::remove_dir_all(&dir);
 
@@ -1030,7 +1030,7 @@ mod tests {
     #[test]
     fn ir_try_load_treats_corrupt_entry_as_a_miss() {
         let dir =
-            std::env::temp_dir().join(format!("skyc-ir-cache-corrupt-{}", std::process::id()));
+            std::env::temp_dir().join(format!("ipec-ir-cache-corrupt-{}", std::process::id()));
         let cache_root = dir.join("cache-root-corrupt");
         let path = ir_entry_file_path(&cache_root, "epoch", "key");
         fs::create_dir_all(path.parent().expect("has parent")).expect("mkdir must succeed");
@@ -1053,7 +1053,7 @@ mod tests {
     /// entry_as_a_miss` gives for the `EmittedProject` tier).
     #[test]
     fn ir_try_load_treats_a_poisoned_symbol_entry_as_a_miss() {
-        let dir = std::env::temp_dir().join(format!("skyc-ir-cache-poison-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("ipec-ir-cache-poison-{}", std::process::id()));
         let cache_root = dir.join("cache-root-poison");
         let path = ir_entry_file_path(&cache_root, "epoch", "key");
         fs::create_dir_all(path.parent().expect("has parent")).expect("mkdir must succeed");

@@ -4,7 +4,7 @@ import Lib1
 
 
 -- Calls `Lib1.execOrLog` with a `List SqlValue` (the typed mixed-param
--- path), cross-module — matches `examples/17-skymon`'s `Lib.Alerts` /
+-- path), cross-module — matches `examples/17-ipemon`'s `Lib.Alerts` /
 -- `Lib.Monitors` calling into `Lib.Database`.
 insertWidget =
     Lib1.execOrLog

@@ -85,7 +85,7 @@ fn spike_project_builds_and_injects_compiled_source() {
 /// file is a hard error, never a silent supply-chain override of the audited
 /// implementation.
 #[test]
-fn hostile_std_squat_is_sky_n0025() {
+fn hostile_std_squat_is_ipe_n0025() {
     let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("spike_hostile_squat");
     let _ = std::fs::remove_dir_all(&root);
     let std_dir = root.join("src").join("Ipe");

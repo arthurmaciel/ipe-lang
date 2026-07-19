@@ -14,7 +14,7 @@ import Ipe.Ui.Background as Background
 -- Html.headNode / Background.linearGradient. (Ui.mediaQuery was deferred
 -- from this batch; wired 2026-07-11 with its own golden — see
 -- tests/golden/ui_mediaquery/.)
--- oracle_divergence = true: skyc's own correct output, not a Go oracle diff.
+-- oracle_divergence = true: ipec's own correct output, not a Go oracle diff.
 
 
 type Msg

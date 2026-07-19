@@ -4,11 +4,11 @@
 //! and print `10`.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
-//! `/home/arthur/Documentos/comp/sky/out/sky` compiles + runs the SAME
+//! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
 //! `Main.ipe` to stdout `10\n`, exit 0 — verified by hand:
 //!
 //! ```text
-//! $ sky run tests/golden/if_expr/Main.ipe   # Go backend
+//! $ ipe run tests/golden/if_expr/Main.ipe   # Go backend
 //! 10
 //! ```
 //!
@@ -16,7 +16,7 @@
 //! leading `n > 0` branch); `classify (0 - 3) = 2` (the `else if n < 0`
 //! branch); the entry's `total = 7 + 1 + 2 = 10`. The `end_to_end_*` test
 //! below asserts the Rust backend reaches the identical `10`. Running the Go
-//! toolchain inside `cargo test` is impractical (it needs the Haskell `sky`
+//! toolchain inside `cargo test` is impractical (it needs the Haskell `ipe`
 //! binary plus a Go toolchain), so the hand-computed value is the in-test
 //! oracle, documented here against the Go-equivalent command.
 
@@ -70,7 +70,7 @@ fn end_to_end_builds_and_prints_ten() {
 
     let root = repo_root();
     let entry = example_entry(&root);
-    let out = std::env::temp_dir().join("skyc_m1_if_e2e");
+    let out = std::env::temp_dir().join("ipec_m1_if_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

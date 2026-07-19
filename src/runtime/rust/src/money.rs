@@ -3,7 +3,7 @@
 //! Mirrors runtime-go/rt/money_kernel.go.
 //!
 //! The Ipê-side `Money` ADT carries a typed `Currency` enum + a `Decimal`
-//! amount. At the Ffi boundary, the wrappers in `sky-stdlib/Std/Money.ipe`
+//! amount. At the Ffi boundary, the wrappers in `ipe-stdlib/Std/Money.ipe`
 //! convert the Currency into its ISO 4217 code (a String) before calling
 //! these kernels — so every function below takes the code as a plain String.
 
@@ -354,7 +354,7 @@ pub fn money_allocate(places: i64, parts: i64, amount: Decimal) -> Vec<Decimal> 
 
 // Silence unused-warning on IpeMaybe import (kept for symmetry with sibling kernels).
 #[allow(dead_code)]
-fn _unused_skymaybe<T>() -> IpeMaybe<T> {
+fn _unused_ipemaybe<T>() -> IpeMaybe<T> {
     IpeMaybe::Nothing
 }
 

@@ -275,12 +275,12 @@ tailExpr  ::= expr                                    -- required final expressi
 
 Moderate, front-loaded on the parser:
 
-- **Parser** (`sky_parse`): new `doBlock` production + layout handling +
+- **Parser** (`ipe_parse`): new `doBlock` production + layout handling +
   three-form statement disambiguation. The bulk.
 - **Desugar**: a pass lowering `doBlock` → existing `Task.andThen` + `Let` nodes
   (canon or a pre-canon desugar). Because it targets existing nodes,
   **type-inference / lower / emit / LSP are essentially untouched**.
-- **Formatter** (`sky_format`): render the block form.
+- **Formatter** (`ipe_format`): render the block form.
 - **Compiler suggestions** (§9): the effect-visibility checks + hints.
 - **Docs / `templates/AGENTS.md`**: syntax reference + the auto-force retirement.
 

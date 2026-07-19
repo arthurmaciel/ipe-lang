@@ -3,7 +3,7 @@ module Main exposing (main)
 import Ipe.Error as Error
 
 -- M5b-db golden: withTransaction COMMIT path and ROLLBACK-on-error path.
--- Uses a file-backed SQLite DB (/tmp/sky_txn_golden.db) so all pool connections
+-- Uses a file-backed SQLite DB (/tmp/ipe_txn_golden.db) so all pool connections
 -- share the same persisted database — independent sequential transactions can
 -- therefore observe each other's commits and non-committed rollbacks.
 -- CREATE TABLE IF NOT EXISTS + DELETE FROM ensures idempotent test runs.
@@ -61,4 +61,4 @@ main =
                     )
                 )
         )
-        (Db.open "sqlite" "/tmp/sky_txn_golden.db")
+        (Db.open "sqlite" "/tmp/ipe_txn_golden.db")

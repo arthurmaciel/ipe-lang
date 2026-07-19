@@ -14,7 +14,7 @@ import Ipe.Log exposing (println)
 -- `Ui.onSubmit` kernel, so it is promoted to `Expr::SharedLambda` (its reads
 -- render `Arc<dyn Fn + Send + Sync>`). The SIBLING `else` branch is an INLINE
 -- `\form -> Noop` lambda, never promoted → default `Box<dyn Fn + Send + Sync>`.
--- `Arc` vs `Box` are distinct Rust types → cargo `E0308` AFTER `skyc` exit 0.
+-- `Arc` vs `Box` are distinct Rust types → cargo `E0308` AFTER `ipec` exit 0.
 -- Fix: the inline lambda leaf is coerced DIRECTLY to `SharedLambda` (`Arc`).
 
 

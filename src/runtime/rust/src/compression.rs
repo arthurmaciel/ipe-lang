@@ -170,7 +170,7 @@ mod tests {
 
     #[test]
     fn gzip_roundtrip() {
-        let orig = b"hello, sky - gzip round-trip with some length to compress".to_vec();
+        let orig = b"hello, ipe - gzip round-trip with some length to compress".to_vec();
         let z: IpeResult<String, Vec<u8>> = task_run(compression_gzip(orig.clone()));
         let comp = match z {
             IpeResult::Ok(c) => c,

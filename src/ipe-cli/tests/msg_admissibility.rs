@@ -20,7 +20,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 /// Compile `source` through `ipe::build`, returning the pipeline result.
 fn compile(test_name: &str, source: &str) -> Result<Result<(), ipe::CliError>, BoxError> {
-    let ipe_dir = std::env::temp_dir().join(format!("msg_adm_{test_name}_sky"));
+    let ipe_dir = std::env::temp_dir().join(format!("msg_adm_{test_name}_ipe"));
     let _ = std::fs::remove_dir_all(&ipe_dir);
     std::fs::create_dir_all(&ipe_dir)?;
     let entry = ipe_dir.join("Main.ipe");
@@ -40,7 +40,7 @@ fn assert_rejected_with(
     expected_code: &str,
 ) -> Result<(), BoxError> {
     match compile(test_name, source)? {
-        Ok(()) => Err(format!("{test_name}: expected {expected_code}, but skyc succeeded").into()),
+        Ok(()) => Err(format!("{test_name}: expected {expected_code}, but ipec succeeded").into()),
         Err(ipe::CliError::Pipeline { diag, .. }) => {
             assert_eq!(
                 diag.code().as_str(),
@@ -57,7 +57,7 @@ fn assert_rejected_with(
 fn assert_accepted(test_name: &str, source: &str) -> Result<(), BoxError> {
     match compile(test_name, source)? {
         Ok(()) => Ok(()),
-        Err(e) => Err(format!("{test_name}: expected skyc success, got {e:?}").into()),
+        Err(e) => Err(format!("{test_name}: expected ipec success, got {e:?}").into()),
     }
 }
 

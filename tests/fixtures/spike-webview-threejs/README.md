@@ -43,7 +43,7 @@ no second process, no `go run`, no port to remember.
 You should see the loopback startup line on stderr:
 
 ```
-[sky.webview] loopback server on http://127.0.0.1:<port>/ (static="static")
+[ipe.webview] loopback server on http://127.0.0.1:<port>/ (static="static")
 ```
 
 ## Per-OS expectations
@@ -80,8 +80,8 @@ still exposes a global `THREE` — perfect for a zero-build spike.
 
 ## How the loopback works (bug #370)
 
-When `ipe.toml` declares `[live].static = "static"`, the Sky
-compiler emits a `SetSkyDefault("LIVE_STATIC_DIR", "static")`
+When `ipe.toml` declares `[live].static = "static"`, the Ipe
+compiler emits a `SetIpeDefault("LIVE_STATIC_DIR", "static")`
 into the program's `init()`. At runtime, `Ipe.Webview` checks
 that env var:
 

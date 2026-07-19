@@ -3,7 +3,7 @@
 7 findings: 0 critical, 1 high, 1 medium, 5 low.
 
 Audited: `src/runtime/rust/src/tui/{layout,app,focus,key,cell,diff,mod}.rs` (prior-audit
-paths `runtime/src/sky_runtime/tui/*` re-homed here). Prior HIGH `fr_total` usize-sum
+paths `runtime/src/ipe_runtime/tui/*` re-homed here). Prior HIGH `fr_total` usize-sum
 overflow in `render_grid_tracked` is FIXED (per-track `MAX_CELLS` clamp + saturating
 folds, `layout.rs:1809-1832`) — not re-filed. Prior `apply_padding` `total_w` clamp is
 in place but only per-dimension (see 002).

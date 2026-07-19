@@ -1,1 +1,1 @@
-divergence: Sky compares Math.max arguments through AsInt (coercing to Int before the compare), giving Math.max 0.4 1.3 = 1. Sky-Rust follows Elm's polymorphic comparable (a -> a -> a), comparing at the argument type; Math.max 0.4 1.3 = 1.3. Divergence from Sky, rationale: Elm-conformance.
+divergence: Ipe compares Math.max arguments through AsInt (coercing to Int before the compare), giving Math.max 0.4 1.3 = 1. Ipe follows Elm's polymorphic comparable (a -> a -> a), comparing at the argument type; Math.max 0.4 1.3 = 1.3. Divergence from Ipe, rationale: Elm-conformance.

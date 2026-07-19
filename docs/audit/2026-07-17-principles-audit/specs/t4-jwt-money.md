@@ -8,7 +8,7 @@ value that enters from untrusted-or-request data through a boundary that fails t
 parse it precisely):
 
 - **Root cause A (Money) — a pure-Ipê port silently dropped the two invariants
-  the runtime kernel it replaced enforces.** `../sky/sky-stdlib/Std/Money.sky:341`
+  the runtime kernel it replaced enforces.** `../ipe/ipe-stdlib/Std/Money.ipe:341`
   routes `allocate` through `Ffi.callPure "Money_allocate"` — the guarded,
   sign-correct kernel (`src/runtime/rust/src/money.rs:271`, `parts <= 0 → []`,
   residue distributed *toward zero by sign*). The fork's `src/stdlib/Ipe/Money.ipe`
@@ -43,7 +43,7 @@ new runtime checks at call sites.
 ### Root cause
 `src/stdlib/Ipe/Money.ipe:432-453` is a pure-Ipê reimplementation of a guarded,
 sign-correct runtime kernel. The header comment (lines 4-8) records the choice to
-replace `Ffi.callPure` with pure Sky "because `ex00-standard-libs` doesn't exercise
+replace `Ffi.callPure` with pure Ipe "because `ex00-standard-libs` doesn't exercise
 the kernel" — that is exactly the §0 shortcut: the port satisfied the example but
 regressed the contract the module's own doc states (line 429: "The sum of returned
 parts equals the input exactly").
@@ -51,7 +51,7 @@ parts equals the input exactly").
 Two structural options, pick per the kernel-availability finding below:
 
 **The kernel IS reachable from the backend.** `scripts/ipe-index locate
-Money.allocate` → `parity=ok route=sky:…Kernel.hs:294 rust=ipe:money.rs:271`. The
+Money.allocate` → `parity=ok route=ipe:…Kernel.hs:294 rust=ipe:money.rs:271`. The
 Rust runtime and the reference backend both carry `Money_allocate`; only the fork's
 `KernelFn` enum (`src/compiler/kernels/src/lib.rs`) lacks a `Money.allocate` arm
 (grep shows only `Db.Decode.n` money-adjacent). So there are two principled
@@ -120,7 +120,7 @@ This makes the invalid state unrepresentable in the source that ships.
 Add a `KernelFn::MoneyAllocate` arm (kernels/src/lib.rs, lower.rs, naming.rs,
 constrain.rs type scheme `Int -> Money -> List Money` lowering to
 `money_allocate(places, parts, amount)`), and rewrite `Money.ipe:allocate` as an
-`Ffi.kernel`-style Sky decl delegating to it — byte-identical to upstream's
+`Ffi.kernel`-style Ipe decl delegating to it — byte-identical to upstream's
 `Ffi.callPure` routing. This is the *most* faithful to parity and reuses the
 already-tested, overflow-checked kernel (`checked_mul`/`checked_div`, the 100k
 parts cap, the `to_i64()` residue fix). **Rejected as the primary fix** because it
@@ -153,7 +153,7 @@ pure body cannot reach byte-parity with the kernel on the `money_parity` fixture
 ### Root cause
 `Money.add`/`sub` (`Money.ipe:395-408`) return `a` on mismatch; `sumOf` inherits it
 (silently drops non-matching entries); `compare`/`lt`/`lte`/`gt`/`gte` (474-506)
-ignore currency entirely. This is byte-parity with `../sky/…/Money.sky:304-317` and
+ignore currency entirely. This is byte-parity with `../ipe/…/Money.ipe:304-317` and
 the comparison functions there — but it is an *unflagged* silent-wrong-money default
 in the flagship "never raw Float for currency" module, exactly the swallowed-error
 class the correctness axis names.
@@ -278,7 +278,7 @@ reads `exp`/`nbf` over the whole numeric domain and reduces the decision to Go's
 ### Parity / divergence
 This RESTORES Go parity (Go evaluates `now >= exp` over the signed value and
 rejects negatives/past-floors); no divergence record needed — it removes a
-`../sky` divergence. Note in the fix that `exp_is_zero`'s replacement is a superset
+`../ipe` divergence. Note in the fix that `exp_is_zero`'s replacement is a superset
 (handles integer-zero plus the missed domain), so no behaviour regresses on the
 cases the old guard covered.
 
@@ -317,7 +317,7 @@ cases the old guard covered.
    encoded the buggy `[-32,-32,-33]` shape.
 - **JWT decoders** are runtime kernels behind `Jwt.decodeHs256`/`decodeRs256`/
    `Jwt.decode` and `Auth.verifyToken`. **Re-gate:** `cargo nextest run -p
-   sky-runtime-rust --features full` (the jwt module tests), plus any auth E2E in
+   ipe-runtime-rust --features full` (the jwt module tests), plus any auth E2E in
    the examples sweep. The change is strictly *more rejecting* on the previously-
    accepted bad tokens; a valid future-dated integer/float `exp` still passes
    (covered by the accept test). Watch for any fixture token in the suite that
@@ -336,7 +336,7 @@ cases the old guard covered.
 
 ```json
 {"id":"TBD","priority":"high","phase":"principles-audit-fix","task":"Restore Money.allocate parts<=0 guard and sign-correct residue in the pure .ipe port","notes":"src/stdlib/Ipe/Money.ipe:432-453 dropped the runtime kernel's guard (parts<=0 -> divide-by-zero abort, CO-INCR-001) and pairs trunc-div // with Euclidean modBy so negative totals mint cents (CO-INCR-002). Fix: `if parts<=0 then []`, and `remainder = totalMinor - base*parts` stepped by sign(remainder) mirroring money.rs:271-322. Add .ipe regression tests: allocate 0 -> [] not exit-101; allocate 3 (neg $1) sums to -$1.00. Re-run money_parity + examples sweep; verify no golden pinned the buggy shape.","spec":"docs/audit/2026-07-17-principles-audit/specs/t4-jwt-money.md","blocked_by":[],"status":"pending"}
-{"id":"TBD","priority":"medium","phase":"principles-audit-fix","task":"Document Money cross-currency mismatch semantics + record divergence (CO-INCR-003)","notes":"Money.add/sub/sumOf return left operand on currency mismatch; compare/lt/... ignore currency (Money.ipe:395-506). Parity with ../sky but unflagged. Add -- WARNING doc on the affected fns stating same-currency precondition + mismatch behaviour, and a docs/divergences-from-sky.md entry noting it is knowingly retained pending the typed-Result redesign. Doc-only, no behaviour change.","spec":"docs/audit/2026-07-17-principles-audit/specs/t4-jwt-money.md","blocked_by":[],"status":"pending"}
+{"id":"TBD","priority":"medium","phase":"principles-audit-fix","task":"Document Money cross-currency mismatch semantics + record divergence (CO-INCR-003)","notes":"Money.add/sub/sumOf return left operand on currency mismatch; compare/lt/... ignore currency (Money.ipe:395-506). Parity with ../ipe but unflagged. Add -- WARNING doc on the affected fns stating same-currency precondition + mismatch behaviour, and a docs/divergences-from-sky.md entry noting it is knowingly retained pending the typed-Result redesign. Doc-only, no behaviour change.","spec":"docs/audit/2026-07-17-principles-audit/specs/t4-jwt-money.md","blocked_by":[],"status":"pending"}
 {"id":"TBD","priority":"low","phase":"principles-audit-fix","task":"Typed Result Money arithmetic redesign (add/sub/sumOf -> Result Error Money)","notes":"Follow-up to CO-INCR-003: make cross-currency add/sub/sumOf return a typed Err (or a SameCurrency witness) instead of a silent left-operand fallthrough. Breaking API change + upstream divergence; caller migration required. Separate from the doc/divergence step.","spec":"docs/audit/2026-07-17-principles-audit/specs/t4-jwt-money.md","blocked_by":[],"status":"pending"}
 {"id":"TBD","priority":"medium","phase":"principles-audit-fix","task":"Align JWT exp/nbf NumericDate parsing to Go across flat + builder decoders","notes":"Replace exp_is_zero (as_u64 integer-zero only) with a total numeric_date reader (i64 or floor(f64)) covering negative + fractional exp/nbf (RFC 7519 NumericDate). Pre-reject now>=exp / now<nbf on jwt_decode_hs256 (jwt.rs:161) and jwt_decode_rs256 (jwt.rs:243) before jsonwebtoken's exp-1 underflow; replace as_i64() with numeric_date in ipe_jwt_decode (jwt.rs:551,557); update auth.rs:189 call site. Closes RT-AUTH-001 (neg exp accepted), RT-AUTH-002 (fractional exp underflow under overflow-checks=false), RT-AUTH-003 (flat/builder disagree). Restores Go parity (no divergence). Add runtime jwt tests: neg exp, exp 0.4/0.0, flat-vs-builder agreement, future-fractional still accepted. NOT a negative_suite.rs (compile-time) test.","spec":"docs/audit/2026-07-17-principles-audit/specs/t4-jwt-money.md","blocked_by":[],"status":"pending"}
 ```
