@@ -35,15 +35,15 @@ use wasm_bindgen::prelude::*;
 
 use crate::core::{IpeResult, IpeTask};
 use crate::dom::{HandlerIndex, LiveReq, build_index, diff::Patch, diff::diff};
-use crate::html::{FormData, Html, assign_sky_ids, render_html};
+use crate::html::{FormData, Html, assign_ipe_ids, render_html};
 use crate::tea::{IpeCmd, IpeSub};
 
 pub mod pubsub;
 mod subs;
 
-/// Root sky-id path — matches the Live/Webview renderers so a future
+/// Root ipe-id path — matches the Live/Webview renderers so a future
 /// SSR-adopt path sees identical ids.
-const ROOT_SKY_ID: &str = "r";
+const ROOT_IPE_ID: &str = "r";
 
 /// Classified fatal-diagnostic prefix (mirrors the native panic classifier's
 /// taxonomy labels; the instance may be unusable after one of these).
@@ -119,7 +119,7 @@ where
 /// listeners. The first user interaction triggers the normal diff→patch cycle.
 ///
 /// Dev-mode empty-first-diff assertion: after adoption, `diff` of the new
-/// virtual tree against itself must be empty (sky-ids match ↔ SSR and client
+/// virtual tree against itself must be empty (ipe-ids match ↔ SSR and client
 /// view are deterministic). A non-empty diff is a determinism violation — logged
 /// as a classified warning and the DOM is patched to the client's view
 /// (production fallback, never a white-screen).
@@ -216,7 +216,7 @@ where
     let (model, cmd0) = init(synthesize_req(&document)?);
 
     let mut tree = view(model.clone());
-    assign_sky_ids(&mut tree, ROOT_SKY_ID);
+    assign_ipe_ids(&mut tree, ROOT_IPE_ID);
     // One renderer: the DOM starts as exactly the bytes `render_html`
     // produces, so every later `diff` runs against known ground truth.
     body.set_inner_html(&render_html(&tree));
@@ -247,13 +247,13 @@ where
 /// Unlike `mount_app`, this function does NOT overwrite `body.innerHTML`.
 /// The server-rendered DOM is trusted to be byte-identical to what `view(model)`
 /// produces (the hydration-determinism invariant). We:
-/// 1. Compute the virtual tree from `view(model)` and assign sky-ids.
+/// 1. Compute the virtual tree from `view(model)` and assign ipe-ids.
 /// 2. Build the handler index from the virtual tree.
 /// 3. Attach delegated event listeners to `<body>`.
 ///
 /// A dev-mode empty-first-diff assertion follows: diffing `tree` against
 /// itself must yield zero patches (the virtual tree IS ground truth for the
-/// diff engine). A non-empty diff signals a sky-id numbering inconsistency —
+/// diff engine). A non-empty diff signals a ipe-id numbering inconsistency —
 /// logged as a classified warning. Production always falls back to a full
 /// diff-and-replace via the normal update loop, never white-screens.
 fn adopt_app<Model, Msg, FUpdate, FView, FSubs>(
@@ -273,11 +273,11 @@ where
     let body: web_sys::HtmlElement = document.body().ok_or("document has no <body>")?;
 
     let mut tree = view(model.clone());
-    assign_sky_ids(&mut tree, ROOT_SKY_ID);
+    assign_ipe_ids(&mut tree, ROOT_IPE_ID);
 
     // Dev-mode empty-first-diff assertion: `diff(&tree, &tree)` must be empty
     // (the virtual tree IS the diff engine's ground truth; any non-empty result
-    // means the sky-id assignment is non-deterministic — a determinism
+    // means the ipe-id assignment is non-deterministic — a determinism
     // violation). Log a warning and continue: production falls back to a full
     // diff-and-replace on the first real update, never white-screens.
     {
@@ -286,7 +286,7 @@ where
         if !self_patches.is_empty() {
             console_warn(&format!(
                 "hydration-mismatch: self-diff produced {} patch(es) — \
-                 sky-id assignment is non-deterministic; \
+                 ipe-id assignment is non-deterministic; \
                  client will patch DOM on first update",
                 self_patches.len()
             ));
@@ -388,7 +388,7 @@ where
 }
 
 /// Decode + dispatch one delegated DOM event: climb from the target to the
-/// nearest ancestor whose sky-id has a handler for this event name.
+/// nearest ancestor whose ipe-id has a handler for this event name.
 fn on_dom_event<Model, Msg>(app: &Rc<App<Model, Msg>>, name: &'static str, ev: &web_sys::Event)
 where
     Model: Clone + 'static,
@@ -401,7 +401,7 @@ where
 
     let mut cur = target;
     while let Some(el) = cur {
-        if let Some(ipe_id) = el.get_attribute("sky-id") {
+        if let Some(ipe_id) = el.get_attribute("ipe-id") {
             let resolved = if name == "submit" {
                 ev.prevent_default();
                 let fd = collect_form_data(&el);
@@ -528,7 +528,7 @@ where
     *app.model.borrow_mut() = model.clone();
 
     let mut new_tree = (app.view)(model);
-    assign_sky_ids(&mut new_tree, ROOT_SKY_ID);
+    assign_ipe_ids(&mut new_tree, ROOT_IPE_ID);
     let patches = diff(&app.tree.borrow(), &new_tree);
     apply_patches(&patches);
     *app.index.borrow_mut() = build_index(&new_tree);
@@ -576,14 +576,14 @@ where
 }
 
 /// Apply the same `Vec<Patch>` the SSE wire serialises, via typed web-sys
-/// calls. Target lookup is by the `sky-id` attribute, exactly as `client.js`.
+/// calls. Target lookup is by the `ipe-id` attribute, exactly as `client.js`.
 fn apply_patches(patches: &[Patch]) {
     let Ok(document) = document() else {
         console_fatal("PatchTargetLost", "document vanished during patch apply");
         return;
     };
     for p in patches {
-        let selector = format!("[sky-id=\"{}\"]", p.id.replace('"', "\\\""));
+        let selector = format!("[ipe-id=\"{}\"]", p.id.replace('"', "\\\""));
         let Ok(Some(el)) = document.query_selector(&selector) else {
             // A stale id can appear when a parent html-replace in this same
             // batch already rewrote the subtree — benign, matching client.js.

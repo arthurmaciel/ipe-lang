@@ -8,7 +8,7 @@
 //!
 //!   1. `stream ct handler` stashes the (E-erased) handler closure in a global
 //!      registry under a fresh token and returns a normal `ServerResponse`
-//!      whose body is the sentinel `__sky_stream:<token>`. This survives the
+//!      whose body is the sentinel `__ipe_stream:<token>`. This survives the
 //!      ServerResponse bridge (which has no handler field).
 //!
 //!   2. `to_axum_response` (server.rs) calls `serve_streaming_sentinel`. On a
@@ -97,16 +97,16 @@ fn reap_expired_pending_handlers() {
         .retain(|_, (inserted, _)| now.duration_since(*inserted) < PENDING_HANDLER_TTL);
 }
 
-const SENTINEL_PREFIX: &str = "__sky_stream:";
+const SENTINEL_PREFIX: &str = "__ipe_stream:";
 
 /// Per-process random nonce woven into the streaming sentinel. The sentinel is
 /// matched on the BODY of any response, so without an unguessable component an
-/// app (or a relayed upstream) whose body begins `__sky_stream:<digits>` could be
+/// app (or a relayed upstream) whose body begins `__ipe_stream:<digits>` could be
 /// misread as a streaming sentinel and divert control flow. The nonce is drawn
 /// once from the OS-seeded `RandomState` (std-only — no extra crate dep, so this
 /// module compiles in every server/live project regardless of `Uuid` usage) so
 /// body-controlled content can neither forge nor collide with a real sentinel.
-/// Sentinel shape: `__sky_stream:<nonce>:<token>`.
+/// Sentinel shape: `__ipe_stream:<nonce>:<token>`.
 fn sentinel_nonce() -> &'static str {
     static N: OnceLock<String> = OnceLock::new();
     N.get_or_init(|| {
@@ -232,7 +232,7 @@ pub fn server_stream_with_content_type<E: From<String> + Send + 'static>(
 /// sentinel, set up the channel + spawn the handler and return the streaming
 /// axum response; otherwise None (the caller falls back to the buffered path).
 pub fn serve_streaming_sentinel(r: &ServerResponse) -> Option<axum::response::Response> {
-    // Sentinel shape: `__sky_stream:<nonce>:<token>`. The per-process nonce must
+    // Sentinel shape: `__ipe_stream:<nonce>:<token>`. The per-process nonce must
     // match exactly, so application/relayed body content can neither forge nor
     // collide with a real pending stream. A non-match falls through to buffered.
     let rest = r.body.strip_prefix(SENTINEL_PREFIX)?;
@@ -289,7 +289,7 @@ pub fn serve_streaming_sentinel(r: &ServerResponse) -> Option<axum::response::Re
     }
     // On builder failure — an invalid Ipê-supplied content-type / header name or
     // value makes `body()` return Err — DO NOT fall through to `None`: the
-    // caller's None-fallback serves the raw `__sky_stream:<nonce>:<token>`
+    // caller's None-fallback serves the raw `__ipe_stream:<nonce>:<token>`
     // sentinel verbatim to the client (leaking the per-process nonce + emitting
     // garbage). The handler is already popped and its task already spawned, so the
     // only correct outcome is a real streaming response. Emit a 500 with an empty

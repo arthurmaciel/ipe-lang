@@ -71,10 +71,10 @@ fn i193_update_base_skyc_accepts_and_clones_consuming_use() {
         "emitted main.rs must contain the bump function; got:\n{emitted}"
     );
     // The record update always emits a `.clone()` borrow of its base into
-    // `__sky_rec` — its presence confirms the update shape is exercised.
+    // `__ipe_rec` — its presence confirms the update shape is exercised.
     assert!(
-        emitted.contains("__sky_rec") && emitted.contains(").clone();"),
-        "update base must borrow via `let mut __sky_rec = (…).clone();`; \
+        emitted.contains("__ipe_rec") && emitted.contains(").clone();"),
+        "update base must borrow via `let mut __ipe_rec = (…).clone();`; \
          got:\n{emitted}"
     );
     // At least two `model.clone()` occurrences: the access `(model.clone()).tag`

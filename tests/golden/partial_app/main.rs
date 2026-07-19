@@ -240,9 +240,9 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 
 pub fn main_f(a: i64) -> Box<dyn Fn(i64, i64) -> i64 + Send + Sync + 'static> {
     {
-        let __sky_fn: Box<dyn Fn(i64, i64) -> i64 + Send + Sync + 'static> =
+        let __ipe_fn: Box<dyn Fn(i64, i64) -> i64 + Send + Sync + 'static> =
             Box::new(move |b: i64, c: i64| -> i64 { ((a + b) + c) });
-        __sky_fn
+        __ipe_fn
     }
 }
 pub fn main_add3(a: i64, b: i64, c: i64) -> i64 {
@@ -253,9 +253,9 @@ pub fn ipe_main() -> IpeTask<()> {
         let g = crate::main_f(1);
         ({
             let h = {
-                let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
+                let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
                     Box::new(move |eta_0: i64| -> i64 { (g)(2, eta_0) });
-                __sky_fn
+                __ipe_fn
             };
             ({
                 let boundPartial = (h)(3);

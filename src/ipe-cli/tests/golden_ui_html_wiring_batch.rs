@@ -31,7 +31,7 @@
 //!   both-axes `Ui.clip` / `Ui.scrollbars` semantics).
 //! * `Background.linearGradient` renders a `linear-gradient(...)` CSS value.
 //! * `Ui.onPseudo` + all 5 `PseudoClass` constants (`hover`/`focus`/
-//!   `focusVisible`/`active`/`disabled`) attach a `data-sky-pc-rules` marker
+//!   `focusVisible`/`active`/`disabled`) attach a `data-ipe-pc-rules` marker
 //!   with the correct wire tag per constant.
 //! * `Ui.image` renders `<img src=… alt=…>`.
 //!
@@ -151,12 +151,12 @@ fn ui_html_wiring_batch_compiles_builds_and_renders_correctly() {
     );
 
     // ── Ui.onPseudo + hover/focus/focusVisible/active/disabled ───────────────
-    // Encoded as `data-sky-pc-rules="h|css||f|css||v|css||a|css||d|css"`
+    // Encoded as `data-ipe-pc-rules="h|css||f|css||v|css||a|css||d|css"`
     // (`||`-joined `tag|css` segments) — one segment per onPseudo call above.
     for tag in ["h", "f", "v", "a", "d"] {
         assert!(
             ui.contains(&format!("{tag}|background-color:rgba(")),
-            "Ui.onPseudo must attach a data-sky-pc-rules segment for wire tag \
+            "Ui.onPseudo must attach a data-ipe-pc-rules segment for wire tag \
              {tag:?}\n--- ui ---\n{ui}"
         );
     }
@@ -171,9 +171,9 @@ fn ui_html_wiring_batch_compiles_builds_and_renders_correctly() {
         "Ui.image src/alt malformed\n--- ui ---\n{ui}"
     );
 
-    // ── Ui.onFile — wire event name "sky-file" ────────────────────────────────
+    // ── Ui.onFile — wire event name "ipe-file" ────────────────────────────────
     assert!(
-        ui.contains("data-sky-on=\"sky-file\""),
-        "Ui.onFile must register a data-sky-on=\"sky-file\" handler marker\n--- ui ---\n{ui}"
+        ui.contains("data-ipe-on=\"ipe-file\""),
+        "Ui.onFile must register a data-ipe-on=\"ipe-file\" handler marker\n--- ui ---\n{ui}"
     );
 }

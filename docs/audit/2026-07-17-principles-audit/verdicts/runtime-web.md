@@ -79,7 +79,7 @@ Read-only; every verdict traced against the cited `file:line`.
 - reasoning: verified the divergence directly. `hub_exporter::enable_from_env`
   parses the URL and refuses non-https/non-loopback, disabling the exporter
   (`hub_exporter.rs:102-119`). `push_exporter::enable_from_env` just
-  `format!("{}/_sky/observability/ingest", parent…)` with NO scheme/host check
+  `format!("{}/_ipe/observability/ingest", parent…)` with NO scheme/host check
   (`push_exporter.rs:75`) before the token is attached. Sibling exporters diverge;
   same secret-in-transit class the hub already guards. Low correct.
 - dup-of: —
@@ -143,7 +143,7 @@ Read-only; every verdict traced against the cited `file:line`.
 
 ## RT-LIVE-005 · CONFIRMED (smell)
 - final severity: low (completeness / invalid-states-representable — smell)
-- reachability: `EventBody` from `/_sky/event` POST; `Route.build` indexes the
+- reachability: `EventBody` from `/_ipe/event` POST; `Route.build` indexes the
   captured-params Vec. No panic reachable from the fixed compile-time route table
   (`match_route` returns exactly the pattern's param count).
 - reasoning: `EventBody` keeps `handler_id`+`id` and `event`+`msg` reconciled by
@@ -187,15 +187,15 @@ Read-only; every verdict traced against the cited `file:line`.
 - reachability: any app using `Keyed.column`/`Keyed.row` (advertised in the
   authoring reference) with reorderable lists carrying uncontrolled inputs / focus.
 - reasoning: verified both claims. `keyed_column_`/`keyed_row_` DROP the key via
-  `.map(|(_, e)| e)` (`keyed.rs:21,31`) instead of attaching `sky-key`. The
+  `.map(|(_, e)| e)` (`keyed.rs:21,31`) instead of attaching `ipe-key`. The
   machinery that would consume it EXISTS and is tested:
-  `assign_sky_ids_depth` → `ipe_id_key` reads the `sky-key` attr
+  `assign_ipe_ids_depth` → `ipe_id_key` reads the `ipe-key` attr
   (`html.rs:703,718-719`), and test `keyed_items_keep_id_across_reorder`
-  (`html.rs:1313`) proves keyed items keep sky-id identity across reorder WHEN the
-  attr is present. Without it, positional sky-ids shift on reorder → the diff
+  (`html.rs:1313`) proves keyed items keep ipe-id identity across reorder WHEN the
+  attr is present. Without it, positional ipe-ids shift on reorder → the diff
   patches the wrong elements and uncontrolled-input state / focus attaches to the
   wrong row. The module doc's "keys are a performance hint, not a behavioural
-  contract — semantically correct" is FALSE for this positional-sky-id runtime.
+  contract — semantically correct" is FALSE for this positional-ipe-id runtime.
   The doc cites `docs/divergences-from-sky.md §B-Keyed`; that file has §B-Lazy
   ONLY — no §B-Keyed section exists. Phantom citation → ledger requirement
   violated. Medium correct.

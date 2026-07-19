@@ -155,7 +155,7 @@ fn json_dec_pipeline_lambda1() {
 // ── Fix A: plain-value factory-wrap ──────────────────────────────────────────
 
 /// `succeed 42` — plain integer value; the emitter factory-wraps it as
-/// `decode_succeed({ let __sky_succeed = 42; Box::new(move || __sky_succeed.clone()) })`.
+/// `decode_succeed({ let __ipe_succeed = 42; Box::new(move || __ipe_succeed.clone()) })`.
 /// Output: `"42"`.
 #[test]
 fn json_dec_succeed_value() {

@@ -2,7 +2,7 @@
 //!
 //! Replaces the in-process `console.rs` plain-HTML shell with the **real bundled
 //! Ipe.Live console**, spawned as a child process and reverse-proxied at
-//! `/_sky/console/*`. The console binary is **pre-built at the user's `sky build`
+//! `/_ipe/console/*`. The console binary is **pre-built at the user's `sky build`
 //! time** into a shared cache — at runtime this module only `exec`s it,
 //! never builds. See `runtime-rust/README.md` §"Rust vs Go — divergent strategies"
 //! for why Rust takes the separate-process path Go abandoned (Go's subprocess
@@ -18,16 +18,16 @@ use std::time::{Duration, Instant};
 use tokio::process::{Child, Command};
 
 /// Override for the pre-built console binary path. When unset, the cache path
-/// (`~/.cache/sky/rust-console/<sky-version>/sky-console`, written at build time) is used.
+/// (`~/.cache/sky/rust-console/<sky-version>/ipe-console`, written at build time) is used.
 const CONSOLE_BIN_ENV: &str = "IPE_CONSOLE_BIN";
 
 /// The mount prefix. The parent proxies everything under this path to the child
 /// and STRIPS the prefix before forwarding (the strip convention — see the
 /// module doc): the child's router stays root-relative, identical to a
 /// standalone Live app. The child only learns the prefix via `IPE_LIVE_BASE_PATH`
-/// (so its rendered `/_sky/event` / `/_sky/sse` URLs come back prefixed and we
+/// (so its rendered `/_ipe/event` / `/_ipe/sse` URLs come back prefixed and we
 /// strip them again on the way in).
-const CONSOLE_BASE: &str = "/_sky/console";
+const CONSOLE_BASE: &str = "/_ipe/console";
 
 /// Request-body buffer cap for the proxy (16 MiB). Event POST bodies are far
 /// smaller (`IPE_LIVE_MAX_BODY_BYTES` defaults to 5 MiB); this is the hard
@@ -56,17 +56,17 @@ pub fn console_bin_path() -> Option<std::path::PathBuf> {
         let pb = std::path::PathBuf::from(p);
         return if pb.is_file() { Some(pb) } else { None };
     }
-    // Key on the SKY compiler version (same source as `/_sky/buildinfo`), NOT
+    // Key on the SKY compiler version (same source as `/_ipe/buildinfo`), NOT
     // the generated crate's CARGO_PKG_VERSION (always "0.1.0"). The ipe build
     // sets IPE_VERSION when compiling this app, and Sky.Build.Rust.Console
     // caches the console binary under the SAME version — so both agree on the
-    // `~/.cache/sky/rust-console/<ver>/sky-console` path.
+    // `~/.cache/sky/rust-console/<ver>/ipe-console` path.
     let ver = option_env!("IPE_VERSION").unwrap_or("dev");
     let home = crate::system::read_env_var("HOME").ok()?;
     let pb = std::path::Path::new(&home)
         .join(".cache/sky/rust-console")
         .join(ver)
-        .join("sky-console");
+        .join("ipe-console");
     if pb.is_file() { Some(pb) } else { None }
 }
 
@@ -131,7 +131,7 @@ pub fn spawn_console(child_port: u16, store: &str, child_collects: bool) -> Opti
     let bin = console_bin_path()?;
     let mut cmd = Command::new(&bin);
     cmd.env("IPE_LIVE_PORT", child_port.to_string())
-        .env("IPE_LIVE_BASE_PATH", "/_sky/console")
+        .env("IPE_LIVE_BASE_PATH", "/_ipe/console")
         // Belt-and-braces: suppress the child's own console auto-mount + banner.
         .env("IPE_CONSOLE_EMBED", "off")
         .kill_on_drop(true);
@@ -238,9 +238,9 @@ fn error_response(status: axum::http::StatusCode, msg: &str) -> axum::response::
     (status, msg.to_string()).into_response()
 }
 
-/// Forward one request to `upstream`, STRIPPING the `/_sky/console` prefix from
+/// Forward one request to `upstream`, STRIPPING the `/_ipe/console` prefix from
 /// the path (strip convention). Response body is streamed, so SSE
-/// (`/_sky/console/_sky/sse`) passes through without buffering. No panic
+/// (`/_ipe/console/_ipe/sse`) passes through without buffering. No panic
 /// vectors: every fallible step degrades to a 502/503, never `unwrap`.
 ///
 /// Factored to take `client` + `upstream` explicitly (rather than reading the
@@ -251,7 +251,7 @@ async fn forward(
     upstream: &str,
     req: axum::extract::Request,
 ) -> axum::response::Response {
-    // Strip the mount prefix: `/_sky/console` → `/`, `/_sky/console/x` → `/x`.
+    // Strip the mount prefix: `/_ipe/console` → `/`, `/_ipe/console/x` → `/x`.
     let path = req.uri().path();
     let rest = path.strip_prefix(CONSOLE_BASE).unwrap_or(path);
     let rest = if rest.is_empty() { "/" } else { rest };
@@ -331,7 +331,7 @@ async fn forward(
 async fn proxy_entry(req: axum::extract::Request) -> axum::response::Response {
     // Per-request auth, defense-in-depth. The PRIMARY enforcement is the
     // outermost `observability::track` middleware, which routes every
-    // `/_sky/console*` request through `console::gate_blocked` (production →
+    // `/_ipe/console*` request through `console::gate_blocked` (production →
     // Bearer admin token required; dev open) BEFORE it reaches this handler — so
     // the proxied path is already gated. This second call to the SAME gate keeps
     // the sensitive console surface protected even if a future router change ever
@@ -395,7 +395,7 @@ fn console_store_path() -> String {
     match crate::system::read_env_var("IPE_CONSOLE_DB_PATH") {
         Ok(p) if !p.is_empty() => p,
         // Default to a per-process file in the temp dir, but add an UNGUESSABLE
-        // suffix: a bare `sky-console-<pid>.db` is predictable, so a local
+        // suffix: a bare `ipe-console-<pid>.db` is predictable, so a local
         // attacker on the shared temp dir could pre-create that path (or a
         // symlink) and hijack/redirect the console store (TOCTOU). The nonce is
         // OS-seeded via RandomState (std-only — no new crate in this shared
@@ -407,7 +407,7 @@ fn console_store_path() -> String {
                 .finish();
             std::env::temp_dir()
                 .join(format!(
-                    "sky-console-{}-{:016x}.db",
+                    "ipe-console-{}-{:016x}.db",
                     std::process::id(),
                     nonce
                 ))
@@ -472,7 +472,7 @@ pub async fn ensure_console_proxy() -> bool {
     // requests without limit. `connect_timeout` caps the TCP handshake; a
     // `read_timeout` (per-read inactivity, NOT a total `.timeout`) caps a child
     // that accepts the connection then stalls — set well above the Ipe.Live SSE
-    // heartbeat (~15 s) + TTL (~35 s) so long-lived `/_sky/sse` streams are not
+    // heartbeat (~15 s) + TTL (~35 s) so long-lived `/_ipe/sse` streams are not
     // severed. `.build()` only fails on a TLS-backend init error (we use none
     // for loopback http); fall back to the default client rather than panic.
     let client = reqwest::Client::builder()
@@ -501,7 +501,7 @@ pub async fn ensure_console_proxy() -> bool {
     true
 }
 
-/// Add the reverse-proxy routes (`/_sky/console` + `/_sky/console/*rest`) to a
+/// Add the reverse-proxy routes (`/_ipe/console` + `/_ipe/console/*rest`) to a
 /// router. Generic over the app state `S` because `proxy_entry` is state-free —
 /// so this composes into the main `Router<LiveState<…>>` before `with_state`,
 /// keeping the proxy under the same `track` middleware as every other route.
@@ -541,7 +541,7 @@ mod tests {
     #[test]
     fn bin_path_none_when_absent() {
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var(CONSOLE_BIN_ENV, "/nonexistent/sky-console-xyz") };
+        unsafe { std::env::set_var(CONSOLE_BIN_ENV, "/nonexistent/ipe-console-xyz") };
         assert!(console_bin_path().is_none());
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::remove_var(CONSOLE_BIN_ENV) };
@@ -551,7 +551,7 @@ mod tests {
     fn spawn_returns_none_without_binary() {
         // No binary at the override path → None (caller falls back), no panic.
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var(CONSOLE_BIN_ENV, "/nonexistent/sky-console-xyz") };
+        unsafe { std::env::set_var(CONSOLE_BIN_ENV, "/nonexistent/ipe-console-xyz") };
         assert!(spawn_console(9931, "", false).is_none());
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::remove_var(CONSOLE_BIN_ENV) };
@@ -578,7 +578,7 @@ mod tests {
     }
 
     // Spin a throwaway upstream that echoes "METHOD PATH BODY", forward a
-    // parent-shaped request through `forward`, and assert the /_sky/console
+    // parent-shaped request through `forward`, and assert the /_ipe/console
     // prefix is stripped while method + body + query round-trip.
     #[tokio::test]
     async fn forward_strips_prefix_and_round_trips() {
@@ -607,10 +607,10 @@ mod tests {
             let _ = axum::serve(listener, app).await;
         });
 
-        // The parent receives POST /_sky/console/_sky/event?x=1 with body "hi".
+        // The parent receives POST /_ipe/console/_ipe/event?x=1 with body "hi".
         let req = axum::http::Request::builder()
             .method("POST")
-            .uri("/_sky/console/_sky/event?x=1")
+            .uri("/_ipe/console/_ipe/event?x=1")
             .body(axum::body::Body::from("hi"))
             .expect("build req");
 
@@ -623,11 +623,11 @@ mod tests {
             .await
             .expect("read resp body");
         let text = String::from_utf8_lossy(&bytes);
-        // Prefix stripped → child sees /_sky/event; method, query, body preserved.
-        assert_eq!(text, "POST /_sky/event?x=1 hi", "got: {text}");
+        // Prefix stripped → child sees /_ipe/event; method, query, body preserved.
+        assert_eq!(text, "POST /_ipe/event?x=1 hi", "got: {text}");
     }
 
-    // The bare mount path `/_sky/console` (no trailing slash) maps to the
+    // The bare mount path `/_ipe/console` (no trailing slash) maps to the
     // child's root `/`.
     #[tokio::test]
     async fn forward_bare_base_maps_to_root() {
@@ -648,7 +648,7 @@ mod tests {
 
         let req = axum::http::Request::builder()
             .method("GET")
-            .uri("/_sky/console")
+            .uri("/_ipe/console")
             .body(axum::body::Body::empty())
             .expect("build req");
 

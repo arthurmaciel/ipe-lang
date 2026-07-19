@@ -244,9 +244,9 @@ pub fn ipe_main() -> IpeTask<()> {
             let eta_0: Vec<i64> = vec![1, 2, 3];
             list_map_consume(
                 {
-                    let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
+                    let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
                         Box::new(move |x: i64| -> i64 { (x + 1) });
-                    __sky_fn
+                    __ipe_fn
                 },
                 eta_0,
             )

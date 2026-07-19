@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""Canonicalise a Ipe.Live page's #sky-root subtree for Go≡Rust equivalence.
+"""Canonicalise a Ipe.Live page's #ipe-root subtree for Go≡Rust equivalence.
 
 The Go and Rust backends are committed to BEHAVIOURAL parity, not byte-identical
 output: several surface forms are legitimate implementation freedoms that this
 normaliser collapses so a diff shows only behaviourally-meaningful divergences:
 
-  * sky-id separators — Go `r.1#div.15`, Rust `r_1_div_15` encode the SAME
+  * ipe-id separators — Go `r.1#div.15`, Rust `r_1_div_15` encode the SAME
     structural path; collapse `#`/`.` → `_`. (machine-internal id; never user-seen)
   * attribute order — both sort for self-determinism (map/HashMap randomisation);
     the specific order is arbitrary. Sort alphabetically on both sides.
-  * event wire-encoding — Go `sky-click="Dec"` (Msg) + `_click`-suffixed hid vs
-    Rust `sky-click="click"` + `data-sky-on`. Same behaviour; canonicalise to the
+  * event wire-encoding — Go `ipe-click="Dec"` (Msg) + `_click`-suffixed hid vs
+    Rust `ipe-click="click"` + `data-ipe-on`. Same behaviour; canonicalise to the
     SET of event TYPES the element handles (`data-events="click,input"`).
   * pseudo-class / media-query / animation / transition STYLE DELIVERY — Go emits
-    a scoped <style> child; Rust emits `data-sky-*-rules` attributes the client
+    a scoped <style> child; Rust emits `data-ipe-*-rules` attributes the client
     turns into CSS. Same visual; drop both delivery forms.
   * SVG chart coordinates — NUMERICALLY CANONICALISED, not masked. The upstream
     Go bug this used to hide (`Math.min`/`Math.max` truncating Float args to Int,
@@ -39,20 +39,20 @@ inline `style=` layout, user attrs (data-test-id, href, …), which events each
 element handles, and now SVG coordinate VALUES (within tolerance). The textarea-
 value and console-badge regressions both surface here.
 
-Usage:  equivalence_normalize_html.py <page.html>   # prints the canonical #sky-root form
+Usage:  equivalence_normalize_html.py <page.html>   # prints the canonical #ipe-root form
 """
 import sys
 import re
 from html.parser import HTMLParser
 
-SKYID_KEYS = ('sky-id', 'data-sky-hid', 'data-sky-pc', 'data-sky-mq',
-              'data-sky-anim', 'data-sky-tr', 'data-sky-key')
+SKYID_KEYS = ('ipe-id', 'data-ipe-hid', 'data-ipe-pc', 'data-ipe-mq',
+              'data-ipe-anim', 'data-ipe-tr', 'data-ipe-key')
 VOID = {'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
         'link', 'meta', 'param', 'source', 'track', 'wbr'}
-DELIVERY_ATTRS = ('data-sky-pc-rules', 'data-sky-mq-q', 'data-sky-mq-rules',
-                  'data-sky-tr-rules', 'data-sky-tr-respect', 'data-sky-anim-name',
-                  'data-sky-anim-rules', 'data-sky-anim-keyframes')
-GO_STYLE_SCOPE = ('data-sky-pc', 'data-sky-mq', 'data-sky-anim', 'data-sky-tr')
+DELIVERY_ATTRS = ('data-ipe-pc-rules', 'data-ipe-mq-q', 'data-ipe-mq-rules',
+                  'data-ipe-tr-rules', 'data-ipe-tr-respect', 'data-ipe-anim-name',
+                  'data-ipe-anim-rules', 'data-ipe-anim-keyframes')
+GO_STYLE_SCOPE = ('data-ipe-pc', 'data-ipe-mq', 'data-ipe-anim', 'data-ipe-tr')
 # NB: keys MUST be lowercase — HTMLParser lowercases every attribute name during
 # parsing, so `k in SVG_COORD` always sees the lowercased form ('viewbox', not
 # 'viewBox'). A camelCase entry here would be dead (never match).
@@ -116,7 +116,7 @@ def esc_attr(v):
 
 
 def norm_style_text(t):
-    return re.sub(r'sky-id="([^"]*)"', lambda m: 'sky-id="%s"' % norm_skyid(m.group(1)), t)
+    return re.sub(r'ipe-id="([^"]*)"', lambda m: 'ipe-id="%s"' % norm_skyid(m.group(1)), t)
 
 
 class Norm(HTMLParser):
@@ -147,9 +147,9 @@ class Norm(HTMLParser):
         for k, v in attrs:
             if v is None:
                 v = ''
-            if k in ('data-sky-on', 'data-sky-hid') or k in DELIVERY_ATTRS:
+            if k in ('data-ipe-on', 'data-ipe-hid') or k in DELIVERY_ATTRS:
                 continue
-            if k.startswith('sky-') and k != 'sky-id' and k != 'sky-key':
+            if k.startswith('sky-') and k != 'ipe-id' and k != 'ipe-key':
                 events.add(k[4:])
                 continue
             if k in SKYID_KEYS:
@@ -197,7 +197,7 @@ class Norm(HTMLParser):
 
 
 class RootExtractor(HTMLParser):
-    """Capture the outerHTML of the element carrying id="sky-root" via a real
+    """Capture the outerHTML of the element carrying id="ipe-root" via a real
     stack-based parse. Robust against `>` inside attribute values (a greedy
     `[^>]*?` regex truncates on those) and free of the O(n^2) regex tag-scan; the
     parser advances linearly. Reconstructs faithfully (raw start tags via
@@ -213,7 +213,7 @@ class RootExtractor(HTMLParser):
 
     def _is_root(self, attrs):
         return not self.capturing and any(
-            k == 'id' and v == 'sky-root' for k, v in attrs)
+            k == 'id' and v == 'ipe-root' for k, v in attrs)
 
     def handle_starttag(self, tag, attrs):
         if self.done:
@@ -262,10 +262,10 @@ class RootExtractor(HTMLParser):
 
 
 def extract_sky_root(html):
-    """Return the #sky-root element subtree (the rendered Ipe.Ui view), or '' —
+    """Return the #ipe-root element subtree (the rendered Ipe.Ui view), or '' —
     we compare the VIEW, not the page shell (Go inlines client JS, Rust externalises
     it; the shell legitimately differs)."""
-    if 'id="sky-root"' not in html:
+    if 'id="ipe-root"' not in html:
         return ''
     ex = RootExtractor()
     ex.feed(html)

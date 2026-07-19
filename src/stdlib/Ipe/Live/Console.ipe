@@ -3,7 +3,7 @@
 --
 -- The `consoleAuth` callback is row-polymorphic, optional, and has
 -- shape `Request -> Task Error (Maybe Identity)`.  When the framework
--- gates `/_sky/console` in `app`-mode (env `IPE_CONSOLE_AUTH=app`),
+-- gates `/_ipe/console` in `app`-mode (env `IPE_CONSOLE_AUTH=app`),
 -- it invokes the callback per request, BEFORE mounting console
 -- routes.  `Nothing` → 403 + structured `console.auth.denied` audit
 -- log.  `Just identity` → request continues; the identity rides on
@@ -27,7 +27,7 @@ module Ipe.Live.Console exposing
 --
 --     consoleAuth : Request -> Task Error (Maybe Identity)
 --
--- When the framework gates `/_sky/console` in `app`-mode (env
+-- When the framework gates `/_ipe/console` in `app`-mode (env
 -- `IPE_CONSOLE_AUTH=app`), it invokes the callback per request,
 -- BEFORE mounting console routes. `Nothing` → 403 + structured
 -- `console.auth.denied` audit log. `Just identity` → the request

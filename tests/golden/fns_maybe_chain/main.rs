@@ -243,14 +243,14 @@ pub fn ipe_main() -> IpeTask<()> {
         0,
         ipe_maybe_and_then(
             ipe_maybe_map(IpeMaybe::Just(5), {
-                let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
+                let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
                     Box::new(move |x: i64| -> i64 { (x * 10) });
-                __sky_fn
+                __ipe_fn
             }),
             {
-                let __sky_fn: Box<dyn Fn(i64) -> IpeMaybe<i64> + Send + Sync + 'static> =
+                let __ipe_fn: Box<dyn Fn(i64) -> IpeMaybe<i64> + Send + Sync + 'static> =
                     Box::new(move |x: i64| -> IpeMaybe<i64> { IpeMaybe::Just((x + 1)) });
-                __sky_fn
+                __ipe_fn
             },
         ),
     )))

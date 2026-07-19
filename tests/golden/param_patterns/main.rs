@@ -310,44 +310,44 @@ pub fn ipe_main() -> IpeTask<()> {
     log_println(string_from_int(
         ((((((((crate::main_apply_i(
             {
-                let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
+                let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
                     Box::new(move |arg_5: i64| -> i64 { 42 });
-                __sky_fn
+                __ipe_fn
             },
             0,
         ) + crate::main_apply_p(
             {
-                let __sky_fn: Box<dyn Fn((i64, i64)) -> i64 + Send + Sync + 'static> =
+                let __ipe_fn: Box<dyn Fn((i64, i64)) -> i64 + Send + Sync + 'static> =
                     Box::new(move |arg_6: (i64, i64)| -> i64 {
                         ({
                             let (a, b) = arg_6;
                             (a + b)
                         })
                     });
-                __sky_fn
+                __ipe_fn
             },
             (1, 2),
         )) + crate::main_apply_r(
             {
-                let __sky_fn: Box<dyn Fn(RecXY) -> i64 + Send + Sync + 'static> =
+                let __ipe_fn: Box<dyn Fn(RecXY) -> i64 + Send + Sync + 'static> =
                     Box::new(move |arg_7: RecXY| -> i64 {
                         ({
                             let RecXY { x, y: _, .. } = arg_7;
                             x
                         })
                     });
-                __sky_fn
+                __ipe_fn
             },
             RecXY { x: 10, y: 5 },
         )) + crate::main_apply_m({
-            let __sky_fn: Box<dyn Fn(i64, i64, (i64, i64)) -> i64 + Send + Sync + 'static> =
+            let __ipe_fn: Box<dyn Fn(i64, i64, (i64, i64)) -> i64 + Send + Sync + 'static> =
                 Box::new(move |arg_8: i64, x: i64, arg_9: (i64, i64)| -> i64 {
                     ({
                         let (a, b) = arg_9;
                         ((x + a) + b)
                     })
                 });
-            __sky_fn
+            __ipe_fn
         })) + crate::main_ignore_arg(99))
             + crate::main_sum_pair((4, 5)))
             + crate::main_get_y(RecXY { x: 1, y: 8 }))

@@ -257,7 +257,7 @@ pub fn ui_scrollbar_y_<M>() -> Attribute<M> {
 
 /// `Ui.gridColumns : Int -> Attribute msg`
 pub fn ui_grid_columns_<M>(n: i64) -> Attribute<M> {
-    Attribute::AttrStyle("--sky-grid-columns".to_owned(), n.to_string())
+    Attribute::AttrStyle("--ipe-grid-columns".to_owned(), n.to_string())
 }
 
 // ── Length builders ───────────────────────────────────────────────────────────
@@ -652,13 +652,13 @@ pub fn ui_on_bool_<M>(f: std::sync::Arc<dyn Fn(bool) -> M + Send + Sync>) -> Att
 }
 
 /// `Ui.onFile : (String -> msg) -> Attribute msg` — wire event name
-/// `"sky-file"`. The browser-side driver reads the chosen file,
+/// `"ipe-file"`. The browser-side driver reads the chosen file,
 /// base64-encodes it as a data URL, and dispatches the URL string to the
 /// handler (mirrors `Ipe.Html.Events.onFile`'s `EventAttr (OnString
-/// "sky-file" handler)` on the `../sky` reference).
+/// "ipe-file" handler)` on the `../sky` reference).
 pub fn ui_on_file_<M>(f: std::sync::Arc<dyn Fn(String) -> M + Send + Sync>) -> Attribute<M> {
     Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnString(
-        "sky-file".into(),
+        "ipe-file".into(),
         f,
     )))
 }
@@ -715,7 +715,7 @@ pub fn ui_grid_tracks_raw_<M>(cols: String, rows: String) -> Attribute<M> {
 /// `Ipe.Ui.Animation.buildKeyframesBody`), and a respect-`prefers-reduced-motion`
 /// flag. Mirrors `ui_transition_raw_`. The live style-injection pass
 /// (`live::style_inject::build_anim`) auto-suffixes `name` with the element's
-/// sky-id (so two `"fadeIn"`s with different keyframes don't collide), gates the
+/// ipe-id (so two `"fadeIn"`s with different keyframes don't collide), gates the
 /// rule behind `@media (prefers-reduced-motion: no-preference)` when `respect =
 /// True`, and validates the keyframes body through `sink_safe_keyframes_body`.
 pub fn ui_animate_raw_<M>(
@@ -1229,9 +1229,9 @@ pub fn ui_behind_<M: Clone>(elem: Element<M>) -> Attribute<M> {
 // upstream's `breakpoint bp attrs child = mediaQuery (breakpointToQuery bp)
 // attrs child` and `breakpointToQuery` is the identity under this typing,
 // `ui_breakpoint_` delegates to `ui_media_query_` — both emit the
-// `data-sky-mq-q` / `data-sky-mq-rules` marker pair consumed by
-// `live::style_inject::build_mq` into a sky-id-scoped
-// `<style data-sky-mq="<sid>">@media <q> { [sky-id="<sid>"] { <rules> } }</style>`
+// `data-ipe-mq-q` / `data-ipe-mq-rules` marker pair consumed by
+// `live::style_inject::build_mq` into a ipe-id-scoped
+// `<style data-ipe-mq="<sid>">@media <q> { [ipe-id="<sid>"] { <rules> } }</style>`
 // block.  (See docs/adr/0019-ui-mediaquery-safe-boundary.md.)
 
 // NOTE: these six breakpoint constants return a bare `String` with NO `M` in
@@ -1314,7 +1314,7 @@ pub fn ui_disabled_() -> PseudoClass {
 /// css)`. Sub-module helpers (`Background.hoverColor`, `Font.hoverColor`,
 /// etc.) build on this exact primitive on the `../sky` reference; mirrored
 /// here so both paths render through the identical collector + the
-/// `data-sky-pc-rules` marker consumed by
+/// `data-ipe-pc-rules` marker consumed by
 /// `ipe_runtime::live::style_inject::build_pc`.
 pub fn ui_on_pseudo_<M: Clone>(pc: PseudoClass, attrs: Vec<Attribute<M>>) -> Attribute<M> {
     Attribute::AttrPseudoRule(pc, super::render::build_style_string(&attrs))
@@ -1324,16 +1324,16 @@ pub fn ui_on_pseudo_<M: Clone>(pc: PseudoClass, attrs: Vec<Attribute<M>>) -> Att
 ///
 /// Raw-CSS-media-query escape hatch (mirrors `../sky` `Ipe.Ui.sky`'s
 /// `mediaQuery`): wraps `child` in a `<div>` carrying the
-/// `data-sky-mq-q` (the query) + `data-sky-mq-rules` (the attrs folded
+/// `data-ipe-mq-q` (the query) + `data-ipe-mq-rules` (the attrs folded
 /// through the SAME `render::build_style_string` collector as the inline
 /// `style=""` path and `Ui.onPseudo`, so every value-as-data attr inherits
 /// the `SafeCssValue` gate) marker pair.  The Ipe.Live / Ipe.Webview render
-/// pipelines consume the markers post-`assign_sky_ids` via
+/// pipelines consume the markers post-`assign_ipe_ids` via
 /// `live::style_inject::apply_style_injections` (`build_mq`), emitting a
-/// sky-id-scoped `<style data-sky-mq="<sid>">@media <q> {
-/// [sky-id="<sid>"] { <rules> } }</style>` child — two media queries on the
+/// ipe-id-scoped `<style data-ipe-mq="<sid>">@media <q> {
+/// [ipe-id="<sid>"] { <rules> } }</style>` child — two media queries on the
 /// same page cannot cross-contaminate because each rule is keyed to its own
-/// sky-id.
+/// ipe-id.
 ///
 /// SECURITY (fail-closed): the query string is attacker-influenceable and is
 /// spliced into the `@media … {` position of a raw `<style>` body, so it is
@@ -1355,8 +1355,8 @@ pub fn ui_media_query_<M: Clone>(
     let rules = super::render::build_style_string(&attrs);
     let markers = match SafeCssMediaQuery::parse(&query) {
         Some(q) if !rules.is_empty() => vec![
-            Attribute::AttrAttribute("data-sky-mq-q".to_owned(), q.as_str().to_owned()),
-            Attribute::AttrAttribute("data-sky-mq-rules".to_owned(), rules),
+            Attribute::AttrAttribute("data-ipe-mq-q".to_owned(), q.as_str().to_owned()),
+            Attribute::AttrAttribute("data-ipe-mq-rules".to_owned(), rules),
         ],
         // Gate failure or nothing to style → no markers (fail-closed drop of
         // the styling only; the child still renders inside the wrapper).

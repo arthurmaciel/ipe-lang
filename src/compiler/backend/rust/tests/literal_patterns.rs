@@ -365,14 +365,14 @@ fn alias_subpattern_renders_binding_with_subpattern() -> DResult<()> {
     // as `y @ x` (that spelling double-moves a non-`Copy` payload — sound
     // only under a by-ref binding mode). It binds a fresh temp and
     // re-derives both binders in the arm prelude via the clone-rebuild
-    // strategy: `MkWrap(__sky_arm_alias_0) => { let y = __sky_arm_alias_0;
+    // strategy: `MkWrap(__ipe_arm_alias_0) => { let y = __ipe_arm_alias_0;
     // let x = y.clone(); … }`.
     assert!(
-        src.contains("MainWrap::MkWrap(__sky_arm_alias_0) =>"),
+        src.contains("MainWrap::MkWrap(__ipe_arm_alias_0) =>"),
         "alias pattern must bind a temp in a by-value ctor payload; got:\n{src}"
     );
     assert!(
-        src.contains("let y = __sky_arm_alias_0;"),
+        src.contains("let y = __ipe_arm_alias_0;"),
         "alias binder must re-derive from the temp; got:\n{src}"
     );
     assert!(

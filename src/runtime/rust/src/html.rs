@@ -148,7 +148,7 @@ pub(crate) fn is_void(tag: &str) -> bool {
 
 /// Render an `Html` tree to an HTML string. Text is HTML-escaped; Raw is
 /// emitted verbatim; void elements self-close with no children; event
-/// handlers emit a `data-sky-on="<space-separated event names>"` marker
+/// handlers emit a `data-ipe-on="<space-separated event names>"` marker
 /// attribute that the browser client reads to bind listeners. Mirrors Go
 /// `renderVNode`.
 pub fn render_html<M>(node: &Html<M>) -> String {
@@ -157,7 +157,7 @@ pub fn render_html<M>(node: &Html<M>) -> String {
     s
 }
 
-/// Maximum Html nesting depth the renderer and the sky-id stamper descend.
+/// Maximum Html nesting depth the renderer and the ipe-id stamper descend.
 /// The Html tree is produced by the Ipê `view` from Model, and Model commonly
 /// holds attacker-influenced data (nested comments / replies / a worst-case
 /// string folded into a chain of wrapper elements). Recursing once per nesting
@@ -201,7 +201,7 @@ fn render_into_ctx<M>(
         // SECURITY: verbatim (un-escaped) text is reachable ONLY here, with
         // raw_text=true, which is set ONLY when the parent tag is the literal
         // "script"/"style" (see the child loop below). Ipe.Ui never produces a
-        // script/style ELEMENT — its styling flows through data-sky-* markers
+        // script/style ELEMENT — its styling flows through data-ipe-* markers
         // consumed server-side — so the "Ipe.Ui HTML-escapes everything" contract
         // is NOT weakened. This path is the documented Ipe.Html raw escape hatch
         // (`node "script" [] [text code]`): the author owns sanitisation of any
@@ -264,7 +264,7 @@ fn render_into_ctx<M>(
                 match a {
                     Attribute::Attr(k, v) => {
                         let k = k.as_str();
-                        if k == "sky-id" {
+                        if k == "ipe-id" {
                             ipe_id = Some(v);
                         }
                         match pairs.iter_mut().find(|(pk, _)| *pk == k) {
@@ -350,37 +350,37 @@ fn render_into_ctx<M>(
                 s.push('"');
             }
             // Browser-client wire markers (live/client.js): the delegated
-            // binder scans for `[sky-<event>]`, reads `data-sky-hid` for the
-            // sky-id, and posts the `sky-<event>` value as `msg`. We make that
+            // binder scans for `[sky-<event>]`, reads `data-ipe-hid` for the
+            // ipe-id, and posts the `sky-<event>` value as `msg`. We make that
             // value the EVENT NAME so the server can tell click from submit
             // (the client doesn't send the event type otherwise) — the handler
-            // resolves by (sky-id, event). `data-sky-on` is kept for parity
+            // resolves by (ipe-id, event). `data-ipe-on` is kept for parity
             // with Go's render.
-            // Event names are emitted unescaped as both the `data-sky-on` value
+            // Event names are emitted unescaped as both the `data-ipe-on` value
             // and the `sky-<ev>` attribute key — an unsafe name injects markup.
             // Drop any that aren't valid HTML names.
             events.retain(|e| is_safe_html_name(e));
             if !events.is_empty() {
-                s.push_str(" data-sky-on=\"");
+                s.push_str(" data-ipe-on=\"");
                 s.push_str(&events.join(" "));
                 s.push('"');
                 if let Some(id) = ipe_id {
-                    s.push_str(" data-sky-hid=\"");
+                    s.push_str(" data-ipe-hid=\"");
                     s.push_str(&escape_attr(id));
                     s.push('"');
                 }
                 for ev in &events {
                     // File/image meta-events arrive already `sky-`-prefixed
-                    // (`sky-image`/`sky-file`); the client's upload driver reads
-                    // them via the `data-sky-ev-<name>` HTML5 data-attribute
+                    // (`ipe-image`/`ipe-file`); the client's upload driver reads
+                    // them via the `data-ipe-ev-<name>` HTML5 data-attribute
                     // convention, while plain DOM events keep `sky-<name>` (Go
-                    // live.go:395-405). Emitting `sky-sky-image` made the driver
+                    // live.go:395-405). Emitting `sky-ipe-image` made the driver
                     // lookup miss, so uploads never fired. `ev` is already
                     // name-gated (events.retain above), so both keys are safe.
-                    let key = if ev.starts_with("sky-") {
-                        format!("data-sky-ev-{ev}")
+                    let key = if ev.starts_with("ipe-") {
+                        format!("data-ipe-ev-{ev}")
                     } else {
-                        format!("sky-{ev}")
+                        format!("ipe-{ev}")
                     };
                     s.push(' ');
                     s.push_str(&key);
@@ -676,30 +676,30 @@ pub(crate) fn safe_patch_attr<'a>(name: &'a str, value: &'a str) -> Option<(&'a 
     Some((safe_name, sanitise_url_attr(name, value)))
 }
 
-/// Stamp every HElement (not HText/HRaw) with a stable `sky-id` attribute derived
-/// from its path. Idempotent: an existing sky-id is overwritten with the same
+/// Stamp every HElement (not HText/HRaw) with a stable `ipe-id` attribute derived
+/// from its path. Idempotent: an existing ipe-id is overwritten with the same
 /// value. HText/HRaw nodes are unaddressable (Go parity).
 ///
 /// Each non-root segment is `{path}_{idx}_{tag}[:{key}]` — the embedded tag means
 /// two structurally different subtrees never share an id at the same positional
-/// depth, and the optional `:{key}` disambiguator (from an explicit `sky-key`
+/// depth, and the optional `:{key}` disambiguator (from an explicit `ipe-key`
 /// attribute, or implicit from `name` on form-bearing tags) lets keyed list items
-/// and named form fields keep identity across reorder. Mirrors Go `assignSkyIDs`
-/// / `skyIDKey` (`runtime-go/rt/live.go`).
-pub fn assign_sky_ids<M>(node: &mut Html<M>, path: &str) {
-    assign_sky_ids_depth(node, path, 0)
+/// and named form fields keep identity across reorder. Mirrors Go `assignIpeIDs`
+/// / `ipeIDKey` (`runtime-go/rt/live.go`).
+pub fn assign_ipe_ids<M>(node: &mut Html<M>, path: &str) {
+    assign_ipe_ids_depth(node, path, 0)
 }
 
 // Same bounded-descent rationale as render_into_ctx (see MAX_HTML_DEPTH): the
 // stamper recurses once per nesting level, so an attacker-influenced deep tree
 // would overflow the stack. Stop descending at the cap. Kept in step with the
 // renderer's cap so a node the renderer drops is also left unstamped.
-fn assign_sky_ids_depth<M>(node: &mut Html<M>, path: &str, depth: usize) {
+fn assign_ipe_ids_depth<M>(node: &mut Html<M>, path: &str, depth: usize) {
     if depth >= MAX_HTML_DEPTH {
         return;
     }
     if let Html::HElement(_tag, attrs, kids) = node {
-        set_attr(attrs, "sky-id", path);
+        set_attr(attrs, "ipe-id", path);
         let mut idx = 0usize;
         for child in kids.iter_mut() {
             if let Html::HElement(ctag, cattrs, _) = child {
@@ -709,21 +709,21 @@ fn assign_sky_ids_depth<M>(node: &mut Html<M>, path: &str, depth: usize) {
                     seg.push_str(&key);
                 }
                 idx += 1;
-                assign_sky_ids_depth(child, &seg, depth.saturating_add(1));
+                assign_ipe_ids_depth(child, &seg, depth.saturating_add(1));
             }
         }
     }
 }
 
 /// Stable disambiguator for an element, or `None`. Priority: an explicit
-/// `sky-key` attribute (set by `Html.keyed`), then `name` on form-bearing tags.
-/// Any matched value is sanitised so it can't corrupt the sky-id grammar.
-/// Mirrors Go `skyIDKey`.
+/// `ipe-key` attribute (set by `Html.keyed`), then `name` on form-bearing tags.
+/// Any matched value is sanitised so it can't corrupt the ipe-id grammar.
+/// Mirrors Go `ipeIDKey`.
 fn ipe_id_key<M>(tag: &str, attrs: &[Attribute<M>]) -> Option<String> {
-    if let Some(k) = attr_value(attrs, "sky-key")
+    if let Some(k) = attr_value(attrs, "ipe-key")
         && !k.is_empty()
     {
-        return Some(sanitise_sky_id_key(k));
+        return Some(sanitise_ipe_id_key(k));
     }
     if matches!(
         tag,
@@ -731,7 +731,7 @@ fn ipe_id_key<M>(tag: &str, attrs: &[Attribute<M>]) -> Option<String> {
     ) && let Some(k) = attr_value(attrs, "name")
         && !k.is_empty()
     {
-        return Some(sanitise_sky_id_key(k));
+        return Some(sanitise_ipe_id_key(k));
     }
     None
 }
@@ -744,9 +744,9 @@ fn attr_value<'a, M>(attrs: &'a [Attribute<M>], key: &str) -> Option<&'a str> {
 }
 
 /// Replace anything outside `[A-Za-z0-9_-]` with `_`. Prevents the key from
-/// breaking sky-id parsing, CSS selector escaping, or HTML attribute quoting.
-/// Mirrors Go `sanitiseSkyIDKey`.
-fn sanitise_sky_id_key(s: &str) -> String {
+/// breaking ipe-id parsing, CSS selector escaping, or HTML attribute quoting.
+/// Mirrors Go `sanitiseIpeIDKey`.
+fn sanitise_ipe_id_key(s: &str) -> String {
     s.chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
@@ -988,7 +988,7 @@ pub fn html_attr_to_string_<M>(attr: Attribute<M>) -> String {
         }
         Attribute::BoolAttr(k, true) if SafeAttrName::parse(&k).is_some() => k,
         Attribute::EventAttr(e) if is_safe_html_name(e.name()) => {
-            format!("data-sky-on=\"{}\"", e.name())
+            format!("data-ipe-on=\"{}\"", e.name())
         }
         // unsafe key / event name, false bool attr, or NoAttr → emit nothing
         Attribute::Attr(..)
@@ -1046,13 +1046,13 @@ mod tests {
             ],
         );
         let mut t = t;
-        assign_sky_ids(&mut t, "r");
+        assign_ipe_ids(&mut t, "r");
         let s = render_html(&t);
-        assert!(s.contains(r#"<div class="x" sky-id="r">"#), "{s}");
+        assert!(s.contains(r#"<div class="x" ipe-id="r">"#), "{s}");
         // Attrs are sorted alphabetically; BoolAttr renders as `k="true"`; void
         // elements self-close — all to match Go renderVNode.
         assert!(
-            s.contains(r#"<input disabled="true" sky-id="r_0_input" value="a&lt;b" />"#),
+            s.contains(r#"<input disabled="true" ipe-id="r_0_input" value="a&lt;b" />"#),
             "{s}"
         );
         assert!(s.contains("1 &lt; 2"));
@@ -1076,7 +1076,7 @@ mod tests {
             vec![],
         );
         let mut t = t;
-        assign_sky_ids(&mut t, "r");
+        assign_ipe_ids(&mut t, "r");
         let s = render_html(&t);
         let low = s.to_ascii_lowercase();
         assert!(!low.contains("onerror"), "{s}");
@@ -1257,7 +1257,7 @@ mod tests {
             vec![Attribute::Attr("href".into(), "/x?q='z".into())],
             vec![],
         );
-        assign_sky_ids(&mut t, "r");
+        assign_ipe_ids(&mut t, "r");
         let s = render_html(&t);
         assert!(s.contains("href=\"/x?q=&#39;z\""), "{s}");
     }
@@ -1270,9 +1270,9 @@ mod tests {
             vec![],
         );
         let mut t = t;
-        assign_sky_ids(&mut t, "r");
+        assign_ipe_ids(&mut t, "r");
         let s = render_html(&t);
-        assert!(s.contains(r#"data-sky-on="click""#), "{s}");
+        assert!(s.contains(r#"data-ipe-on="click""#), "{s}");
     }
 
     #[test]
@@ -1285,11 +1285,11 @@ mod tests {
                 Html::HElement("span".into(), vec![], vec![]),
             ],
         );
-        assign_sky_ids(&mut t, "r");
+        assign_ipe_ids(&mut t, "r");
         let ids = collect_ids(&t);
         assert_eq!(ids, vec!["r", "r_0_span", "r_1_span"]);
         let mut t2 = t.clone();
-        assign_sky_ids(&mut t2, "r");
+        assign_ipe_ids(&mut t2, "r");
         assert_eq!(collect_ids(&t2), ids);
     }
 
@@ -1299,7 +1299,7 @@ mod tests {
             if let Html::HElement(_, attrs, kids) = n {
                 for a in attrs {
                     if let Attribute::Attr(k, v) = a
-                        && k == "sky-id"
+                        && k == "ipe-id"
                     {
                         out.push(v.clone());
                     }
@@ -1320,14 +1320,14 @@ mod tests {
         let li = |k: &str| -> Html<()> {
             Html::HElement(
                 "li".into(),
-                vec![Attribute::Attr("sky-key".into(), k.into())],
+                vec![Attribute::Attr("ipe-key".into(), k.into())],
                 vec![Html::HText(k.into())],
             )
         };
         let mut a: Html<()> = Html::HElement("ul".into(), vec![], vec![li("alpha"), li("beta")]);
         let mut b: Html<()> = Html::HElement("ul".into(), vec![], vec![li("beta"), li("alpha")]);
-        assign_sky_ids(&mut a, "r");
-        assign_sky_ids(&mut b, "r");
+        assign_ipe_ids(&mut a, "r");
+        assign_ipe_ids(&mut b, "r");
         let ids_a = collect_ids(&a);
         let ids_b = collect_ids(&b);
         // alpha keeps the same id in both renders even though its position moved.
@@ -1352,14 +1352,14 @@ mod tests {
                 vec![],
             )],
         );
-        assign_sky_ids(&mut t, "r");
+        assign_ipe_ids(&mut t, "r");
         assert!(collect_ids(&t).contains(&"r_0_input:email".to_string()));
     }
 
     #[test]
     fn ipe_key_value_is_sanitised() {
-        assert_eq!(sanitise_sky_id_key("a/b c.d"), "a_b_c_d");
-        assert_eq!(sanitise_sky_id_key("keep-_OK9"), "keep-_OK9");
+        assert_eq!(sanitise_ipe_id_key("a/b c.d"), "a_b_c_d");
+        assert_eq!(sanitise_ipe_id_key("keep-_OK9"), "keep-_OK9");
     }
 
     #[test]
@@ -1608,7 +1608,7 @@ mod tests {
         }
         let attr: Attribute<String> = html_on_raw_("submit".to_owned(), |o: Order| o.item);
         let mut t: Html<String> = Html::HElement("form".into(), vec![attr], vec![]);
-        assign_sky_ids(&mut t, "r");
+        assign_ipe_ids(&mut t, "r");
         let idx = crate::live::build_index(&t);
 
         // Must dispatch via resolve_form (Event::OnForm), never resolve()'s

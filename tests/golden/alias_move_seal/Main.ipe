@@ -40,7 +40,7 @@ letPos pair =
     String.append (String.append a b) (String.append x y)
 
 -- NESTED alias: `(h, ((c, d) as inner))` — an alias nested inside a tuple
--- binder, exercising the fresh-temp (`__sky_bind_N`) path in a by-value binding.
+-- binder, exercising the fresh-temp (`__ipe_bind_N`) path in a by-value binding.
 nestedPos : (String, (String, String)) -> String
 nestedPos (h, ((c, d) as inner)) =
     let

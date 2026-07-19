@@ -3,7 +3,7 @@
 //! When a Rust Live app runs as a sub-app under a parent (`IPE_PARENT_URL` set),
 //! this background exporter batches its logs + spans and POSTs them every
 //! `IPE_OBSERVABILITY_PUSH_INTERVAL_MS` (default 2000) to the parent's
-//! `/_sky/observability/ingest` — the symmetric counterpart to the receiver in
+//! `/_ipe/observability/ingest` — the symmetric counterpart to the receiver in
 //! `live/console.rs`. Mirrors Go's `observability_push.go` (PushExporter).
 //!
 //! `live`-gated (uses reqwest). Best-effort end to end: a bounded queue drops on
@@ -90,7 +90,7 @@ pub async fn enable_from_env() {
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(DEFAULT_INTERVAL_MS);
-    let ingest_url = format!("{}/_sky/observability/ingest", parent.trim_end_matches('/'));
+    let ingest_url = format!("{}/_ipe/observability/ingest", parent.trim_end_matches('/'));
     enable("federation", ingest_url, interval_ms);
 }
 
@@ -117,11 +117,11 @@ fn url_allows_cleartext_token(url: &str) -> bool {
 /// Enable pushing THIS app's telemetry to a LOCAL console-child collector
 /// ("push-to-local-collector"): a lean parent (no SQLite) batches its
 /// in-RAM telemetry and POSTs it to the console child's
-/// `/_sky/observability/ingest`, where the child (which owns sqlx + the store)
+/// `/_ipe/observability/ingest`, where the child (which owns sqlx + the store)
 /// records → spills → serves it. Called by the console mount after the child is
 /// ready, when the parent has no spill of its own.
 pub async fn enable_to_console(child_port: u16) {
-    let ingest_url = format!("http://127.0.0.1:{child_port}/_sky/observability/ingest");
+    let ingest_url = format!("http://127.0.0.1:{child_port}/_ipe/observability/ingest");
     enable("console-collector", ingest_url, DEFAULT_INTERVAL_MS);
 }
 
@@ -258,7 +258,7 @@ async fn flush(client: &reqwest::Client, ingest_url: &str, token: Option<&str>, 
         .header("content-type", "application/json")
         .body(body);
     if let Some(t) = token {
-        req = req.header("x-sky-ingest-token", t);
+        req = req.header("x-ipe-ingest-token", t);
     }
     if let Err(e) = req.send().await {
         eprintln!("[sky.push] flush to {ingest_url}: {e}");

@@ -11,7 +11,7 @@
 //!   callee-position exemption fires only at `depth == 0`.  At depth > 0 the
 //!   symbol is consumed by an inner `move` closure → outer `FnOnce` → E0525.
 //! * **Fix 3 T4** — `eta_expand_partial` complex-arg hoist: non-Var supplied
-//!   args are lifted to `let __sky_cap_i = <expr>` OUTSIDE the lambda so the
+//!   args are lifted to `let __ipe_cap_i = <expr>` OUTSIDE the lambda so the
 //!   lambda captures the named binding (Clone-wrapped) rather than inlining
 //!   the expression with its free vars captured bare.
 //! * **Fix 4 T7** — `eta_expand_partial` fail-close: `ir_type_from_ty` → None
@@ -169,8 +169,8 @@ fn c02_record_capture_fix1() {
 /// arg `String.append base suffix` is a complex expression (not a bare Var).
 /// Without the fix, the expr was inlined into the eta-lambda body; `base` and `suffix`
 /// (both String, `CloneOk`) were captured bare → `FnOnce` → `E0525` on second call.
-/// Fix 3 T4: hoist to `let __sky_cap_0 = <expr>` outside the lambda; lambda
-/// captures `CloneVar(__sky_cap_0)` → re-callable.
+/// Fix 3 T4: hoist to `let __ipe_cap_0 = <expr>` outside the lambda; lambda
+/// captures `CloneVar(__ipe_cap_0)` → re-callable.
 /// Expected output: "hello! hello?".
 #[test]
 fn c13_complex_arg_hoist_t4() {

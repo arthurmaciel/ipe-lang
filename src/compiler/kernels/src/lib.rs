@@ -965,7 +965,7 @@ pub enum StdlibKernel {
     UiOnBool,
     UiOnSubmit, // (a -> msg) -> Attribute msg  — form submit
     /// `Ui.onFile : (String -> msg) -> Attribute msg` — wire event name
-    /// `"sky-file"`; the browser-side driver reads the chosen file, base64
+    /// `"ipe-file"`; the browser-side driver reads the chosen file, base64
     /// data-URL-encodes it, and dispatches the URL string to the handler.
     UiOnFile,
     // ── Ipe.Html.Events builders — produce `Ipe.Html.Attribute msg`
@@ -1011,13 +1011,13 @@ pub enum StdlibKernel {
     ///
     /// Raw-CSS-media-query escape hatch (the typed `Breakpoint` constants
     /// cover the common cases via `Ui.breakpoint`). Wraps `child` in a
-    /// marker-carrying `<div>` (`data-sky-mq-q` = the query, gated through
-    /// `SafeCssMediaQuery`; `data-sky-mq-rules` = the attrs folded through
+    /// marker-carrying `<div>` (`data-ipe-mq-q` = the query, gated through
+    /// `SafeCssMediaQuery`; `data-ipe-mq-rules` = the attrs folded through
     /// the shared `build_style_string` collector). The Live / Webview render
     /// pipelines consume the markers via
     /// `live::style_inject::apply_style_injections` (`build_mq`) into a
-    /// sky-id-scoped `<style data-sky-mq="<sid>">@media <q> {
-    /// [sky-id="<sid>"] { <rules> } }</style>` block. See
+    /// ipe-id-scoped `<style data-ipe-mq="<sid>">@media <q> {
+    /// [ipe-id="<sid>"] { <rules> } }</style>` block. See
     /// `docs/adr/0019-ui-mediaquery-safe-boundary.md`.
     UiMediaQuery,
     UiMobile,        // Breakpoint constant: "(max-width: 767px)"
@@ -1233,7 +1233,7 @@ pub enum StdlibKernel {
     LazyLazy4,
     /// `Lazy.lazy5 : (a -> b -> c -> d -> e -> Element msg) -> a -> b -> c -> d -> e -> Element msg` (eager)
     LazyLazy5,
-    // ── Ipe.Ui.Keyed — sky-key for diff identity ─────────────────────────
+    // ── Ipe.Ui.Keyed — ipe-key for diff identity ─────────────────────────
     /// `Keyed.column : List (Attribute msg) -> List (String, Element msg) -> Element msg`
     KeyedColumn,
     /// `Keyed.row : List (Attribute msg) -> List (String, Element msg) -> Element msg`

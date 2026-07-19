@@ -345,11 +345,11 @@ fn collect_html_attrs<M: Clone>(attrs: &[Attribute<M>]) -> Vec<HtmlAttribute<M>>
     let mut out: Vec<HtmlAttribute<M>> = Vec::new();
     // `AttrPseudoRule` entries (from `Ui.onPseudo` and the `hoverColor` /
     // `focusColor` / `activeColor` / `disabledColor` sub-module helpers that
-    // build on it) are collected into ONE `data-sky-pc-rules` marker attr,
+    // build on it) are collected into ONE `data-ipe-pc-rules` marker attr,
     // wire-format `"<tag>|<css>||<tag2>|<css2>"` — consumed by
-    // `ipe_runtime::live::style_inject::build_pc` (called post-`assign_sky_ids`
+    // `ipe_runtime::live::style_inject::build_pc` (called post-`assign_ipe_ids`
     // from the Ipe.Live / Ipe.Webview render pipelines), which expands it into
-    // a sky-id-scoped `<style>` block. Multiple entries with the SAME tag are
+    // a ipe-id-scoped `<style>` block. Multiple entries with the SAME tag are
     // NOT merged (each keeps its own `tag|css` segment) — matches the `../sky`
     // reference's `injectPseudoClassStyles` wire contract.
     let mut pseudo_rules: Vec<String> = Vec::new();
@@ -397,7 +397,7 @@ fn collect_html_attrs<M: Clone>(attrs: &[Attribute<M>]) -> Vec<HtmlAttribute<M>>
     }
     if !pseudo_rules.is_empty() {
         out.push(HtmlAttribute::Attr(
-            "data-sky-pc-rules".to_owned(),
+            "data-ipe-pc-rules".to_owned(),
             pseudo_rules.join("||"),
         ));
     }
@@ -473,7 +473,7 @@ fn render_element<M: Clone>(elem: Element<M>) -> Html<M> {
 /// Bounded descent: at `MAX_HTML_DEPTH` the subtree is dropped (empty text
 /// node) rather than recursed into — a truncated render is strictly better than
 /// overflowing the thread stack. Same ceiling as `html.rs::render_into_ctx` and
-/// `html.rs::assign_sky_ids_depth`.
+/// `html.rs::assign_ipe_ids_depth`.
 fn render_element_depth<M: Clone>(elem: Element<M>, depth: usize) -> Html<M> {
     if depth >= crate::html::MAX_HTML_DEPTH {
         return Html::HText(String::new());
@@ -865,14 +865,14 @@ mod tests {
         use crate::html::{Attribute as HtmlAttr, Event};
         // Constructs TestMsg::Click — suppresses the dead-code lint while adding
         // genuine coverage for the AttrEvent/Event::OnMsg path through
-        // collect_html_attrs → render_html's data-sky-on emission.
+        // collect_html_attrs → render_html's data-ipe-on emission.
         let evt = HtmlAttr::EventAttr(Event::OnMsg("click".to_owned(), TestMsg::Click));
         let attrs = vec![Attribute::AttrEvent(evt)];
         let elem: Element<TestMsg> = Element::Text("press me".to_owned());
         let html = ui_layout(attrs, elem);
         let s = render_html(&html);
         assert!(
-            s.contains("data-sky-on=\"click\""),
+            s.contains("data-ipe-on=\"click\""),
             "click event handler must register in rendered HTML: {s}"
         );
         assert!(s.contains("press me"), "element text must render: {s}");
@@ -986,9 +986,9 @@ mod tests {
     #[test]
     fn ui_on_pseudo_emits_data_sky_pc_rules_marker() {
         // `Ui.onPseudo Ui.hover [Background.color red]` must attach a
-        // `data-sky-pc-rules="h|background-color:rgba(255,0,0,1)"` marker —
+        // `data-ipe-pc-rules="h|background-color:rgba(255,0,0,1)"` marker —
         // the wire format `ipe_runtime::live::style_inject::build_pc` decodes
-        // into a sky-id-scoped `<style>` block post-`assign_sky_ids`.
+        // into a ipe-id-scoped `<style>` block post-`assign_ipe_ids`.
         let inner = vec![Attribute::AttrBgColor(Color::Rgba(255, 0, 0, 1.0))];
         let pseudo_attr =
             super::super::helpers::ui_on_pseudo_(super::super::helpers::ui_hover_(), inner);
@@ -997,7 +997,7 @@ mod tests {
         let html = ui_layout(attrs, elem);
         let s = render_html(&html);
         assert!(
-            s.contains("data-sky-pc-rules=\"h|background-color:rgba(255,0,0,1)\""),
+            s.contains("data-ipe-pc-rules=\"h|background-color:rgba(255,0,0,1)\""),
             "onPseudo(hover) marker missing/malformed: {s}"
         );
     }
@@ -1005,11 +1005,11 @@ mod tests {
     #[test]
     fn ui_media_query_emits_wrapper_with_mq_markers() {
         // `Ui.mediaQuery "(min-width: 768px)" [Background.color …] child` must
-        // wrap the child in a <div> carrying data-sky-mq-q (the verbatim
-        // query) + data-sky-mq-rules (the attrs folded through
+        // wrap the child in a <div> carrying data-ipe-mq-q (the verbatim
+        // query) + data-ipe-mq-rules (the attrs folded through
         // build_style_string) — the wire pair
         // `ipe_runtime::live::style_inject::build_mq` decodes into a
-        // sky-id-scoped <style> block post-`assign_sky_ids`.
+        // ipe-id-scoped <style> block post-`assign_ipe_ids`.
         let elem = super::super::helpers::ui_media_query_::<TestMsg>(
             "(min-width: 768px)".to_owned(),
             vec![Attribute::AttrBgColor(Color::Rgba(18, 18, 24, 1.0))],
@@ -1018,11 +1018,11 @@ mod tests {
         let html = ui_layout(vec![], elem);
         let s = render_html(&html);
         assert!(
-            s.contains("data-sky-mq-q=\"(min-width: 768px)\""),
+            s.contains("data-ipe-mq-q=\"(min-width: 768px)\""),
             "mediaQuery query marker missing/malformed: {s}"
         );
         assert!(
-            s.contains("data-sky-mq-rules=\"background-color:rgba(18,18,24,1)\""),
+            s.contains("data-ipe-mq-rules=\"background-color:rgba(18,18,24,1)\""),
             "mediaQuery rules marker missing/malformed: {s}"
         );
         assert!(s.contains("responsive"), "child must render: {s}");
@@ -1042,11 +1042,11 @@ mod tests {
         let html = ui_layout(vec![], elem);
         let s = render_html(&html);
         assert!(
-            s.contains("data-sky-mq-q=\"(max-width: 767px)\""),
+            s.contains("data-ipe-mq-q=\"(max-width: 767px)\""),
             "breakpoint must emit the Ui.mobile media-query marker: {s}"
         );
         assert!(
-            s.contains("data-sky-mq-rules=\"background-color:rgba(1,2,3,1)\""),
+            s.contains("data-ipe-mq-rules=\"background-color:rgba(1,2,3,1)\""),
             "breakpoint rules marker missing: {s}"
         );
     }
@@ -1064,7 +1064,7 @@ mod tests {
         let html = ui_layout(vec![], elem);
         let s = render_html(&html);
         assert!(
-            !s.contains("data-sky-mq-q") && !s.contains("data-sky-mq-rules"),
+            !s.contains("data-ipe-mq-q") && !s.contains("data-ipe-mq-rules"),
             "breakout query must drop BOTH markers: {s}"
         );
         assert!(!s.contains("<script"), "script must never render: {s}");
@@ -1173,7 +1173,7 @@ mod tests {
     #[test]
     fn multiple_pseudo_rules_merge_into_one_marker() {
         // #113 spec §1.4: two pseudo-class sugars on ONE element must merge
-        // into a single `data-sky-pc-rules` marker with `||`-joined entries.
+        // into a single `data-ipe-pc-rules` marker with `||`-joined entries.
         // NB: `Border.focusColor` maps to `PseudoClass::FocusVisible` (wire
         // tag "v"), not `Focus` ("f") — see `ui_border_focus_color_`.
         let attrs: Vec<Attribute<TestMsg>> = vec![
@@ -1187,7 +1187,7 @@ mod tests {
         assert!(s.contains("||"), "entries must be || joined: {s}");
         assert!(s.contains("v|border-color:rgba(0,0,255,1)"), "{s}");
         assert_eq!(
-            s.matches("data-sky-pc-rules").count(),
+            s.matches("data-ipe-pc-rules").count(),
             1,
             "exactly ONE merged marker attr, not one per rule: {s}"
         );
@@ -1232,10 +1232,10 @@ mod tests {
             super::super::helpers::ui_on_file_::<TestMsg>(std::sync::Arc::new(|_s| TestMsg::Click));
         match attr {
             Attribute::AttrEvent(HtmlAttr::EventAttr(Event::OnString(name, _))) => {
-                assert_eq!(name, "sky-file", "onFile must wire as event name sky-file");
+                assert_eq!(name, "ipe-file", "onFile must wire as event name ipe-file");
             }
             other => {
-                panic!("expected AttrEvent(EventAttr(OnString(\"sky-file\", _))), got {other:?}")
+                panic!("expected AttrEvent(EventAttr(OnString(\"ipe-file\", _))), got {other:?}")
             }
         }
     }

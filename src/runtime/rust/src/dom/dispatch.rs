@@ -1,7 +1,7 @@
 use crate::html::*;
 use std::collections::HashMap;
 
-/// Per-session handler index: maps `sky-id` → (`event-name` → the cloneable
+/// Per-session handler index: maps `ipe-id` → (`event-name` → the cloneable
 /// `Event` that owns the handler closure, via `Arc`).
 ///
 /// Built once per `view` commit via [`build_index`]; thrown away and rebuilt
@@ -22,7 +22,7 @@ impl<M: Clone> HandlerIndex<M> {
     /// - `OnBool`  — calls the closure with `args[0] == "true"` (or `false`).
     /// - `OnForm`  — dispatched via [`Self::resolve_form`]; returns `None` here.
     ///
-    /// Returns `None` when the sky-id is unknown or the event name doesn't
+    /// Returns `None` when the ipe-id is unknown or the event name doesn't
     /// match any registered handler.
     pub fn resolve(&self, ipe_id: &str, event: &str, args: &[String]) -> Option<M> {
         match self.map.get(ipe_id)?.get(event)? {
@@ -45,12 +45,12 @@ impl<M: Clone> HandlerIndex<M> {
 }
 
 /// Build a [`HandlerIndex`] by walking `root` and collecting every
-/// `Attribute::Event` keyed by its element's `sky-id` + event name.
+/// `Attribute::Event` keyed by its element's `ipe-id` + event name.
 ///
-/// Precondition: `assign_sky_ids` must have been called on `root` first.
-/// Elements without a `sky-id` attribute (shouldn't happen after assignment)
+/// Precondition: `assign_ipe_ids` must have been called on `root` first.
+/// Elements without a `ipe-id` attribute (shouldn't happen after assignment)
 /// are indexed under the empty-string key, which is harmless — no browser
-/// event will carry an empty sky-id.
+/// event will carry an empty ipe-id.
 pub fn build_index<M: Clone>(root: &Html<M>) -> HandlerIndex<M> {
     let mut map = HashMap::new();
     walk(root, &mut map);
@@ -70,7 +70,7 @@ fn walk<M: Clone>(root: &Html<M>, map: &mut HashMap<String, HashMap<String, Even
             let id = attrs
                 .iter()
                 .find_map(|a| match a {
-                    Attribute::Attr(k, v) if k == "sky-id" => Some(v.clone()),
+                    Attribute::Attr(k, v) if k == "ipe-id" => Some(v.clone()),
                     _ => None,
                 })
                 .unwrap_or_default();
@@ -122,7 +122,7 @@ mod tests {
                 ),
             ],
         );
-        assign_sky_ids(&mut t, "r");
+        assign_ipe_ids(&mut t, "r");
         t
     }
 
@@ -154,7 +154,7 @@ mod tests {
             ))],
             vec![],
         );
-        assign_sky_ids(&mut t, "r");
+        assign_ipe_ids(&mut t, "r");
         let idx = build_index(&t);
         assert_eq!(idx.resolve("r", "change", &["true".into()]), Some(Msg::Inc));
         assert_eq!(
@@ -175,7 +175,7 @@ mod tests {
             ))],
             vec![],
         );
-        assign_sky_ids(&mut t, "r");
+        assign_ipe_ids(&mut t, "r");
         let idx = build_index(&t);
 
         // resolve() returns None for OnForm; resolve_form() dispatches it.
@@ -211,7 +211,7 @@ mod tests {
             other => panic!("expected AttrEvent, got {other:?}"),
         };
         let mut t = Html::HElement("form".into(), vec![html_attr], vec![]);
-        assign_sky_ids(&mut t, "r");
+        assign_ipe_ids(&mut t, "r");
         let idx = build_index(&t);
 
         // Must dispatch via resolve_form (Event::OnForm), NOT resolve()
@@ -237,7 +237,7 @@ mod tests {
             ))],
             vec![],
         );
-        assign_sky_ids(&mut t, "r");
+        assign_ipe_ids(&mut t, "r");
         let idx = build_index(&t);
         // No args → closure receives ""
         assert_eq!(

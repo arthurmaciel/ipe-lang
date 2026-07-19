@@ -1143,11 +1143,11 @@ fn emit_http_call(
 ///   **`HttpWithFollowRedirects f req`**, **`HttpWithMaxRedirects n req`**
 ///   (last three: Go parity) — each emits a clone-and-reassign
 ///   block
-///   (`{ let mut __sky_rec = (req).clone(); __sky_rec.field = val; __sky_rec }`)
+///   (`{ let mut __ipe_rec = (req).clone(); __ipe_rec.field = val; __ipe_rec }`)
 ///   matching the `emit_update` pattern so the source record is moved once.
 ///
 /// * **`HttpWithHeader k v req`** — emits a prepend:
-///   `{ let mut __sky_rec = (req).clone(); __sky_rec.headers.insert(0, (k, v)); __sky_rec }`.
+///   `{ let mut __ipe_rec = (req).clone(); __ipe_rec.headers.insert(0, (k, v)); __ipe_rec }`.
 ///   PREPEND (cons-prepend) matches the Go reference implementation in `Http.ipe`
 ///   (`{ req | headers = (k, v) :: req.headers }`), so `withHeader "B" "2"` after
 ///   `withHeader "A" "1"` yields `B:2,A:1` in iteration order.
@@ -1221,8 +1221,8 @@ fn emit_http_builder_call(
             let m_s = emit_expr_at(ctx, m, indent, child, generics)?;
             let req_s = emit_expr_at(ctx, req, indent, child, generics)?;
             Ok(Some(format!(
-                "{{ let mut __sky_rec = ({req_s}).clone(); \
-                 __sky_rec.method = {m_s}; __sky_rec }}"
+                "{{ let mut __ipe_rec = ({req_s}).clone(); \
+                 __ipe_rec.method = {m_s}; __ipe_rec }}"
             )))
         }
         KernelFn::HttpWithTimeout => {
@@ -1238,8 +1238,8 @@ fn emit_http_builder_call(
             let t_s = emit_expr_at(ctx, t, indent, child, generics)?;
             let req_s = emit_expr_at(ctx, req, indent, child, generics)?;
             Ok(Some(format!(
-                "{{ let mut __sky_rec = ({req_s}).clone(); \
-                 __sky_rec.timeout = {t_s}; __sky_rec }}"
+                "{{ let mut __ipe_rec = ({req_s}).clone(); \
+                 __ipe_rec.timeout = {t_s}; __ipe_rec }}"
             )))
         }
         KernelFn::HttpWithBody => {
@@ -1255,8 +1255,8 @@ fn emit_http_builder_call(
             let b_s = emit_expr_at(ctx, b, indent, child, generics)?;
             let req_s = emit_expr_at(ctx, req, indent, child, generics)?;
             Ok(Some(format!(
-                "{{ let mut __sky_rec = ({req_s}).clone(); \
-                 __sky_rec.body = {b_s}; __sky_rec }}"
+                "{{ let mut __ipe_rec = ({req_s}).clone(); \
+                 __ipe_rec.body = {b_s}; __ipe_rec }}"
             )))
         }
         KernelFn::HttpWithUrl => {
@@ -1272,8 +1272,8 @@ fn emit_http_builder_call(
             let u_s = emit_expr_at(ctx, u, indent, child, generics)?;
             let req_s = emit_expr_at(ctx, req, indent, child, generics)?;
             Ok(Some(format!(
-                "{{ let mut __sky_rec = ({req_s}).clone(); \
-                 __sky_rec.url = {u_s}; __sky_rec }}"
+                "{{ let mut __ipe_rec = ({req_s}).clone(); \
+                 __ipe_rec.url = {u_s}; __ipe_rec }}"
             )))
         }
         KernelFn::HttpWithFollowRedirects => {
@@ -1289,8 +1289,8 @@ fn emit_http_builder_call(
             let f_s = emit_expr_at(ctx, f, indent, child, generics)?;
             let req_s = emit_expr_at(ctx, req, indent, child, generics)?;
             Ok(Some(format!(
-                "{{ let mut __sky_rec = ({req_s}).clone(); \
-                 __sky_rec.followRedirects = {f_s}; __sky_rec }}"
+                "{{ let mut __ipe_rec = ({req_s}).clone(); \
+                 __ipe_rec.followRedirects = {f_s}; __ipe_rec }}"
             )))
         }
         KernelFn::HttpWithMaxRedirects => {
@@ -1306,8 +1306,8 @@ fn emit_http_builder_call(
             let n_s = emit_expr_at(ctx, n, indent, child, generics)?;
             let req_s = emit_expr_at(ctx, req, indent, child, generics)?;
             Ok(Some(format!(
-                "{{ let mut __sky_rec = ({req_s}).clone(); \
-                 __sky_rec.maxRedirects = {n_s}; __sky_rec }}"
+                "{{ let mut __ipe_rec = ({req_s}).clone(); \
+                 __ipe_rec.maxRedirects = {n_s}; __ipe_rec }}"
             )))
         }
         KernelFn::HttpWithHeader => {
@@ -1329,8 +1329,8 @@ fn emit_http_builder_call(
             let v_s = emit_expr_at(ctx, v_arg, indent, child, generics)?;
             let req_s = emit_expr_at(ctx, req, indent, child, generics)?;
             Ok(Some(format!(
-                "{{ let mut __sky_rec = ({req_s}).clone(); \
-                 __sky_rec.headers.insert(0, ({k_s}, {v_s})); __sky_rec }}"
+                "{{ let mut __ipe_rec = ({req_s}).clone(); \
+                 __ipe_rec.headers.insert(0, ({k_s}, {v_s})); __ipe_rec }}"
             )))
         }
         // Unreachable: the guard at the top of this function constrains `k` to the
@@ -1367,7 +1367,7 @@ fn emit_http_builder_call(
 /// Design rationale:
 /// - `RetryPolicy e` is a closed record with a function field `shouldRetry : e ->
 ///   Bool`.  Because `Box<dyn Fn>` is not `Clone`, builders use MOVE semantics
-///   (`let mut __sky_rec = (rec); __sky_rec.field = val; __sky_rec`) rather than
+///   (`let mut __ipe_rec = (rec); __ipe_rec.field = val; __ipe_rec`) rather than
 ///   `.clone()`.
 /// - `Task.retryWith` decomposes the policy and calls the runtime function
 ///   `ipe_runtime::task::task_retry_with`, adapting the `Box<dyn Fn(E) -> bool>`
@@ -1474,7 +1474,7 @@ fn emit_task_retry_call(
             })?;
             let policy_s = emit_expr_at(ctx, policy, indent, child, generics)?;
             Ok(Some(format!(
-                "{{ let mut __sky_rec = ({policy_s}); __sky_rec.jitter = true; __sky_rec }}"
+                "{{ let mut __ipe_rec = ({policy_s}); __ipe_rec.jitter = true; __ipe_rec }}"
             )))
         }
         KernelFn::TaskWithMaxAttempts => {
@@ -1490,7 +1490,7 @@ fn emit_task_retry_call(
             let n_s = emit_expr_at(ctx, n, indent, child, generics)?;
             let policy_s = emit_expr_at(ctx, policy, indent, child, generics)?;
             Ok(Some(format!(
-                "{{ let mut __sky_rec = ({policy_s}); __sky_rec.maxAttempts = {n_s}; __sky_rec }}"
+                "{{ let mut __ipe_rec = ({policy_s}); __ipe_rec.maxAttempts = {n_s}; __ipe_rec }}"
             )))
         }
         KernelFn::TaskWithBaseMs => {
@@ -1506,7 +1506,7 @@ fn emit_task_retry_call(
             let ms_s = emit_expr_at(ctx, ms, indent, child, generics)?;
             let policy_s = emit_expr_at(ctx, policy, indent, child, generics)?;
             Ok(Some(format!(
-                "{{ let mut __sky_rec = ({policy_s}); __sky_rec.baseMs = {ms_s}; __sky_rec }}"
+                "{{ let mut __ipe_rec = ({policy_s}); __ipe_rec.baseMs = {ms_s}; __ipe_rec }}"
             )))
         }
         KernelFn::TaskWithKind => {
@@ -1522,7 +1522,7 @@ fn emit_task_retry_call(
             let k_s = emit_expr_at(ctx, k_arg, indent, child, generics)?;
             let policy_s = emit_expr_at(ctx, policy, indent, child, generics)?;
             Ok(Some(format!(
-                "{{ let mut __sky_rec = ({policy_s}); __sky_rec.kind = {k_s}; __sky_rec }}"
+                "{{ let mut __ipe_rec = ({policy_s}); __ipe_rec.kind = {k_s}; __ipe_rec }}"
             )))
         }
         KernelFn::TaskRetryOn | KernelFn::TaskWithRetryOn => {
@@ -1538,8 +1538,8 @@ fn emit_task_retry_call(
             let pred_s = emit_expr_at(ctx, pred, indent, child, generics)?;
             let policy_s = emit_expr_at(ctx, policy, indent, child, generics)?;
             Ok(Some(format!(
-                "{{ let mut __sky_rec = ({policy_s}); \
-                 __sky_rec.shouldRetry = {pred_s}; __sky_rec }}"
+                "{{ let mut __ipe_rec = ({policy_s}); \
+                 __ipe_rec.shouldRetry = {pred_s}; __ipe_rec }}"
             )))
         }
         KernelFn::TaskRetryWith => {
@@ -1559,14 +1559,14 @@ fn emit_task_retry_call(
             let task_s = emit_expr_at(ctx, task, indent, child, generics)?;
             Ok(Some(format!(
                 "{{ \
-                 let __sky_p = {policy_s}; \
-                 let __sky_sr = __sky_p.shouldRetry; \
+                 let __ipe_p = {policy_s}; \
+                 let __ipe_sr = __ipe_p.shouldRetry; \
                  ipe_runtime::task::task_retry_with(\
-                 __sky_p.maxAttempts, \
-                 __sky_p.baseMs, \
-                 __sky_p.jitter, \
-                 __sky_p.kind, \
-                 move |__sky_e: &IpeError| (__sky_sr)(__sky_e.clone()), \
+                 __ipe_p.maxAttempts, \
+                 __ipe_p.baseMs, \
+                 __ipe_p.jitter, \
+                 __ipe_p.kind, \
+                 move |__ipe_e: &IpeError| (__ipe_sr)(__ipe_e.clone()), \
                  move || {{ {task_s} }}\
                  ) }}"
             )))
@@ -2044,7 +2044,7 @@ fn emit_db_call(
 ///   argument is passed directly to the runtime (its `IrType::List` renders as
 ///   a Rust `Vec`), so we emit `cmd_batch(<list_expr>)` /
 ///   `sub_batch(<list_expr>)`.  (A previous version of this doc stated that the
-///   argument was materialised via `vec_from_sky_list`; that was never the
+///   argument was materialised via `vec_from_ipe_list`; that was never the
 ///   actual code path — the emitted list expression already has `Vec` type.)
 ///
 /// * **`CmdPerform`** — `Task Error a -> (Result Error a -> msg) -> Cmd msg`;
@@ -3969,9 +3969,9 @@ fn emit_ui_call(
 
         // `Ui.mediaQuery : String -> List (Attribute msg) -> Element msg -> Element msg`
         // Raw-CSS-media-query escape hatch: wraps the child in a
-        // marker-carrying `<div>` (`data-sky-mq-q` / `data-sky-mq-rules`)
-        // consumed by `live::style_inject::build_mq` into a sky-id-scoped
-        // `<style data-sky-mq=…>` block. The query string is gated through
+        // marker-carrying `<div>` (`data-ipe-mq-q` / `data-ipe-mq-rules`)
+        // consumed by `live::style_inject::build_mq` into a ipe-id-scoped
+        // `<style data-ipe-mq=…>` block. The query string is gated through
         // `SafeCssMediaQuery` inside the runtime helper (fail-closed drop).
         // See docs/adr/0019-ui-mediaquery-safe-boundary.md.
         KernelFn::UiMediaQuery => {
@@ -5644,7 +5644,7 @@ fn emit_ui_call(
             Ok(Some(s))
         }
 
-        // ── Ipe.Ui.Keyed — sky-key diff identity ─────────────────────────────
+        // ── Ipe.Ui.Keyed — ipe-key diff identity ─────────────────────────────
         // `Keyed.column : List Attr -> List (String, Element msg) -> Element msg`
         KernelFn::KeyedColumn => {
             let [attrs_e, children_e] = args else {
@@ -5803,7 +5803,7 @@ pub fn emit_expr(
 ///   Three sub-cases:
 ///   1. Named N-arg function (`FuncValue`) → `decode_succeed(curry{n}(fn_name))`
 ///   2. Lambda with N params → `decode_succeed(curry{n}(move |p1: T1, …| -> R { body }))`
-///   3. Any other value → `decode_succeed({ let __sky_succeed = <arg>; Box::new(move || __sky_succeed.clone()) })`
+///   3. Any other value → `decode_succeed({ let __ipe_succeed = <arg>; Box::new(move || __ipe_succeed.clone()) })`
 ///
 ///   Cases 1+2 are fail-closed when N > 10 via [`LowerError::DecodeSucceedArityTooHigh`]
 ///   (no `curry11` exists in the runtime).
@@ -5886,7 +5886,7 @@ fn emit_json_decoder_call(
             other => {
                 let val = emit_expr_at(ctx, other, indent, child, generics)?;
                 return Ok(Some(format!(
-                    "decode_succeed::<IpeError, _>({{ let __sky_succeed = {val}; Box::new(move || __sky_succeed.clone()) }})"
+                    "decode_succeed::<IpeError, _>({{ let __ipe_succeed = {val}; Box::new(move || __ipe_succeed.clone()) }})"
                 )));
             }
         }
@@ -6372,8 +6372,8 @@ fn emit_list(
     // generic in M and no concrete M appears elsewhere in the expression.
     //
     // The annotation wraps the vec in a typed `let` block:
-    //   `{ let __sky_m: Vec<Attribute<()>> = vec![ui_padding_(12)]; __sky_m }`
-    // The variable name `__sky_m` is scoped to the anonymous block and cannot
+    //   `{ let __ipe_m: Vec<Attribute<()>> = vec![ui_padding_(12)]; __ipe_m }`
+    // The variable name `__ipe_m` is scoped to the anonymous block and cannot
     // shadow user-visible bindings.  The block is a Rust expression, valid in
     // every argument position.
     //
@@ -6384,7 +6384,7 @@ fn emit_list(
     if matches!(elem, IrType::Ui { .. }) {
         let ty = render_type(ctx, elem, generics)?;
         return Ok(format!(
-            "{{ let __sky_m: Vec<{ty}> = vec![{}]; __sky_m }}",
+            "{{ let __ipe_m: Vec<{ty}> = vec![{}]; __ipe_m }}",
             parts.join(", ")
         ));
     }
@@ -6863,7 +6863,7 @@ fn emit_ctor_arm_pat(
         // raw temp, then re-derive the whole alias shape via the
         // `emit_binding_stmts` machinery against `*temp`.
         if self_edge && pat_contains_alias_in_arm(sub) {
-            let temp = format!("__sky_selfedge_alias_{alias_counter}");
+            let temp = format!("__ipe_selfedge_alias_{alias_counter}");
             alias_counter += 1;
             for stmt in emit_binding_stmts(ctx, sub, &format!("*{temp}"))? {
                 unbox_lines.push_str(&stmt);
@@ -7311,7 +7311,7 @@ fn render_arm_pat_alias_safe(
                         .to_owned(),
                 });
             }
-            let temp = format!("__sky_arm_alias_{}", *counter);
+            let temp = format!("__ipe_arm_alias_{}", *counter);
             *counter += 1;
             // `emit_binding_stmts` already handles
             // `Pat::Alias` exactly this way: `let <name> = <src>; let
@@ -7463,7 +7463,7 @@ fn push_binding_stmts(
             let base = *counter;
             *counter += elems.len();
             let temps: Vec<String> = (0..elems.len())
-                .map(|i| format!("__sky_bind_{}", base + i))
+                .map(|i| format!("__ipe_bind_{}", base + i))
                 .collect();
             out.push(format!("let ({}) = {src};", temps.join(", ")));
             for (elem, temp) in elems.iter().zip(&temps) {
@@ -7759,8 +7759,8 @@ fn emit_record(
 }
 
 /// Emit a functional record update `{ record | f = v, ... }` as a clone-and-
-/// reassign block: `{ let mut __sky_rec = (<record>).clone(); __sky_rec.f = v;
-/// __sky_rec }`. This needs no struct name and leaves the source record
+/// reassign block: `{ let mut __ipe_rec = (<record>).clone(); __ipe_rec.f = v;
+/// __ipe_rec }`. This needs no struct name and leaves the source record
 /// untouched; the block scope makes the temporary safe under nesting. Kept out
 /// of the match (`#[inline(never)]`) for the same frame-size reason as
 /// [`emit_record`].
@@ -7779,10 +7779,10 @@ fn emit_update(
     for (sym, value) in fields {
         let field_ident = ctx.emit_ident(*sym)?;
         let rendered = emit_expr_at(ctx, value, indent, child, generics)?;
-        assigns.push(format!(" __sky_rec.{field_ident} = {rendered};"));
+        assigns.push(format!(" __ipe_rec.{field_ident} = {rendered};"));
     }
     Ok(format!(
-        "{{ let mut __sky_rec = ({base}).clone();{} __sky_rec }}",
+        "{{ let mut __ipe_rec = ({base}).clone();{} __ipe_rec }}",
         assigns.concat()
     ))
 }
@@ -8054,7 +8054,7 @@ fn emit_func_value(
     let typed = render_type(ctx, ty, generics)?;
     let ctor = if wants_arc_ctor(ty) { "Arc" } else { "Box" };
     Ok(format!(
-        "{{ let __sky_fn: {typed} = {ctor}::new({name}); __sky_fn }}"
+        "{{ let __ipe_fn: {typed} = {ctor}::new({name}); __ipe_fn }}"
     ))
 }
 
@@ -8091,8 +8091,8 @@ pub fn emit_lambda_unboxed(
 
 /// Emit a lambda `\p0 p1 ... -> body` as a boxed closure whose static type is
 /// pinned to the trait-object form
-/// `{ let __sky_fn: Box<dyn Fn(T0, ...) -> R + Send + 'static> = Box::new(move
-/// |p0: T0, ...| -> R { <body> }); __sky_fn }`. The `move` capture takes any
+/// `{ let __ipe_fn: Box<dyn Fn(T0, ...) -> R + Send + 'static> = Box::new(move
+/// |p0: T0, ...| -> R { <body> }); __ipe_fn }`. The `move` capture takes any
 /// free locals by value; the explicit return type pins the closure's signature.
 ///
 /// The `let`-binding type annotation is load-bearing: `Box::new(closure)` on
@@ -8145,7 +8145,7 @@ fn emit_lambda(
         "Box"
     };
     Ok(format!(
-        "{{ let __sky_fn: {typed} = {ctor}::new({inner}); __sky_fn }}"
+        "{{ let __ipe_fn: {typed} = {ctor}::new({inner}); __ipe_fn }}"
     ))
 }
 
@@ -8186,7 +8186,7 @@ fn emit_shared_lambda(
         parts.join(", ")
     );
     Ok(format!(
-        "{{ let __sky_fn: {typed} = ::std::sync::Arc::new({inner}); __sky_fn }}"
+        "{{ let __ipe_fn: {typed} = ::std::sync::Arc::new({inner}); __ipe_fn }}"
     ))
 }
 
@@ -8271,7 +8271,7 @@ fn render_bounds(bounds: BoundSet, n: usize) -> String {
         // separate `where`-clause plumbing needed in [`emit_func`].
         traits.push("Into<ipe_runtime::db::SqlParam>".to_owned());
     }
-    if bounds.has_sky_row() {
+    if bounds.has_ipe_row() {
         // Db field-accessor row obligation: a wildcard `any` generic that
         // flows into a `Db.get*` accessor gains `IpeRow` so the runtime's generic
         // `db_get_*<R: IpeRow>(field, &row)` call type-checks and monomorphises
