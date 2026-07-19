@@ -2,50 +2,6 @@ use crate::store::Store;
 use anyhow::Result;
 use std::collections::HashSet;
 
-pub fn cmd_parity(db: &str, gaps: bool) -> Result<()> {
-    use std::io::Write;
-    let s = Store::open(db)?;
-    // `--gaps` shows only REAL gaps: go-only (real missing Rust kernel) + rust-only + orphan-route.
-    // `go-kernel-opt` is excluded from --gaps because those are NOT real Rust deficiencies:
-    // the stdlib implements them as pure Sky, so the Rust backend needs no kernel for them.
-    let sql = if gaps {
-        "SELECT name,parity,go_impl,rust_impl,hs_route_loc,go_impl_loc,rust_impl_loc FROM kernels \
-         WHERE parity!='ok' AND parity!='go-kernel-opt' ORDER BY parity,name"
-    } else {
-        "SELECT name,parity,go_impl,rust_impl,hs_route_loc,go_impl_loc,rust_impl_loc FROM kernels ORDER BY parity,name"
-    };
-    let mut st = s.conn.prepare(sql)?;
-    let rows = st.query_map([], |r| {
-        Ok((
-            r.get::<_, String>(0)?,
-            r.get::<_, String>(1)?,
-            r.get::<_, i64>(2)?,
-            r.get::<_, i64>(3)?,
-            r.get::<_, Option<String>>(4)?,
-            r.get::<_, Option<String>>(5)?,
-            r.get::<_, Option<String>>(6)?,
-        ))
-    })?;
-    let stdout = std::io::stdout();
-    let mut locked = stdout.lock();
-    for row in rows {
-        let (n, p, g, ru, hs_loc, go_loc, rust_loc) = row?;
-        let route_str = hs_loc.as_deref().unwrap_or("<no-route>");
-        let go_str = go_loc.as_deref().unwrap_or("<missing>");
-        let rust_str = rust_loc.as_deref().unwrap_or("<missing>");
-        if let Err(e) = writeln!(
-            locked,
-            "{p:<12} {n:<28} go={g} rust={ru}  route={route_str}  go={go_str}  rust={rust_str}"
-        ) {
-            if e.kind() == std::io::ErrorKind::BrokenPipe {
-                return Ok(());
-            }
-            return Err(e.into());
-        }
-    }
-    Ok(())
-}
-
 pub fn cmd_locate(db: &str, name: &str) -> Result<()> {
     use std::io::Write;
     let s = Store::open(db)?;
@@ -73,34 +29,6 @@ pub fn cmd_locate(db: &str, name: &str) -> Result<()> {
     let mut found = false;
     for (file, line, col, kind) in sym_rows {
         writeln_bp!("{file}:{line}:{col}  {kind}");
-        found = true;
-    }
-    // Also show kernel info if the name matches a kernel.
-    // `(name, parity, hs_route_loc, go_impl_loc, rust_impl_loc)`.
-    type KernRow = (
-        String,
-        String,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    );
-    let kern_rows: Vec<KernRow> = {
-        let mut kst = s.conn.prepare(
-            "SELECT name, parity, hs_route_loc, go_impl_loc, rust_impl_loc FROM kernels WHERE name LIKE ?1 OR hs_route LIKE ?1"
-        )?;
-
-        kst.query_map([format!("%{name}%")], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
-        })?
-        .collect::<std::result::Result<_, _>>()?
-    };
-    for (kname, parity, hs_loc, go_loc, rust_loc) in kern_rows {
-        writeln_bp!(
-            "kernel:{kname}  parity={parity}  route={}  go={}  rust={}",
-            hs_loc.as_deref().unwrap_or("<unknown>"),
-            go_loc.as_deref().unwrap_or("<missing>"),
-            rust_loc.as_deref().unwrap_or("<missing>"),
-        );
         found = true;
     }
     if !found {
@@ -249,19 +177,10 @@ pub fn cmd_wakeup(db: &str) -> Result<()> {
     println!("# ipe-index digest");
     println!("files: {}", s.count("files")?);
     println!(
-        "symbols: {}, edges: {}, kernels: {}",
+        "symbols: {}, edges: {}",
         s.count("symbols")?,
         s.count("edges")?,
-        s.count("kernels")?
     );
-    // Real gaps exclude `go-kernel-opt` (Go optimisation over pure-Sky stdlib functions;
-    // not a Rust deficiency) and `ok`.
-    let gaps: i64 = s.conn.query_row(
-        "SELECT COUNT(*) FROM kernels WHERE parity!='ok' AND parity!='go-kernel-opt'",
-        [],
-        |r| r.get(0),
-    )?;
-    println!("parity gaps: {gaps}  (run `ipe-index parity --gaps`)");
     cmd_roles(db)
 }
 
@@ -342,9 +261,10 @@ fn resolve_import(src: &str, dst: &str, repo: &str, known: &HashSet<String>) -> 
         .and_then(|e| e.to_str())
         .unwrap_or("");
 
+    let _ = repo;
     match src_ext {
-        // ── Haskell / Sky ─────────────────────────────────────────────────────
-        "hs" | "sky" => resolve_module_style(dst, src_ext == "sky", known),
+        // ── Ipê modules ───────────────────────────────────────────────────────
+        "ipe" => resolve_module_style(dst, known),
 
         // ── TypeScript / JavaScript ───────────────────────────────────────────
         "ts" | "tsx" | "js" | "mjs" | "jsx" => {
@@ -355,9 +275,6 @@ fn resolve_import(src: &str, dst: &str, repo: &str, known: &HashSet<String>) -> 
             }
         }
 
-        // ── Go ────────────────────────────────────────────────────────────────
-        "go" => resolve_go_import(dst, repo, known),
-
         // ── Rust ──────────────────────────────────────────────────────────────
         "rs" => resolve_rust_import(src, dst, known),
 
@@ -365,26 +282,18 @@ fn resolve_import(src: &str, dst: &str, repo: &str, known: &HashSet<String>) -> 
     }
 }
 
-/// Resolve a Haskell/Sky module name like `Sky.Core.List` to a file path.
-fn resolve_module_style(module: &str, sky: bool, known: &HashSet<String>) -> Option<String> {
-    // `Sky.Core.List` → `Sky/Core/List`
+/// Resolve a dotted `.ipe` module name like `Ipe.Core.List` to a file path.
+fn resolve_module_style(module: &str, known: &HashSet<String>) -> Option<String> {
+    // `Ipe.Core.List` → `Ipe/Core/List`
     let slash_path = module.replace('.', "/");
-    let extensions: &[&str] = if sky { &["sky", "hs"] } else { &["hs", "sky"] };
-    for ext in extensions {
-        let candidate = format!("{slash_path}.{ext}");
-        if known.contains(&candidate) {
-            return Some(candidate);
-        }
-        // Also check under sky-stdlib/ prefix.
-        let with_prefix = format!("sky-stdlib/{slash_path}.{ext}");
-        if known.contains(&with_prefix) {
-            return Some(with_prefix);
-        }
-        // Under src/ prefix (Haskell compiler source).
-        let with_src = format!("src/{slash_path}.{ext}");
-        if known.contains(&with_src) {
-            return Some(with_src);
-        }
+    let candidate = format!("{slash_path}.ipe");
+    if known.contains(&candidate) {
+        return Some(candidate);
+    }
+    // Also check under a `src/` prefix (an app's module tree).
+    let with_src = format!("src/{slash_path}.ipe");
+    if known.contains(&with_src) {
+        return Some(with_src);
     }
     None
 }
@@ -433,26 +342,6 @@ fn normalise_path(p: &std::path::Path) -> String {
         }
     }
     parts.join("/")
-}
-
-/// Resolve a Go import path to a directory within the repo.
-/// External paths (containing a dot in the first segment, e.g. `github.com/...`)
-/// are left unresolved (return None).
-fn resolve_go_import(dst: &str, _repo: &str, known: &HashSet<String>) -> Option<String> {
-    // External: first segment contains a dot (go module convention).
-    let first = dst.split('/').next().unwrap_or("");
-    if first.contains('.') {
-        return None;
-    }
-    // Internal: try common Go directory patterns.
-    // e.g. `runtime-go/rt` → look for any .go file in that dir.
-    let dir_prefix = dst.trim_start_matches('/');
-    for path in known {
-        if path.starts_with(dir_prefix) && path.ends_with(".go") {
-            return Some(dir_prefix.to_string());
-        }
-    }
-    None
 }
 
 /// Resolve a Rust `use` path to a source file.

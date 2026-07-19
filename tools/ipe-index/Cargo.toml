@@ -1,6 +1,6 @@
 [package]
 name = "ipe-index"
-license.workspace = true
+license = "Apache-2.0"
 version = "0.1.0"
 edition = "2024"
 
@@ -11,16 +11,11 @@ regex = "1"
 rusqlite = { version = "0.31", features = ["bundled"] }
 tree-sitter = "0.22"
 tree-sitter-rust = "0.21"
-tree-sitter-go = "0.21"
-tree-sitter-bash = "0.21"
 tree-sitter-typescript = "0.21"
-# Haskell grammar lags the tree-sitter ABI; if it won't co-compile (Step 3),
-# remove this dep and Haskell falls back to line-scan (Task 5, note).
-tree-sitter-haskell = "0.21"
 
 [profile.dev]
 debug = 0
 
 # Standalone dev tool — detached from the compiler workspace so it keeps its own
-# edition/lints (skydex was never under a strict lint gate) and its own target dir.
+# edition/lints and its own target dir.
 [workspace]
