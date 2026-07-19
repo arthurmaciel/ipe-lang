@@ -136,10 +136,20 @@ pub const CARGO_CONFIG_MARKER: &str =
 /// compiler is present — presence the CLI preflight has already checked.
 #[must_use]
 pub fn cargo_config(plan: &StaticPlan) -> String {
+    // AArch64 links through the bundled `rust-lld` with a self-contained musl
+    // startup, so a static AArch64 build needs only a C cross-compiler for the
+    // C deps (zstd/ring) — no scarce `aarch64-linux-musl-gcc`. Native
+    // x86_64-musl keeps the default linker.
+    let cross_link = match plan.triple {
+        StaticTriple::Aarch64LinuxMusl => {
+            ", \"-C\", \"linker=rust-lld\", \"-C\", \"link-self-contained=yes\""
+        }
+        StaticTriple::X8664LinuxMusl => "",
+    };
     format!(
         "{CARGO_CONFIG_MARKER}\n\
          [target.{triple}]\n\
-         rustflags = [\"-C\", \"target-feature=+crt-static\"]\n",
+         rustflags = [\"-C\", \"target-feature=+crt-static\"{cross_link}]\n",
         triple = plan.triple.as_str()
     )
 }
@@ -368,7 +378,10 @@ mod tests {
         assert!(cfg.contains("[target.aarch64-unknown-linux-musl]"));
         assert!(cfg.contains(r#""target-feature=+crt-static""#));
         assert!(!cfg.contains("target-dir"), "must not shadow the user's pin");
-        assert!(!cfg.contains("linker"), "no linker pin — preflight owns tooling checks");
+        assert!(
+            cfg.contains("linker=rust-lld"),
+            "aarch64 pins rust-lld self-contained (portable, no scarce musl-cross-gcc)"
+        );
     }
 
     #[test]
