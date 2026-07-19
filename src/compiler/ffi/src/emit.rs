@@ -116,11 +116,14 @@ pub fn wrapper_ipe_signature(f: &FnInfo) -> String {
         Fallibility::Infallible => inner_ok,
         Fallibility::TaskError => {
             // An inspector-rendered `Result e a` already carries the fallible
-            // layer; peel to the Ok payload before re-wrapping.
-            let ok = inner_ok
-                .strip_prefix("Result Error ")
-                .map_or(inner_ok.as_str(), str::trim)
-                .to_owned();
+            // layer; peel it to the Ok payload before re-wrapping. The peel is
+            // error-name-agnostic: the wrapper ALWAYS folds the foreign error
+            // through the redaction funnel into the carrier's `Error` slot, so
+            // whatever the foreign error rendered as (`Error`,
+            // `ErrorsFirestoreError`, `String`) must not survive into the
+            // surface — a surface re-stating it would disagree with the
+            // wrapper's own type.
+            let ok = peel_result_layer(&inner_ok).trim().to_owned();
             let carrier = if f.effect() == Effect::Effectful {
                 "Task Error"
             } else {
@@ -130,6 +133,41 @@ pub fn wrapper_ipe_signature(f: &FnInfo) -> String {
         }
     };
     format!("{param_sig} -> {result_ty}")
+}
+
+/// Drop ONE leading `Result <err>` layer off a rendered Ipê type, returning
+/// the Ok component (with any surrounding parens of the whole intact).
+/// A rendering that is not a two-arg `Result` application returns unchanged.
+fn peel_result_layer(s: &str) -> &str {
+    let Some(rest) = s.strip_prefix("Result ") else {
+        return s;
+    };
+    let rest = rest.trim_start();
+    // Skip the error component: a balanced `(...)` group or a single word.
+    let after_err = if rest.starts_with('(') {
+        let mut depth = 0_u32;
+        let mut end = None;
+        for (i, c) in rest.char_indices() {
+            match c {
+                '(' => depth = depth.saturating_add(1),
+                ')' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        end = Some(i + 1);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        end.and_then(|i| rest.get(i..))
+    } else {
+        rest.find(' ').and_then(|i| rest.get(i..))
+    };
+    match after_err.map(str::trim_start) {
+        Some(ok) if !ok.is_empty() => ok,
+        _ => s,
+    }
 }
 
 /// The Ipê builtin heads that never need an opaque-type declaration.

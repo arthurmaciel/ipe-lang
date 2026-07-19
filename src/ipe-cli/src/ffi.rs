@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use ipe_ffi::driver::{CrateName, FfiCache, InstalledCrate};
+use ipe_ffi::driver::{CrateName, CrateSpec, FfiCache, InstalledCrate, VersionPin};
 
 use crate::CliError;
 
@@ -185,6 +185,7 @@ pub fn assemble_emit(
         foreign_types,
         dep_lines: dep_by_name.into_values().collect(),
         bindings_source,
+        interface_modules: catalog.iter().map(|c| c.module_name.clone()).collect(),
     }))
 }
 
@@ -316,6 +317,33 @@ fn toolchain_binds(inspector: &Path) -> (Vec<PathBuf>, Vec<PathBuf>, Option<Path
     (toolchain_ro_binds, path_prepend, rustup_home)
 }
 
+/// The jail resource caps: the fail-closed defaults, each raisable through an
+/// explicit env override that prints a warning (an SDK-scale dependency
+/// closure — hundreds of crates under one `cargo check`/rustdoc — legitimately
+/// needs more CPU/wall/output than the small-crate defaults).
+fn jail_limits() -> ipe_sandbox::ResourceLimits {
+    let mut limits = ipe_sandbox::ResourceLimits::default();
+    let with_override = |var: &str, slot: &mut u64, scale: u64| {
+        if let Ok(raw) = std::env::var(var) {
+            if let Ok(v) = raw.parse::<u64>().map(|v| v.saturating_mul(scale))
+                && v > 0
+            {
+                eprintln!("WARNING: jail cap override {var}={raw}");
+                *slot = v;
+            } else {
+                eprintln!("WARNING: ignoring non-numeric jail cap override {var}={raw}");
+            }
+        }
+    };
+    with_override("IPE_FFI_RSS_MB", &mut limits.rss_bytes, 1024 * 1024);
+    with_override("IPE_FFI_CPU_SECS", &mut limits.cpu_secs, 1);
+    with_override("IPE_FFI_WALL_SECS", &mut limits.wall_secs, 1);
+    with_override("IPE_FFI_FD_CAP", &mut limits.fd_cap, 1);
+    with_override("IPE_FFI_PROC_CAP", &mut limits.proc_cap, 1);
+    with_override("IPE_FFI_OUT_CAP_MB", &mut limits.out_cap_bytes, 1024 * 1024);
+    limits
+}
+
 /// Run one jailed inspector phase over the shared `scoped_tmp`, returning its
 /// captured stdout.
 fn run_phase(
@@ -336,7 +364,7 @@ fn run_phase(
         toolchain_ro_binds,
         path_prepend,
         rustup_home,
-        limits: ipe_sandbox::ResourceLimits::default(),
+        limits: jail_limits(),
     };
     ipe_sandbox::run_in_bwrap_jail(caps, &spec, payload)
         .map_err(|d| io_err(format!("sandboxed inspection failed: {d}")))
@@ -354,17 +382,94 @@ fn run_phase(
 ///      NO network egress, so the crates.io token cannot be exfiltrated even
 ///      if it were reachable (it is not — see [`toolchain_binds`]).
 fn run_inspector(
-    krate: &CrateName,
+    krate: &CrateSpec,
     features: &[String],
     allow_build_scripts: bool,
 ) -> Result<String, CliError> {
+    run_inspector_job(
+        &InspectorJob::Single { krate, features },
+        allow_build_scripts,
+    )
+}
+
+/// One jailed inspector invocation: either a single crate or a MULTI-crate
+/// manifest. The manifest form matters beyond convenience: the inspector's
+/// cross-crate impl index is process-global, so a trait method defined in one
+/// crate and implemented for a sibling's type (the async-SDK `send` shape)
+/// resolves only when every project crate is inspected in ONE process.
+enum InspectorJob<'a> {
+    /// `ipe add <crate>`.
+    Single {
+        /// The crate (with optional version pin).
+        krate: &'a CrateSpec,
+        /// The requested feature list.
+        features: &'a [String],
+    },
+    /// `ipe install` — every `[rust.dependencies]` entry in one run.
+    Manifest {
+        /// Per-crate (spec, features) pairs.
+        entries: &'a [(CrateSpec, Vec<String>)],
+    },
+}
+
+/// Serialize the inspector's `--manifest` JSON into the scoped scratch dir
+/// (the only jail-writable mount, so the path is visible inside the jail).
+fn write_inspector_manifest(
+    scoped_tmp: &Path,
+    entries: &[(CrateSpec, Vec<String>)],
+) -> Result<PathBuf, CliError> {
+    let arr: Vec<serde_json::Value> = entries
+        .iter()
+        .map(|(spec, feats)| serde_json::json!({ "name": spec.inspector_arg(), "features": feats }))
+        .collect();
+    let path = scoped_tmp.join("ipe-install-manifest.json");
+    let body = serde_json::Value::Array(arr).to_string();
+    std::fs::write(&path, body)
+        .map_err(|e| CliError::UsageOwned(format!("ipe install: manifest write failed: {e}")))?;
+    Ok(path)
+}
+
+/// The full inspector argv (program + flags) for one phase of a job. The
+/// manifest path, when present, was written into the jail-visible scratch.
+fn inspector_payload(
+    inspector: &Path,
+    job: &InspectorJob,
+    manifest_path: Option<&Path>,
+    allow_build_scripts: bool,
+    fetch_only: bool,
+) -> Vec<OsString> {
+    let mut payload: Vec<OsString> = vec![inspector.to_path_buf().into_os_string()];
+    match job {
+        InspectorJob::Single { krate, features } => {
+            payload.extend(ipe_ffi::driver::inspector_argv(
+                krate,
+                features,
+                None,
+                allow_build_scripts,
+                fetch_only,
+            ));
+        }
+        InspectorJob::Manifest { .. } => {
+            if fetch_only {
+                payload.push("--fetch-only".into());
+            }
+            if allow_build_scripts {
+                payload.push("--allow-build-scripts".into());
+            }
+            payload.push("--manifest".into());
+            if let Some(p) = manifest_path {
+                payload.push(p.to_path_buf().into_os_string());
+            }
+        }
+    }
+    payload
+}
+
+fn run_inspector_job(job: &InspectorJob, allow_build_scripts: bool) -> Result<String, CliError> {
     let inspector = inspector_binary()?;
-    let with_payload = |fetch_only: bool| -> Vec<OsString> {
-        let argv =
-            ipe_ffi::driver::inspector_argv(krate, features, None, allow_build_scripts, fetch_only);
-        let mut payload: Vec<OsString> = vec![inspector.clone().into_os_string()];
-        payload.extend(argv);
-        payload
+    let scratch_hint = match job {
+        InspectorJob::Single { krate, .. } => krate.name().as_str(),
+        InspectorJob::Manifest { .. } => "manifest",
     };
 
     let caps = ipe_sandbox::probe();
@@ -391,7 +496,22 @@ fn run_inspector(
                 missing.join(", ")
             )));
         }
-        let scoped_tmp = make_scratch_dir(krate.as_str())?;
+        let scoped_tmp = make_scratch_dir(scratch_hint)?;
+        let manifest_path = match job {
+            InspectorJob::Manifest { entries } => {
+                Some(write_inspector_manifest(&scoped_tmp, entries)?)
+            }
+            InspectorJob::Single { .. } => None,
+        };
+        let with_payload = |fetch_only: bool| -> Vec<OsString> {
+            inspector_payload(
+                &inspector,
+                job,
+                manifest_path.as_deref(),
+                allow_build_scripts,
+                fetch_only,
+            )
+        };
         let (toolchain_ro_binds, path_prepend, rustup_home) = toolchain_binds(&inspector);
         // Phase 1 — fetch (network on, no foreign code).
         let fetch_out = run_phase(
@@ -430,14 +550,38 @@ fn run_inspector(
             .map_err(|_| io_err("inspector produced non-UTF-8 output".to_owned()));
     }
 
-    // Explicit unsandboxed override.
+    run_inspector_job_unsandboxed(&inspector, job, scratch_hint, allow_build_scripts)
+}
+
+/// The explicit `IPE_FFI_ALLOW_UNSANDBOXED=1` escape hatch: one direct argv
+/// spawn, loudly labelled.
+fn run_inspector_job_unsandboxed(
+    inspector: &Path,
+    job: &InspectorJob,
+    scratch_hint: &str,
+    allow_build_scripts: bool,
+) -> Result<String, CliError> {
+    let io_err = |detail: String| CliError::UsageOwned(format!("ipe add: {detail}"));
     eprintln!("WARNING: running the FFI inspector UNSANDBOXED (IPE_FFI_ALLOW_UNSANDBOXED=1)");
-    let payload = with_payload(false);
+    let scoped_tmp = make_scratch_dir(scratch_hint)?;
+    let manifest_path = match job {
+        InspectorJob::Manifest { entries } => Some(write_inspector_manifest(&scoped_tmp, entries)?),
+        InspectorJob::Single { .. } => None,
+    };
+    let payload = inspector_payload(
+        inspector,
+        job,
+        manifest_path.as_deref(),
+        allow_build_scripts,
+        false,
+    );
     let (program, rest) = payload.split_first().ok_or(CliError::Usage("ipe add"))?;
     let out = std::process::Command::new(program)
         .args(rest)
         .output()
-        .map_err(|e| io_err(e.to_string()))?;
+        .map_err(|e| io_err(e.to_string()));
+    let _ = std::fs::remove_dir_all(&scoped_tmp);
+    let out = out?;
     if !out.status.success() {
         return Err(io_err(format!(
             "inspector exited with {:?}\n{}",
@@ -452,7 +596,7 @@ fn run_inspector(
 /// Shared tail of `add` / `install`: inspect one crate + write its artifacts.
 fn add_one(
     cache: &FfiCache,
-    krate: &CrateName,
+    krate: &CrateSpec,
     features: &[String],
     allow_build_scripts: bool,
 ) -> Result<(), CliError> {
@@ -480,7 +624,7 @@ fn add_one(
     Ok(())
 }
 
-/// `ipe add <crate> [--features a,b] [--yes]`.
+/// `ipe add <crate>[@<version>] [--features a,b] [--yes]`.
 ///
 /// # Errors
 /// [`CliError`] on misuse, a refused inspection, or a cache-write failure.
@@ -503,19 +647,22 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
             other if krate.is_none() => krate = Some(other.to_owned()),
             _ => {
                 return Err(CliError::Usage(
-                    "usage: ipe add <crate> [--features a,b] [--yes]",
+                    "usage: ipe add <crate>[@<version>] [--features a,b] [--yes]",
                 ));
             }
         }
     }
     let raw = krate.ok_or(CliError::Usage(
-        "usage: ipe add <crate> [--features a,b] [--yes]",
+        "usage: ipe add <crate>[@<version>] [--features a,b] [--yes]",
     ))?;
-    let krate = CrateName::parse(&raw).map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+    let spec = CrateSpec::parse(&raw).map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
 
     if !assume_yes {
         use std::io::Write as _;
-        println!("{}", ipe_ffi::driver::trust_summary(&krate, "", None, 0));
+        println!(
+            "{}",
+            ipe_ffi::driver::trust_summary(spec.name(), "", None, 0)
+        );
         print!("[y/N] ");
         let _ = std::io::stdout().flush();
         if !crate::read_yes_no() {
@@ -524,7 +671,7 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
     }
 
     let cache = FfiCache::at_project_root(Path::new("."));
-    add_one(&cache, &krate, &features, allow_build_scripts)
+    add_one(&cache, &spec, &features, allow_build_scripts)
 }
 
 /// `ipe remove <crate>`.
@@ -544,17 +691,26 @@ pub fn run_remove(rest: &[String]) -> Result<(), CliError> {
     Ok(())
 }
 
-/// `ipe install [--yes]` — (re)inspect every `[rust.dependencies]` crate in
-/// the project's `sky.toml`.
+/// `ipe install [--yes] [--allow-build-scripts]` — (re)inspect every
+/// `[rust.dependencies]` crate in the project's `sky.toml`, honouring each
+/// entry's version pin and feature list.
 ///
 /// # Errors
 /// [`CliError`] on misuse, a missing manifest, or any per-crate failure.
 pub fn run_install(rest: &[String]) -> Result<(), CliError> {
-    let assume_yes = match rest {
-        [] => false,
-        [flag] if flag == "--yes" => true,
-        _ => return Err(CliError::Usage("usage: ipe install [--yes]")),
-    };
+    let mut assume_yes = false;
+    let mut allow_build_scripts = false;
+    for flag in rest {
+        match flag.as_str() {
+            "--yes" => assume_yes = true,
+            "--allow-build-scripts" => allow_build_scripts = true,
+            _ => {
+                return Err(CliError::Usage(
+                    "usage: ipe install [--yes] [--allow-build-scripts]",
+                ));
+            }
+        }
+    }
     let manifest = Path::new("sky.toml");
     if !manifest.is_file() {
         return Err(CliError::Usage(
@@ -573,7 +729,7 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
     // whole list; reserve the silent path for an explicit `--yes`.
     if !assume_yes {
         use std::io::Write as _;
-        let names: Vec<&str> = deps.iter().map(|(n, _)| n.as_str()).collect();
+        let names: Vec<&str> = deps.iter().map(|d| d.name.as_str()).collect();
         println!(
             "About to fetch and COMPILE untrusted code for {} crate(s): {}",
             names.len(),
@@ -590,17 +746,70 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
         }
     }
     let cache = FfiCache::at_project_root(Path::new("."));
-    for (name, _version) in deps {
-        let krate =
-            CrateName::parse(&name).map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
-        add_one(&cache, &krate, &[], false)?;
+    let mut entries: Vec<(CrateSpec, Vec<String>)> = Vec::with_capacity(deps.len());
+    for dep in &deps {
+        let name =
+            CrateName::parse(&dep.name).map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+        // `*` / empty keep the historical latest-stable resolution; anything
+        // else pins the inspector's probe (a prerelease NEEDS an exact `=`).
+        let version = match dep.version.trim() {
+            "" | "*" => None,
+            pin => Some(
+                VersionPin::parse(pin).map_err(|diag| CliError::UsageOwned(diag.to_string()))?,
+            ),
+        };
+        entries.push((CrateSpec::new(name, version), dep.features.clone()));
+    }
+    // ONE inspector invocation for the whole list: the cross-crate impl
+    // index is process-global, so a trait method defined in one dependency
+    // and implemented for a sibling's type (the async-SDK `send` shape)
+    // binds only when every crate is inspected together.
+    let json = run_inspector_job(
+        &InspectorJob::Manifest { entries: &entries },
+        allow_build_scripts,
+    )?;
+    let val: serde_json::Value = serde_json::from_str(&json)
+        .map_err(|e| CliError::UsageOwned(format!("ipe install: invalid inspector JSON: {e}")))?;
+    let items: Vec<serde_json::Value> = match val {
+        serde_json::Value::Array(items) => items,
+        one @ serde_json::Value::Object(_) => vec![one],
+        other => {
+            return Err(CliError::UsageOwned(format!(
+                "ipe install: unexpected inspector output shape: {other}"
+            )));
+        }
+    };
+    for item in items {
+        let (pkg, paths) = ipe_ffi::driver::install_from_inspection(&cache, &item.to_string())
+            .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+        let iface = ipe_ffi::interface::crate_interface(&pkg);
+        println!(
+            "added `{}` v{}: {} bindings ({} skipped) -> {}",
+            pkg.name(),
+            pkg.version(),
+            iface.bindings.len(),
+            iface.skipped.len(),
+            paths.interface.display()
+        );
     }
     Ok(())
 }
 
-/// Extract `name = "version"` pairs from the manifest's
-/// `[rust.dependencies]` / `["rust.dependencies"]` table.
-fn rust_dependencies_from_manifest(text: &str) -> Vec<(String, String)> {
+/// One `[rust.dependencies]` manifest entry.
+#[derive(Debug, PartialEq, Eq)]
+struct ManifestDep {
+    /// The dependency key (the crates.io package name).
+    name: String,
+    /// The version requirement (empty when unspecified).
+    version: String,
+    /// The requested feature list (empty when unspecified).
+    features: Vec<String>,
+}
+
+/// Extract the manifest's `[rust.dependencies]` / `["rust.dependencies"]`
+/// entries. Values may be a bare version string (`uuid = "1"`) or an inline
+/// table (`stripe = { version = "=1.0.0-rc.6", features = ["a", "b"] }`).
+fn rust_dependencies_from_manifest(text: &str) -> Vec<ManifestDep> {
     let mut in_table = false;
     let mut out = Vec::new();
     for line in text.lines() {
@@ -614,11 +823,82 @@ fn rust_dependencies_from_manifest(text: &str) -> Vec<(String, String)> {
         }
         if let Some((k, v)) = line.split_once('=') {
             let name = k.trim().trim_matches('"').to_owned();
-            let version = v.trim().trim_matches('"').to_owned();
-            out.push((name, version));
+            let value = v.trim();
+            if let Some(body) = value
+                .strip_prefix('{')
+                .and_then(|rest| rest.strip_suffix('}'))
+            {
+                out.push(ManifestDep {
+                    name,
+                    version: inline_table_string(body, "version").unwrap_or_default(),
+                    features: inline_table_string_array(body, "features"),
+                });
+            } else {
+                out.push(ManifestDep {
+                    name,
+                    version: value.trim_matches('"').to_owned(),
+                    features: Vec::new(),
+                });
+            }
         }
     }
     out
+}
+
+/// Read `key = "value"` out of an inline-table body.
+fn inline_table_string(body: &str, key: &str) -> Option<String> {
+    let at = find_inline_key(body, key)?;
+    let rest = body.get(at..)?;
+    let (_, after_eq) = rest.split_once('=')?;
+    let after_quote = after_eq.trim_start().strip_prefix('"')?;
+    after_quote.split_once('"').map(|(v, _)| v.to_owned())
+}
+
+/// Read `key = ["a", "b"]` out of an inline-table body.
+fn inline_table_string_array(body: &str, key: &str) -> Vec<String> {
+    let Some(at) = find_inline_key(body, key) else {
+        return Vec::new();
+    };
+    let Some(rest) = body.get(at..) else {
+        return Vec::new();
+    };
+    let Some((_, after_eq)) = rest.split_once('=') else {
+        return Vec::new();
+    };
+    let Some(after_bracket) = after_eq.trim_start().strip_prefix('[') else {
+        return Vec::new();
+    };
+    let Some((inner, _)) = after_bracket.split_once(']') else {
+        return Vec::new();
+    };
+    inner
+        .split(',')
+        .map(|s| s.trim().trim_matches('"').to_owned())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// The byte offset of `key` as a whole word in an inline-table body (so
+/// `version` never matches inside `some_version_like_name`).
+fn find_inline_key(body: &str, key: &str) -> Option<usize> {
+    let bytes = body.as_bytes();
+    let mut from = 0;
+    while let Some(rel) = body.get(from..)?.find(key) {
+        let at = from + rel;
+        let before_ok = at == 0
+            || bytes
+                .get(at.wrapping_sub(1))
+                .is_none_or(|b| !b.is_ascii_alphanumeric() && *b != b'_');
+        let after = at + key.len();
+        let after_ok = bytes
+            .get(after)
+            .is_none_or(|b| !b.is_ascii_alphanumeric() && *b != b'_');
+        if before_ok && after_ok {
+            return Some(at);
+        }
+        from = at + key.len();
+    }
+    None
 }
 
 #[cfg(test)]
@@ -630,12 +910,48 @@ mod tests {
         let text = "[project]\nname = \"x\"\n\n[\"rust.dependencies\"]\nsemver = \"1\"\n\n[live]\nport = 1\n";
         assert_eq!(
             rust_dependencies_from_manifest(text),
-            vec![("semver".to_owned(), "1".to_owned())]
+            vec![ManifestDep {
+                name: "semver".to_owned(),
+                version: "1".to_owned(),
+                features: Vec::new(),
+            }]
         );
         let text2 = "[rust.dependencies]\nuuid = \"1.10\"\n";
         assert_eq!(
             rust_dependencies_from_manifest(text2),
-            vec![("uuid".to_owned(), "1.10".to_owned())]
+            vec![ManifestDep {
+                name: "uuid".to_owned(),
+                version: "1.10".to_owned(),
+                features: Vec::new(),
+            }]
+        );
+    }
+
+    #[test]
+    fn manifest_rust_dependencies_inline_table_carries_pin_and_features() {
+        let text = "[rust.dependencies]\n\
+                    async-stripe-checkout = { version = \"=1.0.0-rc.6\", features = [\"checkout_session\"] }\n\
+                    firestore = { version = \"0.49\" }\n\
+                    plain = \"2\"\n";
+        assert_eq!(
+            rust_dependencies_from_manifest(text),
+            vec![
+                ManifestDep {
+                    name: "async-stripe-checkout".to_owned(),
+                    version: "=1.0.0-rc.6".to_owned(),
+                    features: vec!["checkout_session".to_owned()],
+                },
+                ManifestDep {
+                    name: "firestore".to_owned(),
+                    version: "0.49".to_owned(),
+                    features: Vec::new(),
+                },
+                ManifestDep {
+                    name: "plain".to_owned(),
+                    version: "2".to_owned(),
+                    features: Vec::new(),
+                },
+            ]
         );
     }
 

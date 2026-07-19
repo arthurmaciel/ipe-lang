@@ -1679,7 +1679,17 @@ fn build_dep_entry(
     // `*` requirement against a prerelease-only crate (every async-stripe rc.6
     // sub-crate). An exact `= "=1.0.0-rc.6"` opts in to the prerelease explicitly.
     // None → the historical `*` (latest stable).
-    let ver_req = version.map(|v| format!("={}", toml_escape(v)));
+    // A requirement that already carries a comparison operator (an explicit
+    // `=1.0.0-rc.6`, a `>=`, a `~`) passes through verbatim — prepending a
+    // second `=` would be a cargo parse error.
+    let ver_req = version.map(|v| {
+        let escaped = toml_escape(v);
+        if escaped.starts_with(['=', '>', '<', '~', '^', '*']) {
+            escaped
+        } else {
+            format!("={escaped}")
+        }
+    });
     // Common fields: features list (rendered as Cargo TOML array).
     let feats_field = if features.is_empty() {
         None
@@ -3846,6 +3856,14 @@ fn make_enum_extract(
         format!("_{field_idx}")
     };
     let name = format!("{variant_name}{infix}_as_variant");
+    /// Parenthesize a multi-word Ipe type application for nesting.
+    fn paren_multiword_ipe(s: &str) -> String {
+        if s.contains(' ') && !s.starts_with('(') {
+            format!("({s})")
+        } else {
+            s.to_string()
+        }
+    }
     Function {
         name: name.clone(),
         params: vec![Param {
@@ -3856,8 +3874,11 @@ fn make_enum_extract(
         }],
         results: vec![Param {
             name: String::new(),
-            ty: format!("Maybe {fipe}"),
-            ipe_type: format!("Maybe {fipe}"),
+            // A multi-word payload type (`List FirestoreValue`) must nest
+            // parenthesized — bare application would parse as `Maybe` applied
+            // to an unapplied `List` plus a stray argument.
+            ty: format!("Maybe {}", paren_multiword_ipe(fipe)),
+            ipe_type: format!("Maybe {}", paren_multiword_ipe(fipe)),
             rust_type: format!("Option<{frust}>"),
         }],
         effect: "pure".into(),
@@ -8372,6 +8393,18 @@ fn type_to_typeref(
         return Ok(TypeRef::Prim(r.to_string()));
     }
     if let Some(rp) = val.get("resolved_path") {
+        // See through a crate-local GENERIC Result/Option alias in the CALL
+        // AST exactly as the string renderers do (`FirestoreResult<T> =
+        // Result<T, FirestoreError>` becomes the real `::core::result::Result`
+        // ctor), so the generic-instance wrapper sees the fallible layer and
+        // folds it — an opaque alias here would surface an unusable opaque
+        // handle where `Task Error a` was meant. Depth-bounded; on exceed or
+        // arity mismatch fall through to the opaque rendering (fail-closed).
+        if let Some(_g) = AliasDepthGuard::enter()
+            && let Some(expanded) = expand_generic_alias(rp)
+        {
+            return type_to_typeref(&expanded, param_idx);
+        }
         // The receiver-foreign ctor (or a nested one). Render the `::`-path the
         // SAME way rustdoc_type_to_rust_str does, then recurse into its args.
         let raw_name = rp["name"]
