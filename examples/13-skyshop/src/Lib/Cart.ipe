@@ -27,6 +27,7 @@ import Ipe.List as List
 import Ipe.Dict as Dict
 import Ipe.String as String
 import Ipe.Log exposing (println)
+import Ipe.Task as Task
 import Ipe.Uuid as Uuid
 import Lib.Db as Db
 import Ipe.Error as Error exposing (Error(..), ErrorKind(..))
@@ -34,7 +35,7 @@ import Ipe.Error as Error exposing (Error(..), ErrorKind(..))
 
 newId : String
 newId =
-    Uuid.v4
+    Result.withDefault "" (Task.run (Uuid.v4 ()))
 
 
 getOrCreateCart : String -> Result Error (Dict String String)

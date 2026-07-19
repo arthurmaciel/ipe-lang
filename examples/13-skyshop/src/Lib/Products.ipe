@@ -19,15 +19,16 @@ import Ipe.Dict as Dict
 import Ipe.String as String
 import Ipe.Log exposing (println)
 import Ipe.Error as Error exposing (Error(..))
+import Ipe.Task as Task
 import Ipe.Uuid as Uuid
 import Lib.Db as Db
 
 
--- D8: original imported Github.Com.Google.Uuid; swapped to Sky.Core.Uuid.
--- `Uuid.v4 : String` is a bare zero-arg binding (no `()`).
+-- Entropy is an effect: `Uuid.v4 : () -> Task Error String`; fold it
+-- synchronously like the other environment reads in this app.
 newId : String
 newId =
-    Uuid.v4
+    Result.withDefault "" (Task.run (Uuid.v4 ()))
 
 
 listProducts : List (Dict String String)

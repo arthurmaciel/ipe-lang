@@ -1,22 +1,28 @@
 module Lib.Stripe exposing (createCheckoutSession, verifyPayment, deductStock, CheckoutInfo, PaymentStatus)
 
+-- Payments over the REAL crates.io async-stripe crates, auto-FFI-bound
+-- shim-free. The Lib boundary is synchronous (`Result`): each call builds a
+-- client from STRIPE_SECRET_KEY, runs its Task chain, and folds back via
+-- `Task.run`. Line items are built inline (`price_data` + `product_data`), so
+-- no pre-created Stripe Price is needed. `currencyFromCode` covers the shop's
+-- currency codes with a USD fallback — a recorded over-restriction vs the full
+-- ISO table.
+
 import Ipe.Prelude exposing (..)
-import Ipe.Maybe exposing (..)
+import Ipe.Maybe as Maybe exposing (..)
 import Ipe.Result as Result
 import Ipe.Task as Task
 import Ipe.List as List
 import Ipe.Dict as Dict
 import Ipe.String as String
-import Ipe.Json.Encode as JsonEnc
 import Ipe.Log exposing (println)
 import Ipe.System as System
 import Lib.Db as Db
 import Ipe.Error as Error exposing (Error(..), ErrorKind(..))
--- DE-SHIM PENDING (stripe-builder-surface wall — see README.md): this module
--- still names the reference shim; the real `Rust.Async_stripe*` surfaces bind
--- the create-customer + send flows, but the checkout-session builder members
--- this module needs are not admitted yet.
-import Rust.Sky_stripe_shim as Stripe
+import Rust.Async_stripe as Stripe
+import Rust.Async_stripe_checkout as Checkout
+import Rust.Async_stripe_shared as Shared
+import Rust.Async_stripe_types as Types
 
 
 type alias PaymentStatus =
@@ -60,9 +66,41 @@ domainUrl _ =
                 "http://localhost:" ++ effectivePort
 
 
--- Encode the cart items as a flat JSON array of line-item objects for the shim.
-lineItemValue : Dict String String -> Value
-lineItemValue item =
+secretKey _ =
+    Result.withDefault "" (Task.run (System.getenv "STRIPE_SECRET_KEY"))
+
+
+-- One Stripe client per operation, mirroring Lib.Db's per-op client: build,
+-- run the Task chain, fold back to Result.
+withClient use =
+    Task.run
+        (Task.fromResult (Stripe.new_from_client (secretKey ()))
+            |> Task.andThen use
+        )
+
+
+-- The shop's currency codes, USD fallback (the reference behavior for an
+-- unrecognised code).
+currencyFromCode code =
+    case String.toLower code of
+
+        "eur" ->
+            Types.eUR_new_variant_from_currency ()
+
+        "gbp" ->
+            Types.gBP_new_variant_from_currency ()
+
+        "brl" ->
+            Types.bRL_new_variant_from_currency ()
+
+        _ ->
+            Types.uSD_new_variant_from_currency ()
+
+
+-- One inline line item from a cart row: price_data carries the currency +
+-- unit amount, product_data carries the title; quantity is checked (the
+-- narrowing-int setter is fallible by design).
+buildLineItem item =
     let
         price = Db.getInt "price_amount" item
         discount = Db.getInt "price_discount" item
@@ -72,21 +110,70 @@ lineItemValue item =
 
             else
                 price
+        qtyRaw = Db.getInt "quantity" item
+        qty =
+            if qtyRaw <= 0 then
+                1
+
+            else
+                qtyRaw
+        currency = currencyFromCode (Db.getField "price_currency" item)
     in
-        JsonEnc.object
-            [ ( "title", JsonEnc.string (Db.getField "title" item) )
-            , ( "amount", JsonEnc.int effectivePrice )
-            , ( "quantity", JsonEnc.int (Db.getInt "quantity" item) )
-            , ( "currency"
-              , JsonEnc.string
-                    (String.toLower (Db.getField "price_currency" item))
-              )
-            ]
+        Checkout.new_from_checkout_sessionCreateCheckoutSessionLineItemsPriceData currency
+            |> Result.map
+                (Checkout.unit_amount_set_field_from_checkout_sessionCreateCheckoutSessionLineItemsPriceData
+                    (Just effectivePrice)
+                )
+            |> Result.andThen
+                (\priceData ->
+                    Checkout.new_from_checkout_sessionProductData (Db.getField "title" item)
+                        |> Result.map
+                            (\productData ->
+                                Checkout.product_data_set_field_from_checkout_sessionCreateCheckoutSessionLineItemsPriceData
+                                    (Just productData)
+                                    priceData
+                            )
+                )
+            |> Result.andThen
+                (\priceData ->
+                    Checkout.new_from_checkout_sessionCreateCheckoutSessionLineItems ()
+                        |> Result.map
+                            (Checkout.price_data_set_field_from_checkout_sessionCreateCheckoutSessionLineItems
+                                (Just priceData)
+                            )
+                )
+            |> Result.andThen
+                (Checkout.quantity_set_field_from_checkout_sessionCreateCheckoutSessionLineItems
+                    (Just qty)
+                )
 
 
-encodeLineItems : List (Dict String String) -> String
-encodeLineItems items =
-    JsonEnc.encode 0 (JsonEnc.list lineItemValue items)
+buildLineItems items =
+    if List.isEmpty items then
+        Err (Error.invalidInput "No line items for checkout.")
+
+    else
+        List.foldr
+            (\item acc ->
+                acc
+                    |> Result.andThen
+                        (\rest ->
+                            buildLineItem item
+                                |> Result.map (\li -> li :: rest)
+                        )
+            )
+            (Ok [])
+            items
+
+
+checkoutInfoFromSession session =
+    Shared.to_string_from_checkoutSessionId (Shared.id_field_from_checkoutSession session)
+        |> Result.map
+            (\sessionId ->
+                { id = sessionId
+                , url = Maybe.withDefault "" (Shared.url_field_from_checkoutSession session)
+                }
+            )
 
 
 createCheckoutSession : String -> List (Dict String String) -> String -> String -> String -> String -> Result Error CheckoutInfo
@@ -97,21 +184,49 @@ createCheckoutSession cartId items userId userName userEmail remarks =
         _ = remarks
         successUrl = domainUrl () ++ "/order/" ++ cartId ++ "/success"
         cancelUrl = domainUrl () ++ "/cart"
-        lineItemsJson = encodeLineItems items
         _ =
             println
                 ("[STRIPE] Creating checkout session for cart: " ++ cartId)
     in
-        case Stripe.stripe_create_checkout_session cartId userEmail lineItemsJson successUrl cancelUrl of
-
-            Ok session ->
-                Ok
-                    { id = Db.getField "id" session
-                    , url = Db.getField "url" session
-                    }
-
-            Err _ ->
-                Err (Error.network "Stripe shim: failed to create checkout session.")
+        buildLineItems items
+            |> Result.andThen
+                (\lineItems ->
+                    withClient
+                        (\client ->
+                            Task.fromResult (Checkout.new_from_checkout_sessionCreateCheckoutSession ())
+                                |> Task.andThen
+                                    (\b ->
+                                        Task.fromResult
+                                            (Checkout.mode_from_checkout_sessionCreateCheckoutSession
+                                                b
+                                                (Shared.payment_new_variant_from_checkoutSessionMode ())
+                                            )
+                                    )
+                                |> Task.andThen
+                                    (\b ->
+                                        Task.fromResult
+                                            (Checkout.customer_email_from_checkout_sessionCreateCheckoutSession b userEmail)
+                                    )
+                                |> Task.andThen
+                                    (\b ->
+                                        Task.fromResult
+                                            (Checkout.line_items_from_checkout_sessionCreateCheckoutSession b lineItems)
+                                    )
+                                |> Task.andThen
+                                    (\b ->
+                                        Task.fromResult
+                                            (Checkout.success_url_from_checkout_sessionCreateCheckoutSession b successUrl)
+                                    )
+                                |> Task.andThen
+                                    (\b ->
+                                        Task.fromResult
+                                            (Checkout.cancel_url_from_checkout_sessionCreateCheckoutSession b cancelUrl)
+                                    )
+                                |> Task.andThen
+                                    (\b -> Checkout.send_from_checkout_sessionCreateCheckoutSession b client)
+                        )
+                )
+            |> Result.andThen checkoutInfoFromSession
 
 
 verifyPayment orderId =
@@ -148,37 +263,64 @@ verifyPayment orderId =
 
 
 verifyStripeSession cartId sessionId =
-    case Stripe.stripe_retrieve_session sessionId of
+    withClient
+        (\client ->
+            Task.fromResult (Checkout.new_from_checkout_sessionRetrieveCheckoutSession sessionId)
+                |> Task.andThen
+                    (\r ->
+                        Task.fromResult
+                            (Checkout.expand_from_checkout_sessionRetrieveCheckoutSession r [ "customer_details" ])
+                    )
+                |> Task.andThen
+                    (\r -> Checkout.send_from_checkout_sessionRetrieveCheckoutSession r client)
+        )
+        |> Result.andThen (paymentStatusFromSession cartId)
 
-        Ok sess ->
+
+paymentStatusFromSession cartId session =
+    let
+        status =
+            case Shared.status_field_from_checkoutSession session of
+
+                Just s ->
+                    Result.withDefault "" (Shared.as_str_from_checkoutSessionStatus s)
+
+                Nothing ->
+                    ""
+        paymentStatus =
+            Result.withDefault ""
+                (Shared.as_str_from_checkoutSessionPaymentStatus
+                    (Shared.payment_status_field_from_checkoutSession session)
+                )
+        details = Shared.customer_details_field_from_checkoutSession session
+        address =
+            Maybe.andThen Shared.address_field_from_paymentPagesCheckoutSessionCustomerDetails details
+        detailField get =
+            Maybe.withDefault "" (Maybe.andThen get details)
+        addressField get =
+            Maybe.withDefault "" (Maybe.andThen get address)
+    in
+        if status == "complete" && paymentStatus == "paid" then
             let
-                status = Db.getField "status" sess
-                paymentStatus = Db.getField "payment_status" sess
+                _ =
+                    println
+                        ("[STRIPE] Payment verified for cart: " ++ cartId)
             in
-                if status == "complete" && paymentStatus == "paid" then
-                    let
-                        _ =
-                            println
-                                ("[STRIPE] Payment verified for cart: " ++ cartId)
-                    in
-                        Ok
-                            { status = status
-                            , paymentStatus = paymentStatus
-                            , customerName = Db.getField "customer_name" sess
-                            , customerEmail = Db.getField "customer_email" sess
-                            , customerPhone = Db.getField "customer_phone" sess
-                            , shippingLine1 = Db.getField "shipping_line1" sess
-                            , shippingLine2 = Db.getField "shipping_line2" sess
-                            , shippingCity = Db.getField "shipping_city" sess
-                            , shippingCountry = Db.getField "shipping_country" sess
-                            , shippingPostalCode = Db.getField "shipping_postal_code" sess
-                            }
+                Ok
+                    { status = status
+                    , paymentStatus = paymentStatus
+                    , customerName = detailField Shared.name_field_from_paymentPagesCheckoutSessionCustomerDetails
+                    , customerEmail = detailField Shared.email_field_from_paymentPagesCheckoutSessionCustomerDetails
+                    , customerPhone = detailField Shared.phone_field_from_paymentPagesCheckoutSessionCustomerDetails
+                    , shippingLine1 = addressField Shared.line1_field_from_address
+                    , shippingLine2 = addressField Shared.line2_field_from_address
+                    , shippingCity = addressField Shared.city_field_from_address
+                    , shippingCountry = addressField Shared.country_field_from_address
+                    , shippingPostalCode = addressField Shared.postal_code_field_from_address
+                    }
 
-                else
-                    Err (Error.invalidInput "Payment not complete.")
-
-        Err _ ->
-            Err (Error.network "Failed to retrieve checkout session.")
+        else
+            Err (Error.invalidInput "Payment not complete.")
 
 
 deductStock orderId =
