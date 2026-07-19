@@ -2441,6 +2441,69 @@ fn emit_server_call(
 /// Returns [`Diagnostic::CompilerBug`] when no field with the requested name
 /// is present in the list.  Fail-closed — never silently drops a missing
 /// required field (MAKE INVALID STATES UNREPRESENTABLE principle).
+/// Render a UI kernel call whose inline cfg-record fields map to POSITIONAL
+/// runtime arguments: every argument is hoisted into a block local in IR walk
+/// order — `leading` args first, then the cfg fields in their STORED
+/// (name-sorted) record order, then `trailing` args — and the call composes
+/// the locals in the runtime's positional order (`leading…`, then
+/// `positional_fields` by name, then `trailing…`).
+///
+/// The hoist is load-bearing: the multi-use-clone rewrite walks the record in
+/// stored order and leaves the walk-order-LAST use of a value as a bare move.
+/// Rendering the fields positionally without the hoist reorders evaluation,
+/// so that bare move could run BEFORE an earlier use's `.clone()` (E0382 on
+/// `Ui.button`'s `{ onPress, label }`, whose stored order is `label` first
+/// but whose positional order passes `onPress` first).
+#[allow(clippy::too_many_arguments)] // one hoist site per cfg-record kernel; the args mirror emit_expr_at's
+fn emit_cfg_record_call(
+    ctx: &EmitCtx,
+    leading: &[&Expr],
+    fields: &[(Symbol, Expr)],
+    trailing: &[&Expr],
+    positional_fields: &[&str],
+    callee: &str,
+    where_: &'static str,
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<String> {
+    use std::fmt::Write as _;
+    let mut hoist = String::new();
+    for (i, e) in leading.iter().enumerate() {
+        let rendered = emit_expr_at(ctx, e, indent, child, generics)?;
+        // Writing into a String is infallible.
+        let _ = write!(hoist, "let __ui_lead{i} = {rendered}; ");
+    }
+    let mut local_of: Vec<(String, String)> = Vec::with_capacity(fields.len());
+    for (i, (sym, fe)) in fields.iter().enumerate() {
+        let fname = ctx.resolve_ident(*sym)?;
+        let rendered = emit_expr_at(ctx, fe, indent, child, generics)?;
+        let local = format!("__ui_f{i}");
+        let _ = write!(hoist, "let {local} = {rendered}; ");
+        local_of.push((fname.to_owned(), local));
+    }
+    for (i, e) in trailing.iter().enumerate() {
+        let rendered = emit_expr_at(ctx, e, indent, child, generics)?;
+        let _ = write!(hoist, "let __ui_trail{i} = {rendered}; ");
+    }
+    let mut call_args: Vec<String> = (0..leading.len())
+        .map(|i| format!("__ui_lead{i}"))
+        .collect();
+    for name in positional_fields {
+        let local = local_of
+            .iter()
+            .find(|(f, _)| f == name)
+            .map(|(_, l)| l.clone())
+            .ok_or_else(|| Diagnostic::CompilerBug {
+                where_,
+                detail: format!("cfg record is missing required field `{name}`"),
+            })?;
+        call_args.push(local);
+    }
+    call_args.extend((0..trailing.len()).map(|i| format!("__ui_trail{i}")));
+    Ok(format!("{{ {hoist}{callee}({}) }}", call_args.join(", ")))
+}
+
 fn lookup_field<'f>(
     ctx: &EmitCtx,
     fields: &'f [(Symbol, Expr)],
@@ -2544,8 +2607,21 @@ fn emit_arc_callback_field(
             break;
         }
     }
-    let inner_s = emit_expr_at(ctx, inner, indent, child, generics)?;
-    let arc = arc_callback_wrap(&inner_s);
+    // An inline lambda literal goes STRAIGHT into the `Arc` — one closure
+    // boundary. The generic wrap-and-redispatch below builds a fresh boxed
+    // closure per call of the `Arc` closure, so a callee-position capture of
+    // a `Box<dyn Fn>` param would be moved out of the `Fn` env per call
+    // (E0507); the direct form moves the capture ONCE at `Arc` construction
+    // and every call merely borrows it.
+    let arc = if let Expr::Lambda { params, ret, body } | Expr::SharedLambda { params, ret, body } =
+        inner
+    {
+        let closure = emit_lambda_unboxed(ctx, params, ret, body, indent, child, generics)?;
+        format!("::std::sync::Arc::new({closure})")
+    } else {
+        let inner_s = emit_expr_at(ctx, inner, indent, child, generics)?;
+        arc_callback_wrap(&inner_s)
+    };
     if hoisted.is_empty() {
         return Ok(arc);
     }
@@ -2652,25 +2728,19 @@ fn emit_ui_call(
                         .into(),
                 });
             };
-            let wrapper_e = lookup_field(
-                ctx,
-                fields,
-                "wrapperAttrs",
-                "ipe_backend_rust::emit_ui_call::UiLayoutWith::wrapperAttrs",
-            )?;
-            let root_e = lookup_field(
-                ctx,
-                fields,
-                "rootAttrs",
-                "ipe_backend_rust::emit_ui_call::UiLayoutWith::rootAttrs",
-            )?;
-            let wrapper_s = emit_expr_at(ctx, wrapper_e, indent, child, generics)?;
-            let root_s = emit_expr_at(ctx, root_e, indent, child, generics)?;
-            let elem_s = emit_expr_at(ctx, elem_e, indent, child, generics)?;
             // Same bottom-up M inference as UiLayout — no turbofish.
-            Ok(Some(format!(
-                "ipe_runtime::ui::render::ui_layout_with_vecs({wrapper_s}, {root_s}, {elem_s})"
-            )))
+            Ok(Some(emit_cfg_record_call(
+                ctx,
+                &[],
+                fields,
+                &[elem_e],
+                &["wrapperAttrs", "rootAttrs"],
+                "ipe_runtime::ui::render::ui_layout_with_vecs",
+                "ipe_backend_rust::emit_ui_call::UiLayoutWith",
+                indent,
+                child,
+                generics,
+            )?))
         }
 
         // `Html.render : Html msg -> String`
@@ -3005,24 +3075,18 @@ fn emit_ui_call(
                         .into(),
                 });
             };
-            let on_press_e = lookup_field(
+            Ok(Some(emit_cfg_record_call(
                 ctx,
+                &[attrs_e],
                 fields,
-                "onPress",
-                "ipe_backend_rust::emit_ui_call::UiButton::onPress",
-            )?;
-            let label_e = lookup_field(
-                ctx,
-                fields,
-                "label",
-                "ipe_backend_rust::emit_ui_call::UiButton::label",
-            )?;
-            let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let on_press_s = emit_expr_at(ctx, on_press_e, indent, child, generics)?;
-            let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_button_({attrs_s}, {on_press_s}, {label_s})"
-            )))
+                &[],
+                &["onPress", "label"],
+                "ipe_runtime::ui::helpers::ui_button_",
+                "ipe_backend_rust::emit_ui_call::UiButton",
+                indent,
+                child,
+                generics,
+            )?))
         }
 
         // `Ui.link : List (Attribute msg) -> { url : String, label : Element msg } -> Element msg`
@@ -3041,24 +3105,18 @@ fn emit_ui_call(
                         .into(),
                 });
             };
-            let url_e = lookup_field(
+            Ok(Some(emit_cfg_record_call(
                 ctx,
+                &[attrs_e],
                 fields,
-                "url",
-                "ipe_backend_rust::emit_ui_call::UiLink::url",
-            )?;
-            let label_e = lookup_field(
-                ctx,
-                fields,
-                "label",
-                "ipe_backend_rust::emit_ui_call::UiLink::label",
-            )?;
-            let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let url_s = emit_expr_at(ctx, url_e, indent, child, generics)?;
-            let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_link_({attrs_s}, {url_s}, {label_s})"
-            )))
+                &[],
+                &["url", "label"],
+                "ipe_runtime::ui::helpers::ui_link_",
+                "ipe_backend_rust::emit_ui_call::UiLink",
+                indent,
+                child,
+                generics,
+            )?))
         }
 
         // `Ui.image : List (Attribute msg) -> { src : String, description : String } -> Element msg`
@@ -3077,24 +3135,18 @@ fn emit_ui_call(
                         .into(),
                 });
             };
-            let src_e = lookup_field(
+            Ok(Some(emit_cfg_record_call(
                 ctx,
+                &[attrs_e],
                 fields,
-                "src",
-                "ipe_backend_rust::emit_ui_call::UiImage::src",
-            )?;
-            let description_e = lookup_field(
-                ctx,
-                fields,
-                "description",
-                "ipe_backend_rust::emit_ui_call::UiImage::description",
-            )?;
-            let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let src_s = emit_expr_at(ctx, src_e, indent, child, generics)?;
-            let description_s = emit_expr_at(ctx, description_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_image_({attrs_s}, {src_s}, {description_s})"
-            )))
+                &[],
+                &["src", "description"],
+                "ipe_runtime::ui::helpers::ui_image_",
+                "ipe_backend_rust::emit_ui_call::UiImage",
+                indent,
+                child,
+                generics,
+            )?))
         }
 
         // ── Ipe.Ui attribute builders ─────────────────────────────────────────

@@ -9263,7 +9263,17 @@ impl<'a> Lowerer<'a> {
         // exactly the read patterns a bare `Box` param cannot serve.
         if let IrType::Fun(ps, r) = ir_ty {
             let flags = fn_value_read_flags(sym, &body);
-            if flags.non_callee_ge1 || flags.any_ge2 || count_fn_value_uses(sym, &body) > 1 {
+            // The sync-capture flow check mirrors the `lower_let_pvar`
+            // trigger: a fn param captured inside a `requires_sync_capture`
+            // kernel argument is moved out of the wrapper `Fn` closure's env
+            // per call (E0507) unless it rides the `Clone` `Arc` carrier —
+            // the flags walk deliberately excludes those slots, so the flow
+            // check is the param-side trigger for them.
+            if flags.non_callee_ge1
+                || flags.any_ge2
+                || count_fn_value_uses(sym, &body) > 1
+                || flows_into_sync_kernel_call(sym, &body)
+            {
                 let shimmed = shim_fn_value_reads(sym, ps, r, &self.eta_params, body)?;
                 let mut remaining = count_var_uses(sym, &shimmed);
                 let disciplined = rewrite_multiuse_clones(sym, &mut remaining, shimmed);

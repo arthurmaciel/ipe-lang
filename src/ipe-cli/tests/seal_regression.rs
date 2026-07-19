@@ -281,3 +281,38 @@ fn multi_module_distinct_mod_idents_compile() {
     ];
     assert_accepted_project("multi_module_distinct", files, "HI\n");
 }
+
+// ===========================================================================
+// Qualified cross-module ALIAS references expand like exposed ones. A dep's
+// record alias reached ONLY through the import qualifier (`Money.Price`, no
+// `exposing (Price)`) must unify with the alias expansion flowing out of the
+// dep's own functions — qualified access needs no exposure.
+// ===========================================================================
+#[test]
+fn qualified_dep_alias_expands_without_exposing() {
+    let files: &[(&str, &str)] = &[
+        (
+            "Main.ipe",
+            "module Main exposing (main)\n\
+             import Ipe.Prelude exposing (..)\n\
+             import Ipe.Log exposing (println)\n\
+             import Lib.Money as Money\n\
+             view : Money.Price -> String\n\
+             view p = p.original\n\
+             main = println (view (Money.mk \"10\"))\n",
+        ),
+        (
+            "Lib/Money.ipe",
+            "module Lib.Money exposing (Price, mk)\n\
+             import Ipe.Prelude exposing (..)\n\
+             type alias Price =\n\
+             \x20   { original : String\n\
+             \x20   , discounted : String\n\
+             \x20   , hasDiscount : Bool\n\
+             \x20   }\n\
+             mk : String -> Price\n\
+             mk s = { original = s, discounted = s, hasDiscount = False }\n",
+        ),
+    ];
+    assert_accepted_project("qualified_dep_alias", files, "10\n");
+}

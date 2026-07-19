@@ -765,6 +765,25 @@ pub fn canonicalise_module_in_project(
         }
         qualifier_paths.insert(qualifier, dep_path.clone());
         qualifier_first_span.insert(qualifier, import.name.span);
+
+        // Register every exported alias of the dep under a synthetic
+        // `Qualifier.Name` key so a QUALIFIED annotation (`Money.Price`)
+        // expands the alias exactly as an `exposing`-injected one would —
+        // qualified access needs no exposure, and the qualified key can never
+        // collide with a bare local name (bare symbols carry no dot).
+        if let Some(dep) = deps.get(dep_path) {
+            let qualifier_s = name_str(interner, qualifier)?;
+            for (&alias_name, ea) in &dep.aliases {
+                let alias_s = name_str(interner, alias_name)?;
+                let key = interner.intern(&format!("{qualifier_s}.{alias_s}"))?;
+                injected_aliases.entry(key).or_insert_with(|| AliasDef {
+                    params: ea.params.clone(),
+                    body: ea.body.clone(),
+                    dep_scope_types: Some(dep.scope_types.clone()),
+                    dep_scope_aliases: Some(dep.scope_aliases.clone()),
+                });
+            }
+        }
     }
 
     // Fold Html-family STDLIB import qualifiers into `qualifier_paths` (→
@@ -1770,7 +1789,15 @@ fn synthesize_record_alias_ctors(
         let mut can_fields: Vec<(Symbol, canon::Type)> = Vec::with_capacity(fields.len());
         for (fname, fty) in fields {
             let mut budget = TYPE_EXPANSION_NODE_LIMIT;
-            let cty = canonicalise_type(fty, &ctx, &subst, &mut free_set, &mut visited, &mut budget, 0)?;
+            let cty = canonicalise_type(
+                fty,
+                &ctx,
+                &subst,
+                &mut free_set,
+                &mut visited,
+                &mut budget,
+                0,
+            )?;
             can_fields.push((*fname, cty));
         }
 
@@ -2505,7 +2532,15 @@ fn canonicalise_value(
             };
             let subst = BTreeMap::new();
             let mut budget = TYPE_EXPANSION_NODE_LIMIT;
-            let ty = canonicalise_type(&ann.value, &ctx, &subst, &mut free_vars, &mut visited, &mut budget, 0)?;
+            let ty = canonicalise_type(
+                &ann.value,
+                &ctx,
+                &subst,
+                &mut free_vars,
+                &mut visited,
+                &mut budget,
+                0,
+            )?;
             // Order the quantified type variables by their resolved NAME, not by
             // `Symbol` id (intern order is allocation-dependent, hence not a
             // stable wire order). Determinism gate: a multi-tyvar annotation
@@ -3295,8 +3330,24 @@ fn canonicalise_type(
     })?;
     match t {
         src::TypeAnnotation::TLambda(a, b) => Ok(canon::Type::Lambda(
-            Box::new(canonicalise_type(a, ctx, subst, free_vars, visited, budget, depth.saturating_add(1))?),
-            Box::new(canonicalise_type(b, ctx, subst, free_vars, visited, budget, depth.saturating_add(1))?),
+            Box::new(canonicalise_type(
+                a,
+                ctx,
+                subst,
+                free_vars,
+                visited,
+                budget,
+                depth.saturating_add(1),
+            )?),
+            Box::new(canonicalise_type(
+                b,
+                ctx,
+                subst,
+                free_vars,
+                visited,
+                budget,
+                depth.saturating_add(1),
+            )?),
         )),
         src::TypeAnnotation::TVar(v) => {
             // A variable bound to an alias argument resolves to that argument; its
@@ -3315,7 +3366,15 @@ fn canonicalise_type(
         src::TypeAnnotation::TTuple(elems) => {
             let mut can_elems = Vec::with_capacity(elems.len());
             for e in elems {
-                can_elems.push(canonicalise_type(e, ctx, subst, free_vars, visited, budget, depth.saturating_add(1))?);
+                can_elems.push(canonicalise_type(
+                    e,
+                    ctx,
+                    subst,
+                    free_vars,
+                    visited,
+                    budget,
+                    depth.saturating_add(1),
+                )?);
             }
             Ok(canon::Type::Tuple(can_elems))
         }
@@ -3328,7 +3387,15 @@ fn canonicalise_type(
             for (name, fty) in fields {
                 can_fields.push((
                     *name,
-                    canonicalise_type(fty, ctx, subst, free_vars, visited, budget, depth.saturating_add(1))?,
+                    canonicalise_type(
+                        fty,
+                        ctx,
+                        subst,
+                        free_vars,
+                        visited,
+                        budget,
+                        depth.saturating_add(1),
+                    )?,
                 ));
             }
             Ok(canon::Type::Record(can_fields))
@@ -3362,14 +3429,37 @@ fn canonicalise_type(
             // alias or an ordinary constructor.
             let mut can_args = Vec::with_capacity(args.len());
             for a in args {
-                can_args.push(canonicalise_type(a, ctx, subst, free_vars, visited, budget, depth.saturating_add(1))?);
+                can_args.push(canonicalise_type(
+                    a,
+                    ctx,
+                    subst,
+                    free_vars,
+                    visited,
+                    budget,
+                    depth.saturating_add(1),
+                )?);
             }
+            // A QUALIFIED reference (`Money.Price`) expands the dep's exported
+            // alias through its synthetic `Qualifier.Name` key even when the
+            // name was never `exposing`-injected — qualified access needs no
+            // exposure, and the qualified key wins over a same-named LOCAL
+            // alias. A miss (stdlib qualifier, non-alias type) falls back to
+            // the bare-name lookup below.
+            let alias_key: Symbol = if qualifier_str.is_empty() {
+                name
+            } else {
+                let name_s = ctx.interner.resolve(name).unwrap_or("");
+                ctx.interner
+                    .lookup(&format!("{qualifier_str}.{name_s}"))
+                    .filter(|sym| ctx.aliases.contains_key(sym))
+                    .unwrap_or(name)
+            };
             // A registered alias not already mid-expansion (cycle) is expanded:
             // its declared parameters are bound to the canonicalised arguments and
             // the body is canonicalised under that fresh substitution. Arity must
             // match exactly — a type alias has to be fully applied.
-            if !visited.contains(&name)
-                && let Some(alias) = ctx.aliases.get(&name)
+            if !visited.contains(&alias_key)
+                && let Some(alias) = ctx.aliases.get(&alias_key)
             {
                 if can_args.len() != alias.params.len() {
                     return Err(Diagnostic::Name {
@@ -3383,7 +3473,7 @@ fn canonicalise_type(
                 }
                 let body_subst: BTreeMap<Symbol, canon::Type> =
                     alias.params.iter().copied().zip(can_args).collect();
-                visited.push(name);
+                visited.push(alias_key);
                 // When the alias was injected from a dep module, expand its
                 // body in the DEP's type scope rather than the importing
                 // module's scope. This lets body references to types from the
@@ -3419,9 +3509,25 @@ fn canonicalise_type(
                         interner: ctx.interner,
                         ann_span: ctx.ann_span,
                     };
-                    canonicalise_type(&alias.body, &alt_ctx, &body_subst, free_vars, visited, budget, depth.saturating_add(1))?
+                    canonicalise_type(
+                        &alias.body,
+                        &alt_ctx,
+                        &body_subst,
+                        free_vars,
+                        visited,
+                        budget,
+                        depth.saturating_add(1),
+                    )?
                 } else {
-                    canonicalise_type(&alias.body, ctx, &body_subst, free_vars, visited, budget, depth.saturating_add(1))?
+                    canonicalise_type(
+                        &alias.body,
+                        ctx,
+                        &body_subst,
+                        free_vars,
+                        visited,
+                        budget,
+                        depth.saturating_add(1),
+                    )?
                 };
                 visited.pop();
                 return Ok(expanded);

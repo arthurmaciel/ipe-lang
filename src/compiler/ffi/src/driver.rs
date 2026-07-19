@@ -468,9 +468,10 @@ impl FfiCache {
 
     /// Emit and write all artifacts for a validated package. `inspection_json`
     /// is the raw inspector wire text that decoded into `pkg`; it is persisted
-    /// as `<slug>.pkg.json` so a warm build can RE-DERIVE `_bindings.rs` from
-    /// it through the validated decode gate rather than trusting the stored
-    /// `_bindings.rs` text.
+    /// as `<slug>.pkg.json`, the sole source `load_catalog` re-derives the
+    /// whole consumer-side view from through the validated decode gate. The
+    /// other six artifacts are debug/watch projections the loader never
+    /// trusts.
     ///
     /// # Errors
     ///
@@ -637,15 +638,19 @@ pub struct InstalledCrate {
 ///
 /// An absent cache directory is an empty catalog (a project with no FFI).
 ///
-/// The `_bindings.rs` file on disk is NEVER trusted as text: its
-/// `bindings_source` is RE-DERIVED by decoding the stored `<slug>.pkg.json`
-/// inspection document through the validated [`PkgInfo`] gate and re-running
-/// [`crate::bindings::emit_bindings`]. A hand-edited or planted `_bindings.rs`
-/// is therefore inert — an injected wrapper body cannot survive, because the
-/// emit derives only from decode-validated newtypes (no raw type/path/selector
-/// string reaches the rendered code). A tampered `pkg.json` re-runs the full
-/// decode gate, so it can only ever produce injection-free wrappers or fail
-/// closed.
+/// `<slug>.pkg.json` is the SOLE source of record: when it exists, EVERY
+/// consumer-side view — interface source, bindings source, module/kernel
+/// names, opaque maps, dep lines — is RE-DERIVED by decoding it through the
+/// validated [`PkgInfo`] gate and re-running the emitters. The sibling
+/// projection files (`.ipei`, `consumer.json`, `<slug>.ipe`, `_bindings.rs`)
+/// are debug/watch artifacts the loader never trusts, so a projection that
+/// diverges from the catalog (torn write, mixed-run cache, hand edit) is
+/// inert by construction: a member either exists in `pkg.json` or it does
+/// not exist anywhere. A planted `_bindings.rs` cannot inject a wrapper
+/// body, because the emit derives only from decode-validated newtypes (no
+/// raw type/path/selector string reaches the rendered code); a tampered
+/// `pkg.json` re-runs the full decode gate, so it can only ever produce
+/// injection-free wrappers or fail closed.
 ///
 /// # Errors
 ///
@@ -696,26 +701,48 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
         let read = |p: &Path| -> Result<String, Diagnostic> {
             std::fs::read_to_string(p).map_err(|e| io_err(p, e.to_string()))
         };
-        let consumer_text = read(&paths.consumer)?;
-        let interface_source = read(&paths.interface)?;
-        // RE-DERIVE the wrappers from the validated inspection document — the
-        // on-disk `_bindings.rs` is never trusted as text (door (a) close).
-        // A legacy cache written before the `pkg.json` artifact existed has no
-        // document to re-derive from; it falls back to the stored text, whose
-        // trust then rests on the discovery-time ownership/write-boundary gate
-        // (`find_cache_root`) plus the injection-free-by-construction emitter.
-        let mut dep_versions: std::collections::BTreeMap<String, String> =
-            std::collections::BTreeMap::new();
-        let bindings_source = if paths.pkg_json.is_file() {
+        // RE-DERIVE the whole consumer-side view from the validated
+        // inspection document — no on-disk projection is trusted as text
+        // (see [`load_catalog`]). A legacy cache written before the
+        // `pkg.json` artifact existed has no document to re-derive from; it
+        // falls back to the stored projections, whose trust then rests on
+        // the discovery-time ownership/write-boundary gate
+        // (`find_cache_root`) plus the injection-free-by-construction
+        // emitter.
+        if paths.pkg_json.is_file() {
             let pkg_text = read(&paths.pkg_json)?;
             let pkg = PkgInfo::decode_json(&pkg_text)?;
+            let mut dep_versions: std::collections::BTreeMap<String, String> =
+                std::collections::BTreeMap::new();
             for dep in pkg.transitive_deps() {
                 dep_versions.insert(dep.ident.as_str().to_owned(), dep.version.clone());
             }
-            crate::bindings::emit_bindings(&pkg)
-        } else {
-            read(&paths.bindings)?
-        };
+            let iface = crate::interface::crate_interface(&pkg);
+            let bindings_source = crate::bindings::emit_bindings(&pkg);
+            let wrapper_idents: BTreeSet<String> = iface
+                .bindings
+                .iter()
+                .map(|b| b.wrapper_ident.clone())
+                .collect();
+            return Ok(InstalledCrate {
+                slug,
+                module_name: iface.module_name,
+                kernel_name: iface.kernel_name,
+                interface_source: iface.source,
+                bindings_source,
+                opaque_types: iface.opaque_types,
+                opaque_type_ids: iface.opaque_type_ids,
+                cargo_deps: cargo_dep_lines(&pkg)?,
+                bindings: iface.bindings,
+                wrapper_idents,
+                dep_versions,
+            });
+        }
+        let consumer_text = read(&paths.consumer)?;
+        let interface_source = read(&paths.interface)?;
+        let dep_versions: std::collections::BTreeMap<String, String> =
+            std::collections::BTreeMap::new();
+        let bindings_source = read(&paths.bindings)?;
         let malformed = |detail: String| Diagnostic::WireMalformed {
             context: format!("consumer manifest `{}`", paths.consumer.display()),
             defect: crate::diag::WireDefect::Json { detail },
@@ -1267,6 +1294,42 @@ mod tests {
         assert!(
             c.bindings_source.contains("pub fn semver_parse"),
             "the real wrapper is re-derived"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn divergent_projection_files_are_inert_under_pkg_json() {
+        // A projection claiming a member the authoritative catalog lacks
+        // (torn write, mixed-run cache, hand edit) must never reach the
+        // loaded view: everything re-derives from pkg.json.
+        let tmp = std::env::temp_dir().join(format!("ipe-ffi-diverge-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let cache = FfiCache::at_project_root(&tmp);
+        let (_pkg, paths) = install_from_inspection(&cache, &semver_json()).expect("installs");
+        let baseline = load_catalog(cache.root()).expect("loads");
+        let base = baseline.first().expect("one crate");
+        // Plant a phantom binding into the consumer manifest and a phantom
+        // forwarder into the interface module.
+        let consumer = std::fs::read_to_string(&paths.consumer)
+            .expect("readable")
+            .replace(
+                "\"bindings\": [",
+                "\"bindings\": [{\"refName\": \"phantom\", \"wrapperIdent\": \
+                 \"semver_phantom\", \"arity\": 1, \"sig\": \"String -> String\"},",
+            );
+        std::fs::write(&paths.consumer, consumer).expect("plant consumer");
+        let mut iface = std::fs::read_to_string(&paths.interface).expect("readable");
+        iface.push_str(
+            "phantom : String -> String\nphantom a0 =\n    Ffi.binding \"semver_phantom\" a0\n",
+        );
+        std::fs::write(&paths.interface, iface).expect("plant interface");
+        let reloaded = load_catalog(cache.root()).expect("loads");
+        let c = reloaded.first().expect("one crate");
+        assert_eq!(c, base, "planted projections must not change the view");
+        assert!(
+            !c.interface_source.contains("phantom"),
+            "the phantom forwarder must not survive re-derivation"
         );
         let _ = std::fs::remove_dir_all(&tmp);
     }
