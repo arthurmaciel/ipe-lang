@@ -402,10 +402,19 @@ mod tests {
             ))
             .is_ok()
         );
-        assert!(matches!(
+        assert!(
             resolve(&layer(
                 Some(true),
                 Some("aarch64-unknown-linux-musl"),
+                None,
+                None
+            ))
+            .is_ok()
+        );
+        assert!(matches!(
+            resolve(&layer(
+                Some(true),
+                Some("riscv64gc-unknown-linux-musl"),
                 None,
                 None
             )),

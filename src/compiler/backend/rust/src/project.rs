@@ -1547,16 +1547,16 @@ fn ir_type_contains_non_serde(ty: &IrType) -> bool {
         IrType::Record(fields) => fields.values().any(ir_type_contains_non_serde),
         IrType::Enum { args, .. } => args.iter().any(ir_type_contains_non_serde),
 
-        // ── Function types — never serialisable ───────────────────────────
-        IrType::Fun(..) | IrType::FnOnceChain(..) => true,
-
-        // ── UI element types — not serialisable ───────────────────────────
-        IrType::Ui { .. } | IrType::UiPlain(_) => true,
-
-        // ── Non-serde server-surface / runtime-opaque types ───────────────
-        // These are either handles to server resources, async primitives, or
-        // types explicitly documented as non-serde (Secret, SqlFragment).
-        IrType::Task(_)
+        // ── Never serialisable ────────────────────────────────────────────
+        // Function types, UI element types, and the non-serde server-surface
+        // / runtime-opaque types: handles to server resources, async
+        // primitives, or types explicitly documented as non-serde
+        // (Secret, SqlFragment).
+        IrType::Fun(..)
+        | IrType::FnOnceChain(..)
+        | IrType::Ui { .. }
+        | IrType::UiPlain(_)
+        | IrType::Task(_)
         | IrType::Cmd(_)
         | IrType::Sub(_)
         | IrType::Decoder(_)

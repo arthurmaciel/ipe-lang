@@ -46,9 +46,9 @@ pub enum StaticTriple {
     /// The default when `--static` is given without `--target`.
     #[default]
     X8664LinuxMusl,
-    /// `aarch64-unknown-linux-musl` — fully static AArch64 ELF, zero runtime
+    /// `aarch64-unknown-linux-musl` — fully static `AArch64` ELF, zero runtime
     /// deps. Requires the `aarch64-unknown-linux-musl` rustup target and a
-    /// musl-capable AArch64 C linker (`aarch64-linux-musl-gcc` or equivalent).
+    /// musl-capable `AArch64` C linker (`aarch64-linux-musl-gcc` or equivalent).
     Aarch64LinuxMusl,
 }
 

@@ -299,6 +299,9 @@ fn render_merged_dep_line(name: &str, version: &str, features: &BTreeSet<String>
 pub struct FfiPrep {
     /// The parsed per-crate entries — used to assemble [`ipe_backend_rust::FfiEmit`].
     pub catalog: Vec<InstalledCrate>,
+    /// Cross-crate foreign-type nominal unification decisions (one Ipê home
+    /// per foreign type) applied to the catalog before injection.
+    pub unify: ipe_ffi::unify::UnifyReport,
     /// The module paths injected into the source map (earn
     /// `ModuleOrigin::FfiInterface` at [`crate::create_source_root`]).
     pub injected: BTreeSet<Vec<String>>,
@@ -328,12 +331,17 @@ pub fn prepare_ffi(
     sources: &mut BTreeMap<Vec<String>, (PathBuf, String)>,
     blame_path: &Path,
 ) -> Result<FfiPrep, CliError> {
-    let catalog = load_catalog_for(blame_path)?;
+    let mut catalog = load_catalog_for(blame_path)?;
+    // One Ipê home per foreign type: collapse same-defining-path nominals
+    // across the catalog BEFORE injection, so every injected signature and
+    // the assembled `foreign_types` map agree on one nominal per type.
+    let unify = ipe_ffi::unify::unify_foreign_nominals(&mut catalog);
     let cache_hint = find_cache_root(blame_path)?.unwrap_or_default();
     let injected = inject_interfaces(sources, &catalog, &cache_hint)?;
     let emit = assemble_emit(&catalog)?;
     Ok(FfiPrep {
         catalog,
+        unify,
         injected,
         emit,
     })
@@ -1173,6 +1181,9 @@ mod tests {
             interface_source: String::new(),
             bindings_source: String::new(),
             opaque_types: BTreeMap::new(),
+            opaque_type_ids: BTreeMap::new(),
+            bindings: Vec::new(),
+            dep_versions: BTreeMap::new(),
             cargo_deps: vec![line.to_owned()],
             wrapper_idents: BTreeSet::new(),
         };
@@ -1201,6 +1212,9 @@ mod tests {
             interface_source: String::new(),
             bindings_source: String::new(),
             opaque_types: BTreeMap::new(),
+            opaque_type_ids: BTreeMap::new(),
+            bindings: Vec::new(),
+            dep_versions: BTreeMap::new(),
             cargo_deps: vec![line.to_owned()],
             wrapper_idents: BTreeSet::new(),
         };
@@ -1236,6 +1250,9 @@ mod tests {
             interface_source: String::new(),
             bindings_source: String::new(),
             opaque_types: BTreeMap::new(),
+            opaque_type_ids: BTreeMap::new(),
+            bindings: Vec::new(),
+            dep_versions: BTreeMap::new(),
             cargo_deps: lines.into_iter().map(str::to_owned).collect(),
             wrapper_idents: BTreeSet::new(),
         };
