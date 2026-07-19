@@ -20,7 +20,7 @@ pub use ir::{
     UiPlain, Variant, carrier_is_clone, fun_value_arc_promotable, ir_type_is_derivable,
     ir_type_is_serde, is_dispatch_free, is_irrefutable,
 };
-pub use pretty::pretty;
+pub use pretty::{MAX_IR_RENDER_DEPTH, pretty};
 
 /// The compilation target (kernel-availability axis) — re-exported so
 /// backend/db consumers reach it through the IR crate like `KernelFn`.
