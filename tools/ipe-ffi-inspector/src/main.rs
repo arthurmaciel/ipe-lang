@@ -619,6 +619,8 @@ fn main() {
 
     // [WALL-G #84] Reset the process-global cross-crate impl index once per run.
     GLOBAL_XC_IMPLS.with(|c| c.borrow_mut().clear());
+    // [stripe-send F2] Reset the cross-crate proven-public-path set once per run.
+    GLOBAL_XC_PUBLIC_PATHS.with(|c| c.borrow_mut().clear());
 
     // [WALL-G #84] Cross-crate unique-impl monomorphization needs EVERY project crate's
     // concrete impls indexed BEFORE any crate is bound (the crate defining `op<C: Wire>`
@@ -1741,6 +1743,18 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
     // rustdoc_type_to_rust_str so it can fully-qualify opaque types.  Must be
     // set BEFORE any function is parsed (parse_fn_item -> rust_str reads it).
     let (rp, rfp) = collect_reachable_paths(doc);
+    // [stripe-send F2] Union THIS crate's proven-public type paths into the
+    // manifest-run cross-crate set. Each value is the crate-qualified public path a
+    // sibling crate's renderer needs for a cross-crate Output. Skip the synthetic
+    // probe crate (its transient wrapper types are never a real Output).
+    GLOBAL_XC_PUBLIC_PATHS.with(|c| {
+        let mut set = c.borrow_mut();
+        for path in rp.values() {
+            if !path.starts_with("_ipe_ffi_probe") {
+                set.insert(path.clone());
+            }
+        }
+    });
     REACHABLE_PATHS.with(|c| *c.borrow_mut() = rp);
     REACHABLE_FN_PATHS.with(|c| *c.borrow_mut() = rfp);
     ALIAS_MAP.with(|c| *c.borrow_mut() = collect_aliases(doc));
@@ -4834,7 +4848,21 @@ thread_local! {
     static TRAIT_ID_CANON_PATH: std::cell::RefCell<HashMap<String, String>> =
         std::cell::RefCell::new(HashMap::new());
 
-    // [#52] Set of CRATE-LOCAL trait ids that themselves carry a `Send` supertrait
+    // [stripe-send F2] Manifest-run cross-crate PROVEN-PUBLIC type paths: the union
+    // of every MEMBER crate's own reachable-path walk (root-public re-exports
+    // included), stored as the crate-qualified public path STRING — exactly what
+    // `rustdoc_type_to_rust_str` renders for a resolved_path. A sibling manifest
+    // crate's public type (`stripe_shared::Customer`, the `CustomerCreateCustomer`
+    // send Output) is unnameable through the CONSUMING crate's own `doc["paths"]`,
+    // so the renderer falls to the bare last segment and the nameability filter
+    // drops it. Consulting this set lets the renderer keep the proven-public path.
+    // Only paths PROVEN public by the owning crate's reachable walk enter it — never
+    // a def-path reconstruction (the private-module trap). Reset once per manifest
+    // run, populated in every member crate's `parse_rustdoc`.
+    static GLOBAL_XC_PUBLIC_PATHS: std::cell::RefCell<HashSet<String>> =
+        std::cell::RefCell::new(HashSet::new());
+
+    // Set of CRATE-LOCAL trait ids that themselves carry a `Send` supertrait
     // bound (declared `trait T: Send` / `trait T: Send + Sync + …`). The Send-proof
     // (Step 3) consults this: a generic param `C: T` monomorphized to a concrete
     // opaque is provably-Send-for-the-async-gate when its bound trait `T: Send`,
@@ -5304,6 +5332,23 @@ fn collect_external_trait_paths(doc: &serde_json::Value) -> HashMap<String, Stri
                 format!("std::str::{r}")
             } else {
                 public_path
+            };
+            // [private-path-admission] A trait's rustdoc DEFINITION path can
+            // thread a PRIVATE module of a NON-STD external crate
+            // (`::krate::private_mod::Trait`) whose public re-export is
+            // unprovable without that crate's own rustdoc. Emitting it as the
+            // UFCS qualifier is E0603 the moment the wrapper is reached — today
+            // only unreached-wrapper DCE keeps builds green, which is luck, not
+            // admission. Route the same proven-public / fail-closed gate the
+            // external TYPE path already uses (`external_type_public_path`): a
+            // std/core path (already normalised above) and a root-public
+            // `crate::Trait` pass; a non-std multi-segment path whose
+            // intermediate modules cannot be proven public is DROPPED (absent
+            // from the map → `build_trait_ctx` yields `TraitUnreachable`,
+            // sound over-drop). std/core paths are kept verbatim by that gate,
+            // preserving every existing std-trait binding.
+            let Some(public_path) = external_type_public_path(&public_path) else {
+                continue;
             };
             out.insert(id.clone(), public_path);
         }
@@ -6074,7 +6119,18 @@ fn resolved_path_is_bindable(id: &serde_json::Value, raw_name: &str) -> bool {
     // always-nameable std containers (`Vec`/`Option`/…) — which rustdoc may not
     // record an id for — may bind via the bare last segment; anything else drops.
     let last = raw_name.rsplit("::").next().unwrap_or(raw_name);
-    ALWAYS_NAMEABLE.contains(&last)
+    if ALWAYS_NAMEABLE.contains(&last) {
+        return true;
+    }
+    // [stripe-send F2] A sibling manifest crate's public type this crate cannot
+    // resolve locally is bindable when the manifest-run proven-public set has a
+    // UNIQUE last-segment match — the renderer will name it by that proven-public
+    // path. Ambiguous / absent → stays unbindable (fail-closed).
+    GLOBAL_XC_PUBLIC_PATHS.with(|c| {
+        let set = c.borrow();
+        let mut hits = set.iter().filter(|p| p.rsplit("::").next() == Some(last));
+        matches!((hits.next(), hits.next()), (Some(_), None))
+    })
 }
 
 /// Register `path` for `id` if it is shorter than any currently stored path.
@@ -6965,7 +7021,19 @@ fn rustdoc_type_to_rust_str(val: &serde_json::Value) -> String {
         let qualified = rp.get("id").and_then(reachable_local_path);
         let name: String = match qualified {
             Some(full) => full,
-            None => raw_name.rsplit("::").next().unwrap_or(raw_name).to_string(),
+            // [stripe-send F2] A type unnameable through THIS crate's reachable
+            // paths but defined+public in a SIBLING manifest crate (the
+            // `stripe_shared::Customer` send Output). This crate's own `doc["paths"]`
+            // records the referenced external item's canonical path
+            // (`reachable_external_type_path`); admit it ONLY when the manifest-run
+            // proven-public set — the union of every member crate's own reachable
+            // walk — confirms it (keeping the private-module def-path trap closed:
+            // such a path never entered the set).
+            None => rp
+                .get("id")
+                .and_then(reachable_external_type_path)
+                .filter(|p| GLOBAL_XC_PUBLIC_PATHS.with(|c| c.borrow().contains(p)))
+                .unwrap_or_else(|| raw_name.rsplit("::").next().unwrap_or(raw_name).to_string()),
         };
         let name = name.as_str();
         let args: Vec<String> = rp
@@ -8436,7 +8504,28 @@ fn type_to_typeref(
         }
         let qualified = rp.get("id").and_then(reachable_local_path);
         let ext_path = rp.get("id").and_then(reachable_external_type_path);
-        let name: String = match qualified.or(ext_path) {
+        // [stripe-send F2] A sibling manifest crate's public type unresolvable
+        // through THIS crate's own paths (`stripe_shared::Customer`, the
+        // `CustomerCreateCustomer` send Output). Match the raw name's last segment
+        // against the manifest-run proven-public set (each entry is a member
+        // crate's own reachable-walk path); admit ONLY a UNIQUE match (two crates
+        // exposing the same last segment → ambiguous → fall through to the drop,
+        // fail-closed). The private-module trap stays closed: only proven-public
+        // paths ever entered the set.
+        let xc_path = if qualified.is_none() && ext_path.is_none() {
+            let last = raw_name.rsplit("::").next().unwrap_or(raw_name);
+            GLOBAL_XC_PUBLIC_PATHS.with(|c| {
+                let set = c.borrow();
+                let mut hits = set.iter().filter(|p| p.rsplit("::").next() == Some(last));
+                match (hits.next(), hits.next()) {
+                    (Some(p), None) => Some(p.clone()),
+                    _ => None,
+                }
+            })
+        } else {
+            None
+        };
+        let name: String = match qualified.or(ext_path).or(xc_path) {
             Some(full) => full,
             // [#48-R1] Fall back to bare last-segment ONLY for always-nameable
             // containers (Vec, Option, …) — these don't need a qualified path
@@ -13478,6 +13567,70 @@ mod tests {
         );
     }
 
+    // ── private-path-admission — an external TRAIT def-path threading a
+    //    private module of a NON-std crate must NOT be recorded as a UFCS
+    //    qualifier (E0603 if reached); a root-public external trait still is.
+    #[test]
+    fn external_trait_private_module_path_is_dropped_at_admission() {
+        let doc = serde_json::json!({
+            "index": {
+                "1": { "name": "mycrate", "crate_id": 0, "visibility": "public",
+                       "inner": { "module": { "items": [] } } }
+            },
+            "paths": {
+                // Root-public foreign trait — the public path IS the def path.
+                "200": { "crate_id": 1, "kind": "trait",
+                         "path": ["reqwest", "IntoUrl"] },
+                // Foreign trait whose def path threads a PRIVATE module; the
+                // public re-export lives at an ancestor whose visibility we
+                // cannot read without reqwest's own rustdoc.
+                "201": { "crate_id": 1, "kind": "trait",
+                         "path": ["reqwest", "async_impl", "client", "Fluent"] }
+            },
+        });
+        let paths = collect_external_trait_paths(&doc);
+        assert_eq!(
+            paths.get("200").map(String::as_str),
+            Some("reqwest::IntoUrl"),
+            "a root-public external trait keeps its verbatim public path"
+        );
+        assert!(
+            !paths.contains_key("201"),
+            "a private-module-threading external trait must be DROPPED at admission \
+             (absent from the map → TraitUnreachable), got {:?}",
+            paths.get("201")
+        );
+    }
+
+    #[test]
+    fn external_std_trait_multisegment_still_recorded() {
+        // The fix must NOT regress a legitimate std/core trait whose public path
+        // coincides with its multi-segment def path.
+        let doc = serde_json::json!({
+            "index": {
+                "1": { "name": "mycrate", "crate_id": 0, "visibility": "public",
+                       "inner": { "module": { "items": [] } } }
+            },
+            "paths": {
+                "300": { "crate_id": 1, "kind": "trait",
+                         "path": ["core", "convert", "From"] },
+                // The known private std re-export submodule still collapses.
+                "301": { "crate_id": 1, "kind": "trait",
+                         "path": ["core", "str", "traits", "FromStr"] }
+            },
+        });
+        let paths = collect_external_trait_paths(&doc);
+        assert_eq!(
+            paths.get("300").map(String::as_str),
+            Some("core::convert::From")
+        );
+        assert_eq!(
+            paths.get("301").map(String::as_str),
+            Some("core::str::FromStr"),
+            "the core::str::traits private re-export must still collapse to public"
+        );
+    }
+
     /// A rustdoc `doc` whose `paths` table carries:
     ///   id 100 → external `core::clone::Clone` (the real std trait)
     ///   id 101 → external `core::fmt::Display`
@@ -17422,6 +17575,41 @@ mod tests {
     }
 
     #[test]
+    fn xc_send_output_resolves_via_proven_public_set() {
+        // The `CustomerCreateCustomer.send` Output shape: a sibling manifest
+        // crate's public type (`stripe_shared::Customer`) referenced from the
+        // consuming crate, whose own paths cannot name it. `type_to_typeref` (the
+        // send Output path) must resolve it via the manifest-run proven-public set
+        // to the crate-qualified path — else the wrapper drops silently.
+        REACHABLE_PATHS.with(|c| c.borrow_mut().clear());
+        LOCAL_TYPE_IDS.with(|c| c.borrow_mut().clear());
+        EXTERNAL_TYPE_IDS.with(|c| c.borrow_mut().clear());
+        EXTERNAL_TYPE_PATH_BY_ID.with(|c| c.borrow_mut().clear());
+        GLOBAL_XC_PUBLIC_PATHS.with(|c| {
+            c.borrow_mut().clear();
+            c.borrow_mut().insert("stripe_shared::Customer".to_string());
+        });
+        let pidx: HashMap<String, usize> = HashMap::new();
+        let node = serde_json::json!({
+            "resolved_path": { "name": "Customer", "path": "Customer", "id": 900, "args": null }
+        });
+        assert_eq!(
+            type_to_typeref(&node, &pidx),
+            Ok(TypeRef::Ctor(
+                "::stripe_shared::Customer".to_string(),
+                vec![]
+            )),
+            "the send Output must resolve to the proven-public sibling path"
+        );
+        // Without the proven-public entry it drops (fail-closed, pre-fix).
+        GLOBAL_XC_PUBLIC_PATHS.with(|c| c.borrow_mut().clear());
+        assert!(
+            type_to_typeref(&node, &pidx).is_err(),
+            "an unproven cross-crate type must still drop"
+        );
+    }
+
+    #[test]
     fn non_serde_bound_not_reduced() {
         // `fn f<T: Display>(x: T)` → NOT reduced (Display is not serde).
         let display_bound = serde_json::json!({
@@ -18078,6 +18266,59 @@ mod tests {
     /// up to the bound then renders the inner alias OPAQUE. The test PASSING (not
     /// hanging/aborting) is itself the termination proof; we also assert the output
     /// is bounded + contains the opaque inner name at the truncation point.
+    // ── stripe-send F2 — a cross-crate Output type nameable only via a sibling
+    //    manifest crate's proven-public path (the `stripe_shared::Customer` shape).
+    #[test]
+    fn xc_public_path_renders_when_a_sibling_crate_proved_it_public() {
+        // The consuming crate's own `doc["paths"]` records the referenced external
+        // item's canonical path, but `reachable_local_path` misses (not
+        // crate-local). Without the proven-public set the renderer falls to the
+        // bare last segment (`Customer`), which the nameability filter drops — the
+        // exact `CustomerCreateCustomer.send` Output drop.
+        REACHABLE_PATHS.with(|c| c.borrow_mut().clear());
+        EXTERNAL_TYPE_PATH_BY_ID.with(|c| {
+            c.borrow_mut().clear();
+            c.borrow_mut()
+                .insert("777".to_string(), "stripe_shared::Customer".to_string());
+        });
+        let node = serde_json::json!({
+            "resolved_path": { "name": "Customer", "path": "Customer", "id": 777, "args": null }
+        });
+        // Not yet in the proven-public set → falls to the bare segment (dropped
+        // downstream, the pre-fix behaviour).
+        GLOBAL_XC_PUBLIC_PATHS.with(|c| c.borrow_mut().clear());
+        assert_eq!(rustdoc_type_to_rust_str(&node), "Customer");
+        // A SIBLING member crate's reachable walk proved it public → the renderer
+        // keeps the crate-qualified path, so the Output is nameable and `send`
+        // binds.
+        GLOBAL_XC_PUBLIC_PATHS.with(|c| {
+            c.borrow_mut().insert("stripe_shared::Customer".to_string());
+        });
+        assert_eq!(rustdoc_type_to_rust_str(&node), "stripe_shared::Customer");
+        GLOBAL_XC_PUBLIC_PATHS.with(|c| c.borrow_mut().clear());
+        EXTERNAL_TYPE_PATH_BY_ID.with(|c| c.borrow_mut().clear());
+    }
+
+    #[test]
+    fn xc_public_path_never_admits_an_unproven_external_path() {
+        // A def-path threading a private module of a non-member crate was never
+        // recorded into the proven-public set (`external_type_public_path` fail-
+        // closes it), so even present in EXTERNAL_TYPE_PATH_BY_ID it stays dropped
+        // — the private-module trap stays closed.
+        REACHABLE_PATHS.with(|c| c.borrow_mut().clear());
+        EXTERNAL_TYPE_PATH_BY_ID.with(|c| {
+            c.borrow_mut().clear();
+            c.borrow_mut()
+                .insert("778".to_string(), "krate::private_mod::Secret".to_string());
+        });
+        GLOBAL_XC_PUBLIC_PATHS.with(|c| c.borrow_mut().clear());
+        let node = serde_json::json!({
+            "resolved_path": { "name": "Secret", "path": "Secret", "id": 778, "args": null }
+        });
+        assert_eq!(rustdoc_type_to_rust_str(&node), "Secret");
+        EXTERNAL_TYPE_PATH_BY_ID.with(|c| c.borrow_mut().clear());
+    }
+
     #[test]
     fn wall5_cyclic_alias_terminates_fail_closed() {
         // body = Result<DbResult<T>, DbError>  (the first arg is the alias itself)

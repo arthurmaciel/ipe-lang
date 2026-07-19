@@ -415,6 +415,13 @@ fn name_label(msg: &NameError) -> Option<String> {
         } => Some(format!(
             "`{name}` takes {expected} type argument(s), but {found} were given"
         )),
+        NameError::BuiltinTypeArity {
+            name,
+            expected,
+            found,
+        } => Some(format!(
+            "`{name}` takes exactly {expected} type argument(s), but {found} were given"
+        )),
         NameError::ModuleNotFound { name, .. } => Some(format!("module `{name}` was not found")),
         NameError::ImportCycle { path } => {
             let cycle = path.join(" → ");
