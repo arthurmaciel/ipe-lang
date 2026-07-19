@@ -11,7 +11,8 @@ other governance docs — `AGENTS.md` (Ipê language authoring reference),
    injection (SQL, shell, path, header, log), no secret leakage into logs or
    errors, no auth/CSRF bypass, no timing oracle on a secret comparison, no
    unbounded resource a remote party can exhaust. On untrusted input the safe
-   outcome is the only reachable outcome.
+   outcome is the only reachable outcome — fail closed: absent proof the input
+   is safe, take the conservative, secure branch, never the permissive one.
 2. **Correctness** — same well-typed Ipê program + same input ⇒ the Rust output
    matches the Go reference's observable behaviour (ideally byte-for-byte).
    Deliberate divergence is documented, never silent.
@@ -48,7 +49,8 @@ Beneath the ranked principles, every design and code pass obeys:
   constructor over an open field. A kernel the resolver recognises but the
   type-scheme table does not cover MUST be a compile-time error — never a
   silent flexible type variable that defers failure to the downstream Rust
-  build.
+  build. This is fail-closed by construction: with no proof the state is
+  valid, the representable outcome is rejection, not a deferred blowup.
 - **Fix the structure, not the symptom.** Repair the generative cause — the
   missing invariant, the drifting table, the untyped boundary, the
   special-case that should be a general rule — so the whole defect class
