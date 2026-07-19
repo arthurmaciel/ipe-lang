@@ -54,3 +54,10 @@ The upstream set includes Go-package examples (`02-go-stdlib`, `03-tea-external`
 Go-FFI filter (`lib/examples.sh`) excludes those from the Rust build set
 unchanged — a Go-package import that resolves to neither an Ipê stdlib module
 nor a local project `.ipe` file marks the example out of scope.
+
+`13-skyshop` has a first-class Ipê-NATIVE counterpart at
+`examples/13-skyshop/`: the same storefront rebuilt on the shim-free auto-FFI
+(real `firestore` / `rs-firebase-admin-sdk` / `async-stripe` crates). The
+Go-FFI upstream stays out of mirror scope; the counterpart is a
+behaviour-level port, not a token patch, so it lives as an ordinary in-tree
+example rather than a rename-map entry.

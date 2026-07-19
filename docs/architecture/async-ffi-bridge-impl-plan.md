@@ -212,6 +212,106 @@ Same-named distinct types keep distinct nominals (correct). Old caches
 without `foreignTypeIds` simply see no unification (today's behavior) —
 re-running `ipe install` upgrades them.
 
+### Milestone: param-shape-admission — general type-shape rules for rich builder surfaces
+
+**The structural diagnosis.** The binder's param/field admission grew outward
+from primitives: a parameter is admitted only when its type reduces to a
+closed set of std shapes (numerics, `String`, `Vec`/`Option` of those). But
+the same inspection ALSO binds nominal types as opaque handles — structs,
+enums, typed-ID newtypes — with constructors, accessors, and one canonical
+identity per defining path. The remaining checkout-flow gaps are all one
+symptom: **a parameter or field whose type is a nominal the binder already
+binds elsewhere is still refused, because the admission tables predate the
+opaque-handle surface.** Concretely, on `rustdoc` type structure:
+
+| Gap member | Rust shape | Missing admission class |
+|---|---|---|
+| `CreateCheckoutSession::line_items` | `impl Into<Vec<LocalCloneStruct>>` param | conversion-bound → Vec-of-bound-nominal |
+| `CreateCheckoutSession::mode`, `LineItemsPriceData::new` | `impl Into<CrossCrateEnum>` param | conversion-bound → bound-nominal (identity) |
+| `RetrieveCheckoutSession::new` | `impl Into<NewtypeId>` param, `NewtypeId: From<String>` | conversion-bound → String-convertible target |
+| `CheckoutSessionMode` variant ctors | `#[non_exhaustive]` enum (enum-level) | enum-level non-exhaustive ≠ non-constructible |
+| `CheckoutSession.status` / `.payment_status` | struct field of crate-local Clone enum | enum-typed field in the field closed set |
+
+These are not one crate's quirks — they are the standard shapes of every rich
+Rust API (builder setters over `impl Into<T>`, typed-ID newtypes with
+`From<String>`, enums as params and as struct fields), so each rule below is
+keyed ONLY on rustdoc type structure, never on a crate name.
+
+**Admission classes (the design).**
+
+1. **Identity conversion-bound admission.** A PARAM-position `Into<X>`/`From<X>`
+   bound (named generic or anonymous `impl Trait`) whose target `X` is a
+   *bindable nominal* — crate-local reachable, or cross-crate
+   identity-provable via the defining-path map — or a `Vec` of one,
+   substitutes the target itself. Soundness: `X: Into<X>` and `X: From<X>`
+   hold for every `X` by std's reflexive `From` + blanket `Into`; the wrapper
+   passes the owned Ipê-held value straight through, and every existing
+   nameability / bindability / Send gate still applies downstream. RETURN
+   position is untouched: an anonymous conversion-bound return produces an
+   opaque value that merely *converts to* `X` — claiming `X` in the wrapper
+   signature would be a latent type mismatch at cargo time, so it stays
+   dropped.
+2. **String-convertible target preference.** Checked BEFORE identity: if the
+   target `X` carries a proven `impl From<String>` (std `From` resolved by
+   id, `String` argument, target = a crate-local defined type; proofs are
+   collected per member crate and unioned across the manifest run keyed by
+   the target's defining path, same identity discipline as the Send and
+   public-path maps), substitute `String`: `String: Into<X>` follows from
+   `X: From<String>` via the blanket impl. The Ipê surface takes a plain
+   `String` — exactly how typed-ID newtypes are meant to be called. This is
+   direction-sensitive: it applies ONLY to `Into<X>` bounds (the wrapper
+   *supplies* the String); a `From<X>` bound would need the opposite
+   direction and falls through to identity. Fail-closed: no proof → class 1.
+3. **Enum constructibility matches the language rule.** `#[non_exhaustive]`
+   on an ENUM restricts *exhaustive matching* by downstream crates (already
+   honoured: the tag/extractor wildcard) — it does NOT restrict construction
+   of its variants. Only a variant-level `#[non_exhaustive]` (or a stripped /
+   ineligible field) makes that variant non-constructible. Variant
+   constructors are therefore emitted for enum-level non-exhaustive enums
+   too; the variant-level suppression and the match-wildcard rule stand
+   unchanged. Verified empirically cross-crate before landing (unit + tuple
+   variants of an enum-level non-exhaustive foreign enum compile; the
+   fixture also covers struct-kind variants).
+4. **Enum-typed fields join the field closed set.** A struct field whose type
+   is a crate-local `Clone` ENUM that the enum binder surfaces as an opaque
+   handle (public, non-doc-hidden, non-generic) is getter/setter-eligible
+   under exactly the conditions a `Clone` struct field is. Reading yields the
+   opaque handle (dispatch Ipê-side via the tag accessor / `as_str`);
+   writing assigns an owned handle by value — no numeric narrowing exists on
+   a nominal, so the lossless-setter gate is unaffected.
+
+`Vec`-of-opaque params need no fourth mechanism: the `Vec` arm of
+conversion-bound resolution recurses into class 1, and Ipê `List X` already
+lowers to `Vec<X>` at the wrapper boundary (exercised today by the bound
+`List <opaque>` field setters).
+
+**How this maps beyond the checkout flow.**
+- *axum*: `Router`/`MethodRouter` builder methods pass bound nominals by
+  value (class 1); config enums as params and fields (classes 1/3/4).
+  Handler/extractor trait generics (`impl Handler`, `FromRequest`) are a
+  distinct trait-bound class, out of scope and honestly dropped.
+- *bevy*: app/plugin builders take Component/Resource structs by value
+  (class 1); enums appear pervasively as params and struct fields
+  (classes 1, 3, 4).
+- Any crate with typed-ID newtypes over strings gets class 2 for free.
+
+**What cannot be made general soundly (stays dropped, recorded).**
+- Anonymous conversion-bound RETURNS (identity is unsound there: the callee's
+  value is opaque, not `X`).
+- Conversion targets carrying borrows (`impl Into<Cow<'_, str>>`,
+  `Into<&'static str>`): a runtime-owned value cannot become a borrow.
+- Fallible-conversion IDs (`TryFrom<&str>`-style, e.g. `HeaderName`): no
+  blanket `Into`, and admitting them would need a new fallible-param surface
+  — a recorded follow-up, never a silent admit.
+
+**Filed follow-ups surfaced by this analysis (pre-existing, not blocking):**
+- `FromStr` `from_string` bridges are absent from every generated interface
+  while the sibling `Display` `to_string` bridges emit — the bridge is
+  synthesized but never survives to `.ipei`; root cause not yet located.
+- Cross-crate enum-typed FIELD admission (a field typed by a sibling crate's
+  enum) needs the defining-path identity map at field-eligibility level;
+  crate-local admission (class 4) does not cover it.
+
 ### Step: closure
 - `cargo fmt --all`; full scoped gates; divergence ledger updated (Δ1, Δ2);
   `AGENTS.md` untouched unless surface changed; final report.
@@ -258,8 +358,8 @@ the emulator/mock is available, never faked green:
 | firebase bind | **DONE, SEAL green + live run.** `rs-firebase-admin-sdk` 4.3 binds 304 shim-free. Three root-cause fixes unlocked the ID-token used-set: (1) the nameability retain no longer requires the FOLDED top-level Result Err arm to be nameable (the wrapper never spells it — `reqwest::Error` no longer drops `LiveValidator::new_jwt_validator`); (2) the CONCRETE serde-JSON claims lift — `serde_json::Value`, and a string-keyed `HashMap`/`BTreeMap` of it, becomes the same typed serde-Value node the generic reduction produces (recognised by DEFINING path via the new raw external-defpath index; Ipê surface = claims JSON `String`); (3) the method-level turbofish now comes ONLY from the explicit per-own-generic list (the legacy infer-from-serde-touch fallback stamped an E0107 turbofish on zero-generic concrete methods). Plus: `cargo metadata --filter-platform <host>` so macOS-only conditional deps (`system-configuration`) are no longer exact-pinned into the emitted manifest. Probe: `validate : JwtLiveValidator -> String -> Task Error String`; ipe 0 → cargo 0; RUN live: JWKS fetch, Invalid-token folds to typed `ForeignError`, exit 0; DCE 304 → 2. The EMULATOR validator's `validate` is shadowed by the duplicate-name interface collapse (only the Live impl's is importable) — emulator-path residual noted below. |
 | foreign-type-one-home (the structural fix) | **LANDED + VERIFIED END-TO-END.** Design per the named milestone section: identity = rustdoc defining path, one Ipê home module per foreign type. Inspector emits `foreignTypeIds` (rendered path → defid, filtered to used paths, conflicting claims fail closed); `PkgInfo`/`CrateInterface`/`consumer.json` round-trip it; new `ipe_ffi::unify` collapses same-name+same-defid nominals at catalog assembly (guards: missing identity, distinct defids, defining-crate version disagreement among members that RESOLVED it — a member with no resolution saw the type only through the manifest-run xc index and is not evidence of a second type —, import-cycle); demoted modules re-render with `import <Home> exposing (T)` from structured consumer data; `run_build` consolidated onto `prepare_ffi` (its divergent inline copy skipped unification). VERIFIED: 6-crate stripe install → `Client` (defid `stripe::hyper::client::Client`) is ONE nominal; stripe SEAL probe green (ipe 0 → cargo 0, DCE → 5 wrappers) and RUNS (live 401 on a dummy key folds to typed `ForeignError`, exit 0). Firestore SEAL re-verified green. |
 | firestore serde surface | **REGRESSION FOUND + FIXED.** The private-path-admission gate had fail-closed `serde::de::Deserialize` (external trait, one intermediate module) OUT of the trait-path map, so `is_serde_trait_bound` no longer recognised serde bounds — the ENTIRE serde document surface (`get_obj`/`update_obj`/`query_obj`/…) silently vanished from re-installs (the "Dropped: none" ledger never saw them — they dropped as `unmodellable-bound Deserialize` on the generic path). Fix: serde-trait identity falls back to the RAW defining path (`EXTERNAL_DEFPATH_BY_ID`) — an identity question, never an emitted path. Fresh install: 841 bindings incl. `get_obj_if_exists : FirestoreDb -> String -> String -> Maybe (List String) -> Task Error (Maybe String)`, `create_obj`/`update_obj`/`query_obj` + the full QueryParams builder. |
-| skyshop transpose | IN PROGRESS — `examples/13-skyshop/` created from `../sky/examples/rust/skyshop-rs/src/` via the global rename-map transform; manifest = the REAL 8 crates; `Lib/Db.ipe` DE-SHIMMED onto `Rust.Firestore` (per-op client via `Task.run`, flat-row JSON codec in Ipê, `queryWhere(+Order)` = fetch + Ipê-side filter/sort — recorded over-restriction: no `FirestoreValue` constructor on the bound surface); `Lib/Auth.ipe` DE-SHIMMED onto `Rust.Rs_firebase_admin_sdk` (live JWT validator → claims JSON → `sub`/`email`/`name` via `Json.Decode`). **BLOCKED at `Lib/Stripe.ipe` on the NEXT WALL — stripe-builder-surface (see below).** |
-| stripe-builder-surface (NEW WALL, blocks skyshop acceptance) | The checkout-session flow needs builder/accessor members that do NOT bind yet, all in PARAM/FIELD-admission classes distinct from the (solved) identity axis: (a) `CreateCheckoutSession::line_items` (`Vec<CreateCheckoutSessionLineItems>` param — Vec-of-opaque), (b) `::mode` (`stripe_shared::CheckoutSessionMode` cross-crate enum param), (c) `RetrieveCheckoutSession::new` (`&stripe_shared::CheckoutSessionId` typed-ID param, `SmolStr`-backed), (d) `LineItemsPriceData` ctor (`stripe_types::Currency` cross-crate enum param), (e) `CheckoutSession.status`/`payment_status` field accessors (shared-crate enum-typed fields). Only 12 of the CreateCheckoutSession builder's methods (the String-typed ones) currently bind. Next session: extend param admission to cross-crate enums (they already have Ipê nominals via one-home + variant ctors), `Vec<local opaque>` params, and enum-typed field accessors; the typed-ID class likely lifts via a `String -> Id` coercion at the wrapper boundary. |
+| skyshop transpose | **DONE — SHIM-FREE SEAL.** `examples/13-skyshop/` builds shim-free: `ipe build` exit 0 → emitted `cargo build` exit 0; `Lib/Db.ipe` on `Rust.Firestore`, `Lib/Auth.ipe` on `Rust.Rs_firebase_admin_sdk`, `Lib/Stripe.ipe` on the real `Rust.Async_stripe*` surface (create/retrieve checkout-session builders + async sends). Sentinel DCE: 51 wrappers of ~32.5k catalog bindings reach the emitted `src/ffi.rs`. `async-stripe` pins `features = ["default-tls"]` in `sky.toml` — the all-features inspection surfaces several client concretes, making the unique-impl monomorphisation of the async `send`s ambiguous (blocking-only surface); the explicit default pin restores the tokio-hyper `Client` + `Task`-typed sends. |
+| stripe-builder-surface | **FELL — all five member classes bind and land in the authoritative `pkg.json`:** (a) `line_items` (conversion-bound → Vec-of-bound-nominal), (b) `mode` (conversion-bound → cross-crate enum, identity class), (c) `RetrieveCheckoutSession::new` (typed-ID via the `From<String>` preference — Ipê surface takes a plain `String`; the wrapper passes the OWNED `String`, which satisfies `impl Into<Id>` where `&String` does not), (d) the `LineItemsPriceData` ctor (`impl Into<stripe_types::Currency>`, identity class), (e) `status`/`payment_status` field accessors (Clone-enum fields). Emission fixes that completed the SEAL: checked-setter surface carries the `Result` layer the wrapper renders; the generic-instance OK lift recurses through `Option`/`Vec` (container-nested serde payloads re-serialise to JSON text); UI cfg-record kernels hoist arguments in ownership-walk order; fn params flowing into sync-capture kernel args promote to the `Arc` carrier; an inline lambda in an `Input.*` callback slot goes straight into `Arc::new` (one closure boundary). |
 | closure | pending |
 
 ### 5a. Remaining-spec milestones (`async-ffi-bridge-remaining-spec.md`)
