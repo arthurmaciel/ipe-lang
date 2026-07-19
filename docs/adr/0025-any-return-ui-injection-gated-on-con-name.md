@@ -40,4 +40,4 @@ prior art), never a return-only generic.
   actionable ("annotate the element type or drop the `any`").
 - **Sanctioned divergence:** a backend that erases `any` to a wildcard accepts
   `w : Int -> any; w n = []`; Ipê rejects it — loud-not-silently-wrong, recorded
-  in `docs/divergences-from-ipe.md`.
+  in `docs/divergences-from-sky.md`.
