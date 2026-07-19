@@ -147,6 +147,14 @@ fn handle_request(state: &State, connection: &Connection, request: Request) {
         "textDocument/references" => Some(references_result(state, &request.params)),
         "textDocument/prepareRename" => Some(prepare_rename_result(state, &request.params)),
         "textDocument/rename" => Some(rename_result(state, &request.params)),
+        "textDocument/formatting" => Some(formatting_result(state, &request.params)),
+        "textDocument/rangeFormatting" => Some(range_formatting_result(state, &request.params)),
+        "textDocument/codeAction" => Some(code_action_result(state, &request.params)),
+        "textDocument/semanticTokens/full" => {
+            Some(semantic_tokens_full_result(state, &request.params))
+        }
+        "textDocument/signatureHelp" => Some(signature_help_result(state, &request.params)),
+        "textDocument/inlayHint" => Some(inlay_hints_result(state, &request.params)),
         _ => None,
     };
     let response = match result {
@@ -771,6 +779,139 @@ fn compute_batch(
         }
     }
     per_uri.into_iter().collect()
+}
+
+/// `textDocument/formatting` — reformat the whole document.
+fn formatting_result(state: &State, params: &serde_json::Value) -> serde_json::Value {
+    let Ok(params) =
+        serde_json::from_value::<lsp_types::DocumentFormattingParams>(params.clone())
+    else {
+        return serde_json::Value::Null;
+    };
+    let Some((_module, file, _text)) = state.locate(&params.text_document.uri) else {
+        return serde_json::Value::Null;
+    };
+    let edits =
+        ipe_lsp_features::formatting::format_document(&state.db, file, state.encoding);
+    serde_json::to_value(edits).unwrap_or(serde_json::Value::Null)
+}
+
+/// `textDocument/rangeFormatting` — reformat a selected range.
+fn range_formatting_result(state: &State, params: &serde_json::Value) -> serde_json::Value {
+    let Ok(params) =
+        serde_json::from_value::<lsp_types::DocumentRangeFormattingParams>(params.clone())
+    else {
+        return serde_json::Value::Null;
+    };
+    let Some((_module, file, _text)) = state.locate(&params.text_document.uri) else {
+        return serde_json::Value::Null;
+    };
+    let edits = ipe_lsp_features::formatting::format_range(
+        &state.db,
+        file,
+        params.range,
+        state.encoding,
+    );
+    serde_json::to_value(edits).unwrap_or(serde_json::Value::Null)
+}
+
+/// `textDocument/codeAction` — diagnostic-driven quick-fixes.
+fn code_action_result(state: &State, params: &serde_json::Value) -> serde_json::Value {
+    let Ok(params) =
+        serde_json::from_value::<lsp_types::CodeActionParams>(params.clone())
+    else {
+        return serde_json::Value::Null;
+    };
+    let Some((module, _file, text)) = state.locate(&params.text_document.uri) else {
+        return serde_json::Value::Null;
+    };
+    let Some(root) = state.root else {
+        return serde_json::Value::Null;
+    };
+    let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
+        return serde_json::Value::Null;
+    };
+    let actions = ipe_lsp_features::code_actions::code_actions(
+        &state.db,
+        root,
+        entry_file,
+        &module,
+        &params.text_document.uri,
+        params.range,
+        &params.context.diagnostics,
+        &text,
+        state.encoding,
+    );
+    serde_json::to_value(actions).unwrap_or(serde_json::Value::Null)
+}
+
+/// `textDocument/semanticTokens/full` — full semantic token encoding.
+fn semantic_tokens_full_result(state: &State, params: &serde_json::Value) -> serde_json::Value {
+    let Ok(params) =
+        serde_json::from_value::<lsp_types::SemanticTokensParams>(params.clone())
+    else {
+        return serde_json::Value::Null;
+    };
+    let Some((_module, file, _text)) = state.locate(&params.text_document.uri) else {
+        return serde_json::Value::Null;
+    };
+    let result =
+        ipe_lsp_features::semantic_tokens::semantic_tokens_full(&state.db, file, state.encoding);
+    serde_json::to_value(result).unwrap_or(serde_json::Value::Null)
+}
+
+/// `textDocument/signatureHelp` — callee signature at the cursor.
+fn signature_help_result(state: &State, params: &serde_json::Value) -> serde_json::Value {
+    let Ok(params) =
+        serde_json::from_value::<lsp_types::SignatureHelpParams>(params.clone())
+    else {
+        return serde_json::Value::Null;
+    };
+    let position = params.text_document_position_params;
+    let Some((module, _file, text)) = state.locate(&position.text_document.uri) else {
+        return serde_json::Value::Null;
+    };
+    let Some(root) = state.root else {
+        return serde_json::Value::Null;
+    };
+    let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
+        return serde_json::Value::Null;
+    };
+    let byte = offset::position_to_offset(&text, position.position, state.encoding);
+    let byte = u32::try_from(byte).unwrap_or(u32::MAX);
+    match ipe_lsp_features::signature_help::signature_help(
+        &state.db, root, entry_file, &module, byte,
+    ) {
+        Some(help) => serde_json::to_value(help).unwrap_or(serde_json::Value::Null),
+        None => serde_json::Value::Null,
+    }
+}
+
+/// `textDocument/inlayHint` — type annotation inlay hints.
+fn inlay_hints_result(state: &State, params: &serde_json::Value) -> serde_json::Value {
+    let Ok(params) =
+        serde_json::from_value::<lsp_types::InlayHintParams>(params.clone())
+    else {
+        return serde_json::Value::Null;
+    };
+    let Some((module, _file, _text)) = state.locate(&params.text_document.uri) else {
+        return serde_json::Value::Null;
+    };
+    let Some(root) = state.root else {
+        return serde_json::Value::Null;
+    };
+    let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
+        return serde_json::Value::Null;
+    };
+    let hints = ipe_lsp_features::inlay_hints::inlay_hints(
+        &state.db,
+        root,
+        entry_file,
+        &module,
+        params.range,
+        state.encoding,
+    );
+    serde_json::to_value(hints).unwrap_or(serde_json::Value::Null)
 }
 
 /// Latest-generation-wins publishing with change suppression: identical
