@@ -22,6 +22,8 @@
 
 use std::path::{Path, PathBuf};
 
+mod support;
+
 fn repo_root() -> PathBuf {
     let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
     std::fs::canonicalize(&joined).unwrap_or(joined)
@@ -82,6 +84,15 @@ fn server_request_accessor_emit_inserts_clone() {
     // Each accessor must appear at a call site that includes `.clone()`.
     // The fixture calls all seven on the same `req` binding — without `.clone()`
     // all but the first would fail to compile (E0382).
+    //
+    // Match on rustfmt-normalized text (`support::normalize_rustfmt_whitespace`)
+    // rather than a per-line scan: a multi-arg call (e.g. `server_header("x-
+    // probe".to_string(), req.clone().clone())`) wraps one argument per line
+    // once it exceeds rustfmt's width limit, so `.clone()` lands on a
+    // DIFFERENT line than `accessor(` — the same stale-assertion class as
+    // #269/#191/#193/#195/#190/Ipe.Ui.Transition, here hitting a per-line
+    // rather than a single-line-substring check.
+    let normalized = support::normalize_rustfmt_whitespace(&main_rs);
     for accessor in &[
         "server_body",
         "server_path",
@@ -91,12 +102,16 @@ fn server_request_accessor_emit_inserts_clone() {
         "server_param",
         "server_get_cookie",
     ] {
-        // Find the call site in the emitted source and check it ends with
-        // `.clone())` — the pattern inserted by `emit_server_call`.
-        let has_clone = main_rs
-            .lines()
-            .filter(|l| l.contains(accessor))
-            .any(|l| l.contains(".clone()"));
+        let call_prefix = format!("{accessor}(");
+        // `.clone()` must appear within the call's argument list — scan a
+        // window after `accessor(` rather than requiring same-line adjacency.
+        // Every fixture call site has a short (<=2-arg) argument list, so 200
+        // normalized (whitespace-free) chars comfortably covers it without
+        // reaching into an unrelated later call.
+        let has_clone = normalized.match_indices(&call_prefix).any(|(idx, _)| {
+            let window_end = (idx + call_prefix.len() + 200).min(normalized.len());
+            normalized[idx..window_end].contains(".clone()")
+        });
         assert!(
             has_clone,
             "emitted main.rs: {accessor}(…) call must include `.clone()` on the request arg \
@@ -104,7 +119,7 @@ fn server_request_accessor_emit_inserts_clone() {
              relevant lines:\n{}",
             main_rs
                 .lines()
-                .filter(|l| l.contains(accessor))
+                .filter(|l| l.contains(*accessor))
                 .collect::<Vec<_>>()
                 .join("\n")
         );
