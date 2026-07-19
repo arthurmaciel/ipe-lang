@@ -32,6 +32,9 @@ Prefer building from source? `git clone https://github.com/arthurmaciel/ipe-lang
 
 - [Features](#features)
 - [Code shapes](#code-shapes)
+- [Playground](#playground)
+- [Editor setup (LSP)](#editor-setup-lsp)
+- [Static compilation](#static-compilation)
 - [Support](#support)
 
 ## Features
@@ -66,6 +69,152 @@ The three ✓ shapes follow [The Elm Architecture](https://guide.elm-lang.org/ar
 (`init` / `update` / `view` / `subscriptions`) — and share the **same
 `Ipe.Ui` view code**, so one view renders on web, terminal, and desktop.
 See [`examples/`](examples/) for a program of each shape.
+
+## Playground
+
+The playground server compiles Ipê source to WASM on demand and renders the
+result in a live browser preview. Run it locally:
+
+```sh
+# Prerequisites (once):
+rustup target add wasm32-unknown-unknown
+cargo install wasm-pack
+
+# Build:
+cargo build --release -p ipe
+cargo build --release -p ipe-playground
+
+# Run:
+export IPE_BIN="$(pwd)/target/release/ipe"
+export SKY_RUNTIME_DIR="$(pwd)/src/runtime/rust/src/sky_runtime"
+export IPE_PLAYGROUND_STATIC_DIR="$(pwd)/src/playground/www"
+./target/release/ipe-playground
+```
+
+Open `http://localhost:3000`. Edit Ipê source in the left pane and press
+**Run** (or `Ctrl+Enter`) to compile and preview. The first compile builds all
+dependencies; subsequent compiles reuse the warm target directory.
+
+For a persistent warm cache across restarts, set:
+
+```sh
+export IPE_PLAYGROUND_TARGET_DIR="$HOME/.cache/ipe/playground-target"
+```
+
+Full details (port, timeout, architecture): [`docs/architecture/tbd/playground.md`](docs/architecture/tbd/playground.md).
+
+## Editor setup (LSP)
+
+`ipe lsp` speaks JSON-RPC over stdio and works with any LSP-compliant editor.
+Features: completion, go-to-definition, find-references, rename, formatting,
+range formatting, code actions, semantic tokens, signature help, and inlay hints.
+
+### Helix
+
+Add to `~/.config/helix/languages.toml`:
+
+```toml
+[[language]]
+name = "ipe"
+scope = "source.ipe"
+file-types = ["ipe"]
+roots = ["sky.toml"]
+language-servers = ["ipe-lsp"]
+
+[language-server.ipe-lsp]
+command = "ipe"
+args = ["lsp"]
+```
+
+### Neovim (with `nvim-lspconfig`)
+
+```lua
+local lspconfig = require("lspconfig")
+local configs = require("lspconfig.configs")
+
+if not configs.ipe then
+  configs.ipe = {
+    default_config = {
+      cmd = { "ipe", "lsp" },
+      filetypes = { "ipe" },
+      root_dir = lspconfig.util.root_pattern("sky.toml", ".git"),
+      settings = {},
+    },
+  }
+end
+
+lspconfig.ipe.setup({})
+```
+
+Add the filetype detection if needed:
+
+```lua
+vim.filetype.add({ extension = { ipe = "ipe" } })
+```
+
+### VS Code
+
+Install the [Ipê extension](https://marketplace.visualstudio.com/items?itemName=arthurmaciel.ipe-lang)
+(bundles the LSP client), or configure it manually in `.vscode/settings.json`:
+
+```json
+{
+  "ipe.languageServer.command": "ipe",
+  "ipe.languageServer.args": ["lsp"]
+}
+```
+
+If you prefer a generic LSP client (e.g. `vscode-languageclient`), register:
+
+```json
+{
+  "[ipe]": {},
+  "languageServerExample.trace.server": "verbose"
+}
+```
+
+and point `command` to `ipe lsp` for `.ipe` files.
+
+## Static compilation
+
+`ipe build --static` produces a fully-static musl binary — zero runtime
+dependencies, copy and run anywhere.
+
+```sh
+# Prerequisite (once):
+rustup target add x86_64-unknown-linux-musl
+sudo apt-get install musl-tools   # or equivalent on your distro
+
+# Build a static binary (x86_64 Linux, dlmalloc allocator — the default):
+cd examples/01-hello-world
+ipe build sky.toml --out sky-out/rust --static
+cd sky-out/rust
+cargo build --release --target x86_64-unknown-linux-musl
+```
+
+The emitted `.cargo/config.toml` sets `+crt-static` automatically; no extra
+`RUSTFLAGS` are needed.
+
+**Allocator options** (`--allocator <name>`):
+
+| Name | Default | Notes |
+|---|---|---|
+| `dlmalloc` | yes | pure Rust, no C toolchain beyond musl |
+| `mimalloc` | | C opt-in; needs a musl-capable C compiler |
+| `system` | | musl's malloc; requires `--allow-slow-allocator` |
+
+**Supported targets:**
+
+| Target | Status |
+|---|---|
+| `x86_64-unknown-linux-musl` | fully supported, CI-verified |
+| `aarch64-unknown-linux-musl` | wired, pending toolchain confirmation (CI: `continue-on-error`) |
+
+The aarch64 target is structurally complete — the variant exists, the CI job
+runs, and cross-verification via `qemu-user-static` is scripted — but the CI
+job is marked `continue-on-error` until a musl-capable AArch64 C linker is
+confirmed available on the runner. Remove `continue-on-error` from
+`.github/workflows/static.yml` `linux-static-arm64` once the job turns green.
 
 ## Support
 
