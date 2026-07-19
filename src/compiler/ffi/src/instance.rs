@@ -1331,6 +1331,7 @@ match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(move || ::box1::
                     "ret": {"ctor": "::core::result::Result",
                             "args": [{"serdeValue": true}, {"ctor": "::std::string::String"}]},
                     "traitQualifier": ["::db::Db", "::db::Repo"],
+                    "methodTurbofish": [{"serdeValue": true}],
                     "isAsync": true
                 }
             }
