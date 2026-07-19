@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use ipe_diagnostics::{DResult, Diagnostic, Located, NameError, Span};
+use ipe_diagnostics::{AliasExpansionKind, DResult, Diagnostic, Located, NameError, Span};
 use ipe_intern::{Interner, Symbol};
 use ipe_kernels::StdlibKernel;
 use ipe_syntax as src;
@@ -20,6 +20,42 @@ const MAX_SUGGESTIONS: usize = 3;
 /// reference (`Sky.Canonicalise.Module.suggestQualifier`): beyond two edits a
 /// "did you mean" is more misleading than helpful, so silence wins.
 const SUGGESTION_MAX_DISTANCE: usize = 2;
+
+/// Recursion-depth cap for [`canonicalise_type`].
+///
+/// Every recursive call to [`canonicalise_type`] — including alias-body
+/// expansion — adds one native stack frame. A long straight chain of distinct
+/// aliases (`type alias A1 = A0`, `type alias A2 = A1`, …) composes their
+/// individually-parser-capped-at-256 bodies into a single call depth that
+/// grows with the chain length, independent of the total node count (the chain
+/// produces only O(n) nodes). Empirically, a debug-profile build overflows the
+/// default thread stack somewhere between depth 350 and 600; this cap is set
+/// at the same order of magnitude as the parser's own proven-safe `MAX_DEPTH`
+/// (256) to stay well inside that cliff in every build profile and
+/// thread-stack configuration.
+///
+/// Checked first inside [`canonicalise_type`] because it is the cheap,
+/// profile-independent stack-safety guard.
+const TYPE_EXPANSION_DEPTH_LIMIT: u32 = 256;
+
+/// Per-annotation node budget for [`canonicalise_type`]'s alias expansion.
+///
+/// `visited` (the `Vec<Symbol>` threaded through the call stack) only blocks a
+/// directly CYCLIC alias — it is popped once a branch finishes, so it tracks
+/// the current expansion PATH, not every alias ever expanded. A diamond of
+/// aliases (`type alias A1 = (A0, A0)`, `type alias A2 = (A1, A1)`, …,
+/// `type alias A30 = (A29, A29)`) is acyclic and re-expands the same subtree
+/// at every sibling position, doubling the work per level. `visited` alone
+/// lets that compose to billions of nodes despite the diamond's call depth
+/// staying at most ~30. This budget ticks once per [`canonicalise_type`] call
+/// and is never restored, so it bounds the total number of nodes one
+/// annotation's expansion can produce regardless of tree shape.
+///
+/// Deliberately much larger than [`TYPE_EXPANSION_DEPTH_LIMIT`] — a wide
+/// annotation (a record with hundreds of fields, none of them nested) burns
+/// through this quickly without ever growing the call stack, so it alone must
+/// not be relied on for stack safety.
+const TYPE_EXPANSION_NODE_LIMIT: u32 = 100_000;
 
 /// Type-constructor names the compiler reserves for built-ins. A user `type` /
 /// `type alias` whose name is one of these is rejected at declaration
@@ -1733,7 +1769,8 @@ fn synthesize_record_alias_ctors(
         let mut visited = vec![alias_name];
         let mut can_fields: Vec<(Symbol, canon::Type)> = Vec::with_capacity(fields.len());
         for (fname, fty) in fields {
-            let cty = canonicalise_type(fty, &ctx, &subst, &mut free_set, &mut visited)?;
+            let mut budget = TYPE_EXPANSION_NODE_LIMIT;
+            let cty = canonicalise_type(fty, &ctx, &subst, &mut free_set, &mut visited, &mut budget, 0)?;
             can_fields.push((*fname, cty));
         }
 
@@ -2400,12 +2437,15 @@ fn canonicalise_union(
             let mut free_vars = BTreeSet::new();
             let mut visited = Vec::new();
             let subst = BTreeMap::new();
+            let mut budget = TYPE_EXPANSION_NODE_LIMIT;
             args.push(canonicalise_type(
                 a,
                 &ctx,
                 &subst,
                 &mut free_vars,
                 &mut visited,
+                &mut budget,
+                0,
             )?);
         }
         ctors.push(canon::Ctor {
@@ -2464,7 +2504,8 @@ fn canonicalise_value(
                 ann_span: ann.span,
             };
             let subst = BTreeMap::new();
-            let ty = canonicalise_type(&ann.value, &ctx, &subst, &mut free_vars, &mut visited)?;
+            let mut budget = TYPE_EXPANSION_NODE_LIMIT;
+            let ty = canonicalise_type(&ann.value, &ctx, &subst, &mut free_vars, &mut visited, &mut budget, 0)?;
             // Order the quantified type variables by their resolved NAME, not by
             // `Symbol` id (intern order is allocation-dependent, hence not a
             // stable wire order). Determinism gate: a multi-tyvar annotation
@@ -3222,11 +3263,40 @@ fn canonicalise_type(
     subst: &BTreeMap<Symbol, canon::Type>,
     free_vars: &mut BTreeSet<Symbol>,
     visited: &mut Vec<Symbol>,
+    budget: &mut u32,
+    depth: u32,
 ) -> DResult<canon::Type> {
+    // Depth is passed BY VALUE and incremented at every recursive call site,
+    // so it mirrors the true native call-stack depth (each invocation gets its
+    // own copy; sibling iterations in a loop do not compound). Checked first
+    // because it is cheap and profile-independent; the node budget alone
+    // cannot guard stack depth (a long straight alias chain produces O(n)
+    // nodes but O(n) stack frames).
+    if depth > TYPE_EXPANSION_DEPTH_LIMIT {
+        return Err(Diagnostic::Name {
+            span: ctx.ann_span,
+            msg: NameError::TypeExpansionTooDeep {
+                kind: AliasExpansionKind::Depth,
+                limit: TYPE_EXPANSION_DEPTH_LIMIT,
+            },
+        });
+    }
+    // Ticked before any recursion, so a deeper call can only happen once this
+    // node has already spent from the budget — bounds total work regardless of
+    // tree shape. A diamond alias re-expands the same subtree at each sibling
+    // position; the path-based `visited` guard does not catch it because the
+    // diamond is acyclic. This budget does.
+    *budget = budget.checked_sub(1).ok_or(Diagnostic::Name {
+        span: ctx.ann_span,
+        msg: NameError::TypeExpansionTooDeep {
+            kind: AliasExpansionKind::Nodes,
+            limit: TYPE_EXPANSION_NODE_LIMIT,
+        },
+    })?;
     match t {
         src::TypeAnnotation::TLambda(a, b) => Ok(canon::Type::Lambda(
-            Box::new(canonicalise_type(a, ctx, subst, free_vars, visited)?),
-            Box::new(canonicalise_type(b, ctx, subst, free_vars, visited)?),
+            Box::new(canonicalise_type(a, ctx, subst, free_vars, visited, budget, depth.saturating_add(1))?),
+            Box::new(canonicalise_type(b, ctx, subst, free_vars, visited, budget, depth.saturating_add(1))?),
         )),
         src::TypeAnnotation::TVar(v) => {
             // A variable bound to an alias argument resolves to that argument; its
@@ -3245,7 +3315,7 @@ fn canonicalise_type(
         src::TypeAnnotation::TTuple(elems) => {
             let mut can_elems = Vec::with_capacity(elems.len());
             for e in elems {
-                can_elems.push(canonicalise_type(e, ctx, subst, free_vars, visited)?);
+                can_elems.push(canonicalise_type(e, ctx, subst, free_vars, visited, budget, depth.saturating_add(1))?);
             }
             Ok(canon::Type::Tuple(can_elems))
         }
@@ -3258,7 +3328,7 @@ fn canonicalise_type(
             for (name, fty) in fields {
                 can_fields.push((
                     *name,
-                    canonicalise_type(fty, ctx, subst, free_vars, visited)?,
+                    canonicalise_type(fty, ctx, subst, free_vars, visited, budget, depth.saturating_add(1))?,
                 ));
             }
             Ok(canon::Type::Record(can_fields))
@@ -3292,7 +3362,7 @@ fn canonicalise_type(
             // alias or an ordinary constructor.
             let mut can_args = Vec::with_capacity(args.len());
             for a in args {
-                can_args.push(canonicalise_type(a, ctx, subst, free_vars, visited)?);
+                can_args.push(canonicalise_type(a, ctx, subst, free_vars, visited, budget, depth.saturating_add(1))?);
             }
             // A registered alias not already mid-expansion (cycle) is expanded:
             // its declared parameters are bound to the canonicalised arguments and
@@ -3349,9 +3419,9 @@ fn canonicalise_type(
                         interner: ctx.interner,
                         ann_span: ctx.ann_span,
                     };
-                    canonicalise_type(&alias.body, &alt_ctx, &body_subst, free_vars, visited)?
+                    canonicalise_type(&alias.body, &alt_ctx, &body_subst, free_vars, visited, budget, depth.saturating_add(1))?
                 } else {
-                    canonicalise_type(&alias.body, ctx, &body_subst, free_vars, visited)?
+                    canonicalise_type(&alias.body, ctx, &body_subst, free_vars, visited, budget, depth.saturating_add(1))?
                 };
                 visited.pop();
                 return Ok(expanded);

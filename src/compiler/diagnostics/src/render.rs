@@ -456,6 +456,21 @@ fn name_label(msg: &NameError) -> Option<String> {
         NameError::ServerModuleReachableFromWasmClient { chain } => Some(format!(
             "the client entry's reachability closure reaches a server module: {chain}"
         )),
+        NameError::BuiltinTypeArity {
+            name,
+            expected,
+            found,
+        } => Some(format!(
+            "`{name}` takes {expected} type argument(s), but {found} were given"
+        )),
+        NameError::TypeExpansionTooDeep { kind, limit } => {
+            use crate::diagnostic::AliasExpansionKind;
+            let what = match kind {
+                AliasExpansionKind::Depth => "recursion depth",
+                AliasExpansionKind::Nodes => "node count",
+            };
+            Some(format!("alias expansion exceeded the {what} limit of {limit}"))
+        }
         NameError::Unknown => None,
     }
 }
