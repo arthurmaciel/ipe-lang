@@ -151,6 +151,15 @@ pub struct Module {
     /// `lettre` dependency (the only extra crate `email.rs` needs beyond the
     /// base manifest) to the emitted `Cargo.toml`.
     pub uses_email: bool,
+    /// `true` when the lowerer detected the `Ipe.Env` `Env.public` kernel
+    /// call in the module's function bodies.
+    ///
+    /// Set by `ipe_lower` when a call site resolves to `KernelFn::EnvPublic`.
+    /// The backend reads this flag to decide whether to emit the per-project
+    /// `env_public.rs` (built from `sky.toml`'s `[wasm] publicEnv` allowlist)
+    /// and append `pub mod env_public; pub use env_public::*;` to the
+    /// emitted `ipe_runtime/mod.rs`.
+    pub uses_env_public: bool,
     /// `true` when the lowerer lowered at least one [`Callee::Ffi`] call —
     /// a foreign-crate wrapper forwarder from a driver-generated FFI
     /// interface module. The backend reads this flag to declare `mod ffi;`
@@ -3420,6 +3429,7 @@ mod tests {
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_env_public: false,
                 uses_ffi: false,
             }],
         };
@@ -3914,6 +3924,7 @@ mod serde_persistence_tests {
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_env_public: false,
                 uses_ffi: false,
             }],
         })
@@ -3980,6 +3991,7 @@ mod serde_persistence_tests {
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_env_public: false,
                 uses_ffi: false,
             }],
         };

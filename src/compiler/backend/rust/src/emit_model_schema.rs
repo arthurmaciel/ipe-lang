@@ -386,6 +386,7 @@ mod tests {
             DbDriver::Sqlite,
             None,
             ipe_ir::Target::Native,
+            Vec::new(),
         )?;
         model_schema_tag(&ctx, &IrType::Record(fields))
     }
@@ -470,7 +471,7 @@ mod tests {
                 uses_css: false,
                 uses_auth: false,
                 uses_websocket: false,
-                uses_email: false,
+                uses_email: false, uses_env_public: false,
                 uses_ffi: false,
             }],
         }
@@ -525,6 +526,7 @@ mod tests {
             DbDriver::Sqlite,
             None,
             ipe_ir::Target::Native,
+            Vec::new(),
         )?;
 
         let model_a = IrType::Record(BTreeMap::from([(
@@ -609,6 +611,7 @@ mod tests {
             DbDriver::Sqlite,
             None,
             ipe_ir::Target::Native,
+            Vec::new(),
         )?;
         let a = model_schema_tag(&ctx_1, &model)?;
         let ctx_2 = EmitCtx::build(
@@ -617,6 +620,7 @@ mod tests {
             DbDriver::Sqlite,
             None,
             ipe_ir::Target::Native,
+            Vec::new(),
         )?;
         let b = model_schema_tag(&ctx_2, &model)?;
         assert_ne!(

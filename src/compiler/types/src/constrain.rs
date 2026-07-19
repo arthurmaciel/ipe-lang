@@ -6041,6 +6041,13 @@ impl<'a> Builder<'a> {
                 fun(int(), fun(string(), fun(var(0), sub(var(1)))))
             }
 
+            // ── Ipe.Env — build-time-embedded public config ──────────
+            // public : String -> Maybe String. Resolves ONLY for a
+            // `[wasm] publicEnv`-allowlisted key (`env_public.rs`, a
+            // per-project backend-generated file — see `project.rs`'s
+            // `render_env_public_rs`); every other key is `Nothing`.
+            K::EnvPublic => fun(string(), maybe(string())),
+
             // ── Ipe.Regex (5 kernels) ────────────────────────────────
             // Concrete, monomorphic schemes (no type vars): RE2 helpers over
             // `String`. `match` returns `Bool`; `find` a `Maybe String`;
@@ -7788,6 +7795,8 @@ mod registry_phase_c_tests {
             K::WebSocketClose,
             K::WebSocketCloseWithCode,
             K::SubSubscribeWebSocket,
+            // ── Ipe.Env — build-time-embedded public config ──
+            K::EnvPublic,
             // ── Ipe.Ui.Region — all 8 landmark/live-region attrs ──
             K::RegionMainContent,
             K::RegionNavigation,

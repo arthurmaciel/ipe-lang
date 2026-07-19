@@ -1314,6 +1314,8 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // of the four typed `sub_subscribe_ws_*` fns; this name is the fallback
         // (the `message` kind) and is never emitted via the standard N-arg path.
         KernelFn::SubSubscribeWebSocket => "sub_subscribe_ws_message",
+        // ── Ipe.Env — build-time-embedded public config ──────────────────
+        KernelFn::EnvPublic => "env_public",
         // ── Ipe.Ui.Lazy ────────────────────────────────────────────────
         KernelFn::LazyLazy => "lazy_lazy_",
         KernelFn::LazyLazy2 => "lazy_lazy2_",
