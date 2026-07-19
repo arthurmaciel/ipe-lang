@@ -450,25 +450,16 @@ fn compile_modules_observed(
     // source — the ONLY inputs that earn `ModuleOrigin::EmbeddedStdlib` below.
     let injected = project::inject_compiled_std_closure(&mut sources, &mut discovered);
 
-    // The FFI seam: load the project's installed-crate catalog (empty when no
-    // `.ipe/cache/ffi/rust` exists up-tree), inject one `Rust.<Crate>`
-    // interface module per crate, and assemble the backend emission inputs.
-    let ffi_catalog = match ffi::load_catalog_for(blame_path) {
-        Ok(c) => c,
+    // The FFI seam: the SAME catalog-load → nominal-unification →
+    // interface-inject → emit-assemble sequence `watch` and `lsp` use
+    // (`prepare_ffi`) — a divergent copy here once skipped the unification
+    // step entirely.
+    let ffi_prep = match ffi::prepare_ffi(&mut sources, blame_path) {
+        Ok(p) => p,
         Err(e) => return (Err(e), CacheOutcome::Miss),
     };
-    let ffi_cache_hint = match ffi::find_cache_root(blame_path) {
-        Ok(hint) => hint.unwrap_or_default(),
-        Err(e) => return (Err(e), CacheOutcome::Miss),
-    };
-    let ffi_injected = match ffi::inject_interfaces(&mut sources, &ffi_catalog, &ffi_cache_hint) {
-        Ok(set) => set,
-        Err(e) => return (Err(e), CacheOutcome::Miss),
-    };
-    let ffi_emit = match ffi::assemble_emit(&ffi_catalog) {
-        Ok(f) => f,
-        Err(e) => return (Err(e), CacheOutcome::Miss),
-    };
+    let ffi_injected = ffi_prep.injected;
+    let ffi_emit = ffi_prep.emit;
     // The on-disk build caches key only the Ipê sources — the FFI bindings
     // text and opaque map live OUTSIDE that key, so a cache hit could serve a
     // stale emitted project after `ipe add`/`ipe remove`. Disable both cache
@@ -2433,7 +2424,7 @@ mod tests {
         let index = code_index();
         let lines = index.lines().count();
         assert_eq!(lines, ALL_CODES.len(), "one line per code");
-        assert_eq!(ALL_CODES.len(), 99, "taxonomy is 99 codes");
+        assert_eq!(ALL_CODES.len(), 101, "taxonomy is 101 codes");
         assert!(
             index.contains("IPE-T0001  type mismatch"),
             "index pairs code with title"

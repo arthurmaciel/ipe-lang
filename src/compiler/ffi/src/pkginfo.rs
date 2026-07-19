@@ -107,6 +107,8 @@ struct WirePkgInfo {
     transitive_deps: Vec<WireTransitiveDep>,
     #[serde(default)]
     features: Vec<String>,
+    #[serde(default, rename = "foreignTypeIds")]
+    foreign_type_ids: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -444,6 +446,13 @@ pub struct PkgInfo {
     notes: Vec<String>,
     transitive_deps: Vec<TransitiveDep>,
     features: Vec<String>,
+    /// Rendered foreign-nominal path (`::`-prefixed) -> the type's canonical
+    /// DEFINING path (the rustdoc `paths` identity, identical in every crate
+    /// that can see the type). The catalog unification keys cross-crate
+    /// nominal identity on the value. Entries failing the path-shape
+    /// validation are dropped at decode (no identity claim survives
+    /// unvalidated; absence only disables unification, never soundness).
+    foreign_type_ids: std::collections::BTreeMap<String, String>,
     dropped: Vec<Diagnostic>,
 }
 
@@ -522,12 +531,31 @@ impl PkgInfo {
         &self.features
     }
 
+    /// Rendered foreign-nominal path (`::`-prefixed) -> defining-path identity.
+    #[must_use]
+    pub const fn foreign_type_ids(&self) -> &std::collections::BTreeMap<String, String> {
+        &self.foreign_type_ids
+    }
+
     /// The bindings dropped by the validating conversion, with the reason
     /// each was refused — the over-drop keystone made visible.
     #[must_use]
     pub fn dropped(&self) -> &[Diagnostic] {
         &self.dropped
     }
+}
+
+/// `true` when `s` is `seg::…::Seg` with every segment a legal Rust
+/// identifier (ASCII letter/underscore head, alphanumeric/underscore tail).
+fn is_rust_path_shaped(s: &str) -> bool {
+    !s.is_empty()
+        && s.split("::").all(|seg| {
+            let mut chars = seg.chars();
+            chars
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        })
 }
 
 fn decode_effect(function: &str, s: &str) -> Result<Effect, Diagnostic> {
@@ -779,6 +807,17 @@ impl TryFrom<WirePkgInfo> for PkgInfo {
                 version: dep.version,
             });
         }
+        // Foreign-type identity entries: keep only well-shaped `::seg::…::Seg`
+        // keys and `seg::…::Seg` values (every segment a legal Rust ident).
+        // A malformed entry is dropped — identity metadata only ever ENABLES
+        // nominal unification, so absence is the safe default.
+        let foreign_type_ids = w
+            .foreign_type_ids
+            .into_iter()
+            .filter(|(k, v)| {
+                k.strip_prefix("::").is_some_and(is_rust_path_shaped) && is_rust_path_shaped(v)
+            })
+            .collect();
         Ok(Self {
             pkg_path,
             name,
@@ -789,6 +828,7 @@ impl TryFrom<WirePkgInfo> for PkgInfo {
             notes: w.notes,
             transitive_deps,
             features: w.features,
+            foreign_type_ids,
             dropped,
         })
     }

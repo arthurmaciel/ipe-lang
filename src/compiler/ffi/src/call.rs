@@ -445,30 +445,19 @@ impl Call {
         } else {
             format!("::<{}>", render_list(&self.type_args))
         };
-        // Whether the call boundary touches serde-Value anywhere (return or
-        // any wrapper value-arg, recursively — a serde return commonly nests
-        // inside `Result<Value, E>`). Drives the UFCS method-level turbofish.
-        let touches_serde =
-            self.ret.any_serde() || self.arg_types.iter().any(ArgTypeRef::any_serde);
         // The method's OWN generics' resolved concretes, rendered as a
-        // method-level turbofish. Empty list ⇒ empty string.
+        // method-level turbofish. The EXPLICIT list is the ONLY source: the
+        // inspector emits one entry per serde/mono-reduced own generic, and a
+        // method with NO own generics (a CONCRETE serde claims lift such as
+        // `validate -> HashMap<String, Value>`) legitimately touches serde
+        // with no turbofish at all — inferring one from serde-touch was an
+        // E0107 on every such method. Empty list => empty string.
         let explicit_method_turbofish = if self.method_turbofish.is_empty() {
             String::new()
         } else {
             format!("::<{}>", render_list(&self.method_turbofish))
         };
-        // UFCS branch: prefer the explicit ordered list; fall back to the
-        // legacy single-serde turbofish (byte-identical for a method with
-        // exactly one serde-reduced own generic).
-        let method_turbofish = if self.method_turbofish.is_empty() {
-            if touches_serde {
-                "::<serde_json::Value>".to_owned()
-            } else {
-                String::new()
-            }
-        } else {
-            explicit_method_turbofish.clone()
-        };
+        let method_turbofish = explicit_method_turbofish.clone();
         let callee = match (&self.trait_qualifier, &self.method) {
             // A trait method on a concrete type renders `<Self as Trait>::m`.
             // No path turbofish — every tyvar reaches the callee through a
@@ -839,7 +828,8 @@ mod tests {
     }
 
     #[test]
-    fn serde_nested_in_result_fires_the_method_level_turbofish() {
+    fn serde_generic_turbofish_comes_only_from_the_explicit_list() {
+        // Serde-reduced own generic: the inspector emits the explicit list.
         let c = decode(
             0,
             json!({
@@ -852,6 +842,7 @@ mod tests {
                 "ret": {"ctor": "::core::result::Result",
                         "args": [{"serdeValue": true}, {"ctor": "::std::string::String"}]},
                 "traitQualifier": ["::db::Db", "::db::Repo"],
+                "methodTurbofish": [{"serdeValue": true}],
                 "isAsync": true
             }),
         )
@@ -860,6 +851,29 @@ mod tests {
         assert_eq!(
             c.render_body(&[]),
             "<::db::Db as ::db::Repo>::get_obj::<serde_json::Value>(&arg0)"
+        );
+        // A CONCRETE serde return (claims map lift) has NO own generics and
+        // no explicit list — the call must render with NO turbofish (the
+        // host method takes zero generic arguments; inferring one is E0107).
+        let c = decode(
+            0,
+            json!({
+                "kind": "method",
+                "path": ["::fb", "Validator"],
+                "method": "validate",
+                "receiver": {"arg": 0, "by": "ref"},
+                "args": [],
+                "argTypes": [{"ctor": "::fb::Validator"}],
+                "ret": {"ctor": "::core::result::Result",
+                        "args": [{"serdeValue": true}, {"prim": "String"}]},
+                "traitQualifier": ["::fb::Validator", "::fb::TokenValidator"],
+                "isAsync": true
+            }),
+        )
+        .expect("decodes");
+        assert_eq!(
+            c.render_body(&[]),
+            "<::fb::Validator as ::fb::TokenValidator>::validate(&arg0)"
         );
     }
 
@@ -877,6 +891,7 @@ mod tests {
                 "ret": {"ctor": "::core::result::Result",
                         "args": [{"ctor": "()"}, {"ctor": "::std::string::String"}]},
                 "traitQualifier": ["::db::Db", "::db::Repo"],
+                "methodTurbofish": [{"serdeValue": true}],
                 "isAsync": true
             }),
         )
