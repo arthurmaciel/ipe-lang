@@ -31,7 +31,7 @@ impl Patch {
     }
 }
 
-/// Structural diff between two `Html` trees that have already had `assign_sky_ids`
+/// Structural diff between two `Html` trees that have already had `assign_ipe_ids`
 /// applied. Returns the minimal list of `Patch` operations needed to update the
 /// DOM from `old` to `new`. Faithful port of Go `diffNodes`
 /// (`runtime-go/rt/live.go`):
@@ -39,9 +39,9 @@ impl Patch {
 /// - Tag/kind mismatch, child-count change, or any mixed-child text change:
 ///   whole-subtree `html` replace at the parent.
 /// - Sole text-child change: `SetText` via `p.text` (fast path).
-/// - Event handlers toggled on/off: `sky-<event>` attr set/remove + `data-sky-hid`.
-/// - Keyed identity is carried by `assign_sky_ids` (the `:{key}` segment) so a
-///   reordered keyed item keeps its sky-id and only its moved attrs patch.
+/// - Event handlers toggled on/off: `sky-<event>` attr set/remove + `data-ipe-hid`.
+/// - Keyed identity is carried by `assign_ipe_ids` (the `:{key}` segment) so a
+///   reordered keyed item keeps its ipe-id and only its moved attrs patch.
 pub fn diff<M>(old: &Html<M>, new: &Html<M>) -> Vec<Patch> {
     let mut out = vec![];
     diff_node_depth(old, new, &mut out, 0);
@@ -54,7 +54,7 @@ fn ipe_id<M>(n: &Html<M>) -> Option<&str> {
     if let Html::HElement(_, attrs, _) = n {
         for a in attrs {
             if let Attribute::Attr(k, v) = a
-                && k == "sky-id"
+                && k == "ipe-id"
             {
                 return Some(v);
             }
@@ -151,7 +151,7 @@ fn diff_node_depth<M>(old: &Html<M>, new: &Html<M>, out: &mut Vec<Patch>, depth:
 
 /// Compute the attribute + event delta between `old` and `new`.
 /// Keys changed or added → new value. Keys removed → empty string (Go convention).
-/// `sky-id` is excluded (never patched as an attribute).
+/// `ipe-id` is excluded (never patched as an attribute).
 fn diff_attrs<M>(old: &[Attribute<M>], new: &[Attribute<M>], p: &mut Patch) {
     // Borrowed maps: cloning every key AND value of every element into two
     // owned HashMaps per diff was the hottest allocation in the SSE path
@@ -164,7 +164,7 @@ fn diff_attrs<M>(old: &[Attribute<M>], new: &[Attribute<M>], p: &mut Patch) {
         let mut m = HashMap::new();
         for a in xs {
             match a {
-                Attribute::Attr(k, v) if k != "sky-id" => {
+                Attribute::Attr(k, v) if k != "ipe-id" => {
                     m.insert(k.as_str(), v.as_str());
                 }
                 Attribute::BoolAttr(k, true) => {
@@ -206,8 +206,8 @@ fn insert_safe_attr(p: &mut Patch, key: &str, val: &str) {
 
 /// Event-handler delta. Mirrors Go `diffNodes`' Events block: an element gaining
 /// a handler emits `sky-<event>` = `<event>` (the value the client posts back as
-/// `msg`, matching `render_html`) plus a fresh `data-sky-hid`; an element losing a
-/// handler emits `sky-<event>` = `""` (remove), and clears `data-sky-hid` once the
+/// `msg`, matching `render_html`) plus a fresh `data-ipe-hid`; an element losing a
+/// handler emits `sky-<event>` = `""` (remove), and clears `data-ipe-hid` once the
 /// last handler is gone. Without this, toggling a handler leaves a stale listener
 /// marker and the user's gesture is silently dropped.
 fn diff_events<M>(old: &[Attribute<M>], new: &[Attribute<M>], p: &mut Patch) {
@@ -221,14 +221,14 @@ fn diff_events<M>(old: &[Attribute<M>], new: &[Attribute<M>], p: &mut Patch) {
     };
     // Wire-marker key per event name — MUST match render_html's emission
     // (html.rs): file/image meta-events are already `sky-`-prefixed and the
-    // client reads them as `data-sky-ev-<name>`; plain DOM events use
+    // client reads them as `data-ipe-ev-<name>`; plain DOM events use
     // `sky-<name>`. Render and diff disagreeing here = a dead listener or a
     // spurious patch.
     let ev_key = |ev: &str| -> String {
-        if ev.starts_with("sky-") {
-            format!("data-sky-ev-{ev}")
+        if ev.starts_with("ipe-") {
+            format!("data-ipe-ev-{ev}")
         } else {
-            format!("sky-{ev}")
+            format!("ipe-{ev}")
         }
     };
     let (on, nn) = (names(old), names(new));
@@ -236,14 +236,14 @@ fn diff_events<M>(old: &[Attribute<M>], new: &[Attribute<M>], p: &mut Patch) {
     for ev in &nn {
         if !on.contains(ev) {
             insert_safe_attr(p, &ev_key(ev), ev);
-            insert_safe_attr(p, "data-sky-hid", &id);
+            insert_safe_attr(p, "data-ipe-hid", &id);
         }
     }
     for ev in &on {
         if !nn.contains(ev) {
             insert_safe_attr(p, &ev_key(ev), "");
             if nn.is_empty() {
-                insert_safe_attr(p, "data-sky-hid", "");
+                insert_safe_attr(p, "data-ipe-hid", "");
             }
         }
     }
@@ -268,7 +268,7 @@ mod tests {
     use super::*;
 
     fn ids(h: &mut Html<()>) {
-        assign_sky_ids(h, "r");
+        assign_ipe_ids(h, "r");
     }
 
     #[test]
@@ -392,7 +392,7 @@ mod tests {
 
     #[test]
     fn diff_event_added_emits_marker_and_hid() {
-        // <button> gains an onClick: client needs sky-click + data-sky-hid to bind.
+        // <button> gains an onClick: client needs ipe-click + data-ipe-hid to bind.
         let mut a: Html<()> = Html::HElement("button".into(), vec![], vec![]);
         let mut b: Html<()> = Html::HElement(
             "button".into(),
@@ -404,11 +404,11 @@ mod tests {
         let p = diff(&a, &b);
         assert_eq!(p.len(), 1);
         assert_eq!(
-            p[0].attrs.get("sky-click").map(String::as_str),
+            p[0].attrs.get("ipe-click").map(String::as_str),
             Some("click")
         );
         assert_eq!(
-            p[0].attrs.get("data-sky-hid").map(String::as_str),
+            p[0].attrs.get("data-ipe-hid").map(String::as_str),
             Some("r")
         );
     }
@@ -426,8 +426,8 @@ mod tests {
         let p = diff(&a, &b);
         assert_eq!(p.len(), 1);
         // Removal sentinel: empty string for both the marker and the (now-stale) hid.
-        assert_eq!(p[0].attrs.get("sky-click").map(String::as_str), Some(""));
-        assert_eq!(p[0].attrs.get("data-sky-hid").map(String::as_str), Some(""));
+        assert_eq!(p[0].attrs.get("ipe-click").map(String::as_str), Some(""));
+        assert_eq!(p[0].attrs.get("data-ipe-hid").map(String::as_str), Some(""));
     }
 
     #[test]
@@ -510,8 +510,8 @@ mod tests {
 
         let mut old = make_chain(DEPTH);
         let mut new = make_chain(DEPTH);
-        assign_sky_ids(&mut old, "r");
-        assign_sky_ids(&mut new, "r");
+        assign_ipe_ids(&mut old, "r");
+        assign_ipe_ids(&mut new, "r");
         // This call must return, not overflow the stack.
         let patches = diff(&old, &new);
         // Identical trees produce no patches (or only structural no-ops).

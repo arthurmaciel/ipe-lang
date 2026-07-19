@@ -241,9 +241,9 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 pub fn ipe_main() -> IpeTask<()> {
     log_println(string_from_int(list_length(list_filter(
         {
-            let __sky_fn: Box<dyn Fn(i64) -> bool + Send + Sync + 'static> =
+            let __ipe_fn: Box<dyn Fn(i64) -> bool + Send + Sync + 'static> =
                 Box::new(move |x: i64| -> bool { (x > 2) });
-            __sky_fn
+            __ipe_fn
         },
         vec![1, 2, 3, 4],
     ))))

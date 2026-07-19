@@ -258,9 +258,9 @@ pub fn ipe_main() -> IpeTask<()> {
         let p = RecXY { x: 1, y: 2 };
         ({
             let q = {
-                let mut __sky_rec = (p.clone()).clone();
-                __sky_rec.x = 41;
-                __sky_rec
+                let mut __ipe_rec = (p.clone()).clone();
+                __ipe_rec.x = 41;
+                __ipe_rec
             };
             log_println(string_from_int(((q).x + (p).y)))
         })

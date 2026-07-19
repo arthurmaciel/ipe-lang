@@ -216,9 +216,9 @@ fn synthesises_struct_literal_access_and_update() -> DResult<()> {
     // Update → clone-and-reassign block (no struct name needed).
     // Rustfmt spreads the block across lines; assert the stable key fragments.
     assert!(
-        out.contains("let mut __sky_rec = (p).clone();")
-            && out.contains("__sky_rec.x = 5;")
-            && out.contains("__sky_rec"),
+        out.contains("let mut __ipe_rec = (p).clone();")
+            && out.contains("__ipe_rec.x = 5;")
+            && out.contains("__ipe_rec"),
         "record update not emitted as clone-and-reassign:\n{out}"
     );
     // Access → parenthesised `.field`.

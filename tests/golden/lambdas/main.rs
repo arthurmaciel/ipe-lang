@@ -241,17 +241,17 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 pub fn ipe_main() -> IpeTask<()> {
     ({
         let inc = {
-            let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
+            let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
                 Box::new(move |x: i64| -> i64 { (x + 1) });
-            __sky_fn
+            __ipe_fn
         };
         ({
             let n = 10;
             ({
                 let add = {
-                    let __sky_fn: Box<dyn Fn(i64, i64) -> i64 + Send + Sync + 'static> =
+                    let __ipe_fn: Box<dyn Fn(i64, i64) -> i64 + Send + Sync + 'static> =
                         Box::new(move |a: i64, b: i64| -> i64 { (a + b) });
-                    __sky_fn
+                    __ipe_fn
                 };
                 ({
                     let r = (((inc)(41)

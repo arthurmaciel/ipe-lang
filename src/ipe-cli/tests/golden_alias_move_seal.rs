@@ -20,7 +20,7 @@
 //! * CASE — a single-arm product `case`, an irrefutable destructure.
 //! * LET — an irrefutable `let` destructure with an alias.
 //! * NESTED — `(h, ((c, d) as inner))`, an alias nested inside a tuple, driving
-//!   the fresh-temp (`__sky_bind_N`) path.
+//!   the fresh-temp (`__ipe_bind_N`) path.
 //!
 //! Two locks:
 //!
@@ -95,8 +95,8 @@ fn no_by_value_alias_uses_at_subpattern() {
     );
     // Nested alias inside a tuple → fresh temps, then clone the inner shape.
     assert!(
-        src.contains("let (__sky_bind_0, __sky_bind_1) = arg_1;")
-            && src.contains("let inner = __sky_bind_1;")
+        src.contains("let (__ipe_bind_0, __ipe_bind_1) = arg_1;")
+            && src.contains("let inner = __ipe_bind_1;")
             && src.contains("let (c, d) = inner.clone();"),
         "NESTED alias must bind fresh temps then clone the inner shape:\n{src}"
     );

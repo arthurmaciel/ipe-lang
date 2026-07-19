@@ -184,7 +184,7 @@ pub fn production_from_env() -> bool {
 /// suppression only ever makes bodies match MORE often across odd configs, and
 /// the sweep's env (nothing set) hits the injecting path either way.
 ///
-/// Rendered as a sibling of `#sky-root` on the Live path (so a body patch never
+/// Rendered as a sibling of `#ipe-root` on the Live path (so a body patch never
 /// blows it away); `position:fixed` pins it bottom-right and `pointer-events`
 /// stays default so the link is clickable.
 pub fn dev_console_banner(base: &str) -> String {
@@ -209,12 +209,12 @@ pub fn dev_console_banner(base: &str) -> String {
     // Byte-match Go's `devBannerHTML` (`dev_banner.go`): same id, target/rel/title,
     // monospace blue styling, and the `&#128269;` entity (NOT a literal emoji) so
     // both backends emit identical bytes. href honours `IPE_CONSOLE_URL` (default
-    // `/_sky/console`), attribute-escaped against a hostile env value.
+    // `/_ipe/console`), attribute-escaped against a hostile env value.
     let url = crate::system::read_env_var("IPE_CONSOLE_URL")
         .map(|v| v.trim().to_string())
         .ok()
         .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| "/_sky/console".to_string());
+        .unwrap_or_else(|| "/_ipe/console".to_string());
     let esc = url
         .replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -222,7 +222,7 @@ pub fn dev_console_banner(base: &str) -> String {
         .replace('"', "&#34;")
         .replace('\'', "&#39;");
     format!(
-        "<a id=\"__sky-dev-console\" href=\"{esc}\" target=\"_blank\" rel=\"noopener\" \
+        "<a id=\"__ipe-dev-console\" href=\"{esc}\" target=\"_blank\" rel=\"noopener\" \
          title=\"Sky Console (dev only)\" \
          style=\"position:fixed;right:12px;bottom:12px;z-index:2147483646;\
          font:12px/1.4 ui-monospace,Menlo,monospace;\
@@ -820,7 +820,7 @@ mod tests {
         // monospace blue style, `&#128269;` ENTITY (not a literal emoji). Default
         // test env is dev (ENV/IPE_ENV unset) → non-empty banner.
         let b = dev_console_banner("");
-        let expected = "<a id=\"__sky-dev-console\" href=\"/_sky/console\" target=\"_blank\" \
+        let expected = "<a id=\"__ipe-dev-console\" href=\"/_ipe/console\" target=\"_blank\" \
             rel=\"noopener\" title=\"Sky Console (dev only)\" \
             style=\"position:fixed;right:12px;bottom:12px;z-index:2147483646;\
             font:12px/1.4 ui-monospace,Menlo,monospace;\
@@ -840,7 +840,7 @@ mod tests {
     fn dev_banner_suppressed_for_subapp() {
         // A non-empty base = sub-app (e.g. the console child) → no recursive link.
         // Base-gate needs no env mutation, so this stays race-free.
-        assert_eq!(dev_console_banner("/_sky/console"), "");
+        assert_eq!(dev_console_banner("/_ipe/console"), "");
     }
 
     #[test]

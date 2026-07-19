@@ -6242,7 +6242,7 @@ pub struct Lowerer<'a> {
     /// Pre-minted, collision-free names for capturing a supplied argument
     /// expression in an eta-expand-partial hoist (T4). When a supplied arg
     /// is not a literal or bare `Var`, it is hoisted to
-    /// `let __sky_cap_i = <arg> in <lambda>` so it evaluates once even though
+    /// `let __ipe_cap_i = <arg> in <lambda>` so it evaluates once even though
     /// the lambda is called multiple times. Sized identically to `eta_params`
     /// (widest arity); position `i` names the i-th hoisted capture.
     cap_params: Vec<Symbol>,
@@ -12031,7 +12031,7 @@ impl<'a> Lowerer<'a> {
         // CloneOk, error for NonClone, leave bare for CopyLeaf.
         //
         // Non-Var supplied args (complex expressions): hoist to a
-        // `let __sky_cap_i = <expr>` binding OUTSIDE the lambda using a
+        // `let __ipe_cap_i = <expr>` binding OUTSIDE the lambda using a
         // pre-minted symbol from `cap_params`.  The lambda body uses the
         // cap symbol (clone-wrapped if CloneOk) so each call reads a
         // captured binding rather than re-evaluating the expression —
@@ -12094,8 +12094,8 @@ impl<'a> Lowerer<'a> {
                 // CopyLeaf slot: the expression evaluates to a Rust `Copy`
                 // scalar — inlining is safe.  No hoist needed.
                 //
-                // CloneOk slot: hoist to a `let __sky_cap_i = <expr>` OUTSIDE
-                // the lambda.  The lambda body uses `CloneVar(__sky_cap_i)` so
+                // CloneOk slot: hoist to a `let __ipe_cap_i = <expr>` OUTSIDE
+                // the lambda.  The lambda body uses `CloneVar(__ipe_cap_i)` so
                 // each call clones the named binding rather than re-evaluating
                 // the expression with bare-moved free vars → FnOnce → E0525.
                 //
@@ -12242,7 +12242,7 @@ impl<'a> Lowerer<'a> {
     /// The T4 capture-clone discipline applies identically to the supplied
     /// args: a `CloneOk` `Var` becomes `CloneVar` (the residual closure is `Fn`,
     /// re-callable, so a captured non-`Copy` value must clone per call); a
-    /// non-`Var` `CloneOk` expression is hoisted to a `let __sky_cap_i` binding
+    /// non-`Var` `CloneOk` expression is hoisted to a `let __ipe_cap_i` binding
     /// outside the lambda; `NonClone`/unknown non-`Fun` slots surface
     /// [`Feature::NonCloneCapture`]. The captured VALUE itself is a `Box<dyn Fn>`
     /// captured by move; the closure calls it via `Fn`'s `&self`, so the residual
@@ -12308,7 +12308,7 @@ impl<'a> Lowerer<'a> {
                 }
             } else {
                 // Non-`Var` complex expression. CloneOk → hoist to a
-                // `let __sky_cap_i = <expr>` OUTSIDE the lambda so it evaluates
+                // `let __ipe_cap_i = <expr>` OUTSIDE the lambda so it evaluates
                 // once and each call clones the binding. CopyLeaf/NonClone/None →
                 // inline (a fresh value each call, not a capture).
                 match cls {
@@ -12385,7 +12385,7 @@ impl<'a> Lowerer<'a> {
     ///   type is `CloneOk`; left bare for `CopyLeaf`.  `NonClone` or unknown types
     ///   surface [`Feature::NonCloneCapture`] (IPE-L0126).
     /// * Non-`Var` complex expressions in `CloneOk` slots are hoisted to a
-    ///   `let __sky_cap_i = <expr>` binding outside the lambda so each call reads
+    ///   `let __ipe_cap_i = <expr>` binding outside the lambda so each call reads
     ///   a captured binding (closing the re-evaluation / `FnOnce` hazard).
     ///
     /// The region type for the ctor is looked up at `callee.span`; it must peel

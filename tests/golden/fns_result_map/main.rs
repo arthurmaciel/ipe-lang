@@ -242,9 +242,9 @@ pub fn ipe_main() -> IpeTask<()> {
     log_println(string_from_int(result_with_default(
         0,
         ipe_result_map(ok_res(2), {
-            let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
+            let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
                 Box::new(move |x: i64| -> i64 { (x + 1) });
-            __sky_fn
+            __ipe_fn
         }),
     )))
 }

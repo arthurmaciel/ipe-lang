@@ -104,7 +104,7 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Ui", "Region"], "Region"),
     (&["Ipe", "Ui", "Input"], "Input"),
     (&["Ipe", "Ui", "Lazy"], "Lazy"),
-    (&["Ipe", "Ui", "Keyed"], "Keyed"), // sky-key diff identity
+    (&["Ipe", "Ui", "Keyed"], "Keyed"), // ipe-key diff identity
     (&["Ipe", "Decimal"], "Decimal"),   // arbitrary-precision decimal arithmetic
     (&["Ipe", "Html"], "Html"),
     (&["Ipe", "Html", "Attributes"], "Attr"),
@@ -1263,7 +1263,7 @@ impl Env {
             ),
             // ── Ipe.Ui.Lazy sub-module ───────────────────────────────────────────
             ("Lazy", &["lazy", "lazy2", "lazy3", "lazy4", "lazy5"]),
-            // ── Ipe.Ui.Keyed — sky-key for diff identity ─────────────────────────
+            // ── Ipe.Ui.Keyed — ipe-key for diff identity ─────────────────────────
             ("Keyed", &["column", "row"]),
             // ── Ipe.Html — typed HTML element / text surface ─────────────────────
             // `render` / `escapeHtml` / `escapeAttr` / `attrToString` are render

@@ -16,7 +16,7 @@ pub mod console;
 pub mod csrf;
 pub mod style_inject;
 // Pre-built console child + reverse-proxy — spawns the bundled console
-// binary and proxies /_sky/console/*; falls back to in-process `console` when the
+// binary and proxies /_ipe/console/*; falls back to in-process `console` when the
 // binary is absent.
 pub mod console_proxy;
 pub mod observability;
@@ -54,9 +54,9 @@ pub use crate::html::*;
 
 use super::*;
 
-/// Body returned with a session-miss 404 from `/_sky/event` and `/_sky/sse`.
+/// Body returned with a session-miss 404 from `/_ipe/event` and `/_ipe/sse`.
 ///
-/// LOAD-BEARING CONTRACT — `client.js` `__skyProbeSessionLost` only triggers
+/// LOAD-BEARING CONTRACT — `client.js` `__ipeProbeSessionLost` only triggers
 /// `window.location.reload()` (the SSE-reconnect recovery path) when a probe
 /// POST gets a 404 + `X-Ipê-Live: 1` AND the body CONTAINS the substring
 /// `"session not found"` (client.js l1481/l1530/l1536). Go's backend returns
@@ -76,7 +76,7 @@ const CLIENT_JS: &str = include_str!("client.js");
 /// Content-addressing for the client asset: computed ONCE at first access via
 /// `OnceLock`. Holds `(hex16, base64full)` where:
 ///   - `hex16` — first 16 hex chars of SHA-256(CLIENT_JS) → used in the URL
-///     (`/_sky/client.<hex16>.js`) for cache-busting.
+///     (`/_ipe/client.<hex16>.js`) for cache-busting.
 ///   - `base64full` — standard base64 of the full 32-byte SHA-256 digest → the
 ///     `integrity="sha256-<base64full>"` SRI attribute value.
 ///
@@ -98,12 +98,12 @@ fn client_js_hashes() -> &'static (String, String) {
 }
 
 /// The content-addressed URL path for the client JS asset, e.g.
-/// `/_sky/client.a1b2c3d4e5f6a7b8.js`. The path is stable for a given
+/// `/_ipe/client.a1b2c3d4e5f6a7b8.js`. The path is stable for a given
 /// `client.js` build and changes whenever the file changes — making
 /// `Cache-Control: immutable` safe. Callers may prepend the sub-app `base`.
 pub fn client_js_path() -> String {
     let (hex16, _) = client_js_hashes();
-    format!("/_sky/client.{}.js", hex16)
+    format!("/_ipe/client.{}.js", hex16)
 }
 
 /// Minimal CSS reset injected into every Ipe.Live page.
@@ -112,7 +112,7 @@ const BASE_CSS: &str = concat!(
     "*,*::before,*::after{box-sizing:border-box}",
     "html,body{margin:0;padding:0;min-height:100%}",
     "body{min-height:100vh;display:flex;flex-direction:column;font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,\"Helvetica Neue\",Arial,sans-serif;line-height:1.4}",
-    "#sky-root{display:flex;flex-direction:column;flex:1 0 auto;min-height:0}",
+    "#ipe-root{display:flex;flex-direction:column;flex:1 0 auto;min-height:0}",
     "h1,h2,h3,h4,h5,h6,p,ul,ol,li,figure,blockquote,pre,dl,dd{margin:0;padding:0;font-weight:inherit;font-size:inherit}",
     "button,input,select,textarea{font:inherit;color:inherit}",
     "button{background:none;border:0;padding:0;cursor:pointer;text-align:inherit}",
@@ -133,7 +133,7 @@ where
 {
     Box::pin(async move {
         let mut tree = view(model);
-        assign_sky_ids(&mut tree, "r");
+        assign_ipe_ids(&mut tree, "r");
         style_inject::apply_style_injections(&mut tree);
         println!("{}", render_page(&render_html(&tree)));
         IpeResult::Ok(())
@@ -144,7 +144,7 @@ where
 /// continues to pass. The full client-bearing wrap is `render_page_full`.
 pub fn render_page(body: &str) -> String {
     format!(
-        "<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body><div id=\"sky-root\">{body}</div></body></html>"
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body><div id=\"ipe-root\">{body}</div></body></html>"
     )
 }
 
@@ -186,17 +186,17 @@ pub fn island_escape(json: &str) -> String {
 /// Page wrap for isomorphic SSR + WASM hydration (M7 mode 2).
 ///
 /// Emits a standard HTML page with:
-/// - The SSR body in `<div id="sky-root">`.
+/// - The SSR body in `<div id="ipe-root">`.
 /// - The WASM bundle boot scripts (external JS + `hydrate(island_json)` call).
-/// - A **typed public-payload island** `<script type="application/sky-model+json">`
+/// - A **typed public-payload island** `<script type="application/ipe-model+json">`
 ///   carrying the XSS-escaped, serde-serialised `HydrationState` JSON.
 ///
 /// The island body is read by the WASM client via
-/// `document.querySelector('script[type="application/sky-model+json"]').textContent`
+/// `document.querySelector('script[type="application/ipe-model+json"]').textContent`
 /// and passed to the emitted `hydrate(model_json)` entry — parsed with `serde_json`,
 /// never evaluated. The `island_escape` call forecloses all script-injection paths.
 ///
-/// `body`        — SSR-rendered HTML (from `render_html` with sky-ids assigned).
+/// `body`        — SSR-rendered HTML (from `render_html` with ipe-ids assigned).
 /// `island_json` — serde-serialised `HydrationState` (BEFORE island_escape;
 ///                 this function applies the escape internally).
 /// `pkg_base`    — URL prefix for the WASM bundle assets, e.g. `/pkg` or `./pkg`.
@@ -207,13 +207,13 @@ pub fn render_page_hydrate(body: &str, island_json: &str, pkg_base: &str) -> Str
 <html>\
 <head><meta charset=\"utf-8\"></head>\
 <body>\
-<div id=\"sky-root\">{body}</div>\
-<script type=\"application/sky-model+json\">{escaped}</script>\
+<div id=\"ipe-root\">{body}</div>\
+<script type=\"application/ipe-model+json\">{escaped}</script>\
 <script type=\"module\">\
-import init, {{ hydrate }} from '{pkg_base}/sky_app.js';\
+import init, {{ hydrate }} from '{pkg_base}/ipe_app.js';\
 async function boot() {{\
-  await init('{pkg_base}/sky_app_bg.wasm');\
-  const island = document.querySelector('script[type=\"application/sky-model+json\"]');\
+  await init('{pkg_base}/ipe_app_bg.wasm');\
+  const island = document.querySelector('script[type=\"application/ipe-model+json\"]');\
   hydrate(island ? island.textContent : '');\
 }}\
 boot();\
@@ -267,16 +267,16 @@ mod island_escape_tests {
 /// Full page wrap with the live client loaded as a cacheable external asset.
 /// Mirrors Go's live page render (runtime-go/rt/live.go:3788).
 ///
-/// `sid`  — session id (injected into the JS via `window.__SKY_SID`).
+/// `sid`  — session id (injected into the JS via `window.__IPE_SID`).
 /// `base` — sub-app base path, e.g. "" for root-mounted apps.
 /// `body` — pre-rendered HTML body (from `render_html`).
 ///
 /// Two scripts are emitted in document order (no defer/async — execution order
 /// is left-to-right by the HTML spec):
 ///   1. A tiny inline `<script>` setting the three per-session window globals
-///      (`__SKY_SID`, `__SKY_BASE`, `__SKY_CSRF_TOKEN`). These MUST stay inline
+///      (`__IPE_SID`, `__IPE_BASE`, `__IPE_CSRF_TOKEN`). These MUST stay inline
 ///      because they are per-session values and must never be cached.
-///   2. An external `<script src="…/_sky/client.<hash>.js" integrity="sha256-…"
+///   2. An external `<script src="…/_ipe/client.<hash>.js" integrity="sha256-…"
 ///      crossorigin="anonymous">` loading the invariant client body. The URL is
 ///      content-addressed (hash of the file) so it is safe to cache with
 ///      `immutable`. The SRI `integrity` attribute lets the browser verify the
@@ -289,7 +289,7 @@ mod island_escape_tests {
 /// inline script to tighten CSP is deferred; it requires threading the nonce
 /// through the response pipeline and is outside the scope of this change.
 /// Server-side client-config templating (Go parity, live.go ~5993): read the
-/// `IPE_LIVE_*` tuning env vars and emit the `window.__SKY_*` assignments the
+/// `IPE_LIVE_*` tuning env vars and emit the `window.__IPE_*` assignments the
 /// client (`client.js`) reads with a hardcoded fallback. Without this the Rust
 /// client ignored every `IPE_LIVE_RETRY_*` / `QUEUE_MAX` / `HELLO_TIMEOUT_MS` /
 /// `HEARTBEAT_TTL_MS` / `BANNER` override. Totally parsed: a malformed value
@@ -309,15 +309,15 @@ fn live_client_config_js() -> String {
         Some(ref v) if v == "off" || v == "0" || v == "false"
     );
     format!(
-        "window.__SKY_BANNER_ENABLED={banner};\
-         window.__SKY_RETRY_BASE_MS={};\
-         window.__SKY_RETRY_MAX_MS={};\
-         window.__SKY_RETRY_MAX_ATTEMPTS={};\
-         window.__SKY_EVENT_QUEUE_MAX={};\
-         window.__SKY_HELLO_TIMEOUT_MS={};\
-         window.__SKY_HEARTBEAT_TTL_MS={};\
-         window.__SKY_MSG_RECONNECTING=\"Reconnecting…\";\
-         window.__SKY_MSG_OFFLINE=\"Connection lost — refresh to retry\";",
+        "window.__IPE_BANNER_ENABLED={banner};\
+         window.__IPE_RETRY_BASE_MS={};\
+         window.__IPE_RETRY_MAX_MS={};\
+         window.__IPE_RETRY_MAX_ATTEMPTS={};\
+         window.__IPE_EVENT_QUEUE_MAX={};\
+         window.__IPE_HELLO_TIMEOUT_MS={};\
+         window.__IPE_HEARTBEAT_TTL_MS={};\
+         window.__IPE_MSG_RECONNECTING=\"Reconnecting…\";\
+         window.__IPE_MSG_OFFLINE=\"Connection lost — refresh to retry\";",
         num("IPE_LIVE_RETRY_BASE_MS", 500),
         num("IPE_LIVE_RETRY_MAX_MS", 16000),
         num("IPE_LIVE_RETRY_MAX_ATTEMPTS", 10),
@@ -338,19 +338,19 @@ pub fn render_page_full(sid: &str, base: &str, body: &str, csrf_token: &str) -> 
     // Content-addressed client asset URL and SRI hash — computed once at first call.
     let (hex16, b64) = client_js_hashes();
     // Honour the sub-app base prefix so the external script request goes through
-    // the parent proxy (same as /_sky/sse, /_sky/event, /_sky/console).
-    let client_src = format!("{base}/_sky/client.{hex16}.js");
+    // the parent proxy (same as /_ipe/sse, /_ipe/event, /_ipe/console).
+    let client_src = format!("{base}/_ipe/client.{hex16}.js");
     let integrity = format!("sha256-{b64}");
     let config_js = live_client_config_js();
     format!(
         "<!DOCTYPE html><html><head>\
          <meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
-         <meta name=\"sky-base\" content=\"{base}\">\
+         <meta name=\"ipe-base\" content=\"{base}\">\
          <style>{BASE_CSS}</style>\
          </head>\
-         <body><div id=\"sky-root\">{body}</div>{dev_banner}\
-         <script>window.__SKY_SID={sid_js};window.__SKY_BASE={base_js};window.__SKY_CSRF_TOKEN={csrf_js};{config_js}</script>\
+         <body><div id=\"ipe-root\">{body}</div>{dev_banner}\
+         <script>window.__IPE_SID={sid_js};window.__IPE_BASE={base_js};window.__IPE_CSRF_TOKEN={csrf_js};{config_js}</script>\
          <script src=\"{client_src}\" integrity=\"{integrity}\" crossorigin=\"anonymous\"></script>\
          </body></html>"
     )
@@ -385,7 +385,7 @@ pub struct SessionEntry<Model, Msg> {
 
 /// SSE patches envelope. The browser client (`live/client.js`) consumes the
 /// `event: patches` frame as `{globalSeq, patches}` and routes it through
-/// `__skyHandleResponse(undefined, _, _, globalSeq)` → `__skyApplyPatches`.
+/// `__ipeHandleResponse(undefined, _, _, globalSeq)` → `__ipeApplyPatches`.
 /// We use `globalSeq` (the server-owned broadcast counter) rather than the
 /// local `seq` so it never collides with the client's own POST-local seq gate.
 #[derive(serde::Serialize)]
@@ -395,10 +395,10 @@ struct PatchEnvelope<'a> {
     patches: &'a [crate::live::diff::Patch],
 }
 
-/// Wire shape POSTed by the browser client to `/_sky/event`
-/// (`live/client.js` __skySend): `{sessionId, seq, msg, args, handlerId}`.
-/// `handlerId` is the element's `data-sky-hid` (== its sky-id); `msg` is the
-/// `sky-<event>` marker. We resolve handlers server-side by sky-id + event,
+/// Wire shape POSTed by the browser client to `/_ipe/event`
+/// (`live/client.js` __ipeSend): `{sessionId, seq, msg, args, handlerId}`.
+/// `handlerId` is the element's `data-ipe-hid` (== its ipe-id); `msg` is the
+/// `sky-<event>` marker. We resolve handlers server-side by ipe-id + event,
 /// so `handlerId` is the authoritative locator; `event` is derived below.
 #[derive(serde::Deserialize)]
 struct EventBody {
@@ -712,7 +712,7 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
         let cmd_is_none = matches!(cmd, IpeCmd::None);
 
         let mut tree = view(next.clone());
-        assign_sky_ids(&mut tree, "r");
+        assign_ipe_ids(&mut tree, "r");
         style_inject::apply_style_injections(&mut tree);
 
         let (patches, seq, sse, noop) = {
@@ -820,7 +820,7 @@ fn normalise_base_path(raw: &str) -> String {
 /// distinct `cookieName` for the same reason (live.go:2769).
 ///
 /// SECURITY (root, secure mode): the session cookie is the SOLE bearer credential
-/// (`sid_from_cookie` + `store.get` authorise every `/_sky/event` + `/_sky/sse`),
+/// (`sid_from_cookie` + `store.get` authorise every `/_ipe/event` + `/_ipe/sse`),
 /// so it gets the `__Host-` prefix — the browser then refuses any `Set-Cookie`
 /// carrying a `Domain=` attribute, closing the sibling-subdomain cookie-tossing →
 /// session-fixation vector (an attacker on `evil.example.com` with a valid cert
@@ -860,8 +860,8 @@ fn cookie_path_for(base: &str) -> String {
 /// Normalised sub-app base path, read from `IPE_LIVE_BASE_PATH`. Empty when
 /// unset (root-mounted app → byte-identical to a standalone Live server). When
 /// set (this app runs as a reverse-proxied sub-app — e.g. the bundled console
-/// mounted at `/_sky/console`), the value is threaded into `render_page_full`
-/// so the client JS prefixes `/_sky/event` + `/_sky/sse` with it. The browser
+/// mounted at `/_ipe/console`), the value is threaded into `render_page_full`
+/// so the client JS prefixes `/_ipe/event` + `/_ipe/sse` with it. The browser
 /// reaches this child only through the parent proxy, which strips the prefix
 /// before forwarding — so the child's own router stays root-relative.
 fn live_base_path() -> String {
@@ -1003,7 +1003,7 @@ fn page_response(
     resp
 }
 
-/// Maximum request body bytes for `/_sky/event`: `IPE_LIVE_MAX_BODY_BYTES`,
+/// Maximum request body bytes for `/_ipe/event`: `IPE_LIVE_MAX_BODY_BYTES`,
 /// default 5 MiB (5 << 20 = 5 242 880). Mirrors Go's `handleEvent` body cap
 /// (runtime-go/rt/live.go ~l3911). The default covers `Event.onFile` /
 /// `Event.onImage` data-URL payloads; override for larger file uploads.
@@ -1019,7 +1019,7 @@ fn live_max_body_bytes() -> usize {
 mod live_max_body_bytes_tests {
     // IPE_LIVE_MAX_BODY_BYTES=0 must floor at the default, not disable the
     // body (matching server::max_body's `.filter(|&n| n > 0)`). Without the
-    // floor a 0 value would 413 every /_sky/event POST.
+    // floor a 0 value would 413 every /_ipe/event POST.
     //
     // This tests the parsing/filtering formula directly rather than mutating
     // the real env var: `std::env::set_var` is not thread-safe under a
@@ -1539,7 +1539,7 @@ where
             //   * miss      → init a new session.
             let cookie_sid = sid_from_cookie(&headers);
             // CSRF double-submit token: reuse the browser's existing well-formed
-            // `__sky_csrf` cookie (so a reload keeps the same token), else mint a
+            // `__ipe_csrf` cookie (so a reload keeps the same token), else mint a
             // fresh one. page_response sets the cookie + injects the value into
             // the page JS; the client echoes it back in the X-Ipê-Csrf header.
             let csrf_tok = csrf::cookie_value(&headers, csrf::csrf_cookie_name())
@@ -1581,7 +1581,7 @@ where
                         let mut e = handle.lock().unwrap_or_else(|e| e.into_inner());
                         e.model = (st.route_resolver)(e.model.clone(), uri.path());
                         let mut tree = (st.view)(e.model.clone());
-                        assign_sky_ids(&mut tree, "r");
+                        assign_ipe_ids(&mut tree, "r");
                         style_inject::apply_style_injections(&mut tree);
                         e.index = build_index(&tree);
                         e.last_view = tree.clone();
@@ -1630,7 +1630,7 @@ where
             };
 
             let mut tree = (st.view)(model.clone());
-            assign_sky_ids(&mut tree, "r");
+            assign_ipe_ids(&mut tree, "r");
             style_inject::apply_style_injections(&mut tree);
             let index = build_index(&tree);
             let body = render_html(&tree);
@@ -1679,7 +1679,7 @@ where
             page_response(&sid, &body, &csrf_tok, &headers)
         }
 
-        // ── GET /_sky/sse ─────────────────────────────────────────────────
+        // ── GET /_ipe/sse ─────────────────────────────────────────────────
         async fn sse_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
             State(st): State<LiveState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
             headers: axum::http::HeaderMap,
@@ -1708,7 +1708,7 @@ where
                 None => {
                     return (
                         StatusCode::NOT_FOUND,
-                        [(axum::http::HeaderName::from_static("x-sky-live"), "1")],
+                        [(axum::http::HeaderName::from_static("x-ipe-live"), "1")],
                         SESSION_LOST_BODY,
                     )
                         .into_response();
@@ -1735,7 +1735,7 @@ where
             // Go-parity hello payload (live.go ~5486): `{"v":1,"sid":...,"ts":<ms>}`.
             // Reaching here means `entry` exists ⇒ the cookie sid was a live session,
             // so `sid` is Some; the impossible None degrades to an empty sid (the
-            // client already holds its sid via window.__SKY_SID — the body is
+            // client already holds its sid via window.__IPE_SID — the body is
             // confirmatory). The sid is hex (new_sid) ⇒ JSON-safe without escaping.
             let hello_sid = sid.as_deref().unwrap_or("");
             let hello_ts = chrono::Utc::now().timestamp_millis();
@@ -1752,7 +1752,7 @@ where
             // store — has no live subscriptions from the previous process, so
             // nothing pushes until the next user Msg. Render the current view once
             // and ship it as a full-body `event: patch` frame; the client consumes
-            // `{seq, body}` → __skyPatch full replace (client.js:1318). No globalSeq
+            // `{seq, body}` → __ipePatch full replace (client.js:1318). No globalSeq
             // field → the client's broadcast-dedup guard (globalSeq>0) can never
             // drop this authoritative, idempotent frame. Bump seq under the same
             // lock the event path uses so it stays monotonic vs later patches; drop
@@ -1824,7 +1824,7 @@ where
             }
         }
 
-        // ── POST /_sky/event ──────────────────────────────────────────────
+        // ── POST /_ipe/event ──────────────────────────────────────────────
         async fn event_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
             State(st): State<LiveState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
             headers: axum::http::HeaderMap,
@@ -1854,7 +1854,7 @@ where
                 None => {
                     return (
                         StatusCode::NOT_FOUND,
-                        [(axum::http::HeaderName::from_static("x-sky-live"), "1")],
+                        [(axum::http::HeaderName::from_static("x-ipe-live"), "1")],
                         SESSION_LOST_BODY,
                     )
                         .into_response();
@@ -1872,7 +1872,7 @@ where
                 None => {
                     return (
                         StatusCode::NOT_FOUND,
-                        [(axum::http::HeaderName::from_static("x-sky-live"), "1")],
+                        [(axum::http::HeaderName::from_static("x-ipe-live"), "1")],
                         SESSION_LOST_BODY,
                     )
                         .into_response();
@@ -1942,7 +1942,7 @@ where
                 StatusCode::OK,
                 [
                     (axum::http::header::CONTENT_TYPE, "application/json"),
-                    (axum::http::HeaderName::from_static("x-sky-live"), "1"),
+                    (axum::http::HeaderName::from_static("x-ipe-live"), "1"),
                 ],
                 format!("{{\"seq\":{seq},\"patches\":[]}}"),
             )
@@ -1982,10 +1982,10 @@ where
         // absent / spawn fails / readiness times out / the gate is closed.
         // Decided HERE (before the router is built) so both the proxy routes and
         // the in-process console routes sit under the same `track` middleware,
-        // and the two never collide on `/_sky/console`.
+        // and the two never collide on `/_ipe/console`.
         let use_console_proxy = console_proxy::ensure_console_proxy().await;
 
-        // Body-size cap on /_sky/event: mirrors Go's http.MaxBytesReader
+        // Body-size cap on /_ipe/event: mirrors Go's http.MaxBytesReader
         // (runtime-go/rt/live.go:3915). axum's DefaultBodyLimit applies
         // before the handler sees the bytes, so an over-sized payload is
         // rejected at the extract layer with 413 Payload Too Large.
@@ -1998,7 +1998,7 @@ where
         // exempt (GET; the CSRF middleware only checks mutating verbs) and open
         // to all (it's a static public asset). It is registered BEFORE the
         // catch-all `/*path` route so it is matched first.
-        let client_js_route_path = client_js_path(); // e.g. "/_sky/client.a1b2c3d4e5f6a7b8.js"
+        let client_js_route_path = client_js_path(); // e.g. "/_ipe/client.a1b2c3d4e5f6a7b8.js"
         async fn serve_client_js() -> impl axum::response::IntoResponse {
             use axum::http::header;
             (
@@ -2019,22 +2019,22 @@ where
 
         let mut router = Router::new()
             .route(
-                "/_sky/sse",
+                "/_ipe/sse",
                 get(sse_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>),
             )
-            .route("/_sky/event", event_route)
+            .route("/_ipe/event", event_route)
             .route(&client_js_route_path, get(serve_client_js))
             // Observability surface (Go parity — observability.go).
-            .route("/_sky/healthz", get(observability::healthz))
-            .route("/_sky/readyz", get(observability::readyz))
-            .route("/_sky/buildinfo", get(observability::buildinfo))
-            .route("/_sky/metrics", get(observability::metrics))
+            .route("/_ipe/healthz", get(observability::healthz))
+            .route("/_ipe/readyz", get(observability::readyz))
+            .route("/_ipe/buildinfo", get(observability::buildinfo))
+            .route("/_ipe/metrics", get(observability::metrics))
             // Observability federation receiver stays on the parent regardless
             // of console mode (sub-apps push telemetry here). Body-capped (reuses
-            // the /_sky/event limit) so an unbounded ingest POST can't exhaust
+            // the /_ipe/event limit) so an unbounded ingest POST can't exhaust
             // memory before the JSON parse.
             .route(
-                "/_sky/observability/ingest",
+                "/_ipe/observability/ingest",
                 post(console::ingest)
                     .layer(axum::extract::DefaultBodyLimit::max(live_max_body_bytes())),
             );
@@ -2057,18 +2057,18 @@ where
             if console_proxy::gate_allows() {
                 eprintln!("{}", store::memory_store_log_line(live_ttl()));
                 eprintln!(
-                    "[sky.console] inline console mounted as Ipe.Live sub-app at /_sky/console mode={}",
+                    "[sky.console] inline console mounted as Ipe.Live sub-app at /_ipe/console mode={}",
                     console::console_auth_mode_label()
                 );
             }
             router
-                .route("/_sky/console", get(console::console_html))
-                .route("/_sky/console/api/overview", get(console::api_overview))
-                .route("/_sky/console/api/logs", get(console::api_logs))
-                .route("/_sky/console/api/errors", get(console::api_errors))
-                .route("/_sky/console/api/traces", get(console::api_traces))
+                .route("/_ipe/console", get(console::console_html))
+                .route("/_ipe/console/api/overview", get(console::api_overview))
+                .route("/_ipe/console/api/logs", get(console::api_logs))
+                .route("/_ipe/console/api/errors", get(console::api_errors))
+                .route("/_ipe/console/api/traces", get(console::api_traces))
                 .route(
-                    "/_sky/console/api/metrics-summary",
+                    "/_ipe/console/api/metrics-summary",
                     get(console::api_metrics_summary),
                 )
         };
@@ -2277,7 +2277,7 @@ mod dev_banner_tests {
         // Go parity (dev_banner.go devBannerHTML): same id, target/rel/title,
         // monospace blue style, `&#128269;` ENTITY (not a literal emoji).
         let b = dev_console_banner("");
-        let expected = "<a id=\"__sky-dev-console\" href=\"/_sky/console\" target=\"_blank\" \
+        let expected = "<a id=\"__ipe-dev-console\" href=\"/_ipe/console\" target=\"_blank\" \
             rel=\"noopener\" title=\"Sky Console (dev only)\" \
             style=\"position:fixed;right:12px;bottom:12px;z-index:2147483646;\
             font:12px/1.4 ui-monospace,Menlo,monospace;\
@@ -2296,7 +2296,7 @@ mod dev_banner_tests {
     #[test]
     fn banner_suppressed_for_subapp() {
         // A non-empty base = sub-app (e.g. the console child) → no recursive link.
-        assert_eq!(dev_console_banner("/_sky/console"), "");
+        assert_eq!(dev_console_banner("/_ipe/console"), "");
     }
 }
 
@@ -2374,48 +2374,48 @@ mod base_path_tests {
 
     #[test]
     fn normalise_adds_leading_drops_trailing() {
-        assert_eq!(normalise_base_path("/_sky/console"), "/_sky/console");
-        assert_eq!(normalise_base_path("/_sky/console/"), "/_sky/console");
-        assert_eq!(normalise_base_path("_sky/console"), "/_sky/console");
+        assert_eq!(normalise_base_path("/_ipe/console"), "/_ipe/console");
+        assert_eq!(normalise_base_path("/_ipe/console/"), "/_ipe/console");
+        assert_eq!(normalise_base_path("_ipe/console"), "/_ipe/console");
         assert_eq!(normalise_base_path("  /billing/  "), "/billing");
     }
 
     #[test]
-    fn cookie_name_is_sky_sid_at_root_distinct_under_base() {
+    fn cookie_name_is_ipe_sid_at_root_distinct_under_base() {
         assert_eq!(cookie_name_for(""), "ipe_sid");
         // Distinct from the parent's `ipe_sid` so the proxied child can't clobber it.
-        assert_eq!(cookie_name_for("/_sky/console"), "ipe_sid__sky_console");
-        assert_ne!(cookie_name_for("/_sky/console"), "ipe_sid");
+        assert_eq!(cookie_name_for("/_ipe/console"), "ipe_sid__ipe_console");
+        assert_ne!(cookie_name_for("/_ipe/console"), "ipe_sid");
     }
 
     #[test]
     fn cookie_path_scopes_to_base() {
         assert_eq!(cookie_path_for(""), "/");
         // Scoped → the cookie is never sent to the parent's own routes.
-        assert_eq!(cookie_path_for("/_sky/console"), "/_sky/console");
+        assert_eq!(cookie_path_for("/_ipe/console"), "/_ipe/console");
     }
 
     #[test]
     fn render_page_threads_base_into_meta_and_window_global() {
         let root = render_page_full("sid1", "", "<b>x</b>", "deadbeef");
-        assert!(root.contains("<meta name=\"sky-base\" content=\"\">"));
-        assert!(root.contains("window.__SKY_BASE=\"\""));
+        assert!(root.contains("<meta name=\"ipe-base\" content=\"\">"));
+        assert!(root.contains("window.__IPE_BASE=\"\""));
 
-        let sub = render_page_full("sid1", "/_sky/console", "<b>x</b>", "deadbeef");
-        assert!(sub.contains("<meta name=\"sky-base\" content=\"/_sky/console\">"));
-        assert!(sub.contains("window.__SKY_BASE=\"/_sky/console\""));
+        let sub = render_page_full("sid1", "/_ipe/console", "<b>x</b>", "deadbeef");
+        assert!(sub.contains("<meta name=\"ipe-base\" content=\"/_ipe/console\">"));
+        assert!(sub.contains("window.__IPE_BASE=\"/_ipe/console\""));
     }
 
     #[test]
     fn render_page_emits_external_client_script_with_sri() {
         let root = render_page_full("sid1", "", "<b>x</b>", "tok1");
         // Per-session values stay inline.
-        assert!(root.contains("window.__SKY_SID=\"sid1\""));
-        assert!(root.contains("window.__SKY_CSRF_TOKEN=\"tok1\""));
+        assert!(root.contains("window.__IPE_SID=\"sid1\""));
+        assert!(root.contains("window.__IPE_CSRF_TOKEN=\"tok1\""));
         // CLIENT_JS body must NOT be inlined.
-        assert!(!root.contains("var __skySid = window.__SKY_SID"));
+        assert!(!root.contains("var __ipeSid = window.__IPE_SID"));
         // External script tag with content-addressed src.
-        assert!(root.contains("<script src=\"/_sky/client."));
+        assert!(root.contains("<script src=\"/_ipe/client."));
         assert!(root.contains(".js\" integrity=\"sha256-"));
         assert!(root.contains("crossorigin=\"anonymous\">"));
         // SRI attribute is present and non-empty.
@@ -2424,14 +2424,14 @@ mod base_path_tests {
 
     #[test]
     fn render_page_sub_app_prefixes_client_src() {
-        let sub = render_page_full("sid1", "/_sky/console", "<b>x</b>", "tok1");
+        let sub = render_page_full("sid1", "/_ipe/console", "<b>x</b>", "tok1");
         // External script src must carry the base prefix.
-        assert!(root_or_sub_has_prefixed_client_src(&sub, "/_sky/console"));
+        assert!(root_or_sub_has_prefixed_client_src(&sub, "/_ipe/console"));
     }
 
     fn root_or_sub_has_prefixed_client_src(html: &str, base: &str) -> bool {
-        // Find `<script src="` and check the src starts with `base/_sky/client.`
-        let needle = format!("<script src=\"{}/_sky/client.", base);
+        // Find `<script src="` and check the src starts with `base/_ipe/client.`
+        let needle = format!("<script src=\"{}/_ipe/client.", base);
         html.contains(&needle)
     }
 
@@ -2441,11 +2441,11 @@ mod base_path_tests {
         let p2 = client_js_path();
         // Same result on repeated calls (OnceLock).
         assert_eq!(p1, p2);
-        // Path format: /_sky/client.<16 hex chars>.js
-        assert!(p1.starts_with("/_sky/client."));
+        // Path format: /_ipe/client.<16 hex chars>.js
+        assert!(p1.starts_with("/_ipe/client."));
         assert!(p1.ends_with(".js"));
         let hash_part = p1
-            .trim_start_matches("/_sky/client.")
+            .trim_start_matches("/_ipe/client.")
             .trim_end_matches(".js");
         assert_eq!(hash_part.len(), 16, "URL hash should be 16 hex chars");
         assert!(
@@ -2460,8 +2460,8 @@ mod session_lost_body_tests {
     //! Guards the LOAD-BEARING session-lost 404 wire contract.
     //!
     //! After a server restart, the browser recovers ONLY because
-    //! `client.js` `__skyProbeSessionLost` reloads the page when its probe
-    //! POST to `/_sky/event` gets a 404 + `X-Sky-Live: 1` whose body CONTAINS
+    //! `client.js` `__ipeProbeSessionLost` reloads the page when its probe
+    //! POST to `/_ipe/event` gets a 404 + `X-Ipe-Live: 1` whose body CONTAINS
     //! the substring `"session not found"` (client.js l1481/l1530/l1536). A
     //! refactor that flips the body back to the old `"no session"` would
     //! silently strand every client on a permanent "Reconnecting…" banner —
@@ -2481,7 +2481,7 @@ mod session_lost_body_tests {
     async fn no_session_event_handler() -> Response {
         (
             StatusCode::NOT_FOUND,
-            [(HeaderName::from_static("x-sky-live"), "1")],
+            [(HeaderName::from_static("x-ipe-live"), "1")],
             SESSION_LOST_BODY,
         )
             .into_response()
@@ -2504,11 +2504,11 @@ mod session_lost_body_tests {
 
     #[tokio::test]
     async fn event_session_miss_returns_404_marker_and_contract_body() {
-        let app = Router::new().route("/_sky/event", post(no_session_event_handler));
+        let app = Router::new().route("/_ipe/event", post(no_session_event_handler));
 
         let req = Request::builder()
             .method("POST")
-            .uri("/_sky/event")
+            .uri("/_ipe/event")
             .body(Body::from("{}"))
             .expect("build probe request");
 
@@ -2517,12 +2517,12 @@ mod session_lost_body_tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND, "must be a 404");
         assert_eq!(
             resp.headers()
-                .get("x-sky-live")
-                .expect("x-sky-live header present")
+                .get("x-ipe-live")
+                .expect("x-ipe-live header present")
                 .to_str()
                 .expect("ascii header value"),
             "1",
-            "X-Sky-Live marker distinguishes session-lost from a wedged proxy"
+            "X-Ipe-Live marker distinguishes session-lost from a wedged proxy"
         );
 
         let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)

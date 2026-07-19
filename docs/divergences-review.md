@@ -51,7 +51,7 @@ diverged, the row records it and gives the reconciled call.
 | U1 | NEUTRAL→FEATURE | Server-rendered `Ipe.Ui`; the sellable angle is "no client build." | Support |
 | U2 | FEATURE | Typed pseudo/media/animation/grid surface elm-ui lacks, keeping "never write CSS." | Support |
 | U3 | NEUTRAL | Asymmetric `Ui.fill` lowering — a Flexbox §9.8 indefinite-height fix. | Omit (footnote) |
-| U4 | FEATURE | No `data-sky-eval`/eval sink, HTML-escape-everything, CSP-strict. | Lead (security) |
+| U4 | FEATURE | No `data-ipe-eval`/eval sink, HTML-escape-everything, CSP-strict. | Lead (security) |
 | R1 | NEUTRAL | Haystack-first `*In` companions; both forms ship. | Omit |
 | R2 | NEUTRAL | `ToString.*` discoverability namespace. | Omit |
 | R3 | INTERIM `[with arity-0 fix]` | `Ipe.Pure` arity-0 companions — an admitted workaround for Limitation #7. Couples to B7. | Converging |

@@ -99,9 +99,9 @@ divergences (see §5).
 | # | Divergence from Elm (elm-ui / mdgriffith) | Rationale |
 |---|---|---|
 | U1 | **Server-rendered, not client-rendered.** `Ipe.Ui` is elm-ui-derived (`row`/`column`/`el`, `Background`/`Border`/`Font`/`Region`, `Input.*`) but renders to **inline-styled HTML on the server**. elm-ui builds the layout in the browser at runtime. | Follows from server-driven TEA (P2). |
-| U2 | **Added surface elm-ui lacks:** typed pseudo-classes (`:hover`/`:focus-visible`/`:active`/`:disabled`), CSS media queries + a typed `Breakpoint` ADT, CSS transitions + keyframe animations (auto-wrapped in `prefers-reduced-motion`), CSS-grid track ADT, aspect-ratio helpers — all lowered to inline CSS / sky-id-scoped `<style>` blocks. | Production web UI needs responsive + motion + grid without dropping to raw CSS; keeps the "never write CSS" contract. |
+| U2 | **Added surface elm-ui lacks:** typed pseudo-classes (`:hover`/`:focus-visible`/`:active`/`:disabled`), CSS media queries + a typed `Breakpoint` ADT, CSS transitions + keyframe animations (auto-wrapped in `prefers-reduced-motion`), CSS-grid track ADT, aspect-ratio helpers — all lowered to inline CSS / ipe-id-scoped `<style>` blocks. | Production web UI needs responsive + motion + grid without dropping to raw CSS; keeps the "never write CSS" contract. |
 | U3 | **`Ui.fill` lowers asymmetrically by flex axis** (main-axis `flex-grow`; cross-axis width `100%`; cross-axis height relies on flex `stretch`). elm-ui's fill model differs. | Closes a real CSS Flexbox §9.8 indefinite-height bug class specific to HTML/flex emission. |
-| U4 | **`data-sky-eval` is forbidden; `Ipe.Ui` HTML-escapes everything; `data-sky-path` (typed) drives URL sync.** No `new Function()` / eval sink; CSP-strict by default. elm-ui/elm has no such directive because it never emits server HTML that could carry an injection sink. | XSS/CSP hardening is a server-HTML concern that does not arise in Elm's client model. |
+| U4 | **`data-ipe-eval` is forbidden; `Ipe.Ui` HTML-escapes everything; `data-ipe-path` (typed) drives URL sync.** No `new Function()` / eval sink; CSP-strict by default. elm-ui/elm has no such directive because it never emits server HTML that could carry an injection sink. | XSS/CSP hardening is a server-HTML concern that does not arise in Elm's client model. |
 
 ### 4.3 Effect + platform modules with no Elm-core counterpart
 
@@ -122,7 +122,7 @@ server/native target:
 - **Servers & networking:** `Ipe.Http.Server` (routes, middleware, cookies,
   streaming), `Ipe.Http.Server.WebSocket` + `Ipe.WebSocket` (client),
   `Ipe.Http.Server.Stream` (SSE / chunked). Elm cannot open a server socket.
-- **Observability:** `Ipe.Log`, `Ipe.Trace`, auto-mounted `/_sky/console`,
+- **Observability:** `Ipe.Log`, `Ipe.Trace`, auto-mounted `/_ipe/console`,
   Prometheus metrics, OTLP export. No Elm-core analog (`Debug.log` is the
   nearest, and it is dev-only + removed from production builds).
 - **Runtime services:** `Ipe.Cache` (LRU+TTL), `Ipe.Email` (Resend/SES/

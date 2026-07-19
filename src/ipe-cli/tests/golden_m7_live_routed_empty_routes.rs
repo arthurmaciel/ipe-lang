@@ -443,7 +443,7 @@ fn routed_empty_routes_well_typed_cargo_builds() {
 
 /// `Live.app` with a non-empty `routes` list but Model has no `page`
 /// field must compile on the non-routed path (mirrors `examples/24-tui-
-/// kitchen-sink` and `examples/25-sky-console`).
+/// kitchen-sink` and `examples/25-ipe-console`).
 ///
 /// Before fix: skyc returned IPE-L0124 (gate was overly strict vs. Go oracle).
 /// After fix: ipe exits 0 and emits `live_app` (not `live_app_routed`).

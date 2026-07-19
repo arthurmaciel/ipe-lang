@@ -9,8 +9,8 @@ pub(crate) fn main_summary(count: i64) -> String {
 }
 pub(crate) fn ipe_main() -> IpeTask<()> {
     task_and_then(crate::lib_seed_and_count(), {
-        let __sky_fn: Box<dyn Fn(i64) -> IpeTask<()> + Send + Sync + 'static> =
+        let __ipe_fn: Box<dyn Fn(i64) -> IpeTask<()> + Send + Sync + 'static> =
             Box::new(move |count: i64| -> IpeTask<()> { log_println(crate::main_summary(count)) });
-        __sky_fn
+        __ipe_fn
     })
 }

@@ -39,7 +39,7 @@ adversarially verified. Some low "smells" are auditor-reported only (marked ⚠�
 | CO-BACKEND-002 | soundness | dead `assert_mod_idents_unique` gate (lying comment) → `Std.Ui` vs `Std_Ui` collide → E0428 + silent file overwrite. | T2 |
 | CO-INCR-003 | correctness | `Money.add`/`sub` return left operand on currency mismatch; comparisons ignore currency — silent-wrong-money. | T4 |
 | CO-INCR-005 | completeness | `ipe watch`/`lsp` never wire FFI → FFI projects red-loop under watch while `ipe build` succeeds. | T5 |
-| RT-UI-002 | completeness | `Keyed.column/row` drop the key instead of attaching `sky-key` → wrong-element patches on reorder. | T5 |
+| RT-UI-002 | completeness | `Keyed.column/row` drop the key instead of attaching `ipe-key` → wrong-element patches on reorder. | T5 |
 
 ## Downgraded / refuted (judge corrections — do NOT chase)
 - **RT-LIVE-004** med→low: the O(n²) style-scrub is defended on the auditor's cited path (`SafeCssValue` rejects `</`); only reachable via uncited callers needing author cooperation — not an every-render DoS.

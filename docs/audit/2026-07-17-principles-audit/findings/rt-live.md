@@ -17,10 +17,10 @@ critical/high items are FIXED and were NOT re-filed:
   `diff_events` route every key/value through `insert_safe_attr` →
   `crate::html::safe_patch_attr` (name gate + URL-scheme gate); tests
   `diff_gates_out_dangerous_attr` / `diff_neutralises_javascript_url_in_patch`.
-- `client.js` `__skyRunEvals` eval sink (CRITICAL) → FIXED: removed; only the
-  CSP-safe `__skyRunPaths` remains; no `new Function(`/`eval(` survives.
+- `client.js` `__ipeRunEvals` eval sink (CRITICAL) → FIXED: removed; only the
+  CSP-safe `__ipeRunPaths` remains; no `new Function(`/`eval(` survives.
 - `sendBeacon` CSRF omission (MEDIUM) → FIXED: `client.js` now flushes via a
-  `keepalive` fetch carrying `X-Sky-Csrf`.
+  `keepalive` fetch carrying `X-Ipe-Csrf`.
 
 ## rt-live-001 · push_exporter sends the ingest token over cleartext HTTP
 - severity: low
@@ -28,10 +28,10 @@ critical/high items are FIXED and were NOT re-filed:
 - principle: P1 no secret leakage into transit; "safe outcome is the only reachable one"
 - location: `src/runtime/rust/src/live/push_exporter.rs:66-77,103-111,216-228`
 - reachability: `enable_from_env` reads `IPE_PARENT_URL` and, when
-  `IPE_INGEST_TOKEN` is set, `flush` attaches it as the `x-sky-ingest-token`
+  `IPE_INGEST_TOKEN` is set, `flush` attaches it as the `x-ipe-ingest-token`
   header on every POST. Unlike the sibling `hub_exporter::enable_from_env`
   (which parses the URL and refuses a non-`https`, non-loopback host —
-  `hub_exporter.rs:102-119`), `push_exporter` appends `/_sky/observability/ingest`
+  `hub_exporter.rs:102-119`), `push_exporter` appends `/_ipe/observability/ingest`
   to the raw parent URL with no scheme/host validation.
 - problem: an operator who sets `IPE_PARENT_URL=http://<non-loopback-host>`
   plus an ingest token ships the shared secret in cleartext to that host. Same
@@ -117,7 +117,7 @@ critical/high items are FIXED and were NOT re-filed:
 - principle: make-invalid-states-unrepresentable
 - location: `src/runtime/rust/src/live/mod.rs:287-311` (`EventBody`) +
   `src/runtime/rust/src/live/route.rs:14-27` (`Route.build`)
-- reachability: `EventBody` deserializes from the `/_sky/event` POST body;
+- reachability: `EventBody` deserializes from the `/_ipe/event` POST body;
   `Route.build` closures index the captured-params `Vec` (`p[0]`, `p[1]` — the
   codegen-emitted shape mirrored in the route.rs test helpers).
 - problem: `EventBody` keeps two fields for one concept (`handler_id` + fallback

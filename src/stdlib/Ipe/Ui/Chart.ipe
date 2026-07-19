@@ -5,7 +5,7 @@
 -- inline-styled SVG.  Pair with `Ui.layoutWith` to embed in
 -- dashboards.  XSS-hardened: all axis ticks + tooltip labels
 -- HTML-escape through the same renderer as text content; no
--- innerHTML, no `data-sky-eval`.  Used by the bundled Sky Console
+-- innerHTML, no `data-ipe-eval`.  Used by the bundled Sky Console
 -- + `examples/26-ui-showcase`.
 module Ipe.Ui.Chart exposing
     ( Cfg

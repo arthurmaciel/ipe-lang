@@ -73,7 +73,7 @@ pub enum PseudoClass {
 impl PseudoClass {
     /// Stable wire tag consumed by
     /// `ipe_runtime::live::style_inject::pseudo_selector_for_tag` when
-    /// decoding the `data-sky-pc-rules` marker attribute. MUST stay in
+    /// decoding the `data-ipe-pc-rules` marker attribute. MUST stay in
     /// lock-step with that function and with `pseudoClassTag` in
     /// `../sky`'s `Ipe.Ui.sky` (the shared wire-format contract).
     #[must_use]

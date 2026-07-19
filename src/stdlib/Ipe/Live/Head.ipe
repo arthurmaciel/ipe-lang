@@ -15,11 +15,11 @@ module Ipe.Live.Head exposing
 -- List (Html msg)` field on `Live.app`.
 --
 -- The runtime calls the user-supplied `head` callback once per
--- full GET (initial page load / sky-nav navigation) and splices
+-- full GET (initial page load / ipe-nav navigation) and splices
 -- the rendered string into <head> AFTER the runtime's required
 -- charset + viewport tags and BEFORE the inline <style> reset.
 -- SSE patches scope to <body>, so head updates require a full
--- reload (which sky-nav already does for in-app navigation —
+-- reload (which ipe-nav already does for in-app navigation —
 -- the typical case where head changes between pages).
 --
 -- Every helper here returns `Html msg` so the list type lines up

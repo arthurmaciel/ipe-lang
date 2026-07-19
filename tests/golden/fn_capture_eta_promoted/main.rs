@@ -244,7 +244,7 @@ pub fn main_inc(a: i64, b: i64) -> i64 {
 pub fn ipe_main() -> IpeTask<()> {
     ({
         let wrap = {
-            let __sky_fn: ::std::sync::Arc<
+            let __ipe_fn: ::std::sync::Arc<
                 dyn Fn(Box<dyn Fn(i64) -> i64 + Send + Sync + 'static>, i64) -> i64
                     + Send
                     + Sync
@@ -254,36 +254,36 @@ pub fn ipe_main() -> IpeTask<()> {
                     ((f)(x) + 1)
                 },
             );
-            __sky_fn
+            __ipe_fn
         };
         ({
             let guarded = ({
                 let wrap = wrap.clone();
                 {
-                    let __sky_fn: Box<dyn Fn(i64, i64) -> i64 + Send + Sync + 'static> =
+                    let __ipe_fn: Box<dyn Fn(i64, i64) -> i64 + Send + Sync + 'static> =
                         Box::new(move |f: i64, eta_0: i64| -> i64 {
                             ({
                                 let wrap = wrap.clone();
                                 {
-                                    let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
+                                    let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
                                         Box::new(move |eta_0: i64| -> i64 {
                                             (wrap)(
                                                 {
-                                                    let __sky_fn: Box<
+                                                    let __ipe_fn: Box<
                                                         dyn Fn(i64) -> i64 + Send + Sync + 'static,
                                                     > = Box::new(move |eta_0: i64| -> i64 {
                                                         crate::main_inc(f, eta_0)
                                                     });
-                                                    __sky_fn
+                                                    __ipe_fn
                                                 },
                                                 eta_0,
                                             )
                                         });
-                                    __sky_fn
+                                    __ipe_fn
                                 }
                             })(eta_0)
                         });
-                    __sky_fn
+                    __ipe_fn
                 }
             });
             ({
