@@ -160,6 +160,13 @@ pub enum SourceDefect {
         /// The offending pin value.
         got: String,
     },
+    /// A crate version requirement outside the semver charset
+    /// `[0-9A-Za-z.*=<>~^,+ -]` — the same TOML-value position the crate name
+    /// occupies, so the same injection gate applies.
+    VersionReqIllegal {
+        /// The offending version requirement.
+        got: String,
+    },
 }
 
 impl fmt::Display for SourceDefect {
@@ -186,6 +193,11 @@ impl fmt::Display for SourceDefect {
             Self::PinIllegal { got } => write!(
                 f,
                 "pin value {got:?} is empty, option-shaped, or carries whitespace"
+            ),
+            Self::VersionReqIllegal { got } => write!(
+                f,
+                "version requirement {got:?} must be non-empty semver text \
+                 ([0-9A-Za-z.*=<>~^,+ -])"
             ),
         }
     }
