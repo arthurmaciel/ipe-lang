@@ -148,6 +148,122 @@ pub fn render_page(body: &str) -> String {
     )
 }
 
+/// Escape a serde-serialised JSON string for safe embedding inside a
+/// `<script>` element (HTML script-data context, not attribute context).
+///
+/// JSON alone is not sufficient: a string field containing `</script>` would
+/// end the `<script>` element, breaking out of the data island into executable
+/// script context and defeating the no-eval / no-`'unsafe-eval'` posture.
+/// The five characters below are the only ones that matter in script-data
+/// context; `serde_json`'s own output already encodes control characters, so
+/// no other escaping is required.
+///
+/// Escapes applied (JSON numeric escapes — losslessly round-trippable by any
+/// JSON parser, including `serde_json`):
+/// - U+003C `<`    → `<`  (forecloses `</script`)
+/// - U+003E `>`    → `>`  (defence-in-depth against `>` injection)
+/// - U+0026 `&`    → `&`  (forecloses HTML entity injection)
+/// - U+2028 LINE SEPARATOR   → ` `  (JSON-legal but HTML-hostile)
+/// - U+2029 PARAGRAPH SEPARATOR → ` `
+///
+/// Identical escape class as the telemetry `json_escape` U+2028/2029 gap —
+/// the island serialiser applies it here for consistency.
+pub fn island_escape(json: &str) -> String {
+    let mut out = String::with_capacity(json.len());
+    for ch in json.chars() {
+        match ch {
+            '<' => out.push_str("\\u003c"),
+            '>' => out.push_str("\\u003e"),
+            '&' => out.push_str("\\u0026"),
+            '\u{2028}' => out.push_str("\\u2028"),
+            '\u{2029}' => out.push_str("\\u2029"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Page wrap for isomorphic SSR + WASM hydration (M7 mode 2).
+///
+/// Emits a standard HTML page with:
+/// - The SSR body in `<div id="sky-root">`.
+/// - The WASM bundle boot scripts (external JS + `hydrate(island_json)` call).
+/// - A **typed public-payload island** `<script type="application/sky-model+json">`
+///   carrying the XSS-escaped, serde-serialised `HydrationState` JSON.
+///
+/// The island body is read by the WASM client via
+/// `document.querySelector('script[type="application/sky-model+json"]').textContent`
+/// and passed to the emitted `hydrate(model_json)` entry — parsed with `serde_json`,
+/// never evaluated. The `island_escape` call forecloses all script-injection paths.
+///
+/// `body`        — SSR-rendered HTML (from `render_html` with sky-ids assigned).
+/// `island_json` — serde-serialised `HydrationState` (BEFORE island_escape;
+///                 this function applies the escape internally).
+/// `pkg_base`    — URL prefix for the WASM bundle assets, e.g. `/pkg` or `./pkg`.
+pub fn render_page_hydrate(body: &str, island_json: &str, pkg_base: &str) -> String {
+    let escaped = island_escape(island_json);
+    format!(
+        "<!DOCTYPE html>\
+<html>\
+<head><meta charset=\"utf-8\"></head>\
+<body>\
+<div id=\"sky-root\">{body}</div>\
+<script type=\"application/sky-model+json\">{escaped}</script>\
+<script type=\"module\">\
+import init, {{ hydrate }} from '{pkg_base}/sky_app.js';\
+async function boot() {{\
+  await init('{pkg_base}/sky_app_bg.wasm');\
+  const island = document.querySelector('script[type=\"application/sky-model+json\"]');\
+  hydrate(island ? island.textContent : '');\
+}}\
+boot();\
+</script>\
+</body>\
+</html>"
+    )
+}
+
+#[cfg(test)]
+mod island_escape_tests {
+    use super::island_escape;
+
+    #[test]
+    fn escapes_lt_gt_amp() {
+        let input = r#"{"k":"<b>&amp;</b>"}"#;
+        let out = island_escape(input);
+        assert!(!out.contains('<'));
+        assert!(!out.contains('>'));
+        assert!(!out.contains('&'));
+        assert!(out.contains("\\u003c"));
+        assert!(out.contains("\\u003e"));
+        assert!(out.contains("\\u0026"));
+    }
+
+    #[test]
+    fn script_injection_foreclosed() {
+        let payload = r#"{"x":"</script><script>evil()</script>"}"#;
+        let out = island_escape(payload);
+        assert!(!out.contains("</script>"), "script tag must not be present");
+    }
+
+    #[test]
+    fn line_separator_escaped() {
+        let payload = "\u{2028}\u{2029}";
+        let out = island_escape(payload);
+        assert!(!out.contains('\u{2028}'));
+        assert!(!out.contains('\u{2029}'));
+        assert!(out.contains("\\u2028"));
+        assert!(out.contains("\\u2029"));
+    }
+
+    #[test]
+    fn plain_json_is_lossless() {
+        let payload = r#"{"count":42,"name":"hello"}"#;
+        let out = island_escape(payload);
+        assert_eq!(out, payload); // nothing to escape
+    }
+}
+
 /// Full page wrap with the live client loaded as a cacheable external asset.
 /// Mirrors Go's live page render (runtime-go/rt/live.go:3788).
 ///

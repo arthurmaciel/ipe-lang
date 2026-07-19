@@ -1,0 +1,105 @@
+module Main exposing (main)
+
+-- M7 Hydration example: SSR paint + WASM client takeover.
+--
+-- The server renders the initial HTML with an embedded island blob
+-- (a `<script type="application/sky-model+json">` tag) containing the
+-- serialised `HydrationState`. On boot the WASM `hydrate(json)` export
+-- parses that blob, converts it to `Model` via `fromHydrationState`, and
+-- adopts the server-rendered DOM without re-rendering.
+--
+-- Gate properties demonstrated:
+--   * `HydrationState` carries only client-safe data types (Int, String).
+--   * `fromHydrationState` converts the hydration record to the app Model.
+--   * The first client diff is empty — SSR and client view are deterministic.
+--   * A tampered / missing island falls back to clean init (count = 0).
+
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+import Ipe.Live exposing (app)
+import Ipe.Cmd as Cmd
+import Ipe.Sub as Sub
+import Ipe.Html as Html
+
+
+-- The island type: only serialisable fields.
+-- A `Secret` or `Db` field here is a compile error (M7 field-type gate).
+type alias HydrationState =
+    { count : Int
+    }
+
+
+type Msg
+    = Increment
+    | Decrement
+    | Reset
+
+
+type alias Model =
+    { count : Int
+    }
+
+
+-- Converts the hydrated island state to the live Model.
+fromHydrationState : HydrationState -> Model
+fromHydrationState hs =
+    { count = hs.count }
+
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { count = 0 }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+        Decrement ->
+            ( { model | count = model.count - 1 }, Cmd.none )
+
+        Reset ->
+            ( { model | count = 0 }, Cmd.none )
+
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+view : Model -> Html Msg
+view model =
+    Html.div []
+        [ Html.h1 [] [ Html.text "Ipê Hydration Counter" ]
+        , Html.p
+            [ Html.attribute "data-testid" "count" ]
+            [ Html.text (String.fromInt model.count) ]
+        , Html.button
+            [ Html.attribute "data-testid" "increment"
+            , Html.onClick Increment
+            ]
+            [ Html.text "+" ]
+        , Html.button
+            [ Html.attribute "data-testid" "decrement"
+            , Html.onClick Decrement
+            ]
+            [ Html.text "−" ]
+        , Html.button
+            [ Html.attribute "data-testid" "reset"
+            , Html.onClick Reset
+            ]
+            [ Html.text "Reset" ]
+        ]
+
+
+main =
+    app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = {}
+        }

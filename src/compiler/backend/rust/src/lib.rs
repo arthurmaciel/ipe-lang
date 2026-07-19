@@ -87,6 +87,7 @@ pub struct RustBackend<'a> {
     ffi: Option<FfiEmit>,
     target: ipe_ir::Target,
     wasm_public_env: Vec<String>,
+    wasm_hydrate_mode: bool,
 }
 
 impl<'a> RustBackend<'a> {
@@ -101,6 +102,7 @@ impl<'a> RustBackend<'a> {
             ffi: None,
             target: ipe_ir::Target::Native,
             wasm_public_env: Vec::new(),
+            wasm_hydrate_mode: false,
         }
     }
 
@@ -141,6 +143,19 @@ impl<'a> RustBackend<'a> {
         self
     }
 
+    /// Enable the `[wasm] mode = "hydrate"` emission path (M7 SSR + hydration).
+    /// When set, the emitted wasm crate exports a `#[wasm_bindgen] pub fn
+    /// hydrate(model_json: &str)` in addition to the `#[wasm_bindgen(start)]`
+    /// `ipe_start` entry. The `hydrate` export parses the island JSON,
+    /// calls `ipe_runtime::wasm::wasm_adopt_app` on success, and falls back to
+    /// `ipe_main()` with a console warning on parse failure (fault-tolerant
+    /// hydrate — spec Q6 §"Fault-tolerant hydrate — parse, don't unwrap").
+    #[must_use]
+    pub const fn with_wasm_hydrate_mode(mut self, enabled: bool) -> Self {
+        self.wasm_hydrate_mode = enabled;
+        self
+    }
+
     /// Render the `Spine` tier's Rust text for `program` — the program-wide
     /// entry file content (see [`project::emit_spine`] for the full
     /// specification). ADDITIVE entry point: NOT on the public
@@ -159,6 +174,7 @@ impl<'a> RustBackend<'a> {
             self.ffi.clone(),
             self.target,
             self.wasm_public_env.clone(),
+            self.wasm_hydrate_mode,
         )?;
         project::emit_spine(&ctx, program)
     }
@@ -180,6 +196,7 @@ impl<'a> RustBackend<'a> {
             self.ffi.clone(),
             self.target,
             self.wasm_public_env.clone(),
+            self.wasm_hydrate_mode,
         )?;
         project::emit_module_file(
             &ctx,
@@ -216,6 +233,7 @@ impl<'a> RustBackend<'a> {
             self.ffi.clone(),
             self.target,
             self.wasm_public_env.clone(),
+            self.wasm_hydrate_mode,
         )?;
         project::assemble_split_manifest(&ctx, program, spine_text, module_texts)
     }
@@ -259,6 +277,7 @@ impl Backend for RustBackend<'_> {
             self.ffi.clone(),
             self.target,
             self.wasm_public_env.clone(),
+            self.wasm_hydrate_mode,
         )?;
         project::emit_program(&ctx, program)
     }
@@ -441,6 +460,11 @@ pub(crate) struct EmitCtx<'a> {
     /// secret-name denylist at `sky.toml` parse time. Meaningless / ignored
     /// when [`Self::uses_env_public`] is `false`.
     pub(crate) wasm_public_env: Vec<String>,
+    /// `true` when `[wasm] mode = "hydrate"` was set in `sky.toml`. When set,
+    /// the emitted wasm epilogue includes a `#[wasm_bindgen] pub fn hydrate(…)`
+    /// export in addition to the `#[wasm_bindgen(start)] ipe_start` entry —
+    /// the fault-tolerant island parse + `wasm_adopt_app` fallback path (M7).
+    pub(crate) wasm_hydrate_mode: bool,
     /// The Rust type name for the emitted `SqlValue` enum (e.g. `MainSqlValue`).
     /// `None` when `uses_db` is `false`.
     pub(crate) sqlvalue_rust_name: Option<String>,
@@ -506,6 +530,7 @@ impl<'a> EmitCtx<'a> {
         ffi: Option<FfiEmit>,
         target: ipe_ir::Target,
         wasm_public_env: Vec<String>,
+        wasm_hydrate_mode: bool,
     ) -> DResult<Self> {
         let mut enum_names: BTreeMap<(ModPath, Symbol), String> = BTreeMap::new();
         let mut variant_fields: BTreeMap<(ModPath, Symbol, Symbol), Vec<IrType>> = BTreeMap::new();
@@ -891,6 +916,7 @@ impl<'a> EmitCtx<'a> {
             ffi,
             uses_env_public,
             wasm_public_env,
+            wasm_hydrate_mode,
             sqlvalue_rust_name,
             sqlfield_rust_name,
             enum_names,
@@ -2394,6 +2420,7 @@ mod record_struct_namespace_tests {
             None,
             ipe_ir::Target::Native,
             Vec::new(),
+            false,
         )?;
         assert_eq!(ctx.record_structs().len(), 1);
         assert_eq!(
@@ -2466,6 +2493,7 @@ mod record_struct_namespace_tests {
             None,
             ipe_ir::Target::Native,
             Vec::new(),
+            false,
         )?;
         ctx.assert_record_structs_disjoint_from_type_namespace(&BTreeSet::new())
     }
