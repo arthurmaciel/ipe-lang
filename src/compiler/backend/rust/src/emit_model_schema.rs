@@ -387,6 +387,7 @@ mod tests {
             None,
             ipe_ir::Target::Native,
             Vec::new(),
+            false,
         )?;
         model_schema_tag(&ctx, &IrType::Record(fields))
     }
@@ -527,6 +528,7 @@ mod tests {
             None,
             ipe_ir::Target::Native,
             Vec::new(),
+            false,
         )?;
 
         let model_a = IrType::Record(BTreeMap::from([(
@@ -612,6 +614,7 @@ mod tests {
             None,
             ipe_ir::Target::Native,
             Vec::new(),
+            false,
         )?;
         let a = model_schema_tag(&ctx_1, &model)?;
         let ctx_2 = EmitCtx::build(
@@ -621,6 +624,7 @@ mod tests {
             None,
             ipe_ir::Target::Native,
             Vec::new(),
+            false,
         )?;
         let b = model_schema_tag(&ctx_2, &model)?;
         assert_ne!(
