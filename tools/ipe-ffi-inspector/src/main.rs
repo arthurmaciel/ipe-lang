@@ -621,6 +621,9 @@ fn main() {
     GLOBAL_XC_IMPLS.with(|c| c.borrow_mut().clear());
     // [stripe-send F2] Reset the cross-crate proven-public-path set once per run.
     GLOBAL_XC_PUBLIC_PATHS.with(|c| c.borrow_mut().clear());
+    // [stripe-send F3] Reset the cross-crate proven-Send opaque-name set once per run.
+    GLOBAL_XC_SEND_NAMES.with(|c| c.borrow_mut().clear());
+    GLOBAL_XC_NONSEND_LASTSEGS.with(|c| c.borrow_mut().clear());
 
     // [WALL-G #84] Cross-crate unique-impl monomorphization needs EVERY project crate's
     // concrete impls indexed BEFORE any crate is bound (the crate defining `op<C: Wire>`
@@ -1215,6 +1218,21 @@ fn run_rustdoc_package(
             "json",
             "-Z",
             "unstable-options",
+            // Include `#[doc(hidden)] pub` items in the JSON. `#[doc(hidden)]` is a
+            // DOCUMENTATION-visibility attribute, NOT a privacy/semantic boundary: a
+            // `#[doc(hidden)] pub` type is a real public API surface, reachable by its
+            // path and by any `pub use` re-export. Crates that generate a large flat
+            // per-resource API commonly hide the generated modules yet re-export their
+            // types at the crate root (async-stripe: every `send` Ok-payload —
+            // `Customer`, `CheckoutSession`, … — lives in a `#[doc(hidden)] pub mod`
+            // re-exported via `#[doc(inline)] pub use ::*`). Default rustdoc strips those
+            // modules and their structs from the JSON entirely, so the inspector cannot
+            // name / Send-prove / bind the payload types and every request builder's
+            // `send` silently drops. Surfacing them is sound: the per-item `doc_hidden`
+            // gate still refuses any INDIVIDUALLY `#[doc(hidden)]` field/method (a hidden
+            // detail of a shown type), so this only admits types that are hidden solely
+            // by virtue of living in a hidden-but-publicly-re-exported module.
+            "--document-hidden-items",
         ])
         .output()
         .map_err(|e| {
@@ -1863,6 +1881,67 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
         };
         SYNTHETIC_SEND_TYPE_IDS.with(|s| s.borrow().iter().for_each(&mut add_id));
         ALL_FIELDS_SEND_TYPE_IDS.with(|s| s.borrow().iter().for_each(&mut add_id));
+        // [stripe-send F3] Union these Send-proven FULL public paths (each proven by
+        // THIS owning crate) into the manifest-run cross-crate Send set, so a sibling
+        // crate binding a `send` whose Ok-Output is one of them (rendered bare) can
+        // prove it Send. Explicit-`impl Send` ids too (the strongest proof). Skip the
+        // synthetic probe crate. Full paths only (the unique-bare-segment consult in
+        // `xc_send_proven` derives the last segment).
+        GLOBAL_XC_SEND_NAMES.with(|c| {
+            let mut set = c.borrow_mut();
+            for p in &names {
+                if !p.starts_with("_ipe_ffi_probe") {
+                    set.insert(p.clone());
+                }
+            }
+        });
+        EXPLICIT_SEND_TYPE_IDS.with(|s| {
+            for id in s.borrow().iter() {
+                if let Some(f) = REACHABLE_PATHS.with(|c| c.borrow().get(id).cloned())
+                    && !f.starts_with("_ipe_ffi_probe")
+                {
+                    GLOBAL_XC_SEND_NAMES.with(|c| c.borrow_mut().insert(f));
+                }
+            }
+        });
+        // [stripe-send F3] Record the bare last-segment of every reachable crate-local
+        // type DEFINED IN THIS CRATE whose id is proven Send by NONE of the sources
+        // above. If such a NON-Send type shares a last segment with a Send-proven one, a
+        // bare cross-crate reference to that segment is genuinely ambiguous and must stay
+        // fail-closed. When the segment appears ONLY as Send-proven types (the benign SDK
+        // re-export case), `xc_send_proven` admits it.
+        //
+        // CRITICAL: restrict to CRATE-LOCAL definitions (`LOCAL_TYPE_IDS`). A type
+        // RE-EXPORTED from a sibling crate (`pub use sib::CheckoutSession`) is reachable
+        // here but its Send impl lives in the DEFINING crate's rustdoc, absent from this
+        // crate's Send id-sets — so it would look "non-Send" here and wrongly poison the
+        // segment. The defining crate records the true Send verdict; a re-export must not
+        // override it.
+        {
+            let send_ids: HashSet<String> = SYNTHETIC_SEND_TYPE_IDS
+                .with(|s| s.borrow().clone())
+                .union(&ALL_FIELDS_SEND_TYPE_IDS.with(|s| s.borrow().clone()))
+                .cloned()
+                .collect::<HashSet<String>>()
+                .union(&EXPLICIT_SEND_TYPE_IDS.with(|s| s.borrow().clone()))
+                .cloned()
+                .collect();
+            let local_ids = LOCAL_TYPE_IDS.with(|c| c.borrow().clone());
+            REACHABLE_PATHS.with(|c| {
+                for (id, path) in c.borrow().iter() {
+                    if path.starts_with("_ipe_ffi_probe")
+                        || send_ids.contains(id)
+                        || !local_ids.contains(id)
+                    {
+                        continue;
+                    }
+                    if let Some(last) = path.rsplit("::").next() {
+                        GLOBAL_XC_NONSEND_LASTSEGS
+                            .with(|n| n.borrow_mut().insert(last.to_string()));
+                    }
+                }
+            });
+        }
         SEND_WHEN_ARGS_SEND_NAMES.with(|c| *c.borrow_mut() = names);
     }
 
@@ -4862,6 +4941,39 @@ thread_local! {
     static GLOBAL_XC_PUBLIC_PATHS: std::cell::RefCell<HashSet<String>> =
         std::cell::RefCell::new(HashSet::new());
 
+    // Manifest-run set of CROSS-CRATE async-Send-proven opaque type names. The C1
+    // async-Send gate (`is_provably_send_opaque_return` and the receiver/param
+    // variants) proves Send only from the OWNING crate's per-crate
+    // `PROVABLY_SEND_RECV_NAMES` / `PROVABLY_SEND_OPAQUE_NAMES`, both cleared before
+    // a SIBLING crate binds. So a `send` whose Ok-Output is a sibling's plain data
+    // struct (e.g. `stripe_shared::Customer` / `CheckoutSession`) renders its Output
+    // as the BARE last segment and fails the gate → the async wrapper silently drops.
+    // This set carries each member crate's OWN proven-Send opaque names (rendered by
+    // that crate's Send proof) across the manifest run, so the consuming crate's Send
+    // gate can admit the cross-crate Output. Reset once per manifest run, unioned in
+    // every member's `parse_rustdoc`.
+    //
+    // SOUNDNESS: a name enters ONLY if its OWNING crate proved the type `Send` (the
+    // same explicit-impl / synthetic-auto-Send / all-fields-Send proof the local gate
+    // trusts); the consult side (`xc_send_proven`) admits a BARE last segment ONLY on a
+    // UNIQUE match (ambiguous last segment → fail-closed drop, mirroring the
+    // cross-crate public-path uniqueness rule), so a sibling's same-named `!Send` type
+    // can never be admitted by collision.
+    static GLOBAL_XC_SEND_NAMES: std::cell::RefCell<HashSet<String>> =
+        std::cell::RefCell::new(HashSet::new());
+
+    // Companion to `GLOBAL_XC_SEND_NAMES`: the set of bare last-segments that appear
+    // in the manifest run as a type that is NOT proven Send by its owning crate. A
+    // large flat SDK re-exports the SAME public type from several member crates, so a
+    // Send payload's bare last segment (`CheckoutSession`) legitimately matches MORE
+    // than one entry in the Send set — a strict unique-match would fail-close on that
+    // benign re-export. This set lets `xc_send_proven` instead admit a bare match on
+    // >=1 Send-proven entry PROVIDED no member crate exposes a DIFFERENT, non-Send type
+    // with the same last segment (which would make the bare name genuinely ambiguous
+    // between a Send and a !Send type). Populated per crate alongside the Send set.
+    static GLOBAL_XC_NONSEND_LASTSEGS: std::cell::RefCell<HashSet<String>> =
+        std::cell::RefCell::new(HashSet::new());
+
     // Set of CRATE-LOCAL trait ids that themselves carry a `Send` supertrait
     // bound (declared `trait T: Send` / `trait T: Send + Sync + …`). The Send-proof
     // (Step 3) consults this: a generic param `C: T` monomorphized to a concrete
@@ -5135,6 +5247,8 @@ fn is_generic_instantiation_send(rt: &str) -> bool {
         is_async_send_output(a)
             || PROVABLY_SEND_OPAQUE_NAMES.with(|c| c.borrow().contains(a))
             || PROVABLY_SEND_RECV_NAMES.with(|c| c.borrow().contains(a))
+            // [stripe-send F3] a cross-crate sibling's proven-Send arg (`Vec<Customer>`).
+            || xc_send_proven(a)
             || is_generic_instantiation_send(a)
     })
 }
@@ -6425,7 +6539,41 @@ fn is_provably_send_opaque_return(rt: &str) -> bool {
     // (a Self-mono'd concrete `Resp` — the stripe `send` Ok payload after T resolves).
     // FULL-PATH match only (guardian B-1): the OPAQUE set holds cross-crate concretes by
     // owning-crate path; a bare-last match would admit a sibling's same-named !Send type.
-    in_recv || PROVABLY_SEND_OPAQUE_NAMES.with(|c| c.borrow().contains(s))
+    // [stripe-send F3] A SIBLING manifest crate's plain data struct proven Send by ITS
+    // OWN inspection (e.g. `stripe_shared::Customer` / `CheckoutSession` — the create/
+    // checkout `send` Ok payload), rendered bare here and held by neither per-crate set.
+    in_recv
+        || PROVABLY_SEND_OPAQUE_NAMES.with(|c| c.borrow().contains(s))
+        || xc_send_proven(s)
+}
+
+/// [stripe-send F3] True when `name` (bare or crate-qualified) matches the manifest-run
+/// cross-crate proven-Send set (`GLOBAL_XC_SEND_NAMES`) — a sibling crate proved this
+/// exact type `Send` during its own inspection. Match discipline: a FULL crate-qualified
+/// path matches directly. A BARE last segment is admitted when >=1 Send-proven entry ends
+/// in it AND no member crate exposes a DIFFERENT, NON-Send type with the same last segment
+/// (`GLOBAL_XC_NONSEND_LASTSEGS`). This admits the benign case where a large flat SDK
+/// re-exports the SAME Send type from several member crates (so the bare segment matches
+/// multiple Send entries that are all the same type), while staying fail-closed when the
+/// bare name is genuinely ambiguous between a Send and a `!Send` type. Empty / compound
+/// inputs never match.
+fn xc_send_proven(name: &str) -> bool {
+    let n = name.trim();
+    if n.is_empty() || n.contains('<') || n.contains(' ') || n.contains('&') {
+        return false;
+    }
+    if GLOBAL_XC_SEND_NAMES.with(|c| c.borrow().contains(n)) {
+        return true;
+    }
+    let last = n.rsplit("::").next().unwrap_or(n);
+    let matches_send = GLOBAL_XC_SEND_NAMES
+        .with(|c| c.borrow().iter().any(|p| p.rsplit("::").next() == Some(last)));
+    if !matches_send {
+        return false;
+    }
+    // A same-named NON-Send type in any member crate makes the bare reference ambiguous
+    // between Send and !Send → fail closed.
+    !GLOBAL_XC_NONSEND_LASTSEGS.with(|c| c.borrow().contains(last))
 }
 
 /// Async-output sequence variant: `Vec<T>` / `&[T]` / `[T; N]` / `&[T; N]`
@@ -17607,6 +17755,84 @@ mod tests {
             type_to_typeref(&node, &pidx).is_err(),
             "an unproven cross-crate type must still drop"
         );
+    }
+
+    #[test]
+    fn xc_send_proven_admits_reexport_and_fails_closed_on_real_ambiguity() {
+        // The `CreateCheckoutSession.send` Ok-Output `CheckoutSession` is owned by a
+        // SIBLING manifest crate and rendered BARE in the consuming crate. The C1
+        // async-Send gate proves it Send via the manifest-run cross-crate Send set.
+        GLOBAL_XC_SEND_NAMES.with(|c| {
+            let mut s = c.borrow_mut();
+            s.clear();
+            s.insert("stripe_shared::checkout_session::CheckoutSession".to_string());
+            s.insert("stripe_shared::customer::Customer".to_string());
+        });
+        GLOBAL_XC_NONSEND_LASTSEGS.with(|c| c.borrow_mut().clear());
+        // Bare last segment, matches a Send-proven entry, no same-named !Send type → Send.
+        assert!(xc_send_proven("CheckoutSession"));
+        assert!(xc_send_proven("Customer"));
+        // The full path matches directly too.
+        assert!(xc_send_proven("stripe_shared::checkout_session::CheckoutSession"));
+        // An absent type never matches.
+        assert!(!xc_send_proven("PaymentMethod"));
+        // Compound / reference / generic shapes never match here.
+        assert!(!xc_send_proven("List<CheckoutSession>"));
+        assert!(!xc_send_proven("&CheckoutSession"));
+        assert!(!xc_send_proven(""));
+
+        // BENIGN RE-EXPORT: the SAME Send type re-exported from two member crates →
+        // two Send-set entries share the last segment, and NO !Send type has that
+        // segment → admit (a strict unique-match would have wrongly fail-closed here).
+        GLOBAL_XC_SEND_NAMES.with(|c| {
+            let mut s = c.borrow_mut();
+            s.clear();
+            s.insert("stripe_shared::checkout_session::CheckoutSession".to_string());
+            s.insert("stripe_checkout::checkout_session::CheckoutSession".to_string());
+        });
+        GLOBAL_XC_NONSEND_LASTSEGS.with(|c| c.borrow_mut().clear());
+        assert!(
+            xc_send_proven("CheckoutSession"),
+            "the same Send type re-exported by two member crates must still be admitted"
+        );
+
+        // REAL AMBIGUITY: a DIFFERENT, NON-Send type in some crate shares the last
+        // segment → a bare reference could be either → FAIL CLOSED.
+        GLOBAL_XC_NONSEND_LASTSEGS.with(|c| {
+            c.borrow_mut().insert("CheckoutSession".to_string());
+        });
+        assert!(
+            !xc_send_proven("CheckoutSession"),
+            "a same-named non-Send type must make the bare reference fail closed"
+        );
+        // …but naming the FULL Send path is unambiguous and still admitted.
+        assert!(xc_send_proven("stripe_shared::checkout_session::CheckoutSession"));
+
+        GLOBAL_XC_SEND_NAMES.with(|c| c.borrow_mut().clear());
+        GLOBAL_XC_NONSEND_LASTSEGS.with(|c| c.borrow_mut().clear());
+    }
+
+    #[test]
+    fn is_provably_send_opaque_return_consults_xc_send_set() {
+        // End-to-end at the C1 output gate: a bare cross-crate Send payload passes
+        // `is_provably_send_opaque_return` ONLY when the cross-crate Send set proves it.
+        PROVABLY_SEND_RECV_NAMES.with(|c| c.borrow_mut().clear());
+        PROVABLY_SEND_OPAQUE_NAMES.with(|c| c.borrow_mut().clear());
+        GLOBAL_XC_SEND_NAMES.with(|c| c.borrow_mut().clear());
+        GLOBAL_XC_NONSEND_LASTSEGS.with(|c| c.borrow_mut().clear());
+        assert!(
+            !is_provably_send_opaque_return("CheckoutSession"),
+            "unproven bare cross-crate type must not be Send-admitted"
+        );
+        GLOBAL_XC_SEND_NAMES.with(|c| {
+            c.borrow_mut()
+                .insert("stripe_shared::checkout_session::CheckoutSession".to_string());
+        });
+        assert!(
+            is_provably_send_opaque_return("CheckoutSession"),
+            "a sibling-proven Send payload must now pass the C1 output gate"
+        );
+        GLOBAL_XC_SEND_NAMES.with(|c| c.borrow_mut().clear());
     }
 
     #[test]
