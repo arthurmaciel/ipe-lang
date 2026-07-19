@@ -621,6 +621,8 @@ fn main() {
     GLOBAL_XC_IMPLS.with(|c| c.borrow_mut().clear());
     // [stripe-send F2] Reset the cross-crate proven-public-path set once per run.
     GLOBAL_XC_PUBLIC_PATHS.with(|c| c.borrow_mut().clear());
+    // [stripe-send W4] Reset the identity-keyed cross-crate public-path map once per run.
+    GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| c.borrow_mut().clear());
     // [stripe-send F3] Reset the cross-crate proven-Send opaque-name set once per run.
     GLOBAL_XC_SEND_NAMES.with(|c| c.borrow_mut().clear());
     GLOBAL_XC_NONSEND_LASTSEGS.with(|c| c.borrow_mut().clear());
@@ -1773,6 +1775,41 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
             }
         }
     });
+    // [stripe-send W4] Index each proven-public path under its DEFINING-TYPE identity —
+    // the canonical path rustdoc records in `doc["paths"]` for that item's id, which is
+    // the SAME string in every member crate (a re-exporting crate's `paths` entry for the
+    // external item carries the DEFINING crate's path). So the defining crate's own entry
+    // and every sibling re-export collapse under one key, and a last-segment lookup can
+    // distinguish a genuine re-export (one key) from a real name collision (many keys).
+    // Fail-closed: an id with no `doc["paths"]` entry (no recoverable identity) is skipped
+    // here — it still lives in the plain set, where strict-unique last-segment applies.
+    {
+        let paths_obj = doc["paths"].as_object();
+        let defpath_of = |id: &str| -> Option<String> {
+            paths_obj
+                .and_then(|m| m.get(id))
+                .and_then(|e| e.get("path"))
+                .and_then(|p| p.as_array())
+                .map(|segs| {
+                    segs.iter()
+                        .filter_map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join("::")
+                })
+                .filter(|s| !s.is_empty())
+        };
+        GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| {
+            let mut map = c.borrow_mut();
+            for (id, path) in &rp {
+                if path.starts_with("_ipe_ffi_probe") {
+                    continue;
+                }
+                if let Some(defpath) = defpath_of(id) {
+                    map.entry(defpath).or_default().insert(path.clone());
+                }
+            }
+        });
+    }
     REACHABLE_PATHS.with(|c| *c.borrow_mut() = rp);
     REACHABLE_FN_PATHS.with(|c| *c.borrow_mut() = rfp);
     ALIAS_MAP.with(|c| *c.borrow_mut() = collect_aliases(doc));
@@ -4941,6 +4978,25 @@ thread_local! {
     static GLOBAL_XC_PUBLIC_PATHS: std::cell::RefCell<HashSet<String>> =
         std::cell::RefCell::new(HashSet::new());
 
+    // [stripe-send W4] Companion to `GLOBAL_XC_PUBLIC_PATHS`, keyed on DEFINING-TYPE
+    // IDENTITY: canonical defining path (`doc["paths"][id]["path"]`, IDENTICAL across
+    // every member crate that defines OR re-exports the type) → the chosen proven-public
+    // path to emit. A genuine RE-EXPORT (`stripe_shared::checkout_session::CheckoutSession`
+    // defines it; `stripe_checkout` re-exports it at `stripe_checkout::CheckoutSession`)
+    // collapses to ONE entry under the shared defining key — so a last-segment lookup that
+    // finds several candidate public paths can tell "same type re-exported N times" (a
+    // single defining key → admit that path) from "N distinct same-named types" (several
+    // keys → genuinely ambiguous → fail-closed). This is the single wall left after W1–W3:
+    // the plain `GLOBAL_XC_PUBLIC_PATHS` strict-unique last-segment match fails CLOSED on
+    // the `CheckoutSession` re-export (two valid public paths), so the create/checkout
+    // `send` Output could not be named. Keyed on type IDENTITY, NOT Send-ness — mirroring
+    // F3's non-poisoning discipline. SOUNDNESS: only paths PROVEN public by the owning
+    // crate's own reachable walk ever enter (same as the set); the defining key is read
+    // from `doc["paths"]` (the crate's own recorded canonical path), never reconstructed.
+    // Reset once per manifest run alongside the set; populated in every member crate.
+    static GLOBAL_XC_PUBLIC_PATH_BY_DEFID: std::cell::RefCell<HashMap<String, HashSet<String>>> =
+        std::cell::RefCell::new(HashMap::new());
+
     // Manifest-run set of CROSS-CRATE async-Send-proven opaque type names. The C1
     // async-Send gate (`is_provably_send_opaque_return` and the receiver/param
     // variants) proves Send only from the OWNING crate's per-crate
@@ -6236,15 +6292,12 @@ fn resolved_path_is_bindable(id: &serde_json::Value, raw_name: &str) -> bool {
     if ALWAYS_NAMEABLE.contains(&last) {
         return true;
     }
-    // [stripe-send F2] A sibling manifest crate's public type this crate cannot
-    // resolve locally is bindable when the manifest-run proven-public set has a
-    // UNIQUE last-segment match — the renderer will name it by that proven-public
-    // path. Ambiguous / absent → stays unbindable (fail-closed).
-    GLOBAL_XC_PUBLIC_PATHS.with(|c| {
-        let set = c.borrow();
-        let mut hits = set.iter().filter(|p| p.rsplit("::").next() == Some(last));
-        matches!((hits.next(), hits.next()), (Some(_), None))
-    })
+    // [stripe-send F2/W4] A sibling manifest crate's public type this crate cannot
+    // resolve locally is bindable when the manifest run proves a UNIQUE-BY-IDENTITY
+    // public path for its last segment — the renderer names it by that path. A genuine
+    // re-export (the `CheckoutSession` wall: one defining type, two public paths) now
+    // admits (W4); two DISTINCT same-named types stay ambiguous → unbindable (fail-closed).
+    xc_public_path_for_last_segment(last).is_some()
 }
 
 /// Register `path` for `id` if it is shorter than any currently stored path.
@@ -6574,6 +6627,56 @@ fn xc_send_proven(name: &str) -> bool {
     // A same-named NON-Send type in any member crate makes the bare reference ambiguous
     // between Send and !Send → fail closed.
     !GLOBAL_XC_NONSEND_LASTSEGS.with(|c| c.borrow().contains(last))
+}
+
+/// [stripe-send W4] Resolve a bare type `last` segment to a UNIQUE cross-crate
+/// proven-public path, tolerating a genuine re-export (the same defining type
+/// exposed at several public paths) while staying fail-closed on a real name
+/// collision (two DISTINCT types sharing a last segment).
+///
+/// `GLOBAL_XC_PUBLIC_PATH_BY_DEFID` keys every proven-public path under its
+/// DEFINING-TYPE identity (the `doc["paths"]` canonical path, identical across a
+/// definer and every re-exporter). So:
+///   - all candidate paths ending in `last` come from ONE defining key → a genuine
+///     re-export → return a single, DETERMINISTIC public path (the lexicographically
+///     smallest, so the choice is stable across runs and independent of hash order);
+///   - candidates span ≥2 defining keys → two distinct same-named types → `None`
+///     (fail-closed; picking one could name the WRONG type → E0308/E0433 at cargo).
+/// A bare `last` absent from every key returns `None`.
+///
+/// This is the identity-keyed successor to the strict-UNIQUE last-segment match on
+/// the plain `GLOBAL_XC_PUBLIC_PATHS` set (which fail-closed on ANY re-export, the
+/// `CheckoutSession` wall). Same soundness envelope: only owning-crate reachable-walk
+/// paths ever populate the map, and only a single defining identity is ever admitted.
+fn xc_public_path_for_last_segment(last: &str) -> Option<String> {
+    if last.is_empty() {
+        return None;
+    }
+    GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| {
+        let map = c.borrow();
+        let mut defining_key: Option<&String> = None;
+        for (defpath, public_paths) in map.iter() {
+            let matched_here = public_paths
+                .iter()
+                .any(|p| p.rsplit("::").next() == Some(last));
+            if matched_here {
+                match defining_key {
+                    // A second, DIFFERENT defining identity shares the segment → two
+                    // distinct same-named types → real ambiguity → fail closed.
+                    Some(prev) if prev != defpath => return None,
+                    _ => defining_key = Some(defpath),
+                }
+            }
+        }
+        // Exactly one defining identity matched (or none). Return that identity's
+        // smallest matching public path for a deterministic, hash-order-independent pick.
+        let defpath = defining_key?;
+        map.get(defpath)?
+            .iter()
+            .filter(|p| p.rsplit("::").next() == Some(last))
+            .min()
+            .cloned()
+    })
 }
 
 /// Async-output sequence variant: `Vec<T>` / `&[T]` / `[T; N]` / `&[T; N]`
@@ -8652,24 +8755,17 @@ fn type_to_typeref(
         }
         let qualified = rp.get("id").and_then(reachable_local_path);
         let ext_path = rp.get("id").and_then(reachable_external_type_path);
-        // [stripe-send F2] A sibling manifest crate's public type unresolvable
-        // through THIS crate's own paths (`stripe_shared::Customer`, the
-        // `CustomerCreateCustomer` send Output). Match the raw name's last segment
-        // against the manifest-run proven-public set (each entry is a member
-        // crate's own reachable-walk path); admit ONLY a UNIQUE match (two crates
-        // exposing the same last segment → ambiguous → fall through to the drop,
-        // fail-closed). The private-module trap stays closed: only proven-public
-        // paths ever entered the set.
+        // [stripe-send F2/W4] A sibling manifest crate's public type unresolvable
+        // through THIS crate's own paths (`stripe_shared::CheckoutSession`, the
+        // `CreateCheckoutSession` send Output). Resolve the raw name's last segment
+        // against the manifest run's UNIQUE-BY-IDENTITY public path: a genuine re-export
+        // (one defining type reachable at several public paths — the `CheckoutSession`
+        // wall) now names it; two DISTINCT same-named types stay ambiguous → drop
+        // (fail-closed). The private-module trap stays closed: only proven-public paths
+        // ever entered the map, keyed on their `doc["paths"]` defining identity.
         let xc_path = if qualified.is_none() && ext_path.is_none() {
             let last = raw_name.rsplit("::").next().unwrap_or(raw_name);
-            GLOBAL_XC_PUBLIC_PATHS.with(|c| {
-                let set = c.borrow();
-                let mut hits = set.iter().filter(|p| p.rsplit("::").next() == Some(last));
-                match (hits.next(), hits.next()) {
-                    (Some(p), None) => Some(p.clone()),
-                    _ => None,
-                }
-            })
+            xc_public_path_for_last_segment(last)
         } else {
             None
         };
@@ -17737,6 +17833,15 @@ mod tests {
             c.borrow_mut().clear();
             c.borrow_mut().insert("stripe_shared::Customer".to_string());
         });
+        // [W4] The identity-keyed map is the authority the two ambiguity sites now read:
+        // one defining identity for `Customer`.
+        GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| {
+            let mut m = c.borrow_mut();
+            m.clear();
+            m.entry("stripe_shared::customer::Customer".to_string())
+                .or_default()
+                .insert("stripe_shared::Customer".to_string());
+        });
         let pidx: HashMap<String, usize> = HashMap::new();
         let node = serde_json::json!({
             "resolved_path": { "name": "Customer", "path": "Customer", "id": 900, "args": null }
@@ -17751,6 +17856,7 @@ mod tests {
         );
         // Without the proven-public entry it drops (fail-closed, pre-fix).
         GLOBAL_XC_PUBLIC_PATHS.with(|c| c.borrow_mut().clear());
+        GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| c.borrow_mut().clear());
         assert!(
             type_to_typeref(&node, &pidx).is_err(),
             "an unproven cross-crate type must still drop"
@@ -17810,6 +17916,105 @@ mod tests {
 
         GLOBAL_XC_SEND_NAMES.with(|c| c.borrow_mut().clear());
         GLOBAL_XC_NONSEND_LASTSEGS.with(|c| c.borrow_mut().clear());
+    }
+
+    #[test]
+    fn xc_public_path_admits_reexport_by_identity_and_fails_closed_on_collision() {
+        // [W4] The return-nameability wall the create/checkout `send` hit. `CheckoutSession`
+        // is DEFINED in `stripe_shared` and RE-EXPORTED by `stripe_checkout`, so the
+        // manifest run has TWO valid public paths ending in `CheckoutSession`. The old
+        // strict-unique last-segment match on the flat set fail-closed here (two hits) and
+        // the Output could not be named. Identity keying collapses both under the SAME
+        // defining path → admit one deterministic public path.
+        GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| {
+            let mut m = c.borrow_mut();
+            m.clear();
+            // One defining identity, two public paths (a genuine re-export).
+            let e = m
+                .entry("stripe_shared::checkout_session::CheckoutSession".to_string())
+                .or_default();
+            e.insert("stripe_shared::CheckoutSession".to_string());
+            e.insert("stripe_checkout::CheckoutSession".to_string());
+        });
+        assert_eq!(
+            xc_public_path_for_last_segment("CheckoutSession"),
+            Some("stripe_checkout::CheckoutSession".to_string()),
+            "a genuine re-export (one defining identity, N public paths) must admit a \
+             deterministic path — the lexicographically smallest"
+        );
+        // An absent last segment never resolves.
+        assert_eq!(xc_public_path_for_last_segment("PaymentMethod"), None);
+        assert_eq!(xc_public_path_for_last_segment(""), None);
+
+        // REAL COLLISION: two DISTINCT defining types share the last segment `Config`
+        // (e.g. `crate_a::Config` and `crate_b::Config` are different types) → naming
+        // either could be the WRONG type → FAIL CLOSED.
+        GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| {
+            let mut m = c.borrow_mut();
+            m.clear();
+            m.entry("crate_a::settings::Config".to_string())
+                .or_default()
+                .insert("crate_a::Config".to_string());
+            m.entry("crate_b::opts::Config".to_string())
+                .or_default()
+                .insert("crate_b::Config".to_string());
+        });
+        assert_eq!(
+            xc_public_path_for_last_segment("Config"),
+            None,
+            "two distinct same-named defining types must fail closed (no wrong-type pick)"
+        );
+        GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| c.borrow_mut().clear());
+    }
+
+    #[test]
+    fn type_to_typeref_names_reexported_send_output_via_identity() {
+        // [W4] End-to-end at the `type_to_typeref` return-nameability site: the
+        // `CreateCheckoutSession.send` Output `CheckoutSession`, reachable from two member
+        // crates as a genuine re-export, must NAME (via the identity map) — the whole
+        // point of W4 (pre-fix it dropped on the two-hit ambiguity).
+        REACHABLE_PATHS.with(|c| c.borrow_mut().clear());
+        LOCAL_TYPE_IDS.with(|c| c.borrow_mut().clear());
+        EXTERNAL_TYPE_IDS.with(|c| c.borrow_mut().clear());
+        EXTERNAL_TYPE_PATH_BY_ID.with(|c| c.borrow_mut().clear());
+        GLOBAL_XC_PUBLIC_PATHS.with(|c| c.borrow_mut().clear());
+        GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| {
+            let mut m = c.borrow_mut();
+            m.clear();
+            let e = m
+                .entry("stripe_shared::checkout_session::CheckoutSession".to_string())
+                .or_default();
+            e.insert("stripe_shared::CheckoutSession".to_string());
+            e.insert("stripe_checkout::CheckoutSession".to_string());
+        });
+        let pidx: HashMap<String, usize> = HashMap::new();
+        let node = serde_json::json!({
+            "resolved_path": { "name": "CheckoutSession", "path": "CheckoutSession", "id": 901, "args": null }
+        });
+        assert_eq!(
+            type_to_typeref(&node, &pidx),
+            Ok(TypeRef::Ctor(
+                "::stripe_checkout::CheckoutSession".to_string(),
+                vec![]
+            )),
+            "the re-exported send Output must resolve to a proven-public path (W4)"
+        );
+        // A genuinely colliding pair of distinct types keeps the Output unnameable.
+        GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| {
+            let mut m = c.borrow_mut();
+            m.clear();
+            m.entry("a::x::CheckoutSession".to_string())
+                .or_default()
+                .insert("a::CheckoutSession".to_string());
+            m.entry("b::y::CheckoutSession".to_string())
+                .or_default()
+                .insert("b::CheckoutSession".to_string());
+        });
+        assert!(
+            type_to_typeref(&node, &pidx).is_err(),
+            "two distinct same-named types must still drop (fail-closed)"
+        );
+        GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| c.borrow_mut().clear());
     }
 
     #[test]
