@@ -1,0 +1,259 @@
+# examples/sky/manifest.toml
+#
+# Registry of upstream Sky examples covered by the Sky→Ipê syntactic patch.
+# The patch itself is the single global rename-map.tsv applied by
+# scripts/equivalence-checks/sky-to-ipe-transform.py — a token-rewrite that
+# survives any line-position changes between Sky releases (unlike a *.patch).
+#
+# PATCH SCOPE: rename-map.tsv is sufficient for every example listed here.
+# All Sky→Ipê differences are purely syntactic module-qualifier rewrites
+# (Sky.Core.* / Sky.Http.* / Std.* / Sky.Ffi / Sky.Test → Ipe.*) plus the
+# .sky→.ipe extension and sky.toml `entry` key. No example in this list
+# requires a behaviour-changing delta; such a delta would be a compiler/stdlib
+# gap to file, never a patch.
+#
+# HOW THE SWEEP USES THIS FILE
+# scripts/equivalence-checks/examples-sweep.sh with IPE_SWEEP_MIRROR_SKY=1
+# calls mirror_sky_examples (scripts/lib/sky_mirror.sh) which:
+#   1. Copies ../sky/examples/<name> (fallback: fetches anzellai/sky) into
+#      examples/sky/<name>/ (git-ignored — regenerated each run).
+#   2. Applies rename-map.tsv via sky-to-ipe-transform.py (token rewrite).
+#   3. Hands the patched tree to the normal BUILD/RUN/EQUIVALENCE pipeline.
+#
+# ADDING A NEW UPSTREAM EXAMPLE
+# When anzellai/sky adds an example not listed here the sweep emits a loud
+# FAIL for that example (unpatched-new-example). Add it here once you have
+# verified the global rename-map covers it (or extended the map / added a
+# per-example override). Never let an unpatched example silently skip.
+#
+# FORMAT: one [[example]] section per Sky-derived example.
+#   name         = upstream directory name
+#   sky_source   = "sibling" | "network" (how the sweep fetches the source)
+#   patch        = "global-rename-map" | "global-rename-map+<override-file>"
+#   go_ffi       = true if the example imports Go packages (excluded from Rust
+#                  build; checked by is_out_of_scope in lib/examples.sh)
+#   notes        = free-form, optional
+
+# ── Pure Ipê / no Go-FFI ─────────────────────────────────────────────────────
+
+[[example]]
+name = "00-standard-libs"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = false
+
+[[example]]
+name = "01-hello-world"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = false
+
+[[example]]
+name = "04-local-pkg"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = false
+
+[[example]]
+name = "06-json"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = false
+
+[[example]]
+name = "07-todo-cli"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = false
+
+[[example]]
+name = "09-live-counter"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = false
+
+[[example]]
+name = "10-live-component"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = false
+
+[[example]]
+name = "12-skyvote"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = false
+
+[[example]]
+name = "14-task-demo"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = false
+
+[[example]]
+name = "15-http-server"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = false
+
+[[example]]
+name = "20-cli-counter"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = false
+
+[[example]]
+name = "21-tui-stopwatch"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = false
+
+[[example]]
+name = "22-tui-stopwatch-ui"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = false
+
+[[example]]
+name = "23-tui-todo"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = false
+
+[[example]]
+name = "24-tui-kitchen-sink"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = false
+
+[[example]]
+name = "25-sky-console"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = false
+
+[[example]]
+name = "26-ui-showcase"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = false
+
+[[example]]
+name = "27-multi-session-chat"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = false
+
+[[example]]
+name = "28-streaming-chat"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = false
+
+[[example]]
+name = "30-sse-server-demo"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = false
+
+[[example]]
+name = "31-webview-stopwatch-ui"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = false
+
+[[example]]
+name = "32-sse-relay"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = false
+
+[[example]]
+name = "33-websocket-echo"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = false
+
+[[example]]
+name = "34-multi-tier-console"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = false
+
+[[example]]
+name = "35-composite-generics"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = false
+
+[[example]]
+name = "simple"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = false
+
+[[example]]
+name = "test_pkg"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = false
+
+# ── Go-FFI examples (excluded from Rust build by is_out_of_scope) ─────────────
+# Listed here so the sweep knows they exist in upstream and does not FAIL LOUD
+# for them; they are intentionally excluded from the build set.
+
+[[example]]
+name = "02-go-stdlib"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = true
+notes = "imports Net.Http — Go stdlib; excluded from Rust build set"
+
+[[example]]
+name = "16-skychess"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = true
+notes = "imports Github.Com.Notnil.Chess — Go FFI; excluded from Rust build set"
+
+[[example]]
+name = "17-skymon"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = true
+notes = "imports Github.Com.Shirou.Gopsutil — Go FFI; excluded from Rust build set"
+
+[[example]]
+name = "18-job-queue"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = true
+notes = "imports Github.Com.Hibiken.Asynq — Go FFI; excluded from Rust build set"
+
+[[example]]
+name = "19-skyforum"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = true
+notes = "imports Github.Com.Gorilla.Websocket — Go FFI; excluded from Rust build set"
+
+[[example]]
+name = "36-composite-server"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = true
+notes = "composite with Go-FFI sub-packages; excluded from Rust build set"
+
+[[example]]
+name = "37-composite-live-shop"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = true
+notes = "composite with Go-FFI sub-packages; excluded from Rust build set"
+
+[[example]]
+name = "38-composite-ui-multibackend"
+sky_source = "sibling"
+patch = "global-rename-map"
+go_ffi = true
+notes = "composite with Go-FFI sub-packages; excluded from Rust build set"

@@ -26,7 +26,8 @@ fn repo_root() -> PathBuf {
 
 fn css_manifest() -> PathBuf {
     repo_root()
-        .join("examples")
+        .join("tests")
+        .join("fixtures")
         .join("spike-css-source")
         .join("sky.toml")
 }

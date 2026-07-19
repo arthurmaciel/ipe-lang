@@ -8,6 +8,8 @@ sky-out/
 # scripts/lib/sky_mirror.sh (IPE_SWEEP_MIRROR_SKY=1). Regenerated each run, never
 # vendored; only the rename map + README + manifest under examples/sky/ are source.
 /examples/sky/[0-9]*/
+/examples/sky/simple/
+/examples/sky/test_pkg/
 # Default SQLite DB written by `Db.connect ()` when an emitted binary is run
 # by the E2E test harness in the crate/repo cwd — a run artifact, never source.
 sky.db
@@ -19,9 +21,6 @@ sky.db-wal
 # node_modules/ + any fetched Playwright browser binaries are not.
 scripts/equivalence-checks/node_modules/
 
-# Pinned Go-reference oracle binaries — large, fetched not committed.
-# Pinned version is the SSOT at tools/oracle/README.md, not duplicated here.
-tools/oracle/bin/
 # agent worktrees — never commit
 .claude/worktrees/
 # progressive-development loop runtime artifacts

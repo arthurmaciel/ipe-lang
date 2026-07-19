@@ -1,15 +1,22 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# ipê EXAMPLES sweep — the cornerstone correctness gate for the vendored examples.
+# ipê EXAMPLES sweep — the cornerstone correctness gate for the Ipe-native examples.
 #
 # Runs `scripts/equivalence-checks/examples-sweep.sh` (per in-scope example: BUILD `ipe build` +
-# `cargo build` · RUN headless per shape · EQUIVALENCE Go≡Rust — PHASED, off for now).
+# `cargo build` · RUN headless per shape · EQUIVALENCE self-regression — PHASED, off for now).
 # The single OS-aware `scripts/lib/checks.sh` drives every host — no per-OS fork.
 #
-# ── PHASED Go-parity (READ THIS) ─────────────────────────────────────────────
-# EQUIVALENCE needs a Go reference built by the Haskell `sky` compiler, which this repo
-# does NOT have. The first iteration therefore runs BUILD+RUN only
-# (IPE_SWEEP_NO_EQUIV=1). The commented `examples-sweep-equivalence` job stub at the
-# bottom shows how EQUIVALENCE turns on later (build/obtain the Haskell `sky` reference).
+# ── PHASED self-regression (READ THIS) ───────────────────────────────────────
+# EQUIVALENCE now uses self-regression (`expected.txt` per example, captured from
+# ipe's own output) rather than the old Go-oracle (`expected_go.txt` + oracle.meta
+# SHA256 staleness gate, which required the Haskell `sky` compiler). The first
+# iteration runs BUILD+RUN only (IPE_SWEEP_NO_EQUIV=1). EQUIVALENCE turns on later
+# once expected.txt goldens are populated and verified.
+#
+# ── UNPATCHED NEW EXAMPLES (FAIL LOUD) ───────────────────────────────────────
+# When IPE_SWEEP_MIRROR_SKY=1, the sweep detects any upstream Sky example that is
+# NOT listed in examples/sky/manifest.toml and emits a RED `unpatched-new-example`
+# row. Add the entry to manifest.toml (with a verified patch) before the sweep
+# can pass with a new upstream example.
 #
 # ── NON-GATING FOR NOW ───────────────────────────────────────────────────────
 # ipe currently implements only `Ipe.*`; examples reaching for `Ipe.*` /
@@ -171,14 +178,16 @@ jobs:
           if-no-files-found: warn
 
   # ───────────────────────────────────────────────────────────────────────────
-  # PHASE 2 (COMMENTED STUB) — Go≡Rust EQUIVALENCE. Turn this on once a Go reference is
-  # available. Two supported paths:
-  #   (a) Build the Haskell `sky` compiler in the job (haskell-actions/setup +
-  #       cabal build exe:sky), put it on PATH as IPE_GO_BIN, drop
-  #       IPE_SWEEP_NO_EQUIV, and add setup-go for the reference `go build`.
-  #   (b) Consume vendored Go reference outputs (expected_go.txt per example,
-  #       à la docs/architecture/e2e-and-oracle-caching.md) so no Go toolchain is
-  #       needed — extend equivalence_for() to diff against the cached reference.
+  # PHASE 2 (COMMENTED STUB) — self-regression EQUIVALENCE. Turn this on once
+  # expected.txt goldens are populated for each in-scope example. Two paths:
+  #   (a) Populate expected.txt per example by running `ipe run` once and
+  #       capturing stdout, then commit the goldens into tests/golden/<name>/.
+  #       Drop IPE_SWEEP_NO_EQUIV — equivalence_for() reads expected.txt via
+  #       e2e_support::read_expected() and diffs against the current run.
+  #   (b) For Sky-mirrored examples (IPE_SWEEP_MIRROR_SKY=1), populate
+  #       expected.txt under examples/sky/<name>/ after the mirror+patch step
+  #       has been verified correct. The manifest.toml registers each such
+  #       example and its patch; the sweep mirrors at runtime, not at commit time.
   # ───────────────────────────────────────────────────────────────────────────
   # examples-sweep-equivalence:
   #   name: examples-sweep-equivalence (ubuntu, Go≡Rust)

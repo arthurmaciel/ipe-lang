@@ -11,7 +11,7 @@
 //! 1. Writes a Ipê program to a fresh temp dir.
 //! 2. Compiles it through `ipe::build` (full pipeline: parse → canon → types →
 //!    lower → emit Rust).
-//! 3. Builds the emitted Cargo project with `oracle::build_rust_binary` — the
+//! 3. Builds the emitted Cargo project with `e2e_support::build_rust_binary` — the
 //!    global `~/.cargo/config.toml` shared target is used so dependencies
 //!    (axum, tokio, tower-http, …) compile once and are reused.
 //! 4. Acquires an ephemeral port by binding `TcpListener::bind("127.0.0.1:0")`,
@@ -94,7 +94,7 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<PathBuf, BoxEr
     ipe::build(&entry, &out_dir, &runtime)
         .map_err(|e| -> BoxError { format!("{test_name}: ipe build failed: {e}").into() })?;
 
-    let exe = oracle::build_rust_binary(test_name, &out_dir)
+    let exe = e2e_support::build_rust_binary(test_name, &out_dir)
         .map_err(|e| -> BoxError { format!("{test_name}: cargo build failed: {e}").into() })?;
 
     Ok(PathBuf::from(exe))

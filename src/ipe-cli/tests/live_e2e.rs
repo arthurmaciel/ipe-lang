@@ -8,7 +8,7 @@
 //!
 //! 1. A minimal Ipe.Live counter program is written to a temp dir.
 //! 2. `ipe::build` compiles it (parse → canon → types → lower → emit Rust).
-//! 3. `oracle::build_rust_binary` runs `cargo build` on the emitted project —
+//! 3. `e2e_support::build_rust_binary` runs `cargo build` on the emitted project —
 //!    the shared Cargo target (`~/.cargo/config.toml`) lets axum/tokio/serde
 //!    compile once and be reused.
 //! 4. An ephemeral TCP port is reserved via `TcpListener::bind("0")` → drop.
@@ -315,7 +315,7 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<PathBuf, BoxEr
     ipe::build(&entry, &out_dir, &runtime)
         .map_err(|e| -> BoxError { format!("{test_name}: ipe build failed: {e}").into() })?;
 
-    let exe = oracle::build_rust_binary(test_name, &out_dir)
+    let exe = e2e_support::build_rust_binary(test_name, &out_dir)
         .map_err(|e| -> BoxError { format!("{test_name}: cargo build failed: {e}").into() })?;
 
     Ok(PathBuf::from(exe))

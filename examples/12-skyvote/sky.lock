@@ -1,5 +1,0 @@
-go:
-  crypto/sha256: latest
-  database/sql: latest
-  encoding/hex: latest
-  modernc.org/sqlite: latest
