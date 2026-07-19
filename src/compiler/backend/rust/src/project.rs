@@ -2232,8 +2232,16 @@ fn shake_ffi_by_fn_ident(source: &str, reached: &std::collections::BTreeSet<Stri
                     .chars()
                     .take_while(|c| c.is_alphanumeric() || *c == '_')
                     .collect();
-                // An ident we cannot read is conservatively kept.
-                *keep = ident.is_empty() || reached.contains(&ident);
+                // Accumulate, never overwrite: a region with more than one
+                // `pub fn` (not produced by today's generator, but not
+                // structurally forbidden either) must stay kept once ANY of
+                // its fns is reached — overwriting on the LAST fn seen would
+                // drop a region whose FIRST fn is reached but whose last one
+                // is not, an under-bind (the reached fn's own wrapper
+                // vanishes, an E0425 the linker reports far from this
+                // decision point). An ident we cannot read is conservatively
+                // kept.
+                *keep = *keep || ident.is_empty() || reached.contains(&ident);
             }
             if line.trim_end() == FFI_WRAPPER_END {
                 if *keep {
@@ -2398,6 +2406,7 @@ mod tests {
     use super::{
         CARGO_TOML, RUNTIME_CONFIG_RS_DB_POSTGRES, RUNTIME_CONFIG_RS_DB_SQLITE,
         RUNTIME_MOD_RS_LIVE_APPEND, db_cargo_toml, live_cargo_toml, server_cargo_toml,
+        shake_ffi_by_fn_ident,
     };
     use crate::DbDriver;
     use crate::crate_specs;
@@ -2672,6 +2681,71 @@ mod tests {
             RUNTIME_MOD_RS_LIVE_APPEND.contains("pubsub_publish_no_echo"),
             "RUNTIME_MOD_RS_LIVE_APPEND must re-export pubsub_publish_no_echo (E0425 fix, #215): \
              {RUNTIME_MOD_RS_LIVE_APPEND}"
+        );
+    }
+
+    /// One wrapper region built from a single generator BEGIN/END span with
+    /// two `pub fn`s: `first` then `second`, wrapped exactly like
+    /// `shake_ffi_by_fn_ident`'s doc comment describes.
+    fn two_fn_region(first: &str, second: &str) -> String {
+        format!(
+            "// preamble\n\
+             // IPE-FFI-WRAPPER BEGIN region\n\
+             pub fn {first}(x: i64) -> i64 {{\n    x\n}}\n\
+             pub fn {second}(x: i64) -> i64 {{\n    x\n}}\n\
+             // IPE-FFI-WRAPPER END\n\
+             // trailer\n"
+        )
+    }
+
+    /// CO-BACKEND-007: a region with TWO `pub fn`s where only the FIRST is
+    /// reached must stay KEPT — the last-fn-wins bug dropped it because the
+    /// decision was overwritten by the second (unreached) fn's verdict.
+    #[test]
+    fn shake_keeps_region_when_only_the_first_of_two_fns_is_reached() {
+        let source = two_fn_region("reached_fn", "unreached_fn");
+        let reached: std::collections::BTreeSet<String> =
+            std::collections::BTreeSet::from(["reached_fn".to_owned()]);
+        let out = shake_ffi_by_fn_ident(&source, &reached);
+        assert!(
+            out.contains("pub fn reached_fn"),
+            "the reached fn's own wrapper must survive: {out}"
+        );
+        assert!(
+            out.contains("pub fn unreached_fn"),
+            "the whole region (both fns) must be kept once ANY fn in it is reached: {out}"
+        );
+    }
+
+    /// Mirror case: only the SECOND of two fns is reached. Already passed
+    /// under the old last-wins logic (the second fn's verdict IS the final
+    /// one), but pins the same invariant from the other direction.
+    #[test]
+    fn shake_keeps_region_when_only_the_second_of_two_fns_is_reached() {
+        let source = two_fn_region("unreached_fn", "reached_fn");
+        let reached: std::collections::BTreeSet<String> =
+            std::collections::BTreeSet::from(["reached_fn".to_owned()]);
+        let out = shake_ffi_by_fn_ident(&source, &reached);
+        assert!(
+            out.contains("pub fn reached_fn") && out.contains("pub fn unreached_fn"),
+            "the whole region must be kept once ANY fn in it is reached: {out}"
+        );
+    }
+
+    /// A region whose fns are ALL unreached is still dropped — the fix must
+    /// not turn the shake into a no-op.
+    #[test]
+    fn shake_drops_region_when_no_fn_is_reached() {
+        let source = two_fn_region("unreached_a", "unreached_b");
+        let reached: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let out = shake_ffi_by_fn_ident(&source, &reached);
+        assert!(
+            !out.contains("pub fn unreached_a") && !out.contains("pub fn unreached_b"),
+            "a region with no reached fn must be dropped: {out}"
+        );
+        assert!(
+            out.contains("// preamble") && out.contains("// trailer"),
+            "surrounding non-region text must survive untouched: {out}"
         );
     }
 }
