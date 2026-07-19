@@ -21,3 +21,9 @@ reader from re-litigating a settled question.
 What follows from this decision — what becomes easier, what becomes harder, and
 above all what invariant must continue to hold for the decision to stay valid.
 Note any follow-on decisions this enables or forecloses.
+
+## Conventions
+
+ADRs describe Ipê on its own terms. Do not reference any prior or external
+implementation, parity with another system, or project ancestry — state each
+decision as a standalone Ipê decision.
