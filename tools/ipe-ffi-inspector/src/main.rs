@@ -7272,18 +7272,30 @@ fn rustdoc_type_to_rust_str(val: &serde_json::Value) -> String {
         let qualified = rp.get("id").and_then(reachable_local_path);
         let name: String = match qualified {
             Some(full) => full,
-            // [stripe-send F2] A type unnameable through THIS crate's reachable
+            // [stripe-send F2/W4] A type unnameable through THIS crate's reachable
             // paths but defined+public in a SIBLING manifest crate (the
-            // `stripe_shared::Customer` send Output). This crate's own `doc["paths"]`
-            // records the referenced external item's canonical path
-            // (`reachable_external_type_path`); admit it ONLY when the manifest-run
-            // proven-public set — the union of every member crate's own reachable
-            // walk — confirms it (keeping the private-module def-path trap closed:
-            // such a path never entered the set).
+            // `stripe_shared::Customer` / `CheckoutSession` send Output). Two sound
+            // sources, tried in order:
+            //   1. this crate's own `doc["paths"]` canonical path
+            //      (`reachable_external_type_path`), admitted ONLY when the manifest-run
+            //      proven-public SET confirms it (private-module def-path trap stays shut);
+            //   2. failing that (the def path threads a sibling submodule — e.g.
+            //      `stripe_shared::customer::Customer` — so `external_type_public_path`
+            //      fail-closed it out of `EXTERNAL_TYPE_PATH_BY_ID` and step 1 misses),
+            //      the manifest-run UNIQUE-BY-IDENTITY public path keyed on the type's
+            //      last segment. This mirrors the `type_to_typeref` W4 resolution so the
+            //      RENDERED `rust_type` (which the C1 async-Send gate and the emitter read)
+            //      matches the CALL-AST path — without it the Output renders BARE here,
+            //      the emitter absolutizes it to `::Customer`, and the create/checkout
+            //      `send` drops or E0433s while `type_to_typeref` already names it.
             None => rp
                 .get("id")
                 .and_then(reachable_external_type_path)
                 .filter(|p| GLOBAL_XC_PUBLIC_PATHS.with(|c| c.borrow().contains(p)))
+                .or_else(|| {
+                    let last = raw_name.rsplit("::").next().unwrap_or(raw_name);
+                    xc_public_path_for_last_segment(last)
+                })
                 .unwrap_or_else(|| raw_name.rsplit("::").next().unwrap_or(raw_name).to_string()),
         };
         let name = name.as_str();
@@ -18743,11 +18755,61 @@ mod tests {
                 .insert("778".to_string(), "krate::private_mod::Secret".to_string());
         });
         GLOBAL_XC_PUBLIC_PATHS.with(|c| c.borrow_mut().clear());
+        GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| c.borrow_mut().clear());
         let node = serde_json::json!({
             "resolved_path": { "name": "Secret", "path": "Secret", "id": 778, "args": null }
         });
         assert_eq!(rustdoc_type_to_rust_str(&node), "Secret");
         EXTERNAL_TYPE_PATH_BY_ID.with(|c| c.borrow_mut().clear());
+    }
+
+    #[test]
+    fn rust_str_renders_reexported_output_via_identity_when_defpath_fails_closed() {
+        // [W4] The `rust_type` render path (`rustdoc_type_to_rust_str`) — the source the
+        // C1 async-Send gate and the emitter read. The create/checkout `send` Output
+        // `Customer`/`CheckoutSession` is DEFINED in a sibling submodule
+        // (`stripe_shared::customer::Customer`), so `external_type_public_path` fail-closes
+        // it out of EXTERNAL_TYPE_PATH_BY_ID (rule 5: non-std intermediate module). Without
+        // the identity fall-through the render is BARE `Customer` → the emitter absolutizes
+        // it to `::Customer` → E0433 / silent drop, even though `type_to_typeref` already
+        // names it. The identity map (populated from the DEFINING crate's own reachable
+        // walk) supplies the proven-public path so both render paths agree.
+        REACHABLE_PATHS.with(|c| c.borrow_mut().clear());
+        EXTERNAL_TYPE_PATH_BY_ID.with(|c| c.borrow_mut().clear());
+        GLOBAL_XC_PUBLIC_PATHS.with(|c| c.borrow_mut().clear());
+        GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| {
+            let mut m = c.borrow_mut();
+            m.clear();
+            let e = m
+                .entry("stripe_shared::customer::Customer".to_string())
+                .or_default();
+            e.insert("stripe_shared::Customer".to_string());
+        });
+        let node = serde_json::json!({
+            "resolved_path": { "name": "Customer", "path": "Customer", "id": 555, "args": null }
+        });
+        assert_eq!(
+            rustdoc_type_to_rust_str(&node),
+            "stripe_shared::Customer",
+            "the render path must qualify a sibling-defined re-exported Output via identity"
+        );
+        // Fail-closed on a genuine collision — two distinct same-named defining types.
+        GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| {
+            let mut m = c.borrow_mut();
+            m.clear();
+            m.entry("a::x::Customer".to_string())
+                .or_default()
+                .insert("a::Customer".to_string());
+            m.entry("b::y::Customer".to_string())
+                .or_default()
+                .insert("b::Customer".to_string());
+        });
+        assert_eq!(
+            rustdoc_type_to_rust_str(&node),
+            "Customer",
+            "a real collision stays bare (fail-closed), never a wrong-type pick"
+        );
+        GLOBAL_XC_PUBLIC_PATH_BY_DEFID.with(|c| c.borrow_mut().clear());
     }
 
     #[test]
