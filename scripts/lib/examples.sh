@@ -35,8 +35,12 @@
 # lib/sky_mirror.sh before the sweep loop) is included too — same shape/Go-FFI
 # derivation applies to both.
 all_examples() {
-  local d globs=(examples/[0-9]*/ examples/simple/ examples/test_pkg/ examples/rust/*/)
-  [ "${IPE_SWEEP_MIRROR_SKY:-0}" = 1 ] && globs+=(examples/sky/[0-9]*/)
+  # First-party Ipe examples: the numbered dirs (39+) that remain after the
+  # Sky-derived set was moved to examples/sky/. With IPE_SWEEP_MIRROR_SKY=1 the
+  # mirrored+patched upstream set (materialised by lib/sky_mirror.sh into
+  # examples/sky/<name>/) is included too; simple/ and test_pkg/ live there now.
+  local d globs=(examples/[0-9]*/ examples/rust/*/)
+  [ "${IPE_SWEEP_MIRROR_SKY:-0}" = 1 ] && globs+=(examples/sky/[0-9]*/ examples/sky/simple/ examples/sky/test_pkg/)
   for d in "${globs[@]}"; do
     [ -d "$d" ] || continue
     d="${d%/}"
