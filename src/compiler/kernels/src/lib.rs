@@ -5002,6 +5002,10 @@ impl StdlibKernel {
             // `Cmd.publishNoEcho` / `Sub.subscribeTopic` / `PubSub.publish` /
             // `PubSub.publishNoEcho` route through the in-tab broker
             // (`wasm::pubsub`) — the M4 Cmd/Sub browser-effects bridge.
+            // `SubSubscribeWebSocket` (the WebSocket client's onOpen/
+            // onMessage/onClose/onError receive surface) routes through
+            // `ws_client.rs`'s wasm32 arm — `web_sys::WebSocket`'s
+            // `onopen`/`onmessage`/`onclose`/`onerror` handler slots.
             KernelClass::Tea => matches!(
                 self,
                 Self::CmdNone
@@ -5016,6 +5020,7 @@ impl StdlibKernel {
                     | Self::SubSubscribeTopic
                     | Self::PubSubPublish
                     | Self::PubSubPublishNoEcho
+                    | Self::SubSubscribeWebSocket
             ),
             KernelClass::Pure => {
                 // Pure families whose runtime modules are in the proven wasm
@@ -5074,12 +5079,9 @@ impl StdlibKernel {
                 // deliberately NOT a qualifier-wide allow.
                 matches!(self, Self::CryptoRandomBytes | Self::CryptoRandomToken) ||
                 // `Ipe.WebSocket` client Task-tier — `web_sys::WebSocket`
-                // (ws_client.rs's wasm32 arm). `SubSubscribeWebSocket` (the
-                // onMessage/onOpen/onClose/onError receive surface) is
-                // deliberately excluded: unreachable on EVERY target today
-                // (no `KernelFn` wires codegen to it), so it has no wasm
-                // substitute to tag — allowing it would be a SEAL hole
-                // (a resolvable name with no linkable symbol).
+                // (ws_client.rs's wasm32 arm). The Sub-tier receive kernel
+                // (`SubSubscribeWebSocket`) is `Tea`-classed, not `Pure` —
+                // see the `KernelClass::Tea` arm above.
                 matches!(
                     self,
                     Self::WebSocketConnect
@@ -5159,10 +5161,6 @@ mod tests {
             StdlibKernel::CryptoSha256,
             StdlibKernel::CryptoAesGcmEncrypt,
             StdlibKernel::CryptoAesKeyFromPassword,
-            // WebSocket: only the Task-tier client is substituted; the
-            // receive surface is unreachable on every target (no `KernelFn`
-            // wires it), so it stays untagged too.
-            StdlibKernel::SubSubscribeWebSocket,
         ] {
             assert!(
                 !denied.available_on(Target::WasmClient),
@@ -5211,6 +5209,11 @@ mod tests {
             StdlibKernel::WebSocketConnect,
             StdlibKernel::WebSocketSend,
             StdlibKernel::WebSocketClose,
+            // The WebSocket client's Sub-tier receive surface —
+            // `ws_client.rs`'s wasm32 arm now wires `onOpen`/`onMessage`/
+            // `onClose`/`onError` via `web_sys::WebSocket`'s `onopen`/
+            // `onmessage`/`onclose`/`onerror` handler slots.
+            StdlibKernel::SubSubscribeWebSocket,
         ] {
             assert!(
                 allowed.available_on(Target::WasmClient),

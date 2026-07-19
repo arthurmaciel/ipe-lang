@@ -2274,7 +2274,7 @@ fn resolve_sym(interner: &Interner, sym: Symbol) -> DResult<&str> {
 /// enum's own decl is suppressed in [`crate::emit_types::emit_enum`]. Keyed on
 /// the type's HOME module so a user's unrelated `type CloseCode` never folds.
 pub(crate) fn websocket_bridge_rust_name(home_segs: &[&str], name: &str) -> Option<&'static str> {
-    if home_segs != ["Sky", "Core", "WebSocket"] {
+    if home_segs != ["Ipe", "WebSocket"] {
         return None;
     }
     match name {

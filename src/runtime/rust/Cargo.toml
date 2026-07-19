@@ -210,20 +210,55 @@ wasm-client = [
 
 [dev-dependencies]
 regex = "1"
-proptest = "1"
-# `tower` (util feature) is a TEST-ONLY dep for `ServiceExt::oneshot`, which
-# drives a Router through a single request in unit tests (e.g. asserting a
-# panicking handler is caught as a 500). It does NOT propagate to generated
-# projects — those emit their own Cargo.toml from crate-specs.toml.
-tower = { version = "0.5", features = ["util"] }
-tokio = { version = "1", features = ["full", "test-util", "macros"] }
 serde_json = "1"
 sha2 = "0.10"
+
+# `wasm-bindgen-test` drives the headless-browser test harness (`tests/
+# wasm_*` files, `#[wasm_bindgen_test]`) — meaningless on native, so it is
+# wasm32-only (see the `[target.'cfg(target_arch = "wasm32")'.dev-dependencies]`
+# table below), never pulled into a native `cargo test`.
+#
+# `proptest`/`bcrypt`/`jsonwebtoken`/`aes-gcm`/`chacha20poly1305`/`pbkdf2` are
+# native-only test deps (property tests over pure kernels; AEAD/RSA/PBKDF2/
+# bcrypt hashing kernels, none of which have a wasm32 denotation — see
+# `ipe_kernels::StdlibKernel::wasm_client_available`'s doc comment: "Every
+# OTHER Crypto kernel... stays denied"). Root-caused getrandom conflict: an
+# unconditional dev-dependency here is compiled for EVERY target `cargo
+# test`/`cargo check --tests` targets, including wasm32 — `bcrypt 0.17` and
+# `proptest`'s `rand 0.9` chain both pull `getrandom 0.3` (`rand_core 0.9`),
+# which collides with the pinned `getrandom 0.2` (`features = ["js"]`) this
+# crate's own `[dependencies]` uses for the wasm entropy shim (`uuid`/
+# `crypto_random_bytes`/`random.rs`'s `lcg_init`). getrandom 0.2 and 0.3 are
+# NOT the same crate to cargo (SemVer-major difference) so cargo happily
+# resolves both into one dependency graph — but `getrandom 0.3` refuses to
+# build on `wasm32-unknown-unknown` at all without an explicit
+# `--cfg getrandom_backend="wasm_js"` RUSTFLAG this crate never sets (it
+# targets 0.2's `js` feature instead), so the wasm32 test target fails to
+# compile the moment either of these deps enters its graph. Moving them into
+# a native-only `[target]` table (Cargo's standard target-conditional
+# dev-dependency mechanism) keeps a wasm32 test build's dependency closure
+# free of `getrandom 0.3` entirely — the actual fix, not a version pin
+# override (which would just re-litigate the SAME collision against whatever
+# version bcrypt/proptest ship next).
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+proptest = "1"
 jsonwebtoken = "9"
 bcrypt = "0.17"
 aes-gcm = "0.10"
 chacha20poly1305 = "0.10"
 pbkdf2 = "0.12"
+# `tower` (util feature) is a TEST-ONLY dep for `ServiceExt::oneshot`, which
+# drives a Router through a single request in unit tests (e.g. asserting a
+# panicking handler is caught as a 500). It does NOT propagate to generated
+# projects — those emit their own Cargo.toml from crate-specs.toml. `tokio`
+# native-only for the same reason `websocket_client`/`server`/`db` gate it in
+# `[dependencies]`: no meaningful wasm32 denotation (single-threaded browser
+# event loop, no OS threads for `tokio::spawn`/`block_on`).
+tower = { version = "0.5", features = ["util"] }
+tokio = { version = "1", features = ["full", "test-util", "macros"] }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
 
 [lints.clippy]
 # No-runtime-errors gate: a panic vector reached from well-typed code is a bug.
