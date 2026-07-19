@@ -440,3 +440,53 @@ fn parity_multimodule_adversarial_edits() {
         assert_parity(&format!("adversarial/{label}"), &warm_out, &cold_out);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Watch-mode shape: the exact incremental pattern `ipe watch`'s orchestrator
+// runs (one `SourceRoot` reused across `FsBatch` cycles via
+// `sync_source_root`, feeding the same `compile_prepared` call every cycle —
+// see `src/ipe-cli/src/watch.rs`'s `OrchestratorEvent::FsBatch` arm).
+// `WarmSession` above already reproduces this shape; this test names it
+// explicitly so a future reader does not have to infer watch-mode coverage
+// from the golden-fixture probes.
+// ---------------------------------------------------------------------------
+
+// A closure-capture program: `compose` forwards a fn-typed param through a
+// lambda, which lowers through the `eta_*` fresh-name pool (see
+// `capture_fn_forwarded`/`firstclass_curried` under `tests/golden/`) — the
+// exact pool the doc's warm-vs-cold hazard is about, so this probe exercises
+// the numbering hazard rather than passing on an empty diff.
+const WATCH_PROBE_V0: &str = "module Main exposing (main)\n\n\
+     applyTwice : (Int -> Int) -> Int -> Int\n\
+     applyTwice g x =\n    g (g x)\n\n\
+     compose : (Int -> Int) -> Int -> Int\n\
+     compose f =\n    \\x -> applyTwice f x\n\n\
+     main =\n    println (String.fromInt (compose (\\n -> n + 1) 3))\n";
+
+/// One save-cycle in `ipe watch` that adds a brand-new top-level identifier
+/// — the sharpest symbol-numbering probe (a warm db interns it at a tail id;
+/// a cold db interns it mid-parse) — must still emit byte-identical Rust to
+/// a cold build of the post-edit source, on a program whose lowering mints
+/// `eta_*` fresh names (so the probe actually exercises the numbering
+/// hazard, not just a byte-identical no-op).
+#[test]
+fn watch_mode_identifier_add_parity() {
+    let state0 = sources_of(&[(["Main"].as_slice(), WATCH_PROBE_V0)]);
+    let mut state1 = state0.clone();
+    state1
+        .get_mut(&entry_path())
+        .expect("Main present")
+        .push_str("\n\nwatchModeProbeIdentifier = 99\n");
+
+    let mut warm = WarmSession::new();
+    assert_parity(
+        "watch-mode/state0",
+        &warm.compile(&state0),
+        &cold_compile(&state0),
+    );
+    assert_parity(
+        "watch-mode/identifier-added",
+        &warm.compile(&state1),
+        &cold_compile(&state1),
+    );
+}
