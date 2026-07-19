@@ -7795,6 +7795,16 @@ fn is_serde_trait_bound(bound: &serde_json::Value) -> bool {
         if let Some(path) = EXTERNAL_TRAIT_PATH_BY_ID.with(|m| m.borrow().get(&key).cloned()) {
             return SERDE_TRAIT_PATHS.contains(&path.as_str());
         }
+        // Identity fallback: the trait's RAW defining path. The public-path
+        // map fail-closes any external path with an intermediate module
+        // (`serde::de::Deserialize` — its `de` module is public, but that is
+        // unprovable without serde's own rustdoc), which silently
+        // de-serde-ified every `T: Deserialize` bound. A serde-trait CHECK is
+        // an identity question — the path is never emitted — so the raw
+        // defining path is the sound source.
+        if let Some(defpath) = EXTERNAL_DEFPATH_BY_ID.with(|m| m.borrow().get(&key).cloned()) {
+            return SERDE_TRAIT_PATHS.contains(&defpath.as_str());
+        }
         // If the id is confirmed crate-local → NOT serde (C-G1).
         let is_local = LOCAL_TYPE_IDS.with(|s| s.borrow().contains(&key))
             || REACHABLE_PATHS.with(|c| c.borrow().contains_key(&key));
@@ -7825,6 +7835,10 @@ fn serde_bound_path(bound: &serde_json::Value) -> Option<&'static str> {
         let key = item_id_to_str(id);
         if let Some(path) = EXTERNAL_TRAIT_PATH_BY_ID.with(|m| m.borrow().get(&key).cloned()) {
             return find(&path);
+        }
+        // Identity fallback by RAW defining path (see is_serde_trait_bound).
+        if let Some(defpath) = EXTERNAL_DEFPATH_BY_ID.with(|m| m.borrow().get(&key).cloned()) {
+            return find(&defpath);
         }
         // Confirmed crate-local → NOT serde (parity with is_serde_trait_bound).
         let is_local = LOCAL_TYPE_IDS.with(|s| s.borrow().contains(&key))
