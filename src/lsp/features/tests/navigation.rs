@@ -41,14 +41,14 @@ fn hover_reports_the_solved_type_of_the_innermost_region() {
 
     // `three` inside `main = double three` (the last occurrence).
     let byte = u32::try_from(MAIN.rfind("three").expect("occurrence")).expect("fits");
-    let info = ipe_lsp_features::hover::hover(&db, root, entry, &["Main".to_owned()], byte)
-        .expect("hover hit");
+    let info =
+        ipe_lsp_features::hover::hover(&db, root, entry, entry, byte).expect("hover hit");
     assert_eq!(info.ty, "Int");
 
-    // Hover in the dep module works with the dep's own module path.
+    // Hover in the dep module works with the dep's own source file.
     let byte = u32::try_from(HELPER.rfind('3').expect("literal")).expect("fits");
-    let info = ipe_lsp_features::hover::hover(&db, root, entry, &["Helper".to_owned()], byte)
-        .expect("hover hit in dep");
+    let info =
+        ipe_lsp_features::hover::hover(&db, root, entry, helper, byte).expect("hover hit in dep");
     assert_eq!(info.ty, "Int");
 }
 

@@ -1223,6 +1223,21 @@ pub struct Builder<'a> {
     /// bare-`Span` key (pre-fix) silently overwrote earlier entries, causing the
     /// lowerer to read the wrong type and produce IPE-I0001.
     regions: BTreeMap<(Vec<Symbol>, Span), VarId>,
+    /// The type EXPECTED at each source region by its surrounding context,
+    /// keyed by `(home_module_path, Span)` — the type-directed-completion
+    /// sidecar (ADR 0034 / LSP plan §6). Where [`Self::regions`] records the
+    /// type an expression WAS inferred to have, this records the type its
+    /// enclosing context PUSHES DOWN onto it: a `Call` argument's declared
+    /// parameter slot, a typed def body's annotation return, an `if` branch's
+    /// shared result, a `let` binding's pattern, a list/cons element. Recording
+    /// an already-created solver variable is a pure map insert — it adds NO
+    /// constraint and NO variable, so `SolvedTypes`'s existing fields are
+    /// byte-identical whether or not this map is populated (additivity proven
+    /// by `expected_types_additive` in `lib.rs`). Only positions with a genuine
+    /// contextual expectation appear; an unconstrained position (a bare
+    /// top-level body, a lambda not in an annotated context) is absent, and the
+    /// completion provider degrades to scope-only ranking there.
+    expected: BTreeMap<(Vec<Symbol>, Span), VarId>,
     /// Home module path of the def currently being constrained.  Set at the
     /// start of each `constrain_def` call; read by every `regions.insert`.
     current_home: Vec<Symbol>,
@@ -1473,6 +1488,11 @@ pub struct Generated {
     /// Resolved type per source region, keyed by `(home_module_path, Span)`.
     /// See [`Builder::regions`] for the rationale.
     pub regions: BTreeMap<(Vec<Symbol>, Span), VarId>,
+    /// Contextually-EXPECTED type per source region — the type-directed
+    /// completion sidecar. See [`Builder::expected`]. Read back into
+    /// `SolvedTypes::expected` and never consulted by the solver, so it is
+    /// purely additive over the existing inference result.
+    pub expected: BTreeMap<(Vec<Symbol>, Span), VarId>,
     pub constraints: Vec<Constraint>,
     /// Values stay behind the builder's `Rc`; the read-back (`lib.rs`) unwraps
     /// them into the public `SolvedTypes::env` shape (refcount is 1 by then —
@@ -1522,6 +1542,7 @@ impl<'a> Builder<'a> {
             interner,
             builtins,
             regions: BTreeMap::new(),
+            expected: BTreeMap::new(),
             current_home: Vec::new(),
             constraints: Vec::new(),
             top_level: BTreeMap::new(), // (home, name) → Ty
@@ -1684,6 +1705,7 @@ impl<'a> Builder<'a> {
 
         Ok(Generated {
             regions: builder.regions,
+            expected: builder.expected,
             constraints: builder.constraints,
             top_level: builder.top_level,
             untyped: builder.untyped,
@@ -1895,6 +1917,10 @@ impl<'a> Builder<'a> {
         let elem = self.flex()?;
         for e in elems {
             let ev = self.constrain_expr(local, e)?;
+            // Every list element expects the shared element type — an empty
+            // slot in `[ ⟨|⟩ ]` where sibling elements pin `elem` completes to
+            // that element type.
+            self.record_expected(e.span, elem);
             self.eq(e.span, ev, elem);
         }
         self.list_var(elem)
@@ -1912,6 +1938,8 @@ impl<'a> Builder<'a> {
         let elem = self.constrain_expr(local, head)?;
         let list = self.list_var(elem)?;
         let tail_var = self.constrain_expr(local, tail)?;
+        // The tail of `head :: tail` expects `List elem`.
+        self.record_expected(tail.span, list);
         self.eq(tail.span, tail_var, list);
         Ok(list)
     }
@@ -1923,6 +1951,20 @@ impl<'a> Builder<'a> {
             rhs,
             home: self.current_home.clone(),
         });
+    }
+
+    /// Record the solver variable the enclosing context EXPECTS at `span` —
+    /// the type-directed-completion sidecar (see [`Self::expected`]).
+    ///
+    /// Pure bookkeeping: it inserts into a map the solver never reads and mints
+    /// no variable, so it cannot perturb inference. First writer wins — the
+    /// tightest (innermost-recorded) expectation for a span is kept; an outer
+    /// context that revisits the same span (rare, only under span-sharing
+    /// desugarings) does not overwrite it.
+    fn record_expected(&mut self, span: Span, var: VarId) {
+        self.expected
+            .entry((self.current_home.clone(), span))
+            .or_insert(var);
     }
 
     // ── Ty ⇄ solver bridges ────────────────────────────────────────────────
@@ -2177,6 +2219,10 @@ impl<'a> Builder<'a> {
                 let ret_ty = self.normalize_annotation_ty(from_canon(cursor), name.span)?;
                 let ret_var = self.instantiate_rigid(&ret_ty, &mut rigid_vars)?;
                 let body_var = self.constrain_expr(&local, body)?;
+                // A typed binding's body expects its annotation return type —
+                // the strongest completion signal: `f : Color; f = ⟨|⟩` offers
+                // `Color`'s constructors first.
+                self.record_expected(body.span, ret_var);
                 self.eq(body.span, body_var, ret_var);
                 // Record the skolem each annotation variable instantiated to, so
                 // its body-imposed super-type obligations can be read back for
@@ -3029,6 +3075,12 @@ impl<'a> Builder<'a> {
                 for a in args {
                     let arg_var = self.constrain_expr(local, a)?;
                     let param_var = self.flex()?;
+                    // The callee's declared slot is exactly the type this
+                    // argument position expects: after the callee-vs-shape
+                    // constraint solves, `param_var` adopts the declared param
+                    // type, so completion at this span offers only candidates
+                    // whose type unifies with the declared parameter.
+                    self.record_expected(a.span, param_var);
                     arg_pairs.push((a.span, arg_var, param_var));
                 }
                 let ret = self.flex()?;
@@ -3074,11 +3126,16 @@ impl<'a> Builder<'a> {
                 for (cond, body) in branches {
                     let cond_var = self.constrain_expr(local, cond)?;
                     let want_bool = self.bool_var()?;
+                    // A condition expects `Bool`; a branch body expects the
+                    // shared `if` result type.
+                    self.record_expected(cond.span, want_bool);
                     self.eq(cond.span, cond_var, want_bool);
                     let body_var = self.constrain_expr(local, body)?;
+                    self.record_expected(body.span, result);
                     self.eq(body.span, body_var, result);
                 }
                 let else_var = self.constrain_expr(local, else_expr)?;
+                self.record_expected(else_expr.span, result);
                 self.eq(else_expr.span, else_var, result);
                 result
             }
@@ -3225,6 +3282,8 @@ impl<'a> Builder<'a> {
             let mut br_local = local.clone();
             self.constrain_pattern(&mut br_local, &br.pat, scrut_var)?;
             let body_var = self.constrain_expr(&br_local, &br.body)?;
+            // Every arm body expects the shared `case` result type.
+            self.record_expected(br.body.span, result);
             self.eq(br.body.span, body_var, result);
         }
         Ok(result)
@@ -6878,6 +6937,7 @@ impl<'a> Builder<'a> {
             interner,
             builtins,
             regions: BTreeMap::new(),
+            expected: BTreeMap::new(),
             current_home: Vec::new(),
             constraints: Vec::new(),
             top_level: BTreeMap::new(),

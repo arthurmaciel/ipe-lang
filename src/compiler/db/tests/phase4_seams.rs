@@ -12,7 +12,7 @@
 
 use std::sync::{Arc, Mutex, PoisonError};
 
-use ipe_db::{IpeDatabase, ModuleOrigin, SourceFile, SourceRoot};
+use ipe_db::{Db as _, IpeDatabase, ModuleOrigin, SourceFile, SourceRoot};
 
 /// A shared, poison-safe log of executed-query debug keys.
 #[derive(Clone, Default)]
@@ -234,4 +234,137 @@ fn lower_program_short_circuits_on_typecheck_error() {
         typecheck_err, lower_err,
         "lower_program's short-circuit must surface typecheck's own diagnostic verbatim"
     );
+}
+
+// ---------------------------------------------------------------------------
+// typecheck_module — the per-module projection SEAM (the incremental query
+// contract, over the coarse whole-program solve today). These prove the
+// projection is EXACTLY the whole-program result filtered to one module's
+// home — a refactor with no behavior change — so the future per-module solver
+// swaps in as the query BODY with zero consumer changes.
+// ---------------------------------------------------------------------------
+
+/// Two modules with same-named-but-distinct bindings: `A.shared : Int` and
+/// `B.shared : String`. The per-module projection must give each module ONLY
+/// its own home's entries — never the other's — and the two slices must union
+/// to exactly the whole-program env, proving the projection loses nothing and
+/// invents nothing.
+#[test]
+fn typecheck_module_projection_matches_whole_program() {
+    const DEP: &str = "module A exposing (shared, av)\n\n\
+        shared : Int\n\
+        shared = 1\n\n\
+        av : Int\n\
+        av = shared\n";
+    const ENTRY: &str = "module B exposing (shared, bv)\n\n\
+        import A exposing (av)\n\n\
+        shared : String\n\
+        shared = \"s\"\n\n\
+        bv : Int\n\
+        bv = av\n";
+    let (db, _log) = logged_db();
+    let a = file(&db, &["A"], DEP);
+    let b = file(&db, &["B"], ENTRY);
+    let root = root_of(&db, &[(&["A"], a), (&["B"], b)]);
+
+    let whole = ipe_db::typecheck(&db, root, b).expect("program type-checks");
+    let a_types = ipe_db::typecheck_module(&db, root, b, a).expect("A projects");
+    let b_types = ipe_db::typecheck_module(&db, root, b, b).expect("B projects");
+
+    // Resolve the two home paths so we can filter the whole-program env.
+    let (a_home, b_home) = {
+        let mut i = db.interner().lock();
+        (
+            vec![i.intern("A").unwrap()],
+            vec![i.intern("B").unwrap()],
+        )
+    };
+
+    // Each projection equals the whole-program env filtered to that home.
+    let whole_a: std::collections::BTreeMap<_, _> = whole
+        .env
+        .iter()
+        .filter(|((h, _), _)| *h == a_home)
+        .map(|((_, n), ty)| (*n, ty.clone()))
+        .collect();
+    let whole_b: std::collections::BTreeMap<_, _> = whole
+        .env
+        .iter()
+        .filter(|((h, _), _)| *h == b_home)
+        .map(|((_, n), ty)| (*n, ty.clone()))
+        .collect();
+    assert_eq!(
+        a_types.env, whole_a,
+        "A's projected env must equal the whole-program env filtered to home A"
+    );
+    assert_eq!(
+        b_types.env, whole_b,
+        "B's projected env must equal the whole-program env filtered to home B"
+    );
+
+    // Disjoint + total: the two homes' env slices union to the whole env
+    // (every binding in this two-module program belongs to A or B).
+    assert_eq!(
+        a_types.env.len() + b_types.env.len(),
+        whole.env.len(),
+        "the per-module env slices partition the whole-program env"
+    );
+
+    // The same-named `shared` resolves DIFFERENTLY per module — the projection
+    // must not conflate them (the exact cross-module-collision hazard the
+    // home-keyed `SolvedTypes` maps exist to prevent).
+    let shared_sym = {
+        let mut i = db.interner().lock();
+        i.intern("shared").unwrap()
+    };
+    let a_shared = a_types.env.get(&shared_sym).expect("A.shared typed");
+    let b_shared = b_types.env.get(&shared_sym).expect("B.shared typed");
+    assert_ne!(
+        a_shared, b_shared,
+        "A.shared : Int and B.shared : String must project to distinct types"
+    );
+
+    // regions and expected slices are likewise home-scoped and union to the
+    // whole (no region belongs to neither module).
+    assert_eq!(
+        a_types.regions.len() + b_types.regions.len(),
+        whole.regions.len(),
+        "per-module region slices partition the whole-program regions"
+    );
+    assert_eq!(
+        a_types.expected.len() + b_types.expected.len(),
+        whole.expected.len(),
+        "per-module expected slices partition the whole-program expected sidecar"
+    );
+}
+
+/// The projection is memoized and its value backdates: a repeat demand
+/// executes nothing, and (today's coarse floor) a whole-program re-solve still
+/// re-projects — but a module whose slice is byte-equal cuts its own
+/// dependents. This is the incremental contract the future per-module solver
+/// inherits unchanged.
+#[test]
+fn typecheck_module_is_memoized() {
+    let (mut db, log) = logged_db();
+    let a = file(&db, &["A"], DEP_A);
+    let b = file(&db, &["B"], IMPORTER_B);
+    let root = root_of(&db, &[(&["A"], a), (&["B"], b)]);
+
+    assert!(ipe_db::typecheck_module(&db, root, b, b).is_ok());
+    assert_eq!(log.executions_of("typecheck_module("), 1);
+
+    // Repeat demand: memo hit.
+    log.clear();
+    assert!(ipe_db::typecheck_module(&db, root, b, b).is_ok());
+    assert_eq!(
+        log.executions_of("typecheck_module("),
+        0,
+        "repeat per-module demand is memoized"
+    );
+
+    // Byte-equal re-save: boundary no-op, nothing re-projects.
+    log.clear();
+    assert!(!ipe_db::set_text_if_changed(&mut db, a, DEP_A));
+    assert!(ipe_db::typecheck_module(&db, root, b, b).is_ok());
+    assert_eq!(log.executions_of("typecheck_module("), 0);
 }

@@ -20,8 +20,9 @@ Where Ipê came from, and where it's going.
 - **WASM floor** — the pure kernel set and the whole `Ipe.Ui` render surface
   compile to `wasm32-unknown-unknown`; a target-keyed security gate and a
   browser DOM sink prove a real `Ipe.Ui` app running in-browser.
-- **LSP** — `ipe lsp` serves live diagnostics, hover, and document symbols
-  over the incremental salsa graph.
+- **LSP** — `ipe lsp` serves live diagnostics, hover, document symbols, and
+  type-directed completion (candidates filtered and ranked by the type the
+  cursor context expects) over the incremental salsa graph.
 - **FFI (sync ladder)** — `ipe add <crate>` auto-generates typed bindings to a
   real Rust crate, shim-free, through a sandboxed inspector.
 - **A whole-codebase soundness audit** — every finding root-caused and
