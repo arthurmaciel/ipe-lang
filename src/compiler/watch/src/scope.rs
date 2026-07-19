@@ -1,6 +1,6 @@
 //! The confined watcher's typed scope (INV-4, H18).
 //!
-//! `ipe watch` must observe only a strict, typed allowlist: `sky.toml`, the
+//! `ipe watch` must observe only a strict, typed allowlist: `ipe.toml`, the
 //! entry point's directory (recursive source-extension walk), and `tests/`
 //! if present — never `target/`, `.git/`, `node_modules/`, or any generated
 //! output directory, whose churn would self-trigger a rebuild loop.
@@ -187,11 +187,11 @@ impl WatchScope {
 
         let mut roots_to_watch = Vec::new();
 
-        // sky.toml, if present, is a FILE watch target (its own directory is
+        // ipe.toml, if present, is a FILE watch target (its own directory is
         // the project root, already covered by entry_dir/tests below in the
-        // common case, but sky.toml may live in an ancestor of a nested
+        // common case, but ipe.toml may live in an ancestor of a nested
         // entry — watch it explicitly regardless).
-        let manifest = canon_root.join("sky.toml");
+        let manifest = canon_root.join("ipe.toml");
         if manifest.is_file()
             && let Some(w) = WatchedPath::confine(&canon_root, &manifest)
         {
@@ -252,7 +252,7 @@ impl WatchScope {
 
     /// Whether a raw filesystem-event path is IN scope: confinable to the
     /// root, not under an excluded directory, and (for files) either a
-    /// `.ipe` source, `sky.toml`, or an `.ipei`/`kernel.json` FFI interface
+    /// `.ipe` source, `ipe.toml`, or an `.ipei`/`kernel.json` FFI interface
     /// file (H13 — the cross-terminal `ipe add` observation seam).
     ///
     /// This is the drop-at-the-source filter (design doc: "drop excluded-dir
@@ -286,7 +286,7 @@ impl WatchScope {
 
 /// Whether a (canonicalised, in-root, non-excluded) leaf path is one of the
 /// file kinds a confined watch actually reacts to: `.ipe` sources,
-/// `sky.toml`, or a file under the root-level `tests/` watch root (any
+/// `ipe.toml`, or a file under the root-level `tests/` watch root (any
 /// extension — a fixture asset under `tests/` still belongs to the
 /// allowlist even without a `.ipe` extension, mirroring the reference
 /// project's "tests/ if present" scope).
@@ -298,7 +298,7 @@ impl WatchScope {
 /// `examples/foo/tests/output.log`) must not self-trigger the watch loop by
 /// virtue of a path SEGMENT matching that word.
 fn is_watchable_leaf(tests_root: Option<&Path>, path: &Path) -> bool {
-    if path.file_name().and_then(|n| n.to_str()) == Some("sky.toml") {
+    if path.file_name().and_then(|n| n.to_str()) == Some("ipe.toml") {
         return true;
     }
     if is_source_file(path) {
@@ -452,11 +452,11 @@ mod tests {
             "module Main exposing (main)\nmain = 1\n",
         )
         .unwrap();
-        fs::write(root.join("sky.toml"), "name = \"x\"\n").unwrap();
+        fs::write(root.join("ipe.toml"), "name = \"x\"\n").unwrap();
         fs::write(src.join("notes.txt"), "hi").unwrap();
 
         let scope = WatchScope::build(&root, &src).unwrap();
-        assert!(scope.is_relevant(&root.join("sky.toml")));
+        assert!(scope.is_relevant(&root.join("ipe.toml")));
         assert!(!scope.is_relevant(&src.join("notes.txt")));
     }
 
@@ -478,7 +478,7 @@ mod tests {
     /// CO-INCR-009: a nested `tests` directory OUTSIDE the root-level
     /// `tests/` watch root (e.g. a supervised app's own
     /// `examples/foo/tests/`) must not self-trigger the watch loop for its
-    /// non-`.ipe` artifacts — only the extension/`sky.toml` rules, and the
+    /// non-`.ipe` artifacts — only the extension/`ipe.toml` rules, and the
     /// ACTUAL root-level `tests/`, are watchable.
     #[test]
     fn is_relevant_ignores_a_non_root_tests_directory() {
@@ -544,7 +544,7 @@ mod tests {
             "module Main exposing (main)\nmain = 1\n",
         )
         .unwrap();
-        fs::write(root.join("sky.toml"), "name = \"x\"\n").unwrap();
+        fs::write(root.join("ipe.toml"), "name = \"x\"\n").unwrap();
         let tests_dir = root.join("tests");
         fs::create_dir_all(&tests_dir).unwrap();
         for i in 0..10 {
@@ -555,7 +555,7 @@ mod tests {
         assert_eq!(
             scope.file_count(),
             1,
-            "only Main.ipe counts — sky.toml and the 10 tests/ artifacts must not"
+            "only Main.ipe counts — ipe.toml and the 10 tests/ artifacts must not"
         );
     }
 }

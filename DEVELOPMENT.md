@@ -51,7 +51,7 @@ incremental DB), `sky_intern`, `sky_watch`; `ipe` = driver + CLI. Runtime
 impls in `runtime/src/sky_runtime/`.
 
 **ipe CLI:** subcommands `build` / `run` / `watch` / `explain` / `fix`.
-`skyc build <src/Main.ipe | sky.toml> --out sky-out/rust`. Binary =
+`skyc build <src/Main.ipe | ipe.toml> --out sky-out/rust`. Binary =
 `target/release/ipe` (`cargo build --release -p ipe`);
 `source scripts/lib/env.sh` sets `SKYC_BIN` + `IPE_RUNTIME_DIR`.
 
@@ -65,7 +65,7 @@ of `KNOWN_UNBACKED` bucket), `sky_lower` (arity table +
 `crates/ipe/tests/golden_stdlib_module_seal.rs`.
 
 **Examples + sweep:** example = `examples/NN-name/src/Main.ipe` (+ other
-`.ipe` modules, `sky.toml`). `build_set` = **disk-derived**
+`.ipe` modules, `ipe.toml`). `build_set` = **disk-derived**
 (`scripts/lib/examples.sh`) — every `examples/NN-*/src/Main.ipe` whose imports
 resolve auto-included; adding dir IS registration.
 `scripts/equivalence-checks/examples-sweep.sh`, per example: `skyc build … --out sky-out/rust` →

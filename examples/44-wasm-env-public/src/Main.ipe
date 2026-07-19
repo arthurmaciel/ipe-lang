@@ -2,9 +2,9 @@ module Main exposing (main)
 
 -- `Ipe.Env.public` — build-time-embedded public config, exercised end-to-end
 -- in a real browser: `API_BASE_URL` is allowlisted in this project's
--- `sky.toml` `[wasm] publicEnv` and embedded at `cargo build` time via
+-- `ipe.toml` `[wasm] publicEnv` and embedded at `cargo build` time via
 -- `option_env!`; `IPE_AUTH_TOKEN_SECRET` is named directly here (NOT
--- allowlisted — `sky.toml` would refuse it at parse time if it were) to
+-- allowlisted — `ipe.toml` would refuse it at parse time if it were) to
 -- prove the kernel returns `Nothing` for any key outside the allowlist,
 -- never a live read of the raw process/host environment.
 

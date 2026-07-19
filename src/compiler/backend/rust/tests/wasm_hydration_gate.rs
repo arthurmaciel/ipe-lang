@@ -2,7 +2,7 @@
 //! `docs/architecture/wasm-target.md` §M7 field-type gate).
 //!
 //! When `wasm_hydrate_mode = true` (set by `[wasm] mode = "hydrate"` in
-//! `sky.toml`), the backend inspects the `HydrationState` type declared in
+//! `ipe.toml`), the backend inspects the `HydrationState` type declared in
 //! module `Main` and rejects any field whose `IrType` is non-serialisable
 //! (server-surface handles, async primitives, function types, etc.).
 //!

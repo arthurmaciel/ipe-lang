@@ -115,7 +115,7 @@ scenario_for() {
 # a fixed `sky-app` bin). Because ~/.cargo/config.toml pins a shared target-dir,
 # each example's `cargo build` writes $CARGO_TARGET_DIR/{debug,release}/sky-app;
 # the sweep builds+runs one example at a time (rm -rf between), so overwrite is
-# fine. Probe the shared target first, then the per-example target. The sky.toml
+# fine. Probe the shared target first, then the per-example target. The ipe.toml
 # `name` is tried too (harmless first probe; ipe names the bin sky-app regardless).
 resolve_bin() {
   local d="$1" name b
@@ -131,7 +131,7 @@ resolve_bin() {
     done
     return 1
   fi
-  name="$(rg -No '^name\s*=\s*"([^"]+)"' -r '$1' "$d/sky.toml" 2>/dev/null | head -1)"
+  name="$(rg -No '^name\s*=\s*"([^"]+)"' -r '$1' "$d/ipe.toml" 2>/dev/null | head -1)"
   for b in \
     "$CARGO_TARGET_DIR/debug/sky-app" \
     "$CARGO_TARGET_DIR/release/sky-app" \

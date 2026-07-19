@@ -153,7 +153,7 @@ fn standard_libs_sky_t0015_money_blocker_gone() {
     let manifest = root
         .join("examples")
         .join("00-standard-libs")
-        .join("sky.toml");
+        .join("ipe.toml");
     if !manifest.exists() {
         return;
     }

@@ -146,7 +146,7 @@ current tree; I re-anchored each claim to the live code.
   ancestor (e.g. a checkout in `/tmp/<x>` on a multi-user host, with a
   pre-planted `/tmp/.ipe/cache/ffi/rust`).
 - reasoning: `find_cache_root` (ffi.rs:26-40) walks UP to the filesystem root and
-  returns the FIRST `.ipe/cache/ffi/rust` hit — no stop at `sky.toml`, no
+  returns the FIRST `.ipe/cache/ffi/rust` hit — no stop at `ipe.toml`, no
   ownership check. `load_catalog_for` then loads that catalog and
   `assemble_emit` splices its `bindings_source` verbatim into the emitted
   `src/ffi.rs`, which `ipe run` compiles + executes. Directory position alone

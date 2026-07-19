@@ -3,7 +3,7 @@
 //! `docs/architecture/static-compilation.md`).
 //!
 //! The request arrives through three precedence layers — CLI flags, env
-//! (`IPE_STATIC` / `IPE_TARGET` / `IPE_ALLOC`), `sky.toml` `[rust]` — merged
+//! (`IPE_STATIC` / `IPE_TARGET` / `IPE_ALLOC`), `ipe.toml` `[rust]` — merged
 //! per-field (CLI > env > toml) and resolved ONCE into
 //! `Result<Option<StaticPlan>, Refusal>` before any compilation starts.
 //! Downstream code sees either `None` (a normal dynamic build) or a plan
@@ -55,7 +55,7 @@ impl AllocatorChoice {
     }
 }
 
-/// One precedence layer of the static request (CLI, env, or `sky.toml`).
+/// One precedence layer of the static request (CLI, env, or `ipe.toml`).
 /// Every field is `Option` so a layer overrides only what it actually sets.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StaticRequestLayer {
@@ -107,7 +107,7 @@ pub fn env_layer() -> Result<StaticRequestLayer, Refusal> {
     })
 }
 
-/// Parse a boolean request value (`sky.toml` key or env var).
+/// Parse a boolean request value (`ipe.toml` key or env var).
 ///
 /// # Errors
 /// [`Refusal::InvalidBool`] naming the source and the malformed value.
@@ -151,7 +151,7 @@ pub enum Refusal {
     /// The dependency graph carries C compile units (`zstd`, `ring`) and no
     /// musl-capable C compiler is reachable.
     MuslCCompilerMissing { triple: &'static str },
-    /// A boolean request value (env var or `sky.toml` key) is malformed.
+    /// A boolean request value (env var or `ipe.toml` key) is malformed.
     InvalidBool { source: &'static str, got: String },
 }
 
@@ -179,7 +179,7 @@ impl fmt::Display for Refusal {
                 f,
                 "refusing system malloc on a musl-static target: musl's malloc is ~7x slower on \
                  allocation-heavy workloads. Pass --allow-slow-allocator (or set \
-                 [rust] allowSlowAllocator = true in sky.toml) to accept, or drop \
+                 [rust] allowSlowAllocator = true in ipe.toml) to accept, or drop \
                  --allocator system to get the dlmalloc default"
             ),
             Self::TalcRequiresArenaDesign => write!(

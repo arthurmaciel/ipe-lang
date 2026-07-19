@@ -42,7 +42,7 @@ pub enum CliError {
     /// Command-line misuse; carries a fixed usage hint.
     Usage(&'static str),
     /// Command-line / manifest misuse whose message must echo user-supplied
-    /// input (e.g. an unrecognised `sky.toml` value) — kept distinct from
+    /// input (e.g. an unrecognised `ipe.toml` value) — kept distinct from
     /// [`Self::Usage`] so no call site needs to leak a `String` into a
     /// `&'static str` just to report what the user actually wrote.
     UsageOwned(String),
@@ -133,14 +133,14 @@ pub struct BuildOptions {
     /// `ipe build --target wasm`) — threaded into kernel resolution (the
     /// Layer-1 wasm gate), the emitted manifest, and both cache keys.
     pub target: ipe_ir::Target,
-    /// The `[wasm] publicEnv` allowlist (`sky.toml`, already validated
+    /// The `[wasm] publicEnv` allowlist (`ipe.toml`, already validated
     /// against the secret-name denylist at parse time). Empty when the
-    /// project has no `[wasm]` section (or no `sky.toml` at all — the
+    /// project has no `[wasm]` section (or no `ipe.toml` at all — the
     /// sibling-discovery single-file path). Threaded into
     /// [`ipe_backend_rust::RustBackend::with_wasm_public_env`] /
     /// [`ipe_db::BuildConfig::wasm_public_env`].
     pub wasm_public_env: Vec<String>,
-    /// `true` when `[wasm] mode = "hydrate"` in the project's `sky.toml`.
+    /// `true` when `[wasm] mode = "hydrate"` in the project's `ipe.toml`.
     /// Causes the backend to emit a `#[wasm_bindgen] pub fn hydrate(model_json: &str)`
     /// export in addition to the `#[wasm_bindgen(start)] pub fn ipe_start()` entry.
     /// The emitted `hydrate` function parses the island JSON as the user's declared
@@ -205,7 +205,7 @@ pub fn build_with_options(
     }];
 
     // No manifest on the single-file path — default to sqlite, matching the
-    // documented `sky.toml` default for a project that has no `[database]`
+    // documented `ipe.toml` default for a project that has no `[database]`
     // section at all.
     compile_modules(
         sources,
@@ -222,7 +222,7 @@ pub fn build_with_options(
 /// Build a `.ipe` entry file and all sibling modules discovered in the same
 /// source directory.
 ///
-/// When no `sky.toml` is present, the entry file's parent directory is used
+/// When no `ipe.toml` is present, the entry file's parent directory is used
 /// as the source root. Every `*.ipe` file found there is loaded and compiled
 /// together — fixing IPE-N0020 for multi-file projects built via the
 /// file-path shorthand (`ipe build src/Main.ipe`).
@@ -314,7 +314,7 @@ pub fn build_with_sibling_discovery_with_options(
         }
     }
 
-    // No sky.toml on this path either (sibling discovery is the "no manifest
+    // No ipe.toml on this path either (sibling discovery is the "no manifest
     // found" fallback) — default to sqlite, same rationale as `build`.
     compile_modules(
         sources,
@@ -329,17 +329,17 @@ pub fn build_with_sibling_discovery_with_options(
 }
 
 /// Walk up the directory tree from a `.ipe` file's parent, looking for a
-/// `sky.toml` manifest. Returns the manifest path if found, or `None` when
+/// `ipe.toml` manifest. Returns the manifest path if found, or `None` when
 /// the walk reaches the filesystem root.
 ///
 /// Faithful port of the Haskell `sky build src/Main.ipe` behavior: when
 /// given a file entry the Haskell driver locates the project root (where
-/// `sky.toml` lives) before calling `buildProject`, so the full module graph
+/// `ipe.toml` lives) before calling `buildProject`, so the full module graph
 /// is compiled instead of just the single entry file.
 fn find_manifest_for_sky_file(ipe_file: &Path) -> Option<PathBuf> {
     let mut dir = ipe_file.parent()?;
     loop {
-        let candidate = dir.join("sky.toml");
+        let candidate = dir.join("ipe.toml");
         if candidate.is_file() {
             return Some(candidate);
         }
@@ -548,7 +548,7 @@ fn compile_modules_observed(
     let db = ipe_db::IpeDatabase::new();
     let source_root = create_source_root(&db, &sources, &injected, &ffi_injected);
     // The config input (see `ipe_db::BuildConfig`'s doc for why this
-    // is narrowed to `db_driver` rather than the full `sky.toml` shape). A
+    // is narrowed to `db_driver` rather than the full `ipe.toml` shape). A
     // fresh `BuildConfig` per one-shot invocation is fine here — unlike the
     // clean-vs-incremental parity gate's warm sequence, this driver never
     // re-demands `emit_project` against a second config instance.
@@ -1221,11 +1221,11 @@ fn prune_orphaned_files(
     Ok(())
 }
 
-/// Build a multi-module Sky project rooted at `manifest_path` (`sky.toml`) into
+/// Build a multi-module Sky project rooted at `manifest_path` (`ipe.toml`) into
 /// a Rust Cargo project under `out_dir`, vendoring the runtime from `runtime_dir`.
 ///
 /// The build pipeline:
-/// 1. Parse `sky.toml` to locate the source root.
+/// 1. Parse `ipe.toml` to locate the source root.
 /// 2. Discover every `*.ipe` file under `src/`.
 /// 3. Scan each file for `import` declarations (token-level lexer scan) to
 ///    build the import graph.
@@ -1351,13 +1351,13 @@ pub fn resolve_runtime() -> Result<PathBuf, CliError> {
 
 /// The top-level usage hint, listing every subcommand and flag.
 const USAGE: &str = "usage:\n  \
-     ipe build <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [--emit-ir] [--fix]\n  \
+     ipe build <entry.ipe|project-dir|ipe.toml> [--out <dir>] [--runtime <dir>] [--emit-ir] [--fix]\n  \
      \x20         [--static] [--target <triple|wasm>] [--allocator <auto|system|dlmalloc|talc|mimalloc>]\n  \
      \x20         [--allow-slow-allocator]\n  \
-     ipe run   <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>]\n  \
+     ipe run   <entry.ipe|project-dir|ipe.toml> [--out <dir>] [--runtime <dir>]\n  \
      \x20         [--static] [--target <triple>] [--allocator <auto|system|dlmalloc|talc|mimalloc>]\n  \
      \x20         [--allow-slow-allocator] [-- <args>...]\n  \
-     ipe watch <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [--port <n>]\n  \
+     ipe watch <entry.ipe|project-dir|ipe.toml> [--out <dir>] [--runtime <dir>] [--port <n>]\n  \
      ipe add <crate>[@<version>] [--features a,b] [--yes] [--allow-build-scripts]\n  \
      ipe remove <crate>\n  \
      ipe install [--yes] [--allow-build-scripts]\n  \
@@ -1461,18 +1461,18 @@ impl StaticCliFlags {
     }
 }
 
-/// Route an entry argument to its `sky.toml`, when one governs it:
+/// Route an entry argument to its `ipe.toml`, when one governs it:
 /// a directory must contain one, a `.toml` argument IS one, and a `.ipe`
 /// entry walks up the tree looking for one (falling back to sibling
 /// discovery when none exists).
 fn discover_manifest(entry_path: &Path) -> Result<Option<PathBuf>, CliError> {
     if entry_path.is_dir() {
-        let candidate = entry_path.join("sky.toml");
+        let candidate = entry_path.join("ipe.toml");
         if candidate.is_file() {
             Ok(Some(candidate))
         } else {
             Err(CliError::Usage(
-                "directory supplied but no sky.toml found inside it",
+                "directory supplied but no ipe.toml found inside it",
             ))
         }
     } else if entry_path.extension().and_then(|e| e.to_str()) == Some("toml") {
@@ -1483,7 +1483,7 @@ fn discover_manifest(entry_path: &Path) -> Result<Option<PathBuf>, CliError> {
 }
 
 /// Resolve the static request with full precedence — CLI flags > env
-/// (`IPE_STATIC` / `IPE_TARGET` / `IPE_ALLOC`) > `sky.toml` `[rust]` > AUTO —
+/// (`IPE_STATIC` / `IPE_TARGET` / `IPE_ALLOC`) > `ipe.toml` `[rust]` > AUTO —
 /// into a typed plan (or a typed refusal — no artifact), run the toolchain
 /// preflight, and surface the mimalloc opt-in notice. Shared by `build` and
 /// `run`; resolved ONCE before any compilation starts.
@@ -1568,10 +1568,10 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
     };
 
     // Route the build:
-    //   1. Directory → expect sky.toml inside it.
+    //   1. Directory → expect ipe.toml inside it.
     //   2. .toml file → build_project directly.
-    //   3. .ipe file → walk up looking for sky.toml (project-mode); fall back
-    //      to sibling discovery when no sky.toml exists (fixes IPE-N0020 for
+    //   3. .ipe file → walk up looking for ipe.toml (project-mode); fall back
+    //      to sibling discovery when no ipe.toml exists (fixes IPE-N0020 for
     //      multi-file projects built via the file-path shorthand). This mirrors
     //      the Haskell driver's `Graph.discoverModulesMulti srcRoot entryPath`
     //      call in `Sky.Build.Compile.hs`.
@@ -1589,7 +1589,7 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
         wasm_hydrate_mode: false,
     };
 
-    // No sky.toml found: compile entry + all sibling .ipe files in the same
+    // No ipe.toml found: compile entry + all sibling .ipe files in the same
     // directory. Byte-identical to `build` when the directory holds only the
     // entry file (regression-covered by the golden suite).
     manifest.map_or_else(
@@ -1715,7 +1715,7 @@ fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
     Ok(())
 }
 
-/// `ipe run <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [-- <args>...]`
+/// `ipe run <entry.ipe|project-dir|ipe.toml> [--out <dir>] [--runtime <dir>] [-- <args>...]`
 ///
 /// One-shot build + run: compiles the entry to `out_dir` (same routing as
 /// [`run_build`]), then invokes `cargo build` on the emitted project and
@@ -2596,7 +2596,7 @@ mod tests {
     // find_manifest_for_sky_file tests (IPE-N0020 fix)
     // -----------------------------------------------------------------------
 
-    /// Creates a temp directory with a nested `src/Main.ipe` and a `sky.toml`
+    /// Creates a temp directory with a nested `src/Main.ipe` and a `ipe.toml`
     /// at the project root, confirming the upward walk finds the manifest.
     #[test]
     fn find_manifest_walks_up_to_project_root() {
@@ -2604,8 +2604,8 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
         let src = tmp.join("src");
         fs::create_dir_all(&src).expect("create src/");
-        let toml = tmp.join("sky.toml");
-        fs::write(&toml, "name = \"test\"\n").expect("write sky.toml");
+        let toml = tmp.join("ipe.toml");
+        fs::write(&toml, "name = \"test\"\n").expect("write ipe.toml");
         let main_sky = src.join("Main.ipe");
         fs::write(&main_sky, "module Main exposing (main)\nmain = 0\n").expect("write Main.ipe");
 
@@ -2613,7 +2613,7 @@ mod tests {
         assert_eq!(
             found.as_deref(),
             Some(toml.as_path()),
-            "upward walk must find sky.toml at project root"
+            "upward walk must find ipe.toml at project root"
         );
         let _ = fs::remove_dir_all(&tmp);
     }
@@ -2751,7 +2751,7 @@ main =
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// When no sky.toml exists in any parent directory, returns None.
+    /// When no ipe.toml exists in any parent directory, returns None.
     #[test]
     fn find_manifest_returns_none_when_absent() {
         let tmp = std::env::temp_dir().join("skyc_no_manifest_test");
@@ -2759,7 +2759,7 @@ main =
         fs::create_dir_all(&tmp).expect("create dir");
         let sky = tmp.join("Standalone.ipe");
         fs::write(&sky, "module Standalone exposing (f)\nf = 0\n").expect("write sky");
-        // Deliberately no sky.toml anywhere under tmp.
+        // Deliberately no ipe.toml anywhere under tmp.
         // The walk terminates at the filesystem root without finding one.
         // We cannot guarantee the walk terminates before reaching /tmp or /
         // on all systems, so we only assert non-panicking behaviour and that

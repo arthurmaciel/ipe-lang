@@ -267,7 +267,7 @@ fn run_subcommand_refuses_like_build() {
     );
 }
 
-/// `sky.toml [rust]` parses into the typed request layer; malformed values
+/// `ipe.toml [rust]` parses into the typed request layer; malformed values
 /// are refused at manifest-parse time.
 #[test]
 fn sky_toml_rust_section_parses_and_rejects_typos() {
@@ -280,12 +280,12 @@ fn sky_toml_rust_section_parses_and_rejects_typos() {
     )
     .expect("write Main.ipe");
 
-    let manifest_path = scratch.join("sky.toml");
+    let manifest_path = scratch.join("ipe.toml");
     std::fs::write(
         &manifest_path,
         "name = \"p\"\n[rust]\nstatic = true\nallocator = \"dlmalloc\"\nallowSlowAllocator = false\n",
     )
-    .expect("write sky.toml");
+    .expect("write ipe.toml");
     let parsed = ipe::project::parse_manifest(&manifest_path).expect("parse");
     assert_eq!(
         parsed.static_request,
@@ -301,7 +301,7 @@ fn sky_toml_rust_section_parses_and_rejects_typos() {
         &manifest_path,
         "name = \"p\"\n[rust]\nallocator = \"jemallocc\"\n",
     )
-    .expect("write sky.toml");
+    .expect("write ipe.toml");
     let err = ipe::project::parse_manifest(&manifest_path).expect_err("typo must refuse");
     assert!(
         matches!(

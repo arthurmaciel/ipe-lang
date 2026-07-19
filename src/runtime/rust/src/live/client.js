@@ -708,7 +708,7 @@ function __skyPostEvent(body) {
   // Phase 1.2 — attach the per-session CSRF token. The server-side
   // middleware (runtime-go/rt/csrf_middleware.go) rejects POSTs
   // without a matching X-Sky-Csrf / __sky_csrf cookie pair. Empty
-  // token means CSRF is disabled at the runtime level (sky.toml
+  // token means CSRF is disabled at the runtime level (ipe.toml
   // [security] csrf = false) — header omitted, middleware skipped.
   var headers = {"Content-Type":"application/json"};
   if (__skyCsrfToken) headers["X-Sky-Csrf"] = __skyCsrfToken;
@@ -1497,7 +1497,7 @@ function __skyForceReopenSSE() {
   }
   __skyRetryAttempts++;
   // Session-loss probe: when the SSE is wedged (typically a server
-  // restart with the memory store, or a sky.toml [live] store change
+  // restart with the memory store, or a ipe.toml [live] store change
   // wiping the persistent session), no amount of reopen retries can
   // recover the lost session — the only path forward is a full page
   // reload, which fires handleInitial and creates a fresh session.

@@ -21,7 +21,7 @@ use crate::CliError;
 const CACHE_REL: &str = ".ipe/cache/ffi/rust";
 
 /// The project manifest that bounds the upward cache-discovery walk.
-const PROJECT_MANIFEST: &str = "sky.toml";
+const PROJECT_MANIFEST: &str = "ipe.toml";
 
 /// The invoking user's real uid, read from the owner of `/proc/self` (no FFI
 /// dependency). `u32::MAX` on failure — a sentinel no real cache dir matches,
@@ -52,9 +52,9 @@ fn is_trusted_cache_dir(_dir: &Path) -> bool {
 }
 
 /// Walk up from `start` looking for an FFI artifact cache, bounded at the
-/// nearest `sky.toml` project root.
+/// nearest `ipe.toml` project root.
 ///
-/// Never walks above the nearest `sky.toml`, so a planted ancestor cache
+/// Never walks above the nearest `ipe.toml`, so a planted ancestor cache
 /// outside the project cannot be discovered. A found cache not owned by the
 /// invoking uid (or group/other-writable) is REFUSED, not loaded, since its
 /// `_bindings.rs` compiles unsandboxed into the crate.
@@ -81,7 +81,7 @@ pub fn find_cache_root(start: &Path) -> Result<Option<PathBuf>, CliError> {
                 candidate.display()
             )));
         }
-        // Stop at the project root: do not walk above the nearest sky.toml.
+        // Stop at the project root: do not walk above the nearest ipe.toml.
         if d.join(PROJECT_MANIFEST).is_file() {
             return Ok(None);
         }
@@ -803,7 +803,7 @@ pub fn run_remove(rest: &[String]) -> Result<(), CliError> {
 }
 
 /// `ipe install [--yes] [--allow-build-scripts]` — (re)inspect every
-/// `[rust.dependencies]` crate in the project's `sky.toml`, honouring each
+/// `[rust.dependencies]` crate in the project's `ipe.toml`, honouring each
 /// entry's version pin and feature list.
 ///
 /// # Errors
@@ -822,10 +822,10 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
             }
         }
     }
-    let manifest = Path::new("sky.toml");
+    let manifest = Path::new("ipe.toml");
     if !manifest.is_file() {
         return Err(CliError::Usage(
-            "ipe install: no sky.toml in the current directory",
+            "ipe install: no ipe.toml in the current directory",
         ));
     }
     let text = std::fs::read_to_string(manifest)
@@ -1087,13 +1087,13 @@ mod tests {
         // Ancestor cache (a planted vector) ABOVE the project root.
         let ancestor_cache = tmp.join(CACHE_REL);
         std::fs::create_dir_all(&ancestor_cache).expect("mk ancestor cache");
-        // The project root, with its own sky.toml, one level down; no cache.
+        // The project root, with its own ipe.toml, one level down; no cache.
         let project = tmp.join("proj");
         std::fs::create_dir_all(&project).expect("mk project");
-        std::fs::write(project.join("sky.toml"), "name=\"x\"\n").expect("write manifest");
+        std::fs::write(project.join("ipe.toml"), "name=\"x\"\n").expect("write manifest");
         let src = project.join("src");
         std::fs::create_dir_all(&src).expect("mk src");
-        // Discovery from inside the project must NOT climb past sky.toml to the
+        // Discovery from inside the project must NOT climb past ipe.toml to the
         // planted ancestor cache — it returns None.
         let found = find_cache_root(&src).expect("no error");
         assert_eq!(found, None, "must not discover the ancestor cache");
@@ -1106,7 +1106,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         let cache = tmp.join(CACHE_REL);
         std::fs::create_dir_all(&cache).expect("mk cache");
-        std::fs::write(tmp.join("sky.toml"), "name=\"x\"\n").expect("manifest");
+        std::fs::write(tmp.join("ipe.toml"), "name=\"x\"\n").expect("manifest");
         // The invoker owns a freshly-created dir, so it is trusted + found.
         let found = find_cache_root(&tmp).expect("no error");
         assert_eq!(found.as_deref(), Some(cache.as_path()));
@@ -1121,7 +1121,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         let cache = tmp.join(CACHE_REL);
         std::fs::create_dir_all(&cache).expect("mk cache");
-        std::fs::write(tmp.join("sky.toml"), "name=\"x\"\n").expect("manifest");
+        std::fs::write(tmp.join("ipe.toml"), "name=\"x\"\n").expect("manifest");
         // Make the cache world-writable — the delivery vector for a planted
         // _bindings.rs — and confirm discovery refuses it.
         std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o777)).expect("chmod");
