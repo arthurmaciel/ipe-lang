@@ -44,6 +44,12 @@ Pointed the job at the in-repo runtime (`src/runtime/rust/src`). Left it
 the pre-existing oracle-staleness backlog (filed #A) — flip to gating once that
 backlog is regenerated.
 
+### 5. CI — `fmt` red: unformatted FFI decode-boundary code
+The `fmt` gate (`cargo fmt --all -- --check`) failed on `src/compiler/ffi/src/
+driver.rs` and `pkginfo.rs`: a `BTreeMap::insert` call and two `assert_eq!`
+blocks exceeded the line width without being wrapped. `rustfmt`-formatted both
+files (whitespace only); gate green.
+
 ## Filed (tracked blockers — NOT fixed here)
 
 ### A. ~101 of 450 goldens are oracle-stale
