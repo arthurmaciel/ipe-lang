@@ -74,19 +74,32 @@ version, verifies the content hash, and runs in a sandbox.
 
 ### Universal tier — every package, including pure Ipê
 
-Pure-Ipê packages compile to Rust like everything else, so **every** package runs
-the SEAL stage: `ipe build` → `cargo build` the emitted crate → run → the package's
-tests. This is the only way to observe a SEAL break, and it applies to pure-Ipê
-packages first-class. Plus: capability consistency (below) and the enforced-semver
-check.
+Every package's emitted Rust is held to the same quality bar the compiler holds
+itself to — because on a *well-typed* program, missing that bar is the **emitter's**
+fault, not the user's. Universal stages, all on the emitted crate:
+
+- `ipe build` → `cargo build` → run → the package's tests (the SEAL).
+- `cargo clippy` with the workspace's strict lints — no `unwrap`/`expect`/`panic`/
+  raw indexing, no `dyn Any`.
+- `cargo fmt --check` — the emitted Rust is rustfmt-clean.
+- capability consistency (below) and enforced-semver.
+
+Each stage catches a *distinct* class of compiler bug on real-world Ipê that the
+first-party goldens do not exercise: a `cargo build` failure is a SEAL break; an
+emitted `unwrap`/`panic`/`dyn Any` or a lint-failing construct is an emitter
+soundness/quality regression; unformatted output is an emitter formatting bug (the
+class the native formatter closes by construction). None can be a user error — the
+program is well-typed.
 
 ### Native tier — packages that cross `Rust.`
 
-A package whose source contains any `Rust.` crossing additionally runs: clippy,
-miri, cargo-audit, cargo-deny, the declared-native-capability sandbox check, a
-visible "contains native code" label on the index entry, and a longer review path
-(manual sign-off / verified publisher). `rg '\bRust\.'` enumerates every native
-crossing — the audit primitive from D1 doubles as the security primitive.
+A package whose source contains any `Rust.` crossing additionally runs: miri (UB in
+the unsafe/FFI surface — no signal on safe pure-Ipê output, so native-only),
+cargo-audit + cargo-deny (the crate dependency graph), the declared-native-capability
+sandbox check, a visible "contains native code" label on the index entry, and a
+longer review path (manual sign-off / verified publisher). `rg '\bRust\.'`
+enumerates every native crossing — the audit primitive from D1 doubles as the
+security primitive.
 
 ### Failure classification + tickets
 
@@ -95,15 +108,19 @@ A gate failure is classified and reported:
 - **User-code error** (a type error, a missing test, a wrong semver bump): the PR
   fails with the compiler's own diagnostic and its explain page. The author fixes
   and re-pushes.
-- **Ipê compiler bug**: the gate auto-opens a ticket. A **SEAL break** — a
-  *well-typed* Ipê package whose `ipe build` exits 0 but whose emitted Rust fails
-  `cargo build` — is not a user error by definition; it is the compiler emitting
-  un-buildable Rust for a valid program. Such a ticket is filed at **CRITICAL**
-  priority.
+- **Ipê compiler bug**: the gate auto-opens a ticket, priced by class. A **SEAL
+  break** — a *well-typed* package whose `ipe build` exits 0 but whose emitted Rust
+  fails `cargo build` — is filed **CRITICAL** (it violates the core invariant). An
+  emitter-quality failure on a well-typed program — a strict-lint hit (`unwrap`/
+  `panic`/`dyn Any`) or unformatted output — is filed **High** (an emitter
+  regression, not un-buildable). Both are the compiler's fault, not the author's.
 
-An emergent property: the index becomes a **continuous SEAL-regression corpus**.
-Every published real-world program is a free stress test of the core invariant,
-and any break is detected and escalated automatically by the ecosystem itself.
+An emergent property: the index becomes a **continuous regression corpus for the
+whole class of Ipê compiler bugs the project hardens against** — SEAL breaks,
+emitted `unwrap`/`panic`/`dyn Any`, unformatted output, and future unknowns — not
+just the SEAL. Every published real-world program is a free stress test of emitter
+soundness *and* quality, and any regression is detected and escalated
+automatically by the ecosystem itself.
 
 ## Capabilities: the trust core
 
