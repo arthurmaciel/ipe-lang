@@ -167,6 +167,14 @@ pub enum SourceDefect {
         /// The offending version requirement.
         got: String,
     },
+    /// A Cargo feature name outside `[A-Za-z0-9_+./?:-]`. Feature names are
+    /// spliced into the emitted manifest's `features = [ … ]` array, a TOML
+    /// string position, so a name carrying a quote/bracket/newline could
+    /// break out and inject arbitrary manifest content.
+    FeatureNameIllegal {
+        /// The offending feature name.
+        got: String,
+    },
 }
 
 impl fmt::Display for SourceDefect {
@@ -198,6 +206,10 @@ impl fmt::Display for SourceDefect {
                 f,
                 "version requirement {got:?} must be non-empty semver text \
                  ([0-9A-Za-z.*=<>~^,+ -])"
+            ),
+            Self::FeatureNameIllegal { got } => write!(
+                f,
+                "feature name {got:?} must be non-empty and match [A-Za-z0-9_+./?:-]"
             ),
         }
     }
