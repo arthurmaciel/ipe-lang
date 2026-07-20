@@ -37,11 +37,11 @@
   `TypeInfo { expected, actual }`. Smart constructors default `details =
   Nothing` via `mkInfo`. Pure-Ipê `toString`/`kindLabel`/`isRetryable`.
 - The Rust backend currently hardcodes the fallback preamble
-  `const START: &str = "type SkyError = String;"` (`crates/sky_backend_rust/src/project.rs:193`).
+  `const START: &str = "type SkyError = String;"` (`src/compiler/backend/rust/src/project.rs:193`).
 - Lowering collapses the error type to a String: `"String" | "Error" =>
-  Ok(IrType::Str)` at `crates/sky_lower/src/lower.rs:1730` and `:2089`.
+  Ok(IrType::Str)` at `src/compiler/lower/src/lower.rs:1730` and `:2089`.
 - HM already interns a distinct nullary `Error` builtin
-  (`crates/sky_types/src/constrain.rs:245`) and validates the `Task Error a`
+  (`src/compiler/types/src/constrain.rs:245`) and validates the `Task Error a`
   channel against it (`is_error_ty`, `:1301`/`:1372`). **Only the value level
   is missing.**
 - Builtin ADTs are already seeded for ctor + exhaustive-match support via
@@ -220,12 +220,12 @@ added only where a boundary needs it.
 ## Ordered, implementable build tasks
 
 1. **Canon registration (task #78).** Add `Ipe.Error` to
-   `crates/ipe/src/stdlib.rs`: an `ERROR = include_str!("../stdlib/Ipê/Core/Error.ipe")`
+   `src/ipe-cli/src/stdlib.rs`: an `ERROR = include_str!("../stdlib/Ipê/Core/Error.ipe")`
    const + a `MODULES` entry (drop the byte-identical copy under
-   `crates/ipe/stdlib/Ipê/Core/Error.ipe`). As a compiled source module its
+   `src/stdlib/Ipê/Core/Error.ipe`). As a compiled source module its
    functions resolve as ordinary top-level bindings (`Callee::TopLevel`) — no
    N0004, no per-function QUALIFIERS wiring. Keep `Error`/`ErrorKind`/
-   `ErrorDetails` in `RESERVED_BUILTIN_TYPES` (`crates/sky_canon/src/resolve.rs`)
+   `ErrorDetails` in `RESERVED_BUILTIN_TYPES` (`src/compiler/canon/src/resolve.rs`)
    but exempt the canonical declarer via a `{Maybe→Ipe.Maybe,
    Result→…, Error→Ipe.Error}` owner table (reuse the exemption Maybe.ipe
    already relies on; make it explicit if currently implicit-by-compile-order).
@@ -236,17 +236,17 @@ added only where a boundary needs it.
    alias from step 1. *(Fallback only if compiling the Ipê bodies against the
    emitted structs surfaces friction — e.g. record-update codegen: demote the
    ~17 helpers to `KernelClass::Pure` StdlibKernel variants backed by
-   `sky_runtime::error::*`, each with matching `decl(qualifier="Error", …)`
+   `ipe_runtime::error::*`, each with matching `decl(qualifier="Error", …)`
    arity and a `("Error", name)` `lower_callee` arm. Strictly more code;
    avoided by default.)*
-3. **HM scheme (`crates/sky_types/src/constrain.rs`).** Remove the String-magic
+3. **HM scheme (`src/compiler/types/src/constrain.rs`).** Remove the String-magic
    co-treatment: keep `builtins.error` interned and `is_error_ty` (Task-channel
    validation) unchanged, but derive `Error : ErrorKind -> ErrorInfo -> Error`,
    the 11 nullary `ErrorKind` ctors, and the 5 `ErrorDetails` ctors **from the
    source ADT** like any user type. `errorToString : Error -> String`. This
    closes the #45 drift class for the Error family (schemes derived, not a
    hand-maintained table).
-4. **Lowering (`crates/sky_lower/src/lower.rs`).** Split the shared arm at
+4. **Lowering (`src/compiler/lower/src/lower.rs`).** Split the shared arm at
    `:1730` and `:2089`: `"String" => Ok(IrType::Str)` stays; add
    `"Error" => Named(SkyCoreErrorError)` plus `"ErrorKind"`/`"ErrorDetails"` and
    the three record aliases `"ErrorInfo"`/`"PanicInfo"`/`"TypeInfo"` → their
@@ -258,7 +258,7 @@ added only where a boundary needs it.
    `JsonDecode`/`Custom`=1) so `case err of Error kind info ->` and
    `case kind of Timeout ->` take the validated exhaustive-match path and
    `Error Io (mkInfo m)` lowers as a saturated construction — no bespoke arms.
-5. **Backend emission (`crates/sky_backend_rust`).** Emit the Error ADT + the
+5. **Backend emission (`src/compiler/backend/rust`).** Emit the Error ADT + the
    three record structs through the ordinary user-type path with
    `#[derive(Clone, Debug, PartialEq)]` (+`serde` only at boundaries that need
    it). Emit **unconditional** `type SkyError = SkyCoreErrorError;`, `str_err`,
@@ -267,8 +267,8 @@ added only where a boundary needs it.
    `impl Display` + `impl std::error::Error` delegating to `toString` semantics
    but **never** folding `details`. Update the golden anchor
    `project.rs:193 START` from `"type SkyError = String;"` to the new alias, and
-   emit a `use sky_runtime::…` alias block so camelCase-mangled names resolve.
-6. **Runtime construct / render (`runtime/src/sky_runtime`).** Keep the runtime
+   emit a `use ipe_runtime::…` alias block so camelCase-mangled names resolve.
+6. **Runtime construct / render (`src/runtime/rust/src`).** Keep the runtime
    **generic** over `E: Send + From<String>` — it never names `Error`. Confine
    the lossy `From<String>` to the runtime/FFI seam. Implement B8 redaction in
    `sky_error_from_foreign`: log the foreign `Debug` server-side under a

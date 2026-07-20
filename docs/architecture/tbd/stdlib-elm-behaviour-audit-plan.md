@@ -25,7 +25,7 @@ per-behaviour, test-pinned verdict ledger.
 
 | Behaviour | Ipê (file:line) | Go reference | Elm | Status |
 |---|---|---|---|---|
-| JSON object key order | alphabetical — serde_json `BTreeMap` (`runtime/src/sky_runtime/json.rs:369-371`; no `preserve_order` feature, `runtime/Cargo.toml:9`) | alphabetical (`json.Marshal`, `../sky/runtime-go/rt/stdlib_extra.go:353-368`) | insertion order (JS object kernel) | Ipê≡Go ≠ Elm |
+| JSON object key order | alphabetical — serde_json `BTreeMap` (`src/runtime/rust/src/json.rs:369-371`; no `preserve_order` feature, `runtime/Cargo.toml:9`) | alphabetical (`json.Marshal`, `../sky/runtime-go/rt/stdlib_extra.go:353-368`) | insertion order (JS object kernel) | Ipê≡Go ≠ Elm |
 | `Json.Decode.int` strictness | truncates any number: `3.5`→`3`, `1e2`→`100` (`json.rs:383-397`, documented Go-parity) | same truncation (`stdlib_extra.go:529-536`) | rejects non-integral numbers ("Expecting an Int") | Ipê≡Go ≠ Elm; arguably a **correctness** bug in both backends (silent data loss) |
 | Float formatting | Go `%v` pinned, exp ≥ 6 threshold, probed vs Go 1.26.2 (#52; `json.rs:90-128` `go_format_f64`) | same by construction | JS shortest-repr (Ryū) | Ipê≡Go ≠ Elm; resolved+recorded (`divergences-from-sky.md` B15) |
 | `oneOf` failure reporting | last branch's error only (`json.rs:748-768`) | last error | accumulates ALL branch failures | Ipê≡Go ≠ Elm; Elm's is better DX |
@@ -52,7 +52,7 @@ function. Concretely, per module family:
    `min`/`max`/`clamp`/`compare`.
 4. **List/Dict/Set** — `sortWith` stability, `Dict` iteration order
    (Elm: sorted by key — Ipê Dict is HashMap + sort-on-read,
-   `runtime/src/sky_runtime/dict.rs:15,40-60`; equivalence must be
+   `src/runtime/rust/src/dict.rs:15,40-60`; equivalence must be
    *observable-order* equivalence), `==` structural-equality corners
    (functions inside data: Elm throws — Ipê/Go?).
 5. **Time/Random** — only *contract* shapes (Elm's `Random` is a pure

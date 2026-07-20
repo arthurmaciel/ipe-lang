@@ -29,16 +29,13 @@ Debug, Dict, List, Maybe, Platform, Platform.Cmd, Platform.Sub, Process,
 Result, Set, String, Task, Tuple — 17 total, all verified against the
 registry.
 
-> **Audit basis.** The authoritative ipê stdlib for the Rust port is the set
-> embedded by `crates/ipe/src/stdlib.rs` (17 `Ipe.*` modules: `Basics`,
-> `Maybe`, `Result`, `List`, `String`, `Char`, `Dict`, `Set`, `Bytes`,
-> `Crypto`, `Task`, `Io`, `Time`, `System`, `Random`, `File`, `Http`). The
-> larger `sky-out/.ipe-stdlib/` tree is a reference-compiler artifact and is
-> **not** what ipe ships. A name counts as reachable only when it both
+> **Audit basis.** The authoritative ipê stdlib is the `ipe_stdlib` crate
+> (`src/stdlib/`, the `Ipe/*.ipe` modules embedded via `src/stdlib/src/lib.rs`).
+> A name counts as reachable only when it both
 > resolves — via the embedded module's `exposing` list or the auto-prelude
-> `QUALIFIERS` table in `crates/sky_canon/src/env.rs` — **and** carries a
+> `QUALIFIERS` table in `src/compiler/canon/src/env.rs` — **and** carries a
 > concrete type, either from a Ipê-source body/annotation or from a matched
-> arm of `kernel_ty` in `crates/sky_types/src/constrain.rs`. `kernel_ty`'s
+> arm of `kernel_ty` in `src/compiler/types/src/constrain.rs`. `kernel_ty`'s
 > catch-all returns an unconstrained type variable, so a name that only hits
 > the fallback is treated as *not* usably typed. Notably, ipê has **no**
 > `Array`, `Bitwise`, `Tuple`, `Debug`, `Process`, or `Platform` module, and
