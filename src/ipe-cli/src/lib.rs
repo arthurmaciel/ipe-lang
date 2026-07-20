@@ -1363,7 +1363,8 @@ const USAGE: &str = "usage:\n  \
      ipe install [--yes] [--allow-build-scripts]\n  \
      ipe explain [<CODE>]\n  \
      ipe fix <entry.ipe> [--yes]\n  \
-     ipe lsp";
+     ipe lsp\n  \
+     ipe version";
 
 /// Parse `argv` (excluding the program name) and run the requested command.
 ///
@@ -1380,6 +1381,10 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
         Some((cmd, rest)) if cmd == "install" => ffi::run_install(rest),
         Some((cmd, rest)) if cmd == "fix" => run_fix(rest),
         Some((cmd, rest)) if cmd == "lsp" => lsp::run_lsp(rest),
+        Some((cmd, _)) if cmd == "version" || cmd == "--version" || cmd == "-V" => {
+            println!("ipe {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
         _ => Err(CliError::Usage(USAGE)),
     }
 }
