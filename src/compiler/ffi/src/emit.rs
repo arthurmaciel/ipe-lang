@@ -271,7 +271,7 @@ pub fn emit_kernel_json(pkg: &PkgInfo) -> String {
                 serde_json::json!({
                     "ident": d.ident.as_str(),
                     "name": d.name,
-                    "version": d.version,
+                    "version": d.version.as_str(),
                 })
             })
             .collect();

@@ -372,8 +372,9 @@ pub struct TransitiveDep {
     pub ident: RustIdent,
     /// The canonical package name (the Cargo `[dependencies]` key).
     pub name: String,
-    /// The exact resolved version.
-    pub version: String,
+    /// The exact resolved version, validated at decode so it cannot break out
+    /// of its TOML string when the manifest emitter pins it.
+    pub version: CrateVersion,
 }
 
 /// A validated cargo PACKAGE name: `[A-Za-z0-9_-]+`. Distinct from
@@ -397,6 +398,57 @@ impl PackageName {
 
     fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+/// A validated resolved crate version.
+///
+/// The version is the ONLY path by which a resolved-dependency string reaches
+/// a TOML value position of the emitted `Cargo.toml`: the manifest emitter
+/// renders `<name> = "=<version>"` (and the `version = "=<version>"` features
+/// branch) from it. A raw, unvalidated version could carry a `"`-and-newline
+/// payload that closes the TOML string and splices arbitrary manifest content
+/// (`[dependencies.evil]`, a path override) into the generated file. Gating
+/// here at the decode boundary — the same surface [`PackageName`] and
+/// [`PkgPath`] are gated on — makes an injection-bearing version
+/// unrepresentable past decode; the charset mirrors the driver's `VersionPin`
+/// (the CLI-supplied version pin), so both halves of a `name@version` spec and
+/// every resolved dependency share one semver-value gate.
+///
+/// An EMPTY version is legal here — the inspector reports an empty version on a
+/// probe failure, and the manifest emitter's own downstream check refuses to
+/// pin an empty version loudly ([`crate::driver::cargo_dep_lines`]); rejecting
+/// it at decode would turn that precise "unpinned dependency" diagnostic into a
+/// blunt whole-package decode failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CrateVersion(String);
+
+impl CrateVersion {
+    fn parse(s: &str) -> Result<Self, crate::diag::WireDefect> {
+        let legal = s.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(
+                    c,
+                    '.' | '-' | '+' | '*' | '=' | '>' | '<' | '~' | '^' | ',' | ' '
+                )
+        });
+        if legal {
+            Ok(Self(s.to_owned()))
+        } else {
+            Err(crate::diag::WireDefect::InvalidVersion { got: s.to_owned() })
+        }
+    }
+
+    /// The validated version text (may be empty on inspector probe failure).
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Whether the version is empty (an unresolved probe).
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 }
 
@@ -439,7 +491,7 @@ impl PkgPath {
 pub struct PkgInfo {
     pkg_path: PkgPath,
     name: PackageName,
-    version: String,
+    version: CrateVersion,
     fns: Vec<FnInfo>,
     modules: Vec<String>,
     errors: Vec<String>,
@@ -491,6 +543,13 @@ impl PkgInfo {
     /// The exact resolved crate version (may be empty on inspector failure).
     #[must_use]
     pub fn version(&self) -> &str {
+        self.version.as_str()
+    }
+
+    /// The validated resolved crate version — the only value that can reach the
+    /// manifest emitter's TOML-value position.
+    #[must_use]
+    pub const fn crate_version(&self) -> &CrateVersion {
         &self.version
     }
 
@@ -783,6 +842,11 @@ impl TryFrom<WirePkgInfo> for PkgInfo {
             context: format!("crate `{}`", w.name),
             defect,
         })?;
+        let version =
+            CrateVersion::parse(&w.version).map_err(|defect| Diagnostic::WireMalformed {
+                context: format!("crate `{}`", w.name),
+                defect,
+            })?;
         let mut fns = Vec::with_capacity(w.functions.len());
         let mut dropped = Vec::new();
         for wf in w.functions {
@@ -806,10 +870,15 @@ impl TryFrom<WirePkgInfo> for PkgInfo {
                     context: format!("transitive dep `{}`", dep.name),
                     defect,
                 })?;
+            let version =
+                CrateVersion::parse(&dep.version).map_err(|defect| Diagnostic::WireMalformed {
+                    context: format!("transitive dep `{}`", dep.name),
+                    defect,
+                })?;
             transitive_deps.push(TransitiveDep {
                 ident,
                 name: dep.name,
-                version: dep.version,
+                version,
             });
         }
         // Foreign-type identity entries: keep only well-shaped `::seg::…::Seg`
@@ -826,7 +895,7 @@ impl TryFrom<WirePkgInfo> for PkgInfo {
         Ok(Self {
             pkg_path,
             name,
-            version: w.version,
+            version,
             fns,
             modules: w.modules,
             errors: w.errors,
@@ -1182,6 +1251,72 @@ mod tests {
         });
         let pkg = decode(&v).expect("manifest-path-shaped pkg decodes");
         assert_eq!(pkg.pkg_path(), "crates/semver-tool/Cargo.toml");
+    }
+
+    // The resolved `version` is spliced into a TOML value position of the
+    // emitted `Cargo.toml` (`<name> = "=<version>"`). A version carrying a
+    // `"`-and-newline payload could close the string and inject a rogue
+    // `[dependencies.evil]` table. Assert decode refuses the WHOLE package
+    // (like the newline-bearing-pkg-path case) rather than passing the raw
+    // string through to the manifest emitter.
+    #[test]
+    fn an_injection_bearing_version_fails_the_whole_package() {
+        let evil = "1.0\", features=[\"net\"] }\n[dependencies.evil]\npath = \"/etc";
+        let v = json!({
+            "pkg": "semver",
+            "name": "semver",
+            "version": evil,
+            "functions": [],
+            "errors": []
+        });
+        assert!(matches!(
+            decode(&v),
+            Err(Diagnostic::WireMalformed {
+                defect: WireDefect::InvalidVersion { .. },
+                ..
+            })
+        ));
+    }
+
+    // The same gate guards a TRANSITIVE dependency's version — the transitive
+    // path is the one `render_dep_line` reaches for every non-primary crate.
+    #[test]
+    fn an_injection_bearing_transitive_version_fails_the_whole_package() {
+        let v = json!({
+            "pkg": "semver",
+            "name": "semver",
+            "version": "1.0.26",
+            "functions": [],
+            "errors": [],
+            "transitiveDeps": [
+                {"ident": "serde_json", "name": "serde-json",
+                 "version": "1.0\" }\n[dependencies.evil]\npath = \"/etc"}
+            ]
+        });
+        assert!(matches!(
+            decode(&v),
+            Err(Diagnostic::WireMalformed {
+                defect: WireDefect::InvalidVersion { .. },
+                ..
+            })
+        ));
+    }
+
+    // Legal semver requirement text (exact pins, ranges, prereleases, the
+    // empty unresolved-probe version) must still decode — the gate rejects
+    // only the TOML-breaking charset, never ordinary version syntax.
+    #[test]
+    fn legal_versions_decode() {
+        for ok in ["1.0.26", "=1.0.0-rc.6", ">=1, <2", "1.2.3+build.5", "*", ""] {
+            let v = json!({
+                "pkg": "semver",
+                "name": "semver",
+                "version": ok,
+                "functions": [],
+                "errors": []
+            });
+            assert!(decode(&v).is_ok(), "{ok:?} must decode");
+        }
     }
 
     #[test]

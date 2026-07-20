@@ -507,6 +507,15 @@ pub enum WireDefect {
         /// The offending path.
         got: String,
     },
+    /// A resolved crate version carries a character outside the semver charset
+    /// `[0-9A-Za-z.*=<>~^,+ -]`. The version is spliced into a TOML value
+    /// position of the emitted `Cargo.toml` (`<name> = "=<version>"`); a value
+    /// carrying a quote/brace/bracket/newline could break out of the string
+    /// and inject arbitrary manifest content.
+    InvalidVersion {
+        /// The offending version string.
+        got: String,
+    },
     /// The document is not the JSON shape the wire contract declares
     /// (carries the rendered serde error as detail).
     Json {
@@ -579,6 +588,13 @@ impl fmt::Display for WireDefect {
                 write!(
                     f,
                     "{got:?} is not a legal package path (it carries a control character)"
+                )
+            }
+            Self::InvalidVersion { got } => {
+                write!(
+                    f,
+                    "{got:?} is not a legal crate version (it must match the semver charset \
+                     [0-9A-Za-z.*=<>~^,+ -])"
                 )
             }
             Self::Json { detail } => write!(f, "{detail}"),
