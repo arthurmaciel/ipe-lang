@@ -1356,13 +1356,13 @@ pub fn resolve_runtime() -> Result<PathBuf, CliError> {
 /// The top-level usage hint, listing every subcommand and flag.
 const USAGE: &str = "usage:\n  \
      ipe init  [<name>|.] [--force]\n  \
-     ipe build <entry.ipe|project-dir|ipe.toml> [--out <dir>] [--runtime <dir>] [--emit-ir] [--fix]\n  \
+     ipe build [<entry.ipe|project-dir|ipe.toml>] [--out <dir>] [--runtime <dir>] [--emit-ir] [--fix]\n  \
      \x20         [--static] [--target <triple|wasm>] [--allocator <auto|system|dlmalloc|talc|mimalloc>]\n  \
      \x20         [--allow-slow-allocator]\n  \
-     ipe run   <entry.ipe|project-dir|ipe.toml> [--out <dir>] [--runtime <dir>]\n  \
+     ipe run   [<entry.ipe|project-dir|ipe.toml>] [--out <dir>] [--runtime <dir>]\n  \
      \x20         [--static] [--target <triple>] [--allocator <auto|system|dlmalloc|talc|mimalloc>]\n  \
      \x20         [--allow-slow-allocator] [-- <args>...]\n  \
-     ipe watch <entry.ipe|project-dir|ipe.toml> [--out <dir>] [--runtime <dir>] [--port <n>]\n  \
+     ipe watch [<entry.ipe|project-dir|ipe.toml>] [--out <dir>] [--runtime <dir>] [--port <n>]\n  \
      ipe add <crate>[@<version>] [--features a,b] [--yes] [--allow-build-scripts]\n  \
      ipe remove <crate>\n  \
      ipe install [--yes] [--allow-build-scripts]\n  \
@@ -1395,13 +1395,35 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
     }
 }
 
-/// `ipe watch <entry> [--out <dir>] [--runtime <dir>] [--port <n>]`
+/// Project-aware default entry when no positional argument is given to
+/// `build`, `run`, or `watch`.
+///
+/// Resolution order:
+/// 1. `./ipe.toml` exists — entry `"."` (project mode; `discover_manifest`
+///    routes it to the directory's manifest).
+/// 2. `./src/Main.ipe` exists — entry `"src/Main.ipe"` (single-file
+///    shorthand without a manifest).
+/// 3. Neither — usage error: nothing to build here.
+fn default_entry() -> Result<String, CliError> {
+    if std::path::Path::new("ipe.toml").exists() {
+        return Ok(".".to_owned());
+    }
+    if std::path::Path::new("src/Main.ipe").exists() {
+        return Ok("src/Main.ipe".to_owned());
+    }
+    Err(CliError::Usage(USAGE))
+}
+
+/// `ipe watch [<entry>] [--out <dir>] [--runtime <dir>] [--port <n>]`
 /// (`crate::watch`). Never returns
 /// `Err` for a build failure (INV-3: a red build is logged, not fatal);
 /// only misuse / setup failures propagate.
 fn run_watch(rest: &[String]) -> Result<(), CliError> {
     let mut it = rest.iter();
-    let entry = it.next().ok_or(CliError::Usage(USAGE))?.clone();
+    let entry = match it.next() {
+        Some(e) => e.clone(),
+        None => default_entry()?,
+    };
     let mut out: Option<String> = None;
     let mut runtime: Option<String> = None;
     let mut port: u16 = 8000;
@@ -1522,12 +1544,15 @@ fn resolve_static_plan(
     Ok(static_plan)
 }
 
-/// `ipe build <entry.ipe> [--out <dir>] [--runtime <dir>] [--emit-ir] [--fix]
+/// `ipe build [<entry.ipe>] [--out <dir>] [--runtime <dir>] [--emit-ir] [--fix]
 /// [--static] [--target <triple>] [--allocator <choice>]
 /// [--allow-slow-allocator]`.
 fn run_build(rest: &[String]) -> Result<(), CliError> {
     let mut it = rest.iter();
-    let entry = it.next().ok_or(CliError::Usage(USAGE))?.clone();
+    let entry = match it.next() {
+        Some(e) => e.clone(),
+        None => default_entry()?,
+    };
     let mut out: Option<String> = None;
     let mut runtime: Option<String> = None;
     let mut emit_ir = false;
@@ -1750,7 +1775,10 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
     });
 
     let mut it = ipe_args.iter();
-    let entry = it.next().ok_or(CliError::Usage(USAGE))?.clone();
+    let entry = match it.next() {
+        Some(e) => e.clone(),
+        None => default_entry()?,
+    };
     let mut out: Option<String> = None;
     let mut runtime: Option<String> = None;
     let mut static_flags = StaticCliFlags::default();
