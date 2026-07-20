@@ -1029,7 +1029,12 @@ impl<'a> EmitCtx<'a> {
     /// program never declared — an upstream-contract violation (the type checker
     /// pins every constructor to its union), surfaced as a [`Diagnostic::CompilerBug`]
     /// rather than a silent mis-emit.
-    fn variant_fields(&self, home: &ModPath, ty: Symbol, variant: Symbol) -> DResult<&[IrType]> {
+    pub(crate) fn variant_fields(
+        &self,
+        home: &ModPath,
+        ty: Symbol,
+        variant: Symbol,
+    ) -> DResult<&[IrType]> {
         self.variant_fields
             .get(&(home.clone(), ty, variant))
             .map(Vec::as_slice)
@@ -1282,7 +1287,7 @@ impl<'a> EmitCtx<'a> {
     /// emptiness ([`Self::resolve_ident`]) and then mangled if it collides with
     /// a Rust keyword ([`naming::mangle_reserved`]). Used for every emitted
     /// value/variant/param name.
-    fn emit_ident(&self, sym: Symbol) -> DResult<String> {
+    pub(crate) fn emit_ident(&self, sym: Symbol) -> DResult<String> {
         Ok(naming::mangle_reserved(self.resolve_ident(sym)?.to_owned()))
     }
 
@@ -1300,7 +1305,7 @@ impl<'a> EmitCtx<'a> {
             )
     }
 
-    fn enum_name(&self, home: &ModPath, ty: Symbol) -> DResult<&str> {
+    pub(crate) fn enum_name(&self, home: &ModPath, ty: Symbol) -> DResult<&str> {
         // `StreamId` is a builtin opaque Http.Stream type backed by the runtime
         // struct `IpeStreamId`.  It has no synthetic `EnumDef` injection (unlike
         // `SqlValue`), so it is not in `enum_names`; we route it here instead.
@@ -1347,7 +1352,7 @@ impl<'a> EmitCtx<'a> {
     /// names match Ipê's verbatim. A `Some` result steers constructor and pattern
     /// emission to the runtime type (no user-enum field-boxing lookup applies, as
     /// neither is self-recursive).
-    fn builtin_runtime_enum(&self, home: &ModPath, ty: Symbol) -> Option<&'static str> {
+    pub(crate) fn builtin_runtime_enum(&self, home: &ModPath, ty: Symbol) -> Option<&'static str> {
         // A declared user enum always wins: real Ipê cannot name a `type` `Maybe`
         // or `Result` (canonicalisation rejects shadowing a built-in), so a
         // program-level enum carrying that symbol is a distinct, user-owned type

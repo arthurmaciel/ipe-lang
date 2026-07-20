@@ -11,15 +11,17 @@
 //!   * the binary-operator chain (`BinOp` Add..Or) → [`Doc::Chain`];
 //!   * `if`/`else` → inline or block form by an absolute width threshold;
 //!   * the delimited lists — `Tuple`, plain non-empty non-`Ui` `List`, `Cons`,
-//!     and the plain user-function `Call` (`Callee::Func`, no turbofish pin) —
-//!     which lay out flat when they fit and otherwise break one element per line
-//!     with a break-conditional trailing comma ([`Doc::IfBroken`]).
+//!     the plain user-function `Call` (`Callee::Func`, no turbofish pin), and the
+//!     saturated payload `Ctor` (user-enum, each cyclic-self-field argument boxed,
+//!     or runtime-enum `IpeMaybe`/`IpeResult`/…) — which lay out flat when they
+//!     fit and otherwise break one element per line with a break-conditional
+//!     trailing comma ([`Doc::IfBroken`]).
 //!
 //! Every remaining arm is carried as one [`Doc::owned`] leaf holding the string
 //! emitter's exact bytes: the literals (Int/Float/Str/…), the call-shaped binops
 //! (`Append`/`IntDiv`), the empty/`Ui` list and zero-arg call forms, and the
 //! context-heavy arms not yet structured (kernel-dispatch / FFI / pinned calls,
-//! `Ctor`, `let`/destructure blocks, lambdas, `match`, records, updates, apply,
+//! `Apply`, `let`/destructure blocks, lambdas, `match`, records, updates,
 //! field access, task sequencing). Carrying bytes keeps the SEAL exact by
 //! construction; those arms simply do not yet gain multi-line layout.
 //!
@@ -33,8 +35,9 @@
 
 use std::borrow::Cow;
 
-use ipe_diagnostics::DResult;
-use ipe_ir::{BinOp, CallPin, Callee, Expr, IrType};
+use ipe_diagnostics::{DResult, Diagnostic};
+use ipe_intern::Symbol;
+use ipe_ir::{BinOp, CallPin, Callee, Expr, IrType, ModPath};
 
 use crate::EmitCtx;
 use crate::doc::{ChainOperand, Doc};
@@ -107,6 +110,20 @@ pub fn build_doc(
 
         // `head :: tail`: the runtime cons call, a two-argument delimited group.
         Expr::Cons { head, tail } => build_cons(ctx, head, tail, indent, child, generics),
+
+        // A constructor application `EnumName::Variant(a0, a1, …)`. A nullary
+        // constructor (built-in-runtime or user) stays a leaf (`EnumName::Variant`
+        // — no positional payload to break); a saturated payload constructor is a
+        // delimited group over its argument docs, each cyclic-self-field argument
+        // wrapped in `Box::new(..)` exactly as the string emitter wraps it.
+        Expr::Ctor {
+            home,
+            ty,
+            variant,
+            args,
+        } if !args.is_empty() => {
+            build_ctor(ctx, home, *ty, *variant, args, indent, child, generics)
+        }
 
         // A plain user-function call `crate::fn(a0, a1, …)`. Structured ONLY for
         // `Callee::Func` with an empty turbofish pin: that path provably falls
@@ -413,6 +430,79 @@ fn build_cons(
     ))
 }
 
+/// Build the `Doc` for a saturated payload constructor. Mirrors
+/// [`crate::emit_expr::emit_ctor`] token-for-token: the runtime-enum branch
+/// (`IpeMaybe::Just(..)`, `IpeResult::Err(..)`, …) and the user-enum branch
+/// (`EnumName::Variant(..)`) both build the prefix path, then lay the payload out
+/// as a delimited group. Each user-enum argument on a type-size cycle back to its
+/// own enum is wrapped in `Box::new(..)` — the exact wrap the string emitter
+/// applies (runtime-enum payloads are never self-recursive, so that branch never
+/// boxes). The nullary forms never reach here (the caller keeps them leaves).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "mirrors emit_ctor's (home, ty) split"
+)]
+fn build_ctor(
+    ctx: &EmitCtx,
+    home: &ModPath,
+    ty: Symbol,
+    variant: Symbol,
+    args: &[Expr],
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Doc> {
+    // A built-in `Maybe` / `Result` / `Order` / `ChunkEvent` constructor routes to
+    // the runtime enum; its payload is never a self-recursive user field, so no
+    // field-boxing lookup applies (matching the string emitter).
+    if let Some(runtime) = ctx.builtin_runtime_enum(home, ty) {
+        let path = format!("{runtime}::{}", ctx.emit_ident(variant)?);
+        let docs = build_args(ctx, args, indent, child, generics)?;
+        return Ok(delimited(
+            Doc::owned(format!("{path}(")),
+            docs,
+            Doc::text(")"),
+        ));
+    }
+
+    let path = format!("{}::{}", ctx.enum_name(home, ty)?, ctx.emit_ident(variant)?);
+    let fields = ctx.variant_fields(home, ty, variant)?;
+    if fields.len() != args.len() {
+        return Err(Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::build_ctor",
+            detail: format!(
+                "constructor {} of enum {} applied to {} args but declares {} fields; \
+                 a constructor application must be saturated",
+                variant.as_raw(),
+                ty.as_raw(),
+                args.len(),
+                fields.len()
+            ),
+        });
+    }
+    let mut docs = Vec::with_capacity(args.len());
+    for (arg, field_ty) in args.iter().zip(fields.iter()) {
+        let arg_doc = build_doc(ctx, arg, indent, child, generics)?;
+        // A cyclic self-edge field is boxed in the enum, so its construction
+        // argument is boxed too: `Box::new(<arg>)`. The `Box::new(` prefix and the
+        // matching `)` are carried as leaves so the SEAL sees the exact tokens.
+        if ctx.is_cyclic_self_field(field_ty, home, ty) {
+            docs.push(Doc::concat(vec![
+                Doc::text("Box::new("),
+                arg_doc,
+                Doc::text(")"),
+            ]));
+        } else {
+            docs.push(arg_doc);
+        }
+    }
+    Ok(delimited(
+        Doc::owned(format!("{path}(")),
+        docs,
+        Doc::text(")"),
+    ))
+}
+
 #[cfg(test)]
 #[allow(clippy::panic, clippy::expect_used, reason = "test assertions")]
 mod tests {
@@ -443,6 +533,22 @@ mod tests {
         interner: Interner,
         program: Program,
         syms: Vec<ipe_intern::Symbol>,
+        /// `Main` module path — the `home` of the fixture enum, for `Ctor` fixtures.
+        main_mod: ipe_intern::Symbol,
+        /// The `Msg` enum type symbol, for `Ctor` fixtures.
+        msg_ty: ipe_intern::Symbol,
+        /// The `Wrap` payload-variant symbol (`Wrap(Int)`), for `Ctor` fixtures.
+        wrap_ctor: ipe_intern::Symbol,
+        /// The `Triple` three-field-variant symbol (`Triple(Int, Int, Int)`), for
+        /// the wide (breaking) `Ctor` byte-golden.
+        triple_ctor: ipe_intern::Symbol,
+        /// The `Unit` nullary-variant symbol, for the nullary `Ctor` fixture.
+        unit_ctor: ipe_intern::Symbol,
+        /// The built-in `Maybe` type symbol (no `EnumDef`), for the runtime-enum
+        /// `Ctor` fixture.
+        maybe_ty: ipe_intern::Symbol,
+        /// The built-in `Just` variant symbol, for the runtime-enum `Ctor` fixture.
+        just_ctor: ipe_intern::Symbol,
     }
 
     fn fixture() -> Fixture {
@@ -450,6 +556,16 @@ mod tests {
         let main_mod = interner.intern("Main").expect("intern Main");
         let msg_ty = interner.intern("Msg").expect("intern Msg");
         let unit_ctor = interner.intern("Unit").expect("intern Unit");
+        // A one-field variant so a saturated payload-`Ctor` fixture resolves its
+        // field types (`Msg::Wrap(Int)`).
+        let wrap_ctor = interner.intern("Wrap").expect("intern Wrap");
+        // A three-field variant for the wide (breaking) `Ctor` byte-golden
+        // (`Msg::Triple(Int, Int, Int)`).
+        let triple_ctor = interner.intern("Triple").expect("intern Triple");
+        // Built-in `Maybe`/`Just` symbols: NO `EnumDef` is injected for them, so
+        // `builtin_runtime_enum` routes their constructor to `IpeMaybe`.
+        let maybe_ty = interner.intern("Maybe").expect("intern Maybe");
+        let just_ctor = interner.intern("Just").expect("intern Just");
         // A zero-arg helper function so a `Callee::Func(FuncId 0)` call fixture
         // resolves a Rust name; its body is never emitted by these builder tests.
         let helper_fn = interner.intern("helper").expect("intern helper");
@@ -480,10 +596,20 @@ mod tests {
                     name: msg_ty,
                     home: ModPath(vec![main_mod]),
                     type_params: vec![],
-                    variants: vec![Variant {
-                        name: unit_ctor,
-                        fields: vec![],
-                    }],
+                    variants: vec![
+                        Variant {
+                            name: unit_ctor,
+                            fields: vec![],
+                        },
+                        Variant {
+                            name: wrap_ctor,
+                            fields: vec![IrType::Int],
+                        },
+                        Variant {
+                            name: triple_ctor,
+                            fields: vec![IrType::Int, IrType::Int, IrType::Int],
+                        },
+                    ],
                 })],
                 funcs: vec![Func {
                     id: FuncId::from_raw(0),
@@ -514,6 +640,13 @@ mod tests {
             interner,
             program,
             syms,
+            main_mod,
+            msg_ty,
+            wrap_ctor,
+            triple_ctor,
+            unit_ctor,
+            maybe_ty,
+            just_ctor,
         }
     }
 
@@ -550,6 +683,7 @@ mod tests {
     /// The all-variant-shape fixture matrix. Every fixture that `build_doc`
     /// structures (or explicitly delegates as a leaf) appears here so a missing
     /// or drifted builder fails the SEAL property, not a runtime `unreachable!`.
+    #[allow(clippy::too_many_lines, reason = "one entry per expr shape under test")]
     fn seal_fixtures(fx: &Fixture) -> Vec<Expr> {
         vec![
             // Leaves.
@@ -657,6 +791,27 @@ mod tests {
             Expr::List {
                 elem: IrType::Int,
                 items: vec![],
+            },
+            // Nullary user constructor (leaf: `Msg::Unit`, no positional payload).
+            Expr::Ctor {
+                home: ModPath(vec![fx.main_mod]),
+                ty: fx.msg_ty,
+                variant: fx.unit_ctor,
+                args: vec![],
+            },
+            // Saturated payload user constructor (structured): `Msg::Wrap(a)`.
+            Expr::Ctor {
+                home: ModPath(vec![fx.main_mod]),
+                ty: fx.msg_ty,
+                variant: fx.wrap_ctor,
+                args: vec![var(fx, 0)],
+            },
+            // Built-in runtime-enum constructor (structured): `IpeMaybe::Just(a)`.
+            Expr::Ctor {
+                home: ModPath(vec![]),
+                ty: fx.maybe_ty,
+                variant: fx.just_ctor,
+                args: vec![var(fx, 0)],
             },
             // Plain user-function call (structured, inline).
             Expr::Call {
@@ -1053,6 +1208,88 @@ mod tests {
             let doc = build_doc(ctx, &expr, 4, 0, scope).expect("build_doc");
             let string = emit_expr_at(ctx, &expr, 4, 0, scope).expect("emit_expr_at");
             assert_eq!(doc.normalized_leaves(), whitespace_normalize(&string));
+        });
+    }
+
+    #[test]
+    fn ctor_fits_inline() {
+        // A short saturated user constructor stays inline: `<EnumName>::Wrap(a)`.
+        // A nullary constructor is a bare path leaf: `<EnumName>::Unit`.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let scope = GenericScope::new(&[]);
+            let payload = Expr::Ctor {
+                home: ModPath(vec![fx.main_mod]),
+                ty: fx.msg_ty,
+                variant: fx.wrap_ctor,
+                args: vec![var(&fx, 0)],
+            };
+            // The exact Rust enum name the emitter chooses for `Main.Msg`.
+            let string = emit_expr_at(ctx, &payload, 0, 0, scope).expect("emit_expr_at");
+            let doc = build_doc(ctx, &payload, 0, 0, scope).expect("build_doc");
+            assert_eq!(render(&doc, RenderConfig::default()), string);
+            assert!(string.ends_with("::Wrap(a)"), "got {string}");
+
+            let nullary = Expr::Ctor {
+                home: ModPath(vec![fx.main_mod]),
+                ty: fx.msg_ty,
+                variant: fx.unit_ctor,
+                args: vec![],
+            };
+            let ns = emit_expr_at(ctx, &nullary, 0, 0, scope).expect("emit_expr_at");
+            let nd = build_doc(ctx, &nullary, 0, 0, scope).expect("build_doc");
+            assert_eq!(render(&nd, RenderConfig::default()), ns);
+            assert!(ns.ends_with("::Unit"), "got {ns}");
+        });
+    }
+
+    #[test]
+    fn ctor_breaks_fields_one_per_line_with_trailing_comma() {
+        // A saturated three-field constructor whose args overflow width 100 breaks
+        // each field onto its own line at nest+4 with a trailing comma, `)` dedented
+        // to the statement indent — rustfmt's tuple-variant-call layout. The prefix
+        // is `<EnumName>::Triple(` (the exact Rust name the emitter chooses); the
+        // layout is what this golden pins. Golden captured from
+        // `rustfmt --edition 2024 --style-edition 2024`.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let scope = GenericScope::new(&[]);
+            let expr = Expr::Ctor {
+                home: ModPath(vec![fx.main_mod]),
+                ty: fx.msg_ty,
+                variant: fx.triple_ctor,
+                args: vec![var(&fx, 7), var(&fx, 8), var(&fx, 9)],
+            };
+            // Recover the emitter's chosen prefix from the flat string form
+            // (`<EnumName>::Triple(` up to the first `(`).
+            let flat = emit_expr_at(ctx, &expr, 0, 0, scope).expect("emit_expr_at");
+            let prefix = flat.split_once('(').expect("ctor has an open paren").0;
+            let got = render_let_stmt(ctx, &expr);
+            let expected = format!(
+                "let z = {prefix}(\n        argument_that_is_quite_long_enough_to_matter_x,\n        argument_that_is_quite_long_enough_to_matter_y,\n        argument_that_is_quite_long_enough_to_matter_z,\n    )"
+            );
+            assert_eq!(
+                got, expected,
+                "\n--- got ---\n{got}\n--- want ---\n{expected}"
+            );
+        });
+    }
+
+    #[test]
+    fn ctor_runtime_enum_just_renders_inline() {
+        // A built-in `Maybe` constructor routes to the runtime enum
+        // `IpeMaybe::Just(a)` — same delimited group, no field-boxing.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let scope = GenericScope::new(&[]);
+            let expr = Expr::Ctor {
+                home: ModPath(vec![]),
+                ty: fx.maybe_ty,
+                variant: fx.just_ctor,
+                args: vec![var(&fx, 0)],
+            };
+            let doc = build_doc(ctx, &expr, 0, 0, scope).expect("build_doc");
+            assert_eq!(render(&doc, RenderConfig::default()), "IpeMaybe::Just(a)");
         });
     }
 }
