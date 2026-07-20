@@ -10,7 +10,8 @@
 # Each example is transformed from Sky to Ipê in two ordered steps:
 #   1. rename-map.tsv (via sky-to-ipe-transform.py) — the shared, drift-resistant
 #      token rewrite: Sky.Core.* / Sky.Http.* / Sky.Ffi / Sky.Test / Std.* → Ipe.*
-#      plus the .sky→.ipe source-extension rename and the sky.toml `entry` key.
+#      plus the .sky→.ipe source-extension rename and the sky.toml→ipe.toml
+#      manifest rename (with its `entry` key).
 #   2. ipe-patches/<name>.patch — an OPTIONAL per-example unified diff applied on
 #      top, for a semantic delta the token rewrite cannot express. Absent for an
 #      example whose transform is purely syntactic (the common case).
@@ -101,7 +102,8 @@ _fetch_sky_example_network() {
 
 # ── sky_mirror_one <name> <dst>: mirror + transform + patch one example ───────
 # Copies the upstream tree (local sibling preferred, network fallback), renames
-# every *.sky -> *.ipe, rewrites the sky.toml `entry` key, applies the
+# every *.sky -> *.ipe, renames sky.toml -> ipe.toml (rewriting its `entry` key),
+# applies the
 # rename-map transform to every .ipe file, then applies the optional
 # ipe-patches/<name>.patch semantic delta. Returns 0 on success, 2 when the
 # per-example patch fails to apply (a real regression to surface, never ignore).
@@ -131,10 +133,15 @@ sky_mirror_one() {
     mv -f "$f" "${f%.sky}.ipe"
   done < <(find "$dst" -type f -name '*.sky' -print 2>/dev/null)
 
-  # sky.toml `entry` key: src/Main.sky -> src/Main.ipe (only the entry line).
+  # Project manifest: sky.toml -> ipe.toml (Ipê's canonical manifest name), with
+  # the `entry` key's src/Main.sky -> src/Main.ipe rewrite. Renaming the file (not
+  # just editing it) is load-bearing: every consumer of the mirrored tree
+  # (ipe_build_target, is_wasm_example, resolve_bin) keys off `ipe.toml`, so the
+  # mirrored tree must be indistinguishable from a native Ipê project.
   if [ -f "$dst/sky.toml" ]; then
     sed -i.bak -E 's/^([[:space:]]*entry[[:space:]]*=[[:space:]]*")([^"]*)\.sky(")/\1\2.ipe\3/' "$dst/sky.toml"
     rm -f "$dst/sky.toml.bak"
+    mv -f "$dst/sky.toml" "$dst/ipe.toml"
   fi
 
   # Bare stdlib imports (`import System` -> `import Ipe.System`): the set of
