@@ -22,6 +22,7 @@
 //! | `row_poly_closed_superset_neg` | P4 | reject | CLOSED record annotation called with a superset arg → IPE-T0001 |
 //! | `row_poly_two_supersets_neg` | P6 (class-1 tripwire) | reject | unannotated let-bound getter called with two DIFFERENT superset shapes → IPE-T0001 |
 //! | `row_poly_annotation_gap` | P1 (gap canary) | reject | row-var record annotation `{ r \| f : T }` does not parse → IPE-P0001 |
+//! | `row_poly_accessor` | P8 | accept | first-class accessor `.name` (desugars to `\r -> r.name`) through `List.map` over a superset list; emits a concrete getter closure over the superset struct; `IPE_E2E=1` prints `Ada, Bo` |
 //!
 //! Run the E2E accept-path bodies (real `cargo build` + run) with:
 //! ```text
@@ -340,5 +341,87 @@ fn row_var_annotation_is_ipe_p0001() {
     assert!(
         !out.join("src").join("main.rs").exists(),
         "{name}: no Rust must be emitted on a rejection"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// row_poly_accessor — P8: the first-class accessor `.name` as a value.
+// Accept end-to-end.
+// ---------------------------------------------------------------------------
+
+/// ipe-0: the compiler must accept `List.map .name people` — the first-class
+/// accessor `.name` (which desugars to the getter `\r -> r.name`) — and emit a
+/// CONCRETE getter closure whose parameter is the resolved superset struct
+/// `RecAgeName`, never a generic. This is the accessor form of the mechanism-2
+/// deferred field access plus mechanism-4 monomorphic pinning; the record
+/// reaches the backend fully pinned so the A7 exact-sorted-field-set lookup
+/// resolves it without a miss. Checked unconditionally (cheap, no `cargo`).
+#[test]
+fn accessor_ipec_accepts_and_resolves_concrete_getter() {
+    let entry = golden_dir("row_poly_accessor").join("Main.ipe");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("row_poly_accessor_ipec_out");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        eprintln!("SKIP row_poly_accessor: runtime not available");
+        return;
+    };
+
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "ipe build must accept row_poly_accessor (P8, first-class accessor \
+         `.name` over a superset record list): {:?}",
+        built.err()
+    );
+
+    let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
+        .expect("emitted main.rs must exist");
+    assert!(
+        emitted.contains("struct RecAgeName"),
+        "the superset struct RecAgeName must be resolved and emitted; got \
+         main.rs:\n{emitted}"
+    );
+    assert!(
+        emitted.contains("move |ipe_accessor_arg: RecAgeName| -> String"),
+        "the accessor `.name` must lower to a CONCRETE getter closure over the \
+         resolved superset struct (the A7 exact-key path), not a generic; got \
+         main.rs:\n{emitted}"
+    );
+}
+
+/// cargo-0 ∧ run-0: the emitted project actually compiles (SEAL) and prints the
+/// `name` field read off each record through the accessor. Gated on
+/// `IPE_E2E=1`.
+#[test]
+fn accessor_cargo_builds_and_prints_names() {
+    if std::env::var("IPE_E2E").is_err() {
+        return;
+    }
+
+    let entry = golden_dir("row_poly_accessor").join("Main.ipe");
+    let out = std::env::temp_dir().join("ipec_row_poly_accessor_e2e");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return;
+    };
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "ipe build must succeed for row_poly_accessor: {:?}",
+        built.err()
+    );
+
+    let outcome = support::build_and_run_emitted("row_poly_accessor", &out);
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "row_poly_accessor binary must exit 0; got {:?}",
+        outcome.exit_code
+    );
+    assert_eq!(
+        outcome.stdout, "Ada, Bo\n",
+        "must print the `name` fields read through the first-class accessor"
     );
 }
