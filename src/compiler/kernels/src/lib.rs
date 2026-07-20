@@ -14,6 +14,9 @@
 #![allow(clippy::module_name_repetitions)] // KernelId / KernelClass / FfiKernelId all contain "Kernel"
 #![forbid(unsafe_code)]
 
+mod capability;
+pub use capability::Capability;
+
 /// Classification of a kernel variant by which compiler / runtime subsystem
 /// owns its emission.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
@@ -4066,6 +4069,934 @@ impl StdlibKernel {
         }
     }
 
+    /// The security-relevant capability this kernel exercises, or `None` when it
+    /// is pure. Classified by effect family: HTTP / server / WebSocket / email →
+    /// [`Capability::Network`]; file / database / config-and-`.env`-file reads →
+    /// [`Capability::Filesystem`]; environment-variable and argv reads →
+    /// [`Capability::Env`]; wall-clock / sleep / timer → [`Capability::Clock`];
+    /// RNG / random tokens / UUIDs → [`Capability::Random`]. `Env.public` reads a
+    /// build-time-embedded allowlisted constant, not the live process
+    /// environment, so it is pure. `Trace.*` write only to an observability sink,
+    /// and `Io.*` only to the console, so neither is a sandboxed capability.
+    ///
+    /// The match is exhaustive with no `_` arm: a newly-added kernel cannot
+    /// compile until it is classified here, so a program's inferred capability
+    /// set cannot silently drift as the stdlib grows.
+    #[must_use]
+    #[allow(clippy::too_many_lines)]
+    pub const fn capability(self) -> Option<Capability> {
+        match self {
+            Self::HttpGet
+            | Self::HttpPost
+            | Self::HttpRequest
+            | Self::ServerGet
+            | Self::ServerPost
+            | Self::ServerPut
+            | Self::ServerDelete
+            | Self::ServerAny
+            | Self::ServerApi
+            | Self::ServerStatic
+            | Self::ServerListen
+            | Self::ServerText
+            | Self::ServerJson
+            | Self::ServerHtml
+            | Self::ServerWithStatus
+            | Self::ServerWithHeader
+            | Self::ServerRedirect
+            | Self::ServerParam
+            | Self::ServerQueryParam
+            | Self::ServerHeader
+            | Self::ServerGetCookie
+            | Self::ServerBody
+            | Self::ServerPath
+            | Self::ServerMethod
+            | Self::ServerCookieNew
+            | Self::ServerWithCookie
+            | Self::MiddlewareWithCors
+            | Self::MiddlewareWithLogging
+            | Self::MiddlewareWithBasicAuth
+            | Self::MiddlewareWithRateLimit
+            | Self::MiddlewareWithCsrf
+            | Self::RateLimitAllow
+            | Self::StreamStream
+            | Self::StreamEmit
+            | Self::StreamFinish
+            | Self::StreamWithContentType
+            | Self::HttpStreamOpen
+            | Self::HttpStreamForEachChunk
+            | Self::HttpStreamClose
+            | Self::HttpStreamChunks
+            | Self::WsDefaultCfg
+            | Self::WsWithOnConnect
+            | Self::WsWithOnMessage
+            | Self::WsWithOnClose
+            | Self::WsWithOnError
+            | Self::WsWithMaxMessageBytes
+            | Self::WsWithOriginPatterns
+            | Self::WsUpgrade
+            | Self::WsSendToClient
+            | Self::WsSendBinaryToClient
+            | Self::WsBroadcast
+            | Self::WsCloseClient
+            | Self::WebSocketConnect
+            | Self::WebSocketConnectWith
+            | Self::WebSocketSend
+            | Self::WebSocketSendBinary
+            | Self::WebSocketClose
+            | Self::WebSocketCloseWithCode
+            | Self::SubSubscribeWebSocket
+            | Self::EmailSend => Some(Capability::Network),
+            Self::SystemCwd
+            | Self::SystemLoadEnv
+            | Self::FileReadFile
+            | Self::FileWriteFile
+            | Self::FileExists
+            | Self::FileRemove
+            | Self::FileMkdirAll
+            | Self::FileReadFileLimit
+            | Self::FileReadFileBytes
+            | Self::FileAppend
+            | Self::FileReadDir
+            | Self::FileIsDir
+            | Self::FileTempFile
+            | Self::FileTempDir
+            | Self::FileCopy
+            | Self::FileRename
+            | Self::FileDelete
+            | Self::DbConnect
+            | Self::DbOpen
+            | Self::DbClose
+            | Self::DbExecRaw
+            | Self::DbExec
+            | Self::DbQuery
+            | Self::DbQueryDecode
+            | Self::DbGetString
+            | Self::DbGetInt
+            | Self::DbGetBool
+            | Self::DbGetField
+            | Self::DbInsertRow
+            | Self::DbGetById
+            | Self::DbUpdateById
+            | Self::DbDeleteById
+            | Self::DbFindOneByField
+            | Self::DbFindManyByField
+            | Self::DbFindByConditions
+            | Self::DbInsertFields
+            | Self::DbUpdateFields
+            | Self::DbInsertFieldsReturning
+            | Self::DbWithTransaction
+            | Self::DbMigrate
+            | Self::DbFindWhere
+            | Self::DbDeleteWhere
+            | Self::CsvParseStreamFromFile
+            | Self::ConfigLoadFromFile => Some(Capability::Filesystem),
+            Self::SystemArgs
+            | Self::SystemGetenv
+            | Self::SystemGetenvOr
+            | Self::SystemGetArg
+            | Self::SystemGetenvInt
+            | Self::SystemGetenvBool
+            | Self::SystemSetenv
+            | Self::SystemUnsetenv => Some(Capability::Env),
+            Self::TimeNow
+            | Self::TimeSleep
+            | Self::TimeUnixMillis
+            | Self::TimeTimeString
+            | Self::SubEvery
+            | Self::TimeEvery => Some(Capability::Clock),
+            Self::CryptoRandomBytes
+            | Self::CryptoRandomToken
+            | Self::UuidV4
+            | Self::UuidV7
+            | Self::RandomInt
+            | Self::RandomFloat
+            | Self::RandomChoice => Some(Capability::Random),
+            Self::LogPrintln
+            | Self::LogInfo
+            | Self::LogDebug
+            | Self::LogWarn
+            | Self::LogError
+            | Self::LogInfoWith
+            | Self::LogDebugWith
+            | Self::LogWarnWith
+            | Self::LogErrorWith
+            | Self::StringFromInt
+            | Self::StringFromFloat
+            | Self::StringLength
+            | Self::StringIsEmpty
+            | Self::StringReverse
+            | Self::StringToUpper
+            | Self::StringToLower
+            | Self::StringCasefold
+            | Self::StringTrim
+            | Self::StringTrimStart
+            | Self::StringTrimEnd
+            | Self::StringToInt
+            | Self::StringToFloat
+            | Self::StringFromChar
+            | Self::StringFromList
+            | Self::StringConcat
+            | Self::StringWords
+            | Self::StringLines
+            | Self::StringToList
+            | Self::StringIsEmail
+            | Self::StringIsUrl
+            | Self::StringAppend
+            | Self::StringContains
+            | Self::StringStartsWith
+            | Self::StringEndsWith
+            | Self::StringEqualFold
+            | Self::StringJoin
+            | Self::StringSplit
+            | Self::StringRepeat
+            | Self::StringDropLeft
+            | Self::StringDropRight
+            | Self::StringReplace
+            | Self::StringSlice
+            | Self::StringPadLeft
+            | Self::StringPadRight
+            | Self::StringContainsIn
+            | Self::StringStartsWithIn
+            | Self::StringEndsWithIn
+            | Self::CharIsAlpha
+            | Self::CharIsDigit
+            | Self::CharIsLower
+            | Self::CharIsUpper
+            | Self::CharToLower
+            | Self::CharToUpper
+            | Self::CharToCode
+            | Self::CharFromCode
+            | Self::ListMap
+            | Self::ListFilter
+            | Self::ListFoldl
+            | Self::ListFoldr
+            | Self::ListLength
+            | Self::ListHead
+            | Self::ListTail
+            | Self::ListMember
+            | Self::ListRange
+            | Self::ListReverse
+            | Self::ListAppend
+            | Self::ListConcat
+            | Self::ListTake
+            | Self::ListDrop
+            | Self::ListZip
+            | Self::ListCons
+            | Self::ListIsEmpty
+            | Self::ListConcatMap
+            | Self::ListIndexedMap
+            | Self::ListAny
+            | Self::ListAll
+            | Self::ListFind
+            | Self::ListFilterMap
+            | Self::ListSortBy
+            | Self::BasicsNot
+            | Self::BasicsIdentity
+            | Self::BasicsAlways
+            | Self::BasicsFst
+            | Self::BasicsSnd
+            | Self::BasicsModBy
+            | Self::BasicsClamp
+            | Self::BasicsToString
+            | Self::BasicsNegate
+            | Self::BasicsAbs
+            | Self::BasicsSqrt
+            | Self::BasicsMin
+            | Self::BasicsMax
+            | Self::BasicsCompare
+            | Self::ErrorUnexpected
+            | Self::ErrorInvalidInput
+            | Self::ErrorIo
+            | Self::ErrorNetwork
+            | Self::ErrorFfi
+            | Self::ErrorDecode
+            | Self::ErrorConflict
+            | Self::ErrorUnavailable
+            | Self::ErrorTimeout
+            | Self::ErrorNotFound
+            | Self::ErrorPermissionDenied
+            | Self::ErrorToString
+            | Self::ErrorWithMessage
+            | Self::ErrorIsRetryable
+            | Self::ErrorWithDetails
+            | Self::CssSafetySafeValue
+            | Self::CssSafetySafePropName
+            | Self::CssSafetySafeSelector
+            | Self::CssSafetyStripStyleClose
+            | Self::MaybeWithDefault
+            | Self::MaybeMap
+            | Self::MaybeAndThen
+            | Self::MaybeMap2
+            | Self::MaybeMap3
+            | Self::MaybeMap4
+            | Self::MaybeMap5
+            | Self::MaybeAndMap
+            | Self::MaybeCombine
+            | Self::ResultWithDefault
+            | Self::ResultMap
+            | Self::ResultAndThen
+            | Self::ResultMapError
+            | Self::ResultMap2
+            | Self::ResultMap3
+            | Self::ResultMap4
+            | Self::ResultMap5
+            | Self::ResultAndMap
+            | Self::ResultCombine
+            | Self::ResultTraverse
+            | Self::ResultOkDefault
+            | Self::MathMin
+            | Self::MathMax
+            | Self::MathPi
+            | Self::MathE
+            | Self::MathPhi
+            | Self::MathSqrt2
+            | Self::MathInf
+            | Self::MathNan
+            | Self::MathIsNaN
+            | Self::MathAbs
+            | Self::MathSqrt
+            | Self::MathCbrt
+            | Self::MathExp
+            | Self::MathExp2
+            | Self::MathLog
+            | Self::MathLog2
+            | Self::MathLog10
+            | Self::MathSin
+            | Self::MathCos
+            | Self::MathTan
+            | Self::MathAsin
+            | Self::MathAcos
+            | Self::MathAtan
+            | Self::MathSinh
+            | Self::MathCosh
+            | Self::MathTanh
+            | Self::MathAsinh
+            | Self::MathAcosh
+            | Self::MathAtanh
+            | Self::MathFloor
+            | Self::MathCeil
+            | Self::MathRound
+            | Self::MathTrunc
+            | Self::MathPow
+            | Self::MathHypot
+            | Self::MathAtan2
+            | Self::MathMod
+            | Self::MathRemainder
+            | Self::DictEmpty
+            | Self::DictIsEmpty
+            | Self::DictSize
+            | Self::DictKeys
+            | Self::DictValues
+            | Self::DictToList
+            | Self::DictFromList
+            | Self::DictGet
+            | Self::DictMember
+            | Self::DictRemove
+            | Self::DictUnion
+            | Self::DictMap
+            | Self::DictInsert
+            | Self::DictFoldl
+            | Self::SetEmpty
+            | Self::SetSize
+            | Self::SetToList
+            | Self::SetFromList
+            | Self::SetMember
+            | Self::SetInsert
+            | Self::SetRemove
+            | Self::SetUnion
+            | Self::SetIntersect
+            | Self::SetDiff
+            | Self::BytesEmpty
+            | Self::BytesLength
+            | Self::BytesIsEmpty
+            | Self::BytesFromString
+            | Self::BytesToString
+            | Self::BytesFromHex
+            | Self::BytesToHex
+            | Self::BytesFromBase64
+            | Self::BytesToBase64
+            | Self::BytesAppend
+            | Self::BytesSlice
+            | Self::EncodingBase64Encode
+            | Self::EncodingBase64Decode
+            | Self::EncodingUrlEncode
+            | Self::EncodingUrlDecode
+            | Self::EncodingHexEncode
+            | Self::EncodingHexDecode
+            | Self::JsonEncString
+            | Self::JsonEncInt
+            | Self::JsonEncFloat
+            | Self::JsonEncBool
+            | Self::JsonEncNull
+            | Self::JsonEncList
+            | Self::JsonEncObject
+            | Self::JsonEncEncode
+            | Self::JsonDecString
+            | Self::JsonDecInt
+            | Self::JsonDecFloat
+            | Self::JsonDecBool
+            | Self::JsonDecDecodeString
+            | Self::JsonDecField
+            | Self::JsonDecAt
+            | Self::JsonDecIndex
+            | Self::JsonDecList
+            | Self::JsonDecMap
+            | Self::JsonDecAndThen
+            | Self::JsonDecSucceed
+            | Self::JsonDecFail
+            | Self::JsonDecOneOf
+            | Self::JsonDecMap2
+            | Self::JsonDecMap3
+            | Self::JsonDecMap4
+            | Self::JsonDecPRequired
+            | Self::JsonDecPOptional
+            | Self::JsonDecPCustom
+            | Self::JsonDecPRequiredAt
+            | Self::CryptoSha256
+            | Self::CryptoSha512
+            | Self::CryptoSha1
+            | Self::CryptoMd5
+            | Self::CryptoHmacSha256
+            | Self::CryptoHmacSha512
+            | Self::CryptoRsaSha256Sign
+            | Self::CryptoRsaSha256Verify
+            | Self::CryptoConstantTimeEqual
+            | Self::CryptoAesGcmEncrypt
+            | Self::CryptoAesGcmDecrypt
+            | Self::CryptoChacha20Encrypt
+            | Self::CryptoChacha20Decrypt
+            | Self::CryptoAesKeyFromPassword
+            | Self::CryptoChachaKeyFromPassword
+            | Self::UuidParse
+            | Self::JwtEncodeHs256
+            | Self::JwtDecodeHs256
+            | Self::JwtEncodeRs256
+            | Self::JwtDecodeRs256
+            | Self::JwtClaims
+            | Self::JwtHs256
+            | Self::JwtRs256
+            | Self::JwtSubject
+            | Self::JwtIssuer
+            | Self::JwtAudience
+            | Self::JwtExpiresAt
+            | Self::JwtNotBefore
+            | Self::JwtIssuedAt
+            | Self::JwtJwtId
+            | Self::JwtWithClaim
+            | Self::JwtEncode
+            | Self::JwtDecode
+            | Self::TaskSucceed
+            | Self::TaskFail
+            | Self::TaskMap
+            | Self::TaskAndThen
+            | Self::TaskMapError
+            | Self::TaskOnError
+            | Self::TaskFromResult
+            | Self::TaskAndThenResult
+            | Self::TaskSequence
+            | Self::TaskParallel
+            | Self::TaskRun
+            | Self::TaskPerform
+            | Self::TaskLazy
+            | Self::TaskRetryWith
+            | Self::TaskLinearBackoff
+            | Self::TaskExponentialBackoff
+            | Self::TaskWithJitter
+            | Self::TaskRetryOn
+            | Self::TaskWithRetryOn
+            | Self::TaskDefaultRetryPolicy
+            | Self::TaskWithMaxAttempts
+            | Self::TaskWithBaseMs
+            | Self::TaskWithKind
+            | Self::IoReadLine
+            | Self::IoWriteStdout
+            | Self::IoWriteStderr
+            | Self::TimeIsLeapYear
+            | Self::TimeDaysInMonth
+            | Self::SystemExit
+            | Self::HttpParseQuery
+            | Self::HttpDefaultRequest
+            | Self::HttpWithMethod
+            | Self::HttpWithTimeout
+            | Self::HttpWithBody
+            | Self::HttpWithHeader
+            | Self::HttpWithUrl
+            | Self::HttpWithFollowRedirects
+            | Self::HttpWithMaxRedirects
+            | Self::DbDefaultMigration
+            | Self::DbDecString
+            | Self::DbDecInt
+            | Self::DbDecFloat
+            | Self::DbDecBool
+            | Self::DbDecNullable
+            | Self::DbDecMap
+            | Self::DbDecAndThen
+            | Self::DbDecSucceed
+            | Self::DbDecFail
+            | Self::DbDecMap2
+            | Self::DbDecMap3
+            | Self::DbDecMap4
+            | Self::DbDecRequired
+            | Self::DbDecOptional
+            | Self::DbDecMoney
+            | Self::DbDecBytes
+            | Self::CmdNone
+            | Self::CmdBatch
+            | Self::CmdPerform
+            | Self::SubNone
+            | Self::SubBatch
+            | Self::CmdPublish
+            | Self::CmdPublishNoEcho
+            | Self::SubSubscribeTopic
+            | Self::PubSubPublish
+            | Self::PubSubPublishNoEcho
+            | Self::UiLayout
+            | Self::UiLayoutWith
+            | Self::HtmlRender
+            | Self::HtmlEscapeText
+            | Self::HtmlEscapeAttr
+            | Self::HtmlAttrToString
+            | Self::UiNone
+            | Self::UiText
+            | Self::UiHtml
+            | Self::UiEl
+            | Self::UiRow
+            | Self::UiColumn
+            | Self::UiWrappedRow
+            | Self::UiGrid
+            | Self::UiParagraph
+            | Self::UiTextColumn
+            | Self::UiButton
+            | Self::UiLink
+            | Self::UiForm
+            | Self::UiImage
+            | Self::UiAbove
+            | Self::UiBelow
+            | Self::UiOnLeft
+            | Self::UiOnRight
+            | Self::UiInFront
+            | Self::UiBehind
+            | Self::UiSpacing
+            | Self::UiPadding
+            | Self::UiPaddingXY
+            | Self::UiPaddingEach
+            | Self::UiWidth
+            | Self::UiHeight
+            | Self::UiCenterX
+            | Self::UiCenterY
+            | Self::UiAlignLeft
+            | Self::UiAlignRight
+            | Self::UiAlignTop
+            | Self::UiAlignBottom
+            | Self::UiPointer
+            | Self::UiClip
+            | Self::UiClipX
+            | Self::UiClipY
+            | Self::UiScrollbars
+            | Self::UiScrollbarX
+            | Self::UiScrollbarY
+            | Self::UiGridColumns
+            | Self::UiPx
+            | Self::UiFill
+            | Self::UiContent
+            | Self::UiShrink
+            | Self::UiFillPortion
+            | Self::UiVh
+            | Self::UiVw
+            | Self::UiMinimum
+            | Self::UiMaximum
+            | Self::UiRgb
+            | Self::UiRgba
+            | Self::UiWhite
+            | Self::UiBlack
+            | Self::UiTransparent
+            | Self::UiColorCss
+            | Self::BackgroundColor
+            | Self::BackgroundImage
+            | Self::BackgroundLinearGradient
+            | Self::BorderWidth
+            | Self::BorderRounded
+            | Self::BorderColor
+            | Self::BorderWidthEach
+            | Self::BorderShadow
+            | Self::BorderGlow
+            | Self::BorderInnerShadow
+            | Self::FontSize
+            | Self::FontColor
+            | Self::FontFamily
+            | Self::FontBold
+            | Self::FontItalic
+            | Self::HtmlTextNode
+            | Self::HtmlRawNode
+            | Self::HtmlNode
+            | Self::HtmlVoidNode
+            | Self::HtmlDoctype
+            | Self::HtmlTitleNode
+            | Self::HtmlToString
+            | Self::HtmlStyleNode
+            | Self::HtmlDiv
+            | Self::HtmlSpan
+            | Self::HtmlA
+            | Self::HtmlButton
+            | Self::HtmlP
+            | Self::HtmlInput
+            | Self::HtmlImg
+            | Self::HtmlH1
+            | Self::HtmlH2
+            | Self::HtmlH3
+            | Self::HtmlH4
+            | Self::HtmlH5
+            | Self::HtmlH6
+            | Self::HtmlNav
+            | Self::HtmlSection
+            | Self::HtmlArticle
+            | Self::HtmlHeader
+            | Self::HtmlHeaderNode
+            | Self::HtmlCodeNode
+            | Self::HtmlMainNode
+            | Self::HtmlFooterNode
+            | Self::HtmlLinkNode
+            | Self::HtmlFooter
+            | Self::HtmlMain
+            | Self::HtmlAside
+            | Self::HtmlUl
+            | Self::HtmlOl
+            | Self::HtmlLi
+            | Self::HtmlTable
+            | Self::HtmlThead
+            | Self::HtmlTbody
+            | Self::HtmlTfoot
+            | Self::HtmlTr
+            | Self::HtmlTh
+            | Self::HtmlTd
+            | Self::HtmlTextarea
+            | Self::HtmlSelect
+            | Self::HtmlOption
+            | Self::HtmlLabel
+            | Self::HtmlForm
+            | Self::HtmlFieldset
+            | Self::HtmlLegend
+            | Self::HtmlPre
+            | Self::HtmlCode
+            | Self::HtmlStrong
+            | Self::HtmlEm
+            | Self::HtmlSmall
+            | Self::HtmlBlockquote
+            | Self::HtmlFigure
+            | Self::HtmlFigcaption
+            | Self::HtmlDetails
+            | Self::HtmlSummary
+            | Self::HtmlDialog
+            | Self::HtmlVideo
+            | Self::HtmlAudio
+            | Self::HtmlCanvas
+            | Self::HtmlIframe
+            | Self::HtmlProgress
+            | Self::HtmlMeter
+            | Self::HtmlScript
+            | Self::HtmlBody
+            | Self::HtmlTitle
+            | Self::HtmlHtmlNode
+            | Self::HtmlHeadNode
+            | Self::HtmlBr
+            | Self::HtmlHr
+            | Self::HtmlMeta
+            | Self::HtmlLink
+            | Self::HtmlArea
+            | Self::HtmlBase
+            | Self::HtmlCol
+            | Self::HtmlEmbed
+            | Self::HtmlSource
+            | Self::HtmlTrack
+            | Self::HtmlWbr
+            | Self::HtmlAttrClass
+            | Self::HtmlAttrId
+            | Self::HtmlAttrHref
+            | Self::HtmlAttrSrc
+            | Self::HtmlAttrAlt
+            | Self::HtmlAttrValue
+            | Self::HtmlAttrName
+            | Self::HtmlAttrPlaceholder
+            | Self::HtmlAttrType
+            | Self::HtmlAttrFor
+            | Self::HtmlAttrStyle
+            | Self::HtmlAttrTitle
+            | Self::HtmlAttrChecked
+            | Self::HtmlAttrDisabled
+            | Self::HtmlAttrReadonly
+            | Self::HtmlAttrRequired
+            | Self::HtmlAttrMultiple
+            | Self::HtmlAttrSelected
+            | Self::HtmlAttrAutofocus
+            | Self::HtmlAttrAutocomplete
+            | Self::HtmlAttribute
+            | Self::HtmlBoolAttribute
+            | Self::HtmlNoAttr
+            | Self::LiveApp
+            | Self::LiveAppRouted
+            | Self::LiveRoute
+            | Self::LiveRenderStatic
+            | Self::TuiProgram
+            | Self::TuiApp
+            | Self::WebviewApp
+            | Self::UiOnClick
+            | Self::UiOnFocus
+            | Self::UiOnBlur
+            | Self::UiOnMouseOver
+            | Self::UiOnMouseOut
+            | Self::UiOnInput
+            | Self::UiOnChange
+            | Self::UiOnKeyDown
+            | Self::UiOnKeyUp
+            | Self::UiOnBool
+            | Self::UiOnSubmit
+            | Self::UiOnFile
+            | Self::HtmlOnClick
+            | Self::HtmlOnFocus
+            | Self::HtmlOnBlur
+            | Self::HtmlOnMouseOver
+            | Self::HtmlOnMouseOut
+            | Self::HtmlOnSubmit
+            | Self::HtmlOnInput
+            | Self::HtmlOnChange
+            | Self::HtmlOnKeyDown
+            | Self::HtmlOnKeyUp
+            | Self::HtmlOnBool
+            | Self::UiSquare
+            | Self::UiWidescreen
+            | Self::UiCinemascope
+            | Self::UiAspectRatio
+            | Self::UiAspectRatioWH
+            | Self::UiHtmlAttribute
+            | Self::UiName
+            | Self::UiStyle
+            | Self::UiTransitionRaw
+            | Self::UiGridTracksRaw
+            | Self::UiAnimateRaw
+            | Self::UiBreakpoint
+            | Self::UiMediaQuery
+            | Self::UiMobile
+            | Self::UiTablet
+            | Self::UiDesktop
+            | Self::UiDarkMode
+            | Self::UiLightMode
+            | Self::UiReducedMotion
+            | Self::UiOnPseudo
+            | Self::UiHover
+            | Self::UiFocus
+            | Self::UiFocusVisible
+            | Self::UiActive
+            | Self::UiDisabled
+            | Self::BackgroundHoverColor
+            | Self::BackgroundFocusColor
+            | Self::BackgroundActiveColor
+            | Self::BackgroundDisabledColor
+            | Self::BorderSolid
+            | Self::BorderDashed
+            | Self::BorderDotted
+            | Self::BorderHoverColor
+            | Self::BorderFocusColor
+            | Self::BorderActiveColor
+            | Self::BorderHoverWidth
+            | Self::BorderHoverRounded
+            | Self::FontWeight
+            | Self::FontSemiBold
+            | Self::FontRegular
+            | Self::FontLight
+            | Self::FontExtraBold
+            | Self::FontBlack
+            | Self::FontUnderline
+            | Self::FontNoDecoration
+            | Self::FontLineThrough
+            | Self::FontLetterSpacing
+            | Self::FontWordSpacing
+            | Self::FontAlignLeft
+            | Self::FontAlignRight
+            | Self::FontAlignCenter
+            | Self::FontCenter
+            | Self::FontJustify
+            | Self::FontSansSerif
+            | Self::FontSerif
+            | Self::FontMonospace
+            | Self::FontHoverColor
+            | Self::FontFocusColor
+            | Self::FontActiveColor
+            | Self::FontDisabledColor
+            | Self::FontHoverSize
+            | Self::HtmlAttrTabindex
+            | Self::HtmlAttrRows
+            | Self::CliProgram
+            | Self::AuthHashPassword
+            | Self::AuthHashPasswordCost
+            | Self::AuthVerifyPassword
+            | Self::AuthPasswordStrength
+            | Self::AuthSignToken
+            | Self::AuthVerifyToken
+            | Self::AuthRegister
+            | Self::AuthLogin
+            | Self::AuthSetRole
+            | Self::EnvPublic
+            | Self::RegionMainContent
+            | Self::RegionNavigation
+            | Self::RegionFooter
+            | Self::RegionAside
+            | Self::RegionHeading
+            | Self::RegionLabel
+            | Self::RegionAnnounce
+            | Self::RegionAnnounceUrgently
+            | Self::UiInput
+            | Self::UiDescribe
+            | Self::UiDescMain
+            | Self::UiDescNavigation
+            | Self::UiDescContentInfo
+            | Self::UiDescComplementary
+            | Self::UiDescLivePolite
+            | Self::UiDescLiveAssertive
+            | Self::UiDescHeading
+            | Self::UiDescLabel
+            | Self::InputLabelAbove
+            | Self::InputLabelBelow
+            | Self::InputLabelLeft
+            | Self::InputLabelRight
+            | Self::InputLabelHidden
+            | Self::InputPlaceholder
+            | Self::InputText
+            | Self::InputMultiline
+            | Self::InputEmail
+            | Self::InputUsername
+            | Self::InputSearch
+            | Self::InputCurrentPassword
+            | Self::InputNewPassword
+            | Self::InputCheckbox
+            | Self::InputSlider
+            | Self::InputOption
+            | Self::InputRadio
+            | Self::InputRadioRow
+            | Self::LazyLazy
+            | Self::LazyLazy2
+            | Self::LazyLazy3
+            | Self::LazyLazy4
+            | Self::LazyLazy5
+            | Self::KeyedColumn
+            | Self::KeyedRow
+            | Self::DecZero
+            | Self::DecOne
+            | Self::DecOneHundred
+            | Self::DecFromString
+            | Self::DecFromInt
+            | Self::DecFromFloat
+            | Self::DecFromMinor
+            | Self::DecToString
+            | Self::DecToStringFixed
+            | Self::DecToFloat
+            | Self::DecToInt
+            | Self::DecToMinor
+            | Self::DecAdd
+            | Self::DecSub
+            | Self::DecMul
+            | Self::DecDiv
+            | Self::DecMod
+            | Self::DecNeg
+            | Self::DecAbs
+            | Self::DecFloor
+            | Self::DecCeil
+            | Self::DecRound
+            | Self::DecRoundHalfUp
+            | Self::DecTruncate
+            | Self::DecCompare
+            | Self::DecEq
+            | Self::DecNeq
+            | Self::DecLt
+            | Self::DecLte
+            | Self::DecGt
+            | Self::DecGte
+            | Self::DecMin
+            | Self::DecMax
+            | Self::DecIsZero
+            | Self::DecIsPositive
+            | Self::DecIsNegative
+            | Self::DecPercentOf
+            | Self::DecAddPercent
+            | Self::DecSubPercent
+            | Self::DecFormatWith
+            | Self::MoneyMinorUnits
+            | Self::MoneySymbol
+            | Self::MoneyCurrencyName
+            | Self::MoneyIsKnownCurrency
+            | Self::MoneyFormat
+            | Self::MoneyFormatWithCode
+            | Self::MoneyAllocate
+            | Self::MoneySetRate
+            | Self::MoneyGetRate
+            | Self::MoneyHasRate
+            | Self::MoneyClearRates
+            | Self::SqlColumn
+            | Self::SqlParam
+            | Self::SqlInt
+            | Self::SqlString
+            | Self::SqlFloat
+            | Self::SqlBool
+            | Self::SqlEq
+            | Self::SqlNe
+            | Self::SqlGt
+            | Self::SqlLt
+            | Self::SqlGte
+            | Self::SqlLte
+            | Self::SqlAnd
+            | Self::SqlOr
+            | Self::SqlNot
+            | Self::SqlIsNull
+            | Self::SqlIsNotNull
+            | Self::SqlInList
+            | Self::SqlLike
+            | Self::SecretFromString
+            | Self::SecretReveal
+            | Self::SecretRedacted
+            | Self::RegexMatch
+            | Self::RegexFind
+            | Self::RegexFindAll
+            | Self::RegexReplace
+            | Self::RegexSplit
+            | Self::PathBase
+            | Self::PathDir
+            | Self::PathExt
+            | Self::PathIsAbsolute
+            | Self::TraceSpan
+            | Self::TraceEvent
+            | Self::TraceAttr
+            | Self::CompressionGzip
+            | Self::CompressionGunzip
+            | Self::CompressionZstdCompress
+            | Self::CompressionZstdDecompress
+            | Self::CsvParse
+            | Self::CsvParseWithDelimiter
+            | Self::CsvEncode
+            | Self::CsvEncodeWithDelimiter
+            | Self::CacheNewRaw
+            | Self::CacheGet
+            | Self::CachePut
+            | Self::CacheRemove
+            | Self::CacheClear
+            | Self::CacheSize
+            | Self::CacheStats
+            | Self::ConfigString
+            | Self::ConfigInt
+            | Self::ConfigFloat
+            | Self::ConfigBool
+            | Self::ConfigNullable
+            | Self::ConfigField
+            | Self::ConfigAt
+            | Self::ConfigList
+            | Self::ConfigSucceed
+            | Self::ConfigFail
+            | Self::ConfigMap
+            | Self::ConfigAndThen
+            | Self::ConfigDecodeToml
+            | Self::ConfigDecodeYaml
+            | Self::ConfigDecodeJson => None,
+        }
+    }
+
     /// `true` when this variant belongs to the TEA (`Cmd` / `Sub` /
     /// `Time.every`) subsystem, including reserved pub/sub variants.
     #[must_use]
@@ -5149,6 +6080,58 @@ mod tests {
     use std::collections::HashMap;
 
     use super::StdlibKernel;
+
+    /// Every wired kernel is callable through `capability()` (the exhaustive
+    /// match is total over the whole registry — no panic, no gap). The compile
+    /// error on a missing arm is the real drift guarantee; this asserts the
+    /// method is live over `ALL`.
+    #[test]
+    fn every_wired_kernel_has_a_capability_decision() {
+        for k in StdlibKernel::ALL {
+            let _ = k.capability();
+        }
+    }
+
+    /// One representative kernel per effect family maps to the right capability,
+    /// and a pure kernel maps to `None`.
+    #[test]
+    fn effect_kernels_map_to_their_capability() {
+        use super::Capability;
+        assert_eq!(
+            StdlibKernel::HttpGet.capability(),
+            Some(Capability::Network)
+        );
+        assert_eq!(
+            StdlibKernel::ServerListen.capability(),
+            Some(Capability::Network)
+        );
+        assert_eq!(
+            StdlibKernel::EmailSend.capability(),
+            Some(Capability::Network)
+        );
+        assert_eq!(
+            StdlibKernel::FileReadFile.capability(),
+            Some(Capability::Filesystem)
+        );
+        assert_eq!(
+            StdlibKernel::DbQuery.capability(),
+            Some(Capability::Filesystem)
+        );
+        assert_eq!(
+            StdlibKernel::SystemGetenv.capability(),
+            Some(Capability::Env)
+        );
+        assert_eq!(StdlibKernel::TimeNow.capability(), Some(Capability::Clock));
+        assert_eq!(
+            StdlibKernel::RandomInt.capability(),
+            Some(Capability::Random)
+        );
+        assert_eq!(StdlibKernel::UuidV4.capability(), Some(Capability::Random));
+        assert_eq!(StdlibKernel::StringToUpper.capability(), None);
+        assert_eq!(StdlibKernel::LogPrintln.capability(), None);
+        // `Env.public` reads a build-time constant, not the live environment.
+        assert_eq!(StdlibKernel::EnvPublic.capability(), None);
+    }
 
     /// The `WasmClient` allowlist is default-deny: every server-effect family
     /// is denied and the pure floor + render surface is allowed.
