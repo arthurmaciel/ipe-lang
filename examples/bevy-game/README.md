@@ -37,15 +37,20 @@ non-generic `World` API: `World::new`, `flush`, `clear_all` / `clear_entities` /
 `clear_trackers`, `entity_count`, `change_tick` / `increment_change_tick`,
 `despawn`, plus the `Tick` / `ComponentId` value types.
 
-The world is threaded **linearly** — each step consumes it and returns it
-(`World -> Result Error World`), so the value is used exactly once per step. An
-opaque foreign handle for a non-`Clone` Rust type (bevy's `World` is `!Clone`)
-cannot be duplicated, so a linear thread is the only shape the shim-free FFI can
-compile today.
+The world is threaded **linearly** — each step consumes it and returns it, so
+the value is used exactly once per step. An opaque foreign handle for a
+non-`Clone` Rust type (bevy's `World` is `!Clone`) cannot be duplicated, so a
+linear thread is the only shape the shim-free FFI can compile.
+
+Mutating steps take `&mut self` and return the world (`World -> Result Error
+World`). Reads take `&self` / `&mut self` and are **receiver-threaded**: a reader
+binds as `World -> Result Error (value, World)` — it hands the world back beside
+the value, so two reads chain linearly (`entity_count` then `change_tick`) with
+no clone. Reusing the ORIGINAL binding after a read instead of the returned one
+still fails closed with `IPE-L0130`.
 
 The wall is Bevy's generic core. `spawn` / `insert` are generic over `Bundle`,
 systems are Rust `Fn` closures, and `Component` is a user-defined Rust type —
 none of which the shim-free FFI can express from Ipê (a closure / `dyn` argument
 and a `<T: Bundle>` method both over-drop by design). The precise dropped
-constructs, and the `&self`-method receiver-threading gap that keeps richer
-programs linear, are ledgered in `examples/sky/BLOCKERS.md`.
+constructs are ledgered in `examples/sky/BLOCKERS.md`.
