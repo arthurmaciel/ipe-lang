@@ -5,7 +5,7 @@
 # The mirror is regenerated on every sweep and git-ignored: examples/sky/<name>/
 # never drifts from upstream because it is never committed. Only the control
 # surface under examples/sky/ is tracked — manifest.toml, rename-map.tsv,
-# ipe-patches/, README.md, BLOCKERS.md.
+# ipe-patches/, README.md.
 #
 # Each example is transformed from Sky to Ipê in two ordered steps:
 #   1. rename-map.tsv (via sky-to-ipe-transform.py) — the shared, drift-resistant
