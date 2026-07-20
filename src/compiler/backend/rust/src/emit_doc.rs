@@ -48,8 +48,8 @@ use ipe_ir::{BinOp, Callee, Expr, IrType, KernelFn, ModPath};
 use crate::EmitCtx;
 use crate::doc::{ChainOperand, Doc};
 use crate::emit_expr::{
-    call_has_kernel_special_case, callee_name, emit_expr_at, expr_value_is_non_clone,
-    kernel_swaps_first_two, scan_free_target, substitute_var,
+    call_has_kernel_special_case, callee_name, emit_binding_stmts, emit_expr_at,
+    expr_value_is_non_clone, kernel_swaps_first_two, scan_free_target, substitute_var,
 };
 use crate::emit_types::GenericScope;
 
@@ -187,6 +187,18 @@ pub fn build_doc(
         Expr::Let { name, value, body } => {
             build_let(ctx, *name, value, body, indent, child, generics)
         }
+
+        // A `Destructure` block `({ <binding stmts> <body> })`. Like the `let`
+        // block, but its binder may expand to MULTIPLE `let` statements
+        // (`emit_binding_stmts`: one flat `let <pat> = <value>;` for an alias-free
+        // binder, or the clone-split sequence for an aliased one). Each statement
+        // and the body go on their own `HardLine`, so the block always breaks —
+        // matching `rustfmt`, which never inlines a block that holds a statement.
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => build_destructure(ctx, binder, value, body, indent, child, generics),
 
         // Every remaining arm carries the string emitter's exact bytes as one
         // leaf. Its layout is whatever single-line pre-`rustfmt` form the string
@@ -653,6 +665,52 @@ fn build_let(
     ]))
 }
 
+/// Build the `Doc` for a `Destructure` block, mirroring
+/// [`crate::emit_expr::emit_expr_at`]'s `Expr::Destructure` arm token-for-token.
+///
+/// The string emitter renders `({ <binding stmts> <body> })` where the binding
+/// statements come from [`crate::emit_expr::emit_binding_stmts`]: a SINGLE flat
+/// `let <pat> = <value>;` for an alias-free binder, or the clone-split
+/// `let name = <value>; let (a, b) = name.clone();` sequence for an aliased one —
+/// one or MORE `let` statements. Each statement is carried as its own leaf on its
+/// own `HardLine`, and the body (built recursively) follows on a further
+/// `HardLine`, all inside the block's sole `Nest(4)`. Like the one-statement
+/// `let` block, this always breaks — `rustfmt` never inlines a block that holds a
+/// statement.
+///
+/// The value is rendered through the same `emit_expr_at` call the string emitter
+/// uses (`emit_binding_stmts` interpolates the value string into each statement),
+/// so the statement leaves carry the string emitter's exact tokens and the SEAL
+/// holds by construction. The body is the only structured child.
+fn build_destructure(
+    ctx: &EmitCtx,
+    binder: &ipe_ir::Pat,
+    value: &Expr,
+    body: &Expr,
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Doc> {
+    let value_s = emit_expr_at(ctx, value, indent, child, generics)?;
+    let stmts = emit_binding_stmts(ctx, binder, &value_s)?;
+    let body_doc = build_doc(ctx, body, indent, child, generics)?;
+    // Each binding statement on its own `HardLine`, then the body on a further
+    // `HardLine`, all at one indent step (the renderer's sole `Nest(4)`).
+    let mut inner = Vec::with_capacity(stmts.len() * 2 + 2);
+    for stmt in stmts {
+        inner.push(Doc::HardLine);
+        inner.push(Doc::owned(stmt));
+    }
+    inner.push(Doc::HardLine);
+    inner.push(body_doc);
+    Ok(Doc::concat(vec![
+        Doc::text("({"),
+        Doc::nest(4, Doc::concat(inner)),
+        Doc::HardLine,
+        Doc::text("})"),
+    ]))
+}
+
 #[cfg(test)]
 #[allow(clippy::panic, clippy::expect_used, reason = "test assertions")]
 mod tests {
@@ -666,7 +724,7 @@ mod tests {
     use ipe_intern::Interner;
     use ipe_ir::{
         BinOp, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module,
-        OnFormKind, Program, TypeDef, Variant,
+        OnFormKind, Pat, Program, TypeDef, Variant,
     };
 
     use super::build_doc;
@@ -1041,6 +1099,25 @@ mod tests {
                 name: sym(fx, 0),
                 value: Box::new(var(fx, 1)),
                 body: Box::new(binop(BinOp::Add, var(fx, 0), var(fx, 2))),
+            },
+            // `Destructure` block, alias-free tuple binder (structured): a SINGLE
+            // flat `let (a, b) = c;` statement, then the body.
+            Expr::Destructure {
+                binder: Pat::Tuple(vec![Pat::Var(sym(fx, 0)), Pat::Var(sym(fx, 1))]),
+                value: Box::new(var(fx, 2)),
+                body: Box::new(var(fx, 0)),
+            },
+            // `Destructure` block, ALIASED tuple binder (structured): the clone-
+            // split MULTI-statement sequence (`let x = c; let (a, b) = x.clone();`),
+            // each statement on its own line, then the body. Exercises the
+            // multiple-`let` path the plain `let` block never hits.
+            Expr::Destructure {
+                binder: Pat::Alias(
+                    Box::new(Pat::Tuple(vec![Pat::Var(sym(fx, 0)), Pat::Var(sym(fx, 1))])),
+                    sym(fx, 3),
+                ),
+                value: Box::new(var(fx, 2)),
+                body: Box::new(var(fx, 0)),
             },
         ]
     }
@@ -1611,6 +1688,56 @@ mod tests {
             };
             let got = render_let_stmt(ctx, &expr);
             let expected = "let z = ({\n        let a = b;\n        ({\n            let a = b;\n            c\n        })\n    })";
+            assert_eq!(
+                got, expected,
+                "\n--- got ---\n{got}\n--- want ---\n{expected}"
+            );
+        });
+    }
+
+    #[test]
+    fn destructure_block_single_statement_always_breaks() {
+        // A `Destructure` with an alias-free tuple binder is a ONE-statement block:
+        // `({`, the flat `let (a, b) = c;`, the body `a`, `})` — each on its own
+        // line, `})` dedented to the statement indent. Always breaks, like the
+        // `let` block. Golden captured from `rustfmt --edition 2024`.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let expr = Expr::Destructure {
+                binder: Pat::Tuple(vec![Pat::Var(sym(&fx, 0)), Pat::Var(sym(&fx, 1))]),
+                value: Box::new(var(&fx, 2)), // c
+                body: Box::new(var(&fx, 0)),  // a
+            };
+            let got = render_let_stmt(ctx, &expr);
+            let expected = "let z = ({\n        let (a, b) = c;\n        a\n    })";
+            assert_eq!(
+                got, expected,
+                "\n--- got ---\n{got}\n--- want ---\n{expected}"
+            );
+        });
+    }
+
+    #[test]
+    fn destructure_block_aliased_binder_emits_multiple_statements() {
+        // An ALIASED tuple binder expands to the clone-split MULTI-statement
+        // sequence: `let x = c;` then `let (a, b) = x.clone();`, each on its own
+        // `HardLine`, then the body — the path the plain `let` block never takes.
+        // Golden captured from `rustfmt --edition 2024`.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let expr = Expr::Destructure {
+                binder: Pat::Alias(
+                    Box::new(Pat::Tuple(vec![
+                        Pat::Var(sym(&fx, 0)),
+                        Pat::Var(sym(&fx, 1)),
+                    ])),
+                    sym(&fx, 3), // x
+                ),
+                value: Box::new(var(&fx, 2)), // c
+                body: Box::new(var(&fx, 0)),  // a
+            };
+            let got = render_let_stmt(ctx, &expr);
+            let expected = "let z = ({\n        let x = c;\n        let (a, b) = x.clone();\n        a\n    })";
             assert_eq!(
                 got, expected,
                 "\n--- got ---\n{got}\n--- want ---\n{expected}"
