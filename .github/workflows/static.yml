@@ -21,14 +21,17 @@
 # ─────────────────────────────────────────────────────────────────────────────
 name: static
 
+# The `--static` musl proof (build + scratch-container run + advisory audit of
+# the frozen lockfile) is a slow gate — a POST-MERGE / nightly check, OFF the
+# required PR path. Runs on push to the main branches and nightly; not on
+# pull_request.
 on:
   push:
     branches: [main, master]
     paths-ignore:
       - '**.md'
-  pull_request:
-    paths-ignore:
-      - '**.md'
+  schedule:
+    - cron: '52 4 * * *'      # nightly, offset from ci.yml / security.yml / examples-sweep
   workflow_dispatch: {}
 
 concurrency:
