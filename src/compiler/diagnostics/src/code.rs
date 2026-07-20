@@ -71,6 +71,8 @@ pub const IPE_P0015: Code = Code("IPE-P0015");
 pub const IPE_P0016: Code = Code("IPE-P0016");
 /// unterminated block comment
 pub const IPE_P0017: Code = Code("IPE-P0017");
+/// a space before `.` reads as an accessor function (unsupported)
+pub const IPE_P0018: Code = Code("IPE-P0018");
 /// malformed module header
 pub const IPE_P0020: Code = Code("IPE-P0020");
 /// malformed exposing list
@@ -318,6 +320,7 @@ pub fn title(c: Code) -> &'static str {
         IPE_P0015 => "malformed character literal",
         IPE_P0016 => "float literal out of range",
         IPE_P0017 => "unterminated block comment",
+        IPE_P0018 => "a space before '.' reads as an accessor function",
         IPE_P0020 => "malformed module header",
         IPE_P0021 => "malformed exposing list",
         IPE_P0030 => "missing '=' in definition",
@@ -447,6 +450,7 @@ fn front_end_explain_page(c: Code) -> Option<&'static str> {
         IPE_P0015 => Some(include_str!("../explain/IPE-P0015.md")),
         IPE_P0016 => Some(include_str!("../explain/IPE-P0016.md")),
         IPE_P0017 => Some(include_str!("../explain/IPE-P0017.md")),
+        IPE_P0018 => Some(include_str!("../explain/IPE-P0018.md")),
         IPE_P0020 => Some(include_str!("../explain/IPE-P0020.md")),
         IPE_P0021 => Some(include_str!("../explain/IPE-P0021.md")),
         IPE_P0030 => Some(include_str!("../explain/IPE-P0030.md")),
@@ -558,18 +562,18 @@ fn back_end_explain_page(c: Code) -> Option<&'static str> {
 /// `explain <CODE>` — no hand-mirror needed.
 pub const ALL_CODES: &[Code] = &[
     IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014,
-    IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040,
-    IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_N0001, IPE_N0002, IPE_N0003,
-    IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021,
-    IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029,
-    IPE_N0031, IPE_N0032, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011,
-    IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_L0100, IPE_L0101,
-    IPE_L0102, IPE_L0103, IPE_L0104, IPE_L0105, IPE_L0106, IPE_L0107, IPE_L0108, IPE_L0110,
-    IPE_L0111, IPE_L0112, IPE_L0113, IPE_L0114, IPE_L0115, IPE_L0116, IPE_L0117, IPE_L0118,
-    IPE_L0119, IPE_L0120, IPE_L0121, IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126,
-    IPE_L0127, IPE_L0128, IPE_L0129, IPE_L0130, IPE_L0200, IPE_F4400, IPE_F4401, IPE_F4402,
-    IPE_F4410, IPE_F4411, IPE_F4412, IPE_I0001, IPE_I0010, IPE_I0011, IPE_I0100, IPE_I0101,
-    IPE_I0102, IPE_I0103, IPE_I0200, IPE_I0201, IPE_I0202, IPE_I0203,
+    IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031,
+    IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_N0001, IPE_N0002,
+    IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020,
+    IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028,
+    IPE_N0029, IPE_N0031, IPE_N0032, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010,
+    IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_L0100,
+    IPE_L0101, IPE_L0102, IPE_L0103, IPE_L0104, IPE_L0105, IPE_L0106, IPE_L0107, IPE_L0108,
+    IPE_L0110, IPE_L0111, IPE_L0112, IPE_L0113, IPE_L0114, IPE_L0115, IPE_L0116, IPE_L0117,
+    IPE_L0118, IPE_L0119, IPE_L0120, IPE_L0121, IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125,
+    IPE_L0126, IPE_L0127, IPE_L0128, IPE_L0129, IPE_L0130, IPE_L0200, IPE_F4400, IPE_F4401,
+    IPE_F4402, IPE_F4410, IPE_F4411, IPE_F4412, IPE_I0001, IPE_I0010, IPE_I0011, IPE_I0100,
+    IPE_I0101, IPE_I0102, IPE_I0103, IPE_I0200, IPE_I0201, IPE_I0202, IPE_I0203,
 ];
 
 #[cfg(test)]
@@ -578,7 +582,7 @@ mod tests {
 
     #[test]
     fn taxonomy_code_count_is_pinned() {
-        assert_eq!(ALL_CODES.len(), 102);
+        assert_eq!(ALL_CODES.len(), 103);
     }
 
     #[test]
@@ -596,7 +600,7 @@ mod tests {
             assert!(s.starts_with("IPE-"), "{s} bad prefix");
             assert!(seen.insert(s), "{s} duplicated");
         }
-        assert_eq!(seen.len(), 102);
+        assert_eq!(seen.len(), 103);
     }
 
     /// CI coverage gate: every taxonomy code has a conforming explain page.

@@ -19,10 +19,10 @@ use crate::code::{
     IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024,
     IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032,
     IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014,
-    IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040,
-    IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_T0001, IPE_T0002, IPE_T0003,
-    IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016,
-    IPE_T0017, Severity,
+    IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031,
+    IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_T0001, IPE_T0002,
+    IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015,
+    IPE_T0016, IPE_T0017, Severity,
 };
 use crate::span::Span;
 
@@ -282,6 +282,11 @@ pub enum ParseError {
     UnknownChar(char),
     /// A lone `.` not part of `..` or a qualified name. [IPE-P0011]
     StrayDot,
+    /// A `.` with whitespace before it in expression position, e.g. `f .x`.
+    /// This is the accessor-function reading (`.x` applied to a record), which
+    /// is not supported yet; field access is written with no space (`f.x`).
+    /// [IPE-P0018]
+    SpaceBeforeDot,
     /// A digit immediately followed by an identifier character. [IPE-P0012]
     NumberJoinedToName(char),
     /// An integer literal that does not fit in `i64`. [IPE-P0013]
@@ -899,6 +904,9 @@ pub enum Hint {
     ModuleHeaderExample,
     /// Suggest `..` or `Module.name` for a stray dot.
     UseDotDotOrQualified,
+    /// Name both readings of a space before `.` and point to the field-access
+    /// fix (remove the space); the accessor-function reading is unsupported.
+    RemoveSpaceBeforeDot,
     /// Suggest separating a number and a name with a space.
     SeparateWithSpace,
     /// State the `i64` integer-literal range.
@@ -1051,6 +1059,7 @@ const fn parse_code(msg: &ParseError) -> Code {
         ParseError::TooDeep | ParseError::NestingTooDeep { .. } => IPE_P0003,
         ParseError::UnknownChar(_) => IPE_P0010,
         ParseError::StrayDot => IPE_P0011,
+        ParseError::SpaceBeforeDot => IPE_P0018,
         ParseError::NumberJoinedToName(_) => IPE_P0012,
         ParseError::IntLiteralOutOfRange => IPE_P0013,
         ParseError::FloatLiteralOutOfRange => IPE_P0016,
@@ -1183,6 +1192,7 @@ fn parse_help(msg: &ParseError) -> Vec<HelpLine> {
     match msg {
         ParseError::MalformedModuleHeader(_) => vec![HelpLine::Hint(Hint::ModuleHeaderExample)],
         ParseError::StrayDot => vec![HelpLine::Hint(Hint::UseDotDotOrQualified)],
+        ParseError::SpaceBeforeDot => vec![HelpLine::Hint(Hint::RemoveSpaceBeforeDot)],
         ParseError::NumberJoinedToName(_) => vec![HelpLine::Hint(Hint::SeparateWithSpace)],
         ParseError::IntLiteralOutOfRange => vec![HelpLine::Hint(Hint::IntegerLiteralRange)],
         ParseError::FloatLiteralOutOfRange => vec![HelpLine::Hint(Hint::FloatLiteralRange)],
