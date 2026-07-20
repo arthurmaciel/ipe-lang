@@ -6,7 +6,7 @@
 //! manifest is the closed cdylib template: no tokio/axum/sqlx/reqwest, no
 //! `server`/`db`/`live` feature. The full browser proof (cargo build to
 //! `.wasm` + a Playwright interaction) lives in the examples flow
-//! (`examples/40-wasm-counter`).
+//! (`examples/wasm-counter`).
 
 use std::path::{Path, PathBuf};
 
