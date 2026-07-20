@@ -409,6 +409,80 @@ mod tests {
     }
 
     #[test]
+    fn bare_field_access_parses_unchanged() {
+        // `record.field` — no space — is one dotted identifier resolved to an
+        // `Access`; whitespace-sensitive dot handling must not disturb this.
+        let mut i = Interner::new();
+        let src = format!("{HDR}f r =\n    r.name\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "bare field access must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let body = find_value(&m, &i, "f").map(|v| &v.body.value);
+        assert!(
+            matches!(body, Some(Expr_::Access(..))),
+            "expected an Access, got {body:?}"
+        );
+    }
+
+    #[test]
+    fn chained_field_access_parses_unchanged() {
+        // `a.b.c` still parses; each segment nests as a further `Access`.
+        let mut i = Interner::new();
+        let src = format!("{HDR}f a =\n    a.b.c\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "chained field access must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let body = find_value(&m, &i, "f").map(|v| &v.body.value);
+        assert!(
+            matches!(body, Some(Expr_::Access(inner, _)) if matches!(inner.value, Expr_::Access(..))),
+            "expected nested Access, got {body:?}"
+        );
+    }
+
+    #[test]
+    fn parenthesised_field_access_parses_unchanged() {
+        // `(r).value` — the `.` is flush against the `)`, so it stays field
+        // access on the parenthesised atom.
+        let mut i = Interner::new();
+        let src = format!("{HDR}f r =\n    (r).value\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "parenthesised field access must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let body = find_value(&m, &i, "f").map(|v| &v.body.value);
+        assert!(
+            matches!(body, Some(Expr_::Access(..))),
+            "expected an Access, got {body:?}"
+        );
+    }
+
+    #[test]
+    fn space_before_dot_is_the_accessor_reading() {
+        // `f .x` is `.x` (an accessor function) applied to `f`, not field
+        // access — an unsupported reading, rejected rather than misparsed.
+        assert_eq!(err_code(&format!("{HDR}g f =\n    f .x\n")), "IPE-P0018");
+    }
+
+    #[test]
+    fn accessor_function_argument_is_rejected() {
+        // A realistic accessor use — `map .name people` — errors clearly on the
+        // spaced `.name` instead of silently reparsing as field access.
+        assert_eq!(
+            err_code(&format!("{HDR}names people =\n    map .name people\n")),
+            "IPE-P0018"
+        );
+    }
+
+    #[test]
+    fn space_before_dot_after_paren_is_rejected() {
+        // `(r) .value` — the space makes `.value` an accessor applied to `(r)`,
+        // distinct from the flush `(r).value` field access above.
+        assert_eq!(
+            err_code(&format!("{HDR}f r =\n    (r) .value\n")),
+            "IPE-P0018"
+        );
+    }
+
+    #[test]
     fn float_literals_lex_to_float_tokens() {
         use lexer::{Tok, lex};
         let kinds = |src: &str| -> Vec<Tok> {
