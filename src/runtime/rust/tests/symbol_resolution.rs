@@ -25,6 +25,10 @@ use std::path::PathBuf;
 /// `callee_name()` path, OR defined in the generated-code epilogue rather
 /// than the runtime.  See module-level docs for per-entry rationale.
 const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
+    // ── Build-time: env_public embeds the whitelisted public environment
+    //         values into the emitted binary at compile time; there is no
+    //         runtime fn to resolve — the value is a baked constant. ──────────
+    "env_public",
     // ── Dead: emit_task_retry_call constructs RetryPolicy / ShouldRetry
     //         values inline for the builder variants; only task_retry_with has
     //         a real runtime fn. These name strings are never emitted. ────────
