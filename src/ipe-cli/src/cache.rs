@@ -137,6 +137,75 @@ fn update_str(hasher: &mut Sha256, s: &str) {
     update_len_prefixed(hasher, s.as_bytes());
 }
 
+/// Domain-separation tag for the source-tree content hash — the integrity check
+/// a resolved package is verified against (`crate::resolve`).
+const TREE_TAG: &[u8] = b"ipe-source-tree-v1";
+
+/// Compute a sha256 over the content of the directory tree rooted at `root`,
+/// deterministically over `(relative_path, file_bytes)` pairs sorted by path.
+///
+/// This is the content integrity check a fetched package is verified against:
+/// the hash the index pins equals `hash_tree` over the source the publisher
+/// registered, so a mismatch means the fetched bytes are not that source. The
+/// `.git` directory is excluded so the hash is of the source tree itself, not of
+/// git's own bookkeeping (which varies across clones of the same revision). Each
+/// path and its bytes are length-prefixed, so no rearrangement of files can
+/// collide (the delimiter-collision hazard, as in [`update_len_prefixed`]).
+///
+/// # Errors
+/// Returns the failing path and its [`std::io::Error`] if the tree cannot be
+/// walked or a file cannot be read.
+pub fn hash_tree(root: &Path) -> Result<String, (PathBuf, std::io::Error)> {
+    let mut files: Vec<(String, PathBuf)> = Vec::new();
+    collect_files(root, root, &mut files)?;
+    // Sort by the relative path so the hash is independent of directory-read
+    // order (which the OS does not guarantee).
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut hasher = Sha256::new();
+    update_len_prefixed(&mut hasher, TREE_TAG);
+    let count = u64::try_from(files.len()).unwrap_or(u64::MAX);
+    hasher.update(count.to_le_bytes());
+    for (rel, abs) in &files {
+        update_str(&mut hasher, rel);
+        let bytes = fs::read(abs).map_err(|e| (abs.clone(), e))?;
+        update_len_prefixed(&mut hasher, &bytes);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+/// Depth-first collect every regular file under `dir` as `(relative_path,
+/// absolute_path)`, with the relative path expressed in forward slashes so the
+/// hash is identical across platforms. The `.git` directory is skipped.
+fn collect_files(
+    base: &Path,
+    dir: &Path,
+    out: &mut Vec<(String, PathBuf)>,
+) -> Result<(), (PathBuf, std::io::Error)> {
+    let entries = fs::read_dir(dir).map_err(|e| (dir.to_path_buf(), e))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| (dir.to_path_buf(), e))?;
+        let path = entry.path();
+        let file_type = entry.file_type().map_err(|e| (path.clone(), e))?;
+        if file_type.is_dir() {
+            if path.file_name().is_some_and(|n| n == ".git") {
+                continue;
+            }
+            collect_files(base, &path, out)?;
+        } else if file_type.is_file() {
+            let rel = path
+                .strip_prefix(base)
+                .unwrap_or(&path)
+                .components()
+                .filter_map(|c| c.as_os_str().to_str())
+                .collect::<Vec<_>>()
+                .join("/");
+            out.push((rel, path));
+        }
+    }
+    Ok(())
+}
+
 /// Compute the content-address key for one build: a pure function of every
 /// input that determines [`EmittedProject`]'s bytes (see the module doc's
 /// "Content address" section for exactly what is, and is not, included).
