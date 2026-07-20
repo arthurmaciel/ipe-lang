@@ -258,3 +258,40 @@ The emitted non-wasm `Cargo.toml` now DECLARES the `wasm-client` feature in its
 raises `unexpected cfg`. The CI examples sweep reports `cargo warnings (past
 #![allow]): 0 total`, and a local emitted-crate build of 01-hello-world shows 0
 warnings. No open work.
+
+### FFI dep `features`/transitive `name` reach the emitted Cargo.toml ungated (RESOLVED)
+Status: RESOLVED. A sibling of the dep-`version` injection fix. The version
+splice was already closed by `CrateVersion`, but two other values on the SAME
+`render_dep_line` splice were ungated: `PkgInfo.features` was stored raw
+(`features: w.features`), and a transitive `TransitiveDep.name` was stored raw
+(`name: dep.name`) — only its `ident` went through `RustIdent`. `render_dep_line`
+(`src/compiler/ffi/src/driver.rs`) splices each feature into a `features = [ … ]`
+array and the name as the `[dependencies]` key of the emitted `Cargo.toml`, so a
+feature or name carrying a quote, bracket, brace and a newline could break out of
+the array / inline table and inject a rogue `[dependencies.evil]` table (with a
+`path`/`git` override and a `build.rs`) that runs at the user's next
+`cargo build`. A `<slug>.pkg.json` is the sole source of record re-decoded on
+every load, and a tampered/planted one is explicitly in scope.
+
+Structural fix (parse-don't-validate at the decode boundary, mirroring
+`CrateVersion`/`PackageName`): a `FeatureName` validated newtype in
+`pkginfo.rs` gating the feature charset `[A-Za-z0-9_+./?:-]` (excludes every
+TOML metacharacter), returning `WireDefect::InvalidFeature`; `PkgInfo.features`
+is now `Vec<FeatureName>`, parsed at the `TryFrom<WirePkgInfo>` boundary.
+`TransitiveDep.name` is now the existing `PackageName` (`[A-Za-z0-9_-]+`,
+alphabetic-first), parsed at the same boundary. The inspector's own probe
+scaffold (`_ipe_ffi_probe_…`, not a legal `PackageName`) is DROPPED at decode
+rather than rejected — a synthetic non-registry package is never a typed
+`TransitiveDep`, so the post-decode skip in `cargo_dep_lines` is gone.
+`render_dep_line` now takes `&[FeatureName]`; the CLI `ipe add --features`
+argument gate routes through the same `FeatureName::parse`, so the wire and CLI
+surfaces share one feature gate (as version does via `CrateVersion`/`VersionPin`).
+An injection-bearing feature or name now fails the WHOLE package at decode,
+never reaching the emitter. Regression tests:
+`an_injection_bearing_feature_fails_the_whole_package`,
+`an_injection_bearing_transitive_name_fails_the_whole_package`,
+`legal_features_decode`, `the_probe_scaffold_is_dropped_at_decode` (pkginfo) and
+`an_injection_bearing_feature_never_reaches_a_manifest_line` +
+`a_legal_feature_set_reaches_a_pinned_manifest_line` (driver). Proven:
+`cargo build --workspace` green, `cargo test -p ipe_ffi` green, `cargo clippy
+-p ipe_ffi --all-targets` clean.

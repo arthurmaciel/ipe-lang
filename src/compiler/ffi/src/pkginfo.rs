@@ -370,8 +370,10 @@ impl FnInfo {
 pub struct TransitiveDep {
     /// The Rust lib-target identifier (the `::<ident>::…` path segment).
     pub ident: RustIdent,
-    /// The canonical package name (the Cargo `[dependencies]` key).
-    pub name: String,
+    /// The canonical package name (the Cargo `[dependencies]` key). Validated
+    /// at decode so it cannot break out of the TOML key position when the
+    /// manifest emitter renders `<name> = "=<version>"`.
+    pub name: PackageName,
     /// The exact resolved version, validated at decode so it cannot break out
     /// of its TOML string when the manifest emitter pins it.
     pub version: CrateVersion,
@@ -396,7 +398,9 @@ impl PackageName {
         }
     }
 
-    fn as_str(&self) -> &str {
+    /// The validated package name.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
         &self.0
     }
 }
@@ -486,6 +490,53 @@ impl PkgPath {
     }
 }
 
+/// A validated Cargo feature name.
+///
+/// Each effective feature is spliced into a `features = [ … ]` array (a TOML
+/// string position) of the emitted `Cargo.toml` by
+/// [`crate::driver::cargo_dep_lines`]. A raw, unvalidated feature could carry a
+/// `"`-and-newline (or `]`/`}`) payload that closes the array + inline table
+/// and injects arbitrary manifest content (`[dependencies.evil]`, a `path`
+/// override). Gating here at the decode boundary — the same surface
+/// [`PackageName`], [`PkgPath`] and [`CrateVersion`] are gated on — makes an
+/// injection-bearing feature unrepresentable past decode. The charset admits
+/// Cargo's dependency-feature syntax (`dep:foo`, `foo/bar`, `dep?/feat`) while
+/// excluding every TOML-breaking character (quote, bracket, brace, backslash,
+/// control), so a name can never escape its string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeatureName(String);
+
+impl FeatureName {
+    /// Validate and wrap a Cargo feature name.
+    ///
+    /// The one gate for every path a feature reaches the emitted manifest by:
+    /// the wire-decode boundary ([`PkgInfo`]'s effective feature set) and the
+    /// `ipe add --features` CLI argument both route through it.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::diag::WireDefect::InvalidFeature`] when the name is empty or
+    /// carries a character outside `[A-Za-z0-9_+./?:-]` (every TOML-breaking
+    /// character — quote, bracket, brace, backslash, control — is excluded).
+    pub fn parse(s: &str) -> Result<Self, crate::diag::WireDefect> {
+        let legal = !s.is_empty()
+            && s.chars().all(|c| {
+                c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+' | '.' | '/' | '?' | ':')
+            });
+        if legal {
+            Ok(Self(s.to_owned()))
+        } else {
+            Err(crate::diag::WireDefect::InvalidFeature { got: s.to_owned() })
+        }
+    }
+
+    /// The validated feature name.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// A fully-validated package inspection result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PkgInfo {
@@ -497,7 +548,7 @@ pub struct PkgInfo {
     errors: Vec<String>,
     notes: Vec<String>,
     transitive_deps: Vec<TransitiveDep>,
-    features: Vec<String>,
+    features: Vec<FeatureName>,
     /// Rendered foreign-nominal path (`::`-prefixed) -> the type's canonical
     /// DEFINING path (the rustdoc `paths` identity, identical in every crate
     /// that can see the type). The catalog unification keys cross-crate
@@ -586,7 +637,7 @@ impl PkgInfo {
 
     /// The effective feature set the introspection succeeded with.
     #[must_use]
-    pub fn features(&self) -> &[String] {
+    pub fn features(&self) -> &[FeatureName] {
         &self.features
     }
 
@@ -865,8 +916,22 @@ impl TryFrom<WirePkgInfo> for PkgInfo {
         fns.retain(|f| seen_refs.insert(f.wrapper_ref_name()));
         let mut transitive_deps = Vec::with_capacity(w.transitive_deps.len());
         for dep in w.transitive_deps {
+            // The inspector's own probe scaffold registers as a workspace
+            // member during introspection; it is a synthetic non-registry
+            // package, not a real dependency, so it never becomes a typed
+            // `TransitiveDep` (its `_ipe_ffi_probe_…` name is not even a legal
+            // `PackageName`). Dropping it here keeps a non-dependency
+            // unrepresentable past decode.
+            if dep.name.starts_with("_ipe_ffi_probe") {
+                continue;
+            }
             let ident =
                 RustIdent::parse(&dep.ident).map_err(|defect| Diagnostic::WireMalformed {
+                    context: format!("transitive dep `{}`", dep.name),
+                    defect,
+                })?;
+            let name =
+                PackageName::parse(&dep.name).map_err(|defect| Diagnostic::WireMalformed {
                     context: format!("transitive dep `{}`", dep.name),
                     defect,
                 })?;
@@ -877,7 +942,7 @@ impl TryFrom<WirePkgInfo> for PkgInfo {
                 })?;
             transitive_deps.push(TransitiveDep {
                 ident,
-                name: dep.name,
+                name,
                 version,
             });
         }
@@ -892,6 +957,18 @@ impl TryFrom<WirePkgInfo> for PkgInfo {
                 k.strip_prefix("::").is_some_and(is_rust_path_shaped) && is_rust_path_shaped(v)
             })
             .collect();
+        // Each feature is spliced into a `features = [ … ]` array of the
+        // emitted `Cargo.toml`; gate it at the boundary so an injection-bearing
+        // feature fails the WHOLE package here rather than reaching the emitter.
+        let mut features = Vec::with_capacity(w.features.len());
+        for f in w.features {
+            features.push(
+                FeatureName::parse(&f).map_err(|defect| Diagnostic::WireMalformed {
+                    context: format!("crate `{}`", w.name),
+                    defect,
+                })?,
+            );
+        }
         Ok(Self {
             pkg_path,
             name,
@@ -901,7 +978,7 @@ impl TryFrom<WirePkgInfo> for PkgInfo {
             errors: w.errors,
             notes: w.notes,
             transitive_deps,
-            features: w.features,
+            features,
             foreign_type_ids,
             dropped,
         })
@@ -1319,6 +1396,105 @@ mod tests {
         }
     }
 
+    // A feature string is spliced into the `features = [ … ]` array of the
+    // emitted `Cargo.toml`. A feature carrying `"`, `]`, `}` and a newline
+    // could close the array + inline table and inject a rogue
+    // `[dependencies.evil]` table. Assert decode refuses the WHOLE package
+    // rather than passing the raw string through to the manifest emitter.
+    #[test]
+    fn an_injection_bearing_feature_fails_the_whole_package() {
+        let evil = "std\"]}\n[dependencies.evil]\npath = \"/tmp/evil\nx = [\"";
+        let v = json!({
+            "pkg": "semver",
+            "name": "semver",
+            "version": "1.0.26",
+            "functions": [],
+            "errors": [],
+            "features": [evil]
+        });
+        assert!(matches!(
+            decode(&v),
+            Err(Diagnostic::WireMalformed {
+                defect: WireDefect::InvalidFeature { .. },
+                ..
+            })
+        ));
+    }
+
+    // The transitive `name` becomes the `[dependencies]` key of the emitted
+    // manifest. Only `ident` went through a gate before; `name` was raw. A
+    // name carrying a TOML breakout must fail the whole package at decode.
+    #[test]
+    fn an_injection_bearing_transitive_name_fails_the_whole_package() {
+        let v = json!({
+            "pkg": "semver",
+            "name": "semver",
+            "version": "1.0.26",
+            "functions": [],
+            "errors": [],
+            "transitiveDeps": [
+                {"ident": "serde_json",
+                 "name": "serde\"]}\n[dependencies.evil]\npath = \"/tmp/evil\nx=[\"",
+                 "version": "1.0.145"}
+            ]
+        });
+        assert!(matches!(
+            decode(&v),
+            Err(Diagnostic::WireMalformed {
+                defect: WireDefect::InvalidIdent { .. },
+                ..
+            })
+        ));
+    }
+
+    // Legal Cargo feature syntax (plain names, dashed, `dep:`, `crate/feat`,
+    // optional `dep?/feat`) must still decode — the gate rejects only the
+    // TOML-breaking charset, never ordinary feature syntax.
+    #[test]
+    fn legal_features_decode() {
+        let v = json!({
+            "pkg": "tokio",
+            "name": "tokio",
+            "version": "1.0.0",
+            "functions": [],
+            "errors": [],
+            "features": ["rt-multi-thread", "dep:foo", "serde/std", "dep?/feat", "v1.2"]
+        });
+        let pkg = decode(&v).expect("legal features decode");
+        assert_eq!(
+            pkg.features().iter().map(FeatureName::as_str).collect::<Vec<_>>(),
+            ["rt-multi-thread", "dep:foo", "serde/std", "dep?/feat", "v1.2"]
+        );
+    }
+
+    // The inspector's own probe scaffold registers as a workspace member of
+    // the introspection project and appears in `transitiveDeps`. It is a
+    // synthetic non-registry package (its `_ipe_ffi_probe_…` name is not a
+    // legal `PackageName`), so decode must DROP it rather than fail — every
+    // surviving `TransitiveDep` is then a real dependency.
+    #[test]
+    fn the_probe_scaffold_is_dropped_at_decode() {
+        let v = json!({
+            "pkg": "semver",
+            "name": "semver",
+            "version": "1.0.26",
+            "functions": [],
+            "errors": [],
+            "transitiveDeps": [
+                {"ident": "_ipe_ffi_probe_semver", "name": "_ipe_ffi_probe_semver",
+                 "version": "0.0.0"},
+                {"ident": "serde_json", "name": "serde-json", "version": "1.0.145"}
+            ]
+        });
+        let pkg = decode(&v).expect("probe scaffold is dropped, not rejected");
+        let names: Vec<&str> = pkg
+            .transitive_deps()
+            .iter()
+            .map(|d| d.name.as_str())
+            .collect();
+        assert_eq!(names, ["serde-json"]);
+    }
+
     #[test]
     fn a_generic_block_routes_through_the_call_gate() {
         let good = decode(&base_pkg(&json!([{
@@ -1394,13 +1570,16 @@ mod tests {
         let pkg = decode(&v).expect("decodes");
         assert_eq!(pkg.errors(), ["rustdoc failed".to_owned()]);
         assert_eq!(pkg.notes(), ["facade guidance".to_owned()]);
-        assert_eq!(pkg.features(), ["std".to_owned()]);
+        assert_eq!(
+            pkg.features().iter().map(FeatureName::as_str).collect::<Vec<_>>(),
+            ["std"]
+        );
         assert_eq!(
             pkg.transitive_deps().first().expect("dep").ident.as_str(),
             "serde_json"
         );
         assert_eq!(
-            pkg.transitive_deps().first().expect("dep").name,
+            pkg.transitive_deps().first().expect("dep").name.as_str(),
             "serde-json"
         );
         assert_eq!(pkg.modules(), ["semver".to_owned()]);

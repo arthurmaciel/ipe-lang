@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use crate::diag::{Diagnostic, SourceDefect};
 use crate::naming::{WRAPPER_END_SENTINEL, WRAPPER_SENTINEL_PREFIX};
-use crate::pkginfo::{CrateVersion, PkgInfo};
+use crate::pkginfo::{CrateVersion, FeatureName, PkgInfo};
 
 // ── crate-name gate ─────────────────────────────────────────────────────────
 
@@ -90,44 +90,6 @@ impl VersionPin {
     }
 
     /// The validated requirement text.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-/// A Cargo feature name, gated before it reaches the emitted manifest.
-///
-/// It is spliced into a `features = [ … ]` array (a TOML string position). The
-/// charset admits Cargo's dependency-feature syntax (`dep:foo`, `foo/bar`,
-/// `dep?/feat`) while excluding every TOML-breaking character (quote, bracket,
-/// brace, backslash, control), so a name can never escape its string.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FeatureName(String);
-
-impl FeatureName {
-    /// Validate and wrap a feature name.
-    ///
-    /// # Errors
-    ///
-    /// `IPE-F4411` when the name is empty or carries a character outside
-    /// `[A-Za-z0-9_+./?:-]`.
-    pub fn parse(s: &str) -> Result<Self, Diagnostic> {
-        let legal = !s.is_empty()
-            && s.chars().all(|c| {
-                c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+' | '.' | '/' | '?' | ':')
-            });
-        if legal {
-            Ok(Self(s.to_owned()))
-        } else {
-            Err(Diagnostic::SourceRejected {
-                source: s.to_owned(),
-                defect: SourceDefect::FeatureNameIllegal { got: s.to_owned() },
-            })
-        }
-    }
-
-    /// The validated feature name.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -943,13 +905,10 @@ pub fn cargo_dep_lines(pkg: &PkgInfo) -> Result<Vec<String>, Diagnostic> {
         return Ok(lines);
     }
     for dep in pkg.transitive_deps() {
-        // The inspector's own probe scaffold registers as a workspace member
-        // during introspection; it is not a real registry package.
-        if dep.name.starts_with("_ipe_ffi_probe") {
-            continue;
-        }
+        // The probe scaffold is dropped at the `PkgInfo` decode boundary, so
+        // every `TransitiveDep` reaching here is a real registry package.
         if dep.version.is_empty() {
-            return Err(missing_version(&dep.name));
+            return Err(missing_version(dep.name.as_str()));
         }
         // The primary crate carries the effective feature set rustdoc
         // succeeded with. Matched on the REGISTRY package NAME, not the lib
@@ -958,28 +917,33 @@ pub fn cargo_dep_lines(pkg: &PkgInfo) -> Result<Vec<String>, Diagnostic> {
         // = pkg.name()`, and the `Cargo.toml` key is the package name — so
         // matching on ident would drop the feature set and ship a manifest
         // missing a mandatory runtime feature (a cargo build-script failure).
-        let features = if dep.name == pkg.name() {
+        let features: &[FeatureName] = if dep.name.as_str() == pkg.name() {
             pkg.features()
         } else {
             &[]
         };
-        lines.push(render_dep_line(&dep.name, &dep.version, features));
+        lines.push(render_dep_line(dep.name.as_str(), &dep.version, features));
     }
     lines.sort();
     Ok(lines)
 }
 
-/// Render one pinned `[dependencies]` line. `version` is a decode-validated
-/// [`CrateVersion`] — a raw unchecked string cannot reach this splice, so the
-/// interpolation into the TOML value position (`"=<version>"`) can never be
-/// broken out of by a `"`-and-newline payload (the type, not a runtime escape,
-/// closes the injection class).
-fn render_dep_line(name: &str, version: &CrateVersion, features: &[String]) -> String {
+/// Render one pinned `[dependencies]` line. Every value spliced here is a
+/// decode-validated newtype whose charset gate excludes TOML metacharacters:
+/// `name` is a [`PackageName`] (`[A-Za-z0-9_-]+`, alphabetic-first), `version`
+/// a [`CrateVersion`], and each feature a [`FeatureName`]. A raw unchecked
+/// string cannot reach any of the three splice positions, so no
+/// `"`-and-newline payload can break out of its TOML string and inject manifest
+/// content — the types, not a runtime escape, close the injection class.
+fn render_dep_line(name: &str, version: &CrateVersion, features: &[FeatureName]) -> String {
     let version = version.as_str();
     if features.is_empty() {
         format!("{name} = \"={version}\"")
     } else {
-        let quoted: Vec<String> = features.iter().map(|f| format!("\"{f}\"")).collect();
+        let quoted: Vec<String> = features
+            .iter()
+            .map(|f| format!("\"{}\"", f.as_str()))
+            .collect();
         format!(
             "{name} = {{ version = \"={version}\", features = [{}] }}",
             quoted.join(", ")
@@ -1033,40 +997,6 @@ mod tests {
                     CrateName::parse(bad),
                     Err(Diagnostic::SourceRejected {
                         defect: SourceDefect::CrateNameIllegal,
-                        ..
-                    })
-                ),
-                "{bad:?} must be rejected"
-            );
-        }
-    }
-
-    #[test]
-    fn feature_name_gate_rejects_toml_breakers() {
-        for ok in [
-            "serde",
-            "rt-multi-thread",
-            "dep:foo",
-            "foo/bar",
-            "dep?/feat",
-            "v1.2",
-        ] {
-            assert!(FeatureName::parse(ok).is_ok(), "{ok:?} must be accepted");
-        }
-        for bad in [
-            "",
-            "a\"]}\nmalicious = true",
-            "a\"",
-            "a]",
-            "a}",
-            "a b",
-            "a\\b",
-        ] {
-            assert!(
-                matches!(
-                    FeatureName::parse(bad),
-                    Err(Diagnostic::SourceRejected {
-                        defect: SourceDefect::FeatureNameIllegal { .. },
                         ..
                     })
                 ),
@@ -1542,6 +1472,61 @@ mod tests {
                 })
             ),
             "an injection-bearing version must fail closed at decode: {decoded:?}"
+        );
+    }
+
+    #[test]
+    fn an_injection_bearing_feature_never_reaches_a_manifest_line() {
+        // An inspection whose effective feature set carries a TOML-array
+        // breakout payload must be REFUSED at decode — the feature can never
+        // reach `render_dep_line`, so no emitted `Cargo.toml` line can carry
+        // the injection. (`render_dep_line` takes `&[FeatureName]`, whose only
+        // constructor is the decode-boundary parse.)
+        let evil = "std\"]}\n[dependencies.evil]\npath = \"/tmp/evil\nx = [\"";
+        let decoded = PkgInfo::decode_json(
+            &json!({
+                "pkg": "semver",
+                "name": "semver",
+                "version": "1.0.26",
+                "functions": [],
+                "errors": [],
+                "features": [evil]
+            })
+            .to_string(),
+        );
+        assert!(
+            matches!(
+                decoded,
+                Err(Diagnostic::WireMalformed {
+                    defect: crate::diag::WireDefect::InvalidFeature { .. },
+                    ..
+                })
+            ),
+            "an injection-bearing feature must fail closed at decode: {decoded:?}"
+        );
+    }
+
+    #[test]
+    fn a_legal_feature_set_reaches_a_pinned_manifest_line() {
+        // The whole point of the gate is to KEEP legal features working: a
+        // primary crate with a real feature set must still render a pinned,
+        // well-formed dependency line carrying that feature.
+        let pkg = PkgInfo::decode_json(
+            &json!({
+                "pkg": "tokio",
+                "name": "tokio",
+                "version": "1.0.0",
+                "functions": [],
+                "errors": [],
+                "features": ["rt-multi-thread"]
+            })
+            .to_string(),
+        )
+        .expect("legal feature set decodes");
+        let lines = cargo_dep_lines(&pkg).expect("renders a manifest line");
+        assert_eq!(
+            lines,
+            ["tokio = { version = \"=1.0.0\", features = [\"rt-multi-thread\"] }"]
         );
     }
 

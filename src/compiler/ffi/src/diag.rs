@@ -167,14 +167,6 @@ pub enum SourceDefect {
         /// The offending version requirement.
         got: String,
     },
-    /// A Cargo feature name outside `[A-Za-z0-9_+./?:-]`. Feature names are
-    /// spliced into the emitted manifest's `features = [ … ]` array, a TOML
-    /// string position, so a name carrying a quote/bracket/newline could
-    /// break out and inject arbitrary manifest content.
-    FeatureNameIllegal {
-        /// The offending feature name.
-        got: String,
-    },
 }
 
 impl fmt::Display for SourceDefect {
@@ -206,10 +198,6 @@ impl fmt::Display for SourceDefect {
                 f,
                 "version requirement {got:?} must be non-empty semver text \
                  ([0-9A-Za-z.*=<>~^,+ -])"
-            ),
-            Self::FeatureNameIllegal { got } => write!(
-                f,
-                "feature name {got:?} must be non-empty and match [A-Za-z0-9_+./?:-]"
             ),
         }
     }
@@ -516,6 +504,15 @@ pub enum WireDefect {
         /// The offending version string.
         got: String,
     },
+    /// A Cargo feature name carries a character outside the feature charset
+    /// `[A-Za-z0-9_+./?:-]`. Each feature is spliced into a `features = [ … ]`
+    /// TOML array position of the emitted `Cargo.toml`; a value carrying a
+    /// quote/brace/bracket/newline could break out of the array and inject
+    /// arbitrary manifest content.
+    InvalidFeature {
+        /// The offending feature string.
+        got: String,
+    },
     /// The document is not the JSON shape the wire contract declares
     /// (carries the rendered serde error as detail).
     Json {
@@ -595,6 +592,13 @@ impl fmt::Display for WireDefect {
                     f,
                     "{got:?} is not a legal crate version (it must match the semver charset \
                      [0-9A-Za-z.*=<>~^,+ -])"
+                )
+            }
+            Self::InvalidFeature { got } => {
+                write!(
+                    f,
+                    "{got:?} is not a legal cargo feature name (it must match the charset \
+                     [A-Za-z0-9_+./?:-])"
                 )
             }
             Self::Json { detail } => write!(f, "{detail}"),
