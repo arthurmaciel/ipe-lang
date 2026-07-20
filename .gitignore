@@ -7,22 +7,27 @@ out/
 .ipedeps/
 /tmp-parity/
 
-# Mirrored+patched upstream Ipe examples — materialised at sweep time by
-# scripts/lib/ipe_mirror.sh (IPE_SWEEP_MIRROR_SKY=1). Regenerated each run, never
-# vendored; only the rename map + README + manifest under examples/ipe/ are source.
-/examples/ipe/[0-9]*/
-/examples/ipe/simple/
-/examples/ipe/test_pkg/
+# Mirrored+patched upstream Sky examples — materialised at sweep time by
+# scripts/lib/mirror.sh. Regenerated each run, never vendored; only the control
+# surface (manifest.toml, rename-map.tsv, ipe-patches/, README.md, BLOCKERS.md)
+# under examples/sky/ is source. Ignore every mirror tree, then re-include the
+# tracked control files so they are never swept up by the wildcard.
+/examples/sky/*
+!/examples/sky/manifest.toml
+!/examples/sky/rename-map.tsv
+!/examples/sky/README.md
+!/examples/sky/BLOCKERS.md
+!/examples/sky/ipe-patches/
 # Default SQLite DB written by `Db.connect ()` when an emitted binary is run
 # by the E2E test harness in the crate/repo cwd — a run artifact, never source.
 ipe.db
 ipe.db-shm
 ipe.db-wal
 
-# Playwright browser-scenario stack deps (scripts/equivalence-checks/{package.json,
-# web-verify.mjs}). package-lock.json IS committed (reproducible installs);
+# Playwright deps for the wasm RUN driver (scripts/lib/{package.json,
+# wasm-verify.mjs}). package-lock.json IS committed (reproducible installs);
 # node_modules/ + any fetched Playwright browser binaries are not.
-scripts/equivalence-checks/node_modules/
+scripts/lib/node_modules/
 
 # agent worktrees — never commit
 .claude/worktrees/
@@ -74,3 +79,7 @@ tools/ipe-ffi-inspector/.ipecache/
 skyshop_core.db
 skyshop_core.db-shm
 skyshop_core.db-wal
+
+# Python bytecode caches
+__pycache__/
+*.pyc

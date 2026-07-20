@@ -2,22 +2,20 @@
 # scripts/lib/env.sh — SINGLE SOURCE OF TRUTH for the ipê examples-sweep command
 # env. SOURCE this (never execute it): `source "$(dirname "$0")/lib/env.sh"`.
 #
-# PORTED from ../ipe/runtime-rust/scripts/lib/env.sh and ADAPTED for this repo:
-# the compiler here is `ipe` (a Rust cargo workspace), NOT the Haskell `ipe`.
-# There is no GHC/cabal, no `out/ipe`; the binary is built by cargo and lives
-# in the (possibly global) cargo target dir. This file defines REPO + IPE_BIN and
-# does NOT cd (callers `cd "$REPO"` themselves so the failure path stays theirs).
+# The compiler is `ipe` (a Rust cargo workspace); the binary is built by cargo
+# and lives in the (possibly global) cargo target dir. This file defines
+# REPO + IPE_BIN and does NOT cd (callers `cd "$REPO"` themselves so the failure
+# path stays theirs).
 #
 # It is idempotent: safe to source even when the caller has already cd'd into the
 # repo or pre-set CARGO_TARGET_DIR / RUSTC_WRAPPER / IPE_BIN (all `${VAR:-…}`).
 
 # ── PATH: prepend the canonical dev dirs, PRESERVE the inherited PATH ────────
-# cargo (and go, kept for the PHASED Go≡Rust equivalence step) resolve from their
-# canonical local dirs first. The trailing `$PATH` is LOAD-BEARING on CI:
-# GitHub's setup-go / setup-node put `go` / `node` / `curl` on the runner PATH at
-# non-canonical locations — clobbering it would abort the sweep at its
-# `command -v go` / `curl` preflight.
-export PATH="$HOME/.cargo/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+# cargo resolves from its canonical local dir first. The trailing `$PATH` is
+# LOAD-BEARING on CI: GitHub's setup-node puts `node` / `curl` on the runner PATH
+# at non-canonical locations — clobbering it would abort the sweep at its
+# `curl` preflight (the RUN check + the mirror's network fallback need it).
+export PATH="$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 # ── Shared cargo target + sccache + CARGO_INCREMENTAL=0 ─────────────────────
 # A shared CARGO_TARGET_DIR compiles the heavy deps (axum/tokio/serde/sqlx/…)
