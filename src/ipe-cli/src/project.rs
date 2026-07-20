@@ -480,6 +480,149 @@ fn parse_ipe_dep(dep: &str, raw_val: &str) -> Result<IpeDep, CliError> {
     Ok(IpeDep::Index(req))
 }
 
+/// Render an [`IpeDep`] as the TOML value it is written as under
+/// `[dependencies]`: a bare string for the index requirement, an inline table
+/// for the git and path escapes. The inverse of [`parse_ipe_dep`].
+#[must_use]
+pub fn render_ipe_dep(dep: &IpeDep) -> String {
+    match dep {
+        IpeDep::Index(req) => format!("\"{req}\""),
+        IpeDep::Git { url, rev } => rev.as_ref().map_or_else(
+            || format!("{{ git = \"{url}\" }}"),
+            |rev| format!("{{ git = \"{url}\", rev = \"{rev}\" }}"),
+        ),
+        IpeDep::Path(path) => format!("{{ path = \"{}\" }}", path.display()),
+    }
+}
+
+/// Upsert `name = <dep>` into the manifest's `[dependencies]` section.
+///
+/// Every other section and line is preserved. When the key already exists its
+/// line is replaced in place; when the section is absent it is appended.
+///
+/// The manifest is edited textually rather than reserialized so a hand-authored
+/// manifest keeps its comments, ordering, and formatting — only the one
+/// dependency line changes.
+///
+/// # Errors
+/// [`CliError::Io`] if the manifest cannot be read or written.
+pub fn upsert_dependency(manifest_path: &Path, name: &str, dep: &IpeDep) -> Result<(), CliError> {
+    let text = read_manifest_text(manifest_path)?;
+    let line = format!("{name} = {}", render_ipe_dep(dep));
+    let updated = edit_dependency_section(&text, name, Some(&line));
+    write_manifest_text(manifest_path, &updated)
+}
+
+/// Remove the `name = …` line from the manifest's `[dependencies]` section, if
+/// present. Every other line is preserved.
+///
+/// # Errors
+/// [`CliError::Io`] if the manifest cannot be read or written.
+pub fn remove_dependency(manifest_path: &Path, name: &str) -> Result<(), CliError> {
+    let text = read_manifest_text(manifest_path)?;
+    let updated = edit_dependency_section(&text, name, None);
+    write_manifest_text(manifest_path, &updated)
+}
+
+/// Read the manifest file's text, mapping an IO failure to [`CliError::Io`].
+fn read_manifest_text(manifest_path: &Path) -> Result<String, CliError> {
+    fs::read_to_string(manifest_path).map_err(|e| CliError::Io {
+        path: manifest_path.to_path_buf(),
+        source: e,
+    })
+}
+
+/// Write the manifest file's text, mapping an IO failure to [`CliError::Io`].
+fn write_manifest_text(manifest_path: &Path, text: &str) -> Result<(), CliError> {
+    fs::write(manifest_path, text).map_err(|e| CliError::Io {
+        path: manifest_path.to_path_buf(),
+        source: e,
+    })
+}
+
+/// Edit the `[dependencies]` section of a manifest's `text`: replace or insert
+/// `replacement` for the key `name` when `replacement` is `Some`, or drop the
+/// key's line when `None`. Returns the whole edited manifest text.
+///
+/// A single scan tracks whether the cursor is inside `[dependencies]`; the key's
+/// existing line (if any) is replaced or dropped there. When the section exists
+/// but the key does not, an insert line is added at the section's end; when the
+/// section is absent entirely, it is appended with the new line.
+fn edit_dependency_section(text: &str, name: &str, replacement: Option<&str>) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut in_deps = false;
+    let mut saw_section = false;
+    let mut handled = false;
+    // The index in `out` just past the last line of `[dependencies]`, so an
+    // insert lands at the section's end rather than after unrelated sections.
+    let mut section_end: Option<usize> = None;
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            if in_deps {
+                section_end = Some(out.len());
+            }
+            in_deps = trimmed == "[dependencies]";
+            if in_deps {
+                saw_section = true;
+            }
+            out.push(line.to_owned());
+            continue;
+        }
+        if in_deps && key_of(trimmed) == Some(name) {
+            handled = true;
+            if let Some(replacement) = replacement {
+                out.push(replacement.to_owned());
+            }
+            // A `None` replacement drops the line by not pushing it.
+            continue;
+        }
+        out.push(line.to_owned());
+    }
+    if in_deps {
+        section_end = Some(out.len());
+    }
+
+    if let Some(replacement) = replacement.filter(|_| !handled) {
+        insert_into_dependencies(&mut out, saw_section, section_end, replacement);
+    }
+
+    let mut joined = out.join("\n");
+    if text.ends_with('\n') && !joined.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
+}
+
+/// Insert `replacement` into the `[dependencies]` section of the accumulated
+/// `out` lines, creating the section when it is absent.
+fn insert_into_dependencies(
+    out: &mut Vec<String>,
+    saw_section: bool,
+    section_end: Option<usize>,
+    replacement: &str,
+) {
+    if let (true, Some(at)) = (saw_section, section_end) {
+        out.insert(at, replacement.to_owned());
+    } else {
+        if out.last().is_some_and(|l| !l.trim().is_empty()) {
+            out.push(String::new());
+        }
+        out.push("[dependencies]".to_owned());
+        out.push(replacement.to_owned());
+    }
+}
+
+/// The `key` of a `key = value` manifest line, trimmed; `None` for a line that
+/// is not a key assignment (a comment, a blank, a bare table header).
+fn key_of(trimmed: &str) -> Option<&str> {
+    if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('[') {
+        return None;
+    }
+    trimmed.split_once('=').map(|(k, _)| k.trim())
+}
+
 /// Parse one `[rust.dependencies]` value into a [`RustDep`]. A bare string is a
 /// version requirement; an inline table carries an optional `version` and
 /// `features` list.

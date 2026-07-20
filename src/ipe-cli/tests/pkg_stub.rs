@@ -1,6 +1,6 @@
-//! `ipe add` / `ipe remove` — the package-authoring commands. Resolution ships
-//! with the index (SP3); until then these parse their arguments and report the
-//! not-yet-available state, exiting non-zero (never a silent no-op).
+//! `ipe add` / `ipe remove` — the package-authoring commands' argument handling
+//! and help surface. The resolution behaviour (fetch, verify, lock) is covered
+//! by `add_resolve.rs`; this covers usage errors and the help pages.
 
 use std::process::Command;
 
@@ -21,36 +21,12 @@ fn run(args: &[&str]) -> (bool, String, String) {
 }
 
 #[test]
-fn add_a_package_reports_not_yet_available_and_exits_nonzero() {
-    let (ok, _, stderr) = run(&["add", "some-package"]);
-    assert!(!ok, "`ipe add` must exit non-zero until the index ships");
-    assert!(
-        stderr.contains("some-package"),
-        "the message must name the requested package, got:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("index"),
-        "the message must point at the index (SP3), got:\n{stderr}"
-    );
-}
-
-#[test]
 fn add_without_a_package_name_is_a_usage_error() {
     let (ok, _, stderr) = run(&["add"]);
     assert!(!ok, "`ipe add` with no package must be misuse");
     assert!(
         stderr.contains("ipe add"),
         "the usage message must name the command, got:\n{stderr}"
-    );
-}
-
-#[test]
-fn remove_a_package_reports_not_yet_available_and_exits_nonzero() {
-    let (ok, _, stderr) = run(&["remove", "some-package"]);
-    assert!(!ok, "`ipe remove` must exit non-zero until the index ships");
-    assert!(
-        stderr.contains("some-package"),
-        "the message must name the requested package, got:\n{stderr}"
     );
 }
 

@@ -20,10 +20,13 @@ mod cache;
 pub mod ffi;
 pub mod fmt;
 pub mod help;
+pub mod index;
 pub mod init;
+pub mod lockfile;
 mod lsp;
 pub mod pkg;
 pub mod project;
+pub mod resolve;
 /// The embedded Ipê standard-library source now lives in the dependency-free
 /// [`ipe_stdlib`] leaf crate so the WebAssembly frontend can share one copy.
 /// Re-exported here so `crate::stdlib::…` call sites resolve unchanged.
@@ -92,6 +95,20 @@ pub enum CliError {
         missing: Vec<&'static str>,
         extra: Vec<&'static str>,
     },
+    /// Package resolution failed for a non-security reason: an index entry could
+    /// not be found or parsed, no published version satisfied the requirement, or
+    /// a `git` fetch of the source failed. Carries a message naming the package.
+    Resolve(String),
+    /// A fetched package's content hash did not equal the hash the index pinned.
+    /// This is the verify-before-trust boundary: a mismatch is always a hard,
+    /// typed error — never a warning — because the source that was fetched is not
+    /// the source the publisher registered. Carries the package name, the
+    /// expected hash, and the hash actually computed over the fetched tree.
+    HashMismatch {
+        package: String,
+        expected: String,
+        actual: String,
+    },
 }
 
 impl From<build_plan::Refusal> for CliError {
@@ -128,6 +145,17 @@ impl std::fmt::Display for CliError {
                 }
                 Ok(())
             }
+            Self::Resolve(message) => f.write_str(message),
+            Self::HashMismatch {
+                package,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "package `{package}`: content hash mismatch — the fetched source does not \
+                 match the hash the index pinned.\n  expected: {expected}\n  actual:   {actual}\n\
+                 the source was NOT trusted; nothing was written."
+            ),
             Self::UnknownCode { input, suggestions } => {
                 write!(f, "unknown error code `{input}`")?;
                 match suggestions.split_first() {
