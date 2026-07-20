@@ -53,7 +53,7 @@ fn string_kernel_is_pure_and_total() {
         ipe_runtime_rust::string::string_to_upper(s.clone()),
         "IPEWASM"
     );
-    assert_eq!(ipe_runtime_rust::string::string_reverse(s), "msawyks");
+    assert_eq!(ipe_runtime_rust::string::string_reverse(s), "msawepi");
 
     // String.toInt failure path is a Maybe, not a panic — floor-safe.
     match ipe_runtime_rust::string::string_to_int("not-a-number".to_string()) {
