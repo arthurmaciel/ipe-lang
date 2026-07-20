@@ -1216,13 +1216,29 @@ impl Printer<'_> {
         if !one.contains('\n') && !self.was_multiline(span) {
             return one;
         }
+        // The backward pipe `<|` breaks differently from every other operator:
+        // it is right-associative and elm-format leaves it at the END of the
+        // left operand's line, dropping the right-hand side onto the next line
+        // indented one level (`f x <|\n    g y`). A whole chain of `<|` nests
+        // this way. Every other operator (`|>`, `::`, `++`, `==`, …) begins the
+        // continuation line instead.
+        let all_backward = chain.iter().all(|(_, op)| self.sym(op.value) == "<|");
+        let inner = pad(indent + 1);
+        if all_backward {
+            let mut out = String::new();
+            for (operand, op) in chain {
+                out.push_str(&self.binop_operand(operand, indent));
+                let _ = write!(out, " {}\n{inner}", self.sym(op.value));
+            }
+            out.push_str(&self.binop_operand(last, indent + 1));
+            return out;
+        }
         // Multiline: the FIRST operand stays on the current line at the base
         // indent; every operator then begins a continuation line indented one
         // level, with its right-hand operand following on that same line. So
         //   { … }
         //       |> Vector
         // keeps the record at the base indent and only the `|>` step indents.
-        let inner = pad(indent + 1);
         let mut out = String::new();
         let mut first = true;
         for (operand, op) in chain {
