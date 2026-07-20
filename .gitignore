@@ -82,3 +82,6 @@ skyshop_core.db-wal
 # Python bytecode caches
 __pycache__/
 *.pyc
+
+# Go/Sky reference-oracle binaries — regeneration-only scaffolding, never shipped.
+tools/oracle/
