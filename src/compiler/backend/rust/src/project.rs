@@ -1111,6 +1111,14 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         // usual doubling.
         let mut out = String::with_capacity(GOLDEN.len() + 4096);
         out.push_str(&preamble()?);
+        // The preamble ends with the USER-TYPES banner and its single closing
+        // blank line. Anything emitted below (types, record structs, Db
+        // projections) is that section's body; the runtime bindings that follow
+        // need one blank line of separation from it. When the section is empty,
+        // the banner's own closing blank already provides that separation, so a
+        // second blank must NOT be pushed (rustfmt collapses runs of blank lines
+        // to one — emitting two would fail `cargo fmt --check`).
+        let after_banner = out.len();
 
         // User types, walked via `type_order` — `partition_items`'s
         // FIRST-ENCOUNTER order over `program.modules[..].types`, a
@@ -1143,7 +1151,9 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
             out.push_str(&emit_db_projection_impls(ctx)?);
         }
 
-        out.push('\n');
+        if out.len() != after_banner {
+            out.push('\n');
+        }
 
         // Fixed kernel-wrapper prelude (IpeError, IpeTask<A>, Decoder<T>, …);
         // the wasm target takes the floor-filtered subset.
@@ -1166,13 +1176,20 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         // order over `program.modules[..].funcs`). `partition_items` never
         // routes a `Func` into `Spine`, so funcs land purely in `IpeModule`
         // buckets.
+        let before_funcs = out.len();
         for file_id in func_order {
             let (_, funcs) = bucket_or_bug(buckets, file_id)?;
             for &func in funcs {
                 out.push_str(&emit_func(ctx, func)?);
             }
         }
-        out.push('\n');
+        // Separate the user functions from the epilogue with one blank line. The
+        // blank pushed above already separates an EMPTY function section from the
+        // epilogue, so a second blank is added only when functions were emitted
+        // (rustfmt collapses blank-line runs to one; two would fail fmt-check).
+        if out.len() != before_funcs {
+            out.push('\n');
+        }
 
         match ctx.target {
             ipe_ir::Target::Native => out.push_str(&epilogue()?),
@@ -1713,6 +1730,10 @@ pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
 
     let mut out = String::with_capacity(GOLDEN.len() + 4096);
     out.push_str(&preamble()?);
+    // See the single-file emit path: the banner's closing blank already
+    // separates an EMPTY user-types section from the runtime bindings, so the
+    // second blank is pushed only when this section emitted content.
+    let after_banner = out.len();
 
     let Partitioned { buckets, .. } = partition_items(program, ctx.interner);
 
@@ -1732,7 +1753,9 @@ pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
         out.push_str(&emit_db_projection_impls(ctx)?);
     }
 
-    out.push('\n');
+    if out.len() != after_banner {
+        out.push('\n');
+    }
 
     match ctx.target {
         ipe_ir::Target::Native => out.push_str(runtime_bindings()?),
@@ -1744,11 +1767,11 @@ pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
     if ctx.uses_auth {
         out.push_str(AUTH_WRAPPERS);
     }
-    out.push('\n');
-
-    // The spine carries NO user functions — they are `emit_module_file`'s.
-    // The blank line the single-file layout emits between the functions and
-    // the epilogue is preserved so the spine's fixed-section spacing matches.
+    // The spine carries NO user functions — they are `emit_module_file`'s — so a
+    // single blank line separates the runtime bindings from the epilogue.
+    // (rustfmt collapses blank-line runs to one; the two blanks the single-file
+    // layout emits around its function block would collapse here anyway, and
+    // emitting them would fail `cargo fmt --check` on the raw output.)
     out.push('\n');
 
     match ctx.target {
