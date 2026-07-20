@@ -4,6 +4,10 @@ examples/**/target/
 examples/**/.ipe/
 examples/**/sky-out/
 examples/**/out/
+# SQLite files an emitted example writes when run (run artifacts, never source).
+examples/*/*.db
+examples/*/*.db-shm
+examples/*/*.db-wal
 out/
 .ipe-cache/
 .ipedeps/
