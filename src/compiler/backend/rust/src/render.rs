@@ -197,10 +197,87 @@ fn render_at(
                 out.push(',');
             }
         }
+        Doc::Assign {
+            prefix,
+            rhs,
+            trailer,
+        } => {
+            render_assign(prefix, rhs, *trailer, cfg, indent, col, flat, out);
+        }
         Doc::Chain { operands } => {
             render_chain(operands, cfg, indent, col, flat, out);
         }
     }
+}
+
+/// Render an assignment with `rustfmt`'s dedicated RHS-break layout axis. See
+/// [`Doc::Assign`]. `col` is where the assignment's first character lands;
+/// `indent` is the enclosing block indent (broken RHS goes to `indent + 4`).
+/// `trailer` is the width reserved after the RHS on its line (the trailing `;`).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "renderer threads col/indent/flat"
+)]
+fn render_assign(
+    prefix: &Doc,
+    rhs: &Doc,
+    trailer: usize,
+    cfg: RenderConfig,
+    indent: usize,
+    col: usize,
+    flat: bool,
+    out: &mut String,
+) {
+    let start_col = eff_col(out, col);
+    let prefix_flat_w = flat_width(prefix, cfg, start_col, indent);
+    let rhs_flat_w = flat_width(rhs, cfg, 0, indent);
+
+    // FLAT: the whole `prefix rhs;` fits on the current line. An enclosing group
+    // that already chose flat forces this too. A hard break in either side rules
+    // it out (a statement-block RHS never lays out flat).
+    let same_line_end = start_col + prefix_flat_w + rhs_flat_w + trailer;
+    let no_hard_break = !has_hard_break(prefix) && !has_hard_break(rhs);
+    if flat || (no_hard_break && same_line_end <= cfg.max_width) {
+        render_at(prefix, cfg, indent, start_col, true, out);
+        let c = current_col(out);
+        render_at(rhs, cfg, indent, c, true, out);
+        return;
+    }
+
+    // The same-line form overflows. Emit the prefix (always single-line — the
+    // `let name: TYPE = ` head never breaks), then decide the RHS layout.
+    render_at(prefix, cfg, indent, start_col, false, out);
+
+    // RHS-BREAK: the flat RHS plus its trailer fits at one indent step past the
+    // block indent. Break after `= ` and drop the flat RHS onto its own line.
+    // `rustfmt` leaves no trailing space on the `= ` line, so trim it before the
+    // newline (the prefix carries the flat-case space after `=`).
+    let rhs_indent = indent + CHAIN_BREAK_INDENT;
+    if no_hard_break && rhs_indent + rhs_flat_w + trailer <= cfg.max_width {
+        trim_trailing_spaces(out);
+        out.push('\n');
+        push_indent(rhs_indent, out);
+        let c = current_col(out);
+        render_at(rhs, cfg, rhs_indent, c, true, out);
+        return;
+    }
+
+    // DELIMITER-BREAK: even at `indent + 4` the flat RHS overflows, so `rustfmt`
+    // keeps it glued to `= ` and breaks it into its own delimiters at the block
+    // indent.
+    let c = current_col(out);
+    render_at(rhs, cfg, indent, c, false, out);
+}
+
+/// The width of `doc` rendered entirely flat from column `start_col` up to its
+/// first hard break — the single-line footprint the assignment's fit tests
+/// measure. Rendered into a scratch buffer with everything flat; a hard break
+/// ends the measured line (a flat statement-block never arises in a fit-tested
+/// path, but measuring to the first newline is the correct general rule).
+fn flat_width(doc: &Doc, cfg: RenderConfig, start_col: usize, indent: usize) -> usize {
+    let mut scratch = String::new();
+    render_at(doc, cfg, indent, start_col, true, &mut scratch);
+    scratch.split('\n').next().unwrap_or(&scratch).len()
 }
 
 /// Whether `doc` contains a [`Doc::HardLine`] that is NOT enclosed in a nested
@@ -222,6 +299,7 @@ fn has_hard_break(doc: &Doc) -> bool {
         | Doc::Group(_)
         | Doc::BraceBody(_)
         | Doc::MatchArmTail { .. }
+        | Doc::Assign { .. }
         | Doc::Chain { .. } => false,
         Doc::Concat(docs) => docs.iter().any(has_hard_break),
         Doc::Nest(_, inner) => has_hard_break(inner),
@@ -233,6 +311,14 @@ fn push_indent(n: usize, out: &mut String) {
     for _ in 0..n {
         out.push(' ');
     }
+}
+
+/// Drop trailing spaces from the end of `out`. Used before a break so a line
+/// never ends in whitespace (`rustfmt` trims the space after `=` when the RHS
+/// moves to the next line).
+fn trim_trailing_spaces(out: &mut String) {
+    let trimmed = out.trim_end_matches(' ').len();
+    out.truncate(trimmed);
 }
 
 /// Whether `doc` rendered flat from column `start_col` fits within the width up
@@ -779,6 +865,77 @@ mod p0_tests {
         assert_eq!(doc.normalized_leaves(), "{ rest }");
         // Flat render drops the braces (matches rustfmt), so rendered != leaves here.
         assert_eq!(render(&doc, RenderConfig::default()), "rest");
+    }
+
+    /// Render an assignment `doc` as a block statement at block `indent`: seed the
+    /// output with the indent, render, and append the trailing `;` the `trailer`
+    /// accounted for. Returns the whole statement line(s), matching the column
+    /// `rustfmt` captured its golden from.
+    fn render_assign_stmt(indent: usize, prefix: &'static str, rhs: Doc) -> String {
+        let mut out = String::new();
+        push_indent(indent, &mut out);
+        let doc = Doc::assign(Doc::text(prefix), rhs, 1);
+        render_at(
+            &doc,
+            RenderConfig::default(),
+            indent,
+            current_col(&out),
+            false,
+            &mut out,
+        );
+        out.push(';');
+        out
+    }
+
+    #[test]
+    fn assign_stays_flat_when_prefix_and_rhs_fit() {
+        // `let x: T = rhs;` that fits the width stays on one line: prefix then the
+        // flat RHS, no break after `=`.
+        let got = render_assign_stmt(4, "let x: i64 = ", Doc::text("Box::new(short)"));
+        assert_eq!(got, "    let x: i64 = Box::new(short);");
+    }
+
+    #[test]
+    fn assign_breaks_rhs_to_own_line_when_prefix_rhs_overflows() {
+        // `let __ipe_fn: Box<…> = Box::new(…);` whose one-line form (with the `;`)
+        // overflows width 100 but whose flat RHS fits on its own line at col 8
+        // (block 4 + step 4): the RHS drops below the `=`, indented +4. Golden
+        // captured from `rustfmt --edition 2024 --style-edition 2024`.
+        let got = render_assign_stmt(
+            4,
+            "let __ipe_fn: Box<dyn Fn(i64, i64, i64) -> i64 + Send + 'static> = ",
+            Doc::text("Box::new(move |aaaa: i64, bbbb: i64, cccc: i64| -> i64 { aaaa })"),
+        );
+        let expected = "    let __ipe_fn: Box<dyn Fn(i64, i64, i64) -> i64 + Send + 'static> =\n        Box::new(move |aaaa: i64, bbbb: i64, cccc: i64| -> i64 { aaaa });";
+        assert_eq!(
+            got, expected,
+            "\n--- got ---\n{got}\n--- want ---\n{expected}"
+        );
+    }
+
+    #[test]
+    fn assign_falls_back_to_delimiter_break_when_rhs_overflows_on_own_line() {
+        // When even at col 8 the flat RHS (plus its `;`) overflows, `rustfmt` keeps
+        // the RHS glued to `= ` and breaks it into its own delimiters. Modelled with
+        // a delimited-group RHS whose flat form overflows at col 8: the group breaks
+        // one arg per line, the open delimiter stays on the prefix line, `)` dedents.
+        let wide = "argument_that_is_quite_long_enough_to_matter_and_then_some_more_padding_x";
+        let rhs = arg_group("some_function_name", &[wide, wide]);
+        let got = render_assign_stmt(4, "let n: T = ", rhs);
+        let expected = "    let n: T = some_function_name(\n        argument_that_is_quite_long_enough_to_matter_and_then_some_more_padding_x,\n        argument_that_is_quite_long_enough_to_matter_and_then_some_more_padding_x\n    );";
+        assert_eq!(
+            got, expected,
+            "\n--- got ---\n{got}\n--- want ---\n{expected}"
+        );
+    }
+
+    #[test]
+    fn assign_leaves_are_break_invisible_matching_a_flat_prefix_rhs() {
+        // The break after `= ` is pure whitespace: the normalized leaves of an
+        // assignment equal `prefix rhs` with a single space — exactly what the
+        // string emitter writes — so the SEAL holds across the break.
+        let doc = Doc::assign(Doc::text("let x: T = "), Doc::text("value"), 1);
+        assert_eq!(doc.normalized_leaves(), "let x: T = value");
     }
 
     #[test]
