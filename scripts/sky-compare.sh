@@ -40,7 +40,7 @@ _strip_sky_log() {
 need_bin() { [ -x "$IPE_BIN" ] || { echo "ERROR: ipe binary not at '$IPE_BIN' (cargo build --release -p ipe)"; exit 2; }; }
 
 main() {
-  cd "$REPO"
+  cd "$REPO" || { echo "ERROR: cannot cd to REPO='$REPO'"; exit 2; }
   need_bin
   export SKY_SWEEP_COMPARE=1   # tell the mirror to preserve the raw .sky tree
 
