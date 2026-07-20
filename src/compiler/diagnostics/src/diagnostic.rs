@@ -283,9 +283,9 @@ pub enum ParseError {
     /// A lone `.` not part of `..` or a qualified name. [IPE-P0011]
     StrayDot,
     /// A `.` with whitespace before it in expression position, e.g. `f .x`.
-    /// This is the accessor-function reading (`.x` applied to a record), which
-    /// is not supported yet; field access is written with no space (`f.x`).
-    /// [IPE-P0018]
+    /// No longer produced: `f .x` now parses as the first-class accessor `.x`
+    /// (the getter `\r -> r.x`) applied to `f`. The code is retained in the
+    /// catalog so historical diagnostics/explanations resolve. [IPE-P0018]
     SpaceBeforeDot,
     /// A digit immediately followed by an identifier character. [IPE-P0012]
     NumberJoinedToName(char),
