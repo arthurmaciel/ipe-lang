@@ -43,6 +43,7 @@ Prefer building from source? `git clone https://github.com/arthurmaciel/ipe-lang
 
 - [Features](#features)
 - [Code shapes](#code-shapes)
+- [Capabilities](#capabilities)
 - [Editor setup (LSP)](#editor-setup-lsp)
 - [Static compilation](#static-compilation)
 - [Support](#support)
@@ -79,6 +80,25 @@ The three ✓ shapes follow [The Elm Architecture](https://guide.elm-lang.org/ar
 (`init` / `update` / `view` / `subscriptions`) — and share the **same
 `Ipe.Ui` view code**, so one view renders on web, terminal, and desktop.
 See [`examples/`](examples/) for a program of each shape.
+
+## Capabilities
+
+Every effect in Ipê flows through a capability-tagged kernel, so the compiler can
+tell you exactly what a program is allowed to do — network, filesystem, env,
+subprocess, clock, random, native-ffi — from its code alone, with nothing to
+declare. `ipe capabilities <entry>` prints that inferred set (one per line, or
+`none` for a pure program):
+
+```
+$ ipe capabilities examples/sky/02-go-stdlib/src/Main.ipe
+network
+clock
+```
+
+The set is generated, not hand-written, and cannot drift: a program that reaches
+a new effectful kernel gains the matching capability automatically. `native-ffi`
+appears whenever the program crosses into `Rust.` code, which is opaque to the
+inference and the one place effects can escape the model.
 
 ## Editor setup (LSP)
 

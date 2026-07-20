@@ -81,3 +81,28 @@ fn verify_rejects_overdeclared() {
     let r = verify_capabilities(&fixture("pure_string.ipe"), &declared);
     assert!(r.is_err(), "an over-declaration must be rejected");
 }
+
+/// Acceptance over a real `examples/*` app with known effects: the
+/// `02-go-stdlib` program makes an HTTP call (`Http.get`) and reads the clock
+/// (`Time.now` / `Time.timeString`), and uses no other effect — so its inferred
+/// capability set is exactly `{network, clock}`. Any drift here is a
+/// mis-classified tag, caught against a real program rather than a fixture.
+#[test]
+fn acceptance_go_stdlib_example_infers_network_and_clock() -> TestResult {
+    let example =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/sky/02-go-stdlib/src/Main.ipe");
+    let (ok, stdout) = run_ipe(&["capabilities", &example.to_string_lossy()])?;
+    assert!(ok, "capabilities must exit 0 on the example");
+    let reported: BTreeSet<&str> = stdout.split_whitespace().collect();
+    assert_eq!(
+        reported,
+        BTreeSet::from(["network", "clock"]),
+        "unexpected capability set for 02-go-stdlib, got:\n{stdout}"
+    );
+
+    // The library verifier agrees with the reported set exactly.
+    let declared = BTreeSet::from([Capability::Network, Capability::Clock]);
+    let r = verify_capabilities(&example, &declared);
+    assert!(r.is_ok(), "the exact inferred set must verify: {r:?}");
+    Ok(())
+}
