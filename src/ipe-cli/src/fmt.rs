@@ -1147,17 +1147,32 @@ impl Printer<'_> {
         // Multiline application — port of elm-format's `application`:
         //   * `FAJoinFirst` (Case 2): the first argument stays on the function
         //     line, the rest indent — but ONLY when that first argument is a
-        //     "trivially joinable" atom (a name / literal / empty collection),
-        //     never a non-empty list / record / tuple / parenthesised compound.
+        //     "trivially joinable" atom (a name / literal / joinable string /
+        //     empty collection), never a non-empty list / record / tuple /
+        //     parenthesised compound, AND a *later* argument renders as a genuine
+        //     multi-line block. When every argument is single-line and the call
+        //     only broke on width, elm-format instead stacks all of them.
         //   * otherwise (Case 3): the function stands alone and EVERY argument
         //     goes on its own indented line.
         let inner = pad(indent + 1);
         // `split_first` avoids indexing/slicing panics and cleanly expresses the
         // "first argument joins the head line" branch.
+        // The first argument hugs the function line when it is itself a genuine
+        // multi-line block (a triple-quoted string), or when a *later* argument
+        // renders as a multi-line block — elm-format's `FAJoinFirst`. When every
+        // argument is single-line and the call broke only on width, elm-format
+        // stacks them all instead of hugging the first.
+        let first_is_block =
+            |a: &Expr| matches!(&a.value, Expr_::MultilineStr(s) if s.contains('\n'));
+        let later_block = |tail: &[Expr]| {
+            tail.iter()
+                .any(|a| has_layout_newline(&self.expr_atom(a, indent + 1)))
+        };
         let (mut out, rest): (String, &[Expr]) = match args.split_first() {
             Some((first, tail))
                 if self.joins_on_head_line(first, indent + 1)
-                    && head_line_fits(&head_s, first, indent) =>
+                    && head_line_fits(&head_s, first, indent)
+                    && (first_is_block(first) || later_block(tail)) =>
             {
                 let first_s = self.expr_atom(first, indent + 1);
                 (format!("{head_s} {first_s}"), tail)
@@ -1183,17 +1198,14 @@ impl Printer<'_> {
         // One that opens with a newline (`"""\n…`) — or any string literal that is
         // a single line — drops to its own indented line instead.
         if let Expr_::MultilineStr(s) = &a.value {
-            // Hug the function line only when the string is genuinely multi-line
-            // and its first physical line opens with visible, non-whitespace
-            // content (`"""head…`). A string that opens with a newline (`"""\n…`)
-            // or with leading indentation (`"""    …`) drops to its own line.
+            // A triple-quoted string hugs the function line only when its first
+            // physical line opens with visible, non-whitespace content
+            // (`"""head…`). One that opens with a newline (`"""\n…`) or with
+            // leading indentation (`"""    …`) drops to its own line.
             return match s.split_once('\n') {
                 Some((first, _)) => first.starts_with(|c: char| !c.is_whitespace()),
                 None => false,
             };
-        }
-        if matches!(&a.value, Expr_::Str(_)) {
-            return false;
         }
         let rendered = self.expr_atom(a, indent);
         if rendered.contains('\n') {
