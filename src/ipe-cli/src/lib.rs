@@ -18,6 +18,7 @@
 pub mod build_plan;
 mod cache;
 pub mod ffi;
+pub mod fmt;
 pub mod help;
 pub mod init;
 mod lsp;
@@ -29,7 +30,6 @@ pub use ipe_stdlib as stdlib;
 pub mod watch;
 
 use std::collections::BTreeMap;
-use std::fmt;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -90,8 +90,8 @@ impl From<build_plan::Refusal> for CliError {
     }
 }
 
-impl fmt::Display for CliError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for CliError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Usage(hint) => write!(f, "{hint}"),
             Self::UsageOwned(hint) => write!(f, "{hint}"),
@@ -1376,6 +1376,7 @@ const USAGE: &str = "usage:\n  \
      ipe install [--yes] [--allow-build-scripts]\n  \
      ipe explain [<CODE>]\n  \
      ipe fix <entry.ipe> [--yes]\n  \
+     ipe fmt [<path>|.] [--check]\n  \
      ipe lsp\n  \
      ipe version";
 
@@ -1444,6 +1445,7 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
         Some((cmd, rest)) if cmd == "remove" => ffi::run_remove(rest),
         Some((cmd, rest)) if cmd == "install" => ffi::run_install(rest),
         Some((cmd, rest)) if cmd == "fix" => run_fix(rest),
+        Some((cmd, rest)) if cmd == "fmt" => fmt::run_fmt(rest),
         Some((cmd, rest)) if cmd == "lsp" => lsp::run_lsp(rest),
         Some((cmd, _)) if cmd == "version" || cmd == "--version" || cmd == "-V" => {
             println!("ipe {}", env!("CARGO_PKG_VERSION"));
