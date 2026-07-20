@@ -73,9 +73,9 @@ depends on. Ports `validateCall`/`parseCall` (`sky/…/Rust/FfiCall.hs:756-820`)
 
 ### R0.2 — M4 must be an OPEN, `KernelId`-indexed registry; the exhaustive `match KernelFn` sites get a total FFI default
 
-Today kernels are a closed 404-variant enum (`crates/sky_ir/src/ir.rs:822`→`:1863`,
+Today kernels are a closed 404-variant enum (`src/compiler/ir/src/ir.rs:822`→`:1863`,
 `Callee` at `:804`) matched exhaustively by `kernel_is_db`/`_is_tea`/`_is_server`
-(`crates/sky_lower/src/lower.rs:324,386,456`), `kernel_native_ir_type`
+(`src/compiler/lower/src/lower.rs:324,386,456`), `kernel_native_ir_type`
 (`:2128`), plus arity handling now scattered across lower (`ctor_arity`/
 `max_def_arity` `:687-755`, `ir_type_from_ty` `:1746`, `native_ir_type`
 `:2128`). An FFI binding is data-driven and cannot be an enum variant.
@@ -211,7 +211,7 @@ foreclosure.
 
 **Opaque `Ty::Con` keying.** `module` is the computed `Rust.<Crate>` module
 (`Ffi.hs:262`), `name` the type ident, both interned `Symbol`s
-(`crates/sky_types/src/ty.rs:29-33`) so two references to the same opaque type
+(`src/compiler/types/src/ty.rs:29-33`) so two references to the same opaque type
 from different `.ipei` files unify. The mapper trusts the inspector's per-param
 `rustType` override verbatim on the emit side (`_fnRustParamTypes`,
 `FfiGen.hs:94-98`); it does not re-derive it.
@@ -322,12 +322,12 @@ registers `(Rust.<Crate>.<name> → KernelId, Scheme)` with `origin = Ffi`. This
 is the *consumer-side* single parse point: after this load a foreign value is a
 fully-typed ipê value; opaque types are `Ty::Con` unifying nominally.
 Post-registry-migration the stdlib resolution seam **moves from `env.rs`
-`QUALIFIERS` (`crates/sky_canon/src/env.rs:182`) to `sky_kernels::resolve`**
+`QUALIFIERS` (`src/compiler/canon/src/env.rs:182`) to `sky_kernels::resolve`**
 (kernel-registry-design.md Q2), so the FFI `Rust.*` → `Ffi(fid)` path targets
 `sky_kernels::resolve(qual, name)` returning `KernelId::Ffi(fid)` when a loaded
 `.ipei` declares the `Rust.*` qualifier, else an unknown-qualifier error (the
 `VarHome::Kernel` → `canon::Expr_::VarKernel` production is at
-`crates/sky_canon/src/resolve.rs:1131`; `:986` is a lambda-capture comment, not
+`src/compiler/canon/src/resolve.rs:1131`; `:986` is a lambda-capture comment, not
 the seam). `kernel.json` is consulted at lowering (not typing) to resolve the
 `KernelId`.
 
@@ -356,7 +356,7 @@ an M-D acceptance criterion, not a deferred nicety.
 through the exact stdlib code; splitting the blocking boundary keeps the
 generator off M4's critical path.
 
-**Ports.** canon seeding analogue `crates/sky_canon/src/env.rs:186-268`;
+**Ports.** canon seeding analogue `src/compiler/canon/src/env.rs:186-268`;
 module-name computation `sky/…/Rust/Ffi.hs:262-292`; kernel-name
 `Ffi.hs:270-278`.
 
@@ -511,7 +511,7 @@ Demand-driven generic instance collection (D5) assumes lowering exposes a
 per-call-site region→concrete-`Ty` map at FFI callees (analogue of the Haskell
 `SolvedTypes.regions → IrType`, `sky/…/Rust/FfiInstance.hs:106-107`). **The
 capability appears present:** the lowering pass already imports `SolvedTypes,
-Ty` (`crates/sky_lower/src/lower.rs:26`) and already handles a missing inferred
+Ty` (`src/compiler/lower/src/lower.rs:26`) and already handles a missing inferred
 region type per region (`lower.rs:40-41,102+`) — so per-region solved `Ty` is
 threaded into lower today. The remaining confirmation is narrow: verify that
 map reaches the **FFI-callee region specifically** (not just stdlib/user call

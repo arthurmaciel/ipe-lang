@@ -40,15 +40,15 @@ output-changing Ipê departure.
 
 ### Current behaviour (both compilers, confirmed 2026-07-10)
 
-- **Ipê lexer:** `crates/sky_parse/src/lexer.rs:478-509`
+- **Ipê lexer:** `src/compiler/parse/src/lexer.rs:478-509`
   (`lex_triple_string`) returns `Tok::TripleStr(String)` with the RAW
   body — no escape resolution, no margin handling. The token
   (`lexer.rs:116-128`) carries 1-based `line`/`col` of the opening `"`;
-  `Span` (`crates/sky_diagnostics/src/span.rs:3-8`) is byte-offsets
+  `Span` (`src/compiler/diagnostics/src/span.rs:3-8`) is byte-offsets
   only, so column info exists **only at lex time**.
-- **Ipê parser/AST:** `crates/sky_parse/src/parser.rs:1148` wraps the
+- **Ipê parser/AST:** `src/compiler/parse/src/parser.rs:1148` wraps the
   raw body into `Expr_::MultilineStr(String)`
-  (`crates/sky_syntax/src/ast.rs:150-156`); the canonicaliser later
+  (`src/compiler/syntax/src/ast.rs:150-156`); the canonicaliser later
   desugars `{{expr}}` interpolation and `\{{` / `\\` escapes into a
   `++` chain, mirroring the reference's `desugarMultiline`.
 - **Reference:** `../sky/src/Sky/Parse/String.hs:23-37` returns
@@ -134,14 +134,14 @@ sub-expressions is computed against the raw body** during
 canonicalisation. Therefore: compute the anchor in the lexer, strip in
 the canonicaliser.
 
-1. **Lexer** (`crates/sky_parse/src/lexer.rs:478-509`): compute A per
+1. **Lexer** (`src/compiler/parse/src/lexer.rs:478-509`): compute A per
    the rules above while scanning (the scanner already tracks
    line/col; record the column of the first non-newline content char).
    Extend the token to `Tok::TripleStr { raw: String, anchor: u32 }`.
    Do NOT strip here — the raw body must survive so downstream span
    arithmetic stays valid.
-2. **Parser/AST** (`crates/sky_parse/src/parser.rs:1148`,
-   `crates/sky_syntax/src/ast.rs:150-156`): carry the anchor —
+2. **Parser/AST** (`src/compiler/parse/src/parser.rs:1148`,
+   `src/compiler/syntax/src/ast.rs:150-156`): carry the anchor —
    `Expr_::MultilineStr { raw: String, anchor: u32 }`. Update the
    formatter/pretty walkers the exhaustive-match friction points at.
 3. **Canonicaliser** (the `desugarMultiline`-mirror): during the
@@ -178,7 +178,7 @@ desugared result is still a `++` chain of plain string literals).
 
 ## Test plan
 
-Parser/canonicaliser unit tests (`crates/sky_parse` /
+Parser/canonicaliser unit tests (`src/compiler/parse` /
 canonicaliser test module) — one per normative property:
 
 - `m133_same_line_anchor` — `"""a\n   b"""` with opening at a known

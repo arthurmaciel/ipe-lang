@@ -24,16 +24,16 @@ Ipê's `Float` is `comparable`, so the type checker accepts `Set Float`
 and `Dict Float v` — but the Rust backend rejects both at lowering with
 IPE-L0117, because its backings have trait bounds `f64` cannot meet:
 
-- Diagnostic: `crates/sky_diagnostics/src/code.rs:194-195` ("Float is
+- Diagnostic: `src/compiler/diagnostics/src/code.rs:194-195` ("Float is
   not a valid Set element or Dict key on the Rust backend"); explain
-  page `crates/sky_diagnostics/explain/IPE-L0117.md`.
-- Gates: `crates/sky_lower/src/lower.rs:4840-4852` (Dict annotation
+  page `src/compiler/diagnostics/explain/IPE-L0117.md`.
+- Gates: `src/compiler/lower/src/lower.rs:4840-4852` (Dict annotation
   path), `4854-4864` (Set), the parallel `Decoder` path, and the
   post-inference `reject_float_keyed_collection` at `5919-5938`.
 - Backings: `Dict` = `HashMap<K, V>` with `K: Hash + Eq`
-  (`runtime/src/sky_runtime/dict.rs:15,24`; ordered reads sort with
+  (`src/runtime/rust/src/dict.rs:15,24`; ordered reads sort with
   `K: Ord` at 40–60); `Set` = `BTreeSet<A>` with `A: Ord`
-  (`runtime/src/sky_runtime/set.rs:20-70`). `f64` implements none of
+  (`src/runtime/rust/src/set.rs:20-70`). `f64` implements none of
   `Ord`/`Eq`/`Hash` (NaN breaks all three).
 - Ledger: divergence **A17** (`docs/divergences-from-sky.md:551-566`)
   records the fail-closed gate and names "total-order Float set/dict
@@ -123,10 +123,10 @@ payloads, diverging from Ipê `==` on keys.
 
 Current case mapping is Unicode-correct but locale-independent
 everywhere: `string_to_upper`/`to_lower`
-(`runtime/src/sky_runtime/string.rs:28-33`) and `string_casefold`
+(`src/runtime/rust/src/string.rs:28-33`) and `string_casefold`
 (`string.rs:339-346`) use Rust `to_uppercase()`/`to_lowercase()`;
 `char_to_lower`/`char_to_upper`
-(`runtime/src/sky_runtime/char_kernel.rs:24-69`) likewise. The Go
+(`src/runtime/rust/src/char_kernel.rs:24-69`) likewise. The Go
 reference is identical in kind (`strings.ToUpper`/`ToLower`). The gap
 is the locale-*sensitive* tailorings Unicode itself defines
 (SpecialCasing.txt): Turkish/Azerbaijani dotted-İ/dotless-ı, Lithuanian

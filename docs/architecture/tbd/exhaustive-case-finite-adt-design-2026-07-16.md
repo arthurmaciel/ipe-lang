@@ -4,9 +4,9 @@ Status: design-only (no code). Companion design:
 `ipe-lint-tool-design-2026-07-16.md` — the two share the `@allow` directive
 infrastructure, the `Suggestion` fix machinery, and the LSP quick-fix surface.
 
-Related: `crates/sky_types/src/exhaust.rs` (the Maranget usefulness pass this
+Related: `src/compiler/types/src/exhaust.rs` (the Maranget usefulness pass this
 rule extends), `ipe-lsp.md` Q3(b)/(c) + G2 (the code-action counterweight),
-`crates/sky_diagnostics/explain/IPE-T0010.md` (whose teaching narrative this
+`src/compiler/diagnostics/explain/IPE-T0010.md` (whose teaching narrative this
 rule makes true — see §2), `docs/divergences-from-elm.md` (ledger entry).
 
 This is a **departure from Elm** (and from the Ipê reference, which follows
@@ -66,7 +66,7 @@ the strong default the language default, with an explicit, reasoned opt-out.
   in the direction the teaching narrative already committed to — scoped to
   closed unions, where the claim is actually desirable.
 - Corpus impact: 407 catch-all arms (`_ ->`) across `examples/` +
-  `crates/ipe/stdlib` (many over open types — `String` route dispatch, JSON
+  `src/stdlib` (many over open types — `String` route dispatch, JSON
   field fallbacks — which remain legal). The migration burden is real and is
   costed in §8.
 
@@ -291,7 +291,7 @@ each green before the next:
   alias-of-var} × {absorbed 0 (→T0011), 1, many} × {allowed, not-allowed}
   × {Bool/List/Int scrutinee → no finding}; goldens for message rendering.
 - **Phase 4 — corpus migration (the honest cost).** Run the compiler over
-  `examples/` + `crates/ipe/stdlib` + `tests/golden/`; every IPE-T0018 is
+  `examples/` + `src/stdlib` + `tests/golden/`; every IPE-T0018 is
   resolved by expansion (the machine-applicable fix), by a reasoned
   `@allow(open-case)` (expected: `Ipe.Money` currency dispatch, decoder
   fallbacks), or — where a golden deliberately tests catch-all lowering — a

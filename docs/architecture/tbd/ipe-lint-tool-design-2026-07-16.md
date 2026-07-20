@@ -29,7 +29,7 @@ rename with roadmap C.1 (`ipe_*`, `IPE-*`). CLI shown as `ipe lint`
 | Concern | Decision |
 |---|---|
 | Analyzer identity | A **third consumer of the compiler's own artifacts** (parse AST + canon AST + `SolvedTypes`), never a second analyzer. A lint rule cannot parse, resolve, or infer anything itself — it reads what `ipe` computed. |
-| Crate | New `crates/sky_lint`: rule trait, driver, registry, rules. CLI subcommand in `ipe`; LSP surfacing via `sky_lsp` (its Phase 3). |
+| Crate | New `src/compiler/lint`: rule trait, driver, registry, rules. CLI subcommand in `ipe`; LSP surfacing via `sky_lsp` (its Phase 3). |
 | Rule API | elm-review-style **visitor schema over a single driver walk** (one AST traversal for N rules), with a typed `LintContext` exposing solved types by span. Rules are Rust impls registered in a closed `ALL_RULES` table with a drift test (the `sky_kernels` pattern). |
 | Identity + levels | Dual identity per rule: stable code `IPE-W####` + kebab-case name (`unused-import`). clippy-style levels `allow`/`warn`/`deny`; defaults per rule; config in `sky.toml [lint]`; per-site `-- @allow(<rule>) <reason>` directive with mandatory reason. |
 | Findings | Lint findings are `sky_diagnostics::Diagnostic`s (new `Lint` variant) — one rendering pipeline, one `explain` surface, one `Suggestion`/`Applicability` fix model, one LSP publishing path. |
@@ -223,7 +223,7 @@ Lint {
 What this buys, structurally:
 - **Rendering** — the existing rustc/Elm-style report renderer works unchanged
   (caret snippet, help lines, `ipe explain IPE-W0101` pointer).
-- **`explain`** — lint explain pages join `crates/sky_diagnostics/explain/`
+- **`explain`** — lint explain pages join `src/compiler/diagnostics/explain/`
   and the `ipe explain` index; they follow the compiler-as-kind-teacher
   standard (progressive ELI10→deep, runnable before/after snippets).
 - **Fixes** — `Suggestion { span, replacement, applicability }` is already the
@@ -441,12 +441,12 @@ Each phase lands green (fmt, clippy pedantic/nursery, tests) and is
 independently useful. Gates listed per phase.
 
 - **Phase 0 — skeleton + pipeline seam.**
-  `crates/sky_lint` (RuleMeta/Rule/Cx/Findings/registry + drift tests);
+  `src/compiler/lint` (RuleMeta/Rule/Cx/Findings/registry + drift tests);
   `Diagnostic::Lint` + `IPE-W` range in `sky_diagnostics` (+ `ALL_CODES`
   count test update); driver walk over parse+canon+`SolvedTypes`;
   `ipe lint` CLI (human format, exit policy); **two seed rules**
   (`unused-import`, `case-bool-to-if`) with explain pages + fixtures.
-  *Gate:* corpus run over `examples/` + `crates/ipe/stdlib` — every finding
+  *Gate:* corpus run over `examples/` + `src/stdlib` — every finding
   on our own corpus is triaged: real (fixed in the same change) or a
   false-positive (rule fixed). A rule that cannot go corpus-clean does not
   ship.

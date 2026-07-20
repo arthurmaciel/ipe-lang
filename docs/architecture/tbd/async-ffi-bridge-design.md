@@ -114,7 +114,7 @@ code, not a frozen future), and per-step DCE.
 ### 1.3 Error mapping (port — already implemented in our runtime)
 
 One universal rule: every foreign `Err(e)` AND every `JoinError` routes
-through `sky_error_from_foreign` (`runtime/src/sky_runtime/core.rs:54` —
+through `sky_error_from_foreign` (`src/runtime/rust/src/core.rs:54` —
 verified present): raw `Debug` logged server-side under a fresh correlation
 id (B8 — SDK errors echo URLs/bearer tokens/API keys in their `Debug`), Ipê
 receives `Error.unexpected "external operation failed (ref <id>)"`. Typed
@@ -225,7 +225,7 @@ no such hazard). The concrete mechanism is decided as:
    holds reactor-registered I/O; using it under runtime B after A dropped →
    hyper "reactor gone". The reference never hit this because its fixtures
    live inside one `Task.run`; the skyshop CLI/dev shapes will. Fix: a
-   `OnceLock<tokio::runtime::Runtime>` in `runtime/src/sky_runtime/task.rs`;
+   `OnceLock<tokio::runtime::Runtime>` in `src/runtime/rust/src/task.rs`;
    `block_on` drives on the global runtime via the existing spawned-thread
    panic-isolation wrapper (~15 lines; behavior-compatible — a shared reactor
    is strictly more available than a fresh one). `block_on_current_thread`

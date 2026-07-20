@@ -12,7 +12,7 @@
 
 ## 1. Root cause (verified against HEAD)
 
-The defect is one type in `crates/sky_canon/src/env.rs:104`:
+The defect is one type in `src/compiler/canon/src/env.rs:104`:
 
 ```rust
 Kernel(Option<StdlibKernel>, Symbol, Symbol)   // the Option is the bug
@@ -236,18 +236,18 @@ state unrepresentable.
 ## 5. Files touched
 
 ```
-crates/sky_kernels/src/surface.rs        (new — MemberSpec / PortStatus / Backing / UI_HTML_SURFACE / DEFERRED_COUNT)
-crates/sky_kernels/src/lib.rs            (StdlibKernel variants: generic Tagged kernels; ALL derived)
-crates/sky_canon/src/env.rs              (VarHome::Kernel non-Option Backing; deferred_members; iterate manifest)
-crates/sky_canon/src/resolve.rs          (drop Option seams; Deferred use-site diagnostic)
-crates/sky_canon/src/ast.rs              (VarKernel drops Option id)
-crates/sky_canon/src/lib.rs              (total-partition test; retire canon_equals_registry role)
-crates/sky_types/src/constrain.rs        (stdlib_scheme total over Backing; Backing → scheme)
-crates/sky_lower/src/lower.rs            (delete legacy string dispatch + IPE-L0108 hole; tag/value injection)
-crates/sky_backend_rust/src/naming.rs    (generic kernel names)
-crates/sky_backend_rust/src/emit_expr.rs (single emit_html_tag arm; SafeAttrName sinks)
-runtime/src/sky_runtime/ui/{helpers.rs,element.rs,render.rs}
-runtime/src/sky_runtime/html.rs          (html_void_node_; depth cap; SafeAttrName; URL sanitiser)
+src/compiler/kernels/src/surface.rs        (new — MemberSpec / PortStatus / Backing / UI_HTML_SURFACE / DEFERRED_COUNT)
+src/compiler/kernels/src/lib.rs            (StdlibKernel variants: generic Tagged kernels; ALL derived)
+src/compiler/canon/src/env.rs              (VarHome::Kernel non-Option Backing; deferred_members; iterate manifest)
+src/compiler/canon/src/resolve.rs          (drop Option seams; Deferred use-site diagnostic)
+src/compiler/canon/src/ast.rs              (VarKernel drops Option id)
+src/compiler/canon/src/lib.rs              (total-partition test; retire canon_equals_registry role)
+src/compiler/types/src/constrain.rs        (stdlib_scheme total over Backing; Backing → scheme)
+src/compiler/lower/src/lower.rs            (delete legacy string dispatch + IPE-L0108 hole; tag/value injection)
+src/compiler/backend/rust/src/naming.rs    (generic kernel names)
+src/compiler/backend/rust/src/emit_expr.rs (single emit_html_tag arm; SafeAttrName sinks)
+src/runtime/rust/src/ui/{helpers.rs,element.rs,render.rs}
+src/runtime/rust/src/html.rs          (html_void_node_; depth cap; SafeAttrName; URL sanitiser)
 docs/divergences-from-sky.md             (layout-sentinel divergence; numeric-entity escape spelling)
 ```
 
