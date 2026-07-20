@@ -504,7 +504,7 @@ impl Printer<'_> {
         if lo >= hi {
             return false;
         }
-        src.get(lo..hi).is_some_and(|s| s.contains('\n'))
+        src.get(lo..hi).is_some_and(has_layout_newline)
     }
 
     fn dotted(&self, segs: &[ipe_intern::Symbol]) -> String {
@@ -1094,7 +1094,7 @@ impl Printer<'_> {
             Expr_::Call(head, args) => self.call(head, args, indent, e.span),
             Expr_::Binops(chain, last) => self.binops(chain, last, indent, e.span),
             Expr_::Case(scrut, arms) => self.case(scrut, arms, indent),
-            Expr_::Lambda(params, body) => self.lambda(params, body, indent),
+            Expr_::Lambda(params, body) => self.lambda(params, body, indent, e.span),
             Expr_::Let(bindings, body) => self.let_(bindings, body, indent),
             Expr_::If(branches, else_) => self.if_(branches, else_, indent),
             Expr_::Tuple(elems) => self.tuple(elems, indent, e.span),
@@ -1140,7 +1140,7 @@ impl Printer<'_> {
         let arg_one_strs: Vec<String> =
             args.iter().map(|a| self.expr_atom(a, indent + 1)).collect();
         let one = format!("{head_s} {}", arg_one_strs.join(" "));
-        if !one.contains('\n') && !self.was_multiline(span) {
+        if !has_layout_newline(&one) && !self.was_multiline(span) {
             return one;
         }
 
@@ -1155,7 +1155,10 @@ impl Printer<'_> {
         // `split_first` avoids indexing/slicing panics and cleanly expresses the
         // "first argument joins the head line" branch.
         let (mut out, rest): (String, &[Expr]) = match args.split_first() {
-            Some((first, tail)) if self.joins_on_head_line(first, indent + 1) => {
+            Some((first, tail))
+                if self.joins_on_head_line(first, indent + 1)
+                    && head_line_fits(&head_s, first, indent) =>
+            {
                 let first_s = self.expr_atom(first, indent + 1);
                 (format!("{head_s} {first_s}"), tail)
             }
@@ -1175,6 +1178,23 @@ impl Printer<'_> {
     /// line AND is not itself a block form (non-empty list / record / tuple /
     /// update / parenthesised compound).
     fn joins_on_head_line(&self, a: &Expr, indent: usize) -> bool {
+        // A triple-quoted string hugs the function line only when it opens with
+        // visible content on its first physical line (`interpolate """head\n…"""`).
+        // One that opens with a newline (`"""\n…`) — or any string literal that is
+        // a single line — drops to its own indented line instead.
+        if let Expr_::MultilineStr(s) = &a.value {
+            // Hug the function line only when the string is genuinely multi-line
+            // and its first physical line opens with visible, non-whitespace
+            // content (`"""head…`). A string that opens with a newline (`"""\n…`)
+            // or with leading indentation (`"""    …`) drops to its own line.
+            return match s.split_once('\n') {
+                Some((first, _)) => first.starts_with(|c: char| !c.is_whitespace()),
+                None => false,
+            };
+        }
+        if matches!(&a.value, Expr_::Str(_)) {
+            return false;
+        }
         let rendered = self.expr_atom(a, indent);
         if rendered.contains('\n') {
             return false;
@@ -1213,7 +1233,7 @@ impl Printer<'_> {
         // single-line however wide (elm-format keeps 900-column `::` chains
         // intact), and only a source-multiline chain — or one whose operand
         // itself broke — lays out one operator per continuation line.
-        if !one.contains('\n') && !self.was_multiline(span) {
+        if !has_layout_newline(&one) && !self.was_multiline(span) {
             return one;
         }
         // The backward pipe `<|` breaks differently from every other operator:
@@ -1265,14 +1285,23 @@ impl Printer<'_> {
         }
     }
 
-    fn lambda(&self, params: &[Pattern], body: &Expr, indent: usize) -> String {
+    fn lambda(
+        &self,
+        params: &[Pattern],
+        body: &Expr,
+        indent: usize,
+        span: ipe_diagnostics::Span,
+    ) -> String {
         let ps: Vec<String> = params.iter().map(|p| self.pattern_atom(&p.value)).collect();
         let head = format!("\\{} ->", ps.join(" "));
         // A block-form body (`let` / `case` / `if`) always drops to the next
         // line, indented one level: an inline `-> let …` would place the `let`
         // keyword mid-line, breaking its layout-sensitive block on re-parse.
+        // A modal body — one written across multiple source lines — also drops
+        // to its own indented line, matching elm-format's `\x ->\n    body`.
         // Any other body stays inline after the arrow.
-        if matches!(body.value, Expr_::Let(..) | Expr_::Case(..) | Expr_::If(..)) {
+        let block_body = matches!(body.value, Expr_::Let(..) | Expr_::Case(..) | Expr_::If(..));
+        if block_body || self.was_multiline(span) {
             let inner = pad(indent + 1);
             let body_s = self.expr(body, indent + 1);
             format!("{head}\n{inner}{body_s}")
@@ -1359,7 +1388,7 @@ impl Printer<'_> {
     fn tuple(&self, elems: &[Expr], indent: usize, span: ipe_diagnostics::Span) -> String {
         let parts: Vec<String> = elems.iter().map(|e| self.expr(e, indent)).collect();
         let one = format!("( {} )", parts.join(", "));
-        if !one.contains('\n') && !self.was_multiline(span) {
+        if !has_layout_newline(&one) && !self.was_multiline(span) {
             return one;
         }
         comma_multiline("(", ")", &parts, indent)
@@ -1371,7 +1400,7 @@ impl Printer<'_> {
         }
         let parts: Vec<String> = elems.iter().map(|e| self.expr(e, indent)).collect();
         let one = format!("[ {} ]", parts.join(", "));
-        if !one.contains('\n') && !self.was_multiline(span) {
+        if !has_layout_newline(&one) && !self.was_multiline(span) {
             return one;
         }
         comma_multiline("[", "]", &parts, indent)
@@ -1391,7 +1420,7 @@ impl Printer<'_> {
             .map(|(n, v)| format!("{} = {}", self.sym(n.value), self.expr(v, indent)))
             .collect();
         let one = format!("{{ {} }}", parts.join(", "));
-        if !one.contains('\n') && !self.was_multiline(span) {
+        if !has_layout_newline(&one) && !self.was_multiline(span) {
             return one;
         }
         comma_multiline("{", "}", &parts, indent)
@@ -1412,7 +1441,7 @@ impl Printer<'_> {
             .map(|(n, v)| format!("{} = {}", self.sym(n.value), self.expr(v, indent + 1)))
             .collect();
         let one = format!("{{ {base_s} | {} }}", parts.join(", "));
-        if !one.contains('\n') && !self.was_multiline(span) {
+        if !has_layout_newline(&one) && !self.was_multiline(span) {
             return one;
         }
         // Multiline update: `{ base` on the first line, then the `| field` /
@@ -1444,6 +1473,46 @@ const fn needs_parens_as_atom(e: &Expr_) -> bool {
             | Expr_::Let(..)
             | Expr_::If(..)
     )
+}
+
+/// Whether `s` contains a newline that is part of the source *layout* rather
+/// than the *content* of a triple-quoted (`"""…"""`) string. elm-format's modal
+/// rule keys the multi-line layout of a construct on whether the construct was
+/// written across multiple source lines — but a multi-line string literal is a
+/// single logical token, so the `\n`s inside its `"""…"""` delimiters are
+/// content, not layout. Counting them would make e.g. `interpolate """…\n…"""`
+/// look "source-multiline" and wrongly break the surrounding call.
+fn has_layout_newline(s: &str) -> bool {
+    let mut in_triple = false;
+    let mut rest = s.as_bytes();
+    while let Some((&head, tail)) = rest.split_first() {
+        if rest.starts_with(b"\"\"\"") {
+            in_triple = !in_triple;
+            rest = rest.get(3..).unwrap_or(&[]);
+            continue;
+        }
+        if head == b'\n' && !in_triple {
+            return true;
+        }
+        rest = tail;
+    }
+    false
+}
+
+/// Whether the head plus its first argument fits on one line before the
+/// argument's own break. For a multi-line triple-quoted string the join line is
+/// `head """first-content-line`; elm-format only hugs the string to the function
+/// when that opening line stays within the width budget, otherwise the string
+/// drops to its own indented line. Other joinable first arguments (names, empty
+/// collections) are short and always fit.
+fn head_line_fits(head_s: &str, first: &Expr, indent: usize) -> bool {
+    let Expr_::MultilineStr(s) = &first.value else {
+        return true;
+    };
+    let first_content = s.split_once('\n').map_or(s.as_str(), |(f, _)| f);
+    // column of the head + head + ` ` + `"""` + first content line
+    let col = indent * 4 + head_s.chars().count() + 1 + 3 + first_content.chars().count();
+    col <= MAX_WIDTH
 }
 
 /// Shared leading-comma multiline layout for records / lists / tuples:
