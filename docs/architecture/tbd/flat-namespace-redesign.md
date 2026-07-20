@@ -49,7 +49,7 @@ auto-imported namespace of module qualifiers**. You write `String.map`,
 mandatory disambiguator. This is *not* a fully-unqualified surface — bare `map`
 would collide across 6–8 modules and an HM-only compiler cannot soundly
 overload-resolve it. The design is mostly *formalising an invariant that already
-half-ships*: `install_prelude_qualifiers` (`crates/sky_canon/src/env.rs:202`)
+half-ships*: `install_prelude_qualifiers` (`src/compiler/canon/src/env.rs:202`)
 already auto-seeds kernel qualifiers, and kernels emit nothing unless referenced.
 
 The real work is two hardening items, both code-confirmed this session:
@@ -60,7 +60,7 @@ The real work is two hardening items, both code-confirmed this session:
    driven from one `STDLIB_MANIFEST`.
 2. **Reseed reachability off referenced qualifiers, not import decls.** Ipê-level
    DCE is absent today (audit #11: emit-all + LLVM strip). Auto-import deletes the
-   import edge that gates module inclusion (`crates/ipe/src/project.rs:285`), so
+   import edge that gates module inclusion (`src/ipe-cli/src/project.rs:285`), so
    inclusion must be re-rooted on the set of referenced qualifiers — otherwise the
    build either link-fails or compiles the whole stdlib every time.
 
@@ -80,7 +80,7 @@ commits. Rename #59 lands **first**; flatten lands **second**.
   `import Ipe.Core.String as String` is near-redundant plumbing.
 - **F2. Disambiguation is structural.** `qual_vars` is keyed `(qualifier → name →
   VarHome)`. The tripwire `no_colliding_qualifier_name_pairs`
-  (`crates/sky_kernels/src/lib.rs`) already proves no two kernels share a
+  (`src/compiler/kernels/src/lib.rs`) already proves no two kernels share a
   `(qualifier, name)`. Collisions appear only if the qualifier dimension is
   collapsed.
 - **F3. Silent qualifier merge is live.** `env.rs:1036` / `:1063` use
@@ -88,13 +88,13 @@ commits. Rename #59 lands **first**; flatten lands **second**.
 - **F4. Ipê-level DCE is absent.** Audit #11: ipê emits all defs
   (`for func in &module.funcs`) and relies on rustc/LLVM link-strip. Class "P4
   efficiency (build speed) only", priority low. Embedded stdlib
-  (`crates/ipe/src/stdlib.rs`, fixed 18-module `include_str!` set) is pulled into
+  (`src/ipe-cli/src/stdlib.rs`, fixed 18-module `include_str!` set) is pulled into
   the compile graph by import/reference resolution, then all its defs emit.
 - **F5. Kernel-backed defs emit no Rust body.** `Ffi.kernel "String_fromInt"` →
   runtime dispatch. Auto-importing kernel modules costs zero emitted source; only
   the runtime crate carries them, and LLVM strips the unused.
 - **F6. `Ipê`/`Std` are reserved first path segments** (IPE-N0025,
-  `crates/sky_canon/src/resolve.rs:108`). `AmbiguousImport` (IPE-N0024,
+  `src/compiler/canon/src/resolve.rs:108`). `AmbiguousImport` (IPE-N0024,
   `resolve.rs`) already errors when two deps expose the same unqualified name.
 - **F7. `Ipe.*` is not yet ported to the Rust fork.** Only 18 `Ipe.Core.*` modules
   ship. `Ipe.Db/Auth/Ui/Time` describe the Go/Haskell reference. This makes the
@@ -366,7 +366,7 @@ tests exist to prevent.
 holds no `Sky` entry. It does **not** rename the curated upstream-Sky provenance:
 the single README credit line, the `docs/divergences-from-sky.md` references, the
 `../sky` paths, and the embedded-source provenance comments in
-`crates/ipe/src/stdlib.rs` are on the naive-sed exclusion list and are preserved
+`src/ipe-cli/src/stdlib.rs` are on the naive-sed exclusion list and are preserved
 verbatim. No disparagement of the upstream project appears in code or docs.
 
 ---

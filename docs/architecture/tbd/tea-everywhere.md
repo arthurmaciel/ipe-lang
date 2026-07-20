@@ -24,7 +24,7 @@ existing entry point.
 The ported runtime already contains a headless-capable TEA loop:
 
 ```
-runtime/src/sky_runtime/tea.rs
+src/runtime/rust/src/tea.rs
     cli_program(init, update, view, subscriptions, on_line) -> SkyTask<E, ()>
 ```
 

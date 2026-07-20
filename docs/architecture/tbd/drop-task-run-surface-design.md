@@ -38,13 +38,13 @@ Current inventory in the Rust port (all confirmed 2026-07-10):
 
 | Layer | Location |
 |---|---|
-| Kernel variants | `crates/sky_kernels/src/lib.rs:485-487` (`TaskRun`, `TaskPerform`), decls at 1613–1614 (both `d("Task","run"/"perform", 1, Pure, "task_run")`), `ALL` at 2589–2590 |
-| Constrain schemes | `crates/sky_types/src/constrain.rs:3564-3571` — both `fun(task(var(0)), result(error_ty(), var(0)))` (error channel pinned to `Error`) |
-| Resolver (surface) | `crates/sky_lower/src/lower.rs:8520-8521` — `("Task","run")` / `("Task","perform")` → `Callee::Kernel(…)` |
-| Discard-context detection | `crates/sky_lower/src/lower.rs:7052-7053` |
-| Backend naming | `crates/sky_backend_rust/src/naming.rs:583-585` — both → `task_run` |
-| Entry elision | `crates/sky_backend_rust/src/emit_expr.rs:6659-6677` — `Call(TaskRun\|TaskPerform, [t])` at `sky_main` already elides the wrapper |
-| Runtime | `runtime/src/sky_runtime/task.rs:191-195` — `task_run` = `block_on`, panic→Err, total |
+| Kernel variants | `src/compiler/kernels/src/lib.rs:485-487` (`TaskRun`, `TaskPerform`), decls at 1613–1614 (both `d("Task","run"/"perform", 1, Pure, "task_run")`), `ALL` at 2589–2590 |
+| Constrain schemes | `src/compiler/types/src/constrain.rs:3564-3571` — both `fun(task(var(0)), result(error_ty(), var(0)))` (error channel pinned to `Error`) |
+| Resolver (surface) | `src/compiler/lower/src/lower.rs:8520-8521` — `("Task","run")` / `("Task","perform")` → `Callee::Kernel(…)` |
+| Discard-context detection | `src/compiler/lower/src/lower.rs:7052-7053` |
+| Backend naming | `src/compiler/backend/rust/src/naming.rs:583-585` — both → `task_run` |
+| Entry elision | `src/compiler/backend/rust/src/emit_expr.rs:6659-6677` — `Call(TaskRun\|TaskPerform, [t])` at `sky_main` already elides the wrapper |
+| Runtime | `src/runtime/rust/src/task.rs:191-195` — `task_run` = `block_on`, panic→Err, total |
 
 Corpus pressure: 95 occurrences across 35 files in `../sky/examples/`
 (top: `17-skymon` 18, `38-composite-ui-multibackend` 6, `16-ipehess` 6,
@@ -71,7 +71,7 @@ that would demote a removed, well-known surface to a generic
 unknown-qualified-name error. Instead the resolver keeps *recognising*
 `("Task","run")` and `("Task","perform")` and maps them to a new
 removed-surface diagnostic (allocate the next free IPE-N code;
-explain page in `crates/sky_diagnostics/explain/`) whose message is a
+explain page in `src/compiler/diagnostics/explain/`) whose message is a
 teacher, per the compiler-as-kind-teacher rule:
 
 - for `expr |> Task.run` / `Task.run expr` in `main` or a top-level
@@ -153,7 +153,7 @@ Order of operations (after #116 is landed and green):
 
 1. Add the removed-surface diagnostic code + explain page (teacher
    messages per D2, with the three shape-specific hints).
-2. `crates/sky_lower/src/lower.rs:8520-8521`: map both names to the new
+2. `src/compiler/lower/src/lower.rs:8520-8521`: map both names to the new
    diagnostic (carry the call-shape context needed to pick the hint —
    the lowerer knows discard/entry/mid-flow context via the existing
    sync-discard detection at 7052–7053 and the entry detection the

@@ -21,15 +21,15 @@ runtime-internally: match the path against `routes`, build the `Page`
 value, and mutate `Model.page` via the generated `set_page` closure —
 the app's `update` never sees a navigation event.
 
-- Runtime application site: `runtime/src/sky_runtime/live/mod.rs:1173-1174`
+- Runtime application site: `src/runtime/rust/src/live/mod.rs:1173-1174`
   — `route_resolver: Arc<dyn Fn(Model, &str) -> Model>` applies
   `(set_page)(route::match_routes(&routes, &not_found, path), m)` directly.
-- Client paths that trigger it: `runtime/src/sky_runtime/live/client.js`
+- Client paths that trigger it: `src/runtime/rust/src/live/client.js`
   — `sky-nav` click handler (≈1182–1206), `popstate` listener
   (≈1210–1306), `data-sky-path` history sync (≈1005–1012).
-- The "magic" detection: `crates/sky_types/src/lib.rs:916-920`
+- The "magic" detection: `src/compiler/types/src/lib.rs:916-920`
   (`resolve_routed_live_checks`) inspects the settled Model for a field
-  literally named `page`; `crates/sky_backend_rust/src/emit_live.rs:361-417`
+  literally named `page`; `src/compiler/backend/rust/src/emit_live.rs:361-417`
   (`emit_live_app_inner`) branches on it and synthesises `set_page`.
 
 Consequences: an app cannot react to navigation (fetch data for the new
@@ -54,7 +54,7 @@ sugar over onNavigate") is Ipê editorial.
 
 Same field name, position, and semantics as the reference. It rides the
 existing open row tail (`RowTail::Open(3)`) of the `Live.app` cfg scheme
-(`crates/sky_types/src/constrain.rs:4028-4055`), so no required-field
+(`src/compiler/types/src/constrain.rs:4028-4055`), so no required-field
 change and no breakage for existing apps.
 
 Typing is enforced by a **deferred post-solve check**, the same pattern
@@ -71,7 +71,7 @@ When `onNavigate` is present, on every URL-driven route change (initial
 mount, `sky-nav` click, popstate Back/Forward) the runtime:
 
 1. matches the path exactly as today (`route::match_routes`,
-   `runtime/src/sky_runtime/live/route.rs`);
+   `src/runtime/rust/src/live/route.rs`);
 2. does **not** call `set_page`;
 3. calls `onNavigate(matchedPage)` and dispatches the resulting Msg
    through `update`, exactly like any other event (same Cmd handling,
@@ -109,7 +109,7 @@ absent (no synthetic Msg value is actually constructed — the desugaring
 is normative, not operational), but docs, the routed-live explain pages,
 and `routed-live-app-design.md` are updated to present `page` as sugar
 over `onNavigate`, not as magic. IPE-L0124 ("routes declared but no
-`page` field", `crates/sky_types/src/lib.rs:947-950`) is extended: an
+`page` field", `src/compiler/types/src/lib.rs:947-950`) is extended: an
 app with `routes` but neither a `page` field nor `onNavigate` warns; an
 app with `onNavigate` and no `page` field is **legal** (the app may
 store its route state under any name — this is the demotion made real).
@@ -143,18 +143,18 @@ store its route state under any name — this is the demotion made real).
 
 ## Implementation plan (for a cold swarm lane)
 
-Constrain (`crates/sky_types/src/constrain.rs`):
+Constrain (`src/compiler/types/src/constrain.rs`):
 1. Intern `live_f_on_navigate` symbol next to `live_f_routes`/
    `live_f_not_found` (≈lines 290–297, interning at ≈519–520).
 2. Add an `OnNavigateCheck { cfg_row_var, page_var, msg_var, span }`
    deferred check pushed per `Live.app` call site (mirror
    `RoutedLiveCheck`, `constrain.rs:1148-1155`); resolve it in
-   `crates/sky_types/src/lib.rs` next to `resolve_routed_live_checks`
+   `src/compiler/types/src/lib.rs` next to `resolve_routed_live_checks`
    (≈864–955): if the settled row has `onNavigate`, unify with
    `Fun(page, msg)`; IPE-T0001 on mismatch.
 
-Lower + emit (`crates/sky_lower/src/lower.rs` ≈3264–3305
-`lower_app_entry_cfg`; `crates/sky_backend_rust/src/emit_live.rs`):
+Lower + emit (`src/compiler/lower/src/lower.rs` ≈3264–3305
+`lower_app_entry_cfg`; `src/compiler/backend/rust/src/emit_live.rs`):
 3. Thread the optional `onNavigate` cfg field through the lowered app
    entry; `emit_live_app_inner` (`emit_live.rs:361-417`) passes it to
    `live_app_routed` as `Option<Arc<dyn Fn(Page) -> Msg>>` (or a
@@ -165,7 +165,7 @@ Lower + emit (`crates/sky_lower/src/lower.rs` ≈3264–3305
    emit branch: `routed_page_field` detection gains "or cfg has
    onNavigate" so routes are forwarded.
 
-Runtime (`runtime/src/sky_runtime/live/mod.rs`):
+Runtime (`src/runtime/rust/src/live/mod.rs`):
 5. Replace `route_resolver: Arc<dyn Fn(Model, &str) -> Model>`
    (≈1173–1174) with the `NavigationMode` enum: `SetPage` keeps today's
    closure; `Dispatch` runs `match_routes` then feeds
@@ -183,7 +183,7 @@ being landed (#108, done). Post-completion phase as filed.
 
 ## Test plan
 
-Unit/golden (`crates/ipe/tests/`, fixtures under `tests/golden/`):
+Unit/golden (`src/ipe-cli/tests/`, fixtures under `tests/golden/`):
 - `i155_on_navigate_dispatch` — routed app with `onNavigate = NavTo`;
   `update (NavTo p)` sets `page` and appends to a log list rendered in
   the view. E2E (`IPE_E2E=1`): drive a route change, assert the log
@@ -201,7 +201,7 @@ Unit/golden (`crates/ipe/tests/`, fixtures under `tests/golden/`):
   unchanged for a "locked" page; E2E asserts the view did not change
   (app-owned navigation proof).
 
-Runtime unit (`runtime/src/sky_runtime/live/` tests): `NavigationMode`
+Runtime unit (`src/runtime/rust/src/live/` tests): `NavigationMode`
 dispatch — popstate-shaped and nav-shaped requests both route through
 the update queue in `Dispatch` mode; `SetPage` mode bit-identical to
 current behaviour.

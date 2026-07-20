@@ -2,11 +2,11 @@
 
 Status: APPROVED (guardian-synthesised). Task #55. Not yet implemented.
 Verified against HEAD 2026-07-03 (encoding.rs, jwt.rs, email.rs, compression.rs,
-ws_client.rs, server.rs, crates/sky_types/src/constrain.rs).
+ws_client.rs, server.rs, src/compiler/types/src/constrain.rs).
 
 > **SCOPE CORRECTION (2026-07-03, gap-1 enumeration before impl).** The panel
 > reasoned partly against the UPSTREAM `sky-stdlib/` tree. In the ipe PORT
-> (`crates/ipe/stdlib/`) there is **no `Compression.ipe`, `Email.ipe`, or
+> (`src/stdlib/`) there is **no `Compression.ipe`, `Email.ipe`, or
 > `WebSocket.ipe`** — those modules are NOT ported yet, so they have no Ipê-facing
 > binary surface to re-type. The swarm's "atomic step-3" (re-type
 > Compression/Email/WebSocket binary payloads `String→Bytes`) is therefore MOOT
@@ -317,9 +317,9 @@ principles order, delay beats corruption.
 - **(c) Encoding schemed & sound** — CLEARED: FIRST_SCHEMED in the same change
   as the soundness fix (D10); Phase-E deferred to PubSub (D11).
 
-Files touched: `runtime/src/sky_runtime/{encoding,bytes,jwt,compression,email,
+Files touched: `src/runtime/rust/src/{encoding,bytes,jwt,compression,email,
 ws_client,server}.rs`; Ipê surfaces `Std/{Compression,Email}`,
-`Ipê/Core/WebSocket` (+ constrain schemes/lowering); `crates/sky_types/src/
+`Ipê/Core/WebSocket` (+ constrain schemes/lowering); `src/compiler/types/src/
 constrain.rs` (FIRST_SCHEMED :5663, stdlib_scheme arms, exclusion notes
 :2920/:5660, Phase-E :1503 left in place); `tests/golden/m4f_encoding_*`,
 `jwt_hs256_bytes`.

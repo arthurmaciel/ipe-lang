@@ -23,16 +23,16 @@ tree, so nothing needs a new subsystem:
 
 - **Two ways to ship a binding.**
   1. **Pure Ipê source** — a `.ipe` module embedded via `include_str!` in
-     `crates/ipe/src/stdlib.rs` (the 17 `Ipe.*` modules today), with an
+     `src/ipe-cli/src/stdlib.rs` (the 17 `Ipe.*` modules today), with an
      `exposing (…)` list. Bodies are recursive/`case`-based Ipê, or
      `Ffi.kernel "Name"` aliases whose HM signature is written in Ipê and whose
      call sites route to a kernel.
   2. **Kernel** — a variant of the closed `StdlibKernel` enum
-     (`crates/sky_kernels/src/lib.rs`). Each variant's `decl()` returns
+     (`src/compiler/kernels/src/lib.rs`). Each variant's `decl()` returns
      `StdlibDecl { qualifier, name, arity, class, emit }`; the variant is listed
      in `StdlibKernel::ALL`; its type is built in `stdlib_scheme(k)`
-     (`crates/sky_types/src/constrain.rs`) from interned `builtins`; a runtime
-     symbol named by `emit` lives in `runtime/src/sky_runtime/*`.
+     (`src/compiler/types/src/constrain.rs`) from interned `builtins`; a runtime
+     symbol named by `emit` lives in `src/runtime/rust/src/*`.
 - **The scheme is a `Ty` built from `builtins`.** `stdlib_scheme` uses closures
   `int()`, `float()`, `string()`, `bool_ty()`, `list(t)`, `maybe(t)`,
   `result(e,a)`, `dict(k,v)`, `set(a)`, `bytes()`, `char()`, `tuple2(a,b)`,
