@@ -348,6 +348,56 @@ impl FnInfo {
         self.self_returning
     }
 
+    /// Whether the method is a by-borrow reader whose receiver must be threaded
+    /// back out beside the result.
+    ///
+    /// True for an ordinary ([`FnShape::Plain`]) instance method whose receiver
+    /// is taken by borrow (`&self`/`&mut self` — the `self` param's Rust type
+    /// begins with `&`) and does NOT already return the receiver
+    /// ([`Self::self_returning`]). For such a method the wrapper appends the
+    /// receiver to its result, so the Ipê surface binds `T -> Result Error
+    /// (R, T)` and the caller can flow a non-`Clone` foreign handle on without a
+    /// clone or the `IPE-L0130` linearity gate.
+    ///
+    /// A method that itself returns the receiver type (a `Self`-returning
+    /// builder) is excluded — threading the receiver back would duplicate it.
+    #[must_use]
+    pub fn is_borrow_reader(&self) -> bool {
+        if !matches!(self.shape, FnShape::Plain) || self.self_returning {
+            return false;
+        }
+        let Some(recv) = self.params.first() else {
+            return false;
+        };
+        let is_instance =
+            !self.recv_type.is_empty() && !self.method_name.is_empty() && recv.name == "self";
+        if !is_instance || !recv.rust_type_str().trim_start().starts_with('&') {
+            return false;
+        }
+        // The `to_string` Display bridge takes `impl Display`, not the receiver
+        // handle — it is a value conversion, not a handle reader, so it never
+        // threads a receiver back.
+        if self.method_name == "to_string" {
+            return false;
+        }
+        // Exclude a `Self`-returning reader: the sole non-error result already
+        // IS the receiver, so there is nothing extra to thread back.
+        let sole_result_is_self = match self
+            .results
+            .iter()
+            .filter(|r| r.foreign_ty != "error")
+            .collect::<Vec<_>>()
+            .as_slice()
+        {
+            [r] => {
+                r.ipe_type == self.recv_type
+                    || (r.ipe_type.is_empty() && r.foreign_ty == self.recv_type)
+            }
+            _ => false,
+        };
+        !sole_result_is_self
+    }
+
     /// The parametric generic block, when present.
     #[must_use]
     pub const fn generic(&self) -> Option<&GenericFn> {

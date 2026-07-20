@@ -79,9 +79,11 @@ fn write_project(dir: &Path, main: &str) -> bool {
     fs::write(src.join("Main.ipe"), main).is_ok()
 }
 
-/// FAIL-CLOSED: the `world` handle (a non-`Clone` `Rust.Handle_demo.Widget`) is
-/// read twice, so the lowerer must reject it with IPE-L0130 instead of emitting
-/// a `.clone()` the foreign type does not support.
+/// FAIL-CLOSED BACKSTOP: the `w` handle (a non-`Clone` `Rust.Handle_demo.Widget`)
+/// is read by TWO calls that each consume the ORIGINAL binding — ignoring the
+/// receiver each reader threads back. That is still a non-linear use, so the
+/// lowerer must reject it with IPE-L0130 instead of emitting a `.clone()` the
+/// foreign type does not support.
 #[test]
 fn nonclone_handle_reused_fails_closed_before_cargo() {
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -89,8 +91,10 @@ fn nonclone_handle_reused_fails_closed_before_cargo() {
     };
 
     let tmp = std::env::temp_dir().join("ipec_ffi_nonclone_handle_reuse");
-    // `w` is bound once, then read by TWO independent `slot_count` calls — a
-    // non-linear use of a non-`Clone` foreign handle.
+    // `w` is bound once, then read by TWO `slot_count` calls that both discard
+    // the threaded-back receiver and re-use the ORIGINAL `w` — a non-linear use
+    // of a non-`Clone` foreign handle. `slot_count` now binds as
+    // `Widget -> Result Error (Int, Widget)`; each read drops its `.second`.
     let wrote = write_project(
         &tmp,
         "module Main exposing (main)\n\
@@ -102,8 +106,8 @@ fn nonclone_handle_reused_fails_closed_before_cargo() {
          readTwice : H.Widget -> Result Error Int\n\
          readTwice w =\n\
          \x20   let\n\
-         \x20       a = H.slot_count_from_widget w\n\
-         \x20       b = H.slot_count_from_widget w\n\
+         \x20       a = Result.map (\\( n, _ ) -> n) (H.slot_count_from_widget w)\n\
+         \x20       b = Result.map (\\( n, _ ) -> n) (H.slot_count_from_widget w)\n\
          \x20   in\n\
          \x20       Result.map2 (\\x y -> x + y) a b\n\n\
          main =\n\
@@ -139,4 +143,56 @@ fn nonclone_handle_reused_fails_closed_before_cargo() {
         "IPE-L0130",
         "reusing a non-`Clone` FFI handle must fail closed with IPE-L0130, got {code:?}: {err}"
     );
+}
+
+/// ERGONOMIC PATH: a by-borrow reader threads its receiver back, so the handle
+/// flows on linearly with NO clone and NO IPE-L0130 gate. Destructuring the
+/// `(Int, Widget)` result and feeding the returned handle to the next call
+/// builds and compiles clean — the whole point of receiver borrow-threading.
+#[test]
+fn nonclone_handle_threaded_linearly_builds() {
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return; // runtime unavailable in this environment — skip silently
+    };
+
+    let tmp = std::env::temp_dir().join("ipec_ffi_nonclone_handle_thread");
+    // Each read consumes the world and hands the RETURNED handle to the next —
+    // one linear chain, so the non-`Clone` handle never needs a clone.
+    let wrote = write_project(
+        &tmp,
+        "module Main exposing (main)\n\
+         import Ipe.Prelude exposing (..)\n\
+         import Ipe.Log exposing (println)\n\
+         import Ipe.Result as Result\n\
+         import Ipe.String as String\n\
+         import Rust.Handle_demo as H\n\n\
+         readTwice : H.Widget -> Result Error Int\n\
+         readTwice w =\n\
+         \x20   H.slot_count_from_widget w\n\
+         \x20       |> Result.andThen\n\
+         \x20           (\\( count, w1 ) ->\n\
+         \x20               H.slot_count_from_widget w1\n\
+         \x20                   |> Result.map (\\( more, _ ) -> count + more)\n\
+         \x20           )\n\n\
+         main =\n\
+         \x20   case Result.andThen readTwice (H.new_from_widget ()) of\n\
+         \x20       Ok n -> println (String.fromInt n)\n\
+         \x20       Err _ -> println \"err\"\n",
+    );
+    assert!(
+        wrote,
+        "must write the fixture project + FFI cache to a temp dir"
+    );
+
+    let entry = tmp.join("src").join("Main.ipe");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_nonclone_handle_thread_out");
+    let _ = fs::remove_dir_all(&out);
+
+    match ipe::build_with_sibling_discovery(&entry, &out, &runtime) {
+        Ok(()) => {}
+        Err(err) => assert!(
+            false_marker(),
+            "linear borrow-threaded handle use must build, got: {err}"
+        ),
+    }
 }

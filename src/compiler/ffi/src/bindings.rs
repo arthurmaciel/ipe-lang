@@ -1019,6 +1019,7 @@ fn emit_fn_region(krate: &str, kernel_name: &str, f: &FnInfo) -> Vec<String> {
 }
 
 /// Plain fn / method / static / pkg-var wrapper (the fallible-carrier tier).
+#[allow(clippy::too_many_lines)] // one linear body-shape cascade (self-return / borrow-thread / effect arms)
 fn plain_lines(cx: &WrapperCx<'_>) -> Vec<String> {
     let f = cx.f;
     // Degenerate method: a self-param entry whose concrete receiver the
@@ -1034,6 +1035,19 @@ fn plain_lines(cx: &WrapperCx<'_>) -> Vec<String> {
         return Vec::new();
     }
     let (ret_inner, ret_coerce) = cx.ret_inner_and_coerce();
+    // A by-borrow reader threads its receiver (`arg0`) back beside the result:
+    // the inner return type gains a trailing receiver component and the body
+    // returns `(value, arg0)`. The `&self`/`&mut self` call only borrows `arg0`,
+    // so it is still live to return. Async (effectful) readers move the receiver
+    // into the spawned task and cannot thread it back — they keep the
+    // `IPE-L0130` linearity backstop.
+    let thread_recv = f.is_borrow_reader() && f.effect() != Effect::Effectful;
+    let recv_rust_ty = cx.param_types.first().cloned().unwrap_or_default();
+    let ret_inner = if thread_recv {
+        format!("({ret_inner}, {recv_rust_ty})")
+    } else {
+        ret_inner
+    };
     let ret_type = if f.effect() == Effect::Effectful {
         format!("IpeTask<{ret_inner}>")
     } else {
@@ -1055,6 +1069,25 @@ fn plain_lines(cx: &WrapperCx<'_>) -> Vec<String> {
              arg0.{method}({own_thread_args}); arg0 }})) \
              {{ Ok(r) => ok_res(r), Err(_) => IpeResult::Err(str_err(\"foreign call panicked\")) }}"
         )
+    } else if thread_recv {
+        // By-borrow reader: the closure owns `arg0`, calls the borrowing method,
+        // then hands the receiver back so it flows out beside the result. A
+        // Fallible reader folds its `Err` arm normally (the handle is spent on
+        // failure — the Ipê `Result Error (R, T)` carries no tuple there).
+        match f.effect() {
+            Effect::Fallible => format!(
+                "match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {{ let __r = {call}; (__r, arg0) }})) \
+                 {{ Ok((Ok(v), recv)) => ok_res(({}, recv)), Ok((Err(e), _)) => IpeResult::Err(ipe_error_from_foreign(e)), \
+                 Err(_) => IpeResult::Err(str_err(\"foreign call panicked\")) }}",
+                ret_coerce("v")
+            ),
+            // Pure (and, defensively, any non-fallible non-effectful shape).
+            _ => format!(
+                "match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {{ let __r = {call}; (__r, arg0) }})) \
+                 {{ Ok((v, recv)) => ok_res(({}, recv)), Err(_) => IpeResult::Err(str_err(\"foreign call panicked\")) }}",
+                ret_coerce("v")
+            ),
+        }
     } else {
         match f.effect() {
             Effect::Effectful => {
@@ -1730,6 +1763,41 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
             ),
             "{out}"
         );
+    }
+
+    #[test]
+    fn borrow_reader_threads_the_receiver_back_beside_the_result() {
+        // A `&self` reader (receiver `rustType` begins with `&`) hands `arg0`
+        // back beside the coerced result: the return type is `(i64, Widget)`
+        // and the body pairs the value with the receiver.
+        let pkg = decode(&json!({
+            "pkg": "handle_demo",
+            "name": "handle_demo",
+            "functions": [{
+                "name": "slot_count",
+                "params": [
+                    {"name": "self", "type": "Widget", "ipeType": "Widget", "rustType": "&handle_demo::Widget"}
+                ],
+                "results": [{"name": "", "type": "Int", "rustType": "usize"}],
+                "effect": "pure",
+                "recvType": "Widget",
+                "recvRustType": "handle_demo::Widget",
+                "methodName": "slot_count"
+            }],
+            "errors": []
+        }));
+        let out = emit_bindings(&pkg);
+        assert!(
+            out.contains(
+                "pub fn handle_demo_slot_count_from_widget(mut arg0: ::handle_demo::Widget) -> IpeResult<IpeError, (i64, ::handle_demo::Widget)> {"
+            ),
+            "{out}"
+        );
+        assert!(
+            out.contains("let __r = arg0.slot_count(); (__r, arg0)"),
+            "{out}"
+        );
+        assert!(out.contains("Ok((v, recv)) => ok_res(("), "{out}");
     }
 
     #[test]

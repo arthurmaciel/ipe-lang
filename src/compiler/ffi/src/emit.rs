@@ -104,11 +104,23 @@ pub fn wrapper_ipe_signature(f: &FnInfo) -> String {
         .iter()
         .filter(|r| r.foreign_ty != "error")
         .collect();
-    let inner_ok = match non_err.as_slice() {
-        [] => "()".to_owned(),
-        [single] => param_ipe_type(single),
-        multi => {
+    // A by-borrow reader threads its receiver back beside the result, so the Ok
+    // payload gains a trailing receiver component: `R` becomes `(R, T)`, `()`
+    // becomes `T`. The caller destructures it and flows the handle on without a
+    // clone or the `IPE-L0130` linearity gate.
+    let thread_recv = f.is_borrow_reader();
+    let inner_ok = match (non_err.as_slice(), thread_recv) {
+        ([], false) => "()".to_owned(),
+        ([single], false) => param_ipe_type(single),
+        (multi, false) => {
             let parts: Vec<String> = multi.iter().map(|p| param_ipe_type(p)).collect();
+            format!("({})", parts.join(", "))
+        }
+        // Borrow-reader: append the receiver as the last tuple component.
+        ([], true) => paren_multi(f.recv_type()),
+        (results, true) => {
+            let mut parts: Vec<String> = results.iter().map(|p| param_ipe_type(p)).collect();
+            parts.push(f.recv_type().to_owned());
             format!("({})", parts.join(", "))
         }
     };
@@ -394,6 +406,40 @@ mod tests {
         assert_eq!(
             wrapper_ipe_signature(f),
             "Int -> Version -> Result Error Version"
+        );
+    }
+
+    #[test]
+    fn borrow_reader_threads_the_receiver_into_the_result_tuple() {
+        // A `&self` reader (receiver `rustType` begins with `&`) that returns a
+        // non-`Self` value threads the receiver back: the Ok payload gains a
+        // trailing receiver component, `Int` becomes `(Int, Widget)`.
+        let pkg = crate::pkginfo::PkgInfo::decode_json(
+            &serde_json::json!({
+                "pkg": "handle_demo",
+                "name": "handle_demo",
+                "version": "0.1.0",
+                "functions": [{
+                    "name": "slot_count",
+                    "params": [
+                        {"name": "self", "type": "Widget", "ipeType": "Widget", "rustType": "&handle_demo::Widget"}
+                    ],
+                    "results": [{"name": "", "type": "Int", "rustType": "usize"}],
+                    "effect": "pure",
+                    "recvType": "Widget",
+                    "recvRustType": "handle_demo::Widget",
+                    "methodName": "slot_count"
+                }],
+                "errors": []
+            })
+            .to_string(),
+        )
+        .expect("decodes");
+        let f = pkg.fns().first().expect("one binding");
+        assert!(f.is_borrow_reader());
+        assert_eq!(
+            wrapper_ipe_signature(f),
+            "Widget -> Result Error (Int, Widget)"
         );
     }
 
