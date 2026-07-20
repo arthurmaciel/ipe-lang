@@ -15,8 +15,10 @@
 //!
 //! Errors are typed ([`CliError`]); no operation panics or unwraps.
 
+pub mod api_surface;
 pub mod build_plan;
 mod cache;
+pub mod diff;
 pub mod ffi;
 pub mod fmt;
 pub mod help;
