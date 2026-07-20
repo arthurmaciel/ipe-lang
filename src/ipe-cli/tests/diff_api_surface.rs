@@ -3,6 +3,10 @@
 //! interfaces project into a canonical, order-independent [`PublicApi`], and a
 //! module whose interface is open or un-typecheckable fails closed.
 
+// Test fixture setup: a failed `expect`/`panic` IS the failure signal — the
+// harness reports it as the test failure, which is the intended behaviour here.
+#![allow(clippy::expect_used, clippy::panic)]
+
 use std::path::PathBuf;
 
 use ipe::api_surface::{DiffError, extract_tree};
@@ -15,8 +19,7 @@ fn temp_pkg(tag: &str) -> PathBuf {
         tag,
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
+            .map_or(0, |d| d.as_nanos())
     ));
     std::fs::create_dir_all(dir.join("src")).expect("create temp src dir");
     dir
@@ -64,7 +67,7 @@ fn extracts_exported_values_with_canonical_signatures() {
         "wrap's polymorphic signature"
     );
     assert!(
-        module.values.get("hidden").is_none(),
+        !module.values.contains_key("hidden"),
         "only exposed names appear"
     );
 }

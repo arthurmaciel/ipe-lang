@@ -99,7 +99,7 @@ impl ApiChange {
     /// expressions a new variant would break — matching Elm and Ipê's exhaustive
     /// matching.
     #[must_use]
-    pub fn compatibility(&self) -> Compatibility {
+    pub const fn compatibility(&self) -> Compatibility {
         match self {
             Self::ModuleAdded { .. } | Self::ValueAdded { .. } | Self::UnionAdded { .. } => {
                 Compatibility::Compatible
@@ -261,7 +261,7 @@ pub fn magnitude(changes: &[ApiChange]) -> Compatibility {
 
 /// Map a delta's compatibility to its required bump (pre-1.0).
 #[must_use]
-pub fn required_bump(compat: Compatibility) -> RequiredBump {
+pub const fn required_bump(compat: Compatibility) -> RequiredBump {
     match compat {
         Compatibility::Compatible => RequiredBump::Patch,
         Compatibility::Breaking => RequiredBump::Minor,
@@ -274,7 +274,7 @@ pub fn required_bump(compat: Compatibility) -> RequiredBump {
 /// - `Patch`: any strict increase over `old` (`0.y.(z+1)` is the smallest).
 /// - `Minor`: at least `0.(y+1).0` — a patch bump does not clear it.
 #[must_use]
-pub fn bump_floor(old: &Version, required: RequiredBump) -> Version {
+pub const fn bump_floor(old: &Version, required: RequiredBump) -> Version {
     match required {
         RequiredBump::Patch => Version::new(old.major, old.minor, old.patch.saturating_add(1)),
         RequiredBump::Minor => Version::new(old.major, old.minor.saturating_add(1), 0),
@@ -322,7 +322,7 @@ pub fn report(
 impl RequiredBump {
     /// The lowercase name of the bump, for messages.
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Patch => "patch",
             Self::Minor => "minor",

@@ -2,6 +2,10 @@
 //! End-to-end `ipe diff`: the gate primitive over two real package trees, and
 //! the CLI's exit behaviour in report and `--check` modes.
 
+// Test fixture setup: a failed `expect`/`panic` IS the failure signal — the
+// harness reports it as the test failure, which is the intended behaviour here.
+#![allow(clippy::expect_used, clippy::panic)]
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -16,8 +20,7 @@ fn temp_pkg(tag: &str) -> PathBuf {
         tag,
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
+            .map_or(0, |d| d.as_nanos())
     ));
     std::fs::create_dir_all(dir.join("src")).expect("create temp src dir");
     dir

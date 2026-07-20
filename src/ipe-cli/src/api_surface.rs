@@ -382,8 +382,12 @@ fn extract_from_db(
         }
         match ipe_db::typed_interface(db, source_root, *file) {
             Some(interface) => {
-                let interner = db.interner().lock();
-                let module_api = project_interface(&interface, &interner, path)?;
+                // Scope the interner lock to the projection only — it must not
+                // outlive this arm, and the mutex is not reentrant.
+                let module_api = {
+                    let interner = db.interner().lock();
+                    project_interface(&interface, &interner, path)?
+                };
                 modules.insert(path.clone(), module_api);
             }
             None => {
