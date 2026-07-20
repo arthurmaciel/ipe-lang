@@ -133,8 +133,8 @@ is the locale-*sensitive* tailorings Unicode itself defines
 dot-above accumulation — plus Greek final sigma which Rust already
 handles positionally. `docs/architecture/divergence-policy.md:233-250`
 explicitly deferred this ("would need ICU-style data"); Elm's
-counterparts `Char.toLocaleUpper`/`toLocaleLower` are `MISSING` in the
-gap matrix (`elm-core-gap-matrix.md:177-178`).
+counterparts `Char.toLocaleUpper`/`toLocaleLower` are absent (see
+`elm-core-coverage.md`).
 
 ### Decision
 
@@ -202,8 +202,8 @@ breaks static-binary posture, security surface; (3) changing default
    recipe (canon registration + constrain schemes + lower arms +
    naming + runtime), sealed per the no-exit-0-then-cargo-fail
    mandate; backend flips the cargo feature on use.
-3. Ledger entries per B3; `elm-core-gap-matrix.md:177-178` rows updated
-   from `MISSING` to `intentional(explicit-locale)`.
+3. Ledger entries per B3; the `elm-core-coverage.md` rows for the locale
+   case functions move from absent to `intentional(explicit-locale)`.
 
 ## Test plan
 
