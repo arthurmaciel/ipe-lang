@@ -350,7 +350,12 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
         // Ipê signature maps every integer to `Int` (i64) — the forwarder
         // would be an E0308. Over-drop until tuple-component scalar coercion
         // is wired into the wrapper emitter.
-        if contains_tuple(&sig) {
+        //
+        // A by-borrow reader's receiver-threaded tuple (`(R, T)`) is the one
+        // exception: its wrapper coerces the result component to `i64`/`f64`
+        // before pairing it with the receiver handle, so the forwarder types
+        // check. Let it through.
+        if contains_tuple(&sig) && !f.is_borrow_reader() {
             skip(
                 "tuple in signature needs component scalar coercion — not yet wired",
                 &mut skipped,

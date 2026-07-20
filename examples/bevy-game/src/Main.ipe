@@ -52,8 +52,16 @@ play =
         |> Result.andThen (step "clear change trackers" Ecs.clear_trackers_from_worldWorld)
         |> Result.andThen (step "clear all entities" Ecs.clear_entities_from_worldWorld)
         |> Result.andThen (step "flush command queue" Ecs.flush_from_worldWorld)
-        -- Terminal read: consume the threaded world for its final entity count.
+        -- Two reads, threaded: a by-borrow `&self` reader returns
+        -- `(value, world)`, so the world flows on to the next read without a
+        -- clone or the IPE-L0130 gate. `entity_count` reads, hands the world
+        -- back; `change_tick` reads the same threaded world; we combine both.
         |> Result.andThen Ecs.entity_count_from_worldWorld
+        |> Result.andThen
+            (\( count, world ) ->
+                Ecs.change_tick_from_worldWorld world
+                    |> Result.map (\( _, _ ) -> count)
+            )
 
 
 main =
