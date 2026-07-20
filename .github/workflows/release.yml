@@ -1,12 +1,22 @@
 name: Release
 
+# release-please owns tag + GitHub-release CREATION and the changelog body (see
+# release-please.yml). This workflow owns only the 5-platform binary build and
+# ATTACHES those assets to the release release-please already published — it
+# never creates a release itself, so there is exactly one release object per tag.
+#
+# Trigger: `release: published`, which fires when release-please publishes the
+# release for the tag it just pushed. Keying on the release event (not the tag
+# push) guarantees the release object already exists when the upload step runs,
+# so `gh release upload` cannot race ahead of its creation. `workflow_dispatch`
+# stays for manual rebuilds against an existing release.
 on:
-  push:
-    tags: ['v*']
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to build (e.g. v0.1.0)'
+        description: 'Existing release tag to build + upload assets to (e.g. v0.1.0)'
         required: true
 
 permissions:
@@ -43,6 +53,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Build the tagged commit for both triggers: the release event's tag,
+          # or the manually-dispatched tag input.
+          ref: ${{ github.event.release.tag_name || github.event.inputs.tag }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -84,6 +98,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || github.event.inputs.tag }}
       - name: Build in FreeBSD VM
         uses: vmactions/freebsd-vm@v1
         with:
@@ -102,12 +118,14 @@ jobs:
           path: dist/ipe-freebsd-x64.tar.gz
           if-no-files-found: ignore
 
-  # Assemble assets, checksum, publish the GitHub Release.
+  # Assemble assets, checksum, upload them to the release-please-created release.
   release:
     needs: [build, build-freebsd]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || github.event.inputs.tag }}
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -119,12 +137,15 @@ jobs:
           cp scripts/install.sh release/install.sh
           ( cd release && sha256sum * > SHA256SUMS )
           ls -la release/
-      - name: Publish release
+      # Attach binaries to the release release-please already created. Upload,
+      # not create: the release object and its changelog body already exist.
+      # `--clobber` makes a manual workflow_dispatch re-run idempotent (replaces
+      # same-named assets instead of erroring).
+      - name: Upload assets to release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
-          gh release create "$TAG" release/* \
-            --title "Ipê $TAG" \
-            --generate-notes \
+          gh release upload "$TAG" release/* \
+            --clobber \
             --repo "${{ github.repository }}"

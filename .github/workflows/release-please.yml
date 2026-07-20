@@ -1,0 +1,33 @@
+name: release-please
+
+# Automated versioning + changelog + release cutting, driven by Conventional
+# Commits. On every push to `main`, release-please opens (or refreshes) a single
+# standing "release PR" that bumps the workspace version in Cargo.toml and
+# prepends the new CHANGELOG.md section. That PR is inert until merged; merging
+# it tags `vX.Y.Z` and creates the GitHub release. The binary build+upload lives
+# in release.yml, triggered by the tag release-please pushes.
+#
+# Pre-1.0 bump policy (release-please-config.json): feat/fix/perf -> patch,
+# `!`/`BREAKING CHANGE` -> minor. It never auto-bumps to 1.0 — that is a
+# deliberate stability promise made by hand.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .github/.release-please-manifest.json
