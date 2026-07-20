@@ -620,10 +620,11 @@ are missing (only `Time.sleep` covers `Process.sleep`).
 
 ### (c) Signature / behaviour divergences worth a decision
 
-- **`Basics.compare` / the `Order` type.** ipê has no `Order` (`LT`/`EQ`/`GT`)
-  type, and `compare` is a registered `Basics` qualifier that hits `kernel_ty`'s
-  unconstrained fallback — no concrete typed dispatch. `List.sortWith` (which
-  Elm types via `Order`) is blocked on this decision.
+- **`Basics.compare` / the `Order` type.** `Basics.compare`
+  (`src/runtime/rust/src/basics.rs`) and `List.sortWith`
+  (`src/runtime/rust/src/list.rs`) are implemented as kernels. Whether ipê exposes
+  a first-class `Order` (`LT`/`EQ`/`GT`) ADT to user code, versus keeping compare
+  as an opaque three-way kernel result, is the open surface decision.
 - **`Basics.modBy` / `negate`.** Both are registered `Basics` qualifiers with no
   `kernel_ty` arm, so they type as an unconstrained variable rather than
   `Int -> Int -> Int` / `number -> number`. The concrete integer-modulo surface
@@ -645,3 +646,35 @@ are missing (only `Time.sleep` covers `Process.sleep`).
 - **No function-composition operators.** `(>>)` / `(<<)` are unavailable; only
   `(|>)` / `(<|)` pipes exist. `(^)` (power) is likewise absent — `Math.pow`
   covers it for `Float` only.
+
+## Prioritized implementation backlog
+
+Grouped into build-lane batches ordered by user impact; each is independently
+implementable. Regenerate by comparing the kernel registry
+(`src/compiler/kernels/src/lib.rs`) and canon qualifiers
+(`src/compiler/canon/src/env.rs`) against `elm/core`'s `docs.json`; record
+sanctioned gaps in `divergences-from-elm.md`.
+
+- **List numerics (very high, pure):** `maximum`, `minimum`, `sum`, `product`,
+  `singleton`, `repeat` — foldl/range based.
+- **List sort/parallel (high):** `sort` (needs `comparable`), `map2`, `map3`–`5`,
+  `intersperse`, `partition`, `unzip`.
+- **Dict traversal (high):** `singleton`, `update`, `filter`, `foldr`,
+  `partition`; set-ops `intersect`, `diff`, `merge`.
+- **Set HOFs (medium):** `isEmpty`, `singleton`, `foldl` (unlocks the rest),
+  `map`, `filter`, `partition` — Set has no HOF surface today.
+- **String char-level (medium):** `map`, `filter`, `any`, `all`, `foldl`,
+  `foldr`; navigation `left`, `right`, `cons`, `uncons`, `pad`, `indexes`.
+- **Result/Maybe bridges (low count, high usability):** `Result.fromMaybe`
+  (`toMaybe` already present).
+- **Basics numerics (medium):** `toFloat`, `remainderBy`, `xor`, `isInfinite`,
+  `logBase`; geometry `degrees`/`radians`/`turns`/`toPolar`/`fromPolar`; `(^)`,
+  `(>>)`/`(<<)`.
+- **Char completeness (low-medium):** `isAlphaNum`, `isHexDigit`, `isOctDigit`.
+- **Task (medium):** `map2`–`map5`, `attempt`.
+- **Tuple (low):** `mapFirst`, `mapSecond`, `mapBoth`.
+- **Cmd.map / Sub.map (low-medium):** enables composing sub-components with
+  different `Msg` types in the TEA update loop.
+
+`Array` and `Bitwise` have no planned pure implementation (use `List` / FFI); see
+`additive-stdlib-features.md` for the opaque-type designs if that changes.

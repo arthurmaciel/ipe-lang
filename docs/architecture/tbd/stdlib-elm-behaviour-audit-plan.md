@@ -11,9 +11,9 @@
 
 Ipê's stdlib is built to **Go-reference parity** (PRINCIPLES.md §"Match
 the reference"); Elm parity has only ever been audited at the
-**API-surface** level (`docs/architecture/elm-core-coverage.md` and
-`elm-core-gap-matrix.md` record *which functions exist*, explicitly not
-*what they do*). But the project's stated ambition (README framing,
+**API-surface** level (`docs/architecture/elm-core-coverage.md` records
+*which functions exist*, explicitly not *what they do*). But the project's
+stated ambition (README framing,
 divergences-from-elm ledger) is Elm-family **semantics**, and several
 behaviours are known to sit at three-way corners where Go, Elm, and
 "most correct" disagree. `docs/architecture/divergence-policy.md:264-267`
@@ -124,9 +124,8 @@ For each behaviour probed:
    architecture-level.
 4. New BACKLOG.md rows for every `defect` verdict, each carrying its
    probe fixture name in Notes.
-5. `elm-core-gap-matrix.md` gains a `behaviour-audited` marker column
-   (or per-row note) for entries the audit covered, so C.4 and D.2
-   don't double-track.
+5. `elm-core-coverage.md` gains a `behaviour-audited` marker (or per-row
+   note) for entries the audit covered, so C.4 and D.2 don't double-track.
 
 ## Execution notes for the lane that picks this up
 
