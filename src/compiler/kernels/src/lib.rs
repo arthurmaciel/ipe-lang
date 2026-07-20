@@ -4163,7 +4163,9 @@ impl StdlibKernel {
             | Self::FileCopy
             | Self::FileRename
             | Self::FileDelete
-            | Self::DbConnect
+            | Self::CsvParseStreamFromFile
+            | Self::ConfigLoadFromFile => Some(Capability::Filesystem),
+            Self::DbConnect
             | Self::DbOpen
             | Self::DbClose
             | Self::DbExecRaw
@@ -4188,8 +4190,23 @@ impl StdlibKernel {
             | Self::DbMigrate
             | Self::DbFindWhere
             | Self::DbDeleteWhere
-            | Self::CsvParseStreamFromFile
-            | Self::ConfigLoadFromFile => Some(Capability::Filesystem),
+            | Self::DbDefaultMigration
+            | Self::DbDecString
+            | Self::DbDecInt
+            | Self::DbDecFloat
+            | Self::DbDecBool
+            | Self::DbDecNullable
+            | Self::DbDecMap
+            | Self::DbDecAndThen
+            | Self::DbDecSucceed
+            | Self::DbDecFail
+            | Self::DbDecMap2
+            | Self::DbDecMap3
+            | Self::DbDecMap4
+            | Self::DbDecRequired
+            | Self::DbDecOptional
+            | Self::DbDecMoney
+            | Self::DbDecBytes => Some(Capability::Database),
             Self::SystemArgs
             | Self::SystemGetenv
             | Self::SystemGetenvOr
@@ -4523,23 +4540,6 @@ impl StdlibKernel {
             | Self::HttpWithUrl
             | Self::HttpWithFollowRedirects
             | Self::HttpWithMaxRedirects
-            | Self::DbDefaultMigration
-            | Self::DbDecString
-            | Self::DbDecInt
-            | Self::DbDecFloat
-            | Self::DbDecBool
-            | Self::DbDecNullable
-            | Self::DbDecMap
-            | Self::DbDecAndThen
-            | Self::DbDecSucceed
-            | Self::DbDecFail
-            | Self::DbDecMap2
-            | Self::DbDecMap3
-            | Self::DbDecMap4
-            | Self::DbDecRequired
-            | Self::DbDecOptional
-            | Self::DbDecMoney
-            | Self::DbDecBytes
             | Self::CmdNone
             | Self::CmdBatch
             | Self::CmdPerform
@@ -6115,7 +6115,11 @@ mod tests {
         );
         assert_eq!(
             StdlibKernel::DbQuery.capability(),
-            Some(Capability::Filesystem)
+            Some(Capability::Database)
+        );
+        assert_eq!(
+            StdlibKernel::DbDecString.capability(),
+            Some(Capability::Database)
         );
         assert_eq!(
             StdlibKernel::SystemGetenv.capability(),

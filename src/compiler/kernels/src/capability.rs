@@ -10,7 +10,7 @@
 
 /// What a program is permitted to do, on the security-relevant axis.
 ///
-/// The seven axes a sandbox can isolate independently. A kernel maps to at most
+/// The eight axes a sandbox can isolate independently. A kernel maps to at most
 /// one; a program's set is the union over its reachable kernels plus
 /// [`Capability::NativeFfi`] when it crosses into `Rust.` code.
 #[derive(
@@ -20,9 +20,13 @@ pub enum Capability {
     /// Outbound or inbound network access (HTTP client/server, WebSocket,
     /// email send).
     Network,
-    /// Reading or writing the filesystem (files, directories, a local
-    /// database, an `.env` or config file).
+    /// Reading or writing the filesystem (files, directories, an `.env` or
+    /// config file). Does not include database access — see [`Self::Database`].
     Filesystem,
+    /// Structured database access (SQL queries, migrations, row decoders).
+    ///
+    /// Resolved by SP4 sandbox to filesystem or network per the ipe.toml driver.
+    Database,
     /// Reading or writing process environment (environment variables, argv).
     Env,
     /// Spawning or controlling a child process.
@@ -44,6 +48,7 @@ impl Capability {
     pub const ALL: &'static [Self] = &[
         Self::Network,
         Self::Filesystem,
+        Self::Database,
         Self::Env,
         Self::Subprocess,
         Self::Clock,
@@ -58,6 +63,7 @@ impl Capability {
         match self {
             Self::Network => "network",
             Self::Filesystem => "filesystem",
+            Self::Database => "database",
             Self::Env => "env",
             Self::Subprocess => "subprocess",
             Self::Clock => "clock",
@@ -74,9 +80,9 @@ mod tests {
     #[test]
     fn all_lists_every_variant_once() {
         // A guard against `ALL` drifting from the enum: each name is distinct,
-        // and the count matches the seven declared axes.
+        // and the count matches the eight declared axes.
         let names: Vec<&str> = Capability::ALL.iter().map(|c| c.as_str()).collect();
-        assert_eq!(names.len(), 7);
+        assert_eq!(names.len(), 8);
         let mut sorted = names.clone();
         sorted.sort_unstable();
         sorted.dedup();
@@ -87,6 +93,7 @@ mod tests {
     fn as_str_is_the_wire_vocabulary() {
         assert_eq!(Capability::Network.as_str(), "network");
         assert_eq!(Capability::Filesystem.as_str(), "filesystem");
+        assert_eq!(Capability::Database.as_str(), "database");
         assert_eq!(Capability::Env.as_str(), "env");
         assert_eq!(Capability::Subprocess.as_str(), "subprocess");
         assert_eq!(Capability::Clock.as_str(), "clock");
