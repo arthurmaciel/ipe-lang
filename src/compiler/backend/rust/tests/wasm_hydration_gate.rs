@@ -63,7 +63,7 @@ fn hydrate_program(interner: &mut Interner, fields: Vec<IrType>) -> DResult<Prog
 }
 
 /// Build the wasm-hydrate-mode `RustBackend`.
-fn hydrate_backend(interner: &Interner) -> RustBackend<'_> {
+const fn hydrate_backend(interner: &Interner) -> RustBackend<'_> {
     RustBackend::new(interner)
         .with_target(ipe_ir::Target::WasmClient)
         .with_wasm_hydrate_mode(true)
@@ -109,9 +109,7 @@ fn hydration_state_db_field_is_compile_error() -> DResult<()> {
 fn hydration_state_primitive_fields_compile_clean() -> DResult<()> {
     let mut interner = Interner::new();
     let prog = hydrate_program(&mut interner, vec![IrType::Int, IrType::Str])?;
-    hydrate_backend(&interner)
-        .emit_spine(&prog)
-        .map(|_| ())
+    hydrate_backend(&interner).emit_spine(&prog).map(|_| ())
 }
 
 /// A program with NO `HydrationState` type passes the gate — the presence of
@@ -141,9 +139,7 @@ fn no_hydration_state_type_passes_gate() -> DResult<()> {
             uses_ffi: false,
         }],
     };
-    hydrate_backend(&interner)
-        .emit_spine(&prog)
-        .map(|_| ())
+    hydrate_backend(&interner).emit_spine(&prog).map(|_| ())
 }
 
 /// The gate is a no-op for native mode: the same `Secret`-fielded
@@ -153,9 +149,7 @@ fn gate_is_noop_for_native_mode() -> DResult<()> {
     let mut interner = Interner::new();
     let prog = hydrate_program(&mut interner, vec![IrType::Secret])?;
     // Native mode, no hydrate flag — gate must not fire.
-    RustBackend::new(&interner)
-        .emit_spine(&prog)
-        .map(|_| ())
+    RustBackend::new(&interner).emit_spine(&prog).map(|_| ())
 }
 
 /// The emitted spine contains the `hydrate` wasm-bindgen export when

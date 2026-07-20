@@ -16,7 +16,7 @@
 use ipe_backend::Backend;
 use ipe_backend_rust::RustBackend;
 use ipe_intern::Interner;
-use ipe_ir::{Module, ModPath, Program, Target};
+use ipe_ir::{ModPath, Module, Program, Target};
 
 /// Build the minimal `Program` + the `Interner` used to construct it.
 /// Returns both because `RustBackend` borrows the interner for symbol resolution.
@@ -50,6 +50,10 @@ fn minimal_wasm_program() -> (Program, Interner) {
 
 fn emit_wasm_cargo_toml() -> String {
     let (program, interner) = minimal_wasm_program();
+    // A test precondition: a body-free wasm program must emit, and a failure
+    // here should fail the test at its source rather than mask a real breach in
+    // a downstream `contains` assertion.
+    #[allow(clippy::expect_used)] // emit-must-succeed is the test's precondition
     RustBackend::new(&interner)
         .with_target(Target::WasmClient)
         .emit(&program)

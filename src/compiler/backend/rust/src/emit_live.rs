@@ -732,6 +732,51 @@ mod schema_tag_tests {
         }
     }
 
+    /// The `{ init, update, view, subscriptions }` config record a single-page
+    /// TEA program passes to `live_app`, over the given `model` type. `syms` are
+    /// the field symbols in declaration order (init, update, view, subscriptions).
+    fn single_page_live_cfg(model: &IrType, syms: [ipe_intern::Symbol; 4]) -> Expr {
+        let [init_sym, update_sym, view_sym, subs_sym] = syms;
+        let cmd_int = || IrType::Cmd(Box::new(IrType::Int));
+        let pair = || IrType::Tuple(vec![model.clone(), cmd_int()]);
+        Expr::Record(vec![
+            (
+                init_sym,
+                func_value(0, IrType::Fun(vec![IrType::LiveReq], Box::new(pair()))),
+            ),
+            (
+                update_sym,
+                func_value(
+                    1,
+                    IrType::Fun(vec![IrType::Int, model.clone()], Box::new(pair())),
+                ),
+            ),
+            (
+                view_sym,
+                func_value(
+                    2,
+                    IrType::Fun(
+                        vec![model.clone()],
+                        Box::new(IrType::Ui {
+                            ctor: UiCtor::Html,
+                            msg: Box::new(IrType::Int),
+                        }),
+                    ),
+                ),
+            ),
+            (
+                subs_sym,
+                func_value(
+                    3,
+                    IrType::Fun(
+                        vec![model.clone()],
+                        Box::new(IrType::Sub(Box::new(IrType::Int))),
+                    ),
+                ),
+            ),
+        ])
+    }
+
     /// The emitted `live_app(...)` call carries the compile-time Model schema
     /// tag: a `const IPE_LIVE_MODEL_SCHEMA_TAG: [u8; 32] = [...]` declaration
     /// plus that identifier as the call's new final argument (H24 — the
@@ -767,7 +812,8 @@ mod schema_tag_tests {
                 uses_css: false,
                 uses_auth: false,
                 uses_websocket: false,
-                uses_email: false, uses_env_public: false,
+                uses_email: false,
+                uses_env_public: false,
                 uses_ffi: false,
             }],
         };
@@ -783,44 +829,7 @@ mod schema_tag_tests {
 
         // Model = { count : Int } (no `page` field → the single-page branch).
         let model = IrType::Record(BTreeMap::from([(count, IrType::Int)]));
-        let cmd_int = || IrType::Cmd(Box::new(IrType::Int));
-        let pair = || IrType::Tuple(vec![model.clone(), cmd_int()]);
-        let cfg = Expr::Record(vec![
-            (
-                init_sym,
-                func_value(0, IrType::Fun(vec![IrType::LiveReq], Box::new(pair()))),
-            ),
-            (
-                update_sym,
-                func_value(
-                    1,
-                    IrType::Fun(vec![IrType::Int, model.clone()], Box::new(pair())),
-                ),
-            ),
-            (
-                view_sym,
-                func_value(
-                    2,
-                    IrType::Fun(
-                        vec![model.clone()],
-                        Box::new(IrType::Ui {
-                            ctor: UiCtor::Html,
-                            msg: Box::new(IrType::Int),
-                        }),
-                    ),
-                ),
-            ),
-            (
-                subs_sym,
-                func_value(
-                    3,
-                    IrType::Fun(
-                        vec![model.clone()],
-                        Box::new(IrType::Sub(Box::new(IrType::Int))),
-                    ),
-                ),
-            ),
-        ]);
+        let cfg = single_page_live_cfg(&model, [init_sym, update_sym, view_sym, subs_sym]);
 
         let out = super::emit_live_call(
             &ctx,
