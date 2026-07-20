@@ -1,41 +1,44 @@
-//! The Doc-building emit path (P1): a parallel to
+//! The Doc-building emit path: a parallel to
 //! [`crate::emit_expr::emit_expr_at`] that returns a [`Doc`] instead of a
 //! `String`.
 //!
 //! Every builder carries EXACTLY the token sequence the string emitter produces,
 //! so the whitespace-normalized leaf sequence of `build_doc(e)` equals the
-//! whitespace-normalized string of `emit_expr_at(e)` — the SEAL. The one
-//! layout-bearing arm this phase structures is the binary-operator chain
-//! (`BinOp` Add..Or), flattened into a [`Doc::Chain`] so the renderer lays it
-//! out to `rustfmt`-canonical bytes. Every other arm is carried as a single
-//! [`Doc::owned`] leaf holding the string emitter's exact bytes.
+//! whitespace-normalized string of `emit_expr_at(e)` — the SEAL.
 //!
-//! The chain is the only construct the frozen renderer can currently break-or-
-//! flatten: a [`Doc::Group`]'s bare [`Doc::Line`]s are unconditional hard breaks
-//! (a group never flattens a `{ 1 }` / `(a, b)` body), so structured `if` /
-//! block / call / tuple layout needs a renderer extension and is deferred to P2.
-//! Carrying those arms as leaves is byte-exact today because the string emitter
-//! already produces their single-line pre-`rustfmt` form. The leaf path spans
-//! the literals (Int/Float/Str/…), the call-shaped binops (`Append`/`IntDiv`),
-//! and the context-heavy arms (kernel-dispatch calls, `let`/destructure binding
-//! statements, lambdas, `match`, records, updates, apply, field access).
+//! Structured (layout-bearing) arms, each byte-goldened against
+//! `rustfmt --edition 2024 --style-edition 2024`:
+//!   * the binary-operator chain (`BinOp` Add..Or) → [`Doc::Chain`];
+//!   * `if`/`else` → inline or block form by an absolute width threshold;
+//!   * the delimited lists — `Tuple`, plain non-empty non-`Ui` `List`, `Cons`,
+//!     and the plain user-function `Call` (`Callee::Func`, no turbofish pin) —
+//!     which lay out flat when they fit and otherwise break one element per line
+//!     with a break-conditional trailing comma ([`Doc::IfBroken`]).
 //!
-//! This path is gated behind tests and the `RustFmtConfig.native` flag; the
-//! legacy string path in `emit_expr.rs` remains the emit default until the P3
-//! cutover, so every intermediate commit stays byte-green against the goldens.
+//! Every remaining arm is carried as one [`Doc::owned`] leaf holding the string
+//! emitter's exact bytes: the literals (Int/Float/Str/…), the call-shaped binops
+//! (`Append`/`IntDiv`), the empty/`Ui` list and zero-arg call forms, and the
+//! context-heavy arms not yet structured (kernel-dispatch / FFI / pinned calls,
+//! `Ctor`, `let`/destructure blocks, lambdas, `match`, records, updates, apply,
+//! field access, task sequencing). Carrying bytes keeps the SEAL exact by
+//! construction; those arms simply do not yet gain multi-line layout.
+//!
+//! The legacy string path in `emit_expr.rs` remains the emit default; this path
+//! is exercised by the in-module SEAL + byte-golden tests only, so every commit
+//! stays byte-green against the goldens until the native-emit cutover wires it in.
 
-// The Doc emit path is wired into project.rs at the P3 cutover; until then its
-// builders are exercised by the golden_doc_render.rs SEAL + byte tests only.
-#![allow(dead_code, reason = "consumed at the P3 native-emit cutover")]
+// Until the native-emit cutover wires these builders into project.rs, they are
+// exercised by the in-module SEAL + byte-golden tests only.
+#![allow(dead_code, reason = "consumed at the native-emit cutover")]
 
 use std::borrow::Cow;
 
 use ipe_diagnostics::DResult;
-use ipe_ir::{BinOp, Expr};
+use ipe_ir::{BinOp, CallPin, Callee, Expr, IrType};
 
 use crate::EmitCtx;
 use crate::doc::{ChainOperand, Doc};
-use crate::emit_expr::emit_expr_at;
+use crate::emit_expr::{callee_name, emit_expr_at};
 use crate::emit_types::GenericScope;
 
 /// The infix spelling of a chain-eligible operator (never `Append` / `IntDiv`,
@@ -91,11 +94,48 @@ pub fn build_doc(
             build_if(ctx, cond, then_, else_, indent, child, generics)
         }
 
+        // A tuple constructor `(e0, e1, …)`: a delimited group that breaks one
+        // element per line with a trailing comma when it does not fit.
+        Expr::Tuple(elems) => build_tuple(ctx, elems, indent, child, generics),
+
+        // A plain non-empty, non-`Ui` list literal `vec![e0, e1, …]`: a delimited
+        // group like the tuple. The empty-list forms and the `Ui`-annotated
+        // wrapper carry no positional list layout, so they stay leaves.
+        Expr::List { elem, items } if !items.is_empty() && !matches!(elem, IrType::Ui { .. }) => {
+            build_list(ctx, items, indent, child, generics)
+        }
+
+        // `head :: tail`: the runtime cons call, a two-argument delimited group.
+        Expr::Cons { head, tail } => build_cons(ctx, head, tail, indent, child, generics),
+
+        // A plain user-function call `crate::fn(a0, a1, …)`. Structured ONLY for
+        // `Callee::Func` with an empty turbofish pin: that path provably falls
+        // through every `Callee::Kernel` special case (the emitter gates all of
+        // them on `matches!(callee, Callee::Kernel(_))`), takes no argument swap
+        // (only kernels swap), and carries no turbofish (the pin is empty and only
+        // kernels get the CsvParse override) — so its exact tokens are
+        // `callee_name(callee)` + a delimited argument list. Every kernel / FFI /
+        // pinned call stays a leaf (its bespoke wrapping is not yet structured).
+        Expr::Call {
+            callee, args, pin, ..
+        } if matches!(callee, Callee::Func(_))
+            && matches!(pin, CallPin::None)
+            && !args.is_empty() =>
+        {
+            let name = callee_name(ctx, callee)?;
+            let docs = build_args(ctx, args, indent, child, generics)?;
+            Ok(delimited(
+                Doc::owned(format!("{name}(")),
+                docs,
+                Doc::text(")"),
+            ))
+        }
+
         // Every remaining arm carries the string emitter's exact bytes as one
         // leaf. Its layout is whatever single-line pre-`rustfmt` form the string
-        // emitter produces; structuring the rest (call-arg lists, tuple/list,
-        // block-form `let`/destructure, match, lambda, record/update) is the
-        // remaining P2 work. Carrying bytes keeps the SEAL exact by construction.
+        // emitter produces; structuring the rest (call-arg lists, block-form
+        // `let`/destructure, match, lambda, record/update) is the remaining P2
+        // work. Carrying bytes keeps the SEAL exact by construction.
         _ => leaf(ctx, expr, indent, depth, generics),
     }
 }
@@ -259,6 +299,120 @@ fn build_if(
     ]))
 }
 
+/// Build a `rustfmt`-canonical delimited list: `{open}{a0}, {a1}, …{close}` when
+/// it fits the width, or the broken form with one element per line at one indent
+/// step, a break-conditional trailing comma, and the closing delimiter dedented
+/// back to the group's start column:
+///
+/// ```text
+/// {open}
+///     {a0},
+///     {a1},
+/// {close}
+/// ```
+///
+/// `open` already includes the opening delimiter (`f(`, `(`, `vec![`); `close` is
+/// the matching closer (`)`, `]`). The inter-element separator is a real `,`
+/// (which the string emitter emits via `join(", ")`) followed by a soft `Line`
+/// (a space when flat, a newline+indent when broken). The TRAILING comma is a
+/// [`Doc::IfBroken`] — invisible to the SEAL (the string emitter never emits it)
+/// and rendered only in the broken arm, matching `rustfmt`.
+///
+/// An empty element list is not delimited here (callers handle the zero-arg form
+/// as a plain leaf, matching the string emitter's `name()` / `()` output).
+fn delimited(open: Doc, elems: Vec<Doc>, close: Doc) -> Doc {
+    let mut inner = vec![open];
+    let mut nested = Vec::with_capacity(elems.len() * 2);
+    let last = elems.len().saturating_sub(1);
+    for (i, e) in elems.into_iter().enumerate() {
+        if i == 0 {
+            nested.push(Doc::Softline);
+        } else {
+            nested.push(Doc::text(","));
+            nested.push(Doc::Line);
+        }
+        nested.push(e);
+        if i == last {
+            // Trailing comma only when the group breaks; absent (and SEAL-
+            // invisible) when flat.
+            nested.push(Doc::if_broken(","));
+        }
+    }
+    inner.push(Doc::nest(4, Doc::concat(nested)));
+    inner.push(Doc::Softline);
+    inner.push(close);
+    Doc::group(Doc::concat(inner))
+}
+
+/// Build the arg docs for a positional argument list, each at the child depth the
+/// string emitter uses. Mirrors the `for arg in args { emit_expr_at(child) }`
+/// loops in the string emitter's call / ctor / tuple / list arms.
+fn build_args(
+    ctx: &EmitCtx,
+    args: &[Expr],
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Vec<Doc>> {
+    let mut docs = Vec::with_capacity(args.len());
+    for arg in args {
+        docs.push(build_doc(ctx, arg, indent, child, generics)?);
+    }
+    Ok(docs)
+}
+
+/// Build the `Doc` for a `Tuple`. The string emitter renders `({parts.join(", ")})`
+/// with each part at the child depth; this builder carries the identical tokens in
+/// a delimited group so a wide tuple breaks one element per line with a trailing
+/// comma, matching `rustfmt`.
+fn build_tuple(
+    ctx: &EmitCtx,
+    elems: &[Expr],
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Doc> {
+    let docs = build_args(ctx, elems, indent, child, generics)?;
+    Ok(delimited(Doc::text("("), docs, Doc::text(")")))
+}
+
+/// Build the `Doc` for a plain non-empty list literal `vec![e0, e1, …]`. Only the
+/// plain path is structured here; the empty-list forms (`Vec::<T>::new()` /
+/// `Vec::new()`) and the `Ui`-annotated `{ let __ipe_m: … = vec![…]; __ipe_m }`
+/// wrapper carry no positional delimited layout, so those cases stay leaves (the
+/// caller checks and delegates). Elements are built at the child depth.
+fn build_list(
+    ctx: &EmitCtx,
+    items: &[Expr],
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Doc> {
+    let docs = build_args(ctx, items, indent, child, generics)?;
+    Ok(delimited(Doc::text("vec!["), docs, Doc::text("]")))
+}
+
+/// Build the `Doc` for `head :: tail`. The string emitter renders the runtime
+/// call `ipe_runtime::list::ipe_list_cons({h}, {t})`; this builder carries the
+/// identical tokens in a two-element delimited group so a wide cons breaks its two
+/// arguments one per line with a trailing comma, matching `rustfmt`.
+fn build_cons(
+    ctx: &EmitCtx,
+    head: &Expr,
+    tail: &Expr,
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Doc> {
+    let head_doc = build_doc(ctx, head, indent, child, generics)?;
+    let tail_doc = build_doc(ctx, tail, indent, child, generics)?;
+    Ok(delimited(
+        Doc::text("ipe_runtime::list::ipe_list_cons("),
+        vec![head_doc, tail_doc],
+        Doc::text(")"),
+    ))
+}
+
 #[cfg(test)]
 #[allow(clippy::panic, clippy::expect_used, reason = "test assertions")]
 mod tests {
@@ -270,7 +424,10 @@ mod tests {
     use std::borrow::Cow;
 
     use ipe_intern::Interner;
-    use ipe_ir::{BinOp, EnumDef, Expr, IrType, ModPath, Module, Program, TypeDef, Variant};
+    use ipe_ir::{
+        BinOp, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, ModPath, Module, OnFormKind,
+        Program, TypeDef, Variant,
+    };
 
     use super::build_doc;
     use crate::doc::{ChainOperand, Doc, whitespace_normalize};
@@ -293,6 +450,9 @@ mod tests {
         let main_mod = interner.intern("Main").expect("intern Main");
         let msg_ty = interner.intern("Msg").expect("intern Msg");
         let unit_ctor = interner.intern("Unit").expect("intern Unit");
+        // A zero-arg helper function so a `Callee::Func(FuncId 0)` call fixture
+        // resolves a Rust name; its body is never emitted by these builder tests.
+        let helper_fn = interner.intern("helper").expect("intern helper");
         let syms = [
             "a",
             "b",
@@ -304,6 +464,11 @@ mod tests {
             "some_condition_variable",
             "first_branch_value",
             "second_branch_value_here",
+            // Wide identifiers for the broken tuple / list / cons byte-goldens:
+            // three of these in a delimited list overflow width 100.
+            "argument_that_is_quite_long_enough_to_matter_x",
+            "argument_that_is_quite_long_enough_to_matter_y",
+            "argument_that_is_quite_long_enough_to_matter_z",
         ]
         .iter()
         .map(|n| interner.intern(n).expect("intern var"))
@@ -320,7 +485,15 @@ mod tests {
                         fields: vec![],
                     }],
                 })],
-                funcs: vec![],
+                funcs: vec![Func {
+                    id: FuncId::from_raw(0),
+                    name: helper_fn,
+                    home: ModPath(vec![main_mod]),
+                    type_params: vec![],
+                    params: vec![],
+                    ret: IrType::Int,
+                    body: Expr::Int(0),
+                }],
                 entry: None,
                 records: vec![],
                 uses_tea: false,
@@ -441,15 +614,70 @@ mod tests {
                 then_: Box::new(binop(BinOp::Add, var(fx, 1), var(fx, 2))),
                 else_: Box::new(binop(BinOp::Mul, var(fx, 1), var(fx, 2))),
             },
-            // Tuple (leaf).
+            // Composite: a chain whose first operand is a WIDE (block-form) `if`,
+            // so that operand renders multiline inside the chain — the glue-after-
+            // multiline-operand path. The SEAL must hold across the break.
+            binop(
+                BinOp::Add,
+                Expr::If {
+                    cond: Box::new(var(fx, 4)),
+                    then_: Box::new(var(fx, 5)),
+                    else_: Box::new(var(fx, 6)),
+                },
+                var(fx, 3),
+            ),
+            // Tuple (structured, inline).
             Expr::Tuple(vec![var(fx, 0), var(fx, 1)]),
-            // Cons (leaf, call-shaped).
+            // Tuple (structured, wide → breaks). SEAL holds across the boundary.
+            Expr::Tuple(vec![var(fx, 7), var(fx, 8), var(fx, 9)]),
+            // Cons onto the empty list (structured; tail is a leaf empty-list).
             Expr::Cons {
                 head: Box::new(var(fx, 0)),
                 tail: Box::new(Expr::List {
                     elem: IrType::Int,
                     items: vec![],
                 }),
+            },
+            // Cons (structured, wide → breaks both arguments).
+            Expr::Cons {
+                head: Box::new(var(fx, 7)),
+                tail: Box::new(var(fx, 8)),
+            },
+            // Non-empty list (structured, inline).
+            Expr::List {
+                elem: IrType::Int,
+                items: vec![var(fx, 0), var(fx, 1)],
+            },
+            // Non-empty list (structured, wide → breaks).
+            Expr::List {
+                elem: IrType::Int,
+                items: vec![var(fx, 7), var(fx, 8), var(fx, 9)],
+            },
+            // Empty list (leaf: `Vec::<i64>::new()`, no positional layout).
+            Expr::List {
+                elem: IrType::Int,
+                items: vec![],
+            },
+            // Plain user-function call (structured, inline).
+            Expr::Call {
+                callee: Callee::Func(FuncId::from_raw(0)),
+                args: vec![var(fx, 0), var(fx, 1)],
+                pin: CallPin::None,
+                on_form: OnFormKind::NotForm,
+            },
+            // Plain user-function call (structured, wide → breaks args).
+            Expr::Call {
+                callee: Callee::Func(FuncId::from_raw(0)),
+                args: vec![var(fx, 7), var(fx, 8), var(fx, 9)],
+                pin: CallPin::None,
+                on_form: OnFormKind::NotForm,
+            },
+            // Zero-arg call (leaf: `crate::…()`, no positional layout).
+            Expr::Call {
+                callee: Callee::Func(FuncId::from_raw(0)),
+                args: vec![],
+                pin: CallPin::None,
+                on_form: OnFormKind::NotForm,
             },
         ]
     }
@@ -667,6 +895,164 @@ mod tests {
                 render(&doc, RenderConfig::default()),
                 "ipe_runtime::list::ipe_list_cons(a, Vec::<i64>::new())"
             );
+        });
+    }
+
+    /// Render `expr` as the value of a `let z = ` statement at block indent 4,
+    /// returning the whole statement line(s) so a mid-line delimited group starts
+    /// at the same column `rustfmt` captured its golden from.
+    fn render_let_stmt(ctx: &EmitCtx, expr: &Expr) -> String {
+        let scope = GenericScope::new(&[]);
+        let doc = build_doc(ctx, expr, 4, 0, scope).expect("build_doc");
+        let stmt = Doc::nest(4, Doc::concat(vec![Doc::text("let z = "), doc]));
+        render(&stmt, RenderConfig::default())
+    }
+
+    #[test]
+    fn tuple_breaks_one_element_per_line_with_trailing_comma() {
+        // `(x, y, z)` with three wide elements overflows width 100, so rustfmt
+        // breaks each element onto its own line at nest+4 with a trailing comma and
+        // dedents the closing paren to the statement indent. Golden captured from
+        // `rustfmt --edition 2024 --style-edition 2024`.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let expr = Expr::Tuple(vec![var(&fx, 7), var(&fx, 8), var(&fx, 9)]);
+            let got = render_let_stmt(ctx, &expr);
+            let expected = "let z = (\n        argument_that_is_quite_long_enough_to_matter_x,\n        argument_that_is_quite_long_enough_to_matter_y,\n        argument_that_is_quite_long_enough_to_matter_z,\n    )";
+            assert_eq!(
+                got, expected,
+                "\n--- got ---\n{got}\n--- want ---\n{expected}"
+            );
+        });
+    }
+
+    #[test]
+    fn list_breaks_one_element_per_line_with_trailing_comma() {
+        // `vec![x, y, z]` with three wide elements overflows; rustfmt breaks each
+        // onto its own line with a trailing comma and dedents `]` to the statement
+        // indent. Golden captured from rustfmt.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let expr = Expr::List {
+                elem: IrType::Int,
+                items: vec![var(&fx, 7), var(&fx, 8), var(&fx, 9)],
+            };
+            let got = render_let_stmt(ctx, &expr);
+            let expected = "let z = vec![\n        argument_that_is_quite_long_enough_to_matter_x,\n        argument_that_is_quite_long_enough_to_matter_y,\n        argument_that_is_quite_long_enough_to_matter_z,\n    ]";
+            assert_eq!(
+                got, expected,
+                "\n--- got ---\n{got}\n--- want ---\n{expected}"
+            );
+        });
+    }
+
+    #[test]
+    fn cons_breaks_both_arguments_with_trailing_comma() {
+        // A cons whose two arguments together overflow width 100 breaks each onto
+        // its own line with a trailing comma; `)` dedents to the statement indent.
+        // Golden captured from rustfmt.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let expr = Expr::Cons {
+                head: Box::new(var(&fx, 7)),
+                tail: Box::new(var(&fx, 8)),
+            };
+            let got = render_let_stmt(ctx, &expr);
+            let expected = "let z = ipe_runtime::list::ipe_list_cons(\n        argument_that_is_quite_long_enough_to_matter_x,\n        argument_that_is_quite_long_enough_to_matter_y,\n    )";
+            assert_eq!(
+                got, expected,
+                "\n--- got ---\n{got}\n--- want ---\n{expected}"
+            );
+        });
+    }
+
+    #[test]
+    fn user_call_breaks_args_one_per_line_with_trailing_comma() {
+        // A plain user-function call whose three wide args overflow width 100
+        // breaks each arg onto its own line at nest+4 with a trailing comma, `)`
+        // dedented to the statement indent — rustfmt's call-arg layout. The prefix
+        // is `callee_name(callee)(` (the exact Rust name the emitter uses); the
+        // layout (breaks, trailing comma, indent) is what this golden pins.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let callee = Callee::Func(FuncId::from_raw(0));
+            let name = super::callee_name(ctx, &callee).expect("callee_name");
+            let expr = Expr::Call {
+                callee,
+                args: vec![var(&fx, 7), var(&fx, 8), var(&fx, 9)],
+                pin: CallPin::None,
+                on_form: OnFormKind::NotForm,
+            };
+            let got = render_let_stmt(ctx, &expr);
+            let expected = format!(
+                "let z = {name}(\n        argument_that_is_quite_long_enough_to_matter_x,\n        argument_that_is_quite_long_enough_to_matter_y,\n        argument_that_is_quite_long_enough_to_matter_z,\n    )"
+            );
+            assert_eq!(
+                got, expected,
+                "\n--- got ---\n{got}\n--- want ---\n{expected}"
+            );
+        });
+    }
+
+    #[test]
+    fn user_call_fits_inline() {
+        // A short user-function call stays inline: `name(a, b)`.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let scope = GenericScope::new(&[]);
+            let callee = Callee::Func(FuncId::from_raw(0));
+            let name = super::callee_name(ctx, &callee).expect("callee_name");
+            let expr = Expr::Call {
+                callee,
+                args: vec![var(&fx, 0), var(&fx, 1)],
+                pin: CallPin::None,
+                on_form: OnFormKind::NotForm,
+            };
+            let doc = build_doc(ctx, &expr, 0, 0, scope).expect("build_doc");
+            assert_eq!(
+                render(&doc, RenderConfig::default()),
+                format!("{name}(a, b)")
+            );
+        });
+    }
+
+    #[test]
+    fn chain_operand_that_breaks_multiline_glues_following_operator() {
+        // A chain `(broadIf + tail)` whose FIRST operand is a block-form (wide)
+        // `if` renders the `if` multiline; the single `+ tail)` operator glues to
+        // the `if`'s closing-line column (the chain has not broken, and the glued
+        // operand fits). This exercises `render_chain`'s multiline-operand glue
+        // path with a structured operand — the previously-untested composite.
+        // Golden captured from `rustfmt --edition 2024 --style-edition 2024`.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let wide_if = Expr::If {
+                cond: Box::new(var(&fx, 4)),  // some_condition_variable
+                then_: Box::new(var(&fx, 5)), // first_branch_value
+                else_: Box::new(var(&fx, 6)), // second_branch_value_here
+            };
+            let expr = binop(BinOp::Add, wide_if, var(&fx, 3)); // + x (a placeholder tail)
+            let got = render_let_stmt(ctx, &expr);
+            let expected = "let z = ((if some_condition_variable {\n        first_branch_value\n    } else {\n        second_branch_value_here\n    }) + x)";
+            assert_eq!(
+                got, expected,
+                "\n--- got ---\n{got}\n--- want ---\n{expected}"
+            );
+        });
+    }
+
+    #[test]
+    fn delimited_trailing_comma_is_seal_invisible() {
+        // The break-conditional trailing comma is NOT part of the SEAL leaf
+        // sequence (the string emitter never emits it), so a broken tuple's
+        // normalized leaves must still equal the string emitter's normalized bytes.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let scope = GenericScope::new(&[]);
+            let expr = Expr::Tuple(vec![var(&fx, 7), var(&fx, 8), var(&fx, 9)]);
+            let doc = build_doc(ctx, &expr, 4, 0, scope).expect("build_doc");
+            let string = emit_expr_at(ctx, &expr, 4, 0, scope).expect("emit_expr_at");
+            assert_eq!(doc.normalized_leaves(), whitespace_normalize(&string));
         });
     }
 }
