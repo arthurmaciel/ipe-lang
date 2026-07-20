@@ -608,60 +608,267 @@ fn run_inspector_job(job: &InspectorJob, allow_build_scripts: bool) -> Result<St
             )));
         }
         let scoped_tmp = make_scratch_dir(scratch_hint)?;
-        let manifest_path = match job {
-            InspectorJob::Manifest { entries } => {
-                Some(write_inspector_manifest(&scoped_tmp, entries)?)
-            }
-            InspectorJob::Single { .. } => None,
-        };
-        let with_payload = |fetch_only: bool| -> Vec<OsString> {
-            inspector_payload(
+        let binds = toolchain_binds(&inspector);
+        let result = match job {
+            // A single crate is one populate-free bind — the historical two
+            // phases (fetch, introspect) over one scoped scratch.
+            InspectorJob::Single { .. } => run_single_bwrap(
                 &inspector,
                 job,
-                manifest_path.as_deref(),
+                &caps,
+                &scoped_tmp,
+                &binds,
                 allow_build_scripts,
-                fetch_only,
-            )
+            ),
+            // A multi-crate manifest is CHUNKED: one fetch, then a per-crate
+            // populate sequence that accumulates the cross-crate index through
+            // a checkpoint, then a per-crate bind — so no single jailed run
+            // exceeds the wall, which the whole-manifest run did (its populate
+            // + bind of every crate ran under one wall budget).
+            InspectorJob::Manifest { entries } => run_manifest_bwrap_chunked(
+                &inspector,
+                entries,
+                &caps,
+                &scoped_tmp,
+                &binds,
+                allow_build_scripts,
+            ),
         };
-        let (toolchain_ro_binds, path_prepend, rustup_home) = toolchain_binds(&inspector);
-        // Phase 1 — fetch (network on, no foreign code).
-        let fetch_out = run_phase(
-            &caps,
-            ipe_sandbox::NetworkPolicy::FetchOnly,
-            &scoped_tmp,
-            toolchain_ro_binds.clone(),
-            path_prepend.clone(),
-            rustup_home.clone(),
-            &with_payload(true),
-        );
-        if let Err(e) = fetch_out {
-            let _ = std::fs::remove_dir_all(&scoped_tmp);
-            return Err(e);
-        }
-        // Phase 2 — introspect (no egress; foreign code runs here).
-        let out = run_phase(
-            &caps,
-            ipe_sandbox::NetworkPolicy::Denied,
-            &scoped_tmp,
-            toolchain_ro_binds,
-            path_prepend,
-            rustup_home,
-            &with_payload(false),
-        );
         let _ = std::fs::remove_dir_all(&scoped_tmp);
-        let out = out?;
-        if out.status != Some(0) {
-            return Err(io_err(format!(
-                "inspector exited with {:?}\n{}",
-                out.status,
-                String::from_utf8_lossy(&out.stderr)
-            )));
-        }
-        return String::from_utf8(out.stdout)
-            .map_err(|_| io_err("inspector produced non-UTF-8 output".to_owned()));
+        return result;
     }
 
     run_inspector_job_unsandboxed(&inspector, job, scratch_hint, allow_build_scripts)
+}
+
+/// The toolchain jail binds, grouped so the chunked driver can clone them once
+/// per phase without repeating the tuple destructure.
+type ToolchainBinds = (Vec<PathBuf>, Vec<PathBuf>, Option<PathBuf>);
+
+/// The historical two-phase single-crate flow: fetch (network on, no foreign
+/// code) then introspect (no egress, foreign code runs) over one scratch.
+fn run_single_bwrap(
+    inspector: &Path,
+    job: &InspectorJob,
+    caps: &ipe_sandbox::Capabilities,
+    scoped_tmp: &Path,
+    binds: &ToolchainBinds,
+    allow_build_scripts: bool,
+) -> Result<String, CliError> {
+    let io_err = |detail: String| CliError::UsageOwned(format!("ipe add: {detail}"));
+    let (toolchain_ro_binds, path_prepend, rustup_home) = binds;
+    let with_payload =
+        |fetch_only: bool| inspector_payload(inspector, job, None, allow_build_scripts, fetch_only);
+    run_phase(
+        caps,
+        ipe_sandbox::NetworkPolicy::FetchOnly,
+        scoped_tmp,
+        toolchain_ro_binds.clone(),
+        path_prepend.clone(),
+        rustup_home.clone(),
+        &with_payload(true),
+    )?;
+    let out = run_phase(
+        caps,
+        ipe_sandbox::NetworkPolicy::Denied,
+        scoped_tmp,
+        toolchain_ro_binds.clone(),
+        path_prepend.clone(),
+        rustup_home.clone(),
+        &with_payload(false),
+    )?;
+    if out.status != Some(0) {
+        return Err(io_err(format!(
+            "inspector exited with {:?}\n{}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+    String::from_utf8(out.stdout)
+        .map_err(|_| io_err("inspector produced non-UTF-8 output".to_owned()))
+}
+
+/// The inspector argv for one chunk of the manifest flow: a single-crate
+/// manifest file plus optional cross-crate checkpoint load/save flags. The
+/// manifest form is kept (never `Single`) so a one-crate chunk still emits a
+/// JSON array — the shape `run_install` decodes.
+fn manifest_chunk_payload(
+    inspector: &Path,
+    manifest_path: &Path,
+    allow_build_scripts: bool,
+    fetch_only: bool,
+    xc_load: Option<&Path>,
+    xc_save: Option<&Path>,
+) -> Vec<OsString> {
+    let mut payload: Vec<OsString> = vec![inspector.to_path_buf().into_os_string()];
+    if fetch_only {
+        payload.push("--fetch-only".into());
+    }
+    if allow_build_scripts {
+        payload.push("--allow-build-scripts".into());
+    }
+    if let Some(p) = xc_load {
+        payload.push("--xc-load".into());
+        payload.push(p.to_path_buf().into_os_string());
+    }
+    if let Some(p) = xc_save {
+        payload.push("--xc-save".into());
+        payload.push(p.to_path_buf().into_os_string());
+    }
+    payload.push("--manifest".into());
+    payload.push(manifest_path.to_path_buf().into_os_string());
+    payload
+}
+
+/// Run one jailed introspect chunk (network denied — foreign code runs here)
+/// and return its stdout, mapping a non-zero exit to a typed error.
+fn run_introspect_chunk(
+    caps: &ipe_sandbox::Capabilities,
+    scoped_tmp: &Path,
+    binds: &ToolchainBinds,
+    payload: &[OsString],
+) -> Result<String, CliError> {
+    let io_err = |detail: String| CliError::UsageOwned(format!("ipe add: {detail}"));
+    let (toolchain_ro_binds, path_prepend, rustup_home) = binds;
+    let out = run_phase(
+        caps,
+        ipe_sandbox::NetworkPolicy::Denied,
+        scoped_tmp,
+        toolchain_ro_binds.clone(),
+        path_prepend.clone(),
+        rustup_home.clone(),
+        payload,
+    )?;
+    if out.status != Some(0) {
+        return Err(io_err(format!(
+            "inspector exited with {:?}\n{}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+    String::from_utf8(out.stdout)
+        .map_err(|_| io_err("inspector produced non-UTF-8 output".to_owned()))
+}
+
+/// Chunk a multi-crate manifest into per-crate jailed runs so no single run
+/// exceeds the jail wall.
+///
+/// One shared scratch (one `CARGO_HOME`, one checkpoint) hosts three stages:
+///  1. **Fetch** — one network-on run over the WHOLE manifest, populating the
+///     scoped registry. No foreign code runs (the inspector stops at
+///     `--fetch-only`).
+///  2. **Populate** — one network-denied run PER crate, each loading the prior
+///     crate's checkpoint and saving the accumulated one. A crate's build
+///     scripts run here, but the checkpoint is read before any foreign code
+///     and rewritten (full accumulated maps) after it, so no crate can corrupt
+///     the index a sibling later loads — the trust model of the single-process
+///     populate pass, split across processes.
+///  3. **Bind** — one network-denied run PER crate, each loading the COMPLETE
+///     checkpoint, so every sibling impl is indexed before the crate binds.
+///
+/// Returns the concatenated bind results as one JSON array string — the shape
+/// the whole-manifest run produced, so `run_install`'s decode is unchanged.
+fn run_manifest_bwrap_chunked(
+    inspector: &Path,
+    entries: &[(CrateSpec, Vec<String>)],
+    caps: &ipe_sandbox::Capabilities,
+    scoped_tmp: &Path,
+    binds: &ToolchainBinds,
+    allow_build_scripts: bool,
+) -> Result<String, CliError> {
+    let io_err = |detail: String| CliError::UsageOwned(format!("ipe add: {detail}"));
+    let (toolchain_ro_binds, path_prepend, rustup_home) = binds;
+
+    // Stage 1 — fetch every crate in one network-on run (no foreign code).
+    let full_manifest = write_inspector_manifest(scoped_tmp, entries)?;
+    let fetch_payload = manifest_chunk_payload(
+        inspector,
+        &full_manifest,
+        allow_build_scripts,
+        true,
+        None,
+        None,
+    );
+    run_phase(
+        caps,
+        ipe_sandbox::NetworkPolicy::FetchOnly,
+        scoped_tmp,
+        toolchain_ro_binds.clone(),
+        path_prepend.clone(),
+        rustup_home.clone(),
+        &fetch_payload,
+    )?;
+
+    // The checkpoint lives in the shared scratch: written by each populate
+    // chunk, read by the next populate chunk and by every bind chunk. It is a
+    // jail-writable path, but each process reads it before foreign code runs
+    // and rewrites it after, so a build script cannot plant facts a sibling
+    // then trusts.
+    let checkpoint = scoped_tmp.join("xc-checkpoint.json");
+
+    // Stage 2 — populate the cross-crate index one crate at a time.
+    for (i, (spec, features)) in entries.iter().enumerate() {
+        let chunk_manifest =
+            write_inspector_manifest_chunk(scoped_tmp, &format!("populate-{i}"), spec, features)?;
+        let xc_load = (i > 0).then_some(checkpoint.as_path());
+        let payload = manifest_chunk_payload(
+            inspector,
+            &chunk_manifest,
+            allow_build_scripts,
+            false,
+            xc_load,
+            Some(checkpoint.as_path()),
+        );
+        // Populate emits no stdout of interest (bindings discarded); a non-zero
+        // exit still surfaces as an error.
+        let _ = run_introspect_chunk(caps, scoped_tmp, binds, &payload)?;
+    }
+
+    // Stage 3 — bind each crate against the complete cross-crate index.
+    let mut bound: Vec<serde_json::Value> = Vec::with_capacity(entries.len());
+    for (i, (spec, features)) in entries.iter().enumerate() {
+        let chunk_manifest =
+            write_inspector_manifest_chunk(scoped_tmp, &format!("bind-{i}"), spec, features)?;
+        let payload = manifest_chunk_payload(
+            inspector,
+            &chunk_manifest,
+            allow_build_scripts,
+            false,
+            Some(checkpoint.as_path()),
+            None,
+        );
+        let json = run_introspect_chunk(caps, scoped_tmp, binds, &payload)?;
+        // A manifest chunk always emits a JSON array (of one PkgInfo).
+        match serde_json::from_str::<serde_json::Value>(&json) {
+            Ok(serde_json::Value::Array(items)) => bound.extend(items),
+            Ok(other) => bound.push(other),
+            Err(e) => {
+                return Err(io_err(format!(
+                    "invalid inspector JSON for `{}`: {e}",
+                    spec.inspector_arg()
+                )));
+            }
+        }
+    }
+    serde_json::to_string(&serde_json::Value::Array(bound))
+        .map_err(|e| io_err(format!("re-serializing chunked inspection failed: {e}")))
+}
+
+/// Serialize a SINGLE-crate inspector manifest into the scoped scratch under a
+/// stage-unique name (`<stage>.json`), so a crate's populate and bind chunks —
+/// and successive crates — never clobber each other's manifest file.
+fn write_inspector_manifest_chunk(
+    scoped_tmp: &Path,
+    stage: &str,
+    spec: &CrateSpec,
+    features: &[String],
+) -> Result<PathBuf, CliError> {
+    let arr = serde_json::json!([{ "name": spec.inspector_arg(), "features": features }]);
+    let path = scoped_tmp.join(format!("ipe-install-{stage}.json"));
+    std::fs::write(&path, arr.to_string()).map_err(|e| {
+        CliError::UsageOwned(format!("ipe install: manifest chunk write failed: {e}"))
+    })?;
+    Ok(path)
 }
 
 /// The explicit `IPE_FFI_ALLOW_UNSANDBOXED=1` escape hatch: one direct argv
@@ -1063,6 +1270,89 @@ mod tests {
                     features: Vec::new(),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn manifest_chunk_is_a_single_crate_array_with_pin_and_features() {
+        let scratch =
+            std::env::temp_dir().join(format!("ipe-chunk-manifest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).expect("mk scratch");
+        let spec = CrateSpec::parse("async-stripe-checkout@=1.0.0-rc.6").expect("spec parses");
+        let path = write_inspector_manifest_chunk(
+            &scratch,
+            "populate-0",
+            &spec,
+            &["checkout_session".to_owned()],
+        )
+        .expect("chunk write");
+        assert_eq!(
+            path.file_name().and_then(|f| f.to_str()),
+            Some("ipe-install-populate-0.json"),
+            "the stage names the file so chunks never clobber each other"
+        );
+        let body = std::fs::read_to_string(&path).expect("read chunk");
+        let val: serde_json::Value = serde_json::from_str(&body).expect("valid JSON");
+        let arr = val.as_array().expect("a single-crate array");
+        assert_eq!(arr.len(), 1, "one crate per chunk");
+        let entry = arr.first().expect("the single crate entry");
+        assert_eq!(
+            entry.get("name"),
+            Some(&serde_json::json!("async-stripe-checkout@=1.0.0-rc.6"))
+        );
+        assert_eq!(
+            entry.get("features"),
+            Some(&serde_json::json!(["checkout_session"]))
+        );
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn chunk_payload_wires_xc_flags_and_manifest_shell_free() {
+        let inspector = Path::new("/opt/ipe/bin/ipe-ffi-inspector");
+        let manifest = Path::new("/scratch/ipe-install-populate-1.json");
+        let load = Path::new("/scratch/xc-checkpoint.json");
+        let save = Path::new("/scratch/xc-checkpoint.json");
+        let payload =
+            manifest_chunk_payload(inspector, manifest, true, false, Some(load), Some(save));
+        let rendered: Vec<String> = payload
+            .iter()
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect();
+        // The accumulating populate chunk: load prior, save merged, over a
+        // single-crate manifest, with build scripts allowed and no fetch flag.
+        // The value following each flag is asserted by finding the flag and
+        // reading the next token via `.get`, never a raw index.
+        let arg_after = |flag: &str| -> Option<&String> {
+            rendered
+                .iter()
+                .position(|s| s == flag)
+                .and_then(|at| rendered.get(at + 1))
+        };
+        assert_eq!(
+            rendered.first().map(String::as_str),
+            Some("/opt/ipe/bin/ipe-ffi-inspector")
+        );
+        assert!(rendered.contains(&"--allow-build-scripts".to_owned()));
+        assert!(!rendered.contains(&"--fetch-only".to_owned()));
+        assert_eq!(
+            arg_after("--xc-load").map(String::as_str),
+            Some("/scratch/xc-checkpoint.json")
+        );
+        assert_eq!(
+            arg_after("--xc-save").map(String::as_str),
+            Some("/scratch/xc-checkpoint.json")
+        );
+        assert_eq!(
+            arg_after("--manifest").map(String::as_str),
+            Some("/scratch/ipe-install-populate-1.json")
+        );
+        // No shell metacharacter smuggled into any token (direct-argv contract).
+        assert!(
+            rendered
+                .iter()
+                .all(|t| !t.contains(';') && !t.contains('|'))
         );
     }
 

@@ -193,10 +193,24 @@ pub struct ResourceLimits {
 
 impl Default for ResourceLimits {
     fn default() -> Self {
+        // Calibrated so ONE large generated SDK crate can be inspected
+        // sandboxed without any override: a crate like `async-stripe-shared`
+        // (thousands of generated types) builds its whole dependency closure
+        // and then rustdoc-expands under one jailed process, whose peak
+        // virtual-address-space and wall-clock exceed the caps a small crate
+        // needs. The install driver CHUNKS a multi-crate manifest into one
+        // jailed process PER crate, so these caps bound a single crate's
+        // inspection, not a whole SDK's — a runaway build script is still
+        // killed, just at a ceiling a real SDK crate does not hit.
         Self {
-            rss_bytes: 4 * 1024 * 1024 * 1024,
-            cpu_secs: 300,
-            wall_secs: 420,
+            // Address-space (rlimit AS), not resident memory: rustdoc on a huge
+            // crate maps far more virtual space than it makes resident, so the
+            // 4 GiB AS cap SIGKILLs it while its resident set stays a few hundred
+            // MiB. 10 GiB clears that (verified against `async-stripe-shared`)
+            // while keeping resident use far below the host memory guard.
+            rss_bytes: 10 * 1024 * 1024 * 1024,
+            cpu_secs: 900,
+            wall_secs: 900,
             fd_cap: 256,
             proc_cap: 512,
             out_cap_bytes: 256 * 1024 * 1024,
@@ -479,7 +493,7 @@ mod tests {
         let argv = rendered_argv(&spec());
         let joined = argv.join(" ");
         // Wall clock wraps everything.
-        assert!(joined.starts_with("/usr/bin/timeout --kill-after=5s 420 /usr/bin/bwrap"));
+        assert!(joined.starts_with("/usr/bin/timeout --kill-after=5s 900 /usr/bin/bwrap"));
         // Network denied, namespaces fresh, tty detached, env scrubbed.
         for flag in [
             "--unshare-net",
@@ -518,8 +532,9 @@ mod tests {
         );
         // Resource caps via prlimit, then the payload with NO shell.
         assert!(
-            joined
-                .contains("-- /usr/bin/prlimit --as=4294967296 --cpu=300 --nofile=256 --nproc=512"),
+            joined.contains(
+                "-- /usr/bin/prlimit --as=10737418240 --cpu=900 --nofile=256 --nproc=512"
+            ),
             "{joined}"
         );
         assert!(joined.ends_with("-- ipe-ffi-inspector semver"), "{joined}");
@@ -643,9 +658,11 @@ mod tests {
     #[test]
     fn default_limits_match_the_spec_table() {
         let l = ResourceLimits::default();
-        assert_eq!(l.rss_bytes, 4 * 1024 * 1024 * 1024);
-        assert_eq!(l.cpu_secs, 300);
-        assert_eq!(l.wall_secs, 420);
+        // Calibrated for a single large generated SDK crate's inspection
+        // (address space and wall a huge rustdoc needs), not a small crate.
+        assert_eq!(l.rss_bytes, 10 * 1024 * 1024 * 1024);
+        assert_eq!(l.cpu_secs, 900);
+        assert_eq!(l.wall_secs, 900);
         assert_eq!(l.fd_cap, 256);
         assert_eq!(l.proc_cap, 512);
         assert_eq!(l.out_cap_bytes, 256 * 1024 * 1024);
