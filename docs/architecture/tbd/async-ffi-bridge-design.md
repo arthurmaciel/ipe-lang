@@ -4,8 +4,9 @@
 > 2026-07-04 by conciliating the two swarm arms (a reference-blind
 > first-principles arm and a reference-mining arm). Supersedes both for
 > implementation purposes; the two swarm-arm inputs are preserved in git
-> history. Amends the P-plan of
-> `ffi-rust-subsystem-design.md` (§9 below re-slots its milestones).
+> history. This design owns async emission as part of the base generator; the
+> milestone DAG it amends lives in `ffi-port-spec.md` (§C) and the architecture
+> in `ffi-subsystem-design.md` (D1–D8).
 >
 > **Conciliation discipline applied:** faithful-port DEFAULT — where the
 > reference (`../sky` @ feat/runtime-rust) has a *proven* async mechanism we
