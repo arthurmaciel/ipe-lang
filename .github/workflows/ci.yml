@@ -1,8 +1,23 @@
 name: CI
 
 # GitHub-hosted runners (4-core/16GB, ephemeral) with matrix parallelism.
-# Cheap gates fail fast; E2E is sharded across 6 runners; sccache (GHA backend)
-# keeps builds warm across runs. See docs/architecture/ci-and-hosting.md.
+#
+# Split by trigger so `main` is green by construction:
+#   • PULL REQUEST — the FAST required gate (target: minutes). fmt, clippy,
+#     test (nextest unit/integration), cargo-deny (in security.yml), and
+#     seal-smoke (build+run ONE emitted example, a fast proxy for THE SEAL).
+#     A PR merges only when these pass; branch protection lists them as the
+#     required checks.
+#   • PUSH to main + nightly SCHEDULE — the SLOW non-blocking checks: the full
+#     6-shard e2e (THE SEAL in full), live sky-parity, miri, and the runtime
+#     feature-combo / full-feature builds. These never gate a PR; they catch
+#     regressions post-merge and on the nightly dep/upstream-drift sweep.
+#   • wasm-floor runs on PRs only when wasm-relevant paths change (paths: filter
+#     below), plus nightly — it is OFF the always-required PR path.
+#
+# Job-level `if:` keys on github.event_name: the slow jobs self-skip on
+# pull_request. E2E is sharded across 6 runners; sccache (GHA backend) keeps
+# builds warm across runs.
 
 on:
   push:
@@ -21,6 +36,28 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
+  # Path filter for wasm-floor: on a PR it runs only when wasm-relevant files
+  # change; on push/schedule it always runs (see wasm-floor's `if:`). Keeps the
+  # wasm build OFF the always-required PR path for non-wasm changes.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      wasm: ${{ steps.filter.outputs.wasm }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            wasm:
+              - 'src/runtime/**'
+              - 'src/compiler/backend/**'
+              - 'src/wasm/**'
+              - 'runtime/**'
+              - 'crates/ipe_backend_rust/**'
+              - '**/*wasm*'
+              - '.github/workflows/ci.yml'
+
   fmt:
     runs-on: ubuntu-latest
     steps:
@@ -51,6 +88,7 @@ jobs:
   # `#[cfg(feature = "live")]`.
   runtime-feature-combos:
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'   # slow: push/nightly only, off the required PR gate
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -68,6 +106,10 @@ jobs:
   # of the browser target (docs/architecture/wasm-target.md).
   wasm-floor:
     runs-on: ubuntu-latest
+    # OFF the required PR path: on a PR it runs only when wasm-relevant files
+    # change (the `changes` job's filter); on push/schedule it always runs.
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.wasm == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -97,6 +139,37 @@ jobs:
       - run: cargo nextest run --workspace --profile ci   # E2E tests no-op without IPE_E2E
       - run: cargo test --doc --workspace                 # nextest doesn't run doctests
 
+  # SEAL smoke — the fast required proxy for THE SEAL. Build the compiler, then
+  # take ONE small `cli` example end to end: `ipe build` → `cargo build` the
+  # emitted crate → run it → assert its expected stdout. This proves the
+  # emit→build→run floor holds on every PR in ~a couple of minutes, without the
+  # full 6-shard `e2e` (which stays on push/nightly below). A break here means
+  # the compiler emits a crate that no longer builds or runs — a hard stop.
+  seal-smoke:
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: -C link-arg=-fuse-ld=mold
+      IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rui314/setup-mold@v1
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: Swatinem/rust-cache@v2
+      - name: Build ipe
+        run: cargo build --release -p ipe
+      - name: Emit + build + run (examples/01-hello-world)
+        run: |
+          set -euo pipefail
+          IPE="$PWD/target/release/ipe"
+          cd examples/01-hello-world
+          "$IPE" build ipe.toml --out out/rust
+          cd out/rust
+          cargo build --release
+          OUT="$(cargo run --release --quiet)"
+          echo "emitted-binary output: $OUT"
+          echo "$OUT" | grep -q 'Hello from Ipe!'
+
   # `ipe-runtime-rust`'s `default = []` leaves `compression`/`csv`/`config`/
   # `tokio` (and every other optional feature) OFF, so the `test` job above
   # never compiles the `#[cfg(feature = "...")]`-gated unit tests that live
@@ -115,6 +188,7 @@ jobs:
   # in sync with this job.
   runtime-full-features:
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'   # slow: push/nightly only, off the required PR gate
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -141,6 +215,7 @@ jobs:
   # `posix_spawn` is an unsupported foreign call under Miri.
   miri:
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'   # slow: push/nightly only, off the required PR gate
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
@@ -180,6 +255,7 @@ jobs:
   # backlog is regenerated — then a SEAL regression fails CI as it should.
   e2e:
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'   # slow: push/nightly only (seal-smoke is the PR proxy)
     continue-on-error: true
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
@@ -235,6 +311,7 @@ jobs:
   # is broad and the install path is proven stable across runners.
   sky-parity:
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'   # slow: push/nightly only, off the required PR gate
     continue-on-error: true
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold

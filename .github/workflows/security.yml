@@ -1,29 +1,28 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Supply-chain security gate — RustSec advisories + license compliance +
-# dependency-source pinning against Cargo.lock.
+# dependency-source pinning against Cargo.lock. ONE tool: `cargo-deny`.
 #
-# Split out of ci.yml (which covers correctness/soundness: fmt/clippy/test/
-# miri/e2e — see docs/architecture/ci-and-hosting.md) because this is a
-# distinct concern (PRINCIPLES.md ranks Security #1, ahead of Correctness):
-# these jobs check the DEPENDENCY TREE, not the code we write. Both tools are
-# lockfile/metadata-only — no compilation — so they run in seconds and don't
-# need sccache/target caching.
+# `cargo-deny`'s `advisories` check subsumes `cargo-audit` (both read the same
+# RustSec advisory-db against Cargo.lock), and deny additionally covers
+# licenses / bans / sources in one pass — so this is the single supply-chain
+# gate. It is lockfile/metadata-only (no compilation), so it runs in seconds
+# and needs no sccache/target caching.
 #
-# GATING, not advisory. Both jobs fail the workflow on a real finding. This is
-# deliberately stricter than some prior art (an earlier sibling project ran an
-# equivalent check as advisory-only, worried a fix-less CVE would pin CI red
-# forever) — but `cargo-audit`/`cargo-deny` both support a documented,
-# justified ignore-list for exactly that case (see `.cargo/audit.toml` +
-# `deny.toml` at the repo root), so a real unfixable advisory is handled by an
-# explicit, reviewed exception, not by downgrading the whole gate to
-# best-effort. A silently-ignored NEW vulnerability is worse than an
-# occasionally-red CI run.
+# On the REQUIRED PR gate: `cargo-deny` is one of the fast checks branch
+# protection requires (fmt/clippy/test/cargo-deny/seal-smoke). It also runs on
+# push-to-main and nightly, offset from ci.yml's 04:00 UTC sweep so a newly
+# published advisory against an unchanged tree is still caught.
 #
-# Why NOT Miri here: cargo-audit/cargo-deny check third-party dependency
-# metadata (advisories/licenses/registry provenance), which is orthogonal to
-# Miri (undefined-behaviour detection in OUR code's execution). Miri already
-# has its own scoped job in ci.yml (`miri`, targeting the small set of crates
-# where it's actually load-bearing — see that job's inline comment).
+# GATING, not advisory. A real finding fails the workflow. Prior art ran this
+# advisory-only (fearing a fix-less CVE pins CI red forever) — but `deny.toml`
+# supports a documented, justified ignore-list for exactly that case (see the
+# repo-root `deny.toml`), so a real unfixable advisory is an explicit, reviewed
+# exception, not a downgraded gate. A silently-ignored NEW vulnerability is
+# worse than an occasionally-red CI run.
+#
+# Why NOT Miri here: cargo-deny checks third-party dependency metadata
+# (advisories/licenses/registry provenance), orthogonal to Miri (UB in OUR
+# code's execution). Miri has its own scoped job in ci.yml.
 # ─────────────────────────────────────────────────────────────────────────────
 name: security
 
@@ -43,28 +42,17 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # RustSec advisory-db scan against Cargo.lock (CVE / unmaintained / unsound).
-  # `.cargo/audit.toml` documents the one currently-accepted advisory
-  # (RUSTSEC-2023-0071, rsa's Marvin Attack — no fixed upstream release
-  # exists) with a written justification and a re-check trigger.
-  cargo-audit:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-audit
-      - run: cargo audit
-
-  # License compliance + dependency-source pinning + duplicate-version report
-  # against the `--features full` graph (matches ci.yml's
-  # `runtime-full-features` job — the actual shipped feature surface, not the
-  # narrow default-feature slice `cargo test` alone would see). Deliberately
-  # NOT `--all-features`: `webview` (wry/tao/GTK3) is excluded from `full` by
-  # design (runtime/Cargo.toml) and would inject a large, noisy, platform-
-  # gated dependency surface that no CI job or generated project builds.
-  # `deny.toml` at the repo root carries the full rationale per section.
+  # RustSec advisories + license compliance + dependency-source pinning +
+  # duplicate-version report against the `--features full` graph (matches
+  # ci.yml's `runtime-full-features` job — the actual shipped feature surface,
+  # not the narrow default-feature slice `cargo test` alone would see).
+  # Deliberately NOT `--all-features`: `webview` (wry/tao/GTK3) is excluded
+  # from `full` by design (runtime/Cargo.toml) and would inject a large, noisy,
+  # platform-gated dependency surface that no CI job or generated project
+  # builds. `deny.toml` at the repo root carries the full rationale per section.
+  #
+  # Part of the FAST required PR gate — job name `cargo-deny` is a required
+  # status check under branch protection.
   cargo-deny:
     runs-on: ubuntu-latest
     steps:

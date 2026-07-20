@@ -348,6 +348,49 @@ mid-build leaves half-written artifacts worse than clean rebuild.
 Any step failing → fix root cause, re-run from step 1. Never tag w/ known
 build or runtime failure.
 
+## Contributing / PR workflow
+
+`main` is green by construction: changes land through PRs, and a PR merges
+only when a FAST required gate is green. Slow checks run post-merge and
+nightly, so they never block a PR — a regression they catch is on `main`, not
+in the merge queue.
+
+**Flow:** branch → open a PR → the fast gate runs → set the PR to auto-merge
+(`gh pr merge <N> --auto --squash`) → it merges the moment the gate is green
+and the branch is up to date with `main`.
+
+**The fast required gate** (target: minutes — the checks branch protection
+requires):
+
+- `fmt` — `cargo fmt --all -- --check`
+- `clippy` — `cargo clippy --all-targets --workspace -- -D warnings`
+- `test` — the nextest unit/integration suite (E2E tests no-op without
+  `IPE_E2E`)
+- `cargo-deny` — the supply-chain gate (see below)
+- `seal-smoke` — build the compiler, then take one small example
+  end to end (`ipe build` → `cargo build` the emitted crate → run it → assert
+  output). A fast proxy for THE SEAL; the full 6-shard `e2e` runs post-merge.
+
+**Slow checks** run on push-to-`main` + a nightly `schedule`, never on a PR:
+the full 6-shard `e2e` (THE SEAL in full), live `sky-parity`, `miri`, the
+runtime feature-combo / full-feature builds, and `examples-sweep`. `wasm-floor`
+is off the always-required PR path — on a PR it runs only when wasm-relevant
+files change (a `paths` filter), plus nightly. Triggers live in
+`.github/workflows/{ci,security,examples-sweep,static}.yml`.
+
+**`cargo-deny`** is the one supply-chain gate. Its `advisories` check subsumes
+`cargo-audit` (same RustSec DB), and it also covers `licenses` / `bans` /
+`sources` in one lockfile-only pass. Policy + every accepted exception (with a
+written justification) live in `deny.toml` at the repo root. A real finding
+fails the PR; an unfixable advisory is handled by a documented, reviewed
+ignore — never by downgrading the gate.
+
+**Branch protection** is enabled by running
+`scripts/ci/enable-branch-protection.sh` (required checks = the five fast jobs,
+`strict` up-to-date branch, PRs required, auto-merge on). It is deliberately
+run by hand, not by CI — flip it on only after in-flight direct-push lanes
+drain.
+
 ## Workflow rules
 
 - **Always run mem-guard** (§1).
