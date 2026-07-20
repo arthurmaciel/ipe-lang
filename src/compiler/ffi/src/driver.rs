@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use crate::diag::{Diagnostic, SourceDefect};
 use crate::naming::{WRAPPER_END_SENTINEL, WRAPPER_SENTINEL_PREFIX};
-use crate::pkginfo::PkgInfo;
+use crate::pkginfo::{CrateVersion, PkgInfo};
 
 // ── crate-name gate ─────────────────────────────────────────────────────────
 
@@ -753,7 +753,7 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
             let mut dep_versions: std::collections::BTreeMap<String, String> =
                 std::collections::BTreeMap::new();
             for dep in pkg.transitive_deps() {
-                dep_versions.insert(dep.ident.as_str().to_owned(), dep.version.clone());
+                dep_versions.insert(dep.ident.as_str().to_owned(), dep.version.as_str().to_owned());
             }
             let iface = crate::interface::crate_interface(&pkg);
             let bindings_source = crate::bindings::emit_bindings(&pkg);
@@ -939,7 +939,7 @@ pub fn cargo_dep_lines(pkg: &PkgInfo) -> Result<Vec<String>, Diagnostic> {
             return Err(missing_version(pkg.name()));
         }
         let name = crate::bindings::pkg_to_crate_import(pkg.pkg_path()).replace('_', "-");
-        lines.push(render_dep_line(&name, pkg.version(), pkg.features()));
+        lines.push(render_dep_line(&name, pkg.crate_version(), pkg.features()));
         return Ok(lines);
     }
     for dep in pkg.transitive_deps() {
@@ -969,7 +969,13 @@ pub fn cargo_dep_lines(pkg: &PkgInfo) -> Result<Vec<String>, Diagnostic> {
     Ok(lines)
 }
 
-fn render_dep_line(name: &str, version: &str, features: &[String]) -> String {
+/// Render one pinned `[dependencies]` line. `version` is a decode-validated
+/// [`CrateVersion`] — a raw unchecked string cannot reach this splice, so the
+/// interpolation into the TOML value position (`"=<version>"`) can never be
+/// broken out of by a `"`-and-newline payload (the type, not a runtime escape,
+/// closes the injection class).
+fn render_dep_line(name: &str, version: &CrateVersion, features: &[String]) -> String {
+    let version = version.as_str();
     if features.is_empty() {
         format!("{name} = \"={version}\"")
     } else {
@@ -1505,6 +1511,37 @@ mod tests {
         assert_eq!(
             cargo_dep_lines(&pkg).expect("renders"),
             vec!["serde-json = \"=1.0.145\""]
+        );
+    }
+
+    #[test]
+    fn an_injection_bearing_version_never_reaches_a_manifest_line() {
+        // An inspection whose resolved version carries a TOML-string-breakout
+        // payload must be REFUSED at decode — the version can never reach
+        // `render_dep_line`, so no emitted `Cargo.toml` line can carry the
+        // injection. (The type-level guarantee: `render_dep_line` takes a
+        // `&CrateVersion`, and the only constructor is the decode-boundary
+        // parse, so an un-parsed string is unrepresentable at emission.)
+        let evil = "1.0\", features=[\"net\"] }\n[dependencies.evil]\npath = \"/etc";
+        let decoded = PkgInfo::decode_json(
+            &json!({
+                "pkg": "semver",
+                "name": "semver",
+                "version": evil,
+                "functions": [],
+                "errors": []
+            })
+            .to_string(),
+        );
+        assert!(
+            matches!(
+                decoded,
+                Err(Diagnostic::WireMalformed {
+                    defect: crate::diag::WireDefect::InvalidVersion { .. },
+                    ..
+                })
+            ),
+            "an injection-bearing version must fail closed at decode: {decoded:?}"
         );
     }
 
