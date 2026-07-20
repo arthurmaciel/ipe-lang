@@ -1157,11 +1157,20 @@ impl Printer<'_> {
         let inner = pad(indent + 1);
         // `split_first` avoids indexing/slicing panics and cleanly expresses the
         // "first argument joins the head line" branch.
-        // The first argument hugs the function line when it is itself a genuine
-        // multi-line block (a triple-quoted string), or when a *later* argument
-        // renders as a multi-line block — elm-format's `FAJoinFirst`. When every
-        // argument is single-line and the call broke only on width, elm-format
-        // stacks them all instead of hugging the first.
+        // The first argument hugs the function line — elm-format's `FAJoinFirst`
+        // — when either:
+        //   * it is a simple reference (a name / qualified name / accessor): such
+        //     a token always joins the broken head line;
+        //   * it is itself a multi-line block (a triple-quoted string); or
+        //   * a *later* argument renders as a multi-line block.
+        // A literal first argument (string / number) that is followed only by
+        // single-line arguments does NOT join — elm-format stacks them all.
+        let is_simple_ref = |a: &Expr| {
+            matches!(
+                a.value,
+                Expr_::VarLocal(_) | Expr_::VarQual(..) | Expr_::Access(..)
+            )
+        };
         let first_is_block =
             |a: &Expr| matches!(&a.value, Expr_::MultilineStr(s) if s.contains('\n'));
         let later_block = |tail: &[Expr]| {
@@ -1172,7 +1181,7 @@ impl Printer<'_> {
             Some((first, tail))
                 if self.joins_on_head_line(first, indent + 1)
                     && head_line_fits(&head_s, first, indent)
-                    && (first_is_block(first) || later_block(tail)) =>
+                    && (is_simple_ref(first) || first_is_block(first) || later_block(tail)) =>
             {
                 let first_s = self.expr_atom(first, indent + 1);
                 (format!("{head_s} {first_s}"), tail)
