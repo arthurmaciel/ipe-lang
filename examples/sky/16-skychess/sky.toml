@@ -1,0 +1,19 @@
+name = "skychess"
+version = "0.1.0"
+entry = "src/Main.ipe"
+
+[source]
+root = "src"
+
+[live]
+port = 8000
+store = "sqlite"
+storePath = "skychess.db"
+
+[database]
+driver = "sqlite"
+path = "skychess.db"
+
+["go.dependencies"]
+"crypto/sha256" = "latest"
+"encoding/hex" = "latest"
