@@ -1,0 +1,69 @@
+module Main exposing (main)
+
+-- A headless bevy_ecs "world tick" driven entirely from Ipê, over the REAL
+-- crates.io `bevy_ecs` crate, auto-FFI-bound shim-free. Bevy's `World` is the
+-- ECS core. Here we create one and thread it LINEARLY through a sequence of
+-- real ECS maintenance operations — the work a schedule does between frames:
+-- flush command queues, clear trackers, clear entities — then read the world's
+-- final change tick (the ECS clock) and entity count as observable state.
+--
+-- Every `World.*` / `Tick.*` call is a generated binding — no hand-written Rust.
+--
+-- The world is threaded, never duplicated: each maintenance step consumes the
+-- world and returns it (`World -> Result Error World`), so the value is used
+-- exactly once per step. An opaque foreign handle for a non-`Clone` Rust type
+-- (bevy's `World` is `!Clone`) cannot be duplicated, so a linear thread is the
+-- only shape the shim-free FFI can compile — see examples/sky/BLOCKERS.md.
+
+import Ipe.Prelude exposing (..)
+import Ipe.Result as Result
+import Ipe.String as String
+import Ipe.Log exposing (println)
+import Ipe.Error as Error exposing (Error)
+import Rust.Bevy_ecs as Ecs
+
+
+-- One maintenance step: run `op` on the world, log `label`, hand the world on.
+step : String -> (Ecs.WorldWorld -> Result Error Ecs.WorldWorld) -> Ecs.WorldWorld -> Result Error Ecs.WorldWorld
+step label op world =
+    op world
+        |> Result.map
+            (\next ->
+                let
+                    _ =
+                        println ("[world] " ++ label)
+                in
+                    next
+            )
+
+
+play : Result Error Int
+play =
+    Ecs.new_from_worldWorld ()
+        |> Result.map
+            (\world ->
+                let
+                    _ =
+                        println "bevy_ecs World created."
+                in
+                    world
+            )
+        |> Result.andThen (step "flush command queue" Ecs.flush_from_worldWorld)
+        |> Result.andThen (step "clear change trackers" Ecs.clear_trackers_from_worldWorld)
+        |> Result.andThen (step "clear all entities" Ecs.clear_entities_from_worldWorld)
+        |> Result.andThen (step "flush command queue" Ecs.flush_from_worldWorld)
+        -- Terminal read: consume the threaded world for its final entity count.
+        |> Result.andThen Ecs.entity_count_from_worldWorld
+
+
+main =
+    case play of
+
+        Ok count ->
+            println
+                ("headless bevy_ecs world tick finished; final entity count = "
+                    ++ String.fromInt count
+                )
+
+        Err err ->
+            println ("bevy_ecs error: " ++ Error.toString err)
