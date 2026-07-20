@@ -715,7 +715,10 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
             let mut dep_versions: std::collections::BTreeMap<String, String> =
                 std::collections::BTreeMap::new();
             for dep in pkg.transitive_deps() {
-                dep_versions.insert(dep.ident.as_str().to_owned(), dep.version.as_str().to_owned());
+                dep_versions.insert(
+                    dep.ident.as_str().to_owned(),
+                    dep.version.as_str().to_owned(),
+                );
             }
             let iface = crate::interface::crate_interface(&pkg);
             let bindings_source = crate::bindings::emit_bindings(&pkg);
