@@ -7689,6 +7689,29 @@ fn emit_record(
     generics: GenericScope,
 ) -> DResult<String> {
     let child = depth + 1;
+    let (struct_name, is_server_response) = record_struct_name(ctx, fields)?;
+    let mut parts = Vec::with_capacity(fields.len() + usize::from(is_server_response));
+    for (sym, value) in fields {
+        let field_ident = ctx.emit_ident(*sym)?;
+        let rendered = emit_expr_at(ctx, value, indent, child, generics)?;
+        parts.push(format!("{field_ident}: {rendered}"));
+    }
+    if is_server_response {
+        // The runtime struct's multi-`Set-Cookie` field is not part of the Ipê
+        // record alias; default it so the struct literal is complete.
+        parts.push("cookies: Vec::new()".to_owned());
+    }
+    Ok(format!("{struct_name} {{ {} }}", parts.join(", ")))
+}
+
+/// Resolve the Rust struct name a record literal constructs, from its field-name
+/// SET (Rust names struct-literal fields, so field write order is free). Returns
+/// the struct name and whether it folds to the runtime `ServerResponse` struct
+/// (which carries an extra `cookies: Vec<String>` field the Ipê record alias
+/// omits, so the caller appends a `cookies: Vec::new()` field). Shared by
+/// [`emit_record`] and the native Doc emitter so the two agree on the struct name
+/// exactly.
+pub fn record_struct_name(ctx: &EmitCtx, fields: &[(Symbol, Expr)]) -> DResult<(String, bool)> {
     // The struct is resolved by the literal's field-name set (Rust names
     // struct-literal fields, so write order is free); the field idents are
     // keyword-mangled to match the struct definition.
@@ -7792,18 +7815,7 @@ fn emit_record(
             }
         }
     };
-    let mut parts = Vec::with_capacity(fields.len() + usize::from(is_server_response));
-    for (sym, value) in fields {
-        let field_ident = ctx.emit_ident(*sym)?;
-        let rendered = emit_expr_at(ctx, value, indent, child, generics)?;
-        parts.push(format!("{field_ident}: {rendered}"));
-    }
-    if is_server_response {
-        // The runtime struct's multi-`Set-Cookie` field is not part of the Ipê
-        // record alias; default it so the struct literal is complete.
-        parts.push("cookies: Vec::new()".to_owned());
-    }
-    Ok(format!("{struct_name} {{ {} }}", parts.join(", ")))
+    Ok((struct_name, is_server_response))
 }
 
 /// Emit a functional record update `{ record | f = v, ... }` as a clone-and-
