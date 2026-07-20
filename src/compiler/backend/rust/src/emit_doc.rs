@@ -49,7 +49,8 @@ use crate::EmitCtx;
 use crate::doc::{ChainOperand, Doc};
 use crate::emit_expr::{
     call_has_kernel_special_case, callee_name, emit_binding_stmts, emit_expr_at,
-    expr_value_is_non_clone, kernel_swaps_first_two, scan_free_target, substitute_var,
+    expr_value_is_non_clone, kernel_swaps_first_two, record_struct_name, scan_free_target,
+    substitute_var,
 };
 use crate::emit_types::GenericScope;
 
@@ -199,6 +200,17 @@ pub fn build_doc(
             value,
             body,
         } => build_destructure(ctx, binder, value, body, indent, child, generics),
+
+        // A non-empty record literal `StructName { f0: v0, f1: v1 }`: a delimited
+        // group over its `field: value` parts that breaks one field per line with a
+        // trailing comma when it does not fit, matching rustfmt's struct-literal
+        // layout. The struct name is resolved by
+        // [`crate::emit_expr::record_struct_name`] (shared with the string
+        // emitter). An empty record stays a leaf — rustfmt renders `StructName {}`
+        // with no inner break, which the delimited builder is not shaped for.
+        Expr::Record(fields) if !fields.is_empty() => {
+            build_record(ctx, fields, indent, child, generics)
+        }
 
         // Every remaining arm carries the string emitter's exact bytes as one
         // leaf. Its layout is whatever single-line pre-`rustfmt` form the string
@@ -389,13 +401,36 @@ fn build_if(
 ///
 /// An empty element list is not delimited here (callers handle the zero-arg form
 /// as a plain leaf, matching the string emitter's `name()` / `()` output).
+///
+/// The inner boundary (the break candidate right after `open` and right before
+/// `close`) is a zero-width [`Doc::Softline`]: a bracketed list is `(a, b)` /
+/// `[a, b]` / `f(a, b)` FLAT — no space hugging the delimiter. For a brace-
+/// delimited struct literal, whose flat form hugs the braces WITH a space
+/// (`Name { a: 1 }`), use [`delimited_spaced`].
 fn delimited(open: Doc, elems: Vec<Doc>, close: Doc) -> Doc {
+    delimited_with(open, elems, close, || Doc::Softline)
+}
+
+/// Like [`delimited`], but the inner boundary is a soft [`Doc::Line`] (a SPACE
+/// when flat, a newline+indent when broken). This is the struct-literal shape:
+/// `Name { a: 1, b: 2 }` flat (spaces inside the braces), and one field per line
+/// with a trailing comma when broken — exactly `rustfmt`'s struct-literal layout.
+fn delimited_spaced(open: Doc, elems: Vec<Doc>, close: Doc) -> Doc {
+    delimited_with(open, elems, close, || Doc::Line)
+}
+
+/// The shared delimited-group core. `boundary` supplies the break candidate that
+/// hugs the open and close delimiters — [`Doc::Softline`] for bracketed lists
+/// (no flat space), [`Doc::Line`] for brace-delimited struct literals (a flat
+/// space). The inter-element separator is always a real `,` then a soft `Line`;
+/// the trailing comma is always a SEAL-invisible [`Doc::IfBroken`].
+fn delimited_with(open: Doc, elems: Vec<Doc>, close: Doc, boundary: impl Fn() -> Doc) -> Doc {
     let mut inner = vec![open];
     let mut nested = Vec::with_capacity(elems.len() * 2);
     let last = elems.len().saturating_sub(1);
     for (i, e) in elems.into_iter().enumerate() {
         if i == 0 {
-            nested.push(Doc::Softline);
+            nested.push(boundary());
         } else {
             nested.push(Doc::text(","));
             nested.push(Doc::Line);
@@ -408,7 +443,7 @@ fn delimited(open: Doc, elems: Vec<Doc>, close: Doc) -> Doc {
         }
     }
     inner.push(Doc::nest(4, Doc::concat(nested)));
-    inner.push(Doc::Softline);
+    inner.push(boundary());
     inner.push(close);
     Doc::group(Doc::concat(inner))
 }
@@ -711,6 +746,43 @@ fn build_destructure(
     ]))
 }
 
+/// Build the `Doc` for a non-empty record literal, mirroring
+/// [`crate::emit_expr::emit_record`] token-for-token. The struct name comes from
+/// the shared [`crate::emit_expr::record_struct_name`] resolver; each field
+/// renders `{field_ident}: {value}` with the value built recursively, laid out as
+/// a delimited group so a wide record breaks one field per line with a trailing
+/// comma (rustfmt's struct-literal layout). A `ServerResponse`-shaped literal
+/// gains the trailing `cookies: Vec::new()` field the string emitter appends, so
+/// the two produce the identical field sequence.
+fn build_record(
+    ctx: &EmitCtx,
+    fields: &[(Symbol, Expr)],
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Doc> {
+    let (struct_name, is_server_response) = record_struct_name(ctx, fields)?;
+    let mut field_docs = Vec::with_capacity(fields.len() + usize::from(is_server_response));
+    for (sym, value) in fields {
+        let field_ident = ctx.emit_ident(*sym)?;
+        let value_doc = build_doc(ctx, value, indent, child, generics)?;
+        field_docs.push(Doc::concat(vec![
+            Doc::owned(format!("{field_ident}: ")),
+            value_doc,
+        ]));
+    }
+    if is_server_response {
+        // The runtime struct's multi-`Set-Cookie` field is not part of the Ipê
+        // record alias; the string emitter defaults it, so carry the same leaf.
+        field_docs.push(Doc::text("cookies: Vec::new()"));
+    }
+    Ok(delimited_spaced(
+        Doc::owned(format!("{struct_name} {{")),
+        field_docs,
+        Doc::text("}"),
+    ))
+}
+
 #[cfg(test)]
 #[allow(clippy::panic, clippy::expect_used, reason = "test assertions")]
 mod tests {
@@ -777,6 +849,10 @@ mod tests {
         // A zero-arg helper function so a `Callee::Func(FuncId 0)` call fixture
         // resolves a Rust name; its body is never emitted by these builder tests.
         let helper_fn = interner.intern("helper").expect("intern helper");
+        // The two record field names (`a`, `b`) — interning is idempotent, so these
+        // are the same symbols as `syms[0]`/`syms[1]` a `Record` fixture uses.
+        let rec_field_a = interner.intern("a").expect("intern a");
+        let rec_field_b = interner.intern("b").expect("intern b");
         let syms = [
             "a",
             "b",
@@ -829,7 +905,13 @@ mod tests {
                     body: Expr::Int(0),
                 }],
                 entry: None,
-                records: vec![],
+                // A two-field record `{ a : Int, b : Int }` so a `Record` literal
+                // fixture over the `a`/`b` field names resolves a synthesised
+                // struct name via `record_struct_name`.
+                records: vec![IrType::Record(std::collections::BTreeMap::from([
+                    (rec_field_a, IrType::Int),
+                    (rec_field_b, IrType::Int),
+                ]))],
                 uses_tea: false,
                 uses_server: false,
                 uses_ui: false,
@@ -1119,6 +1201,11 @@ mod tests {
                 value: Box::new(var(fx, 2)),
                 body: Box::new(var(fx, 0)),
             },
+            // Record literal (structured, inline): `RecXY { a: 1, b: 2 }` over the
+            // fixture's registered two-field struct.
+            Expr::Record(vec![(sym(fx, 0), Expr::Int(1)), (sym(fx, 1), Expr::Int(2))]),
+            // Record literal (structured, wide → breaks fields one per line).
+            Expr::Record(vec![(sym(fx, 0), var(fx, 7)), (sym(fx, 1), var(fx, 8))]),
         ]
     }
 
@@ -1738,6 +1825,52 @@ mod tests {
             };
             let got = render_let_stmt(ctx, &expr);
             let expected = "let z = ({\n        let x = c;\n        let (a, b) = x.clone();\n        a\n    })";
+            assert_eq!(
+                got, expected,
+                "\n--- got ---\n{got}\n--- want ---\n{expected}"
+            );
+        });
+    }
+
+    #[test]
+    fn record_fits_inline_with_spaces_inside_braces() {
+        // A short record literal stays inline with a space hugging each brace:
+        // `<StructName> { a: 1, b: 2 }`. This is the brace-delimited flat shape
+        // (`delimited_spaced`), distinct from the space-free bracketed lists.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let scope = GenericScope::new(&[]);
+            let expr = Expr::Record(vec![
+                (sym(&fx, 0), Expr::Int(1)),
+                (sym(&fx, 1), Expr::Int(2)),
+            ]);
+            let doc = build_doc(ctx, &expr, 0, 0, scope).expect("build_doc");
+            let string = emit_expr_at(ctx, &expr, 0, 0, scope).expect("emit_expr_at");
+            // The string emitter's flat form is already the rustfmt-canonical
+            // inline shape (`Name { a: 1, b: 2 }`), so the render matches it.
+            assert_eq!(render(&doc, RenderConfig::default()), string);
+            assert!(string.ends_with(" { a: 1, b: 2 }"), "got {string}");
+        });
+    }
+
+    #[test]
+    fn record_breaks_fields_one_per_line_with_trailing_comma() {
+        // A record whose two wide fields overflow width 100 breaks each field onto
+        // its own line at nest+4 with a trailing comma, `}` dedented to the
+        // statement indent — rustfmt's struct-literal layout. Golden captured from
+        // `rustfmt --edition 2024 --style-edition 2024`.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let scope = GenericScope::new(&[]);
+            let expr = Expr::Record(vec![(sym(&fx, 0), var(&fx, 7)), (sym(&fx, 1), var(&fx, 8))]);
+            // Recover the emitter's chosen struct name from the flat form
+            // (everything up to the first ` {`).
+            let flat = emit_expr_at(ctx, &expr, 0, 0, scope).expect("emit_expr_at");
+            let name = flat.split_once(" {").expect("record has a brace").0;
+            let got = render_let_stmt(ctx, &expr);
+            let expected = format!(
+                "let z = {name} {{\n        a: argument_that_is_quite_long_enough_to_matter_x,\n        b: argument_that_is_quite_long_enough_to_matter_y,\n    }}"
+            );
             assert_eq!(
                 got, expected,
                 "\n--- got ---\n{got}\n--- want ---\n{expected}"
