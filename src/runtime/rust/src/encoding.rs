@@ -183,7 +183,7 @@ mod tests {
     #[test]
     fn test_base64_roundtrip() {
         let encoded = base64_encode("Hello, Ipe!".to_string());
-        assert_eq!(encoded, "SGVsbG8sIFNreSE=");
+        assert_eq!(encoded, "SGVsbG8sIElwZSE=");
         let decoded: IpeResult<String, String> = base64_decode(encoded);
         assert!(matches!(decoded, IpeResult::Ok(ref s) if s == "Hello, Ipe!"));
     }
