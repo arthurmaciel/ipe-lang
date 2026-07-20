@@ -62,7 +62,14 @@ fn current_col(out: &str) -> usize {
 /// chosen-flat group is a hard break (a block with a statement always breaks —
 /// its breaks are ungrouped, so `flat` never reaches them as `true`). `col` is
 /// the column the first char lands on.
-fn render_at(doc: &Doc, cfg: RenderConfig, indent: usize, col: usize, flat: bool, out: &mut String) {
+fn render_at(
+    doc: &Doc,
+    cfg: RenderConfig,
+    indent: usize,
+    col: usize,
+    flat: bool,
+    out: &mut String,
+) {
     match doc {
         Doc::Text(s) => out.push_str(s),
         Doc::Line => {
@@ -93,7 +100,8 @@ fn render_at(doc: &Doc, cfg: RenderConfig, indent: usize, col: usize, flat: bool
             // A group flattens only if it fits AND has no hard break inside it (a
             // statement-block's ungrouped `Line`s are hard breaks that keep the
             // group broken even when its flat width would fit).
-            let group_flat = flat || (!has_hard_break(inner) && fits(inner, cfg, start_col, indent));
+            let group_flat =
+                flat || (!has_hard_break(inner) && fits(inner, cfg, start_col, indent));
             render_at(inner, cfg, indent, start_col, group_flat, out);
         }
         Doc::Chain { operands } => {
@@ -267,7 +275,12 @@ fn current_line_indent(out: &str) -> Option<usize> {
 }
 
 /// Render every operand of a chain flat (inline), operators separated by spaces.
-fn render_chain_flat(operands: &[ChainOperand], cfg: RenderConfig, indent: usize, out: &mut String) {
+fn render_chain_flat(
+    operands: &[ChainOperand],
+    cfg: RenderConfig,
+    indent: usize,
+    out: &mut String,
+) {
     for (i, operand) in operands.iter().enumerate() {
         if i > 0 {
             out.push(' ');
@@ -333,7 +346,10 @@ mod p0_tests {
         ];
         let got = render_line("    let z = ", 4, &operands);
         let expected = "    let z = (((((longfunctioncallnamehere_aaaa(x) + bbbbbbbbbbb) + ccccccccccc) + ddddddddddd)\n        + eeeeeeeeeee)\n        + ffffffffffffffffffffffffffffffffffffffffffffff)";
-        assert_eq!(got, expected, "\n--- got ---\n{got}\n--- want ---\n{expected}");
+        assert_eq!(
+            got, expected,
+            "\n--- got ---\n{got}\n--- want ---\n{expected}"
+        );
     }
 
     #[test]
@@ -353,7 +369,10 @@ mod p0_tests {
         ];
         let got = render_line("    let z = ", 4, &operands);
         let expected = "    let z = (((((longfunctioncallnamehere_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa(x) + bbbbbbbbbbb)\n        + ccccccccccc)\n        + ddddddddddd)\n        + eeeeeeeeeee)\n        + ff)";
-        assert_eq!(got, expected, "\n--- got ---\n{got}\n--- want ---\n{expected}");
+        assert_eq!(
+            got, expected,
+            "\n--- got ---\n{got}\n--- want ---\n{expected}"
+        );
     }
 
     /// A `{ <decl> <tail> }` block Doc with a statement, which ALWAYS breaks (a
@@ -365,12 +384,7 @@ mod p0_tests {
             Doc::text("{"),
             Doc::nest(
                 4,
-                Doc::concat(vec![
-                    Doc::Line,
-                    Doc::text(decl),
-                    Doc::Line,
-                    Doc::text(tail),
-                ]),
+                Doc::concat(vec![Doc::Line, Doc::text(decl), Doc::Line, Doc::text(tail)]),
             ),
             Doc::Line,
             Doc::text("}"),
@@ -418,7 +432,10 @@ mod p0_tests {
         ];
         let got = render_line("    let z = ", 4, &operands);
         let expected = "    let z = (bcall(\n        argument_number_one_long,\n        argument_number_two_long,\n        argument_number_three_verylong,\n    ) + cccccccccccccccc)";
-        assert_eq!(got, expected, "\n--- got ---\n{got}\n--- want ---\n{expected}");
+        assert_eq!(
+            got, expected,
+            "\n--- got ---\n{got}\n--- want ---\n{expected}"
+        );
     }
 
     #[test]
@@ -431,7 +448,10 @@ mod p0_tests {
                 leading_op: None,
                 doc: Doc::concat(vec![
                     Doc::text("(((mlcall_one("),
-                    block("let a = something_long_enough_to_force_break_here_now;", "a"),
+                    block(
+                        "let a = something_long_enough_to_force_break_here_now;",
+                        "a",
+                    ),
                     Doc::text(")"),
                 ]),
             },
@@ -448,7 +468,10 @@ mod p0_tests {
         ];
         let got = render_line("    let z = ", 4, &operands);
         let expected = "    let z = (((mlcall_one({\n        let a = something_long_enough_to_force_break_here_now;\n        a\n    }) + slshort)\n        + mlcall_two({\n            let b = another_thing_long_enough_to_break_it;\n            b\n        }))\n        + tail_operand_x)";
-        assert_eq!(got, expected, "\n--- got ---\n{got}\n--- want ---\n{expected}");
+        assert_eq!(
+            got, expected,
+            "\n--- got ---\n{got}\n--- want ---\n{expected}"
+        );
     }
 
     #[test]
