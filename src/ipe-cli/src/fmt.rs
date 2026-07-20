@@ -1405,24 +1405,28 @@ impl Printer<'_> {
         span: ipe_diagnostics::Span,
     ) -> String {
         let base_s = self.sym(base.value);
+        // Field values render at one level deeper than the brace so a value's
+        // own line breaks align under the multi-line update body.
         let parts: Vec<String> = fields
             .iter()
-            .map(|(n, v)| format!("{} = {}", self.sym(n.value), self.expr(v, indent)))
+            .map(|(n, v)| format!("{} = {}", self.sym(n.value), self.expr(v, indent + 1)))
             .collect();
         let one = format!("{{ {base_s} | {} }}", parts.join(", "));
         if !one.contains('\n') && !self.was_multiline(span) {
             return one;
         }
-        // Multiline update: `{ base` then leading-comma fields, `| ` on the
-        // first field line.
-        let pad = pad(indent);
-        let inner = pad_in(indent);
+        // Multiline update: `{ base` on the first line, then the `| field` /
+        // `, field` lines indented ONE LEVEL DEEPER than the brace (elm-format
+        // aligns the update pipe under the record body, not under the `{`), and
+        // the closing `}` back at the brace column.
+        let close_pad = pad(indent);
+        let inner = pad(indent + 1);
         let mut out = format!("{{ {base_s}");
         for (i, p) in parts.iter().enumerate() {
             let lead = if i == 0 { "|" } else { "," };
             let _ = write!(out, "\n{inner}{lead} {p}");
         }
-        let _ = write!(out, "\n{pad}}}");
+        let _ = write!(out, "\n{close_pad}}}");
         out
     }
 }
