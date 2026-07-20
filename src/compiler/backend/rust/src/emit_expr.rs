@@ -7473,7 +7473,7 @@ fn render_arm_pat_alias_safe(
 /// handled at any depth: each tuple element binds to a fresh, uniquely-numbered
 /// temporary, so a nested alias clones from its OWN temp and never shares a move
 /// with a sibling binder.
-fn emit_binding_stmts(ctx: &EmitCtx, binder: &Pat, value: &str) -> DResult<Vec<String>> {
+pub fn emit_binding_stmts(ctx: &EmitCtx, binder: &Pat, value: &str) -> DResult<Vec<String>> {
     let mut out = Vec::new();
     let mut counter: usize = 0;
     push_binding_stmts(ctx, binder, value, &mut counter, &mut out)?;
