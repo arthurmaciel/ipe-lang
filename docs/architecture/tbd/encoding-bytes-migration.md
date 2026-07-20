@@ -1,8 +1,10 @@
 # Encoding / Bytes migration — authoritative spec
 
-Status: APPROVED (guardian-synthesised). Task #55. Not yet implemented.
-Verified against HEAD 2026-07-03 (encoding.rs, jwt.rs, email.rs, compression.rs,
-ws_client.rs, server.rs, src/compiler/types/src/constrain.rs).
+Status: partially implemented. The reachable-surface slice landed — the six
+`Encoding` kernels are typed in `src/compiler/types/src/constrain.rs` and the
+UTF-8 encode-truncation is fixed (`src/runtime/rust/src/encoding.rs`). The
+remaining work is the runtime byte-pipeline migration for `Compression`, `Email`,
+and `WebSocket`, which is blocked until those modules gain an Ipê-facing surface.
 
 > **SCOPE CORRECTION (2026-07-03, gap-1 enumeration before impl).** The panel
 > reasoned partly against the UPSTREAM `sky-stdlib/` tree. In the ipe PORT
