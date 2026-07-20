@@ -9289,24 +9289,52 @@ fn subst_assoc_json(
     val: &serde_json::Value,
     assoc: &std::collections::HashMap<String, serde_json::Value>,
 ) -> serde_json::Value {
+    subst_assoc_json_guarded(val, assoc, &mut Vec::new())
+}
+
+/// Cycle-guarded associated-type projection substitution. A projection binding
+/// may itself project (`Self::A -> Vec<Self::B>`), so substitution recurses
+/// through the binding; a crate whose impls chain projections back onto one
+/// another (an ECS `SystemParam`/`QueryData` self-referential `Item` graph)
+/// forms a cycle `A -> …-> A` that would recur without end and overflow the
+/// stack. `active` holds the projection names currently open on the recursion
+/// path: re-entering a name means a cycle, so the projection is left
+/// UNSUBSTITUTED — the surviving `qualified_path` then trips
+/// `contains_qualified_path` and the binding drops as
+/// `assoc-projection-unresolved` (over-drop, never crash, never grind).
+fn subst_assoc_json_guarded(
+    val: &serde_json::Value,
+    assoc: &std::collections::HashMap<String, serde_json::Value>,
+    active: &mut Vec<String>,
+) -> serde_json::Value {
     if let Some(qp) = val.get("qualified_path")
         && let Some(name) = qp.get("name").and_then(|n| n.as_str())
         && let Some(concrete) = assoc.get(name)
     {
+        // A name already open on this path is a projection cycle: stop and
+        // leave the node unsubstituted so the drop gate refuses the binding.
+        if active.iter().any(|n| n == name) {
+            return val.clone();
+        }
         // Recurse into the binding too (in case it nests further) — but a
         // concrete impl binding (`i64`) has no projection, so this is a
         // clone in the common case.
-        return subst_assoc_json(concrete, assoc);
+        active.push(name.to_owned());
+        let out = subst_assoc_json_guarded(concrete, assoc, active);
+        active.pop();
+        return out;
     }
     match val {
         serde_json::Value::Object(o) => serde_json::Value::Object(
             o.iter()
-                .map(|(k, v)| (k.clone(), subst_assoc_json(v, assoc)))
+                .map(|(k, v)| (k.clone(), subst_assoc_json_guarded(v, assoc, active)))
                 .collect(),
         ),
-        serde_json::Value::Array(a) => {
-            serde_json::Value::Array(a.iter().map(|v| subst_assoc_json(v, assoc)).collect())
-        }
+        serde_json::Value::Array(a) => serde_json::Value::Array(
+            a.iter()
+                .map(|v| subst_assoc_json_guarded(v, assoc, active))
+                .collect(),
+        ),
         other => other.clone(),
     }
 }
@@ -13018,6 +13046,45 @@ mod tests {
 
     fn ipe(val: &serde_json::Value) -> String {
         rustdoc_type_to_ipe(val, &HashMap::new())
+    }
+
+    // A projection whose binding chains back onto itself (`A -> Vec<Self::A>`)
+    // is a cycle: `subst_assoc_json` must terminate and leave the projection
+    // UNSUBSTITUTED (so the drop gate refuses the binding), not recur forever
+    // and overflow the stack — the shape bevy_ecs' self-referential
+    // `SystemParam`/`QueryData` `Item` graph produced.
+    #[test]
+    fn subst_assoc_json_terminates_on_a_projection_cycle() {
+        let proj_a = serde_json::json!({ "qualified_path": { "name": "A" } });
+        // assoc binds A -> Vec<Self::A>, i.e. an array carrying the projection
+        // of A itself — the minimal self-referential projection cycle.
+        let mut assoc = std::collections::HashMap::new();
+        assoc.insert(
+            "A".to_owned(),
+            serde_json::json!([{ "qualified_path": { "name": "A" } }]),
+        );
+        // Must return (not hang/overflow); the surviving projection then trips
+        // the unresolved-projection drop gate.
+        let out = subst_assoc_json(&proj_a, &assoc);
+        assert!(
+            contains_qualified_path(&out),
+            "a cyclic projection stays unresolved so the binding drops: {out}"
+        );
+    }
+
+    // The non-cyclic case still resolves fully: `A -> i64` substitutes, and a
+    // projection nested in a container resolves its element.
+    #[test]
+    fn subst_assoc_json_resolves_a_finite_projection() {
+        let mut assoc = std::collections::HashMap::new();
+        assoc.insert("A".to_owned(), serde_json::json!({ "primitive": "i64" }));
+        let nested = serde_json::json!([{ "qualified_path": { "name": "A" } }]);
+        let out = subst_assoc_json(&nested, &assoc);
+        assert!(
+            !contains_qualified_path(&out),
+            "a finite projection resolves away: {out}"
+        );
+        assert_eq!(out, serde_json::json!([{ "primitive": "i64" }]));
     }
 
     // [foreign-type-one-home] The identity map keys every rendered foreign

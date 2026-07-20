@@ -301,3 +301,87 @@ never reaching the emitter. Regression tests:
 `a_legal_feature_set_reaches_a_pinned_manifest_line` (driver). Proven:
 `cargo build --workspace` green, `cargo test -p ipe_ffi` green, `cargo clippy
 -p ipe_ffi --all-targets` clean.
+
+## FFI torture-test: `bevy_ecs` (examples/bevy-game)
+
+Stress-testing the shim-free auto-FFI against `bevy_ecs 0.19` (Bevy's ECS core).
+Result: `bevy_ecs` inspects and binds **619 functions shim-free**, and a headless
+`World`-tick program (`examples/bevy-game`) builds and runs end-to-end via
+`ipe run` with zero hand-written shims.
+
+### Fixed here — inspector stack overflow on cyclic associated-type projections
+
+`ipe add bevy_ecs` aborted with SIGABRT (signal 134, "thread 'main' has
+overflowed its stack") during rustdoc-JSON analysis, before emitting any
+binding — so the entire crate was unusable. Root cause:
+`subst_assoc_json` (tools/ipe-ffi-inspector) substitutes `Self::Assoc`
+projections with their impl bindings and recurses into each binding in case it
+projects further (`Self::A -> Vec<Self::B>`). Bevy's `SystemParam` / `QueryData`
+trait graph is self-referential (a projection chain `A -> … -> A`), so the
+substitution recurred without end and blew the 8 MB main-thread stack. Fix: a
+cycle guard — the substituter carries the projection names currently open on the
+recursion path; re-entering a name is a cycle, so the projection is left
+UNSUBSTITUTED and the surviving `qualified_path` trips the existing
+`contains_qualified_path` drop gate (`assoc-projection-unresolved`) — over-drop,
+never crash, never grind. Regression tests:
+`subst_assoc_json_terminates_on_a_projection_cycle`,
+`subst_assoc_json_resolves_a_finite_projection`. Proven: `ipe add bevy_ecs`
+exit 0, 619 bindings; `cargo test -p ipe-ffi-inspector` green (247 tests).
+
+### Filed — non-generic `World` surface only; the ECS generic core over-drops
+
+The runnable surface is the non-generic `World` API (`new`, `flush`, `clear_*`,
+`entity_count`, `change_tick` / `increment_change_tick`, `despawn`). Bevy's ECS
+proper — spawning entities with components and running systems — does NOT bind,
+for three independent reasons, each an honest limit of the shim-free model:
+
+1. **`spawn` / `insert` are generic over `Bundle`.** Every entity-building method
+   is `fn spawn<B: Bundle>(&mut self, bundle: B)`; a `<T: Bundle>` type-param is
+   outside the modellable-5 bound set, so it over-drops (`trait-method-generic-self`,
+   ×4675 across the crate). The coverage report also shows the concrete miss:
+   `spawn | foreign type 'SpawnRelatedBundle' has no resolvable Rust path`.
+
+2. **A `Component` is a user-defined Rust type.** There is no public concrete
+   component type in `bevy_ecs` to spawn, and Ipê cannot DEFINE a Rust type that
+   `#[derive(Component)]`. `ComponentDescriptor::new` (the dynamic-registration
+   escape hatch) is itself generic / takes a `TypeId` + `Layout` not constructible
+   from Ipê, so it drops too. Component hooks drop with
+   `on_insert | foreign type 'ComponentHook' has no resolvable Rust path`.
+
+3. **A system is a Rust `Fn` closure.** `App`/`Schedule::add_systems` takes an
+   `IntoSystem` — a Rust function/closure — and every `dyn Fn` / `FnMut` / `FnOnce`
+   argument over-drops by design (`trait-object-unsupported`, closure-seam not
+   wired). So a schedule can be constructed but never populated from Ipê.
+
+### Filed — `&self` / `&mut self` methods force `.clone()` on non-`Clone` handles
+
+A method whose real receiver is `&self` or `&mut self` and whose return is NOT
+`Self` (e.g. `World::entity_count(&self) -> usize`,
+`World::change_tick(&self) -> Tick`) binds as `World -> Result Error T`: the
+wrapper takes the opaque handle BY VALUE and does not hand it back. When the Ipê
+program uses the same `world` value more than once, the backend lowers each
+non-final use as `world.clone()` (correct for a value-semantics language), but
+`bevy_ecs::world::World` is `!Clone`, so the emitted `ipe-app` crate fails:
+
+```
+error[E0599]: no method named `clone` found for struct `World` in the current scope
+   |  let world = world.clone();
+```
+
+`ipe build` reports exit 0, then `cargo build` fails — a SEAL violation with no
+diagnostic. Two consequences:
+
+- **Workaround in-example:** thread the `World` LINEARLY — use only methods that
+  return the receiver (`flush` / `clear_*`, which the FFI's `self_returning`
+  owned-threading path already surfaces as `World -> Result Error World`) and
+  make any terminal read (`entity_count`) the single last use. `examples/bevy-game`
+  is written this way and runs clean.
+- **Root-cause fix (not done — cross-cutting):** extend the owned-threading path
+  from setters to ALL `&self` / `&mut self` non-`Self`-returning methods, so a
+  reader binds as `World -> Result Error (T, World)` and the handle flows on
+  without a clone. This changes the binding SIGNATURE the interface exposes and
+  ripples through the interface generator, the `.ipei` type-env, and every
+  consumer, so it is out of scope for a single example landing. Until then, a
+  non-`Clone` opaque handle used non-linearly is an under-caught SEAL gap: the
+  build emitter should either thread the receiver or refuse the non-linear use
+  with a diagnostic, never emit an uncompilable `.clone()`.
