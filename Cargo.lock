@@ -1979,6 +1979,7 @@ dependencies = [
  "ipe_parse",
  "ipe_sandbox",
  "ipe_stdlib",
+ "ipe_syntax",
  "ipe_types",
  "ipe_watch",
  "notify",

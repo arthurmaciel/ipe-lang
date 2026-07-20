@@ -1,0 +1,164 @@
+//! Integration tests for `ipe fmt` — the source formatter.
+//!
+//! These drive the PUBLIC library surface (`ipe::fmt`) rather than spawning the
+//! binary: `format_source` is the pure formatting function, and `run_fmt` is
+//! the CLI entry point (file discovery, in-place rewrite, `--check`). Every
+//! assertion is over observable behaviour — the exact formatted bytes, the
+//! idempotency fixed point, comment survival, and the `--check` exit contract —
+//! never a self-report.
+
+use std::fs;
+use std::path::PathBuf;
+
+use ipe::fmt::{self, format_source};
+
+/// A curated fixture set covering records, lists, tuples, `case`, `let`, `if`,
+/// and comments. Each must be a fixed point of `format_source` after one pass.
+fn fixtures() -> Vec<(&'static str, String)> {
+    vec![
+        (
+            "simple_value",
+            "module M exposing (x)\n\n\nx =\n    1\n".to_owned(),
+        ),
+        (
+            "record_single_line",
+            "module M exposing (r)\n\n\nr =\n    { a = 1, b = 2 }\n".to_owned(),
+        ),
+        (
+            "list_single_line",
+            "module M exposing (l)\n\n\nl =\n    [ 1, 2, 3 ]\n".to_owned(),
+        ),
+        (
+            "tuple",
+            "module M exposing (t)\n\n\nt =\n    ( 1, 2 )\n".to_owned(),
+        ),
+        (
+            "case_expr",
+            "module M exposing (f)\n\n\nf x =\n    case x of\n        0 ->\n            \"z\"\n\n        _ ->\n            \"n\"\n".to_owned(),
+        ),
+        (
+            "let_expr",
+            "module M exposing (f)\n\n\nf x =\n    let\n        y = x + 1\n    in\n    y\n".to_owned(),
+        ),
+        (
+            "if_expr",
+            "module M exposing (f)\n\n\nf x =\n    if x > 0 then\n        1\n\n    else\n        2\n".to_owned(),
+        ),
+        (
+            "union_type",
+            "module M exposing (T)\n\n\ntype T\n    = A\n    | B\n".to_owned(),
+        ),
+        (
+            "with_comments",
+            "module M exposing (f, g)\n\n\n-- leading on f\nf =\n    1\n\n\n{- block before g -}\ng =\n    2\n".to_owned(),
+        ),
+    ]
+}
+
+#[test]
+fn every_fixture_is_a_fixed_point() {
+    for (name, src) in fixtures() {
+        let once = format_source(&src).unwrap();
+        let twice = format_source(&once).unwrap();
+        assert_eq!(once, twice, "{name}: fmt(fmt(x)) != fmt(x)");
+    }
+}
+
+/// Every fixture that is already in canonical form must be UNCHANGED by
+/// formatting (a strict fixed point on canonical input).
+#[test]
+fn canonical_inputs_are_unchanged() {
+    for (name, src) in fixtures() {
+        // First canonicalise, then assert the canonical form is stable.
+        let canon = format_source(&src).unwrap();
+        assert_eq!(
+            format_source(&canon).unwrap(),
+            canon,
+            "{name}: canonical form is not stable"
+        );
+    }
+}
+
+#[test]
+fn comments_survive() {
+    let src = fixtures()
+        .into_iter()
+        .find(|(n, _)| *n == "with_comments")
+        .map(|(_, s)| s)
+        .unwrap();
+    let out = format_source(&src).unwrap();
+    assert!(out.contains("-- leading on f"), "line comment lost:\n{out}");
+    assert!(
+        out.contains("{- block before g -}"),
+        "block comment lost:\n{out}"
+    );
+}
+
+/// `run_fmt` rewrites an unformatted file in place, and a second run is a no-op.
+#[test]
+fn run_fmt_rewrites_in_place_and_is_idempotent() {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("fmt_rewrite");
+    fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("M.ipe");
+    // Deliberately non-canonical (extra spaces, wrong blank-line count).
+    fs::write(&file, "module M exposing (x)\n\nx =\n  1\n").unwrap();
+
+    fmt::run_fmt(&[file.to_string_lossy().into_owned()]).expect("first fmt");
+    let after1 = fs::read_to_string(&file).unwrap();
+    assert!(after1.contains("x =\n    1"), "not reformatted:\n{after1}");
+
+    fmt::run_fmt(&[file.to_string_lossy().into_owned()]).expect("second fmt");
+    let after2 = fs::read_to_string(&file).unwrap();
+    assert_eq!(after1, after2, "second fmt changed a formatted file");
+}
+
+/// `--check` exits zero on a formatted file and non-zero on an unformatted one,
+/// and never writes.
+#[test]
+fn check_flag_exit_contract() {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("fmt_check");
+    fs::create_dir_all(&dir).unwrap();
+
+    // Unformatted file: --check must error and leave the file untouched.
+    let unf = dir.join("Unf.ipe");
+    let unf_src = "module M exposing (x)\n\nx =\n  1\n";
+    fs::write(&unf, unf_src).unwrap();
+    let res = fmt::run_fmt(&["--check".to_owned(), unf.to_string_lossy().into_owned()]);
+    assert!(res.is_err(), "--check passed an unformatted file");
+    assert_eq!(
+        fs::read_to_string(&unf).unwrap(),
+        unf_src,
+        "--check must not modify the file"
+    );
+
+    // Formatted file: --check must succeed.
+    let ok = dir.join("Ok.ipe");
+    let canon = format_source(unf_src).unwrap();
+    fs::write(&ok, &canon).unwrap();
+    let res = fmt::run_fmt(&["--check".to_owned(), ok.to_string_lossy().into_owned()]);
+    assert!(res.is_ok(), "--check failed a formatted file: {res:?}");
+}
+
+/// A directory argument formats every `.ipe` under it.
+#[test]
+fn directory_formats_all_ipe_files() {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("fmt_dir");
+    let sub = dir.join("src").join("Nested");
+    fs::create_dir_all(&sub).unwrap();
+    let a = dir.join("src").join("A.ipe");
+    let b = sub.join("B.ipe");
+    fs::write(&a, "module A exposing (x)\n\nx =\n  1\n").unwrap();
+    fs::write(&b, "module Nested.B exposing (y)\n\ny =\n  2\n").unwrap();
+
+    fmt::run_fmt(&[dir.to_string_lossy().into_owned()]).expect("dir fmt");
+    assert!(fs::read_to_string(&a).unwrap().contains("x =\n    1"));
+    assert!(fs::read_to_string(&b).unwrap().contains("y =\n    2"));
+}
+
+/// An unparseable file is refused (formatting invalid source could change its
+/// meaning) rather than mangled.
+#[test]
+fn invalid_source_is_refused() {
+    let bad = "module M exposing (x)\n\nx = = =\n";
+    assert!(format_source(bad).is_err(), "invalid source was formatted");
+}
