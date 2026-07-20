@@ -1096,9 +1096,21 @@ impl<'a> Parser<'a> {
     /// dotted identifier, so its segments are split back out here. Field access binds
     /// tighter than application, so it is resolved per-atom before [`Self::parse_app`]
     /// gathers arguments.
+    ///
+    /// The `.` must sit flush against the atom (`(r).value`). A space before it —
+    /// `f .value` — is the accessor-function reading (`.value` applied to `f`), a
+    /// different program the type system cannot yet express; it is rejected with a
+    /// teaching diagnostic rather than silently parsed as field access.
     fn parse_atom_postfix(&mut self, threshold: u32, depth: u32) -> DResult<Expr> {
         let mut expr = self.parse_atom(threshold, depth + 1)?;
         while self.peek_kind() == Some(&Tok::Dot) {
+            let dot_span = self.err_here_span();
+            if dot_span.lo != expr.span.hi {
+                return Err(Diagnostic::Parse {
+                    span: dot_span,
+                    msg: ParseError::SpaceBeforeDot,
+                });
+            }
             self.bump(Construct::Expression)?;
             let tok = self.bump(Construct::Expression)?;
             let Tok::Ident(text) = &tok.kind else {

@@ -364,6 +364,9 @@ fn parse_label(msg: &ParseError) -> Option<String> {
         }
         ParseError::UnknownChar(c) => Some(format!("unknown character {}", char_repr(*c))),
         ParseError::StrayDot => Some("stray `.`".to_string()),
+        ParseError::SpaceBeforeDot => {
+            Some("a space before `.` reads as the accessor function `.field`".to_string())
+        }
         ParseError::NumberJoinedToName(c) => {
             Some(format!("a number cannot be followed by {}", char_repr(*c)))
         }
@@ -642,6 +645,11 @@ fn hint_text(hint: Hint) -> String {
         }
         Hint::UseDotDotOrQualified => {
             "use `..` for a range, or `Module.name` for a qualified name".to_string()
+        }
+        Hint::RemoveSpaceBeforeDot => {
+            "`f .field` is the accessor function `.field` applied to `f`, which \
+             isn't supported yet; for field access remove the space (`f.field`)"
+                .to_string()
         }
         Hint::SeparateWithSpace => "separate the number and the name with a space".to_string(),
         Hint::IntegerLiteralRange => {
