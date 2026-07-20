@@ -42,10 +42,15 @@ fn run(args: &[&str]) -> Run {
 
 /// Every command name and every section title, for coverage assertions.
 const COMMANDS: &[&str] = &[
-    "init", "build", "run", "watch", "fix", "fmt", "add", "remove", "install", "explain", "lsp",
+    "init", "build", "run", "watch", "fix", "fmt", "add", "remove", "rust", "explain", "lsp",
     "version",
 ];
-const SECTIONS: &[&str] = &["Development", "Foreign-function interface (FFI)", "Tools"];
+const SECTIONS: &[&str] = &[
+    "Development",
+    "Package authoring",
+    "Foreign-function interface (FFI)",
+    "Tools",
+];
 
 #[test]
 fn top_level_help_lists_every_command_and_section() {

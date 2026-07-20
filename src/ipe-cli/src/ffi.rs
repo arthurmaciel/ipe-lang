@@ -1,7 +1,8 @@
-//! The `ipe add` / `ipe install` / `ipe remove` commands and the build-time
-//! FFI seam: interface-module injection + backend emission-input assembly.
+//! The `ipe rust add` / `ipe rust install` / `ipe rust remove` commands and the
+//! build-time FFI seam: interface-module injection + backend emission-input
+//! assembly.
 //!
-//! `ipe add <crate>` runs the `ipe-ffi-inspector` inside the `ipe_sandbox`
+//! `ipe rust add <crate>` runs the `ipe-ffi-inspector` inside the `ipe_sandbox`
 //! bubblewrap jail (fetch posture: network on, everything else confined),
 //! decodes the inspection, and writes the six cache artifacts under
 //! `<project>/.ipe/cache/ffi/rust/`. At build time the driver loads that
@@ -943,7 +944,41 @@ fn add_one(
     Ok(())
 }
 
-/// `ipe add <crate>[@<version>] [--features a,b] [--yes]`.
+/// The `ipe rust` group help, printed when the group is invoked bare.
+const RUST_GROUP_HELP: &str = "\
+ipe rust — manage Rust crates as foreign-function dependencies.
+
+Subcommands:
+  add <crate>[@<version>] [--features a,b] [--yes]  inspect and cache a crate
+  remove <crate>                                    drop a cached crate
+  install [--yes] [--allow-build-scripts]           (re)inspect every [rust.dependencies] crate
+
+Run `ipe rust <subcommand> --help` for a subcommand's options.
+";
+
+/// `ipe rust <add|remove|install> …` — the Rust foreign-function group.
+///
+/// Bare `ipe rust` prints the group help. Every subcommand dispatches to the
+/// existing FFI command body unchanged.
+///
+/// # Errors
+/// [`CliError`] on an unknown subcommand or any subcommand failure.
+pub fn run_rust(rest: &[String]) -> Result<(), CliError> {
+    match rest.split_first() {
+        None => {
+            print!("{RUST_GROUP_HELP}");
+            Ok(())
+        }
+        Some((sub, args)) if sub == "add" => run_add(args),
+        Some((sub, args)) if sub == "remove" => run_remove(args),
+        Some((sub, args)) if sub == "install" => run_install(args),
+        Some((sub, _)) => Err(CliError::UsageOwned(format!(
+            "ipe rust: unknown subcommand {sub:?} (expected add, remove, or install)"
+        ))),
+    }
+}
+
+/// `ipe rust add <crate>[@<version>] [--features a,b] [--yes]`.
 ///
 /// # Errors
 /// [`CliError`] on misuse, a refused inspection, or a cache-write failure.
@@ -958,7 +993,7 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
             "--features" => {
                 let raw = it
                     .next()
-                    .ok_or(CliError::Usage("ipe add: --features needs a value"))?;
+                    .ok_or(CliError::Usage("ipe rust add: --features needs a value"))?;
                 // Parse, don't validate: gate each feature name at the boundary
                 // before it can reach the emitted manifest's `features` array.
                 for feat in raw.split(',') {
@@ -972,13 +1007,13 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
             other if krate.is_none() => krate = Some(other.to_owned()),
             _ => {
                 return Err(CliError::Usage(
-                    "usage: ipe add <crate>[@<version>] [--features a,b] [--yes]",
+                    "usage: ipe rust add <crate>[@<version>] [--features a,b] [--yes]",
                 ));
             }
         }
     }
     let raw = krate.ok_or(CliError::Usage(
-        "usage: ipe add <crate>[@<version>] [--features a,b] [--yes]",
+        "usage: ipe rust add <crate>[@<version>] [--features a,b] [--yes]",
     ))?;
     let spec = CrateSpec::parse(&raw).map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
 
@@ -991,7 +1026,7 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
         print!("[y/N] ");
         let _ = std::io::stdout().flush();
         if !crate::read_yes_no() {
-            return Err(CliError::Usage("ipe add: aborted"));
+            return Err(CliError::Usage("ipe rust add: aborted"));
         }
     }
 
@@ -999,13 +1034,13 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
     add_one(&cache, &spec, &features, allow_build_scripts)
 }
 
-/// `ipe remove <crate>`.
+/// `ipe rust remove <crate>`.
 ///
 /// # Errors
 /// [`CliError`] on misuse or a cache-delete failure.
 pub fn run_remove(rest: &[String]) -> Result<(), CliError> {
     let [raw] = rest else {
-        return Err(CliError::Usage("usage: ipe remove <crate>"));
+        return Err(CliError::Usage("usage: ipe rust remove <crate>"));
     };
     let cache = FfiCache::at_project_root(Path::new("."));
     let slug = ipe_ffi::driver::slugify(raw);
@@ -1016,7 +1051,7 @@ pub fn run_remove(rest: &[String]) -> Result<(), CliError> {
     Ok(())
 }
 
-/// `ipe install [--yes] [--allow-build-scripts]` — (re)inspect every
+/// `ipe rust install [--yes] [--allow-build-scripts]` — (re)inspect every
 /// `[rust.dependencies]` crate in the project's `ipe.toml`, honouring each
 /// entry's version pin and feature list.
 ///
@@ -1031,7 +1066,7 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
             "--allow-build-scripts" => allow_build_scripts = true,
             _ => {
                 return Err(CliError::Usage(
-                    "usage: ipe install [--yes] [--allow-build-scripts]",
+                    "usage: ipe rust install [--yes] [--allow-build-scripts]",
                 ));
             }
         }

@@ -22,6 +22,7 @@ pub mod fmt;
 pub mod help;
 pub mod init;
 mod lsp;
+pub mod pkg;
 pub mod project;
 /// The embedded Ipê standard-library source now lives in the dependency-free
 /// [`ipe_stdlib`] leaf crate so the WebAssembly frontend can share one copy.
@@ -1461,9 +1462,9 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
         Some((cmd, rest)) if cmd == "watch" => run_watch(rest),
         Some((cmd, rest)) if cmd == "explain" => run_explain(rest),
         Some((cmd, rest)) if cmd == "capabilities" => run_capabilities(rest),
-        Some((cmd, rest)) if cmd == "add" => ffi::run_add(rest),
-        Some((cmd, rest)) if cmd == "remove" => ffi::run_remove(rest),
-        Some((cmd, rest)) if cmd == "install" => ffi::run_install(rest),
+        Some((cmd, rest)) if cmd == "rust" => ffi::run_rust(rest),
+        Some((cmd, rest)) if cmd == "add" => pkg::run_add(rest),
+        Some((cmd, rest)) if cmd == "remove" => pkg::run_remove(rest),
         Some((cmd, rest)) if cmd == "fix" => run_fix(rest),
         Some((cmd, rest)) if cmd == "fmt" => fmt::run_fmt(rest),
         Some((cmd, rest)) if cmd == "lsp" => lsp::run_lsp(rest),
