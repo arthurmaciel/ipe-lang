@@ -1,0 +1,158 @@
+//! The frozen Doc IR: a Wadler/Leijen-style document algebra the emitter builds
+//! during its owned-IR walk, so a single deterministic renderer ([`crate::render`])
+//! lays it out to `rustfmt`-clean bytes without a second parse or a subprocess.
+//!
+//! Every token the string-emitter would have produced is carried here as a
+//! [`Doc::Text`] leaf — including every parenthesis. The leaf sequence is a
+//! checkable invariant (the SEAL): `whitespace_normalize(concat(leaves(doc)))`
+//! must equal the whitespace-normalized string the legacy `emit_expr_at` emits,
+//! so the paren-drop / token-drift class of bug is structurally impossible.
+//!
+//! The enum is FROZEN at seven variants. The [`Doc::Chain`] variant exists
+//! because a generic [`Doc::Group`] (all-flat-or-all-break) cannot render a binop
+//! chain's layout — first operator glued to a multiline operand's closing line,
+//! the rest broken one-per-line to a single shared indent. That mechanism is
+//! proven byte-exact against the golden corpus in `render.rs`.
+
+// The Doc IR and renderer are the P0 deliverable; the emit_expr.rs builders that
+// consume them land in P1. Until then the constructors and the SEAL leaf oracle
+// are exercised only by the P0 tests, so their non-test uses are pending.
+#![allow(dead_code, reason = "consumed by the P1 emit_expr.rs Doc builders")]
+
+use std::borrow::Cow;
+
+/// A layout document. Rendered by [`crate::render::render`].
+///
+/// The variants are frozen; downstream builders compose these and never add new
+/// ones. A break candidate is [`Doc::Line`] (a space when flat, a newline plus
+/// indent when broken) or [`Doc::Softline`] (empty when flat).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Doc {
+    /// A leaf token, carried verbatim — including every parenthesis the emitter
+    /// emits. Never a break point.
+    Text(Cow<'static, str>),
+    /// A sequence laid out left to right with no break points of its own.
+    Concat(Vec<Self>),
+    /// A break candidate: a single space when its enclosing group is flat, a
+    /// newline followed by the current indent when the group is broken.
+    Line,
+    /// A zero-width break candidate: empty when flat, a newline plus indent when
+    /// broken. Used where flat layout wants no space (e.g. before a closing
+    /// delimiter on a call arg list).
+    Softline,
+    /// Indent the inner document by `n` columns relative to the current indent.
+    /// Used non-accumulating (`Nest(4, ...)`) for block bodies and arg lists.
+    Nest(usize, Box<Self>),
+    /// A group: rendered flat if the whole group fits the remaining width,
+    /// otherwise every [`Doc::Line`] / [`Doc::Softline`] in it breaks. Used for
+    /// block bodies, call arg lists, and if-branch bodies.
+    Group(Box<Self>),
+    /// A left-associative same-precedence binary-operator run. The renderer lays
+    /// this out with rustfmt's chain mechanism: line-1 packs the maximal
+    /// left-nested prefix that fits the width, then every remaining operator
+    /// breaks one-per-line to a single shared indent (chain-begin-line indent +
+    /// 4), with the sole exception of an operator glued to a multiline operand's
+    /// closing line when it still fits.
+    Chain {
+        /// The operands and their leading operators, in source order. The first
+        /// operand's `leading_op` is `None`.
+        operands: Vec<ChainOperand>,
+    },
+}
+
+/// One operand of a [`Doc::Chain`], with the operator that precedes it (if any).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChainOperand {
+    /// The infix operator immediately before this operand, e.g. `"+"`. `None`
+    /// for the first operand.
+    pub leading_op: Option<Cow<'static, str>>,
+    /// The operand's own document. May itself render multiline (a block, a
+    /// forced-break call), which drives the chain's last-line-glue decision.
+    pub doc: Doc,
+}
+
+impl Doc {
+    /// A text leaf from a static string.
+    pub const fn text(s: &'static str) -> Self {
+        Self::Text(Cow::Borrowed(s))
+    }
+
+    /// A text leaf from an owned string.
+    pub const fn owned(s: String) -> Self {
+        Self::Text(Cow::Owned(s))
+    }
+
+    /// A concatenation of documents.
+    pub const fn concat(docs: Vec<Self>) -> Self {
+        Self::Concat(docs)
+    }
+
+    /// A group (flat-if-fits-else-break).
+    pub fn group(inner: Self) -> Self {
+        Self::Group(Box::new(inner))
+    }
+
+    /// Indent `inner` by `n` columns.
+    pub fn nest(n: usize, inner: Self) -> Self {
+        Self::Nest(n, Box::new(inner))
+    }
+
+    /// Append every text leaf of this document, in order, to `out`. This is the
+    /// SEAL oracle: `concat(leaves(doc))` whitespace-normalizes to the legacy
+    /// emitter's string. Break candidates ([`Doc::Line`] / [`Doc::Softline`])
+    /// contribute a single space so adjacency is preserved under normalization.
+    pub fn collect_leaves(&self, out: &mut String) {
+        match self {
+            Self::Text(s) => out.push_str(s),
+            Self::Line => out.push(' '),
+            Self::Softline => {}
+            Self::Concat(docs) => {
+                for d in docs {
+                    d.collect_leaves(out);
+                }
+            }
+            Self::Nest(_, inner) | Self::Group(inner) => inner.collect_leaves(out),
+            Self::Chain { operands } => {
+                for (i, op) in operands.iter().enumerate() {
+                    if let Some(o) = &op.leading_op {
+                        if i > 0 {
+                            out.push(' ');
+                        }
+                        out.push_str(o);
+                        out.push(' ');
+                    }
+                    op.doc.collect_leaves(out);
+                }
+            }
+        }
+    }
+
+    /// The whitespace-normalized leaf string: runs of whitespace collapsed to a
+    /// single space, trimmed. Two documents with the same token sequence
+    /// (ignoring layout) normalize equal — this is the SEAL comparison key.
+    pub fn normalized_leaves(&self) -> String {
+        let mut raw = String::new();
+        self.collect_leaves(&mut raw);
+        whitespace_normalize(&raw)
+    }
+}
+
+/// Collapse every run of ASCII whitespace to a single space and trim the ends.
+/// Token adjacency (not layout) is what the SEAL checks, so this is the
+/// canonical form both the Doc leaves and the legacy emitter output reduce to.
+pub fn whitespace_normalize(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_ws = false;
+    for c in s.chars() {
+        if c.is_ascii_whitespace() {
+            in_ws = true;
+        } else {
+            if in_ws && !out.is_empty() {
+                out.push(' ');
+            }
+            in_ws = false;
+            out.push(c);
+        }
+    }
+    out
+}

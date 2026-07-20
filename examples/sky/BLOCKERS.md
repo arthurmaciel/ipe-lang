@@ -265,6 +265,40 @@ raises `unexpected cfg`. The CI examples sweep reports `cargo warnings (past
 #![allow]): 0 total`, and a local emitted-crate build of 01-hello-world shows 0
 warnings. No open work.
 
+### Native Rust formatter replacing the per-file `rustfmt` subprocess (P0 LANDED)
+Status: P0 byte-green; P1–P3 open. Motivation (PRINCIPLES order): (1) SOUNDNESS
+— structural token-preservation, every emitted token carried as a Doc leaf so
+the paren-drop / token-drift class is unrepresentable; (2) SPEED — kill the
+per-file `rustfmt` subprocess fork on the native emit path; (3) STABILITY —
+emitted Rust fmt-clean by construction, so the CI `cargo fmt` gate can never red
+on emitted output.
+
+P0 (make-or-break, LANDED): `src/compiler/backend/rust/src/doc.rs` (frozen
+7-variant `Doc` enum: `Text`/`Concat`/`Line`/`Softline`/`Nest`/`Group`/`Chain`,
+plus the SEAL leaf oracle) and `src/compiler/backend/rust/src/render.rs` (the
+deterministic renderer). The binop-chain mechanism was derived EMPIRICALLY from
+`rustfmt 1.9.0 --edition 2024 --style-edition 2024` and is proven byte-exact
+through the renderer against the panel probe set: line-1 max-fit (`stair`),
+unconditional tiny-tail break past the boundary (`stair2` — a tiny operand that
+trivially fits still breaks), forced-break-call glue (`callbreak`), and the
+op-after-multiline-operand transition (`hyp` — a single-line operand after a
+multiline one ends the glue region, matching `param_patterns`'s `+ sum_pair`
+break after the single-line `ignore_arg`). The Chain node is proven necessary (a
+generic `Group` cannot render glue+break-in-one-chain). The full `param_patterns`
+golden (the real 9-operand chain) reproduces byte-identically from the flat
+parenthesized emitter input through real `rustfmt`, confirming the ground truth.
+`cargo test -p ipe_backend_rust --lib p0_tests` = 7/7; `cargo clippy` clean;
+`cargo build --target wasm32-unknown-unknown` green (the new modules use no
+`std::process`); existing `golden_param_patterns` stays 3/3 (the modules are
+additive — the legacy `run_rustfmt` path is unchanged).
+
+Open (P1–P3, ~6 engineer-weeks): P1 migrate `emit_expr.rs` (520 sites / 31 Expr
+variants) to Doc builders, keeping the full golden corpus byte-green
+incrementally; P2 the statement-position emit surface + framework `emit_*`
+modules (incl. `emit_types`' `Box<dyn Fn + Send + Sync + 'static>` bound-wrap);
+P3 thread `RustFmtConfig` through `EmitCtx`, skip `run_rustfmt` when native, force
+native on wasm32, delete the subprocess from the native path.
+
 ### FFI dep `features`/transitive `name` reach the emitted Cargo.toml ungated (RESOLVED)
 Status: RESOLVED. A sibling of the dep-`version` injection fix. The version
 splice was already closed by `CrateVersion`, but two other values on the SAME
