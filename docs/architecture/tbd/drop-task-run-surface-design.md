@@ -1,11 +1,8 @@
-# Dropping `Task.run` + `Task.perform` from the Ipê surface (#128)
+# Dropping `Task.run` + `Task.perform` from the Ipê surface
 
-> Backlog item #128 (Post-completion): "Drop `Task.run` + `Task.perform`
-> from the Ipê surface (#116 companion). Departure — first consumer of
-> the CI example-patch-queue." Spec+plan written 2026-07-10.
 > Design-only; no code has changed.
 >
-> **One-line decision:** after #116's auto-run entry contract lands,
+> **One-line decision:** after the auto-run entry contract lands,
 > the two *surface* bindings `Task.run` and `Task.perform` are removed
 > from the resolver with a dedicated removed-surface diagnostic +
 > `ipe fix` codemod; the **internal** `task_run` runtime kernel and the
@@ -34,7 +31,7 @@ surface bindings only remain useful for (b) — synchronous mid-flow
 forcing — which is exactly the escape hatch that lets effectful code
 masquerade as pure and that Elm deliberately does not offer.
 
-Current inventory in the Rust port (all confirmed 2026-07-10):
+Current inventory in the Rust port:
 
 | Layer | Location |
 |---|---|
@@ -52,7 +49,7 @@ Corpus pressure: 95 occurrences across 35 files in `../sky/examples/`
 `tests/golden/` corpus (`http_stream_id` 4,
 `wildcard_lambda_pany` 2, `poly_task_on_error` 1). This is
 why #128 is "the first consumer of the CI example-patch-queue"
-(`docs/divergences-from-sky.md` §6.9, accepted 2026-07-05).
+(`docs/divergences-from-sky.md` §6.9).
 
 ## Decision
 

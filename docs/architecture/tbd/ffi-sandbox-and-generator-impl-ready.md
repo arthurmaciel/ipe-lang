@@ -73,7 +73,7 @@ malicious transitive dep from executing when a teammate merely builds the repo.
   `rust-toolchain.toml`, no `Cargo.lock`** (verified) — its own build is
   non-reproducible and network-dependent.
 
-### 1.3 Host capability probe (verified on this host, 2026-07-02)
+### 1.3 Host capability probe
 
 ```
 bwrap    /usr/bin/bwrap        unshare  /usr/bin/unshare

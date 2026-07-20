@@ -1,6 +1,6 @@
 # Progressive-Development Pipeline — Algorithm Spec
 
-**Version: v4 (2026-07-07)** — living document; bump the version + add a Changelog
+**Version: v5** — living document; bump the version + add a Changelog
 row on every tuning change. The numbers below are *starting points* chosen from
 the cost model, to be fine-tuned against measured land-rates and wall-clock.
 
@@ -256,7 +256,7 @@ autopilot (until 2 dry passes = converged):
 
 ## Changelog
 
-- **v5 (2026-07-07)** — filed §3.1 **parallel guardian** (parallel author, serial
+- **v5** — filed §3.1 **parallel guardian** (parallel author, serial
   gate; flag-gated `GUARDIAN_LANES`, mock-tested, supervised rollout). Records the
   batch of shipped changes it builds on: guardian E2BIG fix (design→file, not argv);
   **design-reuse on retry** (attempt-1 saves the plan, a retry reuses it + gets the
@@ -266,12 +266,12 @@ autopilot (until 2 dry passes = converged):
   `-Zthreads=8` + mold** (parallel frontend speeds clippy + test builds, mold speeds
   link); clippy `--no-deps --jobs 4`, `--all-targets` dropped; nightly clippy drift
   reconciled (2 `pedantic` fixes) so the nightly gate is clean, not permanently red.
-- **v4 (2026-07-07)** — added the status-header design (progdev-status.txt + watch.sh fixed header + heartbeat markers): task / type / start / phase / model / attempt, all script-known.
-- **v3 (2026-07-07)** — filed the per-lane failure ownership rule (clippy-p /
+- **v4** — added the status-header design (progdev-status.txt + watch.sh fixed header + heartbeat markers): task / type / start / phase / model / attempt, all script-known.
+- **v3** — filed the per-lane failure ownership rule (clippy-p /
   ipe-verify → Sonnet iterates in-lane, cap ~3; review REJECT → re-design as a
   fresh attempt, never a Sonnet patch). Added the liveness-UX item (HH:MM
   timestamps + a spinner/pulse around silent gates).
-- **v2 (2026-07-07)** — mechanical author lanes **2→3** (→4 if land-rate holds),
+- **v2** — mechanical author lanes **2→3** (→4 if land-rate holds),
   mechanical batch **2–4→3–4**: mechanical batches union-reconcile at high p, so
   more lanes → bigger batches → the serial gate amortizes over more items
   (throughput scales with lanes — the earlier "gate-bound at 2" was wrong for the
@@ -280,7 +280,7 @@ autopilot (until 2 dry passes = converged):
   concurrency + 47 GB). Guardian resume attempts **3→2**: 3rd try has diminishing
   returns on review-dominated failures → escalate to phase-4 instead. Guardian
   lane cap stays low — for p^k + conflict + attribution reasons, NOT disk.
-- **v1 (2026-07-07)** — initial spec. Derived from the cost model + the observed
+- **v1** — initial spec. Derived from the cost model + the observed
   ~8–12→~1 `cargo test` reduction, review-before-gate (failures are review-
   dominated), sccache-backed per-lane `clippy -p` + ipe-verify, small
   attributable integration batches, mechanical-vs-guardian differentiation.

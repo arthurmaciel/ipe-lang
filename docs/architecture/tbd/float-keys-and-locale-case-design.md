@@ -1,9 +1,6 @@
-# Full Float Set/Dict keys (lifting IPE-L0117) + locale-correct case mapping (D.3)
+# Full Float Set/Dict keys (lifting IPE-L0117) + locale-correct case mapping
 
-> Backlog item D.3 (Longer-horizon): "Full floating-point Set/Dict keys
-> (ordered-float) + locale-correct case mapping. Lifts IPE-L0117."
-> Spec+plan written 2026-07-10. Two independent sub-designs share this
-> doc because the backlog row couples them; they are separately
+> Two independent sub-designs share this doc; they are separately
 > landable. Design-only; no code has changed.
 >
 > **One-line decisions:** (a) key-position `Float` lowers to

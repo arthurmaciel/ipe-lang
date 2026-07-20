@@ -2,17 +2,14 @@
 
 **Status:** design-ahead. Tier-2 FFI is implemented LAST per the roadmap
 (`ROADMAP.md` §B); nothing in this doc executes now.
-**Date:** 2026-07-04.
 
-> **GOAL CORRECTION (coordinator, 2026-07-04; premise corrected by the
-> async-bridge conciliation, 2026-07-04) — supersedes this doc's scope +
-> P-ordering.** The goal is fully-automatic, UNIVERSAL (every crate) Ipê→Rust
+> **GOAL CORRECTION (supersedes this doc's original scope + P-ordering).** The goal is fully-automatic, UNIVERSAL (every crate) Ipê→Rust
 > FFI. **The acceptance metric is `../sky/examples/rust/skyshop-rs` running with
 > ZERO manual shims for firestore, firebase, and stripe, plus DCE of unused FFI
 > functions/values** (bind/emit only the used subset; stripe visible surface =
 > 20,358 symbols post-#89, 3,534 bound). CORRECTED PREMISE: the reference did
 > NOT give up on async — it binds foreign `async fn` as `Task Error a` natively
-> since #44 (2026-06-23), binds firestore 0.49 direct and shim-free (fixture
+> binds firestore 0.49 direct and shim-free (fixture
 > 104), and proved every stripe mechanism on fixtures 93-96 (WALL-I/J/K); the
 > skyshop shims are a pre-#44 fossil. We PORT that campaign and FINISH its two
 > open ends — the never-run real async-stripe E2E build, and the never-done
@@ -41,7 +38,7 @@ The single most important learning: **the reference already does exactly what
 our premise predicted — it binds RUST CRATES directly, shim-free, via a
 rustdoc-JSON inspector + Haskell generator, with a hard no-fallback wall
 between the Go-FFI and Rust-FFI worlds.** Our banked spec was written against
-the reference's state as of ~2026-07-02 and is remarkably current; the
+the reference's state at the time of writing and is remarkably current; the
 reference completing does not invalidate it — it CONFIRMS its architecture
 and sharpens four things (§7):
 
@@ -60,11 +57,7 @@ and sharpens four things (§7):
    reference's own `runtime-rust/src/sky_runtime/ffi_polyfills.rs` contains
    the same two panicking polyfills with the same rationale. The only thing
    it diverges from is the Go runtime's `%v`-string registry.
-4. ~~The reference's honest scope is ours too: 10 pure/sync crates proven
-   shim-free; async SDKs remain hand-shimmed even in the completed
-   reference.~~ **STALE — corrected 2026-07-04 by the async-bridge
-   conciliation** (`async-ffi-bridge-design.md`, verified in-repo): the
-   reference binds async natively since #44 — firestore 0.49 direct +
+4. The reference binds async natively — firestore 0.49 direct +
    shim-free (fixture 104, `IPE_DCE=0` residual 124 → 10), all stripe
    mechanisms proven on fixtures 93-96. `examples/rust/skyshop-rs` still
    *ships* its three shim crates, but that is an unfinished migration
@@ -217,7 +210,7 @@ feat/runtime-rust v0.17.2-1204 (`c818e081`).
 
 ---
 
-## 2. Our current assets (audited 2026-07-04)
+## 2. Our current assets
 
 | Asset | State |
 |---|---|
@@ -396,7 +389,7 @@ here + in `docs/divergences-from-sky.md` when implemented.
 | Dynamic `Ffi.callTask`/`callPure` | Rust runtime panics by design (`ffi_polyfills.rs:53-61`) | identical (vendored) | **adopt** — reclassified from "our divergence" to reference parity |
 | DCE of unused bindings | `FfiRef` reachability (`Dce.hs:19-22`) + sentinel-sliced `_bindings.rs` | same (S4, conservative-keep text slicing on BEGIN/END sentinels) | **adopt** |
 | Cargo dep wiring | exact locked version + effective features from PkgInfo (`FfiGen.hs:186-201`) | same; resolve `(ident, canonical_name, version)` triple, never guess `_`→`-`, never `"*"` | **adopt** |
-| Async SDKs | binds natively since #44 (firestore direct, fixture 104; stripe mechanisms proven on fixtures 93-96); skyshop-rs shims are an unfinished migration | port the async emission + finish the two open ends (real stripe E2E, skyshop de-shim) — see `async-ffi-bridge-design.md` | **adopt + finish** (row corrected 2026-07-04) |
+| Async SDKs | binds natively (firestore direct, fixture 104; stripe mechanisms proven on fixtures 93-96); skyshop-rs shims are an unfinished migration | port the async emission + finish the two open ends (real stripe E2E, skyshop de-shim) — see `async-ffi-bridge-design.md` | **adopt + finish** |
 
 ## 6. Milestone plan
 
@@ -437,8 +430,7 @@ a new leaf crate with no workspace-target contention beyond the shared
 
 ## 7. Reconciliation with the banked #39 suite
 
-The suite was banked against the reference state of ~2026-07-02 — i.e.
-AFTER the reference's 10th shim-free crate landed (2026-06-28). It is
+The suite was banked against the reference state after the 10th shim-free crate landed. It is
 therefore mostly CONFIRMED, not obsoleted. Explicit dispositions:
 
 1. **Confirmed, now with completed-reference evidence:** direct Rust-crate

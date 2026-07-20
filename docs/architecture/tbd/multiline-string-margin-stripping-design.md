@@ -1,9 +1,6 @@
-# Multiline-string margin stripping — anchor at the first content column (#133)
+# Multiline-string margin stripping — anchor at the first content column
 
-> Backlog item #133 (Post-completion): "Multiline-string margin
-> stripping (anchor = first string character's column). Departure —
-> output-changing; records an oracle divergence per patch class."
-> Spec+plan written 2026-07-10. Design-only; no code has changed.
+> Design-only; no code has changed.
 >
 > **One-line decision:** the lexer computes the anchor column A (the
 > column of the first non-newline content character of a `"""…"""`
@@ -38,7 +35,7 @@ indentation handling (it also barely has multiline strings), and the
 reference Ipê preserves the body verbatim — so this is a deliberate,
 output-changing Ipê departure.
 
-### Current behaviour (both compilers, confirmed 2026-07-10)
+### Current behaviour (both compilers)
 
 - **Ipê lexer:** `crates/sky_parse/src/lexer.rs:478-509`
   (`lex_triple_string`) returns `Tok::TripleStr(String)` with the RAW

@@ -1,8 +1,5 @@
 # Standard-library behaviour audit against Elm semantics — methodology (D.2)
 
-> Backlog item D.2 (Longer-horizon): "Standard-library behaviour audit
-> against Elm semantics (JSON key order, integer-decoder strictness,
-> float formatting, null/oneOf/nullable)." Plan written 2026-07-10.
 > This is an **audit methodology + scope + triage contract**, not a
 > pre-baked findings list — the findings are the audit's own output,
 > produced by whoever executes this plan. Design-only; no code changed.
@@ -21,7 +18,7 @@ already flags JSON semantics as UNAUDITED. D.2 is the systematic pass
 that turns "we think we match Go and haven't checked Elm" into a
 per-behaviour, test-pinned verdict ledger.
 
-### Seed corners (verified 2026-07-10 — these calibrate the method, they do not bound the scope)
+### Seed corners (calibrate the method; do not bound the scope)
 
 | Behaviour | Ipê (file:line) | Go reference | Elm | Status |
 |---|---|---|---|---|
@@ -114,7 +111,7 @@ For each behaviour probed:
 1. `docs/architecture/stdlib-elm-behaviour-audit-<date>.md` — the
    findings ledger: one row per probe (module, behaviour, three-column
    result, verdict, artifact link). Structure mirrors
-   `principles-audit-2026-07-09.md`'s findings table.
+   a per-row findings table.
 2. The probe corpus: `tests/golden/d2_*` goldens +
    `runtime/tests/*_elm_audit.rs` unit fixtures, all green and wired
    into the normal test run (no special CI lane).

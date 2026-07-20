@@ -1,6 +1,6 @@
 # Ipe.Error — conciliated module design
 
-> **⚠️ CORRECTION (impl-guardian gate, verified, 2026-07-03).** Steps 1–2's
+> **⚠️ CORRECTION (impl-guardian gate, verified).** Steps 1–2's
 > PRIMARY approach — "Ipe.Error as a *compiled Ipê source module*, helpers
 > stay pure Ipê, no kernels" — is **INFEASIBLE at HEAD**: nothing calls
 > `ipe::stdlib::source` (embedded `.ipe` are parse-tested only; `build`/

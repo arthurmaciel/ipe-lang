@@ -1,12 +1,13 @@
 # Incremental compilation and the developer loop for ipê
 
-> **Status:** authoritative design spec (design-only — no implementation
-> commitment beyond the locked decisions below). Supersedes the memory note
+> **Status:** authoritative design spec. Supersedes the memory note
 > `incremental-compilation-salsa.md` for scope purposes.
-> **Implementation status:** Phase 1 (salsa db + `SourceFile`/`SourceRoot`
-> inputs + `parse`/`imports` tracked queries on the one-shot `ipe` path)
-> landed 2026-07-11 — see
-> `docs/architecture/salsa-incremental-compilation-2026-07-11.md`.
+> **Landed:** `ipe_db` salsa database (`src/compiler/db/`) with
+> `SourceFile`/`SourceRoot` inputs, `parse`/`imports` tracked queries,
+> and the clean-vs-incremental parity gate.
+> **Remaining:** `ipe watch` daemon (Q2), hot-reload L0+ packaging (Q3),
+> emitted-crate split for fast relink (Q4), cross-session `.ipe/lowered/`
+> persistence (Q1b).
 >
 > **Principles order (hard):** security > correctness > soundness > efficiency
 > > completeness > readability. Two fundamental rules govern every decision:
@@ -310,7 +311,7 @@ temptation to firewall metadata.
 > call-graph-shape firewall as a separately-audited **post-v1** escalation.
 > User to confirm whether v1 must include the optimisation or may defer it.
 >
-> **LOCKED (user, 2026-07-02): DEFER.** v1 ships the conservative "re-run
+> **LOCKED: DEFER.** v1 ships the conservative "re-run
 > whole-program reachability every build" floor (sound by construction). The
 > call-graph-shape firewall is a separately-audited post-v1 escalation, not a
 > v1 requirement.
@@ -381,7 +382,7 @@ type-checked) and the last-good binary keeps serving.
 > risk to a whole-directory wipe on upgrade. Adopt Option A only if the team
 > wants the strictest "restart clears all doubt" posture for v1. User to pick.
 >
-> **LOCKED (user, 2026-07-02): OPTION B.** Persist per-module lowered IR to
+> **LOCKED: OPTION B.** Persist per-module lowered IR to
 > `.ipe/lowered/`, content-addressed over the whole-project key surface
 > (module identity + resolved import targets + emitted `mod` list + app-crate
 > `Cargo.toml` hash), behind a version-epoch directory prefix (a compiler
@@ -749,7 +750,7 @@ and the `data-sky-eval` ban are untouched at every level.
 > release gate — so the hot-reload substrate can never "lie" (dev/prod
 > divergence). User to set the roadmap priority.
 >
-> **LOCKED (user, 2026-07-02): POSITION A (minimalist).** The interpreter tier
+> **LOCKED: POSITION A (minimalist).** The interpreter tier
 > is justified by other roadmap goals (REPL, WASM/portability); interpreter-tier
 > hot-reload (L1/L2) is a beneficiary once it exists, NOT on the near-critical
 > path. L0+ ships first and already crosses the perceptual "immediate" threshold.

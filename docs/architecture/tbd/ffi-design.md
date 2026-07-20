@@ -1,6 +1,6 @@
 # Ipê → Rust FFI — architecture (design-with-it-in-mind)
 
-> **Status:** standing design constraint. Written 2026-06-27.
+> **Status:** standing design constraint.
 > **Directive:** develop the Ipê Rust compiler *with Ipê→Rust FFI in mind* — the
 > pipeline, IR, type system, backend, and Cargo emission must accommodate FFI from
 > the start, even though FFI itself is implemented at a later milestone.

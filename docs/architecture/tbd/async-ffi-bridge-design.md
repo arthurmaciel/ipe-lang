@@ -1,10 +1,9 @@
 # Async-FFI Auto-Bridge — AUTHORITATIVE design (conciliation of the double-swarm)
 
-> **Status:** the ONE design of record for the async-FFI auto-bridge, produced
-> 2026-07-04 by conciliating the two swarm arms (a reference-blind
-> first-principles arm and a reference-mining arm). Supersedes both for
-> implementation purposes; the two swarm-arm inputs are preserved in git
-> history. Amends the P-plan of
+> **Status:** the ONE design of record for the async-FFI auto-bridge,
+> produced by conciliating a reference-blind first-principles arm and a
+> reference-mining arm. Supersedes both for implementation purposes;
+> the two swarm-arm inputs are preserved in git history. Amends the P-plan of
 > `ffi-rust-subsystem-design.md` (§9 below re-slots its milestones).
 >
 > **Conciliation discipline applied:** faithful-port DEFAULT — where the
@@ -14,8 +13,8 @@
 > recorded (§8) per the sanctioned-divergence policy and belongs in
 > `docs/divergences-from-sky.md` when implemented.
 >
-> **Corrected premise (verified in-repo 2026-07-04):** the reference DOES bind
-> async natively since #44 (2026-06-23) — firestore 0.49 binds direct and
+> **Corrected premise (verified in-repo):** the reference DOES bind
+> async natively — firestore 0.49 binds direct and
 > shim-free (fixture `104-ffi-owned-query-builder`), every stripe mechanism is
 > proven on synthetic fixtures 93/94/95/96 (WALL-I/J/K). The skyshop-rs shims
 > are a pre-#44 fossil. The reference left exactly TWO ends open: (1) the real

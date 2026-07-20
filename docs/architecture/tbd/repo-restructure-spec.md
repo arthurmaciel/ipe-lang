@@ -48,7 +48,7 @@ src/
 ```
 `crates/` and `runtime/` are removed after their contents move.
 
-### Naming decisions (confirmed 2026-07-16)
+### Naming decisions
 - **`src/ipe-cli`** (was `src/app`) — explicit + unequivocal; it is the `ipe`
   CLI binary.
 - **`src/runtime/rust/`** — the `/rust/` level is intentional: other backends +

@@ -1,8 +1,7 @@
 # Task combinators — the three-axis taxonomy
 
-> Coordinator-ratified design (2026-07-05). Governs the Task composition
-> surface; `parallel2..5` is a post-parity addition (#131), `do` is Idea 7
-> (deferred post-parity). Everything else is shipped.
+> Governs the Task composition surface; `parallel2..5` is a post-parity
+> addition, `do` is deferred post-parity. Everything else is shipped.
 
 Three orthogonal axes classify every way of combining Tasks:
 
@@ -67,7 +66,7 @@ special case.)
 
 ## Considered and rejected: a "parallel do"
 
-A `do`-like block with concurrent semantics was considered (2026-07-05) in
+A `do`-like block with concurrent semantics was considered in
 two forms, both rejected:
 
 - **Implicit** (Haskell `ApplicativeDo` / Haxl style — the compiler
@@ -77,7 +76,7 @@ two forms, both rejected:
   the outside world. Implicit parallelisation would silently race
   log-before-charge-shaped code that reads as sequential. Effect order in a
   `do` block must be exactly reading order, always.
-- **Explicit — ACCEPTED as `parallelDo` (revised 2026-07-05),** replacing
+- **Explicit — ACCEPTED as `parallelDo`,** replacing
   the `parallel2..5` function family. The construct is sound because
   independence is a SCOPING rule, not a lint: bind RHSs elaborate in the
   *outer* scope only, so binds are not in scope for each other —

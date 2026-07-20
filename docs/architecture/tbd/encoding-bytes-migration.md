@@ -1,10 +1,10 @@
 # Encoding / Bytes migration — authoritative spec
 
-Status: APPROVED (guardian-synthesised). Task #55. Not yet implemented.
-Verified against HEAD 2026-07-03 (encoding.rs, jwt.rs, email.rs, compression.rs,
+Status: APPROVED (guardian-synthesised). Not yet implemented.
+Verified against HEAD (encoding.rs, jwt.rs, email.rs, compression.rs,
 ws_client.rs, server.rs, crates/sky_types/src/constrain.rs).
 
-> **SCOPE CORRECTION (2026-07-03, gap-1 enumeration before impl).** The panel
+> **SCOPE CORRECTION (gap-1 enumeration before impl).** The panel
 > reasoned partly against the UPSTREAM `sky-stdlib/` tree. In the ipe PORT
 > (`crates/ipe/stdlib/`) there is **no `Compression.ipe`, `Email.ipe`, or
 > `WebSocket.ipe`** — those modules are NOT ported yet, so they have no Ipê-facing

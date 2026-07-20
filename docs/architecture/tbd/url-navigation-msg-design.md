@@ -1,8 +1,6 @@
-# URL navigation as a Msg — `onNavigate` + `page`-field demotion (#155)
+# URL navigation as a Msg — `onNavigate` + `page`-field demotion
 
-> Backlog item #155 (Post-completion): "Route URL changes to a Msg (Elm
-> `Browser.application` parity), demote the magic `page` field to sugar."
-> Spec+plan written 2026-07-10. Design-only; no code has changed.
+> Design-only; no code has changed.
 >
 > **One-line decision:** add the reference's optional
 > `onNavigate : page -> msg` cfg field to `Live.app` (row-poly absorbed,
