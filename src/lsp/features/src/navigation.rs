@@ -533,9 +533,10 @@ mod tests {
         let refs = find_references(&db, root, entry, &["Helper".to_owned()], "three");
 
         assert_eq!(refs.len(), 1, "expected 1 reference, got: {refs:?}");
-        assert_eq!(refs[0].module, vec!["Main".to_owned()]);
-        let lo = refs[0].span.lo as usize;
-        let hi = refs[0].span.hi as usize;
+        let first = refs.first().expect("one reference");
+        assert_eq!(first.module, vec!["Main".to_owned()]);
+        let lo = first.span.lo as usize;
+        let hi = first.span.hi as usize;
         assert_eq!(MAIN.get(lo..hi), Some("three"), "span covers identifier");
     }
 }

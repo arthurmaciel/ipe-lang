@@ -28,6 +28,21 @@ use ipe_diagnostics::Span;
 
 use crate::offset::{PositionEncoding, offset_to_position};
 
+/// The salsa database view a quick-fix reads from.
+///
+/// Bundles the database, the source root, and the build's entry file so the
+/// action signatures stay readable — they otherwise thread the same three
+/// values through every helper.
+#[derive(Clone, Copy)]
+pub struct DbView<'a> {
+    /// The salsa database snapshot.
+    pub db: &'a IpeDatabase,
+    /// The compilation's source root.
+    pub root: SourceRoot,
+    /// The build's entry file (the module `typecheck` is rooted at).
+    pub entry: ipe_db::SourceFile,
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -39,9 +54,7 @@ use crate::offset::{PositionEncoding, offset_to_position};
 /// `text` is the current source text of the document.
 #[must_use]
 pub fn code_actions(
-    db: &IpeDatabase,
-    root: SourceRoot,
-    entry: ipe_db::SourceFile,
+    view: DbView<'_>,
     module: &[String],
     uri: &Url,
     range: Range,
@@ -49,7 +62,7 @@ pub fn code_actions(
     text: &str,
     encoding: PositionEncoding,
 ) -> Vec<CodeActionOrCommand> {
-    let _ = (db, root, entry); // reserved for richer fixes using the type env
+    let DbView { db, root, .. } = view;
     let files = root.files(db);
     let Some(&_file) = files.get(module) else {
         return Vec::new();
@@ -74,20 +87,17 @@ pub fn code_actions(
         match code.as_str() {
             "IPE-N0001" => {
                 // Unused import — remove the line containing this diagnostic.
-                if let Some(action) =
-                    remove_line_action(uri, diag, text, "Remove unused import", encoding)
-                {
-                    actions.push(CodeActionOrCommand::CodeAction(action));
-                }
+                let action = remove_line_action(uri, diag, text, "Remove unused import", encoding);
+                actions.push(CodeActionOrCommand::CodeAction(action));
             }
             "IPE-N0004" => {
                 // Missing type annotation — insert the annotation.
                 // The diagnostic message carries the inferred type in the form
                 // `missing type annotation for `name`: Type`. We extract the
                 // type string and synthesise the edit.
-                if let Some(action) = add_type_annotation_action(
-                    db, root, entry, module, uri, diag, text, encoding,
-                ) {
+                if let Some(action) =
+                    add_type_annotation_action(view, module, uri, diag, text, encoding)
+                {
                     actions.push(CodeActionOrCommand::CodeAction(action));
                 }
             }
@@ -114,7 +124,7 @@ fn remove_line_action(
     text: &str,
     title: &str,
     encoding: PositionEncoding,
-) -> Option<CodeAction> {
+) -> CodeAction {
     let line = diag.range.start.line as usize;
     // Byte span of the full line including its trailing '\n'.
     let (line_start, line_end) = line_byte_range(text, line);
@@ -126,7 +136,7 @@ fn remove_line_action(
     };
     let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
     changes.insert(uri.clone(), vec![edit]);
-    Some(CodeAction {
+    CodeAction {
         title: title.to_owned(),
         kind: Some(CodeActionKind::QUICKFIX),
         diagnostics: Some(vec![diag.clone()]),
@@ -139,15 +149,13 @@ fn remove_line_action(
         is_preferred: Some(true),
         disabled: None,
         data: None,
-    })
+    }
 }
 
 /// Quick-fix that inserts a type annotation above the binding named in the
 /// diagnostic message. Extracts the name and inferred type from the message.
 fn add_type_annotation_action(
-    db: &IpeDatabase,
-    root: SourceRoot,
-    entry: ipe_db::SourceFile,
+    view: DbView<'_>,
     module: &[String],
     uri: &Url,
     diag: &Diagnostic,
@@ -157,12 +165,13 @@ fn add_type_annotation_action(
     // Try to extract name + type from the solved type environment.
     // Diagnostic range points at the name token — resolve it via the parse
     // tree to find the line the annotation should precede.
+    let DbView { db, root, entry } = view;
     let files = root.files(db);
     let &file = files.get(module)?;
     let parsed = ipe_db::parse(db, file).ok()?;
     let byte = {
         let lo = diag.range.start;
-        crate::offset::position_to_offset(text, lo, encoding) as u32
+        u32::try_from(crate::offset::position_to_offset(text, lo, encoding)).unwrap_or(u32::MAX)
     };
     // Find which top-level binding spans this byte.
     let interner = db.interner().lock();
@@ -171,13 +180,8 @@ fn add_type_annotation_action(
     for value in &parsed.values {
         let name_span = value.value.name.span;
         if name_span.lo <= byte && byte < name_span.hi {
-            found_name = interner
-                .resolve(value.value.name.value)
-                .map(str::to_owned);
-            annotation_line = Some(
-                offset_to_position(text, name_span.lo as usize, encoding)
-                    .line,
-            );
+            found_name = interner.resolve(value.value.name.value).map(str::to_owned);
+            annotation_line = Some(offset_to_position(text, name_span.lo as usize, encoding).line);
             break;
         }
     }
@@ -252,13 +256,11 @@ type _SpanAlias = Span;
 #[cfg(test)]
 mod tests {
     use ipe_db::{IpeDatabase, ModuleOrigin, SourceFile, SourceRoot};
-    use lsp_types::{
-        Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, Url,
-    };
+    use lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, Url};
 
     use crate::offset::PositionEncoding;
 
-    use super::code_actions;
+    use super::{DbView, code_actions};
 
     fn file(db: &IpeDatabase, path: &[&str], text: &str) -> SourceFile {
         SourceFile::new(
@@ -319,9 +321,11 @@ mod tests {
         };
         let diag = diag_at(2, "IPE-X9999");
         let actions = code_actions(
-            &db,
-            root,
-            entry,
+            DbView {
+                db: &db,
+                root,
+                entry,
+            },
             &["Main".to_owned()],
             &uri,
             range,
@@ -335,8 +339,7 @@ mod tests {
     #[test]
     fn remove_import_action_deletes_the_import_line() {
         let db = IpeDatabase::new();
-        let src =
-            "module Main exposing (main)\n\nimport Unused\n\nmain : Int\nmain =\n    42\n";
+        let src = "module Main exposing (main)\n\nimport Unused\n\nmain : Int\nmain =\n    42\n";
         let entry = file(&db, &["Main"], src);
         let root = root_of(&db, &[(&["Main"], entry)]);
         let uri = Url::from_file_path("/fake/Main.ipe").unwrap();
@@ -352,9 +355,11 @@ mod tests {
         };
         let diag = diag_at(2, "IPE-N0001");
         let actions = code_actions(
-            &db,
-            root,
-            entry,
+            DbView {
+                db: &db,
+                root,
+                entry,
+            },
             &["Main".to_owned()],
             &uri,
             range,
@@ -363,9 +368,11 @@ mod tests {
             PositionEncoding::Utf16,
         );
         assert_eq!(actions.len(), 1, "one action for unused import");
-        let lsp_types::CodeActionOrCommand::CodeAction(action) = &actions[0] else {
-            panic!("expected CodeAction");
-        };
+        let action = actions.into_iter().find_map(|a| match a {
+            lsp_types::CodeActionOrCommand::CodeAction(action) => Some(action),
+            lsp_types::CodeActionOrCommand::Command(_) => None,
+        });
+        let action = action.expect("the single action is a CodeAction");
         assert_eq!(action.title, "Remove unused import");
         let edit = action
             .edit

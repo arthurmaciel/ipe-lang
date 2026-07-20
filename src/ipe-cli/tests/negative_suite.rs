@@ -14,6 +14,7 @@
 //! oracle / `IPE_E2E` gate. Each test returns early when the embedded runtime
 //! cannot be located (the pipeline needs the compiled stdlib source).
 
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use ipe::{BuildOptions, CliError};
@@ -372,7 +373,8 @@ fn canon_type_alias_expansion_node_budget() {
     // Level n produces 2^n expansion nodes, so A30 alone would need > 1 billion.
     let mut src = format!("{HEAD}type alias A0 = Int\n");
     for i in 1..=30_u32 {
-        src.push_str(&format!("type alias A{i} = ( A{}, A{} )\n", i - 1, i - 1));
+        // Writing into a String is infallible.
+        let _ = writeln!(src, "type alias A{i} = ( A{}, A{} )", i - 1, i - 1);
     }
     src.push_str("main : A30\nmain =\n    (1, 1)\n");
     assert_rejected("canon_alias_node_budget", &src, "IPE-N0032");
@@ -385,7 +387,8 @@ fn canon_type_alias_expansion_node_budget() {
 fn canon_type_alias_expansion_depth_limit() {
     let mut src = format!("{HEAD}type alias A0 = Int\n");
     for i in 1..=300_u32 {
-        src.push_str(&format!("type alias A{i} = A{}\n", i - 1));
+        // Writing into a String is infallible.
+        let _ = writeln!(src, "type alias A{i} = A{}", i - 1);
     }
     src.push_str("main : A300\nmain =\n    1\n");
     assert_rejected("canon_alias_depth_limit", &src, "IPE-N0032");

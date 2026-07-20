@@ -330,7 +330,11 @@ mod tests {
         let mut catalog = vec![
             member(
                 "Rust.Async_stripe",
-                &[("Client", "::stripe::Client", Some("stripe_client_core::client::Client"))],
+                &[(
+                    "Client",
+                    "::stripe::Client",
+                    Some("stripe_client_core::client::Client"),
+                )],
                 &[("new_from_client", "String -> Client")],
                 &[("stripe_client_core", "1.0.0-rc.6")],
             ),
@@ -347,20 +351,32 @@ mod tests {
         ];
         let report = unify_foreign_nominals(&mut catalog);
         assert_eq!(report.unified.len(), 1, "{report:?}");
-        assert_eq!(report.unified[0].home_module, "Rust.Async_stripe_client_core");
-        assert_eq!(report.unified[0].demoted_modules, vec!["Rust.Async_stripe"]);
+        let unified = report.unified.first().expect("one unification");
+        assert_eq!(unified.home_module, "Rust.Async_stripe_client_core");
+        assert_eq!(unified.demoted_modules, vec!["Rust.Async_stripe"]);
         // Demoted module: declaration gone, import present, binding kept.
-        assert!(!catalog[0].opaque_types.contains_key("Client"));
-        let src = &catalog[0].interface_source;
+        let demoted = catalog.first().expect("demoted member");
+        assert!(!demoted.opaque_types.contains_key("Client"));
+        let src = &demoted.interface_source;
         assert!(
             src.contains("\nimport Rust.Async_stripe_client_core exposing (Client)\n"),
             "{src}"
         );
         assert!(!src.contains("type Client"), "{src}");
-        assert!(src.contains("\nnew_from_client : String -> Client\n"), "{src}");
-        assert!(src.starts_with("module Rust.Async_stripe exposing (new_from_client)"), "{src}");
+        assert!(
+            src.contains("\nnew_from_client : String -> Client\n"),
+            "{src}"
+        );
+        assert!(
+            src.starts_with("module Rust.Async_stripe exposing (new_from_client)"),
+            "{src}"
+        );
         // Home module untouched.
-        assert!(catalog[1].opaque_types.contains_key("Client"));
+        assert!(
+            catalog
+                .get(1)
+                .is_some_and(|m| m.opaque_types.contains_key("Client"))
+        );
     }
 
     #[test]
@@ -381,9 +397,20 @@ mod tests {
         ];
         let report = unify_foreign_nominals(&mut catalog);
         assert!(report.unified.is_empty(), "{report:?}");
-        assert!(report.skipped.is_empty(), "distinct types are not an over-drop");
-        assert!(catalog[0].opaque_types.contains_key("Config"));
-        assert!(catalog[1].opaque_types.contains_key("Config"));
+        assert!(
+            report.skipped.is_empty(),
+            "distinct types are not an over-drop"
+        );
+        assert!(
+            catalog
+                .first()
+                .is_some_and(|m| m.opaque_types.contains_key("Config"))
+        );
+        assert!(
+            catalog
+                .get(1)
+                .is_some_and(|m| m.opaque_types.contains_key("Config"))
+        );
     }
 
     #[test]
@@ -394,41 +421,69 @@ mod tests {
         let mut catalog = vec![
             member(
                 "Rust.Async_stripe",
-                &[("Client", "::stripe::Client", Some("stripe::hyper::client::Client"))],
+                &[(
+                    "Client",
+                    "::stripe::Client",
+                    Some("stripe::hyper::client::Client"),
+                )],
                 &[],
                 &[("stripe", "1.0.0-rc.6")],
             ),
             member(
                 "Rust.Async_stripe_core",
-                &[("Client", "::stripe::Client", Some("stripe::hyper::client::Client"))],
+                &[(
+                    "Client",
+                    "::stripe::Client",
+                    Some("stripe::hyper::client::Client"),
+                )],
                 &[],
                 &[("stripe_shared", "1.0.0-rc.6")],
             ),
         ];
         let report = unify_foreign_nominals(&mut catalog);
         assert_eq!(report.unified.len(), 1, "{report:?}");
-        assert_eq!(report.unified[0].home_module, "Rust.Async_stripe");
+        assert_eq!(
+            report.unified.first().map(|u| u.home_module.as_str()),
+            Some("Rust.Async_stripe")
+        );
     }
 
     #[test]
     fn missing_identity_or_version_disagreement_skips_with_reason() {
         // Missing defid on one member.
         let mut catalog = vec![
-            member("Rust.A", &[("T", "::x::T", Some("x::T"))], &[], &[("x", "1.0.0")]),
+            member(
+                "Rust.A",
+                &[("T", "::x::T", Some("x::T"))],
+                &[],
+                &[("x", "1.0.0")],
+            ),
             member("Rust.B", &[("T", "::x::T", None)], &[], &[("x", "1.0.0")]),
         ];
         let report = unify_foreign_nominals(&mut catalog);
         assert!(report.unified.is_empty());
-        assert!(report.skipped[0].reason.contains("no defining-path identity"));
+        let skipped = report.skipped.first().expect("one skip reason");
+        assert!(skipped.reason.contains("no defining-path identity"));
 
         // Version disagreement on the defining crate.
         let mut catalog = vec![
-            member("Rust.A", &[("T", "::x::T", Some("x::T"))], &[], &[("x", "1.0.0")]),
-            member("Rust.B", &[("T", "::x::T", Some("x::T"))], &[], &[("x", "2.0.0")]),
+            member(
+                "Rust.A",
+                &[("T", "::x::T", Some("x::T"))],
+                &[],
+                &[("x", "1.0.0")],
+            ),
+            member(
+                "Rust.B",
+                &[("T", "::x::T", Some("x::T"))],
+                &[],
+                &[("x", "2.0.0")],
+            ),
         ];
         let report = unify_foreign_nominals(&mut catalog);
         assert!(report.unified.is_empty());
-        assert!(report.skipped[0].reason.contains("one known version"));
+        let skipped = report.skipped.first().expect("one skip reason");
+        assert!(skipped.reason.contains("one known version"));
     }
 
     #[test]
@@ -458,8 +513,15 @@ mod tests {
         // Sorted order: `Alpha` unifies (home Rust.A), `Beta` would need
         // Rust.A → Rust.B and is refused.
         assert_eq!(report.unified.len(), 1, "{report:?}");
-        assert_eq!(report.unified[0].name, "Alpha");
-        assert!(report.skipped.iter().any(|s| s.name == "Beta"
-            && s.reason.contains("import cycle")));
+        assert_eq!(
+            report.unified.first().map(|u| u.name.as_str()),
+            Some("Alpha")
+        );
+        assert!(
+            report
+                .skipped
+                .iter()
+                .any(|s| s.name == "Beta" && s.reason.contains("import cycle"))
+        );
     }
 }

@@ -8,6 +8,8 @@
 //! The formatted output is returned as a single `TextEdit` replacing the whole
 //! document (for `formatting`) or the selected lines (for `rangeFormatting`).
 
+use std::fmt::Write as _;
+
 use ipe_db::{Db as _, IpeDatabase, SourceFile};
 use lsp_types::{Range, TextEdit};
 
@@ -23,7 +25,7 @@ pub fn format_document(
 ) -> Option<Vec<TextEdit>> {
     let module = ipe_db::parse(db, file).ok()?;
     let text = file.text(db);
-    let formatted = format_module(db, &module, &text);
+    let formatted = format_module(db, &module, text);
     if formatted == text.as_str() {
         return Some(Vec::new()); // already canonical — no edit
     }
@@ -58,8 +60,12 @@ pub fn format_range(
     let lines: Vec<&str> = formatted.split('\n').collect();
     let lo_line = start_line.min(lines.len().saturating_sub(1));
     let hi_line = end_line.min(lines.len().saturating_sub(1));
-    // Collect the slice plus a trailing newline when present.
-    let slice: String = lines[lo_line..=hi_line].join("\n");
+    // Collect the slice plus a trailing newline when present. `lo_line`/`hi_line`
+    // are both clamped below `lines.len()`, so the range is always in bounds; an
+    // empty `lines` yields an empty slice rather than a panic.
+    let slice: String = lines
+        .get(lo_line..=hi_line)
+        .map_or_else(String::new, |ls| ls.join("\n"));
 
     // The LSP range covers full lines (character 0 to end of hi_line).
     let text = file.text(db);
@@ -125,45 +131,66 @@ fn format_module(db: &IpeDatabase, module: &ipe_syntax::Module, original: &str) 
     push_exposing(&mut out, &module.exposing.value, &interner);
     out.push_str(")\n");
 
-    // Imports — sorted alphabetically.
-    if !module.imports.is_empty() {
-        out.push('\n');
-        let mut imports = module.imports.clone();
-        imports.sort_by(|a, b| {
-            let an: Vec<&str> = a.name.value.iter().map(|&s| resolve(s)).collect();
-            let bn: Vec<&str> = b.name.value.iter().map(|&s| resolve(s)).collect();
-            an.cmp(&bn)
-        });
-        for imp in &imports {
-            let imp_name = imp
-                .name
-                .value
-                .iter()
-                .map(|&s| resolve(s))
-                .collect::<Vec<_>>()
-                .join(".");
-            out.push_str("import ");
-            out.push_str(&imp_name);
-            if let Some(alias) = imp.alias {
-                out.push_str(" as ");
-                out.push_str(resolve(alias));
-            }
-            match &imp.exposing.value {
-                ipe_syntax::Exposing::All => {
-                    out.push_str(" exposing (..)");
-                }
-                ipe_syntax::Exposing::List(list) if !list.is_empty() => {
-                    out.push_str(" exposing (");
-                    push_exposing(&mut out, &imp.exposing.value, &interner);
-                    out.push(')');
-                }
-                ipe_syntax::Exposing::List(_) => {}
-            }
-            out.push('\n');
-        }
-    }
+    push_imports(&mut out, module, &interner);
+    push_aliases(&mut out, module, &interner);
+    push_unions(&mut out, module, &interner);
+    push_values(&mut out, module, &interner, original);
 
-    // Type aliases.
+    // The module printer always ends with exactly one trailing newline.
+    while out.ends_with("\n\n") {
+        out.pop();
+    }
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+/// Print the module's imports, sorted alphabetically by dotted name.
+fn push_imports(out: &mut String, module: &ipe_syntax::Module, interner: &ipe_intern::Interner) {
+    let resolve = |sym: ipe_intern::Symbol| interner.resolve(sym).unwrap_or("?");
+    if module.imports.is_empty() {
+        return;
+    }
+    out.push('\n');
+    let mut imports = module.imports.clone();
+    imports.sort_by(|a, b| {
+        let an: Vec<&str> = a.name.value.iter().map(|&s| resolve(s)).collect();
+        let bn: Vec<&str> = b.name.value.iter().map(|&s| resolve(s)).collect();
+        an.cmp(&bn)
+    });
+    for imp in &imports {
+        let imp_name = imp
+            .name
+            .value
+            .iter()
+            .map(|&s| resolve(s))
+            .collect::<Vec<_>>()
+            .join(".");
+        out.push_str("import ");
+        out.push_str(&imp_name);
+        if let Some(alias) = imp.alias {
+            out.push_str(" as ");
+            out.push_str(resolve(alias));
+        }
+        match &imp.exposing.value {
+            ipe_syntax::Exposing::All => {
+                out.push_str(" exposing (..)");
+            }
+            ipe_syntax::Exposing::List(list) if !list.is_empty() => {
+                out.push_str(" exposing (");
+                push_exposing(out, &imp.exposing.value, interner);
+                out.push(')');
+            }
+            ipe_syntax::Exposing::List(_) => {}
+        }
+        out.push('\n');
+    }
+}
+
+/// Print the module's type aliases.
+fn push_aliases(out: &mut String, module: &ipe_syntax::Module, interner: &ipe_intern::Interner) {
+    let resolve = |sym: ipe_intern::Symbol| interner.resolve(sym).unwrap_or("?");
     for alias in &module.aliases {
         out.push('\n');
         let name = resolve(alias.value.name.value);
@@ -174,11 +201,14 @@ fn format_module(db: &IpeDatabase, module: &ipe_syntax::Module, original: &str) 
             out.push_str(resolve(var.value));
         }
         out.push_str(" =\n    ");
-        push_type_annotation(&mut out, &alias.value.body.value, &interner);
+        push_type_annotation(out, &alias.value.body.value, interner);
         out.push('\n');
     }
+}
 
-    // Union types.
+/// Print the module's union types.
+fn push_unions(out: &mut String, module: &ipe_syntax::Module, interner: &ipe_intern::Interner) {
+    let resolve = |sym: ipe_intern::Symbol| interner.resolve(sym).unwrap_or("?");
     for union in &module.unions {
         out.push('\n');
         let name = resolve(union.value.name.value);
@@ -198,13 +228,22 @@ fn format_module(db: &IpeDatabase, module: &ipe_syntax::Module, original: &str) 
             out.push_str(resolve(ctor.value.name));
             for arg in &ctor.value.args {
                 out.push(' ');
-                push_type_annotation(&mut out, arg, &interner);
+                push_type_annotation(out, arg, interner);
             }
             out.push('\n');
         }
     }
+}
 
-    // Value declarations.
+/// Print the module's value declarations (each optional type annotation
+/// followed by its equation).
+fn push_values(
+    out: &mut String,
+    module: &ipe_syntax::Module,
+    interner: &ipe_intern::Interner,
+    original: &str,
+) {
+    let resolve = |sym: ipe_intern::Symbol| interner.resolve(sym).unwrap_or("?");
     for value in &module.values {
         out.push('\n');
         let name = resolve(value.value.name.value);
@@ -212,27 +251,18 @@ fn format_module(db: &IpeDatabase, module: &ipe_syntax::Module, original: &str) 
         if let Some(ann) = &value.value.type_annotation {
             out.push_str(name);
             out.push_str(" : ");
-            push_type_annotation(&mut out, &ann.value, &interner);
+            push_type_annotation(out, &ann.value, interner);
             out.push('\n');
         }
         out.push_str(name);
         for pat in &value.value.patterns {
             out.push(' ');
-            push_pattern(&mut out, pat, &interner);
+            push_pattern(out, pat, interner);
         }
         out.push_str(" =\n    ");
-        push_expr(&mut out, &value.value.body, 1, &interner, original);
+        push_expr(out, &value.value.body, 1, interner, original);
         out.push('\n');
     }
-
-    // The module printer always ends with exactly one trailing newline.
-    while out.ends_with("\n\n") {
-        out.pop();
-    }
-    if !out.ends_with('\n') {
-        out.push('\n');
-    }
-    out
 }
 
 // ---------------------------------------------------------------------------
@@ -314,8 +344,7 @@ fn push_type_annotation(
             }
         }
         ipe_syntax::TypeAnnotation::TLambda(a, b) => {
-            let needs_parens =
-                matches!(a.as_ref(), ipe_syntax::TypeAnnotation::TLambda(..));
+            let needs_parens = matches!(a.as_ref(), ipe_syntax::TypeAnnotation::TLambda(..));
             if needs_parens {
                 out.push('(');
                 push_type_annotation(out, a, interner);
@@ -351,11 +380,7 @@ fn push_type_annotation(
     }
 }
 
-fn push_pattern(
-    out: &mut String,
-    pat: &ipe_syntax::Pattern,
-    interner: &ipe_intern::Interner,
-) {
+fn push_pattern(out: &mut String, pat: &ipe_syntax::Pattern, interner: &ipe_intern::Interner) {
     let resolve = |sym: ipe_intern::Symbol| interner.resolve(sym).unwrap_or("?");
     match &pat.value {
         ipe_syntax::Pattern_::PAnything => out.push('_'),
@@ -451,8 +476,6 @@ fn push_expr(
     original: &str,
 ) {
     let resolve = |sym: ipe_intern::Symbol| interner.resolve(sym).unwrap_or("?");
-    let pad = "    ".repeat(indent);
-    let pad1 = "    ".repeat(indent + 1);
 
     match &expr.value {
         ipe_syntax::Expr_::VarLocal(sym) => out.push_str(resolve(*sym)),
@@ -470,7 +493,8 @@ fn push_expr(
             if let Some(slice) = original.get(lo..hi) {
                 out.push_str(slice);
             } else {
-                out.push_str(&format!("{f}"));
+                // Writing an f64 into a String is infallible.
+                let _ = write!(out, "{f}");
             }
         }
         ipe_syntax::Expr_::Str(s) => {
@@ -506,6 +530,109 @@ fn push_expr(
             }
             push_atom(out, last, indent, interner, original);
         }
+        ipe_syntax::Expr_::Lambda(..)
+        | ipe_syntax::Expr_::Let(..)
+        | ipe_syntax::Expr_::If(..)
+        | ipe_syntax::Expr_::Case(..) => {
+            push_block_expr(out, expr, indent, interner, original);
+        }
+        ipe_syntax::Expr_::Tuple(..)
+        | ipe_syntax::Expr_::List(..)
+        | ipe_syntax::Expr_::Record(..)
+        | ipe_syntax::Expr_::Access(..)
+        | ipe_syntax::Expr_::Update(..) => {
+            push_collection_expr(out, expr, indent, interner, original);
+        }
+    }
+}
+
+/// Print the delimited collection / record forms (tuples, lists, records,
+/// field access, record update), factored out of `push_expr`.
+fn push_collection_expr(
+    out: &mut String,
+    expr: &ipe_syntax::Expr,
+    indent: usize,
+    interner: &ipe_intern::Interner,
+    original: &str,
+) {
+    let resolve = |sym: ipe_intern::Symbol| interner.resolve(sym).unwrap_or("?");
+    match &expr.value {
+        ipe_syntax::Expr_::Tuple(elems) => {
+            out.push('(');
+            for (i, e) in elems.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                push_expr(out, e, indent, interner, original);
+            }
+            out.push(')');
+        }
+        ipe_syntax::Expr_::List(elems) => {
+            if elems.is_empty() {
+                out.push_str("[]");
+            } else {
+                out.push_str("[ ");
+                for (i, e) in elems.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    push_expr(out, e, indent, interner, original);
+                }
+                out.push_str(" ]");
+            }
+        }
+        ipe_syntax::Expr_::Record(fields) => {
+            if fields.is_empty() {
+                out.push_str("{}");
+            } else {
+                out.push_str("{ ");
+                for (i, (name, val)) in fields.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    out.push_str(resolve(name.value));
+                    out.push_str(" = ");
+                    push_expr(out, val, indent, interner, original);
+                }
+                out.push_str(" }");
+            }
+        }
+        ipe_syntax::Expr_::Access(rec, field) => {
+            push_atom(out, rec, indent, interner, original);
+            out.push('.');
+            out.push_str(resolve(field.value));
+        }
+        ipe_syntax::Expr_::Update(base, fields) => {
+            out.push_str("{ ");
+            out.push_str(resolve(base.value));
+            out.push_str(" | ");
+            for (i, (name, val)) in fields.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(resolve(name.value));
+                out.push_str(" = ");
+                push_expr(out, val, indent, interner, original);
+            }
+            out.push_str(" }");
+        }
+        // `push_expr` only routes the five collection forms here.
+        _ => push_expr(out, expr, indent, interner, original),
+    }
+}
+
+/// Print the multi-line block expressions (`\… ->`, `let`, `if`, `case`),
+/// factored out of `push_expr` so each printer stays focused.
+fn push_block_expr(
+    out: &mut String,
+    expr: &ipe_syntax::Expr,
+    indent: usize,
+    interner: &ipe_intern::Interner,
+    original: &str,
+) {
+    let pad = "    ".repeat(indent);
+    let pad1 = "    ".repeat(indent + 1);
+    match &expr.value {
         ipe_syntax::Expr_::Lambda(params, body) => {
             out.push('\\');
             for (i, p) in params.iter().enumerate() {
@@ -569,65 +696,8 @@ fn push_expr(
                 out.pop();
             }
         }
-        ipe_syntax::Expr_::Tuple(elems) => {
-            out.push('(');
-            for (i, e) in elems.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
-                }
-                push_expr(out, e, indent, interner, original);
-            }
-            out.push(')');
-        }
-        ipe_syntax::Expr_::List(elems) => {
-            if elems.is_empty() {
-                out.push_str("[]");
-            } else {
-                out.push_str("[ ");
-                for (i, e) in elems.iter().enumerate() {
-                    if i > 0 {
-                        out.push_str(", ");
-                    }
-                    push_expr(out, e, indent, interner, original);
-                }
-                out.push_str(" ]");
-            }
-        }
-        ipe_syntax::Expr_::Record(fields) => {
-            if fields.is_empty() {
-                out.push_str("{}");
-            } else {
-                out.push_str("{ ");
-                for (i, (name, val)) in fields.iter().enumerate() {
-                    if i > 0 {
-                        out.push_str(", ");
-                    }
-                    out.push_str(resolve(name.value));
-                    out.push_str(" = ");
-                    push_expr(out, val, indent, interner, original);
-                }
-                out.push_str(" }");
-            }
-        }
-        ipe_syntax::Expr_::Access(rec, field) => {
-            push_atom(out, rec, indent, interner, original);
-            out.push('.');
-            out.push_str(resolve(field.value));
-        }
-        ipe_syntax::Expr_::Update(base, fields) => {
-            out.push_str("{ ");
-            out.push_str(resolve(base.value));
-            out.push_str(" | ");
-            for (i, (name, val)) in fields.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
-                }
-                out.push_str(resolve(name.value));
-                out.push_str(" = ");
-                push_expr(out, val, indent, interner, original);
-            }
-            out.push_str(" }");
-        }
+        // `push_expr` only routes the four block forms here.
+        _ => push_expr(out, expr, indent, interner, original),
     }
 }
 
@@ -674,8 +744,7 @@ mod tests {
         )
     }
 
-    const ALREADY_FORMATTED: &str =
-        "module Main exposing (main)\n\nmain : Int\nmain =\n    42\n";
+    const ALREADY_FORMATTED: &str = "module Main exposing (main)\n\nmain : Int\nmain =\n    42\n";
 
     #[test]
     fn already_formatted_produces_no_edit() {
@@ -694,14 +763,12 @@ mod tests {
         let edits = format_document(&db, f, PositionEncoding::Utf16)
             .expect("parseable source returns Some");
         // Apply the edit (if any) and re-parse — must still parse cleanly.
-        let result = if edits.is_empty() {
-            src.to_owned()
-        } else {
-            edits[0].new_text.clone()
-        };
+        let result = edits
+            .first()
+            .map_or_else(|| src.to_owned(), |e| e.new_text.clone());
         let f2 = file(&db, &["Main"], &result);
-        let edits2 = format_document(&db, f2, PositionEncoding::Utf16)
-            .expect("formatted source parses");
+        let edits2 =
+            format_document(&db, f2, PositionEncoding::Utf16).expect("formatted source parses");
         assert!(edits2.is_empty(), "idempotent after one pass");
     }
 

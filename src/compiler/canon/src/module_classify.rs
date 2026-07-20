@@ -297,7 +297,7 @@ mod tests {
                 ),
             ),
             top_level(
-                view.clone(),
+                view,
                 call_view,
                 Expr_::Call(
                     Box::new(Located::new(Span::DUMMY, var_top(data.clone(), load))),
@@ -305,7 +305,7 @@ mod tests {
                 ),
             ),
             top_level(
-                data.clone(),
+                data,
                 load,
                 Expr_::VarKernel {
                     id: None, // unregistered / DOES-NOT kernel: default-deny
@@ -322,12 +322,18 @@ mod tests {
 
         let err = check_client_reachability(&linked, &main, &interner)
             .expect_err("Data is server-classified and reachable from Main");
-        let Diagnostic::Name {
-            msg: NameError::ServerModuleReachableFromWasmClient { chain },
-            ..
-        } = err
-        else {
-            panic!("expected ServerModuleReachableFromWasmClient, got {err:?}");
+        let chain = match err {
+            Diagnostic::Name {
+                msg: NameError::ServerModuleReachableFromWasmClient { chain },
+                ..
+            } => chain,
+            other => {
+                return assert_eq!(
+                    format!("{other:?}"),
+                    "ServerModuleReachableFromWasmClient",
+                    "expected ServerModuleReachableFromWasmClient"
+                );
+            }
         };
         assert_eq!(
             chain.as_ref(),

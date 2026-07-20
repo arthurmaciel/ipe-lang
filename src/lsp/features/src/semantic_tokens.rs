@@ -116,11 +116,7 @@ fn collect_tokens(
 
     // Module keyword + name.
     push_keyword(&mut raw, keyword_span(text, 0, "module"));
-    push_span(
-        &mut raw,
-        module.name.span,
-        TT_NAMESPACE,
-    );
+    push_span(&mut raw, module.name.span, TT_NAMESPACE);
 
     // Imports.
     for imp in &module.imports {
@@ -149,7 +145,7 @@ fn collect_tokens(
         for var in &alias.value.vars {
             push_span(&mut raw, var.span, TT_TYPE_PARAMETER);
         }
-        push_type_annotation_tokens(&mut raw, &alias.value.body.value, text, &interner);
+        push_type_annotation_tokens(&mut raw, &alias.value.body.value);
     }
 
     // Union types.
@@ -162,7 +158,12 @@ fn collect_tokens(
             push_span(&mut raw, var.span, TT_TYPE_PARAMETER);
         }
         for ctor in &union.value.ctors {
-            push_span(&mut raw, Span::new(ctor.span.lo, ctor.span.lo + interner.resolve(ctor.value.name).map_or(0, |s| s.len() as u32)), TT_ENUM_MEMBER);
+            let name_len = interner.resolve(ctor.value.name).map_or(0, byte_len_u32);
+            push_span(
+                &mut raw,
+                Span::new(ctor.span.lo, ctor.span.lo + name_len),
+                TT_ENUM_MEMBER,
+            );
         }
     }
 
@@ -170,7 +171,7 @@ fn collect_tokens(
     for value in &module.values {
         push_span(&mut raw, value.value.name.span, TT_FUNCTION);
         if let Some(ann) = &value.value.type_annotation {
-            push_type_annotation_tokens(&mut raw, &ann.value, text, &interner);
+            push_type_annotation_tokens(&mut raw, &ann.value);
         }
         for pat in &value.value.patterns {
             push_pattern_tokens(&mut raw, pat, &interner);
@@ -206,15 +207,16 @@ fn encode(raw: Vec<RawToken>, text: &str, encoding: PositionEncoding) -> Vec<Sem
             pos.character
         };
         // Length in encoding units (UTF-16 or UTF-8 columns).
-        let len_bytes = tok.len as usize;
         let slice = text
             .get(tok.byte as usize..(tok.byte + tok.len) as usize)
             .unwrap_or("");
         let length = match encoding {
-            crate::offset::PositionEncoding::Utf8 => len_bytes as u32,
-            crate::offset::PositionEncoding::Utf16 => {
-                slice.chars().map(|c| c.len_utf16() as u32).sum()
-            }
+            crate::offset::PositionEncoding::Utf8 => tok.len,
+            crate::offset::PositionEncoding::Utf16 => slice
+                .chars()
+                // `len_utf16` is 1 or 2 — always representable as u32.
+                .map(|c| u32::try_from(c.len_utf16()).unwrap_or(2))
+                .sum(),
         };
         out.push(SemanticToken {
             delta_line,
@@ -255,32 +257,43 @@ fn find_keyword_before(text: &str, before_byte: u32, keyword: &str) -> Option<Sp
     let window_start = (before_byte as usize).saturating_sub(64);
     let window = text.get(window_start..before_byte as usize)?;
     let kw_pos = window.rfind(keyword)?;
-    let abs_start = (window_start + kw_pos) as u32;
+    let abs_start = offset_u32(window_start + kw_pos);
     // Verify word boundaries — must be preceded by whitespace/start and
     // followed by whitespace.
     let before_ok = abs_start == 0
         || text
             .as_bytes()
             .get(abs_start as usize - 1)
-            .map_or(true, |b| b.is_ascii_whitespace());
+            .is_none_or(u8::is_ascii_whitespace);
     let after_ok = text
         .as_bytes()
         .get(abs_start as usize + keyword.len())
-        .map_or(true, |b| b.is_ascii_whitespace() || *b == b'(');
+        .is_none_or(|b| b.is_ascii_whitespace() || *b == b'(');
     if before_ok && after_ok {
-        Some(Span::new(abs_start, abs_start + keyword.len() as u32))
+        Some(Span::new(abs_start, abs_start + byte_len_u32(keyword)))
     } else {
         None
     }
 }
 
+/// A byte length narrowed to the `u32` source spans use. Identifiers and
+/// keywords are far shorter than `u32::MAX`, so the saturating fallback is
+/// unreachable in practice; it keeps the conversion total.
+fn byte_len_u32(s: &str) -> u32 {
+    u32::try_from(s.len()).unwrap_or(u32::MAX)
+}
+
+/// A byte offset narrowed to the `u32` source spans use. Source files are far
+/// smaller than `u32::MAX` bytes, so the saturating fallback is unreachable in
+/// practice; it keeps the conversion total.
+fn offset_u32(byte: usize) -> u32 {
+    u32::try_from(byte).unwrap_or(u32::MAX)
+}
+
 /// Locate `"module"` at (or just before) `hint_byte`.
 fn keyword_span(text: &str, hint_byte: usize, keyword: &str) -> Span {
-    if let Some(pos) = text.find(keyword) {
-        Span::new(pos as u32, (pos + keyword.len()) as u32)
-    } else {
-        Span::new(hint_byte as u32, (hint_byte + keyword.len()) as u32)
-    }
+    let start = text.find(keyword).unwrap_or(hint_byte);
+    Span::new(offset_u32(start), offset_u32(start + keyword.len()))
 }
 
 fn push_exposing_tokens(
@@ -306,39 +319,13 @@ fn push_exposing_tokens(
     }
 }
 
-fn push_type_annotation_tokens(
-    raw: &mut Vec<RawToken>,
-    ty: &ipe_syntax::TypeAnnotation,
-    _text: &str,
-    _interner: &ipe_intern::Interner,
-) {
-    match ty {
-        ipe_syntax::TypeAnnotation::TVar(sym) => {
-            // Span is not available directly from the enum; skip for now.
-            let _ = sym;
-        }
-        ipe_syntax::TypeAnnotation::TUnit => {}
-        ipe_syntax::TypeAnnotation::TType(_qualifier, _name_segs, args) => {
-            for arg in args {
-                push_type_annotation_tokens(raw, arg, _text, _interner);
-            }
-        }
-        ipe_syntax::TypeAnnotation::TLambda(a, b) => {
-            push_type_annotation_tokens(raw, a, _text, _interner);
-            push_type_annotation_tokens(raw, b, _text, _interner);
-        }
-        ipe_syntax::TypeAnnotation::TTuple(elems) => {
-            for e in elems {
-                push_type_annotation_tokens(raw, e, _text, _interner);
-            }
-        }
-        ipe_syntax::TypeAnnotation::TRecord(fields) => {
-            for (_, ty) in fields {
-                push_type_annotation_tokens(raw, ty, _text, _interner);
-            }
-        }
-    }
-}
+/// Highlight the tokens of a type annotation.
+///
+/// The `TypeAnnotation` AST carries no per-node spans, so there is currently
+/// nothing to emit — annotations stay un-highlighted until the parser records
+/// their spans. Kept as a named seam so the call sites read intentionally and
+/// gain highlighting the moment spans are available.
+const fn push_type_annotation_tokens(_raw: &mut [RawToken], _ty: &ipe_syntax::TypeAnnotation) {}
 
 fn push_pattern_tokens(
     raw: &mut Vec<RawToken>,
@@ -351,13 +338,17 @@ fn push_pattern_tokens(
             push_span(raw, pat.span, TT_VARIABLE);
         }
         ipe_syntax::Pattern_::PCtor(name, _module_segs, args) => {
-            let name_len = interner.resolve(*name).map_or(0, |s| s.len() as u32);
-            push_span(raw, Span::new(pat.span.lo, pat.span.lo + name_len), TT_ENUM_MEMBER);
+            let name_len = interner.resolve(*name).map_or(0, byte_len_u32);
+            push_span(
+                raw,
+                Span::new(pat.span.lo, pat.span.lo + name_len),
+                TT_ENUM_MEMBER,
+            );
             for arg in args {
                 push_pattern_tokens(raw, arg, interner);
             }
         }
-        ipe_syntax::Pattern_::PTuple(elems) => {
+        ipe_syntax::Pattern_::PTuple(elems) | ipe_syntax::Pattern_::PList(elems) => {
             for e in elems {
                 push_pattern_tokens(raw, e, interner);
             }
@@ -379,11 +370,6 @@ fn push_pattern_tokens(
         ipe_syntax::Pattern_::PAlias(inner, name) => {
             push_pattern_tokens(raw, inner, interner);
             push_span(raw, name.span, TT_VARIABLE);
-        }
-        ipe_syntax::Pattern_::PList(elems) => {
-            for e in elems {
-                push_pattern_tokens(raw, e, interner);
-            }
         }
         ipe_syntax::Pattern_::PCons(h, t) => {
             push_pattern_tokens(raw, h, interner);
@@ -494,6 +480,17 @@ mod tests {
         )
     }
 
+    /// Unwrap the full-encoding result to its token list. `semantic_tokens_full`
+    /// only ever returns the `Tokens` variant; the `Partial` case maps to `None`
+    /// so the caller's `.expect` fails the test rather than panicking inline.
+    fn tokens_of(result: lsp_types::SemanticTokensResult) -> lsp_types::SemanticTokens {
+        let tokens = match result {
+            lsp_types::SemanticTokensResult::Tokens(tokens) => Some(tokens),
+            lsp_types::SemanticTokensResult::Partial(_) => None,
+        };
+        tokens.expect("semantic_tokens_full returns the Tokens variant")
+    }
+
     #[test]
     fn legend_has_ten_token_types() {
         assert_eq!(legend().token_types.len(), 10);
@@ -505,9 +502,7 @@ mod tests {
         let src = "module Main exposing (main)\n\nmain : Int\nmain =\n    42\n";
         let f = file(&db, &["Main"], src);
         let result = semantic_tokens_full(&db, f, PositionEncoding::Utf16);
-        let lsp_types::SemanticTokensResult::Tokens(tokens) = result else {
-            panic!("expected Tokens variant");
-        };
+        let tokens = tokens_of(result);
         assert!(!tokens.data.is_empty(), "tokens produced for valid module");
     }
 
@@ -516,9 +511,7 @@ mod tests {
         let db = IpeDatabase::new();
         let f = file(&db, &["Main"], "@@@ not parseable @@@");
         let result = semantic_tokens_full(&db, f, PositionEncoding::Utf16);
-        let lsp_types::SemanticTokensResult::Tokens(tokens) = result else {
-            panic!("expected Tokens variant");
-        };
+        let tokens = tokens_of(result);
         assert!(tokens.data.is_empty(), "no tokens for unparseable source");
     }
 
@@ -528,9 +521,7 @@ mod tests {
         let src = "module Main exposing (main)\n\nmain : Int\nmain =\n    42\n";
         let f = file(&db, &["Main"], src);
         let result = semantic_tokens_full(&db, f, PositionEncoding::Utf16);
-        let lsp_types::SemanticTokensResult::Tokens(tokens) = result else {
-            panic!("expected Tokens variant");
-        };
+        let tokens = tokens_of(result);
         // In a valid delta encoding, line deltas are non-negative and a
         // zero-delta line implies a non-negative character delta.
         let mut line: u32 = 0;

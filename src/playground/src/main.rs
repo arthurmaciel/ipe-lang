@@ -150,7 +150,11 @@ async fn compile(
     }
     let out_dir = tmpdir.path().join("out");
 
-    info!("compiling source ({} bytes) in {:?}", req.source.len(), tmpdir.path());
+    info!(
+        "compiling source ({} bytes) in {:?}",
+        req.source.len(),
+        tmpdir.path()
+    );
 
     let result = compile_wasm(&state, &entry, &out_dir).await;
     match result {
@@ -187,7 +191,10 @@ async fn compile_wasm(
         .stderr(std::process::Stdio::piped());
 
     let future = async {
-        let output = cmd.output().await.map_err(|e| format!("spawn failed: {e}"))?;
+        let output = cmd
+            .output()
+            .await
+            .map_err(|e| format!("spawn failed: {e}"))?;
         if output.status.success() {
             Ok(output)
         } else {
@@ -236,11 +243,12 @@ fn read_bundle(out_dir: &Path) -> Result<CompileSuccess, String> {
 }
 
 fn read_text(path: &Path) -> Result<String, String> {
-    std::fs::read_to_string(path).map_err(|e| format!("missing bundle file {path:?}: {e}"))
+    std::fs::read_to_string(path)
+        .map_err(|e| format!("missing bundle file {}: {e}", path.display()))
 }
 
 fn read_bytes(path: &Path) -> Result<Vec<u8>, String> {
-    std::fs::read(path).map_err(|e| format!("missing bundle file {path:?}: {e}"))
+    std::fs::read(path).map_err(|e| format!("missing bundle file {}: {e}", path.display()))
 }
 
 /// Minimal base64 encoder (RFC 4648, no padding variation).
@@ -248,23 +256,26 @@ fn read_bytes(path: &Path) -> Result<Vec<u8>, String> {
 /// Using a hand-rolled encoder rather than pulling in the `base64` crate keeps
 /// the dependency tree minimal. The alphabet is the standard RFC 4648 table.
 fn base64_encode(bytes: &[u8]) -> String {
-    const TABLE: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    // Index the alphabet through a helper so a 6-bit value maps to a char with
+    // no possibility of an out-of-bounds panic (the mask already bounds it to
+    // 0..64, but the compiler cannot see that through `[]`).
+    let sextet = |v: u32| TABLE.get((v & 0x3f) as usize).map_or('=', |&b| b as char);
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
-        let b0 = u32::from(chunk[0]);
+        let b0 = chunk.first().copied().map_or(0, u32::from);
         let b1 = chunk.get(1).copied().map_or(0, u32::from);
         let b2 = chunk.get(2).copied().map_or(0, u32::from);
         let n = (b0 << 16) | (b1 << 8) | b2;
-        out.push(TABLE[((n >> 18) & 0x3f) as usize] as char);
-        out.push(TABLE[((n >> 12) & 0x3f) as usize] as char);
+        out.push(sextet(n >> 18));
+        out.push(sextet(n >> 12));
         if chunk.len() >= 2 {
-            out.push(TABLE[((n >> 6) & 0x3f) as usize] as char);
+            out.push(sextet(n >> 6));
         } else {
             out.push('=');
         }
         if chunk.len() == 3 {
-            out.push(TABLE[(n & 0x3f) as usize] as char);
+            out.push(sextet(n));
         } else {
             out.push('=');
         }
@@ -298,13 +309,14 @@ fn resolve_runtime_dir() -> Result<PathBuf, String> {
         if path.is_dir() {
             return Ok(path);
         }
-        return Err(format!("IPE_RUNTIME_DIR={path:?} is not a directory"));
+        return Err(format!(
+            "IPE_RUNTIME_DIR={} is not a directory",
+            path.display()
+        ));
     }
-    Err(
-        "runtime directory not found; set IPE_RUNTIME_DIR to the \
+    Err("runtime directory not found; set IPE_RUNTIME_DIR to the \
          ipe_runtime source directory (src/runtime/rust/src)"
-            .to_owned(),
-    )
+        .to_owned())
 }
 
 #[tokio::main]
@@ -338,15 +350,18 @@ async fn main() {
         }
     };
 
-    let cargo_target_dir = std::env::var("IPE_PLAYGROUND_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp/ipe-playground-target"));
+    let cargo_target_dir = std::env::var("IPE_PLAYGROUND_TARGET_DIR").map_or_else(
+        |_| PathBuf::from("/tmp/ipe-playground-target"),
+        PathBuf::from,
+    );
 
     let compile_timeout = std::env::var("IPE_PLAYGROUND_TIMEOUT_SECS")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
-        .map(Duration::from_secs)
-        .unwrap_or(Duration::from_secs(DEFAULT_COMPILE_TIMEOUT_SECS));
+        .map_or(
+            Duration::from_secs(DEFAULT_COMPILE_TIMEOUT_SECS),
+            Duration::from_secs,
+        );
 
     info!(
         "cargo_target_dir={:?} compile_timeout={:?}",
@@ -373,10 +388,7 @@ async fn main() {
     // Optionally serve a static playground UI.
     if let Ok(static_dir) = std::env::var("IPE_PLAYGROUND_STATIC_DIR") {
         info!("serving static playground UI from {:?}", static_dir);
-        app = app.nest_service(
-            "/",
-            tower_http::services::ServeDir::new(static_dir),
-        );
+        app = app.nest_service("/", tower_http::services::ServeDir::new(static_dir));
     }
 
     let port = std::env::var("IPE_PLAYGROUND_PORT")

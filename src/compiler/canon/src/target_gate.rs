@@ -168,12 +168,18 @@ mod tests {
         let module = single_def_module(&mut interner, body);
         let err = check_wasm_client(&module, &interner)
             .expect_err("Ipe.Db.query must be denied under --target wasm");
-        let Diagnostic::Name {
-            msg: NameError::ServerOnlyKernelForWasm { qualifier, name },
-            ..
-        } = err
-        else {
-            panic!("expected ServerOnlyKernelForWasm, got {err:?}");
+        let (qualifier, name) = match err {
+            Diagnostic::Name {
+                msg: NameError::ServerOnlyKernelForWasm { qualifier, name },
+                ..
+            } => (qualifier, name),
+            other => {
+                return assert_eq!(
+                    format!("{other:?}"),
+                    "ServerOnlyKernelForWasm",
+                    "expected ServerOnlyKernelForWasm"
+                );
+            }
         };
         assert_eq!(qualifier.as_ref(), "Ipe.Db");
         assert_eq!(name.as_ref(), "query");

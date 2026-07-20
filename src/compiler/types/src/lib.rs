@@ -2104,9 +2104,8 @@ mod tests {
             "{M2C_HDR}type Color = Red | Blue\n\nfavorite : Color\nfavorite =\n    Red\n\nmain = favorite\n"
         );
         let (solved, i, m) = infer_src(&src);
-        let (Ok(solved), Some(m)) = (solved, m) else {
-            panic!("must typecheck: no solved types");
-        };
+        let solved = solved.expect("must typecheck: no solved types");
+        let m = m.expect("must typecheck: module present");
         // The `favorite` body is `Red`; find its span via the def's body.
         let fav = m
             .defs
@@ -2134,9 +2133,8 @@ mod tests {
             "{M2C_HDR}len : String -> Int\nlen s =\n    0\n\nmain : Int\nmain =\n    len \"hi\"\n"
         );
         let (solved, i, m) = infer_src(&src);
-        let (Ok(solved), Some(m)) = (solved, m) else {
-            panic!("must typecheck");
-        };
+        let solved = solved.expect("must typecheck");
+        let m = m.expect("module present");
         let main = m
             .defs
             .iter()
@@ -2172,9 +2170,8 @@ mod tests {
             "{M2C_HDR}type Color = Red | Blue\n\npick : Bool -> Color\npick b =\n    if b then Red else Blue\n\nmain = pick True\n"
         );
         let (solved, i, m) = infer_src(&src);
-        let (Ok(solved), Some(m)) = (solved, m) else {
-            panic!("must typecheck");
-        };
+        let solved = solved.expect("must typecheck");
+        let m = m.expect("module present");
         // `env` unchanged: `pick : Bool -> Color`.
         let pick = def_key(&i, &m, "pick").expect("pick key");
         let pick_ty = solved.env.get(&pick).expect("pick typed");

@@ -18,9 +18,7 @@ use ipe_db::{Db as _, IpeDatabase, SourceRoot};
 use ipe_diagnostics::Located;
 use ipe_intern::Symbol;
 use ipe_types::{Ty, VarNamer, ty_to_doc};
-use lsp_types::{
-    ParameterInformation, ParameterLabel, SignatureHelp, SignatureInformation,
-};
+use lsp_types::{ParameterInformation, ParameterLabel, SignatureHelp, SignatureInformation};
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -45,7 +43,7 @@ pub fn signature_help(
     let (home_syms, name_sym, active_param) = find_call_at(&canonical.module, byte)?;
 
     // Resolve the callee's type from the solved env.
-    let callee_ty = solved.env.get(&(home_syms.clone(), name_sym))?.clone();
+    let callee_ty = solved.env.get(&(home_syms, name_sym))?.clone();
 
     // Decompose into parameter types.
     let params = fn_params(&callee_ty);
@@ -70,7 +68,11 @@ pub fn signature_help(
     }
     drop(interner);
 
-    let active = (active_param as u32).min(param_infos.len().saturating_sub(1) as u32);
+    // Clamp to the last parameter index, then narrow to u32 (LSP's wire type);
+    // a signature never has u32::MAX parameters, so the saturating fallback is
+    // unreachable in practice but keeps the conversion total.
+    let last_param = param_infos.len().saturating_sub(1);
+    let active = u32::try_from(active_param.min(last_param)).unwrap_or(u32::MAX);
 
     Some(SignatureHelp {
         signatures: vec![SignatureInformation {
@@ -93,14 +95,9 @@ pub fn signature_help(
 fn fn_params(ty: &Ty) -> Vec<Ty> {
     let mut params = Vec::new();
     let mut cur = ty;
-    loop {
-        match cur {
-            Ty::Fun(param, ret) => {
-                params.push(*param.clone());
-                cur = ret;
-            }
-            _ => break,
-        }
+    while let Ty::Fun(param, ret) = cur {
+        params.push(*param.clone());
+        cur = ret;
     }
     params
 }
@@ -230,8 +227,7 @@ mod tests {
 
     const HELPER: &str =
         "module Helper exposing (add)\n\nadd : Int -> Int -> Int\nadd x y =\n    x + y\n";
-    const MAIN: &str =
-        "module Main exposing (main)\n\nimport Helper exposing (add)\n\nmain : Int\nmain =\n    add 1 2\n";
+    const MAIN: &str = "module Main exposing (main)\n\nimport Helper exposing (add)\n\nmain : Int\nmain =\n    add 1 2\n";
 
     /// Byte offset of `1` in the `add 1 2` call.
     fn call_arg_byte() -> u32 {
@@ -255,8 +251,7 @@ mod tests {
         let helper = file(&db, &["Helper"], HELPER);
         let entry = file(&db, &["Main"], MAIN);
         let root = root_of(&db, &[(&["Helper"], helper), (&["Main"], entry)]);
-        let _result =
-            signature_help(&db, root, entry, &["Main".to_owned()], call_arg_byte());
+        let _result = signature_help(&db, root, entry, &["Main".to_owned()], call_arg_byte());
         // If the implementation finds the call, it should return Some with the
         // `add` signature; either way, no panic.
     }
@@ -267,11 +262,9 @@ mod tests {
         let helper = file(&db, &["Helper"], HELPER);
         let entry = file(&db, &["Main"], MAIN);
         let root = root_of(&db, &[(&["Helper"], helper), (&["Main"], entry)]);
-        let result =
-            signature_help(&db, root, entry, &["Main".to_owned()], call_arg_byte());
+        let result = signature_help(&db, root, entry, &["Main".to_owned()], call_arg_byte());
         if let Some(help) = result {
-            assert!(!help.signatures.is_empty());
-            let sig = &help.signatures[0];
+            let sig = help.signatures.first().expect("at least one signature");
             // The label must mention `add`.
             assert!(sig.label.contains("add"), "label: {}", sig.label);
             // Should have 2 parameters (Int -> Int -> Int has 2 params).
