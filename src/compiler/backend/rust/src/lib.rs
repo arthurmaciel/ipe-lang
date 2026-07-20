@@ -16,6 +16,7 @@
 //! with. The [`ipe_backend::Backend`] trait stays string-free.
 
 mod crate_specs;
+mod doc;
 mod emit_cli;
 mod emit_expr;
 mod emit_live;
@@ -27,6 +28,7 @@ mod emit_webview;
 mod naming;
 mod preamble;
 mod project;
+mod render;
 mod rust_file;
 pub mod static_build;
 

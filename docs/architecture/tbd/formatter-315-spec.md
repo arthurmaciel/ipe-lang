@@ -1,7 +1,10 @@
 # Native Rust formatter (#315) — approved-approach design spec
 
-Status: approach unanimously endorsed by the review panel; specific rustfmt layout-rule
-details are settled empirically against the 483-golden byte-diff corpus during implementation.
+Status: P0 LANDED (byte-green) — the decision is recorded in `docs/adr/0036-native-rust-formatter.md`.
+`doc.rs` (frozen 7-variant enum) + `render.rs` (renderer, chain mechanism byte-exact against the
+probe set) + `p0_tests` are in `src/compiler/backend/rust/src/`. This document remains the working
+plan for the open phases P1–P3 (site census, phased migration, cutover). Specific layout-rule
+details are settled empirically against the golden byte-diff corpus during implementation.
 
 
 ## approach
