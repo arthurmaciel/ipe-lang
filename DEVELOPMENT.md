@@ -391,6 +391,40 @@ ignore — never by downgrading the gate.
 run by hand, not by CI — flip it on only after in-flight direct-push lanes
 drain.
 
+## Versioning & Releases
+
+Versioning, changelog, and release cutting are automated by
+[release-please](https://github.com/googleapis/release-please)
+(`.github/workflows/release-please.yml`), driven by the same Conventional
+Commit messages the PR workflow already uses. Contributors never bump a version
+or edit `CHANGELOG.md` by hand.
+
+**How a release ships.** On every push to `main`, release-please maintains one
+standing **release pull request**. It bumps the workspace version in
+`Cargo.toml` and prepends the next `CHANGELOG.md` section, derived from the
+commits merged since the last release. That PR is inert while open — nothing is
+released until it merges. **Merging the release PR is the act of shipping:**
+merging it tags `vX.Y.Z`, creates the GitHub release with the changelog as its
+body, and that tag's release event triggers `release.yml` to build the
+5-platform binaries and attach them to the release. There is exactly one release
+object per tag — release-please creates it; `release.yml` only uploads assets to
+it.
+
+**Pre-1.0 bump rules** (config in `release-please-config.json`, current version
+`0.1.0`):
+
+| Commit | Version effect (pre-1.0) |
+|---|---|
+| `feat`, `fix`, `perf` | **patch** (`0.1.0` → `0.1.1`) |
+| `!` suffix / `BREAKING CHANGE:` footer | **minor** (`0.1.0` → `0.2.0`) |
+| `docs`, `chore`, `ci`, `test`, `refactor`, `style`, `build` | no release entry |
+
+`1.0.0` is **never** reached automatically — while `0.x`, a breaking change
+only bumps the minor. Cutting `1.0` is a deliberate, hand-made stability
+promise: the public surface is committed to and breaking changes thereafter bump
+the major per SemVer. Until then, treat any `0.x` release as potentially
+breaking.
+
 ## Workflow rules
 
 - **Always run mem-guard** (§1).
