@@ -1,8 +1,7 @@
 //! WASM pure-kernel **floor guard** — native-side invariants of the enforced
 //! wasm floor.
 //!
-//! Spec: `docs/architecture/wasm-target.md`; build order:
-//! `docs/architecture/wasm-target-impl-plan.md`. The floor itself is a live CI
+//! Spec: `docs/architecture/wasm-target.md`. The floor itself is a live CI
 //! gate (`wasm-floor` job): `cargo build -p ipe-runtime-rust --target
 //! wasm32-unknown-unknown` (default and `--features json`) must exit 0 — the
 //! entire default kernel set, including the `Ipe.Ui` render surface
