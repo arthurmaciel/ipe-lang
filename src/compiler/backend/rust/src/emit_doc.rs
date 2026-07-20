@@ -212,6 +212,15 @@ pub fn build_doc(
             build_record(ctx, fields, indent, child, generics)
         }
 
+        // A functional record update `{ let mut __ipe_rec = (record).clone();
+        // __ipe_rec.f = v; … __ipe_rec }`: a statement block that ALWAYS breaks
+        // (it holds statements), each `let`/assignment/tail on its own `HardLine`
+        // inside the sole `Nest(4)`, matching rustfmt. The base and each field
+        // value are built recursively.
+        Expr::Update { record, fields } => {
+            build_update(ctx, record, fields, indent, child, generics)
+        }
+
         // Every remaining arm carries the string emitter's exact bytes as one
         // leaf. Its layout is whatever single-line pre-`rustfmt` form the string
         // emitter produces; structuring the rest (call-arg lists, block-form
@@ -783,6 +792,47 @@ fn build_record(
     ))
 }
 
+/// Build the `Doc` for a functional record update, mirroring
+/// [`crate::emit_expr::emit_update`] token-for-token. The string emitter renders
+/// `{ let mut __ipe_rec = (<record>).clone(); __ipe_rec.f = v; … __ipe_rec }` — a
+/// clone-and-reassign statement block. Since it holds statements, it ALWAYS
+/// breaks: the `let mut` binding, each field assignment, and the `__ipe_rec` tail
+/// each land on their own `HardLine` inside the block's sole `Nest(4)`, matching
+/// rustfmt. The base record and each field value are built recursively; their
+/// leaves carry the string emitter's exact tokens, so the SEAL holds.
+fn build_update(
+    ctx: &EmitCtx,
+    record: &Expr,
+    fields: &[(Symbol, Expr)],
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Doc> {
+    let base_doc = build_doc(ctx, record, indent, child, generics)?;
+    let mut inner = vec![
+        Doc::HardLine,
+        Doc::text("let mut __ipe_rec = ("),
+        base_doc,
+        Doc::text(").clone();"),
+    ];
+    for (sym, value) in fields {
+        let field_ident = ctx.emit_ident(*sym)?;
+        let value_doc = build_doc(ctx, value, indent, child, generics)?;
+        inner.push(Doc::HardLine);
+        inner.push(Doc::owned(format!("__ipe_rec.{field_ident} = ")));
+        inner.push(value_doc);
+        inner.push(Doc::text(";"));
+    }
+    inner.push(Doc::HardLine);
+    inner.push(Doc::text("__ipe_rec"));
+    Ok(Doc::concat(vec![
+        Doc::text("{"),
+        Doc::nest(4, Doc::concat(inner)),
+        Doc::HardLine,
+        Doc::text("}"),
+    ]))
+}
+
 #[cfg(test)]
 #[allow(clippy::panic, clippy::expect_used, reason = "test assertions")]
 mod tests {
@@ -1206,6 +1256,17 @@ mod tests {
             Expr::Record(vec![(sym(fx, 0), Expr::Int(1)), (sym(fx, 1), Expr::Int(2))]),
             // Record literal (structured, wide → breaks fields one per line).
             Expr::Record(vec![(sym(fx, 0), var(fx, 7)), (sym(fx, 1), var(fx, 8))]),
+            // Record update (structured statement block): clone the base, reassign
+            // one field, return the temp. Always breaks (holds statements).
+            Expr::Update {
+                record: Box::new(var(fx, 2)),
+                fields: vec![(sym(fx, 0), Expr::Int(9))],
+            },
+            // Record update with TWO reassigned fields — multiple assignment lines.
+            Expr::Update {
+                record: Box::new(var(fx, 2)),
+                fields: vec![(sym(fx, 0), Expr::Int(9)), (sym(fx, 1), Expr::Int(8))],
+            },
         ]
     }
 
@@ -1871,6 +1932,46 @@ mod tests {
             let expected = format!(
                 "let z = {name} {{\n        a: argument_that_is_quite_long_enough_to_matter_x,\n        b: argument_that_is_quite_long_enough_to_matter_y,\n    }}"
             );
+            assert_eq!(
+                got, expected,
+                "\n--- got ---\n{got}\n--- want ---\n{expected}"
+            );
+        });
+    }
+
+    #[test]
+    fn update_block_single_field_always_breaks() {
+        // A record update is a clone-and-reassign statement block: `{`, the
+        // `let mut __ipe_rec = (c).clone();`, the `__ipe_rec.a = 9;` assignment, the
+        // `__ipe_rec` tail, `}` — each on its own line. Always breaks. Golden
+        // captured from `rustfmt --edition 2024 --style-edition 2024`.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let expr = Expr::Update {
+                record: Box::new(var(&fx, 2)), // c
+                fields: vec![(sym(&fx, 0), Expr::Int(9))],
+            };
+            let got = render_let_stmt(ctx, &expr);
+            let expected = "let z = {\n        let mut __ipe_rec = (c).clone();\n        __ipe_rec.a = 9;\n        __ipe_rec\n    }";
+            assert_eq!(
+                got, expected,
+                "\n--- got ---\n{got}\n--- want ---\n{expected}"
+            );
+        });
+    }
+
+    #[test]
+    fn update_block_multiple_fields_emit_one_assignment_per_line() {
+        // Two reassigned fields → two assignment lines between the `let mut` binding
+        // and the `__ipe_rec` tail. Golden captured from rustfmt.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let expr = Expr::Update {
+                record: Box::new(var(&fx, 2)), // c
+                fields: vec![(sym(&fx, 0), Expr::Int(9)), (sym(&fx, 1), Expr::Int(8))],
+            };
+            let got = render_let_stmt(ctx, &expr);
+            let expected = "let z = {\n        let mut __ipe_rec = (c).clone();\n        __ipe_rec.a = 9;\n        __ipe_rec.b = 8;\n        __ipe_rec\n    }";
             assert_eq!(
                 got, expected,
                 "\n--- got ---\n{got}\n--- want ---\n{expected}"
