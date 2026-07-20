@@ -210,3 +210,37 @@ even when every row is build-ok. This is a codegen/runtime defect independent of
 the mirror model; the CI examples-sweep job is `continue-on-error` so it does not
 block the workflow. Set `IPE_SWEEP_WARN_GATE=0` to score BUILD+RUN only while the
 warning is open.
+
+## CI-preparation backlog
+
+### #310 — FFI dep `version` reaches the emitted Cargo.toml unvalidated (OPEN)
+The FFI inspector's `PkgInfo` decode validates the crate `name`
+(`PackageName::parse`, `[A-Za-z0-9_-]+`), `pkg_path`, function names, and Rust
+types at the wire boundary — an injection-shaped value fails the whole package
+(`WireDefect::InvalidPkgPath` / illegal-crate-name). The `version` field is the
+one gap: `src/compiler/ffi/src/pkginfo.rs` stores it as a raw `String` ("the
+exact resolved crate version") with no parse. When the manifest emitter renders
+`<name> = { version = "<version>", ... }` into the generated `Cargo.toml`, a
+`version` carrying a `"`-and-newline payload could break out of the TOML string.
+
+Root cause / structural fix: parse `version` at the same boundary the name is
+parsed — a `CrateVersion` smart constructor over a `semver::VersionReq`-shaped
+string, so an injection-bearing version is unrepresentable past decode (mirrors
+the `PackageName` treatment). Add the sibling test to the injection suite
+(`a_newline_bearing_pkg_path_fails_the_whole_package`) for a version payload.
+Filed, not fixed here — it is a checker-boundary change on the FFI path, outside
+the CI-prep scope, and no current example exercises it.
+
+### #313 — 00-standard-libs Money.add Result divergence (RESOLVED)
+Previously BUILD-green/RUN-red (the `Ipe.Money.add` `Result` return divergence
+left 4 runtime test failures). Now GREEN in the CI examples sweep
+(`00-standard-libs  ok  ok`) — the `ipe-patches/00-standard-libs.patch` covers
+the divergence. No open work.
+
+### #314 — `unexpected cfg condition value: wasm-client` warning (RESOLVED)
+The emitted non-wasm `Cargo.toml` now DECLARES the `wasm-client` feature in its
+`[features]` table (`wasm-client = []`), so the runtime's
+`cfg(all(target_arch = "wasm32", feature = "wasm-client"))` reference no longer
+raises `unexpected cfg`. The CI examples sweep reports `cargo warnings (past
+#![allow]): 0 total`, and a local emitted-crate build of 01-hello-world shows 0
+warnings. No open work.
