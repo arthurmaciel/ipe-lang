@@ -1,6 +1,8 @@
 # Ipe.Webview — app-entry wiring target
 
-Status: design-locked (v0.1). Implementation not started.
+Status: implemented — runtime (`src/runtime/rust/src/webview.rs`), IR kernel, lower
+resolution, and emission (`src/compiler/backend/rust/src/emit_webview.rs`) all landed;
+a blocking example under `examples/` is the remaining gap.
 Scope: wire `Webview.app { init, update, view, subscriptions, window }` through ipê
 so a desktop app opens a native window via the system webview, reusing the proven
 Ipe.Live (Phase-1b) and Ipe.Tui (Phase-1c) app-entry mechanics.
@@ -12,17 +14,17 @@ panic from well-typed Ipê. No exit-0-then-cargo-fail.
 
 ## Executive summary (12 lines)
 
-1. The Webview runtime is fully ported (`runtime/src/sky_runtime/webview.rs`, `webview_app` at :186, `WebviewWindowCfg` at :38) and feature-gated (`webview = ["wry","tao","live"]`, `runtime/Cargo.toml:98`; wry 0.55 + tao 0.35).
+1. The Webview runtime is fully ported (`src/runtime/rust/src/webview.rs`, `webview_app`, `WebviewWindowCfg`) and feature-gated (`webview = ["wry","tao","live"]`, `src/runtime/rust/Cargo.toml`; wry 0.55 + tao 0.35).
 2. The IR kernel (`KernelFn::WebviewApp`), `is_webview()`, lower callee-resolution `("Webview","app")→WebviewApp` (`lower.rs:4049`), arity-1, and `uses_webview` propagation already exist.
 3. Four wiring holes remain: (a) constrain scheme, (b) lower L0107 exemption arm, (c) `emit_webview.rs`, (d) `project.rs` manifest + mod.rs injection — plus a fifth, genuinely-new element: the main-thread entry switch.
 4. Cfg is a closed 5-field record: `init : () -> (Model, Cmd Msg)` (unit, not `LiveReq`), `update`, `view : Model -> Html Msg` (Html, not Element), `subscriptions`, `window`.
 5. `window` is a nested closed record `{ title : String, size : (Int, Int) }`, fully concrete, type-checked by existing structural record + tuple unification with zero new machinery.
 6. `view` returns `Html`; the user wraps `Ui.layout [] (...)` to convert `Element → Html`. Forgetting the wrap is a compile error (Element ≠ Html), not Go's silent blank window.
-7. The bridge is in-process: initial `render` → `with_html`; DOM events → `window.ipc.postMessage` → `parse_ipc` → reused Live `HandlerIndex::resolve` → `update` → re-render → `evaluate_script("__skyApply(...)")` full-body `innerHTML` swap. No HTTP, SSE, or session store.
+7. The bridge is in-process: initial `render` → `with_html`; DOM events → `window.ipc.postMessage` → `parse_ipc` → reused Live `HandlerIndex::resolve` → `update` → re-render → `evaluate_script("__ipeApply(...)")` full-body `innerHTML` swap. No HTTP, SSE, or session store.
 8. The single genuinely-new soundness-critical deliverable (hard Phase-1d requirement): under `uses_webview`, the emitted `fn main` must call `block_on_current_thread(sky_main())` (not the thread-spawning `block_on`), applied as an anchor-asserted `replacen`-once that emits `CompilerBug` on anchor drift (fail-loud, never a silent no-op). Omission = exit-0 at compile, death on first paint; its runtime regression is the Tier-B xvfb paint test.
 9. `Cmd.perform` / `Sub.every` are dropped with a one-time stderr warning in v0.1 — documented limitation, observable, never a panic; `Cmd.none` works.
 10. Feature gating is structural, not a toggle: `--features webview` unconditionally needs the system webview dev libs; `ipe` preflights `pkg-config webkit2gtk-4.1 libsoup-3.0` and emits an actionable diagnostic.
-11. Security posture is inherited from Ipe.Live verbatim: `render_html` escapes every text/attr node; the single `evaluate_script` slot is safe because it is a JS-*execution* context (not an HTML parse) and `json_str` (= `serde_json::to_string`) escapes the literal delimiters + control bytes — NOT because it escapes U+2028/U+2029 (it does not; see Q6). No `data-sky-eval`/`new Function()`, local-content-only (`with_html`, never `with_url`), fail-closed IPC. No new sink.
+11. Security posture is inherited from Ipe.Live verbatim: `render_html` escapes every text/attr node; the single `evaluate_script` slot is safe because it is a JS-*execution* context (not an HTML parse) and `json_str` (= `serde_json::to_string`) escapes the literal delimiters + control bytes — NOT because it escapes U+2028/U+2029 (it does not; see Q6). No `data-ipe-eval`/`new Function()`, local-content-only (`with_html`, never `with_url`), fail-closed IPC. No new sink.
 12. Golden: three tiers — build+link (real + stub), xvfb spawn/render/no-crash, and a round-trip coverage tier that never pollutes the shipped runtime.
 
 ## Testing-golden verdict
@@ -152,7 +154,7 @@ unaffected.
 
 ## Q3 — the wry/tao in-process TEA bridge
 
-Runtime entry (cite `runtime/src/sky_runtime/webview.rs:186` real / `:55` stub):
+Runtime entry (`src/runtime/rust/src/webview.rs`, real + `!webview` stub):
 
 ```rust
 pub fn webview_app<Model, Msg, E, FInit, FUpdate, FView, FSubs>(
@@ -173,8 +175,8 @@ DECISION — the loop (all in-process; no HTTP, no SSE, no session store):
 
 1. Build `EventLoopBuilder::<UserEvent>::with_user_event().build()` on the true main thread; a `WindowBuilder` with `title` + `LogicalSize(w, h)`.
 2. `init(())` → `(model, cmd0)`; initial view → HTML: `render(&view, &model)` → `(body0, index)`; wrap in `<!doctype html>…<body>{body0}</body><script>{BRIDGE_JS}</script>`; `WebViewBuilder::new().with_html(html)` loads it directly — local content only, no remote URL. Per-OS webview build: `build(&win)` off Linux, `build_gtk(default_vbox | gtk_window)` on Linux (`webview.rs:266`).
-3. Msg dispatch (JS→Rust): `BRIDGE_JS` installs delegated `document` listeners on `[sky-id]` elements; each event posts `{skyId, event, args}` over `window.ipc.postMessage`. The `with_ipc_handler` closure forwards the body into the loop as `UserEvent::Ipc` via the event-loop proxy. On `Event::UserEvent(Ipc(body))`: `parse_ipc` (serde → `Option`) → reused Live `HandlerIndex::resolve(sky_id, ev, args)` → `Option<Msg>`.
-4. update → re-render → DOM patch (Rust→JS): `update(msg, model)` → next model → `render` again → `webview.evaluate_script("window.__skyApply(<json_str(nbody)>)")`, which sets `document.body.innerHTML = nbody`. This is a full-body `innerHTML` swap, NOT a VNode diff. Event delegation means the swap needs no re-bind. `__skyApply` wraps the assignment in the pinned focus/caret save/restore (OPEN DECISION 1 → option (a)): capture `document.activeElement`'s `sky-id` + `value` + selection before the swap, re-apply them by PROPERTY assignment after — never by concatenation into the HTML string.
+3. Msg dispatch (JS→Rust): `BRIDGE_JS` installs delegated `document` listeners on `[ipe-id]` elements; each event posts `{skyId, event, args}` over `window.ipc.postMessage`. The `with_ipc_handler` closure forwards the body into the loop as `UserEvent::Ipc` via the event-loop proxy. On `Event::UserEvent(Ipc(body))`: `parse_ipc` (serde → `Option`) → reused Live `HandlerIndex::resolve(sky_id, ev, args)` → `Option<Msg>`.
+4. update → re-render → DOM patch (Rust→JS): `update(msg, model)` → next model → `render` again → `webview.evaluate_script("window.__ipeApply(<json_str(nbody)>)")`, which sets `document.body.innerHTML = nbody`. This is a full-body `innerHTML` swap, NOT a VNode diff. Event delegation means the swap needs no re-bind. `__ipeApply` wraps the assignment in the pinned focus/caret save/restore (OPEN DECISION 1 → option (a)): capture `document.activeElement`'s `ipe-id` + `value` + selection before the swap, re-apply them by PROPERTY assignment after — never by concatenation into the HTML string.
 5. `WindowEvent::CloseRequested → ControlFlow::Exit`. `event_loop.run` is synchronous and diverging, so no `.await` crosses the `!Send` webview and the `SkyTask` future stays `Send`.
 
 Rationale on the innerHTML swap. AGENTS.md/spec text mentions `diffTrees`; the ported runtime
@@ -270,10 +272,10 @@ simulation; that would be a dishonest golden.
 DECISION. The webview loads only app-rendered, local HTML — the entire attack surface is
 app-controlled content, defended by reusing Ipe.Live's sanitizer unchanged.
 
-- render_html sanitization parity. The body comes exclusively from `render_html`, which HTML-escapes every text + attribute node (INVARIANT comment, `webview.rs:106`). The `document.body.innerHTML = html` in `__skyApply` is therefore not an XSS sink for user data. Any FUTURE raw-HTML renderer node becomes the XSS boundary and must be audited in `render_html`, not here — the Webview port adds ZERO new sink.
-- No eval of app content. `BRIDGE_JS` is a fixed, audited constant with no `data-sky-eval` / `new Function()`. The only outbound `evaluate_script` call is `window.__skyApply(<json_str(body)>)`, where `json_str` = `serde_json::to_string(body)`. The re-render payload cannot break out of the JS string literal — but note the precise reason, because the obvious one is WRONG. Stock `serde_json::to_string` does NOT escape U+2028/U+2029 (serde emits those raw, unlike Go's `encoding/json`); do not claim a U+2028 escaping guarantee that the encoder does not provide. The no-breakout conclusion holds for two independent reasons: (1) the sink is a JS-*execution* context (`evaluate_script("window.__skyApply(...)")`), NOT an HTML-parse context, so `</script>` / `<` breakouts are structurally inapplicable — there is no HTML parser between the string and the engine; and (2) on wry 0.55's ES2019+ engines (WebKitGTK 2.50 / modern WKWebView / WebView2), U+2028/U+2029 are legal string-literal characters and do not terminate the literal. serde's `\"` / `\\` / control-char escaping closes the remaining literal-delimiter and control-byte breakout. WARNING to future maintainers: this reasoning is sink-specific. A different sink — e.g. splicing `json_str(body)` into an inline `<script>` HTML block that goes through an HTML parser — would face BOTH the `</script>` breakout AND (on a legacy/HTML-context engine) the U+2028 line-terminator hazard, neither of which `json_str` guards against. Do NOT route a new sink through `json_str` trusting a U+2028 guarantee that does not exist.
+- render_html sanitization parity. The body comes exclusively from `render_html`, which HTML-escapes every text + attribute node (INVARIANT comment, `webview.rs:106`). The `document.body.innerHTML = html` in `__ipeApply` is therefore not an XSS sink for user data. Any FUTURE raw-HTML renderer node becomes the XSS boundary and must be audited in `render_html`, not here — the Webview port adds ZERO new sink.
+- No eval of app content. `BRIDGE_JS` is a fixed, audited constant with no `data-ipe-eval` / `new Function()`. The only outbound `evaluate_script` call is `window.__ipeApply(<json_str(body)>)`, where `json_str` = `serde_json::to_string(body)`. The re-render payload cannot break out of the JS string literal — but note the precise reason, because the obvious one is WRONG. Stock `serde_json::to_string` does NOT escape U+2028/U+2029 (serde emits those raw, unlike Go's `encoding/json`); do not claim a U+2028 escaping guarantee that the encoder does not provide. The no-breakout conclusion holds for two independent reasons: (1) the sink is a JS-*execution* context (`evaluate_script("window.__ipeApply(...)")`), NOT an HTML-parse context, so `</script>` / `<` breakouts are structurally inapplicable — there is no HTML parser between the string and the engine; and (2) on wry 0.55's ES2019+ engines (WebKitGTK 2.50 / modern WKWebView / WebView2), U+2028/U+2029 are legal string-literal characters and do not terminate the literal. serde's `\"` / `\\` / control-char escaping closes the remaining literal-delimiter and control-byte breakout. WARNING to future maintainers: this reasoning is sink-specific. A different sink — e.g. splicing `json_str(body)` into an inline `<script>` HTML block that goes through an HTML parser — would face BOTH the `</script>` breakout AND (on a legacy/HTML-context engine) the U+2028 line-terminator hazard, neither of which `json_str` guards against. Do NOT route a new sink through `json_str` trusting a U+2028 guarantee that does not exist.
 - Local content only. `with_html(...)` loads inline app HTML in-process; there is no `.with_url`, no remote navigation, no network fetch.
-- Fail-closed IPC. `parse_ipc` is `serde_json::from_str(...).ok()?` — a malformed/hostile IPC body yields `None` (no panic, no dispatch). `HandlerIndex::resolve` returns `None` for an unknown sky-id/event (no fabricated Msg). The only IPC producer is the fixed `BRIDGE_JS` in a no-remote-load webview, so there is no external injector; the parse path is fail-closed by construction. IPC-arg indexing uses `args.get(i).cloned().unwrap_or_default()`-style access — no `.unwrap`, no index-panic.
+- Fail-closed IPC. `parse_ipc` is `serde_json::from_str(...).ok()?` — a malformed/hostile IPC body yields `None` (no panic, no dispatch). `HandlerIndex::resolve` returns `None` for an unknown ipe-id/event (no fabricated Msg). The only IPC producer is the fixed `BRIDGE_JS` in a no-remote-load webview, so there is no external injector; the parse path is fail-closed by construction. IPC-arg indexing uses `args.get(i).cloned().unwrap_or_default()`-style access — no `.unwrap`, no index-panic.
 - No new secrets surface. No session store, no cookies, no HTTP server — the multi-tenant/console/auth attack surfaces of Ipe.Live do not exist for Webview.
 - No panic from well-typed Ipê. Every fallible step routes through `Err` (window build `:235`, webview build `:271`, stub `:72`); `event_loop.run` diverges; `json_str`'s unreachable Err arm has a total fallback. On a machine without libs (feature-ON, libs-missing) the failure is at cargo link, not at runtime — consistent with "if it compiles, it works". Preserve this by never adding an `.unwrap()` in the emitted call path.
 
@@ -299,15 +301,15 @@ valued_field` cleanly. A let-bound / builder-piped cfg stays fail-closed. Add th
 gate here (Q1).
 
 2. Closed-record constrain scheme (`constrain.rs`) — Q1. Qualifier set == lower resolved set.
-3. `emit_webview.rs` (new, clone `emit_tui.rs`) — field-extract the four function fields via `emit_webview_fn`; extract `title`/`size` from the inline `window` record and construct the NOMINAL `sky_runtime::webview::WebviewWindowCfg { title, size: (w, h) }` by name. Do NOT route `window` through the generic anonymous-record emitter — that produces a distinct `Rec…`-named struct and cargo-fails. Dispatch from `emit_expr.rs` (replace the Phase-0 `CompilerBug` stub) on `k.is_webview()`.
+3. `emit_webview.rs` (modelled on `emit_tui.rs`) — field-extract the four function fields via `emit_webview_fn`; extract `title`/`size` from the inline `window` record and construct the NOMINAL `ipe_runtime::webview::WebviewWindowCfg { title, size: (w, h) }` by name. Do NOT route `window` through the generic anonymous-record emitter — that produces a distinct `Rec…`-named struct and cargo-fails. Dispatch from `emit_expr.rs` on `k.is_webview()`.
 4. `project.rs` manifest injection — Q4.
 
 Emitted call shape:
 
 ```rust
-sky_runtime::webview::webview_app(
+ipe_runtime::webview::webview_app(
     <init>, <update>, <view>, <subscriptions>,
-    sky_runtime::webview::WebviewWindowCfg { title: <title>, size: (<w>, <h>) },
+    ipe_runtime::webview::WebviewWindowCfg { title: <title>, size: (<w>, <h>) },
 )
 ```
 
@@ -329,13 +331,13 @@ sky_runtime::webview::webview_app(
 | missing native libs | cargo link | `ipe` pkg-config preflight with actionable diagnostic; stub path links + `Err`. |
 | Cmd/Sub silently dropped | v0.1 sync loop | `warn_dropped_cmd_if_real` (one-time stderr); typed uniformly; no panic. |
 | click-is-a-no-op regression | headless test | Tier-C runtime round-trip unit test (build-only can't catch it). |
-| new XSS / eval hole | DOM patch | Reuse `render_html` (escapes all) + `__skyApply` sink is a JS-execution context (not HTML-parse) with `json_str` literal-escaping — NOT a U+2028 guarantee (serde does not escape U+2028/U+2029; see Q6); no `data-sky-eval`; local-content-only; fail-closed IPC. |
+| new XSS / eval hole | DOM patch | Reuse `render_html` (escapes all) + `__ipeApply` sink is a JS-execution context (not HTML-parse) with `json_str` literal-escaping — NOT a U+2028 guarantee (serde does not escape U+2028/U+2029; see Q6); no `data-ipe-eval`; local-content-only; fail-closed IPC. |
 
 ---
 
 ## OPEN DECISIONS
 
-1. Input / focus preservation parity (v0.1) — PINNED to option (a). Ipe.Live hardens against re-render destroying uncontrolled input state (focus-preserving DOM replacer; password fields carry no `value`; open-`<select>` defence). A naive full-body `innerHTML = nbody` blows focus, caret position, in-flight input text, and open dropdowns on every Msg. RESOLUTION (a): add a small, bounded save/restore of `document.activeElement`'s value + selection (`selectionStart`/`selectionEnd`) around the innerHTML assignment inside the fixed `BRIDGE_JS` constant, keyed by the element's `sky-id`. HARD CONSTRAINT: the restore MUST use property assignment (`el.value = savedValue; el.selectionStart = …`), NEVER concatenation of the saved value into an HTML string. Property assignment sets a live DOM node's property directly — it never re-enters the HTML parser and never re-enters `eval`, so it opens ZERO new injection path (in contrast, splicing the saved value back into `innerHTML` would resurrect an XSS sink). The saved value stays entirely client-side and is never round-tripped to Rust. IMPORTANT — the doc must NOT claim Ipe.Live input-preservation parity: this save/restore covers the focused element's value + caret only, not Live's full uncontrolled-field matrix (every uncontrolled INPUT/TEXTAREA/SELECT, password-field-carries-no-`value`, open-`<select>` defence). It is a UX/correctness gap, not a security gap — the in-flight input remains client-side and is therefore never a secret leak. State the residual gap explicitly rather than implying parity.
+1. Input / focus preservation parity (v0.1) — PINNED to option (a). Ipe.Live hardens against re-render destroying uncontrolled input state (focus-preserving DOM replacer; password fields carry no `value`; open-`<select>` defence). A naive full-body `innerHTML = nbody` blows focus, caret position, in-flight input text, and open dropdowns on every Msg. RESOLUTION (a): add a small, bounded save/restore of `document.activeElement`'s value + selection (`selectionStart`/`selectionEnd`) around the innerHTML assignment inside the fixed `BRIDGE_JS` constant, keyed by the element's `ipe-id`. HARD CONSTRAINT: the restore MUST use property assignment (`el.value = savedValue; el.selectionStart = …`), NEVER concatenation of the saved value into an HTML string. Property assignment sets a live DOM node's property directly — it never re-enters the HTML parser and never re-enters `eval`, so it opens ZERO new injection path (in contrast, splicing the saved value back into `innerHTML` would resurrect an XSS sink). The saved value stays entirely client-side and is never round-tripped to Rust. IMPORTANT — the doc must NOT claim Ipe.Live input-preservation parity: this save/restore covers the focused element's value + caret only, not Live's full uncontrolled-field matrix (every uncontrolled INPUT/TEXTAREA/SELECT, password-field-carries-no-`value`, open-`<select>` defence). It is a UX/correctness gap, not a security gap — the in-flight input remains client-side and is therefore never a secret leak. State the residual gap explicitly rather than implying parity.
 
 2. Manifest dependency-emission mechanism. Whether `webview_cargo_toml` DIRECT-INJECTS `wry = "0.55"` + `tao = "0.35"` into the emitted project manifest, or relies on FEATURE-FORWARDING from the vendored runtime's `webview = ["wry","tao","live"]` mapping, depends on whether the vendored runtime is an in-project module (single Cargo.toml → direct-inject) or a path sub-crate (features forward). RESOLVE by reading `project.rs` and mirroring `live_cargo_toml`'s proven mechanism exactly — do not invent a new one. Tier-A build+link catches any drift.
 
@@ -347,6 +349,6 @@ sky_runtime::webview::webview_app(
 
 ## Load-bearing files
 
-- Runtime: `runtime/src/sky_runtime/webview.rs` (`webview_app` :186, `WebviewWindowCfg` :38, `BRIDGE_JS` / `__skyApply` :94-110, `render` :157, `warn_dropped_cmd_if_real` :125); `runtime/src/sky_runtime/task.rs` (`block_on` :5, `block_on_current_thread` :47); `runtime/Cargo.toml:98` (`webview` feature).
-- Wiring sites: `crates/sky_types/src/constrain.rs` (new arm + 3 interned symbols); `crates/sky_lower/src/lower.rs` (L0107 intercept + inline-window gate + `uses_webview⇒uses_live`; resolve :4049); new `crates/sky_backend_rust/src/emit_webview.rs` + `crates/sky_backend_rust/src/emit_expr.rs` (dispatch); `crates/sky_backend_rust/src/project.rs` (`webview_cargo_toml` + mod.rs append + entry switch); `crates/sky_backend_rust/src/preamble.rs` + `tests/golden/basics/main.rs:287` (entry rewrite).
-- Reference templates: `crates/sky_backend_rust/src/emit_tui.rs`, `emit_live.rs`, and the `live_cargo_toml` / `tui_cargo_toml` injectors in `project.rs`.
+- Runtime: `src/runtime/rust/src/webview.rs` (`webview_app`, `WebviewWindowCfg`, `BRIDGE_JS` / `__ipeApply`, `render`, `warn_dropped_cmd_if_real`); `src/runtime/rust/src/task.rs` (`block_on`, `block_on_current_thread`); `src/runtime/rust/Cargo.toml` (`webview` feature).
+- Wiring sites: `src/compiler/types/src/constrain.rs` (new arm + interned symbols); `src/compiler/lower/src/lower.rs` (`L0107` intercept + inline-window gate + `uses_webview⇒uses_live`; callee resolve); `src/compiler/backend/rust/src/emit_webview.rs` + `emit_expr.rs` (dispatch); `src/compiler/backend/rust/src/project.rs` (`webview_cargo_toml` + `mod.rs` append + entry switch); `src/compiler/backend/rust/src/preamble.rs` (entry rewrite).
+- Reference templates: `src/compiler/backend/rust/src/emit_tui.rs`, `emit_live.rs`, and the `live_cargo_toml` / `tui_cargo_toml` injectors in `project.rs`.
