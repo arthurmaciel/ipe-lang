@@ -216,6 +216,15 @@ const COMMANDS: &[Command] = &[
         options: &[],
     },
     Command {
+        name: "diff",
+        summary: "Compare two package versions' public APIs and report the required semver bump.",
+        args: "<old-path> <new-path>",
+        options: &[Opt {
+            flag: "[--check <old-version> <new-version>]",
+            desc: "reject a new version that does not clear the required bump",
+        }],
+    },
+    Command {
         name: "lsp",
         summary: "Run the language server over stdio.",
         args: "",
@@ -245,7 +254,7 @@ const SECTIONS: &[Section] = &[
     },
     Section {
         title: "Tools",
-        commands: &["explain", "capabilities", "lsp", "version"],
+        commands: &["explain", "capabilities", "diff", "lsp", "version"],
     },
 ];
 

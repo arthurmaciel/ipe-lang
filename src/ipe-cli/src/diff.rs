@@ -11,10 +11,11 @@
 //! change it cannot prove compatible is breaking — a false-breaking wastes a
 //! version number, a false-compatible ships a silent break.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use semver::Version;
 
+use crate::CliError;
 use crate::api_surface::{DiffError, ModuleApi, PublicApi, extract_tree};
 
 /// Whether a public-API delta breaks existing users.
@@ -316,4 +317,147 @@ pub fn report(
         floor,
         satisfied,
     }
+}
+
+impl RequiredBump {
+    /// The lowercase name of the bump, for messages.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Patch => "patch",
+            Self::Minor => "minor",
+        }
+    }
+}
+
+impl std::fmt::Display for ApiChange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ModuleRemoved { module } => write!(f, "  - removed module {module}"),
+            Self::ModuleAdded { module } => write!(f, "  + added module {module}"),
+            Self::ValueRemoved { module, name } => write!(f, "  - removed {module}.{name}"),
+            Self::ValueAdded { module, name } => write!(f, "  + added {module}.{name}"),
+            Self::ValueChanged {
+                module,
+                name,
+                old,
+                new,
+            } => write!(f, "  ~ changed {module}.{name} : {old}  ->  {new}"),
+            Self::UnionRemoved { module, name } => write!(f, "  - removed type {module}.{name}"),
+            Self::UnionAdded { module, name } => write!(f, "  + added type {module}.{name}"),
+            Self::UnionArityChanged {
+                module,
+                name,
+                old,
+                new,
+            } => write!(
+                f,
+                "  ~ changed type parameters of {module}.{name}: {old} -> {new}"
+            ),
+            Self::ConstructorRemoved {
+                module,
+                union,
+                ctor,
+            } => write!(f, "  - removed constructor {module}.{union}.{ctor}"),
+            Self::ConstructorAdded {
+                module,
+                union,
+                ctor,
+            } => write!(f, "  + added constructor {module}.{union}.{ctor}"),
+            Self::ConstructorChanged {
+                module,
+                union,
+                ctor,
+            } => write!(f, "  ~ changed constructor {module}.{union}.{ctor}"),
+        }
+    }
+}
+
+/// Print `report`'s classified changes and its required-bump verdict to stdout.
+fn print_report(report: &SemverReport) {
+    if report.changes.is_empty() {
+        println!("No public API changes.");
+    } else {
+        println!("Public API changes:");
+        for change in &report.changes {
+            println!("{change}");
+        }
+    }
+    let kind = match report.compatibility {
+        Compatibility::Compatible => "compatible",
+        Compatibility::Breaking => "breaking",
+    };
+    println!(
+        "\nThis is a {kind} change — it requires at least a {} bump (>= {}).",
+        report.required.as_str(),
+        report.floor
+    );
+}
+
+/// `ipe diff <old> <new> [--check <old-version> <new-version>]`.
+///
+/// Without `--check`, prints the classified public-API changes and the required
+/// bump, exiting 0 (it is a report). With `--check <old-ver> <new-ver>`, also
+/// verifies the proposed new version clears the required floor, exiting non-zero
+/// (a typed [`CliError::SemverRejected`]) when it does not — the gate primitive
+/// in CLI form.
+///
+/// # Errors
+/// [`CliError::Usage`] on argument misuse, [`CliError::UsageOwned`] on a
+/// malformed version, [`CliError::Diff`] when a tree cannot be read/typechecked,
+/// or [`CliError::SemverRejected`] when `--check` finds an under-bump.
+pub fn run_diff(rest: &[String]) -> Result<(), CliError> {
+    const USAGE: &str =
+        "usage: ipe diff <old-path> <new-path> [--check <old-version> <new-version>]";
+
+    let mut positional: Vec<&str> = Vec::new();
+    let mut check: Option<(String, String)> = None;
+    let mut it = rest.iter();
+    while let Some(arg) = it.next() {
+        if arg == "--check" {
+            let old_v = it.next().ok_or(CliError::Usage(USAGE))?.clone();
+            let new_v = it.next().ok_or(CliError::Usage(USAGE))?.clone();
+            check = Some((old_v, new_v));
+        } else {
+            positional.push(arg);
+        }
+    }
+    let [old_path, new_path] = positional.as_slice() else {
+        return Err(CliError::Usage(USAGE));
+    };
+    let old_tree = PathBuf::from(old_path);
+    let new_tree = PathBuf::from(new_path);
+
+    match check {
+        None => {
+            // Report mode: diff against a placeholder version pair so the report
+            // still names the required bump. The floor is informational here.
+            let old_api = extract_tree(&old_tree)?;
+            let new_api = extract_tree(&new_tree)?;
+            let placeholder = Version::new(0, 0, 0);
+            let rep = report(&old_api, &new_api, &placeholder, &placeholder);
+            print_report(&rep);
+            Ok(())
+        }
+        Some((old_v, new_v)) => {
+            let old_version = parse_version(&old_v)?;
+            let new_version = parse_version(&new_v)?;
+            let rep = check_semver_bump(&old_tree, &new_tree, &old_version, &new_version)?;
+            print_report(&rep);
+            if rep.satisfied {
+                Ok(())
+            } else {
+                Err(CliError::SemverRejected {
+                    required: rep.required.as_str().to_owned(),
+                    floor: rep.floor.to_string(),
+                    proposed: new_version.to_string(),
+                })
+            }
+        }
+    }
+}
+
+/// Parse a semver version argument, mapping a malformed value to a usage error.
+fn parse_version(raw: &str) -> Result<Version, CliError> {
+    Version::parse(raw).map_err(|_| CliError::UsageOwned(format!("diff: invalid version `{raw}`")))
 }

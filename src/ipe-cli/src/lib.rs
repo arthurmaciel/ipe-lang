@@ -111,6 +111,24 @@ pub enum CliError {
         expected: String,
         actual: String,
     },
+    /// `ipe diff` could not compute the public-API delta — a tree could not be
+    /// read, did not typecheck, or exposed an open interface. Carries the typed
+    /// [`api_surface::DiffError`] cause.
+    Diff(api_surface::DiffError),
+    /// `ipe diff --check` found the proposed new version does not clear the
+    /// required semver floor. Carries the required floor version and the
+    /// human-readable required bump so the message is actionable.
+    SemverRejected {
+        required: String,
+        floor: String,
+        proposed: String,
+    },
+}
+
+impl From<api_surface::DiffError> for CliError {
+    fn from(err: api_surface::DiffError) -> Self {
+        Self::Diff(err)
+    }
 }
 
 impl From<build_plan::Refusal> for CliError {
@@ -171,6 +189,16 @@ impl std::fmt::Display for CliError {
                     }
                 }
             }
+            Self::Diff(err) => write!(f, "{err}"),
+            Self::SemverRejected {
+                required,
+                floor,
+                proposed,
+            } => write!(
+                f,
+                "version {proposed} does not clear the required {required} bump — the new \
+                 version must be at least {floor}."
+            ),
         }
     }
 }
@@ -1492,6 +1520,7 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
         Some((cmd, rest)) if cmd == "watch" => run_watch(rest),
         Some((cmd, rest)) if cmd == "explain" => run_explain(rest),
         Some((cmd, rest)) if cmd == "capabilities" => run_capabilities(rest),
+        Some((cmd, rest)) if cmd == "diff" => diff::run_diff(rest),
         Some((cmd, rest)) if cmd == "rust" => ffi::run_rust(rest),
         Some((cmd, rest)) if cmd == "add" => pkg::run_add(rest),
         Some((cmd, rest)) if cmd == "remove" => pkg::run_remove(rest),
