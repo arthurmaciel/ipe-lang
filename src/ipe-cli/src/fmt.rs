@@ -518,11 +518,17 @@ impl Printer<'_> {
     fn module(&self, m: &Module) -> String {
         let mut out = String::new();
 
-        // Any comment before the module header prints first, on its own line(s).
+        // Any comment before the module header prints first, on its own
+        // line(s). elm-format then separates the comment block from the header
+        // with exactly two blank lines, however the source spaced them.
         let header_lo = usize::try_from(m.name.span.lo).unwrap_or(0);
-        for c in self.comments_before(0, header_lo) {
-            out.push_str(&c.text);
-            out.push('\n');
+        let pre_header = self.comments_before(0, header_lo);
+        if !pre_header.is_empty() {
+            for c in &pre_header {
+                out.push_str(&c.text);
+                out.push('\n');
+            }
+            out.push_str("\n\n");
         }
 
         // module <Name> exposing (…)
@@ -993,7 +999,11 @@ impl Printer<'_> {
             .map(|(n, ty)| format!("{} : {}", self.sym(*n), self.type_annotation(ty, indent)))
             .collect();
         let one = format!("{{ {} }}", parts.join(", "));
-        if fits(&one, indent * 4) && !force_multi {
+        // Modal, like every other collection: a record type written on one line
+        // stays single-line however wide; only a source-multiline record (the
+        // `force_multi` trigger) or one whose own field broke lays out one field
+        // per leading-comma line.
+        if !force_multi && !one.contains('\n') {
             return one;
         }
         let pad = pad(indent);
