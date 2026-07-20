@@ -17,7 +17,9 @@
 //!   * `Task.fail e |> Task.andThen (\_ -> Task.succeed "unreachable")`
 //!   * `ignore : a -> Task Error String` with `_` as named binder
 //!
-//! Asserts ipe-0 ∧ cargo-0 ∧ run produces expected output.
+//! Asserts ipe-0 ∧ cargo-0 ∧ run produces expected output. `Error.toString`
+//! renders the `ErrorKind` ADT as `"<Kind>: <message>"`, so the `Task.fail`
+//! chain prints `err: Unexpected: intentional`.
 //!
 //! Gated on `IPE_E2E=1`. Run:
 //!
@@ -78,8 +80,8 @@ fn wildcard_lambda_pany_ipec_cargo_and_run_zero() {
         outcome.stdout
     );
     assert!(
-        outcome.stdout.contains("err: intentional"),
-        "Task.fail chain must print 'err: intentional'; got:\n{}",
+        outcome.stdout.contains("err: Unexpected: intentional"),
+        "Task.fail chain must print 'err: Unexpected: intentional'; got:\n{}",
         outcome.stdout
     );
     assert!(

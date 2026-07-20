@@ -9,10 +9,9 @@
 //!   (Task.fail (Error.unexpected "boom"))`. Exercises the whole minimal Error
 //!   surface end-to-end: `Error.unexpected` (message constructor, `String ->
 //!   Error`), `Task.fail` on an `Error`-channel value, `Task.onError` with an
-//!   `e : Error` handler parameter, and `Error.toString : Error -> String`. With
-//!   `IpeError = String` the message round-trips verbatim, so stdout is `boom`.
-//!   Marked `oracle_divergence` because upstream Go renders the kind prefix
-//!   (`Unexpected: boom`) via the rich `ErrorKind` ADT deferred elsewhere.
+//!   `e : Error` handler parameter, and `Error.toString : Error -> String`.
+//!   `Error.toString` renders the `ErrorKind` ADT as `"<Kind>: <message>"`, so an
+//!   `Unexpected`-kind error carrying `"boom"` prints `Unexpected: boom`.
 //!
 //! Run:
 //!
