@@ -249,6 +249,8 @@ pub const IPE_L0127: Code = Code("IPE-L0127");
 pub const IPE_L0128: Code = Code("IPE-L0128");
 /// A routed `Live.app` under `--target wasm` (client router not yet built).
 pub const IPE_L0129: Code = Code("IPE-L0129");
+/// a foreign opaque FFI handle (possibly non-`Clone`) is used more than once
+pub const IPE_L0130: Code = Code("IPE-L0130");
 /// expression nests too deeply for the backend
 pub const IPE_L0200: Code = Code("IPE-L0200");
 
@@ -391,6 +393,7 @@ pub fn title(c: Code) -> &'static str {
         IPE_L0127 => "a value holding a function is used more than once",
         IPE_L0128 => "alias over a dispatch-needing nested pattern not supported yet",
         IPE_L0129 => "routed Live.app not supported under --target wasm yet",
+        IPE_L0130 => "a foreign opaque FFI handle is used more than once",
         IPE_L0200 => "expression nests too deeply for the backend",
         IPE_F4400 => "a foreign-call description cannot be rendered as valid Rust",
         IPE_F4401 => "a foreign binding's inspection data is malformed",
@@ -526,6 +529,7 @@ fn back_end_explain_page(c: Code) -> Option<&'static str> {
         IPE_L0127 => Some(include_str!("../explain/IPE-L0127.md")),
         IPE_L0128 => Some(include_str!("../explain/IPE-L0128.md")),
         IPE_L0129 => Some(include_str!("../explain/IPE-L0129.md")),
+        IPE_L0130 => Some(include_str!("../explain/IPE-L0130.md")),
         IPE_L0200 => Some(include_str!("../explain/IPE-L0200.md")),
         IPE_F4400 => Some(include_str!("../explain/IPE-F4400.md")),
         IPE_F4401 => Some(include_str!("../explain/IPE-F4401.md")),
@@ -563,9 +567,9 @@ pub const ALL_CODES: &[Code] = &[
     IPE_L0102, IPE_L0103, IPE_L0104, IPE_L0105, IPE_L0106, IPE_L0107, IPE_L0108, IPE_L0110,
     IPE_L0111, IPE_L0112, IPE_L0113, IPE_L0114, IPE_L0115, IPE_L0116, IPE_L0117, IPE_L0118,
     IPE_L0119, IPE_L0120, IPE_L0121, IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126,
-    IPE_L0127, IPE_L0128, IPE_L0129, IPE_L0200, IPE_F4400, IPE_F4401, IPE_F4402, IPE_F4410,
-    IPE_F4411, IPE_F4412, IPE_I0001, IPE_I0010, IPE_I0011, IPE_I0100, IPE_I0101, IPE_I0102,
-    IPE_I0103, IPE_I0200, IPE_I0201, IPE_I0202, IPE_I0203,
+    IPE_L0127, IPE_L0128, IPE_L0129, IPE_L0130, IPE_L0200, IPE_F4400, IPE_F4401, IPE_F4402,
+    IPE_F4410, IPE_F4411, IPE_F4412, IPE_I0001, IPE_I0010, IPE_I0011, IPE_I0100, IPE_I0101,
+    IPE_I0102, IPE_I0103, IPE_I0200, IPE_I0201, IPE_I0202, IPE_I0203,
 ];
 
 #[cfg(test)]
@@ -574,7 +578,7 @@ mod tests {
 
     #[test]
     fn taxonomy_code_count_is_pinned() {
-        assert_eq!(ALL_CODES.len(), 101);
+        assert_eq!(ALL_CODES.len(), 102);
     }
 
     #[test]
@@ -592,7 +596,7 @@ mod tests {
             assert!(s.starts_with("IPE-"), "{s} bad prefix");
             assert!(seen.insert(s), "{s} duplicated");
         }
-        assert_eq!(seen.len(), 101);
+        assert_eq!(seen.len(), 102);
     }
 
     /// CI coverage gate: every taxonomy code has a conforming explain page.
