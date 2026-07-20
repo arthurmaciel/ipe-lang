@@ -8,9 +8,7 @@ that builds with `ipe build` and targets the Rust backend.
 
 | Directory | Shape | What it demonstrates |
 |-----------|-------|----------------------|
-| `39-ffi-skyshop-core` | cli | Ipeshop domain core ported to Rust FFI crates: order IDs from the real `uuid` crate via the shim-free auto-FFI bridge (`Rust.Uuid`), persistence via `Ipe.Db` SQLite (replacing Firestore). Proof of the shim-free FFI path end-to-end. |
 | `40-wasm-counter` | wasm/live | Basic TEA counter compiled to WebAssembly via `--target wasm`. The canonical "hello WASM" starting point. |
-| `41-money-allocate-regression` | cli | Regression suite for `Money.allocate`: zero-allocation guard (CO-INCR-001) and sign-correct residue distribution (CO-INCR-002). |
 | `42-wasm-effects` | wasm/live | `Sub.every` timer and `Cmd.perform` side-effects exercised end-to-end in a browser via the M4 Cmd/Sub bridge (gloo-timers). |
 | `43-wasm-websocket` | wasm/live | `Ipe.WebSocket` client substitute: connect / onOpen / send / onMessage / close / onClose against a real WebSocket server in-browser. |
 | `44-wasm-env-public` | wasm/live | `Ipe.Env.public` build-time config embedding: an allowlisted `API_BASE_URL` variable injected at compile time and readable in WASM at run time. |
@@ -38,7 +36,6 @@ git-ignored.
 
 ```sh
 # Build and run a CLI example
-cd examples/41-money-allocate-regression
 ipe build ipe.toml --out out/rust
 cargo run --manifest-path out/rust/Cargo.toml
 
