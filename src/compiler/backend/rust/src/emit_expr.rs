@@ -6573,7 +6573,7 @@ fn emit_match(
 /// matched as `&str` (string `case`) or `&[T]` (list `case`) or as-is; a TUPLE
 /// scrutinee (a multi-arm product `case`) is matched column-by-column, each
 /// column carrying its own string / list coercion.
-enum ScrutMode {
+pub enum ScrutMode {
     Whole { str_mode: bool, list_mode: bool },
     Tuple(Vec<ColMode>),
 }
@@ -6582,7 +6582,7 @@ enum ScrutMode {
 /// matched as `&[T]` when some arm slices it (`… , x :: xs , …`) and as `&str`
 /// when some arm matches it against a string literal.
 #[derive(Clone, Copy)]
-struct ColMode {
+pub struct ColMode {
     str_mode: bool,
     list_mode: bool,
 }
@@ -6627,7 +6627,7 @@ fn tuple_col_modes(arms: &[Arm], arity: usize) -> Vec<ColMode> {
     cols
 }
 
-fn emit_match_scrutinee(
+pub fn emit_match_scrutinee(
     ctx: &EmitCtx,
     m: &Match,
     indent: usize,
@@ -6702,7 +6702,7 @@ fn emit_match_scrutinee(
 /// both, or neither may be present; both present are joined `synth && ir` (the
 /// synthesized `as_str()` checks come from the pattern, so they read first).
 /// `None` when neither is present, leaving the arm's `=> …` shape guardless.
-fn combine_guards(synth: Option<String>, ir: Option<String>) -> Option<String> {
+pub fn combine_guards(synth: Option<String>, ir: Option<String>) -> Option<String> {
     match (synth, ir) {
         (Some(s), Some(i)) => Some(format!("{s} && {i}")),
         (Some(s), None) => Some(s),
@@ -6716,7 +6716,7 @@ fn combine_guards(synth: Option<String>, ir: Option<String>) -> Option<String> {
 /// by-value string-literal column, joined with `&&` when several columns carry
 /// one). `None` when no guard is synthesized, so the
 /// caller's `if <guard>` clause stays absent.
-fn emit_arm_head(
+pub fn emit_arm_head(
     ctx: &EmitCtx,
     pat: &Pat,
     mode: &ScrutMode,
