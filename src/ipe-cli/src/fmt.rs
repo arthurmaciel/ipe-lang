@@ -1249,7 +1249,7 @@ impl Printer<'_> {
             one.push_str(&self.sym(op.value));
             one.push(' ');
         }
-        one.push_str(&self.binop_operand(last, indent));
+        one.push_str(&self.binop_last_operand(last, indent));
         // Modal, like every other construct: a chain written on one line stays
         // single-line however wide (elm-format keeps 900-column `::` chains
         // intact), and only a source-multiline chain — or one whose operand
@@ -1271,7 +1271,7 @@ impl Printer<'_> {
                 out.push_str(&self.binop_operand(operand, indent));
                 let _ = write!(out, " {}\n{inner}", self.sym(op.value));
             }
-            out.push_str(&self.binop_operand(last, indent + 1));
+            out.push_str(&self.binop_last_operand(last, indent + 1));
             return out;
         }
         // Multiline: the FIRST operand stays on the current line at the base
@@ -1289,7 +1289,7 @@ impl Printer<'_> {
             first = false;
         }
         // The trailing operand shares the last operator's continuation line.
-        out.push_str(&self.binop_operand(last, indent + 1));
+        out.push_str(&self.binop_last_operand(last, indent + 1));
         out
     }
 
@@ -1303,6 +1303,18 @@ impl Printer<'_> {
             self.expr(e, indent)
         } else {
             self.expr_atom(e, indent)
+        }
+    }
+
+    /// The final operand of an operator chain. A trailing `\x -> …` needs no
+    /// wrapping parens — the operator to its left already delimits it and its
+    /// body extends to the end of the expression, so elm-format emits it bare
+    /// (`f <| \x -> body`). Every other operand keeps [`Self::binop_operand`].
+    fn binop_last_operand(&self, e: &Expr, indent: usize) -> String {
+        if matches!(e.value, Expr_::Lambda(..)) {
+            self.expr(e, indent)
+        } else {
+            self.binop_operand(e, indent)
         }
     }
 
