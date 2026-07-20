@@ -37,8 +37,11 @@ concurrency:
   group: examples-sweep-${{ github.ref }}
   cancel-in-progress: true
 
+# The sweep refreshes the tracked examples/sky/ mirror from upstream in place;
+# the commit-refreshed-mirror step (ubuntu, main only) needs write access to
+# push that refresh back. Every other job/host stays read-only.
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   examples-sweep:
@@ -134,6 +137,34 @@ jobs:
       - name: Run examples sweep (mirror + BUILD + RUN)
         shell: bash
         run: bash scripts/examples-sweep.sh
+
+      # Commit the refreshed raw upstream mirror. The sweep rewrites the tracked
+      # examples/sky/ tree in place from the CURRENT upstream, so the committed
+      # snapshot tracks upstream drift. ONE OS (ubuntu, the developer reference),
+      # main only, and only when the tree actually differs — `[skip ci]` so the
+      # bot commit does not re-trigger the sweep. The sweep's own BUILD/RUN
+      # artifacts are gitignored (examples/sky/**/{out,target,sky-out,.ipe,...}),
+      # so only genuine source drift is staged.
+      - name: Commit refreshed upstream mirror
+        if: >-
+          startsWith(matrix.os, 'ubuntu')
+          && github.event_name == 'push'
+          && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A examples/sky/
+          if git diff --cached --quiet; then
+            echo "mirror unchanged — nothing to commit."
+            exit 0
+          fi
+          git config user.name  "ipe-mirror-bot"
+          git config user.email "ipe-mirror-bot@users.noreply.github.com"
+          git commit -m "chore(examples): refresh upstream Sky mirror [skip ci]"
+          # Rebase onto any concurrent main advance before pushing (the sweep is
+          # slow; another push may have landed). Fail loud rather than force.
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
 
       # Per-OS job summary: the BUILD·RUN table inline on the run page. always()
       # so it renders even on a RED verdict. COSMETIC — never fails the job.
