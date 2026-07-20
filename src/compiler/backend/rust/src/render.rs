@@ -5,8 +5,13 @@
 //! Two layout mechanisms:
 //!
 //! * [`Doc::Group`] is flat-if-fits-else-break: if the group's flat rendering
-//!   fits the remaining width, every [`Doc::Line`] in it is a space; otherwise
-//!   every `Line` / `Softline` becomes a newline plus the current indent.
+//!   fits the remaining width AND it contains no [`Doc::HardLine`], every
+//!   [`Doc::Line`] / [`Doc::Softline`] in it lays out flat (a space / nothing);
+//!   otherwise every soft break in it becomes a newline plus the current indent.
+//!   A [`Doc::HardLine`] always breaks and forces every enclosing group broken —
+//!   that keeps a statement block (`{ let x = …; x }`) from ever inlining, while
+//!   an inline structure (`(a, b)`, `if c {1} else {2}`, carrying only soft
+//!   `Line`s) flattens when it fits.
 //!
 //! * [`Doc::Chain`] is rustfmt's binary-operator-chain layout, derived
 //!   empirically from real rustfmt bytes and proven byte-exact against the
@@ -56,12 +61,27 @@ fn current_col(out: &str) -> usize {
     out.rfind('\n').map_or(out.len(), |nl| out.len() - nl - 1)
 }
 
+/// The column the next character will land on. Once anything has been written to
+/// `out`, the live cursor ([`current_col`]) is authoritative — including after a
+/// break reset it to the fresh line's indent. The seed `col` is used only for an
+/// empty buffer (the render root, or a `fits` scratch measured from `start_col`),
+/// where there is no cursor yet. Taking `max` here would leak a pre-newline
+/// column past a break, so we deliberately prefer the live cursor.
+fn eff_col(out: &str, col: usize) -> usize {
+    if out.is_empty() {
+        col
+    } else {
+        current_col(out)
+    }
+}
+
 /// Render `doc` into `out`. `indent` is the block indent for newlines within
-/// `doc`; `flat` forces flat mode for the [`Doc::Line`] / [`Doc::Softline`] whose
-/// nearest enclosing group chose flat. A `Line` / `Softline` NOT inside a
-/// chosen-flat group is a hard break (a block with a statement always breaks —
-/// its breaks are ungrouped, so `flat` never reaches them as `true`). `col` is
-/// the column the first char lands on.
+/// `doc`; `flat` is `true` when the nearest enclosing [`Doc::Group`] chose flat,
+/// which turns a soft [`Doc::Line`] into a space and a [`Doc::Softline`] into
+/// nothing. A [`Doc::HardLine`] ignores `flat` — it always breaks (and its
+/// presence already forced every enclosing group broken, so it is never reached
+/// with `flat == true` in practice, but it breaks unconditionally regardless).
+/// `col` is the column the first char lands on.
 fn render_at(
     doc: &Doc,
     cfg: RenderConfig,
@@ -86,9 +106,13 @@ fn render_at(
                 push_indent(indent, out);
             }
         }
+        Doc::HardLine => {
+            out.push('\n');
+            push_indent(indent, out);
+        }
         Doc::Concat(docs) => {
             for d in docs {
-                let c = current_col(out).max(col);
+                let c = eff_col(out, col);
                 render_at(d, cfg, indent, c, flat, out);
             }
         }
@@ -96,10 +120,11 @@ fn render_at(
             render_at(inner, cfg, indent + n, col, flat, out);
         }
         Doc::Group(inner) => {
-            let start_col = current_col(out).max(col);
-            // A group flattens only if it fits AND has no hard break inside it (a
-            // statement-block's ungrouped `Line`s are hard breaks that keep the
-            // group broken even when its flat width would fit).
+            let start_col = eff_col(out, col);
+            // A group flattens only if it fits AND carries no `HardLine` (a
+            // statement block's `HardLine`s keep the group broken even when its
+            // flat width would fit). Its own soft `Line`s are what flatten or
+            // break as a unit — that is the standard Wadler `group`.
             let group_flat =
                 flat || (!has_hard_break(inner) && fits(inner, cfg, start_col, indent));
             render_at(inner, cfg, indent, start_col, group_flat, out);
@@ -110,15 +135,16 @@ fn render_at(
     }
 }
 
-/// Whether `doc` contains a break candidate that is NOT enclosed in a nested
-/// group — a hard break that forces its enclosing group to stay broken. A block
-/// with a statement carries its `Line`s ungrouped, so this returns `true` for it;
-/// a bare inline document (no ungrouped `Line` / `Softline`) returns `false`.
-/// Nested groups and chains hide their own breaks (they decide independently).
+/// Whether `doc` contains a [`Doc::HardLine`] that is NOT enclosed in a nested
+/// group — an unconditional break that forces its enclosing group to stay broken.
+/// A statement block carries a `HardLine` before each statement, so this returns
+/// `true` for it; an inline structure carrying only soft `Line` / `Softline`
+/// returns `false` and is free to flatten. Nested groups and chains hide their
+/// own breaks (they decide their own layout independently).
 fn has_hard_break(doc: &Doc) -> bool {
     match doc {
-        Doc::Line | Doc::Softline => true,
-        Doc::Text(_) | Doc::Group(_) | Doc::Chain { .. } => false,
+        Doc::HardLine => true,
+        Doc::Text(_) | Doc::Line | Doc::Softline | Doc::Group(_) | Doc::Chain { .. } => false,
         Doc::Concat(docs) => docs.iter().any(has_hard_break),
         Doc::Nest(_, inner) => has_hard_break(inner),
     }
@@ -197,7 +223,7 @@ fn render_chain(
     let mut prev_multiline = false;
     for (i, operand) in operands.iter().enumerate() {
         if i == 0 {
-            let c = current_col(out).max(col);
+            let c = eff_col(out, col);
             let before = out.len();
             render_at(&operand.doc, cfg, indent, c, false, out);
             prev_multiline = out[before..].contains('\n');
@@ -376,17 +402,22 @@ mod p0_tests {
     }
 
     /// A `{ <decl> <tail> }` block Doc with a statement, which ALWAYS breaks (a
-    /// block containing any statement is never inlined — spec rule 3). It carries
-    /// no `Group`: bare `Line`s break unconditionally in the non-flat context a
-    /// broken chain renders its operands in.
+    /// block containing any statement is never inlined — spec rule 3). The
+    /// statement separators are `HardLine`s, so the block breaks unconditionally
+    /// and forces any enclosing group broken, whatever the width.
     fn block(decl: &'static str, tail: &'static str) -> Doc {
         Doc::concat(vec![
             Doc::text("{"),
             Doc::nest(
                 4,
-                Doc::concat(vec![Doc::Line, Doc::text(decl), Doc::Line, Doc::text(tail)]),
+                Doc::concat(vec![
+                    Doc::HardLine,
+                    Doc::text(decl),
+                    Doc::HardLine,
+                    Doc::text(tail),
+                ]),
             ),
-            Doc::Line,
+            Doc::HardLine,
             Doc::text("}"),
         ])
     }
@@ -493,8 +524,10 @@ mod p0_tests {
         // broken to a shared indent). Model the same operands as a Group over
         // Line-separated `op operand` pieces; when broken, EVERY Line breaks, so
         // op1 cannot stay glued. This proves the Chain variant earns its place.
+        // The leading operand is padded past the width so the group cannot fit and
+        // is forced broken — exercising the "all soft Lines break uniformly" path.
         let group = Doc::group(Doc::concat(vec![
-            Doc::text("(((mlcall_one({...}) "),
+            Doc::owned(format!("(((mlcall_one({}) ", "x".repeat(110))),
             Doc::text("+"),
             Doc::Line,
             Doc::text("slshort) +"),
@@ -503,7 +536,7 @@ mod p0_tests {
             Doc::Line,
             Doc::text("tail_operand_x)"),
         ]));
-        // Force the group broken by starting it near the width limit.
+        // The over-wide first operand forces the group broken.
         let mut out = String::from("    let z = ");
         render_at(
             &group,
@@ -548,6 +581,92 @@ mod p0_tests {
             crate::doc::whitespace_normalize(&rendered),
             chain.normalized_leaves(),
             "rendered bytes and Doc leaves must normalize to the same token sequence"
+        );
+    }
+
+    /// A parenthesized arg list `name(a, b, c)`: a `Group` over
+    /// `name(` + nested `Softline`-separated args (trailing comma) + `Softline`
+    /// + `)`. Flat: `name(a, b, c)`. Broken: one arg per line, trailing comma,
+    /// closing paren dedented to the group's start column.
+    fn arg_group(name: &str, args: &[&str]) -> Doc {
+        let mut inner = vec![Doc::owned(format!("{name}("))];
+        let mut nested = vec![];
+        for (i, a) in args.iter().enumerate() {
+            if i == 0 {
+                nested.push(Doc::Softline);
+            } else {
+                nested.push(Doc::text(","));
+                nested.push(Doc::Line);
+            }
+            nested.push(Doc::owned((*a).to_owned()));
+        }
+        // Trailing comma appears only when broken; a `Softline`-guarded `,` would
+        // vanish flat. Emit it as part of the last arg via a separate group-aware
+        // token: here we keep it simple and match rustfmt's "trailing comma when
+        // broken" by appending a `,` before the closing `Softline` only in the
+        // broken layout. The renderer cannot conditionally add text, so we model
+        // the common flat-fits case (no trailing comma) and the broken case is
+        // covered by the call-arg builder in emit_doc; this fixture proves the
+        // flatten/break decision itself.
+        inner.push(Doc::nest(4, Doc::concat(nested)));
+        inner.push(Doc::Softline);
+        inner.push(Doc::text(")"));
+        Doc::group(Doc::concat(inner))
+    }
+
+    #[test]
+    fn group_with_soft_lines_flattens_when_it_fits() {
+        // The whole call fits width 100 from column 0: every soft break lays out
+        // flat — `Softline` -> nothing, `Line` -> a single space.
+        let doc = arg_group("f", &["a", "b", "c"]);
+        assert_eq!(render(&doc, RenderConfig::default()), "f(a, b, c)");
+    }
+
+    #[test]
+    fn group_with_soft_lines_breaks_when_too_wide() {
+        // The same shape, but the args overflow width 100: every soft break in the
+        // group breaks uniformly — one arg per line at nest+4, closing paren back
+        // at the group's start column.
+        let long = "argument_that_is_quite_long_enough_to_matter";
+        let doc = arg_group("some_function_name", &[long, long, long]);
+        let got = render(&doc, RenderConfig::default());
+        let expected = "some_function_name(\n    argument_that_is_quite_long_enough_to_matter,\n    argument_that_is_quite_long_enough_to_matter,\n    argument_that_is_quite_long_enough_to_matter\n)";
+        assert_eq!(
+            got, expected,
+            "\n--- got ---\n{got}\n--- want ---\n{expected}"
+        );
+    }
+
+    #[test]
+    fn group_with_hardline_never_flattens_even_when_it_would_fit() {
+        // A tiny group whose flat width easily fits, but carrying a `HardLine`:
+        // it must still break (a statement block never inlines).
+        let doc = Doc::group(Doc::concat(vec![
+            Doc::text("{"),
+            Doc::nest(4, Doc::concat(vec![Doc::HardLine, Doc::text("x")])),
+            Doc::HardLine,
+            Doc::text("}"),
+        ]));
+        assert_eq!(render(&doc, RenderConfig::default()), "{\n    x\n}");
+    }
+
+    #[test]
+    fn nested_group_refits_independently_of_broken_outer_group() {
+        // An outer group forced broken (over-wide leading text) still lets an inner
+        // group that fits lay out flat — groups decide their layout independently.
+        let inner = arg_group("g", &["p", "q"]);
+        let outer = Doc::group(Doc::concat(vec![
+            Doc::owned(format!("outer_{}(", "z".repeat(110))),
+            Doc::nest(4, Doc::concat(vec![Doc::Softline, inner])),
+            Doc::Softline,
+            Doc::text(")"),
+        ]));
+        let got = render(&outer, RenderConfig::default());
+        // Outer breaks (its leading token overflows); inner `g(p, q)` fits and
+        // stays flat on its own line.
+        assert!(
+            got.contains("\n    g(p, q)\n"),
+            "inner group should flatten inside a broken outer group:\n{got}"
         );
     }
 }

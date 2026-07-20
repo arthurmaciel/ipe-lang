@@ -8,11 +8,19 @@
 //! must equal the whitespace-normalized string the legacy `emit_expr_at` emits,
 //! so the paren-drop / token-drift class of bug is structurally impossible.
 //!
-//! The enum is FROZEN at seven variants. The [`Doc::Chain`] variant exists
-//! because a generic [`Doc::Group`] (all-flat-or-all-break) cannot render a binop
-//! chain's layout — first operator glued to a multiline operand's closing line,
-//! the rest broken one-per-line to a single shared indent. That mechanism is
-//! proven byte-exact against the golden corpus in `render.rs`.
+//! The [`Doc::Chain`] variant exists because a generic [`Doc::Group`]
+//! (all-flat-or-all-break) cannot render a binop chain's layout — first operator
+//! glued to a multiline operand's closing line, the rest broken one-per-line to a
+//! single shared indent. That mechanism is proven byte-exact against the golden
+//! corpus in `render.rs`.
+//!
+//! [`Doc::Line`] / [`Doc::Softline`] are SOFT breaks: a space (resp. nothing)
+//! when their nearest enclosing [`Doc::Group`] lays out flat, a newline-plus-
+//! indent when it breaks. [`Doc::HardLine`] is an UNCONDITIONAL break — always a
+//! newline-plus-indent, and its presence forces every enclosing group to break.
+//! A statement block (`{ let x = …; x }`) carries a `HardLine` before each
+//! statement so it never inlines; an inline structure (`(a, b)`, `if c {1} else
+//! {2}`) carries only soft `Line`s so its group flattens when it fits.
 
 // The Doc IR and renderer are the P0 deliverable; the emit_expr.rs builders that
 // consume them land in P1. Until then the constructors and the SEAL leaf oracle
@@ -23,9 +31,10 @@ use std::borrow::Cow;
 
 /// A layout document. Rendered by [`crate::render::render`].
 ///
-/// The variants are frozen; downstream builders compose these and never add new
-/// ones. A break candidate is [`Doc::Line`] (a space when flat, a newline plus
-/// indent when broken) or [`Doc::Softline`] (empty when flat).
+/// Downstream builders compose these variants. A soft break candidate is
+/// [`Doc::Line`] (a space when flat, a newline plus indent when broken) or
+/// [`Doc::Softline`] (empty when flat); [`Doc::HardLine`] is an unconditional
+/// break that also forces its enclosing group to break.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Doc {
     /// A leaf token, carried verbatim — including every parenthesis the emitter
@@ -33,13 +42,18 @@ pub enum Doc {
     Text(Cow<'static, str>),
     /// A sequence laid out left to right with no break points of its own.
     Concat(Vec<Self>),
-    /// A break candidate: a single space when its enclosing group is flat, a
+    /// A soft break candidate: a single space when its enclosing group is flat, a
     /// newline followed by the current indent when the group is broken.
     Line,
-    /// A zero-width break candidate: empty when flat, a newline plus indent when
-    /// broken. Used where flat layout wants no space (e.g. before a closing
+    /// A zero-width soft break candidate: empty when flat, a newline plus indent
+    /// when broken. Used where flat layout wants no space (e.g. before a closing
     /// delimiter on a call arg list).
     Softline,
+    /// An unconditional break: always a newline plus the current indent, whether
+    /// or not any enclosing group is flat. Its presence anywhere inside a group
+    /// forces that group to lay out broken. Used for statement separators in a
+    /// block body (a block with any statement never inlines).
+    HardLine,
     /// Indent the inner document by `n` columns relative to the current indent.
     /// Used non-accumulating (`Nest(4, ...)`) for block bodies and arg lists.
     Nest(usize, Box<Self>),
@@ -99,12 +113,13 @@ impl Doc {
 
     /// Append every text leaf of this document, in order, to `out`. This is the
     /// SEAL oracle: `concat(leaves(doc))` whitespace-normalizes to the legacy
-    /// emitter's string. Break candidates ([`Doc::Line`] / [`Doc::Softline`])
-    /// contribute a single space so adjacency is preserved under normalization.
+    /// emitter's string. Break candidates ([`Doc::Line`] / [`Doc::HardLine`])
+    /// contribute a single space so adjacency is preserved under normalization
+    /// ([`Doc::Softline`] contributes nothing, as it never separates tokens).
     pub fn collect_leaves(&self, out: &mut String) {
         match self {
             Self::Text(s) => out.push_str(s),
-            Self::Line => out.push(' '),
+            Self::Line | Self::HardLine => out.push(' '),
             Self::Softline => {}
             Self::Concat(docs) => {
                 for d in docs {
