@@ -116,7 +116,7 @@ default-deny proven by an untagged-new-kernel test.
 project-local `.cargo/config.toml` shielding wasm32 from host native-linker
 rustflags), wasm runtime module set + floor-filtered prelude,
 `#[wasm_bindgen(start)]` entry, `www/index.html` + `boot.js` CSP shell in the
-emitted project. SEAL proven: `examples/40-wasm-counter` ipe-0 ⇒ wasm
+emitted project. SEAL proven: `examples/wasm-counter` ipe-0 ⇒ wasm
 cargo-0. The driver prints the cargo/wasm-bindgen bundle commands instead of
 running them — the in-driver orchestration (+`wasm-opt`) is the remaining M2
 work.
@@ -141,7 +141,7 @@ to a `.wasm` (SEAL holds cross-target: ipe exit-0 ⇒ wasm cargo exit-0).
 `wasm-client`): mount, `dom::diff` `Vec<Patch>` apply via typed web-sys,
 delegated root listeners keyed by sky-id, rAF-coalesced update cycle,
 `Cmd.perform` via `spawn_local`, panic hook. Proven in Chromium:
-`examples/40-wasm-counter` renders the Ipe.Ui view and processes onClick
+`examples/wasm-counter` renders the Ipe.Ui view and processes onClick
 (+3/−1/Reset). Divergence from the sketch: mount applies the
 sanitiser-gated `render_html` output (ONE renderer — the DOM the diff
 patches is byte-identical to the SSE first paint) rather than a per-node
@@ -232,7 +232,7 @@ clean `init` on tampered/malformed island), `HydrationState` field-type gate
 (`ir_type_contains_non_serde` allowlist — compile error on secret/server-only
 fields), `wasm_hydrate_mode` flag wired from `[wasm] mode = "hydrate"` in
 `sky.toml` through `BuildOptions` → `BuildConfig` → `RustBackend` → `EmitCtx`,
-example `46-wasm-hydration`, 6 gate tests in `wasm_hydration_gate.rs`.
+example `wasm-hydration`, 6 gate tests in `wasm_hydration_gate.rs`.
 
 **Scope.** Spec Q6 mode 2: typed `HydrationState` island (never the Model)
 with the field-type gate in `ipe_types`; island serialiser escaping

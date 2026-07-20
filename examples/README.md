@@ -8,12 +8,12 @@ that builds with `ipe build` and targets the Rust backend.
 
 | Directory | Shape | What it demonstrates |
 |-----------|-------|----------------------|
-| `40-wasm-counter` | wasm/live | Basic TEA counter compiled to WebAssembly via `--target wasm`. The canonical "hello WASM" starting point. |
-| `42-wasm-effects` | wasm/live | `Sub.every` timer and `Cmd.perform` side-effects exercised end-to-end in a browser via the M4 Cmd/Sub bridge (gloo-timers). |
-| `43-wasm-websocket` | wasm/live | `Ipe.WebSocket` client substitute: connect / onOpen / send / onMessage / close / onClose against a real WebSocket server in-browser. |
-| `44-wasm-env-public` | wasm/live | `Ipe.Env.public` build-time config embedding: an allowlisted `API_BASE_URL` variable injected at compile time and readable in WASM at run time. |
-| `45-wasm-spa` | wasm | M6 SPA target: a pure-client single-page application with full TEA loop running in the browser. Uses `Live.app` which emits `wasm_app` under `--target wasm`. |
-| `46-wasm-hydration` | wasm | M7 SSR hydration: server-side initial render (paint) followed by WASM client takeover. |
+| `wasm-counter` | wasm/live | Basic TEA counter compiled to WebAssembly via `--target wasm`. The canonical "hello WASM" starting point. |
+| `wasm-effects` | wasm/live | `Sub.every` timer and `Cmd.perform` side-effects exercised end-to-end in a browser via the Cmd/Sub bridge (gloo-timers). |
+| `wasm-websocket` | wasm/live | `Ipe.WebSocket` client substitute: connect / onOpen / send / onMessage / close / onClose against a real WebSocket server in-browser. |
+| `wasm-env-public` | wasm/live | `Ipe.Env.public` build-time config embedding: an allowlisted `API_BASE_URL` variable injected at compile time and readable in WASM at run time. |
+| `wasm-spa` | wasm | SPA target: a pure-client single-page application with full TEA loop running in the browser. Uses `Live.app` which emits `wasm_app` under `--target wasm`. |
+| `wasm-hydration` | wasm | SSR hydration: server-side initial render (paint) followed by WASM client takeover. |
 
 ## Sky-derived examples
 
@@ -40,7 +40,7 @@ ipe build ipe.toml --out out/rust
 cargo run --manifest-path out/rust/Cargo.toml
 
 # Build a WASM example (outputs to out/rust/www/)
-cd examples/45-wasm-spa
+cd examples/wasm-spa
 ipe build ipe.toml --out out/rust --target wasm
 ```
 
