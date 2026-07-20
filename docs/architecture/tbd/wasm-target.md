@@ -1,10 +1,12 @@
 # WASM / browser target for ipê
 
-> **Status:** design-locked (this document). No target code yet; execution plan
-> in `docs/architecture/wasm-target-impl-plan.md`. Probe result: the runtime's
-> default (pure) feature set — including the whole `ui`/`html` render surface —
-> already compiles clean to `wasm32-unknown-unknown` once uuid's `js`
-> (getrandom) feature is enabled; see the plan's M0.
+> **Status:** implemented. This document is the design of record for the
+> client-WASM target and its security model; the shipped code lives under
+> `src/runtime/rust/src/wasm/`, `src/compiler/backend/rust/` (emission branch),
+> and `src/compiler/canon/src/target_gate.rs` (the `WasmClient` effect gate),
+> with browser examples under `examples/wasm-*`. (`wasm-backend.md` proposes a
+> distinct, still-rejected direct IR→WASM backend that reuses this document's
+> effect gate.)
 > **Scope:** running ipê in the browser — client-side apps (SPA + Ipe.Live
 > hydration) and an online playground.
 > **Principle ordering (binding for every decision below):** security >
@@ -792,9 +794,7 @@ AOT path well before B2.
 
 ---
 
-## Implementation surface (files that change)
-
-Phased milestones + gates: `docs/architecture/wasm-target-impl-plan.md`.
+## Implementation surface (the files this target owns)
 
 - `src/compiler/backend/rust/src/project.rs` (+ `crate_specs.rs`) — WASM
   manifest template (cdylib + wasm-bindgen/web-sys/gloo/getrandom-js; no
