@@ -25,3 +25,7 @@ pub use pretty::{MAX_IR_RENDER_DEPTH, pretty};
 /// The compilation target (kernel-availability axis) — re-exported so
 /// backend/db consumers reach it through the IR crate like `KernelFn`.
 pub use ipe_kernels::Target;
+
+/// The security-capability vocabulary — re-exported so lowering/CLI consumers
+/// reach it through the IR crate like `KernelFn`.
+pub use ipe_kernels::Capability;

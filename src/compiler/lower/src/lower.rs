@@ -21,9 +21,9 @@ use ipe_canon::ast as canon;
 use ipe_diagnostics::{DResult, Diagnostic, Feature, Located, LowerError, Span};
 use ipe_intern::{Interner, Symbol};
 use ipe_ir::{
-    Arm, BinOp, BoundSet, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match,
-    ModPath, Module, OnFormKind, Pat, Program, RuntimeModule, TypeDef, UiCtor, UiPlain, Variant,
-    fun_value_arc_promotable, is_dispatch_free, is_irrefutable,
+    Arm, BinOp, BoundSet, CallPin, Callee, Capability, EnumDef, Expr, Func, FuncId, IrType,
+    KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RuntimeModule, TypeDef, UiCtor,
+    UiPlain, Variant, fun_value_arc_promotable, is_dispatch_free, is_irrefutable,
 };
 use ipe_types::{SolvedTypes, Ty, TyBounds};
 
@@ -5719,12 +5719,25 @@ struct KernelUsage {
     /// Any foreign-crate FFI wrapper call ([`Callee::Ffi`]) — gates the
     /// emitted `mod ffi;` declaration + bound-crate `Cargo.toml` deps.
     ffi: bool,
+    /// The security capabilities of every kernel visited so far, for whole-
+    /// program capability inference ([`crate::capabilities::program_capabilities`]).
+    /// Populated from [`KernelFn::capability`] on the SAME kernel-callee visit
+    /// that sets the `uses_*` family flags — no second traversal.
+    caps: BTreeSet<Capability>,
+    /// When set, the traversal never early-exits on [`Self::all_set`]: the
+    /// capability set is only complete after every kernel callee is visited,
+    /// whereas the `uses_*` family flags saturate early. The lowerer's flag scan
+    /// leaves this `false` and keeps its early-exit; the capability scan sets it.
+    collect_caps: bool,
 }
 
 impl KernelUsage {
     /// Every flag already set — nothing left to learn, traversal can stop.
+    /// Never true while collecting capabilities: the capability set is only
+    /// complete once every kernel callee has been visited.
     const fn all_set(&self) -> bool {
-        self.db
+        !self.collect_caps
+            && self.db
             && self.tea
             && self.server
             && self.ui
@@ -5739,8 +5752,14 @@ impl KernelUsage {
             && self.ffi
     }
 
-    /// OR in the family flags for one kernel callee.
-    const fn record(&mut self, k: KernelFn) {
+    /// OR in the family flags for one kernel callee, and record its capability
+    /// when the capability scan is active.
+    fn record(&mut self, k: KernelFn) {
+        if self.collect_caps
+            && let Some(cap) = k.capability()
+        {
+            self.caps.insert(cap);
+        }
         self.db |= k.is_db();
         self.tea |= k.is_tea();
         self.server |= k.is_server();
@@ -5873,6 +5892,31 @@ fn scan_kernel_usage(expr: &Expr, usage: &mut KernelUsage) {
         | Expr::CloneVar(_)
         | Expr::Var(_) => {}
     }
+}
+
+/// The whole-program security-capability set: the union of every reachable
+/// kernel's [`KernelFn::capability`] plus [`Capability::NativeFfi`] when the
+/// program crosses into `Rust.` (any [`Callee::Ffi`]).
+///
+/// Reuses the SAME [`scan_kernel_usage`] traversal the lowerer runs for the
+/// `uses_*` runtime-module flags — the capability set is collected on the same
+/// kernel-callee visits, with the family-flag early-exit disabled so the scan is
+/// exhaustive over the reachable kernels rather than stopping once the flags
+/// saturate.
+pub fn program_capabilities_scan(program: &Program) -> BTreeSet<Capability> {
+    let mut usage = KernelUsage {
+        collect_caps: true,
+        ..KernelUsage::default()
+    };
+    for module in &program.modules {
+        for func in &module.funcs {
+            scan_kernel_usage(&func.body, &mut usage);
+        }
+    }
+    if usage.ffi {
+        usage.caps.insert(Capability::NativeFfi);
+    }
+    usage.caps
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
