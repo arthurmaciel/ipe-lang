@@ -3058,6 +3058,92 @@ mod tests {
         });
     }
 
+    /// Format `body_expr` (the string-emitter form of a fixture) the legacy way:
+    /// wrap it as a function body, run real `rustfmt`, and return the formatted
+    /// body dedented to column 0 — the bytes the legacy `emit + run_rustfmt` path
+    /// produces for that expression. Returns `None` if `rustfmt` is unavailable or
+    /// rejects the wrapper (a non-value expression shape).
+    fn legacy_rustfmt_body(body_expr: &str) -> Option<String> {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        let source = format!("fn __sweep() -> Wrap {{\n    {body_expr}\n}}\n");
+        let mut child = Command::new("rustfmt")
+            .args(["--edition", "2024", "--style-edition", "2024"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()?;
+        child.stdin.take()?.write_all(source.as_bytes()).ok()?;
+        let out = child.wait_with_output().ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let formatted = String::from_utf8(out.stdout).ok()?;
+        // Strip the `fn __sweep() -> Wrap {` first line and the closing `}` last
+        // line, then dedent the body by four columns to column 0.
+        let mut lines: Vec<&str> = formatted.lines().collect();
+        if lines.len() < 2 {
+            return None;
+        }
+        lines.remove(0);
+        lines.pop();
+        let body = lines
+            .iter()
+            .map(|l| l.strip_prefix("    ").unwrap_or(l))
+            .collect::<Vec<_>>()
+            .join("\n");
+        Some(body)
+    }
+
+    #[test]
+    #[ignore = "native-vs-legacy corpus diff sweep — run explicitly; needs rustfmt \
+                on PATH and enumerates the remaining P3-cutover divergences"]
+    fn native_vs_legacy_corpus_diff_sweep() {
+        // The P3-cutover gate: render every fixture BOTH ways — the native Doc path
+        // (`render(build_doc)`) and the legacy path (`emit_expr_at` then real
+        // `rustfmt`) — and enumerate exactly which expression shapes still diverge.
+        // Cutover is safe only when this list is empty for the whole corpus. Run with
+        // `--ignored` (it spawns `rustfmt` per fixture).
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let scope = GenericScope::new(&[]);
+            let mut divergences = Vec::new();
+            let mut compared = 0usize;
+            for expr in seal_fixtures(&fx) {
+                let legacy_raw = emit_expr_at(ctx, &expr, 0, 0, scope).expect("emit_expr_at");
+                let Some(legacy) = legacy_rustfmt_body(&legacy_raw) else {
+                    // rustfmt rejected the wrapper (an expression that is not a bare
+                    // value in this synthetic context) — skip; the real corpus formats
+                    // it in its true position.
+                    continue;
+                };
+                let doc = build_doc(ctx, &expr, 0, 0, scope).expect("build_doc");
+                let native = render(&doc, RenderConfig::default());
+                compared += 1;
+                if native != legacy {
+                    divergences.push(format!(
+                        "DIVERGES: {expr:?}\n  native:\n{native}\n  legacy:\n{legacy}\n"
+                    ));
+                }
+            }
+            eprintln!(
+                "native-vs-legacy sweep: compared {compared} fixtures, {} diverged",
+                divergences.len()
+            );
+            for d in &divergences {
+                eprintln!("{d}");
+            }
+            assert!(
+                divergences.is_empty(),
+                "{} fixture(s) diverge between native render and legacy rustfmt \
+                 (see stderr) — the P3-cutover gate is not yet green",
+                divergences.len()
+            );
+        });
+    }
+
     #[test]
     fn ctor_runtime_enum_just_renders_inline() {
         // A built-in `Maybe` constructor routes to the runtime enum
