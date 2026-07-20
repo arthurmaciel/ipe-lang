@@ -248,23 +248,29 @@ fn render_assign(
     // `let name: TYPE = ` head never breaks), then decide the RHS layout.
     render_at(prefix, cfg, indent, start_col, false, out);
 
-    // RHS-BREAK: the flat RHS plus its trailer fits at one indent step past the
-    // block indent. Break after `= ` and drop the flat RHS onto its own line.
-    // `rustfmt` leaves no trailing space on the `= ` line, so trim it before the
-    // newline (the prefix carries the flat-case space after `=`).
+    // RHS-BREAK: dropped onto its own line at one indent step past the block, the
+    // RHS's FIRST line (laying out its own internal breaks — e.g. a closure body
+    // block) fits the width. `rustfmt` prefers this next-line placement for a
+    // value that would otherwise crowd the wide `let name: TYPE = ` prefix. The
+    // trailer is charged against the first line only when the RHS does not break
+    // internally (a single-line RHS carries the `;` on that one line).
     let rhs_indent = indent + CHAIN_BREAK_INDENT;
-    if no_hard_break && rhs_indent + rhs_flat_w + trailer <= cfg.max_width {
+    let (rhs_first_line_w, rhs_breaks) = first_line_width(rhs, cfg, rhs_indent);
+    let rhs_break_trailer = if rhs_breaks { 0 } else { trailer };
+    if no_hard_break && rhs_indent + rhs_first_line_w + rhs_break_trailer <= cfg.max_width {
+        // `rustfmt` leaves no trailing space on the `= ` line, so trim it before
+        // the newline (the prefix carries the flat-case space after `=`).
         trim_trailing_spaces(out);
         out.push('\n');
         push_indent(rhs_indent, out);
         let c = current_col(out);
-        render_at(rhs, cfg, rhs_indent, c, true, out);
+        render_at(rhs, cfg, rhs_indent, c, false, out);
         return;
     }
 
-    // DELIMITER-BREAK: even at `indent + 4` the flat RHS overflows, so `rustfmt`
-    // keeps it glued to `= ` and breaks it into its own delimiters at the block
-    // indent.
+    // DELIMITER-BREAK: even at `indent + 4` the RHS's first line overflows, so
+    // `rustfmt` keeps it glued to `= ` and breaks it into its own delimiters at
+    // the block indent.
     let c = current_col(out);
     render_at(rhs, cfg, indent, c, false, out);
 }
@@ -278,6 +284,21 @@ fn flat_width(doc: &Doc, cfg: RenderConfig, start_col: usize, indent: usize) -> 
     let mut scratch = String::new();
     render_at(doc, cfg, indent, start_col, true, &mut scratch);
     scratch.split('\n').next().unwrap_or(&scratch).len()
+}
+
+/// The column width of `doc`'s first line when rendered from `start_col` letting
+/// its own groups decide their internal breaks (non-flat), plus whether it broke
+/// onto more than one line. `rustfmt`'s assignment RHS-break test measures this
+/// first line: a value whose head fits at the RHS indent goes to the next line
+/// even when its body then breaks below (a wide closure body block).
+fn first_line_width(doc: &Doc, cfg: RenderConfig, start_col: usize) -> (usize, bool) {
+    let mut scratch = String::new();
+    push_indent(start_col, &mut scratch);
+    render_at(doc, cfg, start_col, start_col, false, &mut scratch);
+    let mut lines = scratch.split('\n');
+    let first = lines.next().unwrap_or(&scratch);
+    let breaks = lines.next().is_some();
+    (first.len().saturating_sub(start_col), breaks)
 }
 
 /// Whether `doc` contains a [`Doc::HardLine`] that is NOT enclosed in a nested
@@ -748,10 +769,10 @@ mod p0_tests {
         );
     }
 
-    /// A parenthesized arg list `name(a, b, c)`: a `Group` over
-    /// `name(` + nested `Softline`-separated args (trailing comma) + `Softline`
-    /// + `)`. Flat: `name(a, b, c)`. Broken: one arg per line, trailing comma,
-    /// closing paren dedented to the group's start column.
+    /// A parenthesized arg list `name(a, b, c)`: a `Group` over `name(` + nested
+    /// `Softline`-separated args (trailing comma) + `Softline` + `)`. Flat:
+    /// `name(a, b, c)`. Broken: one arg per line, trailing comma, closing paren
+    /// dedented to the group's start column.
     fn arg_group(name: &str, args: &[&str]) -> Doc {
         let mut inner = vec![Doc::owned(format!("{name}("))];
         let mut nested = vec![];
@@ -914,18 +935,29 @@ mod p0_tests {
     }
 
     #[test]
-    fn assign_falls_back_to_delimiter_break_when_rhs_overflows_on_own_line() {
-        // When even at col 8 the flat RHS (plus its `;`) overflows, `rustfmt` keeps
-        // the RHS glued to `= ` and breaks it into its own delimiters. Modelled with
-        // a delimited-group RHS whose flat form overflows at col 8: the group breaks
-        // one arg per line, the open delimiter stays on the prefix line, `)` dedents.
-        let wide = "argument_that_is_quite_long_enough_to_matter_and_then_some_more_padding_x";
-        let rhs = arg_group("some_function_name", &[wide, wide]);
+    fn assign_falls_back_to_delimiter_break_when_rhs_first_line_overflows_on_own_line() {
+        // When even at col 8 the RHS's FIRST line (its open-delimiter head, laid out
+        // broken) overflows the width, RHS-break is unavailable — the flat RHS moved
+        // to the next line would not fit either. The assignment keeps the RHS glued
+        // to `= ` and breaks it into its own delimiters at the block indent (the
+        // fallback). This exercises the third `render_assign` branch: the `= ` line
+        // keeps the RHS head, and the RHS lays out non-flat (its `Softline`s break).
+        //
+        // The name is sized so the broken group's first line — `<name>(` at col 8 —
+        // exceeds width 100, ruling out RHS-break.
+        let long_name = "a_deliberately_enormous_callee_name_wide_enough_that_its_open_paren_alone_overflows_col_eight_pad";
+        let rhs = arg_group(long_name, &["a", "b"]);
         let got = render_assign_stmt(4, "let n: T = ", rhs);
-        let expected = "    let n: T = some_function_name(\n        argument_that_is_quite_long_enough_to_matter_and_then_some_more_padding_x,\n        argument_that_is_quite_long_enough_to_matter_and_then_some_more_padding_x\n    );";
-        assert_eq!(
-            got, expected,
-            "\n--- got ---\n{got}\n--- want ---\n{expected}"
+        // The RHS stayed glued to `= ` (no break after `=`) and broke its own args
+        // one per line — the delimiter-break fallback, not the RHS-break.
+        let first_line = got.lines().next().expect("at least one line");
+        assert!(
+            first_line.ends_with('('),
+            "RHS head should stay glued to `= ` on the first line: {first_line}"
+        );
+        assert!(
+            got.contains("\n        a,\n        b\n"),
+            "the RHS should break its args in place at col 8:\n{got}"
         );
     }
 
