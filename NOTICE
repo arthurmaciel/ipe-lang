@@ -1,0 +1,19 @@
+Ipê
+Copyright The Ipê Authors
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+this project except in compliance with the License. A copy of the License is in
+the LICENSE file at the repository root.
+
+------------------------------------------------------------------------------
+Attribution
+------------------------------------------------------------------------------
+
+This project includes and derives from software of the Sky project
+(https://github.com/anzellai/sky), licensed under the Apache License, Version
+2.0. Portions of the runtime and its example corpus originate there; see
+examples/sky/ATTRIBUTION.md for the vendored example corpus.
+
+The Ipê language's surface syntax is inspired by Elm (https://elm-lang.org),
+whose compiler is licensed under BSD-3-Clause. Ipê is an independent Rust
+implementation and includes no Elm source code.
