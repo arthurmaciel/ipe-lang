@@ -1978,6 +1978,7 @@ dependencies = [
  "ipe_lsp_server",
  "ipe_parse",
  "ipe_sandbox",
+ "ipe_stdlib",
  "ipe_types",
  "ipe_watch",
  "notify",
@@ -2070,6 +2071,24 @@ dependencies = [
  "wry",
  "zeroize",
  "zstd",
+]
+
+[[package]]
+name = "ipe-wasm"
+version = "0.0.0"
+dependencies = [
+ "ipe_backend",
+ "ipe_backend_rust",
+ "ipe_canon",
+ "ipe_db",
+ "ipe_diagnostics",
+ "ipe_intern",
+ "ipe_ir",
+ "ipe_kernels",
+ "ipe_parse",
+ "ipe_stdlib",
+ "js-sys",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -2216,6 +2235,15 @@ name = "ipe_sandbox"
 version = "0.0.0"
 dependencies = [
  "ipe_diagnostics",
+]
+
+[[package]]
+name = "ipe_stdlib"
+version = "0.0.0"
+dependencies = [
+ "ipe_canon",
+ "ipe_intern",
+ "ipe_parse",
 ]
 
 [[package]]

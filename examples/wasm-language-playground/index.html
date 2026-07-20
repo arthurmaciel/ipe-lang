@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ipê playground</title>
+  <style>
+    /* The default palette matches the original playground (slate). Every
+       colour is a CSS variable so a chosen ACE theme can re-theme the whole
+       interface, not just the editor. JS overrides these variables from the
+       selected theme's computed background/foreground. */
+    :root {
+      --bg: #0f172a;
+      --panel: #1e293b;
+      --border: #334155;
+      --fg: #e2e8f0;
+      --muted: #94a3b8;
+      --accent: #2563eb;
+      --accent-fg: #ffffff;
+      --ok: #34d399;
+      --err: #f87171;
+      --warn: #fbbf24;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      padding: 12px 20px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    header h1 { font-size: 1.1rem; font-weight: 600; color: var(--fg); }
+    header .badge {
+      font-size: 0.7rem;
+      background: var(--accent);
+      color: var(--accent-fg);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-weight: 500;
+    }
+    .spacer { margin-left: auto; }
+    label.control {
+      font-size: 0.8rem;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    select {
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 5px 8px;
+      font-size: 0.85rem;
+    }
+    #run-btn {
+      padding: 7px 18px;
+      background: var(--accent);
+      color: var(--accent-fg);
+      border: none;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    #run-btn:hover { filter: brightness(1.1); }
+    #run-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    #run-btn svg { fill: currentColor; }
+    a.gh {
+      color: var(--muted);
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.85rem;
+    }
+    a.gh:hover { color: var(--fg); }
+    a.gh svg { fill: currentColor; }
+    main {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      min-height: 0;
+    }
+    #editor-pane, #output-pane {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    #editor-pane { border-right: 1px solid var(--border); }
+    .pane-label {
+      padding: 8px 12px;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    #editor { flex: 1; min-height: 0; width: 100%; font-size: 14px; }
+    #output {
+      flex: 1;
+      margin: 0;
+      padding: 16px;
+      overflow: auto;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+      font-size: 0.8rem;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    #output.err { color: var(--err); }
+    #status-bar {
+      padding: 6px 12px;
+      font-size: 0.75rem;
+      background: var(--panel);
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      min-height: 28px;
+    }
+    #status-bar.error { color: var(--err); }
+    #status-bar.ok { color: var(--ok); }
+    #status-bar.compiling { color: var(--warn); }
+  </style>
+  <!-- ACE editor + its full theme/mode set, from jsDelivr's `ace-builds` (its
+       theme/mode chunks are served with permissive CORS + the correct MIME, so
+       ACE's lazy `<script>` loads are not blocked). `ext-themelist` enumerates
+       every bundled theme so the switcher can offer all of them. `basePath`
+       points ACE's lazy loader at the same CDN dir. -->
+  <script src="https://cdn.jsdelivr.net/npm/ace-builds@1.35.4/src-min-noconflict/ace.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/ace-builds@1.35.4/src-min-noconflict/ext-themelist.js" crossorigin="anonymous"></script>
+  <script>
+    // Lazy-loaded theme/mode chunks come from the same jsDelivr dir.
+    if (window.ace) ace.config.set('basePath', 'https://cdn.jsdelivr.net/npm/ace-builds@1.35.4/src-min-noconflict/');
+  </script>
+</head>
+<body>
+  <header>
+    <h1>Ipê playground</h1>
+    <span class="badge">in-browser WASM compiler</span>
+    <label class="control">
+      Theme
+      <select id="theme-select" aria-label="Editor and interface theme"></select>
+    </label>
+    <button id="run-btn" title="Compile and show the emitted Rust (Ctrl/Cmd+Enter)">
+      <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true"><polygon points="3,2 13,8 3,14"/></svg>
+      Run
+    </button>
+    <span class="spacer"></span>
+    <a class="gh" href="https://github.com/arthurmaciel/ipe-lang/tree/main/examples/wasm-language-playground" target="_blank" rel="noopener">
+      <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
+      </svg>
+      GitHub
+    </a>
+  </header>
+  <main>
+    <div id="editor-pane">
+      <div class="pane-label">Ipê source</div>
+      <div id="editor"></div>
+    </div>
+    <div id="output-pane">
+      <div class="pane-label"><span id="output-title">Emitted Rust</span></div>
+      <pre id="output">Loading the in-browser compiler…</pre>
+    </div>
+  </main>
+  <div id="status-bar">Initialising…</div>
+
+  <script type="module">
+    import init, { compile } from './pkg/ipe_wasm.js';
+
+    const SAMPLE = `module Main exposing (main)
+
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+
+-- Edit this program: it compiles in your browser as you type.
+-- The Ipê frontend (parse -> typecheck -> lower -> emit) runs as WebAssembly
+-- and shows the Rust it emits. (Turning that Rust into a binary needs cargo,
+-- so running the program is not done in-browser.)
+
+double : Int -> Int
+double n = n * 2
+
+greeting : String
+greeting = String.join " " [ "double 21 =", String.fromInt (double 21) ]
+
+main : String
+main = greeting
+`;
+
+    const statusBar = document.getElementById('status-bar');
+    const output = document.getElementById('output');
+    const outputTitle = document.getElementById('output-title');
+    const themeSelect = document.getElementById('theme-select');
+    const runBtn = document.getElementById('run-btn');
+
+    // ---- ACE editor ----
+    const editor = ace.edit('editor');
+    // Ipê is close to Elm/Haskell syntactically; Haskell highlighting is the
+    // best-fit bundled mode until a dedicated Ipê mode is authored.
+    editor.session.setMode('ace/mode/haskell');
+    editor.setOptions({
+      fontFamily: '"JetBrains Mono", "Fira Code", ui-monospace, monospace',
+      fontSize: '14px',
+      showPrintMargin: false,
+      tabSize: 4,
+      useSoftTabs: true,
+    });
+    editor.setValue(SAMPLE, -1);
+
+    // ---- Theme switcher: re-themes editor AND the surrounding UI ----
+    const themelist = ace.require('ace/ext/themelist');
+    for (const theme of themelist.themes) {
+      const opt = document.createElement('option');
+      opt.value = theme.theme;       // e.g. "ace/theme/monokai"
+      opt.textContent = theme.caption;
+      themeSelect.appendChild(opt);
+    }
+
+    // Parse an "rgb(r, g, b)" / "rgba(...)" string into [r,g,b].
+    function parseRgb(str) {
+      const m = str && str.match(/(\d+(?:\.\d+)?)/g);
+      if (!m || m.length < 3) return null;
+      return [Number(m[0]), Number(m[1]), Number(m[2])];
+    }
+    function luminance([r, g, b]) {
+      return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    }
+    function mix([r, g, b], [r2, g2, b2], t) {
+      const c = (a, d) => Math.round(a + (d - a) * t);
+      return `rgb(${c(r, r2)}, ${c(g, g2)}, ${c(b, b2)})`;
+    }
+    function rgbStr([r, g, b]) { return `rgb(${r}, ${g}, ${b})`; }
+
+    // Derive UI CSS variables from the ACE theme's editor colours so the whole
+    // interface (header, panels, status bar, output) matches the editor.
+    function applyUiFromEditor() {
+      const editorEl = editor.container.querySelector('.ace_editor')
+        || editor.container;
+      const gutterEl = editor.container.querySelector('.ace_gutter');
+      const cs = getComputedStyle(editorEl);
+      const bg = parseRgb(cs.backgroundColor);
+      const fg = parseRgb(cs.color);
+      if (!bg || !fg) return;
+
+      const dark = luminance(bg) < 0.5;
+      const towards = dark ? [255, 255, 255] : [0, 0, 0];
+      const gcs = gutterEl ? getComputedStyle(gutterEl) : null;
+      const panel = gcs ? parseRgb(gcs.backgroundColor) : null;
+
+      const root = document.documentElement.style;
+      root.setProperty('--bg', rgbStr(bg));
+      root.setProperty('--fg', rgbStr(fg));
+      root.setProperty('--panel', panel ? rgbStr(panel) : mix(bg, towards, 0.06));
+      root.setProperty('--border', mix(bg, towards, 0.16));
+      root.setProperty('--muted', mix(fg, bg, 0.35));
+      // Keep a readable accent regardless of theme brightness.
+      root.setProperty('--accent', dark ? '#3b82f6' : '#2563eb');
+      root.setProperty('--accent-fg', '#ffffff');
+    }
+
+    function setTheme(theme) {
+      editor.setTheme(theme);
+      // ACE applies the theme asynchronously (injects a <style>); read colours
+      // after it lands.
+      setTimeout(applyUiFromEditor, 60);
+    }
+    themeSelect.addEventListener('change', () => setTheme(themeSelect.value));
+
+    const DEFAULT_THEME = 'ace/theme/tomorrow_night';
+    themeSelect.value = DEFAULT_THEME;
+    setTheme(DEFAULT_THEME);
+
+    // ---- Live, debounced compile ----
+    let wasmReady = false;
+    let timer = null;
+
+    function runCompile() {
+      if (!wasmReady) return;
+      statusBar.className = 'compiling';
+      statusBar.textContent = 'Compiling…';
+      // Yield so the status paints before the (synchronous) compile runs.
+      requestAnimationFrame(() => {
+        let res;
+        try {
+          res = compile(editor.getValue());
+        } catch (e) {
+          statusBar.className = 'error';
+          statusBar.textContent = 'Compiler error: ' + e;
+          return;
+        }
+        if (res.ok) {
+          output.className = '';
+          outputTitle.textContent = 'Emitted Rust';
+          output.textContent = res.emitted_rust;
+          statusBar.className = 'ok';
+          statusBar.textContent = 'Compiled successfully — emitted Rust shown.';
+        } else {
+          output.className = 'err';
+          outputTitle.textContent = 'Diagnostics';
+          output.textContent = res.diagnostics || '(no diagnostics)';
+          statusBar.className = 'error';
+          statusBar.textContent = 'Compile error — see diagnostics.';
+        }
+      });
+    }
+
+    function scheduleCompile() {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(runCompile, 300);
+    }
+    editor.session.on('change', scheduleCompile);
+
+    // ---- Run button: compile now and show the emitted Rust ----
+    // Cancels any pending debounced compile so the click result is what shows.
+    function runNow() {
+      if (timer) { clearTimeout(timer); timer = null; }
+      runCompile();
+    }
+    runBtn.addEventListener('click', runNow);
+    // Ctrl/Cmd+Enter runs from the editor, matching the original playground.
+    editor.commands.addCommand({
+      name: 'ipeRun',
+      bindKey: { win: 'Ctrl-Enter', mac: 'Cmd-Enter' },
+      exec: runNow,
+    });
+
+    // ---- Boot ----
+    runBtn.disabled = true;
+    (async () => {
+      try {
+        await init();
+        wasmReady = true;
+        runBtn.disabled = false;
+        statusBar.className = 'ok';
+        statusBar.textContent = 'In-browser compiler ready. Press Run to compile.';
+        runCompile();
+      } catch (e) {
+        statusBar.className = 'error';
+        statusBar.textContent = 'Failed to load the WASM compiler: ' + e;
+        output.className = 'err';
+        output.textContent = String(e);
+      }
+    })();
+  </script>
+</body>
+</html>

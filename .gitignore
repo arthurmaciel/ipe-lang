@@ -1,4 +1,8 @@
 /target
+# The in-browser playground's wasm-bindgen output (the compiled `.wasm` plus its
+# JS glue). A regeneratable build artifact — `examples/wasm-language-playground/
+# build.sh` produces it — never a committed binary blob in the source tree.
+examples/wasm-language-playground/pkg/
 # Per-example build + generated FFI artifacts (regeneratable; never source)
 examples/**/target/
 examples/**/.ipe/

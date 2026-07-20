@@ -1,0 +1,39 @@
+[package]
+name = "ipe-wasm"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+description = "The Ipê compiler frontend compiled to WebAssembly: Ipê source -> diagnostics + emitted Rust, entirely in-browser."
+
+[lib]
+# `cdylib` for the wasm-bindgen artifact; `rlib` so the native crate-graph
+# (workspace `cargo build`/`clippy --all-targets`) can still typecheck it.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Frontend-only crate graph: parse -> canon -> types -> lower -> emit. None of
+# these touches std::fs / std::process / network at runtime (verified: the
+# whole graph builds for wasm32-unknown-unknown). Deliberately NO ipe-cli,
+# ipe_ffi, ipe_sandbox, ipe_watch, ipe_lsp_server, notify — those carry the
+# filesystem/process/native surface that cannot exist in a browser.
+ipe_intern = { path = "../compiler/intern" }
+ipe_diagnostics = { path = "../compiler/diagnostics" }
+ipe_canon = { path = "../compiler/canon" }
+ipe_parse = { path = "../compiler/parse" }
+ipe_db = { path = "../compiler/db" }
+ipe_ir = { path = "../compiler/ir" }
+ipe_kernels = { path = "../compiler/kernels" }
+ipe_backend = { path = "../compiler/backend" }
+ipe_backend_rust = { path = "../compiler/backend/rust" }
+# The embedded stdlib source table (`include_str!`), a dependency-free leaf
+# crate. Shared verbatim with the native CLI — one copy of the stdlib, no
+# duplication. The in-memory injection closure over this table lives in
+# `crate::stdlib_inject`.
+ipe_stdlib = { path = "../stdlib" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+
+[lints]
+workspace = true
