@@ -789,6 +789,12 @@ const fn feature_label(f: Feature) -> &'static str {
              use needs the value re-constructed or the code restructured to a single \
              linear use [feature: function-value-reuse]"
         }
+        Feature::ForeignHandleReuse => {
+            "a foreign opaque FFI handle is used more than once — the handle is the \
+             real foreign Rust type, which need not be `Clone`, so a duplicating \
+             `.clone()` may not compile; thread the handle linearly through one \
+             call chain and read it once at the end [feature: foreign-handle-reuse]"
+        }
     }
 }
 
