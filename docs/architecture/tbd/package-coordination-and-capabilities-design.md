@@ -67,6 +67,27 @@ present, tests present, inferred capabilities, correct semver bump), then opens 
 pull request that adds or updates the package's index entry. GitHub Actions is the
 infrastructure — there is no bespoke package server to run or defend.
 
+### Opening the index PR — no `gh` requirement
+
+`ipe package publish` must not hard-require the `gh` CLI on an author's machine.
+Three layered mechanisms, most-independent first:
+
+- **Default — `git` push + browser-prefilled PR.** `ipe` pushes the entry branch to
+  the author's fork using their existing git credentials, then opens the browser to
+  GitHub's pre-filled compare URL
+  (`…/compare/main...<author>:<branch>?quick_pull=1&title=…&body=…`). The author
+  clicks "Create pull request" in an already-authenticated browser. Needs only `git`
+  (already required) and a browser opener — no `gh`, no HTTP client, no token stored
+  in `ipe`. One-time cost: a fork of the index repo.
+- **Headless / CI — GitHub API with a token.** For non-interactive publishing, `ipe`
+  calls the API using `GITHUB_TOKEN` or a token from an `ipe login` device-code OAuth
+  flow (the flow `gh auth login` uses). This is the only path that needs a token.
+- **Opportunistic — `gh pr create`.** If `gh` is detected and authenticated, use it.
+
+Default to the first: it keeps `ipe` dependency-light, mirroring the choice to
+resolve the index over `git` rather than add an HTTP client. This is a decision for
+the publish slice; the index-schema slice only defines the entry the PR carries.
+
 ## The gate
 
 The gate runs on the index pull request. It downloads the package at the proposed
