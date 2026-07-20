@@ -52,7 +52,7 @@
 use std::borrow::Cow;
 
 use ipe_diagnostics::{DResult, Diagnostic};
-use ipe_intern::Symbol;
+use ipe_intern::{Interner, Symbol};
 use ipe_ir::{BinOp, Callee, Expr, IrType, KernelFn, ModPath};
 
 use crate::EmitCtx;
@@ -342,6 +342,153 @@ fn leaf(
     Ok(Doc::owned(emit_expr_at(
         ctx, expr, indent, depth, generics,
     )?))
+}
+
+/// One divergent function body.
+///
+/// Its native Doc render (`render(build_doc)`) differs from the legacy
+/// `emit_expr_at` + `rustfmt` bytes; reported by [`native_vs_legacy_sweep`].
+#[derive(Debug, Clone)]
+pub struct SweepDivergence {
+    /// The Rust name of the function the divergent expression is a body of.
+    pub func: String,
+    /// A short `{:?}`-prefix of the divergent [`Expr`], for identification.
+    pub expr_head: String,
+    /// The native Doc render (`render(build_doc(e))`).
+    pub native: String,
+    /// The legacy `rustfmt(emit_expr_at(e))` bytes.
+    pub legacy: String,
+}
+
+/// The whole-corpus P3-cutover gate.
+///
+/// For every function body in `program`, render it BOTH ways — the native Doc
+/// path (`render(build_doc)`) and the legacy path (`emit_expr_at` then real
+/// `rustfmt`) — and return every expression whose two renders disagree. The native
+/// path is safe to make the default emit path only when this returns empty for the
+/// whole corpus.
+///
+/// The comparison unit is the whole function body expression: that is the value
+/// the native path replaces, and rustfmt formats a sub-expression differently in
+/// isolation than in context, so a per-sub-expr diff would report spurious
+/// divergences. Each body is wrapped as `fn __sweep() -> Wrap { <body> }` and run
+/// through `rustfmt --edition 2024 --style-edition 2024`; a body rustfmt rejects
+/// (a non-value shape in this synthetic context — a `let`/`match` statement head,
+/// a `TailLoop`) is SKIPPED and counted, mirroring the fixture sweep's skip rule.
+///
+/// `compared` is the number of bodies actually diffed (rustfmt accepted the
+/// wrapper); `skipped` counts the bodies rustfmt rejected. Requires `rustfmt` on
+/// `PATH`; a body whose legacy formatting fails is skipped rather than reported.
+///
+/// # Errors
+/// Propagates any [`Diagnostic`] from [`EmitCtx::build`] or the emitters.
+pub fn native_vs_legacy_sweep(
+    interner: &Interner,
+    program: &ipe_ir::Program,
+) -> DResult<(Vec<SweepDivergence>, usize, usize)> {
+    let ctx = EmitCtx::build(
+        interner,
+        program,
+        crate::DbDriver::Sqlite,
+        None,
+        ipe_ir::Target::Native,
+        Vec::new(),
+        false,
+    )?;
+    let mut divergences = Vec::new();
+    let mut compared = 0usize;
+    let mut skipped = 0usize;
+    for module in &program.modules {
+        for func in &module.funcs {
+            let name = ctx.func_name(func.id)?.to_owned();
+            let scope_syms: Vec<Symbol> = func.type_params.iter().map(|(s, _)| *s).collect();
+            let generics = GenericScope::new(&scope_syms);
+            // The body is emitted at fn-body indent 1, depth 0 — exactly the
+            // context `emit_func` passes to `emit_expr`.
+            let Ok(legacy_raw) = emit_expr_at(&ctx, &func.body, 1, 0, generics) else {
+                skipped += 1;
+                continue;
+            };
+            let Some(legacy) = legacy_rustfmt_body(&legacy_raw) else {
+                skipped += 1;
+                continue;
+            };
+            let doc = build_doc(&ctx, &func.body, 1, 0, generics)?;
+            let native = render_body_dedented(&doc);
+            compared += 1;
+            if native != legacy {
+                divergences.push(SweepDivergence {
+                    func: name,
+                    expr_head: expr_head(&func.body),
+                    native,
+                    legacy,
+                });
+            }
+        }
+    }
+    Ok((divergences, compared, skipped))
+}
+
+/// Render a function-body `doc` at the fn-body block indent (level 1 = 4 columns)
+/// and dedent every line back to column 0 — the same framing the legacy path is
+/// compared at (`legacy_rustfmt_body` strips the `fn __sweep` wrapper's four-space
+/// body indent). The body's opening character lands at column 4 (matching the
+/// `fn f() {` body column rustfmt measures against), then the four-space prefix is
+/// removed from each line so both sides are compared at column 0.
+fn render_body_dedented(doc: &Doc) -> String {
+    // Seed the render with four spaces so the body starts at column 4, and wrap the
+    // doc in `Nest(4)` so every internal newline indents from the block indent —
+    // exactly the `render_fn_body` test framing.
+    let seeded = Doc::nest(4, Doc::concat(vec![Doc::text("    "), doc.clone()]));
+    let rendered = crate::render::render(&seeded, crate::render::RenderConfig::default());
+    rendered
+        .lines()
+        .map(|l| l.strip_prefix("    ").unwrap_or(l))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A short identifying prefix of an [`Expr`]'s debug form (the variant name and a
+/// little context), for the divergence report.
+fn expr_head(expr: &Expr) -> String {
+    let dbg = format!("{expr:?}");
+    dbg.chars().take(80).collect()
+}
+
+/// Format `body_expr` as a `fn __sweep() -> Wrap { <body> }` function body, run
+/// real `rustfmt`, and return the formatted body dedented to column 0 — the bytes
+/// the legacy `emit + run_rustfmt` path produces for that expression. Returns
+/// `None` if `rustfmt` is unavailable or rejects the wrapper.
+fn legacy_rustfmt_body(body_expr: &str) -> Option<String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let source = format!("fn __sweep() -> Wrap {{\n    {body_expr}\n}}\n");
+    let mut child = Command::new("rustfmt")
+        .args(["--edition", "2024", "--style-edition", "2024"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    child.stdin.take()?.write_all(source.as_bytes()).ok()?;
+    let out = child.wait_with_output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let formatted = String::from_utf8(out.stdout).ok()?;
+    let mut lines: Vec<&str> = formatted.lines().collect();
+    if lines.len() < 2 {
+        return None;
+    }
+    lines.remove(0);
+    lines.pop();
+    let body = lines
+        .iter()
+        .map(|l| l.strip_prefix("    ").unwrap_or(l))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(body)
 }
 
 /// Build the `Doc::Chain` for a chain-eligible binop. Walks the left-nested
