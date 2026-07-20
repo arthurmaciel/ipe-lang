@@ -14,6 +14,11 @@ redis_store = []
 webview = []
 tui = []
 websocket_client = []
+# Declared but inert on native targets: the vendored runtime gates its browser
+# sink on `cfg(all(target_arch = "wasm32", feature = "wasm-client"))`. Declaring
+# the feature keeps rustc's check-cfg quiet without pulling any wasm glue (only
+# a wasm32 build ever activates it, via the WASM manifest template).
+wasm-client = []
 alloc_dlmalloc = ["dep:dlmalloc"]
 alloc_mimalloc = ["dep:mimalloc"]
 
