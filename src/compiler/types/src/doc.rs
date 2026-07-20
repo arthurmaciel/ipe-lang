@@ -50,6 +50,7 @@ impl VarNamer {
 }
 
 /// `0 → a`, `25 → z`, `26 → a1`, `27 → b1`, … — a spreadsheet-column-style name.
+#[must_use]
 pub fn letters(k: u32) -> Box<str> {
     let letter = char::from(b'a'.wrapping_add(u8::try_from(k % 26).unwrap_or(0)));
     let suffix = k / 26;
