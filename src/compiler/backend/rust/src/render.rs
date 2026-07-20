@@ -164,6 +164,39 @@ fn render_at(
                 out.push('}');
             }
         }
+        Doc::MatchArmTail { body, control } => {
+            let start_col = eff_col(out, col);
+            // The arm body stays inline (with a trailing comma) when it fits on the
+            // arm's line. A `HardLine` body (a prelude block arm) never fits, so it
+            // always takes the broken path.
+            let body_flat = !has_hard_break(body) && fits(body, cfg, start_col, indent);
+            if body_flat {
+                render_at(body, cfg, indent, start_col, true, out);
+                out.push(',');
+            } else if *control {
+                // A control/paren body that breaks is wrapped in synthesized braces
+                // and the trailing comma is dropped — `rustfmt`'s arm-brace form.
+                out.push('{');
+                render_at(
+                    &Doc::Nest(4, Box::new(Doc::HardLine)),
+                    cfg,
+                    indent,
+                    start_col,
+                    false,
+                    out,
+                );
+                let c = current_col(out);
+                render_at(body, cfg, indent + 4, c, false, out);
+                out.push('\n');
+                push_indent(indent, out);
+                out.push('}');
+            } else {
+                // A delimited-tail body breaks inside its own brackets; the trailing
+                // comma is kept.
+                render_at(body, cfg, indent, start_col, false, out);
+                out.push(',');
+            }
+        }
         Doc::Chain { operands } => {
             render_chain(operands, cfg, indent, col, flat, out);
         }
@@ -188,6 +221,7 @@ fn has_hard_break(doc: &Doc) -> bool {
         | Doc::IfBroken(_)
         | Doc::Group(_)
         | Doc::BraceBody(_)
+        | Doc::MatchArmTail { .. }
         | Doc::Chain { .. } => false,
         Doc::Concat(docs) => docs.iter().any(has_hard_break),
         Doc::Nest(_, inner) => has_hard_break(inner),

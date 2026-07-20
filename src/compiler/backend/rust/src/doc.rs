@@ -100,6 +100,36 @@ pub enum Doc {
     /// checks the render against `rustfmt`, the SEAL checks the leaves against the
     /// string emitter, and both hold.
     BraceBody(Box<Self>),
+    /// A `match` arm tail: the arm body plus its trailing comma, laid out per
+    /// `rustfmt`'s arm brace/comma rule. When the body fits on the arm's line it is
+    /// rendered inline followed by a comma (`Pat => body,`). When it does not fit,
+    /// the layout depends on the body's head kind, carried in `control`:
+    ///
+    ///   * a DELIMITED-TAIL body (`control == false`: a call / tuple / list / cons
+    ///     / struct-literal / constructor / `task_and_then` — anything whose own
+    ///     group breaks as a bracketed argument list) breaks INSIDE its own
+    ///     delimiters, and `rustfmt` keeps the trailing comma: `Pat => call(\n …\n),`.
+    ///   * a CONTROL body (`control == true`: an `if` / binary-operator chain /
+    ///     block / parenthesized statement block) is wrapped by `rustfmt` in a
+    ///     SYNTHESIZED brace block, and the trailing comma is dropped:
+    ///     `Pat => {\n body\n}`.
+    ///
+    /// SEAL accounting matches the string emitter, which always writes the body
+    /// followed by a comma and NEVER writes the synthesized braces: the trailing
+    /// comma IS a leaf (so it appears in the SEAL) and the synthesized braces are
+    /// INVISIBLE (like [`Doc::IfBroken`]). The render drops the comma and adds the
+    /// braces only in the broken control case, matching `rustfmt`, so rendered bytes
+    /// and leaves diverge there exactly as they do for the trailing comma on a
+    /// broken delimited list. A body carrying a [`Doc::HardLine`] (a prelude block
+    /// arm) never fits, so it always takes the broken path.
+    MatchArmTail {
+        /// The arm body's document.
+        body: Box<Self>,
+        /// Whether the body is a control/paren-wrapped expression (`true`) that
+        /// `rustfmt` wraps in synthesized braces when it breaks, rather than a
+        /// delimited-tail expression (`false`) that breaks inside its own brackets.
+        control: bool,
+    },
     /// A left-associative same-precedence binary-operator run. The renderer lays
     /// this out with rustfmt's chain mechanism: line-1 packs the maximal
     /// left-nested prefix that fits the width, then every remaining operator
@@ -161,6 +191,15 @@ impl Doc {
         Self::BraceBody(Box::new(body))
     }
 
+    /// A `match` arm tail: the body plus its trailing comma, laid out per
+    /// `rustfmt`'s arm brace/comma rule. See [`Doc::MatchArmTail`].
+    pub fn match_arm_tail(body: Self, control: bool) -> Self {
+        Self::MatchArmTail {
+            body: Box::new(body),
+            control,
+        }
+    }
+
     /// Append every text leaf of this document, in order, to `out`. This is the
     /// SEAL oracle: `concat(leaves(doc))` whitespace-normalizes to the legacy
     /// emitter's string. Break candidates ([`Doc::Line`] / [`Doc::HardLine`])
@@ -188,6 +227,13 @@ impl Doc {
                 out.push_str("{ ");
                 inner.collect_leaves(out);
                 out.push_str(" }");
+            }
+            // The trailing comma IS a leaf (the string emitter writes it after every
+            // arm body); the synthesized braces are NOT (the string emitter never
+            // writes them, so they stay invisible like `IfBroken`).
+            Self::MatchArmTail { body, .. } => {
+                body.collect_leaves(out);
+                out.push(',');
             }
             Self::Chain { operands } => {
                 for (i, op) in operands.iter().enumerate() {
