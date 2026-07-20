@@ -3010,6 +3010,55 @@ mod tests {
     }
 
     #[test]
+    fn match_str_mode_variable_arm_carries_a_rebind_prelude_block() {
+        // A string-mode `match` (an arm carries a `Pat::Str`) forces the scrutinee to
+        // `(x).as_str()`, and a trailing variable catch-all binds that `&str`. The
+        // arm-head helper emits a rebind PRELUDE `let v = v.to_string(); ` so the arm
+        // body sees an owned `String` — the multi-statement `{ prelude body }` arm
+        // shape `build_match` builds. It ALWAYS breaks (it holds the prelude
+        // statement): the prelude and the body each on their own line inside the
+        // braces, the comma dropped. This independently goldens the prelude-arm
+        // split. Golden captured from `rustfmt --edition 2024 --style-edition 2024`.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let scope = GenericScope::new(&[]);
+            // Arm 1: `"go" => a` (a `Pat::Str` head, which triggers str_mode).
+            // Arm 2: `v => v` (the variable catch-all whose binder rebinds `&str`).
+            let arms = vec![
+                Arm {
+                    pat: Pat::Str("go".to_owned()),
+                    body: var(&fx, 0), // a
+                    guard: None,
+                },
+                Arm {
+                    pat: Pat::Var(sym(&fx, 1)), // v-binder over syms[1] (`b`)
+                    body: var(&fx, 1),
+                    guard: None,
+                },
+            ];
+            let expr = Expr::Match(Match::new_flat(var(&fx, 3), arms).expect("Match::new_flat"));
+            // Confirm the string emitter really produced the rebind prelude — the
+            // path this golden is here to lock.
+            let string = emit_expr_at(ctx, &expr, 0, 0, scope).expect("emit_expr_at");
+            assert!(
+                string.contains(".to_string();"),
+                "expected a str-binder rebind prelude, got:\n{string}"
+            );
+            let doc = build_doc(ctx, &expr, 0, 0, scope).expect("build_doc");
+            let got = render(&doc, RenderConfig::default());
+            // The `"go"` literal arm keeps its comma (a fitting delimited-tail body);
+            // the `b` variable arm carries the `{ let b = b.to_string(); b }` prelude
+            // block, which breaks and drops the comma. Golden captured from
+            // `rustfmt --edition 2024`.
+            let expected = "match (x).as_str() {\n    \"go\" => a,\n    b => {\n        let b = b.to_string();\n        b\n    }\n}";
+            assert_eq!(
+                got, expected,
+                "\n--- got ---\n{got}\n--- want ---\n{expected}"
+            );
+        });
+    }
+
+    #[test]
     fn ctor_runtime_enum_just_renders_inline() {
         // A built-in `Maybe` constructor routes to the runtime enum
         // `IpeMaybe::Just(a)` — same delimited group, no field-boxing.
