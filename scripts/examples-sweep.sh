@@ -17,7 +17,7 @@
 #      then the OPTIONAL examples/sky/ipe-patches/<name>.patch semantic delta.
 #
 # The BUILD step, per example:
-#   ( cd <example> && ipe build <sky.toml | src/Main.ipe> --out out/rust )
+#   ( cd <example> && ipe build <ipe.toml | src/Main.ipe> --out out/rust )
 #   cargo build --manifest-path <example>/out/rust/Cargo.toml
 # ipe emits a self-contained Cargo project under out/rust/ with the runtime
 # vendored into src/ipe_runtime, whose default binary is `ipe-app`.
@@ -114,10 +114,12 @@ fi
 
 [ "$BUILD_ONLY" = 1 ] && say "  (IPE_SWEEP_BUILD_ONLY=1 — BUILD column only; RUN skipped)"
 
-# ── ipe build target for an example dir — sky.toml if present, else src/Main.ipe
+# ── ipe build target for an example dir — ipe.toml if present, else src/Main.ipe
+# The mirror renames the upstream sky.toml to ipe.toml (lib/mirror.sh), so a
+# materialised example carries Ipê's canonical manifest name.
 ipe_build_target() {
   local d="$1"
-  if [ -f "$d/sky.toml" ]; then echo "sky.toml"; else echo "src/Main.ipe"; fi
+  if [ -f "$d/ipe.toml" ]; then echo "ipe.toml"; else echo "src/Main.ipe"; fi
 }
 
 # ── build_rust <dir> <example> → 0=ok; sets BUILD_CELL to the failure word ───
