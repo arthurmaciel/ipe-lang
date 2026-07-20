@@ -9,7 +9,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::pkginfo::{Effect, Fallibility, FnInfo, Param, PkgInfo};
+use crate::pkginfo::{Effect, Fallibility, FeatureName, FnInfo, Param, PkgInfo};
 
 /// Map a foreign Rust type string to its Ipê type, used only when the
 /// inspector supplied no `ipeType` override.
@@ -270,7 +270,7 @@ pub fn emit_kernel_json(pkg: &PkgInfo) -> String {
             .map(|d| {
                 serde_json::json!({
                     "ident": d.ident.as_str(),
-                    "name": d.name,
+                    "name": d.name.as_str(),
                     "version": d.version.as_str(),
                 })
             })
@@ -278,7 +278,8 @@ pub fn emit_kernel_json(pkg: &PkgInfo) -> String {
         doc.insert("transitiveDeps".into(), deps.into());
     }
     if !pkg.features().is_empty() {
-        doc.insert("features".into(), serde_json::json!(pkg.features()));
+        let features: Vec<&str> = pkg.features().iter().map(FeatureName::as_str).collect();
+        doc.insert("features".into(), serde_json::json!(features));
     }
     let mut text = serde_json::to_string_pretty(&serde_json::Value::Object(doc))
         .unwrap_or_else(|_| "{}".to_owned());

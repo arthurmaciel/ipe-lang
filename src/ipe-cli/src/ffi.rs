@@ -13,7 +13,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use ipe_ffi::driver::{CrateName, CrateSpec, FeatureName, FfiCache, InstalledCrate, VersionPin};
+use ipe_ffi::driver::{CrateName, CrateSpec, FfiCache, InstalledCrate, VersionPin};
+use ipe_ffi::pkginfo::FeatureName;
 
 use crate::CliError;
 
@@ -962,7 +963,7 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
                 // before it can reach the emitted manifest's `features` array.
                 for feat in raw.split(',') {
                     let gated = FeatureName::parse(feat)
-                        .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+                        .map_err(|defect| CliError::UsageOwned(defect.to_string()))?;
                     features.push(gated.as_str().to_owned());
                 }
             }
@@ -1087,7 +1088,8 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
         let mut features = Vec::with_capacity(dep.features.len());
         for feat in &dep.features {
             features.push(
-                FeatureName::parse(feat).map_err(|diag| CliError::UsageOwned(diag.to_string()))?,
+                FeatureName::parse(feat)
+                    .map_err(|defect| CliError::UsageOwned(defect.to_string()))?,
             );
         }
         let features: Vec<String> = features.iter().map(|f| f.as_str().to_owned()).collect();
