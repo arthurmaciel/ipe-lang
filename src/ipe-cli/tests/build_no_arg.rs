@@ -72,9 +72,8 @@ fn build_no_arg_in_project_dir_succeeds() {
         return;
     }
 
-    let runtime_dir = match ipe::resolve_runtime() {
-        Ok(d) => d,
-        Err(_) => return, // runtime not available in this environment
+    let Ok(runtime_dir) = ipe::resolve_runtime() else {
+        return; // runtime not available in this environment
     };
 
     let dir = fresh_dir("build_project");
@@ -124,9 +123,8 @@ fn build_flag_first_no_entry_resolves_default() {
         return;
     }
 
-    let runtime_dir = match ipe::resolve_runtime() {
-        Ok(d) => d,
-        Err(_) => return,
+    let Ok(runtime_dir) = ipe::resolve_runtime() else {
+        return;
     };
 
     let dir = fresh_dir("build_flagfirst");
