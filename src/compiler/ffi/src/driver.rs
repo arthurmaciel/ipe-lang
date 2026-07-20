@@ -71,14 +71,7 @@ impl VersionPin {
     /// `IPE-F4411` when the requirement is empty or carries a character
     /// outside `[0-9A-Za-z.*=<>~^,+ -]`.
     pub fn parse(s: &str) -> Result<Self, Diagnostic> {
-        let legal = !s.is_empty()
-            && s.chars().all(|c| {
-                c.is_ascii_alphanumeric()
-                    || matches!(
-                        c,
-                        '.' | '-' | '+' | '*' | '=' | '>' | '<' | '~' | '^' | ',' | ' '
-                    )
-            });
+        let legal = !s.is_empty() && s.chars().all(crate::pkginfo::version_char_is_legal);
         if legal {
             Ok(Self(s.to_owned()))
         } else {
