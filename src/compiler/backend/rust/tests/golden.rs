@@ -211,3 +211,87 @@ fn m0_backend_name_is_rust() {
     let backend = RustBackend::new(&interner);
     assert_eq!(backend.name(), "rust");
 }
+
+/// A program with no user types and no user functions in `main.rs`. Exercises
+/// the emitter's empty-section branches: the USER-TYPES banner is followed
+/// directly by the runtime bindings, and the bindings are followed directly by
+/// the epilogue, each separated by exactly one blank line.
+fn build_no_user_items(interner: &mut Interner) -> DResult<Program> {
+    let main_mod = interner.intern("Main")?;
+    let main = interner.intern("main")?;
+    let main_id = FuncId::from_raw(0);
+
+    // `main = println "hi"` — no user types, and the single `main` function's
+    // body is a kernel call, so no user-defined helper functions are emitted.
+    let main_fn = Func {
+        id: main_id,
+        name: main,
+        home: ModPath(vec![]),
+        type_params: vec![],
+        params: vec![],
+        ret: IrType::Task(Box::new(IrType::Unit)),
+        body: Expr::Call {
+            callee: Callee::Kernel(KernelFn::LogPrintln),
+            args: vec![Expr::Str("hi".to_owned())],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        },
+    };
+
+    Ok(Program {
+        modules: vec![Module {
+            name: ModPath(vec![main_mod]),
+            types: vec![],
+            funcs: vec![main_fn],
+            entry: Some(main_id),
+            records: vec![],
+            uses_tea: false,
+            uses_server: false,
+            uses_ui: false,
+            uses_live: false,
+            uses_tui: false,
+            uses_webview: false,
+            uses_css: false,
+            uses_auth: false,
+            uses_websocket: false,
+            uses_email: false,
+            uses_env_public: false,
+            uses_ffi: false,
+        }],
+    })
+}
+
+/// The emitter never produces two consecutive blank lines, so its raw
+/// (pre-rustfmt) output already satisfies rustfmt's max-one-consecutive-blank
+/// rule. This pins the empty-section blank-line guards: without them, a program
+/// with no user types (banner immediately followed by the runtime bindings) or
+/// no `main.rs` functions (bindings immediately followed by the epilogue)
+/// emitted a double blank that only the rustfmt pass papered over — a silent
+/// drift from `cargo fmt --check`-clean the moment the pass is skipped (the
+/// `ipe watch` hot loop, and the whole `wasm32` playground, which cannot spawn
+/// rustfmt).
+///
+/// Uses [`RustBackend::emit_spine`], which returns the raw pre-rustfmt spine
+/// text directly (no environment toggle, so no cross-test formatting race). The
+/// spine carries no user functions, exercising the bindings-to-epilogue guard;
+/// `build_m0` (user types present) and `build_no_user_items` (types absent)
+/// exercise the banner-to-bindings guard on both branches.
+#[test]
+fn emitter_spine_has_no_consecutive_blank_lines() -> DResult<()> {
+    for build in [
+        build_m0 as fn(&mut Interner) -> DResult<Program>,
+        build_no_user_items,
+    ] {
+        let mut interner = Interner::new();
+        let program = build(&mut interner)?;
+        let backend = RustBackend::new(&interner);
+        let spine = backend.emit_spine(&program)?;
+        assert!(
+            !spine.contains("\n\n\n"),
+            "raw emitter output must not contain two consecutive blank lines \
+             (rustfmt collapses them, so this drifts from fmt-clean whenever the \
+             fmt pass is skipped):\n{spine}"
+        );
+    }
+    Ok(())
+}
