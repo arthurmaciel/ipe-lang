@@ -715,6 +715,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::SystemCwd => "system_cwd",
         KernelFn::SystemLoadEnv => "system_load_env",
         KernelFn::SystemExit => "system_exit",
+        KernelFn::ProcessRun => "process_run",
         // ── Random kernels ──────────────────────────────────────────────
         KernelFn::RandomInt => "random_int",
         KernelFn::RandomFloat => "random_float",

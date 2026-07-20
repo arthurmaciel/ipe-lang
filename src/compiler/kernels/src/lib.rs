@@ -565,6 +565,11 @@ pub enum StdlibKernel {
     SystemCwd,
     SystemLoadEnv,
     SystemExit,
+    // ── Process ───────────────────────────────────────────────────────────────
+    /// `Process.run cmd args` — spawn a subprocess, return combined
+    /// stdout+stderr. Native-only (denied under `--target wasm`); the caller
+    /// sandboxes untrusted subprocesses, exactly as on the Go backend.
+    ProcessRun,
     // ── Random ──────────────────────────────────────────────────────────────
     RandomInt,
     RandomFloat,
@@ -2054,6 +2059,7 @@ impl StdlibKernel {
             Self::SystemCwd => d("System", "cwd", 1, Pure, "system_cwd"),
             Self::SystemLoadEnv => d("System", "loadEnv", 1, Pure, "system_load_env"),
             Self::SystemExit => d("System", "exit", 1, Pure, "system_exit"),
+            Self::ProcessRun => d("Process", "run", 2, Pure, "process_run"),
             // ── Random ──────────────────────────────────────────────────────
             Self::RandomInt => d("Random", "int", 2, Pure, "random_int"),
             Self::RandomFloat => d("Random", "float", 2, Pure, "random_float"),
@@ -3311,6 +3317,8 @@ impl StdlibKernel {
         Self::SystemCwd,
         Self::SystemLoadEnv,
         Self::SystemExit,
+        // Process
+        Self::ProcessRun,
         // Random
         Self::RandomInt,
         Self::RandomFloat,

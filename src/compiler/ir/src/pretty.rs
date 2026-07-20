@@ -629,6 +629,8 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::SystemCwd => "System.cwd",
         KernelFn::SystemLoadEnv => "System.loadEnv",
         KernelFn::SystemExit => "System.exit",
+        // ── Process kernels ─────────────────────────────────────────────
+        KernelFn::ProcessRun => "Process.run",
         // ── Random kernels ──────────────────────────────────────────────
         KernelFn::RandomInt => "Random.int",
         KernelFn::RandomFloat => "Random.float",

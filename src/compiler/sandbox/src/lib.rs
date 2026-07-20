@@ -240,6 +240,18 @@ pub struct JailSpec {
     /// The rustup root exported as `RUSTUP_HOME` (the env is scrubbed, so the
     /// proxy binaries cannot discover it from `$HOME`).
     pub rustup_home: Option<PathBuf>,
+    /// Extra WRITABLE binds beyond `scoped_tmp` — e.g. a warm dependency
+    /// target dir shared across invocations so the fixed dep set is compiled
+    /// once. Each is `--bind <p> <p>` (read-write). Untrusted code can write
+    /// here, so only host-owned caches the operator is willing to share may be
+    /// listed; the per-request user artifacts belong in `scoped_tmp`. Empty
+    /// for the FFI inspection path.
+    pub rw_binds: Vec<PathBuf>,
+    /// Extra `--setenv KEY VALUE` pairs layered onto the fixed allowlist —
+    /// e.g. `CARGO_TARGET_DIR` pointing at a `rw_binds` warm target. Empty for
+    /// the FFI inspection path. These are appended after the built-in
+    /// allowlist, so a caller cannot drop a security-relevant built-in.
+    pub setenvs: Vec<(String, OsString)>,
     /// Resource caps.
     pub limits: ResourceLimits,
 }
@@ -309,6 +321,13 @@ pub fn bwrap_argv(
     argv.push("--bind".into());
     argv.push(spec.scoped_tmp.clone().into());
     argv.push(spec.scoped_tmp.clone().into());
+    // Extra writable binds (e.g. a shared warm target). Read-write, like the
+    // scoped tempdir; the operator is responsible for what they share.
+    for dir in &spec.rw_binds {
+        argv.push("--bind".into());
+        argv.push(dir.clone().into());
+        argv.push(dir.clone().into());
+    }
     argv.push("--chdir".into());
     argv.push(spec.scoped_tmp.clone().into());
     let cargo_home = spec.scoped_tmp.join("cargo-home");
@@ -331,6 +350,13 @@ pub fn bwrap_argv(
         argv.push("--setenv".into());
         argv.push(key.into());
         argv.push(value);
+    }
+    // Caller-supplied extra env, layered AFTER the built-in allowlist so a
+    // built-in (offline flag, scoped CARGO_HOME) can never be dropped.
+    for (key, value) in &spec.setenvs {
+        argv.push("--setenv".into());
+        argv.push(key.as_str().into());
+        argv.push(value.clone());
     }
     if let Some(tc) = &spec.toolchain {
         argv.push("--setenv".into());
@@ -470,6 +496,8 @@ mod tests {
             toolchain_ro_binds: Vec::new(),
             path_prepend: Vec::new(),
             rustup_home: None,
+            rw_binds: Vec::new(),
+            setenvs: Vec::new(),
             limits: ResourceLimits::default(),
         }
     }
@@ -539,6 +567,28 @@ mod tests {
         );
         assert!(joined.ends_with("-- ipe-ffi-inspector semver"), "{joined}");
         assert!(!joined.contains("sh -c"), "{joined}");
+    }
+
+    #[test]
+    fn rw_binds_and_extra_setenvs_render_writable_and_after_the_allowlist() {
+        let mut s = spec();
+        s.rw_binds = vec![PathBuf::from("/warm/target")];
+        s.setenvs = vec![("CARGO_TARGET_DIR".to_owned(), "/warm/target".into())];
+        let argv = rendered_argv(&s);
+        let joined = argv.join(" ");
+        // A shared warm target is a WRITABLE bind (--bind, not --ro-bind).
+        assert!(joined.contains("--bind /warm/target /warm/target"), "{joined}");
+        assert!(joined.contains("--setenv CARGO_TARGET_DIR /warm/target"), "{joined}");
+        // Extra setenv lands AFTER the built-in offline flag, so the built-in
+        // allowlist cannot be dropped by a caller.
+        let offline = joined.find("--setenv CARGO_NET_OFFLINE").expect("offline");
+        let extra = joined.find("--setenv CARGO_TARGET_DIR").expect("extra");
+        assert!(offline < extra, "{joined}");
+        // The writable warm bind sits before the prlimit payload separator, so
+        // it is bwrap's mount, not the payload's argument.
+        let warm = joined.find("--bind /warm/target").expect("warm");
+        let sep = joined.find(" -- /usr/bin/prlimit").expect("sep");
+        assert!(warm < sep, "{joined}");
     }
 
     #[test]

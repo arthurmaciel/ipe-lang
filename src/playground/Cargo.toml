@@ -10,6 +10,9 @@ name = "ipe-playground"
 path = "src/main.rs"
 
 [dependencies]
+# The hardened bubblewrap + prlimit jail the untrusted-source build runs inside
+# — REUSED from the FFI RCE-sandbox path, not reinvented.
+ipe_sandbox = { path = "../compiler/sandbox" }
 axum = { version = "0.7", features = ["json"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }

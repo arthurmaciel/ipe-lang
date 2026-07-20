@@ -2001,6 +2001,7 @@ name = "ipe-playground"
 version = "0.0.0"
 dependencies = [
  "axum",
+ "ipe_sandbox",
  "serde",
  "serde_json",
  "tempfile",

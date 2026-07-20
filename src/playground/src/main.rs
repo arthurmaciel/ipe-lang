@@ -1,77 +1,102 @@
-//! Ipê playground backend — B1 server-compile-then-ship-WASM tier.
+//! Ipê playground backend — the opt-in "Run for real" tier.
 //!
 //! # Architecture
 //!
 //! One HTTP endpoint:
 //!
 //! - `POST /compile` — accepts `{"source": "<Ipê source text>"}`, writes the
-//!   source to a temp directory, runs `ipe build --target wasm` as a
-//!   subprocess, and returns the compiled bundle or a diagnostic on error.
+//!   source to a per-request scratch directory, runs `ipe build --target wasm`
+//!   inside a hardened sandbox, and returns the compiled bundle or a diagnostic
+//!   on error.
 //!
-//! The bundle response carries the five files the WASM browser runtime needs:
+//! The bundle response carries the files the WASM browser runtime needs:
 //! `www/index.html`, `www/boot.js`, `www/pkg/ipe_app.js`, and
 //! `www/pkg/ipe_app_bg.wasm` (base64-encoded), plus the compile diagnostics
 //! string on failure.
 //!
-//! # Isolation
+//! # Opt-in — off by default
 //!
-//! Each compile runs as a separate subprocess. A configurable `COMPILE_TIMEOUT`
-//! (default 120 s) kills the subprocess and returns a timeout error. CPU/memory
-//! limits are supplied by the operating environment (cgroups / container
-//! runtime); this process imposes no further kernel-level sandboxing — that is
-//! a deployment concern, not a library concern.
+//! The build endpoint runs `cargo build` on a crate emitted from UNTRUSTED user
+//! input. Compiling Rust executes native code at build time (`build.rs`,
+//! proc-macros) regardless of `--target wasm32`, so the build is an RCE surface.
+//! Because of that, the endpoint is **off by default**. It is enabled only when
+//! `IPE_PLAYGROUND_RUN=1` AND the host can host a sound sandbox
+//! ([`sandbox_build::probe_build_jail`]). When it is not enabled the server
+//! still serves the static playground UI (which compiles Ipê in the browser and
+//! needs no backend), and `/compile` returns a typed "disabled" response — so
+//! the default deployment has no build surface at all.
 //!
-//! # Warmth
+//! # Sandbox — the BUILD is jailed
 //!
-//! A single `CARGO_TARGET_DIR` is shared across all compile requests (set via
-//! `IPE_PLAYGROUND_TARGET_DIR` or defaulting to `/tmp/ipe-playground-target`).
-//! The runtime rlib, wasm-bindgen-cli, and all dependency crates are compiled
-//! once and reused. `sccache` is respected if `RUSTC_WRAPPER=sccache` is set
-//! in the environment.
+//! When enabled, every build runs inside the repo's hardened `ipe_sandbox`
+//! primitive (the same bubblewrap + prlimit jail the FFI untrusted-crate path
+//! uses): a fresh empty network namespace (no egress), a read-only `/`, a
+//! single writable per-request scratch dir (+ a shared warm dependency target),
+//! `--clearenv`, and prlimit caps on address space / CPU / file descriptors /
+//! process count / file size, all under a `timeout` wall clock. A hostile
+//! `build.rs` is contained: no network, confined filesystem, resource-killed.
+//! See `sandbox_build` and `docs/internals/playground-run.md`.
+//!
+//! # Offline, fixed deps
+//!
+//! The emitted crate depends only on the in-repo vendored runtime plus a fixed
+//! set of browser-safe crates (the playground gates to the `WasmClient` target,
+//! so no FFI foreign crates enter). The jailed build runs offline
+//! (`CARGO_NET_OFFLINE=1`) against a warm target that already holds those deps
+//! — so no crates.io fetch can pull a hostile transitive `build.rs`.
 //!
 //! # Static playground UI
 //!
 //! If `IPE_PLAYGROUND_STATIC_DIR` is set, the server also serves a static
-//! directory at `/` (the playground front-end HTML/JS). This is optional —
-//! the compile endpoint is fully usable standalone.
+//! directory at `/` (the playground front-end HTML/JS).
 
 #![allow(clippy::module_name_repetitions)] // AppState, CompileRequest etc. are clear
 #![allow(clippy::missing_errors_doc)] // internal helpers, not public API
 
+mod sandbox_build;
+
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
+use ipe_sandbox::Capabilities;
+use sandbox_build::{BuildToolchain, JailedBuild, build_limits, run_jailed_build};
 use serde::{Deserialize, Serialize};
-use tokio::process::Command;
-use tokio::time::timeout;
 use tracing::{error, info, warn};
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
-/// Default compile subprocess timeout.
+/// Default per-build wall-clock timeout (seconds).
 const DEFAULT_COMPILE_TIMEOUT_SECS: u64 = 120;
 
 /// Maximum source file size accepted (1 MiB). Larger payloads are rejected
 /// before spawning a subprocess, so a malicious oversized request is cheap.
 const MAX_SOURCE_BYTES: usize = 1024 * 1024;
 
+/// The build path, present only when the endpoint is enabled AND the host has a
+/// sound sandbox. Its absence is the OFF state: `/compile` refuses.
+#[derive(Clone)]
+struct RunConfig {
+    /// The probed host sandbox tools (bwrap / prlimit / timeout).
+    caps: Capabilities,
+    /// Toolchain + warm-target paths bound into the jail.
+    toolchain: BuildToolchain,
+    /// Per-build wall-clock cap (seconds).
+    wall_secs: u64,
+}
+
 /// Resolved server configuration, populated once at startup.
 #[derive(Clone)]
 struct AppState {
-    /// Absolute path to the `ipe` binary.
-    ipe_bin: PathBuf,
-    /// Absolute path to the compiled runtime directory passed as `--runtime`.
-    runtime_dir: PathBuf,
-    /// Absolute path to the shared warm `CARGO_TARGET_DIR`.
-    cargo_target_dir: PathBuf,
-    /// Per-compile subprocess timeout.
-    compile_timeout: Duration,
+    /// The sandboxed-build configuration, or `None` when the endpoint is off
+    /// (the default). When `None`, `/compile` returns a typed "disabled"
+    /// response and never spawns a build.
+    run: Option<Arc<RunConfig>>,
 }
 
 // ── Request / response shapes ─────────────────────────────────────────────────
@@ -100,6 +125,10 @@ struct CompileSuccess {
 enum CompileResponse {
     Ok(CompileSuccess),
     Error { diagnostics: String },
+    /// The build endpoint is not enabled on this server. The static playground
+    /// (browser-only compile + diagnostics) remains fully usable; only the
+    /// server-side "Run for real" build is off.
+    Disabled { reason: String },
 }
 
 // ── Error handling ────────────────────────────────────────────────────────────
@@ -128,7 +157,18 @@ async fn compile(
     State(state): State<AppState>,
     axum::Json(req): axum::Json<CompileRequest>,
 ) -> Result<axum::Json<CompileResponse>, AppError> {
-    // Guard: source size limit.
+    // Off by default: no build surface unless explicitly enabled with a sound
+    // sandbox. Refuse cheaply, before touching the filesystem.
+    let Some(run) = state.run.clone() else {
+        return Ok(axum::Json(CompileResponse::Disabled {
+            reason: "server-side build is disabled; set IPE_PLAYGROUND_RUN=1 with a working \
+                     sandbox (bwrap + prlimit + timeout) to enable it. The browser playground \
+                     compiles Ipê client-side with no backend."
+                .to_owned(),
+        }));
+    };
+
+    // Guard: source size limit (before spawning anything).
     if req.source.len() > MAX_SOURCE_BYTES {
         return Ok(axum::Json(CompileResponse::Error {
             diagnostics: format!(
@@ -139,89 +179,70 @@ async fn compile(
         }));
     }
 
-    // Write source to a temp directory.
+    // Fresh per-request scratch dir: the ONLY primary writable mount in the
+    // jail. The user source + emitted crate live here and are dropped after.
     let tmpdir = tempfile::TempDir::new()?;
-    let src_dir = tmpdir.path().join("src");
+    let scratch = tmpdir.path().to_path_buf();
+    let src_dir = scratch.join("src");
     std::fs::create_dir_all(&src_dir)?;
     let entry = src_dir.join("Main.ipe");
     {
         let mut f = std::fs::File::create(&entry)?;
         f.write_all(req.source.as_bytes())?;
     }
-    let out_dir = tmpdir.path().join("out");
+    let out_dir = scratch.join("out");
 
     info!(
-        "compiling source ({} bytes) in {:?}",
+        "sandboxed build of source ({} bytes) in {:?}",
         req.source.len(),
-        tmpdir.path()
+        scratch
     );
 
-    let result = compile_wasm(&state, &entry, &out_dir).await;
+    // The jailed build is blocking (spawn + wait); run it off the async
+    // executor so it cannot starve the reactor.
+    let source_len = req.source.len();
+    let result = tokio::task::spawn_blocking(move || {
+        let job = JailedBuild {
+            scratch: &scratch,
+            entry: &entry,
+            out_dir: &out_dir,
+            limits: build_limits(run.wall_secs),
+        };
+        let jailed = run_jailed_build(&run.caps, &run.toolchain, &job)?;
+        Ok::<_, sandbox_build::BuildJailError>((jailed, out_dir))
+    })
+    .await
+    .map_err(|e| AppError(format!("build task panicked: {e}")))?;
+
+    let _ = source_len;
     match result {
-        Ok(bundle) => Ok(axum::Json(CompileResponse::Ok(bundle))),
-        Err(diag) => Ok(axum::Json(CompileResponse::Error { diagnostics: diag })),
-    }
-}
-
-/// Run `ipe build --target wasm` and collect the bundle files from `out_dir`.
-///
-/// Returns the bundle on success, or a diagnostics string on compile error /
-/// timeout.
-async fn compile_wasm(
-    state: &AppState,
-    entry: &Path,
-    out_dir: &Path,
-) -> Result<CompileSuccess, String> {
-    let mut cmd = Command::new(&state.ipe_bin);
-    cmd.arg("build")
-        .arg("--target")
-        .arg("wasm")
-        .arg("--entry")
-        .arg(entry)
-        .arg("--out")
-        .arg(out_dir)
-        .arg("--runtime")
-        .arg(&state.runtime_dir)
-        .env("CARGO_TARGET_DIR", &state.cargo_target_dir)
-        // Disable incremental to keep each job's artifact space bounded.
-        .env("CARGO_INCREMENTAL", "0")
-        // Suppress noisy cargo progress bars in subprocess stdout.
-        .env("CARGO_TERM_PROGRESS_WHEN", "never")
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-
-    let future = async {
-        let output = cmd
-            .output()
-            .await
-            .map_err(|e| format!("spawn failed: {e}"))?;
-        if output.status.success() {
-            Ok(output)
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-            Err(stderr)
+        Ok((jailed, out_dir)) => {
+            let stderr = String::from_utf8_lossy(&jailed.stderr);
+            if jailed.status == Some(0) {
+                if !stderr.trim().is_empty() {
+                    info!("build stderr (success): {stderr}");
+                }
+                match read_bundle(&out_dir) {
+                    Ok(bundle) => Ok(axum::Json(CompileResponse::Ok(bundle))),
+                    Err(diag) => Ok(axum::Json(CompileResponse::Error { diagnostics: diag })),
+                }
+            } else {
+                // Non-zero (or signal-killed) exit inside the jail: a compile
+                // failure or a resource kill. Surface the captured diagnostics.
+                let code = jailed
+                    .status
+                    .map_or_else(|| "killed (signal / wall clock)".to_owned(), |c| c.to_string());
+                warn!("jailed build exited {code}");
+                Ok(axum::Json(CompileResponse::Error {
+                    diagnostics: format!("build failed (exit {code})\n{stderr}"),
+                }))
+            }
         }
-    };
-
-    let output = match timeout(state.compile_timeout, future).await {
-        Ok(Ok(out)) => out,
-        Ok(Err(diag)) => return Err(diag),
-        Err(_elapsed) => {
-            warn!("compile timed out after {:?}", state.compile_timeout);
-            return Err(format!(
-                "compile timed out after {} s",
-                state.compile_timeout.as_secs()
-            ));
+        Err(e) => {
+            error!("sandbox error: {e}");
+            Err(AppError(format!("sandbox error: {e}")))
         }
-    };
-
-    // Log any stderr output at debug level even on success.
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if !stderr.trim().is_empty() {
-        info!("compile stderr: {stderr}");
     }
-
-    read_bundle(out_dir)
 }
 
 /// Read the five bundle files from `out_dir/www/`.
@@ -319,6 +340,108 @@ fn resolve_runtime_dir() -> Result<PathBuf, String> {
         .to_owned())
 }
 
+/// Resolve the toolchain paths the jailed build binds read-only: the cargo
+/// home (`~/.cargo`, holding the cargo/rustc/wasm-bindgen proxies + bin) and
+/// the rustup home (`~/.rustup`, holding the actual toolchains + the wasm32
+/// sysroot). Honours `CARGO_HOME` / `RUSTUP_HOME`, else the conventional
+/// `~/.cargo` / `~/.rustup`.
+///
+/// Both are re-exposed read-only in the jail *after* the `/home` tmpfs mask, so
+/// the build can execute the toolchain but never mutate it.
+fn resolve_toolchain(ipe_bin: PathBuf, runtime_dir: PathBuf, warm_target_dir: PathBuf) -> Result<BuildToolchain, String> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let cargo_home = std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| home.as_ref().map(|h| h.join(".cargo")))
+        .ok_or("cannot resolve CARGO_HOME or ~/.cargo; set CARGO_HOME")?;
+    let rustup_home = std::env::var_os("RUSTUP_HOME")
+        .map(PathBuf::from)
+        .or_else(|| home.as_ref().map(|h| h.join(".rustup")))
+        .ok_or("cannot resolve RUSTUP_HOME or ~/.rustup; set RUSTUP_HOME")?;
+    if !cargo_home.is_dir() {
+        return Err(format!("CARGO_HOME {} is not a directory", cargo_home.display()));
+    }
+    if !rustup_home.is_dir() {
+        return Err(format!("RUSTUP_HOME {} is not a directory", rustup_home.display()));
+    }
+    let cargo_bin = cargo_home.join("bin");
+    Ok(BuildToolchain {
+        ipe_bin,
+        runtime_dir,
+        toolchain_ro_binds: vec![cargo_home.clone(), rustup_home.clone()],
+        path_prepend: vec![cargo_bin],
+        rustup_home: Some(rustup_home),
+        warm_target_dir,
+    })
+}
+
+/// Assemble the opt-in build config, or `None` (endpoint off) with a logged
+/// reason. The endpoint is enabled ONLY when `IPE_PLAYGROUND_RUN=1` AND the
+/// host has a sound sandbox — fail-closed on anything missing.
+fn resolve_run_config() -> Option<RunConfig> {
+    if std::env::var_os("IPE_PLAYGROUND_RUN").is_none_or(|v| v != "1") {
+        info!(
+            "server-side build DISABLED (IPE_PLAYGROUND_RUN != 1); serving the browser \
+             playground only, with no build surface"
+        );
+        return None;
+    }
+    // Probe for a sound sandbox — refuse to enable an unsandboxed build.
+    let caps = match sandbox_build::probe_build_jail() {
+        Ok(c) => c,
+        Err(e) => {
+            error!("IPE_PLAYGROUND_RUN=1 but {e}");
+            error!("REFUSING to enable the build endpoint unsandboxed — it stays OFF");
+            return None;
+        }
+    };
+    let ipe_bin = match resolve_ipe_bin() {
+        Ok(p) => p,
+        Err(e) => {
+            error!("IPE_PLAYGROUND_RUN=1 but {e}; endpoint stays OFF");
+            return None;
+        }
+    };
+    let runtime_dir = match resolve_runtime_dir() {
+        Ok(p) => p,
+        Err(e) => {
+            error!("IPE_PLAYGROUND_RUN=1 but {e}; endpoint stays OFF");
+            return None;
+        }
+    };
+    let warm_target_dir = std::env::var_os("IPE_PLAYGROUND_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp/ipe-playground-target"));
+    if let Err(e) = std::fs::create_dir_all(&warm_target_dir) {
+        error!("cannot create warm target dir {}: {e}; endpoint stays OFF", warm_target_dir.display());
+        return None;
+    }
+    let toolchain = match resolve_toolchain(ipe_bin, runtime_dir, warm_target_dir) {
+        Ok(t) => t,
+        Err(e) => {
+            error!("IPE_PLAYGROUND_RUN=1 but toolchain unresolved: {e}; endpoint stays OFF");
+            return None;
+        }
+    };
+    let wall_secs = std::env::var("IPE_PLAYGROUND_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_COMPILE_TIMEOUT_SECS);
+    info!(
+        "server-side build ENABLED (sandboxed): ipe={:?} runtime={:?} warm_target={:?} wall={}s",
+        toolchain.ipe_bin, toolchain.runtime_dir, toolchain.warm_target_dir, wall_secs
+    );
+    info!(
+        "jail: bwrap={:?} prlimit={:?} timeout={:?} — network denied, / read-only, per-request scratch",
+        caps.bwrap, caps.prlimit, caps.timeout
+    );
+    Some(RunConfig {
+        caps,
+        toolchain,
+        wall_secs,
+    })
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -328,51 +451,10 @@ async fn main() {
         )
         .init();
 
-    let ipe_bin = match resolve_ipe_bin() {
-        Ok(p) => {
-            info!("ipe binary: {:?}", p);
-            p
-        }
-        Err(e) => {
-            error!("{e}");
-            std::process::exit(1);
-        }
-    };
-
-    let runtime_dir = match resolve_runtime_dir() {
-        Ok(p) => {
-            info!("runtime dir: {:?}", p);
-            p
-        }
-        Err(e) => {
-            error!("{e}");
-            std::process::exit(1);
-        }
-    };
-
-    let cargo_target_dir = std::env::var("IPE_PLAYGROUND_TARGET_DIR").map_or_else(
-        |_| PathBuf::from("/tmp/ipe-playground-target"),
-        PathBuf::from,
-    );
-
-    let compile_timeout = std::env::var("IPE_PLAYGROUND_TIMEOUT_SECS")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-        .map_or(
-            Duration::from_secs(DEFAULT_COMPILE_TIMEOUT_SECS),
-            Duration::from_secs,
-        );
-
-    info!(
-        "cargo_target_dir={:?} compile_timeout={:?}",
-        cargo_target_dir, compile_timeout
-    );
-
+    // Opt-in build config (off by default). When off, the server still serves
+    // the browser playground; only the server-side build is disabled.
     let state = AppState {
-        ipe_bin,
-        runtime_dir,
-        cargo_target_dir,
-        compile_timeout,
+        run: resolve_run_config().map(Arc::new),
     };
 
     let mut app = Router::new()

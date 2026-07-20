@@ -475,6 +475,8 @@ fn run_phase(
         toolchain_ro_binds,
         path_prepend,
         rustup_home,
+        rw_binds: Vec::new(),
+        setenvs: Vec::new(),
         limits: jail_limits(),
     };
     ipe_sandbox::run_in_bwrap_jail(caps, &spec, payload)
