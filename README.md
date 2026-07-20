@@ -43,7 +43,6 @@ Prefer building from source? `git clone https://github.com/arthurmaciel/ipe-lang
 
 - [Features](#features)
 - [Code shapes](#code-shapes)
-- [Playground](#playground)
 - [Editor setup (LSP)](#editor-setup-lsp)
 - [Static compilation](#static-compilation)
 - [Support](#support)
@@ -80,40 +79,6 @@ The three ✓ shapes follow [The Elm Architecture](https://guide.elm-lang.org/ar
 (`init` / `update` / `view` / `subscriptions`) — and share the **same
 `Ipe.Ui` view code**, so one view renders on web, terminal, and desktop.
 See [`examples/`](examples/) for a program of each shape.
-
-## Playground
-
-The playground compiles Ipê **entirely in the browser** — no server, no
-subprocess. The Ipê compiler frontend (parse → typecheck → lower → emit) is
-built to WebAssembly (`src/ipe-wasm`) and runs in the page; as you type it shows
-the diagnostics and the emitted Rust. (The final Rust→binary step needs `cargo`,
-which a browser cannot run, so the playground stops at the emitted Rust rather
-than running the program — an intended limitation.)
-
-Build and run it locally:
-
-```sh
-# Prerequisites (once):
-rustup target add wasm32-unknown-unknown
-cargo install wasm-bindgen-cli   # version matching the wasm-bindgen crate
-
-# Build the WASM compiler + JS bindings into examples/wasm-language-playground/pkg/:
-bash examples/wasm-language-playground/build.sh
-
-# Serve the static directory (any static server works):
-python3 -m http.server --directory examples/wasm-language-playground 8080
-```
-
-Open `http://localhost:8080`. Edit Ipê source in the left pane; it compiles live
-(debounced) and the right pane shows the emitted Rust or the diagnostics. The
-theme switcher offers every ACE editor theme and re-themes both the editor and
-the surrounding interface.
-
-How it works internally (what compiles to WASM, what is stubbed and why, the JS
-API, the playground data flow): [`docs/internals/wasm.md`](docs/internals/wasm.md).
-
-> The earlier server-based playground (`src/playground/`, an axum backend that
-> shelled out to `cargo`) is superseded by this browser-native model.
 
 ## Editor setup (LSP)
 
