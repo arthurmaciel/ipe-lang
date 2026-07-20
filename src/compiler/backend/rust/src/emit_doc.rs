@@ -16,13 +16,17 @@
 //!     or runtime-enum `IpeMaybe`/`IpeResult`/…), and the general function-value
 //!     `Apply` tail (`({f})(args)`, non-lambda func, non-empty args) — which lay
 //!     out flat when they fit and otherwise break one element per line with a
-//!     break-conditional trailing comma ([`Doc::IfBroken`]).
+//!     break-conditional trailing comma ([`Doc::IfBroken`]);
+//!   * the `let` block (`({ let name = value; body })`) — the one-statement block
+//!     always breaks (a `HardLine` per line); its zero-statement multi-use inline
+//!     substitution form (`({ inlined_body })`) is a soft group that flattens
+//!     when it fits.
 //!
 //! Every remaining arm is carried as one [`Doc::owned`] leaf holding the string
 //! emitter's exact bytes: the literals (Int/Float/Str/…), the call-shaped binops
 //! (`Append`/`IntDiv`), the empty/`Ui` list and zero-arg call forms, and the
 //! context-heavy arms not yet structured (kernel-dispatch / FFI / pinned calls,
-//! the immediately-applied-lambda `Apply` block, `let`/destructure blocks,
+//! the immediately-applied-lambda `Apply` block, the `Destructure` block,
 //! lambdas, `match`, records, updates, field access, task sequencing). Carrying
 //! bytes keeps the SEAL exact by
 //! construction; those arms simply do not yet gain multi-line layout.
@@ -43,7 +47,9 @@ use ipe_ir::{BinOp, CallPin, Callee, Expr, IrType, ModPath};
 
 use crate::EmitCtx;
 use crate::doc::{ChainOperand, Doc};
-use crate::emit_expr::{callee_name, emit_expr_at};
+use crate::emit_expr::{
+    callee_name, emit_expr_at, expr_value_is_non_clone, scan_free_target, substitute_var,
+};
 use crate::emit_types::GenericScope;
 
 /// The infix spelling of a chain-eligible operator (never `Append` / `IntDiv`,
@@ -167,6 +173,17 @@ pub fn build_doc(
                 docs,
                 Doc::text(")"),
             ))
+        }
+
+        // A `let` expression `({ let name = value; body })`. The one-statement
+        // block ALWAYS breaks (rustfmt never inlines a block that holds a `let`):
+        // `({`, then the `let` statement and the body each on their own line at
+        // one indent step, then `})` dedented back. The multi-use non-clone
+        // inline-substitution path (a ZERO-statement block `({ body })`) lays out
+        // as a soft group so it flattens when it fits — mirroring
+        // [`crate::emit_expr::emit_expr_at`]'s `Expr::Let` arm decision exactly.
+        Expr::Let { name, value, body } => {
+            build_let(ctx, *name, value, body, indent, child, generics)
         }
 
         // Every remaining arm carries the string emitter's exact bytes as one
@@ -524,6 +541,70 @@ fn build_ctor(
     ))
 }
 
+/// Build the `Doc` for a `let` expression, mirroring
+/// [`crate::emit_expr::emit_expr_at`]'s `Expr::Let` arm token-for-token.
+///
+/// Two shapes, chosen by the identical `needs_inline` predicate the string
+/// emitter uses (multi-use of a non-`Clone` value, no `CloneVar` capture site):
+///
+///   * inline-substitution path — a ZERO-statement block `({ inlined_body })`.
+///     Laid out as a soft group (`Line`s) so it flattens when it fits and breaks
+///     the body onto its own line otherwise, matching rustfmt's zero-statement
+///     block.
+///   * normal path — a ONE-statement block `({ let name = value; body })`. rustfmt
+///     never inlines a block that holds a statement, so this ALWAYS breaks: `({`,
+///     the `let` statement and the body each on their own line at one indent step
+///     (the renderer's sole `Nest(4)`), then `})` dedented back. `HardLine`s force
+///     the break unconditionally.
+///
+/// `value` and `body` are built recursively; their leaves carry the string
+/// emitter's single-line bytes, so no leaf embeds a newline+indent that would
+/// double-count against the block's `Nest(4)` (the sole indent source).
+fn build_let(
+    ctx: &EmitCtx,
+    name: Symbol,
+    value: &Expr,
+    body: &Expr,
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Doc> {
+    let (occurrences, has_clonevar) = scan_free_target(body, name);
+    let needs_inline = occurrences > 1 && expr_value_is_non_clone(value) && !has_clonevar;
+    if needs_inline {
+        // Zero-statement block `({ inlined_body })`: the body with `name`
+        // substituted by `value`, laid out as a soft group.
+        let inlined_body = substitute_var(body.clone(), name, value);
+        let body_doc = build_doc(ctx, &inlined_body, indent, child, generics)?;
+        return Ok(Doc::group(Doc::concat(vec![
+            Doc::text("({"),
+            Doc::nest(4, Doc::concat(vec![Doc::Line, body_doc])),
+            Doc::Line,
+            Doc::text("})"),
+        ])));
+    }
+    let name_s = ctx.emit_ident(name)?;
+    let value_doc = build_doc(ctx, value, indent, child, generics)?;
+    let body_doc = build_doc(ctx, body, indent, child, generics)?;
+    // One-statement block: `let name = value;` then `body`, each on its own line.
+    Ok(Doc::concat(vec![
+        Doc::text("({"),
+        Doc::nest(
+            4,
+            Doc::concat(vec![
+                Doc::HardLine,
+                Doc::owned(format!("let {name_s} = ")),
+                value_doc,
+                Doc::text(";"),
+                Doc::HardLine,
+                body_doc,
+            ]),
+        ),
+        Doc::HardLine,
+        Doc::text("})"),
+    ]))
+}
+
 #[cfg(test)]
 #[allow(clippy::panic, clippy::expect_used, reason = "test assertions")]
 mod tests {
@@ -879,6 +960,21 @@ mod tests {
             Expr::Apply {
                 func: Box::new(var(fx, 0)),
                 args: vec![],
+            },
+            // `let` normal path (structured block): `({ let a = b; c })`. The body
+            // references `a` zero times, so `needs_inline` is false — the plain
+            // one-statement block form.
+            Expr::Let {
+                name: sym(fx, 0),
+                value: Box::new(var(fx, 1)),
+                body: Box::new(var(fx, 2)),
+            },
+            // `let` with a body that uses the binding (still normal path — the
+            // value `b` is a plain Clone `Var`, so `needs_inline` is false).
+            Expr::Let {
+                name: sym(fx, 0),
+                value: Box::new(var(fx, 1)),
+                body: Box::new(binop(BinOp::Add, var(fx, 0), var(fx, 2))),
             },
         ]
     }
@@ -1350,6 +1446,56 @@ mod tests {
             };
             let got = render_let_stmt(ctx, &expr);
             let expected = "let z = (a)(\n        argument_that_is_quite_long_enough_to_matter_x,\n        argument_that_is_quite_long_enough_to_matter_y,\n        argument_that_is_quite_long_enough_to_matter_z,\n    )";
+            assert_eq!(
+                got, expected,
+                "\n--- got ---\n{got}\n--- want ---\n{expected}"
+            );
+        });
+    }
+
+    #[test]
+    fn let_block_always_breaks_to_statements() {
+        // A `let` block ALWAYS breaks (rustfmt never inlines a block that holds a
+        // statement), even when short: `({`, the `let` statement and body each on
+        // their own line at block+4 (col 8), `})` dedented to the statement indent.
+        // Golden captured from `rustfmt --edition 2024 --style-edition 2024`.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let expr = Expr::Let {
+                name: sym(&fx, 0),            // a
+                value: Box::new(var(&fx, 1)), // b
+                body: Box::new(var(&fx, 2)),  // c
+            };
+            let got = render_let_stmt(ctx, &expr);
+            let expected = "let z = ({\n        let a = b;\n        c\n    })";
+            assert_eq!(
+                got, expected,
+                "\n--- got ---\n{got}\n--- want ---\n{expected}"
+            );
+        });
+    }
+
+    #[test]
+    fn nested_let_blocks_indent_by_the_renderer_nest_only() {
+        // A `let` whose body is another `let` block: the inner block indents one
+        // further step (col 12 = block 4 + outer Nest 4 + inner Nest 4), the inner
+        // `})` sits at col 8. This pins that the renderer's `Nest(4)` is the SOLE
+        // indent source — no leaf embeds indentation that would double-count.
+        // Golden captured from `rustfmt --edition 2024 --style-edition 2024`.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let inner = Expr::Let {
+                name: sym(&fx, 0),
+                value: Box::new(var(&fx, 1)),
+                body: Box::new(var(&fx, 2)),
+            };
+            let expr = Expr::Let {
+                name: sym(&fx, 0),
+                value: Box::new(var(&fx, 1)),
+                body: Box::new(inner),
+            };
+            let got = render_let_stmt(ctx, &expr);
+            let expected = "let z = ({\n        let a = b;\n        ({\n            let a = b;\n            c\n        })\n    })";
             assert_eq!(
                 got, expected,
                 "\n--- got ---\n{got}\n--- want ---\n{expected}"

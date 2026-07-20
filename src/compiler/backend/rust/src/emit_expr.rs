@@ -62,7 +62,7 @@ fn indent_of(level: usize) -> String {
 /// binding) is NOT detected here — that needs a real type-of-expression
 /// recovery pass this backend does not have; filed as a residual gap rather
 /// than guessed at (see AUD-04 follow-up in backlog.md).
-fn expr_value_is_non_clone(expr: &Expr) -> bool {
+pub fn expr_value_is_non_clone(expr: &Expr) -> bool {
     match expr {
         // A list whose element is a task (or contains one) — Vec<IpeTask<A>>
         // is move-only.
@@ -539,7 +539,7 @@ fn clone_targets_in_expr(expr: Expr, targets: &std::collections::BTreeSet<Symbol
 ///   leaf; when this is `true`, `Expr::Let`'s emitter skips inlining and
 ///   keeps the plain `let` form — always correct, just not move-optimized
 ///   for that one binding.
-fn scan_free_target(expr: &Expr, target: Symbol) -> (usize, bool) {
+pub fn scan_free_target(expr: &Expr, target: Symbol) -> (usize, bool) {
     let mut count = 0usize;
     let mut has_clonevar = false;
     scan_free_target_into(expr, target, &mut count, &mut has_clonevar);
@@ -660,7 +660,7 @@ fn scan_free_target_into(expr: &Expr, target: Symbol, count: &mut usize, has_clo
 /// `Var` leaf nodes — a string literal is an opaque `Expr::Str`, a record
 /// field name is a `Symbol` key never matched against `Expr::Var`.
 #[allow(clippy::too_many_lines)] // A recursive tree-walk over a large enum — necessarily long.
-fn substitute_var(expr: Expr, target: Symbol, replacement: &Expr) -> Expr {
+pub fn substitute_var(expr: Expr, target: Symbol, replacement: &Expr) -> Expr {
     match expr {
         Expr::Var(s) if s == target => replacement.clone(),
         Expr::Var(_)
