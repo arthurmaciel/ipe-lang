@@ -75,6 +75,31 @@ pub enum Doc {
     /// otherwise every [`Doc::Line`] / [`Doc::Softline`] in it breaks. Used for
     /// block bodies, call arg lists, and if-branch bodies.
     Group(Box<Self>),
+    /// A `rustfmt` token-level brace pair whose braces appear ONLY when the body
+    /// does not fit flat. It models the "braces iff the body is a block / does not
+    /// fit" decision `rustfmt` applies to a closure body (`move |_| { rest }` →
+    /// `move |_| rest` when it fits, `move |_| { <break> rest <break> }` when it
+    /// does not) and to a wide non-block `match` arm body (`Pat => body,` inline,
+    /// `Pat => { <break> body <break> }` when it breaks — comma then dropped).
+    ///
+    /// Rendered flat when `body` fits the remaining width: JUST the body, no
+    /// braces. Rendered broken otherwise: `{`, the body on its own line at one
+    /// indent step, then `}` dedented back. Its own break decision is independent
+    /// of any enclosing group (like [`Doc::Group`]), because `rustfmt` re-tests the
+    /// closure body against the width on its own line even when the enclosing call
+    /// broke. A `body` carrying a [`Doc::HardLine`] can never fit, so it always
+    /// braces (a statement-block closure body is always braced).
+    ///
+    /// UNLIKE [`Doc::IfBroken`], its braces ARE part of the SEAL leaf sequence: the
+    /// legacy string emitter always writes the braces (`move |_| {{ {rest} }}`), so
+    /// [`Doc::collect_leaves`] carries `{` + the body's leaves + `}` to keep the
+    /// leaf sequence equal to the string emitter's tokens in BOTH the flat and
+    /// broken cases. The flat RENDER drops the braces (matching `rustfmt`), so the
+    /// rendered bytes and the leaf sequence diverge on the brace tokens exactly as
+    /// they diverge on the trailing comma for [`Doc::IfBroken`] — the byte golden
+    /// checks the render against `rustfmt`, the SEAL checks the leaves against the
+    /// string emitter, and both hold.
+    BraceBody(Box<Self>),
     /// A left-associative same-precedence binary-operator run. The renderer lays
     /// this out with rustfmt's chain mechanism: line-1 packs the maximal
     /// left-nested prefix that fits the width, then every remaining operator
@@ -130,6 +155,12 @@ impl Doc {
         Self::IfBroken(Cow::Borrowed(s))
     }
 
+    /// A brace-body token: `body` inline (no braces) when it fits flat, `{ body }`
+    /// as a broken block otherwise. See [`Doc::BraceBody`].
+    pub fn brace_body(body: Self) -> Self {
+        Self::BraceBody(Box::new(body))
+    }
+
     /// Append every text leaf of this document, in order, to `out`. This is the
     /// SEAL oracle: `concat(leaves(doc))` whitespace-normalizes to the legacy
     /// emitter's string. Break candidates ([`Doc::Line`] / [`Doc::HardLine`])
@@ -149,6 +180,15 @@ impl Doc {
                 }
             }
             Self::Nest(_, inner) | Self::Group(inner) => inner.collect_leaves(out),
+            // The braces ARE part of the leaf sequence: the string emitter always
+            // writes them, so they must appear in the SEAL comparison (unlike the
+            // trailing comma above, which the string emitter never writes). A space
+            // pads each brace so token adjacency survives normalization.
+            Self::BraceBody(inner) => {
+                out.push_str("{ ");
+                inner.collect_leaves(out);
+                out.push_str(" }");
+            }
             Self::Chain { operands } => {
                 for (i, op) in operands.iter().enumerate() {
                     if let Some(o) = &op.leading_op {

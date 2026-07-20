@@ -138,6 +138,32 @@ fn render_at(
                 flat || (!has_hard_break(inner) && fits(inner, cfg, start_col, indent));
             render_at(inner, cfg, indent, start_col, group_flat, out);
         }
+        Doc::BraceBody(body) => {
+            let start_col = eff_col(out, col);
+            // The body braces only when it does not fit flat here — `rustfmt` re-
+            // tests the closure/arm body against the width on its own line, so this
+            // decision is independent of any enclosing group. A `HardLine` inside
+            // the body (a statement-block body) can never fit, so it always braces.
+            let body_flat = flat || (!has_hard_break(body) && fits(body, cfg, start_col, indent));
+            if body_flat {
+                render_at(body, cfg, indent, start_col, true, out);
+            } else {
+                out.push('{');
+                render_at(
+                    &Doc::Nest(4, Box::new(Doc::HardLine)),
+                    cfg,
+                    indent,
+                    start_col,
+                    false,
+                    out,
+                );
+                let c = current_col(out);
+                render_at(body, cfg, indent + 4, c, false, out);
+                out.push('\n');
+                push_indent(indent, out);
+                out.push('}');
+            }
+        }
         Doc::Chain { operands } => {
             render_chain(operands, cfg, indent, col, flat, out);
         }
@@ -153,11 +179,15 @@ fn render_at(
 fn has_hard_break(doc: &Doc) -> bool {
     match doc {
         Doc::HardLine => true,
+        // A `BraceBody` decides its own layout independently (like `Group` and
+        // `Chain`), so it hides its own breaks from the enclosing group — a
+        // closure inside a call does not force the call multiline.
         Doc::Text(_)
         | Doc::Line
         | Doc::Softline
         | Doc::IfBroken(_)
         | Doc::Group(_)
+        | Doc::BraceBody(_)
         | Doc::Chain { .. } => false,
         Doc::Concat(docs) => docs.iter().any(has_hard_break),
         Doc::Nest(_, inner) => has_hard_break(inner),
@@ -662,6 +692,59 @@ mod p0_tests {
             Doc::text("}"),
         ]));
         assert_eq!(render(&doc, RenderConfig::default()), "{\n    x\n}");
+    }
+
+    #[test]
+    fn brace_body_vanishes_when_body_fits_flat() {
+        // A `BraceBody` whose body fits the width renders JUST the body — no braces
+        // — matching `rustfmt`'s `move |_| rest` brace-strip on a fitting closure.
+        let doc = Doc::concat(vec![
+            Doc::text("move |_| "),
+            Doc::brace_body(Doc::text("short_rest")),
+        ]);
+        assert_eq!(render(&doc, RenderConfig::default()), "move |_| short_rest");
+    }
+
+    #[test]
+    fn brace_body_braces_and_breaks_when_body_overflows() {
+        // A `BraceBody` whose body overflows the width braces and breaks to a block:
+        // `{`, the body on its own line at one indent step, `}` dedented back —
+        // `rustfmt`'s block-form closure body.
+        let wide = "a".repeat(110);
+        let doc = Doc::concat(vec![
+            Doc::text("move |_| "),
+            Doc::brace_body(Doc::owned(wide.clone())),
+        ]);
+        let got = render(&doc, RenderConfig::default());
+        let expected = format!("move |_| {{\n    {wide}\n}}");
+        assert_eq!(
+            got, expected,
+            "\n--- got ---\n{got}\n--- want ---\n{expected}"
+        );
+    }
+
+    #[test]
+    fn brace_body_with_hardline_body_always_braces_even_when_narrow() {
+        // A statement-block body carries a `HardLine`, so it can never fit flat and
+        // the `BraceBody` always braces — a block closure body is always braced.
+        let body = Doc::concat(vec![Doc::text("let y = 1;"), Doc::HardLine, Doc::text("y")]);
+        let doc = Doc::concat(vec![Doc::text("move |_| "), Doc::brace_body(body)]);
+        assert_eq!(
+            render(&doc, RenderConfig::default()),
+            "move |_| {\n    let y = 1;\n    y\n}"
+        );
+    }
+
+    #[test]
+    fn brace_body_leaves_carry_the_braces_for_the_seal() {
+        // The braces ARE part of the SEAL leaf sequence (the string emitter always
+        // writes them), so the normalized leaves carry `{ body }` whether or not the
+        // render drops the braces — the flat render diverges from the leaves on the
+        // braces exactly as `IfBroken` diverges on the trailing comma.
+        let doc = Doc::brace_body(Doc::text("rest"));
+        assert_eq!(doc.normalized_leaves(), "{ rest }");
+        // Flat render drops the braces (matches rustfmt), so rendered != leaves here.
+        assert_eq!(render(&doc, RenderConfig::default()), "rest");
     }
 
     #[test]
