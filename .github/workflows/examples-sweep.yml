@@ -1,31 +1,25 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# ipê EXAMPLES sweep — the cornerstone correctness gate for the Ipe-native examples.
+# ipê EXAMPLES sweep — the upstream-mirror parity PROOF.
 #
-# Runs `scripts/equivalence-checks/examples-sweep.sh` (per in-scope example: BUILD `ipe build` +
-# `cargo build` · RUN headless per shape · EQUIVALENCE self-regression — PHASED, off for now).
-# The single OS-aware `scripts/lib/checks.sh` drives every host — no per-OS fork.
-#
-# ── PHASED self-regression (READ THIS) ───────────────────────────────────────
-# EQUIVALENCE now uses self-regression (`expected.txt` per example, captured from
-# ipe's own output) rather than the old Go-oracle (`expected_go.txt` + oracle.meta
-# SHA256 staleness gate, which required the Haskell `sky` compiler). The first
-# iteration runs BUILD+RUN only (IPE_SWEEP_NO_EQUIV=1). EQUIVALENCE turns on later
-# once expected.txt goldens are populated and verified.
+# Runs `scripts/examples-sweep.sh`. For each in-scope example it mirrors the real
+# upstream Sky example (network-fetched from anzellai/sky on CI, since there is no
+# ../sky sibling), patches it into Ipê (examples/sky/rename-map.tsv token rewrite
+# + optional examples/sky/ipe-patches/<name>.patch), then runs BUILD (`ipe build`
+# + `cargo build`) and RUN (headless, per shape). There is NO reference-compiler
+# build and no cross-compiler output comparison — this proves OUR compiler
+# builds+runs the real upstream examples. `scripts/lib/checks.sh` drives every host.
 #
 # ── UNPATCHED NEW EXAMPLES (FAIL LOUD) ───────────────────────────────────────
-# When IPE_SWEEP_MIRROR_SKY=1, the sweep detects any upstream Sky example that is
-# NOT listed in examples/sky/manifest.toml and emits a RED `unpatched-new-example`
-# row. Add the entry to manifest.toml (with a verified patch) before the sweep
-# can pass with a new upstream example.
+# Any upstream Sky example NOT listed in examples/sky/manifest.toml emits a RED
+# `unpatched-new-example` row. Add the entry to manifest.toml (with a verified
+# patch) before the sweep can pass with a new upstream example.
 #
 # ── NON-GATING FOR NOW ───────────────────────────────────────────────────────
-# ipe currently implements only `Ipe.*`; examples reaching for `Ipe.*` /
-# server / tui / webview runtimes will ipe-fail or cargo-fail until the compiler
-# reaches parity. So the sweep is expected to be largely RED during the build-out.
-# The job runs with `continue-on-error: true` (informational: it prints the table,
-# uploads the artifact, and surfaces the verdict WITHOUT failing the workflow).
-# FLIP `continue-on-error` to false — making a RED row fail CI — once ipe reaches
-# example parity (tracked in docs/architecture/examples-sweep-port.md).
+# ipe is still reaching example parity, so some rows are expected RED during the
+# build-out. The job runs with `continue-on-error: true` (informational: it
+# prints the table, uploads the artifact, and surfaces the verdict WITHOUT
+# failing the workflow). FLIP `continue-on-error` to false once ipe reaches
+# example parity.
 # ─────────────────────────────────────────────────────────────────────────────
 name: examples sweep
 
@@ -57,24 +51,21 @@ jobs:
       matrix:
         # ubuntu is the developer-reference host (full cli/server/live/tui/webview).
         # macOS adapts (tui via BSD `script`, webview via the real display). Windows
-        # (Git Bash) can be added once ipe matures — kept out of the first iteration
-        # to avoid noise while most rows are still ipe-fail.
+        # (Git Bash) can be added once ipe matures.
         os: [ubuntu-latest, macos-latest]
 
     env:
       # Shared cargo target (persisted via actions/cache). ipe + every emitted
       # example crate build into this ONE dir, so heavy deps compile once.
-      CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/sky-rust-target
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/ipe-target
       # sccache OFF on CI (its GHA backend uses GitHub's retired v1 Actions-Cache
       # API); actions/cache carries cross-run warmth instead. Leaving
       # CARGO_INCREMENTAL at cargo's default lets the cached target do incremental.
       IPE_NO_SCCACHE: '1'
-      # Phase 1: BUILD + RUN, no Go≡Rust EQUIVALENCE (no Haskell `sky` reference here).
-      IPE_SWEEP_NO_EQUIV: '1'
       # Night gate is opt-in (off by default) — but set FORCE too, belt-and-braces.
       IPE_SWEEP_FORCE: '1'
-      # >=32-byte test secret so any Std.Auth example that DOES build can boot.
-      IPE_AUTH_TOKEN_SECRET: sky-ci-sweep-test-secret-0123456789-abcdef
+      # >=32-byte test secret so any Ipe.Auth example that DOES build can boot.
+      IPE_AUTH_TOKEN_SECRET: ipe-ci-sweep-test-secret-0123456789-abcdef
       # Cold-CI build headroom (per-example ipe ceiling).
       IPE_SWEEP_BUILD_TIMEOUT: '900'
       CARGO_HTTP_MULTIPLEXING: 'false'
@@ -102,21 +93,21 @@ jobs:
         with:
           path: |
             ~/.cargo/registry
-            ${{ github.workspace }}/.cache/sky-rust-target
+            ${{ github.workspace }}/.cache/ipe-target
           key: ${{ runner.os }}-sweep-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-sweep-cargo-
 
       # ripgrep — REQUIRED by lib/examples.sh's is_out_of_scope Go-FFI filter.
       # Without it the scope scan silently mis-classifies and the sweep is wrong.
+      # xvfb runs webview examples headless. curl+tar fetch the upstream mirror.
       - name: Install ripgrep + xvfb (Linux)
         if: startsWith(matrix.os, 'ubuntu')
         run: |
           sudo apt-get update
           sudo apt-get install -y ripgrep xvfb
           # NOTE: webkit2gtk/libsoup (needed to LINK a webview example) are not
-          # installed yet — webview examples don't build on ipe during phase 1,
-          # so their RUN column reports skip. Add them here when that changes.
+          # installed yet — webview examples may not build until that changes.
 
       - name: Install ripgrep + coreutils (macOS)
         if: matrix.os == 'macos-latest'
@@ -128,7 +119,7 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       # Build the compiler under test into the shared target dir. --release keeps
-      # the per-example build ceilings comfortable; SKYC_BIN auto-resolves to
+      # the per-example build ceilings comfortable; IPE_BIN auto-resolves to
       # $CARGO_TARGET_DIR/release/ipe (see scripts/lib/env.sh).
       - name: Build ipe
         run: cargo build --release -p ipe
@@ -138,24 +129,26 @@ jobs:
       - name: Pre-warm runtime deps
         run: cargo build -p ipe-runtime-rust || cargo build --workspace || true
 
-      - name: Run examples sweep (BUILD + RUN, no EQUIVALENCE)
+      # No ../sky sibling on CI, so the mirror falls back to a network fetch of
+      # anzellai/sky (curl + tar, both preinstalled on the runners).
+      - name: Run examples sweep (mirror + BUILD + RUN)
         shell: bash
-        run: bash scripts/equivalence-checks/examples-sweep.sh
+        run: bash scripts/examples-sweep.sh
 
-      # Per-OS job summary: the BUILD·RUN·EQUIVALENCE table inline on the run page.
-      # always() so it renders even on a RED verdict. COSMETIC — never fails the job.
+      # Per-OS job summary: the BUILD·RUN table inline on the run page. always()
+      # so it renders even on a RED verdict. COSMETIC — never fails the job.
       - name: Job summary (sweep table)
         if: always()
         shell: bash
         run: |
           set +e +o pipefail
-          HIST="$HOME/.cache/sky/examples-sweep"
+          HIST="$HOME/.cache/ipe/examples-sweep"
           table="$(ls -t "$HIST"/sweep-*.table 2>/dev/null | head -1)"
           verdict="$(grep -h '=== VERDICT:' "$HIST"/run-*.log 2>/dev/null | tail -1 | sed 's/^=== //; s/ ===.*$//')"
           {
             echo "## examples-sweep — ${{ matrix.os }}"
             echo
-            echo "_Phase 1: BUILD + RUN only (Go≡Rust EQUIVALENCE is phased in later)._"
+            echo "_Upstream-mirror parity: does ipe build + run the real (patched) upstream examples?_"
             echo
             [ -n "$verdict" ] && { echo "**${verdict}**"; echo; }
             if [ -n "$table" ] && [ -f "$table" ]; then
@@ -172,44 +165,7 @@ jobs:
         with:
           name: examples-sweep-${{ matrix.os }}
           path: |
-            ~/.cache/sky/examples-sweep/sweep-*.table
-            ~/.cache/sky/examples-sweep/warnings-*.tsv
-            ~/.cache/sky/examples-sweep/*.log
+            ~/.cache/ipe/examples-sweep/sweep-*.table
+            ~/.cache/ipe/examples-sweep/warnings-*.tsv
+            ~/.cache/ipe/examples-sweep/*.log
           if-no-files-found: warn
-
-  # ───────────────────────────────────────────────────────────────────────────
-  # PHASE 2 (COMMENTED STUB) — self-regression EQUIVALENCE. Turn this on once
-  # expected.txt goldens are populated for each in-scope example. Two paths:
-  #   (a) Populate expected.txt per example by running `ipe run` once and
-  #       capturing stdout, then commit the goldens into tests/golden/<name>/.
-  #       Drop IPE_SWEEP_NO_EQUIV — equivalence_for() reads expected.txt via
-  #       e2e_support::read_expected() and diffs against the current run.
-  #   (b) For Sky-mirrored examples (IPE_SWEEP_MIRROR_SKY=1), populate
-  #       expected.txt under examples/sky/<name>/ after the mirror+patch step
-  #       has been verified correct. The manifest.toml registers each such
-  #       example and its patch; the sweep mirrors at runtime, not at commit time.
-  # ───────────────────────────────────────────────────────────────────────────
-  # examples-sweep-equivalence:
-  #   name: examples-sweep-equivalence (ubuntu, Go≡Rust)
-  #   runs-on: ubuntu-latest
-  #   env:
-  #     CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/sky-rust-target
-  #     IPE_NO_SCCACHE: '1'
-  #     IPE_SWEEP_FORCE: '1'
-  #     IPE_GO_BIN: sky           # the Haskell reference compiler on PATH
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: dtolnay/rust-toolchain@stable
-  #     - uses: actions/setup-go@v5
-  #       with: { go-version: '1.26', cache: true }
-  #     - uses: haskell-actions/setup@v2       # build the Haskell `sky` reference
-  #       with: { ghc-version: '9.6.7', cabal-version: 'latest' }
-  #     - run: sudo apt-get update && sudo apt-get install -y ripgrep xvfb
-  #     - name: Build ipe
-  #       run: cargo build --release -p ipe
-  #     - name: Build the Haskell sky reference (IPE_GO_BIN)
-  #       run: |
-  #         # (in the sky checkout) cabal build exe:sky && ln -sf "$(cabal list-bin exe:sky)" /usr/local/bin/sky
-  #         echo "TODO: wire the Haskell sky reference build"
-  #     - name: Run examples sweep (BUILD + RUN + EQUIVALENCE)
-  #       run: bash scripts/equivalence-checks/examples-sweep.sh   # EQUIVALENCE on: IPE_SWEEP_NO_EQUIV unset

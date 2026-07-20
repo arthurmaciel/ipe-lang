@@ -1,8 +1,8 @@
-# Blockers surfaced by the Sky-example mirror + CI-prep
+# Blockers surfaced by the upstream Sky-example mirror sweep
 
-Honest ledger (PRINCIPLES.md §0) of every defect the mirror + sweep + CI-prep
-surfaced. Two kinds: **fixed here** (root-caused, in-boundary) and **filed**
-(a tracked blocker the owning lane must close). None is papered over.
+Honest ledger (PRINCIPLES.md §0) of every defect the mirror + sweep surfaced.
+Two kinds: **fixed here** (root-caused, in-boundary) and **filed** (a tracked
+blocker the owning lane must close). None is papered over.
 
 ## Fixed here
 
@@ -159,52 +159,40 @@ PROJECT-WIDE type index (name → real home) so it unifies with the genuine
 firewall (`src/compiler/db`), which is invasive and risks the incremental
 early-cut invariant — out of this cycle's boundary.
 
-### Full-mirror build tally (build-only, IPE_SWEEP_MIRROR_SKY=1)
-Of the 34 in-scope examples: **D1 (09/10/12) + D2 (06) now build + SEAL** (was 25
-green → **29 green**). Remaining reds: **5 out-of-scope Go-FFI** (03-tea-external,
-05-mux-server, 08-notes-app, 11-fyne-stopwatch, 13-skyshop — `is_out_of_scope`) +
-**5 filed D3 gaps** (16/17: project-wide types; 18: DCE; 26: LiveReq hardening;
-31: parametric-annotation arity-fill).
+**00-standard-libs — FILED.**
+`Test.equal "$15.00" (Money.format (Money.add a b))` passes the result of
+`Money.add` straight into `Money.format`. Upstream Sky's `Money.add` returns a
+bare `Money`; Ipê's `Ipe.Money.add` returns `Result Error Money` (a fail-closed
+divergence — over/underflow is a typed error, not a silent wrap). So the example
+hits `IPE-T0001: expected Ipe.Money.Money, found Result Error Ipe.Money.Money` at
+`src/Main.ipe:656`. This is a sanctioned security divergence, not a bug: the
+result of a checked-arithmetic op MUST be unwrapped before formatting. Closing 00
+needs the upstream example rewritten to thread the `Result` (a real behavioural
+delta → an `ipe-patches/00-standard-libs.patch`), OR a lenient display-only
+`Money.formatResult` helper. Deferred pending a decision on which; recorded here
+so the red row is understood, never papered over.
 
-## Equivalence design — Go reference builds from PRISTINE upstream, not the patch
+### New-model sweep tally (scripts/examples-sweep.sh, BUILD + RUN)
 
-The Go-oracle reference (Haskell `sky`) does NOT understand the `Ipe.*`
-namespaces the patch introduces — it wants `Sky.Core.*` / `Std.*` and `.sky`
-sources. So the equivalence path must build the Go binary from the ORIGINAL
-upstream Sky source, while the Rust build uses the patched Ipê mirror.
-`sky_mirror_one` now preserves the pristine tree under
-`examples/sky/<name>/.sky-original/` for exactly this. (The sweep's existing
-`build_go` builds `src/Main.ipe` from the same dir as the Rust build — correct
-for the first-party `examples/NN-*` set, which has no separate Go source, but for
-the sky-mirror set the Go build should target `.sky-original/`. Wiring that
-switch is a follow-up; the pristine source is now captured so it is a small
-change, not a re-architecture.)
+Of the **28 in-scope sky-mirror examples** (the 41 upstream minus 13 Go-FFI
+excluded by the manifest's `go_ffi = true` classification): **25 build + run
+green**; **3 red**, each a filed compiler/stdlib gap above — 00-standard-libs
+(Money `Result` divergence), 26-ui-showcase (LiveReq hardening), 31-webview-
+stopwatch-ui (parametric-annotation arity-fill). 39-hub-demo is a multi-app
+composite (billing-app + frontend-app) with no top-level `src/Main.ipe`, so the
+per-dir sweep reports `no-source`; building a composite's sub-apps as separate
+units is a sweep-structure follow-up, not a compiler gap.
 
-## Host / toolchain constraints (visual Go-vs-Rust comparison)
+The 16/17/18 project-wide-type / DCE gaps (D3 above) remain real, but those
+examples are Go-FFI (`[go.dependencies]` in their `sky.toml`) and so are out of
+the Rust build set by the manifest — their reds no longer appear in the sweep.
 
-Two independent constraints gate the visual pixel-diff:
-
-1. **Go-oracle version skew.** The `sky` binary on PATH is **v0.16.29**; the
-   mirrored examples are **v0.17.9**. The v0.16.29 oracle builds only the subset
-   of examples that avoid v0.16↔v0.17 stdlib skew (01-hello-world, 15-http-server
-   build; the mirrored 26/31 fail the OTHER D3 gaps above). Full visual coverage needs
-   a v0.17.x `sky` oracle pinned under `tools/oracle/bin/sky` (the sweep's
-   documented resolution slot).
-
-2. **Server-lifecycle vs harness-timeout interaction (this host).** The
-   `screenshot-compare.mjs` driver is implemented (boots both binaries
-   sequentially on the announced port, screenshots each in headless Chromium via
-   `--no-sandbox`, pixel-diffs with `pixelmatch`/`pngjs`, exits 3=SKIP when the Go
-   reference is absent). Chromium is installed and launches. But the emitted
-   server binaries here do not exit on `SIGTERM`, so a single foreground
-   invocation that boots one hangs until an outer `timeout` SIGTERMs the whole
-   group — which lands before node flushes, so the run could not be captured
-   live in this shell. The sweep's own `lib/checks.sh` solves the identical
-   problem with process-group SIGKILL + `reap`; the driver uses
-   `child.kill('SIGKILL')` and is expected to work under that harness. Recorded
-   honestly as a not-live-proven-on-this-host constraint rather than a doctored
-   pass.
-
-`screenshot-compare.mjs` degrades safely on BOTH: it captures the Rust
-screenshot always and exits 3 (SKIP, "Go reference unavailable") when the Go
-binary is empty/version-skewed — never a silent pass.
+**Cargo-warning gate — FILED (pre-existing, repo-wide).** Every emitted crate
+warns `unexpected cfg condition value: wasm-client` (6 per non-wasm example): the
+runtime references `cfg(feature = "wasm-client")` but the emitted non-wasm
+`Cargo.toml` never declares that feature. The sweep counts these via
+`IPE_SWEEP_WARN_GATE` (default on), so the verdict is FAIL until they are fixed
+even when every row is build-ok. This is a codegen/runtime defect independent of
+the mirror model; the CI examples-sweep job is `continue-on-error` so it does not
+block the workflow. Set `IPE_SWEEP_WARN_GATE=0` to score BUILD+RUN only while the
+warning is open.
