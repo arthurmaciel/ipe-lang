@@ -1,0 +1,5 @@
+go:
+  database/sql: latest
+  log/slog: latest
+  modernc.org/sqlite: latest
+  os: latest
