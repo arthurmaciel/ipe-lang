@@ -48,9 +48,9 @@ use ipe_ir::{BinOp, Callee, Expr, IrType, KernelFn, ModPath};
 use crate::EmitCtx;
 use crate::doc::{ChainOperand, Doc};
 use crate::emit_expr::{
-    call_has_kernel_special_case, callee_name, emit_binding_stmts, emit_expr_at,
-    expr_value_is_non_clone, kernel_swaps_first_two, record_struct_name, scan_free_target,
-    substitute_var,
+    call_has_kernel_special_case, callee_name, clone_targets_in_expr, emit_binding_stmts,
+    emit_expr_at, expr_value_is_non_clone, free_vars, kernel_swaps_first_two, record_struct_name,
+    scan_free_target, substitute_var,
 };
 use crate::emit_types::GenericScope;
 
@@ -219,6 +219,17 @@ pub fn build_doc(
         // value are built recursively.
         Expr::Update { record, fields } => {
             build_update(ctx, record, fields, indent, child, generics)
+        }
+
+        // The sync task-sequencing block `{ let _ = task_run(<effect>); <rest> }`.
+        // A statement block (it holds the discard `let`), so it ALWAYS breaks: the
+        // `let _ = task_run(<effect>);` statement and the `<rest>` tail each on their
+        // own `HardLine` inside the block's sole `Nest(4)`, matching rustfmt. The
+        // effect gets the identical IR-level clone-capture rewrite the string
+        // emitter applies (`clone_targets_in_expr` over `rest`'s `free_vars`); both
+        // effect and rest are built recursively.
+        Expr::TaskSeqSync { effect, rest } => {
+            build_task_seq_sync(ctx, effect, rest, indent, child, generics)
         }
 
         // Every remaining arm carries the string emitter's exact bytes as one
@@ -833,6 +844,52 @@ fn build_update(
     ]))
 }
 
+/// Build the `Doc` for the sync task-sequencing block, mirroring
+/// [`crate::emit_expr::emit_expr_at`]'s `Expr::TaskSeqSync` arm token-for-token.
+///
+/// The string emitter renders `{ let _ = task_run(<effect>); <rest> }` — a
+/// statement block that discards the blocking task result, then evaluates `rest`
+/// in the same sync scope. Since it holds the discard `let`, it ALWAYS breaks:
+/// the `let _ = task_run(` prefix + the effect doc + `);` land on one `HardLine`,
+/// and `rest` on a further `HardLine`, all inside the block's sole `Nest(4)` —
+/// matching rustfmt, which never inlines a block that holds a statement.
+///
+/// Before emitting, the effect gets the identical IR-level clone-capture rewrite
+/// the string emitter applies: any identifier `rest` reads next but `effect`'s
+/// own left-to-right evaluation would move is rewritten to a `CloneVar`
+/// (`clone_targets_in_expr` over `rest`'s `free_vars`). Both effect and rest are
+/// built recursively; their leaves carry the string emitter's exact tokens, so
+/// the SEAL holds.
+fn build_task_seq_sync(
+    ctx: &EmitCtx,
+    effect: &Expr,
+    rest: &Expr,
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Doc> {
+    let rest_captures = free_vars(rest);
+    let effect_rw = clone_targets_in_expr(effect.clone(), &rest_captures);
+    let effect_doc = build_doc(ctx, &effect_rw, indent, child, generics)?;
+    let rest_doc = build_doc(ctx, rest, indent, child, generics)?;
+    Ok(Doc::concat(vec![
+        Doc::text("{"),
+        Doc::nest(
+            4,
+            Doc::concat(vec![
+                Doc::HardLine,
+                Doc::text("let _ = task_run("),
+                effect_doc,
+                Doc::text(");"),
+                Doc::HardLine,
+                rest_doc,
+            ]),
+        ),
+        Doc::HardLine,
+        Doc::text("}"),
+    ]))
+}
+
 #[cfg(test)]
 #[allow(clippy::panic, clippy::expect_used, reason = "test assertions")]
 mod tests {
@@ -1266,6 +1323,28 @@ mod tests {
             Expr::Update {
                 record: Box::new(var(fx, 2)),
                 fields: vec![(sym(fx, 0), Expr::Int(9)), (sym(fx, 1), Expr::Int(8))],
+            },
+            // Sync task-sequencing block (structured statement block): block on the
+            // effect (discarding its result), then evaluate `rest`. Always breaks.
+            // The effect `a` and `rest` `b` are distinct vars, so no clone-capture
+            // rewrite fires — the SEAL leaves stay the plain `a`/`b` tokens.
+            Expr::TaskSeqSync {
+                effect: Box::new(var(fx, 0)),
+                rest: Box::new(var(fx, 1)),
+            },
+            // Sync task-seq whose `rest` re-reads the same var the `effect` moves:
+            // the IR-level clone-capture rewrite turns the effect's `a` into a
+            // `CloneVar` (`a.clone()`), so the effect and body carry DIFFERENT
+            // leaves — the SEAL must still match the string emitter's rewritten
+            // tokens (both apply the identical `clone_targets_in_expr` pass).
+            Expr::TaskSeqSync {
+                effect: Box::new(Expr::Call {
+                    callee: Callee::Func(FuncId::from_raw(0)),
+                    args: vec![var(fx, 0)],
+                    pin: CallPin::None,
+                    on_form: OnFormKind::NotForm,
+                }),
+                rest: Box::new(var(fx, 0)),
             },
         ]
     }
@@ -1972,6 +2051,28 @@ mod tests {
             };
             let got = render_let_stmt(ctx, &expr);
             let expected = "let z = {\n        let mut __ipe_rec = (c).clone();\n        __ipe_rec.a = 9;\n        __ipe_rec.b = 8;\n        __ipe_rec\n    }";
+            assert_eq!(
+                got, expected,
+                "\n--- got ---\n{got}\n--- want ---\n{expected}"
+            );
+        });
+    }
+
+    #[test]
+    fn task_seq_sync_block_always_breaks_to_statements() {
+        // A sync task-seq is a statement block `{ let _ = task_run(<effect>); <rest> }`
+        // that ALWAYS breaks (rustfmt never inlines a block that holds a statement):
+        // `{`, the `let _ = task_run(a);` discard and the `b` tail each on their own
+        // line at block+4 (col 8), `}` dedented to the statement indent. Golden
+        // captured from `rustfmt --edition 2024 --style-edition 2024`.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let expr = Expr::TaskSeqSync {
+                effect: Box::new(var(&fx, 0)), // a
+                rest: Box::new(var(&fx, 1)),   // b
+            };
+            let got = render_let_stmt(ctx, &expr);
+            let expected = "let z = {\n        let _ = task_run(a);\n        b\n    }";
             assert_eq!(
                 got, expected,
                 "\n--- got ---\n{got}\n--- want ---\n{expected}"
