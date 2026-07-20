@@ -23,14 +23,17 @@
 # ─────────────────────────────────────────────────────────────────────────────
 name: examples sweep
 
+# Slow, live-upstream parity proof — a POST-MERGE / nightly check, OFF the
+# required PR gate (the fast PR proxy for THE SEAL is ci.yml's `seal-smoke`).
+# Runs on push to the main branches and on a nightly schedule; never on
+# pull_request.
 on:
   push:
     branches: [main, master, 'feat/**']
     paths-ignore:
       - '**.md'
-  pull_request:
-    paths-ignore:
-      - '**.md'
+  schedule:
+    - cron: '37 4 * * *'      # nightly, offset from ci.yml (04:00) + security.yml (05:13)
   workflow_dispatch: {}
 
 concurrency:

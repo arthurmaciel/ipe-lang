@@ -28,13 +28,18 @@ move later if values or cost demand it.
 
 Parallel jobs: `fmt`, `clippy -D warnings`, `nextest` + doctests, `miri` (compiler
 crates), `e2e` (sharded nextest + `IPE_E2E=1`). Supply-chain security lives in a
-separate `.github/workflows/security.yml` (`cargo-audit` + `cargo-deny`), so it cannot
-gate routine PRs but still runs nightly.
+separate `.github/workflows/security.yml` (`cargo-deny` — its `advisories` check
+subsumes `cargo-audit`).
+
+Jobs are split by trigger so `main` is green by construction: a PR runs
+only the FAST required gate (`fmt`, `clippy`, `test`, `cargo-deny`, `seal-smoke`) and
+merges when green; the slow jobs (`e2e`, `sky-parity`, `miri`, runtime feature-combos,
+`examples-sweep`, `static`) run on push-to-main + nightly, off the PR path.
 
 ## Consequences
 
-- Every push to `main`/`master` or PR triggers the full matrix; nightly cron covers dep
-  and upstream drift.
+- A PR triggers only the fast required gate; push to `main`/`master` and the nightly
+  cron trigger the full matrix (the latter also covers dep and upstream drift).
 - The concurrency group (`ci-${{ github.ref }}`) cancels superseded in-progress runs
   on the same ref; release/tag runs are never cancelled.
 - Self-hosted runner tooling, Forgejo/Woodpecker config, and local systemd services are
