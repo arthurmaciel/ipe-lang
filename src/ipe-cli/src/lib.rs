@@ -20,7 +20,10 @@ mod cache;
 pub mod ffi;
 mod lsp;
 pub mod project;
-pub mod stdlib;
+/// The embedded Ipê standard-library source now lives in the dependency-free
+/// [`ipe_stdlib`] leaf crate so the WebAssembly frontend can share one copy.
+/// Re-exported here so `crate::stdlib::…` call sites resolve unchanged.
+pub use ipe_stdlib as stdlib;
 pub mod watch;
 
 use std::collections::BTreeMap;

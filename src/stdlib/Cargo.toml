@@ -1,0 +1,23 @@
+[package]
+name = "ipe_stdlib"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+description = "The embedded Ipê standard-library source (`Ipe.*`), compiled into the binary via `include_str!` from the sibling `Ipe/` tree. A dependency-free leaf crate so both the native CLI and the WebAssembly frontend share one copy of the stdlib source table."
+
+[lib]
+path = "src/lib.rs"
+
+# Dev-only: the embedded-source parse fixtures + the qualifier-disjointness
+# check exercise the real compiler crates. Kept as dev-dependencies so the
+# crate's RUNTIME graph stays dependency-free — the whole point of this leaf
+# crate is that the WebAssembly frontend can embed the stdlib without pulling
+# the compiler's world. (No cycle: nothing in the compiler depends on
+# `ipe_stdlib`.)
+[dev-dependencies]
+ipe_intern = { path = "../compiler/intern" }
+ipe_parse = { path = "../compiler/parse" }
+ipe_canon = { path = "../compiler/canon" }
+
+[lints]
+workspace = true

@@ -15,7 +15,13 @@
 //! ```
 
 use std::collections::{BTreeMap, BTreeSet};
+// `rustfmt` is spawned as a subprocess (see `run_rustfmt`), which is a native-
+// only path — a browser cannot spawn a process. On `wasm32` the fmt pass is
+// disabled (`rust_fmt_disabled`), so these imports and `run_rustfmt` are not
+// compiled there.
+#[cfg(not(target_arch = "wasm32"))]
 use std::io::Write;
+#[cfg(not(target_arch = "wasm32"))]
 use std::process::{Command, Stdio};
 
 use ipe_backend::{EmittedProject, RelPath};
@@ -66,6 +72,9 @@ fn format_generated_rust_files(files: &mut BTreeMap<RelPath, String>) -> DResult
     if rust_fmt_disabled() {
         return Ok(());
     }
+    // Unreachable on `wasm32` (`rust_fmt_disabled` is always `true` there); the
+    // `run_rustfmt` subprocess path is not compiled for wasm.
+    #[cfg(not(target_arch = "wasm32"))]
     for (path, text) in files.iter_mut() {
         if !is_generated_rust_path(path.as_str()) {
             continue;
@@ -75,11 +84,26 @@ fn format_generated_rust_files(files: &mut BTreeMap<RelPath, String>) -> DResult
     Ok(())
 }
 
-/// Whether the post-emit `rustfmt` pass is disabled via `IPE_RUST_FMT=0`. Any
-/// other value (or unset) leaves it enabled, so the fmt-clean invariant the
-/// goldens and sweep depend on holds by default.
+/// Whether the post-emit `rustfmt` pass is disabled.
+///
+/// On `wasm32` (the in-browser compiler) it is ALWAYS disabled: `rustfmt` is a
+/// separate process, and a browser cannot spawn one. This is a platform
+/// limitation, not a correctness compromise — the emitted Rust is valid, just
+/// not canonically formatted. The playground shows source, it does not
+/// byte-compare against goldens.
+///
+/// Off `wasm32` it honours `IPE_RUST_FMT=0`; any other value (or unset) leaves
+/// formatting enabled, so the fmt-clean invariant the goldens and sweep depend
+/// on holds by default.
 fn rust_fmt_disabled() -> bool {
-    std::env::var("IPE_RUST_FMT").is_ok_and(|v| v == "0")
+    #[cfg(target_arch = "wasm32")]
+    {
+        true
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::env::var("IPE_RUST_FMT").is_ok_and(|v| v == "0")
+    }
 }
 
 /// A generated Rust source path the backend authored and must format: any `.rs`
@@ -87,6 +111,10 @@ fn rust_fmt_disabled() -> bool {
 /// top on disk by the driver and are already clean; the two the backend
 /// GENERATES (`mod.rs`, `config.rs`) are the only `ipe_runtime` entries in
 /// `files`.
+///
+/// Native only: its sole caller is the `rustfmt` loop, which is not compiled on
+/// `wasm32`.
+#[cfg(not(target_arch = "wasm32"))]
 fn is_generated_rust_path(rel: &str) -> bool {
     rel.starts_with("src/")
         && std::path::Path::new(rel)
@@ -95,6 +123,11 @@ fn is_generated_rust_path(rel: &str) -> bool {
 }
 
 /// Pipe `source` through `rustfmt` on stdin and return the formatted bytes.
+///
+/// Native only: spawns the `rustfmt` subprocess. On `wasm32` the fmt pass is
+/// disabled upstream (`rust_fmt_disabled` returns `true`), so this is never
+/// reached and is not compiled in.
+#[cfg(not(target_arch = "wasm32"))]
 fn run_rustfmt(source: &str) -> DResult<String> {
     let fmt_bug = |detail: String| Diagnostic::CompilerBug {
         where_: "ipe_backend_rust::project::run_rustfmt",

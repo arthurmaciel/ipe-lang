@@ -72,36 +72,37 @@ See [`examples/`](examples/) for a program of each shape.
 
 ## Playground
 
-The playground server compiles Ipê source to WASM on demand and renders the
-result in a live browser preview. Run it locally:
+The playground compiles Ipê **entirely in the browser** — no server, no
+subprocess. The Ipê compiler frontend (parse → typecheck → lower → emit) is
+built to WebAssembly (`src/ipe-wasm`) and runs in the page; as you type it shows
+the diagnostics and the emitted Rust. (The final Rust→binary step needs `cargo`,
+which a browser cannot run, so the playground stops at the emitted Rust rather
+than running the program — an intended limitation.)
+
+Build and run it locally:
 
 ```sh
 # Prerequisites (once):
 rustup target add wasm32-unknown-unknown
-cargo install wasm-pack
+cargo install wasm-bindgen-cli   # version matching the wasm-bindgen crate
 
-# Build:
-cargo build --release -p ipe
-cargo build --release -p ipe-playground
+# Build the WASM compiler + JS bindings into examples/wasm-language-playground/pkg/:
+bash examples/wasm-language-playground/build.sh
 
-# Run:
-export IPE_BIN="$(pwd)/target/release/ipe"
-export IPE_RUNTIME_DIR="$(pwd)/src/runtime/rust/src"
-export IPE_PLAYGROUND_STATIC_DIR="$(pwd)/src/playground/www"
-./target/release/ipe-playground
+# Serve the static directory (any static server works):
+python3 -m http.server --directory examples/wasm-language-playground 8080
 ```
 
-Open `http://localhost:3000`. Edit Ipê source in the left pane and press
-**Run** (or `Ctrl+Enter`) to compile and preview. The first compile builds all
-dependencies; subsequent compiles reuse the warm target directory.
+Open `http://localhost:8080`. Edit Ipê source in the left pane; it compiles live
+(debounced) and the right pane shows the emitted Rust or the diagnostics. The
+theme switcher offers every ACE editor theme and re-themes both the editor and
+the surrounding interface.
 
-For a persistent warm cache across restarts, set:
+How it works internally (what compiles to WASM, what is stubbed and why, the JS
+API, the playground data flow): [`docs/internals/wasm.md`](docs/internals/wasm.md).
 
-```sh
-export IPE_PLAYGROUND_TARGET_DIR="$HOME/.cache/ipe/playground-target"
-```
-
-Full details (port, timeout, architecture): [`docs/architecture/tbd/playground.md`](docs/architecture/tbd/playground.md).
+> The earlier server-based playground (`src/playground/`, an axum backend that
+> shelled out to `cargo`) is superseded by this browser-native model.
 
 ## Editor setup (LSP)
 

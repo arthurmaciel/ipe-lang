@@ -13,6 +13,7 @@ name = "ipe"
 path = "src/main.rs"
 
 [dependencies]
+ipe_stdlib = { path = "../stdlib" }
 ipe_intern = { path = "../compiler/intern" }
 ipe_diagnostics = { path = "../compiler/diagnostics" }
 ipe_parse = { path = "../compiler/parse" }

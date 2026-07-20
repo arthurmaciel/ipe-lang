@@ -1,0 +1,12 @@
+# The in-browser compiler crate (`src/ipe-wasm`) builds for
+# `wasm32-unknown-unknown`, whose linker is `rust-lld` (wasm flavor). A native
+# host config that sets a system linker for the ELF link step — e.g.
+# `-C link-arg=-fuse-ld=mold` in a machine-global `[build] rustflags` — leaks
+# into every target unless overridden, and `rust-lld` rejects `-fuse-ld=mold`.
+#
+# A `[target.<triple>] rustflags` overrides `[build] rustflags` for that triple
+# only (cargo does not merge them), so this pins the wasm link step to a
+# mold-free flag set while leaving native builds on whatever the host config
+# selects. Debuginfo is dropped by the crate's release profile, not here.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "debuginfo=0"]

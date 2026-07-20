@@ -12,6 +12,7 @@
 //! is ordinary Ipê: the same parser that reads user code reads it (the
 //! `parses` test proves it), so it is the substrate the import resolver
 //! compiles.
+#![forbid(unsafe_code)]
 
 /// One embedded standard-library module: its dotted name and its Ipê source.
 pub struct StdModule {
@@ -22,43 +23,43 @@ pub struct StdModule {
 }
 
 /// `Ipe.Basics` — `identity` / `always` / `not` / `fst` / `snd` / `clamp`.
-const BASICS: &str = include_str!("../../stdlib/Ipe/Basics.ipe");
+const BASICS: &str = include_str!("../Ipe/Basics.ipe");
 /// `Ipe.Maybe` — combinators over the `Maybe` ADT.
-const MAYBE: &str = include_str!("../../stdlib/Ipe/Maybe.ipe");
+const MAYBE: &str = include_str!("../Ipe/Maybe.ipe");
 /// `Ipe.Result` — combinators over the `Result` ADT.
-const RESULT: &str = include_str!("../../stdlib/Ipe/Result.ipe");
+const RESULT: &str = include_str!("../Ipe/Result.ipe");
 /// `Ipe.List` — list combinators.
-const LIST: &str = include_str!("../../stdlib/Ipe/List.ipe");
+const LIST: &str = include_str!("../Ipe/List.ipe");
 /// `Ipe.String` — string combinators.
-const STRING: &str = include_str!("../../stdlib/Ipe/String.ipe");
+const STRING: &str = include_str!("../Ipe/String.ipe");
 /// `Ipe.Char` — single-character helpers.
-const CHAR: &str = include_str!("../../stdlib/Ipe/Char.ipe");
+const CHAR: &str = include_str!("../Ipe/Char.ipe");
 /// `Ipe.Dict` — string-keyed associative map.
-const DICT: &str = include_str!("../../stdlib/Ipe/Dict.ipe");
+const DICT: &str = include_str!("../Ipe/Dict.ipe");
 /// `Ipe.Set` — unordered set of unique elements.
-const SET: &str = include_str!("../../stdlib/Ipe/Set.ipe");
+const SET: &str = include_str!("../Ipe/Set.ipe");
 /// `Ipe.Bytes` — arbitrary byte buffer, distinct from `String`.
 ///
 /// Divergence from Ipê: Ipê defines `type alias Bytes = String`; Ipê-Rust
 /// makes `Bytes` a distinct primitive lowering to `Vec<u8>` (lossless for
 /// non-UTF-8 binary). See `docs/architecture/divergence-policy.md`.
-const BYTES: &str = include_str!("../../stdlib/Ipe/Bytes.ipe");
+const BYTES: &str = include_str!("../Ipe/Bytes.ipe");
 /// `Ipe.Crypto` — hashes / HMAC / RSA / AEAD / key-derivation / random.
-const CRYPTO: &str = include_str!("../../stdlib/Ipe/Crypto.ipe");
+const CRYPTO: &str = include_str!("../Ipe/Crypto.ipe");
 /// `Ipe.Task` — Task combinator surface.
-const TASK: &str = include_str!("../../stdlib/Ipe/Task.ipe");
+const TASK: &str = include_str!("../Ipe/Task.ipe");
 /// `Ipe.Io` — standard-I/O effect kernels.
-const IO: &str = include_str!("../../stdlib/Ipe/Io.ipe");
+const IO: &str = include_str!("../Ipe/Io.ipe");
 /// `Ipe.Time` — time effect kernels.
-const TIME: &str = include_str!("../../stdlib/Ipe/Time.ipe");
+const TIME: &str = include_str!("../Ipe/Time.ipe");
 /// `Ipe.System` — process / environment effect kernels.
-const SYSTEM: &str = include_str!("../../stdlib/Ipe/System.ipe");
+const SYSTEM: &str = include_str!("../Ipe/System.ipe");
 /// `Ipe.Random` — entropy-backed randomness effect kernels.
-const RANDOM: &str = include_str!("../../stdlib/Ipe/Random.ipe");
+const RANDOM: &str = include_str!("../Ipe/Random.ipe");
 /// `Ipe.File` — file-system effect kernels.
-const FILE: &str = include_str!("../../stdlib/Ipe/File.ipe");
+const FILE: &str = include_str!("../Ipe/File.ipe");
 /// `Ipe.Http` — outbound HTTP client kernels + pure builders.
-const HTTP: &str = include_str!("../../stdlib/Ipe/Http.ipe");
+const HTTP: &str = include_str!("../Ipe/Http.ipe");
 
 /// `Ipe.Path` — pure filesystem-path helpers, compiled-source Layer-3.
 ///
@@ -68,7 +69,7 @@ const HTTP: &str = include_str!("../../stdlib/Ipe/Http.ipe");
 /// variants. Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`) so its body
 /// is actually compiled; NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness
 /// invariant holds.
-const PATH: &str = include_str!("../../stdlib/Ipe/Path.ipe");
+const PATH: &str = include_str!("../Ipe/Path.ipe");
 /// `Ipe.Regex` — RE2 regex helpers, compiled-source Layer-3.
 ///
 /// The members are point-free `Ffi.kernel "Regex_*"` aliases resolved by the
@@ -76,7 +77,7 @@ const PATH: &str = include_str!("../../stdlib/Ipe/Path.ipe");
 /// the pure `RegexMatch`/`RegexFind`/… `StdlibKernel` variants. Registered in
 /// [`COMPILED_STD_MODULES`] (NOT `MODULES`) so its body is actually compiled;
 /// NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
-const REGEX: &str = include_str!("../../stdlib/Ipe/Regex.ipe");
+const REGEX: &str = include_str!("../Ipe/Regex.ipe");
 
 /// Every embedded `Ipe` module, keyed by its dotted import name.
 ///
@@ -198,14 +199,14 @@ pub struct CompiledStdModule {
 
 /// `Ipe.Palette` — a Std-namespace module that defines `Shade`
 /// and pattern-matches its own constructors in `toHex`.
-const PALETTE: &str = include_str!("../../stdlib/Ipe/Palette.ipe");
+const PALETTE: &str = include_str!("../Ipe/Palette.ipe");
 
 /// `Ipe.Css` — the typed stylesheet DSL, compiled pure Ipê source: it
 /// defines AND pattern-matches its own `CssProp` / `CssRule` / `Length` /
 /// `Color` / keyword-enum ADTs and folds them to a CSS string.  Its only Rust
 /// surface is the four leaf security kernels under the `Ipe.CssSafety`
 /// kernel qualifier (NOT under `Ipe.Css`, so the disjointness invariant holds).
-const CSS: &str = include_str!("../../stdlib/Ipe/Css.ipe");
+const CSS: &str = include_str!("../Ipe/Css.ipe");
 
 /// `Ipe.ToString` — naming-consistency surface.
 ///
@@ -214,7 +215,7 @@ const CSS: &str = include_str!("../../stdlib/Ipe/Css.ipe");
 /// sub-namespace.  `fromTime` is OMITTED pending the `Time_timeString` Rust
 /// kernel.  Disjoint from `STDLIB_MODULE_QUALIFIERS` (no `"ToString"` entry
 /// exists in `STDLIB_MODULE_QUALIFIERS`).
-const TOSTRING_CORE: &str = include_str!("../../stdlib/Ipe/ToString.ipe");
+const TOSTRING_CORE: &str = include_str!("../Ipe/ToString.ipe");
 
 /// `Ipe.Test` — lightweight in-process test framework.
 ///
@@ -222,7 +223,7 @@ const TOSTRING_CORE: &str = include_str!("../../stdlib/Ipe/ToString.ipe");
 /// all assertion helpers.  `expectErrorKind` / `kindName` are OMITTED pending
 /// the `Ipe.Error` compiled-source migration; `summarise` is pure (no IO).
 /// Disjoint from `STDLIB_MODULE_QUALIFIERS` (no `"Test"` entry exists there).
-const IPE_TEST: &str = include_str!("../../stdlib/Ipe/Test.ipe");
+const IPE_TEST: &str = include_str!("../Ipe/Test.ipe");
 
 /// `Ipe.Live.Head` — typed `<head>` helpers for Ipe.Live per-page injection.
 ///
@@ -233,7 +234,7 @@ const IPE_TEST: &str = include_str!("../../stdlib/Ipe/Test.ipe");
 /// so the disjointness invariant holds.
 ///
 /// Unblocks `38-composite-ui-multibackend` (N0004: Ipe.Live.Head).
-const STD_LIVE_HEAD: &str = include_str!("../../stdlib/Ipe/Live/Head.ipe");
+const STD_LIVE_HEAD: &str = include_str!("../Ipe/Live/Head.ipe");
 
 /// `Ipe.Ui.Responsive` — device-class helpers for responsive layout branching.
 ///
@@ -241,7 +242,7 @@ const STD_LIVE_HEAD: &str = include_str!("../../stdlib/Ipe/Live/Head.ipe");
 /// `../ipe/ipe-stdlib/Std/Ui/Responsive.ipe`.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 /// Unblocks `37-composite-live-shop` (N0004: Ipe.Ui.Responsive).
-const STD_UI_RESPONSIVE: &str = include_str!("../../stdlib/Ipe/Ui/Responsive.ipe");
+const STD_UI_RESPONSIVE: &str = include_str!("../Ipe/Ui/Responsive.ipe");
 
 /// `Ipe.Ui.Chart` — pure-Ipê charting helpers (line, area, bar, sparkline, heatmap).
 ///
@@ -250,7 +251,7 @@ const STD_UI_RESPONSIVE: &str = include_str!("../../stdlib/Ipe/Ui/Responsive.ipe
 /// `../ipe/ipe-stdlib/Std/Ui/Chart.ipe`.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 /// Unblocks `38-composite-ui-multibackend` (N0004: Ipe.Ui.Chart).
-const STD_UI_CHART: &str = include_str!("../../stdlib/Ipe/Ui/Chart.ipe");
+const STD_UI_CHART: &str = include_str!("../Ipe/Ui/Chart.ipe");
 
 /// `Ipe.Ui.Grid` — typed CSS-grid track ADT + `columns`/`rows`/`tracks` builders.
 ///
@@ -261,7 +262,7 @@ const STD_UI_CHART: &str = include_str!("../../stdlib/Ipe/Ui/Chart.ipe");
 /// `docs/divergences-from-sky.md` (typed carrier vs reference's sentinel approach).
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 /// Unblocks `26-ui-showcase` (IPE-N0004: Ipe.Ui.Grid — Grid.columns/fr/px).
-const STD_UI_GRID: &str = include_str!("../../stdlib/Ipe/Ui/Grid.ipe");
+const STD_UI_GRID: &str = include_str!("../Ipe/Ui/Grid.ipe");
 
 /// `Ipe.Ui.Transition` — typed CSS transition `Step`/`Easing` ADTs +
 /// `attribute`/`attributeUnsafe` builders.
@@ -274,13 +275,13 @@ const STD_UI_GRID: &str = include_str!("../../stdlib/Ipe/Ui/Grid.ipe");
 /// (mirrors the `Ipe.Ui.Grid` port's `Ui.style` call).
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 /// Unblocks `26-ui-showcase` (IPE-N0004: Ipe.Ui.Transition).
-const STD_UI_TRANSITION: &str = include_str!("../../stdlib/Ipe/Ui/Transition.ipe");
+const STD_UI_TRANSITION: &str = include_str!("../Ipe/Ui/Transition.ipe");
 
 /// `Ipe.Ui.Transform` — typed CSS transform / opacity helpers for `Ui.animate`
 /// keyframes. Pure Ipê; uses only `Ipe.*` internals — no
 /// native primitive needed. Not in `STDLIB_MODULE_QUALIFIERS` so disjointness
 /// invariant holds. Unblocks `26-ui-showcase` (IPE-N0004: Ipe.Ui.Transform).
-const STD_UI_TRANSFORM: &str = include_str!("../../stdlib/Ipe/Ui/Transform.ipe");
+const STD_UI_TRANSFORM: &str = include_str!("../Ipe/Ui/Transform.ipe");
 
 /// `Ipe.Ui.Animation` — typed CSS keyframe-animation `Iterations`/`FillMode`
 /// ADTs + `Spec` record + `attribute`/`defaultSpec`/`with*` builders.
@@ -297,7 +298,7 @@ const STD_UI_TRANSFORM: &str = include_str!("../../stdlib/Ipe/Ui/Transform.ipe")
 /// (`Prop`/`propsToCss`) ports.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 /// Unblocks `26-ui-showcase` (IPE-N0004: Ipe.Ui.Animation — Animation.attribute).
-const STD_UI_ANIMATION: &str = include_str!("../../stdlib/Ipe/Ui/Animation.ipe");
+const STD_UI_ANIMATION: &str = include_str!("../Ipe/Ui/Animation.ipe");
 
 /// `Ipe.Money` — currency-typed Money on `Ipe.Decimal` + ISO 4217 enum.
 ///
@@ -307,7 +308,7 @@ const STD_UI_ANIMATION: &str = include_str!("../../stdlib/Ipe/Ui/Animation.ipe")
 /// case-expressions / recursions.  The FX rate registry is stubbed.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 /// Unblocks `00-standard-libs` (N0004: Ipe.Money).
-const STD_MONEY: &str = include_str!("../../stdlib/Ipe/Money.ipe");
+const STD_MONEY: &str = include_str!("../Ipe/Money.ipe");
 
 /// `Ipe.Pure` — uniform `() -> Task Error a` companion surface.
 ///
@@ -320,7 +321,7 @@ const STD_MONEY: &str = include_str!("../../stdlib/Ipe/Money.ipe");
 /// arity-0-alias-of-nullary-effect-kernel lowering exists.  See
 /// `docs/divergences-from-sky.md` §B-FfiKernelAliasSealed.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
-const IPE_CORE_PURE: &str = include_str!("../../stdlib/Ipe/Pure.ipe");
+const IPE_CORE_PURE: &str = include_str!("../Ipe/Pure.ipe");
 
 /// `Ipe.WebSocket` — outbound WebSocket client (compiled source).
 ///
@@ -335,7 +336,7 @@ const IPE_CORE_PURE: &str = include_str!("../../stdlib/Ipe/Pure.ipe");
 /// gated behind the `websocket_client` feature the backend adds via
 /// `uses_websocket`. Resolved via the `Ffi.kernel` alias fast-path, so the
 /// `WebSocket` qualifier stays out of `STDLIB_MODULE_QUALIFIERS`.
-const IPE_CORE_WEBSOCKET: &str = include_str!("../../stdlib/Ipe/WebSocket.ipe");
+const IPE_CORE_WEBSOCKET: &str = include_str!("../Ipe/WebSocket.ipe");
 
 /// `Ipe.Env` — build-time-embedded public config (compiled source).
 ///
@@ -346,7 +347,7 @@ const IPE_CORE_WEBSOCKET: &str = include_str!("../../stdlib/Ipe/WebSocket.ipe");
 /// `ipe_backend_rust::project::render_env_public_rs`. Resolved via the
 /// `Ffi.kernel` alias fast-path, so the `Env` qualifier stays out of
 /// `STDLIB_MODULE_QUALIFIERS`.
-const IPE_CORE_ENV: &str = include_str!("../../stdlib/Ipe/Env.ipe");
+const IPE_CORE_ENV: &str = include_str!("../Ipe/Env.ipe");
 
 /// `Ipe.Cache` — in-memory LRU + TTL cache (compiled source).
 ///
@@ -359,14 +360,14 @@ const IPE_CORE_ENV: &str = include_str!("../../stdlib/Ipe/Env.ipe");
 /// the runtime `CacheCfg` / `CacheStats` structs (mirroring the reference's
 /// struct-alias registry).
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
-const STD_CACHE: &str = include_str!("../../stdlib/Ipe/Cache.ipe");
+const STD_CACHE: &str = include_str!("../Ipe/Cache.ipe");
 
 /// `Ipe.Compression` — gzip + zstd compression (compiled source).
 ///
 /// KERNEL-BLOCKED: no `Compression_*` kernel variants exist — member use
 /// fails closed with IPE-N0028.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
-const STD_COMPRESSION: &str = include_str!("../../stdlib/Ipe/Compression.ipe");
+const STD_COMPRESSION: &str = include_str!("../Ipe/Compression.ipe");
 
 /// `Ipe.Config` — typed TOML/YAML/JSON decoders (compiled source).
 ///
@@ -383,14 +384,14 @@ const STD_COMPRESSION: &str = include_str!("../../stdlib/Ipe/Compression.ipe");
 /// nullable/load kernels emit `ipe_runtime::config_decode::*` (vendored
 /// unconditionally, same posture as Csv/Cache/Compression).
 /// Not in `STDLIB_MODULE_QUALIFIERS`.
-const STD_CONFIG: &str = include_str!("../../stdlib/Ipe/Config.ipe");
+const STD_CONFIG: &str = include_str!("../Ipe/Config.ipe");
 
 /// `Ipe.Csv` — CSV encode + decode (compiled source).
 ///
 /// Defines `type alias Csv` + pure Ipê builders.  KERNEL-BLOCKED: no
 /// `Csv_*` kernel variants exist — member use fails closed with IPE-N0028.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
-const STD_CSV: &str = include_str!("../../stdlib/Ipe/Csv.ipe");
+const STD_CSV: &str = include_str!("../Ipe/Csv.ipe");
 
 /// `Ipe.Email` — provider-abstract email send (compiled source).
 ///
@@ -398,13 +399,13 @@ const STD_CSV: &str = include_str!("../../stdlib/Ipe/Csv.ipe");
 /// no `Email_*` kernel variant exists — member use fails closed with
 /// IPE-N0028.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
-const STD_EMAIL: &str = include_str!("../../stdlib/Ipe/Email.ipe");
+const STD_EMAIL: &str = include_str!("../Ipe/Email.ipe");
 
 /// `Ipe.Live.Console` — typed console identity + builder helpers (compiled source).
 ///
 /// Pure Ipê; no Ffi.kernel calls.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
-const STD_LIVE_CONSOLE: &str = include_str!("../../stdlib/Ipe/Live/Console.ipe");
+const STD_LIVE_CONSOLE: &str = include_str!("../Ipe/Live/Console.ipe");
 
 /// `Ipe.PubSub` — Task-shaped publish, callable from any context (compiled source).
 ///
@@ -416,14 +417,14 @@ const STD_LIVE_CONSOLE: &str = include_str!("../../stdlib/Ipe/Live/Console.ipe")
 /// over-generic), never erased.  See `docs/divergences-from-sky.md`
 /// §B-FfiKernelAliasSealed for the closed completeness gap.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
-const STD_PUBSUB: &str = include_str!("../../stdlib/Ipe/PubSub.ipe");
+const STD_PUBSUB: &str = include_str!("../Ipe/PubSub.ipe");
 
 /// `Ipe.Trace` — opt-in distributed-tracing spans (compiled source).
 ///
 /// KERNEL-BLOCKED: no `Trace_*` kernel variants exist — member use fails
 /// closed with IPE-N0028.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
-const STD_TRACE: &str = include_str!("../../stdlib/Ipe/Trace.ipe");
+const STD_TRACE: &str = include_str!("../Ipe/Trace.ipe");
 
 /// `Ipe.Ui.Events` — pure Ipê re-exports of `Ipe.Ui` event helpers (compiled source).
 ///
@@ -433,7 +434,7 @@ const STD_TRACE: &str = include_str!("../../stdlib/Ipe/Trace.ipe");
 /// `(String -> msg) -> Attribute msg`) — see `docs/divergences-from-sky.md`
 /// §B-UiEventsFnArg.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
-const STD_UI_EVENTS: &str = include_str!("../../stdlib/Ipe/Ui/Events.ipe");
+const STD_UI_EVENTS: &str = include_str!("../Ipe/Ui/Events.ipe");
 
 /// Every compiled-source stdlib module, keyed by its dotted import name.
 ///
