@@ -47,8 +47,11 @@ _sky_release_asset() {
 # a false red).
 sky_upstream_bin() {
   local bin
+  # The release tarball ships TWO binaries: the compiler `sky-<os>-<arch>` and
+  # the FFI inspector `sky-ffi-inspect-sky-<os>-<arch>`. Select the COMPILER —
+  # exclude the inspector, which would emit FFI-inspection JSON, not a compile.
   bin="$(find "$SKY_UPSTREAM_CACHE" -maxdepth 1 -type f -name 'sky-*-*' \
-         ! -name '*.tar.gz' ! -name '*.zip' 2>/dev/null | head -1)"
+         ! -name 'sky-ffi-inspect-*' ! -name '*.tar.gz' ! -name '*.zip' 2>/dev/null | head -1)"
   if [ -n "$bin" ] && [ -x "$bin" ]; then printf '%s\n' "$bin"; return 0; fi
 
   local asset; asset="$(_sky_release_asset)" || { echo "sky-upstream: unsupported host" >&2; return 1; }
@@ -63,8 +66,11 @@ sky_upstream_bin() {
     curl -fsSL --max-time 180 "$url" -o "$tgz" 2>/dev/null || { echo "sky-upstream: download failed ($url)" >&2; return 1; }
   fi
   tar -xzf "$tgz" -C "$SKY_UPSTREAM_CACHE" 2>/dev/null || { echo "sky-upstream: extract failed" >&2; return 1; }
+  # The release tarball ships TWO binaries: the compiler `sky-<os>-<arch>` and
+  # the FFI inspector `sky-ffi-inspect-sky-<os>-<arch>`. Select the COMPILER —
+  # exclude the inspector, which would emit FFI-inspection JSON, not a compile.
   bin="$(find "$SKY_UPSTREAM_CACHE" -maxdepth 1 -type f -name 'sky-*-*' \
-         ! -name '*.tar.gz' ! -name '*.zip' 2>/dev/null | head -1)"
+         ! -name 'sky-ffi-inspect-*' ! -name '*.tar.gz' ! -name '*.zip' 2>/dev/null | head -1)"
   [ -n "$bin" ] || { echo "sky-upstream: no sky binary in release asset" >&2; return 1; }
   chmod +x "$bin"
   printf '%s\n' "$bin"
