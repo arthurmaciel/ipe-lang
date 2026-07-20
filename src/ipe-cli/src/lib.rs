@@ -22,6 +22,7 @@ pub mod fmt;
 pub mod help;
 pub mod index;
 pub mod init;
+pub mod lockfile;
 mod lsp;
 pub mod pkg;
 pub mod project;
