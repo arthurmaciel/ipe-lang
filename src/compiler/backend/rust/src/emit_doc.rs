@@ -82,16 +82,20 @@ pub fn build_doc(
             build_binop_chain(ctx, *op, lhs, rhs, indent, child, generics)
         }
 
+        // A parenthesized `if`/`else` expression. rustfmt keeps the whole
+        // construct on one line when the `if cond { then } else { else }` text
+        // (WITHOUT the outer parens) is at most `single_line_if_else_max_width`
+        // (50) columns wide — an absolute, column-independent threshold — and
+        // otherwise breaks each branch body onto its own line in block form.
+        Expr::If { cond, then_, else_ } => {
+            build_if(ctx, cond, then_, else_, indent, child, generics)
+        }
+
         // Every remaining arm carries the string emitter's exact bytes as one
-        // leaf. The frozen renderer's only inline-vs-break mechanism today is
-        // the `Chain` node (a `Group`'s bare `Doc::Line`s are unconditional hard
-        // breaks, so a `Group` cannot flatten a `{ 1 }` / `(a, b)` body — that
-        // needs a renderer extension, which is P2). Until then a leaf carrying
-        // the string emitter's bytes is byte-exact for every non-chain arm:
-        // leaves (Int/Float/Str/…), the call-shaped binops (Append/IntDiv), the
-        // `if`/tuple/cons/list constructs, and the opaque context-heavy arms
-        // (Ctor/Call/Let/Destructure/Access/Record/Update/Lambda/Match/TaskSeq).
-        // Carrying bytes keeps the SEAL exact by construction.
+        // leaf. Its layout is whatever single-line pre-`rustfmt` form the string
+        // emitter produces; structuring the rest (call-arg lists, tuple/list,
+        // block-form `let`/destructure, match, lambda, record/update) is the
+        // remaining P2 work. Carrying bytes keeps the SEAL exact by construction.
         _ => leaf(ctx, expr, indent, depth, generics),
     }
 }
@@ -178,6 +182,83 @@ fn build_binop_chain(
     Ok(Doc::Chain { operands })
 }
 
+/// `rustfmt`'s `single_line_if_else_max_width` (default 50): the maximum width of
+/// an `if cond { then } else { else }` construct — measured WITHOUT the outer
+/// parentheses the emitter wraps it in — that `rustfmt` keeps on one line. Wider
+/// constructs break each branch body onto its own line. The threshold is absolute
+/// (column-independent), so the decision is made here at build time from the flat
+/// leaf widths.
+const SINGLE_LINE_IF_ELSE_MAX_WIDTH: usize = 50;
+
+/// Build the `Doc` for a parenthesized `if`/`else`. The string emitter produces
+/// `(if {cond} {{ {then} }} else {{ {else} }})`; this builder carries the exact
+/// same tokens but, when the un-parenthesized construct exceeds
+/// [`SINGLE_LINE_IF_ELSE_MAX_WIDTH`], lays the branch bodies out in broken block
+/// form (`HardLine`-separated), matching `rustfmt`.
+///
+/// The branch bodies are built recursively so a nested chain / `if` inside a
+/// branch structures too; a branch's own leaves carry its exact tokens.
+fn build_if(
+    ctx: &EmitCtx,
+    cond: &Expr,
+    then_: &Expr,
+    else_: &Expr,
+    indent: usize,
+    depth: u16,
+    generics: GenericScope,
+) -> DResult<Doc> {
+    // The branch bodies' visual indentation comes entirely from the renderer's
+    // `Nest(4)` wrappers below; the builder `indent` is threaded unchanged so a
+    // single-line branch leaf carries no embedded indentation that would
+    // double-count against the `Nest`.
+    let cond_doc = build_doc(ctx, cond, indent, depth, generics)?;
+    let then_doc = build_doc(ctx, then_, indent, depth, generics)?;
+    let else_doc = build_doc(ctx, else_, indent, depth, generics)?;
+
+    // The single-line construct width, WITHOUT the outer parens:
+    // `if ` + cond + ` { ` + then + ` } else { ` + else + ` }`.
+    let cond_flat = cond_doc.normalized_leaves();
+    let then_flat = then_doc.normalized_leaves();
+    let else_flat = else_doc.normalized_leaves();
+    let construct_width = "if ".len()
+        + cond_flat.len()
+        + " { ".len()
+        + then_flat.len()
+        + " } else { ".len()
+        + else_flat.len()
+        + " }".len();
+
+    if construct_width <= SINGLE_LINE_IF_ELSE_MAX_WIDTH {
+        // Inline: `(if cond { then } else { else })`. Soft `Line`s so a wider
+        // enclosing group could in principle break it, but the width test already
+        // guaranteed it fits.
+        return Ok(Doc::concat(vec![
+            Doc::text("(if "),
+            cond_doc,
+            Doc::text(" { "),
+            then_doc,
+            Doc::text(" } else { "),
+            else_doc,
+            Doc::text(" })"),
+        ]));
+    }
+
+    // Broken block form. Braces sit at the enclosing block `indent`; each branch
+    // body indents to `indent + 4`. `HardLine`s force the layout unconditionally,
+    // matching `rustfmt`'s block-form `if` once past the single-line threshold.
+    Ok(Doc::concat(vec![
+        Doc::text("(if "),
+        cond_doc,
+        Doc::text(" {"),
+        Doc::nest(4, Doc::concat(vec![Doc::HardLine, then_doc])),
+        Doc::HardLine,
+        Doc::text("} else {"),
+        Doc::nest(4, Doc::concat(vec![Doc::HardLine, else_doc])),
+        Doc::HardLine,
+        Doc::text("})"),
+    ]))
+}
+
 #[cfg(test)]
 #[allow(clippy::panic, clippy::expect_used, reason = "test assertions")]
 mod tests {
@@ -212,10 +293,21 @@ mod tests {
         let main_mod = interner.intern("Main").expect("intern Main");
         let msg_ty = interner.intern("Msg").expect("intern Msg");
         let unit_ctor = interner.intern("Unit").expect("intern Unit");
-        let syms = ["a", "b", "c", "x"]
-            .iter()
-            .map(|n| interner.intern(n).expect("intern var"))
-            .collect::<Vec<_>>();
+        let syms = [
+            "a",
+            "b",
+            "c",
+            "x",
+            // Wide identifiers for the broken-`if` byte-golden: their combined
+            // width pushes the `if cond { then } else { else }` construct past the
+            // single-line threshold so the builder emits block form.
+            "some_condition_variable",
+            "first_branch_value",
+            "second_branch_value_here",
+        ]
+        .iter()
+        .map(|n| interner.intern(n).expect("intern var"))
+        .collect::<Vec<_>>();
         let program = Program {
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
@@ -313,15 +405,45 @@ mod tests {
             // Call-shaped binops (leaf).
             binop(BinOp::Append, var(fx, 0), var(fx, 1)),
             binop(BinOp::IntDiv, var(fx, 0), var(fx, 1)),
-            // If (structured).
+            // If (structured) — narrow, stays inline.
             Expr::If {
                 cond: Box::new(var(fx, 0)),
                 then_: Box::new(Expr::Int(1)),
                 else_: Box::new(Expr::Int(2)),
             },
-            // Tuple (structured).
+            // If (structured) — wide, breaks to block form; the SEAL must hold
+            // across the break/flat boundary (same tokens, different layout).
+            Expr::If {
+                cond: Box::new(var(fx, 4)),
+                then_: Box::new(var(fx, 5)),
+                else_: Box::new(var(fx, 6)),
+            },
+            // Composite: a chain-eligible binop whose operands are themselves
+            // `if` expressions — exercises the structured `if` builder nested
+            // inside the structured `Chain` builder.
+            binop(
+                BinOp::Add,
+                Expr::If {
+                    cond: Box::new(var(fx, 0)),
+                    then_: Box::new(Expr::Int(1)),
+                    else_: Box::new(Expr::Int(2)),
+                },
+                Expr::If {
+                    cond: Box::new(var(fx, 1)),
+                    then_: Box::new(Expr::Int(3)),
+                    else_: Box::new(Expr::Int(4)),
+                },
+            ),
+            // Composite: an `if` whose branches are chain-eligible binops —
+            // exercises the structured `Chain` builder nested inside the `if`.
+            Expr::If {
+                cond: Box::new(var(fx, 0)),
+                then_: Box::new(binop(BinOp::Add, var(fx, 1), var(fx, 2))),
+                else_: Box::new(binop(BinOp::Mul, var(fx, 1), var(fx, 2))),
+            },
+            // Tuple (leaf).
             Expr::Tuple(vec![var(fx, 0), var(fx, 1)]),
-            // Cons (structured, call-shaped).
+            // Cons (leaf, call-shaped).
             Expr::Cons {
                 head: Box::new(var(fx, 0)),
                 tail: Box::new(Expr::List {
@@ -439,6 +561,88 @@ mod tests {
             let doc = build_doc(ctx, &expr, 0, 0, scope).expect("build_doc");
             let rendered = render(&doc, RenderConfig::default());
             assert_eq!(rendered, "(if a { 1 } else { 2 })");
+        });
+    }
+
+    #[test]
+    fn if_expr_at_threshold_boundary_stays_inline() {
+        // An `if cond { then } else { else }` construct exactly 50 columns wide
+        // (the threshold) stays inline; 51 breaks. `cond1234567890` + `thenvalab`
+        // + `elsevalab` is the pinned 50-wide construct captured from rustfmt.
+        let mut interner = Interner::new();
+        let main_mod = interner.intern("Main").expect("intern Main");
+        let cond = interner.intern("cond1234567890").expect("intern");
+        let thenv = interner.intern("thenvalab").expect("intern");
+        let elsev = interner.intern("elsevalab").expect("intern");
+        let program = Program {
+            modules: vec![Module {
+                name: ModPath(vec![main_mod]),
+                types: vec![],
+                funcs: vec![],
+                entry: None,
+                records: vec![],
+                uses_tea: false,
+                uses_server: false,
+                uses_ui: false,
+                uses_live: false,
+                uses_tui: false,
+                uses_webview: false,
+                uses_css: false,
+                uses_auth: false,
+                uses_websocket: false,
+                uses_email: false,
+                uses_env_public: false,
+                uses_ffi: false,
+            }],
+        };
+        let ctx = EmitCtx::build(
+            &interner,
+            &program,
+            DbDriver::Sqlite,
+            None,
+            ipe_ir::Target::Native,
+            Vec::new(),
+            false,
+        )
+        .expect("EmitCtx::build");
+        let scope = GenericScope::new(&[]);
+        let expr = Expr::If {
+            cond: Box::new(Expr::Var(cond)),
+            then_: Box::new(Expr::Var(thenv)),
+            else_: Box::new(Expr::Var(elsev)),
+        };
+        let doc = build_doc(&ctx, &expr, 4, 0, scope).expect("build_doc");
+        assert_eq!(
+            render(&doc, RenderConfig::default()),
+            "(if cond1234567890 { thenvalab } else { elsevalab })",
+            "a 50-wide construct must stay inline"
+        );
+    }
+
+    #[test]
+    fn if_expr_breaks_to_block_form_when_over_threshold() {
+        // `(if some_condition_variable { first_branch_value } else {
+        // second_branch_value_here })` — the construct is 83 cols (> 50), so
+        // rustfmt breaks each branch onto its own line. Golden captured from
+        // `rustfmt --edition 2024 --style-edition 2024` at block indent 4.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let scope = GenericScope::new(&[]);
+            let expr = Expr::If {
+                cond: Box::new(var(&fx, 4)),  // some_condition_variable
+                then_: Box::new(var(&fx, 5)), // first_branch_value
+                else_: Box::new(var(&fx, 6)), // second_branch_value_here
+            };
+            let doc = build_doc(ctx, &expr, 4, 0, scope).expect("build_doc");
+            // Rendered inside a `let z = ` statement at block indent 4, matching the
+            // captured golden's origin column.
+            let stmt = Doc::nest(4, Doc::concat(vec![Doc::text("let z = "), doc]));
+            let got = render(&stmt, RenderConfig::default());
+            let expected = "let z = (if some_condition_variable {\n        first_branch_value\n    } else {\n        second_branch_value_here\n    })";
+            assert_eq!(
+                got, expected,
+                "\n--- got ---\n{got}\n--- want ---\n{expected}"
+            );
         });
     }
 
