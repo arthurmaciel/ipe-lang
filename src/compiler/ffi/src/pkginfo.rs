@@ -1462,8 +1462,17 @@ mod tests {
         });
         let pkg = decode(&v).expect("legal features decode");
         assert_eq!(
-            pkg.features().iter().map(FeatureName::as_str).collect::<Vec<_>>(),
-            ["rt-multi-thread", "dep:foo", "serde/std", "dep?/feat", "v1.2"]
+            pkg.features()
+                .iter()
+                .map(FeatureName::as_str)
+                .collect::<Vec<_>>(),
+            [
+                "rt-multi-thread",
+                "dep:foo",
+                "serde/std",
+                "dep?/feat",
+                "v1.2"
+            ]
         );
     }
 
@@ -1571,7 +1580,10 @@ mod tests {
         assert_eq!(pkg.errors(), ["rustdoc failed".to_owned()]);
         assert_eq!(pkg.notes(), ["facade guidance".to_owned()]);
         assert_eq!(
-            pkg.features().iter().map(FeatureName::as_str).collect::<Vec<_>>(),
+            pkg.features()
+                .iter()
+                .map(FeatureName::as_str)
+                .collect::<Vec<_>>(),
             ["std"]
         );
         assert_eq!(
