@@ -1040,6 +1040,9 @@ impl<'a> Parser<'a> {
                 | Tok::TripleStr(_)
                 | Tok::Char(_)
                 | Tok::Ident(_)
+                // A leading `.field` begins a first-class accessor atom, so
+                // `List.map .name xs` gathers `.name` as an argument.
+                | Tok::Dot
         )
     }
 
@@ -1106,10 +1109,11 @@ impl<'a> Parser<'a> {
         while self.peek_kind() == Some(&Tok::Dot) {
             let dot_span = self.err_here_span();
             if dot_span.lo != expr.span.hi {
-                return Err(Diagnostic::Parse {
-                    span: dot_span,
-                    msg: ParseError::SpaceBeforeDot,
-                });
+                // A space before the `.` is NOT field access on `expr`; it is the
+                // first-class accessor reading — `f .x` is `.x` (the getter
+                // `\p -> p.x`) applied to `f`. Stop the postfix run and leave the
+                // `.x` for `parse_app` to gather as an argument atom.
+                break;
             }
             self.bump(Construct::Expression)?;
             let tok = self.bump(Construct::Expression)?;
@@ -1164,8 +1168,51 @@ impl<'a> Parser<'a> {
                 let expr = self.ident_expr(text, tok.span)?;
                 Ok(Located::new(tok.span, expr))
             }
+            // A leading `.field` in atom position is the first-class accessor — a
+            // value of type `{ r | field : a } -> a`. It desugars here to the
+            // getter lambda `\<fresh> -> <fresh>.field`, reusing the ordinary
+            // record-access path (deferred field access + monomorphic pinning) so
+            // no new type/canon/backend node is needed.
+            Tok::Dot => self.parse_field_accessor(tok.span, depth),
             _ => Err(Self::unexpected_token(&tok, &[Expected::Expression])),
         }
+    }
+
+    /// Build the desugared getter lambda for a first-class accessor `.field`, the
+    /// leading `.` already consumed (its span is `dot_span`). The next token is
+    /// the field identifier (`lex_dot` only yields [`Tok::Dot`] when an identifier
+    /// start follows). A dotted run `.a.b` lexes the `a.b` as one identifier; its
+    /// segments become a nested `Access` chain over the synthesised parameter,
+    /// exactly as [`Self::parse_atom_postfix`] does for `(r).a.b`.
+    fn parse_field_accessor(&mut self, dot_span: Span, depth: u32) -> DResult<Expr> {
+        if depth > MAX_DEPTH {
+            return Err(self.too_deep(Construct::Expression));
+        }
+        let tok = self.bump(Construct::Expression)?;
+        let Tok::Ident(text) = &tok.kind else {
+            return Err(Self::unexpected_token(&tok, &[Expected::Identifier]));
+        };
+        // The synthesised parameter. Its name need only be a valid emitted Rust
+        // identifier: the parameter is the innermost binder of this lambda, so the
+        // body's `VarLocal` resolves to it by lexical scoping even if a user
+        // binding of the same name exists further out (which the body never
+        // references anyway).
+        let param_sym = self.interner.intern("ipe_accessor_arg")?;
+        let param = Located::new(dot_span, Pattern_::PVar(param_sym));
+        let mut body = Located::new(dot_span, Expr_::VarLocal(param_sym));
+        for (seg_count, seg) in (0_u32..).zip(text.split('.')) {
+            if seg_count > MAX_DEPTH {
+                return Err(self.too_deep(Construct::Expression));
+            }
+            let field = Located::new(tok.span, self.interner.intern(seg)?);
+            let span = Self::span_merge(dot_span, tok.span);
+            body = Located::new(span, Expr_::Access(Box::new(body), field));
+        }
+        let span = Self::span_merge(dot_span, tok.span);
+        Ok(Located::new(
+            span,
+            Expr_::Lambda(vec![param], Box::new(body)),
+        ))
     }
 
     /// Parse a unary minus in atom (prefix) position, the `-` already consumed

@@ -391,6 +391,90 @@ mod tests {
     }
 
     #[test]
+    fn bare_field_accessor_desugars_to_a_getter_lambda() {
+        // `.name` as a value is the first-class accessor `{ r | name : a } -> a`.
+        // It desugars at parse time to `\<fresh> -> <fresh>.name`, i.e. a
+        // one-parameter lambda whose body is an `Access` of the parameter.
+        let mut i = Interner::new();
+        let src = format!("{HDR}f =\n    .name\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "bare accessor must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let f = find_value(&m, &i, "f");
+        let body = f.map(|v| &v.body.value);
+        assert!(
+            matches!(
+                body,
+                Some(Expr_::Lambda(params, b))
+                    if params.len() == 1
+                        && matches!(
+                            &b.value,
+                            Expr_::Access(inner, field)
+                                if matches!(inner.value, Expr_::VarLocal(_))
+                                    && i.resolve(field.value) == Some("name")
+                        )
+            ),
+            "expected `\\p -> p.name`, got {body:?}"
+        );
+        // The lambda parameter and the accessed record must be the SAME symbol,
+        // so the body resolves to the synthesised parameter, never a user binding.
+        if let Some(Expr_::Lambda(params, b)) = body
+            && let (Some(param), Expr_::Access(inner, _)) = (params.first(), &b.value)
+            && let (Pattern_::PVar(p), Expr_::VarLocal(v)) = (&param.value, &inner.value)
+        {
+            assert_eq!(p, v, "accessor param and access target must be one symbol");
+        }
+    }
+
+    #[test]
+    fn accessor_as_a_map_argument_parses() {
+        // `List.map .name xs` — the accessor is a first-class argument.
+        let mut i = Interner::new();
+        let src = format!("{HDR}f xs =\n    List.map .name xs\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "accessor argument must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let f = find_value(&m, &i, "f");
+        // Body is `List.map .name xs` — a Call whose second argument is the
+        // desugared accessor lambda.
+        assert!(
+            f.is_some_and(|v| matches!(
+                &v.body.value,
+                Expr_::Call(_, args)
+                    if args.len() == 2 && matches!(args.first().map(|a| &a.value), Some(Expr_::Lambda(..)))
+            )),
+            "expected `Call(List.map, [<accessor lambda>, xs])`, got {:?}",
+            f.map(|v| &v.body.value)
+        );
+    }
+
+    #[test]
+    fn nested_field_accessor_chains_the_access() {
+        // `.a.b` accessor desugars to `\p -> p.a.b` (nested Access).
+        let mut i = Interner::new();
+        let src = format!("{HDR}f =\n    .a.b\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "nested accessor must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let f = find_value(&m, &i, "f");
+        assert!(
+            f.is_some_and(|v| matches!(
+                &v.body.value,
+                Expr_::Lambda(params, b)
+                    if params.len() == 1
+                        && matches!(
+                            &b.value,
+                            // outer `.b` over inner `.a` over the parameter
+                            Expr_::Access(inner, _)
+                                if matches!(inner.value, Expr_::Access(..))
+                        )
+            )),
+            "expected `\\p -> p.a.b`, got {:?}",
+            f.map(|v| &v.body.value)
+        );
+    }
+
+    #[test]
     fn lone_ampersand_is_unknown_char() {
         // A single `&` is not a Ipê operator (only `&&`); it lexes as IPE-P0010.
         assert_eq!(err_code(&format!("{HDR}x = 1 & 2")), "IPE-P0010");
@@ -456,29 +540,73 @@ mod tests {
     }
 
     #[test]
-    fn space_before_dot_is_the_accessor_reading() {
-        // `f .x` is `.x` (an accessor function) applied to `f`, not field
-        // access — an unsupported reading, rejected rather than misparsed.
-        assert_eq!(err_code(&format!("{HDR}g f =\n    f .x\n")), "IPE-P0018");
-    }
-
-    #[test]
-    fn accessor_function_argument_is_rejected() {
-        // A realistic accessor use — `map .name people` — errors clearly on the
-        // spaced `.name` instead of silently reparsing as field access.
-        assert_eq!(
-            err_code(&format!("{HDR}names people =\n    map .name people\n")),
-            "IPE-P0018"
+    fn space_before_dot_is_the_accessor_application() {
+        // `f .x` is `.x` (the first-class accessor `\p -> p.x`) applied to `f` —
+        // a `Call` of `f` on the desugared accessor lambda, not field access.
+        let mut i = Interner::new();
+        let src = format!("{HDR}g f =\n    f .x\n");
+        let m = parse_module(&src, &mut i);
+        assert!(
+            m.is_ok(),
+            "`f .x` must parse as accessor application: {m:?}"
+        );
+        let Ok(m) = m else { return };
+        let g = find_value(&m, &i, "g");
+        assert!(
+            g.is_some_and(|v| matches!(
+                &v.body.value,
+                Expr_::Call(callee, args)
+                    if matches!(callee.value, Expr_::VarLocal(_))
+                        && args.len() == 1
+                        && matches!(args.first().map(|a| &a.value), Some(Expr_::Lambda(..)))
+            )),
+            "expected `Call(f, [<accessor lambda>])`, got {:?}",
+            g.map(|v| &v.body.value)
         );
     }
 
     #[test]
-    fn space_before_dot_after_paren_is_rejected() {
-        // `(r) .value` — the space makes `.value` an accessor applied to `(r)`,
-        // distinct from the flush `(r).value` field access above.
-        assert_eq!(
-            err_code(&format!("{HDR}f r =\n    (r) .value\n")),
-            "IPE-P0018"
+    fn accessor_function_argument_parses() {
+        // A realistic accessor use — `map .name people` — gathers the spaced
+        // `.name` as the first argument (the desugared accessor lambda).
+        let mut i = Interner::new();
+        let src = format!("{HDR}names people =\n    map .name people\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "`map .name people` must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let names = find_value(&m, &i, "names");
+        assert!(
+            names.is_some_and(|v| matches!(
+                &v.body.value,
+                Expr_::Call(_, args)
+                    if args.len() == 2
+                        && matches!(args.first().map(|a| &a.value), Some(Expr_::Lambda(..)))
+            )),
+            "expected `Call(map, [<accessor lambda>, people])`, got {:?}",
+            names.map(|v| &v.body.value)
+        );
+    }
+
+    #[test]
+    fn space_before_dot_after_paren_is_accessor_application() {
+        // `(r) .value` — the space makes `.value` the first-class accessor
+        // applied to `(r)`, distinct from the flush `(r).value` field access
+        // above. It parses as `Call((r), [<accessor lambda>])`.
+        let mut i = Interner::new();
+        let src = format!("{HDR}f r =\n    (r) .value\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "`(r) .value` must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let f = find_value(&m, &i, "f");
+        assert!(
+            f.is_some_and(|v| matches!(
+                &v.body.value,
+                Expr_::Call(_, args)
+                    if args.len() == 1
+                        && matches!(args.first().map(|a| &a.value), Some(Expr_::Lambda(..)))
+            )),
+            "expected `Call((r), [<accessor lambda>])`, got {:?}",
+            f.map(|v| &v.body.value)
         );
     }
 
