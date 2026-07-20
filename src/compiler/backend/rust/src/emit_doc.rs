@@ -43,12 +43,13 @@ use std::borrow::Cow;
 
 use ipe_diagnostics::{DResult, Diagnostic};
 use ipe_intern::Symbol;
-use ipe_ir::{BinOp, CallPin, Callee, Expr, IrType, ModPath};
+use ipe_ir::{BinOp, Callee, Expr, IrType, KernelFn, ModPath};
 
 use crate::EmitCtx;
 use crate::doc::{ChainOperand, Doc};
 use crate::emit_expr::{
-    callee_name, emit_expr_at, expr_value_is_non_clone, scan_free_target, substitute_var,
+    call_has_kernel_special_case, callee_name, emit_expr_at, expr_value_is_non_clone,
+    kernel_swaps_first_two, scan_free_target, substitute_var,
 };
 use crate::emit_types::GenericScope;
 
@@ -133,27 +134,28 @@ pub fn build_doc(
             build_ctor(ctx, home, *ty, *variant, args, indent, child, generics)
         }
 
-        // A plain user-function call `crate::fn(a0, a1, …)`. Structured ONLY for
-        // `Callee::Func` with an empty turbofish pin: that path provably falls
-        // through every `Callee::Kernel` special case (the emitter gates all of
-        // them on `matches!(callee, Callee::Kernel(_))`), takes no argument swap
-        // (only kernels swap), and carries no turbofish (the pin is empty and only
-        // kernels get the CsvParse override) — so its exact tokens are
-        // `callee_name(callee)` + a delimited argument list. Every kernel / FFI /
-        // pinned call stays a leaf (its bespoke wrapping is not yet structured).
+        // A function call whose emitted form is the generic fall-through tail
+        // `{name}{turbofish}({args})` — the exact shape
+        // [`crate::emit_expr::emit_expr_at`] produces once every kernel special
+        // case has been ruled out. Structured for any non-empty-arg call
+        // (`Callee::Func` / `Ffi` / a kernel with no bespoke wrapping): the plain
+        // user call, the FFI wrapper, the turbofish-pinned kernel, and the
+        // container-swapping kernel all lower to `{name}{turbofish}(` + a delimited
+        // argument list. The `call_has_kernel_special_case` predicate re-runs the
+        // ~8 probe helpers + the `Dict.get` clone case; when ANY applies the call
+        // stays a byte-carried leaf (its bespoke wrapping is not structured). A
+        // zero-arg call also stays a leaf (no positional list to break).
         Expr::Call {
-            callee, args, pin, ..
-        } if matches!(callee, Callee::Func(_))
-            && matches!(pin, CallPin::None)
-            && !args.is_empty() =>
+            callee,
+            args,
+            pin,
+            on_form,
+        } if !args.is_empty()
+            && !call_has_kernel_special_case(
+                ctx, callee, args, *on_form, indent, child, generics,
+            )? =>
         {
-            let name = callee_name(ctx, callee)?;
-            let docs = build_args(ctx, args, indent, child, generics)?;
-            Ok(delimited(
-                Doc::owned(format!("{name}(")),
-                docs,
-                Doc::text(")"),
-            ))
+            build_generic_call(ctx, callee, args, *pin, indent, child, generics)
         }
 
         // A general function-value application `({f})(a0, a1, …)`. Structured ONLY
@@ -468,6 +470,52 @@ fn build_cons(
     ))
 }
 
+/// Build the `Doc` for the generic call tail `{name}{turbofish}({args})`,
+/// mirroring the fall-through of [`crate::emit_expr::emit_expr_at`]'s `Expr::Call`
+/// arm token-for-token. The caller has already proved no kernel special case
+/// applies (via [`crate::emit_expr::call_has_kernel_special_case`]) and that the
+/// argument list is non-empty, so the emitted form is exactly the callee name,
+/// then the pin's turbofish (with the `Ipe.Csv` parse `::<IpeError>` override the
+/// string emitter applies), then a delimited argument list — with the two
+/// arguments pre-swapped for the container-first `Maybe`/`Result`/… kernels that
+/// [`crate::emit_expr::kernel_swaps_first_two`] flags, exactly as the string
+/// emitter reverses `parts` before joining.
+fn build_generic_call(
+    ctx: &EmitCtx,
+    callee: &Callee,
+    args: &[Expr],
+    pin: ipe_ir::CallPin,
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Doc> {
+    let name = callee_name(ctx, callee)?;
+    // The pin's turbofish, with the CsvParse error-channel anchor the string
+    // emitter substitutes when the pin is empty (`csv_parse::<IpeError>(…)`).
+    let pin_turbofish = pin.turbofish();
+    let turbofish: &str = if pin_turbofish.is_empty()
+        && matches!(
+            callee,
+            Callee::Kernel(KernelFn::CsvParse | KernelFn::CsvParseWithDelimiter)
+        ) {
+        "::<IpeError>"
+    } else {
+        pin_turbofish
+    };
+    let mut docs = build_args(ctx, args, indent, child, generics)?;
+    // Container-first kernels take their two arguments in the opposite order to
+    // the Ipê call; the string emitter reverses the rendered `parts`, so the Doc
+    // builder reverses the built arg docs to carry the identical token sequence.
+    if matches!(callee, Callee::Kernel(k) if kernel_swaps_first_two(*k)) {
+        docs.reverse();
+    }
+    Ok(delimited(
+        Doc::owned(format!("{name}{turbofish}(")),
+        docs,
+        Doc::text(")"),
+    ))
+}
+
 /// Build the `Doc` for a saturated payload constructor. Mirrors
 /// [`crate::emit_expr::emit_ctor`] token-for-token: the runtime-enum branch
 /// (`IpeMaybe::Just(..)`, `IpeResult::Err(..)`, …) and the user-enum branch
@@ -617,8 +665,8 @@ mod tests {
 
     use ipe_intern::Interner;
     use ipe_ir::{
-        BinOp, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, ModPath, Module, OnFormKind,
-        Program, TypeDef, Variant,
+        BinOp, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module,
+        OnFormKind, Program, TypeDef, Variant,
     };
 
     use super::build_doc;
@@ -933,6 +981,24 @@ mod tests {
             Expr::Call {
                 callee: Callee::Func(FuncId::from_raw(0)),
                 args: vec![],
+                pin: CallPin::None,
+                on_form: OnFormKind::NotForm,
+            },
+            // Container-swapping kernel call (structured generic tail): `Maybe.map`
+            // reverses its two arguments to the runtime's container-first order,
+            // so the Doc builder must reverse the arg docs to match the string
+            // emitter's `parts.reverse()`. No probe matches `MaybeMap`.
+            Expr::Call {
+                callee: Callee::Kernel(KernelFn::MaybeMap),
+                args: vec![var(fx, 0), var(fx, 1)],
+                pin: CallPin::None,
+                on_form: OnFormKind::NotForm,
+            },
+            // Csv parse kernel call (structured generic tail): the empty pin gets
+            // the `::<IpeError>` error-channel anchor between the name and `(`.
+            Expr::Call {
+                callee: Callee::Kernel(KernelFn::CsvParse),
+                args: vec![var(fx, 0)],
                 pin: CallPin::None,
                 on_form: OnFormKind::NotForm,
             },
@@ -1309,6 +1375,55 @@ mod tests {
             assert_eq!(
                 render(&doc, RenderConfig::default()),
                 format!("{name}(a, b)")
+            );
+        });
+    }
+
+    #[test]
+    fn swapping_kernel_call_reverses_args_inline() {
+        // `Maybe.map f m` lowers container-first: the runtime call reverses the two
+        // arguments. The Doc builder's inline render must equal the string
+        // emitter's byte-for-byte (same reversed order).
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let scope = GenericScope::new(&[]);
+            let expr = Expr::Call {
+                callee: Callee::Kernel(KernelFn::MaybeMap),
+                args: vec![var(&fx, 0), var(&fx, 1)],
+                pin: CallPin::None,
+                on_form: OnFormKind::NotForm,
+            };
+            let doc = build_doc(ctx, &expr, 0, 0, scope).expect("build_doc");
+            let string = emit_expr_at(ctx, &expr, 0, 0, scope).expect("emit_expr_at");
+            assert_eq!(render(&doc, RenderConfig::default()), string);
+            // The runtime container comes first: `b` (the container arg) precedes
+            // `a` (the mapped function) in the emitted call.
+            assert!(
+                string.contains("(b, a)"),
+                "swapped arg order expected, got {string}"
+            );
+        });
+    }
+
+    #[test]
+    fn csv_parse_kernel_call_carries_turbofish_inline() {
+        // `Csv.parse` gets the `::<IpeError>` error-channel anchor between the name
+        // and its `(` argument list. The Doc builder must carry it identically.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let scope = GenericScope::new(&[]);
+            let expr = Expr::Call {
+                callee: Callee::Kernel(KernelFn::CsvParse),
+                args: vec![var(&fx, 0)],
+                pin: CallPin::None,
+                on_form: OnFormKind::NotForm,
+            };
+            let doc = build_doc(ctx, &expr, 0, 0, scope).expect("build_doc");
+            let string = emit_expr_at(ctx, &expr, 0, 0, scope).expect("emit_expr_at");
+            assert_eq!(render(&doc, RenderConfig::default()), string);
+            assert!(
+                string.contains("::<IpeError>("),
+                "turbofish anchor expected, got {string}"
             );
         });
     }
