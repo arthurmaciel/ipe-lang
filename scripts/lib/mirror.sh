@@ -108,11 +108,17 @@ _fetch_sky_example_network() {
 sky_mirror_one() {
   local name="$1" dst="$2" src
   rm -rf "$dst"
-  if src="$(sky_upstream_dir)" && [ -d "$src/$name" ]; then
+  # Network FIRST — the point of the mirror is to hold the CURRENT upstream, so
+  # each refresh fetches from anzellai/sky. A local ../sky sibling is only the
+  # offline fallback (network failure), so a stale local checkout never masks a
+  # fresh upstream.
+  if _fetch_sky_example_network "$name" "$dst"; then
+    :
+  elif src="$(sky_upstream_dir)" && [ -d "$src/$name" ]; then
     mkdir -p "$dst"
     cp -rf "$src/$name/." "$dst/"
-  elif ! _fetch_sky_example_network "$name" "$dst"; then
-    echo "mirror: no source for '$name' (no ../sky sibling and network fetch failed)" >&2
+  else
+    echo "mirror: no source for '$name' (upstream fetch failed and no local ../sky fallback)" >&2
     return 1
   fi
   # Drop any stale build/cache artefacts copied from the source tree.

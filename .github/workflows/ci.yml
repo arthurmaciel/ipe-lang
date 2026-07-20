@@ -153,9 +153,10 @@ jobs:
 
   # E2E builds+runs the emitted Rust per golden (THE SEAL — the soundness floor:
   # every `ipe`-exit-0 golden's emitted Cargo project must `cargo build` + run).
-  # Sharded across 6 runners via nextest partitioning. Behavioural parity vs the
-  # Go oracle rides the CACHED oracle (committed expected_go.txt — see
-  # docs/architecture/e2e-and-oracle-caching.md), so NO Go toolchain is needed.
+  # Sharded across 6 runners via nextest partitioning. Behavioural parity is
+  # checked against the LATEST upstream Sky compiler: the CI-stabilization pass
+  # installs Sky from anzellai/sky and compares its `sky run` output to ipe's per
+  # golden. The cached expected_go.txt oracle is retired — this step supersedes it.
   #
   # The Ipê runtime lives IN-REPO at src/runtime/rust/src (the `ipe-runtime-rust`
   # crate); `ipe::resolve_runtime()` finds it by walking up from the repo root, so
