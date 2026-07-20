@@ -21,6 +21,11 @@
 //! A statement block (`{ let x = …; x }`) carries a `HardLine` before each
 //! statement so it never inlines; an inline structure (`(a, b)`, `if c {1} else
 //! {2}`) carries only soft `Line`s so its group flattens when it fits.
+//!
+//! [`Doc::IfBroken`] is a break-conditional token: it renders only when its
+//! enclosing group breaks, and is invisible to the SEAL leaf sequence — it stands
+//! for `rustfmt`'s trailing comma on a broken delimited list (`f(a, b, c,)`),
+//! which the legacy string emitter never emits.
 
 // The Doc IR and renderer are the P0 deliverable; the emit_expr.rs builders that
 // consume them land in P1. Until then the constructors and the SEAL leaf oracle
@@ -54,6 +59,15 @@ pub enum Doc {
     /// forces that group to lay out broken. Used for statement separators in a
     /// block body (a block with any statement never inlines).
     HardLine,
+    /// A break-conditional token: renders as its text when the nearest enclosing
+    /// [`Doc::Group`] breaks, and as nothing when the group lays out flat. It is
+    /// INVISIBLE to the SEAL leaf sequence (contributes nothing to
+    /// [`Doc::collect_leaves`]), because the token it stands for — `rustfmt`'s
+    /// trailing comma on a broken `f(a, b, c,)` / `(a, b,)` / `vec![a, b,]` — is
+    /// NOT a token the legacy string emitter produces. A `Softline`-guarded `,`
+    /// cannot express this: it would show the comma flat too. Never a break point
+    /// itself (it introduces no newline), so it never forces a group broken.
+    IfBroken(Cow<'static, str>),
     /// Indent the inner document by `n` columns relative to the current indent.
     /// Used non-accumulating (`Nest(4, ...)`) for block bodies and arg lists.
     Nest(usize, Box<Self>),
@@ -111,6 +125,11 @@ impl Doc {
         Self::Nest(n, Box::new(inner))
     }
 
+    /// A break-conditional static token (renders only when its group breaks).
+    pub const fn if_broken(s: &'static str) -> Self {
+        Self::IfBroken(Cow::Borrowed(s))
+    }
+
     /// Append every text leaf of this document, in order, to `out`. This is the
     /// SEAL oracle: `concat(leaves(doc))` whitespace-normalizes to the legacy
     /// emitter's string. Break candidates ([`Doc::Line`] / [`Doc::HardLine`])
@@ -120,7 +139,10 @@ impl Doc {
         match self {
             Self::Text(s) => out.push_str(s),
             Self::Line | Self::HardLine => out.push(' '),
-            Self::Softline => {}
+            // Invisible to the SEAL: the trailing comma it stands for is not a
+            // token the legacy string emitter produces, so it must not appear in
+            // the leaf sequence the SEAL compares.
+            Self::Softline | Self::IfBroken(_) => {}
             Self::Concat(docs) => {
                 for d in docs {
                     d.collect_leaves(out);

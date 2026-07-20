@@ -110,6 +110,15 @@ fn render_at(
             out.push('\n');
             push_indent(indent, out);
         }
+        Doc::IfBroken(s) => {
+            // Renders only when the nearest enclosing group broke (`!flat`) —
+            // rustfmt's trailing comma on a broken delimited list. Nothing when
+            // flat, so the flat form (and the `fits` measurement of it) carries no
+            // trailing comma.
+            if !flat {
+                out.push_str(s);
+            }
+        }
         Doc::Concat(docs) => {
             for d in docs {
                 let c = eff_col(out, col);
@@ -144,7 +153,12 @@ fn render_at(
 fn has_hard_break(doc: &Doc) -> bool {
     match doc {
         Doc::HardLine => true,
-        Doc::Text(_) | Doc::Line | Doc::Softline | Doc::Group(_) | Doc::Chain { .. } => false,
+        Doc::Text(_)
+        | Doc::Line
+        | Doc::Softline
+        | Doc::IfBroken(_)
+        | Doc::Group(_)
+        | Doc::Chain { .. } => false,
         Doc::Concat(docs) => docs.iter().any(has_hard_break),
         Doc::Nest(_, inner) => has_hard_break(inner),
     }
