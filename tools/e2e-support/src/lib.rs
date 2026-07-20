@@ -147,9 +147,7 @@ pub fn build_and_run_rust(golden_name: &str, emitted_dir: &Path) -> Result<RunRe
 
     let json_stdout = String::from_utf8_lossy(&build.stdout);
     let exe = find_executable(&json_stdout, &unique_pkg).ok_or_else(|| {
-        format!(
-            "{golden_name}: no `executable` artifact for package `{unique_pkg}` in cargo JSON"
-        )
+        format!("{golden_name}: no `executable` artifact for package `{unique_pkg}` in cargo JSON")
     })?;
 
     let run = Command::new(&exe)
@@ -194,9 +192,7 @@ pub fn build_rust_binary(golden_name: &str, emitted_dir: &Path) -> Result<String
 
     let json_stdout = String::from_utf8_lossy(&build.stdout);
     find_executable(&json_stdout, &unique_pkg).ok_or_else(|| {
-        format!(
-            "{golden_name}: no `executable` artifact for package `{unique_pkg}` in cargo JSON"
-        )
+        format!("{golden_name}: no `executable` artifact for package `{unique_pkg}` in cargo JSON")
     })
 }
 

@@ -90,8 +90,10 @@ async fn onopen_onmessage_onclose_round_trip_against_a_live_server() {
     let opened = Rc::new(RefCell::new(false));
     let opened_w = Rc::clone(&opened);
     let open_emit: Rc<dyn Fn(())> = Rc::new(move |()| *opened_w.borrow_mut() = true);
-    let open_teardown =
-        drive_source(ipe_runtime_rust::ws_client::sub_subscribe_ws_open(socket_id, ()), open_emit);
+    let open_teardown = drive_source(
+        ipe_runtime_rust::ws_client::sub_subscribe_ws_open(socket_id, ()),
+        open_emit,
+    );
     assert!(
         wait_until(100, || *opened.borrow()).await,
         "onOpen never fired against a live socket"

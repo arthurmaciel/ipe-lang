@@ -462,7 +462,9 @@ fn name_label(msg: &NameError) -> Option<String> {
                 AliasExpansionKind::Depth => "recursion depth",
                 AliasExpansionKind::Nodes => "node count",
             };
-            Some(format!("alias expansion exceeded the {what} limit of {limit}"))
+            Some(format!(
+                "alias expansion exceeded the {what} limit of {limit}"
+            ))
         }
         NameError::Unknown => None,
     }

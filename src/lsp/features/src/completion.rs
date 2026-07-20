@@ -345,9 +345,7 @@ fn render_candidates(
         // The candidate's own solved type (values only), used for both the
         // detail string and result-head classification.
         let value_ty: Option<&Ty> = match c.kind {
-            CandidateKind::Value => {
-                solved_env.and_then(|env| env.get(&(c.home.clone(), c.name)))
-            }
+            CandidateKind::Value => solved_env.and_then(|env| env.get(&(c.home.clone(), c.name))),
             CandidateKind::Ctor | CandidateKind::Type => None,
         };
 
@@ -593,10 +591,9 @@ mod tests {
         // Byte offset of `Red` in `favorite = Red` — the typed body position
         // that expects `Color`. (Target the def body, not the `= Red` that also
         // appears in the union declaration.)
-        let byte = u32::try_from(
-            SRC.find("favorite = Red").expect("has body") + "favorite = ".len(),
-        )
-        .expect("offset fits u32");
+        let byte =
+            u32::try_from(SRC.find("favorite = Red").expect("has body") + "favorite = ".len())
+                .expect("offset fits u32");
         let items = completions(&db, root, entry, &["Main".to_owned()], byte);
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
 
@@ -638,8 +635,17 @@ mod tests {
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
         // Names still surface (canonicalize succeeds even though typecheck fails);
         // no candidate is dropped because no expected type was inferable.
-        assert!(labels.contains(&"Red"), "Red missing on type-error prog: {labels:?}");
-        assert!(labels.contains(&"bad"), "bad missing on type-error prog: {labels:?}");
-        assert!(labels.contains(&"main"), "main missing on type-error prog: {labels:?}");
+        assert!(
+            labels.contains(&"Red"),
+            "Red missing on type-error prog: {labels:?}"
+        );
+        assert!(
+            labels.contains(&"bad"),
+            "bad missing on type-error prog: {labels:?}"
+        );
+        assert!(
+            labels.contains(&"main"),
+            "main missing on type-error prog: {labels:?}"
+        );
     }
 }

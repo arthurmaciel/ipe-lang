@@ -994,7 +994,9 @@ mod wasm_client {
             return Some(super::WsClientMessage::Text(text));
         }
         if let Ok(buf) = data.dyn_into::<js_sys::ArrayBuffer>() {
-            return Some(super::WsClientMessage::Binary(js_sys::Uint8Array::new(&buf).to_vec()));
+            return Some(super::WsClientMessage::Binary(
+                js_sys::Uint8Array::new(&buf).to_vec(),
+            ));
         }
         None
     }
@@ -1034,7 +1036,8 @@ mod wasm_client {
                         {
                             emit(m);
                         }
-                    }) as Box<dyn FnMut(web_sys::Event)>);
+                    })
+                        as Box<dyn FnMut(web_sys::Event)>);
                     ws.set_onopen(Some(closure.as_ref().unchecked_ref()));
                     *closure_slot.borrow_mut() = Some(closure);
                 }
@@ -1068,7 +1071,8 @@ mod wasm_client {
                         if let Some(m) = decode_message_event(&ev) {
                             emit(to_msg(m));
                         }
-                    }) as Box<dyn FnMut(web_sys::MessageEvent)>);
+                    })
+                        as Box<dyn FnMut(web_sys::MessageEvent)>);
                     ws.set_onmessage(Some(closure.as_ref().unchecked_ref()));
                     *closure_slot.borrow_mut() = Some(closure);
                 }
@@ -1100,7 +1104,8 @@ mod wasm_client {
                     let closure = Closure::wrap(Box::new(move |ev: web_sys::CloseEvent| {
                         let code = super::ws_close_code(i64::from(ev.code()));
                         emit(to_msg(code));
-                    }) as Box<dyn FnMut(web_sys::CloseEvent)>);
+                    })
+                        as Box<dyn FnMut(web_sys::CloseEvent)>);
                     ws.set_onclose(Some(closure.as_ref().unchecked_ref()));
                     *closure_slot.borrow_mut() = Some(closure);
                 }
@@ -1142,7 +1147,8 @@ mod wasm_client {
                         emit(to_msg(E::from(format!(
                             "WebSocket {sid} error (see the close event for a code/reason)"
                         ))));
-                    }) as Box<dyn FnMut(web_sys::Event)>);
+                    })
+                        as Box<dyn FnMut(web_sys::Event)>);
                     ws.set_onerror(Some(closure.as_ref().unchecked_ref()));
                     *closure_slot.borrow_mut() = Some(closure);
                 }

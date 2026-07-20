@@ -377,7 +377,10 @@ mod tests {
         assert!(cfg.starts_with(CARGO_CONFIG_MARKER));
         assert!(cfg.contains("[target.aarch64-unknown-linux-musl]"));
         assert!(cfg.contains(r#""target-feature=+crt-static""#));
-        assert!(!cfg.contains("target-dir"), "must not shadow the user's pin");
+        assert!(
+            !cfg.contains("target-dir"),
+            "must not shadow the user's pin"
+        );
         assert!(
             cfg.contains("linker=rust-lld"),
             "aarch64 pins rust-lld self-contained (portable, no scarce musl-cross-gcc)"

@@ -89,7 +89,14 @@ fn body_edit_reexecutes_only_the_edited_module_file() {
     let lib = file(&db, &["Lib"], LIB);
     let main = file(&db, &["Main"], MAIN);
     let root = root_of(&db, &[(&["Lib"], lib), (&["Main"], main)]);
-    let config = BuildConfig::new(&db, DbDriver::Sqlite, None, ipe_ir::Target::Native, Vec::new(), false);
+    let config = BuildConfig::new(
+        &db,
+        DbDriver::Sqlite,
+        None,
+        ipe_ir::Target::Native,
+        Vec::new(),
+        false,
+    );
 
     // Warm the session: demand the top-level manifest once. On a genuine
     // 2-home program this drives emit_spine_file + one emit_rust_file per home.
