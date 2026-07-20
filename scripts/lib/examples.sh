@@ -1,13 +1,6 @@
 # shellcheck shell=bash
-# scripts/lib/examples.sh — SINGLE SOURCE OF TRUTH for the example manifest.
+# scripts/lib/examples.sh — SINGLE SOURCE OF TRUTH for the example set.
 # SOURCE this (never execute it).
-#
-# PORTED from ../ipe/runtime-rust/scripts/lib/examples.sh. The Go-FFI EXCLUSION
-# LOGIC (is_out_of_scope / build_set) is preserved VERBATIM — it is the authority
-# on which examples belong to the Rust backend. Only two paths are adapted for
-# this repo: the ipe-stdlib index scan (this repo's stdlib lives under
-# src/stdlib, not ipe-stdlib/) and the equivalence-classification overrides
-# path (scripts/, not runtime-rust/scripts/).
 #
 # DERIVED, NOT HARDCODED. Every set is computed at call time from the example
 # dirs on disk + their Ipê source. The ONLY thing that excludes an example is
@@ -24,23 +17,18 @@
 #   all_examples            → every candidate example dir, one per line (no trailing /).
 #   is_out_of_scope <dir>   → exit 0 IFF Go-FFI (imports an unresolvable Go-pkg module).
 #   is_web_example  <dir>   → exit 0 IFF Ipe.Live / Ipe.Http.Server (browser-drivable).
-#   example_shape   <dir>   → tui|webview|fyne|server|live|cli
+#   example_shape   <dir>   → wasm|tui|webview|fyne|server|live|cli
 #   build_set               → all_examples − Go-FFI (the BUILD sweep set).
 #   run_set / perf_set      → == build_set.
-#   equivalence_mode <dir>        → none|stdout|body|scenario|pty (DERIVED, overrides on top).
 
 # ── all_examples: every candidate dir on disk, trailing slash stripped ───────
-# The first-party `examples/NN-*` set always. With IPE_SWEEP_MIRROR_SKY=1 the
-# mirrored+patched upstream set under `examples/ipe/NN-*` (materialised by
-# lib/ipe_mirror.sh before the sweep loop) is included too — same shape/Go-FFI
-# derivation applies to both.
+# Two sets: the first-party `examples/NN-*` dirs, AND the mirrored+patched
+# upstream Sky set under `examples/sky/<name>/` (materialised by lib/mirror.sh
+# before the sweep loop). The same shape/Go-FFI derivation applies to both.
+# `simple/` and `test_pkg/` are the non-numbered upstream examples.
 all_examples() {
-  # First-party Ipe examples: the numbered dirs (39+) that remain after the
-  # Ipe-derived set was moved to examples/ipe/. With IPE_SWEEP_MIRROR_SKY=1 the
-  # mirrored+patched upstream set (materialised by lib/ipe_mirror.sh into
-  # examples/ipe/<name>/) is included too; simple/ and test_pkg/ live there now.
-  local d globs=(examples/[0-9]*/ examples/rust/*/)
-  [ "${IPE_SWEEP_MIRROR_SKY:-0}" = 1 ] && globs+=(examples/ipe/[0-9]*/ examples/ipe/simple/ examples/ipe/test_pkg/)
+  local d globs=(examples/[0-9]*/ examples/rust/*/ \
+                 examples/sky/[0-9]*/ examples/sky/simple/ examples/sky/test_pkg/)
   for d in "${globs[@]}"; do
     [ -d "$d" ] || continue
     d="${d%/}"
@@ -79,6 +67,26 @@ _build_stdlib_index() {
   _SKY_STDLIB_INDEX_BUILT=1
 }
 
+# ── _manifest_go_ffi <name>: exit 0 IFF the manifest marks <name> go_ffi=true ─
+# Parses examples/sky/manifest.toml — the [[example]] block whose `name = "<name>"`
+# carries `go_ffi = true`. One awk pass, cached into an associative array.
+declare -gA _SKY_GO_FFI
+_manifest_go_ffi() {
+  local name="$1" manifest="$REPO/examples/sky/manifest.toml" n
+  [ -f "$manifest" ] || return 1
+  if [ -z "${_SKY_GO_FFI_BUILT:-}" ]; then
+    while IFS= read -r n; do
+      [ -n "$n" ] && _SKY_GO_FFI["$n"]=1
+    done < <(awk '
+      /^\[\[example\]\]/ { name=""; next }
+      /^[[:space:]]*name[[:space:]]*=/ { if (match($0, /"[^"]+"/)) name=substr($0,RSTART+1,RLENGTH-2) }
+      /^[[:space:]]*go_ffi[[:space:]]*=[[:space:]]*true/ { if (name!="") print name }
+    ' "$manifest")
+    _SKY_GO_FFI_BUILT=1
+  fi
+  [ -n "${_SKY_GO_FFI[$name]:-}" ]
+}
+
 # ── is_out_of_scope <dir>: the ONLY exclusion is Go-FFI (IMPORT signal) ──────
 # Return 0 (exclude) IFF the example imports a Go-PACKAGE module: a Ipê `import`
 # whose module name resolves to NEITHER a Ipê stdlib module NOR a local project
@@ -96,6 +104,14 @@ is_out_of_scope() {
   # the per-commit gate. (Not vendored into this repo; the case-guard is kept for
   # parity with upstream so a future re-sync stays consistent.)
   case "$dir" in */skyshop-rs) return 0 ;; esac
+  # Manifest is the SSOT for mirrored-example scope: a `go_ffi = true` upstream
+  # example is out of the Rust build set by declaration, fail-closed. This is
+  # belt-and-braces with the import walk below — a Go import can hide behind a
+  # local module the recursive walk resolves, so the declared classification
+  # wins for the sky mirror set.
+  case "$dir" in
+    examples/sky/*|*/examples/sky/*) _manifest_go_ffi "$(basename "$dir")" && return 0 ;;
+  esac
   _build_stdlib_index
   while read -r m; do
     [ -z "$m" ] && continue
@@ -178,38 +194,3 @@ build_set() {
 
 run_set()  { build_set; }
 perf_set() { build_set; }
-
-# ── equivalence_mode <dir>: DERIVE the Go≡Rust equivalence mode from the shape ─────
-#   Go-FFI / out-of-scope → none · cli → stdout · server → body ·
-#   live → scenario · tui → pty · webview → none · fyne → none.
-# An OVERRIDE from equivalence-classification.tsv (keyed by basename) wins if present.
-equivalence_mode() {
-  local dir="$1" base over
-  base="$(basename "$dir")"
-  if [ -f "$EQUIVALENCE_TSV" ]; then
-    over="$(awk -v k="$base" '!/^#/ && $1==k {print $2; exit}' "$EQUIVALENCE_TSV" 2>/dev/null)"
-    [ -n "$over" ] && { printf '%s\n' "$over"; return 0; }
-  fi
-  if is_out_of_scope "$dir"; then printf 'none\n'; return 0; fi
-  case "$(example_shape "$dir")" in
-    cli)     printf 'stdout\n'   ;;
-    server)  printf 'body\n'     ;;
-    live)    printf 'scenario\n' ;;
-    tui)     printf 'pty\n'      ;;
-    webview) printf 'none\n'     ;;
-    fyne)    printf 'none\n'     ;;
-    wasm)    printf 'none\n'     ;;
-    *)       printf 'none\n'     ;;
-  esac
-}
-
-# equivalence_override_reason <dir> → the .tsv reason column for an overridden example.
-equivalence_override_reason() {
-  local base; base="$(basename "$1")"
-  [ -f "$EQUIVALENCE_TSV" ] || return 0
-  awk -v k="$base" '!/^#/ && $1==k {$1="";$2="";sub(/^[[:space:]]+/,"");print;exit}' "$EQUIVALENCE_TSV" 2>/dev/null
-}
-
-# The overrides file (overrides-on-top-of-derived), resolved relative to REPO.
-# ADAPTED path: scripts/, not runtime-rust/scripts/.
-EQUIVALENCE_TSV="${EQUIVALENCE_TSV:-$REPO/scripts/equivalence-checks/equivalence-classification.tsv}"

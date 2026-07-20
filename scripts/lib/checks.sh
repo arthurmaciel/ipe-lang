@@ -3,18 +3,14 @@
 # already-built binary" logic. SOURCE this (never execute it):
 #   source "$(dirname "$0")/lib/checks.sh"
 #
-# PORTED from ../ipe/runtime-rust/scripts/lib/checks.sh. The exercise_* contract
-# is backend-agnostic (it drives a built binary and asks "did it work?"), so it
-# ports almost unchanged. ADAPTATIONS for this repo:
-#   • night_guard is OPT-IN (IPE_SWEEP_NIGHT_GATE=1) so it NEVER blocks GitHub CI.
-#   • the browser driver / scenarios paths point at this repo's scripts/ (absent
-#     for now → WEB_OK=0 → exercise_live degrades to a server boot check, which
-#     is exactly the BUILD+RUN phase-1 behaviour we want).
-#   • resolve_bin looks under out/rust/target and the shared CARGO_TARGET_DIR
-#     for ipe's emitted `ipe-app` binary.
+# The exercise_* contract is backend-agnostic: it drives a built binary and asks
+# "did it work?" per shape (cli/server/live/tui/webview/wasm). night_guard is
+# OPT-IN (IPE_SWEEP_NIGHT_GATE=1) so it NEVER blocks GitHub CI. resolve_bin looks
+# under out/rust/target and the shared CARGO_TARGET_DIR for ipe's emitted
+# `ipe-app` binary.
 #
 # Depends on lib/env.sh being sourced first (CARGO_TARGET_DIR, PATH, REPO). It is
-# idempotent and side-effect-light at source time (exports + a browser-stack probe).
+# idempotent and side-effect-light at source time (a few exports).
 
 # ── Shared exercise env ─────────────────────────────────────────────────────
 # Server/live examples that use Ipe.Auth refuse to boot without a >=32-byte
@@ -75,39 +71,23 @@ free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0)
 reap() {
   command -v pkill >/dev/null 2>&1 || return 0
   for p in ipe-app app; do pkill -x "$p" 2>/dev/null; done
-  pkill -f "examples/.*/out/" 2>/dev/null; pkill -f web-verify.mjs 2>/dev/null
+  pkill -f "examples/.*/out/" 2>/dev/null; pkill -f wasm-verify.mjs 2>/dev/null
   pkill -x Xvfb 2>/dev/null
 }
 
-# ── Browser-round-trip stack probe (shared) ─────────────────────────────────
-# If any piece is absent, WEB_OK=0 and exercise_live degrades to a server boot
-# check. ADAPTED paths: this repo's scripts/ (the driver/scenarios are not yet
-# ported — phase 1 is BUILD+RUN, so the boot-check degrade is intended).
+# ── Node PATH for the wasm RUN check (wasm-verify.mjs) ───────────────────────
 NODE_BIN="$(for _nb in "$HOME"/.nvm/versions/node/*/bin; do [ -d "$_nb" ] && printf '%s\n' "$_nb"; done | sort -V | tail -1)"
 export PATH="${NODE_BIN:+$NODE_BIN:}$PATH"
-export IPE_CHROMIUM="${IPE_CHROMIUM:-/usr/bin/chromium}"
-DRIVER="${DRIVER:-$REPO/scripts/equivalence-checks/web-verify.mjs}"
-SCENARIOS="${SCENARIOS:-$REPO/scripts/equivalence-checks/verify-scenarios.mjs}"
-WEB_OK=1
-command -v node >/dev/null 2>&1          || WEB_OK=0
-[ -x "$IPE_CHROMIUM" ]                    || WEB_OK=0
-[ -f "$DRIVER" ]                          || WEB_OK=0
-[ -d "$REPO/node_modules/playwright" ]    || WEB_OK=0
 
-# ── scenario_for <example-name>: the browser scenario key for an example ────
-# Emits the resolved scenario key on stdout. When no per-app scenario matches
-# and the example degrades to the `smoke` boot-only check, a diagnostic is
-# written to stderr so a live example verified by boot-alone (NOT by a real
-# interaction) is visible in the sweep log instead of passing silently.
+# ── scenario_for <example-name>: the wasm browser scenario key for an example ─
+# The wasm RUN check (wasm-verify.mjs) takes a scenario key. There is no
+# per-example interaction scenario file, so every example degrades to `smoke`
+# (boot + non-empty body only). Kept as a function so the key derivation lives
+# in one place if named scenarios are wired later.
 scenario_for() {
-  local ex="$1" key
-  key="$(echo "$ex" | sed -E 's/^[0-9]+-//')"
-  if [ -f "$SCENARIOS" ] && rg -q "async '?${key}'?\(" "$SCENARIOS" 2>/dev/null; then
-    echo "$key"
-  else
-    echo "NOTE: no interaction scenario for '$ex' — degrading to 'smoke' (boot + non-empty body only; no user action asserted)" >&2
-    echo smoke
-  fi
+  local ex="$1"
+  echo "$ex" | sed -E 's/^[0-9]+-//' >/dev/null
+  echo smoke
 }
 
 # ── resolve_bin <example-dir>: the freshest Rust binary ipe just built ──────
@@ -156,9 +136,6 @@ assert_static_bin() {
     *) return 1 ;;
   esac
 }
-
-# ── browser_drivable <example-dir>: can web-verify.mjs locate this example? ──
-browser_drivable() { case "$1" in examples/rust/*) return 1;; *) return 0;; esac; }
 
 # _abs_bin <path> -> absolute path (passthrough if already absolute).
 _abs_bin() { case "$1" in /*) printf '%s\n' "$1";; *) printf '%s/%s\n' "$(cd "$(dirname "$1")" 2>/dev/null && pwd)" "$(basename "$1")";; esac; }
@@ -215,17 +192,6 @@ exercise_server() {
   return 1
 }
 
-# exercise_live <bin> <example-name> <port> <scenario> <logfile>
-exercise_live() {
-  local bin="$1" ex="$2" port="$3" scen="$4" log="$5" abin
-  abin="$bin"; case "$bin" in /*) ;; *) abin="$(cd "$(dirname "$bin")" 2>/dev/null && pwd)/$(basename "$bin")";; esac
-  if [ "$WEB_OK" = 1 ]; then
-    node "$DRIVER" "$ex" "$port" "$scen" "$abin" >"$log" 2>&1
-    return $?
-  fi
-  exercise_server "$abin" "$port" "$log"
-}
-
 # exercise_tui <bin> <logfile>  (pty smoke, OS-aware)
 exercise_tui() {
   local bin="$1" log="$2" abin run_dir
@@ -279,154 +245,4 @@ exercise_webview() {
   rm -rf "$run_dir" 2>/dev/null
   grep -qiE "$PANIC_RE" "$log" && return 1
   return 0
-}
-
-# ── _boot_server_at <bin> <port> <run_dir> <log> → echoes "PID:PORT" ─────────
-_boot_server_at() {
-  local bin="$1" port="$2" run_dir="$3" log="$4" abin pid i code lp
-  abin="$(cd "$(dirname "$bin")" 2>/dev/null && pwd)/$(basename "$bin")"
-  ( cd "$run_dir" && exec env IPE_LIVE_PORT="$port" PORT="$port" "$abin" ) >"$log" 2>&1 </dev/null &
-  pid=$!
-  for i in $(seq 1 30); do
-    kill -0 "$pid" 2>/dev/null || { echo ""; return 1; }
-    code="$(curl -s -o /dev/null -m 1 -w '%{http_code}' "http://127.0.0.1:$port/" 2>/dev/null || true)"
-    http_responds "$code" && { echo "$pid:$port"; return 0; }
-    lp="$(grep -iE "listening on" "$log" 2>/dev/null | grep -oE ':[0-9]+' | tail -1 | tr -d ':')"
-    if [ -n "$lp" ] && [ "$lp" != "$port" ]; then
-      code="$(curl -s -o /dev/null -m 1 -w '%{http_code}' "http://127.0.0.1:$lp/" 2>/dev/null || true)"
-      http_responds "$code" && { echo "$pid:$lp"; return 0; }
-    fi
-    sleep 0.5
-  done
-  echo ""; return 1
-}
-
-# ── _norm_body_for_equiv <body> <logfile>: normalize HTML before body-compare ──
-# Ipe.Live pages carry id="ipe-root"; the normaliser collapses the known
-# implementation-freedom surface (ipe-id format, attr order, event encoding,
-# style delivery child vs data-* attributes) so the diff shows only
-# behaviourally-meaningful divergences. For non-HTML responses (JSON, plain
-# text) the body is returned unmodified.
-#
-# Requires: python3 + $REPO/scripts/lib/equivalence_normalize_html.py (always present
-# alongside this file). Normaliser exit != 0 → fall through to the raw body so
-# an unexpected Python error doesn't silently flip MATCH to DIFFER.
-_norm_body_for_equiv() {
-  local body="$1" log="${2:-/dev/null}"
-  if [[ "$body" == *'id="ipe-root"'* ]]; then
-    local tf rc normed
-    tf="$(mktemp "${TMPDIR:-/tmp}/ipe-eqvnorm.XXXXXX.html")"
-    printf '%s' "$body" >"$tf"
-    normed="$(python3 "$REPO/scripts/lib/equivalence_normalize_html.py" "$tf" 2>>"$log")"
-    rc=$?
-    rm -f "$tf"
-    if [ "$rc" = 0 ]; then
-      printf '%s' "$normed"
-    else
-      # normaliser unexpectedly failed — return raw body, log the issue
-      printf 'WARN: equivalence_normalize_html.py exit %s for ipe-root page\n' "$rc" >>"$log"
-      printf '%s' "$body"
-    fi
-  else
-    printf '%s' "$body"
-  fi
-}
-
-# ── exercise_server_equiv <go_bin> <rust_bin> <example_dir> <log> ────────────
-# SERVER body-equivalence: boot Go and Rust on separate ports (isolated cwds) and
-# compare comparable GET-route bodies.  HTML bodies containing id="ipe-root" are
-# normalized via _norm_body_for_equiv before comparison (collapses ipe-id format,
-# attribute order, event-encoding, style-delivery differences). PRINTS a result:
-#   equivalence-body N · equivalence-serve · DIFFER · go-ref-broken · rust-broken
-# Used only in the PHASED Go≡Rust equivalence step (NO_EQUIV=0); dormant in phase 1.
-exercise_server_equiv() {
-  local go_bin="$1" rust_bin="$2" dir="$3" log="$4"
-  local gport rport grun rrun gpid rpid route routes=() comparable=() n=0 verdict=""
-  gport="$(free_port)"; rport="$(free_port)"
-  if [ -z "$gport" ] || [ -z "$rport" ]; then
-    printf 'free_port unavailable (python3 missing) — cannot allocate equivalence ports\n' >>"$log" 2>/dev/null
-    echo "rust-broken"; return 0
-  fi
-  [ "$gport" = "$rport" ] && rport=$((rport + 1))
-  grun="$(mktemp -d "${TMPDIR:-/tmp}/ipe-eqv-go.XXXXXX")"
-  rrun="$(mktemp -d "${TMPDIR:-/tmp}/ipe-eqv-rs.XXXXXX")"
-  : >"$log"
-
-  routes=()
-  while IFS= read -r route; do [ -n "$route" ] && routes+=("$route"); done < <(
-    rg --no-filename -No 'Server\.get[[:space:]]+"([^"]*)"' -r '$1' "$dir"/src 2>/dev/null | sort -u)
-  case " ${routes[*]} " in *" / "*) ;; *) routes=("/" "${routes[@]}");; esac
-
-  for route in "${routes[@]}"; do
-    case "$route" in
-      *:*) continue ;;
-      */ws|*ws/*|*/ws/*) continue ;;
-    esac
-    case "$(basename "$route")" in
-      ws|events|stream|sse|relay|upstream) continue ;;
-    esac
-    comparable+=("$route")
-  done
-
-  local gboot gpid gp
-  gboot="$(_boot_server_at "$go_bin" "$gport" "$grun" "$log.go")"
-  gpid="${gboot%%:*}"; gp="${gboot##*:}"
-  if [ -z "$gpid" ]; then
-    rm -rf "$grun" "$rrun"; cat "$log.go" >>"$log" 2>/dev/null
-    echo "go-ref-broken"; return 0
-  fi
-  local -A gobody=()
-  for route in "${comparable[@]}"; do
-    local g1 g2 t0 t1 gcode
-    gcode="$(curl -s -o /dev/null -m 2 -w '%{http_code}' "http://127.0.0.1:$gp$route" 2>/dev/null || true)"
-    [ "$gcode" = 404 ] && { printf 'SKIP (Go 404 — route not served) %s\n' "$route" >>"$log"; continue; }
-    t0="$( { gdate +%s%N 2>/dev/null || date +%s%N; } )"
-    g1="$(curl -s -m 2 "http://127.0.0.1:$gp$route" 2>/dev/null)" || { printf 'SKIP (no-response) %s\n' "$route" >>"$log"; continue; }
-    t1="$( { gdate +%s%N 2>/dev/null || date +%s%N; } )"
-    if [ "$(( (t1 - t0) / 1000000 ))" -ge 1900 ]; then printf 'SKIP (slow/streaming) %s\n' "$route" >>"$log"; continue; fi
-    g2="$(curl -s -m 2 "http://127.0.0.1:$gp$route" 2>/dev/null)"
-    if [ "$g1" != "$g2" ]; then printf 'SKIP (nondeterministic) %s\n' "$route" >>"$log"; continue; fi
-    gobody["$route"]="$g1"
-  done
-  kill -TERM "$gpid" 2>/dev/null; sleep 0.3; kill -KILL "$gpid" 2>/dev/null
-
-  local rboot rpid rp
-  rboot="$(_boot_server_at "$rust_bin" "$rport" "$rrun" "$log.rs")"
-  rpid="${rboot%%:*}"; rp="${rboot##*:}"
-  if [ -z "$rpid" ]; then
-    rm -rf "$grun" "$rrun"; cat "$log.rs" >>"$log" 2>/dev/null
-    echo "rust-broken"; return 0
-  fi
-  for route in "${!gobody[@]}"; do
-    local r1 gcmp rcmp html_norm=0
-    r1="$(curl -s -m 2 "http://127.0.0.1:$rp$route" 2>/dev/null)"
-    # Normalize HTML bodies so ipe-id format / attr order / event encoding /
-    # style delivery differences don't produce false DIFFERs.
-    gcmp="$(_norm_body_for_equiv "${gobody[$route]}" "$log")"
-    rcmp="$(_norm_body_for_equiv "$r1" "$log")"
-    [[ "${gobody[$route]}" == *'id="ipe-root"'* ]] && html_norm=1
-    if [ "$gcmp" = "$rcmp" ]; then
-      n=$((n + 1))
-      if [ "$html_norm" = 1 ]; then
-        printf 'MATCH-HTML-NORM %s\n' "$route" >>"$log"
-      else
-        printf 'MATCH %s\n' "$route" >>"$log"
-      fi
-    else
-      if [ "$html_norm" = 1 ]; then
-        printf 'DIFFER-HTML-NORM %s\n  go:   %s\n  rust: %s\n' \
-          "$route" "${gcmp:0:200}" "${rcmp:0:200}" >>"$log"
-      else
-        printf 'DIFFER %s\n  go:   %s\n  rust: %s\n' \
-          "$route" "${gcmp:0:200}" "${rcmp:0:200}" >>"$log"
-      fi
-      verdict="DIFFER"
-    fi
-  done
-  kill -TERM "$rpid" 2>/dev/null; sleep 0.3; kill -KILL "$rpid" 2>/dev/null
-  rm -rf "$grun" "$rrun"
-
-  if [ -n "$verdict" ]; then echo "DIFFER"; return 0; fi
-  if [ "$n" -ge 1 ]; then echo "equivalence-body $n"; return 0; fi
-  echo "equivalence-serve"; return 0
 }
