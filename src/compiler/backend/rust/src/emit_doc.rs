@@ -51,8 +51,9 @@ use crate::emit_expr::{
     call_has_kernel_special_case, callee_name, clone_targets_in_expr, combine_guards,
     emit_arm_head, emit_binding_stmts, emit_expr_at, emit_match_scrutinee, expr_value_is_non_clone,
     free_vars, kernel_swaps_first_two, record_struct_name, scan_free_target, substitute_var,
+    wants_arc_ctor,
 };
-use crate::emit_types::GenericScope;
+use crate::emit_types::{GenericScope, render_type};
 
 /// The infix spelling of a chain-eligible operator (never `Append` / `IntDiv`,
 /// which are call-shaped). Kept in step with `emit_expr::op_str`.
@@ -159,13 +160,50 @@ pub fn build_doc(
             build_generic_call(ctx, callee, args, *pin, indent, child, generics)
         }
 
+        // A boxed lambda value `{ let __ipe_fn: <TypedFn> = Box::new(move |…| -> R {
+        // <body> }); __ipe_fn }` (`Arc` for the runtime handler shapes). A
+        // statement block that ALWAYS breaks (it holds the `let`): the assignment
+        // and the `__ipe_fn` tail each on their own `HardLine`. The `let` statement
+        // uses the [`Doc::Assign`] RHS-break axis (the wide `Box<dyn Fn(…) -> R +
+        // Send + 'static>` annotation pushes the RHS to its own line), and the
+        // closure body is a braces-always block that breaks when wide.
+        Expr::Lambda { params, ret, body } => {
+            build_lambda(ctx, params, ret, body, indent, child, generics, false)
+        }
+        // A shared (`Arc<dyn Fn(…) + Send + Sync>`) lambda value — the same block
+        // shape as [`Expr::Lambda`] but with the reference-counted pointer the
+        // capture analysis proved it needs. See [`build_lambda`].
+        Expr::SharedLambda { params, ret, body } => {
+            build_lambda(ctx, params, ret, body, indent, child, generics, true)
+        }
+
+        // An immediately-applied lambda `({ let p0: T0 = a0; … body })`. The string
+        // emitter inlines the lambda's params as `let` bindings then the body — a
+        // statement block that ALWAYS breaks (it holds the bindings): each binding
+        // and the body on their own `HardLine`. Each binding is an [`Doc::Assign`]
+        // (its `p: T = arg` may RHS-break when wide); the body is built recursively.
+        Expr::Apply { func, args }
+            if matches!(func.as_ref(), Expr::Lambda { .. }) && !args.is_empty() =>
+        {
+            let Expr::Lambda {
+                params,
+                body: lam_body,
+                ..
+            } = func.as_ref()
+            else {
+                // The guard already proved `func` is a `Lambda`; unreachable, but
+                // fail closed rather than panic.
+                return leaf(ctx, expr, indent, depth, generics);
+            };
+            build_applied_lambda(ctx, params, args, lam_body, indent, child, generics)
+        }
+
         // A general function-value application `({f})(a0, a1, …)`. Structured ONLY
-        // for the non-lambda, non-empty-arg tail: the string emitter's own
-        // immediately-applied-lambda branch (`func` is a `Lambda`) rewrites to a
-        // `({ let p = a; … body })` BLOCK — that block form is P2 work — so it stays
-        // a leaf; a zero-arg apply (`({f})()`) has no positional list, also a leaf.
-        // The remaining tail is exactly `({f})(` + a delimited argument list; `f`
-        // is built recursively so a structured func operand rides inside its parens.
+        // for the non-lambda, non-empty-arg tail: the immediately-applied-lambda
+        // `func` is a `Lambda` case is handled by the arm above; a zero-arg apply
+        // (`({f})()`) has no positional list, so it stays a leaf. The remaining tail
+        // is exactly `({f})(` + a delimited argument list; `f` is built recursively
+        // so a structured func operand rides inside its parens.
         Expr::Apply { func, args }
             if !matches!(func.as_ref(), Expr::Lambda { .. }) && !args.is_empty() =>
         {
@@ -956,6 +994,185 @@ fn build_task_seq(
     ))
 }
 
+/// A braces-always block whose body lays out flat (`{ body }`, a space hugging
+/// each brace) when it fits and breaks to a block (`{`, the body at one indent
+/// step, `}` dedented) when it does not. This is `rustfmt`'s closure-body block
+/// for a return-type-annotated closure (`move |…| -> R { body }`) — UNLIKE
+/// [`Doc::BraceBody`], the braces are present in BOTH layouts, because the
+/// explicit `-> R` return type stops `rustfmt` from ever stripping them. Modeled
+/// as a group over `{`, a soft `Line`-hugged body at `Nest(4)`, and `}`, so a
+/// wide body breaks the block while the braces stay put.
+fn braced_block(body: Doc) -> Doc {
+    Doc::group(Doc::concat(vec![
+        Doc::text("{"),
+        Doc::nest(4, Doc::concat(vec![Doc::Line, body])),
+        Doc::Line,
+        Doc::text("}"),
+    ]))
+}
+
+/// Build the unboxed closure `move |p0: T0, …| -> R <braced-body>` document,
+/// mirroring [`crate::emit_expr::emit_lambda_unboxed`] token-for-token. The param
+/// list, the `-> R` return type, and the `move |…| -> R ` head are single-line
+/// leaves; only the closure body is structured (a [`braced_block`] that breaks
+/// when wide). The head's trailing space before the body matches the string
+/// emitter's `move |…| -> {ret} {{ … }}`.
+fn build_closure(
+    ctx: &EmitCtx,
+    params: &[(Symbol, IrType)],
+    ret: &IrType,
+    body: &Expr,
+    indent: usize,
+    depth: u16,
+    generics: GenericScope,
+) -> DResult<Doc> {
+    let child = depth + 1;
+    let mut parts = Vec::with_capacity(params.len());
+    for (param, ty) in params {
+        parts.push(format!(
+            "{}: {}",
+            ctx.emit_ident(*param)?,
+            render_type(ctx, ty, generics)?
+        ));
+    }
+    let ret_s = render_type(ctx, ret, generics)?;
+    let head = format!("move |{}| -> {ret_s} ", parts.join(", "));
+    let body_doc = build_doc(ctx, body, indent, child, generics)?;
+    Ok(Doc::concat(vec![Doc::owned(head), braced_block(body_doc)]))
+}
+
+/// Build the `Doc` for a boxed lambda value, mirroring
+/// [`crate::emit_expr::emit_lambda`] / [`crate::emit_expr::emit_shared_lambda`]
+/// token-for-token. The string emitter renders the statement block
+/// `{ let __ipe_fn: <TypedFn> = <ctor>::new(<closure>); __ipe_fn }` — a block that
+/// ALWAYS breaks (it holds the `let`): the assignment and the `__ipe_fn` tail each
+/// on their own `HardLine` inside the block's sole `Nest(4)`.
+///
+/// The assignment is a [`Doc::Assign`]: the `let __ipe_fn: <TypedFn> = ` prefix's
+/// wide `Box<dyn Fn(…) -> R + Send + 'static>` (or the `Arc<… + Send + Sync>`
+/// shared form) annotation pushes the `<ctor>::new(<closure>)` RHS onto its own
+/// line at `indent + 4` when the same-line form overflows, matching `rustfmt`.
+/// The `trailer` is the statement's `;`.
+///
+/// `shared` selects the pointer: an `Arc<dyn Fn(…) + Send + Sync + 'static>`
+/// reference-counted closure (`SharedLambda`, whose typed annotation is built
+/// directly, NOT through `render_type`'s `Box`-only `Fun` arm) versus the boxed
+/// `Box<dyn Fn(…) -> R + Send + 'static>` (`Lambda`, routed through `render_type`
+/// with `Arc::new` for the two runtime handler shapes `wants_arc_ctor` flags).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "mirrors emit_lambda's parameters"
+)]
+fn build_lambda(
+    ctx: &EmitCtx,
+    params: &[(Symbol, IrType)],
+    ret: &IrType,
+    body: &Expr,
+    indent: usize,
+    depth: u16,
+    generics: GenericScope,
+    shared: bool,
+) -> DResult<Doc> {
+    let closure = build_closure(ctx, params, ret, body, indent, depth, generics)?;
+    let (typed, ctor) = if shared {
+        // The shared form builds the `+ Sync` trait object directly: `render_type`'s
+        // generic `Fun` arm renders `Box<… + Send>` (no `Sync`), which would make
+        // the `Arc` wrapper itself neither `Send` nor `Sync`.
+        let mut parts = Vec::with_capacity(params.len());
+        for (_, ty) in params {
+            parts.push(render_type(ctx, ty, generics)?);
+        }
+        let ret_s = render_type(ctx, ret, generics)?;
+        let typed = format!(
+            "::std::sync::Arc<dyn Fn({}) -> {ret_s} + Send + Sync + 'static>",
+            parts.join(", ")
+        );
+        (typed, "::std::sync::Arc")
+    } else {
+        let fun_ty = IrType::Fun(
+            params.iter().map(|(_, t)| t.clone()).collect(),
+            Box::new(ret.clone()),
+        );
+        let typed = render_type(ctx, &fun_ty, generics)?;
+        let ctor = if wants_arc_ctor(&fun_ty) {
+            "Arc"
+        } else {
+            "Box"
+        };
+        (typed, ctor)
+    };
+    // The `<ctor>::new(<closure>)` RHS: the ctor path, the closure (whose body is
+    // the sole breakable), and the closing paren, all as one concatenation — no
+    // group around the call, so only the closure body breaks (never the `(`).
+    let rhs = Doc::concat(vec![
+        Doc::owned(format!("{ctor}::new(")),
+        closure,
+        Doc::text(")"),
+    ]);
+    let assign = Doc::assign(
+        Doc::owned(format!("let __ipe_fn: {typed} = ")),
+        rhs,
+        // The statement's trailing `;`.
+        1,
+    );
+    Ok(Doc::concat(vec![
+        Doc::text("{"),
+        Doc::nest(
+            4,
+            Doc::concat(vec![
+                Doc::HardLine,
+                assign,
+                Doc::text(";"),
+                Doc::HardLine,
+                Doc::text("__ipe_fn"),
+            ]),
+        ),
+        Doc::HardLine,
+        Doc::text("}"),
+    ]))
+}
+
+/// Build the `Doc` for an immediately-applied lambda, mirroring the
+/// `Expr::Lambda` branch of [`crate::emit_expr::emit_apply`] token-for-token. The
+/// string emitter inlines the closure as a block `({ let p0: T0 = a0; … body })` —
+/// each param becomes a `let p: T = arg;` binding, then the body — so the block
+/// ALWAYS breaks (it holds the bindings): each binding and the body on their own
+/// `HardLine` inside the block's sole `Nest(4)`. Each binding's `p: T = arg` is a
+/// [`Doc::Assign`] (a wide argument RHS-breaks); the argument and the body are
+/// built recursively.
+fn build_applied_lambda(
+    ctx: &EmitCtx,
+    params: &[(Symbol, IrType)],
+    args: &[Expr],
+    body: &Expr,
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Doc> {
+    let mut inner = Vec::with_capacity(params.len() * 4 + 2);
+    for ((param, ty), arg) in params.iter().zip(args.iter()) {
+        let p = ctx.emit_ident(*param)?;
+        let t = render_type(ctx, ty, generics)?;
+        let arg_doc = build_doc(ctx, arg, indent, child, generics)?;
+        inner.push(Doc::HardLine);
+        inner.push(Doc::assign(
+            Doc::owned(format!("let {p}: {t} = ")),
+            arg_doc,
+            1,
+        ));
+        inner.push(Doc::text(";"));
+    }
+    let body_doc = build_doc(ctx, body, indent, child, generics)?;
+    inner.push(Doc::HardLine);
+    inner.push(body_doc);
+    Ok(Doc::concat(vec![
+        Doc::text("({"),
+        Doc::nest(4, Doc::concat(inner)),
+        Doc::HardLine,
+        Doc::text("})"),
+    ]))
+}
+
 /// Whether a `match` arm body is a CONTROL/paren-wrapped expression that
 /// `rustfmt` wraps in synthesized braces (dropping the trailing comma) when it
 /// breaks, rather than a DELIMITED-TAIL expression that breaks inside its own
@@ -1431,8 +1648,9 @@ mod tests {
                 func: Box::new(var(fx, 0)),
                 args: vec![var(fx, 7), var(fx, 8), var(fx, 9)],
             },
-            // Immediately-applied lambda (leaf: rewrites to a `({ let … })` block —
-            // the block form is P2 work, so the string emitter's bytes are carried).
+            // Immediately-applied lambda (structured block): rewrites to a
+            // `({ let x: i64 = 1; x })` block — each param a `let p: T = arg;`
+            // binding, then the body.
             Expr::Apply {
                 func: Box::new(Expr::Lambda {
                     params: vec![(sym(fx, 3), IrType::Int)],
@@ -1445,6 +1663,27 @@ mod tests {
             Expr::Apply {
                 func: Box::new(var(fx, 0)),
                 args: vec![],
+            },
+            // Boxed lambda value (structured block): `{ let __ipe_fn: Box<…> =
+            // Box::new(move |x: i64| -> i64 { x }); __ipe_fn }`.
+            Expr::Lambda {
+                params: vec![(sym(fx, 3), IrType::Int)],
+                ret: IrType::Int,
+                body: Box::new(var(fx, 3)),
+            },
+            // Boxed lambda whose body is a chain-eligible binop — the closure body
+            // is a structured `Chain` inside the braces-always block.
+            Expr::Lambda {
+                params: vec![(sym(fx, 3), IrType::Int)],
+                ret: IrType::Int,
+                body: Box::new(binop(BinOp::Add, var(fx, 3), var(fx, 0))),
+            },
+            // Shared (`Arc<… + Send + Sync>`) lambda value (structured block): the
+            // same block shape, the shared trait-object annotation and `Arc::new`.
+            Expr::SharedLambda {
+                params: vec![(sym(fx, 3), IrType::Int)],
+                ret: IrType::Int,
+                body: Box::new(var(fx, 3)),
             },
             // `let` normal path (structured block): `({ let a = b; c })`. The body
             // references `a` zero times, so `needs_inline` is false — the plain
@@ -2101,6 +2340,180 @@ mod tests {
             assert_eq!(
                 got, expected,
                 "\n--- got ---\n{got}\n--- want ---\n{expected}"
+            );
+        });
+    }
+
+    /// Render `expr` as a function-body value at block indent 4: the block's
+    /// opening `{` lands at col 4, and every newline inside the value indents from
+    /// there — matching the column `rustfmt` captured a golden from for a
+    /// `fn f() -> R { <expr> }` body. The `Nest(4)` makes the renderer's block
+    /// indent 4; the leading four-space seed places the opening `{` at col 4.
+    fn render_fn_body(ctx: &EmitCtx, expr: &Expr) -> String {
+        let scope = GenericScope::new(&[]);
+        let doc = build_doc(ctx, expr, 1, 0, scope).expect("build_doc");
+        let stmt = Doc::nest(4, Doc::concat(vec![Doc::text("    "), doc]));
+        render(&stmt, RenderConfig::default())
+    }
+
+    #[test]
+    fn boxed_lambda_block_rhs_breaks_the_wide_type_annotation() {
+        // A trivial boxed lambda `{ let __ipe_fn: Box<…> = Box::new(move |x: i64| ->
+        // i64 { x }); __ipe_fn }` at a fn-body indent: the block always breaks, and
+        // the `let __ipe_fn: <wide Box type> = ` prefix pushes the `Box::new(closure)`
+        // RHS onto its own line at col 12 (the assignment-RHS-break axis). Golden
+        // captured from `rustfmt --edition 2024 --style-edition 2024`.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let expr = Expr::Lambda {
+                params: vec![(sym(&fx, 3), IrType::Int)],
+                ret: IrType::Int,
+                body: Box::new(var(&fx, 3)),
+            };
+            let got = render_fn_body(ctx, &expr);
+            let expected = "    {\n        let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =\n            Box::new(move |x: i64| -> i64 { x });\n        __ipe_fn\n    }";
+            assert_eq!(
+                got, expected,
+                "\n--- got ---\n{got}\n--- want ---\n{expected}"
+            );
+        });
+    }
+
+    #[test]
+    fn boxed_lambda_wide_body_breaks_the_closure_block_not_the_assignment() {
+        // A boxed lambda whose closure BODY is wide: the `let … = Box::new(move |…|
+        // -> i64 {` head stays on one line (the closure body block gives rustfmt the
+        // room), and the body breaks to its own line inside the braces. Golden
+        // captured from `rustfmt --edition 2024 --style-edition 2024`. The wide body
+        // is a single long identifier interned just for this test.
+        let mut interner = Interner::new();
+        let main_mod = interner.intern("Main").expect("intern Main");
+        let x = interner.intern("x").expect("intern x");
+        let wide = interner
+            .intern(
+                "a_very_long_body_expression_that_definitely_exceeds_the_available_width_padding",
+            )
+            .expect("intern wide");
+        let program = Program {
+            modules: vec![Module {
+                name: ModPath(vec![main_mod]),
+                types: vec![],
+                funcs: vec![],
+                entry: None,
+                records: vec![],
+                uses_tea: false,
+                uses_server: false,
+                uses_ui: false,
+                uses_live: false,
+                uses_tui: false,
+                uses_webview: false,
+                uses_css: false,
+                uses_auth: false,
+                uses_websocket: false,
+                uses_email: false,
+                uses_env_public: false,
+                uses_ffi: false,
+            }],
+        };
+        let ctx = EmitCtx::build(
+            &interner,
+            &program,
+            DbDriver::Sqlite,
+            None,
+            ipe_ir::Target::Native,
+            Vec::new(),
+            false,
+        )
+        .expect("EmitCtx::build");
+        let expr = Expr::Lambda {
+            params: vec![(x, IrType::Int)],
+            ret: IrType::Int,
+            body: Box::new(Expr::Var(wide)),
+        };
+        let got = render_fn_body(&ctx, &expr);
+        let expected = "    {\n        let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =\n            Box::new(move |x: i64| -> i64 {\n                a_very_long_body_expression_that_definitely_exceeds_the_available_width_padding\n            });\n        __ipe_fn\n    }";
+        assert_eq!(
+            got, expected,
+            "\n--- got ---\n{got}\n--- want ---\n{expected}"
+        );
+    }
+
+    #[test]
+    fn shared_lambda_block_uses_arc_pointer_and_sync_bound() {
+        // A shared lambda `{ let __ipe_fn: ::std::sync::Arc<dyn Fn(i64) -> i64 + Send
+        // + Sync + 'static> = ::std::sync::Arc::new(move |x: i64| -> i64 { x });
+        // __ipe_fn }`: the reference-counted pointer and the `+ Sync` trait object.
+        // The render must equal the string emitter's bytes byte-for-byte (its flat
+        // form is already the rustfmt-canonical single-line closure body).
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let scope = GenericScope::new(&[]);
+            let expr = Expr::SharedLambda {
+                params: vec![(sym(&fx, 3), IrType::Int)],
+                ret: IrType::Int,
+                body: Box::new(var(&fx, 3)),
+            };
+            let doc = build_doc(ctx, &expr, 1, 0, scope).expect("build_doc");
+            let got = render(&doc, RenderConfig::default());
+            // The shared annotation is wide, so the RHS breaks to its own line at
+            // col 12. Golden captured from `rustfmt --edition 2024`.
+            let expected = "{\n    let __ipe_fn: ::std::sync::Arc<dyn Fn(i64) -> i64 + Send + Sync + 'static> =\n        ::std::sync::Arc::new(move |x: i64| -> i64 { x });\n    __ipe_fn\n}";
+            assert_eq!(
+                got, expected,
+                "\n--- got ---\n{got}\n--- want ---\n{expected}"
+            );
+        });
+    }
+
+    #[test]
+    fn applied_lambda_block_binds_args_then_body() {
+        // An immediately-applied lambda `({ let x: i64 = 1; x })`: the param becomes
+        // a `let` binding, then the body — a block that always breaks. Golden
+        // captured from `rustfmt --edition 2024 --style-edition 2024`.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let expr = Expr::Apply {
+                func: Box::new(Expr::Lambda {
+                    params: vec![(sym(&fx, 3), IrType::Int)],
+                    ret: IrType::Int,
+                    body: Box::new(var(&fx, 3)),
+                }),
+                args: vec![Expr::Int(1)],
+            };
+            let got = render_let_stmt(ctx, &expr);
+            let expected = "let z = ({\n        let x: i64 = 1;\n        x\n    })";
+            assert_eq!(
+                got, expected,
+                "\n--- got ---\n{got}\n--- want ---\n{expected}"
+            );
+        });
+    }
+
+    #[test]
+    fn lambda_render_equals_string_emitter_when_flat() {
+        // A lambda whose whole block fits: the Doc render must equal the string
+        // emitter's bytes (which are already single-line and rustfmt-shaped). This
+        // pins that the braces-always closure body and the block leaves reproduce the
+        // string emitter exactly when nothing breaks. The block always breaks (it
+        // holds the `let`), so "flat" here means every non-statement piece is inline.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let scope = GenericScope::new(&[]);
+            // A lambda short enough that the assignment does NOT RHS-break: a short
+            // return type keeps `prefix rhs;` within width. `Unit -> Unit` renders a
+            // narrow `Box<dyn Fn() -> () + Send + 'static>`.
+            let expr = Expr::Lambda {
+                params: vec![],
+                ret: IrType::Unit,
+                body: Box::new(Expr::Unit),
+            };
+            let doc = build_doc(ctx, &expr, 1, 0, scope).expect("build_doc");
+            let got = render(&doc, RenderConfig::default());
+            // The block still breaks its statements; the closure body `{ () }` stays
+            // inline. This is the rustfmt shape of the string emitter's bytes.
+            assert!(
+                got.contains("Box::new(move || -> () { () })"),
+                "closure body should stay inline with braces:\n{got}"
             );
         });
     }

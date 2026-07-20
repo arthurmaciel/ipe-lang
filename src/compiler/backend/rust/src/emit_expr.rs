@@ -8088,7 +8088,7 @@ fn emit_apply(
 /// there but boxed with `Box::new` here (or vice-versa) is an E0308. Both
 /// `emit_func_value` and `emit_lambda` route through here so the two emit paths
 /// can never drift.
-fn wants_arc_ctor(ty: &IrType) -> bool {
+pub fn wants_arc_ctor(ty: &IrType) -> bool {
     matches!(ty,
         IrType::Fun(params, ret)
             if (matches!(params.as_slice(), [IrType::ServerRequest])
