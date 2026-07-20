@@ -2768,6 +2768,7 @@ program
                 uses_websocket: false,
                 uses_email: false,
                 uses_ffi: false,
+                uses_env_public: false,
             }],
         })
     }
