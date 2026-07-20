@@ -7,17 +7,14 @@ out/
 .ipedeps/
 /tmp-parity/
 
-# Mirrored+patched upstream Sky examples — materialised at sweep time by
-# scripts/lib/mirror.sh. Regenerated each run, never vendored; only the control
-# surface (manifest.toml, rename-map.tsv, ipe-patches/, README.md, BLOCKERS.md)
-# under examples/sky/ is source. Ignore every mirror tree, then re-include the
-# tracked control files so they are never swept up by the wildcard.
-/examples/sky/*
-!/examples/sky/manifest.toml
-!/examples/sky/rename-map.tsv
-!/examples/sky/README.md
-!/examples/sky/BLOCKERS.md
-!/examples/sky/ipe-patches/
+# The upstream Sky example mirror under examples/sky/ is TRACKED (a committed
+# snapshot of the reference corpus). Each CI examples sweep refreshes it from
+# upstream and commits the update, so the badge + the tree reflect the current
+# upstream. Build artifacts inside the mirror are still ignored below.
+examples/sky/**/target/
+examples/sky/**/sky-out/
+examples/sky/**/.sky/
+examples/sky/**/.ipe/
 # Default SQLite DB written by `Db.connect ()` when an emitted binary is run
 # by the E2E test harness in the crate/repo cwd — a run artifact, never source.
 ipe.db
