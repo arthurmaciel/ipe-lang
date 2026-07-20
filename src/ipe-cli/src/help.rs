@@ -173,6 +173,18 @@ const COMMANDS: &[Command] = &[
         }],
     },
     Command {
+        name: "add",
+        summary: "Add an Ipê package dependency (resolution ships with the index).",
+        args: "<package>[@<version>]",
+        options: &[],
+    },
+    Command {
+        name: "remove",
+        summary: "Remove an Ipê package dependency.",
+        args: "<package>",
+        options: &[],
+    },
+    Command {
         name: "rust",
         summary: "Manage Rust crates as foreign-function dependencies (add / remove / install).",
         args: "<add|remove|install> [<args>...]",
@@ -222,6 +234,10 @@ const SECTIONS: &[Section] = &[
     Section {
         title: "Development",
         commands: &["init", "build", "run", "watch", "fix", "fmt"],
+    },
+    Section {
+        title: "Package authoring",
+        commands: &["add", "remove"],
     },
     Section {
         title: "Foreign-function interface (FFI)",
