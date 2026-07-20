@@ -68,11 +68,12 @@ of `KNOWN_UNBACKED` bucket), `ipe_lower` (arity table +
 `.ipe` modules, `ipe.toml`). `build_set` = **disk-derived**
 (`scripts/lib/examples.sh`) — every `examples/NN-*/src/Main.ipe` whose imports
 resolve auto-included; adding dir IS registration.
-`scripts/equivalence-checks/examples-sweep.sh`, per example: `ipec build … --out out/rust` →
-`cargo build --manifest-path out/rust/Cargo.toml` → run
-`out/rust/target/debug/ipe-app`. VERDICT PASS iff zero red rows. Modes:
-`IPE_SWEEP_BUILD_ONLY=1` (compile only), `IPE_SWEEP_NO_EQUIV=1` (build+run, no
-Go), default (+ Go≡Rust via cached `expected_go.txt`).
+`scripts/examples-sweep.sh` also mirrors the upstream Sky examples
+(`examples/sky/`, patched via `scripts/lib/mirror.sh`), per example:
+`ipe build … --out out/rust` → `cargo build --manifest-path out/rust/Cargo.toml`
+→ run `out/rust/target/debug/ipe-app`. VERDICT PASS iff zero red rows. Mode:
+`IPE_SWEEP_BUILD_ONLY=1` (compile only, RUN skipped). No Go build, no
+cross-compiler comparison.
 
 **Emitted project:** `out/rust/` = Cargo project w/ runtime
 vendored into `src/ipe_runtime/` (ipe copies from `IPE_RUNTIME_DIR`), default
@@ -268,7 +269,7 @@ rm -f /tmp/autopilot-gate.log /tmp/mem-guard.log
 df -h /
 ```
 
-**Automatic hygiene:** `scripts/equivalence-checks/examples-sweep.sh` aborts w/ `< 5G free`
+**Automatic hygiene:** `scripts/examples-sweep.sh` aborts w/ `< 5G free`
 guard before start; loop's `reclaim_disk` (`autopilot.sh`) keeps
 gate + shared-oracle + warm `lane-*` targets and reaps rest. Worktree
 cleanup after every finished agent stays manual.
@@ -323,11 +324,11 @@ mid-build leaves half-written artifacts worse than clean rebuild.
   compile-time + codegen behaviour; **`runtime/tests/*.rs`** for runtime-kernel
   soundness/parity; goldens byte-compared and `IPE_E2E=1` builds+runs
   emitted project (THE SEAL).
-- **Runtime verification.** Example sweep (`scripts/equivalence-checks/examples-sweep.sh`)
-  builds AND runs each example, then diffs Rust≡Go stdout/body via cached
-  oracle; web scenarios drive Ipe.Live + Ipe.Http.Server through Playwright
-  (`scripts/equivalence-checks/web-verify.mjs`, `scripts/equivalence-checks/verify-scenarios.mjs`). Build-only
-  check doesn't catch "click is a no-op" regression class.
+- **Runtime verification.** Example sweep (`scripts/examples-sweep.sh`) builds
+  AND runs each example headless per shape (cli/server/live/tui/webview/wasm);
+  wasm examples drive the emitted SPA in headless Chromium
+  (`scripts/lib/wasm-verify.mjs`). Build-only check doesn't catch "click is a
+  no-op" regression class.
 
 ### Release checklist (non-negotiable)
 
@@ -337,9 +338,9 @@ mid-build leaves half-written artifacts worse than clean rebuild.
    run --workspace`, `cargo +nightly nextest run -p ipe-runtime-rust --features
    full`, `cargo +nightly test --workspace --doc`, `cargo +nightly clippy
    --workspace --all-targets -- -D warnings`, fuzz.
-3. Example sweep green — `scripts/equivalence-checks/examples-sweep.sh` (per example: ipe build →
-   `cargo build` emitted crate → run `ipe-app` → Rust≡Go equivalence). VERDICT
-   PASS iff zero red rows (THE SEAL end-to-end).
+3. Example sweep green — `scripts/examples-sweep.sh` (per example: ipe build →
+   `cargo build` emitted crate → run `ipe-app`). VERDICT PASS iff zero red rows
+   (THE SEAL end-to-end).
 4. CI parity — `.github/workflows/{ci,examples-sweep,security}.yml` runs
    same gate; cancel superseded in-progress `main` runs before pushing (see
    Workflow rules).

@@ -17,21 +17,22 @@ that builds with `ipe build` and targets the Rust backend.
 | `45-wasm-spa` | wasm | M6 SPA target: a pure-client single-page application with full TEA loop running in the browser. Uses `Live.app` which emits `wasm_app` under `--target wasm`. |
 | `46-wasm-hydration` | wasm | M7 SSR hydration: server-side initial render (paint) followed by WASM client takeover. |
 
-## Ipe-derived examples
+## Sky-derived examples
 
-The upstream `anzellai/ipe` examples (00–38 + `simple` + `test_pkg`) are not
-vendored here. They live as a declarative patch under `ipe/` and are
+The upstream `anzellai/sky` examples (00–39 + `simple` + `test_pkg`) are not
+vendored here. They live as a declarative patch under `sky/` and are
 materialised at sweep time:
 
-- `ipe/manifest.toml` — the authoritative list of upstream examples and their
-  patch status (`global-rename-map` or excluded via `go_ffi = true`).
-- `ipe/rename-map.tsv` — the token-level `Ipe.*` → `Ipe.*` rename map applied
-  by `scripts/equivalence-checks/ipe-to-ipe-transform.py`.
-- `ipe/README.md` — how the mirror and patch pipeline work.
+- `sky/manifest.toml` — the authoritative list of upstream examples and their
+  scope (`rename-map` patch, or excluded via `go_ffi = true`).
+- `sky/rename-map.tsv` — the token-level `Sky.*`/`Std.*` → `Ipe.*` rename map
+  applied by `scripts/lib/sky-to-ipe-transform.py`.
+- `sky/ipe-patches/<name>.patch` — optional per-example semantic delta on top.
+- `sky/README.md` — how the mirror + patch pipeline works.
 
-Run `IPE_SWEEP_MIRROR_SKY=1 bash scripts/equivalence-checks/examples-sweep.sh`
-to materialise the mirrored examples under `ipe/<name>/` and include them in
-the sweep. The materialised trees are git-ignored.
+Run `bash scripts/examples-sweep.sh` to materialise the mirrored examples under
+`sky/<name>/`, patch them, and build + run each. The materialised trees are
+git-ignored.
 
 ## Running an example
 
@@ -49,5 +50,5 @@ ipe build ipe.toml --out out/rust --target wasm
 Or use the sweep to build and run all in-scope examples at once:
 
 ```sh
-IPE_SWEEP_BUILD_ONLY=1 bash scripts/equivalence-checks/examples-sweep.sh
+IPE_SWEEP_BUILD_ONLY=1 bash scripts/examples-sweep.sh
 ```

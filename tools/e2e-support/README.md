@@ -1,10 +1,11 @@
 # Go-reference oracle binary
 
-The equivalence oracle (`scripts/equivalence-checks/examples-sweep.sh`, EQUIVALENCE column) diffs ipe's
-emitted-Rust **runtime output** against the reference Haskell `ipe` compiler's
-**Go-backend runtime output**. For that diff to mean "parity," the reference
-must be pinned to our **port target version**, not whatever stale `ipe` happens
-to be on `PATH`.
+The golden-test E2E oracle (`crates/ipe/tests/golden_*.rs`, cached
+`expected_go.txt`) diffs ipe's emitted-Rust **runtime output** against the
+reference Haskell `ipe` compiler's **Go-backend runtime output**. For that diff
+to mean "parity," the reference must be pinned to our **port target version**,
+not whatever stale `ipe` happens to be on `PATH`. (The examples sweep no longer
+uses this oracle — it is an upstream-mirror build+run proof, not a Go diff.)
 
 ## Pinned binary
 
