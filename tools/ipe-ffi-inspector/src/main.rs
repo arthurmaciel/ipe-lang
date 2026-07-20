@@ -503,14 +503,22 @@ fn main() {
     // the sibling impl'ing `Trait` are different crates). Without it the single global
     // `--git` could not describe two crates from two repos.
     let mut manifest_path: Option<String> = None;
-    // Cross-crate proof-map checkpoint (OPERATOR-TRUSTED files, dev/unsandboxed
-    // convenience only): `--xc-save` runs the populate pass, writes the maps,
-    // and exits before binding; `--xc-load` skips the populate pass and binds
-    // with the loaded maps — the checkpoint must come from a populate pass
-    // over the SAME manifest. Together they split the long two-pass manifest
-    // run into two resumable processes. The `IPE_FFI_XC_{SAVE,LOAD}` env
-    // fallbacks reach an inspector spawned by the driver; the sandbox jail
-    // clears the environment, so a jailed run can never see them.
+    // Cross-crate proof-map checkpoint: `--xc-save` loads any `--xc-load`
+    // checkpoint, runs the populate pass over THIS invocation's crates on top
+    // of it (accumulating), writes the merged maps, and exits before binding;
+    // `--xc-load` alone skips the populate pass and binds with the loaded maps.
+    // The two split one long multi-crate run into a sequence of per-crate
+    // populate processes (each `--xc-load prev --xc-save next`, one crate's
+    // rustdoc per process so no process exceeds the jail wall) followed by
+    // per-crate bind processes (each `--xc-load full`, binding one crate
+    // against the complete cross-crate index). Because a process reads the
+    // loaded checkpoint BEFORE any foreign code runs and writes its save
+    // AFTER, and re-serializes the full accumulated maps at save, no crate's
+    // build scripts can corrupt the maps a sibling later loads — the trust
+    // model matches the single-process populate-then-bind run. The
+    // `IPE_FFI_XC_{SAVE,LOAD}` env fallbacks reach an inspector spawned by the
+    // driver; the sandbox jail clears the environment, so a jailed run only
+    // sees the flags the driver passes on argv.
     let mut xc_save: Option<String> = std::env::var("IPE_FFI_XC_SAVE").ok();
     let mut xc_load: Option<String> = std::env::var("IPE_FFI_XC_LOAD").ok();
 
@@ -668,22 +676,30 @@ fn main() {
     // skips the extra pass — there are no siblings, and the global fallback is inert
     // (the per-crate index already finds any same-crate impl first), so behaviour is
     // byte-identical to pre-WALL-G.
-    if let Some(path) = &xc_load {
-        // The loaded checkpoint REPLACES the populate pass; a file that fails
-        // to decode fails the run closed (binding with empty maps would
-        // silently over-drop).
-        if let Err(e) = load_xc_checkpoint(path) {
-            eprintln!("ipe-ffi-inspector: --xc-load {}: {}", path, e);
-            std::process::exit(1);
-        }
-    } else if crate_specs.len() > 1 {
-        for spec in &crate_specs {
-            // PHASE-1 populate: discarded — skip the #106 stable check (verify_stable=false).
-            let _ = inspect_crate(&spec.name, &spec.features, spec.git.as_ref(), false);
-        }
+    // Seed the cross-crate maps from a prior checkpoint when resuming a chunked
+    // populate (or when a checkpoint stands in for the whole populate pass ahead
+    // of a bind-only run). A file that fails to decode fails the run closed —
+    // binding with empty maps would silently over-drop.
+    if let Some(path) = &xc_load
+        && let Err(e) = load_xc_checkpoint(path)
+    {
+        eprintln!("ipe-ffi-inspector: --xc-load {}: {}", path, e);
+        std::process::exit(1);
     }
 
     if let Some(path) = &xc_save {
+        // Populate THIS invocation's crates on top of any loaded checkpoint,
+        // then write the accumulated maps and exit before binding. One crate's
+        // rustdoc per `--xc-save` process keeps each jailed run under the wall,
+        // so a multi-crate manifest is populated as a resumable sequence of
+        // single-crate `--xc-load prev --xc-save next` chunks. `--xc-save`
+        // WITHOUT `--xc-load` populates from empty — the whole-manifest
+        // checkpoint. `mirror_into_global_xc_index` dedups by public path, so
+        // re-populating an already-loaded crate is idempotent.
+        for spec in &crate_specs {
+            // Populate: bindings discarded (verify_stable=false).
+            let _ = inspect_crate(&spec.name, &spec.features, spec.git.as_ref(), false);
+        }
         if let Err(e) = save_xc_checkpoint(path) {
             eprintln!("ipe-ffi-inspector: --xc-save {}: {}", path, e);
             std::process::exit(1);
@@ -693,6 +709,17 @@ fn main() {
             path
         );
         return;
+    }
+
+    // Bind path. With a checkpoint loaded, the populate pass is already
+    // complete — bind directly. Without one, a multi-crate manifest still
+    // needs the in-process populate so every sibling impl is indexed before
+    // any crate binds; a single-crate run needs no populate pass.
+    if xc_load.is_none() && crate_specs.len() > 1 {
+        for spec in &crate_specs {
+            // PHASE-1 populate: discarded (verify_stable=false).
+            let _ = inspect_crate(&spec.name, &spec.features, spec.git.as_ref(), false);
+        }
     }
 
     let crate_args: Vec<String> = crate_specs.iter().map(|s| s.name.clone()).collect();
