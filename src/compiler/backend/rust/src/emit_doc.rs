@@ -11,18 +11,20 @@
 //!   * the binary-operator chain (`BinOp` Add..Or) → [`Doc::Chain`];
 //!   * `if`/`else` → inline or block form by an absolute width threshold;
 //!   * the delimited lists — `Tuple`, plain non-empty non-`Ui` `List`, `Cons`,
-//!     the plain user-function `Call` (`Callee::Func`, no turbofish pin), and the
+//!     the plain user-function `Call` (`Callee::Func`, no turbofish pin), the
 //!     saturated payload `Ctor` (user-enum, each cyclic-self-field argument boxed,
-//!     or runtime-enum `IpeMaybe`/`IpeResult`/…) — which lay out flat when they
-//!     fit and otherwise break one element per line with a break-conditional
-//!     trailing comma ([`Doc::IfBroken`]).
+//!     or runtime-enum `IpeMaybe`/`IpeResult`/…), and the general function-value
+//!     `Apply` tail (`({f})(args)`, non-lambda func, non-empty args) — which lay
+//!     out flat when they fit and otherwise break one element per line with a
+//!     break-conditional trailing comma ([`Doc::IfBroken`]).
 //!
 //! Every remaining arm is carried as one [`Doc::owned`] leaf holding the string
 //! emitter's exact bytes: the literals (Int/Float/Str/…), the call-shaped binops
 //! (`Append`/`IntDiv`), the empty/`Ui` list and zero-arg call forms, and the
 //! context-heavy arms not yet structured (kernel-dispatch / FFI / pinned calls,
-//! `Apply`, `let`/destructure blocks, lambdas, `match`, records, updates,
-//! field access, task sequencing). Carrying bytes keeps the SEAL exact by
+//! the immediately-applied-lambda `Apply` block, `let`/destructure blocks,
+//! lambdas, `match`, records, updates, field access, task sequencing). Carrying
+//! bytes keeps the SEAL exact by
 //! construction; those arms simply do not yet gain multi-line layout.
 //!
 //! The legacy string path in `emit_expr.rs` remains the emit default; this path
@@ -143,6 +145,25 @@ pub fn build_doc(
             let docs = build_args(ctx, args, indent, child, generics)?;
             Ok(delimited(
                 Doc::owned(format!("{name}(")),
+                docs,
+                Doc::text(")"),
+            ))
+        }
+
+        // A general function-value application `({f})(a0, a1, …)`. Structured ONLY
+        // for the non-lambda, non-empty-arg tail: the string emitter's own
+        // immediately-applied-lambda branch (`func` is a `Lambda`) rewrites to a
+        // `({ let p = a; … body })` BLOCK — that block form is P2 work — so it stays
+        // a leaf; a zero-arg apply (`({f})()`) has no positional list, also a leaf.
+        // The remaining tail is exactly `({f})(` + a delimited argument list; `f`
+        // is built recursively so a structured func operand rides inside its parens.
+        Expr::Apply { func, args }
+            if !matches!(func.as_ref(), Expr::Lambda { .. }) && !args.is_empty() =>
+        {
+            let func_doc = build_doc(ctx, func, indent, child, generics)?;
+            let docs = build_args(ctx, args, indent, child, generics)?;
+            Ok(delimited(
+                Doc::concat(vec![Doc::text("("), func_doc, Doc::text(")(")]),
                 docs,
                 Doc::text(")"),
             ))
@@ -834,6 +855,31 @@ mod tests {
                 pin: CallPin::None,
                 on_form: OnFormKind::NotForm,
             },
+            // General function-value application (structured, inline): `(a)(b, c)`.
+            Expr::Apply {
+                func: Box::new(var(fx, 0)),
+                args: vec![var(fx, 1), var(fx, 2)],
+            },
+            // General application (structured, wide → breaks args).
+            Expr::Apply {
+                func: Box::new(var(fx, 0)),
+                args: vec![var(fx, 7), var(fx, 8), var(fx, 9)],
+            },
+            // Immediately-applied lambda (leaf: rewrites to a `({ let … })` block —
+            // the block form is P2 work, so the string emitter's bytes are carried).
+            Expr::Apply {
+                func: Box::new(Expr::Lambda {
+                    params: vec![(sym(fx, 3), IrType::Int)],
+                    ret: IrType::Int,
+                    body: Box::new(var(fx, 3)),
+                }),
+                args: vec![Expr::Int(1)],
+            },
+            // Zero-arg application (leaf: `(f)()`, no positional layout).
+            Expr::Apply {
+                func: Box::new(var(fx, 0)),
+                args: vec![],
+            },
         ]
     }
 
@@ -1268,6 +1314,42 @@ mod tests {
             let expected = format!(
                 "let z = {prefix}(\n        argument_that_is_quite_long_enough_to_matter_x,\n        argument_that_is_quite_long_enough_to_matter_y,\n        argument_that_is_quite_long_enough_to_matter_z,\n    )"
             );
+            assert_eq!(
+                got, expected,
+                "\n--- got ---\n{got}\n--- want ---\n{expected}"
+            );
+        });
+    }
+
+    #[test]
+    fn apply_fits_inline() {
+        // A short general application stays inline: `(a)(b, c)`.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let scope = GenericScope::new(&[]);
+            let expr = Expr::Apply {
+                func: Box::new(var(&fx, 0)),
+                args: vec![var(&fx, 1), var(&fx, 2)],
+            };
+            let doc = build_doc(ctx, &expr, 0, 0, scope).expect("build_doc");
+            assert_eq!(render(&doc, RenderConfig::default()), "(a)(b, c)");
+        });
+    }
+
+    #[test]
+    fn apply_breaks_args_one_per_line_with_trailing_comma() {
+        // A general application whose three wide args overflow width 100 breaks each
+        // arg onto its own line at nest+4 with a trailing comma, `)` dedented to the
+        // statement indent — rustfmt's call-arg layout with an `(f)(` prefix. Golden
+        // captured from `rustfmt --edition 2024 --style-edition 2024`.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let expr = Expr::Apply {
+                func: Box::new(var(&fx, 0)),
+                args: vec![var(&fx, 7), var(&fx, 8), var(&fx, 9)],
+            };
+            let got = render_let_stmt(ctx, &expr);
+            let expected = "let z = (a)(\n        argument_that_is_quite_long_enough_to_matter_x,\n        argument_that_is_quite_long_enough_to_matter_y,\n        argument_that_is_quite_long_enough_to_matter_z,\n    )";
             assert_eq!(
                 got, expected,
                 "\n--- got ---\n{got}\n--- want ---\n{expected}"
