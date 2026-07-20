@@ -48,9 +48,9 @@ use ipe_ir::{BinOp, Callee, Expr, IrType, KernelFn, ModPath};
 use crate::EmitCtx;
 use crate::doc::{ChainOperand, Doc};
 use crate::emit_expr::{
-    call_has_kernel_special_case, callee_name, clone_targets_in_expr, emit_binding_stmts,
-    emit_expr_at, expr_value_is_non_clone, free_vars, kernel_swaps_first_two, record_struct_name,
-    scan_free_target, substitute_var,
+    call_has_kernel_special_case, callee_name, clone_targets_in_expr, combine_guards,
+    emit_arm_head, emit_binding_stmts, emit_expr_at, emit_match_scrutinee, expr_value_is_non_clone,
+    free_vars, kernel_swaps_first_two, record_struct_name, scan_free_target, substitute_var,
 };
 use crate::emit_types::GenericScope;
 
@@ -244,6 +244,15 @@ pub fn build_doc(
         Expr::TaskSeq { effect, rest } => {
             build_task_seq(ctx, effect, rest, indent, child, generics)
         }
+
+        // A `match scrut { pat => body, … }`. The match skeleton always breaks (a
+        // `match` never inlines): the scrutinee and each arm head/guard are carried
+        // as byte leaves (single-line, no layout of their own — they reuse the
+        // string emitter's `emit_match_scrutinee` / `emit_arm_head`), and only the
+        // arm BODIES gain recursive Doc layout. Each arm is wrapped per rustfmt's
+        // brace/comma rule (see [`build_match`]). Threaded with the match's own
+        // `depth` (not `child`), matching `emit_match`'s own `child = depth + 1`.
+        Expr::Match(m) => build_match(ctx, m, indent, depth, generics),
 
         // Every remaining arm carries the string emitter's exact bytes as one
         // leaf. Its layout is whatever single-line pre-`rustfmt` form the string
@@ -947,6 +956,112 @@ fn build_task_seq(
     ))
 }
 
+/// Whether a `match` arm body is a CONTROL/paren-wrapped expression that
+/// `rustfmt` wraps in synthesized braces (dropping the trailing comma) when it
+/// breaks, rather than a DELIMITED-TAIL expression that breaks inside its own
+/// brackets (keeping the comma). This mirrors `rustfmt`'s arm-body rule: a call /
+/// constructor / application / tuple / list / cons / record / `task_and_then`
+/// tail overflows into its own argument list, so no braces are synthesized; an
+/// `if` / binary-operator chain / `let` / destructure / update / sync task block
+/// is parenthesized or block-shaped and gets wrapped.
+///
+/// A body that is not one of the structured shapes (a plain leaf) is treated as
+/// delimited-tail: a leaf renders single-line and always fits, so it takes the
+/// inline (comma-kept) path regardless — the classification only matters for a
+/// body that BREAKS, which a leaf never does.
+const fn arm_body_is_control(body: &Expr) -> bool {
+    match body {
+        // Parenthesized or block-shaped: wrapped in synthesized braces when broken.
+        Expr::If { .. }
+        | Expr::Let { .. }
+        | Expr::Destructure { .. }
+        | Expr::Update { .. }
+        | Expr::TaskSeqSync { .. } => true,
+        // A chain-eligible binary operator renders `(a + b)` and wraps when broken;
+        // the call-shaped `Append` / `IntDiv` are leaves (delimited-tail).
+        Expr::BinOp { op, .. } => chain_op_str(*op).is_some(),
+        // Delimited-tail (breaks inside its own brackets) or a single-line leaf.
+        _ => false,
+    }
+}
+
+/// Build the `Doc` for a `match` expression, mirroring
+/// [`crate::emit_expr::emit_match`] token-for-token.
+///
+/// The `match` skeleton ALWAYS breaks (`rustfmt` never inlines a `match`): the
+/// scrutinee and each arm head / guard are single-line, so they reuse the string
+/// emitter's [`crate::emit_expr::emit_match_scrutinee`] /
+/// [`crate::emit_expr::emit_arm_head`] and are carried as byte leaves. Only the
+/// arm BODIES gain recursive Doc layout, each wrapped in a [`Doc::MatchArmTail`]
+/// that applies `rustfmt`'s per-arm brace/comma rule ([`arm_body_is_control`]).
+///
+/// A prelude-carrying arm (a constructor unbox / string-binder rebind) keeps the
+/// string emitter's `{{ prelude body }}` block shape: the prelude statements and
+/// the body go on their own `HardLine`s inside the braces, so the arm always
+/// breaks and the comma is dropped — the same shape `rustfmt` produces for a block
+/// arm body.
+fn build_match(
+    ctx: &EmitCtx,
+    m: &ipe_ir::Match,
+    indent: usize,
+    depth: u16,
+    generics: GenericScope,
+) -> DResult<Doc> {
+    let child = depth + 1;
+    let (scrut, mode) = emit_match_scrutinee(ctx, m, indent, depth, generics)?;
+    let mut arm_docs = Vec::with_capacity(m.arms().len());
+    for arm in m.arms() {
+        let (pat, prelude, synth_guard) = emit_arm_head(ctx, &arm.pat, &mode)?;
+        // The body is emitted at one indent step past the `match` (the arm indent),
+        // exactly as the string emitter passes `indent + 1`.
+        let body_doc = build_doc(ctx, &arm.body, indent + 1, child, generics)?;
+        let ir_guard = match &arm.guard {
+            Some(g) => Some(emit_expr_at(ctx, g, indent + 1, child, generics)?),
+            None => None,
+        };
+        let head = combine_guards(synth_guard, ir_guard).map_or_else(
+            || Doc::owned(format!("{pat} => ")),
+            |guard| Doc::owned(format!("{pat} if {guard} => ")),
+        );
+        let tail = if prelude.is_empty() {
+            // Plain body: the arm-tail token applies the brace/comma rule by the
+            // body's head kind.
+            Doc::match_arm_tail(body_doc, arm_body_is_control(&arm.body))
+        } else {
+            // Prelude present: the string emitter wraps `{{ prelude body }}`. Keep
+            // that block — each prelude statement and the body on their own
+            // `HardLine`s inside the braces (always breaks, comma dropped), matching
+            // `rustfmt`. The prelude is a run of `let …; ` statements the rebind /
+            // unbox helpers build with a trailing `"; "` each, so splitting on it
+            // recovers one statement per line (a trailing empty segment is skipped).
+            let mut inner = Vec::new();
+            for stmt in prelude.split_inclusive("; ") {
+                let stmt = stmt.trim_end();
+                if stmt.is_empty() {
+                    continue;
+                }
+                inner.push(Doc::HardLine);
+                inner.push(Doc::owned(stmt.to_owned()));
+            }
+            inner.push(Doc::HardLine);
+            inner.push(body_doc);
+            Doc::concat(vec![
+                Doc::text("{"),
+                Doc::nest(4, Doc::concat(inner)),
+                Doc::HardLine,
+                Doc::text("}"),
+            ])
+        };
+        arm_docs.push(Doc::concat(vec![Doc::HardLine, head, tail]));
+    }
+    Ok(Doc::concat(vec![
+        Doc::owned(format!("match {scrut} {{")),
+        Doc::nest(4, Doc::concat(arm_docs)),
+        Doc::HardLine,
+        Doc::text("}"),
+    ]))
+}
+
 #[cfg(test)]
 #[allow(clippy::panic, clippy::expect_used, reason = "test assertions")]
 mod tests {
@@ -959,8 +1074,8 @@ mod tests {
 
     use ipe_intern::Interner;
     use ipe_ir::{
-        BinOp, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module,
-        OnFormKind, Pat, Program, TypeDef, Variant,
+        Arm, BinOp, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath,
+        Module, OnFormKind, Pat, Program, TypeDef, Variant,
     };
 
     use super::build_doc;
@@ -1423,6 +1538,47 @@ mod tests {
                 }),
                 rest: Box::new(var(fx, 0)),
             },
+            // A `match` (structured): three constructor arms — a fits-inline body, a
+            // wide delimited-tail call (comma kept), and a wide binop chain (synth
+            // braces, comma dropped). The SEAL must hold across all three arm shapes:
+            // the synthesized braces are leaf-invisible, the per-arm comma is a leaf.
+            Expr::Match(
+                Match::new_flat(
+                    var(fx, 3),
+                    vec![
+                        Arm {
+                            pat: Pat::Ctor {
+                                home: ModPath(vec![fx.main_mod]),
+                                ty: fx.msg_ty,
+                                variant: fx.unit_ctor,
+                                args: vec![],
+                            },
+                            body: Expr::Call {
+                                callee: Callee::Func(FuncId::from_raw(0)),
+                                args: vec![var(fx, 7), var(fx, 8), var(fx, 9)],
+                                pin: CallPin::None,
+                                on_form: OnFormKind::NotForm,
+                            },
+                            guard: None,
+                        },
+                        Arm {
+                            pat: Pat::Ctor {
+                                home: ModPath(vec![fx.main_mod]),
+                                ty: fx.msg_ty,
+                                variant: fx.wrap_ctor,
+                                args: vec![Pat::Var(sym(fx, 0))],
+                            },
+                            body: binop(
+                                BinOp::Add,
+                                binop(BinOp::Add, var(fx, 7), var(fx, 8)),
+                                var(fx, 9),
+                            ),
+                            guard: None,
+                        },
+                    ],
+                )
+                .expect("Match::new_flat"),
+            ),
         ]
     }
 
@@ -2271,6 +2427,172 @@ mod tests {
             let doc = build_doc(ctx, &expr, 0, 0, scope).expect("build_doc");
             let string = emit_expr_at(ctx, &expr, 0, 0, scope).expect("emit_expr_at");
             assert_eq!(doc.normalized_leaves(), whitespace_normalize(&string));
+        });
+    }
+
+    /// A constructor arm head over the fixture's `Msg` enum.
+    fn ctor_arm(fx: &Fixture, variant: ipe_intern::Symbol, args: Vec<Pat>, body: Expr) -> Arm {
+        Arm {
+            pat: Pat::Ctor {
+                home: ModPath(vec![fx.main_mod]),
+                ty: fx.msg_ty,
+                variant,
+                args,
+            },
+            body,
+            guard: None,
+        }
+    }
+
+    /// A `Match` over the fixture's `Msg` enum scrutinee `x` (syms[3]) with the
+    /// given constructor arms, built through the flat all-ctor-headed path.
+    fn match_expr(fx: &Fixture, arms: Vec<Arm>) -> Expr {
+        Expr::Match(Match::new_flat(var(fx, 3), arms).expect("Match::new_flat"))
+    }
+
+    #[test]
+    fn match_skeleton_always_breaks_arms_fit_inline_with_comma() {
+        // Constructor arms whose bodies fit inline: the `match` always breaks its
+        // arms one per line, each `Pat => body,` with the comma kept. The Doc render
+        // must reproduce the string emitter's already-rustfmt-shaped output exactly.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let arms = vec![
+                ctor_arm(
+                    &fx,
+                    fx.unit_ctor,
+                    vec![],
+                    binop(BinOp::Add, var(&fx, 2), Expr::Int(1)),
+                ),
+                ctor_arm(&fx, fx.wrap_ctor, vec![Pat::Var(sym(&fx, 0))], var(&fx, 0)),
+            ];
+            let expr = match_expr(&fx, arms);
+            let scope = GenericScope::new(&[]);
+            let string = emit_expr_at(ctx, &expr, 0, 0, scope).expect("string");
+            let doc = build_doc(ctx, &expr, 0, 0, scope).expect("doc");
+            // Every arm body fits, so the Doc render equals the string emitter's
+            // bytes (the string emitter's arm bodies are already single-line and
+            // rustfmt-shaped, so no layout differs) — an exact byte match.
+            assert_eq!(
+                render(&doc, RenderConfig::default()),
+                string,
+                "the fits-inline match render must equal the string emitter's bytes"
+            );
+        });
+    }
+
+    #[test]
+    fn match_wide_delimited_tail_arm_keeps_comma() {
+        // An arm whose body is a wide user-function CALL (a delimited tail) breaks
+        // inside its own argument list and keeps its trailing comma — no synthesized
+        // braces. Golden captured from `rustfmt --edition 2024 --style-edition 2024`.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let wide_call = Expr::Call {
+                callee: Callee::Func(FuncId::from_raw(0)),
+                args: vec![var(&fx, 7), var(&fx, 8), var(&fx, 9)],
+                pin: CallPin::None,
+                on_form: OnFormKind::NotForm,
+            };
+            let arms = vec![
+                ctor_arm(&fx, fx.unit_ctor, vec![], wide_call),
+                ctor_arm(&fx, fx.wrap_ctor, vec![Pat::Var(sym(&fx, 0))], var(&fx, 0)),
+            ];
+            let expr = match_expr(&fx, arms);
+            let scope = GenericScope::new(&[]);
+            let name = super::callee_name(ctx, &Callee::Func(FuncId::from_raw(0))).expect("name");
+            let doc = build_doc(ctx, &expr, 0, 0, scope).expect("doc");
+            let got = render(&doc, RenderConfig::default());
+            // The scrutinee `x` and the enum name `MainMsg` are the fixture's stable
+            // Rust names. The `Unit` arm's wide call breaks inside its own argument
+            // list with the trailing comma kept; the fitting `Wrap` arm keeps its
+            // comma too. Golden captured from `rustfmt --edition 2024`.
+            let expected = format!(
+                "match x {{\n    MainMsg::Unit => {name}(\n        argument_that_is_quite_long_enough_to_matter_x,\n        argument_that_is_quite_long_enough_to_matter_y,\n        argument_that_is_quite_long_enough_to_matter_z,\n    ),\n    MainMsg::Wrap(a) => a,\n}}"
+            );
+            assert_eq!(
+                got, expected,
+                "\n--- got ---\n{got}\n--- want ---\n{expected}"
+            );
+        });
+    }
+
+    #[test]
+    fn match_wide_control_arm_synthesizes_braces_and_drops_comma() {
+        // An arm whose body is a wide binary-operator CHAIN (a control body) is
+        // wrapped by rustfmt in synthesized braces and the trailing comma is
+        // dropped. Golden captured from `rustfmt --edition 2024 --style-edition 2024`.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            // `(…_x + …_y + …_z)` — a three-operand chain wide enough to break.
+            let wide_chain = binop(
+                BinOp::Add,
+                binop(BinOp::Add, var(&fx, 7), var(&fx, 8)),
+                var(&fx, 9),
+            );
+            let arms = vec![
+                ctor_arm(&fx, fx.unit_ctor, vec![], wide_chain),
+                ctor_arm(&fx, fx.wrap_ctor, vec![Pat::Var(sym(&fx, 0))], var(&fx, 0)),
+            ];
+            let expr = match_expr(&fx, arms);
+            let scope = GenericScope::new(&[]);
+            let doc = build_doc(ctx, &expr, 0, 0, scope).expect("doc");
+            let got = render(&doc, RenderConfig::default());
+            // The chain body braces and breaks; the `Unit` arm has no trailing comma
+            // (dropped by the synthesized braces), while the fitting `Wrap` arm keeps
+            // its comma. Golden captured from `rustfmt --edition 2024`.
+            let expected = "match x {\n    MainMsg::Unit => {\n        ((argument_that_is_quite_long_enough_to_matter_x\n            + argument_that_is_quite_long_enough_to_matter_y)\n            + argument_that_is_quite_long_enough_to_matter_z)\n    }\n    MainMsg::Wrap(a) => a,\n}";
+            assert_eq!(
+                got, expected,
+                "\n--- got ---\n{got}\n--- want ---\n{expected}"
+            );
+        });
+    }
+
+    #[test]
+    fn match_seal_holds_over_arm_bodies() {
+        // SEAL: the Doc's normalized leaves equal the string emitter's normalized
+        // bytes across every arm shape (fits, wide-delimited, wide-control), because
+        // the synthesized braces are leaf-invisible and the trailing comma is a leaf
+        // matching the string emitter's per-arm comma.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let scope = GenericScope::new(&[]);
+            let wide_call = Expr::Call {
+                callee: Callee::Func(FuncId::from_raw(0)),
+                args: vec![var(&fx, 7), var(&fx, 8), var(&fx, 9)],
+                pin: CallPin::None,
+                on_form: OnFormKind::NotForm,
+            };
+            let wide_chain = binop(
+                BinOp::Add,
+                binop(BinOp::Add, var(&fx, 7), var(&fx, 8)),
+                var(&fx, 9),
+            );
+            let arms = vec![
+                ctor_arm(&fx, fx.unit_ctor, vec![], wide_call),
+                ctor_arm(&fx, fx.wrap_ctor, vec![Pat::Var(sym(&fx, 0))], wide_chain),
+                ctor_arm(
+                    &fx,
+                    fx.triple_ctor,
+                    vec![
+                        Pat::Var(sym(&fx, 0)),
+                        Pat::Var(sym(&fx, 1)),
+                        Pat::Var(sym(&fx, 2)),
+                    ],
+                    var(&fx, 0),
+                ),
+            ];
+            let expr = match_expr(&fx, arms);
+            let doc = build_doc(ctx, &expr, 0, 0, scope).expect("doc");
+            let string = emit_expr_at(ctx, &expr, 0, 0, scope).expect("string");
+            assert_eq!(
+                doc.normalized_leaves(),
+                whitespace_normalize(&string),
+                "\nSEAL mismatch\n  doc leaves : {}\n  emit string: {}",
+                doc.normalized_leaves(),
+                whitespace_normalize(&string),
+            );
         });
     }
 
