@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use ipe_ffi::driver::{CrateName, CrateSpec, FfiCache, InstalledCrate, VersionPin};
+use ipe_ffi::driver::{CrateName, CrateSpec, FeatureName, FfiCache, InstalledCrate, VersionPin};
 
 use crate::CliError;
 
@@ -958,7 +958,13 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
                 let raw = it
                     .next()
                     .ok_or(CliError::Usage("ipe add: --features needs a value"))?;
-                features.extend(raw.split(',').map(str::to_owned));
+                // Parse, don't validate: gate each feature name at the boundary
+                // before it can reach the emitted manifest's `features` array.
+                for feat in raw.split(',') {
+                    let gated = FeatureName::parse(feat)
+                        .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+                    features.push(gated.as_str().to_owned());
+                }
             }
             "--yes" => assume_yes = true,
             "--allow-build-scripts" => allow_build_scripts = true,
@@ -1076,7 +1082,16 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
                 VersionPin::parse(pin).map_err(|diag| CliError::UsageOwned(diag.to_string()))?,
             ),
         };
-        entries.push((CrateSpec::new(name, version), dep.features.clone()));
+        // Parse, don't validate: every feature name is gated at the boundary
+        // (it is later spliced into the emitted manifest's `features` array).
+        let mut features = Vec::with_capacity(dep.features.len());
+        for feat in &dep.features {
+            features.push(
+                FeatureName::parse(feat).map_err(|diag| CliError::UsageOwned(diag.to_string()))?,
+            );
+        }
+        let features: Vec<String> = features.iter().map(|f| f.as_str().to_owned()).collect();
+        entries.push((CrateSpec::new(name, version), features));
     }
     // ONE inspector invocation for the whole list: the cross-crate impl
     // index is process-global, so a trait method defined in one dependency

@@ -96,6 +96,44 @@ impl VersionPin {
     }
 }
 
+/// A Cargo feature name, gated before it reaches the emitted manifest.
+///
+/// It is spliced into a `features = [ … ]` array (a TOML string position). The
+/// charset admits Cargo's dependency-feature syntax (`dep:foo`, `foo/bar`,
+/// `dep?/feat`) while excluding every TOML-breaking character (quote, bracket,
+/// brace, backslash, control), so a name can never escape its string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeatureName(String);
+
+impl FeatureName {
+    /// Validate and wrap a feature name.
+    ///
+    /// # Errors
+    ///
+    /// `IPE-F4411` when the name is empty or carries a character outside
+    /// `[A-Za-z0-9_+./?:-]`.
+    pub fn parse(s: &str) -> Result<Self, Diagnostic> {
+        let legal = !s.is_empty()
+            && s.chars().all(|c| {
+                c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+' | '.' | '/' | '?' | ':')
+            });
+        if legal {
+            Ok(Self(s.to_owned()))
+        } else {
+            Err(Diagnostic::SourceRejected {
+                source: s.to_owned(),
+                defect: SourceDefect::FeatureNameIllegal { got: s.to_owned() },
+            })
+        }
+    }
+
+    /// The validated feature name.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// A crate plus an optional version pin, as `ipe add <crate>[@<version>]`
 /// accepts (mirrors `cargo add name@version`; a prerelease resolves only
 /// through an exact pin).
@@ -989,6 +1027,40 @@ mod tests {
                     CrateName::parse(bad),
                     Err(Diagnostic::SourceRejected {
                         defect: SourceDefect::CrateNameIllegal,
+                        ..
+                    })
+                ),
+                "{bad:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn feature_name_gate_rejects_toml_breakers() {
+        for ok in [
+            "serde",
+            "rt-multi-thread",
+            "dep:foo",
+            "foo/bar",
+            "dep?/feat",
+            "v1.2",
+        ] {
+            assert!(FeatureName::parse(ok).is_ok(), "{ok:?} must be accepted");
+        }
+        for bad in [
+            "",
+            "a\"]}\nmalicious = true",
+            "a\"",
+            "a]",
+            "a}",
+            "a b",
+            "a\\b",
+        ] {
+            assert!(
+                matches!(
+                    FeatureName::parse(bad),
+                    Err(Diagnostic::SourceRejected {
+                        defect: SourceDefect::FeatureNameIllegal { .. },
                         ..
                     })
                 ),
