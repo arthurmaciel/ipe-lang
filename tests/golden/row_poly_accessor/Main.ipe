@@ -1,0 +1,23 @@
+module Main exposing (main)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
+
+
+-- Proof-matrix row P8: the first-class accessor `.name` used as a value.
+-- `.name` is the getter `\r -> r.name` of type `{ r | name : a } -> a`; passed
+-- to `List.map` it reads the `name` field off each record. The desugared getter
+-- reuses the deferred-field-access + monomorphic-pinning path, so each record
+-- reaches the backend as the one concrete superset shape `{ name, age }` and
+-- resolves through the A7 exact-sorted-field-set struct registry — no generic,
+-- no unpinned record.
+type alias Person =
+    { name : String, age : Int }
+
+
+people : List Person
+people =
+    [ { name = "Ada", age = 36 }, { name = "Bo", age = 20 } ]
+
+
+main =
+    println (String.join ", " (List.map .name people))

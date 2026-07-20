@@ -1192,10 +1192,12 @@ impl<'a> Parser<'a> {
         let Tok::Ident(text) = &tok.kind else {
             return Err(Self::unexpected_token(&tok, &[Expected::Identifier]));
         };
-        // A synthesised parameter whose name is unlexable in source (leading `.`),
-        // so it can never collide with a user binding: the lambda body's
-        // `VarLocal` resolves to exactly this parameter.
-        let param_sym = self.interner.intern(".acc")?;
+        // The synthesised parameter. Its name need only be a valid emitted Rust
+        // identifier: the parameter is the innermost binder of this lambda, so the
+        // body's `VarLocal` resolves to it by lexical scoping even if a user
+        // binding of the same name exists further out (which the body never
+        // references anyway).
+        let param_sym = self.interner.intern("ipe_accessor_arg")?;
         let param = Located::new(dot_span, Pattern_::PVar(param_sym));
         let mut body = Located::new(dot_span, Expr_::VarLocal(param_sym));
         for (seg_count, seg) in (0_u32..).zip(text.split('.')) {
