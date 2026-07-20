@@ -219,6 +219,12 @@ const COMMANDS: &[Command] = &[
         options: &[],
     },
     Command {
+        name: "capabilities",
+        summary: "Report the security capabilities a program exercises, inferred from its code.",
+        args: "[<entry.ipe|project-dir|ipe.toml>]",
+        options: &[],
+    },
+    Command {
         name: "lsp",
         summary: "Run the language server over stdio.",
         args: "",
@@ -244,7 +250,7 @@ const SECTIONS: &[Section] = &[
     },
     Section {
         title: "Tools",
-        commands: &["explain", "lsp", "version"],
+        commands: &["explain", "capabilities", "lsp", "version"],
     },
 ];
 
