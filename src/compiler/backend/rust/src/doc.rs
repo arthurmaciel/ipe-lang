@@ -130,6 +130,41 @@ pub enum Doc {
         /// delimited-tail expression (`false`) that breaks inside its own brackets.
         control: bool,
     },
+    /// An assignment whose right-hand side breaks to its own line when the
+    /// `prefix RHS` overflows — `rustfmt`'s dedicated `let name: TYPE = RHS`
+    /// layout axis, distinct from breaking into the RHS's own delimiters. The
+    /// `prefix` carries the `let name: TYPE = ` tokens (up to and including the
+    /// `= `); `rhs` is the value document. Three layouts, in `rustfmt`'s order:
+    ///
+    ///   * FLAT — `prefix RHS` plus the `trailer` (the following `;` this
+    ///     assignment is a statement of, in columns) fits the remaining width:
+    ///     rendered on one line, `prefix` then the flat `rhs`.
+    ///   * RHS-BREAK — the same-line form overflows, but the flat `rhs` plus the
+    ///     `trailer` fits at one indent step past the block indent: `prefix` on its
+    ///     line, then a newline and the flat `rhs` at `indent + 4`. The break is
+    ///     pure whitespace, so it is INVISIBLE to the SEAL (like [`Doc::HardLine`])
+    ///     — the string emitter writes `prefix RHS` with a single separating space,
+    ///     which normalizes equal.
+    ///   * DELIMITER-BREAK — even at `indent + 4` the flat `rhs` plus the `trailer`
+    ///     overflows: the `rhs` stays glued to `prefix` and breaks into its own
+    ///     delimiters (rendered non-flat at the block indent), `rustfmt`'s fallback.
+    ///
+    /// `trailer` is the width `rustfmt` reserves after the `rhs` on whichever line
+    /// it lands — the trailing `;` when this assignment is a block statement (the
+    /// only shape the emitter builds), so `trailer == 1`. It is carried explicitly
+    /// rather than assumed so the fit decision is a function of the node alone.
+    ///
+    /// The whole assignment decides its layout independently of any enclosing
+    /// group (like [`Doc::Group`] / [`Doc::BraceBody`]) — `rustfmt` re-tests the
+    /// RHS against the width on its own line.
+    Assign {
+        /// The `let name: TYPE = ` tokens, up to and including the `= `.
+        prefix: Box<Self>,
+        /// The right-hand-side value document.
+        rhs: Box<Self>,
+        /// Columns reserved after the `rhs` on its line (the trailing `;`).
+        trailer: usize,
+    },
     /// A left-associative same-precedence binary-operator run. The renderer lays
     /// this out with rustfmt's chain mechanism: line-1 packs the maximal
     /// left-nested prefix that fits the width, then every remaining operator
@@ -200,6 +235,17 @@ impl Doc {
         }
     }
 
+    /// An assignment whose `rhs` breaks to its own line when `prefix rhs`
+    /// overflows. `trailer` is the width reserved after the `rhs` (a trailing
+    /// `;` for a block-statement assignment is `1`). See [`Doc::Assign`].
+    pub fn assign(prefix: Self, rhs: Self, trailer: usize) -> Self {
+        Self::Assign {
+            prefix: Box::new(prefix),
+            rhs: Box::new(rhs),
+            trailer,
+        }
+    }
+
     /// Append every text leaf of this document, in order, to `out`. This is the
     /// SEAL oracle: `concat(leaves(doc))` whitespace-normalizes to the legacy
     /// emitter's string. Break candidates ([`Doc::Line`] / [`Doc::HardLine`])
@@ -234,6 +280,13 @@ impl Doc {
             Self::MatchArmTail { body, .. } => {
                 body.collect_leaves(out);
                 out.push(',');
+            }
+            // The break after `= ` is pure whitespace (SEAL-invisible, like a
+            // `HardLine`): the string emitter writes `prefix rhs` with a single
+            // separating space, which normalizes equal to either broken layout.
+            Self::Assign { prefix, rhs, .. } => {
+                prefix.collect_leaves(out);
+                rhs.collect_leaves(out);
             }
             Self::Chain { operands } => {
                 for (i, op) in operands.iter().enumerate() {
