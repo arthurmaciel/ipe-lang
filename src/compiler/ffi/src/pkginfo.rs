@@ -427,15 +427,26 @@ impl PackageName {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CrateVersion(String);
 
+/// Whether `c` may appear in a crate-version requirement value.
+///
+/// The single semver-value charset `[0-9A-Za-z.*=<>~^,+ -]`, shared by both
+/// version newtypes: [`CrateVersion`] (the wire-decode boundary) and
+/// [`crate::driver::VersionPin`] (the CLI `name@version` boundary). A version
+/// is spliced into a TOML value position in the emitted manifest; every
+/// character outside this set (quote, bracket, brace, backslash, control, …)
+/// is excluded so a value can never close its string and inject manifest
+/// content.
+pub(crate) const fn version_char_is_legal(c: char) -> bool {
+    c.is_ascii_alphanumeric()
+        || matches!(
+            c,
+            '.' | '-' | '+' | '*' | '=' | '>' | '<' | '~' | '^' | ',' | ' '
+        )
+}
+
 impl CrateVersion {
     fn parse(s: &str) -> Result<Self, crate::diag::WireDefect> {
-        let legal = s.chars().all(|c| {
-            c.is_ascii_alphanumeric()
-                || matches!(
-                    c,
-                    '.' | '-' | '+' | '*' | '=' | '>' | '<' | '~' | '^' | ',' | ' '
-                )
-        });
+        let legal = s.chars().all(version_char_is_legal);
         if legal {
             Ok(Self(s.to_owned()))
         } else {
