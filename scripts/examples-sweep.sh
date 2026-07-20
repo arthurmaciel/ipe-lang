@@ -313,6 +313,19 @@ for d in "${EXAMPLES[@]}"; do
   [ -f "$d/src/Main.ipe" ] || continue
   DCUR="$d"
   shape="$(example_shape "$d")"
+
+  # A `[rust.dependencies]` example needs a sandboxed `ipe install` to generate
+  # its shim-free Rust-SDK bindings (into a gitignored .ipe/cache/ffi/rust) before
+  # `ipe build` can resolve its `import Rust.<Crate>` modules. The per-commit
+  # sweep does not run that install (build-scripts / network / RCE-sandbox), so
+  # without a pre-populated cache this is an install prerequisite, not a compiler
+  # defect: a SKIP row, never a false RED.
+  if needs_ffi_install "$d"; then
+    printf '%s\t%s\t%s\t%s\n' "$n" "ok" "skip" \
+      "needs FFI install (ipe install --allow-build-scripts) to generate Rust.* bindings — not run in the per-commit sweep" >>"$ROWS"
+    continue
+  fi
+
   ( cd "$d" && rm -rf out .ipe .ipecache .ipedeps )
 
   build_cell=""; run_cell="—"; note=""
