@@ -174,41 +174,32 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "add",
-        summary: "Add a Rust crate as a foreign-function dependency.",
-        args: "<crate-name>[@<version>]",
-        options: &[
-            Opt {
-                flag: "[--features <a,b>]",
-                desc: "enable the listed crate features",
-            },
-            Opt {
-                flag: "[--yes]",
-                desc: "skip the trust-summary confirmation prompt",
-            },
-            Opt {
-                flag: "[--allow-build-scripts]",
-                desc: "permit the crate's build scripts to run",
-            },
-        ],
-    },
-    Command {
-        name: "remove",
-        summary: "Remove a foreign-function crate dependency.",
-        args: "<crate-name>",
+        summary: "Add an Ipê package dependency (resolution ships with the index).",
+        args: "<package>[@<version>]",
         options: &[],
     },
     Command {
-        name: "install",
-        summary: "(Re)inspect every foreign-function crate in the project's ipe.toml.",
-        args: "",
+        name: "remove",
+        summary: "Remove an Ipê package dependency.",
+        args: "<package>",
+        options: &[],
+    },
+    Command {
+        name: "rust",
+        summary: "Manage Rust crates as foreign-function dependencies (add / remove / install).",
+        args: "<add|remove|install> [<args>...]",
         options: &[
             Opt {
+                flag: "[--features <a,b>]",
+                desc: "add: enable the listed crate features",
+            },
+            Opt {
                 flag: "[--yes]",
-                desc: "skip each trust-summary confirmation prompt",
+                desc: "add/install: skip the trust-summary confirmation prompt",
             },
             Opt {
                 flag: "[--allow-build-scripts]",
-                desc: "permit the crates' build scripts to run",
+                desc: "add/install: permit the crates' build scripts to run",
             },
         ],
     },
@@ -245,8 +236,12 @@ const SECTIONS: &[Section] = &[
         commands: &["init", "build", "run", "watch", "fix", "fmt"],
     },
     Section {
+        title: "Package authoring",
+        commands: &["add", "remove"],
+    },
+    Section {
         title: "Foreign-function interface (FFI)",
-        commands: &["add", "remove", "install"],
+        commands: &["rust"],
     },
     Section {
         title: "Tools",

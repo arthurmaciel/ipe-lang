@@ -44,6 +44,7 @@ Prefer building from source? `git clone https://github.com/arthurmaciel/ipe-lang
 - [Features](#features)
 - [Code shapes](#code-shapes)
 - [Capabilities](#capabilities)
+- [Dependencies](#dependencies)
 - [Editor setup (LSP)](#editor-setup-lsp)
 - [Static compilation](#static-compilation)
 - [Support](#support)
@@ -99,6 +100,38 @@ The set is generated, not hand-written, and cannot drift: a program that reaches
 a new effectful kernel gains the matching capability automatically. `native-ffi`
 appears whenever the program crosses into `Rust.` code, which is opaque to the
 inference and the one place effects can escape the model.
+
+## Dependencies
+
+A project declares its dependencies in `ipe.toml`. Three sections, each optional:
+
+```toml
+[dependencies]              # Ipê packages
+http  = "^1.2"              # from the package index, by semver requirement
+mylib = { git = "https://example.com/mylib.git", rev = "abc123" }
+local = { path = "../local" }
+
+[rust.dependencies]         # Rust crates, bound as a foreign-function interface
+uuid = "1.10"
+
+[capabilities]              # the capabilities you declare the program exercises
+declared = ["network", "clock"]
+```
+
+**Rust crates** are managed by the `ipe rust` command group:
+
+```
+$ ipe rust add uuid@1.10        # inspect and cache a crate
+$ ipe rust remove uuid          # drop it
+$ ipe rust install              # (re)inspect every [rust.dependencies] crate
+```
+
+Each crate is inspected inside a sandbox before it is trusted, and its
+`Rust.<Crate>` interface is generated for you — no hand-written bindings.
+
+**Ipê packages** are managed by `ipe add` / `ipe remove`. Package resolution
+arrives with the package index; until then `ipe add <package>` reports that and
+exits non-zero, so a script never mistakes it for a completed install.
 
 ## Editor setup (LSP)
 

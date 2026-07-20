@@ -60,6 +60,17 @@ pub struct ProjectManifest {
     /// `optLevel`) — `WasmConfig::default()` (mode "off") when the section is
     /// absent.
     pub wasm: WasmConfig,
+    /// The `[dependencies]` section: Ipê packages by name. Empty when the
+    /// section is absent (back-compat). Resolution (fetch / download / lockfile)
+    /// is SP3; this is the parsed schema only.
+    pub dependencies: BTreeMap<String, IpeDep>,
+    /// The `[rust.dependencies]` section: crates.io crates bound as
+    /// foreign-function dependencies. Empty when the section is absent.
+    pub rust_dependencies: BTreeMap<String, RustDep>,
+    /// The `[capabilities] declared = […]` set: the security capabilities the
+    /// author declares the program exercises. Empty when the section is absent.
+    /// Verifying this against the compiler's inferred set is SP4.
+    pub capabilities: BTreeSet<Capability>,
 }
 
 /// `[wasm]` `ipe.toml` section (spec: `docs/architecture/wasm-target.md` Q6
@@ -134,16 +145,17 @@ fn validate_public_env(names: &[String]) -> Result<(), CliError> {
     Ok(())
 }
 
-/// Parse a TOML string array `["a", "b", "c"]` — the one array shape
-/// `[wasm] publicEnv` needs. Each element must be a double-quoted string;
-/// whitespace around commas/brackets is tolerated. Not a general TOML array
-/// parser (this file's `ipe.toml` reader is a deliberately minimal line
-/// parser, not a full TOML implementation — see the module doc).
-fn parse_string_array(raw: &str) -> Result<Vec<String>, CliError> {
+/// Parse a TOML string array `["a", "b", "c"]` — the one array shape both
+/// `[wasm] publicEnv` and `[capabilities] declared` need. `context` names the
+/// section in any error (`"[wasm] publicEnv"`). Each element must be a
+/// double-quoted string; whitespace around commas/brackets is tolerated. Not a
+/// general TOML array parser (this file's `ipe.toml` reader is a deliberately
+/// minimal line parser, not a full TOML implementation — see the module doc).
+fn parse_string_array(context: &str, raw: &str) -> Result<Vec<String>, CliError> {
     let trimmed = raw.trim();
     let Some(inner) = trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']')) else {
         return Err(CliError::UsageOwned(format!(
-            "ipe.toml: [wasm] publicEnv must be a `[\"NAME\", …]` array, got: {raw}"
+            "ipe.toml: {context} must be a `[\"NAME\", …]` array, got: {raw}"
         )));
     };
     let inner = inner.trim();
@@ -157,7 +169,7 @@ fn parse_string_array(raw: &str) -> Result<Vec<String>, CliError> {
             let unquoted = item.strip_prefix('"').and_then(|s| s.strip_suffix('"'));
             unquoted.map(str::to_owned).ok_or_else(|| {
                 CliError::UsageOwned(format!(
-                    "ipe.toml: [wasm] publicEnv entry must be a quoted string, got: {item}"
+                    "ipe.toml: {context} entry must be a quoted string, got: {item}"
                 ))
             })
         })
@@ -185,6 +197,45 @@ pub struct ImportEdge {
 /// for the driver and existing callers.
 pub use ipe_db::CycleError;
 
+/// The capability vocabulary, re-exported from the kernel registry so the
+/// manifest's `[capabilities]` set and the compiler's inferred set are the same
+/// type.
+pub use ipe_ir::Capability;
+
+/// One `ipe.toml [dependencies]` entry: an Ipê package pulled from the index by
+/// version, or one of the two escapes (a git repo, a local path).
+///
+/// Modelled as a sum, not three optional fields, so an entry can never be both a
+/// git and a path dependency at once (make-invalid-states-unrepresentable). The
+/// index case carries a parsed [`semver::VersionReq`], so a malformed version is
+/// a manifest-parse error, never a resolution-time surprise.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IpeDep {
+    /// Resolved from the package index by a semver requirement (`http = "^1.2"`).
+    Index(semver::VersionReq),
+    /// A git repository escape (`{ git = "…", rev = "…" }`); `rev` is optional.
+    Git {
+        /// The repository URL.
+        url: String,
+        /// A pinned revision (commit / tag / branch), when given.
+        rev: Option<String>,
+    },
+    /// A local path escape (`{ path = "../local" }`), relative to the manifest.
+    Path(PathBuf),
+}
+
+/// One `ipe.toml [rust.dependencies]` entry: a crates.io crate bound as a
+/// foreign-function dependency, with its version requirement and feature list.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct RustDep {
+    /// The version requirement string (empty when unspecified). Left as the raw
+    /// string the crate ecosystem's own resolver consumes, not a parsed
+    /// [`semver::VersionReq`] — it is handed verbatim to cargo.
+    pub version: String,
+    /// The requested crate features (empty when unspecified).
+    pub features: Vec<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Manifest parsing
 // ---------------------------------------------------------------------------
@@ -209,61 +260,49 @@ fn parse_db_driver(s: &str) -> Result<ipe_backend_rust::DbDriver, CliError> {
     }
 }
 
-/// Parse a `ipe.toml` file and return a [`ProjectManifest`].
-///
-/// The format recognised:
-/// ```toml
-/// [project]
-/// name = "my-app"
-///
-/// [database]
-/// driver = "sqlite"   # or "postgres" — defaults to "sqlite" when absent
-/// ```
-/// Lines that start with `#` are comments and are ignored. All other lines
-/// outside `[project]` / `[database]` are ignored (forward-compatible). Within
-/// `[project]`, only `name` is extracted; within `[database]`, only `driver`
-/// is extracted; other keys are ignored.
+/// The raw per-section values a single line-scan of a `ipe.toml` collects,
+/// before they are turned into the typed [`ProjectManifest`] fields. Splitting
+/// the scan out keeps [`parse_manifest`] a straight assembly of typed values.
+#[derive(Default)]
+struct RawManifest {
+    name: Option<String>,
+    src_rel: Option<String>,
+    driver_str: Option<String>,
+    rust_static: Option<String>,
+    rust_target: Option<String>,
+    rust_allocator: Option<String>,
+    rust_allow_slow: Option<String>,
+    wasm_mode: Option<String>,
+    wasm_entry: Option<String>,
+    wasm_mount: Option<String>,
+    wasm_public_env: Vec<String>,
+    wasm_opt_level: Option<String>,
+    dependencies: BTreeMap<String, IpeDep>,
+    rust_dependencies: BTreeMap<String, RustDep>,
+    capabilities: BTreeSet<Capability>,
+}
+
+/// Scan a `ipe.toml`'s lines once, collecting each recognised section's raw
+/// values. `name` may sit at the top level (Ipê's own examples) or under
+/// `[project]`; unrecognised sections and keys are ignored (forward-compatible).
 ///
 /// # Errors
-/// [`CliError::Io`] if the file cannot be read; [`CliError::Usage`] if the
-/// manifest is malformed or the `src/` directory does not exist;
-/// [`CliError::UsageOwned`] if `[database] driver` names an unsupported value.
-pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError> {
-    let root = manifest_path
-        .parent()
-        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-
-    let text = fs::read_to_string(manifest_path).map_err(|e| CliError::Io {
-        path: manifest_path.to_path_buf(),
-        source: e,
-    })?;
-
-    // `ipe.toml` schema: `name` may sit at the top level (Ipe's own examples) or
-    // under `[project]`; the source root comes from `[source] root = "…"`,
-    // defaulting to `src`; the driver comes from `[database] driver = "…"`,
-    // defaulting to sqlite. `section` is the empty string at the top level.
+/// [`CliError::UsageOwned`] when a `[dependencies]`, `[capabilities]`, or
+/// `[wasm] publicEnv` value is malformed.
+fn scan_raw_manifest(text: &str) -> Result<RawManifest, CliError> {
+    let mut raw = RawManifest::default();
     let mut section = "";
-    let mut name: Option<String> = None;
-    let mut src_rel: Option<String> = None;
-    let mut driver_str: Option<String> = None;
-    let mut rust_static: Option<String> = None;
-    let mut rust_target: Option<String> = None;
-    let mut rust_allocator: Option<String> = None;
-    let mut rust_allow_slow: Option<String> = None;
-    let mut wasm_mode: Option<String> = None;
-    let mut wasm_entry: Option<String> = None;
-    let mut wasm_mount: Option<String> = None;
-    let mut wasm_public_env: Vec<String> = Vec::new();
-    let mut wasm_opt_level: Option<String> = None;
-
-    for raw_line in text.lines() {
-        let line = raw_line.trim();
+    for line in text.lines().map(str::trim) {
         if line.starts_with('#') || line.is_empty() {
             continue;
         }
         if line.starts_with('[') {
             section = match line {
-                "[project]" | "[source]" | "[database]" | "[rust]" | "[wasm]" => line,
+                "[project]" | "[source]" | "[database]" | "[rust]" | "[wasm]"
+                | "[dependencies]" | "[capabilities]" => line,
+                // Both spellings of the FFI crate table are accepted, the same
+                // as the `ipe rust install` reader.
+                "[rust.dependencies]" | "[\"rust.dependencies\"]" => "[rust.dependencies]",
                 _ => "other",
             };
             continue;
@@ -275,41 +314,100 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
         let raw_val = val.trim();
         let val = raw_val.trim_matches('"');
         match (section, key) {
-            ("" | "[project]", "name") => name = Some(val.to_owned()),
-            ("[source]", "root") => src_rel = Some(val.to_owned()),
-            ("[database]", "driver") => driver_str = Some(val.to_owned()),
-            ("[rust]", "static") => rust_static = Some(val.to_owned()),
-            ("[rust]", "target") => rust_target = Some(val.to_owned()),
-            ("[rust]", "allocator") => rust_allocator = Some(val.to_owned()),
-            ("[rust]", "allowSlowAllocator") => rust_allow_slow = Some(val.to_owned()),
-            ("[wasm]", "mode") => wasm_mode = Some(val.to_owned()),
-            ("[wasm]", "entry") => wasm_entry = Some(val.to_owned()),
-            ("[wasm]", "mount") => wasm_mount = Some(val.to_owned()),
-            ("[wasm]", "publicEnv") => wasm_public_env = parse_string_array(raw_val)?,
-            ("[wasm]", "optLevel") => wasm_opt_level = Some(val.to_owned()),
+            ("" | "[project]", "name") => raw.name = Some(val.to_owned()),
+            ("[source]", "root") => raw.src_rel = Some(val.to_owned()),
+            ("[database]", "driver") => raw.driver_str = Some(val.to_owned()),
+            ("[rust]", "static") => raw.rust_static = Some(val.to_owned()),
+            ("[rust]", "target") => raw.rust_target = Some(val.to_owned()),
+            ("[rust]", "allocator") => raw.rust_allocator = Some(val.to_owned()),
+            ("[rust]", "allowSlowAllocator") => raw.rust_allow_slow = Some(val.to_owned()),
+            ("[wasm]", "mode") => raw.wasm_mode = Some(val.to_owned()),
+            ("[wasm]", "entry") => raw.wasm_entry = Some(val.to_owned()),
+            ("[wasm]", "mount") => raw.wasm_mount = Some(val.to_owned()),
+            ("[wasm]", "publicEnv") => {
+                raw.wasm_public_env = parse_string_array("[wasm] publicEnv", raw_val)?;
+            }
+            ("[wasm]", "optLevel") => raw.wasm_opt_level = Some(val.to_owned()),
+            ("[dependencies]", dep) => {
+                raw.dependencies
+                    .insert(dep.to_owned(), parse_ipe_dep(dep, raw_val)?);
+            }
+            ("[rust.dependencies]", dep) => {
+                raw.rust_dependencies
+                    .insert(dep.to_owned(), parse_rust_dep(raw_val));
+            }
+            ("[capabilities]", "declared") => {
+                raw.capabilities = parse_capabilities(raw_val)?;
+            }
             _ => {}
         }
     }
+    Ok(raw)
+}
 
-    validate_public_env(&wasm_public_env)?;
+/// Parse a `ipe.toml` file and return a [`ProjectManifest`].
+///
+/// The format recognised:
+/// ```toml
+/// [project]
+/// name = "my-app"
+///
+/// [database]
+/// driver = "sqlite"   # or "postgres" — defaults to "sqlite" when absent
+///
+/// [dependencies]              # Ipê packages (SP3 resolves them)
+/// http  = "^1.2"              # from the index, by semver requirement
+/// mylib = { git = "…", rev = "…" }
+/// local = { path = "../local" }
+///
+/// [rust.dependencies]         # crates.io crates bound via `ipe rust`
+/// uuid = "1.10"
+///
+/// [capabilities]              # the author-declared capability set
+/// declared = ["network", "clock"]
+/// ```
+/// Lines that start with `#` are comments and are ignored. Unrecognised
+/// sections and keys are ignored (forward-compatible). Every section is
+/// optional; absent sections yield empty maps / sets.
+///
+/// # Errors
+/// [`CliError::Io`] if the file cannot be read; [`CliError::Usage`] if the
+/// manifest is malformed or the `src/` directory does not exist;
+/// [`CliError::UsageOwned`] if `[database] driver` names an unsupported value, a
+/// dependency version requirement is malformed, or a capability is unknown.
+pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError> {
+    let root = manifest_path
+        .parent()
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+
+    let text = fs::read_to_string(manifest_path).map_err(|e| CliError::Io {
+        path: manifest_path.to_path_buf(),
+        source: e,
+    })?;
+
+    let raw = scan_raw_manifest(&text)?;
+
+    validate_public_env(&raw.wasm_public_env)?;
     let wasm = WasmConfig {
-        mode: wasm_mode,
-        entry: wasm_entry,
-        mount: wasm_mount,
-        public_env: wasm_public_env,
-        opt_level: wasm_opt_level,
+        mode: raw.wasm_mode,
+        entry: raw.wasm_entry,
+        mount: raw.wasm_mount,
+        public_env: raw.wasm_public_env,
+        opt_level: raw.wasm_opt_level,
     };
 
-    let name = name.ok_or(CliError::Usage("ipe.toml: missing a `name = \"…\"` entry"))?;
+    let name = raw
+        .name
+        .ok_or(CliError::Usage("ipe.toml: missing a `name = \"…\"` entry"))?;
 
-    let src_root = root.join(src_rel.as_deref().unwrap_or("src"));
+    let src_root = root.join(raw.src_rel.as_deref().unwrap_or("src"));
     if !src_root.is_dir() {
         return Err(CliError::Usage(
             "ipe.toml: the source root directory does not exist",
         ));
     }
 
-    let driver = match driver_str {
+    let driver = match raw.driver_str {
         Some(s) => parse_db_driver(&s)?,
         None => ipe_backend_rust::DbDriver::Sqlite,
     };
@@ -318,14 +416,17 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
     // here, so a typo'd allocator or bool is a hard error at manifest-parse
     // time — the same posture as `[database] driver` above.
     let static_request = crate::build_plan::StaticRequestLayer {
-        static_build: rust_static
+        static_build: raw
+            .rust_static
             .map(|v| crate::build_plan::parse_bool("ipe.toml: [rust] static", &v))
             .transpose()?,
-        target: rust_target,
-        allocator: rust_allocator
+        target: raw.rust_target,
+        allocator: raw
+            .rust_allocator
             .map(|v| crate::build_plan::AllocatorChoice::parse(&v))
             .transpose()?,
-        allow_slow_allocator: rust_allow_slow
+        allow_slow_allocator: raw
+            .rust_allow_slow
             .map(|v| crate::build_plan::parse_bool("ipe.toml: [rust] allowSlowAllocator", &v))
             .transpose()?,
     };
@@ -337,7 +438,142 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
         driver,
         static_request,
         wasm,
+        dependencies: raw.dependencies,
+        rust_dependencies: raw.rust_dependencies,
+        capabilities: raw.capabilities,
     })
+}
+
+/// Parse one `[dependencies]` value into a typed [`IpeDep`]. A bare string is a
+/// semver requirement (index dependency); an inline table with a `git` or `path`
+/// key is the corresponding escape.
+///
+/// Parse, don't validate: an index version requirement is turned into a
+/// [`semver::VersionReq`] here, so a malformed version is a manifest-parse error
+/// naming `dep`, never a resolution-time surprise.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] on a malformed version requirement, an inline table
+/// missing both `git` and `path`, or an unrecognised value shape.
+fn parse_ipe_dep(dep: &str, raw_val: &str) -> Result<IpeDep, CliError> {
+    if let Some(body) = raw_val
+        .strip_prefix('{')
+        .and_then(|rest| rest.strip_suffix('}'))
+    {
+        if let Some(url) = inline_table_string(body, "git") {
+            let rev = inline_table_string(body, "rev");
+            return Ok(IpeDep::Git { url, rev });
+        }
+        if let Some(path) = inline_table_string(body, "path") {
+            return Ok(IpeDep::Path(PathBuf::from(path)));
+        }
+        return Err(CliError::UsageOwned(format!(
+            "ipe.toml: [dependencies] {dep} inline table must carry a `git` or `path` key"
+        )));
+    }
+    let version = raw_val.trim_matches('"');
+    let req = version.parse::<semver::VersionReq>().map_err(|e| {
+        CliError::UsageOwned(format!(
+            "ipe.toml: [dependencies] {dep} = {version:?} is not a valid version requirement: {e}"
+        ))
+    })?;
+    Ok(IpeDep::Index(req))
+}
+
+/// Parse one `[rust.dependencies]` value into a [`RustDep`]. A bare string is a
+/// version requirement; an inline table carries an optional `version` and
+/// `features` list.
+fn parse_rust_dep(raw_val: &str) -> RustDep {
+    let inline_body = raw_val
+        .strip_prefix('{')
+        .and_then(|rest| rest.strip_suffix('}'));
+    inline_body.map_or_else(
+        || RustDep {
+            version: raw_val.trim_matches('"').to_owned(),
+            features: Vec::new(),
+        },
+        |body| RustDep {
+            version: inline_table_string(body, "version").unwrap_or_default(),
+            features: inline_table_string_array(body, "features"),
+        },
+    )
+}
+
+/// Parse the `[capabilities] declared = ["…", …]` array into a typed set, via
+/// [`Capability::from_str`]. An unknown capability name is a loud, named error —
+/// a typo can never become a silently-dropped capability the sandbox then fails
+/// to enforce.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] naming an unrecognised capability, or a malformed
+/// array.
+fn parse_capabilities(raw_val: &str) -> Result<BTreeSet<Capability>, CliError> {
+    let names = parse_string_array("[capabilities] declared", raw_val)?;
+    let mut set = BTreeSet::new();
+    for name in names {
+        let cap = name
+            .parse::<Capability>()
+            .map_err(|e| CliError::UsageOwned(format!("ipe.toml: [capabilities] {e}")))?;
+        set.insert(cap);
+    }
+    Ok(set)
+}
+
+/// Read `key = "value"` out of an inline-table body (`git = "…"`, `version =
+/// "…"`). Whole-word key match, so `version` never matches inside a longer key.
+fn inline_table_string(body: &str, key: &str) -> Option<String> {
+    let at = find_inline_key(body, key)?;
+    let rest = body.get(at..)?;
+    let (_, after_eq) = rest.split_once('=')?;
+    let after_quote = after_eq.trim_start().strip_prefix('"')?;
+    after_quote.split_once('"').map(|(v, _)| v.to_owned())
+}
+
+/// Read `key = ["a", "b"]` out of an inline-table body.
+fn inline_table_string_array(body: &str, key: &str) -> Vec<String> {
+    let Some(at) = find_inline_key(body, key) else {
+        return Vec::new();
+    };
+    let Some(rest) = body.get(at..) else {
+        return Vec::new();
+    };
+    let Some((_, after_eq)) = rest.split_once('=') else {
+        return Vec::new();
+    };
+    let Some(after_bracket) = after_eq.trim_start().strip_prefix('[') else {
+        return Vec::new();
+    };
+    let Some((inner, _)) = after_bracket.split_once(']') else {
+        return Vec::new();
+    };
+    inner
+        .split(',')
+        .map(|s| s.trim().trim_matches('"').to_owned())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// The byte offset of `key` as a whole word in an inline-table body, so a short
+/// key (`rev`) never matches inside a longer one.
+fn find_inline_key(body: &str, key: &str) -> Option<usize> {
+    let bytes = body.as_bytes();
+    let mut from = 0;
+    while let Some(rel) = body.get(from..)?.find(key) {
+        let at = from + rel;
+        let before_ok = at == 0
+            || bytes
+                .get(at.wrapping_sub(1))
+                .is_none_or(|b| !b.is_ascii_alphanumeric() && *b != b'_');
+        let after = at + key.len();
+        let after_ok = bytes
+            .get(after)
+            .is_none_or(|b| !b.is_ascii_alphanumeric() && *b != b'_');
+        if before_ok && after_ok {
+            return Some(at);
+        }
+        from = at + key.len();
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -918,5 +1154,96 @@ import String
             "[wasm]\npublicEnv = [\"API_BASE_URL\"]\n",
         );
         parse_manifest(&toml_path).expect("an ordinary config name must parse cleanly");
+    }
+
+    #[test]
+    fn absent_sections_leave_the_new_maps_empty() {
+        // Back-compat: a manifest with none of the SP2 sections parses with
+        // empty dependency maps and capability set.
+        let toml_path = write_manifest("sp2_absent", "");
+        let m = parse_manifest(&toml_path).expect("bare manifest must parse");
+        assert!(m.dependencies.is_empty());
+        assert!(m.rust_dependencies.is_empty());
+        assert!(m.capabilities.is_empty());
+        let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
+    }
+
+    #[test]
+    fn parses_index_git_and_path_dependencies() {
+        let section = "[dependencies]\n\
+             http = \"^1.2\"\n\
+             mylib = { git = \"https://example.com/mylib.git\", rev = \"abc123\" }\n\
+             local = { path = \"../local\" }\n";
+        let toml_path = write_manifest("sp2_deps", section);
+        let m = parse_manifest(&toml_path).expect("dependency section must parse");
+        let http = m.dependencies.get("http");
+        assert!(
+            matches!(http, Some(IpeDep::Index(req)) if req.matches(&semver::Version::new(1, 5, 0))),
+            "http should be an Index dep admitting 1.5, got {http:?}"
+        );
+        assert_eq!(
+            m.dependencies.get("mylib"),
+            Some(&IpeDep::Git {
+                url: "https://example.com/mylib.git".to_owned(),
+                rev: Some("abc123".to_owned()),
+            })
+        );
+        assert_eq!(
+            m.dependencies.get("local"),
+            Some(&IpeDep::Path(PathBuf::from("../local")))
+        );
+        let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
+    }
+
+    #[test]
+    fn parses_rust_dependencies_bare_and_inline_table() {
+        let section = "[rust.dependencies]\n\
+             uuid = \"1.10\"\n\
+             stripe = { version = \"=1.0.0\", features = [\"blocking\", \"webhooks\"] }\n";
+        let toml_path = write_manifest("sp2_rust_deps", section);
+        let m = parse_manifest(&toml_path).expect("rust.dependencies must parse");
+        let uuid = m.rust_dependencies.get("uuid").expect("uuid present");
+        assert_eq!(uuid.version, "1.10");
+        assert!(uuid.features.is_empty());
+        let stripe = m.rust_dependencies.get("stripe").expect("stripe present");
+        assert_eq!(stripe.version, "=1.0.0");
+        assert_eq!(stripe.features, vec!["blocking", "webhooks"]);
+        let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
+    }
+
+    #[test]
+    fn parses_capabilities_into_a_typed_set() {
+        let toml_path = write_manifest(
+            "sp2_caps",
+            "[capabilities]\ndeclared = [\"network\", \"clock\"]\n",
+        );
+        let m = parse_manifest(&toml_path).expect("capabilities must parse");
+        assert_eq!(
+            m.capabilities,
+            BTreeSet::from([Capability::Network, Capability::Clock])
+        );
+        let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
+    }
+
+    #[test]
+    fn an_unknown_capability_is_a_named_error() {
+        let toml_path = write_manifest("sp2_bad_cap", "[capabilities]\ndeclared = [\"netwrok\"]\n");
+        let err = parse_manifest(&toml_path).expect_err("a typo'd capability must be rejected");
+        assert!(
+            err.to_string().contains("netwrok"),
+            "the error must name the bad capability: {err}"
+        );
+        let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
+    }
+
+    #[test]
+    fn a_malformed_version_req_is_a_named_error() {
+        let toml_path = write_manifest("sp2_bad_ver", "[dependencies]\nhttp = \"not a version\"\n");
+        let err = parse_manifest(&toml_path).expect_err("a malformed version must be rejected");
+        assert!(
+            err.to_string().contains("http"),
+            "the error must name the offending dependency: {err}"
+        );
+        let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
     }
 }

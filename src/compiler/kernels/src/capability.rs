@@ -73,6 +73,47 @@ impl Capability {
     }
 }
 
+/// Parse a capability from its wire name, the inverse of [`Capability::as_str`].
+/// An unrecognised name is [`UnknownCapability`] rather than a silent drop — a
+/// typo'd `[capabilities]` entry in a manifest must be a loud rejection, never a
+/// capability the sandbox then fails to enforce.
+impl std::str::FromStr for Capability {
+    type Err = UnknownCapability;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        match name {
+            "network" => Ok(Self::Network),
+            "filesystem" => Ok(Self::Filesystem),
+            "database" => Ok(Self::Database),
+            "env" => Ok(Self::Env),
+            "subprocess" => Ok(Self::Subprocess),
+            "clock" => Ok(Self::Clock),
+            "random" => Ok(Self::Random),
+            "native-ffi" => Ok(Self::NativeFfi),
+            other => Err(UnknownCapability(other.to_owned())),
+        }
+    }
+}
+
+/// An unrecognised capability wire name, from [`Capability`]'s
+/// [`FromStr`](std::str::FromStr). Carries the offending token so the caller can
+/// name it in a diagnostic.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnknownCapability(pub String);
+
+impl std::fmt::Display for UnknownCapability {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "unknown capability {:?} (expected one of: network, filesystem, \
+             database, env, subprocess, clock, random, native-ffi)",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for UnknownCapability {}
+
 #[cfg(test)]
 mod tests {
     use super::Capability;
@@ -99,6 +140,22 @@ mod tests {
         assert_eq!(Capability::Clock.as_str(), "clock");
         assert_eq!(Capability::Random.as_str(), "random");
         assert_eq!(Capability::NativeFfi.as_str(), "native-ffi");
+    }
+
+    #[test]
+    fn from_str_round_trips_every_variant() {
+        // `from_str` is the exact inverse of `as_str` over the whole vocabulary.
+        use std::str::FromStr as _;
+        for &cap in Capability::ALL {
+            assert_eq!(Capability::from_str(cap.as_str()), Ok(cap));
+        }
+    }
+
+    #[test]
+    fn from_str_rejects_an_unknown_name() {
+        use std::str::FromStr as _;
+        let err = Capability::from_str("filesytem").unwrap_err();
+        assert_eq!(err, super::UnknownCapability("filesytem".to_owned()));
     }
 
     #[test]
