@@ -11,6 +11,17 @@ It compiles to readable, `rustfmt`-clean Rust.
 curl -fsSL https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/scripts/install.sh | sh
 ```
 
+Scaffold a new project — `ipe init` writes an `ipe.toml`, a `README.md`, and a
+working `Ipe.Live` counter in `src/Main.ipe`:
+
+```sh
+ipe init counter          # or `ipe init .` to scaffold in the current directory
+cd counter
+ipe run                   # serves the counter at http://localhost:8000
+```
+
+Prefer to start from scratch? A minimal program is just:
+
 ```elm
 -- src/Main.ipe
 module Main exposing (main)
