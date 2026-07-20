@@ -213,23 +213,37 @@ warning is open.
 
 ## CI-preparation backlog
 
-### #310 — FFI dep `version` reaches the emitted Cargo.toml unvalidated (OPEN)
-The FFI inspector's `PkgInfo` decode validates the crate `name`
-(`PackageName::parse`, `[A-Za-z0-9_-]+`), `pkg_path`, function names, and Rust
-types at the wire boundary — an injection-shaped value fails the whole package
-(`WireDefect::InvalidPkgPath` / illegal-crate-name). The `version` field is the
-one gap: `src/compiler/ffi/src/pkginfo.rs` stores it as a raw `String` ("the
-exact resolved crate version") with no parse. When the manifest emitter renders
-`<name> = { version = "<version>", ... }` into the generated `Cargo.toml`, a
-`version` carrying a `"`-and-newline payload could break out of the TOML string.
+### #310 — FFI dep `version` reaches the emitted Cargo.toml unvalidated (RESOLVED)
+Status: RESOLVED. The FFI inspector's `PkgInfo` decode validates the crate
+`name` (`PackageName::parse`, `[A-Za-z0-9_-]+`), `pkg_path`, function names, and
+Rust types at the wire boundary — an injection-shaped value fails the whole
+package (`WireDefect::InvalidPkgPath` / illegal-crate-name). The `version` field
+was the one gap: `src/compiler/ffi/src/pkginfo.rs` stored it as a raw `String`
+with no parse, and `render_dep_line` interpolated it into `<name> = "=<version>"`
+(and the `features` branch) of the generated `Cargo.toml`, so a `version`
+carrying a `"`-and-newline payload could break out of the TOML string and inject
+a rogue `[dependencies.evil]` table.
 
-Root cause / structural fix: parse `version` at the same boundary the name is
-parsed — a `CrateVersion` smart constructor over a `semver::VersionReq`-shaped
-string, so an injection-bearing version is unrepresentable past decode (mirrors
-the `PackageName` treatment). Add the sibling test to the injection suite
-(`a_newline_bearing_pkg_path_fails_the_whole_package`) for a version payload.
-Filed, not fixed here — it is a checker-boundary change on the FFI path, outside
-the CI-prep scope, and no current example exercises it.
+Structural fix (mirrors the `PackageName`/`PkgPath` treatment, not a render-site
+escape): a `CrateVersion` validated newtype in `pkginfo.rs` with a private
+`parse` smart constructor gating the semver charset `[0-9A-Za-z.*=<>~^,+ -]`
+(rejecting every TOML metacharacter — quote, brace, bracket, backslash, control),
+returning `WireDefect::InvalidVersion`. Both `PkgInfo.version` and
+`TransitiveDep.version` are now `CrateVersion`, parsed at the
+`TryFrom<WirePkgInfo>` decode boundary — an injection-bearing version fails the
+WHOLE package there. `render_dep_line` now takes `&CrateVersion`, whose only
+constructor is the decode-boundary parse, so a raw unchecked string is
+unrepresentable at emission (the type, not a runtime escape, closes the class).
+The charset mirrors the driver's existing `VersionPin` (the CLI-supplied pin),
+so the CLI and the resolved-dependency paths share one semver-value gate; an
+empty version stays legal at decode (the unresolved-probe case) and is refused
+loudly downstream by `cargo_dep_lines`. Regression tests:
+`an_injection_bearing_version_fails_the_whole_package` +
+`an_injection_bearing_transitive_version_fails_the_whole_package` +
+`legal_versions_decode` (pkginfo) and
+`an_injection_bearing_version_never_reaches_a_manifest_line` (driver). Proven:
+`cargo build --workspace` green, `cargo nextest run -p ipe_ffi` 157/157,
+`cargo clippy -p ipe_ffi --all-targets` clean.
 
 ### #313 — 00-standard-libs Money.add Result divergence (RESOLVED)
 Previously BUILD-green/RUN-red (the `Ipe.Money.add` `Result` return divergence
