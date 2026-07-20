@@ -232,6 +232,19 @@ pub fn build_doc(
             build_task_seq_sync(ctx, effect, rest, indent, child, generics)
         }
 
+        // The auto-force task-sequencing tail
+        // `task_and_then(<effect>, Box::new(move |_| { <rest> }))`. The outer
+        // `task_and_then(effect, cont)` is a two-argument delimited group (it breaks
+        // one argument per line with a trailing comma when it does not fit); the
+        // continuation's `<rest>` body is a `BraceBody`, so `rustfmt` strips its
+        // braces when the closure body fits (`move |_| rest`) and braces+breaks them
+        // when it does not. The effect gets the identical IR-level clone-capture
+        // rewrite the string emitter applies (`clone_targets_in_expr` over `rest`'s
+        // `free_vars`); both effect and rest are built recursively.
+        Expr::TaskSeq { effect, rest } => {
+            build_task_seq(ctx, effect, rest, indent, child, generics)
+        }
+
         // Every remaining arm carries the string emitter's exact bytes as one
         // leaf. Its layout is whatever single-line pre-`rustfmt` form the string
         // emitter produces; structuring the rest (call-arg lists, block-form
@@ -890,6 +903,50 @@ fn build_task_seq_sync(
     ]))
 }
 
+/// Build the `Doc` for the auto-force task-sequencing tail, mirroring
+/// [`crate::emit_expr::emit_expr_at`]'s `Expr::TaskSeq` arm token-for-token.
+///
+/// The string emitter renders
+/// `task_and_then(<effect>, Box::new(move |_| {{ <rest> }}))` — the runtime awaits
+/// the effect, then runs the continuation closure. The outer
+/// `task_and_then(effect, cont)` is a two-argument delimited group, so a wide call
+/// breaks one argument per line with a trailing comma. The continuation's `<rest>`
+/// body is wrapped in a [`Doc::BraceBody`]: `rustfmt` strips its braces when the
+/// closure body fits (`move |_| rest`) and braces+breaks it when it does not
+/// (`move |_| {{ <break> rest <break> }}`).
+///
+/// Before emitting, the effect gets the identical IR-level clone-capture rewrite
+/// the string emitter applies (`clone_targets_in_expr` over `rest`'s `free_vars`):
+/// any identifier `rest` reads next but `effect`'s own left-to-right evaluation
+/// would move is rewritten to a `CloneVar`. Both effect and rest are built
+/// recursively; their leaves carry the string emitter's exact tokens, so the SEAL
+/// holds.
+fn build_task_seq(
+    ctx: &EmitCtx,
+    effect: &Expr,
+    rest: &Expr,
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Doc> {
+    let rest_captures = free_vars(rest);
+    let effect_rw = clone_targets_in_expr(effect.clone(), &rest_captures);
+    let effect_doc = build_doc(ctx, &effect_rw, indent, child, generics)?;
+    let rest_doc = build_doc(ctx, rest, indent, child, generics)?;
+    // The continuation `Box::new(move |_| <brace-body>[rest])`: the closure body's
+    // braces vanish when it fits flat and brace+break when it does not.
+    let cont = Doc::concat(vec![
+        Doc::text("Box::new(move |_| "),
+        Doc::brace_body(rest_doc),
+        Doc::text(")"),
+    ]);
+    Ok(delimited(
+        Doc::text("task_and_then("),
+        vec![effect_doc, cont],
+        Doc::text(")"),
+    ))
+}
+
 #[cfg(test)]
 #[allow(clippy::panic, clippy::expect_used, reason = "test assertions")]
 mod tests {
@@ -1338,6 +1395,26 @@ mod tests {
             // leaves — the SEAL must still match the string emitter's rewritten
             // tokens (both apply the identical `clone_targets_in_expr` pass).
             Expr::TaskSeqSync {
+                effect: Box::new(Expr::Call {
+                    callee: Callee::Func(FuncId::from_raw(0)),
+                    args: vec![var(fx, 0)],
+                    pin: CallPin::None,
+                    on_form: OnFormKind::NotForm,
+                }),
+                rest: Box::new(var(fx, 0)),
+            },
+            // Auto-force task-sequencing tail (structured): the continuation's rest
+            // body is a `BraceBody`, and the outer `task_and_then(effect, cont)` is a
+            // two-argument delimited group. Distinct vars, so no clone-capture fires.
+            Expr::TaskSeq {
+                effect: Box::new(var(fx, 0)),
+                rest: Box::new(var(fx, 1)),
+            },
+            // Auto-force task-seq whose `rest` re-reads the var the `effect` moves:
+            // the IR-level clone-capture rewrite turns the effect's `a` into a
+            // `CloneVar` (`a.clone()`), so effect and rest carry DIFFERENT leaves —
+            // the SEAL must still match the string emitter's rewritten tokens.
+            Expr::TaskSeq {
                 effect: Box::new(Expr::Call {
                     callee: Callee::Func(FuncId::from_raw(0)),
                     args: vec![var(fx, 0)],
@@ -2077,6 +2154,123 @@ mod tests {
                 got, expected,
                 "\n--- got ---\n{got}\n--- want ---\n{expected}"
             );
+        });
+    }
+
+    #[test]
+    fn task_seq_fits_inline_with_braces_stripped() {
+        // A short auto-force task-seq stays inline and `rustfmt` strips the closure
+        // body's braces: `task_and_then(a, Box::new(move |_| b))`.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let scope = GenericScope::new(&[]);
+            let expr = Expr::TaskSeq {
+                effect: Box::new(var(&fx, 0)), // a
+                rest: Box::new(var(&fx, 1)),   // b
+            };
+            let doc = build_doc(ctx, &expr, 0, 0, scope).expect("build_doc");
+            assert_eq!(
+                render(&doc, RenderConfig::default()),
+                "task_and_then(a, Box::new(move |_| b))"
+            );
+        });
+    }
+
+    #[test]
+    fn task_seq_outer_breaks_but_closure_body_stays_flat() {
+        // A task-seq whose two arguments together overflow width 100 breaks the
+        // outer `task_and_then(...)` one argument per line with a trailing comma,
+        // while the closure body still fits on its own line — braces stay stripped.
+        // Golden captured from `rustfmt --edition 2024 --style-edition 2024`.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let expr = Expr::TaskSeq {
+                effect: Box::new(var(&fx, 7)), // …_x
+                rest: Box::new(var(&fx, 8)),   // …_y
+            };
+            let got = render_let_stmt(ctx, &expr);
+            let expected = "let z = task_and_then(\n        argument_that_is_quite_long_enough_to_matter_x,\n        Box::new(move |_| argument_that_is_quite_long_enough_to_matter_y),\n    )";
+            assert_eq!(
+                got, expected,
+                "\n--- got ---\n{got}\n--- want ---\n{expected}"
+            );
+        });
+    }
+
+    #[test]
+    fn task_seq_closure_body_breaks_to_a_braced_block() {
+        // A task-seq whose closure body alone is wide: the outer call breaks, and
+        // the closure body braces+breaks to a block (`move |_| {\n body\n}`). Golden
+        // captured from `rustfmt --edition 2024 --style-edition 2024`. The wide body
+        // is a single long identifier interned just for this test.
+        let mut interner = ipe_intern::Interner::new();
+        let main_mod = interner.intern("Main").expect("intern Main");
+        let short_eff = interner.intern("short_eff").expect("intern");
+        let wide_body = interner
+            .intern("a_body_wide_enough_to_break_only_the_closure_body_padding_padding_padding_pad")
+            .expect("intern");
+        let program = Program {
+            modules: vec![Module {
+                name: ModPath(vec![main_mod]),
+                types: vec![],
+                funcs: vec![],
+                entry: None,
+                records: vec![],
+                uses_tea: false,
+                uses_server: false,
+                uses_ui: false,
+                uses_live: false,
+                uses_tui: false,
+                uses_webview: false,
+                uses_css: false,
+                uses_auth: false,
+                uses_websocket: false,
+                uses_email: false,
+                uses_env_public: false,
+                uses_ffi: false,
+            }],
+        };
+        let ctx = EmitCtx::build(
+            &interner,
+            &program,
+            DbDriver::Sqlite,
+            None,
+            ipe_ir::Target::Native,
+            Vec::new(),
+            false,
+        )
+        .expect("EmitCtx::build");
+        let scope = GenericScope::new(&[]);
+        let expr = Expr::TaskSeq {
+            effect: Box::new(Expr::Var(short_eff)),
+            rest: Box::new(Expr::Var(wide_body)),
+        };
+        let doc = build_doc(&ctx, &expr, 4, 0, scope).expect("build_doc");
+        let stmt = Doc::nest(4, Doc::concat(vec![Doc::text("let z = "), doc]));
+        let got = render(&stmt, RenderConfig::default());
+        let expected = "let z = task_and_then(\n        short_eff,\n        Box::new(move |_| {\n            a_body_wide_enough_to_break_only_the_closure_body_padding_padding_padding_pad\n        }),\n    )";
+        assert_eq!(
+            got, expected,
+            "\n--- got ---\n{got}\n--- want ---\n{expected}"
+        );
+    }
+
+    #[test]
+    fn task_seq_brace_body_is_seal_visible() {
+        // The closure body's braces ARE part of the SEAL leaf sequence — the string
+        // emitter always writes `move |_| { rest }` with braces — so the doc's
+        // normalized leaves equal the string emitter's normalized bytes even when
+        // the flat render strips the braces.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let scope = GenericScope::new(&[]);
+            let expr = Expr::TaskSeq {
+                effect: Box::new(var(&fx, 0)),
+                rest: Box::new(var(&fx, 1)),
+            };
+            let doc = build_doc(ctx, &expr, 0, 0, scope).expect("build_doc");
+            let string = emit_expr_at(ctx, &expr, 0, 0, scope).expect("emit_expr_at");
+            assert_eq!(doc.normalized_leaves(), whitespace_normalize(&string));
         });
     }
 
