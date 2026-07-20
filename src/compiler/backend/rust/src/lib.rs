@@ -2410,7 +2410,8 @@ mod record_struct_namespace_tests {
                 uses_css: false,
                 uses_auth: false,
                 uses_websocket: false,
-                uses_email: false, uses_env_public: false,
+                uses_email: false,
+                uses_env_public: false,
                 uses_ffi: false,
             }],
         };
@@ -2486,7 +2487,8 @@ mod record_struct_namespace_tests {
                 uses_css: false,
                 uses_auth: false,
                 uses_websocket: false,
-                uses_email: false, uses_env_public: false,
+                uses_email: false,
+                uses_env_public: false,
                 uses_ffi: false,
             }],
         };

@@ -148,7 +148,8 @@ fn wrap_program(i: &mut Interner) -> DResult<Program> {
             uses_css: false,
             uses_auth: false,
             uses_websocket: false,
-            uses_email: false, uses_env_public: false,
+            uses_email: false,
+            uses_env_public: false,
             uses_ffi: false,
         }],
     })
@@ -209,7 +210,8 @@ fn unit_value_and_type_render() -> DResult<()> {
             uses_css: false,
             uses_auth: false,
             uses_websocket: false,
-            uses_email: false, uses_env_public: false,
+            uses_email: false,
+            uses_env_public: false,
             uses_ffi: false,
         }],
     };

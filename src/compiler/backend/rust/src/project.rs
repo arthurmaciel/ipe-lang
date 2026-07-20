@@ -1537,12 +1537,8 @@ fn ir_type_contains_non_serde(ty: &IrType) -> bool {
         IrType::Maybe(inner) | IrType::List(inner) | IrType::Set(inner) => {
             ir_type_contains_non_serde(inner)
         }
-        IrType::Result(a, b) => {
-            ir_type_contains_non_serde(a) || ir_type_contains_non_serde(b)
-        }
-        IrType::Dict(k, v) => {
-            ir_type_contains_non_serde(k) || ir_type_contains_non_serde(v)
-        }
+        IrType::Result(a, b) => ir_type_contains_non_serde(a) || ir_type_contains_non_serde(b),
+        IrType::Dict(k, v) => ir_type_contains_non_serde(k) || ir_type_contains_non_serde(v),
         IrType::Tuple(elems) => elems.iter().any(ir_type_contains_non_serde),
         IrType::Record(fields) => fields.values().any(ir_type_contains_non_serde),
         IrType::Enum { args, .. } => args.iter().any(ir_type_contains_non_serde),
@@ -1609,10 +1605,7 @@ fn check_hydration_state_fields(ctx: &EmitCtx, program: &Program) -> DResult<()>
         return Ok(());
     };
 
-    let main_module = program
-        .modules
-        .iter()
-        .find(|m| m.name.0 == [main_sym]);
+    let main_module = program.modules.iter().find(|m| m.name.0 == [main_sym]);
     let Some(main_module) = main_module else {
         return Ok(());
     };
@@ -1626,13 +1619,10 @@ fn check_hydration_state_fields(ctx: &EmitCtx, program: &Program) -> DResult<()>
         return Ok(());
     };
 
-    let hs_type = main_module
-        .types
-        .iter()
-        .find(|td| {
-            let ipe_ir::TypeDef::Enum(def) = td;
-            def.name == hs_sym
-        });
+    let hs_type = main_module.types.iter().find(|td| {
+        let ipe_ir::TypeDef::Enum(def) = td;
+        def.name == hs_sym
+    });
     let Some(ipe_ir::TypeDef::Enum(hs_def)) = hs_type else {
         return Ok(());
     };

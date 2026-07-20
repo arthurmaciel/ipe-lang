@@ -467,8 +467,7 @@ pub fn assert_self_regression(golden_name: &str, golden_dir: &Path, ipe_stdout: 
     );
     let Ok(expected) = expected else { return };
     assert_eq!(
-        ipe_stdout,
-        expected,
+        ipe_stdout, expected,
         "{golden_name}: stdout does not match expected.txt"
     );
 }

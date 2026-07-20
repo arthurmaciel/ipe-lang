@@ -23,12 +23,12 @@ use std::fmt;
 
 use lsp_server::Connection;
 use lsp_types::{
-    CompletionOptions, DocumentLinkOptions,
-    FoldingRangeProviderCapability, HoverProviderCapability, InitializeParams, InitializeResult,
-    OneOf, PositionEncodingKind, RenameOptions, SaveOptions, SemanticTokensFullOptions,
-    SemanticTokensOptions, SemanticTokensServerCapabilities, ServerCapabilities, ServerInfo,
-    SignatureHelpOptions, TextDocumentSyncCapability, TextDocumentSyncKind,
-    TextDocumentSyncOptions, TextDocumentSyncSaveOptions,
+    CompletionOptions, DocumentLinkOptions, FoldingRangeProviderCapability,
+    HoverProviderCapability, InitializeParams, InitializeResult, OneOf, PositionEncodingKind,
+    RenameOptions, SaveOptions, SemanticTokensFullOptions, SemanticTokensOptions,
+    SemanticTokensServerCapabilities, ServerCapabilities, ServerInfo, SignatureHelpOptions,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
+    TextDocumentSyncSaveOptions,
 };
 
 use ipe_lsp_features::PositionEncoding;

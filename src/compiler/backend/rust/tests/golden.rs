@@ -155,7 +155,8 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
             uses_css: false,
             uses_auth: false,
             uses_websocket: false,
-            uses_email: false, uses_env_public: false,
+            uses_email: false,
+            uses_env_public: false,
             uses_ffi: false,
         }],
     })
