@@ -1,0 +1,10 @@
+module Main exposing (main)
+
+import Ipe.Http as Http
+import Ipe.Task as Task
+import Ipe.Log exposing (println)
+
+main : Task ()
+main =
+    Http.get "http://example.com"
+        |> Task.andThen (\_ -> println "done")

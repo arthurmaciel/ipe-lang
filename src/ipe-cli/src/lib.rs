@@ -82,6 +82,15 @@ pub enum CliError {
     /// [`build_plan::Refusal`]). Refusal means NO artifact: the build asked
     /// to be static is never silently degraded to a dynamic one.
     StaticRefusal(build_plan::Refusal),
+    /// A declared capability set did not equal the set inferred from the
+    /// program. Carries the capabilities the program uses but did not declare
+    /// (`missing`) and the ones declared but never used (`extra`), each a stable
+    /// sorted list of wire names. Consumed by SP2/SP4 to reject a drifted
+    /// manifest.
+    CapabilityMismatch {
+        missing: Vec<&'static str>,
+        extra: Vec<&'static str>,
+    },
 }
 
 impl From<build_plan::Refusal> for CliError {
@@ -108,6 +117,16 @@ impl std::fmt::Display for CliError {
                  set IPE_RUNTIME_DIR to an explicit path or pass --runtime <dir>"
             ),
             Self::StaticRefusal(refusal) => write!(f, "static build refused: {refusal}"),
+            Self::CapabilityMismatch { missing, extra } => {
+                f.write_str("declared capabilities do not match the program's inferred set")?;
+                if !missing.is_empty() {
+                    write!(f, "\n  used but not declared: {}", missing.join(", "))?;
+                }
+                if !extra.is_empty() {
+                    write!(f, "\n  declared but not used: {}", extra.join(", "))?;
+                }
+                Ok(())
+            }
             Self::UnknownCode { input, suggestions } => {
                 write!(f, "unknown error code `{input}`")?;
                 match suggestions.split_first() {
@@ -1441,6 +1460,7 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
         Some((cmd, rest)) if cmd == "run" => run_run(rest),
         Some((cmd, rest)) if cmd == "watch" => run_watch(rest),
         Some((cmd, rest)) if cmd == "explain" => run_explain(rest),
+        Some((cmd, rest)) if cmd == "capabilities" => run_capabilities(rest),
         Some((cmd, rest)) if cmd == "add" => ffi::run_add(rest),
         Some((cmd, rest)) if cmd == "remove" => ffi::run_remove(rest),
         Some((cmd, rest)) if cmd == "install" => ffi::run_install(rest),
@@ -2138,6 +2158,76 @@ pub fn emit_ir_text(entry: &Path) -> Result<String, CliError> {
     let program = ipe_lower::lower(&canonical, &types, &mut interner)
         .map_err(|(diag, _home)| pipeline_err(diag))?;
     Ok(ipe_ir::pretty(&program, &interner))
+}
+
+// ===========================================================================
+// `capabilities` — report / verify a program's inferred capability set
+// ===========================================================================
+
+/// Run parse → canon → types → lower over a single `.ipe` entry, returning the
+/// lowered program. Shares the exact pipeline [`emit_ir_text`] uses so the two
+/// analysis surfaces cannot diverge.
+///
+/// # Errors
+/// [`CliError::Pipeline`] when the compiler rejects the program;
+/// [`CliError::Io`] when the entry file cannot be read.
+fn lower_entry(entry: &Path) -> Result<ipe_ir::Program, CliError> {
+    let source = fs::read_to_string(entry).map_err(|e| io_err(entry, e))?;
+    let pipeline_err = |diag: Diagnostic| CliError::Pipeline {
+        file: entry.to_path_buf(),
+        src: source.clone(),
+        diag,
+    };
+    let mut interner = Interner::new();
+    let module = ipe_parse::parse_module(&source, &mut interner).map_err(&pipeline_err)?;
+    let canonical = ipe_canon::canonicalise(&module, &mut interner).map_err(&pipeline_err)?;
+    let types = ipe_types::infer(&canonical, &mut interner).map_err(&pipeline_err)?;
+    ipe_lower::lower(&canonical, &types, &mut interner).map_err(|(diag, _home)| pipeline_err(diag))
+}
+
+/// `ipe capabilities <entry.ipe>` — print the program's inferred security
+/// capabilities, one per line in sorted order, or `none` when the program is
+/// pure. Read-only analysis: nothing is emitted or written.
+fn run_capabilities(rest: &[String]) -> Result<(), CliError> {
+    let entry = match rest.first() {
+        Some(e) => PathBuf::from(e),
+        None => PathBuf::from(default_entry()?),
+    };
+    let program = lower_entry(&entry)?;
+    let caps = ipe_lower::program_capabilities(&program);
+    if caps.is_empty() {
+        println!("none");
+    } else {
+        for cap in &caps {
+            println!("{}", cap.as_str());
+        }
+    }
+    Ok(())
+}
+
+/// Verify a declared capability set equals the set inferred from `entry`.
+///
+/// Returns `Ok(())` iff `declared` is exactly the inferred set. Otherwise a
+/// [`CliError::CapabilityMismatch`] naming the capabilities used but not
+/// declared and those declared but not used. This is the primitive SP2 (manifest
+/// generation) and SP4 (sandbox configuration) consume to reject a drifted or
+/// under-declared manifest.
+///
+/// # Errors
+/// [`CliError::Pipeline`] / [`CliError::Io`] when `entry` cannot be lowered, or
+/// [`CliError::CapabilityMismatch`] on a set mismatch.
+pub fn verify_capabilities(
+    entry: &Path,
+    declared: &std::collections::BTreeSet<ipe_ir::Capability>,
+) -> Result<(), CliError> {
+    let program = lower_entry(entry)?;
+    let inferred = ipe_lower::program_capabilities(&program);
+    if *declared == inferred {
+        return Ok(());
+    }
+    let missing: Vec<&'static str> = inferred.difference(declared).map(|c| c.as_str()).collect();
+    let extra: Vec<&'static str> = declared.difference(&inferred).map(|c| c.as_str()).collect();
+    Err(CliError::CapabilityMismatch { missing, extra })
 }
 
 // ===========================================================================
