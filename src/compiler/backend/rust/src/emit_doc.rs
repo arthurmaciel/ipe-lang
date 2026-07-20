@@ -22,14 +22,24 @@
 //!     substitution form (`({ inlined_body })`) is a soft group that flattens
 //!     when it fits.
 //!
+//! The call-shaped binops are structured too: `++` → `format!("{}{}", l, r)` (a
+//! MACRO delimited group, broken WITHOUT a trailing comma) and `//` →
+//! `ipe_runtime::math::ipe_int_div(l, r)` (a plain two-argument delimited group).
+//! The named-function value `FuncValue` is the same always-breaking `{ let
+//! __ipe_fn: <TypedFn> = <ctor>::new(<name>); __ipe_fn }` block as a boxed lambda,
+//! its `let` on the [`Doc::Assign`] RHS-break axis.
+//!
 //! Every remaining arm is carried as one [`Doc::owned`] leaf holding the string
-//! emitter's exact bytes: the literals (Int/Float/Str/…), the call-shaped binops
-//! (`Append`/`IntDiv`), the empty/`Ui` list and zero-arg call forms, and the
-//! context-heavy arms not yet structured (kernel-dispatch / FFI / pinned calls,
-//! the immediately-applied-lambda `Apply` block, the `Destructure` block,
-//! lambdas, `match`, records, updates, field access, task sequencing). Carrying
-//! bytes keeps the SEAL exact by
-//! construction; those arms simply do not yet gain multi-line layout.
+//! emitter's exact bytes: the literals (Int/Float/Str/…), the empty/`Ui` list and
+//! zero-arg call forms, and the context-heavy arms not yet structured
+//! (kernel-dispatch / FFI / pinned calls). Field access (`Access`), the constant
+//! list-index clone (`ListIndexClone`), and the borrowing length guard
+//! (`ListLenCheck`) also stay leaves: their only break point is `rustfmt`'s
+//! method-call-chain layout (`.field` / `.clone()` / `.len()` each dropped onto
+//! its own line when the BASE breaks), a mechanism the Doc IR does not model — and
+//! no corpus fixture ever exercises it, because every base is a single-line
+//! `Var` / `CloneVar`. Carrying bytes keeps the SEAL exact by construction; those
+//! arms simply do not yet gain multi-line layout.
 //!
 //! The legacy string path in `emit_expr.rs` remains the emit default; this path
 //! is exercised by the in-module SEAL + byte-golden tests only, so every commit
@@ -42,7 +52,7 @@
 use std::borrow::Cow;
 
 use ipe_diagnostics::{DResult, Diagnostic};
-use ipe_intern::Symbol;
+use ipe_intern::{Interner, Symbol};
 use ipe_ir::{BinOp, Callee, Expr, IrType, KernelFn, ModPath};
 
 use crate::EmitCtx;
@@ -97,6 +107,15 @@ pub fn build_doc(
         // emitter emits as a `Text` leaf.
         Expr::BinOp { op, lhs, rhs } if chain_op_str(*op).is_some() => {
             build_binop_chain(ctx, *op, lhs, rhs, indent, child, generics)
+        }
+
+        // The two call-shaped binops. `++` lowers to `format!("{}{}", l, r)` (a
+        // MACRO — its broken form carries NO trailing comma) and `//` to
+        // `ipe_runtime::math::ipe_int_div(l, r)` (a plain function call — trailing
+        // comma kept). Both are two-argument delimited groups over their built
+        // operands; `build_call_binop` picks the trailing-comma rule by kind.
+        Expr::BinOp { op, lhs, rhs } if matches!(op, BinOp::Append | BinOp::IntDiv) => {
+            build_call_binop(ctx, *op, lhs, rhs, indent, child, generics)
         }
 
         // A parenthesized `if`/`else` expression. rustfmt keeps the whole
@@ -159,6 +178,15 @@ pub fn build_doc(
         {
             build_generic_call(ctx, callee, args, *pin, indent, child, generics)
         }
+
+        // A named-function value `{ let __ipe_fn: <TypedFn> = <ctor>::new(<name>);
+        // __ipe_fn }`. The same always-breaking statement block as a boxed lambda,
+        // but the RHS is `<ctor>::new(<name>)` over a bare function name (a leaf,
+        // never itself breaking) rather than a closure. The `let` statement uses the
+        // [`Doc::Assign`] RHS-break axis (the wide `Box<dyn Fn(…) -> R + …>`
+        // annotation pushes the RHS to its own line when the same-line form
+        // overflows). See [`build_func_value`].
+        Expr::FuncValue { callee, ty } => build_func_value(ctx, callee, ty, generics),
 
         // A boxed lambda value `{ let __ipe_fn: <TypedFn> = Box::new(move |…| -> R {
         // <body> }); __ipe_fn }` (`Arc` for the runtime handler shapes). A
@@ -316,6 +344,153 @@ fn leaf(
     )?))
 }
 
+/// One divergent function body.
+///
+/// Its native Doc render (`render(build_doc)`) differs from the legacy
+/// `emit_expr_at` + `rustfmt` bytes; reported by [`native_vs_legacy_sweep`].
+#[derive(Debug, Clone)]
+pub struct SweepDivergence {
+    /// The Rust name of the function the divergent expression is a body of.
+    pub func: String,
+    /// A short `{:?}`-prefix of the divergent [`Expr`], for identification.
+    pub expr_head: String,
+    /// The native Doc render (`render(build_doc(e))`).
+    pub native: String,
+    /// The legacy `rustfmt(emit_expr_at(e))` bytes.
+    pub legacy: String,
+}
+
+/// The whole-corpus P3-cutover gate.
+///
+/// For every function body in `program`, render it BOTH ways — the native Doc
+/// path (`render(build_doc)`) and the legacy path (`emit_expr_at` then real
+/// `rustfmt`) — and return every expression whose two renders disagree. The native
+/// path is safe to make the default emit path only when this returns empty for the
+/// whole corpus.
+///
+/// The comparison unit is the whole function body expression: that is the value
+/// the native path replaces, and rustfmt formats a sub-expression differently in
+/// isolation than in context, so a per-sub-expr diff would report spurious
+/// divergences. Each body is wrapped as `fn __sweep() -> Wrap { <body> }` and run
+/// through `rustfmt --edition 2024 --style-edition 2024`; a body rustfmt rejects
+/// (a non-value shape in this synthetic context — a `let`/`match` statement head,
+/// a `TailLoop`) is SKIPPED and counted, mirroring the fixture sweep's skip rule.
+///
+/// `compared` is the number of bodies actually diffed (rustfmt accepted the
+/// wrapper); `skipped` counts the bodies rustfmt rejected. Requires `rustfmt` on
+/// `PATH`; a body whose legacy formatting fails is skipped rather than reported.
+///
+/// # Errors
+/// Propagates any [`Diagnostic`] from [`EmitCtx::build`] or the emitters.
+pub fn native_vs_legacy_sweep(
+    interner: &Interner,
+    program: &ipe_ir::Program,
+) -> DResult<(Vec<SweepDivergence>, usize, usize)> {
+    let ctx = EmitCtx::build(
+        interner,
+        program,
+        crate::DbDriver::Sqlite,
+        None,
+        ipe_ir::Target::Native,
+        Vec::new(),
+        false,
+    )?;
+    let mut divergences = Vec::new();
+    let mut compared = 0usize;
+    let mut skipped = 0usize;
+    for module in &program.modules {
+        for func in &module.funcs {
+            let name = ctx.func_name(func.id)?.to_owned();
+            let scope_syms: Vec<Symbol> = func.type_params.iter().map(|(s, _)| *s).collect();
+            let generics = GenericScope::new(&scope_syms);
+            // The body is emitted at fn-body indent 1, depth 0 — exactly the
+            // context `emit_func` passes to `emit_expr`.
+            let Ok(legacy_raw) = emit_expr_at(&ctx, &func.body, 1, 0, generics) else {
+                skipped += 1;
+                continue;
+            };
+            let Some(legacy) = legacy_rustfmt_body(&legacy_raw) else {
+                skipped += 1;
+                continue;
+            };
+            let doc = build_doc(&ctx, &func.body, 1, 0, generics)?;
+            let native = render_body_dedented(&doc);
+            compared += 1;
+            if native != legacy {
+                divergences.push(SweepDivergence {
+                    func: name,
+                    expr_head: expr_head(&func.body),
+                    native,
+                    legacy,
+                });
+            }
+        }
+    }
+    Ok((divergences, compared, skipped))
+}
+
+/// Render a function-body `doc` at the fn-body block indent (level 1 = 4 columns)
+/// and dedent every line back to column 0 — the same framing the legacy path is
+/// compared at (`legacy_rustfmt_body` strips the `fn __sweep` wrapper's four-space
+/// body indent). The body's opening character lands at column 4 (matching the
+/// `fn f() {` body column rustfmt measures against), then the four-space prefix is
+/// removed from each line so both sides are compared at column 0.
+fn render_body_dedented(doc: &Doc) -> String {
+    // Seed the render with four spaces so the body starts at column 4, and wrap the
+    // doc in `Nest(4)` so every internal newline indents from the block indent —
+    // exactly the `render_fn_body` test framing.
+    let seeded = Doc::nest(4, Doc::concat(vec![Doc::text("    "), doc.clone()]));
+    let rendered = crate::render::render(&seeded, crate::render::RenderConfig::default());
+    rendered
+        .lines()
+        .map(|l| l.strip_prefix("    ").unwrap_or(l))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A short identifying prefix of an [`Expr`]'s debug form (the variant name and a
+/// little context), for the divergence report.
+fn expr_head(expr: &Expr) -> String {
+    let dbg = format!("{expr:?}");
+    dbg.chars().take(80).collect()
+}
+
+/// Format `body_expr` as a `fn __sweep() -> Wrap { <body> }` function body, run
+/// real `rustfmt`, and return the formatted body dedented to column 0 — the bytes
+/// the legacy `emit + run_rustfmt` path produces for that expression. Returns
+/// `None` if `rustfmt` is unavailable or rejects the wrapper.
+fn legacy_rustfmt_body(body_expr: &str) -> Option<String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let source = format!("fn __sweep() -> Wrap {{\n    {body_expr}\n}}\n");
+    let mut child = Command::new("rustfmt")
+        .args(["--edition", "2024", "--style-edition", "2024"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    child.stdin.take()?.write_all(source.as_bytes()).ok()?;
+    let out = child.wait_with_output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let formatted = String::from_utf8(out.stdout).ok()?;
+    let mut lines: Vec<&str> = formatted.lines().collect();
+    if lines.len() < 2 {
+        return None;
+    }
+    lines.remove(0);
+    lines.pop();
+    let body = lines
+        .iter()
+        .map(|l| l.strip_prefix("    ").unwrap_or(l))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(body)
+}
+
 /// Build the `Doc::Chain` for a chain-eligible binop. Walks the left-nested
 /// same-operator run (rustfmt groups a left-associative operator run as one
 /// chain) into a flat operand list, carrying every wrapping paren.
@@ -381,6 +556,106 @@ fn build_binop_chain(
     }
 
     Ok(Doc::Chain { operands })
+}
+
+/// Build the `Doc` for a call-shaped binop, mirroring
+/// [`crate::emit_expr::emit_expr_at`]'s `BinOp::Append` / `BinOp::IntDiv` arms
+/// token-for-token.
+///
+///   * `Append` (`++`) lowers to `format!("{}{}", l, r)` — a MACRO call. Its
+///     first argument is the fixed `"{}{}"` format-string leaf, then the two
+///     operand docs. `rustfmt` breaks a wide macro argument list one argument per
+///     line with NO trailing comma, so this uses [`delimited_no_trailing_comma`].
+///   * `IntDiv` (`//`) lowers to `ipe_runtime::math::ipe_int_div(l, r)` — a plain
+///     function call whose two operand docs break with the trailing comma
+///     `rustfmt` keeps ([`delimited`]).
+///
+/// The operands are built recursively so a structured operand rides inside the
+/// argument list. The caller has already matched `op` to one of these two.
+fn build_call_binop(
+    ctx: &EmitCtx,
+    op: BinOp,
+    lhs: &Expr,
+    rhs: &Expr,
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Doc> {
+    let l = build_doc(ctx, lhs, indent, child, generics)?;
+    let r = build_doc(ctx, rhs, indent, child, generics)?;
+    match op {
+        BinOp::Append => Ok(delimited_no_trailing_comma(
+            Doc::text("format!("),
+            // The format string is a fixed leaf; the two operands follow it as the
+            // macro's positional arguments, exactly as the string emitter writes
+            // `format!("{{}}{{}}", {l}, {r})`.
+            vec![Doc::text("\"{}{}\""), l, r],
+            Doc::text(")"),
+        )),
+        BinOp::IntDiv => Ok(delimited(
+            Doc::text("ipe_runtime::math::ipe_int_div("),
+            vec![l, r],
+            Doc::text(")"),
+        )),
+        // The caller's guard restricts `op` to the two call-shaped binops; any
+        // other operator is a chain operator built elsewhere. Fail closed rather
+        // than emit a wrong shape.
+        _ => Err(Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::build_call_binop",
+            detail: format!(
+                "build_call_binop called with non-call-shaped operator {op:?}; \
+                 only Append and IntDiv route here"
+            ),
+        }),
+    }
+}
+
+/// Build the `Doc` for a named-function value, mirroring
+/// [`crate::emit_expr::emit_func_value`] token-for-token. The string emitter
+/// renders the statement block
+/// `{ let __ipe_fn: <TypedFn> = <ctor>::new(<name>); __ipe_fn }` — a block that
+/// ALWAYS breaks (it holds the `let`): the assignment and the `__ipe_fn` tail each
+/// on their own `HardLine` inside the block's sole `Nest(4)`.
+///
+/// The assignment is a [`Doc::Assign`]: the wide `Box<dyn Fn(…) -> R + Send +
+/// 'static>` (or `Arc<…>`) annotation on the `let __ipe_fn: <TypedFn> = ` prefix
+/// pushes the `<ctor>::new(<name>)` RHS onto its own line at `indent + 4` when the
+/// same-line form overflows, matching `rustfmt`. The `name` is a bare identifier
+/// leaf (it never breaks internally), so the RHS is a plain concatenation — no
+/// group around the `(` — exactly like [`build_lambda`]'s RHS but without a
+/// closure body. The pointer constructor (`Box::new` / `Arc::new`) is chosen by
+/// the same `wants_arc_ctor` structural predicate the string emitter uses.
+fn build_func_value(
+    ctx: &EmitCtx,
+    callee: &Callee,
+    ty: &IrType,
+    generics: GenericScope,
+) -> DResult<Doc> {
+    let name = callee_name(ctx, callee)?;
+    let typed = render_type(ctx, ty, generics)?;
+    let ctor = if wants_arc_ctor(ty) { "Arc" } else { "Box" };
+    let rhs = Doc::owned(format!("{ctor}::new({name})"));
+    let assign = Doc::assign(
+        Doc::owned(format!("let __ipe_fn: {typed} = ")),
+        rhs,
+        // The statement's trailing `;`.
+        1,
+    );
+    Ok(Doc::concat(vec![
+        Doc::text("{"),
+        Doc::nest(
+            4,
+            Doc::concat(vec![
+                Doc::HardLine,
+                assign,
+                Doc::text(";"),
+                Doc::HardLine,
+                Doc::text("__ipe_fn"),
+            ]),
+        ),
+        Doc::HardLine,
+        Doc::text("}"),
+    ]))
 }
 
 /// `rustfmt`'s `single_line_if_else_max_width` (default 50): the maximum width of
@@ -488,7 +763,15 @@ fn build_if(
 /// delimited struct literal, whose flat form hugs the braces WITH a space
 /// (`Name { a: 1 }`), use [`delimited_spaced`].
 fn delimited(open: Doc, elems: Vec<Doc>, close: Doc) -> Doc {
-    delimited_with(open, elems, close, || Doc::Softline)
+    delimited_with(open, elems, close, || Doc::Softline, true)
+}
+
+/// Like [`delimited`], but the broken form carries NO trailing comma. This is the
+/// `format!`/`vec!`-style MACRO argument shape: `rustfmt` breaks a wide macro
+/// call one argument per line but — unlike a function call — never appends the
+/// trailing comma. Used for the `++` append lowering `format!("{}{}", l, r)`.
+fn delimited_no_trailing_comma(open: Doc, elems: Vec<Doc>, close: Doc) -> Doc {
+    delimited_with(open, elems, close, || Doc::Softline, false)
 }
 
 /// Like [`delimited`], but the inner boundary is a soft [`Doc::Line`] (a SPACE
@@ -496,7 +779,7 @@ fn delimited(open: Doc, elems: Vec<Doc>, close: Doc) -> Doc {
 /// `Name { a: 1, b: 2 }` flat (spaces inside the braces), and one field per line
 /// with a trailing comma when broken — exactly `rustfmt`'s struct-literal layout.
 fn delimited_spaced(open: Doc, elems: Vec<Doc>, close: Doc) -> Doc {
-    delimited_with(open, elems, close, || Doc::Line)
+    delimited_with(open, elems, close, || Doc::Line, true)
 }
 
 /// The shared delimited-group core. `boundary` supplies the break candidate that
@@ -504,7 +787,13 @@ fn delimited_spaced(open: Doc, elems: Vec<Doc>, close: Doc) -> Doc {
 /// (no flat space), [`Doc::Line`] for brace-delimited struct literals (a flat
 /// space). The inter-element separator is always a real `,` then a soft `Line`;
 /// the trailing comma is always a SEAL-invisible [`Doc::IfBroken`].
-fn delimited_with(open: Doc, elems: Vec<Doc>, close: Doc, boundary: impl Fn() -> Doc) -> Doc {
+fn delimited_with(
+    open: Doc,
+    elems: Vec<Doc>,
+    close: Doc,
+    boundary: impl Fn() -> Doc,
+    trailing_comma: bool,
+) -> Doc {
     let mut inner = vec![open];
     let mut nested = Vec::with_capacity(elems.len() * 2);
     let last = elems.len().saturating_sub(1);
@@ -516,9 +805,10 @@ fn delimited_with(open: Doc, elems: Vec<Doc>, close: Doc, boundary: impl Fn() ->
             nested.push(Doc::Line);
         }
         nested.push(e);
-        if i == last {
+        if i == last && trailing_comma {
             // Trailing comma only when the group breaks; absent (and SEAL-
-            // invisible) when flat.
+            // invisible) when flat. Suppressed entirely for a macro argument list
+            // (`trailing_comma == false`), which `rustfmt` breaks without one.
             nested.push(Doc::if_broken(","));
         }
     }
@@ -1495,9 +1785,15 @@ mod tests {
             ),
             binop(BinOp::Eq, var(fx, 0), var(fx, 1)),
             binop(BinOp::And, var(fx, 0), var(fx, 1)),
-            // Call-shaped binops (leaf).
+            // Call-shaped binops (structured): `++` → `format!("{}{}", a, b)` (a
+            // macro, no trailing comma), `//` → `ipe_int_div(a, b)` (a plain call).
             binop(BinOp::Append, var(fx, 0), var(fx, 1)),
             binop(BinOp::IntDiv, var(fx, 0), var(fx, 1)),
+            // Call-shaped binops, wide → break. The SEAL must hold across the
+            // break/flat boundary; the append macro drops its trailing comma while
+            // the int-div call keeps one.
+            binop(BinOp::Append, var(fx, 7), var(fx, 8)),
+            binop(BinOp::IntDiv, var(fx, 7), var(fx, 8)),
             // If (structured) — narrow, stays inline.
             Expr::If {
                 cond: Box::new(var(fx, 0)),
@@ -1684,6 +1980,13 @@ mod tests {
                 params: vec![(sym(fx, 3), IrType::Int)],
                 ret: IrType::Int,
                 body: Box::new(var(fx, 3)),
+            },
+            // Named-function value (structured block): `{ let __ipe_fn: Box<…> =
+            // Box::new(<name>); __ipe_fn }` — the same always-breaking block as a
+            // boxed lambda, its RHS a bare `Box::new(<name>)` over the helper fn.
+            Expr::FuncValue {
+                callee: Callee::Func(FuncId::from_raw(0)),
+                ty: IrType::Fun(vec![], Box::new(IrType::Int)),
             },
             // `let` normal path (structured block): `({ let a = b; c })`. The body
             // references `a` zero times, so `needs_inline` is false — the plain
@@ -2241,6 +2544,147 @@ mod tests {
             let doc = build_doc(ctx, &expr, 4, 0, scope).expect("build_doc");
             let string = emit_expr_at(ctx, &expr, 4, 0, scope).expect("emit_expr_at");
             assert_eq!(doc.normalized_leaves(), whitespace_normalize(&string));
+        });
+    }
+
+    #[test]
+    fn append_fits_inline() {
+        // A short `++` append stays inline: `format!("{}{}", a, b)`. The render must
+        // equal the string emitter's already-rustfmt-shaped bytes.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let scope = GenericScope::new(&[]);
+            let expr = binop(BinOp::Append, var(&fx, 0), var(&fx, 1));
+            let doc = build_doc(ctx, &expr, 0, 0, scope).expect("build_doc");
+            let string = emit_expr_at(ctx, &expr, 0, 0, scope).expect("emit_expr_at");
+            assert_eq!(render(&doc, RenderConfig::default()), string);
+            assert_eq!(
+                render(&doc, RenderConfig::default()),
+                "format!(\"{}{}\", a, b)"
+            );
+        });
+    }
+
+    #[test]
+    fn append_macro_breaks_args_without_a_trailing_comma() {
+        // A wide `++` append breaks its macro argument list one argument per line —
+        // but, being a MACRO, `rustfmt` appends NO trailing comma (unlike a fn call).
+        // The format string `"{}{}"` is the first argument. Golden captured from
+        // `rustfmt --edition 2024 --style-edition 2024`.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let expr = binop(BinOp::Append, var(&fx, 7), var(&fx, 8));
+            let got = render_let_stmt(ctx, &expr);
+            let expected = "let z = format!(\n        \"{}{}\",\n        argument_that_is_quite_long_enough_to_matter_x,\n        argument_that_is_quite_long_enough_to_matter_y\n    )";
+            assert_eq!(
+                got, expected,
+                "\n--- got ---\n{got}\n--- want ---\n{expected}"
+            );
+        });
+    }
+
+    #[test]
+    fn int_div_call_breaks_args_with_a_trailing_comma() {
+        // A wide `//` int-div breaks its two arguments one per line WITH the trailing
+        // comma `rustfmt` keeps on a plain function call (the macro/call divergence
+        // this pins against `append_macro_breaks_args_without_a_trailing_comma`).
+        // Golden captured from `rustfmt --edition 2024 --style-edition 2024`.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let expr = binop(BinOp::IntDiv, var(&fx, 7), var(&fx, 8));
+            let got = render_let_stmt(ctx, &expr);
+            let expected = "let z = ipe_runtime::math::ipe_int_div(\n        argument_that_is_quite_long_enough_to_matter_x,\n        argument_that_is_quite_long_enough_to_matter_y,\n    )";
+            assert_eq!(
+                got, expected,
+                "\n--- got ---\n{got}\n--- want ---\n{expected}"
+            );
+        });
+    }
+
+    #[test]
+    fn call_binop_seal_holds_across_the_break() {
+        // SEAL: both call-shaped binops' normalized leaves equal the string
+        // emitter's normalized bytes even when broken — the macro's absent trailing
+        // comma and the call's break-conditional comma are both SEAL-invisible.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let scope = GenericScope::new(&[]);
+            for expr in [
+                binop(BinOp::Append, var(&fx, 7), var(&fx, 8)),
+                binop(BinOp::IntDiv, var(&fx, 7), var(&fx, 8)),
+            ] {
+                let doc = build_doc(ctx, &expr, 4, 0, scope).expect("build_doc");
+                let string = emit_expr_at(ctx, &expr, 4, 0, scope).expect("emit_expr_at");
+                assert_eq!(doc.normalized_leaves(), whitespace_normalize(&string));
+            }
+        });
+    }
+
+    #[test]
+    fn func_value_block_always_breaks_but_assignment_stays_flat() {
+        // A named-function value whose narrow `let` annotation (`Fun([], Int)` →
+        // `Box<dyn Fn() -> i64 + …>`) keeps the assignment on one line: the block
+        // still ALWAYS breaks (it holds the `let`), but the `= Box::new(<name>)`
+        // RHS does NOT drop to its own line. Golden captured from
+        // `rustfmt --edition 2024 --style-edition 2024`, with the emitter's chosen
+        // `Box::new(<name>)` RHS recovered from the flat string form.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let scope = GenericScope::new(&[]);
+            let expr = Expr::FuncValue {
+                callee: Callee::Func(FuncId::from_raw(0)),
+                ty: IrType::Fun(vec![], Box::new(IrType::Int)),
+            };
+            let flat = emit_expr_at(ctx, &expr, 1, 0, scope).expect("emit_expr_at");
+            let rhs = flat
+                .split_once("= ")
+                .and_then(|(_, r)| r.split_once(';'))
+                .map(|(r, _)| r.trim())
+                .expect("func value has a `= <rhs>;`");
+            let got = render_fn_body(ctx, &expr);
+            let expected = format!(
+                "    {{\n        let __ipe_fn: Box<dyn Fn() -> i64 + Send + Sync + 'static> = {rhs};\n        __ipe_fn\n    }}"
+            );
+            assert_eq!(
+                got, expected,
+                "\n--- got ---\n{got}\n--- want ---\n{expected}"
+            );
+        });
+    }
+
+    #[test]
+    fn func_value_block_rhs_breaks_the_wide_type_annotation() {
+        // A named-function value whose `let __ipe_fn: <wide Box type> = ` prefix
+        // pushes the `Box::new(<name>)` RHS onto its own line at col 12 (the
+        // assignment-RHS-break axis), exactly like the boxed lambda. The wide
+        // three-arg fn type overflows the same-line form. Golden captured from
+        // `rustfmt --edition 2024 --style-edition 2024`, with the emitter's chosen
+        // helper name recovered from the flat string form.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let scope = GenericScope::new(&[]);
+            let expr = Expr::FuncValue {
+                callee: Callee::Func(FuncId::from_raw(0)),
+                ty: IrType::Fun(
+                    vec![IrType::Int, IrType::Int, IrType::Int],
+                    Box::new(IrType::Int),
+                ),
+            };
+            // Recover the emitter's `Box::new(<name>)` RHS from the flat form.
+            let flat = emit_expr_at(ctx, &expr, 1, 0, scope).expect("emit_expr_at");
+            let rhs = flat
+                .split_once("= ")
+                .and_then(|(_, r)| r.split_once(';'))
+                .map(|(r, _)| r.trim())
+                .expect("func value has a `= <rhs>;`");
+            let got = render_fn_body(ctx, &expr);
+            let expected = format!(
+                "    {{\n        let __ipe_fn: Box<dyn Fn(i64, i64, i64) -> i64 + Send + Sync + 'static> =\n            {rhs};\n        __ipe_fn\n    }}"
+            );
+            assert_eq!(
+                got, expected,
+                "\n--- got ---\n{got}\n--- want ---\n{expected}"
+            );
         });
     }
 

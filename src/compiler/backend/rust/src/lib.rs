@@ -40,6 +40,7 @@ use ipe_diagnostics::{DResult, Diagnostic, NameError, Span};
 use ipe_intern::{Interner, Symbol};
 use ipe_ir::{FuncId, IrType, ModPath, Program, TypeDef};
 
+pub use emit_doc::{SweepDivergence, native_vs_legacy_sweep};
 pub use preamble::{epilogue, preamble};
 
 /// Which SQL database driver the emitted project targets.
