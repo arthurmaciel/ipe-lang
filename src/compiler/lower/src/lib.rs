@@ -20,7 +20,13 @@
 //! is absent is an internal-invariant violation and surfaces as
 //! [`ipe_diagnostics::Diagnostic::CompilerBug`] — never a panic.
 
+mod capabilities;
 mod lower;
+
+/// Whole-program capability inference: the exact security-capability set a
+/// lowered program exercises. Consumed by `ipe capabilities` (SP1) and, ahead,
+/// by manifest generation (SP2) and sandbox configuration (SP4).
+pub use capabilities::program_capabilities;
 
 /// Test-only surface: the crate-private TCO analysis/rewrite,
 /// re-exported so the integration-test binary can drive them directly. Hidden
