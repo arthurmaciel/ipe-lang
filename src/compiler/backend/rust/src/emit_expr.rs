@@ -969,7 +969,7 @@ pub fn callee_name(ctx: &EmitCtx, callee: &Callee) -> DResult<String> {
 /// container-first in the runtime (`ipe_maybe_map(m, f)`) but function-first in
 /// Ipê (`Maybe.map f m`); every other wired kernel matches the Ipê order. Used by
 /// the [`Expr::Call`] emitter to reverse the rendered argument list.
-const fn kernel_swaps_first_two(k: ipe_ir::KernelFn) -> bool {
+pub const fn kernel_swaps_first_two(k: ipe_ir::KernelFn) -> bool {
     matches!(
         k,
         KernelFn::MaybeMap
@@ -992,6 +992,54 @@ const fn kernel_swaps_first_two(k: ipe_ir::KernelFn) -> bool {
             // sites (see `Expr::TaskSeq` below for the auto-force counterpart).
             | KernelFn::TaskAndThen
     )
+}
+
+/// Whether a `Call` node hits one of the bespoke kernel special cases the
+/// generic `{name}{turbofish}({args})` tail below does NOT cover — the JSON /
+/// Http / Http-builder / Task-retry / Db / TEA / Server / UI probe helpers, or
+/// the `Dict.get` clone-arg case. Every one of those probes gates on
+/// `Callee::Kernel`, so a non-kernel callee is trivially `false`.
+///
+/// This is the p'does any special case apply?' predicate the native Doc emitter
+/// ([`crate::emit_doc`]) consults to decide whether a `Call` can be structured as
+/// the generic delimited tail (special case absent) or must stay a byte-carried
+/// leaf (special case present). It re-runs the probes rather than duplicating
+/// their per-kernel `KernelFn` matches, so it can never drift from them; the
+/// probes take `&EmitCtx` immutably and have no side effects, so re-running them
+/// is safe. The rendered strings they return are discarded here.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "mirrors the emit_expr_at Call arm's probe-chain arguments verbatim"
+)]
+pub fn call_has_kernel_special_case(
+    ctx: &EmitCtx,
+    callee: &Callee,
+    args: &[Expr],
+    on_form: ipe_ir::OnFormKind,
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<bool> {
+    // Only kernels have special cases; every probe would gate out immediately.
+    if !matches!(callee, Callee::Kernel(_)) {
+        return Ok(false);
+    }
+    if emit_json_decoder_call(ctx, callee, args, indent, child, generics)?.is_some()
+        || emit_http_call(ctx, callee, args, indent, child, generics)?.is_some()
+        || emit_http_builder_call(ctx, callee, args, indent, child, generics)?.is_some()
+        || emit_task_retry_call(ctx, callee, args, indent, child, generics)?.is_some()
+        || emit_db_call(ctx, callee, args, indent, child, generics)?.is_some()
+        || emit_tea_call(ctx, callee, args, indent, child, generics)?.is_some()
+        || emit_server_call(ctx, callee, args, indent, child, generics)?.is_some()
+        || emit_ui_call(ctx, callee, args, on_form, indent, child, generics)?.is_some()
+    {
+        return Ok(true);
+    }
+    // `Dict.get` clones its dict arg — the generic tail would drop the `.clone()`.
+    if matches!(callee, Callee::Kernel(KernelFn::DictGet)) {
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 /// Handle Http kernel calls that require custom argument wrapping.
