@@ -158,7 +158,7 @@ fn pat_bound_symbols(pat: &Pat, out: &mut std::collections::BTreeSet<Symbol>) {
 /// patterns) removes its bound name(s) from the free set of the scope it
 /// introduces, exactly mirroring `ipe_lower::rewrite_var_to_apply`'s
 /// shadow-aware recursion shape.
-fn free_vars(expr: &Expr) -> std::collections::BTreeSet<Symbol> {
+pub fn free_vars(expr: &Expr) -> std::collections::BTreeSet<Symbol> {
     let mut out = std::collections::BTreeSet::new();
     collect_free_vars(expr, &mut out);
     out
@@ -519,7 +519,7 @@ fn pat_binds_target(pat: &Pat, target: Symbol) -> bool {
 /// only ever rewrites bare `Var` occurrences into `CloneVar` — the passes
 /// don't interfere with each other regardless of order (a `CloneVar` leaf is
 /// never re-matched by a later target's pass).
-fn clone_targets_in_expr(expr: Expr, targets: &std::collections::BTreeSet<Symbol>) -> Expr {
+pub fn clone_targets_in_expr(expr: Expr, targets: &std::collections::BTreeSet<Symbol>) -> Expr {
     targets.iter().fold(expr, |e, &t| clone_free_target(e, t))
 }
 
