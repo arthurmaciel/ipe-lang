@@ -976,7 +976,7 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
 name = "e2e-support"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "serde_json",
 ]
@@ -1962,7 +1962,7 @@ dependencies = [
 
 [[package]]
 name = "ipe"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "e2e-support",
  "hex",
@@ -1998,7 +1998,7 @@ dependencies = [
 
 [[package]]
 name = "ipe-playground"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "axum",
  "serde",
@@ -2075,7 +2075,7 @@ dependencies = [
 
 [[package]]
 name = "ipe-wasm"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "ipe_backend",
  "ipe_backend_rust",
@@ -2093,7 +2093,7 @@ dependencies = [
 
 [[package]]
 name = "ipe_backend"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "ipe_diagnostics",
  "ipe_ir",
@@ -2103,7 +2103,7 @@ dependencies = [
 
 [[package]]
 name = "ipe_backend_rust"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "ipe_backend",
  "ipe_diagnostics",
@@ -2114,7 +2114,7 @@ dependencies = [
 
 [[package]]
 name = "ipe_canon"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "ipe_diagnostics",
  "ipe_intern",
@@ -2125,7 +2125,7 @@ dependencies = [
 
 [[package]]
 name = "ipe_db"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "ipe_backend",
  "ipe_backend_rust",
@@ -2143,11 +2143,11 @@ dependencies = [
 
 [[package]]
 name = "ipe_diagnostics"
-version = "0.0.0"
+version = "0.1.0"
 
 [[package]]
 name = "ipe_ffi"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "ipe_canon",
  "ipe_diagnostics",
@@ -2157,7 +2157,7 @@ dependencies = [
 
 [[package]]
 name = "ipe_intern"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "ipe_diagnostics",
  "serde",
@@ -2166,7 +2166,7 @@ dependencies = [
 
 [[package]]
 name = "ipe_ir"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "ipe_diagnostics",
  "ipe_intern",
@@ -2177,14 +2177,14 @@ dependencies = [
 
 [[package]]
 name = "ipe_kernels"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "ipe_lower"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "ipe_canon",
  "ipe_diagnostics",
@@ -2196,7 +2196,7 @@ dependencies = [
 
 [[package]]
 name = "ipe_lsp_features"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "ipe_canon",
  "ipe_db",
@@ -2209,7 +2209,7 @@ dependencies = [
 
 [[package]]
 name = "ipe_lsp_server"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
  "ipe_db",
@@ -2223,7 +2223,7 @@ dependencies = [
 
 [[package]]
 name = "ipe_parse"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "ipe_diagnostics",
  "ipe_intern",
@@ -2232,14 +2232,14 @@ dependencies = [
 
 [[package]]
 name = "ipe_sandbox"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "ipe_diagnostics",
 ]
 
 [[package]]
 name = "ipe_stdlib"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "ipe_canon",
  "ipe_intern",
@@ -2248,7 +2248,7 @@ dependencies = [
 
 [[package]]
 name = "ipe_syntax"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "ipe_diagnostics",
  "ipe_intern",
@@ -2256,7 +2256,7 @@ dependencies = [
 
 [[package]]
 name = "ipe_types"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "ipe_canon",
  "ipe_diagnostics",
@@ -2267,7 +2267,7 @@ dependencies = [
 
 [[package]]
 name = "ipe_watch"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "notify",
  "sha2",

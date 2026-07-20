@@ -18,6 +18,7 @@
 pub mod build_plan;
 mod cache;
 pub mod ffi;
+pub mod help;
 pub mod init;
 mod lsp;
 pub mod project;
@@ -45,6 +46,10 @@ use ipe_intern::Interner;
 pub enum CliError {
     /// Command-line misuse; carries a fixed usage hint.
     Usage(&'static str),
+    /// No command, or an unrecognised one: the top-level help is shown and the
+    /// process exits non-zero. Distinct from [`Self::Usage`] because it renders
+    /// the full sectioned screen (coloured for a terminal) rather than a hint.
+    UnknownCommand,
     /// Command-line / manifest misuse whose message must echo user-supplied
     /// input (e.g. an unrecognised `ipe.toml` value) — kept distinct from
     /// [`Self::Usage`] so no call site needs to leak a `String` into a
@@ -90,6 +95,9 @@ impl fmt::Display for CliError {
         match self {
             Self::Usage(hint) => write!(f, "{hint}"),
             Self::UsageOwned(hint) => write!(f, "{hint}"),
+            // The top-level help, coloured for a terminal. Rendered against
+            // stderr because misuse output goes to stderr.
+            Self::UnknownCommand => f.write_str(help::top_level(&std::io::stderr()).trim_start()),
             Self::Io { path, source } => write!(f, "io error at {}: {source}", path.display()),
             Self::Pipeline { file, src, diag } => {
                 f.write_str(&render(diag, &file.to_string_lossy(), src))
@@ -1371,11 +1379,61 @@ const USAGE: &str = "usage:\n  \
      ipe lsp\n  \
      ipe version";
 
+/// A request for help asks for output, not an error: it prints to stdout and
+/// exits successfully. Returned by [`intercept_help`] so [`run_cli`] can honour
+/// it before any command runs.
+struct HelpRequest;
+
+/// Recognise a help request in `args` and, when found, print the matching page
+/// to stdout. Handles the top-level screen (no args, or a leading `--help` /
+/// `-h` / `help`) and every per-command page (`<cmd> --help` or `help <cmd>`).
+///
+/// Returns `Some(HelpRequest)` when help was printed (the caller returns `Ok`),
+/// or `None` when `args` is an ordinary command to dispatch.
+fn intercept_help(args: &[String]) -> Option<HelpRequest> {
+    let is_help_flag = |a: &str| a == "--help" || a == "-h" || a == "help";
+
+    // No arguments, or a leading bare help token: the top-level screen.
+    match args.split_first() {
+        None => {
+            print!("{}", help::top_level(&std::io::stdout()));
+            return Some(HelpRequest);
+        }
+        Some((first, rest)) if is_help_flag(first) => {
+            // `help <cmd>` / `--help <cmd>`: that command's page, else the
+            // top-level screen.
+            let named = rest
+                .first()
+                .and_then(|c| help::command(c, &std::io::stdout()));
+            match named {
+                Some(page) => print!("{page}"),
+                None => print!("{}", help::top_level(&std::io::stdout())),
+            }
+            return Some(HelpRequest);
+        }
+        _ => {}
+    }
+
+    // `<cmd> --help`: the command's own page, when the command is known.
+    if let Some((cmd, rest)) = args.split_first()
+        && help::is_command(cmd)
+        && rest.iter().any(|a| is_help_flag(a))
+        && let Some(page) = help::command(cmd, &std::io::stdout())
+    {
+        print!("{page}");
+        return Some(HelpRequest);
+    }
+    None
+}
+
 /// Parse `argv` (excluding the program name) and run the requested command.
 ///
 /// # Errors
 /// Returns [`CliError`] on misuse, a compile failure, or a filesystem error.
 pub fn run_cli(args: &[String]) -> Result<(), CliError> {
+    if intercept_help(args).is_some() {
+        return Ok(());
+    }
     match args.split_first() {
         Some((cmd, rest)) if cmd == "init" => init::run_init(rest),
         Some((cmd, rest)) if cmd == "build" => run_build(rest),
@@ -1391,7 +1449,9 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
             println!("ipe {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
-        _ => Err(CliError::Usage(USAGE)),
+        // An unknown command is misuse: show the top-level help and fail. Unlike
+        // an explicit `--help`, this is not a request, so it exits non-zero.
+        _ => Err(CliError::UnknownCommand),
     }
 }
 
