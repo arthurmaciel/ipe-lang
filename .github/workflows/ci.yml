@@ -246,17 +246,13 @@ jobs:
   # on a loaded runner — the default 120s nextest-partition limit kills them on
   # scheduler contention, not on a real regression.
   #
-  # NON-GATING FOR NOW (`continue-on-error: true`). The prior form gated on a
-  # `vendor/upstream-ipe/...` path that never landed, so E2E ALWAYS self-skipped —
-  # THE SEAL was never enforced in CI. Pointing it at the in-repo runtime turns it
-  # back on, which surfaces a real pre-existing backlog the skip had masked. Those
-  # are tracked blockers, not a reason to keep E2E blind, so the job runs and
-  # reports without failing CI. FLIP `continue-on-error` to false once the oracle
-  # backlog is regenerated — then a SEAL regression fails CI as it should.
+  # GATING. The oracle.meta → expected.txt migration is complete: every golden
+  # that calls assert_go_parity has a matching expected.txt, and the full E2E
+  # suite passes locally (207 expected.txt files, 0 oracle.meta). A SEAL
+  # regression now fails CI as it should.
   e2e:
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'   # slow: push/nightly only (seal-smoke is the PR proxy)
-    continue-on-error: true
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
     strategy:
