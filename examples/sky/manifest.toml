@@ -42,7 +42,7 @@
 [[example]]
 name = "00-standard-libs"
 sky_source = "sibling"
-patch = "rename-map"
+patch = "rename-map+ipe-patch"
 go_ffi = false
 
 [[example]]

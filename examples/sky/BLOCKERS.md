@@ -159,18 +159,32 @@ PROJECT-WIDE type index (name → real home) so it unifies with the genuine
 firewall (`src/compiler/db`), which is invasive and risks the incremental
 early-cut invariant — out of this cycle's boundary.
 
-**00-standard-libs — FILED.**
-`Test.equal "$15.00" (Money.format (Money.add a b))` passes the result of
-`Money.add` straight into `Money.format`. Upstream Sky's `Money.add` returns a
-bare `Money`; Ipê's `Ipe.Money.add` returns `Result Error Money` (a fail-closed
-divergence — over/underflow is a typed error, not a silent wrap). So the example
-hits `IPE-T0001: expected Ipe.Money.Money, found Result Error Ipe.Money.Money` at
-`src/Main.ipe:656`. This is a sanctioned security divergence, not a bug: the
-result of a checked-arithmetic op MUST be unwrapped before formatting. Closing 00
-needs the upstream example rewritten to thread the `Result` (a real behavioural
-delta → an `ipe-patches/00-standard-libs.patch`), OR a lenient display-only
-`Money.formatResult` helper. Deferred pending a decision on which; recorded here
-so the red row is understood, never papered over.
+### 00-standard-libs — Money `Result` type-mismatch (BUILD fixed via patch)
+`Money.format (Money.add a b)` and `Money.format (Money.sumOf USD parts)` passed
+the result of a checked-arithmetic op straight into `Money.format`. Upstream
+Sky's `Money.add` / `Money.sumOf` return a bare `Money`; Ipê's return
+`Result Error Money` (a fail-closed divergence — a currency mismatch is a typed
+error, not a silent wrong sum), so the example hit `IPE-T0001: expected
+Ipe.Money.Money, found Result Error Ipe.Money.Money`. This is a sanctioned
+security divergence, not a bug: the checked result MUST be unwrapped before
+formatting. Fixed by `ipe-patches/00-standard-libs.patch`, which threads both
+sums through `Result.withDefault (Money.zero USD)` (the `Result` module is
+already imported; both sums are same-currency, hence always `Ok`). Verified:
+`ipe build` exit 0 and the emitted crate `cargo build` exit 0 (THE SEAL).
+
+## Filed
+
+### 00-standard-libs — 4 RUN-time test failures (unmasked by the BUILD fix)
+With the type-mismatch above resolved, the example compiles and its `Test`
+suite now RUNS for the first time: `127 passed, 4 failed (131 total)`. The four
+failures are runtime behaviour mismatches, NOT build/type errors, and were
+previously masked because the example never compiled. The stdlib `Ipe.Test`
+runner prints only the pass/fail COUNT (`src/stdlib/Ipe/Test.ipe` collects
+failing test names but the summary line does not emit them), so the specific
+four are not yet identified. Closing this needs either a `Test`-runner change to
+print each failing test's name + expected/actual, or a bisect of the suite to
+name the four — then a root-cause per failure. Recorded honestly: the row is
+BUILD-green, RUN-red pending that diagnosis, never papered over.
 
 ### New-model sweep tally (scripts/examples-sweep.sh, BUILD + RUN)
 
