@@ -52,6 +52,43 @@ fn fixtures() -> Vec<(&'static str, String)> {
             "with_comments",
             "module M exposing (f, g)\n\n\n-- leading on f\nf =\n    1\n\n\n{- block before g -}\ng =\n    2\n".to_owned(),
         ),
+        // --- Regressions caught battle-testing against elm-format ------------
+        // A constructor-with-args pattern in ARGUMENT position keeps its parens;
+        // dropping them turned one parameter into several.
+        (
+            "ctor_param_parens",
+            "module M exposing (f)\n\n\nf (Vector va) (Wrap x) =\n    va\n".to_owned(),
+        ),
+        // A single-line type signature stays single-line however wide — the
+        // signature break is modal, not width-driven.
+        (
+            "wide_signature_stays_one_line",
+            "module M exposing (map4)\n\n\nmap4 : (a -> b -> c -> d -> e) -> Vector a -> Vector b -> Vector c -> Vector d -> Vector e\nmap4 f =\n    f\n".to_owned(),
+        ),
+        // A `let` binder that destructures with a constructor pattern keeps its
+        // parens (`(Decoder d) = …`), and each binding's value drops to its own
+        // indented line with a blank line between bindings.
+        (
+            "let_ctor_destructure",
+            "module M exposing (f)\n\n\nf =\n    let\n        ( a, b ) =\n            pair\n\n        (Decoder d) =\n            wrap a\n    in\n    d\n".to_owned(),
+        ),
+        // A pipe operand that is a function application needs no parentheses.
+        (
+            "pipe_call_operand_bare",
+            "module M exposing (f)\n\n\nf start vector =\n    List.foldr f start <| toList vector\n".to_owned(),
+        ),
+        // A lambda whose body is a `let` drops the body onto the next line
+        // rather than printing `-> let` inline (which would place the `let`
+        // keyword mid-line and break its layout-sensitive block on re-parse).
+        (
+            "lambda_let_body",
+            "module M exposing (f)\n\n\nf =\n    apply\n        (\\x ->\n            let\n                y =\n                    x\n            in\n            y\n        )\n".to_owned(),
+        ),
+        // A multi-line module `exposing` list preserves its source grouping.
+        (
+            "exposing_multiline_grouped",
+            "module M exposing\n    ( A\n    , b, c\n    , d\n    )\n\n\nb =\n    1\n".to_owned(),
+        ),
     ]
 }
 
@@ -75,6 +112,34 @@ fn canonical_inputs_are_unchanged() {
             format_source(&canon).unwrap(),
             canon,
             "{name}: canonical form is not stable"
+        );
+    }
+}
+
+/// The elm-format-parity regression fixtures are already in canonical form, so
+/// each must be an EXACT (byte-for-byte) fixed point of a single pass — this is
+/// the guard against the specific formatter bugs found battle-testing the
+/// formatter against real elm-format output (constructor-parameter parens,
+/// modal signature width, `let` constructor destructures, bare pipe operands,
+/// lambda `let` bodies, and grouped multi-line `exposing` lists).
+#[test]
+fn parity_regressions_are_exact_fixed_points() {
+    let names = [
+        "ctor_param_parens",
+        "wide_signature_stays_one_line",
+        "let_ctor_destructure",
+        "pipe_call_operand_bare",
+        "lambda_let_body",
+        "exposing_multiline_grouped",
+    ];
+    for (name, src) in fixtures() {
+        if !names.contains(&name) {
+            continue;
+        }
+        let out = format_source(&src).unwrap();
+        assert_eq!(
+            out, src,
+            "{name}: not an exact fixed point\n--- got:\n{out}"
         );
     }
 }
