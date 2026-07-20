@@ -25,6 +25,9 @@ examples/sky/**/target/
 examples/sky/**/sky-out/
 examples/sky/**/.sky/
 examples/sky/**/.ipe/
+# Raw upstream .sky tree preserved by the mirror under SKY_SWEEP_COMPARE for the
+# live-Sky comparison — a transient run artifact, never committed.
+examples/**/.sky-src/
 # Default SQLite DB written by `Db.connect ()` when an emitted binary is run
 # by the E2E test harness in the crate/repo cwd — a run artifact, never source.
 ipe.db

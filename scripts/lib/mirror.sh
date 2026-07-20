@@ -127,11 +127,28 @@ sky_mirror_one() {
   rm -rf "$dst/sky-out" "$dst/out" "$dst/.ipe" "$dst/.ipecache" "$dst/.ipedeps" \
          "$dst/.skydeps" "$dst/.skyache" "$dst/target" 2>/dev/null
 
-  # *.sky -> *.ipe (source extension rename).
+  # Preserve the RAW upstream .sky tree in a sibling `.sky-src/` before the
+  # rewrites, so the live-Sky comparison (SKY_SWEEP_COMPARE) can `sky run` the
+  # unmodified upstream. Skipped when comparison is off, to keep the mirror lean.
+  # Copy each top-level entry individually — `cp "$dst/." "$dst/.sky-src/"` would
+  # race on the just-created target dir and can copy nothing on some `cp`s.
+  if [ "${SKY_SWEEP_COMPARE:-0}" = 1 ]; then
+    local _e
+    rm -rf "$dst/.sky-src"
+    mkdir -p "$dst/.sky-src"
+    for _e in "$dst"/* "$dst"/.[!.]*; do
+      [ -e "$_e" ] || continue
+      case "$(basename "$_e")" in .sky-src) continue ;; esac
+      cp -rf "$_e" "$dst/.sky-src/" 2>/dev/null
+    done
+  fi
+
+  # *.sky -> *.ipe (source extension rename). The `.sky-src/` raw-preservation
+  # tree is pruned from every walk below so it keeps its original .sky files.
   local f
   while IFS= read -r f; do
     mv -f "$f" "${f%.sky}.ipe"
-  done < <(find "$dst" -type f -name '*.sky' -print 2>/dev/null)
+  done < <(find "$dst" -path "$dst/.sky-src" -prune -o -type f -name '*.sky' -print 2>/dev/null)
 
   # Project manifest: sky.toml -> ipe.toml (Ipê's canonical manifest name), with
   # the `entry` key's src/Main.sky -> src/Main.ipe rewrite. Renaming the file (not
@@ -152,7 +169,7 @@ sky_mirror_one() {
   [ -n "$bare" ] && bareflag=(--bare-stdlib "$bare")
 
   # Step 1 — the shared token rewrite (code-only; strings/comments preserved).
-  find "$dst" -type f -name '*.ipe' -print0 2>/dev/null \
+  find "$dst" -path "$dst/.sky-src" -prune -o -type f -name '*.ipe' -print0 2>/dev/null \
     | xargs -0 -r python3 "$SKY_TRANSFORM" "${bareflag[@]}" "$SKY_RENAME_MAP"
 
   # Step 2 — the optional per-example semantic-delta patch. A patch that fails
