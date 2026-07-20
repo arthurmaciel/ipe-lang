@@ -387,35 +387,56 @@ for three independent reasons, each an honest limit of the shim-free model:
    argument over-drops by design (`trait-object-unsupported`, closure-seam not
    wired). So a schedule can be constructed but never populated from Ipê.
 
-### Filed — `&self` / `&mut self` methods force `.clone()` on non-`Clone` handles
+### SEAL-CLOSED — `&self` / `&mut self` methods force `.clone()` on non-`Clone` handles
 
 A method whose real receiver is `&self` or `&mut self` and whose return is NOT
 `Self` (e.g. `World::entity_count(&self) -> usize`,
 `World::change_tick(&self) -> Tick`) binds as `World -> Result Error T`: the
 wrapper takes the opaque handle BY VALUE and does not hand it back. When the Ipê
-program uses the same `world` value more than once, the backend lowers each
+program used the same `world` value more than once, the backend lowered each
 non-final use as `world.clone()` (correct for a value-semantics language), but
-`bevy_ecs::world::World` is `!Clone`, so the emitted `ipe-app` crate fails:
+`bevy_ecs::world::World` is `!Clone`, so the emitted `ipe-app` crate failed:
 
 ```
 error[E0599]: no method named `clone` found for struct `World` in the current scope
    |  let world = world.clone();
 ```
 
-`ipe build` reports exit 0, then `cargo build` fails — a SEAL violation with no
-diagnostic. Two consequences:
+`ipe build` reported exit 0, then `cargo build` failed — a SEAL violation with
+no diagnostic.
 
-- **Workaround in-example:** thread the `World` LINEARLY — use only methods that
-  return the receiver (`flush` / `clear_*`, which the FFI's `self_returning`
-  owned-threading path already surfaces as `World -> Result Error World`) and
-  make any terminal read (`entity_count`) the single last use. `examples/bevy-game`
-  is written this way and runs clean.
-- **Root-cause fix (not done — cross-cutting):** extend the owned-threading path
-  from setters to ALL `&self` / `&mut self` non-`Self`-returning methods, so a
-  reader binds as `World -> Result Error (T, World)` and the handle flows on
-  without a clone. This changes the binding SIGNATURE the interface exposes and
-  ripples through the interface generator, the `.ipei` type-env, and every
-  consumer, so it is out of scope for a single example landing. Until then, a
-  non-`Clone` opaque handle used non-linearly is an under-caught SEAL gap: the
-  build emitter should either thread the receiver or refuse the non-linear use
-  with a diagnostic, never emit an uncompilable `.clone()`.
+**Root cause:** the lowerer's clone-classifier (`ipe_lower` `clone_class` +
+`ipe_ir::carrier_is_clone`) lowered an FFI opaque handle to `IrType::Enum {
+args: [] }` and classified it, like any user enum, as `Clone`-deriving —
+inserting `.clone()` on reuse. But an FFI opaque type IS the real foreign Rust
+type, whose `Clone`-ness the foreign crate decides, not Ipe.
+
+**Fix (SEAL-closed, fail-closed minimum):** the lowerer now recognises a
+`Rust.*`-homed opaque `Enum` as an FFI foreign handle (`enum_home_is_ffi_foreign`,
+mirroring the backend's `is_foreign_interface_home`) and classifies it
+`NonClone` — the multi-use rewrite never inserts a `.clone()` on it. A
+non-linear (used-more-than-once) reuse of such a handle now fails closed with a
+typed diagnostic, **IPE-L0130** (`Feature::ForeignHandleReuse`), and a NON-ZERO
+`ipe build` exit — so the exit-0-then-cargo-fail hole is closed. A same-named
+user enum under a non-`Rust` home still derives `Clone` (unchanged).
+Regression-pinned by `ipe_lower` `ffi_foreign_opaque_handle_is_non_clone` /
+`ffi_foreign_handle_reuse_fails_closed` and the end-to-end golden
+`src/ipe-cli/tests/golden_ffi_nonclone_handle_reuse_seal.rs`.
+
+- **Workaround in-example (still the ergonomic path):** thread the `World`
+  LINEARLY — use methods that return the receiver (`flush` / `clear_*`, surfaced
+  by the FFI's `self_returning` owned-threading path as
+  `World -> Result Error World`) and make any terminal read (`entity_count`) the
+  single last use. `examples/bevy-game` is written this way and runs clean.
+- **Follow-up (ergonomic borrow-threading — FILED, not in this change):** extend
+  the owned-threading path from setters to ALL `&self` / `&mut self`
+  non-`Self`-returning methods so a reader binds as
+  `World -> Result Error (T, World)` and the handle flows on without a clone AND
+  without the IPE-L0130 gate. This changes the binding SIGNATURE the interface
+  exposes and ripples through: (1) the interface generator's Ipe-signature build
+  (`ipe_ffi` `emit::wrapper_ipe_signature` — append the receiver to the result
+  tuple for a `&self`/`&mut self` non-`Self` reader), (2) the wrapper body
+  (`ipe_ffi` `bindings::plain_lines` — return `(ret, arg0)` instead of dropping
+  `arg0`), (3) the `.ipei` type-env + `kernel.json` arity, and (4) every
+  consumer, which must destructure the returned tuple. Until it lands, the
+  IPE-L0130 fail-closed gate holds the SEAL.

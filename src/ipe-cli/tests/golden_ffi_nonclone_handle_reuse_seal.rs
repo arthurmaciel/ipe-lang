@@ -1,0 +1,142 @@
+//! Regression — THE SEAL for a NON-`Clone` FFI opaque handle used non-linearly.
+//!
+//! A shim-free FFI binding maps an Ipe opaque type onto the REAL foreign Rust
+//! type. When that type is not `Clone` (e.g. `bevy_ecs::World`), reusing the
+//! same handle binding twice in a value-consuming position cannot be lowered as
+//! `handle.clone()` — the emitted crate would fail `cargo build` (E0599) AFTER
+//! `ipe build` already reported exit 0. That exit-0-then-cargo-fail hole is the
+//! exact SEAL break `PRINCIPLES.md` forbids.
+//!
+//! The lowerer now classifies a `Rust.*`-homed opaque `Enum` as non-`Clone` and
+//! fails closed on its non-linear reuse with IPE-L0130, so `ipe build` can never
+//! exit 0 with uncompilable Rust for this shape.
+//!
+//! ```text
+//! cargo test -p ipe --test golden_ffi_nonclone_handle_reuse_seal
+//! ```
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use ipe_ffi::driver::{FfiCache, install_from_inspection};
+
+/// A runtime `false` the optimiser cannot fold — a deliberate failure marker.
+const fn false_marker() -> bool {
+    std::hint::black_box(false)
+}
+
+/// Seed the project's FFI cache with a hand-crafted inspection document for a
+/// non-`Clone` foreign crate `handle_demo`: an opaque `Widget` handle, a `new`
+/// constructor, and a `&self` reader `slot_count(&self) -> usize` (binds as
+/// `Widget -> Result Error Int`). Returns false if the cache could not be
+/// written.
+fn seed_nonclone_ffi_cache(project_root: &Path) -> bool {
+    let cache = FfiCache::at_project_root(project_root);
+    // Mirrors the inspector wire shape (see `ipe_ffi` bindings fixtures): a
+    // static `new` returning the opaque type, and a `&self` non-`Self`-returning
+    // reader. The `rustType` `&handle_demo::Widget` receiver marks the method as
+    // by-borrow; the wrapper today takes the handle by value.
+    let doc = serde_json::json!({
+        "pkg": "handle_demo",
+        "name": "handle_demo",
+        "version": "0.1.0",
+        "functions": [
+            {
+                "name": "new",
+                "params": [],
+                "results": [{"name": "", "type": "Widget", "ipeType": "Widget", "rustType": "handle_demo::Widget"}],
+                "effect": "pure",
+                "recvType": "Widget",
+                "recvRustType": "handle_demo::Widget",
+                "methodName": "new"
+            },
+            {
+                "name": "slot_count",
+                "params": [
+                    {"name": "self", "type": "Widget", "ipeType": "Widget", "rustType": "&handle_demo::Widget"}
+                ],
+                "results": [{"name": "", "type": "Int", "rustType": "usize"}],
+                "effect": "pure",
+                "recvType": "Widget",
+                "recvRustType": "handle_demo::Widget",
+                "methodName": "slot_count"
+            }
+        ],
+        "errors": []
+    });
+    install_from_inspection(&cache, &doc.to_string()).is_ok()
+}
+
+fn write_project(dir: &Path, main: &str) -> bool {
+    let src = dir.join("src");
+    let _ = fs::remove_dir_all(dir);
+    if fs::create_dir_all(&src).is_err() {
+        return false;
+    }
+    if !seed_nonclone_ffi_cache(dir) {
+        return false;
+    }
+    fs::write(src.join("Main.ipe"), main).is_ok()
+}
+
+/// FAIL-CLOSED: the `world` handle (a non-`Clone` `Rust.Handle_demo.Widget`) is
+/// read twice, so the lowerer must reject it with IPE-L0130 instead of emitting
+/// a `.clone()` the foreign type does not support.
+#[test]
+fn nonclone_handle_reused_fails_closed_before_cargo() {
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return; // runtime unavailable in this environment — skip silently
+    };
+
+    let tmp = std::env::temp_dir().join("ipec_ffi_nonclone_handle_reuse");
+    // `w` is bound once, then read by TWO independent `slot_count` calls — a
+    // non-linear use of a non-`Clone` foreign handle.
+    let wrote = write_project(
+        &tmp,
+        "module Main exposing (main)\n\
+         import Ipe.Prelude exposing (..)\n\
+         import Ipe.Log exposing (println)\n\
+         import Ipe.Result as Result\n\
+         import Ipe.String as String\n\
+         import Rust.Handle_demo as H\n\n\
+         readTwice : H.Widget -> Result Error Int\n\
+         readTwice w =\n\
+         \x20   let\n\
+         \x20       a = H.slot_count_from_widget w\n\
+         \x20       b = H.slot_count_from_widget w\n\
+         \x20   in\n\
+         \x20       Result.map2 (\\x y -> x + y) a b\n\n\
+         main =\n\
+         \x20   case Result.andThen readTwice (H.new_from_widget ()) of\n\
+         \x20       Ok n -> println (String.fromInt n)\n\
+         \x20       Err _ -> println \"err\"\n",
+    );
+    assert!(
+        wrote,
+        "must write the fixture project + FFI cache to a temp dir"
+    );
+
+    let entry = tmp.join("src").join("Main.ipe");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_nonclone_handle_reuse_out");
+    let _ = fs::remove_dir_all(&out);
+
+    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let Err(err) = built else {
+        assert!(
+            false_marker(),
+            "expected IPE-L0130 rejection for reusing a non-`Clone` FFI handle, \
+             but ipe build SUCCEEDED — an exit-0-then-cargo-fail SEAL hole"
+        );
+        return;
+    };
+    let ipe::CliError::Pipeline { diag, .. } = &err else {
+        assert!(false_marker(), "expected a Pipeline diagnostic, got: {err}");
+        return;
+    };
+    let code = diag.code();
+    assert_eq!(
+        code.as_str(),
+        "IPE-L0130",
+        "reusing a non-`Clone` FFI handle must fail closed with IPE-L0130, got {code:?}: {err}"
+    );
+}
