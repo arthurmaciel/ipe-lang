@@ -26,6 +26,7 @@ pub mod lockfile;
 mod lsp;
 pub mod pkg;
 pub mod project;
+pub mod resolve;
 /// The embedded Ipê standard-library source now lives in the dependency-free
 /// [`ipe_stdlib`] leaf crate so the WebAssembly frontend can share one copy.
 /// Re-exported here so `crate::stdlib::…` call sites resolve unchanged.
