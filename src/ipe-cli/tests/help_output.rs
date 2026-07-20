@@ -42,8 +42,7 @@ fn run(args: &[&str]) -> Run {
 
 /// Every command name and every section title, for coverage assertions.
 const COMMANDS: &[&str] = &[
-    "init", "build", "run", "watch", "fix", "fmt", "add", "remove", "install", "explain", "lsp",
-    "version",
+    "init", "build", "run", "watch", "fix", "fmt", "rust", "explain", "lsp", "version",
 ];
 const SECTIONS: &[&str] = &["Development", "Foreign-function interface (FFI)", "Tools"];
 
