@@ -129,9 +129,33 @@ $ ipe rust install              # (re)inspect every [rust.dependencies] crate
 Each crate is inspected inside a sandbox before it is trusted, and its
 `Rust.<Crate>` interface is generated for you — no hand-written bindings.
 
-**Ipê packages** are managed by `ipe add` / `ipe remove`. Package resolution
-arrives with the package index; until then `ipe add <package>` reports that and
-exits non-zero, so a script never mistakes it for a completed install.
+**Ipê packages** are managed by `ipe add` / `ipe remove`:
+
+```
+$ ipe add http-extras           # resolve the latest published version
+$ ipe add http-extras@^1.2       # or pin a semver requirement
+$ ipe remove http-extras         # drop it from ipe.toml and ipe.lock
+```
+
+`ipe add` resolves the package through the **curated index** (a git repository):
+it reads the package's entry, picks the highest published version satisfying your
+requirement, fetches that version's source at its pinned revision, and **verifies
+the fetched source's sha256 against the hash the index pinned** before trusting
+it — a mismatch is a hard error, never a warning, and nothing is written. It then
+records the exact pins in `ipe.lock` and the requirement in `ipe.toml`, and prints
+the resolved version and its capability set (loudly, when a package uses
+`native-ffi`).
+
+`ipe.lock` pins the resolved version, source, revision, and content hash of every
+dependency, so a build is reproducible from the lock even when the index is
+unreachable, and a later build re-verifies the same source.
+
+The `{ git = … }` and `{ path = … }` escapes bypass the index (for a private repo
+or a local checkout) but still carry lockfile integrity — the fetched or copied
+tree is hashed and locked exactly as an index dependency is.
+
+The index checkout defaults to a standard per-user location; set `IPE_INDEX_DIR`
+to point at a different checkout (a local fixture index, for offline testing).
 
 ## Editor setup (LSP)
 

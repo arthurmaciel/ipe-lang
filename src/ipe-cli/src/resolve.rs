@@ -299,31 +299,46 @@ fn write_records(
     project::upsert_dependency(&manifest_path(project_root), name, dep)
 }
 
-/// Print the resolved version and its capability set, loud on the `native-ffi`
-/// capability (which means the package crosses into opaque native code, the one
-/// capability inference cannot see past).
+/// Print the resolved version and its capability set for consent.
 fn report_added(name: &str, version: &str, capabilities: &std::collections::BTreeSet<Capability>) {
-    println!("Added `{name}` {version}.");
+    print!("{}", added_report(name, version, capabilities));
+}
+
+/// The `ipe add` consent report: the resolved version, the capability set, and —
+/// loud — a warning when the package uses `native-ffi` (it crosses into opaque
+/// native code, the one capability inference cannot see past). A pure function of
+/// its inputs so the exact wording is testable.
+fn added_report(
+    name: &str,
+    version: &str,
+    capabilities: &std::collections::BTreeSet<Capability>,
+) -> String {
+    use std::fmt::Write as _;
+    let mut out = format!("Added `{name}` {version}.\n");
     if capabilities.is_empty() {
-        println!("  capabilities: none");
+        out.push_str("  capabilities: none\n");
     } else {
         let names: Vec<&str> = capabilities.iter().map(|c| c.as_str()).collect();
-        println!("  capabilities: {}", names.join(", "));
+        let _ = writeln!(out, "  capabilities: {}", names.join(", "));
     }
     if capabilities.contains(&Capability::NativeFfi) {
-        println!(
+        let _ = writeln!(
+            out,
             "  WARNING: `{name}` uses native FFI (`native-ffi`) — it runs native code whose \
              true capabilities cannot be inferred from Ipê. Review its source before trusting it."
         );
     }
+    out
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{package_cache_dir, resolve_and_remove, resolve_escape, verify_hash};
+    use super::{added_report, package_cache_dir, resolve_and_remove, resolve_escape, verify_hash};
     use crate::cache;
     use crate::lockfile::Lockfile;
     use crate::project::IpeDep;
+    use ipe_ir::Capability;
+    use std::collections::BTreeSet;
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
@@ -415,6 +430,37 @@ mod tests {
         assert!(package_cache_dir(&proj, "remotelib", "HEAD").exists());
         let _ = std::fs::remove_dir_all(&proj);
         let _ = std::fs::remove_dir_all(&src);
+    }
+
+    #[test]
+    fn the_add_report_shows_the_capability_set() {
+        let caps: BTreeSet<Capability> = [Capability::Network, Capability::Clock]
+            .into_iter()
+            .collect();
+        let report = added_report("http-extras", "1.2.0", &caps);
+        assert!(report.contains("Added `http-extras` 1.2.0."));
+        assert!(report.contains("capabilities: network, clock"));
+        assert!(
+            !report.contains("WARNING"),
+            "no native-ffi means no warning"
+        );
+    }
+
+    #[test]
+    fn the_add_report_is_loud_on_native_ffi() {
+        let caps: BTreeSet<Capability> = std::iter::once(Capability::NativeFfi).collect();
+        let report = added_report("risky", "0.1.0", &caps);
+        assert!(report.contains("native-ffi"));
+        assert!(
+            report.contains("WARNING"),
+            "native-ffi must be surfaced loudly"
+        );
+    }
+
+    #[test]
+    fn the_add_report_names_no_capabilities() {
+        let report = added_report("pure", "1.0.0", &BTreeSet::new());
+        assert!(report.contains("capabilities: none"));
     }
 
     #[test]
