@@ -1,0 +1,6 @@
+# Emitted Rust project and its build artifacts.
+/out/
+/target/
+
+# Per-project cache (FFI bindings, incremental build cache).
+/.ipe/

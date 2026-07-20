@@ -18,6 +18,7 @@
 pub mod build_plan;
 mod cache;
 pub mod ffi;
+pub mod init;
 mod lsp;
 pub mod project;
 /// The embedded Ipê standard-library source now lives in the dependency-free
@@ -1354,6 +1355,7 @@ pub fn resolve_runtime() -> Result<PathBuf, CliError> {
 
 /// The top-level usage hint, listing every subcommand and flag.
 const USAGE: &str = "usage:\n  \
+     ipe init  [<name>|.] [--force]\n  \
      ipe build <entry.ipe|project-dir|ipe.toml> [--out <dir>] [--runtime <dir>] [--emit-ir] [--fix]\n  \
      \x20         [--static] [--target <triple|wasm>] [--allocator <auto|system|dlmalloc|talc|mimalloc>]\n  \
      \x20         [--allow-slow-allocator]\n  \
@@ -1375,6 +1377,7 @@ const USAGE: &str = "usage:\n  \
 /// Returns [`CliError`] on misuse, a compile failure, or a filesystem error.
 pub fn run_cli(args: &[String]) -> Result<(), CliError> {
     match args.split_first() {
+        Some((cmd, rest)) if cmd == "init" => init::run_init(rest),
         Some((cmd, rest)) if cmd == "build" => run_build(rest),
         Some((cmd, rest)) if cmd == "run" => run_run(rest),
         Some((cmd, rest)) if cmd == "watch" => run_watch(rest),
