@@ -494,7 +494,14 @@ fn render_chain(
         if !broken {
             let cur = current_col(out);
             let can_glue = if flat_prefix {
+                // In the flat prefix, an operator glues to a FOLLOWING operand only
+                // when that operand renders single-line and fits. `rustfmt` breaks
+                // the chain BEFORE an operand that would itself render multiline — it
+                // never opens a multiline operand mid-line in a broken chain (the sole
+                // multiline glue is onto a PRECEDING operand's closing line, the
+                // `prev_multiline` arm below).
                 glue_fits(&operand.doc, cfg, cur, indent, op)
+                    && renders_single_line(&operand.doc, cfg, cur + 1 + op.len() + 1, indent)
             } else {
                 // Past the flat prefix, an operator glues only immediately after a
                 // multiline operand, at that operand's closing-line column.
@@ -565,8 +572,23 @@ fn render_call_args(
     // `f(g(\n …\n))` for the sole-argument case. No trailing comma.
     if let Some((last, prefix)) = elems.split_last() {
         // Outermost combine: the `fn_call_width` budget is measured from where THIS
-        // call's arguments begin, and shared by every nested combine below.
-        if last_arg_combines(open, prefix, last, None, cfg, start_col, indent).is_some() {
+        // call's arguments begin, and shared by every nested combine below. The
+        // recursive `Shape` budget handed to `last` is `min(max_width − arg-start,
+        // fn_call_width)`; each nested combine shrinks it one step.
+        let open_end = start_col + flat_leaf_len(open);
+        let budget = FN_CALL_WIDTH.min(cfg.max_width.saturating_sub(open_end));
+        if last_arg_combines(
+            open,
+            prefix,
+            last,
+            None,
+            Some(budget),
+            cfg,
+            start_col,
+            indent,
+        )
+        .is_some()
+        {
             render_at(open, cfg, indent, start_col, false, out);
             let base = current_col(out);
             for e in prefix {
@@ -574,7 +596,7 @@ fn render_call_args(
                 render_at(e, cfg, indent, c, true, out);
                 out.push_str(", ");
             }
-            render_forced_break(last, base, cfg, indent, current_col(out), out);
+            render_forced_break(last, base, budget, cfg, indent, current_col(out), out);
             let c = current_col(out);
             render_at(close, cfg, indent, c, false, out);
             return;
@@ -637,11 +659,40 @@ fn call_args_flat_fits(
     // after the opening delimiter to just before the closing one. This gates
     // function calls, constructors, tuples AND macro (`format!` / `vec!`) lists —
     // `rustfmt` applies the same 60-column argument budget to all of them.
-    let args_width = elems_end.saturating_sub(open_end);
+    //
+    // A single-argument call wrapping another combinable construct (`Box::new((a, b))`,
+    // `outer(inner(a, b))`) is TRANSPARENT to this gate: `rustfmt` measures the
+    // INNERMOST combinable's argument text, not the wrapper's (which includes the
+    // inner delimiters). So `Box::new((a, b))` stays flat when `a, b` fits
+    // `fn_call_width`, even though `(a, b)` plus the wrapper does not.
+    let args_width = innermost_args_width(elems, open_end, elems_end);
     if args_width > FN_CALL_WIDTH {
         return false;
     }
     true
+}
+
+/// The `fn_call_width` argument text width of a call, seeing through a single-argument
+/// combinable wrapper (`Box::new(<inner>)`, `outer(<inner>)`) to the INNERMOST
+/// combinable's own argument text. `rustfmt` gates the flat layout on that innermost
+/// width, not the wrapper's (which would double-count the inner delimiters). `open_end`
+/// / `elems_end` bound the current call's own argument span; a single combinable inner
+/// element recurses one delimiter step deeper.
+fn innermost_args_width(elems: &[Doc], open_end: usize, elems_end: usize) -> usize {
+    if let [only @ Doc::CallArgs { open, close, elems: inner, .. }] = elems
+        // Only a DELIMITED-LITERAL inner (a tuple `(…)`, array `[…]` / `vec![…]`, or a
+        // `Box::new(<delimited>)` wrapper of one) is transparent to `fn_call_width` —
+        // `rustfmt`'s `overflow_delimited_expr`. A nested CALL or MACRO is measured with
+        // its own delimiters counted (its combining is driven by the recursive `Shape`
+        // budget, not this flat gate), so seeing through it would wrongly flatten a call
+        // whose deep-nested budget has already run out.
+        && is_delimited_expr(only)
+    {
+        let inner_open = open_end + flat_leaf_len(open);
+        let inner_close = elems_end.saturating_sub(flat_leaf_len(close));
+        return innermost_args_width(inner, inner_open, inner_close);
+    }
+    elems_end.saturating_sub(open_end)
 }
 
 /// Render the elements flat, separated by `, ` — the shared flat body of a
@@ -686,6 +737,7 @@ fn last_arg_combines(
     prefix: &[Doc],
     last: &Doc,
     combine_base: Option<usize>,
+    budget: Option<usize>,
     cfg: RenderConfig,
     start_col: usize,
     indent: usize,
@@ -736,11 +788,36 @@ fn last_arg_combines(
         if !flat.contains('\n') && (last_col + flat.len()).saturating_sub(base) <= FN_CALL_WIDTH {
             return None;
         }
+        // Recursive `Shape` budget: `rustfmt` shrinks the combining width one step per
+        // nested single-argument call — `min(width − callee(, fn_call_width)` — and
+        // breaks THIS call one-per-line (giving its argument its own line) rather than
+        // gluing when the width for THIS call's argument runs out. `budget` is the
+        // width the enclosing combine handed this call; shrinking it by this call's own
+        // `open` gives the width available to open the argument's combining head. A flat
+        // `fn_call_width` from the outermost base cannot see this shrink and keeps
+        // gluing an ever-deeper chain past the point `rustfmt` stops. When the shrunk
+        // budget cannot open the argument's head, break this call one-per-line.
+        if let Some(b) = budget {
+            let arg_budget = shrink_budget(b, open);
+            let head_len = flat_leaf_len(last_head(last));
+            if arg_budget <= head_len {
+                return None;
+            }
+        }
     }
     // Render the last element FORCED broken from that column; its first line is the
-    // combined head's tail.
+    // combined head's tail. `budget` (when threaded) is the recursive `Shape` width
+    // for `last`; a probe without a threaded budget measures at the full `fn_call_width`.
     let mut tail = String::new();
-    render_forced_break(last, base, cfg, indent, last_col, &mut tail);
+    render_forced_break(
+        last,
+        base,
+        budget.unwrap_or(FN_CALL_WIDTH),
+        cfg,
+        indent,
+        last_col,
+        &mut tail,
+    );
     let first = tail.split('\n').next().unwrap_or("");
     let first_line_end = last_col + first.len();
     if first_line_end > cfg.max_width {
@@ -763,6 +840,7 @@ fn last_arg_combines(
 fn render_forced_break(
     doc: &Doc,
     combine_base: usize,
+    budget: usize,
     cfg: RenderConfig,
     indent: usize,
     col: usize,
@@ -778,13 +856,16 @@ fn render_forced_break(
             let start_col = eff_col(out, col);
             // Recurse the combine on the last argument first; if it does not apply,
             // fall through to the one-per-line break. The shared `combine_base` keeps
-            // the `fn_call_width` budget anchored at the outermost combine.
+            // the `fn_call_width` budget anchored at the outermost combine; `budget`
+            // is the recursive `Shape` width this call received for its argument, and
+            // shrinks one step (`shrink_budget`) as the combine descends.
             if let Some((last, prefix)) = elems.split_last()
                 && last_arg_combines(
                     open,
                     prefix,
                     last,
                     Some(combine_base),
+                    Some(budget),
                     cfg,
                     start_col,
                     indent,
@@ -797,7 +878,16 @@ fn render_forced_break(
                     render_at(e, cfg, indent, c, true, out);
                     out.push_str(", ");
                 }
-                render_forced_break(last, combine_base, cfg, indent, current_col(out), out);
+                let inner_budget = shrink_budget(budget, open);
+                render_forced_break(
+                    last,
+                    combine_base,
+                    inner_budget,
+                    cfg,
+                    indent,
+                    current_col(out),
+                    out,
+                );
                 let c = current_col(out);
                 render_at(close, cfg, indent, c, false, out);
                 return;
@@ -820,15 +910,21 @@ fn render_forced_break(
             let c = current_col(out);
             render_at(close, cfg, indent, c, false, out);
         }
-        // A wrapper like `Box::new(<CallArgs>)`: force-break the inner construct.
+        // A wrapper like `Box::new(<CallArgs>)`: force-break the inner construct. The
+        // leading wrapper text (`Box::new(`) shrinks the recursive `Shape` budget one
+        // step before the inner combine, exactly like a `CallArgs` open.
         Doc::Concat(parts) => {
+            let mut inner_budget = budget;
             for p in parts {
                 let c = eff_col(out, col);
-                match p {
-                    Doc::CallArgs { .. } => {
-                        render_forced_break(p, combine_base, cfg, indent, c, out);
+                if let Doc::CallArgs { .. } = p {
+                    render_forced_break(p, combine_base, inner_budget, cfg, indent, c, out);
+                } else {
+                    if let Doc::Text(_) = p {
+                        inner_budget =
+                            FN_CALL_WIDTH.min(inner_budget.saturating_sub(flat_leaf_len(p)));
                     }
-                    _ => render_at(p, cfg, indent, c, false, out),
+                    render_at(p, cfg, indent, c, false, out);
                 }
             }
         }
@@ -836,6 +932,41 @@ fn render_forced_break(
         // `HardLine`); render it non-flat.
         _ => render_at(doc, cfg, indent, col, false, out),
     }
+}
+
+/// The opening head leaf (`f(`, `Box::new((`, `(`) of a combinable construct — the
+/// text a nested combine glues onto and whose width shrinks the recursive `Shape`
+/// budget one step. A [`Doc::CallArgs`] head is its `open`; a text-wrapped single
+/// inner (`Box::new(<inner>)`) head is its leading `(`-terminated text; anything else
+/// has no combining head (returns an empty leaf, width 0).
+fn last_head(doc: &Doc) -> &Doc {
+    match doc {
+        Doc::CallArgs { open, .. } => open,
+        Doc::Concat(parts) => match parts.first() {
+            Some(t @ Doc::Text(h)) if h.ends_with('(') && !h.contains('{') => t,
+            _ => &EMPTY_LEAF,
+        },
+        _ => &EMPTY_LEAF,
+    }
+}
+
+/// An empty text leaf, the zero-width combining head of a non-combinable construct.
+static EMPTY_LEAF: Doc = Doc::Text(std::borrow::Cow::Borrowed(""));
+
+/// The flat-rendered length of a delimiter/head leaf (`f(`, `Box::new((`), used to
+/// shrink the recursive combining budget one nesting step.
+fn flat_leaf_len(doc: &Doc) -> usize {
+    let mut s = String::new();
+    let cfg = RenderConfig::default();
+    render_at(doc, cfg, 0, 0, true, &mut s);
+    s.len()
+}
+
+/// The combining budget handed to a nested call's argument: the parent's budget
+/// reduced by the parent call's own opening head, re-clamped to `fn_call_width`.
+/// `rustfmt` shrinks the `Shape` width this way one step per nested combine.
+fn shrink_budget(parent: usize, open: &Doc) -> usize {
+    FN_CALL_WIDTH.min(parent.saturating_sub(flat_leaf_len(open)))
 }
 
 /// Whether `doc` is a GLUE-shaped construct for the SINGLE-argument combine chain:
@@ -846,9 +977,15 @@ fn render_forced_break(
 fn is_glue_shape(doc: &Doc) -> bool {
     match doc {
         Doc::CallArgs { .. } => true,
+        // A struct literal (`Name { … }`) is a `Group`-wrapped brace-delimited
+        // construct; `rustfmt` glues a wrapper's head onto its `Name {` just like a
+        // call's `(`. See through the group to its `Concat` body.
+        Doc::Group(inner) => is_glue_shape(inner),
         Doc::Concat(parts) => match parts.first() {
-            // A brace block `{ … }` (closure body / statement block).
-            Some(Doc::Text(head)) if head == "{" => true,
+            // A brace block `{ … }` (closure body / statement block) or a struct
+            // literal `Name { … }` — a `{`-terminated head that is NOT a `({`
+            // paren-wrapped statement block (which `rustfmt` does NOT combine).
+            Some(Doc::Text(head)) if head.ends_with('{') && !head.starts_with('(') => true,
             // A `Box::new(<inner>)` / `Some(<inner>)` wrapper: a `(`-terminated head
             // (NOT a `({` paren-block), the inner glue construct, then a `)` tail.
             Some(Doc::Text(head)) if head.ends_with('(') && !head.contains('{') => {
@@ -878,8 +1015,13 @@ fn is_delimited_expr(doc: &Doc) -> bool {
             }
             _ => false,
         },
+        // A struct literal (`Name { … }`) is a `Group`-wrapped brace construct — a
+        // delimited expr for the overflow rule; see through the group.
+        Doc::Group(inner) => is_delimited_expr(inner),
         Doc::Concat(parts) => match parts.first() {
-            Some(Doc::Text(head)) if head == "{" => true,
+            // A brace block `{ … }` or a struct literal `Name { … }` — a
+            // `{`-terminated head that is NOT a `({` paren-wrapped statement block.
+            Some(Doc::Text(head)) if head.ends_with('{') && !head.starts_with('(') => true,
             Some(Doc::Text(head)) if head.ends_with('(') && !head.contains('{') => {
                 parts.get(1).is_some_and(is_delimited_expr)
             }
@@ -903,6 +1045,15 @@ fn glue_fits(operand: &Doc, cfg: RenderConfig, col: usize, indent: usize, op: &s
     render_at(operand, cfg, indent, after_op, false, &mut scratch);
     let first_line = scratch.split('\n').next().unwrap_or("");
     after_op + first_line.len() <= cfg.max_width
+}
+
+/// Whether `operand`, rendered non-flat from `col`, stays on a single line. A chain
+/// operator glues to a FOLLOWING operand only when the operand is single-line;
+/// `rustfmt` breaks the chain before an operand that would itself render multiline.
+fn renders_single_line(operand: &Doc, cfg: RenderConfig, col: usize, indent: usize) -> bool {
+    let mut scratch = String::new();
+    render_at(operand, cfg, indent, col, false, &mut scratch);
+    !scratch.contains('\n')
 }
 
 /// The indentation (leading-space count) of the line currently being written in
