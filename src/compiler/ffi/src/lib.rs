@@ -13,11 +13,13 @@
 //! before emission). Under-bind — emitting a binding cargo then rejects — is
 //! forbidden.
 //!
-//! Module DAG (leaf-first): `num_coerce` → `diag` → `naming` → `pkginfo` /
-//! `typeref` → `call` → `emit` / `bindings` → `instance` → `driver` → `unify`.
+//! Module DAG (leaf-first): `num_coerce` → `diag` → `naming` → `carrier` /
+//! `pkginfo` / `typeref` → `call` → `emit` / `bindings` → `instance` →
+//! `driver` → `unify`.
 
 pub mod bindings;
 pub mod call;
+pub mod carrier;
 pub mod diag;
 pub mod driver;
 pub mod emit;
