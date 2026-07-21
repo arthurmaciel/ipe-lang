@@ -181,10 +181,13 @@ pub fn crypto_hmac_sha256(key: String, msg: String) -> String {
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
     type HmacSha256 = Hmac<Sha256>;
-    // INFALLIBLE: HMAC accepts any key length (new_from_slice never returns Err);
-    // the kernel is a pure `String -> String -> String` Ipê surface with no Result
-    // channel, and a fallback MAC would be a silently-wrong hash (a security defect).
-    // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel, 2026-06-13) — infallible HMAC ctor; pure kernel has no Result channel; a fallback MAC is a security defect [ledger #1]
+    // STRUCTURALLY-DEAD Err: `Hmac<D>::new_from_slice` pads/hashes any key
+    // internally and returns `Ok` unconditionally, so `InvalidLength` is never
+    // produced. Kept as a LOUD `.expect`, not eliminated: threading a Result through
+    // this pure `String -> String` kernel makes callers handle a never-occurring Err
+    // whose mishandling is a wrong hash, and an infallible-by-type ctor would
+    // reimplement key prep (a security regression). See the ledger for the full verdict.
+    // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — structurally-dead HMAC InvalidLength; a loud .expect is safer than a dead Result Err a caller can mishandle into a wrong MAC [ledger #1]
     #[allow(clippy::expect_used)]
     let mut mac =
         HmacSha256::new_from_slice(key.as_bytes()).expect("Hmac<Sha256> accepts any key length");
@@ -201,10 +204,13 @@ pub fn crypto_hmac_sha512(key: String, msg: String) -> String {
     use hmac::{Hmac, Mac};
     use sha2::Sha512;
     type HmacSha512 = Hmac<Sha512>;
-    // INFALLIBLE: HMAC accepts any key length (new_from_slice never returns Err);
-    // the kernel is a pure `String -> String -> String` Ipê surface with no Result
-    // channel, and a fallback MAC would be a silently-wrong hash (a security defect).
-    // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel, 2026-06-13) — infallible HMAC ctor; pure kernel has no Result channel; a fallback MAC is a security defect [ledger #1]
+    // STRUCTURALLY-DEAD Err: `Hmac<D>::new_from_slice` pads/hashes any key
+    // internally and returns `Ok` unconditionally, so `InvalidLength` is never
+    // produced. Kept as a LOUD `.expect`, not eliminated: threading a Result through
+    // this pure `String -> String` kernel makes callers handle a never-occurring Err
+    // whose mishandling is a wrong hash, and an infallible-by-type ctor would
+    // reimplement key prep (a security regression). See the ledger for the full verdict.
+    // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — structurally-dead HMAC InvalidLength; a loud .expect is safer than a dead Result Err a caller can mishandle into a wrong MAC [ledger #1]
     #[allow(clippy::expect_used)]
     let mut mac =
         HmacSha512::new_from_slice(key.as_bytes()).expect("Hmac<Sha512> accepts any key length");
