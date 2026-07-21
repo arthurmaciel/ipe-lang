@@ -3,3 +3,14 @@
 # lets test assertions stay readable without #[allow] noise at every call site.
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
+
+# Abrupt-failure constructs that have no dedicated clippy lint. Denying them by
+# path closes the gaps left by the `unwrap_used`/`expect_used`/`panic` denies in
+# Cargo.toml's [workspace.lints]. See docs/internals/rust-abrupt-failure-ledger.md.
+disallowed-methods = [
+    { path = "core::option::Option::unwrap_unchecked", reason = "UB on None; return a Result or model the invariant in a type" },
+    { path = "core::result::Result::unwrap_unchecked", reason = "UB on Err; return a Result or model the invariant in a type" },
+    { path = "std::process::abort", reason = "abrupt termination that skips Drop; return a Result to the CLI boundary" },
+    { path = "std::panic::panic_any", reason = "a panic; return a Result or emit a diagnostic" },
+    { path = "core::hint::unreachable_unchecked", reason = "UB; model the invariant in a type instead" },
+]

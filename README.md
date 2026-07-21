@@ -64,6 +64,12 @@ Prefer building from source? `git clone https://github.com/arthurmaciel/ipe-lang
   recompiles only what changed.
 - **Static compilation** — `ipe build --static` produces a fully-static musl
   single binary. Copy it anywhere and run — no runtime, no dependencies.
+- **No authored abrupt failure** — the compiler's and runtime's own Rust carries
+  no `panic!`, `unwrap`, `expect`, `assert!`, or indexing panic: every failure is
+  a typed `Result` or a diagnostic. Enforced by clippy denies plus a token-level
+  scanner (which also gates generated and third-party FFI Rust), with a small,
+  audited exception ledger. (`std` and third-party crate internals are outside
+  this guarantee.)
 
 ## Code shapes
 
