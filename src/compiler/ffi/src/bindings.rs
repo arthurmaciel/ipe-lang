@@ -1326,8 +1326,7 @@ impl OpaqueResolver {
         for name in &poisoned {
             inspected.remove(name);
         }
-        let define_defined =
-            surviving_define_defs(&define_opaque_deps, &inspected, &parameterised);
+        let define_defined = surviving_define_defs(&define_opaque_deps, &inspected, &parameterised);
         Self {
             inspected,
             define_defined,
