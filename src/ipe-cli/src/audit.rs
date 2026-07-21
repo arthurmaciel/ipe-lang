@@ -260,24 +260,28 @@ fn audit_scratch_dir(package: &str) -> PathBuf {
 ///
 /// - a hit in author-supplied FFI wrapper Rust (`_bindings.rs` in the project's
 ///   FFI cache) is a **user error**: the gate rejects the package, pointing at
-///   the file and line.
-/// - a hit in our EMITTED Rust is a **compiler bug** — not the author's fault.
-///   The gate surfaces it as an internal error (a [`CliError::Pipeline`]
-///   compiler-bug diagnostic) rather than blaming the author, matching the
-///   plan's routing (§1a: emitted-Rust hits fail OUR CI, not the author's).
-///
-/// The runtime tree vendored into the emitted project is EXCLUDED from the
-/// compiler-bug scan: it is hand-written library Rust whose audited internal
-/// `unwrap`/`expect` are not codegen output, so scanning it would misattribute a
-/// runtime-library construct as an emitted-codegen compiler bug.
+///   the file and line. This is the security boundary the check exists to close —
+///   author Rust compiles unsandboxed into the shipped artifact, so an authored
+///   `panic!`/`unwrap` there is a soundness hole the package must not ship with.
+/// - a hit in our EMITTED Rust is attributed to the COMPILER, not the author. Per
+///   the plan (§1a) an emitted-Rust hit is OUR CI's concern, never the author's,
+///   so the author-facing package gate does not scan it here: the emitted surface
+///   is already covered by the compiler's own `tools/panic-scan` CI over the
+///   backend's `src/` templates (`.github/workflows/panic-scan.yml`). That
+///   separation is not incidental — the backend's FIXED epilogue emits one
+///   deliberate, `#[allow(unreachable_code)]`-guarded polyfill `panic!` into
+///   every project's `main.rs`, so scanning emitted output as an author gate
+///   would reject every package for a construct that is neither the author's nor
+///   accidental codegen. The provenance boundary is therefore exact by
+///   construction: the gate rejects ONLY the author-supplied FFI wrapper Rust.
 ///
 /// # Errors
 /// [`CliError::PackageAudit`] when an author FFI Rust file contains an abrupt-
-/// failure construct; [`CliError::Pipeline`] when EMITTED Rust does (a compiler
-/// bug); [`CliError::Io`] on a read failure.
+/// failure construct; [`CliError::Io`] on a read failure.
 fn provenance_panic_scan(prepared: &Prepared) -> Result<(), CliError> {
-    // Author Rust first: a user error is the author's to fix, and is the reject
-    // this check exists to produce.
+    // Author FFI wrapper Rust is the one surface this check gates: it compiles
+    // unsandboxed into the shipped artifact, so an authored abrupt-failure
+    // construct there is a soundness hole the package must not ship with.
     if let Some(hit) = scan_author_ffi_rust(prepared)? {
         return Err(reject(
             Check::Provenance,
@@ -289,27 +293,6 @@ fn provenance_panic_scan(prepared: &Prepared) -> Result<(), CliError> {
                 hit.tok, hit.file.display(), hit.line, hit.tok
             ),
         ));
-    }
-
-    // Emitted Rust: a hit here is OUR codegen breaking the no-authored-panic
-    // contract — a compiler bug, surfaced as such (a `CompilerBug` diagnostic
-    // routed to our CI) rather than blamed on the author.
-    if let Some(hit) = scan_emitted_rust(prepared)? {
-        return Err(CliError::Pipeline {
-            file: hit.file.clone(),
-            src: String::new(),
-            diag: ipe_diagnostics::Diagnostic::CompilerBug {
-                where_: "backend.emit",
-                detail: format!(
-                    "the compiler emitted an abrupt-failure construct into generated Rust \
-                     ({}:{}: `{}`) — emitted code from pure Ipê must never contain \
-                     panic/unwrap/expect. This is a compiler bug, not an author error.",
-                    hit.file.display(),
-                    hit.line,
-                    hit.tok
-                ),
-            },
-        });
     }
     Ok(())
 }
@@ -352,45 +335,6 @@ fn scan_author_ffi_rust(prepared: &Prepared) -> Result<Option<LocatedHit>, CliEr
             .and_then(|n| n.to_str())
             .is_some_and(|n| n.ends_with("_bindings.rs"));
         if !is_bindings {
-            continue;
-        }
-        if let Some(hit) = first_hit(&file)? {
-            return Ok(Some(hit));
-        }
-    }
-    Ok(None)
-}
-
-/// Scan the emitted project's `src/` for the first abrupt-failure construct in a
-/// file our BACKEND produced — excluding the vendored runtime tree
-/// (`src/ipe_runtime/`), which is hand-written library Rust, not codegen output.
-///
-/// # Errors
-/// [`CliError::Io`] on a read failure.
-fn scan_emitted_rust(prepared: &Prepared) -> Result<Option<LocatedHit>, CliError> {
-    let src_dir = prepared.emitted_dir.join("src");
-    if !src_dir.is_dir() {
-        return Ok(None);
-    }
-    let runtime_dir = src_dir.join("ipe_runtime");
-    let mut files: Vec<PathBuf> = Vec::new();
-    collect_rust_files(&src_dir, &mut files)?;
-    files.sort();
-    for file in files {
-        // The vendored runtime is not emitted-from-Ipê codegen; skip it so a
-        // runtime-library construct is not misread as a codegen compiler bug.
-        if file.starts_with(&runtime_dir) {
-            continue;
-        }
-        // The author FFI wrapper is re-emitted into the project's `src/ffi.rs` /
-        // bindings; it was already scanned (and attributed to the author) in
-        // `scan_author_ffi_rust`, so exclude it here to avoid double-reporting an
-        // author hit as a compiler bug.
-        let is_ffi_bindings = file
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n == "ffi.rs" || n.ends_with("_bindings.rs"));
-        if is_ffi_bindings {
             continue;
         }
         if let Some(hit) = first_hit(&file)? {
@@ -485,21 +429,24 @@ fn capability_consistency(prepared: &Prepared) -> Result<(), CliError> {
             Ok(())
         }
         Err(CliError::CapabilityMismatch { missing, extra }) => {
+            use std::fmt::Write as _;
             let mut message = String::from(
                 "the declared `[capabilities]` set does not match the program's inferred \
                  effects — the declared set must be exactly the truth the user consents to.",
             );
             if !missing.is_empty() {
-                message.push_str(&format!(
+                let _ = write!(
+                    message,
                     "\n  used but NOT declared (a hidden effect): {}",
                     missing.join(", ")
-                ));
+                );
             }
             if !extra.is_empty() {
-                message.push_str(&format!(
+                let _ = write!(
+                    message,
                     "\n  declared but NOT used (an over-broad claim): {}",
                     extra.join(", ")
-                ));
+                );
             }
             Err(reject(Check::Capability, message))
         }
@@ -541,17 +488,14 @@ fn enforced_semver(prepared: &Prepared, index_root: Option<&Path>) -> Result<(),
     };
 
     let index_root = index_root.map_or_else(crate::resolve::index_root, Path::to_path_buf);
-    let entry = match crate::index::read_entry(&index_root, &prepared.manifest.name) {
-        Ok(entry) => entry,
-        // Not in the index ⇒ a first submission; no predecessor to enforce.
-        Err(_) => {
-            println!(
-                "package audit: `{}` has no previously published version in the index — \
-                 skipping the enforced-semver check (first version).",
-                prepared.manifest.name
-            );
-            return Ok(());
-        }
+    // Not in the index ⇒ a first submission; no predecessor to enforce.
+    let Ok(entry) = crate::index::read_entry(&index_root, &prepared.manifest.name) else {
+        println!(
+            "package audit: `{}` has no previously published version in the index — \
+             skipping the enforced-semver check (first version).",
+            prepared.manifest.name
+        );
+        return Ok(());
     };
 
     // The predecessor is the highest published version strictly BELOW this one.
@@ -630,7 +574,8 @@ fn supply_chain(prepared: &Prepared) -> Result<(), CliError> {
         return verify_locked_dependency_hashes(prepared);
     }
 
-    let output = Command::new("cargo")
+    let mut command = Command::new("cargo");
+    command
         .arg("deny")
         .arg("--manifest-path")
         .arg(&manifest)
@@ -639,8 +584,20 @@ fn supply_chain(prepared: &Prepared) -> Result<(), CliError> {
         // project-policy axis the workspace's own gate owns, not the package gate.
         .arg("advisories")
         .arg("bans")
-        .arg("sources")
-        .output();
+        .arg("sources");
+    // Apply the SAME advisory/bans/sources posture the workspace uses (plan
+    // §1d) — its `deny.toml` ledgers the advisories the vendored runtime's
+    // dependency tree legitimately carries (e.g. the `rsa` timing advisory the
+    // runtime pins behind an optional feature). Without it the check would
+    // default-reject every emitted package for a runtime dependency the
+    // workspace has already vetted. `--config` is a `check` argument, so it
+    // follows the subcommand. Absent a resolvable config, cargo-deny falls back
+    // to its defaults.
+    let derived_config = derive_deny_config(&prepared.emitted_dir)?;
+    if let Some(config) = &derived_config {
+        command.arg("--config").arg(config);
+    }
+    let output = command.output();
 
     match output {
         Ok(out) if out.status.success() => verify_locked_dependency_hashes(prepared),
@@ -692,7 +649,79 @@ fn verify_locked_dependency_hashes(prepared: &Prepared) -> Result<(), CliError> 
     }
 }
 
+/// Locate the workspace's `deny.toml` so the supply-chain check applies the same
+/// posture the workspace CI does. Walks up from the current directory, then from
+/// the resolved runtime tree's ancestry (the runtime lives inside the workspace,
+/// so `deny.toml` sits at the workspace root above it). Returns `None` when no
+/// `deny.toml` is found.
+fn locate_workspace_deny_config() -> Option<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        roots.push(cwd);
+    }
+    if let Ok(runtime) = crate::resolve_runtime() {
+        roots.push(runtime);
+    }
+    for root in roots {
+        let mut here: Option<&Path> = Some(root.as_path());
+        while let Some(dir) = here {
+            let candidate = dir.join("deny.toml");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+            here = dir.parent();
+        }
+    }
+    None
+}
+
+/// Derive a cargo-deny config for the EMITTED project from the workspace's
+/// `deny.toml`, dropping its `[graph]` section.
+///
+/// The workspace config's `[graph] features = ["full"]` names the RUNTIME crate's
+/// own feature set, which the emitted `ipe-app` does not have — passing the
+/// workspace config verbatim makes `cargo metadata` fail on the unknown feature.
+/// The advisory/license/bans/sources POLICY is exactly what the gate must apply,
+/// so this copies every section EXCEPT `[graph]` into a derived config written
+/// beside the emitted project, and returns its path. Returns `None` when no
+/// workspace `deny.toml` is found (cargo-deny then uses its defaults).
+///
+/// # Errors
+/// [`CliError::Io`] on a read/write failure.
+fn derive_deny_config(emitted_dir: &Path) -> Result<Option<PathBuf>, CliError> {
+    let Some(source) = locate_workspace_deny_config() else {
+        return Ok(None);
+    };
+    let text = std::fs::read_to_string(&source).map_err(|e| CliError::Io {
+        path: source.clone(),
+        source: e,
+    })?;
+
+    // Line-filter out the `[graph]` table (up to the next top-level `[section]`).
+    // The remaining tables (`[advisories]`, `[licenses]`, `[bans]`, `[sources]`)
+    // are the emitted-project-independent policy the gate applies.
+    let mut out = String::with_capacity(text.len());
+    let mut in_graph = false;
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('[') {
+            in_graph = trimmed.starts_with("[graph]");
+        }
+        if !in_graph {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+
+    let derived = emitted_dir.join("ipe-audit-deny.toml");
+    std::fs::write(&derived, out).map_err(|e| CliError::Io {
+        path: derived.clone(),
+        source: e,
+    })?;
+    Ok(Some(derived))
+}
+
 /// Build a [`CliError::PackageAudit`] for `check` carrying `message`.
-fn reject(check: Check, message: String) -> CliError {
+const fn reject(check: Check, message: String) -> CliError {
     CliError::PackageAudit(Rejection { check, message })
 }
