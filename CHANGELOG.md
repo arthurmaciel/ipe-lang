@@ -10,6 +10,13 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.10](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.9...ipe-v0.1.10) (2026-07-21)
+
+
+### Features
+
+* **ffi:** [#364](https://github.com/arthurmaciel/ipe-lang/issues/364) Tier 2 phases 1-3 — bind author-supplied Rust wrapper crates ([#62](https://github.com/arthurmaciel/ipe-lang/issues/62)) ([28618f7](https://github.com/arthurmaciel/ipe-lang/commit/28618f7a7536b4c293ae6ddc65e02e2092e1114c))
+
 ## [0.1.9](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.8...ipe-v0.1.9) (2026-07-21)
 
 
