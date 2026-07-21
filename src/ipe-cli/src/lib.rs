@@ -16,6 +16,7 @@
 //! Errors are typed ([`CliError`]); no operation panics or unwraps.
 
 pub mod api_surface;
+pub mod audit;
 pub mod build_plan;
 mod cache;
 pub mod cli_args;
@@ -124,6 +125,12 @@ pub enum CliError {
         floor: String,
         proposed: String,
     },
+    /// A `ipe package audit` Tier-1 check rejected the package. Carries the
+    /// typed [`audit::Rejection`] naming the failing check and its one
+    /// diagnostic. This is the package gate's hard reject — a check that would
+    /// let an unsafe or dishonest version through is a security hole, so it is
+    /// always a typed error, never a warning.
+    PackageAudit(audit::Rejection),
 }
 
 impl From<api_surface::DiffError> for CliError {
@@ -200,6 +207,7 @@ impl std::fmt::Display for CliError {
                 "version {proposed} does not clear the required {required} bump — the new \
                  version must be at least {floor}."
             ),
+            Self::PackageAudit(rejection) => write!(f, "{rejection}"),
         }
     }
 }
@@ -1525,6 +1533,7 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
         Some((cmd, rest)) if cmd == "rust" => ffi::run_rust(rest),
         Some((cmd, rest)) if cmd == "add" => pkg::run_add(rest),
         Some((cmd, rest)) if cmd == "remove" => pkg::run_remove(rest),
+        Some((cmd, rest)) if cmd == "package" => run_package(rest),
         Some((cmd, rest)) if cmd == "fix" => run_fix(rest),
         Some((cmd, rest)) if cmd == "fmt" => fmt::run_fmt(rest),
         Some((cmd, rest)) if cmd == "lsp" => lsp::run_lsp(rest),
@@ -2146,6 +2155,22 @@ fn lower_entry(entry: &Path) -> Result<ipe_ir::Program, CliError> {
 /// `ipe capabilities <entry.ipe>` — print the program's inferred security
 /// capabilities, one per line in sorted order, or `none` when the program is
 /// pure. Read-only analysis: nothing is emitted or written.
+/// `ipe package <subcommand>` — package-authoring commands. Today the one
+/// subcommand is `audit`, the SP4 Tier-1 package gate.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] on a missing or unknown subcommand; the audit's own
+/// errors (a build failure or a [`CliError::PackageAudit`] reject) otherwise.
+fn run_package(rest: &[String]) -> Result<(), CliError> {
+    match rest.split_first() {
+        Some((sub, tail)) if sub == "audit" => audit::run_audit(tail),
+        Some((sub, _)) => Err(CliError::UsageOwned(format!(
+            "ipe package: unknown subcommand `{sub}` (expected `audit`)"
+        ))),
+        None => Err(CliError::Usage("usage: ipe package audit [<path>]")),
+    }
+}
+
 fn run_capabilities(rest: &[String]) -> Result<(), CliError> {
     let entry = match rest.first() {
         Some(e) => PathBuf::from(e),
@@ -2186,6 +2211,72 @@ pub fn verify_capabilities(
     let missing: Vec<&'static str> = inferred.difference(declared).map(|c| c.as_str()).collect();
     let extra: Vec<&'static str> = declared.difference(&inferred).map(|c| c.as_str()).collect();
     Err(CliError::CapabilityMismatch { missing, extra })
+}
+
+/// The security capabilities a whole PACKAGE exercises — the union over every
+/// module the package ships, not just the entry's reachability closure.
+///
+/// A single-entry program's capability set is its entry's reachable kernels
+/// ([`verify_capabilities`]). A publishable package is different: a downstream
+/// consumer can `import` ANY exposed module, so a sibling module that makes a
+/// network call is a real capability of the package even when the package's own
+/// `Main` never reaches it. The declared `[capabilities]` set the index records
+/// is the consumer's consent surface, so it must cover the whole shipped surface
+/// — the same whole-tree posture the enforced-semver check already takes over the
+/// package's public API.
+///
+/// This lowers each discovered module in turn (with every sibling source present,
+/// so cross-module imports resolve) and unions their inferred capabilities. A
+/// module that fails to lower on its own — e.g. one that is only meaningful as a
+/// dependency of another — is skipped for the union rather than failing the whole
+/// inference, so a helper module never masks a sibling's real effect.
+///
+/// # Errors
+/// [`CliError::Pipeline`] / [`CliError::Io`] when the package cannot be read or
+/// no module lowers at all.
+pub fn infer_package_capabilities(
+    manifest_path: &Path,
+) -> Result<std::collections::BTreeSet<ipe_ir::Capability>, CliError> {
+    let manifest = project::parse_manifest(manifest_path)?;
+    let discovered = project::discover_modules(&manifest.src_root)?;
+
+    // Read every module's source once; the shared map lets each per-module
+    // lowering resolve its sibling imports.
+    let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+    for m in &discovered {
+        let src = fs::read_to_string(&m.path).map_err(|e| io_err(&m.path, e))?;
+        sources.insert(m.module_path.clone(), (m.path.clone(), src));
+    }
+
+    let injected = std::collections::BTreeSet::new();
+    let ffi_injected = std::collections::BTreeSet::new();
+    let mut inferred: std::collections::BTreeSet<ipe_ir::Capability> =
+        std::collections::BTreeSet::new();
+    let mut any_lowered = false;
+
+    // Lower each module as its own entry (a fresh database per module keeps the
+    // interning deterministic and the borrow of the shared interner scoped). A
+    // module that does not lower standalone is skipped, never fatal — its
+    // capabilities, if any, surface through whichever sibling does reach it.
+    for m in &discovered {
+        let db = ipe_db::IpeDatabase::new();
+        let source_root = create_source_root(&db, &sources, &injected, &ffi_injected);
+        let Some(entry_file) = source_root.files(&db).get(&m.module_path).copied() else {
+            continue;
+        };
+        if let Ok(program) = ipe_db::lower_program(&db, source_root, entry_file) {
+            inferred.extend(ipe_lower::program_capabilities(&program));
+            any_lowered = true;
+        }
+    }
+
+    if any_lowered {
+        Ok(inferred)
+    } else {
+        Err(CliError::Usage(
+            "package capability inference: no module in the package could be lowered",
+        ))
+    }
 }
 
 // ===========================================================================

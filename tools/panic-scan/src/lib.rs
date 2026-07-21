@@ -34,7 +34,13 @@ const MACROS: &[&str] = &[
 ];
 
 /// Panicking (or UB) methods: `x.unwrap()`, `x.expect(..)`, …
-const METHODS: &[&str] = &["unwrap", "expect", "unwrap_err", "expect_err", "unwrap_unchecked"];
+const METHODS: &[&str] = &[
+    "unwrap",
+    "expect",
+    "unwrap_err",
+    "expect_err",
+    "unwrap_unchecked",
+];
 
 /// Free functions that abort/panic: `panic_any(..)`, `unreachable_unchecked()`.
 const FNS: &[&str] = &["panic_any", "unreachable_unchecked"];
@@ -75,8 +81,12 @@ fn scan_stream(ts: TokenStream, hits: &mut Vec<Hit>) {
             TokenTree::Punct(p) if p.as_char() == '#' => {
                 if let Some(TokenTree::Group(g)) = toks.get(i + 1) {
                     if g.delimiter() == Delimiter::Bracket {
-                        let inner: String =
-                            g.stream().to_string().chars().filter(|c| !c.is_whitespace()).collect();
+                        let inner: String = g
+                            .stream()
+                            .to_string()
+                            .chars()
+                            .filter(|c| !c.is_whitespace())
+                            .collect();
                         if inner == "test" || inner.contains("cfg(test") {
                             skip_next_brace = true;
                         }
@@ -88,7 +98,10 @@ fn scan_stream(ts: TokenStream, hits: &mut Vec<Hit>) {
             TokenTree::Ident(id) if MACROS.contains(&id.to_string().as_str()) => {
                 if let Some(TokenTree::Punct(bang)) = toks.get(i + 1) {
                     if bang.as_char() == '!' {
-                        hits.push(Hit { line: id.span().start().line, tok: format!("{id}!") });
+                        hits.push(Hit {
+                            line: id.span().start().line,
+                            tok: format!("{id}!"),
+                        });
                     }
                 }
             }
@@ -97,7 +110,10 @@ fn scan_stream(ts: TokenStream, hits: &mut Vec<Hit>) {
             TokenTree::Ident(id) if FNS.contains(&id.to_string().as_str()) => {
                 if let Some(TokenTree::Group(g)) = toks.get(i + 1) {
                     if g.delimiter() == Delimiter::Parenthesis {
-                        hits.push(Hit { line: id.span().start().line, tok: id.to_string() });
+                        hits.push(Hit {
+                            line: id.span().start().line,
+                            tok: id.to_string(),
+                        });
                     }
                 }
             }
@@ -177,8 +193,11 @@ mod tests {
         let src = include_str!("../fixtures/positives.rs");
         let res = scan_str(src);
         assert!(res.is_ok(), "fixture must lex: {:?}", res.err());
-        let got: BTreeSet<usize> =
-            res.unwrap_or_default().into_iter().map(|h| h.line).collect();
+        let got: BTreeSet<usize> = res
+            .unwrap_or_default()
+            .into_iter()
+            .map(|h| h.line)
+            .collect();
         let want = wanted(src);
         let missed: Vec<_> = want.difference(&got).collect();
         let extra: Vec<_> = got.difference(&want).collect();
@@ -195,7 +214,9 @@ mod tests {
         assert!(
             hits.is_empty(),
             "FALSE POSITIVES: {:?}",
-            hits.iter().map(|h| (h.line, h.tok.as_str())).collect::<Vec<_>>()
+            hits.iter()
+                .map(|h| (h.line, h.tok.as_str()))
+                .collect::<Vec<_>>()
         );
     }
 }
