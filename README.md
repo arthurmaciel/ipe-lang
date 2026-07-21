@@ -181,7 +181,7 @@ Add to `~/.config/helix/languages.toml`:
 name = "ipe"
 scope = "source.ipe"
 file-types = ["ipe"]
-roots = ["sky.toml"]
+roots = ["ipe.toml"]
 language-servers = ["ipe-lsp"]
 
 [language-server.ipe-lsp]
@@ -200,7 +200,7 @@ if not configs.ipe then
     default_config = {
       cmd = { "ipe", "lsp" },
       filetypes = { "ipe" },
-      root_dir = lspconfig.util.root_pattern("sky.toml", ".git"),
+      root_dir = lspconfig.util.root_pattern("ipe.toml", ".git"),
       settings = {},
     },
   }
@@ -250,8 +250,8 @@ sudo apt-get install musl-tools   # or equivalent on your distro
 
 # Build a static binary (x86_64 Linux, dlmalloc allocator — the default):
 cd examples/01-hello-world
-ipe build sky.toml --out sky-out/rust --static
-cd sky-out/rust
+ipe build ipe.toml --out out/rust --static
+cd out/rust
 cargo build --release --target x86_64-unknown-linux-musl
 ```
 
