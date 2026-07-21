@@ -177,6 +177,58 @@ pub fn hash_source_tree(root: &Path) -> Result<String, CliError> {
     hash_checkout(root)
 }
 
+/// Fetch a specific published index version's source at its pinned revision into
+/// the package cache and verify its content hash equals the index pin, returning
+/// the verified checkout directory.
+///
+/// The SP4 package gate's enforced-semver check calls this to materialise the
+/// previous published version's source as the semver baseline — the exact bytes
+/// the index registered, since nothing derived from an unverified fetch is
+/// returned (verify-before-trust, the same boundary [`resolve_and_add`] applies
+/// at install).
+///
+/// # Errors
+/// [`CliError::Resolve`] on a `git` fetch failure; [`CliError::HashMismatch`]
+/// when the fetched tree's hash does not equal the pinned hash; [`CliError::Io`]
+/// on a filesystem failure.
+pub fn fetch_and_verify_index_version(
+    project_root: &Path,
+    name: &str,
+    version: &EntryVersion,
+) -> Result<PathBuf, CliError> {
+    let checkout = fetch_source(project_root, name, &version.version.to_string(), version)?;
+    verify_hash(name, &checkout, &version.sha256)?;
+    Ok(checkout)
+}
+
+/// Re-verify that every locked Ipê dependency's cached source still hashes to the
+/// pin recorded in `ipe.lock`.
+///
+/// The resolver verifies a fetched tree's hash at install ([`resolve_and_add`]);
+/// this re-asserts the same integrity over the ALREADY-cached trees at publish
+/// (the SP4 supply-chain check). A dependency whose cached bytes drifted from the
+/// locked hash is a hard [`CliError::HashMismatch`] — the same verify-before-trust
+/// boundary, never a warning. A dependency whose cache directory is absent is not
+/// a mismatch (nothing was tampered; a build re-fetches it), so it is skipped.
+///
+/// # Errors
+/// [`CliError::HashMismatch`] when a cached tree no longer matches its locked
+/// hash; [`CliError::Io`] on a read failure; [`CliError::Resolve`] on a malformed
+/// lockfile.
+pub fn verify_lockfile_hashes(project_root: &Path) -> Result<(), CliError> {
+    let lockfile = Lockfile::read(project_root)?;
+    for dep in lockfile.packages() {
+        let cache_dir = package_cache_dir(project_root, &dep.name, &dep.version.to_string());
+        if !cache_dir.is_dir() {
+            // Not cached locally — nothing to re-verify here; a build re-fetches
+            // and re-verifies against this same pin.
+            continue;
+        }
+        verify_hash(&dep.name, &cache_dir, &dep.sha256)?;
+    }
+    Ok(())
+}
+
 /// The manifest path for a project root.
 fn manifest_path(project_root: &Path) -> PathBuf {
     project_root.join("ipe.toml")

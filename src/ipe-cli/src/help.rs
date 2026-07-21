@@ -217,6 +217,17 @@ const COMMANDS: &[Command] = &[
         ],
     },
     Command {
+        name: "package",
+        summary: "Audit a package against the Tier-1 quality gate before publishing.",
+        args: "audit [<path>]",
+        args_desc: "The subcommand (audit) and the project directory or ipe.toml to audit \
+                    (defaults to the current project).",
+        options: &[Opt {
+            flag: "[--index <dir>]",
+            desc: "audit: read the previous published version from this index checkout",
+        }],
+    },
+    Command {
         name: "explain",
         summary: "Explain a diagnostic code, or list every code with no argument.",
         args: "[<code>]",
@@ -269,7 +280,7 @@ const SECTIONS: &[Section] = &[
     },
     Section {
         title: "Using external packages",
-        commands: &["add", "remove"],
+        commands: &["add", "remove", "package"],
     },
     Section {
         title: "Foreign-function interface (FFI)",
