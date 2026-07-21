@@ -1,0 +1,310 @@
+# Extensions to Elm
+
+> **Framing.** Ipê is an **Elm-family** language: it inherits Elm's core syntax,
+> Hindley–Milner discipline, and The Elm Architecture. The goal is to **cover as
+> much of the official `elm/*` package set as is relevant to Ipê's target**, and
+> to keep every departure **small, deliberate, and documented**. This is the
+> single top-level ledger. It has two jobs:
+>
+> 1. A **coverage matrix** — every `elm/*` module mapped to a per-value status:
+>    `present` (with the Ipê name), `diverged` (how + why), `missing` (a real
+>    gap), or `excluded` (irrelevant to Ipê's target, with the justification).
+> 2. A **narrative of the deliberate departures** — the effect model, the
+>    server-driven runtime, the typed-`Error` mandate, and the native stdlib
+>    that Elm core has no counterpart for.
+>
+> The prioritized plan for closing the `missing` rows lives in
+> [`tbd/elm-coverage-gap-plan.md`](tbd/elm-coverage-gap-plan.md). The exhaustive
+> per-value `elm/core` table lives in
+> [`tbd/elm-core-coverage.md`](tbd/elm-core-coverage.md); this doc summarizes it
+> and extends the audit to the rest of the `elm/*` org.
+
+Ipê's target — typed Rust producing server, native, TUI, and desktop binaries —
+differs from Elm's (a sandboxed browser client). Most divergences fall out of
+that one root fact. Elm's choices are correct for Elm's target; the departures
+below are stated as engineering trade-offs, not corrections.
+
+---
+
+## 1. Coverage at a glance
+
+| `elm/*` package | Ipê relationship | Verdict |
+|---|---|---|
+| `elm/core` | Broad coverage; `List`/`Dict`/`Set`/`String`/`Maybe`/`Result`/`Task`/`Cmd`/`Sub` present, several gaps | **partial** — see §2 |
+| `elm/json` | Role filled by `Ipe.Config` decoders (TOML/YAML/JSON in one surface) | **diverged** — §3.1 |
+| `elm/time` | `Ipe.Time` — reshaped (server clock, IANA zones, formatting), no `Posix`/`Zone` ADTs | **diverged** — §3.2 |
+| `elm/random` | `Ipe.Random` — `Task`-based generation + a seeded pure surface, not `Generator`/`step` | **diverged** — §3.3 |
+| `elm/http` | `Ipe.Http` — builder-style client `Task`; server side is `Ipe.Http.Server` | **diverged** — §3.4 |
+| `elm/url` | Only `Http.parseQuery`; no `Url`/`Url.Builder`/`Url.Parser` | **mostly missing** — §3.5 |
+| `elm/bytes` | `Ipe.Bytes` — value + hex/base64 codecs, no `Bytes.Decode`/`Encode` combinators | **diverged** — §3.6 |
+| `elm/file` | `Ipe.File` — full native filesystem, not the browser `File`/`Download`/`Select` model | **diverged** — §3.7 |
+| `elm/regex` | `Ipe.Regex` — built-in (Elm 0.19 de-blessed it), reshaped surface | **diverged** — §3.8 |
+| `elm/parser` | No counterpart | **missing** — §3.9 |
+| `elm/html` | No counterpart; replaced by `Ipe.Ui` (elm-ui-derived) | **excluded** — §4 |
+| `elm/svg` | No counterpart | **excluded** — §4 |
+| `elm/virtual-dom` | Internal to the runtimes, not a user surface | **excluded** — §4 |
+| `elm/browser` | No counterpart; replaced by `Ipe.Live` / `Ipe.Tui` / `Ipe.Webview` | **excluded** — §4 |
+
+Headline `elm/core` count (from [`tbd/elm-core-coverage.md`](tbd/elm-core-coverage.md),
+264 exposed values across 17 modules): **139 present · 15 diverged · 107 missing ·
+3 n/a**, plus 13 of 20 exposed types present.
+
+---
+
+## 2. `elm/core` — module-by-module
+
+Statuses are `✓ present` / `~ diverged` / `✗ missing` / `n/a excluded`. The
+authoritative per-value table with signatures is
+[`tbd/elm-core-coverage.md`](tbd/elm-core-coverage.md); only the summary and the
+decisions live here.
+
+| Module | Present | Diverged | Missing | Notes |
+|---|---|---|---|---|
+| `Basics` | 34 | 6 | 15 | numerics live in `Ipe.Math`, not the auto-prelude |
+| `List` | 20 | 0 | 17 | missing `sort*`, numeric folds, `map2..5`, `filterMap`, `partition`, `unzip` |
+| `Dict` | 14 | 0 | 8 | missing `update`, `merge`, `filter`, `foldr`, set-ops |
+| `Set` | 10 | 0 | 7 | no HOF surface (`map`/`foldl`/`filter`/`partition`) |
+| `String` | 29 | 2 | 13 | code-point semantics (§5); missing char-fold family, `left`/`right`, `cons`/`uncons` |
+| `Maybe` | 7 | 0 | 0 | complete |
+| `Result` | 8 | 0 | 2 | missing `toMaybe`/`fromMaybe` bridges |
+| `Char` | 6 | 2 | 5 | `toUpper`/`toLower` return `String`; missing `isHexDigit`/`isOctDigit`/`isAlphaNum` |
+| `Task` | 7 | 1 | 5 | fixed `Error` channel (§6); missing `map2..5`, `attempt` |
+| `Platform.Cmd` | 2 | 0 | 1 | missing `Cmd.map` |
+| `Platform.Sub` | 2 | 0 | 1 | missing `Sub.map` |
+| `Array` | 0 | 0 | 18 | **whole module absent** |
+| `Bitwise` | 0 | 0 | 7 | **whole module absent** |
+| `Tuple` | 0 | 2 | 4 | `fst`/`snd` in `Basics`; module absent |
+| `Debug` | 0 | 1 | 2 | no dev-helper module; `Ipe.Log` is a `Task` logger |
+| `Platform` | 0 | 0 | 0 (3 n/a) | effect-manager plumbing — excluded (§6) |
+| `Process` | 0 | 1 | 2 | only `sleep` (as `Time.sleep`); no `spawn`/`kill`/`ProcessId` |
+
+### Decisions carried in `elm/core`
+
+- **Numerics namespace.** `round`/`floor`/`sqrt`/trig/`e`/`pi` live under
+  `Ipe.Math` (renamed `ceiling→ceil`, `truncate→trunc`), not the zero-import
+  `Basics`. `Basics.compare`/`modBy`/`negate` are registered qualifiers with no
+  typed kernel arm today. Open decision: re-export the `Math.*` numerics through
+  the default prelude to match Elm's ergonomics. Filed in the gap plan.
+- **No `Order` ADT.** `compare` is an opaque three-way kernel result; there is no
+  first-class `LT`/`EQ`/`GT`. `List.sortWith` is a kernel. Exposing `Order`
+  to user code is an open surface decision.
+- **No composition/power operators.** `(>>)`, `(<<)`, `(^)` are absent; only the
+  `(|>)`/`(<|)` pipes exist.
+
+---
+
+## 3. Reshaped `elm/*` packages (the deliberate departures)
+
+Each of these is a `diverged` verdict: Ipê covers the package's *role* but with a
+surface shaped for the server/native target. The rule is **small and documented**
+— a reviewer should be able to see both the divergence and its justification.
+
+### 3.1 `elm/json` → `Ipe.Config`
+
+Elm splits decoding (`Json.Decode`, ~30 values) and encoding (`Json.Encode`).
+Ipê's `Ipe.Config` is a single decoder surface — `string`/`int`/`float`/`bool`/
+`nullable`/`field`/`at`/`list`/`succeed`/`fail`/`map`/`andThen` — that decodes
+**JSON, TOML, and YAML** through the same `Decoder a` (`decodeJson`/`decodeToml`/
+`decodeYaml`/`loadFromFile`).
+
+- **Present (renamed):** the decoder combinator core (`Decoder`, `string`, `int`,
+  `float`, `bool`, `nullable`, `field`, `at`, `list`, `succeed`, `fail`, `map`,
+  `andThen`).
+- **Missing:** `map2..8`, `oneOf`, `maybe`, `index`, `keyValuePairs`, `dict`,
+  `array`, `lazy`, `value`/`Value`, `decodeValue`, `errorToString`, `oneOrMore`.
+- **Missing (whole surface):** `Json.Encode` — there is no first-class typed JSON
+  *encoder* value surface; serialization is per-effect (`Http` body helpers, DB).
+- **Justification for the merge:** config-file decoding (TOML/YAML/JSON) is the
+  dominant server use case; one `Decoder` over all three avoids three parallel
+  APIs. The gap is the **thin `map2..8`/`oneOf`/`maybe`** combinator set, which is
+  a real usability hole and is filed.
+
+### 3.2 `elm/time` → `Ipe.Time`
+
+Elm models time as pure values (`Posix`, `Zone`, `Weekday`, `Month`) plus `Cmd`
+effects (`now`, `here`, `every`). Ipê's `Ipe.Time` is `Task`-based
+(`now : Task Error Posix`-shaped, `sleep`, `every`) with formatting
+(`format`/`formatISO8601`/`formatRFC3339`/`formatHTTP`) and calendar math
+(`addMillis`/`diffMillis`, `unixMillis`).
+
+- **Present (reshaped):** `now`, `every`, millis conversions.
+- **Missing / different:** the `Posix`/`Zone`/`Weekday`/`Month`/`ZoneName` ADTs
+  and their accessors (`toYear`/`toMonth`/`toHour`/…), `here`/`utc`/`customZone`/
+  `getZoneName`/`millisToPosix`/`posixToMillis` as named values. Ipê exposes IANA
+  zone handling and formatting instead of the decomposed accessor family.
+- **Justification:** server time is clock-and-format heavy; the decomposed
+  `Weekday`/`Month` accessor family is lower value than ISO/RFC formatting. The
+  **absence of a public `Posix`/`Zone` type** is the notable gap — decide whether
+  to surface them for calendar-arithmetic code. Filed.
+
+### 3.3 `elm/random` → `Ipe.Random`
+
+Elm is generator-based and pure: `Generator a`, `step`, `Seed`, `map`/`andThen`/
+`list`/`pair`, driven to effect via `Random.generate : (a -> msg) -> Generator a
+-> Cmd msg`. Ipê offers **two surfaces**: `Task`-based generation (`int`, `float`,
+`range`, `choice`, `shuffle`, `weighted`) and a **seeded pure** surface (`Seed`,
+`seed`, `seededInt`, `seededFloat`, `seededChoice`).
+
+- **Present (reshaped):** `int`, `float`, `weighted`, a `Seed` type, seeded draws.
+- **Missing:** the composable `Generator a` monad — `map`/`map2..5`/`andThen`/
+  `constant`/`uniform`/`list`/`pair`/`lazy`, `initialSeed`/`independentSeed`,
+  `minInt`/`maxInt`.
+- **Justification:** effectful randomness (`Task`) is the common server path; the
+  seeded surface covers reproducibility. The **composable `Generator` monad** is
+  the real gap for structured/property-style generation. Filed.
+
+### 3.4 `elm/http` → `Ipe.Http` (+ `Ipe.Http.Server`)
+
+Elm's `Http` is a `Cmd`/`Task` client with `Body`/`Expect`/`Resolver`/`Progress`/
+`Response` ADTs. Ipê's `Ipe.Http` is a **builder-style client** (`defaultRequest`
+`|> withUrl |> withMethod |> withHeader |> withBody |> …`, then `get`/`post`/
+`request` returning `Task Error HttpResponse`). The **server** side
+(`Ipe.Http.Server`: routes, middleware, cookies, streaming, WebSocket) has no Elm
+counterpart at all (a browser cannot open a socket).
+
+- **Present (reshaped):** request construction, `get`/`post`/`request`, headers,
+  body, timeout, redirects.
+- **Missing:** the typed `Expect`/`expectJson`/`expectString`/`expectBytes`
+  decoding-on-response family, `Progress`/`track`, `multipartBody`/`Part`,
+  `Resolver`/`task`, `riskyRequest`.
+- **Excluded from parity:** `Ipe.Http.Server` is a deliberate extension beyond
+  Elm's remit, not a divergence to reconcile.
+
+### 3.5 `elm/url` → `Ipe.Http.parseQuery` (mostly missing)
+
+Only query-string parsing (`Http.parseQuery`) exists. The whole `Url` value type,
+`Url.Builder` (typed URL construction), `Url.Parser` (the `</>`/`<?>` routing
+combinators), and `Url.Parser.Query` are absent.
+
+- **Justification for what's missing:** Ipê's routing is server-side (`Ipe.Live`
+  path handling, `data-ipe-path`), so the client-side `Browser.application` URL
+  model is less load-bearing — but a typed `Url` + builder is genuinely useful for
+  the HTTP **client** and is a real gap. Filed.
+
+### 3.6 `elm/bytes` → `Ipe.Bytes`
+
+Elm exposes `Bytes` + full `Bytes.Decode`/`Bytes.Encode` binary combinator DSLs
+(`unsignedInt16`, `float64`, `sequence`, endianness, `loop`). Ipê's `Ipe.Bytes` is
+a byte-buffer value with **codec helpers** (`fromString`/`toString`, `fromHex`/
+`toHex`, `fromBase64`/`toBase64`, `append`/`slice`/`length`/`isEmpty`).
+
+- **Present:** the `Bytes` value + hex/base64/utf-8 conversions + slicing.
+- **Missing:** the structured binary `Decode`/`Encode` combinator surface and the
+  `Endianness` type.
+- **Justification:** hex/base64/utf-8 covers the overwhelmingly common
+  serialization need; a full binary DSL is a heavier, lower-frequency surface.
+  Filed as lower priority.
+
+### 3.7 `elm/file` → `Ipe.File`
+
+Elm's `File` is a **browser** upload/download model (`File.Select.file`,
+`File.Download.string`, `toUrl`). Ipê's `Ipe.File` is a **native filesystem**:
+`readFile`/`writeFile`/`append`/`exists`/`remove`/`mkdirAll`/`readDir`/`isDir`/
+`tempFile`/`tempDir`/`copy`/`rename`, all `Task Error a`.
+
+- **Justification:** the browser `File`/`Select`/`Download` model is
+  target-specific (see §4 exclusions). The native filesystem is the correct
+  analogue and is a strict superset for the server target. The browser upload
+  surface is **excluded**; a future WASM/webview target may reintroduce a
+  select/download shim.
+
+### 3.8 `elm/regex` → `Ipe.Regex`
+
+Elm 0.19 **de-blessed** `elm/regex` (steering users to `elm/parser`). Ipê keeps
+regex first-class but reshapes the surface: `match`/`find`/`findAll`/`replace`/
+`split` (vs Elm's `fromString`/`contains`/`find`/`replace`/`split` with a
+`Regex`/`Match`/`Options` type + `*AtMost` variants).
+
+- **Missing / different:** the explicit `Regex`/`Match`/`Options` types,
+  `fromStringWith` options, and the `findAtMost`/`replaceAtMost`/`splitAtMost`
+  count-limited variants.
+- **Justification:** a compiled-once `Regex` handle + count limits are reasonable
+  additions; filed as low priority.
+
+### 3.9 `elm/parser` — missing
+
+No parser-combinator library. `Parser`/`Parser.Advanced` (`succeed`/`|=`/`|.`/
+`oneOf`/`chompWhile`/`loop`/`run`/…) have no Ipê counterpart. This is a genuine
+gap for hand-written text parsing; filed as medium priority.
+
+---
+
+## 4. Justified exclusions (irrelevant to Ipê's target)
+
+These `elm/*` surfaces are **excluded on purpose**, not silently dropped. Each is
+target-specific to Elm's sandboxed browser client and is covered — where relevant
+— by an Ipê-native subsystem.
+
+| Elm surface | Why excluded | Ipê equivalent, if any |
+|---|---|---|
+| `elm/html`, `elm/svg` | Direct DOM/SVG node construction is a client-render concern. Ipê never emits a client VDOM program authored in HTML nodes. | `Ipe.Ui` (elm-ui-derived `row`/`column`/`el`), server-rendered to inline-styled HTML / ANSI / webview |
+| `elm/virtual-dom` | The VNode/diff layer is a runtime internal, not a user API. | Internal to `Ipe.Live`/`Ipe.Tui`/`Ipe.Webview`; users never call it |
+| `elm/browser` (`Browser.application`/`document`/`element`/`sandbox`, `Browser.Dom`, `Browser.Events`, `Browser.Navigation`) | Program entry + DOM/focus/viewport/nav are browser-runtime concepts. | `Ipe.Live.app` / `Ipe.Tui.app` / `Ipe.Webview.app` are the entry points; navigation is server-side `data-ipe-path` |
+| `Platform.worker`, `Platform.sendToApp`/`sendToSelf`, `Router` | User-defined effect managers are an Elm kernel-package privilege that does not exist in Ipê (which binds native effects via FFI + `Task`). | `Ffi.kernel` + the `Task` effect stdlib |
+| `Process.spawn`/`kill`, `ProcessId` | Elm's green-thread handles are a runtime-scheduler surface. | Concurrency is `Task.parallel` / `Cmd`; `Process.sleep` is `Time.sleep` |
+| `File.Select`/`File.Download`, `File.toUrl` | Browser upload/download. | Native `Ipe.File`; a select/download shim may return with WASM/webview |
+| `Debug.log`/`Debug.todo` | Dev-only, stripped from Elm `--optimize` builds. | `Ipe.Log` (production `Task` logger) + `Ipe.Trace` |
+
+**Boundary rule for future work:** an exclusion is only legitimate when a
+Ipê-native subsystem covers the *user need* (UI, navigation, concurrency, IO) or
+the surface is target-specific with no need on the server/native target. A missing
+value that has no such justification is a **gap** (§2–§3), not an exclusion, and
+belongs in the plan.
+
+---
+
+## 5. String / Unicode semantics
+
+Every Ipê `String` length/index/slice operation counts **Unicode code points**
+(runes — Rust `char`, a Unicode scalar value), uniformly across the module. Elm
+0.19 `String` is JS-backed and counts **UTF-16 code units**, so astral-plane
+characters (emoji, some CJK) count as 2 and can be split mid-character. Ipê counts
+such a character as length 1 and never splits it (verified in
+`runtime/src/ipe_runtime/string.rs`). The unit is code points, not grapheme
+clusters; `Ipe.Tui` uses grapheme segmentation separately for terminal display
+width, which does not affect `String` semantics.
+
+Ipê also adds `casefold`/`equalFold`/`isEmail`/`isUrl` and the haystack-first
+`containsIn`/`startsWithIn`/`endsWithIn` pipeline companions beyond Elm's set.
+
+---
+
+## 6. Effect-model & error-type departures (the structural ones)
+
+These are not per-value gaps but whole-model choices; they explain why several
+`elm/core` rows read `diverged` or `n/a`.
+
+- **Task-everywhere.** Every observable side effect returns `Task Error a`, and
+  `Task` is directly runnable at the program entry boundary. In Elm, `Task` is
+  inert until converted to a `Cmd` by the runtime. This is why Ipê ships
+  `File`/`Http`/`Db`/`Time`/`Random`/`Crypto`/`Io`/`System` as `Task`.
+- **Fixed `Error` channel.** Every `Task`/`Result` combinator fixes the error slot
+  to a canonical typed `Error` (`Task Error a`, not polymorphic `Task x a`);
+  `Result String a` / `Task String a` are forbidden in public surfaces and this is
+  test-enforced. There is no `Never` type, so `Task Never a` and `Basics.never`
+  have no analogue.
+- **Server-driven TEA.** `init`/`update`/`view` run on the **server**; the browser
+  receives HTML on load and VNode-diff patches over SSE (`Ipe.Live`), ANSI cells
+  (`Ipe.Tui`), or a native webview (`Ipe.Webview`). This is why `elm/browser` is
+  excluded rather than reshaped.
+- **Native stdlib with no Elm-core counterpart.** `Ipe.Db`, `Ipe.Auth`,
+  `Ipe.Crypto`, `Ipe.Jwt`, `Ipe.Money`/`Decimal`, `Ipe.Email`, `Ipe.Cache`,
+  `Ipe.Compression`, `Ipe.Csv`, `Ipe.Http.Server`, `Ipe.Log`/`Trace` are additive
+  extensions justified by the server/native target. They are **extensions**, not
+  divergences to reconcile against Elm.
+
+---
+
+## 7. Shared-with-Elm constraints (not divergences)
+
+Listed so they are not mis-sold as Ipê inventions — they match Elm 0.19.x: no
+higher-kinded types, no custom operators, no `where` clauses, negative-literal
+arguments need parens (`f (-1)`), exhaustive `case…of`, extensible record
+annotations + record update, and identical core syntax (pipelines, cons, lambdas,
+`let`/`case`, module/import, `type`/`type alias`). Prelude names
+(`Ok`/`Err`/`Just`/`Nothing`/`identity`/`always`/`not`/`fst`/`snd`/`clamp`/
+`modBy`) match Elm's exposure.
+
+One **planned** language divergence is filed separately: closed-union `case`
+refusing catch-all arms (see the exhaustive-case finite-ADT design under
+`docs/architecture/`).
