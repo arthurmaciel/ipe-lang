@@ -544,7 +544,9 @@ mod tests {
                 help_columns.extend(col);
             }
             assert!(
-                help_columns.windows(2).all(|w| matches!(w, [a, b] if a == b)),
+                help_columns
+                    .windows(2)
+                    .all(|w| matches!(w, [a, b] if a == b)),
                 "`--help` column misaligned in section {}: {help_columns:?}",
                 section.title
             );
