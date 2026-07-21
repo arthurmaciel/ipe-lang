@@ -1044,8 +1044,7 @@ fn inspect_crate_source(
                         };
                         pkg.functions.retain(|f| {
                             expose.iter().any(|e| e == &f.name)
-                                || marked.contains(&f.name)
-                                || marked.contains(&f.recv_type)
+                                || fn_touches_marked_type(f, &marked)
                         });
                     }
                     pkg
@@ -4165,6 +4164,45 @@ fn ipe_provide_marked_names(doc: &serde_json::Value) -> std::collections::HashSe
         }
     }
     names
+}
+
+/// Whether a foreign type STRING names one of the `#[ipe::provide]`-marked
+/// types as a whole nominal segment.
+///
+/// A type string is `sprite_wrap::Sprite`, `Sprite`, `Vec<Sprite>`, `&Sprite`,
+/// … — the marked NAME (`Sprite`) appears as a `::`-path-final segment or a
+/// bare word, never as a substring of a longer identifier (`SpriteSheet` must
+/// NOT match). Split on every non-identifier character, then compare each
+/// resulting word — and, for a `a::b::c` path, its final segment — against the
+/// marked set.
+fn type_names_marked(ty: &str, marked: &std::collections::HashSet<String>) -> bool {
+    if marked.is_empty() {
+        return false;
+    }
+    ty.split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != ':')
+        .flat_map(|word| {
+            // A `a::b::Seg` path matches on its FINAL segment (the nominal), and
+            // a bare `Seg` matches as itself.
+            let last = word.rsplit("::").next().unwrap_or(word);
+            [word, last]
+        })
+        .any(|seg| marked.contains(seg))
+}
+
+/// Whether a function should be auto-exposed because it BINDS a marked type: it
+/// is a method ON the marked type (`recvType`), or its name is marked (a marked
+/// free fn), or any param/result names a marked type. A marked type is only
+/// usable from Ipê when the functions that construct and consume it surface, so
+/// the mark reaches those functions transitively — every one still passes the
+/// same carrier-compatibility over-drop as any wrapper symbol.
+fn fn_touches_marked_type(f: &Function, marked: &std::collections::HashSet<String>) -> bool {
+    if marked.contains(&f.name) || marked.contains(&f.recv_type) {
+        return true;
+    }
+    f.params
+        .iter()
+        .chain(f.results.iter())
+        .any(|p| type_names_marked(&p.ty, marked))
 }
 
 /// The variant KIND (R5) read from a variant item's `inner.variant.kind`:
@@ -13270,6 +13308,22 @@ mod tests {
         assert!(!ipe_provide_marked(&unmarked));
         let no_docs = serde_json::json!({ "attrs": ["non_exhaustive"] });
         assert!(!ipe_provide_marked(&no_docs));
+    }
+
+    #[test]
+    fn type_names_marked_matches_whole_nominal_segments_only() {
+        let marked: std::collections::HashSet<String> = ["Sprite".to_string()].into_iter().collect();
+        assert!(type_names_marked("Sprite", &marked));
+        assert!(type_names_marked("sprite_wrap::Sprite", &marked));
+        assert!(type_names_marked("&Sprite", &marked));
+        assert!(type_names_marked("Vec<Sprite>", &marked));
+        assert!(type_names_marked("Result<sprite_wrap::Sprite, String>", &marked));
+        // A longer identifier that merely CONTAINS the name must not match.
+        assert!(!type_names_marked("SpriteSheet", &marked));
+        assert!(!type_names_marked("MySprite", &marked));
+        assert!(!type_names_marked("String", &marked));
+        // An empty marked set never matches.
+        assert!(!type_names_marked("Sprite", &std::collections::HashSet::new()));
     }
 
     #[test]
