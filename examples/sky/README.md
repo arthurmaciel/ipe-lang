@@ -58,8 +58,10 @@ paper over a real gap.
 `scripts/examples-sweep.sh` calls `mirror_sky_examples` (`scripts/lib/mirror.sh`)
 per in-scope example:
 
-1. Copy `../sky/examples/<name>` (network fallback: fetch from `anzellai/sky`)
-   into `examples/sky/<name>/`.
+1. Fetch the current upstream example from `anzellai/sky` into
+   `examples/sky/<name>/`. A local `../sky` sibling checkout is used only as an
+   offline fallback — the network fetch comes first, so each refresh tracks the
+   live upstream.
 2. Rename every `*.sky` → `*.ipe`; rewrite the `sky.toml` `entry` key.
 3. Apply `rename-map.tsv` (the token rewrite), then `ipe-patches/<name>.patch`
    if present.
