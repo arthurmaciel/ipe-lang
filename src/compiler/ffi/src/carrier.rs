@@ -640,20 +640,47 @@ impl EnumDef {
 
 /// A closure's declared return, after the total-carrier-return soundness rule.
 ///
-/// Exactly three shapes are representable. A total return is scalar-only
-/// (MF-2): an opaque handle has no default to yield on a panic-abort, so it is
-/// legal only inside the fallible shapes, where a failed call folds to
-/// `Err`/`None`.
+/// A SYNC return has three shapes; an ASYNC (`Future`-returning) return has
+/// exactly two. A total return is scalar-only (MF-2): an opaque handle has no
+/// default to yield on a panic-abort, so it is legal only inside the fallible
+/// shapes, where a failed call folds to `Err`/`None`.
+///
+/// An ASYNC return is ALWAYS fallible (`AsyncResult`/`AsyncOption`) — there is
+/// deliberately no `AsyncTotal`. A panic while POLLING the returned future has
+/// no synchronous frame to `catch_unwind`; it surfaces as a spawn `JoinError`
+/// that must fold into an error channel. A total async return would have no
+/// such channel, so a poll-panic could only abort the whole executor (a remote
+/// `DoS` from inside a request handler) or launder the panic into a `Default` —
+/// both refused. Making async-total UNREPRESENTABLE here means the emitter can
+/// never be asked to produce it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClosureRet {
-    /// A total scalar return (`-> i64`). A panic in the Ipê closure aborts the
-    /// process — a total signature has no error channel to fold into.
+    /// A total scalar sync return (`-> i64`). A panic in the Ipê closure aborts
+    /// the process — a total signature has no error channel to fold into.
     Total(ScalarCarrier),
-    /// A `Result<B, E>` return. A panic folds to `Err` via the runtime error
-    /// funnel; `B` may be any carrier (opaque included).
+    /// A sync `Result<B, E>` return. A panic folds to `Err` via the runtime
+    /// error funnel; `B` may be any carrier (opaque included).
     Result(Carrier),
-    /// An `Option<B>` return. A panic folds to `None`; `B` may be any carrier.
+    /// A sync `Option<B>` return. A panic folds to `None`; `B` may be any
+    /// carrier.
     Option(Carrier),
+    /// An async `-> impl Future<Output = Result<B, E>>` return. The returned
+    /// future is awaited under a spawned task; a poll-panic folds to `Err` via
+    /// the `JoinError` funnel, and a synchronous panic while PRODUCING the
+    /// future folds to `Err` too. `B` may be any carrier (opaque included).
+    AsyncResult(Carrier),
+    /// An async `-> impl Future<Output = Option<B>>` return. A poll-panic or a
+    /// production-panic folds to `None`. `B` may be any carrier.
+    AsyncOption(Carrier),
+}
+
+impl ClosureRet {
+    /// Whether this return is async (the adapter must emit the spawned-await
+    /// containment and the `AbortOnDrop` cancel guard).
+    #[must_use]
+    pub const fn is_async(&self) -> bool {
+        matches!(self, Self::AsyncResult(_) | Self::AsyncOption(_))
+    }
 }
 
 /// A fully-parsed `provide.closure` signature.
@@ -768,6 +795,22 @@ impl ClosureSig {
             ClosureRet::Total(sc) => sc.rust_owned().to_owned(),
             ClosureRet::Result(c) => format!("Result<{}, IpeError>", c.rust_owned()),
             ClosureRet::Option(c) => format!("Option<{}>", c.rust_owned()),
+            // An async return renders as the concrete boxed future the Ipê value
+            // carries — `Pin<Box<dyn Future<Output = …> + Send + 'static>>`. The
+            // inner `Send + 'static` is part of the type, so the received box IS
+            // the Send/'static-across-await proof; the adapter never re-derives
+            // it. The `Output` is always the fallible carrier (async-total is
+            // unrepresentable).
+            ClosureRet::AsyncResult(c) => format!(
+                "::std::pin::Pin<Box<dyn ::std::future::Future<Output = Result<{}, IpeError>> \
+                 + Send + 'static>>",
+                c.rust_owned()
+            ),
+            ClosureRet::AsyncOption(c) => format!(
+                "::std::pin::Pin<Box<dyn ::std::future::Future<Output = Option<{}>> \
+                 + Send + 'static>>",
+                c.rust_owned()
+            ),
         };
         let bounds = self.bounds.rust_suffix();
         if bounds.is_empty() {
@@ -796,10 +839,69 @@ fn split_ret_and_bounds(s: &str) -> (&str, &str) {
     (s, "")
 }
 
+/// The `Output` type of a future-returning spelling, or [`None`] when `s` is
+/// not a future.
+///
+/// Recognises the three shapes an author may paste for an async handler return:
+///
+/// * `impl Future<Output = R>`
+/// * `Pin<Box<dyn Future<Output = R> + Send + 'static>>` (any `+ Bound` tail)
+/// * `BoxFuture<'static, R>` (the `futures` type alias)
+///
+/// For the `Future<Output = …>` forms the `Output` slot is extracted at
+/// angle-bracket depth zero so a `Result<i64, E>` output stays whole. For the
+/// `BoxFuture<'life, R>` form the second generic argument (after the lifetime)
+/// is the output. No raw text escapes: the extracted slice is re-parsed through
+/// [`parse_ret`], and any leftover is rejected there.
+fn future_output(s: &str) -> Option<&str> {
+    // `BoxFuture<'a, R>` — strip the alias head and its trailing `>`, then drop
+    // the leading `'lifetime,`.
+    if let Some(inner) = s
+        .strip_prefix("BoxFuture<")
+        .and_then(|r| r.strip_suffix('>'))
+    {
+        let after_life = inner.split_once(',').map_or(inner, |(_, r)| r).trim();
+        return Some(after_life);
+    }
+    // Any other future spelling must expose a `Future<Output = R>` fragment.
+    // Find `Output`, require the following `=`, then take everything up to the
+    // matching top-level `>` that closes the `Future<…>` angle group.
+    let after_output = s.split_once("Future<")?.1;
+    let eq_rest = after_output.split_once('=')?.1.trim_start();
+    let mut depth = 0_i32;
+    for (i, c) in eq_rest.char_indices() {
+        match c {
+            '<' | '(' => depth += 1,
+            '>' if depth == 0 => return eq_rest.get(..i).map(str::trim),
+            ')' | '>' => depth -= 1,
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Parse a closure return type into the closed [`ClosureRet`], enforcing the
-/// total-carrier-return rule: a bare (non-`Result`/`Option`) return must be a
-/// scalar carrier.
+/// total-carrier-return rule (a bare sync return must be a scalar carrier) and
+/// the async-must-be-fallible rule (a `Future`-returning closure's output must
+/// be `Result`/`Option`, never a total carrier).
 fn parse_ret(s: &str) -> Result<ClosureRet, String> {
+    // An async return: `impl Future<Output = R>`, a boxed/pinned future, or a
+    // `BoxFuture<'static, R>`. The `Output` R is re-parsed as a SYNC return and
+    // must land on the fallible shape — an async-total return is unrepresentable
+    // (a poll-panic has no error channel; see `ClosureRet`).
+    if let Some(output) = future_output(s) {
+        return match parse_ret(output)? {
+            ClosureRet::Result(c) => Ok(ClosureRet::AsyncResult(c)),
+            ClosureRet::Option(c) => Ok(ClosureRet::AsyncOption(c)),
+            ClosureRet::Total(_) => Err(format!(
+                "an async return `{s}` must be fallible — a `Future<Output = R>` with a total \
+                 (non-`Result`/`Option`) `R` has no error channel to fold a poll-panic into"
+            )),
+            ClosureRet::AsyncResult(_) | ClosureRet::AsyncOption(_) => Err(format!(
+                "a nested async return `{s}` (a future of a future) is not a carrier shape"
+            )),
+        };
+    }
     let inner_of = |head: &str| -> Option<&str> {
         s.strip_prefix(head)
             .and_then(|r| r.strip_suffix('>'))
@@ -943,6 +1045,86 @@ mod tests {
             o.ret,
             ClosureRet::Option(Carrier::Opaque(RustIdent::parse("Counter").unwrap()))
         );
+    }
+
+    // ── async-returning closures ────────────────────────────────────────────
+
+    #[test]
+    fn an_impl_future_result_return_parses_async() {
+        let sig = ClosureSig::parse(
+            "Fn(Int) -> impl Future<Output = Result<Int, Error>> + Send + Sync + 'static",
+        )
+        .expect("impl Future<Result> parses");
+        assert_eq!(sig.ret, ClosureRet::AsyncResult(Carrier::Int));
+        assert!(sig.ret.is_async());
+        assert_eq!(
+            sig.rust_dyn_fn(),
+            "dyn Fn(i64) -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = \
+             Result<i64, IpeError>> + Send + 'static>> + Send + Sync + 'static"
+        );
+    }
+
+    #[test]
+    fn an_impl_future_option_return_parses_async() {
+        let sig = ClosureSig::parse(
+            "Fn(String) -> impl Future<Output = Option<Int>> + Send + Sync + 'static",
+        )
+        .expect("impl Future<Option> parses");
+        assert_eq!(sig.ret, ClosureRet::AsyncOption(Carrier::Int));
+        assert!(sig.ret.is_async());
+    }
+
+    #[test]
+    fn a_pinned_boxed_future_spelling_parses_async() {
+        // The exact type an Axum handler's `-> Pin<Box<dyn Future<…>>>` names.
+        let sig = ClosureSig::parse(
+            "Fn(Int) -> Pin<Box<dyn Future<Output = Result<String, Error>> + Send + 'static>> \
+             + Send + Sync + 'static",
+        )
+        .expect("Pin<Box<dyn Future>> parses");
+        assert_eq!(sig.ret, ClosureRet::AsyncResult(Carrier::Str));
+    }
+
+    #[test]
+    fn a_boxfuture_alias_spelling_parses_async() {
+        let sig = ClosureSig::parse(
+            "Fn(Int) -> BoxFuture<'static, Result<Int, Error>> + Send + Sync + 'static",
+        )
+        .expect("BoxFuture parses");
+        assert_eq!(sig.ret, ClosureRet::AsyncResult(Carrier::Int));
+    }
+
+    #[test]
+    fn an_async_opaque_return_is_legal_inside_result() {
+        let sig = ClosureSig::parse(
+            "Fn(Int) -> impl Future<Output = Result<Counter, Error>> + Send + Sync + 'static",
+        )
+        .expect("async Result<opaque> parses");
+        assert_eq!(
+            sig.ret,
+            ClosureRet::AsyncResult(Carrier::Opaque(RustIdent::parse("Counter").unwrap()))
+        );
+    }
+
+    #[test]
+    fn an_async_total_return_is_unrepresentable() {
+        // The single new async soundness rule: a `Future<Output = R>` with a
+        // total (non-Result/Option) `R` has no error channel to fold a
+        // poll-panic into, so it is refused at parse — never a runtime surprise
+        // (a poll-panic would otherwise abort the whole executor).
+        for bad in [
+            "Fn(Int) -> impl Future<Output = Int> + Send + Sync + 'static",
+            "Fn(Int) -> impl Future<Output = Bool> + Send + Sync + 'static",
+            "Fn(Int) -> BoxFuture<'static, Int> + Send + Sync + 'static",
+        ] {
+            assert!(
+                matches!(
+                    ClosureSig::parse(bad),
+                    Err(WireDefect::InvalidClosureSig { .. })
+                ),
+                "{bad:?} must be refused (async-total has no error channel)"
+            );
+        }
     }
 
     #[test]

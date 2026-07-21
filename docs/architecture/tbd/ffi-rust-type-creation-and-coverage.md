@@ -225,10 +225,13 @@ gate that already exists or a narrow new one:
 3. **Re-entrancy / runtime context.** The Ipê evaluator apply path must be
    callable from an arbitrary Rust thread (a Bevy system thread, a tokio worker).
    The process-global runtime `OnceLock` the async bridge already introduces
-   (`ffi-sandbox-and-generator-impl-ready.md` §4, H1) supplies the context. For
-   the first increment we restrict to the **synchronous** apply path (no `Task`
-   inside the closure body); async-returning closures defer to the async-bridge
-   milestone.
+   (`ffi-sandbox-and-generator-impl-ready.md` §4, H1) supplies the context.
+   **Async-returning closures are now supported** (see §3.5): the declared
+   return is a `Future`, the Ipê value carries a concrete `IpeTask`-shaped boxed
+   future, and the adapter awaits it under a spawned task guarded by
+   `AbortOnDrop`. A `tokio` runtime context must exist at poll time (the crate's
+   own executor — Axum/Hyper — supplies it), exactly as the async bridge's
+   spawned wrappers require.
 
 4. **`Clone` for multi-call `Fn`/`FnMut`.** A `dyn Fn` may be called many
    times; the captured Ipê value is `Clone` (runtime values are refcounted /
@@ -255,6 +258,48 @@ gate that already exists or a narrow new one:
   inherits whatever the crate's trait impl transitively needs.
 
 ---
+
+### 3.5 The async-returning closure adapter (Axum/Hyper handlers)
+
+An async `provide.closure` declares a `Future`-returning signature — the shape
+an Axum/Hyper route handler needs (`Fn(Request) -> impl Future<Output =
+Result<Response, E>>`). Three author spellings decode to the same shape:
+`impl Future<Output = R>`, `Pin<Box<dyn Future<Output = R> + …>>`, and
+`BoxFuture<'static, R>`. The soundness core rests on one fact:
+
+* **The received box type IS the `Send + 'static`-across-await proof.** The
+  runtime type `IpeTask<E, A> = Pin<Box<dyn Future<Output = IpeResult<E, A>> +
+  Send + 'static>>`. So an async Ipê fn value on the app side is already typed
+  `Box<dyn Fn(A…) -> Pin<Box<dyn Future<Output = CrateRet> + Send + 'static>> +
+  Send + Sync + 'static>`. The inner future's `Send + 'static` is part of the
+  received box type — rustc discharges it at the wrapper boundary. The adapter
+  never re-derives a Send proof; if the captured Ipê environment or an argument
+  were not `Send + 'static`, the received box type would not type-check. A
+  lifetime-borrowed capture therefore cannot escape into the `'static + Send`
+  future by construction.
+
+The adapter receives and returns the SAME concrete boxed-future type (so the
+opaque paths on both sides can never disagree — an E0308 otherwise), Arc-wraps
+the captured value for multi-call `Clone`, and per call:
+
+1. produces the future by calling the Ipê fn under `catch_unwind` — a
+   *production* panic folds to an immediate-error future (`Err`/`None`);
+2. returns a boxed future that `tokio::task::spawn`s the produced future and
+   awaits its `JoinHandle`, so a *poll* panic surfaces as a `JoinError` folded
+   to `Err`/`None`. Only `{JoinHandle, AbortHandle}` cross the await point — the
+   `Arc` is consumed producing the future *before* the await, so the returned
+   future stays `Send` even though `IpeTask` is `!Sync`.
+3. arms an `AbortOnDrop` guard over the spawn (async-bridge §1.1 Δ1): a dropped
+   outer task (a cancelled request) aborts the inner one, so no Ipê side effect
+   runs after cancel.
+
+**Async returns are always fallible.** There is no `AsyncTotal` shape — a
+poll-panic has no synchronous frame to `catch_unwind` and only surfaces as a
+`JoinError`, which needs an error channel to fold into. A total async return
+would leave a poll-panic to either abort the whole executor (a remote DoS from
+inside a request handler) or launder the panic into a `Default` — both refused.
+`ClosureRet` makes async-total **unrepresentable**, so the emitter can never be
+asked to produce it; the decode boundary over-drops the whole entry.
 
 ## 4. Approaches weighed
 
@@ -335,8 +380,21 @@ and preserves the SEAL + over-drop keystone.
   plumbing (one forwarder PER variant returning the single shared enum nominal; a
   unit variant binds a zero-arg forwarder) landed alongside `provide.struct` — see
   the §2.1 note and `tests/provide_forwarder_seal.rs`.
-* **P5 — async-returning closures**, gated behind the async-bridge milestone
-  (`async-ffi-bridge-design.md`); `Send`-proof composition per that spec.
+* **P5 — async-returning closures.** *Landed.* A `Future`-returning
+  `provide.closure` (`Fn(A…) -> impl Future<Output = Result<B, E>>`), the
+  Axum/Hyper handler shape. `ClosureRet` gained `AsyncResult`/`AsyncOption` arms
+  (async-total is unrepresentable — no error channel for a poll-panic); the
+  signature parser recognises `impl Future` / `Pin<Box<dyn Future>>` /
+  `BoxFuture<'static, R>`. The emitter received/returns the same concrete
+  `IpeTask`-shaped boxed future (the type IS the `Send + 'static`-across-await
+  proof — §3.5), produces the future under `catch_unwind`, and awaits it under a
+  spawned task guarded by `AbortOnDrop` so a poll-panic folds through the
+  `JoinError` arm to `Err`/`None`. SEAL fixture
+  `tests/provide_async_closure_seal.rs` (an async `Result` handler cargo-builds
+  on a real `tokio` and runs under `IPE_E2E`, round-tripping the awaited value
+  and folding a poll-panic to `Err`; an async-total return over-drops). The
+  closure-adapter-to-`run` handoff (surfacing the boxed async handler as an
+  Ipê-held value) stays deferred with its sync sibling (Cluster 1).
 * **P6 — escape hatch B** (`#[ipe::provide]` companion-crate proc-macro) only if
   the roadmap surfaces a crate A cannot reach.
 
@@ -356,7 +414,7 @@ first. "Create-types features exercised" names which provide-forms each needs.
 | # | Crate | Why / fit | Minimal binding surface | Create-types features |
 |---|-------|-----------|-------------------------|-----------------------|
 | 1 | **Iced** | Elm architecture maps directly onto Ipê TEA — `Model`/`Message`/`update`/`view`. Highest value, cleanest fit. | `Application`/`Sandbox` trait, `Element`, `Command`; the runtime driver. | `provide.struct` (Model), `provide.closure` (update/view), `provide.enum` (Message) — **P1–P4**. |
-| 2 | **Axum / Hyper** | async servers; Ipê already has a server story. Handlers are `Fn(Request) -> impl Future`. | `Router`, route registration, handler adapter, extractors as opaque handles. | `provide.closure` returning a `Task`/future — **P5** (async). Struct handlers via **P1**. |
+| 2 | **Axum / Hyper** | async servers; Ipê already has a server story. Handlers are `Fn(Request) -> impl Future`. | `Router`, route registration, handler adapter, extractors as opaque handles. | `provide.closure` returning a `Future` — **P5 (async), landed** (§3.5). Struct handlers via **P1**. |
 | 3 | **Ratatui** | TUI; immediate-mode `render(frame)` closure, no async, small trait surface. | `Terminal`, `Frame`, widget constructors (opaque), a `draw` closure. | `provide.closure` sync (draw) + `provide.struct` (app state) — **P1–P3**. |
 | 4 | **Bevy** | ECS + systems + closures — the hardest. Systems are `Fn(Query, ...)`; `Component`/`Resource` are user structs, often needing real trait impls. | `App`, `Component`/`Resource` structs, system-fn adapter, `Query` as opaque. | `provide.struct` **with a trait impl** — many need **escape hatch B**; systems need multi-arg `provide.closure` (**P3**). Partial coverage under A; full needs B. |
 | 5 | **Slint / Dioxus / Gtk** | declarative/native UI; macro- or markup-driven. Slint compiles `.slint`; Dioxus uses `rsx!`. | Component handle (opaque), event-callback adapters, property setters. | `provide.closure` (callbacks) + `provide.struct` (props). Markup stays crate-side; Ipê binds the imperative seam. **P1–P3**, some macro cases → B. |
@@ -378,8 +436,11 @@ first. "Create-types features exercised" names which provide-forms each needs.
   (a separate follow-up).
 * Cluster 2 — struct-with-trait-impl (Bevy `Component`, Iced `Application`):
   needs escape hatch B or a declarative `impl` sub-form.
-* Cluster 3 — async-returning closures (Axum handlers): gated on the async
-  bridge.
+* Cluster 3 — async-returning closures (Axum handlers): **LANDED.** The
+  adapter emits the async return as the concrete `IpeTask`-shaped boxed future
+  and awaits it under a spawned task with the `AbortOnDrop` cancel guard (§3.5).
+  The Ipê-side handoff (surfacing the boxed handler as an Ipê value passed to a
+  crate `run`) is shared with Cluster 1 and still deferred.
 
 ---
 
