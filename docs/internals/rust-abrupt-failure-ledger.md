@@ -32,10 +32,12 @@ each is recorded in `docs/adr/0037-no-authored-abrupt-failure.md`.
 | 1 | `runtime/rust/src/crypto.rs` (×2) | `.expect` | `Hmac::new_from_slice` returns `Result`, but `Hmac<D>`'s impl pads/hashes any key internally and returns `Ok` unconditionally, so the `InvalidLength` branch is structurally dead. See "Why #1/#2 stay" below. |
 | 2 | `runtime/rust/src/email.rs` | `.expect` | The same structurally-dead HMAC ctor, in the SES SigV4 request signer's key-derivation chain. |
 
-This ledger is **tracked debt, not an accepted state** — the target is zero. Two
-classes have been driven out; two remain because eliminating them would *reduce*
-security (Security > Correctness > Soundness: a weaker design is never shipped to
-chase zero).
+The ledger is reduced to **two permanently-retained, security-reviewed HMAC
+assertions** — everything that could be removed without weakening security has
+been. Retaining #1/#2 is a deliberate project decision on Security-first grounds
+(Security > Correctness > Soundness: a weaker design is never shipped to chase a
+zero count), not a tolerated leftover. The two remaining classes are documented
+below and were driven from four down to two.
 
 ### Eliminated
 
@@ -86,6 +88,9 @@ into `Result`-returning forces every caller to handle a never-occurring `Err`
 whose mishandling is a wrong hash. A **loud** `.expect` on a provably-dead branch
 is safer and more honest than a `Result` carrying a provably-dead `Err`.
 
-These two remain ledgered pending a project decision; they are not kept because
-they were previously tolerated. The ledger exists to be emptied, and everything
-that could be emptied without weakening security has been.
+These two are **retained by decision** as permanent, security-justified
+exceptions — not kept because they were previously tolerated, but because a loud
+assertion on a provably-dead branch is the most secure option available. Any new
+abrupt-failure site is still forbidden; these two are the sole, reviewed
+exceptions, and the enforcement gates (clippy + `tools/panic-scan`) hold for
+everything else.
