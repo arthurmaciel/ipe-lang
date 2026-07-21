@@ -19,6 +19,8 @@
 //! binding it cannot render soundly emits NOTHING (over-drop), never a
 //! wrapper cargo would reject.
 
+use std::collections::BTreeSet;
+
 use crate::carrier::{Carrier, ClosureRet, ClosureSig, EnumDef, StructDef};
 use crate::naming::{RustIdent, arg_name, rust_kernel_name, rust_safe_ident, wrapper_fn_ident};
 use crate::num_coerce::{is_numeric_rust, num_saturate, num_widen_scalar};
@@ -1052,8 +1054,9 @@ pub fn emit_bindings(pkg: &PkgInfo) -> String {
         "use std::collections::HashMap;".to_owned(),
         String::new(),
     ];
+    let opaques = OpaqueResolver::from_pkg(pkg);
     for f in pkg.fns() {
-        lines.extend(emit_fn_region(&krate, &kernel, f));
+        lines.extend(emit_fn_region(&krate, &kernel, f, &opaques));
     }
     lines.push(String::new());
     let mut out = lines.join("\n");
@@ -1069,9 +1072,10 @@ pub fn emit_bindings(pkg: &PkgInfo) -> String {
 pub fn surviving_ref_names(pkg: &PkgInfo) -> std::collections::BTreeSet<String> {
     let kernel = rust_kernel_name(pkg.pkg_path());
     let krate = pkg_to_crate_import(pkg.pkg_path());
+    let opaques = OpaqueResolver::from_pkg(pkg);
     pkg.fns()
         .iter()
-        .filter(|f| !emit_fn_region(&krate, &kernel, f).is_empty())
+        .filter(|f| !emit_fn_region(&krate, &kernel, f, &opaques).is_empty())
         .map(super::pkginfo::FnInfo::wrapper_ref_name)
         .collect()
 }
@@ -1095,7 +1099,12 @@ fn closed_instance_lines(kernel_name: &str, f: &FnInfo) -> Vec<String> {
 
 /// One binding's sentinel-bracketed wrapper region; empty when the binding is
 /// dropped (degenerate method / unresolved-generic receiver / trait fn).
-fn emit_fn_region(krate: &str, kernel_name: &str, f: &FnInfo) -> Vec<String> {
+fn emit_fn_region(
+    krate: &str,
+    kernel_name: &str,
+    f: &FnInfo,
+    opaques: &OpaqueResolver,
+) -> Vec<String> {
     let cx = WrapperCx::new(krate, kernel_name, f);
     let body = match f.shape() {
         FnShape::EnumCtor {
@@ -1120,7 +1129,7 @@ fn emit_fn_region(krate: &str, kernel_name: &str, f: &FnInfo) -> Vec<String> {
         ),
         FnShape::FieldGet => field_get_lines(&cx),
         FnShape::FieldSet => field_set_lines(&cx),
-        FnShape::ClosureAdapter { sig } => closure_adapter_lines(&cx, sig),
+        FnShape::ClosureAdapter { sig } => closure_adapter_lines(&cx, sig, opaques),
         FnShape::StructCtor { def } => struct_ctor_lines(&cx, def),
         FnShape::EnumDefCtor { def } => enum_def_ctor_lines(&cx, def),
         FnShape::Plain | FnShape::PkgVar => plain_lines(&cx),
@@ -1154,6 +1163,183 @@ fn carrier_rust_ty(krate: &str, c: &Carrier) -> String {
     }
 }
 
+/// Resolves a `provide.closure` carrier to the concrete owned Rust type the
+/// emitted adapter names — the opaque-map threaded into the closure-adapter
+/// emitter so an opaque return/param resolves to a path the wrapped `pub mod
+/// <slug>` region can actually name.
+///
+/// An opaque handle in a `provide.closure` signature is a BARE name (the author
+/// writes `Fn(Model) -> Result<Element, E>`); resolving it soundly requires the
+/// whole crate's type information, which a lone `ClosureSig` lacks. Three cases,
+/// keyed only off the crate's inspected types + the author's own manifest — user
+/// `.ipe` source never contributes:
+///
+/// * a name the crate's `[rust.provide.struct/enum]` decls DEFINE resolves to
+///   the BARE in-module name (the `pub struct`/`pub enum` lives in the same
+///   `pub mod <slug>` region as the adapter, so a bare reference is in scope);
+/// * an INSPECTED crate-opaque resolves to its absolute `::crate::path` (so it
+///   can never fold onto a re-exported runtime kernel module);
+/// * anything else — an unresolvable name, OR an opaque whose inspected type is
+///   generic/lifetime-parameterised (`Element<'a, Message>`, whose stripped
+///   path `::iced::Element` would be an E0107 arity error) — resolves to
+///   [`None`], which OVER-DROPS the whole adapter (emit nothing, record a
+///   coverage skip), never emit-and-cargo-fail.
+///
+/// The parameterised-opaque exclusion is why the marquee Iced `view : Model ->
+/// Element Message` case stays refused: `Element` requires generic arguments the
+/// bare-handle carrier cannot carry, so a sound emit is impossible and the
+/// adapter over-drops rather than breach the SEAL.
+struct OpaqueResolver {
+    /// Bare opaque name → absolute `::crate::path` (inspected crate types only).
+    inspected: std::collections::BTreeMap<String, String>,
+    /// Bare names the crate's own `provide.struct/enum` decls DEFINE.
+    provide_defined: BTreeSet<String>,
+    /// Bare base names that appear generic/lifetime-parameterised (`Base<…>`)
+    /// anywhere in the crate's inspected type strings — unsound to emit as a
+    /// bare-arg path, so they over-drop.
+    parameterised: BTreeSet<String>,
+}
+
+impl OpaqueResolver {
+    /// Build the resolver purely from the package, so every `emit_bindings`
+    /// call site derives the SAME map from the SAME `PkgInfo` (the warm-load
+    /// byte-identical SEAL holds by construction — no per-site input to drift).
+    fn from_pkg(pkg: &PkgInfo) -> Self {
+        let mut inspected: std::collections::BTreeMap<String, String> =
+            std::collections::BTreeMap::new();
+        let mut poisoned: BTreeSet<String> = BTreeSet::new();
+        let mut parameterised: BTreeSet<String> = BTreeSet::new();
+        let mut provide_defined: BTreeSet<String> = BTreeSet::new();
+        let mut visit = |raw: &str| {
+            note_parameterised_bases(raw, &mut parameterised);
+            for (base, path) in opaque_path_tokens(raw) {
+                match inspected.get(&base) {
+                    Some(prev) if *prev != path => {
+                        poisoned.insert(base);
+                    }
+                    Some(_) => {}
+                    None => {
+                        inspected.insert(base, path);
+                    }
+                }
+            }
+        };
+        for f in pkg.fns() {
+            visit(f.recv_rust_type());
+            for p in f.params().iter().chain(f.results().iter()) {
+                visit(p.rust_type_str());
+                visit(&p.foreign_ty);
+            }
+            if let FnShape::StructCtor { def } = f.shape() {
+                provide_defined.insert(def.name.as_str().to_owned());
+            }
+            if let FnShape::EnumDefCtor { def } = f.shape() {
+                provide_defined.insert(def.name.as_str().to_owned());
+            }
+        }
+        // A name claimed by two distinct paths is genuinely ambiguous — drop it
+        // so it resolves to `None` (over-drop), never an arbitrary wrong path.
+        for name in &poisoned {
+            inspected.remove(name);
+        }
+        Self {
+            inspected,
+            provide_defined,
+            parameterised,
+        }
+    }
+
+    /// The owned Rust type this carrier lowers to in the emitted adapter, or
+    /// [`None`] when an opaque carrier is unresolvable / parameterised (the
+    /// signal to over-drop the whole adapter). A scalar always resolves.
+    fn carrier_ty(&self, c: &Carrier) -> Option<String> {
+        match c {
+            Carrier::Opaque(id) => {
+                let name = id.as_str();
+                if self.parameterised.contains(name) {
+                    return None;
+                }
+                if self.provide_defined.contains(name) {
+                    // Same-module `pub struct`/`pub enum`: the bare name is in
+                    // scope inside `pub mod <slug>`.
+                    return Some(name.to_owned());
+                }
+                self.inspected.get(name).cloned()
+            }
+            _ => Some(c.rust_owned().to_owned()),
+        }
+    }
+}
+
+/// Record every base name that appears generic/lifetime-parameterised
+/// (`Base<…>`) in a raw Rust type string, so the closure-adapter resolver can
+/// over-drop it (a bare-arg path would be an E0107). A base is "parameterised"
+/// iff a capitalised identifier is immediately followed by `<`.
+fn note_parameterised_bases(raw: &str, out: &mut BTreeSet<String>) {
+    let mut token = String::new();
+    let flush = |token: &mut String, next: Option<char>, out: &mut BTreeSet<String>| {
+        if next == Some('<')
+            && token.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+            && token.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            out.insert(std::mem::take(token));
+        } else {
+            token.clear();
+        }
+    };
+    for c in raw.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' {
+            token.push(c);
+        } else {
+            flush(&mut token, Some(c), out);
+        }
+    }
+    flush(&mut token, None, out);
+}
+
+/// Extract every `seg::…::Base` opaque path token from a Rust type string,
+/// returning `(Base, ::seg::…::Base)` pairs — the bindings-emitter twin of the
+/// interface's path-map, so an opaque return/param resolves to the same
+/// absolute path the interface's opaque-type map records. A bare identifier
+/// (no `::`) carries no path and is skipped (a provide-defined type, resolved
+/// separately in-module).
+///
+/// Only the BARE base name keys the map: a closure signature's opaque carrier
+/// is always a bare Rust identifier (`Element`, `Regex`), never the interface's
+/// composite submodule head (`BytesRegex`), so — unlike the interface path-map —
+/// no composite key is needed here. An unresolvable carrier over-drops, so the
+/// worst case of this narrower keying is a conservative over-drop, never a
+/// wrong path.
+fn opaque_path_tokens(raw: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut token = String::new();
+    let flush = |token: &mut String, out: &mut Vec<(String, String)>| {
+        if token.contains("::") {
+            let normalized = if token.starts_with("::") {
+                token.clone()
+            } else {
+                format!("::{token}")
+            };
+            if let Some(base) = normalized.rsplit("::").next()
+                && !base.is_empty()
+                && base.chars().next().is_some_and(char::is_uppercase)
+            {
+                out.push((base.to_owned(), normalized.clone()));
+            }
+        }
+        token.clear();
+    };
+    for c in raw.chars() {
+        if c.is_alphanumeric() || c == '_' || c == ':' {
+            token.push(c);
+        } else {
+            flush(&mut token, &mut out);
+        }
+    }
+    flush(&mut token, &mut out);
+    out
+}
+
 /// The `[rust.provide.closure]` adapter wrapper.
 ///
 /// The wrapper takes an Ipê function value — already a
@@ -1171,16 +1357,44 @@ fn carrier_rust_ty(krate: &str, c: &Carrier) -> String {
 ///
 /// Everything renders from the parsed [`ClosureSig`] — no raw manifest string
 /// reaches this emitted Rust.
-fn closure_adapter_lines(cx: &WrapperCx<'_>, sig: &ClosureSig) -> Vec<String> {
-    let krate = cx.krate;
-    // The crate-facing closure's parameter list and the Ipê closure's
-    // parameter list are the SAME carriers in the sync P2 case — the Ipê fn's
-    // arguments ARE the crate's arguments. Bind each `aN` and forward it.
-    let params: Vec<(String, String)> = sig
-        .params
+///
+/// An opaque param or `Result`/`Option` return carrier resolves through the
+/// crate [`OpaqueResolver`]; an unresolvable or parameterised opaque OVER-DROPS
+/// the whole adapter (returns an empty region — no emit-and-cargo-fail), so an
+/// `Element<'a, Message>`-shaped return stays refused rather than breach the
+/// SEAL. The received `Box<dyn Fn …>` type and the returned one render from the
+/// SAME resolved carriers, so their opaque paths can never disagree (an E0308
+/// otherwise).
+fn closure_adapter_lines(
+    cx: &WrapperCx<'_>,
+    sig: &ClosureSig,
+    opaques: &OpaqueResolver,
+) -> Vec<String> {
+    // The crate-facing closure's parameter list and the Ipê closure's parameter
+    // list are the SAME carriers in the sync P2 case — the Ipê fn's arguments
+    // ARE the crate's arguments. Resolve every param carrier; a single
+    // unresolvable/parameterised opaque over-drops the whole adapter.
+    let mut param_tys: Vec<String> = Vec::with_capacity(sig.params.len());
+    for c in &sig.params {
+        let Some(ty) = opaques.carrier_ty(c) else {
+            return Vec::new();
+        };
+        param_tys.push(ty);
+    }
+    // The return carrier, resolved through the same map so the returned box
+    // type and the received box type agree. A `Total` return is scalar-only by
+    // construction (an opaque total return is unrepresentable in `ClosureSig`),
+    // so it never over-drops here.
+    let Some(inner_ret) = (match &sig.ret {
+        ClosureRet::Total(sc) => Some(sc.rust_owned().to_owned()),
+        ClosureRet::Result(c) | ClosureRet::Option(c) => opaques.carrier_ty(c),
+    }) else {
+        return Vec::new();
+    };
+    let params: Vec<(String, String)> = param_tys
         .iter()
         .enumerate()
-        .map(|(j, c)| (arg_name(j), carrier_rust_ty(krate, c)))
+        .map(|(j, ty)| (arg_name(j), ty.clone()))
         .collect();
     let crate_param_decls: Vec<String> = params
         .iter()
@@ -1188,23 +1402,25 @@ fn closure_adapter_lines(cx: &WrapperCx<'_>, sig: &ClosureSig) -> Vec<String> {
         .collect();
     let forwarded: Vec<String> = params.iter().map(|(name, _)| name.clone()).collect();
     let forwarded_args = forwarded.join(", ");
-    // The Ipê function value the wrapper receives has this exact box type — it
-    // is what the app-side backend emits for a fn value of this arrow.
-    let ipe_fn_ty = format!("Box<{}>", sig.rust_dyn_fn());
+    // The return type the crate closure yields (and the Ipê fn value produces).
     let crate_ret = match &sig.ret {
-        ClosureRet::Total(sc) => sc.rust_owned().to_owned(),
-        ClosureRet::Result(c) => format!("Result<{}, IpeError>", carrier_rust_ty(krate, c)),
-        ClosureRet::Option(c) => format!("Option<{}>", carrier_rust_ty(krate, c)),
+        ClosureRet::Total(_) => inner_ret,
+        ClosureRet::Result(_) => format!("Result<{inner_ret}, IpeError>"),
+        ClosureRet::Option(_) => format!("Option<{inner_ret}>"),
     };
     let bounds = sig.bounds.rust_suffix();
-    let out_ty = if bounds.is_empty() {
-        format!("Box<dyn Fn({}) -> {crate_ret}>", param_ty_list(&params))
-    } else {
-        format!(
-            "Box<dyn Fn({}) -> {crate_ret} + {bounds}>",
-            param_ty_list(&params)
-        )
+    let dyn_fn = |ret: &str| -> String {
+        if bounds.is_empty() {
+            format!("dyn Fn({}) -> {ret}", param_ty_list(&params))
+        } else {
+            format!("dyn Fn({}) -> {ret} + {bounds}", param_ty_list(&params))
+        }
     };
+    // The Ipê function value the wrapper receives has this exact box type — the
+    // SAME resolved params + return the crate closure carries, so an opaque
+    // path is identical on both sides (no E0308).
+    let ipe_fn_ty = format!("Box<{}>", dyn_fn(&crate_ret));
+    let out_ty = format!("Box<{}>", dyn_fn(&crate_ret));
     let wrapper = &cx.rust_name;
     // The captured Ipê closure. `Arc` gives the returned closure `Clone` for
     // multi-call re-entry without cloning the Ipê value itself.
@@ -2043,6 +2259,150 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
         );
         assert!(out.contains("Err(_) => None"), "{out}");
         assert!(!out.contains("std::process::abort()"), "{out}");
+    }
+
+    // ── opaque-return closure adapters (opaque-map threaded) ───────────────
+
+    /// A package with an inspected fn (which seeds the opaque-map) PLUS a
+    /// closure adapter whose signature names that opaque. `opaque_rust` is the
+    /// real inspected Rust type the fn returns (`semver::Version`,
+    /// `iced::Element<'a, Message>`, …).
+    fn closure_region_with_inspected_opaque(sig: &str, opaque_rust: &str) -> String {
+        let pkg = semver_pkg(&json!([
+            {
+                "name": "make",
+                "params": [],
+                "results": [{ "name": "", "type": "Handle", "rustType": opaque_rust }],
+                "effect": "pure"
+            },
+            {
+                "name": "update_fn",
+                "effect": "pure",
+                "isClosureAdapter": true,
+                "closureSig": sig
+            }
+        ]));
+        emit_bindings(&pkg)
+    }
+
+    #[test]
+    fn a_provide_defined_opaque_return_resolves_to_the_in_module_name() {
+        // A closure returning a provide-DEFINED type (defined in the same
+        // `pub mod <slug>` region) resolves to the bare in-module name — it is
+        // in scope beside the emitted `pub struct`, so no path is needed.
+        let pkg = semver_pkg(&json!([
+            {
+                "name": "counter_new",
+                "effect": "pure",
+                "isStructCtor": true,
+                "structName": "Counter",
+                "structFields": [{ "name": "value", "type": "i64" }],
+                "structDerives": ["Clone"]
+            },
+            {
+                "name": "update_fn",
+                "effect": "pure",
+                "isClosureAdapter": true,
+                "closureSig": "Fn(Counter) -> Result<Counter, Error> + Send + Sync + 'static"
+            }
+        ]));
+        let out = emit_bindings(&pkg);
+        assert!(
+            out.contains(
+                "pub fn semver_update_fn(__ipe_fn: Box<dyn Fn(Counter) -> Result<Counter, \
+                 IpeError> + Send + Sync + 'static>) -> Box<dyn Fn(Counter) -> Result<Counter, \
+                 IpeError> + Send + Sync + 'static> {"
+            ),
+            "the received AND returned box types both name the in-module `Counter`:\n{out}"
+        );
+        assert!(
+            out.contains("Err(_) => Err(str_err(\"foreign closure panicked\"))"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn an_inspected_non_generic_opaque_return_resolves_to_its_absolute_path() {
+        // An INSPECTED crate-opaque (`semver::Version`, no generic args)
+        // resolves to its absolute `::semver::Version` path — never a bare
+        // `Version` that would fold onto a re-exported runtime kernel module.
+        let out = closure_region_with_inspected_opaque(
+            "Fn(Int) -> Option<Version> + Send + Sync + 'static",
+            "semver::Version",
+        );
+        assert!(
+            out.contains(
+                "pub fn semver_update_fn(__ipe_fn: Box<dyn Fn(i64) -> \
+                 Option<::semver::Version> + Send + Sync + 'static>) -> Box<dyn Fn(i64) -> \
+                 Option<::semver::Version> + Send + Sync + 'static> {"
+            ),
+            "an inspected opaque return absolutizes on BOTH box sides:\n{out}"
+        );
+        assert!(out.contains("Err(_) => None"), "{out}");
+    }
+
+    #[test]
+    fn a_lifetime_parameterised_opaque_return_over_drops_the_whole_adapter() {
+        // The marquee Iced `view : Model -> Element Message` case: `Element` is
+        // inspected as `iced::Element<'a, Message>` — a generic, lifetime-
+        // parameterised handle the bare-handle carrier cannot carry. Emitting
+        // the stripped path `::iced::Element` would be an E0107, so the adapter
+        // OVER-DROPS (emits nothing) rather than breach the SEAL.
+        let out = closure_region_with_inspected_opaque(
+            "Fn(Counter) -> Result<Element, Error> + Send + Sync + 'static",
+            "iced::Element<'a, Message>",
+        );
+        assert!(
+            !out.contains("semver_update_fn"),
+            "a parameterised opaque return must over-drop the adapter:\n{out}"
+        );
+        assert!(
+            !out.contains("// IPE-FFI-WRAPPER BEGIN update_fn"),
+            "no wrapper region is emitted for the over-dropped adapter:\n{out}"
+        );
+        // The over-drop is silent — the survivor gate agrees (no phantom).
+        let pkg = semver_pkg(&json!([
+            {
+                "name": "make",
+                "params": [],
+                "results": [{ "name": "", "type": "Handle",
+                              "rustType": "iced::Element<'a, Message>" }],
+                "effect": "pure"
+            },
+            {
+                "name": "update_fn",
+                "effect": "pure",
+                "isClosureAdapter": true,
+                "closureSig": "Fn(Counter) -> Result<Element, Error> + Send + Sync + 'static"
+            }
+        ]));
+        assert!(
+            !surviving_ref_names(&pkg).contains("update_fn"),
+            "the survivor gate must not admit the over-dropped adapter"
+        );
+    }
+
+    #[test]
+    fn an_unresolvable_opaque_return_over_drops_the_whole_adapter() {
+        // An opaque name that is neither provide-defined nor inspected anywhere
+        // in the crate cannot resolve to any nameable path — over-drop rather
+        // than emit a bare handle no `pub mod <slug>` region can name.
+        let out = closure_region("Fn(Int) -> Result<Ghost, Error> + Send + Sync + 'static");
+        assert!(
+            !out.contains("semver_update_fn"),
+            "an unresolvable opaque return must over-drop the adapter:\n{out}"
+        );
+    }
+
+    #[test]
+    fn an_unresolvable_opaque_param_over_drops_the_whole_adapter() {
+        // The over-drop covers opaque PARAMETERS too — a param the wrapper
+        // could not name is as unbuildable as an unnameable return.
+        let out = closure_region("Fn(Ghost) -> Int + Send + Sync + 'static");
+        assert!(
+            !out.contains("semver_update_fn"),
+            "an unresolvable opaque param must over-drop the adapter:\n{out}"
+        );
     }
 
     #[test]
