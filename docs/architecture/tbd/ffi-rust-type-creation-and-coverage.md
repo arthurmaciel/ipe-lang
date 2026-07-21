@@ -471,6 +471,51 @@ first. "Create-types features exercised" names which provide-forms each needs.
   The Ipê-side handoff (surfacing the boxed handler as an Ipê value passed to a
   crate `run`) is shared with Cluster 1 and still deferred.
 
+### 6.1 Method-shape coverage notes
+
+The auto-binder over-drops any method shape it cannot render soundly (fail
+closed, never emit-and-cargo-fail). As each shape's coercion wiring lands, its
+admission gate widens; the residual over-drops below are each load-bearing.
+
+* **Multi-result tuples — WIDENED.** A non-borrow-reader method returning a Rust
+  tuple binds when every component is an OWNED scalar the wrapper coerces totally:
+  a numeric width (saturating widen into its `Int`/`Float` carrier), an owned
+  `String`, or a `bool` (each an identity coercion). The wrapper destructures the
+  raw tuple and coerces each slot, so the declared `(i64, String, bool)` matches
+  the Ipê `(Int, String, Bool)` signature carrier-for-carrier. Because
+  `foreign_to_ipe` does not recurse into a tuple string, the admission gate reads
+  the signature's tuple type through the SAME `param_ipe_type` the emitter uses and
+  refuses unless it is a same-arity tuple whose heads match the emitted Rust
+  carriers exactly — closing a latent hole the numeric-only gate shared (a tuple
+  with no Ipê-carrier override would otherwise emit a raw `(u64, u32)` into `.ipei`
+  the backend cannot lower). STILL over-drops: a `&`-borrowed component, an opaque
+  handle, a nested container (`Vec`/`Option`), or a serde value — none is wired in
+  the tuple emitter. (`multi_result_tuple_seal` SEAL fixture: emit + `IPE_E2E`
+  build/run.)
+
+* **Bundle-generic methods — OVER-DROP (permanent under approach A).** A Bevy
+  `Commands::spawn<B: Bundle>(b: B)`-style open generic stays refused. The
+  demand-driven generic path binds a generic FFI call ONLY at a concrete
+  instantiation whose type-arg is in the closed Ipê↔Rust set and whose declared
+  bounds are all in `MODELLABLE_5` (`{Hash, Eq, Ord, Clone, Default}`). `Bundle`
+  is not modellable, and a `Component`/provide-nominal arg is not in the closed
+  instance set, so no instantiation binds — and the interface never surfaces the
+  open generic as a static forwarder (its emitter degrades a `B`-typed param to a
+  broken `String::spawn()`, which admitting would expose to cargo). The over-drop
+  plus the DCE tree-shake of the unreferenced wrapper IS the seal. A real Bevy
+  system registers through `provide.closure` (below), not a bundle-generic.
+
+* **`dyn Fn`/`FnMut` system closures — LANDED via `provide.closure`, envelope
+  gated.** A Bevy system / Iced `update` / Axum handler is a `provide.closure`
+  adapter surfaced as an arity-1 Ipê forwarder `(A -> B -> R) -> <Handle>` and
+  handed to a crate `run`-style entrypoint (the closure→run handoff, §3.5 +
+  Cluster 1). A multi-arg sync signature (`Fn(Model, Msg) -> Result<Model, Error>`)
+  binds. STILL over-drops at the `ClosureSig` decode boundary, each a soundness
+  gate: an opaque TOTAL return (no error channel for a per-call panic — legal only
+  inside `Result`/`Option`), an async-total return, a param/return outside the
+  closed carrier set, or a bound outside `{Send, Sync, 'static}`.
+  (`generic_and_system_over_drop_seal` negative fixtures + `closure_handoff_seal`.)
+
 ---
 
 ## 7. First increment status
