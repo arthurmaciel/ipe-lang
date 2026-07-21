@@ -938,12 +938,14 @@ fn add_one(
         Ok(text) => {
             let closures = rust_provide_closures_from_manifest(&text);
             let structs = rust_provide_structs_from_manifest(&text);
+            let enums = rust_provide_enums_from_manifest(&text);
             let sole_dep = rust_dependencies_from_manifest(&text).len() <= 1;
             merge_provides(
                 &doc_text,
                 krate.name().as_str(),
                 &closures,
                 &structs,
+                &enums,
                 sole_dep,
             )?
         }
@@ -1176,6 +1178,7 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
     // binding. `sole_dep` decides whether an unqualified entry may attach.
     let closures = rust_provide_closures_from_manifest(&text);
     let structs = rust_provide_structs_from_manifest(&text);
+    let enums = rust_provide_enums_from_manifest(&text);
     let sole_dep = deps.len() <= 1;
     for item in items {
         // The crate's own name, from its inspection document, is the key an
@@ -1195,6 +1198,7 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
             &item_crate,
             &closures,
             &structs,
+            &enums,
             sole_dep,
         )?;
         let (pkg, paths) = ipe_ffi::driver::install_from_inspection(&cache, &merged)
@@ -1266,6 +1270,35 @@ struct ManifestProvideStruct {
     struct_name: String,
     /// The struct fields as `(name, carrier-spelling)` pairs, in order.
     fields: Vec<(String, String)>,
+    /// The requested derive tokens (validated against the closed allowlist in
+    /// the driver, never rendered raw).
+    derives: Vec<String>,
+}
+
+/// One `[[rust.provide.enum]]` manifest entry — the author-declared surface that
+/// DEFINES a nominal Rust `enum` (a sum of unit / tuple-payload variants over
+/// owned carriers, with an allowlisted `#[derive]` set) plus one constructor
+/// wrapper per variant. This is the P4 `provide` form — the shape an Iced/TEA
+/// `Message` needs.
+///
+/// Like the struct surface, this is Rust-side native code shown under informed
+/// consent; it never routes untrusted text into emitted Rust — the enum name,
+/// every variant name/payload type, and every derive re-parse through the
+/// driver's closed `EnumDef` gate in `PkgInfo` decode, so a malformed entry
+/// over-drops rather than emit-and-cargo-fail, and the wrappers live in the
+/// unforgeable `FfiInterface` module exactly like every other binding.
+#[derive(Debug, PartialEq, Eq)]
+struct ManifestProvideEnum {
+    /// The dependency this enum augments (empty ⇒ the sole dependency).
+    krate: String,
+    /// The constructor-wrapper prefix (the Ipê-facing binding / tri-artifact
+    /// key). Each variant's constructor is named `<ctor>_<snake(variant)>`.
+    ctor: String,
+    /// The Rust enum name to define.
+    enum_name: String,
+    /// The variants as `(name, payload-carrier-spellings)` pairs, in order.
+    /// An empty payload list is a unit variant.
+    variants: Vec<(String, Vec<String>)>,
     /// The requested derive tokens (validated against the closed allowlist in
     /// the driver, never rendered raw).
     derives: Vec<String>,
@@ -1508,6 +1541,145 @@ fn rust_provide_structs_from_manifest(text: &str) -> Vec<ManifestProvideStruct> 
     out
 }
 
+/// Extract the manifest's `[[rust.provide.enum]]` array-of-tables entries.
+///
+/// Each `[[rust.provide.enum]]` header opens a new entry; `name` (the Rust
+/// enum), `ctor` (the constructor-wrapper prefix — defaults to `<snake>_new`),
+/// `variants` (an inline table of `Variant = ["carrier", …]`, `[]` for a unit
+/// variant), `derives` (an array), and optional `crate` are read line-by-line.
+/// Only entries with a `name` and at least one variant are returned; a
+/// half-formed entry is dropped here, never merged. Variant names and payload
+/// types are carried verbatim; the driver's `EnumDef` decode, not this reader,
+/// validates them.
+fn rust_provide_enums_from_manifest(text: &str) -> Vec<ManifestProvideEnum> {
+    #[derive(Default)]
+    struct Acc {
+        krate: String,
+        ctor: String,
+        name: String,
+        variants: Vec<(String, Vec<String>)>,
+        derives: Vec<String>,
+    }
+    let mut in_table = false;
+    let mut out: Vec<ManifestProvideEnum> = Vec::new();
+    let mut cur: Option<Acc> = None;
+    let flush = |cur: &mut Option<Acc>, out: &mut Vec<ManifestProvideEnum>| {
+        if let Some(a) = cur.take()
+            && !a.name.is_empty()
+            && !a.variants.is_empty()
+        {
+            let ctor = if a.ctor.is_empty() {
+                format!("{}_new", to_snake_case(&a.name))
+            } else {
+                a.ctor
+            };
+            out.push(ManifestProvideEnum {
+                krate: a.krate,
+                ctor,
+                enum_name: a.name,
+                variants: a.variants,
+                derives: a.derives,
+            });
+        }
+    };
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            flush(&mut cur, &mut out);
+            in_table = line == "[[rust.provide.enum]]" || line == "[[\"rust.provide.enum\"]]";
+            if in_table {
+                cur = Some(Acc::default());
+            }
+            continue;
+        }
+        if !in_table || line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
+        let key = k.trim().trim_matches('"');
+        let value = v.trim();
+        let Some(a) = cur.as_mut() else { continue };
+        match key {
+            "crate" => value.trim_matches('"').clone_into(&mut a.krate),
+            "ctor" => value.trim_matches('"').clone_into(&mut a.ctor),
+            "name" => value.trim_matches('"').clone_into(&mut a.name),
+            "derives" => {
+                if let Some(body) = value.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
+                    a.derives = body
+                        .split(',')
+                        .map(|s| s.trim().trim_matches('"').to_owned())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                }
+            }
+            "variants" => {
+                if let Some(body) = value.strip_prefix('{').and_then(|r| r.strip_suffix('}')) {
+                    a.variants = parse_inline_variant_table(body);
+                }
+            }
+            _ => {}
+        }
+    }
+    flush(&mut cur, &mut out);
+    out
+}
+
+/// Parse a `provide.enum` inline `variants` table body (`Increment = [],
+/// SetValue = ["i64"], Move = ["i64", "i64"]`) into `(variant-name,
+/// payload-carrier-spellings)` pairs, in declaration order. Each value is a
+/// bracketed list of carrier spellings (empty ⇒ a unit variant). Types are
+/// carried verbatim; the driver's `EnumDef` validates them.
+///
+/// The split is bracket-aware: a `,` inside a `[...]` payload list does not end
+/// a variant, so `Move = ["i64", "i64"]` reads as ONE two-payload variant.
+fn parse_inline_variant_table(body: &str) -> Vec<(String, Vec<String>)> {
+    let mut out: Vec<(String, Vec<String>)> = Vec::new();
+    let mut depth = 0_i32;
+    let mut start = 0_usize;
+    let mut segments: Vec<&str> = Vec::new();
+    for (i, c) in body.char_indices() {
+        match c {
+            '[' => depth += 1,
+            ']' => depth -= 1,
+            ',' if depth == 0 => {
+                if let Some(seg) = body.get(start..i) {
+                    segments.push(seg);
+                }
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    if let Some(seg) = body.get(start..) {
+        segments.push(seg);
+    }
+    for seg in segments {
+        let Some((k, v)) = seg.split_once('=') else {
+            continue;
+        };
+        let name = k.trim().trim_matches('"').to_owned();
+        if name.is_empty() {
+            continue;
+        }
+        let v = v.trim();
+        let payload = v
+            .strip_prefix('[')
+            .and_then(|r| r.strip_suffix(']'))
+            .map(|inner| {
+                inner
+                    .split(',')
+                    .map(|s| s.trim().trim_matches('"').to_owned())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<String>>()
+            })
+            .unwrap_or_default();
+        out.push((name, payload));
+    }
+    out
+}
+
 /// Parse a `provide.struct` inline `fields` table body (`value = "i64", tag =
 /// "String"`) into `(field-name, carrier-spelling)` pairs, in declaration
 /// order. Types are carried verbatim; the driver's `StructDef` validates them.
@@ -1587,6 +1759,7 @@ fn merge_provides(
     crate_name: &str,
     closures: &[ManifestProvideClosure],
     structs: &[ManifestProvideStruct],
+    enums: &[ManifestProvideEnum],
     sole_dep: bool,
 ) -> Result<String, CliError> {
     reject_ambiguous_provide(
@@ -1604,6 +1777,14 @@ fn merge_provides(
             .iter()
             .filter(|s| s.krate.is_empty())
             .map(|s| s.ctor.as_str()),
+    )?;
+    reject_ambiguous_provide(
+        "enum",
+        sole_dep,
+        enums
+            .iter()
+            .filter(|e| e.krate.is_empty())
+            .map(|e| e.ctor.as_str()),
     )?;
 
     let synthetic: Vec<serde_json::Value> = closures
@@ -1634,6 +1815,26 @@ fn merge_provides(
                         "structName": s.struct_name,
                         "structFields": fields,
                         "structDerives": s.derives,
+                    })
+                }),
+        )
+        .chain(
+            enums
+                .iter()
+                .filter(|e| provide_attaches(&e.krate, crate_name, sole_dep))
+                .map(|e| {
+                    let variants: Vec<serde_json::Value> = e
+                        .variants
+                        .iter()
+                        .map(|(n, payload)| serde_json::json!({ "name": n, "payload": payload }))
+                        .collect();
+                    serde_json::json!({
+                        "name": e.ctor,
+                        "effect": "pure",
+                        "isEnumDef": true,
+                        "enumName": e.enum_name,
+                        "enumVariants": variants,
+                        "enumDerives": e.derives,
                     })
                 }),
         )
@@ -1681,6 +1882,44 @@ mod tests {
                 version: "1.10".to_owned(),
                 features: Vec::new(),
             }]
+        );
+    }
+
+    #[test]
+    fn manifest_provide_enum_reads_variants_and_defaults_the_ctor() {
+        let text = "[rust.dependencies]\niced = \"=0.12.1\"\n\n\
+                    [[rust.provide.enum]]\n\
+                    name = \"Message\"\n\
+                    variants = { Increment = [], Decrement = [], SetValue = [\"i64\"] }\n\
+                    derives = [\"Clone\"]\n";
+        let enums = rust_provide_enums_from_manifest(text);
+        assert_eq!(
+            enums,
+            vec![ManifestProvideEnum {
+                krate: String::new(),
+                // Ctor defaults to `<snake(name)>_new`.
+                ctor: "message_new".to_owned(),
+                enum_name: "Message".to_owned(),
+                variants: vec![
+                    ("Increment".to_owned(), vec![]),
+                    ("Decrement".to_owned(), vec![]),
+                    ("SetValue".to_owned(), vec!["i64".to_owned()]),
+                ],
+                derives: vec!["Clone".to_owned()],
+            }]
+        );
+    }
+
+    #[test]
+    fn manifest_provide_enum_multi_payload_split_is_bracket_aware() {
+        // A `,` inside a payload list must NOT split the variant.
+        let vars = parse_inline_variant_table("Tick = [], Move = [\"i64\", \"i64\"]");
+        assert_eq!(
+            vars,
+            vec![
+                ("Tick".to_owned(), vec![]),
+                ("Move".to_owned(), vec!["i64".to_owned(), "i64".to_owned()]),
+            ]
         );
     }
 
@@ -2055,7 +2294,7 @@ mod tests {
             name: "update_fn".to_owned(),
             signature: "Fn(Int) -> Int + Send + Sync + 'static".to_owned(),
         }];
-        let merged = merge_provides(doc, "demo", &closures, &[], true).expect("merges");
+        let merged = merge_provides(doc, "demo", &closures, &[], &[], true).expect("merges");
         let val: serde_json::Value = serde_json::from_str(&merged).expect("valid json");
         let fns = val
             .get("functions")
@@ -2087,7 +2326,7 @@ mod tests {
             signature: "Fn(Int) -> Int".to_owned(),
         }];
         // A qualified entry for `demo` does not attach to `other`.
-        let merged = merge_provides(doc, "other", &closures, &[], false).expect("merges");
+        let merged = merge_provides(doc, "other", &closures, &[], &[], false).expect("merges");
         let val: serde_json::Value = serde_json::from_str(&merged).expect("valid json");
         assert!(
             val.get("functions")
@@ -2106,9 +2345,9 @@ mod tests {
             signature: "Fn(Int) -> Int".to_owned(),
         }];
         // sole_dep = false ⇒ an unattributed entry cannot be placed: refuse.
-        assert!(merge_provides(doc, "demo", &closures, &[], false).is_err());
+        assert!(merge_provides(doc, "demo", &closures, &[], &[], false).is_err());
         // sole_dep = true ⇒ it attaches to the one crate.
-        assert!(merge_provides(doc, "demo", &closures, &[], true).is_ok());
+        assert!(merge_provides(doc, "demo", &closures, &[], &[], true).is_ok());
     }
 
     /// The manifest→adapter SEAL: a `[[rust.provide.closure]]` declared in an
@@ -2126,7 +2365,8 @@ mod tests {
         let sole_dep = rust_dependencies_from_manifest(manifest).len() <= 1;
         let inspection = "{\"pkg\":\"demo\",\"name\":\"demo\",\"version\":\"0.1.0\",\
                           \"functions\":[],\"errors\":[]}";
-        let merged = merge_provides(inspection, "demo", &closures, &[], sole_dep).expect("merges");
+        let merged =
+            merge_provides(inspection, "demo", &closures, &[], &[], sole_dep).expect("merges");
         let pkg = ipe_ffi::pkginfo::PkgInfo::decode_json(&merged).expect("merged doc decodes");
         let bindings = ipe_ffi::bindings::emit_bindings(&pkg);
         assert!(
@@ -2208,7 +2448,8 @@ mod tests {
         let sole_dep = rust_dependencies_from_manifest(manifest).len() <= 1;
         let inspection = "{\"pkg\":\"demo\",\"name\":\"demo\",\"version\":\"0.1.0\",\
                           \"functions\":[],\"errors\":[]}";
-        let merged = merge_provides(inspection, "demo", &[], &structs, sole_dep).expect("merges");
+        let merged =
+            merge_provides(inspection, "demo", &[], &structs, &[], sole_dep).expect("merges");
         let pkg = ipe_ffi::pkginfo::PkgInfo::decode_json(&merged).expect("merged doc decodes");
         let bindings = ipe_ffi::bindings::emit_bindings(&pkg);
         assert!(bindings.contains("#[derive(Clone, Default)]"), "{bindings}");
@@ -2233,7 +2474,7 @@ mod tests {
             fields: vec![("value".to_owned(), "i64".to_owned())],
             derives: Vec::new(),
         }];
-        assert!(merge_provides(doc, "demo", &[], &structs, false).is_err());
-        assert!(merge_provides(doc, "demo", &[], &structs, true).is_ok());
+        assert!(merge_provides(doc, "demo", &[], &structs, &[], false).is_err());
+        assert!(merge_provides(doc, "demo", &[], &structs, &[], true).is_ok());
     }
 }

@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 
 use crate::call::Call;
-use crate::carrier::{ClosureSig, StructDef};
+use crate::carrier::{ClosureSig, EnumDef, StructDef};
 use crate::diag::{Diagnostic, WireDefect};
 use crate::naming::{FieldSelector, RustIdent, RustPattern, RustTypeExpr, wrapper_ref_name};
 
@@ -96,6 +96,14 @@ struct WireFunction {
     struct_ctor_fields: Vec<WireStructField>,
     #[serde(default, rename = "structDerives")]
     struct_derives: Vec<String>,
+    #[serde(default, rename = "isEnumDef")]
+    is_enum_def: bool,
+    #[serde(default, rename = "enumName")]
+    enum_def_name: String,
+    #[serde(default, rename = "enumVariants")]
+    enum_def_variants: Vec<WireEnumVariant>,
+    #[serde(default, rename = "enumDerives")]
+    enum_def_derives: Vec<String>,
     #[serde(default)]
     generic: Option<WireGeneric>,
     #[serde(default, rename = "callPath")]
@@ -139,6 +147,17 @@ struct WireStructField {
     name: String,
     #[serde(default, rename = "type")]
     ty: String,
+}
+
+/// One `[[rust.provide.enum]]` variant: a name and its positional payload
+/// carrier spellings (empty ⇒ a unit variant). Each spelling is validated at
+/// decode (`EnumDef::parse`), never rendered raw.
+#[derive(Debug, Deserialize)]
+struct WireEnumVariant {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    payload: Vec<String>,
 }
 
 // ── domain layer ────────────────────────────────────────────────────────────
@@ -258,6 +277,20 @@ pub enum FnShape {
         /// `#[derive]`ed definition + the constructor body from this alone — no
         /// raw manifest string reaches generated Rust.
         def: StructDef,
+    },
+    /// A `[rust.provide.enum]` definition + per-variant constructors: Ipê DEFINES
+    /// a nominal Rust `enum` (a sum of unit / tuple-payload variants over owned
+    /// carriers, with an allowlisted `#[derive]` set) plus one constructor
+    /// wrapper per variant — the `StructCtor` path generalised to a sum, and the
+    /// `EnumCtor` inbound coercion generalised to an author-defined enum. This is
+    /// the shape an Iced/TEA `Message` needs. Author-declared native code that
+    /// flows through the same `FfiInterface` trust gate as every other wrapper;
+    /// user `.ipe` source can never mint it.
+    EnumDefCtor {
+        /// The parsed, validated enum definition. The emitter renders the
+        /// `#[derive]`ed definition + each variant constructor from this alone —
+        /// no raw manifest string reaches generated Rust.
+        def: EnumDef,
     },
 }
 
@@ -828,7 +861,7 @@ fn decode_arms(function: &str, arms: Vec<String>) -> Result<Vec<EnumArm>, Diagno
 
 /// Collapse the seven mutually-exclusive accessor flags into the closed shape.
 fn decode_shape(w: &WireFunction) -> Result<FnShape, Diagnostic> {
-    let flags: [(&'static str, bool); 8] = [
+    let flags: [(&'static str, bool); 9] = [
         ("isField", w.is_field),
         ("isFieldSet", w.is_field_set),
         ("isPkgVar", w.is_pkg_var),
@@ -837,6 +870,7 @@ fn decode_shape(w: &WireFunction) -> Result<FnShape, Diagnostic> {
         ("isEnumExtract", w.is_enum_extract),
         ("isClosureAdapter", w.is_closure_adapter),
         ("isStructCtor", w.is_struct_ctor),
+        ("isEnumDef", w.is_enum_def),
     ];
     let set: Vec<&'static str> = flags.iter().filter(|(_, b)| *b).map(|(n, _)| *n).collect();
     if set.len() > 1 {
@@ -852,7 +886,6 @@ fn decode_shape(w: &WireFunction) -> Result<FnShape, Diagnostic> {
     let ident_field =
         |s: &str| -> Result<RustIdent, Diagnostic> { RustIdent::parse(s).map_err(wire_err) };
     Ok(match set.first().copied() {
-        None => FnShape::Plain,
         Some("isField") => FnShape::FieldGet,
         Some("isFieldSet") => FnShape::FieldSet,
         Some("isPkgVar") => FnShape::PkgVar,
@@ -894,12 +927,12 @@ fn decode_shape(w: &WireFunction) -> Result<FnShape, Diagnostic> {
             let sig = ClosureSig::parse(&w.closure_sig).map_err(wire_err)?;
             FnShape::ClosureAdapter { sig }
         }
-        Some(_) => {
-            // `isStructCtor` (the only remaining flag). The parsed definition is
-            // the SOLE input the emitter renders from; an ill-formed one (a bad
-            // struct/field name, a field type outside the carrier set, a derive
-            // outside the allowlist, or a total-Eq derive on a Float field)
-            // over-drops the whole provide entry here, never emit-and-cargo-fail.
+        Some("isStructCtor") => {
+            // The parsed definition is the SOLE input the emitter renders from;
+            // an ill-formed one (a bad struct/field name, a field type outside
+            // the carrier set, a derive outside the allowlist, or a total-Eq
+            // derive on a Float field) over-drops the whole provide entry here,
+            // never emit-and-cargo-fail.
             let raw_fields: Vec<(String, String)> = w
                 .struct_ctor_fields
                 .iter()
@@ -922,6 +955,39 @@ fn decode_shape(w: &WireFunction) -> Result<FnShape, Diagnostic> {
             }
             FnShape::StructCtor { def }
         }
+        Some("isEnumDef") => {
+            // The parsed definition is the SOLE input the emitter renders from;
+            // an ill-formed one (a bad enum/variant name, a payload type outside
+            // the carrier set, a derive outside the allowlist, a total-Eq derive
+            // on a Float payload, or a variantless enum) over-drops the whole
+            // provide entry here, never emit-and-cargo-fail.
+            let raw_variants: Vec<(String, Vec<String>)> = w
+                .enum_def_variants
+                .iter()
+                .map(|v| (v.name.clone(), v.payload.clone()))
+                .collect();
+            let def = EnumDef::parse(&w.enum_def_name, &raw_variants, &w.enum_def_derives)
+                .map_err(wire_err)?;
+            // An opaque payload would need the crate's opaque-map to resolve to a
+            // path the emitted `_bindings.rs` can name; that plumbing is a
+            // follow-up, so a `provide.enum` with an opaque payload over-drops
+            // here rather than emit an unresolvable bare handle and break the
+            // SEAL. Scalar payloads and unit variants are fully supported.
+            if let Some(handle) = def.first_opaque_payload() {
+                return Err(wire_err(WireDefect::InvalidType {
+                    got: format!(
+                        "provide.enum variant payload of opaque type `{handle}` — only scalar \
+                         carrier payloads are supported yet (opaque-map resolution is a follow-up)"
+                    ),
+                }));
+            }
+            FnShape::EnumDefCtor { def }
+        }
+        // No flag set is an ordinary function; every named flag has an explicit
+        // arm above, and the filter that produced `set` draws only from those
+        // names, so any other `Some` is unreachable — fall back to `Plain`
+        // rather than panic.
+        None | Some(_) => FnShape::Plain,
     })
 }
 
@@ -947,7 +1013,10 @@ const fn shape_fallibility(shape: &FnShape, effect: Effect) -> Fallibility {
         // A struct constructor is a total struct literal over decode-validated
         // inbound values — building it cannot fail, so the wrapper's own return
         // is the bare struct (no `Result` wrapper).
-        | FnShape::StructCtor { .. } => Fallibility::Infallible,
+        | FnShape::StructCtor { .. }
+        // Each enum-variant constructor is a total variant literal over
+        // decode-validated inbound values — building it cannot fail either.
+        | FnShape::EnumDefCtor { .. } => Fallibility::Infallible,
         FnShape::Plain | FnShape::PkgVar => Fallibility::TaskError,
     }
 }
@@ -1355,6 +1424,76 @@ mod tests {
                 defect: WireDefect::InvalidType { .. },
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn a_provide_enum_decodes_into_an_enum_def_shape() {
+        let pkg = decode(&base_pkg(&json!([{
+            "name": "message",
+            "effect": "pure",
+            "isEnumDef": true,
+            "enumName": "Message",
+            "enumVariants": [
+                { "name": "Increment", "payload": [] },
+                { "name": "SetValue", "payload": ["i64"] }
+            ],
+            "enumDerives": ["Clone"]
+        }])))
+        .expect("decodes");
+        let f = fn_at(&pkg, 0);
+        let (name, derives, variants) = match f.shape() {
+            FnShape::EnumDefCtor { def } => (
+                def.name.as_str().to_owned(),
+                def.derives.rust_list(),
+                def.variants.len(),
+            ),
+            other => (format!("not an enum def: {other:?}"), String::new(), 0),
+        };
+        assert_eq!(name, "Message");
+        assert_eq!(derives, "Clone");
+        assert_eq!(variants, 2);
+        // Construction is infallible — a total variant literal.
+        assert_eq!(f.fallibility(), Fallibility::Infallible);
+        assert!(pkg.dropped().is_empty());
+    }
+
+    #[test]
+    fn an_ill_formed_provide_enum_over_drops_the_entry() {
+        // A variantless enum is uninhabited — refused at decode.
+        let pkg = decode(&base_pkg(&json!([{
+            "name": "bad",
+            "effect": "pure",
+            "isEnumDef": true,
+            "enumName": "Void",
+            "enumVariants": [],
+            "enumDerives": []
+        }])))
+        .expect("package survives");
+        assert!(pkg.fns().is_empty());
+        assert!(matches!(
+            pkg.dropped().first().expect("dropped diagnostic"),
+            Diagnostic::WireMalformed {
+                defect: WireDefect::InvalidType { .. },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn an_enum_def_flag_clashing_with_an_accessor_flag_drops_the_binding() {
+        let pkg = decode(&base_pkg(&json!([{
+            "name": "confused",
+            "effect": "pure",
+            "isEnumDef": true,
+            "isField": true,
+            "enumName": "X"
+        }])))
+        .expect("package survives");
+        assert!(pkg.fns().is_empty());
+        assert!(matches!(
+            pkg.dropped().first().expect("dropped diagnostic"),
+            Diagnostic::ShapeContradiction { .. }
         ));
     }
 

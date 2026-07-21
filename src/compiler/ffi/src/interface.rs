@@ -352,6 +352,19 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
             );
             continue;
         }
+        // A provide.enum emits its `_bindings.rs` definition + per-variant
+        // constructor wrappers (a downstream binding builds the Ipê-defined
+        // sum), but it is NOT admitted as a standalone Ipê forwarder here:
+        // surfacing the defined enum as an Ipê-held opaque nominal + one
+        // forwarder per variant is the same interface-plumbing step deferred for
+        // provide.struct. Recorded, not mis-admitted with a wrong arity.
+        if matches!(f.shape(), crate::pkginfo::FnShape::EnumDefCtor { .. }) {
+            skip(
+                "provide.enum — Ipê opaque-nominal forwarder plumbing not wired yet",
+                &mut skipped,
+            );
+            continue;
+        }
         if !survivors.contains(&ref_name) {
             skip("no wrapper region in _bindings.rs", &mut skipped);
             continue;

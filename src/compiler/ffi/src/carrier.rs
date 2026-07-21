@@ -250,12 +250,14 @@ impl BoundSet {
     }
 }
 
-/// One allowlisted `#[derive]` a `provide.struct` may request.
+/// One allowlisted `#[derive]` a `provide.struct` / `provide.enum` may request.
 ///
-/// The set is exactly the `MODELLABLE_5` fence (`{Hash, Eq, Ord, Clone,
-/// Default}`) — the two-way cross-crate assertion the parametric monomorphiser
-/// already relies on — never free text, so no derive spelling from the manifest
-/// reaches the emitted `#[derive(...)]` list as a raw string.
+/// The set is the `MODELLABLE_5` fence (`{Hash, Eq, Ord, Clone, Default}`) — the
+/// two-way cross-crate assertion the parametric monomorphiser already relies on
+/// — plus `Debug`, which every closed carrier implements totally (no IEEE-754
+/// hazard) and which real crate trait bounds routinely require (Iced's
+/// `Sandbox::Message: Debug`). Never free text, so no derive spelling from the
+/// manifest reaches the emitted `#[derive(...)]` list as a raw string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Derive {
     /// `#[derive(Hash)]`.
@@ -268,6 +270,10 @@ pub enum Derive {
     Clone,
     /// `#[derive(Default)]`.
     Default,
+    /// `#[derive(Debug)]`. Total for every closed carrier (and every unit /
+    /// scalar-payload variant), so it carries no IEEE-754 hazard — unlike
+    /// `Eq`/`Ord`/`Hash`, a `Float` field/payload may derive it freely.
+    Debug,
 }
 
 impl Derive {
@@ -279,6 +285,7 @@ impl Derive {
             "Ord" => Some(Self::Ord),
             "Clone" => Some(Self::Clone),
             "Default" => Some(Self::Default),
+            "Debug" => Some(Self::Debug),
             _ => None,
         }
     }
@@ -292,13 +299,15 @@ impl Derive {
             Self::Ord => "Ord",
             Self::Clone => "Clone",
             Self::Default => "Default",
+            Self::Debug => "Debug",
         }
     }
 
-    /// Whether this derive is unsound for a struct carrying an IEEE-754 field.
-    /// `f64` has no total `Eq`/`Ord`/`Hash`, so a struct with a `Float` field
-    /// may derive only `Clone`/`Default` — the cell the `MODELLABLE_5` fence
-    /// already guards, re-checked here at the define boundary.
+    /// Whether this derive is unsound for a struct/enum carrying an IEEE-754
+    /// field. `f64` has no total `Eq`/`Ord`/`Hash`, so a type with a `Float`
+    /// field/payload may derive only `Clone`/`Default`/`Debug` — the cell the
+    /// `MODELLABLE_5` fence already guards, re-checked here at the define
+    /// boundary. `Debug` is total for `f64`, so it is NOT gated.
     const fn requires_total_eq(self) -> bool {
         matches!(self, Self::Hash | Self::Eq | Self::Ord)
     }
@@ -321,7 +330,7 @@ impl DeriveSet {
         let mut set = std::collections::BTreeSet::new();
         for tok in tokens {
             let d = Derive::parse(tok).ok_or_else(|| WireDefect::InvalidType {
-                got: format!("derive `{tok}` is outside {{Hash, Eq, Ord, Clone, Default}}"),
+                got: format!("derive `{tok}` is outside {{Hash, Eq, Ord, Clone, Default, Debug}}"),
             })?;
             if has_float_field && d.requires_total_eq() {
                 return Err(WireDefect::InvalidType {
@@ -442,6 +451,146 @@ impl StructDef {
                 _ => carrier.rust_owned().to_owned(),
             };
             out.push(format!("    pub {}: {ty},", fname.as_str()));
+        }
+        out.push("}".to_owned());
+        out
+    }
+}
+
+/// One variant of a `provide.enum`: a name and its tuple-payload carriers.
+///
+/// An empty payload is a unit variant. Named-field (struct) variants are not
+/// represented — a `Message` enum's variants are unit or positional, and a tuple
+/// variant already covers every payload the closed carrier set can carry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumVariant {
+    /// The Rust variant identifier.
+    pub name: RustIdent,
+    /// The variant's positional payload carriers, in order (empty ⇒ unit).
+    pub payload: Vec<Carrier>,
+}
+
+/// A fully-parsed `provide.enum` definition: the Rust enum, its variants, and
+/// the derive set.
+///
+/// Rendered from closed carriers/derives only, never from raw manifest text —
+/// the `StructDef` discipline generalised to a sum: every variant name gates
+/// through [`RustIdent`], every payload carrier through [`Carrier::parse`], and
+/// the derive set through [`DeriveSet::parse`] (the IEEE-754 fence fires if ANY
+/// variant carries a `Float` payload).
+///
+/// This is the P4 form of the `provide` roadmap: an Ipê union → a Rust enum, the
+/// shape an Iced/TEA `Message` needs. Like `provide.struct`, it solves "define a
+/// Rust type" with ZERO new trust surface — the emitted definition and every
+/// variant constructor are total functions of decode-validated data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumDef {
+    /// The nominal Rust enum name to define.
+    pub name: RustIdent,
+    /// The enum's variants in declaration order.
+    pub variants: Vec<EnumVariant>,
+    /// The closed derive set.
+    pub derives: DeriveSet,
+}
+
+impl EnumDef {
+    /// Assemble a validated enum definition from decoded parts.
+    ///
+    /// `raw_variants` is `(variant-name, payload-carrier-spellings)` pairs in
+    /// declaration order; `raw_derives` is the requested derive tokens. Every
+    /// variant name gates through [`RustIdent`], every payload spelling through
+    /// [`Carrier::parse`], and the derive set through [`DeriveSet::parse`] (which
+    /// enforces the IEEE-754 fence against any `Float` payload). An enum with no
+    /// variants is refused (an uninhabited type no constructor can build).
+    ///
+    /// # Errors
+    ///
+    /// [`WireDefect::InvalidType`] naming the first offending name, payload type,
+    /// or derive, or reporting a variantless enum.
+    pub fn parse(
+        name: &str,
+        raw_variants: &[(String, Vec<String>)],
+        raw_derives: &[String],
+    ) -> Result<Self, WireDefect> {
+        let name = RustIdent::parse(name).map_err(|_| WireDefect::InvalidType {
+            got: format!("enum name `{name}`"),
+        })?;
+        if raw_variants.is_empty() {
+            return Err(WireDefect::InvalidType {
+                got: format!("enum `{}` has no variants", name.as_str()),
+            });
+        }
+        let mut variants = Vec::with_capacity(raw_variants.len());
+        let mut has_float = false;
+        for (vname, payload_types) in raw_variants {
+            let variant_name = RustIdent::parse(vname).map_err(|_| WireDefect::InvalidType {
+                got: format!("variant name `{vname}`"),
+            })?;
+            let mut payload = Vec::with_capacity(payload_types.len());
+            for pty in payload_types {
+                let carrier = Carrier::parse(pty)?;
+                if carrier == Carrier::Float {
+                    has_float = true;
+                }
+                payload.push(carrier);
+            }
+            variants.push(EnumVariant {
+                name: variant_name,
+                payload,
+            });
+        }
+        let derives = DeriveSet::parse(raw_derives, has_float)?;
+        Ok(Self {
+            name,
+            variants,
+            derives,
+        })
+    }
+
+    /// The first opaque payload carrier's handle name, or [`None`] when every
+    /// variant carries scalar carriers only.
+    ///
+    /// A sound emit for an opaque payload must resolve the handle through the
+    /// crate's opaque-type map, which the first `provide.enum` increment does not
+    /// yet thread — so the decode boundary refuses an opaque payload for now,
+    /// keeping the SEAL (no emitted-and-cargo-failing enum). Scalar payloads and
+    /// unit variants are fully supported.
+    #[must_use]
+    pub fn first_opaque_payload(&self) -> Option<&str> {
+        self.variants.iter().find_map(|v| {
+            v.payload.iter().find_map(|c| match c {
+                Carrier::Opaque(id) => Some(id.as_str()),
+                _ => None,
+            })
+        })
+    }
+
+    /// The enum definition + `#[derive]` lines this renders to, from closed
+    /// carriers/derives only. A unit variant renders bare (`Increment,`); a
+    /// payload-bearing variant renders a tuple (`SetValue(i64),`). Opaque-payload
+    /// absolutization is the emitter's job (this leaf never renders a crate
+    /// path); a scalar payload renders its owned Rust type directly.
+    #[must_use]
+    pub fn definition_lines(&self, opaque_rust_ty: &dyn Fn(&RustIdent) -> String) -> Vec<String> {
+        let mut out = Vec::new();
+        if !self.derives.is_empty() {
+            out.push(format!("#[derive({})]", self.derives.rust_list()));
+        }
+        out.push(format!("pub enum {} {{", self.name.as_str()));
+        for v in &self.variants {
+            if v.payload.is_empty() {
+                out.push(format!("    {},", v.name.as_str()));
+            } else {
+                let tys: Vec<String> = v
+                    .payload
+                    .iter()
+                    .map(|c| match c {
+                        Carrier::Opaque(id) => opaque_rust_ty(id),
+                        _ => c.rust_owned().to_owned(),
+                    })
+                    .collect();
+                out.push(format!("    {}({}),", v.name.as_str(), tys.join(", ")));
+            }
         }
         out.push("}".to_owned());
         out
@@ -865,7 +1014,7 @@ mod tests {
 
     #[test]
     fn a_derive_outside_the_allowlist_is_refused() {
-        for bad in ["Serialize", "Debug", "Copy", "PartialOrd"] {
+        for bad in ["Serialize", "Copy", "PartialOrd", "Send"] {
             assert!(
                 matches!(
                     DeriveSet::parse(&[bad.to_owned()], false),
@@ -874,6 +1023,16 @@ mod tests {
                 "{bad} must be refused"
             );
         }
+    }
+
+    #[test]
+    fn debug_is_allowlisted_and_total_on_a_float() {
+        // Iced's `Sandbox::Message: Debug` bound needs this. `Debug` is total
+        // for every carrier, so it is accepted even with a Float field/payload —
+        // unlike Eq/Ord/Hash.
+        let d = DeriveSet::parse(&["Debug".to_owned(), "Clone".to_owned()], true)
+            .expect("Debug is allowlisted and Float-safe");
+        assert_eq!(d.rust_list(), "Clone, Debug");
     }
 
     #[test]
@@ -925,6 +1084,137 @@ mod tests {
         assert_eq!(
             sig.rust_dyn_fn(),
             "dyn Fn(String) -> Result<i64, IpeError> + Send + Sync + 'static"
+        );
+    }
+
+    // ── EnumDef ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn a_unit_variant_enum_parses_and_renders_a_definition() {
+        // The Iced/TEA `Message` shape: unit variants only.
+        let e = EnumDef::parse(
+            "Message",
+            &[
+                ("Increment".to_owned(), vec![]),
+                ("Decrement".to_owned(), vec![]),
+            ],
+            &["Clone".to_owned()],
+        )
+        .expect("unit-variant enum parses");
+        assert_eq!(e.name.as_str(), "Message");
+        assert_eq!(e.derives.rust_list(), "Clone");
+        let lines = e.definition_lines(&|id| format!("demo::{}", id.as_str()));
+        assert_eq!(
+            lines,
+            vec![
+                "#[derive(Clone)]".to_owned(),
+                "pub enum Message {".to_owned(),
+                "    Increment,".to_owned(),
+                "    Decrement,".to_owned(),
+                "}".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_tuple_payload_variant_renders_its_carriers() {
+        let e = EnumDef::parse(
+            "Event",
+            &[
+                ("Tick".to_owned(), vec![]),
+                ("SetValue".to_owned(), vec!["i64".to_owned()]),
+                ("Move".to_owned(), vec!["i64".to_owned(), "i64".to_owned()]),
+            ],
+            &[],
+        )
+        .expect("payload-variant enum parses");
+        let lines = e.definition_lines(&|id| format!("demo::{}", id.as_str()));
+        // No derives ⇒ no `#[derive]` line; unit + tuple variants render.
+        assert_eq!(
+            lines,
+            vec![
+                "pub enum Event {".to_owned(),
+                "    Tick,".to_owned(),
+                "    SetValue(i64),".to_owned(),
+                "    Move(i64, i64),".to_owned(),
+                "}".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_opaque_payload_variant_absolutizes_through_the_hook() {
+        let e = EnumDef::parse(
+            "Wrap",
+            &[("Hold".to_owned(), vec!["Widget".to_owned()])],
+            &[],
+        )
+        .expect("opaque-payload enum parses");
+        assert_eq!(e.first_opaque_payload(), Some("Widget"));
+        let lines = e.definition_lines(&|id| format!("demo::{}", id.as_str()));
+        assert_eq!(
+            lines,
+            vec![
+                "pub enum Wrap {".to_owned(),
+                "    Hold(demo::Widget),".to_owned(),
+                "}".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_variantless_enum_is_refused() {
+        assert!(matches!(
+            EnumDef::parse("Void", &[], &[]),
+            Err(WireDefect::InvalidType { .. })
+        ));
+    }
+
+    #[test]
+    fn a_bad_enum_or_variant_name_is_refused() {
+        assert!(matches!(
+            EnumDef::parse("9Bad", &[("A".to_owned(), vec![])], &[]),
+            Err(WireDefect::InvalidType { .. })
+        ));
+        assert!(matches!(
+            EnumDef::parse("E", &[("9bad".to_owned(), vec![])], &[]),
+            Err(WireDefect::InvalidType { .. })
+        ));
+    }
+
+    #[test]
+    fn an_enum_payload_outside_the_carrier_set_is_refused() {
+        assert!(matches!(
+            EnumDef::parse("E", &[("A".to_owned(), vec!["u32".to_owned()])], &[]),
+            Err(WireDefect::InvalidType { .. })
+        ));
+    }
+
+    #[test]
+    fn total_eq_derives_on_a_float_payload_are_refused() {
+        // The IEEE-754 fence generalises to a sum: any variant carrying a Float
+        // payload forbids Eq/Ord/Hash on the whole enum.
+        for bad in ["Eq", "Ord", "Hash"] {
+            assert!(
+                matches!(
+                    EnumDef::parse(
+                        "E",
+                        &[("A".to_owned(), vec!["f64".to_owned()])],
+                        &[bad.to_owned()],
+                    ),
+                    Err(WireDefect::InvalidType { .. })
+                ),
+                "{bad} on a Float-payload variant must be refused"
+            );
+        }
+        // Clone/Default are fine on a Float payload.
+        assert!(
+            EnumDef::parse(
+                "E",
+                &[("A".to_owned(), vec!["f64".to_owned()])],
+                &["Clone".to_owned()],
+            )
+            .is_ok()
         );
     }
 }
