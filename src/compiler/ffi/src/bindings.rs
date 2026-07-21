@@ -1130,8 +1130,8 @@ fn emit_fn_region(
         FnShape::FieldGet => field_get_lines(&cx),
         FnShape::FieldSet => field_set_lines(&cx),
         FnShape::ClosureAdapter { sig } => closure_adapter_lines(&cx, sig, opaques),
-        FnShape::StructCtor { def } => struct_ctor_lines(&cx, def),
-        FnShape::EnumDefCtor { def } => enum_def_ctor_lines(&cx, def),
+        FnShape::StructCtor { def } => struct_ctor_lines(&cx, def, opaques),
+        FnShape::EnumDefCtor { def } => enum_def_ctor_lines(&cx, def, opaques),
         FnShape::Plain | FnShape::PkgVar => plain_lines(&cx),
     };
     // A trait-qualified / turbofished binding with NO open type params is a
@@ -1151,16 +1151,6 @@ fn emit_fn_region(
     out.extend(body);
     out.push(crate::naming::WRAPPER_END_SENTINEL.to_owned());
     out
-}
-
-/// Render a carrier as a concrete owned Rust type, absolutizing an opaque
-/// handle through the crate so it can never collide with a runtime kernel
-/// module re-exported at the app crate root.
-fn carrier_rust_ty(krate: &str, c: &Carrier) -> String {
-    match c {
-        Carrier::Opaque(id) => absolutize_crate(krate, id.as_str()),
-        _ => c.rust_owned().to_owned(),
-    }
 }
 
 /// Resolves a `provide.closure` carrier to the concrete owned Rust type the
@@ -1192,7 +1182,13 @@ fn carrier_rust_ty(krate: &str, c: &Carrier) -> String {
 struct OpaqueResolver {
     /// Bare opaque name → absolute `::crate::path` (inspected crate types only).
     inspected: std::collections::BTreeMap<String, String>,
-    /// Bare names the crate's own `provide.struct/enum` decls DEFINE.
+    /// Bare names the crate's own `provide.struct/enum` decls DEFINE **and whose
+    /// own definition survives** — i.e. every opaque field/payload it holds is
+    /// itself resolvable, computed to a fixed point. A provide type absent here
+    /// either is not defined or over-dropped (its own definition emits nothing),
+    /// so a reference to it must over-drop too — otherwise the referencing
+    /// definition would name a `pub struct`/`pub enum` that was never emitted (an
+    /// E0425 the SEAL forbids).
     provide_defined: BTreeSet<String>,
     /// Bare base names that appear generic/lifetime-parameterised (`Base<…>`)
     /// anywhere in the crate's inspected type strings — unsound to emit as a
@@ -1209,7 +1205,11 @@ impl OpaqueResolver {
             std::collections::BTreeMap::new();
         let mut poisoned: BTreeSet<String> = BTreeSet::new();
         let mut parameterised: BTreeSet<String> = BTreeSet::new();
-        let mut provide_defined: BTreeSet<String> = BTreeSet::new();
+        // Every provide-defined name → the opaque handles its own definition
+        // holds (its fields/payloads). A def survives only when EVERY one of
+        // these resolves, so this drives the survivor fixed point below.
+        let mut provide_opaque_deps: std::collections::BTreeMap<String, Vec<String>> =
+            std::collections::BTreeMap::new();
         let mut visit = |raw: &str| {
             note_parameterised_bases(raw, &mut parameterised);
             for (base, path) in opaque_path_tokens(raw) {
@@ -1230,11 +1230,15 @@ impl OpaqueResolver {
                 visit(p.rust_type_str());
                 visit(&p.foreign_ty);
             }
-            if let FnShape::StructCtor { def } = f.shape() {
-                provide_defined.insert(def.name.as_str().to_owned());
-            }
-            if let FnShape::EnumDefCtor { def } = f.shape() {
-                provide_defined.insert(def.name.as_str().to_owned());
+            match f.shape() {
+                FnShape::StructCtor { def } => {
+                    provide_opaque_deps
+                        .insert(def.name.as_str().to_owned(), struct_opaque_deps(def));
+                }
+                FnShape::EnumDefCtor { def } => {
+                    provide_opaque_deps.insert(def.name.as_str().to_owned(), enum_opaque_deps(def));
+                }
+                _ => {}
             }
         }
         // A name claimed by two distinct paths is genuinely ambiguous — drop it
@@ -1242,6 +1246,8 @@ impl OpaqueResolver {
         for name in &poisoned {
             inspected.remove(name);
         }
+        let provide_defined =
+            surviving_provide_defs(&provide_opaque_deps, &inspected, &parameterised);
         Self {
             inspected,
             provide_defined,
@@ -1260,13 +1266,79 @@ impl OpaqueResolver {
                     return None;
                 }
                 if self.provide_defined.contains(name) {
-                    // Same-module `pub struct`/`pub enum`: the bare name is in
-                    // scope inside `pub mod <slug>`.
+                    // Same-module `pub struct`/`pub enum` whose own definition
+                    // SURVIVES: the bare name is in scope inside `pub mod <slug>`.
+                    // A provide name that over-dropped is absent from the set, so
+                    // it falls through to `inspected` (empty for a pure provide
+                    // type) and returns `None` — the reference over-drops too.
                     return Some(name.to_owned());
                 }
                 self.inspected.get(name).cloned()
             }
             _ => Some(c.rust_owned().to_owned()),
+        }
+    }
+}
+
+/// The opaque handle names a `provide.struct`'s fields hold (bare identifiers,
+/// possibly other provide types) — the dependency edges for the survivor fixed
+/// point.
+fn struct_opaque_deps(def: &StructDef) -> Vec<String> {
+    def.fields
+        .iter()
+        .filter_map(|(_, c)| match c {
+            Carrier::Opaque(id) => Some(id.as_str().to_owned()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The opaque handle names a `provide.enum`'s variant payloads hold.
+fn enum_opaque_deps(def: &EnumDef) -> Vec<String> {
+    def.variants
+        .iter()
+        .flat_map(|v| {
+            v.payload.iter().filter_map(|c| match c {
+                Carrier::Opaque(id) => Some(id.as_str().to_owned()),
+                _ => None,
+            })
+        })
+        .collect()
+}
+
+/// The set of provide-defined names whose own definition SURVIVES emission,
+/// computed to a fixed point.
+///
+/// A provide def survives iff every opaque handle it holds resolves: an inspected
+/// crate-opaque (a known `::crate::path`), or ANOTHER provide-defined name that is
+/// ITSELF surviving. A parameterised handle never resolves; a bare handle that is
+/// neither inspected nor a surviving provide type never resolves. Because a
+/// dependency A→B→… can only ever REMOVE survivors, the fixpoint is monotone
+/// decreasing from "all defined" and terminates in at most `defs.len()` passes.
+fn surviving_provide_defs(
+    deps: &std::collections::BTreeMap<String, Vec<String>>,
+    inspected: &std::collections::BTreeMap<String, String>,
+    parameterised: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let mut surviving: BTreeSet<String> = deps.keys().cloned().collect();
+    loop {
+        let mut dropped: Vec<String> = Vec::new();
+        for (name, handles) in deps {
+            if !surviving.contains(name) {
+                continue;
+            }
+            let all_resolve = handles.iter().all(|h| {
+                !parameterised.contains(h) && (inspected.contains_key(h) || surviving.contains(h))
+            });
+            if !all_resolve {
+                dropped.push(name.clone());
+            }
+        }
+        if dropped.is_empty() {
+            return surviving;
+        }
+        for name in dropped {
+            surviving.remove(&name);
         }
     }
 }
@@ -1529,24 +1601,37 @@ fn closure_per_call_body(ret: &ClosureRet, call: &str, wrapper: &str) -> Vec<Str
 /// carriers only, exactly like `enum_ctor_lines`. Everything renders from the
 /// parsed [`StructDef`]; no raw manifest string reaches this emitted Rust.
 ///
-/// An opaque field type absolutizes through the crate so the defined struct can
-/// never collide with a runtime kernel module re-exported at the app crate root.
-fn struct_ctor_lines(cx: &WrapperCx<'_>, def: &StructDef) -> Vec<String> {
-    let krate = cx.krate;
-    // The struct definition, with each opaque field absolutized through the
-    // crate (a scalar field renders its owned Rust type directly).
-    let mut out = def.definition_lines(&|id| absolutize_crate(krate, id.as_str()));
+/// An opaque field type resolves through the crate [`OpaqueResolver`] so the
+/// defined struct names an absolute crate path (never colliding with a re-exported
+/// runtime kernel module). An unresolvable or parameterised opaque field OVER-DROPS
+/// the whole region (empty ⇒ the interface skips the forwarder), so an
+/// `Element<'a, Msg>`-shaped field stays refused rather than breach the SEAL. The
+/// definition and the constructor's parameter types render from the SAME resolved
+/// carriers, so their opaque paths can never disagree (an E0308 otherwise).
+fn struct_ctor_lines(cx: &WrapperCx<'_>, def: &StructDef, opaques: &OpaqueResolver) -> Vec<String> {
+    // The struct definition, with each opaque field resolved through the crate
+    // (a scalar field renders its owned Rust type directly). A single
+    // unresolvable field over-drops the whole definition.
+    let Some(mut out) =
+        def.definition_lines(&|id| opaques.carrier_ty(&Carrier::Opaque(id.clone())))
+    else {
+        return Vec::new();
+    };
     // The constructor: one owned-carrier parameter per field, in order, folded
     // into the struct literal. Each parameter's inbound coercion is the identity
     // for the closed carrier set (the owned Rust type IS the Ipê value's carrier
-    // — no narrowing), mirroring the struct-variant `enum_ctor_lines` path.
+    // — no narrowing), mirroring the struct-variant `enum_ctor_lines` path. The
+    // definition already established every opaque field is resolvable, so the
+    // param resolve below cannot fail here — but it is threaded through the same
+    // resolver to keep the two type renderings identical by construction.
     let struct_name = def.name.as_str();
-    let params: Vec<String> = def
-        .fields
-        .iter()
-        .enumerate()
-        .map(|(j, (_, c))| format!("{}: {}", arg_name(j), carrier_rust_ty(krate, c)))
-        .collect();
+    let mut params: Vec<String> = Vec::with_capacity(def.fields.len());
+    for (j, (_, c)) in def.fields.iter().enumerate() {
+        let Some(ty) = opaques.carrier_ty(c) else {
+            return Vec::new();
+        };
+        params.push(format!("{}: {ty}", arg_name(j)));
+    }
     let assigns: Vec<String> = def
         .fields
         .iter()
@@ -1575,13 +1660,22 @@ fn struct_ctor_lines(cx: &WrapperCx<'_>, def: &StructDef) -> Vec<String> {
 /// enum. Everything renders from the parsed [`EnumDef`]; no raw manifest string
 /// reaches this emitted Rust.
 ///
-/// An opaque payload absolutizes through the crate so the defined enum can never
-/// collide with a runtime kernel module re-exported at the app crate root.
-fn enum_def_ctor_lines(cx: &WrapperCx<'_>, def: &EnumDef) -> Vec<String> {
-    let krate = cx.krate;
-    // The enum definition, with each opaque payload absolutized through the
-    // crate (a scalar payload renders its owned Rust type directly).
-    let mut out = def.definition_lines(&|id| absolutize_crate(krate, id.as_str()));
+/// An opaque payload resolves through the crate [`OpaqueResolver`] so the defined
+/// enum names an absolute crate path (never colliding with a re-exported runtime
+/// kernel module). An unresolvable or parameterised opaque payload OVER-DROPS the
+/// whole region (empty ⇒ the interface skips every variant forwarder), so an
+/// `Element<'a, Msg>`-shaped payload stays refused rather than breach the SEAL. The
+/// definition and every constructor's parameter types render from the SAME
+/// resolved carriers, so their opaque paths can never disagree (an E0308).
+fn enum_def_ctor_lines(cx: &WrapperCx<'_>, def: &EnumDef, opaques: &OpaqueResolver) -> Vec<String> {
+    // The enum definition, with each opaque payload resolved through the crate
+    // (a scalar payload renders its owned Rust type directly). A single
+    // unresolvable payload over-drops the whole definition.
+    let Some(mut out) =
+        def.definition_lines(&|id| opaques.carrier_ty(&Carrier::Opaque(id.clone())))
+    else {
+        return Vec::new();
+    };
     let enum_name = def.name.as_str();
     // One constructor per variant, named `<ctor>_<snake(variant)>` off the
     // manifest ctor name (`cx.rust_name`). Each parameter's inbound coercion is
@@ -1598,12 +1692,16 @@ fn enum_def_ctor_lines(cx: &WrapperCx<'_>, def: &EnumDef) -> Vec<String> {
             out.push(format!("pub fn {ctor}() -> {enum_name} {{"));
             out.push(format!("    {enum_name}::{}", v.name.as_str()));
         } else {
-            let params: Vec<String> = v
-                .payload
-                .iter()
-                .enumerate()
-                .map(|(j, c)| format!("{}: {}", arg_name(j), carrier_rust_ty(krate, c)))
-                .collect();
+            // The definition already established every opaque payload is
+            // resolvable, so this resolve cannot fail here — threaded through the
+            // same resolver to keep the two type renderings identical.
+            let mut params: Vec<String> = Vec::with_capacity(v.payload.len());
+            for (j, c) in v.payload.iter().enumerate() {
+                let Some(ty) = opaques.carrier_ty(c) else {
+                    return Vec::new();
+                };
+                params.push(format!("{}: {ty}", arg_name(j)));
+            }
             let forwarded: Vec<String> = (0..v.payload.len()).map(arg_name).collect();
             out.push(format!(
                 "pub fn {ctor}({}) -> {enum_name} {{",
