@@ -1,0 +1,12 @@
+[package]
+name = "ipe_provide"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+description = "The #[ipe::provide] marker attribute — tags an author-written wrapper item so the Ipê FFI inspector surfaces it as a Tier 2 opaque nominal + forwarder"
+
+[lib]
+proc-macro = true
+
+[lints]
+workspace = true
