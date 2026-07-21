@@ -43,7 +43,7 @@ is isolated away; a capability that *is* in the set has its control relaxed to
 | `filesystem` | Read-write bind of the working tree + a scoped writable tempdir | `/` read-only, `$HOME`/`/root`/`/tmp` masked by tmpfs, one scoped writable tempdir only | `--ro-bind / /`, `--tmpfs`, `--bind <scoped>` |
 | `database` | Resolved to `network` **or** `filesystem` per the `ipe.toml` driver (a TCP driver → network; a file/SQLite driver → filesystem path) | Neither the network nor the file path the driver needs is present | (delegates to the two above) |
 | `env` | Manifest-named variables re-exported into the scrubbed env | `--clearenv`; only a fixed minimal allowlist (`PATH`, `TMPDIR`, `LANG`) re-enters; secrets in the host env are invisible | `--clearenv` + `--setenv` allowlist |
-| `subprocess` | PID namespace shared / `fork`+`exec` permitted | seccomp-bpf denies `fork`/`vfork`/`clone`(new task)/`execve`/`execveat` → `EPERM`; fresh PID namespace so no host PID is addressable | seccomp-bpf syscall filter + `--unshare-pid` |
+| `subprocess` | `fork`+`exec` permitted; still under a **fresh PID namespace** even when allowed (no host-PID visibility) | seccomp-bpf denies the whole task-creation family — `fork`/`vfork`/`clone`/**`clone3`**/`execve`/`execveat` → `EPERM` (see the clone3 note); fresh PID namespace | seccomp-bpf syscall filter + `--unshare-pid` |
 | `clock` | (always allowed) time syscalls are not isolated | not isolated — reading time is not a confinement axis in the first cut | none (see note) |
 | `random` | (always allowed) `getrandom`/`/dev/urandom` available | not isolated in the first cut | none (see note) |
 | `native-ffi` | The *marker* that inference is blind; does not itself open a control — it forces the declared set to be treated as the ceiling | n/a (it never widens the OS surface on its own) | none directly; it gates *which* of the above are trusted from declaration vs inference |
@@ -71,14 +71,52 @@ filesystem scoping (Landlock LSM / finer bind sets), and a seccomp
 capability→syscall map that denies whole syscall families per absent capability
 rather than only the process axis.
 
+### Baseline denials — regardless of the capability set
+
+The following are denied *unconditionally* (no capability grants them), because they
+are escape/exfiltration primitives no legitimate effect needs. These close holes the
+reused build-jail argv does not, and are part of the first cut, not a later map:
+
+- **`--proc /proc` (fresh proc mask).** The reused `bwrap_argv` does `--ro-bind / /`,
+  which exposes the *host* `/proc`. That defeats the `env` guarantee outright
+  (`/proc/<pid>/environ` of sibling host processes leaks secrets past `--clearenv`),
+  re-enters masked paths via `/proc/<pid>/{root,cwd,fd}`, and is the classic
+  user-namespace escape lever. The run jail MUST mount a fresh `--proc /proc` and
+  never inherit the host one.
+- **`clone3` and the whole task-creation family.** seccomp cannot dereference
+  `clone3`'s pointer argument, so a flags-based "threads yes, processes no" allowlist
+  is not reliably expressible. The first cut therefore denies the *entire* create
+  family (`fork`/`vfork`/`clone`/`clone3`/`execve`/`execveat`) when `subprocess` is
+  absent, accepting that in-process threads collateral-share the deny (Rust std
+  threads use `clone` with `CLONE_VM`); the app runs single-process. A fixture must
+  call `SYS_clone3` *raw*, not just `Command::new`, to prove the raw path is closed.
+- **`ptrace`, `process_vm_readv`/`process_vm_writev`** — cross-process memory read /
+  code injection against jail siblings and (on a misconfigured user namespace) the
+  launcher. No capability needs them; baseline-denied.
+- **`io_uring_setup`/`enter`/`register`** — perform file and network I/O *without* the
+  `openat`/`connect` syscalls a naive filter watches, bypassing the filesystem-bind
+  view. Baseline-denied (network is separately contained by the empty netns).
+- **`no_new_privs` set; no setuid.** Make the "no privilege gain" claim mechanical,
+  not incidental; a setuid-binary fixture must fail to elevate.
+- **`--unshare-ipc` and `--unshare-net` stay unconditional** even when their axis is
+  granted-elsewhere-shaped, because SysV shmem / message queues / abstract sockets are
+  covert channels that ride IPC/net namespaces independent of the `network` axis.
+
 ## Mechanism, per platform (fail-closed everywhere)
 
 The invariant across every platform: **if the required primitive is unavailable,
 refuse to run — never run unconfined.** An emitted binary with a non-empty
 native/declared capability set that cannot be jailed is an `IPE-F44xx`-class refusal,
-mirroring the build jail's `IPE-F4410`. The one override is an explicit, loud
-`IPE_ALLOW_UNSANDBOXED=1` that prints a trust warning (paralleling
-`IPE_FFI_ALLOW_UNSANDBOXED`).
+mirroring the build jail's `IPE-F4410`.
+
+The override is deliberately narrow. `IPE_ALLOW_UNSANDBOXED=1` (a **distinct** env
+var from the FFI-compile `IPE_FFI_ALLOW_UNSANDBOXED`) covers only the pure-Ipê /
+low-value-axis cases and prints a trust warning. Once the install gate flips to admit
+real-capability Tier 2 wrappers, this override becomes an "arbitrary native code runs
+with the invoking user's full privileges" switch — so it is a **hard error, not a
+warning**, when the resolved set includes `native-ffi` or a high-value native axis
+(network/filesystem/subprocess/env). There is no flag that runs admitted native code
+unconfined; that combination refuses, full stop.
 
 - **Linux (the first target).** Bubblewrap user + namespaces (net/pid/uts/ipc/cgroup)
   for the coarse capability axes, `prlimit` for resource caps, `timeout` for a wall
@@ -112,13 +150,35 @@ native-capability binary unconfined by default.
 1. **Collect the set.** `inferred = program_capabilities(entry)`. If the project
    carries native/Tier 2 declarations, `declared = manifest.capabilities`. The
    **profile set is `inferred ∪ declared`** — the same union the package design
-   specifies. The manifest gate (`verify_capabilities`) has already proven declared
-   ⊇ inferred for the Ipê side, and `native-ffi` accounts for the opaque remainder.
+   specifies. Union (not intersection, not inferred-only) is what guarantees the
+   *no-false-deny* property: every capability anyone claims the program has is
+   relaxed, so a legitimately-declared effect can never be blocked.
+
+   **What the manifest gate does and does not prove (do not overstate this).**
+   `verify_capabilities` proves `declared == inferred` over the **Ipê-inferable set
+   only** — it is *blind to native `Rust.` code* by construction. So for native code
+   the union is **containment, not proof**: an under-declared wrapper is *contained*
+   by the jail (an undeclared syscall fails closed), not *caught* at the gate. The
+   static source scan (below) is a best-effort, defeatable smell test, never the
+   boundary. Do not claim the gate has proven `declared ⊇ inferred` for native code —
+   it has not, and cannot.
 2. **Lower `database`** to `network`/`filesystem` per the `ipe.toml` driver.
+   **Fail-closed on an unknown/missing/ambiguous driver** — never silently drop the
+   axis (dropping it would *tighten* the jail past what the program needs → a
+   false-deny; and mis-lowering to the wrong axis under-isolates).
 3. **Emit a `SandboxProfile`** — a small serializable value (network on/off,
    filesystem scope, env allowlist, subprocess allow/deny, resource limits). This
    is the platform-independent description; a per-platform *builder* turns it into
    a `bwrap` argv + seccomp program (Linux) or a `.sb` profile (macOS).
+
+   **Deny-by-default, structurally.** `profile_from_capabilities` MUST be an
+   exhaustive `match Capability` with **no `_` catch-all** (mirroring the exhaustive
+   `as_str`/`FromStr` in `capability.rs`), so a newly-added capability variant fails
+   to *compile* until it is classified — and an unclassified variant can never
+   default to "allowed". `native-ffi`'s no-op control is still an explicit arm.
+   `SandboxProfile` has no `Default` that yields an all-allowed value: an empty set
+   lowers to the *maximally isolated* profile, or the type is simply not
+   `Default`-constructible.
 
 ### Two wire points
 
@@ -138,6 +198,16 @@ native-capability binary unconfined by default.
   exec'ing the app. The artifact is enforceable wherever an Ipê-aware launcher runs;
   a bare `./ipe-app` invocation is the escape hatch a deployer must consciously choose
   (documented, and refused by the launcher path).
+
+  **`ipe.profile` is untrusted input to the launcher — parse, don't validate.** A
+  tampered profile that requests *fewer* isolations builds a no-op jail around a
+  high-capability binary, which would make the mechanism *weaker* than the
+  bare-`./ipe-app` escape it closes. So: the launcher strictly *parses* the profile
+  into the typed `SandboxProfile` (parse failure ⇒ refuse-to-run, never a permissive
+  fallback), and the authoritative capability set is **embedded in the binary itself**
+  (so the profile cannot claim fewer axes than the binary was built for) — the profile
+  file is a convenience mirror, not the source of truth. A profile weaker than the
+  embedded floor is a refuse-to-run, not an honored request.
 
 ### Where the two sets come from — no new inference
 
@@ -171,14 +241,31 @@ the Tier 2 doc's "sandbox enforcement (guarantees)" step are satisfied by this j
 The implementing work should update those docs' forward-references from "planned" to
 "provided by the runtime sandbox" and flip the install gate.
 
+**The flip is conditioned on the jail actually being present where the artifact
+runs — this is the most dangerous step in the plan.** Flipping refuse-until-jail →
+admit-and-isolate *globally* would, on a platform in the refuse-gap (macOS without
+the Seatbelt path, Windows, BSD), mean admit-and-run-**unconfined** — strictly worse
+than today. So the flip is per-target: a real-capability Tier 2 wrapper is admitted
+only for a run/deploy target that has a working jail; on a refuse-gap target the
+refuse-until-jail posture *stays*. The admission decision is "is this binary going to
+run somewhere the jail holds?", not "does a jail exist on the build host?". A static
+source scan of the wrapper (reusing the existing capability-gate path rules) runs at
+admission as a best-effort honesty smell test on the declaration — surfacing an
+obvious under-declaration — but it is defeatable and is never the boundary; the jail
+is.
+
 ## Resource quotas — carried, but honestly scoped
 
 The capability doc defers a general per-program quota model (memory/CPU-time/I/O) to
 the deployment layer. This jail **carries the hooks** rather than the policy:
 `prlimit` (address space, CPU-seconds, open FDs, process count, file size) and a
-`timeout` wall clock are already in the build-jail argv and are reused verbatim for
-the run jail, so a runaway emitted binary is bounded by the same mechanism. What is
-**not** carried at first: a per-program *quota policy* surfaced in the manifest (e.g.
+`timeout` wall clock are already in the build-jail argv and are reused as the
+*mechanism* for the run jail. **The values are not reused** — the build-jail defaults
+(10 GiB address space, 900-second CPU and wall clock) are calibrated to kill a giant
+one-shot rustdoc build and would wrongly kill a legitimate long-lived server (a
+false-deny). The run jail defines its own `ResourceLimits`: no wall-clock kill by
+default for a long-running app, generous CPU, sane FD/memory ceilings. Reuse the
+mechanism, not the numbers. What is **not** carried at first: a per-program *quota policy* surfaced in the manifest (e.g.
 `memory = "512M"`), cgroup v2 accounting, or I/O-throughput limits. The first cut
 ships sane default `ResourceLimits` for the run jail and leaves a *policy* knob
 (manifest-declared quotas, cgroup enforcement) as the deferred quota story,
@@ -192,11 +279,15 @@ after this jail lands) attempting to exceed its declared capability set at runti
 
 | Threat | Containment | Residual (first cut) |
 |---|---|---|
-| Undeclared network exfiltration | Fresh empty net namespace when `network` absent — no route, native `connect` fails | Coarse: a *declared* `network` crate may reach any host (per-host is a later refinement) |
+| Undeclared network exfiltration | Fresh empty net namespace when `network` absent — no interface but loopback, no route off-host, native `connect` to a real endpoint fails | Coarse: a *declared* `network` crate may reach any host (per-host is a later refinement); loopback still exists inside the namespace |
 | Undeclared filesystem read/write | `/` read-only, home/tmp masked, one scoped writable dir when `filesystem` absent | Coarse: a declared `filesystem` crate may touch any path (per-path/Landlock is a later refinement) |
-| Undeclared subprocess spawn | seccomp-bpf denies `fork`/`clone`/`execve` → `EPERM` when `subprocess` absent | Requires seccomp available; refuse-if-absent closes the fallback |
-| Host-secret theft via env | `--clearenv` + fixed allowlist; host secrets invisible unless `env`-declared and named | A declared `env` var is exposed in full |
-| Namespace/jail escape (user-ns tricks, `/proc` writes, setuid) | `--die-with-parent`, `--new-session`, read-only `/`, fresh dev, no setuid via user namespace; seccomp denies `mount`/`pivot_root`/`setns`/`unshare` re-escape | User-namespace kernel CVEs are out of scope (host kernel trust) |
+| Undeclared subprocess spawn | seccomp-bpf denies the whole create family incl. **`clone3`** → `EPERM` when `subprocess` absent; fresh PID namespace | Requires seccomp available; refuse-if-absent closes the fallback; single-process (thread collateral) |
+| I/O via `io_uring` bypassing the syscall filter | `io_uring_setup`/`enter`/`register` baseline-denied — the fs-bind view and the netns still bound it, but the direct-I/O bypass is closed | Baseline deny; not axis-conditional |
+| Cross-process memory read / injection (`ptrace`, `process_vm_readv`) | Baseline-denied unconditionally — no capability grants them | — |
+| Host-secret theft via env or `/proc` | `--clearenv` + fixed allowlist **and** a fresh `--proc /proc` mask (host `/proc/<pid>/environ` is not exposed) | A declared `env` var is exposed in full |
+| Namespace/jail escape (user-ns tricks, `/proc`, setuid) | fresh `--proc /proc`, `no_new_privs`, `--die-with-parent`, `--new-session`, read-only `/`, fresh dev, no setuid; seccomp denies `mount`/`pivot_root`/`setns`/`unshare`/`ptrace` re-escape | User-namespace kernel CVEs are out of scope (host kernel trust) |
+| Launcher tampering (a doctored `ipe.profile` requesting a no-op jail) | The profile is strictly parsed (parse-fail ⇒ refuse); the authoritative set is embedded in the binary; a profile below that floor refuses | A deployer editing the binary itself is the raw-binary escape, already documented |
+| Covert channels (shmem, abstract sockets, timing/RNG) | `--unshare-ipc`/`--unshare-net` unconditional close shmem/abstract-socket channels | Timing/RNG side channels via `clock`/`random` remain (accepted by design — not a confinement axis) |
 | Capability *false-deny* (a legitimately declared effect blocked) | Profile is built from `inferred ∪ declared`; a declared axis is *relaxed*, so a declared effect must work — a false-deny is a correctness bug, tested by positive fixtures | Requires the map to relax exactly and only the declared axes |
 | Bypass by running the bare binary off a build artifact | `ipe.profile` + launcher travel with the artifact; the launcher applies the jail; bare `./ipe-app` is a documented, deliberate deployer escape | A deployer who runs the raw binary opts out — documented, not silent |
 | Primitive unavailable → silent unconfined run | **Fail-closed refusal** (`IPE-F44xx`), override only via loud `IPE_ALLOW_UNSANDBOXED=1` | Override exists for CI/dev; prints a trust warning |
@@ -214,13 +305,14 @@ Two load-bearing soundness properties the implementation and its fixtures must p
 ## First cut vs later refinements
 
 **First cut (this plan):**
-- Linux: bwrap namespaces (net/fs/env/pid) + seccomp-bpf for `subprocess` + `prlimit`/`timeout` caps, reusing the `ipe_sandbox` argv vocabulary.
+- Linux: bwrap namespaces (net/fs/env/pid/ipc) + fresh `--proc /proc` + seccomp-bpf (subprocess incl. `clone3`, plus baseline `ptrace`/`process_vm_*`/`io_uring` denial) + `no_new_privs` + run-tuned `prlimit`/`timeout`, reusing the `ipe_sandbox` argv vocabulary (mechanism, not values).
 - Coarse whole-capability axes (any host / any path).
-- `database` lowered to network/filesystem; `clock`/`random` not OS-isolated.
-- `ipe run` wrap + `ipe build` artifact profile + launcher.
-- Fail-closed refusal when a primitive is absent; loud override env.
-- macOS: Seatbelt profile **or** documented refuse-unless-override gap; other platforms refuse.
-- The capability-enforcement hand-off: lift refuse-until-jail → admit-and-isolate.
+- `database` lowered to network/filesystem (fail-closed on an unknown driver); `clock`/`random` not OS-isolated.
+- `ipe run` wrap + `ipe build` artifact profile (strictly parsed, capability floor embedded in the binary) + launcher.
+- Deny-by-default via an exhaustive `match Capability` (a new variant fails to compile until classified).
+- Fail-closed refusal when a primitive is absent; narrow override env that hard-errors on native/high-value axes.
+- macOS: Seatbelt profile (`sandbox_init`/`.sb`, a consciously-chosen deprecated primitive) **or** documented refuse-unless-override gap; other platforms refuse.
+- The capability-enforcement hand-off: lift refuse-until-jail → admit-and-isolate **only per-target where the jail holds**; the honest posture that native under-declaration is *contained, not caught*.
 
 **Later refinements (tracked, not built here):**
 - Per-host network allowlist, per-path filesystem scope (Landlock).
@@ -234,37 +326,50 @@ Two load-bearing soundness properties the implementation and its fixtures must p
 A. **`SandboxProfile` type + the capability→profile lowering.** A serializable
    profile value in a new module (near `ipe_sandbox` or a sibling `ipe_runtime_jail`
    crate), plus `profile_from_capabilities(inferred, declared, driver) -> SandboxProfile`
-   that unions the sets, lowers `database`, and drops the non-isolated axes. Pure,
-   fully unit-tested. No process spawned.
+   built from `inferred ∪ declared`, lowering `database` (fail-closed on an unknown
+   driver) and dropping the non-isolated axes. The match over `Capability` is
+   exhaustive with no `_`; the empty set yields the maximally-isolated profile; no
+   all-allowed `Default`. Pure, fully unit-tested. No process spawned.
 
 B. **Linux profile → jail argv.** A builder that turns a `SandboxProfile` into a
    `bwrap` argv reusing `bwrap_argv`'s flag vocabulary, adding the run-jail
-   allow/deny toggles (net shared vs unshared, fs scope, env allowlist). Pure/testable
-   like the existing argv builder.
+   allow/deny toggles (net shared vs unshared, fs scope, env allowlist), the fresh
+   `--proc /proc` mask, `no_new_privs`, and run-tuned `ResourceLimits` (distinct from
+   the SDK-inspection defaults). Pure/testable like the existing argv builder.
 
-C. **seccomp-bpf `subprocess` filter.** Compile a minimal BPF program denying the
-   fork/exec family, applied via `bwrap --seccomp`. Behind a probe (refuse if seccomp
-   unavailable). Unit-test the program shape; end-to-end-test the deny.
+C. **seccomp-bpf baseline + `subprocess` filter.** Compile a BPF program denying the
+   whole create family (incl. `clone3`) when `subprocess` is absent, plus the
+   unconditional baseline (`ptrace`/`process_vm_*`/`io_uring`/`mount`-family), applied
+   via `bwrap --seccomp`. Behind a probe (refuse if seccomp unavailable). Unit-test the
+   program shape; end-to-end-test the deny with a *raw* `SYS_clone3` fixture (not just
+   `Command::new`).
 
 D. **Wire `ipe run`.** Insert profile-build + jail before the final `exec` in
-   `run_run`. Fail-closed refusal path + loud override. Positive fixture (declared
-   effect works) and negative fixture (undeclared effect fails) under `IPE_E2E`.
+   `run_run`. Fail-closed refusal path + the narrow override (hard-error on
+   native/high-value axes). Positive fixture (declared effect works) and negative
+   fixture (undeclared effect fails at the OS boundary) under `IPE_E2E`.
 
 E. **Wire `ipe build` artifact.** Emit `ipe.profile` into the manifest and add the
-   launcher (`ipe exec <artifact>` or an `ipe-run` shim) that reads it and applies
-   the jail. Copy-off-host fixture proving enforcement travels.
+   launcher (`ipe exec <artifact>` or an `ipe-run` shim) that strictly *parses* it
+   (parse-fail ⇒ refuse) and applies the jail; embed the authoritative capability
+   floor in the binary so a weakened profile cannot under-isolate. Copy-off-host
+   fixture proving enforcement travels and a tampered-profile fixture proving it
+   refuses.
 
 F. **macOS Seatbelt path _or_ documented-gap refusal.** Either a `.sb` generator +
-   `sandbox_init` wire, or the refuse-unless-override gate with a clear diagnostic.
-   Decide up front; do not leave macOS silently unconfined.
+   `sandbox_init` wire (a consciously-chosen deprecated primitive), or the
+   refuse-unless-override gate with a clear diagnostic. Decide up front; do not leave
+   macOS silently unconfined.
 
 G. **Capability-enforcement hand-off.** Flip the install gate from refuse-until-jail
-   to admit-and-isolate for real-capability Tier 2 wrappers; update the Tier 2 and
-   capability docs' forward-references from "planned" to "provided". Guarded by the
-   full jail being green.
+   to admit-and-isolate for real-capability Tier 2 wrappers **per-target where the
+   jail holds** (never globally — a refuse-gap target keeps refusing). Add the
+   best-effort static-scan honesty check on the declaration. Correct the Tier 2 and
+   capability docs' forward-references to say the jail *contains* native code (not
+   that the gate *proves* the native set). Guarded by the full jail being green.
 
 H. **Resource-quota hooks.** Confirm the run jail carries `prlimit`/`timeout` with
-   sane run defaults; leave the manifest-quota *policy* as the cross-referenced
+   run-tuned defaults; leave the manifest-quota *policy* as the cross-referenced
    deferred story.
 
 Steps A–C are pure/testable with no CLI changes; D is the first behavior-visible
