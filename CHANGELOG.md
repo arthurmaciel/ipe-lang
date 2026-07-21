@@ -10,6 +10,18 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.4](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.3...ipe-v0.1.4) (2026-07-21)
+
+
+### Features
+
+* **backend:** [#315](https://github.com/arthurmaciel/ipe-lang/issues/315) port IpeStringify format! emitters to native Doc rendering ([#35](https://github.com/arthurmaciel/ipe-lang/issues/35)) ([ce4a766](https://github.com/arthurmaciel/ipe-lang/commit/ce4a7660796ca3e6a48257e5116f17ab2f57f7ff))
+* **backend:** [#315](https://github.com/arthurmaciel/ipe-lang/issues/315) wire native Doc emitter into production emit_func ([#40](https://github.com/arthurmaciel/ipe-lang/issues/40)) ([f20e430](https://github.com/arthurmaciel/ipe-lang/commit/f20e430fec9a0fb20a3c40ca6d807bc27c01de23))
+* **ffi:** [#347](https://github.com/arthurmaciel/ipe-lang/issues/347) sync closure adapter ([rust.provide.closure]) ([#36](https://github.com/arthurmaciel/ipe-lang/issues/36)) ([72cfd04](https://github.com/arthurmaciel/ipe-lang/commit/72cfd041b1c87a29e3415f4590fdf638b507e605))
+* **ffi:** [#350](https://github.com/arthurmaciel/ipe-lang/issues/350) closure-manifest glue + [#348](https://github.com/arthurmaciel/ipe-lang/issues/348) struct-with-trait-impl ([#38](https://github.com/arthurmaciel/ipe-lang/issues/38)) ([ade2673](https://github.com/arthurmaciel/ipe-lang/commit/ade2673adffb0c3d118384f57e06b5b5bc9b06a1))
+* **ffi:** provide.enum (P4) + Debug derive — Iced binding spike ([#42](https://github.com/arthurmaciel/ipe-lang/issues/42)) ([eef982a](https://github.com/arthurmaciel/ipe-lang/commit/eef982a8e8d6a499c4d9ce38f19200b25d2c43b4))
+* **stdlib:** [#339](https://github.com/arthurmaciel/ipe-lang/issues/339) pure elm/core fills (List/Dict/Set/Result/Char/String) ([#43](https://github.com/arthurmaciel/ipe-lang/issues/43)) ([37da719](https://github.com/arthurmaciel/ipe-lang/commit/37da7192da96bf9ca651bc594ded7a4482402145))
+
 ## [0.1.3](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.2...ipe-v0.1.3) (2026-07-21)
 
 
