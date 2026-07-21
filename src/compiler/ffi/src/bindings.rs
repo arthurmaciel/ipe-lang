@@ -433,6 +433,9 @@ pub fn translate_rust_ret(raw0: &str) -> (String, RetCoercion) {
     if raw.is_empty() || raw == "()" {
         return ("()".to_owned(), identity_coercion());
     }
+    if let Some(comps) = tuple_components(&raw) {
+        return translate_tuple_ret(&comps);
+    }
     if let Some(sk) = seq_kind(&raw) {
         return translate_seq_ret(&sk);
     }
@@ -545,6 +548,125 @@ fn translate_seq_ret(sk: &SeqKind) -> (String, RetCoercion) {
             )
         }
     }
+}
+
+/// Split a Rust tuple type (`(A, B, ..)`) into its top-level component types,
+/// respecting nested `<>`/`()` so `(u64, Result<T, E>)` yields two parts. A
+/// non-tuple, the unit `()`, or a single-element `(T,)`/`(T)` group returns
+/// `None` — only a genuine 2+-arity tuple is a multi-result carrier here.
+fn tuple_components(raw: &str) -> Option<Vec<String>> {
+    let t = raw.trim();
+    let inner = t.strip_prefix('(')?.strip_suffix(')')?;
+    // Reject a balanced-but-non-tuple parse like `(A, B) -> C` where the outer
+    // parens do not wrap the whole type: the strip above only removes the first
+    // `(` and last `)`, so verify the remaining depth never dips to zero early.
+    let mut depth = 0_i32;
+    let mut parts: Vec<String> = Vec::new();
+    let mut start = 0usize;
+    for (i, c) in inner.char_indices() {
+        match c {
+            '<' | '(' | '[' => depth += 1,
+            '>' | ')' | ']' => {
+                if depth == 0 {
+                    return None; // unbalanced — the outer parens were not a wrapper
+                }
+                depth -= 1;
+            }
+            ',' if depth == 0 => {
+                parts.push(inner.get(start..i).unwrap_or("").trim().to_owned());
+                start = i + c.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    if depth != 0 {
+        return None;
+    }
+    let tail = inner.get(start..).unwrap_or("").trim();
+    if !tail.is_empty() {
+        parts.push(tail.to_owned());
+    }
+    // A 1-tuple `(T,)` leaves a trailing empty part that we skipped, so a single
+    // real component means "not a multi-result tuple" — leave it to the scalar
+    // paths. Only 2+ components are the multi-result shape.
+    if parts.len() < 2 { None } else { Some(parts) }
+}
+
+/// Translate a multi-result Rust tuple into its wrapper-declared inner type and
+/// a coercion that destructures the raw tuple and coerces each component. Each
+/// component rides its own [`translate_rust_ret`], so a `(u64, u32)` becomes
+/// `(i64, i64)` with per-slot saturating widening — matching the `(Int, Int)`
+/// the Ipê signature declares.
+fn translate_tuple_ret(comps: &[String]) -> (String, RetCoercion) {
+    let mut decls: Vec<String> = Vec::with_capacity(comps.len());
+    let mut coercers: Vec<RetCoercion> = Vec::with_capacity(comps.len());
+    for c in comps {
+        let (d, co) = translate_rust_ret(c);
+        decls.push(d);
+        coercers.push(co);
+    }
+    let decl = format!("({})", decls.join(", "));
+    (
+        decl,
+        Box::new(move |e| {
+            let binders: Vec<String> = (0..coercers.len()).map(|i| format!("t{i}")).collect();
+            let coerced: Vec<String> = coercers
+                .iter()
+                .enumerate()
+                .map(|(i, co)| co(&format!("t{i}")))
+                .collect();
+            format!(
+                "{{ let ({}) = {e}; ({}) }}",
+                binders.join(", "),
+                coerced.join(", ")
+            )
+        }),
+    )
+}
+
+/// The raw Rust Ok-type a binding's result carries, with the fallible/effectful
+/// `Result<Ok, E>` layer peeled. Mirrors [`WrapperCx::effective_raw_result`] +
+/// the Ok-peel so the interface admission gate reasons over the exact type the
+/// wrapper body will coerce.
+fn effective_ok_raw(f: &FnInfo) -> String {
+    let raw = f.results().first().map_or("", Param::rust_type_str);
+    let base = if raw.is_empty() {
+        let ipe = f.results().first().map_or("()", |r| {
+            if r.foreign_ty.is_empty() {
+                "()"
+            } else {
+                r.foreign_ty.as_str()
+            }
+        });
+        ipe_type_to_rust(ipe)
+    } else {
+        raw.to_owned()
+    };
+    match f.effect() {
+        Effect::Fallible | Effect::Effectful => ok_type_of_result(&base),
+        Effect::Pure => base,
+    }
+}
+
+/// Whether a binding's result is a multi-result tuple every component of which
+/// the wrapper can soundly coerce — the admission predicate for the interface
+/// tuple gate.
+///
+/// Sound only for a tuple of NUMERIC scalar components: each rides a total
+/// saturating widen into its `Int`/`Float` carrier, so the emitted `(i64, ..)`
+/// matches the `(Int, ..)` the Ipê signature declares. A tuple carrying a
+/// String, an opaque handle, or a nested container is NOT admitted here — its
+/// ownership/lifetime wiring is not in the tuple emitter, so it stays dropped
+/// (over-drop, never an unsound bind).
+#[must_use]
+pub fn multi_result_tuple_is_coercible(f: &FnInfo) -> bool {
+    // A self-returning setter or a borrow-reader threads a handle, handled by
+    // their own gates — this predicate is only for the plain multi-result case.
+    if f.self_returning() || f.is_borrow_reader() {
+        return false;
+    }
+    let raw = effective_ok_raw(f);
+    tuple_components(&raw).is_some_and(|comps| comps.iter().all(|c| is_numeric_rust(c.trim())))
 }
 
 // ── per-function wrapper context ────────────────────────────────────────────
@@ -1798,6 +1920,73 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
             "{out}"
         );
         assert!(out.contains("Ok((v, recv)) => ok_res(("), "{out}");
+    }
+
+    #[test]
+    fn tuple_return_coerces_every_component_to_its_carrier() {
+        // `(u64, u32)` declares `(i64, i64)` and destructures the raw tuple,
+        // widening each component: the wide unsigned saturates, the narrow one
+        // is a plain `as i64`.
+        let (decl, co) = translate_rust_ret("(u64, u32)");
+        assert_eq!(decl, "(i64, i64)");
+        assert_eq!(
+            co("r"),
+            "{ let (t0, t1) = r; ((t0).min(i64::MAX as u64) as i64, (t1) as i64) }"
+        );
+    }
+
+    #[test]
+    fn tuple_predicate_rejects_a_string_component() {
+        // A String component is NOT wired → not coercible (stays dropped).
+        let mixed = decode(&json!({
+            "pkg": "grid", "name": "grid",
+            "functions": [{
+                "name": "labelled",
+                "params": [],
+                "results": [{"name": "", "type": "(Int, String)", "rustType": "(u32, String)"}],
+                "effect": "pure",
+                "methodName": ""
+            }],
+            "errors": []
+        }));
+        let mf = mixed.fns().first().expect("one fn");
+        assert!(
+            !multi_result_tuple_is_coercible(mf),
+            "String component must not admit"
+        );
+    }
+
+    #[test]
+    fn plain_multi_result_tuple_binds_with_per_component_coercion() {
+        // A plain (non-reader, non-setter) free fn returning `(u64, u32)` now
+        // binds: the wrapper declares `(i64, i64)` and coerces each slot.
+        let pkg = decode(&json!({
+            "pkg": "geo", "name": "geo",
+            "functions": [{
+                "name": "bounds",
+                "params": [],
+                "results": [{"name": "", "type": "(Int, Int)", "rustType": "(u64, u32)"}],
+                "effect": "pure",
+                "methodName": ""
+            }],
+            "errors": []
+        }));
+        let f = pkg.fns().first().expect("one fn");
+        assert!(
+            multi_result_tuple_is_coercible(f),
+            "all-numeric tuple must admit"
+        );
+        let out = emit_bindings(&pkg);
+        assert!(
+            out.contains("-> IpeResult<IpeError, (i64, i64)> {"),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "{ let (t0, t1) = ::geo::bounds(); ((t0).min(i64::MAX as u64) as i64, (t1) as i64) }"
+            ),
+            "{out}"
+        );
     }
 
     #[test]

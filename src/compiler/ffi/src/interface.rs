@@ -351,11 +351,17 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
         // would be an E0308. Over-drop until tuple-component scalar coercion
         // is wired into the wrapper emitter.
         //
-        // A by-borrow reader's receiver-threaded tuple (`(R, T)`) is the one
-        // exception: its wrapper coerces the result component to `i64`/`f64`
-        // before pairing it with the receiver handle, so the forwarder types
-        // check. Let it through.
-        if contains_tuple(&sig) && !f.is_borrow_reader() {
+        // Two shapes coerce their tuple components and so type-check: a
+        // by-borrow reader's receiver-threaded tuple (`(R, T)`), whose wrapper
+        // coerces the result component before pairing it with the receiver
+        // handle; and a plain multi-result tuple all of whose components are
+        // numeric scalars, each of which the wrapper widens to its `Int`/`Float`
+        // carrier. Any other tuple (String / opaque handle / nested container
+        // component) still over-drops until that wiring exists.
+        if contains_tuple(&sig)
+            && !f.is_borrow_reader()
+            && !crate::bindings::multi_result_tuple_is_coercible(f)
+        {
             skip(
                 "tuple in signature needs component scalar coercion — not yet wired",
                 &mut skipped,
@@ -553,6 +559,49 @@ mod tests {
                 .iter()
                 .any(|s| s.ref_name == "explain_from_error"
                     && s.reason.contains("shadows an Ipê reserved builtin type")),
+            "{:?}",
+            iface.skipped
+        );
+    }
+
+    #[test]
+    fn plain_multi_result_numeric_tuple_is_admitted_not_dropped() {
+        // A non-borrow-reader free fn returning an all-numeric tuple used to
+        // over-drop on the tuple gate; its components are each coercible, so it
+        // is now bound. A tuple carrying a String component still drops.
+        let doc = serde_json::json!({
+            "pkg": "geom",
+            "name": "geom",
+            "version": "0.1.0",
+            "functions": [
+                {
+                    "name": "extent",
+                    "params": [],
+                    "results": [{"name": "", "type": "(Int, Int)", "rustType": "(u64, u32)"}],
+                    "effect": "pure"
+                },
+                {
+                    "name": "labelled_extent",
+                    "params": [],
+                    "results": [{"name": "", "type": "(Int, String)", "rustType": "(u64, String)"}],
+                    "effect": "pure"
+                }
+            ],
+            "errors": []
+        });
+        let iface = crate_interface(&PkgInfo::decode_json(&doc.to_string()).expect("decodes"));
+        assert!(
+            iface
+                .bindings
+                .iter()
+                .any(|b| b.ref_name == "extent" && b.sig == "() -> Result Error (Int, Int)"),
+            "{:?}",
+            iface.skipped
+        );
+        // The String-carrying tuple still over-drops on the tuple gate.
+        assert!(
+            iface.skipped.iter().any(|s| s.ref_name == "labelled_extent"
+                && s.reason.contains("component scalar coercion")),
             "{:?}",
             iface.skipped
         );
