@@ -57,20 +57,20 @@ impl Default for RenderConfig {
 
 impl RenderConfig {
     /// This config with the trailing-delimiter `reserve` set to `n`.
-    fn with_reserve(self, n: usize) -> Self {
+    const fn with_reserve(self, n: usize) -> Self {
         Self { reserve: n, ..self }
     }
 
     /// This config with the trailing-delimiter `reserve` cleared — used when a
     /// construct opens its own delimiters, so its interior lines are measured
     /// against the full width.
-    fn no_reserve(self) -> Self {
+    const fn no_reserve(self) -> Self {
         self.with_reserve(0)
     }
 
     /// The effective right margin for a construct's LAST line: `max_width` less the
     /// reserved trailing-delimiter columns.
-    fn margin(self) -> usize {
+    const fn margin(self) -> usize {
         self.max_width.saturating_sub(self.reserve)
     }
 }
@@ -172,7 +172,7 @@ fn render_at(
             // against the width `rustfmt`'s `Shape` leaves after its trailing tokens.
             for (i, d) in docs.iter().enumerate() {
                 let c = eff_col(out, col);
-                let suffix = trailing_siblings_flat_width(&docs[i + 1..]);
+                let suffix = trailing_siblings_flat_width(docs.get(i + 1..).unwrap_or(&[]));
                 let child_cfg = cfg.with_reserve(cfg.reserve + suffix);
                 render_at(d, child_cfg, indent, c, flat, out);
             }
@@ -325,27 +325,25 @@ fn render_type_bound(
     render_at(ptr_open, cfg.no_reserve(), indent, start_col, false, out);
     let bound_indent = indent + CHAIN_BREAK_INDENT;
 
-    // The flat bound list at the bound indent, plus its trailing `,`.
+    // ANGLE-BREAK when the whole bound list (plus its trailing `,`) fits on one line
+    // at the bound indent; otherwise BOUND-BREAK, each `+ Ti` on its own line at a
+    // further indent step. The `head` and the traits open the bound list at
+    // `bound_indent` either way.
     let bound_flat_w = type_bound_list_flat_width(head, traits, cfg);
-    if bound_indent + bound_flat_w + 1 <= cfg.max_width {
-        // ANGLE-BREAK: the whole bound list on one line at `bound_indent`.
-        out.push('\n');
-        push_indent(bound_indent, out);
-        let c = current_col(out);
-        render_at(head, cfg.no_reserve(), bound_indent, c, true, out);
+    let angle_break = bound_indent + bound_flat_w < cfg.max_width;
+    out.push('\n');
+    push_indent(bound_indent, out);
+    let c = current_col(out);
+    render_at(head, cfg.no_reserve(), bound_indent, c, true, out);
+    if angle_break {
+        // The whole bound list stays on one line at `bound_indent`.
         for t in traits {
             out.push_str(" + ");
             let c = current_col(out);
             render_at(t, cfg.no_reserve(), bound_indent, c, true, out);
         }
-        out.push(',');
     } else {
-        // BOUND-BREAK: `Head` on its own line, each `+ Ti` on its own line at a
-        // further indent step, a trailing comma after the last.
-        out.push('\n');
-        push_indent(bound_indent, out);
-        let c = current_col(out);
-        render_at(head, cfg.no_reserve(), bound_indent, c, false, out);
+        // Each `+ Ti` on its own line at a further indent step.
         let trait_indent = bound_indent + CHAIN_BREAK_INDENT;
         for t in traits {
             out.push('\n');
@@ -354,8 +352,8 @@ fn render_type_bound(
             let c = current_col(out);
             render_at(t, cfg.no_reserve(), trait_indent, c, false, out);
         }
-        out.push(',');
     }
+    out.push(',');
     out.push('\n');
     push_indent(indent, out);
     let c = current_col(out);
@@ -732,10 +730,10 @@ fn has_hard_break(doc: &Doc) -> bool {
         // carries a `HardLine`.
         | Doc::TypeBound { .. } => false,
         Doc::Concat(docs) => docs.iter().any(has_hard_break),
-        Doc::Nest(_, inner) => has_hard_break(inner),
-        // The redundant paren is pure wrapping: its break behavior is its inner's
-        // (a paren-block carries the statement `HardLine`s that force a break).
-        Doc::ElidableParen { inner } => has_hard_break(inner),
+        // `Nest` is pure indentation and `ElidableParen` pure wrapping: each forwards
+        // its break behavior to its inner (a paren-block carries the statement
+        // `HardLine`s that force a break).
+        Doc::Nest(_, inner) | Doc::ElidableParen { inner } => has_hard_break(inner),
     }
 }
 
@@ -1490,10 +1488,10 @@ fn is_block_like(doc: &Doc) -> bool {
 /// statement block (`({ … })`) are NOT glue-shaped.
 fn is_glue_shape(doc: &Doc) -> bool {
     match doc {
-        Doc::CallArgs { .. } => true,
-        // A struct literal (`Name { … }`) is a brace-delimited construct; `rustfmt`
-        // glues a wrapper's head onto its `Name {` just like a call's `(`.
-        Doc::StructLit { .. } => true,
+        // A call/ctor/macro/tuple/list glues onto its own delimiters, and a struct
+        // literal (`Name { … }`) is a brace-delimited construct `rustfmt` glues a
+        // wrapper's head onto just like a call's `(`.
+        Doc::CallArgs { .. } | Doc::StructLit { .. } => true,
         Doc::Group(inner) => is_glue_shape(inner),
         Doc::Concat(parts) => match parts.first() {
             // A `move |…| -> R ` closure head followed by its braced body — a

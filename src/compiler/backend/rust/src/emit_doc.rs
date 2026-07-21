@@ -636,52 +636,50 @@ fn typed_let_prefix(typed: &str) -> Doc {
 /// `+` bounds are not split.
 fn parse_type_bound(typed: &str) -> Option<Doc> {
     let open = typed.find('<')?;
-    if !typed.ends_with('>') {
-        return None;
-    }
-    let ptr = &typed[..=open];
-    let inner = &typed[open + 1..typed.len() - 1];
-    // Split `inner` on ` + ` at bracket depth 0 (relative to `inner`).
+    let ptr = typed.get(..=open)?;
+    // `Ptr<…>` requires the matching `>`; the inner is the span between them.
+    let inner = typed.strip_suffix('>')?.get(open + 1..)?;
+
+    // Split `inner` on a top-level ` + ` — a `+` flanked by spaces at angle/paren/
+    // bracket depth 0 — so a nested generic's own `+` bounds are not split. A `>`
+    // that follows `-` is the `->` return arrow, NOT a bracket close. Each `Doc::Text`
+    // segment is trimmed of its flanking spaces.
+    let bytes = inner.as_bytes();
     let mut segments: Vec<&str> = Vec::new();
     let mut depth: i32 = 0;
     let mut seg_start = 0usize;
-    let bytes = inner.as_bytes();
-    let mut i = 0usize;
-    while i < bytes.len() {
-        match bytes[i] {
+    for (i, &b) in bytes.iter().enumerate() {
+        let prev = i.checked_sub(1).and_then(|j| bytes.get(j)).copied();
+        let next = bytes.get(i + 1).copied();
+        match b {
             b'<' | b'(' | b'[' => depth += 1,
-            // A `>` closes a bracket EXCEPT the `>` of a `->` return arrow, which is
-            // not a delimiter — skipping it keeps the return type's `+` bounds at the
-            // outer depth so the top-level marker list splits correctly.
-            b'>' if i >= 1 && bytes[i - 1] == b'-' => {}
+            b'>' if prev == Some(b'-') => {}
             b')' | b']' | b'>' => depth -= 1,
-            b'+' if depth == 0
-                && i >= 1
-                && bytes[i - 1] == b' '
-                && i + 1 < bytes.len()
-                && bytes[i + 1] == b' ' =>
-            {
-                // A top-level ` + `: the segment ends at the space before `+`.
-                segments.push(inner[seg_start..i - 1].trim());
+            b'+' if depth == 0 && prev == Some(b' ') && next == Some(b' ') => {
+                if let Some(seg) = inner.get(seg_start..i.saturating_sub(1)) {
+                    segments.push(seg.trim());
+                }
                 seg_start = i + 2;
             }
             _ => {}
         }
-        i += 1;
     }
-    segments.push(inner[seg_start..].trim());
-    // A breakable bound needs at least one `+ Trait` marker after the head.
-    if segments.len() < 2 {
+    if let Some(seg) = inner.get(seg_start..) {
+        segments.push(seg.trim());
+    }
+
+    // A breakable bound needs a head plus at least one `+ Trait` marker.
+    let (head, markers) = segments.split_first()?;
+    if markers.is_empty() {
         return None;
     }
-    let head = Doc::owned(segments[0].to_owned());
-    let traits = segments[1..]
+    let traits = markers
         .iter()
         .map(|s| Doc::owned((*s).to_owned()))
         .collect();
     Some(Doc::type_bound(
-        Doc::owned(format!("{ptr}")),
-        head,
+        Doc::owned(ptr.to_owned()),
+        Doc::owned((*head).to_owned()),
         traits,
         Doc::text(">"),
     ))
