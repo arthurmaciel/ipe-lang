@@ -214,6 +214,26 @@ pub enum Doc {
         /// breaks without one.
         trailing_comma: bool,
     },
+    /// A struct literal `Name { f0: v0, f1: v1 }`, laid out with `rustfmt`'s
+    /// `struct_lit_width` (default 18) rule. Unlike a [`Doc::CallArgs`] (gated by
+    /// `fn_call_width` = 60), a struct literal stays on one line ONLY when its FIELD
+    /// TEXT — the span between the braces, trimmed of the hugging spaces — fits 18
+    /// columns AND the whole line fits `max_width`. Otherwise it breaks one field
+    /// per line with a trailing comma, `close` dedented back to `open`'s column.
+    ///
+    /// Flat form hugs the braces WITH a space (`Name { a: 1, b: 2 }`); the break
+    /// decision is independent of any enclosing group (like [`Doc::CallArgs`]), so
+    /// a struct literal nested in a broken outer construct re-tests its own field
+    /// width. SEAL accounting matches [`Doc::CallArgs`]: `open`, each `field: value`
+    /// joined by `, `, and `close` are leaves; the trailing comma is SEAL-invisible.
+    StructLit {
+        /// The `Name {` opening (the struct name and the brace).
+        open: Box<Self>,
+        /// The `field: value` documents, in source order.
+        fields: Vec<Self>,
+        /// The closing `}`.
+        close: Box<Self>,
+    },
 }
 
 /// One operand of a [`Doc::Chain`], with the operator that precedes it (if any).
@@ -295,6 +315,16 @@ impl Doc {
         }
     }
 
+    /// A struct literal laid out with `rustfmt`'s `struct_lit_width` rule.
+    /// See [`Doc::StructLit`].
+    pub fn struct_lit(open: Self, fields: Vec<Self>, close: Self) -> Self {
+        Self::StructLit {
+            open: Box::new(open),
+            fields,
+            close: Box::new(close),
+        }
+    }
+
     /// Append every text leaf of this document, in order, to `out`. This is the
     /// SEAL oracle: `concat(leaves(doc))` whitespace-normalizes to the legacy
     /// emitter's string. Break candidates ([`Doc::Line`] / [`Doc::HardLine`])
@@ -363,6 +393,25 @@ impl Doc {
                     }
                     e.collect_leaves(out);
                 }
+                close.collect_leaves(out);
+            }
+            // Same accounting as `CallArgs`: `open`, each field joined by `, `, and
+            // `close` are leaves; the trailing comma is SEAL-invisible. A space pads
+            // the braces so `Name { a: 1 }` normalizes with the hugging spaces.
+            Self::StructLit {
+                open,
+                fields,
+                close,
+            } => {
+                open.collect_leaves(out);
+                out.push(' ');
+                for (i, e) in fields.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    e.collect_leaves(out);
+                }
+                out.push(' ');
                 close.collect_leaves(out);
             }
         }

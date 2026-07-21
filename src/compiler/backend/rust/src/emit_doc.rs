@@ -761,7 +761,7 @@ fn build_if(
 /// `close`) is a zero-width [`Doc::Softline`]: a bracketed list is `(a, b)` /
 /// `[a, b]` / `f(a, b)` FLAT — no space hugging the delimiter. For a brace-
 /// delimited struct literal, whose flat form hugs the braces WITH a space
-/// (`Name { a: 1 }`), use [`delimited_spaced`].
+/// (`Name { a: 1 }`) and obeys `struct_lit_width`, use [`Doc::struct_lit`].
 fn delimited(open: Doc, elems: Vec<Doc>, close: Doc) -> Doc {
     Doc::call_args(open, elems, close, true)
 }
@@ -772,50 +772,6 @@ fn delimited(open: Doc, elems: Vec<Doc>, close: Doc) -> Doc {
 /// the trailing comma. Used for the `++` append lowering `format!("{}{}", l, r)`.
 fn delimited_no_trailing_comma(open: Doc, elems: Vec<Doc>, close: Doc) -> Doc {
     Doc::call_args(open, elems, close, false)
-}
-
-/// Like [`delimited`], but the inner boundary is a soft [`Doc::Line`] (a SPACE
-/// when flat, a newline+indent when broken). This is the struct-literal shape:
-/// `Name { a: 1, b: 2 }` flat (spaces inside the braces), and one field per line
-/// with a trailing comma when broken — exactly `rustfmt`'s struct-literal layout.
-fn delimited_spaced(open: Doc, elems: Vec<Doc>, close: Doc) -> Doc {
-    delimited_with(open, elems, close, || Doc::Line, true)
-}
-
-/// The shared delimited-group core. `boundary` supplies the break candidate that
-/// hugs the open and close delimiters — [`Doc::Softline`] for bracketed lists
-/// (no flat space), [`Doc::Line`] for brace-delimited struct literals (a flat
-/// space). The inter-element separator is always a real `,` then a soft `Line`;
-/// the trailing comma is always a SEAL-invisible [`Doc::IfBroken`].
-fn delimited_with(
-    open: Doc,
-    elems: Vec<Doc>,
-    close: Doc,
-    boundary: impl Fn() -> Doc,
-    trailing_comma: bool,
-) -> Doc {
-    let mut inner = vec![open];
-    let mut nested = Vec::with_capacity(elems.len() * 2);
-    let last = elems.len().saturating_sub(1);
-    for (i, e) in elems.into_iter().enumerate() {
-        if i == 0 {
-            nested.push(boundary());
-        } else {
-            nested.push(Doc::text(","));
-            nested.push(Doc::Line);
-        }
-        nested.push(e);
-        if i == last && trailing_comma {
-            // Trailing comma only when the group breaks; absent (and SEAL-
-            // invisible) when flat. Suppressed entirely for a macro argument list
-            // (`trailing_comma == false`), which `rustfmt` breaks without one.
-            nested.push(Doc::if_broken(","));
-        }
-    }
-    inner.push(Doc::nest(4, Doc::concat(nested)));
-    inner.push(boundary());
-    inner.push(close);
-    Doc::group(Doc::concat(inner))
 }
 
 /// Build the arg docs for a positional argument list, each at the child depth the
@@ -1147,7 +1103,7 @@ fn build_record(
         // record alias; the string emitter defaults it, so carry the same leaf.
         field_docs.push(Doc::text("cookies: Vec::new()"));
     }
-    Ok(delimited_spaced(
+    Ok(Doc::struct_lit(
         Doc::owned(format!("{struct_name} {{")),
         field_docs,
         Doc::text("}"),

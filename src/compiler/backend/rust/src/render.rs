@@ -223,7 +223,102 @@ fn render_at(
                 out,
             );
         }
+        Doc::StructLit {
+            open,
+            fields,
+            close,
+        } => {
+            render_struct_lit(open, fields, close, cfg, indent, col, out);
+        }
     }
+}
+
+/// Render a [`Doc::StructLit`] with `rustfmt`'s `struct_lit_width` rule: the flat
+/// `Name { a: 1, b: 2 }` (spaces hugging the braces) when the FIELD TEXT fits 18
+/// columns and the whole line fits `max_width`; otherwise one field per line with a
+/// trailing comma, `close` dedented back to `open`'s column. The break decision is
+/// independent of any enclosing group (`rustfmt` re-tests the field width on the
+/// struct's own line), like [`Doc::CallArgs`].
+#[allow(
+    clippy::too_many_arguments,
+    reason = "renderer threads open/close/col/indent"
+)]
+fn render_struct_lit(
+    open: &Doc,
+    fields: &[Doc],
+    close: &Doc,
+    cfg: RenderConfig,
+    indent: usize,
+    col: usize,
+    out: &mut String,
+) {
+    let start_col = eff_col(out, col);
+    // The `struct_lit_width` gate applies even when the enclosing group chose flat:
+    // a struct literal whose field text exceeds 18 columns breaks and forces its
+    // enclosing construct broken (like a `HardLine`), so `flat` alone does not force
+    // it inline — `struct_lit_flat_fits` is the sole authority.
+    if struct_lit_flat_fits(open, fields, close, cfg, start_col, indent) {
+        // Flat: `Name { a: 1, b: 2 }` — a space hugs each brace.
+        render_at(open, cfg.no_reserve(), indent, start_col, true, out);
+        out.push(' ');
+        render_flat_elems(fields, cfg, indent, out);
+        out.push(' ');
+        let c = current_col(out);
+        render_at(close, cfg, indent, c, true, out);
+        return;
+    }
+    // Broken: one field per line with a trailing comma — the same one-per-line
+    // layout as a delimited list.
+    render_one_per_line(open, fields, close, true, cfg, indent, start_col, out);
+}
+
+/// `rustfmt`'s `struct_lit_width` (default 18): the maximum width of a struct
+/// literal's FIELD TEXT — the span between the braces, trimmed of the hugging
+/// spaces — that stays on one line. A struct literal whose field text exceeds this
+/// breaks one field per line even when the whole line still fits `max_width`.
+const STRUCT_LIT_WIDTH: usize = 18;
+
+/// Whether a struct literal `Name { fields }` may lay out flat from `start_col`:
+/// genuinely single-line, the whole line (with the hugging spaces and the trailing
+/// `reserve`) within `max_width`, AND the field text within `struct_lit_width`.
+fn struct_lit_flat_fits(
+    open: &Doc,
+    fields: &[Doc],
+    close: &Doc,
+    cfg: RenderConfig,
+    start_col: usize,
+    indent: usize,
+) -> bool {
+    let mut scratch = String::new();
+    render_at(
+        open,
+        cfg.no_reserve(),
+        indent,
+        start_col,
+        true,
+        &mut scratch,
+    );
+    let open_end = current_col(&scratch);
+    scratch.push(' ');
+    render_flat_elems(fields, cfg, indent, &mut scratch);
+    let fields_end = current_col(&scratch);
+    scratch.push(' ');
+    render_at(
+        close,
+        cfg.no_reserve(),
+        indent,
+        fields_end + 1,
+        true,
+        &mut scratch,
+    );
+    if scratch.contains('\n') {
+        return false;
+    }
+    if start_col + scratch.len() > cfg.margin() {
+        return false;
+    }
+    // The field text is the span between the braces, excluding the hugging spaces.
+    fields_end.saturating_sub(open_end) <= STRUCT_LIT_WIDTH
 }
 
 /// Render a [`Doc::BraceBody`]: the body inline (no braces) when it fits flat here,
@@ -413,7 +508,10 @@ fn has_hard_break(doc: &Doc) -> bool {
         // A `CallArgs` decides its own layout independently (like `Group`), so it
         // hides its own breaks — a combinable call inside another does not force
         // the outer to break its whole list; the combining rule glues instead.
-        | Doc::CallArgs { .. } => false,
+        | Doc::CallArgs { .. }
+        // A `StructLit` decides its own layout independently too (its own
+        // `struct_lit_width` re-test), so it hides its breaks like `CallArgs`.
+        | Doc::StructLit { .. } => false,
         Doc::Concat(docs) => docs.iter().any(has_hard_break),
         Doc::Nest(_, inner) => has_hard_break(inner),
     }
@@ -986,14 +1084,26 @@ fn render_forced_break(
                 out,
             );
         }
-        // A wrapper like `Box::new(<CallArgs>)`: force-break the inner construct. The
-        // leading wrapper text (`Box::new(`) shrinks the recursive `Shape` budget one
-        // step before the inner combine, exactly like a `CallArgs` open.
+        // A struct literal `Name { … }` forced broken: one field per line. Its own
+        // `struct_lit_width` re-test does not apply here (the combine forced it
+        // multiline), so break its fields directly.
+        Doc::StructLit {
+            open,
+            fields,
+            close,
+        } => {
+            let start_col = eff_col(out, col);
+            render_one_per_line(open, fields, close, true, cfg, indent, start_col, out);
+        }
+        // A wrapper like `Box::new(<CallArgs>)` / `Box::new(<StructLit>)`:
+        // force-break the inner construct. The leading wrapper text (`Box::new(`)
+        // shrinks the recursive `Shape` budget one step before the inner combine,
+        // exactly like a `CallArgs` open.
         Doc::Concat(parts) => {
             let mut inner_budget = budget;
             for p in parts {
                 let c = eff_col(out, col);
-                if let Doc::CallArgs { .. } = p {
+                if matches!(p, Doc::CallArgs { .. } | Doc::StructLit { .. }) {
                     render_forced_break(p, combine_base, inner_budget, cfg, indent, c, out);
                 } else {
                     if let Doc::Text(_) = p {
@@ -1017,7 +1127,7 @@ fn render_forced_break(
 /// has no combining head (returns an empty leaf, width 0).
 fn last_head(doc: &Doc) -> &Doc {
     match doc {
-        Doc::CallArgs { open, .. } => open,
+        Doc::CallArgs { open, .. } | Doc::StructLit { open, .. } => open,
         Doc::Concat(parts) => match parts.first() {
             Some(t @ Doc::Text(h)) if h.ends_with('(') && !h.contains('{') => t,
             _ => &EMPTY_LEAF,
@@ -1053,9 +1163,9 @@ fn shrink_budget(parent: usize, open: &Doc) -> usize {
 fn is_glue_shape(doc: &Doc) -> bool {
     match doc {
         Doc::CallArgs { .. } => true,
-        // A struct literal (`Name { … }`) is a `Group`-wrapped brace-delimited
-        // construct; `rustfmt` glues a wrapper's head onto its `Name {` just like a
-        // call's `(`. See through the group to its `Concat` body.
+        // A struct literal (`Name { … }`) is a brace-delimited construct; `rustfmt`
+        // glues a wrapper's head onto its `Name {` just like a call's `(`.
+        Doc::StructLit { .. } => true,
         Doc::Group(inner) => is_glue_shape(inner),
         Doc::Concat(parts) => match parts.first() {
             // A brace block `{ … }` (closure body / statement block) or a struct
@@ -1091,8 +1201,9 @@ fn is_delimited_expr(doc: &Doc) -> bool {
             }
             _ => false,
         },
-        // A struct literal (`Name { … }`) is a `Group`-wrapped brace construct — a
-        // delimited expr for the overflow rule; see through the group.
+        // A struct literal (`Name { … }`) is a brace construct — a delimited expr
+        // for the overflow rule.
+        Doc::StructLit { .. } => true,
         Doc::Group(inner) => is_delimited_expr(inner),
         Doc::Concat(parts) => match parts.first() {
             // A brace block `{ … }` or a struct literal `Name { … }` — a
