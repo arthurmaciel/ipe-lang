@@ -51,10 +51,12 @@ banner() {
 # user's shell later sources (executes). Parse, don't validate: reject any path
 # carrying shell metacharacters here, ONCE, so every downstream sink can treat
 # it as a safe literal. Only ordinary path characters are allowed; a quote,
-# backtick, `$`, backslash, or whitespace could inject shell code into a sourced
-# file, so we refuse rather than try to quote it perfectly at each use.
+# backtick, `$`, or whitespace could inject shell code into a sourced file, so we
+# refuse rather than try to quote it perfectly at each use. Backslash and the
+# drive-letter colon ARE allowed — Windows paths (`D:\...`) need them, and both
+# are inert inside the single-quoted `export PATH='…'` the env file emits.
 case "$INSTALL_DIR" in
-  *[!A-Za-z0-9._/+@:-]*)
+  *[!A-Za-z0-9._/+@:\\-]*)
     die "The install directory contains unsupported characters: $INSTALL_DIR" ;;
   '') die "The install directory is empty." ;;
 esac
