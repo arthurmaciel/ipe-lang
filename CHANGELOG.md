@@ -10,6 +10,18 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.7](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.6...ipe-v0.1.7) (2026-07-21)
+
+
+### Features
+
+* **cli:** aligned --help column + consent-based installer PATH setup ([#50](https://github.com/arthurmaciel/ipe-lang/issues/50)) ([fb98598](https://github.com/arthurmaciel/ipe-lang/commit/fb98598988dc6fd877ea5fc9e329c22458c460af))
+
+
+### Bug Fixes
+
+* **ci:** install wry/tao Linux link deps in e2e job to clear SEAL breach ([#51](https://github.com/arthurmaciel/ipe-lang/issues/51)) ([4378a36](https://github.com/arthurmaciel/ipe-lang/commit/4378a36a54940fc223eb2200fa3a8854f3a071c3))
+
 ## [0.1.6](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.5...ipe-v0.1.6) (2026-07-21)
 
 
