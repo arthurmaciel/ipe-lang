@@ -1,6 +1,8 @@
 # Row polymorphism (337) — general user-facing rows + first-class record accessors
 
-Status: design + implementation plan (this lane lands the accessor increment).
+Status: design + implementation plan. Increment 1 (accessor) landed; Increment 2
+front half (parser + AST + canon + `from_canon` + type layer + `IPE-L0131`
+lowering gate) landed; Increment 2 backend monomorphisation deferred.
 
 ## Goal (mirror Elm)
 
@@ -115,27 +117,50 @@ unmarked.
   emitted Rust `cargo build`s (SEAL).
 - Wire into `golden_row_poly_records.rs` matrix (new accept row).
 
-### Step 3 — annotation parser + AST (follow-up, may not land this lane)
+### Step 3 — annotation parser + AST (LANDED)
 
 - `TypeAnnotation::TRecordOpen(row_var: Symbol, fields)` arm;
-  `parse_record_type` reads an optional `<lowerVar> |` prefix, mirroring
-  Sky's `Ipe.Parse.Type` open-record arm (~20 lines).
+  `parse_record_type` reads an optional `<lowerVar> |` prefix (two-token
+  `{ <lowerVar> | … }` lookahead), mirroring Sky's `Sky.Parse.Type`
+  open-record arm.
 - `canon::Type::RecordOpen(Symbol, Vec<(Symbol, Type)>)` + canonicaliser
-  lowering.
-- `from_canon` produces `RowTail::Open(rowvar.as_raw())` for the open arm.
-  Flip `row_poly_annotation_gap` only when the *whole chain* (incl. backend
-  monomorphisation) lands — not before.
+  lowering (the row var is quantified like a field type variable).
+- `from_canon` produces `RowTail::Open(row_var.as_raw())` for the open arm.
+  `instantiate_in` already freshens the open tail per use site, so the
+  annotation type-checks with the reference's open-row semantics.
+- `row_poly_annotation_gap` now flips from a PARSE reject (`IPE-P0001`) to a
+  LOWERING reject (`IPE-L0131`): the annotation parses and type-checks, and is
+  failed closed at the layer that cannot yet emit. This is NOT the full flip —
+  the program still does not build. The whole-chain flip (accepting + building)
+  waits on Step 4.
 
-### Step 4 — backend per-shape monomorphisation (follow-up, gated)
+### Step 4 — backend per-shape monomorphisation (follow-up, DEFERRED)
+
+Gated at lowering by `IPE-L0131` (`Feature::RowPolyRecordAnnotation`), raised by
+`canon_type_has_open_row` at the signature boundary in `ipe_lower::lower`. The
+remaining work:
 
 - Emit one specialised callee copy per distinct concrete record shape observed at
-  call sites; each resolves through the A7 registry. Amend ADR-0018. Only then
-  flip `row_poly_two_supersets_neg`.
+  call sites; each resolves through the A7 registry. Today `split_typed_sig`
+  lowers each annotated parameter from the ANNOTATION (`ir_type_from_canon`),
+  which for an open row would key the struct registry on the annotation's SUBSET
+  field set and miss the concrete superset — the A7 exact-key miss. The pass must
+  instead lower a row-poly parameter to the CONCRETE solved shape at each call
+  site and clone the callee per distinct shape.
+- Amend ADR-0018 (add mechanism (b): per-record-shape callee monomorphisation)
+  and only THEN flip `row_poly_two_supersets_neg` + drop the `IPE-L0131` gate.
+- Until then the two rejection tripwires keep rejecting and no ADR amendment is
+  made.
 
 ## Guards
 
 - SEAL: accessor path emits a concrete getter (proven-shape struct), so
-  exit-0 ⇒ cargo build.
-- Golden suite unchanged except the deliberately-added accessor fixture.
-- ADR-0018 tripwires (`row_poly_two_supersets_neg`, `row_poly_closed_superset_neg`,
-  `row_poly_annotation_gap`) all keep rejecting this lane.
+  exit-0 ⇒ cargo build. The open annotation never reaches emit — it fails closed
+  at lowering (`IPE-L0131`), so no unbuildable Rust is produced.
+- Golden suite unchanged except the accessor fixture (Increment 1) and the
+  `row_poly_annotation_gap` fixture's flip from `IPE-P0001` to `IPE-L0131`
+  (Increment 2 front half).
+- ADR-0018 tripwires (`row_poly_two_supersets_neg`, `row_poly_closed_superset_neg`)
+  keep rejecting as `IPE-T0001`; `row_poly_annotation_gap` now rejects at
+  lowering (`IPE-L0131`) instead of parse. No tripwire flips to ACCEPT and no
+  ADR-0018 amendment is made — that waits on Step 4's backend monomorphisation.
