@@ -1731,7 +1731,7 @@ fn field_type_nonderivable(interner: &Interner, t: &canon::Type) -> bool {
                 || args.iter().any(|a| field_type_nonderivable(interner, a))
         }
         canon::Type::Tuple(elems) => elems.iter().any(|e| field_type_nonderivable(interner, e)),
-        canon::Type::Record(fields) => fields
+        canon::Type::Record(fields) | canon::Type::RecordOpen(_, fields) => fields
             .iter()
             .any(|(_, f)| field_type_nonderivable(interner, f)),
         canon::Type::Var(_) | canon::Type::Unit => false,
@@ -3399,6 +3399,33 @@ fn canonicalise_type(
                 ));
             }
             Ok(canon::Type::Record(can_fields))
+        }
+        src::TypeAnnotation::TRecordOpen(row_var, fields) => {
+            // The row variable names the open tail; like any unbound annotation
+            // variable it is quantified by the binding, so it is collected into
+            // `free_vars` (unless an enclosing alias argument already bound it,
+            // in which case the substitution resolves it). Each constrained
+            // field type is canonicalised exactly as in the closed `TRecord`
+            // arm above.
+            if !subst.contains_key(row_var) {
+                free_vars.insert(*row_var);
+            }
+            let mut can_fields = Vec::with_capacity(fields.len());
+            for (name, fty) in fields {
+                can_fields.push((
+                    *name,
+                    canonicalise_type(
+                        fty,
+                        ctx,
+                        subst,
+                        free_vars,
+                        visited,
+                        budget,
+                        depth.saturating_add(1),
+                    )?,
+                ));
+            }
+            Ok(canon::Type::RecordOpen(*row_var, can_fields))
         }
         src::TypeAnnotation::TType(qualifier, segments, args) => {
             let name = segments.last().copied().unwrap_or_else(|| {

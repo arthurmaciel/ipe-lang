@@ -803,6 +803,14 @@ const fn feature_label(f: Feature) -> &'static str {
              `.clone()` may not compile; thread the handle linearly through one \
              call chain and read it once at the end [feature: foreign-handle-reuse]"
         }
+        Feature::RowPolyRecordAnnotation => {
+            "a row-polymorphic record annotation `{ r | f : T }` is not yet \
+             emittable — the backend emits one struct per exact field set and \
+             cannot yet emit a callee once per record shape at its call sites; \
+             use a closed record annotation, or drop the annotation and let the \
+             parameter's shape be inferred at its call site \
+             [feature: row-poly-record-annotation]"
+        }
     }
 }
 
