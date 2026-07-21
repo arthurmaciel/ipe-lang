@@ -9,8 +9,109 @@ use ipe_diagnostics::{DResult, Diagnostic};
 use ipe_intern::Symbol;
 use ipe_ir::{EnumDef, IrType, UiCtor, UiPlain, ir_type_is_derivable};
 
+use crate::doc::Doc;
 use crate::naming::mangle_reserved;
+use crate::render::{RenderConfig, render_seeded};
 use crate::{EmitCtx, RecordStruct};
+
+/// Render a `format!(<fmt>, <arg>, …)` `IpeStringify` body natively, laid out
+/// exactly as `rustfmt --edition 2024 --style-edition 2024` would — the record
+/// `ipe_show` body and the payload-variant enum arm.
+///
+/// `rustfmt` keeps the whole call on one line when its argument text (the span
+/// between `format!(` and the closing `)`) fits `fn_call_width` (60) AND the full
+/// line fits `max_width` (100); otherwise it breaks one argument per line
+/// (WITHOUT a trailing comma, as it does for every macro call), each argument at
+/// one block-indent step past `block_indent`, the `)` dedented back to
+/// `block_indent`. This is precisely a [`Doc::CallArgs`] with
+/// `trailing_comma == false`, so the shared renderer reproduces the decision by
+/// construction.
+///
+/// `open_col` is the column the `format!` token lands on — used only for the
+/// single-line fit test — and `block_indent` is the indent a broken line nests
+/// from: for the record body both are 8 (two block-indent levels deep in
+/// `ipe_show`); for an enum arm `open_col` is the column after the `… => ` arm
+/// head while `block_indent` is the arm's own indent (12). The returned string
+/// carries no leading spaces for `open_col` — the caller has already written the
+/// prefix on that line — and every broken line carries its own absolute indent.
+fn render_stringify_format(
+    fmt_literal: &str,
+    args: &[String],
+    open_col: usize,
+    block_indent: usize,
+) -> String {
+    let elems: Vec<Doc> = std::iter::once(Doc::owned(fmt_literal.to_owned()))
+        .chain(args.iter().map(|a| Doc::owned(a.clone())))
+        .collect();
+    let call = Doc::call_args(
+        Doc::text("format!("),
+        elems,
+        Doc::text(")"),
+        // A macro argument list breaks without a trailing comma.
+        false,
+    );
+    render_seeded(&call, RenderConfig::default(), block_indent, open_col)
+}
+
+/// `rustfmt`'s `max_width` (default 100): the widest line the formatter leaves
+/// unbroken.
+const MAX_WIDTH: usize = 100;
+
+/// `rustfmt`'s `fn_call_width` (default 60): the widest a call's argument text may
+/// be and still lay out flat between its delimiters.
+const FN_CALL_WIDTH: usize = 60;
+
+/// Render a payload-variant enum arm's `Pat => format!(…)` tail exactly as
+/// `rustfmt` lays it out, returning the whole arm line(s) including the arm head
+/// and the trailing `,`.
+///
+/// `rustfmt` decides in three tiers, in order:
+///
+///   * INLINE — the whole `arm_head format!(…),` fits `max_width` and the
+///     argument text fits `fn_call_width`: one line.
+///   * BLOCK-WRAP — the call's argument text fits `fn_call_width` (so the call
+///     itself does not want to break its delimiters) but the inline arm overflows
+///     `max_width`: `rustfmt` wraps the body in a synthesized brace block —
+///     `Pat => {\n    format!(…)\n}` (no trailing comma) — with the `format!` on
+///     its own line at the arm indent + 4, where it fits.
+///   * DELIMITER-BREAK — the argument text itself exceeds `fn_call_width`: the
+///     `format!` breaks one argument per line in place after the `=> `, the `)`
+///     dedented to the arm indent, and the arm keeps its trailing `,`.
+///
+/// `arm_head` is the `            {Enum}::{Variant}(binders) => ` prefix at block
+/// indent 12; `fmt_literal` and `args` are the `format!` operands.
+fn render_stringify_enum_arm(arm_head: &str, fmt_literal: &str, args: &[String]) -> String {
+    const ARM_INDENT: usize = 12;
+    let open_col = arm_head.chars().count();
+
+    // The argument text between `format!(` and `)` — `rustfmt`'s `fn_call_width`
+    // span — and the full inline arm line width.
+    let inline_args = args.join(", ");
+    let args_text = if args.is_empty() {
+        fmt_literal.to_owned()
+    } else {
+        format!("{fmt_literal}, {inline_args}")
+    };
+    let args_width = args_text.chars().count();
+    let inline_call = format!("format!({args_text})");
+    let inline_arm_width = open_col + inline_call.chars().count() + 1; // +1 for the `,`
+
+    if args_width <= FN_CALL_WIDTH && inline_arm_width <= MAX_WIDTH {
+        // INLINE.
+        format!("{arm_head}{inline_call},")
+    } else if args_width <= FN_CALL_WIDTH {
+        // BLOCK-WRAP: the call fits `fn_call_width` but the inline arm overflows,
+        // so `rustfmt` brace-wraps the body. The `format!` lands at arm indent + 4.
+        let body_indent = " ".repeat(ARM_INDENT + 4);
+        let close_indent = " ".repeat(ARM_INDENT);
+        format!("{arm_head}{{\n{body_indent}{inline_call}\n{close_indent}}}")
+    } else {
+        // DELIMITER-BREAK: the argument text exceeds `fn_call_width`, so the
+        // `format!` breaks one argument per line after `=> `; the arm keeps `,`.
+        let call = render_stringify_format(fmt_literal, args, open_col, ARM_INDENT);
+        format!("{arm_head}{call},")
+    }
+}
 
 /// The generic-type-parameter scope in effect while emitting one function's
 /// signature and body.
@@ -523,10 +624,15 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
             let placeholders = vec!["{}"; variant.fields.len()].join(" ");
             // Go `%v`-style: `Vname <f0> <f1> …` (variant name, then space-
             // separated fields). Matches the Go-reference `ipeStringifyEnumImpl`.
-            show_arms.push(format!(
-                "            {name}::{vn}({}) => format!(\"{display} {placeholders}\", {}),",
-                binders.join(", "),
-                show_args.join(", ")
+            // The arm head `            {name}::{vn}(binders) => ` sits at block
+            // indent 12; `render_stringify_enum_arm` lays the `format!` tail out in
+            // `rustfmt`'s inline / block-wrap / delimiter-break tiers.
+            let arm_head = format!("            {name}::{vn}({}) => ", binders.join(", "));
+            let fmt_literal = format!("\"{display} {placeholders}\"");
+            show_arms.push(render_stringify_enum_arm(
+                &arm_head,
+                &fmt_literal,
+                &show_args,
             ));
         }
     }
@@ -687,12 +793,17 @@ pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> 
 
     // Go `%v` of a struct: `{v0 v1 ...}` — N space-separated `{}` placeholders
     // wrapped in literal braces. With zero fields the rendering is just `{}`.
+    //
+    // The `format!` body is laid out natively (not hand-inlined then handed to
+    // `rustfmt`): it lands at column 8 — `fn ipe_show`'s body, two block-indent
+    // levels deep — and breaks one argument per line there when its argument text
+    // exceeds `fn_call_width`, matching `rustfmt` by construction.
     let body = if rec.fields.is_empty() {
         "\"{}\".to_string()".to_owned()
     } else {
         let placeholders = vec!["{}"; rec.fields.len()].join(" ");
-        let fmt = format!("{{{{{placeholders}}}}}");
-        format!("format!(\"{fmt}\", {})", show_args.join(", "))
+        let fmt_literal = format!("\"{{{{{placeholders}}}}}\"");
+        render_stringify_format(&fmt_literal, &show_args, 8, 8)
     };
 
     // seal: only a fully-derivable record takes the unconditional

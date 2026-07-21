@@ -97,6 +97,20 @@ pub fn render(doc: &Doc, cfg: RenderConfig) -> String {
     out
 }
 
+/// Render `doc` as if its first character lands at column `col` with the given
+/// block `indent` for any line it breaks onto. Used to lay out a construct that
+/// is spliced after a fixed prefix already occupying the start of its line — the
+/// `IpeStringify` `format!` body, which begins after `        ` (record) or after
+/// the `… => ` arm head (enum), and whose broken argument lines nest from the
+/// enclosing block indent, not from `col`. The returned string carries no leading
+/// prefix for `col` (the caller already wrote it); every broken line carries its
+/// own absolute indentation.
+pub fn render_seeded(doc: &Doc, cfg: RenderConfig, indent: usize, col: usize) -> String {
+    let mut out = String::new();
+    render_at(doc, cfg, indent, col, false, &mut out);
+    out
+}
+
 /// The current column after the last newline in `out`, i.e. how many characters
 /// sit on the line so far. This is the live cursor the fit tests measure.
 fn current_col(out: &str) -> usize {
