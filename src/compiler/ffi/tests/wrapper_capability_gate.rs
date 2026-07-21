@@ -90,3 +90,17 @@ fn a_clock_wrapper_whose_declaration_matches_is_admitted() {
         "a clock-only wrapper is containable and must build: {verdict:?}"
     );
 }
+
+#[test]
+fn a_wrapper_with_a_non_std_dependency_is_refused_even_if_its_source_looks_pure() {
+    // A capability can hide entirely in a dependency (`reqwest::get` is Network
+    // the wrapper's own `.rs` never names as a std path). A non-std dependency is
+    // therefore opaque and refuses — the `non_std_deps` slice is the whole
+    // signal, since the source scan alone would propose nothing here.
+    let scan = scan_sources([("src/lib.rs", PURE_WRAPPER)]);
+    let verdict = reconcile(&BTreeSet::new(), &scan, &["reqwest".to_owned()]);
+    assert!(
+        matches!(&verdict, Verdict::Refuse { .. }),
+        "a wrapper with a non-std dependency must be refused: {verdict:?}"
+    );
+}

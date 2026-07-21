@@ -1198,10 +1198,13 @@ fn collect_wrapper_rust_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), 
 /// scan (a dependency's capabilities live in source the scan never opens), so
 /// each name becomes a refuse trigger.
 ///
-/// This is a deliberately conservative line-scan of the `[dependencies]` /
-/// `[dependencies.<name>]` / `[build-dependencies]` tables: it OVER-collects
-/// (a commented dependency or a dev-dependency name it mis-attributes only
-/// causes an over-refuse, never an under-refuse), which is the safe direction.
+/// This is a deliberately conservative line-scan of EVERY Cargo dependency-table
+/// form — `[dependencies]`, `[build-dependencies]`, `[target.*.dependencies]`,
+/// `[workspace.dependencies]`, and the `[….dependencies.<name>]` sub-table — via
+/// [`parse_cargo_dependency_names`]. It OVER-collects (the safe direction): an
+/// over-refused wrapper costs an author a narrowing, whereas a missed dep would
+/// admit an unconstrained capability. `dev-dependencies` are excluded (test/
+/// build-only, never shipped).
 ///
 /// # Errors
 /// [`CliError::Io`] on a read failure (an unreadable manifest is refused, not
@@ -1217,24 +1220,39 @@ fn wrapper_non_std_dependencies(wrapper_dir: &Path) -> Result<Vec<String>, CliEr
         path: manifest.clone(),
         source: e,
     })?;
+    Ok(parse_cargo_dependency_names(&text))
+}
+
+/// Extract every dependency name from a `Cargo.toml`'s text — the pure,
+/// unit-testable core of [`wrapper_non_std_dependencies`]. Over-collects (the
+/// safe direction): a name it flags that is not really a runtime dep only
+/// over-refuses a wrapper, whereas a missed name would admit an unconstrained
+/// capability.
+fn parse_cargo_dependency_names(text: &str) -> Vec<String> {
     let mut deps: BTreeSet<String> = BTreeSet::new();
     // Which dependency table (if any) we are currently inside.
     let mut in_deps_table = false;
     for raw in text.lines() {
         let line = raw.trim();
         if line.starts_with('[') {
-            // A `[dependencies]`, `[build-dependencies]`, or
-            // `[dependencies.<name>]` header opens a dep table; any other header
-            // closes it. `dev-dependencies` are build/test-only and never ship,
-            // so they are not a runtime capability surface.
+            // A dependency table opens `in_deps_table`; any other header closes
+            // it. The forms that ship a runtime dependency are matched by SUFFIX,
+            // not an exact allow-list, so every Cargo variant is caught:
+            //   [dependencies]                       -> `dependencies`
+            //   [build-dependencies]                 -> `build-dependencies`
+            //   [target.'cfg(unix)'.dependencies]    -> `….dependencies`
+            //   [target.<triple>.build-dependencies] -> `….build-dependencies`
+            //   [workspace.dependencies]             -> `….dependencies`
+            // and the single-name sub-table form `….dependencies.<name>` names
+            // the dep directly. Over-collection is the safe direction: an extra
+            // refused wrapper costs an author a narrowing, a missed dep would
+            // admit an unconstrained capability. `dev-dependencies` are
+            // build/test-only, never ship, and are deliberately NOT matched.
             let header = line.trim_start_matches('[').trim_end_matches(']');
-            if header == "dependencies" || header == "build-dependencies" {
+            if is_dependency_table_header(header) {
                 in_deps_table = true;
-            } else if let Some(name) = header
-                .strip_prefix("dependencies.")
-                .or_else(|| header.strip_prefix("build-dependencies."))
-            {
-                // A `[dependencies.foo]` sub-table names the dep directly.
+            } else if let Some(name) = dependency_subtable_name(header) {
+                // A `[….dependencies.foo]` sub-table names the dep directly.
                 deps.insert(name.trim().to_owned());
                 in_deps_table = false;
             } else {
@@ -1252,7 +1270,38 @@ fn wrapper_non_std_dependencies(wrapper_dir: &Path) -> Result<Vec<String>, CliEr
             }
         }
     }
-    Ok(deps.into_iter().collect())
+    deps.into_iter().collect()
+}
+
+/// Whether a TOML table header names a runtime/build dependency TABLE (one whose
+/// `name = …` entries are deps), covering the plain, `target.*`, and
+/// `workspace` forms — matched by suffix so no Cargo variant slips through.
+/// `dev-dependencies` (test/build-only, never shipped) is deliberately excluded.
+fn is_dependency_table_header(header: &str) -> bool {
+    // A plain-table header ends in `.dependencies` / `.build-dependencies`, OR is
+    // exactly one of those. A `dev-dependencies` header ends in
+    // `-dependencies` (no leading dot), so the `.`-anchored suffixes miss it,
+    // and the exact-match arm lists only the two shipped forms.
+    header == "dependencies"
+        || header == "build-dependencies"
+        || header.ends_with(".dependencies")
+        || header.ends_with(".build-dependencies")
+}
+
+/// The single dependency name a `[….dependencies.<name>]` /
+/// `[….build-dependencies.<name>]` sub-table header declares, if the header is
+/// that form. The `<name>` is the final dotted segment after a `.dependencies` /
+/// `.build-dependencies` component.
+fn dependency_subtable_name(header: &str) -> Option<&str> {
+    // Split on the LAST `.`: the tail is the candidate dep name, the head must be
+    // (or end with) a dependency-table header. A dep name carries no `.`, so the
+    // last segment is the whole name.
+    let (head, name) = header.rsplit_once('.')?;
+    if is_dependency_table_header(head) && !name.is_empty() {
+        Some(name)
+    } else {
+        None
+    }
 }
 
 /// Shared tail of `add` / `install`: inspect one crate + write its artifacts.
@@ -2323,6 +2372,60 @@ mod tests {
     fn manifest_without_a_wrapper_table_reports_none() {
         let text = "[rust.dependencies]\nsemver = \"1\"\n";
         assert!(rust_wrapper_from_manifest(text).is_none());
+    }
+
+    #[test]
+    fn wrapper_cargo_dep_scan_catches_every_dependency_table_form() {
+        // The guardian's fail-open case: a target-cfg / triple / workspace dep
+        // table must be scanned, or a network dep (`reqwest`) hides there and a
+        // Network-capable wrapper installs unconstrained.
+        let text = "\
+[package]
+name = \"w\"
+
+[dependencies]
+serde = \"1\"
+
+[build-dependencies]
+cc = \"1\"
+
+[target.'cfg(unix)'.dependencies]
+reqwest = \"0.12\"
+
+[target.x86_64-unknown-linux-gnu.dependencies]
+libc_dep = \"0.2\"
+
+[workspace.dependencies]
+tokio = \"1\"
+
+[dependencies.hyper]
+version = \"1\"
+";
+        let deps = parse_cargo_dependency_names(text);
+        for expected in ["serde", "cc", "reqwest", "libc_dep", "tokio", "hyper"] {
+            assert!(
+                deps.iter().any(|d| d == expected),
+                "dep `{expected}` must be caught: {deps:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn wrapper_cargo_dep_scan_excludes_dev_dependencies() {
+        // `dev-dependencies` are test/build-only and never ship, so they are not
+        // a runtime capability surface and must NOT force a refuse.
+        let text = "[package]\nname = \"w\"\n\n[dev-dependencies]\nproptest = \"1\"\n";
+        let deps = parse_cargo_dependency_names(text);
+        assert!(
+            !deps.iter().any(|d| d == "proptest"),
+            "dev-dependencies must not be flagged: {deps:?}"
+        );
+    }
+
+    #[test]
+    fn a_pure_wrapper_cargo_toml_has_no_deps() {
+        let text = "[package]\nname = \"w\"\nversion = \"0.1.0\"\nedition = \"2021\"\n";
+        assert!(parse_cargo_dependency_names(text).is_empty());
     }
 
     #[test]
