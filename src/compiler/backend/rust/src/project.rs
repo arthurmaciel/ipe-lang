@@ -3233,6 +3233,39 @@ mod tests {
         );
     }
 
+    /// A `provide.enum` region carries the `enum` definition PLUS one ctor per
+    /// variant in a SINGLE sentinel span. Reaching just ONE variant forwarder
+    /// must keep the whole region — the enum def and EVERY sibling ctor — or the
+    /// kept forwarder references a dropped ctor / a missing type (a cargo-fail
+    /// far from here). Proves the multi-ctor provide.enum region is shake-safe.
+    #[test]
+    fn shake_keeps_the_whole_provide_enum_region_when_one_variant_is_reached() {
+        let source = "// preamble\n\
+             // IPE-FFI-WRAPPER BEGIN message_new\n\
+             #[derive(Clone, Debug)]\n\
+             pub enum Message { Increment, Decrement }\n\
+             pub fn demo_message_new_increment() -> Message { Message::Increment }\n\
+             pub fn demo_message_new_decrement() -> Message { Message::Decrement }\n\
+             // IPE-FFI-WRAPPER END\n\
+             // trailer\n";
+        // Only the Increment forwarder is reached by user code.
+        let reached: std::collections::BTreeSet<String> =
+            std::collections::BTreeSet::from(["demo_message_new_increment".to_owned()]);
+        let out = shake_ffi_by_fn_ident(source, &reached);
+        assert!(
+            out.contains("pub enum Message"),
+            "enum def must survive: {out}"
+        );
+        assert!(
+            out.contains("pub fn demo_message_new_increment"),
+            "the reached variant ctor must survive: {out}"
+        );
+        assert!(
+            out.contains("pub fn demo_message_new_decrement"),
+            "the sibling ctor must survive so the kept region compiles: {out}"
+        );
+    }
+
     /// A region whose fns are ALL unreached is still dropped — the fix must
     /// not turn the shake into a no-op.
     #[test]

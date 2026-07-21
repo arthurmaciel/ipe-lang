@@ -1313,7 +1313,11 @@ fn enum_def_ctor_lines(cx: &WrapperCx<'_>, def: &EnumDef) -> Vec<String> {
     // the identity for the closed carrier set (the owned Rust type IS the Ipê
     // value's carrier — no narrowing), mirroring the tuple-variant `EnumCtor`.
     for v in &def.variants {
-        let ctor = format!("{}_{}", cx.rust_name, variant_snake(v.name.as_str()));
+        let ctor = format!(
+            "{}_{}",
+            cx.rust_name,
+            crate::naming::variant_snake(v.name.as_str())
+        );
         out.push(String::new());
         if v.payload.is_empty() {
             out.push(format!("pub fn {ctor}() -> {enum_name} {{"));
@@ -1337,24 +1341,6 @@ fn enum_def_ctor_lines(cx: &WrapperCx<'_>, def: &EnumDef) -> Vec<String> {
             ));
         }
         out.push("}".to_owned());
-    }
-    out
-}
-
-/// The `snake_case` of a variant identifier (`SetValue` → `set_value`), for the
-/// per-variant constructor suffix. The input is a validated `RustIdent`, so this
-/// only lowercases and inserts `_` at internal case boundaries.
-fn variant_snake(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 4);
-    for (i, c) in s.chars().enumerate() {
-        if c.is_ascii_uppercase() {
-            if i != 0 {
-                out.push('_');
-            }
-            out.push(c.to_ascii_lowercase());
-        } else {
-            out.push(c);
-        }
     }
     out
 }

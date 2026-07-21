@@ -177,6 +177,30 @@ pub fn assemble_emit(
         for (name, path) in &c.opaque_types {
             foreign_types.insert(format!("{}.{name}", c.module_name), path.clone());
         }
+        // A `[rust.provide.struct/enum]` type is DEFINED in the emitted
+        // `_bindings.rs` (wrapped `pub mod <slug> { … } pub use <slug>::*;` in
+        // `src/ffi.rs`), so it resolves at the crate-absolute path
+        // `crate::ffi::<slug>::<Name>` — never an external `::crate::Path`, and
+        // never the bare `<Name>` glob (the `pub use` re-exports inside
+        // `src/ffi.rs`, but the backend renders the foreign-type path into the
+        // app's MAIN module tree, where only a crate-absolute path resolves).
+        for name in &c.provide_types {
+            let key = format!("{}.{name}", c.module_name);
+            // A provide type sharing a name with an inspected opaque of the same
+            // crate would silently overwrite the other's path (a wrong Rust type
+            // the SEAL would then compile against). Fail closed — the author must
+            // rename one; the two nominals are genuinely different Rust types.
+            if foreign_types.contains_key(&key) {
+                return Err(CliError::UsageOwned(format!(
+                    "installed FFI crate `{}` defines a `[rust.provide.*]` type `{name}` \
+                     whose name also names an inspected opaque type of the crate — the two \
+                     are different Rust types that would collide on one nominal; rename the \
+                     provide type",
+                    c.slug
+                )));
+            }
+            foreign_types.insert(key, format!("crate::ffi::{}::{name}", c.slug));
+        }
         for line in &c.cargo_deps {
             let Some((name, version, features)) = parse_dep_line(line) else {
                 return Err(CliError::UsageOwned(format!(
@@ -2150,6 +2174,7 @@ mod tests {
             bindings_source: String::new(),
             opaque_types: BTreeMap::new(),
             opaque_type_ids: BTreeMap::new(),
+            provide_types: BTreeSet::new(),
             bindings: Vec::new(),
             dep_versions: BTreeMap::new(),
             cargo_deps: vec![line.to_owned()],
@@ -2181,6 +2206,7 @@ mod tests {
             bindings_source: String::new(),
             opaque_types: BTreeMap::new(),
             opaque_type_ids: BTreeMap::new(),
+            provide_types: BTreeSet::new(),
             bindings: Vec::new(),
             dep_versions: BTreeMap::new(),
             cargo_deps: vec![line.to_owned()],
@@ -2219,6 +2245,7 @@ mod tests {
             bindings_source: String::new(),
             opaque_types: BTreeMap::new(),
             opaque_type_ids: BTreeMap::new(),
+            provide_types: BTreeSet::new(),
             bindings: Vec::new(),
             dep_versions: BTreeMap::new(),
             cargo_deps: lines.into_iter().map(str::to_owned).collect(),
@@ -2476,5 +2503,60 @@ mod tests {
         }];
         assert!(merge_provides(doc, "demo", &[], &structs, &[], false).is_err());
         assert!(merge_provides(doc, "demo", &[], &structs, &[], true).is_ok());
+    }
+
+    /// A one-crate `InstalledCrate` with the given opaque + provide type maps.
+    fn crate_with_types(slug: &str, opaque: &[(&str, &str)], provide: &[&str]) -> InstalledCrate {
+        InstalledCrate {
+            slug: slug.to_owned(),
+            module_name: format!("Rust.{slug}"),
+            kernel_name: format!("Rust_{slug}"),
+            interface_source: String::new(),
+            bindings_source: String::new(),
+            opaque_types: opaque
+                .iter()
+                .map(|(n, p)| ((*n).to_owned(), (*p).to_owned()))
+                .collect(),
+            opaque_type_ids: BTreeMap::new(),
+            provide_types: provide.iter().map(|n| (*n).to_owned()).collect(),
+            bindings: Vec::new(),
+            dep_versions: BTreeMap::new(),
+            cargo_deps: Vec::new(),
+            wrapper_idents: BTreeSet::new(),
+        }
+    }
+
+    #[test]
+    fn a_provide_type_renders_a_crate_absolute_ffi_path() {
+        // A provide-defined type lives in `crate::ffi::<slug>::<Name>` (the app
+        // crate's own module tree), NOT at an external `::crate::Path`.
+        let emit = assemble_emit(&[crate_with_types("iced", &[], &["Counter", "Message"])])
+            .expect("emit ok")
+            .expect("emit present");
+        assert_eq!(
+            emit.foreign_types
+                .get("Rust.iced.Counter")
+                .map(String::as_str),
+            Some("crate::ffi::iced::Counter")
+        );
+        assert_eq!(
+            emit.foreign_types
+                .get("Rust.iced.Message")
+                .map(String::as_str),
+            Some("crate::ffi::iced::Message")
+        );
+    }
+
+    #[test]
+    fn a_provide_type_colliding_with_an_inspected_opaque_is_refused() {
+        // A provide type sharing a name with an inspected opaque of the SAME
+        // crate would silently overwrite one path — the two are different Rust
+        // types. Fail closed rather than emit a wrong-type binding.
+        let clash = assemble_emit(&[crate_with_types(
+            "iced",
+            &[("Element", "::iced::Element")],
+            &["Element"],
+        )]);
+        assert!(clash.is_err(), "a provide-vs-opaque name clash must refuse");
     }
 }
