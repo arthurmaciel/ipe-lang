@@ -176,6 +176,44 @@ pub enum Doc {
         /// operand's `leading_op` is `None`.
         operands: Vec<ChainOperand>,
     },
+    /// A bracket-delimited argument list (`f(a, b)`, `(a, b)`, `vec![a, b]`,
+    /// `Ctor(a, b)`) laid out with `rustfmt`'s call-argument COMBINING rule — the
+    /// "combining openings and closings" behavior. Three layouts, in `rustfmt`'s
+    /// order:
+    ///
+    ///   * FLAT — the whole `open a, b close` fits single-line: rendered inline,
+    ///     no trailing comma.
+    ///   * COMBINED (head-glue) — the list has EXACTLY ONE element and that element
+    ///     renders multiline as a combinable construct (its own bracketed/braced
+    ///     break: a nested call / macro / block / tuple / list / ctor). `rustfmt`
+    ///     glues `open` to the element's own head and lets the element break IN
+    ///     PLACE at the CURRENT indent (not one step deeper), then glues `close`
+    ///     onto the element's closing line — `f(g(\n    x,\n))`. No trailing comma,
+    ///     no per-element break. This nests: a chain of single-argument calls all
+    ///     glue their heads (`log_println(string_from_int(list_length(\n …))`).
+    ///   * ONE-PER-LINE — otherwise (more than one element, or the sole element is
+    ///     not a combinable multiline construct): each element on its own line at
+    ///     one indent step, a break-conditional trailing comma (unless
+    ///     `trailing_comma == false` for a macro), the close dedented back — the
+    ///     plain broken delimited form.
+    ///
+    /// The break decision is independent of any enclosing group (like [`Doc::Group`]
+    /// / [`Doc::BraceBody`]): `rustfmt` re-tests the argument list against the width
+    /// on its own line. SEAL accounting matches the plain delimited group: the
+    /// trailing comma is SEAL-invisible (the string emitter never writes it), every
+    /// other token is a leaf.
+    CallArgs {
+        /// The opening delimiter and any callee/name prefix (`f(`, `(`, `vec![`).
+        open: Box<Self>,
+        /// The argument documents, in source order.
+        elems: Vec<Self>,
+        /// The closing delimiter (`)`, `]`).
+        close: Box<Self>,
+        /// Whether the broken one-per-line form carries a trailing comma. `false`
+        /// for a macro argument list (`format!` / `vec!`-macro), which `rustfmt`
+        /// breaks without one.
+        trailing_comma: bool,
+    },
 }
 
 /// One operand of a [`Doc::Chain`], with the operator that precedes it (if any).
@@ -246,6 +284,17 @@ impl Doc {
         }
     }
 
+    /// A bracket-delimited argument list laid out with `rustfmt`'s combining rule.
+    /// See [`Doc::CallArgs`].
+    pub fn call_args(open: Self, elems: Vec<Self>, close: Self, trailing_comma: bool) -> Self {
+        Self::CallArgs {
+            open: Box::new(open),
+            elems,
+            close: Box::new(close),
+            trailing_comma,
+        }
+    }
+
     /// Append every text leaf of this document, in order, to `out`. This is the
     /// SEAL oracle: `concat(leaves(doc))` whitespace-normalizes to the legacy
     /// emitter's string. Break candidates ([`Doc::Line`] / [`Doc::HardLine`])
@@ -299,6 +348,22 @@ impl Doc {
                     }
                     op.doc.collect_leaves(out);
                 }
+            }
+            // The open/close delimiters and each element ARE leaves; elements are
+            // separated by `, ` (the string emitter's `join(", ")`). The trailing
+            // comma of the broken one-per-line form is SEAL-invisible (the string
+            // emitter never writes it), exactly like the plain delimited group's.
+            Self::CallArgs {
+                open, elems, close, ..
+            } => {
+                open.collect_leaves(out);
+                for (i, e) in elems.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    e.collect_leaves(out);
+                }
+                close.collect_leaves(out);
             }
         }
     }
