@@ -651,16 +651,45 @@ fn effective_ok_raw(f: &FnInfo) -> String {
     }
 }
 
+/// The Ipê carrier surface a soundly-coercible tuple component presents, or
+/// [`None`] when the component is not one the tuple emitter can coerce.
+///
+/// The admissible set is exactly the components [`translate_rust_ret`] lifts
+/// TOTALLY and OWNED with no lifetime/opaque wiring: every numeric width (a
+/// saturating widen into `Int`/`Float`), owned `String` (identity), and `bool`
+/// (identity). The `String`/`bool` match is EXACT — a `&str`/`&String` borrow
+/// renders with a leading `&` and never as bare `String`, and a `Vec`/`Option`/
+/// opaque/serde component never spells `String` or `bool` — so an exact compare
+/// is what fails those closed.
+fn tuple_component_carrier(c: &str) -> Option<&'static str> {
+    let t = c.trim();
+    match t {
+        "String" => Some("String"),
+        "bool" => Some("Bool"),
+        "f32" | "f64" => Some("Float"),
+        _ if is_numeric_rust(t) => Some("Int"),
+        _ => None,
+    }
+}
+
 /// Whether a binding's result is a multi-result tuple every component of which
 /// the wrapper can soundly coerce — the admission predicate for the interface
 /// tuple gate.
 ///
-/// Sound only for a tuple of NUMERIC scalar components: each rides a total
-/// saturating widen into its `Int`/`Float` carrier, so the emitted `(i64, ..)`
-/// matches the `(Int, ..)` the Ipê signature declares. A tuple carrying a
-/// String, an opaque handle, or a nested container is NOT admitted here — its
-/// ownership/lifetime wiring is not in the tuple emitter, so it stays dropped
-/// (over-drop, never an unsound bind).
+/// Two conditions must BOTH hold, or the tuple over-drops (fail closed):
+///
+/// * every Rust component is one [`tuple_component_carrier`] admits — a numeric
+///   scalar (a total saturating widen into its `Int`/`Float` carrier), owned
+///   `String`, or `bool` (each an identity coercion). A `&`-borrow, an opaque
+///   handle, a nested container, or a serde value is NOT wired in the tuple
+///   emitter, so it stays refused;
+/// * the Ipê-side type the signature will DECLARE — the inspector's `ipe_type`
+///   override on the result — is a present, same-arity tuple whose i-th head is
+///   exactly the carrier the i-th Rust component coerces to. `foreign_to_ipe`
+///   does NOT recurse into a tuple string, so without a matching override the
+///   signature would carry the raw `(u64, String)` the backend cannot lower (an
+///   `ipe`-exit-0 ⇒ cargo-fail SEAL breach). Requiring the override to agree
+///   with the emitted Rust carriers makes that mismatch unrepresentable.
 #[must_use]
 pub fn multi_result_tuple_is_coercible(f: &FnInfo) -> bool {
     // A self-returning setter or a borrow-reader threads a handle, handled by
@@ -669,7 +698,58 @@ pub fn multi_result_tuple_is_coercible(f: &FnInfo) -> bool {
         return false;
     }
     let raw = effective_ok_raw(f);
-    tuple_components(&raw).is_some_and(|comps| comps.iter().all(|c| is_numeric_rust(c.trim())))
+    let Some(comps) = tuple_components(&raw) else {
+        return false;
+    };
+    let Some(carriers) = comps
+        .iter()
+        .map(|c| tuple_component_carrier(c))
+        .collect::<Option<Vec<_>>>()
+    else {
+        return false;
+    };
+    // The signature's tuple type is what `wrapper_ipe_signature` will DECLARE for
+    // the sole non-error result — the inspector's `ipe_type` override, or the
+    // `foreign_to_ipe` fallback (which does NOT recurse into a tuple string, so a
+    // tuple survives only when it was already spelled in Ipê carriers). Read it
+    // through the SAME `param_ipe_type` the emitter uses so the gate and the
+    // signature cannot drift, then refuse unless it is a same-arity tuple whose
+    // heads match the emitted Rust carriers exactly. Without this the signature
+    // could carry the raw `(u64, String)` the backend cannot lower — an
+    // `ipe`-exit-0 ⇒ cargo-fail SEAL breach.
+    let non_err: Vec<&Param> = f
+        .results()
+        .iter()
+        .filter(|r| r.foreign_ty != "error")
+        .collect();
+    let [single] = non_err.as_slice() else {
+        return false;
+    };
+    ipe_tuple_heads(&crate::emit::param_ipe_type(single)).is_some_and(|heads| heads == carriers)
+}
+
+/// The top-level component heads of an Ipê tuple type string (`(Int, String)` →
+/// `["Int", "String"]`), or [`None`] when the string is not a parenthesised
+/// tuple of bare (single-token) component heads.
+///
+/// Only a flat tuple of bare heads is recognised — a nested container component
+/// (`(Int, List String)`) yields `None`, which fails the admission gate, exactly
+/// as the tuple emitter (which admits no container component) requires.
+fn ipe_tuple_heads(sig: &str) -> Option<Vec<&'static str>> {
+    let t = sig.trim();
+    let inner = t.strip_prefix('(')?.strip_suffix(')')?;
+    let mut heads: Vec<&'static str> = Vec::new();
+    for part in inner.split(',') {
+        let head = match part.trim() {
+            "Int" => "Int",
+            "Float" => "Float",
+            "Bool" => "Bool",
+            "String" => "String",
+            _ => return None,
+        };
+        heads.push(head);
+    }
+    if heads.len() < 2 { None } else { Some(heads) }
 }
 
 // ── per-function wrapper context ────────────────────────────────────────────
@@ -2949,14 +3029,18 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
     }
 
     #[test]
-    fn tuple_predicate_rejects_a_string_component() {
-        // A String component is NOT wired → not coercible (stays dropped).
+    fn tuple_predicate_admits_owned_string_and_bool_components() {
+        // Owned `String` and `bool` components ARE wired — each an identity
+        // coercion whose declared carrier (`String` / `bool`) matches the Ipê
+        // surface (`String` / `Bool`). A tuple mixing numeric + String + bool
+        // whose `ipe_type` override agrees is admitted.
         let mixed = decode(&json!({
             "pkg": "grid", "name": "grid",
             "functions": [{
                 "name": "labelled",
                 "params": [],
-                "results": [{"name": "", "type": "(Int, String)", "rustType": "(u32, String)"}],
+                "results": [{"name": "", "type": "(Int, String, Bool)",
+                             "rustType": "(u32, String, bool)"}],
                 "effect": "pure",
                 "methodName": ""
             }],
@@ -2964,8 +3048,85 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
         }));
         let mf = mixed.fns().first().expect("one fn");
         assert!(
-            !multi_result_tuple_is_coercible(mf),
-            "String component must not admit"
+            multi_result_tuple_is_coercible(mf),
+            "owned String + bool components must admit"
+        );
+    }
+
+    #[test]
+    fn tuple_predicate_rejects_a_borrowed_or_opaque_component() {
+        // A `&str` borrow, an opaque handle, and a nested container each stay
+        // refused — none is an owned scalar/String/bool the tuple emitter can
+        // coerce, so admitting them would break the SEAL.
+        for (rust, ipe) in [
+            ("(u32, &str)", "(Int, String)"),
+            ("(u32, Version)", "(Int, Version)"),
+            ("(u32, Vec<u8>)", "(Int, List Int)"),
+        ] {
+            let pkg = decode(&json!({
+                "pkg": "grid", "name": "grid",
+                "functions": [{
+                    "name": "labelled",
+                    "params": [],
+                    "results": [{"name": "", "type": ipe, "rustType": rust}],
+                    "effect": "pure",
+                    "methodName": ""
+                }],
+                "errors": []
+            }));
+            let f = pkg.fns().first().expect("one fn");
+            assert!(
+                !multi_result_tuple_is_coercible(f),
+                "component `{rust}` must not admit"
+            );
+        }
+    }
+
+    #[test]
+    fn tuple_predicate_refuses_a_component_carrier_mismatch() {
+        // The Ipê `ipe_type` override MUST agree with the emitted Rust carriers,
+        // or the signature would declare a type the wrapper does not produce (an
+        // exit-0-then-cargo-fail). Here the override claims `(Int, Int)` but the
+        // Rust tuple is `(u64, String)` — refuse fail-closed.
+        let pkg = decode(&json!({
+            "pkg": "grid", "name": "grid",
+            "functions": [{
+                "name": "labelled",
+                "params": [],
+                "results": [{"name": "", "type": "", "ipeType": "(Int, Int)",
+                             "rustType": "(u64, String)"}],
+                "effect": "pure",
+                "methodName": ""
+            }],
+            "errors": []
+        }));
+        let f = pkg.fns().first().expect("one fn");
+        assert!(
+            !multi_result_tuple_is_coercible(f),
+            "a carrier/override mismatch must refuse fail-closed"
+        );
+    }
+
+    #[test]
+    fn tuple_predicate_refuses_a_tuple_with_no_ipe_override_it_cannot_synthesise() {
+        // `foreign_to_ipe` does NOT recurse into a tuple string, so a tuple whose
+        // `type`/`ipeType` is a RAW Rust spelling (no Ipê carriers) cannot yield a
+        // lowerable signature — refuse rather than emit `(u64, u32)` into `.ipei`.
+        let pkg = decode(&json!({
+            "pkg": "grid", "name": "grid",
+            "functions": [{
+                "name": "raw_tuple",
+                "params": [],
+                "results": [{"name": "", "type": "(u64, u32)", "rustType": "(u64, u32)"}],
+                "effect": "pure",
+                "methodName": ""
+            }],
+            "errors": []
+        }));
+        let f = pkg.fns().first().expect("one fn");
+        assert!(
+            !multi_result_tuple_is_coercible(f),
+            "a raw-Rust-spelled tuple with no Ipê carrier override must refuse"
         );
     }
 
