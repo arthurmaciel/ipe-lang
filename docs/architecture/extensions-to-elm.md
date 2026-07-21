@@ -71,8 +71,8 @@ decisions live here.
 | `Result` | 10 | 0 | 0 | complete — `toMaybe`/`fromMaybe` bridges now present |
 | `Char` | 9 | 2 | 2 | `toUpper`/`toLower` return `String`; `isAlphaNum`/`isHexDigit`/`isOctDigit` now present |
 | `Task` | 7 | 1 | 5 | fixed `Error` channel (§6); missing `map2..5`, `attempt` |
-| `Platform.Cmd` | 2 | 0 | 1 | missing `Cmd.map` |
-| `Platform.Sub` | 2 | 0 | 1 | missing `Sub.map` |
+| `Platform.Cmd` | 3 | 0 | 0 | complete — `Cmd.map` now present |
+| `Platform.Sub` | 3 | 0 | 0 | complete — `Sub.map` now present |
 | `Array` | 0 | 0 | 18 | **whole module absent** |
 | `Bitwise` | 0 | 0 | 7 | **whole module absent** |
 | `Tuple` | 0 | 2 | 4 | `fst`/`snd` in `Basics`; module absent |

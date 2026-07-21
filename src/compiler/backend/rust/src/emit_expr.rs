@@ -2166,6 +2166,23 @@ fn emit_tea_call(
             let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
             Ok(Some(format!("cmd_perform({task_s}, {f_s})")))
         }
+        // ── Arity-2: Cmd.map / Sub.map (retag a sub-component's effects) ─────────
+        // `Cmd.map : (a -> msg) -> Cmd a -> Cmd msg`  →  `cmd_map(<cmd>, <f>)`
+        // `Sub.map : (a -> msg) -> Sub a -> Sub msg`  →  `sub_map(<sub>, <f>)`
+        // The Ipê argument order is `(f, effect)`; the runtime takes
+        // `(effect, f)` (effect first so `f` infers its `A` from the effect's
+        // message type), so the two args are emitted swapped. `f` is passed
+        // through unboxed — `cmd_map`/`sub_map` are generic over `F: Fn(A) -> M`
+        // and share it via `Arc` internally, so the emitted closure value binds
+        // directly with no re-wrap.
+        KernelFn::CmdMap | KernelFn::SubMap => {
+            let f_e = arg!(0, "f")?;
+            let effect_e = arg!(1, "effect")?;
+            let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
+            let effect_s = emit_expr_at(ctx, effect_e, indent, child, generics)?;
+            let name = kernel_name(*k); // "cmd_map" / "sub_map"
+            Ok(Some(format!("{name}({effect_s}, {f_s})")))
+        }
         // ── Arity-2: tick subscriptions — standard path ──────────────────────────
         // `Sub.every : Int -> msg -> Sub msg` and
         // `Time.every : Int -> msg -> Sub msg`

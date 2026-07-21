@@ -4593,6 +4593,9 @@ impl<'a> Builder<'a> {
                 task(var(0)),
                 fun(fun(result(error_ty(), var(0)), var(1)), cmd(var(1))),
             ),
+            // `Cmd.map : (a -> msg) -> Cmd a -> Cmd msg` — retag a
+            // sub-component's commands. var(0)=a (child msg), var(1)=msg (parent).
+            K::CmdMap => fun(fun(var(0), var(1)), fun(cmd(var(0)), cmd(var(1)))),
 
             // ── Cmd.publish / Cmd.publishNoEcho ──
             // `Cmd.publish : String -> any -> Cmd msg`
@@ -4605,6 +4608,9 @@ impl<'a> Builder<'a> {
             K::SubNone => sub(var(0)),
             K::SubBatch => fun(list(sub(var(0))), sub(var(0))),
             K::SubEvery => fun(int(), fun(var(0), sub(var(0)))),
+            // `Sub.map : (a -> msg) -> Sub a -> Sub msg` — the `Sub` twin of
+            // `Cmd.map`. var(0)=a (child msg), var(1)=msg (parent).
+            K::SubMap => fun(fun(var(0), var(1)), fun(sub(var(0)), sub(var(1)))),
             // `Sub.subscribeTopic : String -> (any -> msg) -> Sub msg`
             // var(0) = payload type (the `any`), var(1) = message type.
             K::SubSubscribeTopic => fun(string(), fun(fun(var(0), var(1)), sub(var(1)))),
@@ -8540,6 +8546,12 @@ mod registry_phase_c_tests {
             // scheme `String -> a -> Task Error Int`.
             K::PubSubPublish,
             K::PubSubPublishNoEcho,
+            // ── TEA: Cmd.map / Sub.map (2) ─────────────────────────
+            // Ipê-new (no legacy oracle): `(a -> msg) -> Cmd a -> Cmd msg` and
+            // the `Sub` twin. Runtime `cmd_map` / `sub_map`, emit arm in
+            // `emit_tea_call`.
+            K::CmdMap,
+            K::SubMap,
         ]
     };
 
