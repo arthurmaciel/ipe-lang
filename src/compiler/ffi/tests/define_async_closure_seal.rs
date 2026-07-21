@@ -1,4 +1,4 @@
-//! SEAL fixture for ASYNC-returning closure adapters (`[rust.provide.closure]`
+//! SEAL fixture for ASYNC-returning closure adapters (`[rust.define.closure]`
 //! whose declared return is a `Future`, the Axum/Hyper async-handler shape).
 //!
 //! The sync `closure_adapter_seal` fixture proves a `Fn(A) -> R` closure
@@ -26,7 +26,7 @@ use ipe_ffi::bindings::{emit_bindings, surviving_ref_names};
 use ipe_ffi::pkginfo::PkgInfo;
 
 /// Decode a one-crate inspection document carrying a single async
-/// `provide.closure` entry, and return the emitted `_bindings.rs`.
+/// `define.closure` entry, and return the emitted `_bindings.rs`.
 fn emit_async_closure(sig: &str) -> String {
     let doc = serde_json::json!({
         "pkg": "demo",
@@ -41,7 +41,7 @@ fn emit_async_closure(sig: &str) -> String {
         "errors": []
     })
     .to_string();
-    let pkg = PkgInfo::decode_json(&doc).expect("async provide.closure decodes");
+    let pkg = PkgInfo::decode_json(&doc).expect("async define.closure decodes");
     emit_bindings(&pkg)
 }
 

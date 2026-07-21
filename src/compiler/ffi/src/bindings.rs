@@ -1233,18 +1233,18 @@ fn emit_fn_region(
     out
 }
 
-/// Resolves a `provide.closure` carrier to the concrete owned Rust type the
+/// Resolves a `define.closure` carrier to the concrete owned Rust type the
 /// emitted adapter names — the opaque-map threaded into the closure-adapter
 /// emitter so an opaque return/param resolves to a path the wrapped `pub mod
 /// <slug>` region can actually name.
 ///
-/// An opaque handle in a `provide.closure` signature is a BARE name (the author
+/// An opaque handle in a `define.closure` signature is a BARE name (the author
 /// writes `Fn(Model) -> Result<Element, E>`); resolving it soundly requires the
 /// whole crate's type information, which a lone `ClosureSig` lacks. Three cases,
 /// keyed only off the crate's inspected types + the author's own manifest — user
 /// `.ipe` source never contributes:
 ///
-/// * a name the crate's `[rust.provide.struct/enum]` decls DEFINE resolves to
+/// * a name the crate's `[rust.define.struct/enum]` decls DEFINE resolves to
 ///   the BARE in-module name (the `pub struct`/`pub enum` lives in the same
 ///   `pub mod <slug>` region as the adapter, so a bare reference is in scope);
 /// * an INSPECTED crate-opaque resolves to its absolute `::crate::path` (so it
@@ -1262,14 +1262,14 @@ fn emit_fn_region(
 struct OpaqueResolver {
     /// Bare opaque name → absolute `::crate::path` (inspected crate types only).
     inspected: std::collections::BTreeMap<String, String>,
-    /// Bare names the crate's own `provide.struct/enum` decls DEFINE **and whose
+    /// Bare names the crate's own `define.struct/enum` decls DEFINE **and whose
     /// own definition survives** — i.e. every opaque field/payload it holds is
-    /// itself resolvable, computed to a fixed point. A provide type absent here
+    /// itself resolvable, computed to a fixed point. A define type absent here
     /// either is not defined or over-dropped (its own definition emits nothing),
     /// so a reference to it must over-drop too — otherwise the referencing
     /// definition would name a `pub struct`/`pub enum` that was never emitted (an
     /// E0425 the SEAL forbids).
-    provide_defined: BTreeSet<String>,
+    define_defined: BTreeSet<String>,
     /// Bare base names that appear generic/lifetime-parameterised (`Base<…>`)
     /// anywhere in the crate's inspected type strings — unsound to emit as a
     /// bare-arg path, so they over-drop.
@@ -1285,10 +1285,10 @@ impl OpaqueResolver {
             std::collections::BTreeMap::new();
         let mut poisoned: BTreeSet<String> = BTreeSet::new();
         let mut parameterised: BTreeSet<String> = BTreeSet::new();
-        // Every provide-defined name → the opaque handles its own definition
+        // Every define-defined name → the opaque handles its own definition
         // holds (its fields/payloads). A def survives only when EVERY one of
         // these resolves, so this drives the survivor fixed point below.
-        let mut provide_opaque_deps: std::collections::BTreeMap<String, Vec<String>> =
+        let mut define_opaque_deps: std::collections::BTreeMap<String, Vec<String>> =
             std::collections::BTreeMap::new();
         let mut visit = |raw: &str| {
             note_parameterised_bases(raw, &mut parameterised);
@@ -1312,11 +1312,11 @@ impl OpaqueResolver {
             }
             match f.shape() {
                 FnShape::StructCtor { def } => {
-                    provide_opaque_deps
+                    define_opaque_deps
                         .insert(def.name.as_str().to_owned(), struct_opaque_deps(def));
                 }
                 FnShape::EnumDefCtor { def } => {
-                    provide_opaque_deps.insert(def.name.as_str().to_owned(), enum_opaque_deps(def));
+                    define_opaque_deps.insert(def.name.as_str().to_owned(), enum_opaque_deps(def));
                 }
                 _ => {}
             }
@@ -1326,11 +1326,10 @@ impl OpaqueResolver {
         for name in &poisoned {
             inspected.remove(name);
         }
-        let provide_defined =
-            surviving_provide_defs(&provide_opaque_deps, &inspected, &parameterised);
+        let define_defined = surviving_define_defs(&define_opaque_deps, &inspected, &parameterised);
         Self {
             inspected,
-            provide_defined,
+            define_defined,
             parameterised,
         }
     }
@@ -1345,11 +1344,11 @@ impl OpaqueResolver {
                 if self.parameterised.contains(name) {
                     return None;
                 }
-                if self.provide_defined.contains(name) {
+                if self.define_defined.contains(name) {
                     // Same-module `pub struct`/`pub enum` whose own definition
                     // SURVIVES: the bare name is in scope inside `pub mod <slug>`.
-                    // A provide name that over-dropped is absent from the set, so
-                    // it falls through to `inspected` (empty for a pure provide
+                    // A define name that over-dropped is absent from the set, so
+                    // it falls through to `inspected` (empty for a pure define
                     // type) and returns `None` — the reference over-drops too.
                     return Some(name.to_owned());
                 }
@@ -1360,8 +1359,8 @@ impl OpaqueResolver {
     }
 }
 
-/// The opaque handle names a `provide.struct`'s fields hold (bare identifiers,
-/// possibly other provide types) — the dependency edges for the survivor fixed
+/// The opaque handle names a `define.struct`'s fields hold (bare identifiers,
+/// possibly other define types) — the dependency edges for the survivor fixed
 /// point.
 fn struct_opaque_deps(def: &StructDef) -> Vec<String> {
     def.fields
@@ -1373,7 +1372,7 @@ fn struct_opaque_deps(def: &StructDef) -> Vec<String> {
         .collect()
 }
 
-/// The opaque handle names a `provide.enum`'s variant payloads hold.
+/// The opaque handle names a `define.enum`'s variant payloads hold.
 fn enum_opaque_deps(def: &EnumDef) -> Vec<String> {
     def.variants
         .iter()
@@ -1386,16 +1385,16 @@ fn enum_opaque_deps(def: &EnumDef) -> Vec<String> {
         .collect()
 }
 
-/// The set of provide-defined names whose own definition SURVIVES emission,
+/// The set of define-defined names whose own definition SURVIVES emission,
 /// computed to a fixed point.
 ///
-/// A provide def survives iff every opaque handle it holds resolves: an inspected
-/// crate-opaque (a known `::crate::path`), or ANOTHER provide-defined name that is
+/// A define def survives iff every opaque handle it holds resolves: an inspected
+/// crate-opaque (a known `::crate::path`), or ANOTHER define-defined name that is
 /// ITSELF surviving. A parameterised handle never resolves; a bare handle that is
-/// neither inspected nor a surviving provide type never resolves. Because a
+/// neither inspected nor a surviving define type never resolves. Because a
 /// dependency A→B→… can only ever REMOVE survivors, the fixpoint is monotone
 /// decreasing from "all defined" and terminates in at most `defs.len()` passes.
-fn surviving_provide_defs(
+fn surviving_define_defs(
     deps: &std::collections::BTreeMap<String, Vec<String>>,
     inspected: &std::collections::BTreeMap<String, String>,
     parameterised: &BTreeSet<String>,
@@ -1453,7 +1452,7 @@ fn note_parameterised_bases(raw: &str, out: &mut BTreeSet<String>) {
 /// returning `(Base, ::seg::…::Base)` pairs — the bindings-emitter twin of the
 /// interface's path-map, so an opaque return/param resolves to the same
 /// absolute path the interface's opaque-type map records. A bare identifier
-/// (no `::`) carries no path and is skipped (a provide-defined type, resolved
+/// (no `::`) carries no path and is skipped (a define-defined type, resolved
 /// separately in-module).
 ///
 /// Only the BARE base name keys the map: a closure signature's opaque carrier
@@ -1492,7 +1491,7 @@ fn opaque_path_tokens(raw: &str) -> Vec<(String, String)> {
     out
 }
 
-/// The `[rust.provide.closure]` adapter wrapper.
+/// The `[rust.define.closure]` adapter wrapper.
 ///
 /// The wrapper takes an Ipê function value — already a
 /// `Box<dyn Fn(A0, …) -> R + Send + Sync + 'static>` on the app side — and
@@ -1680,7 +1679,7 @@ fn closure_per_call_body(ret: &ClosureRet, call: &str, wrapper: &str) -> Vec<Str
     }
 }
 
-/// The `[rust.provide.struct]` definition + constructor wrapper.
+/// The `[rust.define.struct]` definition + constructor wrapper.
 ///
 /// Ipê DEFINES a nominal Rust type here: the emitter renders the `#[derive]`ed
 /// struct definition, then a constructor wrapper that takes each field's owned
@@ -1737,7 +1736,7 @@ fn struct_ctor_lines(cx: &WrapperCx<'_>, def: &StructDef, opaques: &OpaqueResolv
     out
 }
 
-/// The `[rust.provide.enum]` definition + one constructor per variant.
+/// The `[rust.define.enum]` definition + one constructor per variant.
 ///
 /// Ipê DEFINES a nominal Rust `enum` here: the emitter renders the `#[derive]`ed
 /// enum definition once, then a constructor wrapper per variant. A unit variant
@@ -2610,8 +2609,8 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
     }
 
     #[test]
-    fn a_provide_defined_opaque_return_resolves_to_the_in_module_name() {
-        // A closure returning a provide-DEFINED type (defined in the same
+    fn a_define_defined_opaque_return_resolves_to_the_in_module_name() {
+        // A closure returning a define-DEFINED type (defined in the same
         // `pub mod <slug>` region) resolves to the bare in-module name — it is
         // in scope beside the emitted `pub struct`, so no path is needed.
         let pkg = semver_pkg(&json!([
@@ -2723,7 +2722,7 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
 
     #[test]
     fn an_unresolvable_opaque_return_over_drops_the_whole_adapter() {
-        // An opaque name that is neither provide-defined nor inspected anywhere
+        // An opaque name that is neither define-defined nor inspected anywhere
         // in the crate cannot resolve to any nameable path — over-drop rather
         // than emit a bare handle no `pub mod <slug>` region can name.
         let out = closure_region("Fn(Int) -> Result<Ghost, Error> + Send + Sync + 'static");

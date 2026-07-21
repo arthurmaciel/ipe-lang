@@ -1021,7 +1021,7 @@ fn inspect_crate_source(
                         pkg.wrapper_path = p.to_string();
                     }
                     // Tier 2 escape hatch: any item the author tagged with
-                    // `#[ipe::provide]` is added to the exposed set, so a
+                    // `#[define_in_ipe]` is added to the exposed set, so a
                     // hand-written type whose trait impl only a real Rust `impl`
                     // can express (a Bevy `Component`/`Resource`) surfaces even
                     // when the author narrows `[rust.wrapper] expose` to a subset.
@@ -1038,7 +1038,7 @@ fn inspect_crate_source(
                     // bind-all default into a restriction.
                     if !expose.is_empty() {
                         let marked = if path.is_some() {
-                            ipe_provide_marked_names(&doc)
+                            ipe_define_marked_names(&doc)
                         } else {
                             std::collections::HashSet::new()
                         };
@@ -4113,10 +4113,10 @@ fn non_exhaustive(item: &serde_json::Value) -> bool {
         .unwrap_or(true)
 }
 
-/// The exact sentinel the `#[ipe::provide]` marker attribute (the `ipe_provide`
+/// The exact sentinel the `#[define_in_ipe]` marker attribute (the `ipe_bindgen`
 /// companion proc-macro) attaches to an item as a `#[doc = "…"]` string.
 ///
-/// `#[ipe::provide]` is an INERT attribute: it re-emits the annotated item
+/// `#[define_in_ipe]` is an INERT attribute: it re-emits the annotated item
 /// unchanged and prepends this one pure-data doc line, which rustdoc folds into
 /// the item's `docs` field (verified against the JSON format — a `#[doc = "…"]`
 /// attribute lands in `docs`, trimmed, not in `attrs`). The inspector reads it
@@ -4125,10 +4125,10 @@ fn non_exhaustive(item: &serde_json::Value) -> bool {
 ///
 /// The marker crate authors the same literal (its `MARKER_DOC` begins with a
 /// leading space rustdoc trims); the two are kept in sync by this shared spelling.
-const IPE_PROVIDE_MARKER: &str = "ipe-ffi-provide-marker";
+const IPE_DEFINE_MARKER: &str = "ipe-ffi-define-marker";
 
-/// True when a rustdoc item carries the `#[ipe::provide]` marker — i.e. one of
-/// its `docs` lines is EXACTLY the [`IPE_PROVIDE_MARKER`] sentinel.
+/// True when a rustdoc item carries the `#[define_in_ipe]` marker — i.e. one of
+/// its `docs` lines is EXACTLY the [`IPE_DEFINE_MARKER`] sentinel.
 ///
 /// Matched as a whole trimmed line, not a free-text substring: only the inert
 /// marker macro emits this precise line, so an author's ordinary prose can
@@ -4136,27 +4136,27 @@ const IPE_PROVIDE_MARKER: &str = "ipe-ffi-provide-marker";
 /// wrapper's exposed set (`inspect_crate_source`), then surfaces through the
 /// same over-drop / carrier-compatibility / panic-scan gates as any other
 /// wrapper symbol — the mark only widens WHICH candidates are considered.
-fn ipe_provide_marked(item: &serde_json::Value) -> bool {
+fn ipe_define_marked(item: &serde_json::Value) -> bool {
     item.get("docs")
         .and_then(|d| d.as_str())
-        .is_some_and(|docs| docs.lines().any(|line| line.trim() == IPE_PROVIDE_MARKER))
+        .is_some_and(|docs| docs.lines().any(|line| line.trim() == IPE_DEFINE_MARKER))
 }
 
-/// The NAMES of every crate-local item carrying the `#[ipe::provide]` marker.
+/// The NAMES of every crate-local item carrying the `#[define_in_ipe]` marker.
 ///
 /// A marked type's methods surface with `recvType = <TypeName>` and a marked
 /// free function surfaces with `name = <fnName>`, so this name set is unioned
 /// into the wrapper's `--expose` filter: a function is kept when its own name OR
 /// its receiver type is marked. Only crate-local items (`crate_id == 0`) are
 /// considered — a marker cannot travel in from a dependency.
-fn ipe_provide_marked_names(doc: &serde_json::Value) -> std::collections::HashSet<String> {
+fn ipe_define_marked_names(doc: &serde_json::Value) -> std::collections::HashSet<String> {
     let mut names = std::collections::HashSet::new();
     if let Some(index) = doc.get("index").and_then(|i| i.as_object()) {
         for item in index.values() {
             if item.get("crate_id").and_then(serde_json::Value::as_u64) != Some(0) {
                 continue;
             }
-            if ipe_provide_marked(item)
+            if ipe_define_marked(item)
                 && let Some(name) = item.get("name").and_then(|n| n.as_str())
             {
                 names.insert(name.to_string());
@@ -4166,7 +4166,7 @@ fn ipe_provide_marked_names(doc: &serde_json::Value) -> std::collections::HashSe
     names
 }
 
-/// Whether a foreign type STRING names one of the `#[ipe::provide]`-marked
+/// Whether a foreign type STRING names one of the `#[define_in_ipe]`-marked
 /// types as a whole nominal segment.
 ///
 /// A type string is `sprite_wrap::Sprite`, `Sprite`, `Vec<Sprite>`, `&Sprite`,
@@ -13284,16 +13284,16 @@ mod tests {
     }
 
     #[test]
-    fn the_provide_marker_is_read_from_the_docs_field() {
+    fn the_define_marker_is_read_from_the_docs_field() {
         // rustdoc folds a `#[doc = "…"]` into `docs` (trimmed), so the marker
-        // that the inert `#[ipe::provide]` macro emits lands there, not in attrs.
-        let marked = serde_json::json!({ "docs": IPE_PROVIDE_MARKER });
-        assert!(ipe_provide_marked(&marked));
+        // that the inert `#[define_in_ipe]` macro emits lands there, not in attrs.
+        let marked = serde_json::json!({ "docs": IPE_DEFINE_MARKER });
+        assert!(ipe_define_marked(&marked));
         // A marker line among ordinary prose still matches (whole-line).
         let mixed = serde_json::json!({
-            "docs": format!("Widget doc.\n{IPE_PROVIDE_MARKER}\nMore prose.")
+            "docs": format!("Widget doc.\n{IPE_DEFINE_MARKER}\nMore prose.")
         });
-        assert!(ipe_provide_marked(&mixed));
+        assert!(ipe_define_marked(&mixed));
     }
 
     #[test]
@@ -13301,13 +13301,13 @@ mod tests {
         // A whole-line match, not a substring: prose mentioning the sentinel
         // inline (not on its own line) does not count as marked.
         let prose = serde_json::json!({
-            "docs": format!("see {IPE_PROVIDE_MARKER} for details")
+            "docs": format!("see {IPE_DEFINE_MARKER} for details")
         });
-        assert!(!ipe_provide_marked(&prose));
+        assert!(!ipe_define_marked(&prose));
         let unmarked = serde_json::json!({ "docs": "just a normal doc comment" });
-        assert!(!ipe_provide_marked(&unmarked));
+        assert!(!ipe_define_marked(&unmarked));
         let no_docs = serde_json::json!({ "attrs": ["non_exhaustive"] });
-        assert!(!ipe_provide_marked(&no_docs));
+        assert!(!ipe_define_marked(&no_docs));
     }
 
     #[test]
@@ -13337,14 +13337,14 @@ mod tests {
     fn marked_names_collects_only_crate_local_marked_items() {
         let doc = serde_json::json!({
             "index": {
-                "1": { "name": "Widget", "crate_id": 0, "docs": IPE_PROVIDE_MARKER },
+                "1": { "name": "Widget", "crate_id": 0, "docs": IPE_DEFINE_MARKER },
                 "2": { "name": "Plain", "crate_id": 0, "docs": "unmarked" },
                 // A marked item from a dependency (crate_id != 0) is ignored —
                 // a marker cannot travel in from a registry dep.
-                "3": { "name": "Foreign", "crate_id": 1, "docs": IPE_PROVIDE_MARKER }
+                "3": { "name": "Foreign", "crate_id": 1, "docs": IPE_DEFINE_MARKER }
             }
         });
-        let names = ipe_provide_marked_names(&doc);
+        let names = ipe_define_marked_names(&doc);
         assert!(names.contains("Widget"));
         assert!(!names.contains("Plain"));
         assert!(!names.contains("Foreign"));

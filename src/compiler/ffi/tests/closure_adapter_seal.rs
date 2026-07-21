@@ -1,4 +1,4 @@
-//! SEAL fixture for the `[rust.provide.closure]` sync closure adapter.
+//! SEAL fixture for the `[rust.define.closure]` sync closure adapter.
 //!
 //! The keystone invariant is `ipe build ⇒ cargo build ⇒ the closure runs`. This
 //! fixture proves the emitted adapter wrapper is not just well-shaped text but
@@ -21,7 +21,7 @@
 use ipe_ffi::bindings::emit_bindings;
 use ipe_ffi::pkginfo::PkgInfo;
 
-/// Decode a one-crate inspection document carrying a single `provide.closure`
+/// Decode a one-crate inspection document carrying a single `define.closure`
 /// entry, and return the emitted `_bindings.rs`.
 fn emit_closure(sig: &str) -> String {
     let doc = serde_json::json!({
@@ -37,7 +37,7 @@ fn emit_closure(sig: &str) -> String {
         "errors": []
     })
     .to_string();
-    let pkg = PkgInfo::decode_json(&doc).expect("provide.closure decodes");
+    let pkg = PkgInfo::decode_json(&doc).expect("define.closure decodes");
     emit_bindings(&pkg)
 }
 
@@ -86,7 +86,7 @@ fn closure_adapter_emits_a_wrapper_for_both_return_shapes() {
 }
 
 /// The rejection paths: an ill-formed or unsound signature over-drops the whole
-/// provide entry at decode (no wrapper emitted), never emit-and-cargo-fail.
+/// define entry at decode (no wrapper emitted), never emit-and-cargo-fail.
 #[test]
 fn unsound_closure_signatures_emit_no_wrapper() {
     for bad in [

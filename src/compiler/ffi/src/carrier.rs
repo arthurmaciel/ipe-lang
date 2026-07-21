@@ -1,16 +1,16 @@
-//! The closed carrier set for Ipê-defined Rust types (the `provide` surface).
+//! The closed carrier set for Ipê-defined Rust types (the `define` surface).
 //!
 //! When Ipê DEFINES a Rust type — a struct field type, or a closure parameter
 //! / result type — the type it names must be one the wrapper can lift an owned,
 //! immutable Ipê value into and out of *totally*. That set is closed and small:
 //! the scalar carriers plus a nominal opaque handle already vouched by the
 //! crate's own inspection. Anything outside it is refused at the decode
-//! boundary (over-drop the whole `provide` entry) rather than emitted as Rust
+//! boundary (over-drop the whole `define` entry) rather than emitted as Rust
 //! the wrapper cannot soundly coerce — the same parse-don't-validate discipline
 //! the `PkgInfo` and `Call` boundaries hold.
 //!
 //! This module is a pure decode LEAF: it renders no Rust and touches no
-//! sandbox path. It is the parse boundary the later `provide` emitters render
+//! sandbox path. It is the parse boundary the later `define` emitters render
 //! from, so no raw manifest string ever reaches generated source.
 
 use crate::diag::WireDefect;
@@ -42,7 +42,7 @@ pub enum Carrier {
 }
 
 impl Carrier {
-    /// Parse one carrier spelling as it appears in a `provide` manifest entry.
+    /// Parse one carrier spelling as it appears in a `define` manifest entry.
     ///
     /// The scalar spellings are the Ipê-facing carrier names AND their Rust
     /// spellings (both `i64` and `Int` name the integer carrier), so an author
@@ -191,7 +191,7 @@ impl ScalarCarrier {
 
 /// A single closure bound.
 ///
-/// The bound set a `provide.closure` signature may carry is exactly
+/// The bound set a `define.closure` signature may carry is exactly
 /// `{Send, Sync, 'static}` — a CLOSED enum, never free text, so no bound
 /// spelling from the manifest reaches emitted Rust as a raw string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -263,7 +263,7 @@ impl BoundSet {
     }
 }
 
-/// One allowlisted `#[derive]` a `provide.struct` / `provide.enum` may request.
+/// One allowlisted `#[derive]` a `define.struct` / `define.enum` may request.
 ///
 /// The set is the `MODELLABLE_5` fence (`{Hash, Eq, Ord, Clone, Default}`) — the
 /// two-way cross-crate assertion the parametric monomorphiser already relies on
@@ -326,7 +326,7 @@ impl Derive {
     }
 }
 
-/// The closed derive set a `provide.struct` requests, rendered from allowlisted
+/// The closed derive set a `define.struct` requests, rendered from allowlisted
 /// variants only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeriveSet(std::collections::BTreeSet<Derive>);
@@ -376,7 +376,7 @@ impl DeriveSet {
     }
 }
 
-/// A fully-parsed `provide.struct` definition: the Rust type to define, its
+/// A fully-parsed `define.struct` definition: the Rust type to define, its
 /// owned fields, and the derive set — rendered from closed carriers/derives
 /// only, never from raw manifest text.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -451,7 +451,7 @@ impl StructDef {
     /// struct's own nominal (`Int -> Counter`; `() -> Counter` for a fieldless
     /// struct). Rendered from the field carriers' Ipê surfaces and the struct
     /// name — never from `FnInfo::params`, which is empty for a synthetic
-    /// `provide` entry.
+    /// `define` entry.
     #[must_use]
     pub fn forwarder_ipe_sig(&self) -> String {
         let params = if self.fields.is_empty() {
@@ -499,7 +499,7 @@ impl StructDef {
     }
 }
 
-/// One variant of a `provide.enum`: a name and its tuple-payload carriers.
+/// One variant of a `define.enum`: a name and its tuple-payload carriers.
 ///
 /// An empty payload is a unit variant. Named-field (struct) variants are not
 /// represented — a `Message` enum's variants are unit or positional, and a tuple
@@ -533,7 +533,7 @@ impl EnumVariant {
     }
 }
 
-/// A fully-parsed `provide.enum` definition: the Rust enum, its variants, and
+/// A fully-parsed `define.enum` definition: the Rust enum, its variants, and
 /// the derive set.
 ///
 /// Rendered from closed carriers/derives only, never from raw manifest text —
@@ -542,8 +542,8 @@ impl EnumVariant {
 /// the derive set through [`DeriveSet::parse`] (the IEEE-754 fence fires if ANY
 /// variant carries a `Float` payload).
 ///
-/// This is the P4 form of the `provide` roadmap: an Ipê union → a Rust enum, the
-/// shape an Iced/TEA `Message` needs. Like `provide.struct`, it solves "define a
+/// This is the P4 form of the `define` roadmap: an Ipê union → a Rust enum, the
+/// shape an Iced/TEA `Message` needs. Like `define.struct`, it solves "define a
 /// Rust type" with ZERO new trust surface — the emitted definition and every
 /// variant constructor are total functions of decode-validated data.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -710,7 +710,7 @@ impl ClosureRet {
     }
 }
 
-/// A fully-parsed `provide.closure` signature.
+/// A fully-parsed `define.closure` signature.
 ///
 /// Rendered from ONLY closed carriers and bounds — never from a raw manifest
 /// string. The emitter reads this, exactly as `render_dep_line` reads
@@ -727,7 +727,7 @@ pub struct ClosureSig {
 }
 
 impl ClosureSig {
-    /// Parse a `provide.closure` signature of the shape
+    /// Parse a `define.closure` signature of the shape
     /// `Fn(P0, P1, …) -> R + Send + Sync + 'static`.
     ///
     /// Every fragment routes through [`Carrier::parse`] or the closed bound

@@ -1,18 +1,18 @@
-//! SEAL fixture for the `#[ipe::provide]` trait-impl escape hatch (Tier 2 §6).
+//! SEAL fixture for the `#[define_in_ipe]` trait-impl escape hatch (Tier 2 §6).
 //!
 //! Some crate types need a real hand-written `impl Trait` whose derive is
 //! outside Ipê's closed modellable set — a Bevy `#[derive(Component)]` /
 //! `Resource`, or here a fixture `Render` trait. Such a type cannot be
-//! *declared* through the closed Tier 1 `[rust.provide.*]` forms, so the author
+//! *declared* through the closed Tier 1 `[rust.define.*]` forms, so the author
 //! writes it as normal Rust in a `[rust.wrapper]` crate and tags it with
-//! `#[ipe::provide]`. The tagged type is bound as an ORDINARY wrapper symbol —
+//! `#[define_in_ipe]`. The tagged type is bound as an ORDINARY wrapper symbol —
 //! an Ipê-held opaque nominal plus its carrier-compatible forwarders — never
 //! injected into emitted `.ipe`. This is a special case of a Tier 2 wrapper, not
 //! a new mechanism, so it rides the SAME inspect → emit → path-dep pipeline the
 //! `wrapper_crate_seal.rs` fixture proves.
 //!
 //! The keystone SEAL is unchanged: `ipe` exit 0 ⇒ the emitted app crate — our
-//! generated bindings PLUS the wrapper (which depends on the `ipe_provide`
+//! generated bindings PLUS the wrapper (which depends on the `ipe_bindgen`
 //! marker crate and hand-writes a trait impl) as a `path` dependency —
 //! cargo-builds and runs.
 //!
@@ -28,7 +28,7 @@ use ipe_ffi::interface::crate_interface;
 use ipe_ffi::pkginfo::PkgInfo;
 
 /// The inspection document the inspector produces for a wrapper crate whose
-/// `#[ipe::provide]`-marked `Sprite` type implements a fixture `Render` trait: a
+/// `#[define_in_ipe]`-marked `Sprite` type implements a fixture `Render` trait: a
 /// carrier-typed constructor (`spawn(depth: i64) -> Sprite`) and an owned-value
 /// reader (`label(s: Sprite) -> String`, forwarding the hand-written
 /// `Render::label` impl method). `wrapperPath` marks the package as an
@@ -62,7 +62,7 @@ fn sprite_wrapper_pkg(wrapper_path: &str) -> PkgInfo {
 
 /// Default gate: the marked type's constructor + reader bind and call into the
 /// wrapper crate, and the driver renders the wrapper as a `path` dependency. A
-/// `#[ipe::provide]`-marked type is bound exactly like any other exposed wrapper
+/// `#[define_in_ipe]`-marked type is bound exactly like any other exposed wrapper
 /// symbol — the emit path does not distinguish it, which is the point.
 #[test]
 fn a_marked_trait_impl_type_binds_its_symbols_and_depends_by_path() {
@@ -147,8 +147,8 @@ fn a_marked_borrowed_return_method_over_drops() {
 }
 
 /// The load-bearing SEAL proof under `IPE_E2E=1`: run the REAL inspector over a
-/// wrapper crate that depends on the `ipe_provide` marker crate, tags a `Sprite`
-/// type with `#[ipe_provide::provide]`, and hand-writes an `impl Render for
+/// wrapper crate that depends on the `ipe_bindgen` marker crate, tags a `Sprite`
+/// type with `#[ipe_bindgen::define_in_ipe]`, and hand-writes an `impl Render for
 /// Sprite`. Assert the marker surfaces the type (its constructor + trait-impl
 /// reader bind even though `expose` names ONLY the constructor), then assemble
 /// the emitted app crate + the wrapper `path` dep and cargo-run it. `ipe` exit 0
@@ -171,7 +171,7 @@ fn the_marker_surfaces_the_type_and_the_emitted_crate_builds_and_runs() {
         return; // inspector not built in this environment — skip
     };
 
-    let root = std::env::temp_dir().join(format!("ipe_ffi_provide_seal_{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("ipe_ffi_define_seal_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
 
     // 1-2. Write the marked wrapper crate and run the REAL inspector over it,
@@ -181,7 +181,7 @@ fn the_marker_surfaces_the_type_and_the_emitted_crate_builds_and_runs() {
     let Some(pkg) = inspect_marked_wrapper(&wrapper_dir, &root, &inspector) else {
         return;
     };
-    // The `#[ipe::provide]` marker must auto-surface `Sprite` (and thus the
+    // The `#[define_in_ipe]` marker must auto-surface `Sprite` (and thus the
     // `label` reader that takes/produces it) even though it is not in `--expose`
     // — proving marker-driven pickup, not just the expose list.
     let survivors = surviving_ref_names(&pkg);
@@ -191,7 +191,7 @@ fn the_marker_surfaces_the_type_and_the_emitted_crate_builds_and_runs() {
     );
     assert!(
         survivors.iter().any(|s| s == "label"),
-        "the #[ipe::provide] marker must auto-surface the trait-impl reader \
+        "the #[define_in_ipe] marker must auto-surface the trait-impl reader \
          even though only `spawn` was exposed: {survivors:?}"
     );
 
@@ -213,8 +213,8 @@ fn the_marker_surfaces_the_type_and_the_emitted_crate_builds_and_runs() {
     std::fs::write(
         root.join("Cargo.toml"),
         format!(
-            "[package]\nname = \"provide_seal\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\
-             [[bin]]\nname = \"provide_seal\"\npath = \"src/main.rs\"\n\
+            "[package]\nname = \"define_seal\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\
+             [[bin]]\nname = \"define_seal\"\npath = \"src/main.rs\"\n\
              [dependencies]\nsprite_wrap = {{ path = {wrapper_abs:?} }}\n",
         ),
     )
@@ -272,7 +272,7 @@ fn main() {{
 /// the real inspector over it (exposing only `spawn`), returning the decoded
 /// inspection — or `None` when the inspector's nightly rustdoc is unavailable.
 ///
-/// The wrapper is normal Rust: it tags `Sprite` with `#[ipe_provide::provide]`
+/// The wrapper is normal Rust: it tags `Sprite` with `#[ipe_bindgen::define_in_ipe]`
 /// and hand-writes an `impl Render for Sprite` a closed Tier 1 form could not
 /// express (a fixture `Render`, standing in for a Bevy `Component`). `label`
 /// forwards the trait-impl method as an owned-value binding.
@@ -281,20 +281,20 @@ fn inspect_marked_wrapper(
     root: &std::path::Path,
     inspector: &std::path::Path,
 ) -> Option<PkgInfo> {
-    // The `ipe_provide` marker crate lives beside the ffi crate in the
+    // The `ipe_bindgen` marker crate lives beside the ffi crate in the
     // workspace; the wrapper depends on it by an absolute `path`.
-    let provide_crate = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../ffi-provide-macro")
+    let define_crate = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../ffi-bindgen-macro")
         .canonicalize()
-        .expect("ipe_provide crate resolves");
+        .expect("ipe_bindgen crate resolves");
 
     std::fs::create_dir_all(wrapper_dir.join("src")).expect("mkdir wrapper");
     std::fs::write(
         wrapper_dir.join("Cargo.toml"),
         format!(
             "[package]\nname = \"sprite_wrap\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
-             [dependencies]\nipe_provide = {{ path = {:?} }}\n",
-            provide_crate.to_string_lossy()
+             [dependencies]\nipe_bindgen = {{ path = {:?} }}\n",
+            define_crate.to_string_lossy()
         ),
     )
     .expect("wrapper Cargo.toml");
@@ -304,7 +304,7 @@ fn inspect_marked_wrapper(
          /// escape-hatch case (stands in for a Bevy `Component`).\n\
          pub trait Render { fn label(&self) -> String; }\n\
          \n\
-         #[ipe_provide::provide]\n\
+         #[ipe_bindgen::define_in_ipe]\n\
          pub struct Sprite { depth: i64 }\n\
          \n\
          impl Render for Sprite {\n\
@@ -321,7 +321,7 @@ fn inspect_marked_wrapper(
     let probe = root.join("probe");
     std::fs::create_dir_all(&probe).expect("mkdir probe");
     // `--allow-build-scripts` is required because the wrapper depends on the
-    // `ipe_provide` proc-macro crate (proc-macro expansion runs at compile time);
+    // `ipe_bindgen` proc-macro crate (proc-macro expansion runs at compile time);
     // the real CLI passes it after informed consent (`install_wrapper`). The test
     // runs unsandboxed on a scratch probe dir.
     let out = std::process::Command::new(inspector)

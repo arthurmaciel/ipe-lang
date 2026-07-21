@@ -14,7 +14,7 @@ members = [
     "src/compiler/backend",
     "src/compiler/backend/rust",
     "src/compiler/ffi",
-    "src/ffi-provide-macro",
+    "src/ffi-bindgen-macro",
     "src/compiler/sandbox",
     "src/compiler/watch",
     "src/stdlib",

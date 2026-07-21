@@ -271,7 +271,7 @@ pub fn unify_foreign_nominals(catalog: &mut [InstalledCrate]) -> UnifyReport {
                 &c.module_name,
                 member_imports,
                 &c.opaque_types,
-                &c.provide_types,
+                &c.define_types,
                 &c.bindings,
             );
         }
@@ -315,7 +315,7 @@ mod tests {
             bindings_source: String::new(),
             opaque_types,
             opaque_type_ids,
-            provide_types: std::collections::BTreeSet::new(),
+            define_types: std::collections::BTreeSet::new(),
             cargo_deps: vec![],
             bindings,
             wrapper_idents: std::collections::BTreeSet::new(),

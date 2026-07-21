@@ -1,11 +1,11 @@
-//! SEAL fixture for the `[rust.provide.*]` Ipê-side FORWARDER plumbing.
+//! SEAL fixture for the `[rust.define.*]` Ipê-side FORWARDER plumbing.
 //!
-//! The earlier `provide_struct_seal` / `provide_enum_seal` fixtures prove the
+//! The earlier `define_struct_seal` / `define_enum_seal` fixtures prove the
 //! emitted `_bindings.rs` DEFINITION + constructors compile. This fixture proves
 //! the next link: the FFI interface admits those constructors as Ipê-callable
 //! FORWARDERS (an opaque nominal `type Counter` + a `counter_new` binding), and
 //! the emitted app-crate — the `src/ffi.rs` module tree the backend assembles —
-//! resolves the provide type at its crate-absolute path `crate::ffi::<slug>::<T>`
+//! resolves the define type at its crate-absolute path `crate::ffi::<slug>::<T>`
 //! and CALLS every forwarder.
 //!
 //! The keystone invariant is `ipe build ⇒ cargo build`. The interface-admission
@@ -18,8 +18,8 @@ use ipe_ffi::bindings::emit_bindings;
 use ipe_ffi::interface::crate_interface;
 use ipe_ffi::pkginfo::PkgInfo;
 
-/// A one-crate package with a `provide.struct` (a `Counter` model) and a
-/// `provide.enum` (a `Message` sum: one unit + one payload variant) — the exact
+/// A one-crate package with a `define.struct` (a `Counter` model) and a
+/// `define.enum` (a `Message` sum: one unit + one payload variant) — the exact
 /// create-types surface an Iced/TEA counter needs.
 fn counter_pkg() -> PkgInfo {
     let doc = serde_json::json!({
@@ -44,22 +44,22 @@ fn counter_pkg() -> PkgInfo {
         "errors": []
     })
     .to_string();
-    PkgInfo::decode_json(&doc).expect("provide surface decodes")
+    PkgInfo::decode_json(&doc).expect("define surface decodes")
 }
 
-/// The interface admits an opaque nominal per provide type and a forwarder per
+/// The interface admits an opaque nominal per define type and a forwarder per
 /// constructor, with arity + signature taken from the def (never the empty fn
 /// params). Default gate — no cargo.
 #[test]
 fn forwarders_and_nominals_are_admitted() {
     let iface = crate_interface(&counter_pkg());
     assert!(
-        iface.provide_types.contains("Counter"),
+        iface.define_types.contains("Counter"),
         "{:?}",
         iface.skipped
     );
     assert!(
-        iface.provide_types.contains("Message"),
+        iface.define_types.contains("Message"),
         "{:?}",
         iface.skipped
     );
@@ -86,7 +86,7 @@ fn forwarders_and_nominals_are_admitted() {
 
 /// The load-bearing SEAL proof: under `IPE_E2E=1`, assemble the app-crate module
 /// tree the backend emits — `src/ffi.rs` wrapping the bindings as
-/// `pub mod <slug> { … } pub use <slug>::*;`, the provide types referenced at
+/// `pub mod <slug> { … } pub use <slug>::*;`, the define types referenced at
 /// their crate-absolute path `crate::ffi::<slug>::<T>` — and a `main` that calls
 /// every forwarder and folds the sum. Proves the crate-absolute path resolves
 /// and the nullary forwarders build.
@@ -107,7 +107,7 @@ fn assembled_module_tree_builds_and_runs() {
     // wraps the generated bindings in `pub mod <slug> { … } pub use <slug>::*;`.
     let ffi_rs = format!("pub mod {slug} {{\n{bindings}}}\npub use {slug}::*;\n");
 
-    // The `main` references the provide types at their CRATE-ABSOLUTE path — the
+    // The `main` references the define types at their CRATE-ABSOLUTE path — the
     // exact `foreign_types` value `assemble_emit` renders (`crate::ffi::<slug>::T`)
     // — and calls each forwarder fn (also under `crate::ffi::`).
     let main_rs = format!(
@@ -156,7 +156,7 @@ fn main() {{
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         out.status.success(),
-        "the assembled provide-forwarder module tree must build and run exit 0.\n\
+        "the assembled define-forwarder module tree must build and run exit 0.\n\
          stdout: {stdout}\nstderr: {stderr}"
     );
     assert!(

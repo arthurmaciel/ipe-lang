@@ -427,7 +427,7 @@ pub fn to_snake_case(s: &str) -> String {
 }
 
 /// The `snake_case` of a variant identifier (`SetValue` → `set_value`), for a
-/// `provide.enum` per-variant constructor suffix.
+/// `define.enum` per-variant constructor suffix.
 ///
 /// The single source of truth shared by the wrapper emitter (which names each
 /// emitted per-variant `pub fn`) and the interface generator (which forwards to
@@ -461,7 +461,7 @@ pub fn wrapper_fn_ident(kernel_name: &str, ref_name: &str) -> String {
     to_snake_case(&format!("{base}_{ref_name}"))
 }
 
-/// The opaque handle nominal a `provide.closure` adapter surfaces its returned
+/// The opaque handle nominal a `define.closure` adapter surfaces its returned
 /// boxed closure as.
 ///
 /// The program HOLDS this nominal and hands it to a foreign `run`-style
@@ -469,7 +469,7 @@ pub fn wrapper_fn_ident(kernel_name: &str, ref_name: &str) -> String {
 /// ref name upper-camels and gains a `Closure` suffix (`update` →
 /// `UpdateClosure`, `apply_fn` → `ApplyFnClosure`): an upper-camel Ipê type name
 /// distinct from any snake-case value binding, and — with the suffix — from a
-/// bare provide-struct/enum nominal an author would name after the type itself
+/// bare define-struct/enum nominal an author would name after the type itself
 /// (`Counter`, `Message`). The interface still gates the result against every
 /// real nominal fail-closed; this scheme only lowers the odds a gate must fire.
 #[must_use]

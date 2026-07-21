@@ -66,15 +66,15 @@ pub struct CrateInterface {
     /// path are the SAME Rust type and collapse to one Ipê nominal. A name
     /// absent here (older cache / no recoverable identity) never unifies.
     pub opaque_type_ids: BTreeMap<String, String>,
-    /// The nominal names this crate's `[rust.provide.struct/enum]` decls DEFINE
+    /// The nominal names this crate's `[rust.define.struct/enum]` decls DEFINE
     /// (`Counter`, `Message`). Unlike [`Self::opaque_types`] — external crate
-    /// types the inspector found at an absolute `::crate::Path` — a provide type
+    /// types the inspector found at an absolute `::crate::Path` — a define type
     /// is DEFINED in the emitted `_bindings.rs` and lives at
     /// `crate::ffi::<slug>::<Name>`. The slug is not known here (the interface
     /// generator has only the `PkgInfo`), so the crate-local path is assembled
     /// downstream (`assemble_emit`) where the slug is; this set is the ground
-    /// truth for WHICH names are provide-defined so the two paths never blur.
-    pub provide_types: BTreeSet<String>,
+    /// truth for WHICH names are define-defined so the two paths never blur.
+    pub define_types: BTreeSet<String>,
     /// The included bindings.
     pub bindings: Vec<InterfaceBinding>,
     /// The excluded bindings, with reasons.
@@ -312,7 +312,7 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
     let mut skipped: Vec<SkippedBinding> = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut used_opaques: BTreeSet<String> = BTreeSet::new();
-    let mut provide_types: BTreeSet<String> = BTreeSet::new();
+    let mut define_types: BTreeSet<String> = BTreeSet::new();
 
     for f in pkg.fns() {
         let ref_name = f.wrapper_ref_name();
@@ -358,18 +358,18 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
                     &mut bindings,
                     &mut skipped,
                     &mut seen,
-                    &mut provide_types,
+                    &mut define_types,
                 );
             } else {
                 skip(
-                    "provide.closure with an unresolvable or parameterised opaque \
+                    "define.closure with an unresolvable or parameterised opaque \
                      param/return — adapter over-dropped in _bindings.rs",
                     &mut skipped,
                 );
             }
             continue;
         }
-        // A provide.struct / provide.enum DEFINES an Ipê-held nominal Rust type
+        // A define.struct / define.enum DEFINES an Ipê-held nominal Rust type
         // and admits its constructor(s) as Ipê forwarders. The whole surface is
         // synthesised from the parsed def (its `params()`/`results()` are empty —
         // it is a manifest entry, not an inspected fn), so its signature, arity,
@@ -388,7 +388,7 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
         ) && !survivors.contains(&ref_name)
         {
             skip(
-                "provide.struct/enum with an unresolvable or parameterised opaque \
+                "define.struct/enum with an unresolvable or parameterised opaque \
                  field/payload — definition over-dropped in _bindings.rs",
                 &mut skipped,
             );
@@ -402,7 +402,7 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
                 &mut bindings,
                 &mut skipped,
                 &mut seen,
-                &mut provide_types,
+                &mut define_types,
             );
             continue;
         }
@@ -414,7 +414,7 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
                 &mut bindings,
                 &mut skipped,
                 &mut seen,
-                &mut provide_types,
+                &mut define_types,
             );
             continue;
         }
@@ -525,7 +525,7 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
         &module_name,
         &BTreeMap::new(),
         &opaque_types,
-        &provide_types,
+        &define_types,
         &bindings,
     );
     CrateInterface {
@@ -534,14 +534,14 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
         source,
         opaque_types,
         opaque_type_ids,
-        provide_types,
+        define_types,
         bindings,
         skipped,
     }
 }
 
-/// Admit a `provide.struct` constructor as an Ipê forwarder, registering the
-/// struct's nominal as a provide-defined type.
+/// Admit a `define.struct` constructor as an Ipê forwarder, registering the
+/// struct's nominal as a define-defined type.
 ///
 /// The whole surface is synthesised from the parsed [`StructDef`]: the forwarder
 /// signature and arity come from the field carriers (the fn's own
@@ -551,7 +551,7 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
 /// * a constructor name that is not a legal Ipê value identifier is dropped;
 /// * a duplicate constructor name keeps the first;
 /// * the struct nominal routes through [`claim_nominal`], which refuses a
-///   reserved-builtin shadow or a collision with another provide surface
+///   reserved-builtin shadow or a collision with another define surface
 ///   (an admitted shadowing/colliding nominal is a silent-wrong-type or
 ///   duplicate-definition SEAL breach — refuse, never rename).
 fn admit_struct_forwarder(
@@ -561,13 +561,13 @@ fn admit_struct_forwarder(
     bindings: &mut Vec<InterfaceBinding>,
     skipped: &mut Vec<SkippedBinding>,
     seen: &mut BTreeSet<String>,
-    provide_types: &mut BTreeSet<String>,
+    define_types: &mut BTreeSet<String>,
 ) {
     let type_name = def.name.as_str();
     if !valid_ipe_value_name(ctor) {
         skipped.push(SkippedBinding {
             ref_name: ctor.to_owned(),
-            reason: "provide.struct constructor name is not a legal Ipê identifier".to_owned(),
+            reason: "define.struct constructor name is not a legal Ipê identifier".to_owned(),
         });
         return;
     }
@@ -578,7 +578,7 @@ fn admit_struct_forwarder(
         });
         return;
     }
-    if let Err(reason) = claim_nominal("provide.struct", type_name, provide_types) {
+    if let Err(reason) = claim_nominal("define.struct", type_name, define_types) {
         skipped.push(SkippedBinding {
             ref_name: ctor.to_owned(),
             reason,
@@ -593,7 +593,7 @@ fn admit_struct_forwarder(
     });
 }
 
-/// Admit each `provide.enum` variant constructor as an Ipê forwarder, registering
+/// Admit each `define.enum` variant constructor as an Ipê forwarder, registering
 /// the enum's nominal ONCE.
 ///
 /// The enum is one Rust type; its N per-variant constructor fns all return that
@@ -602,7 +602,7 @@ fn admit_struct_forwarder(
 /// Over-drops fail-closed:
 ///
 /// * the enum nominal routes through [`claim_nominal`] up-front, which refuses a
-///   reserved-builtin shadow or a collision with another provide surface,
+///   reserved-builtin shadow or a collision with another define surface,
 ///   dropping the WHOLE entry (all variant forwarders) — a shadowing/colliding
 ///   nominal is a silent-wrong-type or duplicate-definition SEAL breach;
 /// * a per-variant constructor name that is not a legal Ipê value identifier is
@@ -615,14 +615,14 @@ fn admit_enum_forwarders(
     bindings: &mut Vec<InterfaceBinding>,
     skipped: &mut Vec<SkippedBinding>,
     seen: &mut BTreeSet<String>,
-    provide_types: &mut BTreeSet<String>,
+    define_types: &mut BTreeSet<String>,
 ) {
     let enum_name = def.name.as_str();
     // Claim the ONE shared nominal up-front so a reserved-builtin shadow or a
-    // collision with another provide surface refuses the WHOLE entry fail-closed
+    // collision with another define surface refuses the WHOLE entry fail-closed
     // — a variant forwarder must never point at an enum whose `type` was dropped.
     // An enum with no surviving variant un-claims the nominal at the tail.
-    if let Err(reason) = claim_nominal("provide.enum", enum_name, provide_types) {
+    if let Err(reason) = claim_nominal("define.enum", enum_name, define_types) {
         skipped.push(SkippedBinding {
             ref_name: ref_name.to_owned(),
             reason,
@@ -641,7 +641,7 @@ fn admit_enum_forwarders(
         if !valid_ipe_value_name(&variant_ref) {
             skipped.push(SkippedBinding {
                 ref_name: variant_ref,
-                reason: "provide.enum variant constructor name is not a legal Ipê identifier"
+                reason: "define.enum variant constructor name is not a legal Ipê identifier"
                     .to_owned(),
             });
             continue;
@@ -666,27 +666,27 @@ fn admit_enum_forwarders(
     // so a bare `type` would be a dead opaque. Un-claim it otherwise (it was
     // claimed up-front for the fail-closed collision gate).
     if !any_admitted {
-        provide_types.remove(enum_name);
+        define_types.remove(enum_name);
     }
 }
 
-/// Admit a `provide.closure` adapter as an arity-1 Ipê forwarder, registering
-/// its returned boxed closure's opaque handle nominal as a provide-defined type.
+/// Admit a `define.closure` adapter as an arity-1 Ipê forwarder, registering
+/// its returned boxed closure's opaque handle nominal as a define-defined type.
 ///
 /// The wrapper takes ONE argument — the Ipê function value — and returns the
 /// boxed closure surfaced as the handle nominal (see
 /// [`crate::naming::closure_handle_nominal`]); the forwarder's Ipê signature is
 /// `(A -> B -> R) -> <Handle>`, synthesised from the parsed [`ClosureSig`]'s
-/// carriers, never the empty fn params. The handle registers in `provide_types`
+/// carriers, never the empty fn params. The handle registers in `define_types`
 /// so the backend resolves it at the crate-local `crate::ffi::<slug>::<Handle>`,
-/// exactly as a provide-struct/enum nominal.
+/// exactly as a define-struct/enum nominal.
 ///
 /// Over-drops fail-closed — the handle nominal is never renamed to dodge a clash:
 ///
 /// * a `ref_name` that is not a legal Ipê value identifier, or a duplicate
 ///   `ref_name`, is dropped (keeping the first);
 /// * the handle nominal routes through [`claim_nominal`], which refuses a
-///   reserved-builtin shadow or a collision with any other provide surface
+///   reserved-builtin shadow or a collision with any other define surface
 ///   (struct / enum / another closure adapter) fail-closed.
 fn admit_closure_forwarder(
     ref_name: &str,
@@ -695,12 +695,12 @@ fn admit_closure_forwarder(
     bindings: &mut Vec<InterfaceBinding>,
     skipped: &mut Vec<SkippedBinding>,
     seen: &mut BTreeSet<String>,
-    provide_types: &mut BTreeSet<String>,
+    define_types: &mut BTreeSet<String>,
 ) {
     if !valid_ipe_value_name(ref_name) {
         skipped.push(SkippedBinding {
             ref_name: ref_name.to_owned(),
-            reason: "provide.closure adapter name is not a legal Ipê identifier".to_owned(),
+            reason: "define.closure adapter name is not a legal Ipê identifier".to_owned(),
         });
         return;
     }
@@ -712,7 +712,7 @@ fn admit_closure_forwarder(
         });
         return;
     }
-    if let Err(reason) = claim_nominal("provide.closure handle", &handle, provide_types) {
+    if let Err(reason) = claim_nominal("define.closure handle", &handle, define_types) {
         skipped.push(SkippedBinding {
             ref_name: ref_name.to_owned(),
             reason,
@@ -727,36 +727,36 @@ fn admit_closure_forwarder(
     });
 }
 
-/// Claim a provide-defined nominal for the interface, fail-closed.
+/// Claim a define-defined nominal for the interface, fail-closed.
 ///
-/// EVERY provide surface — struct, enum, closure handle — DEFINES a bare
+/// EVERY define surface — struct, enum, closure handle — DEFINES a bare
 /// in-module `pub struct`/`pub enum`/`pub type` in the one emitted
 /// `pub mod <slug>` region, so two distinct definitions that claim the SAME
 /// nominal are an `E0428` the app crate cannot compile — an `ipe`-exit-0 ⇒
-/// cargo-fail SEAL breach. Routing every claim through here makes "each provide
+/// cargo-fail SEAL breach. Routing every claim through here makes "each define
 /// nominal registered at most once" the ONLY representable outcome, independent
 /// of admission order (a name-collision is refused whichever surface declares it
 /// second, never renamed to dodge the clash):
 ///
 /// * a nominal shadowing an Ipê reserved builtin is refused (a shadowing nominal
 ///   is a silent-wrong-type breach);
-/// * a nominal already claimed by another provide surface is refused.
+/// * a nominal already claimed by another define surface is refused.
 ///
 /// Returns `Ok(())` with the nominal inserted, or `Err(reason)` naming the broken
 /// rule for the caller to record as a skip.
 fn claim_nominal(
     kind: &str,
     nominal: &str,
-    provide_types: &mut BTreeSet<String>,
+    define_types: &mut BTreeSet<String>,
 ) -> Result<(), String> {
     if ipe_canon::is_reserved_builtin_type_name(nominal) {
         return Err(format!(
             "{kind} type `{nominal}` shadows an Ipê reserved builtin type"
         ));
     }
-    if !provide_types.insert(nominal.to_owned()) {
+    if !define_types.insert(nominal.to_owned()) {
         return Err(format!(
-            "{kind} type `{nominal}` collides with another provide-defined nominal"
+            "{kind} type `{nominal}` collides with another define-defined nominal"
         ));
     }
     Ok(())
@@ -776,23 +776,23 @@ pub fn render_module(
     module_name: &str,
     imports: &BTreeMap<String, BTreeSet<String>>,
     opaque_types: &BTreeMap<String, String>,
-    provide_types: &BTreeSet<String>,
+    define_types: &BTreeSet<String>,
     bindings: &[InterfaceBinding],
 ) -> String {
     let mut exports: Vec<String> = opaque_types.keys().cloned().collect();
-    exports.extend(provide_types.iter().cloned());
+    exports.extend(define_types.iter().cloned());
     exports.extend(bindings.iter().map(|b| b.ref_name.clone()));
     let mut out = format!("module {module_name} exposing ({})\n", exports.join(", "));
     for (home, names) in imports {
         let joined = names.iter().cloned().collect::<Vec<_>>().join(", ");
         let _ = write!(out, "\nimport {home} exposing ({joined})\n");
     }
-    // Both an inspected opaque foreign type and a `provide`-defined nominal are
+    // Both an inspected opaque foreign type and a `define`-defined nominal are
     // Ipê-held opaque handles — one nullary `type <Name> = <Name>` declaration,
     // exported WITHOUT `(..)` so the placeholder constructor never escapes. The
     // two differ only in their Rust PATH (external `::crate::T` vs crate-local
     // `crate::ffi::<slug>::T`), resolved downstream, never in their Ipê surface.
-    for name in opaque_types.keys().chain(provide_types.iter()) {
+    for name in opaque_types.keys().chain(define_types.iter()) {
         // Writing into a String is infallible.
         let _ = write!(out, "\ntype {name} = {name}\n");
     }
@@ -1011,7 +1011,7 @@ mod tests {
         );
     }
 
-    /// One-crate package carrying a single `provide.struct` entry.
+    /// One-crate package carrying a single `define.struct` entry.
     fn struct_pkg(ctor: &str, name: &str, fields: &serde_json::Value) -> PkgInfo {
         let doc = serde_json::json!({
             "pkg": "demo", "name": "demo", "version": "0.1.0",
@@ -1024,7 +1024,7 @@ mod tests {
         PkgInfo::decode_json(&doc.to_string()).expect("decodes")
     }
 
-    /// One-crate package carrying a single `provide.enum` entry.
+    /// One-crate package carrying a single `define.enum` entry.
     fn enum_pkg(ctor: &str, name: &str, variants: &serde_json::Value) -> PkgInfo {
         let doc = serde_json::json!({
             "pkg": "demo", "name": "demo", "version": "0.1.0",
@@ -1038,14 +1038,14 @@ mod tests {
     }
 
     #[test]
-    fn provide_struct_admits_a_forwarder_and_opaque_nominal() {
+    fn define_struct_admits_a_forwarder_and_opaque_nominal() {
         let iface = crate_interface(&struct_pkg(
             "counter_new",
             "Counter",
             &serde_json::json!([{ "name": "value", "type": "i64" }]),
         ));
         assert!(
-            iface.provide_types.contains("Counter"),
+            iface.define_types.contains("Counter"),
             "{:?}",
             iface.skipped
         );
@@ -1074,7 +1074,7 @@ mod tests {
     }
 
     #[test]
-    fn provide_struct_fieldless_is_a_nullary_forwarder() {
+    fn define_struct_fieldless_is_a_nullary_forwarder() {
         // A zero-field struct's constructor is nullary — the emitted `pub fn` is
         // zero-param, so the forwarder must bind zero args (no spurious arg0).
         let iface = crate_interface(&struct_pkg("unit_new", "Unit", &serde_json::json!([])));
@@ -1095,7 +1095,7 @@ mod tests {
     }
 
     #[test]
-    fn provide_enum_admits_one_forwarder_per_variant_and_one_nominal() {
+    fn define_enum_admits_one_forwarder_per_variant_and_one_nominal() {
         let iface = crate_interface(&enum_pkg(
             "message_new",
             "Message",
@@ -1107,7 +1107,7 @@ mod tests {
         // The enum nominal registers exactly once, not per-variant.
         assert_eq!(
             iface
-                .provide_types
+                .define_types
                 .iter()
                 .filter(|n| *n == "Message")
                 .count(),
@@ -1146,8 +1146,8 @@ mod tests {
     }
 
     #[test]
-    fn provide_type_shadowing_a_builtin_is_refused_whole() {
-        // A provide type named `Result` (a reserved builtin) refuses the WHOLE
+    fn define_type_shadowing_a_builtin_is_refused_whole() {
+        // A define type named `Result` (a reserved builtin) refuses the WHOLE
         // entry — no forwarder, no nominal — an admitted shadow is a silent
         // wrong-type SEAL breach.
         let iface = crate_interface(&enum_pkg(
@@ -1155,7 +1155,7 @@ mod tests {
             "Result",
             &serde_json::json!([{ "name": "Ok", "payload": [] }]),
         ));
-        assert!(iface.provide_types.is_empty());
+        assert!(iface.define_types.is_empty());
         assert!(iface.bindings.iter().all(|b| b.ref_name != "result_new_ok"));
         assert!(
             iface
