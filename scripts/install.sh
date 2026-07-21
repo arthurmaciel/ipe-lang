@@ -286,18 +286,104 @@ for b in ipe ipe-ffi-inspector; do
 done
 [ "$installed" -gt 0 ] || die "The archive contained no ipe binaries."
 
+# ── PATH setup ────────────────────────────────────────────────────────────────
+# ipe is installed, but a bin dir is only useful once it is on PATH. We make
+# that painless without ever silently editing a shell file: we detect the login
+# shell's rc, show the EXACT file and the one line we would add, ask for a yes on
+# the real terminal (/dev/tty — never the piped installer on stdin), append only
+# on a yes, and fall back to a copy-paste hint otherwise.
+
+# on_path — succeed when INSTALL_DIR is already a PATH entry.
+on_path() {
+  case ":${PATH:-}:" in
+    *":$INSTALL_DIR:"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# resolve_shell_rc — set RC_FILE (the login shell's startup file) and PATH_LINE
+# (the exact line that puts INSTALL_DIR on PATH, in that shell's syntax).
+resolve_shell_rc() {
+  sh_name="$(basename "${SHELL:-sh}")"
+  case "$sh_name" in
+    zsh)  RC_FILE="${ZDOTDIR:-$HOME}/.zshrc" ;;
+    bash)
+      # Prefer an existing file; else .bash_profile on macOS (login shells),
+      # .bashrc elsewhere.
+      if   [ -f "$HOME/.bashrc" ];       then RC_FILE="$HOME/.bashrc"
+      elif [ -f "$HOME/.bash_profile" ]; then RC_FILE="$HOME/.bash_profile"
+      elif [ "$plat" = darwin ];         then RC_FILE="$HOME/.bash_profile"
+      else RC_FILE="$HOME/.bashrc"; fi
+      ;;
+    fish) RC_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish" ;;
+    ksh)  RC_FILE="$HOME/.kshrc" ;;
+    *)    RC_FILE="$HOME/.profile" ;;
+  esac
+  if [ "$sh_name" = fish ]; then
+    PATH_LINE="fish_add_path $INSTALL_DIR"
+  else
+    # shellcheck disable=SC2016  # $PATH must stay literal so it expands per-shell
+    PATH_LINE="export PATH=\"$INSTALL_DIR:\$PATH\""
+  fi
+}
+
+# manual_path_hint — the do-it-yourself fallback (PATH_LINE must be set).
+manual_path_hint() {
+  printf '  Run this now, and add it to your shell profile to keep it:\n' >&2
+  printf '      %s%s%s\n\n' "$C_DIM" "$PATH_LINE" "$C_RESET" >&2
+}
+
+# persist_path — offer to add INSTALL_DIR to the login shell's rc, with consent.
+persist_path() {
+  resolve_shell_rc
+
+  # Already written into the rc — just say how to pick it up.
+  if [ -f "$RC_FILE" ] && grep -Fq "$INSTALL_DIR" "$RC_FILE" 2>/dev/null; then
+    printf '\n%sAlmost there!%s %s is set in %s%s%s.\n' \
+      "$C_GREEN" "$C_RESET" "$INSTALL_DIR" "$C_YELLOW" "$RC_FILE" "$C_RESET" >&2
+    info "Open a new terminal, or run: source $RC_FILE"
+    return 0
+  fi
+
+  # No terminal to ask on (piped into a non-interactive shell, CI): never edit a
+  # file unasked — print the hint and stop.
+  if [ "$IS_TTY" != 1 ] || [ ! -r /dev/tty ]; then
+    printf '\n%sAlmost there!%s Add %s to your PATH:\n' \
+      "$C_GREEN" "$C_RESET" "$INSTALL_DIR" >&2
+    manual_path_hint
+    return 0
+  fi
+
+  printf '\n%s%s is not on your PATH yet.%s\n' "$C_BOLD" "$INSTALL_DIR" "$C_RESET" >&2
+  printf '  I can add one line to %s%s%s:\n' "$C_YELLOW" "$RC_FILE" "$C_RESET" >&2
+  printf '      %s%s%s\n' "$C_DIM" "$PATH_LINE" "$C_RESET" >&2
+  printf '  Update it now? [Y/n] ' >&2
+
+  ans=''
+  read -r ans < /dev/tty || ans=''
+  case "$ans" in
+    ''|[Yy]|[Yy][Ee][Ss])
+      mkdir -p "$(dirname "$RC_FILE")" 2>/dev/null || true
+      { printf '\n# Added by the Ipê installer — puts ipe on your PATH\n'
+        printf '%s\n' "$PATH_LINE"
+      } >> "$RC_FILE" || die "Could not write to $RC_FILE."
+      done_ "Updated $RC_FILE."
+      printf '  %sUse ipe in this terminal now:%s  source %s%s%s\n\n' \
+        "$C_BOLD" "$C_RESET" "$C_YELLOW" "$RC_FILE" "$C_RESET" >&2
+      ;;
+    *)
+      info "Left $RC_FILE untouched."
+      manual_path_hint
+      ;;
+  esac
+}
+
 # ── Done + next steps ────────────────────────────────────────────────────────
 done_ "Installed ipe $ver to $INSTALL_DIR/ipe"
-case ":$PATH:" in
-  *":$INSTALL_DIR:"*)
-    printf '\n%sYou are all set.%s Try %sipe --help%s to get started.\n\n' \
-      "$C_GREEN" "$C_RESET" "$C_BOLD" "$C_RESET" >&2
-    "$INSTALL_DIR/ipe" --version >&2 || true
-    ;;
-  *)
-    printf '\n%sAlmost there!%s Add ipe to your PATH, then run %sipe --help%s:\n' \
-      "$C_GREEN" "$C_RESET" "$C_BOLD" "$C_RESET" >&2
-    # shellcheck disable=SC2016  # literal $PATH is intentional in the shown command
-    printf '  %sexport PATH="%s:$PATH"%s\n\n' "$C_DIM" "$INSTALL_DIR" "$C_RESET" >&2
-    ;;
-esac
+if on_path; then
+  printf '\n%sYou are all set.%s Try %sipe --help%s to get started.\n\n' \
+    "$C_GREEN" "$C_RESET" "$C_BOLD" "$C_RESET" >&2
+  "$INSTALL_DIR/ipe" --version >&2 || true
+else
+  persist_path
+fi
