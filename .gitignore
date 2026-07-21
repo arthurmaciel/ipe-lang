@@ -83,7 +83,11 @@ scripts/progressive-development/backlog.svg
 scripts/progressive-development/backlog.png
 scripts/progressive-development/backlog.mmd
 
-# FFI inspector run artifacts (coverage reports) — run outputs, never source
+# FFI inspector run artifacts (coverage reports) — run outputs, never source.
+# The inspector writes `.ipe/cache/ffi/rust/<crate>.coverage.md` relative to the
+# CWD it runs under; an `ipe_ffi` E2E fixture that shells out to it can drop one
+# beside the crate, so ignore `.ipe/cache/` at ANY depth, not just the tool.
+**/.ipe/cache/
 tools/ipe-ffi-inspector/.ipe/
 tools/ipe-ffi-inspector/.ipecache/
 skyshop_core.db

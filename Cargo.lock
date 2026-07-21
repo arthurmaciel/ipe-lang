@@ -2234,6 +2234,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "ipe_provide"
+version = "0.1.10"
+
+[[package]]
 name = "ipe_sandbox"
 version = "0.1.10"
 dependencies = [

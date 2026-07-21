@@ -181,12 +181,58 @@ model's existing stance and does not trust the wrapper's self-report alone.
 
 ## 6. Where the proc-macro / trait-impl escape hatch fits
 
-A `#[ipe::provide]` companion crate — a hand-written `impl Trait` for a crate type
-whose derive is outside the `MODELLABLE_5` set (Bevy `Component`/`Resource`) — is
-a **special case of Tier 2**, not a separate mechanism: a wrapper crate that
-exposes a trait impl. It should be folded into the Tier 2 pipeline as the
-"provide a trait impl" shape rather than built as a bespoke Tier-1 extension.
-That is why the escape-hatch work is designed here rather than raced as Tier 1.
+*Landed.* A `#[ipe::provide]` companion crate — a hand-written `impl Trait` for a
+crate type whose derive is outside the `MODELLABLE_5` set (Bevy
+`Component`/`Resource`) — is a **special case of Tier 2**, not a separate
+mechanism: a wrapper crate that exposes a trait impl. It is folded into the Tier
+2 pipeline as the "provide a trait impl" shape, not a bespoke Tier-1 extension —
+which is why the escape-hatch work is designed here.
+
+**The marker.** A tiny companion proc-macro crate `ipe_provide` (workspace member
+`src/ffi-provide-macro`) exports one **inert** attribute macro, `#[ipe::provide]`
+(spelled `#[ipe_provide::provide]`, or re-exported as `ipe::provide`). It re-emits
+the annotated item token-for-token and prepends exactly one pure-data breadcrumb —
+a `#[doc = " ipe-ffi-provide-marker"]` string rustdoc folds into the item's `docs`
+field. The macro generates NO trait impl, NO glue, NO logic; it only tags. So the
+author's Rust stays entirely authored (and thus source-panic-scannable, §3.4) —
+nothing is injected into the trusted emission set.
+
+**How it rides the wrapper pipeline.** When the inspector runs over a `[rust.wrapper]`
+`--path` crate, it reads the marker as a boolean "is this item author-marked"
+(exactly as `doc_hidden` reads `attrs`, matched as a whole trimmed line so prose
+cannot forge it), then **auto-adds** every marked item to the exposed set: a
+marked TYPE's methods (`recvType`), a marked free fn (`name`), and any function
+whose params/results name a marked type (whole-segment matched, so `Sprite`
+matches `sprite::Sprite`/`&Sprite`/`Vec<Sprite>` but never `SpriteSheet`). The
+mark only widens WHICH candidate symbols are considered — each still passes the
+same carrier-compatibility over-drop, the source panic-scan (§3.4), and the
+capability gate (§5) as any other wrapper symbol. The marked type then surfaces
+as an Ipê-held opaque nominal + forwarders through the SAME inspect → sandbox →
+generate → over-drop path Phases 1-3 landed; a borrowed-return method on a marked
+type still over-drops rather than emit-and-cargo-fail. The wrapper is bound
+exactly like any other exposed symbol — the emit path does not distinguish a
+marked type, which is the point.
+
+**Guardian verdict.** The `security-soundness-guardian` reviewed the design pre-write
+and returned PROCEED-WITH-CONDITIONS: the new proc-macro crate adds no privileged
+context (it runs at the wrapper's compile time inside the RCE sandbox that already
+builds the wrapper's proc-macro deps); the inert pass-through is load-bearing (a
+code-generating macro would move panic-scan's target off the authored source and
+evade the provenance gate); auto-expose only enlarges the candidate set, never a
+gate bypass; and the marker is read as a boolean, never rendered, so it is no
+injection vector. All conditions are honored — inertness snapshot test, exact
+whole-sentinel match, borrowed-return over-drop + positive `IPE_E2E` build/run
+fixtures, `ipe_provide` as a wrapper-author build-dep only, panic-scan on authored
+source, marker read as data.
+
+**SEAL fixture.** `src/compiler/ffi/tests/provide_trait_impl_seal.rs` proves the
+whole path: under `IPE_E2E`, the real inspector runs over a wrapper crate that
+depends on `ipe_provide`, tags a `Sprite` with `#[ipe_provide::provide]`, and
+hand-writes an `impl Render for Sprite` (a fixture trait standing in for a Bevy
+`Component`); the marker surfaces `Sprite` and its reader even though `expose`
+names ONLY the constructor, then the emitted app crate + the wrapper `path` dep
+cargo-build and run exit 0, round-tripping the value through the hand-written
+trait impl. A marked borrowed-return method over-drops in the default gate.
 
 ---
 
@@ -261,7 +307,9 @@ That is why the escape-hatch work is designed here rather than raced as Tier 1.
    reconciliation + sandbox enforcement wiring (§5). This is the largest and
    most security-sensitive phase — security-soundness-guardian review required.
 6. **Fold the trait-impl escape hatch** — the `#[ipe::provide]` companion crate as
-   a Tier 2 wrapper shape.
+   a Tier 2 wrapper shape. *Landed* (§6): the inert `ipe_provide` marker macro +
+   inspector auto-expose of marked items + SEAL fixture
+   (`provide_trait_impl_seal.rs`).
 
 Phases 1-3 are the mechanical reuse; 4-5 are the provenance gates and carry the
 security weight; 6 closes the Bevy-derive case.
