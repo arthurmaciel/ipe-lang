@@ -34,11 +34,44 @@ use crate::doc::{ChainOperand, Doc};
 pub struct RenderConfig {
     /// The maximum line width (`rustfmt` `max_width`, default 100).
     pub max_width: usize,
+    /// Columns that must stay free at the end of the current line — the trailing
+    /// delimiter(s) `rustfmt` reserves after the construct being laid out (the
+    /// `,` after a one-per-line list element, the `),` after the sole argument of
+    /// an enclosing call). `rustfmt` carries this as the `Shape`'s reduced width;
+    /// a node's fit test subtracts it so a construct that would end exactly at
+    /// `max_width` still breaks to leave room for its trailing delimiter. Reset to
+    /// `0` whenever a construct opens its own delimiters (its interior lines are
+    /// measured against the full width; the reserve applies only to the LAST line
+    /// the construct shares with the enclosing delimiter).
+    pub reserve: usize,
 }
 
 impl Default for RenderConfig {
     fn default() -> Self {
-        Self { max_width: 100 }
+        Self {
+            max_width: 100,
+            reserve: 0,
+        }
+    }
+}
+
+impl RenderConfig {
+    /// This config with the trailing-delimiter `reserve` set to `n`.
+    fn with_reserve(self, n: usize) -> Self {
+        Self { reserve: n, ..self }
+    }
+
+    /// This config with the trailing-delimiter `reserve` cleared — used when a
+    /// construct opens its own delimiters, so its interior lines are measured
+    /// against the full width.
+    fn no_reserve(self) -> Self {
+        self.with_reserve(0)
+    }
+
+    /// The effective right margin for a construct's LAST line: `max_width` less the
+    /// reserved trailing-delimiter columns.
+    fn margin(self) -> usize {
+        self.max_width.saturating_sub(self.reserve)
     }
 }
 
@@ -129,9 +162,15 @@ fn render_at(
             }
         }
         Doc::Concat(docs) => {
-            for d in docs {
+            // The trailing-delimiter `reserve` belongs to the concatenation's LAST
+            // line, so only the FINAL child inherits it; earlier children are
+            // measured against the full width (their tail is another child, not the
+            // enclosing delimiter).
+            let last = docs.len().saturating_sub(1);
+            for (i, d) in docs.iter().enumerate() {
                 let c = eff_col(out, col);
-                render_at(d, cfg, indent, c, flat, out);
+                let child_cfg = if i == last { cfg } else { cfg.no_reserve() };
+                render_at(d, child_cfg, indent, c, flat, out);
             }
         }
         Doc::Nest(n, inner) => {
@@ -405,9 +444,9 @@ fn trim_trailing_spaces(out: &mut String) {
 /// general rule.
 fn fits(doc: &Doc, cfg: RenderConfig, start_col: usize, indent: usize) -> bool {
     let mut scratch = String::new();
-    render_at(doc, cfg, indent, start_col, true, &mut scratch);
+    render_at(doc, cfg.no_reserve(), indent, start_col, true, &mut scratch);
     let first_line = scratch.split('\n').next().unwrap_or(&scratch);
-    start_col + first_line.len() <= cfg.max_width
+    start_col + first_line.len() <= cfg.margin()
 }
 
 /// Whether `doc` rendered flat from column `start_col` is genuinely single-line
@@ -422,11 +461,11 @@ fn fits(doc: &Doc, cfg: RenderConfig, start_col: usize, indent: usize) -> bool {
 /// newline in their flat form, so this coincides with [`fits`] for them.
 fn fits_single_line(doc: &Doc, cfg: RenderConfig, start_col: usize, indent: usize) -> bool {
     let mut scratch = String::new();
-    render_at(doc, cfg, indent, start_col, true, &mut scratch);
+    render_at(doc, cfg.no_reserve(), indent, start_col, true, &mut scratch);
     if scratch.contains('\n') {
         return false;
     }
-    start_col + scratch.len() <= cfg.max_width
+    start_col + scratch.len() <= cfg.margin()
 }
 
 /// Render a binop chain with rustfmt's layout.
@@ -450,6 +489,10 @@ fn render_chain(
     let whole = Doc::Chain {
         operands: operands.to_vec(),
     };
+    // The whole-flat and per-operator glue fit tests honor the trailing-delimiter
+    // `reserve`: the `,` (or `),`) `rustfmt` appends after the chain reduces the
+    // width the chain's single line may occupy. `fits`/`glue_fits` already subtract
+    // `cfg.reserve` via `cfg.margin()`.
     if flat || (no_hard_break && fits(&whole, cfg, col, indent)) {
         render_chain_flat(operands, cfg, indent, out);
         return;
@@ -606,15 +649,54 @@ fn render_call_args(
     // ONE-PER-LINE: `open`, each element on its own line at one indent step, a
     // break-conditional trailing comma (suppressed for a macro list), the close
     // dedented back to the group's start column.
-    render_at(open, cfg, indent, start_col, false, out);
+    render_one_per_line(
+        open,
+        elems,
+        close,
+        trailing_comma,
+        cfg,
+        indent,
+        start_col,
+        out,
+    );
+}
+
+/// Lay a delimited list out one element per line: `open`, each element on its own
+/// line at one indent step, a trailing `,` after each (suppressed for the final
+/// element of a macro list), the `close` dedented back to `start_col`. Each
+/// element's last line carries a trailing comma, so it is rendered with a
+/// one-column trailing `reserve` — `rustfmt`'s `Shape` width reduced by the comma
+/// — while `open`/`close` open the list's own delimiters (enclosing reserve
+/// cleared). Shared by the plain one-per-line break and the forced-break fallback.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "renderer threads open/close/col/indent"
+)]
+fn render_one_per_line(
+    open: &Doc,
+    elems: &[Doc],
+    close: &Doc,
+    trailing_comma: bool,
+    cfg: RenderConfig,
+    indent: usize,
+    start_col: usize,
+    out: &mut String,
+) {
+    render_at(open, cfg.no_reserve(), indent, start_col, false, out);
     let inner_indent = indent + CHAIN_BREAK_INDENT;
     let last = elems.len().saturating_sub(1);
     for (i, e) in elems.iter().enumerate() {
         out.push('\n');
         push_indent(inner_indent, out);
         let c = current_col(out);
-        render_at(e, cfg, inner_indent, c, false, out);
-        if i < last || trailing_comma {
+        let has_comma = i < last || trailing_comma;
+        let elem_cfg = if has_comma {
+            cfg.with_reserve(1)
+        } else {
+            cfg.no_reserve()
+        };
+        render_at(e, elem_cfg, inner_indent, c, false, out);
+        if has_comma {
             out.push(',');
         }
     }
@@ -893,22 +975,16 @@ fn render_forced_break(
                 return;
             }
             // One argument per line.
-            render_at(open, cfg, indent, start_col, false, out);
-            let inner_indent = indent + CHAIN_BREAK_INDENT;
-            let last = elems.len().saturating_sub(1);
-            for (i, e) in elems.iter().enumerate() {
-                out.push('\n');
-                push_indent(inner_indent, out);
-                let c = current_col(out);
-                render_at(e, cfg, inner_indent, c, false, out);
-                if i < last || *trailing_comma {
-                    out.push(',');
-                }
-            }
-            out.push('\n');
-            push_indent(indent, out);
-            let c = current_col(out);
-            render_at(close, cfg, indent, c, false, out);
+            render_one_per_line(
+                open,
+                elems,
+                close,
+                *trailing_comma,
+                cfg,
+                indent,
+                start_col,
+                out,
+            );
         }
         // A wrapper like `Box::new(<CallArgs>)`: force-break the inner construct. The
         // leading wrapper text (`Box::new(`) shrinks the recursive `Shape` budget one
@@ -1038,13 +1114,30 @@ fn is_delimited_expr(doc: &Doc) -> bool {
 fn glue_fits(operand: &Doc, cfg: RenderConfig, col: usize, indent: usize, op: &str) -> bool {
     // Column after " op " is appended.
     let after_op = col + 1 + op.len() + 1;
-    if after_op > cfg.max_width {
+    if after_op > cfg.margin() {
         return false;
     }
     let mut scratch = String::new();
-    render_at(operand, cfg, indent, after_op, false, &mut scratch);
+    render_at(
+        operand,
+        cfg.no_reserve(),
+        indent,
+        after_op,
+        false,
+        &mut scratch,
+    );
     let first_line = scratch.split('\n').next().unwrap_or("");
-    after_op + first_line.len() <= cfg.max_width
+    let single_line = !scratch.contains('\n');
+    // The trailing-delimiter `reserve` bites only when the operand renders
+    // single-line here — then this glued line IS the chain's last line and the
+    // enclosing `,` sits at its end. A multiline operand ends on a later line, so
+    // its glued first line is measured against the full width.
+    let margin = if single_line {
+        cfg.margin()
+    } else {
+        cfg.max_width
+    };
+    after_op + first_line.len() <= margin
 }
 
 /// Whether `operand`, rendered non-flat from `col`, stays on a single line. A chain
