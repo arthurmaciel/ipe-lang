@@ -46,9 +46,16 @@ fn emit_closure(sig: &str) -> String {
 #[test]
 fn closure_adapter_emits_a_wrapper_for_both_return_shapes() {
     let total = emit_closure("Fn(Int) -> Int + Send + Sync + 'static");
+    // The returned boxed closure is surfaced as an opaque handle nominal whose
+    // full box type the region's own `pub type` alias carries.
+    assert!(
+        total.contains("pub type ApplyFnClosure = Box<dyn Fn(i64) -> i64 + Send + Sync + 'static>;"),
+        "{total}"
+    );
     assert!(
         total.contains(
-            "pub fn demo_apply_fn(__ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static>)"
+            "pub fn demo_apply_fn(__ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static>) \
+             -> ApplyFnClosure"
         ),
         "{total}"
     );
@@ -56,9 +63,13 @@ fn closure_adapter_emits_a_wrapper_for_both_return_shapes() {
 
     let res = emit_closure("Fn(Int) -> Result<Int, Error> + Send + Sync + 'static");
     assert!(
-        res.contains("-> Box<dyn Fn(i64) -> Result<i64, IpeError> + Send + Sync + 'static>"),
+        res.contains(
+            "pub type ApplyFnClosure = \
+             Box<dyn Fn(i64) -> Result<i64, IpeError> + Send + Sync + 'static>;"
+        ),
         "{res}"
     );
+    assert!(res.contains("-> ApplyFnClosure {"), "{res}");
     assert!(
         res.contains("Err(_) => Err(str_err(\"foreign closure panicked\"))"),
         "{res}"
@@ -172,9 +183,17 @@ fn main() {{
     println!("{{total}} {{result}}");
 }}
 "#,
-        // Rename the two wrappers so both can coexist in one bin.
-        total_fn = total_fn.replace("pub fn demo_apply_fn(", "pub fn demo_apply_fn_total("),
-        result_fn = result_fn.replace("pub fn demo_apply_fn(", "pub fn demo_apply_fn_result("),
+        // Rename the two wrappers AND their handle aliases so both regions can
+        // coexist in one bin (the alias name is region-derived, so both emit
+        // `ApplyFnClosure` — disambiguate them here). A type alias IS the
+        // underlying box, so the renamed-alias return still passes to the
+        // `crate_takes_*` fns that take the raw `Box<dyn Fn …>`.
+        total_fn = total_fn
+            .replace("pub fn demo_apply_fn(", "pub fn demo_apply_fn_total(")
+            .replace("ApplyFnClosure", "ApplyFnClosureTotal"),
+        result_fn = result_fn
+            .replace("pub fn demo_apply_fn(", "pub fn demo_apply_fn_result(")
+            .replace("ApplyFnClosure", "ApplyFnClosureResult"),
     );
     std::fs::write(dir.join("src").join("main.rs"), main_rs).expect("main.rs");
 

@@ -2380,12 +2380,21 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
     #[test]
     fn closure_adapter_total_return_aborts_on_panic_never_fabricates() {
         let out = closure_region("Fn(Int, Bool) -> Int + Send + Sync + 'static");
+        // The returned boxed closure is surfaced as an opaque handle nominal, its
+        // full `Box<dyn Fn …>` type carried by a `pub type` alias in the SAME
+        // region (so the interface's forwarder + alias can never skew).
+        assert!(
+            out.contains(
+                "pub type UpdateFnClosure = Box<dyn Fn(i64, bool) -> i64 + Send + Sync + 'static>;"
+            ),
+            "{out}"
+        );
         // The wrapper receives the Ipê fn value as the exact app-side box type
-        // and returns the crate closure of the exact declared signature.
+        // and returns the handle nominal.
         assert!(
             out.contains(
                 "pub fn semver_update_fn(__ipe_fn: Box<dyn Fn(i64, bool) -> i64 + Send + Sync + \
-                 'static>) -> Box<dyn Fn(i64, bool) -> i64 + Send + Sync + 'static> {"
+                 'static>) -> UpdateFnClosure {"
             ),
             "{out}"
         );
@@ -2404,9 +2413,13 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
     fn closure_adapter_result_return_folds_the_panic_in_band() {
         let out = closure_region("Fn(Int) -> Result<Int, Error> + Send + Sync + 'static");
         assert!(
-            out.contains("-> Box<dyn Fn(i64) -> Result<i64, IpeError> + Send + Sync + 'static> {"),
+            out.contains(
+                "pub type UpdateFnClosure = \
+                 Box<dyn Fn(i64) -> Result<i64, IpeError> + Send + Sync + 'static>;"
+            ),
             "{out}"
         );
+        assert!(out.contains("-> UpdateFnClosure {"), "{out}");
         // A fallible return folds a panic to Err — never aborts.
         assert!(
             out.contains("Err(_) => Err(str_err(\"foreign closure panicked\"))"),
@@ -2419,9 +2432,13 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
     fn closure_adapter_option_return_folds_the_panic_to_none() {
         let out = closure_region("Fn(Int) -> Option<Int> + Send + Sync + 'static");
         assert!(
-            out.contains("-> Box<dyn Fn(i64) -> Option<i64> + Send + Sync + 'static> {"),
+            out.contains(
+                "pub type UpdateFnClosure = \
+                 Box<dyn Fn(i64) -> Option<i64> + Send + Sync + 'static>;"
+            ),
             "{out}"
         );
+        assert!(out.contains("-> UpdateFnClosure {"), "{out}");
         assert!(out.contains("Err(_) => None"), "{out}");
         assert!(!out.contains("std::process::abort()"), "{out}");
     }
@@ -2433,17 +2450,19 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
         let out = closure_region(
             "Fn(Int) -> impl Future<Output = Result<Int, Error>> + Send + Sync + 'static",
         );
-        // Received AND returned box carry the concrete boxed future the
+        // Received box AND the handle alias carry the concrete boxed future the
         // `IpeTask` value holds — the SAME type on both sides (no E0308). The
         // inner `Send + 'static` is part of the type: it IS the
         // Send/'static-across-await proof, never re-derived.
         assert!(
             out.contains(
-                "-> Box<dyn Fn(i64) -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = \
-                 Result<i64, IpeError>> + Send + 'static>> + Send + Sync + 'static> {"
+                "pub type UpdateFnClosure = Box<dyn Fn(i64) -> ::std::pin::Pin<Box<dyn \
+                 ::std::future::Future<Output = Result<i64, IpeError>> + Send + 'static>> \
+                 + Send + Sync + 'static>;"
             ),
             "{out}"
         );
+        assert!(out.contains("-> UpdateFnClosure {"), "{out}");
         // The future is produced under catch_unwind (a production-panic yields an
         // immediate-error future), then awaited under a spawned task so a
         // poll-panic folds through the JoinError arm.
@@ -2467,11 +2486,13 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
             closure_region("Fn(Int) -> impl Future<Output = Option<Int>> + Send + Sync + 'static");
         assert!(
             out.contains(
-                "-> Box<dyn Fn(i64) -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = \
-                 Option<i64>> + Send + 'static>> + Send + Sync + 'static> {"
+                "pub type UpdateFnClosure = Box<dyn Fn(i64) -> ::std::pin::Pin<Box<dyn \
+                 ::std::future::Future<Output = Option<i64>> + Send + 'static>> \
+                 + Send + Sync + 'static>;"
             ),
             "{out}"
         );
+        assert!(out.contains("-> UpdateFnClosure {"), "{out}");
         assert!(out.contains("tokio::task::spawn(__fut)"), "{out}");
         // A production-panic and a poll-panic both fold to None.
         assert!(
@@ -2530,13 +2551,20 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
             }
         ]));
         let out = emit_bindings(&pkg);
+        // The received box AND the handle alias both name the in-module `Counter`.
+        assert!(
+            out.contains(
+                "pub type UpdateFnClosure = Box<dyn Fn(Counter) -> Result<Counter, \
+                 IpeError> + Send + Sync + 'static>;"
+            ),
+            "the alias names the in-module `Counter`:\n{out}"
+        );
         assert!(
             out.contains(
                 "pub fn semver_update_fn(__ipe_fn: Box<dyn Fn(Counter) -> Result<Counter, \
-                 IpeError> + Send + Sync + 'static>) -> Box<dyn Fn(Counter) -> Result<Counter, \
-                 IpeError> + Send + Sync + 'static> {"
+                 IpeError> + Send + Sync + 'static>) -> UpdateFnClosure {"
             ),
-            "the received AND returned box types both name the in-module `Counter`:\n{out}"
+            "the received box names the in-module `Counter`; the return is the handle:\n{out}"
         );
         assert!(
             out.contains("Err(_) => Err(str_err(\"foreign closure panicked\"))"),
@@ -2553,13 +2581,21 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
             "Fn(Int) -> Option<Version> + Send + Sync + 'static",
             "semver::Version",
         );
+        // The inspected opaque return absolutizes on BOTH the alias and the
+        // received box — the same resolved carrier, so their paths cannot skew.
+        assert!(
+            out.contains(
+                "pub type UpdateFnClosure = Box<dyn Fn(i64) -> \
+                 Option<::semver::Version> + Send + Sync + 'static>;"
+            ),
+            "the alias absolutizes the opaque return:\n{out}"
+        );
         assert!(
             out.contains(
                 "pub fn semver_update_fn(__ipe_fn: Box<dyn Fn(i64) -> \
-                 Option<::semver::Version> + Send + Sync + 'static>) -> Box<dyn Fn(i64) -> \
-                 Option<::semver::Version> + Send + Sync + 'static> {"
+                 Option<::semver::Version> + Send + Sync + 'static>) -> UpdateFnClosure {"
             ),
-            "an inspected opaque return absolutizes on BOTH box sides:\n{out}"
+            "the received box absolutizes the opaque return:\n{out}"
         );
         assert!(out.contains("Err(_) => None"), "{out}");
     }

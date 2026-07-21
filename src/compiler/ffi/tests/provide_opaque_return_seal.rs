@@ -53,13 +53,21 @@ fn counter_update_pkg() -> PkgInfo {
 #[test]
 fn a_provide_defined_opaque_result_closure_emits_a_resolvable_wrapper() {
     let out = emit_bindings(&counter_update_pkg());
+    // The opaque return resolves to the in-module `Counter` on the received box
+    // AND the handle alias; the wrapper returns the opaque handle nominal.
+    assert!(
+        out.contains(
+            "pub type UpdateFnClosure = Box<dyn Fn(Counter) -> Result<Counter, IpeError> \
+             + Send + Sync + 'static>;"
+        ),
+        "the handle alias resolves the opaque return to the in-module `Counter`:\n{out}"
+    );
     assert!(
         out.contains(
             "pub fn demo_update_fn(__ipe_fn: Box<dyn Fn(Counter) -> Result<Counter, IpeError> \
-             + Send + Sync + 'static>) -> Box<dyn Fn(Counter) -> Result<Counter, IpeError> \
-             + Send + Sync + 'static> {"
+             + Send + Sync + 'static>) -> UpdateFnClosure {"
         ),
-        "the opaque return must resolve to the in-module `Counter` on both box sides:\n{out}"
+        "the received box resolves `Counter`; the return is the handle:\n{out}"
     );
     assert!(
         out.contains("Err(_) => Err(str_err(\"foreign closure panicked\"))"),
