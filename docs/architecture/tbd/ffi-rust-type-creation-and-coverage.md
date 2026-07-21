@@ -111,6 +111,18 @@ Ipê program never sees the struct's internals; it holds an opaque handle. This
 solves (a) with **zero new trust surface**: the constructor body is built from
 decode-validated newtypes only, identical to today's `EnumCtor`.
 
+> **Wired.** The interface now ADMITS the `provide.struct` / `provide.enum`
+> constructors as Ipê forwarders (the opaque nominal + `counter_new` /
+> per-variant `message_new_*` bindings), not just emits the `_bindings.rs`
+> definition. A provide-defined type resolves at the crate-absolute path
+> `crate::ffi::<slug>::<Name>` — it lives in the emitted app crate, not an
+> external `::crate::Path`. The nominal-name-vs-inspected-opaque clash fails
+> closed, a name shadowing an Ipê builtin over-drops the whole entry, and a
+> nullary constructor (a fieldless struct / unit variant) binds a zero-arg
+> forwarder. The `provide.closure`-to-`run` handoff — surfacing a boxed Ipê
+> closure as an Ipê-held value to pass onward — stays deferred (a separate,
+> harder step).
+
 ### 2.2 `provide.closure` — an Ipê function becomes a `dyn Fn` of an exact signature
 
 ```toml
@@ -282,13 +294,15 @@ and preserves the SEAL + over-drop keystone.
   and `ClosureSig`/`BoundSet`/`DeriveSet` parsers with validating `TryFrom`.
   Anti-drift: register in `pkginfo.rs`; unit-test refusal of every ill-formed
   shape. No emission yet. *(A minimal slice of this landed — see §7.)*
-* **P1 — `FnShape::StructCtor` emit.** Generalise `enum_ctor_lines` /
-  `owned_value_coercion` to a struct literal; emit the `#[derive]`ed definition
+* **P1 — `FnShape::StructCtor` emit.** *Landed.* Generalised `enum_ctor_lines` /
+  `owned_value_coercion` to a struct literal; emits the `#[derive]`ed definition
   + constructor wrapper into `_bindings.rs`; opaque nominal + forwarder into the
-  interface. Fixture: an Ipê program builds a `Rust.Demo.Counter` from an `Int`,
-  reads a field back, `ipe build` ⇒ `cargo build` ⇒ runs. Registration sites:
-  `decode_shape` (`pkginfo.rs:806`), `fallibility_of` (`:849`), `emit_fn_region`
-  (`bindings.rs:1097`), interface admission (`interface.rs:307` cascade).
+  interface. The interface admission (the opaque nominal `type Counter` + the
+  `counter_new` forwarder, its arity/signature read from the parsed `StructDef`)
+  and the crate-absolute `crate::ffi::<slug>::<Name>` path resolution landed with
+  the forwarder-plumbing work. SEAL fixtures `tests/provide_struct_seal.rs` +
+  `tests/provide_forwarder_seal.rs` (the latter assembles the app's `src/ffi.rs`
+  module tree and `cargo build`s+runs the forwarders under `IPE_E2E`).
 * **P2 — `FnShape::ClosureAdapter`, sync single-arg.** The §3.3 adapter for
   `dyn Fn(A) -> B + Send + Sync + 'static`, A/B total carriers, no `Task` in
   body. Fixture: a crate takes a callback, an Ipê fn supplies it, the callback
@@ -301,10 +315,12 @@ and preserves the SEAL + over-drop keystone.
   wired through `decode_shape`/`shape_fallibility`/`emit_fn_region` + the
   interface admission gate, `[[rust.provide.enum]]` manifest reader in the CLI's
   `ffi.rs`. Emits the `#[derive]`ed `enum` + one constructor per variant. SEAL
-  fixture `tests/provide_enum_seal.rs` (cargo build+run under `IPE_E2E`). Ipê-side
-  forwarder plumbing deferred with `provide.struct`. The derive allowlist gained
-  `Debug` (total for every carrier, no IEEE-754 hazard) because Iced's
-  `Sandbox::Message: Debug` bound requires it.
+  fixture `tests/provide_enum_seal.rs` (cargo build+run under `IPE_E2E`). The
+  derive allowlist gained `Debug` (total for every carrier, no IEEE-754 hazard)
+  because Iced's `Sandbox::Message: Debug` bound requires it. Ipê-side forwarder
+  plumbing (one forwarder PER variant returning the single shared enum nominal; a
+  unit variant binds a zero-arg forwarder) landed alongside `provide.struct` — see
+  the §2.1 note and `tests/provide_forwarder_seal.rs`.
 * **P5 — async-returning closures**, gated behind the async-bridge milestone
   (`async-ffi-bridge-design.md`); `Send`-proof composition per that spec.
 * **P6 — escape hatch B** (`#[ipe::provide]` companion-crate proc-macro) only if
@@ -333,8 +349,15 @@ first. "Create-types features exercised" names which provide-forms each needs.
 
 **Gap clusters filed to the backlog** (see §8):
 
-* Cluster 1 — closure adapter (`provide.closure`, sync): unblocks Iced update,
-  Ratatui draw, Slint/Dioxus callbacks. Largest single unblock.
+* Cluster 0 — provide-type FORWARDER plumbing (`provide.struct` / `provide.enum`
+  constructors surfaced as Ipê forwarders + opaque nominals): **LANDED.** An Ipê
+  program can now construct provide-defined Rust types.
+* Cluster 1 — closure adapter (`provide.closure`, sync) surfaced as an Ipê-held
+  boxed-closure value + handed to a crate `run` entrypoint: unblocks Iced update,
+  Ratatui draw, Slint/Dioxus callbacks. Largest remaining single unblock. Also
+  covers the opaque-RETURN closure (`view : … -> Element<Message>`) and
+  opaque struct fields / enum payloads (both refused at decode today until the
+  opaque-map is threaded into the definition emitter).
 * Cluster 2 — struct-with-trait-impl (Bevy `Component`, Iced `Application`):
   needs escape hatch B or a declarative `impl` sub-form.
 * Cluster 3 — async-returning closures (Axum handlers): gated on the async

@@ -426,6 +426,30 @@ pub fn to_snake_case(s: &str) -> String {
     out
 }
 
+/// The `snake_case` of a variant identifier (`SetValue` → `set_value`), for a
+/// `provide.enum` per-variant constructor suffix.
+///
+/// The single source of truth shared by the wrapper emitter (which names each
+/// emitted per-variant `pub fn`) and the interface generator (which forwards to
+/// it): a divergence here is an under-bind that link-fails. The input is a
+/// validated `RustIdent`, so this only lowercases and inserts `_` at internal
+/// case boundaries.
+#[must_use]
+pub fn variant_snake(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 4);
+    for (i, c) in s.chars().enumerate() {
+        if c.is_ascii_uppercase() {
+            if i != 0 {
+                out.push('_');
+            }
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// The emitted `_bindings.rs` wrapper fn identifier.
 ///
 /// The kernel base (the kernel name minus its `Rust_` prefix) joined to the
