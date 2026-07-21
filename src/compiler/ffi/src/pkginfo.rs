@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 
 use crate::call::Call;
+use crate::carrier::ClosureSig;
 use crate::diag::{Diagnostic, WireDefect};
 use crate::naming::{FieldSelector, RustIdent, RustPattern, RustTypeExpr, wrapper_ref_name};
 
@@ -83,6 +84,10 @@ struct WireFunction {
     enum_arms: Vec<String>,
     #[serde(default, rename = "enumWildcard")]
     enum_wildcard: bool,
+    #[serde(default, rename = "isClosureAdapter")]
+    is_closure_adapter: bool,
+    #[serde(default, rename = "closureSig")]
+    closure_sig: String,
     #[serde(default)]
     generic: Option<WireGeneric>,
     #[serde(default, rename = "callPath")]
@@ -211,6 +216,17 @@ pub enum FnShape {
         field_count: u64,
         /// Whether the match needs a trailing `_ =>` wildcard arm.
         wildcard: bool,
+    },
+    /// A `[rust.provide.closure]` adapter: the wrapper takes an Ipê function
+    /// value and returns a boxed Rust closure of the exact author-declared
+    /// signature. Author-declared native code that flows through the same
+    /// `FfiInterface` trust gate as every other wrapper — the driver merges the
+    /// manifest entry into the inspection document, so user `.ipe` source can
+    /// never mint it.
+    ClosureAdapter {
+        /// The parsed, validated target signature. The emitter renders from
+        /// this alone — no raw manifest string reaches generated Rust.
+        sig: ClosureSig,
     },
 }
 
@@ -779,15 +795,16 @@ fn decode_arms(function: &str, arms: Vec<String>) -> Result<Vec<EnumArm>, Diagno
         .collect()
 }
 
-/// Collapse the six mutually-exclusive accessor flags into the closed shape.
+/// Collapse the seven mutually-exclusive accessor flags into the closed shape.
 fn decode_shape(w: &WireFunction) -> Result<FnShape, Diagnostic> {
-    let flags: [(&'static str, bool); 6] = [
+    let flags: [(&'static str, bool); 7] = [
         ("isField", w.is_field),
         ("isFieldSet", w.is_field_set),
         ("isPkgVar", w.is_pkg_var),
         ("isEnumCtor", w.is_enum_ctor),
         ("isEnumTag", w.is_enum_tag),
         ("isEnumExtract", w.is_enum_extract),
+        ("isClosureAdapter", w.is_closure_adapter),
     ];
     let set: Vec<&'static str> = flags.iter().filter(|(_, b)| *b).map(|(n, _)| *n).collect();
     if set.len() > 1 {
@@ -825,7 +842,7 @@ fn decode_shape(w: &WireFunction) -> Result<FnShape, Diagnostic> {
             arms: decode_arms(&w.name, w.enum_arms.clone())?,
             wildcard: w.enum_wildcard,
         },
-        Some(_) => {
+        Some("isEnumExtract") => {
             let selector =
                 FieldSelector::parse(w.enum_struct_fields.first().map_or("", String::as_str))
                     .map_err(wire_err)?;
@@ -837,6 +854,14 @@ fn decode_shape(w: &WireFunction) -> Result<FnShape, Diagnostic> {
                 wildcard: w.enum_wildcard,
             }
         }
+        Some(_) => {
+            // The parsed signature is the SOLE input the emitter renders from;
+            // an ill-formed one (a carrier outside the closed set, a bound
+            // outside {Send, Sync, 'static}, a non-total return, trailing text)
+            // over-drops the whole provide entry here, never emit-and-cargo-fail.
+            let sig = ClosureSig::parse(&w.closure_sig).map_err(wire_err)?;
+            FnShape::ClosureAdapter { sig }
+        }
     })
 }
 
@@ -847,11 +872,18 @@ const fn shape_fallibility(shape: &FnShape, effect: Effect) -> Fallibility {
         // carry the same layer or the interface and the wrapper disagree at
         // cargo time.
         FnShape::FieldSet if matches!(effect, Effect::Fallible) => Fallibility::TaskError,
+        // For `ClosureAdapter`, Infallible names CONSTRUCTION: building the
+        // boxed adapter cannot fail, so the wrapper's own return is the bare
+        // boxed closure (no `Result` wrapper). This is NOT a claim that CALLING
+        // the closure cannot fail — a per-call panic in a `Total` return
+        // aborts, and a `Result`/`Option` return folds the failure in-band (see
+        // the `ClosureAdapter` emit arm).
         FnShape::FieldGet
         | FnShape::FieldSet
         | FnShape::EnumCtor { .. }
         | FnShape::EnumTag { .. }
-        | FnShape::EnumExtract { .. } => Fallibility::Infallible,
+        | FnShape::EnumExtract { .. }
+        | FnShape::ClosureAdapter { .. } => Fallibility::Infallible,
         FnShape::Plain | FnShape::PkgVar => Fallibility::TaskError,
     }
 }
@@ -1169,6 +1201,64 @@ mod tests {
         for f in pkg.fns() {
             assert_eq!(f.fallibility(), Fallibility::Infallible);
         }
+    }
+
+    #[test]
+    fn a_provide_closure_decodes_into_a_closure_adapter_shape() {
+        let pkg = decode(&base_pkg(&json!([{
+            "name": "update_fn",
+            "effect": "pure",
+            "isClosureAdapter": true,
+            "closureSig": "Fn(Int, Bool) -> Int + Send + Sync + 'static"
+        }])))
+        .expect("decodes");
+        let f = fn_at(&pkg, 0);
+        let rendered = match f.shape() {
+            FnShape::ClosureAdapter { sig } => sig.rust_dyn_fn(),
+            other => format!("not a closure adapter: {other:?}"),
+        };
+        assert_eq!(rendered, "dyn Fn(i64, bool) -> i64 + Send + Sync + 'static");
+        // Construction is infallible; per-call failure is handled in-band.
+        assert_eq!(f.fallibility(), Fallibility::Infallible);
+        assert!(pkg.dropped().is_empty());
+    }
+
+    #[test]
+    fn an_ill_formed_closure_signature_over_drops_the_entry() {
+        // A return outside the carrier set (a total opaque) refuses at decode —
+        // the whole provide entry over-drops, never emit-and-cargo-fail.
+        let pkg = decode(&base_pkg(&json!([{
+            "name": "bad_fn",
+            "effect": "pure",
+            "isClosureAdapter": true,
+            "closureSig": "Fn(Int) -> Widget + Send + Sync + 'static"
+        }])))
+        .expect("package survives");
+        assert!(pkg.fns().is_empty());
+        assert!(matches!(
+            pkg.dropped().first().expect("dropped diagnostic"),
+            Diagnostic::WireMalformed {
+                defect: WireDefect::InvalidClosureSig { .. },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_closure_adapter_flag_clashing_with_an_accessor_flag_drops_the_binding() {
+        let pkg = decode(&base_pkg(&json!([{
+            "name": "confused",
+            "effect": "pure",
+            "isClosureAdapter": true,
+            "isField": true,
+            "closureSig": "Fn(Int) -> Int"
+        }])))
+        .expect("package survives");
+        assert!(pkg.fns().is_empty());
+        assert!(matches!(
+            pkg.dropped().first().expect("dropped diagnostic"),
+            Diagnostic::ShapeContradiction { .. }
+        ));
     }
 
     #[test]

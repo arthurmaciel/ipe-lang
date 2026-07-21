@@ -176,9 +176,11 @@ impl ScalarCarrier {
     }
 }
 
-/// A single closure bound. The bound set a `provide.closure` signature may
-/// carry is exactly `{Send, Sync, 'static}` — a CLOSED enum, never free text,
-/// so no bound spelling from the manifest reaches emitted Rust as a raw string.
+/// A single closure bound.
+///
+/// The bound set a `provide.closure` signature may carry is exactly
+/// `{Send, Sync, 'static}` — a CLOSED enum, never free text, so no bound
+/// spelling from the manifest reaches emitted Rust as a raw string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Bound {
     /// The `Send` auto-trait bound.
@@ -211,10 +213,12 @@ impl Bound {
     }
 }
 
-/// The closed bound set a closure signature carries. The adapter always
-/// captures the Ipê function value by move into a `Send + Sync + 'static` box,
-/// so `Send`, `Sync`, and `'static` are the only bounds a signature may name;
-/// the set is rendered from these variants, never from raw text.
+/// The closed bound set a closure signature carries.
+///
+/// The adapter always captures the Ipê function value by move into a
+/// `Send + Sync + 'static` box, so `Send`, `Sync`, and `'static` are the only
+/// bounds a signature may name; the set is rendered from these variants, never
+/// from raw text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BoundSet(std::collections::BTreeSet<Bound>);
 
@@ -264,9 +268,11 @@ pub enum ClosureRet {
     Option(Carrier),
 }
 
-/// A fully-parsed `provide.closure` signature, rendered from ONLY closed
-/// carriers and bounds — never from a raw manifest string. The emitter reads
-/// this, exactly as `render_dep_line` reads `CrateVersion`/`FeatureName`.
+/// A fully-parsed `provide.closure` signature.
+///
+/// Rendered from ONLY closed carriers and bounds — never from a raw manifest
+/// string. The emitter reads this, exactly as `render_dep_line` reads
+/// `CrateVersion`/`FeatureName`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClosureSig {
     /// The closure's parameter carriers, in order.
@@ -326,24 +332,24 @@ impl ClosureSig {
                     .map_err(|_| refuse(&format!("parameter `{p}` is outside the carrier set")))?,
             );
         }
-        let mut rest = after_open.get(close + 1..).unwrap_or("").trim();
+        let mut tail = after_open.get(close + 1..).unwrap_or("").trim();
         // Drop an optional trailing `>` left by a `Box<dyn …>` wrapper.
-        if let Some(stripped) = rest.strip_suffix('>') {
-            rest = stripped.trim_end();
+        if let Some(stripped) = tail.strip_suffix('>') {
+            tail = stripped.trim_end();
         }
         // The return arrow is mandatory: a `-> R` names the value the crate
-        // consumes; a bare `Fn(...)` (unit return) is deferred (no P2 fixture).
-        let after_arrow = rest
+        // consumes; a bare `Fn(...)` unit-return closure is not yet supported.
+        let after_arrow = tail
             .strip_prefix("->")
             .ok_or_else(|| refuse("closure must declare a `-> return` type"))?
             .trim_start();
         // Split the return type from the trailing `+ Bound` list at the first
         // top-level `+` (respecting `<…>` nesting so `Result<i64, E>` stays
         // whole). Everything before is the return; everything after is bounds.
-        let (ret_src, bounds_src) = split_ret_and_bounds(after_arrow);
-        let ret = parse_ret(ret_src.trim()).map_err(|reason| refuse(&reason))?;
+        let (ret_text, bound_list) = split_ret_and_bounds(after_arrow);
+        let ret = parse_ret(ret_text.trim()).map_err(|reason| refuse(&reason))?;
         let mut bounds = std::collections::BTreeSet::new();
-        for b in bounds_src.split('+') {
+        for b in bound_list.split('+') {
             let b = b.trim();
             if b.is_empty() {
                 continue;

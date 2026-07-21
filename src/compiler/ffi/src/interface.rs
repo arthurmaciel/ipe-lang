@@ -326,6 +326,19 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
             );
             continue;
         }
+        // A closure adapter emits its `_bindings.rs` wrapper (a downstream
+        // crate-call binding consumes the boxed closure it returns), but it is
+        // NOT admitted as a standalone Ipê forwarder here: surfacing the boxed
+        // closure as an Ipê-held opaque value (to pass it on) is the
+        // cross-binding step deferred to a follow-up. Recorded, not
+        // mis-admitted with a wrong arity.
+        if matches!(f.shape(), crate::pkginfo::FnShape::ClosureAdapter { .. }) {
+            skip(
+                "closure adapter — boxed-closure-as-Ipê-value plumbing not wired yet",
+                &mut skipped,
+            );
+            continue;
+        }
         if !survivors.contains(&ref_name) {
             skip("no wrapper region in _bindings.rs", &mut skipped);
             continue;
