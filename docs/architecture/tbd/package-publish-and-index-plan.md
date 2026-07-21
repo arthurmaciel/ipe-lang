@@ -29,6 +29,15 @@ The trust chain is one line: **the index CI vouches that a merged entry's pinned
 `sha256` names gate-passing source, and the resolver refuses any fetched tree
 whose hash is not that pin.** Verify-before-trust at both ends.
 
+Two integrity anchors are on the table — the `sha256`-of-tree the resolver
+already computes, and the git commit `rev` — and the plan pins **both** (§3.5).
+The tree hash must first be widened to cover a full checkout (symlinks + file
+modes), because a source host that serves the same `rev` to CI and to a user
+could otherwise smuggle a symlink past a hash that only covers regular-file bytes
+(§3.5). Pinning the commit `rev` in addition closes that gap independently: a git
+commit is content-addressed over the full tree (modes and symlinks included), so
+a host cannot serve two different trees under one commit id.
+
 ---
 
 ## 1. `ipe package publish`
@@ -252,6 +261,16 @@ a malicious-but-hash-honest package. Both are required.
   proc-macro is contained on the CI host. The gate's own workflow uses
   least-privilege CI tokens and does not expose index-write credentials to
   submission code.
+- **The CI trigger must not hand a fork PR write-scoped secrets.** The gate
+  workflow runs on the *untrusted head* of a fork PR, so it must use the trigger
+  that gives the fork run a read-only token with no repository secrets — never the
+  variant that runs in the base-repo trust context with write scope. A merge is
+  performed by a *separate*, trusted job that runs only after the gate is green
+  and only reads the already-validated entry file; the attacker-controlled build
+  never shares a process, a token, or a secret with the merge step. Getting this
+  trigger wrong is the single highest-value attack on the whole scheme (index-write
+  credential exfiltration), so it is called out explicitly rather than left to the
+  CI author.
 
 ### 3.3 How a malicious or typo'd entry is rejected
 
@@ -264,7 +283,9 @@ a malicious-but-hash-honest package. Both are required.
 | **Silent breaking change as a patch** | enforced-semver check (`ipe diff` vs the previous published version) — an under-bump rejects |
 | **Malicious build-time code** (`build.rs`, proc-macro) | sandboxed build in `ipe_sandbox`; native tier only |
 | **Unknown / typo'd capability** (`netwrok`) | the entry parser rejects an unknown wire name at read time — never a silently-dropped capability |
-| **Compromised source host post-publish** | the pin is immutable; a swapped tree fails the resolver's hash verify at every install and every locked rebuild |
+| **Compromised source host post-publish** | the pin is immutable; a swapped tree fails the resolver's hash verify at every install and every locked rebuild — **once the tree hash covers a full checkout (§3.5)** and the git `rev` is re-verified against the pin |
+| **Symlink / mode smuggling** (same `rev`, CI sees a clean tree, user sees an added `evil -> /etc/passwd` symlink or an execute bit) | closed by widening the tree hash to include symlink targets + file modes, and by re-verifying the fetched git `rev` equals the pin (a git commit is content-addressed over the full tree). §3.5 — **a design correction, not yet in the built `hash_tree`** |
+| **Un-vetted transitive dependency via a `{git=}`/`{path=}` escape** (a gate-passing package pulls an un-gated dependency whose network/native effects the top-level capability set never declared) | the gate must run capability inference + verify-before-trust over the **escape closure**, not just the package's own source, and surface any escape-reached capability at `ipe add`. §3.6 — **a design correction** |
 
 A native-bearing package (`native-ffi` present) additionally runs miri, cargo-audit
 + cargo-deny over its crate graph, the declared-native-capability sandbox check,
@@ -283,10 +304,56 @@ visible label make it loud, attributable, gated, and opt-in — not magically sa
   filesystem, env, subprocess) fail-closed, and the fine-grained seccomp
   capability→syscall map is a tracked v2. v1 is honest about the tier rather than
   overclaiming airtight native enforcement.
-- **A first publish of a brand-new name** is the one place human review still
-  matters (typosquat / impersonation): the automated gate cannot know a name is
-  meant to deceive, so a new-name entry gets a maintainer's eyes even though a
-  new *version* of an existing name is fully automatable.
+- **A first publish of a brand-new name** is the one place a machine-checkable
+  identity check still matters (typosquat / impersonation): the automated gate
+  cannot know a name is *meant* to deceive. The defense is a **verified-publisher**
+  binding, not maintainer taste — the `publisher` field must be an
+  authenticated GitHub identity (the account that opened the index PR), so a new
+  name is attributable to a real account and an impersonating publisher is
+  refused mechanically rather than by a reviewer's judgment. This keeps §3.2's
+  "the gate, not a person, is the authority" intact even for new names: the human
+  step, if any, is a bounded appeal, not the merge gate.
+
+### 3.5 The integrity anchor must cover a full checkout
+
+The `sha256`-of-tree the resolver computes today (`cache::hash_tree`) hashes
+regular-file bytes only — it does **not** hash symlink targets or file modes.
+Left as-is, that under-covers a real git checkout: a malicious source host could
+serve CI a clean tree and a user a tree with an added `evil -> /etc/passwd`
+symlink (or an added execute bit) at the *same* revision, and both would produce
+the same tree hash. Two independent corrections, both required:
+
+- **Widen the tree hash** to include symlink presence + target and file mode, so
+  the hash actually characterises the checkout it claims to.
+- **Pin and re-verify the git commit `rev`.** A git commit id is content-addressed
+  over the full tree (modes and symlinks included), so a host cannot serve two
+  different trees under one commit. The resolver must confirm the fetched checkout
+  is exactly the pinned `rev`, not merely that its tree hash matches — belt and
+  braces, since the two anchors fail independently.
+
+Until the tree hash is widened, the sole load-bearing anchor is the git `rev`;
+the plan pins both so neither is a single point of failure.
+
+### 3.6 The gate must cover the escape closure
+
+Capability inference and verify-before-trust run over a package's *own* source.
+A gate-passing package that pulls a transitive dependency through a
+`{git=}`/`{path=}` escape can therefore reach effects (network, native FFI) that
+the top-level capability set never declared — the escape is un-gated by design,
+but its capabilities must not become invisible just because a gated package sits
+above it. The gate must:
+
+- run capability inference over the **escape closure** (the package plus every
+  dependency it reaches, including escape-resolved ones), and require the declared
+  set to cover the closure, not just the root;
+- apply verify-before-trust (hash-and-lock) to every escape-reached dependency, as
+  the resolver already does per dependency; and
+- surface any escape-reached capability at `ipe add`, loud on a native-ffi reached
+  only through an escape.
+
+A pure-Ipê package with no escapes is unaffected — its closure is its own source.
+The correction matters precisely for a package that launders un-vetted code in
+through an escape while presenting a clean top-level capability set.
 
 ---
 
@@ -324,11 +391,23 @@ lanes that came before.
    and `gh pr create` mechanisms for non-interactive publishing, behind the same
    entry-compute core.
 
+Two **security corrections from the guardian review** are prerequisites, not
+optional refinements, and land before the index serves untrusted packages:
+
+- **Widen `cache::hash_tree`** to include symlink targets + file modes, and have
+  the resolver re-verify the fetched git `rev` equals the pin (§3.5). This is an
+  isolated `cache.rs` + `resolve.rs` edit with a fixture: a tree differing only by
+  an added symlink or an execute bit must produce a different hash and be rejected.
+- **Extend the gate + resolver to the escape closure** (§3.6): capability
+  inference and hash-and-lock over escape-reached dependencies, with escape-reached
+  capabilities surfaced at `ipe add`. Fixture: a package whose only network access
+  is through a `{git=}` escape has `network` in its required set or is rejected.
+
 Steps 1–4 deliver a working publish + authoritative gate for pure-Ipê and
-hash/semver/capability-honest packages. 5–6 are refinements. Native-tier
-enforcement in the gate lands with the FFI Tier 2 capability layer (per the gate
-plan), not here — this plan wires the *publish path and the index repo* around the
-gate that already exists.
+hash/semver/capability-honest packages, once the two corrections above are in.
+Steps 5–6 are refinements. Native-tier enforcement in the gate lands with the FFI
+Tier 2 capability layer (per the gate plan), not here — this plan wires the
+*publish path and the index repo* around the gate that already exists.
 
 ---
 
@@ -349,6 +428,12 @@ gate that already exists.
 - **Toolchain pinning for gate reproducibility.** The author's local `audit` and
   the index CI must reach the same verdict — pin the toolchain + scanner version
   the gate runs with, so a green local run is a green CI run.
+- **Revocation / yank.** The plan makes publishing safe but says nothing about
+  *un*-publishing a version later found malicious or vulnerable. Decide the
+  mechanism: a `yanked` flag on a `[[version]]` the resolver refuses for a fresh
+  add but honours for an existing lock, versus outright entry removal (which breaks
+  a locked rebuild). A yank flag is the safer default — reproducibility of an
+  existing lock is preserved while new installs are steered away.
 
 ---
 
@@ -363,3 +448,11 @@ gate that already exists.
   the *authoring* and *hosting* halves around them.
 - The universal gate rests on the existing SEAL guarantee; the native tier rests
   on the existing FFI `ipe_sandbox`.
+
+The trust model in §3 was reviewed by the security-soundness guardian:
+**sound with caveats**. The two-ended verify-before-trust architecture is
+correct; the review surfaced two must-fix gaps now folded in as prerequisites —
+the tree hash under-covering a checkout (symlinks + modes, §3.5) and the un-gated
+escape closure (§3.6) — plus the CI-trigger hardening (§3.2) and the
+verified-publisher resolution of the new-name case (§3.4). Those corrections are
+first-class steps in §4, not deferred.
