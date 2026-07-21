@@ -1,0 +1,94 @@
+# CLI output
+
+`ipe` is **human-first by default and machine-readable on request**. Every
+command reads well in a terminal; the commands that emit data can also print a
+clean, scriptable form when you ask for one.
+
+## Human by default
+
+With no output flag, every command prints a human-friendly form: a two-space
+left gutter on prose lines, and colour when — and only when — the output is a
+terminal. Piped or redirected output, or any run with `NO_COLOR` set, is clean
+plain text with no escape codes.
+
+```
+$ ipe capabilities examples/sky/02-go-stdlib/src/Main.ipe
+  This program exercises 2 security capabilities:
+    • network
+    • clock
+```
+
+The gutter and colour rule are the same everywhere — every command, and the
+installer, indent identically — because they come from one place in the code.
+
+## `--plain` and `--json`
+
+The data-producing commands — `capabilities`, `diff`, `version`, and `explain`
+with no code (the code list) — accept two mutually-exclusive machine forms:
+
+- **`--plain`** — unstyled, **flush-left**, one record per line, so `grep`,
+  `cut`, and `awk` slice it cleanly.
+- **`--json`** — a stable, documented object, so `jq` reads it.
+
+Passing both `--plain` and `--json` together is a usage error. The other
+commands (`run`, `build`, `init`, `watch`, `fix`, `fmt`) and `--help` do not take
+these flags — they are not data producers.
+
+### `capabilities`
+
+```
+$ ipe capabilities --plain <entry>
+network
+clock
+
+$ ipe capabilities --json <entry>
+{"capabilities":["network","clock"]}
+```
+
+`--plain` is the bare capability names, one per line — a pure program prints
+nothing, so `| wc -l` counts them. `--json` is `{"capabilities": [<name>, …]}`,
+the sorted name array (empty for a pure program).
+
+> **Migration.** `--plain` is byte-for-byte the old default `ipe capabilities`
+> output. A script that parsed the bare list adopts `--plain` with no other
+> change; the unflagged command is now the human report.
+
+### `version`
+
+```
+$ ipe version --plain
+0.1.11
+
+$ ipe version --json
+{"version":"0.1.11"}
+```
+
+### `explain` (the code list)
+
+`ipe explain` with no argument lists every diagnostic code. `--plain` prints
+`<CODE>\t<title>` rows (tab-separated, so `cut -f1` yields the codes); `--json`
+prints `{"codes": [{"code": …, "title": …}, …]}` in taxonomy order. Explaining a
+single code prints a human teaching page and takes no output flag.
+
+### `diff`
+
+`--plain` prints one flush-left record per line: a `change\t<detail>` row per
+public-API change, then a `bump\t<compatibility>\t<required>\t<floor>` verdict
+row. `--json` prints
+`{"compatibility": …, "required": …, "floor": …, "changes": [<detail>, …]}`.
+
+## `ipe run` passes the program through
+
+`ipe run` compiles your program and then runs it. **Your program's stdout is
+passed through untouched** — no gutter, no colour, no wrapping — so a program
+that emits its own machine output stays pipeable. `ipe`'s own messages (compile
+progress, errors) go to **stderr**, out of the way of that stdout.
+
+## Errors show the command's help
+
+Misusing a command — a bad or missing argument, an unknown flag, `--plain` and
+`--json` together — prints that command's **full `--help` page to stderr** and
+exits non-zero. There is no terse one-line `usage:`; the same page you would
+read from `ipe <command> --help` is the error output, uniformly across every
+command and subcommand. Help you asked for goes to stdout and exits zero; help
+shown because of a mistake goes to stderr and exits non-zero.

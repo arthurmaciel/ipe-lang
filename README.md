@@ -93,11 +93,11 @@ See [`examples/`](examples/) for a program of each shape.
 Every effect in Ipê flows through a capability-tagged kernel, so the compiler can
 tell you exactly what a program is allowed to do — network, filesystem, env,
 subprocess, clock, random, native-ffi — from its code alone, with nothing to
-declare. `ipe capabilities <entry>` prints that inferred set (one per line, or
-`none` for a pure program):
+declare. `ipe capabilities <entry>` prints that inferred set as a human report by
+default; `--plain` gives the bare names, one per line, for a script:
 
 ```
-$ ipe capabilities examples/sky/02-go-stdlib/src/Main.ipe
+$ ipe capabilities --plain examples/sky/02-go-stdlib/src/Main.ipe
 network
 clock
 ```
@@ -109,6 +109,8 @@ inference and the one place effects can escape the model.
 
 See [**Capabilities**](docs/capabilities.md) for the full model — the eight
 capabilities, how inference works, and how native code declares and is sandboxed.
+Every command is human-friendly by default; data commands take `--plain` and
+`--json` for scripts — see [**CLI output**](docs/cli-output.md).
 
 ## Dependencies
 
