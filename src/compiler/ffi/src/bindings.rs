@@ -19,7 +19,7 @@
 //! binding it cannot render soundly emits NOTHING (over-drop), never a
 //! wrapper cargo would reject.
 
-use crate::carrier::{Carrier, ClosureRet, ClosureSig, StructDef};
+use crate::carrier::{Carrier, ClosureRet, ClosureSig, EnumDef, StructDef};
 use crate::naming::{RustIdent, arg_name, rust_kernel_name, rust_safe_ident, wrapper_fn_ident};
 use crate::num_coerce::{is_numeric_rust, num_saturate, num_widen_scalar};
 use crate::pkginfo::{Effect, EnumArm, EnumVariantKind, FnInfo, FnShape, Param, PkgInfo};
@@ -1122,6 +1122,7 @@ fn emit_fn_region(krate: &str, kernel_name: &str, f: &FnInfo) -> Vec<String> {
         FnShape::FieldSet => field_set_lines(&cx),
         FnShape::ClosureAdapter { sig } => closure_adapter_lines(&cx, sig),
         FnShape::StructCtor { def } => struct_ctor_lines(&cx, def),
+        FnShape::EnumDefCtor { def } => enum_def_ctor_lines(&cx, def),
         FnShape::Plain | FnShape::PkgVar => plain_lines(&cx),
     };
     // A trait-qualified / turbofished binding with NO open type params is a
@@ -1285,6 +1286,76 @@ fn struct_ctor_lines(cx: &WrapperCx<'_>, def: &StructDef) -> Vec<String> {
     ));
     out.push(format!("    {struct_name} {{ {} }}", assigns.join(", ")));
     out.push("}".to_owned());
+    out
+}
+
+/// The `[rust.provide.enum]` definition + one constructor per variant.
+///
+/// Ipê DEFINES a nominal Rust `enum` here: the emitter renders the `#[derive]`ed
+/// enum definition once, then a constructor wrapper per variant. A unit variant
+/// gets a nullary constructor (`E::V`); a tuple-payload variant gets one owned
+/// carrier parameter per payload position, folded into `E::V(a0, …)`. This is
+/// the `struct_ctor_lines` path generalised to a sum — the exact `EnumCtor`
+/// inbound coercion an inspected enum already uses, applied to an author-defined
+/// enum. Everything renders from the parsed [`EnumDef`]; no raw manifest string
+/// reaches this emitted Rust.
+///
+/// An opaque payload absolutizes through the crate so the defined enum can never
+/// collide with a runtime kernel module re-exported at the app crate root.
+fn enum_def_ctor_lines(cx: &WrapperCx<'_>, def: &EnumDef) -> Vec<String> {
+    let krate = cx.krate;
+    // The enum definition, with each opaque payload absolutized through the
+    // crate (a scalar payload renders its owned Rust type directly).
+    let mut out = def.definition_lines(&|id| absolutize_crate(krate, id.as_str()));
+    let enum_name = def.name.as_str();
+    // One constructor per variant, named `<ctor>_<snake(variant)>` off the
+    // manifest ctor name (`cx.rust_name`). Each parameter's inbound coercion is
+    // the identity for the closed carrier set (the owned Rust type IS the Ipê
+    // value's carrier — no narrowing), mirroring the tuple-variant `EnumCtor`.
+    for v in &def.variants {
+        let ctor = format!("{}_{}", cx.rust_name, variant_snake(v.name.as_str()));
+        out.push(String::new());
+        if v.payload.is_empty() {
+            out.push(format!("pub fn {ctor}() -> {enum_name} {{"));
+            out.push(format!("    {enum_name}::{}", v.name.as_str()));
+        } else {
+            let params: Vec<String> = v
+                .payload
+                .iter()
+                .enumerate()
+                .map(|(j, c)| format!("{}: {}", arg_name(j), carrier_rust_ty(krate, c)))
+                .collect();
+            let forwarded: Vec<String> = (0..v.payload.len()).map(arg_name).collect();
+            out.push(format!(
+                "pub fn {ctor}({}) -> {enum_name} {{",
+                params.join(", ")
+            ));
+            out.push(format!(
+                "    {enum_name}::{}({})",
+                v.name.as_str(),
+                forwarded.join(", ")
+            ));
+        }
+        out.push("}".to_owned());
+    }
+    out
+}
+
+/// The `snake_case` of a variant identifier (`SetValue` → `set_value`), for the
+/// per-variant constructor suffix. The input is a validated `RustIdent`, so this
+/// only lowercases and inserts `_` at internal case boundaries.
+fn variant_snake(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 4);
+    for (i, c) in s.chars().enumerate() {
+        if c.is_ascii_uppercase() {
+            if i != 0 {
+                out.push('_');
+            }
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
     out
 }
 
@@ -2055,6 +2126,57 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
             "{out}"
         );
         assert!(out.contains("Point { x: arg0, y: arg1 }"), "{out}");
+    }
+
+    #[test]
+    fn enum_def_emits_the_derived_definition_and_per_variant_constructors() {
+        // The Iced/TEA `Message` shape: unit variants + a tuple-payload one.
+        let out = emit_bindings(&semver_pkg(&json!([{
+            "name": "message",
+            "effect": "pure",
+            "isEnumDef": true,
+            "enumName": "Message",
+            "enumVariants": [
+                { "name": "Increment", "payload": [] },
+                { "name": "Decrement", "payload": [] },
+                { "name": "SetValue", "payload": ["i64"] }
+            ],
+            "enumDerives": ["Clone"]
+        }])));
+        assert!(out.contains("#[derive(Clone)]"), "{out}");
+        assert!(out.contains("pub enum Message {"), "{out}");
+        assert!(out.contains("    Increment,"), "{out}");
+        assert!(out.contains("    SetValue(i64),"), "{out}");
+        // One constructor per variant, `<ctor>_<snake(variant)>`.
+        assert!(
+            out.contains("pub fn semver_message_increment() -> Message {"),
+            "{out}"
+        );
+        assert!(out.contains("Message::Increment"), "{out}");
+        assert!(
+            out.contains("pub fn semver_message_set_value(arg0: i64) -> Message {"),
+            "{out}"
+        );
+        assert!(out.contains("Message::SetValue(arg0)"), "{out}");
+        // Sentinel bracketing so DCE can drop the region by name.
+        assert!(out.contains("// IPE-FFI-WRAPPER BEGIN message"), "{out}");
+    }
+
+    #[test]
+    fn enum_def_with_an_opaque_payload_over_drops_no_wrapper() {
+        // An opaque payload needs the crate opaque-map to resolve to a nameable
+        // path; that plumbing is a follow-up, so the entry over-drops at decode
+        // rather than emit an unresolvable bare handle and break the SEAL.
+        let out = emit_bindings(&semver_pkg(&json!([{
+            "name": "wrap",
+            "effect": "pure",
+            "isEnumDef": true,
+            "enumName": "Wrap",
+            "enumVariants": [{ "name": "Hold", "payload": ["Version"] }],
+            "enumDerives": []
+        }])));
+        assert!(!out.contains("pub enum Wrap"), "{out}");
+        assert!(!out.contains("semver_wrap_hold"), "{out}");
     }
 
     #[test]
