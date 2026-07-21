@@ -26,6 +26,9 @@ use std::path::{Path, PathBuf};
 
 use ipe_diagnostics::{Code, IPE_F4410};
 
+pub mod run_jail;
+pub mod seccomp;
+
 /// Why a jail could not be established or a jailed run failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SandboxDefect {

@@ -2245,6 +2245,8 @@ name = "ipe_sandbox"
 version = "0.1.11"
 dependencies = [
  "ipe_diagnostics",
+ "ipe_kernels",
+ "serde",
 ]
 
 [[package]]

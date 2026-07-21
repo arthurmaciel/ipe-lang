@@ -31,6 +31,7 @@ mod lsp;
 pub mod pkg;
 pub mod project;
 pub mod resolve;
+pub mod run_sandbox;
 pub mod style;
 /// The embedded Ipê standard-library source now lives in the dependency-free
 /// [`ipe_stdlib`] leaf crate so the WebAssembly frontend can share one copy.
@@ -1912,7 +1913,7 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
         wasm_hydrate_mode: false,
     };
 
-    manifest.map_or_else(
+    manifest.as_ref().map_or_else(
         || {
             build_with_sibling_discovery_with_options(
                 &entry_path,
@@ -1921,7 +1922,7 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
                 options.clone(),
             )
         },
-        |m| build_project_with_options(&m, &out_dir, &runtime_dir, options.clone()),
+        |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
     )?;
 
     // --- Step 2: cargo build the emitted project ---
@@ -1958,18 +1959,55 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
     }
     bin.push("debug");
     bin.push("ipe-app");
-    let mut cmd = std::process::Command::new(&bin);
-    cmd.args(bin_args);
 
-    // On Unix, replace the current process image (exec) so signals and
-    // process-group membership propagate cleanly. On other platforms (Windows),
-    // spawn-and-wait is the only option.
+    // --- Step 3a: resolve the capability set and build the runtime jail ---
+    // The jail confines the emitted app to `inferred ∪ declared`. A declared
+    // effect works; an undeclared one fails at the OS boundary. Fail-closed: a
+    // missing primitive refuses (never runs unconfined), except the narrow
+    // low-value override.
+    let manifest_parsed = match &manifest {
+        Some(m) => Some(project::parse_manifest(m)?),
+        None => None,
+    };
+    let driver = manifest_parsed
+        .as_ref()
+        .map_or(ipe_backend_rust::DbDriver::Sqlite, |m| m.driver);
+    let resolved = run_sandbox::resolve_for_run(
+        manifest_parsed.as_ref(),
+        manifest.as_deref(),
+        &entry_path,
+    )?;
+    let union = resolved.union();
+    let profile = run_sandbox::build_profile(&resolved, driver)?;
+    let bin_args_os: Vec<std::ffi::OsString> =
+        bin_args.iter().map(std::ffi::OsString::from).collect();
+
+    // The scoped writable tempdir (the sole writable mount when `filesystem` is
+    // absent) and the working tree (bound read-write only when it is granted).
+    let scoped_tmp = run_sandbox::make_scoped_tmp()?;
+    let working_tree = std::env::current_dir().map_err(|e| CliError::Io {
+        path: PathBuf::from("."),
+        source: e,
+    })?;
+
     #[cfg(unix)]
     {
+        // On Linux the jail is established and `exec_in_run_jail` replaces this
+        // process with the jailed app (does not return on success). On a
+        // refuse-gap platform or a missing primitive, the fail-closed policy
+        // either refuses or (low-value override) returns to run unconfined.
+        run_sandbox::jail_and_exec(
+            &profile,
+            &union,
+            &scoped_tmp,
+            &working_tree,
+            &bin,
+            &bin_args_os,
+        )?;
+        // Reached only when the override permitted a low-value unconfined run.
         use std::os::unix::process::CommandExt as _;
-        // `exec` does not return on success; any returned error is an OS failure.
-        // This block is the function tail on Unix (the `#[cfg(not(unix))]` arm is
-        // absent), so the `Err` is the tail expression — no `return` needed.
+        let mut cmd = std::process::Command::new(&bin);
+        cmd.args(&bin_args);
         let err = cmd.exec();
         Err(CliError::Io {
             path: bin,
@@ -1978,15 +2016,26 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
     }
     #[cfg(not(unix))]
     {
+        // Off Unix there is no jail (the documented refuse-gap): `jail_and_exec`
+        // applies the fail-closed policy — refuse a native-capability program,
+        // or (low-value override) return Ok to run unconfined below.
+        run_sandbox::jail_and_exec(
+            &profile,
+            &union,
+            &scoped_tmp,
+            &working_tree,
+            &bin,
+            &bin_args_os,
+        )?;
+        let mut cmd = std::process::Command::new(&bin);
+        cmd.args(&bin_args);
         let status = cmd.status().map_err(|e| CliError::Io {
             path: bin,
             source: e,
         })?;
         // Propagate the child's exit code.  `CliError` only models failure, so
         // a non-zero exit is surfaced as a usage-owned message; the caller
-        // (main.rs) prints it to stderr and exits 1.  For a richer exit-code
-        // passthrough the caller would need to call `std::process::exit`
-        // directly, but that is out of scope for this driver library.
+        // (main.rs) prints it to stderr and exits 1.
         if !status.success() {
             let code = status.code().unwrap_or(1);
             return Err(CliError::UsageOwned(format!(
@@ -2225,7 +2274,7 @@ pub fn emit_ir_text(entry: &Path) -> Result<String, CliError> {
 /// # Errors
 /// [`CliError::Pipeline`] when the compiler rejects the program;
 /// [`CliError::Io`] when the entry file cannot be read.
-fn lower_entry(entry: &Path) -> Result<ipe_ir::Program, CliError> {
+pub(crate) fn lower_entry(entry: &Path) -> Result<ipe_ir::Program, CliError> {
     let source = fs::read_to_string(entry).map_err(|e| io_err(entry, e))?;
     let pipeline_err = |diag: Diagnostic| CliError::Pipeline {
         file: entry.to_path_buf(),

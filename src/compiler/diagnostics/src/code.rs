@@ -273,6 +273,8 @@ pub const IPE_F4410: Code = Code("IPE-F4410");
 pub const IPE_F4411: Code = Code("IPE-F4411");
 /// an FFI cache artifact cannot be read or written
 pub const IPE_F4412: Code = Code("IPE-F4412");
+/// no runtime jail can be established around the emitted app, or a jailed run failed
+pub const IPE_F4413: Code = Code("IPE-F4413");
 
 // ---------------------------------------------------------------------------
 // Internal (IPE-I####)
@@ -406,6 +408,7 @@ pub fn title(c: Code) -> &'static str {
         IPE_F4410 => "no isolation jail can be established for compiling an untrusted crate",
         IPE_F4411 => "a git source for a foreign crate was rejected",
         IPE_F4412 => "an FFI cache artifact cannot be read or written",
+        IPE_F4413 => "no runtime jail can be established around the emitted app",
         IPE_I0001 => "internal compiler error",
         IPE_I0010 => "intern: unresolved symbol",
         IPE_I0011 => "intern: symbol table exhausted",
@@ -544,6 +547,7 @@ fn back_end_explain_page(c: Code) -> Option<&'static str> {
         IPE_F4410 => Some(include_str!("../explain/IPE-F4410.md")),
         IPE_F4411 => Some(include_str!("../explain/IPE-F4411.md")),
         IPE_F4412 => Some(include_str!("../explain/IPE-F4412.md")),
+        IPE_F4413 => Some(include_str!("../explain/IPE-F4413.md")),
         IPE_I0001 => Some(include_str!("../explain/IPE-I0001.md")),
         IPE_I0010 => Some(include_str!("../explain/IPE-I0010.md")),
         IPE_I0011 => Some(include_str!("../explain/IPE-I0011.md")),
@@ -575,8 +579,9 @@ pub const ALL_CODES: &[Code] = &[
     IPE_L0110, IPE_L0111, IPE_L0112, IPE_L0113, IPE_L0114, IPE_L0115, IPE_L0116, IPE_L0117,
     IPE_L0118, IPE_L0119, IPE_L0120, IPE_L0121, IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125,
     IPE_L0126, IPE_L0127, IPE_L0128, IPE_L0129, IPE_L0130, IPE_L0131, IPE_L0200, IPE_F4400,
-    IPE_F4401, IPE_F4402, IPE_F4410, IPE_F4411, IPE_F4412, IPE_I0001, IPE_I0010, IPE_I0011,
-    IPE_I0100, IPE_I0101, IPE_I0102, IPE_I0103, IPE_I0200, IPE_I0201, IPE_I0202, IPE_I0203,
+    IPE_F4401, IPE_F4402, IPE_F4410, IPE_F4411, IPE_F4412, IPE_F4413, IPE_I0001, IPE_I0010,
+    IPE_I0011, IPE_I0100, IPE_I0101, IPE_I0102, IPE_I0103, IPE_I0200, IPE_I0201, IPE_I0202,
+    IPE_I0203,
 ];
 
 #[cfg(test)]
@@ -585,7 +590,7 @@ mod tests {
 
     #[test]
     fn taxonomy_code_count_is_pinned() {
-        assert_eq!(ALL_CODES.len(), 104);
+        assert_eq!(ALL_CODES.len(), 105);
     }
 
     #[test]
