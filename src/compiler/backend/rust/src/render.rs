@@ -162,14 +162,18 @@ fn render_at(
             }
         }
         Doc::Concat(docs) => {
-            // The trailing-delimiter `reserve` belongs to the concatenation's LAST
-            // line, so only the FINAL child inherits it; earlier children are
-            // measured against the full width (their tail is another child, not the
-            // enclosing delimiter).
-            let last = docs.len().saturating_sub(1);
+            // A child's own trailing `reserve` is the enclosing reserve PLUS the flat
+            // width of every following sibling that lands on the SAME line — the
+            // closing delimiter text a wrapper appends after a breakable construct
+            // (`Box::new(<closure>)`'s `)`, then the enclosing `;`). Only siblings
+            // that render single-line count; once one would break, the reserve no
+            // longer applies to earlier children (their tail is that break, not the
+            // delimiter). This lets a `BraceBody`/`CallArgs` child re-test its own fit
+            // against the width `rustfmt`'s `Shape` leaves after its trailing tokens.
             for (i, d) in docs.iter().enumerate() {
                 let c = eff_col(out, col);
-                let child_cfg = if i == last { cfg } else { cfg.no_reserve() };
+                let suffix = trailing_siblings_flat_width(&docs[i + 1..]);
+                let child_cfg = cfg.with_reserve(cfg.reserve + suffix);
                 render_at(d, child_cfg, indent, c, flat, out);
             }
         }
@@ -230,7 +234,140 @@ fn render_at(
         } => {
             render_struct_lit(open, fields, close, cfg, indent, col, out);
         }
+        Doc::TypeBound {
+            ptr_open,
+            head,
+            traits,
+            close,
+        } => {
+            render_type_bound(ptr_open, head, traits, close, cfg, indent, col, flat, out);
+        }
     }
+}
+
+/// Render a [`Doc::TypeBound`] `Ptr<Head + T1 + …>` with `rustfmt`'s angle-bracket
+/// break. Flat when it fits; else `Ptr<` then the bound list at one indent step
+/// (`Head + T1 + …,`) with `>` dedented; else, when the bound list itself overflows
+/// at that step, `Head` and each `+ Ti` on their own lines at a further indent step.
+/// The break decision is independent of any enclosing group (`rustfmt` re-tests the
+/// annotation against the width on its own line). `col` is where `ptr_open`'s first
+/// character lands.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "renderer threads ptr/head/traits/close + col/indent"
+)]
+fn render_type_bound(
+    ptr_open: &Doc,
+    head: &Doc,
+    traits: &[Doc],
+    close: &Doc,
+    cfg: RenderConfig,
+    indent: usize,
+    col: usize,
+    flat: bool,
+    out: &mut String,
+) {
+    let start_col = eff_col(out, col);
+    // FLAT: an enclosing group that chose flat forces the inline form (used by the
+    // assignment's `flat_width` measurement of its prefix); otherwise the inline
+    // form holds only while `Ptr<Head + T1 + …>` fits the (reserve-reduced) width.
+    let flat_w = type_bound_flat_width(ptr_open, head, traits, close, cfg);
+    if flat || start_col + flat_w <= cfg.margin() {
+        render_at(ptr_open, cfg.no_reserve(), indent, start_col, true, out);
+        let c = current_col(out);
+        render_at(head, cfg.no_reserve(), indent, c, true, out);
+        for t in traits {
+            out.push_str(" + ");
+            let c = current_col(out);
+            render_at(t, cfg.no_reserve(), indent, c, true, out);
+        }
+        let c = current_col(out);
+        render_at(close, cfg, indent, c, true, out);
+        return;
+    }
+
+    // Overflowing: break the angle brackets. `Ptr<` on this line, the bound list at
+    // one indent step, `>` dedented back to `Ptr`'s column.
+    render_at(ptr_open, cfg.no_reserve(), indent, start_col, false, out);
+    let bound_indent = indent + CHAIN_BREAK_INDENT;
+
+    // The flat bound list at the bound indent, plus its trailing `,`.
+    let bound_flat_w = type_bound_list_flat_width(head, traits, cfg);
+    if bound_indent + bound_flat_w + 1 <= cfg.max_width {
+        // ANGLE-BREAK: the whole bound list on one line at `bound_indent`.
+        out.push('\n');
+        push_indent(bound_indent, out);
+        let c = current_col(out);
+        render_at(head, cfg.no_reserve(), bound_indent, c, true, out);
+        for t in traits {
+            out.push_str(" + ");
+            let c = current_col(out);
+            render_at(t, cfg.no_reserve(), bound_indent, c, true, out);
+        }
+        out.push(',');
+    } else {
+        // BOUND-BREAK: `Head` on its own line, each `+ Ti` on its own line at a
+        // further indent step, a trailing comma after the last.
+        out.push('\n');
+        push_indent(bound_indent, out);
+        let c = current_col(out);
+        render_at(head, cfg.no_reserve(), bound_indent, c, false, out);
+        let trait_indent = bound_indent + CHAIN_BREAK_INDENT;
+        for t in traits {
+            out.push('\n');
+            push_indent(trait_indent, out);
+            out.push_str("+ ");
+            let c = current_col(out);
+            render_at(t, cfg.no_reserve(), trait_indent, c, false, out);
+        }
+        out.push(',');
+    }
+    out.push('\n');
+    push_indent(indent, out);
+    let c = current_col(out);
+    render_at(close, cfg, indent, c, false, out);
+}
+
+/// The flat width of `Ptr<Head + T1 + …>` — the single-line footprint of a
+/// [`Doc::TypeBound`], for its overflow test.
+fn type_bound_flat_width(
+    ptr_open: &Doc,
+    head: &Doc,
+    traits: &[Doc],
+    close: &Doc,
+    cfg: RenderConfig,
+) -> usize {
+    let mut scratch = String::new();
+    render_at(ptr_open, cfg.no_reserve(), 0, 0, true, &mut scratch);
+    render_at(
+        head,
+        cfg.no_reserve(),
+        0,
+        current_col(&scratch),
+        true,
+        &mut scratch,
+    );
+    for t in traits {
+        scratch.push_str(" + ");
+        let c = current_col(&scratch);
+        render_at(t, cfg.no_reserve(), 0, c, true, &mut scratch);
+    }
+    let c = current_col(&scratch);
+    render_at(close, cfg.no_reserve(), 0, c, true, &mut scratch);
+    scratch.len()
+}
+
+/// The flat width of the bound list `Head + T1 + …` alone (no `Ptr<` / `>`), for
+/// the angle-break-vs-bound-break decision.
+fn type_bound_list_flat_width(head: &Doc, traits: &[Doc], cfg: RenderConfig) -> usize {
+    let mut scratch = String::new();
+    render_at(head, cfg.no_reserve(), 0, 0, true, &mut scratch);
+    for t in traits {
+        scratch.push_str(" + ");
+        let c = current_col(&scratch);
+        render_at(t, cfg.no_reserve(), 0, c, true, &mut scratch);
+    }
+    scratch.len()
 }
 
 /// Render a [`Doc::StructLit`] with `rustfmt`'s `struct_lit_width` rule: the flat
@@ -427,9 +564,33 @@ fn render_assign(
         return;
     }
 
-    // The same-line form overflows. Emit the prefix (always single-line — the
-    // `let name: TYPE = ` head never breaks), then decide the RHS layout.
-    render_at(prefix, cfg, indent, start_col, false, out);
+    // The same-line form overflows. The `let name: TYPE = ` prefix stays flat
+    // UNLESS its own flat width overflows the line — then `rustfmt` breaks the
+    // TYPE's angle brackets (a `Doc::TypeBound` prefix does this) to shorten the
+    // prefix before it even reaches the RHS. Rendering the prefix non-flat only when
+    // it overflows keeps the RHS-break (which alone fixes a merely-`prefix+rhs`-wide
+    // line) preferred, matching `rustfmt`.
+    let prefix_overflows = start_col + prefix_flat_w > cfg.max_width;
+    render_at(prefix, cfg, indent, start_col, !prefix_overflows, out);
+
+    // When the prefix itself broke its TYPE across lines, its last line ends with
+    // `> = ` and `rustfmt` GLUES the RHS onto it (the type-break already reclaimed
+    // the width the RHS-break would have) — the RHS breaks into its own delimiters
+    // in place, exactly the delimiter-break form. Skip the RHS-break axis.
+    if prefix_overflows {
+        let c = current_col(out);
+        // The trailing `;` (the `trailer`) is reserved on the RHS's last line so a
+        // glued closure body re-tests its fit with room for the statement terminator.
+        render_at(
+            rhs,
+            cfg.with_reserve(cfg.reserve + trailer),
+            indent,
+            c,
+            false,
+            out,
+        );
+        return;
+    }
 
     // RHS-BREAK: dropped onto its own line at one indent step past the block, the
     // RHS's FIRST line (laying out its own internal breaks — e.g. a closure body
@@ -456,6 +617,27 @@ fn render_assign(
     // the block indent.
     let c = current_col(out);
     render_at(rhs, cfg, indent, c, false, out);
+}
+
+/// The combined flat width of the run of trailing sibling TEXT leaves that follow a
+/// `Doc::Concat` child on the same line — the closing-delimiter text a wrapper
+/// appends after a breakable child (`Box::new(<closure>)`'s `)`). Only bare text
+/// leaves count: they are the delimiter tails that always sit on the child's last
+/// line. The scan stops at the first non-text sibling (a nested structure begins its
+/// own layout and does not reserve against an earlier child). Restricting to text
+/// leaves keeps this O(remaining leaves) rather than re-rendering nested subtrees,
+/// avoiding the exponential blowup a full per-child re-render would cause on deeply
+/// nested closures. This is the extra `reserve` a child inherits so its own fit test
+/// leaves room for its wrapper's tail.
+fn trailing_siblings_flat_width(siblings: &[Doc]) -> usize {
+    let mut total = 0usize;
+    for s in siblings {
+        match s {
+            Doc::Text(t) => total += t.len(),
+            _ => break,
+        }
+    }
+    total
 }
 
 /// The width of `doc` rendered entirely flat from column `start_col` up to its
@@ -511,7 +693,10 @@ fn has_hard_break(doc: &Doc) -> bool {
         | Doc::CallArgs { .. }
         // A `StructLit` decides its own layout independently too (its own
         // `struct_lit_width` re-test), so it hides its breaks like `CallArgs`.
-        | Doc::StructLit { .. } => false,
+        | Doc::StructLit { .. }
+        // A `TypeBound` decides its own angle-bracket break independently; it never
+        // carries a `HardLine`.
+        | Doc::TypeBound { .. } => false,
         Doc::Concat(docs) => docs.iter().any(has_hard_break),
         Doc::Nest(_, inner) => has_hard_break(inner),
     }

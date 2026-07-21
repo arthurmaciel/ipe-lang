@@ -610,6 +610,79 @@ fn build_call_binop(
     }
 }
 
+/// Build the `let __ipe_fn: <typed> = ` assignment-prefix document. When `typed`
+/// is a pointer-wrapped trait object `Ptr<Head + T1 + …>` (`Box<…>` /
+/// `::std::sync::Arc<…>`), the angle-bracketed bound is carried as a breakable
+/// [`Doc::TypeBound`] so `rustfmt`'s deep-indent type break (`Ptr<\n  Head + …,\n>`)
+/// is reproduced; any other annotation stays a single leaf. The top-level `+`
+/// splits at outer-angle-bracket depth only, so a nested `Box<… + …>` inside the
+/// head keeps its own bounds.
+fn typed_let_prefix(typed: &str) -> Doc {
+    if let Some(bound) = parse_type_bound(typed) {
+        return Doc::concat(vec![Doc::text("let __ipe_fn: "), bound, Doc::text(" = ")]);
+    }
+    Doc::owned(format!("let __ipe_fn: {typed} = "))
+}
+
+/// Parse a pointer-wrapped trait object `Ptr<Head + T1 + …>` into a breakable
+/// [`Doc::TypeBound`], or `None` when `typed` is not of that shape (no outer `<…>`,
+/// or the bound has no `+`-separated markers — nothing to break). `Ptr` is the text
+/// up to and including the first `<`; the inner is split into the head and the
+/// marker traits on ` + ` at the outer bracket's depth, so a nested generic's own
+/// `+` bounds are not split.
+fn parse_type_bound(typed: &str) -> Option<Doc> {
+    let open = typed.find('<')?;
+    if !typed.ends_with('>') {
+        return None;
+    }
+    let ptr = &typed[..=open];
+    let inner = &typed[open + 1..typed.len() - 1];
+    // Split `inner` on ` + ` at bracket depth 0 (relative to `inner`).
+    let mut segments: Vec<&str> = Vec::new();
+    let mut depth: i32 = 0;
+    let mut seg_start = 0usize;
+    let bytes = inner.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'<' | b'(' | b'[' => depth += 1,
+            // A `>` closes a bracket EXCEPT the `>` of a `->` return arrow, which is
+            // not a delimiter — skipping it keeps the return type's `+` bounds at the
+            // outer depth so the top-level marker list splits correctly.
+            b'>' if i >= 1 && bytes[i - 1] == b'-' => {}
+            b')' | b']' | b'>' => depth -= 1,
+            b'+' if depth == 0
+                && i >= 1
+                && bytes[i - 1] == b' '
+                && i + 1 < bytes.len()
+                && bytes[i + 1] == b' ' =>
+            {
+                // A top-level ` + `: the segment ends at the space before `+`.
+                segments.push(inner[seg_start..i - 1].trim());
+                seg_start = i + 2;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    segments.push(inner[seg_start..].trim());
+    // A breakable bound needs at least one `+ Trait` marker after the head.
+    if segments.len() < 2 {
+        return None;
+    }
+    let head = Doc::owned(segments[0].to_owned());
+    let traits = segments[1..]
+        .iter()
+        .map(|s| Doc::owned((*s).to_owned()))
+        .collect();
+    Some(Doc::type_bound(
+        Doc::owned(format!("{ptr}")),
+        head,
+        traits,
+        Doc::text(">"),
+    ))
+}
+
 /// Build the `Doc` for a named-function value, mirroring
 /// [`crate::emit_expr::emit_func_value`] token-for-token. The string emitter
 /// renders the statement block
@@ -636,7 +709,7 @@ fn build_func_value(
     let ctor = if wants_arc_ctor(ty) { "Arc" } else { "Box" };
     let rhs = Doc::owned(format!("{ctor}::new({name})"));
     let assign = Doc::assign(
-        Doc::owned(format!("let __ipe_fn: {typed} = ")),
+        typed_let_prefix(&typed),
         rhs,
         // The statement's trailing `;`.
         1,
@@ -1357,7 +1430,7 @@ fn build_lambda(
         Doc::text(")"),
     ]);
     let assign = Doc::assign(
-        Doc::owned(format!("let __ipe_fn: {typed} = ")),
+        typed_let_prefix(&typed),
         rhs,
         // The statement's trailing `;`.
         1,

@@ -234,6 +234,37 @@ pub enum Doc {
         /// The closing `}`.
         close: Box<Self>,
     },
+    /// An angle-bracketed generic type carrying a `+`-separated trait-bound list —
+    /// `Ptr<Head + T1 + T2 + …>` where `Ptr` is a pointer path (`Box`,
+    /// `::std::sync::Arc`), `Head` is the first bound (`dyn Fn(…) -> R`), and each
+    /// `Ti` is a marker trait (`Send`, `Sync`, `'static`). `rustfmt` lays this out
+    /// in one of three forms, in order:
+    ///
+    ///   * FLAT — `Ptr<Head + T1 + …>` fits: rendered inline.
+    ///   * ANGLE-BREAK — the flat form overflows: `Ptr<` on the opening line, the
+    ///     whole bound list at one indent step (`Head + T1 + …,` with a trailing
+    ///     comma), and `>` dedented back to `Ptr`'s column.
+    ///   * BOUND-BREAK — even at the indent step the bound list overflows: `Ptr<`,
+    ///     then `Head` on its own line, each `+ Ti` on its own line at a further
+    ///     indent step, a trailing comma after the last, and `>` dedented back.
+    ///
+    /// Used only for the `let __ipe_fn: <TypedFn> = ` annotation prefix of a boxed /
+    /// shared closure binding, whose wide `Box<dyn Fn(…) -> R + Send + Sync +
+    /// 'static>` type `rustfmt` breaks when the binding sits at a deep indent. The
+    /// break decision is independent of any enclosing group. SEAL accounting: `ptr`,
+    /// `<`, `head`, each `+ Ti`, and `>` are all leaves (the string emitter writes
+    /// the same tokens); the trailing comma of a broken bound list is SEAL-invisible.
+    TypeBound {
+        /// The pointer path and opening angle bracket, e.g. `Box<` / `::std::sync::Arc<`.
+        ptr_open: Box<Self>,
+        /// The first bound (`dyn Fn(…) -> R`), never itself broken here.
+        head: Box<Self>,
+        /// The marker traits after `head`, each a `+`-prefixed leaf token WITHOUT
+        /// the leading `+ ` (e.g. `Send`, `Sync`, `'static`), in source order.
+        traits: Vec<Self>,
+        /// The closing angle bracket `>`.
+        close: Box<Self>,
+    },
 }
 
 /// One operand of a [`Doc::Chain`], with the operator that precedes it (if any).
@@ -325,6 +356,18 @@ impl Doc {
         }
     }
 
+    /// An angle-bracketed generic bound `Ptr<Head + T1 + …>` that breaks the angle
+    /// brackets (and, if needed, the `+`-list) when it overflows. See
+    /// [`Doc::TypeBound`].
+    pub fn type_bound(ptr_open: Self, head: Self, traits: Vec<Self>, close: Self) -> Self {
+        Self::TypeBound {
+            ptr_open: Box::new(ptr_open),
+            head: Box::new(head),
+            traits,
+            close: Box::new(close),
+        }
+    }
+
     /// Append every text leaf of this document, in order, to `out`. This is the
     /// SEAL oracle: `concat(leaves(doc))` whitespace-normalizes to the legacy
     /// emitter's string. Break candidates ([`Doc::Line`] / [`Doc::HardLine`])
@@ -412,6 +455,23 @@ impl Doc {
                     e.collect_leaves(out);
                 }
                 out.push(' ');
+                close.collect_leaves(out);
+            }
+            // `Ptr<Head + T1 + T2 + …>` — the same token sequence the string emitter
+            // writes for the flat annotation. The angle-break's trailing comma is
+            // SEAL-invisible (the string emitter never writes it).
+            Self::TypeBound {
+                ptr_open,
+                head,
+                traits,
+                close,
+            } => {
+                ptr_open.collect_leaves(out);
+                head.collect_leaves(out);
+                for t in traits {
+                    out.push_str(" + ");
+                    t.collect_leaves(out);
+                }
                 close.collect_leaves(out);
             }
         }
