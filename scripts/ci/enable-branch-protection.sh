@@ -19,10 +19,13 @@
 # The slow jobs (e2e, sky-parity, miri, runtime-*, wasm-floor, examples-sweep)
 # are deliberately NOT listed — they self-skip on pull_request or run advisory.
 #
-# `strict: true` requires the PR branch to be up to date with `main` before
-# merge (no merge-skew regressions). Combined with auto-merge, a PR author sets
-# auto-merge once and the PR lands as soon as the gate is green and the branch
-# is current.
+# `strict: false`: PRs do NOT have to be up to date with `main` before merging.
+# `strict: true` would require it, but GitHub only auto-updates a behind branch
+# when a full merge QUEUE is configured — without one it just adds a manual
+# "Update branch" button, so strict + many concurrent PRs means constant manual
+# rebasing. The required checks still gate every PR and literal conflicts still
+# block the merge; only semantic merge-skew is possible, which the post-merge
+# push CI catches. Revisit strict only alongside a merge queue.
 set -euo pipefail
 
 REPO="arthurmaciel/ipe-lang"
@@ -38,7 +41,7 @@ gh api -X PUT "repos/${REPO}/branches/${BRANCH}/protection" \
   --input - <<'JSON'
 {
   "required_status_checks": {
-    "strict": true,
+    "strict": false,
     "contexts": ["fmt", "clippy", "test", "seal-smoke", "cargo-deny"]
   },
   "enforce_admins": false,
