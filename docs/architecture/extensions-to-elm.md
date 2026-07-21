@@ -30,7 +30,7 @@ below are stated as engineering trade-offs, not corrections.
 
 | `elm/*` package | Ipê relationship | Verdict |
 |---|---|---|
-| `elm/core` | Broad coverage; `List`/`Dict`/`Set`/`String`/`Maybe`/`Result`/`Task`/`Cmd`/`Sub` present, several gaps | **partial** — see §2 |
+| `elm/core` | Broad coverage; `List`/`Dict`/`Set`/`String`/`Maybe`/`Result`/`Task`/`Cmd`/`Sub` present, few remaining gaps | **partial** — see §2 |
 | `elm/json` | Role filled by `Ipe.Config` decoders (TOML/YAML/JSON in one surface) | **diverged** — §3.1 |
 | `elm/time` | `Ipe.Time` — reshaped (server clock, IANA zones, formatting), no `Posix`/`Zone` ADTs | **diverged** — §3.2 |
 | `elm/random` | `Ipe.Random` — `Task`-based generation + a seeded pure surface, not `Generator`/`step` | **diverged** — §3.3 |
@@ -46,8 +46,11 @@ below are stated as engineering trade-offs, not corrections.
 | `elm/browser` | No counterpart; replaced by `Ipe.Live` / `Ipe.Tui` / `Ipe.Webview` | **excluded** — §4 |
 
 Headline `elm/core` count (from [`tbd/elm-core-coverage.md`](tbd/elm-core-coverage.md),
-264 exposed values across 17 modules): **139 present · 15 diverged · 107 missing ·
-3 n/a**, plus 13 of 20 exposed types present.
+264 exposed values across 17 modules): **181 present · 15 diverged · 65 missing ·
+3 n/a**, plus 13 of 20 exposed types present. (The `List`/`Dict`/`Set`/`Result`/
+`Char`/`String` pure-`elm/core` fills closed the bulk of the former gap; the
+remaining `missing` rows are `List.map2`–`map5`, `Dict.merge`, and the whole
+absent modules — see §2.)
 
 ---
 
@@ -64,7 +67,7 @@ decisions live here.
 | `List` | 33 | 0 | 4 | `sum`/`product`/`maximum`/`minimum`/`singleton`/`repeat`/`intersperse`/`partition`/`unzip`/`sort`/`sortWith` now present; still missing `map2`–`map5` |
 | `Dict` | 21 | 0 | 1 | `update`/`singleton`/`foldr`/`filter`/`partition`/`intersect`/`diff` now present; still missing `merge` |
 | `Set` | 17 | 0 | 0 | complete — `isEmpty`/`singleton`/`foldl`/`foldr`/`map`/`filter`/`partition` now present |
-| `String` | 29 | 2 | 13 | code-point semantics (§5); missing char-fold family, `left`/`right`, `cons`/`uncons` |
+| `String` | 41 | 2 | 1 | code-point semantics (§5); `left`/`right`/`cons`/`uncons`/`pad`/`indexes` + the char-fold family now present |
 | `Maybe` | 7 | 0 | 0 | complete |
 | `Result` | 10 | 0 | 0 | complete — `toMaybe`/`fromMaybe` bridges now present |
 | `Char` | 9 | 2 | 2 | `toUpper`/`toLower` return `String`; `isAlphaNum`/`isHexDigit`/`isOctDigit` now present |

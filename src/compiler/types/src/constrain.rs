@@ -5257,6 +5257,27 @@ impl<'a> Builder<'a> {
             K::StringPadLeft | K::StringPadRight => {
                 fun(int(), fun(char(), fun(string(), string())))
             }
+            // left / right : Int -> String -> String
+            K::StringLeft | K::StringRight => fun(int(), fun(string(), string())),
+            // cons : Char -> String -> String
+            K::StringCons => fun(char(), fun(string(), string())),
+            // uncons : String -> Maybe (Char, String)
+            K::StringUncons => fun(string(), maybe(tuple2(char(), string()))),
+            // pad : Int -> Char -> String -> String
+            K::StringPad => fun(int(), fun(char(), fun(string(), string()))),
+            // indexes : String -> String -> List Int
+            K::StringIndexes => fun(string(), fun(string(), list(int()))),
+            // map : (Char -> Char) -> String -> String
+            K::StringMap => fun(fun(char(), char()), fun(string(), string())),
+            // filter : (Char -> Bool) -> String -> String
+            K::StringFilter => fun(fun(char(), bool_ty()), fun(string(), string())),
+            // foldl / foldr : (Char -> b -> b) -> b -> String -> b
+            K::StringFoldl | K::StringFoldr => fun(
+                fun(char(), fun(var(0), var(0))),
+                fun(var(0), fun(string(), var(0))),
+            ),
+            // any / all : (Char -> Bool) -> String -> Bool
+            K::StringAny | K::StringAll => fun(fun(char(), bool_ty()), fun(string(), bool_ty())),
 
             // ── Char (8) — `Char -> …`; `toLower`/`toUpper` return a 1-rune
             //    String (runtime `char_to_lower : char -> String`). ──
@@ -7739,6 +7760,18 @@ mod registry_phase_c_tests {
             K::StringContainsIn,
             K::StringStartsWithIn,
             K::StringEndsWithIn,
+            K::StringLeft,
+            K::StringRight,
+            K::StringCons,
+            K::StringUncons,
+            K::StringPad,
+            K::StringIndexes,
+            K::StringMap,
+            K::StringFilter,
+            K::StringFoldl,
+            K::StringFoldr,
+            K::StringAny,
+            K::StringAll,
             // Char (8)
             K::CharIsAlpha,
             K::CharIsDigit,

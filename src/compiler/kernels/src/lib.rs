@@ -188,6 +188,19 @@ pub enum StdlibKernel {
     StringContainsIn,
     StringStartsWithIn,
     StringEndsWithIn,
+    // Char-level navigation + fold family.
+    StringLeft,
+    StringRight,
+    StringCons,
+    StringUncons,
+    StringPad,
+    StringIndexes,
+    StringMap,
+    StringFilter,
+    StringFoldl,
+    StringFoldr,
+    StringAny,
+    StringAll,
     // ── Char ────────────────────────────────────────────────────────────────
     CharIsAlpha,
     CharIsDigit,
@@ -1681,6 +1694,18 @@ impl StdlibKernel {
                 d("String", "startsWithIn", 2, Pure, "string_starts_with_in")
             }
             Self::StringEndsWithIn => d("String", "endsWithIn", 2, Pure, "string_ends_with_in"),
+            Self::StringLeft => d("String", "left", 2, Pure, "string_left"),
+            Self::StringRight => d("String", "right", 2, Pure, "string_right"),
+            Self::StringCons => d("String", "cons", 2, Pure, "string_cons"),
+            Self::StringUncons => d("String", "uncons", 1, Pure, "string_uncons"),
+            Self::StringPad => d("String", "pad", 3, Pure, "string_pad"),
+            Self::StringIndexes => d("String", "indexes", 2, Pure, "string_indexes"),
+            Self::StringMap => d("String", "map", 2, Pure, "string_map"),
+            Self::StringFilter => d("String", "filter", 2, Pure, "string_filter"),
+            Self::StringFoldl => d("String", "foldl", 3, Pure, "string_foldl"),
+            Self::StringFoldr => d("String", "foldr", 3, Pure, "string_foldr"),
+            Self::StringAny => d("String", "any", 2, Pure, "string_any"),
+            Self::StringAll => d("String", "all", 2, Pure, "string_all"),
             // ── Char ────────────────────────────────────────────────────────
             Self::CharIsAlpha => d("Char", "isAlpha", 1, Pure, "char_is_alpha"),
             Self::CharIsDigit => d("Char", "isDigit", 1, Pure, "char_is_digit"),
@@ -3077,6 +3102,18 @@ impl StdlibKernel {
         Self::StringContainsIn,
         Self::StringStartsWithIn,
         Self::StringEndsWithIn,
+        Self::StringLeft,
+        Self::StringRight,
+        Self::StringCons,
+        Self::StringUncons,
+        Self::StringPad,
+        Self::StringIndexes,
+        Self::StringMap,
+        Self::StringFilter,
+        Self::StringFoldl,
+        Self::StringFoldr,
+        Self::StringAny,
+        Self::StringAll,
         // Char
         Self::CharIsAlpha,
         Self::CharIsDigit,
@@ -4368,6 +4405,18 @@ impl StdlibKernel {
             | Self::StringContainsIn
             | Self::StringStartsWithIn
             | Self::StringEndsWithIn
+            | Self::StringLeft
+            | Self::StringRight
+            | Self::StringCons
+            | Self::StringUncons
+            | Self::StringPad
+            | Self::StringIndexes
+            | Self::StringMap
+            | Self::StringFilter
+            | Self::StringFoldl
+            | Self::StringFoldr
+            | Self::StringAny
+            | Self::StringAll
             | Self::CharIsAlpha
             | Self::CharIsDigit
             | Self::CharIsLower

@@ -27,6 +27,8 @@ module Ipe.String exposing
     , words, lines
     , fromChar, toList, fromList
     , repeat, padLeft, padRight
+    , left, right, cons, uncons, pad, indexes
+    , map, filter, foldl, foldr, any, all
     )
 
 
@@ -216,3 +218,69 @@ lines = Ffi.kernel "String_lines"
 
 toList : String -> List Char
 toList = Ffi.kernel "String_toList"
+
+
+-- ─── Char-level navigation ─────────────────────────────────────────
+
+
+-- | `left n s` — the first `n` characters (runes). `n <= 0` → "".
+left : Int -> String -> String
+left = Ffi.kernel "String_left"
+
+
+-- | `right n s` — the last `n` characters (runes). `n <= 0` → "".
+right : Int -> String -> String
+right = Ffi.kernel "String_right"
+
+
+-- | `cons c s` — prepend a character.
+cons : Char -> String -> String
+cons = Ffi.kernel "String_cons"
+
+
+-- | `uncons s` — split off the first character; `Nothing` on "".
+uncons : String -> Maybe ( Char, String )
+uncons = Ffi.kernel "String_uncons"
+
+
+-- | `pad n ch s` — centre-pad `s` to width `n` with `ch`.
+pad : Int -> Char -> String -> String
+pad = Ffi.kernel "String_pad"
+
+
+-- | `indexes sub s` — every rune start index of `sub` within `s`.
+indexes : String -> String -> List Int
+indexes = Ffi.kernel "String_indexes"
+
+
+-- ─── Char-fold family ──────────────────────────────────────────────
+
+
+-- | `map fn s` — transform each character.
+map : (Char -> Char) -> String -> String
+map = Ffi.kernel "String_map"
+
+
+-- | `filter pred s` — keep only characters satisfying `pred`.
+filter : (Char -> Bool) -> String -> String
+filter = Ffi.kernel "String_filter"
+
+
+-- | `foldl fn acc s` — fold left over the characters.
+foldl : (Char -> b -> b) -> b -> String -> b
+foldl = Ffi.kernel "String_foldl"
+
+
+-- | `foldr fn acc s` — fold right over the characters.
+foldr : (Char -> b -> b) -> b -> String -> b
+foldr = Ffi.kernel "String_foldr"
+
+
+-- | `any pred s` — `True` if any character satisfies `pred`.
+any : (Char -> Bool) -> String -> Bool
+any = Ffi.kernel "String_any"
+
+
+-- | `all pred s` — `True` if every character satisfies `pred`.
+all : (Char -> Bool) -> String -> Bool
+all = Ffi.kernel "String_all"

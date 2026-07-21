@@ -543,6 +543,110 @@ pub fn string_to_list(s: String) -> Vec<char> {
     s.chars().collect()
 }
 
+/// `String.cons : Char -> String -> String` — prepend a character.
+pub fn string_cons(c: char, s: String) -> String {
+    let mut out = String::with_capacity(s.len() + c.len_utf8());
+    out.push(c);
+    out.push_str(&s);
+    out
+}
+
+/// `String.uncons : String -> Maybe (Char, String)` — split off the first
+/// character; `Nothing` on the empty string. Code-point (rune) based.
+pub fn string_uncons(s: String) -> IpeMaybe<(char, String)> {
+    let mut it = s.chars();
+    match it.next() {
+        Some(c) => IpeMaybe::Just((c, it.collect())),
+        None => IpeMaybe::Nothing,
+    }
+}
+
+/// `String.pad : Int -> Char -> String -> String` — centre-pad `s` to width `n`
+/// with `ch`. Matches Elm: extra padding on the RIGHT when the total is odd.
+/// `n <= length s` returns `s` unchanged.
+pub fn string_pad(n: i64, ch: char, s: String) -> String {
+    let len = s.chars().count() as i64;
+    if n <= len {
+        return s;
+    }
+    let total = (n - len) as usize;
+    let left = total / 2;
+    let right = total - left;
+    let mut out = String::new();
+    for _ in 0..left {
+        out.push(ch);
+    }
+    out.push_str(&s);
+    for _ in 0..right {
+        out.push(ch);
+    }
+    out
+}
+
+/// `String.indexes : String -> String -> List Int` — every code-point start
+/// index of `sub` within `s` (overlapping matches included, mirroring Elm).
+/// Empty `sub` yields `[]` (matches Elm).
+pub fn string_indexes(sub: String, s: String) -> Vec<i64> {
+    if sub.is_empty() {
+        return Vec::new();
+    }
+    let hay: Vec<char> = s.chars().collect();
+    let needle: Vec<char> = sub.chars().collect();
+    let mut out = Vec::new();
+    if needle.len() > hay.len() {
+        return out;
+    }
+    // Slide a window in CODE-POINT space so the returned indices are rune
+    // offsets (consistent with the rest of the module), not byte offsets.
+    for start in 0..=(hay.len() - needle.len()) {
+        if hay
+            .get(start..start + needle.len())
+            .is_some_and(|w| w == needle.as_slice())
+        {
+            out.push(start as i64);
+        }
+    }
+    out
+}
+
+/// `String.map : (Char -> Char) -> String -> String` — transform each rune.
+pub fn string_map(f: impl Fn(char) -> char, s: String) -> String {
+    s.chars().map(f).collect()
+}
+
+/// `String.filter : (Char -> Bool) -> String -> String` — keep matching runes.
+pub fn string_filter(pred: impl Fn(char) -> bool, s: String) -> String {
+    s.chars().filter(|c| pred(*c)).collect()
+}
+
+/// `String.foldl : (Char -> b -> b) -> b -> String -> b` — fold left over runes.
+pub fn string_foldl<B>(f: impl Fn(char, B) -> B, init: B, s: String) -> B {
+    let mut acc = init;
+    for c in s.chars() {
+        acc = f(c, acc);
+    }
+    acc
+}
+
+/// `String.foldr : (Char -> b -> b) -> b -> String -> b` — fold right over runes.
+pub fn string_foldr<B>(f: impl Fn(char, B) -> B, init: B, s: String) -> B {
+    let mut acc = init;
+    for c in s.chars().rev() {
+        acc = f(c, acc);
+    }
+    acc
+}
+
+/// `String.any : (Char -> Bool) -> String -> Bool`.
+pub fn string_any(pred: impl Fn(char) -> bool, s: String) -> bool {
+    s.chars().any(pred)
+}
+
+/// `String.all : (Char -> Bool) -> String -> Bool`.
+pub fn string_all(pred: impl Fn(char) -> bool, s: String) -> bool {
+    s.chars().all(pred)
+}
+
 /// `String.trimStart : String -> String`
 /// Removes leading Unicode whitespace. Matches Go's `unicodeIsSpace` set
 /// (includes NBSP, various space categories, BOM).
@@ -1079,5 +1183,89 @@ mod tests {
         let s = "héllo wörld".to_string();
         let chars = string_to_list(s.clone());
         assert_eq!(string_from_list(chars), s);
+    }
+
+    // ── New String fills — Elm-matching semantics ─────────────────────────
+
+    #[test]
+    fn left_right_match_elm() {
+        assert_eq!(string_left(3, "abcdef".into()), "abc");
+        assert_eq!(string_right(3, "abcdef".into()), "def");
+        assert_eq!(string_left(0, "abc".into()), "");
+        assert_eq!(string_left(-2, "abc".into()), ""); // Elm: n<=0 → ""
+        assert_eq!(string_left(9, "ab".into()), "ab"); // n>len → whole
+    }
+
+    #[test]
+    fn cons_uncons_match_elm() {
+        assert_eq!(string_cons('a', "bc".into()), "abc");
+        assert_eq!(
+            string_uncons("abc".into()),
+            IpeMaybe::Just(('a', "bc".to_string()))
+        );
+        assert_eq!(string_uncons(String::new()), IpeMaybe::Nothing);
+        // rune-based: astral char stays whole.
+        assert_eq!(
+            string_uncons("😀x".into()),
+            IpeMaybe::Just(('😀', "x".to_string()))
+        );
+    }
+
+    #[test]
+    fn pad_matches_elm() {
+        // Elm: pad 5 ' ' "abc" == "  abc " (extra pad on the right when odd).
+        assert_eq!(string_pad(5, ' ', "abc".into()), " abc ");
+        assert_eq!(string_pad(4, '.', "ab".into()), ".ab.");
+        assert_eq!(string_pad(2, '.', "abc".into()), "abc"); // n<=len → unchanged
+    }
+
+    #[test]
+    fn indexes_matches_elm() {
+        // Elm: indexes "i" "Mississippi" == [1,4,7,10].
+        assert_eq!(
+            string_indexes("i".into(), "Mississippi".into()),
+            vec![1, 4, 7, 10]
+        );
+        // Overlapping matches included.
+        assert_eq!(string_indexes("aa".into(), "aaa".into()), vec![0, 1]);
+        // Elm: indexes "" "abc" == [].
+        assert_eq!(
+            string_indexes(String::new(), "abc".into()),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn char_fold_family_matches_elm() {
+        // map / filter over runes.
+        assert_eq!(
+            string_map(|c| if c == 'a' { 'A' } else { c }, "banana".into()),
+            "bAnAnA"
+        );
+        assert_eq!(string_filter(|c| c != 'a', "banana".into()), "bnn");
+        // foldl / foldr build a string in each direction.
+        let l = string_foldl(
+            |c, mut acc: String| {
+                acc.push(c);
+                acc
+            },
+            String::new(),
+            "abc".into(),
+        );
+        assert_eq!(l, "abc");
+        let r = string_foldr(
+            |c, mut acc: String| {
+                acc.push(c);
+                acc
+            },
+            String::new(),
+            "abc".into(),
+        );
+        assert_eq!(r, "cba");
+        // any / all.
+        assert!(string_any(|c| c == 'z', "xyz".into()));
+        assert!(!string_any(|c| c == 'q', "xyz".into()));
+        assert!(string_all(|c| c.is_ascii_lowercase(), "xyz".into()));
+        assert!(!string_all(|c| c.is_ascii_lowercase(), "xYz".into()));
     }
 }

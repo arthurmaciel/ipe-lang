@@ -13090,6 +13090,7 @@ impl<'a> Lowerer<'a> {
             Callee::Kernel(
                 KernelFn::StringFromInt
                 | KernelFn::StringFromFloat
+                | KernelFn::StringUncons
                 | KernelFn::StringLength
                 | KernelFn::StringIsEmpty
                 | KernelFn::StringReverse
@@ -13371,6 +13372,14 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::StringRepeat
                 | KernelFn::StringDropLeft
                 | KernelFn::StringDropRight
+                | KernelFn::StringLeft
+                | KernelFn::StringRight
+                | KernelFn::StringCons
+                | KernelFn::StringIndexes
+                | KernelFn::StringMap
+                | KernelFn::StringFilter
+                | KernelFn::StringAny
+                | KernelFn::StringAll
                 | KernelFn::ListMap
                 | KernelFn::ListFilter
                 | KernelFn::ListMember
@@ -13596,6 +13605,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::StringSlice
                 | KernelFn::StringPadLeft
                 | KernelFn::StringPadRight
+                | KernelFn::StringPad
+                | KernelFn::StringFoldl
+                | KernelFn::StringFoldr
                 | KernelFn::BasicsClamp
                 | KernelFn::ListFoldl
                 | KernelFn::ListFoldr
@@ -14680,6 +14692,18 @@ impl<'a> Lowerer<'a> {
                     ("String", "containsIn") => Ok(Callee::Kernel(KernelFn::StringContainsIn)),
                     ("String", "startsWithIn") => Ok(Callee::Kernel(KernelFn::StringStartsWithIn)),
                     ("String", "endsWithIn") => Ok(Callee::Kernel(KernelFn::StringEndsWithIn)),
+                    ("String", "left") => Ok(Callee::Kernel(KernelFn::StringLeft)),
+                    ("String", "right") => Ok(Callee::Kernel(KernelFn::StringRight)),
+                    ("String", "cons") => Ok(Callee::Kernel(KernelFn::StringCons)),
+                    ("String", "uncons") => Ok(Callee::Kernel(KernelFn::StringUncons)),
+                    ("String", "pad") => Ok(Callee::Kernel(KernelFn::StringPad)),
+                    ("String", "indexes") => Ok(Callee::Kernel(KernelFn::StringIndexes)),
+                    ("String", "map") => Ok(Callee::Kernel(KernelFn::StringMap)),
+                    ("String", "filter") => Ok(Callee::Kernel(KernelFn::StringFilter)),
+                    ("String", "foldl") => Ok(Callee::Kernel(KernelFn::StringFoldl)),
+                    ("String", "foldr") => Ok(Callee::Kernel(KernelFn::StringFoldr)),
+                    ("String", "any") => Ok(Callee::Kernel(KernelFn::StringAny)),
+                    ("String", "all") => Ok(Callee::Kernel(KernelFn::StringAll)),
                     // ── Char kernels ───────────────────────────────────────
                     ("Char", "isAlpha") => Ok(Callee::Kernel(KernelFn::CharIsAlpha)),
                     ("Char", "isDigit") => Ok(Callee::Kernel(KernelFn::CharIsDigit)),
