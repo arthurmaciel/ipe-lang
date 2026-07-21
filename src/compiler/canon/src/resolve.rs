@@ -467,6 +467,14 @@ struct TypeCtx<'a> {
     qualifier_paths: &'a BTreeMap<Symbol, Vec<Symbol>>,
     aliases: &'a BTreeMap<Symbol, AliasDef>,
     interner: &'a Interner,
+    /// The interned `"any"` wildcard type-variable symbol. A bare builtin
+    /// parametric UI annotation (`view : Html`, `attr : Attribute`) is
+    /// arity-filled to `Html any` / `Attribute any` at the [`src::TypeAnnotation::TType`]
+    /// arm using this symbol, so its lone message parameter is inferred rather
+    /// than reaching the lowerer as a zero-arg `Html` (IPE-I0001). Pre-interned
+    /// by the module entry point (where the interner is mutable); the `TType` arm
+    /// runs under an immutable interner and cannot mint it.
+    ui_wildcard_msg: Symbol,
     /// Span of the enclosing value annotation, used as the location for an
     /// alias-arity error (the type AST itself carries no inner spans).
     ann_span: Span,
@@ -1352,6 +1360,12 @@ fn canonicalise_with_env(
 ) -> DResult<(canon::Module, BTreeMap<Symbol, KernelAlias>)> {
     let home = env.home.clone();
 
+    // The `"any"` wildcard symbol used to arity-fill a bare builtin parametric
+    // UI annotation (`view : Html` → `view : Html any`). Interned once here where
+    // the interner is mutable; the deeper `canonicalise_type` TType arm runs under
+    // an immutable `&Interner` and threads this symbol via `TypeCtx`.
+    let ui_wildcard_msg = interner.intern("any")?;
+
     // A LOCAL type/alias declaration whose name already has a
     // `type_home_map` entry from a DIFFERENT home is a dep-imported type being
     // shadowed. Reject it here, at the declaration, with the SAME
@@ -1495,6 +1509,7 @@ fn canonicalise_with_env(
             qualifier_paths,
             &aliases,
             interner,
+            ui_wildcard_msg,
         )?);
     }
 
@@ -1521,6 +1536,7 @@ fn canonicalise_with_env(
         &seen_ctors,
         &user_value_names,
         interner,
+        ui_wildcard_msg,
     )?;
 
     // Register every top-level value name so bindings can be referenced before
@@ -1603,6 +1619,7 @@ fn canonicalise_with_env(
             qualifier_paths,
             &aliases,
             interner,
+            ui_wildcard_msg,
         )?);
     }
     // The synthesized constructor defs are already fully canonical.
@@ -1749,6 +1766,7 @@ fn synthesize_record_alias_ctors(
     seen_ctors: &BTreeMap<Symbol, Span>,
     user_value_names: &BTreeSet<Symbol>,
     interner: &Interner,
+    ui_wildcard_msg: Symbol,
 ) -> DResult<Vec<canon::Def>> {
     let mut synth = Vec::new();
     for a in &m.aliases {
@@ -1781,6 +1799,7 @@ fn synthesize_record_alias_ctors(
             qualifier_paths,
             aliases,
             interner,
+            ui_wildcard_msg,
             ann_span: a.value.body.span,
         };
         let subst = BTreeMap::new();
@@ -2439,6 +2458,7 @@ fn canonicalise_union(
     qualifier_paths: &BTreeMap<Symbol, Vec<Symbol>>,
     aliases: &BTreeMap<Symbol, AliasDef>,
     interner: &Interner,
+    ui_wildcard_msg: Symbol,
 ) -> DResult<canon::Union> {
     let type_name = u.name.value;
     let vars: Vec<Symbol> = u.vars.iter().map(|v| v.value).collect();
@@ -2452,6 +2472,7 @@ fn canonicalise_union(
             qualifier_paths,
             aliases,
             interner,
+            ui_wildcard_msg,
             ann_span: c.span,
         };
         let mut args = Vec::with_capacity(c.value.args.len());
@@ -2499,6 +2520,7 @@ fn canonicalise_value(
     qualifier_paths: &BTreeMap<Symbol, Vec<Symbol>>,
     aliases: &BTreeMap<Symbol, AliasDef>,
     interner: &mut Interner,
+    ui_wildcard_msg: Symbol,
 ) -> DResult<canon::Def> {
     // Add parameter-bound names to a body-local environment.
     let mut body_env = env.clone();
@@ -2528,6 +2550,7 @@ fn canonicalise_value(
                 qualifier_paths,
                 aliases,
                 interner,
+                ui_wildcard_msg,
                 ann_span: ann.span,
             };
             let subst = BTreeMap::new();
@@ -3534,6 +3557,7 @@ fn canonicalise_type(
                         qualifier_paths: ctx.qualifier_paths,
                         aliases: aliases_ref,
                         interner: ctx.interner,
+                        ui_wildcard_msg: ctx.ui_wildcard_msg,
                         ann_span: ctx.ann_span,
                     };
                     canonicalise_type(
@@ -3596,6 +3620,28 @@ fn canonicalise_type(
                     },
                 });
             }
+            // A bare builtin parametric UI constructor (`Html` / `Element` /
+            // `Attribute`) carries one implicit message parameter — `view : Html`
+            // means `view : Html any`, with the message type inferred from the
+            // body's `Ui.layout …`. Arity-fill the missing parameter here, at the
+            // single canon source of truth, so BOTH the type checker (via
+            // `from_canon`, whose `any`-wildcard machinery gives each occurrence a
+            // fresh flex variable) AND the lowerer see `Html any` rather than a
+            // zero-arg `Html` that reaches the lowerer's empty-home catch-all ICE
+            // (IPE-I0001). The fill is gated on the empty-home sentinel, so a user
+            // `type Html a` (real home) is never touched; the synthetic `any` var
+            // is NOT collected into `free_vars`, keeping it a per-occurrence
+            // wildcard the solver resolves rather than a quantified type parameter.
+            let can_args = if home.is_empty()
+                && can_args.is_empty()
+                && matches!(
+                    ctx.interner.resolve(name),
+                    Some("Html" | "Element" | "Attribute")
+                ) {
+                vec![canon::Type::Var(ctx.ui_wildcard_msg)]
+            } else {
+                can_args
+            };
             Ok(canon::Type::Con {
                 home,
                 name,
