@@ -47,7 +47,7 @@ const COMMANDS: &[&str] = &[
 ];
 const SECTIONS: &[&str] = &[
     "Development",
-    "Package authoring",
+    "Using external packages",
     "Foreign-function interface (FFI)",
     "Tools",
 ];
