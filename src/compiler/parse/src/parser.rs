@@ -945,6 +945,47 @@ impl<'a> Parser<'a> {
             let span = Self::span_merge(opener, close);
             return Ok(Located::new(span, TypeAnnotation::TRecord(Vec::new())));
         }
+        // The row-polymorphic (open) record type `{ r | field : T, ... }`: a
+        // lowercase row variable followed by `|`, then the constrained fields.
+        // A closed record's first field is a name followed by `:`, so a `|` in
+        // the second token position disambiguates without backtracking. (A `|`
+        // never appears here in its record-update meaning — that sigil lives in
+        // expression land, never type land.)
+        if self.peek_is_open_record_intro() {
+            let row_var = self.parse_record_field_name()?;
+            self.bump(Construct::Type)?; // the `|`
+            let fields = self.parse_record_type_fields(depth)?;
+            let close = self.expect_record_close()?;
+            let span = Self::span_merge(opener, close);
+            return Ok(Located::new(
+                span,
+                TypeAnnotation::TRecordOpen(row_var.value, fields),
+            ));
+        }
+        let fields = self.parse_record_type_fields(depth)?;
+        let close = self.expect_record_close()?;
+        let span = Self::span_merge(opener, close);
+        Ok(Located::new(span, TypeAnnotation::TRecord(fields)))
+    }
+
+    /// True when the record-type parser sits at a row-polymorphic opener
+    /// `<lowerVar> |` — a lowercase identifier immediately followed by a `|`.
+    /// Non-consuming (two-token lookahead), so the closed-record path is
+    /// untouched when this returns false. A qualified/uppercase name is not a
+    /// row variable, so only a bare lowercase `Ident` qualifies.
+    fn peek_is_open_record_intro(&self) -> bool {
+        let is_row_var = self.peek_kind().is_some_and(|k| match k {
+            Tok::Ident(text) => {
+                !text.contains('.') && text.chars().next().is_some_and(|c| !c.is_ascii_uppercase())
+            }
+            _ => false,
+        });
+        is_row_var && self.toks.get(self.pos + 1).map(|t| &t.kind) == Some(&Tok::Pipe)
+    }
+
+    /// Parse a non-empty, comma-separated `field : Type` list, stopping before
+    /// the closing `}`. Shared by the closed and open record-type arms.
+    fn parse_record_type_fields(&mut self, depth: u32) -> DResult<Vec<(Symbol, TypeAnnotation)>> {
         let mut fields = Vec::new();
         loop {
             let name = self.parse_record_field_name()?;
@@ -955,20 +996,26 @@ impl<'a> Parser<'a> {
                 Some(t) if t.kind == Tok::Comma => {
                     self.bump(Construct::Type)?;
                 }
-                Some(t) if t.kind == Tok::RBrace => {
-                    let close = t.span;
-                    self.bump(Construct::Type)?;
-                    let span = Self::span_merge(opener, close);
-                    return Ok(Located::new(span, TypeAnnotation::TRecord(fields)));
-                }
-                Some(t) => {
-                    return Err(Self::unexpected_token(
-                        t,
-                        &[Expected::Comma, Expected::RBrace],
-                    ));
-                }
-                None => return Err(self.record_eof()),
+                _ => return Ok(fields),
             }
+        }
+    }
+
+    /// Consume the `}` closing a record type, returning its span. Anything else
+    /// (mid field-list) is the same "expected `,` or `}`" error the closed
+    /// record loop reported before this was factored out.
+    fn expect_record_close(&mut self) -> DResult<Span> {
+        match self.peek() {
+            Some(t) if t.kind == Tok::RBrace => {
+                let close = t.span;
+                self.bump(Construct::Type)?;
+                Ok(close)
+            }
+            Some(t) => Err(Self::unexpected_token(
+                t,
+                &[Expected::Comma, Expected::RBrace],
+            )),
+            None => Err(self.record_eof()),
         }
     }
 

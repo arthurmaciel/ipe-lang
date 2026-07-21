@@ -479,6 +479,19 @@ pub fn from_canon(t: &canon::Type) -> Ty {
                 .collect(),
             RowTail::Closed,
         ),
+        // A row-polymorphic annotation `{ r | field : T, ... }` carries an OPEN
+        // tail keyed by the row variable's raw id, so unification lets the
+        // record absorb extra fields (mechanism 1, `unifyRecords`). The row var
+        // is quantified by the binding's scheme exactly like a field type
+        // variable, so instantiating the signature freshens the tail id per use
+        // site — the same freshening the closed case gives its field vars.
+        canon::Type::RecordOpen(row_var, fields) => Ty::Record(
+            fields
+                .iter()
+                .map(|(name, fty)| (*name, from_canon(fty)))
+                .collect(),
+            RowTail::Open(row_var.as_raw()),
+        ),
     }
 }
 

@@ -349,6 +349,12 @@ pub enum Type {
     /// non-empty. A field type variable participates in the binding's
     /// quantification exactly like one in any other position.
     Record(Vec<(Symbol, Self)>),
+    /// A row-polymorphic (open) record type `{ r | field : T, ... }`. The first
+    /// element is the row variable; the fields are the ones the annotation
+    /// constrains. The row variable and any field type variables are quantified
+    /// by the binding exactly like a top-level [`Self::Var`]. The type layer
+    /// turns this into an [`crate`]-independent `Ty::Record(_, RowTail::Open)`.
+    RecordOpen(Symbol, Vec<(Symbol, Self)>),
 }
 
 #[cfg(test)]

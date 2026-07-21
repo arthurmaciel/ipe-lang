@@ -309,6 +309,22 @@ fn canon_type_to_string(
             entries.sort();
             Ok(format!("{{ {} }}", entries.join(", ")))
         }
+        Type::RecordOpen(row_var, fields) => {
+            let mut entries = Vec::with_capacity(fields.len());
+            for (fname, fty) in fields {
+                entries.push(format!(
+                    "{} : {}",
+                    render_symbol(*fname)?,
+                    canon_type_to_string(fty, interner, vars)?
+                ));
+            }
+            entries.sort();
+            Ok(format!(
+                "{{ {} | {} }}",
+                vars.name_of(*row_var),
+                entries.join(", ")
+            ))
+        }
     }
 }
 

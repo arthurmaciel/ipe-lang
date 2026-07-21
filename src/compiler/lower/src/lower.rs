@@ -1118,6 +1118,32 @@ fn collect_type_vars(t: &canon::Type, out: &mut BTreeSet<Symbol>) {
                 collect_type_vars(fty, out);
             }
         }
+        canon::Type::RecordOpen(row_var, fields) => {
+            // The row variable is itself a quantified type variable (it names the
+            // open tail), so it is collected alongside the field type variables.
+            out.insert(*row_var);
+            for (_, fty) in fields {
+                collect_type_vars(fty, out);
+            }
+        }
+    }
+}
+
+/// Does a canonical type embed a row-polymorphic (open) record `{ r | f : T }`
+/// anywhere? The type layer models the open row and accepts such a program, but
+/// the Rust backend emits one struct per exact field set and cannot yet emit a
+/// callee once per record shape at its call sites (per-record-shape callee
+/// monomorphisation). So a signature carrying an open row is failed closed at
+/// lowering with [`Feature::RowPolyRecordAnnotation`] (`IPE-L0131`) rather than
+/// emitting Rust that would miss the exact-field-set struct registry.
+fn canon_type_has_open_row(t: &canon::Type) -> bool {
+    match t {
+        canon::Type::RecordOpen(_, _) => true,
+        canon::Type::Var(_) | canon::Type::Unit => false,
+        canon::Type::Lambda(a, b) => canon_type_has_open_row(a) || canon_type_has_open_row(b),
+        canon::Type::Tuple(elems) => elems.iter().any(canon_type_has_open_row),
+        canon::Type::Con { args, .. } => args.iter().any(canon_type_has_open_row),
+        canon::Type::Record(fields) => fields.iter().any(|(_, f)| canon_type_has_open_row(f)),
     }
 }
 
@@ -7670,7 +7696,7 @@ impl<'a> Lowerer<'a> {
                 .task_arity_in_canon(a)
                 .or_else(|| self.task_arity_in_canon(b)),
             canon::Type::Tuple(elems) => elems.iter().find_map(|e| self.task_arity_in_canon(e)),
-            canon::Type::Record(fields) => fields
+            canon::Type::Record(fields) | canon::Type::RecordOpen(_, fields) => fields
                 .iter()
                 .find_map(|(_, ty)| self.task_arity_in_canon(ty)),
             canon::Type::Var(_) | canon::Type::Unit => None,
@@ -7979,6 +8005,15 @@ impl<'a> Lowerer<'a> {
                     let (p, pr, r) = self.split_unannotated_sig(solved_ty, patterns, sig_span)?;
                     (p, pr, r, Vec::new())
                 } else {
+                    // A row-polymorphic record annotation types cleanly but has
+                    // no single field set to emit — fail closed here (IPE-L0131)
+                    // rather than emit Rust that misses the A7 exact-key struct
+                    // registry. Until per-record-shape callee monomorphisation
+                    // lands, the closed annotation / inferred-shape paths remain
+                    // the supported surface.
+                    if canon_type_has_open_row(ty) {
+                        return Err(unsupported(sig_span, Feature::RowPolyRecordAnnotation));
+                    }
                     self.split_typed_sig(ty, patterns, free_vars)?
                 };
                 // Bug-29 fix: `view : Model -> any` where the body region is a UI
@@ -9278,6 +9313,16 @@ impl<'a> Lowerer<'a> {
                 }
                 Ok(IrType::Record(ir_fields))
             }
+            // A row-polymorphic record annotation has no single field set to emit
+            // (mechanism deferred; see `canon_type_has_open_row`). Every signature
+            // path is gated with the span-carrying `IPE-L0131` before reaching
+            // here, so an open row arriving at this span-less arm is an internal
+            // invariant violation — surfaced as a bug, not a silent mis-lowering.
+            canon::Type::RecordOpen(_, _) => Err(bug(
+                "ipe_lower::ir_type_from_canon",
+                "row-polymorphic record annotation reached type lowering; the \
+                 signature-level IPE-L0131 gate should have rejected it first",
+            )),
         }
     }
 

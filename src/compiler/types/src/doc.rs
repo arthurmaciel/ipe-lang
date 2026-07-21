@@ -177,7 +177,11 @@ pub fn canon_type_to_doc(t: &canon::Type, interner: &Interner) -> DResult<TyDoc>
             }
             Ok(TyDoc::Tuple(doc_elems.into_boxed_slice()))
         }
-        canon::Type::Record(fields) => {
+        // Both the closed and the row-polymorphic record render as the same
+        // field-name-ordered `TyDoc::Record`; the open tail carries no named
+        // field, so — like the solved-type renderer above, which discards its
+        // tail marker — it is not shown.
+        canon::Type::Record(fields) | canon::Type::RecordOpen(_, fields) => {
             // Render in field-name order for a deterministic form, mirroring the
             // solved-type renderer above.
             let mut entries: Vec<(Box<str>, TyDoc)> = Vec::with_capacity(fields.len());
