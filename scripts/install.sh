@@ -268,7 +268,10 @@ else
 fi
 
 # ── Extract + install ────────────────────────────────────────────────────────
-step "Installing to $INSTALL_DIR…"
+# Brace the name: on a non-UTF-8 `/bin/sh` (macOS bash in POSIX mode) an
+# unbraced `$INSTALL_DIR` followed by the multibyte `…` slurps the ellipsis's
+# first byte into the variable name → an "unbound variable" abort under set -u.
+step "Installing to ${INSTALL_DIR}…"
 if [ "$ext" = zip ]; then
   # `unzip` isn't guaranteed (e.g. Git Bash on Windows); bsdtar (`tar`) reads
   # zips on Windows and macOS, so fall back to it.
