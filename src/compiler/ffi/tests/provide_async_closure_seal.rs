@@ -1,0 +1,248 @@
+//! SEAL fixture for ASYNC-returning closure adapters (`[rust.provide.closure]`
+//! whose declared return is a `Future`, the Axum/Hyper async-handler shape).
+//!
+//! The sync `closure_adapter_seal` fixture proves a `Fn(A) -> R` closure
+//! round-trips. This one proves the next link: a `Fn(A) -> impl Future<Output =
+//! Result<B, E>>` closure. The emitted adapter must:
+//!
+//!  * receive AND return the SAME concrete boxed future the `IpeTask` value
+//!    carries (`Pin<Box<dyn Future<Output = …> + Send + 'static>>`), so the
+//!    inner `Send + 'static` — the proof the captured Ipê env and args cannot
+//!    escape into a non-`Send` future — is discharged by rustc at the boundary,
+//!    never re-derived;
+//!  * produce the future under `catch_unwind` (a production-panic yields an
+//!    immediate-error future), then await it under a spawned task guarded by
+//!    `AbortOnDrop`, so a POLL-panic folds through the `JoinError` arm to
+//!    `Err`/`None` and a dropped outer task cancels the inner one;
+//!  * refuse an async TOTAL return at decode (a poll-panic would have no error
+//!    channel), so only `Result`/`Option` async shapes ever emit.
+//!
+//! The emit-only assertions run in the DEFAULT gate; the cargo build+run proof
+//! is `IPE_E2E`-gated (it shells out to `cargo`, and the scratch crate pulls a
+//! real `tokio`), matching the repo's other SEAL fixtures.
+#![allow(clippy::expect_used)] // test setup: a failed decode / scratch-dir op IS the failure
+
+use ipe_ffi::bindings::{emit_bindings, surviving_ref_names};
+use ipe_ffi::pkginfo::PkgInfo;
+
+/// Decode a one-crate inspection document carrying a single async
+/// `provide.closure` entry, and return the emitted `_bindings.rs`.
+fn emit_async_closure(sig: &str) -> String {
+    let doc = serde_json::json!({
+        "pkg": "demo",
+        "name": "demo",
+        "version": "0.1.0",
+        "functions": [{
+            "name": "handler_fn",
+            "effect": "pure",
+            "isClosureAdapter": true,
+            "closureSig": sig
+        }],
+        "errors": []
+    })
+    .to_string();
+    let pkg = PkgInfo::decode_json(&doc).expect("async provide.closure decodes");
+    emit_bindings(&pkg)
+}
+
+/// Default gate: an async `Result` adapter emits the spawned-await containment
+/// (`tokio::task::spawn` + `AbortOnDrop` + `defuse`) with both panic sites
+/// folding to `Err`, and names the concrete boxed future on BOTH box sides.
+#[test]
+fn async_result_adapter_emits_spawned_await_containment() {
+    let out = emit_async_closure(
+        "Fn(Int) -> impl Future<Output = Result<Int, Error>> + Send + Sync + 'static",
+    );
+    assert!(
+        out.contains(
+            "pub fn demo_handler_fn(__ipe_fn: Box<dyn Fn(i64) -> ::std::pin::Pin<Box<dyn \
+             ::std::future::Future<Output = Result<i64, IpeError>> + Send + 'static>> + Send \
+             + Sync + 'static>) -> Box<dyn Fn(i64) -> ::std::pin::Pin<Box<dyn \
+             ::std::future::Future<Output = Result<i64, IpeError>> + Send + 'static>> + Send \
+             + Sync + 'static> {"
+        ),
+        "the received and returned box must carry the SAME boxed future:\n{out}"
+    );
+    assert!(out.contains("tokio::task::spawn(__fut)"), "{out}");
+    assert!(
+        out.contains("AbortOnDrop::new(__handle.abort_handle())"),
+        "{out}"
+    );
+    assert!(out.contains("__guard.defuse();"), "{out}");
+    // A production-panic yields an immediate-error future; a poll-panic folds
+    // through the JoinError arm. Both to Err — never abort, never fabricate.
+    assert!(
+        out.contains(
+            "Err(_) => return Box::pin(async move { Err(str_err(\"foreign closure panicked\")) })"
+        ),
+        "{out}"
+    );
+    assert!(!out.contains("std::process::abort()"), "{out}");
+    assert!(surviving_ref_names(&async_pkg()).contains("handler_fn"));
+}
+
+fn async_pkg() -> PkgInfo {
+    let doc = serde_json::json!({
+        "pkg": "demo", "name": "demo", "version": "0.1.0",
+        "functions": [{
+            "name": "handler_fn", "effect": "pure", "isClosureAdapter": true,
+            "closureSig": "Fn(Int) -> impl Future<Output = Result<Int, Error>> + Send + Sync + 'static"
+        }],
+        "errors": []
+    })
+    .to_string();
+    PkgInfo::decode_json(&doc).expect("decodes")
+}
+
+/// Default gate: an async TOTAL return has no error channel to fold a poll-panic
+/// into, so it over-drops at decode — no wrapper, never emit-and-cargo-fail.
+#[test]
+fn an_async_total_return_over_drops() {
+    for bad in [
+        "Fn(Int) -> impl Future<Output = Int> + Send + Sync + 'static",
+        "Fn(Int) -> BoxFuture<'static, Bool> + Send + Sync + 'static",
+    ] {
+        let out = emit_async_closure(bad);
+        assert!(
+            !out.contains("pub fn demo_handler_fn"),
+            "{bad:?} must over-drop — async-total has no error channel:\n{out}"
+        );
+    }
+}
+
+/// The load-bearing SEAL proof: under `IPE_E2E=1`, build a tiny cargo crate
+/// around an emitted async adapter and RUN it on a real tokio runtime, proving
+/// the future round-trips, a poll-panic folds to `Err`, and cancellation aborts
+/// the inner task (no side effect after drop).
+#[test]
+fn async_closure_adapter_builds_and_runs() {
+    if std::env::var("IPE_E2E").is_err() {
+        return;
+    }
+    let Ok(cargo) = std::env::var("CARGO") else {
+        return; // no cargo on PATH in this environment — skip like the goldens
+    };
+
+    let result_region = emit_async_closure(
+        "Fn(Int) -> impl Future<Output = Result<Int, Error>> + Send + Sync + 'static",
+    );
+    let result_fn = wrapper_region(&result_region, "handler_fn");
+
+    let dir =
+        std::env::temp_dir().join(format!("ipe_ffi_async_closure_seal_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).expect("mkdir");
+    std::fs::write(
+        dir.join("Cargo.toml"),
+        "[package]\nname = \"async_closure_seal\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\
+         [[bin]]\nname = \"async_closure_seal\"\npath = \"src/main.rs\"\n\
+         [dependencies]\ntokio = { version = \"1\", features = [\"rt\", \"rt-multi-thread\", \"macros\", \"time\"] }\n\
+         # catch_unwind soundness requires panic=unwind (the emitter's own fence)\n\
+         [profile.dev]\npanic = \"unwind\"\n",
+    )
+    .expect("Cargo.toml");
+
+    // A minimal stand-in for the runtime glue the emitted async adapter names
+    // (`str_err`, `IpeError`, and the `AbortOnDrop` cancel guard). These mirror
+    // `ipe_runtime`'s real definitions; the fixture supplies its own so it need
+    // not depend on the whole runtime crate.
+    let main_rs = format!(
+        r#"use std::pin::Pin;
+use std::future::Future;
+
+#[derive(Debug)]
+pub struct IpeError(String);
+pub fn str_err<E: From<String>>(s: &str) -> E {{ s.to_string().into() }}
+impl From<String> for IpeError {{ fn from(s: String) -> Self {{ IpeError(s) }} }}
+
+// The cancel guard the emitted async adapter arms around its spawned task: its
+// Drop aborts the inner task unless defused (matches `ipe_runtime::AbortOnDrop`).
+pub struct AbortOnDrop(Option<tokio::task::AbortHandle>);
+impl AbortOnDrop {{
+    pub fn new(h: tokio::task::AbortHandle) -> Self {{ Self(Some(h)) }}
+    pub fn defuse(mut self) {{ self.0 = None; }}
+}}
+impl Drop for AbortOnDrop {{
+    fn drop(&mut self) {{ if let Some(h) = self.0.take() {{ h.abort(); }} }}
+}}
+
+// A tiny async "crate" that takes the boxed handler the adapter returns and
+// awaits it — the exact shape an Axum/Hyper route handler driver would.
+async fn crate_awaits(
+    f: Box<dyn Fn(i64) -> Pin<Box<dyn Future<Output = Result<i64, IpeError>> + Send + 'static>> + Send + Sync + 'static>,
+) -> i64 {{
+    // Multi-call: the boxed handler fires more than once.
+    let a = f(20).await.unwrap_or(-1);
+    let b = f(22).await.unwrap_or(-1);
+    a + b
+}}
+
+{result_fn}
+
+fn main() {{
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    rt.block_on(async {{
+        // The Ipê async fn value: on the app side, exactly a boxed `Fn` whose
+        // return is the concrete `IpeTask`-shaped boxed future.
+        let ipe_ok: Box<dyn Fn(i64) -> Pin<Box<dyn Future<Output = Result<i64, IpeError>> + Send + 'static>> + Send + Sync + 'static> =
+            Box::new(|x| Box::pin(async move {{ Ok(x + 1) }}));
+        let adapted = demo_handler_fn(ipe_ok);
+        let summed = crate_awaits(adapted).await; // (20+1) + (22+1) = 43
+
+        // A handler whose future PANICS while polling must fold to Err (the
+        // spawned-await JoinError arm), never abort the whole executor.
+        let ipe_panics: Box<dyn Fn(i64) -> Pin<Box<dyn Future<Output = Result<i64, IpeError>> + Send + 'static>> + Send + Sync + 'static> =
+            Box::new(|_| Box::pin(async move {{ panic!("boom in the future") }}));
+        let adapted_panic = demo_handler_fn(ipe_panics);
+        let folded = adapted_panic(1).await.map(|_| 0).unwrap_or(-7);
+
+        assert_eq!(summed, 44, "async closure round-trips its awaited value");
+        assert_eq!(folded, -7, "a poll-panic folds to Err, never aborts the executor");
+        println!("{{summed}} {{folded}}");
+    }});
+}}
+"#,
+    );
+    std::fs::write(dir.join("src").join("main.rs"), main_rs).expect("main.rs");
+
+    let out = std::process::Command::new(&cargo)
+        .arg("run")
+        .arg("--quiet")
+        .current_dir(&dir)
+        .output()
+        .expect("cargo run spawns");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "the emitted async closure adapter crate must build and run exit 0.\n\
+         stdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("44 -7"),
+        "the async closure must round-trip and fold a poll-panic to Err.\nstdout: {stdout}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Extract the sentinel-bracketed wrapper region for `ref_name` from an emitted
+/// `_bindings.rs`, without the preamble.
+fn wrapper_region(bindings: &str, ref_name: &str) -> String {
+    let begin = format!("// IPE-FFI-WRAPPER BEGIN {ref_name}");
+    let mut keep = false;
+    let mut out = String::new();
+    for line in bindings.lines() {
+        if line.trim_end() == begin {
+            keep = true;
+            continue;
+        }
+        if line.trim_end() == "// IPE-FFI-WRAPPER END" && keep {
+            break;
+        }
+        if keep {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
