@@ -1,5 +1,5 @@
-//! The `elm/core` String fills (`left`/`right`/`cons`/`uncons`/`pad`/`indexes`
-//! + the char-fold family `map`/`filter`/`foldl`/`foldr`/`any`/`all`) are
+//! The `elm/core` String fills — `left`/`right`/`cons`/`uncons`/`pad`/`indexes`
+//! plus the char-fold family `map`/`filter`/`foldl`/`foldr`/`any`/`all` — are
 //! CALLABLE from user code and produce Elm-matching results.
 //!
 //! Exercises all twelve in one program (`tests/golden/string_fills/Main.ipe`),
