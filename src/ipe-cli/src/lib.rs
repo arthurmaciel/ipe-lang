@@ -132,6 +132,19 @@ pub enum CliError {
     /// let an unsafe or dishonest version through is a security hole, so it is
     /// always a typed error, never a warning.
     PackageAudit(audit::Rejection),
+    /// A known command was misused (bad or missing arguments, an unknown flag).
+    /// Carries the specific reason and the command name; [`fmt::Display`] renders
+    /// the reason followed by that command's full, indented `--help` page — the
+    /// uniform "misuse shows help" output every command shares, printed to stderr
+    /// by [`crate::run_cli`]'s caller. The command name is always a known command
+    /// (the dispatcher wraps a raw [`Self::Usage`] / [`Self::UsageOwned`] into
+    /// this only for a command it recognised).
+    CommandUsage {
+        /// The command whose help page to show (a known command name).
+        command: &'static str,
+        /// The specific reason for the misuse (e.g. `unknown flag \`--x\``).
+        reason: String,
+    },
 }
 
 impl From<api_surface::DiffError> for CliError {
@@ -209,6 +222,17 @@ impl std::fmt::Display for CliError {
                  version must be at least {floor}."
             ),
             Self::PackageAudit(rejection) => write!(f, "{rejection}"),
+            // The reason, then the command's full `--help` page (indented,
+            // coloured for a terminal). Rendered against stderr because misuse
+            // output goes there. A known command always has a help page; the
+            // `None` fallback (never taken for a known command) degrades to the
+            // top-level screen rather than panicking.
+            Self::CommandUsage { command, reason } => {
+                writeln!(f, "{reason}")?;
+                let page = help::command(command, &std::io::stderr())
+                    .unwrap_or_else(|| help::top_level(&std::io::stderr()));
+                f.write_str(page.trim_end_matches('\n'))
+            }
         }
     }
 }
@@ -1524,27 +1548,44 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
         return Ok(());
     }
     match args.split_first() {
-        Some((cmd, rest)) if cmd == "init" => init::run_init(rest),
-        Some((cmd, rest)) if cmd == "build" => run_build(rest),
-        Some((cmd, rest)) if cmd == "run" => run_run(rest),
-        Some((cmd, rest)) if cmd == "watch" => run_watch(rest),
-        Some((cmd, rest)) if cmd == "explain" => run_explain(rest),
-        Some((cmd, rest)) if cmd == "capabilities" => run_capabilities(rest),
-        Some((cmd, rest)) if cmd == "diff" => diff::run_diff(rest),
-        Some((cmd, rest)) if cmd == "rust" => ffi::run_rust(rest),
-        Some((cmd, rest)) if cmd == "add" => pkg::run_add(rest),
-        Some((cmd, rest)) if cmd == "remove" => pkg::run_remove(rest),
-        Some((cmd, rest)) if cmd == "package" => run_package(rest),
-        Some((cmd, rest)) if cmd == "fix" => run_fix(rest),
-        Some((cmd, rest)) if cmd == "fmt" => fmt::run_fmt(rest),
-        Some((cmd, rest)) if cmd == "lsp" => lsp::run_lsp(rest),
-        Some((cmd, _)) if cmd == "version" || cmd == "--version" || cmd == "-V" => {
-            println!("ipe {}", env!("CARGO_PKG_VERSION"));
-            Ok(())
+        Some((cmd, rest)) if cmd == "init" => with_help_on_misuse("init", init::run_init(rest)),
+        Some((cmd, rest)) if cmd == "build" => with_help_on_misuse("build", run_build(rest)),
+        Some((cmd, rest)) if cmd == "run" => with_help_on_misuse("run", run_run(rest)),
+        Some((cmd, rest)) if cmd == "watch" => with_help_on_misuse("watch", run_watch(rest)),
+        Some((cmd, rest)) if cmd == "explain" => with_help_on_misuse("explain", run_explain(rest)),
+        Some((cmd, rest)) if cmd == "capabilities" => {
+            with_help_on_misuse("capabilities", run_capabilities(rest))
+        }
+        Some((cmd, rest)) if cmd == "diff" => with_help_on_misuse("diff", diff::run_diff(rest)),
+        Some((cmd, rest)) if cmd == "rust" => with_help_on_misuse("rust", ffi::run_rust(rest)),
+        Some((cmd, rest)) if cmd == "add" => with_help_on_misuse("add", pkg::run_add(rest)),
+        Some((cmd, rest)) if cmd == "remove" => with_help_on_misuse("remove", pkg::run_remove(rest)),
+        Some((cmd, rest)) if cmd == "package" => with_help_on_misuse("package", run_package(rest)),
+        Some((cmd, rest)) if cmd == "fix" => with_help_on_misuse("fix", run_fix(rest)),
+        Some((cmd, rest)) if cmd == "fmt" => with_help_on_misuse("fmt", fmt::run_fmt(rest)),
+        Some((cmd, rest)) if cmd == "lsp" => with_help_on_misuse("lsp", lsp::run_lsp(rest)),
+        Some((cmd, rest)) if cmd == "version" || cmd == "--version" || cmd == "-V" => {
+            with_help_on_misuse("version", run_version(rest))
         }
         // An unknown command is misuse: show the top-level help and fail. Unlike
         // an explicit `--help`, this is not a request, so it exits non-zero.
         _ => Err(CliError::UnknownCommand),
+    }
+}
+
+/// Map a known command's raw usage error into a [`CliError::CommandUsage`] so the
+/// caller prints that command's full, indented `--help` page — the uniform
+/// "misuse shows help" output. Any non-usage error (a compile failure, a
+/// filesystem error) passes through untouched, since it is not a help-worthy
+/// misuse. `command` is always a known command name.
+fn with_help_on_misuse(command: &'static str, result: Result<(), CliError>) -> Result<(), CliError> {
+    match result {
+        Err(CliError::Usage(reason)) => Err(CliError::CommandUsage {
+            command,
+            reason: reason.to_owned(),
+        }),
+        Err(CliError::UsageOwned(reason)) => Err(CliError::CommandUsage { command, reason }),
+        other => other,
     }
 }
 
@@ -1985,16 +2026,56 @@ fn cargo_target_directory(crate_dir: &Path) -> Result<PathBuf, CliError> {
 /// `ipe explain [<CODE>]`. No argument prints the one-line index of every code
 /// and its title; an argument prints that code's embedded explain page.
 fn run_explain(rest: &[String]) -> Result<(), CliError> {
-    match rest.first() {
+    // The format flags apply to the LIST (`ipe explain` with no code) — the
+    // machine-consumable surface. Explaining a single code prints a human
+    // teaching page, which carries no `--plain` / `--json` form.
+    let (format, positional) = cli_args::split_format(rest, "explain")?;
+    match positional.first() {
         None => {
-            print!("{}", code_index());
+            print!("{}", render_code_index(format, &std::io::stdout()));
             Ok(())
         }
         Some(arg) => {
+            if format != cli_args::OutputFormat::Human {
+                return Err(CliError::Usage(
+                    "--plain / --json apply to the code list (`ipe explain` with no code), \
+                     not to a single code's explanation",
+                ));
+            }
             let page = explain_lookup(arg)?;
             print!("{page}");
             Ok(())
         }
+    }
+}
+
+/// Render the diagnostic-code list in the requested [`OutputFormat`].
+///
+/// - Human (default): a guttered `<CODE>  <title>` table, one code per line.
+/// - `--plain`: the same `<CODE>\t<title>` rows, flush-left and tab-separated so
+///   `cut -f1` yields the codes and `grep`/`awk` slice the table.
+/// - `--json`: `{"codes": [{"code": "IPE-…", "title": "…"}, …]}`, a stable array
+///   of `{code, title}` objects in taxonomy order.
+fn render_code_index(format: cli_args::OutputFormat, _stream: &impl std::io::IsTerminal) -> String {
+    use std::fmt::Write as _;
+
+    use cli_args::OutputFormat::{Human, Json, Plain};
+    match format {
+        Plain => {
+            let mut out = String::new();
+            for &c in ALL_CODES {
+                let _ = writeln!(out, "{}\t{}", c.as_str(), title(c));
+            }
+            out
+        }
+        Json => {
+            let rows: Vec<String> = ALL_CODES
+                .iter()
+                .map(|&c| format!("{{\"code\":{:?},\"title\":{:?}}}", c.as_str(), title(c)))
+                .collect();
+            format!("{{\"codes\":[{}]}}\n", rows.join(","))
+        }
+        Human => style::gutter(&code_index()),
     }
 }
 
@@ -2173,20 +2254,107 @@ fn run_package(rest: &[String]) -> Result<(), CliError> {
 }
 
 fn run_capabilities(rest: &[String]) -> Result<(), CliError> {
-    let entry = match rest.first() {
+    let (format, positional) = cli_args::split_format(rest, "capabilities")?;
+    let entry = match positional.first() {
         Some(e) => PathBuf::from(e),
         None => PathBuf::from(default_entry()?),
     };
     let program = lower_entry(&entry)?;
     let caps = ipe_lower::program_capabilities(&program);
-    if caps.is_empty() {
-        println!("none");
-    } else {
-        for cap in &caps {
-            println!("{}", cap.as_str());
+    let names: Vec<&'static str> = caps.iter().map(|c| c.as_str()).collect();
+    print!("{}", render_capabilities(&names, format, &std::io::stdout()));
+    Ok(())
+}
+
+/// Render a program's inferred capability set in the requested [`OutputFormat`].
+///
+/// - Human (default): a guttered, labelled report — a heading and one bullet per
+///   capability, or a line saying the program is pure.
+/// - `--plain`: the bare capability names, one per line, flush-left (or nothing
+///   at all for a pure program — the scriptable form pipelines already consume).
+/// - `--json`: `{"capabilities": ["network", …]}`, a stable object whose one
+///   `capabilities` field is the sorted name array (empty for a pure program).
+fn render_capabilities(
+    names: &[&str],
+    format: cli_args::OutputFormat,
+    stream: &impl std::io::IsTerminal,
+) -> String {
+    use std::fmt::Write as _;
+
+    use cli_args::OutputFormat::{Human, Json, Plain};
+    match format {
+        Plain => {
+            // The historical scriptable form: bare names, one per line. A pure
+            // program prints nothing, so `| wc -l` counts the capabilities.
+            let mut out = String::new();
+            for name in names {
+                out.push_str(name);
+                out.push('\n');
+            }
+            out
+        }
+        Json => {
+            let quoted: Vec<String> = names.iter().map(|n| format!("{n:?}")).collect();
+            format!("{{\"capabilities\":[{}]}}\n", quoted.join(","))
+        }
+        Human => {
+            let p = style::Palette::for_stream(stream);
+            let mut body = String::new();
+            if names.is_empty() {
+                body.push_str("This program is pure — it exercises no security capabilities.\n");
+            } else {
+                let noun = if names.len() == 1 {
+                    "capability"
+                } else {
+                    "capabilities"
+                };
+                let _ = writeln!(
+                    body,
+                    "This program exercises {} security {noun}:",
+                    names.len(),
+                );
+                for name in names {
+                    let _ = writeln!(
+                        body,
+                        "  {}{}{} {}{name}{}",
+                        p.yellow,
+                        style::glyph::STEP,
+                        p.reset,
+                        p.yellow,
+                        p.reset,
+                    );
+                }
+            }
+            style::gutter(&body)
         }
     }
+}
+
+/// `ipe version` — print the ipe version in the requested format.
+fn run_version(rest: &[String]) -> Result<(), CliError> {
+    let (format, positional) = cli_args::split_format(rest, "version")?;
+    if let Some(extra) = positional.first() {
+        return Err(CliError::UsageOwned(format!(
+            "ipe version: unexpected argument `{extra}`"
+        )));
+    }
+    print!("{}", render_version(format, &std::io::stdout()));
     Ok(())
+}
+
+/// Render the ipe version in the requested [`OutputFormat`].
+///
+/// - Human (default): a guttered `ipe <version>` line.
+/// - `--plain`: the bare version string, flush-left, nothing else.
+/// - `--json`: `{"version": "<x.y.z>"}`, a stable single-field object.
+fn render_version(format: cli_args::OutputFormat, _stream: &impl std::io::IsTerminal) -> String {
+    use cli_args::OutputFormat::{Human, Json, Plain};
+    let version = env!("CARGO_PKG_VERSION");
+    match format {
+        Plain => format!("{version}\n"),
+        Json => format!("{{\"version\":{version:?}}}\n"),
+        Human => style::gutter(&format!("ipe {version}\n")),
+    }
 }
 
 /// Verify a declared capability set equals the set inferred from `entry`.
