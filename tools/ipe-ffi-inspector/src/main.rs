@@ -479,6 +479,16 @@ struct PkgInfo {
     // type, whether reached through its definer or a re-exporter.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     foreign_type_ids: std::collections::BTreeMap<String, String>,
+    // The absolute path to the author-supplied wrapper crate this package was
+    // inspected from (a `--path <dir>` source), or empty for an ordinary
+    // crates.io / git inspection. The generator emits a `path` dependency for a
+    // wrapper crate rather than a registry pin.
+    #[serde(
+        rename = "wrapperPath",
+        skip_serializing_if = "String::is_empty",
+        default
+    )]
+    wrapper_path: String,
 }
 
 // ── Entry point ────────────────────────────────────────────────────────
@@ -494,6 +504,14 @@ fn main() {
     let mut git_rev: Option<String> = None;
     let mut git_branch: Option<String> = None;
     let mut git_tag: Option<String> = None;
+    // `--path <dir>` points at a local author-supplied wrapper crate: the probe
+    // manifest depends on it by `path` and the inspection reports `wrapperPath`.
+    // Single-crate only, mutually exclusive with `--git`.
+    let mut path_source: Option<String> = None;
+    // `--expose <a,b,…>` restricts the bound public symbols to the named set (a
+    // wrapper author lists exactly what to bind); empty ⇒ bind every public
+    // symbol, unchanged.
+    let mut expose: Vec<String> = Vec::new();
 
     let mut audit = false;
     // [WALL-G #84] `--manifest <path>` points at a JSON array of crate specs
@@ -573,6 +591,23 @@ fn main() {
                     git_url = Some(raw_args[i].clone());
                 }
             }
+            "--path" => {
+                i += 1;
+                if i < raw_args.len() {
+                    path_source = Some(raw_args[i].clone());
+                }
+            }
+            "--expose" => {
+                i += 1;
+                if i < raw_args.len() {
+                    for sym in raw_args[i].split(',') {
+                        let s = sym.trim().to_string();
+                        if !s.is_empty() {
+                            expose.push(s);
+                        }
+                    }
+                }
+            }
             "--rev" => {
                 i += 1;
                 if i < raw_args.len() {
@@ -600,7 +635,7 @@ fn main() {
 
     if crate_args.is_empty() && manifest_path.is_none() {
         eprintln!(
-            "Usage: ipe-ffi-inspector [--features f1,f2] [--git URL [--rev R | --branch B | --tag T]] [--allow-build-scripts] <crate-name> [crate-name...]"
+            "Usage: ipe-ffi-inspector [--features f1,f2] [--git URL [--rev R | --branch B | --tag T]] [--path DIR [--expose a,b,…]] [--allow-build-scripts] <crate-name> [crate-name...]"
         );
         eprintln!(
             "   or: ipe-ffi-inspector --manifest <crates.json>  (multi-crate, per-crate git/features — WALL-G cross-crate index)"
@@ -640,6 +675,7 @@ fn main() {
                     transitive_deps: vec![],
                     features: vec![],
                     foreign_type_ids: std::collections::BTreeMap::new(),
+                    wrapper_path: String::new(),
                 };
                 println!("{}", serde_json::to_string_pretty(&err).unwrap_or_default());
                 std::process::exit(1);
@@ -651,6 +687,8 @@ fn main() {
                 name: n.clone(),
                 features: features.clone(),
                 git: git_clone(&git),
+                path: path_source.clone(),
+                expose: expose.clone(),
             })
             .collect(),
     };
@@ -725,7 +763,16 @@ fn main() {
     let crate_args: Vec<String> = crate_specs.iter().map(|s| s.name.clone()).collect();
     let results: Vec<PkgInfo> = crate_specs
         .iter()
-        .map(|spec| inspect_crate(&spec.name, &spec.features, spec.git.as_ref(), true))
+        .map(|spec| {
+            inspect_crate_source(
+                &spec.name,
+                &spec.features,
+                spec.git.as_ref(),
+                spec.path.as_deref(),
+                &spec.expose,
+                true,
+            )
+        })
         .collect();
 
     if audit {
@@ -755,6 +802,7 @@ fn main() {
                 transitive_deps: vec![],
                 features: vec![],
                 foreign_type_ids: std::collections::BTreeMap::new(),
+                wrapper_path: String::new(),
             };
             let body = serde_json::to_string_pretty(&err).unwrap_or_else(|_| {
                 // Last-resort hand-rolled JSON so a serialization failure on the
@@ -845,6 +893,11 @@ struct CrateSpec {
     name: String,
     features: Vec<String>,
     git: Option<GitSource>,
+    /// A local wrapper-crate directory (`--path`), depended on by `path` rather
+    /// than a registry/git source. Mutually exclusive with `git`.
+    path: Option<String>,
+    /// The public symbols to bind (`--expose`); empty ⇒ bind everything.
+    expose: Vec<String>,
 }
 
 /// Clone an `Option<&GitSource>`-style borrow into an owned `Option<GitSource>`.
@@ -894,6 +947,8 @@ fn parse_manifest(path: &str) -> Result<Vec<CrateSpec>, String> {
             name,
             features,
             git,
+            path: None,
+            expose: Vec::new(),
         });
     }
     if out.is_empty() {
@@ -932,21 +987,47 @@ fn inspect_crate(
     git: Option<&GitSource>,
     verify_stable: bool,
 ) -> PkgInfo {
-    // [#70 stripe] The arg may carry a `name@version` pin (handled in run_rustdoc).
-    // Strip the version HERE so the PkgInfo name + the binding-file slug derived from
-    // it stay CLEAN (`async-stripe-shared`, not `async-stripe-shared@1.0.0-rc.6` — an
-    // `@` in the slug would mismatch the generator copy step's clean-name slug).
+    inspect_crate_source(crate_name, features, git, None, &[], verify_stable)
+}
+
+/// Inspect one crate from any source. `path` names a local wrapper-crate
+/// directory (depended on by `path`, mutually exclusive with `git`); `expose`,
+/// when non-empty, restricts the bound public symbols to the named set (a
+/// wrapper author binds exactly what they list).
+fn inspect_crate_source(
+    crate_name: &str,
+    features: &[String],
+    git: Option<&GitSource>,
+    path: Option<&str>,
+    expose: &[String],
+    verify_stable: bool,
+) -> PkgInfo {
+    // The arg may carry a `name@version` pin (handled in run_rustdoc). Strip the
+    // version HERE so the PkgInfo name + the binding-file slug derived from it
+    // stay clean (an `@` in the slug would mismatch the generator copy step's
+    // clean-name slug).
     let clean_name = crate_name
         .split_once('@')
         .map(|(n, _)| n)
         .unwrap_or(crate_name);
-    match run_rustdoc(crate_name, features, git, verify_stable) {
+    match run_rustdoc_source(crate_name, features, git, path, verify_stable) {
         Ok((json_content, version, transitive_deps, effective_features)) => {
             match serde_json::from_str::<serde_json::Value>(&json_content) {
                 Ok(doc) => {
                     let mut pkg = parse_rustdoc(&doc, clean_name, &version);
                     pkg.transitive_deps = transitive_deps;
                     pkg.features = effective_features;
+                    if let Some(p) = path {
+                        pkg.wrapper_path = p.to_string();
+                    }
+                    // A wrapper author binds exactly the symbols they list; an
+                    // exposed name that is not a bindable public symbol is
+                    // silently absent (the same over-drop the inspector already
+                    // applies to any non-carrier-compatible signature).
+                    if !expose.is_empty() {
+                        pkg.functions
+                            .retain(|f| expose.iter().any(|e| e == &f.name));
+                    }
                     pkg
                 }
                 Err(e) => pkg_error(clean_name, &format!("rustdoc JSON parse error: {}", e)),
@@ -963,10 +1044,13 @@ fn inspect_crate(
 /// Handles thin re-export facades (e.g. `clap` re-exports `clap_builder`):
 /// if the first rustdoc run produces 0 functions, we scan the JSON for glob
 /// `pub use other_crate::*` re-exports and re-run on the underlying crate.
-fn run_rustdoc(
+/// `path`, when present, names a local wrapper-crate directory the probe
+/// manifest depends on by `path` instead of a registry/git source.
+fn run_rustdoc_source(
     crate_name: &str,
     features: &[String],
     git: Option<&GitSource>,
+    path: Option<&str>,
     verify_stable: bool,
 ) -> Result<(String, String, Vec<TransitiveDep>, Vec<String>), String> {
     // [#70 stripe] Accept a `name@version` spec (mirrors `cargo add name@version`)
@@ -1035,7 +1119,7 @@ fn run_rustdoc(
     // the manifest once the #89 visibility feature set is resolved (and again on
     // the fallback to default features).
     let write_manifest = |feats: &[String]| -> Result<(), String> {
-        let dep_entry = build_dep_entry(crate_name, feats, git, req_version);
+        let dep_entry = build_dep_entry_source(crate_name, feats, git, path, req_version);
         let toml_content = format!(
             r#"[package]
 name = "_ipe_ffi_probe_{safe_name}"
@@ -1810,12 +1894,49 @@ fn choose_visibility_features(avail: &[String]) -> Vec<String> {
     }
 }
 
+/// Render a Cargo `features = [...]` inline-table field from a feature list, or
+/// `None` when the list is empty.
+fn render_features_field(features: &[String]) -> Option<String> {
+    if features.is_empty() {
+        None
+    } else {
+        let feats = features
+            .iter()
+            .map(|f| format!("\"{}\"", toml_escape(f)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        Some(format!("features = [{}]", feats))
+    }
+}
+
+#[cfg(test)]
 fn build_dep_entry(
     crate_name: &str,
     features: &[String],
     git: Option<&GitSource>,
     version: Option<&str>,
 ) -> String {
+    build_dep_entry_source(crate_name, features, git, None, version)
+}
+
+/// As [`build_dep_entry`], but a `path` source renders `crate = { path = "…" }`
+/// so a local wrapper crate is depended on directly. `path` wins over `git`/
+/// `version` when present.
+fn build_dep_entry_source(
+    crate_name: &str,
+    features: &[String],
+    git: Option<&GitSource>,
+    path: Option<&str>,
+    version: Option<&str>,
+) -> String {
+    if let Some(p) = path {
+        let crate_name = toml_escape(crate_name);
+        let path_field = format!("path = \"{}\"", toml_escape(p));
+        return match render_features_field(features) {
+            None => format!("{} = {{ {} }}", crate_name, path_field),
+            Some(f) => format!("{} = {{ {}, {} }}", crate_name, path_field, f),
+        };
+    }
     let crate_name = toml_escape(crate_name);
     // [#70 stripe] A requested version → EXACT pin `=X.Y.Z`. Required to inspect a
     // PRERELEASE crate: `cargo add name` adds `= "*"`, and cargo refuses to match a
@@ -3095,6 +3216,8 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
         // Filled in by `inspect_crate` with the rustdoc-succeeded feature set (#100 Part B).
         features: Vec::new(),
         foreign_type_ids,
+        // Filled in by `inspect_crate` when the source was a `--path` wrapper crate.
+        wrapper_path: String::new(),
     }
 }
 
@@ -7998,6 +8121,7 @@ fn pkg_error(name: &str, msg: &str) -> PkgInfo {
         transitive_deps: vec![],
         features: vec![],
         foreign_type_ids: std::collections::BTreeMap::new(),
+        wrapper_path: String::new(),
     }
 }
 
@@ -13283,6 +13407,31 @@ mod tests {
         assert_eq!(
             build_dep_entry("foo", &["bar".to_string()], None, None),
             r#"foo = { version = "*", features = ["bar"] }"#
+        );
+    }
+
+    #[test]
+    fn build_dep_entry_path_source_emits_a_path_dependency() {
+        // A `--path` wrapper crate depends by `path`, never a registry pin.
+        assert_eq!(
+            build_dep_entry_source("engine_wrap", &[], None, Some("/abs/wrappers/engine"), None),
+            r#"engine_wrap = { path = "/abs/wrappers/engine" }"#
+        );
+        // Features ride along on the path dep.
+        assert_eq!(
+            build_dep_entry_source(
+                "engine_wrap",
+                &["extra".to_string()],
+                None,
+                Some("wrappers/engine"),
+                None
+            ),
+            r#"engine_wrap = { path = "wrappers/engine", features = ["extra"] }"#
+        );
+        // `path` wins over a version pin — a wrapper is never a registry crate.
+        assert_eq!(
+            build_dep_entry_source("w", &[], None, Some("w"), Some("1.0.0")),
+            r#"w = { path = "w" }"#
         );
     }
 

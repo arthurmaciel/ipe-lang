@@ -909,6 +909,19 @@ pub fn cargo_dep_lines(pkg: &PkgInfo) -> Result<Vec<String>, Diagnostic> {
         },
     };
     let mut lines = Vec::new();
+    // An author-supplied wrapper crate is bound by PATH, never a registry pin:
+    // the emitted app crate depends on the local wrapper directory. Its own
+    // transitive deps resolve through the wrapper's `Cargo.toml`, so the single
+    // path line is the whole dependency surface the app needs to add.
+    if !pkg.wrapper_path().is_empty() {
+        let name = crate::bindings::pkg_to_crate_import(pkg.pkg_path()).replace('_', "-");
+        lines.push(render_path_dep_line(
+            &name,
+            pkg.wrapper_path().as_str(),
+            pkg.features(),
+        ));
+        return Ok(lines);
+    }
     if pkg.transitive_deps().is_empty() {
         // No probe metadata: pin the primary crate from the package header.
         if pkg.version().is_empty() {
@@ -960,6 +973,28 @@ fn render_dep_line(name: &str, version: &CrateVersion, features: &[FeatureName])
             .collect();
         format!(
             "{name} = {{ version = \"={version}\", features = [{}] }}",
+            quoted.join(", ")
+        )
+    }
+}
+
+/// Render a `path` `[dependencies]` line for an author-supplied wrapper crate.
+///
+/// `path` is a [`crate::pkginfo::WrapperCratePath`], decode-gated to
+/// `[A-Za-z0-9._/-]` (plus space) so it carries no `"`-and-newline payload that
+/// could close its TOML string and inject manifest content; `name` and each
+/// feature are the same decode-validated newtypes `render_dep_line` splices, so
+/// no raw string reaches a TOML position.
+fn render_path_dep_line(name: &str, path: &str, features: &[FeatureName]) -> String {
+    if features.is_empty() {
+        format!("{name} = {{ path = \"{path}\" }}")
+    } else {
+        let quoted: Vec<String> = features
+            .iter()
+            .map(|f| format!("\"{}\"", f.as_str()))
+            .collect();
+        format!(
+            "{name} = {{ path = \"{path}\", features = [{}] }}",
             quoted.join(", ")
         )
     }
