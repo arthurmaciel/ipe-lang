@@ -85,6 +85,16 @@ declares capabilities and is sandbox-enforced).
 - **Native code** → the sandbox isolates the declared high-value capabilities,
   fail-closed, so undeclared effects cannot occur.
 
+## Not covered: resource quotas
+
+Capabilities answer *what* a program may touch, not *how much* it may consume.
+Bounding a program's memory, CPU time, or I/O throughput is a separate concern
+that native compilation does not provide at the language level — a native binary
+can loop or allocate without limit. The sandbox has partial time/`prlimit` hooks,
+but a general per-program quota model is deferred to the deployment layer
+(OS-level `cgroups`/`prlimit`) rather than the language. This is a deliberate
+trade for native speed; a VM-based runtime would bound these for free.
+
 ## Going deeper
 
 - The package-level trust model — how capabilities feed the package index, the

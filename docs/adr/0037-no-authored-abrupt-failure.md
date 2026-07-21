@@ -53,10 +53,13 @@ Enforced by **two independent gates**:
   `ModuleOrigin::FfiInterface` boundary). A hit is a **user error** — a rejecting
   diagnostic. The scanner is lexical, so no package compilation is needed.
 
-**We do not conform to tolerated insecurity, even when documented.** The exception
-ledger is tracked debt whose target is zero — a documented `#[allow]` is not an
-accepted state, only a temporary marker until the construct is removed. Every
-class is reworked to eliminate the construct rather than left asserted.
+**We do not conform to tolerated insecurity, even when documented.** A documented
+`#[allow]` is tracked debt, not an accepted state — the target is zero, and every
+class is reworked to eliminate the construct rather than left asserted. The one
+principled exception is a construct that is *provably dead and whose removal would
+reduce security*: there, a loud assertion on the dead branch is the more secure
+shape and is retained by explicit decision (Security > Correctness). The burndown
+took the ledger from four classes to two such HMAC assertions.
 
 ## Review verdict
 
@@ -79,8 +82,8 @@ permits (`docs/internals/rust-abrupt-failure-ledger.md`):
   thread a provably-dead `Result` `Err` through the SES SigV4 key-derivation
   chain, where a caller mishandling the never-occurring error would substitute a
   silent wrong MAC. A loud `.expect` on a structurally-dead branch is the safer,
-  more honest shape (Security > Correctness > Soundness). Left ledgered pending a
-  project decision.
+  more honest shape (Security > Correctness > Soundness). **Retained by decision**
+  as a permanent, security-justified exception.
 
 ## Consequences
 
