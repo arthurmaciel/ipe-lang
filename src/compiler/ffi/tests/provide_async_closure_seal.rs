@@ -53,15 +53,23 @@ fn async_result_adapter_emits_spawned_await_containment() {
     let out = emit_async_closure(
         "Fn(Int) -> impl Future<Output = Result<Int, Error>> + Send + Sync + 'static",
     );
+    // The received box and the handle alias carry the SAME boxed future; the
+    // wrapper returns the opaque handle nominal.
+    assert!(
+        out.contains(
+            "pub type HandlerFnClosure = Box<dyn Fn(i64) -> ::std::pin::Pin<Box<dyn \
+             ::std::future::Future<Output = Result<i64, IpeError>> + Send + 'static>> + Send \
+             + Sync + 'static>;"
+        ),
+        "the handle alias must carry the boxed future:\n{out}"
+    );
     assert!(
         out.contains(
             "pub fn demo_handler_fn(__ipe_fn: Box<dyn Fn(i64) -> ::std::pin::Pin<Box<dyn \
              ::std::future::Future<Output = Result<i64, IpeError>> + Send + 'static>> + Send \
-             + Sync + 'static>) -> Box<dyn Fn(i64) -> ::std::pin::Pin<Box<dyn \
-             ::std::future::Future<Output = Result<i64, IpeError>> + Send + 'static>> + Send \
-             + Sync + 'static> {"
+             + Sync + 'static>) -> HandlerFnClosure {"
         ),
-        "the received and returned box must carry the SAME boxed future:\n{out}"
+        "the received box carries the boxed future; the return is the handle:\n{out}"
     );
     assert!(out.contains("tokio::task::spawn(__fut)"), "{out}");
     assert!(
