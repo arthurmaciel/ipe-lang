@@ -273,10 +273,10 @@ struct Palette {
 }
 
 impl Palette {
-    /// The coloured palette: the golden Ipê-amarelo (256-colour 220) for names,
+    /// The coloured palette: a soft Ipê-amarelo (256-colour 222) for names,
     /// a mid grey (244) for dim text.
     const COLOR: Self = Self {
-        yellow: "\x1b[38;5;220m",
+        yellow: "\x1b[38;5;222m",
         dim: "\x1b[38;5;244m",
         bold: "\x1b[1m",
         reset: "\x1b[0m",
@@ -359,22 +359,18 @@ fn render_top_level(p: &Palette) -> String {
             out.push_str("  ");
             out.push_str(&command_line(cmd, p));
             out.push('\n');
-            // Optional flags sit dim and indented below the command line, so the
-            // mandatory form reads on the command line and the flags are
-            // visually separate.
-            for flag_line in wrap_flags(cmd.options) {
-                let _ = writeln!(out, "{}      {}{}", p.dim, flag_line, p.reset);
-            }
         }
     }
 
-    // Footer.
+    // Footer: how to see a command's options, then where to report bugs. The
+    // repository link already sits in the header, so it is not repeated here.
     out.push('\n');
     let _ = writeln!(
         out,
-        "{}Run `ipe <command> --help` for a command's options.\n{REPO_URL}{}",
+        "{}Run `ipe <command> --help` for a command's options.\n\nFound any bugs? Please report them at {REPO_URL}/issues.{}",
         p.dim, p.reset
     );
+    out.push('\n');
     out
 }
 
@@ -399,29 +395,8 @@ fn render_command(cmd: &Command, p: &Palette) -> String {
             );
         }
     }
+    out.push('\n');
     out
-}
-
-/// Group the flag forms into indentation-friendly lines, wrapping so no single
-/// line runs too wide. Each returned line is a space-joined run of flags.
-fn wrap_flags(options: &[Opt]) -> Vec<String> {
-    /// The soft width at which a flag run wraps to the next indented line.
-    const WRAP_AT: usize = 66;
-    let mut lines: Vec<String> = Vec::new();
-    let mut current = String::new();
-    for opt in options {
-        if !current.is_empty() && current.len() + 1 + opt.flag.len() > WRAP_AT {
-            lines.push(std::mem::take(&mut current));
-        }
-        if !current.is_empty() {
-            current.push(' ');
-        }
-        current.push_str(opt.flag);
-    }
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    lines
 }
 
 #[cfg(test)]
