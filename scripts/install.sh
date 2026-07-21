@@ -46,6 +46,19 @@ banner() {
     "$C_BOLD" "$C_YELLOW" "$C_RESET" "$C_DIM" "$1" "$C_RESET" >&2
 }
 
+# ── Gate the install dir once, at the boundary ───────────────────────────────
+# INSTALL_DIR ends up written verbatim into the ~/.ipe env files, which the
+# user's shell later sources (executes). Parse, don't validate: reject any path
+# carrying shell metacharacters here, ONCE, so every downstream sink can treat
+# it as a safe literal. Only ordinary path characters are allowed; a quote,
+# backtick, `$`, backslash, or whitespace could inject shell code into a sourced
+# file, so we refuse rather than try to quote it perfectly at each use.
+case "$INSTALL_DIR" in
+  *[!A-Za-z0-9._/+@:-]*)
+    die "The install directory contains unsupported characters: $INSTALL_DIR" ;;
+  '') die "The install directory is empty." ;;
+esac
+
 # ── Detect platform → the release artifact name ──────────────────────────────
 os="$(uname -s)"; arch="$(uname -m)"
 case "$os" in
@@ -325,19 +338,34 @@ on_path() {
   esac
 }
 
-# refuse_symlink_escape PATH — die if PATH is a symlink resolving outside $HOME.
-# A managed dotfile or env file must stay within the user's home; we never
-# follow a link that would let us write elsewhere.
+# canonical_home — $HOME with any symlinks and `..` resolved to a physical path,
+# computed once. The prefix test below compares physical paths, so a link whose
+# textual target begins with "$HOME/" but resolves elsewhere cannot slip past.
+canonical_home="$(cd -P "$HOME" 2>/dev/null && pwd -P)" || canonical_home="$HOME"
+
+# refuse_symlink_escape PATH — die if PATH is a symlink whose target resolves
+# outside $HOME. A managed env file or dotfile must stay within the user's home;
+# we never follow a link that would let us write elsewhere. The whole symlink
+# chain and every `..` are resolved (readlink -f where available, else a
+# physical-cd fallback) before the comparison, so a relative `../` target or a
+# multi-hop chain cannot escape.
 refuse_symlink_escape() {
   rse_path="$1"
   [ -L "$rse_path" ] || return 0
-  rse_target="$(readlink "$rse_path" 2>/dev/null || printf '%s' "$rse_path")"
-  case "$rse_target" in
-    /*) : ;;
-    *)  rse_target="$(dirname "$rse_path")/$rse_target" ;;
-  esac
-  case "$rse_target" in
-    "$HOME"/*|"$HOME") return 0 ;;
+
+  # Resolve the link fully. readlink -f follows the chain and normalizes `..`;
+  # the fallback resolves the parent physically and appends the basename, which
+  # collapses a `..` that would otherwise escape.
+  rse_real="$(readlink -f "$rse_path" 2>/dev/null || true)"
+  if [ -z "$rse_real" ]; then
+    rse_dir="$(dirname "$rse_path")"
+    rse_base="$(basename "$rse_path")"
+    rse_pdir="$(cd -P "$rse_dir" 2>/dev/null && pwd -P)" || rse_pdir="$rse_dir"
+    rse_real="$rse_pdir/$rse_base"
+  fi
+
+  case "$rse_real/" in
+    "$canonical_home"/*) return 0 ;;
     *) die "$rse_path is a symlink pointing outside your home directory — refusing to edit it." ;;
   esac
 }
@@ -379,21 +407,36 @@ resolve_shell_rc() {
 # These are entirely ours, so overwriting them on every run keeps them correct
 # after a move or version change. POSIX and fish both get one, so a user who
 # switches shells still has the right file to source.
+# write_managed FILE CONTENT — write CONTENT to FILE by rendering to a fresh
+# temp file inside the validated $IPE_HOME and `mv`-ing it into place. `mv`
+# replaces a symlink at FILE rather than following it, so a final-component
+# symlink swapped in after our check cannot redirect the write outside $HOME
+# (closing the check-then-write TOCTOU that a plain `>` redirect leaves open).
+write_managed() {
+  wm_dest="$1"; wm_body="$2"
+  wm_tmp="$IPE_HOME/.env.$$.tmp"
+  printf '%s' "$wm_body" > "$wm_tmp" || die "Could not write $wm_dest."
+  mv -f "$wm_tmp" "$wm_dest" || { rm -f "$wm_tmp"; die "Could not write $wm_dest."; }
+}
+
 write_env_files() {
   refuse_symlink_escape "$IPE_HOME"
   mkdir -p "$IPE_HOME" 2>/dev/null || die "Could not create $IPE_HOME."
   refuse_symlink_escape "$ENV_POSIX"
   refuse_symlink_escape "$ENV_FISH"
-  { printf '# Managed by the Ipê installer — puts ipe on your PATH.\n'
-    # shellcheck disable=SC2016  # $PATH stays literal for per-shell expansion
-    printf 'case ":${PATH}:" in *":%s:"*) ;; *) export PATH="%s:$PATH" ;; esac\n' \
-      "$INSTALL_DIR" "$INSTALL_DIR"
-  } > "$ENV_POSIX" || die "Could not write $ENV_POSIX."
-  { printf '# Managed by the Ipê installer — puts ipe on your PATH.\n'
-    # shellcheck disable=SC2016  # $PATH stays literal for fish to expand
-    printf 'if not contains %s $PATH\n    fish_add_path %s\nend\n' \
-      "$INSTALL_DIR" "$INSTALL_DIR"
-  } > "$ENV_FISH" || die "Could not write $ENV_FISH."
+  # INSTALL_DIR is gated to path characters at the boundary, so single-quoting
+  # it here yields an inert literal even though the file is later sourced.
+  # shellcheck disable=SC2016  # $PATH must stay literal for per-shell expansion
+  write_env_files_posix="# Managed by the Ipê installer — puts ipe on your PATH.
+case \":\${PATH}:\" in *\":$INSTALL_DIR:\"*) ;; *) export PATH='$INSTALL_DIR':\"\$PATH\" ;; esac
+"
+  write_env_files_fish="# Managed by the Ipê installer — puts ipe on your PATH.
+if not contains '$INSTALL_DIR' \$PATH
+    fish_add_path '$INSTALL_DIR'
+end
+"
+  write_managed "$ENV_POSIX" "$write_env_files_posix"
+  write_managed "$ENV_FISH" "$write_env_files_fish"
 }
 
 # activation_hint — the two commands to activate PATH in the CURRENT shell: run
@@ -442,8 +485,12 @@ persist_path() {
   printf '      %s%s%s\n' "$C_DIM" "$RC_SOURCE_LINE" "$C_RESET" >&2
   printf '  Update it now? [Y/n] ' >&2
 
+  # A successful read of an empty line (bare ENTER) means yes; a failed read
+  # (closed tty / EOF) is NOT consent — default to leaving the file untouched.
   ans=''
-  read -r ans < /dev/tty || ans=''
+  if ! IFS= read -r ans < /dev/tty; then
+    ans=n
+  fi
   case "$ans" in
     ''|[Yy]|[Yy][Ee][Ss])
       mkdir -p "$(dirname "$RC_FILE")" 2>/dev/null || true
