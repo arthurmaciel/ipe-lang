@@ -237,8 +237,12 @@ pub fn build_doc(
         {
             let func_doc = build_doc(ctx, func, indent, child, generics)?;
             let docs = build_args(ctx, args, indent, child, generics)?;
+            // The string emitter writes `({f})(args)`; when `f` already renders
+            // parenthesized (a `({ … })` block), the outer pair is redundant and
+            // `rustfmt` collapses `(( … ))` to `( … )`. `Doc::elidable_paren` carries
+            // the parens in the SEAL leaves but drops them at render in that case.
             Ok(delimited(
-                Doc::concat(vec![Doc::text("("), func_doc, Doc::text(")(")]),
+                Doc::concat(vec![Doc::elidable_paren(func_doc), Doc::text("(")]),
                 docs,
                 Doc::text(")"),
             ))

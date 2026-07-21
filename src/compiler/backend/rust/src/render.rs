@@ -242,7 +242,41 @@ fn render_at(
         } => {
             render_type_bound(ptr_open, head, traits, close, cfg, indent, col, flat, out);
         }
+        Doc::ElidableParen { inner } => {
+            // Drop the redundant wrapping parens when `inner` already renders
+            // parenthesized (a doubled `(( … ))` collapses to `( … )`), matching
+            // `rustfmt`. The probe measures `inner`'s first rendered character.
+            if inner_renders_parenthesized(inner, cfg, eff_col(out, col), indent) {
+                render_at(inner, cfg, indent, col, flat, out);
+            } else {
+                out.push('(');
+                let c = current_col(out);
+                render_at(inner, cfg, indent, c, flat, out);
+                out.push(')');
+            }
+        }
     }
+}
+
+/// Whether `inner` renders with a leading `(` at `start_col` — a self-parenthesizing
+/// block / paren-expr whose enclosing redundant paren pair `rustfmt` elides. Probed
+/// by rendering `inner` flat and inspecting its first character.
+fn inner_renders_parenthesized(
+    inner: &Doc,
+    cfg: RenderConfig,
+    start_col: usize,
+    indent: usize,
+) -> bool {
+    let mut scratch = String::new();
+    render_at(
+        inner,
+        cfg.no_reserve(),
+        indent,
+        start_col,
+        true,
+        &mut scratch,
+    );
+    scratch.starts_with('(')
 }
 
 /// Render a [`Doc::TypeBound`] `Ptr<Head + T1 + …>` with `rustfmt`'s angle-bracket
@@ -699,6 +733,9 @@ fn has_hard_break(doc: &Doc) -> bool {
         | Doc::TypeBound { .. } => false,
         Doc::Concat(docs) => docs.iter().any(has_hard_break),
         Doc::Nest(_, inner) => has_hard_break(inner),
+        // The redundant paren is pure wrapping: its break behavior is its inner's
+        // (a paren-block carries the statement `HardLine`s that force a break).
+        Doc::ElidableParen { inner } => has_hard_break(inner),
     }
 }
 
@@ -866,6 +903,23 @@ fn render_chain(
     }
 }
 
+/// Whether a call's `open` renders across more than one line at `start_col` — a
+/// `(func)(args)` whose `func` is a `({ … })` block that breaks. When so, the tiny
+/// argument list may still glue onto the open's closing line rather than breaking
+/// one-per-line.
+fn open_is_multiline(open: &Doc, cfg: RenderConfig, start_col: usize, indent: usize) -> bool {
+    let mut scratch = String::new();
+    render_at(
+        open,
+        cfg.no_reserve(),
+        indent,
+        start_col,
+        false,
+        &mut scratch,
+    );
+    scratch.contains('\n')
+}
+
 /// Render a bracket-delimited argument list with `rustfmt`'s call-argument
 /// COMBINING rule. See [`Doc::CallArgs`]. `col` is where `open`'s first character
 /// lands; `indent` is the enclosing block indent.
@@ -895,6 +949,34 @@ fn render_call_args(
         let c = current_col(out);
         render_at(close, cfg, indent, c, true, out);
         return;
+    }
+
+    // MULTILINE-OPEN GLUE: the `open` itself renders multi-line — a `(func)(args)`
+    // whose `func` is a `({ … })` block that breaks — but the flat argument list
+    // fits on the open's LAST line. `rustfmt` glues `(args)` onto the block's closing
+    // `})` line rather than breaking the tiny argument list one-per-line. Render the
+    // open non-flat, then the flat args and close on its last line.
+    if !elems.is_empty() && open_is_multiline(open, cfg, start_col, indent) {
+        let mut probe = String::new();
+        render_at(open, cfg.no_reserve(), indent, start_col, false, &mut probe);
+        let open_last = current_col(&probe);
+        let mut argscratch = String::new();
+        render_flat_elems(elems, cfg, indent, &mut argscratch);
+        render_at(
+            close,
+            cfg.no_reserve(),
+            indent,
+            open_last,
+            true,
+            &mut argscratch,
+        );
+        if !argscratch.contains('\n') && open_last + argscratch.len() <= cfg.margin() {
+            render_at(open, cfg.no_reserve(), indent, start_col, false, out);
+            render_flat_elems(elems, cfg, indent, out);
+            let c = current_col(out);
+            render_at(close, cfg, indent, c, true, out);
+            return;
+        }
     }
 
     // COMBINED (last-argument overflow / head-glue): the LAST element is a

@@ -265,6 +265,22 @@ pub enum Doc {
         /// The closing angle bracket `>`.
         close: Box<Self>,
     },
+    /// A REDUNDANT wrapping paren pair `( inner )` that `rustfmt` elides when `inner`
+    /// is itself already parenthesized — a doubled `(( … ))` collapses to `( … )`.
+    /// The string emitter's `({f})(args)` application form writes both pairs when `f`
+    /// already renders as `({ … })`, so the outer pair is redundant; `rustfmt` drops
+    /// it. Rendered as JUST `inner` when `inner`'s rendered form begins with `(` (a
+    /// self-parenthesizing block / paren-expr), else as `( inner )`.
+    ///
+    /// SEAL accounting: the parens ARE leaves (the string emitter writes them), so
+    /// they appear in the leaf sequence whether or not the render drops them — the
+    /// same rendered-vs-leaves divergence as [`Doc::IfBroken`]'s trailing comma and
+    /// [`Doc::BraceBody`]'s braces. The byte golden checks the render (parens
+    /// dropped), the SEAL checks the leaves (parens present), and both hold.
+    ElidableParen {
+        /// The inner document whose leading `(` makes the wrapping parens redundant.
+        inner: Box<Self>,
+    },
 }
 
 /// One operand of a [`Doc::Chain`], with the operator that precedes it (if any).
@@ -365,6 +381,14 @@ impl Doc {
             head: Box::new(head),
             traits,
             close: Box::new(close),
+        }
+    }
+
+    /// A redundant wrapping paren pair around `inner`, elided at render when `inner`
+    /// is already parenthesized. See [`Doc::ElidableParen`].
+    pub fn elidable_paren(inner: Self) -> Self {
+        Self::ElidableParen {
+            inner: Box::new(inner),
         }
     }
 
@@ -473,6 +497,14 @@ impl Doc {
                     t.collect_leaves(out);
                 }
                 close.collect_leaves(out);
+            }
+            // The parens ARE leaves (the string emitter writes `({f})`), whether or
+            // not the render drops them — the same rendered-vs-leaves divergence as
+            // `IfBroken` / `BraceBody`.
+            Self::ElidableParen { inner } => {
+                out.push('(');
+                inner.collect_leaves(out);
+                out.push(')');
             }
         }
     }
