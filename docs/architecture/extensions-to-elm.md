@@ -30,7 +30,7 @@ below are stated as engineering trade-offs, not corrections.
 
 | `elm/*` package | Ipê relationship | Verdict |
 |---|---|---|
-| `elm/core` | Broad coverage; `List`/`Dict`/`Set`/`String`/`Maybe`/`Result`/`Task`/`Cmd`/`Sub` present, several gaps | **partial** — see §2 |
+| `elm/core` | Broad coverage; `List`/`Dict`/`Set`/`String`/`Maybe`/`Result`/`Task`/`Cmd`/`Sub` present, few remaining gaps | **partial** — see §2 |
 | `elm/json` | Role filled by `Ipe.Config` decoders (TOML/YAML/JSON in one surface) | **diverged** — §3.1 |
 | `elm/time` | `Ipe.Time` — reshaped (server clock, IANA zones, formatting), no `Posix`/`Zone` ADTs | **diverged** — §3.2 |
 | `elm/random` | `Ipe.Random` — `Task`-based generation + a seeded pure surface, not `Generator`/`step` | **diverged** — §3.3 |
@@ -46,8 +46,10 @@ below are stated as engineering trade-offs, not corrections.
 | `elm/browser` | No counterpart; replaced by `Ipe.Live` / `Ipe.Tui` / `Ipe.Webview` | **excluded** — §4 |
 
 Headline `elm/core` count (from [`tbd/elm-core-coverage.md`](tbd/elm-core-coverage.md),
-264 exposed values across 17 modules): **139 present · 15 diverged · 107 missing ·
-3 n/a**, plus 13 of 20 exposed types present.
+264 exposed values across 17 modules): **185 present · 15 diverged · 61 missing ·
+3 n/a**, plus 13 of 20 exposed types present. (The `List`/`Dict`/`Set`/`Result`/
+`Char`/`String` pure-`elm/core` fills closed the bulk of the former gap; the
+remaining `missing` rows are `Dict.merge` and the whole absent modules — see §2.)
 
 ---
 
@@ -61,13 +63,13 @@ decisions live here.
 | Module | Present | Diverged | Missing | Notes |
 |---|---|---|---|---|
 | `Basics` | 34 | 6 | 15 | numerics live in `Ipe.Math`, not the auto-prelude |
-| `List` | 20 | 0 | 17 | missing `sort*`, numeric folds, `map2..5`, `filterMap`, `partition`, `unzip` |
-| `Dict` | 14 | 0 | 8 | missing `update`, `merge`, `filter`, `foldr`, set-ops |
-| `Set` | 10 | 0 | 7 | no HOF surface (`map`/`foldl`/`filter`/`partition`) |
-| `String` | 29 | 2 | 13 | code-point semantics (§5); missing char-fold family, `left`/`right`, `cons`/`uncons` |
+| `List` | 37 | 0 | 0 | complete — `sum`/`product`/`maximum`/`minimum`/`singleton`/`repeat`/`intersperse`/`partition`/`unzip`/`sort`/`sortWith`/`map2`–`map5` now present |
+| `Dict` | 21 | 0 | 1 | `update`/`singleton`/`foldr`/`filter`/`partition`/`intersect`/`diff` now present; still missing `merge` |
+| `Set` | 17 | 0 | 0 | complete — `isEmpty`/`singleton`/`foldl`/`foldr`/`map`/`filter`/`partition` now present |
+| `String` | 41 | 2 | 1 | code-point semantics (§5); `left`/`right`/`cons`/`uncons`/`pad`/`indexes` + the char-fold family now present |
 | `Maybe` | 7 | 0 | 0 | complete |
-| `Result` | 8 | 0 | 2 | missing `toMaybe`/`fromMaybe` bridges |
-| `Char` | 6 | 2 | 5 | `toUpper`/`toLower` return `String`; missing `isHexDigit`/`isOctDigit`/`isAlphaNum` |
+| `Result` | 10 | 0 | 0 | complete — `toMaybe`/`fromMaybe` bridges now present |
+| `Char` | 9 | 2 | 2 | `toUpper`/`toLower` return `String`; `isAlphaNum`/`isHexDigit`/`isOctDigit` now present |
 | `Task` | 7 | 1 | 5 | fixed `Error` channel (§6); missing `map2..5`, `attempt` |
 | `Platform.Cmd` | 2 | 0 | 1 | missing `Cmd.map` |
 | `Platform.Sub` | 2 | 0 | 1 | missing `Sub.map` |

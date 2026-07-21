@@ -1,0 +1,28 @@
+module Main exposing (main)
+
+import Ipe.Prelude exposing (..)
+import Ipe.Result as Result
+import Ipe.Maybe as Maybe
+import Ipe.List as List
+
+
+-- toMaybe : Result e a -> Maybe a  (Ok → Just, Err → Nothing)
+-- fromMaybe : e -> Maybe a -> Result e a  (Just → Ok, Nothing → Err)
+main =
+    let
+        okVal =
+            Maybe.withDefault 0 (Result.toMaybe (Ok 5))
+
+        errVal =
+            Maybe.withDefault 0 (Result.toMaybe (Err "boom"))
+
+        roundTrip =
+            Result.withDefault 0 (Result.fromMaybe "missing" (Just 7))
+
+        defaulted =
+            Result.withDefault 99 (Result.fromMaybe "missing" Nothing)
+    in
+    println
+        (String.join " "
+            (List.map String.fromInt [ okVal, errVal, roundTrip, defaulted ])
+        )

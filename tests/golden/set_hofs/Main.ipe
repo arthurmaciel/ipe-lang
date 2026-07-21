@@ -1,0 +1,46 @@
+module Main exposing (main)
+
+import Ipe.Prelude exposing (..)
+import Ipe.Set as Set
+import Ipe.List as List
+
+
+main =
+    let
+        s =
+            Set.fromList [ 1, 2, 3, 4, 5, 6 ]
+
+        total =
+            Set.foldl (\x acc -> x + acc) 0 s
+
+        totalR =
+            Set.foldr (\x acc -> x + acc) 0 s
+
+        doubledSize =
+            Set.size (Set.map (\x -> x * 2) s)
+
+        evensSize =
+            Set.size (Set.filter (\x -> modBy 2 x == 0) s)
+
+        parts =
+            Set.partition (\x -> x > 3) s
+
+        bigSize =
+            Set.size (fst parts)
+
+        one =
+            Set.size (Set.singleton 42)
+
+        emptyFlag =
+            if Set.isEmpty (Set.filter (\x -> x > 100) s) then
+                1
+
+            else
+                0
+    in
+    println
+        (String.join " "
+            (List.map String.fromInt
+                [ total, totalR, doubledSize, evensSize, bigSize, one, emptyFlag ]
+            )
+        )

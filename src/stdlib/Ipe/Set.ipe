@@ -17,10 +17,13 @@
 -- (the same one Dict uses). Order of iteration is unspecified.
 module Ipe.Set exposing
     ( empty
-    , size
+    , size, isEmpty
+    , singleton
     , insert, remove, member
     , toList, fromList
     , union, intersect, diff
+    , foldl, foldr
+    , map, filter, partition
     )
 
 
@@ -90,3 +93,44 @@ intersect = Ffi.kernel "Set_intersect"
 -- | `diff a b` — every element in `a` BUT NOT in `b`.
 diff : Set a -> Set a -> Set a
 diff = Ffi.kernel "Set_diff"
+
+
+-- ─── Cardinality / construction ────────────────────────────────────
+
+
+-- | `True` when the set has no elements.
+isEmpty : Set a -> Bool
+isEmpty = Ffi.kernel "Set_isEmpty"
+
+
+-- | `singleton x` — the one-element set `{x}`.
+singleton : a -> Set a
+singleton = Ffi.kernel "Set_singleton"
+
+
+-- ─── Higher-order combinators ──────────────────────────────────────
+
+
+-- | `foldl fn acc s` — fold over the elements in ascending order.
+foldl : (a -> b -> b) -> b -> Set a -> b
+foldl = Ffi.kernel "Set_foldl"
+
+
+-- | `foldr fn acc s` — fold over the elements in descending order.
+foldr : (a -> b -> b) -> b -> Set a -> b
+foldr = Ffi.kernel "Set_foldr"
+
+
+-- | `map fn s` — apply `fn` to every element; duplicate results collapse.
+map : (a -> b) -> Set a -> Set b
+map = Ffi.kernel "Set_map"
+
+
+-- | `filter pred s` — keep only elements satisfying `pred`.
+filter : (a -> Bool) -> Set a -> Set a
+filter = Ffi.kernel "Set_filter"
+
+
+-- | `partition pred s` — split into (satisfying, not-satisfying).
+partition : (a -> Bool) -> Set a -> ( Set a, Set a )
+partition = Ffi.kernel "Set_partition"

@@ -1,0 +1,86 @@
+module Main exposing (main)
+
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+import Ipe.List as List
+
+
+main =
+    let
+        s =
+            "Mississippi"
+
+        -- left/right slices.
+        lft =
+            String.left 4 s
+
+        rgt =
+            String.right 3 s
+
+        -- cons + uncons round-trip: uncons "abc" → Just ('a', "bc"); cons back.
+        rebuilt =
+            case String.uncons "abc" of
+                Just ( c, rest ) ->
+                    String.cons c rest
+
+                Nothing ->
+                    ""
+
+        -- pad centre.
+        padded =
+            String.pad 7 '.' "abc"
+
+        -- indexes of "i".
+        idxCount =
+            List.length (String.indexes "i" s)
+
+        -- char-fold family. map swaps 'o' → '0'.
+        shout =
+            String.map
+                (\c ->
+                    if c == 'o' then
+                        '0'
+
+                    else
+                        c
+                )
+                "loud"
+
+        vowelsGone =
+            String.filter (\c -> c /= 'i') s
+
+        countChars =
+            String.foldl (\_c n -> n + 1) 0 s
+
+        reversed =
+            String.foldr (\c acc -> String.cons c acc) "" "abc"
+
+        hasZ =
+            if String.any (\c -> c == 'z') "xyz" then
+                1
+
+            else
+                0
+
+        allLower =
+            if String.all (\c -> c == 'p' || c == 's' || c == 'i' || c == 'M') s then
+                0
+
+            else
+                1
+    in
+    println
+        (String.join " "
+            [ lft
+            , rgt
+            , rebuilt
+            , padded
+            , String.fromInt idxCount
+            , shout
+            , vowelsGone
+            , String.fromInt countChars
+            , reversed
+            , String.fromInt hasZ
+            , String.fromInt allLower
+            ]
+        )

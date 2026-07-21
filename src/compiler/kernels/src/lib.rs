@@ -188,6 +188,19 @@ pub enum StdlibKernel {
     StringContainsIn,
     StringStartsWithIn,
     StringEndsWithIn,
+    // Char-level navigation + fold family.
+    StringLeft,
+    StringRight,
+    StringCons,
+    StringUncons,
+    StringPad,
+    StringIndexes,
+    StringMap,
+    StringFilter,
+    StringFoldl,
+    StringFoldr,
+    StringAny,
+    StringAll,
     // ── Char ────────────────────────────────────────────────────────────────
     CharIsAlpha,
     CharIsDigit,
@@ -197,6 +210,9 @@ pub enum StdlibKernel {
     CharToUpper,
     CharToCode,
     CharFromCode,
+    CharIsAlphaNum,
+    CharIsHexDigit,
+    CharIsOctDigit,
     // ── List ────────────────────────────────────────────────────────────────
     ListMap,
     ListFilter,
@@ -223,6 +239,21 @@ pub enum StdlibKernel {
     // ── List batch ───────────────────────────────────────────────────
     ListFilterMap,
     ListSortBy,
+    ListSort,
+    ListSortWith,
+    ListSingleton,
+    ListRepeat,
+    ListSum,
+    ListProduct,
+    ListMaximum,
+    ListMinimum,
+    ListIntersperse,
+    ListPartition,
+    ListUnzip,
+    ListMap2,
+    ListMap3,
+    ListMap4,
+    ListMap5,
     // ── Basics (core Prelude) ────────────────────────────────────────────────
     BasicsNot,
     BasicsIdentity,
@@ -323,6 +354,11 @@ pub enum StdlibKernel {
     /// `Result.traverse : (a -> Result e b) -> List a -> Result e (List b)`
     /// — one-pass map+collect; first `Err` short-circuits.
     ResultTraverse,
+    /// `Result.toMaybe : Result e a -> Maybe a` — `Ok`→`Just`, `Err`→`Nothing`.
+    ResultToMaybe,
+    /// `Result.fromMaybe : e -> Maybe a -> Result e a` — `Just`→`Ok`,
+    /// `Nothing`→`Err err`.
+    ResultFromMaybe,
     /// Internal: `Result.withDefault`-style defaulting used during lowering.
     /// Qualifier `"_internal_"` — not registered in the canon `QUALIFIERS`
     /// table and excluded from the tripwire test.
@@ -381,6 +417,13 @@ pub enum StdlibKernel {
     DictMap,
     DictInsert,
     DictFoldl,
+    DictSingleton,
+    DictFoldr,
+    DictFilter,
+    DictPartition,
+    DictIntersect,
+    DictDiff,
+    DictUpdate,
     // ── Set ─────────────────────────────────────────────────────────────────
     SetEmpty,
     SetSize,
@@ -392,6 +435,13 @@ pub enum StdlibKernel {
     SetUnion,
     SetIntersect,
     SetDiff,
+    SetIsEmpty,
+    SetSingleton,
+    SetFoldl,
+    SetFoldr,
+    SetMap,
+    SetFilter,
+    SetPartition,
     // ── Bytes ───────────────────────────────────────────────────────────────
     BytesEmpty,
     BytesLength,
@@ -1648,6 +1698,18 @@ impl StdlibKernel {
                 d("String", "startsWithIn", 2, Pure, "string_starts_with_in")
             }
             Self::StringEndsWithIn => d("String", "endsWithIn", 2, Pure, "string_ends_with_in"),
+            Self::StringLeft => d("String", "left", 2, Pure, "string_left"),
+            Self::StringRight => d("String", "right", 2, Pure, "string_right"),
+            Self::StringCons => d("String", "cons", 2, Pure, "string_cons"),
+            Self::StringUncons => d("String", "uncons", 1, Pure, "string_uncons"),
+            Self::StringPad => d("String", "pad", 3, Pure, "string_pad"),
+            Self::StringIndexes => d("String", "indexes", 2, Pure, "string_indexes"),
+            Self::StringMap => d("String", "map", 2, Pure, "string_map"),
+            Self::StringFilter => d("String", "filter", 2, Pure, "string_filter"),
+            Self::StringFoldl => d("String", "foldl", 3, Pure, "string_foldl"),
+            Self::StringFoldr => d("String", "foldr", 3, Pure, "string_foldr"),
+            Self::StringAny => d("String", "any", 2, Pure, "string_any"),
+            Self::StringAll => d("String", "all", 2, Pure, "string_all"),
             // ── Char ────────────────────────────────────────────────────────
             Self::CharIsAlpha => d("Char", "isAlpha", 1, Pure, "char_is_alpha"),
             Self::CharIsDigit => d("Char", "isDigit", 1, Pure, "char_is_digit"),
@@ -1657,6 +1719,9 @@ impl StdlibKernel {
             Self::CharToUpper => d("Char", "toUpper", 1, Pure, "char_to_upper"),
             Self::CharToCode => d("Char", "toCode", 1, Pure, "char_to_code"),
             Self::CharFromCode => d("Char", "fromCode", 1, Pure, "char_from_code"),
+            Self::CharIsAlphaNum => d("Char", "isAlphaNum", 1, Pure, "char_is_alpha_num"),
+            Self::CharIsHexDigit => d("Char", "isHexDigit", 1, Pure, "char_is_hex_digit"),
+            Self::CharIsOctDigit => d("Char", "isOctDigit", 1, Pure, "char_is_oct_digit"),
             // ── List ────────────────────────────────────────────────────────
             Self::ListMap => d("List", "map", 2, Pure, "list_map_consume"),
             Self::ListFilter => d("List", "filter", 2, Pure, "list_filter"),
@@ -1683,6 +1748,21 @@ impl StdlibKernel {
             // ── List batch ────────────────────────────────────────────
             Self::ListFilterMap => d("List", "filterMap", 2, Pure, "list_filter_map"),
             Self::ListSortBy => d("List", "sortBy", 2, Pure, "list_sort_by"),
+            Self::ListSort => d("List", "sort", 1, Pure, "list_sort"),
+            Self::ListSortWith => d("List", "sortWith", 2, Pure, "list_sort_with_order"),
+            Self::ListSingleton => d("List", "singleton", 1, Pure, "list_singleton"),
+            Self::ListRepeat => d("List", "repeat", 2, Pure, "list_repeat"),
+            Self::ListSum => d("List", "sum", 1, Pure, "list_sum"),
+            Self::ListProduct => d("List", "product", 1, Pure, "list_product"),
+            Self::ListMaximum => d("List", "maximum", 1, Pure, "list_maximum"),
+            Self::ListMinimum => d("List", "minimum", 1, Pure, "list_minimum"),
+            Self::ListIntersperse => d("List", "intersperse", 2, Pure, "list_intersperse"),
+            Self::ListPartition => d("List", "partition", 2, Pure, "list_partition"),
+            Self::ListUnzip => d("List", "unzip", 1, Pure, "list_unzip"),
+            Self::ListMap2 => d("List", "map2", 3, Pure, "list_map2"),
+            Self::ListMap3 => d("List", "map3", 4, Pure, "list_map3"),
+            Self::ListMap4 => d("List", "map4", 5, Pure, "list_map4"),
+            Self::ListMap5 => d("List", "map5", 6, Pure, "list_map5"),
             Self::BasicsNot => d("Basics", "not", 1, Pure, "basics_not"),
             Self::BasicsIdentity => d("Basics", "identity", 1, Pure, "basics_identity"),
             Self::BasicsAlways => d("Basics", "always", 2, Pure, "basics_always"),
@@ -1766,6 +1846,8 @@ impl StdlibKernel {
             Self::ResultAndMap => d("Result", "andMap", 2, Pure, "result_and_map"),
             Self::ResultCombine => d("Result", "combine", 1, Pure, "result_combine"),
             Self::ResultTraverse => d("Result", "traverse", 2, Pure, "result_traverse"),
+            Self::ResultToMaybe => d("Result", "toMaybe", 1, Pure, "ipe_result_to_maybe"),
+            Self::ResultFromMaybe => d("Result", "fromMaybe", 2, Pure, "ipe_result_from_maybe"),
             // Internal: qualifier starts with '_' → skipped by tripwire test.
             Self::ResultOkDefault => d("_internal_", "okDefault", 1, Pure, "ok_res"),
             // ── Math ────────────────────────────────────────────────────────
@@ -1822,6 +1904,13 @@ impl StdlibKernel {
             Self::DictMap => d("Dict", "map", 2, Pure, "dict_map"),
             Self::DictInsert => d("Dict", "insert", 3, Pure, "dict_insert"),
             Self::DictFoldl => d("Dict", "foldl", 3, Pure, "dict_foldl"),
+            Self::DictSingleton => d("Dict", "singleton", 2, Pure, "dict_singleton"),
+            Self::DictFoldr => d("Dict", "foldr", 3, Pure, "dict_foldr"),
+            Self::DictFilter => d("Dict", "filter", 2, Pure, "dict_filter"),
+            Self::DictPartition => d("Dict", "partition", 2, Pure, "dict_partition"),
+            Self::DictIntersect => d("Dict", "intersect", 2, Pure, "dict_intersect"),
+            Self::DictDiff => d("Dict", "diff", 2, Pure, "dict_diff"),
+            Self::DictUpdate => d("Dict", "update", 3, Pure, "dict_update"),
             // ── Set ─────────────────────────────────────────────────────────
             Self::SetEmpty => d("Set", "empty", 0, Pure, "set_empty"),
             Self::SetSize => d("Set", "size", 1, Pure, "set_size"),
@@ -1833,6 +1922,13 @@ impl StdlibKernel {
             Self::SetUnion => d("Set", "union", 2, Pure, "set_union"),
             Self::SetIntersect => d("Set", "intersect", 2, Pure, "set_intersect"),
             Self::SetDiff => d("Set", "diff", 2, Pure, "set_diff"),
+            Self::SetIsEmpty => d("Set", "isEmpty", 1, Pure, "set_is_empty"),
+            Self::SetSingleton => d("Set", "singleton", 1, Pure, "set_singleton"),
+            Self::SetFoldl => d("Set", "foldl", 3, Pure, "set_foldl"),
+            Self::SetFoldr => d("Set", "foldr", 3, Pure, "set_foldr"),
+            Self::SetMap => d("Set", "map", 2, Pure, "set_map"),
+            Self::SetFilter => d("Set", "filter", 2, Pure, "set_filter"),
+            Self::SetPartition => d("Set", "partition", 2, Pure, "set_partition"),
             // ── Bytes ───────────────────────────────────────────────────────
             Self::BytesEmpty => d("Bytes", "empty", 0, Pure, "bytes_empty"),
             Self::BytesLength => d("Bytes", "length", 1, Pure, "bytes_length"),
@@ -3014,6 +3110,18 @@ impl StdlibKernel {
         Self::StringContainsIn,
         Self::StringStartsWithIn,
         Self::StringEndsWithIn,
+        Self::StringLeft,
+        Self::StringRight,
+        Self::StringCons,
+        Self::StringUncons,
+        Self::StringPad,
+        Self::StringIndexes,
+        Self::StringMap,
+        Self::StringFilter,
+        Self::StringFoldl,
+        Self::StringFoldr,
+        Self::StringAny,
+        Self::StringAll,
         // Char
         Self::CharIsAlpha,
         Self::CharIsDigit,
@@ -3023,6 +3131,9 @@ impl StdlibKernel {
         Self::CharToUpper,
         Self::CharToCode,
         Self::CharFromCode,
+        Self::CharIsAlphaNum,
+        Self::CharIsHexDigit,
+        Self::CharIsOctDigit,
         // List
         Self::ListMap,
         Self::ListFilter,
@@ -3049,6 +3160,21 @@ impl StdlibKernel {
         // ── List batch ────────────────────────────────────────────────
         Self::ListFilterMap,
         Self::ListSortBy,
+        Self::ListSort,
+        Self::ListSortWith,
+        Self::ListSingleton,
+        Self::ListRepeat,
+        Self::ListSum,
+        Self::ListProduct,
+        Self::ListMaximum,
+        Self::ListMinimum,
+        Self::ListIntersperse,
+        Self::ListPartition,
+        Self::ListUnzip,
+        Self::ListMap2,
+        Self::ListMap3,
+        Self::ListMap4,
+        Self::ListMap5,
         // Basics
         Self::BasicsNot,
         Self::BasicsIdentity,
@@ -3109,6 +3235,8 @@ impl StdlibKernel {
         Self::ResultAndMap,
         Self::ResultCombine,
         Self::ResultTraverse,
+        Self::ResultToMaybe,
+        Self::ResultFromMaybe,
         Self::ResultOkDefault, // qualifier "_internal_" → tripwire skips
         // Math
         Self::MathMin,
@@ -3164,6 +3292,13 @@ impl StdlibKernel {
         Self::DictMap,
         Self::DictInsert,
         Self::DictFoldl,
+        Self::DictSingleton,
+        Self::DictFoldr,
+        Self::DictFilter,
+        Self::DictPartition,
+        Self::DictIntersect,
+        Self::DictDiff,
+        Self::DictUpdate,
         // Set
         Self::SetEmpty,
         Self::SetSize,
@@ -3175,6 +3310,13 @@ impl StdlibKernel {
         Self::SetUnion,
         Self::SetIntersect,
         Self::SetDiff,
+        Self::SetIsEmpty,
+        Self::SetSingleton,
+        Self::SetFoldl,
+        Self::SetFoldr,
+        Self::SetMap,
+        Self::SetFilter,
+        Self::SetPartition,
         // Bytes
         Self::BytesEmpty,
         Self::BytesLength,
@@ -4275,6 +4417,18 @@ impl StdlibKernel {
             | Self::StringContainsIn
             | Self::StringStartsWithIn
             | Self::StringEndsWithIn
+            | Self::StringLeft
+            | Self::StringRight
+            | Self::StringCons
+            | Self::StringUncons
+            | Self::StringPad
+            | Self::StringIndexes
+            | Self::StringMap
+            | Self::StringFilter
+            | Self::StringFoldl
+            | Self::StringFoldr
+            | Self::StringAny
+            | Self::StringAll
             | Self::CharIsAlpha
             | Self::CharIsDigit
             | Self::CharIsLower
@@ -4283,6 +4437,9 @@ impl StdlibKernel {
             | Self::CharToUpper
             | Self::CharToCode
             | Self::CharFromCode
+            | Self::CharIsAlphaNum
+            | Self::CharIsHexDigit
+            | Self::CharIsOctDigit
             | Self::ListMap
             | Self::ListFilter
             | Self::ListFoldl
@@ -4307,6 +4464,21 @@ impl StdlibKernel {
             | Self::ListFind
             | Self::ListFilterMap
             | Self::ListSortBy
+            | Self::ListSort
+            | Self::ListSortWith
+            | Self::ListSingleton
+            | Self::ListRepeat
+            | Self::ListSum
+            | Self::ListProduct
+            | Self::ListMaximum
+            | Self::ListMinimum
+            | Self::ListIntersperse
+            | Self::ListPartition
+            | Self::ListUnzip
+            | Self::ListMap2
+            | Self::ListMap3
+            | Self::ListMap4
+            | Self::ListMap5
             | Self::BasicsNot
             | Self::BasicsIdentity
             | Self::BasicsAlways
@@ -4360,6 +4532,8 @@ impl StdlibKernel {
             | Self::ResultAndMap
             | Self::ResultCombine
             | Self::ResultTraverse
+            | Self::ResultToMaybe
+            | Self::ResultFromMaybe
             | Self::ResultOkDefault
             | Self::MathMin
             | Self::MathMax
@@ -4413,6 +4587,13 @@ impl StdlibKernel {
             | Self::DictMap
             | Self::DictInsert
             | Self::DictFoldl
+            | Self::DictSingleton
+            | Self::DictFoldr
+            | Self::DictFilter
+            | Self::DictPartition
+            | Self::DictIntersect
+            | Self::DictDiff
+            | Self::DictUpdate
             | Self::SetEmpty
             | Self::SetSize
             | Self::SetToList
@@ -4423,6 +4604,13 @@ impl StdlibKernel {
             | Self::SetUnion
             | Self::SetIntersect
             | Self::SetDiff
+            | Self::SetIsEmpty
+            | Self::SetSingleton
+            | Self::SetFoldl
+            | Self::SetFoldr
+            | Self::SetMap
+            | Self::SetFilter
+            | Self::SetPartition
             | Self::BytesEmpty
             | Self::BytesLength
             | Self::BytesIsEmpty

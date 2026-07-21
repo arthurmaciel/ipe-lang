@@ -5,6 +5,7 @@
 -- kernel via Stage 4 `Ffi.kernel`.
 module Ipe.Char exposing
     ( isAlpha, isDigit, isLower, isUpper
+    , isAlphaNum, isHexDigit, isOctDigit
     , toLower, toUpper
     , toCode, fromCode
     )
@@ -27,6 +28,21 @@ isLower = Ffi.kernel "Char_isLower"
 
 isUpper : Char -> Bool
 isUpper = Ffi.kernel "Char_isUpper"
+
+
+-- | A letter or a digit (`isAlpha` or `isDigit`).
+isAlphaNum : Char -> Bool
+isAlphaNum = Ffi.kernel "Char_isAlphaNum"
+
+
+-- | An ASCII hexadecimal digit (`0-9`, `a-f`, `A-F`).
+isHexDigit : Char -> Bool
+isHexDigit = Ffi.kernel "Char_isHexDigit"
+
+
+-- | An ASCII octal digit (`0-7`).
+isOctDigit : Char -> Bool
+isOctDigit = Ffi.kernel "Char_isOctDigit"
 
 
 -- Note: `toLower` / `toUpper` return a single-rune String (the
