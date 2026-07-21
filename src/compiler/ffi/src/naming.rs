@@ -461,6 +461,27 @@ pub fn wrapper_fn_ident(kernel_name: &str, ref_name: &str) -> String {
     to_snake_case(&format!("{base}_{ref_name}"))
 }
 
+/// The opaque handle nominal a `provide.closure` adapter surfaces its returned
+/// boxed closure as.
+///
+/// The program HOLDS this nominal and hands it to a foreign `run`-style
+/// entrypoint, never seeing the `Box<dyn Fn …>` inside. The adapter's snake-case
+/// ref name upper-camels and gains a `Closure` suffix (`update` →
+/// `UpdateClosure`, `apply_fn` → `ApplyFnClosure`): an upper-camel Ipê type name
+/// distinct from any snake-case value binding, and — with the suffix — from a
+/// bare provide-struct/enum nominal an author would name after the type itself
+/// (`Counter`, `Message`). The interface still gates the result against every
+/// real nominal fail-closed; this scheme only lowers the odds a gate must fire.
+#[must_use]
+pub fn closure_handle_nominal(ref_name: &str) -> String {
+    let camel: String = ref_name
+        .split('_')
+        .filter(|seg| !seg.is_empty())
+        .map(capitalise_first)
+        .collect();
+    format!("{camel}Closure")
+}
+
 /// Raw-escape a foreign identifier that collides with a Rust keyword
 /// (`match` → `r#match`) so a keyword-named foreign field/variant/method
 /// still renders parseable Rust.
@@ -594,6 +615,15 @@ mod tests {
             "semver_major_field_from_version"
         );
         assert_eq!(wrapper_fn_ident("Ffi", "x"), "ffi_x");
+    }
+
+    #[test]
+    fn closure_handle_nominal_upper_camels_and_suffixes() {
+        assert_eq!(closure_handle_nominal("update"), "UpdateClosure");
+        assert_eq!(closure_handle_nominal("apply_fn"), "ApplyFnClosure");
+        assert_eq!(closure_handle_nominal("handler_fn"), "HandlerFnClosure");
+        // Repeated / trailing underscores collapse rather than emit empty segments.
+        assert_eq!(closure_handle_nominal("a__b_"), "ABClosure");
     }
 
     #[test]
