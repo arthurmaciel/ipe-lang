@@ -1131,6 +1131,13 @@ impl Printer<'_> {
     /// access base): parenthesised when it is a compound that would otherwise
     /// bind incorrectly against its surroundings.
     fn expr_atom(&self, e: &Expr, indent: usize) -> String {
+        // A negative numeric literal (`-5`, `-1.0`) prints with a leading `-`,
+        // which the parser reads as a binary subtraction operator once the
+        // literal sits after another atom — so `f (-5)` bare-printed as `f -5`
+        // re-parses as `f - 5`. In atom position the sign must stay wrapped.
+        if is_negative_literal(&e.value) {
+            return format!("({})", self.expr(e, indent));
+        }
         if needs_parens_as_atom(&e.value) {
             let inner = self.expr(e, indent);
             if inner.contains('\n') {
@@ -1513,6 +1520,18 @@ impl Printer<'_> {
     }
 }
 
+/// Whether an expression is a negative numeric literal (`Int` below zero, or a
+/// `Float` that carries a minus sign — including `-0.0`). Such a literal renders
+/// with a leading `-`, which the parser treats as binary subtraction once the
+/// literal follows another atom, so it must be parenthesised in atom position.
+const fn is_negative_literal(e: &Expr_) -> bool {
+    match e {
+        Expr_::Int(n) => *n < 0,
+        Expr_::Float(f) => f.is_sign_negative(),
+        _ => false,
+    }
+}
+
 /// Whether an expression needs parentheses when it appears in atom position
 /// (an application argument, an operator operand, or an access base) — the
 /// compound forms that would otherwise re-associate against their surroundings.
@@ -1785,6 +1804,49 @@ mod tests {
         // If the formatted output parsed to a different AST, `format_source`
         // returns `Err(RoundTrip)`. Success is the assertion.
         assert!(format_source(src).is_ok());
+    }
+
+    /// A negative numeric literal in argument (atom) position keeps its
+    /// parentheses: printing `f (-5)` as bare `f -5` re-parses as the binary
+    /// subtraction `f - 5`, so the round-trip guard inside `format_source` would
+    /// reject it. Success (no `Err(RoundTrip)`) is the assertion, and the output
+    /// retains the wrapping.
+    #[test]
+    fn negative_literal_argument_round_trips() {
+        let cases = [
+            "module M exposing (x)\n\n\nx =\n    f (-5)\n",
+            "module M exposing (x)\n\n\nx =\n    f (-1.0)\n",
+            "module M exposing (x)\n\n\nx =\n    g (-1) (-2)\n",
+        ];
+        for src in cases {
+            let out = format_source(src).expect("negative-literal argument round-trips");
+            assert!(
+                out.contains("(-"),
+                "negative literal lost its parens:\n{out}"
+            );
+            let twice = format_source(&out).expect("second pass formats");
+            assert_eq!(out, twice, "not idempotent for input:\n{src}");
+        }
+    }
+
+    /// A negative literal at TOP-LEVEL body / list-element position (not atom
+    /// position) must NOT be over-parenthesised — the comma / definition already
+    /// delimits it, so `x = -5` and `[ -5, -3 ]` stay bare and round-trip.
+    #[test]
+    fn negative_literal_not_over_parenthesised() {
+        let bare = "module M exposing (x)\n\n\nx =\n    -5\n";
+        let out = format_source(bare).expect("formats");
+        assert_eq!(
+            out, bare,
+            "bare negative body must be a fixed point:\n{out}"
+        );
+
+        let list = "module M exposing (l)\n\n\nl =\n    [ -5, -3 ]\n";
+        let out = format_source(list).expect("formats");
+        assert!(
+            !out.contains("[ (-"),
+            "list element must not be parenthesised:\n{out}"
+        );
     }
 
     /// `scan_comments` does not mistake a `--` inside a string for a comment.
