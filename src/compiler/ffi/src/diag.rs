@@ -525,6 +525,19 @@ pub enum WireDefect {
         /// Which structural rule was broken.
         reason: String,
     },
+    /// A `[rust.provide.struct]`/`[rust.provide.enum]` whose field/payload
+    /// reference graph forms a cycle back to itself (directly, or mutually
+    /// through other provide types). A recursive nominal type has no `Box` in
+    /// the closed carrier set to break it, so emitting it would be an
+    /// infinitely-sized Rust type (`error[E0072]`). Refused at decode — the
+    /// package author must break the cycle (e.g. indirect through a handle the
+    /// FFI can name), never emit-and-cargo-fail.
+    RecursiveProvideType {
+        /// The provide type refused (a member of the cycle).
+        name: String,
+        /// The cycle, as the chain of provide-type names it closes over.
+        cycle: Vec<String>,
+    },
     /// The document is not the JSON shape the wire contract declares
     /// (carries the rendered serde error as detail).
     Json {
@@ -617,6 +630,15 @@ impl fmt::Display for WireDefect {
                 write!(
                     f,
                     "{got:?} is not a legal provide.closure signature: {reason}"
+                )
+            }
+            Self::RecursiveProvideType { name, cycle } => {
+                write!(
+                    f,
+                    "provide type {name:?} is recursive ({}) — a nominal FFI type cannot \
+                     reference itself (no boxed indirection is available in the closed carrier \
+                     set); break the cycle by indirecting through a crate handle the FFI can name",
+                    cycle.join(" -> ")
                 )
             }
             Self::Json { detail } => write!(f, "{detail}"),

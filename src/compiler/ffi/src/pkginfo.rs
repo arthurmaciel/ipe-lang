@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 
 use crate::call::Call;
-use crate::carrier::{ClosureSig, EnumDef, StructDef};
+use crate::carrier::{Carrier, ClosureSig, EnumDef, StructDef};
 use crate::diag::{Diagnostic, WireDefect};
 use crate::naming::{FieldSelector, RustIdent, RustPattern, RustTypeExpr, wrapper_ref_name};
 
@@ -1091,6 +1091,165 @@ impl TryFrom<WireFunction> for FnInfo {
     }
 }
 
+/// The provide-type names one def references through its opaque fields/payloads
+/// — the outgoing edges of the provide-type reference graph. A scalar carrier
+/// carries no edge; an opaque carrier names a bare handle that MAY be another
+/// provide type (resolved by membership in the caller's name set).
+fn provide_def_edges(shape: &FnShape) -> Vec<&RustIdent> {
+    match shape {
+        FnShape::StructCtor { def } => def
+            .fields
+            .iter()
+            .filter_map(|(_, c)| match c {
+                Carrier::Opaque(id) => Some(id),
+                _ => None,
+            })
+            .collect(),
+        FnShape::EnumDefCtor { def } => def
+            .variants
+            .iter()
+            .flat_map(|v| {
+                v.payload.iter().filter_map(|c| match c {
+                    Carrier::Opaque(id) => Some(id),
+                    _ => None,
+                })
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The def name a provide-type binding defines, or [`None`] for a non-defining
+/// shape.
+const fn provide_def_name(shape: &FnShape) -> Option<&RustIdent> {
+    match shape {
+        FnShape::StructCtor { def } => Some(&def.name),
+        FnShape::EnumDefCtor { def } => Some(&def.name),
+        _ => None,
+    }
+}
+
+/// The set of provide-type names that lie on a cycle in the provide-type
+/// reference graph (a def whose fields/payloads reach, directly or through
+/// other provide types, back to itself).
+///
+/// Edges to names that are NOT provide-defined (crate opaques, unresolvable
+/// handles) leave the graph and cannot close a cycle, so they are ignored: a
+/// name is on a cycle iff it can reach itself through provide-defined names
+/// only. Computed as the fixed point of "keep only names that both are reached
+/// by a live name and reach a live name" — a node survives iff it has an
+/// in-edge and an out-edge within the surviving set, which for a finite graph
+/// leaves exactly the union of its cycles.
+fn recursive_provide_names(
+    defs: &BTreeMap<String, std::collections::BTreeSet<String>>,
+) -> std::collections::BTreeSet<String> {
+    // Restrict every edge target to a defined name — an edge leaving the graph
+    // can never be part of a cycle.
+    let mut out: BTreeMap<String, std::collections::BTreeSet<String>> = defs
+        .iter()
+        .map(|(name, edges)| {
+            (
+                name.clone(),
+                edges
+                    .iter()
+                    .filter(|e| defs.contains_key(*e))
+                    .cloned()
+                    .collect(),
+            )
+        })
+        .collect();
+    loop {
+        // A node with no out-edge (within the graph) sinks — it ends no cycle.
+        // A node no live node points at is a source — it starts no cycle.
+        let with_out: std::collections::BTreeSet<String> = out
+            .iter()
+            .filter(|(_, edges)| !edges.is_empty())
+            .map(|(name, _)| name.clone())
+            .collect();
+        let with_in: std::collections::BTreeSet<String> = out.values().flatten().cloned().collect();
+        let live: std::collections::BTreeSet<String> =
+            with_out.intersection(&with_in).cloned().collect();
+        if live.len() == out.len() {
+            return live;
+        }
+        out = out
+            .into_iter()
+            .filter(|(name, _)| live.contains(name))
+            .map(|(name, edges)| {
+                (
+                    name,
+                    edges.into_iter().filter(|e| live.contains(e)).collect(),
+                )
+            })
+            .collect();
+    }
+}
+
+/// One representative cycle chain through `start`, for the diagnostic — the
+/// first path a depth-first walk closes back onto `start` (every edge target
+/// restricted to a recursive name, so the walk stays on the cycle set).
+fn cycle_chain_from(
+    start: &str,
+    edges: &BTreeMap<String, std::collections::BTreeSet<String>>,
+    recursive: &std::collections::BTreeSet<String>,
+) -> Vec<String> {
+    let mut path = vec![start.to_owned()];
+    let mut node = start.to_owned();
+    let mut guard = recursive.len().saturating_add(1);
+    while guard > 0 {
+        guard -= 1;
+        let Some(next) = edges
+            .get(&node)
+            .and_then(|es| es.iter().find(|e| recursive.contains(*e)).cloned())
+        else {
+            break;
+        };
+        if next == start {
+            path.push(next);
+            return path;
+        }
+        if path.contains(&next) {
+            path.push(next);
+            return path;
+        }
+        path.push(next.clone());
+        node = next;
+    }
+    path
+}
+
+/// Drop every provide-type binding whose def lies on a cycle in the provide-type
+/// reference graph, recording one [`Diagnostic`] per refused def. A non-defining
+/// binding (a getter/plain call) is never touched here — the emitter's survivor
+/// fixpoint fans the over-drop out to references of a dropped type.
+fn drop_recursive_provide_defs(fns: &mut Vec<FnInfo>, dropped: &mut Vec<Diagnostic>) {
+    let mut edges: BTreeMap<String, std::collections::BTreeSet<String>> = BTreeMap::new();
+    for f in fns.iter() {
+        if let Some(name) = provide_def_name(f.shape()) {
+            let deps = provide_def_edges(f.shape())
+                .into_iter()
+                .map(|id| id.as_str().to_owned())
+                .collect();
+            edges.insert(name.as_str().to_owned(), deps);
+        }
+    }
+    let recursive = recursive_provide_names(&edges);
+    if recursive.is_empty() {
+        return;
+    }
+    for name in &recursive {
+        let cycle = cycle_chain_from(name, &edges, &recursive);
+        dropped.push(Diagnostic::WireMalformed {
+            context: format!("provide type `{name}`"),
+            defect: WireDefect::RecursiveProvideType {
+                name: name.clone(),
+                cycle,
+            },
+        });
+    }
+    fns.retain(|f| provide_def_name(f.shape()).is_none_or(|n| !recursive.contains(n.as_str())));
+}
+
 impl TryFrom<WirePkgInfo> for PkgInfo {
     type Error = Diagnostic;
 
@@ -1124,6 +1283,12 @@ impl TryFrom<WirePkgInfo> for PkgInfo {
         // Display bridge is one entry, never a duplicate Rust item.
         let mut seen_refs = std::collections::BTreeSet::new();
         fns.retain(|f| seen_refs.insert(f.wrapper_ref_name()));
+        // A directly- or mutually-recursive provide type has no boxed
+        // indirection in the closed carrier set, so emitting it would be an
+        // infinitely-sized Rust type (`error[E0072]`). Refuse every def on a
+        // cycle here — the def-bearing binding is dropped, and the emitter's
+        // survivor fixpoint fans the over-drop out to every reference of it.
+        drop_recursive_provide_defs(&mut fns, &mut dropped);
         let mut transitive_deps = Vec::with_capacity(w.transitive_deps.len());
         for dep in w.transitive_deps {
             // The inspector's own probe scaffold registers as a workspace
@@ -1462,6 +1627,139 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn a_self_recursive_provide_struct_is_refused_at_decode() {
+        // `Tree { child: Tree }` has no boxed indirection in the closed carrier
+        // set, so emitting it would be an infinitely-sized Rust type (E0072).
+        let pkg = decode(&base_pkg(&json!([{
+            "name": "tree_new",
+            "effect": "pure",
+            "isStructCtor": true,
+            "structName": "Tree",
+            "structFields": [{ "name": "child", "type": "Tree" }],
+            "structDerives": ["Clone"]
+        }])))
+        .expect("package survives");
+        assert!(pkg.fns().is_empty(), "the recursive def emits nothing");
+        assert!(matches!(
+            pkg.dropped().first().expect("dropped diagnostic"),
+            Diagnostic::WireMalformed {
+                defect: WireDefect::RecursiveProvideType { name, .. },
+                ..
+            } if name == "Tree"
+        ));
+    }
+
+    #[test]
+    fn a_mutually_recursive_provide_pair_is_refused_at_decode() {
+        // `A { inner: B }` + `B { inner: A }` close a cycle through each other.
+        let pkg = decode(&base_pkg(&json!([
+            {
+                "name": "a_new",
+                "effect": "pure",
+                "isStructCtor": true,
+                "structName": "A",
+                "structFields": [{ "name": "inner", "type": "B" }],
+                "structDerives": ["Clone"]
+            },
+            {
+                "name": "b_new",
+                "effect": "pure",
+                "isStructCtor": true,
+                "structName": "B",
+                "structFields": [{ "name": "inner", "type": "A" }],
+                "structDerives": ["Clone"]
+            }
+        ])))
+        .expect("package survives");
+        assert!(pkg.fns().is_empty(), "both cyclic defs emit nothing");
+        let refused: std::collections::BTreeSet<&str> = pkg
+            .dropped()
+            .iter()
+            .filter_map(|d| match d {
+                Diagnostic::WireMalformed {
+                    defect: WireDefect::RecursiveProvideType { name, .. },
+                    ..
+                } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            refused,
+            ["A", "B"]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>()
+        );
+    }
+
+    #[test]
+    fn a_self_recursive_provide_enum_is_refused_at_decode() {
+        // `List::Cons(List)` recurses through its own variant payload.
+        let pkg = decode(&base_pkg(&json!([{
+            "name": "list",
+            "effect": "pure",
+            "isEnumDef": true,
+            "enumName": "List",
+            "enumVariants": [
+                { "name": "Nil", "payload": [] },
+                { "name": "Cons", "payload": ["List"] }
+            ],
+            "enumDerives": ["Clone"]
+        }])))
+        .expect("package survives");
+        assert!(pkg.fns().is_empty());
+        assert!(matches!(
+            pkg.dropped().first().expect("dropped diagnostic"),
+            Diagnostic::WireMalformed {
+                defect: WireDefect::RecursiveProvideType { name, .. },
+                ..
+            } if name == "List"
+        ));
+    }
+
+    #[test]
+    fn a_non_recursive_provide_chain_survives_decode() {
+        // `A { b: B }`, `B { c: i64 }` is an acyclic chain — both survive.
+        let pkg = decode(&base_pkg(&json!([
+            {
+                "name": "a_new",
+                "effect": "pure",
+                "isStructCtor": true,
+                "structName": "A",
+                "structFields": [{ "name": "b", "type": "B" }],
+                "structDerives": ["Clone"]
+            },
+            {
+                "name": "b_new",
+                "effect": "pure",
+                "isStructCtor": true,
+                "structName": "B",
+                "structFields": [{ "name": "c", "type": "i64" }],
+                "structDerives": ["Clone"]
+            }
+        ])))
+        .expect("decodes");
+        assert_eq!(pkg.fns().len(), 2, "the acyclic chain survives whole");
+        assert!(pkg.dropped().is_empty());
+    }
+
+    #[test]
+    fn a_provide_type_referencing_a_crate_opaque_is_not_a_cycle() {
+        // `Wrap { inner: Regex }` names a crate opaque, not a provide type —
+        // the edge leaves the graph and closes no cycle.
+        let pkg = decode(&base_pkg(&json!([{
+            "name": "wrap_new",
+            "effect": "pure",
+            "isStructCtor": true,
+            "structName": "Wrap",
+            "structFields": [{ "name": "inner", "type": "Regex" }],
+            "structDerives": ["Clone"]
+        }])))
+        .expect("decodes");
+        assert_eq!(pkg.fns().len(), 1);
+        assert!(pkg.dropped().is_empty());
     }
 
     #[test]
