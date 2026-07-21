@@ -1018,6 +1018,16 @@ fn install_wrapper(
     // from the directory name, gated through the crate-name charset.
     let krate = CrateName::parse(abs.file_name().and_then(|n| n.to_str()).unwrap_or(rel))
         .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+
+    // The capability gate runs BEFORE the trust prompt and any jailed compile: a
+    // wrapper whose effects Ipê cannot contain at run must be refused before we
+    // ask to build it. It scans the wrapper's own `.rs`, reconciles the inferred
+    // set against the declared one, and refuses any runtime-unenforceable or
+    // opaque capability (there is no runtime sandbox around the emitted app in
+    // this release, so such a capability would be uncontained — refuse rather
+    // than admit unenforced).
+    enforce_wrapper_capabilities(&abs, manifest.capabilities())?;
+
     if !assume_yes {
         use std::io::Write as _;
         println!(
@@ -1059,6 +1069,217 @@ fn install_wrapper(
         paths.interface.display()
     );
     Ok(())
+}
+
+/// The capability gate for a `[rust.wrapper]` crate: scan its source, reconcile
+/// the inferred set against the author's declaration, and REFUSE any wrapper
+/// whose effects Ipê cannot enforce at run.
+///
+/// The three-layer defence, load-bearing part last (spec §5):
+///   1. **Static inference** proposes a coarse capability set by token-scanning
+///      the wrapper's `.rs` (string/comment-safe, over-approximating).
+///   2. **Declaration** is the author's typed [`Capability`] set (already parsed
+///      fail-closed by [`ipe_ffi::wrapper::WrapperManifest`]).
+///   3. **Enforcement**: there is no runtime sandbox around the emitted app in
+///      this release, so a capability on a runtime-enforced axis is infeasible to
+///      contain — [`ipe_ffi::capability_scan::reconcile`] REFUSES it rather than
+///      admit it unenforced. Only wrappers confined to the containable axes
+///      (clock/random, or none) install.
+///
+/// # Errors
+/// [`CliError::Io`] on a read failure; [`CliError::UsageOwned`] when the
+/// reconcile refuses the wrapper (naming every reason and the proposed set).
+fn enforce_wrapper_capabilities(
+    wrapper_dir: &Path,
+    declared: &BTreeSet<ipe_ffi::capability_scan::Capability>,
+) -> Result<(), CliError> {
+    // Collect every `.rs` under the wrapper crate (incl. `build.rs`, `bin/`,
+    // nested modules). A single unscanned file is a hole, so the walk is
+    // recursive and unfiltered.
+    let mut rs_files: Vec<PathBuf> = Vec::new();
+    collect_wrapper_rust_files(wrapper_dir, &mut rs_files)?;
+    rs_files.sort();
+
+    let mut sources: Vec<(String, String)> = Vec::with_capacity(rs_files.len());
+    for file in &rs_files {
+        let src = std::fs::read_to_string(file).map_err(|e| CliError::Io {
+            path: file.clone(),
+            source: e,
+        })?;
+        sources.push((file.display().to_string(), src));
+    }
+    let scan = ipe_ffi::capability_scan::scan_sources(
+        sources.iter().map(|(f, s)| (f.as_str(), s.as_str())),
+    );
+
+    // A wrapper with any non-`std` Cargo dependency is opaque: a dependency's
+    // capabilities live in source the scan never opens.
+    let non_std_deps = wrapper_non_std_dependencies(wrapper_dir)?;
+
+    match ipe_ffi::capability_scan::reconcile(declared, &scan, &non_std_deps) {
+        ipe_ffi::capability_scan::Verdict::Admit { declared } => {
+            if declared.is_empty() {
+                println!("wrapper capability check: no capabilities — pure compute.");
+            } else {
+                let names: Vec<&str> = declared.iter().map(|c| c.as_str()).collect();
+                println!(
+                    "wrapper capability check: declared and containable — {}.",
+                    names.join(", ")
+                );
+            }
+            Ok(())
+        }
+        ipe_ffi::capability_scan::Verdict::Refuse { reasons, proposed } => {
+            use std::fmt::Write as _;
+            let mut message = String::from(
+                "ipe install: the wrapper crate cannot be admitted — its capabilities cannot be \
+                 enforced in this release.\n",
+            );
+            for reason in &reasons {
+                let _ = writeln!(message, "  - {reason}");
+            }
+            if proposed.is_empty() {
+                let _ = writeln!(
+                    message,
+                    "  inferred from its source: (none — but see the reasons above)"
+                );
+            } else {
+                let names: Vec<&str> = proposed.iter().map(|c| c.as_str()).collect();
+                let _ = writeln!(message, "  inferred from its source: {}", names.join(", "));
+            }
+            message.push_str(
+                "  Ipê has no runtime sandbox around the emitted app yet, so a wrapper that \
+                 touches the network, filesystem, environment, a subprocess, native FFI, or a \
+                 non-std dependency would run uncontained. Narrow the wrapper to pure compute \
+                 (Tier 1 `[rust.provide.*]` covers the safe shapes), or wait for the runtime jail.",
+            );
+            Err(CliError::UsageOwned(message))
+        }
+    }
+}
+
+/// Recursively collect every `.rs` file under a wrapper crate directory.
+///
+/// # Errors
+/// [`CliError::Io`] on a directory-read failure.
+fn collect_wrapper_rust_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), CliError> {
+    let entries = std::fs::read_dir(dir).map_err(|e| CliError::Io {
+        path: dir.to_path_buf(),
+        source: e,
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|e| CliError::Io {
+            path: dir.to_path_buf(),
+            source: e,
+        })?;
+        let path = entry.path();
+        let file_type = entry.file_type().map_err(|e| CliError::Io {
+            path: path.clone(),
+            source: e,
+        })?;
+        if file_type.is_dir() {
+            // Never descend into `target/`: a built wrapper's dependency source is
+            // not the author's Rust and would swamp the scan (and re-flag deps we
+            // already refuse via the manifest). The author surface is `src/`,
+            // `build.rs`, and any sibling module files.
+            if path.file_name().and_then(|n| n.to_str()) == Some("target") {
+                continue;
+            }
+            collect_wrapper_rust_files(&path, out)?;
+        } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
+/// The wrapper crate's non-`std` Cargo dependency names, read from its
+/// `Cargo.toml`. A wrapper with any external dependency is opaque to the source
+/// scan (a dependency's capabilities live in source the scan never opens), so
+/// each name becomes a refuse trigger.
+///
+/// This is a deliberately conservative line-scan of EVERY Cargo dependency-table
+/// form — `[dependencies]`, `[build-dependencies]`, `[target.*.dependencies]`,
+/// `[workspace.dependencies]`, and the `[….dependencies.<name>]` sub-table — via
+/// [`parse_cargo_dependency_names`]. It OVER-collects (the safe direction): an
+/// over-refused wrapper costs an author a narrowing, whereas a missed dep would
+/// admit an unconstrained capability. `dev-dependencies` are excluded (test/
+/// build-only, never shipped).
+///
+/// # Errors
+/// [`CliError::Io`] on a read failure (an unreadable manifest is refused, not
+/// silently treated as dependency-free).
+fn wrapper_non_std_dependencies(wrapper_dir: &Path) -> Result<Vec<String>, CliError> {
+    let manifest = wrapper_dir.join("Cargo.toml");
+    if !manifest.is_file() {
+        // No manifest means no crate to inspect; the inspector will fail loudly
+        // later. Treat as no declared deps here (the source scan still runs).
+        return Ok(Vec::new());
+    }
+    let text = std::fs::read_to_string(&manifest).map_err(|e| CliError::Io {
+        path: manifest.clone(),
+        source: e,
+    })?;
+    Ok(parse_cargo_dependency_names(&text))
+}
+
+/// Extract every dependency name from a `Cargo.toml`'s text — the pure,
+/// unit-testable core of [`wrapper_non_std_dependencies`].
+///
+/// Parse, don't validate: the manifest is parsed into a typed TOML document and
+/// EVERY dependency table is read structurally, so a trailing comment on a
+/// header, whitespace inside `[ dependencies ]`, an inline
+/// `dependencies = { … }` table, and the `[target.*]` / `[workspace]` forms all
+/// resolve identically — a hand-rolled line scan under-refuses on those and any
+/// missed dependency would admit an unconstrained capability. A manifest that
+/// does not parse yields the whole document's key set conservatively via the
+/// fallback, so a malformed `Cargo.toml` never silently reports "no deps"
+/// (the inspector's own build then fails it loudly).
+fn parse_cargo_dependency_names(text: &str) -> Vec<String> {
+    let Ok(doc) = text.parse::<toml::Value>() else {
+        // A `Cargo.toml` that does not parse is refused conservatively: if the
+        // word `dependencies` appears anywhere, treat it as having a dependency
+        // (a sentinel name), so a malformed manifest cannot fail OPEN. The real
+        // build later rejects the unparseable manifest loudly.
+        return if text.contains("dependencies") {
+            vec!["<unparseable-cargo-toml>".to_owned()]
+        } else {
+            Vec::new()
+        };
+    };
+    let mut deps: BTreeSet<String> = BTreeSet::new();
+    collect_dependency_tables(&doc, &mut deps);
+    deps.into_iter().collect()
+}
+
+/// Walk a parsed `Cargo.toml` value, inserting the name of every dependency
+/// declared in any `dependencies` or `build-dependencies` table — at the top
+/// level, under `[target.*]`, or under `[workspace]`. `dev-dependencies` are
+/// test/build-only and never shipped, so they are deliberately NOT collected.
+fn collect_dependency_tables(value: &toml::Value, out: &mut BTreeSet<String>) {
+    let Some(table) = value.as_table() else {
+        return;
+    };
+    for (key, sub) in table {
+        match key.as_str() {
+            // A shipped dependency table: every KEY is a dependency name.
+            "dependencies" | "build-dependencies" => {
+                if let Some(deps) = sub.as_table() {
+                    for name in deps.keys() {
+                        out.insert(name.clone());
+                    }
+                }
+            }
+            // Any other table may nest a dependency table one or more levels
+            // down: `[target.<cfg>].dependencies`, `[workspace].dependencies`,
+            // or a future/unknown Cargo form. Recurse into EVERY sub-table so no
+            // nesting escapes the scan (bounded by the parser's own nesting
+            // limit). Over-collection is the safe direction — a spurious name
+            // only over-refuses a wrapper, whereas a missed one would admit an
+            // unconstrained capability.
+            _ => collect_dependency_tables(sub, out),
+        }
+    }
 }
 
 /// Shared tail of `add` / `install`: inspect one crate + write its artifacts.
@@ -2113,18 +2334,125 @@ mod tests {
         assert_eq!(w.path, "wrappers/engine");
         assert_eq!(w.expose, ["make", "describe", "Engine"]);
         assert_eq!(w.capabilities, ["network"]);
-        // The typed gate accepts it (path is package-jailed, symbols validate;
-        // capabilities are preserved, not enforced here).
+        // The typed gate accepts it (path is package-jailed, symbols validate)
+        // and parses the declared capability into the closed vocabulary.
         let parsed = ipe_ffi::wrapper::WrapperManifest::parse(&w.path, &w.expose, &w.capabilities)
             .expect("typed decode accepts a jailed relative path + valid symbols");
         assert_eq!(parsed.path().as_str(), "wrappers/engine");
-        assert_eq!(parsed.capabilities(), ["network"]);
+        assert!(
+            parsed
+                .capabilities()
+                .contains(&ipe_ffi::capability_scan::Capability::Network)
+        );
     }
 
     #[test]
     fn manifest_without_a_wrapper_table_reports_none() {
         let text = "[rust.dependencies]\nsemver = \"1\"\n";
         assert!(rust_wrapper_from_manifest(text).is_none());
+    }
+
+    #[test]
+    fn wrapper_cargo_dep_scan_catches_every_dependency_table_form() {
+        // The guardian's fail-open case: a target-cfg / triple / workspace dep
+        // table must be scanned, or a network dep (`reqwest`) hides there and a
+        // Network-capable wrapper installs unconstrained.
+        let text = "\
+[package]
+name = \"w\"
+
+[dependencies]
+serde = \"1\"
+
+[build-dependencies]
+cc = \"1\"
+
+[target.'cfg(unix)'.dependencies]
+reqwest = \"0.12\"
+
+[target.x86_64-unknown-linux-gnu.dependencies]
+libc_dep = \"0.2\"
+
+[workspace.dependencies]
+tokio = \"1\"
+
+[dependencies.hyper]
+version = \"1\"
+";
+        let deps = parse_cargo_dependency_names(text);
+        for expected in ["serde", "cc", "reqwest", "libc_dep", "tokio", "hyper"] {
+            assert!(
+                deps.iter().any(|d| d == expected),
+                "dep `{expected}` must be caught: {deps:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn wrapper_cargo_dep_scan_survives_unusual_but_valid_toml() {
+        // The forms a hand-rolled line scan under-refuses on — each a real Cargo
+        // dependency the structural parse resolves identically. A miss here would
+        // admit a Network-capable wrapper unconstrained.
+        // Trailing comment on the header.
+        let commented = "[dependencies] # a comment\nreqwest = \"0.12\"\n";
+        assert!(
+            parse_cargo_dependency_names(commented)
+                .iter()
+                .any(|d| d == "reqwest"),
+            "a header with a trailing comment must still be scanned"
+        );
+        // An inline dependency table under a target-cfg parent.
+        let inline = "[target.'cfg(unix)']\ndependencies = { reqwest = \"0.12\" }\n";
+        assert!(
+            parse_cargo_dependency_names(inline)
+                .iter()
+                .any(|d| d == "reqwest"),
+            "an inline dependencies table must be scanned"
+        );
+        // A workspace inline dependencies table.
+        let ws = "[workspace]\ndependencies = { tokio = \"1\" }\n";
+        assert!(
+            parse_cargo_dependency_names(ws)
+                .iter()
+                .any(|d| d == "tokio"),
+            "a workspace inline dependencies table must be scanned"
+        );
+    }
+
+    #[test]
+    fn wrapper_cargo_dep_scan_excludes_dev_dependencies() {
+        // `dev-dependencies` are test/build-only and never ship, so they are not
+        // a runtime capability surface and must NOT force a refuse.
+        let text = "[package]\nname = \"w\"\n\n[dev-dependencies]\nproptest = \"1\"\n";
+        let deps = parse_cargo_dependency_names(text);
+        assert!(
+            !deps.iter().any(|d| d == "proptest"),
+            "dev-dependencies must not be flagged: {deps:?}"
+        );
+        // Target-scoped dev-dependencies are likewise excluded.
+        let scoped = "[target.'cfg(unix)'.dev-dependencies]\nproptest = \"1\"\n";
+        assert!(
+            parse_cargo_dependency_names(scoped).is_empty(),
+            "target dev-dependencies must not be flagged"
+        );
+    }
+
+    #[test]
+    fn a_pure_wrapper_cargo_toml_has_no_deps() {
+        let text = "[package]\nname = \"w\"\nversion = \"0.1.0\"\nedition = \"2021\"\n";
+        assert!(parse_cargo_dependency_names(text).is_empty());
+    }
+
+    #[test]
+    fn a_malformed_cargo_toml_mentioning_dependencies_fails_closed() {
+        // An unparseable manifest that names `dependencies` must NOT report an
+        // empty set (fail-open); it yields a sentinel so the wrapper is refused.
+        let text = "[dependencies\nreqwest = \"0.12\"  # missing closing bracket";
+        let deps = parse_cargo_dependency_names(text);
+        assert!(
+            !deps.is_empty(),
+            "a malformed manifest mentioning dependencies must fail closed: {deps:?}"
+        );
     }
 
     #[test]

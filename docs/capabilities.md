@@ -65,16 +65,23 @@ inference. Ipê handles this without a blind spot:
 - The declared set is checked against the code: a capability the program uses but
   did not surface is a compile error, so a malicious effect cannot hide — it must
   appear as a capability you consented to.
-- At run time the sandbox **enforces** the set, fail-closed: if a package did not
-  declare `network`, the network namespace is left unshared and native network is
-  simply impossible. High-value capabilities (network, filesystem, environment,
-  subprocess) are isolated by the sandbox.
+- Native FFI wrapper crates ([Tier 2](architecture/tbd/ffi-tier2-inspect-author-rust.md))
+  are held to a stricter, fail-closed bar while the runtime sandbox is being
+  built. A wrapper's Rust runs with the process's full authority at `ipe run` —
+  there is **not yet** a runtime jail around the emitted app — so a wrapper that
+  declares or is inferred to reach a runtime-enforced capability (network,
+  filesystem, database, environment, subprocess, native-ffi) is **refused at
+  install** rather than admitted unenforced. Only wrappers confined to the
+  containable axes (clock, random) or to pure compute install today. This is the
+  honest posture until the runtime jail lands, at which point those axes re-open
+  one at a time as each is actually scoped.
 
 How native Rust is bound — and how its capabilities are established — is covered by
 the FFI docs: the declarative [`provide.*`](architecture/tbd/ffi-rust-type-creation-and-coverage.md)
 surface (whose shapes stay capability-inferable) and the
 [wrapper-crate tier](architecture/tbd/ffi-tier2-inspect-author-rust.md) (which
-declares capabilities and is sandbox-enforced).
+declares capabilities, is inference-checked, and is refused unless its effects
+are containable).
 
 ## Where enforcement lives
 
@@ -82,8 +89,13 @@ declares capabilities and is sandbox-enforced).
   enforce at run time; the guarantee is structural.
 - **Packages** → the declared set must match the inferred set (checked at
   compile), and installing is consent to it (`ipe add`).
-- **Native code** → the sandbox isolates the declared high-value capabilities,
-  fail-closed, so undeclared effects cannot occur.
+- **Native code (build)** → the RCE build sandbox isolates the compile of an
+  untrusted crate (fresh empty net namespace, read-only `/`, scrubbed env), so a
+  malicious build script or proc-macro is contained while inspecting/building.
+- **Native code (run)** → the emitted-app runtime jail is **not yet built**. Until
+  it is, a Tier-2 wrapper that would reach a runtime-enforced capability is
+  *refused at install* (above) rather than run uncontained — fail-closed, not
+  fail-open.
 
 ## Not covered: resource quotas
 

@@ -542,6 +542,31 @@ mod tests {
     }
 
     #[test]
+    fn an_undeclared_network_capability_is_denied_fail_closed_at_build() {
+        // The wrapper build/inspect runs in the Denied phase: a FRESH empty net
+        // namespace with no egress. A wrapper that did not declare `network`
+        // cannot reach the network at BUILD time even if its build script tries —
+        // the namespace is unshared, so egress is structurally impossible, not
+        // merely blocked by a rule that could be misconfigured. This is the
+        // build-time half of the fail-closed capability enforcement (§5.3); the
+        // run-time half awaits the emitted-app runtime jail.
+        let argv = rendered_argv(&spec());
+        assert!(
+            argv.contains(&"--unshare-net".to_owned()),
+            "the Denied phase must unshare the net namespace: {}",
+            argv.join(" ")
+        );
+        assert!(
+            argv.contains(&"--setenv".to_owned())
+                && argv
+                    .windows(2)
+                    .any(|w| matches!(w, [k, v] if k == "CARGO_NET_OFFLINE" && v == "1")),
+            "offline cargo backs the unshared namespace: {}",
+            argv.join(" ")
+        );
+    }
+
+    #[test]
     fn fetch_phase_keeps_network_but_every_other_control() {
         let mut s = spec();
         s.network = NetworkPolicy::FetchOnly;
