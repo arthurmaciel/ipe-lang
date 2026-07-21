@@ -38,6 +38,33 @@ pub fn header_line(version: &str) -> String {
     format!("Ipê language - v{version} - {REPO_URL}")
 }
 
+/// The left gutter that indents every human-facing line — help pages, banners,
+/// status chatter, and diagnostics. Two spaces, so prose sits off the terminal
+/// edge while machine output (`--plain` / `--json` / a `run` child's stdout)
+/// stays flush-left for `grep` / `awk` / `jq`. The single width lives here so
+/// every command and the installer indent identically.
+pub const GUTTER: &str = "  ";
+
+/// Prefix every non-empty line of `text` with the [`GUTTER`], leaving blank
+/// lines empty (an indented blank line is trailing whitespace, not structure).
+/// This is how a command renders human output: build the plain body, then
+/// gutter it once at the edge.
+#[must_use]
+pub fn gutter(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        // Split off the trailing newline so an empty line stays empty rather
+        // than becoming two gutter spaces.
+        let (body, newline) = line.strip_suffix('\n').map_or((line, ""), |b| (b, "\n"));
+        if !body.is_empty() {
+            out.push_str(GUTTER);
+        }
+        out.push_str(body);
+        out.push_str(newline);
+    }
+    out
+}
+
 /// The status glyphs that lead a line of progress chatter: a step bullet, a
 /// success check, and a failure cross. Shared by the CLI and the installer.
 pub mod glyph {
@@ -146,6 +173,16 @@ mod tests {
         assert!(report_bugs_footer().ends_with("/issues."));
         assert!(header_line("9.9.9").contains(REPO_URL));
         assert!(header_line("9.9.9").contains("v9.9.9"));
+    }
+
+    #[test]
+    fn gutter_indents_prose_lines_and_leaves_blanks_empty() {
+        let g = gutter("one\n\ntwo\n");
+        assert_eq!(g, "  one\n\n  two\n");
+        // A body with no trailing newline is still guttered.
+        assert_eq!(gutter("tail"), "  tail");
+        // The gutter is exactly the two-space SSOT width.
+        assert_eq!(GUTTER, "  ");
     }
 
     #[test]
