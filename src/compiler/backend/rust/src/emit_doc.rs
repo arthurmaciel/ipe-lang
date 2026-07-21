@@ -763,15 +763,15 @@ fn build_if(
 /// delimited struct literal, whose flat form hugs the braces WITH a space
 /// (`Name { a: 1 }`), use [`delimited_spaced`].
 fn delimited(open: Doc, elems: Vec<Doc>, close: Doc) -> Doc {
-    delimited_with(open, elems, close, || Doc::Softline, true)
+    Doc::call_args(open, elems, close, true)
 }
 
-/// Like [`delimited`], but the broken form carries NO trailing comma. This is the
-/// `format!`/`vec!`-style MACRO argument shape: `rustfmt` breaks a wide macro
-/// call one argument per line but — unlike a function call — never appends the
-/// trailing comma. Used for the `++` append lowering `format!("{}{}", l, r)`.
+/// Like [`delimited`], but the broken one-per-line form carries NO trailing comma.
+/// This is the `format!`/`vec!`-style MACRO argument shape: `rustfmt` breaks a wide
+/// macro call one argument per line but — unlike a function call — never appends
+/// the trailing comma. Used for the `++` append lowering `format!("{}{}", l, r)`.
 fn delimited_no_trailing_comma(open: Doc, elems: Vec<Doc>, close: Doc) -> Doc {
-    delimited_with(open, elems, close, || Doc::Softline, false)
+    Doc::call_args(open, elems, close, false)
 }
 
 /// Like [`delimited`], but the inner boundary is a soft [`Doc::Line`] (a SPACE
@@ -987,14 +987,15 @@ fn build_ctor(
     for (arg, field_ty) in args.iter().zip(fields.iter()) {
         let arg_doc = build_doc(ctx, arg, indent, child, generics)?;
         // A cyclic self-edge field is boxed in the enum, so its construction
-        // argument is boxed too: `Box::new(<arg>)`. The `Box::new(` prefix and the
-        // matching `)` are carried as leaves so the SEAL sees the exact tokens.
+        // argument is boxed too: `Box::new(<arg>)`. Carried as a single-argument
+        // call so `rustfmt`'s combining rule / `fn_call_width` applies to the wrap
+        // (`Box::new(<arg>)` breaks in place when `<arg>` overflows the budget).
         if ctx.is_cyclic_self_field(field_ty, home, ty) {
-            docs.push(Doc::concat(vec![
+            docs.push(delimited(
                 Doc::text("Box::new("),
-                arg_doc,
+                vec![arg_doc],
                 Doc::text(")"),
-            ]));
+            ));
         } else {
             docs.push(arg_doc);
         }
