@@ -43,11 +43,11 @@ fn add_and_remove_have_help_pages() {
 }
 
 #[test]
-fn top_level_help_lists_a_package_authoring_section() {
+fn top_level_help_lists_the_external_packages_section() {
     let (ok, stdout, _) = run(&["--help"]);
     assert!(ok);
     assert!(
-        stdout.contains("Package authoring"),
-        "top-level help must carry the Package authoring section, got:\n{stdout}"
+        stdout.contains("Using external packages"),
+        "top-level help must carry the Using external packages section, got:\n{stdout}"
     );
 }

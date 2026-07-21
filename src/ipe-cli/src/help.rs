@@ -1,10 +1,10 @@
 //! The `ipe` help system — a data-driven renderer for the top-level help
 //! screen and every per-command `--help` page.
 //!
-//! One table ([`COMMANDS`]) holds each command's synopsis and option list; the
-//! top-level screen groups those commands into [`SECTIONS`]. Both the sectioned
-//! overview and the single-command pages render from that one source, so a new
-//! command or flag is described in exactly one place.
+//! One table ([`COMMANDS`]) holds each command's synopsis, argument description,
+//! and option list; the top-level screen highlights a few in [`MOST_USED`] and
+//! groups all of them into [`SECTIONS`]. Both the overview and the per-command
+//! pages render from that one source, so a command or flag is described once.
 //!
 //! Colour is opt-in per output stream: ANSI escapes are emitted only when the
 //! destination is a terminal and `NO_COLOR` is unset. Piped or redirected
@@ -26,19 +26,23 @@ struct Opt {
     desc: &'static str,
 }
 
-/// A command's help entry: the name, the mandatory-argument tail rendered
-/// inline after the name, and the optional flags shown separately.
+/// A command's help entry: the name, its positional-argument tail, a plain
+/// description of that argument, and the optional flags.
 struct Command {
     /// The subcommand name (e.g. `build`).
     name: &'static str,
-    /// A one-line description of the command, shown at the top of its own
-    /// `--help` page.
+    /// A one-line description of the command, shown both under `Most used
+    /// commands` and at the top of the command's own `--help` page.
     summary: &'static str,
-    /// The mandatory positional arguments, rendered inline on the command line
-    /// (e.g. `<crate-name>`). Empty when the command takes none.
+    /// The positional arguments, rendered inline after the name on the synopsis
+    /// line (e.g. `[<path>]`). Empty when the command takes none.
     args: &'static str,
-    /// The optional flags, each rendered dim and indented below the command
-    /// line, and listed with descriptions on the command's `--help` page.
+    /// A one-line, plain-English description of the positional argument, shown
+    /// under `Arguments:` on the command's `--help` page. Empty when there is no
+    /// positional argument to explain.
+    args_desc: &'static str,
+    /// The optional flags, listed with descriptions on the command's `--help`
+    /// page.
     options: &'static [Opt],
 }
 
@@ -54,8 +58,9 @@ struct Section {
 const COMMANDS: &[Command] = &[
     Command {
         name: "init",
-        summary: "Scaffold a new Ipê project in a directory.",
-        args: "[<name>|.]",
+        summary: "Scaffold a new Ipê project.",
+        args: "[<name>]",
+        args_desc: "The directory to create the project in (`.` for the current directory).",
         options: &[Opt {
             flag: "[--force]",
             desc: "overwrite a non-empty target directory",
@@ -63,8 +68,9 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "build",
-        summary: "Compile an Ipê program to a native or WebAssembly artifact.",
-        args: "[<entry.ipe|project-dir|ipe.toml>]",
+        summary: "Compile a program to a native or WebAssembly artifact.",
+        args: "[<path>]",
+        args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
         options: &[
             Opt {
                 flag: "[--out <dir>]",
@@ -102,8 +108,9 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "run",
-        summary: "Compile an Ipê program and run the resulting binary.",
-        args: "[<entry.ipe|project-dir|ipe.toml>]",
+        summary: "Compile a program and run the resulting binary.",
+        args: "[<path>]",
+        args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
         options: &[
             Opt {
                 flag: "[--out <dir>]",
@@ -137,8 +144,9 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "watch",
-        summary: "Rebuild and serve an Ipê program on every source change.",
-        args: "[<entry.ipe|project-dir|ipe.toml>]",
+        summary: "Rebuild and re-run a program on every source change.",
+        args: "[<path>]",
+        args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
         options: &[
             Opt {
                 flag: "[--out <dir>]",
@@ -157,7 +165,8 @@ const COMMANDS: &[Command] = &[
     Command {
         name: "fix",
         summary: "Apply the compiler's machine-applicable fixes to a source file.",
-        args: "<entry.ipe>",
+        args: "<path>",
+        args_desc: "The source file to fix.",
         options: &[Opt {
             flag: "[--yes]",
             desc: "apply every fix without per-edit confirmation",
@@ -166,7 +175,8 @@ const COMMANDS: &[Command] = &[
     Command {
         name: "fmt",
         summary: "Format Ipê source files.",
-        args: "[<path>|.]",
+        args: "[<path>]",
+        args_desc: "A file or directory to format (`.` for the current directory).",
         options: &[Opt {
             flag: "[--check]",
             desc: "report unformatted files without rewriting them",
@@ -175,19 +185,22 @@ const COMMANDS: &[Command] = &[
     Command {
         name: "add",
         summary: "Add an Ipê package dependency (resolution ships with the index).",
-        args: "<package>[@<version>]",
+        args: "<package>",
+        args_desc: "The package name, optionally `@version`.",
         options: &[],
     },
     Command {
         name: "remove",
         summary: "Remove an Ipê package dependency.",
         args: "<package>",
+        args_desc: "The package name.",
         options: &[],
     },
     Command {
         name: "rust",
-        summary: "Manage Rust crates as foreign-function dependencies (add / remove / install).",
+        summary: "Manage Rust crates as foreign-function dependencies.",
         args: "<add|remove|install> [<args>...]",
+        args_desc: "The action to run (add / remove / install) and its arguments.",
         options: &[
             Opt {
                 flag: "[--features <a,b>]",
@@ -206,19 +219,22 @@ const COMMANDS: &[Command] = &[
     Command {
         name: "explain",
         summary: "Explain a diagnostic code, or list every code with no argument.",
-        args: "[<CODE>]",
+        args: "[<code>]",
+        args_desc: "A diagnostic code such as IPE-L0131. Omit to list every code.",
         options: &[],
     },
     Command {
         name: "capabilities",
         summary: "Report the security capabilities a program exercises, inferred from its code.",
-        args: "[<entry.ipe|project-dir|ipe.toml>]",
+        args: "[<path>]",
+        args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
         options: &[],
     },
     Command {
         name: "diff",
         summary: "Compare two package versions' public APIs and report the required semver bump.",
-        args: "<old-path> <new-path>",
+        args: "<old> <new>",
+        args_desc: "The two package paths to compare — the old version first, then the new.",
         options: &[Opt {
             flag: "[--check <old-version> <new-version>]",
             desc: "reject a new version that does not clear the required bump",
@@ -228,24 +244,31 @@ const COMMANDS: &[Command] = &[
         name: "lsp",
         summary: "Run the language server over stdio.",
         args: "",
+        args_desc: "",
         options: &[],
     },
     Command {
         name: "version",
         summary: "Print the ipe version.",
         args: "",
+        args_desc: "",
         options: &[],
     },
 ];
 
-/// The top-level screen's command groups, in display order.
+/// The handful of commands a newcomer reaches for first, highlighted with a
+/// one-line description above the full sectioned list.
+const MOST_USED: &[&str] = &["init", "run", "watch"];
+
+/// The top-level screen's command groups, in display order. Every command
+/// appears in exactly one section (the `MOST_USED` highlights repeat here).
 const SECTIONS: &[Section] = &[
     Section {
         title: "Development",
         commands: &["init", "build", "run", "watch", "fix", "fmt"],
     },
     Section {
-        title: "Package authoring",
+        title: "Using external packages",
         commands: &["add", "remove"],
     },
     Section {
@@ -262,9 +285,9 @@ const SECTIONS: &[Section] = &[
 /// is off every field is the empty string, so the same format code produces
 /// clean plain text.
 struct Palette {
-    /// The Ipê-amarelo golden yellow, for the product name and command names.
+    /// A soft Ipê-amarelo, for the product name and command names.
     yellow: &'static str,
-    /// A dim grey, for optional flags, descriptions, and the footer.
+    /// A dim grey, for descriptions and the footer.
     dim: &'static str,
     /// A bold weight, for section titles.
     bold: &'static str,
@@ -273,10 +296,10 @@ struct Palette {
 }
 
 impl Palette {
-    /// The coloured palette: the golden Ipê-amarelo (256-colour 220) for names,
-    /// a mid grey (244) for dim text.
+    /// The coloured palette: a soft Ipê-amarelo (256-colour 222) for names, a
+    /// mid grey (244) for dim text.
     const COLOR: Self = Self {
-        yellow: "\x1b[38;5;220m",
+        yellow: "\x1b[38;5;222m",
         dim: "\x1b[38;5;244m",
         bold: "\x1b[1m",
         reset: "\x1b[0m",
@@ -327,7 +350,7 @@ pub fn command(name: &str, stream: &impl IsTerminal) -> Option<String> {
     find(name).map(|cmd| render_command(cmd, p))
 }
 
-/// The command line for `cmd`: `ipe <name>` in yellow, then its mandatory args
+/// The synopsis line for `cmd`: `ipe <name>` in yellow, then its arguments
 /// inline in plain text.
 fn command_line(cmd: &Command, p: &Palette) -> String {
     let mut line = format!("{}ipe {}{}", p.yellow, cmd.name, p.reset);
@@ -338,12 +361,13 @@ fn command_line(cmd: &Command, p: &Palette) -> String {
     line
 }
 
-/// Render the sectioned top-level overview.
+/// Render the top-level overview: the header, a highlighted `Most used
+/// commands` block, then every command grouped by section.
 fn render_top_level(p: &Palette) -> String {
     let version = env!("CARGO_PKG_VERSION");
     let mut out = String::new();
 
-    // Header: the product name in golden yellow, the URL dimmed.
+    // Header: the product name in soft yellow, the URL dimmed.
     out.push('\n');
     let _ = writeln!(
         out,
@@ -351,35 +375,40 @@ fn render_top_level(p: &Palette) -> String {
         p.yellow, p.reset, p.dim, p.reset
     );
 
+    // Most-used commands: each name with a one-line description below it.
+    out.push('\n');
+    let _ = writeln!(out, "{}Most used commands:{}", p.bold, p.reset);
+    for &name in MOST_USED {
+        let Some(cmd) = find(name) else { continue };
+        let _ = writeln!(out, "  {}ipe {}{}", p.yellow, cmd.name, p.reset);
+        let _ = writeln!(out, "{}      {}{}", p.dim, cmd.summary, p.reset);
+    }
+
+    // The full list: every command by section, names only. `--help` has the
+    // arguments, options, and descriptions.
     for section in SECTIONS {
         out.push('\n');
         let _ = writeln!(out, "{}{}{}", p.bold, section.title, p.reset);
         for &name in section.commands {
             let Some(cmd) = find(name) else { continue };
-            out.push_str("  ");
-            out.push_str(&command_line(cmd, p));
-            out.push('\n');
-            // Optional flags sit dim and indented below the command line, so the
-            // mandatory form reads on the command line and the flags are
-            // visually separate.
-            for flag_line in wrap_flags(cmd.options) {
-                let _ = writeln!(out, "{}      {}{}", p.dim, flag_line, p.reset);
-            }
+            let _ = writeln!(out, "  {}ipe {}{}", p.yellow, cmd.name, p.reset);
         }
     }
 
-    // Footer.
+    // Footer: how to see a command's detail, then where to report bugs. The
+    // repository link already sits in the header, so it is not repeated here.
     out.push('\n');
     let _ = writeln!(
         out,
-        "{}Run `ipe <command> --help` for a command's options.\n{REPO_URL}{}",
+        "{}Run `ipe <command> --help` for what a command does and its options.\n\nFound any bugs? Please report them at {REPO_URL}/issues.{}",
         p.dim, p.reset
     );
+    out.push('\n');
     out
 }
 
-/// Render one command's `--help` page: summary, synopsis, then each option with
-/// its description.
+/// Render one command's `--help` page: summary, synopsis, the positional
+/// argument, then each option with its description.
 fn render_command(cmd: &Command, p: &Palette) -> String {
     let mut out = String::new();
     out.push('\n');
@@ -387,6 +416,11 @@ fn render_command(cmd: &Command, p: &Palette) -> String {
     out.push('\n');
     out.push_str(&command_line(cmd, p));
     out.push('\n');
+    if !cmd.args_desc.is_empty() {
+        out.push('\n');
+        out.push_str("Arguments:\n");
+        let _ = writeln!(out, "  {}{}{}", p.dim, cmd.args_desc, p.reset);
+    }
     if !cmd.options.is_empty() {
         out.push('\n');
         out.push_str("Options:\n");
@@ -394,34 +428,13 @@ fn render_command(cmd: &Command, p: &Palette) -> String {
         for opt in cmd.options {
             let _ = writeln!(
                 out,
-                "  {}{:<width$}{}  {}{}{}",
-                p.dim, opt.flag, p.reset, p.dim, opt.desc, p.reset
+                "  {:<width$}  {}{}{}",
+                opt.flag, p.dim, opt.desc, p.reset
             );
         }
     }
+    out.push('\n');
     out
-}
-
-/// Group the flag forms into indentation-friendly lines, wrapping so no single
-/// line runs too wide. Each returned line is a space-joined run of flags.
-fn wrap_flags(options: &[Opt]) -> Vec<String> {
-    /// The soft width at which a flag run wraps to the next indented line.
-    const WRAP_AT: usize = 66;
-    let mut lines: Vec<String> = Vec::new();
-    let mut current = String::new();
-    for opt in options {
-        if !current.is_empty() && current.len() + 1 + opt.flag.len() > WRAP_AT {
-            lines.push(std::mem::take(&mut current));
-        }
-        if !current.is_empty() {
-            current.push(' ');
-        }
-        current.push_str(opt.flag);
-    }
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    lines
 }
 
 #[cfg(test)]
@@ -449,6 +462,15 @@ mod tests {
     }
 
     #[test]
+    fn most_used_commands_appear_with_their_summaries() {
+        let plain = render_top_level(&Palette::PLAIN);
+        for &name in MOST_USED {
+            let cmd = find(name).expect("most-used command exists");
+            assert!(plain.contains(cmd.summary), "missing summary for {name}");
+        }
+    }
+
+    #[test]
     fn colored_palette_emits_ansi_plain_does_not() {
         // The colour vs plain rendering is what we assert here; the TTY /
         // NO_COLOR gating that chooses between them is exercised by the
@@ -469,6 +491,21 @@ mod tests {
             let page = render_command(cmd, &Palette::PLAIN);
             assert!(page.contains(&format!("ipe {}", cmd.name)));
             assert!(page.contains(cmd.summary));
+        }
+    }
+
+    #[test]
+    fn commands_with_an_argument_describe_it() {
+        for cmd in COMMANDS {
+            if cmd.args_desc.is_empty() {
+                continue;
+            }
+            let page = render_command(cmd, &Palette::PLAIN);
+            assert!(
+                page.contains("Arguments:") && page.contains(cmd.args_desc),
+                "missing argument description for {}",
+                cmd.name
+            );
         }
     }
 
