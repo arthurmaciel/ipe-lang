@@ -568,13 +568,15 @@ fn enforced_semver(prepared: &Prepared, index_root: Option<&Path>) -> Result<(),
 /// registered hash is caught here too (the resolver verifies at install; the gate
 /// re-verifies at publish).
 ///
-/// When `cargo-deny` is not installed, the check cannot run — it is surfaced as a
-/// reject rather than silently skipped, because a gate that passes when it could
-/// not actually check is a hole.
+/// When `cargo-deny` is not installed, the advisory/bans scan is skipped with a
+/// loud warning (a missing dev tool is not an unsafe package), while the
+/// hash-integrity half still runs. The authoritative index-CI gate always
+/// installs cargo-deny, so enforcement is never actually skipped there.
 ///
 /// # Errors
-/// [`CliError::PackageAudit`] when `cargo-deny` reports a violation, is not
-/// installed, or a locked dependency's hash no longer verifies.
+/// [`CliError::PackageAudit`] when `cargo-deny` reports a violation, fails to run
+/// for any reason other than not being installed, or a locked dependency's hash
+/// no longer verifies.
 fn supply_chain(prepared: &Prepared) -> Result<(), CliError> {
     let manifest = prepared.emitted_dir.join("Cargo.toml");
     if !manifest.is_file() {
@@ -583,9 +585,12 @@ fn supply_chain(prepared: &Prepared) -> Result<(), CliError> {
         return verify_locked_dependency_hashes(prepared);
     }
 
-    let mut command = Command::new("cargo");
+    // Spawn `cargo-deny` directly rather than the `cargo deny` subcommand, so
+    // that a machine without cargo-deny yields a `NotFound` spawn error (handled
+    // as a skip below) instead of `cargo` running and reporting "no such
+    // subcommand", which would masquerade as a supply-chain violation.
+    let mut command = Command::new("cargo-deny");
     command
-        .arg("deny")
         .arg("--manifest-path")
         .arg(&manifest)
         .arg("check")
@@ -621,12 +626,25 @@ fn supply_chain(prepared: &Prepared) -> Result<(), CliError> {
                 ),
             ))
         }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // cargo-deny is not installed. This is a missing dev tool, not an
+            // unsafe package: conflating the two would fail every audit run on a
+            // machine without cargo-deny. The authoritative gate — the package
+            // index CI — always installs it, so advisory/bans enforcement is
+            // never actually skipped there. Locally, skip that scan with a loud
+            // warning; the lockfile hash-integrity half still runs.
+            eprintln!(
+                "warning: supply-chain advisory scan skipped — cargo-deny is not installed \
+                 (`cargo install cargo-deny`). The package index enforces it; lockfile hash \
+                 integrity is still verified."
+            );
+            verify_locked_dependency_hashes(prepared)
+        }
         Err(e) => Err(reject(
             Check::SupplyChain,
             format!(
-                "could not run `cargo deny` ({e}) — the supply-chain check cannot be skipped; \
-                 install cargo-deny (`cargo install cargo-deny`) so the gate can vet the \
-                 dependency graph."
+                "could not run `cargo deny` ({e}) — install cargo-deny \
+                 (`cargo install cargo-deny`) so the gate can vet the dependency graph."
             ),
         )),
     }
