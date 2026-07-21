@@ -166,6 +166,36 @@ tree is hashed and locked exactly as an index dependency is.
 The index checkout defaults to a standard per-user location; set `IPE_INDEX_DIR`
 to point at a different checkout (a local fixture index, for offline testing).
 
+## Auditing a package before you publish
+
+`ipe package audit` runs the package **quality gate** on your working package and
+exits non-zero with a single diagnostic naming exactly what is wrong. It is the
+same gate the curated index re-runs when it accepts a version, so a green audit
+means a green submission. Four checks, each a hard reject (never a warning that
+lets an unsafe or dishonest version through):
+
+- **Provenance** — no authored `panic!`/`unwrap`/`expect`/`assert` in the
+  package's own FFI wrapper Rust (that code compiles unsandboxed into the shipped
+  artifact, so an abrupt failure there is a soundness hole).
+- **Capability honesty** — the `[capabilities]` you declare must be *exactly* the
+  set the compiler infers: a capability you use but did not declare is a hidden
+  effect (reject), and one you declared but never use is an over-broad claim
+  (reject).
+- **Enforced semver** — the public-API delta against the previous published
+  version must clear the required bump; a breaking change under a mere patch bump
+  is rejected. A first version has no predecessor and skips this check.
+- **Supply chain** — `cargo-deny` (advisories, bans, sources) over the package's
+  Rust dependency graph, plus a re-verification that every locked Ipê dependency
+  still hashes to its pin.
+
+```
+$ ipe package audit                 # audit the current project
+$ ipe package audit path/to/pkg     # or a specific package directory
+```
+
+A clean package prints `all Tier-1 checks passed`; a failing one names the check
+and the offending line, capability, version, or dependency.
+
 ## Editor setup (LSP)
 
 `ipe lsp` speaks JSON-RPC over stdio and works with any LSP-compliant editor.

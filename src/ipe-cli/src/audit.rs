@@ -10,13 +10,17 @@
 //! The four Tier-1 checks (see `docs/architecture/tbd/
 //! package-coordination-sp4-gate-plan.md` §1), each wired to existing machinery:
 //!
-//! 1. **Provenance panic-scan** — the emitted Rust is scanned with the SAME
-//!    token scanner the repo's abrupt-failure hook runs ([`panic_scan`]). A hit
-//!    in our EMITTED Rust is a compiler bug (our failure, not the author's); a
-//!    hit in author-supplied FFI wrapper Rust (`_bindings.rs`) is a user error
-//!    the package is rejected for. The two are told apart by WHERE the file came
-//!    from: emitted files come out of the backend; author Rust lives in the FFI
-//!    cache the [`ipe_canon::ModuleOrigin::FfiInterface`] boundary marks.
+//! 1. **Provenance panic-scan** — author-supplied FFI wrapper Rust
+//!    (`*_bindings.rs` in the project's FFI cache) is scanned with the SAME token
+//!    scanner the repo's abrupt-failure hook runs ([`panic_scan`]); an authored
+//!    abrupt-failure construct there is a user error the package is rejected for,
+//!    because that Rust compiles unsandboxed into the shipped artifact. Our
+//!    EMITTED Rust is NOT the author's concern (plan §1a routes emitted-Rust hits
+//!    to our CI, not the author's) and is already gated by the compiler's own
+//!    `tools/panic-scan` CI over the backend `src/` templates — the backend even
+//!    emits one deliberate, guarded polyfill `panic!` into every project — so the
+//!    author gate scans ONLY author Rust, keeping the provenance boundary exact
+//!    by construction.
 //! 2. **Capability consistency** — the inferred capability set (the call-graph
 //!    union that backs `ipe capabilities`) must EQUAL the manifest's declared
 //!    `[capabilities]`. A used-but-undeclared capability is a hidden effect; a
@@ -45,7 +49,7 @@ use crate::project::{self, ProjectManifest};
 /// check that rejected lets the diagnostic say exactly which gate failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Check {
-    /// 1a — abrupt-failure token scan over emitted + author Rust, attributed.
+    /// 1a — abrupt-failure token scan over author-supplied FFI wrapper Rust.
     Provenance,
     /// 1b — inferred vs declared capability set.
     Capability,
@@ -93,18 +97,18 @@ impl std::fmt::Display for Rejection {
     }
 }
 
-/// Where the audit reads the package's emitted Rust and FFI cache from. Bundling
-/// the three roots the checks share (the project root, the emitted-project
-/// directory, and the runtime tree to vendor) keeps each check a pure function of
-/// an already-prepared package rather than re-deriving paths.
+/// The already-built package the four checks read from: its parsed manifest, its
+/// `ipe.toml` path, and the directory it was emitted into. Preparing these once
+/// keeps each check a pure function of a ready package rather than re-deriving
+/// paths and re-building.
 struct Prepared {
     /// The parsed manifest (name, version, declared capabilities, deps).
     manifest: ProjectManifest,
     /// The `ipe.toml` path (the semver check's public-API extraction root is its
     /// parent; the build's blame path).
     manifest_path: PathBuf,
-    /// The directory the package was emitted into (scanned for compiler-bug
-    /// panic hits, and the `cargo-deny` target).
+    /// The directory the package was emitted into (the `cargo-deny` target for
+    /// the supply-chain check).
     emitted_dir: PathBuf,
 }
 
@@ -160,9 +164,9 @@ fn parse_audit_args(rest: &[String]) -> Result<(PathBuf, Option<PathBuf>), CliEr
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--index" => {
-                let value = it.next().ok_or(CliError::Usage(
-                    "ipe package audit: --index needs a value",
-                ))?;
+                let value = it
+                    .next()
+                    .ok_or(CliError::Usage("ipe package audit: --index needs a value"))?;
                 if index.is_some() {
                     return Err(CliError::Usage(
                         "ipe package audit: --index given more than once",
@@ -290,7 +294,10 @@ fn provenance_panic_scan(prepared: &Prepared) -> Result<(), CliError> {
                  that can `{}` at runtime is not safe to publish.\n  {}:{}: `{}`\n\
                  replace it with a `Result`/error return; the gate forbids authored \
                  panic/unwrap/expect/assert in shipped Rust.",
-                hit.tok, hit.file.display(), hit.line, hit.tok
+                hit.tok,
+                hit.file.display(),
+                hit.line,
+                hit.tok
             ),
         ));
     }

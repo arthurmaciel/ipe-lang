@@ -415,7 +415,9 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
         .version_str
         .map(|v| {
             semver::Version::parse(&v).map_err(|e| {
-                CliError::UsageOwned(format!("ipe.toml: `version = \"{v}\"` is not valid semver: {e}"))
+                CliError::UsageOwned(format!(
+                    "ipe.toml: `version = \"{v}\"` is not valid semver: {e}"
+                ))
             })
         })
         .transpose()?;

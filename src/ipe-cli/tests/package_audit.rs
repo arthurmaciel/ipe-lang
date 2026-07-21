@@ -87,11 +87,7 @@ const NETWORK_MAIN: &str = "module Main exposing (main)\n\
 /// An empty index checkout root (no `packages/` entries) — used when a package
 /// has no published predecessor, so the enforced-semver check skips.
 fn empty_index(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "ipe-audit-index-{}-{}",
-        std::process::id(),
-        tag
-    ));
+    let dir = std::env::temp_dir().join(format!("ipe-audit-index-{}-{}", std::process::id(), tag));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("packages")).expect("create index packages dir");
     dir
@@ -260,12 +256,7 @@ struct PublishedIndex {
 /// `src/Main.ipe`), then write an index entry pinning that commit and the tree's
 /// content hash, so `ipe package audit --index <root>` resolves it as the
 /// predecessor.
-fn published_predecessor_index(
-    name: &str,
-    version: &str,
-    lib: &str,
-    main: &str,
-) -> PublishedIndex {
+fn published_predecessor_index(name: &str, version: &str, lib: &str, main: &str) -> PublishedIndex {
     // The predecessor's source repo.
     let src_repo = temp_pkg(&format!("{name}-src-{version}"));
     std::fs::write(src_repo.join("src").join("Lib.ipe"), lib).expect("write baseline Lib");
@@ -273,7 +264,19 @@ fn published_predecessor_index(
 
     git(&src_repo, &["init", "--quiet"]);
     git(&src_repo, &["add", "-A"]);
-    git(&src_repo, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "--quiet", "-m", "v"]);
+    git(
+        &src_repo,
+        &[
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "--quiet",
+            "-m",
+            "v",
+        ],
+    );
     let rev = git_stdout(&src_repo, &["rev-parse", "HEAD"]);
     let rev = rev.trim();
 
@@ -289,8 +292,11 @@ fn published_predecessor_index(
          source = \"{}\"\nrev = \"{rev}\"\nsha256 = \"{sha}\"\ncapabilities = []\n",
         src_repo.display()
     );
-    std::fs::write(index_root.join("packages").join(format!("{name}.toml")), entry)
-        .expect("write index entry");
+    std::fs::write(
+        index_root.join("packages").join(format!("{name}.toml")),
+        entry,
+    )
+    .expect("write index entry");
 
     PublishedIndex { index_root }
 }
