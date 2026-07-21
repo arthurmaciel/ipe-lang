@@ -967,7 +967,14 @@ impl Env {
             // in live/pubsub.rs; emit path uses the standard N-arg route.
             (
                 "Cmd",
-                &["none", "batch", "perform", "publish", "publishNoEcho"],
+                &[
+                    "none",
+                    "batch",
+                    "perform",
+                    "map",
+                    "publish",
+                    "publishNoEcho",
+                ],
             ),
             (
                 "Sub",
@@ -975,6 +982,7 @@ impl Env {
                     "none",
                     "batch",
                     "every",
+                    "map",
                     "subscribeTopic",
                     "subscribeWebSocket",
                 ],

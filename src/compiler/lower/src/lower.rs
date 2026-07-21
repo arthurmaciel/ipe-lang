@@ -13555,8 +13555,12 @@ impl<'a> Lowerer<'a> {
                 // ── TEA arity-2 (wired) ───────────────────────────────────
                 // `Cmd.perform : Task Error a -> (Result Error a -> msg) -> Cmd msg`
                 | KernelFn::CmdPerform
+                // `Cmd.map : (a -> msg) -> Cmd a -> Cmd msg`
+                | KernelFn::CmdMap
                 // `Sub.every : Int -> msg -> Sub msg`
                 | KernelFn::SubEvery
+                // `Sub.map : (a -> msg) -> Sub a -> Sub msg`
+                | KernelFn::SubMap
                 // `Time.every : Int -> msg -> Sub msg`  (alias)
                 | KernelFn::TimeEvery
                 // `Sub.subscribeTopic : String -> (any -> msg) -> Sub msg`  (wired)
@@ -15215,6 +15219,7 @@ impl<'a> Lowerer<'a> {
                     ("Cmd", "none") => Ok(Callee::Kernel(KernelFn::CmdNone)),
                     ("Cmd", "batch") => Ok(Callee::Kernel(KernelFn::CmdBatch)),
                     ("Cmd", "perform") => Ok(Callee::Kernel(KernelFn::CmdPerform)),
+                    ("Cmd", "map") => Ok(Callee::Kernel(KernelFn::CmdMap)),
                     // `Cmd.publish : String -> Dict String String -> Cmd msg`
                     ("Cmd", "publish") => Ok(Callee::Kernel(KernelFn::CmdPublish)),
                     // `Cmd.publishNoEcho : String -> Dict String String -> Cmd msg`
@@ -15222,6 +15227,7 @@ impl<'a> Lowerer<'a> {
                     ("Sub", "none") => Ok(Callee::Kernel(KernelFn::SubNone)),
                     ("Sub", "batch") => Ok(Callee::Kernel(KernelFn::SubBatch)),
                     ("Sub", "every") => Ok(Callee::Kernel(KernelFn::SubEvery)),
+                    ("Sub", "map") => Ok(Callee::Kernel(KernelFn::SubMap)),
                     ("Sub", "subscribeTopic") => Ok(Callee::Kernel(KernelFn::SubSubscribeTopic)),
                     ("Time", "every") => Ok(Callee::Kernel(KernelFn::TimeEvery)),
                     // ── Ipe.Http.Server kernels ─────────────────────────────

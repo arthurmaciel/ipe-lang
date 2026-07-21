@@ -346,7 +346,7 @@ Commands — effects the runtime performs.
 |---|---|---|
 | `none` | `Cmd msg` | ✓ (`Ipe.Cmd.none`) |
 | `batch` | `List (Cmd msg) -> Cmd msg` | ✓ (`Ipe.Cmd.batch`) |
-| `map` | `(a -> msg) -> Cmd a -> Cmd msg` | ✗ (no `Cmd.map`; ipê exposes `Cmd.perform` instead, which is Elm's `Task.perform`) |
+| `map` | `(a -> msg) -> Cmd a -> Cmd msg` | ✓ (`Ipe.Cmd.map`) |
 
 ---
 
@@ -362,7 +362,7 @@ Subscriptions — external events the runtime listens for.
 |---|---|---|
 | `none` | `Sub msg` | ✓ (`Ipe.Sub.none`) |
 | `batch` | `List (Sub msg) -> Sub msg` | ✓ (`Ipe.Sub.batch`) |
-| `map` | `(a -> msg) -> Sub a -> Sub msg` | ✗ (no `Sub.map`; ipê exposes `Sub.every` instead) |
+| `map` | `(a -> msg) -> Sub a -> Sub msg` | ✓ (`Ipe.Sub.map`) |
 
 ---
 
