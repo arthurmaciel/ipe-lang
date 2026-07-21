@@ -268,9 +268,18 @@ else
 fi
 
 # ── Extract + install ────────────────────────────────────────────────────────
-step "Installing to $INSTALL_DIR…"
+# Brace the name: on a non-UTF-8 `/bin/sh` (macOS bash in POSIX mode) an
+# unbraced `$INSTALL_DIR` followed by the multibyte `…` slurps the ellipsis's
+# first byte into the variable name → an "unbound variable" abort under set -u.
+step "Installing to ${INSTALL_DIR}…"
 if [ "$ext" = zip ]; then
-  unzip -q "$pkg" -d "$tmp" || die "Could not unzip the download."
+  # `unzip` isn't guaranteed (e.g. Git Bash on Windows); bsdtar (`tar`) reads
+  # zips on Windows and macOS, so fall back to it.
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -q "$pkg" -d "$tmp" || die "Could not unzip the download."
+  else
+    tar -xf "$pkg" -C "$tmp" || die "Could not extract the download."
+  fi
 else
   tar xzf "$pkg" -C "$tmp" || die "Could not extract the download."
 fi
@@ -286,18 +295,107 @@ for b in ipe ipe-ffi-inspector; do
 done
 [ "$installed" -gt 0 ] || die "The archive contained no ipe binaries."
 
+# ── PATH setup ────────────────────────────────────────────────────────────────
+# ipe is installed, but a bin dir is only useful once it is on PATH. We make
+# that painless without ever silently editing a shell file: we detect the login
+# shell's rc, show the EXACT file and the one line we would add, ask for a yes on
+# the real terminal (/dev/tty — never the piped installer on stdin), append only
+# on a yes, and fall back to a copy-paste hint otherwise.
+
+# on_path — succeed when INSTALL_DIR is already a PATH entry.
+on_path() {
+  case ":${PATH:-}:" in
+    *":$INSTALL_DIR:"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# resolve_shell_rc — set RC_FILE (the login shell's startup file) and PATH_LINE
+# (the exact line that puts INSTALL_DIR on PATH, in that shell's syntax).
+resolve_shell_rc() {
+  sh_name="$(basename "${SHELL:-sh}")"
+  case "$sh_name" in
+    zsh)  RC_FILE="${ZDOTDIR:-$HOME}/.zshrc" ;;
+    bash)
+      # Prefer an existing file; else .bash_profile on macOS (login shells),
+      # .bashrc elsewhere.
+      if   [ -f "$HOME/.bashrc" ];       then RC_FILE="$HOME/.bashrc"
+      elif [ -f "$HOME/.bash_profile" ]; then RC_FILE="$HOME/.bash_profile"
+      elif [ "$plat" = darwin ];         then RC_FILE="$HOME/.bash_profile"
+      else RC_FILE="$HOME/.bashrc"; fi
+      ;;
+    fish) RC_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish" ;;
+    ksh)  RC_FILE="$HOME/.kshrc" ;;
+    *)    RC_FILE="$HOME/.profile" ;;
+  esac
+  if [ "$sh_name" = fish ]; then
+    PATH_LINE="fish_add_path $INSTALL_DIR"
+  else
+    # shellcheck disable=SC2016  # $PATH must stay literal so it expands per-shell
+    PATH_LINE="export PATH=\"$INSTALL_DIR:\$PATH\""
+  fi
+}
+
+# manual_path_hint — the do-it-yourself fallback (PATH_LINE must be set): the
+# one command that puts INSTALL_DIR on PATH, ready to paste.
+manual_path_hint() {
+  printf '  Put ipe on your PATH with:\n' >&2
+  printf '      %s%s%s\n\n' "$C_DIM" "$PATH_LINE" "$C_RESET" >&2
+}
+
+# persist_path — put INSTALL_DIR on PATH for good. We add the export line to the
+# login shell's rc directly (this is the "export PATH=…" the user wants done for
+# them), after showing the exact file + line and getting a yes on the real
+# terminal. Editing a dotfile is consented, never silent; a non-interactive run
+# prints the one-line command instead.
+persist_path() {
+  resolve_shell_rc
+
+  # Already written into the rc — nothing to add.
+  if [ -f "$RC_FILE" ] && grep -Fq "$INSTALL_DIR" "$RC_FILE" 2>/dev/null; then
+    done_ "ipe is on your PATH (via $RC_FILE)."
+    return 0
+  fi
+
+  # No terminal to ask on (piped into a non-interactive shell, CI): never edit a
+  # file unasked — print the one-line command and stop.
+  if [ "$IS_TTY" != 1 ] || [ ! -r /dev/tty ]; then
+    manual_path_hint
+    return 0
+  fi
+
+  printf '\n%s%s is not on your PATH yet.%s\n' "$C_BOLD" "$INSTALL_DIR" "$C_RESET" >&2
+  printf '  Add it to %s%s%s so every shell finds %sipe%s?\n' \
+    "$C_YELLOW" "$RC_FILE" "$C_RESET" "$C_BOLD" "$C_RESET" >&2
+  printf '      %s%s%s\n' "$C_DIM" "$PATH_LINE" "$C_RESET" >&2
+  printf '  Update it now? [Y/n] ' >&2
+
+  ans=''
+  read -r ans < /dev/tty || ans=''
+  case "$ans" in
+    ''|[Yy]|[Yy][Ee][Ss])
+      mkdir -p "$(dirname "$RC_FILE")" 2>/dev/null || true
+      { printf '\n# Added by the Ipê installer — puts ipe on your PATH\n'
+        printf '%s\n' "$PATH_LINE"
+      } >> "$RC_FILE" || die "Could not write to $RC_FILE."
+      done_ "Added ipe to your PATH (via $RC_FILE)."
+      ;;
+    *)
+      info "Left $RC_FILE untouched."
+      manual_path_hint
+      ;;
+  esac
+}
+
 # ── Done + next steps ────────────────────────────────────────────────────────
 done_ "Installed ipe $ver to $INSTALL_DIR/ipe"
-case ":$PATH:" in
-  *":$INSTALL_DIR:"*)
-    printf '\n%sYou are all set.%s Try %sipe --help%s to get started.\n\n' \
-      "$C_GREEN" "$C_RESET" "$C_BOLD" "$C_RESET" >&2
-    "$INSTALL_DIR/ipe" --version >&2 || true
-    ;;
-  *)
-    printf '\n%sAlmost there!%s Add ipe to your PATH, then run %sipe --help%s:\n' \
-      "$C_GREEN" "$C_RESET" "$C_BOLD" "$C_RESET" >&2
-    # shellcheck disable=SC2016  # literal $PATH is intentional in the shown command
-    printf '  %sexport PATH="%s:$PATH"%s\n\n' "$C_DIM" "$INSTALL_DIR" "$C_RESET" >&2
-    ;;
-esac
+if on_path; then
+  printf '\n%sYou are all set.%s Try %sipe --help%s to get started.\n\n' \
+    "$C_GREEN" "$C_RESET" "$C_BOLD" "$C_RESET" >&2
+else
+  # Put INSTALL_DIR on PATH for this run (live immediately when the installer is
+  # sourced), then persist it for future shells.
+  export PATH="$INSTALL_DIR:$PATH"
+  persist_path
+fi
+"$INSTALL_DIR/ipe" --version >&2 || true
