@@ -130,6 +130,8 @@ struct WirePkgInfo {
     features: Vec<String>,
     #[serde(default, rename = "foreignTypeIds")]
     foreign_type_ids: std::collections::BTreeMap<String, String>,
+    #[serde(default, rename = "wrapperPath")]
+    wrapper_path: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -631,6 +633,49 @@ impl PkgPath {
     }
 }
 
+/// A validated absolute filesystem path to an author-supplied wrapper crate.
+///
+/// This is the ONLY value by which a wrapper location reaches a TOML value
+/// position of the emitted app crate's `Cargo.toml`: [`crate::driver::cargo_dep_lines`]
+/// renders `<name> = {{ path = "<WrapperCratePath>" }}` from it. A raw,
+/// unvalidated path could carry a `"`-and-newline payload that closes the TOML
+/// string and injects arbitrary manifest content. Gating here at the decode
+/// boundary — the charset admits real absolute paths (`[A-Za-z0-9._/-]`, plus a
+/// space for a directory name) while excluding every TOML-breaking character
+/// (quote, bracket, brace, backslash, control) — makes an injection-bearing
+/// wrapper path unrepresentable past decode. Empty ⇒ the package did not come
+/// from a wrapper crate (an ordinary crates.io / git inspection).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WrapperCratePath(String);
+
+impl WrapperCratePath {
+    fn parse(s: &str) -> Result<Self, crate::diag::WireDefect> {
+        if s.is_empty() {
+            return Ok(Self(String::new()));
+        }
+        let legal = s
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-' | ' '));
+        if legal {
+            Ok(Self(s.to_owned()))
+        } else {
+            Err(crate::diag::WireDefect::InvalidPkgPath { got: s.to_owned() })
+        }
+    }
+
+    /// The validated wrapper-crate path (empty for a non-wrapper package).
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Whether the package came from an author-supplied wrapper crate.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
 /// A validated Cargo feature name.
 ///
 /// Each effective feature is spliced into a `features = [ … ]` array (a TOML
@@ -697,6 +742,11 @@ pub struct PkgInfo {
     /// validation are dropped at decode (no identity claim survives
     /// unvalidated; absence only disables unification, never soundness).
     foreign_type_ids: std::collections::BTreeMap<String, String>,
+    /// The absolute path to the author-supplied wrapper crate this package was
+    /// inspected from, or empty for an ordinary crates.io / git inspection. When
+    /// set, the emitted app crate depends on the wrapper by `path` rather than a
+    /// registry pin (see [`crate::driver::cargo_dep_lines`]).
+    wrapper_path: WrapperCratePath,
     dropped: Vec<Diagnostic>,
 }
 
@@ -786,6 +836,13 @@ impl PkgInfo {
     #[must_use]
     pub const fn foreign_type_ids(&self) -> &std::collections::BTreeMap<String, String> {
         &self.foreign_type_ids
+    }
+
+    /// The absolute wrapper-crate path this package was inspected from, or empty
+    /// for an ordinary crates.io / git inspection.
+    #[must_use]
+    pub const fn wrapper_path(&self) -> &WrapperCratePath {
+        &self.wrapper_path
     }
 
     /// The bindings dropped by the validating conversion, with the reason
@@ -1179,6 +1236,15 @@ impl TryFrom<WirePkgInfo> for PkgInfo {
                 })?,
             );
         }
+        // The wrapper path is spliced into a `path = "…"` TOML value of the
+        // emitted manifest; gate it at the boundary so an injection-bearing
+        // path fails the WHOLE package here rather than reaching the emitter.
+        let wrapper_path = WrapperCratePath::parse(&w.wrapper_path).map_err(|defect| {
+            Diagnostic::WireMalformed {
+                context: format!("crate `{}`", w.name),
+                defect,
+            }
+        })?;
         Ok(Self {
             pkg_path,
             name,
@@ -1190,6 +1256,7 @@ impl TryFrom<WirePkgInfo> for PkgInfo {
             transitive_deps,
             features,
             foreign_type_ids,
+            wrapper_path,
             dropped,
         })
     }

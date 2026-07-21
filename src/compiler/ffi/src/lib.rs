@@ -30,3 +30,4 @@ pub mod num_coerce;
 pub mod pkginfo;
 pub mod typeref;
 pub mod unify;
+pub mod wrapper;

@@ -167,6 +167,23 @@ pub enum SourceDefect {
         /// The offending version requirement.
         got: String,
     },
+    /// A `[rust.wrapper]` path that is absolute, empty, or escapes the package
+    /// root (a `..` component or a leading `/`). Only a package-jailed relative
+    /// path may name a local wrapper crate.
+    WrapperPathEscapes {
+        /// The offending path.
+        got: String,
+    },
+    /// A `[rust.wrapper]` path carrying a character outside the safe set
+    /// `[A-Za-z0-9._/-]` — every path segment must be a plain relative
+    /// directory name so nothing breaks out of an argv or a TOML value.
+    WrapperPathCharsetIllegal {
+        /// The offending path.
+        got: String,
+    },
+    /// A `[rust.wrapper]` with no `expose` list — a wrapper that binds nothing
+    /// is a no-op declaration and almost certainly an authoring mistake.
+    WrapperExposeEmpty,
 }
 
 impl fmt::Display for SourceDefect {
@@ -198,6 +215,19 @@ impl fmt::Display for SourceDefect {
                 f,
                 "version requirement {got:?} must be non-empty semver text \
                  ([0-9A-Za-z.*=<>~^,+ -])"
+            ),
+            Self::WrapperPathEscapes { got } => write!(
+                f,
+                "wrapper crate path {got:?} must be a non-empty relative path inside \
+                 the package (no leading `/`, no `..` component)"
+            ),
+            Self::WrapperPathCharsetIllegal { got } => write!(
+                f,
+                "wrapper crate path {got:?} has characters outside [A-Za-z0-9._/-]"
+            ),
+            Self::WrapperExposeEmpty => f.write_str(
+                "[rust.wrapper] declares no `expose` symbols — a wrapper that binds \
+                 nothing has no effect",
             ),
         }
     }
