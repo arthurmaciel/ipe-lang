@@ -558,6 +558,13 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::DictMap => "dict_map",
         KernelFn::DictInsert => "dict_insert",
         KernelFn::DictFoldl => "dict_foldl",
+        KernelFn::DictSingleton => "dict_singleton",
+        KernelFn::DictFoldr => "dict_foldr",
+        KernelFn::DictFilter => "dict_filter",
+        KernelFn::DictPartition => "dict_partition",
+        KernelFn::DictIntersect => "dict_intersect",
+        KernelFn::DictDiff => "dict_diff",
+        KernelFn::DictUpdate => "dict_update",
         // ── Set kernels ─────────────────────────────────────────────────────
         KernelFn::SetEmpty => "set_empty",
         KernelFn::SetSize => "set_size",

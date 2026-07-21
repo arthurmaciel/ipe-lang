@@ -400,6 +400,13 @@ pub enum StdlibKernel {
     DictMap,
     DictInsert,
     DictFoldl,
+    DictSingleton,
+    DictFoldr,
+    DictFilter,
+    DictPartition,
+    DictIntersect,
+    DictDiff,
+    DictUpdate,
     // ── Set ─────────────────────────────────────────────────────────────────
     SetEmpty,
     SetSize,
@@ -1864,6 +1871,13 @@ impl StdlibKernel {
             Self::DictMap => d("Dict", "map", 2, Pure, "dict_map"),
             Self::DictInsert => d("Dict", "insert", 3, Pure, "dict_insert"),
             Self::DictFoldl => d("Dict", "foldl", 3, Pure, "dict_foldl"),
+            Self::DictSingleton => d("Dict", "singleton", 2, Pure, "dict_singleton"),
+            Self::DictFoldr => d("Dict", "foldr", 3, Pure, "dict_foldr"),
+            Self::DictFilter => d("Dict", "filter", 2, Pure, "dict_filter"),
+            Self::DictPartition => d("Dict", "partition", 2, Pure, "dict_partition"),
+            Self::DictIntersect => d("Dict", "intersect", 2, Pure, "dict_intersect"),
+            Self::DictDiff => d("Dict", "diff", 2, Pure, "dict_diff"),
+            Self::DictUpdate => d("Dict", "update", 3, Pure, "dict_update"),
             // ── Set ─────────────────────────────────────────────────────────
             Self::SetEmpty => d("Set", "empty", 0, Pure, "set_empty"),
             Self::SetSize => d("Set", "size", 1, Pure, "set_size"),
@@ -3229,6 +3243,13 @@ impl StdlibKernel {
         Self::DictMap,
         Self::DictInsert,
         Self::DictFoldl,
+        Self::DictSingleton,
+        Self::DictFoldr,
+        Self::DictFilter,
+        Self::DictPartition,
+        Self::DictIntersect,
+        Self::DictDiff,
+        Self::DictUpdate,
         // Set
         Self::SetEmpty,
         Self::SetSize,
@@ -4501,6 +4522,13 @@ impl StdlibKernel {
             | Self::DictMap
             | Self::DictInsert
             | Self::DictFoldl
+            | Self::DictSingleton
+            | Self::DictFoldr
+            | Self::DictFilter
+            | Self::DictPartition
+            | Self::DictIntersect
+            | Self::DictDiff
+            | Self::DictUpdate
             | Self::SetEmpty
             | Self::SetSize
             | Self::SetToList

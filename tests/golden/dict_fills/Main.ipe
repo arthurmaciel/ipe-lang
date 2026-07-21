@@ -1,0 +1,64 @@
+module Main exposing (main)
+
+import Ipe.Prelude exposing (..)
+import Ipe.Dict as Dict
+import Ipe.List as List
+import Ipe.Maybe as Maybe
+
+
+bump : Maybe Int -> Maybe Int
+bump m =
+    case m of
+        Just v ->
+            Just (v + 100)
+
+        Nothing ->
+            Just 1
+
+
+main =
+    let
+        d =
+            Dict.fromList [ ( "a", 1 ), ( "b", 2 ), ( "c", 3 ), ( "d", 4 ) ]
+
+        other =
+            Dict.fromList [ ( "b", 20 ), ( "c", 30 ), ( "e", 50 ) ]
+
+        -- foldr sums values (order-independent total).
+        total =
+            Dict.foldr (\_k v acc -> v + acc) 0 d
+
+        evensSize =
+            Dict.size (Dict.filter (\_k v -> modBy 2 v == 0) d)
+
+        parts =
+            Dict.partition (\_k v -> v > 2) d
+
+        bigSize =
+            Dict.size (fst parts)
+
+        interSize =
+            Dict.size (Dict.intersect d other)
+
+        diffSize =
+            Dict.size (Dict.diff d other)
+
+        oneSize =
+            Dict.size (Dict.singleton "z" 9)
+
+        -- update: bump existing "a" (1 -> 101), insert "new" (Nothing -> 1).
+        updated =
+            Dict.update "new" bump (Dict.update "a" bump d)
+
+        aVal =
+            Maybe.withDefault 0 (Dict.get "a" updated)
+
+        newVal =
+            Maybe.withDefault 0 (Dict.get "new" updated)
+    in
+    println
+        (String.join " "
+            (List.map String.fromInt
+                [ total, evensSize, bigSize, interSize, diffSize, oneSize, aVal, newVal ]
+            )
+        )

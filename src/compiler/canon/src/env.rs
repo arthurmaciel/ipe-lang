@@ -663,7 +663,8 @@ impl Env {
                 "Dict",
                 &[
                     "empty", "isEmpty", "size", "insert", "get", "remove", "member", "keys",
-                    "values", "toList", "fromList", "map", "foldl", "union",
+                    "values", "toList", "fromList", "map", "foldl", "union", "singleton", "foldr",
+                    "filter", "partition", "intersect", "diff", "update",
                 ],
             ),
             // `Ipe.Set` — set kernels.

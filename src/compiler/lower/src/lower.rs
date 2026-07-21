@@ -13424,6 +13424,11 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DictRemove
                 | KernelFn::DictUnion
                 | KernelFn::DictMap
+                | KernelFn::DictSingleton
+                | KernelFn::DictFilter
+                | KernelFn::DictPartition
+                | KernelFn::DictIntersect
+                | KernelFn::DictDiff
                 // ── Set arity-2 ──────────────────────────────────────────────
                 | KernelFn::SetMember
                 | KernelFn::SetInsert
@@ -13600,6 +13605,8 @@ impl<'a> Lowerer<'a> {
                 // ── Dict arity-3 ─────────────────────────────────────────────
                 | KernelFn::DictInsert
                 | KernelFn::DictFoldl
+                | KernelFn::DictFoldr
+                | KernelFn::DictUpdate
                 // ── Bytes arity-3 ────────────────────────────────────────────
                 | KernelFn::BytesSlice
                 // ── JsonDec arity-3 ─────────────────────────────────────
@@ -14865,6 +14872,13 @@ impl<'a> Lowerer<'a> {
                     ("Dict", "map") => Ok(Callee::Kernel(KernelFn::DictMap)),
                     ("Dict", "insert") => Ok(Callee::Kernel(KernelFn::DictInsert)),
                     ("Dict", "foldl") => Ok(Callee::Kernel(KernelFn::DictFoldl)),
+                    ("Dict", "singleton") => Ok(Callee::Kernel(KernelFn::DictSingleton)),
+                    ("Dict", "foldr") => Ok(Callee::Kernel(KernelFn::DictFoldr)),
+                    ("Dict", "filter") => Ok(Callee::Kernel(KernelFn::DictFilter)),
+                    ("Dict", "partition") => Ok(Callee::Kernel(KernelFn::DictPartition)),
+                    ("Dict", "intersect") => Ok(Callee::Kernel(KernelFn::DictIntersect)),
+                    ("Dict", "diff") => Ok(Callee::Kernel(KernelFn::DictDiff)),
+                    ("Dict", "update") => Ok(Callee::Kernel(KernelFn::DictUpdate)),
                     // ── Set kernels ────────────────────────────────────────
                     ("Set", "empty") => Ok(Callee::Kernel(KernelFn::SetEmpty)),
                     ("Set", "size") => Ok(Callee::Kernel(KernelFn::SetSize)),

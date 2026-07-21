@@ -62,7 +62,7 @@ decisions live here.
 |---|---|---|---|---|
 | `Basics` | 34 | 6 | 15 | numerics live in `Ipe.Math`, not the auto-prelude |
 | `List` | 33 | 0 | 4 | `sum`/`product`/`maximum`/`minimum`/`singleton`/`repeat`/`intersperse`/`partition`/`unzip`/`sort`/`sortWith` now present; still missing `map2`–`map5` |
-| `Dict` | 14 | 0 | 8 | missing `update`, `merge`, `filter`, `foldr`, set-ops |
+| `Dict` | 21 | 0 | 1 | `update`/`singleton`/`foldr`/`filter`/`partition`/`intersect`/`diff` now present; still missing `merge` |
 | `Set` | 17 | 0 | 0 | complete — `isEmpty`/`singleton`/`foldl`/`foldr`/`map`/`filter`/`partition` now present |
 | `String` | 29 | 2 | 13 | code-point semantics (§5); missing char-fold family, `left`/`right`, `cons`/`uncons` |
 | `Maybe` | 7 | 0 | 0 | complete |

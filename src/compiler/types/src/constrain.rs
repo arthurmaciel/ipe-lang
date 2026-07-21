@@ -4870,6 +4870,39 @@ impl<'a> Builder<'a> {
                 dict(var(0), var(1)),
                 fun(dict(var(0), var(1)), dict(var(0), var(1))),
             ),
+            // singleton : k -> v -> Dict k v
+            K::DictSingleton => fun(var(0), fun(var(1), dict(var(0), var(1)))),
+            // foldr : (k -> v -> a -> a) -> a -> Dict k v -> a
+            K::DictFoldr => fun(
+                fun(var(0), fun(var(1), fun(var(2), var(2)))),
+                fun(var(2), fun(dict(var(0), var(1)), var(2))),
+            ),
+            // filter : (k -> v -> Bool) -> Dict k v -> Dict k v
+            K::DictFilter => fun(
+                fun(var(0), fun(var(1), bool_ty())),
+                fun(dict(var(0), var(1)), dict(var(0), var(1))),
+            ),
+            // partition : (k -> v -> Bool) -> Dict k v -> (Dict k v, Dict k v)
+            K::DictPartition => fun(
+                fun(var(0), fun(var(1), bool_ty())),
+                fun(
+                    dict(var(0), var(1)),
+                    tuple2(dict(var(0), var(1)), dict(var(0), var(1))),
+                ),
+            ),
+            // intersect / diff : Dict k v -> Dict k v -> Dict k v
+            K::DictIntersect | K::DictDiff => fun(
+                dict(var(0), var(1)),
+                fun(dict(var(0), var(1)), dict(var(0), var(1))),
+            ),
+            // update : k -> (Maybe v -> Maybe v) -> Dict k v -> Dict k v
+            K::DictUpdate => fun(
+                var(0),
+                fun(
+                    fun(maybe(var(1)), maybe(var(1))),
+                    fun(dict(var(0), var(1)), dict(var(0), var(1))),
+                ),
+            ),
 
             // ── Ipe.Ui layout / element / event (already schemed in kernel_ty) ──
             K::UiLayout => fun(list(attr(var(0))), fun(elem_t(var(0)), html_t(var(0)))),
@@ -7590,6 +7623,13 @@ mod registry_phase_c_tests {
             K::DictMap,
             K::DictInsert,
             K::DictFoldl,
+            K::DictSingleton,
+            K::DictFoldr,
+            K::DictFilter,
+            K::DictPartition,
+            K::DictIntersect,
+            K::DictDiff,
+            K::DictUpdate,
             // Ipe.Ui layout / element / event (17)
             K::UiLayout,
             K::UiLayoutWith,
