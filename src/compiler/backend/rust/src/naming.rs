@@ -641,7 +641,10 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::JsonDecDecodeString => "decode_from_json_string",
         KernelFn::JsonDecField | KernelFn::ConfigField => "decode_field",
         KernelFn::JsonDecAt | KernelFn::ConfigAt => "decode_at",
-        KernelFn::JsonDecIndex => "decode_index",
+        KernelFn::JsonDecIndex | KernelFn::ConfigIndex => "decode_index",
+        KernelFn::ConfigKeyValuePairs => "decode_key_value_pairs",
+        KernelFn::ConfigMaybe => "config_maybe",
+        KernelFn::ConfigDict => "config_dict",
         KernelFn::JsonDecList | KernelFn::ConfigList => "decode_list",
         KernelFn::JsonDecMap | KernelFn::DbDecMap | KernelFn::ConfigMap => "decode_map",
         KernelFn::JsonDecAndThen | KernelFn::DbDecAndThen | KernelFn::ConfigAndThen => {
@@ -651,10 +654,14 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
             "decode_succeed"
         }
         KernelFn::JsonDecFail | KernelFn::DbDecFail | KernelFn::ConfigFail => "decode_fail",
-        KernelFn::JsonDecOneOf => "decode_one_of",
-        KernelFn::JsonDecMap2 | KernelFn::DbDecMap2 => "decode_map2",
-        KernelFn::JsonDecMap3 | KernelFn::DbDecMap3 => "decode_map3",
-        KernelFn::JsonDecMap4 | KernelFn::DbDecMap4 => "decode_map4",
+        KernelFn::JsonDecOneOf | KernelFn::ConfigOneOf => "decode_one_of",
+        KernelFn::JsonDecMap2 | KernelFn::DbDecMap2 | KernelFn::ConfigMap2 => "decode_map2",
+        KernelFn::JsonDecMap3 | KernelFn::DbDecMap3 | KernelFn::ConfigMap3 => "decode_map3",
+        KernelFn::JsonDecMap4 | KernelFn::DbDecMap4 | KernelFn::ConfigMap4 => "decode_map4",
+        KernelFn::ConfigMap5 => "decode_map5",
+        KernelFn::ConfigMap6 => "decode_map6",
+        KernelFn::ConfigMap7 => "decode_map7",
+        KernelFn::ConfigMap8 => "decode_map8",
         // ── JsonDecP pipeline kernels ──────────────────────────────────
         KernelFn::JsonDecPRequired => "decode_pipeline_required",
         KernelFn::JsonDecPOptional => "decode_pipeline_optional",
@@ -714,6 +721,10 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::TaskSucceed => "task_succeed",
         KernelFn::TaskFail => "task_fail",
         KernelFn::TaskMap => "task_map",
+        KernelFn::TaskMap2 => "task_map2",
+        KernelFn::TaskMap3 => "task_map3",
+        KernelFn::TaskMap4 => "task_map4",
+        KernelFn::TaskMap5 => "task_map5",
         KernelFn::TaskAndThen => "task_and_then",
         KernelFn::TaskMapError => "task_map_error",
         KernelFn::TaskOnError => "task_on_error",
@@ -931,7 +942,9 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // ── TEA Cmd / Sub / Time kernels (wired) ────────────────────────
         KernelFn::CmdNone => "cmd_none",
         KernelFn::CmdBatch => "cmd_batch",
-        KernelFn::CmdPerform => "cmd_perform",
+        // `Task.attempt` shares `cmd_perform` (the Task→Cmd bridge), emitted
+        // with args swapped in `emit_tea_call`.
+        KernelFn::CmdPerform | KernelFn::TaskAttempt => "cmd_perform",
         KernelFn::CmdMap => "cmd_map",
         KernelFn::SubNone => "sub_none",
         KernelFn::SubBatch => "sub_batch",

@@ -31,9 +31,10 @@ module Ipe.Config exposing
     , string, int, float, bool
     , nullable
     , field, at
-    , list
+    , list, index, keyValuePairs, dict
     , succeed, fail
-    , map, andThen
+    , map, map2, map3, map4, map5, map6, map7, map8
+    , andThen, oneOf, maybe
     , decodeToml
     , decodeYaml
     , decodeJson
@@ -100,6 +101,24 @@ list : Decoder a -> Decoder (List a)
 list = Ffi.kernel "Config_list"
 
 
+-- | `index n decoder` — decode the n-th element of an array. Fails on
+-- out-of-bounds or non-array input.
+index : Int -> Decoder a -> Decoder a
+index = Ffi.kernel "Config_index"
+
+
+-- | `keyValuePairs decoder` — decode every entry of an object into a list of
+-- `(key, value)` pairs, applying `decoder` to each value.
+keyValuePairs : Decoder a -> Decoder (List ( String, a ))
+keyValuePairs = Ffi.kernel "Config_keyValuePairs"
+
+
+-- | `dict decoder` — decode an object into a `Dict String a`, applying
+-- `decoder` to each value.
+dict : Decoder a -> Decoder (Dict String a)
+dict = Ffi.kernel "Config_dict"
+
+
 -- ─── Combinators ───────────────────────────────────────────────────
 
 
@@ -117,6 +136,53 @@ map = Ffi.kernel "Config_map"
 
 andThen : (a -> Decoder b) -> Decoder a -> Decoder b
 andThen = Ffi.kernel "Config_andThen"
+
+
+-- | `oneOf decoders` — try each decoder in order, returning the first that
+-- succeeds. Fails (with the last branch's error) if none match. Load-bearing
+-- for decoding unions / heterogeneous shapes.
+oneOf : List (Decoder a) -> Decoder a
+oneOf = Ffi.kernel "Config_oneOf"
+
+
+-- | `map2`..`map8` — combine 2..8 decoders over the SAME value with an N-ary
+-- function; the first failing decoder short-circuits. Load-bearing for record
+-- decoding. Each shares the runtime `decode_mapN` (a captured `Decoder` cannot
+-- be forwarded through a Rust closure — IPE-L0126 — so these are kernels, not
+-- pure `andThen`/`map` compositions).
+map2 : (a -> b -> c) -> Decoder a -> Decoder b -> Decoder c
+map2 = Ffi.kernel "Config_map2"
+
+
+map3 : (a -> b -> c -> d) -> Decoder a -> Decoder b -> Decoder c -> Decoder d
+map3 = Ffi.kernel "Config_map3"
+
+
+map4 : (a -> b -> c -> d -> e) -> Decoder a -> Decoder b -> Decoder c -> Decoder d -> Decoder e
+map4 = Ffi.kernel "Config_map4"
+
+
+map5 : (a -> b -> c -> d -> e -> f) -> Decoder a -> Decoder b -> Decoder c -> Decoder d -> Decoder e -> Decoder f
+map5 = Ffi.kernel "Config_map5"
+
+
+map6 : (a -> b -> c -> d -> e -> f -> g) -> Decoder a -> Decoder b -> Decoder c -> Decoder d -> Decoder e -> Decoder f -> Decoder g
+map6 = Ffi.kernel "Config_map6"
+
+
+map7 : (a -> b -> c -> d -> e -> f -> g -> h) -> Decoder a -> Decoder b -> Decoder c -> Decoder d -> Decoder e -> Decoder f -> Decoder g -> Decoder h
+map7 = Ffi.kernel "Config_map7"
+
+
+map8 : (a -> b -> c -> d -> e -> f -> g -> h -> i) -> Decoder a -> Decoder b -> Decoder c -> Decoder d -> Decoder e -> Decoder f -> Decoder g -> Decoder h -> Decoder i
+map8 = Ffi.kernel "Config_map8"
+
+
+-- | `maybe decoder` — succeed with `Just` when `decoder` matches, else `Nothing`
+-- (never fails). Unlike `nullable` (which only tolerates null/missing), `maybe`
+-- catches ANY decode failure.
+maybe : Decoder a -> Decoder (Maybe a)
+maybe = Ffi.kernel "Config_maybe"
 
 
 -- ─── Entry points ──────────────────────────────────────────────────

@@ -1,0 +1,124 @@
+module Main exposing (main)
+
+-- Config decoder-combinator SEAL fixture.
+--
+-- Exercises the P2 combinator surface — `map2`, `oneOf`, `index` — decoding a
+-- JSON document into a record, then rendering it. Proves the combinators lower,
+-- the emitted crate builds, and the program runs: `Cli.program` renders once at
+-- stdin EOF and exits 0.
+
+import Ipe.Cli as Cli
+import Ipe.Config as Config
+import Ipe.Dict as Dict
+
+type Msg
+    = GotLine String
+
+type alias Server =
+    { host : String, port : Int }
+
+type alias Model =
+    { rendered : String }
+
+-- `port` may be an int OR a stringified int — `oneOf` tries both branches.
+portDecoder : Config.Decoder Int
+portDecoder =
+    Config.oneOf
+        [ Config.field "port" Config.int
+        , Config.field "portStr" (Config.map stringPort Config.string)
+        ]
+
+stringPort : String -> Int
+stringPort _s =
+    8080
+
+-- `map2` combines two field decoders into the record. `index` pulls the first
+-- host out of an array.
+serverDecoder : Config.Decoder Server
+serverDecoder =
+    Config.map2 (\h p -> { host = h, port = p })
+        (Config.field "hosts" (Config.index 0 Config.string))
+        portDecoder
+
+
+-- `maybe` never fails; `keyValuePairs` / `dict` exercise the object surface.
+tagsDecoder : Config.Decoder (Maybe (List ( String, Int )))
+tagsDecoder =
+    Config.maybe (Config.field "tags" (Config.keyValuePairs Config.int))
+
+
+limitsDecoder : Config.Decoder (Dict String Int)
+limitsDecoder =
+    Config.field "limits" (Config.dict Config.int)
+
+doc : String
+doc =
+    "{ \"hosts\": [\"alpha\", \"beta\"], \"port\": 5432, \"tags\": { \"a\": 1 }, \"limits\": { \"cpu\": 2 } }"
+
+-- Exercise all combinators: map2 + oneOf + index (serverDecoder), maybe +
+-- keyValuePairs (tagsDecoder), and dict (limitsDecoder).
+render : Model
+render =
+    case Config.decodeJson doc serverDecoder of
+        Ok server ->
+            let
+                tagCount =
+                    case Config.decodeJson doc tagsDecoder of
+                        Ok (Just pairs) ->
+                            List.length pairs
+
+                        Ok Nothing ->
+                            0
+
+                        Err _ ->
+                            -1
+
+                limitCount =
+                    case Config.decodeJson doc limitsDecoder of
+                        Ok limits ->
+                            Dict.size limits
+
+                        Err _ ->
+                            -1
+            in
+            { rendered =
+                server.host
+                    ++ ":"
+                    ++ String.fromInt server.port
+                    ++ " tags="
+                    ++ String.fromInt tagCount
+                    ++ " limits="
+                    ++ String.fromInt limitCount
+            }
+
+        Err _ ->
+            { rendered = "decode failed" }
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( render, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update _msg model =
+    ( model, Cmd.none )
+
+view : Model -> String
+view model =
+    "server: " ++ model.rendered
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+onLine : String -> Msg
+onLine line =
+    GotLine line
+
+main =
+    Cli.program
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , onLine = onLine
+        }

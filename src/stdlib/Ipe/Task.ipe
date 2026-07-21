@@ -7,7 +7,9 @@
 -- (`IpeError::Error(kind, info)`, backlog #85/#160), not a plain `String`.
 module Ipe.Task exposing
     ( succeed, fail
-    , map, andThen
+    , map, map2, map3, map4, map5
+    , andThen
+    , attempt
     , mapError, onError
     , fromResult, andThenResult
     , sequence, parallel
@@ -40,8 +42,30 @@ fail = Ffi.kernel "Task_fail"
 map : (a -> b) -> Task Error a -> Task Error b
 map = Ffi.kernel "Task_map"
 
+-- | `map2`..`map5` — combine 2..5 independent tasks with an N-ary function.
+-- Elm-compatible: effects run in argument order; an early `Err` short-circuits,
+-- so a later task's effects never fire. Use when the effects' order matters even
+-- though the values are independent (for concurrency use `parallel`).
+map2 : (a -> b -> c) -> Task Error a -> Task Error b -> Task Error c
+map2 = Ffi.kernel "Task_map2"
+
+map3 : (a -> b -> c -> d) -> Task Error a -> Task Error b -> Task Error c -> Task Error d
+map3 = Ffi.kernel "Task_map3"
+
+map4 : (a -> b -> c -> d -> e) -> Task Error a -> Task Error b -> Task Error c -> Task Error d -> Task Error e
+map4 = Ffi.kernel "Task_map4"
+
+map5 : (a -> b -> c -> d -> e -> f) -> Task Error a -> Task Error b -> Task Error c -> Task Error d -> Task Error e -> Task Error f
+map5 = Ffi.kernel "Task_map5"
+
 andThen : (a -> Task Error b) -> Task Error a -> Task Error b
 andThen = Ffi.kernel "Task_andThen"
+
+-- | `attempt toMsg task` — run `task` as a `Cmd`, mapping its settled `Result`
+-- to a message. The Task→Cmd bridge that fires a task from `update`; pairs with
+-- `Cmd.perform`.
+attempt : (Result Error a -> msg) -> Task Error a -> Cmd msg
+attempt = Ffi.kernel "Task_attempt"
 
 
 -- ── Error channel ────────────────────────────────────────────────────────────

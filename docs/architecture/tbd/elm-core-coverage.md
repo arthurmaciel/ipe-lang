@@ -507,16 +507,16 @@ Asynchronous operations that may fail.
 | `succeed` | `a -> Task x a` | ✓ (`Ipe.Task.succeed : a -> Task Error a`) |
 | `fail` | `x -> Task x a` | ✓ (`fail : Error -> Task Error a`) |
 | `map` | `(a -> b) -> Task x a -> Task x b` | ✓ |
-| `map2` | `(a -> b -> result) -> Task x a -> Task x b -> Task x result` | ✗ |
-| `map3` | `(a -> b -> c -> result) -> Task x a -> Task x b -> Task x c -> Task x result` | ✗ |
-| `map4` | `(a -> b -> c -> d -> result) -> Task x a -> Task x b -> Task x c -> Task x d -> Task x result` | ✗ |
-| `map5` | `(a -> b -> c -> d -> e -> result) -> Task x a -> Task x b -> Task x c -> Task x d -> Task x e -> Task x result` | ✗ |
+| `map2` | `(a -> b -> result) -> Task x a -> Task x b -> Task x result` | ✓ |
+| `map3` | `(a -> b -> c -> result) -> Task x a -> Task x b -> Task x c -> Task x result` | ✓ |
+| `map4` | `(a -> b -> c -> d -> result) -> Task x a -> Task x b -> Task x c -> Task x d -> Task x result` | ✓ |
+| `map5` | `(a -> b -> c -> d -> e -> result) -> Task x a -> Task x b -> Task x c -> Task x d -> Task x e -> Task x result` | ✓ |
 | `andThen` | `(a -> Task x b) -> Task x a -> Task x b` | ✓ |
 | `sequence` | `List (Task x a) -> Task x (List a)` | ✓ (plus `parallel`) |
 | `onError` | `(x -> Task y a) -> Task x a -> Task y a` | ✓ (fixed `Error` channel) |
 | `mapError` | `(x -> y) -> Task x a -> Task y a` | ✓ (fixed `Error` channel) |
 | `perform` | `(a -> msg) -> Task Never a -> Cmd msg` | ~ (exists as `Cmd.perform`, different module + signature) |
-| `attempt` | `(Result x a -> msg) -> Task x a -> Cmd msg` | ✗ |
+| `attempt` | `(Result x a -> msg) -> Task x a -> Cmd msg` | ✓ (`Ipe.Task.attempt`; `x` fixed to `Error`) |
 
 ---
 

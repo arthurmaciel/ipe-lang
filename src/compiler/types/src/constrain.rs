@@ -4483,6 +4483,50 @@ impl<'a> Builder<'a> {
             K::TaskSucceed => fun(var(0), task(var(0))),
             K::TaskFail => fun(error_ty(), task(var(0))),
             K::TaskMap => fun(fun(var(0), var(1)), fun(task(var(0)), task(var(1)))),
+            // `Task.map2 : (a -> b -> r) -> Task Error a -> Task Error b -> Task Error r`.
+            K::TaskMap2 => fun(
+                fun(var(0), fun(var(1), var(2))),
+                fun(task(var(0)), fun(task(var(1)), task(var(2)))),
+            ),
+            K::TaskMap3 => fun(
+                fun(var(0), fun(var(1), fun(var(2), var(3)))),
+                fun(
+                    task(var(0)),
+                    fun(task(var(1)), fun(task(var(2)), task(var(3)))),
+                ),
+            ),
+            K::TaskMap4 => fun(
+                fun(var(0), fun(var(1), fun(var(2), fun(var(3), var(4))))),
+                fun(
+                    task(var(0)),
+                    fun(
+                        task(var(1)),
+                        fun(task(var(2)), fun(task(var(3)), task(var(4)))),
+                    ),
+                ),
+            ),
+            K::TaskMap5 => fun(
+                fun(
+                    var(0),
+                    fun(var(1), fun(var(2), fun(var(3), fun(var(4), var(5))))),
+                ),
+                fun(
+                    task(var(0)),
+                    fun(
+                        task(var(1)),
+                        fun(
+                            task(var(2)),
+                            fun(task(var(3)), fun(task(var(4)), task(var(5)))),
+                        ),
+                    ),
+                ),
+            ),
+            // `Task.attempt : (Result Error a -> msg) -> Task Error a -> Cmd msg`.
+            // var(0)=a, var(1)=msg. Mirrors `Cmd.perform` with args reordered.
+            K::TaskAttempt => fun(
+                fun(result(error_ty(), var(0)), var(1)),
+                fun(task(var(0)), cmd(var(1))),
+            ),
             K::TaskAndThen => fun(fun(var(0), task(var(1))), fun(task(var(0)), task(var(1)))),
             K::TaskMapError => fun(fun(error_ty(), error_ty()), fun(task(var(0)), task(var(0)))),
             K::TaskOnError => fun(
@@ -6055,6 +6099,140 @@ impl<'a> Builder<'a> {
             K::ConfigFail => fun(string(), dec(var(0))),
             K::ConfigMap => fun(fun(var(0), var(1)), fun(dec(var(0)), dec(var(1)))),
             K::ConfigAndThen => fun(fun(var(0), dec(var(1))), fun(dec(var(0)), dec(var(1)))),
+            // `Config.map2..8 : (a -> .. -> r) -> Decoder a -> .. -> Decoder r`.
+            K::ConfigMap2 => fun(
+                fun(var(0), fun(var(1), var(2))),
+                fun(dec(var(0)), fun(dec(var(1)), dec(var(2)))),
+            ),
+            K::ConfigMap3 => fun(
+                fun(var(0), fun(var(1), fun(var(2), var(3)))),
+                fun(
+                    dec(var(0)),
+                    fun(dec(var(1)), fun(dec(var(2)), dec(var(3)))),
+                ),
+            ),
+            K::ConfigMap4 => fun(
+                fun(var(0), fun(var(1), fun(var(2), fun(var(3), var(4))))),
+                fun(
+                    dec(var(0)),
+                    fun(
+                        dec(var(1)),
+                        fun(dec(var(2)), fun(dec(var(3)), dec(var(4)))),
+                    ),
+                ),
+            ),
+            K::ConfigMap5 => fun(
+                fun(
+                    var(0),
+                    fun(var(1), fun(var(2), fun(var(3), fun(var(4), var(5))))),
+                ),
+                fun(
+                    dec(var(0)),
+                    fun(
+                        dec(var(1)),
+                        fun(
+                            dec(var(2)),
+                            fun(dec(var(3)), fun(dec(var(4)), dec(var(5)))),
+                        ),
+                    ),
+                ),
+            ),
+            K::ConfigMap6 => fun(
+                fun(
+                    var(0),
+                    fun(
+                        var(1),
+                        fun(var(2), fun(var(3), fun(var(4), fun(var(5), var(6))))),
+                    ),
+                ),
+                fun(
+                    dec(var(0)),
+                    fun(
+                        dec(var(1)),
+                        fun(
+                            dec(var(2)),
+                            fun(
+                                dec(var(3)),
+                                fun(dec(var(4)), fun(dec(var(5)), dec(var(6)))),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            K::ConfigMap7 => fun(
+                fun(
+                    var(0),
+                    fun(
+                        var(1),
+                        fun(
+                            var(2),
+                            fun(var(3), fun(var(4), fun(var(5), fun(var(6), var(7))))),
+                        ),
+                    ),
+                ),
+                fun(
+                    dec(var(0)),
+                    fun(
+                        dec(var(1)),
+                        fun(
+                            dec(var(2)),
+                            fun(
+                                dec(var(3)),
+                                fun(
+                                    dec(var(4)),
+                                    fun(dec(var(5)), fun(dec(var(6)), dec(var(7)))),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            K::ConfigMap8 => fun(
+                fun(
+                    var(0),
+                    fun(
+                        var(1),
+                        fun(
+                            var(2),
+                            fun(
+                                var(3),
+                                fun(var(4), fun(var(5), fun(var(6), fun(var(7), var(8))))),
+                            ),
+                        ),
+                    ),
+                ),
+                fun(
+                    dec(var(0)),
+                    fun(
+                        dec(var(1)),
+                        fun(
+                            dec(var(2)),
+                            fun(
+                                dec(var(3)),
+                                fun(
+                                    dec(var(4)),
+                                    fun(
+                                        dec(var(5)),
+                                        fun(dec(var(6)), fun(dec(var(7)), dec(var(8)))),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            // `Config.oneOf : List (Decoder a) -> Decoder a`.
+            K::ConfigOneOf => fun(list(dec(var(0))), dec(var(0))),
+            // `Config.index : Int -> Decoder a -> Decoder a`.
+            K::ConfigIndex => fun(int(), fun(dec(var(0)), dec(var(0)))),
+            // `Config.keyValuePairs : Decoder a -> Decoder (List (String, a))`.
+            K::ConfigKeyValuePairs => {
+                fun(dec(var(0)), dec(list(Ty::Tuple(vec![string(), var(0)]))))
+            }
+            // `Config.maybe : Decoder a -> Decoder (Maybe a)`.
+            K::ConfigMaybe => fun(dec(var(0)), dec(maybe(var(0)))),
+            // `Config.dict : Decoder a -> Decoder (Dict String a)`.
+            K::ConfigDict => fun(dec(var(0)), dec(dict(string(), var(0)))),
             K::ConfigDecodeToml => {
                 fun(string(), fun(dec(var(0)), result(error_ty(), var(0))))
             }
@@ -8535,6 +8713,18 @@ mod registry_phase_c_tests {
             K::ConfigFail,
             K::ConfigMap,
             K::ConfigAndThen,
+            K::ConfigMap2,
+            K::ConfigMap3,
+            K::ConfigMap4,
+            K::ConfigMap5,
+            K::ConfigMap6,
+            K::ConfigMap7,
+            K::ConfigMap8,
+            K::ConfigOneOf,
+            K::ConfigIndex,
+            K::ConfigKeyValuePairs,
+            K::ConfigMaybe,
+            K::ConfigDict,
             K::ConfigDecodeToml,
             K::ConfigDecodeYaml,
             K::ConfigDecodeJson,
@@ -8552,6 +8742,14 @@ mod registry_phase_c_tests {
             // `emit_tea_call`.
             K::CmdMap,
             K::SubMap,
+            // ── Task combinators map2..5 + attempt (Ipê-new) ───────
+            // `map2..5` combine independent tasks; `attempt` bridges a Task into
+            // a Cmd (emit arm in `emit_tea_call`, runtime `cmd_perform`).
+            K::TaskMap2,
+            K::TaskMap3,
+            K::TaskMap4,
+            K::TaskMap5,
+            K::TaskAttempt,
         ]
     };
 

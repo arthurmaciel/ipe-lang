@@ -679,6 +679,199 @@ pub fn decode_map5<
     )
 }
 
+// `map6`/`map7`/`map8` — combine 6/7/8 decoders over the SAME value with an
+// N-ary function. Mirror map2..5 exactly; first Err short-circuits with the real
+// error. Total, no panic.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+pub fn decode_map6<
+    E: From<String> + 'static,
+    A: 'static + Send,
+    B: 'static + Send,
+    C: 'static + Send,
+    D: 'static + Send,
+    G: 'static + Send,
+    H: 'static + Send,
+    R: 'static + Send,
+>(
+    f: impl Fn(A, B, C, D, G, H) -> R + Send + 'static,
+    da: Decoder<E, A>,
+    db: Decoder<E, B>,
+    dc: Decoder<E, C>,
+    dd: Decoder<E, D>,
+    de: Decoder<E, G>,
+    df: Decoder<E, H>,
+) -> Decoder<E, R> {
+    let mut fields = da.fields.clone();
+    union_fields(&mut fields, &db.fields);
+    union_fields(&mut fields, &dc.fields);
+    union_fields(&mut fields, &dd.fields);
+    union_fields(&mut fields, &de.fields);
+    union_fields(&mut fields, &df.fields);
+    Decoder::new(
+        Box::new(move |v| {
+            let a = match (da.run)(v) {
+                IpeResult::Ok(a) => a,
+                IpeResult::Err(e) => return IpeResult::Err(e),
+            };
+            let b = match (db.run)(v) {
+                IpeResult::Ok(b) => b,
+                IpeResult::Err(e) => return IpeResult::Err(e),
+            };
+            let c = match (dc.run)(v) {
+                IpeResult::Ok(c) => c,
+                IpeResult::Err(e) => return IpeResult::Err(e),
+            };
+            let d = match (dd.run)(v) {
+                IpeResult::Ok(d) => d,
+                IpeResult::Err(e) => return IpeResult::Err(e),
+            };
+            let g = match (de.run)(v) {
+                IpeResult::Ok(g) => g,
+                IpeResult::Err(e) => return IpeResult::Err(e),
+            };
+            let h = match (df.run)(v) {
+                IpeResult::Ok(h) => h,
+                IpeResult::Err(e) => return IpeResult::Err(e),
+            };
+            decode_ok(f(a, b, c, d, g, h))
+        }),
+        fields,
+    )
+}
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+pub fn decode_map7<
+    E: From<String> + 'static,
+    A: 'static + Send,
+    B: 'static + Send,
+    C: 'static + Send,
+    D: 'static + Send,
+    G: 'static + Send,
+    H: 'static + Send,
+    I: 'static + Send,
+    R: 'static + Send,
+>(
+    f: impl Fn(A, B, C, D, G, H, I) -> R + Send + 'static,
+    da: Decoder<E, A>,
+    db: Decoder<E, B>,
+    dc: Decoder<E, C>,
+    dd: Decoder<E, D>,
+    de: Decoder<E, G>,
+    df: Decoder<E, H>,
+    dg: Decoder<E, I>,
+) -> Decoder<E, R> {
+    let mut fields = da.fields.clone();
+    union_fields(&mut fields, &db.fields);
+    union_fields(&mut fields, &dc.fields);
+    union_fields(&mut fields, &dd.fields);
+    union_fields(&mut fields, &de.fields);
+    union_fields(&mut fields, &df.fields);
+    union_fields(&mut fields, &dg.fields);
+    Decoder::new(
+        Box::new(move |v| {
+            let a = match (da.run)(v) {
+                IpeResult::Ok(a) => a,
+                IpeResult::Err(e) => return IpeResult::Err(e),
+            };
+            let b = match (db.run)(v) {
+                IpeResult::Ok(b) => b,
+                IpeResult::Err(e) => return IpeResult::Err(e),
+            };
+            let c = match (dc.run)(v) {
+                IpeResult::Ok(c) => c,
+                IpeResult::Err(e) => return IpeResult::Err(e),
+            };
+            let d = match (dd.run)(v) {
+                IpeResult::Ok(d) => d,
+                IpeResult::Err(e) => return IpeResult::Err(e),
+            };
+            let g = match (de.run)(v) {
+                IpeResult::Ok(g) => g,
+                IpeResult::Err(e) => return IpeResult::Err(e),
+            };
+            let h = match (df.run)(v) {
+                IpeResult::Ok(h) => h,
+                IpeResult::Err(e) => return IpeResult::Err(e),
+            };
+            let i = match (dg.run)(v) {
+                IpeResult::Ok(i) => i,
+                IpeResult::Err(e) => return IpeResult::Err(e),
+            };
+            decode_ok(f(a, b, c, d, g, h, i))
+        }),
+        fields,
+    )
+}
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+pub fn decode_map8<
+    E: From<String> + 'static,
+    A: 'static + Send,
+    B: 'static + Send,
+    C: 'static + Send,
+    D: 'static + Send,
+    G: 'static + Send,
+    H: 'static + Send,
+    I: 'static + Send,
+    J: 'static + Send,
+    R: 'static + Send,
+>(
+    f: impl Fn(A, B, C, D, G, H, I, J) -> R + Send + 'static,
+    da: Decoder<E, A>,
+    db: Decoder<E, B>,
+    dc: Decoder<E, C>,
+    dd: Decoder<E, D>,
+    de: Decoder<E, G>,
+    df: Decoder<E, H>,
+    dg: Decoder<E, I>,
+    dh: Decoder<E, J>,
+) -> Decoder<E, R> {
+    let mut fields = da.fields.clone();
+    union_fields(&mut fields, &db.fields);
+    union_fields(&mut fields, &dc.fields);
+    union_fields(&mut fields, &dd.fields);
+    union_fields(&mut fields, &de.fields);
+    union_fields(&mut fields, &df.fields);
+    union_fields(&mut fields, &dg.fields);
+    union_fields(&mut fields, &dh.fields);
+    Decoder::new(
+        Box::new(move |v| {
+            let a = match (da.run)(v) {
+                IpeResult::Ok(a) => a,
+                IpeResult::Err(e) => return IpeResult::Err(e),
+            };
+            let b = match (db.run)(v) {
+                IpeResult::Ok(b) => b,
+                IpeResult::Err(e) => return IpeResult::Err(e),
+            };
+            let c = match (dc.run)(v) {
+                IpeResult::Ok(c) => c,
+                IpeResult::Err(e) => return IpeResult::Err(e),
+            };
+            let d = match (dd.run)(v) {
+                IpeResult::Ok(d) => d,
+                IpeResult::Err(e) => return IpeResult::Err(e),
+            };
+            let g = match (de.run)(v) {
+                IpeResult::Ok(g) => g,
+                IpeResult::Err(e) => return IpeResult::Err(e),
+            };
+            let h = match (df.run)(v) {
+                IpeResult::Ok(h) => h,
+                IpeResult::Err(e) => return IpeResult::Err(e),
+            };
+            let i = match (dg.run)(v) {
+                IpeResult::Ok(i) => i,
+                IpeResult::Err(e) => return IpeResult::Err(e),
+            };
+            let j = match (dh.run)(v) {
+                IpeResult::Ok(j) => j,
+                IpeResult::Err(e) => return IpeResult::Err(e),
+            };
+            decode_ok(f(a, b, c, d, g, h, i, j))
+        }),
+        fields,
+    )
+}
+
 /// `andMap : Decoder a -> Decoder (a -> b) -> Decoder b` — applicative apply.
 /// Ipê's pipe form: `succeed Ctor |> andMap decA |> andMap decB` chains as
 /// `andMap decB (andMap decA (succeed Ctor))` — the VALUE decoder is the first
@@ -762,6 +955,32 @@ pub fn decode_one_of<E: From<String> + 'static, T: 'static + Send>(
                 last_err = Some(r);
             }
             last_err.unwrap_or_else(|| decode_err_str("oneOf: no match".into()))
+        }),
+        vec![],
+    )
+}
+/// `keyValuePairs : Decoder a -> Decoder (List (String, a))` — decode every
+/// entry of a JSON object, applying `decoder` to each value. Non-object input
+/// is `Err`; the first entry whose value fails to decode short-circuits with
+/// its real error. The single decoder instance is built once and reused across
+/// entries (like `decode_list`).
+pub fn decode_key_value_pairs<E: From<String> + 'static, T: 'static + Send>(
+    decoder: impl Fn() -> Decoder<E, T> + Send + 'static,
+) -> Decoder<E, Vec<(String, T)>> {
+    Decoder::new(
+        Box::new(move |v| match v.as_object() {
+            Some(obj) => {
+                let d = decoder();
+                let mut out = Vec::with_capacity(obj.len());
+                for (key, val) in obj {
+                    match (d.run)(val) {
+                        IpeResult::Ok(t) => out.push((key.clone(), t)),
+                        IpeResult::Err(e) => return IpeResult::Err(e),
+                    }
+                }
+                decode_ok(out)
+            }
+            None => decode_err_str("expected object".into()),
         }),
         vec![],
     )
@@ -1530,5 +1749,45 @@ mod optional_tests {
         let dec = build();
         let v: JsonVal = serde_json::json!({ "age": 42 });
         assert!(matches!((dec.run)(&v), IpeResult::Ok(42)));
+    }
+}
+
+#[cfg(test)]
+mod key_value_pairs_tests {
+    use super::*;
+
+    #[test]
+    fn decodes_object_entries() {
+        let dec = decode_key_value_pairs::<String, i64>(json_decode_int);
+        let v: JsonVal = serde_json::json!({ "a": 1, "b": 2 });
+        match (dec.run)(&v) {
+            IpeResult::Ok(mut pairs) => {
+                // serde_json's default Map is key-sorted, so the order is stable.
+                pairs.sort();
+                assert_eq!(pairs, vec![("a".to_owned(), 1), ("b".to_owned(), 2)]);
+            }
+            IpeResult::Err(e) => panic!("expected Ok, got Err({e})"),
+        }
+    }
+
+    #[test]
+    fn non_object_is_err() {
+        let dec = decode_key_value_pairs::<String, i64>(json_decode_int);
+        let v: JsonVal = serde_json::json!([1, 2, 3]);
+        assert!(matches!((dec.run)(&v), IpeResult::Err(_)));
+    }
+
+    #[test]
+    fn value_decode_error_propagates() {
+        let dec = decode_key_value_pairs::<String, i64>(json_decode_int);
+        let v: JsonVal = serde_json::json!({ "a": "not-an-int" });
+        assert!(matches!((dec.run)(&v), IpeResult::Err(_)));
+    }
+
+    #[test]
+    fn empty_object_is_empty_list() {
+        let dec = decode_key_value_pairs::<String, i64>(json_decode_int);
+        let v: JsonVal = serde_json::json!({});
+        assert!(matches!((dec.run)(&v), IpeResult::Ok(ref p) if p.is_empty()));
     }
 }

@@ -70,7 +70,7 @@ decisions live here.
 | `Maybe` | 7 | 0 | 0 | complete |
 | `Result` | 10 | 0 | 0 | complete — `toMaybe`/`fromMaybe` bridges now present |
 | `Char` | 9 | 2 | 2 | `toUpper`/`toLower` return `String`; `isAlphaNum`/`isHexDigit`/`isOctDigit` now present |
-| `Task` | 7 | 1 | 5 | fixed `Error` channel (§6); missing `map2..5`, `attempt` |
+| `Task` | 7 | 1 | 0 | fixed `Error` channel (§6); `map2..5` + `attempt` now present |
 | `Platform.Cmd` | 3 | 0 | 0 | complete — `Cmd.map` now present |
 | `Platform.Sub` | 3 | 0 | 0 | complete — `Sub.map` now present |
 | `Array` | 0 | 0 | 18 | **whole module absent** |
@@ -111,15 +111,15 @@ Ipê's `Ipe.Config` is a single decoder surface — `string`/`int`/`float`/`bool
 
 - **Present (renamed):** the decoder combinator core (`Decoder`, `string`, `int`,
   `float`, `bool`, `nullable`, `field`, `at`, `list`, `succeed`, `fail`, `map`,
-  `andThen`).
-- **Missing:** `map2..8`, `oneOf`, `maybe`, `index`, `keyValuePairs`, `dict`,
-  `array`, `lazy`, `value`/`Value`, `decodeValue`, `errorToString`, `oneOrMore`.
+  `andThen`, `map2..8`, `oneOf`, `maybe`, `index`, `keyValuePairs`, `dict`).
+- **Missing:** `array`, `lazy`, `value`/`Value`, `decodeValue`, `errorToString`,
+  `oneOrMore`.
 - **Missing (whole surface):** `Json.Encode` — there is no first-class typed JSON
   *encoder* value surface; serialization is per-effect (`Http` body helpers, DB).
 - **Justification for the merge:** config-file decoding (TOML/YAML/JSON) is the
   dominant server use case; one `Decoder` over all three avoids three parallel
-  APIs. The gap is the **thin `map2..8`/`oneOf`/`maybe`** combinator set, which is
-  a real usability hole and is filed.
+  APIs. The load-bearing `map2..8`/`oneOf`/`maybe`/`index`/`keyValuePairs`/`dict`
+  combinator set is now present, closing the record/union-decoding gap.
 
 ### 3.2 `elm/time` → `Ipe.Time`
 
