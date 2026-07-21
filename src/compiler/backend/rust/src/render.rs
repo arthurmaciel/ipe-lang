@@ -46,6 +46,15 @@ impl Default for RenderConfig {
 /// begin-line indent. `rustfmt` uses one block-indent step (4).
 const CHAIN_BREAK_INDENT: usize = 4;
 
+/// `rustfmt`'s `fn_call_width` (default 60): the maximum width of a function-call
+/// (or constructor / tuple) ARGUMENT LIST — the text between the parentheses,
+/// excluding the callee and the delimiters — that `rustfmt` keeps on one line.
+/// A call whose flat argument list exceeds this breaks one argument per line even
+/// when the whole line would still fit `max_width`. Macro (`format!` / `vec!`)
+/// argument lists use a different (wrap-to-`max_width`) layout and are not gated
+/// by this width.
+const FN_CALL_WIDTH: usize = 60;
+
 /// Render `doc` to a string starting at column `col` with block indent `indent`.
 /// `col` is where the document's first character will be placed (used for the
 /// fit test); `indent` is the number of leading spaces a broken line receives.
@@ -130,72 +139,22 @@ fn render_at(
         }
         Doc::Group(inner) => {
             let start_col = eff_col(out, col);
-            // A group flattens only if it fits AND carries no `HardLine` (a
-            // statement block's `HardLine`s keep the group broken even when its
-            // flat width would fit). Its own soft `Line`s are what flatten or
-            // break as a unit — that is the standard Wadler `group`.
+            // A group flattens only if its flat form is genuinely single-line and
+            // fits AND it carries no `HardLine`. A statement block's `HardLine`s
+            // keep it broken; a byte-leaf whose text embeds newlines (an
+            // as-yet-unstructured multiline arg carried through the legacy string
+            // emitter) makes the flat form multi-line — rustfmt breaks the enclosing
+            // delimited list one element per line in that case rather than glue the
+            // multiline arg inline. Its own soft `Line`s are what flatten or break
+            // as a unit — the standard Wadler `group`, refined to reject an embedded
+            // newline the width test alone would miss.
             let group_flat =
-                flat || (!has_hard_break(inner) && fits(inner, cfg, start_col, indent));
+                flat || (!has_hard_break(inner) && fits_single_line(inner, cfg, start_col, indent));
             render_at(inner, cfg, indent, start_col, group_flat, out);
         }
-        Doc::BraceBody(body) => {
-            let start_col = eff_col(out, col);
-            // The body braces only when it does not fit flat here — `rustfmt` re-
-            // tests the closure/arm body against the width on its own line, so this
-            // decision is independent of any enclosing group. A `HardLine` inside
-            // the body (a statement-block body) can never fit, so it always braces.
-            let body_flat = flat || (!has_hard_break(body) && fits(body, cfg, start_col, indent));
-            if body_flat {
-                render_at(body, cfg, indent, start_col, true, out);
-            } else {
-                out.push('{');
-                render_at(
-                    &Doc::Nest(4, Box::new(Doc::HardLine)),
-                    cfg,
-                    indent,
-                    start_col,
-                    false,
-                    out,
-                );
-                let c = current_col(out);
-                render_at(body, cfg, indent + 4, c, false, out);
-                out.push('\n');
-                push_indent(indent, out);
-                out.push('}');
-            }
-        }
+        Doc::BraceBody(body) => render_brace_body(body, cfg, indent, col, flat, out),
         Doc::MatchArmTail { body, control } => {
-            let start_col = eff_col(out, col);
-            // The arm body stays inline (with a trailing comma) when it fits on the
-            // arm's line. A `HardLine` body (a prelude block arm) never fits, so it
-            // always takes the broken path.
-            let body_flat = !has_hard_break(body) && fits(body, cfg, start_col, indent);
-            if body_flat {
-                render_at(body, cfg, indent, start_col, true, out);
-                out.push(',');
-            } else if *control {
-                // A control/paren body that breaks is wrapped in synthesized braces
-                // and the trailing comma is dropped — `rustfmt`'s arm-brace form.
-                out.push('{');
-                render_at(
-                    &Doc::Nest(4, Box::new(Doc::HardLine)),
-                    cfg,
-                    indent,
-                    start_col,
-                    false,
-                    out,
-                );
-                let c = current_col(out);
-                render_at(body, cfg, indent + 4, c, false, out);
-                out.push('\n');
-                push_indent(indent, out);
-                out.push('}');
-            } else {
-                // A delimited-tail body breaks inside its own brackets; the trailing
-                // comma is kept.
-                render_at(body, cfg, indent, start_col, false, out);
-                out.push(',');
-            }
+            render_match_arm_tail(body, *control, cfg, indent, col, out);
         }
         Doc::Assign {
             prefix,
@@ -207,6 +166,96 @@ fn render_at(
         Doc::Chain { operands } => {
             render_chain(operands, cfg, indent, col, flat, out);
         }
+        Doc::CallArgs {
+            open,
+            elems,
+            close,
+            trailing_comma,
+        } => {
+            render_call_args(
+                open,
+                elems,
+                close,
+                *trailing_comma,
+                cfg,
+                indent,
+                col,
+                flat,
+                out,
+            );
+        }
+    }
+}
+
+/// Render a [`Doc::BraceBody`]: the body inline (no braces) when it fits flat here,
+/// else `{`, the body on its own line at one indent step, `}` dedented back.
+/// `rustfmt` re-tests the closure/arm body against the width on its own line, so the
+/// decision is independent of any enclosing group; a `HardLine` body always braces.
+fn render_brace_body(
+    body: &Doc,
+    cfg: RenderConfig,
+    indent: usize,
+    col: usize,
+    flat: bool,
+    out: &mut String,
+) {
+    let start_col = eff_col(out, col);
+    let body_flat = flat || (!has_hard_break(body) && fits(body, cfg, start_col, indent));
+    if body_flat {
+        render_at(body, cfg, indent, start_col, true, out);
+        return;
+    }
+    out.push('{');
+    render_at(
+        &Doc::Nest(4, Box::new(Doc::HardLine)),
+        cfg,
+        indent,
+        start_col,
+        false,
+        out,
+    );
+    let c = current_col(out);
+    render_at(body, cfg, indent + 4, c, false, out);
+    out.push('\n');
+    push_indent(indent, out);
+    out.push('}');
+}
+
+/// Render a [`Doc::MatchArmTail`]: the body plus its trailing comma per `rustfmt`'s
+/// arm brace/comma rule. Inline `body,` when it fits; a broken CONTROL body is
+/// wrapped in synthesized braces (comma dropped); a broken DELIMITED-tail body
+/// breaks inside its own brackets (comma kept). A `HardLine` body always breaks.
+fn render_match_arm_tail(
+    body: &Doc,
+    control: bool,
+    cfg: RenderConfig,
+    indent: usize,
+    col: usize,
+    out: &mut String,
+) {
+    let start_col = eff_col(out, col);
+    let body_flat = !has_hard_break(body) && fits(body, cfg, start_col, indent);
+    if body_flat {
+        render_at(body, cfg, indent, start_col, true, out);
+        out.push(',');
+    } else if control {
+        out.push('{');
+        render_at(
+            &Doc::Nest(4, Box::new(Doc::HardLine)),
+            cfg,
+            indent,
+            start_col,
+            false,
+            out,
+        );
+        let c = current_col(out);
+        render_at(body, cfg, indent + 4, c, false, out);
+        out.push('\n');
+        push_indent(indent, out);
+        out.push('}');
+    } else {
+        render_at(body, cfg, indent, start_col, false, out);
+        out.push(',');
     }
 }
 
@@ -321,7 +370,11 @@ fn has_hard_break(doc: &Doc) -> bool {
         | Doc::BraceBody(_)
         | Doc::MatchArmTail { .. }
         | Doc::Assign { .. }
-        | Doc::Chain { .. } => false,
+        | Doc::Chain { .. }
+        // A `CallArgs` decides its own layout independently (like `Group`), so it
+        // hides its own breaks — a combinable call inside another does not force
+        // the outer to break its whole list; the combining rule glues instead.
+        | Doc::CallArgs { .. } => false,
         Doc::Concat(docs) => docs.iter().any(has_hard_break),
         Doc::Nest(_, inner) => has_hard_break(inner),
     }
@@ -355,6 +408,25 @@ fn fits(doc: &Doc, cfg: RenderConfig, start_col: usize, indent: usize) -> bool {
     render_at(doc, cfg, indent, start_col, true, &mut scratch);
     let first_line = scratch.split('\n').next().unwrap_or(&scratch);
     start_col + first_line.len() <= cfg.max_width
+}
+
+/// Whether `doc` rendered flat from column `start_col` is genuinely single-line
+/// AND fits the width. Stricter than [`fits`]: a flat render that still carries a
+/// newline — a byte-leaf whose legacy-emitter text embeds a multiline block — is
+/// NOT single-line, so the enclosing [`Doc::Group`] must break its delimited list
+/// one element per line rather than glue the multiline element inline. This is the
+/// call-argument-head-glue rule: `rustfmt` keeps a call head glued and lays a
+/// structured multiline argument out in place ONLY through the dedicated
+/// [`Doc::BraceBody`] closure/arm shape; a plain multiline delimited element breaks
+/// the whole list. Groups with only soft `Line`/`Softline` breaks never embed a
+/// newline in their flat form, so this coincides with [`fits`] for them.
+fn fits_single_line(doc: &Doc, cfg: RenderConfig, start_col: usize, indent: usize) -> bool {
+    let mut scratch = String::new();
+    render_at(doc, cfg, indent, start_col, true, &mut scratch);
+    if scratch.contains('\n') {
+        return false;
+    }
+    start_col + scratch.len() <= cfg.max_width
 }
 
 /// Render a binop chain with rustfmt's layout.
@@ -450,6 +522,370 @@ fn render_chain(
         out.push(' ');
         let c = current_col(out);
         render_at(&operand.doc, cfg, shared_indent, c, false, out);
+    }
+}
+
+/// Render a bracket-delimited argument list with `rustfmt`'s call-argument
+/// COMBINING rule. See [`Doc::CallArgs`]. `col` is where `open`'s first character
+/// lands; `indent` is the enclosing block indent.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "renderer threads open/close/col/indent/flat"
+)]
+fn render_call_args(
+    open: &Doc,
+    elems: &[Doc],
+    close: &Doc,
+    trailing_comma: bool,
+    cfg: RenderConfig,
+    indent: usize,
+    col: usize,
+    flat: bool,
+    out: &mut String,
+) {
+    let start_col = eff_col(out, col);
+
+    // FLAT: the whole `open a, b close` is genuinely single-line, fits the width,
+    // and its argument text fits `fn_call_width`. An enclosing group that already
+    // chose flat forces this too.
+    if flat || call_args_flat_fits(open, elems, close, cfg, start_col, indent) {
+        render_at(open, cfg, indent, start_col, true, out);
+        render_flat_elems(elems, cfg, indent, out);
+        let c = current_col(out);
+        render_at(close, cfg, indent, c, true, out);
+        return;
+    }
+
+    // COMBINED (last-argument overflow / head-glue): the LAST element is a
+    // combinable construct, and the head + every preceding argument (flat) + the
+    // last element's own first line all fit on the first line within the width and
+    // `fn_call_width`. `rustfmt` glues them and lets the last element break IN PLACE
+    // at the current block indent — FORCED broken so it provides the multiline the
+    // combine needs — then glues `close` onto its closing line: `f(a, g(\n …\n))` /
+    // `f(g(\n …\n))` for the sole-argument case. No trailing comma.
+    if let Some((last, prefix)) = elems.split_last() {
+        // Outermost combine: the `fn_call_width` budget is measured from where THIS
+        // call's arguments begin, and shared by every nested combine below.
+        if last_arg_combines(open, prefix, last, None, cfg, start_col, indent).is_some() {
+            render_at(open, cfg, indent, start_col, false, out);
+            let base = current_col(out);
+            for e in prefix {
+                let c = current_col(out);
+                render_at(e, cfg, indent, c, true, out);
+                out.push_str(", ");
+            }
+            render_forced_break(last, base, cfg, indent, current_col(out), out);
+            let c = current_col(out);
+            render_at(close, cfg, indent, c, false, out);
+            return;
+        }
+    }
+
+    // ONE-PER-LINE: `open`, each element on its own line at one indent step, a
+    // break-conditional trailing comma (suppressed for a macro list), the close
+    // dedented back to the group's start column.
+    render_at(open, cfg, indent, start_col, false, out);
+    let inner_indent = indent + CHAIN_BREAK_INDENT;
+    let last = elems.len().saturating_sub(1);
+    for (i, e) in elems.iter().enumerate() {
+        out.push('\n');
+        push_indent(inner_indent, out);
+        let c = current_col(out);
+        render_at(e, cfg, inner_indent, c, false, out);
+        if i < last || trailing_comma {
+            out.push(',');
+        }
+    }
+    out.push('\n');
+    push_indent(indent, out);
+    let c = current_col(out);
+    render_at(close, cfg, indent, c, false, out);
+}
+
+/// Whether the flat single-line form `open a, b close` may lay out flat from
+/// `start_col`. Three conditions: it is genuinely single-line (no element embeds a
+/// newline — a statement block forces the broken layout); the whole line fits
+/// `max_width`; and, for a function-call/ctor/tuple list (`trailing_comma`), the
+/// argument text (between the delimiters) fits `fn_call_width`. `rustfmt` breaks a
+/// call whose argument list exceeds `fn_call_width` one argument per line even when
+/// the whole line would still fit `max_width`. A macro list (`format!` / `vec!`,
+/// `trailing_comma == false`) is not gated by `fn_call_width` here — it uses a
+/// wrap-to-`max_width` layout decided elsewhere.
+fn call_args_flat_fits(
+    open: &Doc,
+    elems: &[Doc],
+    close: &Doc,
+    cfg: RenderConfig,
+    start_col: usize,
+    indent: usize,
+) -> bool {
+    // The full flat line, for the single-line + `max_width` checks.
+    let mut scratch = String::new();
+    render_at(open, cfg, indent, start_col, true, &mut scratch);
+    let open_end = current_col(&scratch);
+    render_flat_elems(elems, cfg, indent, &mut scratch);
+    let elems_end = current_col(&scratch);
+    render_at(close, cfg, indent, elems_end, true, &mut scratch);
+    if scratch.contains('\n') {
+        return false;
+    }
+    if start_col + scratch.len() > cfg.max_width {
+        return false;
+    }
+    // `fn_call_width`: an argument list wider than 60 columns breaks even when the
+    // whole line still fits `max_width`. The argument text is the span from just
+    // after the opening delimiter to just before the closing one. This gates
+    // function calls, constructors, tuples AND macro (`format!` / `vec!`) lists —
+    // `rustfmt` applies the same 60-column argument budget to all of them.
+    let args_width = elems_end.saturating_sub(open_end);
+    if args_width > FN_CALL_WIDTH {
+        return false;
+    }
+    true
+}
+
+/// Render the elements flat, separated by `, ` — the shared flat body of a
+/// [`Doc::CallArgs`] (no trailing comma, matching the string emitter's join).
+fn render_flat_elems(elems: &[Doc], cfg: RenderConfig, indent: usize, out: &mut String) {
+    for (i, e) in elems.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        let c = current_col(out);
+        render_at(e, cfg, indent, c, true, out);
+    }
+}
+
+/// Whether the LAST element of a [`Doc::CallArgs`] can be COMBINED with the head
+/// under `rustfmt`'s last-argument-overflow / combining rule — and if so, the
+/// column its first character lands on (right after the flat `open a, b, ` head).
+/// `open` and every preceding argument glue onto the first line, the last element
+/// breaks in place (forced), and `close` glues onto its closing line, rather than
+/// the whole list breaking one argument per line.
+///
+/// Gates, all required:
+///
+///   * STRUCTURAL — the last element must be a combinable construct: its own
+///     braced/bracketed break — a [`Doc::CallArgs`] (call / macro / ctor / tuple /
+///     list) or a brace block (a closure body / statement block opening with `{`),
+///     possibly behind a leading `Box::new(` / `Some(` wrapper. A [`Doc::Chain`]
+///     (a parenthesized operator run) and a parenthesized statement block
+///     (`({ … })`) are NOT combinable — `rustfmt` breaks the outer list instead.
+///   * PREFIX-FLAT — every preceding argument must sit flat on the first line.
+///   * FIRST-LINE FIT — the head + preceding args + the last element's own
+///     forced-broken first line must fit `max_width`, and the combined ARGUMENT
+///     text on the first line must fit `fn_call_width` (the same budget a flat
+///     call list obeys) so a call whose combined head overflows breaks one-per-line
+///     instead.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "renderer threads combine base + col/indent"
+)]
+fn last_arg_combines(
+    open: &Doc,
+    prefix: &[Doc],
+    last: &Doc,
+    combine_base: Option<usize>,
+    cfg: RenderConfig,
+    start_col: usize,
+    indent: usize,
+) -> Option<usize> {
+    // A SINGLE-argument call glues its argument's head freely (the combine chain
+    // "may nest further, as long as all but the innermost construct have only a
+    // single argument"); a MULTI-argument call overflows its LAST argument only when
+    // that argument is a DELIMITED expression (a block / closure / tuple / array /
+    // struct) — not a plain nested function call — subject to `fn_call_width`.
+    let single_arg = prefix.is_empty();
+    if single_arg {
+        if !is_glue_shape(last) {
+            return None;
+        }
+    } else if !is_delimited_expr(last) {
+        return None;
+    }
+    // Build the first-line prefix (`open a, b, `) flat to find where `last` lands.
+    let mut scratch = String::new();
+    render_at(open, cfg, indent, start_col, true, &mut scratch);
+    let open_end = current_col(&scratch);
+    for e in prefix {
+        let c = current_col(&scratch);
+        render_at(e, cfg, indent, c, true, &mut scratch);
+        scratch.push_str(", ");
+    }
+    if scratch.contains('\n') {
+        // A preceding argument is itself multiline — it cannot sit flat.
+        return None;
+    }
+    let last_col = start_col + scratch.len();
+    if last_col > cfg.max_width {
+        return None;
+    }
+    // The `fn_call_width` budget is measured from the OUTERMOST combining call's
+    // argument-start column, shared by this and every nested combine — a deep glue
+    // chain shares one 60-column budget, so an over-wide combined head breaks at
+    // the level where the budget runs out rather than gluing indefinitely.
+    let base = combine_base.unwrap_or(open_end);
+    // A single-argument call glues ONLY when its argument cannot itself sit flat
+    // within the shared budget — i.e. the argument's flat form (from the shared
+    // base) overflows `fn_call_width`, or it is intrinsically multiline. When the
+    // argument fits flat within that budget, `rustfmt` breaks the single-argument
+    // call one-per-line to give the flat argument its own line rather than gluing.
+    if single_arg && !has_hard_break(last) {
+        let mut flat = String::new();
+        render_at(last, cfg, indent, last_col, true, &mut flat);
+        if !flat.contains('\n') && (last_col + flat.len()).saturating_sub(base) <= FN_CALL_WIDTH {
+            return None;
+        }
+    }
+    // Render the last element FORCED broken from that column; its first line is the
+    // combined head's tail.
+    let mut tail = String::new();
+    render_forced_break(last, base, cfg, indent, last_col, &mut tail);
+    let first = tail.split('\n').next().unwrap_or("");
+    let first_line_end = last_col + first.len();
+    if first_line_end > cfg.max_width {
+        return None;
+    }
+    // A multi-argument overflow's combined first line obeys `fn_call_width`; a
+    // single-argument glue chain is exempt (it only nests through single-arg heads).
+    if !single_arg && first_line_end.saturating_sub(base) > FN_CALL_WIDTH {
+        return None;
+    }
+    Some(last_col)
+}
+
+/// Render `doc` at `col` in FORCED-broken mode: a combinable construct is laid out
+/// multiline even when its own width would fit flat, because it is the multiline
+/// target of an enclosing call-argument combine. A [`Doc::CallArgs`] recurses the
+/// combine on ITS last argument (sharing `combine_base` for the `fn_call_width`
+/// budget), else breaks its argument list one per line; any other doc falls back to
+/// the standard non-flat render (a statement block / closure body already breaks).
+fn render_forced_break(
+    doc: &Doc,
+    combine_base: usize,
+    cfg: RenderConfig,
+    indent: usize,
+    col: usize,
+    out: &mut String,
+) {
+    match doc {
+        Doc::CallArgs {
+            open,
+            elems,
+            close,
+            trailing_comma,
+        } => {
+            let start_col = eff_col(out, col);
+            // Recurse the combine on the last argument first; if it does not apply,
+            // fall through to the one-per-line break. The shared `combine_base` keeps
+            // the `fn_call_width` budget anchored at the outermost combine.
+            if let Some((last, prefix)) = elems.split_last()
+                && last_arg_combines(
+                    open,
+                    prefix,
+                    last,
+                    Some(combine_base),
+                    cfg,
+                    start_col,
+                    indent,
+                )
+                .is_some()
+            {
+                render_at(open, cfg, indent, start_col, false, out);
+                for e in prefix {
+                    let c = current_col(out);
+                    render_at(e, cfg, indent, c, true, out);
+                    out.push_str(", ");
+                }
+                render_forced_break(last, combine_base, cfg, indent, current_col(out), out);
+                let c = current_col(out);
+                render_at(close, cfg, indent, c, false, out);
+                return;
+            }
+            // One argument per line.
+            render_at(open, cfg, indent, start_col, false, out);
+            let inner_indent = indent + CHAIN_BREAK_INDENT;
+            let last = elems.len().saturating_sub(1);
+            for (i, e) in elems.iter().enumerate() {
+                out.push('\n');
+                push_indent(inner_indent, out);
+                let c = current_col(out);
+                render_at(e, cfg, inner_indent, c, false, out);
+                if i < last || *trailing_comma {
+                    out.push(',');
+                }
+            }
+            out.push('\n');
+            push_indent(indent, out);
+            let c = current_col(out);
+            render_at(close, cfg, indent, c, false, out);
+        }
+        // A wrapper like `Box::new(<CallArgs>)`: force-break the inner construct.
+        Doc::Concat(parts) => {
+            for p in parts {
+                let c = eff_col(out, col);
+                match p {
+                    Doc::CallArgs { .. } => {
+                        render_forced_break(p, combine_base, cfg, indent, c, out);
+                    }
+                    _ => render_at(p, cfg, indent, c, false, out),
+                }
+            }
+        }
+        // Any other doc breaks on its own (a block / closure body carries a
+        // `HardLine`); render it non-flat.
+        _ => render_at(doc, cfg, indent, col, false, out),
+    }
+}
+
+/// Whether `doc` is a GLUE-shaped construct for the SINGLE-argument combine chain:
+/// a [`Doc::CallArgs`] (any call / macro / ctor / tuple / list whose own delimiters
+/// the outer head glues onto), a brace block (`{ … }`), or either behind a leading
+/// `Box::new(` / `Some(` text wrapper. A [`Doc::Chain`] and a parenthesized
+/// statement block (`({ … })`) are NOT glue-shaped.
+fn is_glue_shape(doc: &Doc) -> bool {
+    match doc {
+        Doc::CallArgs { .. } => true,
+        Doc::Concat(parts) => match parts.first() {
+            // A brace block `{ … }` (closure body / statement block).
+            Some(Doc::Text(head)) if head == "{" => true,
+            // A `Box::new(<inner>)` / `Some(<inner>)` wrapper: a `(`-terminated head
+            // (NOT a `({` paren-block), the inner glue construct, then a `)` tail.
+            Some(Doc::Text(head)) if head.ends_with('(') && !head.contains('{') => {
+                parts.get(1).is_some_and(is_glue_shape)
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// Whether `doc` is a DELIMITED EXPRESSION for the MULTI-argument last-argument
+/// overflow rule (`rustfmt`'s `overflow_delimited_expr`): a brace block / closure
+/// body (`{ … }`), a tuple (`(…)`), or an array (`vec![…]`). A nested function CALL
+/// or constructor is NOT a delimited expr for this rule — a multi-argument call
+/// whose last argument is a plain call breaks one argument per line rather than
+/// overflowing. A `Box::new(<delimited>)` wrapper counts (its inner is delimited).
+fn is_delimited_expr(doc: &Doc) -> bool {
+    match doc {
+        Doc::CallArgs { open, elems, .. } => match open.as_ref() {
+            // A tuple `(` or an array `vec![` / `[`.
+            Doc::Text(h) if h.as_ref() == "(" || h.ends_with('[') => true,
+            // A `Box::new(<delimited>)` / `Some(<delimited>)` single-arg wrapper:
+            // delimited iff its inner is (its own `(`-ended named head).
+            Doc::Text(h) if h.ends_with('(') && !h.contains('{') && elems.len() == 1 => {
+                elems.first().is_some_and(is_delimited_expr)
+            }
+            _ => false,
+        },
+        Doc::Concat(parts) => match parts.first() {
+            Some(Doc::Text(head)) if head == "{" => true,
+            Some(Doc::Text(head)) if head.ends_with('(') && !head.contains('{') => {
+                parts.get(1).is_some_and(is_delimited_expr)
+            }
+            _ => false,
+        },
+        _ => false,
     }
 }
 
@@ -988,5 +1424,145 @@ mod p0_tests {
             got.contains("\n    g(p, q)\n"),
             "inner group should flatten inside a broken outer group:\n{got}"
         );
+    }
+
+    /// A function-call argument list `name(args)` as a [`Doc::CallArgs`] with a
+    /// break-conditional trailing comma. `args` are plain text leaves.
+    fn callargs(name: &'static str, args: &[&'static str]) -> Doc {
+        Doc::call_args(
+            Doc::owned(format!("{name}(")),
+            args.iter().map(|a| Doc::owned((*a).to_owned())).collect(),
+            Doc::text(")"),
+            true,
+        )
+    }
+
+    #[test]
+    fn call_args_flat_when_args_fit_fn_call_width() {
+        // A call whose argument text fits `fn_call_width` (60) and whose line fits
+        // `max_width` stays inline.
+        let doc = callargs("some_call", &["a", "b"]);
+        assert_eq!(render(&doc, RenderConfig::default()), "some_call(a, b)");
+    }
+
+    #[test]
+    fn call_args_break_one_per_line_when_args_exceed_fn_call_width() {
+        // A call whose ARGUMENT text exceeds `fn_call_width` (60) breaks one argument
+        // per line with a trailing comma, even though the whole line still fits
+        // `max_width` (100). Byte-golden from `rustfmt --edition 2024
+        // --style-edition 2024`.
+        let doc = callargs(
+            "some_call",
+            &[
+                "argument_that_is_quite_long_enough_x",
+                "argument_that_is_quite_long_enough_y",
+            ],
+        );
+        let got = render(&doc, RenderConfig::default());
+        let expected = "some_call(\n    argument_that_is_quite_long_enough_x,\n    argument_that_is_quite_long_enough_y,\n)";
+        assert_eq!(
+            got, expected,
+            "\n--- got ---\n{got}\n--- want ---\n{expected}"
+        );
+    }
+
+    #[test]
+    fn call_args_single_arg_head_glue_chain_breaks_innermost() {
+        // Nested single-argument calls glue their heads onto one line and the
+        // innermost (a macro whose args exceed `fn_call_width`) breaks in place, its
+        // closing delimiters collapsing onto the final line — `rustfmt`'s combining
+        // rule. Byte-golden from `rustfmt --edition 2024 --style-edition 2024`.
+        let inner = Doc::call_args(
+            Doc::text("format!("),
+            vec![
+                Doc::text("\"{}{}\""),
+                Doc::text("\"a\".to_string()"),
+                Doc::text("\"b\".to_string()"),
+            ],
+            Doc::text(")"),
+            false,
+        );
+        let mid = Doc::call_args(
+            Doc::text("string_to_upper("),
+            vec![inner],
+            Doc::text(")"),
+            true,
+        );
+        let doc = Doc::call_args(Doc::text("log_println("), vec![mid], Doc::text(")"), true);
+        let got = render(&doc, RenderConfig::default());
+        let expected = "log_println(string_to_upper(format!(\n    \"{}{}\",\n    \"a\".to_string(),\n    \"b\".to_string()\n)))";
+        assert_eq!(
+            got, expected,
+            "\n--- got ---\n{got}\n--- want ---\n{expected}"
+        );
+    }
+
+    #[test]
+    fn call_args_multi_arg_overflows_trailing_block() {
+        // A multi-argument call whose LAST argument is a delimited BLOCK overflows it
+        // in place: the head + preceding args glue on the first line and the block
+        // breaks below (`overflow_delimited_expr`). Byte-golden from `rustfmt
+        // --edition 2024 --style-edition 2024`.
+        let block = Doc::concat(vec![
+            Doc::text("{"),
+            Doc::nest(
+                4,
+                Doc::concat(vec![
+                    Doc::HardLine,
+                    Doc::text("let __ipe_fn: i64 = 1;"),
+                    Doc::HardLine,
+                    Doc::text("__ipe_fn"),
+                ]),
+            ),
+            Doc::HardLine,
+            Doc::text("}"),
+        ]);
+        let doc = Doc::call_args(
+            Doc::text("ipe_result_map("),
+            vec![Doc::text("ok_res(2)"), block],
+            Doc::text(")"),
+            true,
+        );
+        let got = render(&doc, RenderConfig::default());
+        let expected = "ipe_result_map(ok_res(2), {\n    let __ipe_fn: i64 = 1;\n    __ipe_fn\n})";
+        assert_eq!(
+            got, expected,
+            "\n--- got ---\n{got}\n--- want ---\n{expected}"
+        );
+    }
+
+    #[test]
+    fn call_args_flat_render_matches_seal_leaves() {
+        // SEAL: a `CallArgs`'s normalized leaf sequence carries the delimiters and
+        // elements joined by `, ` and NO trailing comma (the string emitter never
+        // writes it) — so a FLAT render normalizes equal to the leaves. The broken
+        // one-per-line render adds a SEAL-invisible trailing comma (like the plain
+        // delimited group), so only the flat render matches byte-for-byte.
+        let doc = callargs("f", &["a", "b"]);
+        assert_eq!(doc.normalized_leaves(), "f(a, b)");
+        assert_eq!(
+            crate::doc::whitespace_normalize(&render(&doc, RenderConfig::default())),
+            doc.normalized_leaves(),
+        );
+    }
+
+    #[test]
+    fn call_args_trailing_comma_is_seal_invisible_when_broken() {
+        // The one-per-line trailing comma is NOT part of the SEAL leaf sequence: the
+        // leaves are width-invariant (`f(a, b)`) whether or not the render breaks.
+        let doc = callargs(
+            "some_call",
+            &[
+                "argument_that_is_quite_long_enough_x",
+                "argument_that_is_quite_long_enough_y",
+            ],
+        );
+        assert_eq!(
+            doc.normalized_leaves(),
+            "some_call(argument_that_is_quite_long_enough_x, argument_that_is_quite_long_enough_y)",
+        );
+        // The broken render carries a trailing comma the leaves do not — exactly the
+        // documented SEAL-invisible divergence, mirroring `Doc::IfBroken`.
+        assert!(render(&doc, RenderConfig::default()).contains("_y,\n)"));
     }
 }
