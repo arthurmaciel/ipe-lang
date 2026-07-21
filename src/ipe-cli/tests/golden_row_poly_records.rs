@@ -21,7 +21,7 @@
 //! | `row_poly_subset_pattern` | P5, P7 | accept | subset `case` pattern AND subset lambda pattern (through `List.map`) over a superset scrutinee; emitted pattern completes to the superset struct (`RecAgeName { age: _, name, .. }`); `IPE_E2E=1` prints `Iri: Ada, Bo` |
 //! | `row_poly_closed_superset_neg` | P4 | reject | CLOSED record annotation called with a superset arg → IPE-T0001 |
 //! | `row_poly_two_supersets_neg` | P6 (class-1 tripwire) | reject | unannotated let-bound getter called with two DIFFERENT superset shapes → IPE-T0001 |
-//! | `row_poly_annotation_gap` | P1 (gap canary) | reject | row-var record annotation `{ r \| f : T }` does not parse → IPE-P0001 |
+//! | `row_poly_annotation_gap` | P1 (gap canary) | reject | row-var record annotation `{ r \| f : T }` parses + type-checks, rejected at lowering → IPE-L0131 (backend monomorphisation deferred) |
 //! | `row_poly_accessor` | P8 | accept | first-class accessor `.name` (desugars to `\r -> r.name`) through `List.map` over a superset list; emits a concrete getter closure over the superset struct; `IPE_E2E=1` prints `Ada, Bo` |
 //!
 //! Run the E2E accept-path bodies (real `cargo build` + run) with:
@@ -303,22 +303,29 @@ fn two_different_supersets_is_ipe_t0001() {
 }
 
 // ---------------------------------------------------------------------------
-// row_poly_annotation_gap — P1, the completeness-gap canary. Reject,
-// IPE-P0001. Compile-time only, no gate.
+// row_poly_annotation_gap — P1, the completeness-gap canary. Now parses and
+// TYPE-CHECKS (the type layer models the open row); rejected at LOWERING,
+// IPE-L0131, because the backend cannot yet monomorphise the callee per
+// record shape. Compile-time only, no gate.
 // ---------------------------------------------------------------------------
 
-/// The row-var record annotation syntax `{ r | name : String }` does not
-/// parse — IPE-P0001 ("found `|`, expected `:`"). The
-/// reference parses this, types the row var, and monomorphises the callee
-/// per record-shape instantiation in its backend; ipê's backend cannot yet
-/// do the per-shape monomorphisation the syntax would require, so the
-/// syntax stays fail-closed at parse rather than accepting a program the
-/// backend cannot emit. This test is the canary named in
-/// docs/adr/0018-row-poly-records-pinned-before-lowering.md "Gap filed" — it
-/// MUST start failing (and force a re-read of that section) the moment the
-/// syntax begins to parse.
+/// The row-var record annotation syntax `{ r | name : String }` parses and
+/// type-checks — the type layer models the open row and accepts the program.
+/// It is rejected at LOWERING with IPE-L0131, because the Rust backend emits
+/// one struct per exact field set and cannot yet emit a callee once per
+/// record shape at its call sites (per-record-shape callee monomorphisation).
+/// The reference parses this, types the row var, and monomorphises the callee
+/// per record-shape instantiation in its backend; ipê fails closed at the
+/// lowering boundary — exactly the layer that cannot yet emit — rather than
+/// at parse. This test is the canary named in
+/// docs/adr/0018-row-poly-records-pinned-before-lowering.md "Gap filed": the
+/// front half of the chain (parser + AST + canon + `from_canon` + type layer)
+/// is now in place; the deferred backend monomorphisation is what IPE-L0131
+/// still gates. It MUST start failing (and force a re-read of that section)
+/// the moment the backend gains per-record-shape monomorphisation and the
+/// program begins to BUILD.
 #[test]
-fn row_var_annotation_is_ipe_p0001() {
+fn row_var_annotation_is_ipe_l0131() {
     let name = "row_poly_annotation_gap";
     let entry = golden_dir(name).join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_out"));
@@ -333,10 +340,10 @@ fn row_var_annotation_is_ipe_p0001() {
     let Err(err) = res else { return };
     assert_eq!(
         diag_code(&err),
-        Some(ipe_diagnostics::IPE_P0001),
-        "row-var record annotation `{{ r | f : T }}` must be IPE-P0001 \
-         (unsupported syntax, fail-closed) until the backend gains \
-         per-record-shape callee monomorphisation; err = {err}"
+        Some(ipe_diagnostics::IPE_L0131),
+        "row-var record annotation `{{ r | f : T }}` must fail closed at \
+         lowering with IPE-L0131 (parses + type-checks; backend cannot yet \
+         monomorphise the callee per record shape); err = {err}"
     );
     assert!(
         !out.join("src").join("main.rs").exists(),

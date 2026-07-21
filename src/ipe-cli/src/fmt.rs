@@ -978,7 +978,27 @@ impl Printer<'_> {
                 format!("( {} )", parts.join(", "))
             }
             TypeAnnotation::TRecord(fields) => self.type_record(fields, indent, false),
+            TypeAnnotation::TRecordOpen(row_var, fields) => {
+                self.type_record_open(*row_var, fields, indent)
+            }
         }
+    }
+
+    /// Render a row-polymorphic record TYPE `{ r | field : T, … }`. The open
+    /// tail always keeps the record on one line — the row var makes it a
+    /// signature fragment, never a wide `type alias` body, so the modal
+    /// multi-line trigger `type_record` honours does not apply.
+    fn type_record_open(
+        &self,
+        row_var: ipe_intern::Symbol,
+        fields: &[(ipe_intern::Symbol, TypeAnnotation)],
+        indent: usize,
+    ) -> String {
+        let parts: Vec<String> = fields
+            .iter()
+            .map(|(n, ty)| format!("{} : {}", self.sym(*n), self.type_annotation(ty, indent)))
+            .collect();
+        format!("{{ {} | {} }}", self.sym(row_var), parts.join(", "))
     }
 
     /// Render a record TYPE `{ field : T, … }`. `force_multi` reproduces

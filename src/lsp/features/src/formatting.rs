@@ -377,6 +377,20 @@ fn push_type_annotation(
             }
             out.push_str(" }");
         }
+        ipe_syntax::TypeAnnotation::TRecordOpen(row_var, fields) => {
+            out.push_str("{ ");
+            out.push_str(resolve(*row_var));
+            out.push_str(" | ");
+            for (i, (name, ty)) in fields.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(resolve(*name));
+                out.push_str(" : ");
+                push_type_annotation(out, ty, interner);
+            }
+            out.push_str(" }");
+        }
     }
 }
 

@@ -1334,6 +1334,63 @@ mod tests {
     }
 
     #[test]
+    fn open_record_type_annotation_parses_into_a_trecordopen() {
+        // `getName : { r | name : String } -> String` — a row-polymorphic
+        // record type. The annotation's argument is a `TRecordOpen(r, [(name,
+        // String)])`, mirroring the Haskell reference's
+        // `TRecord fields (Just rowVar)`.
+        let mut i = Interner::new();
+        let src = format!(
+            "{HDR}getName : {{ r | name : String }} -> String\ngetName rec =\n    rec.name\n"
+        );
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "open-record annotation must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let shape = find_value(&m, &i, "getName").and_then(|v| v.type_annotation.clone());
+        assert!(
+            shape.is_some_and(|ann| matches!(
+                &ann.value,
+                TypeAnnotation::TLambda(arg, _)
+                    if matches!(
+                        &**arg,
+                        TypeAnnotation::TRecordOpen(_, fields)
+                            if fields.len() == 1
+                                && matches!(
+                                    fields.first(),
+                                    Some((_, TypeAnnotation::TType(_, _, _)))
+                                )
+                    )
+            )),
+            "argument is `{{ r | name : String }}` — a 1-field TRecordOpen"
+        );
+    }
+
+    #[test]
+    fn open_record_type_with_multiple_fields_parses() {
+        // `{ r | first : a, second : b }` — the row var precedes a
+        // comma-separated field list, kept in source order.
+        let mut i = Interner::new();
+        let src =
+            format!("{HDR}f : {{ r | first : a, second : b }} -> a\nf rec =\n    rec.first\n");
+        let m = parse_module(&src, &mut i);
+        assert!(
+            m.is_ok(),
+            "multi-field open-record annotation must parse: {m:?}"
+        );
+        let Ok(m) = m else { return };
+        let arity = find_value(&m, &i, "f")
+            .and_then(|v| v.type_annotation.clone())
+            .and_then(|ann| match ann.value {
+                TypeAnnotation::TLambda(arg, _) => match *arg {
+                    TypeAnnotation::TRecordOpen(_, fields) => Some(fields.len()),
+                    _ => None,
+                },
+                _ => None,
+            });
+        assert_eq!(arity, Some(2), "argument is a 2-field TRecordOpen");
+    }
+
+    #[test]
     fn empty_record_type_parses_into_empty_trecord() {
         // `{}` in type position is the empty record type — valid, yields `TRecord []`.
         // Mirrors the Haskell reference (Type.hs line 131-133):

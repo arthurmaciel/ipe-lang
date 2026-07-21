@@ -309,4 +309,10 @@ pub enum TypeAnnotation {
     /// field list. Mirrors the Haskell compiler's `Src.TRecord`, narrowed to the
     /// closed-record subset (no row variable / extension form).
     TRecord(Vec<(Symbol, Self)>),
+    /// A row-polymorphic (open) record type `{ r | field : T, ... }`. The row
+    /// variable `r` names the unnamed tail of extra fields the record may
+    /// carry; the named fields are the ones the annotation constrains. A value
+    /// of this type is any record carrying *at least* the listed fields.
+    /// Mirrors the Haskell compiler's `Src.TRecord fields (Just rowVar)`.
+    TRecordOpen(Symbol, Vec<(Symbol, Self)>),
 }

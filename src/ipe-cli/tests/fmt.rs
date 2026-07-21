@@ -89,6 +89,12 @@ fn fixtures() -> Vec<(&'static str, String)> {
             "exposing_multiline_grouped",
             "module M exposing\n    ( A\n    , b, c\n    , d\n    )\n\n\nb =\n    1\n".to_owned(),
         ),
+        // A row-polymorphic record annotation `{ r | field : T }` round-trips
+        // with the row variable and `|` preserved on one line.
+        (
+            "open_record_signature",
+            "module M exposing (getName)\n\n\ngetName : { r | name : String } -> String\ngetName rec =\n    rec.name\n".to_owned(),
+        ),
     ]
 }
 
