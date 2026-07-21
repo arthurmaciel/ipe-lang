@@ -1,0 +1,43 @@
+# Token-level scan for authored abrupt-failure constructs in the compiler and
+# runtime's own Rust — the second, independent gate behind clippy (see
+# docs/adr/0037-no-authored-abrupt-failure.md). It lexes rather than greps, so it
+# is free of string/comment false positives and line-split false negatives.
+#
+# Report-only for now (continue-on-error): it prints the residual sites while the
+# exception-ledger burndown lands. Flip continue-on-error to false to make it a
+# hard gate once the residuals are ledgered or eliminated.
+name: panic-scan
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'src/**/*.rs'
+      - 'runtime/**/*.rs'
+      - 'tools/panic-scan/**'
+      - '.github/workflows/panic-scan.yml'
+  pull_request:
+    paths:
+      - 'src/**/*.rs'
+      - 'runtime/**/*.rs'
+      - 'tools/panic-scan/**'
+      - '.github/workflows/panic-scan.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  panic-scan:
+    runs-on: ubuntu-latest
+    continue-on-error: true      # report-only until the ledger burndown lands
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build the scanner
+        run: cargo build --release --manifest-path tools/panic-scan/Cargo.toml
+      - name: Scan production Rust (skips /tests/ and #[cfg(test)])
+        run: |
+          # `.rs` under src/ and runtime/, excluding integration-test crates.
+          mapfile -t files < <(find src runtime -name '*.rs' -not -path '*/tests/*')
+          tools/panic-scan/target/release/panic-scan "${files[@]}"
