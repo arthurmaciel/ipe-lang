@@ -10,6 +10,15 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.8](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.7...ipe-v0.1.8) (2026-07-21)
+
+
+### Features
+
+* **ffi:** [#354](https://github.com/arthurmaciel/ipe-lang/issues/354) opaque struct fields / enum payloads ([#57](https://github.com/arthurmaciel/ipe-lang/issues/57)) ([41af8c7](https://github.com/arthurmaciel/ipe-lang/commit/41af8c77b55e55422ab08c76a8db91ae84595c0a))
+* **ffi:** async-returning provide.closure ([#55](https://github.com/arthurmaciel/ipe-lang/issues/55)) ([8bce55b](https://github.com/arthurmaciel/ipe-lang/commit/8bce55badf5c678df9e4066fa0a78e0c75dc28b2))
+* **security:** token-scanner gate + clippy hardening for authored abrupt-failure ([#54](https://github.com/arthurmaciel/ipe-lang/issues/54)) ([843a17b](https://github.com/arthurmaciel/ipe-lang/commit/843a17baedb626ed4ec90bec2ad02e14fb61a67b))
+
 ## [0.1.7](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.6...ipe-v0.1.7) (2026-07-21)
 
 
