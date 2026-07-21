@@ -10,6 +10,19 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.2](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.1...ipe-v0.1.2) (2026-07-21)
+
+
+### Features
+
+* [#337](https://github.com/arthurmaciel/ipe-lang/issues/337) row-polymorphic record annotations { r | f : T } ([#14](https://github.com/arthurmaciel/ipe-lang/issues/14)) ([d0c2514](https://github.com/arthurmaciel/ipe-lang/commit/d0c2514f1aa80ce22161a7fbcdabe3c8ca77eb78))
+* **backend:** [#315](https://github.com/arthurmaciel/ipe-lang/issues/315) recursive-Shape combine + chain glue — sweep 9→5 ([#16](https://github.com/arthurmaciel/ipe-lang/issues/16)) ([29ff276](https://github.com/arthurmaciel/ipe-lang/commit/29ff2761462b48145a9794d875287bff9d7c894a))
+
+
+### Bug Fixes
+
+* **explain:** github issue links + trailing newline ([#18](https://github.com/arthurmaciel/ipe-lang/issues/18)) ([f8fbc6f](https://github.com/arthurmaciel/ipe-lang/commit/f8fbc6fa78359c0461a9739d0a5b41243a739a02))
+
 ## [0.1.1](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.0...ipe-v0.1.1) (2026-07-21)
 
 
