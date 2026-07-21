@@ -2811,6 +2811,45 @@ impl<'a> Builder<'a> {
                 return self.structure(FlatType::Fun(s, inner));
             }
             // ── end Basics numerics ────────────────────────────────────
+            // `List.sum : number a => List a -> a` / `List.product`. The list
+            // element and the result share ONE number-bounded super-var (ADD for
+            // sum, MUL for product — the same obligation `+` / `*` mint), so a
+            // non-numeric element fails closed instead of emitting an unbounded
+            // `list_sum::<T>`. Direct-build (not `stdlib_scheme` + tie) so both
+            // the element and the result collapse to one bounded var.
+            if matches!(k, StdlibKernel::ListSum | StdlibKernel::ListProduct) {
+                let bound = if matches!(k, StdlibKernel::ListSum) {
+                    TyBounds::add()
+                } else {
+                    TyBounds::mul()
+                };
+                let s = self.super_var(bound, span)?;
+                let list_s = self.list_var(s)?;
+                return self.structure(FlatType::Fun(list_s, s));
+            }
+            // `List.maximum / minimum : comparable a => List a -> Maybe a`. The
+            // element carries the ORDERING obligation (same as `Math.min/max`);
+            // the result is `Maybe a` over that bounded var. Direct-build so the
+            // element and the Maybe payload share the one bounded super-var.
+            if matches!(k, StdlibKernel::ListMaximum | StdlibKernel::ListMinimum) {
+                let s = self.super_var(TyBounds::ord(), span)?;
+                let list_s = self.list_var(s)?;
+                let maybe_s = self.structure(FlatType::Con {
+                    module: Vec::new(),
+                    name: self.builtins.maybe,
+                    args: vec![s],
+                })?;
+                return self.structure(FlatType::Fun(list_s, maybe_s));
+            }
+            // `List.sort : comparable a => List a -> List a`. The element carries
+            // the ORDERING obligation; input and output share the one bounded
+            // super-var. Direct-build (not `stdlib_scheme` + tie).
+            if matches!(k, StdlibKernel::ListSort) {
+                let s = self.super_var(TyBounds::ord(), span)?;
+                let list_s = self.list_var(s)?;
+                let list_s2 = self.list_var(s)?;
+                return self.structure(FlatType::Fun(list_s, list_s2));
+            }
             // `Basics.toString : a -> String`. The argument carries the
             // STRINGIFY obligation (a bounded super-var → Rust `IpeStringify`):
             // a scalar / record / ADT satisfies it, a bare function (or a value
@@ -2841,6 +2880,17 @@ impl<'a> Builder<'a> {
                 if let Some(&key_var) = vars.get(&0) {
                     let s = self.super_var(bound, span)?;
                     self.eq(span, key_var, s);
+                }
+                // `Set.map : (a -> b) -> Set a -> Set b` — the RESULT element
+                // `b` (raw scheme-var 1) also backs a `BTreeSet<b>`, so it
+                // carries the same `set_elem` (Ord) obligation as the source
+                // element. Without this a generic `Set.map` would emit an
+                // unbounded `set_map::<A, B>` that `cargo` rejects (B: Ord unmet).
+                if matches!(k, StdlibKernel::SetMap)
+                    && let Some(&res_var) = vars.get(&1)
+                {
+                    let s = self.super_var(bound, span)?;
+                    self.eq(span, res_var, s);
                 }
                 return Ok(var);
             }
@@ -4101,6 +4151,80 @@ impl<'a> Builder<'a> {
             // Production never reaches this arm (obligation pre-check early-returns
             // the bounded scheme); it exists so `stdlib_scheme` is total.
             K::ListSortBy => fun(fun(var(0), var(1)), fun(list(var(0)), list(var(0)))),
+            // sort : comparable a => List a -> List a — BASE scheme only (Ord
+            // obligation layered in `constrain_var_kernel`, keyed off id).
+            K::ListSort => fun(list(var(0)), list(var(0))),
+            // sortWith : (a -> a -> Order) -> List a -> List a — fully generic
+            // (the comparator supplies the ordering), so no obligation is needed.
+            K::ListSortWith => fun(
+                fun(var(0), fun(var(0), order())),
+                fun(list(var(0)), list(var(0))),
+            ),
+            // singleton : a -> List a
+            K::ListSingleton => fun(var(0), list(var(0))),
+            // repeat : Int -> a -> List a
+            K::ListRepeat => fun(int(), fun(var(0), list(var(0)))),
+            // sum / product : number a => List a -> a — BASE scheme only
+            // (number obligation layered in `constrain_var_kernel`).
+            K::ListSum | K::ListProduct => fun(list(var(0)), var(0)),
+            // maximum / minimum : comparable a => List a -> Maybe a — BASE
+            // scheme only (Ord obligation layered in `constrain_var_kernel`).
+            K::ListMaximum | K::ListMinimum => fun(list(var(0)), maybe(var(0))),
+            // intersperse : a -> List a -> List a
+            K::ListIntersperse => fun(var(0), fun(list(var(0)), list(var(0)))),
+            // partition : (a -> Bool) -> List a -> (List a, List a)
+            K::ListPartition => fun(
+                fun(var(0), bool_ty()),
+                fun(list(var(0)), tuple2(list(var(0)), list(var(0)))),
+            ),
+            // unzip : List (a, b) -> (List a, List b)
+            K::ListUnzip => fun(
+                list(tuple2(var(0), var(1))),
+                tuple2(list(var(0)), list(var(1))),
+            ),
+            // map2 : (a -> b -> r) -> List a -> List b -> List r.
+            // vars: 0=a, 1=b, 2=r.
+            K::ListMap2 => fun(
+                fun(var(0), fun(var(1), var(2))),
+                fun(list(var(0)), fun(list(var(1)), list(var(2)))),
+            ),
+            // map3 : (a -> b -> c -> r) -> List a -> List b -> List c -> List r.
+            // vars: 0=a, 1=b, 2=c, 3=r.
+            K::ListMap3 => fun(
+                fun(var(0), fun(var(1), fun(var(2), var(3)))),
+                fun(
+                    list(var(0)),
+                    fun(list(var(1)), fun(list(var(2)), list(var(3)))),
+                ),
+            ),
+            // map4 : (a -> b -> c -> d -> r) -> List a..d -> List r. vars 0..4.
+            K::ListMap4 => fun(
+                fun(var(0), fun(var(1), fun(var(2), fun(var(3), var(4))))),
+                fun(
+                    list(var(0)),
+                    fun(
+                        list(var(1)),
+                        fun(list(var(2)), fun(list(var(3)), list(var(4)))),
+                    ),
+                ),
+            ),
+            // map5 : (a -> b -> c -> d -> e -> r) -> List a..e -> List r. vars 0..5.
+            K::ListMap5 => fun(
+                fun(
+                    var(0),
+                    fun(var(1), fun(var(2), fun(var(3), fun(var(4), var(5))))),
+                ),
+                fun(
+                    list(var(0)),
+                    fun(
+                        list(var(1)),
+                        fun(
+                            list(var(2)),
+                            fun(list(var(3)), fun(list(var(4)), list(var(5)))),
+                        ),
+                    ),
+                ),
+            ),
 
             // ── Basics core Prelude (6 — slice) ──
             K::BasicsNot => fun(bool_ty(), bool_ty()),
@@ -4339,6 +4463,10 @@ impl<'a> Builder<'a> {
                 fun(var(0), result(var(2), var(1))),
                 fun(list(var(0)), result(var(2), list(var(1)))),
             ),
+            // `toMaybe : Result e a -> Maybe a`. var(0)=e, var(1)=a.
+            K::ResultToMaybe => fun(result(var(0), var(1)), maybe(var(1))),
+            // `fromMaybe : e -> Maybe a -> Result e a`. var(0)=e, var(1)=a.
+            K::ResultFromMaybe => fun(var(0), fun(maybe(var(1)), result(var(0), var(1)))),
 
             // ── Bytes ──
             K::BytesEmpty => bytes(),
@@ -4737,6 +4865,25 @@ impl<'a> Builder<'a> {
             K::SetUnion | K::SetIntersect | K::SetDiff => {
                 fun(set(var(0)), fun(set(var(0)), set(var(0))))
             }
+            // isEmpty : Set a -> Bool
+            K::SetIsEmpty => fun(set(var(0)), bool_ty()),
+            // singleton : a -> Set a
+            K::SetSingleton => fun(var(0), set(var(0))),
+            // foldl / foldr : (a -> b -> b) -> b -> Set a -> b
+            K::SetFoldl | K::SetFoldr => fun(
+                fun(var(0), fun(var(1), var(1))),
+                fun(var(1), fun(set(var(0)), var(1))),
+            ),
+            // map : (a -> b) -> Set a -> Set b (var 0=a AND var 1=b carry the
+            // set_elem Ord obligation, layered in constrain_var_kernel).
+            K::SetMap => fun(fun(var(0), var(1)), fun(set(var(0)), set(var(1)))),
+            // filter : (a -> Bool) -> Set a -> Set a
+            K::SetFilter => fun(fun(var(0), bool_ty()), fun(set(var(0)), set(var(0)))),
+            // partition : (a -> Bool) -> Set a -> (Set a, Set a)
+            K::SetPartition => fun(
+                fun(var(0), bool_ty()),
+                fun(set(var(0)), tuple2(set(var(0)), set(var(0)))),
+            ),
 
             // ── Dict (base schemes; the `dict_key` obligation is layered in
             //    constrain_var_kernel, keyed off the id) ──
@@ -4765,6 +4912,39 @@ impl<'a> Builder<'a> {
             K::DictUnion => fun(
                 dict(var(0), var(1)),
                 fun(dict(var(0), var(1)), dict(var(0), var(1))),
+            ),
+            // singleton : k -> v -> Dict k v
+            K::DictSingleton => fun(var(0), fun(var(1), dict(var(0), var(1)))),
+            // foldr : (k -> v -> a -> a) -> a -> Dict k v -> a
+            K::DictFoldr => fun(
+                fun(var(0), fun(var(1), fun(var(2), var(2)))),
+                fun(var(2), fun(dict(var(0), var(1)), var(2))),
+            ),
+            // filter : (k -> v -> Bool) -> Dict k v -> Dict k v
+            K::DictFilter => fun(
+                fun(var(0), fun(var(1), bool_ty())),
+                fun(dict(var(0), var(1)), dict(var(0), var(1))),
+            ),
+            // partition : (k -> v -> Bool) -> Dict k v -> (Dict k v, Dict k v)
+            K::DictPartition => fun(
+                fun(var(0), fun(var(1), bool_ty())),
+                fun(
+                    dict(var(0), var(1)),
+                    tuple2(dict(var(0), var(1)), dict(var(0), var(1))),
+                ),
+            ),
+            // intersect / diff : Dict k v -> Dict k v -> Dict k v
+            K::DictIntersect | K::DictDiff => fun(
+                dict(var(0), var(1)),
+                fun(dict(var(0), var(1)), dict(var(0), var(1))),
+            ),
+            // update : k -> (Maybe v -> Maybe v) -> Dict k v -> Dict k v
+            K::DictUpdate => fun(
+                var(0),
+                fun(
+                    fun(maybe(var(1)), maybe(var(1))),
+                    fun(dict(var(0), var(1)), dict(var(0), var(1))),
+                ),
             ),
 
             // ── Ipe.Ui layout / element / event (already schemed in kernel_ty) ──
@@ -5120,12 +5300,37 @@ impl<'a> Builder<'a> {
             K::StringPadLeft | K::StringPadRight => {
                 fun(int(), fun(char(), fun(string(), string())))
             }
+            // left / right : Int -> String -> String
+            K::StringLeft | K::StringRight => fun(int(), fun(string(), string())),
+            // cons : Char -> String -> String
+            K::StringCons => fun(char(), fun(string(), string())),
+            // uncons : String -> Maybe (Char, String)
+            K::StringUncons => fun(string(), maybe(tuple2(char(), string()))),
+            // pad : Int -> Char -> String -> String
+            K::StringPad => fun(int(), fun(char(), fun(string(), string()))),
+            // indexes : String -> String -> List Int
+            K::StringIndexes => fun(string(), fun(string(), list(int()))),
+            // map : (Char -> Char) -> String -> String
+            K::StringMap => fun(fun(char(), char()), fun(string(), string())),
+            // filter : (Char -> Bool) -> String -> String
+            K::StringFilter => fun(fun(char(), bool_ty()), fun(string(), string())),
+            // foldl / foldr : (Char -> b -> b) -> b -> String -> b
+            K::StringFoldl | K::StringFoldr => fun(
+                fun(char(), fun(var(0), var(0))),
+                fun(var(0), fun(string(), var(0))),
+            ),
+            // any / all : (Char -> Bool) -> String -> Bool
+            K::StringAny | K::StringAll => fun(fun(char(), bool_ty()), fun(string(), bool_ty())),
 
             // ── Char (8) — `Char -> …`; `toLower`/`toUpper` return a 1-rune
             //    String (runtime `char_to_lower : char -> String`). ──
-            K::CharIsAlpha | K::CharIsDigit | K::CharIsLower | K::CharIsUpper => {
-                fun(char(), bool_ty())
-            }
+            K::CharIsAlpha
+            | K::CharIsDigit
+            | K::CharIsLower
+            | K::CharIsUpper
+            | K::CharIsAlphaNum
+            | K::CharIsHexDigit
+            | K::CharIsOctDigit => fun(char(), bool_ty()),
             K::CharToLower | K::CharToUpper => fun(char(), string()),
             K::CharToCode => fun(char(), int()),
             K::CharFromCode => fun(int(), char()),
@@ -7460,6 +7665,13 @@ mod registry_phase_c_tests {
             K::SetUnion,
             K::SetIntersect,
             K::SetDiff,
+            K::SetIsEmpty,
+            K::SetSingleton,
+            K::SetFoldl,
+            K::SetFoldr,
+            K::SetMap,
+            K::SetFilter,
+            K::SetPartition,
             // Dict (14) — base scheme; dict_key obligation layered in constrain_var_kernel
             K::DictEmpty,
             K::DictIsEmpty,
@@ -7475,6 +7687,13 @@ mod registry_phase_c_tests {
             K::DictMap,
             K::DictInsert,
             K::DictFoldl,
+            K::DictSingleton,
+            K::DictFoldr,
+            K::DictFilter,
+            K::DictPartition,
+            K::DictIntersect,
+            K::DictDiff,
+            K::DictUpdate,
             // Ipe.Ui layout / element / event (17)
             K::UiLayout,
             K::UiLayoutWith,
@@ -7584,6 +7803,18 @@ mod registry_phase_c_tests {
             K::StringContainsIn,
             K::StringStartsWithIn,
             K::StringEndsWithIn,
+            K::StringLeft,
+            K::StringRight,
+            K::StringCons,
+            K::StringUncons,
+            K::StringPad,
+            K::StringIndexes,
+            K::StringMap,
+            K::StringFilter,
+            K::StringFoldl,
+            K::StringFoldr,
+            K::StringAny,
+            K::StringAll,
             // Char (8)
             K::CharIsAlpha,
             K::CharIsDigit,
@@ -7593,6 +7824,9 @@ mod registry_phase_c_tests {
             K::CharToUpper,
             K::CharToCode,
             K::CharFromCode,
+            K::CharIsAlphaNum,
+            K::CharIsHexDigit,
+            K::CharIsOctDigit,
             // Error (13 — Ipe.Error minimal `Error = String` slice)
             K::ErrorUnexpected,
             K::ErrorInvalidInput,
@@ -7739,6 +7973,21 @@ mod registry_phase_c_tests {
             // List filterMap/sortBy (2).
             K::ListFilterMap,
             K::ListSortBy,
+            K::ListSort,
+            K::ListSortWith,
+            K::ListSingleton,
+            K::ListRepeat,
+            K::ListSum,
+            K::ListProduct,
+            K::ListMaximum,
+            K::ListMinimum,
+            K::ListIntersperse,
+            K::ListPartition,
+            K::ListUnzip,
+            K::ListMap2,
+            K::ListMap3,
+            K::ListMap4,
+            K::ListMap5,
             // Basics core Prelude (6 — slice).
             K::BasicsNot,
             K::BasicsIdentity,
@@ -7783,6 +8032,8 @@ mod registry_phase_c_tests {
             K::ResultAndMap,
             K::ResultCombine,
             K::ResultTraverse,
+            K::ResultToMaybe,
+            K::ResultFromMaybe,
             K::MaybeMap2,
             K::MaybeMap3,
             K::MaybeMap4,

@@ -13090,6 +13090,7 @@ impl<'a> Lowerer<'a> {
             Callee::Kernel(
                 KernelFn::StringFromInt
                 | KernelFn::StringFromFloat
+                | KernelFn::StringUncons
                 | KernelFn::StringLength
                 | KernelFn::StringIsEmpty
                 | KernelFn::StringReverse
@@ -13117,6 +13118,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::CharToUpper
                 | KernelFn::CharToCode
                 | KernelFn::CharFromCode
+                | KernelFn::CharIsAlphaNum
+                | KernelFn::CharIsHexDigit
+                | KernelFn::CharIsOctDigit
                 | KernelFn::LogPrintln
                 | KernelFn::LogInfo
                 | KernelFn::LogDebug
@@ -13128,6 +13132,13 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ListReverse
                 | KernelFn::ListConcat
                 | KernelFn::ListIsEmpty
+                | KernelFn::ListSort
+                | KernelFn::ListSingleton
+                | KernelFn::ListSum
+                | KernelFn::ListProduct
+                | KernelFn::ListMaximum
+                | KernelFn::ListMinimum
+                | KernelFn::ListUnzip
                 | KernelFn::BasicsNot
                 | KernelFn::BasicsToString
                 | KernelFn::BasicsIdentity
@@ -13142,6 +13153,7 @@ impl<'a> Lowerer<'a> {
                 // ── Result/Maybe combine — arity 1 ─────────────────────
                 | KernelFn::ResultCombine
                 | KernelFn::MaybeCombine
+                | KernelFn::ResultToMaybe
                 // ── Dict arity-1 ─────────────────────────────────────────────
                 | KernelFn::DictIsEmpty
                 | KernelFn::DictSize
@@ -13151,6 +13163,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DictFromList
                 // ── Set arity-1 ──────────────────────────────────────────────
                 | KernelFn::SetSize
+                | KernelFn::SetIsEmpty
+                | KernelFn::SetSingleton
                 | KernelFn::SetToList
                 | KernelFn::SetFromList
                 // ── Bytes arity-1 ────────────────────────────────────────────
@@ -13358,6 +13372,14 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::StringRepeat
                 | KernelFn::StringDropLeft
                 | KernelFn::StringDropRight
+                | KernelFn::StringLeft
+                | KernelFn::StringRight
+                | KernelFn::StringCons
+                | KernelFn::StringIndexes
+                | KernelFn::StringMap
+                | KernelFn::StringFilter
+                | KernelFn::StringAny
+                | KernelFn::StringAll
                 | KernelFn::ListMap
                 | KernelFn::ListFilter
                 | KernelFn::ListMember
@@ -13375,6 +13397,10 @@ impl<'a> Lowerer<'a> {
                 // ── List batch ────────────────────────────────────────
                 | KernelFn::ListFilterMap
                 | KernelFn::ListSortBy
+                | KernelFn::ListSortWith
+                | KernelFn::ListRepeat
+                | KernelFn::ListIntersperse
+                | KernelFn::ListPartition
                 | KernelFn::BasicsAlways
                 | KernelFn::BasicsModBy
                 | KernelFn::LogInfoWith
@@ -13391,6 +13417,7 @@ impl<'a> Lowerer<'a> {
                 // ── Result/Maybe andMap + Result.traverse — arity 2 ────
                 | KernelFn::ResultAndMap
                 | KernelFn::ResultTraverse
+                | KernelFn::ResultFromMaybe
                 | KernelFn::MaybeAndMap
                 | KernelFn::MathMin
                 | KernelFn::MathMax
@@ -13406,6 +13433,11 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DictRemove
                 | KernelFn::DictUnion
                 | KernelFn::DictMap
+                | KernelFn::DictSingleton
+                | KernelFn::DictFilter
+                | KernelFn::DictPartition
+                | KernelFn::DictIntersect
+                | KernelFn::DictDiff
                 // ── Set arity-2 ──────────────────────────────────────────────
                 | KernelFn::SetMember
                 | KernelFn::SetInsert
@@ -13413,6 +13445,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::SetUnion
                 | KernelFn::SetIntersect
                 | KernelFn::SetDiff
+                | KernelFn::SetMap
+                | KernelFn::SetFilter
+                | KernelFn::SetPartition
                 // ── Bytes arity-2 ────────────────────────────────────────────
                 | KernelFn::BytesAppend
                 // ── JsonEnc arity-2 ─────────────────────────────────────
@@ -13570,12 +13605,20 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::StringSlice
                 | KernelFn::StringPadLeft
                 | KernelFn::StringPadRight
+                | KernelFn::StringPad
+                | KernelFn::StringFoldl
+                | KernelFn::StringFoldr
                 | KernelFn::BasicsClamp
                 | KernelFn::ListFoldl
                 | KernelFn::ListFoldr
+                // ── Set arity-3 ──────────────────────────────────────────────
+                | KernelFn::SetFoldl
+                | KernelFn::SetFoldr
                 // ── Dict arity-3 ─────────────────────────────────────────────
                 | KernelFn::DictInsert
                 | KernelFn::DictFoldl
+                | KernelFn::DictFoldr
+                | KernelFn::DictUpdate
                 // ── Bytes arity-3 ────────────────────────────────────────────
                 | KernelFn::BytesSlice
                 // ── JsonDec arity-3 ─────────────────────────────────────
@@ -13619,7 +13662,9 @@ impl<'a> Lowerer<'a> {
                 // `withClaim : String -> String -> Claims -> Claims`
                 | KernelFn::JwtWithClaim
                 // `Jwt.decode : Algorithm -> Int -> String -> Result Error String`
-                | KernelFn::JwtDecode,
+                | KernelFn::JwtDecode
+                // `List.map2 : (a -> b -> r) -> List a -> List b -> List r`
+                | KernelFn::ListMap2,
             ) => Ok(3),
             // ── JsonDec arity-4 ─────────────────────────────────────────
             Callee::Kernel(
@@ -13648,7 +13693,9 @@ impl<'a> Lowerer<'a> {
                 // `Middleware.withRateLimit : String -> Int -> Int -> Handler -> Handler`
                 | KernelFn::MiddlewareWithRateLimit
                 // `RateLimit.allow : String -> String -> Int -> Int -> Bool`
-                | KernelFn::RateLimitAllow,
+                | KernelFn::RateLimitAllow
+                // `List.map3` — arity 4
+                | KernelFn::ListMap3,
             ) => Ok(4),
             // ── JsonDec arity-5 ─────────────────────────────────────────
             Callee::Kernel(
@@ -13660,10 +13707,14 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DbDecMap4
                 // ── Result/Maybe map4 — arity 5 ────────────────────────
                 | KernelFn::ResultMap4
-                | KernelFn::MaybeMap4,
+                | KernelFn::MaybeMap4
+                // `List.map4` — arity 5
+                | KernelFn::ListMap4,
             ) => Ok(5),
-            // ── Result/Maybe map5 — arity 6 ────────────────────────────
-            Callee::Kernel(KernelFn::ResultMap5 | KernelFn::MaybeMap5) => Ok(6),
+            // ── Result/Maybe/List map5 — arity 6 ───────────────────────
+            Callee::Kernel(
+                KernelFn::ResultMap5 | KernelFn::MaybeMap5 | KernelFn::ListMap5,
+            ) => Ok(6),
             // ── Ipe.Ui / Ipe.Html render kernels ─────────────────────────
             // Arity 0: nullary constants — no arguments.
             Callee::Kernel(
@@ -14649,6 +14700,18 @@ impl<'a> Lowerer<'a> {
                     ("String", "containsIn") => Ok(Callee::Kernel(KernelFn::StringContainsIn)),
                     ("String", "startsWithIn") => Ok(Callee::Kernel(KernelFn::StringStartsWithIn)),
                     ("String", "endsWithIn") => Ok(Callee::Kernel(KernelFn::StringEndsWithIn)),
+                    ("String", "left") => Ok(Callee::Kernel(KernelFn::StringLeft)),
+                    ("String", "right") => Ok(Callee::Kernel(KernelFn::StringRight)),
+                    ("String", "cons") => Ok(Callee::Kernel(KernelFn::StringCons)),
+                    ("String", "uncons") => Ok(Callee::Kernel(KernelFn::StringUncons)),
+                    ("String", "pad") => Ok(Callee::Kernel(KernelFn::StringPad)),
+                    ("String", "indexes") => Ok(Callee::Kernel(KernelFn::StringIndexes)),
+                    ("String", "map") => Ok(Callee::Kernel(KernelFn::StringMap)),
+                    ("String", "filter") => Ok(Callee::Kernel(KernelFn::StringFilter)),
+                    ("String", "foldl") => Ok(Callee::Kernel(KernelFn::StringFoldl)),
+                    ("String", "foldr") => Ok(Callee::Kernel(KernelFn::StringFoldr)),
+                    ("String", "any") => Ok(Callee::Kernel(KernelFn::StringAny)),
+                    ("String", "all") => Ok(Callee::Kernel(KernelFn::StringAll)),
                     // ── Char kernels ───────────────────────────────────────
                     ("Char", "isAlpha") => Ok(Callee::Kernel(KernelFn::CharIsAlpha)),
                     ("Char", "isDigit") => Ok(Callee::Kernel(KernelFn::CharIsDigit)),
@@ -14658,6 +14721,9 @@ impl<'a> Lowerer<'a> {
                     ("Char", "toUpper") => Ok(Callee::Kernel(KernelFn::CharToUpper)),
                     ("Char", "toCode") => Ok(Callee::Kernel(KernelFn::CharToCode)),
                     ("Char", "fromCode") => Ok(Callee::Kernel(KernelFn::CharFromCode)),
+                    ("Char", "isAlphaNum") => Ok(Callee::Kernel(KernelFn::CharIsAlphaNum)),
+                    ("Char", "isHexDigit") => Ok(Callee::Kernel(KernelFn::CharIsHexDigit)),
+                    ("Char", "isOctDigit") => Ok(Callee::Kernel(KernelFn::CharIsOctDigit)),
                     // ── List kernels ───────────────────────────────────────
                     ("List", "map") => Ok(Callee::Kernel(KernelFn::ListMap)),
                     ("List", "filter") => Ok(Callee::Kernel(KernelFn::ListFilter)),
@@ -14684,6 +14750,21 @@ impl<'a> Lowerer<'a> {
                     // ── List batch ────────────────────────────────────
                     ("List", "filterMap") => Ok(Callee::Kernel(KernelFn::ListFilterMap)),
                     ("List", "sortBy") => Ok(Callee::Kernel(KernelFn::ListSortBy)),
+                    ("List", "sort") => Ok(Callee::Kernel(KernelFn::ListSort)),
+                    ("List", "sortWith") => Ok(Callee::Kernel(KernelFn::ListSortWith)),
+                    ("List", "singleton") => Ok(Callee::Kernel(KernelFn::ListSingleton)),
+                    ("List", "repeat") => Ok(Callee::Kernel(KernelFn::ListRepeat)),
+                    ("List", "sum") => Ok(Callee::Kernel(KernelFn::ListSum)),
+                    ("List", "product") => Ok(Callee::Kernel(KernelFn::ListProduct)),
+                    ("List", "maximum") => Ok(Callee::Kernel(KernelFn::ListMaximum)),
+                    ("List", "minimum") => Ok(Callee::Kernel(KernelFn::ListMinimum)),
+                    ("List", "intersperse") => Ok(Callee::Kernel(KernelFn::ListIntersperse)),
+                    ("List", "partition") => Ok(Callee::Kernel(KernelFn::ListPartition)),
+                    ("List", "unzip") => Ok(Callee::Kernel(KernelFn::ListUnzip)),
+                    ("List", "map2") => Ok(Callee::Kernel(KernelFn::ListMap2)),
+                    ("List", "map3") => Ok(Callee::Kernel(KernelFn::ListMap3)),
+                    ("List", "map4") => Ok(Callee::Kernel(KernelFn::ListMap4)),
+                    ("List", "map5") => Ok(Callee::Kernel(KernelFn::ListMap5)),
                     ("Basics", "not") => Ok(Callee::Kernel(KernelFn::BasicsNot)),
                     ("Basics", "identity") => Ok(Callee::Kernel(KernelFn::BasicsIdentity)),
                     ("Basics", "always") => Ok(Callee::Kernel(KernelFn::BasicsAlways)),
@@ -14758,6 +14839,8 @@ impl<'a> Lowerer<'a> {
                     ("Result", "andMap") => Ok(Callee::Kernel(KernelFn::ResultAndMap)),
                     ("Result", "combine") => Ok(Callee::Kernel(KernelFn::ResultCombine)),
                     ("Result", "traverse") => Ok(Callee::Kernel(KernelFn::ResultTraverse)),
+                    ("Result", "toMaybe") => Ok(Callee::Kernel(KernelFn::ResultToMaybe)),
+                    ("Result", "fromMaybe") => Ok(Callee::Kernel(KernelFn::ResultFromMaybe)),
                     // ── Math kernels ───────────────────────────────────────
                     // `min` / `max` are polymorphic `a -> a -> a` — lowered to
                     // the runtime's generic compare, NOT through any `Int`
@@ -14825,6 +14908,13 @@ impl<'a> Lowerer<'a> {
                     ("Dict", "map") => Ok(Callee::Kernel(KernelFn::DictMap)),
                     ("Dict", "insert") => Ok(Callee::Kernel(KernelFn::DictInsert)),
                     ("Dict", "foldl") => Ok(Callee::Kernel(KernelFn::DictFoldl)),
+                    ("Dict", "singleton") => Ok(Callee::Kernel(KernelFn::DictSingleton)),
+                    ("Dict", "foldr") => Ok(Callee::Kernel(KernelFn::DictFoldr)),
+                    ("Dict", "filter") => Ok(Callee::Kernel(KernelFn::DictFilter)),
+                    ("Dict", "partition") => Ok(Callee::Kernel(KernelFn::DictPartition)),
+                    ("Dict", "intersect") => Ok(Callee::Kernel(KernelFn::DictIntersect)),
+                    ("Dict", "diff") => Ok(Callee::Kernel(KernelFn::DictDiff)),
+                    ("Dict", "update") => Ok(Callee::Kernel(KernelFn::DictUpdate)),
                     // ── Set kernels ────────────────────────────────────────
                     ("Set", "empty") => Ok(Callee::Kernel(KernelFn::SetEmpty)),
                     ("Set", "size") => Ok(Callee::Kernel(KernelFn::SetSize)),
@@ -14836,6 +14926,13 @@ impl<'a> Lowerer<'a> {
                     ("Set", "union") => Ok(Callee::Kernel(KernelFn::SetUnion)),
                     ("Set", "intersect") => Ok(Callee::Kernel(KernelFn::SetIntersect)),
                     ("Set", "diff") => Ok(Callee::Kernel(KernelFn::SetDiff)),
+                    ("Set", "isEmpty") => Ok(Callee::Kernel(KernelFn::SetIsEmpty)),
+                    ("Set", "singleton") => Ok(Callee::Kernel(KernelFn::SetSingleton)),
+                    ("Set", "foldl") => Ok(Callee::Kernel(KernelFn::SetFoldl)),
+                    ("Set", "foldr") => Ok(Callee::Kernel(KernelFn::SetFoldr)),
+                    ("Set", "map") => Ok(Callee::Kernel(KernelFn::SetMap)),
+                    ("Set", "filter") => Ok(Callee::Kernel(KernelFn::SetFilter)),
+                    ("Set", "partition") => Ok(Callee::Kernel(KernelFn::SetPartition)),
                     // ── Bytes kernels ────────────────────────────────
                     // Divergence from Ipê: Bytes is Vec<u8> not String alias.
                     ("Bytes", "empty") => Ok(Callee::Kernel(KernelFn::BytesEmpty)),

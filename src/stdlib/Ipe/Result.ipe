@@ -18,6 +18,8 @@ module Ipe.Result exposing
     , map2, map3, map4, map5
     , andMap
     , combine
+    , toMaybe
+    , fromMaybe
     )
 
 
@@ -118,3 +120,15 @@ combine results =
                         Ok xs -> Ok (x :: xs)
                         Err e -> Err e
                 Err e -> Err e
+
+
+toMaybe r =
+    case r of
+        Ok x -> Just x
+        Err _ -> Nothing
+
+
+fromMaybe err m =
+    case m of
+        Just x -> Ok x
+        Nothing -> Err err

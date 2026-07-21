@@ -23,11 +23,14 @@
 -- #10 soundness hole.
 module Ipe.Dict exposing
     ( empty
+    , singleton
     , isEmpty, size
-    , insert, get, remove, member
+    , insert, update, get, remove, member
     , keys, values
     , toList, fromList
-    , map, foldl, union
+    , map, foldl, foldr, union
+    , filter, partition
+    , intersect, diff
     )
 
 
@@ -125,3 +128,39 @@ foldl = Ffi.kernel "Dict_foldl"
 -- key collision.
 union : Dict k v -> Dict k v -> Dict k v
 union = Ffi.kernel "Dict_union"
+
+
+-- | `singleton k v` — a dictionary with the single binding `k → v`.
+singleton : k -> v -> Dict k v
+singleton = Ffi.kernel "Dict_singleton"
+
+
+-- | `foldr fn acc d` — accumulate over every entry in descending key order.
+foldr : (k -> v -> a -> a) -> a -> Dict k v -> a
+foldr = Ffi.kernel "Dict_foldr"
+
+
+-- | `filter pred d` — keep only entries for which `pred k v` holds.
+filter : (k -> v -> Bool) -> Dict k v -> Dict k v
+filter = Ffi.kernel "Dict_filter"
+
+
+-- | `partition pred d` — split into (satisfying, not-satisfying).
+partition : (k -> v -> Bool) -> Dict k v -> ( Dict k v, Dict k v )
+partition = Ffi.kernel "Dict_partition"
+
+
+-- | `intersect a b` — keep `a`'s entries whose key also appears in `b`.
+intersect : Dict k v -> Dict k v -> Dict k v
+intersect = Ffi.kernel "Dict_intersect"
+
+
+-- | `diff a b` — keep `a`'s entries whose key does NOT appear in `b`.
+diff : Dict k v -> Dict k v -> Dict k v
+diff = Ffi.kernel "Dict_diff"
+
+
+-- | `update k fn d` — apply `fn` to the current value at `k` (`Just`/`Nothing`);
+-- a `Just` result re-binds `k`, a `Nothing` removes it.
+update : k -> (Maybe v -> Maybe v) -> Dict k v -> Dict k v
+update = Ffi.kernel "Dict_update"

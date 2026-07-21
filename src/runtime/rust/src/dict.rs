@@ -134,6 +134,82 @@ where
     pairs.into_iter().fold(acc, |a, (k, v)| f(k, v, a))
 }
 
+/// `Dict.singleton : k -> v -> Dict k v` — a one-entry dictionary.
+pub fn dict_singleton<K: Hash + Eq, V>(k: K, v: V) -> HashMap<K, V> {
+    let mut d = HashMap::new();
+    d.insert(k, v);
+    d
+}
+
+/// `Dict.foldr : (k -> v -> a -> a) -> a -> Dict k v -> a` — fold over every
+/// entry in **descending** sorted-key order (mirror of `dict_foldl`'s ascending
+/// order; the sorted-key guarantee is the same Rust-backend strengthening).
+pub fn dict_foldr<K: Ord + Hash + Eq, V, A, F>(f: F, acc: A, d: HashMap<K, V>) -> A
+where
+    F: Fn(K, V, A) -> A,
+{
+    let mut pairs: Vec<(K, V)> = d.into_iter().collect();
+    pairs.sort_by(|a, b| a.0.cmp(&b.0));
+    pairs.into_iter().rev().fold(acc, |a, (k, v)| f(k, v, a))
+}
+
+/// `Dict.filter : (k -> v -> Bool) -> Dict k v -> Dict k v` — keep only the
+/// entries for which `pred k v` holds. Keys/values are taken by value (the Ipê
+/// closure ABI), so `K: Clone` and `V: Clone`.
+pub fn dict_filter<K: Hash + Eq + Clone, V: Clone, F>(pred: F, d: HashMap<K, V>) -> HashMap<K, V>
+where
+    F: Fn(K, V) -> bool,
+{
+    d.into_iter()
+        .filter(|(k, v)| pred(k.clone(), v.clone()))
+        .collect()
+}
+
+/// `Dict.partition : (k -> v -> Bool) -> Dict k v -> (Dict k v, Dict k v)` —
+/// split into (satisfying, not-satisfying).
+pub fn dict_partition<K: Hash + Eq + Clone, V: Clone, F>(
+    pred: F,
+    d: HashMap<K, V>,
+) -> (HashMap<K, V>, HashMap<K, V>)
+where
+    F: Fn(K, V) -> bool,
+{
+    d.into_iter().partition(|(k, v)| pred(k.clone(), v.clone()))
+}
+
+/// `Dict.intersect : Dict k v -> Dict k v -> Dict k v` — keep the entries of
+/// the first dict whose key also appears in the second (values from the first).
+pub fn dict_intersect<K: Hash + Eq, V>(a: HashMap<K, V>, b: HashMap<K, V>) -> HashMap<K, V> {
+    a.into_iter().filter(|(k, _)| b.contains_key(k)).collect()
+}
+
+/// `Dict.diff : Dict k v -> Dict k v -> Dict k v` — keep the entries of the
+/// first dict whose key does NOT appear in the second.
+pub fn dict_diff<K: Hash + Eq, V>(a: HashMap<K, V>, b: HashMap<K, V>) -> HashMap<K, V> {
+    a.into_iter().filter(|(k, _)| !b.contains_key(k)).collect()
+}
+
+/// `Dict.update : k -> (Maybe v -> Maybe v) -> Dict k v -> Dict k v` — apply
+/// `f` to the current value at `k` (`Just v` if present, `Nothing` if absent);
+/// `Just v'` re-binds `k`, `Nothing` removes it. Matches Elm exactly.
+pub fn dict_update<K: Hash + Eq, V, F>(k: K, f: F, d: HashMap<K, V>) -> HashMap<K, V>
+where
+    F: Fn(IpeMaybe<V>) -> IpeMaybe<V>,
+{
+    let mut d = d;
+    let current = match d.remove(&k) {
+        Some(v) => IpeMaybe::Just(v),
+        None => IpeMaybe::Nothing,
+    };
+    match f(current) {
+        IpeMaybe::Just(v) => {
+            d.insert(k, v);
+        }
+        IpeMaybe::Nothing => {}
+    }
+    d
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,5 +303,77 @@ mod tests {
             d,
         );
         assert_eq!(keys_seen, vec!["a".to_string(), "b".into(), "c".into()]);
+    }
+
+    #[test]
+    fn singleton_and_foldr_match_elm() {
+        let d = dict_singleton("k".to_string(), 5i64);
+        assert_eq!(dict_size(d.clone()), 1);
+        assert_eq!(dict_get("k".to_string(), d), IpeMaybe::Just(5));
+
+        // foldr visits keys in DESCENDING order.
+        let d: IpeDict<i64> =
+            dict_from_list(vec![("a".into(), 1), ("b".into(), 2), ("c".into(), 3)]);
+        let keys = dict_foldr(
+            |k, _v, mut acc: Vec<String>| {
+                acc.push(k);
+                acc
+            },
+            vec![],
+            d,
+        );
+        assert_eq!(keys, vec!["c".to_string(), "b".into(), "a".into()]);
+    }
+
+    #[test]
+    fn filter_partition_match_elm() {
+        let d: IpeDict<i64> =
+            dict_from_list(vec![("a".into(), 1), ("b".into(), 2), ("c".into(), 3)]);
+        let evens = dict_filter(|_k, v| v % 2 == 0, d.clone());
+        assert_eq!(dict_size(evens.clone()), 1);
+        assert_eq!(dict_get("b".to_string(), evens), IpeMaybe::Just(2));
+
+        let (big, small) = dict_partition(|_k, v| v > 1, d);
+        assert_eq!(dict_size(big), 2);
+        assert_eq!(dict_size(small), 1);
+    }
+
+    #[test]
+    fn intersect_diff_match_elm() {
+        let a: IpeDict<i64> =
+            dict_from_list(vec![("a".into(), 1), ("b".into(), 2), ("c".into(), 3)]);
+        let b: IpeDict<i64> =
+            dict_from_list(vec![("b".into(), 20), ("c".into(), 30), ("d".into(), 40)]);
+        // intersect keeps a's values for keys present in b.
+        let inter = dict_intersect(a.clone(), b.clone());
+        assert_eq!(dict_size(inter.clone()), 2);
+        assert_eq!(dict_get("b".to_string(), inter.clone()), IpeMaybe::Just(2));
+        assert_eq!(dict_get("a".to_string(), inter), IpeMaybe::Nothing);
+        // diff keeps a's entries whose key is absent from b.
+        let d = dict_diff(a, b);
+        assert_eq!(dict_size(d.clone()), 1);
+        assert_eq!(dict_get("a".to_string(), d), IpeMaybe::Just(1));
+    }
+
+    #[test]
+    fn update_inserts_modifies_removes() {
+        let d: IpeDict<i64> = dict_from_list(vec![("a".into(), 1)]);
+        // Modify existing.
+        let d = dict_update(
+            "a".to_string(),
+            |m| match m {
+                IpeMaybe::Just(v) => IpeMaybe::Just(v + 10),
+                IpeMaybe::Nothing => IpeMaybe::Just(0),
+            },
+            d,
+        );
+        assert_eq!(dict_get("a".to_string(), d.clone()), IpeMaybe::Just(11));
+        // Insert new via Nothing → Just.
+        let d = dict_update("b".to_string(), |_m| IpeMaybe::Just(2), d);
+        assert_eq!(dict_get("b".to_string(), d.clone()), IpeMaybe::Just(2));
+        // Remove via Just → Nothing.
+        let d = dict_update("a".to_string(), |_m| IpeMaybe::Nothing, d);
+        assert_eq!(dict_get("a".to_string(), d.clone()), IpeMaybe::Nothing);
+        assert_eq!(dict_size(d), 1);
     }
 }

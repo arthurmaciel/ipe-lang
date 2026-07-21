@@ -1,0 +1,29 @@
+module Main exposing (main)
+
+import Ipe.Prelude exposing (..)
+import Ipe.Char as Char
+import Ipe.String as String
+import Ipe.List as List
+
+
+-- Count the chars in a string that satisfy a predicate.
+countBy : (Char -> Bool) -> String -> Int
+countBy pred s =
+    List.length (List.filter pred (String.toList s))
+
+
+main =
+    let
+        sample =
+            "aF9 z8-7Gx"
+
+        hex =
+            countBy Char.isHexDigit sample
+
+        oct =
+            countBy Char.isOctDigit sample
+
+        alnum =
+            countBy Char.isAlphaNum sample
+    in
+    println (String.join " " (List.map String.fromInt [ hex, oct, alnum ]))
