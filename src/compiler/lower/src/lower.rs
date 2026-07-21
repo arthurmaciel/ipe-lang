@@ -8113,23 +8113,36 @@ impl<'a> Lowerer<'a> {
                 // filters `"any"` out before treating free vars as polymorphic;
                 // `buildEnv` gives each `any` occurrence a fresh flex UV that the body
                 // constrains to a concrete type.  The Rust port must do the same.
-                let ret = if let IrType::Generic(sym) = ret {
-                    if self.interner.resolve(sym) == Some("any") {
-                        // The body's region type is the concrete return type.
-                        let body_ty = self
-                            .types
-                            .regions
-                            .get(&(def.home().to_vec(), body.span))
-                            .ok_or_else(|| {
-                                bug(
-                                    "ipe_lower::lower_def",
-                                    "no region type for body of `any`-annotated binding",
-                                )
-                            })?;
-                        self.ir_type_from_ty(body_ty, sig_span)?
-                    } else {
-                        IrType::Generic(sym)
+                // A return whose type is (or wraps) the `any` wildcard is resolved
+                // from the body's SOLVED type, never emitted as a spurious generic.
+                //  * `view : Model -> any` → `ret` is `IrType::Generic(any)`.
+                //  * `view : Model -> Html` → canon arity-fills to `Html any`, so
+                //    `ret` is `IrType::Ui { msg: Generic(any) }` (the msg slot
+                //    carries the wildcard, produced by `ir_ui_msg_from_canon`).
+                // Both cases substitute the whole return with the body's region
+                // type: `Html<Msg>` concrete, not `Html<()>`, `Html<T1>`, or the
+                // pub/sub `Html<HashMap<String,String>>` carrier.
+                let ret_is_any_wildcard = match &ret {
+                    IrType::Generic(sym) => self.interner.resolve(*sym) == Some("any"),
+                    IrType::Ui { msg, .. } => {
+                        matches!(msg.as_ref(), IrType::Generic(sym)
+                            if self.interner.resolve(*sym) == Some("any"))
                     }
+                    _ => false,
+                };
+                let ret = if ret_is_any_wildcard {
+                    // The body's region type is the concrete return type.
+                    let body_ty = self
+                        .types
+                        .regions
+                        .get(&(def.home().to_vec(), body.span))
+                        .ok_or_else(|| {
+                            bug(
+                                "ipe_lower::lower_def",
+                                "no region type for body of `any`-annotated binding",
+                            )
+                        })?;
+                    self.ir_type_from_ty(body_ty, sig_span)?
                 } else {
                     ret
                 };
@@ -8766,6 +8779,29 @@ impl<'a> Lowerer<'a> {
         IrType::Record(fields)
     }
 
+    /// Lower the message-type argument of a UI constructor (`Html msg`,
+    /// `Element msg`, `Attribute msg`, `Event msg`) from a canon annotation.
+    ///
+    /// Identical to [`Self::ir_type_from_canon`] except for the arity-fill
+    /// wildcard: canon fills a bare `Html` / `Element` / `Attribute` annotation
+    /// to `Html any` using the `any` wildcard variable, and that variable is
+    /// deliberately NOT in the binding's `free_vars`. The plain
+    /// `ir_type_from_canon` `Var` arm maps an out-of-scope `any` to the pub/sub
+    /// `Dict String String` carrier — correct for a union-ctor wire field, wrong
+    /// for a UI message slot. Here the `any` wildcard instead lowers to
+    /// `IrType::Generic(any)`, preserving the marker that the return-type
+    /// substitution in `lower_def` keys on to swap in the body's SOLVED concrete
+    /// message type (`Html<Msg>`), never `Html<()>` or `Html<HashMap<..>>`.
+    fn ir_ui_msg_from_canon(&self, t: &canon::Type, generics: &[Symbol]) -> DResult<IrType> {
+        if let canon::Type::Var(v) = t
+            && self.interner.resolve(*v).is_some_and(|n| n == "any")
+            && !generics.contains(v)
+        {
+            return Ok(IrType::Generic(*v));
+        }
+        self.ir_type_from_canon(t, generics)
+    }
+
     #[allow(clippy::too_many_lines)] // declarative type-constructor dispatch — each builtin listed explicitly for safety
     fn ir_type_from_canon(&self, t: &canon::Type, generics: &[Symbol]) -> DResult<IrType> {
         match t {
@@ -8925,7 +8961,7 @@ impl<'a> Lowerer<'a> {
                 //
                 // `Html msg` — the rendered HTML tree type from `Ipe.Html`.
                 "Html" if args.len() == 1 => {
-                    let msg = self.ir_type_from_canon(
+                    let msg = self.ir_ui_msg_from_canon(
                         args.first().ok_or_else(|| {
                             bug(
                                 "ipe_lower::ir_type_from_canon",
@@ -8941,7 +8977,7 @@ impl<'a> Lowerer<'a> {
                 }
                 // `Element msg` — a Ipe.Ui layout element.
                 "Element" if args.len() == 1 => {
-                    let msg = self.ir_type_from_canon(
+                    let msg = self.ir_ui_msg_from_canon(
                         args.first().ok_or_else(|| {
                             bug(
                                 "ipe_lower::ir_type_from_canon",
@@ -8966,7 +9002,7 @@ impl<'a> Lowerer<'a> {
                 // `columns : List Track -> Attribute msg` reaches the `other =>`
                 // ICE with an empty home (IPE-I0001).
                 "Attribute" if args.len() == 1 => {
-                    let msg = self.ir_type_from_canon(
+                    let msg = self.ir_ui_msg_from_canon(
                         args.first().ok_or_else(|| {
                             bug(
                                 "ipe_lower::ir_type_from_canon",
@@ -8990,7 +9026,7 @@ impl<'a> Lowerer<'a> {
                 // Mirrors the `ir_type_from_ty` "Event" arm; same empty-home
                 // gap as `Attribute` for compiled-source stdlib annotations.
                 "Event" if args.len() == 1 => {
-                    let msg = self.ir_type_from_canon(
+                    let msg = self.ir_ui_msg_from_canon(
                         args.first().ok_or_else(|| {
                             bug(
                                 "ipe_lower::ir_type_from_canon",
