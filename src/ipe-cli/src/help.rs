@@ -13,8 +13,7 @@
 use std::fmt::Write as _;
 use std::io::IsTerminal;
 
-/// The repository home, shown in the header and footer.
-const REPO_URL: &str = "https://github.com/arthurmaciel/ipe-lang";
+use crate::style::{Palette, REPO_URL};
 
 /// A single command option: the flag form (e.g. `[--out <dir>]`, keeping its
 /// `[]` optional syntax) and a one-line description.
@@ -292,50 +291,6 @@ const SECTIONS: &[Section] = &[
     },
 ];
 
-/// The ANSI palette, resolved once against the destination stream. When colour
-/// is off every field is the empty string, so the same format code produces
-/// clean plain text.
-struct Palette {
-    /// A soft Ipê-amarelo, for the product name and command names.
-    yellow: &'static str,
-    /// A dim grey, for descriptions and the footer.
-    dim: &'static str,
-    /// A bold weight, for section titles.
-    bold: &'static str,
-    /// Resets all attributes.
-    reset: &'static str,
-}
-
-impl Palette {
-    /// The coloured palette: a soft Ipê-amarelo (256-colour 222) for names, a
-    /// mid grey (244) for dim text.
-    const COLOR: Self = Self {
-        yellow: "\x1b[38;5;222m",
-        dim: "\x1b[38;5;244m",
-        bold: "\x1b[1m",
-        reset: "\x1b[0m",
-    };
-
-    /// The plain palette: every escape is empty, yielding aligned plain text.
-    const PLAIN: Self = Self {
-        yellow: "",
-        dim: "",
-        bold: "",
-        reset: "",
-    };
-
-    /// Select the coloured palette when `color` is on, else the plain one.
-    const fn select(color: bool) -> &'static Self {
-        if color { &Self::COLOR } else { &Self::PLAIN }
-    }
-}
-
-/// Whether to emit ANSI to `stream`: only when it is a terminal and `NO_COLOR`
-/// is unset (per <https://no-color.org>).
-fn use_color(stream: &impl IsTerminal) -> bool {
-    stream.is_terminal() && std::env::var_os("NO_COLOR").is_none()
-}
-
 /// Look up a command's help entry by name.
 fn find(name: &str) -> Option<&'static Command> {
     COMMANDS.iter().find(|c| c.name == name)
@@ -351,13 +306,13 @@ pub fn is_command(name: &str) -> bool {
 /// Render the top-level help screen for the given output stream.
 #[must_use]
 pub fn top_level(stream: &impl IsTerminal) -> String {
-    render_top_level(Palette::select(use_color(stream)))
+    render_top_level(Palette::for_stream(stream))
 }
 
 /// Render a single command's `--help` page, or `None` if `name` is unknown.
 #[must_use]
 pub fn command(name: &str, stream: &impl IsTerminal) -> Option<String> {
-    let p = Palette::select(use_color(stream));
+    let p = Palette::for_stream(stream);
     find(name).map(|cmd| render_command(cmd, p))
 }
 

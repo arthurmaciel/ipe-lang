@@ -35,7 +35,7 @@ decision the higher-numbered principle yields — a faster path that opens a
 soundness hole is rejected, a more readable form that breaks correctness is
 rejected. A lower principle can never justify compromising a higher one.
 
-## The three fundamental rules
+## The fundamental rules
 
 Beneath the ranked principles, every design and code pass obeys:
 
@@ -62,9 +62,16 @@ Beneath the ranked principles, every design and code pass obeys:
   — the identical `E0308` returns when the sibling is a top-level function
   reference; the structural fix eta-expands every function-typed leaf over the
   group's arrow type, closing the class.
+- **Single source of truth.** Every fact — a colour, a version, a capability
+  name, a kernel signature, a user-facing phrase — is defined in exactly one
+  place. Where it must appear in a second form that cannot import the first (a
+  shell script mirroring a Rust palette), generate one from the other or assert
+  their equality in a test; never hand-sync. SSOT serves the precedence order: a
+  one-line duplication caught by a test beats a leaky shared abstraction that
+  hurts Correctness or Readability.
 
-The ordering says what wins in a conflict; these three rules say how to build
-code that doesn't create the conflict.
+The ordering says what wins in a conflict; these rules say how to build code
+that doesn't create the conflict.
 
 ## THE SEAL — no exit-0-then-cargo-fail
 
