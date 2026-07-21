@@ -14,9 +14,8 @@
 /// Where a reader reports a compiler bug or nudges an unimplemented feature.
 ///
 /// Single source of truth: every humble / ICE message and every `IPE-I*` /
-/// `IPE-L*` explain page footer references this one constant. `OWNER` is a
-/// placeholder until the repository's Codeberg home is fixed.
-pub const ISSUE_TRACKER_URL: &str = "https://codeberg.org/OWNER/ipe-lang/issues";
+/// `IPE-L*` explain page footer references this one constant.
+pub const ISSUE_TRACKER_URL: &str = "https://github.com/arthurmaciel/ipe-lang/issues";
 
 /// A stable compiler error code, e.g. `IPE-T0001`.
 ///
@@ -635,13 +634,25 @@ mod tests {
                     "{} page has {fences} ```ipe fences, need >= 3",
                     c.as_str()
                 );
+                assert!(
+                    page.ends_with('\n'),
+                    "{} page must end with a trailing newline",
+                    c.as_str()
+                );
+                assert!(
+                    !page.ends_with("\n\n"),
+                    "{} page must not end with a double blank line",
+                    c.as_str()
+                );
             }
         }
     }
 
     #[test]
-    fn issue_tracker_url_is_a_codeberg_issues_link() {
-        assert!(ISSUE_TRACKER_URL.starts_with("https://codeberg.org/"));
-        assert!(ISSUE_TRACKER_URL.ends_with("/issues"));
+    fn issue_tracker_url_is_a_github_issues_link() {
+        assert_eq!(
+            ISSUE_TRACKER_URL,
+            "https://github.com/arthurmaciel/ipe-lang/issues"
+        );
     }
 }
