@@ -51,23 +51,75 @@ struct PathRule {
 /// wrapper reaches after `use std::net::*` (`TcpStream`, `File`, `Command`).
 const PATH_RULES: &[PathRule] = &[
     // Network.
-    PathRule { first: "std", second: "net", cap: Capability::Network },
-    PathRule { first: "net", second: "TcpStream", cap: Capability::Network },
-    PathRule { first: "net", second: "TcpListener", cap: Capability::Network },
-    PathRule { first: "net", second: "UdpSocket", cap: Capability::Network },
+    PathRule {
+        first: "std",
+        second: "net",
+        cap: Capability::Network,
+    },
+    PathRule {
+        first: "net",
+        second: "TcpStream",
+        cap: Capability::Network,
+    },
+    PathRule {
+        first: "net",
+        second: "TcpListener",
+        cap: Capability::Network,
+    },
+    PathRule {
+        first: "net",
+        second: "UdpSocket",
+        cap: Capability::Network,
+    },
     // Filesystem.
-    PathRule { first: "std", second: "fs", cap: Capability::Filesystem },
-    PathRule { first: "fs", second: "File", cap: Capability::Filesystem },
-    PathRule { first: "fs", second: "OpenOptions", cap: Capability::Filesystem },
+    PathRule {
+        first: "std",
+        second: "fs",
+        cap: Capability::Filesystem,
+    },
+    PathRule {
+        first: "fs",
+        second: "File",
+        cap: Capability::Filesystem,
+    },
+    PathRule {
+        first: "fs",
+        second: "OpenOptions",
+        cap: Capability::Filesystem,
+    },
     // Subprocess.
-    PathRule { first: "std", second: "process", cap: Capability::Subprocess },
-    PathRule { first: "process", second: "Command", cap: Capability::Subprocess },
+    PathRule {
+        first: "std",
+        second: "process",
+        cap: Capability::Subprocess,
+    },
+    PathRule {
+        first: "process",
+        second: "Command",
+        cap: Capability::Subprocess,
+    },
     // Environment.
-    PathRule { first: "std", second: "env", cap: Capability::Env },
+    PathRule {
+        first: "std",
+        second: "env",
+        cap: Capability::Env,
+    },
     // Clock.
-    PathRule { first: "std", second: "time", cap: Capability::Clock },
-    PathRule { first: "time", second: "Instant", cap: Capability::Clock },
-    PathRule { first: "time", second: "SystemTime", cap: Capability::Clock },
+    PathRule {
+        first: "std",
+        second: "time",
+        cap: Capability::Clock,
+    },
+    PathRule {
+        first: "time",
+        second: "Instant",
+        cap: Capability::Clock,
+    },
+    PathRule {
+        first: "time",
+        second: "SystemTime",
+        cap: Capability::Clock,
+    },
 ];
 
 /// Bare capability-bearing type/const identifiers a wrapper reaches after a
@@ -82,19 +134,20 @@ const BARE_IDENTS: &[(&str, Capability)] = &[
     ("OpenOptions", Capability::Filesystem),
 ];
 
-/// The set of capabilities whose runtime effects Ipê CANNOT contain in this
-/// release — there is no sandbox around the emitted app at `ipe run`, so a
-/// wrapper reaching one of these runs it with the user's full ambient
-/// authority. A wrapper that declares or is inferred to touch any of these is
-/// refused at install: enforcement is infeasible, so the capability is not
-/// admitted unenforced (spec §5, "refuse rather than admit unenforced").
+/// Whether a capability's runtime effects Ipê CANNOT contain in this release.
+///
+/// There is no sandbox around the emitted app at `ipe run`, so a wrapper
+/// reaching one of these runs it with the user's full ambient authority. A
+/// wrapper that declares or is inferred to touch any of these is refused at
+/// install: enforcement is infeasible, so the capability is not admitted
+/// unenforced (spec §5, "refuse rather than admit unenforced").
 ///
 /// [`Capability::Clock`] and [`Capability::Random`] are deliberately absent:
 /// they are non-determinism, not exfiltration, and carry no isolation surface —
 /// admitting them unenforced leaks no authority. Every other axis stays here
 /// until a runtime jail exists to scope it.
 #[must_use]
-pub fn is_runtime_unenforceable(cap: Capability) -> bool {
+pub const fn is_runtime_unenforceable(cap: Capability) -> bool {
     match cap {
         Capability::Network
         | Capability::Filesystem
@@ -106,9 +159,10 @@ pub fn is_runtime_unenforceable(cap: Capability) -> bool {
     }
 }
 
-/// Why a wrapper's source cannot be admitted from the scan alone — an OPAQUE
-/// construct the token scan cannot see past, so the proposed set can no longer
-/// be trusted as complete. Each is a refuse trigger, never a "no capability".
+/// An OPAQUE construct the token scan cannot see past.
+///
+/// Its presence means the proposed set can no longer be trusted as complete, so
+/// each variant is a refuse trigger, never a "no capability found".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Opacity {
     /// A source file that does not lex as Rust tokens. A malformed (or
@@ -182,7 +236,7 @@ pub struct ScanOutcome {
 
 impl ScanOutcome {
     /// Fold another file's outcome into this one (the multi-file union).
-    fn absorb(&mut self, other: ScanOutcome) {
+    fn absorb(&mut self, other: Self) {
         self.proposed.extend(other.proposed);
         self.opacities.extend(other.opacities);
     }
@@ -207,10 +261,11 @@ impl ScanOutcome {
 }
 
 /// Scan one wrapper source file for capability-bearing paths and opacity
-/// triggers. A file that does not lex yields a [`Opacity::DoesNotLex`] — NEVER
-/// an empty proposed set, which would silently under-propose.
+/// triggers.
 ///
-/// `file` is a display label used only in diagnostics; `src` is the file text.
+/// A file that does not lex yields an [`Opacity::DoesNotLex`] — NEVER an empty
+/// proposed set, which would silently under-propose. `file` is a display label
+/// used only in diagnostics; `src` is the file text.
 #[must_use]
 pub fn scan_source(file: &str, src: &str) -> ScanOutcome {
     let Ok(ts) = TokenStream::from_str(src) else {
@@ -243,110 +298,144 @@ pub fn scan_sources<'a>(sources: impl IntoIterator<Item = (&'a str, &'a str)>) -
 /// a construct nowhere near the top level is still seen.
 fn scan_stream(file: &str, ts: TokenStream, out: &mut ScanOutcome) {
     let toks: Vec<TokenTree> = ts.into_iter().collect();
-    // A `#` immediately followed by a `[ … ]` group whose text is a `path = …`
-    // attribute is an unenumerable-module trigger.
     for i in 0..toks.len() {
-        match &toks[i] {
-            // `extern` keyword — an `extern` block or `extern "C" fn` is native
-            // FFI. Bare `extern crate` is NOT native FFI, so require that the
-            // next non-string token is not `crate`.
-            TokenTree::Ident(id) if *id == "extern" => {
-                let next_is_crate = matches!(toks.get(i + 1), Some(TokenTree::Ident(n)) if *n == "crate");
-                if !next_is_crate {
-                    out.opacities.push(Opacity::NativeFfi {
-                        file: file.to_owned(),
-                        line: id.span().start().line,
-                    });
-                    out.proposed.insert(Capability::NativeFfi);
-                }
-            }
-            // `libc` path root — the canonical raw-syscall crate.
-            TokenTree::Ident(id) if *id == "libc" => {
-                if let Some(TokenTree::Punct(p)) = toks.get(i + 1) {
-                    if p.as_char() == ':' {
-                        out.opacities.push(Opacity::NativeFfi {
-                            file: file.to_owned(),
-                            line: id.span().start().line,
-                        });
-                        out.proposed.insert(Capability::NativeFfi);
-                    }
-                }
-            }
-            // `include!` / `include_str!`-style macro pulling in unscanned text.
-            // Only `include!` and `include_bytes!`/`include_str!` matter for
-            // hiding *code*; `include!` is the code one. Flag `include`.
-            TokenTree::Ident(id) if *id == "include" => {
-                if let Some(TokenTree::Punct(bang)) = toks.get(i + 1) {
-                    if bang.as_char() == '!' {
-                        out.opacities.push(Opacity::UnenumerableModule {
-                            file: file.to_owned(),
-                            line: id.span().start().line,
-                            construct: "include!",
-                        });
-                    }
-                }
-            }
-            // `#[path = "…"]` attribute — a module whose source is elsewhere.
-            TokenTree::Punct(p) if p.as_char() == '#' => {
-                if let Some(TokenTree::Group(g)) = toks.get(i + 1) {
-                    if g.delimiter() == Delimiter::Bracket {
-                        let inner: String = g
-                            .stream()
-                            .to_string()
-                            .chars()
-                            .filter(|c| !c.is_whitespace())
-                            .collect();
-                        if inner.starts_with("path=") || inner.starts_with("link") {
-                            let (construct, cap): (&'static str, Option<Capability>) =
-                                if inner.starts_with("link") {
-                                    // `#[link(...)]` links a native library.
-                                    out.proposed.insert(Capability::NativeFfi);
-                                    ("#[link]", Some(Capability::NativeFfi))
-                                } else {
-                                    ("#[path]", None)
-                                };
-                            let _ = cap;
-                            out.opacities.push(Opacity::UnenumerableModule {
-                                file: file.to_owned(),
-                                line: p.span().start().line,
-                                construct,
-                            });
-                        }
-                    }
-                }
-            }
-            // A capability-bearing `first :: second` path pair.
-            TokenTree::Ident(id) => {
-                let name = id.to_string();
-                // Bare capability idents (matched by name alone).
-                for (bare, cap) in BARE_IDENTS {
-                    if name == *bare {
-                        out.proposed.insert(*cap);
-                    }
-                }
-                // `first :: second` — id, `:`, `:`, second-ident.
-                if let (
-                    Some(TokenTree::Punct(c1)),
-                    Some(TokenTree::Punct(c2)),
-                    Some(TokenTree::Ident(second)),
-                ) = (toks.get(i + 1), toks.get(i + 2), toks.get(i + 3))
-                {
-                    if c1.as_char() == ':' && c2.as_char() == ':' {
-                        let second_name = second.to_string();
-                        for rule in PATH_RULES {
-                            if name == rule.first && second_name == rule.second {
-                                out.proposed.insert(rule.cap);
-                            }
-                        }
-                    }
-                }
-            }
+        let Some(tok) = toks.get(i) else { continue };
+        match tok {
+            TokenTree::Ident(id) => scan_ident(file, &toks, i, id, out),
+            // `#[path = "…"]` / `#[link(…)]` attribute — a module or native
+            // library whose source is elsewhere.
+            TokenTree::Punct(p) if p.as_char() == '#' => scan_attribute(file, &toks, i, p, out),
             _ => {}
         }
-
-        if let TokenTree::Group(g) = &toks[i] {
+        if let Some(TokenTree::Group(g)) = toks.get(i) {
             scan_stream(file, g.stream(), out);
         }
+    }
+}
+
+/// Handle an identifier token at index `i`: the `extern`/`libc`/`include`
+/// opacity keywords and the capability-bearing `first::second` / bare-ident
+/// path matches.
+fn scan_ident(
+    file: &str,
+    toks: &[TokenTree],
+    i: usize,
+    id: &proc_macro2::Ident,
+    out: &mut ScanOutcome,
+) {
+    let name = id.to_string();
+    let line = id.span().start().line;
+    match name.as_str() {
+        // `extern` block / `extern "C" fn` is native FFI. Bare `extern crate`
+        // (a 2015-edition import) is NOT, so require the next token is not
+        // `crate`.
+        "extern" => {
+            let next_is_crate =
+                matches!(toks.get(i + 1), Some(TokenTree::Ident(n)) if *n == "crate");
+            if !next_is_crate {
+                out.opacities.push(Opacity::NativeFfi {
+                    file: file.to_owned(),
+                    line,
+                });
+                out.proposed.insert(Capability::NativeFfi);
+            }
+            return;
+        }
+        // `libc::…` — the canonical raw-syscall crate.
+        "libc" if next_is_colon(toks, i) => {
+            out.opacities.push(Opacity::NativeFfi {
+                file: file.to_owned(),
+                line,
+            });
+            out.proposed.insert(Capability::NativeFfi);
+            return;
+        }
+        // `include!(…)` pulls in unscanned code.
+        "include" if next_is_bang(toks, i) => {
+            out.opacities.push(Opacity::UnenumerableModule {
+                file: file.to_owned(),
+                line,
+                construct: "include!",
+            });
+            return;
+        }
+        _ => {}
+    }
+    // Bare capability idents (matched by name alone).
+    for (bare, cap) in BARE_IDENTS {
+        if name == *bare {
+            out.proposed.insert(*cap);
+        }
+    }
+    // `first :: second` — id, `:`, `:`, second-ident.
+    if let Some(second) = colon_colon_ident(toks, i) {
+        for rule in PATH_RULES {
+            if name == rule.first && second == rule.second {
+                out.proposed.insert(rule.cap);
+            }
+        }
+    }
+}
+
+/// Handle a `#` at index `i`: an `#[path = "…"]` (unenumerable module) or
+/// `#[link(…)]` (native library) attribute.
+fn scan_attribute(
+    file: &str,
+    toks: &[TokenTree],
+    i: usize,
+    p: &proc_macro2::Punct,
+    out: &mut ScanOutcome,
+) {
+    let Some(TokenTree::Group(g)) = toks.get(i + 1) else {
+        return;
+    };
+    if g.delimiter() != Delimiter::Bracket {
+        return;
+    }
+    let inner: String = g
+        .stream()
+        .to_string()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    let construct = if inner.starts_with("link") {
+        // `#[link(...)]` links a native library.
+        out.proposed.insert(Capability::NativeFfi);
+        "#[link]"
+    } else if inner.starts_with("path=") {
+        "#[path]"
+    } else {
+        return;
+    };
+    out.opacities.push(Opacity::UnenumerableModule {
+        file: file.to_owned(),
+        line: p.span().start().line,
+        construct,
+    });
+}
+
+/// Whether the token after `i` is a `:` punct (the start of a `::` path).
+fn next_is_colon(toks: &[TokenTree], i: usize) -> bool {
+    matches!(toks.get(i + 1), Some(TokenTree::Punct(p)) if p.as_char() == ':')
+}
+
+/// Whether the token after `i` is a `!` punct (a macro invocation).
+fn next_is_bang(toks: &[TokenTree], i: usize) -> bool {
+    matches!(toks.get(i + 1), Some(TokenTree::Punct(p)) if p.as_char() == '!')
+}
+
+/// The identifier following a `:: ` at index `i` (`id :: second`), if the two
+/// puncts are both colons and the fourth token is an identifier.
+fn colon_colon_ident(toks: &[TokenTree], i: usize) -> Option<String> {
+    let (Some(TokenTree::Punct(c1)), Some(TokenTree::Punct(c2)), Some(TokenTree::Ident(second))) =
+        (toks.get(i + 1), toks.get(i + 2), toks.get(i + 3))
+    else {
+        return None;
+    };
+    if c1.as_char() == ':' && c2.as_char() == ':' {
+        Some(second.to_string())
+    } else {
+        None
     }
 }
 
@@ -478,9 +567,7 @@ pub fn reconcile(
     }
     // Non-std dependencies — capabilities can hide in a dependency's source.
     for name in non_std_deps {
-        reasons.push(RefuseReason::NonStdDependency {
-            name: name.clone(),
-        });
+        reasons.push(RefuseReason::NonStdDependency { name: name.clone() });
     }
 
     if reasons.is_empty() {
@@ -495,15 +582,18 @@ pub fn reconcile(
     }
 }
 
-/// Parse a raw `[rust.wrapper] capabilities = [...]` list into a typed set,
-/// fail-closed on an unknown name. A typo'd capability is a LOUD rejection, never
-/// a capability the reconcile then silently fails to compare.
+/// Parse a raw `[rust.wrapper] capabilities = [...]` list into a typed set.
+///
+/// Fail-closed on an unknown name: a typo'd capability is a LOUD rejection,
+/// never a capability the reconcile then silently fails to compare.
 ///
 /// # Errors
 ///
 /// The offending token, when a name is not one of the closed capability
 /// vocabulary (`Capability::from_str`'s [`ipe_kernels::UnknownCapability`]).
-pub fn parse_declared(names: &[String]) -> Result<BTreeSet<Capability>, ipe_kernels::UnknownCapability> {
+pub fn parse_declared(
+    names: &[String],
+) -> Result<BTreeSet<Capability>, ipe_kernels::UnknownCapability> {
     let mut set = BTreeSet::new();
     for name in names {
         set.insert(Capability::from_str(name)?);
@@ -600,7 +690,10 @@ mod tests {
         assert!(
             matches!(
                 o.opacities.first(),
-                Some(Opacity::UnenumerableModule { construct: "include!", .. })
+                Some(Opacity::UnenumerableModule {
+                    construct: "include!",
+                    ..
+                })
             ),
             "{:?}",
             o.opacities
@@ -615,7 +708,10 @@ mod tests {
         assert!(
             matches!(
                 o.opacities.first(),
-                Some(Opacity::UnenumerableModule { construct: "#[path]", .. })
+                Some(Opacity::UnenumerableModule {
+                    construct: "#[path]",
+                    ..
+                })
             ),
             "{:?}",
             o.opacities
@@ -683,6 +779,15 @@ mod tests {
         caps.iter().copied().collect()
     }
 
+    /// The refuse reasons + surfaced proposed set from a verdict, or `None` when
+    /// it admitted. Lets a test assert on the reasons without a `panic!` arm.
+    fn refusal(v: &Verdict) -> Option<(&[RefuseReason], &BTreeSet<Capability>)> {
+        match v {
+            Verdict::Refuse { reasons, proposed } => Some((reasons, proposed)),
+            Verdict::Admit { .. } => None,
+        }
+    }
+
     #[test]
     fn a_pure_wrapper_with_no_declaration_is_admitted() {
         let scan = scan_source("lib.rs", "pub fn make(x: i64) -> i64 { x + 1 }");
@@ -694,53 +799,53 @@ mod tests {
     fn a_declared_network_wrapper_is_refused_no_runtime_jail() {
         // Even an HONESTLY declared network wrapper cannot install: there is no
         // runtime sandbox to contain the socket at `ipe run`.
-        let scan = scan_source("lib.rs", "pub fn f() { std::net::TcpStream::connect(\"x\"); }");
+        let scan = scan_source(
+            "lib.rs",
+            "pub fn f() { std::net::TcpStream::connect(\"x\"); }",
+        );
         let v = reconcile(&set(&[Capability::Network]), &scan, &[]);
-        match v {
-            Verdict::Refuse { reasons, .. } => {
-                // Declared-unenforceable fires; inferred is de-duped since it was
-                // declared.
-                assert!(
-                    reasons
-                        .iter()
-                        .any(|r| matches!(r, RefuseReason::DeclaredUnenforceable { cap } if *cap == Capability::Network)),
-                    "{reasons:?}"
-                );
-                assert!(
-                    !reasons
-                        .iter()
-                        .any(|r| matches!(r, RefuseReason::InferredUnenforceable { .. })),
-                    "declared axis must not also fire inferred: {reasons:?}"
-                );
-            }
-            Verdict::Admit { .. } => panic!("a network wrapper must be refused"),
-        }
+        let (reasons, _) = refusal(&v).expect("a network wrapper must be refused");
+        // Declared-unenforceable fires; inferred is de-duped since it was declared.
+        assert!(
+            reasons
+                .iter()
+                .any(|r| matches!(r, RefuseReason::DeclaredUnenforceable { cap } if *cap == Capability::Network)),
+            "{reasons:?}"
+        );
+        assert!(
+            !reasons
+                .iter()
+                .any(|r| matches!(r, RefuseReason::InferredUnenforceable { .. })),
+            "declared axis must not also fire inferred: {reasons:?}"
+        );
     }
 
     #[test]
     fn an_undeclared_but_inferred_network_wrapper_is_refused() {
         // The author declared nothing, but the scan finds a socket — the hidden
         // effect is refused, and the proposed set is surfaced.
-        let scan = scan_source("lib.rs", "pub fn f() { std::net::TcpStream::connect(\"x\"); }");
+        let scan = scan_source(
+            "lib.rs",
+            "pub fn f() { std::net::TcpStream::connect(\"x\"); }",
+        );
         let v = reconcile(&BTreeSet::new(), &scan, &[]);
-        match v {
-            Verdict::Refuse { reasons, proposed } => {
-                assert!(
-                    reasons
-                        .iter()
-                        .any(|r| matches!(r, RefuseReason::InferredUnenforceable { cap } if *cap == Capability::Network)),
-                    "{reasons:?}"
-                );
-                assert!(proposed.contains(&Capability::Network), "surfaces proposed");
-            }
-            Verdict::Admit { .. } => panic!("an inferred network wrapper must be refused"),
-        }
+        let (reasons, proposed) = refusal(&v).expect("an inferred network wrapper must be refused");
+        assert!(
+            reasons
+                .iter()
+                .any(|r| matches!(r, RefuseReason::InferredUnenforceable { cap } if *cap == Capability::Network)),
+            "{reasons:?}"
+        );
+        assert!(proposed.contains(&Capability::Network), "surfaces proposed");
     }
 
     #[test]
     fn a_clock_only_wrapper_is_admitted() {
         // Clock is non-determinism, not exfiltration — admissible even unenforced.
-        let scan = scan_source("lib.rs", "pub fn f() -> u128 { std::time::Instant::now().elapsed().as_nanos() }");
+        let scan = scan_source(
+            "lib.rs",
+            "pub fn f() -> u128 { std::time::Instant::now().elapsed().as_nanos() }",
+        );
         let v = reconcile(&set(&[Capability::Clock]), &scan, &[]);
         assert!(matches!(v, Verdict::Admit { .. }), "{v:?}");
     }
@@ -749,15 +854,13 @@ mod tests {
     fn a_non_std_dependency_refuses_even_a_pure_looking_wrapper() {
         let scan = scan_source("lib.rs", "pub fn f() -> i64 { reqwest_get() }");
         let v = reconcile(&BTreeSet::new(), &scan, &["reqwest".to_owned()]);
-        match v {
-            Verdict::Refuse { reasons, .. } => assert!(
-                reasons
-                    .iter()
-                    .any(|r| matches!(r, RefuseReason::NonStdDependency { name } if name == "reqwest")),
-                "{reasons:?}"
-            ),
-            Verdict::Admit { .. } => panic!("a wrapper with a non-std dep must be refused"),
-        }
+        let (reasons, _) = refusal(&v).expect("a wrapper with a non-std dep must be refused");
+        assert!(
+            reasons
+                .iter()
+                .any(|r| matches!(r, RefuseReason::NonStdDependency { name } if name == "reqwest")),
+            "{reasons:?}"
+        );
     }
 
     #[test]

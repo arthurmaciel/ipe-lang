@@ -151,6 +151,10 @@ exit 0, as a surfaced author build error — SEAL is preserved, never breached.
 
 ## 5. Capability inference — the hard part
 
+**Status: landed** (`ipe_ffi::capability_scan` + the `install_wrapper` gate).
+The static inference and the fail-closed reconcile ship; the runtime-enforcement
+half is the one honest caveat, spelled out at the end of this section.
+
 For Tier 1, capabilities are trivial (a struct ctor has none; a closure re-enters
 the Ipê evaluator carrying the *caller's* capabilities). For arbitrary wrapper
 Rust, the crate may touch `std::net`, `std::fs`, `std::process`, threads, env, or
@@ -176,6 +180,42 @@ FFI. A three-layer defence, weakest-to-strongest:
 The security posture: **declaration + fail-closed enforcement**, with static
 inference as an honesty check on the declaration. This mirrors the capability
 model's existing stance and does not trust the wrapper's self-report alone.
+
+### 5.4 The enforcement reality this release ships (fail-closed, not fail-open)
+
+Layer 3's "runtime capability scope enforces it at run" presumes a sandbox
+around the *emitted app* at `ipe run`. **That runtime jail does not exist yet.**
+The emitted app — including the author's wrapper Rust — runs with the invoking
+user's full ambient authority. The build/inspect jail (§3.2) denies network for
+the wrapper *build*, but that does not constrain the *running* app.
+
+Therefore a wrapper capability on a runtime-enforced axis (`network`,
+`filesystem`, `database`, `env`, `subprocess`, `native-ffi`) is **infeasible to
+enforce today**, and the rule "if a sound fail-closed enforcement is infeasible,
+refuse the wrapper rather than admit it unenforced" applies with full force. The
+shipped gate (`ipe_ffi::capability_scan::reconcile`, wired into `install_wrapper`)
+is therefore:
+
+- A wrapper that **declares** OR is **inferred** to reach any runtime-enforced
+  axis is **hard-refused at install** — it cannot be installed in this release.
+  Its runtime effects would be uncontained; admitting it would make the
+  `capabilities` manifest field a false claim.
+- Opaque constructs the scan cannot see past — an `extern` block / `#[link]` /
+  `libc::` (native FFI), an `include!` / `#[path]` module, a non-`std` Cargo
+  dependency (whose capabilities live in source the scan never opens), or a
+  source that does not lex — are each a **refuse** trigger, never a silent
+  "no capability found". The scan is biased to over-refuse: a false positive
+  costs an author a narrowing; a false negative would admit an unconstrained
+  capability.
+- Only wrappers whose declared **and** inferred sets are confined to the
+  containable axes — `clock` / `random` (non-determinism, not exfiltration), or
+  empty (pure compute) — install. These leak no authority even unenforced.
+
+This is strictly a security *improvement* over the prior state, in which such a
+wrapper installed with **no capability gate at all**: it turns "silently
+unconstrained wrapper Rust" into "refused until the runtime jail lands". When the
+emitted-app runtime jail arrives, the refused axes re-open one at a time, each
+gated on its jail actually scoping the syscall fail-closed.
 
 ---
 
@@ -258,8 +298,10 @@ That is why the escape-hatch work is designed here rather than raced as Tier 1.
 4. **Source panic-scan gate** — run `tools/panic-scan` over the wrapper source in
    the package/CI gate; a hit is a user-facing diagnostic.
 5. **Capability inference + enforcement** — static proposer + manifest
-   reconciliation + sandbox enforcement wiring (§5). This is the largest and
-   most security-sensitive phase — security-soundness-guardian review required.
+   reconciliation + fail-closed refuse (§5). **Landed.** Guardian-reviewed on the
+   design and the diff; the runtime-enforcement half is refused-until-available
+   per §5.4 (there is no emitted-app runtime jail yet, so any runtime-enforced
+   capability is hard-refused at install rather than admitted unenforced).
 6. **Fold the trait-impl escape hatch** — the `#[ipe::provide]` companion crate as
    a Tier 2 wrapper shape.
 
