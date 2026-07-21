@@ -6,9 +6,9 @@ Ipê's, so each piece maps to one `[rust.provide.*]` form in `ipe.toml`:
 
 | Iced piece | Ipê shape | `[rust.provide.*]` form | Status |
 |------------|-----------|-------------------------|--------|
-| `Model` (`Counter`) | a struct | `[[rust.provide.struct]]` | emitted, cargo-builds |
-| `Message` (`Increment`/`Decrement`) | an enum | `[[rust.provide.enum]]` | emitted, cargo-builds |
-| `update : Message -> Model -> Model` | a sync closure | `[[rust.provide.closure]]` | scalar subset only |
+| `Model` (`Counter`) | a struct | `[[rust.provide.struct]]` | emitted + Ipê forwarder wired |
+| `Message` (`Increment`/`Decrement`) | an enum | `[[rust.provide.enum]]` | emitted + Ipê forwarder wired |
+| `update : Message -> Model -> Model` | a sync closure | `[[rust.provide.closure]]` | scalar subset only; closure→run pending |
 | `view : Model -> Element Message` | a sync closure | `[[rust.provide.closure]]` | blocked (opaque return) |
 
 ## What binds today (the SEAL that holds)
@@ -36,22 +36,41 @@ spike's build log.) The `Debug` derive is in the allowlist precisely because
 Iced's `Sandbox::Message: Debug` bound requires it — `Debug` is total for every
 closed carrier, so it carries no IEEE-754 hazard (unlike `Eq`/`Ord`/`Hash`).
 
-## The exact remaining block (why `Main.ipe` is a placeholder)
+## What's wired now (the forwarder plumbing)
 
-The Ipê-side **forwarder plumbing** for provide-defined types is not wired yet.
-The FFI interface admits the emitted `_bindings.rs` definitions, but it does NOT
-yet surface:
+The Ipê-side **forwarder plumbing** for provide-defined TYPES is wired. After
+`ipe install`, the `Rust.Iced` interface admits — for the `Counter` struct and
+the `Message` enum — an Ipê-held opaque nominal plus a constructor forwarder the
+Ipê program can call:
 
-* an Ipê-held opaque nominal (`type Counter` / `type Message`) plus a forwarder
-  the Ipê program can call to construct one, and
-* a way to hand a boxed Ipê closure (`update`/`view`) to Iced's `run` entrypoint.
+```elm
+type Counter
+type Message
 
-So the driver's counter loop cannot yet be *entered* from Ipê. This is the same
-gap the neighbouring `bevy-game` example documents for `Component`/system-fn.
-`Main.ipe` therefore names the surface the bindings define but does not drive
-the loop.
+counter_new           : Int -> Counter
+message_new_increment : Message
+message_new_decrement : Message
+```
 
-Two further Iced-specific gaps sit on top of that plumbing:
+A provide-defined type resolves at the crate-absolute path
+`crate::ffi::<slug>::<Name>` (it lives in the emitted app crate's `src/ffi.rs`,
+not an external `::iced::` path). A nullary constructor (a unit variant like
+`Increment`, or a fieldless struct) binds a zero-arg forwarder; a name that would
+shadow an Ipê builtin, or clash with an inspected opaque of the same crate, fails
+closed. So an Ipê program can now **construct** the provide-defined Rust types and
+fold over them.
+
+## The exact remaining block (why `Main.ipe` is still a placeholder)
+
+One gap keeps the driver's own event loop from being *entered* from Ipê:
+
+* **Closure→`run` handoff.** Handing a boxed Ipê closure (`update`/`view`) to
+  Iced's `run` entrypoint is not wired — surfacing a boxed closure as an Ipê-held
+  value to pass onward is the next, harder step. Until then the fold is entered
+  from Ipê, but the driver is not handed our closure. This is the same gap the
+  neighbouring `bevy-game` example documents for `Component`/system-fn.
+
+Two Iced-specific gaps sit on top of that:
 
 * **Opaque-return closures.** `view` returns `Element<Message>` — an opaque,
   lifetime-parameterised handle. The sync closure adapter only lifts scalar /
@@ -61,7 +80,10 @@ Two further Iced-specific gaps sit on top of that plumbing:
   payload of a crate-opaque type (`Element`, `Command`) over-drops at decode
   until the opaque-map is threaded into the definition emitter.
 
-All three are filed to the FFI backlog (see the PR body).
+`Main.ipe` deliberately stays a placeholder rather than importing `Rust.Iced`:
+the interface module only exists after `ipe install` runs the sandboxed inspector
+over real `iced` (network-gated), so a checked-in import of it could not build in
+CI. These remaining gaps are filed to the FFI backlog (see the PR body).
 
 ## Regenerating the bindings
 
