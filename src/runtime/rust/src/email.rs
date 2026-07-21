@@ -419,9 +419,13 @@ fn hex_sha256(b: &[u8]) -> String {
 }
 
 fn hmac_bytes(key: &[u8], msg: &[u8]) -> Vec<u8> {
-    // INFALLIBLE: HMAC accepts any key length (never Err); internal SES-signing
-    // helper with no Result channel — a fallback MAC would be a wrong signature.
-    // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel, 2026-06-13) — infallible HMAC ctor; internal SES-signing helper, no Result channel; a fallback MAC is a wrong signature [ledger #2]
+    // STRUCTURALLY-DEAD Err: `Hmac<D>::new_from_slice` returns `Ok` for any key.
+    // Kept as a LOUD `.expect`, not eliminated: this helper is called five times in
+    // the SigV4 key-derivation chain (each output keys the next), so a threaded dead
+    // Result Err that a caller `.unwrap_or(vec![])`s would substitute an empty/wrong
+    // MAC and forge a plausible-but-invalid AWS signature — a silent-wrong-crypto
+    // defect the loud `.expect` prevents. See the ledger for the full verdict.
+    // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — structurally-dead HMAC InvalidLength in the SES SigV4 chain; loud .expect beats a dead Result Err that could become a silent wrong signature [ledger #2]
     #[allow(clippy::expect_used)]
     let mut mac = HmacSha256::new_from_slice(key).expect("hmac key");
     mac.update(msg);
