@@ -37,8 +37,8 @@ fn run_no_args_returns_usage_error() {
 
 /// `ipe run <entry> --bogus` (unrecognised flag after the entry) must return
 /// a usage error naming the offending flag, not panic. The typed parse rejects
-/// the unknown flag with a specific `UsageOwned` message (`unknown flag
-/// `--bogus-flag``) rather than the generic `Usage` synopsis.
+/// the unknown flag with a specific `UsageOwned` message naming `--bogus-flag`,
+/// rather than the generic `Usage` synopsis.
 #[test]
 fn run_unknown_flag_returns_usage_error() {
     let args: Vec<String> = vec![
