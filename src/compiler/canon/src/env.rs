@@ -529,6 +529,8 @@ impl Env {
                     "andMap",
                     "combine",
                     "traverse",
+                    "toMaybe",
+                    "fromMaybe",
                 ],
             ),
             // `Ipe.Error` — the real `Error ErrorKind ErrorInfo` ADT.

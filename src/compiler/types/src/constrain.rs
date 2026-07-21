@@ -4409,6 +4409,10 @@ impl<'a> Builder<'a> {
                 fun(var(0), result(var(2), var(1))),
                 fun(list(var(0)), result(var(2), list(var(1)))),
             ),
+            // `toMaybe : Result e a -> Maybe a`. var(0)=e, var(1)=a.
+            K::ResultToMaybe => fun(result(var(0), var(1)), maybe(var(1))),
+            // `fromMaybe : e -> Maybe a -> Result e a`. var(0)=e, var(1)=a.
+            K::ResultFromMaybe => fun(var(0), fun(maybe(var(1)), result(var(0), var(1)))),
 
             // ── Bytes ──
             K::BytesEmpty => bytes(),
@@ -7864,6 +7868,8 @@ mod registry_phase_c_tests {
             K::ResultAndMap,
             K::ResultCombine,
             K::ResultTraverse,
+            K::ResultToMaybe,
+            K::ResultFromMaybe,
             K::MaybeMap2,
             K::MaybeMap3,
             K::MaybeMap4,

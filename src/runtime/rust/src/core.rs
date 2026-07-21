@@ -453,6 +453,26 @@ pub fn ipe_result_map_error<E, F, A>(
     }
 }
 
+/// `Result.toMaybe : Result e a -> Maybe a` — `Ok v` → `Just v`, `Err _` →
+/// `Nothing` (the error is discarded). Total.
+pub fn ipe_result_to_maybe<E, A>(r: IpeResult<E, A>) -> IpeMaybe<A> {
+    match r {
+        IpeResult::Ok(v) => IpeMaybe::Just(v),
+        IpeResult::Err(_) => IpeMaybe::Nothing,
+    }
+}
+
+/// `Result.fromMaybe : e -> Maybe a -> Result e a` — `Just v` → `Ok v`,
+/// `Nothing` → `Err err` (the supplied error fills the missing case). Total.
+/// Takes its arguments in Ipê order (`err`, then `maybe`), so no emitter arg
+/// swap is needed.
+pub fn ipe_result_from_maybe<E, A>(err: E, m: IpeMaybe<A>) -> IpeResult<E, A> {
+    match m {
+        IpeMaybe::Just(v) => IpeResult::Ok(v),
+        IpeMaybe::Nothing => IpeResult::Err(err),
+    }
+}
+
 // ===========================================
 // Maybe / Result default + traverse helpers
 // ===========================================
@@ -1151,5 +1171,27 @@ mod tests {
             id.chars().all(|c| c.is_ascii_hexdigit()),
             "id must be hex — got: {id:?}"
         );
+    }
+
+    // ── Result ↔ Maybe bridges — Elm-matching semantics ───────────────────
+
+    #[test]
+    fn result_to_maybe_matches_elm() {
+        // Elm: toMaybe (Ok 5) == Just 5; toMaybe (Err e) == Nothing.
+        let ok: IpeResult<String, i64> = IpeResult::Ok(5);
+        assert_eq!(ipe_result_to_maybe(ok), IpeMaybe::Just(5));
+        let err: IpeResult<String, i64> = IpeResult::Err("boom".to_string());
+        assert_eq!(ipe_result_to_maybe(err), IpeMaybe::Nothing);
+    }
+
+    #[test]
+    fn result_from_maybe_matches_elm() {
+        // Elm: fromMaybe e (Just v) == Ok v; fromMaybe e Nothing == Err e.
+        let just: IpeResult<String, i64> =
+            ipe_result_from_maybe("missing".to_string(), IpeMaybe::Just(9));
+        assert_eq!(just, IpeResult::Ok(9));
+        let nothing: IpeResult<String, i64> =
+            ipe_result_from_maybe("missing".to_string(), IpeMaybe::Nothing);
+        assert_eq!(nothing, IpeResult::Err("missing".to_string()));
     }
 }

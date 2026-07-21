@@ -334,6 +334,11 @@ pub enum StdlibKernel {
     /// `Result.traverse : (a -> Result e b) -> List a -> Result e (List b)`
     /// — one-pass map+collect; first `Err` short-circuits.
     ResultTraverse,
+    /// `Result.toMaybe : Result e a -> Maybe a` — `Ok`→`Just`, `Err`→`Nothing`.
+    ResultToMaybe,
+    /// `Result.fromMaybe : e -> Maybe a -> Result e a` — `Just`→`Ok`,
+    /// `Nothing`→`Err err`.
+    ResultFromMaybe,
     /// Internal: `Result.withDefault`-style defaulting used during lowering.
     /// Qualifier `"_internal_"` — not registered in the canon `QUALIFIERS`
     /// table and excluded from the tripwire test.
@@ -1788,6 +1793,8 @@ impl StdlibKernel {
             Self::ResultAndMap => d("Result", "andMap", 2, Pure, "result_and_map"),
             Self::ResultCombine => d("Result", "combine", 1, Pure, "result_combine"),
             Self::ResultTraverse => d("Result", "traverse", 2, Pure, "result_traverse"),
+            Self::ResultToMaybe => d("Result", "toMaybe", 1, Pure, "ipe_result_to_maybe"),
+            Self::ResultFromMaybe => d("Result", "fromMaybe", 2, Pure, "ipe_result_from_maybe"),
             // Internal: qualifier starts with '_' → skipped by tripwire test.
             Self::ResultOkDefault => d("_internal_", "okDefault", 1, Pure, "ok_res"),
             // ── Math ────────────────────────────────────────────────────────
@@ -3142,6 +3149,8 @@ impl StdlibKernel {
         Self::ResultAndMap,
         Self::ResultCombine,
         Self::ResultTraverse,
+        Self::ResultToMaybe,
+        Self::ResultFromMaybe,
         Self::ResultOkDefault, // qualifier "_internal_" → tripwire skips
         // Math
         Self::MathMin,
@@ -4404,6 +4413,8 @@ impl StdlibKernel {
             | Self::ResultAndMap
             | Self::ResultCombine
             | Self::ResultTraverse
+            | Self::ResultToMaybe
+            | Self::ResultFromMaybe
             | Self::ResultOkDefault
             | Self::MathMin
             | Self::MathMax

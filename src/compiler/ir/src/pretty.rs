@@ -444,6 +444,8 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::ResultAndMap => "Result.andMap",
         KernelFn::ResultCombine => "Result.combine",
         KernelFn::ResultTraverse => "Result.traverse",
+        KernelFn::ResultToMaybe => "Result.toMaybe",
+        KernelFn::ResultFromMaybe => "Result.fromMaybe",
         KernelFn::MathMin => "Math.min",
         KernelFn::MathMax => "Math.max",
         // ── Math constants ───────────────────────────────────────────────────

@@ -66,7 +66,7 @@ decisions live here.
 | `Set` | 10 | 0 | 7 | no HOF surface (`map`/`foldl`/`filter`/`partition`) |
 | `String` | 29 | 2 | 13 | code-point semantics (§5); missing char-fold family, `left`/`right`, `cons`/`uncons` |
 | `Maybe` | 7 | 0 | 0 | complete |
-| `Result` | 8 | 0 | 2 | missing `toMaybe`/`fromMaybe` bridges |
+| `Result` | 10 | 0 | 0 | complete — `toMaybe`/`fromMaybe` bridges now present |
 | `Char` | 6 | 2 | 5 | `toUpper`/`toLower` return `String`; missing `isHexDigit`/`isOctDigit`/`isAlphaNum` |
 | `Task` | 7 | 1 | 5 | fixed `Error` channel (§6); missing `map2..5`, `attempt` |
 | `Platform.Cmd` | 2 | 0 | 1 | missing `Cmd.map` |

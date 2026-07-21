@@ -13149,6 +13149,7 @@ impl<'a> Lowerer<'a> {
                 // ── Result/Maybe combine — arity 1 ─────────────────────
                 | KernelFn::ResultCombine
                 | KernelFn::MaybeCombine
+                | KernelFn::ResultToMaybe
                 // ── Dict arity-1 ─────────────────────────────────────────────
                 | KernelFn::DictIsEmpty
                 | KernelFn::DictSize
@@ -13402,6 +13403,7 @@ impl<'a> Lowerer<'a> {
                 // ── Result/Maybe andMap + Result.traverse — arity 2 ────
                 | KernelFn::ResultAndMap
                 | KernelFn::ResultTraverse
+                | KernelFn::ResultFromMaybe
                 | KernelFn::MaybeAndMap
                 | KernelFn::MathMin
                 | KernelFn::MathMax
@@ -14780,6 +14782,8 @@ impl<'a> Lowerer<'a> {
                     ("Result", "andMap") => Ok(Callee::Kernel(KernelFn::ResultAndMap)),
                     ("Result", "combine") => Ok(Callee::Kernel(KernelFn::ResultCombine)),
                     ("Result", "traverse") => Ok(Callee::Kernel(KernelFn::ResultTraverse)),
+                    ("Result", "toMaybe") => Ok(Callee::Kernel(KernelFn::ResultToMaybe)),
+                    ("Result", "fromMaybe") => Ok(Callee::Kernel(KernelFn::ResultFromMaybe)),
                     // ── Math kernels ───────────────────────────────────────
                     // `min` / `max` are polymorphic `a -> a -> a` — lowered to
                     // the runtime's generic compare, NOT through any `Int`

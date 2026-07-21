@@ -486,6 +486,8 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::ResultAndMap => "result_and_map",
         KernelFn::ResultCombine => "result_combine",
         KernelFn::ResultTraverse => "result_traverse",
+        KernelFn::ResultToMaybe => "ipe_result_to_maybe",
+        KernelFn::ResultFromMaybe => "ipe_result_from_maybe",
         // `Math.min` / `Math.max` map to the runtime's generic
         // `math_min<T: PartialOrd>` / `math_max<T: PartialOrd>`: a real
         // polymorphic compare at the argument's actual type — NO `Int`
