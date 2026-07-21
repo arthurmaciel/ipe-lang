@@ -1439,24 +1439,24 @@ pub fn resolve_runtime() -> Result<PathBuf, CliError> {
     Err(CliError::RuntimeNotFound)
 }
 
-/// The top-level usage hint, listing every subcommand and flag.
+/// The per-command usage hint shown when a command receives bad arguments.
+/// Kept short — one synopsis line per command — so the error is easy to scan.
+/// Full option descriptions live in `ipe <command> --help`.
 const USAGE: &str = "usage:\n  \
-     ipe init  [<name>|.] [--force]\n  \
-     ipe build [<entry.ipe|project-dir|ipe.toml>] [--out <dir>] [--runtime <dir>] [--emit-ir] [--fix]\n  \
-     \x20         [--static] [--target <triple|wasm>] [--allocator <auto|system|dlmalloc|talc|mimalloc>]\n  \
-     \x20         [--allow-slow-allocator]\n  \
-     ipe run   [<entry.ipe|project-dir|ipe.toml>] [--out <dir>] [--runtime <dir>]\n  \
-     \x20         [--static] [--target <triple>] [--allocator <auto|system|dlmalloc|talc|mimalloc>]\n  \
-     \x20         [--allow-slow-allocator] [-- <args>...]\n  \
-     ipe watch [<entry.ipe|project-dir|ipe.toml>] [--out <dir>] [--runtime <dir>] [--port <n>]\n  \
-     ipe add <crate>[@<version>] [--features a,b] [--yes] [--allow-build-scripts]\n  \
-     ipe remove <crate>\n  \
-     ipe install [--yes] [--allow-build-scripts]\n  \
-     ipe explain [<CODE>]\n  \
-     ipe fix <entry.ipe> [--yes]\n  \
-     ipe fmt [<path>|.] [--check]\n  \
+     ipe init  [<name>]\n  \
+     ipe build [<path>]\n  \
+     ipe run   [<path>]\n  \
+     ipe watch [<path>]\n  \
+     ipe fix   <path>\n  \
+     ipe fmt   [<path>]\n  \
+     ipe add   <package>\n  \
+     ipe remove <package>\n  \
+     ipe explain [<code>]\n  \
+     ipe rust  <add|remove|install> [<args>...]\n  \
+     ipe diff  <old> <new>\n  \
      ipe lsp\n  \
-     ipe version";
+     ipe version\n\n  \
+     Run `ipe <command> --help` for options.";
 
 /// A request for help asks for output, not an error: it prints to stdout and
 /// exits successfully. Returned by [`intercept_help`] so [`run_cli`] can honour
@@ -1556,7 +1556,7 @@ fn default_entry() -> Result<String, CliError> {
     Err(CliError::Usage(USAGE))
 }
 
-/// `ipe watch [<entry>] [--out <dir>] [--runtime <dir>] [--port <n>]`
+/// `ipe watch [<path>]` — rebuild and re-run on every source change
 /// (`crate::watch`). Never returns
 /// `Err` for a build failure (INV-3: a red build is logged, not fatal);
 /// only misuse / setup failures propagate.
@@ -1686,9 +1686,7 @@ fn resolve_static_plan(
     Ok(static_plan)
 }
 
-/// `ipe build [<entry.ipe>] [--out <dir>] [--runtime <dir>] [--emit-ir] [--fix]
-/// [--static] [--target <triple>] [--allocator <choice>]
-/// [--allow-slow-allocator]`.
+/// `ipe build [<path>]` — compile a program to a native or WebAssembly artifact.
 fn run_build(rest: &[String]) -> Result<(), CliError> {
     let mut it = rest.iter();
     let entry = match it.next() {
@@ -1893,7 +1891,7 @@ fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
     Ok(())
 }
 
-/// `ipe run <entry.ipe|project-dir|ipe.toml> [--out <dir>] [--runtime <dir>] [-- <args>...]`
+/// `ipe run [<path>]` — compile a program and run the resulting binary.
 ///
 /// One-shot build + run: compiles the entry to `out_dir` (same routing as
 /// [`run_build`]), then invokes `cargo build` on the emitted project and
@@ -2087,7 +2085,8 @@ fn run_explain(rest: &[String]) -> Result<(), CliError> {
     }
 }
 
-/// `ipe fix <entry.ipe> [--yes]`. Default is interactive per-edit confirmation;
+/// `ipe fix <path>` — apply machine-applicable fixes to the source file.
+/// Default is interactive per-edit confirmation;
 /// `--yes` is durable authorization to apply every machine-applicable edit.
 fn run_fix(rest: &[String]) -> Result<(), CliError> {
     let mut it = rest.iter();
