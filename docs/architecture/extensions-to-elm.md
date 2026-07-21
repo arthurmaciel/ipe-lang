@@ -67,7 +67,7 @@ decisions live here.
 | `String` | 29 | 2 | 13 | code-point semantics (§5); missing char-fold family, `left`/`right`, `cons`/`uncons` |
 | `Maybe` | 7 | 0 | 0 | complete |
 | `Result` | 10 | 0 | 0 | complete — `toMaybe`/`fromMaybe` bridges now present |
-| `Char` | 6 | 2 | 5 | `toUpper`/`toLower` return `String`; missing `isHexDigit`/`isOctDigit`/`isAlphaNum` |
+| `Char` | 9 | 2 | 2 | `toUpper`/`toLower` return `String`; `isAlphaNum`/`isHexDigit`/`isOctDigit` now present |
 | `Task` | 7 | 1 | 5 | fixed `Error` channel (§6); missing `map2..5`, `attempt` |
 | `Platform.Cmd` | 2 | 0 | 1 | missing `Cmd.map` |
 | `Platform.Sub` | 2 | 0 | 1 | missing `Sub.map` |

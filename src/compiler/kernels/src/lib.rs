@@ -197,6 +197,9 @@ pub enum StdlibKernel {
     CharToUpper,
     CharToCode,
     CharFromCode,
+    CharIsAlphaNum,
+    CharIsHexDigit,
+    CharIsOctDigit,
     // ── List ────────────────────────────────────────────────────────────────
     ListMap,
     ListFilter,
@@ -1673,6 +1676,9 @@ impl StdlibKernel {
             Self::CharToUpper => d("Char", "toUpper", 1, Pure, "char_to_upper"),
             Self::CharToCode => d("Char", "toCode", 1, Pure, "char_to_code"),
             Self::CharFromCode => d("Char", "fromCode", 1, Pure, "char_from_code"),
+            Self::CharIsAlphaNum => d("Char", "isAlphaNum", 1, Pure, "char_is_alpha_num"),
+            Self::CharIsHexDigit => d("Char", "isHexDigit", 1, Pure, "char_is_hex_digit"),
+            Self::CharIsOctDigit => d("Char", "isOctDigit", 1, Pure, "char_is_oct_digit"),
             // ── List ────────────────────────────────────────────────────────
             Self::ListMap => d("List", "map", 2, Pure, "list_map_consume"),
             Self::ListFilter => d("List", "filter", 2, Pure, "list_filter"),
@@ -3052,6 +3058,9 @@ impl StdlibKernel {
         Self::CharToUpper,
         Self::CharToCode,
         Self::CharFromCode,
+        Self::CharIsAlphaNum,
+        Self::CharIsHexDigit,
+        Self::CharIsOctDigit,
         // List
         Self::ListMap,
         Self::ListFilter,
@@ -4325,6 +4334,9 @@ impl StdlibKernel {
             | Self::CharToUpper
             | Self::CharToCode
             | Self::CharFromCode
+            | Self::CharIsAlphaNum
+            | Self::CharIsHexDigit
+            | Self::CharIsOctDigit
             | Self::ListMap
             | Self::ListFilter
             | Self::ListFoldl

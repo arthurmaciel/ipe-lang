@@ -61,6 +61,26 @@ pub fn char_is_alpha(c: char) -> bool {
     )
 }
 
+/// `isAlphaNum` — a letter or a digit. Mirrors Elm's
+/// `isUpper || isLower || isDigit`, here expressed over the existing
+/// category-based `isAlpha`/`isDigit` so Unicode letters/digits classify
+/// consistently with the rest of this module.
+pub fn char_is_alpha_num(c: char) -> bool {
+    char_is_alpha(c) || char_is_digit(c)
+}
+
+/// `isHexDigit` — an ASCII hexadecimal digit (`0-9`, `a-f`, `A-F`). Matches
+/// Elm's code-point ranges exactly (ASCII only, never Unicode digits).
+pub fn char_is_hex_digit(c: char) -> bool {
+    c.is_ascii_hexdigit()
+}
+
+/// `isOctDigit` — an ASCII octal digit (`0-7`). Matches Elm's code-point range
+/// exactly (ASCII only).
+pub fn char_is_oct_digit(c: char) -> bool {
+    ('0'..='7').contains(&c)
+}
+
 pub fn char_to_lower(c: char) -> String {
     c.to_lowercase().to_string()
 }
@@ -152,5 +172,30 @@ mod tests {
         assert_eq!(char_from_code(-1), '\u{FFFD}');
         assert_eq!(char_from_code(0x110000), '\u{FFFD}');
         assert_eq!(char_from_code(0xD800), '\u{FFFD}'); // lone surrogate
+    }
+
+    #[test]
+    fn alpha_num_hex_oct_match_elm() {
+        // isAlphaNum: letters + digits, not punctuation/space.
+        assert!(char_is_alpha_num('a'));
+        assert!(char_is_alpha_num('Z'));
+        assert!(char_is_alpha_num('7'));
+        assert!(!char_is_alpha_num('-'));
+        assert!(!char_is_alpha_num(' '));
+
+        // isHexDigit: 0-9 a-f A-F only (ASCII).
+        assert!(char_is_hex_digit('0'));
+        assert!(char_is_hex_digit('9'));
+        assert!(char_is_hex_digit('a'));
+        assert!(char_is_hex_digit('F'));
+        assert!(!char_is_hex_digit('g'));
+        assert!(!char_is_hex_digit('G'));
+
+        // isOctDigit: 0-7 only.
+        assert!(char_is_oct_digit('0'));
+        assert!(char_is_oct_digit('7'));
+        assert!(!char_is_oct_digit('8'));
+        assert!(!char_is_oct_digit('9'));
+        assert!(!char_is_oct_digit('a'));
     }
 }

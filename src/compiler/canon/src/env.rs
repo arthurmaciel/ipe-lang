@@ -456,8 +456,17 @@ impl Env {
             (
                 "Char",
                 &[
-                    "isAlpha", "isDigit", "isLower", "isUpper", "toLower", "toUpper", "toCode",
+                    "isAlpha",
+                    "isDigit",
+                    "isLower",
+                    "isUpper",
+                    "toLower",
+                    "toUpper",
+                    "toCode",
                     "fromCode",
+                    "isAlphaNum",
+                    "isHexDigit",
+                    "isOctDigit",
                 ],
             ),
             (

@@ -13117,6 +13117,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::CharToUpper
                 | KernelFn::CharToCode
                 | KernelFn::CharFromCode
+                | KernelFn::CharIsAlphaNum
+                | KernelFn::CharIsHexDigit
+                | KernelFn::CharIsOctDigit
                 | KernelFn::LogPrintln
                 | KernelFn::LogInfo
                 | KernelFn::LogDebug
@@ -14671,6 +14674,9 @@ impl<'a> Lowerer<'a> {
                     ("Char", "toUpper") => Ok(Callee::Kernel(KernelFn::CharToUpper)),
                     ("Char", "toCode") => Ok(Callee::Kernel(KernelFn::CharToCode)),
                     ("Char", "fromCode") => Ok(Callee::Kernel(KernelFn::CharFromCode)),
+                    ("Char", "isAlphaNum") => Ok(Callee::Kernel(KernelFn::CharIsAlphaNum)),
+                    ("Char", "isHexDigit") => Ok(Callee::Kernel(KernelFn::CharIsHexDigit)),
+                    ("Char", "isOctDigit") => Ok(Callee::Kernel(KernelFn::CharIsOctDigit)),
                     // ── List kernels ───────────────────────────────────────
                     ("List", "map") => Ok(Callee::Kernel(KernelFn::ListMap)),
                     ("List", "filter") => Ok(Callee::Kernel(KernelFn::ListFilter)),

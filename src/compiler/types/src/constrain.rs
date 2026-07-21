@@ -5197,9 +5197,13 @@ impl<'a> Builder<'a> {
 
             // ── Char (8) — `Char -> …`; `toLower`/`toUpper` return a 1-rune
             //    String (runtime `char_to_lower : char -> String`). ──
-            K::CharIsAlpha | K::CharIsDigit | K::CharIsLower | K::CharIsUpper => {
-                fun(char(), bool_ty())
-            }
+            K::CharIsAlpha
+            | K::CharIsDigit
+            | K::CharIsLower
+            | K::CharIsUpper
+            | K::CharIsAlphaNum
+            | K::CharIsHexDigit
+            | K::CharIsOctDigit => fun(char(), bool_ty()),
             K::CharToLower | K::CharToUpper => fun(char(), string()),
             K::CharToCode => fun(char(), int()),
             K::CharFromCode => fun(int(), char()),
@@ -7667,6 +7671,9 @@ mod registry_phase_c_tests {
             K::CharToUpper,
             K::CharToCode,
             K::CharFromCode,
+            K::CharIsAlphaNum,
+            K::CharIsHexDigit,
+            K::CharIsOctDigit,
             // Error (13 — Ipe.Error minimal `Error = String` slice)
             K::ErrorUnexpected,
             K::ErrorInvalidInput,
