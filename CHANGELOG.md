@@ -10,6 +10,18 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.9](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.8...ipe-v0.1.9) (2026-07-21)
+
+
+### Features
+
+* **security:** [#359](https://github.com/arthurmaciel/ipe-lang/issues/359) drive the abrupt-failure ledger toward zero ([#58](https://github.com/arthurmaciel/ipe-lang/issues/58)) ([ba4c309](https://github.com/arthurmaciel/ipe-lang/commit/ba4c3091ec33785b975d610d00a7d29cff7b5442))
+
+
+### Bug Fixes
+
+* **ffi:** [#363](https://github.com/arthurmaciel/ipe-lang/issues/363) refuse recursive provide types at decode (SEAL) ([#61](https://github.com/arthurmaciel/ipe-lang/issues/61)) ([51bc01d](https://github.com/arthurmaciel/ipe-lang/commit/51bc01d0e6895a375f4b638e00beee2ba8438710))
+
 ## [0.1.8](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.7...ipe-v0.1.8) (2026-07-21)
 
 
