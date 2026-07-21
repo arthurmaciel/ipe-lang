@@ -513,6 +513,18 @@ pub enum WireDefect {
         /// The offending feature string.
         got: String,
     },
+    /// A `[rust.provide.closure]` signature does not parse into the closed
+    /// [`crate::carrier::ClosureSig`] shape: a parameter or return component
+    /// outside the carrier set, a bound outside `{Send, Sync, 'static}`, a
+    /// return that is neither a total scalar carrier nor `Result`/`Option`, or
+    /// unconsumed trailing text. Refused at decode — no fragment reaches the
+    /// emitted adapter as a raw string.
+    InvalidClosureSig {
+        /// The offending signature string.
+        got: String,
+        /// Which structural rule was broken.
+        reason: String,
+    },
     /// The document is not the JSON shape the wire contract declares
     /// (carries the rendered serde error as detail).
     Json {
@@ -599,6 +611,12 @@ impl fmt::Display for WireDefect {
                     f,
                     "{got:?} is not a legal cargo feature name (it must match the charset \
                      [A-Za-z0-9_+./?:-])"
+                )
+            }
+            Self::InvalidClosureSig { got, reason } => {
+                write!(
+                    f,
+                    "{got:?} is not a legal provide.closure signature: {reason}"
                 )
             }
             Self::Json { detail } => write!(f, "{detail}"),
