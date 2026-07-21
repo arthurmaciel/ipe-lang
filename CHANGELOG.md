@@ -10,6 +10,25 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.3](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.2...ipe-v0.1.3) (2026-07-21)
+
+
+### Features
+
+* **backend:** [#315](https://github.com/arthurmaciel/ipe-lang/issues/315) native emitter sweep to 0 divergences (cutover gated by non-body content) ([#32](https://github.com/arthurmaciel/ipe-lang/issues/32)) ([5581976](https://github.com/arthurmaciel/ipe-lang/commit/558197635e215d68beff405b67aacc7cd3e31760))
+* **cli:** declutter ipe help (soft yellow, no optional-arg overview, bug-report footer) ([#15](https://github.com/arthurmaciel/ipe-lang/issues/15)) ([2f1b6dd](https://github.com/arthurmaciel/ipe-lang/commit/2f1b6dd85434decc6b20518cad82f4b7673c619b))
+* **cli:** typed arg parsing — invalid optional-flag combinations unrepresentable + exhaustive tests ([#34](https://github.com/arthurmaciel/ipe-lang/issues/34)) ([783e922](https://github.com/arthurmaciel/ipe-lang/commit/783e92212020b6d6c2bde9dd1c11564be9790af5))
+* **install:** fix curl (23), add spinner/percent/ETA + friendly branded messages ([#28](https://github.com/arthurmaciel/ipe-lang/issues/28)) ([b27654d](https://github.com/arthurmaciel/ipe-lang/commit/b27654d0ed7f3bdb72bec2772c23db14245f13ab))
+
+
+### Bug Fixes
+
+* **cli:** Usage error strings match the redesigned help ([#23](https://github.com/arthurmaciel/ipe-lang/issues/23)) ([c0872ee](https://github.com/arthurmaciel/ipe-lang/commit/c0872ee57b08eae365f4ae14be2fc5a96d7718db))
+* examples-sweep 26/29/31 build+run green ([#33](https://github.com/arthurmaciel/ipe-lang/issues/33)) ([26c0c11](https://github.com/arthurmaciel/ipe-lang/commit/26c0c1167d66e5a266307e106783bc45d6ff5fc8))
+* **ffi:** [#326](https://github.com/arthurmaciel/ipe-lang/issues/326) admit coercible multi-result tuples for non-borrow-reader methods ([#21](https://github.com/arthurmaciel/ipe-lang/issues/21)) ([f37fe03](https://github.com/arthurmaciel/ipe-lang/commit/f37fe03f8e775b68b5ee5ddfb8dac3c3e167f52c))
+* **fmt:** [#338](https://github.com/arthurmaciel/ipe-lang/issues/338) parenthesise negative literals in atom position ([#24](https://github.com/arthurmaciel/ipe-lang/issues/24)) ([3156db5](https://github.com/arthurmaciel/ipe-lang/commit/3156db56ce741dec9c95ec749bc4fdbe101a61df))
+* **stdlib:** [#324](https://github.com/arthurmaciel/ipe-lang/issues/324) identify + fix 4 00-standard-libs run-time failures ([#22](https://github.com/arthurmaciel/ipe-lang/issues/22)) ([7dcbf21](https://github.com/arthurmaciel/ipe-lang/commit/7dcbf2160bde4fcdf491012a426dbe3c06d63e05))
+
 ## [0.1.2](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.1...ipe-v0.1.2) (2026-07-21)
 
 
