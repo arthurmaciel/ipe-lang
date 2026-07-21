@@ -1,0 +1,64 @@
+module Main exposing (main)
+
+-- Cmd.map / Sub.map SEAL + composition fixture.
+--
+-- A child sub-component speaks its own `ChildMsg`; the parent folds it in with
+-- `Cmd.map` (its init command) and `Sub.map` (its subscriptions), retagging the
+-- child's effects into the parent's `Msg`. Proves the full pipeline compiles,
+-- the emitted crate builds, and the program runs: `Cli.program` renders the
+-- initial view once at stdin EOF and exits 0.
+
+import Ipe.Cli as Cli
+
+type ChildMsg
+    = ChildTick
+
+type Msg
+    = FromChild ChildMsg
+    | GotLine String
+
+type alias Model =
+    { lines : Int }
+
+-- The child's own effects, in `ChildMsg`.
+childCmd : Cmd ChildMsg
+childCmd =
+    Cmd.none
+
+childSub : Sub ChildMsg
+childSub =
+    Sub.none
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { lines = 0 }, Cmd.map FromChild childCmd )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        FromChild _child ->
+            ( model, Cmd.none )
+
+        GotLine _line ->
+            ( { model | lines = model.lines + 1 }, Cmd.none )
+
+view : Model -> String
+view model =
+    "mapped lines: " ++ String.fromInt model.lines
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.map FromChild childSub
+
+onLine : String -> Msg
+onLine line =
+    GotLine line
+
+main =
+    Cli.program
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , onLine = onLine
+        }

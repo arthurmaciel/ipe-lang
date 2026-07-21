@@ -833,9 +833,11 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::CmdNone => "Cmd.none",
         KernelFn::CmdBatch => "Cmd.batch",
         KernelFn::CmdPerform => "Cmd.perform",
+        KernelFn::CmdMap => "Cmd.map",
         KernelFn::SubNone => "Sub.none",
         KernelFn::SubBatch => "Sub.batch",
         KernelFn::SubEvery => "Sub.every",
+        KernelFn::SubMap => "Sub.map",
         KernelFn::TimeEvery => "Time.every",
         // reserved
         KernelFn::CmdPublish => "Cmd.publish",

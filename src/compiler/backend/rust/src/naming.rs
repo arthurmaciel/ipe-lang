@@ -932,9 +932,11 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::CmdNone => "cmd_none",
         KernelFn::CmdBatch => "cmd_batch",
         KernelFn::CmdPerform => "cmd_perform",
+        KernelFn::CmdMap => "cmd_map",
         KernelFn::SubNone => "sub_none",
         KernelFn::SubBatch => "sub_batch",
         KernelFn::SubEvery => "sub_every",
+        KernelFn::SubMap => "sub_map",
         KernelFn::TimeEvery => "time_every",
         // ── Reserved TEA kernels (NOT emittable; emit path returns CompilerBug) ─────
         // kernel_name is still required for any exhaustive match on KernelFn.

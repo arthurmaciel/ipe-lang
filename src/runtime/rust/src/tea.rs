@@ -97,6 +97,87 @@ where
     }))
 }
 
+/// Cmd.map : (a -> msg) -> Cmd a -> Cmd msg — retag every message a command
+/// would produce. Rebuilds the command tree, composing `f` over each leaf's
+/// payload: `Perform`'s produced value is fed through `f`; `Batch` maps its
+/// children; `None` passes through. `Publish` carries no `M`-typed payload (its
+/// thunk yields the subscriber count `i64`; `M` is phantom there), so it is
+/// re-tagged by identity — the one leaf where `f` is not applied.
+///
+/// `f` is shared (`Arc`) because a `Batch` fans it across children and a
+/// `Perform` thunk captures it to run later; the composition stays lazy — no
+/// message is produced until the run loop fires the thunk.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn cmd_map<A, M, F>(cmd: IpeCmd<A>, f: F) -> IpeCmd<M>
+where
+    A: Send + 'static,
+    M: Send + 'static,
+    F: Fn(A) -> M + Send + Sync + 'static,
+{
+    cmd_map_arc(cmd, std::sync::Arc::new(f))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn cmd_map_arc<A, M>(cmd: IpeCmd<A>, f: std::sync::Arc<dyn Fn(A) -> M + Send + Sync>) -> IpeCmd<M>
+where
+    A: Send + 'static,
+    M: Send + 'static,
+{
+    match cmd {
+        IpeCmd::None => IpeCmd::None,
+        IpeCmd::Batch(items) => IpeCmd::Batch(
+            items
+                .into_iter()
+                .map(|c| cmd_map_arc(c, f.clone()))
+                .collect(),
+        ),
+        IpeCmd::Perform(thunk) => IpeCmd::Perform(Box::new(move || {
+            Box::pin(async move {
+                let a = thunk().await;
+                f(a)
+            })
+        })),
+        IpeCmd::Publish(thunk) => IpeCmd::Publish(thunk),
+    }
+}
+
+/// wasm: same tree rebuild, `Rc`-shared `f`, no `Send`/`Sync` bounds
+/// (single-threaded browser event loop). `Publish` re-tags by identity, as on
+/// native.
+#[cfg(target_arch = "wasm32")]
+pub fn cmd_map<A, M, F>(cmd: IpeCmd<A>, f: F) -> IpeCmd<M>
+where
+    A: 'static,
+    M: 'static,
+    F: Fn(A) -> M + 'static,
+{
+    cmd_map_rc(cmd, std::rc::Rc::new(f))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn cmd_map_rc<A, M>(cmd: IpeCmd<A>, f: std::rc::Rc<dyn Fn(A) -> M>) -> IpeCmd<M>
+where
+    A: 'static,
+    M: 'static,
+{
+    match cmd {
+        IpeCmd::None => IpeCmd::None,
+        IpeCmd::Batch(items) => IpeCmd::Batch(
+            items
+                .into_iter()
+                .map(|c| cmd_map_rc(c, f.clone()))
+                .collect(),
+        ),
+        IpeCmd::Perform(thunk) => IpeCmd::Perform(Box::new(move || {
+            Box::pin(async move {
+                let a = thunk().await;
+                f(a)
+            })
+        })),
+        IpeCmd::Publish(thunk) => IpeCmd::Publish(thunk),
+    }
+}
+
 // ─── Sub kernels ──────────────────────────────────────────────────────────
 
 pub fn sub_none<M>() -> IpeSub<M> {
@@ -116,6 +197,85 @@ pub fn sub_every<M>(ms: i64, msg: M) -> IpeSub<M> {
 /// lowers to this.
 pub fn time_every<M>(ms: i64, msg: M) -> IpeSub<M> {
     sub_every(ms, msg)
+}
+
+/// Sub.map : (a -> msg) -> Sub a -> Sub msg — retag every message a
+/// subscription would deliver. Rebuilds the subscription tree: `Every`'s stored
+/// `msg` is retagged eagerly (`f msg`); `Batch` maps its children; `None`
+/// passes through; a `Source` is rewrapped so the emit callback it receives
+/// first pushes each `a` through `f` before handing the resulting `msg` to the
+/// scheduler's real emit — the source stays oblivious to the retagging and its
+/// teardown handle is preserved unchanged.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn sub_map<A, M, F>(sub: IpeSub<A>, f: F) -> IpeSub<M>
+where
+    A: Send + 'static,
+    M: Send + 'static,
+    F: Fn(A) -> M + Send + Sync + 'static,
+{
+    sub_map_arc(sub, std::sync::Arc::new(f))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn sub_map_arc<A, M>(sub: IpeSub<A>, f: std::sync::Arc<dyn Fn(A) -> M + Send + Sync>) -> IpeSub<M>
+where
+    A: Send + 'static,
+    M: Send + 'static,
+{
+    match sub {
+        IpeSub::None => IpeSub::None,
+        IpeSub::Batch(items) => IpeSub::Batch(
+            items
+                .into_iter()
+                .map(|s| sub_map_arc(s, f.clone()))
+                .collect(),
+        ),
+        IpeSub::Every { ms, msg } => IpeSub::Every { ms, msg: f(msg) },
+        IpeSub::Source(spawn) => IpeSub::Source(Box::new(
+            move |emit_outer: std::sync::Arc<dyn Fn(M) + Send + Sync>| {
+                let emit_inner: std::sync::Arc<dyn Fn(A) + Send + Sync> =
+                    std::sync::Arc::new(move |a| emit_outer(f(a)));
+                spawn(emit_inner)
+            },
+        )),
+    }
+}
+
+/// wasm: same tree rebuild, `Rc`-shared `f`, no `Send`/`Sync` bounds. The
+/// `Source` rewrap preserves the source's teardown thunk unchanged.
+#[cfg(target_arch = "wasm32")]
+pub fn sub_map<A, M, F>(sub: IpeSub<A>, f: F) -> IpeSub<M>
+where
+    A: 'static,
+    M: 'static,
+    F: Fn(A) -> M + 'static,
+{
+    sub_map_rc(sub, std::rc::Rc::new(f))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn sub_map_rc<A, M>(sub: IpeSub<A>, f: std::rc::Rc<dyn Fn(A) -> M>) -> IpeSub<M>
+where
+    A: 'static,
+    M: 'static,
+{
+    match sub {
+        IpeSub::None => IpeSub::None,
+        IpeSub::Batch(items) => IpeSub::Batch(
+            items
+                .into_iter()
+                .map(|s| sub_map_rc(s, f.clone()))
+                .collect(),
+        ),
+        IpeSub::Every { ms, msg } => IpeSub::Every { ms, msg: f(msg) },
+        IpeSub::Source(spawn) => {
+            IpeSub::Source(Box::new(move |emit_outer: std::rc::Rc<dyn Fn(M)>| {
+                let emit_inner: std::rc::Rc<dyn Fn(A)> =
+                    std::rc::Rc::new(move |a| emit_outer(f(a)));
+                spawn(emit_inner)
+            }))
+        }
+    }
 }
 
 // `Ipe.Http.Stream.chunks` → `Sub_subscribeStream` lives in `http_stream.rs`
@@ -337,4 +497,132 @@ where
         let _ = std::io::stdout().write_all(b"\n");
         ok_res(())
     })
+}
+
+// ─── Cmd.map / Sub.map unit tests ──────────────────────────────────────────
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod map_tests {
+    use super::*;
+
+    // Two distinct message types so the retag is observable at the type level:
+    // `sub_map`/`cmd_map` carry `Child` into `Parent`.
+    #[derive(Clone, Debug, PartialEq)]
+    enum Child {
+        Tick(i64),
+    }
+    #[derive(Clone, Debug, PartialEq)]
+    enum Parent {
+        FromChild(Child),
+    }
+
+    fn wrap(c: Child) -> Parent {
+        Parent::FromChild(c)
+    }
+
+    #[test]
+    fn sub_map_every_retags_stored_msg() {
+        let mapped = sub_map(sub_every(50, Child::Tick(7)), wrap);
+        match mapped {
+            IpeSub::Every { ms, msg } => {
+                assert_eq!(ms, 50);
+                assert_eq!(msg, Parent::FromChild(Child::Tick(7)));
+            }
+            _ => panic!("expected Every"),
+        }
+    }
+
+    #[test]
+    fn sub_map_batch_and_none_recurse() {
+        let mapped = sub_map(
+            sub_batch(vec![sub_every(1, Child::Tick(1)), sub_none()]),
+            wrap,
+        );
+        match mapped {
+            IpeSub::Batch(items) => {
+                assert_eq!(items.len(), 2);
+                assert!(matches!(items[0], IpeSub::Every { ms: 1, .. }));
+                assert!(matches!(items[1], IpeSub::None));
+            }
+            _ => panic!("expected Batch"),
+        }
+    }
+
+    #[test]
+    fn sub_map_source_retags_emitted_value() {
+        // A source that emits one Child::Tick(9); after mapping, the emit
+        // callback must receive Parent::FromChild(Child::Tick(9)).
+        let src: IpeSub<Child> = IpeSub::Source(Box::new(
+            |emit: std::sync::Arc<dyn Fn(Child) + Send + Sync>| {
+                tokio::spawn(async move {
+                    emit(Child::Tick(9));
+                })
+            },
+        ));
+        let mapped = sub_map(src, wrap);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let got = rt.block_on(async move {
+            let (tx, rx) = std::sync::mpsc::channel::<Parent>();
+            let emit: std::sync::Arc<dyn Fn(Parent) + Send + Sync> =
+                std::sync::Arc::new(move |m| {
+                    let _ = tx.send(m);
+                });
+            let IpeSub::Source(spawn) = mapped else {
+                panic!("expected Source");
+            };
+            let handle = spawn(emit);
+            let _ = handle.await;
+            rx.recv().expect("one message")
+        });
+        assert_eq!(got, Parent::FromChild(Child::Tick(9)));
+    }
+
+    #[test]
+    fn cmd_map_perform_retags_produced_msg() {
+        let cmd: IpeCmd<Child> = IpeCmd::Perform(Box::new(|| Box::pin(async { Child::Tick(4) })));
+        let mapped = cmd_map(cmd, wrap);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let got = rt.block_on(async move {
+            let IpeCmd::Perform(thunk) = mapped else {
+                panic!("expected Perform");
+            };
+            thunk().await
+        });
+        assert_eq!(got, Parent::FromChild(Child::Tick(4)));
+    }
+
+    #[test]
+    fn cmd_map_batch_and_none_recurse() {
+        let cmd: IpeCmd<Child> = cmd_batch(vec![
+            IpeCmd::Perform(Box::new(|| Box::pin(async { Child::Tick(2) }))),
+            cmd_none(),
+        ]);
+        let mapped = cmd_map(cmd, wrap);
+        match mapped {
+            IpeCmd::Batch(items) => {
+                assert_eq!(items.len(), 2);
+                assert!(matches!(items[0], IpeCmd::Perform(_)));
+                assert!(matches!(items[1], IpeCmd::None));
+            }
+            _ => panic!("expected Batch"),
+        }
+    }
+
+    #[test]
+    fn cmd_map_publish_retags_by_identity() {
+        // Publish yields the subscriber count (i64), not an M — mapping keeps
+        // the thunk intact and only changes the phantom M in the type.
+        let cmd: IpeCmd<Child> = IpeCmd::Publish(Box::new(|_origin| 3));
+        let mapped: IpeCmd<Parent> = cmd_map(cmd, wrap);
+        match mapped {
+            IpeCmd::Publish(thunk) => assert_eq!(thunk("sid"), 3),
+            _ => panic!("expected Publish"),
+        }
+    }
 }

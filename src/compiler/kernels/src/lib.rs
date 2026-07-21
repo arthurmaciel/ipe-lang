@@ -707,10 +707,16 @@ pub enum StdlibKernel {
     CmdNone,
     CmdBatch,
     CmdPerform,
+    /// `Cmd.map` — `(a -> msg) -> Cmd a -> Cmd msg`; retags a sub-component's
+    /// commands into the parent's message type.
+    CmdMap,
     SubNone,
     SubBatch,
     SubEvery,
     TimeEvery,
+    /// `Sub.map` — `(a -> msg) -> Sub a -> Sub msg`; the `Sub` twin of
+    /// [`Self::CmdMap`].
+    SubMap,
     // ── TEA: pub/sub ────────────────────────────────────────────────────────
     /// `Cmd.publish` — `"publish"` registered in canon `QUALIFIERS`.
     CmdPublish,
@@ -2257,10 +2263,12 @@ impl StdlibKernel {
             Self::CmdNone => d("Cmd", "none", 0, Tea, "cmd_none"),
             Self::CmdBatch => d("Cmd", "batch", 1, Tea, "cmd_batch"),
             Self::CmdPerform => d("Cmd", "perform", 2, Tea, "cmd_perform"),
+            Self::CmdMap => d("Cmd", "map", 2, Tea, "cmd_map"),
             Self::SubNone => d("Sub", "none", 0, Tea, "sub_none"),
             Self::SubBatch => d("Sub", "batch", 1, Tea, "sub_batch"),
             Self::SubEvery => d("Sub", "every", 2, Tea, "sub_every"),
             Self::TimeEvery => d("Time", "every", 2, Tea, "time_every"),
+            Self::SubMap => d("Sub", "map", 2, Tea, "sub_map"),
             // ── TEA: reserved pub/sub ────────────────────────────────────────
             // Qualifier "Cmd" IS in qual_vars but "publish"/"publishNoEcho" are
             // NOT yet. Absent from ALL until wired; decl() is still exhaustive.
@@ -3535,11 +3543,13 @@ impl StdlibKernel {
         Self::CmdNone,
         Self::CmdBatch,
         Self::CmdPerform,
+        Self::CmdMap,
         Self::CmdPublish,
         Self::CmdPublishNoEcho,
         Self::SubNone,
         Self::SubBatch,
         Self::SubEvery,
+        Self::SubMap,
         Self::SubSubscribeTopic,
         Self::TimeEvery,
         // TEA: PubSub reserved (qualifier "PubSub" not yet in qual_vars →
@@ -4731,8 +4741,10 @@ impl StdlibKernel {
             | Self::CmdNone
             | Self::CmdBatch
             | Self::CmdPerform
+            | Self::CmdMap
             | Self::SubNone
             | Self::SubBatch
+            | Self::SubMap
             | Self::CmdPublish
             | Self::CmdPublishNoEcho
             | Self::SubSubscribeTopic
@@ -5194,9 +5206,11 @@ impl StdlibKernel {
             Self::CmdNone
                 | Self::CmdBatch
                 | Self::CmdPerform
+                | Self::CmdMap
                 | Self::SubNone
                 | Self::SubBatch
                 | Self::SubEvery
+                | Self::SubMap
                 | Self::TimeEvery
                 | Self::CmdPublish
                 | Self::CmdPublishNoEcho
@@ -6141,9 +6155,11 @@ impl StdlibKernel {
                 Self::CmdNone
                     | Self::CmdBatch
                     | Self::CmdPerform
+                    | Self::CmdMap
                     | Self::SubNone
                     | Self::SubBatch
                     | Self::SubEvery
+                    | Self::SubMap
                     | Self::TimeEvery
                     | Self::CmdPublish
                     | Self::CmdPublishNoEcho
