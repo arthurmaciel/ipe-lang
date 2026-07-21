@@ -2213,6 +2213,72 @@ pub fn verify_capabilities(
     Err(CliError::CapabilityMismatch { missing, extra })
 }
 
+/// The security capabilities a whole PACKAGE exercises — the union over every
+/// module the package ships, not just the entry's reachability closure.
+///
+/// A single-entry program's capability set is its entry's reachable kernels
+/// ([`verify_capabilities`]). A publishable package is different: a downstream
+/// consumer can `import` ANY exposed module, so a sibling module that makes a
+/// network call is a real capability of the package even when the package's own
+/// `Main` never reaches it. The declared `[capabilities]` set the index records
+/// is the consumer's consent surface, so it must cover the whole shipped surface
+/// — the same whole-tree posture the enforced-semver check already takes over the
+/// package's public API.
+///
+/// This lowers each discovered module in turn (with every sibling source present,
+/// so cross-module imports resolve) and unions their inferred capabilities. A
+/// module that fails to lower on its own — e.g. one that is only meaningful as a
+/// dependency of another — is skipped for the union rather than failing the whole
+/// inference, so a helper module never masks a sibling's real effect.
+///
+/// # Errors
+/// [`CliError::Pipeline`] / [`CliError::Io`] when the package cannot be read or
+/// no module lowers at all.
+pub fn infer_package_capabilities(
+    manifest_path: &Path,
+) -> Result<std::collections::BTreeSet<ipe_ir::Capability>, CliError> {
+    let manifest = project::parse_manifest(manifest_path)?;
+    let discovered = project::discover_modules(&manifest.src_root)?;
+
+    // Read every module's source once; the shared map lets each per-module
+    // lowering resolve its sibling imports.
+    let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+    for m in &discovered {
+        let src = fs::read_to_string(&m.path).map_err(|e| io_err(&m.path, e))?;
+        sources.insert(m.module_path.clone(), (m.path.clone(), src));
+    }
+
+    let injected = std::collections::BTreeSet::new();
+    let ffi_injected = std::collections::BTreeSet::new();
+    let mut inferred: std::collections::BTreeSet<ipe_ir::Capability> =
+        std::collections::BTreeSet::new();
+    let mut any_lowered = false;
+
+    // Lower each module as its own entry (a fresh database per module keeps the
+    // interning deterministic and the borrow of the shared interner scoped). A
+    // module that does not lower standalone is skipped, never fatal — its
+    // capabilities, if any, surface through whichever sibling does reach it.
+    for m in &discovered {
+        let db = ipe_db::IpeDatabase::new();
+        let source_root = create_source_root(&db, &sources, &injected, &ffi_injected);
+        let Some(entry_file) = source_root.files(&db).get(&m.module_path).copied() else {
+            continue;
+        };
+        if let Ok(program) = ipe_db::lower_program(&db, source_root, entry_file) {
+            inferred.extend(ipe_lower::program_capabilities(&program));
+            any_lowered = true;
+        }
+    }
+
+    if any_lowered {
+        Ok(inferred)
+    } else {
+        Err(CliError::Usage(
+            "package capability inference: no module in the package could be lowered",
+        ))
+    }
+}
+
 // ===========================================================================
 // `fix` / `--fix` — apply machine-applicable suggestions
 // ===========================================================================

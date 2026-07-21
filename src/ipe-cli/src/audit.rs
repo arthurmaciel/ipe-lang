@@ -407,60 +407,62 @@ fn collect_rust_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), CliError
 // ===========================================================================
 
 /// Verify the manifest's declared `[capabilities]` set EQUALS the set inferred
-/// from the program's call graph — no hidden effect, no over-broad claim.
+/// over the WHOLE package — no hidden effect, no over-broad claim.
 ///
-/// Reuses [`crate::verify_capabilities`] (the same inference that backs `ipe
-/// capabilities` and SP2 manifest generation). `native-ffi` is not inferred from
-/// Ipê — it is a declared axis whose presence the plan says must be surfaced
-/// loudly — so a manifest that declares `native-ffi` while the package carries no
-/// FFI cache is itself an over-broad claim the equality check already rejects.
+/// Uses [`crate::infer_package_capabilities`] (the union over every shipped
+/// module, not just `Main`'s reachability closure) so a sibling module a consumer
+/// could `import` cannot smuggle in an undeclared effect. This is the same
+/// whole-tree posture the enforced-semver check takes over the public API — the
+/// declared set the index records is the consumer's consent surface, so it must
+/// cover the whole shipped module set. `native-ffi` is inferred like any other
+/// axis (it enters the set when a module crosses into `Rust.` code) and, when
+/// present and consistent, is surfaced loudly per §1b.
 ///
 /// # Errors
-/// [`CliError::PackageAudit`] when the declared and inferred sets differ.
+/// [`CliError::PackageAudit`] when the declared and inferred sets differ;
+/// [`CliError::Pipeline`] / [`CliError::Io`] when the package cannot be lowered
+/// at all.
 fn capability_consistency(prepared: &Prepared) -> Result<(), CliError> {
-    let entry = prepared.manifest.src_root.join("Main.ipe");
-    let declared: BTreeSet<Capability> = prepared.manifest.capabilities.clone();
+    use std::fmt::Write as _;
 
-    match crate::verify_capabilities(&entry, &declared) {
-        Ok(()) => {
-            if declared.contains(&Capability::NativeFfi) {
-                // Surfaced loudly per §1b: `native-ffi` is a declared, not
-                // inferred, axis — a package the user consents to as crossing
-                // into opaque native code.
-                println!(
-                    "package audit: note — `{}` declares the `native-ffi` capability; \
-                     its true effect set cannot be inferred from Ipê alone.",
-                    prepared.manifest.name
-                );
-            }
-            Ok(())
-        }
-        Err(CliError::CapabilityMismatch { missing, extra }) => {
-            use std::fmt::Write as _;
-            let mut message = String::from(
-                "the declared `[capabilities]` set does not match the program's inferred \
-                 effects — the declared set must be exactly the truth the user consents to.",
+    let declared: BTreeSet<Capability> = prepared.manifest.capabilities.clone();
+    let inferred = crate::infer_package_capabilities(&prepared.manifest_path)?;
+
+    if declared == inferred {
+        if declared.contains(&Capability::NativeFfi) {
+            // Surfaced loudly per §1b: a package the user consents to as crossing
+            // into opaque native code, whose true effect set cannot be inferred
+            // from Ipê alone beyond the `native-ffi` marker itself.
+            println!(
+                "package audit: note — `{}` exercises the `native-ffi` capability; its \
+                 native effects cannot be inferred from Ipê alone.",
+                prepared.manifest.name
             );
-            if !missing.is_empty() {
-                let _ = write!(
-                    message,
-                    "\n  used but NOT declared (a hidden effect): {}",
-                    missing.join(", ")
-                );
-            }
-            if !extra.is_empty() {
-                let _ = write!(
-                    message,
-                    "\n  declared but NOT used (an over-broad claim): {}",
-                    extra.join(", ")
-                );
-            }
-            Err(reject(Check::Capability, message))
         }
-        // A non-mismatch error (the entry cannot be lowered) is a genuine build
-        // failure, not a gate reject — propagate it unchanged.
-        Err(other) => Err(other),
+        return Ok(());
     }
+
+    let mut message = String::from(
+        "the declared `[capabilities]` set does not match the package's inferred effects \
+         — the declared set must be exactly the truth the user consents to.",
+    );
+    let missing: Vec<&'static str> = inferred.difference(&declared).map(|c| c.as_str()).collect();
+    let extra: Vec<&'static str> = declared.difference(&inferred).map(|c| c.as_str()).collect();
+    if !missing.is_empty() {
+        let _ = write!(
+            message,
+            "\n  used but NOT declared (a hidden effect): {}",
+            missing.join(", ")
+        );
+    }
+    if !extra.is_empty() {
+        let _ = write!(
+            message,
+            "\n  declared but NOT used (an over-broad claim): {}",
+            extra.join(", ")
+        );
+    }
+    Err(reject(Check::Capability, message))
 }
 
 // ===========================================================================

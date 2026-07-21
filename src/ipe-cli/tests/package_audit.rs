@@ -161,6 +161,47 @@ fn an_overdeclared_capability_rejects() {
 }
 
 #[test]
+fn an_unimported_sibling_capability_rejects() {
+    // The whole-package hole: `Main` is pure and never imports `Extra`, but the
+    // package SHIPS `Extra`, which makes a network call. A downstream consumer
+    // can `import Extra`, so the package's honest capability set is `{network}` —
+    // declaring nothing is a hidden effect the gate must reject even though the
+    // entry's own reachability closure is capability-free.
+    let pkg = temp_pkg("sibling-cap");
+    write_package(
+        &pkg,
+        "name = \"sibling-pkg\"\nversion = \"0.1.0\"\n\n[source]\nroot = \"src\"\n",
+        // Pure Main — does NOT import Extra.
+        "module Main exposing (main)\n\nimport Ipe.Log exposing (println)\n\n\
+         main : Task ()\nmain =\n\x20   println \"hi\"\n",
+    );
+    // An exposed sibling that reaches the network, unimported by Main.
+    std::fs::write(
+        pkg.join("src").join("Extra.ipe"),
+        "module Extra exposing (fetch)\n\nimport Ipe.Http as Http\n\
+         import Ipe.Task as Task\nimport Ipe.Log exposing (println)\n\n\
+         fetch : Task ()\nfetch =\n\
+         \x20   Http.get \"http://example.com\"\n\
+         \x20       |> Task.andThen (\\_ -> println \"done\")\n",
+    )
+    .expect("write Extra");
+    let index = empty_index("sibling-cap");
+
+    let (ok, stdout, stderr) = run_audit(&pkg, &index);
+    assert!(
+        !ok,
+        "a network-using sibling module must reject even when Main never imports \
+         it; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("capability consistency")
+            && stderr.contains("network")
+            && stderr.contains("used but NOT declared"),
+        "the diagnostic names the hidden sibling `network` effect; got:\n{stderr}"
+    );
+}
+
+#[test]
 fn a_semver_underbump_rejects() {
     let pkg = temp_pkg("underbump-new");
     // The new version is a BREAKING change (Lib.double's type changed) but only
