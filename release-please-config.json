@@ -3,6 +3,7 @@
   "bump-minor-pre-major": true,
   "bump-patch-for-minor-pre-major": true,
   "include-v-in-tag": true,
+  "pull-request-header": "Automated release — merge to publish the version below.",
   "packages": {
     ".": {
       "release-type": "simple",
