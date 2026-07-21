@@ -547,6 +547,16 @@ enum InspectorJob<'a> {
         /// Per-crate (spec, features) pairs.
         entries: &'a [(CrateSpec, Vec<String>)],
     },
+    /// A `[rust.wrapper]` local wrapper crate: inspected from an absolute path
+    /// (bound RO by the whole-`/` jail bind), binding only the exposed symbols.
+    WrapperPath {
+        /// The wrapper crate's Cargo package name (the inspection slug).
+        krate: &'a CrateName,
+        /// The absolute, package-jailed wrapper-crate directory.
+        abs_path: &'a str,
+        /// The public symbols to bind (empty ⇒ every public symbol).
+        expose: &'a [String],
+    },
 }
 
 /// Serialize the inspector's `--manifest` JSON into the scoped scratch dir
@@ -598,6 +608,25 @@ fn inspector_payload(
                 payload.push(p.to_path_buf().into_os_string());
             }
         }
+        InspectorJob::WrapperPath {
+            krate,
+            abs_path,
+            expose,
+        } => {
+            if fetch_only {
+                payload.push("--fetch-only".into());
+            }
+            if allow_build_scripts {
+                payload.push("--allow-build-scripts".into());
+            }
+            payload.push("--path".into());
+            payload.push((*abs_path).into());
+            if !expose.is_empty() {
+                payload.push("--expose".into());
+                payload.push(expose.join(",").into());
+            }
+            payload.push(krate.as_str().into());
+        }
     }
     payload
 }
@@ -606,6 +635,7 @@ fn run_inspector_job(job: &InspectorJob, allow_build_scripts: bool) -> Result<St
     let inspector = inspector_binary()?;
     let scratch_hint = match job {
         InspectorJob::Single { krate, .. } => krate.name().as_str(),
+        InspectorJob::WrapperPath { krate, .. } => krate.as_str(),
         InspectorJob::Manifest { .. } => "manifest",
     };
 
@@ -636,9 +666,11 @@ fn run_inspector_job(job: &InspectorJob, allow_build_scripts: bool) -> Result<St
         let scoped_tmp = make_scratch_dir(scratch_hint)?;
         let binds = toolchain_binds(&inspector);
         let result = match job {
-            // A single crate is one populate-free bind — the historical two
-            // phases (fetch, introspect) over one scoped scratch.
-            InspectorJob::Single { .. } => run_single_bwrap(
+            // A single crate — or a single local wrapper crate — is one
+            // populate-free bind over the historical two phases (fetch,
+            // introspect) on one scoped scratch. A wrapper crate is local, so
+            // its fetch phase only resolves the wrapper's own registry deps.
+            InspectorJob::Single { .. } | InspectorJob::WrapperPath { .. } => run_single_bwrap(
                 &inspector,
                 job,
                 &caps,
@@ -910,7 +942,7 @@ fn run_inspector_job_unsandboxed(
     let scoped_tmp = make_scratch_dir(scratch_hint)?;
     let manifest_path = match job {
         InspectorJob::Manifest { entries } => Some(write_inspector_manifest(&scoped_tmp, entries)?),
-        InspectorJob::Single { .. } => None,
+        InspectorJob::Single { .. } | InspectorJob::WrapperPath { .. } => None,
     };
     let payload = inspector_payload(
         inspector,
@@ -935,6 +967,98 @@ fn run_inspector_job_unsandboxed(
     }
     String::from_utf8(out.stdout)
         .map_err(|_| io_err("inspector produced non-UTF-8 output".to_owned()))
+}
+
+/// Inspect + install a `[rust.wrapper]` local wrapper crate.
+///
+/// The path is decode-jailed to the package tree by
+/// [`ipe_ffi::wrapper::WrapperManifest`], then canonicalized under the project
+/// root; the inspector binds only the exposed symbols and reports the crate's
+/// absolute path as `wrapperPath`, so the emitted app crate depends on it by
+/// `path`. The wrapper's build runs in the same RCE jail as a crate's build
+/// script — the whole-`/` read-only bind makes the local source readable, and
+/// the sandboxed build catches a non-compiling wrapper BEFORE exit 0.
+fn install_wrapper(
+    cache: &FfiCache,
+    raw: &RawWrapperTable,
+    assume_yes: bool,
+    allow_build_scripts: bool,
+) -> Result<(), CliError> {
+    let manifest =
+        ipe_ffi::wrapper::WrapperManifest::parse(&raw.path, &raw.expose, &raw.capabilities)
+            .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+    // Resolve the package-jailed relative path to an absolute directory under
+    // the project root. Canonicalization also confirms the wrapper crate
+    // actually exists before any jailed build.
+    let rel = manifest.path().as_str();
+    let abs = std::fs::canonicalize(rel)
+        .map_err(|e| CliError::UsageOwned(format!("ipe install: wrapper crate `{rel}`: {e}")))?;
+    // The lexical `..`/absolute jail on the relative path is not enough:
+    // canonicalization resolves symlinks, so a checked-in symlink under the
+    // package could still point the resolved directory outside the project. Bind
+    // the resolved path back inside the project root — a wrapper that escapes it
+    // is refused before any jailed build.
+    let project_root = std::fs::canonicalize(".")
+        .map_err(|e| CliError::UsageOwned(format!("ipe install: project root: {e}")))?;
+    if !abs.starts_with(&project_root) {
+        return Err(CliError::UsageOwned(format!(
+            "ipe install: wrapper crate `{rel}` resolves to {} — outside the project root",
+            abs.display()
+        )));
+    }
+    let abs_str = abs
+        .to_str()
+        .ok_or_else(|| {
+            CliError::UsageOwned(format!(
+                "ipe install: wrapper crate path `{rel}` is not UTF-8"
+            ))
+        })?
+        .to_owned();
+    // The wrapper crate's Cargo package name is the inspection slug. Derive it
+    // from the directory name, gated through the crate-name charset.
+    let krate = CrateName::parse(abs.file_name().and_then(|n| n.to_str()).unwrap_or(rel))
+        .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+    if !assume_yes {
+        use std::io::Write as _;
+        println!(
+            "About to COMPILE a local wrapper crate `{}` at {} (inside the isolation jail).",
+            krate.as_str(),
+            abs_str
+        );
+        print!("Continue? [y/N] ");
+        let _ = std::io::stdout().flush();
+        if !crate::read_yes_no() {
+            return Err(CliError::Usage("ipe install: aborted"));
+        }
+    }
+    let expose = manifest.expose_names();
+    let json = run_inspector_job(
+        &InspectorJob::WrapperPath {
+            krate: &krate,
+            abs_path: &abs_str,
+            expose: &expose,
+        },
+        allow_build_scripts,
+    )?;
+    // A single-crate inspector run may emit a singleton array; unwrap it.
+    let doc_text = match serde_json::from_str::<serde_json::Value>(&json) {
+        Ok(serde_json::Value::Array(items)) if items.len() == 1 => items
+            .first()
+            .map(serde_json::Value::to_string)
+            .unwrap_or(json),
+        _ => json,
+    };
+    let (pkg, paths) = ipe_ffi::driver::install_from_inspection(cache, &doc_text)
+        .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+    let iface = ipe_ffi::interface::crate_interface(&pkg);
+    println!(
+        "added wrapper `{}`: {} bindings ({} skipped) -> {}",
+        pkg.name(),
+        iface.bindings.len(),
+        iface.skipped.len(),
+        paths.interface.display()
+    );
+    Ok(())
 }
 
 /// Shared tail of `add` / `install`: inspect one crate + write its artifacts.
@@ -1127,8 +1251,19 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
     let text = std::fs::read_to_string(manifest)
         .map_err(|e| CliError::UsageOwned(format!("ipe install: {e}")))?;
     let deps = rust_dependencies_from_manifest(&text);
+    let wrapper = rust_wrapper_from_manifest(&text);
+    if deps.is_empty() && wrapper.is_none() {
+        println!("ipe install: no [rust.dependencies] or [rust.wrapper] entries");
+        return Ok(());
+    }
+    let cache = FfiCache::at_project_root(Path::new("."));
+    // A `[rust.wrapper]` local crate is inspected + bound like any dependency,
+    // from its package-jailed path. Processed before the registry deps so a
+    // wrapper-only manifest still installs.
+    if let Some(w) = &wrapper {
+        install_wrapper(&cache, w, assume_yes, allow_build_scripts)?;
+    }
     if deps.is_empty() {
-        println!("ipe install: no [rust.dependencies] entries");
         return Ok(());
     }
     // Bare `ipe install` COMPILES every listed untrusted crate — the same
@@ -1152,7 +1287,6 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
             return Err(CliError::Usage("ipe install: aborted"));
         }
     }
-    let cache = FfiCache::at_project_root(Path::new("."));
     let mut entries: Vec<(CrateSpec, Vec<String>)> = Vec::with_capacity(deps.len());
     for dep in &deps {
         let name =
@@ -1331,6 +1465,65 @@ struct ManifestProvideEnum {
 /// Extract the manifest's `[rust.dependencies]` / `["rust.dependencies"]`
 /// entries. Values may be a bare version string (`uuid = "1"`) or an inline
 /// table (`stripe = { version = "=1.0.0-rc.6", features = ["a", "b"] }`).
+/// A raw `[rust.wrapper]` manifest table: the local wrapper-crate path, the
+/// public symbols to bind, and the (accepted-but-not-enforced) capability set.
+/// Every field is carried verbatim; `ipe_ffi::wrapper::WrapperManifest::parse`
+/// is the gate that validates the path (package-jailed) and each symbol.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct RawWrapperTable {
+    path: String,
+    expose: Vec<String>,
+    capabilities: Vec<String>,
+}
+
+/// Read the single `[rust.wrapper]` table from a manifest, or `None` when the
+/// package declares no wrapper crate. Line-based, matching the other
+/// `[rust.*]` readers here (no TOML dependency in this crate).
+fn rust_wrapper_from_manifest(text: &str) -> Option<RawWrapperTable> {
+    let mut in_table = false;
+    let mut table = RawWrapperTable::default();
+    let mut found = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_table = line == "[rust.wrapper]" || line == "[\"rust.wrapper\"]";
+            if in_table {
+                found = true;
+            }
+            continue;
+        }
+        if !in_table || line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
+        let key = k.trim().trim_matches('"');
+        let value = v.trim();
+        match key {
+            "path" => value.trim_matches('"').clone_into(&mut table.path),
+            "expose" => table.expose = parse_string_array(value),
+            "capabilities" => table.capabilities = parse_string_array(value),
+            _ => {}
+        }
+    }
+    found.then_some(table)
+}
+
+/// Parse a `["a", "b"]` inline array into its string elements.
+fn parse_string_array(value: &str) -> Vec<String> {
+    let inner = value
+        .trim()
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .unwrap_or(value);
+    inner
+        .split(',')
+        .map(|s| s.trim().trim_matches('"').to_owned())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
 fn rust_dependencies_from_manifest(text: &str) -> Vec<ManifestDep> {
     let mut in_table = false;
     let mut out = Vec::new();
@@ -1906,6 +2099,41 @@ mod tests {
                 version: "1.10".to_owned(),
                 features: Vec::new(),
             }]
+        );
+    }
+
+    #[test]
+    fn manifest_rust_wrapper_table_reads_path_expose_and_capabilities() {
+        let text = "[project]\nname = \"app\"\n\n\
+                    [rust.wrapper]\n\
+                    path = \"wrappers/engine\"\n\
+                    expose = [\"make\", \"describe\", \"Engine\"]\n\
+                    capabilities = [\"network\"]\n";
+        let w = rust_wrapper_from_manifest(text).expect("wrapper table present");
+        assert_eq!(w.path, "wrappers/engine");
+        assert_eq!(w.expose, ["make", "describe", "Engine"]);
+        assert_eq!(w.capabilities, ["network"]);
+        // The typed gate accepts it (path is package-jailed, symbols validate;
+        // capabilities are preserved, not enforced here).
+        let parsed = ipe_ffi::wrapper::WrapperManifest::parse(&w.path, &w.expose, &w.capabilities)
+            .expect("typed decode accepts a jailed relative path + valid symbols");
+        assert_eq!(parsed.path().as_str(), "wrappers/engine");
+        assert_eq!(parsed.capabilities(), ["network"]);
+    }
+
+    #[test]
+    fn manifest_without_a_wrapper_table_reports_none() {
+        let text = "[rust.dependencies]\nsemver = \"1\"\n";
+        assert!(rust_wrapper_from_manifest(text).is_none());
+    }
+
+    #[test]
+    fn a_wrapper_path_escape_is_refused_by_the_typed_gate() {
+        let text = "[rust.wrapper]\npath = \"../evil\"\nexpose = [\"f\"]\n";
+        let w = rust_wrapper_from_manifest(text).expect("table present");
+        assert!(
+            ipe_ffi::wrapper::WrapperManifest::parse(&w.path, &w.expose, &w.capabilities).is_err(),
+            "a `..` escape must be refused at decode"
         );
     }
 
