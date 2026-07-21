@@ -334,7 +334,26 @@ and preserves the SEAL + over-drop keystone.
   because Iced's `Sandbox::Message: Debug` bound requires it. Ipê-side forwarder
   plumbing (one forwarder PER variant returning the single shared enum nominal; a
   unit variant binds a zero-arg forwarder) landed alongside `provide.struct` — see
-  the §2.1 note and `tests/provide_forwarder_seal.rs`.
+  the §2.1 note and `tests/provide_forwarder_seal.rs`. *OPAQUE fields/payloads
+  landed:* the DEFINITION emitter (`struct_ctor_lines`/`enum_def_ctor_lines`)
+  threads the SAME crate opaque-map the closure adapter uses, so a `provide.struct`
+  field or a `provide.enum` variant payload of an owned non-parameterised opaque
+  (including a provide-defined nominal held by another provide type) resolves — the
+  definition and every constructor parameter render from the same resolved carrier,
+  so their opaque paths cannot disagree. A bare/parameterised handle over-drops the
+  whole definition (empty wrapper region ⇒ the survivor gate drops the ref-name ⇒
+  the interface skips the forwarder), never emit-and-cargo-fail. Over-drop is
+  TRANSITIVE across provide types: `provide_defined` resolvability is a survivor
+  FIXED POINT — a provide type resolves a field/payload of another provide type
+  only when that referenced type ITSELF survives, so a type holding an over-dropped
+  provide type falls with it (else it would name a `pub struct`/`pub enum` never
+  emitted, an E0425). The decode gate no
+  longer refuses an opaque field/payload — resolvability is now decided at emit
+  time by the crate opaque-map, the single oracle. SEAL fixture
+  `tests/provide_opaque_field_seal.rs` (a `Model` holding an opaque `Counter` field
+  and a `Message` carrying an opaque `Counter` payload cargo-build+run under
+  `IPE_E2E`; the parameterised `Element<'a, Message>` field/payload over-drops, and
+  a provide type referencing an over-dropped provide type over-drops transitively).
 * **P5 — async-returning closures**, gated behind the async-bridge milestone
   (`async-ffi-bridge-design.md`); `Send`-proof composition per that spec.
 * **P6 — escape hatch B** (`#[ipe::provide]` companion-crate proc-macro) only if
@@ -373,9 +392,14 @@ first. "Create-types features exercised" names which provide-forms each needs.
   resolves through the opaque-map (P3 above), so an owned non-parameterised
   opaque return builds; only the lifetime/generic-parameterised
   `view : … -> Element<Message>` still over-drops (the bare-handle carrier cannot
-  carry `Element`'s generic args). Opaque struct fields / enum payloads remain
-  refused at decode until the opaque-map is threaded into the DEFINITION emitter
-  (a separate follow-up).
+  carry `Element`'s generic args). Opaque struct fields / enum payloads are now
+  LANDED too: the DEFINITION emitter threads the same crate opaque-map, so a field
+  or variant payload of an owned non-parameterised opaque (including a
+  provide-defined nominal held by another provide type) resolves and builds; a
+  bare/parameterised handle over-drops the whole definition (empty wrapper region ⇒
+  the interface skips the forwarder), never emit-and-cargo-fail. The
+  lifetime-parameterised `Model` holding a bare `Element` stays refused for the
+  same reason the parameterised return does.
 * Cluster 2 — struct-with-trait-impl (Bevy `Component`, Iced `Application`):
   needs escape hatch B or a declarative `impl` sub-form.
 * Cluster 3 — async-returning closures (Axum handlers): gated on the async

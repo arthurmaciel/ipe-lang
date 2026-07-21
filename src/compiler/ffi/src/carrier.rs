@@ -417,21 +417,20 @@ impl StructDef {
         })
     }
 
-    /// The first opaque field's handle name, or [`None`] when every field is a
-    /// scalar carrier.
+    /// Whether any field carries an opaque handle.
     ///
-    /// A sound emit for an opaque field must resolve the handle through the
-    /// crate's opaque-type map (a bare `Version` is not in scope in the emitted
-    /// `_bindings.rs`), which the first `provide.struct` increment does not yet
-    /// thread — so the decode boundary refuses an opaque field for now, keeping
-    /// the SEAL (no emitted-and-cargo-failing struct), and this projects the
-    /// offending field name for the refusal.
+    /// An opaque field's soundness is decided at emit time, not decode time: the
+    /// handle must resolve through the crate's opaque-type map to a nameable path
+    /// (a bare `Element` is not in scope in the emitted `_bindings.rs`, and a
+    /// lifetime/generic-parameterised `Element<'a, Msg>` has no bare-arg path at
+    /// all). The decode boundary therefore accepts an opaque field; the emitter's
+    /// resolver over-drops the whole definition when the handle is unresolvable,
+    /// keeping the SEAL (no emitted-and-cargo-failing struct).
     #[must_use]
-    pub fn first_opaque_field(&self) -> Option<&str> {
-        self.fields.iter().find_map(|(_, c)| match c {
-            Carrier::Opaque(id) => Some(id.as_str()),
-            _ => None,
-        })
+    pub fn has_opaque_field(&self) -> bool {
+        self.fields
+            .iter()
+            .any(|(_, c)| matches!(c, Carrier::Opaque(_)))
     }
 
     /// The Ipê-side forwarder signature the interface admits for this struct's
@@ -455,11 +454,21 @@ impl StructDef {
     }
 
     /// The struct definition + `#[derive]` lines this renders to, from closed
-    /// carriers/derives only. The opaque-field absolutization is the emitter's
-    /// job (this leaf never renders a crate path); a scalar field renders its
-    /// owned Rust type directly.
+    /// carriers/derives only, or [`None`] to over-drop when an opaque field is
+    /// unresolvable.
+    ///
+    /// `opaque_rust_ty` resolves an opaque field handle to the concrete owned Rust
+    /// type the emitted definition names, or [`None`] when the handle is
+    /// unresolvable/parameterised (the crate's opaque-map job — this leaf never
+    /// renders a crate path itself). A single unresolvable field over-drops the
+    /// WHOLE definition (returns [`None`]) rather than emit a bare handle that
+    /// breaks the SEAL. A scalar field renders its owned Rust type directly and
+    /// never over-drops.
     #[must_use]
-    pub fn definition_lines(&self, opaque_rust_ty: &dyn Fn(&RustIdent) -> String) -> Vec<String> {
+    pub fn definition_lines(
+        &self,
+        opaque_rust_ty: &dyn Fn(&RustIdent) -> Option<String>,
+    ) -> Option<Vec<String>> {
         let mut out = Vec::new();
         if !self.derives.is_empty() {
             out.push(format!("#[derive({})]", self.derives.rust_list()));
@@ -467,13 +476,13 @@ impl StructDef {
         out.push(format!("pub struct {} {{", self.name.as_str()));
         for (fname, carrier) in &self.fields {
             let ty = match carrier {
-                Carrier::Opaque(id) => opaque_rust_ty(id),
+                Carrier::Opaque(id) => opaque_rust_ty(id)?,
                 _ => carrier.rust_owned().to_owned(),
             };
             out.push(format!("    pub {}: {ty},", fname.as_str()));
         }
         out.push("}".to_owned());
-        out
+        Some(out)
     }
 }
 
@@ -588,31 +597,36 @@ impl EnumDef {
         })
     }
 
-    /// The first opaque payload carrier's handle name, or [`None`] when every
-    /// variant carries scalar carriers only.
+    /// Whether any variant carries an opaque payload.
     ///
-    /// A sound emit for an opaque payload must resolve the handle through the
-    /// crate's opaque-type map, which the first `provide.enum` increment does not
-    /// yet thread — so the decode boundary refuses an opaque payload for now,
-    /// keeping the SEAL (no emitted-and-cargo-failing enum). Scalar payloads and
-    /// unit variants are fully supported.
+    /// Like [`StructDef::has_opaque_field`], an opaque payload's soundness is
+    /// decided at emit time: the handle must resolve through the crate's
+    /// opaque-map to a nameable path, and a parameterised handle has no bare-arg
+    /// path. The decode boundary accepts an opaque payload; the emitter's resolver
+    /// over-drops the whole definition when the handle is unresolvable.
     #[must_use]
-    pub fn first_opaque_payload(&self) -> Option<&str> {
-        self.variants.iter().find_map(|v| {
-            v.payload.iter().find_map(|c| match c {
-                Carrier::Opaque(id) => Some(id.as_str()),
-                _ => None,
-            })
-        })
+    pub fn has_opaque_payload(&self) -> bool {
+        self.variants
+            .iter()
+            .any(|v| v.payload.iter().any(|c| matches!(c, Carrier::Opaque(_))))
     }
 
     /// The enum definition + `#[derive]` lines this renders to, from closed
-    /// carriers/derives only. A unit variant renders bare (`Increment,`); a
-    /// payload-bearing variant renders a tuple (`SetValue(i64),`). Opaque-payload
-    /// absolutization is the emitter's job (this leaf never renders a crate
-    /// path); a scalar payload renders its owned Rust type directly.
+    /// carriers/derives only, or [`None`] to over-drop when an opaque payload is
+    /// unresolvable. A unit variant renders bare (`Increment,`); a payload-bearing
+    /// variant renders a tuple (`SetValue(i64),`).
+    ///
+    /// `opaque_rust_ty` resolves an opaque payload handle to the concrete owned
+    /// Rust type, or [`None`] when unresolvable/parameterised (the crate's
+    /// opaque-map job — this leaf never renders a crate path itself). A single
+    /// unresolvable payload over-drops the WHOLE definition rather than emit a bare
+    /// handle that breaks the SEAL. A scalar payload renders its owned Rust type
+    /// directly and never over-drops.
     #[must_use]
-    pub fn definition_lines(&self, opaque_rust_ty: &dyn Fn(&RustIdent) -> String) -> Vec<String> {
+    pub fn definition_lines(
+        &self,
+        opaque_rust_ty: &dyn Fn(&RustIdent) -> Option<String>,
+    ) -> Option<Vec<String>> {
         let mut out = Vec::new();
         if !self.derives.is_empty() {
             out.push(format!("#[derive({})]", self.derives.rust_list()));
@@ -622,19 +636,19 @@ impl EnumDef {
             if v.payload.is_empty() {
                 out.push(format!("    {},", v.name.as_str()));
             } else {
-                let tys: Vec<String> = v
-                    .payload
-                    .iter()
-                    .map(|c| match c {
-                        Carrier::Opaque(id) => opaque_rust_ty(id),
+                let mut tys: Vec<String> = Vec::with_capacity(v.payload.len());
+                for c in &v.payload {
+                    let ty = match c {
+                        Carrier::Opaque(id) => opaque_rust_ty(id)?,
                         _ => c.rust_owned().to_owned(),
-                    })
-                    .collect();
+                    };
+                    tys.push(ty);
+                }
                 out.push(format!("    {}({}),", v.name.as_str(), tys.join(", ")));
             }
         }
         out.push("}".to_owned());
-        out
+        Some(out)
     }
 }
 
@@ -1025,7 +1039,10 @@ mod tests {
         .expect("scalar struct parses");
         assert_eq!(s.name.as_str(), "Counter");
         assert_eq!(s.derives.rust_list(), "Clone, Default");
-        let lines = s.definition_lines(&|id| format!("demo::{}", id.as_str()));
+        assert!(!s.has_opaque_field());
+        let lines = s
+            .definition_lines(&|id| Some(format!("demo::{}", id.as_str())))
+            .expect("a scalar struct never over-drops");
         assert_eq!(
             lines,
             vec![
@@ -1041,7 +1058,10 @@ mod tests {
     fn an_opaque_field_absolutizes_through_the_emitter_hook() {
         let s = StructDef::parse("Wrap", &[("inner".to_owned(), "Widget".to_owned())], &[])
             .expect("opaque-field struct parses");
-        let lines = s.definition_lines(&|id| format!("demo::{}", id.as_str()));
+        assert!(s.has_opaque_field());
+        let lines = s
+            .definition_lines(&|id| Some(format!("demo::{}", id.as_str())))
+            .expect("a resolvable opaque field renders");
         // No derives ⇒ no `#[derive]` line; the opaque field absolutizes.
         assert_eq!(
             lines,
@@ -1051,6 +1071,16 @@ mod tests {
                 "}".to_owned(),
             ]
         );
+    }
+
+    #[test]
+    fn an_unresolvable_opaque_field_over_drops_the_whole_definition() {
+        // A parameterised / unresolvable handle yields `None` from the resolver,
+        // so the WHOLE struct over-drops rather than emit a bare handle that
+        // would break the SEAL.
+        let s = StructDef::parse("Wrap", &[("inner".to_owned(), "Element".to_owned())], &[])
+            .expect("opaque-field struct parses");
+        assert!(s.definition_lines(&|_| None).is_none());
     }
 
     #[test]
@@ -1144,7 +1174,10 @@ mod tests {
         .expect("unit-variant enum parses");
         assert_eq!(e.name.as_str(), "Message");
         assert_eq!(e.derives.rust_list(), "Clone");
-        let lines = e.definition_lines(&|id| format!("demo::{}", id.as_str()));
+        assert!(!e.has_opaque_payload());
+        let lines = e
+            .definition_lines(&|id| Some(format!("demo::{}", id.as_str())))
+            .expect("a scalar enum never over-drops");
         assert_eq!(
             lines,
             vec![
@@ -1169,7 +1202,9 @@ mod tests {
             &[],
         )
         .expect("payload-variant enum parses");
-        let lines = e.definition_lines(&|id| format!("demo::{}", id.as_str()));
+        let lines = e
+            .definition_lines(&|id| Some(format!("demo::{}", id.as_str())))
+            .expect("scalar payloads never over-drop");
         // No derives ⇒ no `#[derive]` line; unit + tuple variants render.
         assert_eq!(
             lines,
@@ -1191,8 +1226,10 @@ mod tests {
             &[],
         )
         .expect("opaque-payload enum parses");
-        assert_eq!(e.first_opaque_payload(), Some("Widget"));
-        let lines = e.definition_lines(&|id| format!("demo::{}", id.as_str()));
+        assert!(e.has_opaque_payload());
+        let lines = e
+            .definition_lines(&|id| Some(format!("demo::{}", id.as_str())))
+            .expect("a resolvable opaque payload renders");
         assert_eq!(
             lines,
             vec![
@@ -1201,6 +1238,22 @@ mod tests {
                 "}".to_owned(),
             ]
         );
+    }
+
+    #[test]
+    fn an_unresolvable_opaque_payload_over_drops_the_whole_definition() {
+        // A single unresolvable payload over-drops the WHOLE enum rather than
+        // emit a bare handle that would break the SEAL.
+        let e = EnumDef::parse(
+            "Wrap",
+            &[
+                ("Tick".to_owned(), vec![]),
+                ("Hold".to_owned(), vec!["Element".to_owned()]),
+            ],
+            &[],
+        )
+        .expect("opaque-payload enum parses");
+        assert!(e.definition_lines(&|_| None).is_none());
     }
 
     #[test]
