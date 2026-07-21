@@ -56,11 +56,31 @@ Enforced by **two independent gates**:
 **We do not conform to tolerated insecurity, even when documented.** The exception
 ledger is tracked debt whose target is zero — a documented `#[allow]` is not an
 accepted state, only a temporary marker until the construct is removed. Every
-class is reworked to eliminate the construct, *including* provably-infallible ones
-(threaded through a `Result` channel or made infallible by type) rather than left
-asserted. Current classes and their elimination plan are in
-`docs/internals/rust-abrupt-failure-ledger.md`; all four are scheduled for removal,
-not retention.
+class is reworked to eliminate the construct rather than left asserted.
+
+## Review verdict
+
+The ledger's four original classes have been burned down as far as security
+permits (`docs/internals/rust-abrupt-failure-ledger.md`):
+
+- **#3 (`ffi_polyfills` `panic!` ×2) — eliminated.** The dynamic-dispatch FFI
+  shape has no `target=rust` denotation (no `.ipe` source names it; the IR has no
+  reflective `Callee` variant), so the two panicking guards were unreachable dead
+  code and were deleted. The impossibility is now structural.
+- **#4 (`dyn Any` downcast registries) — reclassified to zero.** These sites
+  carry no authored-abrupt-failure construct: every downcast already resolves
+  through a total `None => miss/no-op/rebuild` fallback with no `.expect`/`panic`
+  and no abrupt-failure `#[allow]`; only a `dyn Any` erasure-seam *comment*
+  remained. A fully-typed registry is blocked (a new dependency for `pubsub`, or
+  an infeasible handle-representation change for `cache`), for zero failure
+  reduction, so the class is closed.
+- **#1/#2 (infallible HMAC `.expect` ×3) — remain, justified.** Removing them
+  would either hand-reimplement HMAC key preparation (a security regression) or
+  thread a provably-dead `Result` `Err` through the SES SigV4 key-derivation
+  chain, where a caller mishandling the never-occurring error would substitute a
+  silent wrong MAC. A loud `.expect` on a structurally-dead branch is the safer,
+  more honest shape (Security > Correctness > Soundness). Left ledgered pending a
+  project decision.
 
 ## Consequences
 
