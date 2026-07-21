@@ -1387,7 +1387,10 @@ fn closure_adapter_lines(
     // so it never over-drops here.
     let Some(inner_ret) = (match &sig.ret {
         ClosureRet::Total(sc) => Some(sc.rust_owned().to_owned()),
-        ClosureRet::Result(c) | ClosureRet::Option(c) => opaques.carrier_ty(c),
+        ClosureRet::Result(c)
+        | ClosureRet::Option(c)
+        | ClosureRet::AsyncResult(c)
+        | ClosureRet::AsyncOption(c) => opaques.carrier_ty(c),
     }) else {
         return Vec::new();
     };
@@ -1402,11 +1405,25 @@ fn closure_adapter_lines(
         .collect();
     let forwarded: Vec<String> = params.iter().map(|(name, _)| name.clone()).collect();
     let forwarded_args = forwarded.join(", ");
+    // The output the awaited work yields, for an async return — the fallible
+    // carrier the future resolves to (`Result<T, IpeError>` / `Option<T>`).
+    let async_output = match &sig.ret {
+        ClosureRet::AsyncResult(_) => Some(format!("Result<{inner_ret}, IpeError>")),
+        ClosureRet::AsyncOption(_) => Some(format!("Option<{inner_ret}>")),
+        _ => None,
+    };
     // The return type the crate closure yields (and the Ipê fn value produces).
+    // An async return is the concrete boxed future the `IpeTask` value carries;
+    // its inner `Send + 'static` is part of the type, so the received box IS the
+    // Send/'static-across-await proof — the adapter never re-derives it.
     let crate_ret = match &sig.ret {
         ClosureRet::Total(_) => inner_ret,
         ClosureRet::Result(_) => format!("Result<{inner_ret}, IpeError>"),
         ClosureRet::Option(_) => format!("Option<{inner_ret}>"),
+        ClosureRet::AsyncResult(_) | ClosureRet::AsyncOption(_) => format!(
+            "::std::pin::Pin<Box<dyn ::std::future::Future<Output = {}> + Send + 'static>>",
+            async_output.as_deref().unwrap_or("")
+        ),
     };
     let bounds = sig.bounds.rust_suffix();
     let dyn_fn = |ret: &str| -> String {
@@ -1429,36 +1446,78 @@ fn closure_adapter_lines(
     } else {
         format!("(__ipe_fn)({forwarded_args})")
     };
-    let per_call_body = match &sig.ret {
-        // A total (scalar) return has no error channel: a panic ABORTS. Never
-        // fabricate a Default — that launders a real Ipê panic into a wrong
-        // value the crate silently consumes. catch_unwind stays so the raw
-        // unwind never crosses the foreign Fn frame (that is UB).
-        ClosureRet::Total(_) => format!(
-            "match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {call})) \
+    let crate_params_joined = crate_param_decls.join(", ");
+    let body_lines = closure_per_call_body(&sig.ret, &call, wrapper);
+    let mut out = vec![
+        format!("pub fn {wrapper}(__ipe_fn: {ipe_fn_ty}) -> {out_ty} {{"),
+        "    let __ipe_fn = std::sync::Arc::new(__ipe_fn);".to_owned(),
+        format!("    Box::new(move |{crate_params_joined}| {{"),
+        "        let __ipe_fn = std::sync::Arc::clone(&__ipe_fn);".to_owned(),
+    ];
+    out.extend(body_lines);
+    out.push("    })".to_owned());
+    out.push("}".to_owned());
+    out
+}
+
+/// The per-call closure body the adapter's returned closure runs each call.
+///
+/// A SYNC return is a single `catch_unwind` `match` expression: a `Total`
+/// (scalar) return has no error channel so a panic ABORTS (never fabricating a
+/// `Default` — that would launder a real Ipê panic into a wrong value); a
+/// `Result`/`Option` return folds the panic in-band to `Err`/`None`.
+///
+/// An ASYNC return produces the `IpeTask` future under `catch_unwind` (a
+/// production-panic yields an immediate-error future), then returns a boxed
+/// future that awaits it under a spawned task — a poll-panic surfaces as a
+/// `JoinError` folded to `Err`/`None`, and an `AbortOnDrop` guard cancels the
+/// inner task if the outer one is dropped (no Ipê side effect after cancel). The
+/// captured `Arc` is consumed PRODUCING the future, before the await, so only
+/// `{JoinHandle, AbortHandle}` cross the await point and the returned future
+/// stays `Send` even though `IpeTask` is `!Sync`.
+fn closure_per_call_body(ret: &ClosureRet, call: &str, wrapper: &str) -> Vec<String> {
+    match ret {
+        ClosureRet::Total(_) => vec![format!(
+            "        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {call})) \
              {{ Ok(v) => v, Err(_) => {{ \
              eprintln!(\"ipe_ffi: Ipê closure `{wrapper}` panicked; aborting \
              (total return has no error channel)\"); std::process::abort(); }} }}"
-        ),
-        ClosureRet::Result(_) => format!(
-            "match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {call})) \
+        )],
+        ClosureRet::Result(_) => vec![format!(
+            "        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {call})) \
              {{ Ok(inner) => inner, Err(_) => Err(str_err(\"foreign closure panicked\")) }}"
-        ),
-        ClosureRet::Option(_) => format!(
-            "match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {call})) \
+        )],
+        ClosureRet::Option(_) => vec![format!(
+            "        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {call})) \
              {{ Ok(inner) => inner, Err(_) => None }}"
-        ),
-    };
-    let crate_params_joined = crate_param_decls.join(", ");
-    vec![
-        format!("pub fn {wrapper}(__ipe_fn: {ipe_fn_ty}) -> {out_ty} {{"),
-        format!("    let __ipe_fn = std::sync::Arc::new(__ipe_fn);"),
-        format!("    Box::new(move |{crate_params_joined}| {{"),
-        format!("        let __ipe_fn = std::sync::Arc::clone(&__ipe_fn);"),
-        format!("        {per_call_body}"),
-        "    })".to_owned(),
-        "}".to_owned(),
-    ]
+        )],
+        ClosureRet::AsyncResult(_) | ClosureRet::AsyncOption(_) => {
+            let (prod_fold, join_fold) = if matches!(ret, ClosureRet::AsyncResult(_)) {
+                (
+                    "Box::pin(async move { Err(str_err(\"foreign closure panicked\")) })",
+                    "Err(str_err(\"foreign closure panicked\"))",
+                )
+            } else {
+                ("Box::pin(async move { None })", "None")
+            };
+            vec![
+                format!(
+                    "        let __fut = match std::panic::catch_unwind(\
+                     std::panic::AssertUnwindSafe(move || {call})) \
+                     {{ Ok(f) => f, Err(_) => return {prod_fold} }};"
+                ),
+                "        Box::pin(async move {".to_owned(),
+                "            let __handle = tokio::task::spawn(__fut);".to_owned(),
+                "            let __guard = AbortOnDrop::new(__handle.abort_handle());".to_owned(),
+                "            let __joined = __handle.await;".to_owned(),
+                "            __guard.defuse();".to_owned(),
+                format!(
+                    "            match __joined {{ Ok(inner) => inner, Err(_) => {join_fold} }}"
+                ),
+                "        })".to_owned(),
+            ]
+        }
+    }
 }
 
 /// The `[rust.provide.struct]` definition + constructor wrapper.
@@ -2259,6 +2318,64 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
         );
         assert!(out.contains("Err(_) => None"), "{out}");
         assert!(!out.contains("std::process::abort()"), "{out}");
+    }
+
+    // ── async-returning closure adapters ───────────────────────────────────
+
+    #[test]
+    fn closure_adapter_async_result_return_spawns_and_folds_the_join_error() {
+        let out = closure_region(
+            "Fn(Int) -> impl Future<Output = Result<Int, Error>> + Send + Sync + 'static",
+        );
+        // Received AND returned box carry the concrete boxed future the
+        // `IpeTask` value holds — the SAME type on both sides (no E0308). The
+        // inner `Send + 'static` is part of the type: it IS the
+        // Send/'static-across-await proof, never re-derived.
+        assert!(
+            out.contains(
+                "-> Box<dyn Fn(i64) -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = \
+                 Result<i64, IpeError>> + Send + 'static>> + Send + Sync + 'static> {"
+            ),
+            "{out}"
+        );
+        // The future is produced under catch_unwind (a production-panic yields an
+        // immediate-error future), then awaited under a spawned task so a
+        // poll-panic folds through the JoinError arm.
+        assert!(out.contains("tokio::task::spawn(__fut)"), "{out}");
+        assert!(
+            out.contains("AbortOnDrop::new(__handle.abort_handle())"),
+            "{out}"
+        );
+        assert!(out.contains("__guard.defuse();"), "{out}");
+        // Both panic sites fold to Err — never abort, never fabricate.
+        assert!(
+            out.contains("Err(_) => Err(str_err(\"foreign closure panicked\"))"),
+            "{out}"
+        );
+        assert!(!out.contains("std::process::abort()"), "{out}");
+    }
+
+    #[test]
+    fn closure_adapter_async_option_return_folds_the_join_error_to_none() {
+        let out =
+            closure_region("Fn(Int) -> impl Future<Output = Option<Int>> + Send + Sync + 'static");
+        assert!(
+            out.contains(
+                "-> Box<dyn Fn(i64) -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = \
+                 Option<i64>> + Send + 'static>> + Send + Sync + 'static> {"
+            ),
+            "{out}"
+        );
+        assert!(out.contains("tokio::task::spawn(__fut)"), "{out}");
+        // A production-panic and a poll-panic both fold to None.
+        assert!(
+            out.contains("Err(_) => return Box::pin(async move { None })"),
+            "{out}"
+        );
+        assert!(
+            out.contains("match __joined { Ok(inner) => inner, Err(_) => None }"),
+            "{out}"
+        );
     }
 
     // ── opaque-return closure adapters (opaque-map threaded) ───────────────
