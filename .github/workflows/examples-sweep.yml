@@ -169,7 +169,14 @@ jobs:
           # Rebase onto any concurrent main advance before pushing (the sweep is
           # slow; another push may have landed). Fail loud rather than force.
           git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          # The mirror refresh is a best-effort convenience, not part of the parity
+          # proof. Branch protection blocks a direct push to a protected branch, so
+          # warn and pass rather than red the (already-succeeded) sweep. Refresh the
+          # tracked examples/sky/ mirror via a PR when it drifts.
+          git push origin "HEAD:${GITHUB_REF_NAME}" || {
+            echo "::warning::upstream-mirror refresh not committed — direct push to ${GITHUB_REF_NAME} is blocked by branch protection. Refresh examples/sky/ via a PR when needed."
+            exit 0
+          }
 
       # Per-OS job summary: the BUILD·RUN table inline on the run page. always()
       # so it renders even on a RED verdict. COSMETIC — never fails the job.
