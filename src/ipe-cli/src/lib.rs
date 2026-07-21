@@ -2679,6 +2679,18 @@ mod tests {
     }
 
     #[test]
+    fn explain_output_ends_with_trailing_newline() {
+        // `ipe explain <CODE>` does `print!("{page}")`, so the page itself must
+        // end with a newline to avoid a missing newline at the shell prompt.
+        let page = explain_lookup("IPE-T0001").expect("known code must resolve");
+        assert!(
+            page.ends_with('\n'),
+            "explain output must end with a trailing newline; got: {:?}",
+            &page[page.len().saturating_sub(20)..]
+        );
+    }
+
+    #[test]
     fn code_index_lists_every_code() {
         let index = code_index();
         let lines = index.lines().count();
