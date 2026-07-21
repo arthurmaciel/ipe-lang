@@ -7,15 +7,15 @@
 //!
 //! * a Bundle-generic method (`Commands::spawn<B: Bundle>(b: B)`) — an OPEN
 //!   generic whose `Bundle` bound is not modellable and whose argument would be a
-//!   provide-nominal outside the closed instance set. Admitting it would surface a
+//!   define-nominal outside the closed instance set. Admitting it would surface a
 //!   forwarder onto a generic wrapper the emitter degrades to broken code
 //!   (`String::spawn()`), an `ipe`-exit-0 ⇒ cargo-fail breach. The demand-driven
 //!   generic path binds a generic FFI call ONLY at a concrete, closed-set,
 //!   modellable-bound instantiation — a Bundle instantiation is neither.
 //!
 //! * a `dyn Fn`/`FnMut` SYSTEM registration whose closure signature is outside the
-//!   sound `provide.closure` carrier envelope. The landed closure→run handoff
-//!   admits a `provide.closure` adapter (`Fn(A, B) -> R`) as an Ipê forwarder, but
+//!   sound `define.closure` carrier envelope. The landed closure→run handoff
+//!   admits a `define.closure` adapter (`Fn(A, B) -> R`) as an Ipê forwarder, but
 //!   only when every param/return is a closed carrier, the return is total-scalar
 //!   or `Result`/`Option`, and the bounds are exactly `{Send, Sync, 'static}`. A
 //!   signature outside that envelope (an opaque TOTAL return with no error channel)
@@ -81,7 +81,7 @@ fn bundle_generic_method_over_drops() {
 /// A `dyn Fn` system closure whose return is an opaque TOTAL (`Fn(Query) -> World`)
 /// — outside the sound carrier envelope: an opaque total return has no error
 /// channel to fold a per-call panic into, so `ClosureSig::parse` refuses it and
-/// the whole `provide.closure` adapter over-drops at decode.
+/// the whole `define.closure` adapter over-drops at decode.
 fn opaque_total_system_pkg() -> PkgInfo {
     let doc = serde_json::json!({
         "pkg": "bevy_app", "name": "bevy_app", "version": "0.1.0",

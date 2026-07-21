@@ -1,4 +1,4 @@
-//! The `#[ipe::provide]` attribute must be INERT: it re-emits the annotated
+//! The `#[define_in_ipe]` attribute must be INERT: it re-emits the annotated
 //! item unchanged (plus one pure-data doc breadcrumb) and generates no code. If
 //! a future edit ever made the macro rewrite or synthesize anything, these
 //! tests would fail — the item would no longer behave identically to the
@@ -17,14 +17,14 @@
     clippy::too_long_first_doc_paragraph
 )]
 
-use ipe_provide::provide;
+use ipe_bindgen::define_in_ipe;
 
 /// A fixture trait a hand-written impl satisfies — the escape-hatch case.
 trait Render {
     fn label(&self) -> String;
 }
 
-#[provide]
+#[define_in_ipe]
 pub struct Sprite {
     depth: i64,
 }
@@ -35,7 +35,7 @@ impl Render for Sprite {
     }
 }
 
-#[provide]
+#[define_in_ipe]
 pub fn spawn(depth: i64) -> Sprite {
     Sprite { depth }
 }
@@ -53,7 +53,7 @@ fn the_annotated_item_is_unchanged() {
 /// The marker rides in the item's doc string, so `#[deny(missing_docs)]`-style
 /// tooling and rustdoc see it — but it is pure data. This asserts the attribute
 /// does not, e.g., strip a real doc comment the author wrote.
-#[provide]
+#[define_in_ipe]
 /// Author's own doc comment.
 pub struct Documented;
 

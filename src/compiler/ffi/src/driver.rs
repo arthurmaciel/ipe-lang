@@ -586,7 +586,7 @@ pub fn emit_consumer_json(
         "kernelName": iface.kernel_name,
         "opaqueTypes": iface.opaque_types,
         "opaqueTypeIds": iface.opaque_type_ids,
-        "provideTypes": iface.provide_types,
+        "defineTypes": iface.define_types,
         "cargoDeps": cargo_dep_lines(pkg)?,
         "bindings": bindings,
     });
@@ -614,12 +614,12 @@ pub struct InstalledCrate {
     /// [`crate::interface::CrateInterface::opaque_type_ids`]). Empty for a
     /// cache written before identities existed — such a crate never unifies.
     pub opaque_type_ids: std::collections::BTreeMap<String, String>,
-    /// The nominal names this crate's `[rust.provide.struct/enum]` decls DEFINE
-    /// (see [`crate::interface::CrateInterface::provide_types`]). These live at
+    /// The nominal names this crate's `[rust.define.struct/enum]` decls DEFINE
+    /// (see [`crate::interface::CrateInterface::define_types`]). These live at
     /// `crate::ffi::<slug>::<Name>` in the emitted app crate, so `assemble_emit`
     /// renders their `foreign_types` path crate-locally rather than as an
     /// external `::crate::Path`.
-    pub provide_types: BTreeSet<String>,
+    pub define_types: BTreeSet<String>,
     /// Pinned `[dependencies]` lines.
     pub cargo_deps: Vec<String>,
     /// The structured interface bindings (name, wrapper, arity, signature) —
@@ -735,7 +735,7 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
                 bindings_source,
                 opaque_types: iface.opaque_types,
                 opaque_type_ids: iface.opaque_type_ids,
-                provide_types: iface.provide_types,
+                define_types: iface.define_types,
                 cargo_deps: cargo_dep_lines(&pkg)?,
                 bindings: iface.bindings,
                 wrapper_idents,
@@ -773,8 +773,8 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
         };
         let opaque_types = decode_str_map("opaqueTypes");
         let opaque_type_ids = decode_str_map("opaqueTypeIds");
-        let provide_types: BTreeSet<String> = doc
-            .get("provideTypes")
+        let define_types: BTreeSet<String> = doc
+            .get("defineTypes")
             .and_then(serde_json::Value::as_array)
             .map(|a| {
                 a.iter()
@@ -833,7 +833,7 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
             bindings_source,
             opaque_types,
             opaque_type_ids,
-            provide_types,
+            define_types,
             cargo_deps,
             bindings,
             wrapper_idents,

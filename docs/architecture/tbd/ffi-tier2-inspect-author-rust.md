@@ -1,7 +1,7 @@
 # FFI Tier 2 — inspecting author-supplied Rust wrapper crates
 
 Status: design (tbd). Specifies the second FFI tier: instead of *declaring* a Rust
-type in the manifest (Tier 1, `[rust.provide.*]`), the package author *writes* a
+type in the manifest (Tier 1, `[rust.define.*]`), the package author *writes* a
 normal Rust wrapper crate, and Ipê binds it by running the **same** inspect →
 sandbox → generate pipeline it already runs on a crates.io dependency — plus two
 provenance-specific gates (source panic-scan and capability inference).
@@ -12,7 +12,7 @@ Fenced code blocks are illustrative unless the prose says a fixture ran.
 
 ## 0. Why a second tier
 
-Tier 1 (`[rust.provide.*]`, see `ffi-rust-type-creation-and-coverage.md`) is
+Tier 1 (`[rust.define.*]`, see `ffi-rust-type-creation-and-coverage.md`) is
 **structured, declarative shims**: the author declares a shape (struct fields,
 enum variants, closure signature) and the driver *generates* the Rust from
 decode-validated newtypes. That makes it **safe by construction** — nothing but
@@ -31,7 +31,7 @@ last used: the crate inspector, the RCE build sandbox, the capability model, and
 
 The two tiers are complementary, not competing:
 
-| | Tier 1 `provide.*` | Tier 2 wrapper crate |
+| | Tier 1 `define.*` | Tier 2 wrapper crate |
 |---|---|---|
 | Author writes | a manifest declaration | normal Rust |
 | Expressiveness | closed forms only | arbitrary Rust |
@@ -129,7 +129,7 @@ Tier 2 — and the difference is the whole point, so it must be explicit:
 - **crates.io dependency** — we do **not** source-scan it for panics (that would
   reject the ecosystem). We bind its symbols and sandbox its *behavior*; its
   internal panics are the documented "outside the guarantee" boundary.
-- **Tier 1 `provide.*`** — **impossible by construction**: the Rust is generated
+- **Tier 1 `define.*`** — **impossible by construction**: the Rust is generated
   from typed decode; no abrupt-failure or capability escape can exist because we
   wrote every line.
 - **Tier 2 wrapper** — **checked and attributed**: the author wrote it, so we
@@ -221,18 +221,18 @@ gated on its jail actually scoping the syscall fail-closed.
 
 ## 6. Where the proc-macro / trait-impl escape hatch fits
 
-*Landed.* A `#[ipe::provide]` companion crate — a hand-written `impl Trait` for a
+*Landed.* A `#[define_in_ipe]` companion crate — a hand-written `impl Trait` for a
 crate type whose derive is outside the `MODELLABLE_5` set (Bevy
 `Component`/`Resource`) — is a **special case of Tier 2**, not a separate
 mechanism: a wrapper crate that exposes a trait impl. It is folded into the Tier
-2 pipeline as the "provide a trait impl" shape, not a bespoke Tier-1 extension —
+2 pipeline as the "define a trait impl" shape, not a bespoke Tier-1 extension —
 which is why the escape-hatch work is designed here.
 
-**The marker.** A tiny companion proc-macro crate `ipe_provide` (workspace member
-`src/ffi-provide-macro`) exports one **inert** attribute macro, `#[ipe::provide]`
-(spelled `#[ipe_provide::provide]`, or re-exported as `ipe::provide`). It re-emits
+**The marker.** A tiny companion proc-macro crate `ipe_bindgen` (workspace member
+`src/ffi-bindgen-macro`) exports one **inert** attribute macro, `#[define_in_ipe]`
+(spelled `#[ipe_bindgen::define_in_ipe]`, or re-exported as `define_in_ipe`). It re-emits
 the annotated item token-for-token and prepends exactly one pure-data breadcrumb —
-a `#[doc = " ipe-ffi-provide-marker"]` string rustdoc folds into the item's `docs`
+a `#[doc = " ipe-ffi-define-marker"]` string rustdoc folds into the item's `docs`
 field. The macro generates NO trait impl, NO glue, NO logic; it only tags. So the
 author's Rust stays entirely authored (and thus source-panic-scannable, §3.4) —
 nothing is injected into the trusted emission set.
@@ -262,12 +262,12 @@ evade the provenance gate); auto-expose only enlarges the candidate set, never a
 gate bypass; and the marker is read as a boolean, never rendered, so it is no
 injection vector. All conditions are honored — inertness snapshot test, exact
 whole-sentinel match, borrowed-return over-drop + positive `IPE_E2E` build/run
-fixtures, `ipe_provide` as a wrapper-author build-dep only, panic-scan on authored
+fixtures, `ipe_bindgen` as a wrapper-author build-dep only, panic-scan on authored
 source, marker read as data.
 
-**SEAL fixture.** `src/compiler/ffi/tests/provide_trait_impl_seal.rs` proves the
+**SEAL fixture.** `src/compiler/ffi/tests/define_trait_impl_seal.rs` proves the
 whole path: under `IPE_E2E`, the real inspector runs over a wrapper crate that
-depends on `ipe_provide`, tags a `Sprite` with `#[ipe_provide::provide]`, and
+depends on `ipe_bindgen`, tags a `Sprite` with `#[ipe_bindgen::define_in_ipe]`, and
 hand-writes an `impl Render for Sprite` (a fixture trait standing in for a Bevy
 `Component`); the marker surfaces `Sprite` and its reader even though `expose`
 names ONLY the constructor, then the emitted app crate + the wrapper `path` dep
@@ -279,11 +279,11 @@ trait impl. A marked borrowed-return method over-drops in the default gate.
 ## 7. Boundary rules — when each tier applies
 
 - Type is a plain record/union of carriers, or a closure of a closed signature →
-  **Tier 1** (`provide.*`). No user Rust; safe by construction. Prefer it.
+  **Tier 1** (`define.*`). No user Rust; safe by construction. Prefer it.
 - Type needs a real `impl Trait`, generics, builder logic, or glue → **Tier 2**
   (wrapper crate). Accept checked-and-attributed for the expressiveness.
 - The compiler should *suggest* Tier 1 when a Tier 2 wrapper only does what a
-  `provide.*` form could express (a lint / `ipe` diagnostic), to keep authors on
+  `define.*` form could express (a lint / `ipe` diagnostic), to keep authors on
   the stronger guarantee whenever possible.
 
 ---
@@ -348,10 +348,10 @@ trait impl. A marked borrowed-return method over-drops in the default gate.
    design and the diff; the runtime-enforcement half is refused-until-available
    per §5.4 (there is no emitted-app runtime jail yet, so any runtime-enforced
    capability is hard-refused at install rather than admitted unenforced).
-6. **Fold the trait-impl escape hatch** — the `#[ipe::provide]` companion crate as
-   a Tier 2 wrapper shape. *Landed* (§6): the inert `ipe_provide` marker macro +
+6. **Fold the trait-impl escape hatch** — the `#[define_in_ipe]` companion crate as
+   a Tier 2 wrapper shape. *Landed* (§6): the inert `ipe_bindgen` marker macro +
    inspector auto-expose of marked items + SEAL fixture
-   (`provide_trait_impl_seal.rs`).
+   (`define_trait_impl_seal.rs`).
 
 Phases 1-3 are the mechanical reuse; 4-5 are the provenance gates and carry the
 security weight; 6 closes the Bevy-derive case.

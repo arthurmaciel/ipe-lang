@@ -318,7 +318,7 @@ struct LocatedHit {
 ///
 /// This is the exact author-Rust surface the `_bindings.rs` naming marks: the FFI
 /// cache stores one `<slug>_bindings.rs` per installed crate, the hand-written
-/// wrapper the inspection produced from the author's `[rust.provide.*]` decls.
+/// wrapper the inspection produced from the author's `[rust.define.*]` decls.
 /// The interface `.ipe` modules (origin [`ipe_canon::ModuleOrigin::FfiInterface`])
 /// are Ipê, not Rust; the `_bindings.rs` files are the author Rust the scan
 /// attributes to the user.

@@ -7,7 +7,7 @@
 //! Result<Counter, E>` — the shape an Iced `update` fn folding a model needs).
 //! The emitted adapter must resolve the opaque through the crate's opaque-map:
 //!
-//!  * a provide-DEFINED opaque (`Counter`, defined in the same `pub mod <slug>`
+//!  * a define-DEFINED opaque (`Counter`, defined in the same `pub mod <slug>`
 //!    region) resolves to the bare in-module name and round-trips;
 //!  * a lifetime/generic-parameterised inspected opaque (`Element<'a, Message>`)
 //!    is unsound to emit as a stripped bare-arg path, so the whole adapter
@@ -23,7 +23,7 @@
 use ipe_ffi::bindings::{emit_bindings, surviving_ref_names};
 use ipe_ffi::pkginfo::PkgInfo;
 
-/// A one-crate package that DEFINES a `Counter` (provide.struct) and declares a
+/// A one-crate package that DEFINES a `Counter` (define.struct) and declares a
 /// closure adapter `Fn(Counter) -> Result<Counter, E>` over it — the exact
 /// opaque-return shape a TEA `update` fold needs.
 fn counter_update_pkg() -> PkgInfo {
@@ -44,14 +44,14 @@ fn counter_update_pkg() -> PkgInfo {
         "errors": []
     })
     .to_string();
-    PkgInfo::decode_json(&doc).expect("provide surface decodes")
+    PkgInfo::decode_json(&doc).expect("define surface decodes")
 }
 
-/// Default gate: a `Result<opaque>` closure over a provide-defined type emits a
+/// Default gate: a `Result<opaque>` closure over a define-defined type emits a
 /// wrapper naming the in-module opaque on BOTH box sides (received + returned),
 /// with the panic-fold-to-`Err` arm intact.
 #[test]
-fn a_provide_defined_opaque_result_closure_emits_a_resolvable_wrapper() {
+fn a_define_defined_opaque_result_closure_emits_a_resolvable_wrapper() {
     let out = emit_bindings(&counter_update_pkg());
     // The opaque return resolves to the in-module `Counter` on the received box
     // AND the handle alias; the wrapper returns the opaque handle nominal.
@@ -114,7 +114,7 @@ fn a_parameterised_opaque_return_over_drops() {
 }
 
 /// The load-bearing SEAL proof: under `IPE_E2E=1`, assemble a crate with the
-/// emitted provide-`Counter` definition + the emitted opaque-return closure
+/// emitted define-`Counter` definition + the emitted opaque-return closure
 /// adapter, supply an Ipê closure folding the model, pass it through the
 /// adapter, and RUN — proving the resolved opaque return builds and both the
 /// happy-path and the panic-fold-to-`Err` arms behave.

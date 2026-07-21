@@ -3233,13 +3233,13 @@ mod tests {
         );
     }
 
-    /// A `provide.enum` region carries the `enum` definition PLUS one ctor per
+    /// A `define.enum` region carries the `enum` definition PLUS one ctor per
     /// variant in a SINGLE sentinel span. Reaching just ONE variant forwarder
     /// must keep the whole region — the enum def and EVERY sibling ctor — or the
     /// kept forwarder references a dropped ctor / a missing type (a cargo-fail
-    /// far from here). Proves the multi-ctor provide.enum region is shake-safe.
+    /// far from here). Proves the multi-ctor define.enum region is shake-safe.
     #[test]
-    fn shake_keeps_the_whole_provide_enum_region_when_one_variant_is_reached() {
+    fn shake_keeps_the_whole_define_enum_region_when_one_variant_is_reached() {
         let source = "// preamble\n\
              // IPE-FFI-WRAPPER BEGIN message_new\n\
              #[derive(Clone, Debug)]\n\

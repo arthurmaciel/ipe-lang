@@ -141,7 +141,7 @@ struct WireTransitiveDep {
     version: String,
 }
 
-/// One `[[rust.provide.struct]]` field: a name and its carrier spelling. The
+/// One `[[rust.define.struct]]` field: a name and its carrier spelling. The
 /// carrier is validated at decode (`StructDef::parse`), never rendered raw.
 #[derive(Debug, Deserialize)]
 struct WireStructField {
@@ -151,7 +151,7 @@ struct WireStructField {
     ty: String,
 }
 
-/// One `[[rust.provide.enum]]` variant: a name and its positional payload
+/// One `[[rust.define.enum]]` variant: a name and its positional payload
 /// carrier spellings (empty ⇒ a unit variant). Each spelling is validated at
 /// decode (`EnumDef::parse`), never rendered raw.
 #[derive(Debug, Deserialize)]
@@ -256,7 +256,7 @@ pub enum FnShape {
         /// Whether the match needs a trailing `_ =>` wildcard arm.
         wildcard: bool,
     },
-    /// A `[rust.provide.closure]` adapter: the wrapper takes an Ipê function
+    /// A `[rust.define.closure]` adapter: the wrapper takes an Ipê function
     /// value and returns a boxed Rust closure of the exact author-declared
     /// signature. Author-declared native code that flows through the same
     /// `FfiInterface` trust gate as every other wrapper — the driver merges the
@@ -267,7 +267,7 @@ pub enum FnShape {
         /// this alone — no raw manifest string reaches generated Rust.
         sig: ClosureSig,
     },
-    /// A `[rust.provide.struct]` definition + constructor: Ipê DEFINES a nominal
+    /// A `[rust.define.struct]` definition + constructor: Ipê DEFINES a nominal
     /// Rust type (a record of owned, Ipê-coercible carrier fields, with an
     /// allowlisted `#[derive]` set) plus a constructor wrapper that builds it
     /// from decode-validated inbound values — the exact `EnumCtor`/`FieldSet`
@@ -280,7 +280,7 @@ pub enum FnShape {
         /// raw manifest string reaches generated Rust.
         def: StructDef,
     },
-    /// A `[rust.provide.enum]` definition + per-variant constructors: Ipê DEFINES
+    /// A `[rust.define.enum]` definition + per-variant constructors: Ipê DEFINES
     /// a nominal Rust `enum` (a sum of unit / tuple-payload variants over owned
     /// carriers, with an allowlisted `#[derive]` set) plus one constructor
     /// wrapper per variant — the `StructCtor` path generalised to a sum, and the
@@ -980,7 +980,7 @@ fn decode_shape(w: &WireFunction) -> Result<FnShape, Diagnostic> {
             // The parsed signature is the SOLE input the emitter renders from;
             // an ill-formed one (a carrier outside the closed set, a bound
             // outside {Send, Sync, 'static}, a non-total return, trailing text)
-            // over-drops the whole provide entry here, never emit-and-cargo-fail.
+            // over-drops the whole define entry here, never emit-and-cargo-fail.
             let sig = ClosureSig::parse(&w.closure_sig).map_err(wire_err)?;
             FnShape::ClosureAdapter { sig }
         }
@@ -988,7 +988,7 @@ fn decode_shape(w: &WireFunction) -> Result<FnShape, Diagnostic> {
             // The parsed definition is the SOLE input the emitter renders from;
             // an ill-formed one (a bad struct/field name, a field type outside
             // the carrier set, a derive outside the allowlist, or a total-Eq
-            // derive on a Float field) over-drops the whole provide entry here,
+            // derive on a Float field) over-drops the whole define entry here,
             // never emit-and-cargo-fail.
             let raw_fields: Vec<(String, String)> = w
                 .struct_ctor_fields
@@ -1009,7 +1009,7 @@ fn decode_shape(w: &WireFunction) -> Result<FnShape, Diagnostic> {
             // an ill-formed one (a bad enum/variant name, a payload type outside
             // the carrier set, a derive outside the allowlist, a total-Eq derive
             // on a Float payload, or a variantless enum) over-drops the whole
-            // provide entry here, never emit-and-cargo-fail.
+            // define entry here, never emit-and-cargo-fail.
             let raw_variants: Vec<(String, Vec<String>)> = w
                 .enum_def_variants
                 .iter()
@@ -1148,11 +1148,11 @@ impl TryFrom<WireFunction> for FnInfo {
     }
 }
 
-/// The provide-type names one def references through its opaque fields/payloads
-/// — the outgoing edges of the provide-type reference graph. A scalar carrier
+/// The define-type names one def references through its opaque fields/payloads
+/// — the outgoing edges of the define-type reference graph. A scalar carrier
 /// carries no edge; an opaque carrier names a bare handle that MAY be another
-/// provide type (resolved by membership in the caller's name set).
-fn provide_def_edges(shape: &FnShape) -> Vec<&RustIdent> {
+/// define type (resolved by membership in the caller's name set).
+fn define_def_edges(shape: &FnShape) -> Vec<&RustIdent> {
     match shape {
         FnShape::StructCtor { def } => def
             .fields
@@ -1176,9 +1176,9 @@ fn provide_def_edges(shape: &FnShape) -> Vec<&RustIdent> {
     }
 }
 
-/// The def name a provide-type binding defines, or [`None`] for a non-defining
+/// The def name a define-type binding defines, or [`None`] for a non-defining
 /// shape.
-const fn provide_def_name(shape: &FnShape) -> Option<&RustIdent> {
+const fn define_def_name(shape: &FnShape) -> Option<&RustIdent> {
     match shape {
         FnShape::StructCtor { def } => Some(&def.name),
         FnShape::EnumDefCtor { def } => Some(&def.name),
@@ -1186,18 +1186,18 @@ const fn provide_def_name(shape: &FnShape) -> Option<&RustIdent> {
     }
 }
 
-/// The set of provide-type names that lie on a cycle in the provide-type
+/// The set of define-type names that lie on a cycle in the define-type
 /// reference graph (a def whose fields/payloads reach, directly or through
-/// other provide types, back to itself).
+/// other define types, back to itself).
 ///
-/// Edges to names that are NOT provide-defined (crate opaques, unresolvable
+/// Edges to names that are NOT define-defined (crate opaques, unresolvable
 /// handles) leave the graph and cannot close a cycle, so they are ignored: a
-/// name is on a cycle iff it can reach itself through provide-defined names
+/// name is on a cycle iff it can reach itself through define-defined names
 /// only. Computed as the fixed point of "keep only names that both are reached
 /// by a live name and reach a live name" — a node survives iff it has an
 /// in-edge and an out-edge within the surviving set, which for a finite graph
 /// leaves exactly the union of its cycles.
-fn recursive_provide_names(
+fn recursive_define_names(
     defs: &BTreeMap<String, std::collections::BTreeSet<String>>,
 ) -> std::collections::BTreeSet<String> {
     // Restrict every edge target to a defined name — an edge leaving the graph
@@ -1275,36 +1275,36 @@ fn cycle_chain_from(
     path
 }
 
-/// Drop every provide-type binding whose def lies on a cycle in the provide-type
+/// Drop every define-type binding whose def lies on a cycle in the define-type
 /// reference graph, recording one [`Diagnostic`] per refused def. A non-defining
 /// binding (a getter/plain call) is never touched here — the emitter's survivor
 /// fixpoint fans the over-drop out to references of a dropped type.
-fn drop_recursive_provide_defs(fns: &mut Vec<FnInfo>, dropped: &mut Vec<Diagnostic>) {
+fn drop_recursive_define_defs(fns: &mut Vec<FnInfo>, dropped: &mut Vec<Diagnostic>) {
     let mut edges: BTreeMap<String, std::collections::BTreeSet<String>> = BTreeMap::new();
     for f in fns.iter() {
-        if let Some(name) = provide_def_name(f.shape()) {
-            let deps = provide_def_edges(f.shape())
+        if let Some(name) = define_def_name(f.shape()) {
+            let deps = define_def_edges(f.shape())
                 .into_iter()
                 .map(|id| id.as_str().to_owned())
                 .collect();
             edges.insert(name.as_str().to_owned(), deps);
         }
     }
-    let recursive = recursive_provide_names(&edges);
+    let recursive = recursive_define_names(&edges);
     if recursive.is_empty() {
         return;
     }
     for name in &recursive {
         let cycle = cycle_chain_from(name, &edges, &recursive);
         dropped.push(Diagnostic::WireMalformed {
-            context: format!("provide type `{name}`"),
-            defect: WireDefect::RecursiveProvideType {
+            context: format!("define type `{name}`"),
+            defect: WireDefect::RecursiveDefineType {
                 name: name.clone(),
                 cycle,
             },
         });
     }
-    fns.retain(|f| provide_def_name(f.shape()).is_none_or(|n| !recursive.contains(n.as_str())));
+    fns.retain(|f| define_def_name(f.shape()).is_none_or(|n| !recursive.contains(n.as_str())));
 }
 
 impl TryFrom<WirePkgInfo> for PkgInfo {
@@ -1340,12 +1340,12 @@ impl TryFrom<WirePkgInfo> for PkgInfo {
         // Display bridge is one entry, never a duplicate Rust item.
         let mut seen_refs = std::collections::BTreeSet::new();
         fns.retain(|f| seen_refs.insert(f.wrapper_ref_name()));
-        // A directly- or mutually-recursive provide type has no boxed
+        // A directly- or mutually-recursive define type has no boxed
         // indirection in the closed carrier set, so emitting it would be an
         // infinitely-sized Rust type (`error[E0072]`). Refuse every def on a
         // cycle here — the def-bearing binding is dropped, and the emitter's
         // survivor fixpoint fans the over-drop out to every reference of it.
-        drop_recursive_provide_defs(&mut fns, &mut dropped);
+        drop_recursive_define_defs(&mut fns, &mut dropped);
         let mut transitive_deps = Vec::with_capacity(w.transitive_deps.len());
         for dep in w.transitive_deps {
             // The inspector's own probe scaffold registers as a workspace
@@ -1553,7 +1553,7 @@ mod tests {
     }
 
     #[test]
-    fn a_provide_closure_decodes_into_a_closure_adapter_shape() {
+    fn a_define_closure_decodes_into_a_closure_adapter_shape() {
         let pkg = decode(&base_pkg(&json!([{
             "name": "update_fn",
             "effect": "pure",
@@ -1575,7 +1575,7 @@ mod tests {
     #[test]
     fn an_ill_formed_closure_signature_over_drops_the_entry() {
         // A return outside the carrier set (a total opaque) refuses at decode —
-        // the whole provide entry over-drops, never emit-and-cargo-fail.
+        // the whole define entry over-drops, never emit-and-cargo-fail.
         let pkg = decode(&base_pkg(&json!([{
             "name": "bad_fn",
             "effect": "pure",
@@ -1594,7 +1594,7 @@ mod tests {
     }
 
     #[test]
-    fn a_provide_struct_decodes_into_a_struct_ctor_shape() {
+    fn a_define_struct_decodes_into_a_struct_ctor_shape() {
         let pkg = decode(&base_pkg(&json!([{
             "name": "counter_new",
             "effect": "pure",
@@ -1622,7 +1622,7 @@ mod tests {
     }
 
     #[test]
-    fn an_ill_formed_provide_struct_over_drops_the_entry() {
+    fn an_ill_formed_define_struct_over_drops_the_entry() {
         // A derive outside the allowlist refuses the whole entry at decode.
         let pkg = decode(&base_pkg(&json!([{
             "name": "bad_new",
@@ -1644,7 +1644,7 @@ mod tests {
     }
 
     #[test]
-    fn a_provide_enum_decodes_into_an_enum_def_shape() {
+    fn a_define_enum_decodes_into_an_enum_def_shape() {
         let pkg = decode(&base_pkg(&json!([{
             "name": "message",
             "effect": "pure",
@@ -1675,7 +1675,7 @@ mod tests {
     }
 
     #[test]
-    fn an_ill_formed_provide_enum_over_drops_the_entry() {
+    fn an_ill_formed_define_enum_over_drops_the_entry() {
         // A variantless enum is uninhabited — refused at decode.
         let pkg = decode(&base_pkg(&json!([{
             "name": "bad",
@@ -1697,7 +1697,7 @@ mod tests {
     }
 
     #[test]
-    fn a_self_recursive_provide_struct_is_refused_at_decode() {
+    fn a_self_recursive_define_struct_is_refused_at_decode() {
         // `Tree { child: Tree }` has no boxed indirection in the closed carrier
         // set, so emitting it would be an infinitely-sized Rust type (E0072).
         let pkg = decode(&base_pkg(&json!([{
@@ -1713,14 +1713,14 @@ mod tests {
         assert!(matches!(
             pkg.dropped().first().expect("dropped diagnostic"),
             Diagnostic::WireMalformed {
-                defect: WireDefect::RecursiveProvideType { name, .. },
+                defect: WireDefect::RecursiveDefineType { name, .. },
                 ..
             } if name == "Tree"
         ));
     }
 
     #[test]
-    fn a_mutually_recursive_provide_pair_is_refused_at_decode() {
+    fn a_mutually_recursive_define_pair_is_refused_at_decode() {
         // `A { inner: B }` + `B { inner: A }` close a cycle through each other.
         let pkg = decode(&base_pkg(&json!([
             {
@@ -1747,7 +1747,7 @@ mod tests {
             .iter()
             .filter_map(|d| match d {
                 Diagnostic::WireMalformed {
-                    defect: WireDefect::RecursiveProvideType { name, .. },
+                    defect: WireDefect::RecursiveDefineType { name, .. },
                     ..
                 } => Some(name.as_str()),
                 _ => None,
@@ -1762,7 +1762,7 @@ mod tests {
     }
 
     #[test]
-    fn a_self_recursive_provide_enum_is_refused_at_decode() {
+    fn a_self_recursive_define_enum_is_refused_at_decode() {
         // `List::Cons(List)` recurses through its own variant payload.
         let pkg = decode(&base_pkg(&json!([{
             "name": "list",
@@ -1780,14 +1780,14 @@ mod tests {
         assert!(matches!(
             pkg.dropped().first().expect("dropped diagnostic"),
             Diagnostic::WireMalformed {
-                defect: WireDefect::RecursiveProvideType { name, .. },
+                defect: WireDefect::RecursiveDefineType { name, .. },
                 ..
             } if name == "List"
         ));
     }
 
     #[test]
-    fn a_non_recursive_provide_chain_survives_decode() {
+    fn a_non_recursive_define_chain_survives_decode() {
         // `A { b: B }`, `B { c: i64 }` is an acyclic chain — both survive.
         let pkg = decode(&base_pkg(&json!([
             {
@@ -1813,8 +1813,8 @@ mod tests {
     }
 
     #[test]
-    fn a_provide_type_referencing_a_crate_opaque_is_not_a_cycle() {
-        // `Wrap { inner: Regex }` names a crate opaque, not a provide type —
+    fn a_define_type_referencing_a_crate_opaque_is_not_a_cycle() {
+        // `Wrap { inner: Regex }` names a crate opaque, not a define type —
         // the edge leaves the graph and closes no cycle.
         let pkg = decode(&base_pkg(&json!([{
             "name": "wrap_new",

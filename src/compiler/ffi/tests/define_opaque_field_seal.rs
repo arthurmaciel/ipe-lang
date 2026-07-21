@@ -1,14 +1,14 @@
-//! SEAL fixture for OPAQUE `provide.struct` fields and `provide.enum` variant
+//! SEAL fixture for OPAQUE `define.struct` fields and `define.enum` variant
 //! payloads (the crate opaque-map threaded into the definition emitter).
 //!
-//! The neighbouring `provide_struct_seal` / `provide_enum_seal` fixtures prove a
+//! The neighbouring `define_struct_seal` / `define_enum_seal` fixtures prove a
 //! struct of SCALAR fields and an enum of scalar/unit variants round-trip. This
-//! fixture proves the next link: a `provide.struct` FIELD or a `provide.enum`
+//! fixture proves the next link: a `define.struct` FIELD or a `define.enum`
 //! variant PAYLOAD whose type is a crate-opaque handle (the shape an Iced `Model`
 //! holding a sub-widget, or a `Message` variant carrying one, needs). The emitted
 //! definition must resolve the opaque through the crate's opaque-map:
 //!
-//!  * a provide-DEFINED opaque (`Counter`, defined in the same `pub mod <slug>`
+//!  * a define-DEFINED opaque (`Counter`, defined in the same `pub mod <slug>`
 //!    region) resolves to the bare in-module name and round-trips;
 //!  * a lifetime/generic-parameterised inspected opaque (`Element<'a, Message>`)
 //!    is unsound to emit as a stripped bare-arg path (an E0107), so the whole
@@ -25,9 +25,9 @@ use ipe_ffi::bindings::{emit_bindings, surviving_ref_names};
 use ipe_ffi::interface::crate_interface;
 use ipe_ffi::pkginfo::PkgInfo;
 
-/// A one-crate package that DEFINES a `Counter` (provide.struct scalar), a
-/// `Model` (provide.struct holding a `Counter` opaque field), and a `Message`
-/// (provide.enum with a variant carrying a `Counter` opaque payload) — the exact
+/// A one-crate package that DEFINES a `Counter` (define.struct scalar), a
+/// `Model` (define.struct holding a `Counter` opaque field), and a `Message`
+/// (define.enum with a variant carrying a `Counter` opaque payload) — the exact
 /// opaque-field / opaque-payload shapes a TEA model + message need.
 fn model_message_pkg() -> PkgInfo {
     let doc = serde_json::json!({
@@ -61,14 +61,14 @@ fn model_message_pkg() -> PkgInfo {
         "errors": []
     })
     .to_string();
-    PkgInfo::decode_json(&doc).expect("provide surface decodes")
+    PkgInfo::decode_json(&doc).expect("define surface decodes")
 }
 
-/// Default gate: a provide-defined opaque FIELD resolves to the bare in-module
+/// Default gate: a define-defined opaque FIELD resolves to the bare in-module
 /// name in the emitted struct definition + constructor, and the survivor gate +
 /// interface admit the forwarder (no phantom).
 #[test]
-fn a_provide_defined_opaque_field_resolves_in_module() {
+fn a_define_defined_opaque_field_resolves_in_module() {
     let out = emit_bindings(&model_message_pkg());
     assert!(
         out.contains("pub struct Model {"),
@@ -88,7 +88,7 @@ fn a_provide_defined_opaque_field_resolves_in_module() {
     );
     let iface = crate_interface(&model_message_pkg());
     assert!(
-        iface.provide_types.contains("Model"),
+        iface.define_types.contains("Model"),
         "the interface registers the Model nominal"
     );
     assert!(
@@ -97,10 +97,10 @@ fn a_provide_defined_opaque_field_resolves_in_module() {
     );
 }
 
-/// Default gate: a provide-defined opaque PAYLOAD resolves to the bare in-module
+/// Default gate: a define-defined opaque PAYLOAD resolves to the bare in-module
 /// name in the emitted enum definition + variant constructor.
 #[test]
-fn a_provide_defined_opaque_payload_resolves_in_module() {
+fn a_define_defined_opaque_payload_resolves_in_module() {
     let out = emit_bindings(&model_message_pkg());
     assert!(
         out.contains("pub enum Message {"),
@@ -161,7 +161,7 @@ fn a_parameterised_opaque_field_over_drops() {
     );
     let iface = crate_interface(&pkg);
     assert!(
-        !iface.provide_types.contains("Model"),
+        !iface.define_types.contains("Model"),
         "the interface must not register the over-dropped Model nominal"
     );
     assert!(
@@ -216,14 +216,14 @@ fn a_parameterised_opaque_payload_over_drops() {
     );
 }
 
-/// Default gate — the TRANSITIVE over-drop: a provide type `Outer` that resolves
-/// in isolation (its only opaque field is another provide type `Inner`) MUST
+/// Default gate — the TRANSITIVE over-drop: a define type `Outer` that resolves
+/// in isolation (its only opaque field is another define type `Inner`) MUST
 /// over-drop when `Inner` itself over-drops (Inner's own field is a parameterised
 /// `Element`). Otherwise `Outer` would emit `pub struct Outer { inner: Inner }`
 /// referencing an `Inner` that was never emitted (an E0425 the SEAL forbids). The
 /// survivor fixed point removes `Outer` because its dependency `Inner` is gone.
 #[test]
-fn a_provide_type_referencing_an_over_dropped_provide_type_also_over_drops() {
+fn a_define_type_referencing_an_over_dropped_define_type_also_over_drops() {
     let doc = serde_json::json!({
         "pkg": "iced", "name": "iced", "version": "0.12.1",
         "functions": [
@@ -269,7 +269,7 @@ fn a_provide_type_referencing_an_over_dropped_provide_type_also_over_drops() {
     );
     let iface = crate_interface(&pkg);
     assert!(
-        !iface.provide_types.contains("Outer") && !iface.provide_types.contains("Inner"),
+        !iface.define_types.contains("Outer") && !iface.define_types.contains("Inner"),
         "the interface registers neither over-dropped nominal"
     );
     assert!(
@@ -282,10 +282,10 @@ fn a_provide_type_referencing_an_over_dropped_provide_type_also_over_drops() {
 }
 
 /// Default gate — a resolvable CHAIN survives end to end: `Outer` holds `Middle`
-/// holds a scalar-only `Leaf`, all provide-defined, so every link resolves and the
+/// holds a scalar-only `Leaf`, all define-defined, so every link resolves and the
 /// whole chain emits. Guards the fixed point against over-dropping a sound chain.
 #[test]
-fn a_resolvable_provide_type_chain_all_survives() {
+fn a_resolvable_define_type_chain_all_survives() {
     let doc = serde_json::json!({
         "pkg": "demo", "name": "demo", "version": "0.1.0",
         "functions": [
@@ -320,7 +320,7 @@ fn a_resolvable_provide_type_chain_all_survives() {
         survivors.contains("leaf_new")
             && survivors.contains("middle_new")
             && survivors.contains("outer_new"),
-        "every link of a resolvable provide chain survives"
+        "every link of a resolvable define chain survives"
     );
 }
 

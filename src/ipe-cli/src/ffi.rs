@@ -177,25 +177,25 @@ pub fn assemble_emit(
         for (name, path) in &c.opaque_types {
             foreign_types.insert(format!("{}.{name}", c.module_name), path.clone());
         }
-        // A `[rust.provide.struct/enum]` type is DEFINED in the emitted
+        // A `[rust.define.struct/enum]` type is DEFINED in the emitted
         // `_bindings.rs` (wrapped `pub mod <slug> { … } pub use <slug>::*;` in
         // `src/ffi.rs`), so it resolves at the crate-absolute path
         // `crate::ffi::<slug>::<Name>` — never an external `::crate::Path`, and
         // never the bare `<Name>` glob (the `pub use` re-exports inside
         // `src/ffi.rs`, but the backend renders the foreign-type path into the
         // app's MAIN module tree, where only a crate-absolute path resolves).
-        for name in &c.provide_types {
+        for name in &c.define_types {
             let key = format!("{}.{name}", c.module_name);
-            // A provide type sharing a name with an inspected opaque of the same
+            // A define type sharing a name with an inspected opaque of the same
             // crate would silently overwrite the other's path (a wrong Rust type
             // the SEAL would then compile against). Fail closed — the author must
             // rename one; the two nominals are genuinely different Rust types.
             if foreign_types.contains_key(&key) {
                 return Err(CliError::UsageOwned(format!(
-                    "installed FFI crate `{}` defines a `[rust.provide.*]` type `{name}` \
+                    "installed FFI crate `{}` defines a `[rust.define.*]` type `{name}` \
                      whose name also names an inspected opaque type of the crate — the two \
                      are different Rust types that would collide on one nominal; rename the \
-                     provide type",
+                     define type",
                     c.slug
                 )));
             }
@@ -1151,7 +1151,7 @@ fn enforce_wrapper_capabilities(
                 "  Ipê has no runtime sandbox around the emitted app yet, so a wrapper that \
                  touches the network, filesystem, environment, a subprocess, native FFI, or a \
                  non-std dependency would run uncontained. Narrow the wrapper to pure compute \
-                 (Tier 1 `[rust.provide.*]` covers the safe shapes), or wait for the runtime jail.",
+                 (Tier 1 `[rust.define.*]` covers the safe shapes), or wait for the runtime jail.",
             );
             Err(CliError::UsageOwned(message))
         }
@@ -1299,15 +1299,15 @@ fn add_one(
             .unwrap_or(json),
         _ => json,
     };
-    // Merge any `[[rust.provide.closure]]` entries the project manifest declares
+    // Merge any `[[rust.define.closure]]` entries the project manifest declares
     // for this crate into the inspection document BEFORE the driver decodes it,
     // so the author-declared adapter flows through the same `PkgInfo` gate + the
     // unforgeable `FfiInterface` module as an inspected binding.
     let doc_text = match std::fs::read_to_string(PROJECT_MANIFEST) {
         Ok(text) => {
-            let closures = rust_provide_closures_from_manifest(&text);
-            let structs = rust_provide_structs_from_manifest(&text);
-            let enums = rust_provide_enums_from_manifest(&text);
+            let closures = rust_define_closures_from_manifest(&text);
+            let structs = rust_define_structs_from_manifest(&text);
+            let enums = rust_define_enums_from_manifest(&text);
             let sole_dep = rust_dependencies_from_manifest(&text).len() <= 1;
             merge_provides(
                 &doc_text,
@@ -1551,17 +1551,17 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
             )));
         }
     };
-    // Any `[[rust.provide.*]]` entries are merged per-crate below, keyed by the
+    // Any `[[rust.define.*]]` entries are merged per-crate below, keyed by the
     // crate's inspection `name`/`pkg` field, so an author-declared adapter or
     // struct flows through the driver's decode gate exactly like an inspected
     // binding. `sole_dep` decides whether an unqualified entry may attach.
-    let closures = rust_provide_closures_from_manifest(&text);
-    let structs = rust_provide_structs_from_manifest(&text);
-    let enums = rust_provide_enums_from_manifest(&text);
+    let closures = rust_define_closures_from_manifest(&text);
+    let structs = rust_define_structs_from_manifest(&text);
+    let enums = rust_define_enums_from_manifest(&text);
     let sole_dep = deps.len() <= 1;
     for item in items {
         // The crate's own name, from its inspection document, is the key an
-        // unqualified `[[rust.provide.closure]]` attaches to under `sole_dep`
+        // unqualified `[[rust.define.closure]]` attaches to under `sole_dep`
         // and a qualified one matches against.
         // The manifest's `[rust.dependencies]` key is the crates.io name (the
         // inspection `name`), so match on it; `pkg` (the lib ident) is the
@@ -1606,7 +1606,7 @@ struct ManifestDep {
     features: Vec<String>,
 }
 
-/// One `[[rust.provide.closure]]` manifest entry — the author-declared surface
+/// One `[[rust.define.closure]]` manifest entry — the author-declared surface
 /// that turns an Ipê function value into a Rust `dyn Fn` of an exact signature.
 ///
 /// This is Rust-side native code shown to the user under informed consent, like
@@ -1617,7 +1617,7 @@ struct ManifestDep {
 /// lives in the unforgeable `FfiInterface` module exactly like every other
 /// binding (user `.ipe` source still cannot mint a `ForeignCall`).
 #[derive(Debug, PartialEq, Eq)]
-struct ManifestProvideClosure {
+struct ManifestDefineClosure {
     /// The dependency this closure adapter augments (the `[rust.dependencies]`
     /// key). Empty ⇒ attach to the sole dependency (an ambiguity when there is
     /// more than one, refused at merge).
@@ -1629,7 +1629,7 @@ struct ManifestProvideClosure {
     signature: String,
 }
 
-/// One `[[rust.provide.struct]]` manifest entry — the author-declared surface
+/// One `[[rust.define.struct]]` manifest entry — the author-declared surface
 /// that DEFINES a nominal Rust type (a record of owned carrier fields, with an
 /// allowlisted `#[derive]` set) plus a constructor wrapper.
 ///
@@ -1640,7 +1640,7 @@ struct ManifestProvideClosure {
 /// than emit-and-cargo-fail, and the wrapper lives in the unforgeable
 /// `FfiInterface` module exactly like every other binding.
 #[derive(Debug, PartialEq, Eq)]
-struct ManifestProvideStruct {
+struct ManifestDefineStruct {
     /// The dependency this struct augments (empty ⇒ the sole dependency).
     krate: String,
     /// The constructor wrapper name (the Ipê-facing binding / tri-artifact key).
@@ -1654,10 +1654,10 @@ struct ManifestProvideStruct {
     derives: Vec<String>,
 }
 
-/// One `[[rust.provide.enum]]` manifest entry — the author-declared surface that
+/// One `[[rust.define.enum]]` manifest entry — the author-declared surface that
 /// DEFINES a nominal Rust `enum` (a sum of unit / tuple-payload variants over
 /// owned carriers, with an allowlisted `#[derive]` set) plus one constructor
-/// wrapper per variant. This is the P4 `provide` form — the shape an Iced/TEA
+/// wrapper per variant. This is the P4 `define` form — the shape an Iced/TEA
 /// `Message` needs.
 ///
 /// Like the struct surface, this is Rust-side native code shown under informed
@@ -1667,7 +1667,7 @@ struct ManifestProvideStruct {
 /// over-drops rather than emit-and-cargo-fail, and the wrappers live in the
 /// unforgeable `FfiInterface` module exactly like every other binding.
 #[derive(Debug, PartialEq, Eq)]
-struct ManifestProvideEnum {
+struct ManifestDefineEnum {
     /// The dependency this enum augments (empty ⇒ the sole dependency).
     krate: String,
     /// The constructor-wrapper prefix (the Ipê-facing binding / tri-artifact
@@ -1837,25 +1837,25 @@ fn find_inline_key(body: &str, key: &str) -> Option<usize> {
     None
 }
 
-/// Extract the manifest's `[[rust.provide.closure]]` array-of-tables entries.
+/// Extract the manifest's `[[rust.define.closure]]` array-of-tables entries.
 ///
-/// Each `[[rust.provide.closure]]` header opens a new entry; its `name`,
+/// Each `[[rust.define.closure]]` header opens a new entry; its `name`,
 /// `signature`, and optional `crate` keys are read line-by-line until the next
 /// table header. Only complete entries (both `name` and `signature` present)
 /// are returned — an entry missing either is dropped here, never merged as a
 /// half-formed function. The `signature` string is carried verbatim; it is the
 /// driver's `ClosureSig` decode, not this reader, that validates it.
-fn rust_provide_closures_from_manifest(text: &str) -> Vec<ManifestProvideClosure> {
+fn rust_define_closures_from_manifest(text: &str) -> Vec<ManifestDefineClosure> {
     let mut in_table = false;
-    let mut out: Vec<ManifestProvideClosure> = Vec::new();
+    let mut out: Vec<ManifestDefineClosure> = Vec::new();
     let mut cur: Option<(String, String, String)> = None; // (crate, name, signature)
     let flush = |cur: &mut Option<(String, String, String)>,
-                 out: &mut Vec<ManifestProvideClosure>| {
+                 out: &mut Vec<ManifestDefineClosure>| {
         if let Some((krate, name, signature)) = cur.take()
             && !name.is_empty()
             && !signature.is_empty()
         {
-            out.push(ManifestProvideClosure {
+            out.push(ManifestDefineClosure {
                 krate,
                 name,
                 signature,
@@ -1866,7 +1866,7 @@ fn rust_provide_closures_from_manifest(text: &str) -> Vec<ManifestProvideClosure
         let line = line.trim();
         if line.starts_with('[') {
             flush(&mut cur, &mut out);
-            in_table = line == "[[rust.provide.closure]]" || line == "[[\"rust.provide.closure\"]]";
+            in_table = line == "[[rust.define.closure]]" || line == "[[\"rust.define.closure\"]]";
             if in_table {
                 cur = Some((String::new(), String::new(), String::new()));
             }
@@ -1893,16 +1893,16 @@ fn rust_provide_closures_from_manifest(text: &str) -> Vec<ManifestProvideClosure
     out
 }
 
-/// Extract the manifest's `[[rust.provide.struct]]` array-of-tables entries.
+/// Extract the manifest's `[[rust.define.struct]]` array-of-tables entries.
 ///
-/// Each `[[rust.provide.struct]]` header opens a new entry; `name` (the Rust
+/// Each `[[rust.define.struct]]` header opens a new entry; `name` (the Rust
 /// type), `ctor` (the constructor wrapper name — defaults to `<snake>_new`),
 /// `fields` (an inline table of `field = "carrier"`), `derives` (an array), and
 /// optional `crate` are read line-by-line. Only entries with a `name` and at
 /// least one field are returned; a half-formed entry is dropped here, never
 /// merged. Field types and derives are carried verbatim; the driver's
 /// `StructDef` decode, not this reader, validates them.
-fn rust_provide_structs_from_manifest(text: &str) -> Vec<ManifestProvideStruct> {
+fn rust_define_structs_from_manifest(text: &str) -> Vec<ManifestDefineStruct> {
     #[derive(Default)]
     struct Acc {
         krate: String,
@@ -1912,9 +1912,9 @@ fn rust_provide_structs_from_manifest(text: &str) -> Vec<ManifestProvideStruct> 
         derives: Vec<String>,
     }
     let mut in_table = false;
-    let mut out: Vec<ManifestProvideStruct> = Vec::new();
+    let mut out: Vec<ManifestDefineStruct> = Vec::new();
     let mut cur: Option<Acc> = None;
-    let flush = |cur: &mut Option<Acc>, out: &mut Vec<ManifestProvideStruct>| {
+    let flush = |cur: &mut Option<Acc>, out: &mut Vec<ManifestDefineStruct>| {
         if let Some(a) = cur.take()
             && !a.name.is_empty()
             && !a.fields.is_empty()
@@ -1926,7 +1926,7 @@ fn rust_provide_structs_from_manifest(text: &str) -> Vec<ManifestProvideStruct> 
             } else {
                 a.ctor
             };
-            out.push(ManifestProvideStruct {
+            out.push(ManifestDefineStruct {
                 krate: a.krate,
                 ctor,
                 struct_name: a.name,
@@ -1939,7 +1939,7 @@ fn rust_provide_structs_from_manifest(text: &str) -> Vec<ManifestProvideStruct> 
         let line = line.trim();
         if line.starts_with('[') {
             flush(&mut cur, &mut out);
-            in_table = line == "[[rust.provide.struct]]" || line == "[[\"rust.provide.struct\"]]";
+            in_table = line == "[[rust.define.struct]]" || line == "[[\"rust.define.struct\"]]";
             if in_table {
                 cur = Some(Acc::default());
             }
@@ -1979,9 +1979,9 @@ fn rust_provide_structs_from_manifest(text: &str) -> Vec<ManifestProvideStruct> 
     out
 }
 
-/// Extract the manifest's `[[rust.provide.enum]]` array-of-tables entries.
+/// Extract the manifest's `[[rust.define.enum]]` array-of-tables entries.
 ///
-/// Each `[[rust.provide.enum]]` header opens a new entry; `name` (the Rust
+/// Each `[[rust.define.enum]]` header opens a new entry; `name` (the Rust
 /// enum), `ctor` (the constructor-wrapper prefix — defaults to `<snake>_new`),
 /// `variants` (an inline table of `Variant = ["carrier", …]`, `[]` for a unit
 /// variant), `derives` (an array), and optional `crate` are read line-by-line.
@@ -1989,7 +1989,7 @@ fn rust_provide_structs_from_manifest(text: &str) -> Vec<ManifestProvideStruct> 
 /// half-formed entry is dropped here, never merged. Variant names and payload
 /// types are carried verbatim; the driver's `EnumDef` decode, not this reader,
 /// validates them.
-fn rust_provide_enums_from_manifest(text: &str) -> Vec<ManifestProvideEnum> {
+fn rust_define_enums_from_manifest(text: &str) -> Vec<ManifestDefineEnum> {
     #[derive(Default)]
     struct Acc {
         krate: String,
@@ -1999,9 +1999,9 @@ fn rust_provide_enums_from_manifest(text: &str) -> Vec<ManifestProvideEnum> {
         derives: Vec<String>,
     }
     let mut in_table = false;
-    let mut out: Vec<ManifestProvideEnum> = Vec::new();
+    let mut out: Vec<ManifestDefineEnum> = Vec::new();
     let mut cur: Option<Acc> = None;
-    let flush = |cur: &mut Option<Acc>, out: &mut Vec<ManifestProvideEnum>| {
+    let flush = |cur: &mut Option<Acc>, out: &mut Vec<ManifestDefineEnum>| {
         if let Some(a) = cur.take()
             && !a.name.is_empty()
             && !a.variants.is_empty()
@@ -2011,7 +2011,7 @@ fn rust_provide_enums_from_manifest(text: &str) -> Vec<ManifestProvideEnum> {
             } else {
                 a.ctor
             };
-            out.push(ManifestProvideEnum {
+            out.push(ManifestDefineEnum {
                 krate: a.krate,
                 ctor,
                 enum_name: a.name,
@@ -2024,7 +2024,7 @@ fn rust_provide_enums_from_manifest(text: &str) -> Vec<ManifestProvideEnum> {
         let line = line.trim();
         if line.starts_with('[') {
             flush(&mut cur, &mut out);
-            in_table = line == "[[rust.provide.enum]]" || line == "[[\"rust.provide.enum\"]]";
+            in_table = line == "[[rust.define.enum]]" || line == "[[\"rust.define.enum\"]]";
             if in_table {
                 cur = Some(Acc::default());
             }
@@ -2064,7 +2064,7 @@ fn rust_provide_enums_from_manifest(text: &str) -> Vec<ManifestProvideEnum> {
     out
 }
 
-/// Parse a `provide.enum` inline `variants` table body (`Increment = [],
+/// Parse a `define.enum` inline `variants` table body (`Increment = [],
 /// SetValue = ["i64"], Move = ["i64", "i64"]`) into `(variant-name,
 /// payload-carrier-spellings)` pairs, in declaration order. Each value is a
 /// bracketed list of carrier spellings (empty ⇒ a unit variant). Types are
@@ -2118,7 +2118,7 @@ fn parse_inline_variant_table(body: &str) -> Vec<(String, Vec<String>)> {
     out
 }
 
-/// Parse a `provide.struct` inline `fields` table body (`value = "i64", tag =
+/// Parse a `define.struct` inline `fields` table body (`value = "i64", tag =
 /// "String"`) into `(field-name, carrier-spelling)` pairs, in declaration
 /// order. Types are carried verbatim; the driver's `StructDef` validates them.
 fn parse_inline_field_table(body: &str) -> Vec<(String, String)> {
@@ -2149,10 +2149,10 @@ fn to_snake_case(s: &str) -> String {
     out
 }
 
-/// Whether a `[[rust.provide.*]]` entry keyed by `entry_crate` attaches to
+/// Whether a `[[rust.define.*]]` entry keyed by `entry_crate` attaches to
 /// `crate_name`: a qualified entry matches by name; an unqualified one attaches
 /// only when the crate is the SOLE dependency (`sole_dep`).
-fn provide_attaches(entry_crate: &str, crate_name: &str, sole_dep: bool) -> bool {
+fn define_attaches(entry_crate: &str, crate_name: &str, sole_dep: bool) -> bool {
     if entry_crate.is_empty() {
         sole_dep
     } else {
@@ -2160,17 +2160,17 @@ fn provide_attaches(entry_crate: &str, crate_name: &str, sole_dep: bool) -> bool
     }
 }
 
-/// Refuse an unqualified `[[rust.provide.*]]` entry under a multi-crate manifest
+/// Refuse an unqualified `[[rust.define.*]]` entry under a multi-crate manifest
 /// (it cannot be attributed to one crate — parse, don't validate at the manifest
 /// boundary). `kind` names the surface for the diagnostic; `name` the entry.
-fn reject_ambiguous_provide<'a>(
+fn reject_ambiguous_define<'a>(
     kind: &str,
     sole_dep: bool,
     mut unqualified: impl Iterator<Item = &'a str>,
 ) -> Result<(), CliError> {
     if !sole_dep && let Some(name) = unqualified.next() {
         return Err(CliError::UsageOwned(format!(
-            "ipe: [[rust.provide.{kind}]] `{name}` has no `crate` key but the manifest \
+            "ipe: [[rust.define.{kind}]] `{name}` has no `crate` key but the manifest \
              lists more than one [rust.dependencies] crate — add `crate = \"<name>\"` \
              to say which crate it augments"
         )));
@@ -2178,7 +2178,7 @@ fn reject_ambiguous_provide<'a>(
     Ok(())
 }
 
-/// Merge every `[[rust.provide.closure]]` / `[[rust.provide.struct]]` entry that
+/// Merge every `[[rust.define.closure]]` / `[[rust.define.struct]]` entry that
 /// targets `crate_name` into the crate's inspection JSON, as synthetic
 /// `functions` carrying the wire flags the driver's `PkgInfo` decode reads.
 ///
@@ -2195,12 +2195,12 @@ fn reject_ambiguous_provide<'a>(
 fn merge_provides(
     inspection_json: &str,
     crate_name: &str,
-    closures: &[ManifestProvideClosure],
-    structs: &[ManifestProvideStruct],
-    enums: &[ManifestProvideEnum],
+    closures: &[ManifestDefineClosure],
+    structs: &[ManifestDefineStruct],
+    enums: &[ManifestDefineEnum],
     sole_dep: bool,
 ) -> Result<String, CliError> {
-    reject_ambiguous_provide(
+    reject_ambiguous_define(
         "closure",
         sole_dep,
         closures
@@ -2208,7 +2208,7 @@ fn merge_provides(
             .filter(|c| c.krate.is_empty())
             .map(|c| c.name.as_str()),
     )?;
-    reject_ambiguous_provide(
+    reject_ambiguous_define(
         "struct",
         sole_dep,
         structs
@@ -2216,7 +2216,7 @@ fn merge_provides(
             .filter(|s| s.krate.is_empty())
             .map(|s| s.ctor.as_str()),
     )?;
-    reject_ambiguous_provide(
+    reject_ambiguous_define(
         "enum",
         sole_dep,
         enums
@@ -2227,7 +2227,7 @@ fn merge_provides(
 
     let synthetic: Vec<serde_json::Value> = closures
         .iter()
-        .filter(|c| provide_attaches(&c.krate, crate_name, sole_dep))
+        .filter(|c| define_attaches(&c.krate, crate_name, sole_dep))
         .map(|c| {
             serde_json::json!({
                 "name": c.name,
@@ -2239,7 +2239,7 @@ fn merge_provides(
         .chain(
             structs
                 .iter()
-                .filter(|s| provide_attaches(&s.krate, crate_name, sole_dep))
+                .filter(|s| define_attaches(&s.krate, crate_name, sole_dep))
                 .map(|s| {
                     let fields: Vec<serde_json::Value> = s
                         .fields
@@ -2259,7 +2259,7 @@ fn merge_provides(
         .chain(
             enums
                 .iter()
-                .filter(|e| provide_attaches(&e.krate, crate_name, sole_dep))
+                .filter(|e| define_attaches(&e.krate, crate_name, sole_dep))
                 .map(|e| {
                     let variants: Vec<serde_json::Value> = e
                         .variants
@@ -2466,16 +2466,16 @@ version = \"1\"
     }
 
     #[test]
-    fn manifest_provide_enum_reads_variants_and_defaults_the_ctor() {
+    fn manifest_define_enum_reads_variants_and_defaults_the_ctor() {
         let text = "[rust.dependencies]\niced = \"=0.12.1\"\n\n\
-                    [[rust.provide.enum]]\n\
+                    [[rust.define.enum]]\n\
                     name = \"Message\"\n\
                     variants = { Increment = [], Decrement = [], SetValue = [\"i64\"] }\n\
                     derives = [\"Clone\"]\n";
-        let enums = rust_provide_enums_from_manifest(text);
+        let enums = rust_define_enums_from_manifest(text);
         assert_eq!(
             enums,
-            vec![ManifestProvideEnum {
+            vec![ManifestDefineEnum {
                 krate: String::new(),
                 // Ctor defaults to `<snake(name)>_new`.
                 ctor: "message_new".to_owned(),
@@ -2491,7 +2491,7 @@ version = \"1\"
     }
 
     #[test]
-    fn manifest_provide_enum_multi_payload_split_is_bracket_aware() {
+    fn manifest_define_enum_multi_payload_split_is_bracket_aware() {
         // A `,` inside a payload list must NOT split the variant.
         let vars = parse_inline_variant_table("Tick = [], Move = [\"i64\", \"i64\"]");
         assert_eq!(
@@ -2730,7 +2730,7 @@ version = \"1\"
             bindings_source: String::new(),
             opaque_types: BTreeMap::new(),
             opaque_type_ids: BTreeMap::new(),
-            provide_types: BTreeSet::new(),
+            define_types: BTreeSet::new(),
             bindings: Vec::new(),
             dep_versions: BTreeMap::new(),
             cargo_deps: vec![line.to_owned()],
@@ -2762,7 +2762,7 @@ version = \"1\"
             bindings_source: String::new(),
             opaque_types: BTreeMap::new(),
             opaque_type_ids: BTreeMap::new(),
-            provide_types: BTreeSet::new(),
+            define_types: BTreeSet::new(),
             bindings: Vec::new(),
             dep_versions: BTreeMap::new(),
             cargo_deps: vec![line.to_owned()],
@@ -2801,7 +2801,7 @@ version = \"1\"
             bindings_source: String::new(),
             opaque_types: BTreeMap::new(),
             opaque_type_ids: BTreeMap::new(),
-            provide_types: BTreeSet::new(),
+            define_types: BTreeSet::new(),
             bindings: Vec::new(),
             dep_versions: BTreeMap::new(),
             cargo_deps: lines.into_iter().map(str::to_owned).collect(),
@@ -2836,24 +2836,24 @@ version = \"1\"
     }
 
     #[test]
-    fn manifest_provide_closure_array_of_tables_parses() {
+    fn manifest_define_closure_array_of_tables_parses() {
         let text = "[rust.dependencies]\ndemo = \"1\"\n\n\
-                    [[rust.provide.closure]]\n\
+                    [[rust.define.closure]]\n\
                     crate = \"demo\"\n\
                     name = \"update_fn\"\n\
                     signature = \"Fn(Int, Bool) -> Int + Send + Sync + 'static\"\n\n\
-                    [[rust.provide.closure]]\n\
+                    [[rust.define.closure]]\n\
                     name = \"draw_fn\"\n\
                     signature = \"Fn(Int) -> Bool + Send + Sync + 'static\"\n";
         assert_eq!(
-            rust_provide_closures_from_manifest(text),
+            rust_define_closures_from_manifest(text),
             vec![
-                ManifestProvideClosure {
+                ManifestDefineClosure {
                     krate: "demo".to_owned(),
                     name: "update_fn".to_owned(),
                     signature: "Fn(Int, Bool) -> Int + Send + Sync + 'static".to_owned(),
                 },
-                ManifestProvideClosure {
+                ManifestDefineClosure {
                     krate: String::new(),
                     name: "draw_fn".to_owned(),
                     signature: "Fn(Int) -> Bool + Send + Sync + 'static".to_owned(),
@@ -2863,16 +2863,16 @@ version = \"1\"
     }
 
     #[test]
-    fn a_provide_closure_missing_name_or_signature_is_dropped_not_half_merged() {
-        let text = "[[rust.provide.closure]]\nname = \"no_sig\"\n\n\
-                    [[rust.provide.closure]]\nsignature = \"Fn(Int) -> Int\"\n";
-        assert!(rust_provide_closures_from_manifest(text).is_empty());
+    fn a_define_closure_missing_name_or_signature_is_dropped_not_half_merged() {
+        let text = "[[rust.define.closure]]\nname = \"no_sig\"\n\n\
+                    [[rust.define.closure]]\nsignature = \"Fn(Int) -> Int\"\n";
+        assert!(rust_define_closures_from_manifest(text).is_empty());
     }
 
     #[test]
     fn merge_injects_a_matching_closure_as_a_synthetic_function() {
         let doc = "{\"pkg\":\"demo\",\"name\":\"demo\",\"functions\":[]}";
-        let closures = vec![ManifestProvideClosure {
+        let closures = vec![ManifestDefineClosure {
             krate: "demo".to_owned(),
             name: "update_fn".to_owned(),
             signature: "Fn(Int) -> Int + Send + Sync + 'static".to_owned(),
@@ -2903,7 +2903,7 @@ version = \"1\"
     #[test]
     fn merge_leaves_a_non_matching_crate_untouched() {
         let doc = "{\"pkg\":\"other\",\"name\":\"other\",\"functions\":[]}";
-        let closures = vec![ManifestProvideClosure {
+        let closures = vec![ManifestDefineClosure {
             krate: "demo".to_owned(),
             name: "update_fn".to_owned(),
             signature: "Fn(Int) -> Int".to_owned(),
@@ -2922,7 +2922,7 @@ version = \"1\"
     #[test]
     fn an_unqualified_closure_under_a_multi_crate_manifest_is_refused() {
         let doc = "{\"pkg\":\"demo\",\"name\":\"demo\",\"functions\":[]}";
-        let closures = vec![ManifestProvideClosure {
+        let closures = vec![ManifestDefineClosure {
             krate: String::new(),
             name: "update_fn".to_owned(),
             signature: "Fn(Int) -> Int".to_owned(),
@@ -2933,18 +2933,18 @@ version = \"1\"
         assert!(merge_provides(doc, "demo", &closures, &[], &[], true).is_ok());
     }
 
-    /// The manifest→adapter SEAL: a `[[rust.provide.closure]]` declared in an
+    /// The manifest→adapter SEAL: a `[[rust.define.closure]]` declared in an
     /// `ipe.toml` flows through the CLI merge glue, then the driver's `PkgInfo`
     /// decode, and emits the closure-adapter wrapper Rust — the same path
     /// `ipe rust install` drives, minus the sandbox/inspector spawn. Without the
     /// merge glue the declared closure never becomes an emitted adapter.
     #[test]
-    fn a_manifest_provide_closure_produces_the_emitted_adapter() {
+    fn a_manifest_define_closure_produces_the_emitted_adapter() {
         let manifest = "[rust.dependencies]\ndemo = \"1\"\n\n\
-                        [[rust.provide.closure]]\n\
+                        [[rust.define.closure]]\n\
                         name = \"apply_fn\"\n\
                         signature = \"Fn(Int) -> Int + Send + Sync + 'static\"\n";
-        let closures = rust_provide_closures_from_manifest(manifest);
+        let closures = rust_define_closures_from_manifest(manifest);
         let sole_dep = rust_dependencies_from_manifest(manifest).len() <= 1;
         let inspection = "{\"pkg\":\"demo\",\"name\":\"demo\",\"version\":\"0.1.0\",\
                           \"functions\":[],\"errors\":[]}";
@@ -2960,25 +2960,25 @@ version = \"1\"
         );
         assert!(
             pkg.dropped().is_empty(),
-            "a well-formed provide entry over-drops nothing"
+            "a well-formed define entry over-drops nothing"
         );
     }
 
     #[test]
-    fn manifest_provide_struct_array_of_tables_parses() {
+    fn manifest_define_struct_array_of_tables_parses() {
         let text = "[rust.dependencies]\ndemo = \"1\"\n\n\
-                    [[rust.provide.struct]]\n\
+                    [[rust.define.struct]]\n\
                     crate = \"demo\"\n\
                     name = \"Counter\"\n\
                     derives = [\"Default\", \"Clone\"]\n\
                     fields = { value = \"i64\", tag = \"String\" }\n\n\
-                    [[rust.provide.struct]]\n\
+                    [[rust.define.struct]]\n\
                     name = \"Point\"\n\
                     fields = { x = \"i64\" }\n";
         assert_eq!(
-            rust_provide_structs_from_manifest(text),
+            rust_define_structs_from_manifest(text),
             vec![
-                ManifestProvideStruct {
+                ManifestDefineStruct {
                     krate: "demo".to_owned(),
                     ctor: "counter_new".to_owned(),
                     struct_name: "Counter".to_owned(),
@@ -2988,7 +2988,7 @@ version = \"1\"
                     ],
                     derives: vec!["Default".to_owned(), "Clone".to_owned()],
                 },
-                ManifestProvideStruct {
+                ManifestDefineStruct {
                     krate: String::new(),
                     ctor: "point_new".to_owned(),
                     struct_name: "Point".to_owned(),
@@ -3000,34 +3000,34 @@ version = \"1\"
     }
 
     #[test]
-    fn a_provide_struct_missing_name_or_fields_is_dropped() {
-        let text = "[[rust.provide.struct]]\nname = \"NoFields\"\n\n\
-                    [[rust.provide.struct]]\nfields = { x = \"i64\" }\n";
-        assert!(rust_provide_structs_from_manifest(text).is_empty());
+    fn a_define_struct_missing_name_or_fields_is_dropped() {
+        let text = "[[rust.define.struct]]\nname = \"NoFields\"\n\n\
+                    [[rust.define.struct]]\nfields = { x = \"i64\" }\n";
+        assert!(rust_define_structs_from_manifest(text).is_empty());
     }
 
     #[test]
     fn an_explicit_ctor_name_overrides_the_snake_default() {
-        let text = "[[rust.provide.struct]]\n\
+        let text = "[[rust.define.struct]]\n\
                     name = \"Counter\"\n\
                     ctor = \"mk_counter\"\n\
                     fields = { value = \"i64\" }\n";
-        let parsed = rust_provide_structs_from_manifest(text);
+        let parsed = rust_define_structs_from_manifest(text);
         assert_eq!(parsed.first().expect("one entry").ctor, "mk_counter");
     }
 
-    /// The manifest→constructor SEAL: a `[[rust.provide.struct]]` declared in an
+    /// The manifest→constructor SEAL: a `[[rust.define.struct]]` declared in an
     /// `ipe.toml` flows through the CLI merge glue, the driver's `PkgInfo`
     /// decode, and emits the struct definition + constructor wrapper — the same
     /// path `ipe rust install` drives, minus the sandbox/inspector spawn.
     #[test]
-    fn a_manifest_provide_struct_produces_the_emitted_definition_and_ctor() {
+    fn a_manifest_define_struct_produces_the_emitted_definition_and_ctor() {
         let manifest = "[rust.dependencies]\ndemo = \"1\"\n\n\
-                        [[rust.provide.struct]]\n\
+                        [[rust.define.struct]]\n\
                         name = \"Counter\"\n\
                         derives = [\"Default\", \"Clone\"]\n\
                         fields = { value = \"i64\" }\n";
-        let structs = rust_provide_structs_from_manifest(manifest);
+        let structs = rust_define_structs_from_manifest(manifest);
         let sole_dep = rust_dependencies_from_manifest(manifest).len() <= 1;
         let inspection = "{\"pkg\":\"demo\",\"name\":\"demo\",\"version\":\"0.1.0\",\
                           \"functions\":[],\"errors\":[]}";
@@ -3043,14 +3043,14 @@ version = \"1\"
         );
         assert!(
             pkg.dropped().is_empty(),
-            "a well-formed provide.struct over-drops nothing"
+            "a well-formed define.struct over-drops nothing"
         );
     }
 
     #[test]
     fn an_unqualified_struct_under_a_multi_crate_manifest_is_refused() {
         let doc = "{\"pkg\":\"demo\",\"name\":\"demo\",\"functions\":[]}";
-        let structs = vec![ManifestProvideStruct {
+        let structs = vec![ManifestDefineStruct {
             krate: String::new(),
             ctor: "counter_new".to_owned(),
             struct_name: "Counter".to_owned(),
@@ -3061,8 +3061,8 @@ version = \"1\"
         assert!(merge_provides(doc, "demo", &[], &structs, &[], true).is_ok());
     }
 
-    /// A one-crate `InstalledCrate` with the given opaque + provide type maps.
-    fn crate_with_types(slug: &str, opaque: &[(&str, &str)], provide: &[&str]) -> InstalledCrate {
+    /// A one-crate `InstalledCrate` with the given opaque + define type maps.
+    fn crate_with_types(slug: &str, opaque: &[(&str, &str)], define: &[&str]) -> InstalledCrate {
         InstalledCrate {
             slug: slug.to_owned(),
             module_name: format!("Rust.{slug}"),
@@ -3074,7 +3074,7 @@ version = \"1\"
                 .map(|(n, p)| ((*n).to_owned(), (*p).to_owned()))
                 .collect(),
             opaque_type_ids: BTreeMap::new(),
-            provide_types: provide.iter().map(|n| (*n).to_owned()).collect(),
+            define_types: define.iter().map(|n| (*n).to_owned()).collect(),
             bindings: Vec::new(),
             dep_versions: BTreeMap::new(),
             cargo_deps: Vec::new(),
@@ -3083,8 +3083,8 @@ version = \"1\"
     }
 
     #[test]
-    fn a_provide_type_renders_a_crate_absolute_ffi_path() {
-        // A provide-defined type lives in `crate::ffi::<slug>::<Name>` (the app
+    fn a_define_type_renders_a_crate_absolute_ffi_path() {
+        // A define-defined type lives in `crate::ffi::<slug>::<Name>` (the app
         // crate's own module tree), NOT at an external `::crate::Path`.
         let emit = assemble_emit(&[crate_with_types("iced", &[], &["Counter", "Message"])])
             .expect("emit ok")
@@ -3104,8 +3104,8 @@ version = \"1\"
     }
 
     #[test]
-    fn a_provide_type_colliding_with_an_inspected_opaque_is_refused() {
-        // A provide type sharing a name with an inspected opaque of the SAME
+    fn a_define_type_colliding_with_an_inspected_opaque_is_refused() {
+        // A define type sharing a name with an inspected opaque of the SAME
         // crate would silently overwrite one path — the two are different Rust
         // types. Fail closed rather than emit a wrong-type binding.
         let clash = assemble_emit(&[crate_with_types(
@@ -3113,6 +3113,6 @@ version = \"1\"
             &[("Element", "::iced::Element")],
             &["Element"],
         )]);
-        assert!(clash.is_err(), "a provide-vs-opaque name clash must refuse");
+        assert!(clash.is_err(), "a define-vs-opaque name clash must refuse");
     }
 }

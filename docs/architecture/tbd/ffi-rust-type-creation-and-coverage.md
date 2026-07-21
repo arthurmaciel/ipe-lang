@@ -21,7 +21,7 @@ Fenced code blocks are **illustrative** unless the prose says a fixture ran.
 There are two distinct blockers. Keep them separate:
 
 * **(a) define a Rust type** — the crate's API needs a *nominal Rust type the
-  crate does not itself provide*: a `struct` implementing the crate's trait, an
+  crate does not itself define*: a `struct` implementing the crate's trait, an
   `enum`, or a closure value of an exact `Fn` signature. Today the generator
   can only name types that already exist in the inspected crate.
 * **(b) lifetime-borrowed opaque returns** — a foreign fn returns `&'a T`
@@ -31,7 +31,7 @@ There are two distinct blockers. Keep them separate:
   `.to_owned()`/`.to_string()`). A borrowed return has no owner to attach a
   lifetime to on the Ipê side.
 
-The recommendation resolves (a) with a new **provide** surface, and resolves
+The recommendation resolves (a) with a new **define** surface, and resolves
 (b) by **elevating owned-only from an implementation accident to an invariant**:
 borrowed opaque returns stay refused (over-drop), permanently and on purpose.
 Ipê values are immutable and have no lifetime algebra; a `Rust.` type Ipê can
@@ -63,7 +63,7 @@ This single constraint eliminates the most tempting-but-unsound designs (see
 
 ---
 
-## 2. Recommended surface: a declarative `provide` block in the crate manifest
+## 2. Recommended surface: a declarative `define` block in the crate manifest
 
 Ipê defines a Rust type **declaratively**, in the crate's own `ipe.toml`
 `[rust]` section, not with new expression syntax in user `.ipe` files. The
@@ -72,16 +72,16 @@ declaration is author-authored, shown to the user under informed-consent at
 `Rust.` surface — `package-coordination-and-capabilities-design.md`), and the
 driver compiles it into new `FnShape` variants.
 
-Two provide-forms cover the crate roadmap:
+Two define-forms cover the crate roadmap:
 
-### 2.1 `provide.struct` / `provide.enum` — an Ipê record/union becomes a Rust type
+### 2.1 `define.struct` / `define.enum` — an Ipê record/union becomes a Rust type
 
 ```toml
 # ipe.toml  (illustrative)
 [rust]
 dependencies = { iced = "=0.12.1" }
 
-[[rust.provide.struct]]
+[[rust.define.struct]]
 # The Rust type name to define, and the trait it satisfies for the crate.
 name    = "Counter"
 derives = ["Default", "Clone"]        # closed allowlist, see §3.2
@@ -111,22 +111,22 @@ Ipê program never sees the struct's internals; it holds an opaque handle. This
 solves (a) with **zero new trust surface**: the constructor body is built from
 decode-validated newtypes only, identical to today's `EnumCtor`.
 
-> **Wired.** The interface now ADMITS the `provide.struct` / `provide.enum`
+> **Wired.** The interface now ADMITS the `define.struct` / `define.enum`
 > constructors as Ipê forwarders (the opaque nominal + `counter_new` /
 > per-variant `message_new_*` bindings), not just emits the `_bindings.rs`
-> definition. A provide-defined type resolves at the crate-absolute path
+> definition. A define-defined type resolves at the crate-absolute path
 > `crate::ffi::<slug>::<Name>` — it lives in the emitted app crate, not an
 > external `::crate::Path`. The nominal-name-vs-inspected-opaque clash fails
 > closed, a name shadowing an Ipê builtin over-drops the whole entry, and a
 > nullary constructor (a fieldless struct / unit variant) binds a zero-arg
-> forwarder. The `provide.closure`-to-`run` handoff — surfacing a boxed Ipê
+> forwarder. The `define.closure`-to-`run` handoff — surfacing a boxed Ipê
 > closure as an Ipê-held value to pass onward — stays deferred (a separate,
 > harder step).
 
-### 2.2 `provide.closure` — an Ipê function becomes a `dyn Fn` of an exact signature
+### 2.2 `define.closure` — an Ipê function becomes a `dyn Fn` of an exact signature
 
 ```toml
-[[rust.provide.closure]]
+[[rust.define.closure]]
 # The wrapper takes an Ipê function value and returns a boxed Rust closure of
 # an EXACT, author-declared signature. No inference from crate metadata.
 name     = "update_fn"
@@ -142,7 +142,7 @@ evaluator per call. See §3.3 for the soundness argument (the hard part).
 ### Why declarative-in-manifest, not new `.ipe` syntax
 
 * It stays **greppable at the `Rust.` boundary (D1)**: everything Rust-side is
-  under `[rust.provide.*]` in one file, mirroring `[rust.dependencies]`.
+  under `[rust.define.*]` in one file, mirroring `[rust.dependencies]`.
 * It is **author-declared native code** → it flows through the existing
   capability-consent model unchanged; the user sees it at `ipe add`.
 * It keeps user `.ipe` source **free of any Rust-text injection point** — the
@@ -158,14 +158,14 @@ evaluator per call. See §3.3 for the soundness argument (the hard part).
 ### 3.1 A third-and-fourth decode boundary — same discipline
 
 The subsystem has exactly two typed decode boundaries today (`PkgInfo`, `Call`).
-`provide` adds decoding of the manifest `[rust.provide.*]` tables. To preserve
+`define` adds decoding of the manifest `[rust.define.*]` tables. To preserve
 "parse, don't validate", these decode through the SAME newtype gates:
 
 * `name` → `RustIdent` (`naming.rs`), already `^[A-Za-z_][A-Za-z0-9_]*$`.
 * struct field names → `RustIdent`; field types → a **closed** carrier set
   (`i64|f64|bool|char|String|Bytes|<opaque-already-in-this-crate>`), the same
   set `owned_value_coercion` can already lift. Anything else → refuse the whole
-  `provide` entry at decode (over-drop the type, never emit-and-cargo-fail).
+  `define` entry at decode (over-drop the type, never emit-and-cargo-fail).
 * closure `signature` → a parsed `ClosureSig { params: Vec<Carrier>, ret:
   Carrier, bounds: BoundSet }` where `BoundSet ⊆ {Send, Sync, 'static}` is a
   closed enum, never free text. A signature that does not parse into this shape
@@ -189,14 +189,14 @@ fail; per-call failure is handled in-band, §3.3).
 ### 3.2 `derives` is a closed allowlist re-verified against the runtime
 
 The `MODELLABLE_5` fence (`{Hash, Eq, Ord, Clone, Default}`) already exists as a
-two-way cross-crate assertion. `provide.struct.derives` reuses it verbatim: a
+two-way cross-crate assertion. `define.struct.derives` reuses it verbatim: a
 derive outside the set is refused at decode. This keeps the emitted `#[derive]`
 list sound (a struct with an `f64` field can derive `Clone`/`Default` but never
 `Eq`/`Hash`/`Ord` — the IEEE-754 cell the fence already guards).
 
 ### 3.3 The closure adapter — the hard soundness core
 
-A `provide.closure` wrapper must turn an Ipê function value into
+A `define.closure` wrapper must turn an Ipê function value into
 `Box<dyn Fn(A) -> B + Send + Sync + 'static>`. Four obligations, each met by a
 gate that already exists or a narrow new one:
 
@@ -206,7 +206,7 @@ gate that already exists or a narrow new one:
    (it must be, for `Task`/tokio to move work across threads — see the async
    bridge's C1/C1b/C1c Send gates). The adapter captures the value by move into
    the box; `'static` holds because Ipê values own their environment (no
-   borrows). **Gate:** refuse a `provide.closure` whose `ipe_arg` references any
+   borrows). **Gate:** refuse a `define.closure` whose `ipe_arg` references any
    non-`Send` carrier (there are none in the closed carrier set — every carrier
    is an owned value or an opaque handle that is itself `Send` by the async
    bridge's `PROVABLY_SEND_OPAQUE_NAMES` verdict). Over-drop otherwise.
@@ -241,18 +241,18 @@ gate that already exists or a narrow new one:
 ### 3.4 SEAL and sandbox interaction
 
 * **SEAL** (`ipe build ⇒ cargo build`): the new shapes are total functions over
-  a decode-validated `provide` spec, emitted into sentinel regions like every
-  other wrapper. A `provide` entry that cannot render soundly emits **nothing**
+  a decode-validated `define` spec, emitted into sentinel regions like every
+  other wrapper. A `define` entry that cannot render soundly emits **nothing**
   (over-drop) and appears in `coverage.md`. No path emits Rust that cargo then
   rejects.
-* **Sandbox** stays fail-closed and untouched: `provide` types are compiled in
+* **Sandbox** stays fail-closed and untouched: `define` types are compiled in
   the same jailed `cargo check`/`rustdoc` inspection as the rest of the crate.
   Defining a struct/closure does not widen the syscall surface — the capability
   set is still the union of inferred-Ipê + author-declared-native, enforced at
-  the OS boundary. A `provide.struct` holding, say, a `File` handle would
+  the OS boundary. A `define.struct` holding, say, a `File` handle would
   require the `filesystem` capability declared by the author and shown at add,
   exactly like any other native surface.
-* **Capabilities**: crossing into a `provide` type is a `Callee::Ffi`, so it
+* **Capabilities**: crossing into a `define` type is a `Callee::Ffi`, so it
   already contributes `Capability::NativeFfi` (`lower/src/capabilities.rs:6`).
   No new capability kind is needed for the struct/enum case; the closure case
   inherits whatever the crate's trait impl transitively needs.
@@ -261,7 +261,7 @@ gate that already exists or a narrow new one:
 
 ### 3.5 The async-returning closure adapter (Axum/Hyper handlers)
 
-An async `provide.closure` declares a `Future`-returning signature — the shape
+An async `define.closure` declares a `Future`-returning signature — the shape
 an Axum/Hyper route handler needs (`Fn(Request) -> impl Future<Output =
 Result<Response, E>>`). Three author spellings decode to the same shape:
 `impl Future<Output = R>`, `Pin<Box<dyn Future<Output = R> + …>>`, and
@@ -303,7 +303,7 @@ asked to produce it; the decode boundary over-drops the whole entry.
 
 ## 4. Approaches weighed
 
-**A. Declarative `provide` in the manifest (RECOMMENDED).** Trust gate intact,
+**A. Declarative `define` in the manifest (RECOMMENDED).** Trust gate intact,
 SEAL intact, reuses `EnumCtor`/`FieldSet` inbound coercion + the async bridge's
 Send/Clone gates. Cost: a closed, declarative surface — it cannot express an
 arbitrary hand-written Rust `impl` body. That is the point: everything it emits
@@ -312,7 +312,7 @@ Security (no new RCE/injection surface), Correctness (owned-only invariant),
 Soundness (closed carriers + closed bounds) all hold; Completeness is
 deliberately bounded.
 
-**B. Inspector-inferred type synthesis (a `#[ipe::provide]` proc-macro the
+**B. Inspector-inferred type synthesis (a `#[define_in_ipe]` proc-macro the
 author writes in a companion Rust crate).** The author writes real Rust; the
 inspector reads it. Strictly more expressive. Rejected for the FIRST increment:
 it moves author-written Rust *into the trusted emission set* and needs the
@@ -345,8 +345,8 @@ and preserves the SEAL + over-drop keystone.
   interface. The interface admission (the opaque nominal `type Counter` + the
   `counter_new` forwarder, its arity/signature read from the parsed `StructDef`)
   and the crate-absolute `crate::ffi::<slug>::<Name>` path resolution landed with
-  the forwarder-plumbing work. SEAL fixtures `tests/provide_struct_seal.rs` +
-  `tests/provide_forwarder_seal.rs` (the latter assembles the app's `src/ffi.rs`
+  the forwarder-plumbing work. SEAL fixtures `tests/define_struct_seal.rs` +
+  `tests/define_forwarder_seal.rs` (the latter assembles the app's `src/ffi.rs`
   module tree and `cargo build`s+runs the forwarders under `IPE_E2E`).
 * **P2 — `FnShape::ClosureAdapter`, sync single-arg.** The §3.3 adapter for
   `dyn Fn(A) -> B + Send + Sync + 'static`, A/B total carriers, no `Task` in
@@ -355,7 +355,7 @@ and preserves the SEAL + over-drop keystone.
 * **P3 — multi-arg closures + `Result`/`Option` returns** (fallible callback
   bodies fold through `ipe_error_from_foreign`). *OPAQUE returns landed:* the
   closure-adapter emitter threads the crate opaque-map, so a `Result`/`Option`
-  Ok/Some carrier that is an opaque handle resolves — a provide-DEFINED type to
+  Ok/Some carrier that is an opaque handle resolves — a define-DEFINED type to
   its bare in-module name (it lives in the same `pub mod <slug>` region), an
   INSPECTED crate-opaque to its absolute `::crate::path`. The received and
   returned `Box<dyn Fn …>` types render from the SAME resolved carriers, so their
@@ -365,42 +365,42 @@ and preserves the SEAL + over-drop keystone.
   carrier cannot carry `Element`'s generic args, so emitting the stripped path
   would be an E0107; refusing keeps the SEAL. So `view : Model -> Element
   Message` specifically stays refused (opaque returns work for non-parameterised
-  owned opaques). SEAL fixture `tests/provide_opaque_return_seal.rs` (a
+  owned opaques). SEAL fixture `tests/define_opaque_return_seal.rs` (a
   `Result<Counter>`-returning closure cargo-builds+runs under `IPE_E2E`; the
   parameterised case over-drops).
-* **P4 — `provide.enum`** (Ipê union → Rust enum; reuse `EnumCtor` per variant).
+* **P4 — `define.enum`** (Ipê union → Rust enum; reuse `EnumCtor` per variant).
   *Landed:* `EnumDef` in `carrier.rs` (unit + tuple-payload variants over the
   closed carrier set, IEEE-754 fence generalised to a sum), `FnShape::EnumDefCtor`
   wired through `decode_shape`/`shape_fallibility`/`emit_fn_region` + the
-  interface admission gate, `[[rust.provide.enum]]` manifest reader in the CLI's
+  interface admission gate, `[[rust.define.enum]]` manifest reader in the CLI's
   `ffi.rs`. Emits the `#[derive]`ed `enum` + one constructor per variant. SEAL
-  fixture `tests/provide_enum_seal.rs` (cargo build+run under `IPE_E2E`). The
+  fixture `tests/define_enum_seal.rs` (cargo build+run under `IPE_E2E`). The
   derive allowlist gained `Debug` (total for every carrier, no IEEE-754 hazard)
   because Iced's `Sandbox::Message: Debug` bound requires it. Ipê-side forwarder
   plumbing (one forwarder PER variant returning the single shared enum nominal; a
-  unit variant binds a zero-arg forwarder) landed alongside `provide.struct` — see
-  the §2.1 note and `tests/provide_forwarder_seal.rs`. *OPAQUE fields/payloads
+  unit variant binds a zero-arg forwarder) landed alongside `define.struct` — see
+  the §2.1 note and `tests/define_forwarder_seal.rs`. *OPAQUE fields/payloads
   landed:* the DEFINITION emitter (`struct_ctor_lines`/`enum_def_ctor_lines`)
-  threads the SAME crate opaque-map the closure adapter uses, so a `provide.struct`
-  field or a `provide.enum` variant payload of an owned non-parameterised opaque
-  (including a provide-defined nominal held by another provide type) resolves — the
+  threads the SAME crate opaque-map the closure adapter uses, so a `define.struct`
+  field or a `define.enum` variant payload of an owned non-parameterised opaque
+  (including a define-defined nominal held by another define type) resolves — the
   definition and every constructor parameter render from the same resolved carrier,
   so their opaque paths cannot disagree. A bare/parameterised handle over-drops the
   whole definition (empty wrapper region ⇒ the survivor gate drops the ref-name ⇒
   the interface skips the forwarder), never emit-and-cargo-fail. Over-drop is
-  TRANSITIVE across provide types: `provide_defined` resolvability is a survivor
-  FIXED POINT — a provide type resolves a field/payload of another provide type
+  TRANSITIVE across define types: `define_defined` resolvability is a survivor
+  FIXED POINT — a define type resolves a field/payload of another define type
   only when that referenced type ITSELF survives, so a type holding an over-dropped
-  provide type falls with it (else it would name a `pub struct`/`pub enum` never
+  define type falls with it (else it would name a `pub struct`/`pub enum` never
   emitted, an E0425). The decode gate no
   longer refuses an opaque field/payload — resolvability is now decided at emit
   time by the crate opaque-map, the single oracle. SEAL fixture
-  `tests/provide_opaque_field_seal.rs` (a `Model` holding an opaque `Counter` field
+  `tests/define_opaque_field_seal.rs` (a `Model` holding an opaque `Counter` field
   and a `Message` carrying an opaque `Counter` payload cargo-build+run under
   `IPE_E2E`; the parameterised `Element<'a, Message>` field/payload over-drops, and
-  a provide type referencing an over-dropped provide type over-drops transitively).
+  a define type referencing an over-dropped define type over-drops transitively).
 * **P5 — async-returning closures.** *Landed.* A `Future`-returning
-  `provide.closure` (`Fn(A…) -> impl Future<Output = Result<B, E>>`), the
+  `define.closure` (`Fn(A…) -> impl Future<Output = Result<B, E>>`), the
   Axum/Hyper handler shape. `ClosureRet` gained `AsyncResult`/`AsyncOption` arms
   (async-total is unrepresentable — no error channel for a poll-panic); the
   signature parser recognises `impl Future` / `Pin<Box<dyn Future>>` /
@@ -409,16 +409,16 @@ and preserves the SEAL + over-drop keystone.
   proof — §3.5), produces the future under `catch_unwind`, and awaits it under a
   spawned task guarded by `AbortOnDrop` so a poll-panic folds through the
   `JoinError` arm to `Err`/`None`. SEAL fixture
-  `tests/provide_async_closure_seal.rs` (an async `Result` handler cargo-builds
+  `tests/define_async_closure_seal.rs` (an async `Result` handler cargo-builds
   on a real `tokio` and runs under `IPE_E2E`, round-tripping the awaited value
   and folding a poll-panic to `Err`; an async-total return over-drops). The
   closure-adapter-to-`run` handoff (surfacing the boxed async handler as an
   Ipê-held value) stays deferred with its sync sibling (Cluster 1).
-* **P6 — escape hatch B** (`#[ipe::provide]` companion-crate proc-macro).
+* **P6 — escape hatch B** (`#[define_in_ipe]` companion-crate proc-macro).
   *Landed as a Tier 2 wrapper shape*, not a Tier-1 extension — see
-  `ffi-tier2-inspect-author-rust.md` §6. The inert `ipe_provide` marker macro
+  `ffi-tier2-inspect-author-rust.md` §6. The inert `ipe_bindgen` marker macro
   tags a hand-written wrapper item; the inspector auto-exposes marked items so a
-  crate whose trait impl a closed `provide.*` form cannot express (a Bevy
+  crate whose trait impl a closed `define.*` form cannot express (a Bevy
   `Component`/`Resource`) binds through the ordinary wrapper inspect → sandbox →
   generate → over-drop pipeline.
 
@@ -433,22 +433,22 @@ fails the byte-diff test.
 ## 6. Crate-coverage roadmap
 
 Priority order is by *soundness tractability under approach A*, natural fits
-first. "Create-types features exercised" names which provide-forms each needs.
+first. "Create-types features exercised" names which define-forms each needs.
 
 | # | Crate | Why / fit | Minimal binding surface | Create-types features |
 |---|-------|-----------|-------------------------|-----------------------|
-| 1 | **Iced** | Elm architecture maps directly onto Ipê TEA — `Model`/`Message`/`update`/`view`. Highest value, cleanest fit. | `Application`/`Sandbox` trait, `Element`, `Command`; the runtime driver. | `provide.struct` (Model), `provide.closure` (update/view), `provide.enum` (Message) — **P1–P4**. |
-| 2 | **Axum / Hyper** | async servers; Ipê already has a server story. Handlers are `Fn(Request) -> impl Future`. | `Router`, route registration, handler adapter, extractors as opaque handles. | `provide.closure` returning a `Future` — **P5 (async), landed** (§3.5). Struct handlers via **P1**. |
-| 3 | **Ratatui** | TUI; immediate-mode `render(frame)` closure, no async, small trait surface. | `Terminal`, `Frame`, widget constructors (opaque), a `draw` closure. | `provide.closure` sync (draw) + `provide.struct` (app state) — **P1–P3**. |
-| 4 | **Bevy** | ECS + systems + closures — the hardest. Systems are `Fn(Query, ...)`; `Component`/`Resource` are user structs, often needing real trait impls. | `App`, `Component`/`Resource` structs, system-fn adapter, `Query` as opaque. | `provide.struct` **with a trait impl** — many need **escape hatch B**; systems need multi-arg `provide.closure` (**P3**). Partial coverage under A; full needs B. |
-| 5 | **Slint / Dioxus / Gtk** | declarative/native UI; macro- or markup-driven. Slint compiles `.slint`; Dioxus uses `rsx!`. | Component handle (opaque), event-callback adapters, property setters. | `provide.closure` (callbacks) + `provide.struct` (props). Markup stays crate-side; Ipê binds the imperative seam. **P1–P3**, some macro cases → B. |
+| 1 | **Iced** | Elm architecture maps directly onto Ipê TEA — `Model`/`Message`/`update`/`view`. Highest value, cleanest fit. | `Application`/`Sandbox` trait, `Element`, `Command`; the runtime driver. | `define.struct` (Model), `define.closure` (update/view), `define.enum` (Message) — **P1–P4**. |
+| 2 | **Axum / Hyper** | async servers; Ipê already has a server story. Handlers are `Fn(Request) -> impl Future`. | `Router`, route registration, handler adapter, extractors as opaque handles. | `define.closure` returning a `Future` — **P5 (async), landed** (§3.5). Struct handlers via **P1**. |
+| 3 | **Ratatui** | TUI; immediate-mode `render(frame)` closure, no async, small trait surface. | `Terminal`, `Frame`, widget constructors (opaque), a `draw` closure. | `define.closure` sync (draw) + `define.struct` (app state) — **P1–P3**. |
+| 4 | **Bevy** | ECS + systems + closures — the hardest. Systems are `Fn(Query, ...)`; `Component`/`Resource` are user structs, often needing real trait impls. | `App`, `Component`/`Resource` structs, system-fn adapter, `Query` as opaque. | `define.struct` **with a trait impl** — many need **escape hatch B**; systems need multi-arg `define.closure` (**P3**). Partial coverage under A; full needs B. |
+| 5 | **Slint / Dioxus / Gtk** | declarative/native UI; macro- or markup-driven. Slint compiles `.slint`; Dioxus uses `rsx!`. | Component handle (opaque), event-callback adapters, property setters. | `define.closure` (callbacks) + `define.struct` (props). Markup stays crate-side; Ipê binds the imperative seam. **P1–P3**, some macro cases → B. |
 
 **Gap clusters filed to the backlog** (see §8):
 
-* Cluster 0 — provide-type FORWARDER plumbing (`provide.struct` / `provide.enum`
+* Cluster 0 — define-type FORWARDER plumbing (`define.struct` / `define.enum`
   constructors surfaced as Ipê forwarders + opaque nominals): **LANDED.** An Ipê
-  program can now construct provide-defined Rust types.
-* Cluster 1 — closure adapter (`provide.closure`, sync) surfaced as an Ipê-held
+  program can now construct define-defined Rust types.
+* Cluster 1 — closure adapter (`define.closure`, sync) surfaced as an Ipê-held
   boxed-closure value + handed to a crate `run` entrypoint: unblocks Iced update,
   Ratatui draw, Slint/Dioxus callbacks. Largest remaining single unblock. The
   opaque-RETURN closure is now PARTLY landed — a `Result`/`Option` opaque return
@@ -458,7 +458,7 @@ first. "Create-types features exercised" names which provide-forms each needs.
   carry `Element`'s generic args). Opaque struct fields / enum payloads are now
   LANDED too: the DEFINITION emitter threads the same crate opaque-map, so a field
   or variant payload of an owned non-parameterised opaque (including a
-  provide-defined nominal held by another provide type) resolves and builds; a
+  define-defined nominal held by another define type) resolves and builds; a
   bare/parameterised handle over-drops the whole definition (empty wrapper region ⇒
   the interface skips the forwarder), never emit-and-cargo-fail. The
   lifetime-parameterised `Model` holding a bare `Element` stays refused for the
@@ -498,15 +498,15 @@ admission gate widens; the residual over-drops below are each load-bearing.
   demand-driven generic path binds a generic FFI call ONLY at a concrete
   instantiation whose type-arg is in the closed Ipê↔Rust set and whose declared
   bounds are all in `MODELLABLE_5` (`{Hash, Eq, Ord, Clone, Default}`). `Bundle`
-  is not modellable, and a `Component`/provide-nominal arg is not in the closed
+  is not modellable, and a `Component`/define-nominal arg is not in the closed
   instance set, so no instantiation binds — and the interface never surfaces the
   open generic as a static forwarder (its emitter degrades a `B`-typed param to a
   broken `String::spawn()`, which admitting would expose to cargo). The over-drop
   plus the DCE tree-shake of the unreferenced wrapper IS the seal. A real Bevy
-  system registers through `provide.closure` (below), not a bundle-generic.
+  system registers through `define.closure` (below), not a bundle-generic.
 
-* **`dyn Fn`/`FnMut` system closures — LANDED via `provide.closure`, envelope
-  gated.** A Bevy system / Iced `update` / Axum handler is a `provide.closure`
+* **`dyn Fn`/`FnMut` system closures — LANDED via `define.closure`, envelope
+  gated.** A Bevy system / Iced `update` / Axum handler is a `define.closure`
   adapter surfaced as an arity-1 Ipê forwarder `(A -> B -> R) -> <Handle>` and
   handed to a crate `run`-style entrypoint (the closure→run handoff, §3.5 +
   Cluster 1). A multi-arg sync signature (`Fn(Model, Msg) -> Result<Model, Error>`)

@@ -1,4 +1,4 @@
-//! SEAL fixture for the `[rust.provide.struct]` type-definition + constructor.
+//! SEAL fixture for the `[rust.define.struct]` type-definition + constructor.
 //!
 //! The keystone invariant is `ipe build ⇒ cargo build ⇒ the type is usable`.
 //! This fixture proves the emitted definition + constructor are not just
@@ -15,7 +15,7 @@
 use ipe_ffi::bindings::emit_bindings;
 use ipe_ffi::pkginfo::PkgInfo;
 
-/// Decode a one-crate inspection document carrying a single `provide.struct`
+/// Decode a one-crate inspection document carrying a single `define.struct`
 /// entry, and return the emitted `_bindings.rs`.
 fn emit_struct(
     struct_name: &str,
@@ -37,14 +37,14 @@ fn emit_struct(
         "errors": []
     })
     .to_string();
-    let pkg = PkgInfo::decode_json(&doc).expect("provide.struct decodes");
+    let pkg = PkgInfo::decode_json(&doc).expect("define.struct decodes");
     emit_bindings(&pkg)
 }
 
 /// A derived and a derive-free struct both emit a `#[derive]`ed (or bare)
 /// definition + a `pub fn demo_make` constructor (default-gate — no cargo).
 #[test]
-fn provide_struct_emits_a_definition_and_a_constructor() {
+fn define_struct_emits_a_definition_and_a_constructor() {
     let derived = emit_struct(
         "Counter",
         &serde_json::json!([{ "name": "value", "type": "i64" }]),
@@ -74,10 +74,10 @@ fn provide_struct_emits_a_definition_and_a_constructor() {
     );
 }
 
-/// The rejection paths: an ill-formed or unsound `provide.struct` over-drops the
+/// The rejection paths: an ill-formed or unsound `define.struct` over-drops the
 /// whole entry at decode (no wrapper emitted), never emit-and-cargo-fail.
 #[test]
-fn unsound_provide_structs_emit_no_wrapper() {
+fn unsound_define_structs_emit_no_wrapper() {
     // A total-Eq derive on a Float field (IEEE-754 has no total Eq/Ord/Hash).
     let float_eq = emit_struct(
         "Bad",
@@ -109,7 +109,7 @@ fn unsound_provide_structs_emit_no_wrapper() {
 /// could not become a nominal Rust type at all; with it, the emitted definition
 /// must compile and the constructor must build a real value.
 #[test]
-fn provide_struct_builds_and_runs() {
+fn define_struct_builds_and_runs() {
     if std::env::var("IPE_E2E").is_err() {
         return;
     }
@@ -166,7 +166,7 @@ fn main() {{
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         out.status.success(),
-        "emitted provide.struct crate must build and run exit 0.\n\
+        "emitted define.struct crate must build and run exit 0.\n\
          stdout: {stdout}\nstderr: {stderr}"
     );
     assert!(

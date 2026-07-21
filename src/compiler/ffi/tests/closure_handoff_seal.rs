@@ -1,16 +1,16 @@
 //! SEAL fixture for the closure→run HANDOFF.
 //!
 //! The `closure_adapter_seal` fixture proves the emitted adapter turns an Ipê
-//! function value into a boxed Rust closure. The `provide_forwarder_seal` fixture
-//! proves `provide.struct`/`enum` constructors admit as Ipê forwarders. This
-//! fixture proves the missing link between them: a `provide.closure` adapter now
+//! function value into a boxed Rust closure. The `define_forwarder_seal` fixture
+//! proves `define.struct`/`enum` constructors admit as Ipê forwarders. This
+//! fixture proves the missing link between them: a `define.closure` adapter now
 //! ADMITS as an arity-1 Ipê forwarder `(Model -> Msg -> Model) -> <Handle>`, the
 //! program HOLDS the returned closure as the opaque handle nominal, and hands it
 //! to a foreign `run`-style entrypoint that DRIVES a real loop.
 //!
 //! An `iced::Sandbox::run` proper needs a lifetime/generic `Element<'a, Msg>` in
 //! its `view` return, which the bare-handle carrier still refuses (proven by
-//! `provide_opaque_return_seal`'s over-drop). This fixture uses an owned-return
+//! `define_opaque_return_seal`'s over-drop). This fixture uses an owned-return
 //! `run(model, update)` shape — the SAME handoff mechanism, with an owned
 //! `Model`/`Message` surface — to prove the mechanism end-to-end; the
 //! Iced-specific parameterised-opaque residual stays refused there.
@@ -25,8 +25,8 @@ use ipe_ffi::interface::crate_interface;
 use ipe_ffi::pkginfo::PkgInfo;
 
 /// A one-crate package with the full TEA counter surface: a `Counter` model
-/// (`provide.struct`), a `Message` sum (`provide.enum`), and an `update_fn`
-/// (`provide.closure`) whose signature is `Fn(Counter, Message) -> Counter` —
+/// (`define.struct`), a `Message` sum (`define.enum`), and an `update_fn`
+/// (`define.closure`) whose signature is `Fn(Counter, Message) -> Counter` —
 /// the shape a driver hands to a `run(model, update)` loop.
 fn counter_app_pkg() -> PkgInfo {
     let doc = serde_json::json!({
@@ -60,18 +60,18 @@ fn counter_app_pkg() -> PkgInfo {
 
 /// The interface admits the closure adapter as an arity-1 forwarder whose Ipê
 /// signature takes the Ipê `update` FUNCTION value (parenthesised) and returns
-/// the opaque handle nominal, and registers that handle as a provide type.
+/// the opaque handle nominal, and registers that handle as a define type.
 /// Default gate — no cargo.
 #[test]
 fn closure_forwarder_and_handle_nominal_are_admitted() {
     let iface = crate_interface(&counter_app_pkg());
 
-    // The synthesized handle nominal registers as a provide-defined type, beside
+    // The synthesized handle nominal registers as a define-defined type, beside
     // the struct/enum nominals.
     assert!(
-        iface.provide_types.contains("UpdateFnClosure"),
-        "handle nominal must register as a provide type:\n{:?}",
-        iface.provide_types
+        iface.define_types.contains("UpdateFnClosure"),
+        "handle nominal must register as a define type:\n{:?}",
+        iface.define_types
     );
 
     let uf = iface.bindings.iter().find(|b| b.ref_name == "update_fn");
@@ -105,14 +105,14 @@ fn closure_forwarder_and_handle_nominal_are_admitted() {
     );
 }
 
-/// A closure handle nominal that collides with a provide-struct nominal is
+/// A closure handle nominal that collides with a define-struct nominal is
 /// refused fail-closed WHICHEVER surface declares it second — never renamed,
 /// never both emitted (two `UpdateFnClosure` definitions in one module would be
 /// an `E0428` the app crate cannot compile, an `ipe`-exit-0 ⇒ cargo-fail breach).
 /// Default gate — no cargo.
 #[test]
 fn a_handle_colliding_with_a_struct_nominal_is_refused_either_order() {
-    // A `provide.struct` literally named `UpdateFnClosure` — the exact nominal the
+    // A `define.struct` literally named `UpdateFnClosure` — the exact nominal the
     // `update_fn` closure adapter synthesises — plus that adapter. In manifest
     // order the struct is declared FIRST, so it claims the nominal and the closure
     // is refused; the reverse order refuses the struct. Either way, exactly one
@@ -154,7 +154,7 @@ fn a_handle_colliding_with_a_struct_nominal_is_refused_either_order() {
         iface.skipped
     );
     // The nominal is registered exactly once (by the winning struct).
-    assert!(iface.provide_types.contains("UpdateFnClosure"), "{iface:?}");
+    assert!(iface.define_types.contains("UpdateFnClosure"), "{iface:?}");
 }
 
 /// The load-bearing SEAL proof: under `IPE_E2E=1`, assemble the app-crate module
