@@ -429,6 +429,19 @@ cryptoSuite =
 
 -- ─── Jwt ───────────────────────────────────────────────────────────
 
+-- HS256 keys must be at least 32 bytes (RFC 7518 §3.2); both the valid
+-- and the wrong key clear that floor so the "forged signature" case
+-- tests a genuine signature mismatch, not a rejected short key.
+jwtSecret : String
+jwtSecret =
+    "topsecret-hs256-signing-key-0001!"
+
+
+jwtWrongSecret : String
+jwtWrongSecret =
+    "wrong-hs256-signing-key-000000001!"
+
+
 jwtClaimSet : Jwt.Claims
 jwtClaimSet =
     Jwt.claims |> Jwt.subject "alice" |> Jwt.expiresAt 9999999999
@@ -436,7 +449,7 @@ jwtClaimSet =
 
 jwtHsToken : Result Error String
 jwtHsToken =
-    Jwt.encode (Jwt.hs256 "topsecret") jwtClaimSet
+    Jwt.encode (Jwt.hs256 jwtSecret) jwtClaimSet
 
 
 jwtDecodeOk : String -> Int -> String -> Bool
@@ -462,21 +475,21 @@ jwtSuite =
         , Test.test "HS256 verify round-trips" (\_ ->
             case jwtHsToken of
                 Ok tok ->
-                    Test.isTrue (jwtDecodeOk "topsecret" 1000 tok)
+                    Test.isTrue (jwtDecodeOk jwtSecret 1000 tok)
 
                 Err _ ->
                     Test.isTrue False)
         , Test.test "rejects a forged signature (wrong key)" (\_ ->
             case jwtHsToken of
                 Ok tok ->
-                    Test.isFalse (jwtDecodeOk "wrong-key" 1000 tok)
+                    Test.isFalse (jwtDecodeOk jwtWrongSecret 1000 tok)
 
                 Err _ ->
                     Test.isTrue False)
         , Test.test "rejects an expired token" (\_ ->
             case jwtHsToken of
                 Ok tok ->
-                    Test.isFalse (jwtDecodeOk "topsecret" 99999999999 tok)
+                    Test.isFalse (jwtDecodeOk jwtSecret 99999999999 tok)
 
                 Err _ ->
                     Test.isTrue False)
@@ -653,7 +666,9 @@ moneySuite =
                 a = Money.fromMajor Money.USD 10
                 b = Money.fromMajor Money.USD 5
             in
-                Test.equal "$15.00" (Money.format (Money.add a b)))
+                case Money.add a b of
+                    Ok sum -> Test.equal "$15.00" (Money.format sum)
+                    Err e -> Test.fail (errorToString e))
         , Test.test "percentOf 10% of $100 = $10" (\_ ->
             let
                 price = Money.fromMajor Money.USD 100
@@ -663,9 +678,10 @@ moneySuite =
         , Test.test "allocate $100 over 3 → sum preserved" (\_ ->
             let
                 parts = Money.allocate 3 (Money.fromMajor Money.USD 100)
-                total = Money.sumOf Money.USD parts
             in
-                Test.equal "$100.00" (Money.format total))
+                case Money.sumOf Money.USD parts of
+                    Ok total -> Test.equal "$100.00" (Money.format total)
+                    Err e -> Test.fail (errorToString e))
         , Test.test "allocate $100 over 3 yields 3 parts" (\_ ->
             Test.equal 3
                 (List.length (Money.allocate 3 (Money.fromMajor Money.USD 100))))
