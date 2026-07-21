@@ -531,14 +531,17 @@ mod tests {
             // and within the section the `--help` column is vertically aligned.
             let mut help_columns = Vec::new();
             for &name in section.commands {
-                let line = plain
+                let needle = format!("ipe {name} ");
+                let col = plain
                     .lines()
-                    .find(|l| l.trim_start().starts_with(&format!("ipe {name} ")))
-                    .unwrap_or_else(|| panic!("no line for `ipe {name}` in {}", section.title));
-                let col = line.find("--help").unwrap_or_else(|| {
-                    panic!("`ipe {name}` line lacks a --help suffix")
-                });
-                help_columns.push(col);
+                    .find(|l| l.trim_start().starts_with(&needle))
+                    .and_then(|l| l.find("--help"));
+                assert!(
+                    col.is_some(),
+                    "`ipe {name}` in {} must render a copy-pasteable --help suffix",
+                    section.title
+                );
+                help_columns.extend(col);
             }
             assert!(
                 help_columns.windows(2).all(|w| w[0] == w[1]),

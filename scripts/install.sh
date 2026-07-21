@@ -270,7 +270,13 @@ fi
 # ── Extract + install ────────────────────────────────────────────────────────
 step "Installing to $INSTALL_DIR…"
 if [ "$ext" = zip ]; then
-  unzip -q "$pkg" -d "$tmp" || die "Could not unzip the download."
+  # `unzip` isn't guaranteed (e.g. Git Bash on Windows); bsdtar (`tar`) reads
+  # zips on Windows and macOS, so fall back to it.
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -q "$pkg" -d "$tmp" || die "Could not unzip the download."
+  else
+    tar -xf "$pkg" -C "$tmp" || die "Could not extract the download."
+  fi
 else
   tar xzf "$pkg" -C "$tmp" || die "Could not extract the download."
 fi
@@ -327,35 +333,37 @@ resolve_shell_rc() {
   fi
 }
 
-# manual_path_hint — the do-it-yourself fallback (PATH_LINE must be set).
+# manual_path_hint — the do-it-yourself fallback (PATH_LINE must be set): the
+# one command that puts INSTALL_DIR on PATH, ready to paste.
 manual_path_hint() {
-  printf '  Run this now, and add it to your shell profile to keep it:\n' >&2
+  printf '  Put ipe on your PATH with:\n' >&2
   printf '      %s%s%s\n\n' "$C_DIM" "$PATH_LINE" "$C_RESET" >&2
 }
 
-# persist_path — offer to add INSTALL_DIR to the login shell's rc, with consent.
+# persist_path — put INSTALL_DIR on PATH for good. We add the export line to the
+# login shell's rc directly (this is the "export PATH=…" the user wants done for
+# them), after showing the exact file + line and getting a yes on the real
+# terminal. Editing a dotfile is consented, never silent; a non-interactive run
+# prints the one-line command instead.
 persist_path() {
   resolve_shell_rc
 
-  # Already written into the rc — just say how to pick it up.
+  # Already written into the rc — nothing to add.
   if [ -f "$RC_FILE" ] && grep -Fq "$INSTALL_DIR" "$RC_FILE" 2>/dev/null; then
-    printf '\n%sAlmost there!%s %s is set in %s%s%s.\n' \
-      "$C_GREEN" "$C_RESET" "$INSTALL_DIR" "$C_YELLOW" "$RC_FILE" "$C_RESET" >&2
-    info "Open a new terminal, or run: source $RC_FILE"
+    done_ "ipe is on your PATH (via $RC_FILE)."
     return 0
   fi
 
   # No terminal to ask on (piped into a non-interactive shell, CI): never edit a
-  # file unasked — print the hint and stop.
+  # file unasked — print the one-line command and stop.
   if [ "$IS_TTY" != 1 ] || [ ! -r /dev/tty ]; then
-    printf '\n%sAlmost there!%s Add %s to your PATH:\n' \
-      "$C_GREEN" "$C_RESET" "$INSTALL_DIR" >&2
     manual_path_hint
     return 0
   fi
 
   printf '\n%s%s is not on your PATH yet.%s\n' "$C_BOLD" "$INSTALL_DIR" "$C_RESET" >&2
-  printf '  I can add one line to %s%s%s:\n' "$C_YELLOW" "$RC_FILE" "$C_RESET" >&2
+  printf '  Add it to %s%s%s so every shell finds %sipe%s?\n' \
+    "$C_YELLOW" "$RC_FILE" "$C_RESET" "$C_BOLD" "$C_RESET" >&2
   printf '      %s%s%s\n' "$C_DIM" "$PATH_LINE" "$C_RESET" >&2
   printf '  Update it now? [Y/n] ' >&2
 
@@ -367,9 +375,7 @@ persist_path() {
       { printf '\n# Added by the Ipê installer — puts ipe on your PATH\n'
         printf '%s\n' "$PATH_LINE"
       } >> "$RC_FILE" || die "Could not write to $RC_FILE."
-      done_ "Updated $RC_FILE."
-      printf '  %sUse ipe in this terminal now:%s  source %s%s%s\n\n' \
-        "$C_BOLD" "$C_RESET" "$C_YELLOW" "$RC_FILE" "$C_RESET" >&2
+      done_ "Added ipe to your PATH (via $RC_FILE)."
       ;;
     *)
       info "Left $RC_FILE untouched."
@@ -383,7 +389,10 @@ done_ "Installed ipe $ver to $INSTALL_DIR/ipe"
 if on_path; then
   printf '\n%sYou are all set.%s Try %sipe --help%s to get started.\n\n' \
     "$C_GREEN" "$C_RESET" "$C_BOLD" "$C_RESET" >&2
-  "$INSTALL_DIR/ipe" --version >&2 || true
 else
+  # Put INSTALL_DIR on PATH for this run (live immediately when the installer is
+  # sourced), then persist it for future shells.
+  export PATH="$INSTALL_DIR:$PATH"
   persist_path
 fi
+"$INSTALL_DIR/ipe" --version >&2 || true
