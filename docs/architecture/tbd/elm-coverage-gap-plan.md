@@ -101,21 +101,25 @@ opaque. Recommend deciding before landing `sortWith` publicly.
 
 ---
 
-## P2 — Task combinators (`Ipe/Task.ipe`)
+## P2 — Task combinators (`Ipe/Task.ipe`) — **DONE**
 
-Missing: `map2`–`map5`, `attempt`. `map2..5` are pure combinations of `andThen`/
-`map` (already present) — cheap. `attempt : (Result Error a -> msg) -> Task Error
-a -> Cmd msg` bridges Task→Cmd catching failure; pairs with the existing
-`Cmd.perform`. See also `task-combinators.md`.
+`map2`–`map5` + `attempt` now present. `map2..5` are kernels over new runtime
+`task_map2..5` (Elm semantics: argument-ordered effects, first `Err` short-
+circuits — a captured `Task` cannot be forwarded through a Rust closure, so pure
+`andThen`/`map` composition is unavailable, IPE-L0126). `attempt : (Result Error
+a -> msg) -> Task Error a -> Cmd msg` reuses the runtime `cmd_perform` (the
+`Cmd.perform` bridge, args swapped). See also `task-combinators.md`.
 
 ---
 
-## P2 — Json decoder combinators (`Ipe/Config.ipe`)
+## P2 — Json decoder combinators (`Ipe/Config.ipe`) — **DONE**
 
-`Ipe.Config` covers the decoder core but is missing the composition surface that
-makes real decoders ergonomic: `map2`–`map8`, `oneOf`, `maybe`, `index`,
-`keyValuePairs`, `dict`. `map2..8` and `oneOf` are the load-bearing ones (record
-decoding, union decoding). Pure combinators over the existing `Decoder`/`andThen`.
+`map2`–`map8`, `oneOf`, `maybe`, `index`, `keyValuePairs`, `dict` now present.
+`map2..8` and `oneOf` are the load-bearing ones (record decoding, union
+decoding). All are kernels sharing the runtime `decode_*` / `config_*` fns
+(`decode_map2..8`, `decode_one_of`, `decode_index`, `decode_key_value_pairs`,
+`config_maybe`, `config_dict`) — the opaque `Decoder` carrier cannot be forwarded
+through a Rust closure, so pure combinator bodies are unavailable (IPE-L0126).
 No JSON **encoder** value surface is planned here (serialization stays
 per-effect); flag if a typed `Json.Encode` analogue is wanted later.
 

@@ -551,6 +551,16 @@ pub enum StdlibKernel {
     TaskSucceed,
     TaskFail,
     TaskMap,
+    /// `Task.map2`..`Task.map5` — combine 2..5 independent tasks with an N-ary
+    /// function; effects run in argument order, first `Err` short-circuits.
+    TaskMap2,
+    TaskMap3,
+    TaskMap4,
+    TaskMap5,
+    /// `Task.attempt : (Result Error a -> msg) -> Task Error a -> Cmd msg` —
+    /// bridge a `Task` into a `Cmd`, mapping the settled `Result` to a message.
+    /// Emits the runtime `cmd_perform` (arg order swapped from `Cmd.perform`).
+    TaskAttempt,
     TaskAndThen,
     TaskMapError,
     TaskOnError,
@@ -1605,6 +1615,30 @@ pub enum StdlibKernel {
     ConfigMap,
     /// `Config.andThen : (a -> Decoder b) -> Decoder a -> Decoder b` — shares `decode_and_then`.
     ConfigAndThen,
+    /// `Config.map2`..`Config.map8` — combine 2..8 decoders with an N-ary
+    /// function; share the runtime `decode_map2`..`decode_map8`.
+    ConfigMap2,
+    ConfigMap3,
+    ConfigMap4,
+    ConfigMap5,
+    ConfigMap6,
+    ConfigMap7,
+    ConfigMap8,
+    /// `Config.oneOf : List (Decoder a) -> Decoder a` — first succeeding branch;
+    /// shares `decode_one_of`.
+    ConfigOneOf,
+    /// `Config.index : Int -> Decoder a -> Decoder a` — decode the n-th array
+    /// element; shares `decode_index`.
+    ConfigIndex,
+    /// `Config.keyValuePairs : Decoder a -> Decoder (List (String, a))` — decode
+    /// every object entry; shares `decode_key_value_pairs`.
+    ConfigKeyValuePairs,
+    /// `Config.maybe : Decoder a -> Decoder (Maybe a)` — `Just` on success,
+    /// `Nothing` on ANY failure (`config_maybe`).
+    ConfigMaybe,
+    /// `Config.dict : Decoder a -> Decoder (Dict String a)` — decode an object
+    /// into a `Dict String a` (`config_dict`).
+    ConfigDict,
     /// `Config.decodeToml : String -> Decoder a -> Result Error a`.
     ConfigDecodeToml,
     /// `Config.decodeYaml : String -> Decoder a -> Result Error a`.
@@ -2101,6 +2135,11 @@ impl StdlibKernel {
             Self::TaskSucceed => d("Task", "succeed", 1, Pure, "task_succeed"),
             Self::TaskFail => d("Task", "fail", 1, Pure, "task_fail"),
             Self::TaskMap => d("Task", "map", 2, Pure, "task_map"),
+            Self::TaskMap2 => d("Task", "map2", 3, Pure, "task_map2"),
+            Self::TaskMap3 => d("Task", "map3", 4, Pure, "task_map3"),
+            Self::TaskMap4 => d("Task", "map4", 5, Pure, "task_map4"),
+            Self::TaskMap5 => d("Task", "map5", 6, Pure, "task_map5"),
+            Self::TaskAttempt => d("Task", "attempt", 2, Tea, "cmd_perform"),
             Self::TaskAndThen => d("Task", "andThen", 2, Pure, "task_and_then"),
             Self::TaskMapError => d("Task", "mapError", 2, Pure, "task_map_error"),
             Self::TaskOnError => d("Task", "onError", 2, Pure, "task_on_error"),
@@ -3041,6 +3080,20 @@ impl StdlibKernel {
             Self::ConfigFail => d("Config", "fail", 1, Pure, "decode_fail"),
             Self::ConfigMap => d("Config", "map", 2, Pure, "decode_map"),
             Self::ConfigAndThen => d("Config", "andThen", 2, Pure, "decode_and_then"),
+            Self::ConfigMap2 => d("Config", "map2", 3, Pure, "decode_map2"),
+            Self::ConfigMap3 => d("Config", "map3", 4, Pure, "decode_map3"),
+            Self::ConfigMap4 => d("Config", "map4", 5, Pure, "decode_map4"),
+            Self::ConfigMap5 => d("Config", "map5", 6, Pure, "decode_map5"),
+            Self::ConfigMap6 => d("Config", "map6", 7, Pure, "decode_map6"),
+            Self::ConfigMap7 => d("Config", "map7", 8, Pure, "decode_map7"),
+            Self::ConfigMap8 => d("Config", "map8", 9, Pure, "decode_map8"),
+            Self::ConfigOneOf => d("Config", "oneOf", 1, Pure, "decode_one_of"),
+            Self::ConfigIndex => d("Config", "index", 2, Pure, "decode_index"),
+            Self::ConfigKeyValuePairs => {
+                d("Config", "keyValuePairs", 1, Pure, "decode_key_value_pairs")
+            }
+            Self::ConfigMaybe => d("Config", "maybe", 1, Pure, "config_maybe"),
+            Self::ConfigDict => d("Config", "dict", 1, Pure, "config_dict"),
             Self::ConfigDecodeToml => d("Config", "decodeToml", 2, Pure, "config_decode_toml"),
             Self::ConfigDecodeYaml => d("Config", "decodeYaml", 2, Pure, "config_decode_yaml"),
             Self::ConfigDecodeJson => d("Config", "decodeJson", 2, Pure, "config_decode_json"),
@@ -3421,6 +3474,11 @@ impl StdlibKernel {
         Self::TaskSucceed,
         Self::TaskFail,
         Self::TaskMap,
+        Self::TaskMap2,
+        Self::TaskMap3,
+        Self::TaskMap4,
+        Self::TaskMap5,
+        Self::TaskAttempt,
         Self::TaskAndThen,
         Self::TaskMapError,
         Self::TaskOnError,
@@ -4094,6 +4152,18 @@ impl StdlibKernel {
         Self::ConfigFail,
         Self::ConfigMap,
         Self::ConfigAndThen,
+        Self::ConfigMap2,
+        Self::ConfigMap3,
+        Self::ConfigMap4,
+        Self::ConfigMap5,
+        Self::ConfigMap6,
+        Self::ConfigMap7,
+        Self::ConfigMap8,
+        Self::ConfigOneOf,
+        Self::ConfigIndex,
+        Self::ConfigKeyValuePairs,
+        Self::ConfigMaybe,
+        Self::ConfigDict,
         Self::ConfigDecodeToml,
         Self::ConfigDecodeYaml,
         Self::ConfigDecodeJson,
@@ -4703,6 +4773,11 @@ impl StdlibKernel {
             | Self::TaskSucceed
             | Self::TaskFail
             | Self::TaskMap
+            | Self::TaskMap2
+            | Self::TaskMap3
+            | Self::TaskMap4
+            | Self::TaskMap5
+            | Self::TaskAttempt
             | Self::TaskAndThen
             | Self::TaskMapError
             | Self::TaskOnError
@@ -5191,6 +5266,18 @@ impl StdlibKernel {
             | Self::ConfigFail
             | Self::ConfigMap
             | Self::ConfigAndThen
+            | Self::ConfigMap2
+            | Self::ConfigMap3
+            | Self::ConfigMap4
+            | Self::ConfigMap5
+            | Self::ConfigMap6
+            | Self::ConfigMap7
+            | Self::ConfigMap8
+            | Self::ConfigOneOf
+            | Self::ConfigIndex
+            | Self::ConfigKeyValuePairs
+            | Self::ConfigMaybe
+            | Self::ConfigDict
             | Self::ConfigDecodeToml
             | Self::ConfigDecodeYaml
             | Self::ConfigDecodeJson => None,
@@ -5207,6 +5294,7 @@ impl StdlibKernel {
                 | Self::CmdBatch
                 | Self::CmdPerform
                 | Self::CmdMap
+                | Self::TaskAttempt
                 | Self::SubNone
                 | Self::SubBatch
                 | Self::SubEvery
@@ -6156,6 +6244,7 @@ impl StdlibKernel {
                     | Self::CmdBatch
                     | Self::CmdPerform
                     | Self::CmdMap
+                    | Self::TaskAttempt
                     | Self::SubNone
                     | Self::SubBatch
                     | Self::SubEvery
@@ -6252,6 +6341,10 @@ impl StdlibKernel {
                     Self::TaskSucceed
                         | Self::TaskFail
                         | Self::TaskMap
+                        | Self::TaskMap2
+                        | Self::TaskMap3
+                        | Self::TaskMap4
+                        | Self::TaskMap5
                         | Self::TaskAndThen
                         | Self::TaskMapError
                         | Self::TaskOnError

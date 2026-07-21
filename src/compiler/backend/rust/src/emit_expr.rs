@@ -2110,7 +2110,7 @@ fn emit_db_call(
 ///   if `lower_callee` mis-routes it); not user-reachable.
 ///
 /// Returns `Ok(None)` for non-TEA callees so the standard path handles them.
-#[allow(clippy::match_same_arms)]
+#[allow(clippy::match_same_arms, clippy::too_many_lines)]
 fn emit_tea_call(
     ctx: &EmitCtx,
     callee: &Callee,
@@ -2164,6 +2164,17 @@ fn emit_tea_call(
             let f_e = arg!(1, "to_msg")?;
             let task_s = emit_expr_at(ctx, task_e, indent, child, generics)?;
             let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
+            Ok(Some(format!("cmd_perform({task_s}, {f_s})")))
+        }
+        // ── Task.attempt : (Result Error a -> msg) -> Task Error a -> Cmd msg ──
+        // Elm's arg order is `(to_msg, task)`; the runtime `cmd_perform` takes
+        // `(task, to_msg)` (the exact `Cmd.perform` bridge), so the two args are
+        // emitted swapped. Reuses `cmd_perform` — no dedicated runtime symbol.
+        KernelFn::TaskAttempt => {
+            let f_e = arg!(0, "to_msg")?;
+            let task_e = arg!(1, "task")?;
+            let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
+            let task_s = emit_expr_at(ctx, task_e, indent, child, generics)?;
             Ok(Some(format!("cmd_perform({task_s}, {f_s})")))
         }
         // ── Arity-2: Cmd.map / Sub.map (retag a sub-component's effects) ─────────
@@ -5946,6 +5957,17 @@ fn emit_json_decoder_call(
     {
         let inner_s = emit_expr_at(ctx, inner, indent, child, generics)?;
         return Ok(Some(format!("decode_list(move || {{ {inner_s} }})")));
+    }
+    // ── ConfigKeyValuePairs / ConfigDict — same factory-closure shape as
+    // `decode_list`; both expect `impl Fn() -> Decoder<E, T>`.
+    if let Callee::Kernel(
+        k @ (ipe_ir::KernelFn::ConfigKeyValuePairs | ipe_ir::KernelFn::ConfigDict),
+    ) = callee
+        && let Some(inner) = args.first()
+    {
+        let inner_s = emit_expr_at(ctx, inner, indent, child, generics)?;
+        let name = kernel_name(*k); // "decode_key_value_pairs" / "config_dict"
+        return Ok(Some(format!("{name}(move || {{ {inner_s} }})")));
     }
     Ok(None)
 }
