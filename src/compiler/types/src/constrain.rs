@@ -4182,6 +4182,49 @@ impl<'a> Builder<'a> {
                 list(tuple2(var(0), var(1))),
                 tuple2(list(var(0)), list(var(1))),
             ),
+            // map2 : (a -> b -> r) -> List a -> List b -> List r.
+            // vars: 0=a, 1=b, 2=r.
+            K::ListMap2 => fun(
+                fun(var(0), fun(var(1), var(2))),
+                fun(list(var(0)), fun(list(var(1)), list(var(2)))),
+            ),
+            // map3 : (a -> b -> c -> r) -> List a -> List b -> List c -> List r.
+            // vars: 0=a, 1=b, 2=c, 3=r.
+            K::ListMap3 => fun(
+                fun(var(0), fun(var(1), fun(var(2), var(3)))),
+                fun(
+                    list(var(0)),
+                    fun(list(var(1)), fun(list(var(2)), list(var(3)))),
+                ),
+            ),
+            // map4 : (a -> b -> c -> d -> r) -> List a..d -> List r. vars 0..4.
+            K::ListMap4 => fun(
+                fun(var(0), fun(var(1), fun(var(2), fun(var(3), var(4))))),
+                fun(
+                    list(var(0)),
+                    fun(
+                        list(var(1)),
+                        fun(list(var(2)), fun(list(var(3)), list(var(4)))),
+                    ),
+                ),
+            ),
+            // map5 : (a -> b -> c -> d -> e -> r) -> List a..e -> List r. vars 0..5.
+            K::ListMap5 => fun(
+                fun(
+                    var(0),
+                    fun(var(1), fun(var(2), fun(var(3), fun(var(4), var(5))))),
+                ),
+                fun(
+                    list(var(0)),
+                    fun(
+                        list(var(1)),
+                        fun(
+                            list(var(2)),
+                            fun(list(var(3)), fun(list(var(4)), list(var(5)))),
+                        ),
+                    ),
+                ),
+            ),
 
             // ── Basics core Prelude (6 — slice) ──
             K::BasicsNot => fun(bool_ty(), bool_ty()),
@@ -7941,6 +7984,10 @@ mod registry_phase_c_tests {
             K::ListIntersperse,
             K::ListPartition,
             K::ListUnzip,
+            K::ListMap2,
+            K::ListMap3,
+            K::ListMap4,
+            K::ListMap5,
             // Basics core Prelude (6 — slice).
             K::BasicsNot,
             K::BasicsIdentity,

@@ -58,7 +58,15 @@ main =
         descHead =
             Maybe.withDefault 0 (List.head (List.sortWith descending xs))
 
+        -- map2 (+) truncates to the shorter list.
+        map2Sum =
+            List.sum (List.map2 (\a b -> a + b) [ 1, 2, 3 ] [ 10, 20 ])
+
+        -- map3 sums three lists element-wise.
+        map3Sum =
+            List.sum (List.map3 (\a b c -> a + b + c) [ 1, 2 ] [ 10, 20 ] [ 100, 200 ])
+
         nums =
-            [ total, prod, hi, lo, one, rep, gaps, big, keys, vals, sortedHead, descHead ]
+            [ total, prod, hi, lo, one, rep, gaps, big, keys, vals, sortedHead, descHead, map2Sum, map3Sum ]
     in
     println (String.join " " (List.map String.fromInt nums))

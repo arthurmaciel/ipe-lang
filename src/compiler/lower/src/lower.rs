@@ -13662,7 +13662,9 @@ impl<'a> Lowerer<'a> {
                 // `withClaim : String -> String -> Claims -> Claims`
                 | KernelFn::JwtWithClaim
                 // `Jwt.decode : Algorithm -> Int -> String -> Result Error String`
-                | KernelFn::JwtDecode,
+                | KernelFn::JwtDecode
+                // `List.map2 : (a -> b -> r) -> List a -> List b -> List r`
+                | KernelFn::ListMap2,
             ) => Ok(3),
             // ── JsonDec arity-4 ─────────────────────────────────────────
             Callee::Kernel(
@@ -13691,7 +13693,9 @@ impl<'a> Lowerer<'a> {
                 // `Middleware.withRateLimit : String -> Int -> Int -> Handler -> Handler`
                 | KernelFn::MiddlewareWithRateLimit
                 // `RateLimit.allow : String -> String -> Int -> Int -> Bool`
-                | KernelFn::RateLimitAllow,
+                | KernelFn::RateLimitAllow
+                // `List.map3` — arity 4
+                | KernelFn::ListMap3,
             ) => Ok(4),
             // ── JsonDec arity-5 ─────────────────────────────────────────
             Callee::Kernel(
@@ -13703,10 +13707,14 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DbDecMap4
                 // ── Result/Maybe map4 — arity 5 ────────────────────────
                 | KernelFn::ResultMap4
-                | KernelFn::MaybeMap4,
+                | KernelFn::MaybeMap4
+                // `List.map4` — arity 5
+                | KernelFn::ListMap4,
             ) => Ok(5),
-            // ── Result/Maybe map5 — arity 6 ────────────────────────────
-            Callee::Kernel(KernelFn::ResultMap5 | KernelFn::MaybeMap5) => Ok(6),
+            // ── Result/Maybe/List map5 — arity 6 ───────────────────────
+            Callee::Kernel(
+                KernelFn::ResultMap5 | KernelFn::MaybeMap5 | KernelFn::ListMap5,
+            ) => Ok(6),
             // ── Ipe.Ui / Ipe.Html render kernels ─────────────────────────
             // Arity 0: nullary constants — no arguments.
             Callee::Kernel(
@@ -14753,6 +14761,10 @@ impl<'a> Lowerer<'a> {
                     ("List", "intersperse") => Ok(Callee::Kernel(KernelFn::ListIntersperse)),
                     ("List", "partition") => Ok(Callee::Kernel(KernelFn::ListPartition)),
                     ("List", "unzip") => Ok(Callee::Kernel(KernelFn::ListUnzip)),
+                    ("List", "map2") => Ok(Callee::Kernel(KernelFn::ListMap2)),
+                    ("List", "map3") => Ok(Callee::Kernel(KernelFn::ListMap3)),
+                    ("List", "map4") => Ok(Callee::Kernel(KernelFn::ListMap4)),
+                    ("List", "map5") => Ok(Callee::Kernel(KernelFn::ListMap5)),
                     ("Basics", "not") => Ok(Callee::Kernel(KernelFn::BasicsNot)),
                     ("Basics", "identity") => Ok(Callee::Kernel(KernelFn::BasicsIdentity)),
                     ("Basics", "always") => Ok(Callee::Kernel(KernelFn::BasicsAlways)),

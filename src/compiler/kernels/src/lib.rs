@@ -250,6 +250,10 @@ pub enum StdlibKernel {
     ListIntersperse,
     ListPartition,
     ListUnzip,
+    ListMap2,
+    ListMap3,
+    ListMap4,
+    ListMap5,
     // ── Basics (core Prelude) ────────────────────────────────────────────────
     BasicsNot,
     BasicsIdentity,
@@ -1755,6 +1759,10 @@ impl StdlibKernel {
             Self::ListIntersperse => d("List", "intersperse", 2, Pure, "list_intersperse"),
             Self::ListPartition => d("List", "partition", 2, Pure, "list_partition"),
             Self::ListUnzip => d("List", "unzip", 1, Pure, "list_unzip"),
+            Self::ListMap2 => d("List", "map2", 3, Pure, "list_map2"),
+            Self::ListMap3 => d("List", "map3", 4, Pure, "list_map3"),
+            Self::ListMap4 => d("List", "map4", 5, Pure, "list_map4"),
+            Self::ListMap5 => d("List", "map5", 6, Pure, "list_map5"),
             Self::BasicsNot => d("Basics", "not", 1, Pure, "basics_not"),
             Self::BasicsIdentity => d("Basics", "identity", 1, Pure, "basics_identity"),
             Self::BasicsAlways => d("Basics", "always", 2, Pure, "basics_always"),
@@ -3163,6 +3171,10 @@ impl StdlibKernel {
         Self::ListIntersperse,
         Self::ListPartition,
         Self::ListUnzip,
+        Self::ListMap2,
+        Self::ListMap3,
+        Self::ListMap4,
+        Self::ListMap5,
         // Basics
         Self::BasicsNot,
         Self::BasicsIdentity,
@@ -4463,6 +4475,10 @@ impl StdlibKernel {
             | Self::ListIntersperse
             | Self::ListPartition
             | Self::ListUnzip
+            | Self::ListMap2
+            | Self::ListMap3
+            | Self::ListMap4
+            | Self::ListMap5
             | Self::BasicsNot
             | Self::BasicsIdentity
             | Self::BasicsAlways

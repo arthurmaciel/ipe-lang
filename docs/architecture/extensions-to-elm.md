@@ -46,11 +46,10 @@ below are stated as engineering trade-offs, not corrections.
 | `elm/browser` | No counterpart; replaced by `Ipe.Live` / `Ipe.Tui` / `Ipe.Webview` | **excluded** — §4 |
 
 Headline `elm/core` count (from [`tbd/elm-core-coverage.md`](tbd/elm-core-coverage.md),
-264 exposed values across 17 modules): **181 present · 15 diverged · 65 missing ·
+264 exposed values across 17 modules): **185 present · 15 diverged · 61 missing ·
 3 n/a**, plus 13 of 20 exposed types present. (The `List`/`Dict`/`Set`/`Result`/
 `Char`/`String` pure-`elm/core` fills closed the bulk of the former gap; the
-remaining `missing` rows are `List.map2`–`map5`, `Dict.merge`, and the whole
-absent modules — see §2.)
+remaining `missing` rows are `Dict.merge` and the whole absent modules — see §2.)
 
 ---
 
@@ -64,7 +63,7 @@ decisions live here.
 | Module | Present | Diverged | Missing | Notes |
 |---|---|---|---|---|
 | `Basics` | 34 | 6 | 15 | numerics live in `Ipe.Math`, not the auto-prelude |
-| `List` | 33 | 0 | 4 | `sum`/`product`/`maximum`/`minimum`/`singleton`/`repeat`/`intersperse`/`partition`/`unzip`/`sort`/`sortWith` now present; still missing `map2`–`map5` |
+| `List` | 37 | 0 | 0 | complete — `sum`/`product`/`maximum`/`minimum`/`singleton`/`repeat`/`intersperse`/`partition`/`unzip`/`sort`/`sortWith`/`map2`–`map5` now present |
 | `Dict` | 21 | 0 | 1 | `update`/`singleton`/`foldr`/`filter`/`partition`/`intersect`/`diff` now present; still missing `merge` |
 | `Set` | 17 | 0 | 0 | complete — `isEmpty`/`singleton`/`foldl`/`foldr`/`map`/`filter`/`partition` now present |
 | `String` | 41 | 2 | 1 | code-point semantics (§5); `left`/`right`/`cons`/`uncons`/`pad`/`indexes` + the char-fold family now present |

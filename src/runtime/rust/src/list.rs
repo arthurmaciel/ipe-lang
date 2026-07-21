@@ -115,6 +115,56 @@ pub fn list_sort_with_order<A: Clone>(cmp: impl Fn(A, A) -> IpeOrder, list: Vec<
     result
 }
 
+/// `Ipe.List.map2 : (a -> b -> r) -> List a -> List b -> List r` — combine two
+/// lists element-wise, truncating to the shorter (Elm semantics).
+pub fn list_map2<A, B, R>(f: impl Fn(A, B) -> R, a: Vec<A>, b: Vec<B>) -> Vec<R> {
+    a.into_iter().zip(b).map(|(x, y)| f(x, y)).collect()
+}
+
+/// `Ipe.List.map3 : (a -> b -> c -> r) -> List a -> List b -> List c -> List r`
+/// — combine three lists element-wise, truncating to the shortest.
+pub fn list_map3<A, B, C, R>(f: impl Fn(A, B, C) -> R, a: Vec<A>, b: Vec<B>, c: Vec<C>) -> Vec<R> {
+    a.into_iter()
+        .zip(b)
+        .zip(c)
+        .map(|((x, y), z)| f(x, y, z))
+        .collect()
+}
+
+/// `Ipe.List.map4` — combine four lists element-wise, truncating to the shortest.
+pub fn list_map4<A, B, C, D, R>(
+    f: impl Fn(A, B, C, D) -> R,
+    a: Vec<A>,
+    b: Vec<B>,
+    c: Vec<C>,
+    d: Vec<D>,
+) -> Vec<R> {
+    a.into_iter()
+        .zip(b)
+        .zip(c)
+        .zip(d)
+        .map(|(((w, x), y), z)| f(w, x, y, z))
+        .collect()
+}
+
+/// `Ipe.List.map5` — combine five lists element-wise, truncating to the shortest.
+pub fn list_map5<A, B, C, D, E, R>(
+    f: impl Fn(A, B, C, D, E) -> R,
+    a: Vec<A>,
+    b: Vec<B>,
+    c: Vec<C>,
+    d: Vec<D>,
+    e: Vec<E>,
+) -> Vec<R> {
+    a.into_iter()
+        .zip(b)
+        .zip(c)
+        .zip(d)
+        .zip(e)
+        .map(|((((v, w), x), y), z)| f(v, w, x, y, z))
+        .collect()
+}
+
 /// `Ipe.List.length` — element count (kernel-routed call sites; the pure-Ipê
 /// `ipe_core_list_length` is the recursive stdlib form).
 pub fn list_length<T>(xs: Vec<T>) -> i64 {
@@ -658,5 +708,47 @@ mod tests {
         // Always-LT comparator violates antisymmetry — must not panic.
         let out = list_sort_with_order(|_a, _b| IpeOrder::LT, xs);
         assert_eq!(out.len(), 64);
+    }
+
+    #[test]
+    fn map2_through_map5_match_elm() {
+        // map2 (+) [1,2,3] [10,20] → [11,22] (truncates to shorter).
+        assert_eq!(
+            list_map2(|a, b| a + b, vec![1i64, 2, 3], vec![10i64, 20]),
+            vec![11i64, 22]
+        );
+        // map3 sum.
+        assert_eq!(
+            list_map3(
+                |a, b, c| a + b + c,
+                vec![1i64, 2],
+                vec![10i64, 20],
+                vec![100i64, 200]
+            ),
+            vec![111i64, 222]
+        );
+        // map4 sum.
+        assert_eq!(
+            list_map4(
+                |a, b, c, d| a + b + c + d,
+                vec![1i64],
+                vec![10i64],
+                vec![100i64],
+                vec![1000i64]
+            ),
+            vec![1111i64]
+        );
+        // map5 sum, truncating to the shortest (length 1).
+        assert_eq!(
+            list_map5(
+                |a, b, c, d, e| a + b + c + d + e,
+                vec![1i64, 9],
+                vec![10i64],
+                vec![100i64, 9],
+                vec![1000i64, 9],
+                vec![10000i64, 9]
+            ),
+            vec![11111i64]
+        );
     }
 }

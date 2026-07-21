@@ -61,6 +61,7 @@ fn list_fills_run_with_parity() {
     // sum [3,1,4,1,5,9,2,6]=31; product [1,2,3,4]=24; maximum=9; minimum=1;
     // sum (singleton 7)=7; sum (repeat 4 2)=8; length (intersperse 0 [1,2,3])=5;
     // length (fst (partition (>3)))=4; unzip key-sum=6, val-sum=60;
-    // head (sort)=1; head (sortWith descending)=9.
-    assert_eq!(out.stdout.trim(), "31 24 9 1 7 8 5 4 6 60 1 9");
+    // head (sort)=1; head (sortWith descending)=9;
+    // sum (map2 (+) [1,2,3] [10,20])=33; sum (map3 (+) …)=333.
+    assert_eq!(out.stdout.trim(), "31 24 9 1 7 8 5 4 6 60 1 9 33 333");
 }

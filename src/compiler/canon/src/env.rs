@@ -521,6 +521,10 @@ impl Env {
                     "intersperse",
                     "partition",
                     "unzip",
+                    "map2",
+                    "map3",
+                    "map4",
+                    "map5",
                 ],
             ),
             (
