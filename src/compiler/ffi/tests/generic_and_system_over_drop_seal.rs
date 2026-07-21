@@ -63,7 +63,10 @@ fn bundle_generic_pkg() -> PkgInfo {
 fn bundle_generic_method_over_drops() {
     let iface = crate_interface(&bundle_generic_pkg());
     assert!(
-        iface.bindings.iter().all(|b| b.ref_name != "spawn_from_commands"),
+        iface
+            .bindings
+            .iter()
+            .all(|b| b.ref_name != "spawn_from_commands"),
         "a Bundle-generic method must not be admitted:\n{:?}",
         iface.bindings
     );
@@ -104,7 +107,10 @@ fn opaque_total_system_closure_over_drops() {
     assert!(
         pkg.fns().iter().all(|f| f.name() != "add_system"),
         "the opaque-total system closure must not decode into a binding:\n{:?}",
-        pkg.fns().iter().map(ipe_ffi::pkginfo::FnInfo::name).collect::<Vec<_>>()
+        pkg.fns()
+            .iter()
+            .map(ipe_ffi::pkginfo::FnInfo::name)
+            .collect::<Vec<_>>()
     );
     assert!(
         !pkg.dropped().is_empty(),

@@ -71,8 +71,9 @@ fn owned_tuple_admits_and_opaque_tuple_over_drops() {
         iface.bindings
     );
     assert!(
-        iface.skipped.iter().any(|s| s.ref_name == "handle_extent"
-            && s.reason.contains("component scalar coercion")),
+        iface.skipped.iter().any(
+            |s| s.ref_name == "handle_extent" && s.reason.contains("component scalar coercion")
+        ),
         "the over-drop must record the tuple-gate reason:\n{:?}",
         iface.skipped
     );

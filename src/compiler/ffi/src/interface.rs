@@ -951,15 +951,21 @@ mod tests {
         );
         // The String/bool-carrying tuple now binds too.
         assert!(
-            iface.bindings.iter().any(|b| b.ref_name == "labelled_extent"
-                && b.sig == "() -> Result Error (Int, String, Bool)"),
+            iface
+                .bindings
+                .iter()
+                .any(|b| b.ref_name == "labelled_extent"
+                    && b.sig == "() -> Result Error (Int, String, Bool)"),
             "{:?}",
             iface.skipped
         );
         // The opaque-carrying tuple still over-drops on the tuple gate.
         assert!(
-            iface.skipped.iter().any(|s| s.ref_name == "handle_extent"
-                && s.reason.contains("component scalar coercion")),
+            iface
+                .skipped
+                .iter()
+                .any(|s| s.ref_name == "handle_extent"
+                    && s.reason.contains("component scalar coercion")),
             "{:?}",
             iface.skipped
         );
