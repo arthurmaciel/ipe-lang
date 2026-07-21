@@ -26,6 +26,11 @@ members = [
     "tools/ipe-ffi-inspector",
     "src/playground",
 ]
+# `tools/panic-scan` carries its own `[workspace]` so it builds standalone as a
+# pre-commit/CI hook without pulling the compiler crates. Excluding it here lets
+# `ipe-cli` path-depend on it (the `ipe package audit` provenance scan) without
+# cargo seeing two workspace roots.
+exclude = ["tools/panic-scan"]
 
 [workspace.package]
 edition = "2024"

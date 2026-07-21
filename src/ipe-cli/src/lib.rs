@@ -16,6 +16,7 @@
 //! Errors are typed ([`CliError`]); no operation panics or unwraps.
 
 pub mod api_surface;
+pub mod audit;
 pub mod build_plan;
 mod cache;
 pub mod cli_args;
@@ -124,6 +125,12 @@ pub enum CliError {
         floor: String,
         proposed: String,
     },
+    /// A `ipe package audit` Tier-1 check rejected the package. Carries the
+    /// typed [`audit::Rejection`] naming the failing check and its one
+    /// diagnostic. This is the package gate's hard reject — a check that would
+    /// let an unsafe or dishonest version through is a security hole, so it is
+    /// always a typed error, never a warning.
+    PackageAudit(audit::Rejection),
 }
 
 impl From<api_surface::DiffError> for CliError {
@@ -200,6 +207,7 @@ impl std::fmt::Display for CliError {
                 "version {proposed} does not clear the required {required} bump — the new \
                  version must be at least {floor}."
             ),
+            Self::PackageAudit(rejection) => write!(f, "{rejection}"),
         }
     }
 }
@@ -1525,6 +1533,7 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
         Some((cmd, rest)) if cmd == "rust" => ffi::run_rust(rest),
         Some((cmd, rest)) if cmd == "add" => pkg::run_add(rest),
         Some((cmd, rest)) if cmd == "remove" => pkg::run_remove(rest),
+        Some((cmd, rest)) if cmd == "package" => run_package(rest),
         Some((cmd, rest)) if cmd == "fix" => run_fix(rest),
         Some((cmd, rest)) if cmd == "fmt" => fmt::run_fmt(rest),
         Some((cmd, rest)) if cmd == "lsp" => lsp::run_lsp(rest),
@@ -2146,6 +2155,22 @@ fn lower_entry(entry: &Path) -> Result<ipe_ir::Program, CliError> {
 /// `ipe capabilities <entry.ipe>` — print the program's inferred security
 /// capabilities, one per line in sorted order, or `none` when the program is
 /// pure. Read-only analysis: nothing is emitted or written.
+/// `ipe package <subcommand>` — package-authoring commands. Today the one
+/// subcommand is `audit`, the SP4 Tier-1 package gate.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] on a missing or unknown subcommand; the audit's own
+/// errors (a build failure or a [`CliError::PackageAudit`] reject) otherwise.
+fn run_package(rest: &[String]) -> Result<(), CliError> {
+    match rest.split_first() {
+        Some((sub, tail)) if sub == "audit" => audit::run_audit(tail),
+        Some((sub, _)) => Err(CliError::UsageOwned(format!(
+            "ipe package: unknown subcommand `{sub}` (expected `audit`)"
+        ))),
+        None => Err(CliError::Usage("usage: ipe package audit [<path>]")),
+    }
+}
+
 fn run_capabilities(rest: &[String]) -> Result<(), CliError> {
     let entry = match rest.first() {
         Some(e) => PathBuf::from(e),

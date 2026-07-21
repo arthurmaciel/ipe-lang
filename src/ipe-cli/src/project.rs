@@ -40,6 +40,12 @@ use crate::CliError;
 pub struct ProjectManifest {
     /// The project name (from `[project] name = "…"`).
     pub name: String,
+    /// The package version (from `version = "…"`, at the top level or under
+    /// `[project]`), parsed into a typed [`semver::Version`]. `None` when the
+    /// manifest declares no version — the package gate's enforced-semver check
+    /// needs one, so `ipe package audit` rejects a versionless manifest rather
+    /// than inventing a version.
+    pub version: Option<semver::Version>,
     /// Absolute path to the project root directory (where `ipe.toml` lives).
     pub root: PathBuf,
     /// Absolute path to the source root (`<root>/src` by default).
@@ -266,6 +272,7 @@ fn parse_db_driver(s: &str) -> Result<ipe_backend_rust::DbDriver, CliError> {
 #[derive(Default)]
 struct RawManifest {
     name: Option<String>,
+    version_str: Option<String>,
     src_rel: Option<String>,
     driver_str: Option<String>,
     rust_static: Option<String>,
@@ -315,6 +322,7 @@ fn scan_raw_manifest(text: &str) -> Result<RawManifest, CliError> {
         let val = raw_val.trim_matches('"');
         match (section, key) {
             ("" | "[project]", "name") => raw.name = Some(val.to_owned()),
+            ("" | "[project]", "version") => raw.version_str = Some(val.to_owned()),
             ("[source]", "root") => raw.src_rel = Some(val.to_owned()),
             ("[database]", "driver") => raw.driver_str = Some(val.to_owned()),
             ("[rust]", "static") => raw.rust_static = Some(val.to_owned()),
@@ -400,6 +408,18 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
         .name
         .ok_or(CliError::Usage("ipe.toml: missing a `name = \"…\"` entry"))?;
 
+    // Parse, don't validate: a declared version becomes a typed `semver::Version`
+    // here, so a malformed `version = "…"` is a hard manifest-parse error rather
+    // than a surprise the enforced-semver check hits later.
+    let version = raw
+        .version_str
+        .map(|v| {
+            semver::Version::parse(&v).map_err(|e| {
+                CliError::UsageOwned(format!("ipe.toml: `version = \"{v}\"` is not valid semver: {e}"))
+            })
+        })
+        .transpose()?;
+
     let src_root = root.join(raw.src_rel.as_deref().unwrap_or("src"));
     if !src_root.is_dir() {
         return Err(CliError::Usage(
@@ -433,6 +453,7 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
 
     Ok(ProjectManifest {
         name,
+        version,
         root,
         src_root,
         driver,

@@ -1983,6 +1983,7 @@ dependencies = [
  "ipe_types",
  "ipe_watch",
  "notify",
+ "panic-scan",
  "salsa",
  "semver",
  "serde_json",
@@ -3064,6 +3065,13 @@ dependencies = [
  "gobject-sys",
  "libc",
  "system-deps",
+]
+
+[[package]]
+name = "panic-scan"
+version = "0.0.0"
+dependencies = [
+ "proc-macro2",
 ]
 
 [[package]]
