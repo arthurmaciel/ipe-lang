@@ -107,6 +107,9 @@ a new effectful kernel gains the matching capability automatically. `native-ffi`
 appears whenever the program crosses into `Rust.` code, which is opaque to the
 inference and the one place effects can escape the model.
 
+See [**Capabilities**](docs/capabilities.md) for the full model — the eight
+capabilities, how inference works, and how native code declares and is sandboxed.
+
 ## Dependencies
 
 A project declares its dependencies in `ipe.toml`. Three sections, each optional:
