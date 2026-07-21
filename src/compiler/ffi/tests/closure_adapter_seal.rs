@@ -49,7 +49,8 @@ fn closure_adapter_emits_a_wrapper_for_both_return_shapes() {
     // The returned boxed closure is surfaced as an opaque handle nominal whose
     // full box type the region's own `pub type` alias carries.
     assert!(
-        total.contains("pub type ApplyFnClosure = Box<dyn Fn(i64) -> i64 + Send + Sync + 'static>;"),
+        total
+            .contains("pub type ApplyFnClosure = Box<dyn Fn(i64) -> i64 + Send + Sync + 'static>;"),
         "{total}"
     );
     assert!(

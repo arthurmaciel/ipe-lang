@@ -705,7 +705,9 @@ fn admit_closure_forwarder(
     if ipe_canon::is_reserved_builtin_type_name(&handle) {
         skipped.push(SkippedBinding {
             ref_name: ref_name.to_owned(),
-            reason: format!("provide.closure handle `{handle}` shadows an Ipê reserved builtin type"),
+            reason: format!(
+                "provide.closure handle `{handle}` shadows an Ipê reserved builtin type"
+            ),
         });
         return;
     }
