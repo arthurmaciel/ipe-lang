@@ -19,6 +19,7 @@
 //! binding it cannot render soundly emits NOTHING (over-drop), never a
 //! wrapper cargo would reject.
 
+use crate::carrier::{Carrier, ClosureRet, ClosureSig};
 use crate::naming::{RustIdent, arg_name, rust_kernel_name, rust_safe_ident, wrapper_fn_ident};
 use crate::num_coerce::{is_numeric_rust, num_saturate, num_widen_scalar};
 use crate::pkginfo::{Effect, EnumArm, EnumVariantKind, FnInfo, FnShape, Param, PkgInfo};
@@ -1119,6 +1120,7 @@ fn emit_fn_region(krate: &str, kernel_name: &str, f: &FnInfo) -> Vec<String> {
         ),
         FnShape::FieldGet => field_get_lines(&cx),
         FnShape::FieldSet => field_set_lines(&cx),
+        FnShape::ClosureAdapter { sig } => closure_adapter_lines(&cx, sig),
         FnShape::Plain | FnShape::PkgVar => plain_lines(&cx),
     };
     // A trait-qualified / turbofished binding with NO open type params is a
@@ -1138,6 +1140,117 @@ fn emit_fn_region(krate: &str, kernel_name: &str, f: &FnInfo) -> Vec<String> {
     out.extend(body);
     out.push(crate::naming::WRAPPER_END_SENTINEL.to_owned());
     out
+}
+
+/// Render a carrier as a concrete owned Rust type, absolutizing an opaque
+/// handle through the crate so it can never collide with a runtime kernel
+/// module re-exported at the app crate root.
+fn carrier_rust_ty(krate: &str, c: &Carrier) -> String {
+    match c {
+        Carrier::Opaque(id) => absolutize_crate(krate, id.as_str()),
+        _ => c.rust_owned().to_owned(),
+    }
+}
+
+/// The `[rust.provide.closure]` adapter wrapper.
+///
+/// The wrapper takes an Ipê function value — already a
+/// `Box<dyn Fn(A0, …) -> R + Send + Sync + 'static>` on the app side — and
+/// returns a boxed Rust closure of the EXACT author-declared signature. The
+/// captured Ipê value is moved into an `Arc` so the returned closure is
+/// `Clone` for multi-call `Fn` re-entry.
+///
+/// Per-call soundness (design §3.3): each call re-enters the Ipê closure inside
+/// `std::panic::catch_unwind` (the module-top `panic="abort"` fence makes that
+/// sound). A `Total` (scalar-only) return has NO error channel, so a panic
+/// `std::process::abort()`s — fabricating a `Default` would launder a real Ipê
+/// panic into a silently-consumed wrong value. A `Result`/`Option` return folds
+/// the panic in-band to `Err`/`None`.
+///
+/// Everything renders from the parsed [`ClosureSig`] — no raw manifest string
+/// reaches this emitted Rust.
+fn closure_adapter_lines(cx: &WrapperCx<'_>, sig: &ClosureSig) -> Vec<String> {
+    let krate = cx.krate;
+    // The crate-facing closure's parameter list and the Ipê closure's
+    // parameter list are the SAME carriers in the sync P2 case — the Ipê fn's
+    // arguments ARE the crate's arguments. Bind each `aN` and forward it.
+    let params: Vec<(String, String)> = sig
+        .params
+        .iter()
+        .enumerate()
+        .map(|(j, c)| (arg_name(j), carrier_rust_ty(krate, c)))
+        .collect();
+    let crate_param_decls: Vec<String> = params
+        .iter()
+        .map(|(name, ty)| format!("{name}: {ty}"))
+        .collect();
+    let forwarded: Vec<String> = params.iter().map(|(name, _)| name.clone()).collect();
+    let forwarded_args = forwarded.join(", ");
+    // The Ipê function value the wrapper receives has this exact box type — it
+    // is what the app-side backend emits for a fn value of this arrow.
+    let ipe_fn_ty = format!("Box<{}>", sig.rust_dyn_fn());
+    let crate_ret = match &sig.ret {
+        ClosureRet::Total(sc) => sc.rust_owned().to_owned(),
+        ClosureRet::Result(c) => format!("Result<{}, IpeError>", carrier_rust_ty(krate, c)),
+        ClosureRet::Option(c) => format!("Option<{}>", carrier_rust_ty(krate, c)),
+    };
+    let bounds = sig.bounds.rust_suffix();
+    let out_ty = if bounds.is_empty() {
+        format!("Box<dyn Fn({}) -> {crate_ret}>", param_ty_list(&params))
+    } else {
+        format!(
+            "Box<dyn Fn({}) -> {crate_ret} + {bounds}>",
+            param_ty_list(&params)
+        )
+    };
+    let wrapper = &cx.rust_name;
+    // The captured Ipê closure. `Arc` gives the returned closure `Clone` for
+    // multi-call re-entry without cloning the Ipê value itself.
+    let call = if forwarded_args.is_empty() {
+        "(__ipe_fn)()".to_owned()
+    } else {
+        format!("(__ipe_fn)({forwarded_args})")
+    };
+    let per_call_body = match &sig.ret {
+        // A total (scalar) return has no error channel: a panic ABORTS. Never
+        // fabricate a Default — that launders a real Ipê panic into a wrong
+        // value the crate silently consumes. catch_unwind stays so the raw
+        // unwind never crosses the foreign Fn frame (that is UB).
+        ClosureRet::Total(_) => format!(
+            "match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {call})) \
+             {{ Ok(v) => v, Err(_) => {{ \
+             eprintln!(\"ipe_ffi: Ipê closure `{wrapper}` panicked; aborting \
+             (total return has no error channel)\"); std::process::abort(); }} }}"
+        ),
+        ClosureRet::Result(_) => format!(
+            "match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {call})) \
+             {{ Ok(inner) => inner, Err(_) => Err(str_err(\"foreign closure panicked\")) }}"
+        ),
+        ClosureRet::Option(_) => format!(
+            "match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {call})) \
+             {{ Ok(inner) => inner, Err(_) => None }}"
+        ),
+    };
+    let crate_params_joined = crate_param_decls.join(", ");
+    vec![
+        format!("pub fn {wrapper}(__ipe_fn: {ipe_fn_ty}) -> {out_ty} {{"),
+        format!("    let __ipe_fn = std::sync::Arc::new(__ipe_fn);"),
+        format!("    Box::new(move |{crate_params_joined}| {{"),
+        format!("        let __ipe_fn = std::sync::Arc::clone(&__ipe_fn);"),
+        format!("        {per_call_body}"),
+        "    })".to_owned(),
+        "}".to_owned(),
+    ]
+}
+
+/// The comma-joined declared parameter TYPE list (`i64, bool`) for a boxed
+/// `dyn Fn(...)` type position.
+fn param_ty_list(params: &[(String, String)]) -> String {
+    params
+        .iter()
+        .map(|(_, ty)| ty.clone())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Plain fn / method / static / pkg-var wrapper (the fallible-carrier tier).
@@ -1770,6 +1883,65 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
     }
 
     // ── wrapper-shape coverage ──────────────────────────────────────────
+
+    fn closure_region(sig: &str) -> String {
+        let pkg = semver_pkg(&json!([{
+            "name": "update_fn",
+            "effect": "pure",
+            "isClosureAdapter": true,
+            "closureSig": sig
+        }]));
+        emit_bindings(&pkg)
+    }
+
+    #[test]
+    fn closure_adapter_total_return_aborts_on_panic_never_fabricates() {
+        let out = closure_region("Fn(Int, Bool) -> Int + Send + Sync + 'static");
+        // The wrapper receives the Ipê fn value as the exact app-side box type
+        // and returns the crate closure of the exact declared signature.
+        assert!(
+            out.contains(
+                "pub fn semver_update_fn(__ipe_fn: Box<dyn Fn(i64, bool) -> i64 + Send + Sync + \
+                 'static>) -> Box<dyn Fn(i64, bool) -> i64 + Send + Sync + 'static> {"
+            ),
+            "{out}"
+        );
+        // Multi-call Clone: the captured value is behind an Arc.
+        assert!(out.contains("std::sync::Arc::new(__ipe_fn)"), "{out}");
+        // Panic-isolated per-call re-entry.
+        assert!(out.contains("std::panic::catch_unwind"), "{out}");
+        // A total return has no error channel: abort, NEVER fabricate a Default.
+        assert!(out.contains("std::process::abort()"), "{out}");
+        assert!(!out.contains("Default::default"), "{out}");
+        // Sentinel bracketing so DCE can drop an unreached adapter by name.
+        assert!(out.contains("// IPE-FFI-WRAPPER BEGIN update_fn"), "{out}");
+    }
+
+    #[test]
+    fn closure_adapter_result_return_folds_the_panic_in_band() {
+        let out = closure_region("Fn(Int) -> Result<Int, Error> + Send + Sync + 'static");
+        assert!(
+            out.contains("-> Box<dyn Fn(i64) -> Result<i64, IpeError> + Send + Sync + 'static> {"),
+            "{out}"
+        );
+        // A fallible return folds a panic to Err — never aborts.
+        assert!(
+            out.contains("Err(_) => Err(str_err(\"foreign closure panicked\"))"),
+            "{out}"
+        );
+        assert!(!out.contains("std::process::abort()"), "{out}");
+    }
+
+    #[test]
+    fn closure_adapter_option_return_folds_the_panic_to_none() {
+        let out = closure_region("Fn(Int) -> Option<Int> + Send + Sync + 'static");
+        assert!(
+            out.contains("-> Box<dyn Fn(i64) -> Option<i64> + Send + Sync + 'static> {"),
+            "{out}"
+        );
+        assert!(out.contains("Err(_) => None"), "{out}");
+        assert!(!out.contains("std::process::abort()"), "{out}");
+    }
 
     #[test]
     fn pure_display_bridge_takes_impl_display_and_catches_unwind() {
