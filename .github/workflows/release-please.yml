@@ -29,5 +29,11 @@ jobs:
     steps:
       - uses: googleapis/release-please-action@v4
         with:
+          # A PAT, not GITHUB_TOKEN: GitHub does not trigger workflows for events
+          # created by GITHUB_TOKEN, so a GITHUB_TOKEN-opened release PR never runs
+          # the required checks and can only be admin-merged. A PAT-opened PR runs
+          # the gate and merges normally; the tag it pushes also triggers
+          # release.yml. Falls back to GITHUB_TOKEN until RELEASE_PLEASE_TOKEN is set.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .github/.release-please-manifest.json
