@@ -10,6 +10,17 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.11](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.10...ipe-v0.1.11) (2026-07-21)
+
+
+### Features
+
+* **ffi:** [#317](https://github.com/arthurmaciel/ipe-lang/issues/317)+[#326](https://github.com/arthurmaciel/ipe-lang/issues/326) auto-binding coverage — bundle-generics, dyn-Fn systems, multi-result tuples ([#72](https://github.com/arthurmaciel/ipe-lang/issues/72)) ([572ddbd](https://github.com/arthurmaciel/ipe-lang/commit/572ddbdd1ada659dd04e4920b619786b8dbf781a))
+* **ffi:** [#365](https://github.com/arthurmaciel/ipe-lang/issues/365) Tier 2 capability inference + fail-closed enforcement ([#71](https://github.com/arthurmaciel/ipe-lang/issues/71)) ([965aa15](https://github.com/arthurmaciel/ipe-lang/commit/965aa158a2616ad47c7e3441ad3ee9f83b989267))
+* **ffi:** [#366](https://github.com/arthurmaciel/ipe-lang/issues/366) Tier 2 #[ipe::provide] trait-impl escape hatch ([#69](https://github.com/arthurmaciel/ipe-lang/issues/69)) ([2cc5114](https://github.com/arthurmaciel/ipe-lang/commit/2cc5114470177a84a6c7b67d4ffa96b90c5222db))
+* **ffi:** [#369](https://github.com/arthurmaciel/ipe-lang/issues/369) closure-&gt;run handoff — drive foreign loops with Ipê closures ([#70](https://github.com/arthurmaciel/ipe-lang/issues/70)) ([8c4b662](https://github.com/arthurmaciel/ipe-lang/commit/8c4b6627baa46a7aeb1df4ebb462fd76599b612e))
+* **pkg:** [#368](https://github.com/arthurmaciel/ipe-lang/issues/368) SP4 Tier-1 package gate + ipe package audit ([#66](https://github.com/arthurmaciel/ipe-lang/issues/66)) ([5838ff5](https://github.com/arthurmaciel/ipe-lang/commit/5838ff5de03157dd07bad5a3bc3f846e0fb8e1b9))
+
 ## [0.1.10](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.9...ipe-v0.1.10) (2026-07-21)
 
 
