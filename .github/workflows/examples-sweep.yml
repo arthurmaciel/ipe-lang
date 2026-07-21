@@ -115,10 +115,12 @@ jobs:
           # NOTE: webkit2gtk/libsoup (needed to LINK a webview example) are not
           # installed yet — webview examples may not build until that changes.
 
-      - name: Install ripgrep + coreutils (macOS)
+      - name: Install ripgrep + coreutils + flock (macOS)
         if: matrix.os == 'macos-latest'
         run: |
-          brew install ripgrep coreutils
+          # `flock` serialises the shared-CARGO_TARGET_DIR build/run span; macOS
+          # has no flock by default, so the sweep aborts without it.
+          brew install ripgrep coreutils flock
           # GNU `timeout` (the sweep + libs use bare `timeout`).
           mkdir -p "$HOME/.local/bin"
           ln -sf "$(brew --prefix coreutils)/libexec/gnubin/timeout" "$HOME/.local/bin/timeout"
