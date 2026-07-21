@@ -8,11 +8,17 @@
 //! bind (validated identifiers).
 //!
 //! Everything untrusted passes a parse-don't-validate newtype at this boundary:
-//! [`WrapperPath`] rejects an absolute path or a `..` escape at decode, and each
-//! `expose` entry becomes a [`RustIdent`]. A `capabilities` key is accepted and
-//! preserved verbatim but NOT enforced here — capability inference and
-//! enforcement are a separate gate; this surface reads the key only so a
-//! manifest that declares it still parses.
+//! [`WrapperPath`] rejects an absolute path or a `..` escape at decode, each
+//! `expose` entry becomes a [`RustIdent`], and each `capabilities` entry is
+//! parsed into the closed [`Capability`] vocabulary — a typo'd capability is a
+//! LOUD rejection at decode, never a raw string a later reconcile silently fails
+//! to compare. The declaration is the author's *claim*; the install-time gate
+//! reconciles it against the inferred set and enforces it (see
+//! [`crate::capability_scan`]).
+
+use std::collections::BTreeSet;
+
+use ipe_kernels::Capability;
 
 use crate::diag::{Diagnostic, SourceDefect};
 use crate::naming::RustIdent;
@@ -80,10 +86,11 @@ impl WrapperPath {
 pub struct WrapperManifest {
     path: WrapperPath,
     expose: Vec<RustIdent>,
-    /// The author's declared capability set, accepted and preserved verbatim.
-    /// Stored as raw strings — no capability taxonomy exists at this boundary;
-    /// a later gate parses + enforces it.
-    capabilities: Vec<String>,
+    /// The author's declared capability set, parsed into the closed
+    /// [`Capability`] vocabulary at decode. An unknown name is refused here, so
+    /// a value of this type can only carry real capabilities the reconcile gate
+    /// can compare — an unenforceable capability can never hide behind a typo.
+    capabilities: BTreeSet<Capability>,
 }
 
 impl WrapperManifest {
@@ -95,8 +102,9 @@ impl WrapperManifest {
     /// # Errors
     ///
     /// The [`WrapperPath`] gate's `IPE-F4411`, an [`crate::diag::WireDefect`]
-    /// for an ill-formed exposed identifier, or [`SourceDefect::WrapperExposeEmpty`]
-    /// when no symbols are exposed.
+    /// for an ill-formed exposed identifier, [`SourceDefect::WrapperExposeEmpty`]
+    /// when no symbols are exposed, or [`SourceDefect::WrapperCapabilityUnknown`]
+    /// when a declared capability is not in the closed vocabulary.
     pub fn parse(
         path: &str,
         expose: &[String],
@@ -117,10 +125,17 @@ impl WrapperManifest {
                 context: format!("[rust.wrapper] path `{}`", path.as_str()),
                 defect,
             })?;
+        let capabilities =
+            crate::capability_scan::parse_declared(capabilities).map_err(|unknown| {
+                Diagnostic::SourceRejected {
+                    source: path.as_str().to_owned(),
+                    defect: SourceDefect::WrapperCapabilityUnknown { got: unknown.0 },
+                }
+            })?;
         Ok(Self {
             path,
             expose,
-            capabilities: capabilities.to_vec(),
+            capabilities,
         })
     }
 
@@ -143,9 +158,9 @@ impl WrapperManifest {
         self.expose.iter().map(|i| i.as_str().to_owned()).collect()
     }
 
-    /// The author's declared, preserved capability set.
+    /// The author's declared, typed capability set.
     #[must_use]
-    pub fn capabilities(&self) -> &[String] {
+    pub const fn capabilities(&self) -> &BTreeSet<Capability> {
         &self.capabilities
     }
 }
@@ -175,15 +190,33 @@ mod tests {
     }
 
     #[test]
-    fn capabilities_are_accepted_but_not_enforced_here() {
+    fn declared_capabilities_are_parsed_into_the_closed_vocabulary() {
         let m = WrapperManifest::parse(
             "w",
             &["f".to_owned()],
             &["network".to_owned(), "filesystem".to_owned()],
         )
         .expect("parses");
-        // Accepted verbatim — no taxonomy check at this boundary.
-        assert_eq!(m.capabilities(), ["network", "filesystem"]);
+        assert!(m.capabilities().contains(&Capability::Network));
+        assert!(m.capabilities().contains(&Capability::Filesystem));
+        assert_eq!(m.capabilities().len(), 2);
+    }
+
+    #[test]
+    fn an_unknown_declared_capability_is_refused_at_decode() {
+        // A typo'd capability must be a LOUD rejection, never a raw string the
+        // reconcile then silently fails to compare (a fail-open hole).
+        let r = WrapperManifest::parse("w", &["f".to_owned()], &["netwrok".to_owned()]);
+        assert!(
+            matches!(
+                r,
+                Err(Diagnostic::SourceRejected {
+                    defect: SourceDefect::WrapperCapabilityUnknown { .. },
+                    ..
+                })
+            ),
+            "{r:?}"
+        );
     }
 
     #[test]

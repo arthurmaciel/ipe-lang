@@ -15,7 +15,7 @@
 #![forbid(unsafe_code)]
 
 mod capability;
-pub use capability::Capability;
+pub use capability::{Capability, UnknownCapability};
 
 /// Classification of a kernel variant by which compiler / runtime subsystem
 /// owns its emission.

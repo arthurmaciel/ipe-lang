@@ -184,6 +184,13 @@ pub enum SourceDefect {
     /// A `[rust.wrapper]` with no `expose` list — a wrapper that binds nothing
     /// is a no-op declaration and almost certainly an authoring mistake.
     WrapperExposeEmpty,
+    /// A `[rust.wrapper] capabilities` entry outside the closed capability
+    /// vocabulary. A typo'd capability must be a loud rejection at decode, never
+    /// a raw string the install-time reconcile silently fails to compare.
+    WrapperCapabilityUnknown {
+        /// The offending capability name.
+        got: String,
+    },
 }
 
 impl fmt::Display for SourceDefect {
@@ -228,6 +235,11 @@ impl fmt::Display for SourceDefect {
             Self::WrapperExposeEmpty => f.write_str(
                 "[rust.wrapper] declares no `expose` symbols — a wrapper that binds \
                  nothing has no effect",
+            ),
+            Self::WrapperCapabilityUnknown { got } => write!(
+                f,
+                "[rust.wrapper] declares unknown capability {got:?} (expected one of: \
+                 network, filesystem, database, env, subprocess, clock, random, native-ffi)"
             ),
         }
     }
