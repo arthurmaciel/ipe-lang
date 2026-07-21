@@ -107,13 +107,13 @@ jobs:
       # ripgrep — REQUIRED by lib/examples.sh's is_out_of_scope Go-FFI filter.
       # Without it the scope scan silently mis-classifies and the sweep is wrong.
       # xvfb runs webview examples headless. curl+tar fetch the upstream mirror.
-      - name: Install ripgrep + xvfb (Linux)
+      - name: Install ripgrep + xvfb + webview link deps (Linux)
         if: startsWith(matrix.os, 'ubuntu')
         run: |
           sudo apt-get update
-          sudo apt-get install -y ripgrep xvfb
-          # NOTE: webkit2gtk/libsoup (needed to LINK a webview example) are not
-          # installed yet — webview examples may not build until that changes.
+          # webkit2gtk-4.1 + libsoup-3.0 are wry 0.55's Linux link deps, so the
+          # webview examples (29/31) link; xvfb runs them headless.
+          sudo apt-get install -y ripgrep xvfb libwebkit2gtk-4.1-dev libsoup-3.0-dev
 
       - name: Install ripgrep + coreutils + flock (macOS)
         if: matrix.os == 'macos-latest'
