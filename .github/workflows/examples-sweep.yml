@@ -56,8 +56,9 @@ jobs:
       fail-fast: false
       matrix:
         # ubuntu is the developer-reference host (full cli/server/live/tui/webview).
-        # macOS adapts (tui via BSD `script`, webview via the real display). Windows
-        # (Git Bash) can be added once ipe matures.
+        # macOS adapts (tui via BSD `script`, webview via the real display).
+        # Windows and FreeBSD run as separate jobs below (different install paths
+        # and scoping — see examples-sweep-windows and examples-sweep-freebsd).
         os: [ubuntu-latest, macos-latest]
 
     env:
@@ -212,3 +213,105 @@ jobs:
             ~/.cache/ipe/examples-sweep/warnings-*.tsv
             ~/.cache/ipe/examples-sweep/*.log
           if-no-files-found: warn
+
+  # ── Windows (Git Bash) — BUILD-only, CLI shapes ──────────────────────────────
+  # Scope: ipe build + cargo build of the cli-shaped examples. RUN is skipped
+  # on all shapes (requires curl/python3/flock on PATH — flock has no Windows
+  # equivalent in Git Bash, so scripts/examples-sweep.sh exits 2 on Windows;
+  # the full sweep script cannot run there). TUI and Webview are additionally
+  # scoped out: TUI needs ConPTY/node-pty (not yet wired), Webview needs
+  # WebView2/Edge which is present on windows-latest but requires a display
+  # (exercise_webview in checks.sh does handle Windows, but without the sweep
+  # harness it is not exercised here). This job proves the BUILD path works on
+  # Windows (MSVC toolchain, path separators, cargo invocation) for cli shapes.
+  # Non-gating (continue-on-error: true) during build-out.
+  examples-sweep-windows:
+    name: examples-sweep (windows — BUILD-only, cli shapes)
+    runs-on: windows-latest
+    continue-on-error: true
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/ipe-target
+      IPE_NO_SCCACHE: '1'
+      CARGO_HTTP_MULTIPLEXING: 'false'
+      CARGO_NET_RETRY: '5'
+      REPO: ${{ github.workspace }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ${{ github.workspace }}/.cache/ipe-target
+          key: windows-sweep-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            windows-sweep-cargo-
+
+      - name: Install ripgrep (choco)
+        shell: pwsh
+        run: choco install ripgrep -y --no-progress
+
+      - name: Build ipe
+        run: cargo build --release -p ipe
+
+      # BUILD-only proof for the two deterministic cli examples (no flock, no
+      # RUN). This exercises the Windows cargo invocation, path handling, and
+      # MSVC link path without needing the full sweep harness.
+      - name: BUILD cli examples (01-hello-world, 02-append)
+        env:
+          IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
+        run: |
+          set -euo pipefail
+          IPE="$CARGO_TARGET_DIR/release/ipe.exe"
+          for ex in examples/01-hello-world examples/02-append; do
+            echo "=== BUILD $ex ==="
+            cd "$REPO/$ex"
+            "$IPE" build ipe.toml --out out/rust
+            cargo build --manifest-path out/rust/Cargo.toml
+            cd "$REPO"
+          done
+
+  # ── FreeBSD (vmactions VM on ubuntu host) — BUILD-only ───────────────────────
+  # Scope: ipe build + cargo build inside a FreeBSD VM. RUN is skipped (no
+  # display, no pty allocation in the VM's `run:` block). The full sweep script
+  # requires `flock` — FreeBSD has it in base, but the VM budget is tight, so
+  # we drive ipe build + cargo build directly on the two cli examples rather
+  # than fetching the full upstream mirror and iterating all examples.
+  # Non-gating (continue-on-error: true). Mirror-commit step is ubuntu-only and
+  # is intentionally absent here.
+  examples-sweep-freebsd:
+    name: examples-sweep (freebsd — BUILD-only, cli shapes)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: BUILD cli examples inside FreeBSD VM
+        uses: vmactions/freebsd-vm@v1
+        with:
+          usesh: true
+          prepare: |
+            pkg install -y rust ripgrep curl
+          run: |
+            set -e
+            export CARGO_TARGET_DIR="$HOME/.cache/ipe-freebsd-target"
+            export IPE_RUNTIME_DIR="$PWD/src/runtime/rust/src"
+            export CARGO_HTTP_MULTIPLEXING=false
+            export CARGO_NET_RETRY=5
+            cargo build --release -p ipe
+            IPE="$CARGO_TARGET_DIR/release/ipe"
+            for ex in examples/01-hello-world examples/02-append; do
+              echo "=== BUILD $ex ==="
+              cd "$ex"
+              "$IPE" build ipe.toml --out out/rust
+              cargo build --manifest-path out/rust/Cargo.toml
+              cd -
+            done
