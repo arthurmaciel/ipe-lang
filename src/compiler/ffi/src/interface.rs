@@ -547,11 +547,12 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
 /// `params()`/`results()` are empty — it is a manifest entry), and the nominal is
 /// the struct's own name. Over-drops fail-closed:
 ///
-/// * the struct NAME shadowing an Ipê reserved builtin refuses the whole entry
-///   (an admitted shadowing nominal is a silent-wrong-type SEAL breach — refuse,
-///   never rename);
 /// * a constructor name that is not a legal Ipê value identifier is dropped;
-/// * a duplicate constructor name keeps the first.
+/// * a duplicate constructor name keeps the first;
+/// * the struct nominal routes through [`claim_nominal`], which refuses a
+///   reserved-builtin shadow or a collision with another provide surface
+///   (an admitted shadowing/colliding nominal is a silent-wrong-type or
+///   duplicate-definition SEAL breach — refuse, never rename).
 fn admit_struct_forwarder(
     ctor: &str,
     def: &crate::carrier::StructDef,
@@ -562,15 +563,6 @@ fn admit_struct_forwarder(
     provide_types: &mut BTreeSet<String>,
 ) {
     let type_name = def.name.as_str();
-    if ipe_canon::is_reserved_builtin_type_name(type_name) {
-        skipped.push(SkippedBinding {
-            ref_name: ctor.to_owned(),
-            reason: format!(
-                "provide.struct type `{type_name}` shadows an Ipê reserved builtin type"
-            ),
-        });
-        return;
-    }
     if !valid_ipe_value_name(ctor) {
         skipped.push(SkippedBinding {
             ref_name: ctor.to_owned(),
@@ -585,7 +577,13 @@ fn admit_struct_forwarder(
         });
         return;
     }
-    provide_types.insert(type_name.to_owned());
+    if let Err(reason) = claim_nominal("provide.struct", type_name, provide_types) {
+        skipped.push(SkippedBinding {
+            ref_name: ctor.to_owned(),
+            reason,
+        });
+        return;
+    }
     bindings.push(InterfaceBinding {
         wrapper_ident: crate::naming::wrapper_fn_ident(kernel_name, ctor),
         arity: def.fields.len(),
@@ -602,9 +600,10 @@ fn admit_struct_forwarder(
 /// only in its value-level `ref_name` (`<ctor>_<snake(variant)>`) and arity.
 /// Over-drops fail-closed:
 ///
-/// * the enum NAME shadowing an Ipê reserved builtin refuses the WHOLE entry
-///   (all variant forwarders dropped) — a shadowing nominal is a silent-wrong
-///   -type SEAL breach;
+/// * the enum nominal routes through [`claim_nominal`] up-front, which refuses a
+///   reserved-builtin shadow or a collision with another provide surface,
+///   dropping the WHOLE entry (all variant forwarders) — a shadowing/colliding
+///   nominal is a silent-wrong-type or duplicate-definition SEAL breach;
 /// * a per-variant constructor name that is not a legal Ipê value identifier is
 ///   dropped INDIVIDUALLY (each variant name is independent), the rest kept;
 /// * a duplicate constructor name keeps the first.
@@ -618,10 +617,14 @@ fn admit_enum_forwarders(
     provide_types: &mut BTreeSet<String>,
 ) {
     let enum_name = def.name.as_str();
-    if ipe_canon::is_reserved_builtin_type_name(enum_name) {
+    // Claim the ONE shared nominal up-front so a reserved-builtin shadow or a
+    // collision with another provide surface refuses the WHOLE entry fail-closed
+    // — a variant forwarder must never point at an enum whose `type` was dropped.
+    // An enum with no surviving variant un-claims the nominal at the tail.
+    if let Err(reason) = claim_nominal("provide.enum", enum_name, provide_types) {
         skipped.push(SkippedBinding {
             ref_name: ref_name.to_owned(),
-            reason: format!("provide.enum type `{enum_name}` shadows an Ipê reserved builtin type"),
+            reason,
         });
         return;
     }
@@ -657,11 +660,12 @@ fn admit_enum_forwarders(
         });
         any_admitted = true;
     }
-    // Register the nominal only when at least one variant forwarder survives —
-    // an enum whose every variant name is illegal declares no reachable
-    // constructor, so surfacing the bare `type` would be a dead opaque.
-    if any_admitted {
-        provide_types.insert(enum_name.to_owned());
+    // Keep the nominal only when at least one variant forwarder survives — an
+    // enum whose every variant name is illegal declares no reachable constructor,
+    // so a bare `type` would be a dead opaque. Un-claim it otherwise (it was
+    // claimed up-front for the fail-closed collision gate).
+    if !any_admitted {
+        provide_types.remove(enum_name);
     }
 }
 
@@ -678,13 +682,11 @@ fn admit_enum_forwarders(
 ///
 /// Over-drops fail-closed — the handle nominal is never renamed to dodge a clash:
 ///
-/// * a handle nominal shadowing an Ipê reserved builtin refuses the entry (a
-///   shadowing nominal is a silent-wrong-type SEAL breach);
-/// * a handle nominal already claimed by a provide-struct/enum or another
-///   closure adapter refuses this entry (two distinct Rust types must never
-///   collapse to one Ipê nominal);
-/// * a constructor `ref_name` that is not a legal Ipê value identifier, or a
-///   duplicate `ref_name`, is dropped (keeping the first).
+/// * a `ref_name` that is not a legal Ipê value identifier, or a duplicate
+///   `ref_name`, is dropped (keeping the first);
+/// * the handle nominal routes through [`claim_nominal`], which refuses a
+///   reserved-builtin shadow or a collision with any other provide surface
+///   (struct / enum / another closure adapter) fail-closed.
 fn admit_closure_forwarder(
     ref_name: &str,
     sig: &crate::carrier::ClosureSig,
@@ -702,24 +704,6 @@ fn admit_closure_forwarder(
         return;
     }
     let handle = crate::naming::closure_handle_nominal(ref_name);
-    if ipe_canon::is_reserved_builtin_type_name(&handle) {
-        skipped.push(SkippedBinding {
-            ref_name: ref_name.to_owned(),
-            reason: format!(
-                "provide.closure handle `{handle}` shadows an Ipê reserved builtin type"
-            ),
-        });
-        return;
-    }
-    if provide_types.contains(&handle) {
-        skipped.push(SkippedBinding {
-            ref_name: ref_name.to_owned(),
-            reason: format!(
-                "provide.closure handle `{handle}` collides with another provide-defined nominal"
-            ),
-        });
-        return;
-    }
     if !seen.insert(ref_name.to_owned()) {
         skipped.push(SkippedBinding {
             ref_name: ref_name.to_owned(),
@@ -727,13 +711,54 @@ fn admit_closure_forwarder(
         });
         return;
     }
-    provide_types.insert(handle.clone());
+    if let Err(reason) = claim_nominal("provide.closure handle", &handle, provide_types) {
+        skipped.push(SkippedBinding {
+            ref_name: ref_name.to_owned(),
+            reason,
+        });
+        return;
+    }
     bindings.push(InterfaceBinding {
         wrapper_ident: crate::naming::wrapper_fn_ident(kernel_name, ref_name),
         arity: 1,
         sig: sig.forwarder_ipe_sig(&handle),
         ref_name: ref_name.to_owned(),
     });
+}
+
+/// Claim a provide-defined nominal for the interface, fail-closed.
+///
+/// EVERY provide surface — struct, enum, closure handle — DEFINES a bare
+/// in-module `pub struct`/`pub enum`/`pub type` in the one emitted
+/// `pub mod <slug>` region, so two distinct definitions that claim the SAME
+/// nominal are an `E0428` the app crate cannot compile — an `ipe`-exit-0 ⇒
+/// cargo-fail SEAL breach. Routing every claim through here makes "each provide
+/// nominal registered at most once" the ONLY representable outcome, independent
+/// of admission order (a name-collision is refused whichever surface declares it
+/// second, never renamed to dodge the clash):
+///
+/// * a nominal shadowing an Ipê reserved builtin is refused (a shadowing nominal
+///   is a silent-wrong-type breach);
+/// * a nominal already claimed by another provide surface is refused.
+///
+/// Returns `Ok(())` with the nominal inserted, or `Err(reason)` naming the broken
+/// rule for the caller to record as a skip.
+fn claim_nominal(
+    kind: &str,
+    nominal: &str,
+    provide_types: &mut BTreeSet<String>,
+) -> Result<(), String> {
+    if ipe_canon::is_reserved_builtin_type_name(nominal) {
+        return Err(format!(
+            "{kind} type `{nominal}` shadows an Ipê reserved builtin type"
+        ));
+    }
+    if !provide_types.insert(nominal.to_owned()) {
+        return Err(format!(
+            "{kind} type `{nominal}` collides with another provide-defined nominal"
+        ));
+    }
+    Ok(())
 }
 
 /// Render the injectable module text.

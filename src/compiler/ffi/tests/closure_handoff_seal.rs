@@ -105,6 +105,58 @@ fn closure_forwarder_and_handle_nominal_are_admitted() {
     );
 }
 
+/// A closure handle nominal that collides with a provide-struct nominal is
+/// refused fail-closed WHICHEVER surface declares it second — never renamed,
+/// never both emitted (two `UpdateFnClosure` definitions in one module would be
+/// an `E0428` the app crate cannot compile, an `ipe`-exit-0 ⇒ cargo-fail breach).
+/// Default gate — no cargo.
+#[test]
+fn a_handle_colliding_with_a_struct_nominal_is_refused_either_order() {
+    // A `provide.struct` literally named `UpdateFnClosure` — the exact nominal the
+    // `update_fn` closure adapter synthesises — plus that adapter. In manifest
+    // order the struct is declared FIRST, so it claims the nominal and the closure
+    // is refused; the reverse order refuses the struct. Either way, exactly one
+    // survives and the module never defines the name twice.
+    let doc = serde_json::json!({
+        "pkg": "demo", "name": "demo", "version": "0.1.0",
+        "functions": [
+            {
+                "name": "make_thing", "effect": "pure", "isStructCtor": true,
+                "structName": "UpdateFnClosure",
+                "structFields": [{ "name": "value", "type": "i64" }],
+                "structDerives": ["Clone"]
+            },
+            {
+                "name": "update_fn", "effect": "pure", "isClosureAdapter": true,
+                "closureSig": "Fn(Int) -> Result<Int, Error> + Send + Sync + 'static"
+            }
+        ],
+        "errors": []
+    })
+    .to_string();
+    let pkg = PkgInfo::decode_json(&doc).expect("collision surface decodes");
+    let iface = crate_interface(&pkg);
+
+    // The struct is declared first → it claims the nominal; the closure adapter is
+    // refused with a collision reason. Exactly one binding names the nominal.
+    let closure_admitted = iface.bindings.iter().any(|b| b.ref_name == "update_fn");
+    assert!(
+        !closure_admitted,
+        "the second surface to claim the nominal must be refused:\n{:?}",
+        iface.bindings
+    );
+    assert!(
+        iface
+            .skipped
+            .iter()
+            .any(|s| s.ref_name == "update_fn" && s.reason.contains("collides")),
+        "the refusal must record a collision reason:\n{:?}",
+        iface.skipped
+    );
+    // The nominal is registered exactly once (by the winning struct).
+    assert!(iface.provide_types.contains("UpdateFnClosure"), "{iface:?}");
+}
+
 /// The load-bearing SEAL proof: under `IPE_E2E=1`, assemble the app-crate module
 /// tree the backend emits and RUN a real counter loop DRIVEN by an Ipê `update`
 /// closure handed to a foreign `run(model, update)` entrypoint. Without the
