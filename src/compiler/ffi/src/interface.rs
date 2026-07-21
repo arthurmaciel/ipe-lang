@@ -339,6 +339,19 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
             );
             continue;
         }
+        // A provide.struct emits its `_bindings.rs` definition + constructor
+        // wrapper (a downstream binding builds the Ipê-defined type), but it is
+        // NOT admitted as a standalone Ipê forwarder here: surfacing the defined
+        // struct as an Ipê-held opaque nominal (`type Counter` + a
+        // `counter_new` forwarder) is the interface-plumbing step deferred to a
+        // follow-up. Recorded, not mis-admitted with a wrong arity.
+        if matches!(f.shape(), crate::pkginfo::FnShape::StructCtor { .. }) {
+            skip(
+                "provide.struct — Ipê opaque-nominal forwarder plumbing not wired yet",
+                &mut skipped,
+            );
+            continue;
+        }
         if !survivors.contains(&ref_name) {
             skip("no wrapper region in _bindings.rs", &mut skipped);
             continue;
