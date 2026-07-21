@@ -10,6 +10,14 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.6](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.5...ipe-v0.1.6) (2026-07-21)
+
+
+### Features
+
+* **ffi:** [#353](https://github.com/arthurmaciel/ipe-lang/issues/353) provide.closure opaque returns ([#47](https://github.com/arthurmaciel/ipe-lang/issues/47)) ([bc86028](https://github.com/arthurmaciel/ipe-lang/commit/bc86028122e36aee235f36877a1f46191c07d397))
+* **stdlib:** [#342](https://github.com/arthurmaciel/ipe-lang/issues/342) Task + decoder combinators ([#49](https://github.com/arthurmaciel/ipe-lang/issues/49)) ([1fc9149](https://github.com/arthurmaciel/ipe-lang/commit/1fc91496758dfa4ac63dd02f2018243b111264b3))
+
 ## [0.1.5](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.4...ipe-v0.1.5) (2026-07-21)
 
 
