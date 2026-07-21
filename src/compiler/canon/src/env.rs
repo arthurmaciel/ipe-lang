@@ -488,6 +488,17 @@ impl Env {
                     // ── List batch ───────────────────────────────────────────
                     "filterMap",
                     "sortBy",
+                    "sort",
+                    "sortWith",
+                    "singleton",
+                    "repeat",
+                    "sum",
+                    "product",
+                    "maximum",
+                    "minimum",
+                    "intersperse",
+                    "partition",
+                    "unzip",
                 ],
             ),
             (

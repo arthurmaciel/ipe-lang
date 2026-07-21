@@ -1,6 +1,119 @@
 //! Ipe.List kernel — the single home for the List runtime surface.
 
 use super::IpeMaybe;
+use super::basics::IpeOrder;
+
+/// `Ipe.List.singleton : a -> List a` — the one-element list `[x]`. Total.
+pub fn list_singleton<T>(x: T) -> Vec<T> {
+    vec![x]
+}
+
+/// `Ipe.List.repeat : Int -> a -> List a` — `n` copies of `x`. Elm semantics:
+/// `n <= 0` yields `[]`. `T: Clone` because each copy is a fresh clone.
+pub fn list_repeat<T: Clone>(n: i64, x: T) -> Vec<T> {
+    if n <= 0 {
+        Vec::new()
+    } else {
+        // `n > 0` here, so `n as usize` is total on 64-bit targets.
+        vec![x; n as usize]
+    }
+}
+
+/// `Ipe.List.sum : number a => List a -> a` — the additive fold. Empty list
+/// sums to the type's additive identity (`0` / `0.0`) via `Iterator::sum`.
+pub fn list_sum<T: std::iter::Sum>(xs: Vec<T>) -> T {
+    xs.into_iter().sum()
+}
+
+/// `Ipe.List.product : number a => List a -> a` — the multiplicative fold.
+/// Empty list yields the multiplicative identity (`1` / `1.0`).
+pub fn list_product<T: std::iter::Product>(xs: Vec<T>) -> T {
+    xs.into_iter().product()
+}
+
+/// `Ipe.List.maximum : comparable a => List a -> Maybe a` — the largest
+/// element, or `Nothing` on the empty list. Total on NaN (`cmp_total` maps an
+/// incomparable pair to `Equal`, so `max_by` never trips `Ord`).
+pub fn list_maximum<T: PartialOrd>(xs: Vec<T>) -> IpeMaybe<T> {
+    match xs.into_iter().max_by(cmp_total) {
+        Some(x) => IpeMaybe::Just(x),
+        None => IpeMaybe::Nothing,
+    }
+}
+
+/// `Ipe.List.minimum : comparable a => List a -> Maybe a` — the smallest
+/// element, or `Nothing` on the empty list. Total on NaN (see `list_maximum`).
+pub fn list_minimum<T: PartialOrd>(xs: Vec<T>) -> IpeMaybe<T> {
+    match xs.into_iter().min_by(cmp_total) {
+        Some(x) => IpeMaybe::Just(x),
+        None => IpeMaybe::Nothing,
+    }
+}
+
+/// `Ipe.List.intersperse : a -> List a -> List a` — place `sep` between each
+/// pair of elements. `[]` and `[x]` are unchanged. `T: Clone` because `sep` is
+/// cloned into every gap.
+pub fn list_intersperse<T: Clone>(sep: T, xs: Vec<T>) -> Vec<T> {
+    let mut out = Vec::with_capacity(xs.len().saturating_mul(2).saturating_sub(1));
+    let mut first = true;
+    for x in xs {
+        if first {
+            first = false;
+        } else {
+            out.push(sep.clone());
+        }
+        out.push(x);
+    }
+    out
+}
+
+/// `Ipe.List.partition : (a -> Bool) -> List a -> (List a, List a)` — split into
+/// (satisfying, not-satisfying), preserving input order in each. `T: Clone` is
+/// the element-clone bound the by-value Ipê closure ABI requires (same as
+/// `list_filter`).
+pub fn list_partition<T: Clone>(pred: impl Fn(T) -> bool, xs: Vec<T>) -> (Vec<T>, Vec<T>) {
+    let mut yes = Vec::new();
+    let mut no = Vec::new();
+    for x in xs {
+        if pred(x.clone()) {
+            yes.push(x);
+        } else {
+            no.push(x);
+        }
+    }
+    (yes, no)
+}
+
+/// `Ipe.List.unzip : List (a, b) -> (List a, List b)` — split a list of pairs
+/// into a pair of lists. Total; consumes the input.
+pub fn list_unzip<A, B>(xs: Vec<(A, B)>) -> (Vec<A>, Vec<B>) {
+    xs.into_iter().unzip()
+}
+
+/// `Ipe.List.sortWith : (a -> a -> Order) -> List a -> List a` — stable sort by
+/// a user comparator returning a Ipê `Order` (`LT`/`EQ`/`GT`). The comparator
+/// takes its two elements by value (the Ipê closure ABI), so `a` must be
+/// `Clone`. Panic-safe: an inconsistent comparator (not a strict weak ordering)
+/// leaves the slice in its safe, element-complete (unspecified-order) state
+/// instead of panicking (std sort panics on such a comparator since Rust 1.81).
+pub fn list_sort_with_order<A: Clone>(cmp: impl Fn(A, A) -> IpeOrder, list: Vec<A>) -> Vec<A> {
+    let mut result = list;
+    let order = &mut result;
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        order.sort_by(|a, b| match cmp(a.clone(), b.clone()) {
+            IpeOrder::LT => std::cmp::Ordering::Less,
+            IpeOrder::EQ => std::cmp::Ordering::Equal,
+            IpeOrder::GT => std::cmp::Ordering::Greater,
+        });
+    }));
+    if outcome.is_err() {
+        eprintln!(
+            "[ipe.list] List.sortWith: comparator is not a consistent total order; \
+             returning input in unspecified order"
+        );
+    }
+    result
+}
 
 /// `Ipe.List.length` — element count (kernel-routed call sites; the pure-Ipê
 /// `ipe_core_list_length` is the recursive stdlib form).
@@ -465,5 +578,85 @@ mod tests {
         // All-equal comparator preserves input order (stable).
         let r = list_sort_with(|_a: i64, _b: i64| 0, vec![3i64, 1, 2]);
         assert_eq!(r, vec![3i64, 1, 2]);
+    }
+
+    // ── New List fills — Elm-matching semantics ───────────────────────────
+
+    #[test]
+    fn singleton_and_repeat_match_elm() {
+        assert_eq!(list_singleton(7i64), vec![7i64]);
+        assert_eq!(list_repeat(3, 0i64), vec![0i64, 0, 0]);
+        assert_eq!(list_repeat(0, 9i64), Vec::<i64>::new());
+        assert_eq!(list_repeat(-2, 9i64), Vec::<i64>::new()); // Elm: n<=0 → []
+    }
+
+    #[test]
+    fn sum_product_match_elm() {
+        assert_eq!(list_sum(vec![1i64, 2, 3, 4]), 10);
+        assert_eq!(list_sum(Vec::<i64>::new()), 0); // Elm: sum [] == 0
+        assert_eq!(list_product(vec![2i64, 3, 4]), 24);
+        assert_eq!(list_product(Vec::<i64>::new()), 1); // Elm: product [] == 1
+        assert_eq!(list_sum(vec![1.5f64, 2.5]), 4.0);
+    }
+
+    #[test]
+    fn maximum_minimum_match_elm() {
+        assert_eq!(list_maximum(vec![3i64, 1, 4, 1, 5]), IpeMaybe::Just(5));
+        assert_eq!(list_minimum(vec![3i64, 1, 4, 1, 5]), IpeMaybe::Just(1));
+        // Elm: maximum [] == Nothing.
+        assert_eq!(list_maximum(Vec::<i64>::new()), IpeMaybe::Nothing);
+        assert_eq!(list_minimum(Vec::<i64>::new()), IpeMaybe::Nothing);
+    }
+
+    #[test]
+    fn intersperse_matches_elm() {
+        assert_eq!(
+            list_intersperse(0i64, vec![1i64, 2, 3]),
+            vec![1i64, 0, 2, 0, 3]
+        );
+        assert_eq!(list_intersperse(0i64, vec![1i64]), vec![1i64]);
+        assert_eq!(list_intersperse(0i64, Vec::<i64>::new()), Vec::<i64>::new());
+    }
+
+    #[test]
+    fn partition_matches_elm() {
+        // Elm: partition (\x -> x > 2) [1,2,3,4] == ([3,4], [1,2]).
+        let (yes, no) = list_partition(|x: i64| x > 2, vec![1i64, 2, 3, 4]);
+        assert_eq!(yes, vec![3i64, 4]);
+        assert_eq!(no, vec![1i64, 2]);
+    }
+
+    #[test]
+    fn unzip_matches_elm() {
+        // Elm: unzip [(0,True),(17,False),(1337,True)] == ([0,17,1337],[True,False,True]).
+        let (a, b) = list_unzip(vec![(0i64, true), (17, false), (1337, true)]);
+        assert_eq!(a, vec![0i64, 17, 1337]);
+        assert_eq!(b, vec![true, false, true]);
+    }
+
+    #[test]
+    fn sort_with_order_matches_elm() {
+        // Descending via a flipped Order comparator.
+        let desc = |a: i64, b: i64| {
+            if a > b {
+                IpeOrder::LT
+            } else if a < b {
+                IpeOrder::GT
+            } else {
+                IpeOrder::EQ
+            }
+        };
+        assert_eq!(
+            list_sort_with_order(desc, vec![1i64, 3, 2]),
+            vec![3i64, 2, 1]
+        );
+    }
+
+    #[test]
+    fn sort_with_order_inconsistent_does_not_panic() {
+        let xs: Vec<i64> = (0..64).collect();
+        // Always-LT comparator violates antisymmetry — must not panic.
+        let out = list_sort_with_order(|_a, _b| IpeOrder::LT, xs);
+        assert_eq!(out.len(), 64);
     }
 }

@@ -2811,6 +2811,45 @@ impl<'a> Builder<'a> {
                 return self.structure(FlatType::Fun(s, inner));
             }
             // ── end Basics numerics ────────────────────────────────────
+            // `List.sum : number a => List a -> a` / `List.product`. The list
+            // element and the result share ONE number-bounded super-var (ADD for
+            // sum, MUL for product — the same obligation `+` / `*` mint), so a
+            // non-numeric element fails closed instead of emitting an unbounded
+            // `list_sum::<T>`. Direct-build (not `stdlib_scheme` + tie) so both
+            // the element and the result collapse to one bounded var.
+            if matches!(k, StdlibKernel::ListSum | StdlibKernel::ListProduct) {
+                let bound = if matches!(k, StdlibKernel::ListSum) {
+                    TyBounds::add()
+                } else {
+                    TyBounds::mul()
+                };
+                let s = self.super_var(bound, span)?;
+                let list_s = self.list_var(s)?;
+                return self.structure(FlatType::Fun(list_s, s));
+            }
+            // `List.maximum / minimum : comparable a => List a -> Maybe a`. The
+            // element carries the ORDERING obligation (same as `Math.min/max`);
+            // the result is `Maybe a` over that bounded var. Direct-build so the
+            // element and the Maybe payload share the one bounded super-var.
+            if matches!(k, StdlibKernel::ListMaximum | StdlibKernel::ListMinimum) {
+                let s = self.super_var(TyBounds::ord(), span)?;
+                let list_s = self.list_var(s)?;
+                let maybe_s = self.structure(FlatType::Con {
+                    module: Vec::new(),
+                    name: self.builtins.maybe,
+                    args: vec![s],
+                })?;
+                return self.structure(FlatType::Fun(list_s, maybe_s));
+            }
+            // `List.sort : comparable a => List a -> List a`. The element carries
+            // the ORDERING obligation; input and output share the one bounded
+            // super-var. Direct-build (not `stdlib_scheme` + tie).
+            if matches!(k, StdlibKernel::ListSort) {
+                let s = self.super_var(TyBounds::ord(), span)?;
+                let list_s = self.list_var(s)?;
+                let list_s2 = self.list_var(s)?;
+                return self.structure(FlatType::Fun(list_s, list_s2));
+            }
             // `Basics.toString : a -> String`. The argument carries the
             // STRINGIFY obligation (a bounded super-var → Rust `IpeStringify`):
             // a scalar / record / ADT satisfies it, a bare function (or a value
@@ -4101,6 +4140,37 @@ impl<'a> Builder<'a> {
             // Production never reaches this arm (obligation pre-check early-returns
             // the bounded scheme); it exists so `stdlib_scheme` is total.
             K::ListSortBy => fun(fun(var(0), var(1)), fun(list(var(0)), list(var(0)))),
+            // sort : comparable a => List a -> List a — BASE scheme only (Ord
+            // obligation layered in `constrain_var_kernel`, keyed off id).
+            K::ListSort => fun(list(var(0)), list(var(0))),
+            // sortWith : (a -> a -> Order) -> List a -> List a — fully generic
+            // (the comparator supplies the ordering), so no obligation is needed.
+            K::ListSortWith => fun(
+                fun(var(0), fun(var(0), order())),
+                fun(list(var(0)), list(var(0))),
+            ),
+            // singleton : a -> List a
+            K::ListSingleton => fun(var(0), list(var(0))),
+            // repeat : Int -> a -> List a
+            K::ListRepeat => fun(int(), fun(var(0), list(var(0)))),
+            // sum / product : number a => List a -> a — BASE scheme only
+            // (number obligation layered in `constrain_var_kernel`).
+            K::ListSum | K::ListProduct => fun(list(var(0)), var(0)),
+            // maximum / minimum : comparable a => List a -> Maybe a — BASE
+            // scheme only (Ord obligation layered in `constrain_var_kernel`).
+            K::ListMaximum | K::ListMinimum => fun(list(var(0)), maybe(var(0))),
+            // intersperse : a -> List a -> List a
+            K::ListIntersperse => fun(var(0), fun(list(var(0)), list(var(0)))),
+            // partition : (a -> Bool) -> List a -> (List a, List a)
+            K::ListPartition => fun(
+                fun(var(0), bool_ty()),
+                fun(list(var(0)), tuple2(list(var(0)), list(var(0)))),
+            ),
+            // unzip : List (a, b) -> (List a, List b)
+            K::ListUnzip => fun(
+                list(tuple2(var(0), var(1))),
+                tuple2(list(var(0)), list(var(1))),
+            ),
 
             // ── Basics core Prelude (6 — slice) ──
             K::BasicsNot => fun(bool_ty(), bool_ty()),
@@ -7739,6 +7809,17 @@ mod registry_phase_c_tests {
             // List filterMap/sortBy (2).
             K::ListFilterMap,
             K::ListSortBy,
+            K::ListSort,
+            K::ListSortWith,
+            K::ListSingleton,
+            K::ListRepeat,
+            K::ListSum,
+            K::ListProduct,
+            K::ListMaximum,
+            K::ListMinimum,
+            K::ListIntersperse,
+            K::ListPartition,
+            K::ListUnzip,
             // Basics core Prelude (6 — slice).
             K::BasicsNot,
             K::BasicsIdentity,

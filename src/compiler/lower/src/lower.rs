@@ -13128,6 +13128,13 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ListReverse
                 | KernelFn::ListConcat
                 | KernelFn::ListIsEmpty
+                | KernelFn::ListSort
+                | KernelFn::ListSingleton
+                | KernelFn::ListSum
+                | KernelFn::ListProduct
+                | KernelFn::ListMaximum
+                | KernelFn::ListMinimum
+                | KernelFn::ListUnzip
                 | KernelFn::BasicsNot
                 | KernelFn::BasicsToString
                 | KernelFn::BasicsIdentity
@@ -13375,6 +13382,10 @@ impl<'a> Lowerer<'a> {
                 // ── List batch ────────────────────────────────────────
                 | KernelFn::ListFilterMap
                 | KernelFn::ListSortBy
+                | KernelFn::ListSortWith
+                | KernelFn::ListRepeat
+                | KernelFn::ListIntersperse
+                | KernelFn::ListPartition
                 | KernelFn::BasicsAlways
                 | KernelFn::BasicsModBy
                 | KernelFn::LogInfoWith
@@ -14684,6 +14695,17 @@ impl<'a> Lowerer<'a> {
                     // ── List batch ────────────────────────────────────
                     ("List", "filterMap") => Ok(Callee::Kernel(KernelFn::ListFilterMap)),
                     ("List", "sortBy") => Ok(Callee::Kernel(KernelFn::ListSortBy)),
+                    ("List", "sort") => Ok(Callee::Kernel(KernelFn::ListSort)),
+                    ("List", "sortWith") => Ok(Callee::Kernel(KernelFn::ListSortWith)),
+                    ("List", "singleton") => Ok(Callee::Kernel(KernelFn::ListSingleton)),
+                    ("List", "repeat") => Ok(Callee::Kernel(KernelFn::ListRepeat)),
+                    ("List", "sum") => Ok(Callee::Kernel(KernelFn::ListSum)),
+                    ("List", "product") => Ok(Callee::Kernel(KernelFn::ListProduct)),
+                    ("List", "maximum") => Ok(Callee::Kernel(KernelFn::ListMaximum)),
+                    ("List", "minimum") => Ok(Callee::Kernel(KernelFn::ListMinimum)),
+                    ("List", "intersperse") => Ok(Callee::Kernel(KernelFn::ListIntersperse)),
+                    ("List", "partition") => Ok(Callee::Kernel(KernelFn::ListPartition)),
+                    ("List", "unzip") => Ok(Callee::Kernel(KernelFn::ListUnzip)),
                     ("Basics", "not") => Ok(Callee::Kernel(KernelFn::BasicsNot)),
                     ("Basics", "identity") => Ok(Callee::Kernel(KernelFn::BasicsIdentity)),
                     ("Basics", "always") => Ok(Callee::Kernel(KernelFn::BasicsAlways)),

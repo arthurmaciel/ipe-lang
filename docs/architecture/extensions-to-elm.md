@@ -61,7 +61,7 @@ decisions live here.
 | Module | Present | Diverged | Missing | Notes |
 |---|---|---|---|---|
 | `Basics` | 34 | 6 | 15 | numerics live in `Ipe.Math`, not the auto-prelude |
-| `List` | 20 | 0 | 17 | missing `sort*`, numeric folds, `map2..5`, `filterMap`, `partition`, `unzip` |
+| `List` | 33 | 0 | 4 | `sum`/`product`/`maximum`/`minimum`/`singleton`/`repeat`/`intersperse`/`partition`/`unzip`/`sort`/`sortWith` now present; still missing `map2`–`map5` |
 | `Dict` | 14 | 0 | 8 | missing `update`, `merge`, `filter`, `foldr`, set-ops |
 | `Set` | 10 | 0 | 7 | no HOF surface (`map`/`foldl`/`filter`/`partition`) |
 | `String` | 29 | 2 | 13 | code-point semantics (§5); missing char-fold family, `left`/`right`, `cons`/`uncons` |

@@ -223,6 +223,17 @@ pub enum StdlibKernel {
     // ── List batch ───────────────────────────────────────────────────
     ListFilterMap,
     ListSortBy,
+    ListSort,
+    ListSortWith,
+    ListSingleton,
+    ListRepeat,
+    ListSum,
+    ListProduct,
+    ListMaximum,
+    ListMinimum,
+    ListIntersperse,
+    ListPartition,
+    ListUnzip,
     // ── Basics (core Prelude) ────────────────────────────────────────────────
     BasicsNot,
     BasicsIdentity,
@@ -1683,6 +1694,17 @@ impl StdlibKernel {
             // ── List batch ────────────────────────────────────────────
             Self::ListFilterMap => d("List", "filterMap", 2, Pure, "list_filter_map"),
             Self::ListSortBy => d("List", "sortBy", 2, Pure, "list_sort_by"),
+            Self::ListSort => d("List", "sort", 1, Pure, "list_sort"),
+            Self::ListSortWith => d("List", "sortWith", 2, Pure, "list_sort_with_order"),
+            Self::ListSingleton => d("List", "singleton", 1, Pure, "list_singleton"),
+            Self::ListRepeat => d("List", "repeat", 2, Pure, "list_repeat"),
+            Self::ListSum => d("List", "sum", 1, Pure, "list_sum"),
+            Self::ListProduct => d("List", "product", 1, Pure, "list_product"),
+            Self::ListMaximum => d("List", "maximum", 1, Pure, "list_maximum"),
+            Self::ListMinimum => d("List", "minimum", 1, Pure, "list_minimum"),
+            Self::ListIntersperse => d("List", "intersperse", 2, Pure, "list_intersperse"),
+            Self::ListPartition => d("List", "partition", 2, Pure, "list_partition"),
+            Self::ListUnzip => d("List", "unzip", 1, Pure, "list_unzip"),
             Self::BasicsNot => d("Basics", "not", 1, Pure, "basics_not"),
             Self::BasicsIdentity => d("Basics", "identity", 1, Pure, "basics_identity"),
             Self::BasicsAlways => d("Basics", "always", 2, Pure, "basics_always"),
@@ -3049,6 +3071,17 @@ impl StdlibKernel {
         // ── List batch ────────────────────────────────────────────────
         Self::ListFilterMap,
         Self::ListSortBy,
+        Self::ListSort,
+        Self::ListSortWith,
+        Self::ListSingleton,
+        Self::ListRepeat,
+        Self::ListSum,
+        Self::ListProduct,
+        Self::ListMaximum,
+        Self::ListMinimum,
+        Self::ListIntersperse,
+        Self::ListPartition,
+        Self::ListUnzip,
         // Basics
         Self::BasicsNot,
         Self::BasicsIdentity,
@@ -4307,6 +4340,17 @@ impl StdlibKernel {
             | Self::ListFind
             | Self::ListFilterMap
             | Self::ListSortBy
+            | Self::ListSort
+            | Self::ListSortWith
+            | Self::ListSingleton
+            | Self::ListRepeat
+            | Self::ListSum
+            | Self::ListProduct
+            | Self::ListMaximum
+            | Self::ListMinimum
+            | Self::ListIntersperse
+            | Self::ListPartition
+            | Self::ListUnzip
             | Self::BasicsNot
             | Self::BasicsIdentity
             | Self::BasicsAlways

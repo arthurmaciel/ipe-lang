@@ -1,0 +1,64 @@
+module Main exposing (main)
+
+import Ipe.Prelude exposing (..)
+import Ipe.List as List
+import Ipe.Maybe as Maybe
+
+
+-- Descending Order comparator for List.sortWith.
+descending : Int -> Int -> Order
+descending a b =
+    compare b a
+
+
+main =
+    let
+        xs =
+            [ 3, 1, 4, 1, 5, 9, 2, 6 ]
+
+        total =
+            List.sum xs
+
+        prod =
+            List.product [ 1, 2, 3, 4 ]
+
+        hi =
+            Maybe.withDefault 0 (List.maximum xs)
+
+        lo =
+            Maybe.withDefault 0 (List.minimum xs)
+
+        one =
+            List.sum (List.singleton 7)
+
+        rep =
+            List.sum (List.repeat 4 2)
+
+        gaps =
+            List.length (List.intersperse 0 [ 1, 2, 3 ])
+
+        parts =
+            List.partition (\n -> n > 3) xs
+
+        big =
+            List.length (fst parts)
+
+        pairs =
+            List.unzip [ ( 1, 10 ), ( 2, 20 ), ( 3, 30 ) ]
+
+        keys =
+            List.sum (fst pairs)
+
+        vals =
+            List.sum (snd pairs)
+
+        sortedHead =
+            Maybe.withDefault 0 (List.head (List.sort xs))
+
+        descHead =
+            Maybe.withDefault 0 (List.head (List.sortWith descending xs))
+
+        nums =
+            [ total, prod, hi, lo, one, rep, gaps, big, keys, vals, sortedHead, descHead ]
+    in
+    println (String.join " " (List.map String.fromInt nums))
