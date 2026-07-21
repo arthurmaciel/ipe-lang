@@ -41,19 +41,17 @@
 //! `Var` / `CloneVar`. Carrying bytes keeps the SEAL exact by construction; those
 //! arms simply do not yet gain multi-line layout.
 //!
-//! The legacy string path in `emit_expr.rs` remains the emit default; this path
-//! is exercised by the in-module SEAL + byte-golden tests only, so every commit
-//! stays byte-green against the goldens until the native-emit cutover wires it in.
-
-// Until the native-emit cutover wires these builders into project.rs, they are
-// exercised by the in-module SEAL + byte-golden tests only.
-#![allow(dead_code, reason = "consumed at the native-emit cutover")]
+//! This is the production function-body emit path: [`crate::emit_expr::emit_func`]
+//! renders every body through `build_doc` + [`crate::render::render`], so the
+//! emitted body is `rustfmt`-clean by construction. The string emitter's
+//! [`emit_expr_at`] survives as the leaf builder the structured arms delegate to
+//! (and as the SEAL / byte-golden test oracle), not as the body formatter.
 
 use std::borrow::Cow;
 
-use ipe_diagnostics::{DResult, Diagnostic};
+use ipe_diagnostics::{DResult, Diagnostic, LowerError, Span};
 use ipe_intern::{Interner, Symbol};
-use ipe_ir::{BinOp, Callee, Expr, IrType, KernelFn, ModPath};
+use ipe_ir::{BinOp, Callee, Expr, IrType, KernelFn, MAX_IR_RENDER_DEPTH, ModPath};
 
 use crate::EmitCtx;
 use crate::doc::{ChainOperand, Doc};
@@ -100,6 +98,19 @@ pub fn build_doc(
     depth: u16,
     generics: GenericScope,
 ) -> DResult<Doc> {
+    // The same fail-fast nesting bound the string emitter enforces
+    // ([`emit_expr_at`]): one Rust stack frame per IR level, so an
+    // adversarially deep spine is rejected with a `Lower` diagnostic before it
+    // can overflow the native stack. Shared with the string path via
+    // [`MAX_IR_RENDER_DEPTH`] so the two never drift to different ceilings.
+    if depth > MAX_IR_RENDER_DEPTH {
+        return Err(Diagnostic::Lower {
+            span: Span::DUMMY,
+            msg: LowerError::BackendNestingTooDeep {
+                limit: MAX_IR_RENDER_DEPTH,
+            },
+        });
+    }
     let child = depth + 1;
     match expr {
         // A chain-eligible infix operator: flatten the maximal left-nested
@@ -537,6 +548,21 @@ fn build_binop_chain(
     spine.reverse();
 
     let depth_count = spine.len(); // one wrapping `(` per chain level
+
+    // The chain flattening collapses a same-operator left spine the string
+    // emitter would have recursed through one frame per level. Enforce the shared
+    // nesting bound against that collapsed length so a deep chain fails fast with
+    // the same `Lower` diagnostic ([`emit_expr_at`]'s IPE-L0200) instead of
+    // building a pathologically large `Doc::Chain`.
+    if depth.saturating_add(u16::try_from(depth_count).unwrap_or(u16::MAX)) > MAX_IR_RENDER_DEPTH {
+        return Err(Diagnostic::Lower {
+            span: Span::DUMMY,
+            msg: LowerError::BackendNestingTooDeep {
+                limit: MAX_IR_RENDER_DEPTH,
+            },
+        });
+    }
+
     let mut operands: Vec<ChainOperand> = Vec::with_capacity(depth_count + 1);
 
     // First operand: `(` * depth_count, then the innermost left operand's doc.
