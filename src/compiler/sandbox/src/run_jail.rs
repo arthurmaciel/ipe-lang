@@ -311,6 +311,7 @@ pub fn run_jail_argv(
     profile: &SandboxProfile,
     scoped_tmp: &Path,
     working_tree: &Path,
+    extra_ro_binds: &[PathBuf],
     seccomp_fd: Option<i32>,
     host_env: &dyn Fn(&str) -> Option<OsString>,
     payload: &[OsString],
@@ -365,6 +366,18 @@ pub fn run_jail_argv(
     for tmpfs in ["/home", "/root", "/tmp"] {
         argv.push("--tmpfs".into());
         argv.push(tmpfs.into());
+    }
+
+    // Re-expose paths the tmpfs masks would otherwise hide, read-only. The
+    // emitted app binary (and, when `filesystem` is absent, so the working tree
+    // is NOT already bound, anything it needs at a fixed path) commonly lives
+    // under `$HOME` (e.g. a `CARGO_TARGET_DIR` in `~/.cache`), which the
+    // `--tmpfs /home` mask hides. Read-only: the payload can execute but never
+    // mutate these.
+    for dir in extra_ro_binds {
+        argv.push("--ro-bind".into());
+        argv.push(dir.clone().into());
+        argv.push(dir.clone().into());
     }
 
     // The one writable mount (always), and the working tree read-write only
@@ -608,12 +621,23 @@ pub fn exec_in_run_jail(
     payload.push(app.as_os_str().to_owned());
     payload.extend(app_args.iter().cloned());
 
+    // Re-expose the app binary's directory read-only past the home/tmp tmpfs
+    // masks (a `CARGO_TARGET_DIR` under `~/.cache` is otherwise hidden). The
+    // binary's *parent* is bound so a relocated dynamic loader path or a
+    // co-located artifact resolves; the read-only bind means the app can exec
+    // it but never mutate it.
+    let mut extra_ro_binds: Vec<PathBuf> = Vec::new();
+    if let Some(app_dir) = app.parent() {
+        extra_ro_binds.push(app_dir.to_path_buf());
+    }
+
     let host_env = |k: &str| std::env::var_os(k);
     let argv = run_jail_argv(
         tools,
         profile,
         scoped_tmp,
         working_tree,
+        &extra_ro_binds,
         Some(seccomp_fd),
         &host_env,
         &payload,
@@ -938,6 +962,7 @@ mod tests {
             profile,
             Path::new("/work/tmp-1"),
             Path::new("/work/tree"),
+            &[],
             seccomp_fd,
             &no_env,
             &[OsString::from("/work/tree/target/debug/ipe-app")],
@@ -1027,6 +1052,7 @@ mod tests {
             &p,
             Path::new("/work/tmp-1"),
             Path::new("/work/tree"),
+            &[],
             None,
             &host,
             &[OsString::from("app")],

@@ -93,6 +93,9 @@ const EPERM: u32 = 1;
 const NR_CLONE: u32 = 56;
 const NR_FORK: u32 = 57;
 const NR_VFORK: u32 = 58;
+// `execve`/`execveat` are intentionally NOT denied (see `CREATE_DENIED_NON_CLONE`);
+// these numbers exist to pin their ABI value in the removal-guard test.
+#[cfg_attr(not(test), allow(dead_code))]
 const NR_EXECVE: u32 = 59;
 const NR_PTRACE: u32 = 101;
 const NR_PIVOT_ROOT: u32 = 155;
@@ -102,6 +105,7 @@ const NR_UNSHARE: u32 = 272;
 const NR_SETNS: u32 = 308;
 const NR_PROCESS_VM_READV: u32 = 310;
 const NR_PROCESS_VM_WRITEV: u32 = 311;
+#[cfg_attr(not(test), allow(dead_code))]
 const NR_EXECVEAT: u32 = 322;
 const NR_IO_URING_SETUP: u32 = 425;
 const NR_IO_URING_ENTER: u32 = 426;
@@ -111,6 +115,9 @@ const NR_MOVE_MOUNT: u32 = 429;
 const NR_FSOPEN: u32 = 430;
 const NR_FSCONFIG: u32 = 431;
 const NR_FSMOUNT: u32 = 432;
+// `clone3` is intentionally allowed unconditionally (see `CREATE_DENIED_NON_CLONE`);
+// this number exists to pin its ABI value in the allow-guard test.
+#[cfg_attr(not(test), allow(dead_code))]
 const NR_CLONE3: u32 = 435;
 const NR_MOUNT_SETATTR: u32 = 442;
 
@@ -152,17 +159,44 @@ const BASELINE_DENIED: &[u32] = &[
     NR_MOUNT_SETATTR,
 ];
 
-/// The task-creation syscalls denied when `subprocess` is **absent** — except
-/// legacy `clone` with `CLONE_VM|CLONE_THREAD`, which is thread creation and
-/// must stay allowed (the emitted runtime spawns an OS thread and a
-/// multi-threaded tokio runtime on *every* entry; denying threads would break
-/// every program, a universal false-deny).
+/// The task-creation syscalls denied outright when `subprocess` is **absent**:
+/// `fork` and `vfork`. Legacy `clone` is handled separately (allowed only for a
+/// thread — `CLONE_VM|CLONE_THREAD` — via the flag split below).
 ///
-/// `clone3` is denied outright: its argument is behind a pointer seccomp cannot
-/// dereference, so a flags-based thread/process split is not expressible for it —
-/// and glibc/musl `pthread_create` routes through legacy `clone`, not `clone3`,
-/// so denying `clone3` does not break threads today.
-const CREATE_DENIED_NON_CLONE: &[u32] = &[NR_FORK, NR_VFORK, NR_EXECVE, NR_EXECVEAT, NR_CLONE3];
+/// **`clone3` is deliberately NOT here — it is allowed unconditionally.** On
+/// glibc >= 2.34 (verified: `pthread_create` on glibc 2.35 issues exactly one
+/// `clone3({flags=CLONE_VM|…|CLONE_THREAD})`), thread creation routes through
+/// `clone3`, and the emitted runtime spawns an OS thread + a multi-threaded
+/// tokio runtime on *every* entry. seccomp cannot inspect `clone3`'s argument
+/// (the flags live in a `struct clone_args` behind a pointer classic BPF cannot
+/// dereference), so a thread/process split is not expressible for it — it is
+/// all-or-nothing, and denying it is a universal false-deny (nothing runs).
+///
+/// Allowing `clone3` means a subprocess-absent program *can* raw-`clone3` a new
+/// process. That does not breach the capability boundary: the child is born
+/// inside the *same* jail — same PID/net/mount/IPC namespaces, same scrubbed
+/// env and fresh `/proc`, and the same seccomp filter (a child inherits the
+/// parent's filter, and `no_new_privs` makes it unremovable across `execve`). So
+/// the child is confined **identically to the parent and cannot exceed its
+/// capability set**; it can reach no network/file/env the parent could not.
+/// What the `subprocess` axis still controls is the common, portable spawn paths
+/// (`fork`/`vfork`/legacy-process-`clone` — the syscalls `posix_spawn`,
+/// `Command::new`, `system`, and `fork()+exec()` use); a determined wrapper
+/// using raw `clone3` can make an equally-confined sibling. That residual (a
+/// process *count*, not a capability axis) is the coarse first cut.
+///
+/// **`execve`/`execveat` are deliberately NOT here** (replace-not-spawn model):
+/// `execve` *replaces* the current process image, it does not create a child. A
+/// subprocess needs a `fork`/`vfork`/`clone`(process) FIRST, then an `execve` in
+/// the child — and those fork steps are denied above, so the common subprocess
+/// paths are contained without touching `execve`. Denying `execve` would also
+/// kill the jail's own launch: bubblewrap installs the filter and then `execve`s
+/// the confined payload (`prlimit`, then the app), so an `execve` deny is a
+/// universal false-deny. A lone `execve` grants no new authority: the seccomp
+/// filter survives it (kernel design), and `no_new_privs` + the read-only root
+/// leave the exec'd image equally confined — this holds for a raw-`clone3` child
+/// that then execs, too.
+const CREATE_DENIED_NON_CLONE: &[u32] = &[NR_FORK, NR_VFORK];
 
 /// Build the seccomp program for the run jail.
 ///
@@ -334,6 +368,67 @@ mod tests {
             prog.iter()
                 .any(|i| i.code == (BPF_JMP | BPF_JEQ | BPF_K) && i.k == NR_CLONE),
         );
+    }
+
+    #[test]
+    fn execve_is_never_denied_in_either_mode() {
+        // execve/execveat must stay ALLOWED even when subprocess is absent:
+        // bubblewrap execs the confined payload, and execve replaces (never
+        // spawns) a process. This pins the removal so a future edit cannot
+        // silently re-add them and reintroduce the universal false-deny.
+        for allow in [true, false] {
+            let prog = build_program(allow);
+            for nr in [NR_EXECVE, NR_EXECVEAT] {
+                assert!(
+                    !prog
+                        .iter()
+                        .any(|i| i.code == (BPF_JMP | BPF_JEQ | BPF_K) && i.k == nr),
+                    "execve nr {nr} must not be denied (allow_subprocess={allow})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn clone3_is_never_denied_in_either_mode() {
+        // clone3 must stay ALLOWED even when subprocess is absent: on glibc
+        // >= 2.34 pthread_create issues clone3(CLONE_THREAD), so denying it kills
+        // every thread (a universal false-deny). seccomp cannot inspect clone3's
+        // pointer arg, so it is all-or-nothing; the child it may create is
+        // confined identically to the parent (same filter + namespaces). This
+        // pins the allow so a future edit cannot silently re-add the deny.
+        for allow in [true, false] {
+            let prog = build_program(allow);
+            assert!(
+                !prog
+                    .iter()
+                    .any(|i| i.code == (BPF_JMP | BPF_JEQ | BPF_K) && i.k == NR_CLONE3),
+                "clone3 must not be denied (allow_subprocess={allow})"
+            );
+        }
+    }
+
+    #[test]
+    fn fork_and_vfork_are_denied_only_when_subprocess_absent() {
+        // The portable spawn paths (posix_spawn/Command::new/system/fork+exec)
+        // route through fork/vfork/legacy-process-clone; those must EPERM when
+        // subprocess is absent and be allowed when granted.
+        let denied = build_program(false);
+        let allowed = build_program(true);
+        for nr in [NR_FORK, NR_VFORK] {
+            assert!(
+                denied
+                    .iter()
+                    .any(|i| i.code == (BPF_JMP | BPF_JEQ | BPF_K) && i.k == nr),
+                "fork/vfork {nr} must be denied when subprocess absent"
+            );
+            assert!(
+                !allowed
+                    .iter()
+                    .any(|i| i.code == (BPF_JMP | BPF_JEQ | BPF_K) && i.k == nr),
+                "fork/vfork {nr} must be allowed when subprocess granted"
+            );
+        }
     }
 
     #[test]
