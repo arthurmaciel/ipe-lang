@@ -425,6 +425,12 @@ promise: the public surface is committed to and breaking changes thereafter bump
 the major per SemVer. Until then, treat any `0.x` release as potentially
 breaking.
 
+**Ship a release for every user-facing change.** Any change to the user
+interface — the CLI (commands, flags, help text), diagnostics and `explain`
+pages, the formatter's output, or a public API — is shipped as a release: merge
+the standing release PR once the change lands, so users receive it under a
+version rather than only on `main`.
+
 ## Workflow rules
 
 - **Always run mem-guard** (§1).
