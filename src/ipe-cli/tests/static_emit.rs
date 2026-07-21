@@ -145,7 +145,9 @@ fn static_emit_mimalloc_optin_activates_mimalloc() {
 /// CLI flag refusals fire before any compilation or filesystem write.
 #[test]
 fn cli_refusals_are_typed_and_artifact_free() {
-    // Unknown allocator (closed enum — jemalloc is documented-and-rejected).
+    // Unknown allocator: the closed `--allocator` enum is parsed at the CLI
+    // boundary, so an unknown name is a typed `UsageOwned` refusal there — never
+    // reaching the build plan.
     let err = ipe::run_cli(&[
         "build".into(),
         "NoSuch.ipe".into(),
@@ -155,10 +157,7 @@ fn cli_refusals_are_typed_and_artifact_free() {
     ])
     .expect_err("unknown allocator must refuse");
     assert!(
-        matches!(
-            &err,
-            CliError::StaticRefusal(build_plan::Refusal::UnknownAllocator { got }) if got == "jemalloc"
-        ),
+        matches!(&err, CliError::UsageOwned(msg) if msg.contains("jemalloc")),
         "got: {err:?}"
     );
 

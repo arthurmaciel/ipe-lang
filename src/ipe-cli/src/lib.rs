@@ -18,6 +18,7 @@
 pub mod api_surface;
 pub mod build_plan;
 mod cache;
+pub mod cli_args;
 pub mod diff;
 pub mod ffi;
 pub mod fmt;
@@ -1561,79 +1562,23 @@ fn default_entry() -> Result<String, CliError> {
 /// `Err` for a build failure (INV-3: a red build is logged, not fatal);
 /// only misuse / setup failures propagate.
 fn run_watch(rest: &[String]) -> Result<(), CliError> {
-    let mut it = rest.iter();
-    let entry = match it.next() {
-        Some(e) => e.clone(),
+    let args = cli_args::parse_watch(rest)?;
+    let entry = match args.entry {
+        Some(e) => e,
         None => default_entry()?,
     };
-    let mut out: Option<String> = None;
-    let mut runtime: Option<String> = None;
-    let mut port: u16 = 8000;
-    while let Some(flag) = it.next() {
-        match flag.as_str() {
-            "--out" => out = Some(it.next().ok_or(CliError::Usage(USAGE))?.clone()),
-            "--runtime" => runtime = Some(it.next().ok_or(CliError::Usage(USAGE))?.clone()),
-            "--port" => {
-                let raw = it.next().ok_or(CliError::Usage(USAGE))?;
-                port = raw.parse().map_err(|_| {
-                    CliError::UsageOwned(format!("watch: invalid --port value: {raw}"))
-                })?;
-            }
-            _ => return Err(CliError::Usage(USAGE)),
-        }
-    }
 
-    let out_dir = out.map_or_else(|| PathBuf::from("out").join("rust"), PathBuf::from);
-    let runtime_dir = match runtime {
+    let out_dir = args
+        .out
+        .map_or_else(|| PathBuf::from("out").join("rust"), PathBuf::from);
+    let runtime_dir = match args.runtime {
         Some(r) => PathBuf::from(r),
         None => resolve_runtime()?,
     };
 
     let mut opts = watch::WatchOptions::new(PathBuf::from(entry), out_dir, runtime_dir);
-    opts.port = port;
+    opts.port = args.port;
     watch::run(&opts)
-}
-
-/// The static-request CLI flags shared by `build` and `run` — one parser, so
-/// the two subcommands' static surfaces cannot drift.
-#[derive(Default)]
-struct StaticCliFlags {
-    static_flag: bool,
-    target: Option<String>,
-    allocator: Option<build_plan::AllocatorChoice>,
-    allow_slow_allocator: bool,
-}
-
-impl StaticCliFlags {
-    /// Consume `flag` (pulling a value from `it` where the flag takes one).
-    /// Returns `Ok(false)` when the flag is not a static-request flag.
-    fn consume(
-        &mut self,
-        flag: &str,
-        it: &mut std::slice::Iter<'_, String>,
-    ) -> Result<bool, CliError> {
-        match flag {
-            "--static" => self.static_flag = true,
-            "--target" => self.target = Some(it.next().ok_or(CliError::Usage(USAGE))?.clone()),
-            "--allocator" => {
-                let raw = it.next().ok_or(CliError::Usage(USAGE))?;
-                self.allocator = Some(build_plan::AllocatorChoice::parse(raw)?);
-            }
-            "--allow-slow-allocator" => self.allow_slow_allocator = true,
-            _ => return Ok(false),
-        }
-        Ok(true)
-    }
-
-    /// The CLI precedence layer these flags express.
-    fn layer(self) -> build_plan::StaticRequestLayer {
-        build_plan::StaticRequestLayer {
-            static_build: self.static_flag.then_some(true),
-            target: self.target,
-            allocator: self.allocator,
-            allow_slow_allocator: self.allow_slow_allocator.then_some(true),
-        }
-    }
 }
 
 /// Route an entry argument to its `ipe.toml`, when one governs it:
@@ -1688,57 +1633,36 @@ fn resolve_static_plan(
 
 /// `ipe build [<path>]` — compile a program to a native or WebAssembly artifact.
 fn run_build(rest: &[String]) -> Result<(), CliError> {
-    let mut it = rest.iter();
-    let entry = match it.next() {
-        Some(e) => e.clone(),
+    let args = cli_args::parse_build(rest)?;
+    let entry = match args.entry {
+        Some(e) => e,
         None => default_entry()?,
     };
-    let mut out: Option<String> = None;
-    let mut runtime: Option<String> = None;
-    let mut emit_ir = false;
-    let mut fix = false;
-    let mut static_flags = StaticCliFlags::default();
-    while let Some(flag) = it.next() {
-        if static_flags.consume(flag, &mut it)? {
-            continue;
-        }
-        match flag.as_str() {
-            "--out" => out = Some(it.next().ok_or(CliError::Usage(USAGE))?.clone()),
-            "--runtime" => runtime = Some(it.next().ok_or(CliError::Usage(USAGE))?.clone()),
-            "--emit-ir" => emit_ir = true,
-            "--fix" => fix = true,
-            _ => return Err(CliError::Usage(USAGE)),
-        }
-    }
-    // `--target wasm` selects the browser target (a compilation axis), not a
-    // static-link triple; it never enters static-request resolution.
-    let wasm_target = static_flags.target.as_deref() == Some("wasm");
-    if wasm_target && (static_flags.static_flag || static_flags.allocator.is_some()) {
-        return Err(CliError::Usage(
-            "--static / --allocator are native-target flags; they do not compose with --target wasm",
-        ));
-    }
-    if wasm_target {
-        static_flags.target = None;
-    }
-    let cli_layer = static_flags.layer();
-
     let entry_path = PathBuf::from(&entry);
 
     // `--fix` carries durable authorization: apply machine-applicable fixes
     // non-interactively before the (re-run) build sees the source.
-    if fix {
+    if args.fix {
         apply_fixes_cmd(&entry_path, true, &mut std::io::stdout())?;
     }
 
-    if emit_ir {
-        let tree = emit_ir_text(&entry_path)?;
-        print!("{tree}");
-        return Ok(());
-    }
+    // Parse guaranteed `--emit-ir` composes with no emit-affecting flag, so the
+    // IR-dump path carries no options to drop.
+    let (out, wasm_target, cli_layer) = match args.mode {
+        cli_args::BuildMode::EmitIr => {
+            let tree = emit_ir_text(&entry_path)?;
+            print!("{tree}");
+            return Ok(());
+        }
+        cli_args::BuildMode::Emit {
+            out,
+            wasm,
+            static_layer,
+        } => (out, wasm, static_layer),
+    };
 
     let out_dir = out.map_or_else(|| PathBuf::from("out").join("rust"), PathBuf::from);
-    let runtime_dir = match runtime {
+    let runtime_dir = match args.runtime {
         Some(r) => PathBuf::from(r),
         None => resolve_runtime()?,
     };
@@ -1903,40 +1827,19 @@ fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
 /// exec step replaces the current process (Unix) or propagates the child's
 /// exit code (all platforms) so the caller sees it as `ipe run`'s own exit.
 fn run_run(rest: &[String]) -> Result<(), CliError> {
-    // Split on "--": everything before is ipe flags; everything after is
-    // forwarded to the emitted binary.
-    let dash_dash = rest.iter().position(|a| a == "--");
-    let (ipe_args, bin_args) = dash_dash.map_or((rest, [].as_slice()), |pos| {
-        // `pos` is a valid index returned by `position`, and `pos + 1 <=
-        // rest.len()` (a trailing `--` yields an empty tail), so both splits are
-        // in-bounds — `split_at` proves it without an indexing panic path.
-        let (before, after_incl) = rest.split_at(pos);
-        (before, after_incl.get(1..).unwrap_or(&[]))
-    });
-
-    let mut it = ipe_args.iter();
-    let entry = match it.next() {
-        Some(e) => e.clone(),
+    let args = cli_args::parse_run(rest)?;
+    let bin_args = args.bin_args;
+    let cli_layer = args.static_layer;
+    let entry = match args.entry {
+        Some(e) => e,
         None => default_entry()?,
     };
-    let mut out: Option<String> = None;
-    let mut runtime: Option<String> = None;
-    let mut static_flags = StaticCliFlags::default();
-    while let Some(flag) = it.next() {
-        if static_flags.consume(flag, &mut it)? {
-            continue;
-        }
-        match flag.as_str() {
-            "--out" => out = Some(it.next().ok_or(CliError::Usage(USAGE))?.clone()),
-            "--runtime" => runtime = Some(it.next().ok_or(CliError::Usage(USAGE))?.clone()),
-            _ => return Err(CliError::Usage(USAGE)),
-        }
-    }
-    let cli_layer = static_flags.layer();
 
     let entry_path = PathBuf::from(&entry);
-    let out_dir = out.map_or_else(|| PathBuf::from("out").join("rust"), PathBuf::from);
-    let runtime_dir = match runtime {
+    let out_dir = args
+        .out
+        .map_or_else(|| PathBuf::from("out").join("rust"), PathBuf::from);
+    let runtime_dir = match args.runtime {
         Some(r) => PathBuf::from(r),
         None => resolve_runtime()?,
     };
@@ -2089,16 +1992,12 @@ fn run_explain(rest: &[String]) -> Result<(), CliError> {
 /// Default is interactive per-edit confirmation;
 /// `--yes` is durable authorization to apply every machine-applicable edit.
 fn run_fix(rest: &[String]) -> Result<(), CliError> {
-    let mut it = rest.iter();
-    let entry = it.next().ok_or(CliError::Usage(USAGE))?.clone();
-    let mut auto = false;
-    for flag in it {
-        match flag.as_str() {
-            "--yes" => auto = true,
-            _ => return Err(CliError::Usage(USAGE)),
-        }
-    }
-    apply_fixes_cmd(&PathBuf::from(&entry), auto, &mut std::io::stdout())?;
+    let args = cli_args::parse_fix(rest)?;
+    apply_fixes_cmd(
+        &PathBuf::from(&args.entry),
+        args.auto,
+        &mut std::io::stdout(),
+    )?;
     Ok(())
 }
 
