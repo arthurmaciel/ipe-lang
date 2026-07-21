@@ -1,0 +1,27 @@
+module Main exposing (main)
+
+-- A minimal Iced counter, mapped onto Ipê's TEA over the REAL crates.io `iced`
+-- crate (auto-FFI-bound, shim-free). Iced's Elm architecture is Ipê's:
+--
+--   Model   = a `Counter` struct  → [[rust.provide.struct]]
+--   Message = an `Increment`/`Decrement` enum → [[rust.provide.enum]]
+--   update  : Message -> Counter -> Counter → [[rust.provide.closure]]
+--   view    : Counter -> Element Message     → [[rust.provide.closure]]
+--
+-- The `[rust.provide.*]` decls in ipe.toml define these Rust types from Ipê and
+-- emit them (plus their constructors) into the generated `_bindings.rs`. That
+-- emitted Rust cargo-builds against real Iced — the SEAL for the provide forms.
+--
+-- BLOCKING GAP (filed to the FFI backlog): the Ipê-side FORWARDER plumbing for
+-- provide-defined types is not wired yet — the interface admits no `Counter` /
+-- `Message` forwarder an Ipê program can call, and no way to hand a boxed Ipê
+-- closure to Iced's `run`. So this Main is currently a placeholder: it names the
+-- surface the bindings define, but the driver's counter loop cannot yet be
+-- entered from Ipê. See examples/iced-counter/README.md for the exact status.
+
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
+
+
+main =
+    println "iced-counter: provide.struct/enum/closure bindings emitted; Ipê-side forwarder plumbing pending (see README)."

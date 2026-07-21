@@ -296,6 +296,15 @@ and preserves the SEAL + over-drop keystone.
 * **P3 — multi-arg closures + `Result`/`Option` returns** (fallible callback
   bodies fold through `ipe_error_from_foreign`).
 * **P4 — `provide.enum`** (Ipê union → Rust enum; reuse `EnumCtor` per variant).
+  *Landed:* `EnumDef` in `carrier.rs` (unit + tuple-payload variants over the
+  closed carrier set, IEEE-754 fence generalised to a sum), `FnShape::EnumDefCtor`
+  wired through `decode_shape`/`shape_fallibility`/`emit_fn_region` + the
+  interface admission gate, `[[rust.provide.enum]]` manifest reader in the CLI's
+  `ffi.rs`. Emits the `#[derive]`ed `enum` + one constructor per variant. SEAL
+  fixture `tests/provide_enum_seal.rs` (cargo build+run under `IPE_E2E`). Ipê-side
+  forwarder plumbing deferred with `provide.struct`. The derive allowlist gained
+  `Debug` (total for every carrier, no IEEE-754 hazard) because Iced's
+  `Sandbox::Message: Debug` bound requires it.
 * **P5 — async-returning closures**, gated behind the async-bridge milestone
   (`async-ffi-bridge-design.md`); `Send`-proof composition per that spec.
 * **P6 — escape hatch B** (`#[ipe::provide]` companion-crate proc-macro) only if
