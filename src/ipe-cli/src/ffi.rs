@@ -930,6 +930,19 @@ fn add_one(
             .unwrap_or(json),
         _ => json,
     };
+    // Merge any `[[rust.provide.closure]]` entries the project manifest declares
+    // for this crate into the inspection document BEFORE the driver decodes it,
+    // so the author-declared adapter flows through the same `PkgInfo` gate + the
+    // unforgeable `FfiInterface` module as an inspected binding.
+    let doc_text = match std::fs::read_to_string(PROJECT_MANIFEST) {
+        Ok(text) => {
+            let closures = rust_provide_closures_from_manifest(&text);
+            let sole_dep = rust_dependencies_from_manifest(&text).len() <= 1;
+            merge_provide_closures(&doc_text, krate.name().as_str(), &closures, sole_dep)?
+        }
+        // No manifest (a bare `ipe add` outside a project) ⇒ nothing to merge.
+        Err(_) => doc_text,
+    };
     let (pkg, paths) = ipe_ffi::driver::install_from_inspection(cache, &doc_text)
         .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
     let iface = ipe_ffi::interface::crate_interface(&pkg);
@@ -1149,8 +1162,27 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
             )));
         }
     };
+    // Any `[[rust.provide.closure]]` entries are merged per-crate below, keyed
+    // by the crate's inspection `pkg`/`name` field, so an author-declared
+    // adapter flows through the driver's decode gate exactly like an inspected
+    // binding. `sole_dep` decides whether an unqualified entry may attach.
+    let closures = rust_provide_closures_from_manifest(&text);
+    let sole_dep = deps.len() <= 1;
     for item in items {
-        let (pkg, paths) = ipe_ffi::driver::install_from_inspection(&cache, &item.to_string())
+        // The crate's own name, from its inspection document, is the key an
+        // unqualified `[[rust.provide.closure]]` attaches to under `sole_dep`
+        // and a qualified one matches against.
+        // The manifest's `[rust.dependencies]` key is the crates.io name (the
+        // inspection `name`), so match on it; `pkg` (the lib ident) is the
+        // fallback for a legacy document that omits `name`.
+        let item_crate = item
+            .get("name")
+            .or_else(|| item.get("pkg"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+        let merged = merge_provide_closures(&item.to_string(), &item_crate, &closures, sole_dep)?;
+        let (pkg, paths) = ipe_ffi::driver::install_from_inspection(&cache, &merged)
             .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
         let iface = ipe_ffi::interface::crate_interface(&pkg);
         println!(
@@ -1174,6 +1206,29 @@ struct ManifestDep {
     version: String,
     /// The requested feature list (empty when unspecified).
     features: Vec<String>,
+}
+
+/// One `[[rust.provide.closure]]` manifest entry — the author-declared surface
+/// that turns an Ipê function value into a Rust `dyn Fn` of an exact signature.
+///
+/// This is Rust-side native code shown to the user under informed consent, like
+/// any `[rust.*]` surface; it never routes untrusted text into emitted Rust —
+/// the `signature` is re-parsed through the closed [`ipe_ffi`] carrier/bound
+/// gate (`ClosureSig`) in the driver's `PkgInfo` decode, so a malformed entry
+/// over-drops rather than emit-and-cargo-fail, and the wrapper the driver mints
+/// lives in the unforgeable `FfiInterface` module exactly like every other
+/// binding (user `.ipe` source still cannot mint a `ForeignCall`).
+#[derive(Debug, PartialEq, Eq)]
+struct ManifestProvideClosure {
+    /// The dependency this closure adapter augments (the `[rust.dependencies]`
+    /// key). Empty ⇒ attach to the sole dependency (an ambiguity when there is
+    /// more than one, refused at merge).
+    krate: String,
+    /// The wrapper name (the Ipê-facing binding / tri-artifact key).
+    name: String,
+    /// The exact author-declared target signature, verbatim from the manifest.
+    /// It reaches emitted Rust only after re-parsing through `ClosureSig`.
+    signature: String,
 }
 
 /// Extract the manifest's `[rust.dependencies]` / `["rust.dependencies"]`
@@ -1269,6 +1324,130 @@ fn find_inline_key(body: &str, key: &str) -> Option<usize> {
         from = at + key.len();
     }
     None
+}
+
+/// Extract the manifest's `[[rust.provide.closure]]` array-of-tables entries.
+///
+/// Each `[[rust.provide.closure]]` header opens a new entry; its `name`,
+/// `signature`, and optional `crate` keys are read line-by-line until the next
+/// table header. Only complete entries (both `name` and `signature` present)
+/// are returned — an entry missing either is dropped here, never merged as a
+/// half-formed function. The `signature` string is carried verbatim; it is the
+/// driver's `ClosureSig` decode, not this reader, that validates it.
+fn rust_provide_closures_from_manifest(text: &str) -> Vec<ManifestProvideClosure> {
+    let mut in_table = false;
+    let mut out: Vec<ManifestProvideClosure> = Vec::new();
+    let mut cur: Option<(String, String, String)> = None; // (crate, name, signature)
+    let flush = |cur: &mut Option<(String, String, String)>,
+                 out: &mut Vec<ManifestProvideClosure>| {
+        if let Some((krate, name, signature)) = cur.take() {
+            if !name.is_empty() && !signature.is_empty() {
+                out.push(ManifestProvideClosure {
+                    krate,
+                    name,
+                    signature,
+                });
+            }
+        }
+    };
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            flush(&mut cur, &mut out);
+            in_table = line == "[[rust.provide.closure]]" || line == "[[\"rust.provide.closure\"]]";
+            if in_table {
+                cur = Some((String::new(), String::new(), String::new()));
+            }
+            continue;
+        }
+        if !in_table || line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
+        let key = k.trim().trim_matches('"');
+        let value = v.trim().trim_matches('"').to_owned();
+        if let Some((krate, name, signature)) = cur.as_mut() {
+            match key {
+                "crate" => *krate = value,
+                "name" => *name = value,
+                "signature" => *signature = value,
+                _ => {}
+            }
+        }
+    }
+    flush(&mut cur, &mut out);
+    out
+}
+
+/// Merge every `[[rust.provide.closure]]` entry that targets `crate_name` into
+/// the crate's inspection JSON, as synthetic `functions` carrying the
+/// `isClosureAdapter` wire flag and the verbatim `closureSig`.
+///
+/// The driver's `install_from_inspection` already accepts the merged document
+/// and decodes each synthetic entry through the same `PkgInfo` gate as an
+/// inspected function (an ill-formed `signature` over-drops at
+/// `ClosureSig::parse`, never emit-and-cargo-fail). The trust gate is intact:
+/// the entry is author-declared native code the driver mints into the
+/// `FfiInterface` module — user `.ipe` source never sees it.
+///
+/// An entry whose `crate` is empty attaches to `crate_name` only when it is the
+/// SOLE dependency (`sole_dep`); an unqualified entry under a multi-crate
+/// manifest is ambiguous and refused, never silently attached to every crate.
+fn merge_provide_closures(
+    inspection_json: &str,
+    crate_name: &str,
+    closures: &[ManifestProvideClosure],
+    sole_dep: bool,
+) -> Result<String, CliError> {
+    // An unqualified entry under a multi-crate manifest cannot be attributed —
+    // refuse rather than guess (parse, don't validate at the manifest boundary).
+    if !sole_dep {
+        if let Some(ambiguous) = closures.iter().find(|c| c.krate.is_empty()) {
+            return Err(CliError::UsageOwned(format!(
+                "ipe: [[rust.provide.closure]] `{}` has no `crate` key but the manifest \
+                 lists more than one [rust.dependencies] crate — add `crate = \"<name>\"` \
+                 to say which crate it augments",
+                ambiguous.name
+            )));
+        }
+    }
+    let matching: Vec<&ManifestProvideClosure> = closures
+        .iter()
+        .filter(|c| {
+            if c.krate.is_empty() {
+                sole_dep
+            } else {
+                c.krate == crate_name
+            }
+        })
+        .collect();
+    if matching.is_empty() {
+        return Ok(inspection_json.to_owned());
+    }
+    let mut doc: serde_json::Value = serde_json::from_str(inspection_json)
+        .map_err(|e| CliError::UsageOwned(format!("ipe: inspection JSON is not an object: {e}")))?;
+    let obj = doc
+        .as_object_mut()
+        .ok_or_else(|| CliError::UsageOwned("ipe: inspection JSON is not an object".to_owned()))?;
+    let serde_json::Value::Array(functions) = obj
+        .entry("functions")
+        .or_insert_with(|| serde_json::Value::Array(Vec::new()))
+    else {
+        return Err(CliError::UsageOwned(
+            "ipe: inspection `functions` is not an array".to_owned(),
+        ));
+    };
+    for c in matching {
+        functions.push(serde_json::json!({
+            "name": c.name,
+            "effect": "pure",
+            "isClosureAdapter": true,
+            "closureSig": c.signature,
+        }));
+    }
+    Ok(doc.to_string())
 }
 
 #[cfg(test)]
@@ -1623,6 +1802,119 @@ mod tests {
         assert!(
             clash.is_err(),
             "a direct-crate version conflict still refuses"
+        );
+    }
+
+    #[test]
+    fn manifest_provide_closure_array_of_tables_parses() {
+        let text = "[rust.dependencies]\ndemo = \"1\"\n\n\
+                    [[rust.provide.closure]]\n\
+                    crate = \"demo\"\n\
+                    name = \"update_fn\"\n\
+                    signature = \"Fn(Int, Bool) -> Int + Send + Sync + 'static\"\n\n\
+                    [[rust.provide.closure]]\n\
+                    name = \"draw_fn\"\n\
+                    signature = \"Fn(Int) -> Bool + Send + Sync + 'static\"\n";
+        assert_eq!(
+            rust_provide_closures_from_manifest(text),
+            vec![
+                ManifestProvideClosure {
+                    krate: "demo".to_owned(),
+                    name: "update_fn".to_owned(),
+                    signature: "Fn(Int, Bool) -> Int + Send + Sync + 'static".to_owned(),
+                },
+                ManifestProvideClosure {
+                    krate: String::new(),
+                    name: "draw_fn".to_owned(),
+                    signature: "Fn(Int) -> Bool + Send + Sync + 'static".to_owned(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_provide_closure_missing_name_or_signature_is_dropped_not_half_merged() {
+        let text = "[[rust.provide.closure]]\nname = \"no_sig\"\n\n\
+                    [[rust.provide.closure]]\nsignature = \"Fn(Int) -> Int\"\n";
+        assert!(rust_provide_closures_from_manifest(text).is_empty());
+    }
+
+    #[test]
+    fn merge_injects_a_matching_closure_as_a_synthetic_function() {
+        let doc = "{\"pkg\":\"demo\",\"name\":\"demo\",\"functions\":[]}";
+        let closures = vec![ManifestProvideClosure {
+            krate: "demo".to_owned(),
+            name: "update_fn".to_owned(),
+            signature: "Fn(Int) -> Int + Send + Sync + 'static".to_owned(),
+        }];
+        let merged = merge_provide_closures(doc, "demo", &closures, true).expect("merges");
+        let val: serde_json::Value = serde_json::from_str(&merged).expect("valid json");
+        let fns = val["functions"].as_array().expect("functions array");
+        assert_eq!(fns.len(), 1);
+        assert_eq!(fns[0]["name"], "update_fn");
+        assert_eq!(fns[0]["isClosureAdapter"], true);
+        assert_eq!(
+            fns[0]["closureSig"],
+            "Fn(Int) -> Int + Send + Sync + 'static"
+        );
+    }
+
+    #[test]
+    fn merge_leaves_a_non_matching_crate_untouched() {
+        let doc = "{\"pkg\":\"other\",\"name\":\"other\",\"functions\":[]}";
+        let closures = vec![ManifestProvideClosure {
+            krate: "demo".to_owned(),
+            name: "update_fn".to_owned(),
+            signature: "Fn(Int) -> Int".to_owned(),
+        }];
+        // A qualified entry for `demo` does not attach to `other`.
+        let merged = merge_provide_closures(doc, "other", &closures, false).expect("merges");
+        let val: serde_json::Value = serde_json::from_str(&merged).expect("valid json");
+        assert!(val["functions"].as_array().expect("array").is_empty());
+    }
+
+    #[test]
+    fn an_unqualified_closure_under_a_multi_crate_manifest_is_refused() {
+        let doc = "{\"pkg\":\"demo\",\"name\":\"demo\",\"functions\":[]}";
+        let closures = vec![ManifestProvideClosure {
+            krate: String::new(),
+            name: "update_fn".to_owned(),
+            signature: "Fn(Int) -> Int".to_owned(),
+        }];
+        // sole_dep = false ⇒ an unattributed entry cannot be placed: refuse.
+        assert!(merge_provide_closures(doc, "demo", &closures, false).is_err());
+        // sole_dep = true ⇒ it attaches to the one crate.
+        assert!(merge_provide_closures(doc, "demo", &closures, true).is_ok());
+    }
+
+    /// The manifest→adapter SEAL: a `[[rust.provide.closure]]` declared in an
+    /// `ipe.toml` flows through the CLI merge glue, then the driver's `PkgInfo`
+    /// decode, and emits the closure-adapter wrapper Rust — the same path
+    /// `ipe rust install` drives, minus the sandbox/inspector spawn. Without the
+    /// merge glue the declared closure never becomes an emitted adapter.
+    #[test]
+    fn a_manifest_provide_closure_produces_the_emitted_adapter() {
+        let manifest = "[rust.dependencies]\ndemo = \"1\"\n\n\
+                        [[rust.provide.closure]]\n\
+                        name = \"apply_fn\"\n\
+                        signature = \"Fn(Int) -> Int + Send + Sync + 'static\"\n";
+        let closures = rust_provide_closures_from_manifest(manifest);
+        let sole_dep = rust_dependencies_from_manifest(manifest).len() <= 1;
+        let inspection = "{\"pkg\":\"demo\",\"name\":\"demo\",\"version\":\"0.1.0\",\
+                          \"functions\":[],\"errors\":[]}";
+        let merged =
+            merge_provide_closures(inspection, "demo", &closures, sole_dep).expect("merges");
+        let pkg = ipe_ffi::pkginfo::PkgInfo::decode_json(&merged).expect("merged doc decodes");
+        let bindings = ipe_ffi::bindings::emit_bindings(&pkg);
+        assert!(
+            bindings.contains(
+                "pub fn demo_apply_fn(__ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static>)"
+            ),
+            "the manifest-declared closure must emit its adapter wrapper:\n{bindings}"
+        );
+        assert!(
+            pkg.dropped().is_empty(),
+            "a well-formed provide entry over-drops nothing"
         );
     }
 }
