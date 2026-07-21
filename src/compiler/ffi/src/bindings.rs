@@ -1511,6 +1511,13 @@ fn closure_adapter_lines(
     let ipe_fn_ty = format!("Box<{}>", dyn_fn(&crate_ret));
     let out_ty = format!("Box<{}>", dyn_fn(&crate_ret));
     let wrapper = &cx.rust_name;
+    // The opaque handle nominal the interface surfaces this adapter's boxed
+    // closure as. Emitting the `type <Handle> = <out_ty>;` alias INSIDE this
+    // region — the same `Vec` the survivor oracle observes — makes over-drop
+    // atomic: the interface admits the forwarder only when this region emits, so
+    // it can never reference a `<Handle>` alias that was not also emitted. The
+    // alias and the returned box share `out_ty`, so their types cannot skew.
+    let handle = crate::naming::closure_handle_nominal(&cx.f.wrapper_ref_name());
     // The captured Ipê closure. `Arc` gives the returned closure `Clone` for
     // multi-call re-entry without cloning the Ipê value itself.
     let call = if forwarded_args.is_empty() {
@@ -1521,7 +1528,8 @@ fn closure_adapter_lines(
     let crate_params_joined = crate_param_decls.join(", ");
     let body_lines = closure_per_call_body(&sig.ret, &call, wrapper);
     let mut out = vec![
-        format!("pub fn {wrapper}(__ipe_fn: {ipe_fn_ty}) -> {out_ty} {{"),
+        format!("pub type {handle} = {out_ty};"),
+        format!("pub fn {wrapper}(__ipe_fn: {ipe_fn_ty}) -> {handle} {{"),
         "    let __ipe_fn = std::sync::Arc::new(__ipe_fn);".to_owned(),
         format!("    Box::new(move |{crate_params_joined}| {{"),
         "        let __ipe_fn = std::sync::Arc::clone(&__ipe_fn);".to_owned(),

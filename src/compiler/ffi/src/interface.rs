@@ -336,17 +336,37 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
             );
             continue;
         }
-        // A closure adapter emits its `_bindings.rs` wrapper (a downstream
-        // crate-call binding consumes the boxed closure it returns), but it is
-        // NOT admitted as a standalone Ipê forwarder here: surfacing the boxed
-        // closure as an Ipê-held opaque value (to pass it on) is the
-        // cross-binding step deferred to a follow-up. Recorded, not
-        // mis-admitted with a wrong arity.
-        if matches!(f.shape(), crate::pkginfo::FnShape::ClosureAdapter { .. }) {
-            skip(
-                "closure adapter — boxed-closure-as-Ipê-value plumbing not wired yet",
-                &mut skipped,
-            );
+        // A closure adapter's wrapper takes an Ipê function value and returns a
+        // boxed Rust closure surfaced as an opaque handle nominal. It is admitted
+        // as an arity-1 Ipê forwarder — `(A -> B -> R) -> <Handle>` — so a program
+        // can HOLD the closure and hand it to a foreign `run`-style entrypoint,
+        // never seeing the `Box<dyn Fn …>` inside.
+        //
+        // The admission is gated on the emitter exactly like struct/enum: an
+        // unresolvable/parameterised opaque param or return (`Element<'a, Msg>`)
+        // over-drops the whole region in `_bindings.rs`, dropping the ref-name
+        // from `survivors`. The emitter is the single resolvability oracle — the
+        // `type <Handle>` alias and the wrapper share ONE region, so the interface
+        // can never surface a forwarder onto an alias/wrapper that was not emitted
+        // (a SEAL breach).
+        if let crate::pkginfo::FnShape::ClosureAdapter { sig } = f.shape() {
+            if survivors.contains(&ref_name) {
+                admit_closure_forwarder(
+                    &ref_name,
+                    sig,
+                    &kernel_name,
+                    &mut bindings,
+                    &mut skipped,
+                    &mut seen,
+                    &mut provide_types,
+                );
+            } else {
+                skip(
+                    "provide.closure with an unresolvable or parameterised opaque \
+                     param/return — adapter over-dropped in _bindings.rs",
+                    &mut skipped,
+                );
+            }
             continue;
         }
         // A provide.struct / provide.enum DEFINES an Ipê-held nominal Rust type
@@ -643,6 +663,75 @@ fn admit_enum_forwarders(
     if any_admitted {
         provide_types.insert(enum_name.to_owned());
     }
+}
+
+/// Admit a `provide.closure` adapter as an arity-1 Ipê forwarder, registering
+/// its returned boxed closure's opaque handle nominal as a provide-defined type.
+///
+/// The wrapper takes ONE argument — the Ipê function value — and returns the
+/// boxed closure surfaced as the handle nominal (see
+/// [`crate::naming::closure_handle_nominal`]); the forwarder's Ipê signature is
+/// `(A -> B -> R) -> <Handle>`, synthesised from the parsed [`ClosureSig`]'s
+/// carriers, never the empty fn params. The handle registers in `provide_types`
+/// so the backend resolves it at the crate-local `crate::ffi::<slug>::<Handle>`,
+/// exactly as a provide-struct/enum nominal.
+///
+/// Over-drops fail-closed — the handle nominal is never renamed to dodge a clash:
+///
+/// * a handle nominal shadowing an Ipê reserved builtin refuses the entry (a
+///   shadowing nominal is a silent-wrong-type SEAL breach);
+/// * a handle nominal already claimed by a provide-struct/enum or another
+///   closure adapter refuses this entry (two distinct Rust types must never
+///   collapse to one Ipê nominal);
+/// * a constructor `ref_name` that is not a legal Ipê value identifier, or a
+///   duplicate `ref_name`, is dropped (keeping the first).
+fn admit_closure_forwarder(
+    ref_name: &str,
+    sig: &crate::carrier::ClosureSig,
+    kernel_name: &str,
+    bindings: &mut Vec<InterfaceBinding>,
+    skipped: &mut Vec<SkippedBinding>,
+    seen: &mut BTreeSet<String>,
+    provide_types: &mut BTreeSet<String>,
+) {
+    if !valid_ipe_value_name(ref_name) {
+        skipped.push(SkippedBinding {
+            ref_name: ref_name.to_owned(),
+            reason: "provide.closure adapter name is not a legal Ipê identifier".to_owned(),
+        });
+        return;
+    }
+    let handle = crate::naming::closure_handle_nominal(ref_name);
+    if ipe_canon::is_reserved_builtin_type_name(&handle) {
+        skipped.push(SkippedBinding {
+            ref_name: ref_name.to_owned(),
+            reason: format!("provide.closure handle `{handle}` shadows an Ipê reserved builtin type"),
+        });
+        return;
+    }
+    if provide_types.contains(&handle) {
+        skipped.push(SkippedBinding {
+            ref_name: ref_name.to_owned(),
+            reason: format!(
+                "provide.closure handle `{handle}` collides with another provide-defined nominal"
+            ),
+        });
+        return;
+    }
+    if !seen.insert(ref_name.to_owned()) {
+        skipped.push(SkippedBinding {
+            ref_name: ref_name.to_owned(),
+            reason: "duplicate binding name — first occurrence kept".to_owned(),
+        });
+        return;
+    }
+    provide_types.insert(handle.clone());
+    bindings.push(InterfaceBinding {
+        wrapper_ident: crate::naming::wrapper_fn_ident(kernel_name, ref_name),
+        arity: 1,
+        sig: sig.forwarder_ipe_sig(&handle),
+        ref_name: ref_name.to_owned(),
+    });
 }
 
 /// Render the injectable module text.

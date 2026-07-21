@@ -174,6 +174,19 @@ impl ScalarCarrier {
             Self::Bytes => "Vec<u8>",
         }
     }
+
+    /// The Ipê surface type this scalar presents to a consumer signature.
+    #[must_use]
+    pub const fn ipe_surface(self) -> &'static str {
+        match self {
+            Self::Int => "Int",
+            Self::Float => "Float",
+            Self::Bool => "Bool",
+            Self::Char => "Char",
+            Self::Str => "String",
+            Self::Bytes => "Bytes",
+        }
+    }
 }
 
 /// A single closure bound.
@@ -831,6 +844,51 @@ impl ClosureSig {
             format!("dyn Fn({params}) -> {ret}")
         } else {
             format!("dyn Fn({params}) -> {ret} + {bounds}")
+        }
+    }
+
+    /// The Ipê-side FORWARDER signature the interface admits for a closure
+    /// adapter: the wrapper takes ONE argument — the Ipê function value — and
+    /// returns the opaque closure handle. `handle` is the nominal the handle
+    /// surfaces as (see [`crate::naming::closure_handle_nominal`]).
+    ///
+    /// The function-value parameter is PARENTHESISED (`(A -> B -> R) -> Handle`)
+    /// so it reads as a single higher-order argument, never a wrong-arity
+    /// `A -> B -> R -> Handle` chain. A nullary Ipê closure (no params) renders
+    /// its parameter as `()` (`(() -> R) -> Handle`). Every component is an
+    /// [`Carrier::ipe_surface`], never raw manifest text.
+    #[must_use]
+    pub fn forwarder_ipe_sig(&self, handle: &str) -> String {
+        let fn_value = if self.params.is_empty() {
+            format!("() -> {}", self.ret.ipe_surface())
+        } else {
+            let params = self
+                .params
+                .iter()
+                .map(Carrier::ipe_surface)
+                .collect::<Vec<_>>()
+                .join(" -> ");
+            format!("{params} -> {}", self.ret.ipe_surface())
+        };
+        format!("({fn_value}) -> {handle}")
+    }
+}
+
+impl ClosureRet {
+    /// The Ipê surface type the wrapped closure's return presents to the
+    /// consumer signature.
+    ///
+    /// A `Total` return is its scalar carrier's surface; a `Result`/`Option`
+    /// (sync or async) surfaces its INNER carrier — the fold to `Err`/`None` on
+    /// a panic is an FFI-internal containment detail, not part of the value the
+    /// Ipê closure yields.
+    #[must_use]
+    pub fn ipe_surface(&self) -> &str {
+        match self {
+            Self::Total(sc) => sc.ipe_surface(),
+            Self::Result(c) | Self::Option(c) | Self::AsyncResult(c) | Self::AsyncOption(c) => {
+                c.ipe_surface()
+            }
         }
     }
 }

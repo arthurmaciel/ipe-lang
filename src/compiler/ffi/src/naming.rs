@@ -461,6 +461,27 @@ pub fn wrapper_fn_ident(kernel_name: &str, ref_name: &str) -> String {
     to_snake_case(&format!("{base}_{ref_name}"))
 }
 
+/// The nominal a `provide.closure` adapter surfaces its returned boxed closure
+/// as — an opaque Ipê type the program HOLDS and hands to a foreign `run`-style
+/// entrypoint, never seeing the `Box<dyn Fn …>` inside.
+///
+/// The adapter's snake-case ref name upper-camels and gains a `Closure` suffix
+/// (`update` → `UpdateClosure`, `apply_fn` → `ApplyFnClosure`): a PascalCase
+/// Ipê type name distinct from any snake-case value binding, and — with the
+/// suffix — from a bare provide-struct/enum nominal an author would name after
+/// the type itself (`Counter`, `Message`). The interface still gates the result
+/// against every real nominal fail-closed; this scheme only lowers the odds a
+/// gate must fire.
+#[must_use]
+pub fn closure_handle_nominal(ref_name: &str) -> String {
+    let camel: String = ref_name
+        .split('_')
+        .filter(|seg| !seg.is_empty())
+        .map(capitalise_first)
+        .collect();
+    format!("{camel}Closure")
+}
+
 /// Raw-escape a foreign identifier that collides with a Rust keyword
 /// (`match` → `r#match`) so a keyword-named foreign field/variant/method
 /// still renders parseable Rust.
