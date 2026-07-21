@@ -10,6 +10,14 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.5](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.4...ipe-v0.1.5) (2026-07-21)
+
+
+### Features
+
+* **ffi:** [#352](https://github.com/arthurmaciel/ipe-lang/issues/352) provide.* Ipê-side forwarder plumbing ([#46](https://github.com/arthurmaciel/ipe-lang/issues/46)) ([cc9718b](https://github.com/arthurmaciel/ipe-lang/commit/cc9718b34d7e26a562797466d0b9fc2bcd07653b))
+* **stdlib:** Cmd.map / Sub.map ([#44](https://github.com/arthurmaciel/ipe-lang/issues/44)) ([eca501b](https://github.com/arthurmaciel/ipe-lang/commit/eca501b9265720c1970b290ee67df220e935fbdf))
+
 ## [0.1.4](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.3...ipe-v0.1.4) (2026-07-21)
 
 
