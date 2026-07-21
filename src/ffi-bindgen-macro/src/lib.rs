@@ -1,11 +1,11 @@
-//! The `#[ipe::provide]` marker attribute for Tier 2 FFI wrapper crates.
+//! The `#[define_in_ipe]` marker attribute for Tier 2 FFI wrapper crates.
 //!
 //! Some crate types need a real hand-written `impl Trait` whose derive is
 //! outside Ipê's closed modellable set — a Bevy `#[derive(Component)]` /
 //! `Resource`, an Iced widget trait, any framework contract that only a
 //! hand-authored impl can satisfy. Those types cannot be *declared* through the
-//! closed Tier 1 `[rust.provide.*]` forms, so the author writes them as normal
-//! Rust in a `[rust.wrapper]` crate and tags the type with `#[ipe::provide]`.
+//! closed Tier 1 `[rust.define.*]` forms, so the author writes them as normal
+//! Rust in a `[rust.wrapper]` crate and tags the type with `#[define_in_ipe]`.
 //!
 //! The macro is INERT: it re-emits the annotated item token-for-token and adds
 //! one pure-data marker so the Ipê FFI inspector can find, out of the crate's
@@ -19,10 +19,10 @@
 //! Author usage:
 //!
 //! ```ignore
-//! // wrappers/src/lib.rs — a normal Rust wrapper crate depending on `ipe_provide`.
-//! use ipe_provide::provide as ipe_provide_attr; // or `use ipe_provide::provide;`
+//! // wrappers/src/lib.rs — a normal Rust wrapper crate depending on `ipe_bindgen`.
+//! use ipe_bindgen::define_in_ipe;
 //!
-//! #[ipe_provide::provide]
+//! #[define_in_ipe]
 //! pub struct Widget { /* … */ }
 //!
 //! impl some_framework::Component for Widget { /* hand-written impl */ }
@@ -36,9 +36,9 @@ use proc_macro::TokenStream;
 /// where the inspector reads it as a boolean "is this item marked". The string is
 /// DATA the inspector matches on and never renders, so it cannot become a
 /// code/TOML injection vector. The leading space rustdoc trims; the trimmed form
-/// matches the inspector's `IPE_PROVIDE_MARKER` constant, kept in sync by
+/// matches the inspector's `IPE_DEFINE_MARKER` constant, kept in sync by
 /// convention.
-const MARKER_DOC: &str = " ipe-ffi-provide-marker";
+const MARKER_DOC: &str = " ipe-ffi-define-marker";
 
 /// Tag a hand-written wrapper item as an Ipê FFI Tier 2 escape-hatch symbol.
 ///
@@ -53,7 +53,7 @@ const MARKER_DOC: &str = " ipe-ffi-provide-marker";
 /// or generates code, so it can neither fail to parse the item nor alter its
 /// meaning — the item compiles exactly as if the attribute were absent.
 #[proc_macro_attribute]
-pub fn provide(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn define_in_ipe(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // Prepend `#[doc = MARKER_DOC]` to the item, unchanged. Building the tokens
     // by parsing a fixed, self-authored source string keeps this free of any
     // `syn`/`quote` dependency; the string is a compile-time constant we wrote,

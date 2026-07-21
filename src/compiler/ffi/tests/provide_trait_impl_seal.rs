@@ -284,7 +284,7 @@ fn inspect_marked_wrapper(
     // The `ipe_provide` marker crate lives beside the ffi crate in the
     // workspace; the wrapper depends on it by an absolute `path`.
     let provide_crate = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../ffi-provide-macro")
+        .join("../../ffi-bindgen-macro")
         .canonicalize()
         .expect("ipe_provide crate resolves");
 
