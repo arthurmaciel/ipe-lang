@@ -354,6 +354,26 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
         // synthesised from the parsed def (its `params()`/`results()` are empty —
         // it is a manifest entry, not an inspected fn), so its signature, arity,
         // and nominal name all come from the def, never from the empty fn shape.
+        //
+        // The forwarder is admitted only when the emitter kept the definition's
+        // wrapper region: an opaque field/payload the crate cannot name (a bare or
+        // lifetime/generic-parameterised handle) over-drops in `_bindings.rs`,
+        // dropping the ref-name from `survivors`. Gating here keeps the interface
+        // from surfacing a forwarder onto a wrapper fn that was never emitted (a
+        // SEAL breach), with the emitter as the single resolvability oracle.
+        if matches!(
+            f.shape(),
+            crate::pkginfo::FnShape::StructCtor { .. }
+                | crate::pkginfo::FnShape::EnumDefCtor { .. }
+        ) && !survivors.contains(&ref_name)
+        {
+            skip(
+                "provide.struct/enum with an unresolvable or parameterised opaque \
+                 field/payload — definition over-dropped in _bindings.rs",
+                &mut skipped,
+            );
+            continue;
+        }
         if let crate::pkginfo::FnShape::StructCtor { def } = f.shape() {
             admit_struct_forwarder(
                 &ref_name,

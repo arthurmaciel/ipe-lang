@@ -940,19 +940,11 @@ fn decode_shape(w: &WireFunction) -> Result<FnShape, Diagnostic> {
                 .collect();
             let def = StructDef::parse(&w.struct_name, &raw_fields, &w.struct_derives)
                 .map_err(wire_err)?;
-            // An opaque field would need the crate's opaque-map to resolve to a
-            // path the emitted `_bindings.rs` can name; that plumbing is a
-            // follow-up, so a `provide.struct` with an opaque field over-drops
-            // here rather than emit an unresolvable bare handle and break the
-            // SEAL. Scalar-carrier fields are fully supported.
-            if let Some(handle) = def.first_opaque_field() {
-                return Err(wire_err(WireDefect::InvalidType {
-                    got: format!(
-                        "provide.struct field of opaque type `{handle}` — only scalar carrier \
-                         fields are supported yet (opaque-map resolution is a follow-up)"
-                    ),
-                }));
-            }
+            // An opaque field resolves to a crate path only at emit time (the
+            // decode boundary has no crate opaque-map). A bare/parameterised
+            // handle the crate cannot name over-drops in the emitter (empty
+            // wrapper region ⇒ the interface skips the forwarder), so the SEAL
+            // holds without a decode-time refusal here.
             FnShape::StructCtor { def }
         }
         Some("isEnumDef") => {
@@ -968,19 +960,11 @@ fn decode_shape(w: &WireFunction) -> Result<FnShape, Diagnostic> {
                 .collect();
             let def = EnumDef::parse(&w.enum_def_name, &raw_variants, &w.enum_def_derives)
                 .map_err(wire_err)?;
-            // An opaque payload would need the crate's opaque-map to resolve to a
-            // path the emitted `_bindings.rs` can name; that plumbing is a
-            // follow-up, so a `provide.enum` with an opaque payload over-drops
-            // here rather than emit an unresolvable bare handle and break the
-            // SEAL. Scalar payloads and unit variants are fully supported.
-            if let Some(handle) = def.first_opaque_payload() {
-                return Err(wire_err(WireDefect::InvalidType {
-                    got: format!(
-                        "provide.enum variant payload of opaque type `{handle}` — only scalar \
-                         carrier payloads are supported yet (opaque-map resolution is a follow-up)"
-                    ),
-                }));
-            }
+            // An opaque payload resolves to a crate path only at emit time (the
+            // decode boundary has no crate opaque-map). A bare/parameterised
+            // handle the crate cannot name over-drops in the emitter (empty
+            // wrapper region ⇒ the interface skips the forwarders), so the SEAL
+            // holds without a decode-time refusal here.
             FnShape::EnumDefCtor { def }
         }
         // No flag set is an ordinary function; every named flag has an explicit
