@@ -308,7 +308,21 @@ and preserves the SEAL + over-drop keystone.
   body. Fixture: a crate takes a callback, an Ipê fn supplies it, the callback
   fires and its result round-trips.
 * **P3 — multi-arg closures + `Result`/`Option` returns** (fallible callback
-  bodies fold through `ipe_error_from_foreign`).
+  bodies fold through `ipe_error_from_foreign`). *OPAQUE returns landed:* the
+  closure-adapter emitter threads the crate opaque-map, so a `Result`/`Option`
+  Ok/Some carrier that is an opaque handle resolves — a provide-DEFINED type to
+  its bare in-module name (it lives in the same `pub mod <slug>` region), an
+  INSPECTED crate-opaque to its absolute `::crate::path`. The received and
+  returned `Box<dyn Fn …>` types render from the SAME resolved carriers, so their
+  opaque paths can never disagree. A per-call panic still folds to `Err`/`None`.
+  The one hard residual: a LIFETIME/generic-parameterised inspected opaque
+  (`iced::Element<'a, Message>`) OVER-DROPS the whole adapter — the bare-handle
+  carrier cannot carry `Element`'s generic args, so emitting the stripped path
+  would be an E0107; refusing keeps the SEAL. So `view : Model -> Element
+  Message` specifically stays refused (opaque returns work for non-parameterised
+  owned opaques). SEAL fixture `tests/provide_opaque_return_seal.rs` (a
+  `Result<Counter>`-returning closure cargo-builds+runs under `IPE_E2E`; the
+  parameterised case over-drops).
 * **P4 — `provide.enum`** (Ipê union → Rust enum; reuse `EnumCtor` per variant).
   *Landed:* `EnumDef` in `carrier.rs` (unit + tuple-payload variants over the
   closed carrier set, IEEE-754 fence generalised to a sum), `FnShape::EnumDefCtor`
@@ -354,10 +368,14 @@ first. "Create-types features exercised" names which provide-forms each needs.
   program can now construct provide-defined Rust types.
 * Cluster 1 — closure adapter (`provide.closure`, sync) surfaced as an Ipê-held
   boxed-closure value + handed to a crate `run` entrypoint: unblocks Iced update,
-  Ratatui draw, Slint/Dioxus callbacks. Largest remaining single unblock. Also
-  covers the opaque-RETURN closure (`view : … -> Element<Message>`) and
-  opaque struct fields / enum payloads (both refused at decode today until the
-  opaque-map is threaded into the definition emitter).
+  Ratatui draw, Slint/Dioxus callbacks. Largest remaining single unblock. The
+  opaque-RETURN closure is now PARTLY landed — a `Result`/`Option` opaque return
+  resolves through the opaque-map (P3 above), so an owned non-parameterised
+  opaque return builds; only the lifetime/generic-parameterised
+  `view : … -> Element<Message>` still over-drops (the bare-handle carrier cannot
+  carry `Element`'s generic args). Opaque struct fields / enum payloads remain
+  refused at decode until the opaque-map is threaded into the DEFINITION emitter
+  (a separate follow-up).
 * Cluster 2 — struct-with-trait-impl (Bevy `Component`, Iced `Application`):
   needs escape hatch B or a declarative `impl` sub-form.
 * Cluster 3 — async-returning closures (Axum handlers): gated on the async

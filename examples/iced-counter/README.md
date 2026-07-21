@@ -9,7 +9,7 @@ Ipê's, so each piece maps to one `[rust.provide.*]` form in `ipe.toml`:
 | `Model` (`Counter`) | a struct | `[[rust.provide.struct]]` | emitted + Ipê forwarder wired |
 | `Message` (`Increment`/`Decrement`) | an enum | `[[rust.provide.enum]]` | emitted + Ipê forwarder wired |
 | `update : Message -> Model -> Model` | a sync closure | `[[rust.provide.closure]]` | scalar subset only; closure→run pending |
-| `view : Model -> Element Message` | a sync closure | `[[rust.provide.closure]]` | blocked (opaque return) |
+| `view : Model -> Element Message` | a sync closure | `[[rust.provide.closure]]` | opaque-map threaded; `Element<'a,Msg>` over-drops (parameterised) |
 
 ## What binds today (the SEAL that holds)
 
@@ -72,10 +72,17 @@ One gap keeps the driver's own event loop from being *entered* from Ipê:
 
 Two Iced-specific gaps sit on top of that:
 
-* **Opaque-return closures.** `view` returns `Element<Message>` — an opaque,
-  lifetime-parameterised handle. The sync closure adapter only lifts scalar /
-  `Result`/`Option` returns today; an opaque return needs the opaque-map +
-  boxed-closure-as-Ipê-value plumbing.
+* **Opaque-return closures.** The closure adapter now threads the crate
+  opaque-map, so a `Result`/`Option` closure whose Ok/Some carrier is an OPAQUE
+  handle resolves — a provide-defined type to its bare in-module name, an
+  inspected crate-opaque to its absolute `::crate::path`, with the per-call panic
+  still folding to `Err`/`None`. But `view` returns `Element<'a, Message>` — a
+  LIFETIME/generic-parameterised handle the bare-handle carrier cannot carry
+  (emitting the stripped `::iced::Element` would be an E0107), so that specific
+  adapter over-drops rather than breach the SEAL. Opaque returns thus work today
+  for owned, non-parameterised opaques; `Element<'a,Msg>` stays refused until a
+  carrier that carries generic args exists. The remaining
+  boxed-closure-as-Ipê-value `run`-handoff (above) is orthogonal.
 * **`provide.struct`/`provide.enum` opaque fields/payloads.** A field or variant
   payload of a crate-opaque type (`Element`, `Command`) over-drops at decode
   until the opaque-map is threaded into the definition emitter.
