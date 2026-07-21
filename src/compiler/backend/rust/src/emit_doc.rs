@@ -1421,14 +1421,17 @@ fn build_lambda(
         };
         (typed, ctor)
     };
-    // The `<ctor>::new(<closure>)` RHS: the ctor path, the closure (whose body is
-    // the sole breakable), and the closing paren, all as one concatenation — no
-    // group around the call, so only the closure body breaks (never the `(`).
-    let rhs = Doc::concat(vec![
+    // The `<ctor>::new(<closure>)` RHS: a single-argument delimited call over the
+    // closure. `rustfmt` glues `Ctor::new(` onto the closure's `move |…| -> R {`
+    // head and lets the closure body break in place when the head fits, but breaks
+    // the call one-per-line (closure at `indent + 4`) when the head itself overflows
+    // — the standard single-argument combine, which `Doc::call_args` renders.
+    let rhs = Doc::call_args(
         Doc::owned(format!("{ctor}::new(")),
-        closure,
+        vec![closure],
         Doc::text(")"),
-    ]);
+        true,
+    );
     let assign = Doc::assign(
         typed_let_prefix(&typed),
         rhs,

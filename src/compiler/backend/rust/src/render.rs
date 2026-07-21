@@ -1155,7 +1155,12 @@ fn last_arg_combines(
     // base) overflows `fn_call_width`, or it is intrinsically multiline. When the
     // argument fits flat within that budget, `rustfmt` breaks the single-argument
     // call one-per-line to give the flat argument its own line rather than gluing.
-    if single_arg && !has_hard_break(last) {
+    // A BLOCK-LIKE argument (a `move |…|` closure or a brace block) is `rustfmt`'s
+    // `overflow_delimited_expr`: it is ALWAYS glued onto the call head, with only its
+    // OWN body breaking — the call is never broken one-per-line to give it its own
+    // line. So the "break to give the flat argument its own line" heuristic below is
+    // skipped for it; only the first-line-fit gate (further down) can reject the glue.
+    if single_arg && !has_hard_break(last) && !is_block_like(last) {
         let mut flat = String::new();
         render_at(last, cfg, indent, last_col, true, &mut flat);
         if !flat.contains('\n') && (last_col + flat.len()).saturating_sub(base) <= FN_CALL_WIDTH {
@@ -1288,16 +1293,24 @@ fn render_forced_break(
             let start_col = eff_col(out, col);
             render_one_per_line(open, fields, close, true, cfg, indent, start_col, out);
         }
-        // A wrapper like `Box::new(<CallArgs>)` / `Box::new(<StructLit>)`:
-        // force-break the inner construct. The leading wrapper text (`Box::new(`)
-        // shrinks the recursive `Shape` budget one step before the inner combine,
-        // exactly like a `CallArgs` open.
+        // A wrapper like `Box::new(<CallArgs>)` / `Box::new(<StructLit>)`, or a
+        // `move |…| -> R <braced-block>` closure: force-break the inner construct. A
+        // leading wrapper text (`Box::new(`) shrinks the recursive `Shape` budget one
+        // step before the inner combine. A closure's trailing braced-block `Group`
+        // must be FORCED broken (its body onto its own line) — `rustfmt`'s
+        // `overflow_delimited_expr` opens a block-like argument's body rather than
+        // keeping it flat, even when the flat body alone would fit.
         Doc::Concat(parts) => {
+            let is_closure = matches!(parts.first(), Some(Doc::Text(h)) if h.starts_with("move |"));
+            let last = parts.len().saturating_sub(1);
             let mut inner_budget = budget;
-            for p in parts {
+            for (i, p) in parts.iter().enumerate() {
                 let c = eff_col(out, col);
                 if matches!(p, Doc::CallArgs { .. } | Doc::StructLit { .. }) {
                     render_forced_break(p, combine_base, inner_budget, cfg, indent, c, out);
+                } else if is_closure && i == last {
+                    // The closure's braced body block: force it broken.
+                    render_group_broken(p, cfg, indent, c, out);
                 } else {
                     if let Doc::Text(_) = p {
                         inner_budget =
@@ -1310,6 +1323,20 @@ fn render_forced_break(
         // Any other doc breaks on its own (a block / closure body carries a
         // `HardLine`); render it non-flat.
         _ => render_at(doc, cfg, indent, col, false, out),
+    }
+}
+
+/// Render a closure's braced-block `Group` with its soft breaks FORCED — the body
+/// onto its own line at one indent step, matching `rustfmt`'s `overflow_delimited_expr`
+/// which opens a block-like argument even when its flat body would fit. A non-`Group`
+/// doc (a statement block already carrying `HardLine`s) falls back to the standard
+/// non-flat render, which breaks it anyway.
+fn render_group_broken(doc: &Doc, cfg: RenderConfig, indent: usize, col: usize, out: &mut String) {
+    if let Doc::Group(inner) = doc {
+        let start_col = eff_col(out, col);
+        render_at(inner, cfg, indent, start_col, false, out);
+    } else {
+        render_at(doc, cfg, indent, col, false, out);
     }
 }
 
@@ -1348,6 +1375,32 @@ fn shrink_budget(parent: usize, open: &Doc) -> usize {
     FN_CALL_WIDTH.min(parent.saturating_sub(flat_leaf_len(open)))
 }
 
+/// Whether `doc` is a BLOCK-LIKE argument — a `move |…|` closure or a brace block
+/// `{ … }` — that `rustfmt`'s `overflow_delimited_expr` always glues onto the call
+/// head (breaking only its own body), rather than breaking the call one-per-line to
+/// give the argument its own line. A `Box::new(<block-like>)` wrapper counts (the
+/// wrapper glues and the inner block breaks). Distinct from [`is_glue_shape`], which
+/// also admits nested calls / macros / tuples that DO get their own line when they
+/// fit flat within the shared budget.
+fn is_block_like(doc: &Doc) -> bool {
+    match doc {
+        Doc::BraceBody(_) => true,
+        Doc::Group(inner) => is_block_like(inner),
+        Doc::Concat(parts) => match parts.first() {
+            // A `move |…| -> R ` closure head, or a brace block `{ … }` that is not a
+            // `({` paren-wrapped statement block.
+            Some(Doc::Text(head)) if head.starts_with("move |") => true,
+            Some(Doc::Text(head)) if head.ends_with('{') && !head.starts_with('(') => true,
+            // A `Box::new(<block-like>)` / `Some(<block-like>)` wrapper.
+            Some(Doc::Text(head)) if head.ends_with('(') && !head.contains('{') => {
+                parts.get(1).is_some_and(is_block_like)
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 /// Whether `doc` is a GLUE-shaped construct for the SINGLE-argument combine chain:
 /// a [`Doc::CallArgs`] (any call / macro / ctor / tuple / list whose own delimiters
 /// the outer head glues onto), a brace block (`{ … }`), or either behind a leading
@@ -1361,6 +1414,10 @@ fn is_glue_shape(doc: &Doc) -> bool {
         Doc::StructLit { .. } => true,
         Doc::Group(inner) => is_glue_shape(inner),
         Doc::Concat(parts) => match parts.first() {
+            // A `move |…| -> R ` closure head followed by its braced body — a
+            // block-like expression `rustfmt` glues a wrapper's `(` onto, letting the
+            // closure body break in place while the head stays on the wrapper's line.
+            Some(Doc::Text(head)) if head.starts_with("move |") => true,
             // A brace block `{ … }` (closure body / statement block) or a struct
             // literal `Name { … }` — a `{`-terminated head that is NOT a `({`
             // paren-wrapped statement block (which `rustfmt` does NOT combine).
