@@ -13496,6 +13496,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::JwtEncode
                 // ── Task combinators arity-2 ────────────────────────────
                 | KernelFn::TaskMap
+                | KernelFn::TaskAttempt
                 | KernelFn::TaskAndThen
                 | KernelFn::TaskMapError
                 | KernelFn::TaskOnError
@@ -13668,7 +13669,11 @@ impl<'a> Lowerer<'a> {
                 // `Jwt.decode : Algorithm -> Int -> String -> Result Error String`
                 | KernelFn::JwtDecode
                 // `List.map2 : (a -> b -> r) -> List a -> List b -> List r`
-                | KernelFn::ListMap2,
+                | KernelFn::ListMap2
+                // `Task.map2 : (a -> b -> r) -> Task e a -> Task e b -> Task e r`
+                | KernelFn::TaskMap2
+                // `Config.map2` — arity 3
+                | KernelFn::ConfigMap2,
             ) => Ok(3),
             // ── JsonDec arity-4 ─────────────────────────────────────────
             Callee::Kernel(
@@ -13699,7 +13704,11 @@ impl<'a> Lowerer<'a> {
                 // `RateLimit.allow : String -> String -> Int -> Int -> Bool`
                 | KernelFn::RateLimitAllow
                 // `List.map3` — arity 4
-                | KernelFn::ListMap3,
+                | KernelFn::ListMap3
+                // `Task.map3` — arity 4
+                | KernelFn::TaskMap3
+                // `Config.map3` — arity 4
+                | KernelFn::ConfigMap3,
             ) => Ok(4),
             // ── JsonDec arity-5 ─────────────────────────────────────────
             Callee::Kernel(
@@ -13713,12 +13722,25 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ResultMap4
                 | KernelFn::MaybeMap4
                 // `List.map4` — arity 5
-                | KernelFn::ListMap4,
+                | KernelFn::ListMap4
+                // `Task.map4` — arity 5
+                | KernelFn::TaskMap4
+                // `Config.map4` — arity 5
+                | KernelFn::ConfigMap4,
             ) => Ok(5),
             // ── Result/Maybe/List map5 — arity 6 ───────────────────────
             Callee::Kernel(
-                KernelFn::ResultMap5 | KernelFn::MaybeMap5 | KernelFn::ListMap5,
+                KernelFn::ResultMap5
+                | KernelFn::MaybeMap5
+                | KernelFn::ListMap5
+                | KernelFn::TaskMap5
+                // `Config.map5` — arity 6
+                | KernelFn::ConfigMap5,
             ) => Ok(6),
+            // `Config.map6`/`map7`/`map8` — arities 7/8/9
+            Callee::Kernel(KernelFn::ConfigMap6) => Ok(7),
+            Callee::Kernel(KernelFn::ConfigMap7) => Ok(8),
+            Callee::Kernel(KernelFn::ConfigMap8) => Ok(9),
             // ── Ipe.Ui / Ipe.Html render kernels ─────────────────────────
             // Arity 0: nullary constants — no arguments.
             Callee::Kernel(
@@ -14531,13 +14553,18 @@ impl<'a> Lowerer<'a> {
                 KernelFn::ConfigNullable
                 | KernelFn::ConfigList
                 | KernelFn::ConfigSucceed
-                | KernelFn::ConfigFail,
+                | KernelFn::ConfigFail
+                | KernelFn::ConfigOneOf
+                | KernelFn::ConfigKeyValuePairs
+                | KernelFn::ConfigMaybe
+                | KernelFn::ConfigDict,
             ) => Ok(1),
             Callee::Kernel(
                 KernelFn::ConfigField
                 | KernelFn::ConfigAt
                 | KernelFn::ConfigMap
                 | KernelFn::ConfigAndThen
+                | KernelFn::ConfigIndex
                 | KernelFn::ConfigDecodeToml
                 | KernelFn::ConfigDecodeYaml
                 | KernelFn::ConfigDecodeJson
@@ -15058,6 +15085,11 @@ impl<'a> Lowerer<'a> {
                     ("Task", "succeed") => Ok(Callee::Kernel(KernelFn::TaskSucceed)),
                     ("Task", "fail") => Ok(Callee::Kernel(KernelFn::TaskFail)),
                     ("Task", "map") => Ok(Callee::Kernel(KernelFn::TaskMap)),
+                    ("Task", "map2") => Ok(Callee::Kernel(KernelFn::TaskMap2)),
+                    ("Task", "map3") => Ok(Callee::Kernel(KernelFn::TaskMap3)),
+                    ("Task", "map4") => Ok(Callee::Kernel(KernelFn::TaskMap4)),
+                    ("Task", "map5") => Ok(Callee::Kernel(KernelFn::TaskMap5)),
+                    ("Task", "attempt") => Ok(Callee::Kernel(KernelFn::TaskAttempt)),
                     ("Task", "andThen") => Ok(Callee::Kernel(KernelFn::TaskAndThen)),
                     ("Task", "mapError") => Ok(Callee::Kernel(KernelFn::TaskMapError)),
                     ("Task", "onError") => Ok(Callee::Kernel(KernelFn::TaskOnError)),
@@ -17822,6 +17854,18 @@ mod tests {
         KernelFn::ConfigFail,
         KernelFn::ConfigMap,
         KernelFn::ConfigAndThen,
+        KernelFn::ConfigMap2,
+        KernelFn::ConfigMap3,
+        KernelFn::ConfigMap4,
+        KernelFn::ConfigMap5,
+        KernelFn::ConfigMap6,
+        KernelFn::ConfigMap7,
+        KernelFn::ConfigMap8,
+        KernelFn::ConfigOneOf,
+        KernelFn::ConfigIndex,
+        KernelFn::ConfigKeyValuePairs,
+        KernelFn::ConfigMaybe,
+        KernelFn::ConfigDict,
         KernelFn::ConfigDecodeToml,
         KernelFn::ConfigDecodeYaml,
         KernelFn::ConfigDecodeJson,
