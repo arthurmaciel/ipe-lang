@@ -19,7 +19,7 @@
 //! binding it cannot render soundly emits NOTHING (over-drop), never a
 //! wrapper cargo would reject.
 
-use crate::carrier::{Carrier, ClosureRet, ClosureSig};
+use crate::carrier::{Carrier, ClosureRet, ClosureSig, StructDef};
 use crate::naming::{RustIdent, arg_name, rust_kernel_name, rust_safe_ident, wrapper_fn_ident};
 use crate::num_coerce::{is_numeric_rust, num_saturate, num_widen_scalar};
 use crate::pkginfo::{Effect, EnumArm, EnumVariantKind, FnInfo, FnShape, Param, PkgInfo};
@@ -1121,6 +1121,7 @@ fn emit_fn_region(krate: &str, kernel_name: &str, f: &FnInfo) -> Vec<String> {
         FnShape::FieldGet => field_get_lines(&cx),
         FnShape::FieldSet => field_set_lines(&cx),
         FnShape::ClosureAdapter { sig } => closure_adapter_lines(&cx, sig),
+        FnShape::StructCtor { def } => struct_ctor_lines(&cx, def),
         FnShape::Plain | FnShape::PkgVar => plain_lines(&cx),
     };
     // A trait-qualified / turbofished binding with NO open type params is a
@@ -1241,6 +1242,50 @@ fn closure_adapter_lines(cx: &WrapperCx<'_>, sig: &ClosureSig) -> Vec<String> {
         "    })".to_owned(),
         "}".to_owned(),
     ]
+}
+
+/// The `[rust.provide.struct]` definition + constructor wrapper.
+///
+/// Ipê DEFINES a nominal Rust type here: the emitter renders the `#[derive]`ed
+/// struct definition, then a constructor wrapper that takes each field's owned
+/// carrier value and builds the struct literal. This solves "define a Rust
+/// type" with ZERO new trust surface — the body is built from decode-validated
+/// carriers only, exactly like `enum_ctor_lines`. Everything renders from the
+/// parsed [`StructDef`]; no raw manifest string reaches this emitted Rust.
+///
+/// An opaque field type absolutizes through the crate so the defined struct can
+/// never collide with a runtime kernel module re-exported at the app crate root.
+fn struct_ctor_lines(cx: &WrapperCx<'_>, def: &StructDef) -> Vec<String> {
+    let krate = cx.krate;
+    // The struct definition, with each opaque field absolutized through the
+    // crate (a scalar field renders its owned Rust type directly).
+    let mut out = def.definition_lines(&|id| absolutize_crate(krate, id.as_str()));
+    // The constructor: one owned-carrier parameter per field, in order, folded
+    // into the struct literal. Each parameter's inbound coercion is the identity
+    // for the closed carrier set (the owned Rust type IS the Ipê value's carrier
+    // — no narrowing), mirroring the struct-variant `enum_ctor_lines` path.
+    let struct_name = def.name.as_str();
+    let params: Vec<String> = def
+        .fields
+        .iter()
+        .enumerate()
+        .map(|(j, (_, c))| format!("{}: {}", arg_name(j), carrier_rust_ty(krate, c)))
+        .collect();
+    let assigns: Vec<String> = def
+        .fields
+        .iter()
+        .enumerate()
+        .map(|(j, (fname, _))| format!("{}: {}", fname.as_str(), arg_name(j)))
+        .collect();
+    out.push(String::new());
+    out.push(format!(
+        "pub fn {}({}) -> {struct_name} {{",
+        cx.rust_name,
+        params.join(", ")
+    ));
+    out.push(format!("    {struct_name} {{ {} }}", assigns.join(", ")));
+    out.push("}".to_owned());
+    out
 }
 
 /// The comma-joined declared parameter TYPE list (`i64, bool`) for a boxed
@@ -1941,6 +1986,75 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
         );
         assert!(out.contains("Err(_) => None"), "{out}");
         assert!(!out.contains("std::process::abort()"), "{out}");
+    }
+
+    #[test]
+    fn struct_ctor_emits_the_derived_definition_and_a_constructor() {
+        let out = emit_bindings(&semver_pkg(&json!([{
+            "name": "counter_new",
+            "effect": "pure",
+            "isStructCtor": true,
+            "structName": "Counter",
+            "structFields": [{ "name": "value", "type": "i64" }],
+            "structDerives": ["Default", "Clone"]
+        }])));
+        // The `#[derive]`ed definition (canonical derive order).
+        assert!(out.contains("#[derive(Clone, Default)]"), "{out}");
+        assert!(out.contains("pub struct Counter {"), "{out}");
+        assert!(out.contains("    pub value: i64,"), "{out}");
+        // The constructor wrapper folds each owned-carrier arg into the literal.
+        assert!(
+            out.contains("pub fn semver_counter_new(arg0: i64) -> Counter {"),
+            "{out}"
+        );
+        assert!(out.contains("Counter { value: arg0 }"), "{out}");
+        // Sentinel bracketing so DCE can drop an unreached ctor by name.
+        assert!(
+            out.contains("// IPE-FFI-WRAPPER BEGIN counter_new"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn struct_ctor_with_an_opaque_field_over_drops_no_wrapper() {
+        // An opaque field needs the crate opaque-map to resolve to a nameable
+        // path; that plumbing is a follow-up, so the entry over-drops at decode
+        // rather than emit an unresolvable bare handle and break the SEAL.
+        let out = emit_bindings(&semver_pkg(&json!([{
+            "name": "wrap_new",
+            "effect": "pure",
+            "isStructCtor": true,
+            "structName": "Wrap",
+            "structFields": [{ "name": "inner", "type": "Version" }],
+            "structDerives": []
+        }])));
+        assert!(!out.contains("pub struct Wrap"), "{out}");
+        assert!(!out.contains("semver_wrap_new"), "{out}");
+    }
+
+    #[test]
+    fn struct_ctor_derive_free_scalar_struct_emits() {
+        // The derive-free case: no `#[derive]` line, a scalar field, a ctor.
+        let out = emit_bindings(&semver_pkg(&json!([{
+            "name": "point_new",
+            "effect": "pure",
+            "isStructCtor": true,
+            "structName": "Point",
+            "structFields": [
+                { "name": "x", "type": "i64" },
+                { "name": "y", "type": "i64" }
+            ],
+            "structDerives": []
+        }])));
+        assert!(!out.contains("#[derive"), "{out}");
+        assert!(out.contains("pub struct Point {"), "{out}");
+        assert!(out.contains("    pub x: i64,"), "{out}");
+        assert!(out.contains("    pub y: i64,"), "{out}");
+        assert!(
+            out.contains("pub fn semver_point_new(arg0: i64, arg1: i64) -> Point {"),
+            "{out}"
+        );
+        assert!(out.contains("Point { x: arg0, y: arg1 }"), "{out}");
     }
 
     #[test]

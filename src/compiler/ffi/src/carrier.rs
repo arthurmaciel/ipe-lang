@@ -250,6 +250,204 @@ impl BoundSet {
     }
 }
 
+/// One allowlisted `#[derive]` a `provide.struct` may request.
+///
+/// The set is exactly the `MODELLABLE_5` fence (`{Hash, Eq, Ord, Clone,
+/// Default}`) — the two-way cross-crate assertion the parametric monomorphiser
+/// already relies on — never free text, so no derive spelling from the manifest
+/// reaches the emitted `#[derive(...)]` list as a raw string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Derive {
+    /// `#[derive(Hash)]`.
+    Hash,
+    /// `#[derive(Eq)]` (implies `PartialEq`).
+    Eq,
+    /// `#[derive(Ord)]` (implies `PartialOrd`).
+    Ord,
+    /// `#[derive(Clone)]`.
+    Clone,
+    /// `#[derive(Default)]`.
+    Default,
+}
+
+impl Derive {
+    /// Parse one derive token against the closed allowlist.
+    fn parse(s: &str) -> Option<Self> {
+        match s.trim() {
+            "Hash" => Some(Self::Hash),
+            "Eq" => Some(Self::Eq),
+            "Ord" => Some(Self::Ord),
+            "Clone" => Some(Self::Clone),
+            "Default" => Some(Self::Default),
+            _ => None,
+        }
+    }
+
+    /// The Rust spelling this derive renders to.
+    #[must_use]
+    pub const fn rust(self) -> &'static str {
+        match self {
+            Self::Hash => "Hash",
+            Self::Eq => "Eq",
+            Self::Ord => "Ord",
+            Self::Clone => "Clone",
+            Self::Default => "Default",
+        }
+    }
+
+    /// Whether this derive is unsound for a struct carrying an IEEE-754 field.
+    /// `f64` has no total `Eq`/`Ord`/`Hash`, so a struct with a `Float` field
+    /// may derive only `Clone`/`Default` — the cell the `MODELLABLE_5` fence
+    /// already guards, re-checked here at the define boundary.
+    const fn requires_total_eq(self) -> bool {
+        matches!(self, Self::Hash | Self::Eq | Self::Ord)
+    }
+}
+
+/// The closed derive set a `provide.struct` requests, rendered from allowlisted
+/// variants only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeriveSet(std::collections::BTreeSet<Derive>);
+
+impl DeriveSet {
+    /// Parse a derive list, refusing any token outside the `MODELLABLE_5`
+    /// allowlist and any `Eq`/`Ord`/`Hash` request on a struct that carries a
+    /// `Float` field (no total equality on IEEE-754).
+    ///
+    /// # Errors
+    ///
+    /// [`WireDefect::InvalidType`] naming the first offending derive.
+    pub fn parse(tokens: &[String], has_float_field: bool) -> Result<Self, WireDefect> {
+        let mut set = std::collections::BTreeSet::new();
+        for tok in tokens {
+            let d = Derive::parse(tok).ok_or_else(|| WireDefect::InvalidType {
+                got: format!("derive `{tok}` is outside {{Hash, Eq, Ord, Clone, Default}}"),
+            })?;
+            if has_float_field && d.requires_total_eq() {
+                return Err(WireDefect::InvalidType {
+                    got: format!(
+                        "derive `{}` on a struct with a Float field — IEEE-754 has no total \
+                         Eq/Ord/Hash",
+                        d.rust()
+                    ),
+                });
+            }
+            set.insert(d);
+        }
+        Ok(Self(set))
+    }
+
+    /// Whether the set is empty (a derive-free struct — no `#[derive]` line).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// The derives in canonical order, joined for a `#[derive(...)]` attribute.
+    #[must_use]
+    pub fn rust_list(&self) -> String {
+        self.0
+            .iter()
+            .map(|d| d.rust())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+/// A fully-parsed `provide.struct` definition: the Rust type to define, its
+/// owned fields, and the derive set — rendered from closed carriers/derives
+/// only, never from raw manifest text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructDef {
+    /// The nominal Rust type name to define.
+    pub name: RustIdent,
+    /// The struct's fields in declaration order (each an owned carrier).
+    pub fields: Vec<(RustIdent, Carrier)>,
+    /// The closed derive set.
+    pub derives: DeriveSet,
+}
+
+impl StructDef {
+    /// Assemble a validated struct definition from decoded parts.
+    ///
+    /// `raw_fields` is `(field-name, carrier-spelling)` pairs; `raw_derives` is
+    /// the requested derive tokens. Every field name gates through
+    /// [`RustIdent`], every field type through [`Carrier::parse`], and the
+    /// derive set through [`DeriveSet::parse`] (which also enforces the
+    /// IEEE-754 fence against a `Float` field).
+    ///
+    /// # Errors
+    ///
+    /// [`WireDefect::InvalidType`] naming the first offending name, field type,
+    /// or derive; [`WireDefect::InvalidClosureSig`] is never produced here.
+    pub fn parse(
+        name: &str,
+        raw_fields: &[(String, String)],
+        raw_derives: &[String],
+    ) -> Result<Self, WireDefect> {
+        let name = RustIdent::parse(name).map_err(|_| WireDefect::InvalidType {
+            got: format!("struct name `{name}`"),
+        })?;
+        let mut fields = Vec::with_capacity(raw_fields.len());
+        let mut has_float = false;
+        for (fname, ftype) in raw_fields {
+            let field_name = RustIdent::parse(fname).map_err(|_| WireDefect::InvalidType {
+                got: format!("field name `{fname}`"),
+            })?;
+            let carrier = Carrier::parse(ftype)?;
+            if carrier == Carrier::Float {
+                has_float = true;
+            }
+            fields.push((field_name, carrier));
+        }
+        let derives = DeriveSet::parse(raw_derives, has_float)?;
+        Ok(Self {
+            name,
+            fields,
+            derives,
+        })
+    }
+
+    /// The first opaque field's handle name, or [`None`] when every field is a
+    /// scalar carrier.
+    ///
+    /// A sound emit for an opaque field must resolve the handle through the
+    /// crate's opaque-type map (a bare `Version` is not in scope in the emitted
+    /// `_bindings.rs`), which the first `provide.struct` increment does not yet
+    /// thread — so the decode boundary refuses an opaque field for now, keeping
+    /// the SEAL (no emitted-and-cargo-failing struct), and this projects the
+    /// offending field name for the refusal.
+    #[must_use]
+    pub fn first_opaque_field(&self) -> Option<&str> {
+        self.fields.iter().find_map(|(_, c)| match c {
+            Carrier::Opaque(id) => Some(id.as_str()),
+            _ => None,
+        })
+    }
+
+    /// The struct definition + `#[derive]` lines this renders to, from closed
+    /// carriers/derives only. The opaque-field absolutization is the emitter's
+    /// job (this leaf never renders a crate path); a scalar field renders its
+    /// owned Rust type directly.
+    #[must_use]
+    pub fn definition_lines(&self, opaque_rust_ty: &dyn Fn(&RustIdent) -> String) -> Vec<String> {
+        let mut out = Vec::new();
+        if !self.derives.is_empty() {
+            out.push(format!("#[derive({})]", self.derives.rust_list()));
+        }
+        out.push(format!("pub struct {} {{", self.name.as_str()));
+        for (fname, carrier) in &self.fields {
+            let ty = match carrier {
+                Carrier::Opaque(id) => opaque_rust_ty(id),
+                _ => carrier.rust_owned().to_owned(),
+            };
+            out.push(format!("    pub {}: {ty},", fname.as_str()));
+        }
+        out.push("}".to_owned());
+        out
+    }
+}
+
 /// A closure's declared return, after the total-carrier-return soundness rule.
 ///
 /// Exactly three shapes are representable. A total return is scalar-only
@@ -623,6 +821,100 @@ mod tests {
                 "{bad:?} must be refused"
             );
         }
+    }
+
+    // ── StructDef / DeriveSet ────────────────────────────────────────────────
+
+    #[test]
+    fn a_scalar_struct_parses_and_renders_a_definition() {
+        let s = StructDef::parse(
+            "Counter",
+            &[("value".to_owned(), "i64".to_owned())],
+            &["Default".to_owned(), "Clone".to_owned()],
+        )
+        .expect("scalar struct parses");
+        assert_eq!(s.name.as_str(), "Counter");
+        assert_eq!(s.derives.rust_list(), "Clone, Default");
+        let lines = s.definition_lines(&|id| format!("demo::{}", id.as_str()));
+        assert_eq!(
+            lines,
+            vec![
+                "#[derive(Clone, Default)]".to_owned(),
+                "pub struct Counter {".to_owned(),
+                "    pub value: i64,".to_owned(),
+                "}".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_opaque_field_absolutizes_through_the_emitter_hook() {
+        let s = StructDef::parse("Wrap", &[("inner".to_owned(), "Widget".to_owned())], &[])
+            .expect("opaque-field struct parses");
+        let lines = s.definition_lines(&|id| format!("demo::{}", id.as_str()));
+        // No derives ⇒ no `#[derive]` line; the opaque field absolutizes.
+        assert_eq!(
+            lines,
+            vec![
+                "pub struct Wrap {".to_owned(),
+                "    pub inner: demo::Widget,".to_owned(),
+                "}".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_derive_outside_the_allowlist_is_refused() {
+        for bad in ["Serialize", "Debug", "Copy", "PartialOrd"] {
+            assert!(
+                matches!(
+                    DeriveSet::parse(&[bad.to_owned()], false),
+                    Err(WireDefect::InvalidType { .. })
+                ),
+                "{bad} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn total_eq_derives_on_a_float_field_are_refused() {
+        // The IEEE-754 fence: a struct with a Float field may derive Clone /
+        // Default but never Eq / Ord / Hash.
+        for bad in ["Eq", "Ord", "Hash"] {
+            assert!(
+                matches!(
+                    StructDef::parse(
+                        "P",
+                        &[("x".to_owned(), "f64".to_owned())],
+                        &[bad.to_owned()],
+                    ),
+                    Err(WireDefect::InvalidType { .. })
+                ),
+                "{bad} on a Float field must be refused"
+            );
+        }
+        // Clone / Default on a Float field are fine.
+        assert!(
+            StructDef::parse(
+                "P",
+                &[("x".to_owned(), "f64".to_owned())],
+                &["Clone".to_owned(), "Default".to_owned()],
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_struct_field_type_outside_the_carrier_set_is_refused() {
+        assert!(matches!(
+            StructDef::parse("P", &[("x".to_owned(), "u32".to_owned())], &[]),
+            Err(WireDefect::InvalidType { .. })
+        ));
+        // A bad struct NAME is refused too.
+        assert!(matches!(
+            StructDef::parse("9bad", &[], &[]),
+            Err(WireDefect::InvalidType { .. })
+        ));
     }
 
     #[test]

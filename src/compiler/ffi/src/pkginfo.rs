@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 
 use crate::call::Call;
-use crate::carrier::ClosureSig;
+use crate::carrier::{ClosureSig, StructDef};
 use crate::diag::{Diagnostic, WireDefect};
 use crate::naming::{FieldSelector, RustIdent, RustPattern, RustTypeExpr, wrapper_ref_name};
 
@@ -88,6 +88,14 @@ struct WireFunction {
     is_closure_adapter: bool,
     #[serde(default, rename = "closureSig")]
     closure_sig: String,
+    #[serde(default, rename = "isStructCtor")]
+    is_struct_ctor: bool,
+    #[serde(default, rename = "structName")]
+    struct_name: String,
+    #[serde(default, rename = "structFields")]
+    struct_ctor_fields: Vec<WireStructField>,
+    #[serde(default, rename = "structDerives")]
+    struct_derives: Vec<String>,
     #[serde(default)]
     generic: Option<WireGeneric>,
     #[serde(default, rename = "callPath")]
@@ -121,6 +129,16 @@ struct WireTransitiveDep {
     ident: String,
     name: String,
     version: String,
+}
+
+/// One `[[rust.provide.struct]]` field: a name and its carrier spelling. The
+/// carrier is validated at decode (`StructDef::parse`), never rendered raw.
+#[derive(Debug, Deserialize)]
+struct WireStructField {
+    #[serde(default)]
+    name: String,
+    #[serde(default, rename = "type")]
+    ty: String,
 }
 
 // ── domain layer ────────────────────────────────────────────────────────────
@@ -227,6 +245,19 @@ pub enum FnShape {
         /// The parsed, validated target signature. The emitter renders from
         /// this alone — no raw manifest string reaches generated Rust.
         sig: ClosureSig,
+    },
+    /// A `[rust.provide.struct]` definition + constructor: Ipê DEFINES a nominal
+    /// Rust type (a record of owned, Ipê-coercible carrier fields, with an
+    /// allowlisted `#[derive]` set) plus a constructor wrapper that builds it
+    /// from decode-validated inbound values — the exact `EnumCtor`/`FieldSet`
+    /// inbound path generalised to a struct literal. Author-declared native code
+    /// that flows through the same `FfiInterface` trust gate as every other
+    /// wrapper; user `.ipe` source can never mint it.
+    StructCtor {
+        /// The parsed, validated struct definition. The emitter renders the
+        /// `#[derive]`ed definition + the constructor body from this alone — no
+        /// raw manifest string reaches generated Rust.
+        def: StructDef,
     },
 }
 
@@ -797,7 +828,7 @@ fn decode_arms(function: &str, arms: Vec<String>) -> Result<Vec<EnumArm>, Diagno
 
 /// Collapse the seven mutually-exclusive accessor flags into the closed shape.
 fn decode_shape(w: &WireFunction) -> Result<FnShape, Diagnostic> {
-    let flags: [(&'static str, bool); 7] = [
+    let flags: [(&'static str, bool); 8] = [
         ("isField", w.is_field),
         ("isFieldSet", w.is_field_set),
         ("isPkgVar", w.is_pkg_var),
@@ -805,6 +836,7 @@ fn decode_shape(w: &WireFunction) -> Result<FnShape, Diagnostic> {
         ("isEnumTag", w.is_enum_tag),
         ("isEnumExtract", w.is_enum_extract),
         ("isClosureAdapter", w.is_closure_adapter),
+        ("isStructCtor", w.is_struct_ctor),
     ];
     let set: Vec<&'static str> = flags.iter().filter(|(_, b)| *b).map(|(n, _)| *n).collect();
     if set.len() > 1 {
@@ -854,13 +886,41 @@ fn decode_shape(w: &WireFunction) -> Result<FnShape, Diagnostic> {
                 wildcard: w.enum_wildcard,
             }
         }
-        Some(_) => {
+        Some("isClosureAdapter") => {
             // The parsed signature is the SOLE input the emitter renders from;
             // an ill-formed one (a carrier outside the closed set, a bound
             // outside {Send, Sync, 'static}, a non-total return, trailing text)
             // over-drops the whole provide entry here, never emit-and-cargo-fail.
             let sig = ClosureSig::parse(&w.closure_sig).map_err(wire_err)?;
             FnShape::ClosureAdapter { sig }
+        }
+        Some(_) => {
+            // `isStructCtor` (the only remaining flag). The parsed definition is
+            // the SOLE input the emitter renders from; an ill-formed one (a bad
+            // struct/field name, a field type outside the carrier set, a derive
+            // outside the allowlist, or a total-Eq derive on a Float field)
+            // over-drops the whole provide entry here, never emit-and-cargo-fail.
+            let raw_fields: Vec<(String, String)> = w
+                .struct_ctor_fields
+                .iter()
+                .map(|f| (f.name.clone(), f.ty.clone()))
+                .collect();
+            let def = StructDef::parse(&w.struct_name, &raw_fields, &w.struct_derives)
+                .map_err(wire_err)?;
+            // An opaque field would need the crate's opaque-map to resolve to a
+            // path the emitted `_bindings.rs` can name; that plumbing is a
+            // follow-up, so a `provide.struct` with an opaque field over-drops
+            // here rather than emit an unresolvable bare handle and break the
+            // SEAL. Scalar-carrier fields are fully supported.
+            if let Some(handle) = def.first_opaque_field() {
+                return Err(wire_err(WireDefect::InvalidType {
+                    got: format!(
+                        "provide.struct field of opaque type `{handle}` — only scalar carrier \
+                         fields are supported yet (opaque-map resolution is a follow-up)"
+                    ),
+                }));
+            }
+            FnShape::StructCtor { def }
         }
     })
 }
@@ -883,7 +943,11 @@ const fn shape_fallibility(shape: &FnShape, effect: Effect) -> Fallibility {
         | FnShape::EnumCtor { .. }
         | FnShape::EnumTag { .. }
         | FnShape::EnumExtract { .. }
-        | FnShape::ClosureAdapter { .. } => Fallibility::Infallible,
+        | FnShape::ClosureAdapter { .. }
+        // A struct constructor is a total struct literal over decode-validated
+        // inbound values — building it cannot fail, so the wrapper's own return
+        // is the bare struct (no `Result` wrapper).
+        | FnShape::StructCtor { .. } => Fallibility::Infallible,
         FnShape::Plain | FnShape::PkgVar => Fallibility::TaskError,
     }
 }
@@ -1241,6 +1305,73 @@ mod tests {
                 defect: WireDefect::InvalidClosureSig { .. },
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn a_provide_struct_decodes_into_a_struct_ctor_shape() {
+        let pkg = decode(&base_pkg(&json!([{
+            "name": "counter_new",
+            "effect": "pure",
+            "isStructCtor": true,
+            "structName": "Counter",
+            "structFields": [{ "name": "value", "type": "i64" }],
+            "structDerives": ["Default", "Clone"]
+        }])))
+        .expect("decodes");
+        let f = fn_at(&pkg, 0);
+        let (name, derives, arity) = match f.shape() {
+            FnShape::StructCtor { def } => (
+                def.name.as_str().to_owned(),
+                def.derives.rust_list(),
+                def.fields.len(),
+            ),
+            other => (format!("not a struct ctor: {other:?}"), String::new(), 0),
+        };
+        assert_eq!(name, "Counter");
+        assert_eq!(derives, "Clone, Default");
+        assert_eq!(arity, 1);
+        // Construction is infallible — a total struct literal.
+        assert_eq!(f.fallibility(), Fallibility::Infallible);
+        assert!(pkg.dropped().is_empty());
+    }
+
+    #[test]
+    fn an_ill_formed_provide_struct_over_drops_the_entry() {
+        // A derive outside the allowlist refuses the whole entry at decode.
+        let pkg = decode(&base_pkg(&json!([{
+            "name": "bad_new",
+            "effect": "pure",
+            "isStructCtor": true,
+            "structName": "Bad",
+            "structFields": [{ "name": "x", "type": "f64" }],
+            "structDerives": ["Eq"]
+        }])))
+        .expect("package survives");
+        assert!(pkg.fns().is_empty());
+        assert!(matches!(
+            pkg.dropped().first().expect("dropped diagnostic"),
+            Diagnostic::WireMalformed {
+                defect: WireDefect::InvalidType { .. },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_struct_ctor_flag_clashing_with_an_accessor_flag_drops_the_binding() {
+        let pkg = decode(&base_pkg(&json!([{
+            "name": "confused",
+            "effect": "pure",
+            "isStructCtor": true,
+            "isField": true,
+            "structName": "X"
+        }])))
+        .expect("package survives");
+        assert!(pkg.fns().is_empty());
+        assert!(matches!(
+            pkg.dropped().first().expect("dropped diagnostic"),
+            Diagnostic::ShapeContradiction { .. }
         ));
     }
 
