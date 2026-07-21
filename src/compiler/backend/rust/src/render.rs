@@ -34,11 +34,44 @@ use crate::doc::{ChainOperand, Doc};
 pub struct RenderConfig {
     /// The maximum line width (`rustfmt` `max_width`, default 100).
     pub max_width: usize,
+    /// Columns that must stay free at the end of the current line — the trailing
+    /// delimiter(s) `rustfmt` reserves after the construct being laid out (the
+    /// `,` after a one-per-line list element, the `),` after the sole argument of
+    /// an enclosing call). `rustfmt` carries this as the `Shape`'s reduced width;
+    /// a node's fit test subtracts it so a construct that would end exactly at
+    /// `max_width` still breaks to leave room for its trailing delimiter. Reset to
+    /// `0` whenever a construct opens its own delimiters (its interior lines are
+    /// measured against the full width; the reserve applies only to the LAST line
+    /// the construct shares with the enclosing delimiter).
+    pub reserve: usize,
 }
 
 impl Default for RenderConfig {
     fn default() -> Self {
-        Self { max_width: 100 }
+        Self {
+            max_width: 100,
+            reserve: 0,
+        }
+    }
+}
+
+impl RenderConfig {
+    /// This config with the trailing-delimiter `reserve` set to `n`.
+    const fn with_reserve(self, n: usize) -> Self {
+        Self { reserve: n, ..self }
+    }
+
+    /// This config with the trailing-delimiter `reserve` cleared — used when a
+    /// construct opens its own delimiters, so its interior lines are measured
+    /// against the full width.
+    const fn no_reserve(self) -> Self {
+        self.with_reserve(0)
+    }
+
+    /// The effective right margin for a construct's LAST line: `max_width` less the
+    /// reserved trailing-delimiter columns.
+    const fn margin(self) -> usize {
+        self.max_width.saturating_sub(self.reserve)
     }
 }
 
@@ -129,9 +162,19 @@ fn render_at(
             }
         }
         Doc::Concat(docs) => {
-            for d in docs {
+            // A child's own trailing `reserve` is the enclosing reserve PLUS the flat
+            // width of every following sibling that lands on the SAME line — the
+            // closing delimiter text a wrapper appends after a breakable construct
+            // (`Box::new(<closure>)`'s `)`, then the enclosing `;`). Only siblings
+            // that render single-line count; once one would break, the reserve no
+            // longer applies to earlier children (their tail is that break, not the
+            // delimiter). This lets a `BraceBody`/`CallArgs` child re-test its own fit
+            // against the width `rustfmt`'s `Shape` leaves after its trailing tokens.
+            for (i, d) in docs.iter().enumerate() {
                 let c = eff_col(out, col);
-                render_at(d, cfg, indent, c, flat, out);
+                let suffix = trailing_siblings_flat_width(docs.get(i + 1..).unwrap_or(&[]));
+                let child_cfg = cfg.with_reserve(cfg.reserve + suffix);
+                render_at(d, child_cfg, indent, c, flat, out);
             }
         }
         Doc::Nest(n, inner) => {
@@ -184,7 +227,267 @@ fn render_at(
                 out,
             );
         }
+        Doc::StructLit {
+            open,
+            fields,
+            close,
+        } => {
+            render_struct_lit(open, fields, close, cfg, indent, col, out);
+        }
+        Doc::TypeBound {
+            ptr_open,
+            head,
+            traits,
+            close,
+        } => {
+            render_type_bound(ptr_open, head, traits, close, cfg, indent, col, flat, out);
+        }
+        Doc::ElidableParen { inner } => {
+            // Drop the redundant wrapping parens when `inner` already renders
+            // parenthesized (a doubled `(( … ))` collapses to `( … )`), matching
+            // `rustfmt`. The probe measures `inner`'s first rendered character.
+            if inner_renders_parenthesized(inner, cfg, eff_col(out, col), indent) {
+                render_at(inner, cfg, indent, col, flat, out);
+            } else {
+                out.push('(');
+                let c = current_col(out);
+                render_at(inner, cfg, indent, c, flat, out);
+                out.push(')');
+            }
+        }
     }
+}
+
+/// Whether `inner` renders with a leading `(` at `start_col` — a self-parenthesizing
+/// block / paren-expr whose enclosing redundant paren pair `rustfmt` elides. Probed
+/// by rendering `inner` flat and inspecting its first character.
+fn inner_renders_parenthesized(
+    inner: &Doc,
+    cfg: RenderConfig,
+    start_col: usize,
+    indent: usize,
+) -> bool {
+    let mut scratch = String::new();
+    render_at(
+        inner,
+        cfg.no_reserve(),
+        indent,
+        start_col,
+        true,
+        &mut scratch,
+    );
+    scratch.starts_with('(')
+}
+
+/// Render a [`Doc::TypeBound`] `Ptr<Head + T1 + …>` with `rustfmt`'s angle-bracket
+/// break. Flat when it fits; else `Ptr<` then the bound list at one indent step
+/// (`Head + T1 + …,`) with `>` dedented; else, when the bound list itself overflows
+/// at that step, `Head` and each `+ Ti` on their own lines at a further indent step.
+/// The break decision is independent of any enclosing group (`rustfmt` re-tests the
+/// annotation against the width on its own line). `col` is where `ptr_open`'s first
+/// character lands.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "renderer threads ptr/head/traits/close + col/indent"
+)]
+fn render_type_bound(
+    ptr_open: &Doc,
+    head: &Doc,
+    traits: &[Doc],
+    close: &Doc,
+    cfg: RenderConfig,
+    indent: usize,
+    col: usize,
+    flat: bool,
+    out: &mut String,
+) {
+    let start_col = eff_col(out, col);
+    // FLAT: an enclosing group that chose flat forces the inline form (used by the
+    // assignment's `flat_width` measurement of its prefix); otherwise the inline
+    // form holds only while `Ptr<Head + T1 + …>` fits the (reserve-reduced) width.
+    let flat_w = type_bound_flat_width(ptr_open, head, traits, close, cfg);
+    if flat || start_col + flat_w <= cfg.margin() {
+        render_at(ptr_open, cfg.no_reserve(), indent, start_col, true, out);
+        let c = current_col(out);
+        render_at(head, cfg.no_reserve(), indent, c, true, out);
+        for t in traits {
+            out.push_str(" + ");
+            let c = current_col(out);
+            render_at(t, cfg.no_reserve(), indent, c, true, out);
+        }
+        let c = current_col(out);
+        render_at(close, cfg, indent, c, true, out);
+        return;
+    }
+
+    // Overflowing: break the angle brackets. `Ptr<` on this line, the bound list at
+    // one indent step, `>` dedented back to `Ptr`'s column.
+    render_at(ptr_open, cfg.no_reserve(), indent, start_col, false, out);
+    let bound_indent = indent + CHAIN_BREAK_INDENT;
+
+    // ANGLE-BREAK when the whole bound list (plus its trailing `,`) fits on one line
+    // at the bound indent; otherwise BOUND-BREAK, each `+ Ti` on its own line at a
+    // further indent step. The `head` and the traits open the bound list at
+    // `bound_indent` either way.
+    let bound_flat_w = type_bound_list_flat_width(head, traits, cfg);
+    let angle_break = bound_indent + bound_flat_w < cfg.max_width;
+    out.push('\n');
+    push_indent(bound_indent, out);
+    let c = current_col(out);
+    render_at(head, cfg.no_reserve(), bound_indent, c, true, out);
+    if angle_break {
+        // The whole bound list stays on one line at `bound_indent`.
+        for t in traits {
+            out.push_str(" + ");
+            let c = current_col(out);
+            render_at(t, cfg.no_reserve(), bound_indent, c, true, out);
+        }
+    } else {
+        // Each `+ Ti` on its own line at a further indent step.
+        let trait_indent = bound_indent + CHAIN_BREAK_INDENT;
+        for t in traits {
+            out.push('\n');
+            push_indent(trait_indent, out);
+            out.push_str("+ ");
+            let c = current_col(out);
+            render_at(t, cfg.no_reserve(), trait_indent, c, false, out);
+        }
+    }
+    out.push(',');
+    out.push('\n');
+    push_indent(indent, out);
+    let c = current_col(out);
+    render_at(close, cfg, indent, c, false, out);
+}
+
+/// The flat width of `Ptr<Head + T1 + …>` — the single-line footprint of a
+/// [`Doc::TypeBound`], for its overflow test.
+fn type_bound_flat_width(
+    ptr_open: &Doc,
+    head: &Doc,
+    traits: &[Doc],
+    close: &Doc,
+    cfg: RenderConfig,
+) -> usize {
+    let mut scratch = String::new();
+    render_at(ptr_open, cfg.no_reserve(), 0, 0, true, &mut scratch);
+    render_at(
+        head,
+        cfg.no_reserve(),
+        0,
+        current_col(&scratch),
+        true,
+        &mut scratch,
+    );
+    for t in traits {
+        scratch.push_str(" + ");
+        let c = current_col(&scratch);
+        render_at(t, cfg.no_reserve(), 0, c, true, &mut scratch);
+    }
+    let c = current_col(&scratch);
+    render_at(close, cfg.no_reserve(), 0, c, true, &mut scratch);
+    scratch.len()
+}
+
+/// The flat width of the bound list `Head + T1 + …` alone (no `Ptr<` / `>`), for
+/// the angle-break-vs-bound-break decision.
+fn type_bound_list_flat_width(head: &Doc, traits: &[Doc], cfg: RenderConfig) -> usize {
+    let mut scratch = String::new();
+    render_at(head, cfg.no_reserve(), 0, 0, true, &mut scratch);
+    for t in traits {
+        scratch.push_str(" + ");
+        let c = current_col(&scratch);
+        render_at(t, cfg.no_reserve(), 0, c, true, &mut scratch);
+    }
+    scratch.len()
+}
+
+/// Render a [`Doc::StructLit`] with `rustfmt`'s `struct_lit_width` rule: the flat
+/// `Name { a: 1, b: 2 }` (spaces hugging the braces) when the FIELD TEXT fits 18
+/// columns and the whole line fits `max_width`; otherwise one field per line with a
+/// trailing comma, `close` dedented back to `open`'s column. The break decision is
+/// independent of any enclosing group (`rustfmt` re-tests the field width on the
+/// struct's own line), like [`Doc::CallArgs`].
+#[allow(
+    clippy::too_many_arguments,
+    reason = "renderer threads open/close/col/indent"
+)]
+fn render_struct_lit(
+    open: &Doc,
+    fields: &[Doc],
+    close: &Doc,
+    cfg: RenderConfig,
+    indent: usize,
+    col: usize,
+    out: &mut String,
+) {
+    let start_col = eff_col(out, col);
+    // The `struct_lit_width` gate applies even when the enclosing group chose flat:
+    // a struct literal whose field text exceeds 18 columns breaks and forces its
+    // enclosing construct broken (like a `HardLine`), so `flat` alone does not force
+    // it inline — `struct_lit_flat_fits` is the sole authority.
+    if struct_lit_flat_fits(open, fields, close, cfg, start_col, indent) {
+        // Flat: `Name { a: 1, b: 2 }` — a space hugs each brace.
+        render_at(open, cfg.no_reserve(), indent, start_col, true, out);
+        out.push(' ');
+        render_flat_elems(fields, cfg, indent, out);
+        out.push(' ');
+        let c = current_col(out);
+        render_at(close, cfg, indent, c, true, out);
+        return;
+    }
+    // Broken: one field per line with a trailing comma — the same one-per-line
+    // layout as a delimited list.
+    render_one_per_line(open, fields, close, true, cfg, indent, start_col, out);
+}
+
+/// `rustfmt`'s `struct_lit_width` (default 18): the maximum width of a struct
+/// literal's FIELD TEXT — the span between the braces, trimmed of the hugging
+/// spaces — that stays on one line. A struct literal whose field text exceeds this
+/// breaks one field per line even when the whole line still fits `max_width`.
+const STRUCT_LIT_WIDTH: usize = 18;
+
+/// Whether a struct literal `Name { fields }` may lay out flat from `start_col`:
+/// genuinely single-line, the whole line (with the hugging spaces and the trailing
+/// `reserve`) within `max_width`, AND the field text within `struct_lit_width`.
+fn struct_lit_flat_fits(
+    open: &Doc,
+    fields: &[Doc],
+    close: &Doc,
+    cfg: RenderConfig,
+    start_col: usize,
+    indent: usize,
+) -> bool {
+    let mut scratch = String::new();
+    render_at(
+        open,
+        cfg.no_reserve(),
+        indent,
+        start_col,
+        true,
+        &mut scratch,
+    );
+    let open_end = current_col(&scratch);
+    scratch.push(' ');
+    render_flat_elems(fields, cfg, indent, &mut scratch);
+    let fields_end = current_col(&scratch);
+    scratch.push(' ');
+    render_at(
+        close,
+        cfg.no_reserve(),
+        indent,
+        fields_end + 1,
+        true,
+        &mut scratch,
+    );
+    if scratch.contains('\n') {
+        return false;
+    }
+    if start_col + scratch.len() > cfg.margin() {
+        return false;
+    }
+    // The field text is the span between the braces, excluding the hugging spaces.
+    fields_end.saturating_sub(open_end) <= STRUCT_LIT_WIDTH
 }
 
 /// Render a [`Doc::BraceBody`]: the body inline (no braces) when it fits flat here,
@@ -293,9 +596,33 @@ fn render_assign(
         return;
     }
 
-    // The same-line form overflows. Emit the prefix (always single-line — the
-    // `let name: TYPE = ` head never breaks), then decide the RHS layout.
-    render_at(prefix, cfg, indent, start_col, false, out);
+    // The same-line form overflows. The `let name: TYPE = ` prefix stays flat
+    // UNLESS its own flat width overflows the line — then `rustfmt` breaks the
+    // TYPE's angle brackets (a `Doc::TypeBound` prefix does this) to shorten the
+    // prefix before it even reaches the RHS. Rendering the prefix non-flat only when
+    // it overflows keeps the RHS-break (which alone fixes a merely-`prefix+rhs`-wide
+    // line) preferred, matching `rustfmt`.
+    let prefix_overflows = start_col + prefix_flat_w > cfg.max_width;
+    render_at(prefix, cfg, indent, start_col, !prefix_overflows, out);
+
+    // When the prefix itself broke its TYPE across lines, its last line ends with
+    // `> = ` and `rustfmt` GLUES the RHS onto it (the type-break already reclaimed
+    // the width the RHS-break would have) — the RHS breaks into its own delimiters
+    // in place, exactly the delimiter-break form. Skip the RHS-break axis.
+    if prefix_overflows {
+        let c = current_col(out);
+        // The trailing `;` (the `trailer`) is reserved on the RHS's last line so a
+        // glued closure body re-tests its fit with room for the statement terminator.
+        render_at(
+            rhs,
+            cfg.with_reserve(cfg.reserve + trailer),
+            indent,
+            c,
+            false,
+            out,
+        );
+        return;
+    }
 
     // RHS-BREAK: dropped onto its own line at one indent step past the block, the
     // RHS's FIRST line (laying out its own internal breaks — e.g. a closure body
@@ -322,6 +649,27 @@ fn render_assign(
     // the block indent.
     let c = current_col(out);
     render_at(rhs, cfg, indent, c, false, out);
+}
+
+/// The combined flat width of the run of trailing sibling TEXT leaves that follow a
+/// `Doc::Concat` child on the same line — the closing-delimiter text a wrapper
+/// appends after a breakable child (`Box::new(<closure>)`'s `)`). Only bare text
+/// leaves count: they are the delimiter tails that always sit on the child's last
+/// line. The scan stops at the first non-text sibling (a nested structure begins its
+/// own layout and does not reserve against an earlier child). Restricting to text
+/// leaves keeps this O(remaining leaves) rather than re-rendering nested subtrees,
+/// avoiding the exponential blowup a full per-child re-render would cause on deeply
+/// nested closures. This is the extra `reserve` a child inherits so its own fit test
+/// leaves room for its wrapper's tail.
+fn trailing_siblings_flat_width(siblings: &[Doc]) -> usize {
+    let mut total = 0usize;
+    for s in siblings {
+        match s {
+            Doc::Text(t) => total += t.len(),
+            _ => break,
+        }
+    }
+    total
 }
 
 /// The width of `doc` rendered entirely flat from column `start_col` up to its
@@ -374,9 +722,18 @@ fn has_hard_break(doc: &Doc) -> bool {
         // A `CallArgs` decides its own layout independently (like `Group`), so it
         // hides its own breaks — a combinable call inside another does not force
         // the outer to break its whole list; the combining rule glues instead.
-        | Doc::CallArgs { .. } => false,
+        | Doc::CallArgs { .. }
+        // A `StructLit` decides its own layout independently too (its own
+        // `struct_lit_width` re-test), so it hides its breaks like `CallArgs`.
+        | Doc::StructLit { .. }
+        // A `TypeBound` decides its own angle-bracket break independently; it never
+        // carries a `HardLine`.
+        | Doc::TypeBound { .. } => false,
         Doc::Concat(docs) => docs.iter().any(has_hard_break),
-        Doc::Nest(_, inner) => has_hard_break(inner),
+        // `Nest` is pure indentation and `ElidableParen` pure wrapping: each forwards
+        // its break behavior to its inner (a paren-block carries the statement
+        // `HardLine`s that force a break).
+        Doc::Nest(_, inner) | Doc::ElidableParen { inner } => has_hard_break(inner),
     }
 }
 
@@ -405,9 +762,9 @@ fn trim_trailing_spaces(out: &mut String) {
 /// general rule.
 fn fits(doc: &Doc, cfg: RenderConfig, start_col: usize, indent: usize) -> bool {
     let mut scratch = String::new();
-    render_at(doc, cfg, indent, start_col, true, &mut scratch);
+    render_at(doc, cfg.no_reserve(), indent, start_col, true, &mut scratch);
     let first_line = scratch.split('\n').next().unwrap_or(&scratch);
-    start_col + first_line.len() <= cfg.max_width
+    start_col + first_line.len() <= cfg.margin()
 }
 
 /// Whether `doc` rendered flat from column `start_col` is genuinely single-line
@@ -422,11 +779,11 @@ fn fits(doc: &Doc, cfg: RenderConfig, start_col: usize, indent: usize) -> bool {
 /// newline in their flat form, so this coincides with [`fits`] for them.
 fn fits_single_line(doc: &Doc, cfg: RenderConfig, start_col: usize, indent: usize) -> bool {
     let mut scratch = String::new();
-    render_at(doc, cfg, indent, start_col, true, &mut scratch);
+    render_at(doc, cfg.no_reserve(), indent, start_col, true, &mut scratch);
     if scratch.contains('\n') {
         return false;
     }
-    start_col + scratch.len() <= cfg.max_width
+    start_col + scratch.len() <= cfg.margin()
 }
 
 /// Render a binop chain with rustfmt's layout.
@@ -450,7 +807,19 @@ fn render_chain(
     let whole = Doc::Chain {
         operands: operands.to_vec(),
     };
-    if flat || (no_hard_break && fits(&whole, cfg, col, indent)) {
+    // The whole-flat and per-operator glue fit tests honor the trailing-delimiter
+    // `reserve`: the `,` (or `),`) `rustfmt` appends after the chain reduces the
+    // width the chain's single line may occupy. `fits_single_line`/`glue_fits`
+    // subtract `cfg.reserve` via `cfg.margin()`.
+    //
+    // The whole-flat fast path requires the chain to render GENUINELY single-line,
+    // not merely first-line-fits: an operand carrying an independent-layout construct
+    // (a `CallArgs` whose statement-block argument breaks) hides its `HardLine` from
+    // `no_hard_break`, yet its flat render still spans multiple lines. `fits` would
+    // measure only the (short) first line and wrongly flatten the whole chain, gluing
+    // the block; `fits_single_line` rejects the embedded newline so the chain breaks
+    // and each operand lays out its own multiline argument.
+    if flat || (no_hard_break && fits_single_line(&whole, cfg, col, indent)) {
         render_chain_flat(operands, cfg, indent, out);
         return;
     }
@@ -532,6 +901,23 @@ fn render_chain(
     }
 }
 
+/// Whether a call's `open` renders across more than one line at `start_col` — a
+/// `(func)(args)` whose `func` is a `({ … })` block that breaks. When so, the tiny
+/// argument list may still glue onto the open's closing line rather than breaking
+/// one-per-line.
+fn open_is_multiline(open: &Doc, cfg: RenderConfig, start_col: usize, indent: usize) -> bool {
+    let mut scratch = String::new();
+    render_at(
+        open,
+        cfg.no_reserve(),
+        indent,
+        start_col,
+        false,
+        &mut scratch,
+    );
+    scratch.contains('\n')
+}
+
 /// Render a bracket-delimited argument list with `rustfmt`'s call-argument
 /// COMBINING rule. See [`Doc::CallArgs`]. `col` is where `open`'s first character
 /// lands; `indent` is the enclosing block indent.
@@ -561,6 +947,34 @@ fn render_call_args(
         let c = current_col(out);
         render_at(close, cfg, indent, c, true, out);
         return;
+    }
+
+    // MULTILINE-OPEN GLUE: the `open` itself renders multi-line — a `(func)(args)`
+    // whose `func` is a `({ … })` block that breaks — but the flat argument list
+    // fits on the open's LAST line. `rustfmt` glues `(args)` onto the block's closing
+    // `})` line rather than breaking the tiny argument list one-per-line. Render the
+    // open non-flat, then the flat args and close on its last line.
+    if !elems.is_empty() && open_is_multiline(open, cfg, start_col, indent) {
+        let mut probe = String::new();
+        render_at(open, cfg.no_reserve(), indent, start_col, false, &mut probe);
+        let open_last = current_col(&probe);
+        let mut argscratch = String::new();
+        render_flat_elems(elems, cfg, indent, &mut argscratch);
+        render_at(
+            close,
+            cfg.no_reserve(),
+            indent,
+            open_last,
+            true,
+            &mut argscratch,
+        );
+        if !argscratch.contains('\n') && open_last + argscratch.len() <= cfg.margin() {
+            render_at(open, cfg.no_reserve(), indent, start_col, false, out);
+            render_flat_elems(elems, cfg, indent, out);
+            let c = current_col(out);
+            render_at(close, cfg, indent, c, true, out);
+            return;
+        }
     }
 
     // COMBINED (last-argument overflow / head-glue): the LAST element is a
@@ -606,15 +1020,54 @@ fn render_call_args(
     // ONE-PER-LINE: `open`, each element on its own line at one indent step, a
     // break-conditional trailing comma (suppressed for a macro list), the close
     // dedented back to the group's start column.
-    render_at(open, cfg, indent, start_col, false, out);
+    render_one_per_line(
+        open,
+        elems,
+        close,
+        trailing_comma,
+        cfg,
+        indent,
+        start_col,
+        out,
+    );
+}
+
+/// Lay a delimited list out one element per line: `open`, each element on its own
+/// line at one indent step, a trailing `,` after each (suppressed for the final
+/// element of a macro list), the `close` dedented back to `start_col`. Each
+/// element's last line carries a trailing comma, so it is rendered with a
+/// one-column trailing `reserve` — `rustfmt`'s `Shape` width reduced by the comma
+/// — while `open`/`close` open the list's own delimiters (enclosing reserve
+/// cleared). Shared by the plain one-per-line break and the forced-break fallback.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "renderer threads open/close/col/indent"
+)]
+fn render_one_per_line(
+    open: &Doc,
+    elems: &[Doc],
+    close: &Doc,
+    trailing_comma: bool,
+    cfg: RenderConfig,
+    indent: usize,
+    start_col: usize,
+    out: &mut String,
+) {
+    render_at(open, cfg.no_reserve(), indent, start_col, false, out);
     let inner_indent = indent + CHAIN_BREAK_INDENT;
     let last = elems.len().saturating_sub(1);
     for (i, e) in elems.iter().enumerate() {
         out.push('\n');
         push_indent(inner_indent, out);
         let c = current_col(out);
-        render_at(e, cfg, inner_indent, c, false, out);
-        if i < last || trailing_comma {
+        let has_comma = i < last || trailing_comma;
+        let elem_cfg = if has_comma {
+            cfg.with_reserve(1)
+        } else {
+            cfg.no_reserve()
+        };
+        render_at(e, elem_cfg, inner_indent, c, false, out);
+        if has_comma {
             out.push(',');
         }
     }
@@ -782,7 +1235,12 @@ fn last_arg_combines(
     // base) overflows `fn_call_width`, or it is intrinsically multiline. When the
     // argument fits flat within that budget, `rustfmt` breaks the single-argument
     // call one-per-line to give the flat argument its own line rather than gluing.
-    if single_arg && !has_hard_break(last) {
+    // A BLOCK-LIKE argument (a `move |…|` closure or a brace block) is `rustfmt`'s
+    // `overflow_delimited_expr`: it is ALWAYS glued onto the call head, with only its
+    // OWN body breaking — the call is never broken one-per-line to give it its own
+    // line. So the "break to give the flat argument its own line" heuristic below is
+    // skipped for it; only the first-line-fit gate (further down) can reject the glue.
+    if single_arg && !has_hard_break(last) && !is_block_like(last) {
         let mut flat = String::new();
         render_at(last, cfg, indent, last_col, true, &mut flat);
         if !flat.contains('\n') && (last_col + flat.len()).saturating_sub(base) <= FN_CALL_WIDTH {
@@ -893,32 +1351,46 @@ fn render_forced_break(
                 return;
             }
             // One argument per line.
-            render_at(open, cfg, indent, start_col, false, out);
-            let inner_indent = indent + CHAIN_BREAK_INDENT;
-            let last = elems.len().saturating_sub(1);
-            for (i, e) in elems.iter().enumerate() {
-                out.push('\n');
-                push_indent(inner_indent, out);
-                let c = current_col(out);
-                render_at(e, cfg, inner_indent, c, false, out);
-                if i < last || *trailing_comma {
-                    out.push(',');
-                }
-            }
-            out.push('\n');
-            push_indent(indent, out);
-            let c = current_col(out);
-            render_at(close, cfg, indent, c, false, out);
+            render_one_per_line(
+                open,
+                elems,
+                close,
+                *trailing_comma,
+                cfg,
+                indent,
+                start_col,
+                out,
+            );
         }
-        // A wrapper like `Box::new(<CallArgs>)`: force-break the inner construct. The
+        // A struct literal `Name { … }` forced broken: one field per line. Its own
+        // `struct_lit_width` re-test does not apply here (the combine forced it
+        // multiline), so break its fields directly.
+        Doc::StructLit {
+            open,
+            fields,
+            close,
+        } => {
+            let start_col = eff_col(out, col);
+            render_one_per_line(open, fields, close, true, cfg, indent, start_col, out);
+        }
+        // A wrapper like `Box::new(<CallArgs>)` / `Box::new(<StructLit>)`, or a
+        // `move |…| -> R <braced-block>` closure: force-break the inner construct. A
         // leading wrapper text (`Box::new(`) shrinks the recursive `Shape` budget one
-        // step before the inner combine, exactly like a `CallArgs` open.
+        // step before the inner combine. A closure's trailing braced-block `Group`
+        // must be FORCED broken (its body onto its own line) — `rustfmt`'s
+        // `overflow_delimited_expr` opens a block-like argument's body rather than
+        // keeping it flat, even when the flat body alone would fit.
         Doc::Concat(parts) => {
+            let is_closure = matches!(parts.first(), Some(Doc::Text(h)) if h.starts_with("move |"));
+            let last = parts.len().saturating_sub(1);
             let mut inner_budget = budget;
-            for p in parts {
+            for (i, p) in parts.iter().enumerate() {
                 let c = eff_col(out, col);
-                if let Doc::CallArgs { .. } = p {
+                if matches!(p, Doc::CallArgs { .. } | Doc::StructLit { .. }) {
                     render_forced_break(p, combine_base, inner_budget, cfg, indent, c, out);
+                } else if is_closure && i == last {
+                    // The closure's braced body block: force it broken.
+                    render_group_broken(p, cfg, indent, c, out);
                 } else {
                     if let Doc::Text(_) = p {
                         inner_budget =
@@ -934,6 +1406,20 @@ fn render_forced_break(
     }
 }
 
+/// Render a closure's braced-block `Group` with its soft breaks FORCED — the body
+/// onto its own line at one indent step, matching `rustfmt`'s `overflow_delimited_expr`
+/// which opens a block-like argument even when its flat body would fit. A non-`Group`
+/// doc (a statement block already carrying `HardLine`s) falls back to the standard
+/// non-flat render, which breaks it anyway.
+fn render_group_broken(doc: &Doc, cfg: RenderConfig, indent: usize, col: usize, out: &mut String) {
+    if let Doc::Group(inner) = doc {
+        let start_col = eff_col(out, col);
+        render_at(inner, cfg, indent, start_col, false, out);
+    } else {
+        render_at(doc, cfg, indent, col, false, out);
+    }
+}
+
 /// The opening head leaf (`f(`, `Box::new((`, `(`) of a combinable construct — the
 /// text a nested combine glues onto and whose width shrinks the recursive `Shape`
 /// budget one step. A [`Doc::CallArgs`] head is its `open`; a text-wrapped single
@@ -941,7 +1427,7 @@ fn render_forced_break(
 /// has no combining head (returns an empty leaf, width 0).
 fn last_head(doc: &Doc) -> &Doc {
     match doc {
-        Doc::CallArgs { open, .. } => open,
+        Doc::CallArgs { open, .. } | Doc::StructLit { open, .. } => open,
         Doc::Concat(parts) => match parts.first() {
             Some(t @ Doc::Text(h)) if h.ends_with('(') && !h.contains('{') => t,
             _ => &EMPTY_LEAF,
@@ -969,6 +1455,32 @@ fn shrink_budget(parent: usize, open: &Doc) -> usize {
     FN_CALL_WIDTH.min(parent.saturating_sub(flat_leaf_len(open)))
 }
 
+/// Whether `doc` is a BLOCK-LIKE argument — a `move |…|` closure or a brace block
+/// `{ … }` — that `rustfmt`'s `overflow_delimited_expr` always glues onto the call
+/// head (breaking only its own body), rather than breaking the call one-per-line to
+/// give the argument its own line. A `Box::new(<block-like>)` wrapper counts (the
+/// wrapper glues and the inner block breaks). Distinct from [`is_glue_shape`], which
+/// also admits nested calls / macros / tuples that DO get their own line when they
+/// fit flat within the shared budget.
+fn is_block_like(doc: &Doc) -> bool {
+    match doc {
+        Doc::BraceBody(_) => true,
+        Doc::Group(inner) => is_block_like(inner),
+        Doc::Concat(parts) => match parts.first() {
+            // A `move |…| -> R ` closure head, or a brace block `{ … }` that is not a
+            // `({` paren-wrapped statement block.
+            Some(Doc::Text(head)) if head.starts_with("move |") => true,
+            Some(Doc::Text(head)) if head.ends_with('{') && !head.starts_with('(') => true,
+            // A `Box::new(<block-like>)` / `Some(<block-like>)` wrapper.
+            Some(Doc::Text(head)) if head.ends_with('(') && !head.contains('{') => {
+                parts.get(1).is_some_and(is_block_like)
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 /// Whether `doc` is a GLUE-shaped construct for the SINGLE-argument combine chain:
 /// a [`Doc::CallArgs`] (any call / macro / ctor / tuple / list whose own delimiters
 /// the outer head glues onto), a brace block (`{ … }`), or either behind a leading
@@ -976,12 +1488,16 @@ fn shrink_budget(parent: usize, open: &Doc) -> usize {
 /// statement block (`({ … })`) are NOT glue-shaped.
 fn is_glue_shape(doc: &Doc) -> bool {
     match doc {
-        Doc::CallArgs { .. } => true,
-        // A struct literal (`Name { … }`) is a `Group`-wrapped brace-delimited
-        // construct; `rustfmt` glues a wrapper's head onto its `Name {` just like a
-        // call's `(`. See through the group to its `Concat` body.
+        // A call/ctor/macro/tuple/list glues onto its own delimiters, and a struct
+        // literal (`Name { … }`) is a brace-delimited construct `rustfmt` glues a
+        // wrapper's head onto just like a call's `(`.
+        Doc::CallArgs { .. } | Doc::StructLit { .. } => true,
         Doc::Group(inner) => is_glue_shape(inner),
         Doc::Concat(parts) => match parts.first() {
+            // A `move |…| -> R ` closure head followed by its braced body — a
+            // block-like expression `rustfmt` glues a wrapper's `(` onto, letting the
+            // closure body break in place while the head stays on the wrapper's line.
+            Some(Doc::Text(head)) if head.starts_with("move |") => true,
             // A brace block `{ … }` (closure body / statement block) or a struct
             // literal `Name { … }` — a `{`-terminated head that is NOT a `({`
             // paren-wrapped statement block (which `rustfmt` does NOT combine).
@@ -1015,8 +1531,9 @@ fn is_delimited_expr(doc: &Doc) -> bool {
             }
             _ => false,
         },
-        // A struct literal (`Name { … }`) is a `Group`-wrapped brace construct — a
-        // delimited expr for the overflow rule; see through the group.
+        // A struct literal (`Name { … }`) is a brace construct — a delimited expr
+        // for the overflow rule.
+        Doc::StructLit { .. } => true,
         Doc::Group(inner) => is_delimited_expr(inner),
         Doc::Concat(parts) => match parts.first() {
             // A brace block `{ … }` or a struct literal `Name { … }` — a
@@ -1038,13 +1555,30 @@ fn is_delimited_expr(doc: &Doc) -> bool {
 fn glue_fits(operand: &Doc, cfg: RenderConfig, col: usize, indent: usize, op: &str) -> bool {
     // Column after " op " is appended.
     let after_op = col + 1 + op.len() + 1;
-    if after_op > cfg.max_width {
+    if after_op > cfg.margin() {
         return false;
     }
     let mut scratch = String::new();
-    render_at(operand, cfg, indent, after_op, false, &mut scratch);
+    render_at(
+        operand,
+        cfg.no_reserve(),
+        indent,
+        after_op,
+        false,
+        &mut scratch,
+    );
     let first_line = scratch.split('\n').next().unwrap_or("");
-    after_op + first_line.len() <= cfg.max_width
+    let single_line = !scratch.contains('\n');
+    // The trailing-delimiter `reserve` bites only when the operand renders
+    // single-line here — then this glued line IS the chain's last line and the
+    // enclosing `,` sits at its end. A multiline operand ends on a later line, so
+    // its glued first line is measured against the full width.
+    let margin = if single_line {
+        cfg.margin()
+    } else {
+        cfg.max_width
+    };
+    after_op + first_line.len() <= margin
 }
 
 /// Whether `operand`, rendered non-flat from `col`, stays on a single line. A chain
@@ -1406,6 +1940,56 @@ mod p0_tests {
         assert_eq!(
             got, expected,
             "\n--- got ---\n{got}\n--- want ---\n{expected}"
+        );
+    }
+
+    #[test]
+    fn chain_operand_with_block_arg_call_breaks_not_glues() {
+        // A chain operand `((((((((f({ <stmt block> }, 0)` whose call carries a
+        // statement-block argument must break the CALL one-per-line — the block's
+        // `HardLine` is hidden from `has_hard_break` by the `CallArgs`, so the chain's
+        // whole-flat fast path must use the genuinely-single-line test (else it
+        // glues the multiline block onto the call head). Captured from `rustfmt
+        // --edition 2024 --style-edition 2024`.
+        let block = Doc::concat(vec![
+            Doc::text("{"),
+            Doc::nest(
+                4,
+                Doc::concat(vec![
+                    Doc::HardLine,
+                    Doc::text("let x: i64 = 1;"),
+                    Doc::HardLine,
+                    Doc::text("x"),
+                ]),
+            ),
+            Doc::HardLine,
+            Doc::text("}"),
+        ]);
+        let call = Doc::call_args(
+            Doc::text("crate::main_apply_i("),
+            vec![block, Doc::text("0")],
+            Doc::text(")"),
+            true,
+        );
+        let op0 = Doc::concat(vec![Doc::text("(("), call]);
+        let chain = Doc::Chain {
+            operands: vec![
+                ChainOperand {
+                    leading_op: None,
+                    doc: op0,
+                },
+                ChainOperand {
+                    leading_op: Some(Cow::Borrowed("+")),
+                    doc: Doc::text("crate::main_apply_p(1))"),
+                },
+            ],
+        };
+        let got = render(&chain, RenderConfig::default());
+        // The call breaks one-per-line: the block at +4, then `0,`, `)` dedented,
+        // then the glued `+ ...)`. NOT `main_apply_i({\n ... \n}, 0)` (block glued).
+        assert!(
+            got.contains("crate::main_apply_i(\n") && got.contains("\n    0,\n"),
+            "the block-arg call must break one-per-line, not glue its block:\n{got}"
         );
     }
 

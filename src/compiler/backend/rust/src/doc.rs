@@ -214,6 +214,73 @@ pub enum Doc {
         /// breaks without one.
         trailing_comma: bool,
     },
+    /// A struct literal `Name { f0: v0, f1: v1 }`, laid out with `rustfmt`'s
+    /// `struct_lit_width` (default 18) rule. Unlike a [`Doc::CallArgs`] (gated by
+    /// `fn_call_width` = 60), a struct literal stays on one line ONLY when its FIELD
+    /// TEXT — the span between the braces, trimmed of the hugging spaces — fits 18
+    /// columns AND the whole line fits `max_width`. Otherwise it breaks one field
+    /// per line with a trailing comma, `close` dedented back to `open`'s column.
+    ///
+    /// Flat form hugs the braces WITH a space (`Name { a: 1, b: 2 }`); the break
+    /// decision is independent of any enclosing group (like [`Doc::CallArgs`]), so
+    /// a struct literal nested in a broken outer construct re-tests its own field
+    /// width. SEAL accounting matches [`Doc::CallArgs`]: `open`, each `field: value`
+    /// joined by `, `, and `close` are leaves; the trailing comma is SEAL-invisible.
+    StructLit {
+        /// The `Name {` opening (the struct name and the brace).
+        open: Box<Self>,
+        /// The `field: value` documents, in source order.
+        fields: Vec<Self>,
+        /// The closing `}`.
+        close: Box<Self>,
+    },
+    /// An angle-bracketed generic type carrying a `+`-separated trait-bound list —
+    /// `Ptr<Head + T1 + T2 + …>` where `Ptr` is a pointer path (`Box`,
+    /// `::std::sync::Arc`), `Head` is the first bound (`dyn Fn(…) -> R`), and each
+    /// `Ti` is a marker trait (`Send`, `Sync`, `'static`). `rustfmt` lays this out
+    /// in one of three forms, in order:
+    ///
+    ///   * FLAT — `Ptr<Head + T1 + …>` fits: rendered inline.
+    ///   * ANGLE-BREAK — the flat form overflows: `Ptr<` on the opening line, the
+    ///     whole bound list at one indent step (`Head + T1 + …,` with a trailing
+    ///     comma), and `>` dedented back to `Ptr`'s column.
+    ///   * BOUND-BREAK — even at the indent step the bound list overflows: `Ptr<`,
+    ///     then `Head` on its own line, each `+ Ti` on its own line at a further
+    ///     indent step, a trailing comma after the last, and `>` dedented back.
+    ///
+    /// Used only for the `let __ipe_fn: <TypedFn> = ` annotation prefix of a boxed /
+    /// shared closure binding, whose wide `Box<dyn Fn(…) -> R + Send + Sync +
+    /// 'static>` type `rustfmt` breaks when the binding sits at a deep indent. The
+    /// break decision is independent of any enclosing group. SEAL accounting: `ptr`,
+    /// `<`, `head`, each `+ Ti`, and `>` are all leaves (the string emitter writes
+    /// the same tokens); the trailing comma of a broken bound list is SEAL-invisible.
+    TypeBound {
+        /// The pointer path and opening angle bracket, e.g. `Box<` / `::std::sync::Arc<`.
+        ptr_open: Box<Self>,
+        /// The first bound (`dyn Fn(…) -> R`), never itself broken here.
+        head: Box<Self>,
+        /// The marker traits after `head`, each a `+`-prefixed leaf token WITHOUT
+        /// the leading `+ ` (e.g. `Send`, `Sync`, `'static`), in source order.
+        traits: Vec<Self>,
+        /// The closing angle bracket `>`.
+        close: Box<Self>,
+    },
+    /// A REDUNDANT wrapping paren pair `( inner )` that `rustfmt` elides when `inner`
+    /// is itself already parenthesized — a doubled `(( … ))` collapses to `( … )`.
+    /// The string emitter's `({f})(args)` application form writes both pairs when `f`
+    /// already renders as `({ … })`, so the outer pair is redundant; `rustfmt` drops
+    /// it. Rendered as JUST `inner` when `inner`'s rendered form begins with `(` (a
+    /// self-parenthesizing block / paren-expr), else as `( inner )`.
+    ///
+    /// SEAL accounting: the parens ARE leaves (the string emitter writes them), so
+    /// they appear in the leaf sequence whether or not the render drops them — the
+    /// same rendered-vs-leaves divergence as [`Doc::IfBroken`]'s trailing comma and
+    /// [`Doc::BraceBody`]'s braces. The byte golden checks the render (parens
+    /// dropped), the SEAL checks the leaves (parens present), and both hold.
+    ElidableParen {
+        /// The inner document whose leading `(` makes the wrapping parens redundant.
+        inner: Box<Self>,
+    },
 }
 
 /// One operand of a [`Doc::Chain`], with the operator that precedes it (if any).
@@ -295,6 +362,36 @@ impl Doc {
         }
     }
 
+    /// A struct literal laid out with `rustfmt`'s `struct_lit_width` rule.
+    /// See [`Doc::StructLit`].
+    pub fn struct_lit(open: Self, fields: Vec<Self>, close: Self) -> Self {
+        Self::StructLit {
+            open: Box::new(open),
+            fields,
+            close: Box::new(close),
+        }
+    }
+
+    /// An angle-bracketed generic bound `Ptr<Head + T1 + …>` that breaks the angle
+    /// brackets (and, if needed, the `+`-list) when it overflows. See
+    /// [`Doc::TypeBound`].
+    pub fn type_bound(ptr_open: Self, head: Self, traits: Vec<Self>, close: Self) -> Self {
+        Self::TypeBound {
+            ptr_open: Box::new(ptr_open),
+            head: Box::new(head),
+            traits,
+            close: Box::new(close),
+        }
+    }
+
+    /// A redundant wrapping paren pair around `inner`, elided at render when `inner`
+    /// is already parenthesized. See [`Doc::ElidableParen`].
+    pub fn elidable_paren(inner: Self) -> Self {
+        Self::ElidableParen {
+            inner: Box::new(inner),
+        }
+    }
+
     /// Append every text leaf of this document, in order, to `out`. This is the
     /// SEAL oracle: `concat(leaves(doc))` whitespace-normalizes to the legacy
     /// emitter's string. Break candidates ([`Doc::Line`] / [`Doc::HardLine`])
@@ -364,6 +461,50 @@ impl Doc {
                     e.collect_leaves(out);
                 }
                 close.collect_leaves(out);
+            }
+            // Same accounting as `CallArgs`: `open`, each field joined by `, `, and
+            // `close` are leaves; the trailing comma is SEAL-invisible. A space pads
+            // the braces so `Name { a: 1 }` normalizes with the hugging spaces.
+            Self::StructLit {
+                open,
+                fields,
+                close,
+            } => {
+                open.collect_leaves(out);
+                out.push(' ');
+                for (i, e) in fields.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    e.collect_leaves(out);
+                }
+                out.push(' ');
+                close.collect_leaves(out);
+            }
+            // `Ptr<Head + T1 + T2 + …>` — the same token sequence the string emitter
+            // writes for the flat annotation. The angle-break's trailing comma is
+            // SEAL-invisible (the string emitter never writes it).
+            Self::TypeBound {
+                ptr_open,
+                head,
+                traits,
+                close,
+            } => {
+                ptr_open.collect_leaves(out);
+                head.collect_leaves(out);
+                for t in traits {
+                    out.push_str(" + ");
+                    t.collect_leaves(out);
+                }
+                close.collect_leaves(out);
+            }
+            // The parens ARE leaves (the string emitter writes `({f})`), whether or
+            // not the render drops them — the same rendered-vs-leaves divergence as
+            // `IfBroken` / `BraceBody`.
+            Self::ElidableParen { inner } => {
+                out.push('(');
+                inner.collect_leaves(out);
+                out.push(')');
             }
         }
     }

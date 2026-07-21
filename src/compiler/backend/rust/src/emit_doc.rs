@@ -237,8 +237,12 @@ pub fn build_doc(
         {
             let func_doc = build_doc(ctx, func, indent, child, generics)?;
             let docs = build_args(ctx, args, indent, child, generics)?;
+            // The string emitter writes `({f})(args)`; when `f` already renders
+            // parenthesized (a `({ … })` block), the outer pair is redundant and
+            // `rustfmt` collapses `(( … ))` to `( … )`. `Doc::elidable_paren` carries
+            // the parens in the SEAL leaves but drops them at render in that case.
             Ok(delimited(
-                Doc::concat(vec![Doc::text("("), func_doc, Doc::text(")(")]),
+                Doc::concat(vec![Doc::elidable_paren(func_doc), Doc::text("(")]),
                 docs,
                 Doc::text(")"),
             ))
@@ -610,6 +614,77 @@ fn build_call_binop(
     }
 }
 
+/// Build the `let __ipe_fn: <typed> = ` assignment-prefix document. When `typed`
+/// is a pointer-wrapped trait object `Ptr<Head + T1 + …>` (`Box<…>` /
+/// `::std::sync::Arc<…>`), the angle-bracketed bound is carried as a breakable
+/// [`Doc::TypeBound`] so `rustfmt`'s deep-indent type break (`Ptr<\n  Head + …,\n>`)
+/// is reproduced; any other annotation stays a single leaf. The top-level `+`
+/// splits at outer-angle-bracket depth only, so a nested `Box<… + …>` inside the
+/// head keeps its own bounds.
+fn typed_let_prefix(typed: &str) -> Doc {
+    if let Some(bound) = parse_type_bound(typed) {
+        return Doc::concat(vec![Doc::text("let __ipe_fn: "), bound, Doc::text(" = ")]);
+    }
+    Doc::owned(format!("let __ipe_fn: {typed} = "))
+}
+
+/// Parse a pointer-wrapped trait object `Ptr<Head + T1 + …>` into a breakable
+/// [`Doc::TypeBound`], or `None` when `typed` is not of that shape (no outer `<…>`,
+/// or the bound has no `+`-separated markers — nothing to break). `Ptr` is the text
+/// up to and including the first `<`; the inner is split into the head and the
+/// marker traits on ` + ` at the outer bracket's depth, so a nested generic's own
+/// `+` bounds are not split.
+fn parse_type_bound(typed: &str) -> Option<Doc> {
+    let open = typed.find('<')?;
+    let ptr = typed.get(..=open)?;
+    // `Ptr<…>` requires the matching `>`; the inner is the span between them.
+    let inner = typed.strip_suffix('>')?.get(open + 1..)?;
+
+    // Split `inner` on a top-level ` + ` — a `+` flanked by spaces at angle/paren/
+    // bracket depth 0 — so a nested generic's own `+` bounds are not split. A `>`
+    // that follows `-` is the `->` return arrow, NOT a bracket close. Each `Doc::Text`
+    // segment is trimmed of its flanking spaces.
+    let bytes = inner.as_bytes();
+    let mut segments: Vec<&str> = Vec::new();
+    let mut depth: i32 = 0;
+    let mut seg_start = 0usize;
+    for (i, &b) in bytes.iter().enumerate() {
+        let prev = i.checked_sub(1).and_then(|j| bytes.get(j)).copied();
+        let next = bytes.get(i + 1).copied();
+        match b {
+            b'<' | b'(' | b'[' => depth += 1,
+            b'>' if prev == Some(b'-') => {}
+            b')' | b']' | b'>' => depth -= 1,
+            b'+' if depth == 0 && prev == Some(b' ') && next == Some(b' ') => {
+                if let Some(seg) = inner.get(seg_start..i.saturating_sub(1)) {
+                    segments.push(seg.trim());
+                }
+                seg_start = i + 2;
+            }
+            _ => {}
+        }
+    }
+    if let Some(seg) = inner.get(seg_start..) {
+        segments.push(seg.trim());
+    }
+
+    // A breakable bound needs a head plus at least one `+ Trait` marker.
+    let (head, markers) = segments.split_first()?;
+    if markers.is_empty() {
+        return None;
+    }
+    let traits = markers
+        .iter()
+        .map(|s| Doc::owned((*s).to_owned()))
+        .collect();
+    Some(Doc::type_bound(
+        Doc::owned(ptr.to_owned()),
+        Doc::owned((*head).to_owned()),
+        traits,
+        Doc::text(">"),
+    ))
+}
+
 /// Build the `Doc` for a named-function value, mirroring
 /// [`crate::emit_expr::emit_func_value`] token-for-token. The string emitter
 /// renders the statement block
@@ -636,7 +711,7 @@ fn build_func_value(
     let ctor = if wants_arc_ctor(ty) { "Arc" } else { "Box" };
     let rhs = Doc::owned(format!("{ctor}::new({name})"));
     let assign = Doc::assign(
-        Doc::owned(format!("let __ipe_fn: {typed} = ")),
+        typed_let_prefix(&typed),
         rhs,
         // The statement's trailing `;`.
         1,
@@ -761,7 +836,7 @@ fn build_if(
 /// `close`) is a zero-width [`Doc::Softline`]: a bracketed list is `(a, b)` /
 /// `[a, b]` / `f(a, b)` FLAT — no space hugging the delimiter. For a brace-
 /// delimited struct literal, whose flat form hugs the braces WITH a space
-/// (`Name { a: 1 }`), use [`delimited_spaced`].
+/// (`Name { a: 1 }`) and obeys `struct_lit_width`, use [`Doc::struct_lit`].
 fn delimited(open: Doc, elems: Vec<Doc>, close: Doc) -> Doc {
     Doc::call_args(open, elems, close, true)
 }
@@ -772,50 +847,6 @@ fn delimited(open: Doc, elems: Vec<Doc>, close: Doc) -> Doc {
 /// the trailing comma. Used for the `++` append lowering `format!("{}{}", l, r)`.
 fn delimited_no_trailing_comma(open: Doc, elems: Vec<Doc>, close: Doc) -> Doc {
     Doc::call_args(open, elems, close, false)
-}
-
-/// Like [`delimited`], but the inner boundary is a soft [`Doc::Line`] (a SPACE
-/// when flat, a newline+indent when broken). This is the struct-literal shape:
-/// `Name { a: 1, b: 2 }` flat (spaces inside the braces), and one field per line
-/// with a trailing comma when broken — exactly `rustfmt`'s struct-literal layout.
-fn delimited_spaced(open: Doc, elems: Vec<Doc>, close: Doc) -> Doc {
-    delimited_with(open, elems, close, || Doc::Line, true)
-}
-
-/// The shared delimited-group core. `boundary` supplies the break candidate that
-/// hugs the open and close delimiters — [`Doc::Softline`] for bracketed lists
-/// (no flat space), [`Doc::Line`] for brace-delimited struct literals (a flat
-/// space). The inter-element separator is always a real `,` then a soft `Line`;
-/// the trailing comma is always a SEAL-invisible [`Doc::IfBroken`].
-fn delimited_with(
-    open: Doc,
-    elems: Vec<Doc>,
-    close: Doc,
-    boundary: impl Fn() -> Doc,
-    trailing_comma: bool,
-) -> Doc {
-    let mut inner = vec![open];
-    let mut nested = Vec::with_capacity(elems.len() * 2);
-    let last = elems.len().saturating_sub(1);
-    for (i, e) in elems.into_iter().enumerate() {
-        if i == 0 {
-            nested.push(boundary());
-        } else {
-            nested.push(Doc::text(","));
-            nested.push(Doc::Line);
-        }
-        nested.push(e);
-        if i == last && trailing_comma {
-            // Trailing comma only when the group breaks; absent (and SEAL-
-            // invisible) when flat. Suppressed entirely for a macro argument list
-            // (`trailing_comma == false`), which `rustfmt` breaks without one.
-            nested.push(Doc::if_broken(","));
-        }
-    }
-    inner.push(Doc::nest(4, Doc::concat(nested)));
-    inner.push(boundary());
-    inner.push(close);
-    Doc::group(Doc::concat(inner))
 }
 
 /// Build the arg docs for a positional argument list, each at the child depth the
@@ -1147,7 +1178,7 @@ fn build_record(
         // record alias; the string emitter defaults it, so carry the same leaf.
         field_docs.push(Doc::text("cookies: Vec::new()"));
     }
-    Ok(delimited_spaced(
+    Ok(Doc::struct_lit(
         Doc::owned(format!("{struct_name} {{")),
         field_docs,
         Doc::text("}"),
@@ -1392,16 +1423,19 @@ fn build_lambda(
         };
         (typed, ctor)
     };
-    // The `<ctor>::new(<closure>)` RHS: the ctor path, the closure (whose body is
-    // the sole breakable), and the closing paren, all as one concatenation — no
-    // group around the call, so only the closure body breaks (never the `(`).
-    let rhs = Doc::concat(vec![
+    // The `<ctor>::new(<closure>)` RHS: a single-argument delimited call over the
+    // closure. `rustfmt` glues `Ctor::new(` onto the closure's `move |…| -> R {`
+    // head and lets the closure body break in place when the head fits, but breaks
+    // the call one-per-line (closure at `indent + 4`) when the head itself overflows
+    // — the standard single-argument combine, which `Doc::call_args` renders.
+    let rhs = Doc::call_args(
         Doc::owned(format!("{ctor}::new(")),
-        closure,
+        vec![closure],
         Doc::text(")"),
-    ]);
+        true,
+    );
     let assign = Doc::assign(
-        Doc::owned(format!("let __ipe_fn: {typed} = ")),
+        typed_let_prefix(&typed),
         rhs,
         // The statement's trailing `;`.
         1,
