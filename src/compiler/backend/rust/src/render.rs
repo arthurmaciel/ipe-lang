@@ -774,9 +774,17 @@ fn render_chain(
     };
     // The whole-flat and per-operator glue fit tests honor the trailing-delimiter
     // `reserve`: the `,` (or `),`) `rustfmt` appends after the chain reduces the
-    // width the chain's single line may occupy. `fits`/`glue_fits` already subtract
-    // `cfg.reserve` via `cfg.margin()`.
-    if flat || (no_hard_break && fits(&whole, cfg, col, indent)) {
+    // width the chain's single line may occupy. `fits_single_line`/`glue_fits`
+    // subtract `cfg.reserve` via `cfg.margin()`.
+    //
+    // The whole-flat fast path requires the chain to render GENUINELY single-line,
+    // not merely first-line-fits: an operand carrying an independent-layout construct
+    // (a `CallArgs` whose statement-block argument breaks) hides its `HardLine` from
+    // `no_hard_break`, yet its flat render still spans multiple lines. `fits` would
+    // measure only the (short) first line and wrongly flatten the whole chain, gluing
+    // the block; `fits_single_line` rejects the embedded newline so the chain breaks
+    // and each operand lays out its own multiline argument.
+    if flat || (no_hard_break && fits_single_line(&whole, cfg, col, indent)) {
         render_chain_flat(operands, cfg, indent, out);
         return;
     }
@@ -1795,6 +1803,56 @@ mod p0_tests {
         assert_eq!(
             got, expected,
             "\n--- got ---\n{got}\n--- want ---\n{expected}"
+        );
+    }
+
+    #[test]
+    fn chain_operand_with_block_arg_call_breaks_not_glues() {
+        // A chain operand `((((((((f({ <stmt block> }, 0)` whose call carries a
+        // statement-block argument must break the CALL one-per-line — the block's
+        // `HardLine` is hidden from `has_hard_break` by the `CallArgs`, so the chain's
+        // whole-flat fast path must use the genuinely-single-line test (else it
+        // glues the multiline block onto the call head). Captured from `rustfmt
+        // --edition 2024 --style-edition 2024`.
+        let block = Doc::concat(vec![
+            Doc::text("{"),
+            Doc::nest(
+                4,
+                Doc::concat(vec![
+                    Doc::HardLine,
+                    Doc::text("let x: i64 = 1;"),
+                    Doc::HardLine,
+                    Doc::text("x"),
+                ]),
+            ),
+            Doc::HardLine,
+            Doc::text("}"),
+        ]);
+        let call = Doc::call_args(
+            Doc::text("crate::main_apply_i("),
+            vec![block, Doc::text("0")],
+            Doc::text(")"),
+            true,
+        );
+        let op0 = Doc::concat(vec![Doc::text("(("), call]);
+        let chain = Doc::Chain {
+            operands: vec![
+                ChainOperand {
+                    leading_op: None,
+                    doc: op0,
+                },
+                ChainOperand {
+                    leading_op: Some(Cow::Borrowed("+")),
+                    doc: Doc::text("crate::main_apply_p(1))"),
+                },
+            ],
+        };
+        let got = render(&chain, RenderConfig::default());
+        // The call breaks one-per-line: the block at +4, then `0,`, `)` dedented,
+        // then the glued `+ ...)`. NOT `main_apply_i({\n ... \n}, 0)` (block glued).
+        assert!(
+            got.contains("crate::main_apply_i(\n") && got.contains("\n    0,\n"),
+            "the block-arg call must break one-per-line, not glue its block:\n{got}"
         );
     }
 
