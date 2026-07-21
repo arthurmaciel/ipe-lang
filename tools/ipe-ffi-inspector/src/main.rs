@@ -4125,7 +4125,7 @@ fn non_exhaustive(item: &serde_json::Value) -> bool {
 ///
 /// The marker crate authors the same literal (its `MARKER_DOC` begins with a
 /// leading space rustdoc trims); the two are kept in sync by this shared spelling.
-const IPE_PROVIDE_MARKER: &str = "ipe-provide-marker: this item is surfaced to Ipê FFI";
+const IPE_PROVIDE_MARKER: &str = "ipe-ffi-provide-marker";
 
 /// True when a rustdoc item carries the `#[ipe::provide]` marker — i.e. one of
 /// its `docs` lines is EXACTLY the [`IPE_PROVIDE_MARKER`] sentinel.
@@ -13312,18 +13312,25 @@ mod tests {
 
     #[test]
     fn type_names_marked_matches_whole_nominal_segments_only() {
-        let marked: std::collections::HashSet<String> = ["Sprite".to_string()].into_iter().collect();
+        let marked: std::collections::HashSet<String> =
+            ["Sprite".to_string()].into_iter().collect();
         assert!(type_names_marked("Sprite", &marked));
         assert!(type_names_marked("sprite_wrap::Sprite", &marked));
         assert!(type_names_marked("&Sprite", &marked));
         assert!(type_names_marked("Vec<Sprite>", &marked));
-        assert!(type_names_marked("Result<sprite_wrap::Sprite, String>", &marked));
+        assert!(type_names_marked(
+            "Result<sprite_wrap::Sprite, String>",
+            &marked
+        ));
         // A longer identifier that merely CONTAINS the name must not match.
         assert!(!type_names_marked("SpriteSheet", &marked));
         assert!(!type_names_marked("MySprite", &marked));
         assert!(!type_names_marked("String", &marked));
         // An empty marked set never matches.
-        assert!(!type_names_marked("Sprite", &std::collections::HashSet::new()));
+        assert!(!type_names_marked(
+            "Sprite",
+            &std::collections::HashSet::new()
+        ));
     }
 
     #[test]

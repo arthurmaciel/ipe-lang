@@ -174,77 +174,16 @@ fn the_marker_surfaces_the_type_and_the_emitted_crate_builds_and_runs() {
     let root = std::env::temp_dir().join(format!("ipe_ffi_provide_seal_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
 
-    // The `ipe_provide` marker crate lives beside the ffi crate in the
-    // workspace; the wrapper depends on it by an absolute `path`.
-    let provide_crate = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../ffi-provide-macro")
-        .canonicalize()
-        .expect("ipe_provide crate resolves");
-
-    // 1. The author-supplied wrapper crate — normal Rust: it tags `Sprite` with
-    //    `#[ipe_provide::provide]` and hand-writes a trait impl a closed Tier 1
-    //    form could not express (a fixture `Render`, standing in for a Bevy
-    //    `Component`). `label` forwards the trait-impl method.
+    // 1-2. Write the marked wrapper crate and run the REAL inspector over it,
+    //       exposing ONLY `spawn`. `None` ⇒ the inspector's nightly rustdoc is
+    //       unavailable here; skip like the goldens skipping without cargo.
     let wrapper_dir = root.join("wrappers").join("sprite");
-    std::fs::create_dir_all(wrapper_dir.join("src")).expect("mkdir wrapper");
-    std::fs::write(
-        wrapper_dir.join("Cargo.toml"),
-        format!(
-            "[package]\nname = \"sprite_wrap\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
-             [dependencies]\nipe_provide = {{ path = {:?} }}\n",
-            provide_crate.to_string_lossy()
-        ),
-    )
-    .expect("wrapper Cargo.toml");
-    std::fs::write(
-        wrapper_dir.join("src").join("lib.rs"),
-        "/// A fixture trait whose impl only hand-written Rust can express — the\n\
-         /// escape-hatch case (stands in for a Bevy `Component`).\n\
-         pub trait Render { fn label(&self) -> String; }\n\
-         \n\
-         #[ipe_provide::provide]\n\
-         pub struct Sprite { depth: i64 }\n\
-         \n\
-         impl Render for Sprite {\n\
-         \x20   fn label(&self) -> String { format!(\"sprite@{}\", self.depth) }\n\
-         }\n\
-         \n\
-         pub fn spawn(depth: i64) -> Sprite { Sprite { depth } }\n\
-         // A free reader forwarding the hand-written trait-impl method as an\n\
-         // owned-value binding.\n\
-         pub fn label(s: Sprite) -> String { <Sprite as Render>::label(&s) }\n",
-    )
-    .expect("wrapper lib.rs");
-
-    // 2. Run the REAL inspector over the wrapper crate, exposing ONLY `spawn`.
-    //    The `#[ipe::provide]` marker must auto-surface `Sprite` (and thus the
-    //    `label` reader that takes/produces it) even though it is not in
-    //    `--expose` — proving marker-driven pickup, not just the expose list.
-    let probe = root.join("probe");
-    std::fs::create_dir_all(&probe).expect("mkdir probe");
-    // `--allow-build-scripts` is required because the wrapper depends on the
-    // `ipe_provide` proc-macro crate (proc-macro expansion runs at compile time);
-    // the real CLI passes it after informed consent (`install_wrapper`). The test
-    // runs unsandboxed on a scratch probe dir.
-    let out = std::process::Command::new(&inspector)
-        .arg("--allow-build-scripts")
-        .arg("--path")
-        .arg(wrapper_dir.to_string_lossy().to_string())
-        .arg("--expose")
-        .arg("spawn")
-        .arg("sprite_wrap")
-        .env("IPE_FFI_ALLOW_UNSANDBOXED", "1")
-        .env("IPE_FFI_PROBE_DIR", &probe)
-        .output()
-        .expect("inspector spawns");
-    let json = String::from_utf8_lossy(&out.stdout);
-    if !out.status.success() || json.trim().is_empty() {
-        // The inspector needs nightly rustdoc; if unavailable in this
-        // environment, skip rather than fail the gate (same posture as the
-        // goldens skipping without cargo).
+    let Some(pkg) = inspect_marked_wrapper(&wrapper_dir, &root, &inspector) else {
         return;
-    }
-    let pkg = PkgInfo::decode_json(&json).expect("inspector output decodes");
+    };
+    // The `#[ipe::provide]` marker must auto-surface `Sprite` (and thus the
+    // `label` reader that takes/produces it) even though it is not in `--expose`
+    // — proving marker-driven pickup, not just the expose list.
     let survivors = surviving_ref_names(&pkg);
     assert!(
         survivors.iter().any(|s| s == "spawn"),
@@ -327,6 +266,80 @@ fn main() {{
         "the value must round-trip through the hand-written trait impl.\nstdout: {stdout}"
     );
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Write the author-supplied marked wrapper crate under `wrapper_dir` and run
+/// the real inspector over it (exposing only `spawn`), returning the decoded
+/// inspection — or `None` when the inspector's nightly rustdoc is unavailable.
+///
+/// The wrapper is normal Rust: it tags `Sprite` with `#[ipe_provide::provide]`
+/// and hand-writes an `impl Render for Sprite` a closed Tier 1 form could not
+/// express (a fixture `Render`, standing in for a Bevy `Component`). `label`
+/// forwards the trait-impl method as an owned-value binding.
+fn inspect_marked_wrapper(
+    wrapper_dir: &std::path::Path,
+    root: &std::path::Path,
+    inspector: &std::path::Path,
+) -> Option<PkgInfo> {
+    // The `ipe_provide` marker crate lives beside the ffi crate in the
+    // workspace; the wrapper depends on it by an absolute `path`.
+    let provide_crate = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../ffi-provide-macro")
+        .canonicalize()
+        .expect("ipe_provide crate resolves");
+
+    std::fs::create_dir_all(wrapper_dir.join("src")).expect("mkdir wrapper");
+    std::fs::write(
+        wrapper_dir.join("Cargo.toml"),
+        format!(
+            "[package]\nname = \"sprite_wrap\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+             [dependencies]\nipe_provide = {{ path = {:?} }}\n",
+            provide_crate.to_string_lossy()
+        ),
+    )
+    .expect("wrapper Cargo.toml");
+    std::fs::write(
+        wrapper_dir.join("src").join("lib.rs"),
+        "/// A fixture trait whose impl only hand-written Rust can express — the\n\
+         /// escape-hatch case (stands in for a Bevy `Component`).\n\
+         pub trait Render { fn label(&self) -> String; }\n\
+         \n\
+         #[ipe_provide::provide]\n\
+         pub struct Sprite { depth: i64 }\n\
+         \n\
+         impl Render for Sprite {\n\
+         \x20   fn label(&self) -> String { format!(\"sprite@{}\", self.depth) }\n\
+         }\n\
+         \n\
+         pub fn spawn(depth: i64) -> Sprite { Sprite { depth } }\n\
+         // A free reader forwarding the hand-written trait-impl method as an\n\
+         // owned-value binding.\n\
+         pub fn label(s: Sprite) -> String { <Sprite as Render>::label(&s) }\n",
+    )
+    .expect("wrapper lib.rs");
+
+    let probe = root.join("probe");
+    std::fs::create_dir_all(&probe).expect("mkdir probe");
+    // `--allow-build-scripts` is required because the wrapper depends on the
+    // `ipe_provide` proc-macro crate (proc-macro expansion runs at compile time);
+    // the real CLI passes it after informed consent (`install_wrapper`). The test
+    // runs unsandboxed on a scratch probe dir.
+    let out = std::process::Command::new(inspector)
+        .arg("--allow-build-scripts")
+        .arg("--path")
+        .arg(wrapper_dir.to_string_lossy().to_string())
+        .arg("--expose")
+        .arg("spawn")
+        .arg("sprite_wrap")
+        .env("IPE_FFI_ALLOW_UNSANDBOXED", "1")
+        .env("IPE_FFI_PROBE_DIR", &probe)
+        .output()
+        .expect("inspector spawns");
+    let json = String::from_utf8_lossy(&out.stdout);
+    if !out.status.success() || json.trim().is_empty() {
+        return None;
+    }
+    Some(PkgInfo::decode_json(&json).expect("inspector output decodes"))
 }
 
 /// Locate the built `ipe-ffi-inspector` binary: an explicit

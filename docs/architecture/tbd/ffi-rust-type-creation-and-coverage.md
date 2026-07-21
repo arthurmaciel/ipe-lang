@@ -414,8 +414,13 @@ and preserves the SEAL + over-drop keystone.
   and folding a poll-panic to `Err`; an async-total return over-drops). The
   closure-adapter-to-`run` handoff (surfacing the boxed async handler as an
   Ipê-held value) stays deferred with its sync sibling (Cluster 1).
-* **P6 — escape hatch B** (`#[ipe::provide]` companion-crate proc-macro) only if
-  the roadmap surfaces a crate A cannot reach.
+* **P6 — escape hatch B** (`#[ipe::provide]` companion-crate proc-macro).
+  *Landed as a Tier 2 wrapper shape*, not a Tier-1 extension — see
+  `ffi-tier2-inspect-author-rust.md` §6. The inert `ipe_provide` marker macro
+  tags a hand-written wrapper item; the inspector auto-exposes marked items so a
+  crate whose trait impl a closed `provide.*` form cannot express (a Bevy
+  `Component`/`Resource`) binds through the ordinary wrapper inspect → sandbox →
+  generate → over-drop pipeline.
 
 Anti-drift checklist for every phase touching a shape: `FnShape` variant +
 `decode_shape` arm + `fallibility_of` arm + `emit_fn_region` arm + interface

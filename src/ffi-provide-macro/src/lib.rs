@@ -32,11 +32,13 @@ use proc_macro::TokenStream;
 
 /// The pure-data breadcrumb the inert attribute attaches to a marked item. It is
 /// a plain `#[doc = "…"]` string, so it survives macro expansion into the item's
-/// rustdoc `attrs` array where the inspector reads it as a boolean "is this item
-/// marked". The string is DATA the inspector matches on and never renders, so it
-/// cannot become a code/TOML injection vector. Kept in sync, by convention, with
-/// the inspector's `IPE_PROVIDE_MARKER` constant.
-const MARKER_DOC: &str = concat!(" ", "ipe-provide-marker: this item is surfaced to Ipê FFI");
+/// rustdoc `docs` field (rustdoc folds a `#[doc]` attribute into `docs`, trimmed)
+/// where the inspector reads it as a boolean "is this item marked". The string is
+/// DATA the inspector matches on and never renders, so it cannot become a
+/// code/TOML injection vector. The leading space rustdoc trims; the trimmed form
+/// matches the inspector's `IPE_PROVIDE_MARKER` constant, kept in sync by
+/// convention.
+const MARKER_DOC: &str = " ipe-ffi-provide-marker";
 
 /// Tag a hand-written wrapper item as an Ipê FFI Tier 2 escape-hatch symbol.
 ///
