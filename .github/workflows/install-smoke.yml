@@ -1,0 +1,70 @@
+# Proves scripts/install.sh actually downloads, extracts, and installs a working
+# `ipe` on every platform it claims to support — Linux, macOS, Windows (Git
+# Bash), and FreeBSD. A published release must exist for the installer to fetch,
+# so this runs post-merge, on a weekly schedule, and on any PR that touches the
+# installer. Advisory (not a required gate); it guards the install path from
+# silent rot across OSes.
+name: install-smoke
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'scripts/install.sh'
+      - '.github/workflows/install-smoke.yml'
+  pull_request:
+    paths:
+      - 'scripts/install.sh'
+      - '.github/workflows/install-smoke.yml'
+  schedule:
+    - cron: '19 6 * * 1'      # Mondays, offset from the other scheduled jobs
+  workflow_dispatch: {}
+
+# Read-only: the smoke only fetches a public release and runs the binary.
+permissions:
+  contents: read
+
+concurrency:
+  group: install-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # GitHub-hosted runners cover Linux, macOS (arm64), and Windows via Git Bash.
+  hosted:
+    name: install-smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ipe via install.sh and run it
+        shell: bash
+        env:
+          IPE_INSTALL_DIR: ${{ runner.temp }}/ipe-smoke
+        run: |
+          set -eu
+          sh scripts/install.sh
+          # Git Bash on Windows installs ipe.exe; resolve either name.
+          bin="$IPE_INSTALL_DIR/ipe"
+          [ -x "$bin" ] || bin="$bin.exe"
+          "$bin" --version
+
+  # No hosted FreeBSD runner exists, so drive the same installer inside a
+  # FreeBSD VM on a Linux host — a real freebsd-x64 download + run, not a proxy.
+  freebsd:
+    name: install-smoke (freebsd)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ipe via install.sh inside a FreeBSD VM
+        uses: vmactions/freebsd-vm@v1
+        with:
+          usesh: true
+          prepare: pkg install -y curl
+          run: |
+            set -eu
+            export IPE_INSTALL_DIR="$HOME/ipe-smoke"
+            sh scripts/install.sh
+            "$IPE_INSTALL_DIR/ipe" --version

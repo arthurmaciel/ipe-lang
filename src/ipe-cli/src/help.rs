@@ -384,23 +384,37 @@ fn render_top_level(p: &Palette) -> String {
         let _ = writeln!(out, "{}      {}{}", p.dim, cmd.summary, p.reset);
     }
 
-    // The full list: every command by section, names only. `--help` has the
-    // arguments, options, and descriptions.
+    // The full list: every command by section, each shown as a ready-to-run
+    // `ipe <command> --help`. The `--help` suffix aligns into one column within
+    // the section (names padded to the section's widest) so the lines read as a
+    // tidy block the reader can copy verbatim.
     for section in SECTIONS {
         out.push('\n');
         let _ = writeln!(out, "{}{}{}", p.bold, section.title, p.reset);
+        let name_w = section
+            .commands
+            .iter()
+            .filter_map(|n| find(n))
+            .map(|c| c.name.len())
+            .max()
+            .unwrap_or(0);
         for &name in section.commands {
             let Some(cmd) = find(name) else { continue };
-            let _ = writeln!(out, "  {}ipe {}{}", p.yellow, cmd.name, p.reset);
+            let pad = name_w - cmd.name.len();
+            let _ = writeln!(
+                out,
+                "  {}ipe {}{}{:pad$}  {}--help{}",
+                p.yellow, cmd.name, p.reset, "", p.dim, p.reset,
+            );
         }
     }
 
-    // Footer: how to see a command's detail, then where to report bugs. The
+    // Footer: how to read a command's detail, then where to report bugs. The
     // repository link already sits in the header, so it is not repeated here.
     out.push('\n');
     let _ = writeln!(
         out,
-        "{}Run `ipe <command> --help` for what a command does and its options.\n\nFound any bugs? Please report them at {REPO_URL}/issues.{}",
+        "{}Run any line above to see what a command does and its options.\n\nFound any bugs? Please report them at {REPO_URL}/issues.{}",
         p.dim, p.reset
     );
     out.push('\n');
@@ -505,6 +519,36 @@ mod tests {
                 page.contains("Arguments:") && page.contains(cmd.args_desc),
                 "missing argument description for {}",
                 cmd.name
+            );
+        }
+    }
+
+    #[test]
+    fn section_commands_show_an_aligned_help_suffix() {
+        let plain = render_top_level(&Palette::PLAIN);
+        for section in SECTIONS {
+            // Every command line in a section carries a copy-pasteable `--help`,
+            // and within the section the `--help` column is vertically aligned.
+            let mut help_columns = Vec::new();
+            for &name in section.commands {
+                let needle = format!("ipe {name} ");
+                let col = plain
+                    .lines()
+                    .find(|l| l.trim_start().starts_with(&needle))
+                    .and_then(|l| l.find("--help"));
+                assert!(
+                    col.is_some(),
+                    "`ipe {name}` in {} must render a copy-pasteable --help suffix",
+                    section.title
+                );
+                help_columns.extend(col);
+            }
+            assert!(
+                help_columns
+                    .windows(2)
+                    .all(|w| matches!(w, [a, b] if a == b)),
+                "`--help` column misaligned in section {}: {help_columns:?}",
+                section.title
             );
         }
     }
