@@ -12,16 +12,33 @@ module Main exposing (main)
 -- emit them (plus their constructors) into the generated `_bindings.rs`. That
 -- emitted Rust cargo-builds against real Iced — the SEAL for the provide forms.
 --
--- BLOCKING GAP (filed to the FFI backlog): the Ipê-side FORWARDER plumbing for
--- provide-defined types is not wired yet — the interface admits no `Counter` /
--- `Message` forwarder an Ipê program can call, and no way to hand a boxed Ipê
--- closure to Iced's `run`. So this Main is currently a placeholder: it names the
--- surface the bindings define, but the driver's counter loop cannot yet be
--- entered from Ipê. See examples/iced-counter/README.md for the exact status.
+-- The Ipê-side FORWARDER plumbing for provide-defined TYPES is now wired: after
+-- `ipe install`, the `Rust.Iced` interface admits an opaque `Counter` / `Message`
+-- nominal plus a constructor forwarder for each —
+--
+--     type Counter
+--     type Message
+--     counter_new           : Int -> Counter
+--     message_new_increment : Message
+--     message_new_decrement : Message
+--
+-- so an Ipê program can CONSTRUCT the provide-defined Rust types by importing
+-- `Rust.Iced exposing (Counter, Message, counter_new, message_new_increment, …)`
+-- and folding over them.
+--
+-- REMAINING GAP (filed to the FFI backlog): handing a boxed Ipê closure to Iced's
+-- `run` entrypoint. The update/view arrows return the opaque `Counter` /
+-- `Element<Message>`, which needs the opaque-return + boxed-closure-as-Ipê-value
+-- plumbing. So the provide types are now constructible from Ipê, but the driver's
+-- own event loop is not yet handed our closure. See README.md for the status.
+--
+-- This Main stays a placeholder rather than importing `Rust.Iced`: the interface
+-- module only exists after `ipe install` runs the sandboxed inspector over real
+-- `iced` (network-gated), so a checked-in import of it could not be built in CI.
 
 import Ipe.Prelude exposing (..)
 import Ipe.Log exposing (println)
 
 
 main =
-    println "iced-counter: provide.struct/enum/closure bindings emitted; Ipê-side forwarder plumbing pending (see README)."
+    println "iced-counter: Counter/Message provide-type forwarders wired (construct from Ipê); closure->run handoff pending (see README)."

@@ -434,6 +434,26 @@ impl StructDef {
         })
     }
 
+    /// The Ipê-side forwarder signature the interface admits for this struct's
+    /// constructor: one field carrier per parameter, arrowed, returning the
+    /// struct's own nominal (`Int -> Counter`; `() -> Counter` for a fieldless
+    /// struct). Rendered from the field carriers' Ipê surfaces and the struct
+    /// name — never from `FnInfo::params`, which is empty for a synthetic
+    /// `provide` entry.
+    #[must_use]
+    pub fn forwarder_ipe_sig(&self) -> String {
+        let params = if self.fields.is_empty() {
+            "()".to_owned()
+        } else {
+            self.fields
+                .iter()
+                .map(|(_, c)| c.ipe_surface())
+                .collect::<Vec<_>>()
+                .join(" -> ")
+        };
+        format!("{params} -> {}", self.name.as_str())
+    }
+
     /// The struct definition + `#[derive]` lines this renders to, from closed
     /// carriers/derives only. The opaque-field absolutization is the emitter's
     /// job (this leaf never renders a crate path); a scalar field renders its
@@ -468,6 +488,27 @@ pub struct EnumVariant {
     pub name: RustIdent,
     /// The variant's positional payload carriers, in order (empty ⇒ unit).
     pub payload: Vec<Carrier>,
+}
+
+impl EnumVariant {
+    /// The Ipê-side forwarder signature the interface admits for THIS variant's
+    /// constructor: one payload carrier per parameter, arrowed, returning the
+    /// enum's own nominal (`Int -> Message`; `() -> Message` for a unit
+    /// variant). `enum_name` is the enclosing enum's nominal; the sig renders
+    /// from the payload carriers' Ipê surfaces, never from `FnInfo::params`.
+    #[must_use]
+    pub fn forwarder_ipe_sig(&self, enum_name: &str) -> String {
+        let params = if self.payload.is_empty() {
+            "()".to_owned()
+        } else {
+            self.payload
+                .iter()
+                .map(Carrier::ipe_surface)
+                .collect::<Vec<_>>()
+                .join(" -> ")
+        };
+        format!("{params} -> {enum_name}")
+    }
 }
 
 /// A fully-parsed `provide.enum` definition: the Rust enum, its variants, and
