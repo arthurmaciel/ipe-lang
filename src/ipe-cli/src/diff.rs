@@ -374,7 +374,7 @@ impl std::fmt::Display for ApiChange {
 }
 
 /// The wire word for a compatibility, shared by every output form.
-fn compat_word(compatibility: Compatibility) -> &'static str {
+const fn compat_word(compatibility: Compatibility) -> &'static str {
     match compatibility {
         Compatibility::Compatible => "compatible",
         Compatibility::Breaking => "breaking",
@@ -417,21 +417,22 @@ fn print_report(report: &SemverReport, format: crate::cli_args::OutputFormat) {
             );
         }
         Human => {
+            use std::fmt::Write as _;
+
             let mut body = String::new();
             if report.changes.is_empty() {
                 body.push_str("No public API changes.\n");
             } else {
                 body.push_str("Public API changes:\n");
                 for change in &report.changes {
-                    body.push_str(&change.to_string());
-                    body.push('\n');
+                    let _ = writeln!(body, "{change}");
                 }
             }
-            body.push('\n');
-            body.push_str(&format!(
-                "This is a {compat} change — it requires at least a {required} bump (>= {}).\n",
+            let _ = write!(
+                body,
+                "\nThis is a {compat} change — it requires at least a {required} bump (>= {}).\n",
                 report.floor,
-            ));
+            );
             print!("{}", crate::style::gutter(&body));
         }
     }

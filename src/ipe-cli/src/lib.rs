@@ -142,7 +142,7 @@ pub enum CliError {
     CommandUsage {
         /// The command whose help page to show (a known command name).
         command: &'static str,
-        /// The specific reason for the misuse (e.g. `unknown flag \`--x\``).
+        /// The specific reason for the misuse (e.g. an unknown flag).
         reason: String,
     },
 }
@@ -1559,7 +1559,9 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
         Some((cmd, rest)) if cmd == "diff" => with_help_on_misuse("diff", diff::run_diff(rest)),
         Some((cmd, rest)) if cmd == "rust" => with_help_on_misuse("rust", ffi::run_rust(rest)),
         Some((cmd, rest)) if cmd == "add" => with_help_on_misuse("add", pkg::run_add(rest)),
-        Some((cmd, rest)) if cmd == "remove" => with_help_on_misuse("remove", pkg::run_remove(rest)),
+        Some((cmd, rest)) if cmd == "remove" => {
+            with_help_on_misuse("remove", pkg::run_remove(rest))
+        }
         Some((cmd, rest)) if cmd == "package" => with_help_on_misuse("package", run_package(rest)),
         Some((cmd, rest)) if cmd == "fix" => with_help_on_misuse("fix", run_fix(rest)),
         Some((cmd, rest)) if cmd == "fmt" => with_help_on_misuse("fmt", fmt::run_fmt(rest)),
@@ -1578,7 +1580,10 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
 /// "misuse shows help" output. Any non-usage error (a compile failure, a
 /// filesystem error) passes through untouched, since it is not a help-worthy
 /// misuse. `command` is always a known command name.
-fn with_help_on_misuse(command: &'static str, result: Result<(), CliError>) -> Result<(), CliError> {
+fn with_help_on_misuse(
+    command: &'static str,
+    result: Result<(), CliError>,
+) -> Result<(), CliError> {
     match result {
         Err(CliError::Usage(reason)) => Err(CliError::CommandUsage {
             command,
@@ -2262,7 +2267,10 @@ fn run_capabilities(rest: &[String]) -> Result<(), CliError> {
     let program = lower_entry(&entry)?;
     let caps = ipe_lower::program_capabilities(&program);
     let names: Vec<&'static str> = caps.iter().map(|c| c.as_str()).collect();
-    print!("{}", render_capabilities(&names, format, &std::io::stdout()));
+    print!(
+        "{}",
+        render_capabilities(&names, format, &std::io::stdout())
+    );
     Ok(())
 }
 

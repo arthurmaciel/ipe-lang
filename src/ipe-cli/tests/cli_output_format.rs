@@ -100,7 +100,9 @@ fn capabilities_default_is_human_labelled() {
         r.stdout
     );
     assert!(
-        r.stdout.lines().all(|l| l.is_empty() || l.starts_with("  ")),
+        r.stdout
+            .lines()
+            .all(|l| l.is_empty() || l.starts_with("  ")),
         "human capabilities must be guttered"
     );
 }
@@ -118,7 +120,10 @@ fn capabilities_plain_is_the_bare_scriptable_list() {
 fn capabilities_json_is_a_stable_object() {
     let r = run(&["capabilities", "--json", &sample_entry()]);
     assert!(r.ok, "stderr: {}", r.stderr);
-    assert_eq!(r.stdout.trim(), "{\"capabilities\":[\"network\",\"clock\"]}");
+    assert_eq!(
+        r.stdout.trim(),
+        "{\"capabilities\":[\"network\",\"clock\"]}"
+    );
 }
 
 // ---- explain (the code list) ----------------------------------------------
@@ -140,7 +145,10 @@ fn explain_list_json_is_a_codes_array() {
     let r = run(&["explain", "--json"]);
     assert!(r.ok);
     let out = r.stdout.trim();
-    assert!(out.starts_with("{\"codes\":["), "json must open the codes array");
+    assert!(
+        out.starts_with("{\"codes\":["),
+        "json must open the codes array"
+    );
     assert!(out.contains("\"code\":") && out.contains("\"title\":"));
 }
 
@@ -177,8 +185,9 @@ fn plain_and_json_together_is_a_usage_error_showing_help() {
             r.stderr
         );
         // Error-shows-help: the command's own page follows the reason.
+        let name = cmd.first().copied().unwrap_or_default();
         assert!(
-            r.stderr.contains(&format!("ipe {}", cmd[0])),
+            r.stderr.contains(&format!("ipe {name}")),
             "misuse must show the command's --help for {cmd:?}"
         );
     }

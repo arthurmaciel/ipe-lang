@@ -63,8 +63,11 @@ fn init_refuses_existing_project_without_force() {
 
     let second = ipe::run_cli(&["init".to_owned(), target_str.clone()]);
     assert!(
-        matches!(second, Err(ipe::CliError::UsageOwned(_))),
-        "re-init without --force must be refused, got: {second:?}"
+        matches!(
+            second,
+            Err(ipe::CliError::CommandUsage { command: "init", .. })
+        ),
+        "re-init without --force must be refused (and show init's help), got: {second:?}"
     );
 
     let forced = ipe::run_cli(&["init".to_owned(), target_str, "--force".to_owned()]);
@@ -73,13 +76,17 @@ fn init_refuses_existing_project_without_force() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// `ipe init` with an unrecognised flag returns a usage error, never a panic.
+/// `ipe init` with an unrecognised flag returns a command-usage error for
+/// `init` — so the caller shows init's help — never a panic.
 #[test]
 fn init_unknown_flag_returns_usage_error() {
     let result = ipe::run_cli(&["init".to_owned(), "--bogus".to_owned()]);
     assert!(
-        matches!(result, Err(ipe::CliError::Usage(_))),
-        "unknown flag must yield a usage error, got: {result:?}"
+        matches!(
+            result,
+            Err(ipe::CliError::CommandUsage { command: "init", .. })
+        ),
+        "unknown flag must yield a command-usage error, got: {result:?}"
     );
 }
 

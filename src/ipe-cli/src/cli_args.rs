@@ -16,10 +16,12 @@
 use crate::CliError;
 use crate::build_plan::{AllocatorChoice, StaticRequestLayer};
 
-/// How a data-producing command renders its result. The default is the
-/// human-friendly form; `--plain` and `--json` are the two machine forms, and
-/// they are mutually exclusive — a request for both is a usage error rather than
-/// a silent last-wins, so a caller never gets a format it did not ask for.
+/// How a data-producing command renders its result.
+///
+/// The default is the human-friendly form; `--plain` and `--json` are the two
+/// machine forms, and they are mutually exclusive — a request for both is a usage
+/// error rather than a silent last-wins, so a caller never gets a format it did
+/// not ask for.
 ///
 /// Only the commands that emit machine-consumable data (`capabilities`, `diff`,
 /// `version`, `explain` with no code) accept these flags; `run` / `build` /
@@ -70,8 +72,9 @@ fn consume_format(
     }
 }
 
-/// Parse the trailing output-format flags shared by the data-producing commands,
-/// returning the chosen [`OutputFormat`] (defaulting to [`OutputFormat::Human`])
+/// Parse the shared output-format flags out of a command's argument tail.
+///
+/// Returns the chosen [`OutputFormat`] (defaulting to [`OutputFormat::Human`])
 /// and the positional tokens with the format flags removed.
 ///
 /// # Errors
@@ -836,17 +839,20 @@ mod tests {
 
     #[test]
     fn format_defaults_to_human_and_keeps_positionals() {
-        let (fmt, pos) = split_format(&s(&["a", "b"]), "diff").expect("no flags");
+        let args = s(&["a", "b"]);
+        let (fmt, pos) = split_format(&args, "diff").expect("no flags");
         assert_eq!(fmt, OutputFormat::Human);
         assert_eq!(pos, vec!["a", "b"]);
     }
 
     #[test]
     fn format_plain_and_json_are_recognised() {
-        let (fmt, pos) = split_format(&s(&["x", "--plain"]), "capabilities").expect("plain");
+        let plain = s(&["x", "--plain"]);
+        let (fmt, pos) = split_format(&plain, "capabilities").expect("plain");
         assert_eq!(fmt, OutputFormat::Plain);
         assert_eq!(pos, vec!["x"]);
-        let (fmt, _) = split_format(&s(&["--json", "x"]), "capabilities").expect("json");
+        let json = s(&["--json", "x"]);
+        let (fmt, _) = split_format(&json, "capabilities").expect("json");
         assert_eq!(fmt, OutputFormat::Json);
     }
 

@@ -38,17 +38,19 @@ pub fn header_line(version: &str) -> String {
     format!("Ipê language - v{version} - {REPO_URL}")
 }
 
-/// The left gutter that indents every human-facing line — help pages, banners,
-/// status chatter, and diagnostics. Two spaces, so prose sits off the terminal
-/// edge while machine output (`--plain` / `--json` / a `run` child's stdout)
-/// stays flush-left for `grep` / `awk` / `jq`. The single width lives here so
-/// every command and the installer indent identically.
+/// The left gutter that indents every human-facing line.
+///
+/// It leads help pages, banners, status chatter, and diagnostics. Two spaces, so
+/// prose sits off the terminal edge while machine output (`--plain` / `--json` /
+/// a `run` child's stdout) stays flush-left for `grep` / `awk` / `jq`. The single
+/// width lives here so every command and the installer indent identically.
 pub const GUTTER: &str = "  ";
 
-/// Prefix every non-empty line of `text` with the [`GUTTER`], leaving blank
-/// lines empty (an indented blank line is trailing whitespace, not structure).
-/// This is how a command renders human output: build the plain body, then
-/// gutter it once at the edge.
+/// Prefix every non-empty line of `text` with the [`GUTTER`].
+///
+/// Blank lines stay empty (an indented blank line is trailing whitespace, not
+/// structure). This is how a command renders human output: build the plain body,
+/// then gutter it once at the edge.
 #[must_use]
 pub fn gutter(text: &str) -> String {
     let mut out = String::with_capacity(text.len());

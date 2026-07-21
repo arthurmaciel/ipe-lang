@@ -33,8 +33,11 @@ fn build_no_arg_empty_dir_returns_usage_error() {
     let _ = fs::remove_dir_all(&dir);
 
     assert!(
-        matches!(result, Err(ipe::CliError::Usage(_))),
-        "bare `ipe build` in an empty dir must yield Usage, got: {result:?}"
+        matches!(
+            result,
+            Err(ipe::CliError::CommandUsage { command: "build", .. })
+        ),
+        "bare `ipe build` in an empty dir must yield a build command-usage error, got: {result:?}"
     );
 }
 
@@ -53,8 +56,11 @@ fn run_no_arg_empty_dir_returns_usage_error() {
     let _ = fs::remove_dir_all(&dir);
 
     assert!(
-        matches!(result, Err(ipe::CliError::Usage(_))),
-        "bare `ipe run` in an empty dir must yield Usage, got: {result:?}"
+        matches!(
+            result,
+            Err(ipe::CliError::CommandUsage { command: "run", .. })
+        ),
+        "bare `ipe run` in an empty dir must yield a run command-usage error, got: {result:?}"
     );
 }
 

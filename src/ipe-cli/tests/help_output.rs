@@ -125,7 +125,7 @@ fn package_authoring_section_holds_package_and_external_packages_holds_add_remov
 
 /// The lines belonging to the section titled `heading`: everything from the
 /// heading up to the next blank line (sections are separated by a blank line).
-fn section_body<'a>(screen: &'a str, heading: &str) -> String {
+fn section_body(screen: &str, heading: &str) -> String {
     screen
         .lines()
         .skip_while(|l| l.trim() != heading)
