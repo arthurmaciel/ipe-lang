@@ -131,6 +131,143 @@ where
     })
 }
 
+// `task_map2`..`task_map5` — combine 2..5 independent tasks with an N-ary
+// function. Elm-compatible: the tasks await in argument order and an early
+// `Err` short-circuits, so a later task's effects never fire. The value
+// dependence is none (the function sees all results at once); only the effect
+// order is fixed.
+pub fn task_map2<E, A, B, R>(
+    f: impl FnOnce(A, B) -> R + Send + 'static,
+    ta: IpeTask<E, A>,
+    tb: IpeTask<E, B>,
+) -> IpeTask<E, R>
+where
+    E: Send + 'static,
+    A: Send + 'static,
+    B: Send + 'static,
+    R: Send + 'static,
+{
+    Box::pin(async move {
+        let a = match ta.await {
+            IpeResult::Ok(a) => a,
+            IpeResult::Err(e) => return IpeResult::Err(e),
+        };
+        let b = match tb.await {
+            IpeResult::Ok(b) => b,
+            IpeResult::Err(e) => return IpeResult::Err(e),
+        };
+        ok_res(f(a, b))
+    })
+}
+
+pub fn task_map3<E, A, B, C, R>(
+    f: impl FnOnce(A, B, C) -> R + Send + 'static,
+    ta: IpeTask<E, A>,
+    tb: IpeTask<E, B>,
+    tc: IpeTask<E, C>,
+) -> IpeTask<E, R>
+where
+    E: Send + 'static,
+    A: Send + 'static,
+    B: Send + 'static,
+    C: Send + 'static,
+    R: Send + 'static,
+{
+    Box::pin(async move {
+        let a = match ta.await {
+            IpeResult::Ok(a) => a,
+            IpeResult::Err(e) => return IpeResult::Err(e),
+        };
+        let b = match tb.await {
+            IpeResult::Ok(b) => b,
+            IpeResult::Err(e) => return IpeResult::Err(e),
+        };
+        let c = match tc.await {
+            IpeResult::Ok(c) => c,
+            IpeResult::Err(e) => return IpeResult::Err(e),
+        };
+        ok_res(f(a, b, c))
+    })
+}
+
+pub fn task_map4<E, A, B, C, D, R>(
+    f: impl FnOnce(A, B, C, D) -> R + Send + 'static,
+    ta: IpeTask<E, A>,
+    tb: IpeTask<E, B>,
+    tc: IpeTask<E, C>,
+    td: IpeTask<E, D>,
+) -> IpeTask<E, R>
+where
+    E: Send + 'static,
+    A: Send + 'static,
+    B: Send + 'static,
+    C: Send + 'static,
+    D: Send + 'static,
+    R: Send + 'static,
+{
+    Box::pin(async move {
+        let a = match ta.await {
+            IpeResult::Ok(a) => a,
+            IpeResult::Err(e) => return IpeResult::Err(e),
+        };
+        let b = match tb.await {
+            IpeResult::Ok(b) => b,
+            IpeResult::Err(e) => return IpeResult::Err(e),
+        };
+        let c = match tc.await {
+            IpeResult::Ok(c) => c,
+            IpeResult::Err(e) => return IpeResult::Err(e),
+        };
+        let d = match td.await {
+            IpeResult::Ok(d) => d,
+            IpeResult::Err(e) => return IpeResult::Err(e),
+        };
+        ok_res(f(a, b, c, d))
+    })
+}
+
+pub fn task_map5<E, A, B, C, D, G, R>(
+    f: impl FnOnce(A, B, C, D, G) -> R + Send + 'static,
+    ta: IpeTask<E, A>,
+    tb: IpeTask<E, B>,
+    tc: IpeTask<E, C>,
+    td: IpeTask<E, D>,
+    te: IpeTask<E, G>,
+) -> IpeTask<E, R>
+where
+    E: Send + 'static,
+    A: Send + 'static,
+    B: Send + 'static,
+    C: Send + 'static,
+    D: Send + 'static,
+    G: Send + 'static,
+    R: Send + 'static,
+{
+    Box::pin(async move {
+        let a = match ta.await {
+            IpeResult::Ok(a) => a,
+            IpeResult::Err(e) => return IpeResult::Err(e),
+        };
+        let b = match tb.await {
+            IpeResult::Ok(b) => b,
+            IpeResult::Err(e) => return IpeResult::Err(e),
+        };
+        let c = match tc.await {
+            IpeResult::Ok(c) => c,
+            IpeResult::Err(e) => return IpeResult::Err(e),
+        };
+        let d = match td.await {
+            IpeResult::Ok(d) => d,
+            IpeResult::Err(e) => return IpeResult::Err(e),
+        };
+        let g = match te.await {
+            IpeResult::Ok(g) => g,
+            IpeResult::Err(e) => return IpeResult::Err(e),
+        };
+        ok_res(f(a, b, c, d, g))
+    })
+}
+
 pub fn task_and_then<E, A, B>(
     task: IpeTask<E, A>,
     f: impl FnOnce(A) -> IpeTask<E, B> + Send + 'static,
@@ -621,6 +758,78 @@ mod retry_tests {
             IpeResult::Err(e) => panic!("expected Ok(1), got Err({})", e),
         }
         assert_eq!(counter.load(Ordering::SeqCst), 1, "ran once on success");
+    }
+
+    // ── map2..5: combine, short-circuit on first Err, effects ordered ──
+
+    #[test]
+    fn map2_combines_two_oks() {
+        let task = task_map2(
+            |a: i64, b: i64| a + b,
+            task_succeed::<String, i64>(2),
+            task_succeed::<String, i64>(3),
+        );
+        match block_on(task) {
+            IpeResult::Ok(n) => assert_eq!(n, 5),
+            IpeResult::Err(e) => panic!("expected Ok(5), got Err({})", e),
+        }
+    }
+
+    #[test]
+    fn map2_short_circuits_first_err() {
+        // The first Err (leftmost) is reported; the later task never contributes.
+        let task = task_map2(
+            |a: i64, b: i64| a + b,
+            task_fail::<String, i64>("left".to_owned()),
+            task_succeed::<String, i64>(3),
+        );
+        match block_on(task) {
+            IpeResult::Ok(n) => panic!("expected Err, got Ok({})", n),
+            IpeResult::Err(e) => assert_eq!(e, "left"),
+        }
+    }
+
+    #[test]
+    fn map2_later_err_wins_when_first_ok() {
+        let task = task_map2(
+            |a: i64, b: i64| a + b,
+            task_succeed::<String, i64>(2),
+            task_fail::<String, i64>("right".to_owned()),
+        );
+        match block_on(task) {
+            IpeResult::Ok(n) => panic!("expected Err, got Ok({})", n),
+            IpeResult::Err(e) => assert_eq!(e, "right"),
+        }
+    }
+
+    #[test]
+    fn map3_map4_map5_combine() {
+        let t3 = task_map3(
+            |a: i64, b: i64, c: i64| a + b + c,
+            task_succeed::<String, i64>(1),
+            task_succeed::<String, i64>(2),
+            task_succeed::<String, i64>(3),
+        );
+        assert!(matches!(block_on(t3), IpeResult::Ok(6)));
+
+        let t4 = task_map4(
+            |a: i64, b: i64, c: i64, d: i64| a + b + c + d,
+            task_succeed::<String, i64>(1),
+            task_succeed::<String, i64>(2),
+            task_succeed::<String, i64>(3),
+            task_succeed::<String, i64>(4),
+        );
+        assert!(matches!(block_on(t4), IpeResult::Ok(10)));
+
+        let t5 = task_map5(
+            |a: i64, b: i64, c: i64, d: i64, e: i64| a + b + c + d + e,
+            task_succeed::<String, i64>(1),
+            task_succeed::<String, i64>(2),
+            task_succeed::<String, i64>(3),
+            task_succeed::<String, i64>(4),
+            task_succeed::<String, i64>(5),
+        );
+        assert!(matches!(block_on(t5), IpeResult::Ok(15)));
     }
 }
 

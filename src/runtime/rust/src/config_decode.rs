@@ -31,6 +31,50 @@ pub fn config_nullable<E: From<String> + 'static, T: 'static + Send>(
     )
 }
 
+// Config.maybe : Decoder a -> Decoder (Maybe a)
+// Unlike `nullable` (which only tolerates null/missing), `maybe` catches ANY
+// decode failure: `Just` on success, `Nothing` on any error. Never fails.
+pub fn config_maybe<E: From<String> + 'static, T: 'static + Send>(
+    decoder: Decoder<E, T>,
+) -> Decoder<E, IpeMaybe<T>> {
+    let inner_fields = decoder.fields.clone();
+    Decoder::new(
+        Box::new(move |v| match (decoder.run)(v) {
+            IpeResult::Ok(t) => IpeResult::Ok(IpeMaybe::Just(t)),
+            IpeResult::Err(_) => IpeResult::Ok(IpeMaybe::Nothing),
+        }),
+        inner_fields,
+    )
+}
+
+// Config.dict : Decoder a -> Decoder (Dict String a)
+// Decode every object entry into a `Dict String a` (runtime `IpeDict<T>`),
+// applying `decoder` to each value. Non-object input is `Err`; the first entry
+// whose value fails short-circuits with its real error.
+pub fn config_dict<E: From<String> + 'static, T: 'static + Send>(
+    decoder: impl Fn() -> Decoder<E, T> + Send + 'static,
+) -> Decoder<E, IpeDict<T>> {
+    Decoder::new(
+        Box::new(move |v| match v.as_object() {
+            Some(obj) => {
+                let d = decoder();
+                let mut out: IpeDict<T> = IpeDict::new();
+                for (key, val) in obj {
+                    match (d.run)(val) {
+                        IpeResult::Ok(t) => {
+                            out.insert(key.clone(), t);
+                        }
+                        IpeResult::Err(e) => return IpeResult::Err(e),
+                    }
+                }
+                IpeResult::Ok(out)
+            }
+            None => IpeResult::Err(str_err("expected object")),
+        }),
+        vec![],
+    )
+}
+
 fn run_decoder<E: From<String> + 'static, T>(
     parsed: Result<JsonVal, String>,
     decoder: Decoder<E, T>,
