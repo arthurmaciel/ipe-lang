@@ -36,9 +36,9 @@ fn run_no_args_returns_usage_error() {
 }
 
 /// `ipe run <entry> --bogus` (unrecognised flag after the entry) must return
-/// a usage error, not panic.  Note: `run_run` treats the FIRST positional arg
-/// as the entry path unconditionally, so `--bogus-flag` in the flag position
-/// (after the entry) is what triggers the Usage arm.
+/// a usage error naming the offending flag, not panic. The typed parse rejects
+/// the unknown flag with a specific `UsageOwned` message naming `--bogus-flag`,
+/// rather than the generic `Usage` synopsis.
 #[test]
 fn run_unknown_flag_returns_usage_error() {
     let args: Vec<String> = vec![
@@ -48,8 +48,11 @@ fn run_unknown_flag_returns_usage_error() {
     ];
     let result = ipe::run_cli(&args);
     assert!(
-        matches!(result, Err(ipe::CliError::Usage(_))),
-        "expected Usage error for unknown flag after entry, got: {result:?}"
+        matches!(
+            result,
+            Err(ipe::CliError::Usage(_) | ipe::CliError::UsageOwned(_))
+        ),
+        "expected a usage error for an unknown flag after the entry, got: {result:?}"
     );
 }
 

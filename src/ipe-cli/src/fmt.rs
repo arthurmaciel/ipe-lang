@@ -122,28 +122,16 @@ By default `ipe fmt` rewrites each file in place.";
 /// formatter's round-trip guard trips. Under `--check`, an unformatted file is
 /// reported as a non-zero exit via [`CliError::UsageOwned`] carrying the list.
 pub fn run_fmt(rest: &[String]) -> Result<(), CliError> {
-    let mut path_arg: Option<String> = None;
-    let mut check = false;
-    for arg in rest {
-        match arg.as_str() {
-            "--help" | "-h" => {
-                println!("{FMT_USAGE}");
-                return Ok(());
-            }
-            "--check" => check = true,
-            flag if flag.starts_with('-') => {
-                return Err(CliError::UsageOwned(format!("fmt: unknown flag `{flag}`")));
-            }
-            other => {
-                if path_arg.is_some() {
-                    return Err(CliError::Usage("fmt: expected a single <path> argument"));
-                }
-                path_arg = Some(other.to_owned());
-            }
-        }
+    // `--help` / `-h` is a request for output, not an error — honour it before
+    // the typed parse (which treats every dashed token as a flag to validate).
+    if rest.iter().any(|a| a == "--help" || a == "-h") {
+        println!("{FMT_USAGE}");
+        return Ok(());
     }
+    let args = crate::cli_args::parse_fmt(rest)?;
+    let check = args.check;
 
-    let root = PathBuf::from(path_arg.unwrap_or_else(|| ".".to_owned()));
+    let root = PathBuf::from(args.path.unwrap_or_else(|| ".".to_owned()));
     let files = collect_ipe_files(&root)?;
     if files.is_empty() {
         return Err(CliError::UsageOwned(format!(
