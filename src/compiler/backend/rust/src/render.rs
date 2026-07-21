@@ -23,10 +23,6 @@
 //!   that an operator following a multiline operand glues to that operand's
 //!   closing-line column while the chain has not yet broken.
 
-// The renderer's public entry (`render`) is called by the P1 project.rs cutover;
-// until then only the P0 tests drive it.
-#![allow(dead_code, reason = "consumed by the P1 project.rs native emit path")]
-
 use crate::doc::{ChainOperand, Doc};
 
 /// Rendering configuration. Mirrors the `rustfmt` knobs the golden harness pins.

@@ -5818,25 +5818,6 @@ fn emit_ui_call(
     }
 }
 
-/// Emit an expression. `indent` is the indentation level (in 4-space units) of
-/// the line the expression *starts* on; it is consumed only by the multi-line
-/// `match` form. All other expressions render inline (no leading whitespace,
-/// no embedded newlines), so the caller positions them.
-///
-/// A binary operation is always parenthesised (`(count + 1)`) — matching the
-/// golden — so precedence is explicit and never relies on Rust's binding rules.
-///
-/// The bounded entry point: emission starts at depth 0 and fails fast past
-/// [`MAX_EMIT_DEPTH`] (IPE-L0200) rather than overflowing the native stack.
-pub fn emit_expr(
-    ctx: &EmitCtx,
-    expr: &Expr,
-    indent: usize,
-    generics: GenericScope,
-) -> DResult<String> {
-    emit_expr_at(ctx, expr, indent, 0, generics)
-}
-
 /// Handle JSON / Db decoder kernel calls that require custom argument wrapping.
 ///
 /// Returns `Some(emitted)` for the four special cases:
@@ -8573,14 +8554,14 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     let body = if ipe_main_wrap_unit {
         // Wrap the synchronous body so ipe_main returns IpeTask<()>; the
         // body's own (unit) value is discarded, only its side effects matter.
-        let inner = emit_expr(ctx, body_expr, 1, generics)?;
+        let inner = emit_body_native(ctx, body_expr, generics)?;
         format!("let _r = {{ {inner} }};\n    task_succeed(())")
     } else if ipe_main_wrap {
         // Mixed-arm Task.run-elision-declined wrap (Finding B): the body
         // already evaluates synchronously to a `Result e a` — carry that
         // ACTUAL value into an already-resolved `IpeTask<a>` rather than
         // discarding it, so `fn main`'s Ok/Err match sees the real outcome.
-        let inner = emit_expr(ctx, body_expr, 1, generics)?;
+        let inner = emit_body_native(ctx, body_expr, generics)?;
         format!("task_from_result({{ {inner} }})")
     } else {
         match body_expr {
@@ -8601,7 +8582,7 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
                 let inner = emit_expr_tail(ctx, loop_body, 2, 1, generics, loop_params)?;
                 format!("{shadows}loop {{\n{inner}\n    }}")
             }
-            _ => emit_expr(ctx, body_expr, 1, generics)?,
+            _ => emit_body_native(ctx, body_expr, generics)?,
         }
     };
 
@@ -8610,9 +8591,98 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     // in the param's `BoundSet` — the generic clause just renders the BoundSet.
     let generic_clause = render_fn_generics(func, ret_is_task);
 
-    Ok(format!(
-        "pub fn {name}{generic_clause}({}) -> {ret} {{\n    {body}\n}}\n",
+    let signature = render_fn_signature(&name, &generic_clause, &params, &ret);
+    Ok(format!("{signature} {{\n    {body}\n}}\n"))
+}
+
+/// Render a function signature `pub fn NAME<GEN>(PARAMS) -> RET`, laid out to the
+/// exact bytes `rustfmt --edition 2024 --style-edition 2024` produces — flat when
+/// it fits, otherwise broken to match rustfmt's fn-signature layout. The returned
+/// string has NO trailing ` {`; the caller appends the body block.
+///
+/// `rustfmt`'s three tiers, keyed off `max_width` (100), reproduced here because
+/// the native body path removed the whole-file `rustfmt` pass that used to reflow
+/// these lines:
+///
+/// * **flat** — the whole `pub fn NAME<GEN>(P0, P1, …) -> RET {` line (counting
+///   the trailing ` {` the caller adds) is at most 100 columns.
+/// * **params broken** — otherwise, if the `pub fn NAME<GEN>(` opening line fits:
+///   each parameter on its own line indented four columns with a trailing comma
+///   (every parameter, including the last), then `) -> RET {` at column 0.
+/// * **generics broken** — otherwise each generic on its own line indented four
+///   columns with a trailing comma, `>(` at column 0, then the params-broken body.
+///
+/// The ` {` the caller appends is included in every fit test (rustfmt measures the
+/// opening brace as part of the line), so the flat/broken decision matches the
+/// formatter's own boundary — verified flat at width 100, broken at 101.
+fn render_fn_signature(name: &str, generic_clause: &str, params: &[String], ret: &str) -> String {
+    // `rustfmt` `max_width`; `BRACE` is the trailing ` {` the caller appends after
+    // the return type, which rustfmt counts as part of the signature line.
+    const MAX_WIDTH: usize = 100;
+    const BRACE: usize = 2;
+    let flat = format!(
+        "pub fn {name}{generic_clause}({}) -> {ret}",
         params.join(", ")
+    );
+    if flat.len() + BRACE <= MAX_WIDTH {
+        return flat;
+    }
+
+    // The `pub fn NAME<GEN>(` opening line, with generics still flat.
+    let params_open = format!("pub fn {name}{generic_clause}(");
+    let broken_params = || {
+        let mut out = String::new();
+        for p in params {
+            out.push_str("\n    ");
+            out.push_str(p);
+            out.push(',');
+        }
+        out.push_str("\n) -> ");
+        out.push_str(ret);
+        out
+    };
+    if params_open.len() <= MAX_WIDTH {
+        return format!("{params_open}{}", broken_params());
+    }
+
+    // Both the flat and params-broken openings overflow: break the generic
+    // clause too. `generic_clause` is `<T1: …, T2: …>` (or empty, but an empty
+    // clause cannot overflow the opening line, so this branch is generics-only).
+    let inner = generic_clause
+        .strip_prefix('<')
+        .and_then(|s| s.strip_suffix('>'))
+        .unwrap_or(generic_clause);
+    let mut out = format!("pub fn {name}<");
+    for g in inner.split(", ") {
+        out.push_str("\n    ");
+        out.push_str(g);
+        out.push(',');
+    }
+    out.push_str("\n>(");
+    out.push_str(&broken_params());
+    out
+}
+
+/// Render a value body expression to the exact bytes a `rustfmt`-formatted
+/// function body carries, laid out by the native [`crate::emit_doc::build_doc`] +
+/// [`crate::render::render_seeded`] path instead of the flat string emitter.
+///
+/// The body opens at column 4 — right after the four-space prefix the caller
+/// writes before `{body}` in `pub fn … {\n    {body}\n}` — and every line it
+/// breaks onto nests from the fn-body block indent (4 columns). This is the same
+/// framing the whole-corpus native-vs-legacy sweep proved byte-identical to
+/// `emit_expr_at` + `rustfmt` for every function body in the corpus, so splicing
+/// its result makes the emitted body `rustfmt`-clean by construction.
+///
+/// `build_doc` is threaded the fn-body context the string emitter used: block
+/// indent 1, IR depth 0.
+fn emit_body_native(ctx: &EmitCtx, body_expr: &Expr, generics: GenericScope) -> DResult<String> {
+    let doc = crate::emit_doc::build_doc(ctx, body_expr, 1, 0, generics)?;
+    Ok(crate::render::render_seeded(
+        &doc,
+        crate::render::RenderConfig::default(),
+        4,
+        4,
     ))
 }
 
