@@ -2,19 +2,19 @@
 
 A minimal [Iced](https://iced.rs) counter, mapped onto Ipê's TEA over the REAL
 crates.io `iced` crate (auto-FFI-bound, shim-free). Iced's Elm architecture is
-Ipê's, so each piece maps to one `[rust.provide.*]` form in `ipe.toml`:
+Ipê's, so each piece maps to one `[rust.define.*]` form in `ipe.toml`:
 
-| Iced piece | Ipê shape | `[rust.provide.*]` form | Status |
+| Iced piece | Ipê shape | `[rust.define.*]` form | Status |
 |------------|-----------|-------------------------|--------|
-| `Model` (`Counter`) | a struct | `[[rust.provide.struct]]` | emitted + Ipê forwarder wired |
-| `Message` (`Increment`/`Decrement`) | an enum | `[[rust.provide.enum]]` | emitted + Ipê forwarder wired |
-| `update : Message -> Model -> Model` | a sync closure | `[[rust.provide.closure]]` | scalar subset only; closure→run pending |
-| `view : Model -> Element Message` | a sync closure | `[[rust.provide.closure]]` | opaque-map threaded; `Element<'a,Msg>` over-drops (parameterised) |
+| `Model` (`Counter`) | a struct | `[[rust.define.struct]]` | emitted + Ipê forwarder wired |
+| `Message` (`Increment`/`Decrement`) | an enum | `[[rust.define.enum]]` | emitted + Ipê forwarder wired |
+| `update : Message -> Model -> Model` | a sync closure | `[[rust.define.closure]]` | scalar subset only; closure→run pending |
+| `view : Model -> Element Message` | a sync closure | `[[rust.define.closure]]` | opaque-map threaded; `Element<'a,Msg>` over-drops (parameterised) |
 
 ## What binds today (the SEAL that holds)
 
 `ipe install` runs the sandboxed inspector over `iced = 0.12.1` and merges the
-`[rust.provide.*]` decls into the generated `_bindings.rs`. For the Model + the
+`[rust.define.*]` decls into the generated `_bindings.rs`. For the Model + the
 Message, the driver emits **real, self-contained Rust**:
 
 ```rust
@@ -38,7 +38,7 @@ closed carrier, so it carries no IEEE-754 hazard (unlike `Eq`/`Ord`/`Hash`).
 
 ## What's wired now (the forwarder plumbing)
 
-The Ipê-side **forwarder plumbing** for provide-defined TYPES is wired. After
+The Ipê-side **forwarder plumbing** for define-defined TYPES is wired. After
 `ipe install`, the `Rust.Iced` interface admits — for the `Counter` struct and
 the `Message` enum — an Ipê-held opaque nominal plus a constructor forwarder the
 Ipê program can call:
@@ -52,12 +52,12 @@ message_new_increment : Message
 message_new_decrement : Message
 ```
 
-A provide-defined type resolves at the crate-absolute path
+A define-defined type resolves at the crate-absolute path
 `crate::ffi::<slug>::<Name>` (it lives in the emitted app crate's `src/ffi.rs`,
 not an external `::iced::` path). A nullary constructor (a unit variant like
 `Increment`, or a fieldless struct) binds a zero-arg forwarder; a name that would
 shadow an Ipê builtin, or clash with an inspected opaque of the same crate, fails
-closed. So an Ipê program can now **construct** the provide-defined Rust types and
+closed. So an Ipê program can now **construct** the define-defined Rust types and
 fold over them.
 
 ## The exact remaining block (why `Main.ipe` is still a placeholder)
@@ -74,7 +74,7 @@ Two Iced-specific gaps sit on top of that:
 
 * **Opaque-return closures.** The closure adapter now threads the crate
   opaque-map, so a `Result`/`Option` closure whose Ok/Some carrier is an OPAQUE
-  handle resolves — a provide-defined type to its bare in-module name, an
+  handle resolves — a define-defined type to its bare in-module name, an
   inspected crate-opaque to its absolute `::crate::path`, with the per-call panic
   still folding to `Err`/`None`. But `view` returns `Element<'a, Message>` — a
   LIFETIME/generic-parameterised handle the bare-handle carrier cannot carry
@@ -83,7 +83,7 @@ Two Iced-specific gaps sit on top of that:
   for owned, non-parameterised opaques; `Element<'a,Msg>` stays refused until a
   carrier that carries generic args exists. The remaining
   boxed-closure-as-Ipê-value `run`-handoff (above) is orthogonal.
-* **`provide.struct`/`provide.enum` opaque fields/payloads.** A field or variant
+* **`define.struct`/`define.enum` opaque fields/payloads.** A field or variant
   payload of a crate-opaque type (`Element`, `Command`) over-drops at decode
   until the opaque-map is threaded into the definition emitter.
 
@@ -94,7 +94,7 @@ CI. These remaining gaps are filed to the FFI backlog (see the PR body).
 
 ## Regenerating the bindings
 
-The workflow below is the standard provide-surface flow (as used by
+The workflow below is the standard define-surface flow (as used by
 `bevy-game`). It is shown for reference: `ipe install` emits the
 `_bindings.rs` shown above, but `ipe build` currently stops at the forwarder gap
 documented above — the emitted definitions compile, but `Main.ipe` cannot yet

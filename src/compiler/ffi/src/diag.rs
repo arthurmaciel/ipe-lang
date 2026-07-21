@@ -555,7 +555,7 @@ pub enum WireDefect {
         /// The offending feature string.
         got: String,
     },
-    /// A `[rust.provide.closure]` signature does not parse into the closed
+    /// A `[rust.define.closure]` signature does not parse into the closed
     /// [`crate::carrier::ClosureSig`] shape: a parameter or return component
     /// outside the carrier set, a bound outside `{Send, Sync, 'static}`, a
     /// return that is neither a total scalar carrier nor `Result`/`Option`, or
@@ -567,17 +567,17 @@ pub enum WireDefect {
         /// Which structural rule was broken.
         reason: String,
     },
-    /// A `[rust.provide.struct]`/`[rust.provide.enum]` whose field/payload
+    /// A `[rust.define.struct]`/`[rust.define.enum]` whose field/payload
     /// reference graph forms a cycle back to itself (directly, or mutually
-    /// through other provide types). A recursive nominal type has no `Box` in
+    /// through other define types). A recursive nominal type has no `Box` in
     /// the closed carrier set to break it, so emitting it would be an
     /// infinitely-sized Rust type (`error[E0072]`). Refused at decode — the
     /// package author must break the cycle (e.g. indirect through a handle the
     /// FFI can name), never emit-and-cargo-fail.
-    RecursiveProvideType {
-        /// The provide type refused (a member of the cycle).
+    RecursiveDefineType {
+        /// The define type refused (a member of the cycle).
         name: String,
-        /// The cycle, as the chain of provide-type names it closes over.
+        /// The cycle, as the chain of define-type names it closes over.
         cycle: Vec<String>,
     },
     /// The document is not the JSON shape the wire contract declares
@@ -671,13 +671,13 @@ impl fmt::Display for WireDefect {
             Self::InvalidClosureSig { got, reason } => {
                 write!(
                     f,
-                    "{got:?} is not a legal provide.closure signature: {reason}"
+                    "{got:?} is not a legal define.closure signature: {reason}"
                 )
             }
-            Self::RecursiveProvideType { name, cycle } => {
+            Self::RecursiveDefineType { name, cycle } => {
                 write!(
                     f,
-                    "provide type {name:?} is recursive ({}) — a nominal FFI type cannot \
+                    "define type {name:?} is recursive ({}) — a nominal FFI type cannot \
                      reference itself (no boxed indirection is available in the closed carrier \
                      set); break the cycle by indirecting through a crate handle the FFI can name",
                     cycle.join(" -> ")

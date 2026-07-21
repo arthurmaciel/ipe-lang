@@ -1,4 +1,4 @@
-//! SEAL fixture for the `[rust.provide.enum]` type-definition + per-variant
+//! SEAL fixture for the `[rust.define.enum]` type-definition + per-variant
 //! constructors.
 //!
 //! The keystone invariant is `ipe build ⇒ cargo build ⇒ the type is usable`.
@@ -16,7 +16,7 @@
 use ipe_ffi::bindings::emit_bindings;
 use ipe_ffi::pkginfo::PkgInfo;
 
-/// Decode a one-crate inspection document carrying a single `provide.enum`
+/// Decode a one-crate inspection document carrying a single `define.enum`
 /// entry, and return the emitted `_bindings.rs`.
 fn emit_enum(enum_name: &str, variants: &serde_json::Value, derives: &serde_json::Value) -> String {
     let doc = serde_json::json!({
@@ -34,14 +34,14 @@ fn emit_enum(enum_name: &str, variants: &serde_json::Value, derives: &serde_json
         "errors": []
     })
     .to_string();
-    let pkg = PkgInfo::decode_json(&doc).expect("provide.enum decodes");
+    let pkg = PkgInfo::decode_json(&doc).expect("define.enum decodes");
     emit_bindings(&pkg)
 }
 
 /// A unit-variant enum (the Iced/TEA `Message` shape) emits a `#[derive]`ed
 /// definition + one nullary constructor per variant (default-gate — no cargo).
 #[test]
-fn provide_enum_emits_a_definition_and_unit_constructors() {
+fn define_enum_emits_a_definition_and_unit_constructors() {
     let msg = emit_enum(
         "Message",
         &serde_json::json!([
@@ -69,7 +69,7 @@ fn provide_enum_emits_a_definition_and_unit_constructors() {
 /// A tuple-payload variant emits a constructor with one owned-carrier parameter
 /// per payload position, folded into `E::V(a0, …)`.
 #[test]
-fn provide_enum_emits_tuple_payload_constructors() {
+fn define_enum_emits_tuple_payload_constructors() {
     let ev = emit_enum(
         "Event",
         &serde_json::json!([
@@ -94,10 +94,10 @@ fn provide_enum_emits_tuple_payload_constructors() {
     assert!(ev.contains("Event::Move(arg0, arg1)"), "{ev}");
 }
 
-/// The rejection paths: an ill-formed or unsound `provide.enum` over-drops the
+/// The rejection paths: an ill-formed or unsound `define.enum` over-drops the
 /// whole entry at decode (no wrapper emitted), never emit-and-cargo-fail.
 #[test]
-fn unsound_provide_enums_emit_no_wrapper() {
+fn unsound_define_enums_emit_no_wrapper() {
     // A total-Eq derive on a Float payload (IEEE-754 has no total Eq/Ord/Hash).
     let float_eq = emit_enum(
         "Bad",
@@ -132,7 +132,7 @@ fn unsound_provide_enums_emit_no_wrapper() {
 /// variant constructs and a `match` over the sum resolves — the exact shape an
 /// Iced `update : Message -> Model -> Model` consumes.
 #[test]
-fn provide_enum_builds_and_runs() {
+fn define_enum_builds_and_runs() {
     if std::env::var("IPE_E2E").is_err() {
         return;
     }
@@ -202,7 +202,7 @@ fn main() {{
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         out.status.success(),
-        "emitted provide.enum crate must build and run exit 0.\n\
+        "emitted define.enum crate must build and run exit 0.\n\
          stdout: {stdout}\nstderr: {stderr}"
     );
     assert!(

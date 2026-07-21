@@ -1,10 +1,10 @@
-//! SEAL fixture for RECURSIVE `provide.struct` / `provide.enum` definitions.
+//! SEAL fixture for RECURSIVE `define.struct` / `define.enum` definitions.
 //!
-//! A directly- or mutually-recursive provide type (`Tree { child: Tree }`, or
+//! A directly- or mutually-recursive define type (`Tree { child: Tree }`, or
 //! `A { inner: B }` + `B { inner: A }`) has no boxed indirection in the closed
 //! carrier set, so emitting it would be an infinitely-sized Rust type
 //! (`error[E0072]`) — an `ipe`-exit-0-then-cargo-fail SEAL breach. The decode
-//! boundary refuses every def on a cycle in the provide-type reference graph:
+//! boundary refuses every def on a cycle in the define-type reference graph:
 //! the def-bearing binding is over-dropped with a package-author diagnostic, and
 //! the emitter's survivor fixed point fans the over-drop out to every reference.
 //!
@@ -20,7 +20,7 @@ use ipe_ffi::diag::{Diagnostic, WireDefect};
 use ipe_ffi::interface::crate_interface;
 use ipe_ffi::pkginfo::PkgInfo;
 
-/// A one-crate package whose only provide type is a self-recursive `Tree`.
+/// A one-crate package whose only define type is a self-recursive `Tree`.
 fn self_recursive_pkg() -> PkgInfo {
     let doc = serde_json::json!({
         "pkg": "demo", "name": "demo", "version": "0.1.0",
@@ -38,7 +38,7 @@ fn self_recursive_pkg() -> PkgInfo {
     PkgInfo::decode_json(&doc).expect("the package survives; the def is over-dropped")
 }
 
-/// A one-crate package whose two provide types close a cycle through each other.
+/// A one-crate package whose two define types close a cycle through each other.
 fn mutually_recursive_pkg() -> PkgInfo {
     let doc = serde_json::json!({
         "pkg": "demo", "name": "demo", "version": "0.1.0",
@@ -66,7 +66,7 @@ fn mutually_recursive_pkg() -> PkgInfo {
 /// reaches `_bindings.rs`, the survivor gate rejects it, and the interface
 /// surfaces neither the nominal nor a forwarder onto the absent wrapper.
 #[test]
-fn a_self_recursive_provide_struct_emits_nothing() {
+fn a_self_recursive_define_struct_emits_nothing() {
     let pkg = self_recursive_pkg();
     let out = emit_bindings(&pkg);
     assert!(
@@ -79,7 +79,7 @@ fn a_self_recursive_provide_struct_emits_nothing() {
     );
     let iface = crate_interface(&pkg);
     assert!(
-        !iface.provide_types.contains("Tree"),
+        !iface.define_types.contains("Tree"),
         "the interface must not register the refused nominal"
     );
     assert!(
@@ -89,15 +89,15 @@ fn a_self_recursive_provide_struct_emits_nothing() {
 }
 
 /// Default gate: the refusal carries a loud package-author diagnostic — the
-/// dropped ledger records a `RecursiveProvideType` for the refused def.
+/// dropped ledger records a `RecursiveDefineType` for the refused def.
 #[test]
-fn a_self_recursive_provide_struct_records_a_diagnostic() {
+fn a_self_recursive_define_struct_records_a_diagnostic() {
     let pkg = self_recursive_pkg();
     assert!(
         pkg.dropped().iter().any(|d| matches!(
             d,
             Diagnostic::WireMalformed {
-                defect: WireDefect::RecursiveProvideType { name, .. },
+                defect: WireDefect::RecursiveDefineType { name, .. },
                 ..
             } if name == "Tree"
         )),
@@ -109,7 +109,7 @@ fn a_self_recursive_provide_struct_records_a_diagnostic() {
 /// Default gate: a mutual `A`/`B` cycle refuses BOTH defs — neither type emits,
 /// neither survives, and both are recorded.
 #[test]
-fn a_mutually_recursive_provide_pair_emits_nothing() {
+fn a_mutually_recursive_define_pair_emits_nothing() {
     let pkg = mutually_recursive_pkg();
     let out = emit_bindings(&pkg);
     assert!(
@@ -126,7 +126,7 @@ fn a_mutually_recursive_provide_pair_emits_nothing() {
         .iter()
         .filter_map(|d| match d {
             Diagnostic::WireMalformed {
-                defect: WireDefect::RecursiveProvideType { name, .. },
+                defect: WireDefect::RecursiveDefineType { name, .. },
                 ..
             } => Some(name.as_str()),
             _ => None,
@@ -159,7 +159,7 @@ fn a_non_recursive_chain_survives_decode() {
         !pkg.dropped().iter().any(|d| matches!(
             d,
             Diagnostic::WireMalformed {
-                defect: WireDefect::RecursiveProvideType { .. },
+                defect: WireDefect::RecursiveDefineType { .. },
                 ..
             }
         )),
