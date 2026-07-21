@@ -1,7 +1,8 @@
-//! The single source of truth for the `ipe` command-line look: the colour
-//! palette, the status glyphs, the download spinner and progress bar, and the
-//! two fixed strings (the repository URL and the "report bugs" footer) that
-//! appear in both the CLI and the shell installer.
+//! The single source of truth for the `ipe` command-line look.
+//!
+//! It owns the colour palette, the status glyphs, the download spinner and
+//! progress bar, and the two fixed strings (the repository URL and the "report
+//! bugs" footer) that appear in both the CLI and the shell installer.
 //!
 //! Every visual fact lives here exactly once. The Rust help renderer, audit,
 //! and diff import these constants directly; the shell installer
@@ -28,9 +29,10 @@ pub fn report_bugs_footer() -> String {
     format!("Found any bugs? Please report them at {REPO_URL}/issues.")
 }
 
-/// The product header line, `Ipê language - v{version} - {REPO_URL}` with no
-/// colour. The help renderer inserts the palette escapes around the segments;
-/// this is the plain skeleton the header text agrees on.
+/// The product header line, `Ipê language - v{version} - {REPO_URL}`.
+///
+/// Rendered with no colour; the help renderer inserts the palette escapes around
+/// the segments. This is the plain skeleton the header text agrees on.
 #[must_use]
 pub fn header_line(version: &str) -> String {
     format!("Ipê language - v{version} - {REPO_URL}")
@@ -147,8 +149,11 @@ mod tests {
     }
 
     #[test]
-    fn spinner_has_ten_frames_and_bar_is_nonempty() {
+    fn spinner_has_ten_frames_and_bar_chars_differ() {
         assert_eq!(SPINNER_FRAMES.len(), 10);
-        assert!(progress_bar::WIDTH > 0);
+        // Every frame is a distinct non-empty glyph, and the filled/empty bar
+        // cells are different characters so the bar reads.
+        assert!(SPINNER_FRAMES.iter().all(|f| !f.is_empty()));
+        assert_ne!(progress_bar::FILLED, progress_bar::EMPTY);
     }
 }
