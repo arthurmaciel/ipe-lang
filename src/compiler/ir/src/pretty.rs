@@ -519,6 +519,13 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::SetUnion => "Set.union",
         KernelFn::SetIntersect => "Set.intersect",
         KernelFn::SetDiff => "Set.diff",
+        KernelFn::SetIsEmpty => "Set.isEmpty",
+        KernelFn::SetSingleton => "Set.singleton",
+        KernelFn::SetFoldl => "Set.foldl",
+        KernelFn::SetFoldr => "Set.foldr",
+        KernelFn::SetMap => "Set.map",
+        KernelFn::SetFilter => "Set.filter",
+        KernelFn::SetPartition => "Set.partition",
         // ── Bytes kernels ──────────────────────────────────────────────
         KernelFn::BytesEmpty => "Bytes.empty",
         KernelFn::BytesLength => "Bytes.length",

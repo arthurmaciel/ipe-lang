@@ -569,6 +569,13 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::SetUnion => "set_union",
         KernelFn::SetIntersect => "set_intersect",
         KernelFn::SetDiff => "set_diff",
+        KernelFn::SetIsEmpty => "set_is_empty",
+        KernelFn::SetSingleton => "set_singleton",
+        KernelFn::SetFoldl => "set_foldl",
+        KernelFn::SetFoldr => "set_foldr",
+        KernelFn::SetMap => "set_map",
+        KernelFn::SetFilter => "set_filter",
+        KernelFn::SetPartition => "set_partition",
         // ── Bytes kernels ─────────────────────────────────────────────
         KernelFn::BytesEmpty => "bytes_empty",
         KernelFn::BytesLength => "bytes_length",

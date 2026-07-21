@@ -13162,6 +13162,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DictFromList
                 // ── Set arity-1 ──────────────────────────────────────────────
                 | KernelFn::SetSize
+                | KernelFn::SetIsEmpty
+                | KernelFn::SetSingleton
                 | KernelFn::SetToList
                 | KernelFn::SetFromList
                 // ── Bytes arity-1 ────────────────────────────────────────────
@@ -13429,6 +13431,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::SetUnion
                 | KernelFn::SetIntersect
                 | KernelFn::SetDiff
+                | KernelFn::SetMap
+                | KernelFn::SetFilter
+                | KernelFn::SetPartition
                 // ── Bytes arity-2 ────────────────────────────────────────────
                 | KernelFn::BytesAppend
                 // ── JsonEnc arity-2 ─────────────────────────────────────
@@ -13589,6 +13594,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::BasicsClamp
                 | KernelFn::ListFoldl
                 | KernelFn::ListFoldr
+                // ── Set arity-3 ──────────────────────────────────────────────
+                | KernelFn::SetFoldl
+                | KernelFn::SetFoldr
                 // ── Dict arity-3 ─────────────────────────────────────────────
                 | KernelFn::DictInsert
                 | KernelFn::DictFoldl
@@ -14868,6 +14876,13 @@ impl<'a> Lowerer<'a> {
                     ("Set", "union") => Ok(Callee::Kernel(KernelFn::SetUnion)),
                     ("Set", "intersect") => Ok(Callee::Kernel(KernelFn::SetIntersect)),
                     ("Set", "diff") => Ok(Callee::Kernel(KernelFn::SetDiff)),
+                    ("Set", "isEmpty") => Ok(Callee::Kernel(KernelFn::SetIsEmpty)),
+                    ("Set", "singleton") => Ok(Callee::Kernel(KernelFn::SetSingleton)),
+                    ("Set", "foldl") => Ok(Callee::Kernel(KernelFn::SetFoldl)),
+                    ("Set", "foldr") => Ok(Callee::Kernel(KernelFn::SetFoldr)),
+                    ("Set", "map") => Ok(Callee::Kernel(KernelFn::SetMap)),
+                    ("Set", "filter") => Ok(Callee::Kernel(KernelFn::SetFilter)),
+                    ("Set", "partition") => Ok(Callee::Kernel(KernelFn::SetPartition)),
                     // ── Bytes kernels ────────────────────────────────
                     // Divergence from Ipê: Bytes is Vec<u8> not String alias.
                     ("Bytes", "empty") => Ok(Callee::Kernel(KernelFn::BytesEmpty)),

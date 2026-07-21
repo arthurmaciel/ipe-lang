@@ -411,6 +411,13 @@ pub enum StdlibKernel {
     SetUnion,
     SetIntersect,
     SetDiff,
+    SetIsEmpty,
+    SetSingleton,
+    SetFoldl,
+    SetFoldr,
+    SetMap,
+    SetFilter,
+    SetPartition,
     // ── Bytes ───────────────────────────────────────────────────────────────
     BytesEmpty,
     BytesLength,
@@ -1868,6 +1875,13 @@ impl StdlibKernel {
             Self::SetUnion => d("Set", "union", 2, Pure, "set_union"),
             Self::SetIntersect => d("Set", "intersect", 2, Pure, "set_intersect"),
             Self::SetDiff => d("Set", "diff", 2, Pure, "set_diff"),
+            Self::SetIsEmpty => d("Set", "isEmpty", 1, Pure, "set_is_empty"),
+            Self::SetSingleton => d("Set", "singleton", 1, Pure, "set_singleton"),
+            Self::SetFoldl => d("Set", "foldl", 3, Pure, "set_foldl"),
+            Self::SetFoldr => d("Set", "foldr", 3, Pure, "set_foldr"),
+            Self::SetMap => d("Set", "map", 2, Pure, "set_map"),
+            Self::SetFilter => d("Set", "filter", 2, Pure, "set_filter"),
+            Self::SetPartition => d("Set", "partition", 2, Pure, "set_partition"),
             // ── Bytes ───────────────────────────────────────────────────────
             Self::BytesEmpty => d("Bytes", "empty", 0, Pure, "bytes_empty"),
             Self::BytesLength => d("Bytes", "length", 1, Pure, "bytes_length"),
@@ -3226,6 +3240,13 @@ impl StdlibKernel {
         Self::SetUnion,
         Self::SetIntersect,
         Self::SetDiff,
+        Self::SetIsEmpty,
+        Self::SetSingleton,
+        Self::SetFoldl,
+        Self::SetFoldr,
+        Self::SetMap,
+        Self::SetFilter,
+        Self::SetPartition,
         // Bytes
         Self::BytesEmpty,
         Self::BytesLength,
@@ -4490,6 +4511,13 @@ impl StdlibKernel {
             | Self::SetUnion
             | Self::SetIntersect
             | Self::SetDiff
+            | Self::SetIsEmpty
+            | Self::SetSingleton
+            | Self::SetFoldl
+            | Self::SetFoldr
+            | Self::SetMap
+            | Self::SetFilter
+            | Self::SetPartition
             | Self::BytesEmpty
             | Self::BytesLength
             | Self::BytesIsEmpty

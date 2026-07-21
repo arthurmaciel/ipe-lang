@@ -680,6 +680,13 @@ impl Env {
                     "union",
                     "intersect",
                     "diff",
+                    "isEmpty",
+                    "singleton",
+                    "foldl",
+                    "foldr",
+                    "map",
+                    "filter",
+                    "partition",
                 ],
             ),
             // `Ipe.Bytes` — byte-buffer kernels.

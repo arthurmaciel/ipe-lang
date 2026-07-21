@@ -71,6 +71,62 @@ pub fn set_diff<A: Ord>(a: BTreeSet<A>, b: BTreeSet<A>) -> BTreeSet<A> {
     a.into_iter().filter(|x| !b.contains(x)).collect()
 }
 
+/// `Set.isEmpty : Set a -> Bool`.
+pub fn set_is_empty<A>(s: BTreeSet<A>) -> bool {
+    s.is_empty()
+}
+
+/// `Set.singleton : a -> Set a` — the one-element set `{x}`.
+pub fn set_singleton<A: Ord>(x: A) -> BTreeSet<A> {
+    let mut s = BTreeSet::new();
+    s.insert(x);
+    s
+}
+
+/// `Set.foldl : (a -> b -> b) -> b -> Set a -> b` — fold in ascending element
+/// order (`BTreeSet` iterates sorted). The callback takes the element then the
+/// accumulator, matching Elm's `Set.foldl`.
+pub fn set_foldl<A, B>(f: impl Fn(A, B) -> B, init: B, s: BTreeSet<A>) -> B {
+    let mut acc = init;
+    for x in s {
+        acc = f(x, acc);
+    }
+    acc
+}
+
+/// `Set.foldr : (a -> b -> b) -> b -> Set a -> b` — fold in descending element
+/// order. Matches Elm's `Set.foldr`.
+pub fn set_foldr<A, B>(f: impl Fn(A, B) -> B, init: B, s: BTreeSet<A>) -> B {
+    let mut acc = init;
+    for x in s.into_iter().rev() {
+        acc = f(x, acc);
+    }
+    acc
+}
+
+/// `Set.map : (a -> b) -> Set a -> Set b` — apply `f` to every element,
+/// collapsing duplicate results. `B: Ord` because the result backs a
+/// `BTreeSet<B>`.
+pub fn set_map<A, B: Ord>(f: impl Fn(A) -> B, s: BTreeSet<A>) -> BTreeSet<B> {
+    s.into_iter().map(f).collect()
+}
+
+/// `Set.filter : (a -> Bool) -> Set a -> Set a` — keep only satisfying elements.
+/// The predicate takes its element by value (the Ipê closure ABI), so `A` is
+/// `Ord + Clone` — cloned for the test, original kept for the output.
+pub fn set_filter<A: Ord + Clone>(pred: impl Fn(A) -> bool, s: BTreeSet<A>) -> BTreeSet<A> {
+    s.into_iter().filter(|x| pred(x.clone())).collect()
+}
+
+/// `Set.partition : (a -> Bool) -> Set a -> (Set a, Set a)` — split into
+/// (satisfying, not-satisfying). By-value predicate ABI, so `A: Ord + Clone`.
+pub fn set_partition<A: Ord + Clone>(
+    pred: impl Fn(A) -> bool,
+    s: BTreeSet<A>,
+) -> (BTreeSet<A>, BTreeSet<A>) {
+    s.into_iter().partition(|x| pred(x.clone()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,5 +157,41 @@ mod tests {
         );
         assert_eq!(set_to_list(set_intersect(a.clone(), b.clone())), vec![2, 3]);
         assert_eq!(set_to_list(set_diff(a, b)), vec![1]);
+    }
+
+    #[test]
+    fn is_empty_and_singleton_match_elm() {
+        assert!(set_is_empty(set_empty::<i64>()));
+        assert!(!set_is_empty(set_singleton(1i64)));
+        assert_eq!(set_to_list(set_singleton(9i64)), vec![9]);
+    }
+
+    #[test]
+    fn fold_map_filter_partition_match_elm() {
+        let s = set_from_list(vec![1i64, 2, 3, 4]);
+        // foldl/foldr sum the same total; order differs but sum is invariant.
+        assert_eq!(set_foldl(|x, a| x + a, 0i64, s.clone()), 10);
+        assert_eq!(set_foldr(|x, a| x + a, 0i64, s.clone()), 10);
+        // map doubling; duplicates would collapse (none here).
+        assert_eq!(
+            set_to_list(set_map(|x| x * 2, s.clone())),
+            vec![2i64, 4, 6, 8]
+        );
+        // filter evens.
+        assert_eq!(
+            set_to_list(set_filter(|x: i64| x % 2 == 0, s.clone())),
+            vec![2i64, 4]
+        );
+        // partition (> 2) → ({3,4}, {1,2}).
+        let (yes, no) = set_partition(|x: i64| x > 2, s);
+        assert_eq!(set_to_list(yes), vec![3i64, 4]);
+        assert_eq!(set_to_list(no), vec![1i64, 2]);
+    }
+
+    #[test]
+    fn map_collapses_duplicates() {
+        // map (always 0) over {1,2,3} → {0}.
+        let s = set_from_list(vec![1i64, 2, 3]);
+        assert_eq!(set_to_list(set_map(|_x| 0i64, s)), vec![0i64]);
     }
 }

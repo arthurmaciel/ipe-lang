@@ -2881,6 +2881,17 @@ impl<'a> Builder<'a> {
                     let s = self.super_var(bound, span)?;
                     self.eq(span, key_var, s);
                 }
+                // `Set.map : (a -> b) -> Set a -> Set b` — the RESULT element
+                // `b` (raw scheme-var 1) also backs a `BTreeSet<b>`, so it
+                // carries the same `set_elem` (Ord) obligation as the source
+                // element. Without this a generic `Set.map` would emit an
+                // unbounded `set_map::<A, B>` that `cargo` rejects (B: Ord unmet).
+                if matches!(k, StdlibKernel::SetMap)
+                    && let Some(&res_var) = vars.get(&1)
+                {
+                    let s = self.super_var(bound, span)?;
+                    self.eq(span, res_var, s);
+                }
                 return Ok(var);
             }
             // `Db.exec` / `Db.query` / `Db.queryDecode`: the params-LIST
@@ -4811,6 +4822,25 @@ impl<'a> Builder<'a> {
             K::SetUnion | K::SetIntersect | K::SetDiff => {
                 fun(set(var(0)), fun(set(var(0)), set(var(0))))
             }
+            // isEmpty : Set a -> Bool
+            K::SetIsEmpty => fun(set(var(0)), bool_ty()),
+            // singleton : a -> Set a
+            K::SetSingleton => fun(var(0), set(var(0))),
+            // foldl / foldr : (a -> b -> b) -> b -> Set a -> b
+            K::SetFoldl | K::SetFoldr => fun(
+                fun(var(0), fun(var(1), var(1))),
+                fun(var(1), fun(set(var(0)), var(1))),
+            ),
+            // map : (a -> b) -> Set a -> Set b (var 0=a AND var 1=b carry the
+            // set_elem Ord obligation, layered in constrain_var_kernel).
+            K::SetMap => fun(fun(var(0), var(1)), fun(set(var(0)), set(var(1)))),
+            // filter : (a -> Bool) -> Set a -> Set a
+            K::SetFilter => fun(fun(var(0), bool_ty()), fun(set(var(0)), set(var(0)))),
+            // partition : (a -> Bool) -> Set a -> (Set a, Set a)
+            K::SetPartition => fun(
+                fun(var(0), bool_ty()),
+                fun(set(var(0)), tuple2(set(var(0)), set(var(0)))),
+            ),
 
             // ── Dict (base schemes; the `dict_key` obligation is layered in
             //    constrain_var_kernel, keyed off the id) ──
@@ -7538,6 +7568,13 @@ mod registry_phase_c_tests {
             K::SetUnion,
             K::SetIntersect,
             K::SetDiff,
+            K::SetIsEmpty,
+            K::SetSingleton,
+            K::SetFoldl,
+            K::SetFoldr,
+            K::SetMap,
+            K::SetFilter,
+            K::SetPartition,
             // Dict (14) — base scheme; dict_key obligation layered in constrain_var_kernel
             K::DictEmpty,
             K::DictIsEmpty,
