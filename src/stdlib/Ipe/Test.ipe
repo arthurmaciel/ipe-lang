@@ -14,6 +14,8 @@
 -- All top-level bindings are fully annotated (compiled-source
 -- discipline — annotation-driven generalisation; no whole-program
 -- let-gen).
+
+
 module Ipe.Test exposing
     ( Test, TestResult(..)
     , test, suite
@@ -26,8 +28,6 @@ module Ipe.Test exposing
 
 
 -- ─── Types ───────────────────────────────────────────────────────────────────
-
-
 type Test
     = Leaf String (() -> TestResult)
     | Suite String (List Test)
@@ -39,8 +39,6 @@ type TestResult
 
 
 -- ─── Builders ────────────────────────────────────────────────────────────────
-
-
 test : String -> (() -> TestResult) -> Test
 test name thunk =
     Leaf name thunk
@@ -52,8 +50,6 @@ suite name items =
 
 
 -- ─── Assertions ──────────────────────────────────────────────────────────────
-
-
 pass : TestResult
 pass =
     Passed
@@ -68,18 +64,21 @@ equal : a -> a -> TestResult
 equal expected actual =
     if expected == actual then
         Passed
+
     else
         Failed
             ("expected "
                 ++ errorToString expected
                 ++ " but got "
-                ++ errorToString actual)
+                ++ errorToString actual
+            )
 
 
 notEqual : a -> a -> TestResult
 notEqual expected actual =
     if expected /= actual then
         Passed
+
     else
         Failed ("expected inequality but both were " ++ errorToString actual)
 
@@ -125,8 +124,6 @@ isFalse b =
 
 
 -- ─── Runner ──────────────────────────────────────────────────────────────────
-
-
 run : List Test -> List ( String, TestResult )
 run tests =
     runWithPrefix "" tests
@@ -146,11 +143,14 @@ runWithPrefix prefix tests =
                             nextPrefix =
                                 if prefix == "" then
                                     name ++ " > "
+
                                 else
                                     prefix ++ name ++ " > "
                         in
-                        runWithPrefix nextPrefix inner)
-            tests)
+                        runWithPrefix nextPrefix inner
+            )
+            tests
+        )
 
 
 println : String -> Task Error ()
@@ -171,8 +171,9 @@ summarise results =
                         ( _, Passed ) ->
                             []
 
-                        ( name, Failed _ ) ->
-                            [ name ])
+                        ( name, Failed reason ) ->
+                            [ ( name, reason ) ]
+                )
                 results
 
         failCount =
@@ -181,14 +182,25 @@ summarise results =
         passCount =
             total - failCount
 
+        failureReport =
+            String.join ""
+                (List.map
+                    (\( name, reason ) ->
+                        "  FAIL  " ++ name ++ "\n          " ++ reason ++ "\n"
+                    )
+                    failures
+                )
+
+        summaryLine =
+            String.fromInt passCount
+                ++ " passed, "
+                ++ String.fromInt failCount
+                ++ " failed ("
+                ++ String.fromInt total
+                ++ " total)"
+
         _ =
-            println
-                (String.fromInt passCount
-                    ++ " passed, "
-                    ++ String.fromInt failCount
-                    ++ " failed ("
-                    ++ String.fromInt total
-                    ++ " total)")
+            println (failureReport ++ summaryLine)
     in
     failCount == 0
 
@@ -204,5 +216,6 @@ runMain tests =
     in
     if allPassed then
         System.exit 0
+
     else
         System.exit 1
