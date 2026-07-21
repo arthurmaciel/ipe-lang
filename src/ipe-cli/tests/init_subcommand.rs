@@ -65,7 +65,10 @@ fn init_refuses_existing_project_without_force() {
     assert!(
         matches!(
             second,
-            Err(ipe::CliError::CommandUsage { command: "init", .. })
+            Err(ipe::CliError::CommandUsage {
+                command: "init",
+                ..
+            })
         ),
         "re-init without --force must be refused (and show init's help), got: {second:?}"
     );
@@ -84,7 +87,10 @@ fn init_unknown_flag_returns_usage_error() {
     assert!(
         matches!(
             result,
-            Err(ipe::CliError::CommandUsage { command: "init", .. })
+            Err(ipe::CliError::CommandUsage {
+                command: "init",
+                ..
+            })
         ),
         "unknown flag must yield a command-usage error, got: {result:?}"
     );

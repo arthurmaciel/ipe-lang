@@ -35,7 +35,10 @@ fn build_no_arg_empty_dir_returns_usage_error() {
     assert!(
         matches!(
             result,
-            Err(ipe::CliError::CommandUsage { command: "build", .. })
+            Err(ipe::CliError::CommandUsage {
+                command: "build",
+                ..
+            })
         ),
         "bare `ipe build` in an empty dir must yield a build command-usage error, got: {result:?}"
     );

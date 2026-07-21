@@ -50,16 +50,14 @@ fn run_unknown_flag_returns_usage_error() {
         "--bogus-flag".to_owned(),
     ];
     let result = ipe::run_cli(&args);
-    match result {
-        Err(ipe::CliError::CommandUsage { command, reason }) => {
-            assert_eq!(command, "run");
-            assert!(
-                reason.contains("--bogus-flag"),
-                "the reason must name the offending flag, got: {reason:?}"
-            );
-        }
-        other => panic!("expected a `run` command-usage error, got: {other:?}"),
-    }
+    assert!(
+        matches!(
+            &result,
+            Err(ipe::CliError::CommandUsage { command, reason })
+                if *command == "run" && reason.contains("--bogus-flag")
+        ),
+        "expected a `run` command-usage error naming the offending flag, got: {result:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
