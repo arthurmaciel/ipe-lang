@@ -1020,13 +1020,33 @@ fn inspect_crate_source(
                     if let Some(p) = path {
                         pkg.wrapper_path = p.to_string();
                     }
-                    // A wrapper author binds exactly the symbols they list; an
-                    // exposed name that is not a bindable public symbol is
-                    // silently absent (the same over-drop the inspector already
-                    // applies to any non-carrier-compatible signature).
+                    // Tier 2 escape hatch: any item the author tagged with
+                    // `#[ipe::provide]` is added to the exposed set, so a
+                    // hand-written type whose trait impl only a real Rust `impl`
+                    // can express (a Bevy `Component`/`Resource`) surfaces even
+                    // when the author narrows `[rust.wrapper] expose` to a subset.
+                    // A marked TYPE's methods carry `recvType = <TypeName>`; a
+                    // marked free fn carries `name = <fnName>` — both are matched.
+                    // Marks are read only for a `--path` wrapper crate (a marker
+                    // cannot travel in from a registry dep). The mark only WIDENS
+                    // which candidates are kept; each still passes the same
+                    // carrier-compatibility over-drop as every wrapper symbol.
+                    //
+                    // Applied ONLY when the author already narrowed with `expose`:
+                    // with no `expose` list a wrapper binds every public symbol
+                    // (marked items already included), so a marker never turns the
+                    // bind-all default into a restriction.
                     if !expose.is_empty() {
-                        pkg.functions
-                            .retain(|f| expose.iter().any(|e| e == &f.name));
+                        let marked = if path.is_some() {
+                            ipe_provide_marked_names(&doc)
+                        } else {
+                            std::collections::HashSet::new()
+                        };
+                        pkg.functions.retain(|f| {
+                            expose.iter().any(|e| e == &f.name)
+                                || marked.contains(&f.name)
+                                || marked.contains(&f.recv_type)
+                        });
                     }
                     pkg
                 }
@@ -4092,6 +4112,59 @@ fn non_exhaustive(item: &serde_json::Value) -> bool {
         // constructors): losing a ctor is safe, emitting one on a real
         // non_exhaustive enum is E0639 / cargo-fail.
         .unwrap_or(true)
+}
+
+/// The exact sentinel the `#[ipe::provide]` marker attribute (the `ipe_provide`
+/// companion proc-macro) attaches to an item as a `#[doc = "…"]` string.
+///
+/// `#[ipe::provide]` is an INERT attribute: it re-emits the annotated item
+/// unchanged and prepends this one pure-data doc line, which rustdoc folds into
+/// the item's `docs` field (verified against the JSON format — a `#[doc = "…"]`
+/// attribute lands in `docs`, trimmed, not in `attrs`). The inspector reads it
+/// as a boolean "is this item author-marked for Tier 2 surfacing"; the string is
+/// DATA matched on, never rendered, so it is no code/TOML injection vector.
+///
+/// The marker crate authors the same literal (its `MARKER_DOC` begins with a
+/// leading space rustdoc trims); the two are kept in sync by this shared spelling.
+const IPE_PROVIDE_MARKER: &str = "ipe-provide-marker: this item is surfaced to Ipê FFI";
+
+/// True when a rustdoc item carries the `#[ipe::provide]` marker — i.e. one of
+/// its `docs` lines is EXACTLY the [`IPE_PROVIDE_MARKER`] sentinel.
+///
+/// Matched as a whole trimmed line, not a free-text substring: only the inert
+/// marker macro emits this precise line, so an author's ordinary prose can
+/// neither forge nor suppress the mark. A marked item is auto-added to the
+/// wrapper's exposed set (`inspect_crate_source`), then surfaces through the
+/// same over-drop / carrier-compatibility / panic-scan gates as any other
+/// wrapper symbol — the mark only widens WHICH candidates are considered.
+fn ipe_provide_marked(item: &serde_json::Value) -> bool {
+    item.get("docs")
+        .and_then(|d| d.as_str())
+        .is_some_and(|docs| docs.lines().any(|line| line.trim() == IPE_PROVIDE_MARKER))
+}
+
+/// The NAMES of every crate-local item carrying the `#[ipe::provide]` marker.
+///
+/// A marked type's methods surface with `recvType = <TypeName>` and a marked
+/// free function surfaces with `name = <fnName>`, so this name set is unioned
+/// into the wrapper's `--expose` filter: a function is kept when its own name OR
+/// its receiver type is marked. Only crate-local items (`crate_id == 0`) are
+/// considered — a marker cannot travel in from a dependency.
+fn ipe_provide_marked_names(doc: &serde_json::Value) -> std::collections::HashSet<String> {
+    let mut names = std::collections::HashSet::new();
+    if let Some(index) = doc.get("index").and_then(|i| i.as_object()) {
+        for item in index.values() {
+            if item.get("crate_id").and_then(serde_json::Value::as_u64) != Some(0) {
+                continue;
+            }
+            if ipe_provide_marked(item)
+                && let Some(name) = item.get("name").and_then(|n| n.as_str())
+            {
+                names.insert(name.to_string());
+            }
+        }
+    }
+    names
 }
 
 /// The variant KIND (R5) read from a variant item's `inner.variant.kind`:
@@ -13170,6 +13243,50 @@ mod tests {
 
     fn ipe(val: &serde_json::Value) -> String {
         rustdoc_type_to_ipe(val, &HashMap::new())
+    }
+
+    #[test]
+    fn the_provide_marker_is_read_from_the_docs_field() {
+        // rustdoc folds a `#[doc = "…"]` into `docs` (trimmed), so the marker
+        // that the inert `#[ipe::provide]` macro emits lands there, not in attrs.
+        let marked = serde_json::json!({ "docs": IPE_PROVIDE_MARKER });
+        assert!(ipe_provide_marked(&marked));
+        // A marker line among ordinary prose still matches (whole-line).
+        let mixed = serde_json::json!({
+            "docs": format!("Widget doc.\n{IPE_PROVIDE_MARKER}\nMore prose.")
+        });
+        assert!(ipe_provide_marked(&mixed));
+    }
+
+    #[test]
+    fn ordinary_prose_never_forges_the_marker() {
+        // A whole-line match, not a substring: prose mentioning the sentinel
+        // inline (not on its own line) does not count as marked.
+        let prose = serde_json::json!({
+            "docs": format!("see {IPE_PROVIDE_MARKER} for details")
+        });
+        assert!(!ipe_provide_marked(&prose));
+        let unmarked = serde_json::json!({ "docs": "just a normal doc comment" });
+        assert!(!ipe_provide_marked(&unmarked));
+        let no_docs = serde_json::json!({ "attrs": ["non_exhaustive"] });
+        assert!(!ipe_provide_marked(&no_docs));
+    }
+
+    #[test]
+    fn marked_names_collects_only_crate_local_marked_items() {
+        let doc = serde_json::json!({
+            "index": {
+                "1": { "name": "Widget", "crate_id": 0, "docs": IPE_PROVIDE_MARKER },
+                "2": { "name": "Plain", "crate_id": 0, "docs": "unmarked" },
+                // A marked item from a dependency (crate_id != 0) is ignored —
+                // a marker cannot travel in from a registry dep.
+                "3": { "name": "Foreign", "crate_id": 1, "docs": IPE_PROVIDE_MARKER }
+            }
+        });
+        let names = ipe_provide_marked_names(&doc);
+        assert!(names.contains("Widget"));
+        assert!(!names.contains("Plain"));
+        assert!(!names.contains("Foreign"));
     }
 
     // A projection whose binding chains back onto itself (`A -> Vec<Self::A>`)
