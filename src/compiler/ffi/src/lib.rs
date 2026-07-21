@@ -19,6 +19,7 @@
 
 pub mod bindings;
 pub mod call;
+pub mod capability_scan;
 pub mod carrier;
 pub mod diag;
 pub mod driver;

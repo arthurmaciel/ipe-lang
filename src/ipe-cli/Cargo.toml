@@ -45,6 +45,14 @@ serde_json = "1"
 # `[dependencies]` version requirements in `ipe.toml` are parsed into typed
 # `semver::VersionReq` at manifest-parse time (parse, don't validate).
 semver = "1"
+# The Tier-2 wrapper capability gate reads a wrapper crate's `Cargo.toml`
+# dependency tables STRUCTURALLY (parse, don't validate): a hand-rolled line
+# scan under-refuses on valid-but-unusual TOML (a trailing comment on a header,
+# whitespace inside `[ dependencies ]`, an inline `dependencies = { … }`
+# table), and any missed dependency would admit an unconstrained capability.
+# Same `toml` version the runtime crate already pins, so this adds no new crate
+# to the vetted dependency graph.
+toml = "0.8"
 # The `ipe package audit` provenance panic-scan reuses the SAME token scanner the
 # repo's abrupt-failure attestation hook runs (`tools/panic-scan`), so the gate
 # and the hook can never diverge on what counts as an authored abrupt-failure
