@@ -32,7 +32,14 @@ fi
 step() { printf '%s•%s %s\n' "$C_YELLOW" "$C_RESET" "$1" >&2; }
 info() { printf '  %s%s%s\n' "$C_DIM" "$1" "$C_RESET" >&2; }
 done_() { printf '%s✓%s %s\n' "$C_GREEN" "$C_RESET" "$1" >&2; }
-die()  { printf '%s✗ %s%s\n' "$C_RED" "$1" "$C_RESET" >&2; exit 1; }
+
+# die MESSAGE — a blank line, a red "error:" label, then the message dimmed and
+# indented beneath it, then exit non-zero. Mirrors the CLI's failure shape.
+die() {
+  printf '\n  There was an %serror%s:\n      %s%s%s\n' \
+    "$C_RED" "$C_RESET" "$C_DIM" "$1" "$C_RESET" >&2
+  exit 1
+}
 
 banner() {
   printf '\n%s%sIpê language%s %s- %s%s\n\n' \
@@ -297,10 +304,18 @@ done
 
 # ── PATH setup ────────────────────────────────────────────────────────────────
 # ipe is installed, but a bin dir is only useful once it is on PATH. We make
-# that painless without ever silently editing a shell file: we detect the login
-# shell's rc, show the EXACT file and the one line we would add, ask for a yes on
-# the real terminal (/dev/tty — never the piped installer on stdin), append only
-# on a yes, and fall back to a copy-paste hint otherwise.
+# that painless without ever silently editing a shell file. Following rustup, we
+# own a managed env file under ~/.ipe (env for POSIX shells, env.fish for fish)
+# that exports INSTALL_DIR onto PATH, and we add ONE attributable line to the
+# login shell's rc that sources it. The user sees the exact file and line, and
+# consents on the real terminal (/dev/tty — never the piped installer on stdin)
+# before we touch a dotfile. Because the PATH mechanics live in our own file, a
+# future update or uninstall rewrites or removes it cleanly, and the rc keeps a
+# single stable `. "$HOME/.ipe/env"` line.
+
+IPE_HOME="$HOME/.ipe"
+ENV_POSIX="$IPE_HOME/env"
+ENV_FISH="$IPE_HOME/env.fish"
 
 # on_path — succeed when INSTALL_DIR is already a PATH entry.
 on_path() {
@@ -310,11 +325,31 @@ on_path() {
   esac
 }
 
-# resolve_shell_rc — set RC_FILE (the login shell's startup file) and PATH_LINE
-# (the exact line that puts INSTALL_DIR on PATH, in that shell's syntax).
+# refuse_symlink_escape PATH — die if PATH is a symlink resolving outside $HOME.
+# A managed dotfile or env file must stay within the user's home; we never
+# follow a link that would let us write elsewhere.
+refuse_symlink_escape() {
+  rse_path="$1"
+  [ -L "$rse_path" ] || return 0
+  rse_target="$(readlink "$rse_path" 2>/dev/null || printf '%s' "$rse_path")"
+  case "$rse_target" in
+    /*) : ;;
+    *)  rse_target="$(dirname "$rse_path")/$rse_target" ;;
+  esac
+  case "$rse_target" in
+    "$HOME"/*|"$HOME") return 0 ;;
+    *) die "$rse_path is a symlink pointing outside your home directory — refusing to edit it." ;;
+  esac
+}
+
+# resolve_shell_rc — set SH_NAME and RC_FILE (the login shell's startup file),
+# RC_SOURCE_LINE (the one line we append to rc to source our env file), and
+# PATH_NOW / SOURCE_NOW (the two commands the user can run in the current shell
+# to activate PATH immediately — put ipe on PATH directly, or source the edited
+# rc's env file).
 resolve_shell_rc() {
-  sh_name="$(basename "${SHELL:-sh}")"
-  case "$sh_name" in
+  SH_NAME="$(basename "${SHELL:-sh}")"
+  case "$SH_NAME" in
     zsh)  RC_FILE="${ZDOTDIR:-$HOME}/.zshrc" ;;
     bash)
       # Prefer an existing file; else .bash_profile on macOS (login shells),
@@ -328,37 +363,74 @@ resolve_shell_rc() {
     ksh)  RC_FILE="$HOME/.kshrc" ;;
     *)    RC_FILE="$HOME/.profile" ;;
   esac
-  if [ "$sh_name" = fish ]; then
-    PATH_LINE="fish_add_path $INSTALL_DIR"
+  if [ "$SH_NAME" = fish ]; then
+    RC_SOURCE_LINE="source \"$ENV_FISH\""
+    PATH_NOW="fish_add_path $INSTALL_DIR"
+    SOURCE_NOW="source \"$ENV_FISH\""
   else
+    RC_SOURCE_LINE=". \"$ENV_POSIX\""
     # shellcheck disable=SC2016  # $PATH must stay literal so it expands per-shell
-    PATH_LINE="export PATH=\"$INSTALL_DIR:\$PATH\""
+    PATH_NOW="export PATH=\"$INSTALL_DIR:\$PATH\""
+    SOURCE_NOW=". \"$ENV_POSIX\""
   fi
 }
 
-# manual_path_hint — the do-it-yourself fallback (PATH_LINE must be set): the
-# one command that puts INSTALL_DIR on PATH, ready to paste.
-manual_path_hint() {
-  printf '  Put ipe on your PATH with:\n' >&2
-  printf '      %s%s%s\n\n' "$C_DIM" "$PATH_LINE" "$C_RESET" >&2
+# write_env_files — (re)write our managed env files with the current PATH line.
+# These are entirely ours, so overwriting them on every run keeps them correct
+# after a move or version change. POSIX and fish both get one, so a user who
+# switches shells still has the right file to source.
+write_env_files() {
+  refuse_symlink_escape "$IPE_HOME"
+  mkdir -p "$IPE_HOME" 2>/dev/null || die "Could not create $IPE_HOME."
+  refuse_symlink_escape "$ENV_POSIX"
+  refuse_symlink_escape "$ENV_FISH"
+  { printf '# Managed by the Ipê installer — puts ipe on your PATH.\n'
+    # shellcheck disable=SC2016  # $PATH stays literal for per-shell expansion
+    printf 'case ":${PATH}:" in *":%s:"*) ;; *) export PATH="%s:$PATH" ;; esac\n' \
+      "$INSTALL_DIR" "$INSTALL_DIR"
+  } > "$ENV_POSIX" || die "Could not write $ENV_POSIX."
+  { printf '# Managed by the Ipê installer — puts ipe on your PATH.\n'
+    # shellcheck disable=SC2016  # $PATH stays literal for fish to expand
+    printf 'if not contains %s $PATH\n    fish_add_path %s\nend\n' \
+      "$INSTALL_DIR" "$INSTALL_DIR"
+  } > "$ENV_FISH" || die "Could not write $ENV_FISH."
 }
 
-# persist_path — put INSTALL_DIR on PATH for good. We add the export line to the
-# login shell's rc directly (this is the "export PATH=…" the user wants done for
-# them), after showing the exact file + line and getting a yes on the real
-# terminal. Editing a dotfile is consented, never silent; a non-interactive run
-# prints the one-line command instead.
+# activation_hint — the two commands to activate PATH in the CURRENT shell: run
+# ipe onto PATH directly, or source the env file the edited rc now loads.
+activation_hint() {
+  printf '  To use %sipe%s right now, run:\n' "$C_BOLD" "$C_RESET" >&2
+  printf '      %s%s%s\n' "$C_DIM" "$PATH_NOW" "$C_RESET" >&2
+  printf '  or reload the updated startup file with:\n' >&2
+  printf '      %s%s%s\n\n' "$C_DIM" "$SOURCE_NOW" "$C_RESET" >&2
+}
+
+# manual_path_hint — the do-it-yourself fallback when we did not edit the rc:
+# source our env file (already written) from the shell's startup file yourself.
+manual_path_hint() {
+  printf '  Add ipe to your PATH by putting this line in %s%s%s:\n' \
+    "$C_YELLOW" "$RC_FILE" "$C_RESET" >&2
+  printf '      %s%s%s\n\n' "$C_DIM" "$RC_SOURCE_LINE" "$C_RESET" >&2
+}
+
+# persist_path — put INSTALL_DIR on PATH for good: write our managed env files,
+# then append one attributable line to the login shell's rc that sources the
+# right one, after showing the exact file + line and getting a yes on the real
+# terminal. Idempotent (never double-adds), consented (never silent), and
+# attributable (under a fixed marker). A non-interactive run prints the manual
+# hint instead of editing anything.
 persist_path() {
   resolve_shell_rc
+  write_env_files
 
-  # Already written into the rc — nothing to add.
-  if [ -f "$RC_FILE" ] && grep -Fq "$INSTALL_DIR" "$RC_FILE" 2>/dev/null; then
+  # Already sourcing our env file from the rc — nothing to add.
+  if [ -f "$RC_FILE" ] && grep -Fq "$RC_SOURCE_LINE" "$RC_FILE" 2>/dev/null; then
     done_ "ipe is on your PATH (via $RC_FILE)."
     return 0
   fi
 
   # No terminal to ask on (piped into a non-interactive shell, CI): never edit a
-  # file unasked — print the one-line command and stop.
+  # file unasked — print the manual hint and stop.
   if [ "$IS_TTY" != 1 ] || [ ! -r /dev/tty ]; then
     manual_path_hint
     return 0
@@ -367,7 +439,7 @@ persist_path() {
   printf '\n%s%s is not on your PATH yet.%s\n' "$C_BOLD" "$INSTALL_DIR" "$C_RESET" >&2
   printf '  Add it to %s%s%s so every shell finds %sipe%s?\n' \
     "$C_YELLOW" "$RC_FILE" "$C_RESET" "$C_BOLD" "$C_RESET" >&2
-  printf '      %s%s%s\n' "$C_DIM" "$PATH_LINE" "$C_RESET" >&2
+  printf '      %s%s%s\n' "$C_DIM" "$RC_SOURCE_LINE" "$C_RESET" >&2
   printf '  Update it now? [Y/n] ' >&2
 
   ans=''
@@ -375,10 +447,12 @@ persist_path() {
   case "$ans" in
     ''|[Yy]|[Yy][Ee][Ss])
       mkdir -p "$(dirname "$RC_FILE")" 2>/dev/null || true
-      { printf '\n# Added by the Ipê installer — puts ipe on your PATH\n'
-        printf '%s\n' "$PATH_LINE"
+      refuse_symlink_escape "$RC_FILE"
+      { printf '\n# Added by the Ipê installer\n'
+        printf '%s\n' "$RC_SOURCE_LINE"
       } >> "$RC_FILE" || die "Could not write to $RC_FILE."
       done_ "Added ipe to your PATH (via $RC_FILE)."
+      activation_hint
       ;;
     *)
       info "Left $RC_FILE untouched."
@@ -389,13 +463,17 @@ persist_path() {
 
 # ── Done + next steps ────────────────────────────────────────────────────────
 done_ "Installed ipe $ver to $INSTALL_DIR/ipe"
-if on_path; then
-  printf '\n%sYou are all set.%s Try %sipe --help%s to get started.\n\n' \
-    "$C_GREEN" "$C_RESET" "$C_BOLD" "$C_RESET" >&2
-else
+if ! on_path; then
   # Put INSTALL_DIR on PATH for this run (live immediately when the installer is
   # sourced), then persist it for future shells.
   export PATH="$INSTALL_DIR:$PATH"
   persist_path
 fi
 "$INSTALL_DIR/ipe" --version >&2 || true
+
+# Success banner: the green word carries the good news; the footer mirrors the
+# CLI's "report bugs" line (kept in sync with the style SSOT by a drift test).
+printf '\n  Ipê %s was %ssuccessfully%s installed!\n' \
+  "$ver" "$C_GREEN" "$C_RESET" >&2
+printf '  Found any bugs? Please report them at https://github.com/%s/issues.\n\n' \
+  "$REPO" >&2
