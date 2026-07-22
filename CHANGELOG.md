@@ -10,6 +10,19 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.13](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.12...ipe-v0.1.13) (2026-07-22)
+
+
+### Features
+
+* **examples:** bring composite examples 36-38 into sweep scope ([#377](https://github.com/arthurmaciel/ipe-lang/issues/377)) ([#83](https://github.com/arthurmaciel/ipe-lang/issues/83)) ([6f6193a](https://github.com/arthurmaciel/ipe-lang/commit/6f6193a9af83587b69b41fba2d874d286bb25e40))
+* **security:** [#371](https://github.com/arthurmaciel/ipe-lang/issues/371) runtime capability sandbox + admit-and-isolate Tier 2 wrappers ([#82](https://github.com/arthurmaciel/ipe-lang/issues/82)) ([04214e5](https://github.com/arthurmaciel/ipe-lang/commit/04214e5ab0868dace57586c4c254fc7f8f746ee7))
+
+
+### Bug Fixes
+
+* **runtime:** deliver outstanding init Cmd.perform effects before EOF terminates cli_program ([#379](https://github.com/arthurmaciel/ipe-lang/issues/379)) ([#85](https://github.com/arthurmaciel/ipe-lang/issues/85)) ([b07b42e](https://github.com/arthurmaciel/ipe-lang/commit/b07b42e6315a745285c33d87654889859af04ffa))
+
 ## [0.1.12](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.11...ipe-v0.1.12) (2026-07-22)
 
 
