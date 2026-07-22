@@ -293,7 +293,9 @@ where
         while let Some(ev) = rx.recv().await {
             let msg = match ev {
                 CliEvent::Key(kind, value) => on_key(kind, value),
-                CliEvent::Msg(m) => m,
+                // Tui fires Cmds untracked, so a Perform result also arrives as a
+                // plain Msg; PerformDone is matched for exhaustiveness.
+                CliEvent::Msg(m) | CliEvent::PerformDone(m) => m,
                 CliEvent::Line(_) => continue, // Tui has no line input
                 CliEvent::Eof => break,
             };
@@ -443,7 +445,7 @@ where
         while let Some(ev) = rx.recv().await {
             let mut produced: Option<Msg> = None;
             match ev {
-                CliEvent::Msg(m) => produced = Some(m),
+                CliEvent::Msg(m) | CliEvent::PerformDone(m) => produced = Some(m),
                 CliEvent::Eof => break,
                 CliEvent::Line(_) => continue,
                 CliEvent::Key(kind, value) => {
