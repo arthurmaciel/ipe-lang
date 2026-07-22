@@ -373,25 +373,69 @@ impl std::fmt::Display for ApiChange {
     }
 }
 
-/// Print `report`'s classified changes and its required-bump verdict to stdout.
-fn print_report(report: &SemverReport) {
-    if report.changes.is_empty() {
-        println!("No public API changes.");
-    } else {
-        println!("Public API changes:");
-        for change in &report.changes {
-            println!("{change}");
-        }
-    }
-    let kind = match report.compatibility {
+/// The wire word for a compatibility, shared by every output form.
+const fn compat_word(compatibility: Compatibility) -> &'static str {
+    match compatibility {
         Compatibility::Compatible => "compatible",
         Compatibility::Breaking => "breaking",
-    };
-    println!(
-        "\nThis is a {kind} change — it requires at least a {} bump (>= {}).",
-        report.required.as_str(),
-        report.floor
-    );
+    }
+}
+
+/// Render `report` in the requested [`OutputFormat`] and print it to stdout.
+///
+/// - Human (default): a guttered report — a heading, one bullet per change, and
+///   a sentence naming the required bump.
+/// - `--plain`: one flush-left record per line. A `change\t<description>` row per
+///   change, then a `bump\t<compat>\t<required>\t<floor>` verdict row, so
+///   `grep`/`awk` slice the table.
+/// - `--json`: `{"compatibility": "…", "required": "…", "floor": "…",
+///   "changes": ["…", …]}`, a stable object.
+fn print_report(report: &SemverReport, format: crate::cli_args::OutputFormat) {
+    use crate::cli_args::OutputFormat::{Human, Json, Plain};
+    let compat = compat_word(report.compatibility);
+    let required = report.required.as_str();
+    match format {
+        Plain => {
+            for change in &report.changes {
+                // The Display form leads with indent + glyph; trim to a
+                // flush-left `<+|-|~> <detail>` record for a clean pipe.
+                println!("change\t{}", change.to_string().trim());
+            }
+            println!("bump\t{compat}\t{required}\t{}", report.floor);
+        }
+        Json => {
+            let changes: Vec<String> = report
+                .changes
+                .iter()
+                .map(|c| format!("{:?}", c.to_string().trim()))
+                .collect();
+            println!(
+                "{{\"compatibility\":{compat:?},\"required\":{required:?},\
+                 \"floor\":{:?},\"changes\":[{}]}}",
+                report.floor.to_string(),
+                changes.join(","),
+            );
+        }
+        Human => {
+            use std::fmt::Write as _;
+
+            let mut body = String::new();
+            if report.changes.is_empty() {
+                body.push_str("No public API changes.\n");
+            } else {
+                body.push_str("Public API changes:\n");
+                for change in &report.changes {
+                    let _ = writeln!(body, "{change}");
+                }
+            }
+            let _ = write!(
+                body,
+                "\nThis is a {compat} change — it requires at least a {required} bump (>= {}).\n",
+                report.floor,
+            );
+            print!("{}", crate::style::gutter(&body));
+        }
+    }
 }
 
 /// `ipe diff <old> <new> [--check <old-version> <new-version>]`.
@@ -410,13 +454,17 @@ pub fn run_diff(rest: &[String]) -> Result<(), CliError> {
     const USAGE: &str =
         "usage: ipe diff <old-path> <new-path> [--check <old-version> <new-version>]";
 
+    // Peel the output-format flags first, so `--plain` / `--json` compose with
+    // the positional paths and the value-taking `--check` sub-flag.
+    let (format, args) = crate::cli_args::split_format(rest, "diff")?;
+
     let mut positional: Vec<&str> = Vec::new();
     let mut check: Option<(String, String)> = None;
-    let mut it = rest.iter();
+    let mut it = args.into_iter();
     while let Some(arg) = it.next() {
         if arg == "--check" {
-            let old_v = it.next().ok_or(CliError::Usage(USAGE))?.clone();
-            let new_v = it.next().ok_or(CliError::Usage(USAGE))?.clone();
+            let old_v = it.next().ok_or(CliError::Usage(USAGE))?.to_owned();
+            let new_v = it.next().ok_or(CliError::Usage(USAGE))?.to_owned();
             check = Some((old_v, new_v));
         } else {
             positional.push(arg);
@@ -436,14 +484,14 @@ pub fn run_diff(rest: &[String]) -> Result<(), CliError> {
             let new_api = extract_tree(&new_tree)?;
             let placeholder = Version::new(0, 0, 0);
             let rep = report(&old_api, &new_api, &placeholder, &placeholder);
-            print_report(&rep);
+            print_report(&rep, format);
             Ok(())
         }
         Some((old_v, new_v)) => {
             let old_version = parse_version(&old_v)?;
             let new_version = parse_version(&new_v)?;
             let rep = check_semver_bump(&old_tree, &new_tree, &old_version, &new_version)?;
-            print_report(&rep);
+            print_report(&rep, format);
             if rep.satisfied {
                 Ok(())
             } else {

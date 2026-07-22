@@ -13,7 +13,7 @@
 use std::fmt::Write as _;
 use std::io::IsTerminal;
 
-use crate::style::{Palette, REPO_URL};
+use crate::style::{Palette, REPO_URL, gutter, report_bugs_footer};
 
 /// A single command option: the flag form (e.g. `[--out <dir>]`, keeping its
 /// `[]` optional syntax) and a one-line description.
@@ -231,24 +231,52 @@ const COMMANDS: &[Command] = &[
         summary: "Explain a diagnostic code, or list every code with no argument.",
         args: "[<code>]",
         args_desc: "A diagnostic code such as IPE-L0131. Omit to list every code.",
-        options: &[],
+        options: &[
+            Opt {
+                flag: "[--plain]",
+                desc: "list codes flush-left, tab-separated (code<TAB>title), for grep/awk",
+            },
+            Opt {
+                flag: "[--json]",
+                desc: "list codes as {\"codes\":[{\"code\",\"title\"}]} for jq",
+            },
+        ],
     },
     Command {
         name: "capabilities",
         summary: "Report the security capabilities a program exercises, inferred from its code.",
         args: "[<path>]",
         args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
-        options: &[],
+        options: &[
+            Opt {
+                flag: "[--plain]",
+                desc: "print the bare capability names, one per line, flush-left",
+            },
+            Opt {
+                flag: "[--json]",
+                desc: "print {\"capabilities\":[…]} for jq",
+            },
+        ],
     },
     Command {
         name: "diff",
         summary: "Compare two package versions' public APIs and report the required semver bump.",
         args: "<old> <new>",
         args_desc: "The two package paths to compare — the old version first, then the new.",
-        options: &[Opt {
-            flag: "[--check <old-version> <new-version>]",
-            desc: "reject a new version that does not clear the required bump",
-        }],
+        options: &[
+            Opt {
+                flag: "[--check <old-version> <new-version>]",
+                desc: "reject a new version that does not clear the required bump",
+            },
+            Opt {
+                flag: "[--plain]",
+                desc: "print flush-left change / bump records for grep/awk",
+            },
+            Opt {
+                flag: "[--json]",
+                desc: "print the report as a stable JSON object for jq",
+            },
+        ],
     },
     Command {
         name: "lsp",
@@ -262,7 +290,16 @@ const COMMANDS: &[Command] = &[
         summary: "Print the ipe version.",
         args: "",
         args_desc: "",
-        options: &[],
+        options: &[
+            Opt {
+                flag: "[--plain]",
+                desc: "print the bare version string, flush-left",
+            },
+            Opt {
+                flag: "[--json]",
+                desc: "print {\"version\":\"…\"} for jq",
+            },
+        ],
     },
 ];
 
@@ -279,7 +316,11 @@ const SECTIONS: &[Section] = &[
     },
     Section {
         title: "Using external packages",
-        commands: &["add", "remove", "package"],
+        commands: &["add", "remove"],
+    },
+    Section {
+        title: "Package authoring",
+        commands: &["package"],
     },
     Section {
         title: "Foreign-function interface (FFI)",
@@ -375,20 +416,22 @@ fn render_top_level(p: &Palette) -> String {
         }
     }
 
-    // Footer: how to read a command's detail, then where to report bugs. The
-    // repository link already sits in the header, so it is not repeated here.
+    // Footer: where to report bugs. The repository link already sits in the
+    // header, so it is not repeated here.
     out.push('\n');
-    let _ = writeln!(
-        out,
-        "{}Run any line above to see what a command does and its options.\n\nFound any bugs? Please report them at {REPO_URL}/issues.{}",
-        p.dim, p.reset
-    );
+    let _ = writeln!(out, "{}{}{}", p.dim, report_bugs_footer(), p.reset);
     out.push('\n');
     out
 }
 
 /// Render one command's `--help` page: summary, synopsis, the positional
 /// argument, then each option with its description.
+///
+/// The page is built flush-left, then indented once by the shared [`gutter`]
+/// so every human line — this page IS a command's misuse output — sits off the
+/// terminal edge at the one SSOT width. Within the gutter, `Arguments:` /
+/// `Options:` bodies carry a further two-space indent so they read as nested
+/// under their heading.
 fn render_command(cmd: &Command, p: &Palette) -> String {
     let mut out = String::new();
     out.push('\n');
@@ -414,7 +457,7 @@ fn render_command(cmd: &Command, p: &Palette) -> String {
         }
     }
     out.push('\n');
-    out
+    gutter(&out)
 }
 
 #[cfg(test)]

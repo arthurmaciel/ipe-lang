@@ -31,7 +31,11 @@ fn run_ipe(args: &[&str]) -> Result<(bool, String), Box<dyn Error>> {
 
 #[test]
 fn reports_network_for_an_http_program() -> TestResult {
-    let (ok, stdout) = run_ipe(&["capabilities", &fixture("uses_http.ipe").to_string_lossy()])?;
+    let (ok, stdout) = run_ipe(&[
+        "capabilities",
+        "--plain",
+        &fixture("uses_http.ipe").to_string_lossy(),
+    ])?;
     assert!(ok, "capabilities must exit 0");
     assert_eq!(stdout.trim(), "network");
     Ok(())
@@ -41,10 +45,16 @@ fn reports_network_for_an_http_program() -> TestResult {
 fn reports_none_for_a_pure_program() -> TestResult {
     let (ok, stdout) = run_ipe(&[
         "capabilities",
+        "--plain",
         &fixture("pure_string.ipe").to_string_lossy(),
     ])?;
     assert!(ok, "capabilities must exit 0");
-    assert_eq!(stdout.trim(), "none");
+    // Under `--plain`, a pure program emits zero records (empty) — the "no
+    // capabilities" wording lives only in the human default and `--json`'s `[]`.
+    assert!(
+        stdout.trim().is_empty(),
+        "a pure program has no --plain capability lines, got:\n{stdout}"
+    );
     Ok(())
 }
 
@@ -91,7 +101,7 @@ fn verify_rejects_overdeclared() {
 fn acceptance_go_stdlib_example_infers_network_and_clock() -> TestResult {
     let example =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/sky/02-go-stdlib/src/Main.ipe");
-    let (ok, stdout) = run_ipe(&["capabilities", &example.to_string_lossy()])?;
+    let (ok, stdout) = run_ipe(&["capabilities", "--plain", &example.to_string_lossy()])?;
     assert!(ok, "capabilities must exit 0 on the example");
     let reported: BTreeSet<&str> = stdout.split_whitespace().collect();
     assert_eq!(
