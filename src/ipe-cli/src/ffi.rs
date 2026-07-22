@@ -1116,15 +1116,59 @@ fn enforce_wrapper_capabilities(
     // capabilities live in source the scan never opens.
     let non_std_deps = wrapper_non_std_dependencies(wrapper_dir)?;
 
-    match ipe_ffi::capability_scan::reconcile(declared, &scan, &non_std_deps) {
+    // The refuse-until-jail → admit-and-isolate hand-off is per-target: a
+    // runtime-enforced axis is admitted only where the jail actually holds. The
+    // deploy target is unknown at install, so the honest proxy is THIS host's
+    // jail capability — `ipe add` and `ipe run` typically run on the same
+    // machine. On a refuse-gap host the wrapper is still refused (never
+    // admitted-and-run-unconfined).
+    let jail = if ipe_sandbox::run_jail::platform_supports_jail() {
+        ipe_ffi::capability_scan::JailForTarget::Holds
+    } else {
+        ipe_ffi::capability_scan::JailForTarget::RefuseGap
+    };
+
+    // A best-effort honesty smell test on the declaration: surface an obvious
+    // under-declaration (the scan proposes an axis the author did not declare)
+    // even when the jail will contain it. This is DEFEATABLE and never the
+    // boundary — the jail is — but it nudges an honest declaration.
+    if jail == ipe_ffi::capability_scan::JailForTarget::Holds {
+        let undeclared: Vec<&str> = scan
+            .proposed
+            .difference(declared)
+            .map(|c| c.as_str())
+            .collect();
+        if !undeclared.is_empty() {
+            eprintln!(
+                "note: the wrapper's source appears to reach {} that it did not declare. \
+                 The runtime jail will still contain any undeclared effect (it fails closed at \
+                 the OS boundary), but an honest declaration is the consent surface a user sees — \
+                 consider declaring it.",
+                undeclared.join(", ")
+            );
+        }
+    }
+
+    match ipe_ffi::capability_scan::reconcile_for(declared, &scan, &non_std_deps, jail) {
         ipe_ffi::capability_scan::Verdict::Admit { declared } => {
+            let contains_native_ffi = declared.contains(&ipe_ffi::capability_scan::Capability::NativeFfi);
             if declared.is_empty() {
                 println!("wrapper capability check: no capabilities — pure compute.");
             } else {
                 let names: Vec<&str> = declared.iter().map(|c| c.as_str()).collect();
                 println!(
-                    "wrapper capability check: declared and containable — {}.",
+                    "wrapper capability check: admitted and isolated by the runtime jail — {}.",
                     names.join(", ")
+                );
+            }
+            // Loud consent on native-ffi: inference is blind past it, so the
+            // declared set is the ceiling and the jail contains (not proves) it.
+            if contains_native_ffi {
+                println!(
+                    "  note: this wrapper crosses into native `Rust.` code (native-ffi). Ipê \
+                     cannot infer its true effects — the runtime jail CONTAINS it (an undeclared \
+                     syscall fails closed), but does not PROVE the declared set is complete. \
+                     Installing is informed consent to the declared capabilities."
                 );
             }
             Ok(())
