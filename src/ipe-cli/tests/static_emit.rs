@@ -146,8 +146,9 @@ fn static_emit_mimalloc_optin_activates_mimalloc() {
 #[test]
 fn cli_refusals_are_typed_and_artifact_free() {
     // Unknown allocator: the closed `--allocator` enum is parsed at the CLI
-    // boundary, so an unknown name is a typed `UsageOwned` refusal there — never
-    // reaching the build plan.
+    // boundary, so an unknown name is a typed command-usage refusal there — never
+    // reaching the build plan. The dispatcher wraps it as `CommandUsage` so the
+    // caller shows `build`'s help; the reason still names the bad allocator.
     let err = ipe::run_cli(&[
         "build".into(),
         "NoSuch.ipe".into(),
@@ -157,7 +158,7 @@ fn cli_refusals_are_typed_and_artifact_free() {
     ])
     .expect_err("unknown allocator must refuse");
     assert!(
-        matches!(&err, CliError::UsageOwned(msg) if msg.contains("jemalloc")),
+        matches!(&err, CliError::CommandUsage { command: "build", reason } if reason.contains("jemalloc")),
         "got: {err:?}"
     );
 

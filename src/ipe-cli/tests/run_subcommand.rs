@@ -24,21 +24,24 @@ fn false_marker() -> bool {
 // CLI-parsing tests (unconditional — no network, no build)
 // ---------------------------------------------------------------------------
 
-/// `ipe run` (no arguments) must return a usage error, not panic.
+/// `ipe run` (no arguments, nothing to build here) must return a command-usage
+/// error naming `run` — so the caller shows `run`'s help page — not panic.
 #[test]
 fn run_no_args_returns_usage_error() {
     let args: Vec<String> = vec!["run".to_owned()];
     let result = ipe::run_cli(&args);
     assert!(
-        matches!(result, Err(ipe::CliError::Usage(_))),
-        "expected Usage error for bare `ipec run`, got: {result:?}"
+        matches!(
+            result,
+            Err(ipe::CliError::CommandUsage { command: "run", .. })
+        ),
+        "expected a `run` command-usage error for bare `ipe run`, got: {result:?}"
     );
 }
 
-/// `ipe run <entry> --bogus` (unrecognised flag after the entry) must return
-/// a usage error naming the offending flag, not panic. The typed parse rejects
-/// the unknown flag with a specific `UsageOwned` message naming `--bogus-flag`,
-/// rather than the generic `Usage` synopsis.
+/// `ipe run <entry> --bogus` (unrecognised flag after the entry) must return a
+/// command-usage error for `run` — carrying a reason naming the offending flag,
+/// so the caller shows `run`'s help page — not panic.
 #[test]
 fn run_unknown_flag_returns_usage_error() {
     let args: Vec<String> = vec![
@@ -49,10 +52,11 @@ fn run_unknown_flag_returns_usage_error() {
     let result = ipe::run_cli(&args);
     assert!(
         matches!(
-            result,
-            Err(ipe::CliError::Usage(_) | ipe::CliError::UsageOwned(_))
+            &result,
+            Err(ipe::CliError::CommandUsage { command, reason })
+                if *command == "run" && reason.contains("--bogus-flag")
         ),
-        "expected a usage error for an unknown flag after the entry, got: {result:?}"
+        "expected a `run` command-usage error naming the offending flag, got: {result:?}"
     );
 }
 

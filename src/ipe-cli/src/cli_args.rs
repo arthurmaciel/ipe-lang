@@ -16,6 +16,84 @@
 use crate::CliError;
 use crate::build_plan::{AllocatorChoice, StaticRequestLayer};
 
+/// How a data-producing command renders its result.
+///
+/// The default is the human-friendly form; `--plain` and `--json` are the two
+/// machine forms, and they are mutually exclusive — a request for both is a usage
+/// error rather than a silent last-wins, so a caller never gets a format it did
+/// not ask for.
+///
+/// Only the commands that emit machine-consumable data (`capabilities`, `diff`,
+/// `version`, `explain` with no code) accept these flags; `run` / `build` /
+/// `init` / `watch` / `fix` / `fmt` and `--help` do not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OutputFormat {
+    /// The default: human-friendly, guttered, coloured on a terminal.
+    #[default]
+    Human,
+    /// `--plain` — unstyled, flush-left, one record per line (pipe-friendly).
+    Plain,
+    /// `--json` — a stable documented schema (machine-parseable).
+    Json,
+}
+
+/// Recognise `--plain` / `--json` in `flag`, folding the choice into `slot`.
+/// Returns `Ok(true)` when `flag` was an output-format flag (consumed),
+/// `Ok(false)` when it is some other token the caller must handle.
+///
+/// The two forms are mutually exclusive: a second, different format flag — or a
+/// repeat that would re-assert the same one — is rejected here so `--plain
+/// --json` can never resolve to a single silent winner.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] when a format flag is given after a different one,
+/// naming `command` so the message points at the misused command.
+fn consume_format(
+    slot: &mut Option<OutputFormat>,
+    flag: &str,
+    command: &str,
+) -> Result<bool, CliError> {
+    let requested = match flag {
+        "--plain" => OutputFormat::Plain,
+        "--json" => OutputFormat::Json,
+        _ => return Ok(false),
+    };
+    match slot {
+        None => {
+            *slot = Some(requested);
+            Ok(true)
+        }
+        Some(existing) if *existing == requested => Err(CliError::UsageOwned(format!(
+            "ipe {command}: {flag} given more than once"
+        ))),
+        Some(_) => Err(CliError::UsageOwned(format!(
+            "ipe {command}: --plain and --json are mutually exclusive"
+        ))),
+    }
+}
+
+/// Parse the shared output-format flags out of a command's argument tail.
+///
+/// Returns the chosen [`OutputFormat`] (defaulting to [`OutputFormat::Human`])
+/// and the positional tokens with the format flags removed.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] on `--plain --json` together, or a repeated format
+/// flag.
+pub fn split_format<'a>(
+    rest: &'a [String],
+    command: &str,
+) -> Result<(OutputFormat, Vec<&'a str>), CliError> {
+    let mut format: Option<OutputFormat> = None;
+    let mut positional: Vec<&'a str> = Vec::new();
+    for arg in rest {
+        if !consume_format(&mut format, arg, command)? {
+            positional.push(arg);
+        }
+    }
+    Ok((format.unwrap_or_default(), positional))
+}
+
 /// Set a value option that may appear at most once, rejecting a duplicate with a
 /// specific message rather than silently overwriting the earlier value.
 ///
@@ -755,5 +833,40 @@ mod tests {
     #[test]
     fn fmt_unknown_flag_rejected() {
         assert!(parse_fmt(&s(&["--bogus"])).is_err());
+    }
+
+    // ---- output format ------------------------------------------------------
+
+    #[test]
+    fn format_defaults_to_human_and_keeps_positionals() {
+        let args = s(&["a", "b"]);
+        let (fmt, pos) = split_format(&args, "diff").expect("no flags");
+        assert_eq!(fmt, OutputFormat::Human);
+        assert_eq!(pos, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn format_plain_and_json_are_recognised() {
+        let plain = s(&["x", "--plain"]);
+        let (fmt, pos) = split_format(&plain, "capabilities").expect("plain");
+        assert_eq!(fmt, OutputFormat::Plain);
+        assert_eq!(pos, vec!["x"]);
+        let json = s(&["--json", "x"]);
+        let (fmt, _) = split_format(&json, "capabilities").expect("json");
+        assert_eq!(fmt, OutputFormat::Json);
+    }
+
+    #[test]
+    fn format_rejects_both_flags_together() {
+        assert!(matches!(
+            split_format(&s(&["--plain", "--json"]), "version"),
+            Err(CliError::UsageOwned(_))
+        ));
+        assert!(split_format(&s(&["--json", "--plain"]), "version").is_err());
+    }
+
+    #[test]
+    fn format_rejects_a_repeated_flag() {
+        assert!(split_format(&s(&["--plain", "--plain"]), "diff").is_err());
     }
 }

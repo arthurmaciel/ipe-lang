@@ -48,6 +48,7 @@ const COMMANDS: &[&str] = &[
 const SECTIONS: &[&str] = &[
     "Development",
     "Using external packages",
+    "Package authoring",
     "Foreign-function interface (FFI)",
     "Tools",
 ];
@@ -85,6 +86,89 @@ fn top_level_help_lists_every_command_and_section() {
         !r.stdout.contains('\x1b'),
         "NO_COLOR output must carry no ANSI escapes"
     );
+
+    // The old "Run any line above…" footer sentence is gone — the screen ends at
+    // the report-bugs footer, which alone remains.
+    assert!(
+        !r.stdout.contains("Run any line above"),
+        "the how-to-read footer sentence must be removed"
+    );
+    assert!(
+        r.stdout.contains("Found any bugs? Please report them at"),
+        "the report-bugs footer must remain"
+    );
+}
+
+#[test]
+fn package_authoring_section_holds_package_and_external_packages_holds_add_remove() {
+    let r = run(&["--help"]);
+    assert!(r.ok);
+
+    // Slice the two adjacent sections out of the screen by their headings so we
+    // can assert which commands live under each.
+    let authoring = section_body(&r.stdout, "Package authoring");
+    assert!(
+        authoring.contains("ipe package"),
+        "`package` must sit under `Package authoring`, got:\n{authoring}"
+    );
+
+    let external = section_body(&r.stdout, "Using external packages");
+    assert!(
+        external.contains("ipe add") && external.contains("ipe remove"),
+        "`add`/`remove` must stay under `Using external packages`, got:\n{external}"
+    );
+    assert!(
+        !external.contains("ipe package"),
+        "`package` must have moved out of `Using external packages`"
+    );
+}
+
+/// The lines belonging to the section titled `heading`: everything from the
+/// heading up to the next blank line (sections are separated by a blank line).
+fn section_body(screen: &str, heading: &str) -> String {
+    screen
+        .lines()
+        .skip_while(|l| l.trim() != heading)
+        .skip(1)
+        .take_while(|l| !l.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn command_misuse_shows_that_commands_help_on_stderr() {
+    // An unknown flag to a known command is misuse: the command's OWN `--help`
+    // page goes to stderr, exit is non-zero, and stdout stays empty.
+    let r = run(&["build", "--definitely-not-a-flag"]);
+    assert!(!r.ok, "a misused command must exit non-zero");
+    assert!(r.stdout.is_empty(), "misuse must not write to stdout");
+    assert!(
+        r.stderr.contains("unknown flag"),
+        "the specific reason must lead the misuse output"
+    );
+    assert!(
+        r.stderr.contains("ipe build") && r.stderr.contains("[--emit-ir]"),
+        "misuse must show the command's full --help page on stderr"
+    );
+    // It is the command's page, not the top-level screen.
+    assert!(
+        !r.stderr.contains("Most used commands"),
+        "a command misuse shows the command page, not the top-level screen"
+    );
+}
+
+#[test]
+fn command_help_page_is_indented_by_the_gutter() {
+    // Every non-blank line of a command's `--help` page sits in the two-space
+    // gutter (this page IS a command's misuse output).
+    let r = run(&["fix", "--help"]);
+    assert!(r.ok);
+    for line in r.stdout.lines().filter(|l| !l.trim().is_empty()) {
+        assert!(
+            line.starts_with("  "),
+            "help line must start in the gutter: {line:?}"
+        );
+    }
 }
 
 #[test]
