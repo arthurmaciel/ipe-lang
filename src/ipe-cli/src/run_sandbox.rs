@@ -270,6 +270,272 @@ mod tests {
         let high: BTreeSet<Capability> = [Capability::Network].into_iter().collect();
         assert!(!run_jail::is_low_value_only(&high));
     }
+
+    #[test]
+    fn floor_static_source_carries_the_capfloor_marker() {
+        let p = SandboxProfile {
+            network: true,
+            ..SandboxProfile::maximally_isolated()
+        };
+        let src = capfloor_static_source(&p);
+        // The floor LINE is encoded as byte values, not literal text — so assert
+        // on the static shape and confirm the byte array decodes to the marker.
+        assert!(src.contains("IPE_CAPABILITY_FLOOR"), "{src}");
+        assert!(src.contains("#[used]"), "{src}");
+        // The bytes are the exact `to_capfloor_line()` output.
+        let line = p.to_capfloor_line();
+        let first_byte = line.as_bytes()[0].to_string();
+        assert!(src.contains(&format!("[{first_byte}, ")), "byte array present: {src}");
+        assert!(line.contains("net=true"), "line grants network: {line}");
+    }
+
+    #[test]
+    fn inject_floor_reference_is_idempotent_under_strip_and_reinject() {
+        // A minimal emitted-main shape.
+        let base = "fn ipe_main() {}\n\nfn main() {\n    run();\n}\n";
+        let profile = SandboxProfile::maximally_isolated();
+        // First injection: reference inside main + static appended.
+        let referenced = inject_floor_reference(base).expect("anchor present");
+        let once = format!("{referenced}{}", capfloor_static_source(&profile));
+        assert!(once.contains("black_box(&IPE_CAPABILITY_FLOOR)"));
+        // Re-emitting: strip then re-inject must not stack a second block.
+        let stripped = strip_capfloor_block(&once);
+        assert!(!stripped.contains("IPE_CAPABILITY_FLOOR"), "strip removed the ref+static");
+        let re = inject_floor_reference(&stripped).expect("anchor present");
+        let twice = format!("{re}{}", capfloor_static_source(&profile));
+        assert_eq!(
+            twice.matches("static IPE_CAPABILITY_FLOOR").count(),
+            1,
+            "exactly one floor static after re-emit"
+        );
+        assert_eq!(
+            twice.matches("black_box(&IPE_CAPABILITY_FLOOR)").count(),
+            1,
+            "exactly one floor reference after re-emit"
+        );
+    }
+
+    #[test]
+    fn inject_floor_reference_refuses_a_missing_main_anchor() {
+        assert!(inject_floor_reference("fn not_main() {}\n").is_err());
+    }
+
+    #[test]
+    fn profile_axes_reconstructs_the_granted_set() {
+        use ipe_sandbox::run_jail::FilesystemScope;
+        let p = SandboxProfile {
+            network: true,
+            filesystem: FilesystemScope::WorkingTreeReadWrite,
+            subprocess: false,
+            env_allowlist: vec!["X".to_owned()],
+            limits: ipe_sandbox::run_jail::RunResourceLimits::default(),
+        };
+        let axes = profile_axes(&p);
+        assert!(axes.contains(&Capability::Network));
+        assert!(axes.contains(&Capability::Filesystem));
+        assert!(axes.contains(&Capability::Env));
+        assert!(!axes.contains(&Capability::Subprocess));
+    }
+}
+
+/// Reconstruct the capability axes a profile grants, as a `Capability` set — the
+/// input to the override/refusal policy for a deployed artifact (which has no
+/// source to re-infer from). `database` is not reconstructed: it was already
+/// lowered to `network`/`filesystem` when the profile was built, so the axes
+/// here are the concrete OS-enforced ones.
+#[must_use]
+pub fn profile_axes(profile: &SandboxProfile) -> BTreeSet<Capability> {
+    use ipe_sandbox::run_jail::FilesystemScope;
+    let mut set = BTreeSet::new();
+    if profile.network {
+        set.insert(Capability::Network);
+    }
+    if matches!(profile.filesystem, FilesystemScope::WorkingTreeReadWrite) {
+        set.insert(Capability::Filesystem);
+    }
+    if profile.subprocess {
+        set.insert(Capability::Subprocess);
+    }
+    if !profile.env_allowlist.is_empty() {
+        set.insert(Capability::Env);
+    }
+    set
+}
+
+/// The Rust source of a `#[used] #[link_section]` static that embeds the
+/// capability floor into the emitted binary's `.ipe.capfloor` ELF section.
+///
+/// `ipe exec` reads this section *passively off disk* (never by executing the
+/// binary) as the authoritative floor a tampered `ipe.profile` cannot go below.
+/// `#[used]` keeps the linker from garbage-collecting an otherwise-unreferenced
+/// static; the section name matches [`ipe_sandbox::run_jail::CAPFLOOR_SECTION`].
+#[must_use]
+pub fn capfloor_static_source(profile: &SandboxProfile) -> String {
+    let line = profile.to_capfloor_line();
+    let bytes = line.as_bytes();
+    // A byte array literal so the section holds exactly the floor line (no NUL,
+    // no rustc string-merging surprises).
+    let mut arr = String::new();
+    for (i, b) in bytes.iter().enumerate() {
+        if i > 0 {
+            arr.push_str(", ");
+        }
+        arr.push_str(&b.to_string());
+    }
+    // The floor lands in `.rodata` (an ALLOCATED section) rather than a custom
+    // named section: an allocated section survives `strip` (the deploy artifact
+    // builds release with `strip = true`), whereas a non-alloc custom section is
+    // stripped away. `#[used]` + `#[no_mangle]` keep the linker from
+    // garbage-collecting the never-read static. `ipe exec` finds the floor by
+    // scanning the binary for the unique `ipe-capfloor` marker — see
+    // `ipe_sandbox::run_jail::scan_capfloor`.
+    format!(
+        "\n// The runtime capability FLOOR, embedded read-only in `.rodata` so a\n\
+         // tampered ipe.profile cannot request less isolation than this binary was\n\
+         // built for. `ipe exec` scans this out of the binary WITHOUT running it.\n\
+         // `.rodata` survives `strip`; a custom link-section would not.\n\
+         #[used]\n\
+         #[unsafe(no_mangle)]\n\
+         pub static IPE_CAPABILITY_FLOOR: [u8; {}] = [{arr}];\n",
+        bytes.len()
+    )
+}
+
+/// Write the deployable enforcement artifacts into an emitted native project:
+/// the strictly-parsed `ipe.profile` next to the crate, and the capability-floor
+/// static appended to the emitted `src/main.rs` (embedded in the binary).
+///
+/// The profile is a *convenience mirror* the launcher parses; the authoritative
+/// floor is the embedded section. A profile weaker than the floor is refused at
+/// launch (`ipe exec`), so tampering the mirror alone cannot under-isolate.
+///
+/// # Errors
+///
+/// [`CliError::Io`] on any filesystem failure.
+pub fn write_build_artifacts(out_dir: &Path, profile: &SandboxProfile) -> Result<(), CliError> {
+    // 1. The ipe.profile mirror.
+    let profile_path = out_dir.join("ipe.profile");
+    std::fs::write(&profile_path, profile.to_profile_string()).map_err(|e| CliError::Io {
+        path: profile_path,
+        source: e,
+    })?;
+
+    // 2. Embed the capfloor into the emitted main.rs: a `#[used]` static holding
+    //    the floor bytes, PLUS a `black_box` read of it at the top of `fn main`
+    //    so the linker genuinely retains the bytes (a mere `#[used]` is
+    //    garbage-collected by an aggressive linker like `mold`, and `strip`
+    //    removes the unreferenced data). The read keeps the bytes in `.rodata`,
+    //    where `strip` cannot touch them; `ipe exec` scans them out passively.
+    //    Idempotent: a re-build replaces any prior floor block + reference.
+    let main_rs = out_dir.join("src").join("main.rs");
+    let existing = std::fs::read_to_string(&main_rs).map_err(|e| CliError::Io {
+        path: main_rs.clone(),
+        source: e,
+    })?;
+    let base = strip_capfloor_block(&existing);
+    let referenced = inject_floor_reference(&base)?;
+    let with_floor = format!("{referenced}{}", capfloor_static_source(profile));
+    std::fs::write(&main_rs, with_floor).map_err(|e| CliError::Io {
+        path: main_rs,
+        source: e,
+    })?;
+    Ok(())
+}
+
+/// Remove any previously-appended capfloor block AND its main-body reference, so
+/// re-emitting is idempotent (both are delimited by unique markers).
+fn strip_capfloor_block(src: &str) -> String {
+    const BLOCK_MARKER: &str = "\n// The runtime capability FLOOR, embedded read-only";
+    const REF_MARKER: &str = "    // Retain the embedded capability floor";
+    let without_block = src
+        .find(BLOCK_MARKER)
+        .map_or_else(|| src.to_owned(), |i| src[..i].to_owned());
+    // Drop the injected reference line (and its comment) if present.
+    without_block
+        .lines()
+        .filter(|l| !l.starts_with(REF_MARKER) && !l.contains("IPE_CAPABILITY_FLOOR"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n"
+}
+
+/// The line the linker retains the floor by: a `black_box` read of the static at
+/// the top of `fn main`. Marks the floor bytes as genuinely used so no linker GC
+/// or `strip` removes them.
+const FLOOR_REFERENCE: &str = "    // Retain the embedded capability floor (keeps it past linker GC + strip).\n    std::hint::black_box(&IPE_CAPABILITY_FLOOR);\n";
+
+/// Inject the floor reference at the top of `fn main() {` in the emitted source.
+///
+/// # Errors
+///
+/// [`CliError::UsageOwned`] if the `fn main` anchor is absent (the emitted
+/// program shape has drifted — refuse rather than emit an unreferenced floor
+/// that a linker would collect).
+fn inject_floor_reference(src: &str) -> Result<String, CliError> {
+    const ANCHOR: &str = "fn main() {\n";
+    let idx = src.find(ANCHOR).ok_or_else(|| {
+        CliError::UsageOwned(
+            "ipe build: the emitted `fn main` anchor is absent, so the capability floor cannot be \
+             retained past linker GC — refusing to write an unenforceable artifact"
+                .to_owned(),
+        )
+    })?;
+    let insert_at = idx + ANCHOR.len();
+    let mut out = String::with_capacity(src.len() + FLOOR_REFERENCE.len());
+    out.push_str(&src[..insert_at]);
+    out.push_str(FLOOR_REFERENCE);
+    out.push_str(&src[insert_at..]);
+    Ok(out)
+}
+
+/// Read and verify the deployed artifact's floor against its `ipe.profile`, then
+/// return the profile to jail with. The authoritative floor is the binary's
+/// embedded `.ipe.capfloor` section, read passively.
+///
+/// # Errors
+///
+/// [`CliError::UsageOwned`] on a missing/tampered profile or a profile weaker
+/// than the embedded floor (both refuse-to-run).
+pub fn load_and_verify_artifact(
+    profile_path: &Path,
+    binary_path: &Path,
+) -> Result<SandboxProfile, CliError> {
+    use ipe_sandbox::run_jail;
+
+    // Parse the profile mirror strictly (parse-fail ⇒ refuse).
+    let profile_text = std::fs::read_to_string(profile_path).map_err(|e| CliError::Io {
+        path: profile_path.to_path_buf(),
+        source: e,
+    })?;
+    let profile = run_jail::parse_profile(&profile_text).map_err(|e| {
+        CliError::UsageOwned(format!(
+            "{}: {e} — refusing to run (a profile that does not parse is not honored)",
+            RunJailDefect::ProfileWeakerThanFloor.code().as_str()
+        ))
+    })?;
+
+    // Read the authoritative floor from the binary's embedded `.rodata` bytes
+    // (passively — the binary is NOT executed). A binary with no readable floor
+    // refuses.
+    let binary = std::fs::read(binary_path).map_err(|e| CliError::Io {
+        path: binary_path.to_path_buf(),
+        source: e,
+    })?;
+    let floor = run_jail::scan_capfloor(&binary).ok_or_else(|| {
+        CliError::UsageOwned(format!(
+            "{}: the binary carries no readable capability floor — refusing to run an artifact \
+             whose floor cannot be verified",
+            RunJailDefect::ProfileWeakerThanFloor.code().as_str()
+        ))
+    })?;
+
+    // The profile MUST isolate at least as much as the embedded floor.
+    if !profile.satisfies_capfloor(&floor) {
+        return Err(CliError::UsageOwned(
+            RunJailDefect::ProfileWeakerThanFloor.to_string(),
+        ));
+    }
+    Ok(profile)
 }
 
 /// Resolve the inferred and declared capability sets for a run, given the

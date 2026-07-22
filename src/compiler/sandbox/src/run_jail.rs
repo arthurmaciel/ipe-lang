@@ -203,6 +203,212 @@ impl SandboxProfile {
             .all(|v| floor.env_allowlist.contains(v));
         network_ok && subprocess_ok && fs_ok && env_ok
     }
+
+    /// The launcher's floor check against a [`parse_capfloor`]-derived floor.
+    ///
+    /// The `.ipe.capfloor` ELF section records only axis grants and an env
+    /// *count* (the binary does not carry the env var names — those live in the
+    /// `ipe.profile`). So the env axis is compared by count, not by name: the
+    /// profile may not grant *more* env vars than the floor allows. Every other
+    /// axis is the same "at least as isolated" per-axis check.
+    #[must_use]
+    pub fn satisfies_capfloor(&self, floor: &Self) -> bool {
+        let network_ok = !self.network || floor.network;
+        let subprocess_ok = !self.subprocess || floor.subprocess;
+        let fs_ok = match (&self.filesystem, &floor.filesystem) {
+            (FilesystemScope::Isolated, _) => true,
+            (FilesystemScope::WorkingTreeReadWrite, FilesystemScope::WorkingTreeReadWrite) => true,
+            (FilesystemScope::WorkingTreeReadWrite, FilesystemScope::Isolated) => false,
+        };
+        let env_ok = self.env_allowlist.len() <= floor.env_allowlist.len();
+        network_ok && subprocess_ok && fs_ok && env_ok
+    }
+
+    /// Serialize the profile to the strict, line-oriented `ipe.profile` text.
+    ///
+    /// A tiny explicit grammar (not a general format) keeps the launcher's
+    /// [`parse_profile`] a genuine *parse* — every field is named, every value is
+    /// a fixed token, and anything unrecognized is a hard parse failure (⇒
+    /// refuse-to-run), never a permissive default.
+    #[must_use]
+    pub fn to_profile_string(&self) -> String {
+        let fs = match self.filesystem {
+            FilesystemScope::Isolated => "isolated",
+            FilesystemScope::WorkingTreeReadWrite => "working-tree-rw",
+        };
+        let mut s = String::new();
+        s.push_str("ipe-profile 1\n");
+        s.push_str(&format!("network {}\n", self.network));
+        s.push_str(&format!("filesystem {fs}\n"));
+        s.push_str(&format!("subprocess {}\n", self.subprocess));
+        for name in &self.env_allowlist {
+            s.push_str(&format!("env {name}\n"));
+        }
+        s
+    }
+
+    /// The compact capability-floor token line embedded read-only in the binary
+    /// (the `.ipe.capfloor` ELF section). It records only the *axis* grants (not
+    /// resource limits or env names — the launcher rebuilds a comparison floor
+    /// from these), so a tampered `ipe.profile` cannot claim fewer axes than the
+    /// binary was built for.
+    ///
+    /// Format: `ipe-capfloor 1 net=<b> fs=<isolated|rw> sub=<b> env=<n>` where
+    /// `<n>` is the count of granted env names (the floor compares env by count
+    /// ⊇, since the names live in the profile, not the binary).
+    #[must_use]
+    pub fn to_capfloor_line(&self) -> String {
+        let fs = match self.filesystem {
+            FilesystemScope::Isolated => "isolated",
+            FilesystemScope::WorkingTreeReadWrite => "rw",
+        };
+        format!(
+            "ipe-capfloor 1 net={} fs={fs} sub={} env={}",
+            self.network,
+            self.subprocess,
+            self.env_allowlist.len()
+        )
+    }
+}
+
+/// Why an `ipe.profile` or capfloor could not be parsed. A parse failure is a
+/// **refuse-to-run**, never a permissive fallback.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParseError {
+    /// A malformed or unrecognized line/field.
+    Malformed {
+        /// A short reason.
+        detail: String,
+    },
+}
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Malformed { detail } => write!(f, "malformed profile: {detail}"),
+        }
+    }
+}
+
+impl std::error::Error for ParseError {}
+
+/// Strictly parse an `ipe.profile` string into a [`SandboxProfile`].
+///
+/// Parse-don't-validate: an unknown key, a malformed boolean, a missing required
+/// field, or an unknown filesystem token is a hard [`ParseError`] — the launcher
+/// refuses to run rather than fall back to anything permissive. Resource limits
+/// are not in the wire format (they are a run-jail default, not a confinement
+/// axis); the parsed profile uses [`RunResourceLimits::default`].
+///
+/// # Errors
+///
+/// [`ParseError::Malformed`] on any grammar violation.
+pub fn parse_profile(text: &str) -> Result<SandboxProfile, ParseError> {
+    let malformed = |detail: &str| ParseError::Malformed {
+        detail: detail.to_owned(),
+    };
+    let parse_bool = |v: &str| match v {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        other => Err(ParseError::Malformed {
+            detail: format!("expected true/false, got {other:?}"),
+        }),
+    };
+
+    let mut lines = text.lines();
+    let header = lines.next().ok_or_else(|| malformed("empty profile"))?;
+    if header != "ipe-profile 1" {
+        return Err(malformed("missing or unsupported `ipe-profile 1` header"));
+    }
+
+    // Deny-by-default: start maximally isolated, relax only what the file names.
+    let mut network: Option<bool> = None;
+    let mut filesystem: Option<FilesystemScope> = None;
+    let mut subprocess: Option<bool> = None;
+    let mut env_allowlist: Vec<String> = Vec::new();
+
+    for line in lines {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let (key, value) = line
+            .split_once(' ')
+            .ok_or_else(|| malformed(&format!("expected `key value`, got {line:?}")))?;
+        match key {
+            "network" => network = Some(parse_bool(value)?),
+            "filesystem" => {
+                filesystem = Some(match value {
+                    "isolated" => FilesystemScope::Isolated,
+                    "working-tree-rw" => FilesystemScope::WorkingTreeReadWrite,
+                    other => return Err(malformed(&format!("unknown filesystem scope {other:?}"))),
+                });
+            }
+            "subprocess" => subprocess = Some(parse_bool(value)?),
+            "env" => env_allowlist.push(value.to_owned()),
+            other => return Err(malformed(&format!("unknown key {other:?}"))),
+        }
+    }
+
+    Ok(SandboxProfile {
+        network: network.ok_or_else(|| malformed("missing `network`"))?,
+        filesystem: filesystem.ok_or_else(|| malformed("missing `filesystem`"))?,
+        subprocess: subprocess.ok_or_else(|| malformed("missing `subprocess`"))?,
+        env_allowlist,
+        limits: RunResourceLimits::default(),
+    })
+}
+
+/// Strictly parse a `.ipe.capfloor` section line into the *comparison floor*: a
+/// [`SandboxProfile`] whose axes are the floor the binary was built with. The
+/// env allowlist is reconstructed as `n` placeholder names so the ⊇ check counts
+/// correctly (the launcher checks the profile's env count does not exceed the
+/// floor's; the concrete names are in the profile).
+///
+/// # Errors
+///
+/// [`ParseError::Malformed`] on any grammar violation — a floor that cannot be
+/// parsed means the binary's authoritative floor is unreadable, so the launcher
+/// must refuse (never treat an unreadable floor as "no floor").
+pub fn parse_capfloor(line: &str) -> Result<SandboxProfile, ParseError> {
+    let malformed = |detail: String| ParseError::Malformed { detail };
+    let line = line.trim();
+    let mut parts = line.split_whitespace();
+    if parts.next() != Some("ipe-capfloor") || parts.next() != Some("1") {
+        return Err(malformed("missing `ipe-capfloor 1` header".to_owned()));
+    }
+    let mut network = false;
+    let mut filesystem = FilesystemScope::Isolated;
+    let mut subprocess = false;
+    let mut env_count: usize = 0;
+    for field in parts {
+        let (k, v) = field
+            .split_once('=')
+            .ok_or_else(|| malformed(format!("expected key=value, got {field:?}")))?;
+        match k {
+            "net" => network = v == "true",
+            "fs" => {
+                filesystem = match v {
+                    "isolated" => FilesystemScope::Isolated,
+                    "rw" => FilesystemScope::WorkingTreeReadWrite,
+                    other => return Err(malformed(format!("unknown fs {other:?}"))),
+                };
+            }
+            "sub" => subprocess = v == "true",
+            "env" => {
+                env_count = v
+                    .parse()
+                    .map_err(|_| malformed(format!("bad env count {v:?}")))?;
+            }
+            other => return Err(malformed(format!("unknown capfloor field {other:?}"))),
+        }
+    }
+    Ok(SandboxProfile {
+        network,
+        filesystem,
+        subprocess,
+        env_allowlist: (0..env_count).map(|i| format!("#{i}")).collect(),
+        limits: RunResourceLimits::default(),
+    })
 }
 
 /// Lower a capability set to a [`SandboxProfile`].
@@ -776,6 +982,154 @@ fn write_seccomp_memfd(bytes: &[u8]) -> Result<i32, RunJailDefect> {
     Ok(fd)
 }
 
+// ── passive ELF section reader (the tamper-safe floor read) ─────────────────
+
+/// Read the bytes of a named section from a 64-bit little-endian ELF file
+/// **without executing it** — a pure, passive parse of the on-disk binary.
+///
+/// This is the tamper-safe floor read: the launcher extracts the authoritative
+/// capability floor from the binary's `.ipe.capfloor` section as *data*, never
+/// by running the binary and trusting its self-report (a tampered binary would
+/// lie). A binary that lacks the section, or is not a parseable ELF64-LE, yields
+/// `None` — the launcher treats that as "no readable floor" and refuses (never
+/// as "no floor, so anything goes").
+///
+/// The parser is intentionally minimal (ELF64 little-endian, the Linux/x86_64
+/// target) and bounds-checked at every field access — a malformed header yields
+/// `None`, never a panic or an out-of-bounds read.
+#[must_use]
+pub fn read_elf_section(bytes: &[u8], section_name: &str) -> Option<Vec<u8>> {
+    // ELF64 header offsets (little-endian): e_shoff@0x28 (u64), e_shentsize@0x3a
+    // (u16), e_shnum@0x3c (u16), e_shstrndx@0x3e (u16). Magic: 0x7f 'E' 'L' 'F',
+    // EI_CLASS@4 == 2 (ELF64), EI_DATA@5 == 1 (LE).
+    if bytes.len() < 64 || &bytes[0..4] != b"\x7fELF" || bytes[4] != 2 || bytes[5] != 1 {
+        return None;
+    }
+    let rd_u16 = |off: usize| -> Option<u16> {
+        bytes.get(off..off + 2).map(|b| u16::from_le_bytes([b[0], b[1]]))
+    };
+    let rd_u32 = |off: usize| -> Option<u32> {
+        bytes
+            .get(off..off + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    let rd_u64 = |off: usize| -> Option<u64> {
+        bytes.get(off..off + 8).map(|b| {
+            u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
+        })
+    };
+
+    let e_shoff = usize::try_from(rd_u64(0x28)?).ok()?;
+    let e_shentsize = rd_u16(0x3a)? as usize;
+    let e_shnum = rd_u16(0x3c)? as usize;
+    let e_shstrndx = rd_u16(0x3e)? as usize;
+    if e_shentsize < 64 || e_shstrndx >= e_shnum {
+        return None;
+    }
+
+    // Section header entry (ELF64): sh_name@0 (u32), sh_offset@0x18 (u64),
+    // sh_size@0x20 (u64).
+    let sh_at = |i: usize| -> Option<(u32, u64, u64)> {
+        let base = e_shoff.checked_add(i.checked_mul(e_shentsize)?)?;
+        let name = rd_u32(base)?;
+        let offset = rd_u64(base + 0x18)?;
+        let size = rd_u64(base + 0x20)?;
+        Some((name, offset, size))
+    };
+
+    // The section-header string table gives each section's name.
+    let (_, shstr_off, shstr_size) = sh_at(e_shstrndx)?;
+    let shstr_off = usize::try_from(shstr_off).ok()?;
+    let shstr_size = usize::try_from(shstr_size).ok()?;
+    let shstrtab = bytes.get(shstr_off..shstr_off.checked_add(shstr_size)?)?;
+
+    for i in 0..e_shnum {
+        let (name_off, off, size) = sh_at(i)?;
+        let name_off = name_off as usize;
+        // The name is a NUL-terminated string at `name_off` in shstrtab.
+        let name_bytes = shstrtab.get(name_off..)?;
+        let end = name_bytes.iter().position(|&b| b == 0).unwrap_or(name_bytes.len());
+        let name = std::str::from_utf8(name_bytes.get(..end)?).ok()?;
+        if name == section_name {
+            let off = usize::try_from(off).ok()?;
+            let size = usize::try_from(size).ok()?;
+            return bytes.get(off..off.checked_add(size)?).map(<[u8]>::to_vec);
+        }
+    }
+    None
+}
+
+/// The name of the ELF section the emitted binary carries its capability floor
+/// in. Read passively by [`read_elf_section`] at launch.
+pub const CAPFLOOR_SECTION: &str = ".ipe.capfloor";
+
+/// The marker that begins the capability-floor line embedded in the binary's
+/// `.rodata` (see the CLI's `capfloor_static_source`). [`scan_capfloor`] finds
+/// the floor by this marker, which survives `strip` (`.rodata` is allocated).
+pub const CAPFLOOR_MARKER: &str = "ipe-capfloor 1 ";
+
+/// Scan a binary's bytes for the embedded capability-floor line and parse it —
+/// the tamper-safe floor read that does NOT execute the binary and survives
+/// `strip`.
+///
+/// The floor is a `#[used]` static in `.rodata` (an allocated section `strip`
+/// keeps), so it is present as raw bytes in the file. This scans for the unique
+/// [`CAPFLOOR_MARKER`] prefix and parses the line up to the first NUL or
+/// newline. A binary with no marker yields `None` — the launcher treats that as
+/// "no readable floor" and refuses (never as "no floor, anything goes").
+///
+/// The floor is a *ceiling on grants*: the profile must not grant more than the
+/// floor ([`SandboxProfile::satisfies_capfloor`]). So if the binary contains
+/// MULTIPLE marker occurrences (it should not — the static is emitted once), the
+/// STRICTEST (least-granting) floor wins: an attacker who appends a more
+/// permissive floor line cannot raise the ceiling and relax the jail. Concretely
+/// the floors are intersected (an axis is in the merged floor only if EVERY
+/// occurrence grants it, and the env ceiling is the minimum count).
+#[must_use]
+pub fn scan_capfloor(bytes: &[u8]) -> Option<SandboxProfile> {
+    let marker = CAPFLOOR_MARKER.as_bytes();
+    let mut floors: Vec<SandboxProfile> = Vec::new();
+    let mut i = 0usize;
+    while i + marker.len() <= bytes.len() {
+        if &bytes[i..i + marker.len()] == marker {
+            // The line runs from the marker start to the first NUL or newline.
+            let start = i;
+            let mut end = start;
+            while end < bytes.len() && bytes[end] != 0 && bytes[end] != b'\n' {
+                end += 1;
+            }
+            if let Ok(line) = std::str::from_utf8(&bytes[start..end]) {
+                if let Ok(p) = parse_capfloor(line) {
+                    floors.push(p);
+                }
+            }
+            i = end.max(i + 1);
+        } else {
+            i += 1;
+        }
+    }
+    let (first, rest) = floors.split_first()?;
+    // Intersect to the strictest floor: an axis stays granted only if EVERY
+    // occurrence grants it; the env ceiling is the minimum count. A forged
+    // permissive copy cannot raise the ceiling.
+    let mut merged = first.clone();
+    let mut min_env = first.env_allowlist.len();
+    for f in rest {
+        if !f.network {
+            merged.network = false;
+        }
+        if matches!(f.filesystem, FilesystemScope::Isolated) {
+            merged.filesystem = FilesystemScope::Isolated;
+        }
+        if !f.subprocess {
+            merged.subprocess = false;
+        }
+        min_env = min_env.min(f.env_allowlist.len());
+    }
+    merged.env_allowlist = (0..min_env).map(|i| format!("#{i}")).collect();
+    Some(merged)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1062,6 +1416,167 @@ mod tests {
         assert!(s.contains("--setenv DATABASE_URL postgres://x"), "{s}");
         // An absent named var is simply not re-exported.
         assert!(!s.contains("ABSENT"), "{s}");
+    }
+
+    #[test]
+    fn read_elf_section_rejects_non_elf_and_missing_sections_without_panicking() {
+        // Non-ELF input → None, never a panic.
+        assert_eq!(read_elf_section(b"not an elf", ".ipe.capfloor"), None);
+        assert_eq!(read_elf_section(&[], ".ipe.capfloor"), None);
+        // A truncated ELF magic + garbage → None (bounds-checked).
+        let mut fake = vec![0x7f, b'E', b'L', b'F', 2, 1];
+        fake.extend(std::iter::repeat_n(0u8, 200));
+        assert_eq!(read_elf_section(&fake, ".ipe.capfloor"), None);
+    }
+
+    #[test]
+    fn read_elf_section_finds_a_real_section_in_this_test_binary() {
+        // The test binary is a real ELF64-LE; a well-known always-present section
+        // (`.text`) must be found, proving the parser walks the header table.
+        // (`.ipe.capfloor` is absent here — that path is exercised by the None
+        // tests above and the CLI-level exec fixture.)
+        let self_path = std::env::current_exe().expect("current exe");
+        let bytes = std::fs::read(&self_path).expect("read self");
+        // Only assert on Linux/x86_64 where the ELF64-LE assumption holds.
+        if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            assert!(
+                read_elf_section(&bytes, ".text").is_some(),
+                "the parser must locate .text in a real ELF64-LE binary"
+            );
+            assert_eq!(read_elf_section(&bytes, ".no.such.section"), None);
+        }
+    }
+
+    #[test]
+    fn scan_capfloor_finds_the_embedded_marker() {
+        let p = SandboxProfile {
+            network: true,
+            filesystem: FilesystemScope::WorkingTreeReadWrite,
+            env_allowlist: vec!["A".to_owned(), "B".to_owned()],
+            subprocess: false,
+            limits: RunResourceLimits::default(),
+        };
+        // Simulate a binary: arbitrary bytes, the floor line in .rodata, more bytes.
+        let mut buf: Vec<u8> = vec![0xde, 0xad, 0xbe, 0xef];
+        buf.extend_from_slice(p.to_capfloor_line().as_bytes());
+        buf.push(0); // NUL-terminated as in .rodata
+        buf.extend_from_slice(&[0x11, 0x22]);
+        let floor = scan_capfloor(&buf).expect("found");
+        assert!(floor.network);
+        assert_eq!(floor.filesystem, FilesystemScope::WorkingTreeReadWrite);
+        assert_eq!(floor.env_allowlist.len(), 2);
+    }
+
+    #[test]
+    fn scan_capfloor_takes_the_strictest_of_multiple_copies() {
+        // A legitimate strict floor, plus a forged permissive one appended by an
+        // attacker: the strictest (least-granting) must win so the forgery cannot
+        // relax the ceiling.
+        let strict = SandboxProfile::maximally_isolated();
+        let forged = SandboxProfile {
+            network: true,
+            subprocess: true,
+            filesystem: FilesystemScope::WorkingTreeReadWrite,
+            ..SandboxProfile::maximally_isolated()
+        };
+        let mut buf = Vec::new();
+        buf.extend_from_slice(strict.to_capfloor_line().as_bytes());
+        buf.push(b'\n');
+        buf.extend_from_slice(forged.to_capfloor_line().as_bytes());
+        buf.push(0);
+        let floor = scan_capfloor(&buf).expect("found");
+        // The strict floor wins: no axis granted.
+        assert!(!floor.network);
+        assert!(!floor.subprocess);
+        assert_eq!(floor.filesystem, FilesystemScope::Isolated);
+    }
+
+    #[test]
+    fn scan_capfloor_absent_is_none() {
+        assert_eq!(scan_capfloor(b"no floor here"), None);
+    }
+
+    #[test]
+    fn profile_string_round_trips() {
+        let p = SandboxProfile {
+            network: true,
+            filesystem: FilesystemScope::WorkingTreeReadWrite,
+            env_allowlist: vec!["DATABASE_URL".to_owned(), "API_KEY".to_owned()],
+            subprocess: true,
+            limits: RunResourceLimits::default(),
+        };
+        let text = p.to_profile_string();
+        let parsed = parse_profile(&text).expect("round-trips");
+        assert_eq!(parsed, p);
+    }
+
+    #[test]
+    fn parse_profile_rejects_unknown_keys_and_missing_fields() {
+        // Unknown key → refuse.
+        assert!(parse_profile("ipe-profile 1\nnetwork true\nbogus x\n").is_err());
+        // Missing header → refuse.
+        assert!(parse_profile("network true\n").is_err());
+        // Missing required field → refuse.
+        assert!(parse_profile("ipe-profile 1\nnetwork true\n").is_err());
+        // Malformed boolean → refuse.
+        assert!(parse_profile("ipe-profile 1\nnetwork yes\nfilesystem isolated\nsubprocess false\n").is_err());
+    }
+
+    #[test]
+    fn capfloor_line_round_trips_axes_and_env_count() {
+        let p = SandboxProfile {
+            network: true,
+            filesystem: FilesystemScope::WorkingTreeReadWrite,
+            env_allowlist: vec!["A".to_owned(), "B".to_owned()],
+            subprocess: false,
+            limits: RunResourceLimits::default(),
+        };
+        let line = p.to_capfloor_line();
+        let floor = parse_capfloor(&line).expect("round-trips");
+        assert!(floor.network);
+        assert_eq!(floor.filesystem, FilesystemScope::WorkingTreeReadWrite);
+        assert!(!floor.subprocess);
+        assert_eq!(floor.env_allowlist.len(), 2);
+    }
+
+    #[test]
+    fn satisfies_capfloor_refuses_a_widened_profile() {
+        // floor = maximally isolated; a profile granting network must be refused.
+        let floor = parse_capfloor(&SandboxProfile::maximally_isolated().to_capfloor_line())
+            .expect("floor");
+        let widened = SandboxProfile {
+            network: true,
+            ..SandboxProfile::maximally_isolated()
+        };
+        assert!(!widened.satisfies_capfloor(&floor));
+        assert!(SandboxProfile::maximally_isolated().satisfies_capfloor(&floor));
+    }
+
+    #[test]
+    fn satisfies_capfloor_refuses_more_env_than_the_floor() {
+        // floor grants 1 env var; a profile granting 2 exceeds it → refuse.
+        let floor_profile = SandboxProfile {
+            env_allowlist: vec!["A".to_owned()],
+            ..SandboxProfile::maximally_isolated()
+        };
+        let floor = parse_capfloor(&floor_profile.to_capfloor_line()).expect("floor");
+        let two_env = SandboxProfile {
+            env_allowlist: vec!["A".to_owned(), "B".to_owned()],
+            ..SandboxProfile::maximally_isolated()
+        };
+        assert!(!two_env.satisfies_capfloor(&floor));
+        let one_env = SandboxProfile {
+            env_allowlist: vec!["X".to_owned()],
+            ..SandboxProfile::maximally_isolated()
+        };
+        assert!(one_env.satisfies_capfloor(&floor));
+    }
+
+    #[test]
+    fn parse_capfloor_refuses_an_unreadable_floor() {
+        assert!(parse_capfloor("garbage").is_err());
+        assert!(parse_capfloor("ipe-capfloor 2 net=true").is_err());
+        assert!(parse_capfloor("ipe-capfloor 1 fs=bogus").is_err());
     }
 
     #[test]
