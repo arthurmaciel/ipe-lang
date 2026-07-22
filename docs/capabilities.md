@@ -66,15 +66,16 @@ inference. Ipê handles this without a blind spot:
   did not surface is a compile error, so a malicious effect cannot hide — it must
   appear as a capability you consented to.
 - Native FFI wrapper crates ([Tier 2](architecture/tbd/ffi-tier2-inspect-author-rust.md))
-  are held to a stricter, fail-closed bar while the runtime sandbox is being
-  built. A wrapper's Rust runs with the process's full authority at `ipe run` —
-  there is **not yet** a runtime jail around the emitted app — so a wrapper that
-  declares or is inferred to reach a runtime-enforced capability (network,
-  filesystem, database, environment, subprocess, native-ffi) is **refused at
-  install** rather than admitted unenforced. Only wrappers confined to the
-  containable axes (clock, random) or to pure compute install today. This is the
-  honest posture until the runtime jail lands, at which point those axes re-open
-  one at a time as each is actually scoped.
+  are **admitted and isolated by the runtime jail** on a target where the jail
+  holds (Linux first). A wrapper that reaches a runtime-enforced capability
+  (network, filesystem, database, environment, subprocess, native-ffi) is
+  installed and then run confined to its declared-plus-inferred set — an
+  undeclared effect fails closed at the OS boundary. On a platform in the
+  documented refuse-gap (no jail), the older fail-closed posture stays: such a
+  wrapper is **refused at install** rather than admitted-and-run-unconfined.
+  Native code is **contained, not proven**: the manifest gate cannot see through
+  native Rust, so the jail contains an under-declared wrapper (it does not catch
+  the under-declaration).
 
 How native Rust is bound — and how its capabilities are established — is covered by
 the FFI docs: the declarative [`provide.*`](architecture/tbd/ffi-rust-type-creation-and-coverage.md)
@@ -92,10 +93,21 @@ are containable).
 - **Native code (build)** → the RCE build sandbox isolates the compile of an
   untrusted crate (fresh empty net namespace, read-only `/`, scrubbed env), so a
   malicious build script or proc-macro is contained while inspecting/building.
-- **Native code (run)** → the emitted-app runtime jail is **not yet built**. Until
-  it is, a Tier-2 wrapper that would reach a runtime-enforced capability is
-  *refused at install* (above) rather than run uncontained — fail-closed, not
-  fail-open.
+- **Native code (run)** → the emitted-app **runtime jail** confines the running
+  program to its declared-plus-inferred capability set (`ipe run`, and `ipe exec`
+  for a built artifact). On Linux it is an OS-level, fail-closed jail: a fresh
+  network namespace when `network` is absent, a scoped filesystem when
+  `filesystem` is absent, a scrubbed environment, a `seccomp` filter denying
+  subprocess creation (and, unconditionally, `ptrace`/`io_uring`/mount-family
+  escape primitives), plus a fresh `/proc` and `no_new_privs`. An unavailable
+  primitive **refuses to run** rather than running unconfined; the narrow
+  `IPE_ALLOW_UNSANDBOXED=1` override is a hard error for any high-value native
+  axis. macOS and other platforms are a documented refuse-gap: a native-capability
+  program refuses to run there rather than running unconfined. A built artifact
+  carries its enforcement — an `ipe.profile` plus a capability floor embedded in
+  the binary — so `ipe exec` re-applies the jail wherever the artifact runs; a
+  tampered profile that requests less isolation than the embedded floor is
+  refused.
 
 ## Not covered: resource quotas
 

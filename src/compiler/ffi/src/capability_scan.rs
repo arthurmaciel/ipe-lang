@@ -134,29 +134,67 @@ const BARE_IDENTS: &[(&str, Capability)] = &[
     ("OpenOptions", Capability::Filesystem),
 ];
 
-/// Whether a capability's runtime effects Ipê CANNOT contain in this release.
+/// Whether the runtime capability jail holds for a wrapper's run/deploy target.
 ///
-/// There is no sandbox around the emitted app at `ipe run`, so a wrapper
-/// reaching one of these runs it with the user's full ambient authority. A
-/// wrapper that declares or is inferred to touch any of these is refused at
-/// install: enforcement is infeasible, so the capability is not admitted
-/// unenforced (spec §5, "refuse rather than admit unenforced").
+/// This is the load-bearing per-target condition of the refuse-until-jail →
+/// admit-and-isolate hand-off: admitting a real-capability wrapper is safe ONLY
+/// where the jail actually confines it. Admitting globally would, on a
+/// refuse-gap platform (macOS without the Seatbelt path, Windows, BSD), mean
+/// admit-and-run-**unconfined** — strictly worse than refusing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JailForTarget {
+    /// The runtime jail holds on this target (`Linux`/`x86_64` in the first
+    /// cut): a runtime-enforced axis is contained, so the wrapper may be
+    /// admitted and isolated.
+    Holds,
+    /// The target is in the documented refuse-gap: no jail confines the emitted
+    /// app there, so the refuse-until-jail posture STAYS — a runtime-enforced
+    /// axis is refused rather than admitted-and-run-unconfined.
+    RefuseGap,
+}
+
+/// Whether a capability's runtime effects Ipê CANNOT contain for the given
+/// target.
 ///
-/// [`Capability::Clock`] and [`Capability::Random`] are deliberately absent:
-/// they are non-determinism, not exfiltration, and carry no isolation surface —
-/// admitting them unenforced leaks no authority. Every other axis stays here
-/// until a runtime jail exists to scope it.
+/// The hand-off (ADR 0038): once the runtime jail lands, a runtime-enforced axis
+/// on a [`JailForTarget::Holds`] target is *contained* (an undeclared syscall
+/// fails closed at the OS boundary), so it is admissible. On a
+/// [`JailForTarget::RefuseGap`] target no jail exists, so the axis is still
+/// unenforceable and refused — the honest per-target posture.
+///
+/// [`Capability::NativeFfi`] is special: on a jail-holds target it is
+/// *contained* (the jail confines the whole process regardless of what native
+/// code does), so it is admissible-with-loud-consent, NOT refused. On a
+/// refuse-gap target it stays unenforceable.
+///
+/// [`Capability::Clock`] and [`Capability::Random`] are never unenforceable:
+/// they are non-determinism, not exfiltration, and carry no isolation surface.
+#[must_use]
+pub const fn is_runtime_unenforceable_for(cap: Capability, jail: JailForTarget) -> bool {
+    match jail {
+        // Jail holds: every axis is contained at the OS boundary → admissible.
+        JailForTarget::Holds => false,
+        // Refuse-gap: the runtime-enforced axes remain unenforceable.
+        JailForTarget::RefuseGap => match cap {
+            Capability::Network
+            | Capability::Filesystem
+            | Capability::Database
+            | Capability::Env
+            | Capability::Subprocess
+            | Capability::NativeFfi => true,
+            Capability::Clock | Capability::Random => false,
+        },
+    }
+}
+
+/// The pre-jail refuse-until-jail predicate.
+///
+/// Preserved for callers that have not yet threaded a target through; equivalent
+/// to [`is_runtime_unenforceable_for`] with [`JailForTarget::RefuseGap`] — the
+/// conservative default (refuse) when the target's jail status is unknown.
 #[must_use]
 pub const fn is_runtime_unenforceable(cap: Capability) -> bool {
-    match cap {
-        Capability::Network
-        | Capability::Filesystem
-        | Capability::Database
-        | Capability::Env
-        | Capability::Subprocess
-        | Capability::NativeFfi => true,
-        Capability::Clock | Capability::Random => false,
-    }
+    is_runtime_unenforceable_for(cap, JailForTarget::RefuseGap)
 }
 
 /// An OPAQUE construct the token scan cannot see past.
@@ -241,22 +279,40 @@ impl ScanOutcome {
         self.opacities.extend(other.opacities);
     }
 
-    /// The proposed capabilities that Ipê cannot enforce at run — the subset of
-    /// [`Self::proposed`] for which admission would be unenforced.
+    /// The proposed capabilities Ipê cannot enforce at run **for the given
+    /// target** — the subset of [`Self::proposed`] for which admission would be
+    /// unenforced. On a [`JailForTarget::Holds`] target this is empty (the jail
+    /// contains every axis).
     #[must_use]
-    pub fn unenforceable(&self) -> BTreeSet<Capability> {
+    pub fn unenforceable_for(&self, jail: JailForTarget) -> BTreeSet<Capability> {
         self.proposed
             .iter()
             .copied()
-            .filter(|&c| is_runtime_unenforceable(c))
+            .filter(|&c| is_runtime_unenforceable_for(c, jail))
             .collect()
     }
 
-    /// Whether the scan alone forces a refuse: it found an opaque construct, or
-    /// it proposed a capability Ipê cannot yet contain at run.
+    /// The proposed capabilities unenforceable under the conservative
+    /// refuse-gap posture (no jail) — preserved for callers that have not
+    /// threaded a target through.
+    #[must_use]
+    pub fn unenforceable(&self) -> BTreeSet<Capability> {
+        self.unenforceable_for(JailForTarget::RefuseGap)
+    }
+
+    /// Whether the scan alone forces a refuse for the given target: it found an
+    /// opaque construct, or it proposed a capability the target's jail cannot
+    /// contain.
+    #[must_use]
+    pub fn must_refuse_for(&self, jail: JailForTarget) -> bool {
+        !self.opacities.is_empty() || !self.unenforceable_for(jail).is_empty()
+    }
+
+    /// Whether the scan alone forces a refuse under the conservative refuse-gap
+    /// posture (no jail).
     #[must_use]
     pub fn must_refuse(&self) -> bool {
-        !self.opacities.is_empty() || !self.unenforceable().is_empty()
+        self.must_refuse_for(JailForTarget::RefuseGap)
     }
 }
 
@@ -523,38 +579,53 @@ impl std::fmt::Display for RefuseReason {
 }
 
 /// Reconcile a wrapper's declared capability set against the scan of its source,
-/// and decide admissibility under the current enforcement reality.
+/// and decide admissibility **for a given target's jail status**.
 ///
-/// The rule (FFI Tier 2 §5, hardened by the security review): there is no
-/// runtime sandbox around the emitted app in this release, so any capability on
-/// a runtime-enforced axis ([`is_runtime_unenforceable`]) is *infeasible to
-/// enforce* and MUST NOT be admitted — whether the author declared it or the
-/// scan inferred it. Only wrappers whose declared AND inferred sets are confined
-/// to the containable axes ({clock, random}, or empty) install. `non_std_deps`
-/// is the wrapper crate's non-`std` dependency names — any is opaque and
-/// refuses.
+/// The hand-off (ADR 0038): the refuse-until-jail posture is lifted to
+/// admit-and-isolate *only per-target where the jail holds*.
 ///
-/// This is strictly a security improvement over the prior state, where such a
-/// wrapper installed with NO gate at all: it turns "silently unconstrained" into
-/// "refused until the runtime jail lands".
+/// - On a [`JailForTarget::RefuseGap`] target (no jail), the pre-jail rule holds
+///   unchanged: any runtime-enforced axis (declared or inferred), any opaque
+///   construct, and any non-`std` dependency **refuse** — admitting would run
+///   native code unconfined.
+/// - On a [`JailForTarget::Holds`] target, the jail *contains* the wrapper: an
+///   undeclared syscall fails closed at the OS boundary. So a runtime-enforced
+///   axis is **admitted and isolated**; an opaque construct or a non-`std`
+///   dependency is **admitted-because-contained** (the static scan is a
+///   best-effort honesty smell, never the boundary — ADR 0038's "contained, not
+///   caught"). The declared set is the consent surface, surfaced loudly on
+///   `native-ffi`.
+///
+/// `non_std_deps` is the wrapper crate's non-`std` dependency names.
 #[must_use]
-pub fn reconcile(
+pub fn reconcile_for(
     declared: &BTreeSet<Capability>,
     scan: &ScanOutcome,
     non_std_deps: &[String],
+    jail: JailForTarget,
 ) -> Verdict {
+    // On a jail-holds target, the OS boundary contains every axis, opaque
+    // construct, and dependency effect. The wrapper is admitted-and-isolated:
+    // an undeclared effect fails closed at runtime (contained, not caught).
+    if jail == JailForTarget::Holds {
+        return Verdict::Admit {
+            declared: declared.clone(),
+        };
+    }
+
+    // Refuse-gap target: the pre-jail refuse-until-jail rule, unchanged.
     let mut reasons = Vec::new();
 
     // A declared unenforceable capability: the author's own claim names an
-    // effect we cannot contain.
+    // effect we cannot contain here.
     for &cap in declared {
-        if is_runtime_unenforceable(cap) {
+        if is_runtime_unenforceable_for(cap, jail) {
             reasons.push(RefuseReason::DeclaredUnenforceable { cap });
         }
     }
     // An inferred unenforceable capability the declaration did NOT already
     // account for (avoid a duplicate reason for the same axis).
-    for cap in scan.unenforceable() {
+    for cap in scan.unenforceable_for(jail) {
         if !declared.contains(&cap) {
             reasons.push(RefuseReason::InferredUnenforceable { cap });
         }
@@ -580,6 +651,18 @@ pub fn reconcile(
             proposed: scan.proposed.clone(),
         }
     }
+}
+
+/// Reconcile under the conservative refuse-gap posture (no jail) — preserved for
+/// callers that have not yet threaded a target through. Equivalent to
+/// [`reconcile_for`] with [`JailForTarget::RefuseGap`].
+#[must_use]
+pub fn reconcile(
+    declared: &BTreeSet<Capability>,
+    scan: &ScanOutcome,
+    non_std_deps: &[String],
+) -> Verdict {
+    reconcile_for(declared, scan, non_std_deps, JailForTarget::RefuseGap)
 }
 
 /// Parse a raw `[rust.wrapper] capabilities = [...]` list into a typed set.
@@ -882,5 +965,89 @@ mod tests {
                 _ => assert!(unenf, "{cap:?} must be refused until a runtime jail exists"),
             }
         }
+    }
+
+    #[test]
+    fn on_a_jail_holds_target_no_axis_is_unenforceable() {
+        // The whole point of the hand-off: where the jail holds, every axis is
+        // contained → nothing is unenforceable.
+        for cap in Capability::ALL {
+            assert!(
+                !is_runtime_unenforceable_for(*cap, JailForTarget::Holds),
+                "{cap:?} must be enforceable (contained) where the jail holds"
+            );
+        }
+    }
+
+    #[test]
+    fn on_a_refuse_gap_target_the_runtime_axes_stay_unenforceable() {
+        // A refuse-gap target keeps the pre-jail posture.
+        for cap in Capability::ALL {
+            let unenf = is_runtime_unenforceable_for(*cap, JailForTarget::RefuseGap);
+            match cap {
+                Capability::Clock | Capability::Random => assert!(!unenf, "{cap:?}"),
+                _ => assert!(unenf, "{cap:?} stays refused on a refuse-gap target"),
+            }
+        }
+    }
+
+    #[test]
+    fn reconcile_admits_a_network_wrapper_where_the_jail_holds() {
+        // A declared-network wrapper, refused on a refuse-gap target, is ADMITTED
+        // and isolated where the jail holds (the refuse-until-jail hand-off).
+        let declared: BTreeSet<Capability> = BTreeSet::from([Capability::Network]);
+        let scan = scan_source(
+            "lib.rs",
+            "pub fn f() { let _ = std::net::TcpStream::connect(\"x\"); }",
+        );
+        assert!(matches!(
+            reconcile_for(&declared, &scan, &[], JailForTarget::RefuseGap),
+            Verdict::Refuse { .. }
+        ));
+        assert!(matches!(
+            reconcile_for(&declared, &scan, &[], JailForTarget::Holds),
+            Verdict::Admit { .. }
+        ));
+    }
+
+    #[test]
+    fn reconcile_admits_an_opaque_wrapper_where_the_jail_holds() {
+        // An opaque (native FFI) wrapper is CONTAINED by the jail, so it is
+        // admitted where the jail holds (contained, not caught) — still refused
+        // on a refuse-gap target.
+        let scan = scan_source("lib.rs", "extern \"C\" { fn getpid() -> i32; }");
+        assert!(matches!(
+            reconcile_for(&BTreeSet::new(), &scan, &[], JailForTarget::RefuseGap),
+            Verdict::Refuse { .. }
+        ));
+        assert!(matches!(
+            reconcile_for(&BTreeSet::new(), &scan, &[], JailForTarget::Holds),
+            Verdict::Admit { .. }
+        ));
+    }
+
+    #[test]
+    fn reconcile_admits_a_non_std_dep_wrapper_where_the_jail_holds() {
+        // A non-std dependency's effects are invisible to the scan, but the jail
+        // contains them at runtime → admitted where it holds.
+        let scan = scan_source("lib.rs", "pub fn f() -> i64 { 0 }");
+        assert!(matches!(
+            reconcile_for(
+                &BTreeSet::new(),
+                &scan,
+                &["reqwest".to_owned()],
+                JailForTarget::RefuseGap
+            ),
+            Verdict::Refuse { .. }
+        ));
+        assert!(matches!(
+            reconcile_for(
+                &BTreeSet::new(),
+                &scan,
+                &["reqwest".to_owned()],
+                JailForTarget::Holds
+            ),
+            Verdict::Admit { .. }
+        ));
     }
 }
