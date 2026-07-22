@@ -10,6 +10,20 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.12](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.11...ipe-v0.1.12) (2026-07-22)
+
+
+### Features
+
+* **cli:** CLI-UI single-source-of-truth (style module) + installer polish + SSOT principle ([#75](https://github.com/arthurmaciel/ipe-lang/issues/75)) ([720e2c6](https://github.com/arthurmaciel/ipe-lang/commit/720e2c6b1304d10084c7baa3eb690e70845e5b16))
+* **cli:** human-first output model — --plain/--json, gutter, error-shows-help, Package authoring section ([#78](https://github.com/arthurmaciel/ipe-lang/issues/78)) ([ea01f7f](https://github.com/arthurmaciel/ipe-lang/commit/ea01f7f3530646557c3916149d47c720828ec2e3))
+* **examples:** port go-ffi examples to Ipê + Rust crates (7 examples) ([#80](https://github.com/arthurmaciel/ipe-lang/issues/80)) ([c1f3bf7](https://github.com/arthurmaciel/ipe-lang/commit/c1f3bf782b2f78274d6f5db3297cb5086d196d15))
+
+
+### Bug Fixes
+
+* **install:** allow backslash in INSTALL_DIR so Windows paths (D:\...) install ([#81](https://github.com/arthurmaciel/ipe-lang/issues/81)) ([1e74d8b](https://github.com/arthurmaciel/ipe-lang/commit/1e74d8bf90db22de9b04acafcd09468050a0ddbd))
+
 ## [0.1.11](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.10...ipe-v0.1.11) (2026-07-21)
 
 
