@@ -266,6 +266,27 @@ patch = "rename-map"
 go_ffi = false
 notes = "sky.toml listed no go.dependencies; Gorilla/Websocket was never used in the Ipê source. Full .ipe set already committed."
 
+[[example]]
+name = "36-composite-server"
+sky_source = "sibling"
+patch = "rename-map"
+go_ffi = false
+notes = "sky.toml has no go.dependencies; source imports Sky.Core.*/Sky.Http.*/Sky.Ffi/Std.* only — Sky.Ffi is stdlib, not a Go package. go_ffi was set in error."
+
+[[example]]
+name = "37-composite-live-shop"
+sky_source = "sibling"
+patch = "rename-map"
+go_ffi = false
+notes = "sky.toml has no go.dependencies; source imports Sky.Core.*/Std.* only — no Go FFI. go_ffi was set in error."
+
+[[example]]
+name = "38-composite-ui-multibackend"
+sky_source = "sibling"
+patch = "rename-map"
+go_ffi = false
+notes = "sky.toml has no go.dependencies; source imports Sky.Core.*/Std.* only — no Go FFI. go_ffi was set in error."
+
 # ── Go-FFI examples (excluded from Rust build by is_out_of_scope) ─────────────
 # Listed here so the sweep knows they exist in upstream and does not FAIL LOUD
 # for them; they are intentionally excluded from the build set.
@@ -291,23 +312,3 @@ patch = "rename-map"
 go_ffi = true
 notes = "sky mirror excluded; native Ipê port at examples/13-skyshop/ (firestore+stripe via Rust-crate FFI) is in build_set but skipped by needs_ffi_install until ipe install cache is populated"
 
-[[example]]
-name = "36-composite-server"
-sky_source = "sibling"
-patch = "rename-map"
-go_ffi = true
-notes = "composite with Go-FFI sub-packages; excluded from Rust build set"
-
-[[example]]
-name = "37-composite-live-shop"
-sky_source = "sibling"
-patch = "rename-map"
-go_ffi = true
-notes = "composite with Go-FFI sub-packages; excluded from Rust build set"
-
-[[example]]
-name = "38-composite-ui-multibackend"
-sky_source = "sibling"
-patch = "rename-map"
-go_ffi = true
-notes = "composite with Go-FFI sub-packages; excluded from Rust build set"
