@@ -67,10 +67,14 @@ jobs:
 
       # The emitted dep graph carries C compile units (zstd, ring) — the
       # preflight requires a musl-capable C compiler; mimalloc adds its own.
-      - name: Install musl C toolchain
+      # bubblewrap + util-linux supply the runtime jail primitives (bwrap,
+      # prlimit) `ipe run` needs to confine a program; without them a
+      # capability-bearing run is refused (IPE-F4413), which the gated
+      # `ipe run --static` e2e exercises.
+      - name: Install musl C toolchain and jail primitives
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools
+          sudo apt-get install -y musl-tools bubblewrap util-linux
 
       - name: Cache cargo target
         uses: actions/cache@v4

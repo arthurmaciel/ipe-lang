@@ -1,0 +1,6 @@
+# Golden fixtures are byte-exact LF sources. The Rust backend embeds
+# tests/golden/basics/main.rs via include_str! and slices its preamble at "\n"
+# anchors, and every golden test compares emitted bytes against these files. A
+# Windows checkout with autocrlf must never rewrite them to CRLF, or the anchor
+# splice fails (IPE-I0203: golden anchor not found) and byte compares diverge.
+tests/golden/** text eol=lf
