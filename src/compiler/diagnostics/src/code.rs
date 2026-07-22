@@ -608,7 +608,7 @@ mod tests {
             assert!(s.starts_with("IPE-"), "{s} bad prefix");
             assert!(seen.insert(s), "{s} duplicated");
         }
-        assert_eq!(seen.len(), 104);
+        assert_eq!(seen.len(), 105);
     }
 
     /// CI coverage gate: every taxonomy code has a conforming explain page.

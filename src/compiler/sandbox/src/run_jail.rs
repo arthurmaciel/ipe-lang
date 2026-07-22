@@ -42,15 +42,16 @@ use crate::seccomp;
 
 // ── the database axis (a run-jail input, resolved from ipe.toml) ─────────────
 
-/// How `Capability::Database` lowers for this project — the driver decides
-/// whether a database effect is really a network effect (a TCP driver) or a
-/// filesystem effect (an embedded/SQLite file). Resolved by the CLI from the
-/// `ipe.toml` driver selection before the profile is built.
+/// How `Capability::Database` lowers for this project.
+///
+/// The driver decides whether a database effect is really a network effect (a
+/// TCP driver) or a filesystem effect (an embedded/`SQLite` file). Resolved by
+/// the CLI from the `ipe.toml` driver selection before the profile is built.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DatabaseAxis {
-    /// A TCP-connected database (Postgres, MySQL, …) → the `network` control.
+    /// A TCP-connected database (`Postgres`, `MySQL`, …) → the `network` control.
     Network,
-    /// A file-backed database (SQLite, an embedded store) → the `filesystem`
+    /// A file-backed database (`SQLite`, an embedded store) → the `filesystem`
     /// control.
     Filesystem,
     /// No `database` capability is present, so the driver is irrelevant. Kept
@@ -98,10 +99,11 @@ pub enum FilesystemScope {
     WorkingTreeReadWrite,
 }
 
-/// The resource caps for a run-jailed app — distinct from the build jail's
-/// `ResourceLimits`, whose values (10 GiB AS, 900 s wall/CPU) are tuned to kill
-/// a giant one-shot rustdoc and would wrongly kill a legitimate long-lived
-/// server (a false-deny).
+/// The resource caps for a run-jailed app.
+///
+/// Distinct from the build jail's `ResourceLimits`, whose values (10 GiB AS,
+/// 900 s wall/CPU) are tuned to kill a giant one-shot rustdoc and would wrongly
+/// kill a legitimate long-lived server (a false-deny).
 ///
 /// The mechanism (`prlimit` + optional `timeout`) is reused; the numbers are
 /// not. `wall_secs = None` means no wall-clock kill (a server runs
@@ -136,9 +138,11 @@ impl Default for RunResourceLimits {
     }
 }
 
-/// The platform-independent description of a run jail: what the emitted app may
-/// touch, derived from its capability set. A per-platform *builder*
-/// ([`run_jail_argv`] on Linux) turns this into a concrete jail.
+/// The platform-independent description of a run jail.
+///
+/// What the emitted app may touch, derived from its capability set. A
+/// per-platform *builder* ([`run_jail_argv`] on Linux) turns this into a
+/// concrete jail.
 ///
 /// This is the value serialized into an artifact's `ipe.profile`. It is
 /// deliberately NOT `Default`-constructible to an all-allowed value — the empty
@@ -191,11 +195,7 @@ impl SandboxProfile {
     pub fn is_at_least_as_isolated_as(&self, floor: &Self) -> bool {
         let network_ok = !self.network || floor.network;
         let subprocess_ok = !self.subprocess || floor.subprocess;
-        let fs_ok = match (&self.filesystem, &floor.filesystem) {
-            (FilesystemScope::Isolated, _) => true,
-            (FilesystemScope::WorkingTreeReadWrite, FilesystemScope::WorkingTreeReadWrite) => true,
-            (FilesystemScope::WorkingTreeReadWrite, FilesystemScope::Isolated) => false,
-        };
+        let fs_ok = self.fs_at_least_as_isolated(floor);
         // Every env var self grants must be in the floor's allowlist.
         let env_ok = self
             .env_allowlist
@@ -204,22 +204,27 @@ impl SandboxProfile {
         network_ok && subprocess_ok && fs_ok && env_ok
     }
 
+    /// Whether `self`'s filesystem scope isolates at least as much as `floor`'s:
+    /// `Isolated` isolates more than (or equal to) any scope; a read-write tree
+    /// is only OK if the floor also grants a read-write tree.
+    #[must_use]
+    const fn fs_at_least_as_isolated(&self, floor: &Self) -> bool {
+        matches!(self.filesystem, FilesystemScope::Isolated)
+            || matches!(floor.filesystem, FilesystemScope::WorkingTreeReadWrite)
+    }
+
     /// The launcher's floor check against a [`parse_capfloor`]-derived floor.
     ///
-    /// The `.ipe.capfloor` ELF section records only axis grants and an env
-    /// *count* (the binary does not carry the env var names — those live in the
-    /// `ipe.profile`). So the env axis is compared by count, not by name: the
-    /// profile may not grant *more* env vars than the floor allows. Every other
-    /// axis is the same "at least as isolated" per-axis check.
+    /// The embedded floor records only axis grants and an env *count* (the binary
+    /// does not carry the env var names — those live in the `ipe.profile`). So the
+    /// env axis is compared by count, not by name: the profile may not grant
+    /// *more* env vars than the floor allows. Every other axis is the same "at
+    /// least as isolated" per-axis check.
     #[must_use]
-    pub fn satisfies_capfloor(&self, floor: &Self) -> bool {
+    pub const fn satisfies_capfloor(&self, floor: &Self) -> bool {
         let network_ok = !self.network || floor.network;
         let subprocess_ok = !self.subprocess || floor.subprocess;
-        let fs_ok = match (&self.filesystem, &floor.filesystem) {
-            (FilesystemScope::Isolated, _) => true,
-            (FilesystemScope::WorkingTreeReadWrite, FilesystemScope::WorkingTreeReadWrite) => true,
-            (FilesystemScope::WorkingTreeReadWrite, FilesystemScope::Isolated) => false,
-        };
+        let fs_ok = self.fs_at_least_as_isolated(floor);
         let env_ok = self.env_allowlist.len() <= floor.env_allowlist.len();
         network_ok && subprocess_ok && fs_ok && env_ok
     }
@@ -232,26 +237,26 @@ impl SandboxProfile {
     /// refuse-to-run), never a permissive default.
     #[must_use]
     pub fn to_profile_string(&self) -> String {
+        use std::fmt::Write as _;
         let fs = match self.filesystem {
             FilesystemScope::Isolated => "isolated",
             FilesystemScope::WorkingTreeReadWrite => "working-tree-rw",
         };
-        let mut s = String::new();
-        s.push_str("ipe-profile 1\n");
-        s.push_str(&format!("network {}\n", self.network));
-        s.push_str(&format!("filesystem {fs}\n"));
-        s.push_str(&format!("subprocess {}\n", self.subprocess));
+        let mut s = String::from("ipe-profile 1\n");
+        // Writing to a String is infallible, so the `write!` results are ignored.
+        let _ = writeln!(s, "network {}", self.network);
+        let _ = writeln!(s, "filesystem {fs}");
+        let _ = writeln!(s, "subprocess {}", self.subprocess);
         for name in &self.env_allowlist {
-            s.push_str(&format!("env {name}\n"));
+            let _ = writeln!(s, "env {name}");
         }
         s
     }
 
-    /// The compact capability-floor token line embedded read-only in the binary
-    /// (the `.ipe.capfloor` ELF section). It records only the *axis* grants (not
-    /// resource limits or env names — the launcher rebuilds a comparison floor
-    /// from these), so a tampered `ipe.profile` cannot claim fewer axes than the
-    /// binary was built for.
+    /// The compact capability-floor token line embedded read-only in the binary's
+    /// `.rodata`. It records only the *axis* grants (not resource limits or env
+    /// names — the launcher rebuilds a comparison floor from these), so a tampered
+    /// `ipe.profile` cannot claim fewer axes than the binary was built for.
     ///
     /// Format: `ipe-capfloor 1 net=<b> fs=<isolated|rw> sub=<b> env=<n>` where
     /// `<n>` is the count of granted env names (the floor compares env by count
@@ -358,11 +363,12 @@ pub fn parse_profile(text: &str) -> Result<SandboxProfile, ParseError> {
     })
 }
 
-/// Strictly parse a `.ipe.capfloor` section line into the *comparison floor*: a
-/// [`SandboxProfile`] whose axes are the floor the binary was built with. The
-/// env allowlist is reconstructed as `n` placeholder names so the ⊇ check counts
-/// correctly (the launcher checks the profile's env count does not exceed the
-/// floor's; the concrete names are in the profile).
+/// Strictly parse a capfloor line into the *comparison floor*.
+///
+/// The result is a [`SandboxProfile`] whose axes are the floor the binary was
+/// built with. The env allowlist is reconstructed as `n` placeholder names so
+/// the ⊇ check counts correctly (the launcher checks the profile's env count
+/// does not exceed the floor's; the concrete names are in the profile).
 ///
 /// # Errors
 ///
@@ -440,6 +446,12 @@ pub fn profile_from_capabilities(
     let union: BTreeSet<Capability> = inferred.union(declared).copied().collect();
 
     for &cap in &union {
+        // The empty `clock/random` and `native-ffi` arms are DELIBERATELY
+        // separate (not merged): each capability variant is explicitly
+        // classified here, so a newly-added variant fails to compile until it is
+        // given an arm — the deny-by-default structural guarantee. Merging the
+        // no-op arms would defeat that, so the identical-arms lint is allowed.
+        #[allow(clippy::match_same_arms)]
         match cap {
             Capability::Network => profile.network = true,
             Capability::Filesystem => {
@@ -511,6 +523,12 @@ pub struct RunJailTools {
 /// The env is scrubbed with `--clearenv`; only the fixed minimal allowlist
 /// (`PATH`, `TMPDIR`, `LANG`) plus the profile's `env_allowlist` re-enter. There
 /// is NO shell token anywhere in the result.
+// Every argument is a distinct, load-bearing jail input (tools, profile, the two
+// mount roots, the extra binds, the seccomp fd, the env lookup, the payload);
+// bundling them into a struct would only move the same fields behind one more
+// indirection without reducing the surface. The pure-builder shape is
+// deliberately explicit, matching the sibling `bwrap_argv`.
+#[allow(clippy::too_many_arguments)]
 #[must_use]
 pub fn run_jail_argv(
     tools: &RunJailTools,
@@ -719,16 +737,18 @@ impl std::fmt::Display for RunJailDefect {
 
 impl std::error::Error for RunJailDefect {}
 
-/// Whether the resolved capability set is entirely on the low-value axes
-/// (`clock`/`random`) or empty — the only case the narrow `IPE_ALLOW_UNSANDBOXED`
-/// override may downgrade to a warning. Any high-value native axis (network,
-/// filesystem, database, env, subprocess, native-ffi) makes the override a hard
-/// error: there is no flag that runs admitted native code unconfined.
+/// Whether the resolved capability set is entirely low-value.
+///
+/// The low-value axes are `clock`/`random` (or empty) — the only case the narrow
+/// `IPE_ALLOW_UNSANDBOXED` override may downgrade to a warning. Any high-value
+/// native axis (network, filesystem, database, env, subprocess, native-ffi)
+/// makes the override a hard error: there is no flag that runs admitted native
+/// code unconfined.
 #[must_use]
 pub fn is_low_value_only(union: &BTreeSet<Capability>) -> bool {
-    union.iter().all(|c| {
-        matches!(c, Capability::Clock | Capability::Random)
-    })
+    union
+        .iter()
+        .all(|c| matches!(c, Capability::Clock | Capability::Random))
 }
 
 /// The build-time platform verdict: can a sound run jail be built on THIS
@@ -849,7 +869,7 @@ pub fn exec_in_run_jail(
         &payload,
     );
 
-    let (program_path, rest) = argv.split_first().ok_or(RunJailDefect::Spawn {
+    let (program_path, rest) = argv.split_first().ok_or_else(|| RunJailDefect::Spawn {
         detail: "empty jail argv".to_owned(),
     })?;
     let mut cmd = std::process::Command::new(program_path);
@@ -953,7 +973,9 @@ fn write_seccomp_memfd(bytes: &[u8]) -> Result<i32, RunJailDefect> {
     // seccomp program would be a malformed/rejected filter, so refuse.
     let mut written: usize = 0;
     while written < bytes.len() {
-        let remaining = &bytes[written..];
+        let Some(remaining) = bytes.get(written..) else {
+            break;
+        };
         // SAFETY: `write` reads `remaining.len()` bytes from a valid slice
         // pointer into the owned memfd; the slice outlives the call.
         let n = unsafe {
@@ -982,90 +1004,11 @@ fn write_seccomp_memfd(bytes: &[u8]) -> Result<i32, RunJailDefect> {
     Ok(fd)
 }
 
-// ── passive ELF section reader (the tamper-safe floor read) ─────────────────
-
-/// Read the bytes of a named section from a 64-bit little-endian ELF file
-/// **without executing it** — a pure, passive parse of the on-disk binary.
-///
-/// This is the tamper-safe floor read: the launcher extracts the authoritative
-/// capability floor from the binary's `.ipe.capfloor` section as *data*, never
-/// by running the binary and trusting its self-report (a tampered binary would
-/// lie). A binary that lacks the section, or is not a parseable ELF64-LE, yields
-/// `None` — the launcher treats that as "no readable floor" and refuses (never
-/// as "no floor, so anything goes").
-///
-/// The parser is intentionally minimal (ELF64 little-endian, the Linux/x86_64
-/// target) and bounds-checked at every field access — a malformed header yields
-/// `None`, never a panic or an out-of-bounds read.
-#[must_use]
-pub fn read_elf_section(bytes: &[u8], section_name: &str) -> Option<Vec<u8>> {
-    // ELF64 header offsets (little-endian): e_shoff@0x28 (u64), e_shentsize@0x3a
-    // (u16), e_shnum@0x3c (u16), e_shstrndx@0x3e (u16). Magic: 0x7f 'E' 'L' 'F',
-    // EI_CLASS@4 == 2 (ELF64), EI_DATA@5 == 1 (LE).
-    if bytes.len() < 64 || &bytes[0..4] != b"\x7fELF" || bytes[4] != 2 || bytes[5] != 1 {
-        return None;
-    }
-    let rd_u16 = |off: usize| -> Option<u16> {
-        bytes.get(off..off + 2).map(|b| u16::from_le_bytes([b[0], b[1]]))
-    };
-    let rd_u32 = |off: usize| -> Option<u32> {
-        bytes
-            .get(off..off + 4)
-            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-    };
-    let rd_u64 = |off: usize| -> Option<u64> {
-        bytes.get(off..off + 8).map(|b| {
-            u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
-        })
-    };
-
-    let e_shoff = usize::try_from(rd_u64(0x28)?).ok()?;
-    let e_shentsize = rd_u16(0x3a)? as usize;
-    let e_shnum = rd_u16(0x3c)? as usize;
-    let e_shstrndx = rd_u16(0x3e)? as usize;
-    if e_shentsize < 64 || e_shstrndx >= e_shnum {
-        return None;
-    }
-
-    // Section header entry (ELF64): sh_name@0 (u32), sh_offset@0x18 (u64),
-    // sh_size@0x20 (u64).
-    let sh_at = |i: usize| -> Option<(u32, u64, u64)> {
-        let base = e_shoff.checked_add(i.checked_mul(e_shentsize)?)?;
-        let name = rd_u32(base)?;
-        let offset = rd_u64(base + 0x18)?;
-        let size = rd_u64(base + 0x20)?;
-        Some((name, offset, size))
-    };
-
-    // The section-header string table gives each section's name.
-    let (_, shstr_off, shstr_size) = sh_at(e_shstrndx)?;
-    let shstr_off = usize::try_from(shstr_off).ok()?;
-    let shstr_size = usize::try_from(shstr_size).ok()?;
-    let shstrtab = bytes.get(shstr_off..shstr_off.checked_add(shstr_size)?)?;
-
-    for i in 0..e_shnum {
-        let (name_off, off, size) = sh_at(i)?;
-        let name_off = name_off as usize;
-        // The name is a NUL-terminated string at `name_off` in shstrtab.
-        let name_bytes = shstrtab.get(name_off..)?;
-        let end = name_bytes.iter().position(|&b| b == 0).unwrap_or(name_bytes.len());
-        let name = std::str::from_utf8(name_bytes.get(..end)?).ok()?;
-        if name == section_name {
-            let off = usize::try_from(off).ok()?;
-            let size = usize::try_from(size).ok()?;
-            return bytes.get(off..off.checked_add(size)?).map(<[u8]>::to_vec);
-        }
-    }
-    None
-}
-
-/// The name of the ELF section the emitted binary carries its capability floor
-/// in. Read passively by [`read_elf_section`] at launch.
-pub const CAPFLOOR_SECTION: &str = ".ipe.capfloor";
-
 /// The marker that begins the capability-floor line embedded in the binary's
-/// `.rodata` (see the CLI's `capfloor_static_source`). [`scan_capfloor`] finds
-/// the floor by this marker, which survives `strip` (`.rodata` is allocated).
+/// `.rodata`.
+///
+/// See the CLI's `capfloor_static_source`; [`scan_capfloor`] finds the floor by
+/// this marker, which survives `strip` (`.rodata` is allocated).
 pub const CAPFLOOR_MARKER: &str = "ipe-capfloor 1 ";
 
 /// Scan a binary's bytes for the embedded capability-floor line and parse it —
@@ -1089,23 +1032,22 @@ pub const CAPFLOOR_MARKER: &str = "ipe-capfloor 1 ";
 pub fn scan_capfloor(bytes: &[u8]) -> Option<SandboxProfile> {
     let marker = CAPFLOOR_MARKER.as_bytes();
     let mut floors: Vec<SandboxProfile> = Vec::new();
-    let mut i = 0usize;
-    while i + marker.len() <= bytes.len() {
-        if &bytes[i..i + marker.len()] == marker {
-            // The line runs from the marker start to the first NUL or newline.
-            let start = i;
-            let mut end = start;
-            while end < bytes.len() && bytes[end] != 0 && bytes[end] != b'\n' {
-                end += 1;
-            }
-            if let Ok(line) = std::str::from_utf8(&bytes[start..end]) {
-                if let Ok(p) = parse_capfloor(line) {
-                    floors.push(p);
-                }
-            }
-            i = end.max(i + 1);
-        } else {
-            i += 1;
+    // Every window that starts with the marker begins a candidate floor line.
+    for (start, _) in bytes
+        .windows(marker.len())
+        .enumerate()
+        .filter(|(_, w)| *w == marker)
+    {
+        // The line runs from the marker to the first NUL or newline.
+        let rest = bytes.get(start..).unwrap_or(&[]);
+        let end = rest
+            .iter()
+            .position(|&b| b == 0 || b == b'\n')
+            .unwrap_or(rest.len());
+        if let Ok(line) = std::str::from_utf8(rest.get(..end).unwrap_or(&[]))
+            && let Ok(p) = parse_capfloor(line)
+        {
+            floors.push(p);
         }
     }
     let (first, rest) = floors.split_first()?;
@@ -1346,7 +1288,10 @@ mod tests {
         // the host /proc.
         let ro_root = joined.find("--ro-bind / /").expect("ro-bind root");
         let proc = joined.find("--proc /proc").expect("proc mask");
-        assert!(proc > ro_root, "proc mask must follow the ro-bind: {joined}");
+        assert!(
+            proc > ro_root,
+            "proc mask must follow the ro-bind: {joined}"
+        );
         // Seccomp filter attached.
         assert!(joined.contains("--seccomp 10"), "{joined}");
         // Resource caps then the payload, no shell.
@@ -1411,40 +1356,14 @@ mod tests {
             &host,
             &[OsString::from("app")],
         );
-        let joined: Vec<String> = argv.iter().map(|a| a.to_string_lossy().into_owned()).collect();
+        let joined: Vec<String> = argv
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
         let s = joined.join(" ");
         assert!(s.contains("--setenv DATABASE_URL postgres://x"), "{s}");
         // An absent named var is simply not re-exported.
         assert!(!s.contains("ABSENT"), "{s}");
-    }
-
-    #[test]
-    fn read_elf_section_rejects_non_elf_and_missing_sections_without_panicking() {
-        // Non-ELF input → None, never a panic.
-        assert_eq!(read_elf_section(b"not an elf", ".ipe.capfloor"), None);
-        assert_eq!(read_elf_section(&[], ".ipe.capfloor"), None);
-        // A truncated ELF magic + garbage → None (bounds-checked).
-        let mut fake = vec![0x7f, b'E', b'L', b'F', 2, 1];
-        fake.extend(std::iter::repeat_n(0u8, 200));
-        assert_eq!(read_elf_section(&fake, ".ipe.capfloor"), None);
-    }
-
-    #[test]
-    fn read_elf_section_finds_a_real_section_in_this_test_binary() {
-        // The test binary is a real ELF64-LE; a well-known always-present section
-        // (`.text`) must be found, proving the parser walks the header table.
-        // (`.ipe.capfloor` is absent here — that path is exercised by the None
-        // tests above and the CLI-level exec fixture.)
-        let self_path = std::env::current_exe().expect("current exe");
-        let bytes = std::fs::read(&self_path).expect("read self");
-        // Only assert on Linux/x86_64 where the ELF64-LE assumption holds.
-        if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-            assert!(
-                read_elf_section(&bytes, ".text").is_some(),
-                "the parser must locate .text in a real ELF64-LE binary"
-            );
-            assert_eq!(read_elf_section(&bytes, ".no.such.section"), None);
-        }
     }
 
     #[test]
@@ -1519,7 +1438,10 @@ mod tests {
         // Missing required field → refuse.
         assert!(parse_profile("ipe-profile 1\nnetwork true\n").is_err());
         // Malformed boolean → refuse.
-        assert!(parse_profile("ipe-profile 1\nnetwork yes\nfilesystem isolated\nsubprocess false\n").is_err());
+        assert!(
+            parse_profile("ipe-profile 1\nnetwork yes\nfilesystem isolated\nsubprocess false\n")
+                .is_err()
+        );
     }
 
     #[test]

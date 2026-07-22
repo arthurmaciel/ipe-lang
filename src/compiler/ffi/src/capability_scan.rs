@@ -134,17 +134,18 @@ const BARE_IDENTS: &[(&str, Capability)] = &[
     ("OpenOptions", Capability::Filesystem),
 ];
 
-/// Whether the runtime capability jail holds for the target a wrapper will be
-/// run/deployed on. This is the load-bearing per-target condition of the
-/// refuse-until-jail → admit-and-isolate hand-off: admitting a real-capability
-/// wrapper is safe ONLY where the jail actually confines it. Admitting globally
-/// would, on a refuse-gap platform (macOS without the Seatbelt path, Windows,
-/// BSD), mean admit-and-run-**unconfined** — strictly worse than refusing.
+/// Whether the runtime capability jail holds for a wrapper's run/deploy target.
+///
+/// This is the load-bearing per-target condition of the refuse-until-jail →
+/// admit-and-isolate hand-off: admitting a real-capability wrapper is safe ONLY
+/// where the jail actually confines it. Admitting globally would, on a
+/// refuse-gap platform (macOS without the Seatbelt path, Windows, BSD), mean
+/// admit-and-run-**unconfined** — strictly worse than refusing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JailForTarget {
-    /// The runtime jail holds on this target (Linux/x86_64 in the first cut): a
-    /// runtime-enforced axis is contained, so the wrapper may be admitted and
-    /// isolated.
+    /// The runtime jail holds on this target (`Linux`/`x86_64` in the first
+    /// cut): a runtime-enforced axis is contained, so the wrapper may be
+    /// admitted and isolated.
     Holds,
     /// The target is in the documented refuse-gap: no jail confines the emitted
     /// app there, so the refuse-until-jail posture STAYS — a runtime-enforced
@@ -186,9 +187,10 @@ pub const fn is_runtime_unenforceable_for(cap: Capability, jail: JailForTarget) 
     }
 }
 
-/// The pre-jail refuse-until-jail predicate, preserved for callers that have not
-/// yet threaded a target through. Equivalent to
-/// [`is_runtime_unenforceable_for`] with [`JailForTarget::RefuseGap`] — the
+/// The pre-jail refuse-until-jail predicate.
+///
+/// Preserved for callers that have not yet threaded a target through; equivalent
+/// to [`is_runtime_unenforceable_for`] with [`JailForTarget::RefuseGap`] — the
 /// conservative default (refuse) when the target's jail status is unknown.
 #[must_use]
 pub const fn is_runtime_unenforceable(cap: Capability) -> bool {
@@ -993,8 +995,11 @@ mod tests {
     fn reconcile_admits_a_network_wrapper_where_the_jail_holds() {
         // A declared-network wrapper, refused on a refuse-gap target, is ADMITTED
         // and isolated where the jail holds (the refuse-until-jail hand-off).
-        let declared: BTreeSet<Capability> = [Capability::Network].into_iter().collect();
-        let scan = scan_source("lib.rs", "pub fn f() { let _ = std::net::TcpStream::connect(\"x\"); }");
+        let declared: BTreeSet<Capability> = BTreeSet::from([Capability::Network]);
+        let scan = scan_source(
+            "lib.rs",
+            "pub fn f() { let _ = std::net::TcpStream::connect(\"x\"); }",
+        );
         assert!(matches!(
             reconcile_for(&declared, &scan, &[], JailForTarget::RefuseGap),
             Verdict::Refuse { .. }
@@ -1027,11 +1032,21 @@ mod tests {
         // contains them at runtime → admitted where it holds.
         let scan = scan_source("lib.rs", "pub fn f() -> i64 { 0 }");
         assert!(matches!(
-            reconcile_for(&BTreeSet::new(), &scan, &["reqwest".to_owned()], JailForTarget::RefuseGap),
+            reconcile_for(
+                &BTreeSet::new(),
+                &scan,
+                &["reqwest".to_owned()],
+                JailForTarget::RefuseGap
+            ),
             Verdict::Refuse { .. }
         ));
         assert!(matches!(
-            reconcile_for(&BTreeSet::new(), &scan, &["reqwest".to_owned()], JailForTarget::Holds),
+            reconcile_for(
+                &BTreeSet::new(),
+                &scan,
+                &["reqwest".to_owned()],
+                JailForTarget::Holds
+            ),
             Verdict::Admit { .. }
         ));
     }

@@ -78,7 +78,7 @@ const OFF_ARG0_LO: u32 = 16;
 /// The audit architecture this filter is built for. `AUDIT_ARCH_X86_64` =
 /// `EM_X86_64 (62) | __AUDIT_ARCH_64BIT (0x8000_0000) | __AUDIT_ARCH_LE
 /// (0x4000_0000)`.
-const AUDIT_ARCH_X86_64: u32 = 62 | 0x8000_0000 | 0x4000_0000;
+const AUDIT_ARCH_X86_64: u32 = 0x3E | 0x8000_0000 | 0x4000_0000;
 
 /// seccomp return actions (from <linux/seccomp.h>).
 const SECCOMP_RET_KILL_PROCESS: u32 = 0x8000_0000;
@@ -221,15 +221,15 @@ pub fn subprocess_deny_program(allow_subprocess: bool) -> Option<Vec<SockFilter>
 /// arch-gated entry point.
 #[must_use]
 pub fn build_program(allow_subprocess: bool) -> Vec<SockFilter> {
-    let mut prog: Vec<SockFilter> = Vec::new();
-
     // 1. Load the audit arch and refuse (kill) if it is not the one we built
-    //    for. A mismatched ABI has different syscall numbers, so an
-    //    unchecked filter would be a silent no-op — fail-closed here instead.
-    prog.push(stmt(BPF_LD | BPF_W | BPF_ABS, OFF_ARCH));
-    // if arch == X86_64 → skip the kill (jump +1); else fall through to kill.
-    prog.push(jump(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_X86_64, 1, 0));
-    prog.push(ret(SECCOMP_RET_KILL_PROCESS));
+    //    for. A mismatched ABI has different syscall numbers, so an unchecked
+    //    filter would be a silent no-op — fail-closed here instead. The JEQ
+    //    skips the kill (jump +1) when the arch matches; else it falls through.
+    let mut prog: Vec<SockFilter> = vec![
+        stmt(BPF_LD | BPF_W | BPF_ABS, OFF_ARCH),
+        jump(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_X86_64, 1, 0),
+        ret(SECCOMP_RET_KILL_PROCESS),
+    ];
 
     // 2. Load the syscall number for the per-syscall decisions below.
     prog.push(stmt(BPF_LD | BPF_W | BPF_ABS, OFF_NR));
@@ -277,7 +277,12 @@ pub fn build_program(allow_subprocess: bool) -> Vec<SockFilter> {
 
 /// A statement (no jump): `jt`/`jf` are 0.
 const fn stmt(code: u16, k: u32) -> SockFilter {
-    SockFilter { code, jt: 0, jf: 0, k }
+    SockFilter {
+        code,
+        jt: 0,
+        jf: 0,
+        k,
+    }
 }
 
 /// A conditional jump.
@@ -287,7 +292,12 @@ const fn jump(code: u16, k: u32, jt: u8, jf: u8) -> SockFilter {
 
 /// A return (the low 16 bits of `code` are `BPF_RET`; `k` is the action).
 const fn ret(k: u32) -> SockFilter {
-    SockFilter { code: BPF_RET | BPF_K, jt: 0, jf: 0, k }
+    SockFilter {
+        code: BPF_RET | BPF_K,
+        jt: 0,
+        jf: 0,
+        k,
+    }
 }
 
 /// The whole program as the flat little-endian byte stream bubblewrap loads
@@ -302,6 +312,11 @@ pub fn program_bytes(prog: &[SockFilter]) -> Vec<u8> {
 }
 
 #[cfg(test)]
+// The tests assert on the exact instruction sequence of a KNOWN-length program
+// by index (`prog[c0]`, `prog[c0 + 2]`, …); a panic on an out-of-range index is
+// itself a correct test failure (the program shape drifted), so raw indexing is
+// the clearest, safe form here.
+#[allow(clippy::indexing_slicing)]
 mod tests {
     use super::*;
 
@@ -437,9 +452,7 @@ mod tests {
         // flag discriminator, no create denials.
         let prog = build_program(true);
         assert!(
-            !prog
-                .iter()
-                .any(|i| i.code == (BPF_JMP | BPF_JSET | BPF_K)),
+            !prog.iter().any(|i| i.code == (BPF_JMP | BPF_JSET | BPF_K)),
             "no clone-flag JSET when subprocess is granted"
         );
     }
@@ -496,7 +509,11 @@ mod tests {
         // c0 jf → default ALLOW (the last instruction).
         let not_clone_target = c0 + 1 + prog[c0].jf as usize;
         assert_eq!(prog[not_clone_target], ret(SECCOMP_RET_ALLOW));
-        assert_eq!(not_clone_target, prog.len() - 1, "not-clone → default allow");
+        assert_eq!(
+            not_clone_target,
+            prog.len() - 1,
+            "not-clone → default allow"
+        );
         // c2 = JSET CLONE_THREAD, its jf → EPERM.
         let c2 = c0 + 2;
         assert_eq!(prog[c2].code, BPF_JMP | BPF_JSET | BPF_K);

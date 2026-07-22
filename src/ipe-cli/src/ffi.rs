@@ -1151,7 +1151,8 @@ fn enforce_wrapper_capabilities(
 
     match ipe_ffi::capability_scan::reconcile_for(declared, &scan, &non_std_deps, jail) {
         ipe_ffi::capability_scan::Verdict::Admit { declared } => {
-            let contains_native_ffi = declared.contains(&ipe_ffi::capability_scan::Capability::NativeFfi);
+            let contains_native_ffi =
+                declared.contains(&ipe_ffi::capability_scan::Capability::NativeFfi);
             if declared.is_empty() {
                 println!("wrapper capability check: no capabilities — pure compute.");
             } else {

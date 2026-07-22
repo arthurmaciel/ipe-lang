@@ -1904,6 +1904,9 @@ fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
 /// [`CliError`] and print to stderr via the normal error path. The binary
 /// exec step replaces the current process (Unix) or propagates the child's
 /// exit code (all platforms) so the caller sees it as `ipe run`'s own exit.
+// A linear pipeline (compile → cargo build → resolve capabilities → jail →
+// exec); the steps share enough locals that splitting reads worse than the whole.
+#[allow(clippy::too_many_lines)]
 fn run_run(rest: &[String]) -> Result<(), CliError> {
     let args = cli_args::parse_run(rest)?;
     let bin_args = args.bin_args;
@@ -1993,11 +1996,8 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
     let driver = manifest_parsed
         .as_ref()
         .map_or(ipe_backend_rust::DbDriver::Sqlite, |m| m.driver);
-    let resolved = run_sandbox::resolve_for_run(
-        manifest_parsed.as_ref(),
-        manifest.as_deref(),
-        &entry_path,
-    )?;
+    let resolved =
+        run_sandbox::resolve_for_run(manifest_parsed.as_ref(), manifest.as_deref(), &entry_path)?;
     let union = resolved.union();
     let profile = run_sandbox::build_profile(&resolved, driver)?;
     let bin_args_os: Vec<std::ffi::OsString> =
@@ -2013,6 +2013,7 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
 
     #[cfg(unix)]
     {
+        use std::os::unix::process::CommandExt as _;
         // On Linux the jail is established and `exec_in_run_jail` replaces this
         // process with the jailed app (does not return on success). On a
         // refuse-gap platform or a missing primitive, the fail-closed policy
@@ -2026,7 +2027,6 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
             &bin_args_os,
         )?;
         // Reached only when the override permitted a low-value unconfined run.
-        use std::os::unix::process::CommandExt as _;
         let mut cmd = std::process::Command::new(&bin);
         cmd.args(&bin_args);
         let err = cmd.exec();
@@ -2084,14 +2084,18 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
 /// check, or a fail-closed jail refusal.
 fn run_exec(rest: &[String]) -> Result<(), CliError> {
     // Split `<dir> [-- args…]`.
-    let (dir_arg, app_args) = match rest.iter().position(|a| a == "--") {
-        Some(i) => (rest.get(..i).unwrap_or(&[]), rest.get(i + 1..).unwrap_or(&[])),
-        None => (rest, &[][..]),
-    };
-    let dir = match dir_arg.first() {
-        Some(d) => PathBuf::from(d),
-        None => PathBuf::from("out").join("rust"),
-    };
+    let (dir_arg, app_args) = rest
+        .iter()
+        .position(|a| a == "--")
+        .map_or((rest, &[][..]), |i| {
+            (
+                rest.get(..i).unwrap_or(&[]),
+                rest.get(i + 1..).unwrap_or(&[]),
+            )
+        });
+    let dir = dir_arg
+        .first()
+        .map_or_else(|| PathBuf::from("out").join("rust"), PathBuf::from);
     if !dir.is_dir() {
         return Err(CliError::UsageOwned(format!(
             "ipe exec: no artifact directory at {}",
@@ -2147,14 +2151,20 @@ fn run_exec(rest: &[String]) -> Result<(), CliError> {
         let mut cmd = std::process::Command::new(&bin);
         cmd.args(app_args);
         let err = cmd.exec();
-        Err(CliError::Io { path: bin, source: err })
+        Err(CliError::Io {
+            path: bin,
+            source: err,
+        })
     }
     #[cfg(not(unix))]
     {
         let status = std::process::Command::new(&bin)
             .args(app_args)
             .status()
-            .map_err(|e| CliError::Io { path: bin.clone(), source: e })?;
+            .map_err(|e| CliError::Io {
+                path: bin.clone(),
+                source: e,
+            })?;
         if !status.success() {
             return Err(CliError::UsageOwned(format!(
                 "ipe-app exited with code {}",

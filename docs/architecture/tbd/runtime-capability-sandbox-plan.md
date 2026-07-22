@@ -1,5 +1,17 @@
 # Runtime capability sandbox — spec + implementation plan
 
+> **Status: first cut IMPLEMENTED.** The Linux jail (`ipe_sandbox::run_jail` +
+> `ipe_sandbox::seccomp`), the `ipe run` wire, the `ipe build` artifact profile
+> with an embedded capability floor, the `ipe exec` launcher, and the per-target
+> admit-and-isolate hand-off are in place. macOS/other platforms are the
+> documented refuse-gap (option 2 below). One implementation note refines this
+> plan: modern glibc (>= 2.34) routes `pthread_create` through `clone3`, which
+> seccomp cannot filter by flags, so `clone3` is allowed unconditionally (a
+> `clone3`-spawned child is confined identically to the parent by the inherited
+> filter + namespaces); the `subprocess` axis therefore gates the portable spawn
+> paths (`fork`/`vfork`/legacy-process-`clone`) rather than every possible
+> process creation. See the seccomp module for the full rationale.
+
 A program's capability set is *inferred* from pure Ipê and *declared* for native
 `Rust.` code, and the manifest gate proves the declaration is honest. But there is
 today **no jail around the emitted binary when it runs**: `ipe_sandbox` confines

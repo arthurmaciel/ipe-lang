@@ -15,13 +15,23 @@
 //!   from a network-GRANTED jail is not blocked by the namespace.
 
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
+// This is an integration test harness: `expect`/`unwrap` on setup steps make a
+// mis-set-up test fail loudly (the correct behavior for a test), and the raw
+// FFI + slice handling mirror the production `run_jail` glue it exercises.
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::redundant_closure_for_method_calls,
+    clippy::map_unwrap_or
+)]
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use ipe_sandbox::run_jail::{
-    run_jail_argv, FilesystemScope, RunJailTools, RunResourceLimits, SandboxProfile,
+    FilesystemScope, RunJailTools, RunResourceLimits, SandboxProfile, run_jail_argv,
 };
 
 /// Serialize the jailed runs: each creates a `memfd` and clears its

@@ -17,17 +17,16 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use ipe_ir::Capability;
-use ipe_sandbox::run_jail::{
-    self, DatabaseAxis, RunJailDefect, SandboxProfile,
-};
+use ipe_sandbox::run_jail::{self, DatabaseAxis, RunJailDefect, SandboxProfile};
 
 use crate::CliError;
 use crate::project::ProjectManifest;
 
-/// The narrow, run-jail-specific unsandboxed override — DISTINCT from the
-/// FFI-compile override (`IPE_FFI_ALLOW_UNSANDBOXED`). It downgrades the
-/// refusal to a warning ONLY for a pure / low-value-axis program; for any
-/// high-value native axis it is a hard error (there is no flag that runs
+/// The narrow, run-jail-specific unsandboxed override.
+///
+/// DISTINCT from the FFI-compile override (`IPE_FFI_ALLOW_UNSANDBOXED`). It
+/// downgrades the refusal to a warning ONLY for a pure / low-value-axis program;
+/// for any high-value native axis it is a hard error (there is no flag that runs
 /// admitted native code unconfined).
 pub const OVERRIDE_ENV: &str = "IPE_ALLOW_UNSANDBOXED";
 
@@ -47,13 +46,17 @@ impl ResolvedCapabilities {
     }
 }
 
-/// Lower a database driver to the concrete axis the profile needs. Every
-/// project has a resolved driver (it defaults to SQLite), so this is total —
-/// there is no "unknown driver" path at `ipe run` (the fail-closed
-/// [`DatabaseAxis::NotApplicable`] path exists for callers that genuinely
-/// cannot resolve one).
+/// Lower a database driver to the concrete axis the profile needs.
+///
+/// Every project has a resolved driver (it defaults to `SQLite`), so this is
+/// total — there is no "unknown driver" path at `ipe run` (the fail-closed
+/// [`DatabaseAxis::NotApplicable`] path exists for callers that genuinely cannot
+/// resolve one).
 #[must_use]
-pub fn axis_for_driver(driver: ipe_backend_rust::DbDriver, has_database: bool) -> DatabaseAxis {
+pub const fn axis_for_driver(
+    driver: ipe_backend_rust::DbDriver,
+    has_database: bool,
+) -> DatabaseAxis {
     if !has_database {
         return DatabaseAxis::NotApplicable;
     }
@@ -133,7 +136,9 @@ pub fn resolve_refusal(
          native axis ({}) that would run with your full authority unconfined. There is no flag \
          that runs admitted native code without a jail — install the jail primitives, or narrow \
          the program.",
-        RunJailDefect::UnsupportedPlatform { reason: "" }.code().as_str(),
+        RunJailDefect::UnsupportedPlatform { reason: "" }
+            .code()
+            .as_str(),
         names.join(", ")
     )))
 }
@@ -188,8 +193,7 @@ pub fn make_scoped_tmp() -> Result<PathBuf, CliError> {
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
+            .map_or(0, |d| d.as_nanos())
     );
     let dir = base.join(unique);
     std::fs::create_dir_all(&dir).map_err(|e| CliError::Io {
@@ -199,150 +203,12 @@ pub fn make_scoped_tmp() -> Result<PathBuf, CliError> {
     Ok(dir)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn caps(inferred: &[Capability], declared: &[Capability]) -> ResolvedCapabilities {
-        ResolvedCapabilities {
-            inferred: inferred.iter().copied().collect(),
-            declared: declared.iter().copied().collect(),
-        }
-    }
-
-    #[test]
-    fn union_merges_inferred_and_declared() {
-        let c = caps(&[Capability::Network], &[Capability::Filesystem]);
-        let u = c.union();
-        assert!(u.contains(&Capability::Network));
-        assert!(u.contains(&Capability::Filesystem));
-    }
-
-    #[test]
-    fn sqlite_driver_lowers_database_to_filesystem() {
-        assert_eq!(
-            axis_for_driver(ipe_backend_rust::DbDriver::Sqlite, true),
-            DatabaseAxis::Filesystem
-        );
-    }
-
-    #[test]
-    fn postgres_driver_lowers_database_to_network() {
-        assert_eq!(
-            axis_for_driver(ipe_backend_rust::DbDriver::Postgres, true),
-            DatabaseAxis::Network
-        );
-    }
-
-    #[test]
-    fn no_database_axis_is_not_applicable() {
-        assert_eq!(
-            axis_for_driver(ipe_backend_rust::DbDriver::Sqlite, false),
-            DatabaseAxis::NotApplicable
-        );
-    }
-
-    #[test]
-    fn build_profile_grants_the_union() {
-        let c = caps(&[Capability::Network], &[Capability::Subprocess]);
-        let p = build_profile(&c, ipe_backend_rust::DbDriver::Sqlite).expect("profile");
-        assert!(p.network);
-        assert!(p.subprocess);
-    }
-
-    #[test]
-    fn refusal_without_override_is_verbatim() {
-        let defect = RunJailDefect::PrimitiveUnavailable {
-            missing: vec!["bwrap"],
-        };
-        let union: BTreeSet<Capability> = [Capability::Network].into_iter().collect();
-        // No override env set in this test process.
-        let r = resolve_refusal(&defect, &union);
-        assert!(r.is_err());
-        let msg = format!("{}", r.unwrap_err());
-        assert!(msg.contains("IPE-F4413"), "{msg}");
-    }
-
-    #[test]
-    fn a_low_value_only_set_is_recognised() {
-        let low: BTreeSet<Capability> = [Capability::Clock, Capability::Random].into_iter().collect();
-        assert!(run_jail::is_low_value_only(&low));
-        let high: BTreeSet<Capability> = [Capability::Network].into_iter().collect();
-        assert!(!run_jail::is_low_value_only(&high));
-    }
-
-    #[test]
-    fn floor_static_source_carries_the_capfloor_marker() {
-        let p = SandboxProfile {
-            network: true,
-            ..SandboxProfile::maximally_isolated()
-        };
-        let src = capfloor_static_source(&p);
-        // The floor LINE is encoded as byte values, not literal text — so assert
-        // on the static shape and confirm the byte array decodes to the marker.
-        assert!(src.contains("IPE_CAPABILITY_FLOOR"), "{src}");
-        assert!(src.contains("#[used]"), "{src}");
-        // The bytes are the exact `to_capfloor_line()` output.
-        let line = p.to_capfloor_line();
-        let first_byte = line.as_bytes()[0].to_string();
-        assert!(src.contains(&format!("[{first_byte}, ")), "byte array present: {src}");
-        assert!(line.contains("net=true"), "line grants network: {line}");
-    }
-
-    #[test]
-    fn inject_floor_reference_is_idempotent_under_strip_and_reinject() {
-        // A minimal emitted-main shape.
-        let base = "fn ipe_main() {}\n\nfn main() {\n    run();\n}\n";
-        let profile = SandboxProfile::maximally_isolated();
-        // First injection: reference inside main + static appended.
-        let referenced = inject_floor_reference(base).expect("anchor present");
-        let once = format!("{referenced}{}", capfloor_static_source(&profile));
-        assert!(once.contains("black_box(&IPE_CAPABILITY_FLOOR)"));
-        // Re-emitting: strip then re-inject must not stack a second block.
-        let stripped = strip_capfloor_block(&once);
-        assert!(!stripped.contains("IPE_CAPABILITY_FLOOR"), "strip removed the ref+static");
-        let re = inject_floor_reference(&stripped).expect("anchor present");
-        let twice = format!("{re}{}", capfloor_static_source(&profile));
-        assert_eq!(
-            twice.matches("static IPE_CAPABILITY_FLOOR").count(),
-            1,
-            "exactly one floor static after re-emit"
-        );
-        assert_eq!(
-            twice.matches("black_box(&IPE_CAPABILITY_FLOOR)").count(),
-            1,
-            "exactly one floor reference after re-emit"
-        );
-    }
-
-    #[test]
-    fn inject_floor_reference_refuses_a_missing_main_anchor() {
-        assert!(inject_floor_reference("fn not_main() {}\n").is_err());
-    }
-
-    #[test]
-    fn profile_axes_reconstructs_the_granted_set() {
-        use ipe_sandbox::run_jail::FilesystemScope;
-        let p = SandboxProfile {
-            network: true,
-            filesystem: FilesystemScope::WorkingTreeReadWrite,
-            subprocess: false,
-            env_allowlist: vec!["X".to_owned()],
-            limits: ipe_sandbox::run_jail::RunResourceLimits::default(),
-        };
-        let axes = profile_axes(&p);
-        assert!(axes.contains(&Capability::Network));
-        assert!(axes.contains(&Capability::Filesystem));
-        assert!(axes.contains(&Capability::Env));
-        assert!(!axes.contains(&Capability::Subprocess));
-    }
-}
-
-/// Reconstruct the capability axes a profile grants, as a `Capability` set — the
-/// input to the override/refusal policy for a deployed artifact (which has no
-/// source to re-infer from). `database` is not reconstructed: it was already
-/// lowered to `network`/`filesystem` when the profile was built, so the axes
-/// here are the concrete OS-enforced ones.
+/// Reconstruct the capability axes a profile grants, as a `Capability` set.
+///
+/// This is the input to the override/refusal policy for a deployed artifact
+/// (which has no source to re-infer from). `database` is not reconstructed: it
+/// was already lowered to `network`/`filesystem` when the profile was built, so
+/// the axes here are the concrete OS-enforced ones.
 #[must_use]
 pub fn profile_axes(profile: &SandboxProfile) -> BTreeSet<Capability> {
     use ipe_sandbox::run_jail::FilesystemScope;
@@ -362,13 +228,14 @@ pub fn profile_axes(profile: &SandboxProfile) -> BTreeSet<Capability> {
     set
 }
 
-/// The Rust source of a `#[used] #[link_section]` static that embeds the
-/// capability floor into the emitted binary's `.ipe.capfloor` ELF section.
+/// The Rust source of a `#[used]` static that embeds the capability floor into
+/// the emitted binary's `.rodata`.
 ///
-/// `ipe exec` reads this section *passively off disk* (never by executing the
-/// binary) as the authoritative floor a tampered `ipe.profile` cannot go below.
-/// `#[used]` keeps the linker from garbage-collecting an otherwise-unreferenced
-/// static; the section name matches [`ipe_sandbox::run_jail::CAPFLOOR_SECTION`].
+/// `ipe exec` scans this *passively off disk* (never by executing the binary) as
+/// the authoritative floor a tampered `ipe.profile` cannot go below —
+/// [`ipe_sandbox::run_jail::scan_capfloor`] finds it by its
+/// [`ipe_sandbox::run_jail::CAPFLOOR_MARKER`] prefix. The floor lands in
+/// `.rodata` (referenced from `fn main`) so it survives linker GC and `strip`.
 #[must_use]
 pub fn capfloor_static_source(profile: &SandboxProfile) -> String {
     let line = profile.to_capfloor_line();
@@ -401,13 +268,14 @@ pub fn capfloor_static_source(profile: &SandboxProfile) -> String {
     )
 }
 
-/// Write the deployable enforcement artifacts into an emitted native project:
-/// the strictly-parsed `ipe.profile` next to the crate, and the capability-floor
-/// static appended to the emitted `src/main.rs` (embedded in the binary).
+/// Write the deployable enforcement artifacts into an emitted native project.
 ///
-/// The profile is a *convenience mirror* the launcher parses; the authoritative
-/// floor is the embedded section. A profile weaker than the floor is refused at
-/// launch (`ipe exec`), so tampering the mirror alone cannot under-isolate.
+/// Two artifacts: the strictly-parsed `ipe.profile` next to the crate, and the
+/// capability-floor static appended to the emitted `src/main.rs` (embedded in
+/// the binary). The profile is a *convenience mirror* the launcher parses; the
+/// authoritative floor is the embedded static. A profile weaker than the floor
+/// is refused at launch (`ipe exec`), so tampering the mirror alone cannot
+/// under-isolate.
 ///
 /// # Errors
 ///
@@ -488,9 +356,11 @@ fn inject_floor_reference(src: &str) -> Result<String, CliError> {
     Ok(out)
 }
 
-/// Read and verify the deployed artifact's floor against its `ipe.profile`, then
-/// return the profile to jail with. The authoritative floor is the binary's
-/// embedded `.ipe.capfloor` section, read passively.
+/// Read and verify the deployed artifact's floor against its `ipe.profile`.
+///
+/// Returns the profile to jail with. The authoritative floor is the binary's
+/// embedded `.rodata` capfloor line, scanned passively (the binary is never
+/// executed).
 ///
 /// # Errors
 ///
@@ -555,20 +425,165 @@ pub fn resolve_for_run(
     manifest_path: Option<&Path>,
     entry: &Path,
 ) -> Result<ResolvedCapabilities, CliError> {
-    match (manifest, manifest_path) {
-        (Some(m), Some(mpath)) => {
-            let inferred = crate::infer_package_capabilities(mpath)?;
-            Ok(ResolvedCapabilities {
-                inferred,
-                declared: m.capabilities.clone(),
-            })
+    if let (Some(m), Some(mpath)) = (manifest, manifest_path) {
+        // A manifest project: the package-wide inferred union + the manifest's
+        // declared set.
+        let inferred = crate::infer_package_capabilities(mpath)?;
+        Ok(ResolvedCapabilities {
+            inferred,
+            declared: m.capabilities.clone(),
+        })
+    } else {
+        // A single file: inference over the entry alone, no declared set.
+        let program = crate::lower_entry(entry)?;
+        Ok(ResolvedCapabilities {
+            inferred: ipe_lower::program_capabilities(&program),
+            declared: BTreeSet::new(),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn caps(inferred: &[Capability], declared: &[Capability]) -> ResolvedCapabilities {
+        ResolvedCapabilities {
+            inferred: inferred.iter().copied().collect(),
+            declared: declared.iter().copied().collect(),
         }
-        _ => {
-            let program = crate::lower_entry(entry)?;
-            Ok(ResolvedCapabilities {
-                inferred: ipe_lower::program_capabilities(&program),
-                declared: BTreeSet::new(),
-            })
-        }
+    }
+
+    #[test]
+    fn union_merges_inferred_and_declared() {
+        let c = caps(&[Capability::Network], &[Capability::Filesystem]);
+        let u = c.union();
+        assert!(u.contains(&Capability::Network));
+        assert!(u.contains(&Capability::Filesystem));
+    }
+
+    #[test]
+    fn sqlite_driver_lowers_database_to_filesystem() {
+        assert_eq!(
+            axis_for_driver(ipe_backend_rust::DbDriver::Sqlite, true),
+            DatabaseAxis::Filesystem
+        );
+    }
+
+    #[test]
+    fn postgres_driver_lowers_database_to_network() {
+        assert_eq!(
+            axis_for_driver(ipe_backend_rust::DbDriver::Postgres, true),
+            DatabaseAxis::Network
+        );
+    }
+
+    #[test]
+    fn no_database_axis_is_not_applicable() {
+        assert_eq!(
+            axis_for_driver(ipe_backend_rust::DbDriver::Sqlite, false),
+            DatabaseAxis::NotApplicable
+        );
+    }
+
+    #[test]
+    fn build_profile_grants_the_union() {
+        let c = caps(&[Capability::Network], &[Capability::Subprocess]);
+        let p = build_profile(&c, ipe_backend_rust::DbDriver::Sqlite).expect("profile");
+        assert!(p.network);
+        assert!(p.subprocess);
+    }
+
+    #[test]
+    fn refusal_without_override_is_verbatim() {
+        let defect = RunJailDefect::PrimitiveUnavailable {
+            missing: vec!["bwrap"],
+        };
+        let union: BTreeSet<Capability> = BTreeSet::from([Capability::Network]);
+        // No override env set in this test process.
+        let r = resolve_refusal(&defect, &union);
+        assert!(r.is_err());
+        let msg = format!("{}", r.unwrap_err());
+        assert!(msg.contains("IPE-F4413"), "{msg}");
+    }
+
+    #[test]
+    fn a_low_value_only_set_is_recognised() {
+        let low: BTreeSet<Capability> = BTreeSet::from([Capability::Clock, Capability::Random]);
+        assert!(run_jail::is_low_value_only(&low));
+        let high: BTreeSet<Capability> = BTreeSet::from([Capability::Network]);
+        assert!(!run_jail::is_low_value_only(&high));
+    }
+
+    #[test]
+    fn floor_static_source_carries_the_capfloor_marker() {
+        let p = SandboxProfile {
+            network: true,
+            ..SandboxProfile::maximally_isolated()
+        };
+        let src = capfloor_static_source(&p);
+        // The floor LINE is encoded as byte values, not literal text — so assert
+        // on the static shape and confirm the byte array decodes to the marker.
+        assert!(src.contains("IPE_CAPABILITY_FLOOR"), "{src}");
+        assert!(src.contains("#[used]"), "{src}");
+        // The bytes are the exact `to_capfloor_line()` output.
+        let line = p.to_capfloor_line();
+        let first_byte = line.as_bytes().first().copied().unwrap_or(0).to_string();
+        assert!(
+            src.contains(&format!("[{first_byte}, ")),
+            "byte array present: {src}"
+        );
+        assert!(line.contains("net=true"), "line grants network: {line}");
+    }
+
+    #[test]
+    fn inject_floor_reference_is_idempotent_under_strip_and_reinject() {
+        // A minimal emitted-main shape.
+        let base = "fn ipe_main() {}\n\nfn main() {\n    run();\n}\n";
+        let profile = SandboxProfile::maximally_isolated();
+        // First injection: reference inside main + static appended.
+        let referenced = inject_floor_reference(base).expect("anchor present");
+        let once = format!("{referenced}{}", capfloor_static_source(&profile));
+        assert!(once.contains("black_box(&IPE_CAPABILITY_FLOOR)"));
+        // Re-emitting: strip then re-inject must not stack a second block.
+        let stripped = strip_capfloor_block(&once);
+        assert!(
+            !stripped.contains("IPE_CAPABILITY_FLOOR"),
+            "strip removed the ref+static"
+        );
+        let re = inject_floor_reference(&stripped).expect("anchor present");
+        let twice = format!("{re}{}", capfloor_static_source(&profile));
+        assert_eq!(
+            twice.matches("static IPE_CAPABILITY_FLOOR").count(),
+            1,
+            "exactly one floor static after re-emit"
+        );
+        assert_eq!(
+            twice.matches("black_box(&IPE_CAPABILITY_FLOOR)").count(),
+            1,
+            "exactly one floor reference after re-emit"
+        );
+    }
+
+    #[test]
+    fn inject_floor_reference_refuses_a_missing_main_anchor() {
+        assert!(inject_floor_reference("fn not_main() {}\n").is_err());
+    }
+
+    #[test]
+    fn profile_axes_reconstructs_the_granted_set() {
+        use ipe_sandbox::run_jail::FilesystemScope;
+        let p = SandboxProfile {
+            network: true,
+            filesystem: FilesystemScope::WorkingTreeReadWrite,
+            subprocess: false,
+            env_allowlist: vec!["X".to_owned()],
+            limits: ipe_sandbox::run_jail::RunResourceLimits::default(),
+        };
+        let axes = profile_axes(&p);
+        assert!(axes.contains(&Capability::Network));
+        assert!(axes.contains(&Capability::Filesystem));
+        assert!(axes.contains(&Capability::Env));
+        assert!(!axes.contains(&Capability::Subprocess));
     }
 }
