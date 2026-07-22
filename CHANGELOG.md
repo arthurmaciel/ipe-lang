@@ -10,6 +10,14 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.14](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.13...ipe-v0.1.14) (2026-07-22)
+
+
+### Bug Fixes
+
+* **ci:** install jail primitives for static e2e + pin goldens to LF ([#86](https://github.com/arthurmaciel/ipe-lang/issues/86)) ([dbdd2a0](https://github.com/arthurmaciel/ipe-lang/commit/dbdd2a0bdf477b27f10e0bf6caed149a0f9ada1b))
+* **sandbox:** skip run-jail e2e when the environment cannot establish a jail, not only when bwrap is absent ([#380](https://github.com/arthurmaciel/ipe-lang/issues/380)) ([#88](https://github.com/arthurmaciel/ipe-lang/issues/88)) ([43b2f7f](https://github.com/arthurmaciel/ipe-lang/commit/43b2f7fe2bf58c3f7af2f7dcb09736bf7cfc94ec))
+
 ## [0.1.13](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.12...ipe-v0.1.13) (2026-07-22)
 
 
