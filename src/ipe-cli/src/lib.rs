@@ -31,6 +31,7 @@ mod lsp;
 pub mod pkg;
 pub mod project;
 pub mod resolve;
+pub mod run_sandbox;
 pub mod style;
 /// The embedded Ipê standard-library source now lives in the dependency-free
 /// [`ipe_stdlib`] leaf crate so the WebAssembly frontend can share one copy.
@@ -1551,6 +1552,7 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
         Some((cmd, rest)) if cmd == "init" => with_help_on_misuse("init", init::run_init(rest)),
         Some((cmd, rest)) if cmd == "build" => with_help_on_misuse("build", run_build(rest)),
         Some((cmd, rest)) if cmd == "run" => with_help_on_misuse("run", run_run(rest)),
+        Some((cmd, rest)) if cmd == "exec" => with_help_on_misuse("exec", run_exec(rest)),
         Some((cmd, rest)) if cmd == "watch" => with_help_on_misuse("watch", run_watch(rest)),
         Some((cmd, rest)) if cmd == "explain" => with_help_on_misuse("explain", run_explain(rest)),
         Some((cmd, rest)) if cmd == "capabilities" => {
@@ -1748,7 +1750,7 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
     // No ipe.toml found: compile entry + all sibling .ipe files in the same
     // directory. Byte-identical to `build` when the directory holds only the
     // entry file (regression-covered by the golden suite).
-    manifest.map_or_else(
+    manifest.as_ref().map_or_else(
         || {
             build_with_sibling_discovery_with_options(
                 &entry_path,
@@ -1757,11 +1759,31 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
                 options.clone(),
             )
         },
-        |m| build_project_with_options(&m, &out_dir, &runtime_dir, options.clone()),
+        |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
     )?;
 
     if wasm_target {
         bundle_wasm(&out_dir)?;
+    } else {
+        // A native build artifact carries its own runtime enforcement: an
+        // `ipe.profile` mirror plus the authoritative capability floor embedded
+        // in the binary. `ipe exec <out_dir>` reads these and applies the jail,
+        // so the enforcement travels with a copied-off-host artifact. (A wasm
+        // bundle has no native binary to jail.)
+        let manifest_parsed = match &manifest {
+            Some(m) => Some(project::parse_manifest(m)?),
+            None => None,
+        };
+        let driver = manifest_parsed
+            .as_ref()
+            .map_or(ipe_backend_rust::DbDriver::Sqlite, |m| m.driver);
+        let resolved = run_sandbox::resolve_for_run(
+            manifest_parsed.as_ref(),
+            manifest.as_deref(),
+            &entry_path,
+        )?;
+        let profile = run_sandbox::build_profile(&resolved, driver)?;
+        run_sandbox::write_build_artifacts(&out_dir, &profile)?;
     }
     Ok(())
 }
@@ -1882,6 +1904,9 @@ fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
 /// [`CliError`] and print to stderr via the normal error path. The binary
 /// exec step replaces the current process (Unix) or propagates the child's
 /// exit code (all platforms) so the caller sees it as `ipe run`'s own exit.
+// A linear pipeline (compile → cargo build → resolve capabilities → jail →
+// exec); the steps share enough locals that splitting reads worse than the whole.
+#[allow(clippy::too_many_lines)]
 fn run_run(rest: &[String]) -> Result<(), CliError> {
     let args = cli_args::parse_run(rest)?;
     let bin_args = args.bin_args;
@@ -1912,7 +1937,7 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
         wasm_hydrate_mode: false,
     };
 
-    manifest.map_or_else(
+    manifest.as_ref().map_or_else(
         || {
             build_with_sibling_discovery_with_options(
                 &entry_path,
@@ -1921,7 +1946,7 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
                 options.clone(),
             )
         },
-        |m| build_project_with_options(&m, &out_dir, &runtime_dir, options.clone()),
+        |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
     )?;
 
     // --- Step 2: cargo build the emitted project ---
@@ -1958,18 +1983,52 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
     }
     bin.push("debug");
     bin.push("ipe-app");
-    let mut cmd = std::process::Command::new(&bin);
-    cmd.args(bin_args);
 
-    // On Unix, replace the current process image (exec) so signals and
-    // process-group membership propagate cleanly. On other platforms (Windows),
-    // spawn-and-wait is the only option.
+    // --- Step 3a: resolve the capability set and build the runtime jail ---
+    // The jail confines the emitted app to `inferred ∪ declared`. A declared
+    // effect works; an undeclared one fails at the OS boundary. Fail-closed: a
+    // missing primitive refuses (never runs unconfined), except the narrow
+    // low-value override.
+    let manifest_parsed = match &manifest {
+        Some(m) => Some(project::parse_manifest(m)?),
+        None => None,
+    };
+    let driver = manifest_parsed
+        .as_ref()
+        .map_or(ipe_backend_rust::DbDriver::Sqlite, |m| m.driver);
+    let resolved =
+        run_sandbox::resolve_for_run(manifest_parsed.as_ref(), manifest.as_deref(), &entry_path)?;
+    let union = resolved.union();
+    let profile = run_sandbox::build_profile(&resolved, driver)?;
+    let bin_args_os: Vec<std::ffi::OsString> =
+        bin_args.iter().map(std::ffi::OsString::from).collect();
+
+    // The scoped writable tempdir (the sole writable mount when `filesystem` is
+    // absent) and the working tree (bound read-write only when it is granted).
+    let scoped_tmp = run_sandbox::make_scoped_tmp()?;
+    let working_tree = std::env::current_dir().map_err(|e| CliError::Io {
+        path: PathBuf::from("."),
+        source: e,
+    })?;
+
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;
-        // `exec` does not return on success; any returned error is an OS failure.
-        // This block is the function tail on Unix (the `#[cfg(not(unix))]` arm is
-        // absent), so the `Err` is the tail expression — no `return` needed.
+        // On Linux the jail is established and `exec_in_run_jail` replaces this
+        // process with the jailed app (does not return on success). On a
+        // refuse-gap platform or a missing primitive, the fail-closed policy
+        // either refuses or (low-value override) returns to run unconfined.
+        run_sandbox::jail_and_exec(
+            &profile,
+            &union,
+            &scoped_tmp,
+            &working_tree,
+            &bin,
+            &bin_args_os,
+        )?;
+        // Reached only when the override permitted a low-value unconfined run.
+        let mut cmd = std::process::Command::new(&bin);
+        cmd.args(&bin_args);
         let err = cmd.exec();
         Err(CliError::Io {
             path: bin,
@@ -1978,19 +2037,138 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
     }
     #[cfg(not(unix))]
     {
+        // Off Unix there is no jail (the documented refuse-gap): `jail_and_exec`
+        // applies the fail-closed policy — refuse a native-capability program,
+        // or (low-value override) return Ok to run unconfined below.
+        run_sandbox::jail_and_exec(
+            &profile,
+            &union,
+            &scoped_tmp,
+            &working_tree,
+            &bin,
+            &bin_args_os,
+        )?;
+        let mut cmd = std::process::Command::new(&bin);
+        cmd.args(&bin_args);
         let status = cmd.status().map_err(|e| CliError::Io {
             path: bin,
             source: e,
         })?;
         // Propagate the child's exit code.  `CliError` only models failure, so
         // a non-zero exit is surfaced as a usage-owned message; the caller
-        // (main.rs) prints it to stderr and exits 1.  For a richer exit-code
-        // passthrough the caller would need to call `std::process::exit`
-        // directly, but that is out of scope for this driver library.
+        // (main.rs) prints it to stderr and exits 1.
         if !status.success() {
             let code = status.code().unwrap_or(1);
             return Err(CliError::UsageOwned(format!(
                 "ipe-app exited with code {code}"
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// `ipe exec <artifact-dir> [-- args…]` — run a built native artifact inside the
+/// runtime capability jail described by its `ipe.profile`, with the profile
+/// verified against the capability floor embedded in the binary.
+///
+/// This is the deployable launcher: an artifact copied off the build host still
+/// runs confined, because the `ipe.profile` mirror and the `.ipe.capfloor`
+/// section travel with it. The profile is *strictly parsed* (parse-fail ⇒
+/// refuse) and refused if it is weaker than the embedded floor — a tampered
+/// profile cannot under-isolate. A bare `./ipe-app` invocation is the documented,
+/// deliberate deployer escape (the raw binary opts out of the jail); this path
+/// does not.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] on a missing artifact / profile, a refused floor
+/// check, or a fail-closed jail refusal.
+fn run_exec(rest: &[String]) -> Result<(), CliError> {
+    // Split `<dir> [-- args…]`.
+    let (dir_arg, app_args) = rest
+        .iter()
+        .position(|a| a == "--")
+        .map_or((rest, &[][..]), |i| {
+            (
+                rest.get(..i).unwrap_or(&[]),
+                rest.get(i + 1..).unwrap_or(&[]),
+            )
+        });
+    let dir = dir_arg
+        .first()
+        .map_or_else(|| PathBuf::from("out").join("rust"), PathBuf::from);
+    if !dir.is_dir() {
+        return Err(CliError::UsageOwned(format!(
+            "ipe exec: no artifact directory at {}",
+            dir.display()
+        )));
+    }
+
+    let profile_path = dir.join("ipe.profile");
+    if !profile_path.is_file() {
+        return Err(CliError::UsageOwned(format!(
+            "ipe exec: no ipe.profile in {} — is this an `ipe build` artifact?",
+            dir.display()
+        )));
+    }
+
+    // Locate the emitted binary (cargo metadata honours a relocated target dir).
+    let mut bin = cargo_target_directory(&dir)?;
+    bin.push("debug");
+    bin.push("ipe-app");
+    if !bin.is_file() {
+        return Err(CliError::UsageOwned(format!(
+            "ipe exec: no built binary at {} — run `ipe build` first",
+            bin.display()
+        )));
+    }
+
+    // Strictly parse the profile and verify it against the embedded floor.
+    let profile = run_sandbox::load_and_verify_artifact(&profile_path, &bin)?;
+
+    // The union for the override/refusal policy is reconstructed from the
+    // profile's granted axes (the deployed artifact has no source to re-infer).
+    let union = run_sandbox::profile_axes(&profile);
+    let app_args_os: Vec<std::ffi::OsString> =
+        app_args.iter().map(std::ffi::OsString::from).collect();
+    let scoped_tmp = run_sandbox::make_scoped_tmp()?;
+    let working_tree = std::env::current_dir().map_err(|e| CliError::Io {
+        path: PathBuf::from("."),
+        source: e,
+    })?;
+
+    run_sandbox::jail_and_exec(
+        &profile,
+        &union,
+        &scoped_tmp,
+        &working_tree,
+        &bin,
+        &app_args_os,
+    )?;
+    // Reached only if the low-value override permitted an unconfined run.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        let mut cmd = std::process::Command::new(&bin);
+        cmd.args(app_args);
+        let err = cmd.exec();
+        Err(CliError::Io {
+            path: bin,
+            source: err,
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        let status = std::process::Command::new(&bin)
+            .args(app_args)
+            .status()
+            .map_err(|e| CliError::Io {
+                path: bin.clone(),
+                source: e,
+            })?;
+        if !status.success() {
+            return Err(CliError::UsageOwned(format!(
+                "ipe-app exited with code {}",
+                status.code().unwrap_or(1)
             )));
         }
         Ok(())
@@ -2225,7 +2403,7 @@ pub fn emit_ir_text(entry: &Path) -> Result<String, CliError> {
 /// # Errors
 /// [`CliError::Pipeline`] when the compiler rejects the program;
 /// [`CliError::Io`] when the entry file cannot be read.
-fn lower_entry(entry: &Path) -> Result<ipe_ir::Program, CliError> {
+pub(crate) fn lower_entry(entry: &Path) -> Result<ipe_ir::Program, CliError> {
     let source = fs::read_to_string(entry).map_err(|e| io_err(entry, e))?;
     let pipeline_err = |diag: Diagnostic| CliError::Pipeline {
         file: entry.to_path_buf(),
@@ -2861,7 +3039,7 @@ mod tests {
         let index = code_index();
         let lines = index.lines().count();
         assert_eq!(lines, ALL_CODES.len(), "one line per code");
-        assert_eq!(ALL_CODES.len(), 104, "taxonomy is 104 codes");
+        assert_eq!(ALL_CODES.len(), 105, "taxonomy is 105 codes");
         assert!(
             index.contains("IPE-T0001  type mismatch"),
             "index pairs code with title"
