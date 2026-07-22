@@ -285,9 +285,16 @@ where
 // ─── TEA event loop plumbing (Sub.every tickers + Cmd firing) ───────────────
 
 /// Internal loop event: a raw stdin line (Cli), a decoded key as (kind, value)
-/// (Tui — Strings keep this free of the feature-gated TuiKey type), an
-/// already-built Msg (from a ticker or a Cmd.perform result), or EOF. Shared by
-/// `cli_program` and `tui_app` so both reuse `SubManager` (Tick) + `cli_run_cmd`.
+/// (Tui — Strings keep this free of the feature-gated TuiKey type), a ticker or
+/// subscription Msg, a resolved `Cmd.perform`/`Task.attempt` result, or EOF.
+/// Shared by `cli_program` and `tui_app` so both reuse `SubManager` (Tick) +
+/// `cli_run_cmd`.
+///
+/// `PerformDone` and `Msg` carry the same payload but are kept distinct so the
+/// Cli loop can tell a one-shot effect's result apart from an unbounded ticker
+/// or subscription emission: only `PerformDone` counts toward the outstanding
+/// one-shot effects that must be delivered before EOF may terminate the loop. A
+/// ticker `Msg` can arrive forever and so must never keep the loop alive.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) enum CliEvent<M> {
     Line(String),
@@ -297,6 +304,7 @@ pub(crate) enum CliEvent<M> {
     #[cfg_attr(not(feature = "tui"), allow(dead_code))]
     Key(String, String),
     Msg(M),
+    PerformDone(M),
     Eof,
 }
 
@@ -364,30 +372,83 @@ impl<M: Clone + Send + 'static> SubManager<M> {
 }
 
 /// Fire a Cmd: None/Batch recurse; Perform spawns the composed task→toMsg thunk
-/// and pushes the resulting Msg back into the loop channel.
+/// and pushes the resulting Msg back into the loop channel. The Tui driver
+/// (which exits on a quit key, not stdin EOF) does not track outstanding
+/// effects, so it fires without a counter.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn cli_run_cmd<M: Send + 'static>(
     cmd: IpeCmd<M>,
     tx: &tokio::sync::mpsc::UnboundedSender<CliEvent<M>>,
 ) {
+    cli_run_cmd_tracked(cmd, tx, None);
+}
+
+/// As `cli_run_cmd`, but when `outstanding` is `Some`, each spawned `Perform`
+/// increments it before spawning and its result is delivered as a
+/// `CliEvent::PerformDone` (the Cli loop decrements the counter on dequeue).
+/// This lets the Cli loop keep running past stdin EOF until every one-shot
+/// effect an `init`/`update` issued has delivered its Msg — without letting
+/// unbounded ticker/subscription `Msg`s (which never touch the counter) keep
+/// the loop alive.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn cli_run_cmd_tracked<M: Send + 'static>(
+    cmd: IpeCmd<M>,
+    tx: &tokio::sync::mpsc::UnboundedSender<CliEvent<M>>,
+    outstanding: Option<&std::sync::Arc<std::sync::atomic::AtomicUsize>>,
+) {
     match cmd {
         IpeCmd::None => {}
         IpeCmd::Batch(items) => {
             for c in items {
-                cli_run_cmd(c, tx);
+                cli_run_cmd_tracked(c, tx, outstanding);
             }
         }
         IpeCmd::Perform(thunk) => {
             let tx = tx.clone();
+            // A tracked Perform is counted as outstanding at spawn and delivers a
+            // `PerformDone`; an untracked one (Tui) delivers a plain `Msg`.
+            let counter = outstanding.cloned();
+            if let Some(c) = &counter {
+                c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
             // Fire-and-forget: a panic inside the composed task→toMsg thunk aborts
             // only this task and is intentionally swallowed — that is the
             // Task-boundary recover contract (an effectful task that faults must
-            // not crash the TEA loop). The fault therefore produces no Msg (the
-            // send never runs); structured-warn observability on this path is a
-            // known follow-up (would require awaiting the JoinHandle's JoinError).
+            // not crash the TEA loop). On a fault the JoinHandle is dropped and
+            // no event is sent; the Cli loop's counter would then never be
+            // decremented for this effect, so the spawned task decrements the
+            // counter on the fault path (drop guard) to preserve the EOF
+            // invariant. Structured-warn observability on this path is a known
+            // follow-up (would require awaiting the JoinHandle's JoinError).
             tokio::spawn(async move {
-                let msg = thunk().await;
-                let _ = tx.send(CliEvent::Msg(msg));
+                // Decrement on any exit from this task (normal or panic-unwind)
+                // so a faulting effect can never wedge the EOF-drain invariant.
+                struct OutstandingGuard(Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>);
+                impl Drop for OutstandingGuard {
+                    fn drop(&mut self) {
+                        if let Some(c) = &self.0 {
+                            c.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                        }
+                    }
+                }
+                match counter {
+                    Some(c) => {
+                        // Counter decremented by the loop on `PerformDone` dequeue
+                        // (below) for the delivered case; the guard covers only the
+                        // panic-unwind case where no event reaches the loop.
+                        let guard = OutstandingGuard(Some(c));
+                        let msg = thunk().await;
+                        std::mem::forget(guard); // delivered → loop owns the decrement
+                        // A send failure means the loop already exited (rx
+                        // dropped); the leaked count is then unobservable, so it
+                        // is intentionally not decremented here.
+                        let _ = tx.send(CliEvent::PerformDone(msg));
+                    }
+                    None => {
+                        let msg = thunk().await;
+                        let _ = tx.send(CliEvent::Msg(msg));
+                    }
+                }
             });
         }
         IpeCmd::Publish(thunk) => {
@@ -455,8 +516,15 @@ where
             let _ = line_tx.send(CliEvent::Eof);
         });
 
+        // Count of one-shot `Perform` effects that were issued but whose Msg has
+        // not yet been folded through `update`. EOF must not terminate the loop
+        // while this is non-zero, or an init/update-issued effect's result would
+        // be silently dropped on empty/early-closing stdin.
+        let outstanding = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut eof_seen = false;
+
         let (mut model, cmd0) = init(());
-        cli_run_cmd(cmd0, &tx);
+        cli_run_cmd_tracked(cmd0, &tx, Some(&outstanding));
         let mut submgr = SubManager::new(tx.clone());
         submgr.update(subscriptions(model.clone()));
         // Inline render (a closure borrowing `view` would make the future non-Send).
@@ -484,14 +552,36 @@ where
                 CliEvent::Line(l) => on_line(l),
                 CliEvent::Key(_, _) => continue, // Cli has no keys
                 CliEvent::Msg(m) => m,
-                CliEvent::Eof => break,
+                CliEvent::PerformDone(m) => {
+                    // A one-shot effect delivered its result: this effect is no
+                    // longer outstanding. If EOF already arrived and this was the
+                    // last outstanding effect, fold it and then let EOF terminate.
+                    outstanding.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                    m
+                }
+                CliEvent::Eof => {
+                    // EOF terminates only once every outstanding one-shot effect
+                    // has delivered. If effects are still in flight, remember EOF
+                    // and keep folding their results; the check after each fold
+                    // (below) breaks once the count reaches zero.
+                    if outstanding.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+                        break;
+                    }
+                    eof_seen = true;
+                    continue;
+                }
             };
             let (next, cmd) = update(msg, model);
             model = next;
-            cli_run_cmd(cmd, &tx);
+            cli_run_cmd_tracked(cmd, &tx, Some(&outstanding));
             submgr.update(subscriptions(model.clone()));
             let _ = std::io::stdout().write_all(view(model.clone()).as_bytes());
             let _ = std::io::stdout().flush();
+            // After folding an effect's result, if EOF was already seen and no
+            // effects remain outstanding, terminate as EOF would have.
+            if eof_seen && outstanding.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+                break;
+            }
         }
         submgr.stop_all();
         let _ = std::io::stdout().write_all(b"\n");
