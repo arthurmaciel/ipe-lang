@@ -2,7 +2,14 @@
 //! security half.
 //!
 //! These are REAL jailed runs (they spawn `bwrap`), so they are gated behind
-//! `IPE_E2E=1` and skip cleanly when bubblewrap or the cap helpers are absent.
+//! `IPE_E2E=1` and skip cleanly when the jail cannot run here — either because
+//! bubblewrap or the cap helpers are absent, or because the environment forbids
+//! establishing the jail at all (a container/CI runner where `bwrap` is present
+//! but the kernel denies the network namespace or loopback bring-up). A ONE-time
+//! canary establishment run (a trivial `/bin/true` under the most-isolated
+//! profile) decides this: if the jail cannot even boot a no-op payload, no
+//! assertion below could hold, so every test early-returns exactly as it does
+//! when the tools are missing.
 //! They prove the two load-bearing properties directly at the kernel boundary,
 //! not by the app's own choice:
 //!
@@ -40,7 +47,14 @@ use ipe_sandbox::run_jail::{
 /// the whole harness deterministic regardless of `--test-threads`.
 static JAIL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Skip unless `IPE_E2E=1` and the jail tools are present.
+/// Skip unless `IPE_E2E=1`, the jail tools are present, AND a jail can actually
+/// be established in this environment.
+///
+/// Tool presence alone is not enough: on some CI runners and containers `bwrap`
+/// is installed but the kernel denies the namespace/loopback setup a real jail
+/// needs (`bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`). There
+/// the tests could not pass no matter how correct the jail is, so they must skip.
+/// The [`jail_can_establish`] canary settles this once.
 fn e2e_tools() -> Option<RunJailTools> {
     if std::env::var_os("IPE_E2E").is_none_or(|v| v != "1") {
         return None;
@@ -48,11 +62,67 @@ fn e2e_tools() -> Option<RunJailTools> {
     let caps = ipe_sandbox::probe();
     let bwrap = caps.bwrap?;
     let prlimit = caps.prlimit?;
-    Some(RunJailTools {
+    let tools = RunJailTools {
         bwrap,
         prlimit,
         timeout: caps.timeout,
+    };
+    if !jail_can_establish(&tools) {
+        return None;
+    }
+    Some(tools)
+}
+
+/// Whether a real jail can be *established* in this environment — a one-time,
+/// cached canary establishment run.
+///
+/// It jails `/bin/true` under the most-isolated profile (the same
+/// `--unshare-net` + scoped-fs setup the assertions use, and the one that fails
+/// on a locked-down runner). `/bin/true` cannot itself misbehave, so the outcome
+/// isolates the *establishment* step from any payload behavior:
+///
+/// - jail established → `/bin/true` exits 0 → the environment can run the jail.
+/// - jail could not be established (bwrap fails to set up the namespace/loopback,
+///   e.g. `RTM_NEWADDR: Operation not permitted`, an `unshare` `EPERM`, or any
+///   other setup denial) → `/bin/true` never runs, the exit is non-zero, and
+///   `bwrap` names the failure on stderr → the environment cannot run the jail.
+///
+/// Only an establishment failure gates skipping; a *successful* canary lets the
+/// real assertions run and catch a genuine jail bug. This is inert on the
+/// production path — it lives in the test harness and never touches how
+/// `ipe run` / `ipe exec` decide to refuse.
+fn jail_can_establish(tools: &RunJailTools) -> bool {
+    static CANARY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *CANARY.get_or_init(|| {
+        let payload = vec![OsString::from("/bin/true")];
+        let outcome = run_jailed_capturing(tools, &isolated(), &payload);
+        let established = canary_established(&outcome);
+        if !established {
+            eprintln!(
+                "run_jail_e2e: skipping — the jail cannot be established here (bwrap exited {:?}; stderr: {})",
+                outcome.code,
+                outcome.stderr.trim()
+            );
+        }
+        established
     })
+}
+
+/// The canary's establish-vs-skip decision, factored out so it is unit-testable
+/// without a broken environment: a no-op `/bin/true` payload proves the jail
+/// established if and only if it exits 0. Every other outcome (a signalled
+/// payload, or a non-zero `bwrap` setup exit) is an establishment failure this
+/// environment cannot run.
+fn canary_established(outcome: &Outcome) -> bool {
+    outcome.code == Some(0)
+}
+
+/// The result of one jailed spawn: the payload's exit code (`None` if it was
+/// signalled) and `bwrap`'s stderr. The assertions only read `code`; the canary
+/// reads `stderr` to name an establishment failure.
+struct Outcome {
+    code: Option<i32>,
+    stderr: String,
 }
 
 /// Compile the seccomp program for a profile and place it on an inheritable fd,
@@ -62,6 +132,30 @@ fn e2e_tools() -> Option<RunJailTools> {
 /// so the test can assert on the outcome. The seccomp fd is created with
 /// `memfd_create` and its close-on-exec flag cleared so `bwrap` inherits it.
 fn run_jailed(tools: &RunJailTools, profile: &SandboxProfile, payload: &[OsString]) -> Option<i32> {
+    // The assertions inherit stderr (a diagnostic when one fails); only the
+    // canary captures it.
+    run_jailed_inner(tools, profile, payload, false).code
+}
+
+/// Like [`run_jailed`], but captures `bwrap`'s stderr so an establishment
+/// failure can be named. Used only by the canary.
+fn run_jailed_capturing(
+    tools: &RunJailTools,
+    profile: &SandboxProfile,
+    payload: &[OsString],
+) -> Outcome {
+    run_jailed_inner(tools, profile, payload, true)
+}
+
+/// Shared spawn core. `capture_stderr` selects whether `bwrap`'s stderr is piped
+/// (canary) or inherited (assertions). Panics (fails the test) if the spawn
+/// itself could not be launched.
+fn run_jailed_inner(
+    tools: &RunJailTools,
+    profile: &SandboxProfile,
+    payload: &[OsString],
+    capture_stderr: bool,
+) -> Outcome {
     use std::os::unix::io::FromRawFd as _;
     use std::os::unix::process::CommandExt as _;
 
@@ -100,6 +194,9 @@ fn run_jailed(tools: &RunJailTools, profile: &SandboxProfile, payload: &[OsStrin
     let (prog, rest) = argv.split_first().expect("non-empty argv");
     let mut cmd = Command::new(prog);
     cmd.args(rest);
+    if capture_stderr {
+        cmd.stderr(std::process::Stdio::piped());
+    }
     let fd_copy = fd;
     unsafe {
         cmd.pre_exec(move || {
@@ -115,11 +212,14 @@ fn run_jailed(tools: &RunJailTools, profile: &SandboxProfile, payload: &[OsStrin
             Ok(())
         });
     }
-    let status = cmd.status().expect("spawn jailed process");
+    let out = cmd.output().expect("spawn jailed process");
     // Reap the memfd.
     drop(unsafe { std::fs::File::from_raw_fd(fd) });
     let _ = std::fs::remove_dir_all(&scoped);
-    status.code()
+    Outcome {
+        code: out.status.code(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    }
 }
 
 unsafe extern "C" {
@@ -236,9 +336,6 @@ fn a_thread_spawning_program_boots_under_the_isolated_jail() {
     // false-deny a threaded program. `nproc` (coreutils) reads /proc and the CPU
     // affinity; a simpler thread probe is a python one-liner that spawns a
     // thread (CPython uses pthread_create → clone3 on glibc>=2.34).
-    if ipe_sandbox::probe().bwrap.is_none() {
-        return;
-    }
     let py = "/usr/bin/python3";
     if !Path::new(py).exists() {
         return;
@@ -257,4 +354,30 @@ fn a_thread_spawning_program_boots_under_the_isolated_jail() {
         Some(0),
         "a threaded program must boot under the isolated jail (threads allowed)"
     );
+}
+
+/// The skip gate itself, tested without needing a broken environment: only a
+/// clean `/bin/true` exit (code 0) counts as an established jail; every
+/// establishment-failure shape must gate a skip.
+#[test]
+fn canary_gates_skip_on_any_establishment_failure() {
+    let established = |code| {
+        canary_established(&Outcome {
+            code,
+            stderr: String::new(),
+        })
+    };
+    // The one success shape: the no-op payload booted and exited cleanly.
+    assert!(
+        established(Some(0)),
+        "a clean /bin/true exit means established"
+    );
+    // Establishment-failure shapes → skip. A non-zero bwrap setup exit
+    // (`RTM_NEWADDR`/`unshare` denials surface here) and a signalled process both
+    // mean the jail never ran the payload to completion.
+    assert!(
+        !established(Some(1)),
+        "a non-zero bwrap setup exit is a skip"
+    );
+    assert!(!established(None), "a signalled process is a skip");
 }
