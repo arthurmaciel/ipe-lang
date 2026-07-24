@@ -375,7 +375,10 @@ impl<M: Clone + Send + 'static> SubManager<M> {
 /// and pushes the resulting Msg back into the loop channel. The Tui driver
 /// (which exits on a quit key, not stdin EOF) does not track outstanding
 /// effects, so it fires without a counter.
-#[cfg(not(target_arch = "wasm32"))]
+// Only the Tui driver fires Cmds untracked; the Cli loop uses the tracked
+// variant directly. Gate this wrapper on the same feature as its sole caller so
+// a Tui-less feature combo does not see it as dead code.
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
 pub(crate) fn cli_run_cmd<M: Send + 'static>(
     cmd: IpeCmd<M>,
     tx: &tokio::sync::mpsc::UnboundedSender<CliEvent<M>>,
