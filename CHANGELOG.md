@@ -10,6 +10,13 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.16](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.15...ipe-v0.1.16) (2026-07-24)
+
+
+### Bug Fixes
+
+* **runtime:** gate cli_run_cmd on the tui feature (its sole caller) ([#93](https://github.com/arthurmaciel/ipe-lang/issues/93)) ([cb1f625](https://github.com/arthurmaciel/ipe-lang/commit/cb1f6251217d1f56300927dbf64a5c89f4f4f3fa))
+
 ## [0.1.15](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.14...ipe-v0.1.15) (2026-07-22)
 
 
