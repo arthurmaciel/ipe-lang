@@ -1,4 +1,4 @@
-# TEA everywhere — an opt-in program shape for every ipê backend
+# TEA everywhere — an opt-in program shape for every Ipê backend
 
 Status: design (spec only; no code, no build implied).
 Scope: make The Elm Architecture (`init` / `update` / `view` /
@@ -50,7 +50,7 @@ Elm ships `Platform.worker { init, update, subscriptions }`: headless TEA
 with **no `view`**, for CLI / backend / worker programs. It reacts to
 events (ports, timers, task results) through `update`, issuing `Cmd`s,
 and has no DOM. This design mirrors that model directly: the headless
-ipê entry is view-less, and output is an ordinary `Cmd`.
+Ipê entry is view-less, and output is an ordinary `Cmd`.
 
 ---
 

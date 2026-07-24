@@ -1,8 +1,8 @@
-# The ipê Language Server (LSP) — Design Spec
+# The Ipê Language Server (LSP) — Design Spec
 
 Status: design-only (no code). Authoritative synthesis of the LSP design panel.
 Scope: a JSON-RPC-over-stdio language server giving every LSP-compliant editor
-(VS Code, JetBrains, Neovim, Helix, Emacs, Zed) rich ipê support, with a
+(VS Code, JetBrains, Neovim, Helix, Emacs, Zed) rich Ipê support, with a
 headline feature — **editor-agnostic TEA-scaffolding** delivered through
 standard-LSP snippet completions, code actions, and lint quick-fixes.
 
@@ -75,7 +75,7 @@ STATES UNREPRESENTABLE**. LSP-specific corollaries, each foreclosed below:
 - (a) One compiler, one type-checker, one formatter — never a divergent second
   analyzer.
 - (b) Every code action / quick-fix / scaffold yields parse-clean, type-clean,
-  `ipe fmt`-clean ipê. An insert that breaks the build is a defect.
+  `ipe fmt`-clean Ipê. An insert that breaks the build is a defect.
 - (c) No panic on malformed/partial in-editor buffers — the server eats
   half-typed code constantly and must degrade gracefully, never crash.
 
@@ -502,7 +502,7 @@ build-irrelevant, individually toggleable, making no semantic claim. Every
 *semantic* lint (type, exhaustiveness, reachability) must be sourced from a
 compiler diagnostic. Even the stylistic lint's quick-fix passes the G2 gate.
 
-### G2 — Every synthesized edit yields parse-clean, type-clean, fmt-clean ipê
+### G2 — Every synthesized edit yields parse-clean, type-clean, fmt-clean Ipê
 
 Two provenance channels, not one:
 

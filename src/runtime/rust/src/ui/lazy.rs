@@ -1,7 +1,7 @@
 //! `Ipe.Ui.Lazy` kernel helpers — deferred subtree evaluation.
 //!
-//! **ipê v1 semantics: EAGER.** Ipê's Go runtime memoises the subtree using an
-//! LRU keyed on the function pointer and argument equality; ipê does not yet
+//! **Ipê v1 semantics: EAGER.** Ipê's Go runtime memoises the subtree using an
+//! LRU keyed on the function pointer and argument equality; Ipê does not yet
 //! have a TEA-integrated memoisation layer. In v1 these functions evaluate
 //! immediately, which is semantically equivalent (same output, just no caching
 //! benefit). The divergence is recorded in `docs/divergences-from-sky.md`
@@ -14,7 +14,7 @@ use super::element::Element;
 /// `Lazy.lazy : (a -> Element msg) -> a -> Element msg`
 ///
 /// Applies `f` to `a` eagerly.  In Ipe's Go backend this memoises `f(a)`;
-/// ipê v1 evaluates immediately without caching.
+/// Ipê v1 evaluates immediately without caching.
 pub fn lazy_lazy_<M, A>(f: impl Fn(A) -> Element<M>, a: A) -> Element<M> {
     f(a)
 }

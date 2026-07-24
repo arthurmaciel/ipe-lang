@@ -2,7 +2,7 @@
 //!
 //! ## Background
 //!
-//! ipê pins `Live.app`'s `init` to `LiveReq -> (Model, Cmd Msg)` (mandatory)
+//! Ipê pins `Live.app`'s `init` to `LiveReq -> (Model, Cmd Msg)` (mandatory)
 //! rather than the reference's permissive free `req` type var. Two properties
 //! are pinned here:
 //!

@@ -38,7 +38,7 @@ recorded reference.
 
 ### B-Lazy — `Ipe.Ui.Lazy`: no memoisation in v1 (eager evaluation)
 - **Differs:** `Lazy.lazy f a` / `lazy2` / `lazy3` / `lazy4` / `lazy5` evaluate
-  eagerly in ipê v1 — calling `f(a)` (etc.) directly without caching. Ipê's Go
+  eagerly in Ipê v1 — calling `f(a)` (etc.) directly without caching. Ipê's Go
   runtime memoises the subtree using an LRU keyed on the function pointer and
   shallow argument equality (`reflect.DeepEqual`); re-renders with identical
   arguments short-circuit the diff layer by reusing the last `Element` value.
@@ -50,7 +50,7 @@ recorded reference.
   always the same value regardless of caching, so observable output is
   byte-identical.
 - **Rationale:** The TEA diff layer that would make a keyed memoisation cache
-  reachable at render time does not exist in the ipê Rust backend yet. The
+  reachable at render time does not exist in the Ipê Rust backend yet. The
   `Ipe.Ui.Lazy` *module and kernels* are registered so `import Ipe.Ui.Lazy as
   Lazy` compiles and `Lazy.lazy viewItem item` lowers correctly; the caching
   optimisation is a v2 follow-on.
@@ -59,7 +59,7 @@ recorded reference.
   `runtime/src/sky_runtime/ui/lazy.rs`.
 
 ### B1 — `Math.min` / `Math.max`: Elm polymorphic comparable
-- **Differs:** ipê compares `min`/`max` arguments at the argument type (Elm's
+- **Differs:** Ipê compares `min`/`max` arguments at the argument type (Elm's
   `a -> a -> a` comparable). `Math.min 0.4 1.3 = 0.4`, `Math.max 0.4 1.3 = 1.3`,
   `Math.min "b" "a" = "a"`. The reference routes both arguments through `AsInt`
   before comparing (`Math.min 0.4 1.3 = 0`, and a non-meaningful compare on
@@ -71,7 +71,7 @@ recorded reference.
 
 ### B2 — `Bytes` is a distinct `Vec<u8>` primitive
 - **Differs:** Ipê defines `type alias Bytes = String`; Go's `string` is an
-  arbitrary byte sequence so the alias is cost-free there. ipê makes `Bytes` a
+  arbitrary byte sequence so the alias is cost-free there. Ipê makes `Bytes` a
   distinct primitive lowering to `Vec<u8>`; `String ↔ Bytes` conversions are
   always explicit (`Bytes.fromString` UTF-8-encodes, `Bytes.toString` UTF-8-
   decodes → `Maybe String`).
@@ -88,7 +88,7 @@ recorded reference.
   binary, not UTF-8). Seal probe `compression_builds_and_runs`.
 
 ### B3 — `Encoding.base64Encode` / `hexEncode` over non-ASCII text — ~~divergence~~ RETIRED (task #55a)
-- **Was:** ipê's runtime used a Latin-1 char-as-byte model that silently
+- **Was:** Ipê's runtime used a Latin-1 char-as-byte model that silently
   truncated codepoints > 255 (`c as u8`), so `hexEncode "café" → "636166e9"` vs
   Go's UTF-8 `"636166c3a9"`.
 - **Now (task #55a):** the `Encoding.*` text codecs encode a `String`'s UTF-8
@@ -109,7 +109,7 @@ recorded reference.
   `docs/architecture/encoding-bytes-migration.md`.
 
 ### B4 — `Ipe.Money.allocate` over a negative total
-- **Differs:** ipê distributes the residue toward zero by sign so the shares sum
+- **Differs:** Ipê distributes the residue toward zero by sign so the shares sum
   to the exact input for negative totals as well as positive. The reference
   clamps the residue at zero for negative totals, so its shares no longer sum
   back to the input. For positive totals the two are byte-identical.
@@ -133,7 +133,7 @@ recorded reference.
   `isUpper`/`isAlpha` match Go and are *not* divergences.
 
 ### B6 — `String.toFloat` grammar is stricter
-- **Differs:** ipê accepts the standard float grammar and rejects Go's hex-float
+- **Differs:** Ipê accepts the standard float grammar and rejects Go's hex-float
   and underscore-separated literals.
 - **Go-oracle relationship:** stricter, not looser.
 - **Rationale:** parse-don't-validate at the numeric boundary.
@@ -141,7 +141,7 @@ recorded reference.
 
 ### B7 — Bare arity-0 `Uuid.v4` / `Uuid.v7` evaluate
 - **Differs:** the import-less bare reference `Uuid.v4` / `Uuid.v7` evaluates to a
-  fresh `String` on ipê (the documented bare-reference form). The Go reference
+  fresh `String` on Ipê (the documented bare-reference form). The Go reference
   leaves the bare reference as a kernel function value (AGENTS.md Limitation #7 —
   arity-0 kernel codegen), so its length/version-nibble checks differ.
 - **Go-oracle relationship:** Go succeeds; checks differ on this shape.
@@ -149,15 +149,15 @@ recorded reference.
   Golden `uuid_format`.
 
 ### B8 — `Uuid.parse` accepts a canonical UUID
-- **Differs:** ipê's `Uuid.parse` returns `Just` for a canonical hyphenated UUID
+- **Differs:** Ipê's `Uuid.parse` returns `Just` for a canonical hyphenated UUID
   and `Nothing` for malformed input. The Go reference returns `Nothing` for the
   same canonical UUID on this shape.
-- **Go-oracle relationship:** Go succeeds; ipê is semantically correct.
+- **Go-oracle relationship:** Go succeeds; Ipê is semantically correct.
 - **Rationale:** correctness. **Sanctioned:** yes (`sanctioned:`). Golden
   `uuid_parse`.
 
 ### B9 — `Ipe.Jwt` flat + builder surfaces (✅ both shipped, corrected 2026-07-09)
-- **No longer differs — closed.** ipê surfaces BOTH the four flat kernels
+- **No longer differs — closed.** Ipê surfaces BOTH the four flat kernels
   (`encodeHs256`/`decodeHs256`/`encodeRs256`/`decodeRs256`, claims as a JSON
   string) AND the full builder API (`Jwt.encode`/`Jwt.hs256`/`Jwt.rs256`/
   `Jwt.claims`/`subject`/`issuer`/`audience`/`expiresAt`/`notBefore`/
@@ -185,10 +185,10 @@ recorded reference.
 
 ### B10 — `Ipe.Db` emits Rust + `sqlx` (vs Go + SQLite/cgo)
 - **Differs:** the full `Ipe.Db` surface is shared, but Go emits Go+SQLite (cgo)
-  binaries while ipê emits Rust+`sqlx`. The in-memory SQLite connection-pool
+  binaries while Ipê emits Rust+`sqlx`. The in-memory SQLite connection-pool
   behavior and row-type representation differ enough that one `Main.ipe` cannot
   run identically on both backends.
-- **Go-oracle relationship:** both build; runtime representation differs, so ipê's
+- **Go-oracle relationship:** both build; runtime representation differs, so Ipê's
   output is the recorded reference.
 - **Rationale:** backend runtime substrate. The parameterised-args channel
   (`?`-placeholder binding on `unsafeFindWhere` / `findByConditions`) is exercised
@@ -196,59 +196,59 @@ recorded reference.
 - **Sanctioned:** yes (`sanctioned:`). Goldens `m5b_db_*`.
 
 ### B11 — `Ipe.Ui` HTML skeleton
-- **Differs:** ipê emits compact inline CSS with no separate `<style>` reset
+- **Differs:** Ipê emits compact inline CSS with no separate `<style>` reset
   block; the Go backend emits a different HTML skeleton (separate CSS reset tag,
   trailing spaces). Both render semantically-correct Flexbox layouts.
 - **Go-oracle relationship:** Go succeeds; HTML bytes differ.
 - **Rationale:** the two are separate renderers; strict byte-parity for HTML is a
   later goal. **Sanctioned:** yes (`divergence:`). Goldens `stdui*`.
 
-### B12 — `Cmd` / `Sub` are construct-only on ipê
-- **Differs:** ipê provides TEA `Cmd`/`Sub` constructors; the Go backend has no
-  equivalent constructors, so these goldens record ipê's output as the
+### B12 — `Cmd` / `Sub` are construct-only on Ipê
+- **Differs:** Ipê provides TEA `Cmd`/`Sub` constructors; the Go backend has no
+  equivalent constructors, so these goldens record Ipê's output as the
   authoritative reference.
 - **Go-oracle relationship:** Go has no equivalent surface.
 - **Rationale:** TEA-everywhere surface. **Sanctioned:** yes (`sanctioned:`).
   Goldens `cmd_ctors` / `sub_ctors` / `perform_ctor`.
 
-### B13 — Shapes the Go reference cannot build (ipê compiles + runs)
-- **Differs:** several well-typed ipê programs are rejected by the Go reference's
-  front-end, so ipê's output is recorded as the reference:
-  - Recursive enum through a **tuple** payload — `type Chain = ChainEnd | ChainNode (Chain, Int)` (Go parse error; ipê boxes the cyclic edge so the Rust enum stays finite-sized). Golden `tuple_self_edge`.
+### B13 — Shapes the Go reference cannot build (Ipê compiles + runs)
+- **Differs:** several well-typed Ipê programs are rejected by the Go reference's
+  front-end, so Ipê's output is recorded as the reference:
+  - Recursive enum through a **tuple** payload — `type Chain = ChainEnd | ChainNode (Chain, Int)` (Go parse error; Ipê boxes the cyclic edge so the Rust enum stays finite-sized). Golden `tuple_self_edge`.
   - Recursive enum through a **record** payload — `type RChain = REnd | RNode { rest : RChain, val : Int }` (Go parse error). Golden `record_self_edge`.
-  - `Ipe.Ui` with `Html.htmlRender` — not exposed by the Go oracle (`sky dev`), which exits 1; ipê compiles and runs. Goldens `stdui_onclick` / `stdui_oninput_closure`.
+  - `Ipe.Ui` with `Html.htmlRender` — not exposed by the Go oracle (`sky dev`), which exits 1; Ipê compiles and runs. Goldens `stdui_onclick` / `stdui_oninput_closure`.
   - `Set` generic / member on shapes the Go oracle exits 1 on. Goldens `set_generic` / `set_member`.
-  - Invalid-encoding decode input where the Go oracle exits 1; ipê returns `Err`. Golden `encoding_invalid`.
-  - Partial application of a sibling **let-bound** function value (`wrap f x = f x + 1; guarded f = wrap (inc f)`) — Go emits `wrap(oneArg)` against the flattened 2-arity local and fails `go build` (`not enough arguments in call to wrap`); ipê eta-expands the residual and Arc-promotes the captured value. Golden `fn_capture_eta_promoted` (output `4`, hand-computed language semantics).
-- **Go-oracle relationship:** Go-failure (auto kind-1); ipê handles the shape.
-- **Rationale:** capability/coverage; ipê's output is correct on these shapes.
+  - Invalid-encoding decode input where the Go oracle exits 1; Ipê returns `Err`. Golden `encoding_invalid`.
+  - Partial application of a sibling **let-bound** function value (`wrap f x = f x + 1; guarded f = wrap (inc f)`) — Go emits `wrap(oneArg)` against the flattened 2-arity local and fails `go build` (`not enough arguments in call to wrap`); Ipê eta-expands the residual and Arc-promotes the captured value. Golden `fn_capture_eta_promoted` (output `4`, hand-computed language semantics).
+- **Go-oracle relationship:** Go-failure (auto kind-1); Ipê handles the shape.
+- **Rationale:** capability/coverage; Ipê's output is correct on these shapes.
 - **Sanctioned:** yes (auto Go-failure).
 
 ### B14 — Runtime-fork behavioral hardening (vs the reference's Rust runtime)
 The 48 `sky_runtime` modules are a vendored fork shared by name with the
-reference's `feat/runtime-rust` runtime; the divergence is within-module. ipê is
+reference's `feat/runtime-rust` runtime; the divergence is within-module. Ipê is
 uniformly at-or-ahead — several behavioral differences vs the reference's Rust
 runtime (each either matches Go or is more correct):
-- **auth** — ipê fail-closes on an id-column decode error; the reference's Rust
+- **auth** — Ipê fail-closes on an id-column decode error; the reference's Rust
   runtime `unwrap_or(0)` (authenticating as user 0). *Security.*
-- **jwt** — ipê rejects `now == exp` (Go parity) and makes `exp`/`nbf` optional;
+- **jwt** — Ipê rejects `now == exp` (Go parity) and makes `exp`/`nbf` optional;
   the reference's Rust runtime accepts one instant past expiry and rejects
   legitimately exp-less tokens. *Correctness/security.*
-- **http/ws/http_stream** — ipê redacts URL userinfo/query in errors, defaults
+- **http/ws/http_stream** — Ipê redacts URL userinfo/query in errors, defaults
   SSRF-deny ON in production, and returns `Err` on an invalid HTTP method; the
   reference's Rust runtime echoes the URL, is SSRF-opt-in, and silently downgrades
   an invalid method to GET. *Security/correctness.*
-- **decimal/money** — ipê rounds `toStringFixed`/`formatWith` half-away-from-zero
+- **decimal/money** — Ipê rounds `toStringFixed`/`formatWith` half-away-from-zero
   (Go `StringFixed` parity), caps division at 16 dp (Go `DivisionPrecision = 16`),
   and `saturating_abs` in `allocate`; the reference's Rust runtime banker's-rounds
   `toStringFixed`, leaves division uncapped, and wraps at `i64::MIN`.
-- **cache** — ipê uses saturating counters; the reference's Rust runtime uses raw
+- **cache** — Ipê uses saturating counters; the reference's Rust runtime uses raw
   `+=`/`-=` (debug overflow panic). *Soundness.*
-- **regex split** — ipê drops the trailing zero-width empty (Go `regexp.Split`
+- **regex split** — Ipê drops the trailing zero-width empty (Go `regexp.Split`
   parity); the reference's Rust runtime keeps boundary empties.
-- **env** — ipê routes env access through a process-global lock; the reference's
+- **env** — Ipê routes env access through a process-global lock; the reference's
   Rust runtime uses raw `std::env`. *Soundness (env data-race).*
-- **telemetry/trace** — ipê strips CRLF from CSP frame-ancestors and scrubs log
+- **telemetry/trace** — Ipê strips CRLF from CSP frame-ancestors and scrubs log
   controls + U+2028/9. *Security.*
 - **render/diff depth cap (RT-UI-001)** — `ui/render.rs::render_element` and
   `dom/diff.rs::diff_node` now cap descent at `MAX_HTML_DEPTH = 1024` (matching
@@ -280,7 +280,7 @@ runtime (each either matches Go or is more correct):
   owned-consume positions, the reference clones **all** occurrences — including
   the last one — when the binding is in `ecCloneVars` (the set of locals used
   ≥ 2 times; `ExprEmitter.hs` `collectVarLocalsMulti`, `varLocalRead:781-787`).
-  ipê performs true last-use analysis: borrow-position reads (comparison operands,
+  Ipê performs true last-use analysis: borrow-position reads (comparison operands,
   `++`, interpolation) are emitted bare; among owned-consume reads the **last** is
   emitted as a move (zero clones), and every earlier one is `x.clone()`. Result:
   N uses → N−1 clones instead of N; borrow positions are excluded from the count.
@@ -298,33 +298,33 @@ runtime (each either matches Go or is more correct):
   scrutinee, the reference drops the alias name: `patternToMatchString` renders
   `((a,b) as w)` as just `(a, b)` and never binds `w`
   (`ExprEmitter.hs:4206`). A body that uses `w` would fail with E0425 "cannot
-  find value `w`" — the alias whole is lost. ipê correctly binds the whole by
+  find value `w`" — the alias whole is lost. Ipê correctly binds the whole by
   move (`name @ skeleton`) and reconstructs the inner bindings from
   `name.clone()` in the arm prelude, routing through `emit_binding_stmts` for
   nested aliases. The reference's `let-else` + `patternIsIrrefutable` discipline
   (`Pattern.hs:113-171`) is ported for the refutable reconstruction branch.
 - **Go-oracle relationship:** Go backend does not generate Rust, so the reference
-  pattern is the Haskell-emitting-Rust path. ipê's output is correct on this
+  pattern is the Haskell-emitting-Rust path. Ipê's output is correct on this
   shape; the reference's output is wrong when `name` is used in the arm body.
 - **Rationale:** correctness — the reference has a latent bug (alias name dropped
-  → E0425 on use). ipê fixes it. See `docs/adr/0002-seal-noncopy-move-clone-escape-hatch.md` (§4.2).
+  → E0425 on use). Ipê fixes it. See `docs/adr/0002-seal-noncopy-move-clone-escape-hatch.md` (§4.2).
 - **Verified:** design doc §4.2; `ExprEmitter.hs:4206`; existing #96 clone-split
   machinery (`emit_expr.rs:3237`) extended into `emit_arm_head`.
 - **Sanctioned:** yes (`sanctioned:` — correctness improvement over a reference
   latent bug). Pending fixture goldens for #99.
 
-### B15 — Float scientific-notation threshold — **RESOLVED (ipê-correct)**
-- **Differs:** ipê's `stringify.rs` switches to scientific notation at exponent ≥ 6
+### B15 — Float scientific-notation threshold — **RESOLVED (Ipê-correct)**
+- **Differs:** Ipê's `stringify.rs` switches to scientific notation at exponent ≥ 6
   (`!(-4..6)`); the reference's Rust backend switches at exponent ≥ 21 (`!(-4..21)`).
 - **Go-oracle relationship:** RESOLVED by a direct probe of Go 1.26.2 (task #52,
   commit `1903654`): `fmt %v` ≡ `strconv 'g',-1` cuts to scientific notation at
   decimal exponent ≥ 6 (and < −4) for every input — there is no exp-21 behaviour.
-  `1000000 → "1e+06"`, `1e15 → "1e+15"`, `999999 → "999999"`. ipê matches Go
+  `1000000 → "1e+06"`, `1e15 → "1e+15"`, `999999 → "999999"`. Ipê matches Go
   byte-for-byte; the reference's exp ≥ 21 is the value that diverges from Go.
 - **Rationale:** Go `%v` parity, now oracle-confirmed and pinned by discriminating
   regression tests (`float_go_v_parity` / `ff_go_g_threshold_is_six_not_twentyone`,
   proven RED under a scratch `!(-4..21)` flip).
-- **Sanctioned:** N/A — ipê matches the Go oracle exactly, so this is a difference
+- **Sanctioned:** N/A — Ipê matches the Go oracle exactly, so this is a difference
   from the *reference's Rust fork* only, not from Go. No sanctioned-divergence marker
   needed.
 
@@ -337,23 +337,23 @@ only to pre-empt mis-listing (see AGENTS.md "Agent learnings").
 ### B18 — WS `sendBinary` (server + client) takes `Vec<u8>`, not `String`
 - **Differs:** Ipê defines `type alias Bytes = String`, so the Go reference's
   server `sendBinaryToClient` AND the client `Ipe.WebSocket.sendBinary`
-  both take a `String` (raw bytes in a Go string; cost-free alias). ipê's
+  both take a `String` (raw bytes in a Go string; cost-free alias). Ipê's
   `Bytes` is a distinct `Vec<u8>` primitive (B2), so both `Ws.sendBinaryToClient`
   and `WebSocket.sendBinary` take `Bytes` (`Vec<u8>`) — no lossy UTF-8 hop. The
   client stdlib's `sendBinaryRaw` is annotated `Int -> Bytes -> Task Error ()`
   accordingly (the reference declares `Int -> String`). Programs that pass binary
-  data through either work correctly on ipê; the same program on the Go reference
+  data through either work correctly on Ipê; the same program on the Go reference
   relies on Go's transparent `string` ↔ `[]byte` relationship.
 - **Go-oracle relationship:** Go succeeds; binary frames are representationally
   different (`String` vs `Vec<u8>`). For ASCII-range payloads, output is
-  identical. For non-UTF-8 binary payloads, ipê is the correct implementation
+  identical. For non-UTF-8 binary payloads, Ipê is the correct implementation
   (no silent corruption).
 - **Rationale:** B2 consequence (`Bytes` = distinct `Vec<u8>` primitive — lossless
   byte model). **Sanctioned:** yes (`divergence:`).
 
 ### B19 — WS server `sendToClient` / `broadcast` are bounded fail-fast (D4)
 - **Differs:** Go's reference WS server (`runtime-go/rt/server_websocket.go`)
-  blocks up to ~30 s on a full write buffer before returning an error. ipê's
+  blocks up to ~30 s on a full write buffer before returning an error. Ipê's
   `ws_loop` uses a `tokio::sync::mpsc::channel` of capacity
   `IPE_WS_SEND_BUFFER` (default 256 frames) with `try_send`: when the queue is
   full the send returns `Err` immediately without blocking. Frames from a slow
@@ -371,7 +371,7 @@ only to pre-empt mis-listing (see AGENTS.md "Agent learnings").
 ### ~~B20 — `ws_loop` does not send Ping heartbeat frames~~ — **CLOSED (#135)**
 - ~~**Differs:** Go's reference WS server sends a Ping frame every 30 s with a
   10 s timeout (`runtime-go/rt/server_websocket.go`, `wsDefaultPingInterval
-  = 30s`). ipê's `ws_loop` had no Ping `select!` arm — dead peers lingered in
+  = 30s`). Ipê's `ws_loop` had no Ping `select!` arm — dead peers lingered in
   the registry until TCP gave up.~~
 - **RESOLVED (#135):** `ws_loop` now has a third `select!` arm driven by
   `tokio::time::interval(Duration::from_secs(ws_heartbeat_secs()))`.  Default
@@ -385,7 +385,7 @@ only to pre-empt mis-listing (see AGENTS.md "Agent learnings").
   name by calling `Map.findWithDefault []` on `type_home_map`, silently supplying
   an empty home `[]` for any name absent from the map. An empty home downstream
   in the Go code-gen is a silent runtime error (or, in the Rust backend, a
-  `IPE-I0001` ICE via the `ir_type_from_canon` unique-match heuristic). ipê's
+  `IPE-I0001` ICE via the `ir_type_from_canon` unique-match heuristic). Ipê's
   `canonicalise_type` now classifies every unqualified upper-case type name
   explicitly at canon time:
   - **Known builtins** (`RESERVED_BUILTIN_TYPES` + `EXTRA_BUILTIN_TYPE_NAMES`) →
@@ -397,7 +397,7 @@ only to pre-empt mis-listing (see AGENTS.md "Agent learnings").
     and `ir_type_from_ty` are removed.
 - **Go-oracle relationship:** the Go backend accepts a program where a type name
   is referenced without importing its home module (the empty-home fallback is
-  harmless in Go's stringly-typed codegen). ipê rejects such programs with a
+  harmless in Go's stringly-typed codegen). Ipê rejects such programs with a
   clear user error instead.
 - **Rationale:** correctness / robustness — a reference to a type that is not in
   scope is a genuine user error; silently giving it an empty home and deferring
@@ -410,7 +410,7 @@ only to pre-empt mis-listing (see AGENTS.md "Agent learnings").
   must compile clean).
 
 ### B22 — Function value in a `Maybe`/`Result`/user-union constructor payload (#90 Stage 1)
-- **Differs:** ipê lifted the blanket `IPE-L0114` rejection of a function
+- **Differs:** Ipê lifted the blanket `IPE-L0114` rejection of a function
   value in a constructor payload for ENUM-LIKE heads (`Maybe`/`Result`, or a
   user union) — `Ok (\x -> x + 1)`, `Just f`, and a DECLARED function-typed
   payload (`type Retryish e = RetryWhen (e -> Bool)`) all lower and run.
@@ -419,7 +419,7 @@ only to pre-empt mis-listing (see AGENTS.md "Agent learnings").
   binding in more than one non-call position, stay fail-closed. Upstream's
   Haskell→Rust codegen instead renders a function-typed field as a bare `fn`
   pointer (`TypeRenderer.hs`) — `Clone`/`Debug`/`PartialEq`-preserving, but
-  restricted to NON-CAPTURING closures (documented there explicitly). ipê's
+  restricted to NON-CAPTURING closures (documented there explicitly). Ipê's
   `Box<dyn Fn>` payload is strictly more general (Ipê closures capture
   freely) at the cost of losing those three derives on the carrier — absorbed
   by the #87 derive-demotion fixpoint and the type checker's
@@ -463,7 +463,7 @@ only to pre-empt mis-listing (see AGENTS.md "Agent learnings").
   cross-module ANNOTATED forwarder reused at two different arity-1-safe
   types — confirmed ACCEPTED, closing the one precision-loss case the design
   flagged as needing empirical confirmation before declaring done). Import
-  aliasing (`import Result as R`) is NOT constructible in ipê today —
+  aliasing (`import Result as R`) is NOT constructible in Ipê today —
   `Result`/`Maybe` are fixed compiler-kernel qualifiers
   (`crates/sky_canon/src/resolve.rs`), not backed by an importable
   Ipê-source module in this milestone, so there is no module to alias.
@@ -499,7 +499,7 @@ only to pre-empt mis-listing (see AGENTS.md "Agent learnings").
   — Go silently returns the untransformed `ra` operand instead of applying the
   boxed function, verified against an unambiguous named-function probe:
   `Ok addTen |> Result.andMap (Ok 5)` prints `5` under Go, not the correct
-  `15`). ipê's `Box<dyn Fn>` kernel call computes the semantically correct
+  `15`). Ipê's `Box<dyn Fn>` kernel call computes the semantically correct
   value in every case. A minority of shapes (a genuinely non-capturing payload
   with no `andMap`/case-extraction involved) DO match — real parity there.
 - **Rationale:** Ipê closures capture freely; a bare-`fn`-pointer restriction
@@ -565,17 +565,17 @@ only to pre-empt mis-listing (see AGENTS.md "Agent learnings").
   verified against the reference `sky v0.16.29`: a cross-module untyped
   helper used at two different concrete types from two different importers,
   and an untyped zero-param value binding used at two different element
-  types cross-module, are both **accepted** by the reference. ipê now accepts
+  types cross-module, are both **accepted** by the reference. Ipê now accepts
   both too (test matrix items 1 and 3 in the spec).
 - **D1 — ambiguous instantiation fails closed.** Where the reference accepts
   via Go's `[]any` erasure (a use-site region still carrying a free type
-  variable not covered by the enclosing def's own generics), ipê rejects with
+  variable not covered by the enclosing def's own generics), Ipê rejects with
   IPE-L0102-ambiguous at the use span. **Sanctioned:** yes — matches the
   repo's "prefer concrete over generic codegen" rule; strictly the safer
   direction (under-acceptance, never a soundness hole).
 - **D2 — `Super`-bounded residual vars stay program-monomorphic in phase 1.**
   The reference generalizes `number`-bounded untyped bindings (e.g. `plus a b
-  = a + b` used at `Int` in one module and `Float` in another); ipê phase 1
+  = a + b` used at `Int` in one module and `Float` in another); Ipê phase 1
   defers this — `Super`-bounded roots are excluded from quantification and
   stay shared program-wide, so such a program is still rejected. **Sanctioned:**
   yes — known under-acceptance; phase 2 (quantify `Super{flex}` too, populate
@@ -586,7 +586,7 @@ only to pre-empt mis-listing (see AGENTS.md "Agent learnings").
   leaves `ident`'s shared var rigid; phase 1 conservatively excludes rigid
   roots from generalization. **Sanctioned:** yes — known under-acceptance,
   phase-2 item after a skolem-escape review.
-- **Rationale:** all three (D1/D2/D3) are under-acceptance (ipê rejects
+- **Rationale:** all three (D1/D2/D3) are under-acceptance (Ipê rejects
   programs the reference accepts) — the safe direction. At the HM-solver
   level, an instantiated scheme var is always plain `Flex` (the same shape
   typed instantiation already produces), so no new `Super`-flex / `Super`-
@@ -650,7 +650,7 @@ only to pre-empt mis-listing (see AGENTS.md "Agent learnings").
   req`. It does this for a Go-runtime reason (keep the untyped map compatible
   with any inferred shape; return-only TVar defaulting collapses it to
   `rt.SkyValue` for examples that never touch `req`).
-- **ipê is prescriptive:** the `init` field is **pinned per app shape** — 
+- **Ipê is prescriptive:** the `init` field is **pinned per app shape** — 
   `Live.app` requires `init : LiveReq -> (Model, Cmd Msg)`, and
   `Tui.app`/`Tui.program`/`Webview.app` require `init : () -> (Model, Cmd Msg)`.
   A mismatch (`init : {} ->` on Live, or `init : LiveReq ->` on Tui) is a clear
@@ -659,7 +659,7 @@ only to pre-empt mis-listing (see AGENTS.md "Agent learnings").
   deferred `cargo` break. A `Live.app` init that declares polymorphic `init : a
   -> …` unifies `a` to `LiveReq` automatically (unchanged for the canonical
   corpus examples 09/10/37).
-- **`LiveReq` is a typed opaque record, not a heterogeneous map.** ipê's runtime
+- **`LiveReq` is a typed opaque record, not a heterogeneous map.** Ipê's runtime
   carries `sky_runtime::live::LiveReq` as a concrete struct (`path`/`query`/
   `method : String`; `params`/`headers`/`cookies : Dict String String`).
   `req.path` is ordinary field access: `LiveReq` stays an opaque nullary `Con`
@@ -674,7 +674,7 @@ only to pre-empt mis-listing (see AGENTS.md "Agent learnings").
   anywhere; `init`'s argument carries ONLY genuine per-invocation context with
   no ambient accessor — `LiveReq` for Live (a session is born from one specific
   HTTP request; there is no `System.currentRequest`), nothing for Tui/Webview.
-  Elm needs `flags` as an init arg only because a browser sandboxes JS; ipê runs
+  Elm needs `flags` as an init arg only because a browser sandboxes JS; Ipê runs
   natively with a real `System` API, so `flags`-as-init-arg is redundant. Being
   prescriptive is both more Elm-`Browser.application`-faithful and
   make-invalid-states-unrepresentable — the reference's free-tvar rationale
@@ -689,34 +689,34 @@ only to pre-empt mis-listing (see AGENTS.md "Agent learnings").
 
 These are structural consequences of porting a Haskell compiler that emits
 Go/Rust into a Rust compiler that emits Rust. Confirmed against `../sky`
-(`feat/runtime-rust`) and the ipê tree.
+(`feat/runtime-rust`) and the Ipê tree.
 
 ### A1 — Rust-all-the-way `skyc` vs a Haskell compiler
-The reference is a Haskell compiler (`src/Sky/…`) emitting Go and Rust. ipê is a
+The reference is a Haskell compiler (`src/Sky/…`) emitting Go and Rust. Ipê is a
 single Rust pipeline — parse → canon → types → lower → IR → Rust-emit — split
 across `crates/sky_canon`, `crates/sky_types`, `crates/sky_lower`,
 `crates/sky_ir`, `crates/sky_backend_rust`. Strategies and invariants are ported,
 never literal code.
 
 ### A2 — Typed IR checkpoint vs AST→string emitters
-ipê lowers `canon → typed sky_ir::Expr → Rust` (two stage). The reference walks
+Ipê lowers `canon → typed sky_ir::Expr → Rust` (two stage). The reference walks
 `Can.Expr_` → Rust string in one pass
 (`src/Ipê/Generate/Rust/Builder/ExprEmitter.hs`). *Rationale:* a malformed shape
 is unrepresentable in the typed IR rather than caught only at `rustc` —
 make-invalid-states-unrepresentable.
 
 ### A3 — Typed `TailRecur`/`TailLoop` IR + self-authored Rust `loop` emission
-ipê represents tail recursion as typed IR nodes (`Expr::TailRecur` /
+Ipê represents tail recursion as typed IR nodes (`Expr::TailRecur` /
 `Expr::TailLoop`, `sky_lower/src/lower.rs`) and emits a Rust `loop { … }`. The
 reference transports the jump as a stringly kernel-name sentinel
 (`tcoMarker = "__tco_jump__"`, `src/Ipê/Build/TailCallOpt.hs:140`) and emits TCO
-**Go-only** — its Rust backend has no TCO. ipê ports the reference's
+**Go-only** — its Rust backend has no TCO. Ipê ports the reference's
 backend-agnostic `isTailRecursive` analysis but authors the Rust loop emission
 itself. *Rationale:* soundness — constant stack vs an uncatchable stack-overflow
 trap; and a typed jump vs a stringly sentinel.
 
 ### A4 — Closed typed kernel registry + fail-closed default
-ipê dispatches through a closed **424-variant** `KernelFn` enum with a typed
+Ipê dispatches through a closed **424-variant** `KernelFn` enum with a typed
 `StdlibKernel` registry (`crates/sky_kernels`), indexed anti-drift from
 `StdlibKernel::ALL`; an unknown kernel fails **closed** with `IPE-L0108`. The
 reference dispatches `(mod,name)` via a string `case` and falls **open** to a
@@ -726,28 +726,28 @@ reference dispatches `(mod,name)` via a string `case` and falls **open** to a
 registry.
 
 ### A5 — `render_type : IrType → DResult`, no `"String"` default
-ipê's type renderer is a closed function returning `DResult<String>`
+Ipê's type renderer is a closed function returning `DResult<String>`
 (`emit_types.rs:73`) with no catch-all. The reference's `TypeRenderer.hs` falls
 back to a `"String"` default on an unmatched type. *Rationale:* soundness floor —
 the renderer is total by construction.
 
 ### A6 — First-class opaque `IrType` variants vs `{M}`-placeholder strings
-ipê models opaque/parametric types as first-class closed `IrType` variants with a
+Ipê models opaque/parametric types as first-class closed `IrType` variants with a
 structural `Box<IrType>` message parameter. The reference uses a stringly-keyed
 `Map (String,String) String` with `{M}`-placeholder substitution and
 re-derivation. *Rationale:* invalid-states.
 
 ### A7 — Exact-key record resolution, fail-loud
-ipê resolves record aliases by exact sorted-key match and raises a `CompilerBug`
+Ipê resolves record aliases by exact sorted-key match and raises a `CompilerBug`
 on a miss. The reference widens to the best superset row and falls back to
 `"String"` on a miss. *Rationale:* soundness > completeness (a superset fallback
 would be added only if a real example trips the guard).
 
 ### A8 — Uniform `Box<dyn Fn>` callbacks (reference is more complete here)
-ipê renders effectful callbacks uniformly as `Box<dyn Fn>` (with a handler
+Ipê renders effectful callbacks uniformly as `Box<dyn Fn>` (with a handler
 special-case). The reference uses a 3-way classification (stored
 `Arc<dyn Fn>+Send+Sync` / passed `impl Fn` / ADT-embedded bare `fn`). This is one
-axis where the reference is more complete; ipê adopts the 3-way split when a
+axis where the reference is more complete; Ipê adopts the 3-way split when a
 `derive`/`Clone` callback subsystem lands. *Neutral: reference-ahead on
 completeness.*
 
@@ -787,52 +787,52 @@ multi-parameter payload stays a distinct surface. Regression:
 `golden_i198_decoder_payload_mapper` (ipe-0 render assertion + cargo-0 E2E).
 
 ### A9 — Crate-version SSOT as a typed `const` table + drift test
-ipê holds crate name+version in a typed `const CrateSpec` table
+Ipê holds crate name+version in a typed `const CrateSpec` table
 (`crates/sky_backend_rust/src/crate_specs.rs`) read by every manifest-emitting
 function, with a co-located drift test asserting the SSOT ≡ `runtime/Cargo.toml`
 (all crates) **and** ≡ the golden base manifest. The reference holds the same SSOT
 as an embedded `crate-specs.toml` re-parsed at build
 (`src/Ipê/Generate/Rust/Builder/crate-specs.toml` + `CrateSpecs.hs`) with a sync
-test. *Rationale:* compiler-checked structured data over a string re-parse; ipê's
+test. *Rationale:* compiler-checked structured data over a string re-parse; Ipê's
 drift test additionally covers the golden base manifest.
 
 ### A10 — Kernel-registry drift tripwires
-ipê builds the canon `stdlib_index` anti-drift from `StdlibKernel::ALL`
+Ipê builds the canon `stdlib_index` anti-drift from `StdlibKernel::ALL`
 (`sky_canon/src/env.rs`), so a registered kernel and its call-site resolution
 cannot skew silently. *Rationale:* parse-don't-validate at the registry boundary.
 
 ### A11 — Runtime as a vendored fork that has since diverged
 The 48-module `sky_runtime` is a vendored fork shared by name with the
-reference's Rust runtime; ipê's copy is a strict superset — every module is
+reference's Rust runtime; Ipê's copy is a strict superset — every module is
 equal-or-larger with the reference's logic plus the security/correctness/soundness
 hardening enumerated in B14. Structurally: runtime divergence is *within-module*,
 not a different module layout. *Rationale:* the reference's Rust runtime is not
 cargo-culted back in.
 
 ### A12 — Fail-closed refutable function-argument patterns
-For a refutable function-arg pattern (`f (Just x) = …`) ipê refuses at lower
+For a refutable function-arg pattern (`f (Just x) = …`) Ipê refuses at lower
 (IPE-L0115/0116) and closes the gap via a front-end desugar to `case`. The
 reference synthesises a `let … else { panic! }` (a reachable `panic!`).
 *Rationale:* soundness — "no panic from well-typed Ipê" outranks the completeness
 the reference gains. (Front-end desugar is the completeness close.)
 
-### A13 — Fail-closed nested-constructor-payload patterns (ipê currently less complete)
+### A13 — Fail-closed nested-constructor-payload patterns (Ipê currently less complete)
 A nested list/cons/record inside a constructor payload (`Just (h :: t)`,
-`Ok {name}`) is rejected fail-closed in ipê
+`Ok {name}`) is rejected fail-closed in Ipê
 (`Err(NestedCtorDiscrimination/NestedPayloadPatterns)`); the reference recurses
 and compiles it. *Rationale:* soundness over completeness for now; the
 completeness gap is a tracked front-end item. *Neutral: reference-ahead on
 completeness.*
 
 ### A14 — Non-HOF `List` ops as iterative kernels vs pure-Ipê recursion (efficiency-only, output-identical)
-ipê wires the non-HOF `List` combinators
+Ipê wires the non-HOF `List` combinators
 (`append`/`concat`/`take`/`drop`/`zip`/`cons`/`isEmpty`) as **iterative Rust
 kernels** (constant native stack), whereas the Go "Ipê" backend classifies them
 as non-tail-recursive pure-Ipê (O(N) call-stack). Output is byte-identical
 across all Elm edges (negative/over-length `take`/`drop`, shorter-truncating
-`zip`, empty `concat`); ipê additionally has a strictly better stack profile (no
+`zip`, empty `concat`); Ipê additionally has a strictly better stack profile (no
 200k+-element stack-depth risk). *Rationale:* `List.*` is anchored to
-`VarHome::Kernel` in ipê canonicalisation (task #68), so the kernel path is the
+`VarHome::Kernel` in Ipê canonicalisation (task #68), so the kernel path is the
 only exit-0-safe wiring — the improved stack behaviour is a free consequence, not
 a behavioural change. `concatMap`/`indexedMap` are kernels in both backends.
 *Neutral: efficiency-only, output-identical.* See
@@ -846,7 +846,7 @@ functions, `Html`, `Cmd`, and `Task` values in Model or Msg at compile time (the
 fail to round-trip or are carried as `any`, but the compiler accepts them
 silently).
 
-ipê's Rust runtime imposes **static trait bounds** on both type parameters:
+Ipê's Rust runtime imposes **static trait bounds** on both type parameters:
 `live_app<Model, Msg>` requires
 `Model: serde::Serialize + DeserializeOwned + Clone + PartialEq + Send + Sync`
 and `Msg: Clone + Send + Sync + Debug` (`runtime/src/sky_runtime/live/mod.rs`).
@@ -881,7 +881,7 @@ See `docs/architecture/seal-gates-msg-lambda-view-design.md §4`.
 ### A16 — App cfg must be an inline record literal (IPE-L0119)
 The reference Go backend accepts any expression as the `Live.app` / `Tui.app` /
 `Webview.app` cfg argument, including a let-bound variable
-(`let cfg = { … } in Live.app cfg`). ipê's backend reads the cfg's fields
+(`let cfg = { … } in Live.app cfg`). Ipê's backend reads the cfg's fields
 (`init`, `update`, `view`, `subscriptions`, …) directly from the structural
 record at the call site; a non-literal argument (a `Var`, a pipe result, a
 function call) cannot be field-indexed at lower time, so it is rejected with
@@ -890,7 +890,7 @@ function call) cannot be field-indexed at lower time, so it is rejected with
 *Rationale:* Rust-lowering constraint — the backend must structurally decompose
 the cfg record at lower time to emit the correct `live_app` call; a variable
 reference loses the field structure. The reference's Go backend reconstructs the
-cfg at runtime via reflection; ipê does not have that escape hatch.
+cfg at runtime via reflection; Ipê does not have that escape hatch.
 *Verified:* `code.rs:196`, `explain/IPE-L0119.md`, `emit_live.rs` (lookup_field).
 *Note:* let-bound-cfg support (`[feature: let-bound-app-cfg]` in the explain
 page) is a tracked future item — not a permanent limitation.
@@ -898,7 +898,7 @@ page) is a tracked future item — not a permanent limitation.
 ### A17 — `Float` rejected as `Set` element or `Dict` key (IPE-L0117)
 Ipê's type system treats `Float` as a `comparable` value, so the Ipê type checker
 accepts `Set Float` / `Dict Float v` — the reference Go backend uses `interface{}`
-comparison and tolerates these at runtime. ipê backs `Set a` with
+comparison and tolerates these at runtime. Ipê backs `Set a` with
 `BTreeSet<a>` and `Dict k v` with `HashMap<k, v>`; Rust's `f64` implements
 neither `Ord` (NaN has no place in a total order) nor `Hash`/`Eq` (NaN != NaN).
 Emitting `BTreeSet<f64>` / `HashMap<f64, _>` would produce Rust that does not
@@ -915,19 +915,19 @@ ordered-float wrapper) is a tracked future enhancement.
 Ipê's `Ipe.Http.Server.WebSocket` stdlib source declares
 `WebSocketServerCfg msg` with a phantom `msg` type variable reserved for
 hypothetical future `Sub` integration (the phantom never reaches the runtime).
-ipê types the cfg as a **nullary** opaque constructor: `IrType::WebSocketServerCfg`
+Ipê types the cfg as a **nullary** opaque constructor: `IrType::WebSocketServerCfg`
 renders `WsServerCfg<SkyError>` directly, with `E = SkyError = String` pinned at
 the emit site. The runtime struct `WsServerCfg<E>` remains generic over `E`;
-ipê merely instantiates it monomorphically.
+Ipê merely instantiates it monomorphically.
 
 Effect: a type annotation `Ws.WebSocketServerCfg Msg` compiles on the reference
-(phantom var accepted) but fails arity on ipê (`WebSocketServerCfg` is declared
+(phantom var accepted) but fails arity on Ipê (`WebSocketServerCfg` is declared
 with 0 type args). Example 33 and all known callers never annotate the cfg type
 directly, so this is annotation-only in practice.
 
 *Rationale:* the phantom `msg` var is an artefact of the upstream Go TEA
 architecture where `WebSocketServerCfg msg` was future-proofed for a Sub-based
-WS subscription tier. ipê's kernel-only module has no Sub-tier for the server-side
+WS subscription tier. Ipê's kernel-only module has no Sub-tier for the server-side
 WS surface; a phantom var would widen the type to parametric with nothing to
 unify against (a soundness hazard). Dropping it matches `IrType::Db`,
 `IrType::StreamWriter`, and the other nullary opaque handles.
@@ -956,7 +956,7 @@ reference behaviour to match. *Verified:* the four checked-in golden manifests
 
 ### A20 — Static-build allocator default: pure-Rust dlmalloc, not mimalloc
 The reference's musl-static path defaults to the C `mimalloc` allocator
-(`static_alloc = ["mimalloc"]` in its emitted manifest). ipê's static path
+(`static_alloc = ["mimalloc"]` in its emitted manifest). Ipê's static path
 defaults to pure-Rust `dlmalloc`, with `mimalloc` demoted to an explicit,
 noticed opt-in (`--allocator mimalloc`) — the full trade study and AUTO table
 live in `docs/architecture/static-compilation.md`. *Rationale:* security
@@ -965,7 +965,7 @@ toolchain, `build.rs`, unsafe C-FFI boundary, and frozen vendored-C
 supply-chain surface from every static build, while still clearing the musl
 malloc throughput cliff; dlmalloc is Rust std's wasm allocator (one audited
 allocator across static-native and wasm). The concurrent-churn delta versus
-mimalloc on the ipê runtime is not yet measured (the measure-before-finalize
+mimalloc on the Ipê runtime is not yet measured (the measure-before-finalize
 bench sizes the opt-in recommendation; it does not decide the default — the
 principle order does). Three reference warn-paths tighten into typed
 refusals/gates for the same reason: unknown allocator names are a parse-time
@@ -986,14 +986,14 @@ Surface-shape differences (several overlap the behavioral entries; listed here f
 API-shape review):
 
 - **`Bytes` conversion API** — because `Bytes` is a distinct `Vec<u8>` primitive
-  (B2), ipê exposes explicit `Bytes.fromString` / `Bytes.toString : Maybe String`
+  (B2), Ipê exposes explicit `Bytes.fromString` / `Bytes.toString : Maybe String`
   where Ipê's `Bytes = String` alias needs none.
 - **`Ipe.Jwt` call surface** — flat kernels vs the Go builder API (B9); token
   bytes identical, call surface differs until the builder API lands.
-- **`Cmd` / `Sub` constructors** — present on ipê, absent on the Go backend (B12).
+- **`Cmd` / `Sub` constructors** — present on Ipê, absent on the Go backend (B12).
 - **`Ipe.Db` substrate** — `sqlx`/Rust vs SQLite/cgo/Go (B10); identical Ipê
   surface.
-- **Front-end capability gaps (ipê not-yet, reference-ahead)** — neutral coverage
+- **Front-end capability gaps (Ipê not-yet, reference-ahead)** — neutral coverage
   differences, each a tracked front-end item, none a principle divergence:
   - Bare `.field` accessor-as-function (no canon AST variant yet).
   - Refutable function-argument patterns (A12 — closes via desugar).
@@ -1002,7 +1002,7 @@ API-shape review):
     (self-recursion only).
 - **`Task` error-channel scheme is monomorphic (`fail`/`mapError`/`onError`)**
   — Sky declares `fail : e -> Task e a` (`../sky/sky-stdlib/Sky/Core/Task.sky:51`),
-  polymorphic in the error type. ipê pins all three combinators to the
+  polymorphic in the error type. Ipê pins all three combinators to the
   concrete `Error` type: `fail : Error -> Task Error a`,
   `mapError : (Error -> Error) -> Task Error a -> Task Error a`,
   `onError : (Error -> Task Error a) -> Task Error a -> Task Error a`
@@ -1025,13 +1025,13 @@ API-shape review):
   reading was unimplementable on this backend; it only ever produced
   ill-typed Rust, never a working program.
 
-- **Numeric literals in `{{...}}` interpolation** — ipê's interpolation
+- **Numeric literals in `{{...}}` interpolation** — Ipê's interpolation
   mini-parser (`resolve_simple_interp_ref`) recognises an integer/float literal
   argument, e.g. `{{String.fromInt 54}}` lowers to `String.fromInt 54` and
   prints `54`. Ipê's `resolveInterpolationRef`
   (`Ipê/Canonicalise/Expression.hs`) has no literal case: a digit-leading body
   becomes `Can.VarLocal "54"`, which surfaces downstream as a naming error (the
-  interpolation grammar there is names-only). ipê's `constrain` treats an
+  interpolation grammar there is names-only). Ipê's `constrain` treats an
   unresolved local as a violated invariant (IPE-I0001 ICE), so without this the
   same program ICE'd rather than compiling. A Ipê identifier can never start
   with a digit, so recognising the literal is unambiguous and strictly better
@@ -1055,7 +1055,7 @@ API-shape review):
 
 ## 5. README-liftable summary table
 
-| Aspect | Ipê (reference) | ipê | Why |
+| Aspect | Ipê (reference) | Ipê | Why |
 |---|---|---|---|
 | Compiler host | Haskell, emits Go + Rust | Rust, emits Rust (`skyc`) | Single-language port |
 | IR | AST → string emitters | Typed `sky_ir::Expr` (two-stage) | Malformed shapes unrepresentable |
@@ -1073,7 +1073,7 @@ API-shape review):
 | `Ipe.Db` | Go + SQLite (cgo) | Rust + `sqlx` | Backend substrate |
 | `Ipe.Ui` HTML | skeleton + `<style>` reset | compact inline CSS, no reset block | Separate renderer; byte-parity later |
 | Runtime | shared fork baseline | strict superset (auth/jwt/SSRF/decimal/cache/env/telemetry hardening) | Security/correctness/soundness |
-| Float sci-notation | exp ≥ 21 (reference Rust) | exp ≥ 6 (Go `%v` parity) — **confirmed vs Go 1.26.2 (#52)** | ipê matches Go; the reference's Rust fork diverges |
+| Float sci-notation | exp ≥ 21 (reference Rust) | exp ≥ 6 (Go `%v` parity) — **confirmed vs Go 1.26.2 (#52)** | Ipê matches Go; the reference's Rust fork diverges |
 | Static-build allocator | mimalloc (C) default | pure-Rust dlmalloc default; mimalloc = noticed opt-in; warn-paths → typed refusals | Security #1 > efficiency #4; C-free static path |
 | Clone strategy (non-`Copy` bindings) | use-count ≥ 2 → clone ALL reads (including last) | true last-use: clone all-but-last owned reads, last moves; borrow reads exempt | Rust move semantics; N−1 clones vs N |
 | As-pattern alias in match arm | drops alias name → E0425 on use (latent bug) | binds whole by move, reconstructs inner from clone | Correctness; reference latent bug fixed |
@@ -1135,7 +1135,7 @@ API-shape review):
 
 - ~~**B15 float sci-notation threshold.**~~ RESOLVED (task #52, commit `1903654`):
   probed Go 1.26.2 directly — `%v` cuts to scientific at exp ≥ 6, no exp-21
-  behaviour; ipê matches Go byte-for-byte. No longer an open item.
+  behaviour; Ipê matches Go byte-for-byte. No longer an open item.
 - ~~The reference `TypeRenderer.hs` `"String"` default and `ExprEmitter.hs`
   single-pass shape line-cites.~~ CONFIRMED against the reference tree at
   `src/Ipê/Generate/Rust/Builder/`:
@@ -1163,7 +1163,7 @@ API-shape review):
 - **"Nominal (home, name) identity types #100" — NOT VERIFIED AS SKY DIVERGENCE.**
   Session memory referenced this as a divergence, but in-repo search finds no
   file or commit that records it as a Ipê-specific divergence. The principled-
-  decisions-audit (#12) confirms ipê already keys on `(home, name)` canonical
+  decisions-audit (#12) confirms Ipê already keys on `(home, name)` canonical
   naming — following `elm/compiler` — and the audit verdict is REJECT (already
   better). Sky's own Haskell compiler also uses name-qualified lookup internally,
   so this appears to be a PORT (convergence with elm/compiler), not a divergence
@@ -1186,12 +1186,12 @@ API-shape review):
   runtime to coerce the captured string to the expected field type.
 - **Go-oracle relationship:** for `String`-payload constructors the output is
   byte-identical. For `Int`/`Float`/`Bool` payloads the Go oracle coerces at
-  runtime (opaque to the type checker); ipê emits explicit `.parse::<i64>()`/
+  runtime (opaque to the type checker); Ipê emits explicit `.parse::<i64>()`/
   `.parse::<f64>()`/`parse::<bool>()` expressions that decode at the call site.
-  A malformed capture (e.g. `"abc"` for an `Int` slot) causes ipê to route to
+  A malformed capture (e.g. `"abc"` for an `Int` slot) causes Ipê to route to
   `not_found` — the Go reference silently substitutes `0` via reflect-coercion.
   For payloads of any other type, the reference emits a String and relies on the
-  Go runtime to coerce; ipê rejects at compile time (to be upgraded to diagnostic
+  Go runtime to coerce; Ipê rejects at compile time (to be upgraded to diagnostic
   code `IPE-L0123` — NOT `IPE-L0121`, which is owned by the #94
   `InadmissibleAppMsg` gate; see `docs/architecture/design-coherence-review.md`
   §C1). A route page builder that is neither a page constructor, an inline
@@ -1216,13 +1216,13 @@ API-shape review):
   concrete-over-generic contract: no `dyn Any`/`.downcast`/type-erasure) and
   cannot emit an unconstrained Rust generic (the union's `Clone + Debug +
   PartialEq + Serialize + DeserializeOwned` derives must hold for every field).
-  ipê pins the `any` wildcard to `Dict String String` (`HashMap<String, String>`
+  Ipê pins the `any` wildcard to `Dict String String` (`HashMap<String, String>`
   in the emitted Rust) — the sole concrete carrier that satisfies all derives and
   the `Broker` type parameter.  The pub/sub broker is typed per concrete payload
   (see A18-adjacent: `Broker<HashMap<String,String>>` for `any`-ctor programs);
   publisher and subscriber must agree on the concrete type at compile time.
 - **Go-oracle relationship:** Go succeeds and carries the payload as `any` /
-  `interface{}`; ipê carries it as `Dict String String`.  For real-world pub/sub
+  `interface{}`; Ipê carries it as `Dict String String`.  For real-world pub/sub
   programs (examples 27 and 37) the publisher encodes a record into
   `payloadDict : Dict String String` and the subscriber decodes with
   `Db.getString`; the round-trip is semantically equivalent.  Programs that
@@ -1242,10 +1242,10 @@ API-shape review):
 - **Differs:** Go's `Auth.signToken : String -> a -> Int -> Result Error String`
   / `verifyToken : String -> String -> Result Error a` type the claims argument
   and return as a fully polymorphic `a` — any Go value marshals through
-  `interface{}`/`encoding/json`. ipê pins `a` to `Dict String String`
+  `interface{}`/`encoding/json`. Ipê pins `a` to `Dict String String`
   (`HashMap<String, String>` in the emitted Rust).
 - **Go-oracle relationship:** Go succeeds for any claims shape (record, map,
-  scalar); ipê accepts only a `Dict String String` claims argument (and returns
+  scalar); Ipê accepts only a `Dict String String` claims argument (and returns
   the same on verify). A well-typed Ipê program passing a record literal or
   other non-Dict shape as claims is now REJECTED at type-check (IPE-T0001-class)
   instead of silently miscompiling — the AUD-06 seal fix this entry documents
@@ -1265,12 +1265,12 @@ API-shape review):
 ### B-ErrorToString — `errorToString : Stringify a => a -> String` (bounded polymorphic vs. universal)
 - **Differs:** Ipê's Go runtime implements `errorToString` as `fmt.Sprintf("%v", v)`,
   which accepts any value at runtime (universally polymorphic, no type-level bound).
-  ipê types `errorToString` as `Stringify a => a -> String`, routing all
+  Ipê types `errorToString` as `Stringify a => a -> String`, routing all
   stringification through the single `SkyStringify` trait chokepoint — the same
   chokepoint used by `Basics.toString`.
 - **Go-oracle relationship:** Output is identical for all scalar, record, and ADT
   values. A future `Secret` newtype that omits `SkyStringify` would fail closed
-  at type-check in ipê but would be silently rendered by Go's `fmt.Sprintf`.
+  at type-check in Ipê but would be silently rendered by Go's `fmt.Sprintf`.
 - **Rationale:** The bounded form is strictly sounder for typed-secrets safety.
   A type withheld from the `SkyStringify` impl set (e.g. a future opaque `Secret`)
   fails closed at type-check rather than reaching the runtime `fmt` fallback.
@@ -1384,7 +1384,7 @@ API-shape review):
   is caller-authored text with no typed guard against a mistaken
   string-interpolated fragment sneaking in alongside the intentional
   parameterization.
-- **ipê design:** a new opaque `SqlFragment` type (`Ipe.Db.Sql`, qualifier
+- **Ipê design:** a new opaque `SqlFragment` type (`Ipe.Db.Sql`, qualifier
   `Sql`) whose ONLY constructors are typed combinators — `column`, `param`
   (plus the `int`/`string`/`float`/`bool` sugar), `eq`/`ne`/`gt`/`lt`/`gte`/
   `lte`, `and`/`or`/`not`, `isNull`/`isNotNull`, `inList`, `like`. Every
@@ -1419,7 +1419,7 @@ API-shape review):
   plain `String` signing key, and every other Go/Haskell surface handles API
   keys / passwords / tokens as bare `String` — no typed boundary stops one
   from landing in a log line, a `fmt.Sprintf("%v", …)`, or an error message.
-- **ipê design:** a new opaque `Secret` type (`Ipe.Secret`, 3 kernels:
+- **Ipê design:** a new opaque `Secret` type (`Ipe.Secret`, 3 kernels:
   `fromString` — the seal; `reveal` — the single greppable un-parse;
   `redacted` — the explicit `"<redacted>"` accessor). `Auth.signToken` /
   `Auth.verifyToken`'s signing-key argument is re-typed `String -> Secret`
@@ -1487,7 +1487,7 @@ API-shape review):
   `sqlCodeToCurrency` switch) — Go's runtime is dynamically-typed
   (`any`-based `SkyADT`), so it can construct an arbitrary user ADT value at
   runtime with no compile-time dependency on the project's generated types.
-- **ipê design:** `db_decode_money` (`runtime/src/sky_runtime/db.rs`) returns
+- **Ipê design:** `db_decode_money` (`runtime/src/sky_runtime/db.rs`) returns
   the structural pair `Decoder (Decimal, String)` instead. `Money`/`Currency`
   are project-generated Rust types (`StdMoneyMoney`/`StdMoneyCurrency`,
   named per the project's module prefix) unnameable from the shared
@@ -1529,7 +1529,7 @@ API-shape review):
   not structurally rejected at that boundary — Go's dynamically-typed runtime
   routes it to the `ffi_kernel_polyfill` (`Kernel.hs:780`), which can panic at
   run time.
-- **ipê design:** the split-at-first-`_` `(Module, function)` pair is resolved
+- **Ipê design:** the split-at-first-`_` `(Module, function)` pair is resolved
   against the closed kernel registry (`Env::stdlib_index`) at **canonicalisation**
   (`crates/sky_canon/src/resolve.rs`, `detect_kernel_alias`). A binding whose
   body is exactly `Ffi.kernel "Module_function"` and whose pair IS registered is
@@ -1546,13 +1546,13 @@ API-shape review):
   exists. Regression: `crates/ipe/tests/golden_ffi_kernel_alias_seal.rs`
   (unknown → IPE-N0028; malformed → IPE-N0028; registered `String_toUpper` →
   ipe-0 AND cargo-0).
-- **Layered fail-closed for arity/lowering gaps:** because ipê types the alias's
+- **Layered fail-closed for arity/lowering gaps:** because Ipê types the alias's
   *body* via the kernel's HM scheme (not a flexible var — a flexible var would be
   the exact exit-0-then-cargo-fail hole the SEAL forbids), an alias whose declared
   annotation arity differs from the kernel's scheme is rejected with **IPE-T0001**
   at type-check, and a kernel with no lowering arm is rejected with **IPE-L0108**
   at lowering. Both are clean `ipe`-time rejections — no cargo-fail. Consequence:
-  some upstream compiled-source modules stay kernel-blocked on ipê until their
+  some upstream compiled-source modules stay kernel-blocked on Ipê until their
   Rust kernels (and, where the annotation diverges from the kernel scheme, the
   matching lowering) exist:
   - **Registry-blocked (no `StdlibKernel` variant, IPE-N0028):** `Ipe.Trace`,
@@ -1570,7 +1570,7 @@ API-shape review):
     monomorphized `Box<dyn Fn(()) -> …>` cannot, so the shape is rejected until an
     arity-0-alias-of-nullary-effect-kernel lowering is built.
   These are documented completeness gaps (PRINCIPLES §5), not silent workarounds.
-- **Sanctioned:** yes, tagged `sanctioned` — ipê is deliberately more sound: the
+- **Sanctioned:** yes, tagged `sanctioned` — Ipê is deliberately more sound: the
   closed registry turns a Go-runtime-panic-class (unknown kernel routed to a
   polyfill) into a compile-time rejection. Reference: `crates/sky_canon/src/
   resolve.rs` (`detect_kernel_alias`, `KernelAlias`, in-module + dep injection),
@@ -1584,17 +1584,17 @@ API-shape review):
   re-exports `onSubmit : a -> Attribute b` and `onInput : msg -> Attribute msg`
   — the arg is a bare value, matching upstream `Ipe.Ui`'s permissive event
   kernels.
-- **ipê design:** the Rust `Ui.onSubmit` kernel is `(a -> msg) -> Attribute msg`
+- **Ipê design:** the Rust `Ui.onSubmit` kernel is `(a -> msg) -> Attribute msg`
   and `Ui.onInput` is `(String -> msg) -> Attribute msg` (function-arg handlers
   — `crates/sky_types/src/constrain.rs`, `K::UiOnSubmit`/`K::UiOnInput`). The
   `Ipe.Ui.Events` re-exports mirror those kernel schemes
   (`onSubmit : (a -> msg) -> Ui.Attribute msg`,
   `onInput : (String -> msg) -> Ui.Attribute msg`); the upstream bare-value
-  signatures would not type-check against the ipê kernel. `onClick` is unchanged
+  signatures would not type-check against the Ipê kernel. `onClick` is unchanged
   (`msg -> Attribute msg` on both). Resolves the module fully (ipe-0 AND
   cargo-0). Reference: `crates/ipe/stdlib/Std/Ui/Events.ipe`.
 - **Sanctioned:** yes, tagged `divergence` — an API-shape difference emergent
-  from ipê's function-arg event-kernel schemes; the re-export must match the
+  from Ipê's function-arg event-kernel schemes; the re-export must match the
   kernel it forwards to.
 
 ### B-Keyed — `Ipe.Ui.Keyed`: key attached as `sky-key` DOM attribute (stamp approach)
@@ -1609,10 +1609,10 @@ API-shape review):
 - **Go-oracle relationship:** rendered HTML byte output is identical for any
   single render (both produce the same element tree). On subsequent *patch*
   renders, the Go reference diff uses the key to pair old and new children and
-  issue minimal DOM moves; ipê v1 uses positional sky-ids but the `sky-key`
+  issue minimal DOM moves; Ipê v1 uses positional sky-ids but the `sky-key`
   attribute lets a future diff upgrade adopt stable identity without an API
   change.
-- **Rationale:** ipê v1 ships no VNode struct — the render surface works with
+- **Rationale:** Ipê v1 ships no VNode struct — the render surface works with
   plain `Element<M>` trees serialised as HTML strings. Carrying the key as a
   `sky-key` DOM attribute costs zero abstraction overhead and keeps the public
   API (key ≠ discarded) correct. A VNode-level key differ is a v2 upgrade,
@@ -1632,7 +1632,7 @@ API-shape review):
   validation policy differs for self-signed or private-CA certs: rustls enforces
   WebPKI trust roots (no `InsecureSkipVerify`); Go trusts the OS cert store and
   accepts `InsecureSkipVerify = true`.
-- **Rationale:** ipê already uses rustls for `reqwest` (HTTP client), `sqlx`
+- **Rationale:** Ipê already uses rustls for `reqwest` (HTTP client), `sqlx`
   (database), and `lettre` (email). A uniform TLS backend means one root-store,
   one audit surface, and no OpenSSL linking — aligned with the no-native-deps
   goal of the runtime. The `native-tls` feature of `tokio-tungstenite` is
@@ -1653,7 +1653,7 @@ tokio::task::spawn(…).await })` three-arm match), adopted per
 
 - **JoinError through the redaction funnel.** The reference's panic arm emits
   a bare `str_err("foreign async call panicked")` — no correlation id, no
-  server-side detail. ipê routes the `JoinError` through
+  server-side detail. Ipê routes the `JoinError` through
   `ipe_error_from_foreign` (same funnel as every foreign `Err(e)`): the raw
   `Debug` — which carries the panic payload — is logged server-side under a
   fresh correlation id, and Ipê observes the generic
@@ -1664,7 +1664,7 @@ tokio::task::spawn(…).await })` three-arm match), adopted per
   bearer tokens / API keys in their `Debug` output — a secret channel).
 - **Abort-on-drop cancel guard.** The reference's inner spawned task detaches
   when the outer wrapper future is dropped (`Task.parallel` early-cancel),
-  leaking side effects after failure. ipê arms an `AbortOnDrop` guard
+  leaking side effects after failure. Ipê arms an `AbortOnDrop` guard
   (runtime `task.rs`) around the spawn and defuses it after a normal join, so
   a cancelled foreign call is aborted, preserving the no-side-effect-after-
   failure contract. Regression:
@@ -1672,7 +1672,7 @@ tokio::task::spawn(…).await })` three-arm match), adopted per
 - **Process-global tokio runtime.** Both runtimes historically built a fresh
   `Runtime::new()` per `block_on`, so a reactor-registered handle (FFI
   client, listener) constructed in one entry died with that entry's reactor.
-  ipê drives every `block_on` on one `OnceLock`-held global runtime
+  Ipê drives every `block_on` on one `OnceLock`-held global runtime
   (`task.rs::global_runtime`); `block_on_current_thread` (the webview
   main-thread driver) is unchanged. Behavior-compatible — a shared reactor is
   strictly more available than a fresh one. Regression:
@@ -1692,7 +1692,7 @@ designed, sequenced for the post-completion program (`ROADMAP.md` §C.6).
 Governing rules: every divergence here, if/when adopted, becomes a documented
 ledger entry above (a divergence is *documented*, never silent) and flips the
 relevant parity row from "mirrors Go" → "intentional design + rationale + own
-tests". Until then ipê still **mirrors** upstream behaviour. **Divergences go
+tests". Until then Ipê still **mirrors** upstream behaviour. **Divergences go
 last, on a verified-complete base** (rule filed 2026-06-28): a grammar
 superset can't be checked against the Go oracle (its parser rejects the new
 form), so adding one early would muddy every parity sweep.
@@ -1823,7 +1823,7 @@ migration tool.
 
 The reference ships no lint subsystem — no lint pass, no lint CLI command, no
 per-site suppression (its `Ipê/Lsp/Diag.hs` republishes compiler diagnostics
-only). ipê adds `ipe lint`, an elm-review/clippy-class static-analysis tool
+only). Ipê adds `ipe lint`, an elm-review/clippy-class static-analysis tool
 over the compiler's own artifacts (parse AST + canon AST + `SolvedTypes` —
 never a second analyzer): visitor-schema rules in a new `sky_lint` crate,
 dual `IPE-W####`+kebab-name identity, `allow`/`warn`/`deny` levels via

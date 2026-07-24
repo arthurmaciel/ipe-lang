@@ -30,7 +30,7 @@ mostly moot under qualified access — keep only the reserved-root rejection.
 Status: DESIGN (locked Q1–Q6, open decisions listed). No code, no build.
 Author: guardian design-swarm synthesis + user decided-shape (2026-07-03).
 Supersedes the panel drafts.
-Coupled to: rename #59 (Ipê → ipê), memory `post-completion-rename-and-namespace`,
+Coupled to: rename #59 (Ipê → Ipê), memory `post-completion-rename-and-namespace`,
 audit `docs/architecture/principled-decisions-audit.md` #11 (DCE).
 
 Principle order governing every ruling below:
@@ -85,7 +85,7 @@ commits. Rename #59 lands **first**; flatten lands **second**.
   collapsed.
 - **F3. Silent qualifier merge is live.** `env.rs:1036` / `:1063` use
   `.extend(...)` on a shared qualifier key — last-writer-wins, no error.
-- **F4. Ipê-level DCE is absent.** Audit #11: ipê emits all defs
+- **F4. Ipê-level DCE is absent.** Audit #11: Ipê emits all defs
   (`for func in &module.funcs`) and relies on rustc/LLVM link-strip. Class "P4
   efficiency (build speed) only", priority low. Embedded stdlib
   (`src/ipe-cli/src/stdlib.rs`, fixed 18-module `include_str!` set) is pulled into
@@ -344,7 +344,7 @@ Ordering rationale:
 
 Concrete order:
 
-1. **#59** — rename `Ipê → ipê`/`Ipe`, extension `.ipe → .ipe`, `IPE-N00xx → IPE-N00xx`,
+1. **#59** — rename `Ipê → Ipê`/`Ipe`, extension `.ipe → .ipe`, `IPE-N00xx → IPE-N00xx`,
    reserved segments flip `{Ipê, Std} → {Ipe, Std}`, de-abbreviation. Old public
    names kept as deprecated aliases through the flatten window. Own commit, green
    against the sweep.

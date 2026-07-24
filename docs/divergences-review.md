@@ -12,8 +12,8 @@
 >
 > **Public-artifact rule (enforced in every line below):** neither Elm nor Ipê
 > is characterized as buggy, wrong, or limited. Every departure is stated as
-> *what differs* plus *the technical rationale*. Where ipê matches Go or Elm
-> more closely than the upstream reference does, the framing is "ipê follows
+> *what differs* plus *the technical rationale*. Where Ipê matches Go or Elm
+> more closely than the upstream reference does, the framing is "Ipê follows
 > Elm-conformance / Go `%v` semantics; the reference's fork differs here" —
 > never "the reference is broken."
 
@@ -76,9 +76,9 @@ diverged, the row records it and gives the reconciled call.
 | B10 | NEUTRAL | `Ipe.Db` on sqlx vs cgo/SQLite — substrate. | Omit |
 | B11 | INTERIM `[post-DONE, low]` | `Ipe.Ui` HTML skeleton; semantically correct now, byte-parity later. | Converging |
 | B12 | NEUTRAL | `Cmd`/`Sub` construct-only; the reference has no equivalent surface. | Omit |
-| B13 | FEATURE | Recursive enums through tuple/record boxing + Set shapes the reference can't build — ipê handles strictly more. | Support |
+| B13 | FEATURE | Recursive enums through tuple/record boxing + Set shapes the reference can't build — Ipê handles strictly more. | Support |
 | B14 | FEATURE | Runtime-fork hardening: auth fail-close, JWT `now==exp` reject (RFC-correct), SSRF-deny-default, saturating counters, env lock, telemetry CRLF/control scrub. | **Lead (flagship security)** |
-| B15 | FEATURE | Float sci-notation exp≥6 = Go `%v` parity (confirmed vs Go 1.26.2). Package as "ipê matches Go byte-for-byte; the reference's fork differs." | Support (trust signal) |
+| B15 | FEATURE | Float sci-notation exp≥6 = Go `%v` parity (confirmed vs Go 1.26.2). Package as "Ipê matches Go byte-for-byte; the reference's fork differs." | Support (trust signal) |
 
 ### Ipê ledger — architectural
 
@@ -212,7 +212,7 @@ verify/fix action — candidates to file as tasks.
 - **Root cause.** This is a symptom of the arity-0 kernel codegen limitation
   (#7), surfaced across two ledgers with **opposite valence**: the Elm ledger
   (R3) calls it an honest workaround; the Ipê ledger (B7) frames the same
-  limitation as ipê being "more useful." **Reconciled call:** present it once,
+  limitation as Ipê being "more useful." **Reconciled call:** present it once,
   consistently, as an interim codegen limitation converging — never as a
   strength.
 - **Verify/fix actions.**
@@ -247,7 +247,7 @@ verify/fix action — candidates to file as tasks.
 
 ## 6. Missing divergences worth filing
 
-Departures ipê arguably should make (or additive surfaces it should add) that
+Departures Ipê arguably should make (or additive surfaces it should add) that
 are not yet filed. Reasoners converged on the first four.
 
 1. **Grapheme-cluster String surface** (additive `String.graphemes` /
@@ -255,7 +255,7 @@ are not yet filed. Reasoners converged on the first four.
    emoji and combining sequences; `Ipe.Tui` already vendors `uniseg`, so the
    machinery exists. File additive — do **not** change `length`. *Post-DONE.*
 2. **Unicode normalization (NFC/NFD)** for `String` equality / `equalFold` /
-   `isEmail`. ipê is full-Unicode on casing but code-point-literal on equality
+   `isEmail`. Ipê is full-Unicode on casing but code-point-literal on equality
    (`"é"` composed ≠ decomposed). A normalizing comparison out-correctness both
    Elm and Go; mainstream (Swift/Python) makes this move. *Post-DONE.*
 3. **`Array` (dense typed vector)** with O(1) indexed access. Elm ships it;
@@ -282,11 +282,11 @@ are not yet filed. Reasoners converged on the first four.
 
 ---
 
-## 7. README narrative outline — "How ipê relates to Elm and Ipê"
+## 7. README narrative outline — "How Ipê relates to Elm and Ipê"
 
 Suggested shape for the public section. Neutral voice throughout.
 
-- **Opening frame.** ipê is an Elm-family functional language whose target is
+- **Opening frame.** Ipê is an Elm-family functional language whose target is
   native/server/desktop binaries via a typed backend, rather than a browser
   sandbox. Most departures from Elm and from the upstream Ipe reference follow
   directly from that target. State each as *what differs + why*.
@@ -298,12 +298,12 @@ Suggested shape for the public section. Neutral voice throughout.
   JWT expiry, SSRF, and telemetry; a closed, fail-closed compiler kernel
   registry. (U4, B14, A4.) Keep the internal mechanism detail (e.g. the
   reference's `unwrap_or(0)` authenticate-as-user-0 path) in the audit doc —
-  public copy says "ipê's runtime fork adds fail-closed auth hardening."
+  public copy says "Ipê's runtime fork adds fail-closed auth hardening."
 - **Correctness paragraph.** "Go-parity by default; more correct where the
   reference's fork has a defect." Rune-correct strings (no surrogate
   splitting), full-Unicode case mapping, money splits that sum to input,
   comparable min/max, Go `%v` float parity confirmed against Go 1.26.2. Phrase
-  B1/B8/B15 as "ipê follows Elm-conformance / matches Go `%v`" — never "the
+  B1/B8/B15 as "Ipê follows Elm-conformance / matches Go `%v`" — never "the
   reference is broken."
 - **Compiler paragraph.** Typed IR, total-by-construction type rendering, typed
   tail-call loops (constant stack), compiler-checked crate-version and

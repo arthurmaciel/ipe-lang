@@ -2,7 +2,7 @@
 //!
 //! `docs/adr/0018-row-poly-records-pinned-before-lowering.md` records the
 //! verdict: **no defect found**. Every
-//! row-polymorphic subset/superset record shape reachable through ipê's
+//! row-polymorphic subset/superset record shape reachable through Ipê's
 //! surface today either resolves end-to-end in parity with the reference
 //! compiler, or is rejected with the same verdict the reference gives
 //! (fail-loud parity). This file wires the spec's 5-fixture proof matrix
@@ -315,7 +315,7 @@ fn two_different_supersets_is_ipe_t0001() {
 /// one struct per exact field set and cannot yet emit a callee once per
 /// record shape at its call sites (per-record-shape callee monomorphisation).
 /// The reference parses this, types the row var, and monomorphises the callee
-/// per record-shape instantiation in its backend; ipê fails closed at the
+/// per record-shape instantiation in its backend; Ipê fails closed at the
 /// lowering boundary — exactly the layer that cannot yet emit — rather than
 /// at parse. This test is the canary named in
 /// docs/adr/0018-row-poly-records-pinned-before-lowering.md "Gap filed": the
