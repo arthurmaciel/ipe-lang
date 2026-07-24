@@ -2,22 +2,19 @@
 
 ## Framing
 
-ipê is a Rust port of Sky. Sky — the Haskell compiler and its Go and
-`feat/runtime-rust` backends — is the parity and capability **reference** ipê
-was ported from: for the same well-typed program and the same input, Go /
-behavioral parity is ipê's default contract, ideally byte-for-byte. This
-document is the durable ledger of the places where ipê nonetheless **differs**
+Ipê's runtime is a Rust port of Sky's. Sky is the parity and capability **reference**
+Ipê was ported from: for the same well-typed program and the same input, Go /
+behavioral parity is Ipê's default contract, ideally byte-for-byte. This
+document is the durable ledger of the places where Ipê nonetheless **differs**
 from that reference — some deliberate (recorded as sanctioned divergences with a
 neutral rationale), some emergent from the host-language change (Haskell→Rust)
 and the type system Rust brings. Every entry states only *what differs* and
-*why*. Where ipê matches Ipê, that is not a divergence and is omitted. Where ipê
-follows a different, more principled target (e.g. Elm-conformance, a lossless
-byte model, a closed typed registry), the technical fact is stated neutrally —
-as a difference and its reason, never as a criticism of the reference.
+*why*. Where Ipê matches Sky, that is not a divergence and is omitted. Where Ipê
+follows a different target (e.g. Elm-conformance, a lossless
+byte model, a closed typed registry), the technical fact is stated 
+as a difference and its reason.
 
-The lens throughout is the PRINCIPLES order — **security > correctness >
-soundness > efficiency > completeness > readability** — plus the two foundational
-rules **parse, don't validate** and **make invalid states unrepresentable**.
+The lens throughout is the PRINCIPLES.md content.
 
 This document is also the ledger of **planned** divergences: §6 files the
 intentional future departures from the reference language (accepted or
@@ -27,17 +24,16 @@ one place.
 Every divergence in §2 is recorded in-repo and non-silent: the oracle framework
 (`tools/oracle`) pins each one with an `oracle_divergence = true` marker and a
 tagged reason in `tests/golden/<name>/oracle.meta` + `sanctioned.divergence`
-(policy: `docs/architecture/divergence-policy.md`). 42 goldens currently carry a
-divergence marker.
+(policy: `docs/architecture/divergence-policy.md`).
 
 ---
 
 ## 2. Behavioral divergences
 
 Tag key (from the divergence policy): **`divergence:`** = Ipê's current behavior
-differs and ipê follows a different target; **`sanctioned:`** = the reference
-succeeds correctly and ipê is deliberately more correct still; **Go-failure** =
-the reference cannot build/run the exact shape, so ipê's own output is the
+differs and it follows a different target; **`sanctioned:`** = the reference
+succeeds correctly and Ipê is deliberately more correct still; **Go-failure** =
+the reference cannot build/run the exact shape, so Ipê's own output is the
 recorded reference.
 
 ### B-Lazy — `Ipe.Ui.Lazy`: no memoisation in v1 (eager evaluation)
