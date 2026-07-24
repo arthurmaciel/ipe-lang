@@ -1290,7 +1290,7 @@ pub enum StdlibKernel {
     // ── Ipe.Ui.Lazy ────────────────────────────────────────────────────
     /// `Lazy.lazy : (a -> Element msg) -> a -> Element msg`
     ///
-    /// **Eager in v1.** Ipê's Go runtime memoises the subtree; ipê evaluates
+    /// **Eager in v1.** Ipê's Go runtime memoises the subtree; Ipê evaluates
     /// immediately (no keyed LRU available before the TEA diff layer).  The
     /// divergence is recorded in `docs/divergences-from-sky.md` §B-Lazy.
     LazyLazy,

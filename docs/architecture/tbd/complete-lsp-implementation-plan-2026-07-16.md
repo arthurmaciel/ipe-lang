@@ -1,4 +1,4 @@
-# The complete ipê LSP — implementation plan
+# The complete Ipê LSP — implementation plan
 
 Status: design + implementation plan (no code in this change). This is the
 ONE authoritative plan for the full language server; it consolidates and

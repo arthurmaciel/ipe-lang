@@ -24,7 +24,7 @@ rename with roadmap C.1 (`ipe_*`, `IPE-*`). CLI shown as `ipe lint`
 ## Executive summary
 
 `ipe lint` is an opinionated, extensible static-analysis tool for `.ipe`/`.ipe`
-**source** programs — the elm-review / clippy analogue for ipê. Decisions:
+**source** programs — the elm-review / clippy analogue for Ipê. Decisions:
 
 | Concern | Decision |
 |---|---|
@@ -34,7 +34,7 @@ rename with roadmap C.1 (`ipe_*`, `IPE-*`). CLI shown as `ipe lint`
 | Identity + levels | Dual identity per rule: stable code `IPE-W####` + kebab-case name (`unused-import`). clippy-style levels `allow`/`warn`/`deny`; defaults per rule; config in `sky.toml [lint]`; per-site `-- @allow(<rule>) <reason>` directive with mandatory reason. |
 | Findings | Lint findings are `sky_diagnostics::Diagnostic`s (new `Lint` variant) — one rendering pipeline, one `explain` surface, one `Suggestion`/`Applicability` fix model, one LSP publishing path. |
 | Autofix | Rules attach span-scoped `Suggestion`s; `ipe lint --fix` applies `MachineApplicable` edits and **re-checks before writing** (a fix that breaks the build is unrepresentable in the output — LSP G2 applied to the CLI). |
-| Extensibility v1 | Adding a first-party rule = one file + one table row + one explain page + golden fixtures. Third-party rules (dylib loading or rules-written-in-ipê) are **out of scope v1** — filed as a future phase, not half-shipped. |
+| Extensibility v1 | Adding a first-party rule = one file + one table row + one explain page + golden fixtures. Third-party rules (dylib loading or rules-written-in-Ipê) are **out of scope v1** — filed as a future phase, not half-shipped. |
 
 ---
 
@@ -74,7 +74,7 @@ discipline it uses for everything else.)
 - ADOPT: project rules with a final-evaluation step (cross-module dead code).
 - ADOPT: fixes as first-class rule output.
 - REJECT: rules as user packages in the source language (v1). elm-review's
-  killer feature is writing rules in Elm; the ipê analogue (rules in ipê,
+  killer feature is writing rules in Elm; the Ipê analogue (rules in Ipê,
   running compiled) needs the FFI story and a sandbox stance — filed as
   Phase 5, not faked.
 - REJECT: elm-review's *no in-source suppression* stance. It optimizes for
@@ -89,7 +89,7 @@ discipline it uses for everything else.)
   crate already has clippy/rustc's model verbatim in `sky_diagnostics`).
 - ADOPT: the "unused allow" self-lint (clippy's `#[expect]` benefit without a
   second directive form).
-- REJECT: attribute syntax. ipê has no attributes; the directive is a comment
+- REJECT: attribute syntax. Ipê has no attributes; the directive is a comment
   (§6) parsed by the one lexer.
 
 ## 3. Architecture
@@ -469,8 +469,8 @@ independently useful. Gates listed per phase.
 - **Phase 4 — manifest lints (extension).** Rules over `sky.toml` itself
   (`memory` session store flagged for production, missing `[lint]` floor) —
   a distinct input class, added only once source rules are stable.
-- **Phase 5 (filed, not committed) — rules in ipê.** elm-review's user-rule
-  model: rules authored in ipê compiled against a typed AST surface. Blocked
+- **Phase 5 (filed, not committed) — rules in Ipê.** elm-review's user-rule
+  model: rules authored in Ipê compiled against a typed AST surface. Blocked
   on the FFI sandbox stance and a stable public AST — explicitly out of scope
   until then.
 

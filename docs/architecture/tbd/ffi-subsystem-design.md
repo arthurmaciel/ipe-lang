@@ -1,4 +1,4 @@
-# ipê automatic shim-free Rust-crate FFI subsystem — architecture
+# Ipê automatic shim-free Rust-crate FFI subsystem — architecture
 
 > **Status:** design-locked, implementation PARKED behind compiler completion.
 > The one slice that may start now is the inspector-hardening slice
@@ -27,7 +27,7 @@ Two design rules derive everything below:
 
 1. **Parse, don't validate.** The trusted surface is exactly two typed decode
    boundaries — `PkgInfo` decode and `Call` decode. Every byte of
-   attacker-influenced rustdoc JSON crosses into ipê's type world through those
+   attacker-influenced rustdoc JSON crosses into Ipê's type world through those
    `TryFrom<wire> → Result<T, Diagnostic>` constructors. After decode, an
    ill-formed foreign binding is *unrepresentable*, so every downstream emitter
    and lowering step is a **total function** with no defensive re-check and no
@@ -141,7 +141,7 @@ Haskell `Either String Call` / `fail String` (`FfiCall.hs:756-820`) becomes
 `Result<Call, Diagnostic>` with a closed `CallDefect` reason enum. (The
 inspector's *internal* `errors: Vec<String>` fail-closed channel, `insp:451`, is
 exempt — it is a `tools/` crate signal the generator consumes as opaque, not an
-ipê public surface.)
+Ipê public surface.)
 
 ---
 
@@ -190,19 +190,19 @@ passthrough `:145-153,222`); ident/literal safety `sky/…/Rust/Ffi.hs:50,412-41
 | Direction | Function | Purpose | Totality |
 |---|---|---|---|
 | `TypeRef` AST → Rust source | `render_type_ref` | emit `_bindings.rs` | total, **no `"F?"` fallback** — the only unrepresentable case (nested/non-direct closure) is rejected by `validate_call` check 6 (D3); a `TRClosure` reaching the non-direct path is a `CompilerBug`-class diagnostic, never a leaked `"F?"` string |
-| `FnInfo` → ipê `Ty` | `sky_type_of` | seed `.ipei` HM env | total |
-| ipê `Ty` → Rust type (concrete) | `ty_to_rust` | wrapper param/ret | total on closed set, emit-only `→ String` fallback tolerated ONLY on the non-`call` shared path (unknown means over-drop already happened upstream) |
-| ipê `Ty` → Rust type (generic slot) | `ty_to_rust_closed` | generic bindability gate | **fallible, no fallback** — record/tuple/fn/bare-TVar/opaque → `Err` → `IPE-F4400` |
+| `FnInfo` → Ipê `Ty` | `sky_type_of` | seed `.ipei` HM env | total |
+| Ipê `Ty` → Rust type (concrete) | `ty_to_rust` | wrapper param/ret | total on closed set, emit-only `→ String` fallback tolerated ONLY on the non-`call` shared path (unknown means over-drop already happened upstream) |
+| Ipê `Ty` → Rust type (generic slot) | `ty_to_rust_closed` | generic bindability gate | **fallible, no fallback** — record/tuple/fn/bare-TVar/opaque → `Err` → `IPE-F4400` |
 
 `TypeRef` deserializes via a **hand-written single-key `Visitor`**, not
 `#[serde(untagged)]` — untagged swallows *which* variant failed (destroying
 diagnostic quality) and can backtrack / mis-route an adversarial map. It rejects
 the multi-discriminator case (`param`+`prim` both present).
 
-**Mapping table (`sky_type_of`, foreign → ipê).** Integer widths (`i8..i128`,
+**Mapping table (`sky_type_of`, foreign → Ipê).** Integer widths (`i8..i128`,
 `usize`, `isize`) → `Int` (carrier `i64`); `f32/f64` → `Float`; `bool`/`char`/
 `()` direct; `String`/`&str`/`&Path`/`&OsStr` → `String`; `Option<T>` →
-`Maybe`; `Result<T,E>` → `Result Error a` (**`E` erased to ipê `Error`, never a
+`Maybe`; `Result<T,E>` → `Result Error a` (**`E` erased to Ipê `Error`, never a
 type param, never `Task String`**); `Vec<T>` → `List`; `Dict String a` →
 `HashMap`; serde-bound generic (`TRSerdeValue`/`TRSerdeValueRef`) → **`String`
 (JSON text)**; anything else → **nominal `Ty::Con { module: "Rust.<Crate>",
@@ -225,7 +225,7 @@ would never catch) and `num_widen_scalar` (return, foreign → Ipê carrier —
 scalar cast in `emit` and `instance` delegates here; a grep-fence test asserts
 no bare `as i64`/`as u64` outside `num_coerce`.
 
-**Rationale.** One typed foreign→ipê seed with no `any`; one closed-set gate
+**Rationale.** One typed foreign→Ipê seed with no `any`; one closed-set gate
 that turns every unbindable generic arg into a loud reject; one saturating
 scalar source.
 
@@ -320,7 +320,7 @@ re-coercion) for free.
 **HM seeding.** The type-env builder loads every `.ipei` in the cache and
 registers `(Rust.<Crate>.<name> → KernelId, Scheme)` with `origin = Ffi`. This
 is the *consumer-side* single parse point: after this load a foreign value is a
-fully-typed ipê value; opaque types are `Ty::Con` unifying nominally.
+fully-typed Ipê value; opaque types are `Ty::Con` unifying nominally.
 Post-registry-migration the stdlib resolution seam **moves from `env.rs`
 `QUALIFIERS` (`src/compiler/canon/src/env.rs:182`) to `sky_kernels::resolve`**
 (kernel-registry-design.md Q2), so the FFI `Rust.*` → `Ffi(fid)` path targets
@@ -364,7 +364,7 @@ module-name computation `sky/…/Rust/Ffi.hs:262-292`; kernel-name
 
 **Decision (design-complete now, implementation after the sync ladder).**
 - Every foreign call in every wrapper (sync and async) is wrapped so a foreign
-  panic becomes an ipê `Err(Error::…)`: sync uses `std::panic::catch_unwind`;
+  panic becomes an Ipê `Err(Error::…)`: sync uses `std::panic::catch_unwind`;
   **async uses `futures::FutureExt::catch_unwind` on the pinned future** (you
   cannot `.await` inside the closure `std::panic::catch_unwind` takes).
 - **Panic-profile gate is a `compile_error!` fence emitted IN the wrapper
@@ -381,7 +381,7 @@ module-name computation `sky/…/Rust/Ffi.hs:262-292`; kernel-name
   the handle into the Task completion channel; **it never calls `block_on`**
   (calling `block_on` inside a running reactor panics — a forbidden runtime
   panic). The foreign `E` folds into a typed `Error` value at the boundary;
-  ipê's type is always `Task Error a`.
+  Ipê's type is always `Task Error a`.
 - `Send` discipline: async combinator closure args need `Box<dyn Fn + Send +
   'static>`; the **inspector** supplies the `Send` verdict
   (`recv_provably_async_send`, `PROVABLY_SEND_OPAQUE_NAMES`); an unprovable
@@ -391,7 +391,7 @@ module-name computation `sky/…/Rust/Ffi.hs:262-292`; kernel-name
 SDKs (firestore/firebase/stripe) stay hand-shimmed even in `../sky` and are
 **not** marketed shim-free.
 
-**Rationale.** Preserve "well-typed ipê never panics" across the boundary while
+**Rationale.** Preserve "well-typed Ipê never panics" across the boundary while
 keeping the effect-boundary typed; the fence is the only way to make
 `catch_unwind` soundness *enforced* rather than assumed.
 
@@ -521,7 +521,7 @@ scheduling M-E.
 
 > **Note — polymorphic-passthrough generics are NOT open; they are LOCKED as
 > reject.** A generic FFI slot instantiated at a bare tyvar (a call site inside
-> a still-polymorphic ipê function) fails `ty_to_rust_closed` → `IPE-F4400` at
+> a still-polymorphic Ipê function) fails `ty_to_rust_closed` → `IPE-F4400` at
 > the call site. No erased `func(any) any` fallback — that is the eval-hole the
 > design forbids. The user must monomorphise at the boundary. This is a stated
 > expressiveness limitation and the only sound answer.
@@ -598,7 +598,7 @@ M-G  async → Task Error a (FutureExt::catch_unwind, single Task-owned reactor,
 
 ### Verdict: **YES, but only after B0.0 de-workspaces the inspector; until then it shares the workspace target/lock and is NOT disjoint.**
 
-`tools/ipe-ffi-inspector` has **no dependency on the ipê workspace**
+`tools/ipe-ffi-inspector` has **no dependency on the Ipê workspace**
 (`sky_*`/`ipe_*`) and **no dependency on the M4 registry** (which does not
 exist). But it is **currently a member of the root `[workspace]`
 (`Cargo.toml:18`)**, so today it shares the workspace `target/` and the single
@@ -675,7 +675,7 @@ the panel.
   decode design and is prohibited. No B0.2 change may perturb a well-formed
   crate's `PkgInfo`.
 - **The inspector's `errors: Vec<String>` stays `String`** — it is the tools
-  crate's internal fail-closed channel, not an ipê public surface; the
+  crate's internal fail-closed channel, not an Ipê public surface; the
   no-`Result String` rule does not reach it.
 - **Verify the inspector-side MODELLABLE_5 fence survives untouched** so the M-E
   two-way fence closes with no inspector edit.

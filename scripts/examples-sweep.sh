@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ipê EXAMPLES sweep — the upstream-mirror parity PROOF. For each in-scope
+# Ipê EXAMPLES sweep — the upstream-mirror parity PROOF. For each in-scope
 # example it mirrors the real upstream Sky example, patches it into Ipê, and asks
 # ONE question: does OUR compiler build and run it? Each example yields one table
 # row with two columns:
@@ -75,7 +75,7 @@ TABLE="$HIST/sweep-$STAMP.table"
 RUNLOG="$HIST/run-$STAMP.log"
 say() { echo "$@" | tee -a "$RUNLOG"; }
 diag() { printf '%s/%s.%s.%s\n' "$HIST" "$1" "$STAMP" "$2"; }
-say "=== ipê EXAMPLES sweep @ $STAMP (repo: $REPO · ipe: $IPE_BIN) ==="
+say "=== Ipê EXAMPLES sweep @ $STAMP (repo: $REPO · ipe: $IPE_BIN) ==="
 
 # ── Mirror the upstream Sky examples into examples/sky/ (always) ──────────────
 # The sweep IS the mirror sweep: every in-scope example is a real upstream Sky

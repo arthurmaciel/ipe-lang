@@ -10,7 +10,7 @@ rule extends), `ipe-lsp.md` Q3(b)/(c) + G2 (the code-action counterweight),
 rule makes true — see §2), `docs/divergences-from-elm.md` (ledger entry).
 
 This is a **departure from Elm** (and from the Ipê reference, which follows
-Elm here): both accept `_ ->` as a catch-all over any type. ipê will refuse a
+Elm here): both accept `_ ->` as a catch-all over any type. Ipê will refuse a
 catch-all arm when the scrutinee is a closed, finite-variant union — so adding
 a variant is a compile error at every match site, never a silent fall-through.
 
@@ -42,7 +42,7 @@ the invalid state is a match site that *believes* it is exhaustive over
 yesterday's constructor set. Rust culture handles this with
 `#[deny(wildcard_enum_match_arm)]` on selected enums and `#[non_exhaustive]`
 on the flip side; Elm has community lint rules
-(`elm-review` `NoWildcardCase`-style) but nothing in the language. ipê makes
+(`elm-review` `NoWildcardCase`-style) but nothing in the language. Ipê makes
 the strong default the language default, with an explicit, reasoned opt-out.
 
 ## 2. Current state (facts)
