@@ -1,4 +1,4 @@
-# FFI Port Spec — automatic shim-free binding of Rust crates in ipê
+# FFI Port Spec — automatic shim-free binding of Rust crates in Ipê
 
 > **Status:** committed port plan. Doc-only. Supersedes the forward-looking
 > `docs/architecture/ffi-design.md` (kept as the M0-era design-with-it-in-mind
@@ -23,7 +23,7 @@ efficiency > completeness > readability.
 
 **Two fundamental rules.**
 1. **Parse, don't validate.** The `.ipei` / `kernel.json` contract is the SINGLE
-   typed parse point where a foreign value enters ipê. Opaque foreign types unify
+   typed parse point where a foreign value enters Ipê. Opaque foreign types unify
    nominally as `Ty::Con { module, name }`. No downstream re-coercion to `any`.
 2. **Make invalid states unrepresentable.** Kernel origin is a sum type
    (`Origin::Stdlib | Origin::Ffi { crate }`). A foreign-call AST that cannot be
@@ -164,7 +164,7 @@ the resource rlimits in A.3. The inspector's fail-closed over-drop already bound
 ## B. Phase 0 — inspector hardening (Milestone M-0, parallel-safe)
 
 The inspector lives in a **disjoint `tools/` crate** with no dependency on the
-ipê workspace, so this milestone is doc/disjoint-parallel-safe (see §E) and can
+Ipê workspace, so this milestone is doc/disjoint-parallel-safe (see §E) and can
 run concurrently with the generator port's design milestones.
 
 ### B0.1 Pin reproducibility (blocks nondeterministic inspects)
@@ -209,7 +209,7 @@ bounded memory, error-`PkgInfo` out. This is the acceptance test for B0.2.
 
 Each milestone is a guardian-gated Workflow: **Opus design → Sonnet impl → Haiku
 mechcheck → Opus review** (per the backend-wiring protocol). Target: a new
-`ipe_ffi` crate in the ipê workspace. Haskell source ranges below are the port
+`ipe_ffi` crate in the Ipê workspace. Haskell source ranges below are the port
 inputs; we mirror behaviour, not bytes.
 
 ### C.0 Dependency ordering (read first)
@@ -313,7 +313,7 @@ does not start M-D/M-E against a `KernelFn` enum that has to be re-keyed later.
   `wrapperEndSentinel:257`) for per-fn region slicing — port the sentinel protocol
   so DCE can drop unused wrappers.
 - **Acceptance:** fixture **107** (`semver`, shim-free) round-trips: inspect →
-  `.ipei` + `kernel.json` + `<crate>_bindings.rs` → ipê type-checks a call → cargo
+  `.ipei` + `kernel.json` + `<crate>_bindings.rs` → Ipê type-checks a call → cargo
   builds → runs. Byte-diff the emitted `.ipei`/`kernel.json`/wrapper against the
   sky fixture (`../sky/runtime-rust/tests/sky/107-ffi-shimfree-semver`).
 
@@ -341,7 +341,7 @@ does not start M-D/M-E against a `KernelFn` enum that has to be re-keyed later.
 - **Closure soundness:** a Ipê lambda captured into a multi-call `Fn`/`FnMut` slot
   must be `Clone` (`closureNeedsClone`, `FfiCall.hs:581`; capture gate
   `FfiInstance.hs:322-390`) — else `IPE-F4400`. This is the boundary that keeps
-  "well-typed ipê never panics" across FFI.
+  "well-typed Ipê never panics" across FFI.
 - **Acceptance:** fixtures **92** (generic-self open-T), **105** (generic struct
   accessor). Regression coverage: walls **60/66/73/76/92/105/106**.
 
@@ -372,12 +372,12 @@ does not start M-D/M-E against a `KernelFn` enum that has to be re-keyed later.
   `_call_isAsync` (`FfiCall.hs:797`), the closure `catch_unwind` boundary
   (`Ffi.hs:53-65` doc contract), and `cargoProfilePanicIsUnwind` (`Ffi.hs:66-82`).
 - **`catch_unwind` → `Err` (soundness bridge).** Every foreign call in the wrapper
-  is wrapped so a panicking/aborting FFI fn becomes an ipê `Err`, preserving
-  guarantee (b) — well-typed ipê never panics — across the boundary.
+  is wrapped so a panicking/aborting FFI fn becomes an Ipê `Err`, preserving
+  guarantee (b) — well-typed Ipê never panics — across the boundary.
 - **Panic-profile gate (soundness keystone).** `catch_unwind` is sound ONLY under
   `panic = "unwind"`; under `panic = "abort"` a foreign panic aborts the process
   before the boundary can convert it to `Err` — the keystone-forbidden
-  emit-then-abort class (well-typed ipê observes a hard process kill with no
+  emit-then-abort class (well-typed Ipê observes a hard process kill with no
   diagnostic). The gate MUST be a **compile-time fence emitted IN the wrapper
   crate**, not a text-scan of `Cargo.toml`. A text-scan cannot see the *effective*
   panic strategy: a workspace-root `[profile.*] panic = "abort"`, a
@@ -417,7 +417,7 @@ crates behind fixtures **107-114**
 regressions **73/76/92/97/105/106**).
 
 Acceptance ladder:
-1. **One pure crate end-to-end** — `semver` (fixture 107): inspect → emit → ipê
+1. **One pure crate end-to-end** — `semver` (fixture 107): inspect → emit → Ipê
    type-check → cargo build → run, byte-diff `.ipei`/`kernel.json`/wrapper.
 2. **The 10 shim-free crates** — all of 107-114 green, byte-diff vs sky.
 3. **Async SDKs (firestore / firebase / stripe) are EXPLICITLY NOT claimed
@@ -436,7 +436,7 @@ divergence (e.g. the saturating u64→i64 in M-C) is recorded as
 | Work | Lane |
 |---|---|
 | This spec (M-0 §A/§B docs) | doc-only, parallel-safe |
-| **M-0 inspector hardening** | **disjoint `tools/ipe-ffi-inspector` crate — no ipê-workspace dep; parallel-safe with the design milestones of C** |
+| **M-0 inspector hardening** | **disjoint `tools/ipe-ffi-inspector` crate — no Ipê-workspace dep; parallel-safe with the design milestones of C** |
 | M-A/M-B/M-C (`ipe_ffi` decode + coercion, pure logic) | new-crate, mostly parallel; but M-B/M-C are leaves M-D/M-E depend on, so land them first |
 | **M4 kernel registry** | **serializes the whole consumer side — M-D onward blocks on it** |
 | M-D/M-E/M-F/M-G | serialize behind the **shared workspace `target/`** (any change to registry/canon/lower/backend forces a workspace rebuild) and behind M4 |

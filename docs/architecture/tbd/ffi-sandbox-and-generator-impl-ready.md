@@ -16,14 +16,14 @@
 > (`src/Ipê/Build/Rust/{Ffi,FfiCall,FfiInstance,NumCoerce}.hs`) is the
 > **capability oracle** — it defines *what* can be bound shim-free. It is **not**
 > the security oracle: it runs the inspector unsandboxed via `sh -c` and quotes
-> args with `quoteShell` only. Everywhere below, ipê is **stricter by design**;
+> args with `quoteShell` only. Everywhere below, Ipê is **stricter by design**;
 > each such point is marked **[STRICTER]** with the reason. No disparagement, no
 > upstream-contribution note — this is a from-scratch security posture for a
 > language that fetches and compiles untrusted crates on `ipe add`.
 
 Two fundamental rules drive every type below:
 
-1. **Parse, don't validate.** Untrusted rustdoc JSON crosses into ipê at exactly
+1. **Parse, don't validate.** Untrusted rustdoc JSON crosses into Ipê at exactly
    two `TryFrom<wire> → Result<Domain, Diagnostic>` boundaries (`PkgInfo`,
    `Call`). After decode, an ill-formed foreign binding is *unrepresentable*.
 2. **Make invalid states unrepresentable.** A `Call` that has not passed
@@ -129,7 +129,7 @@ this bounds *what it costs*).
 `OUT_CAP` 256 MiB JSON.
 
 **[STRICTER]** the reference runs the inspector with the user's real `$HOME`,
-`~/.cargo` writable, full network, full env. ipê denies all of that by default.
+`~/.cargo` writable, full network, full env. Ipê denies all of that by default.
 
 ### 1.5 The `unshare` fallback MUST PROVE isolation — never assume
 
@@ -216,7 +216,7 @@ ungated at the driver.
 
 **[STRICTER] — kill the shell class structurally.** The Rust driver builds an
 argv `Vec<OsString>` and spawns `std::process::Command` directly — **no `sh -c`,
-no `quoteShell`.** `quoteShell` is a mitigation for a shell that ipê never
+no `quoteShell`.** `quoteShell` is a mitigation for a shell that Ipê never
 invokes; removing the shell removes the entire injection class rather than
 escaping around it. (`quoteShell` is ported only as a doc reference of the class
 being eliminated, not as live code.)
@@ -262,7 +262,7 @@ A crate that names a symbol `"; std::process::Command::new(…)"` can **never
 construct a `RustIdent`** → the injection class dies at the trusted surface, and
 the emit-side `rust_str_lit`/`absolutize_crate` become belt-and-suspenders rather
 than the sole defense. **[STRICTER]** the reference emits foreign names into Rust
-source guarded only by emit-time string-literal escaping; ipê refuses the bad
+source guarded only by emit-time string-literal escaping; Ipê refuses the bad
 name at *decode*, one layer earlier.
 
 **Closed sums, no catch-all** — an unknown discriminator string is a hard
@@ -290,13 +290,13 @@ both present).
 | Direction | Function | Totality |
 |---|---|---|
 | `TypeRef` AST → Rust source | `render_type_ref` | total, **no `"F?"` fallback** — the only unrepresentable case (non-direct closure) is refused by `validate_call` check 6 |
-| `FnInfo` → ipê `Ty` (seed `.ipei`) | `sky_type_of` | total |
-| ipê `Ty` → Rust type (concrete) | `ty_to_rust` | total on closed set; emit-only `→ String` fallback tolerated only off the `call` path (unknown ⇒ over-drop already happened) |
-| ipê `Ty` → Rust type (generic slot) | `ty_to_rust_closed` | **fallible, no fallback** — record/tuple/fn/bare-TVar/opaque → `Err` → `IPE-F4400` |
+| `FnInfo` → Ipê `Ty` (seed `.ipei`) | `sky_type_of` | total |
+| Ipê `Ty` → Rust type (concrete) | `ty_to_rust` | total on closed set; emit-only `→ String` fallback tolerated only off the `call` path (unknown ⇒ over-drop already happened) |
+| Ipê `Ty` → Rust type (generic slot) | `ty_to_rust_closed` | **fallible, no fallback** — record/tuple/fn/bare-TVar/opaque → `Err` → `IPE-F4400` |
 
-**Foreign → ipê mapping** (`sky_type_of`): int widths → `Int` (carrier `i64`);
+**Foreign → Ipê mapping** (`sky_type_of`): int widths → `Int` (carrier `i64`);
 `f32/f64` → `Float`; `bool/char/()` direct; `String/&str/&Path/&OsStr` → `String`;
-`Option<T>` → `Maybe`; `Result<T,E>` → **`Result Error a`** (`E` erased to ipê
+`Option<T>` → `Maybe`; `Result<T,E>` → **`Result Error a`** (`E` erased to Ipê
 `Error` — **never a type param, never `Result String`/`Task String`**); `Vec<T>` →
 `List`; serde-bound generic → `String` (JSON text); anything else → nominal
 `Ty::Con { module: "Rust.<Crate>", name }` interned as `Symbol` so the same
@@ -484,7 +484,7 @@ user's cargo build. A bound outside the set on an *unused* symbol is over-drop
 so every capture must be **positively `Clone`** via a closed **allowlist**
 (`rust_type_is_clone`, never a denylist); first non-Clone → `IPE-F4400`. `FnOnce`
 is moved once, never gated. **Named M-E acceptance item:** re-verify
-`traits_of_rust_type` cell-by-cell against ipê's actual runtime derives — notably
+`traits_of_rust_type` cell-by-cell against Ipê's actual runtime derives — notably
 `SkyMaybe` derives *no* `Default`/`Hash`/`Eq`, and `f64`/`f32` are `Clone`+`Default`
 only (the IEEE-754 security-critical cell). Port on evidence, not on faith.
 
@@ -496,7 +496,7 @@ answer.
 
 ### 2.8 async → `Task Error a` + `catch_unwind` + panic-profile fence (M-G)
 
-- Every foreign call becomes an ipê `Err` on panic: sync via
+- Every foreign call becomes an Ipê `Err` on panic: sync via
   `std::panic::catch_unwind`; **async via `futures::FutureExt::catch_unwind` on
   the pinned future** (you cannot `.await` inside the closure
   `std::panic::catch_unwind` takes).
@@ -573,7 +573,7 @@ answer.
 | **#41 sandbox** (BLOCKING) | **bwrap jail (§1.4) denies net + scrubs env + RO-binds `/` + bounds RSS/CPU/wall**; **`unshare` fallback proves every namespace post-spawn (§1.5) or HARD-FAILS**; **refusal is the default when neither proves (§1.6)**; **trust-gate + phase separation + `--frozen --locked --offline` (§1.7)**; **`GitSource`/crate-name parse-not-validate + no `sh -c` (§1.8)**. *No untrusted crate may be introspected/compiled until every one of these passes.* This is the gate that unblocks the rest of #42's driver. |
 | **#42 M-A/M-C/M-B** decode+coerce | fixture 107 (`semver`) artifact byte-diff green vs sky; `IPE-F4400` reject corpus green; grep-fence "no bare `as i64/u64` outside `num_coerce`" green. **No M4 needed** (generator is a pure JSON→files function). |
 | **#42 M-D** emit | tri-artifact name-SSOT byte-equal by construction; **`.ipei ≡ stdlib_scheme` structural gate (§2.6) green**; fallibility diff-golden green; `compile_error!` fence present at every wrapper-module top. |
-| **#42 M-E** generics | MODELLABLE_5 two-way fence green; `traits_of_rust_type` re-verified cell-by-cell against ipê runtime derives; per-instance `IPE-F4400` corpus green. (Prereq OPEN-2: confirm per-region solved `Ty` reaches the FFI-callee region.) |
+| **#42 M-E** generics | MODELLABLE_5 two-way fence green; `traits_of_rust_type` re-verified cell-by-cell against Ipê runtime derives; per-instance `IPE-F4400` corpus green. (Prereq OPEN-2: confirm per-region solved `Ty` reaches the FFI-callee region.) |
 | **#42 M-F** driver | consumer wiring blocks on **M4 kernel registry**; then the 10 shim-free sync crates (107-114 + regressions 73/76/92/97/105/106) byte-diff green → shim-free claim proven; malicious crate-name + bad git-URL refused before any compile. |
 | **#42 M-G** async | bridge proven on a small async crate (FutureExt::catch_unwind, single Task reactor, typed `Error`, never `block_on`); large async SDKs explicitly NOT claimed shim-free. |
 

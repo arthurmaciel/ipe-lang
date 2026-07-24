@@ -1,4 +1,4 @@
-# Incremental compilation and the developer loop for ipê
+# Incremental compilation and the developer loop for Ipê
 
 > **Status:** authoritative design spec (design-only — no implementation
 > commitment beyond the locked decisions below). Supersedes the memory note
@@ -274,7 +274,7 @@ STATES-UNREPRESENTABLE — so "resolved to nothing" and "resolved to two things"
 are distinct, handled states, not a `None` that reads as "no imports".
 
 **`module_interface` completeness obligation (release gate, not "signatures
-only").** Because ipê performs **type-directed lowering** — codegen of module A
+only").** Because Ipê performs **type-directed lowering** — codegen of module A
 depends on the *resolved types* in module B, not merely B's names — the interface
 summary MUST be a **sound over-approximation of every cross-module observable
 the monomorphiser / generics emitter can see**: exported types, constructor
@@ -519,7 +519,7 @@ old-alive-while-new-spawns shape.
   build failure) → the previously-running binary **stays alive**; the diagnostic
   is printed; the live process is untouched. The next green build kills +
   respawns.
-- **Distinguish "ipê lowering succeeded" from "cargo build succeeded"** and swap
+- **Distinguish "Ipê lowering succeeded" from "cargo build succeeded"** and swap
   the binary **only on the latter** — the analog of the Haskell "printed success
   before `go build` ran" bug.
 - **`LastGoodBinary` is only constructible** for a build+process that passed its

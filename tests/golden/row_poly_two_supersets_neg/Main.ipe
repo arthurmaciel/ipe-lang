@@ -5,7 +5,7 @@ import Ipe.Log exposing (println)
 
 -- #56 proof-matrix shape P6 (the class-1 "Boundary Scheme Promotion"
 -- coupling tripwire): an unannotated LET-BOUND lambda getter called with
--- TWO DIFFERENT superset shapes. Neither ipê nor the reference
+-- TWO DIFFERENT superset shapes. Neither Ipê nor the reference
 -- let-generalizes over record rows, so the first call site's field access
 -- pins `getName`'s record parameter to `{ name, age }`; the second call
 -- site's `{ name, id }` argument cannot unify against that pinned shape and

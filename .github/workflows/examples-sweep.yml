@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# ipê EXAMPLES sweep — the upstream-mirror parity PROOF.
+# Ipê EXAMPLES sweep — the upstream-mirror parity PROOF.
 #
 # Runs `scripts/examples-sweep.sh`. For each in-scope example it mirrors the real
 # upstream Sky example (network-fetched from anzellai/sky on CI, since there is no
