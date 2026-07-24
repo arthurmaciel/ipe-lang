@@ -71,9 +71,3 @@ The invariant that must continue to hold: the gutter, palette, glyphs, and any
 shared phrasing have exactly one definition in `style`; a `--plain` stream stays
 flush-left and unstyled; and a documented `--json` schema is stable — a field is
 added, never silently renamed or removed, or downstream `jq` breaks.
-
-## Conventions
-
-ADRs describe Ipê on its own terms. Do not reference any prior or external
-implementation, parity with another system, or project ancestry — state each
-decision as a standalone Ipê decision.
