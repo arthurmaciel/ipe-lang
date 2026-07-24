@@ -3,7 +3,7 @@
 This document is the authoritative inventory of the entire `elm/core`
 package — every module, every exposed type, and every exposed value with
 its type signature. It exists to support the roadmap item **"Elm core
-coverage"**: auditing how completely the ipê standard library covers the
+coverage"**: auditing how completely the Ipê standard library covers the
 Elm core surface.
 
 `elm/core` is the always-available base package in every Elm project. It
@@ -15,10 +15,10 @@ helper `Debug`.
 
 **How to read the tables.** Each module section lists its exposed types
 first, then a table of every exposed value/function with its exact Elm
-type signature. The `ipê status` column records the audit verdict for each
+type signature. The `Ipê status` column records the audit verdict for each
 row: `✓` present + reachable (module cited), `~` present but under a
 different name/signature/module (divergence noted), `✗` absent, `n/a`
-Elm-runtime-specific with no ipê analogue. Signatures are quoted verbatim from the Elm package registry
+Elm-runtime-specific with no Ipê analogue. Signatures are quoted verbatim from the Elm package registry
 (`package.elm-lang.org/packages/elm/core/latest/docs.json`); the
 `Module.` qualifiers Elm emits in `docs.json` are elided for readability
 (e.g. `Basics.Int` → `Int`).
@@ -29,7 +29,7 @@ Debug, Dict, List, Maybe, Platform, Platform.Cmd, Platform.Sub, Process,
 Result, Set, String, Task, Tuple — 17 total, all verified against the
 registry.
 
-> **Audit basis.** The authoritative ipê stdlib is the `ipe_stdlib` crate
+> **Audit basis.** The authoritative Ipê stdlib is the `ipe_stdlib` crate
 > (`src/stdlib/`, the `Ipe/*.ipe` modules embedded via `src/stdlib/src/lib.rs`).
 > A name counts as reachable only when it both
 > resolves — via the embedded module's `exposing` list or the auto-prelude
@@ -37,7 +37,7 @@ registry.
 > concrete type, either from a Ipê-source body/annotation or from a matched
 > arm of `kernel_ty` in `src/compiler/types/src/constrain.rs`. `kernel_ty`'s
 > catch-all returns an unconstrained type variable, so a name that only hits
-> the fallback is treated as *not* usably typed. Notably, ipê has **no**
+> the fallback is treated as *not* usably typed. Notably, Ipê has **no**
 > `Array`, `Bitwise`, `Tuple`, `Debug`, `Process`, or `Platform` module, and
 > no `Order` or `Never` type; the numeric surface beyond the language
 > operators lives in `Ipe.Math` (typed in `kernel_ty` and registered in
@@ -54,7 +54,7 @@ Fast immutable arrays with O(log n) indexed access.
 
 - `type Array a` — opaque. ✗ (no `Array` type/module)
 
-| Function / Type | Signature | ipê status |
+| Function / Type | Signature | Ipê status |
 |---|---|---|
 | `empty` | `Array a` | ✗ |
 | `initialize` | `Int -> (Int -> a) -> Array a` | ✗ |
@@ -92,7 +92,7 @@ core types. Everything here is exposed by default in every Elm module.
 
 **Operators**
 
-| Function / Type | Signature | ipê status |
+| Function / Type | Signature | Ipê status |
 |---|---|---|
 | `(+)` | `number -> number -> number` | ✓ (`add`, BinopClass::Arith) |
 | `(-)` | `number -> number -> number` | ✓ (`sub`) |
@@ -116,7 +116,7 @@ core types. Everything here is exposed by default in every Elm module.
 
 **Functions**
 
-| Function / Type | Signature | ipê status |
+| Function / Type | Signature | Ipê status |
 |---|---|---|
 | `toFloat` | `Int -> Float` | ✗ (no `Int -> Float` widening kernel; `String.toFloat` is unrelated) |
 | `round` | `Float -> Int` | ✓ (`Ipe.Math.round`, same sig) |
@@ -161,7 +161,7 @@ core types. Everything here is exposed by default in every Elm module.
 
 Bitwise operations on `Int`.
 
-| Function / Type | Signature | ipê status |
+| Function / Type | Signature | Ipê status |
 |---|---|---|
 | `and` | `Int -> Int -> Int` | ✗ |
 | `or` | `Int -> Int -> Int` | ✗ |
@@ -181,7 +181,7 @@ Functions over single Unicode characters.
 
 - `type Char` — a single Unicode character. ✓ (builtin; runtime rune / `int32`)
 
-| Function / Type | Signature | ipê status |
+| Function / Type | Signature | Ipê status |
 |---|---|---|
 | `isUpper` | `Char -> Bool` | ✓ (`Ipe.Char.isUpper`) |
 | `isLower` | `Char -> Bool` | ✓ (`Ipe.Char.isLower`) |
@@ -204,7 +204,7 @@ Functions over single Unicode characters.
 Development-only helpers. Cannot be used in packages and must be removed
 before `--optimize` builds.
 
-| Function / Type | Signature | ipê status |
+| Function / Type | Signature | Ipê status |
 |---|---|---|
 | `toString` | `a -> String` | ~ (no `Debug` module; the `String.fromInt`/`fromFloat`/`fromChar` family + a registered-but-untyped `Basics.toString` qualifier are the nearest analogues) |
 | `log` | `String -> a -> a` | ✗ (no `Debug.log`; `Ipe.Log` is a `Task`-tier logger, not the value-passthrough dev helper) |
@@ -220,7 +220,7 @@ Immutable dictionary keyed by any `comparable`.
 
 - `type Dict k v` — opaque. ✓ (builtin)
 
-| Function / Type | Signature | ipê status |
+| Function / Type | Signature | Ipê status |
 |---|---|---|
 | `empty` | `Dict k v` | ✓ (`Ipe.Dict.empty`) |
 | `singleton` | `comparable -> v -> Dict comparable v` | ✗ |
@@ -251,7 +251,7 @@ Immutable dictionary keyed by any `comparable`.
 
 Operations on ordered, homogeneous linked lists.
 
-| Function / Type | Signature | ipê status |
+| Function / Type | Signature | Ipê status |
 |---|---|---|
 | `(::)` | `a -> List a -> List a` | ✓ (cons operator + `List.cons`) |
 | `singleton` | `a -> List a` | ✗ |
@@ -289,7 +289,7 @@ Operations on ordered, homogeneous linked lists.
 | `take` | `Int -> List a -> List a` | ✓ |
 | `drop` | `Int -> List a -> List a` | ✓ |
 | `partition` | `(a -> Bool) -> List a -> ( List a, List a )` | ✗ |
-| `unzip` | `List ( a, b ) -> ( List a, List b )` | ✗ (inverse `zip` exists as an ipê extra) |
+| `unzip` | `List ( a, b ) -> ( List a, List b )` | ✗ (inverse `zip` exists as an Ipê extra) |
 
 ---
 
@@ -301,7 +301,7 @@ Optional values.
 
 - `type Maybe a = Just a | Nothing` ✓ (builtin; `Just`/`Nothing` in Prelude)
 
-| Function / Type | Signature | ipê status |
+| Function / Type | Signature | Ipê status |
 |---|---|---|
 | `withDefault` | `a -> Maybe a -> a` | ✓ (`Ipe.Maybe`, Ipê source) |
 | `map` | `(a -> b) -> Maybe a -> Maybe b` | ✓ |
@@ -326,10 +326,10 @@ Program construction and effect-manager plumbing.
 - `type ProcessId` — a lightweight process (re-exposed by `Process` as `Id`). ✗
 - `type Router appMsg selfMsg` — routes messages inside an effect manager. n/a
 
-| Function / Type | Signature | ipê status |
+| Function / Type | Signature | Ipê status |
 |---|---|---|
-| `worker` | `{ init : flags -> ( model, Cmd msg ), update : msg -> model -> ( model, Cmd msg ), subscriptions : model -> Sub msg } -> Program flags model msg` | n/a (ipê program entry is `Live.app` / `Tui.app` / `Webview.app`, not `Platform.worker`) |
-| `sendToApp` | `Router msg a -> msg -> Task x ()` | n/a (effect-manager plumbing; ipê has no user-defined effect managers / `Router`) |
+| `worker` | `{ init : flags -> ( model, Cmd msg ), update : msg -> model -> ( model, Cmd msg ), subscriptions : model -> Sub msg } -> Program flags model msg` | n/a (Ipê program entry is `Live.app` / `Tui.app` / `Webview.app`, not `Platform.worker`) |
+| `sendToApp` | `Router msg a -> msg -> Task x ()` | n/a (effect-manager plumbing; Ipê has no user-defined effect managers / `Router`) |
 | `sendToSelf` | `Router a msg -> msg -> Task x ()` | n/a (effect-manager plumbing) |
 
 ---
@@ -342,7 +342,7 @@ Commands — effects the runtime performs.
 
 - `type Cmd msg` — a batch of effects (re-exposed as `Cmd` in `Platform`). ✓ (builtin)
 
-| Function / Type | Signature | ipê status |
+| Function / Type | Signature | Ipê status |
 |---|---|---|
 | `none` | `Cmd msg` | ✓ (`Ipe.Cmd.none`) |
 | `batch` | `List (Cmd msg) -> Cmd msg` | ✓ (`Ipe.Cmd.batch`) |
@@ -358,7 +358,7 @@ Subscriptions — external events the runtime listens for.
 
 - `type Sub msg` — a batch of subscriptions. ✓ (builtin)
 
-| Function / Type | Signature | ipê status |
+| Function / Type | Signature | Ipê status |
 |---|---|---|
 | `none` | `Sub msg` | ✓ (`Ipe.Sub.none`) |
 | `batch` | `List (Sub msg) -> Sub msg` | ✓ (`Ipe.Sub.batch`) |
@@ -374,7 +374,7 @@ Lightweight green-thread primitives.
 
 - `type alias Id = Platform.ProcessId` ✗ (no `Process` module / `Id` type)
 
-| Function / Type | Signature | ipê status |
+| Function / Type | Signature | Ipê status |
 |---|---|---|
 | `spawn` | `Task x a -> Task y Id` | ✗ (no `Process.spawn`; concurrency is `Task.parallel` / `Cmd`) |
 | `sleep` | `Float -> Task x ()` | ~ (`Ipe.Time.sleep : Float -> Task Error ()` — same semantics, different module) |
@@ -390,7 +390,7 @@ Computations that may fail with a typed error.
 
 - `type Result error value = Ok value | Err error` ✓ (builtin; `Ok`/`Err` in Prelude)
 
-| Function / Type | Signature | ipê status |
+| Function / Type | Signature | Ipê status |
 |---|---|---|
 | `withDefault` | `a -> Result x a -> a` | ✓ (`Ipe.Result`, Ipê source) |
 | `map` | `(a -> value) -> Result x a -> Result x value` | ✓ |
@@ -413,7 +413,7 @@ Immutable set of unique `comparable` values.
 
 - `type Set t` — opaque. ✓ (builtin)
 
-| Function / Type | Signature | ipê status |
+| Function / Type | Signature | Ipê status |
 |---|---|---|
 | `empty` | `Set a` | ✓ (`Ipe.Set.empty`) |
 | `singleton` | `comparable -> Set comparable` | ✗ |
@@ -443,7 +443,7 @@ Operations on UTF-16 text.
 
 - `type String` — a chunk of text. ✓ (builtin; runtime UTF-8)
 
-| Function / Type | Signature | ipê status |
+| Function / Type | Signature | Ipê status |
 |---|---|---|
 | `isEmpty` | `String -> Bool` | ✓ (`Ipe.String`) |
 | `length` | `String -> Int` | ✓ |
@@ -498,11 +498,11 @@ Asynchronous operations that may fail.
 
 **Types**
 
-- `type alias Task x a = Platform.Task x a` ~ (ipê `Task` fixes the error
+- `type alias Task x a = Platform.Task x a` ~ (Ipê `Task` fixes the error
   channel to `Error` — every combinator is `Task Error a`, not a polymorphic
   `Task x a`)
 
-| Function / Type | Signature | ipê status |
+| Function / Type | Signature | Ipê status |
 |---|---|---|
 | `succeed` | `a -> Task x a` | ✓ (`Ipe.Task.succeed : a -> Task Error a`) |
 | `fail` | `x -> Task x a` | ✓ (`fail : Error -> Task Error a`) |
@@ -524,7 +524,7 @@ Asynchronous operations that may fail.
 
 Helpers for pairs.
 
-| Function / Type | Signature | ipê status |
+| Function / Type | Signature | Ipê status |
 |---|---|---|
 | `pair` | `a -> b -> ( a, b )` | ✗ (tuple literals only; no `Tuple` module) |
 | `first` | `( a, b ) -> a` | ~ (`Ipe.Basics.fst` — name differs) |
@@ -574,7 +574,7 @@ The concrete gap list, grouped for roadmap item C.4.
 
 ### (a) Whole modules absent
 
-Four elm/core modules have **no** ipê counterpart at all:
+Four elm/core modules have **no** Ipê counterpart at all:
 
 - **`Array`** (18 funcs, 1 type) — no immutable array type. `List` is the only
   sequence. This is the single largest missing surface.
@@ -586,7 +586,7 @@ Four elm/core modules have **no** ipê counterpart at all:
   analogue; the `toString` role is split across `String.fromInt`/`fromFloat`/…
 
 Additionally, **`Process`** and **`Platform`** are effectively absent as
-user-facing surfaces: `Platform.worker`/`sendToApp`/`sendToSelf` are `n/a` (ipê
+user-facing surfaces: `Platform.worker`/`sendToApp`/`sendToSelf` are `n/a` (Ipê
 programs are `Live.app`/`Tui.app`/`Webview.app`; there are no user effect
 managers or `Router`), and `Process.spawn`/`kill` plus the `ProcessId`/`Id` type
 are missing (only `Time.sleep` covers `Process.sleep`).
@@ -619,7 +619,7 @@ are missing (only `Time.sleep` covers `Process.sleep`).
 
 - **`Basics.compare` / the `Order` type.** `Basics.compare`
   (`src/runtime/rust/src/basics.rs`) and `List.sortWith`
-  (`src/runtime/rust/src/list.rs`) are implemented as kernels. Whether ipê exposes
+  (`src/runtime/rust/src/list.rs`) are implemented as kernels. Whether Ipê exposes
   a first-class `Order` (`LT`/`EQ`/`GT`) ADT to user code, versus keeping compare
   as an opaque three-way kernel result, is the open surface decision.
 - **`Basics.modBy` / `negate`.** Both are registered `Basics` qualifiers with no
@@ -634,7 +634,7 @@ are missing (only `Time.sleep` covers `Process.sleep`).
   under `Ipe.Math`, not auto-exposed `Basics`; `ceiling`→`ceil` and
   `truncate`→`trunc` also rename. Decide whether to re-export the Math numerics
   through the default prelude to match Elm's zero-import ergonomics.
-- **`Char.toUpper`/`toLower` return `String`.** ipê types these as
+- **`Char.toUpper`/`toLower` return `String`.** Ipê types these as
   `Char -> String` (single-rune String) rather than Elm's `Char -> Char`.
 - **`String.trimLeft`/`trimRight`** are named `trimStart`/`trimEnd`.
 - **`Task` fixes the error channel.** Every `Task` combinator is `Task Error a`,

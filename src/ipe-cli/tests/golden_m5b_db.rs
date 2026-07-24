@@ -9,13 +9,13 @@
 //!
 //! ## Oracle provenance — why this is `oracle_divergence = true`
 //!
-//! The Go reference compiler and ipê (the Rust backend) share the same Ipe
+//! The Go reference compiler and Ipê (the Rust backend) share the same Ipe
 //! stdlib surface, but the backends diverge at the database layer:
 //!
-//! * Go emits `database/sql` + `mattn/go-sqlite3` (cgo); ipê emits
+//! * Go emits `database/sql` + `mattn/go-sqlite3` (cgo); Ipê emits
 //!   `sqlx` + `sqlx-sqlite`.
 //! * The row type the Go runtime returns from `Db.query` is
-//!   `[]map[string]any`; ipê returns `Vec<HashMap<String, String>>` —
+//!   `[]map[string]any`; Ipê returns `Vec<HashMap<String, String>>` —
 //!   identical shape, different concrete types.
 //! * Connection management for `sqlite::memory:` pools differs: Go's cgo `SQLite`
 //!   is compiled with `SQLITE_THREADSAFE=2` (serialised mode); sqlx uses async
@@ -24,7 +24,7 @@
 //! Running this `Main.ipe` on the Go backend would require the full Go+cgo
 //! `SQLite` toolchain and would produce byte-identical output, but is not part of
 //! the automated oracle-capture workflow (the oracle tool runs on this machine).
-//! The cached expected is ipê's own verified output.
+//! The cached expected is Ipê's own verified output.
 //!
 //! ## Byte-parity with Go IS proven — separately
 //!
@@ -151,7 +151,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
 ///
 /// Recorded sanctioned divergence (Go+cgo `SQLite` vs Rust+sqlx): the Ipê source
 /// produces identical output on both backends, but the oracle-capture toolchain
-/// only runs ipê locally.
+/// only runs Ipê locally.
 #[test]
 fn db_exec() {
     assert_runs_and_matches_oracle("db_exec");
@@ -163,7 +163,7 @@ fn db_exec() {
 /// that reads `name : String` + `score : Int` into a typed record → formats
 /// `"name:score"` and joins with `","`. Output: `"alice:10,bob:7"`.
 ///
-/// Sanctioned divergence: ipê emits Rust+sqlx; oracle is ipê's own output.
+/// Sanctioned divergence: Ipê emits Rust+sqlx; oracle is Ipê's own output.
 #[test]
 fn db_query_decode() {
     assert_runs_and_matches_oracle("db_query_decode");
@@ -175,7 +175,7 @@ fn db_query_decode() {
 /// `Db.deleteById` (delete) → read-after-delete returns `Nothing`.
 /// Output: `"apple/5\napple/10\ndeleted"`.
 ///
-/// Sanctioned divergence: ipê emits Rust+sqlx; oracle is ipê's own output.
+/// Sanctioned divergence: Ipê emits Rust+sqlx; oracle is Ipê's own output.
 #[test]
 fn db_crud() {
     assert_runs_and_matches_oracle("db_crud");
@@ -191,7 +191,7 @@ fn db_crud() {
 /// A `SELECT` after both transactions observes only `"hello"`.
 /// Output: `"hello"`.
 ///
-/// Sanctioned divergence: ipê emits Rust+sqlx; oracle is ipê's own output.
+/// Sanctioned divergence: Ipê emits Rust+sqlx; oracle is Ipê's own output.
 #[test]
 fn db_transaction() {
     assert_runs_and_matches_oracle("db_transaction");
@@ -203,7 +203,7 @@ fn db_transaction() {
 /// `002_add_email`) and returns their names. Second call (same list) is a
 /// no-op → returns `[]` → empty string. Output: `"001_create_users,002_add_email|"`.
 ///
-/// Sanctioned divergence: ipê emits Rust+sqlx; oracle is ipê's own output.
+/// Sanctioned divergence: Ipê emits Rust+sqlx; oracle is Ipê's own output.
 #[test]
 fn db_migrate() {
     assert_runs_and_matches_oracle("db_migrate");
@@ -216,7 +216,7 @@ fn db_migrate() {
 /// `notes` stays `'none'` while `name` changes to `'gadget'`.
 /// Output: `"widget/none\ngadget/none"`.
 ///
-/// Sanctioned divergence: ipê emits Rust+sqlx; oracle is ipê's own output.
+/// Sanctioned divergence: Ipê emits Rust+sqlx; oracle is Ipê's own output.
 #[test]
 fn db_fields() {
     assert_runs_and_matches_oracle("db_fields");
@@ -229,7 +229,7 @@ fn db_fields() {
 /// Rows formatted as `"just:<tag>"` / `"nothing"` and joined with `","`.
 /// Output: `"just:alpha,nothing"`.
 ///
-/// Sanctioned divergence: ipê emits Rust+sqlx; oracle is ipê's own output.
+/// Sanctioned divergence: Ipê emits Rust+sqlx; oracle is Ipê's own output.
 #[test]
 fn db_nullable() {
     assert_runs_and_matches_oracle("db_nullable");
@@ -244,7 +244,7 @@ fn db_nullable() {
 /// Proves: (a) the `Dict String String` arg type is correct (not the old
 /// `List (String, SqlValue)`); (b) the `DbFindByConditions` emit arm works.
 ///
-/// Sanctioned divergence: ipê emits Rust+sqlx; oracle is ipê's own output.
+/// Sanctioned divergence: Ipê emits Rust+sqlx; oracle is Ipê's own output.
 #[test]
 fn db_find_by_conditions() {
     assert_runs_and_matches_oracle("db_find_by_conditions");
@@ -262,8 +262,8 @@ fn db_find_by_conditions() {
 /// combinators, never a hand-built string (see `db_findwhere_string_is_t0001`
 /// in `golden_m5b_db_gates.rs` for the negative side of this property).
 ///
-/// Sanctioned divergence: ipê emits Rust+sqlx; `Db.findWhere` has no Go
-/// counterpart; oracle is ipê's own output.
+/// Sanctioned divergence: Ipê emits Rust+sqlx; `Db.findWhere` has no Go
+/// counterpart; oracle is Ipê's own output.
 #[test]
 fn db_find_where() {
     assert_runs_and_matches_oracle("db_find_where");
@@ -274,8 +274,8 @@ fn db_find_where() {
 /// `Db.query` confirms only `"gadget"` was removed → print
 /// `"1:sprocket,widget"`.
 ///
-/// Sanctioned divergence: ipê emits Rust+sqlx; `Db.deleteWhere` has no Go
-/// counterpart; oracle is ipê's own output.
+/// Sanctioned divergence: Ipê emits Rust+sqlx; `Db.deleteWhere` has no Go
+/// counterpart; oracle is Ipê's own output.
 #[test]
 fn db_delete_where() {
     assert_runs_and_matches_oracle("db_delete_where");
@@ -286,8 +286,8 @@ fn db_delete_where() {
 /// isNotNull, like, inList non-empty AND the empty-list `(1 = 0)` shortcut)
 /// through three `Db.findWhere` calls. Output: `"widget|0|gadget"`.
 ///
-/// Sanctioned divergence: ipê emits Rust+sqlx; the `Sql.*` family has no Go
-/// counterpart; oracle is ipê's own output.
+/// Sanctioned divergence: Ipê emits Rust+sqlx; the `Sql.*` family has no Go
+/// counterpart; oracle is Ipê's own output.
 #[test]
 fn db_sql_combinators() {
     assert_runs_and_matches_oracle("db_sql_combinators");
@@ -303,7 +303,7 @@ fn db_sql_combinators() {
 /// canon ctor table, constrain.rs type schemes, lower.rs `enum_variants` + `ctor_arity`,
 /// and project.rs `into_sql_param` (both map to `SqlParam::Text`).
 ///
-/// Sanctioned divergence: ipê emits Rust+sqlx; oracle is ipê's own output.
+/// Sanctioned divergence: Ipê emits Rust+sqlx; oracle is Ipê's own output.
 #[test]
 fn db_sql_decimal_money() {
     assert_runs_and_matches_oracle("db_sql_decimal_money");
@@ -325,7 +325,7 @@ fn db_sql_decimal_money() {
 /// E2E assertion (gated on `IPE_E2E=1`): binary prints `"3"` — three rows
 /// inserted and queried back.
 ///
-/// Sanctioned divergence: ipê emits Rust+sqlx; oracle is ipê's own output.
+/// Sanctioned divergence: Ipê emits Rust+sqlx; oracle is Ipê's own output.
 #[test]
 fn db_poly_params_compiles() {
     let root = repo_root();
@@ -370,7 +370,7 @@ fn db_poly_params_e2e() {
 /// real `ipe build` + `cargo build` + run, not just direct runtime source
 /// inspection + the internal exhaustiveness test.
 ///
-/// Sanctioned divergence: ipê emits Rust+sqlx; oracle is ipê's own output.
+/// Sanctioned divergence: Ipê emits Rust+sqlx; oracle is Ipê's own output.
 #[test]
 fn db_find_by_field() {
     assert_runs_and_matches_oracle("db_find_by_field");

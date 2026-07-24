@@ -3,7 +3,7 @@
 Status: implemented — runtime (`src/runtime/rust/src/webview.rs`), IR kernel, lower
 resolution, and emission (`src/compiler/backend/rust/src/emit_webview.rs`) all landed;
 a blocking example under `examples/` is the remaining gap.
-Scope: wire `Webview.app { init, update, view, subscriptions, window }` through ipê
+Scope: wire `Webview.app { init, update, view, subscriptions, window }` through Ipê
 so a desktop app opens a native window via the system webview, reusing the proven
 Ipe.Live (Phase-1b) and Ipe.Tui (Phase-1c) app-entry mechanics.
 Ordering of concerns: security > correctness > soundness > efficiency > completeness > readability.
@@ -233,7 +233,7 @@ unconditionally links the system webview libraries; there is no static-binary fa
 window. `ctx.uses_webview` ⇒ manifest promotes `webview` to `default` ⇒ `cargo build` links
 webkit2gtk/libsoup on the first attempt. A machine without the libs fails at cargo link. The
 feature-OFF stub (`webview.rs:47`) compiles cleanly and returns a graceful `Err` at call time; the
-ipê build emits feature-ON whenever `uses_webview`.
+Ipê build emits feature-ON whenever `uses_webview`.
 
 Dev-experience preflight. When `ctx.uses_webview`, `ipe` runs `pkg-config --exists webkit2gtk-4.1
 libsoup-3.0` on Linux and emits an actionable diagnostic naming the apt/brew package, rather than

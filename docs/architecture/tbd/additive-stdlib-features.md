@@ -133,7 +133,7 @@ reads cleaner. Lean prefix (matches the existing flat `String` surface).
 
 ## 2. Unicode normalization — `String.normalize`
 
-**Why.** ipê is full-Unicode on *casing* (B5, `ß→SS`) but code-point-**literal**
+**Why.** Ipê is full-Unicode on *casing* (B5, `ß→SS`) but code-point-**literal**
 on *equality*: composed `"é"` (U+00E9) ≠ decomposed `"e"`+U+0301, so `==`,
 `equalFold`, `isEmail`, and dict/set keying can disagree with a human's notion
 of "same string." A normalizing form makes equality decidable the way
@@ -192,7 +192,7 @@ change), expose `normalize` + document the compose pattern.
 
 ## 3. `Array` module — immutable indexed vector (genuine Elm-core gap, R5)
 
-**Why.** `elm/core`'s `Array` gives O(log n) indexed access; ipê ships only
+**Why.** `elm/core`'s `Array` gives O(log n) indexed access; Ipê ships only
 `List` (O(n) indexing, O(n) non-tail ops per Active limitation #8). On a
 native/data-workload backend this is a real capability gap, not a clean
 omission — `docs/divergences-review.md` §6.3 flags it. Elm-compatible surface,
@@ -219,7 +219,7 @@ toIndexedList : Array a -> List (Int, a)
 map, indexedMap, filter, foldl, foldr            -- as Elm
 ```
 
-The **soundness win is in `get`**: Elm/ipê type it `Int -> Array a -> Maybe a`,
+The **soundness win is in `get`**: Elm/Ipê type it `Int -> Array a -> Maybe a`,
 so out-of-range indexing is a `Nothing`, never a panic — parse-don't-validate at
 the access site. No `unwrap`, no raw index reaches the runtime.
 
@@ -265,7 +265,7 @@ a dep + Elm-parity goldens). **Roadmap slot: post-DONE** (additive; the
 
 ## 4. `Bitwise` module — integer bit ops (Elm-parity, pure)
 
-**Why.** Crypto, protocol/framing, flags, and hashing code want bit ops; ipê
+**Why.** Crypto, protocol/framing, flags, and hashing code want bit ops; Ipê
 has none (`elm-core-coverage` Bitwise = 0/7). Small, pure, Elm-parity.
 
 **Surface (Elm-identical):**
@@ -287,13 +287,13 @@ has none (`elm-core-coverage` Bitwise = 0/7). Small, pure, Elm-parity.
 subtlety that must be pinned to Elm semantics** and covered by goldens:
 - Elm runs bit ops on **32-bit** values (asm.js/JS `| 0` semantics):
   `shiftLeftBy` masks the shift by 31, `complement` is 32-bit, `shiftRightZfBy`
-  is a 32-bit logical shift. ipê `Int` is **64-bit** (`i64`). **This is a
+  is a 32-bit logical shift. Ipê `Int` is **64-bit** (`i64`). **This is a
   genuine semantic fork** and must be a *decided, recorded* divergence, not an
   accident:
   - **Option A (Go-parity, recommended):** 64-bit ops matching Go's
     `&`/`|`/`^`/`&^`/`<<`/`>>` on `int64`; `shiftRightBy` = arithmetic,
     `shiftRightZfBy` = cast-to-`u64`-shift-back. File as a numbered
-    `oracle_divergence` ("ipê Bitwise is 64-bit / Go `int64`-parity; Elm is
+    `oracle_divergence` ("Ipê Bitwise is 64-bit / Go `int64`-parity; Elm is
     32-bit") — same class as §8.
   - **Option B:** replicate Elm's 32-bit masking for source-portability.
   Recommendation: **A** — it matches the backend's own `Int` and Go; document
@@ -343,7 +343,7 @@ mapBoth f g (a, b) = (f a, g b)
 ```
 
 `first`/`second` can alias `Basics.fst`/`snd` (keep both names — `Tuple.first`
-for Elm-portability, `Basics.fst`/`snd` for the ipê prelude, matching the
+for Elm-portability, `Basics.fst`/`snd` for the Ipê prelude, matching the
 `ToString.*` discoverability pattern R2). Uses `Ty::Tuple` (already in
 `stdlib_scheme` via `tuple2`).
 
@@ -358,7 +358,7 @@ guard.
 (bundle with the `List.sort`/`filterMap` pure-Ipê gap-fill pass).
 
 **Open decision.** None. (Only: 2-tuple-only, matching Elm — no 3-tuple
-helpers; ipê tuples beyond 2 are rare.)
+helpers; Ipê tuples beyond 2 are rare.)
 
 ---
 
@@ -568,7 +568,7 @@ a new division-bearing kernel could shift digit counts and no test would catch
 the drift from Go.
 
 **What to pin.** For non-terminating divisions (`1/3`, `Money.getRate`
-auto-inverse, any non-power-of-10 denominator), ipê rounds the quotient to
+auto-inverse, any non-power-of-10 denominator), Ipê rounds the quotient to
 **16 decimal places** (half-away-from-zero, matching shopspring's
 `DivisionPrecision`) to hold Go byte-parity. Exact fractions
 (money-scale, powers-of-10) are already bit-identical and unaffected.

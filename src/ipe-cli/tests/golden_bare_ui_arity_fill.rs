@@ -1,7 +1,7 @@
 //! Bare builtin parametric UI annotations arity-fill their message parameter.
 //!
 //! A `view : Html` / `attr : Attribute` annotation omits the message-type
-//! parameter every UI constructor carries (`Html msg`). ipê fills it with the
+//! parameter every UI constructor carries (`Html msg`). Ipê fills it with the
 //! inferred `any` wildcard at the single canon source of truth, so the checker
 //! and the lowerer agree on `Html any` rather than a zero-arg `Html` that would
 //! reach the lowerer's empty-home catch-all (IPE-I0001).

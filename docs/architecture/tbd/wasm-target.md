@@ -1,4 +1,4 @@
-# WASM / browser target for ipê
+# WASM / browser target for Ipê
 
 > **Status:** implemented. This document is the design of record for the
 > client-WASM target and its security model; the shipped code lives under
@@ -7,7 +7,7 @@
 > with browser examples under `examples/wasm-*`. (`wasm-backend.md` proposes a
 > distinct, still-rejected direct IR→WASM backend that reuses this document's
 > effect gate.)
-> **Scope:** running ipê in the browser — client-side apps (SPA + Ipe.Live
+> **Scope:** running Ipê in the browser — client-side apps (SPA + Ipe.Live
 > hydration) and an online playground.
 > **Principle ordering (binding for every decision below):** security >
 > correctness > soundness > efficiency > completeness > readability.
@@ -24,15 +24,15 @@ a fork survived critique, it is listed under **Open decisions** for the user.
 
 ## Executive summary
 
-1. **Two targets, staged.** *(A)* compile ipê **programs** to WASM so a TEA app
+1. **Two targets, staged.** *(A)* compile Ipê **programs** to WASM so a TEA app
    runs client-side; *(B)* compile the **toolchain** to WASM for an in-browser
    playground. **Ship A first**; B is A plus a compile stage.
 2. **Q1 — priority:** A first. B splits into **B1** (server-compile-then-ship-
    WASM, nearly free once A exists) and **B2** (interpreter-in-WASM, deferred to
    the interpreter tier). A, B1, B2 share the front-end, the ported runtime, the
    Cmd/Sub browser bridge, and the effect gate.
-3. **Q2 — route:** ipê → Rust → `wasm32-unknown-unknown`, **reusing the existing
-   Rust backend**. No direct ipê→WASM backend (it would fork emission and the
+3. **Q2 — route:** Ipê → Rust → `wasm32-unknown-unknown`, **reusing the existing
+   Rust backend**. No direct Ipê→WASM backend (it would fork emission and the
    no-panic contract, and abandon the ported runtime).
 4. **Q3 — capability matrix:** exhaustive table below. Pure + fallible-pure tiers
    compile wholesale; the effects tier compiles iff a browser analogue exists,
@@ -73,11 +73,11 @@ a fork survived critique, it is listed under **Open decisions** for the user.
 
 ---
 
-## Q1 — What "run ipê in the browser" means; priority; shared machinery
+## Q1 — What "run Ipê in the browser" means; priority; shared machinery
 
 **Decision.** Two genuinely distinct targets, and we build **both**, staged:
 
-- **Target A — compile ipê PROGRAMS to WASM.** A TEA app (`init`/`update`/
+- **Target A — compile Ipê PROGRAMS to WASM.** A TEA app (`init`/`update`/
   `view`) runs client-side and drives the real DOM: a SPA, or the client half of
   a Ipe.Live SSR + hydration page. This is the product — the "real online
   experience." **Priority 1.** ~85% reuse (front-end unchanged; runtime
@@ -106,9 +106,9 @@ the *same* browser-substitute effect bridge and the *same* gate that A needs.
 
 ## Q2 — Compilation route for programs
 
-**Decision.** ipê → Rust → `wasm32-unknown-unknown`, **reusing
+**Decision.** Ipê → Rust → `wasm32-unknown-unknown`, **reusing
 `ipe_backend_rust` (`src/compiler/backend/rust`) verbatim**. Reject a direct
-ipê→WASM backend.
+Ipê→WASM backend.
 
 *Rationale (principle-ordered).* Reuse maximises correctness/soundness: one
 emission path, one runtime, one no-panic contract, one security gate to audit. A
@@ -343,7 +343,7 @@ New module `src/runtime/rust/src/wasm/` (feature `wasm-client`,
 `IpeCmd<M>` / `IpeSub<M>` in `tea.rs` are already generic over `M` (not `any`),
 so only the driver is new.
 
-| ipê | Browser mechanism |
+| Ipê | Browser mechanism |
 |---|---|
 | `Cmd.none` / `Cmd.batch` | no-op / iterate (microtask fan-out) |
 | `Cmd.perform task toMsg` | `spawn_local(async { let m = toMsg(task.await); dispatch(m) })` |
@@ -357,8 +357,8 @@ so only the driver is new.
 
 **No-panic ⇒ no-trap (with one honest residual class).** A WASM `unreachable`
 trap is the panic analogue (worse than a native panic — it poisons the module).
-The contract "no runtime panic from well-typed ipê" becomes "no WASM trap from
-well-typed ipê." For the **kernel-originated** trap class it holds as on native:
+The contract "no runtime panic from well-typed Ipê" becomes "no WASM trap from
+well-typed Ipê." For the **kernel-originated** trap class it holds as on native:
 every trap-capable kernel (`IntDiv`/`Rem` checked, `Coerce` fallible, index
 checks, `render.rs` `saturating_add`) returns `Result`/`Task.fail`, so those
 paths compile to WASM with traps unreachable.
@@ -369,7 +369,7 @@ The kernel-returns-`Result` argument does **not** cover stack overflow, which is
 `concat`/`take`/`zip`/`indexedMap`/`Maybe.combine`/`Result.combine` — Limitation
 #8) recurse on the call stack, and the `wasm32` stack is **smaller** than the
 native one, so a deep-but-well-typed list drives a genuine WASM `unreachable`
-trap from correct ipê. This is a **reachable residual trap**, and this spec
+trap from correct Ipê. This is a **reachable residual trap**, and this spec
 classifies it as such rather than claiming §Q4's "traps unreachable because every
 trap-capable kernel returns `Result`" (which is true only for the kernel class).
 It is caught — not prevented — by the panic-hook path below and surfaced as a
@@ -539,7 +539,7 @@ which matters for an app compiler with a single target per build. Its cost is
 high: the language is **HM-only, no HKT, no effect rows** (Limitation #1); a
 capability row is an invasive extension to the most-used stdlib type, trading
 soundness risk for locality — a bad trade under security > soundness. Filed as a
-speculative endgame, gated on ipê growing row-polymorphic effects for an
+speculative endgame, gated on Ipê growing row-polymorphic effects for an
 independent reason (§Open).
 
 ---
@@ -616,7 +616,7 @@ Three modes:
      devtools), **fall back to a clean client `init`** exactly as the pure-SPA
      mode does, plus a logged hydration-parse warning. It must **never** `unwrap`
      / `expect` / index the parsed value — a tampered island is untrusted input
-     and a trap there would be a well-typed-ipê-reachable white-screen from
+     and a trap there would be a well-typed-Ipê-reachable white-screen from
      adversarial input.
    - **Soundness — the hydration-determinism invariant.** Server and client run
      the *same* `shared` source (compiled native for SSR, WASM for client) →
@@ -723,7 +723,7 @@ mostly reuse of A once the interpreter exists.
   `WasmClient` mode, so a playground snippet touching `Ipe.Db`/`Auth.signToken`
   gets the same unbound-name error. The playground is sandboxed **by
   construction**; the secret boundary holds identically in interpreted mode.
-- The interpreter is a fixed evaluator: user ipê source is *data it evaluates*,
+- The interpreter is a fixed evaluator: user Ipê source is *data it evaluates*,
   never code it `eval`s — the no-eval invariant is preserved.
 
 **Machinery convergence (answering "can A and B share machinery").** The
@@ -743,21 +743,21 @@ AOT path well before B2.
 ## Divergences from Ipê/Elm (stated factually)
 
 - **Elm compiles its compiler to JS and runs the playground fully client-side.**
-  ipê's AOT compiler cannot: it emits Rust and delegates final codegen to
-  `rustc`/cargo, which do not ship to a browser. ipê reaches the same
+  Ipê's AOT compiler cannot: it emits Rust and delegates final codegen to
+  `rustc`/cargo, which do not ship to a browser. Ipê reaches the same
   fully-client playground via a *different* mechanism — an IR interpreter in WASM
-  — not by shipping the AOT compiler. (Elm has no separate interpreter; ipê's
+  — not by shipping the AOT compiler. (Elm has no separate interpreter; Ipê's
   interpreter tier is an independent roadmap item that the playground reuses.)
-- **Elm's client runtime is JS.** ipê's is WASM driven by `web-sys`, which is
+- **Elm's client runtime is JS.** Ipê's is WASM driven by `web-sys`, which is
   **eval-free** and runs under a strictly tighter CSP (`'wasm-unsafe-eval'`, no JS
   `'unsafe-eval'`).
 - **Elm has no server/client secret boundary problem** (no server-side stdlib in
-  the same language). ipê does — hence the target-keyed kernel gate, which has no
+  the same language). Ipê does — hence the target-keyed kernel gate, which has no
   Elm analogue.
-- **Diff-as-data reuse.** ipê already produces DOM mutations as data
+- **Diff-as-data reuse.** Ipê already produces DOM mutations as data
   (`Vec<Patch>`) for the SSE wire; the WASM client reuses that identical data
   path against the real DOM — the SSE consumer and the WASM consumer share one
-  diff algorithm. This is an ipê-specific asset (the ported `diff.rs`), not
+  diff algorithm. This is an Ipê-specific asset (the ported `diff.rs`), not
   inherited from Elm's virtual-DOM.
 
 ---
@@ -782,7 +782,7 @@ AOT path well before B2.
    — so server DB code cannot typecheck against it. Confirm the shape when v2 is
    scoped.
 4. **`Task`-capability-row endgame.** Rejected for v1/v2 (§Q5). Reconsider only
-   if ipê grows row-polymorphic effects for an independent reason.
+   if Ipê grows row-polymorphic effects for an independent reason.
 5. **`wasm32-wasip1` (edge/server WASM).** Out of scope for the browser target;
    a possible third target for edge/serverless deploy (preserves more of
    File/System). Decide if/when edge deploy is on the roadmap.
