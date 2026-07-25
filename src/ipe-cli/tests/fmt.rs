@@ -233,3 +233,16 @@ fn invalid_source_is_refused() {
     let bad = "module M exposing (x)\n\nx = = =\n";
     assert!(format_source(bad).is_err(), "invalid source was formatted");
 }
+
+// -- stdin mode (--stdin) ------------------------------------------------
+
+/// `format_source` is the same pure function used by the stdin path — the
+/// stdin dispatch only differs in I/O wiring, which is tested via the
+/// `FmtMode` parsing and the `run_fmt` dispatch table.
+#[test]
+fn stdin_mode_uses_same_format_source() {
+    let unformatted = "module M exposing (x)\n\nx =\n  1\n";
+    let expected = format_source("module M exposing (x)\n\n\nx =\n    1\n").unwrap();
+    let got = format_source(unformatted).unwrap();
+    assert_eq!(got, expected, "stdin path must produce same output");
+}
