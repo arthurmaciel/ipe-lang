@@ -1,16 +1,24 @@
 //! Wiring the runtime capability sandbox around `ipe run`'s final exec.
 //!
 //! `ipe run` compiles, `cargo build`s, and then runs the emitted `ipe-app`
-//! binary. This module inserts the fail-closed jail between the build and the
-//! run: it resolves the program's capability set (`inferred ∪ declared`), lowers
-//! it to a [`SandboxProfile`], establishes the OS jail, and execs the app inside
-//! it. An undeclared effect the app attempts fails at the OS boundary; a
-//! declared one works.
+//! binary. This module inserts the jail between the build and the run for
+//! programs that reach opaque native code: it resolves the program's capability
+//! set (`inferred ∪ declared`), lowers it to a [`SandboxProfile`], establishes
+//! the OS jail, and execs the app inside it. An undeclared effect the app
+//! attempts fails at the OS boundary; a declared one works.
 //!
-//! Fail-closed everywhere: if the jail cannot be built (a missing primitive, an
-//! unsupported platform), the run **refuses** rather than running unconfined.
-//! The only override is [`OVERRIDE_ENV`], and it is a hard error — not a
-//! warning — when the set includes a high-value native axis.
+//! The jail is **scoped to native-bearing programs** (ADR 0040). Pure Ipê is
+//! structurally bounded to its inferred capabilities — an unreachable effect is
+//! absent from the binary — so it needs no runtime jail and runs directly. Only
+//! a program that crosses into `Rust.` FFI ([`Capability::NativeFfi`]) has
+//! effects inference cannot prove, and only that program is jailed. See
+//! [`is_native_bearing`].
+//!
+//! Where a native-bearing program runs on a platform with no jail primitive, the
+//! jail cannot be established. That is fail-closed by default — the run refuses —
+//! but [`OVERRIDE_ENV`] is the recorded-consent escape: with it set, the run
+//! proceeds unconfined after a loud warning (ADR 0040 "best-effort with
+//! consent"). Pure programs never take this path.
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -22,13 +30,28 @@ use ipe_sandbox::run_jail::{self, DatabaseAxis, RunJailDefect, SandboxProfile};
 use crate::CliError;
 use crate::project::ProjectManifest;
 
-/// The narrow, run-jail-specific unsandboxed override.
+/// The narrow, run-jail-specific unsandboxed override — the recorded consent
+/// that lets a native-bearing program run on a platform with no jail primitive.
 ///
-/// DISTINCT from the FFI-compile override (`IPE_FFI_ALLOW_UNSANDBOXED`). It
-/// downgrades the refusal to a warning ONLY for a pure / low-value-axis program;
-/// for any high-value native axis it is a hard error (there is no flag that runs
-/// admitted native code unconfined).
+/// DISTINCT from the FFI-compile override (`IPE_FFI_ALLOW_UNSANDBOXED`). Only a
+/// native-bearing program can ever reach the jail (ADR 0040); when its platform
+/// has no jail, this flag downgrades the fail-closed refusal to a loud warning
+/// and proceeds unconfined. Unset, the run refuses. Never set it in CI.
 pub const OVERRIDE_ENV: &str = "IPE_ALLOW_UNSANDBOXED";
+
+/// Whether a program is *native-bearing*: it crosses into opaque `Rust.` FFI
+/// code, so its true effect set cannot be proven from Ipê inference and an OS
+/// jail is the only containment.
+///
+/// This reads the same [`Capability::NativeFfi`] the lowerer inserts on any
+/// `Rust.` crossing — a compile-time fact of the inference pass, never a source
+/// heuristic. A pure Ipê program (no `NativeFfi`, whatever else it infers) is
+/// structurally bounded to its inferred capabilities and needs no runtime jail,
+/// so callers run it directly (ADR 0040).
+#[must_use]
+pub fn is_native_bearing(union: &BTreeSet<Capability>) -> bool {
+    union.contains(&Capability::NativeFfi)
+}
 
 /// The resolved capability sets for a program about to run.
 pub struct ResolvedCapabilities {
@@ -97,59 +120,63 @@ pub fn override_requested() -> bool {
     std::env::var_os(OVERRIDE_ENV).is_some_and(|v| v == "1")
 }
 
-/// Decide what to do when the jail cannot be established for `union`.
+/// Decide what to do when the jail cannot be established for a native-bearing
+/// `union`.
 ///
-/// Returns `Ok(true)` to proceed unconfined (the override applies and the set is
-/// low-value only, with a printed warning), or an `Err` refusal. A high-value
-/// native axis makes the override a hard error — there is no unconfined run of
-/// admitted native code.
+/// Only native-bearing programs are jailed (ADR 0040), so this path is always
+/// opaque native code on a platform with no jail primitive.
+///
+/// Fail-closed by default: without recorded consent ([`OVERRIDE_ENV`]) the run
+/// refuses. With consent it prints a loud warning naming the axes that will run
+/// unconfined and returns `Ok(true)` to proceed. There is no unconfined run of
+/// native code without that explicit, recorded consent.
 ///
 /// # Errors
 ///
-/// [`CliError::UsageOwned`] carrying the refusal (`IPE-F4413`) — either the raw
-/// defect, or the "override is a hard error for a native axis" message.
+/// [`CliError::UsageOwned`] carrying the refusal (`IPE-F4413`) when consent is
+/// absent.
 pub fn resolve_refusal(
     defect: &RunJailDefect,
     union: &BTreeSet<Capability>,
 ) -> Result<bool, CliError> {
-    if !override_requested() {
-        // No override: the defect is the refusal, verbatim.
-        return Err(CliError::UsageOwned(defect.to_string()));
-    }
-    if run_jail::is_low_value_only(union) {
-        // Pure / clock / random only: the override may downgrade to a warning.
-        eprintln!(
-            "warning: {OVERRIDE_ENV}=1 — running WITHOUT a capability jail. This program's \
-             capability set is low-value (empty, or clock/random only), so nothing high-value \
-             runs unconfined, but the OS-level guarantee is off. Never set this in CI."
-        );
-        return Ok(true);
-    }
-    // A high-value native axis is present: the override is a hard error.
+    // The axes that would run with the user's full authority (clock/random carry
+    // no OS control and are not part of the warning).
     let names: Vec<&str> = union
         .iter()
         .filter(|c| !matches!(c, Capability::Clock | Capability::Random))
         .map(|c| c.as_str())
         .collect();
-    Err(CliError::UsageOwned(format!(
-        "{}: {defect}\n  {OVERRIDE_ENV}=1 cannot override this: the program reaches a high-value \
-         native axis ({}) that would run with your full authority unconfined. There is no flag \
-         that runs admitted native code without a jail — install the jail primitives, or narrow \
-         the program.",
-        RunJailDefect::UnsupportedPlatform { reason: "" }
-            .code()
-            .as_str(),
+
+    if !override_requested() {
+        // Fail-closed: no jail here and no recorded consent. The defect (which
+        // carries the IPE-F4413 code) is the refusal, with remediation.
+        return Err(CliError::UsageOwned(format!(
+            "{defect}\n  This program reaches native Rust code ({}) whose effects cannot be \
+             proven safe, and no capability jail is available on this platform. Install a jail \
+             primitive (bwrap on Linux), or set {OVERRIDE_ENV}=1 to run it unconfined at your own \
+             risk (never in CI).",
+            names.join(", ")
+        )));
+    }
+
+    // Recorded consent: warn loudly, in red, and proceed unconfined.
+    eprintln!(
+        "\x1b[1;31mwarning: {OVERRIDE_ENV}=1 — running native Rust code ({}) WITHOUT a capability \
+         jail. Its effects are NOT proven safe and it runs with your full authority. Install a \
+         jail primitive to confine it; never set this in CI.\x1b[0m",
         names.join(", ")
-    )))
+    );
+    Ok(true)
 }
 
 /// Establish the jail and exec `app` inside it, or apply the fail-closed
-/// refusal / override policy.
+/// refusal / recorded-consent policy.
 ///
-/// On success (Linux, jail established) this **does not return** — it replaces
-/// the current process with the jailed app. When the override lets a low-value
-/// program run unconfined, it returns `Ok(())` and the caller performs the
-/// ordinary unjailed exec.
+/// Callers invoke this only for native-bearing programs (ADR 0040). On success
+/// (jail established) this **does not return** — it replaces the current process
+/// with the jailed app. When the platform has no jail primitive and recorded
+/// consent ([`OVERRIDE_ENV`]) is present, it returns `Ok(())` and the caller
+/// performs the ordinary unjailed exec.
 ///
 /// # Errors
 ///
@@ -167,8 +194,8 @@ pub fn jail_and_exec(
         Ok(t) => t,
         Err(defect) => {
             // The jail primitive is unavailable / platform unsupported: apply
-            // the override-or-refuse policy. If the override lets a low-value
-            // program through, fall back to an unjailed run.
+            // the consent-or-refuse policy. If recorded consent lets the program
+            // through, fall back to an unjailed run.
             return resolve_refusal(&defect, union).map(|_proceed_unconfined| ());
         }
     };
@@ -356,6 +383,25 @@ fn inject_floor_reference(src: &str) -> Result<String, CliError> {
     Ok(out)
 }
 
+/// Whether a built artifact's binary carries an embedded capability floor — i.e.
+/// it was emitted for a native-bearing program (ADR 0040).
+///
+/// `ipe build` embeds the floor (and writes an `ipe.profile`) only for a program
+/// that reaches `Rust.` code; a pure Ipê artifact carries neither and needs no
+/// jail. `ipe exec` reads this off disk *passively* (the binary is never
+/// executed) to decide whether to jail or run directly.
+///
+/// # Errors
+///
+/// [`CliError::Io`] when the binary cannot be read.
+pub fn artifact_is_native(binary_path: &Path) -> Result<bool, CliError> {
+    let binary = std::fs::read(binary_path).map_err(|e| CliError::Io {
+        path: binary_path.to_path_buf(),
+        source: e,
+    })?;
+    Ok(run_jail::scan_capfloor(&binary).is_some())
+}
+
 /// Read and verify the deployed artifact's floor against its `ipe.profile`.
 ///
 /// Returns the profile to jail with. The authoritative floor is the binary's
@@ -495,24 +541,35 @@ mod tests {
     }
 
     #[test]
-    fn refusal_without_override_is_verbatim() {
+    fn refusal_without_consent_carries_the_code_and_remediation() {
         let defect = RunJailDefect::PrimitiveUnavailable {
             missing: vec!["bwrap"],
         };
-        let union: BTreeSet<Capability> = BTreeSet::from([Capability::Network]);
-        // No override env set in this test process.
+        // A native-bearing union — the only kind that reaches this path.
+        let union: BTreeSet<Capability> =
+            BTreeSet::from([Capability::NativeFfi, Capability::Network]);
+        // No consent env set in this test process.
         let r = resolve_refusal(&defect, &union);
         assert!(r.is_err());
         let msg = format!("{}", r.unwrap_err());
-        assert!(msg.contains("IPE-F4413"), "{msg}");
+        assert!(msg.contains("IPE-F4413"), "carries the defect code: {msg}");
+        assert!(
+            msg.contains(OVERRIDE_ENV),
+            "names the consent escape: {msg}"
+        );
+        assert!(msg.contains("native"), "explains the native reason: {msg}");
     }
 
     #[test]
-    fn a_low_value_only_set_is_recognised() {
-        let low: BTreeSet<Capability> = BTreeSet::from([Capability::Clock, Capability::Random]);
-        assert!(run_jail::is_low_value_only(&low));
-        let high: BTreeSet<Capability> = BTreeSet::from([Capability::Network]);
-        assert!(!run_jail::is_low_value_only(&high));
+    fn native_bearing_is_the_native_ffi_axis() {
+        // A pure program with real (but structural) capabilities is NOT jailed.
+        let pure: BTreeSet<Capability> =
+            BTreeSet::from([Capability::Network, Capability::Filesystem]);
+        assert!(!is_native_bearing(&pure));
+        // Any `Rust.` crossing makes it native-bearing.
+        let native: BTreeSet<Capability> = BTreeSet::from([Capability::NativeFfi]);
+        assert!(is_native_bearing(&native));
+        assert!(!is_native_bearing(&BTreeSet::new()));
     }
 
     #[test]

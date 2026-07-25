@@ -4,7 +4,11 @@ Date: 2026-07-21
 
 ## Status
 
-Accepted and **implemented** (first cut). The Linux jail, `ipe run` wiring, the
+Accepted and **implemented** (first cut), **amended by ADR 0040**. The jail
+mechanism, lowering, and artifact machinery here stand; ADR 0040 narrows *when*
+the jail runs — it applies only to native-bearing programs (a `Rust.` crossing),
+while pure Ipê runs directly. The fail-closed, deny-by-default lowering below
+governs the case where a jail is present. The Linux jail, `ipe run` wiring, the
 `ipe build` artifact profile + `ipe exec` launcher, and the per-target
 admit-and-isolate hand-off are in place; macOS/other platforms are the documented
 refuse-gap. Implementation lives in `ipe_sandbox` (`run_jail`, `seccomp`) and the
