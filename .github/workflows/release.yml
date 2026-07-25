@@ -120,7 +120,7 @@ jobs:
 
   # Assemble assets, checksum, upload them to the release-please-created release.
   release:
-    needs: [build] # build-freebsd - removed temporarily
+    needs: [build, build-freebsd]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
