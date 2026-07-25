@@ -100,3 +100,6 @@ __pycache__/
 
 # Go/Sky reference-oracle binaries — regeneration-only scaffolding, never shipped.
 tools/oracle/
+
+# Editor extensions (local build artifacts, published separately)
+editors/

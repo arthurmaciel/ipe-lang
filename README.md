@@ -200,84 +200,11 @@ and the offending line, capability, version, or dependency.
 
 ## Editor setup (LSP)
 
-`ipe lsp` speaks JSON-RPC over stdio and works with any LSP-compliant editor.
-Features: type-directed completion, go-to-definition, find-references, rename,
-formatting, range formatting, code actions, semantic tokens, signature help,
-and inlay hints.
-
-Completion is type-directed: where the surrounding context expects a specific
-type (a function argument, a typed binding's body, an `if`/`case` branch, a
-list element), candidates whose type matches are offered first and the expected
-type's own constructors are surfaced — an `Int` slot never offers a `String`.
-Away from such a context it falls back to every in-scope name. Every suggestion
-comes from the same type-checker `ipe build` runs, so a completion the editor
-offers is one the compiler accepts.
-
-### Helix
-
-Add to `~/.config/helix/languages.toml`:
-
-```toml
-[[language]]
-name = "ipe"
-scope = "source.ipe"
-file-types = ["ipe"]
-roots = ["ipe.toml"]
-language-servers = ["ipe-lsp"]
-
-[language-server.ipe-lsp]
-command = "ipe"
-args = ["lsp"]
-```
-
-### Neovim (with `nvim-lspconfig`)
-
-```lua
-local lspconfig = require("lspconfig")
-local configs = require("lspconfig.configs")
-
-if not configs.ipe then
-  configs.ipe = {
-    default_config = {
-      cmd = { "ipe", "lsp" },
-      filetypes = { "ipe" },
-      root_dir = lspconfig.util.root_pattern("ipe.toml", ".git"),
-      settings = {},
-    },
-  }
-end
-
-lspconfig.ipe.setup({})
-```
-
-Add the filetype detection if needed:
-
-```lua
-vim.filetype.add({ extension = { ipe = "ipe" } })
-```
-
-### VS Code
-
-Install the [Ipê extension](https://marketplace.visualstudio.com/items?itemName=arthurmaciel.ipe-lang)
-(bundles the LSP client), or configure it manually in `.vscode/settings.json`:
-
-```json
-{
-  "ipe.languageServer.command": "ipe",
-  "ipe.languageServer.args": ["lsp"]
-}
-```
-
-If you prefer a generic LSP client (e.g. `vscode-languageclient`), register:
-
-```json
-{
-  "[ipe]": {},
-  "languageServerExample.trace.server": "verbose"
-}
-```
-
-and point `command` to `ipe lsp` for `.ipe` files.
+`ipe lsp` speaks JSON-RPC over stdio — type-directed completion, go-to-definition,
+find-references, rename, formatting, code actions, semantic tokens, and more.
+See [`docs/editor-integration.md`](docs/editor-integration.md) for setup
+instructions covering Helix, Neovim, VS Code, Emacs (lsp-mode and Doom Emacs),
+and Zed.
 
 ## Static compilation
 
