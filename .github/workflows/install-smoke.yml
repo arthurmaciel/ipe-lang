@@ -38,7 +38,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install ipe via install.sh and run it
         shell: bash
         env:
@@ -57,7 +57,7 @@ jobs:
     name: install-smoke (freebsd)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install ipe via install.sh inside a FreeBSD VM
         uses: vmactions/freebsd-vm@v1
         with:
