@@ -102,21 +102,17 @@ ipe fmt — format Ipê source to the canonical (elm-format-compatible) style
 
 USAGE:
     ipe fmt [<path>] [--check]
-    ipe fmt --stdin [--check]
 
 ARGS:
     <path>    A .ipe file, or a directory / project to format every .ipe under
               (default: the current directory `.`)
 
 OPTIONS:
-    --check   Do not write. Exit non-zero if any file (or stdin) is not already
-              formatted (CI-friendly, like `cargo fmt --check`).
-    --stdin   Read from stdin, write formatted result to stdout. Mutually
-              exclusive with <path>. For editor integration and pipes.
+    --check   Do not write. Exit non-zero if any file is not already formatted
+              (CI-friendly, like `cargo fmt --check`).
     --help    Print this message.
 
-By default `ipe fmt` rewrites each file in place. With `--stdin`, formatted
-output goes to stdout (no file is modified).";
+By default `ipe fmt` rewrites each file in place.";
 
 /// Run the `fmt` subcommand.
 ///
@@ -132,21 +128,10 @@ pub fn run_fmt(rest: &[String]) -> Result<(), CliError> {
         println!("{FMT_USAGE}");
         return Ok(());
     }
-    let mode = crate::cli_args::parse_fmt(rest)?;
-    match mode {
-        crate::cli_args::FmtMode::Stdin => run_fmt_stdin(false),
-        crate::cli_args::FmtMode::StdinCheck => run_fmt_stdin(true),
-        crate::cli_args::FmtMode::InPlace { path, check } => {
-            run_fmt_inplace(path.as_deref(), check)
-        }
-    }
-}
+    let args = crate::cli_args::parse_fmt(rest)?;
+    let check = args.check;
 
-/// Format every `.ipe` under `root` in place.
-///
-/// `None` means the current directory `.`.
-fn run_fmt_inplace(path: Option<&str>, check: bool) -> Result<(), CliError> {
-    let root = PathBuf::from(path.unwrap_or("."));
+    let root = PathBuf::from(args.path.unwrap_or_else(|| ".".to_owned()));
     let files = collect_ipe_files(&root)?;
     if files.is_empty() {
         return Err(CliError::UsageOwned(format!(
@@ -182,66 +167,7 @@ fn run_fmt_inplace(path: Option<&str>, check: bool) -> Result<(), CliError> {
             "the following files are not formatted (run `ipe fmt` to fix):\n{list}"
         )));
     }
-
     Ok(())
-}
-
-/// Format stdin to stdout. When `check` is true, print a diff instead.
-fn run_fmt_stdin(check: bool) -> Result<(), CliError> {
-    let mut src = String::new();
-    std::io::Read::read_to_string(&mut std::io::stdin(), &mut src).map_err(|e| CliError::Io {
-        path: PathBuf::from("<stdin>"),
-        source: e,
-    })?;
-
-    let formatted =
-        format_source(&src).map_err(|e| fmt_err_to_cli(&PathBuf::from("<stdin>"), e))?;
-
-    if check {
-        if formatted != src {
-            // Print a unified diff for CI consumption.
-            diff_eprint("<stdin>", &src, &formatted);
-            return Err(CliError::UsageOwned(
-                "stdin is not formatted (run `ipe fmt --stdin` to fix)".to_owned(),
-            ));
-        }
-    } else {
-        std::io::Write::write_all(&mut std::io::stdout(), formatted.as_bytes()).map_err(|e| {
-            CliError::Io {
-                path: PathBuf::from("<stdout>"),
-                source: e,
-            }
-        })?;
-    }
-
-    Ok(())
-}
-
-/// Print a human-readable diff between `original` and `formatted` to stderr.
-fn diff_eprint(label: &str, original: &str, formatted: &str) {
-    let orig_lines: Vec<&str> = original.lines().collect();
-    let fmt_lines: Vec<&str> = formatted.lines().collect();
-
-    // Simple line-by-line diff — good enough for formatter output where
-    // changes are typically whitespace-only and spread across the file.
-    let mut out = String::new();
-    let _ = writeln!(out, "--- {label}");
-    let _ = writeln!(out, "+++ {label} (formatted)");
-
-    let max = orig_lines.len().max(fmt_lines.len());
-    for i in 0..max {
-        let o = orig_lines.get(i).copied().unwrap_or("");
-        let f = fmt_lines.get(i).copied().unwrap_or("");
-        if o != f {
-            let _ = writeln!(out, "-{o}");
-            let _ = writeln!(out, "+{f}");
-        }
-    }
-
-    // SAFETY: diff_eprint is only called in the `--check` path, which
-    // typically targets stderr.  We write to stdout here to stay consistent
-    // with how other formatters surface diffs (rustfmt prints to stdout).
-    let _ = std::io::Write::write_all(&mut std::io::stdout(), out.as_bytes());
 }
 
 /// Map a [`FmtError`] onto the driver's [`CliError`] channel.

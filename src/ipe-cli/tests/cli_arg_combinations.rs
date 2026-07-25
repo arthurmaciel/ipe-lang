@@ -209,26 +209,17 @@ fn fix_invalid_combinations_rejected() {
 
 #[test]
 fn fmt_valid_combinations_parse() {
-    use ipe::cli_args::FmtMode;
-
     assert!(parse_fmt(&v(&[])).is_ok());
     assert!(parse_fmt(&v(&["src"])).is_ok());
+    let a = parse_fmt(&v(&["src", "--check"])).expect("check");
+    assert!(a.check);
     assert!(parse_fmt(&v(&["--check"])).is_ok());
-    assert!(parse_fmt(&v(&["src", "--check"])).is_ok());
-
-    // --stdin
-    let m = parse_fmt(&v(&["--stdin"])).expect("stdin");
-    assert!(matches!(m, FmtMode::Stdin));
-    let m = parse_fmt(&v(&["--stdin", "--check"])).expect("stdin check");
-    assert!(matches!(m, FmtMode::StdinCheck));
 }
 
 #[test]
 fn fmt_invalid_combinations_rejected() {
     assert!(parse_fmt(&v(&["a", "b"])).is_err());
     assert!(parse_fmt(&v(&["--bogus"])).is_err());
-    // --stdin + path is mutually exclusive
-    assert!(parse_fmt(&v(&["--stdin", "src"])).is_err());
 }
 
 // ===========================================================================
