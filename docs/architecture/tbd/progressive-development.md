@@ -14,10 +14,10 @@ is possible by construction.
 ## Files
 | File | Role |
 |---|---|
-| `scripts/progressive-development/autopilot.sh` | THE loop (the only one) — per cycle it authors up to `PROGDEV_LANES` (2) items CONCURRENTLY (design→impl→review, each in its own worktree + cargo target) then INTEGRATES them SERIALLY (git-mutating gate, one lane at a time); + disk/mem/kill-switch/convergence safety harness |
-| `scripts/progressive-development/context.md` | the operating contract every dispatched lane agent reads (`--append-system-prompt-file`) |
-| `scripts/progressive-development/backlog.jsonl` | the work source (SSOT); queried via the `backlog.sh` interface (`ready`/`claim`/`close`/…) |
-| `scripts/progressive-development/watch.sh` | live monitor — per-lane status header (task + elapsed), narrator line, `1`/`2` key-switching between lanes |
+| `misc/scripts/progressive-development/autopilot.sh` | THE loop (the only one) — per cycle it authors up to `PROGDEV_LANES` (2) items CONCURRENTLY (design→impl→review, each in its own worktree + cargo target) then INTEGRATES them SERIALLY (git-mutating gate, one lane at a time); + disk/mem/kill-switch/convergence safety harness |
+| `misc/scripts/progressive-development/context.md` | the operating contract every dispatched lane agent reads (`--append-system-prompt-file`) |
+| `misc/scripts/progressive-development/backlog.jsonl` | the work source (SSOT); queried via the `backlog.sh` interface (`ready`/`claim`/`close`/…) |
+| `misc/scripts/progressive-development/watch.sh` | live monitor — per-lane status header (task + elapsed), narrator line, `1`/`2` key-switching between lanes |
 | `docs/architecture/progressive-development-log.md` | append-only per-iteration outcomes + attempt counts (created on first run) |
 | `docs/architecture/progressive-development-escalations.md` | items the loop refused (excluded class) + fix sketches (created on first run) |
 
@@ -34,10 +34,10 @@ is possible by construction.
 ## Operating it
 ```bash
 # 0. mem-guard must be running; tree clean; on master (or your base).
-scripts/progressive-development/autopilot-run.sh          # supervised first run (1 cycle, live watch.sh attached)
-scripts/progressive-development/autopilot-run.sh --full   # full run using autopilot's native caps
-PROGDEV_LANES=2 scripts/progressive-development/autopilot.sh   # or invoke directly
-scripts/progressive-development/autopilot-stop.sh         # graceful stop after the current phase (touch autopilot.stop)
+misc/scripts/progressive-development/autopilot-run.sh          # supervised first run (1 cycle, live watch.sh attached)
+misc/scripts/progressive-development/autopilot-run.sh --full   # full run using autopilot's native caps
+PROGDEV_LANES=2 misc/scripts/progressive-development/autopilot.sh   # or invoke directly
+misc/scripts/progressive-development/autopilot-stop.sh         # graceful stop after the current phase (touch autopilot.stop)
 # lanes commit straight to the base branch through the green gate — no fast-forward step.
 ```
 
@@ -61,15 +61,15 @@ No dashboard — durable log files + git. Three surfaces:
      every step (reasoning, tool calls, gate output) is written to the iter-log
      **as it happens** — a true live feed.
 
-**One-command monitor:** `scripts/progressive-development/watch.sh` prints the
+**One-command monitor:** `misc/scripts/progressive-development/watch.sh` prints the
 header (branch + landed commits + escalations) then follows the newest iter-log
 live, pretty-printing stream-json steps via `jq` (falls back to raw tail). Run it
 in a second terminal:
 ```bash
 # terminal 1 — start the loop (auto-attaches watch.sh on a tty)
-scripts/progressive-development/autopilot.sh
+misc/scripts/progressive-development/autopilot.sh
 # terminal 2 (optional) — a foreground watch supports 1/2 lane-switching + a auto
-scripts/progressive-development/watch.sh
+misc/scripts/progressive-development/watch.sh
 ```
 
 ## The AGENTS.md cost — the central economic question
@@ -109,7 +109,7 @@ fixed part** if `F` is large and N is high: a 25k-token `F` over 50 iterations i
    as:
    ```
    claude --safe-mode --permission-mode auto \
-          --append-system-prompt-file scripts/progressive-development/context.md \
+          --append-system-prompt-file misc/scripts/progressive-development/context.md \
           -p "<the stage prompt>"
    ```
    (`--permission-mode auto` — not `acceptEdits`: the latter auto-approves only

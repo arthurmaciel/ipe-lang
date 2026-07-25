@@ -6,7 +6,7 @@
 > (Ipê *language* authoring reference). This file = operational HOW:
 > infrastructure, commands, checklists — Rust toolchain (`cargo`,
 > `crates/`, `runtime/`, `ipe`). Autonomous-loop lanes follow
-> `scripts/progressive-development/context.md`.
+> `misc/scripts/progressive-development/context.md`.
 
 Doc hygiene: no archaeology — see `PRINCIPLES.md`
 §Documentation & code standards.
@@ -97,13 +97,13 @@ key → cold recompiles + more RAM pressure. All cargo targets under
 `IPE_ORACLE_SHARED_TARGET`. `cargo nextest run -p ipe` recompiles ALL ~155
 ipe test binaries — scope to `--test <name>` when you need one.
 
-### 1. Memory safety — `scripts/guards/mem-guard.sh` MUST run during dev
+### 1. Memory safety — `misc/scripts/guards/mem-guard.sh` MUST run during dev
 
 Runaway compiler-tooling process can OOM host. Treat absent
 mem-guard like missing `set -e`.
 
 ```bash
-nohup ./scripts/guards/mem-guard.sh > /tmp/mem-guard.out 2>&1 &
+nohup ./misc/scripts/guards/mem-guard.sh > /tmp/mem-guard.out 2>&1 &
 disown                                # survives shell exit
 ```
 
@@ -131,7 +131,7 @@ pkill -f "playwright"; pkill -f "chromium"
 pkill -f "examples/.*/out/app"
 
 # mem-guard alive?
-pgrep -f mem-guard.sh >/dev/null || (nohup ./scripts/guards/mem-guard.sh > /tmp/mem-guard.out 2>&1 & disown)
+pgrep -f mem-guard.sh >/dev/null || (nohup ./misc/scripts/guards/mem-guard.sh > /tmp/mem-guard.out 2>&1 & disown)
 ```
 
 **Prefer Monitor tool** (orchestrator only — lanes foreground-only,
@@ -173,7 +173,7 @@ out.
 
 Rule (cheap per-lane vs ONE authoritative full gate; components of
 each) = `PRINCIPLES.md` §The two-tier gate. Implementation:
-`scripts/progressive-development/autopilot.sh`; master only advances to
+`misc/scripts/progressive-development/autopilot.sh`; master only advances to
 full-gate-certified sha.
 
 **Cheap gate (`lane_gate`)** — merges lane into integration worktree,
@@ -244,7 +244,7 @@ type-check+codegen succeed, surfacing as file-copy/"build failed" error that
 **masquerades as codegen regression** and wastes whole run on
 mis-diagnosis — always read actual build log before blaming code change.
 
-`scripts/guards/disk-guard.sh` (sibling to mem-guard) polls free disk and reclaims
+`misc/scripts/guards/disk-guard.sh` (sibling to mem-guard) polls free disk and reclaims
 disposable caches BEFORE disk fills, in fixed safety order:
 `~/.cache/sccache` first (self-healing), then orphaned cargo target dirs
 (identified by `CACHEDIR.TAG` content, not name), never dir with
