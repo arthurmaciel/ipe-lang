@@ -1,105 +1,48 @@
+#  Unwanted artifacts
+*.db
+*.db-shm
+*.db-wal
+**/.ipe-cache/
+**/.ipedeps/
+**/.ipe/cache/
 /target
-# The in-browser playground's wasm-bindgen output (the compiled `.wasm` plus its
-# JS glue). A regeneratable build artifact — `examples/wasm-language-playground/
-# build.sh` produces it — never a committed binary blob in the source tree.
+/misc
 examples/wasm-language-playground/pkg/
-# Per-example build + generated FFI artifacts (regeneratable; never source)
 examples/**/target/
 examples/**/.ipe/
 examples/**/sky-out/
 examples/**/out/
-# SQLite files an emitted example writes when run (run artifacts, never source).
-examples/*/*.db
-examples/*/*.db-shm
-examples/*/*.db-wal
-out/
-.ipe-cache/
-.ipedeps/
-/tmp-parity/
-
-# The upstream Sky example mirror under examples/sky/ is TRACKED (a committed
-# snapshot of the reference corpus). Each CI examples sweep refreshes it from
-# upstream and commits the update, so the badge + the tree reflect the current
-# upstream. Build artifacts inside the mirror are still ignored below.
-examples/sky/**/target/
-examples/sky/**/sky-out/
-examples/sky/**/.sky/
-examples/sky/**/.ipe/
-# Raw upstream .sky tree preserved by the mirror under SKY_SWEEP_COMPARE for the
-# live-Sky comparison — a transient run artifact, never committed.
 examples/**/.sky-src/
-# Default SQLite DB written by `Db.connect ()` when an emitted binary is run
-# by the E2E test harness in the crate/repo cwd — a run artifact, never source.
-ipe.db
-ipe.db-shm
-ipe.db-wal
-
-# Playwright deps for the wasm RUN driver (scripts/lib/{package.json,
-# wasm-verify.mjs}). package-lock.json IS committed (reproducible installs);
-# node_modules/ + any fetched Playwright browser binaries are not.
+out/
+/tools/ipe-index/target/
+/tmp-parity/
 scripts/lib/node_modules/
-
-# agent worktrees — never commit
-.claude/worktrees/
-# progressive-development loop runtime artifacts
+.claude
 /progressive-development.stop
 /.progressive-development.lock
+.progressive-development-wt/
+/autopilot.stop
+/.autopilot.lock
 docs/architecture/progressive-development-iter-*.log
 docs/architecture/progressive-development-log.md
 docs/architecture/progressive-development-escalations.md
-.progressive-development-wt/
 docs/architecture/progressive-development-lane-*.log
 docs/architecture/remeasure-snapshot.tsv
 docs/architecture/progressive-development-queue.tsv
 docs/architecture/progressive-development-digest.md
-/autopilot.stop
-/.autopilot.lock
 docs/architecture/progressive-development-resume/
 docs/architecture/progressive-development-*.log
 docs/architecture/progdev-status.txt
-.claude/settings.local.json
 docs/architecture/progdev-cost-ledger.tsv
-# Local-only history-rewrite proposal — never staged; deleted when the rewrite lands
-docs/architecture/history-rewrite-proposal-DRAFT.md
-/.ipe-index/
-
-# ipe-index standalone crate build artifacts
-/tools/ipe-index/target/
-.claude
 skills-lock.json
-
-# Agent-orchestration tooling for THIS repo's own development workflow
-# (Claude Code plugin skills, pre-tool-use hooks) — internal dev-time only,
-# not part of the Ipê language/compiler/runtime a contributor or user needs.
 plugins/
 scripts/hooks/
 scripts/guards/
 scripts/merge-lane.sh
 scripts/migrate-golden-harness.sh
 scripts/progressive-development/
-
-scripts/progressive-development/.backlog.lock
-scripts/progressive-development/backlog.svg
-scripts/progressive-development/backlog.png
-scripts/progressive-development/backlog.mmd
-
-# FFI inspector run artifacts (coverage reports) — run outputs, never source.
-# The inspector writes `.ipe/cache/ffi/rust/<crate>.coverage.md` relative to the
-# CWD it runs under; an `ipe_ffi` E2E fixture that shells out to it can drop one
-# beside the crate, so ignore `.ipe/cache/` at ANY depth, not just the tool.
-**/.ipe/cache/
 tools/ipe-ffi-inspector/.ipe/
 tools/ipe-ffi-inspector/.ipecache/
-skyshop_core.db
-skyshop_core.db-shm
-skyshop_core.db-wal
-
-# Python bytecode caches
 __pycache__/
 *.pyc
 
-# Go/Sky reference-oracle binaries — regeneration-only scaffolding, never shipped.
-tools/oracle/
-
-# Editor extensions (local build artifacts, published separately)
-editors/
