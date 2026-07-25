@@ -1,4 +1,4 @@
-# The in-browser compiler crate (`src/ipe-wasm`) builds for
+# The in-browser compiler crate (`src/wasm`) builds for
 # `wasm32-unknown-unknown`, whose linker is `rust-lld` (wasm flavor). A native
 # host config that sets a system linker for the ELF link step — e.g.
 # `-C link-arg=-fuse-ld=mold` in a machine-global `[build] rustflags` — leaks
