@@ -18,7 +18,7 @@ members = [
     "src/compiler/sandbox",
     "src/compiler/watch",
     "src/stdlib",
-    "src/ipe-wasm",
+    "src/wasm",
     "src/lsp/features",
     "src/lsp/server",
     "src/ipe-cli",

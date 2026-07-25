@@ -1,8 +1,9 @@
 # PRINCIPLES.md
 
-Every enforced rule of the Ipê project lives here, stated once. The
-other governance docs — `AGENTS.md` (Ipê language AI authoring reference),
-`DEVELOPMENT.md` (dev-ops workflow) reference this file rather than restate it.
+Every enforced rule of the Rust-backend project lives here, stated once. The
+other governance docs — `AGENTS.md` (Ipê language authoring reference),
+`DEVELOPMENT.md` (dev-ops workflow), `misc/scripts/progressive-development/context.md`
+(autonomous-lane contract) — reference this file rather than restate it.
 
 ## The main values
 
@@ -188,7 +189,7 @@ Master only ever advances to a full-gate-certified sha.
   reset to the last certified sha + re-queue.
 - The two gates MUST agree on lint scope, and the cheap gate is never
   *stricter* than the full gate. Exact commands: `context.md` §6 and
-  `scripts/progressive-development/autopilot.sh`.
+  `misc/scripts/progressive-development/autopilot.sh`.
 
 ### Write-boundary
 
