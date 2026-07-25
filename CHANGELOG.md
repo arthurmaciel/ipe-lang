@@ -10,6 +10,14 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.17](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.16...ipe-v0.1.17) (2026-07-25)
+
+
+### Bug Fixes
+
+* **case:** ipê is not valid -&gt; Ipê ([dc7689f](https://github.com/arthurmaciel/ipe-lang/commit/dc7689f4c7a090d95c89a05f19d3e3fb842b1d02))
+* **ipe-cli:** add --stdin flag to ipe fmt for editor integration ([34b6c40](https://github.com/arthurmaciel/ipe-lang/commit/34b6c40ea4afd42cf4b47b10c0ea8c58806db921))
+
 ## [0.1.16](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.15...ipe-v0.1.16) (2026-07-24)
 
 
