@@ -87,8 +87,31 @@ vim.api.nvim_create_autocmd("FileType", {
 
 ## VS Code
 
-Install the [Ipê extension](https://marketplace.visualstudio.com/items?itemName=arthurmaciel.ipe-lang)
-(bundles the LSP client), or configure it manually in `.vscode/settings.json`:
+Install the extension from `editors/vscode/ipe-lang-0.1.0.vsix`:
+
+```bash
+code --install-extension editors/vscode/ipe-lang-0.1.0.vsix
+```
+
+Or build from source:
+
+```bash
+cd editors/vscode && npm install && npm run compile && npm run package
+code --install-extension ipe-lang-0.1.0.vsix
+```
+
+The extension bundles LSP client + formatter. Set as default in `.vscode/settings.json`:
+
+```json
+{
+  "[ipe]": {
+    "editor.defaultFormatter": "arthurmaciel.ipe-lang",
+    "editor.formatOnSave": true
+  }
+}
+```
+
+Alternatively, configure formatter-only manually:
 
 ```json
 {
