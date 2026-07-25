@@ -1,11 +1,30 @@
-# PRINCIPLES.md — enforcement SSOT
+# PRINCIPLES.md
 
-Every enforced rule of the Rust-backend project lives here, stated once. The
-other governance docs — `AGENTS.md` (Ipê language authoring reference),
-`DEVELOPMENT.md` (dev-ops workflow), `scripts/progressive-development/context.md`
-(autonomous-lane contract) — reference this file rather than restate it.
+Every enforced rule of the Ipê project lives here, stated once. The
+other governance docs — `AGENTS.md` (Ipê language AI authoring reference),
+`DEVELOPMENT.md` (dev-ops workflow) reference this file rather than restate it.
 
-## The six principles (strict order)
+## The main values
+
+Ipê is meant to be:
+
+1. explicitly principled: the values, principles, rules and declarations
+   stated in this document are entrenched/eternity clauses. They and their
+   priority order cannot be changed, even by decisions taken by the majority
+   of the community. If there is a need to change them (eg. favor exclusivity
+   over community-openess or favor efficiency over security or correctness), it
+   is better to fork the project and start a new one with different principles.
+
+3. community-centered: diversity is not only welcomed, but it is the foundation of
+   the Ipê project. Respecting diversity in its many forms (related to age, gender,
+   sexual orientation, ethinicity, race, culture, physical and cognitive ability,
+   experience and socio-economic levels, etc) is MANDATORY. While respecting the
+   values, principles and rules, the community has full autonomy to modify and
+   extend the language, always trying to reach consensus. If after 3
+   attempts of discussions and votes no consensus is reached, a fourth round of
+   discussion and vote should elect the majority's decision.
+
+## The six technical principles (strict order)
 
 1. **Security** — generated code and runtime give an attacker no foothold: no
    injection (SQL, shell, path, header, log), no secret leakage into logs or
@@ -35,7 +54,7 @@ decision the higher-numbered principle yields — a faster path that opens a
 soundness hole is rejected, a more readable form that breaks correctness is
 rejected. A lower principle can never justify compromising a higher one.
 
-## The fundamental rules
+## The fundamental technical rules
 
 Beneath the ranked principles, every design and code pass obeys:
 
@@ -73,7 +92,7 @@ Beneath the ranked principles, every design and code pass obeys:
 The ordering says what wins in a conflict; these rules say how to build code
 that doesn't create the conflict.
 
-## THE SEAL — no exit-0-then-cargo-fail
+### The mandatory technical SEAL — no ipe-exit-0-then-cargo-fail
 
 **If `ipe` accepts a program (exit 0), the emitted Rust MUST `cargo build`.
 Never emit codegen that type-checks in ipe but fails cargo.** This is
@@ -84,7 +103,7 @@ pipeline state whose symptom is exit-0-then-cargo-fail. Every new acceptance
 path (kernel, scheme, lowering arm, emitter case) fails closed at ipe time,
 never open at cargo time.
 
-## §0 No shortcuts — root cause or honest blocker
+### §0 No shortcuts — root cause or honest blocker
 
 Removing or skipping the file, example, test, fixture, golden, or line that
 *triggers* a bug is NOT a fix — it hides it. NEVER edit a reference example,
@@ -109,7 +128,7 @@ tracked blocker**. A green obtained by deleting the red is a FAILURE.
   shortcut would satisfy the literal ask but betray that goal, do the harder
   correct thing or surface the tradeoff — never take the shortcut silently.
 
-## Mechanical enforcement — comply by construction
+### Mechanical enforcement — comply by construction
 
 When a lint or gate fires, fix the code — never the lint level, never the gate.
 
@@ -133,7 +152,7 @@ When a lint or gate fires, fix the code — never the lint level, never the gate
   `unsafe`-free and stays that way.
 - **Edition 2024** — workspace crates and every emitted project.
 
-## No `dyn Any` — concrete over generic
+### No `dyn Any` — concrete over generic
 
 The backend NEVER emits `dyn Any` / `.downcast` / type-erasure. Wildcard `any`
 is not polymorphism — it has exactly ONE concrete lowering (an opaque carrier
@@ -148,15 +167,7 @@ possible. Sanctioned runtime-internal *container* exceptions (payload itself
 never erased or downcast): `runtime/src/ipe_runtime/cache.rs` and
 `runtime/src/ipe_runtime/live/pubsub.rs`.
 
-## Match the reference
-
-Go/Haskell (`../ipe`) parity is the default contract; `../ipe` is READ-ONLY.
-Diverge ONLY where the divergence is strictly better under the principle order
-(Rust semantics, Unicode correctness, modern security posture) AND it is
-recorded in `docs/divergences-from-sky.md` with rationale and its own tests. A
-hack is never a "divergence".
-
-## The two-tier gate
+### The two-tier gate
 
 Master only ever advances to a full-gate-certified sha.
 
@@ -171,14 +182,15 @@ Master only ever advances to a full-gate-certified sha.
   -p ipe-runtime-rust --features full` (LOAD-BEARING — the runtime's
   `default = []` means the workspace run skips every feature-gated test,
   including the entire `live::*` surface); `cargo test --workspace --doc`;
-  `cargo clippy --workspace --all-targets -- -D warnings`; fuzz + full
+  `cargo clippy --workspace --all-targets -- -D warnings -W clippy::pedantic
+  -W clippy::correctness -W clippy::style -W clippy::complexity`; fuzz + full
   examples sweep. Full-green → certify the batch + advance master. Full-red →
   reset to the last certified sha + re-queue.
 - The two gates MUST agree on lint scope, and the cheap gate is never
   *stricter* than the full gate. Exact commands: `context.md` §6 and
   `scripts/progressive-development/autopilot.sh`.
 
-## Write-boundary
+### Write-boundary
 
 Exactly two writable locations, for everyone (agent or human):
 
@@ -191,7 +203,7 @@ Exactly two writable locations, for everyone (agent or human):
   `../ipe` is READ-ONLY reference — never edit the Haskell/Go backend or
   upstream.
 
-## Agent-lane operational rules
+### Agent-lane operational rules
 
 Every dispatched lane (autopilot or hand-dispatched):
 
@@ -211,7 +223,7 @@ Every dispatched lane (autopilot or hand-dispatched):
   `covers`/`parity`). Learn how the reference handles the construct across
   compiler + backend + runtime before designing the fix.
 
-## Documentation & code standards
+### Documentation & code standards
 
 - **No archaeology.** Docs and comments state what the rule or design IS now,
   never how it got there: no dates, no task numbers, no phase/milestone/
