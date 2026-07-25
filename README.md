@@ -1,12 +1,29 @@
-# Ipê
+<div align="center">
+    <img width="249" height="250" alt="Yellow Ipê (Handroanthus serratifolius)" src="https://github.com/user-attachments/assets/21bc26b9-2360-4667-8306-99fc07c6fda3" />
+</div>
 
 [![CI](https://github.com/arthurmaciel/ipe-lang/actions/workflows/ci.yml/badge.svg)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/ci.yml)
 
-**Ipê** pairs **Elm's syntax** with **Sky's batteries-included runtime** — the
+# Ipê language
+
+> [!CAUTION]
+>
+> Although many of the features are working, the
+> code is under a thorough review that may last 3 to 4 months.
+>
+> Please consider
+> [supporting our project](https://github.com/arthurmaciel/ipe-lang#support) so we get ready soon :)
+
+**Ipê**, pronounced [/ip'e/](https://ipa-reader.com/?text=%09ip%E2%80%B2e&voice=Vitoria), is a "thick-barked" [tree](https://en.wikipedia.org/wiki/Handroanthus_serratifolius) native from South and Central Americas. 
+
+The Ipê programming language aims to be a community-centerd and explicitly [principled](https://github.com/arthurmaciel/ipe-lang/blob/main/PRINCIPLES.md) programming language. 
+
+It pairs [Elm](https://elm-lang.org/)'s syntax with [Sky](https://sky-lang.org/)'s batteries-included runtime — the
 standard library, effect system, and application framework (web, API, CLI,
 terminal, desktop) that turn a pure-functional language into a full-stack one.
 It compiles to readable, `rustfmt`-clean Rust.
 
+Installation:
 ```sh
 curl -fsSL https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/scripts/install.sh | sh
 ```
@@ -20,7 +37,7 @@ cd counter
 ipe run                   # serves the counter at http://localhost:8000
 ```
 
-Prefer to start from scratch? A minimal program is just:
+Prefer to start from scratch? A minimal script program is just:
 
 ```elm
 -- src/Main.ipe
@@ -36,15 +53,20 @@ main =
 ipe run src/Main.ipe        # compile + run in one step
 ```
 
-Prefer building from source? `git clone https://github.com/arthurmaciel/ipe-lang
-&& cd ipe-lang && cargo build --release`.
+Prefer building from source? 
+
+```sh
+git clone https://github.com/arthurmaciel/ipe-lang
+cd ipe-lang
+cargo build --release`.
+```
 
 ## Contents
 
 - [Features](#features)
 - [Code shapes](#code-shapes)
-- [Capabilities](#capabilities)
-- [Dependencies](#dependencies)
+<!-- - [Capabilities](#capabilities)
+- [Dependencies](#dependencies)-->
 - [Editor setup (LSP)](#editor-setup-lsp)
 - [Static compilation](#static-compilation)
 - [Support](#support)
@@ -53,23 +75,19 @@ Prefer building from source? `git clone https://github.com/arthurmaciel/ipe-lang
 
 - **Elm syntax** — pure functions, Hindley–Milner type inference, exhaustive
   `case`, immutable data. No `null`, no runtime exceptions.
-- **Sky's batteries-included runtime** — typed HTTP, Live (SSR + real-time),
+- **Sky's batteries-included runtime** — Live applications (SSR + real-time), typed HTTP, 
   SQL databases, auth, email, cache, pub/sub, and WebSockets, all behind a
   single `Task Error a` effect boundary.
 - **Rust compiler** — the compiler itself is written in Rust: fast, parallel,
   memory-safe.
-- **Rust backend** — emits readable Rust. THE SEAL is enforced: if `ipe`
-  accepts your program, the generated Rust compiles.
+- **Rust backend** — emits readable Rust.
 - **Incremental compilation** — a salsa-backed query engine; `ipe watch`
   recompiles only what changed.
 - **Static compilation** — `ipe build --static` produces a fully-static musl
   single binary. Copy it anywhere and run — no runtime, no dependencies.
 - **No authored abrupt failure** — the compiler's and runtime's own Rust carries
-  no `panic!`, `unwrap`, `expect`, `assert!`, or indexing panic: every failure is
-  a typed `Result` or a diagnostic. Enforced by clippy denies plus a token-level
-  scanner (which also gates generated and third-party FFI Rust), with a small,
-  audited exception ledger. (`std` and third-party crate internals are outside
-  this guarantee.)
+  no `panic!`, `unwrap`, `expect`, `assert!`, or indexing panic. Every failure is
+  a typed `Result` or a diagnostic.
 
 ## Code shapes
 
@@ -112,6 +130,7 @@ capabilities, how inference works, and how native code declares and is sandboxed
 Every command is human-friendly by default; data commands take `--plain` and
 `--json` for scripts — see [**CLI output**](docs/cli-output.md).
 
+<!--
 ## Dependencies
 
 A project declares its dependencies in `ipe.toml`. Three sections, each optional:
@@ -197,6 +216,7 @@ $ ipe package audit path/to/pkg     # or a specific package directory
 
 A clean package prints `all Tier-1 checks passed`; a failing one names the check
 and the offending line, capability, version, or dependency.
+-->
 
 ## Editor setup (LSP)
 
@@ -249,12 +269,26 @@ confirmed available on the runner. Remove `continue-on-error` from
 
 ## Support
 
-Ipê is developed in the open by one person. The Rust backend tracks the
-upstream [Sky](https://github.com/anzellai/sky) language; keeping pace takes
-real work. If Ipê is useful to you, [support its development](https://ko-fi.com/arthur_maciel??g=1)
-— it directly buys faster progress. Thank you! :)
+Contributions are **very** welcome!
 
-Contributions are welcome and **every PR is human-reviewed** before merge.
-The most valuable contributions are **bug reports and security/soundness
-fixes** — a mis-compilation, a panic on valid input, or an unsound emit is
-always worth an [issue](https://github.com/arthurmaciel/ipe-lang/issues).
+There are 4 main forms to support our project. They are listed in order
+of need at the current moment:
+
+### Donations
+
+I'd love to spend more time developing Ipê and also buying AI tokens
+to test battle the code. If you like these idea, please 
+[support Ipê's development](https://ko-fi.com/arthur_maciel??g=1). Thank you!
+
+
+### Pull requests
+The most valuable [pull requests](https://github.com/arthurmaciel/ipe-lang/pulls) are
+**security/soundness fixes** — a mis-compilation, 
+a panic on valid input, an unsound emit or security brech. 
+
+Every `PR` must be human-reviewed. Unfortunately there is not enough time to 
+review AI-only reviewed code. Sorry for that!
+
+### Bug reports
+Even if you can't propose any code yet, please [report](https://github.com/arthurmaciel/ipe-lang/issues)
+ any bugs you find!
