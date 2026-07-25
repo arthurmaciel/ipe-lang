@@ -522,39 +522,25 @@ pub fn parse_fix(rest: &[String]) -> Result<FixArgs, CliError> {
     Ok(FixArgs { entry, auto })
 }
 
-/// Fully-parsed `ipe fmt` mode — three dispatch paths, no ambiguous states.
-///
-/// Constructed exclusively by [`parse_fmt`], which rejects invalid combinations
-/// at the boundary (parse, don't validate).
-pub enum FmtMode {
-    /// Format (or check) every `.ipe` file under `path` in place.
-    /// `None` means the current directory `.`.
-    InPlace { path: Option<String>, check: bool },
-    /// Read from stdin, write formatted result to stdout.
-    Stdin,
-    /// Read from stdin, print diff to stdout without writing.
-    StdinCheck,
+/// Fully-parsed `ipe fmt` arguments.
+pub struct FmtArgs {
+    /// The positional path (`None` → the current directory `.`).
+    pub path: Option<String>,
+    /// `--check` — report unformatted files without rewriting them.
+    pub check: bool,
 }
 
-/// Parse `ipe fmt`'s argument tail into a [`FmtMode`].
-///
-/// * No flags, no path → `InPlace { path: None, check: false }`
-/// * One path → `InPlace { path: Some(…), check: false }`
-/// * `--check` → `InPlace { …, check: true }`
-/// * `--stdin` → `Stdin`
-/// * `--stdin --check` → `StdinCheck`
-/// * `--stdin` + positional path → error (mutually exclusive)
+/// Parse `ipe fmt`'s argument tail. At most one positional `<path>`; the only
+/// flag is `--check`.
 ///
 /// # Errors
 /// [`CliError::Usage`] / [`CliError::UsageOwned`] naming the exact problem.
-pub fn parse_fmt(rest: &[String]) -> Result<FmtMode, CliError> {
+pub fn parse_fmt(rest: &[String]) -> Result<FmtArgs, CliError> {
     let mut path: Option<String> = None;
     let mut check = false;
-    let mut stdin = false;
     for arg in rest {
         match arg.as_str() {
             "--check" => check = true,
-            "--stdin" => stdin = true,
             flag if flag.starts_with('-') => {
                 return Err(CliError::UsageOwned(format!(
                     "ipe fmt: unknown flag `{flag}`"
@@ -568,20 +554,7 @@ pub fn parse_fmt(rest: &[String]) -> Result<FmtMode, CliError> {
             }
         }
     }
-    if stdin && path.is_some() {
-        return Err(CliError::Usage(
-            "fmt: --stdin and a <path> argument are mutually exclusive",
-        ));
-    }
-    if stdin {
-        if check {
-            Ok(FmtMode::StdinCheck)
-        } else {
-            Ok(FmtMode::Stdin)
-        }
-    } else {
-        Ok(FmtMode::InPlace { path, check })
-    }
+    Ok(FmtArgs { path, check })
 }
 
 #[cfg(test)]
@@ -839,56 +812,17 @@ mod tests {
     // ---- fmt ----------------------------------------------------------------
 
     #[test]
-    fn fmt_empty_is_in_place_default() {
-        let m = parse_fmt(&[]).expect("empty fmt");
-        assert!(matches!(
-            m,
-            FmtMode::InPlace {
-                path: None,
-                check: false
-            }
-        ));
-    }
-
-    #[test]
-    fn fmt_path_sets_in_place() {
-        let m = parse_fmt(&s(&["src"])).expect("fmt src");
-        assert!(matches!(m, FmtMode::InPlace { path: Some(p), check: false } if p == "src"));
+    fn fmt_defaults() {
+        let a = parse_fmt(&[]).expect("empty fmt");
+        assert!(a.path.is_none());
+        assert!(!a.check);
     }
 
     #[test]
     fn fmt_check_and_path() {
-        let m = parse_fmt(&s(&["src", "--check"])).expect("fmt");
-        assert!(matches!(m, FmtMode::InPlace { path: Some(p), check: true } if p == "src"));
-    }
-
-    #[test]
-    fn fmt_stdin_only() {
-        let m = parse_fmt(&s(&["--stdin"])).expect("stdin");
-        assert!(matches!(m, FmtMode::Stdin));
-    }
-
-    #[test]
-    fn fmt_stdin_check() {
-        let m = parse_fmt(&s(&["--stdin", "--check"])).expect("stdin check");
-        assert!(matches!(m, FmtMode::StdinCheck));
-    }
-
-    #[test]
-    fn fmt_check_only() {
-        let m = parse_fmt(&s(&["--check"])).expect("check only");
-        assert!(matches!(
-            m,
-            FmtMode::InPlace {
-                path: None,
-                check: true
-            }
-        ));
-    }
-
-    #[test]
-    fn fmt_stdin_with_path_rejected() {
-        assert!(parse_fmt(&s(&["--stdin", "src"])).is_err());
+        let a = parse_fmt(&s(&["src", "--check"])).expect("fmt");
+        assert_eq!(a.path.as_deref(), Some("src"));
+        assert!(a.check);
     }
 
     #[test]
