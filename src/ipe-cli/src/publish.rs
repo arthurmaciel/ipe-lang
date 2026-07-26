@@ -490,16 +490,114 @@ fn open_pr(entry_toml: &str, plan: &PrPlan, fork_owner: &str) -> Result<(), CliE
         }
     }
 
-    let url = compare_url(
-        &plan.index_repo,
-        "main",
-        fork_owner,
-        &plan.branch,
-        &plan.title,
+    // The branch is pushed. Open the PR headlessly when a token is available
+    // (CI's `GITHUB_TOKEN` or `ipe login`); otherwise fall back to the browser
+    // compare page.
+    publish_token().map_or_else(
+        || {
+            let url = compare_url(
+                &plan.index_repo,
+                "main",
+                fork_owner,
+                &plan.branch,
+                &plan.title,
+            );
+            let opened = open_in_browser(&url);
+            print_pr_opened(plan, &url, opened);
+        },
+        |token| submit_pr_via_api(plan, fork_owner, &token),
     );
-    let opened = open_in_browser(&url);
-    print_pr_opened(plan, &url, opened);
     Ok(())
+}
+
+/// The token for the headless PR-open path: `GITHUB_TOKEN` (CI) wins, else the
+/// token stored by `ipe login`. `None` selects the browser path.
+fn publish_token() -> Option<String> {
+    std::env::var("GITHUB_TOKEN")
+        .ok()
+        .map(|t| t.trim().to_owned())
+        .filter(|t| !t.is_empty())
+        .or_else(crate::login::stored_token)
+}
+
+/// The `POST /repos/{index}/pulls` request body: a PR from `fork_owner:branch`
+/// against the index's `main`.
+fn pr_request_body(plan: &PrPlan, fork_owner: &str) -> serde_json::Value {
+    serde_json::json!({
+        "title": plan.title,
+        "head": format!("{fork_owner}:{}", plan.branch),
+        "base": "main",
+    })
+}
+
+/// Open the index PR through the GitHub REST API — no browser. Reuses the branch
+/// already pushed to the fork. On any API failure the pre-filled compare URL is
+/// printed as the manual fallback, so a headless publish never dead-ends.
+fn submit_pr_via_api(plan: &PrPlan, fork_owner: &str, token: &str) {
+    let api = format!("https://api.github.com/repos/{}/pulls", plan.index_repo);
+    let body = pr_request_body(plan, fork_owner);
+    match github_api_post(&api, token, &body) {
+        Ok(resp) => {
+            let url = resp
+                .get("html_url")
+                .and_then(serde_json::Value::as_str)
+                .map_or_else(
+                    || {
+                        compare_url(
+                            &plan.index_repo,
+                            "main",
+                            fork_owner,
+                            &plan.branch,
+                            &plan.title,
+                        )
+                    },
+                    str::to_owned,
+                );
+            print_pr_submitted(plan, &url);
+        }
+        Err(err) => {
+            let url = compare_url(
+                &plan.index_repo,
+                "main",
+                fork_owner,
+                &plan.branch,
+                &plan.title,
+            );
+            print_pr_api_fallback(plan, &url, &err);
+        }
+    }
+}
+
+/// `POST` a JSON body to the GitHub API with the bearer token; return the parsed
+/// response. `--fail` is deliberately omitted so GitHub's error JSON (e.g. a PR
+/// that already exists) is read and surfaced rather than swallowed. An `Err`
+/// carries the API's `message`.
+fn github_api_post(
+    url: &str,
+    token: &str,
+    body: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let body_str = body.to_string();
+    let output = Command::new("curl")
+        .args(["--silent", "--show-error", "-X", "POST"])
+        .args(["-H", "Accept: application/vnd.github+json"])
+        .args(["-H", &format!("Authorization: Bearer {token}")])
+        .args(["-H", "User-Agent: ipe-cli"])
+        .args(["-d", &body_str, url])
+        .output()
+        .map_err(|e| format!("could not run `curl` (needed to open the PR): {e}"))?;
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("could not parse GitHub's response as JSON: {e}"))?;
+    // A successful create returns the PR object (has `html_url`); an error returns
+    // `{ "message": ... }` with no `html_url`.
+    if json.get("html_url").is_none() {
+        let msg = json
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unexpected GitHub API response");
+        return Err(msg.to_owned());
+    }
+    Ok(json)
 }
 
 /// The `<name>` of an `<owner>/<name>` repo (the whole string when it has no
@@ -599,6 +697,27 @@ fn print_pr_opened(plan: &PrPlan, url: &str, opened: bool) {
         } else {
             ""
         }
+    );
+    let _ = write!(body, "  {url}");
+    print!("{}", crate::style::frame(&crate::style::gutter(&body)));
+}
+
+/// Print the "PR opened via the API" summary (headless path — no browser).
+fn print_pr_submitted(plan: &PrPlan, url: &str) {
+    let mut body = String::new();
+    let _ = writeln!(body, "published `{}` — pull request opened:", plan.branch);
+    let _ = write!(body, "  {url}");
+    print!("{}", crate::style::frame(&crate::style::gutter(&body)));
+}
+
+/// Print the manual fallback when the headless API PR-open failed. The branch is
+/// already pushed, so the author finishes at the compare URL by hand.
+fn print_pr_api_fallback(plan: &PrPlan, url: &str, err: &str) {
+    let mut body = String::new();
+    let _ = writeln!(body, "pushed `{}` to your index fork", plan.branch);
+    let _ = writeln!(
+        body,
+        "the GitHub API PR-open failed ({err}); finish it here:"
     );
     let _ = write!(body, "  {url}");
     print!("{}", crate::style::frame(&crate::style::gutter(&body)));
@@ -931,6 +1050,29 @@ mod tests {
             url,
             "https://github.com/arthurmaciel/ipe-index/compare/\
              main...octocat:publish/foo-1.2.3?quick_pull=1&title=Publish%20foo%201.2.3"
+        );
+    }
+
+    #[test]
+    fn pr_request_body_targets_fork_head_against_main() {
+        let plan = PrPlan {
+            index_repo: "arthurmaciel/ipe-index".to_owned(),
+            entry_file: "packages/foo.toml".to_owned(),
+            branch: "publish/foo-1.2.3".to_owned(),
+            title: "Publish foo 1.2.3".to_owned(),
+        };
+        let body = pr_request_body(&plan, "octocat");
+        assert_eq!(
+            body.get("head").and_then(serde_json::Value::as_str),
+            Some("octocat:publish/foo-1.2.3")
+        );
+        assert_eq!(
+            body.get("base").and_then(serde_json::Value::as_str),
+            Some("main")
+        );
+        assert_eq!(
+            body.get("title").and_then(serde_json::Value::as_str),
+            Some("Publish foo 1.2.3")
         );
     }
 
