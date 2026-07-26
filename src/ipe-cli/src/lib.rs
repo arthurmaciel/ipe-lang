@@ -27,6 +27,7 @@ pub mod help;
 pub mod index;
 pub mod init;
 pub mod lockfile;
+pub mod login;
 mod lsp;
 pub mod pkg;
 pub mod project;
@@ -139,7 +140,7 @@ pub enum CliError {
     PackageAudit(audit::Rejection),
     /// `ipe package publish` declined to proceed. Carries the typed
     /// [`publish::Refusal`] naming the precondition that failed (a dirty working
-    /// tree, an unpushed HEAD, an already-published version, or a missing token).
+    /// tree, an unpushed HEAD, or an already-published version).
     /// A publish precondition is a hard, typed refusal — never a warning — because
     /// a merged index entry must pin an immutable, reproducible revision.
     Publish(publish::Refusal),
@@ -1587,6 +1588,7 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
             with_help_on_misuse("remove", pkg::run_remove(rest))
         }
         Some((cmd, rest)) if cmd == "package" => with_help_on_misuse("package", run_package(rest)),
+        Some((cmd, rest)) if cmd == "login" => with_help_on_misuse("login", login::run_login(rest)),
         Some((cmd, rest)) if cmd == "fix" => with_help_on_misuse("fix", run_fix(rest)),
         Some((cmd, rest)) if cmd == "fmt" => with_help_on_misuse("fmt", fmt::run_fmt(rest)),
         Some((cmd, rest)) if cmd == "lsp" => with_help_on_misuse("lsp", lsp::run_lsp(rest)),
@@ -2787,6 +2789,10 @@ pub fn infer_package_capabilities(
     let mut inferred: std::collections::BTreeSet<ipe_ir::Capability> =
         std::collections::BTreeSet::new();
     let mut any_lowered = false;
+    // When nothing lowers, the entry module's real diagnostic is far more useful
+    // than a generic "nothing lowered". Keep the best candidate to surface: the
+    // entry module `Main` if it fails, otherwise the first failure seen.
+    let mut lowering_error: Option<CliError> = None;
 
     // Lower each module as its own entry (a fresh database per module keeps the
     // interning deterministic and the borrow of the shared interner scoped). A
@@ -2798,18 +2804,36 @@ pub fn infer_package_capabilities(
         let Some(entry_file) = source_root.files(&db).get(&m.module_path).copied() else {
             continue;
         };
-        if let Ok(program) = ipe_db::lower_program(&db, source_root, entry_file) {
-            inferred.extend(ipe_lower::program_capabilities(&program));
-            any_lowered = true;
+        match ipe_db::lower_program(&db, source_root, entry_file) {
+            Ok(program) => {
+                inferred.extend(ipe_lower::program_capabilities(&program));
+                any_lowered = true;
+            }
+            Err((diag, _)) => {
+                let is_entry = m.module_path.last().map(String::as_str) == Some("Main");
+                if lowering_error.is_none() || is_entry {
+                    let src = sources
+                        .get(&m.module_path)
+                        .map(|(_, s)| s.clone())
+                        .unwrap_or_default();
+                    lowering_error = Some(CliError::Pipeline {
+                        file: m.path.clone(),
+                        src,
+                        diag,
+                    });
+                }
+            }
         }
     }
 
     if any_lowered {
         Ok(inferred)
     } else {
-        Err(CliError::Usage(
+        // Surface the real reason the entry could not be lowered, not a generic
+        // "nothing lowered" that hides the actual compiler diagnostic.
+        Err(lowering_error.unwrap_or(CliError::Usage(
             "package capability inference: no module in the package could be lowered",
-        ))
+        )))
     }
 }
 

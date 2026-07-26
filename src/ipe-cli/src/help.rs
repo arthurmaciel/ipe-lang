@@ -246,6 +246,27 @@ const COMMANDS: &[Command] = &[
                 flag: "[--rev <sha>]",
                 desc: "publish: the revision to pin (overrides the committed HEAD)",
             },
+            Opt {
+                flag: "[--fork <owner>]",
+                desc: "publish: the owner of your index fork to push to (defaults to the source \
+                       owner)",
+            },
+        ],
+    },
+    Command {
+        name: "login",
+        summary: "Authorize ipe with GitHub (device flow) and store a publish token.",
+        args: "",
+        args_desc: "",
+        options: &[
+            Opt {
+                flag: "[--status]",
+                desc: "report whether a token is stored",
+            },
+            Opt {
+                flag: "[--logout]",
+                desc: "remove the stored token",
+            },
         ],
     },
     Command {
@@ -360,7 +381,7 @@ const SECTIONS: &[Section] = &[
     },
     Section {
         title: "Package authoring",
-        commands: &["package"],
+        commands: &["login", "package"],
     },
     Section {
         title: "Foreign-function interface (FFI)",
