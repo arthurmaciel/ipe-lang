@@ -72,6 +72,22 @@ SBPL
 
 export SCRATCH_DIR="$SCRATCH"
 
-timeout "$TIMEOUT_SECS" \
+# macOS ships `gtimeout` (GNU coreutils via Homebrew) not POSIX `timeout`.
+# GHA macOS runners have GNU coreutils pre-installed.
+if command -v gtimeout >/dev/null 2>&1; then
+    TIMEOUT_CMD=gtimeout
+elif command -v timeout >/dev/null 2>&1; then
+    TIMEOUT_CMD=timeout
+else
+    echo "WARNING: no timeout command found; running without wall-clock cap" >&2
+    TIMEOUT_CMD=
+fi
+
+if [ -n "$TIMEOUT_CMD" ]; then
+    "$TIMEOUT_CMD" "$TIMEOUT_SECS" \
+        sandbox-exec -f "$PROFILE_FILE" \
+            sh "$FIXTURE_ABS"
+else
     sandbox-exec -f "$PROFILE_FILE" \
         sh "$FIXTURE_ABS"
+fi
