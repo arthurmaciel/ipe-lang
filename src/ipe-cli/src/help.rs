@@ -308,6 +308,16 @@ const COMMANDS: &[Command] = &[
         options: &[],
     },
     Command {
+        name: "upgrade",
+        summary: "Self-update ipe to the latest release (re-runs the installer).",
+        args: "",
+        args_desc: "",
+        options: &[Opt {
+            flag: "[--dry-run]",
+            desc: "print the installer command without running it",
+        }],
+    },
+    Command {
         name: "version",
         summary: "Print the ipe version.",
         args: "",
@@ -358,7 +368,14 @@ const SECTIONS: &[Section] = &[
     },
     Section {
         title: "Tools",
-        commands: &["explain", "capabilities", "diff", "lsp", "version"],
+        commands: &[
+            "explain",
+            "capabilities",
+            "diff",
+            "lsp",
+            "upgrade",
+            "version",
+        ],
     },
 ];
 
