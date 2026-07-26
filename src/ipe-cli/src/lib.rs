@@ -2774,7 +2774,7 @@ pub fn infer_package_capabilities(
     manifest_path: &Path,
 ) -> Result<std::collections::BTreeSet<ipe_ir::Capability>, CliError> {
     let manifest = project::parse_manifest(manifest_path)?;
-    let discovered = project::discover_modules(&manifest.src_root)?;
+    let mut discovered = project::discover_modules(&manifest.src_root)?;
 
     // Read every module's source once; the shared map lets each per-module
     // lowering resolve its sibling imports.
@@ -2784,7 +2784,11 @@ pub fn infer_package_capabilities(
         sources.insert(m.module_path.clone(), (m.path.clone(), src));
     }
 
-    let injected = std::collections::BTreeSet::new();
+    // Inject the compiled-source stdlib closure (e.g. `Ipe.Css`) just like the
+    // real build path, so a module that imports a compiled-source stdlib module
+    // lowers standalone here instead of failing name resolution (which, since a
+    // failing entry surfaces its real diagnostic, would otherwise abort build).
+    let injected = project::inject_compiled_std_closure(&mut sources, &mut discovered);
     let ffi_injected = std::collections::BTreeSet::new();
     let mut inferred: std::collections::BTreeSet<ipe_ir::Capability> =
         std::collections::BTreeSet::new();
