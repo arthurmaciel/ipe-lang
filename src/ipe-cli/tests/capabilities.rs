@@ -100,7 +100,7 @@ fn verify_rejects_overdeclared() {
 #[test]
 fn acceptance_go_stdlib_example_infers_network_and_clock() -> TestResult {
     let example =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/sky/02-go-stdlib/src/Main.ipe");
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/sky/ipe/02-go-stdlib/src/Main.ipe");
     let (ok, stdout) = run_ipe(&["capabilities", "--plain", &example.to_string_lossy()])?;
     assert!(ok, "capabilities must exit 0 on the example");
     let reported: BTreeSet<&str> = stdout.split_whitespace().collect();
