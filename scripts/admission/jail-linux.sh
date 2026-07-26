@@ -146,10 +146,15 @@ fi
 # bwrap --seccomp N reads the filter from fd N.
 exec 4< "$SECCOMP_FILTER"
 
+# Bind scratch at its real host path (not /scratch) because --ro-bind / /
+# makes the root read-only and bwrap cannot mkdir /scratch over it.
+# --bind src dst requires dst to already exist in the sandbox; binding at
+# the same path as on the host means the directory already exists via
+# --ro-bind / /.
 timeout "$TIMEOUT_SECS" \
     bwrap \
         --ro-bind / / \
-        --bind "$SCRATCH" /scratch \
+        --bind "$SCRATCH" "$SCRATCH" \
         --tmpfs /tmp \
         --proc /proc \
         --dev /dev \
@@ -158,5 +163,5 @@ timeout "$TIMEOUT_SECS" \
         --unshare-ipc \
         --die-with-parent \
         --seccomp 4 \
-        --setenv SCRATCH_DIR /scratch \
+        --setenv SCRATCH_DIR "$SCRATCH" \
         sh "$FIXTURE_ABS"

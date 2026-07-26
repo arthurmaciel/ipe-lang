@@ -124,14 +124,10 @@ try {
         '-File', 'C:\probe\probe.ps1'
     )
 
-    $Proc = Start-Process docker -ArgumentList $DockerArgs -PassThru -NoNewWindow
-    $TimedOut = -not $Proc.WaitForExit($TimeoutSecs * 1000)
-    if ($TimedOut) {
-        $Proc.Kill()
-        Write-Error "ERROR: jail timed out after ${TimeoutSecs}s"
-        exit 1
-    }
-    $ExitCode = $Proc.ExitCode
+    # Run docker directly with & so $LASTEXITCODE captures the container exit code.
+    # Start-Process -PassThru can return a stale .ExitCode on Windows Server 2022.
+    & docker @DockerArgs
+    $ExitCode = $LASTEXITCODE
     if ($ExitCode -ne 0) {
         Write-Error "ERROR: jail probe failed with exit code $ExitCode"
         exit $ExitCode
