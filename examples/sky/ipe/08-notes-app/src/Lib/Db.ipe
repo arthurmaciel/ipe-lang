@@ -1,0 +1,57 @@
+module Lib.Db exposing (conn, exec, query, getField)
+
+import Ipe.Prelude exposing (..)
+import Ipe.Maybe as Maybe
+import Ipe.Dict as Dict
+import Ipe.System as System
+import Ipe.Task as Task
+import Ipe.Error as Error exposing (Error)
+import Ipe.Log exposing (println)
+import Ipe.Db as Db
+
+
+-- Db.* now returns Task Error a per the effect-boundary doctrine.
+-- This Lib layer is consumed from inside HTTP handlers + update
+-- branches that need a synchronous Result for ergonomic case-pattern
+-- matching. We bridge through Task.run inside each wrapper so the
+-- rest of the app keeps its existing Result contracts unchanged.
+--
+-- For Sky.Live update branches with long-running queries, factor the
+-- Task into a top-level helper and dispatch via Cmd.perform — see
+-- 18-job-queue/src/Main.sky for the canonical async pattern.
+conn =
+    case Task.run (Db.open "sqlite" "skynotes.db") of
+
+        Ok c ->
+            c
+
+        Err e ->
+            let
+                _ =
+                    println
+                        ("[FATAL] Cannot open skynotes.db: " ++ Error.toString e)
+            in
+                System.exit 1
+
+
+-- exec : Result Error () — typed-error DB write. Callers in `update`
+-- MUST pattern-match and decide what to do.
+exec queryStr args =
+    case Task.run (Db.exec conn queryStr args) of
+
+        Ok _ ->
+            Ok ()
+
+        Err e ->
+            Err e
+
+
+-- query : Result Error (List Row). Same contract as exec.
+query queryStr args =
+    Task.run (Db.query conn queryStr args)
+
+
+-- Missing columns are a Sky-side schema mismatch, not a runtime error.
+-- Empty string lets the view degrade predictably for display-only reads.
+getField field row =
+    Maybe.withDefault "" (Dict.get field row)

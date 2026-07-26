@@ -1,216 +1,252 @@
 # examples/sky/manifest.toml
 #
-# Registry of the upstream Sky examples this repo mirrors + patches into
-# buildable-on-Ipê examples. It classifies which examples are in scope for the
-# Rust backend; the sweep (scripts/examples-sweep.sh) reads it to know every
-# upstream example that MUST have a verified patch.
+# Registry of the upstream Sky examples this repo mirrors into buildable-on-Ipê
+# ports. It classifies which examples are in scope for the Rust backend; the
+# regen script + sweep read it to know every upstream example that MUST have a
+# verified transform.
 #
-# PATCH MECHANISM (two ordered steps, per example — see examples/sky/README.md):
+# TRANSFORM MECHANISM (two ordered steps, per example — see examples/sky/README.md):
 #   1. rename-map.tsv (via scripts/lib/sky-to-ipe-transform.py) — the shared,
 #      drift-resistant token rewrite: Sky.Core.* / Sky.Http.* / Sky.Ffi /
 #      Sky.Test / Std.* → Ipe.*, plus the .sky→.ipe extension and sky.toml
 #      `entry` key. Sufficient for every example whose delta is purely syntactic.
-#   2. ipe-patches/<name>.patch — an OPTIONAL per-example unified diff applied on
-#      top, for a semantic delta the token rewrite cannot express. Absent when
-#      the transform alone suffices (the common case). A behavioural NEED that a
-#      patch cannot cleanly express is a compiler/stdlib gap to FILE in
-#      BLOCKERS.md, never a hack.
+#   2. ipe-edits/<name>.edits — an OPTIONAL per-example set of content-anchored
+#      find/replace edits for a semantic delta the token rewrite cannot express.
+#      Anchored on the exact source text (never a line number), so they survive
+#      the line shifts upstream makes between releases. Absent when the transform
+#      alone suffices (the common case).
 #
-# HOW THE SWEEP USES THIS FILE
-# scripts/examples-sweep.sh calls mirror_sky_examples (scripts/lib/mirror.sh):
-#   1. Copies ../sky/examples/<name> (fallback: fetches anzellai/sky) into
-#      examples/sky/<name>/ (git-ignored — regenerated each run).
-#   2. Applies rename-map.tsv then ipe-patches/<name>.patch.
-#   3. Hands the patched tree to the BUILD (ipe build + cargo build) + RUN pipeline.
+# HOW THE REGEN + SWEEP USE THIS FILE
+# scripts/regen-sky-examples.sh (and the sweep) call mirror_sky_examples:
+#   1. Fetch examples/<name> from upstream GitHub (anzellai/sky): the raw tree
+#      lands in examples/sky/original/<name>/, its Ipê port in examples/sky/ipe/<name>/.
+#   2. Apply rename-map.tsv then ipe-edits/<name>.edits to the port.
+#   3. The sweep then BUILD (ipe build + cargo build) + RUN the port.
 #
 # ADDING A NEW UPSTREAM EXAMPLE
 # When anzellai/sky adds an example not listed here the sweep emits a loud
 # FAIL for that example (unpatched-new-example). Add it here once you have
-# verified the transform (+ any ipe-patch) covers it. Never let an unpatched
+# verified the transform (+ any ipe-edits) covers it. Never let an unpatched
 # example silently skip.
 #
 # FORMAT: one [[example]] section per Sky-derived example.
 #   name         = upstream directory name
-#   sky_source   = "sibling" | "network" (how the sweep fetches the source)
-#   patch        = "rename-map" | "rename-map+ipe-patch"
+#   patch        = "rename-map" | "rename-map+ipe-edit"
 #   go_ffi       = true if the example imports Go packages (excluded from Rust
 #                  build; checked by is_out_of_scope in lib/examples.sh)
+#   blocked      = OPTIONAL reason string when the example exercises an Ipê
+#                  feature not yet implemented (a tracked compiler gap). The
+#                  sweep marks it a documented SKIP, never a surprise RED.
 #   notes        = free-form, optional
 
 # ── Pure Ipê / no Go-FFI ─────────────────────────────────────────────────────
 
 [[example]]
 name = "00-standard-libs"
-sky_source = "sibling"
-patch = "rename-map+ipe-patch"
+patch = "rename-map+ipe-edit"
 go_ffi = false
 
 [[example]]
 name = "01-hello-world"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 
 [[example]]
 name = "04-local-pkg"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 
 [[example]]
 name = "06-json"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 
 [[example]]
 name = "07-todo-cli"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 
 [[example]]
 name = "09-live-counter"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 
 [[example]]
 name = "10-live-component"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 
 [[example]]
 name = "12-skyvote"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 
 [[example]]
 name = "14-task-demo"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 
 [[example]]
 name = "15-http-server"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 
 [[example]]
 name = "20-cli-counter"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 
 [[example]]
 name = "21-tui-stopwatch"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 
 [[example]]
 name = "22-tui-stopwatch-ui"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 
 [[example]]
 name = "23-tui-todo"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 
 [[example]]
 name = "24-tui-kitchen-sink"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 
 [[example]]
 name = "25-sky-console"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 
 [[example]]
 name = "26-ui-showcase"
-sky_source = "sibling"
-patch = "rename-map"
+patch = "rename-map+ipe-edit"
 go_ffi = false
+notes = "Live.app init pinned to LiveReq (make-invalid-states-unrepresentable divergence, B24 / ADR 0021)"
 
 [[example]]
 name = "27-multi-session-chat"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 
 [[example]]
 name = "28-streaming-chat"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 
 [[example]]
 name = "29-webview-threejs-spike"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 
 [[example]]
 name = "30-sse-server-demo"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 
 [[example]]
 name = "31-webview-stopwatch-ui"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 
 [[example]]
 name = "32-sse-relay"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 
 [[example]]
 name = "33-websocket-echo"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 
 [[example]]
 name = "34-multi-tier-console"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 
 [[example]]
 name = "35-composite-generics"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 
 [[example]]
 name = "39-hub-demo"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 notes = "composite (billing-app + frontend-app); no top-level src/Main — the sweep's per-dir Main.ipe check skips the composite root"
 
+# ── Type-system regression locks (pure Ipê; token rewrite only) ──────────────
+# Small upstream examples that each lock a specific type-inference/codegen
+# behaviour (generic ADT fields, currying, row polymorphism, record update,
+# cross-module ADTs). No Go FFI; the rename-map transform alone suffices.
+
+[[example]]
+name = "40-generic-adt-field"
+patch = "rename-map"
+go_ffi = false
+
+[[example]]
+name = "41-nested-curry"
+patch = "rename-map"
+go_ffi = false
+
+[[example]]
+name = "42-poly-record"
+patch = "rename-map"
+go_ffi = false
+
+[[example]]
+name = "43-composition"
+patch = "rename-map"
+go_ffi = false
+blocked = "IPE-P0001: the `>>` / `<<` function-composition operators are not yet parsed (#177)"
+
+[[example]]
+name = "44-record-update"
+patch = "rename-map"
+go_ffi = false
+
+[[example]]
+name = "45-record-update-anon"
+patch = "rename-map"
+go_ffi = false
+
+[[example]]
+name = "46-row-poly-result"
+patch = "rename-map"
+go_ffi = false
+
+[[example]]
+name = "47-func-field-record"
+patch = "rename-map"
+go_ffi = false
+blocked = "IPE-L0127: function-value-reuse (a function value used more than once) is not yet supported (#178)"
+
+[[example]]
+name = "48-tuple-unused-binding"
+patch = "rename-map"
+go_ffi = false
+
+[[example]]
+name = "49-xmodule-adt"
+patch = "rename-map"
+go_ffi = false
+
+[[example]]
+name = "50-open-row-closure"
+patch = "rename-map"
+go_ffi = false
+
 [[example]]
 name = "simple"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 
 [[example]]
 name = "test_pkg"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 
@@ -220,69 +256,59 @@ go_ffi = false
 
 [[example]]
 name = "02-go-stdlib"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 
 [[example]]
 name = "03-tea-external"
-sky_source = "sibling"
-patch = "rename-map+ipe-patch"
+patch = "rename-map+ipe-edit"
 go_ffi = false
 notes = "Go uuid → Ipe.Crypto.randomToken (sanctioned divergence: same randomness guarantee, different format)"
 
 [[example]]
 name = "05-mux-server"
-sky_source = "sibling"
-patch = "rename-map+ipe-patch"
+patch = "rename-map+ipe-edit"
 go_ffi = false
 notes = "Go net/http + gorilla/mux → Ipe.Http.Server (behaviour-equivalent route dispatch)"
 
 [[example]]
 name = "16-skychess"
-sky_source = "sibling"
-patch = "rename-map+ipe-patch"
+patch = "rename-map+ipe-edit"
 go_ffi = false
 notes = "go.dependencies were crypto/sha256+hex only (Go backend internal); source imports only local Chess.* modules — no Go FFI in Ipê source. Patch adds missing State import to annotation sites."
 
 [[example]]
 name = "17-skymon"
-sky_source = "sibling"
-patch = "rename-map+ipe-patch"
+patch = "rename-map+ipe-edit"
 go_ffi = false
 notes = "go.dependencies were crypto/sha256+hex only; source imports only local Lib.*/Page.* — no Go FFI. Patch: State.Msg import for Ui.Charts annotations; System.loadEnv → System.getenv in Lib.Auth."
 
 [[example]]
 name = "18-job-queue"
-sky_source = "sibling"
-patch = "rename-map+ipe-patch"
+patch = "rename-map+ipe-edit"
 go_ffi = false
 notes = "sky.toml had no go.dependencies; manifest go_ffi was set in error. Patch adds type annotations for viewJob/viewSnapshot."
 
 [[example]]
 name = "19-skyforum"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 notes = "sky.toml listed no go.dependencies; Gorilla/Websocket was never used in the Ipê source. Full .ipe set already committed."
 
 [[example]]
 name = "36-composite-server"
-sky_source = "sibling"
-patch = "rename-map"
+patch = "rename-map+ipe-edit"
 go_ffi = false
-notes = "sky.toml has no go.dependencies; source imports Sky.Core.*/Sky.Http.*/Sky.Ffi/Std.* only — Sky.Ffi is stdlib, not a Go package. go_ffi was set in error."
+notes = "sky.toml has no go.dependencies; source imports Sky.Core.*/Sky.Http.*/Sky.Ffi/Std.* only — Sky.Ffi is stdlib, not a Go package. Edit renames the SKY_ config env vars to IPE_ so the server boots under the standard secret."
 
 [[example]]
 name = "37-composite-live-shop"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 notes = "sky.toml has no go.dependencies; source imports Sky.Core.*/Std.* only — no Go FFI. go_ffi was set in error."
 
 [[example]]
 name = "38-composite-ui-multibackend"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = false
 notes = "sky.toml has no go.dependencies; source imports Sky.Core.*/Std.* only — no Go FFI. go_ffi was set in error."
@@ -293,21 +319,18 @@ notes = "sky.toml has no go.dependencies; source imports Sky.Core.*/Std.* only �
 
 [[example]]
 name = "08-notes-app"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = true
 notes = "imports Github.Com.Google.Uuid + gorilla/mux — Go FFI; no clean Rust-crate path without a multi-file rewrite of the auth layer; deferred"
 
 [[example]]
 name = "11-fyne-stopwatch"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = true
 notes = "imports Fyne.Io.Fyne.V2 — Go GUI FFI; no portable Rust-native GUI equivalent; skip"
 
 [[example]]
 name = "13-skyshop"
-sky_source = "sibling"
 patch = "rename-map"
 go_ffi = true
 notes = "sky mirror excluded; native Ipê port at examples/13-skyshop/ (firestore+stripe via Rust-crate FFI) is in build_set but skipped by needs_ffi_install until ipe install cache is populated"

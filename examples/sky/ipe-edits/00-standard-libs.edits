@@ -1,0 +1,31 @@
+# Adapt the Money tests to Ipê's fail-closed Money API.
+#
+# Upstream Sky's Money.add / Money.sumOf return a bare Money; Ipê's Ipe.Money.add
+# and Ipe.Money.sumOf return `Result Error Money` so a currency mismatch fails
+# closed instead of producing a silently-wrong sum (a sanctioned soundness
+# divergence, recorded in docs/divergences-from-sky.md). Both sums here are
+# same-currency and therefore always Ok, so unwrap them with Result.withDefault
+# (the module is already imported) before formatting. The asserted outputs are
+# unchanged.
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+Test.equal "$15.00" (Money.format (Money.add a b))
+"""
+replace:
+"""
+Test.equal "$15.00" (Money.format (Result.withDefault (Money.zero Money.USD) (Money.add a b)))
+"""
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+total = Money.sumOf Money.USD parts
+"""
+replace:
+"""
+total = Result.withDefault (Money.zero Money.USD) (Money.sumOf Money.USD parts)
+"""

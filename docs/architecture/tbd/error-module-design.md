@@ -19,7 +19,7 @@
 > corrected step-by-step.
 >
 > **Status:** design of record. Reconciles three independent fresh designs
-> (produced with no knowledge of `../sky`) against the upstream `../sky`
+> (produced with no knowledge of upstream Sky) against the upstream upstream Sky
 > learnings (weeks of prior investment), judged in strict principle order:
 > **(1) security (2) correctness (3) soundness (4) efficiency (5) completeness
 > (6) readability**, under the two rules **"PARSE, DON'T VALIDATE"** and
@@ -58,7 +58,7 @@ compiled Ipê *source* module — its functions (`unexpected`, `io`, `network`,
 `withMessage`, `withDetails`, `kindLabel`, `toString`, `isRetryable`, …) stay
 pure Ipê and are exhaustiveness-checked by the compiler. Its *type* is emitted
 through the ordinary user-ADT path as a normal Rust enum
-(`SkyCoreErrorError`), exactly as `../sky`'s `Emitter.hs` does — **not** as a
+(`SkyCoreErrorError`), exactly as upstream Sky's `Emitter.hs` does — **not** as a
 bespoke runtime-owned primitive. The pervasive error channel becomes
 `type SkyError = SkyCoreErrorError` **unconditionally** (the upstream
 String-fallback else-branch is rejected). The runtime stays fully generic over

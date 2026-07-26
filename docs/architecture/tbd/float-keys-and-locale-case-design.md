@@ -43,7 +43,7 @@ The gate was the right fail-closed call (soundness > completeness), but
 it is a completeness hole against both the type system's own promise
 (`comparable` includes Float) and both references: the Go runtime
 accepts Float keys (Set stringifies via `fmt.Sprintf("%v", …)`,
-`../sky/runtime-go/rt/stdlib_extra.go:32-82`; typed Dict maps use Go's
+`upstream:runtime-go/rt/stdlib_extra.go:32-82`; typed Dict maps use Go's
 IEEE comparison where a NaN key is silently unretrievable), and Elm
 accepts them (with famously undefined NaN-key behaviour in its AVL
 Dict). Both references are *broken* at NaN; we can be complete AND

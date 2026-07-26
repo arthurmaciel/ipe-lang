@@ -1,7 +1,7 @@
 # Sky -> Ipe SYNTACTIC rename map — the declarative patch for the mirrored Sky examples.
 #
-# The examples-sweep mirrors each upstream Sky example (from ../sky/examples, or
-# anzellai/sky as a network fallback) into examples/sky/<name>/ at run time, then
+# The examples-sweep mirrors each upstream Sky example (fetched from the
+# anzellai/sky GitHub repo) into examples/sky/<name>/ at run time, then
 # applies THIS map via sky-to-ipe-transform.py. The map is the entire "patch": a
 # reviewable, order-independent list of module-qualifier rewrites. It is
 # preferred over per-file *.patch diffs because it rewrites TOKENS, not line
