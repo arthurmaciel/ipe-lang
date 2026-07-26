@@ -5858,6 +5858,14 @@ fn scan_kernel_usage(expr: &Expr, usage: &mut KernelUsage) {
         Expr::Match(m) => {
             scan_kernel_usage(m.scrutinee(), usage);
             for arm in m.arms() {
+                // Scan the guard as well as the body so the traversal is
+                // structurally total over `Arm`. Guards are synthesized from
+                // pattern shape today (no `Callee`), but the capability/FFI scan
+                // is the load-bearing security classifier — it must not depend on
+                // a guarantee that lives in a distant desugaring pass.
+                if let Some(guard) = &arm.guard {
+                    scan_kernel_usage(guard, usage);
+                }
                 scan_kernel_usage(&arm.body, usage);
             }
         }

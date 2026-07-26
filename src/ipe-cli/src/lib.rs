@@ -1765,10 +1765,12 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
     if wasm_target {
         bundle_wasm(&out_dir)?;
     } else {
-        // A native build artifact carries its own runtime enforcement: an
+        // A native-bearing build artifact carries its own runtime enforcement: an
         // `ipe.profile` mirror plus the authoritative capability floor embedded
         // in the binary. `ipe exec <out_dir>` reads these and applies the jail,
-        // so the enforcement travels with a copied-off-host artifact. (A wasm
+        // so the enforcement travels with a copied-off-host artifact. A pure Ipê
+        // artifact is structurally bounded and needs no jail (ADR 0040), so it
+        // carries no profile or floor and `ipe exec` runs it directly. (A wasm
         // bundle has no native binary to jail.)
         let manifest_parsed = match &manifest {
             Some(m) => Some(project::parse_manifest(m)?),
@@ -1782,8 +1784,10 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
             manifest.as_deref(),
             &entry_path,
         )?;
-        let profile = run_sandbox::build_profile(&resolved, driver)?;
-        run_sandbox::write_build_artifacts(&out_dir, &profile)?;
+        if run_sandbox::is_native_bearing(&resolved.union()) {
+            let profile = run_sandbox::build_profile(&resolved, driver)?;
+            run_sandbox::write_build_artifacts(&out_dir, &profile)?;
+        }
     }
     Ok(())
 }
@@ -1984,11 +1988,13 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
     bin.push("debug");
     bin.push("ipe-app");
 
-    // --- Step 3a: resolve the capability set and build the runtime jail ---
-    // The jail confines the emitted app to `inferred ∪ declared`. A declared
-    // effect works; an undeclared one fails at the OS boundary. Fail-closed: a
-    // missing primitive refuses (never runs unconfined), except the narrow
-    // low-value override.
+    // --- Step 3a: resolve the capability set and, for native code, the jail ---
+    // The jail confines the emitted app to `inferred ∪ declared`. It is scoped to
+    // native-bearing programs (ADR 0040): pure Ipê is structurally bounded to its
+    // inferred capabilities and runs directly; only a `Rust.` crossing has
+    // effects inference cannot prove, and only that is jailed. For a native
+    // program a missing primitive is fail-closed (refuses unless recorded
+    // consent).
     let manifest_parsed = match &manifest {
         Some(m) => Some(project::parse_manifest(m)?),
         None => None,
@@ -1999,34 +2005,38 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
     let resolved =
         run_sandbox::resolve_for_run(manifest_parsed.as_ref(), manifest.as_deref(), &entry_path)?;
     let union = resolved.union();
+    let native = run_sandbox::is_native_bearing(&union);
     let profile = run_sandbox::build_profile(&resolved, driver)?;
     let bin_args_os: Vec<std::ffi::OsString> =
         bin_args.iter().map(std::ffi::OsString::from).collect();
 
-    // The scoped writable tempdir (the sole writable mount when `filesystem` is
-    // absent) and the working tree (bound read-write only when it is granted).
-    let scoped_tmp = run_sandbox::make_scoped_tmp()?;
-    let working_tree = std::env::current_dir().map_err(|e| CliError::Io {
-        path: PathBuf::from("."),
-        source: e,
-    })?;
-
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;
-        // On Linux the jail is established and `exec_in_run_jail` replaces this
-        // process with the jailed app (does not return on success). On a
-        // refuse-gap platform or a missing primitive, the fail-closed policy
-        // either refuses or (low-value override) returns to run unconfined.
-        run_sandbox::jail_and_exec(
-            &profile,
-            &union,
-            &scoped_tmp,
-            &working_tree,
-            &bin,
-            &bin_args_os,
-        )?;
-        // Reached only when the override permitted a low-value unconfined run.
+        if native {
+            // The scoped writable tempdir (the sole writable mount when
+            // `filesystem` is absent) and the working tree (bound read-write only
+            // when granted) — built only for a jailed run.
+            let scoped_tmp = run_sandbox::make_scoped_tmp()?;
+            let working_tree = std::env::current_dir().map_err(|e| CliError::Io {
+                path: PathBuf::from("."),
+                source: e,
+            })?;
+            // The jail is established and `exec_in_run_jail` replaces this process
+            // with the jailed app (does not return on success). On a platform with
+            // no jail primitive, the fail-closed policy either refuses or (recorded
+            // consent) returns to run unconfined below.
+            run_sandbox::jail_and_exec(
+                &profile,
+                &union,
+                &scoped_tmp,
+                &working_tree,
+                &bin,
+                &bin_args_os,
+            )?;
+        }
+        // Pure Ipê (structural guarantee, no jail) or a native program that
+        // proceeded unconfined after the recorded-consent warning: run directly.
         let mut cmd = std::process::Command::new(&bin);
         cmd.args(&bin_args);
         let err = cmd.exec();
@@ -2037,17 +2047,24 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
     }
     #[cfg(not(unix))]
     {
-        // Off Unix there is no jail (the documented refuse-gap): `jail_and_exec`
-        // applies the fail-closed policy — refuse a native-capability program,
-        // or (low-value override) return Ok to run unconfined below.
-        run_sandbox::jail_and_exec(
-            &profile,
-            &union,
-            &scoped_tmp,
-            &working_tree,
-            &bin,
-            &bin_args_os,
-        )?;
+        if native {
+            // Off Unix there is no jail (the documented refuse-gap): `jail_and_exec`
+            // applies the fail-closed policy — refuse the native program, or
+            // (recorded consent) return Ok to run unconfined below.
+            let scoped_tmp = run_sandbox::make_scoped_tmp()?;
+            let working_tree = std::env::current_dir().map_err(|e| CliError::Io {
+                path: PathBuf::from("."),
+                source: e,
+            })?;
+            run_sandbox::jail_and_exec(
+                &profile,
+                &union,
+                &scoped_tmp,
+                &working_tree,
+                &bin,
+                &bin_args_os,
+            )?;
+        }
         let mut cmd = std::process::Command::new(&bin);
         cmd.args(&bin_args);
         let status = cmd.status().map_err(|e| CliError::Io {
@@ -2067,21 +2084,21 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
     }
 }
 
-/// `ipe exec <artifact-dir> [-- args…]` — run a built native artifact inside the
-/// runtime capability jail described by its `ipe.profile`, with the profile
-/// verified against the capability floor embedded in the binary.
+/// `ipe exec <artifact-dir> [-- args…]` — run a built artifact, jailing it when
+/// it is native-bearing.
 ///
-/// This is the deployable launcher: an artifact copied off the build host still
-/// runs confined, because the `ipe.profile` mirror and the `.ipe.capfloor`
-/// section travel with it. The profile is *strictly parsed* (parse-fail ⇒
-/// refuse) and refused if it is weaker than the embedded floor — a tampered
-/// profile cannot under-isolate. A bare `./ipe-app` invocation is the documented,
-/// deliberate deployer escape (the raw binary opts out of the jail); this path
-/// does not.
+/// The deployable launcher. A **native-bearing** artifact (ADR 0040) carries an
+/// `ipe.profile` mirror plus a capability floor embedded in the binary, so an
+/// artifact copied off the build host still runs confined: the profile is
+/// *strictly parsed* (parse-fail ⇒ refuse) and refused if weaker than the
+/// embedded floor — a tampered profile cannot under-isolate. A **pure** Ipê
+/// artifact carries no floor (structurally bounded to its inferred capabilities)
+/// and runs directly. A bare `./ipe-app` invocation is the documented, deliberate
+/// deployer escape (the raw binary opts out of the jail); this path does not.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on a missing artifact / profile, a refused floor
-/// check, or a fail-closed jail refusal.
+/// [`CliError::UsageOwned`] on a missing binary, a native artifact whose profile
+/// is missing/tampered, a refused floor check, or a fail-closed jail refusal.
 fn run_exec(rest: &[String]) -> Result<(), CliError> {
     // Split `<dir> [-- args…]`.
     let (dir_arg, app_args) = rest
@@ -2103,14 +2120,6 @@ fn run_exec(rest: &[String]) -> Result<(), CliError> {
         )));
     }
 
-    let profile_path = dir.join("ipe.profile");
-    if !profile_path.is_file() {
-        return Err(CliError::UsageOwned(format!(
-            "ipe exec: no ipe.profile in {} — is this an `ipe build` artifact?",
-            dir.display()
-        )));
-    }
-
     // Locate the emitted binary (cargo metadata honours a relocated target dir).
     let mut bin = cargo_target_directory(&dir)?;
     bin.push("debug");
@@ -2122,29 +2131,48 @@ fn run_exec(rest: &[String]) -> Result<(), CliError> {
         )));
     }
 
-    // Strictly parse the profile and verify it against the embedded floor.
-    let profile = run_sandbox::load_and_verify_artifact(&profile_path, &bin)?;
-
-    // The union for the override/refusal policy is reconstructed from the
-    // profile's granted axes (the deployed artifact has no source to re-infer).
-    let union = run_sandbox::profile_axes(&profile);
     let app_args_os: Vec<std::ffi::OsString> =
         app_args.iter().map(std::ffi::OsString::from).collect();
-    let scoped_tmp = run_sandbox::make_scoped_tmp()?;
-    let working_tree = std::env::current_dir().map_err(|e| CliError::Io {
-        path: PathBuf::from("."),
-        source: e,
-    })?;
 
-    run_sandbox::jail_and_exec(
-        &profile,
-        &union,
-        &scoped_tmp,
-        &working_tree,
-        &bin,
-        &app_args_os,
-    )?;
-    // Reached only if the low-value override permitted an unconfined run.
+    // A native-bearing artifact carries an embedded capability floor and is
+    // jailed; a pure Ipê artifact carries none and runs directly (ADR 0040).
+    if run_sandbox::artifact_is_native(&bin)? {
+        let profile_path = dir.join("ipe.profile");
+        if !profile_path.is_file() {
+            return Err(CliError::UsageOwned(format!(
+                "ipe exec: {} embeds a capability floor but carries no ipe.profile — the artifact \
+                 is incomplete or tampered; refusing to run native code without its jail profile",
+                bin.display()
+            )));
+        }
+        // Strictly parse the profile and verify it against the embedded floor.
+        let profile = run_sandbox::load_and_verify_artifact(&profile_path, &bin)?;
+
+        // The union for the consent/refusal policy is reconstructed from the
+        // profile's granted axes (the deployed artifact has no source to
+        // re-infer); the floor's presence already established it is native-bearing.
+        let mut union = run_sandbox::profile_axes(&profile);
+        union.insert(ipe_ir::Capability::NativeFfi);
+        let scoped_tmp = run_sandbox::make_scoped_tmp()?;
+        let working_tree = std::env::current_dir().map_err(|e| CliError::Io {
+            path: PathBuf::from("."),
+            source: e,
+        })?;
+
+        run_sandbox::jail_and_exec(
+            &profile,
+            &union,
+            &scoped_tmp,
+            &working_tree,
+            &bin,
+            &app_args_os,
+        )?;
+        // Returns only if recorded consent permitted an unconfined run; fall
+        // through to the direct exec below.
+    }
+
+    // Pure Ipê artifact, or native that proceeded after the recorded-consent
+    // warning: run directly.
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;
