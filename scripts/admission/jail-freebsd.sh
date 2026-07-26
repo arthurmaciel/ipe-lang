@@ -19,6 +19,9 @@ set -eu
 
 FIXTURE="${1:-tests/fixtures/admission/untrusted-build.sh}"
 TIMEOUT_SECS="${ADMISSION_TIMEOUT_SECS:-120}"
+# Forwarded into the jail so the enforce run and the unjailed control run target
+# the SAME fs-escape path (owned by root; the jailed process runs as nobody).
+ESCAPE_PATH="${ESCAPE_PATH:-/usr/jail-escape-probe}"
 
 if ! command -v jail >/dev/null 2>&1; then
     echo "ERROR: jail(8) not found -- cannot establish jail" >&2
@@ -48,4 +51,4 @@ timeout "$TIMEOUT_SECS" \
         allow.sysvipc=0 \
         persist=0 \
         exec.jail_user=nobody \
-        exec.start="/usr/bin/env SCRATCH_DIR=$SCRATCH /bin/sh $SCRATCH/fixture.sh"
+        exec.start="/usr/bin/env SCRATCH_DIR=$SCRATCH ESCAPE_PATH=$ESCAPE_PATH /bin/sh $SCRATCH/fixture.sh"
