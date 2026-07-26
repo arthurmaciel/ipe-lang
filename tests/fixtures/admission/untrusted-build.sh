@@ -2,71 +2,124 @@
 # Admission-sandbox fixture: simulates an untrusted build.
 #
 # The jail wrapper (scripts/admission/jail-<platform>.sh) runs this script
-# inside the confinement layer with SCRATCH_DIR set to the one writable directory.
+# inside the confinement layer with SCRATCH_DIR set to the one writable
+# directory. The same script also runs OUTSIDE the jail as a positive control,
+# to prove the forbidden actions are only blocked BECAUSE of the jail — not
+# because the target was unreachable or unwritable to begin with.
 #
-# Three probes:
+# PROBE_MODE selects which contract to assert:
+#   enforce (default) — inside the jail: NET and FS-escape must be BLOCKED.
+#   control           — outside the jail: NET and FS-escape must SUCCEED, so a
+#                       blocked result under `enforce` can only come from the jail.
+#
+# Probes:
 #   BENIGN — write to SCRATCH_DIR; must succeed (false-deny = test failure).
-#   NET    — TCP connect to 93.184.216.34:80; must be blocked by the jail.
-#   FS     — write to /tmp/jail-escape-probe (outside SCRATCH_DIR); must be blocked.
+#            Skipped when SCRATCH_DIR is unset (the control run has no scratch).
+#   NET    — TCP connect to $NET_HOST:$NET_PORT.
+#   FS     — write to $ESCAPE_PATH (a path outside SCRATCH_DIR that the jail
+#            renders read-only/denied but that the control principal can write).
 #
 # Exit codes:
-#   0  all probes consistent with isolation contract
-#   2  net probe was NOT blocked
-#   3  fs-escape probe was NOT blocked
+#   0  probes consistent with PROBE_MODE
+#   2  enforce: net was NOT blocked
+#   3  enforce: fs-escape was NOT blocked
+#   4  control: net was NOT reachable
+#   5  control: fs-escape path was NOT writable
 
 set -eu
 
-SCRATCH="${SCRATCH_DIR:-/tmp/scratch}"
+PROBE_MODE="${PROBE_MODE:-enforce}"
+SCRATCH="${SCRATCH_DIR:-}"
+ESCAPE_PATH="${ESCAPE_PATH:-/usr/jail-escape-probe}"
+NET_HOST="${NET_HOST:-github.com}"
+NET_PORT="${NET_PORT:-443}"
 
-# ── probe 1: benign write ─────────────────────────────────────────────────────
-printf 'benign-write\n' > "$SCRATCH/ok.txt"
-echo "PROBE benign: wrote $SCRATCH/ok.txt — OK"
+# Attempt to write the fs-escape probe. In a function so a failed output
+# redirection (read-only/denied target) is caught quietly instead of leaking
+# the shell's "cannot create" message onto stderr.
+fs_write() {
+    printf 'jail-escape' > "$ESCAPE_PATH"
+}
 
-# ── probe 2: network attempt ──────────────────────────────────────────────────
-NET_BLOCKED=0
-if command -v python3 >/dev/null 2>&1; then
-    python3 -c "
+# Attempt a TCP connect. Returns 0 on success, non-zero on failure/no-tool.
+net_connect() {
+    if command -v python3 >/dev/null 2>&1; then
+        python3 - "$NET_HOST" "$NET_PORT" <<'PYEOF'
 import socket, sys
+host, port = sys.argv[1], int(sys.argv[2])
 try:
     s = socket.socket()
-    s.settimeout(3)
-    s.connect(('93.184.216.34', 80))
+    s.settimeout(5)
+    s.connect((host, port))
     s.close()
     sys.exit(0)
 except Exception:
     sys.exit(1)
-" && NET_BLOCKED=0 || NET_BLOCKED=1
-elif command -v nc >/dev/null 2>&1; then
-    nc -z -w 3 93.184.216.34 80 2>/dev/null && NET_BLOCKED=0 || NET_BLOCKED=1
-elif command -v curl >/dev/null 2>&1; then
-    curl --silent --max-time 3 http://93.184.216.34/ >/dev/null 2>&1 \
-        && NET_BLOCKED=0 || NET_BLOCKED=1
-else
-    # No probe tool available; treat as blocked (conservative).
-    NET_BLOCKED=1
+PYEOF
+    elif command -v nc >/dev/null 2>&1; then
+        nc -z -w 5 "$NET_HOST" "$NET_PORT" >/dev/null 2>&1
+    elif command -v curl >/dev/null 2>&1; then
+        curl --silent --max-time 5 "https://$NET_HOST:$NET_PORT/" >/dev/null 2>&1
+    else
+        return 1
+    fi
+}
+
+# ── probe 1: benign write (jail run only — the control has no scratch dir) ────
+if [ -n "$SCRATCH" ]; then
+    printf 'benign-write\n' > "$SCRATCH/ok.txt"
+    echo "PROBE benign: wrote $SCRATCH/ok.txt — OK"
 fi
 
-if [ "$NET_BLOCKED" -eq 1 ]; then
-    echo "PROBE net: blocked — OK"
-else
-    echo "PROBE net: NOT blocked — FAIL"
-    exit 2
-fi
+# ── probe 2: network attempt ──────────────────────────────────────────────────
+if net_connect; then NET_CONNECTED=1; else NET_CONNECTED=0; fi
+
+case "$PROBE_MODE" in
+    control)
+        if [ "$NET_CONNECTED" -eq 1 ]; then
+            echo "PROBE net control: $NET_HOST:$NET_PORT reachable — OK"
+        else
+            echo "PROBE net control: $NET_HOST:$NET_PORT UNREACHABLE — FAIL"
+            exit 4
+        fi
+        ;;
+    *)
+        if [ "$NET_CONNECTED" -eq 0 ]; then
+            echo "PROBE net: blocked — OK"
+        else
+            echo "PROBE net: NOT blocked — FAIL"
+            exit 2
+        fi
+        ;;
+esac
 
 # ── probe 3: filesystem escape attempt ───────────────────────────────────────
-# Target /usr/jail-escape-probe: outside SCRATCH_DIR, on a path the jail
-# mounts read-only (bwrap: --ro-bind / /; macOS SBPL: deny default covers
-# file-write outside $SCRATCH; FreeBSD jail: rootfs is read-only except scratch).
-# Using /tmp would be wrong: bwrap replaces /tmp with a writable tmpfs.
-FS_BLOCKED=0
-printf 'jail-escape' > /usr/jail-escape-probe 2>/dev/null \
-    && FS_BLOCKED=0 || FS_BLOCKED=1
+# $ESCAPE_PATH is outside SCRATCH_DIR. Under each jail it is read-only or denied
+# (bwrap: --ro-bind / /; macOS SBPL: file-write* denied outside scratch; FreeBSD
+# jail: owned by root, the jailed process runs as nobody). The control run uses
+# the SAME path with the SAME principal, so a blocked write under `enforce`
+# proves jail enforcement rather than a mere pre-existing permission denial.
+if fs_write 2>/dev/null; then FS_WROTE=1; else FS_WROTE=0; fi
 
-if [ "$FS_BLOCKED" -eq 1 ]; then
-    echo "PROBE fs-escape: blocked — OK"
-else
-    echo "PROBE fs-escape: NOT blocked — FAIL"
-    exit 3
-fi
+case "$PROBE_MODE" in
+    control)
+        if [ "$FS_WROTE" -eq 1 ]; then
+            echo "PROBE fs-escape control: $ESCAPE_PATH writable — OK"
+            rm -f "$ESCAPE_PATH" 2>/dev/null || true
+        else
+            echo "PROBE fs-escape control: $ESCAPE_PATH NOT writable — FAIL"
+            exit 5
+        fi
+        ;;
+    *)
+        if [ "$FS_WROTE" -eq 0 ]; then
+            echo "PROBE fs-escape: blocked — OK"
+        else
+            echo "PROBE fs-escape: NOT blocked — FAIL"
+            rm -f "$ESCAPE_PATH" 2>/dev/null || true
+            exit 3
+        fi
+        ;;
+esac
 
-echo "All probes passed."
+echo "All probes passed ($PROBE_MODE)."
