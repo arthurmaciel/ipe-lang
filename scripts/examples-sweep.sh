@@ -5,7 +5,8 @@
 # row with two columns:
 #
 #   BUILD   ipe build + cargo build (emitted crate)   → ok / ipe-fail / cargo-fail
-#   RUN     run the emitted binary headless, per shape → ok / panic / hang / noserve / notty / skip
+#   RUN     run the emitted binary headless, per shape → ok / failed / panic / hang / noserve / notty / skip
+#           (failed = the process exited non-zero, e.g. a failing test assertion)
 #
 # There is NO reference-compiler build and NO cross-compiler output comparison.
 # This is a "does the real upstream example (patched) build+run on ipe" proof.
@@ -201,9 +202,11 @@ run_for() {
       fi
       ;;
     cli)
-      if exercise_cli "$bin" "$rl"; then printf 'ok\t\n'
+      exercise_cli "$bin" "$rl"; local crc=$?
+      if   [ "$crc" = 0 ]; then printf 'ok\t\n'
       elif grep -qiE "$PANIC_RE" "$rl"; then printf 'panic\tcli panicked\n'
       elif is_live_network_cli "$n"; then printf 'skip\tcli makes a live external HTTP call — network-dependent RUN; not a Rust defect\n'
+      elif [ "$crc" = 3 ]; then printf 'failed\tcli exited non-zero (see %s)\n' "$(basename "$rl")"
       else printf 'hang\tcli timed out\n'; fi
       ;;
     tui)
@@ -381,7 +384,7 @@ RED=0; GREEN=0; SKIP=0; RED_ROWS=""
 while IFS=$'\t' read -r n b r note; do
   row_red=0
   case "$b" in ipe-fail|cargo-fail|no-source|unpatched-new-example) row_red=1 ;; esac
-  case "$r" in panic|hang|noserve|notty) row_red=1 ;; esac
+  case "$r" in panic|hang|noserve|notty|failed) row_red=1 ;; esac
   row_skip=0; case "$r" in skip) SKIP=$((SKIP+1)); row_skip=1 ;; esac
   if [ "$row_red" = 1 ]; then RED=$((RED+1)); RED_ROWS="$RED_ROWS $n"
   elif [ "$row_skip" = 0 ]; then GREEN=$((GREEN+1)); fi

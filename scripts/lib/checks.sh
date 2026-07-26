@@ -158,8 +158,9 @@ exercise_cli() {
     tries=$((tries+1)); [ "$tries" -ge 10 ] && break; sync; sleep 0.4
   done
   rm -rf "$run_dir" 2>/dev/null
-  if   [ "$rc" = 124 ]; then return 1
-  elif grep -qiE "$PANIC_RE" "$log"; then return 1
+  if   [ "$rc" = 124 ]; then return 1            # timeout / hang
+  elif grep -qiE "$PANIC_RE" "$log"; then return 1   # panic (caller greps to label)
+  elif [ "$rc" != 0 ]; then return 3             # non-zero exit = a real failure
   fi
   return 0
 }
