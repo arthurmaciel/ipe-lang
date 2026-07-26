@@ -1750,6 +1750,20 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
         wasm_hydrate_mode: false,
     };
 
+    // Human-friendly progress: the compile+emit below is otherwise silent, so
+    // bracket it with a start/done line. Shown only on an interactive terminal so
+    // piped / CI output stays clean; status goes to stderr (stdout carries data).
+    let show_progress = {
+        use std::io::IsTerminal as _;
+        std::io::stderr().is_terminal()
+    };
+    if show_progress {
+        eprintln!(
+            "{}",
+            style::gutter(&format!("{} building {entry}", style::glyph::STEP))
+        );
+    }
+
     // No ipe.toml found: compile entry + all sibling .ipe files in the same
     // directory. Byte-identical to `build` when the directory holds only the
     // entry file (regression-covered by the golden suite).
@@ -1791,6 +1805,17 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
             let profile = run_sandbox::build_profile(&resolved, driver)?;
             run_sandbox::write_build_artifacts(&out_dir, &profile)?;
         }
+    }
+
+    if show_progress {
+        eprintln!(
+            "{}",
+            style::gutter(&format!(
+                "{} built → {}",
+                style::glyph::OK,
+                out_dir.display()
+            ))
+        );
     }
     Ok(())
 }
