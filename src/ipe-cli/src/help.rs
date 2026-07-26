@@ -66,6 +66,13 @@ const COMMANDS: &[Command] = &[
         }],
     },
     Command {
+        name: "upgrade-agents",
+        summary: "Refresh AGENTS.md — the Ipê authoring reference — in the current directory.",
+        args: "",
+        args_desc: "",
+        options: &[],
+    },
+    Command {
         name: "build",
         summary: "Compile a program to a native or WebAssembly artifact.",
         args: "[<path>]",
@@ -327,7 +334,15 @@ const MOST_USED: &[&str] = &["init", "run", "watch"];
 const SECTIONS: &[Section] = &[
     Section {
         title: "Development",
-        commands: &["init", "build", "run", "watch", "fix", "fmt"],
+        commands: &[
+            "init",
+            "upgrade-agents",
+            "build",
+            "run",
+            "watch",
+            "fix",
+            "fmt",
+        ],
     },
     Section {
         title: "Using external packages",

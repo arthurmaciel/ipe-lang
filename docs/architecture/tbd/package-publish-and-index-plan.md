@@ -441,8 +441,8 @@ Tier 2 capability layer (per the gate plan), not here — this plan wires the
 
 - Realizes the publish path and index repo left open by
   `package-coordination-and-capabilities-design.md` (the accepted design,
-  superseding D6 of `namespace-imports-and-packaging-spec.md`) and the
-  `package-coordination-sp4-gate-plan.md` gate.
+  superseding D6 of `namespace-imports-and-packaging-spec.md`) and the shipped
+  package gate (`docs/adr/0044-package-coordination-manifest-index-gate.md`).
 - Consumes, unchanged, the resolver + lockfile (`index.rs`, `resolve.rs`,
   `lockfile.rs`) and the `ipe package audit` gate (`audit.rs`) — this plan adds
   the *authoring* and *hosting* halves around them.

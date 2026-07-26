@@ -10,6 +10,20 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.18](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.17...ipe-v0.1.18) (2026-07-26)
+
+
+### Features
+
+* **install:** add binary availability check and cargo detection ([7c9147f](https://github.com/arthurmaciel/ipe-lang/commit/7c9147f137830a7916263f2ffbd72fd91509c6f2))
+* polish install.sh — +2sp indent, ~/.cargo/env detection, reword bugs line ([#136](https://github.com/arthurmaciel/ipe-lang/issues/136)) ([6fb3e7a](https://github.com/arthurmaciel/ipe-lang/commit/6fb3e7a1d308615dd7b365e6894524264247b553))
+* **sandbox:** scope the runtime jail to native-bearing programs (ADR 0040) ([#101](https://github.com/arthurmaciel/ipe-lang/issues/101)) ([9a12f23](https://github.com/arthurmaciel/ipe-lang/commit/9a12f23a1790f08c8df03819a3cb5bd7463622e7))
+
+
+### Bug Fixes
+
+* **installer:** mirror the style footer phrase (fixes install_style_drift) ([#154](https://github.com/arthurmaciel/ipe-lang/issues/154)) ([46d24bb](https://github.com/arthurmaciel/ipe-lang/commit/46d24bba1f631828ae9f344952594382d9817180))
+
 ## [0.1.17](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.16...ipe-v0.1.17) (2026-07-25)
 
 
