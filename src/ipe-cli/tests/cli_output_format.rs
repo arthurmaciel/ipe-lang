@@ -56,10 +56,20 @@ fn sample_entry() -> String {
 fn version_default_is_human_and_guttered() {
     let r = run(&["version"]);
     assert!(r.ok);
-    // Human form sits in the two-space gutter and names `ipe`.
+    // Human form is framed (leading newline) and guttered (two-space indent).
+    // The frame opens with a blank line, so the first non-blank line is `  ipe …`.
     assert!(
-        r.stdout.starts_with("  ipe "),
+        r.stdout
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .map_or(false, |l| l.starts_with("  ipe ")),
         "human version must be guttered: {:?}",
+        r.stdout
+    );
+    // The frame: output starts and ends with a newline.
+    assert!(
+        r.stdout.starts_with('\n'),
+        "human version must open with a newline: {:?}",
         r.stdout
     );
 }
@@ -278,4 +288,69 @@ fn diff_json_is_a_stable_object() {
         assert!(out.contains(field), "json diff missing {field}:\n{out}");
     }
     assert!(!out.starts_with(' '), "json diff must be flush-left");
+}
+
+// ---- gutter + frame: human commands ----------------------------------------
+
+/// `ipe init <dir>` prints a next-steps message: every non-blank line is
+/// indented by the two-space gutter and the output opens and closes with a
+/// blank line (the frame).
+#[test]
+fn init_human_output_is_guttered_and_framed() {
+    let dir = std::env::temp_dir().join(format!(
+        "ipe-148-init-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos())
+    ));
+    let target = dir.join("my-app");
+    let r = run(&["init", &target.to_string_lossy()]);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(r.ok, "init must succeed; stderr: {}", r.stderr);
+    // Every non-blank stdout line sits in the two-space gutter.
+    for line in r.stdout.lines().filter(|l| !l.trim().is_empty()) {
+        assert!(
+            line.starts_with("  "),
+            "init output must be guttered, got: {line:?}"
+        );
+    }
+    // The frame: output opens and closes with a blank line.
+    assert!(
+        r.stdout.starts_with('\n'),
+        "init output must open with a newline, got: {:?}",
+        &r.stdout[..r.stdout.len().min(20)]
+    );
+    assert!(
+        r.stdout.ends_with('\n'),
+        "init output must close with a newline"
+    );
+}
+
+/// `ipe upgrade --dry-run` is a human-facing confirmation: guttered + framed,
+/// flush stdout (not machine output).
+#[test]
+fn upgrade_dry_run_is_guttered_and_framed() {
+    let r = run(&["upgrade", "--dry-run"]);
+    assert!(r.ok, "upgrade --dry-run must exit 0; stderr: {}", r.stderr);
+    // Every non-blank line is indented by the gutter.
+    for line in r.stdout.lines().filter(|l| !l.trim().is_empty()) {
+        assert!(
+            line.starts_with("  "),
+            "upgrade --dry-run output must be guttered, got: {line:?}"
+        );
+    }
+    assert!(
+        r.stdout.starts_with('\n'),
+        "upgrade --dry-run must open with a newline"
+    );
+    assert!(
+        r.stdout.ends_with('\n'),
+        "upgrade --dry-run must close with a newline"
+    );
+    // The actual command is in the output.
+    assert!(
+        r.stdout.contains("would run:"),
+        "upgrade --dry-run must name the command it would run"
+    );
 }
