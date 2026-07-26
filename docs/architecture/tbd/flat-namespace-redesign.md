@@ -365,7 +365,7 @@ tests exist to prevent.
 *code* only — the live reserved namespace drops `Ipê` and the qualifier registry
 holds no `Sky` entry. It does **not** rename the curated upstream-Sky provenance:
 the single README credit line, the `docs/divergences-from-sky.md` references, the
-`../sky` paths, and the embedded-source provenance comments in
+upstream Sky paths, and the embedded-source provenance comments in
 `src/ipe-cli/src/stdlib.rs` are on the naive-sed exclusion list and are preserved
 verbatim. No disparagement of the upstream project appears in code or docs.
 

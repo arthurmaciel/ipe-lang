@@ -1,0 +1,62 @@
+module Lib.Db exposing (exec, query, getField)
+
+import Ipe.Prelude exposing (..)
+import Ipe.Maybe as Maybe
+import Ipe.Dict as Dict
+import Ipe.Task as Task
+import Ipe.Db as Db
+import Ipe.Log exposing (println)
+import Ipe.System as System
+import Ipe.Error as Error exposing (Error)
+
+
+-- Db.* now returns Task Error a per the effect-boundary doctrine.
+-- This Lib layer is consumed from inside `update` branches that need
+-- a synchronous Result for ergonomic case-pattern matching. We bridge
+-- through Task.run inside each wrapper — same eager-evaluation
+-- semantic the example had pre-migration. For long-running batched
+-- writes or background reads, factor into a top-level `Task Error a`
+-- and dispatch via Cmd.perform — see 18-job-queue/src/Main.sky.
+dbConn =
+    case Task.run (Db.open "sqlite" "skyvote.db") of
+
+        Ok c ->
+            c
+
+        Err e ->
+            let
+                _ =
+                    println
+                        ("[FATAL] Cannot open skyvote.db: " ++ Error.toString e)
+            in
+                System.exit 1
+
+
+-- exec : returns Result Error () — DB write at the typed boundary.
+-- Callers in `update` MUST pattern-match and decide what to do (log,
+-- bubble to notification, retry).
+exec queryStr args =
+    case Task.run (Db.exec dbConn queryStr args) of
+
+        Ok _ ->
+            Ok ()
+
+        Err e ->
+            Err e
+
+
+query queryStr args =
+    Task.run (Db.query dbConn queryStr args)
+
+
+-- Missing columns in a row dict are a Sky-side schema mismatch, not a
+-- runtime error worth bubbling. Empty string lets the view degrade
+-- predictably for display-only reads.
+--
+-- NOTE: row values are stored as `any` at runtime (a row can hold
+-- strings from TEXT columns, ints from COUNT(*), etc.) so we keep the
+-- signature loose. Callers who know the column's type should use
+-- `String.fromInt (String.toInt (getField ...))` or explicit
+-- assertion to coerce, rather than relying on the annotation.
+getField field row =
+    Maybe.withDefault "" (Dict.get field row)

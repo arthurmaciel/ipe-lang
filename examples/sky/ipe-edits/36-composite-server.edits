@@ -1,0 +1,44 @@
+# Rename the Sky-branded configuration env vars to Ipê's convention.
+#
+# The port reads its JWT secret, DB path, and port from SKY_*-prefixed env vars.
+# Ipê ships Ipe.Auth reading IPE_AUTH_TOKEN_SECRET, and the examples-sweep sets
+# that name, so the SKY_ names never resolve — the server sees an empty secret,
+# fails its `>= 32 bytes` guard closed, and never serves. Rename every SKY_
+# config var (in code, comments, and error text) to its IPE_ equivalent so the
+# port is Ipê-native and boots under the standard secret.
+
+[[edit]]
+file: src/Main.ipe
+all: true
+find:
+"""
+SKY_AUTH_TOKEN_SECRET
+"""
+replace:
+"""
+IPE_AUTH_TOKEN_SECRET
+"""
+
+[[edit]]
+file: src/Main.ipe
+all: true
+find:
+"""
+SKY_COMPOSITE_DB
+"""
+replace:
+"""
+IPE_COMPOSITE_DB
+"""
+
+[[edit]]
+file: src/Main.ipe
+all: true
+find:
+"""
+SKY_COMPOSITE_PORT
+"""
+replace:
+"""
+IPE_COMPOSITE_PORT
+"""

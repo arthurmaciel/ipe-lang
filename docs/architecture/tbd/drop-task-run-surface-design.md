@@ -18,7 +18,7 @@
 
 Ipê exposes two synchronous Task-forcing kernels:
 
-- `Task.run : Task e a -> Result e a` — `../sky/sky-stdlib/Sky/Core/Task.sky:85-88`
+- `Task.run : Task e a -> Result e a` — `upstream:sky-stdlib/Sky/Core/Task.sky:85-88`
 - `Task.perform : Task e a -> Result e a` — same file, lines 90–96;
   documented there as "the legacy name" for the identical operation.
 
@@ -46,7 +46,7 @@ Current inventory in the Rust port (all confirmed 2026-07-10):
 | Entry elision | `src/compiler/backend/rust/src/emit_expr.rs:6659-6677` — `Call(TaskRun\|TaskPerform, [t])` at `sky_main` already elides the wrapper |
 | Runtime | `src/runtime/rust/src/task.rs:191-195` — `task_run` = `block_on`, panic→Err, total |
 
-Corpus pressure: 95 occurrences across 35 files in `../sky/examples/`
+Corpus pressure: 95 occurrences across 35 files in `upstream:examples/`
 (top: `17-skymon` 18, `38-composite-ui-multibackend` 6, `16-ipehess` 6,
 `00-standard-libs` 6); 7 occurrences in the port's own
 `tests/golden/` corpus (`http_stream_id` 4,
@@ -104,7 +104,7 @@ callers (compiler-synthesised, not user-reachable). What is removed:
 
 `Cmd.perform` is untouched — it is a different operation
 (`Task err a -> (Result err a -> msg) -> Cmd msg`,
-`../sky/sky-stdlib/Std/Cmd.sky:40-45`), not an alias. The **name**
+`upstream:sky-stdlib/Std/Cmd.sky:40-45`), not an alias. The **name**
 `Task.perform` is reserved: do not rebind it in #128; if C.4 Elm-core
 coverage later wants Elm's `Task.perform : (a -> msg) -> Task Never a
 -> Cmd msg` / `Task.attempt`, the name is clean for it. Note this in
