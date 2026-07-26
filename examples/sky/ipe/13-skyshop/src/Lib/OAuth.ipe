@@ -1,0 +1,91 @@
+module Lib.OAuth exposing (firebaseAuthScript, handleAuthCallback)
+
+-- ══════════════════════════════════════════════════════
+-- FIREBASE AUTH
+--
+-- Client-side: Firebase JS SDK handles sign-in popup + session persistence.
+-- Server-side: Firebase Admin SDK verifies ID tokens.
+--
+-- The script is included on ALL pages (in Layout). Firebase JS SDK
+-- auto-restores auth state from browser storage on page load.
+-- When auth state changes, it sends the ID token to the server
+-- via Sky.Live's __sky_send (the same mechanism as onClick events).
+--
+-- .env:
+--   FIREBASE_API_KEY
+--   AUTH_DOMAIN
+--   GOOGLE_CLOUD_PROJECT
+--   GOOGLE_APPLICATION_CREDENTIALS
+-- ══════════════════════════════════════════════════════
+
+import Ipe.Prelude exposing (..)
+import Ipe.Result as Result
+import Ipe.Task as Task
+import Ipe.System
+import Lib.Auth as Auth
+
+
+firebaseAuthScript _ =
+    let
+        apiKey =
+            Result.withDefault "" (Task.run (System.getenv "FIREBASE_API_KEY"))
+        -- Store UID cookie for instant server-side auth on page load
+        -- Clear cookie on sign-out
+        authDomain =
+            Result.withDefault "" (Task.run (System.getenv "AUTH_DOMAIN"))
+        projectId =
+            Result.withDefault
+                ""
+                (Task.run (System.getenv "GOOGLE_CLOUD_PROJECT"))
+    in
+        if apiKey == "" then
+            "<script>function skySignIn(){alert('Sign-in is disabled: set FIREBASE_API_KEY, AUTH_DOMAIN, GOOGLE_CLOUD_PROJECT.');} function skySignOut(){}</script>"
+
+        else
+            -- Load Firebase SDK dynamically into <head>
+            -- Listen for auth state changes (sign-in, sign-out, token refresh)
+            -- Send token to Sky.Live server as a FirebaseAuth Msg
+            -- Retry until __sky_send is available (Sky.Live JS may load after Firebase SDK)
+            -- Sign-in function called by buttons
+            -- Sign-out function
+            -- Skip Firebase SDK injection when the API key is missing.
+            -- Browsers would otherwise fire `Firebase: Error
+            -- (auth/invalid-api-key)` plus 4xx console errors from the
+            -- Firebase auth-metadata probes. Sign-in buttons no-op
+            -- harmlessly until the user sets FIREBASE_API_KEY +
+            -- AUTH_DOMAIN + GOOGLE_CLOUD_PROJECT.
+            """<script>
+var _fbReady=false,_fbUser=null;
+function _fbLoad(url,cb){var s=document.createElement('script');s.src=url;s.onload=cb;document.head.appendChild(s);}
+_fbLoad('https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js',function(){
+_fbLoad('https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js',function(){
+firebase.initializeApp({apiKey:'{{apiKey}}',authDomain:'{{authDomain}}',projectId:'{{projectId}}'});
+_fbReady=true;
+var _skyAuthUid=null;
+firebase.auth().onAuthStateChanged(function(user){
+_fbUser=user;
+if(user){
+if(_skyAuthUid===user.uid)return;
+_skyAuthUid=user.uid;
+document.cookie='sky_user='+user.uid+';path=/;max-age=2592000;SameSite=Lax';
+user.getIdToken().then(function(token){
+function _trySend(t,n){if(window.__sky_send){window.__sky_send('FirebaseAuth',[t]);}else if(n<20){setTimeout(function(){_trySend(t,n+1)},100);}}
+_trySend(token,0);
+});
+}else{_skyAuthUid=null;document.cookie='sky_user=;path=/;max-age=0';}
+});
+});
+});
+function skySignIn(provider){
+if(!_fbReady){setTimeout(function(){skySignIn(provider)},200);return;}
+var el=document.getElementById('auth-error');
+if(el){el.style.display='none';}
+var p=provider==='facebook'?new firebase.auth.FacebookAuthProvider():new firebase.auth.GoogleAuthProvider();
+firebase.auth().signInWithPopup(p).catch(function(e){if(el){el.textContent=e.message;el.style.display='block';}});
+}
+function skySignOut(){if(_fbReady){firebase.auth().signOut();}}
+</script>"""
+
+
+handleAuthCallback token =
+    Auth.verifyToken token

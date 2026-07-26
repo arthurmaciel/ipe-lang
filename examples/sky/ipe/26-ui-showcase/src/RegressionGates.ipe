@@ -1,0 +1,610 @@
+module RegressionGates exposing (cases)
+
+-- Std.Ui regression-gate fixtures for the Cycle 5 renderer churn
+-- (v0.15.37+ → v0.15.41 will add mediaQuery / pseudo-classes /
+-- transitions / aspectRatio). Each section here is owned by
+-- scripts/verify-ui-showcase.{sh,mjs} — keep the data-test-id
+-- attributes stable, or update the runner in lockstep.
+--
+-- Cases by category:
+--   1. Deep-nesting fill — catches issue #63-class flex-chain
+--      regressions (the v0.14.7-v0.14.16 cycle hit 5 times before
+--      ee2812a). Triple/quad-nested fill + fillPortion + explicit-
+--      pixel siblings of fill children.
+--   2. Viewport-resize stubs — exercises Responsive.classifyDevice
+--      at a known viewport size; the runner re-takes the page after
+--      a Playwright resize to check whether dispatch is reactive
+--      (will land in #376; today it's a one-shot at render time).
+--   3. Pseudo-class stubs — primitives that today emit plain
+--      styles, ready to grow `:hover`/`:focus-visible`/`:active`
+--      attributes once #377 ships.
+--   4. Aspect-ratio + grid — placeholders for #379 (aspectRatio +
+--      content-aware grid tracks).
+
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+import Ipe.Html as Html
+import Ipe.Html.Attributes as Attr
+import Ipe.Ui as Ui exposing (Element)
+import Ipe.Ui.Background as Background
+import Ipe.Ui.Border as Border
+import Ipe.Ui.Font as Font
+import Ipe.Ui.Input as Input
+import Ipe.Ui.Transition as Transition
+import Ipe.Ui.Animation as Animation
+import Ipe.Ui.Transform as Transform
+import Ipe.Ui.Grid as Grid
+
+
+-- Stable data-test-id helper; the runner selects by attribute.
+testId : String -> Ui.Attribute msg
+testId v =
+    Ui.htmlAttribute "data-test-id" v
+
+
+white : Ui.Color
+white =
+    Ui.rgb 255 255 255
+
+
+ink : Ui.Color
+ink =
+    Ui.rgb 25 30 40
+
+
+-- ─── 1. Deep-nesting fill ──────────────────────────────────────
+-- Triple-nested fill: outer column has FIXED height; an unsized
+-- middle Ui.el (NO height attr) wraps a child that asks for
+-- `height fill`. Without issue #63's flex-chain propagation the
+-- middle wrapper has no flex-grow, so the inner box collapses.
+-- After the fix, propagation injects synthetic `Fill 1` on the
+-- middle wrapper → flex-grow: 1 → inner stretches to the parent's
+-- 180 px (minus 8 px padding).
+tripleNestedFill : Element msg
+tripleNestedFill =
+    Ui.column
+        [ Ui.width Ui.fill, Ui.height (Ui.px 180), testId "triple-outer" ]
+        [ Ui.el
+              [ Ui.width Ui.fill
+              , Ui.padding 8
+              , Background.color (Ui.rgb 240 245 255)
+              , testId "triple-mid"
+              ]
+              (Ui.el
+                  [ Ui.width Ui.fill
+                  , Ui.height Ui.fill
+                  , Background.color (Ui.rgb 60 80 200)
+                  , testId "triple-inner"
+                  ]
+                  (Ui.el [ Font.color white ] (Ui.text "triple-nested fill")))
+        ]
+
+
+-- Wrap-with-label shape: the canonical issue #63 reproducer.
+-- Mirrors `Input.multiline`'s internal `wrapWithLabel` which
+-- inserts an unsized Ui.el wrapper between the user-supplied
+-- parent (fill main axis) and the textarea (fill main axis).
+-- Without propagation the wrapper collapses; the inner fill
+-- has no growing container so the child stays at content height.
+--
+-- AsRow shape: outer row has fixed width, intermediate row has
+-- NO explicit width, inner asks for width fill. Propagation must
+-- lift width-fill onto the unsized intermediate.
+wrapWithLabelShape : Element msg
+wrapWithLabelShape =
+    Ui.row
+        [ Ui.width (Ui.px 360)
+        , Ui.height (Ui.px 80)
+        , Background.color (Ui.rgb 230 235 245)
+        , testId "wrap-outer"
+        ]
+        [ Ui.row
+              [ Ui.height Ui.fill, testId "wrap-mid" ]
+              [ Ui.el
+                    [ Ui.width Ui.fill
+                    , Ui.height Ui.fill
+                    , Background.color (Ui.rgb 100 130 200)
+                    , testId "wrap-inner"
+                    ]
+                    (Ui.el [ Font.color white ] (Ui.text "wrap"))
+              ]
+        ]
+
+
+-- 1:2:3 fillPortion split, proves the surgical fix doesn't break
+-- portion arithmetic. Verified by computed flex-grow on each child.
+portionRow : Element msg
+portionRow =
+    Ui.row
+        [ Ui.width Ui.fill
+        , Ui.height (Ui.px 56)
+        , Ui.spacing 8
+        , testId "portion-row"
+        ]
+        [ Ui.el
+              [ Ui.width (Ui.fillPortion 1)
+              , Ui.height Ui.fill
+              , Background.color (Ui.rgb 224 96 96)
+              , testId "portion-1"
+              ]
+              Ui.none
+        , Ui.el
+              [ Ui.width (Ui.fillPortion 2)
+              , Ui.height Ui.fill
+              , Background.color (Ui.rgb 96 176 104)
+              , testId "portion-2"
+              ]
+              Ui.none
+        , Ui.el
+              [ Ui.width (Ui.fillPortion 3)
+              , Ui.height Ui.fill
+              , Background.color (Ui.rgb 96 128 224)
+              , testId "portion-3"
+              ]
+              Ui.none
+        ]
+
+
+-- Mixed pixel + fill siblings — the regression class that hit
+-- v0.14.x five times. Explicit `px 80` siblings of a `fill` child
+-- must keep their pixel width; the middle el grows to fill.
+fixedAndFill : Element msg
+fixedAndFill =
+    Ui.row
+        [ Ui.width Ui.fill
+        , Ui.height (Ui.px 56)
+        , Ui.spacing 8
+        , testId "fixed-fill-row"
+        ]
+        [ Ui.el
+              [ Ui.width (Ui.px 80)
+              , Ui.height Ui.fill
+              , Background.color (Ui.rgb 224 96 96)
+              , testId "fixed-left"
+              ]
+              Ui.none
+        , Ui.el
+              [ Ui.width Ui.fill
+              , Ui.height Ui.fill
+              , Background.color (Ui.rgb 240 240 240)
+              , testId "fill-mid"
+              ]
+              Ui.none
+        , Ui.el
+              [ Ui.width (Ui.px 80)
+              , Ui.height Ui.fill
+              , Background.color (Ui.rgb 96 128 224)
+              , testId "fixed-right"
+              ]
+              Ui.none
+        ]
+
+
+-- v0.15.55 follow-up to #63: Input.* attrs split. Layout attrs on
+-- the Input.multiline call hoist to the wrapper; the inner
+-- <textarea> gains implicit fill so the cascade flows through.
+-- Pre-fix the wrapper was layout-attrs-empty and the textarea
+-- collapsed at content-line height even though the user supplied
+-- `Ui.height fill` on Input.multiline.
+--
+-- Takes an `onChange` constructor from the caller so this fixture
+-- keeps the polymorphic `Element msg` shape the rest of cases uses.
+inputMultilineFill : (String -> msg) -> Element msg
+inputMultilineFill onEdit =
+    Ui.column
+        [ Ui.width Ui.fill
+        , Ui.height (Ui.px 120)
+        , testId "input-multiline-outer"
+        ]
+        [ Input.multiline
+              [ Ui.width Ui.fill
+              , Ui.height Ui.fill
+              , Background.color (Ui.rgb 240 245 255)
+              , Ui.htmlAttribute "data-test-id" "input-multiline-textarea"
+              ]
+              { onChange = onEdit
+              , text = "fill the column"
+              , placeholder = Nothing
+              , label = Input.labelHidden "Body"
+              , spellcheck = False
+              }
+        ]
+
+
+-- ─── 2. Viewport-responsive stub ───────────────────────────────
+--
+-- Today `classifyDevice` runs once at render time, NOT on each
+-- viewport resize. The runner records both desktop + mobile
+-- snapshots; after #376 ships, both should differ visibly.
+-- For now the stub renders a fixed `desktop`-looking pill so the
+-- baseline is stable; once reactive, the runner compares the two
+-- snapshots and asserts the mobile one differs.
+viewportStub : Element msg
+viewportStub =
+    Ui.row
+        [ Ui.width Ui.fill, Ui.spacing 12, testId "viewport-stub" ]
+        [ Ui.el
+              [ Ui.width Ui.fill
+              , Background.color (Ui.rgb 60 64 84)
+              , Ui.padding 12
+              , testId "viewport-pane-1"
+              , Font.color white
+              ]
+              (Ui.text "pane A (desktop)")
+        , Ui.el
+              [ Ui.width Ui.fill
+              , Background.color (Ui.rgb 80 100 180)
+              , Ui.padding 12
+              , testId "viewport-pane-2"
+              , Font.color white
+              ]
+              (Ui.text "pane B")
+        ]
+
+
+-- ─── 3. Pseudo-class stubs (#377) ──────────────────────────────
+--
+-- Each helper carries a `data-test-id` so the Playwright runner
+-- can hover()/focus() the element and snapshot the resulting state.
+-- The runtime injects sky-id-scoped `<style>` blocks with `:hover`
+-- under `@media (hover: hover)`, `:focus-visible`, and `:active`
+-- selectors — no JS round-trip, no model field, instant.
+hoverableButton : Element msg
+hoverableButton =
+    Ui.button
+        [ Ui.padding 10
+        , Background.color (Ui.rgb 60 120 200)
+        , Background.hoverColor (Ui.rgb 30 90 170)
+        , Background.activeColor (Ui.rgb 20 60 140)
+        , Border.rounded 6
+        , Border.hoverRounded 12
+        , Font.color white
+        , testId "hover-button"
+        ]
+        { onPress = Nothing, label = Ui.text "hover me" }
+
+
+focusableInput : Element msg
+focusableInput =
+    Ui.el
+        [ testId "focus-input-wrap" ]
+        (Ui.html
+            (Html.node
+                "input"
+                [ Attr.attribute "type" "text"
+                , Attr.attribute "data-test-id" "focus-input"
+                , Attr.attribute "placeholder" "focus me"
+                , Attr.attribute
+                      "style"
+                      "padding:8px;border:2px solid #888;border-radius:6px;font-size:14px;outline:none;"
+                ]
+                []))
+                  -- Plain HTML <input> so the visual baseline can
+                  -- exercise browser-native :focus-visible without
+                  -- routing through Std.Ui.Input's wrapper. The
+                  -- typed Ui pseudo-classes path lives on
+                  -- `hoverableButton`/`disabledButton` here.
+
+
+activeLink : Element msg
+activeLink =
+    Ui.link
+        [ Ui.padding 8
+        , Background.color (Ui.rgb 240 240 240)
+        , Background.activeColor (Ui.rgb 200 200 240)
+        , Border.rounded 4
+        , Font.color (Ui.rgb 20 80 200)
+        , Font.hoverColor (Ui.rgb 180 0 0)
+        , testId "active-link"
+        ]
+        { url = "#test", label = Ui.text "click me" }
+
+
+-- A disabled-state stub — pairs `disabled=true` HTML attribute with
+-- `Background.disabledColor` + `Font.disabledColor` so the runner
+-- can confirm the `:disabled` selector emits + applies. (Browsers
+-- don't fire `:hover` on disabled inputs by default; the runner
+-- just renders the static state.)
+disabledButton : Element msg
+disabledButton =
+    Ui.el
+        [ testId "disabled-wrap" ]
+        (Ui.html
+            (Html.node
+                "button"
+                [ Attr.attribute "disabled" "true"
+                , Attr.attribute "data-test-id" "disabled-button"
+                , Attr.attribute
+                      "style"
+                      "padding:10px;border-radius:6px;background:#cccccc;color:#666666;border:none;"
+                ]
+                [ Html.text "disabled" ]))
+
+
+-- ─── Media-query / breakpoint primitive (#376) ─────────────────
+--
+-- `Ui.breakpoint Ui.mobile` overrides padding + background on the
+-- inner box ONLY when the viewport is ≤ 767 px wide. The runner
+-- captures desktop (1280 wide → base padding 8, blue bg) AND mobile
+-- (375 wide → overridden padding 24, red bg). Computed style + PNG
+-- snapshot both differ — proves the CSS engine reacts without a JS
+-- round-trip / re-render / re-mount.
+--
+-- A second box exercises `Ui.mediaQuery` raw-query escape hatch.
+mediaQueryDemo : Element msg
+mediaQueryDemo =
+    Ui.column
+        [ Ui.width Ui.fill, Ui.spacing 8, testId "mediaquery-row" ]
+        [ Ui.breakpoint
+              Ui.mobile
+              [ Ui.padding 24, Background.color (Ui.rgb 224 96 96) ]
+              (Ui.el
+                  [ Ui.width Ui.fill
+                  , Ui.padding 8
+                  , Background.color (Ui.rgb 96 128 224)
+                  , Font.color white
+                  , testId "mq-mobile-box"
+                  ]
+                  (Ui.text "padded + red on mobile only"))
+        , Ui.mediaQuery
+              "(min-width: 800px)"
+              [ Background.color (Ui.rgb 96 176 104) ]
+              (Ui.el
+                  [ Ui.width Ui.fill
+                  , Ui.padding 8
+                  , Background.color (Ui.rgb 200 200 200)
+                  , Font.color white
+                  , testId "mq-raw-box"
+                  ]
+                  (Ui.text "green on screens ≥800px wide"))
+        ]
+
+
+-- ─── 4. Aspect-ratio + grid tracks (#379) ──────────────────────
+--
+-- `Ui.aspectRatio` / `Ui.aspectRatioWH` lower to inline
+-- `aspect-ratio: <r>` CSS. Pair with `Ui.width Ui.fill` (or a
+-- specific pixel width) so the unset axis auto-scales. The runner
+-- captures three boxes at known widths so it can compute the
+-- expected height and assert width / height matches the ratio.
+aspectStubs : Element msg
+aspectStubs =
+    Ui.column
+        [ Ui.spacing 12, testId "aspect-row" ]
+        [ Ui.el
+              [ Ui.width (Ui.px 320)
+              , Ui.aspectRatioWH 16 9
+              , Background.color (Ui.rgb 80 120 200)
+              , testId "aspect-320"
+              ]
+              Ui.none
+        , Ui.el
+              [ Ui.width (Ui.px 160)
+              , Ui.aspectRatio 1.777
+              , Background.color (Ui.rgb 120 80 200)
+              , testId "aspect-160"
+              ]
+              Ui.none
+        , Ui.el
+              [ Ui.width (Ui.px 100)
+              , Ui.square
+              , Background.color (Ui.rgb 200 120 80)
+              , testId "aspect-square"
+              ]
+              Ui.none
+        , Ui.el
+              [ Ui.width Ui.fill
+              , Ui.cinemascope
+              , Background.color (Ui.rgb 60 80 100)
+              , testId "aspect-fill-cinema"
+              ]
+              Ui.none
+        ]
+
+
+-- Auto-fill grid via the lightweight `Ui.gridColumns` helper. Same
+-- behaviour as before — repeat(auto-fill, minmax(200px, 1fr)).
+gridDemo : Element msg
+gridDemo =
+    Ui.grid
+        [ Ui.width Ui.fill
+        , Ui.gridColumns 200
+        , Ui.spacing 8
+        , testId "grid-row"
+        ]
+        [ gridCell "g1" (Ui.rgb 200 100 100)
+        , gridCell "g2" (Ui.rgb 100 200 100)
+        , gridCell "g3" (Ui.rgb 100 100 200)
+        ]
+
+
+-- Content-aware grid tracks (#379) — Std.Ui.Grid lets you spell
+-- out explicit track lists. Three variants here, each in its own
+-- row so the runner can assert per-row `grid-template-columns`.
+--
+-- 1. Sidebar layout: 1fr / 200px / 1fr — a fixed-width middle
+--    column with stretching outer columns.
+-- 2. Auto-fit cards: repeat(auto-fit, minmax(200px, 1fr)) —
+--    re-flows when the container resizes.
+-- 3. Mixed: auto / fr 1 — hug-the-content + take-the-rest.
+gridTracksDemo : Element msg
+gridTracksDemo =
+    Ui.column
+        [ Ui.width Ui.fill, Ui.spacing 8, testId "grid-tracks-row" ]
+        [ Ui.grid
+              [ Ui.width Ui.fill
+              , Grid.columns [ Grid.fr 1, Grid.px 200, Grid.fr 1 ]
+              , Ui.spacing 8
+              , testId "grid-tracks-sidebar"
+              ]
+              [ gridCell "sl" (Ui.rgb 200 160 100)
+              , gridCell "sm" (Ui.rgb 120 200 160)
+              , gridCell "sr" (Ui.rgb 100 160 200)
+              ]
+        , Ui.grid
+              [ Ui.width Ui.fill
+              , Grid.columns
+                    [ Grid.repeatAutoFit (Grid.minmax (Grid.px 200) (Grid.fr 1))
+                    ]
+              , Ui.spacing 8
+              , testId "grid-tracks-autofit"
+              ]
+              [ gridCell "af1" (Ui.rgb 180 120 200)
+              , gridCell "af2" (Ui.rgb 120 180 200)
+              , gridCell "af3" (Ui.rgb 200 180 120)
+              ]
+        , Ui.grid
+              [ Ui.width Ui.fill
+              , Grid.columns [ Grid.auto, Grid.fr 1 ]
+              , Ui.spacing 8
+              , testId "grid-tracks-auto"
+              ]
+              [ gridCell "ag" (Ui.rgb 220 100 100)
+              , gridCell "ar" (Ui.rgb 100 220 220)
+              ]
+        ]
+
+
+gridCell : String -> Ui.Color -> Element msg
+gridCell label colour =
+    Ui.el
+        [ Ui.padding 16
+        , Background.color colour
+        , Font.color white
+        , testId ("grid-cell-" ++ label)
+        ]
+        (Ui.text label)
+
+
+-- ─── Transitions + animations (#378) ──────────────────────────
+--
+-- `transitionButton` exercises `Transition.attribute` paired with
+-- `Background.hoverColor` — when the cursor enters, the browser's
+-- CSS engine animates the background between the two colours over
+-- 200 ms. The runtime injects ONE <style> per element block with
+-- the transition rule wrapped in
+-- `@media (prefers-reduced-motion: no-preference)` so users who've
+-- opted out of motion get a static UI by default.
+transitionButton : Element msg
+transitionButton =
+    Ui.button
+        [ Ui.padding 10
+        , Background.color (Ui.rgb 60 120 200)
+        , Background.hoverColor (Ui.rgb 30 90 170)
+        , Transition.attribute
+              [ Transition.property "background-color"
+              , Transition.duration 200
+              , Transition.easing Transition.easeOut
+              ]
+        , Border.rounded 6
+        , Font.color white
+        , testId "transition-button"
+        ]
+        { onPress = Nothing, label = Ui.text "transition (hover me)" }
+
+
+-- `animatedFadeIn` exercises `Animation.attribute` — a keyframe
+-- fade-in that runs once on page load.
+animatedFadeIn : Element msg
+animatedFadeIn =
+    Ui.el
+        [ Ui.padding 12
+        , Background.color (Ui.rgb 96 176 104)
+        , Font.color white
+        , Border.rounded 6
+        , Animation.attribute
+              { name = "fadeInUp"
+              , duration = 600
+              , easing = Animation.easeOut
+              , delay = 0
+              , iterations = Animation.once
+              , fillMode = Animation.forwards
+              , respectReducedMotion = True
+              , keyframes = [ ( 0, [ Transform.opacity 0.0, Transform.translateY 8 ] )
+                , ( 100, [ Transform.opacity 1.0, Transform.translateY 0 ] )
+                ]
+              }
+        , testId "animated-fade-in"
+        ]
+        (Ui.text "fade-in animation (respects reduced motion)")
+
+
+-- `animatedSpinner` — opts OUT of the reduced-motion gate via
+-- `respectReducedMotion = False`. The spinner MUST move to convey
+-- "loading"; a static circle is misleading.
+animatedSpinner : Element msg
+animatedSpinner =
+    Ui.el
+        [ Ui.width (Ui.px 24)
+        , Ui.height (Ui.px 24)
+        , Background.color (Ui.rgb 60 120 200)
+        , Border.rounded 12
+        , Animation.attribute
+              { name = "spin"
+              , duration = 1000
+              , easing = Animation.linear
+              , delay = 0
+              , iterations = Animation.infinite
+              , fillMode = Animation.none
+              , respectReducedMotion = False
+              , keyframes = [ ( 0, [ Transform.rotate 0.0 ] )
+                , ( 100, [ Transform.rotate 360.0 ] )
+                ]
+              }
+        , testId "animated-spinner"
+        ]
+        Ui.none
+
+
+-- ─── Section composition ───────────────────────────────────────
+card : String -> String -> Element msg -> Element msg
+card sectionId title body =
+    Ui.column
+        [ Ui.width Ui.fill
+        , Ui.spacing 10
+        , Ui.padding 16
+        , Background.color white
+        , Border.width 1
+        , Border.color (Ui.rgb 220 222 226)
+        , Border.rounded 8
+        , testId ("section-" ++ sectionId)
+        ]
+        [ Ui.el [ Font.size 15, Font.bold, Font.color ink ] (Ui.text title)
+        , body
+        ]
+
+
+-- Composite list — wired into Main's view. Takes an `onEdit`
+-- constructor so the `inputMultilineFill` fixture (#403 / v0.15.55)
+-- can route its typed `onChange` back to the caller's Msg type.
+cases : (String -> msg) -> List (Element msg)
+cases onEdit =
+    [ card "triple-nested" "Triple-nested fill (#63 class)" tripleNestedFill
+    , card
+          "wrap-label"
+          "wrapWithLabel shape (AsRow #63 class)"
+          wrapWithLabelShape
+    , card
+          "input-multiline"
+          "Input.multiline fill (#403 / v0.15.55)"
+          (inputMultilineFill onEdit)
+    , card "portion" "fillPortion 1:2:3" portionRow
+    , card "fixed-fill" "Fixed-px siblings of fill child" fixedAndFill
+    , card "viewport" "Viewport-resize stub (#376)" viewportStub
+    , card
+          "pseudo"
+          "Pseudo-class stubs (#377)"
+          (Ui.column
+              [ Ui.spacing 8 ]
+              [ hoverableButton, focusableInput, activeLink, disabledButton ])
+    , card "aspect" "Aspect ratio (#379)" aspectStubs
+    , card "grid" "Grid (#379)" gridDemo
+    , card "grid-tracks" "Grid tracks — typed Track ADT (#379)" gridTracksDemo
+    , card "mediaquery" "Media query / breakpoint (#376)" mediaQueryDemo
+    , card
+          "motion"
+          "Transitions + animations (#378)"
+          (Ui.column
+              [ Ui.spacing 8 ]
+              [ transitionButton, animatedFadeIn, animatedSpinner ])
+    ]

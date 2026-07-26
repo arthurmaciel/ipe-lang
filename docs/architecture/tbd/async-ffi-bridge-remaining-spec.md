@@ -210,7 +210,7 @@ the same foreign type unify nominally (naming SSOT:
 token and read its claims.
 
 ### 3.1 Surface (from the reference shim,
-`../sky/examples/rust/skyshop-rs/wrappers/sky-firebase-auth-shim/src/lib.rs`)
+`upstream:examples/rust/skyshop-rs/wrappers/sky-firebase-auth-shim/src/lib.rs`)
 
 | Op | Foreign shape | Expected admission class |
 |---|---|---|
@@ -271,10 +271,10 @@ claims JSON round-trips. Used-set DCE count recorded.
 
 ## 4. skyshop-transpose — `examples/13-skyshop/` (ACCEPTANCE)
 
-**Source of the transposition:** `../sky/examples/rust/skyshop-rs/src/`
+**Source of the transposition:** `upstream:examples/rust/skyshop-rs/src/`
 (READ-ONLY; already the FFI-shaped app: `Lib/Db.sky`, `Lib/Stripe.sky`,
 `Lib/Auth.sky` are thin wrappers over the three shims), cross-checked
-against `../sky/examples/13-skyshop/` (Go original) for `static/`, `e2e.json`
+against `upstream:examples/13-skyshop/` (Go original) for `static/`, `e2e.json`
 behavior shapes, and anything skyshop-rs diverged on. ~8.2k lines across
 Main/State/9 Lib/7 Page/1 Ui modules. Our `examples/13-skyshop/` slot is
 free.

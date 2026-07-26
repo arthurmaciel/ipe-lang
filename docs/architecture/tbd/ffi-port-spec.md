@@ -6,11 +6,11 @@
 >
 > **Goal:** `ipe add <crate>` binds an arbitrary **Rust** crate with *zero
 > hand-written shims* for the pure/sync class, mirroring the behaviour of the
-> Haskell generator in `../sky` — not its bytes.
+> Haskell generator in upstream Sky — not its bytes.
 >
 > **Scope split.** The inspector (`tools/ipe-ffi-inspector/src/main.rs`, 18.5k
 > LOC) is **vendored and works** as a `PkgInfo` JSON producer (post-macro-expansion
-> rustdoc-JSON; fail-closed over-drop). The **generator** — Haskell in `../sky`,
+> rustdoc-JSON; fail-closed over-drop). The **generator** — Haskell in upstream Sky,
 > `src/Ipê/Build/Rust/{Ffi.hs (1616), FfiInstance.hs (952), FfiCall.hs (820)}` +
 > `NumCoerce.hs` + naming, with `src/Ipê/Build/FfiGen.hs (1996)` as the shared
 > `.ipei`/`kernel.json` emission reference — is **absent** and must be ported to a
@@ -315,7 +315,7 @@ does not start M-D/M-E against a `KernelFn` enum that has to be re-keyed later.
 - **Acceptance:** fixture **107** (`semver`, shim-free) round-trips: inspect →
   `.ipei` + `kernel.json` + `<crate>_bindings.rs` → Ipê type-checks a call → cargo
   builds → runs. Byte-diff the emitted `.ipei`/`kernel.json`/wrapper against the
-  sky fixture (`../sky/runtime-rust/tests/sky/107-ffi-shimfree-semver`).
+  sky fixture (`upstream:runtime-rust/tests/sky/107-ffi-shimfree-semver`).
 
 ### M-E — generic monomorphisation + closure gates + MODELLABLE_5 drift fence
 - **Port from:** `FfiInstance.hs` in full — `FfiInstance`/`GenericFn` (108-135),
@@ -412,7 +412,7 @@ does not start M-D/M-E against a `KernelFn` enum that has to be re-keyed later.
 
 **Proven shim-free (must pass, byte-diff vs sky output):** the 10 pure/sync
 crates behind fixtures **107-114**
-(`../sky/runtime-rust/tests/sky/{107 semver, 108 multi, 109 multi2, 110 toml,
+(`upstream:runtime-rust/tests/sky/{107 semver, 108 multi, 109 multi2, 110 toml,
 111 serde-json, 112 regex, 113 bytes, 114 jiff}` + the numeric/borrow/serde
 regressions **73/76/92/97/105/106**).
 
@@ -421,7 +421,7 @@ Acceptance ladder:
    type-check → cargo build → run, byte-diff `.ipei`/`kernel.json`/wrapper.
 2. **The 10 shim-free crates** — all of 107-114 green, byte-diff vs sky.
 3. **Async SDKs (firestore / firebase / stripe) are EXPLICITLY NOT claimed
-   shim-free.** They are still hand-shimmed even in `../sky`. M-G proves the async
+   shim-free.** They are still hand-shimmed even in upstream Sky. M-G proves the async
    *bridge* on a small async crate; large async SDKs remain out of the shim-free
    claim until demonstrated. Do not market shim-free for them.
 

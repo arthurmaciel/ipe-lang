@@ -1,0 +1,19 @@
+# Adopt Ipê's prescriptive Live.app `init` signature.
+#
+# Upstream Sky leaves Live.app's init argument a free type variable, so
+# `init : {} -> ( Model, Cmd Msg )` is accepted. Ipê pins the argument to the
+# typed opaque LiveReq (Live.app requires `init : LiveReq -> ( Model, Cmd Msg )`),
+# a sanctioned make-invalid-states-unrepresentable divergence recorded as B24 in
+# docs/divergences-from-sky.md and ADR 0021. The init body ignores the request,
+# so the change is signature-only.
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+init : {  } -> ( Model, Cmd Msg )
+"""
+replace:
+"""
+init : LiveReq -> ( Model, Cmd Msg )
+"""

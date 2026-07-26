@@ -1,0 +1,41 @@
+# Add missing State imports for type annotations that reference Model/Msg.
+#
+# Three files carry type annotations referencing Model or Msg from State without
+# importing it; Sky's type-checker inferred the types, but Ipê requires the
+# import to be in scope. Add the minimal import to each site.
+
+[[edit]]
+file: src/Chess/Move.ipe
+find:
+"""
+import Chess.Board as Board
+"""
+replace:
+"""
+import Chess.Board as Board
+import State exposing (Model)
+"""
+
+[[edit]]
+file: src/Chess/Ai.ipe
+find:
+"""
+import Chess.Eval as Eval
+"""
+replace:
+"""
+import Chess.Eval as Eval
+import State exposing (Model)
+"""
+
+[[edit]]
+file: src/Lib/GameLogic.ipe
+find:
+"""
+import Lib.Games as Games
+"""
+replace:
+"""
+import Lib.Games as Games
+import State exposing (Model, Msg)
+"""

@@ -9,7 +9,7 @@
 > in `ffi-subsystem-design.md` (D1–D8).
 >
 > **Conciliation discipline applied:** faithful-port DEFAULT — where the
-> reference (`../sky` @ feat/runtime-rust) has a *proven* async mechanism we
+> reference (upstream Sky @ feat/runtime-rust) has a *proven* async mechanism we
 > port it; fresh-arm inventions are adopted ONLY where they beat the reference
 > on a named principle or fill a verified reference gap. Every divergence is
 > recorded (§8) per the sanctioned-divergence policy and belongs in
@@ -54,7 +54,7 @@
 
 ### 1.1 The wrapper body (Shape A, fallible async)
 
-Ported from `../sky/src/Sky/Build/Rust/Ffi.hs:997-1006` (shipped #44), with
+Ported from `upstream:src/Sky/Build/Rust/Ffi.hs:997-1006` (shipped #44), with
 the two adopted fresh-arm deltas marked:
 
 ```rust

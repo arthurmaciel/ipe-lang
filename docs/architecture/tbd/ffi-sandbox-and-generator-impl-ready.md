@@ -12,7 +12,7 @@
 > **Priority order:** security > correctness > soundness > efficiency >
 > completeness > readability.
 >
-> **Public-artifact rule.** The Haskell generator in `../sky`
+> **Public-artifact rule.** The Haskell generator in upstream Sky
 > (`src/Ipê/Build/Rust/{Ffi,FfiCall,FfiInstance,NumCoerce}.hs`) is the
 > **capability oracle** — it defines *what* can be bound shim-free. It is **not**
 > the security oracle: it runs the inspector unsandboxed via `sh -c` and quotes
@@ -527,7 +527,7 @@ answer.
   unprovable concrete keeps dropping (over-drop). The generator never re-derives
   Send-ness.
 - **Honest scope:** M-G proves the *bridge* on a small async crate. Large async
-  SDKs (firestore/firebase/stripe) stay hand-shimmed even in `../sky` and are
+  SDKs (firestore/firebase/stripe) stay hand-shimmed even in upstream Sky and are
   **not** marketed shim-free.
 
 ### 2.9 Driver + dynamic Cargo.toml + sentinel DCE (M-F)
@@ -605,7 +605,7 @@ answer.
 
 ---
 
-## Reference source map (capability oracle, `../sky`)
+## Reference source map (capability oracle, upstream Sky)
 
 `Ffi.hs`: `runRustInspectorWith` shell driver `:87-131`, `quoteShell` `:133`,
 `cargoProfilePanicIsUnwind` `:66-82`, `generateRustBindings` `:195`,
