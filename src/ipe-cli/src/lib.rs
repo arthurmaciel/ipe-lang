@@ -30,6 +30,7 @@ pub mod lockfile;
 mod lsp;
 pub mod pkg;
 pub mod project;
+pub mod publish;
 pub mod resolve;
 pub mod run_sandbox;
 pub mod style;
@@ -136,6 +137,12 @@ pub enum CliError {
     /// let an unsafe or dishonest version through is a security hole, so it is
     /// always a typed error, never a warning.
     PackageAudit(audit::Rejection),
+    /// `ipe package publish` declined to proceed. Carries the typed
+    /// [`publish::Refusal`] naming the precondition that failed (a dirty working
+    /// tree, an unpushed HEAD, an already-published version, or a missing token).
+    /// A publish precondition is a hard, typed refusal — never a warning — because
+    /// a merged index entry must pin an immutable, reproducible revision.
+    Publish(publish::Refusal),
     /// A known command was misused (bad or missing arguments, an unknown flag).
     /// Carries the specific reason and the command name; [`fmt::Display`] renders
     /// the reason followed by that command's full, indented `--help` page — the
@@ -234,13 +241,14 @@ impl std::fmt::Display for CliError {
                  version must be at least {floor}."
             ),
             Self::PackageAudit(rejection) => write!(f, "{rejection}"),
+            Self::Publish(refusal) => write!(f, "ipe package publish refused: {refusal}"),
             // The reason, then the command's full `--help` page (indented,
             // coloured for a terminal). Rendered against stderr because misuse
             // output goes there. A known command always has a help page; the
             // `None` fallback (never taken for a known command) degrades to the
             // top-level screen rather than panicking.
             Self::CommandUsage { command, reason } => {
-                writeln!(f, "{reason}")?;
+                writeln!(f, "{}", crate::style::gutter(reason))?;
                 let page = help::command(command, &std::io::stderr())
                     .unwrap_or_else(|| help::top_level(&std::io::stderr()));
                 f.write_str(page.trim_end_matches('\n'))
@@ -1582,6 +1590,9 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
         Some((cmd, rest)) if cmd == "fix" => with_help_on_misuse("fix", run_fix(rest)),
         Some((cmd, rest)) if cmd == "fmt" => with_help_on_misuse("fmt", fmt::run_fmt(rest)),
         Some((cmd, rest)) if cmd == "lsp" => with_help_on_misuse("lsp", lsp::run_lsp(rest)),
+        Some((cmd, rest)) if cmd == "upgrade" => {
+            with_help_on_misuse("upgrade", run_upgrade(rest))
+        }
         Some((cmd, rest)) if cmd == "version" || cmd == "--version" || cmd == "-V" => {
             with_help_on_misuse("version", run_version(rest))
         }
@@ -2507,19 +2518,22 @@ pub(crate) fn lower_entry(entry: &Path) -> Result<ipe_ir::Program, CliError> {
 /// `ipe capabilities <entry.ipe>` — print the program's inferred security
 /// capabilities, one per line in sorted order, or `none` when the program is
 /// pure. Read-only analysis: nothing is emitted or written.
-/// `ipe package <subcommand>` — package-authoring commands. Today the one
-/// subcommand is `audit`, the SP4 Tier-1 package gate.
+/// `ipe package <subcommand>` — package-authoring commands: `audit` (the SP4
+/// Tier-1 package gate) and `publish` (run the gate, compute the index entry, and
+/// open the index PR).
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on a missing or unknown subcommand; the audit's own
-/// errors (a build failure or a [`CliError::PackageAudit`] reject) otherwise.
+/// [`CliError::UsageOwned`] on a missing or unknown subcommand; the subcommand's
+/// own errors (a build failure, a [`CliError::PackageAudit`] reject, or a
+/// [`CliError::Publish`] refusal) otherwise.
 fn run_package(rest: &[String]) -> Result<(), CliError> {
     match rest.split_first() {
         Some((sub, tail)) if sub == "audit" => audit::run_audit(tail),
+        Some((sub, tail)) if sub == "publish" => publish::run_publish(tail),
         Some((sub, _)) => Err(CliError::UsageOwned(format!(
-            "ipe package: unknown subcommand `{sub}` (expected `audit`)"
+            "ipe package: unknown subcommand `{sub}` (expected `audit` or `publish`)"
         ))),
-        None => Err(CliError::Usage("usage: ipe package audit [<path>]")),
+        None => Err(CliError::Usage("usage: ipe package <audit|publish> [<path>]")),
     }
 }
 
@@ -2598,7 +2612,7 @@ fn render_capabilities(
                     );
                 }
             }
-            style::gutter(&body)
+            style::frame(&style::gutter(&body))
         }
     }
 }
@@ -2615,6 +2629,68 @@ fn run_version(rest: &[String]) -> Result<(), CliError> {
     Ok(())
 }
 
+/// The one-liner installer URL — the same script the docs' `curl … | sh` install
+/// uses. `ipe upgrade` re-runs it to fetch the latest release binary and install
+/// it over the current one.
+const INSTALL_SH_URL: &str =
+    "https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/scripts/install.sh";
+
+/// `ipe upgrade [--dry-run]` — self-update by re-running the release installer.
+///
+/// Delegates to `scripts/install.sh` (the documented install path): it detects
+/// the platform, downloads the matching latest-release binary, and installs it
+/// over the current one — the same function and interface as a fresh install.
+/// Requires `sh` and `curl` (a POSIX host); `--dry-run` prints the command
+/// without running it.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] on an unexpected argument, a non-POSIX host, or when
+/// the installer cannot be launched or exits non-zero.
+pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
+    let mut dry_run = false;
+    for arg in rest {
+        match arg.as_str() {
+            "--dry-run" => dry_run = true,
+            other => {
+                return Err(CliError::UsageOwned(format!(
+                    "upgrade: unexpected argument `{other}` (usage: ipe upgrade [--dry-run])"
+                )));
+            }
+        }
+    }
+
+    let command = format!("curl -fsSL {INSTALL_SH_URL} | sh");
+    if dry_run {
+        println!("{}", style::gutter(&format!("would run: {command}")));
+        return Ok(());
+    }
+    if cfg!(not(unix)) {
+        return Err(CliError::UsageOwned(format!(
+            "upgrade: not supported on this platform — run the installer manually:\n  {command}"
+        )));
+    }
+
+    eprintln!(
+        "{}",
+        style::gutter(&format!("{} upgrading ipe via install.sh …", style::glyph::STEP))
+    );
+    let status = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(&command)
+        .status()
+        .map_err(|e| {
+            CliError::UsageOwned(format!(
+                "upgrade: cannot launch the installer (needs `sh` and `curl`): {e}"
+            ))
+        })?;
+    if !status.success() {
+        return Err(CliError::UsageOwned(
+            "upgrade: the installer exited non-zero — nothing was changed".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 /// Render the ipe version in the requested [`OutputFormat`].
 ///
 /// - Human (default): a guttered `ipe <version>` line.
@@ -2626,7 +2702,7 @@ fn render_version(format: cli_args::OutputFormat, _stream: &impl std::io::IsTerm
     match format {
         Plain => format!("{version}\n"),
         Json => format!("{{\"version\":{version:?}}}\n"),
-        Human => style::gutter(&format!("ipe {version}\n")),
+        Human => style::frame(&style::gutter(&format!("ipe {version}\n"))),
     }
 }
 

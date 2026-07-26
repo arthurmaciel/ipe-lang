@@ -15,7 +15,10 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
         Err(err) => {
-            eprintln!("ipe: {err}");
+            eprint!(
+                "{}",
+                ipe::style::frame(&ipe::style::gutter(&format!("ipe: {err}")))
+            );
             ExitCode::FAILURE
         }
     }
