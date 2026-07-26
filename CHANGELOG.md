@@ -10,6 +10,18 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.20](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.19...ipe-v0.1.20) (2026-07-26)
+
+
+### Features
+
+* **cli:** wire ipe package publish live submit (fork push + prefilled PR) ([#165](https://github.com/arthurmaciel/ipe-lang/issues/165)) ([329bf27](https://github.com/arthurmaciel/ipe-lang/commit/329bf270a9f6fb0c021c762b665d1c901eae8a56)), closes [#137](https://github.com/arthurmaciel/ipe-lang/issues/137) [#152](https://github.com/arthurmaciel/ipe-lang/issues/152)
+
+
+### Bug Fixes
+
+* **cli:** surface the real diagnostic when package capability inference finds nothing lowerable ([#168](https://github.com/arthurmaciel/ipe-lang/issues/168)) ([0bf550c](https://github.com/arthurmaciel/ipe-lang/commit/0bf550c2cc627804b3fc90cd7d1f0c91e248930a)), closes [#159](https://github.com/arthurmaciel/ipe-lang/issues/159)
+
 ## [0.1.19](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.18...ipe-v0.1.19) (2026-07-26)
 
 
