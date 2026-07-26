@@ -1473,10 +1473,10 @@ API-shape review):
   `Trace.*` overloads (rejected as a design, not deferred — normalizes
   routing secrets toward logging; `Secret.redacted`/the automatic
   `SkyStringify` redaction already cover the use case); the WASM
-  `HydrationState` field-type containment gate documented in
-  `docs/architecture/wasm-target.md` §Q6 — nothing to gate yet, the WASM
-  target does not exist in this compiler; `Secret`'s `ir_type_is_serde =
-  false` classification IS the future predicate that gate will consult.
+  `HydrationState` field-type containment gate (the client-WASM target and its
+  three-layer effect gate are recorded in `docs/adr/0042-wasm-client-target.md`)
+  — `Secret`'s `ir_type_is_serde = false` classification IS the predicate a
+  hydration-state field-type gate consults.
 
 ### B-DbDecMoney — `Db.Decode.money` returns `Decoder (Decimal, String)`, not `Decoder Money` (backlog #34)
 
