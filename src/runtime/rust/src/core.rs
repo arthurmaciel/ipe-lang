@@ -73,8 +73,8 @@ pub fn ipe_error_from_foreign<ForeignE: std::fmt::Debug, E: From<String>>(e: For
 /// `classify_and_log_panic` log shape (kind `ForeignError`). Total — no
 /// unwrap/index/panic.
 fn log_foreign_error(err_id: &str, detail: &str) {
-    let json = crate::system::read_env_var("IPE_LOG_FORMAT")
-        .is_ok_and(|v| v.eq_ignore_ascii_case("json"));
+    let json =
+        crate::system::read_env_var("IPE_LOG_FORMAT").is_ok_and(|v| v.eq_ignore_ascii_case("json"));
     if json {
         eprintln!(
             "{{\"level\":\"error\",\"kind\":\"ForeignError\",\"errId\":\"{}\",\"message\":\"{}\"}}",
@@ -843,8 +843,8 @@ pub fn classify_and_log_panic(payload: &(dyn std::any::Any + Send)) -> String {
     };
     let kind = classify_panic(&msg);
     let err_id = short_err_id();
-    let json = crate::system::read_env_var("IPE_LOG_FORMAT")
-        .is_ok_and(|v| v.eq_ignore_ascii_case("json"));
+    let json =
+        crate::system::read_env_var("IPE_LOG_FORMAT").is_ok_and(|v| v.eq_ignore_ascii_case("json"));
     if json {
         eprintln!(
             "{{\"level\":\"error\",\"kind\":\"{}\",\"errId\":\"{}\",\"message\":\"{}\"}}",

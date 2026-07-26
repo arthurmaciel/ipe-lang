@@ -14,7 +14,7 @@
 // When adding a new security-bearing random value, route it through `OsRng`, NOT
 // through any `lcg_*` / `random_*` fn here. (Audit finding: low/weak-crypto —
 // recorded as an invariant so a future change can't silently violate it.)
-use super::{IpeMaybe, IpeTask, ok_res, IpeResult, str_err};
+use super::{IpeMaybe, IpeResult, IpeTask, ok_res, str_err};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static LCG_STATE: AtomicU64 = AtomicU64::new(0);

@@ -1,5 +1,5 @@
 // System helpers — some generic over E (when returning IpeTask).
-use super::{IpeTask, ok_res, IpeResult, str_err, IpeMaybe};
+use super::{IpeMaybe, IpeResult, IpeTask, ok_res, str_err};
 
 // `std::env::set_var`/`remove_var` are documented as NOT thread-safe: a mutator
 // can reallocate the C `environ` block while another thread READS it
@@ -19,7 +19,9 @@ static ENV_LOCK: std::sync::RwLock<()> = std::sync::RwLock::new(());
 /// so every non-test process-env read in the crate routes through this one lock —
 /// that's what makes the reader↔mutator serialisation true by construction.
 pub(crate) fn read_env_var(key: &str) -> Result<String, std::env::VarError> {
-    let _guard = ENV_LOCK.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = ENV_LOCK
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     std::env::var(key)
 }
 
@@ -42,7 +44,9 @@ pub(crate) fn locked_set_var(key: &str, val: &str) {
     if key.is_empty() || key.contains('=') || key.contains('\0') || val.contains('\0') {
         return;
     }
-    let _guard = ENV_LOCK.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = ENV_LOCK
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     // SAFETY: `set_var` is `unsafe` in Rust 2024 because a concurrent reader
     // walking `environ` can race the mutation. The exclusive `ENV_LOCK` write
     // guard held here excludes every Ipê-originated reader (all route through
@@ -60,7 +64,9 @@ pub(crate) fn locked_set_var_if_absent(key: &str, val: &str) {
     if key.is_empty() || key.contains('=') || key.contains('\0') || val.contains('\0') {
         return;
     }
-    let _guard = ENV_LOCK.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = ENV_LOCK
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if std::env::var_os(key).is_none() {
         // SAFETY: held under the exclusive `ENV_LOCK` write guard, which excludes
         // every Ipê-originated reader (all take the shared read lock) — see
@@ -75,7 +81,9 @@ pub(crate) fn locked_remove_var(key: &str) {
     if key.is_empty() || key.contains('=') || key.contains('\0') {
         return;
     }
-    let _guard = ENV_LOCK.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = ENV_LOCK
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     // SAFETY: held under the exclusive `ENV_LOCK` write guard, which excludes
     // every Ipê-originated reader (all take the shared read lock) — see
     // `locked_set_var`.
@@ -236,7 +244,9 @@ pub fn system_exit(code: i64) -> ! {
 #[must_use]
 pub fn system_getenv<E: Send + From<String> + 'static>(key: String) -> IpeTask<E, String> {
     Box::pin(async move {
-        if let Ok(v) = read_env_var(&key) { ok_res(v) } else {
+        if let Ok(v) = read_env_var(&key) {
+            ok_res(v)
+        } else {
             let msg = format!("environment variable {key:?} is not set");
             IpeResult::Err(str_err(&msg))
         }

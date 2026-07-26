@@ -1,5 +1,5 @@
 // File kernel stubs — generic over E.
-use super::{IpeTask, ok_res, IpeResult, str_err, from_u8_slice};
+use super::{IpeResult, IpeTask, from_u8_slice, ok_res, str_err};
 
 // ── shared blocking-pool helper ───────────────────────────────────────
 //
@@ -248,8 +248,7 @@ fn file_append_sync(path: &str, content: &str) -> Result<(), String> {
         .create(true)
         .open(path)
         .map_err(|e| format!("{e}"))?;
-    f.write_all(content.as_bytes())
-        .map_err(|e| format!("{e}"))
+    f.write_all(content.as_bytes()).map_err(|e| format!("{e}"))
 }
 
 /// `Ipe.File.append : String -> String -> Task Error ()`
@@ -324,12 +323,9 @@ pub fn file_read_dir<E: Send + From<String> + 'static>(path: String) -> IpeTask<
 pub fn file_is_dir<E: Send + 'static>(path: String) -> IpeTask<E, bool> {
     Box::pin(async move {
         // Same infallible-closure shape as `file_exists` above.
-        let is_dir = run_blocking(move || {
-            Ok(std::fs::metadata(&path)
-                .is_ok_and(|m| m.is_dir()))
-        })
-        .await
-        .unwrap_or(false);
+        let is_dir = run_blocking(move || Ok(std::fs::metadata(&path).is_ok_and(|m| m.is_dir())))
+            .await
+            .unwrap_or(false);
         ok_res(is_dir)
     })
 }

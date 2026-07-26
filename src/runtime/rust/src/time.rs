@@ -1,6 +1,14 @@
 // Time kernel — basic helpers (tokio-gated on native, wasm-client-gated in the
 // browser) + Ipe.Time advanced (always available).
 use super::IpeResult;
+// `IpeTask`/`ok_res` are used only by the async time kernels, which are
+// themselves feature-gated; gate the import to match so it is neither
+// unused (default build) nor a wildcard.
+#[cfg(any(
+    all(feature = "tokio", not(target_arch = "wasm32")),
+    all(target_arch = "wasm32", feature = "wasm-client")
+))]
+use super::{IpeTask, ok_res};
 
 #[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 pub fn time_now<E: Send + 'static>(_: ()) -> IpeTask<E, i64> {

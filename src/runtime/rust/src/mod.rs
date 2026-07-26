@@ -41,7 +41,6 @@
     clippy::cast_lossless,
     clippy::many_single_char_names
 )]
-
 #![cfg_attr(
     not(test),
     deny(

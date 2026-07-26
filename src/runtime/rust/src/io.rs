@@ -1,5 +1,5 @@
 // Ipe.Io — line-oriented stdio. All effectful, so IpeTask-returning.
-use super::{IpeTask, ok_res, IpeResult, str_err};
+use super::{IpeResult, IpeTask, ok_res, str_err};
 
 use std::io::Write;
 
