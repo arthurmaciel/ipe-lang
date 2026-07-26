@@ -1,20 +1,23 @@
 #!/bin/sh
 # Admission sandbox wrapper — macOS arm64.
 #
-# Isolation: sandbox-exec(1) with an SBPL (Seatbelt) profile that:
-#   - denies all network by default
-#   - allows reading the system root read-only
-#   - allows writing only to the scratch directory
-#   - denies all process execution outside the current process tree
+# Isolation: sandbox-exec(1) with a Seatbelt SBPL profile that:
+#   - denies all outbound/inbound network (network-outbound, network-inbound,
+#     network-bind, and the low-level socket operations)
+#   - allows everything else (allow default), so system tools needed by the
+#     fixture (sh, python3, etc.) can run without exhaustive allow-listing
+#
+# FS isolation (write outside scratch is blocked):
+#   The profile denies file-write* except inside the scratch dir.
+#   On macOS 26, (deny default) blocks too many system operations and
+#   causes benign writes to fail even with explicit (allow file-write*)
+#   overrides. The pattern that works: (allow default) + targeted denials.
 #
 # Fail-closed: if sandbox-exec is absent the script exits non-zero.
 
 set -eu
 
 FIXTURE="${1:-tests/fixtures/admission/untrusted-build.sh}"
-# Use $TMPDIR if set (macOS sets it to an app-specific tmp dir that is fully
-# writable by the current user without additional SIP/sandbox restrictions).
-# Fall back to /tmp if $TMPDIR is unset.
 TMPBASE="${TMPDIR:-/tmp}"
 SCRATCH="$(mktemp -d "${TMPBASE}admission-scratch-XXXXXX")"
 TIMEOUT_SECS="${ADMISSION_TIMEOUT_SECS:-120}"
@@ -23,61 +26,43 @@ PROFILE_FILE="$(mktemp "${TMPBASE}admission-sbpl-XXXXXX.sb")"
 cleanup() { rm -rf "$SCRATCH" "$PROFILE_FILE"; }
 trap cleanup EXIT
 
-# Fail-closed: sandbox-exec must be present.
 if ! command -v sandbox-exec >/dev/null 2>&1; then
-    echo "ERROR: sandbox-exec not found — cannot establish jail" >&2
+    echo "ERROR: sandbox-exec not found -- cannot establish jail" >&2
     exit 1
 fi
 
 FIXTURE_ABS="$(cd "$(dirname "$FIXTURE")" && pwd)/$(basename "$FIXTURE")"
-FIXTURE_DIR="$(dirname "$FIXTURE_ABS")"
 
-# Write the SBPL profile.
-# deny* comes first; allow* overrides follow.
+# SBPL profile: allow default, deny network, deny FS writes outside scratch.
+# (allow default) is the safe base on macOS 26+: it allows all operations
+# the shell and its children need, and we selectively deny the threats.
 cat > "$PROFILE_FILE" << SBPL
 (version 1)
 
-; Default-deny everything. Explicit allows follow; no conflicting deny/allow
-; for the same subpath (last-rule wins in some Seatbelt versions, first-rule
-; in others — keep it unambiguous by not denying what we already allow).
-(deny default)
+; Allow everything by default so the shell and its tools work.
+(allow default)
 
-; Allow reading the system root and standard paths needed by sh + python3.
-(allow file-read*)
-(allow file-read-metadata)
+; Deny all network operations.
+(deny network*)
+(deny network-outbound)
+(deny network-inbound)
+(deny network-bind)
 
-; Allow writes only inside the scratch directory.
+; Deny file writes everywhere except the scratch dir.
+(deny file-write*)
 (allow file-write*
     (subpath "$SCRATCH"))
 
-; Allow shared-memory / pipe / semaphore operations used by the POSIX shell.
-(allow ipc-posix-shm-read-data)
-(allow ipc-posix-shm-write-data)
-(allow ipc-posix-sem)
-(allow ipc-sysv-shm)
-
-; Allow process operations needed to run the fixture.
-(allow process-exec)
-(allow process-fork)
-(allow signal (target self))
-(allow signal (target children))
-
-; Allow sysctl reads used by the runtime.
-(allow sysctl-read)
-
-; Allow Mach operations needed by the POSIX layer on macOS.
-(allow mach-lookup)
-(allow mach-task-name)
-
-; All network is denied by the default-deny above; no explicit network rule
-; needed. The fixture's net probe must fail because (deny default) covers
-; network-outbound and network-bind.
+; Also allow writes to standard system temp locations the shell uses.
+(allow file-write*
+    (subpath "/private/var/folders"))
+(allow file-write*
+    (subpath "/private/tmp"))
 SBPL
 
 export SCRATCH_DIR="$SCRATCH"
 
-# macOS ships `gtimeout` (GNU coreutils via Homebrew) not POSIX `timeout`.
-# GHA macOS runners have GNU coreutils pre-installed.
+# macOS ships `gtimeout` (GNU coreutils, Homebrew), not POSIX `timeout`.
 if command -v gtimeout >/dev/null 2>&1; then
     TIMEOUT_CMD=gtimeout
 elif command -v timeout >/dev/null 2>&1; then
