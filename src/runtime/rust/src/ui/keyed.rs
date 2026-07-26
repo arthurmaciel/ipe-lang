@@ -47,6 +47,7 @@ fn attach_key<M: Clone>(key: String, child: Element<M>) -> Element<M> {
 /// Attaches each key as a `ipe-key` attribute on its child, then forwards to
 /// `ui_column_`.  The `ipe-key` is consumed by `ipe_id_key` /
 /// `assign_ipe_ids_depth` to produce stable ipe-ids across reorder.
+#[must_use]
 pub fn keyed_column_<M: Clone>(
     attrs: Vec<Attribute<M>>,
     children: Vec<(String, Element<M>)>,
@@ -64,6 +65,7 @@ pub fn keyed_column_<M: Clone>(
 ///
 /// Attaches each key as a `ipe-key` attribute on its child, then forwards to
 /// `ui_row_`.
+#[must_use]
 pub fn keyed_row_<M: Clone>(
     attrs: Vec<Attribute<M>>,
     children: Vec<(String, Element<M>)>,

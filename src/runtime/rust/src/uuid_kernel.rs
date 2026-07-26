@@ -20,7 +20,7 @@
 //! string with no entropy and no side effect — a genuine parser, not the
 //! arity-0 codegen artifact.
 
-use super::*;
+use super::{IpeMaybe, IpeTask, ok_res};
 
 /// Ipe.Uuid.v4 : () -> Task Error String
 ///
@@ -28,6 +28,7 @@ use super::*;
 /// FRESH id — entropy is not memoizable. Bound is `E: From<String>` to match
 /// the other entropy Tasks (`crypto_random_token`), so a discarded
 /// `let _ = Uuid.v4 ()` auto-forces identically; generation itself never errors.
+#[must_use]
 pub fn uuid_v4<E: From<String> + Send + 'static>(_: ()) -> IpeTask<E, String> {
     Box::pin(async move { ok_res(::uuid::Uuid::new_v4().to_string()) })
 }
@@ -40,6 +41,7 @@ pub fn uuid_v4<E: From<String> + Send + 'static>(_: ()) -> IpeTask<E, String> {
 /// those). `v4` is random (getrandom/CSPRNG) but UUIDs are still only 122 bits of
 /// formatted entropy — prefer `crypto_random_token` for security tokens.
 /// (Audit finding: low — documented contract.)
+#[must_use]
 pub fn uuid_v7<E: From<String> + Send + 'static>(_: ()) -> IpeTask<E, String> {
     Box::pin(async move { ok_res(::uuid::Uuid::now_v7().to_string()) })
 }
@@ -48,6 +50,7 @@ pub fn uuid_v7<E: From<String> + Send + 'static>(_: ()) -> IpeTask<E, String> {
 ///
 /// PURE: no entropy, no effect — a real parser over an existing string. Kept off
 /// the Task tier deliberately (it is not the arity-0 entropy artifact).
+#[must_use]
 pub fn uuid_parse(s: String) -> IpeMaybe<String> {
     match ::uuid::Uuid::parse_str(&s) {
         Ok(u) => IpeMaybe::Just(u.to_string()),
@@ -58,6 +61,7 @@ pub fn uuid_parse(s: String) -> IpeMaybe<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::IpeResult;
 
     /// Run one entropy Task to completion, unwrapping the Ok payload. The error
     /// channel is `String` here (the tests never hit it — generation is total).

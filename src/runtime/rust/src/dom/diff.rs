@@ -1,4 +1,4 @@
-use crate::html::*;
+use crate::html::{Attribute, Html};
 use serde::Serialize;
 use std::collections::HashMap;
 
@@ -42,6 +42,7 @@ impl Patch {
 /// - Event handlers toggled on/off: `ipe-<event>` attr set/remove + `data-ipe-hid`.
 /// - Keyed identity is carried by `assign_ipe_ids` (the `:{key}` segment) so a
 ///   reordered keyed item keeps its ipe-id and only its moved attrs patch.
+#[must_use]
 pub fn diff<M>(old: &Html<M>, new: &Html<M>) -> Vec<Patch> {
     let mut out = vec![];
     diff_node_depth(old, new, &mut out, 0);
@@ -266,6 +267,7 @@ fn render_children<M>(kids: &[Html<M>]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Event, assign_ipe_ids};
 
     fn ids(h: &mut Html<()>) {
         assign_ipe_ids(h, "r");

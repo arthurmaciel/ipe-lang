@@ -223,8 +223,13 @@ fn ipe_maybe_to_option_both_variants() {
     let none: Option<String> = ipe_runtime_rust::core::ipe_maybe_to_option(IpeMaybe::Nothing);
     assert_eq!(none.as_deref(), None);
     // The numeric-narrowing path (.map(|x| x as u16)).
+    // Intentional wrapping truncation: the test exercises the defined `as` cast
+    // semantics (no panic), not type-safe narrowing.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let n = ipe_runtime_rust::core::ipe_maybe_to_option(IpeMaybe::Just(70000i64)).map(|x| x as u16);
-    assert_eq!(n, Some(70000i64 as u16)); // defined wrapping cast, no panic
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let expected = 70000i64 as u16;
+    assert_eq!(n, Some(expected)); // defined wrapping cast, no panic
 }
 
 // ── property: byte/array coercion never panics for ANY input ───────────────

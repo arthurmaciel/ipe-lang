@@ -4,10 +4,10 @@
 //! kernels take/return `char` directly — no `any` boxing. Mirrors the Go
 //! runtime's `Char_*` functions (`runtime-go/rt/rt.go`):
 //!
-//! ## Predicates — exact Unicode General_Category parity with Go
+//! ## Predicates — exact Unicode `General_Category` parity with Go
 //!
 //! Go's `Char_is*` route through the `unicode` package, each keyed off a
-//! precise General_Category (GC). Rust std's `char` predicates are BROADER and
+//! precise `General_Category` (GC). Rust std's `char` predicates are BROADER and
 //! would diverge:
 //!
 //! | Ipê      | Go                  | GC(s)                    | Rust std (rejected)                       |
@@ -19,7 +19,7 @@
 //!
 //! Concretely: `'²'`/`'½'` → isDigit **false** (No, not Nd); `'ª'` → isLower
 //! **false** (Lo, the feminine ordinal — `is_lowercase` wrongly counts its
-//! Other_Lowercase property); `'é'` → isAlpha **true** (Ll ⊂ L*). We resolve
+//! `Other_Lowercase` property); `'é'` → isAlpha **true** (Ll ⊂ L*). We resolve
 //! the exact GC via `unicode_general_category::get_general_category` and match
 //! against Go's category sets. (Case MAPPING — `toLower`/`toUpper` below — is a
 //! deliberate, sanctioned divergence: it stays full-Unicode per
@@ -33,23 +33,27 @@
 
 use unicode_general_category::{GeneralCategory, get_general_category};
 
-/// `isDigit` ← `unicode.IsDigit` = General_Category `Nd` (decimal digit) only.
+/// `isDigit` ← `unicode.IsDigit` = `General_Category` `Nd` (decimal digit) only.
+#[must_use]
 pub fn char_is_digit(c: char) -> bool {
     matches!(get_general_category(c), GeneralCategory::DecimalNumber)
 }
 
-/// `isLower` ← `unicode.IsLower` = General_Category `Ll` only.
+/// `isLower` ← `unicode.IsLower` = `General_Category` `Ll` only.
+#[must_use]
 pub fn char_is_lower(c: char) -> bool {
     matches!(get_general_category(c), GeneralCategory::LowercaseLetter)
 }
 
-/// `isUpper` ← `unicode.IsUpper` = General_Category `Lu` only.
+/// `isUpper` ← `unicode.IsUpper` = `General_Category` `Lu` only.
+#[must_use]
 pub fn char_is_upper(c: char) -> bool {
     matches!(get_general_category(c), GeneralCategory::UppercaseLetter)
 }
 
 /// `isAlpha` ← `unicode.IsLetter` = the letter categories `L*`
 /// (`Lu | Ll | Lt | Lm | Lo`).
+#[must_use]
 pub fn char_is_alpha(c: char) -> bool {
     matches!(
         get_general_category(c),
@@ -65,37 +69,44 @@ pub fn char_is_alpha(c: char) -> bool {
 /// `isUpper || isLower || isDigit`, here expressed over the existing
 /// category-based `isAlpha`/`isDigit` so Unicode letters/digits classify
 /// consistently with the rest of this module.
+#[must_use]
 pub fn char_is_alpha_num(c: char) -> bool {
     char_is_alpha(c) || char_is_digit(c)
 }
 
 /// `isHexDigit` — an ASCII hexadecimal digit (`0-9`, `a-f`, `A-F`). Matches
 /// Elm's code-point ranges exactly (ASCII only, never Unicode digits).
+#[must_use]
 pub fn char_is_hex_digit(c: char) -> bool {
     c.is_ascii_hexdigit()
 }
 
 /// `isOctDigit` — an ASCII octal digit (`0-7`). Matches Elm's code-point range
 /// exactly (ASCII only).
+#[must_use]
 pub fn char_is_oct_digit(c: char) -> bool {
     ('0'..='7').contains(&c)
 }
 
+#[must_use]
 pub fn char_to_lower(c: char) -> String {
     c.to_lowercase().to_string()
 }
+#[must_use]
 pub fn char_to_upper(c: char) -> String {
     c.to_uppercase().to_string()
 }
 
 /// `toCode 'A' -> 65` — the Unicode code point as an integer.
+#[must_use]
 pub fn char_to_code(c: char) -> i64 {
-    c as u32 as i64
+    i64::from(c as u32)
 }
 
 /// `fromCode 65 -> 'A'`. Out-of-range / surrogate -> U+FFFD (matches Go).
+#[must_use]
 pub fn char_from_code(n: i64) -> char {
-    if !(0..=0x10FFFF).contains(&n) {
+    if !(0..=0x0010_FFFF).contains(&n) {
         return '\u{FFFD}';
     }
     char::from_u32(n as u32).unwrap_or('\u{FFFD}')
@@ -170,7 +181,7 @@ mod tests {
     #[test]
     fn from_code_out_of_range_is_replacement() {
         assert_eq!(char_from_code(-1), '\u{FFFD}');
-        assert_eq!(char_from_code(0x110000), '\u{FFFD}');
+        assert_eq!(char_from_code(0x0011_0000), '\u{FFFD}');
         assert_eq!(char_from_code(0xD800), '\u{FFFD}'); // lone surrogate
     }
 

@@ -338,7 +338,7 @@ fn format_with_uses_half_away_from_zero_not_bankers() {
     // Banker's (current Rust) would give "2.54".
     assert_eq!(
         ipe_runtime_rust::decimal::decimal_format_with(
-            "".to_string(),
+            String::new(),
             ".".to_string(),
             2,
             d("2.545")

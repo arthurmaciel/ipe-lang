@@ -1,41 +1,52 @@
 //! Ipe.String kernel — the single home for the String runtime surface.
 //!
 //! Argument order matches the Go runtime's typed kernels
-//! (runtime-go/rt/rt.go: String_replace / String_startsWith / etc.).
+//! (runtime-go/rt/rt.go: `String_replace` / `String_startsWith` / etc.).
 
 use super::IpeMaybe;
 
 // ── Core String kernels (relocated from core.rs so the String surface has one home) ──
 
+#[must_use]
 pub fn string_from_int(i: i64) -> String {
-    format!("{}", i)
+    format!("{i}")
 }
+#[must_use]
 pub fn string_join(sep: String, strs: Vec<String>) -> String {
     strs.join(&sep)
 }
-pub fn string_append(a: String, b: String) -> String {
-    a + &b
+#[must_use]
+pub fn string_append(mut a: String, b: String) -> String {
+    a.push_str(&b);
+    a
 }
+#[must_use]
 pub fn string_length(s: String) -> i64 {
     s.chars().count() as i64
 }
+#[must_use]
 pub fn string_is_empty(s: String) -> bool {
     s.is_empty()
 }
+#[must_use]
 pub fn string_reverse(s: String) -> String {
     s.chars().rev().collect()
 }
+#[must_use]
 pub fn string_to_upper(s: String) -> String {
     s.to_uppercase()
 }
+#[must_use]
 pub fn string_to_lower(s: String) -> String {
     s.to_lowercase()
 }
+#[must_use]
 pub fn string_trim(s: String) -> String {
     s.trim().to_string()
 }
 // Ipê `contains : String -> String -> Bool  -- contains sub str` (str contains
 // sub). Args arrive as (sub, str), so test the SECOND against the first.
+#[must_use]
 pub fn string_contains(sub: String, s: String) -> bool {
     s.contains(&sub)
 }
@@ -47,6 +58,7 @@ pub fn string_contains(sub: String, s: String) -> bool {
 /// emitted code never reaches it; the golden oracle confirms `Nothing`.) This
 /// also matches Elm-family `String.toInt`, which does not trim. So no `.trim()`
 /// here — a leading/trailing space yields `Nothing`, exactly like the oracle.
+#[must_use]
 pub fn string_to_int(s: String) -> IpeMaybe<i64> {
     match s.parse::<i64>() {
         Ok(v) => IpeMaybe::Just(v),
@@ -57,7 +69,7 @@ pub fn string_to_int(s: String) -> IpeMaybe<i64> {
 /// `strconv.ParseFloat(strings.TrimSpace(s), 64)` — UNLIKE `toInt`, Go's float
 /// path DOES trim Unicode whitespace before parsing (the oracle confirms
 /// `String.toFloat " 1.5 " == Just 1.5`), so we trim here too via `str::trim`
-/// (`char::is_whitespace` = the Unicode White_Space property, matching Go's
+/// (`char::is_whitespace` = the Unicode `White_Space` property, matching Go's
 /// `unicode.IsSpace`). The toInt/toFloat trim asymmetry mirrors the Go runtime.
 ///
 ///
@@ -65,6 +77,7 @@ pub fn string_to_int(s: String) -> IpeMaybe<i64> {
 /// decimal / scientific grammar, rejecting Go's hex-float (`0x1p-2`) and
 /// underscore-digit-separator forms. This is a deliberate tightening — those
 /// forms never round-trip from `String.fromFloat` — so no golden is needed.
+#[must_use]
 pub fn string_to_float(s: String) -> IpeMaybe<f64> {
     match s.trim().parse::<f64>() {
         Ok(v) => IpeMaybe::Just(v),
@@ -72,11 +85,13 @@ pub fn string_to_float(s: String) -> IpeMaybe<f64> {
     }
 }
 /// `String.fromChar : Char -> String`.
+#[must_use]
 pub fn string_from_char(c: char) -> String {
     c.to_string()
 }
 /// `String.slice : Int -> Int -> String -> String`. Char(rune)-indexed with
 /// negative-index-from-end + clamping — parity with Go's `String_sliceT`.
+#[must_use]
 pub fn string_slice(start: i64, end: i64, s: String) -> String {
     let runes: Vec<char> = s.chars().collect();
     let total = runes.len() as i64;
@@ -99,6 +114,7 @@ pub fn string_slice(start: i64, end: i64, s: String) -> String {
         .unwrap_or_default()
 }
 /// `Ipe.String.left n s` — the first `n` characters (clamped; negative → "").
+#[must_use]
 pub fn string_left(n: i64, s: String) -> String {
     if n <= 0 {
         return String::new();
@@ -106,6 +122,7 @@ pub fn string_left(n: i64, s: String) -> String {
     s.chars().take(n as usize).collect()
 }
 /// `Ipe.String.right n s` — the last `n` characters (clamped).
+#[must_use]
 pub fn string_right(n: i64, s: String) -> String {
     if n <= 0 {
         return String::new();
@@ -138,6 +155,7 @@ pub fn string_right(n: i64, s: String) -> String {
 /// We obtain the *shortest round-trip* significant digits + scientific exponent
 /// from `{:e}` (Rust's std formatter picks the same canonical shortest decimal
 /// as Go's Dragonbox), then re-render under `'g'`'s positional-vs-exponent rule.
+#[must_use]
 pub fn string_from_float(f: f64) -> String {
     // Non-finite: Go's strconv spells these with a sign on the infinities.
     if f.is_nan() {
@@ -156,11 +174,10 @@ pub fn string_from_float(f: f64) -> String {
     // `{:e}` yields the shortest round-trip form `d[.ddd]e<exp>` for the
     // magnitude; split it into significant digits and the scientific exponent.
     let sci = format!("{:e}", f.abs());
-    let (mantissa, exp_str) = match sci.split_once('e') {
-        Some(parts) => parts,
-        // Unreachable for a finite f64 — `{:e}` always emits an `e`. Falling
-        // back to the raw string keeps the function total rather than panicking.
-        None => return sci,
+    // Unreachable for a finite f64 — `{:e}` always emits an `e`. Falling
+    // back to the raw string keeps the function total rather than panicking.
+    let Some((mantissa, exp_str)) = sci.split_once('e') else {
+        return sci;
     };
     let sci_exp: i32 = exp_str.parse().unwrap_or(0);
     // Significant digits with the radix point removed: e.g. "1.256" -> "1256".
@@ -257,34 +274,44 @@ fn fmt_g_positional(neg: bool, digits: &str, dp: i32) -> String {
 /// `split("", "")` yields the empty list. Rust's `str::split("")` instead emits
 /// boundary "" entries (`["", "a", …, ""]`), so the empty-sep case is handled
 /// by rune iteration to match Go exactly.
+#[must_use]
 pub fn string_split(sep: String, s: String) -> Vec<String> {
     if sep.is_empty() {
         return s.chars().map(|c| c.to_string()).collect();
     }
-    s.split(&sep).map(|x| x.to_string()).collect()
+    s.split(&sep)
+        .map(std::string::ToString::to_string)
+        .collect()
 }
 // Ipe.String.lines / .words — split on line breaks / runs of whitespace.
+#[must_use]
 pub fn string_lines(s: String) -> Vec<String> {
-    s.lines().map(|x| x.to_string()).collect()
+    s.lines().map(std::string::ToString::to_string).collect()
 }
+#[must_use]
 pub fn string_words(s: String) -> Vec<String> {
-    s.split_whitespace().map(|x| x.to_string()).collect()
+    s.split_whitespace()
+        .map(std::string::ToString::to_string)
+        .collect()
 }
 
 // ── String kernels with Go-typed argument order ──
 
 /// Ipê `replace : String -> String -> String -> String`.
 /// Replaces all occurrences of `old` with `new_` in `s`.
+#[must_use]
 pub fn string_replace(old: String, new_: String, s: String) -> String {
     s.replace(&old, &new_)
 }
 
 /// Ipê `startsWith : String -> String -> Bool`. `prefix` first, `s` second.
+#[must_use]
 pub fn string_starts_with(prefix: String, s: String) -> bool {
     s.starts_with(&prefix)
 }
 
 /// Ipê `endsWith : String -> String -> Bool`. `suffix` first, `s` second.
+#[must_use]
 pub fn string_ends_with(suffix: String, s: String) -> bool {
     s.ends_with(&suffix)
 }
@@ -294,23 +321,27 @@ pub fn string_ends_with(suffix: String, s: String) -> bool {
 // Args arrive in Ipê order `(haystack, needle)`, so the runtime signature is
 // haystack-first — the exact opposite operand order of `string_contains`.
 // Defined as a delegation so the single substring check stays in one place.
+#[must_use]
 pub fn string_contains_in(haystack: String, needle: String) -> bool {
     string_contains(needle, haystack)
 }
 
 /// Ipê `startsWithIn : String -> String -> Bool  -- startsWithIn haystack prefix`.
 /// Haystack-first companion of `startsWith`.
+#[must_use]
 pub fn string_starts_with_in(haystack: String, prefix: String) -> bool {
     string_starts_with(prefix, haystack)
 }
 
 /// Ipê `endsWithIn : String -> String -> Bool  -- endsWithIn haystack suffix`.
 /// Haystack-first companion of `endsWith`.
+#[must_use]
 pub fn string_ends_with_in(haystack: String, suffix: String) -> bool {
     string_ends_with(suffix, haystack)
 }
 
 /// Ipê `repeat : Int -> String -> String`. Non-positive `n` returns "".
+#[must_use]
 pub fn string_repeat(n: i64, s: String) -> String {
     if n <= 0 {
         return String::new();
@@ -327,7 +358,8 @@ pub fn string_repeat(n: i64, s: String) -> String {
 
 /// `String.concat : List String -> String`
 /// Concatenates a list of strings with no separator.
-/// Go parity: `String_concat` in rt.go — simple sequential WriteString.
+/// Go parity: `String_concat` in rt.go — simple sequential `WriteString`.
+#[must_use]
 pub fn string_concat(parts: Vec<String>) -> String {
     let mut out = String::new();
     for p in parts {
@@ -338,9 +370,10 @@ pub fn string_concat(parts: Vec<String>) -> String {
 
 /// `String.casefold : String -> String`
 /// Unicode-aware case-fold for locale-neutral case-insensitive comparison.
-/// Go parity: `String_casefold` in stdlib_extra.go — uses `strings.ToLower`
+/// Go parity: `String_casefold` in `stdlib_extra.go` — uses `strings.ToLower`
 /// (Unicode-aware lowercasing). We mirror that with `to_lowercase()` which
 /// performs full Unicode case folding (NFC-lowercased Unicode scalar values).
+#[must_use]
 pub fn string_casefold(s: String) -> String {
     s.to_lowercase()
 }
@@ -349,6 +382,7 @@ pub fn string_casefold(s: String) -> String {
 /// Drops the first `n` characters (runes). Elm semantics:
 ///   negative n → s unchanged; n >= length → "".
 /// Go parity: `String_dropLeft` in rt.go — rune-slice based.
+#[must_use]
 pub fn string_drop_left(n: i64, s: String) -> String {
     if n <= 0 {
         return s;
@@ -366,6 +400,7 @@ pub fn string_drop_left(n: i64, s: String) -> String {
 /// Drops the last `n` characters (runes). Elm semantics:
 ///   negative n → s unchanged; n >= length → "".
 /// Go parity: `String_dropRight` in rt.go — rune-slice based.
+#[must_use]
 pub fn string_drop_right(n: i64, s: String) -> String {
     if n <= 0 {
         return s;
@@ -383,7 +418,8 @@ pub fn string_drop_right(n: i64, s: String) -> String {
 
 /// `String.equalFold : String -> String -> Bool`
 /// Case-insensitive Unicode-aware string equality.
-/// Go parity: `String_equalFold` in stdlib_extra.go — `strings.EqualFold`.
+/// Go parity: `String_equalFold` in `stdlib_extra.go` — `strings.EqualFold`.
+#[must_use]
 pub fn string_equal_fold(a: String, b: String) -> bool {
     // `to_lowercase()` is the same transform used in `string_casefold`,
     // matching Go's `strings.EqualFold` semantics (Unicode case-fold).
@@ -392,7 +428,8 @@ pub fn string_equal_fold(a: String, b: String) -> bool {
 
 /// `String.fromList : List Char -> String`
 /// Concatenates a list of `Char` values into a UTF-8 string.
-/// Go parity: `String_fromList` in rt.go — per-element rune → WriteRune.
+/// Go parity: `String_fromList` in rt.go — per-element rune → `WriteRune`.
+#[must_use]
 pub fn string_from_list(chars: Vec<char>) -> String {
     chars.into_iter().collect()
 }
@@ -408,6 +445,7 @@ pub fn string_from_list(chars: Vec<char>) -> String {
 ///   - domain part non-empty and contains at least one "."
 ///
 /// This intentionally stays as tight as Go's check (no regex crate needed).
+#[must_use]
 pub fn string_is_email(s: String) -> bool {
     // Reject anything that parses with a name component: Go only accepts
     // bare "user@host" (no "Name <user@host>" wrapping).
@@ -451,7 +489,7 @@ pub fn string_is_email(s: String) -> bool {
 /// Absolute URL with scheme http/https/ws/wss.
 /// Go parity: `String_isUrl` in validate.go — `url.Parse` + `IsAbs()` + host
 ///   non-empty + scheme in {http, https, ws, wss}. Rejects relative paths and
-///   javascript:/data: URLs to prevent XSS footguns.
+///   <javascript:/data>: URLs to prevent XSS footguns.
 ///
 /// Implementation: structural parse without external `url` crate — mirrors Go's
 /// `url.Parse` behaviour (scheme + "://" + non-empty host) using only the `regex`
@@ -488,6 +526,7 @@ pub fn string_is_url(s: String) -> bool {
 /// Pads `s` on the left with `ch` until `s` is at least `n` rune-characters
 /// wide. If `s` is already `n` or more characters wide, returns it unchanged.
 /// Go parity: `String_padLeft` in rt.go — rune-count loop, `padChar` for ch.
+#[must_use]
 pub fn string_pad_left(n: i64, ch: char, s: String) -> String {
     if n <= 0 {
         return s;
@@ -514,6 +553,7 @@ pub fn string_pad_left(n: i64, ch: char, s: String) -> String {
 /// Pads `s` on the right with `ch` until `s` is at least `n` rune-characters
 /// wide. If `s` is already `n` or more characters wide, returns it unchanged.
 /// Go parity: `String_padRight` in rt.go — rune-count loop, `padChar` for ch.
+#[must_use]
 pub fn string_pad_right(n: i64, ch: char, s: String) -> String {
     if n <= 0 {
         return s;
@@ -539,11 +579,13 @@ pub fn string_pad_right(n: i64, ch: char, s: String) -> String {
 /// `String.toList : String -> List Char`
 /// Decomposes a string into its Unicode code points (chars).
 /// Go parity: `String_toList` in rt.go — `for _, r := range str`.
+#[must_use]
 pub fn string_to_list(s: String) -> Vec<char> {
     s.chars().collect()
 }
 
 /// `String.cons : Char -> String -> String` — prepend a character.
+#[must_use]
 pub fn string_cons(c: char, s: String) -> String {
     let mut out = String::with_capacity(s.len() + c.len_utf8());
     out.push(c);
@@ -553,6 +595,7 @@ pub fn string_cons(c: char, s: String) -> String {
 
 /// `String.uncons : String -> Maybe (Char, String)` — split off the first
 /// character; `Nothing` on the empty string. Code-point (rune) based.
+#[must_use]
 pub fn string_uncons(s: String) -> IpeMaybe<(char, String)> {
     let mut it = s.chars();
     match it.next() {
@@ -564,6 +607,7 @@ pub fn string_uncons(s: String) -> IpeMaybe<(char, String)> {
 /// `String.pad : Int -> Char -> String -> String` — centre-pad `s` to width `n`
 /// with `ch`. Matches Elm: extra padding on the RIGHT when the total is odd.
 /// `n <= length s` returns `s` unchanged.
+#[must_use]
 pub fn string_pad(n: i64, ch: char, s: String) -> String {
     let len = s.chars().count() as i64;
     if n <= len {
@@ -586,6 +630,7 @@ pub fn string_pad(n: i64, ch: char, s: String) -> String {
 /// `String.indexes : String -> String -> List Int` — every code-point start
 /// index of `sub` within `s` (overlapping matches included, mirroring Elm).
 /// Empty `sub` yields `[]` (matches Elm).
+#[must_use]
 pub fn string_indexes(sub: String, s: String) -> Vec<i64> {
     if sub.is_empty() {
         return Vec::new();
@@ -650,19 +695,19 @@ pub fn string_all(pred: impl Fn(char) -> bool, s: String) -> bool {
 /// `String.trimStart : String -> String`
 /// Removes leading Unicode whitespace. Matches Go's `unicodeIsSpace` set
 /// (includes NBSP, various space categories, BOM).
-/// Go parity: `String_trimStart` in stdlib_extra.go — `strings.TrimLeftFunc`.
+/// Go parity: `String_trimStart` in `stdlib_extra.go` — `strings.TrimLeftFunc`.
 pub fn string_trim_start(s: String) -> String {
     s.trim_start_matches(unicode_is_space).to_string()
 }
 
 /// `String.trimEnd : String -> String`
 /// Removes trailing Unicode whitespace. Same whitespace set as `trimStart`.
-/// Go parity: `String_trimEnd` in stdlib_extra.go — `strings.TrimRightFunc`.
+/// Go parity: `String_trimEnd` in `stdlib_extra.go` — `strings.TrimRightFunc`.
 pub fn string_trim_end(s: String) -> String {
     s.trim_end_matches(unicode_is_space).to_string()
 }
 
-/// Mirrors Go's `unicodeIsSpace` (stdlib_extra.go): covers ASCII whitespace,
+/// Mirrors Go's `unicodeIsSpace` (`stdlib_extra.go)`: covers ASCII whitespace,
 /// NBSP (U+00A0), general-category Zs (U+2000–U+200A), line/paragraph
 /// separators (U+2028/U+2029), ideographic space (U+3000), and BOM (U+FEFF).
 fn unicode_is_space(c: char) -> bool {
@@ -697,7 +742,7 @@ mod tests {
     #[test]
     fn test_replace_empty_old() {
         assert_eq!(
-            string_replace("".into(), "_".into(), "abc".into()),
+            string_replace(String::new(), "_".into(), "abc".into()),
             "_a_b_c_"
         );
     }
@@ -712,7 +757,7 @@ mod tests {
     }
     #[test]
     fn test_starts_with_empty_prefix() {
-        assert!(string_starts_with("".into(), "hello".into()));
+        assert!(string_starts_with(String::new(), "hello".into()));
     }
 
     #[test]
@@ -784,14 +829,14 @@ mod tests {
     fn ff_go_g_threshold_is_six_not_twentyone() {
         // Discriminates Go's flat exp>=6 cut from the reference's 21. Oracle:
         // Go 1.26.2 strconv.FormatFloat(f,'g',-1,64) (see reference-audit.md item 27).
-        assert_eq!(string_from_float(999999.0), "999999"); // exp 5 positional
-        assert_eq!(string_from_float(1000001.0), "1.000001e+06"); // exp 6 scientific
+        assert_eq!(string_from_float(999_999.0), "999999"); // exp 5 positional
+        assert_eq!(string_from_float(1_000_001.0), "1.000001e+06"); // exp 6 scientific
         assert_eq!(string_from_float(1e15), "1e+15"); // 21 would print 16 zeros
         assert_eq!(string_from_float(1e20), "1e+20"); // 21 would print 21 digits
     }
     #[test]
     fn ff_many_fraction() {
-        assert_eq!(string_from_float(123456.789), "123456.789");
+        assert_eq!(string_from_float(123_456.789), "123456.789");
     }
     #[test]
     fn ff_pos_inf() {
@@ -851,7 +896,7 @@ mod tests {
     }
     #[test]
     fn test_casefold_empty() {
-        assert_eq!(string_casefold("".into()), "");
+        assert_eq!(string_casefold(String::new()), "");
     }
 
     // string_drop_left
@@ -921,7 +966,7 @@ mod tests {
     }
     #[test]
     fn test_equal_fold_empty() {
-        assert!(string_equal_fold("".into(), "".into()));
+        assert!(string_equal_fold(String::new(), String::new()));
     }
 
     // string_from_list
@@ -957,7 +1002,7 @@ mod tests {
     }
     #[test]
     fn test_is_email_empty() {
-        assert!(!string_is_email("".into()));
+        assert!(!string_is_email(String::new()));
     }
     #[test]
     fn test_is_email_with_plus() {
@@ -995,7 +1040,7 @@ mod tests {
     }
     #[test]
     fn test_is_url_empty() {
-        assert!(!string_is_url("".into()));
+        assert!(!string_is_url(String::new()));
     }
     #[test]
     fn test_is_url_ftp() {
@@ -1055,7 +1100,7 @@ mod tests {
     }
     #[test]
     fn test_to_list_empty() {
-        assert_eq!(string_to_list("".into()), Vec::<char>::new());
+        assert_eq!(string_to_list(String::new()), Vec::<char>::new());
     }
     #[test]
     fn test_to_list_unicode() {
@@ -1081,7 +1126,7 @@ mod tests {
     }
     #[test]
     fn test_trim_start_empty() {
-        assert_eq!(string_trim_start("".into()), "");
+        assert_eq!(string_trim_start(String::new()), "");
     }
 
     // string_trim_end
@@ -1103,7 +1148,7 @@ mod tests {
     }
     #[test]
     fn test_trim_end_empty() {
-        assert_eq!(string_trim_end("".into()), "");
+        assert_eq!(string_trim_end(String::new()), "");
     }
 
     // string_split — Go strings.Split parity
@@ -1116,15 +1161,24 @@ mod tests {
     }
     #[test]
     fn test_split_empty_sep_runes() {
-        assert_eq!(string_split("".into(), "abc".into()), vec!["a", "b", "c"]);
+        assert_eq!(
+            string_split(String::new(), "abc".into()),
+            vec!["a", "b", "c"]
+        );
     }
     #[test]
     fn test_split_empty_sep_unicode() {
-        assert_eq!(string_split("".into(), "héi".into()), vec!["h", "é", "i"]);
+        assert_eq!(
+            string_split(String::new(), "héi".into()),
+            vec!["h", "é", "i"]
+        );
     }
     #[test]
     fn test_split_empty_sep_empty_str() {
-        assert_eq!(string_split("".into(), "".into()), Vec::<String>::new());
+        assert_eq!(
+            string_split(String::new(), String::new()),
+            Vec::<String>::new()
+        );
     }
     #[test]
     fn test_split_trailing_sep() {
@@ -1160,15 +1214,19 @@ mod tests {
     }
 
     // string_to_float — Unicode-whitespace trim
+    // 1.5 and 1e3 are exactly representable IEEE 754 values; direct equality is correct.
     #[test]
+    #[allow(clippy::float_cmp)]
     fn test_to_float_plain() {
         assert!(matches!(string_to_float("1.5".into()), IpeMaybe::Just(v) if v == 1.5));
     }
     #[test]
+    #[allow(clippy::float_cmp)]
     fn test_to_float_trimmed() {
         assert!(matches!(string_to_float("  1.5\n".into()), IpeMaybe::Just(v) if v == 1.5));
     }
     #[test]
+    #[allow(clippy::float_cmp)]
     fn test_to_float_scientific() {
         assert!(matches!(string_to_float(" 1e3 ".into()), IpeMaybe::Just(v) if v == 1000.0));
     }

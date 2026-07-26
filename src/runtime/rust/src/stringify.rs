@@ -149,9 +149,9 @@ impl IpeStringify for f64 {
                     // Go's `%e` exponent: explicit sign, minimum two digits.
                     // i64 widen so `-exp` can't overflow for any i32.
                     let (sign, mag) = if exp < 0 {
-                        ('-', -(exp as i64))
+                        ('-', -i64::from(exp))
                     } else {
-                        ('+', exp as i64)
+                        ('+', i64::from(exp))
                     };
                     format!("{mantissa}e{sign}{mag:02}")
                 }
@@ -195,14 +195,14 @@ impl<T: IpeStringify + ?Sized> IpeStringify for Box<T> {
 impl<T: IpeStringify> IpeStringify for Vec<T> {
     // Go slice `%v`: `[a b c]` — space-separated, square brackets, empty -> `[]`.
     fn ipe_show(&self) -> String {
-        let parts: Vec<String> = self.iter().map(|x| x.ipe_show()).collect();
+        let parts: Vec<String> = self.iter().map(IpeStringify::ipe_show).collect();
         format!("[{}]", parts.join(" "))
     }
 }
 
 impl<T: IpeStringify> IpeStringify for [T] {
     fn ipe_show(&self) -> String {
-        let parts: Vec<String> = self.iter().map(|x| x.ipe_show()).collect();
+        let parts: Vec<String> = self.iter().map(IpeStringify::ipe_show).collect();
         format!("[{}]", parts.join(" "))
     }
 }
@@ -357,13 +357,13 @@ mod tests {
         // Positional class (exp in [-4, 6)):
         assert_eq!(99999.0f64.ipe_show(), "99999"); // exp 4
         assert_eq!(1e5f64.ipe_show(), "100000"); // exp 5
-        assert_eq!(999999.0f64.ipe_show(), "999999"); // exp 5 (lower guard)
-        assert_eq!(123456.789f64.ipe_show(), "123456.789");
+        assert_eq!(999_999.0_f64.ipe_show(), "999999"); // exp 5 (lower guard)
+        assert_eq!(123_456.789_f64.ipe_show(), "123456.789");
         assert_eq!(0.0001f64.ipe_show(), "0.0001"); // exp -4 boundary
         // Scientific class (exp >= 6) — these DISCRIMINATE 6 from 21:
         assert_eq!(1e6f64.ipe_show(), "1e+06"); // exp 6 — 21 would print "1000000"
-        assert_eq!(1000001.0f64.ipe_show(), "1.000001e+06"); // not a 1e6 special-case
-        assert_eq!(1234567.0f64.ipe_show(), "1.234567e+06");
+        assert_eq!(1_000_001.0_f64.ipe_show(), "1.000001e+06"); // not a 1e6 special-case
+        assert_eq!(1_234_567.0_f64.ipe_show(), "1.234567e+06");
         assert_eq!(1e15f64.ipe_show(), "1e+15"); // 21 would print 16 zeros
         assert_eq!(1e20f64.ipe_show(), "1e+20"); // 21 would print 21 digits
         assert_eq!(1e21f64.ipe_show(), "1e+21");

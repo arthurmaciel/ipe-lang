@@ -95,6 +95,7 @@ fn clean(path: &str) -> String {
 /// `Ipe.Path.base : String -> String` — Go `filepath.Base` (Unix).
 /// "" → "."; all-slashes → "/"; else the final element with trailing slashes
 /// stripped.
+#[must_use]
 pub fn path_base(path: String) -> String {
     if path.is_empty() {
         return ".".to_string();
@@ -122,6 +123,7 @@ pub fn path_base(path: String) -> String {
 /// `Ipe.Path.dir : String -> String` — Go `filepath.Dir` (Unix).
 /// All but the last element, then `Clean`ed: "" / "foo" → "."; "/" → "/";
 /// "/foo/bar" → "/foo"; "/foo/" → "/foo"; "a//b" → "a".
+#[must_use]
 pub fn path_dir(path: String) -> String {
     let b = path.as_bytes();
     let mut i = b.len();
@@ -136,6 +138,7 @@ pub fn path_dir(path: String) -> String {
 /// `Ipe.Path.ext : String -> String` — Go `filepath.Ext` (Unix).
 /// The suffix from the LAST `.` in the final path element (including the dot),
 /// or "" when the final element has no dot. `filepath.Ext(".bashrc")` → ".bashrc".
+#[must_use]
 pub fn path_ext(path: String) -> String {
     let b = path.as_bytes();
     let mut i = b.len();
@@ -152,6 +155,7 @@ pub fn path_ext(path: String) -> String {
 
 /// `Ipe.Path.isAbsolute : String -> Bool` — Go `filepath.IsAbs` (Unix):
 /// an absolute path begins with `/`.
+#[must_use]
 pub fn path_is_absolute(path: String) -> bool {
     path.as_bytes().first() == Some(&SEP)
 }

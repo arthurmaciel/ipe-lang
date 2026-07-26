@@ -157,7 +157,7 @@ fn allocate_sum_exact_for_various_splits() {
     for &(amt, places, n) in cases {
         let parts = money_allocate(places, n, d(amt));
         assert_eq!(
-            parts.len() as i64,
+            i64::try_from(parts.len()).expect("parts.len fits i64"),
             n,
             "allocate({amt}, {n}) must return {n} parts"
         );
@@ -211,7 +211,8 @@ fn money_add_and_format_golden() {
 
 fn rate_test_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    LOCK.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[test]

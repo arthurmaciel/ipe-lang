@@ -115,7 +115,7 @@ mod tests {
     fn string_ops() {
         assert_eq!(string_append("a".into(), "b".into()), "ab");
         assert_eq!(string_length("hello".into()), 5);
-        assert!(string_is_empty("".into()));
+        assert!(string_is_empty(String::new()));
     }
 
     #[test]

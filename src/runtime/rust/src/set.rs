@@ -10,17 +10,19 @@
 //! on the element type for any kernel; a Ipê-level reuse of a Set value is
 //! `.clone()`d at the use site by codegen, exactly like `HashMap`/`Vec`.
 //!
-//! Codegen: TypeRenderer renders `Set a` as `BTreeSet<a>`; the empty-set
+//! Codegen: `TypeRenderer` renders `Set a` as `BTreeSet<a>`; the empty-set
 //! turbofish (`EKSet`) pins `A` from the expected type, mirroring `dict_empty`.
 
 use std::collections::BTreeSet;
 
 /// `Set.empty : Set a`.
+#[must_use]
 pub fn set_empty<A>() -> BTreeSet<A> {
     BTreeSet::new()
 }
 
 /// `Set.fromList : List a -> Set a`. Duplicates collapse.
+#[must_use]
 pub fn set_from_list<A: Ord>(xs: Vec<A>) -> BTreeSet<A> {
     xs.into_iter().collect()
 }
@@ -44,17 +46,20 @@ pub fn set_member<A: Ord>(v: A, s: BTreeSet<A>) -> bool {
     s.contains(&v)
 }
 
-/// `Set.toList : Set a -> List a`. Sorted (BTreeSet iterates in order).
+/// `Set.toList : Set a -> List a`. Sorted (`BTreeSet` iterates in order).
+#[must_use]
 pub fn set_to_list<A>(s: BTreeSet<A>) -> Vec<A> {
     s.into_iter().collect()
 }
 
 /// `Set.size : Set a -> Int`.
+#[must_use]
 pub fn set_size<A>(s: BTreeSet<A>) -> i64 {
     s.len() as i64
 }
 
 /// `Set.union : Set a -> Set a -> Set a`. Every element of either set.
+#[must_use]
 pub fn set_union<A: Ord>(a: BTreeSet<A>, b: BTreeSet<A>) -> BTreeSet<A> {
     let mut a = a;
     a.extend(b);
@@ -62,16 +67,19 @@ pub fn set_union<A: Ord>(a: BTreeSet<A>, b: BTreeSet<A>) -> BTreeSet<A> {
 }
 
 /// `Set.intersect : Set a -> Set a -> Set a`. Elements in BOTH sets.
+#[must_use]
 pub fn set_intersect<A: Ord>(a: BTreeSet<A>, b: BTreeSet<A>) -> BTreeSet<A> {
     a.into_iter().filter(|x| b.contains(x)).collect()
 }
 
 /// `Set.diff : Set a -> Set a -> Set a`. Elements in `a` but NOT in `b`.
+#[must_use]
 pub fn set_diff<A: Ord>(a: BTreeSet<A>, b: BTreeSet<A>) -> BTreeSet<A> {
     a.into_iter().filter(|x| !b.contains(x)).collect()
 }
 
 /// `Set.isEmpty : Set a -> Bool`.
+#[must_use]
 pub fn set_is_empty<A>(s: BTreeSet<A>) -> bool {
     s.is_empty()
 }
