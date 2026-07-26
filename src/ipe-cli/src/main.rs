@@ -10,7 +10,7 @@ fn main() -> ExitCode {
         // An unknown command, or a per-command misuse, shows a full help page on
         // its own; the `ipe: ` prefix belongs to short diagnostics, not a help
         // screen. A command misuse leads with its own reason line before the page.
-        Err(err @ (ipe::CliError::UnknownCommand | ipe::CliError::CommandUsage { .. })) => {
+        Err(err @ (ipe::CliError::UnknownCommand { .. } | ipe::CliError::CommandUsage { .. })) => {
             eprintln!("{err}");
             ExitCode::FAILURE
         }

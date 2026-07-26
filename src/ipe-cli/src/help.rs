@@ -359,6 +359,13 @@ pub fn is_command(name: &str) -> bool {
     find(name).is_some()
 }
 
+/// Every known command name, in table order — the candidate set for suggesting
+/// a near-miss when an unknown command is typed.
+#[must_use]
+pub fn command_names() -> Vec<&'static str> {
+    COMMANDS.iter().map(|c| c.name).collect()
+}
+
 /// Render the top-level help screen for the given output stream.
 #[must_use]
 pub fn top_level(stream: &impl IsTerminal) -> String {

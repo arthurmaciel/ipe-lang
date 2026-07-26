@@ -59,7 +59,10 @@ pub enum CliError {
     /// No command, or an unrecognised one: the top-level help is shown and the
     /// process exits non-zero. Distinct from [`Self::Usage`] because it renders
     /// the full sectioned screen (coloured for a terminal) rather than a hint.
-    UnknownCommand,
+    ///
+    /// `attempted` is the token the user typed (empty when no command was
+    /// given); a near-miss to a known command is offered as a `maybe` hint.
+    UnknownCommand { attempted: String },
     /// Command-line / manifest misuse whose message must echo user-supplied
     /// input (e.g. an unrecognised `ipe.toml` value) — kept distinct from
     /// [`Self::Usage`] so no call site needs to leak a `String` into a
@@ -167,7 +170,15 @@ impl std::fmt::Display for CliError {
             Self::UsageOwned(hint) => write!(f, "{hint}"),
             // The top-level help, coloured for a terminal. Rendered against
             // stderr because misuse output goes to stderr.
-            Self::UnknownCommand => f.write_str(help::top_level(&std::io::stderr()).trim_start()),
+            Self::UnknownCommand { attempted } => {
+                if !attempted.is_empty() {
+                    writeln!(f, "unknown command `{attempted}`")?;
+                    if let Some(sugg) = nearest_command(attempted) {
+                        writeln!(f, "  = help: maybe `{sugg}`?")?;
+                    }
+                }
+                f.write_str(help::top_level(&std::io::stderr()).trim_start())
+            }
             Self::Io { path, source } => write!(f, "io error at {}: {source}", path.display()),
             Self::Pipeline { file, src, diag } => {
                 f.write_str(&render(diag, &file.to_string_lossy(), src))
@@ -1575,8 +1586,15 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
             with_help_on_misuse("version", run_version(rest))
         }
         // An unknown command is misuse: show the top-level help and fail. Unlike
-        // an explicit `--help`, this is not a request, so it exits non-zero.
-        _ => Err(CliError::UnknownCommand),
+        // an explicit `--help`, this is not a request, so it exits non-zero. The
+        // typed token is kept so a near-miss can be suggested; a bare `ipe`
+        // (no command) carries an empty token and just shows help.
+        Some((cmd, _)) => Err(CliError::UnknownCommand {
+            attempted: cmd.clone(),
+        }),
+        None => Err(CliError::UnknownCommand {
+            attempted: String::new(),
+        }),
     }
 }
 
@@ -2377,6 +2395,19 @@ pub fn explain_lookup(input: &str) -> Result<&'static str, CliError> {
         input: input.trim().to_owned(),
         suggestions: did_you_mean_codes(&canonical),
     })
+}
+
+/// The known command closest to `attempted` by Levenshtein distance, within a
+/// small edit threshold — the "maybe ...?" hint for a mistyped command. `None`
+/// when nothing is close enough, so a wildly different token gets only the help
+/// screen, not a misleading guess.
+fn nearest_command(attempted: &str) -> Option<&'static str> {
+    help::command_names()
+        .into_iter()
+        .map(|name| (levenshtein(attempted, name), name))
+        .filter(|&(dist, _)| dist <= 3)
+        .min_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)))
+        .map(|(_, name)| name)
 }
 
 /// The closest known codes to `canonical` (already upper-cased), ranked by
