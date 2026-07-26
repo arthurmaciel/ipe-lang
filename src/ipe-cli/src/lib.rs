@@ -139,7 +139,7 @@ pub enum CliError {
     PackageAudit(audit::Rejection),
     /// `ipe package publish` declined to proceed. Carries the typed
     /// [`publish::Refusal`] naming the precondition that failed (a dirty working
-    /// tree, an unpushed HEAD, an already-published version, or a missing token).
+    /// tree, an unpushed HEAD, or an already-published version).
     /// A publish precondition is a hard, typed refusal — never a warning — because
     /// a merged index entry must pin an immutable, reproducible revision.
     Publish(publish::Refusal),
