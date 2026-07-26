@@ -108,7 +108,6 @@ try {
         'run', '--rm',
         '--isolation', 'process',
         '--network', 'none',
-        '--read-only',
         '--memory', '512m',
         '--cpus', '1',
         '-v', $MountProbe,

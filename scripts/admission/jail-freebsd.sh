@@ -34,23 +34,36 @@ trap cleanup EXIT
 
 FIXTURE_ABS="$(realpath "$FIXTURE")"
 
-# Build jail root via nullfs read-only bind of the live system.
+# Pre-create mountpoint stubs BEFORE the ro nullfs covers them.
+# The JAIL_ROOT dir is empty at this point; mkdir succeeds.
+mkdir -p "${JAIL_ROOT}/scratch"
+mkdir -p "${JAIL_ROOT}/dev"
+
+# Mount the live system as read-only over JAIL_ROOT.
+# The stub dirs are shadowed but the mountpoints now exist in the VFS.
 mount -t nullfs -o ro / "${JAIL_ROOT}"
 
-# Writable scratch dir inside the jail.
-mkdir -p "${JAIL_ROOT}/scratch"
+# Mount writable scratch over the /scratch stub.
 mount -t nullfs -o rw "$SCRATCH_HOST" "${JAIL_ROOT}/scratch"
 
 # Minimal devfs.
-mkdir -p "${JAIL_ROOT}/dev"
 mount -t devfs devfs "${JAIL_ROOT}/dev"
 
 # Copy the fixture into the jail root at a fixed path.
-cp "$FIXTURE_ABS" "${JAIL_ROOT}/fixture.sh"
-chmod +x "${JAIL_ROOT}/fixture.sh"
+# /tmp inside the jail points to the real /tmp (ro), so use the
+# JAIL_ROOT directly from the host (which is not part of the nullfs tree).
+cp "$FIXTURE_ABS" "/tmp/admission-fixture-$$.sh"
+chmod +x "/tmp/admission-fixture-$$.sh"
+
+cleanup_fixture() { rm -f "/tmp/admission-fixture-$$.sh"; }
+trap 'cleanup_fixture; cleanup' EXIT
+
+# Bind the fixture into the jail via the scratch volume so we can reach it.
+cp "$FIXTURE_ABS" "${SCRATCH_HOST}/fixture.sh"
+chmod +x "${SCRATCH_HOST}/fixture.sh"
 
 # Run inside jail: no ip4/ip6, no raw socket, no sysvipc.
-# SCRATCH_DIR is passed via `exec.start` invoking env(1) before sh.
+# SCRATCH_DIR and the fixture path use /scratch which is rw inside.
 timeout "$TIMEOUT_SECS" \
     jail -c \
         path="${JAIL_ROOT}" \
@@ -60,4 +73,4 @@ timeout "$TIMEOUT_SECS" \
         allow.raw_sockets=0 \
         allow.sysvipc=0 \
         persist=0 \
-        exec.start="/usr/bin/env SCRATCH_DIR=/scratch /bin/sh /fixture.sh"
+        exec.start="/usr/bin/env SCRATCH_DIR=/scratch /bin/sh /scratch/fixture.sh"
