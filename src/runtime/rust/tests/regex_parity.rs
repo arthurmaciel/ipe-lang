@@ -1,7 +1,7 @@
 //! Go≡Rust parity fixtures for Ipe.Regex kernels.
 //!
 //! Every assertion mirrors the Go oracle in `runtime-go/rt/rt.go`
-//! (Regex_match / Regex_find / Regex_findAll / Regex_replace / Regex_split)
+//! (`Regex_match` / `Regex_find` / `Regex_findAll` / `Regex_replace` / `Regex_split`)
 //! which uses Go's `regexp` package — RE2 semantics.
 //!
 //! Divergence note: Go's `regexp` and Rust's `regex` crate are both
@@ -39,9 +39,9 @@ fn regex_match_golden() {
     // Go: Regex_match(`^[a-z]+$`, "Hello") = false (case-sensitive)
     assert!(!regex_match(r"^[a-z]+$".to_string(), "Hello".to_string()));
     // Go: Regex_match(`.+`, "") = false (empty string, needs at least one char)
-    assert!(!regex_match(r".+".to_string(), "".to_string()));
+    assert!(!regex_match(r".+".to_string(), String::new()));
     // Go: Regex_match(`.*`, "") = true (zero-or-more matches empty string)
-    assert!(regex_match(r".*".to_string(), "".to_string()));
+    assert!(regex_match(r".*".to_string(), String::new()));
     // Invalid pattern → false (Go: `_, _ := regexp.MatchString` returns false + err)
     assert!(
         !regex_match(r"[unclosed".to_string(), "x".to_string()),
@@ -143,7 +143,7 @@ fn regex_replace_golden() {
     );
     // Replace with empty string (deletion)
     assert_eq!(
-        regex_replace(r"\d+".to_string(), "".to_string(), "a1b22c".to_string()),
+        regex_replace(r"\d+".to_string(), String::new(), "a1b22c".to_string()),
         "abc"
     );
     // Invalid pattern → input unchanged (Go: `return s`)
@@ -208,7 +208,7 @@ fn regex_split_zero_width_matches_go() {
     // Go: Split("", "abc") — empty matches at 0,1,2,3; the position-0 field is
     // dropped → ["a", "b", "c"] (Rust's native Regex::split → ["", "a","b","c"]).
     assert_eq!(
-        regex_split("".to_string(), "abc".to_string()),
+        regex_split(String::new(), "abc".to_string()),
         vec!["a".to_string(), "b".to_string(), "c".to_string()],
         "empty-pattern split drops the leading zero-width field (Go parity)"
     );
@@ -238,19 +238,19 @@ fn regex_split_zero_width_matches_go() {
 #[test]
 fn regex_handles_empty_string_inputs() {
     // Go parity: operations on empty string must not panic
-    assert!(!regex_match(r"\d+".to_string(), "".to_string()));
+    assert!(!regex_match(r"\d+".to_string(), String::new()));
     assert_eq!(
-        regex_find(r"\d+".to_string(), "".to_string()),
+        regex_find(r"\d+".to_string(), String::new()),
         IpeMaybe::Nothing
     );
-    assert!(regex_find_all(r"\d+".to_string(), "".to_string()).is_empty());
+    assert!(regex_find_all(r"\d+".to_string(), String::new()).is_empty());
     assert_eq!(
-        regex_replace(r"\d+".to_string(), "X".to_string(), "".to_string()),
+        regex_replace(r"\d+".to_string(), "X".to_string(), String::new()),
         ""
     );
     assert_eq!(
-        regex_split(r"\d+".to_string(), "".to_string()),
-        vec!["".to_string()]
+        regex_split(r"\d+".to_string(), String::new()),
+        vec![String::new()]
     );
 }
 

@@ -26,21 +26,25 @@ fn color_to_css(c: &Color) -> String {
 // ── Element builders ──────────────────────────────────────────────────────────
 
 /// `Ui.none : Element msg`
+#[must_use]
 pub fn ui_none_<M>() -> Element<M> {
     Element::Empty
 }
 
 /// `Ui.text : String -> Element msg`
+#[must_use]
 pub fn ui_text_<M>(s: String) -> Element<M> {
     Element::Text(s)
 }
 
 /// `Ui.html : Html msg -> Element msg`
+#[must_use]
 pub fn ui_html_<M: Clone>(h: Html<M>) -> Element<M> {
     Element::Raw(h)
 }
 
 /// `Ui.el : List (Attribute msg) -> Element msg -> Element msg`
+#[must_use]
 pub fn ui_el_<M: Clone>(attrs: Vec<Attribute<M>>, ch: Element<M>) -> Element<M> {
     Element::Node(Description::NoDescription, attrs, vec![ch])
 }
@@ -49,6 +53,7 @@ pub fn ui_el_<M: Clone>(attrs: Vec<Attribute<M>>, ch: Element<M>) -> Element<M> 
 ///
 /// Prepends the `__row` row-direction marker matching `rowMarker` in
 /// `Std/Ui.ipe`.
+#[must_use]
 pub fn ui_row_<M: Clone>(attrs: Vec<Attribute<M>>, children: Vec<Element<M>>) -> Element<M> {
     let mut full = Vec::with_capacity(attrs.len() + 1);
     full.push(Attribute::AttrStyle("__row".to_owned(), "true".to_owned()));
@@ -60,6 +65,7 @@ pub fn ui_row_<M: Clone>(attrs: Vec<Attribute<M>>, children: Vec<Element<M>>) ->
 ///
 /// Prepends the `__col` column-direction marker matching `colMarker` in
 /// `Std/Ui.ipe`.
+#[must_use]
 pub fn ui_column_<M: Clone>(attrs: Vec<Attribute<M>>, children: Vec<Element<M>>) -> Element<M> {
     let mut full = Vec::with_capacity(attrs.len() + 1);
     full.push(Attribute::AttrStyle("__col".to_owned(), "true".to_owned()));
@@ -68,6 +74,7 @@ pub fn ui_column_<M: Clone>(attrs: Vec<Attribute<M>>, children: Vec<Element<M>>)
 }
 
 /// `Ui.wrappedRow : List (Attribute msg) -> List (Element msg) -> Element msg`
+#[must_use]
 pub fn ui_wrapped_row_<M: Clone>(
     attrs: Vec<Attribute<M>>,
     children: Vec<Element<M>>,
@@ -82,6 +89,7 @@ pub fn ui_wrapped_row_<M: Clone>(
 }
 
 /// `Ui.grid : List (Attribute msg) -> List (Element msg) -> Element msg`
+#[must_use]
 pub fn ui_grid_<M: Clone>(attrs: Vec<Attribute<M>>, children: Vec<Element<M>>) -> Element<M> {
     let mut full = Vec::with_capacity(attrs.len() + 1);
     full.push(Attribute::AttrStyle("__grid".to_owned(), "true".to_owned()));
@@ -123,6 +131,7 @@ pub fn ui_button_<M: Clone>(
 
 /// `Ui.link : List (Attribute msg) -> { url : String, label : Element msg } -> Element msg`
 /// Renders as `<a href=url>label</a>`.
+#[must_use]
 pub fn ui_link_<M: Clone>(attrs: Vec<Attribute<M>>, url: String, label: Element<M>) -> Element<M> {
     let mut full = Vec::with_capacity(attrs.len() + 1);
     full.push(Attribute::AttrAttribute("href".into(), url));
@@ -136,6 +145,7 @@ pub fn ui_link_<M: Clone>(attrs: Vec<Attribute<M>>, url: String, label: Element<
 /// Renders as `<img src=… alt=…>` (a void `TaggedNode`, no children) — mirrors
 /// the `../ipe` reference: `AttrAttribute "src" cfg.src :: AttrAttribute "alt"
 /// cfg.description :: attrs`.
+#[must_use]
 pub fn ui_image_<M: Clone>(
     attrs: Vec<Attribute<M>>,
     src: String,
@@ -151,11 +161,13 @@ pub fn ui_image_<M: Clone>(
 // ── Attribute builders ────────────────────────────────────────────────────────
 
 /// `Ui.spacing : Int -> Attribute msg`
+#[must_use]
 pub fn ui_spacing_<M>(n: i64) -> Attribute<M> {
     Attribute::AttrSpacing(n)
 }
 
 /// `Ui.padding : Int -> Attribute msg`  (uniform padding on all four sides)
+#[must_use]
 pub fn ui_padding_<M>(n: i64) -> Attribute<M> {
     // AttrPadding(top, right, bottom, left)
     Attribute::AttrPadding(n, n, n, n)
@@ -164,61 +176,73 @@ pub fn ui_padding_<M>(n: i64) -> Attribute<M> {
 /// `Ui.paddingXY : Int -> Int -> Attribute msg`
 ///
 /// `x` = left/right padding, `y` = top/bottom padding.
+#[must_use]
 pub fn ui_padding_xy_<M>(x: i64, y: i64) -> Attribute<M> {
     Attribute::AttrPadding(y, x, y, x)
 }
 
 /// `Ui.paddingEach : { top : Int, right : Int, bottom : Int, left : Int } -> Attribute msg`
+#[must_use]
 pub fn ui_padding_each_<M>(top: i64, right: i64, bottom: i64, left: i64) -> Attribute<M> {
     Attribute::AttrPadding(top, right, bottom, left)
 }
 
 /// `Ui.width : Length -> Attribute msg`
+#[must_use]
 pub fn ui_width_<M>(l: Length) -> Attribute<M> {
     Attribute::AttrWidth(l)
 }
 
 /// `Ui.height : Length -> Attribute msg`
+#[must_use]
 pub fn ui_height_<M>(l: Length) -> Attribute<M> {
     Attribute::AttrHeight(l)
 }
 
 /// `Ui.centerX : Attribute msg`
+#[must_use]
 pub fn ui_center_x_<M>() -> Attribute<M> {
     Attribute::AttrAlignX(HAlign::CenterX)
 }
 
 /// `Ui.centerY : Attribute msg`
+#[must_use]
 pub fn ui_center_y_<M>() -> Attribute<M> {
     Attribute::AttrAlignY(VAlign::CenterY)
 }
 
 /// `Ui.alignLeft : Attribute msg`
+#[must_use]
 pub fn ui_align_left_<M>() -> Attribute<M> {
     Attribute::AttrAlignX(HAlign::AlignLeft)
 }
 
 /// `Ui.alignRight : Attribute msg`
+#[must_use]
 pub fn ui_align_right_<M>() -> Attribute<M> {
     Attribute::AttrAlignX(HAlign::AlignRight)
 }
 
 /// `Ui.alignTop : Attribute msg`
+#[must_use]
 pub fn ui_align_top_<M>() -> Attribute<M> {
     Attribute::AttrAlignY(VAlign::AlignTop)
 }
 
 /// `Ui.alignBottom : Attribute msg`
+#[must_use]
 pub fn ui_align_bottom_<M>() -> Attribute<M> {
     Attribute::AttrAlignY(VAlign::AlignBottom)
 }
 
 /// `Ui.pointer : Attribute msg`
+#[must_use]
 pub fn ui_pointer_<M>() -> Attribute<M> {
     Attribute::AttrPointer
 }
 
 /// `Ui.clip : Attribute msg` — clip overflow on BOTH axes.
+#[must_use]
 pub fn ui_clip_<M>() -> Attribute<M> {
     Attribute::AttrOverflow("hidden".to_owned(), "hidden".to_owned())
 }
@@ -228,16 +252,19 @@ pub fn ui_clip_<M>() -> Attribute<M> {
 /// (unwanted scrollbar) when the other axis is `hidden`/`auto`/`scroll` — but
 /// NOT when it is `clip`. So `overflow-x:clip;overflow-y:visible` truly
 /// leaves Y visible (matches the `../ipe` reference exactly).
+#[must_use]
 pub fn ui_clip_x_<M>() -> Attribute<M> {
     Attribute::AttrOverflow("clip".to_owned(), "visible".to_owned())
 }
 
 /// `Ui.clipY : Attribute msg` — single-axis clip on Y; see [`ui_clip_x_`].
+#[must_use]
 pub fn ui_clip_y_<M>() -> Attribute<M> {
     Attribute::AttrOverflow("visible".to_owned(), "clip".to_owned())
 }
 
 /// `Ui.scrollbars : Attribute msg` — scrollbars on BOTH axes.
+#[must_use]
 pub fn ui_scrollbars_<M>() -> Attribute<M> {
     Attribute::AttrOverflow("auto".to_owned(), "auto".to_owned())
 }
@@ -245,17 +272,20 @@ pub fn ui_scrollbars_<M>() -> Attribute<M> {
 /// `Ui.scrollbarX : Attribute msg` — single-axis scroller. The off-axis is
 /// `hidden`, not `visible`: a `visible` off-axis gets promoted to `auto` by
 /// CSS (an unwanted second scrollbar). Matches the `../ipe` reference.
+#[must_use]
 pub fn ui_scrollbar_x_<M>() -> Attribute<M> {
     Attribute::AttrOverflow("auto".to_owned(), "hidden".to_owned())
 }
 
 /// `Ui.scrollbarY : Attribute msg` — single-axis scroller on Y; see
 /// [`ui_scrollbar_x_`].
+#[must_use]
 pub fn ui_scrollbar_y_<M>() -> Attribute<M> {
     Attribute::AttrOverflow("hidden".to_owned(), "auto".to_owned())
 }
 
 /// `Ui.gridColumns : Int -> Attribute msg`
+#[must_use]
 pub fn ui_grid_columns_<M>(n: i64) -> Attribute<M> {
     Attribute::AttrStyle("--ipe-grid-columns".to_owned(), n.to_string())
 }
@@ -263,46 +293,55 @@ pub fn ui_grid_columns_<M>(n: i64) -> Attribute<M> {
 // ── Length builders ───────────────────────────────────────────────────────────
 
 /// `Ui.px : Int -> Length`
+#[must_use]
 pub fn ui_px_(n: i64) -> Length {
     Length::Px(n)
 }
 
 /// `Ui.fill : Length`  (fill portion = 1)
+#[must_use]
 pub fn ui_fill_() -> Length {
     Length::Fill(1)
 }
 
 /// `Ui.content : Length`
+#[must_use]
 pub fn ui_content_() -> Length {
     Length::Content
 }
 
 /// `Ui.shrink : Length`  (alias for `Ui.content` in Ipê)
+#[must_use]
 pub fn ui_shrink_() -> Length {
     Length::Content
 }
 
 /// `Ui.fillPortion : Int -> Length`
+#[must_use]
 pub fn ui_fill_portion_(n: i64) -> Length {
     Length::Fill(n)
 }
 
 /// `Ui.vh : Int -> Length`
+#[must_use]
 pub fn ui_vh_(n: i64) -> Length {
     Length::Vh(n)
 }
 
 /// `Ui.vw : Int -> Length`
+#[must_use]
 pub fn ui_vw_(n: i64) -> Length {
     Length::Vw(n)
 }
 
 /// `Ui.minimum : Int -> Length -> Length`
+#[must_use]
 pub fn ui_minimum_(n: i64, l: Length) -> Length {
     Length::Min(n, Box::new(l))
 }
 
 /// `Ui.maximum : Int -> Length -> Length`
+#[must_use]
 pub fn ui_maximum_(n: i64, l: Length) -> Length {
     Length::Max(n, Box::new(l))
 }
@@ -310,31 +349,37 @@ pub fn ui_maximum_(n: i64, l: Length) -> Length {
 // ── Color builders ────────────────────────────────────────────────────────────
 
 /// `Ui.rgb : Int -> Int -> Int -> Color`  (alpha = 1.0)
+#[must_use]
 pub fn ui_rgb_(r: i64, g: i64, b: i64) -> Color {
     Color::Rgba(r, g, b, 1.0)
 }
 
 /// `Ui.rgba : Int -> Int -> Int -> Float -> Color`
+#[must_use]
 pub fn ui_rgba_(r: i64, g: i64, b: i64, a: f64) -> Color {
     Color::Rgba(r, g, b, a)
 }
 
 /// `Ui.white : Color`
+#[must_use]
 pub fn ui_white_() -> Color {
     Color::Rgba(255, 255, 255, 1.0)
 }
 
 /// `Ui.black : Color`
+#[must_use]
 pub fn ui_black_() -> Color {
     Color::Rgba(0, 0, 0, 1.0)
 }
 
 /// `Ui.transparent : Color`
+#[must_use]
 pub fn ui_transparent_() -> Color {
     Color::Rgba(0, 0, 0, 0.0)
 }
 
 /// `Ui.colorCss : Color -> String` — convert a `Color` to its CSS string.
+#[must_use]
 pub fn ui_color_css_(c: Color) -> String {
     color_to_css(&c)
 }
@@ -342,11 +387,13 @@ pub fn ui_color_css_(c: Color) -> String {
 // ── Background sub-module ─────────────────────────────────────────────────────
 
 /// `Background.color : Color -> Attribute msg`
+#[must_use]
 pub fn ui_background_color_<M>(c: Color) -> Attribute<M> {
     Attribute::AttrBgColor(c)
 }
 
 /// `Background.image : String -> Attribute msg`
+#[must_use]
 pub fn ui_background_image_<M>(s: String) -> Attribute<M> {
     Attribute::AttrBgImage(s)
 }
@@ -358,6 +405,7 @@ pub fn ui_background_image_<M>(s: String) -> Attribute<M> {
 /// `render.rs`'s `build_style_string`). Float formatting matches Go's
 /// `String.fromFloat` via the shared `string_from_float` kernel (parity with
 /// the `../ipe` reference's `String.fromFloat angle` / `String.fromFloat pct`).
+#[must_use]
 pub fn ui_background_linear_gradient_<M>(angle: f64, stops: Vec<(f64, Color)>) -> Attribute<M> {
     use crate::string::string_from_float;
     let joined = stops
@@ -374,21 +422,25 @@ pub fn ui_background_linear_gradient_<M>(angle: f64, stops: Vec<(f64, Color)>) -
 // ── Border sub-module ─────────────────────────────────────────────────────────
 
 /// `Border.width : Int -> Attribute msg`
+#[must_use]
 pub fn ui_border_width_<M>(n: i64) -> Attribute<M> {
     Attribute::AttrBorderWidth(n)
 }
 
 /// `Border.rounded : Int -> Attribute msg`
+#[must_use]
 pub fn ui_border_rounded_<M>(n: i64) -> Attribute<M> {
     Attribute::AttrBorderRounded(n)
 }
 
 /// `Border.color : Color -> Attribute msg`
+#[must_use]
 pub fn ui_border_color_<M>(c: Color) -> Attribute<M> {
     Attribute::AttrBorderColor(c)
 }
 
 /// `Border.widthEach : { top : Int, right : Int, bottom : Int, left : Int } -> Attribute msg`
+#[must_use]
 pub fn ui_border_width_each_<M>(top: i64, right: i64, bottom: i64, left: i64) -> Attribute<M> {
     Attribute::AttrBorderWidthEach(top, right, bottom, left)
 }
@@ -399,6 +451,7 @@ pub fn ui_border_width_each_<M>(top: i64, right: i64, bottom: i64, left: i64) ->
 /// the CSS `box-shadow: <ox>px <oy>px <blur>px <spread>px <colour>;` shape. Uses
 /// the dedicated `AttrBorderShadow` runtime variant (rendered in `render.rs`) so
 /// the colour flows through the same `color_css` boundary as `Border.color`.
+#[must_use]
 pub fn ui_border_shadow_<M>(
     horiz: i64,
     vert: i64,
@@ -416,6 +469,7 @@ pub fn ui_border_shadow_<M>(
 /// `box-shadow: 0px 0px <blur>px 0px <colour>` via the generic `AttrStyle`
 /// boundary (the colour flows through the same `color_to_css` conversion as
 /// `Border.color` / `Border.shadow`).
+#[must_use]
 pub fn ui_border_glow_<M>(blur: i64, c: Color) -> Attribute<M> {
     Attribute::AttrStyle(
         "box-shadow".into(),
@@ -429,6 +483,7 @@ pub fn ui_border_glow_<M>(blur: i64, c: Color) -> Attribute<M> {
 /// `box-shadow: inset <ox>px <oy>px <blur>px <spread>px <colour>;`. Uses the
 /// dedicated `AttrBorderInsetShadow` runtime variant (rendered in `render.rs`)
 /// so the colour flows through the same `color_css` boundary as `Border.color`.
+#[must_use]
 pub fn ui_border_inner_shadow_<M>(
     horiz: i64,
     vert: i64,
@@ -442,11 +497,13 @@ pub fn ui_border_inner_shadow_<M>(
 // ── Font sub-module ───────────────────────────────────────────────────────────
 
 /// `Font.size : Int -> Attribute msg`
+#[must_use]
 pub fn ui_font_size_<M>(n: i64) -> Attribute<M> {
     Attribute::AttrFontSize(n)
 }
 
 /// `Font.color : Color -> Attribute msg`
+#[must_use]
 pub fn ui_font_color_<M>(c: Color) -> Attribute<M> {
     Attribute::AttrFontColor(c)
 }
@@ -454,16 +511,19 @@ pub fn ui_font_color_<M>(c: Color) -> Attribute<M> {
 /// `Font.family : List String -> Attribute msg`
 ///
 /// Passes the font-family CSS value string through as-is.
+#[must_use]
 pub fn ui_font_family_<M>(family: String) -> Attribute<M> {
     Attribute::AttrFontFamily(family)
 }
 
 /// `Font.bold : Attribute msg`
+#[must_use]
 pub fn ui_font_bold_<M>() -> Attribute<M> {
     Attribute::AttrFontWeight(700)
 }
 
 /// `Font.italic : Attribute msg`
+#[must_use]
 pub fn ui_font_italic_<M>() -> Attribute<M> {
     Attribute::AttrFontItalic
 }
@@ -474,11 +534,13 @@ pub fn ui_font_italic_<M>() -> Attribute<M> {
 // `Std/Html.ipe` from source in Ipê-Rust.
 
 /// `Html.text : String -> Html msg`
+#[must_use]
 pub fn html_text_node_<M>(s: String) -> Html<M> {
     Html::HText(s)
 }
 
 /// `Html.raw : String -> Html msg`
+#[must_use]
 pub fn html_raw_node_<M>(s: String) -> Html<M> {
     Html::HRaw(s)
 }
@@ -491,6 +553,7 @@ pub fn html_raw_node_<M>(s: String) -> Html<M> {
 /// exactly once, HERE, so the `HRaw` it produces is already safe. The `<style>`
 /// render sink (`html::render_into_ctx`) strips again — defence in depth — so a
 /// `</style><script>` breakout in a `Ipe.Css` value cannot reach the DOM.
+#[must_use]
 pub fn html_style_node_<M>(attrs: Vec<crate::html::Attribute<M>>, css: String) -> Html<M> {
     Html::HElement(
         "style".to_owned(),
@@ -500,6 +563,7 @@ pub fn html_style_node_<M>(attrs: Vec<crate::html::Attribute<M>>, css: String) -
 }
 
 /// `Html.node : String -> List (Attribute msg) -> List (Html msg) -> Html msg`
+#[must_use]
 pub fn html_node_<M>(
     tag: String,
     attrs: Vec<crate::html::Attribute<M>>,
@@ -512,32 +576,38 @@ pub fn html_node_<M>(
 /// `!doctype-wrapper` pseudo-tag; `ipe_runtime::html::render_into_ctx`
 /// recognises that literal tag and emits `<!DOCTYPE html>` before the
 /// children directly (mirrors Go's `live.go:303-312`).
+#[must_use]
 pub fn html_doctype_<M>(children: Vec<Html<M>>) -> Html<M> {
     Html::HElement("!doctype-wrapper".to_owned(), Vec::new(), children)
 }
 
 /// `Html.titleNode : String -> Html msg` — wraps a raw string directly in
 /// `<title>` (`HElement "title" [] [HText s]`).
+#[must_use]
 pub fn html_title_node_<M>(s: String) -> Html<M> {
     Html::HElement("title".to_owned(), Vec::new(), vec![Html::HText(s)])
 }
 
 /// `Html.div (and header) : List (Attribute msg) -> List (Html msg) -> Html msg`
+#[must_use]
 pub fn html_div_<M>(attrs: Vec<crate::html::Attribute<M>>, children: Vec<Html<M>>) -> Html<M> {
     Html::HElement("div".to_owned(), attrs, children)
 }
 
 /// `Html.span : List (Attribute msg) -> List (Html msg) -> Html msg`
+#[must_use]
 pub fn html_span_<M>(attrs: Vec<crate::html::Attribute<M>>, children: Vec<Html<M>>) -> Html<M> {
     Html::HElement("span".to_owned(), attrs, children)
 }
 
 /// `Html.a (and link) : List (Attribute msg) -> List (Html msg) -> Html msg`
+#[must_use]
 pub fn html_a_<M>(attrs: Vec<crate::html::Attribute<M>>, children: Vec<Html<M>>) -> Html<M> {
     Html::HElement("a".to_owned(), attrs, children)
 }
 
 /// `Html.button : List (Attribute msg) -> List (Html msg) -> Html msg`
+#[must_use]
 pub fn html_button_<M>(attrs: Vec<crate::html::Attribute<M>>, children: Vec<Html<M>>) -> Html<M> {
     Html::HElement("button".to_owned(), attrs, children)
 }
@@ -549,16 +619,19 @@ pub fn html_button_<M>(attrs: Vec<crate::html::Attribute<M>>, children: Vec<Html
 /// per-tag kernel variants or use `html_node_` with an injected tag-name arg;
 /// `p` is the primary tag, the other tag names are not yet exercised by any
 /// test.
+#[must_use]
 pub fn html_p_<M>(attrs: Vec<crate::html::Attribute<M>>, children: Vec<Html<M>>) -> Html<M> {
     Html::HElement("p".to_owned(), attrs, children)
 }
 
 /// `Html.input : List (Attribute msg) -> Html msg`  (void element, no children)
+#[must_use]
 pub fn html_input_<M>(attrs: Vec<crate::html::Attribute<M>>) -> Html<M> {
     Html::HElement("input".to_owned(), attrs, vec![])
 }
 
 /// `Html.img (and other void elements) : List (Attribute msg) -> Html msg`
+#[must_use]
 pub fn html_img_<M>(attrs: Vec<crate::html::Attribute<M>>) -> Html<M> {
     Html::HElement("img".to_owned(), attrs, vec![])
 }
@@ -668,26 +741,31 @@ pub fn ui_on_file_<M>(f: std::sync::Arc<dyn Fn(String) -> M + Send + Sync>) -> A
 // Ui namespace — aspect-ratio
 
 /// `Ui.square : Attribute msg` — aspect-ratio 1 / 1.
+#[must_use]
 pub fn ui_square_<M>() -> Attribute<M> {
     Attribute::AttrStyle("aspect-ratio".into(), "1 / 1".into())
 }
 
 /// `Ui.widescreen : Attribute msg` — aspect-ratio 16 / 9.
+#[must_use]
 pub fn ui_widescreen_<M>() -> Attribute<M> {
     Attribute::AttrStyle("aspect-ratio".into(), "16 / 9".into())
 }
 
 /// `Ui.cinemascope : Attribute msg` — aspect-ratio 2.35 / 1 (anamorphic wide).
+#[must_use]
 pub fn ui_cinemascope_<M>() -> Attribute<M> {
     Attribute::AttrStyle("aspect-ratio".into(), "2.35 / 1".into())
 }
 
 /// `Ui.name : String -> Attribute msg` — HTML name= attribute (radio groups, form fields).
+#[must_use]
 pub fn ui_name_<M>(value: String) -> Attribute<M> {
     Attribute::AttrAttribute("name".into(), value)
 }
 
 /// `Ui.style : String -> String -> Attribute msg` — raw inline CSS property + value.
+#[must_use]
 pub fn ui_style_<M>(property: String, value: String) -> Attribute<M> {
     Attribute::AttrStyle(property, value)
 }
@@ -698,12 +776,14 @@ pub fn ui_style_<M>(property: String, value: String) -> Attribute<M> {
 /// `Transition.attribute`) auto-gates the rule behind
 /// `@media (prefers-reduced-motion: no-preference)` in the live style-injection
 /// pass; `False` (via `attributeUnsafe`) fires unconditionally.
+#[must_use]
 pub fn ui_transition_raw_<M>(shorthand: String, respect: bool) -> Attribute<M> {
     Attribute::AttrTransition(shorthand, respect)
 }
 
 /// `Ui.gridTracksRaw : String -> String -> Attribute msg` — CSS grid-template-columns
 /// (first arg) and grid-template-rows (second arg).  Pass `""` for either axis to skip it.
+#[must_use]
 pub fn ui_grid_tracks_raw_<M>(cols: String, rows: String) -> Attribute<M> {
     Attribute::AttrGridTracks(cols, rows)
 }
@@ -718,6 +798,7 @@ pub fn ui_grid_tracks_raw_<M>(cols: String, rows: String) -> Attribute<M> {
 /// ipe-id (so two `"fadeIn"`s with different keyframes don't collide), gates the
 /// rule behind `@media (prefers-reduced-motion: no-preference)` when `respect =
 /// True`, and validates the keyframes body through `sink_safe_keyframes_body`.
+#[must_use]
 pub fn ui_animate_raw_<M>(
     name: String,
     shorthand_tail: String,
@@ -728,16 +809,19 @@ pub fn ui_animate_raw_<M>(
 }
 
 /// `Ui.aspectRatio : Float -> Attribute msg`
+#[must_use]
 pub fn ui_aspect_ratio_<M>(r: f64) -> Attribute<M> {
     Attribute::AttrStyle("aspect-ratio".into(), format!("{r}"))
 }
 
 /// `Ui.aspectRatioWH : Int -> Int -> Attribute msg`
+#[must_use]
 pub fn ui_aspect_ratio_wh_<M>(w: i64, h: i64) -> Attribute<M> {
     Attribute::AttrStyle("aspect-ratio".into(), format!("{w} / {h}"))
 }
 
 /// `Ui.htmlAttribute : String -> String -> Attribute msg`
+#[must_use]
 pub fn ui_html_attribute_<M>(key: String, value: String) -> Attribute<M> {
     Attribute::AttrAttribute(key, value)
 }
@@ -745,6 +829,7 @@ pub fn ui_html_attribute_<M>(key: String, value: String) -> Attribute<M> {
 // Background pseudo-class colour attrs
 
 /// `Background.hoverColor : Color -> Attribute msg`
+#[must_use]
 pub fn ui_bg_hover_color_<M>(c: Color) -> Attribute<M> {
     Attribute::AttrPseudoRule(
         PseudoClass::Hover,
@@ -753,6 +838,7 @@ pub fn ui_bg_hover_color_<M>(c: Color) -> Attribute<M> {
 }
 
 /// `Background.focusColor : Color -> Attribute msg`
+#[must_use]
 pub fn ui_bg_focus_color_<M>(c: Color) -> Attribute<M> {
     Attribute::AttrPseudoRule(
         PseudoClass::FocusVisible,
@@ -761,6 +847,7 @@ pub fn ui_bg_focus_color_<M>(c: Color) -> Attribute<M> {
 }
 
 /// `Background.activeColor : Color -> Attribute msg`
+#[must_use]
 pub fn ui_bg_active_color_<M>(c: Color) -> Attribute<M> {
     Attribute::AttrPseudoRule(
         PseudoClass::Active,
@@ -769,6 +856,7 @@ pub fn ui_bg_active_color_<M>(c: Color) -> Attribute<M> {
 }
 
 /// `Background.disabledColor : Color -> Attribute msg`
+#[must_use]
 pub fn ui_bg_disabled_color_<M>(c: Color) -> Attribute<M> {
     Attribute::AttrPseudoRule(
         PseudoClass::Disabled,
@@ -779,16 +867,19 @@ pub fn ui_bg_disabled_color_<M>(c: Color) -> Attribute<M> {
 // Border namespace — style keywords (nullary)
 
 /// `Border.solid : Attribute msg`
+#[must_use]
 pub fn ui_border_solid_<M>() -> Attribute<M> {
     Attribute::AttrBorderStyle("solid".into())
 }
 
 /// `Border.dashed : Attribute msg`
+#[must_use]
 pub fn ui_border_dashed_<M>() -> Attribute<M> {
     Attribute::AttrBorderStyle("dashed".into())
 }
 
 /// `Border.dotted : Attribute msg`
+#[must_use]
 pub fn ui_border_dotted_<M>() -> Attribute<M> {
     Attribute::AttrBorderStyle("dotted".into())
 }
@@ -796,6 +887,7 @@ pub fn ui_border_dotted_<M>() -> Attribute<M> {
 // Border pseudo-class attrs
 
 /// `Border.hoverColor : Color -> Attribute msg`
+#[must_use]
 pub fn ui_border_hover_color_<M>(c: Color) -> Attribute<M> {
     Attribute::AttrPseudoRule(
         PseudoClass::Hover,
@@ -804,6 +896,7 @@ pub fn ui_border_hover_color_<M>(c: Color) -> Attribute<M> {
 }
 
 /// `Border.focusColor : Color -> Attribute msg`
+#[must_use]
 pub fn ui_border_focus_color_<M>(c: Color) -> Attribute<M> {
     Attribute::AttrPseudoRule(
         PseudoClass::FocusVisible,
@@ -812,6 +905,7 @@ pub fn ui_border_focus_color_<M>(c: Color) -> Attribute<M> {
 }
 
 /// `Border.activeColor : Color -> Attribute msg`
+#[must_use]
 pub fn ui_border_active_color_<M>(c: Color) -> Attribute<M> {
     Attribute::AttrPseudoRule(
         PseudoClass::Active,
@@ -820,11 +914,13 @@ pub fn ui_border_active_color_<M>(c: Color) -> Attribute<M> {
 }
 
 /// `Border.hoverWidth : Int -> Attribute msg`
+#[must_use]
 pub fn ui_border_hover_width_<M>(n: i64) -> Attribute<M> {
     Attribute::AttrPseudoRule(PseudoClass::Hover, format!("border-width:{n}px"))
 }
 
 /// `Border.hoverRounded : Int -> Attribute msg`
+#[must_use]
 pub fn ui_border_hover_rounded_<M>(n: i64) -> Attribute<M> {
     Attribute::AttrPseudoRule(PseudoClass::Hover, format!("border-radius:{n}px"))
 }
@@ -832,31 +928,37 @@ pub fn ui_border_hover_rounded_<M>(n: i64) -> Attribute<M> {
 // Font namespace — weight
 
 /// `Font.weight : Int -> Attribute msg`
+#[must_use]
 pub fn ui_font_weight_<M>(n: i64) -> Attribute<M> {
     Attribute::AttrFontWeight(n)
 }
 
 /// `Font.semiBold : Attribute msg` (weight 600)
+#[must_use]
 pub fn ui_font_semi_bold_<M>() -> Attribute<M> {
     Attribute::AttrFontWeight(600)
 }
 
 /// `Font.regular : Attribute msg` (weight 400)
+#[must_use]
 pub fn ui_font_regular_<M>() -> Attribute<M> {
     Attribute::AttrFontWeight(400)
 }
 
 /// `Font.light : Attribute msg` (weight 300)
+#[must_use]
 pub fn ui_font_light_<M>() -> Attribute<M> {
     Attribute::AttrFontWeight(300)
 }
 
 /// `Font.extraBold : Attribute msg` (weight 800)
+#[must_use]
 pub fn ui_font_extra_bold_<M>() -> Attribute<M> {
     Attribute::AttrFontWeight(800)
 }
 
 /// `Font.black : Attribute msg` (weight 900)
+#[must_use]
 pub fn ui_font_black_<M>() -> Attribute<M> {
     Attribute::AttrFontWeight(900)
 }
@@ -864,16 +966,19 @@ pub fn ui_font_black_<M>() -> Attribute<M> {
 // Font namespace — decoration
 
 /// `Font.underline : Attribute msg`
+#[must_use]
 pub fn ui_font_underline_<M>() -> Attribute<M> {
     Attribute::AttrFontUnderline
 }
 
 /// `Font.noDecoration : Attribute msg`
+#[must_use]
 pub fn ui_font_no_decoration_<M>() -> Attribute<M> {
     Attribute::AttrFontDecoration("none".into())
 }
 
 /// `Font.lineThrough : Attribute msg`
+#[must_use]
 pub fn ui_font_line_through_<M>() -> Attribute<M> {
     Attribute::AttrFontDecoration("line-through".into())
 }
@@ -881,11 +986,13 @@ pub fn ui_font_line_through_<M>() -> Attribute<M> {
 // Font namespace — spacing (Float → Attr)
 
 /// `Font.letterSpacing : Float -> Attribute msg`
+#[must_use]
 pub fn ui_font_letter_spacing_<M>(v: f64) -> Attribute<M> {
     Attribute::AttrFontLetterSpacing(v)
 }
 
 /// `Font.wordSpacing : Float -> Attribute msg`
+#[must_use]
 pub fn ui_font_word_spacing_<M>(v: f64) -> Attribute<M> {
     Attribute::AttrFontWordSpacing(v)
 }
@@ -893,26 +1000,31 @@ pub fn ui_font_word_spacing_<M>(v: f64) -> Attribute<M> {
 // Font namespace — text alignment (nullary)
 
 /// `Font.alignLeft : Attribute msg`
+#[must_use]
 pub fn ui_font_align_left_<M>() -> Attribute<M> {
     Attribute::AttrFontAlign("left".into())
 }
 
 /// `Font.alignRight : Attribute msg`
+#[must_use]
 pub fn ui_font_align_right_<M>() -> Attribute<M> {
     Attribute::AttrFontAlign("right".into())
 }
 
 /// `Font.alignCenter : Attribute msg`
+#[must_use]
 pub fn ui_font_align_center_<M>() -> Attribute<M> {
     Attribute::AttrFontAlign("center".into())
 }
 
 /// `Font.center : Attribute msg`
+#[must_use]
 pub fn ui_font_center_<M>() -> Attribute<M> {
     Attribute::AttrFontAlign("center".into())
 }
 
 /// `Font.justify : Attribute msg`
+#[must_use]
 pub fn ui_font_justify_<M>() -> Attribute<M> {
     Attribute::AttrFontAlign("justify".into())
 }
@@ -921,16 +1033,19 @@ pub fn ui_font_justify_<M>() -> Attribute<M> {
 // passed to Font.family)
 
 /// `Font.sansSerif : String`
+#[must_use]
 pub fn ui_font_sans_serif_() -> String {
     "sans-serif".into()
 }
 
 /// `Font.serif : String`
+#[must_use]
 pub fn ui_font_serif_() -> String {
     "serif".into()
 }
 
 /// `Font.monospace : String`
+#[must_use]
 pub fn ui_font_monospace_() -> String {
     "monospace".into()
 }
@@ -938,11 +1053,13 @@ pub fn ui_font_monospace_() -> String {
 // Font namespace — pseudo-class colour attrs
 
 /// `Font.hoverColor : Color -> Attribute msg`
+#[must_use]
 pub fn ui_font_hover_color_<M>(c: Color) -> Attribute<M> {
     Attribute::AttrPseudoRule(PseudoClass::Hover, format!("color:{}", color_to_css(&c)))
 }
 
 /// `Font.focusColor : Color -> Attribute msg`
+#[must_use]
 pub fn ui_font_focus_color_<M>(c: Color) -> Attribute<M> {
     Attribute::AttrPseudoRule(
         PseudoClass::FocusVisible,
@@ -951,16 +1068,19 @@ pub fn ui_font_focus_color_<M>(c: Color) -> Attribute<M> {
 }
 
 /// `Font.activeColor : Color -> Attribute msg`
+#[must_use]
 pub fn ui_font_active_color_<M>(c: Color) -> Attribute<M> {
     Attribute::AttrPseudoRule(PseudoClass::Active, format!("color:{}", color_to_css(&c)))
 }
 
 /// `Font.disabledColor : Color -> Attribute msg`
+#[must_use]
 pub fn ui_font_disabled_color_<M>(c: Color) -> Attribute<M> {
     Attribute::AttrPseudoRule(PseudoClass::Disabled, format!("color:{}", color_to_css(&c)))
 }
 
 /// `Font.hoverSize : Int -> Attribute msg`
+#[must_use]
 pub fn ui_font_hover_size_<M>(n: i64) -> Attribute<M> {
     Attribute::AttrPseudoRule(PseudoClass::Hover, format!("font-size:{n}px"))
 }
@@ -968,41 +1088,49 @@ pub fn ui_font_hover_size_<M>(n: i64) -> Attribute<M> {
 // ── Ipe.Ui.Region ────────────────────────────────────────────────────
 
 /// `Region.mainContent : Attribute msg`
+#[must_use]
 pub fn ui_region_main_content_<M>() -> Attribute<M> {
     Attribute::AttrDescribe(Description::DescMain)
 }
 
 /// `Region.navigation : Attribute msg`
+#[must_use]
 pub fn ui_region_navigation_<M>() -> Attribute<M> {
     Attribute::AttrDescribe(Description::DescNavigation)
 }
 
 /// `Region.footer : Attribute msg`
+#[must_use]
 pub fn ui_region_footer_<M>() -> Attribute<M> {
     Attribute::AttrDescribe(Description::DescContentInfo)
 }
 
 /// `Region.aside : Attribute msg`
+#[must_use]
 pub fn ui_region_aside_<M>() -> Attribute<M> {
     Attribute::AttrDescribe(Description::DescComplementary)
 }
 
 /// `Region.heading : Int -> Attribute msg`
+#[must_use]
 pub fn ui_region_heading_<M>(n: i64) -> Attribute<M> {
     Attribute::AttrDescribe(Description::DescHeading(n))
 }
 
 /// `Region.label : String -> Attribute msg`
+#[must_use]
 pub fn ui_region_label_<M>(s: String) -> Attribute<M> {
     Attribute::AttrDescribe(Description::DescLabel(s))
 }
 
 /// `Region.announce : Attribute msg`
+#[must_use]
 pub fn ui_region_announce_<M>() -> Attribute<M> {
     Attribute::AttrDescribe(Description::DescLivePolite)
 }
 
 /// `Region.announceUrgently : Attribute msg`
+#[must_use]
 pub fn ui_region_announce_urgently_<M>() -> Attribute<M> {
     Attribute::AttrDescribe(Description::DescLiveAssertive)
 }
@@ -1013,51 +1141,61 @@ pub fn ui_region_announce_urgently_<M>() -> Attribute<M> {
 ///
 /// Creates a real `<input>` void HTML element:
 /// `TaggedNode "input" NoDescription attrs []`
+#[must_use]
 pub fn ui_input_<M>(attrs: Vec<Attribute<M>>) -> Element<M> {
     Element::TaggedNode("input".into(), Description::NoDescription, attrs, vec![])
 }
 
 /// `Ui.describe : Description -> Attribute msg`
+#[must_use]
 pub fn ui_describe_<M>(d: Description) -> Attribute<M> {
     Attribute::AttrDescribe(d)
 }
 
 /// `Ui.descMain : Description`
+#[must_use]
 pub fn ui_desc_main_() -> Description {
     Description::DescMain
 }
 
 /// `Ui.descNavigation : Description`
+#[must_use]
 pub fn ui_desc_navigation_() -> Description {
     Description::DescNavigation
 }
 
 /// `Ui.descContentInfo : Description`
+#[must_use]
 pub fn ui_desc_content_info_() -> Description {
     Description::DescContentInfo
 }
 
 /// `Ui.descComplementary : Description`
+#[must_use]
 pub fn ui_desc_complementary_() -> Description {
     Description::DescComplementary
 }
 
 /// `Ui.descLivePolite : Description`
+#[must_use]
 pub fn ui_desc_live_polite_() -> Description {
     Description::DescLivePolite
 }
 
 /// `Ui.descLiveAssertive : Description`
+#[must_use]
 pub fn ui_desc_live_assertive_() -> Description {
     Description::DescLiveAssertive
 }
 
 /// `Ui.descHeading : Int -> Description`
+#[must_use]
 pub fn ui_desc_heading_(n: i64) -> Description {
     Description::DescHeading(n)
 }
 
 /// `Ui.descLabel : String -> Description`
+#[must_use]
 pub fn ui_desc_label_(s: String) -> Description {
     Description::DescLabel(s)
 }
@@ -1067,6 +1205,7 @@ pub fn ui_desc_label_(s: String) -> Description {
 /// Mirrors `paragraph` in `Std/Ui.ipe`: a `<p>`-tagged node carrying
 /// `DescParagraph` plus the `__paragraph` marker (matching `paragraphMarker`),
 /// so text children wrap as inline flow.
+#[must_use]
 pub fn ui_paragraph_<M: Clone>(attrs: Vec<Attribute<M>>, children: Vec<Element<M>>) -> Element<M> {
     let mut full = Vec::with_capacity(attrs.len() + 1);
     full.push(Attribute::AttrStyle(
@@ -1082,6 +1221,7 @@ pub fn ui_paragraph_<M: Clone>(attrs: Vec<Attribute<M>>, children: Vec<Element<M
 /// Mirrors `textColumn` in `Std/Ui.ipe`: a `<section>`-tagged block container
 /// with the `__textcolumn` marker (matching `textColumnMarker`), keeping each
 /// paragraph child on its own line with normal text flow.
+#[must_use]
 pub fn ui_text_column_<M: Clone>(
     attrs: Vec<Attribute<M>>,
     children: Vec<Element<M>>,
@@ -1103,6 +1243,7 @@ pub fn ui_text_column_<M: Clone>(
 // ── Form ─────────────────────────────────────────────────────────────────────
 
 /// `Ui.form : List (Attribute msg) -> List (Element msg) -> Element msg`
+#[must_use]
 pub fn ui_form_<M: Clone>(attrs: Vec<Attribute<M>>, children: Vec<Element<M>>) -> Element<M> {
     Element::TaggedNode(
         "form".to_owned(),
@@ -1189,31 +1330,37 @@ pub fn ui_on_submit_fixed_<M>(_msg: M) -> Attribute<M> {
 // ── Nearby attribute builders ────────────────────────────────────────────────
 
 /// `Ui.above : Element msg -> Attribute msg`
+#[must_use]
 pub fn ui_above_<M: Clone>(elem: Element<M>) -> Attribute<M> {
     Attribute::AttrNearby(Location::Above, elem)
 }
 
 /// `Ui.below : Element msg -> Attribute msg`
+#[must_use]
 pub fn ui_below_<M: Clone>(elem: Element<M>) -> Attribute<M> {
     Attribute::AttrNearby(Location::Below, elem)
 }
 
 /// `Ui.onLeft : Element msg -> Attribute msg`
+#[must_use]
 pub fn ui_on_left_<M: Clone>(elem: Element<M>) -> Attribute<M> {
     Attribute::AttrNearby(Location::OnLeft, elem)
 }
 
 /// `Ui.onRight : Element msg -> Attribute msg`
+#[must_use]
 pub fn ui_on_right_<M: Clone>(elem: Element<M>) -> Attribute<M> {
     Attribute::AttrNearby(Location::OnRight, elem)
 }
 
 /// `Ui.inFront : Element msg -> Attribute msg`
+#[must_use]
 pub fn ui_in_front_<M: Clone>(elem: Element<M>) -> Attribute<M> {
     Attribute::AttrNearby(Location::InFront, elem)
 }
 
 /// `Ui.behind : Element msg -> Attribute msg`
+#[must_use]
 pub fn ui_behind_<M: Clone>(elem: Element<M>) -> Attribute<M> {
     Attribute::AttrNearby(Location::Behind, elem)
 }
@@ -1243,31 +1390,37 @@ pub fn ui_behind_<M: Clone>(elem: Element<M>) -> Attribute<M> {
 // `ui_mobile_()` (no turbofish), so a non-generic fn is exactly what's needed.
 
 /// `Ui.mobile : String` — CSS media query `(max-width: 767px)`.
+#[must_use]
 pub fn ui_mobile_() -> String {
     "(max-width: 767px)".to_owned()
 }
 
 /// `Ui.tablet : String` — CSS media query `(min-width: 768px) and (max-width: 1023px)`.
+#[must_use]
 pub fn ui_tablet_() -> String {
     "(min-width: 768px) and (max-width: 1023px)".to_owned()
 }
 
 /// `Ui.desktop : String` — CSS media query `(min-width: 1024px)`.
+#[must_use]
 pub fn ui_desktop_() -> String {
     "(min-width: 1024px)".to_owned()
 }
 
 /// `Ui.darkMode : String` — CSS media query `(prefers-color-scheme: dark)`.
+#[must_use]
 pub fn ui_dark_mode_() -> String {
     "(prefers-color-scheme: dark)".to_owned()
 }
 
 /// `Ui.lightMode : String` — CSS media query `(prefers-color-scheme: light)`.
+#[must_use]
 pub fn ui_light_mode_() -> String {
     "(prefers-color-scheme: light)".to_owned()
 }
 
 /// `Ui.reducedMotion : String` — CSS media query `(prefers-reduced-motion: reduce)`.
+#[must_use]
 pub fn ui_reduced_motion_() -> String {
     "(prefers-reduced-motion: reduce)".to_owned()
 }
@@ -1281,27 +1434,32 @@ pub fn ui_reduced_motion_() -> String {
 // type (`ipe_runtime::ui::element::PseudoClass`), not a stand-in.
 
 /// `Ui.hover : PseudoClass`
+#[must_use]
 pub fn ui_hover_() -> PseudoClass {
     PseudoClass::Hover
 }
 
 /// `Ui.focus : PseudoClass`
+#[must_use]
 pub fn ui_focus_() -> PseudoClass {
     PseudoClass::Focus
 }
 
 /// `Ui.focusVisible : PseudoClass`
+#[must_use]
 pub fn ui_focus_visible_() -> PseudoClass {
     PseudoClass::FocusVisible
 }
 
 /// `Ui.active : PseudoClass`
+#[must_use]
 pub fn ui_active_() -> PseudoClass {
     PseudoClass::Active
 }
 
 /// `Ui.disabled : PseudoClass` — distinct from the unrelated
 /// `Attr.disabled : Bool -> Attribute msg` (HTML boolean attribute).
+#[must_use]
 pub fn ui_disabled_() -> PseudoClass {
     PseudoClass::Disabled
 }
@@ -1316,6 +1474,7 @@ pub fn ui_disabled_() -> PseudoClass {
 /// here so both paths render through the identical collector + the
 /// `data-ipe-pc-rules` marker consumed by
 /// `ipe_runtime::live::style_inject::build_pc`.
+#[must_use]
 pub fn ui_on_pseudo_<M: Clone>(pc: PseudoClass, attrs: Vec<Attribute<M>>) -> Attribute<M> {
     Attribute::AttrPseudoRule(pc, super::render::build_style_string(&attrs))
 }
@@ -1345,6 +1504,7 @@ pub fn ui_on_pseudo_<M: Clone>(pc: PseudoClass, attrs: Vec<Attribute<M>>) -> Att
 /// emitted (stable DOM shape for the Live diff) but carries no marker attrs,
 /// so no `<style>` block is ever built.  `build_mq`'s `strip_style_close` at
 /// the sink stays as defence-in-depth, not the primary gate.
+#[must_use]
 pub fn ui_media_query_<M: Clone>(
     query: String,
     attrs: Vec<Attribute<M>>,
@@ -1372,6 +1532,7 @@ pub fn ui_media_query_<M: Clone>(
 /// query `String` in this port, `breakpointToQuery` is the identity — so
 /// this is a direct delegation to [`ui_media_query_`] (which also applies
 /// the `SafeCssMediaQuery` gate; the named constants above all pass it).
+#[must_use]
 pub fn ui_breakpoint_<M: Clone>(
     query: String,
     attrs: Vec<Attribute<M>>,

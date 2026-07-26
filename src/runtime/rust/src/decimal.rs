@@ -5,7 +5,7 @@
 use super::IpeResult;
 use rust_decimal::{Decimal as RD, prelude::FromPrimitive};
 
-/// Opaque Ipê `Decimal` — newtype around rust_decimal::Decimal.
+/// Opaque Ipê `Decimal` — newtype around `rust_decimal::Decimal`.
 #[derive(
     Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, serde::Serialize, serde::Deserialize,
 )]
@@ -17,21 +17,25 @@ use std::str::FromStr;
 
 // Constructors
 
+#[must_use]
 pub fn decimal_from_string<E: From<String>>(s: String) -> IpeResult<E, Decimal> {
     match RD::from_str(&s) {
         Ok(d) => IpeResult::Ok(Decimal(d)),
-        Err(e) => IpeResult::Err(format!("Ipe.Decimal: parse: {}", e).into()),
+        Err(e) => IpeResult::Err(format!("Ipe.Decimal: parse: {e}").into()),
     }
 }
+#[must_use]
 pub fn decimal_from_int(n: i64) -> Decimal {
     Decimal(RD::from(n))
 }
+#[must_use]
 pub fn decimal_from_float(f: f64) -> Decimal {
     Decimal(RD::from_f64(f).unwrap_or(RD::ZERO))
 }
 // Ipe.Decimal.fromMinor places minor  (e.g. fromMinor 2 12345 -> 123.45).
 // Arg order is (places, minor): places is the scale, minor is the integer
 // value in minor units. Mantissa = minor, scale = places.
+#[must_use]
 pub fn decimal_from_minor(places: i64, minor: i64) -> Decimal {
     // rust_decimal's MAX_SCALE is 28; `RD::new` PANICS above it. Clamp the
     // user-supplied scale and use the checked constructor so a well-typed Ipê
@@ -39,29 +43,34 @@ pub fn decimal_from_minor(places: i64, minor: i64) -> Decimal {
     // Clamp on i64 FIRST, then narrow: `as u32` on an i64 >= 2^32 truncates
     // (wraps) BEFORE any u32-domain `.min`, so a huge scale could alias to a
     // small wrong value. Clamping in i64 makes the narrowing monotonic.
-    let scale = places.clamp(0, RD::MAX_SCALE as i64) as u32;
+    let scale = places.clamp(0, i64::from(RD::MAX_SCALE)) as u32;
     Decimal(RD::try_new(minor, scale).unwrap_or(RD::ZERO))
 }
+#[must_use]
 pub fn decimal_zero() -> Decimal {
     Decimal(RD::ZERO)
 }
+#[must_use]
 pub fn decimal_one() -> Decimal {
     Decimal(RD::ONE)
 }
+#[must_use]
 pub fn decimal_one_hundred() -> Decimal {
     Decimal(RD::from(100))
 }
 
 // Conversions
 
+#[must_use]
 pub fn decimal_to_string(d: Decimal) -> String {
     d.0.normalize().to_string()
 }
+#[must_use]
 pub fn decimal_to_string_fixed(places: i64, d: Decimal) -> String {
     // Clamp to MAX_SCALE: digits beyond the decimal's max scale are all zeros,
     // so a huge `places` (e.g. 1e9) would only force a multi-GB allocation for
     // trailing zeros. Cap the format width to keep the kernel bounded.
-    let p = places.clamp(0, RD::MAX_SCALE as i64) as u32;
+    let p = places.clamp(0, i64::from(RD::MAX_SCALE)) as u32;
     // Go oracle: shopspring StringFixed calls Round (half-away-from-zero), NOT
     // RoundBank (banker's).  Use MidpointAwayFromZero to match Go byte-for-byte
     // at tie values (e.g. "2.545" at 2 dp → "2.55" in Go).
@@ -69,9 +78,11 @@ pub fn decimal_to_string_fixed(places: i64, d: Decimal) -> String {
         d.0.round_dp_with_strategy(p, RoundingStrategy::MidpointAwayFromZero);
     format!("{:.*}", p as usize, r)
 }
+#[must_use]
 pub fn decimal_to_float(d: Decimal) -> f64 {
     d.0.to_f64().unwrap_or(0.0)
 }
+#[must_use]
 pub fn decimal_to_int(d: Decimal) -> i64 {
     // Saturate at the i64 boundary on out-of-range: `to_i64` returns None for a
     // magnitude beyond ±i64, so `unwrap_or(0)` would map a huge value to 0.
@@ -81,10 +92,11 @@ pub fn decimal_to_int(d: Decimal) -> i64 {
         i64::MAX
     })
 }
+#[must_use]
 pub fn decimal_to_minor(scale: i64, d: Decimal) -> i64 {
     // Clamp on i64 FIRST, then narrow (see decimal_from_minor): a bare
     // `as u32` truncates an i64 >= 2^32 before any clamp.
-    let p = scale.clamp(0, RD::MAX_SCALE as i64) as u32;
+    let p = scale.clamp(0, i64::from(RD::MAX_SCALE)) as u32;
     // `10_i64.pow(19)` overflows i64 → panic (debug) / wrap (release). Use
     // checked_pow with a saturating fallback so the kernel stays total.
     let factor = 10_i64.checked_pow(p).unwrap_or(i64::MAX);
@@ -115,6 +127,7 @@ pub fn decimal_to_minor(scale: i64, d: Decimal) -> i64 {
 // overflow; the Go oracle (shopspring/big.Int-backed) never overflows.
 // On overflow we saturate toward the mathematically correct signed extreme
 // rather than panicking — documented divergence only at values near ±7.9e28.
+#[must_use]
 pub fn decimal_add(a: Decimal, b: Decimal) -> Decimal {
     Decimal(a.0.checked_add(b.0).unwrap_or_else(|| {
         if a.0.is_sign_negative() && b.0.is_sign_negative() {
@@ -124,6 +137,7 @@ pub fn decimal_add(a: Decimal, b: Decimal) -> Decimal {
         }
     }))
 }
+#[must_use]
 pub fn decimal_sub(a: Decimal, b: Decimal) -> Decimal {
     Decimal(a.0.checked_sub(b.0).unwrap_or_else(|| {
         // a - b overflows positive when a is very large positive and b very negative
@@ -134,6 +148,7 @@ pub fn decimal_sub(a: Decimal, b: Decimal) -> Decimal {
         }
     }))
 }
+#[must_use]
 pub fn decimal_mul(a: Decimal, b: Decimal) -> Decimal {
     Decimal(a.0.checked_mul(b.0).unwrap_or_else(|| {
         // result sign = sign(a) XOR sign(b)
@@ -144,6 +159,7 @@ pub fn decimal_mul(a: Decimal, b: Decimal) -> Decimal {
         }
     }))
 }
+#[must_use]
 pub fn decimal_div<E: From<String>>(a: Decimal, b: Decimal) -> IpeResult<E, Decimal> {
     if b.0.is_zero() {
         return IpeResult::Err("Ipe.Decimal: divide by zero".to_string().into());
@@ -168,6 +184,7 @@ pub fn decimal_div<E: From<String>>(a: Decimal, b: Decimal) -> IpeResult<E, Deci
         quotient.round_dp_with_strategy(16, RoundingStrategy::MidpointAwayFromZero),
     ))
 }
+#[must_use]
 pub fn decimal_mod<E: From<String>>(a: Decimal, b: Decimal) -> IpeResult<E, Decimal> {
     if b.0.is_zero() {
         return IpeResult::Err("Ipe.Decimal: mod by zero".to_string().into());
@@ -176,38 +193,46 @@ pub fn decimal_mod<E: From<String>>(a: Decimal, b: Decimal) -> IpeResult<E, Deci
     // Post zero-guard, `None` is overflow → 0 (a sound saturating remainder).
     IpeResult::Ok(Decimal(a.0.checked_rem(b.0).unwrap_or(RD::ZERO)))
 }
+#[must_use]
 pub fn decimal_neg(d: Decimal) -> Decimal {
     Decimal(-d.0)
 }
+#[must_use]
 pub fn decimal_abs(d: Decimal) -> Decimal {
     Decimal(d.0.abs())
 }
 
 // Rounding / truncation
 
+#[must_use]
 pub fn decimal_round(places: i64, d: Decimal) -> Decimal {
     // Clamp on i64 first, then narrow: a bare `as u32` truncates an i64 >= 2^32
     // to a small wrong value. round_dp beyond MAX_SCALE is a no-op anyway.
-    let p = places.clamp(0, RD::MAX_SCALE as i64) as u32;
+    let p = places.clamp(0, i64::from(RD::MAX_SCALE)) as u32;
     Decimal(d.0.round_dp_with_strategy(p, RoundingStrategy::MidpointNearestEven))
 }
+#[must_use]
 pub fn decimal_round_half_up(places: i64, d: Decimal) -> Decimal {
-    let p = places.clamp(0, RD::MAX_SCALE as i64) as u32;
+    let p = places.clamp(0, i64::from(RD::MAX_SCALE)) as u32;
     Decimal(d.0.round_dp_with_strategy(p, RoundingStrategy::MidpointAwayFromZero))
 }
+#[must_use]
 pub fn decimal_truncate(places: i64, d: Decimal) -> Decimal {
-    let p = places.clamp(0, RD::MAX_SCALE as i64) as u32;
+    let p = places.clamp(0, i64::from(RD::MAX_SCALE)) as u32;
     Decimal(d.0.round_dp_with_strategy(p, RoundingStrategy::ToZero))
 }
+#[must_use]
 pub fn decimal_floor(d: Decimal) -> Decimal {
     Decimal(d.0.floor())
 }
+#[must_use]
 pub fn decimal_ceil(d: Decimal) -> Decimal {
     Decimal(d.0.ceil())
 }
 
 // Comparison
 
+#[must_use]
 pub fn decimal_compare(a: Decimal, b: Decimal) -> i64 {
     use std::cmp::Ordering;
     match a.0.cmp(&b.0) {
@@ -220,55 +245,69 @@ pub fn decimal_compare(a: Decimal, b: Decimal) -> i64 {
 // Ipe.Decimal completion (15 kernels)
 
 // === Bool comparisons ===
+#[must_use]
 pub fn decimal_eq(a: Decimal, b: Decimal) -> bool {
     a.0 == b.0
 }
+#[must_use]
 pub fn decimal_neq(a: Decimal, b: Decimal) -> bool {
     a.0 != b.0
 }
+#[must_use]
 pub fn decimal_lt(a: Decimal, b: Decimal) -> bool {
     a.0 < b.0
 }
+#[must_use]
 pub fn decimal_lte(a: Decimal, b: Decimal) -> bool {
     a.0 <= b.0
 }
+#[must_use]
 pub fn decimal_gt(a: Decimal, b: Decimal) -> bool {
     a.0 > b.0
 }
+#[must_use]
 pub fn decimal_gte(a: Decimal, b: Decimal) -> bool {
     a.0 >= b.0
 }
 
 // === min / max ===
+#[must_use]
 pub fn decimal_min(a: Decimal, b: Decimal) -> Decimal {
     if a.0 <= b.0 { a } else { b }
 }
+#[must_use]
 pub fn decimal_max(a: Decimal, b: Decimal) -> Decimal {
     if a.0 >= b.0 { a } else { b }
 }
 
 // === sign predicates ===
+#[must_use]
 pub fn decimal_is_zero(d: Decimal) -> bool {
     d.0.is_zero()
 }
+#[must_use]
 pub fn decimal_is_positive(d: Decimal) -> bool {
     d.0 > RD::ZERO
 }
+#[must_use]
 pub fn decimal_is_negative(d: Decimal) -> bool {
     d.0 < RD::ZERO
 }
 
 // === percent ===
 // Use the saturating helpers so an extreme pct/base combo doesn't panic.
+#[must_use]
 pub fn decimal_percent_of(pct: Decimal, of_: Decimal) -> Decimal {
     decimal_div_raw(decimal_mul(pct, of_), Decimal(RD::from(100)))
 }
+#[must_use]
 pub fn decimal_add_percent(pct: Decimal, base: Decimal) -> Decimal {
     decimal_add(
         base,
         decimal_div_raw(decimal_mul(pct, base), Decimal(RD::from(100))),
     )
 }
+#[must_use]
 pub fn decimal_sub_percent(pct: Decimal, base: Decimal) -> Decimal {
     decimal_sub(
         base,
@@ -295,11 +334,12 @@ fn decimal_div_raw(a: Decimal, b: Decimal) -> Decimal {
 
 // === formatWith — Ipê source: formatWith thousandsSep decimalSep places d ===
 // (group every 3 digits right-to-left)
+#[must_use]
 pub fn decimal_format_with(grp_sep: String, dec_sep: String, places: i64, d: Decimal) -> String {
     // Clamp to MAX_SCALE: digits past the decimal's max scale are zeros anyway,
     // so a huge `places` only inflates the format-width allocation (DoS) without
     // adding precision.
-    let p = places.clamp(0, RD::MAX_SCALE as i64) as u32;
+    let p = places.clamp(0, i64::from(RD::MAX_SCALE)) as u32;
     // Go oracle: formatWith calls StringFixed which uses Round (half-away-from-
     // zero), NOT RoundBank (banker's).  Use MidpointAwayFromZero so tie values
     // (e.g. "2.545" at 2 dp → "2.55") match Go byte-for-byte.
@@ -328,9 +368,9 @@ pub fn decimal_format_with(grp_sep: String, dec_sep: String, places: i64, d: Dec
     let grouped: String = grouped_rev.chars().rev().collect();
     let sign = if neg { "-" } else { "" };
     if p == 0 {
-        format!("{}{}", sign, grouped)
+        format!("{sign}{grouped}")
     } else {
-        format!("{}{}{}{}", sign, grouped, dec_sep, frac_part)
+        format!("{sign}{grouped}{dec_sep}{frac_part}")
     }
 }
 
@@ -360,7 +400,7 @@ mod tests {
         assert_eq!(
             decimal_to_string(match div {
                 IpeResult::Ok(v) => v,
-                _ => panic!(),
+                IpeResult::Err(_) => panic!(),
             }),
             "2.5"
         );
@@ -442,7 +482,7 @@ mod tests {
         );
         // Zero places, no grouping
         assert_eq!(
-            decimal_format_with("".to_string(), ".".to_string(), 0, d("12345")),
+            decimal_format_with(String::new(), ".".to_string(), 0, d("12345")),
             "12345"
         );
         // European convention: ',' decimal, '.' grouping

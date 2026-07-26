@@ -10,36 +10,44 @@
 //!   ceil   : Float -> Int
 //!   round  : Float -> Int
 
+#[must_use]
 pub fn math_pi() -> f64 {
     std::f64::consts::PI
 }
+#[must_use]
 pub fn math_e() -> f64 {
     std::f64::consts::E
 }
 /// Golden ratio φ = (1 + √5) / 2 ≈ 1.6180339887…
-/// (std::f64::consts::PHI is nightly-only; use the literal for stable Rust.)
+/// (`std::f64::consts::PHI` is nightly-only; use the literal for stable Rust.)
+#[must_use]
 pub fn math_phi() -> f64 {
     1.618_033_988_749_895_f64
 }
 /// √2 ≈ 1.4142135623…
+#[must_use]
 pub fn math_sqrt2() -> f64 {
     std::f64::consts::SQRT_2
 }
 /// Positive infinity (IEEE 754).
+#[must_use]
 pub fn math_inf() -> f64 {
     f64::INFINITY
 }
 /// Not-a-number (IEEE 754). Note: NaN ≠ NaN by IEEE 754.
+#[must_use]
 pub fn math_nan() -> f64 {
     f64::NAN
 }
 
 /// Returns `true` if `x` is NaN (IEEE 754).  Ipê `Math.isNaN : Float -> Bool`.
+#[must_use]
 pub fn math_is_nan(x: f64) -> bool {
     x.is_nan()
 }
 
 /// Saturates `i64::MIN` to `i64::MAX` (no-panic rule: `-i64::MIN` is not representable).
+#[must_use]
 pub fn math_abs(x: i64) -> i64 {
     x.checked_abs().unwrap_or(i64::MAX)
 }
@@ -69,16 +77,19 @@ pub fn math_abs(x: i64) -> i64 {
 ///
 /// For every other `(a, b)` pair the result is identical to `a / b` (truncate
 /// toward zero — Go spec, Elm spec, Rust `wrapping_div` all agree).
+///
+/// # Panics
+///
+/// Panics when `b == 0`, mirroring the Ipê integer division-by-zero abort.
 //
 // `clippy::panic` is suppressed here deliberately: this panic IS the
 // DivisionByZero abort that Ipê-Go models. The lint exists to prevent
 // accidental panics; this is a classified, tested, intentional one. The
 // `intdiv_by_zero_aborts_exit_101` golden verifies exit 101 / empty stdout.
 #[allow(clippy::panic)]
+#[must_use]
 pub fn ipe_int_div(a: i64, b: i64) -> i64 {
-    if b == 0 {
-        panic!("attempt to divide by zero");
-    }
+    assert!(b != 0, "attempt to divide by zero");
     a.wrapping_div(b)
 }
 
@@ -95,9 +106,11 @@ pub fn math_max<T: PartialOrd>(a: T, b: T) -> T {
     if a >= b { a } else { b }
 }
 
+#[must_use]
 pub fn math_sqrt(x: f64) -> f64 {
     x.sqrt()
 }
+#[must_use]
 pub fn math_pow(base: f64, exp: f64) -> f64 {
     base.powf(exp)
 }
@@ -108,84 +121,108 @@ pub fn math_pow(base: f64, exp: f64) -> f64 {
 // the deliberate contract; Go's `int64(math.Floor(x))` on the same extreme inputs
 // is implementation-defined (not a well-defined parity target), so we pin the
 // safe saturating behaviour rather than chase undefined Go output.
+#[must_use]
 pub fn math_floor(x: f64) -> i64 {
     x.floor() as i64
 }
+#[must_use]
 pub fn math_ceil(x: f64) -> i64 {
     x.ceil() as i64
 }
 
 /// Ipê `round : Float -> Int` — half-away-from-zero (Go's `math.Round` semantics
 /// match this). Rust's `f64::round` also goes half-away-from-zero, so we just cast.
+#[must_use]
 pub fn math_round(x: f64) -> i64 {
     x.round() as i64
 }
+#[must_use]
 pub fn math_trunc(x: f64) -> i64 {
     x.trunc() as i64
 }
 
 // Exponential / logarithmic (Ipe.Math: exp, exp2, log [natural], log2, log10).
+#[must_use]
 pub fn math_exp(x: f64) -> f64 {
     x.exp()
 }
+#[must_use]
 pub fn math_exp2(x: f64) -> f64 {
     x.exp2()
 }
+#[must_use]
 pub fn math_log(x: f64) -> f64 {
     x.ln()
 }
+#[must_use]
 pub fn math_log2(x: f64) -> f64 {
     x.log2()
 }
+#[must_use]
 pub fn math_log10(x: f64) -> f64 {
     x.log10()
 }
+#[must_use]
 pub fn math_cbrt(x: f64) -> f64 {
     x.cbrt()
 }
+#[must_use]
 pub fn math_hypot(a: f64, b: f64) -> f64 {
     a.hypot(b)
 }
 
 // Trigonometric.
+#[must_use]
 pub fn math_sin(x: f64) -> f64 {
     x.sin()
 }
+#[must_use]
 pub fn math_cos(x: f64) -> f64 {
     x.cos()
 }
+#[must_use]
 pub fn math_tan(x: f64) -> f64 {
     x.tan()
 }
+#[must_use]
 pub fn math_asin(x: f64) -> f64 {
     x.asin()
 }
+#[must_use]
 pub fn math_acos(x: f64) -> f64 {
     x.acos()
 }
+#[must_use]
 pub fn math_atan(x: f64) -> f64 {
     x.atan()
 }
+#[must_use]
 pub fn math_atan2(y: f64, x: f64) -> f64 {
     y.atan2(x)
 }
 
 // Hyperbolic.
+#[must_use]
 pub fn math_sinh(x: f64) -> f64 {
     x.sinh()
 }
+#[must_use]
 pub fn math_cosh(x: f64) -> f64 {
     x.cosh()
 }
+#[must_use]
 pub fn math_tanh(x: f64) -> f64 {
     x.tanh()
 }
+#[must_use]
 pub fn math_asinh(x: f64) -> f64 {
     x.asinh()
 }
+#[must_use]
 pub fn math_acosh(x: f64) -> f64 {
     x.acosh()
 }
+#[must_use]
 pub fn math_atanh(x: f64) -> f64 {
     x.atanh()
 }
@@ -194,6 +231,7 @@ pub fn math_atanh(x: f64) -> f64 {
 /// Float modulo — result has the sign of x (the dividend).
 /// Equivalent to Go's `math.Mod(x, y)` and C's `fmod(x, y)`.
 /// Rust's `x % y` is identical to C fmod for f64.
+#[must_use]
 pub fn math_mod(x: f64, y: f64) -> f64 {
     x % y
 }
@@ -206,6 +244,7 @@ pub fn math_mod(x: f64, y: f64) -> f64 {
 /// `x - (x / y).round_ties_even() * y` loses precision once `|x/y|` exceeds
 /// 2^53 (the quotient rounds away the low integer bits), diverging from the
 /// true IEEE 754 remainder — this reduction avoids that.
+#[must_use]
 pub fn math_remainder(x: f64, y: f64) -> f64 {
     // Twice the smallest positive normal double (0x0020000000000000).
     const TINY: f64 = f64::MIN_POSITIVE * 2.0;
@@ -222,6 +261,9 @@ pub fn math_remainder(x: f64, y: f64) -> f64 {
     let mut x = x.abs();
     let y = y.abs();
 
+    // Exact equality on abs-reduced values is intentional in IEEE 754 remainder
+    // argument reduction (ported from Go's math.Remainder).
+    #[allow(clippy::float_cmp)]
     if x == y {
         return if sign { -0.0 } else { 0.0 };
     }
@@ -275,16 +317,20 @@ mod tests {
     }
 
     #[test]
+    // 3.5, 2.25, 3.0, 1024.0 are all exactly representable IEEE 754 values.
+    #[allow(clippy::float_cmp)]
     fn test_math_min_max_f64() {
         assert_eq!(math_min::<f64>(3.5, 2.25), 2.25);
         assert_eq!(math_max::<f64>(3.5, 2.25), 3.5);
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn test_math_sqrt() {
         assert_eq!(math_sqrt(9.0), 3.0);
     }
     #[test]
+    #[allow(clippy::float_cmp)]
     fn test_math_pow() {
         assert_eq!(math_pow(2.0, 10.0), 1024.0);
     }
@@ -325,9 +371,9 @@ mod tests {
         let n = math_nan();
         assert!(n.is_nan());
         // IEEE 754: NaN != NaN
-        #[allow(clippy::eq_op)]
+        #[allow(clippy::eq_op, clippy::float_cmp)]
         {
-            assert!(n != n);
+            assert_ne!(n, n);
         }
     }
 
@@ -340,6 +386,8 @@ mod tests {
     }
 
     #[test]
+    // 1.5 is exactly representable; these are the exact Go oracle values.
+    #[allow(clippy::float_cmp)]
     fn test_math_mod() {
         // Go: math.Mod(5.5, 2.0) = 1.5  (sign of dividend)
         assert_eq!(math_mod(5.5, 2.0), 1.5);

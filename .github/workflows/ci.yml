@@ -76,7 +76,7 @@ jobs:
           components: clippy
       - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --all-targets --workspace -- -D warnings
+      - run: cargo clippy --all-targets --workspace -- -W clippy::pedantic -W clippy::correctness -W clippy::style -W clippy::complexity -D warnings
 
   # Guards the ipe-runtime-rust feature graph against silent coupling. The
   # workspace jobs above build the runtime with its DEFAULT features (`[]`), so

@@ -132,7 +132,7 @@ proptest! {
         }
         let keys = ipe_runtime_rust::dict::dict_keys(d);
         let mut sorted = keys.clone();
-        sorted.sort();
+        sorted.sort_unstable();
         prop_assert_eq!(keys, sorted);
     }
 }

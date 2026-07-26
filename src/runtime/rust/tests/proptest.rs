@@ -255,7 +255,7 @@ mod json_tests {
 
 #[test]
 fn string_is_empty_true() {
-    assert!(string_is_empty("".to_string()));
+    assert!(string_is_empty(String::new()));
 }
 
 #[test]
@@ -280,7 +280,7 @@ proptest! {
     // to_u8_vec then widen back is identity on in-range bytes.
     #[test]
     fn byte_vec_roundtrip(xs in proptest::collection::vec(0u8..=255, 0..64)) {
-        let as_i64: Vec<i64> = xs.iter().map(|&b| b as i64).collect();
+        let as_i64: Vec<i64> = xs.iter().map(|&b| i64::from(b)).collect();
         prop_assert_eq!(to_u8_vec(&as_i64), xs.clone());
         prop_assert_eq!(from_u8_slice(&xs), as_i64);
     }

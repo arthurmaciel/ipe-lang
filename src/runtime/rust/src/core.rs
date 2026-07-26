@@ -31,7 +31,8 @@ pub fn ok_res<E, A>(a: A) -> IpeResult<E, A> {
 }
 
 /// Construct an error value from a string.  Requires `E: From<String>`.
-/// When E = IpeCoreErrorError, the generated code provides the impl.
+/// When E = `IpeCoreErrorError`, the generated code provides the impl.
+#[must_use]
 pub fn str_err<E: From<String>>(s: &str) -> E {
     s.to_string().into()
 }
@@ -43,7 +44,7 @@ pub fn str_err<E: From<String>>(s: &str) -> E {
 ///
 ///   `Ok(Err(e)) => IpeResult::Err(ipe_error_from_foreign(e))`
 ///
-/// C5: `tokio::task::spawn(...).await` already catches panics via JoinError;
+/// C5: `tokio::task::spawn(...).await` already catches panics via `JoinError`;
 /// this fn handles the non-panic `Err(e)` arm. Any `Debug`-able foreign error
 /// type is accepted — `Debug` is universal and always available.
 ///
@@ -72,9 +73,8 @@ pub fn ipe_error_from_foreign<ForeignE: std::fmt::Debug, E: From<String>>(e: For
 /// `classify_and_log_panic` log shape (kind `ForeignError`). Total — no
 /// unwrap/index/panic.
 fn log_foreign_error(err_id: &str, detail: &str) {
-    let json = crate::system::read_env_var("IPE_LOG_FORMAT")
-        .map(|v| v.eq_ignore_ascii_case("json"))
-        .unwrap_or(false);
+    let json =
+        crate::system::read_env_var("IPE_LOG_FORMAT").is_ok_and(|v| v.eq_ignore_ascii_case("json"));
     if json {
         eprintln!(
             "{{\"level\":\"error\",\"kind\":\"ForeignError\",\"errId\":\"{}\",\"message\":\"{}\"}}",
@@ -125,6 +125,7 @@ pub fn set_env_default(key: &str, val: &str) {
 // codegen makes persisting a closure-Model a hard compile error.
 const DISCONNECTED_MSG: &str = "disconnected store: a closure-Model session was restored — closure-Models require [live] store = memory";
 
+#[must_use]
 pub fn disconnected_fn0<T: Send + 'static, E: From<String> + Send + 'static>()
 -> std::sync::Arc<dyn Fn() -> IpeTask<E, T> + Send + Sync> {
     std::sync::Arc::new(|| -> IpeTask<E, T> {
@@ -133,6 +134,7 @@ pub fn disconnected_fn0<T: Send + 'static, E: From<String> + Send + 'static>()
         ))))
     })
 }
+#[must_use]
 pub fn disconnected_fn1<A: 'static, T: Send + 'static, E: From<String> + Send + 'static>()
 -> std::sync::Arc<dyn Fn(A) -> IpeTask<E, T> + Send + Sync> {
     std::sync::Arc::new(|_a| -> IpeTask<E, T> {
@@ -141,6 +143,7 @@ pub fn disconnected_fn1<A: 'static, T: Send + 'static, E: From<String> + Send + 
         ))))
     })
 }
+#[must_use]
 pub fn disconnected_fn2<
     A1: 'static,
     A2: 'static,
@@ -153,6 +156,7 @@ pub fn disconnected_fn2<
         ))))
     })
 }
+#[must_use]
 pub fn disconnected_fn3<
     A1: 'static,
     A2: 'static,
@@ -174,19 +178,22 @@ pub fn disconnected_fn3<
 /// Ipê `List Int` (Vec<i64>) -> owned bytes. Each element is narrowed `as u8`,
 /// mirroring the numeric param narrowing the FFI codegen already emits.
 /// Used for `&[u8]` and `Vec<u8>` parameters.
+#[must_use]
 pub fn to_u8_vec(xs: &[i64]) -> Vec<u8> {
     xs.iter().map(|&x| x as u8).collect()
 }
 
 /// Owned/borrowed bytes -> Ipê `List Int` (Vec<i64>). Used for byte results.
+#[must_use]
 pub fn from_u8_slice(bs: &[u8]) -> Vec<i64> {
-    bs.iter().map(|&b| b as i64).collect()
+    bs.iter().map(|&b| i64::from(b)).collect()
 }
 
 /// Ipê `List Int` -> `[u8; N]`. A length mismatch returns `Err` and never
 /// panics (honours "no runtime panic from well-typed Ipê code"). Used for
 /// `[u8; N]` / `&[u8; N]` parameters; the generated wrapper instantiates
 /// `E = IpeError` and the concrete `N`.
+#[must_use]
 pub fn to_u8_array<E: From<String>, const N: usize>(xs: &[i64]) -> IpeResult<E, [u8; N]> {
     if xs.len() != N {
         return IpeResult::Err(format!("expected {} bytes, got {}", N, xs.len()).into());
@@ -639,6 +646,7 @@ pub fn result_and_map<E, A, B, F: FnOnce(A) -> B>(
 
 /// `Result.combine : List (Result e a) -> Result e (List a)`. Collects every
 /// `Ok`; the first `Err` in list order short-circuits.
+#[must_use]
 pub fn result_combine<E, A>(results: Vec<IpeResult<E, A>>) -> IpeResult<E, Vec<A>> {
     let mut out = Vec::with_capacity(results.len());
     for r in results {
@@ -762,6 +770,7 @@ pub fn maybe_and_map<A, B, F: FnOnce(A) -> B>(ma: IpeMaybe<A>, mf: IpeMaybe<F>) 
 
 /// `Maybe.combine : List (Maybe a) -> Maybe (List a)`. Collects every `Just`;
 /// the first `Nothing` short-circuits.
+#[must_use]
 pub fn maybe_combine<A>(maybes: Vec<IpeMaybe<A>>) -> IpeMaybe<Vec<A>> {
     let mut out = Vec::with_capacity(maybes.len());
     for m in maybes {
@@ -807,8 +816,7 @@ fn short_err_id() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let n = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
+        .map_or(0, |d| d.subsec_nanos());
     format!("{n:08x}")
 }
 
@@ -835,9 +843,8 @@ pub fn classify_and_log_panic(payload: &(dyn std::any::Any + Send)) -> String {
     };
     let kind = classify_panic(&msg);
     let err_id = short_err_id();
-    let json = crate::system::read_env_var("IPE_LOG_FORMAT")
-        .map(|v| v.eq_ignore_ascii_case("json"))
-        .unwrap_or(false);
+    let json =
+        crate::system::read_env_var("IPE_LOG_FORMAT").is_ok_and(|v| v.eq_ignore_ascii_case("json"));
     if json {
         eprintln!(
             "{{\"level\":\"error\",\"kind\":\"{}\",\"errId\":\"{}\",\"message\":\"{}\"}}",

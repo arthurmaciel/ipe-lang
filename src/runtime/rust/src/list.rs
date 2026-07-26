@@ -21,12 +21,14 @@ pub fn list_repeat<T: Clone>(n: i64, x: T) -> Vec<T> {
 
 /// `Ipe.List.sum : number a => List a -> a` — the additive fold. Empty list
 /// sums to the type's additive identity (`0` / `0.0`) via `Iterator::sum`.
+#[must_use]
 pub fn list_sum<T: std::iter::Sum>(xs: Vec<T>) -> T {
     xs.into_iter().sum()
 }
 
 /// `Ipe.List.product : number a => List a -> a` — the multiplicative fold.
 /// Empty list yields the multiplicative identity (`1` / `1.0`).
+#[must_use]
 pub fn list_product<T: std::iter::Product>(xs: Vec<T>) -> T {
     xs.into_iter().product()
 }
@@ -86,6 +88,7 @@ pub fn list_partition<T: Clone>(pred: impl Fn(T) -> bool, xs: Vec<T>) -> (Vec<T>
 
 /// `Ipe.List.unzip : List (a, b) -> (List a, List b)` — split a list of pairs
 /// into a pair of lists. Total; consumes the input.
+#[must_use]
 pub fn list_unzip<A, B>(xs: Vec<(A, B)>) -> (Vec<A>, Vec<B>) {
     xs.into_iter().unzip()
 }
@@ -167,12 +170,14 @@ pub fn list_map5<A, B, C, D, E, R>(
 
 /// `Ipe.List.length` — element count (kernel-routed call sites; the pure-Ipê
 /// `ipe_core_list_length` is the recursive stdlib form).
+#[must_use]
 pub fn list_length<T>(xs: Vec<T>) -> i64 {
     xs.len() as i64
 }
 
 /// `Ipe.List.head : List a -> Maybe a` — the first element, or `Nothing`
 /// on the empty list. Total (no indexing panic).
+#[must_use]
 pub fn list_head<T>(xs: Vec<T>) -> IpeMaybe<T> {
     match xs.into_iter().next() {
         Some(x) => IpeMaybe::Just(x),
@@ -183,6 +188,7 @@ pub fn list_head<T>(xs: Vec<T>) -> IpeMaybe<T> {
 /// `Ipe.List.tail : List a -> Maybe (List a)` — everything after the first
 /// element, or `Nothing` on the empty list. Total (no indexing panic); mirrors
 /// the pure-Ipê `tail` (`[] -> Nothing`, `(_ :: rest) -> Just rest`).
+#[must_use]
 pub fn list_tail<T>(xs: Vec<T>) -> IpeMaybe<Vec<T>> {
     if xs.is_empty() {
         IpeMaybe::Nothing
@@ -194,6 +200,7 @@ pub fn list_tail<T>(xs: Vec<T>) -> IpeMaybe<Vec<T>> {
 
 /// `Ipe.List.reverse : List a -> List a` — the elements in reverse order.
 /// Total; no `T: Clone` bound (the elements only MOVE).
+#[must_use]
 pub fn list_reverse<T>(xs: Vec<T>) -> Vec<T> {
     let mut xs = xs;
     xs.reverse();
@@ -202,6 +209,7 @@ pub fn list_reverse<T>(xs: Vec<T>) -> Vec<T> {
 
 /// `Ipe.List.drop : Int -> List a -> List a` — drops the first `n`
 /// elements. `n <= 0` keeps the whole list; `n >= len` yields `[]`. Total.
+#[must_use]
 pub fn list_drop<T>(n: i64, xs: Vec<T>) -> Vec<T> {
     if n <= 0 {
         xs
@@ -213,6 +221,7 @@ pub fn list_drop<T>(n: i64, xs: Vec<T>) -> Vec<T> {
 /// `Ipe.List.append : List a -> List a -> List a` — the two lists
 /// concatenated. Iterative (`extend`, constant native stack); no `T: Clone`
 /// bound (both inputs are consumed and MOVE).
+#[must_use]
 pub fn list_append<T>(xs: Vec<T>, ys: Vec<T>) -> Vec<T> {
     let mut xs = xs;
     xs.extend(ys);
@@ -221,6 +230,7 @@ pub fn list_append<T>(xs: Vec<T>, ys: Vec<T>) -> Vec<T> {
 
 /// `Ipe.List.concat : List (List a) -> List a` — flatten one level.
 /// Iterative (`flatten`, constant native stack); consumes the input.
+#[must_use]
 pub fn list_concat<T>(xss: Vec<Vec<T>>) -> Vec<T> {
     xss.into_iter().flatten().collect()
 }
@@ -230,6 +240,7 @@ pub fn list_concat<T>(xss: Vec<Vec<T>>) -> Vec<T> {
 /// `n.max(0)` is non-negative, so the `as usize` cast is total on 64-bit
 /// targets (an `i64` in `0..=i64::MAX` fits `usize`); `truncate(k)` with
 /// `k >= len` is a no-op. No indexing, no overflow, no panic.
+#[must_use]
 pub fn list_take<T>(n: i64, xs: Vec<T>) -> Vec<T> {
     let mut xs = xs;
     xs.truncate(n.max(0) as usize);
@@ -237,6 +248,7 @@ pub fn list_take<T>(n: i64, xs: Vec<T>) -> Vec<T> {
 }
 
 /// `Ipe.List.isEmpty : List a -> Bool`. Total.
+#[must_use]
 pub fn list_is_empty<T>(xs: Vec<T>) -> bool {
     xs.is_empty()
 }
@@ -291,10 +303,8 @@ pub fn list_foldr<T0, T1>(f: impl Fn(T0, T1) -> T1, init: T1, list: Vec<T0>) -> 
     acc
 }
 // Ipê `List.range` is INCLUSIVE: range 1 3 = [1, 2, 3].
+#[must_use]
 pub fn list_range(lo: i64, hi: i64) -> Vec<i64> {
-    if hi < lo {
-        return Vec::new();
-    }
     // Bound the allocation: lo/hi are caller-controlled; an absurd span (e.g.
     // 0..i64::MAX) would OOM. Cap at 10M elements (any real list is far smaller).
     // Over the cap, emit the first 10M (a correct PREFIX) plus a structured warn,
@@ -302,7 +312,10 @@ pub fn list_range(lo: i64, hi: i64) -> Vec<i64> {
     // wrong result for input Ipê's types accept, far more surprising than a
     // truncated-with-warning span.
     const CAP: usize = 10_000_000;
-    let n = (hi as i128) - (lo as i128) + 1;
+    if hi < lo {
+        return Vec::new();
+    }
+    let n = i128::from(hi) - i128::from(lo) + 1;
     if n > CAP as i128 {
         eprintln!(
             "[ipe.list] List.range: span of {n} elements exceeds the {CAP}-element \
@@ -321,6 +334,7 @@ pub fn list_indexed_map<T0, T1>(f: impl Fn(i64, T0) -> T1, list: Vec<T0>) -> Vec
 pub fn list_concat_map<T0, T1>(f: impl Fn(T0) -> Vec<T1>, list: Vec<T0>) -> Vec<T1> {
     list.into_iter().flat_map(f).collect()
 }
+#[must_use]
 pub fn list_zip<T0, T1>(a: Vec<T0>, b: Vec<T1>) -> Vec<(T0, T1)> {
     a.into_iter().zip(b).collect()
 }
@@ -511,7 +525,7 @@ mod tests {
         let out = list_sort_with(|_a, _b| 1, xs.clone());
         // No panic; every element preserved (multiset equal).
         let mut got = out.clone();
-        got.sort();
+        got.sort_unstable();
         assert_eq!(got, (0..64).collect::<Vec<i64>>());
     }
 
@@ -641,6 +655,8 @@ mod tests {
     }
 
     #[test]
+    // 1.5 + 2.5 = 4.0 exactly in IEEE 754.
+    #[allow(clippy::float_cmp)]
     fn sum_product_match_elm() {
         assert_eq!(list_sum(vec![1i64, 2, 3, 4]), 10);
         assert_eq!(list_sum(Vec::<i64>::new()), 0); // Elm: sum [] == 0
@@ -687,14 +703,10 @@ mod tests {
     #[test]
     fn sort_with_order_matches_elm() {
         // Descending via a flipped Order comparator.
-        let desc = |a: i64, b: i64| {
-            if a > b {
-                IpeOrder::LT
-            } else if a < b {
-                IpeOrder::GT
-            } else {
-                IpeOrder::EQ
-            }
+        let desc = |a: i64, b: i64| match a.cmp(&b) {
+            std::cmp::Ordering::Greater => IpeOrder::LT,
+            std::cmp::Ordering::Less => IpeOrder::GT,
+            std::cmp::Ordering::Equal => IpeOrder::EQ,
         };
         assert_eq!(
             list_sort_with_order(desc, vec![1i64, 3, 2]),

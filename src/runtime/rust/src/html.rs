@@ -61,7 +61,7 @@ pub enum Event<M> {
 
 impl<M: PartialEq> PartialEq for Attribute<M> {
     fn eq(&self, o: &Self) -> bool {
-        use Attribute::*;
+        use Attribute::{Attr, BoolAttr, EventAttr, NoAttr};
         match (self, o) {
             (Attr(a, b), Attr(c, d)) => a == c && b == d,
             (BoolAttr(a, b), BoolAttr(c, d)) => a == c && b == d,
@@ -151,6 +151,7 @@ pub(crate) fn is_void(tag: &str) -> bool {
 /// handlers emit a `data-ipe-on="<space-separated event names>"` marker
 /// attribute that the browser client reads to bind listeners. Mirrors Go
 /// `renderVNode`.
+#[must_use]
 pub fn render_html<M>(node: &Html<M>) -> String {
     let mut s = String::new();
     render_into(node, &mut s);
@@ -177,13 +178,14 @@ pub(crate) const MAX_HTML_DEPTH: usize = 1024;
 /// write every child into one shared String instead of allocating a
 /// throwaway String per child (efficiency-audit §6 medium).
 pub(crate) fn render_into<M>(node: &Html<M>, s: &mut String) {
-    render_into_ctx(node, s, None, false, 0)
+    render_into_ctx(node, s, None, false, 0);
 }
 
 // `select_value`: when this node renders as a direct child of a `<select>` that
 // carries a value, the chosen value is threaded here so the matching `<option>`
 // flips `selected` (Go renderVNode, live.go:432-453). `raw_text`: set when the
 // parent is `<script>`/`<style>` so HText children emit verbatim — see SECURITY.
+#[allow(clippy::too_many_lines)]
 fn render_into_ctx<M>(
     node: &Html<M>,
     s: &mut String,
@@ -339,9 +341,8 @@ fn render_into_ctx<M>(
                 // injects a new attribute, and a script-bearing key (`onerror`,
                 // `srcdoc`) executes regardless of value-escaping. `SafeAttrName`
                 // enforces both policies in one place; a key that fails is dropped.
-                let safe_key = match SafeAttrName::parse(k) {
-                    Some(n) => n,
-                    None => continue,
+                let Some(safe_key) = SafeAttrName::parse(k) else {
+                    continue;
                 };
                 s.push(' ');
                 s.push_str(safe_key.as_str());
@@ -492,7 +493,7 @@ fn escape_html(t: &str, escape_quote: bool) -> String {
 /// would break out of the element. Ipê `Html.node` / `Html.attribute` take the
 /// name as a `String`, so it can be attacker-derived. Accept only the characters
 /// that appear in real HTML names — letters, digits, and `-_:.` — and reject
-/// everything else (whitespace, `<>"'=/\``, control bytes, non-ASCII). An invalid
+/// everything else (whitespace, `<>"'=/\`, backtick, control bytes, non-ASCII). An invalid
 /// name causes the element / attribute / event marker to be DROPPED rather than
 /// emitted, closing the XSS hole with no escaping ambiguity.
 fn is_safe_html_name(name: &str) -> bool {
@@ -585,7 +586,7 @@ fn url_scheme(value: &str) -> Option<String> {
         match ch {
             ':' => return Some(scheme),
             '/' | '?' | '#' => return None,
-            c if (c as u32) <= 0x20 => continue,
+            c if (c as u32) <= 0x20 => {}
             c => scheme.push(c.to_ascii_lowercase()),
         }
     }
@@ -596,9 +597,8 @@ fn url_scheme(value: &str) -> Option<String> {
 /// is deliberately EXCLUDED — an SVG document can execute script — as is every
 /// non-image / text/html data payload.
 fn is_inert_data_image(value: &str) -> bool {
-    let rest = match value.find(':').and_then(|i| value.get(i + 1..)) {
-        Some(r) => r,
-        None => return false,
+    let Some(rest) = value.find(':').and_then(|i| value.get(i + 1..)) else {
+        return false;
     };
     let rest = rest.trim_start().to_ascii_lowercase();
     match rest.strip_prefix("image/") {
@@ -630,9 +630,8 @@ fn is_inert_data_image(value: &str) -> bool {
 /// navigational attribute (href/action/cite/…) every `data:` is blocked, since a
 /// `data:image/svg+xml,<svg onload=…>` navigated there executes script.
 fn is_dangerous_url(name: &str, value: &str) -> bool {
-    let scheme = match url_scheme(value) {
-        Some(s) => s,
-        None => return false,
+    let Some(scheme) = url_scheme(value) else {
+        return false;
     };
     if matches!(scheme.as_str(), "javascript" | "vbscript") {
         return true;
@@ -676,7 +675,7 @@ pub(crate) fn safe_patch_attr<'a>(name: &'a str, value: &'a str) -> Option<(&'a 
     Some((safe_name, sanitise_url_attr(name, value)))
 }
 
-/// Stamp every HElement (not HText/HRaw) with a stable `ipe-id` attribute derived
+/// Stamp every `HElement` (not HText/HRaw) with a stable `ipe-id` attribute derived
 /// from its path. Idempotent: an existing ipe-id is overwritten with the same
 /// value. HText/HRaw nodes are unaddressable (Go parity).
 ///
@@ -687,7 +686,7 @@ pub(crate) fn safe_patch_attr<'a>(name: &'a str, value: &'a str) -> Option<(&'a 
 /// and named form fields keep identity across reorder. Mirrors Go `assignIpeIDs`
 /// / `ipeIDKey` (`runtime-go/rt/live.go`).
 pub fn assign_ipe_ids<M>(node: &mut Html<M>, path: &str) {
-    assign_ipe_ids_depth(node, path, 0)
+    assign_ipe_ids_depth(node, path, 0);
 }
 
 // Same bounded-descent rationale as render_into_ctx (see MAX_HTML_DEPTH): the
@@ -778,6 +777,7 @@ fn set_attr<M>(attrs: &mut Vec<Attribute<M>>, key: &str, val: &str) {
 // renders via Html.toString without pulling the Ipe.Live server machinery.
 
 /// `Ffi.callPure "htmlRender"` — render an Html tree to an HTML string.
+#[must_use]
 pub fn html_render_<M>(node: Html<M>) -> String {
     render_html(&node)
 }
@@ -808,7 +808,7 @@ pub fn html_named_attr_<M>(key: String, val: String) -> Attribute<M> {
 /// **Note**: `emit_ui_call` intercepts `HtmlAttrRows` and emits
 /// `html_named_attr_("rows", n.to_string())` directly.  This thin wrapper
 /// exists so the parity-matrix tooling can verify the kernel/runtime contract
-/// without a MISMATCH:runtime_sym_missing failure.
+/// without a `MISMATCH:runtime_sym_missing` failure.
 #[must_use]
 pub fn html_attr_rows_<M>(n: i64) -> Attribute<M> {
     Attribute::Attr("rows".to_owned(), n.to_string())
@@ -961,6 +961,7 @@ pub fn html_on_raw_fixed_<M>(_name: String, _msg: M) -> Attribute<M> {
 /// `Ffi.callPure "htmlEscapeText"` — HTML-escape a string for text content.
 /// Routes through the same escaper as render so the escape set (`& ' < > "`,
 /// matching Go's html.EscapeString for the text subset) can never drift.
+#[must_use]
 pub fn html_escape_text_(s: String) -> String {
     escape_text(&s)
 }
@@ -968,6 +969,7 @@ pub fn html_escape_text_(s: String) -> String {
 /// `Ffi.callPure "htmlEscapeAttr"` — escape a string for use in a quoted
 /// attribute. Shares render's attr escaper, so a value placed in a single- or
 /// double-quoted attribute is escaped identically (no attribute-breakout hole).
+#[must_use]
 pub fn html_escape_attr_(s: String) -> String {
     escape_attr(&s)
 }
@@ -1293,23 +1295,24 @@ mod tests {
         assert_eq!(collect_ids(&t2), ids);
     }
 
-    fn collect_ids<M>(n: &Html<M>) -> Vec<String> {
-        let mut out = vec![];
-        fn go<M>(n: &Html<M>, out: &mut Vec<String>) {
-            if let Html::HElement(_, attrs, kids) = n {
-                for a in attrs {
-                    if let Attribute::Attr(k, v) = a
-                        && k == "ipe-id"
-                    {
-                        out.push(v.clone());
-                    }
-                }
-                for c in kids {
-                    go(c, out);
+    fn collect_ids_go<M>(n: &Html<M>, out: &mut Vec<String>) {
+        if let Html::HElement(_, attrs, kids) = n {
+            for a in attrs {
+                if let Attribute::Attr(k, v) = a
+                    && k == "ipe-id"
+                {
+                    out.push(v.clone());
                 }
             }
+            for c in kids {
+                collect_ids_go(c, out);
+            }
         }
-        go(n, &mut out);
+    }
+
+    fn collect_ids<M>(n: &Html<M>) -> Vec<String> {
+        let mut out = vec![];
+        collect_ids_go(n, &mut out);
         out
     }
 
@@ -1382,7 +1385,7 @@ mod tests {
         let attr: Attribute<Msg> = Attribute::EventAttr(Event::OnMsg("click".into(), Msg::Inc));
         assert_eq!(attr, attr.clone());
         // Debug prints the variant name + event name, not a numeric discriminant.
-        let dbg = format!("{:?}", attr);
+        let dbg = format!("{attr:?}");
         assert!(
             dbg.contains("OnMsg") && dbg.contains("click"),
             "debug was: {dbg}"

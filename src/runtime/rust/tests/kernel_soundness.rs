@@ -67,6 +67,9 @@ proptest! {
 // ── math — out-of-domain inputs are defined (NaN/inf), never panic ─────────
 
 #[test]
+// Exact-equality comparisons here are intentional: sqrt(4) and pow(2,10)
+// produce exact IEEE 754 results (2.0 and 1024.0 respectively).
+#[allow(clippy::float_cmp)]
 fn math_out_of_domain_is_total() {
     assert!(ipe_runtime_rust::math::math_sqrt(-1.0).is_nan());
     assert_eq!(ipe_runtime_rust::math::math_sqrt(4.0), 2.0);

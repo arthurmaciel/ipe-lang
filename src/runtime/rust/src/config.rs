@@ -18,6 +18,7 @@ pub type DbPool = ();
 #[cfg(not(feature = "db"))]
 pub type DbRow = ();
 #[cfg(not(feature = "db"))]
+#[must_use]
 pub fn ipe_db_url() -> String {
     String::new()
 }

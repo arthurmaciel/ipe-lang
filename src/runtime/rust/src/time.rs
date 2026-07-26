@@ -1,6 +1,14 @@
 // Time kernel — basic helpers (tokio-gated on native, wasm-client-gated in the
 // browser) + Ipe.Time advanced (always available).
-use super::*;
+use super::IpeResult;
+// `IpeTask`/`ok_res` are used only by the async time kernels, which are
+// themselves feature-gated; gate the import to match so it is neither
+// unused (default build) nor a wildcard.
+#[cfg(any(
+    all(feature = "tokio", not(target_arch = "wasm32")),
+    all(target_arch = "wasm32", feature = "wasm-client")
+))]
+use super::{IpeTask, ok_res};
 
 #[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 pub fn time_now<E: Send + 'static>(_: ()) -> IpeTask<E, i64> {
@@ -58,6 +66,7 @@ pub fn time_unix_millis<E: 'static>(_: ()) -> IpeTask<E, i64> {
 
 /// `Time.timeString : Int -> String` — Go oracle: `time.Unix(ms/1000, 0).Format("15:04:05")`.
 /// Formats the Unix-millis timestamp as local-time `HH:MM:SS`.
+#[must_use]
 pub fn time_time_string(ms: i64) -> String {
     use chrono::{Local, TimeZone};
     Local
@@ -71,12 +80,14 @@ pub fn time_time_string(ms: i64) -> String {
 /// Go: `return AsInt(ms) + AsInt(delta)`. Args order: delta first, ms second
 /// (matches the Ipê sig `addMillis : Int -> Int -> Int`, called
 /// `Time.addMillis delta ms`).
+#[must_use]
 pub fn time_add_millis(delta: i64, ms: i64) -> i64 {
     ms.saturating_add(delta)
 }
 
 /// `Time.diffMillis : Int -> Int -> Int` — `later - earlier`.
 /// Go: `return AsInt(later) - AsInt(earlier)`. Args: (later, earlier).
+#[must_use]
 pub fn time_diff_millis(later: i64, earlier: i64) -> i64 {
     later.saturating_sub(earlier)
 }
@@ -87,11 +98,11 @@ pub fn time_diff_millis(later: i64, earlier: i64) -> i64 {
 /// ("2006-01-02 15:04:05"), so we translate the Go reference time tokens.
 /// Fallback to a best-effort strftime for unrecognised tokens (matches the
 /// open-ended nature of Go's `t.Format`).
+#[must_use]
 pub fn time_format(layout: String, ms: i64) -> String {
     use chrono::{TimeZone, Utc};
-    let dt = match Utc.timestamp_millis_opt(ms).single() {
-        Some(d) => d,
-        None => return String::new(),
+    let Some(dt) = Utc.timestamp_millis_opt(ms).single() else {
+        return String::new();
     };
     // Translate Go reference-time placeholders to chrono strftime.
     // Go's reference time: Mon Jan 2 15:04:05 MST 2006 (= 2006-01-02 15:04:05).
@@ -125,6 +136,7 @@ pub fn time_format(layout: String, ms: i64) -> String {
 /// `Time.formatHTTP : Int -> String` — HTTP date header format.
 /// Go: `t.UTC().Format(http.TimeFormat)` → "Mon, 02 Jan 2006 15:04:05 GMT".
 /// chrono's `%a, %d %b %Y %H:%M:%S GMT` produces byte-identical output.
+#[must_use]
 pub fn time_format_http(ms: i64) -> String {
     use chrono::{TimeZone, Utc};
     match Utc.timestamp_millis_opt(ms).single() {
@@ -136,6 +148,7 @@ pub fn time_format_http(ms: i64) -> String {
 /// `Time.formatRFC3339 : Int -> String` — RFC 3339 / ISO 8601 with nanoseconds.
 /// Go: `t.UTC().Format(time.RFC3339Nano)` → "2006-01-02T15:04:05.999999999Z".
 /// chrono's `to_rfc3339` produces RFC 3339 with sub-second precision when non-zero.
+#[must_use]
 pub fn time_format_rfc3339(ms: i64) -> String {
     use chrono::{TimeZone, Utc};
     match Utc.timestamp_millis_opt(ms).single() {
@@ -151,7 +164,7 @@ use chrono_tz::Tz;
 fn parse_zone<E: From<String>>(z: &str) -> IpeResult<E, Tz> {
     match z.parse::<Tz>() {
         Ok(t) => IpeResult::Ok(t),
-        Err(_) => IpeResult::Err(format!("Ipe.Time: unknown zone: {}", z).into()),
+        Err(_) => IpeResult::Err(format!("Ipe.Time: unknown zone: {z}").into()),
     }
 }
 
@@ -162,10 +175,11 @@ fn millis_to_zoned<E: From<String>>(zone: &str, ms: i64) -> IpeResult<E, DateTim
     };
     match Utc.timestamp_millis_opt(ms).single() {
         Some(utc) => IpeResult::Ok(utc.with_timezone(&tz)),
-        None => IpeResult::Err(format!("Ipe.Time: epoch ms out of range: {}", ms).into()),
+        None => IpeResult::Err(format!("Ipe.Time: epoch ms out of range: {ms}").into()),
     }
 }
 
+#[must_use]
 pub fn time_in_zone<E: From<String>>(zone: String, ms: i64) -> IpeResult<E, String> {
     let dt = match millis_to_zoned::<E>(&zone, ms) {
         IpeResult::Ok(d) => d,
@@ -178,37 +192,40 @@ pub fn time_in_zone<E: From<String>>(zone: String, ms: i64) -> IpeResult<E, Stri
 // overflow-panic in debug / wrap silently in release. Saturation keeps these
 // total (no panic path) and is the closest bare-`i64` analogue of the
 // `time_add_months` "return ms on out-of-range" fallback.
+#[must_use]
 pub fn time_add_days(days: i64, ms: i64) -> i64 {
     ms.saturating_add(days.saturating_mul(86_400_000))
 }
+#[must_use]
 pub fn time_add_hours(h: i64, ms: i64) -> i64 {
     ms.saturating_add(h.saturating_mul(3_600_000))
 }
+#[must_use]
 pub fn time_add_minutes(m: i64, ms: i64) -> i64 {
     ms.saturating_add(m.saturating_mul(60_000))
 }
+#[must_use]
 pub fn time_add_seconds(s: i64, ms: i64) -> i64 {
     ms.saturating_add(s.saturating_mul(1000))
 }
 
+#[must_use]
 pub fn time_add_months(months: i64, ms: i64) -> i64 {
-    let utc = match Utc.timestamp_millis_opt(ms).single() {
-        Some(d) => d,
-        None => return ms,
+    let Some(utc) = Utc.timestamp_millis_opt(ms).single() else {
+        return ms;
     };
-    let y = utc.year() as i64;
+    let y = i64::from(utc.year());
     // `months` is caller-controlled (Ipê `Ipe.Time.addMonths`): saturating_add
     // avoids the i64 overflow (debug panic / release silent-wrap) on an extreme
     // value. A saturated `m` makes `new_y as i32` truncate → from_ymd_opt below
     // returns None → the function returns `ms` unchanged (total, no panic).
-    let m = (utc.month() as i64 - 1).saturating_add(months);
+    let m = (i64::from(utc.month()) - 1).saturating_add(months);
     // Parse the target year into chrono's i32 domain (don't truncate): a lossy
     // `as i32` on a large-but-non-saturating result would wrap a far-future/past
     // year back into a valid band → a WRONG in-range date. try_from → out-of-range
     // returns `ms` unchanged (the intended total fallthrough).
-    let new_y = match i32::try_from(y.saturating_add(m.div_euclid(12))) {
-        Ok(v) => v,
-        Err(_) => return ms,
+    let Ok(new_y) = i32::try_from(y.saturating_add(m.div_euclid(12))) else {
+        return ms;
     };
     let new_m = (m.rem_euclid(12) + 1) as u32;
     // Clamp day to month end
@@ -239,6 +256,7 @@ pub fn time_add_months(months: i64, ms: i64) -> i64 {
     }
 }
 
+#[must_use]
 pub fn time_add_years(years: i64, ms: i64) -> i64 {
     time_add_months(years.saturating_mul(12), ms)
 }
@@ -254,15 +272,19 @@ where
     IpeResult::Ok(f(dt))
 }
 
+#[must_use]
 pub fn time_year<E: From<String>>(z: String, ms: i64) -> IpeResult<E, i64> {
-    zoned_field(z, ms, |dt| dt.year() as i64)
+    zoned_field(z, ms, |dt| i64::from(dt.year()))
 }
+#[must_use]
 pub fn time_month<E: From<String>>(z: String, ms: i64) -> IpeResult<E, i64> {
-    zoned_field(z, ms, |dt| dt.month() as i64)
+    zoned_field(z, ms, |dt| i64::from(dt.month()))
 }
+#[must_use]
 pub fn time_day<E: From<String>>(z: String, ms: i64) -> IpeResult<E, i64> {
-    zoned_field(z, ms, |dt| dt.day() as i64)
+    zoned_field(z, ms, |dt| i64::from(dt.day()))
 }
+#[must_use]
 pub fn time_day_of_week<E: From<String>>(z: String, ms: i64) -> IpeResult<E, i64> {
     zoned_field(z, ms, |dt| match dt.weekday() {
         Weekday::Mon => 1,
@@ -274,12 +296,15 @@ pub fn time_day_of_week<E: From<String>>(z: String, ms: i64) -> IpeResult<E, i64
         Weekday::Sun => 7,
     })
 }
+#[must_use]
 pub fn time_day_of_year<E: From<String>>(z: String, ms: i64) -> IpeResult<E, i64> {
-    zoned_field(z, ms, |dt| dt.ordinal() as i64)
+    zoned_field(z, ms, |dt| i64::from(dt.ordinal()))
 }
+#[must_use]
 pub fn time_week_of_year<E: From<String>>(z: String, ms: i64) -> IpeResult<E, i64> {
-    zoned_field(z, ms, |dt| dt.iso_week().week() as i64)
+    zoned_field(z, ms, |dt| i64::from(dt.iso_week().week()))
 }
+#[must_use]
 pub fn time_is_weekend<E: From<String>>(z: String, ms: i64) -> IpeResult<E, bool> {
     let dt = match millis_to_zoned::<E>(&z, ms) {
         IpeResult::Ok(d) => d,
@@ -288,6 +313,7 @@ pub fn time_is_weekend<E: From<String>>(z: String, ms: i64) -> IpeResult<E, bool
     IpeResult::Ok(matches!(dt.weekday(), Weekday::Sat | Weekday::Sun))
 }
 
+#[must_use]
 pub fn time_is_leap_year(y: i64) -> bool {
     // AUD-09: parse into chrono's i32 domain rather than truncating — a lossy
     // `as i32` cast on a large caller Int wraps to a valid band, giving a
@@ -299,12 +325,12 @@ pub fn time_is_leap_year(y: i64) -> bool {
     (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
 }
 
+#[must_use]
 pub fn time_days_in_month(year: i64, month: i64) -> i64 {
     // Parse year into chrono's i32 domain rather than truncating: a lossy cast on
     // a large caller Int would wrap to a valid band → wrong day count. Out-of-range → 0.
-    let y = match i32::try_from(year) {
-        Ok(v) => v,
-        Err(_) => return 0,
+    let Ok(y) = i32::try_from(year) else {
+        return 0;
     };
     let m = month as u32;
     if !(1..=12).contains(&m) {
@@ -340,9 +366,8 @@ fn local_midnight_in_zone<E: From<String>>(
         IpeResult::Err(e) => return IpeResult::Err(e),
     };
     let date = target_date(dt);
-    let local = match date.and_hms_milli_opt(h, mi, se, mi_lli) {
-        Some(l) => l,
-        None => return IpeResult::Err("Ipe.Time: invalid date components".to_string().into()),
+    let Some(local) = date.and_hms_milli_opt(h, mi, se, mi_lli) else {
+        return IpeResult::Err("Ipe.Time: invalid date components".to_string().into());
     };
     match dt.timezone().from_local_datetime(&local).single() {
         Some(z) => IpeResult::Ok(z.timestamp_millis()),
@@ -350,47 +375,55 @@ fn local_midnight_in_zone<E: From<String>>(
     }
 }
 
+#[must_use]
 pub fn time_start_of_day<E: From<String>>(zone: String, ms: i64) -> IpeResult<E, i64> {
     local_midnight_in_zone(zone, ms, 0, 0, 0, 0, |dt| dt.date_naive())
 }
+#[must_use]
 pub fn time_end_of_day<E: From<String>>(zone: String, ms: i64) -> IpeResult<E, i64> {
     match time_start_of_day::<E>(zone, ms) {
         IpeResult::Ok(start) => IpeResult::Ok(start + 86_400_000 - 1),
         IpeResult::Err(e) => IpeResult::Err(e),
     }
 }
+#[must_use]
 pub fn time_start_of_week<E: From<String>>(zone: String, ms: i64) -> IpeResult<E, i64> {
     local_midnight_in_zone(zone, ms, 0, 0, 0, 0, |dt| {
         let wd = dt.weekday().num_days_from_monday();
-        dt.date_naive() - Duration::days(wd as i64)
+        dt.date_naive() - Duration::days(i64::from(wd))
     })
 }
+#[must_use]
 pub fn time_start_of_month<E: From<String>>(zone: String, ms: i64) -> IpeResult<E, i64> {
     local_midnight_in_zone(zone, ms, 0, 0, 0, 0, |dt| {
         NaiveDate::from_ymd_opt(dt.year(), dt.month(), 1).unwrap_or(dt.date_naive())
     })
 }
+#[must_use]
 pub fn time_end_of_month<E: From<String>>(zone: String, ms: i64) -> IpeResult<E, i64> {
     let dt = match millis_to_zoned::<E>(&zone, ms) {
         IpeResult::Ok(d) => d,
         IpeResult::Err(e) => return IpeResult::Err(e),
     };
-    let dim = time_days_in_month(dt.year() as i64, dt.month() as i64) as u32;
+    let dim = time_days_in_month(i64::from(dt.year()), i64::from(dt.month())) as u32;
     let target = NaiveDate::from_ymd_opt(dt.year(), dt.month(), dim);
     let target_date = target.unwrap_or(dt.date_naive());
     local_midnight_in_zone::<E>(zone, ms, 23, 59, 59, 999, move |_| target_date)
 }
+#[must_use]
 pub fn time_start_of_year<E: From<String>>(zone: String, ms: i64) -> IpeResult<E, i64> {
     local_midnight_in_zone(zone, ms, 0, 0, 0, 0, |dt| {
         NaiveDate::from_ymd_opt(dt.year(), 1, 1).unwrap_or(dt.date_naive())
     })
 }
+#[must_use]
 pub fn time_end_of_year<E: From<String>>(zone: String, ms: i64) -> IpeResult<E, i64> {
     local_midnight_in_zone(zone, ms, 23, 59, 59, 999, |dt| {
         NaiveDate::from_ymd_opt(dt.year(), 12, 31).unwrap_or(dt.date_naive())
     })
 }
 
+#[must_use]
 pub fn time_format_in_zone<E: From<String>>(
     pattern: String,
     zone: String,
@@ -413,6 +446,7 @@ pub fn time_format_in_zone<E: From<String>>(
 /// `Ipe.Time.formatISO8601 ms` — the UTC instant as an RFC3339 / ISO-8601
 /// string (Go parity: `t.UTC().Format(time.RFC3339)`). Infallible (`""` only on
 /// an out-of-range timestamp).
+#[must_use]
 pub fn time_format_iso8601(ms: i64) -> String {
     match Utc.timestamp_millis_opt(ms).single() {
         Some(dt) => dt.to_rfc3339(),
@@ -425,15 +459,19 @@ pub fn time_format_iso8601(ms: i64) -> String {
 /// `diffSeconds later earlier` — integer seconds between two epoch-ms timestamps.
 // Division truncates toward zero (Go parity; negative spans truncate toward
 // zero too). `saturating_sub` avoids an overflow-panic on extreme epoch inputs.
+#[must_use]
 pub fn time_diff_seconds(later_ms: i64, earlier_ms: i64) -> i64 {
     later_ms.saturating_sub(earlier_ms) / 1_000
 }
+#[must_use]
 pub fn time_diff_minutes(later_ms: i64, earlier_ms: i64) -> i64 {
     later_ms.saturating_sub(earlier_ms) / 60_000
 }
+#[must_use]
 pub fn time_diff_hours(later_ms: i64, earlier_ms: i64) -> i64 {
     later_ms.saturating_sub(earlier_ms) / 3_600_000
 }
+#[must_use]
 pub fn time_diff_days(later_ms: i64, earlier_ms: i64) -> i64 {
     later_ms.saturating_sub(earlier_ms) / 86_400_000
 }
@@ -441,6 +479,7 @@ pub fn time_diff_days(later_ms: i64, earlier_ms: i64) -> i64 {
 /// Ipê source: `fromParts zone y m d h mins s -> Result Error Int`.
 /// Computes the UTC epoch-ms for the given local date/time in the given IANA
 /// zone. Invalid parts return Err. Unknown timezone returns Err.
+#[must_use]
 pub fn time_from_parts<E: From<String>>(
     zone: String,
     y: i64,
@@ -453,63 +492,56 @@ pub fn time_from_parts<E: From<String>>(
     let tz: Tz = match zone.parse() {
         Ok(t) => t,
         Err(_) => {
-            return IpeResult::Err(format!("Time.fromParts: unknown timezone {:?}", zone).into());
+            return IpeResult::Err(format!("Time.fromParts: unknown timezone {zone:?}").into());
         }
     };
     // AUD-09: parse `y` into chrono's i32 domain rather than truncating — a
     // lossy `as i32` cast on a large caller Int wraps to a valid band,
     // silently accepting an out-of-range year as if it were a different,
     // in-range one instead of failing closed with "invalid date parts".
-    let naive = match i32::try_from(y).ok().and_then(|y32| {
+    let Some(naive) = i32::try_from(y).ok().and_then(|y32| {
         NaiveDate::from_ymd_opt(y32, m as u32, d as u32)
             .and_then(|day| day.and_hms_opt(h as u32, mins as u32, s as u32))
-    }) {
-        Some(n) => n,
-        None => {
-            return IpeResult::Err(
-                format!(
-                    "Time.fromParts: invalid date parts {}-{:02}-{:02} {:02}:{:02}:{:02}",
-                    y, m, d, h, mins, s
-                )
+    }) else {
+        return IpeResult::Err(
+            format!("Time.fromParts: invalid date parts {y}-{m:02}-{d:02} {h:02}:{mins:02}:{s:02}")
                 .into(),
-            );
-        }
+        );
     };
     match tz.from_local_datetime(&naive).single() {
         Some(zoned) => IpeResult::Ok(zoned.with_timezone(&Utc).timestamp_millis()),
         None => IpeResult::Err(format!(
-            "Time.fromParts: ambiguous/non-existent local time {}-{:02}-{:02} {:02}:{:02}:{:02} in {}",
-            y, m, d, h, mins, s, zone).into()),
+            "Time.fromParts: ambiguous/non-existent local time {y}-{m:02}-{d:02} {h:02}:{mins:02}:{s:02} in {zone}").into()),
     }
 }
 
 /// `zoneOffset zone ms -> Result Error Int` — UTC offset in seconds for the
 /// instant in the given zone. Unknown zones return Err.
+#[must_use]
 pub fn time_zone_offset<E: From<String>>(zone_name: String, ms: i64) -> IpeResult<E, i64> {
     use chrono::Offset;
     let utc: DateTime<Utc> = match Utc.timestamp_millis_opt(ms).single() {
         Some(t) => t,
-        None => return IpeResult::Err(format!("Time.zoneOffset: invalid epoch ms {}", ms).into()),
+        None => return IpeResult::Err(format!("Time.zoneOffset: invalid epoch ms {ms}").into()),
     };
     match zone_name.parse::<Tz>() {
-        Ok(tz) => IpeResult::Ok(
+        Ok(tz) => IpeResult::Ok(i64::from(
             tz.from_utc_datetime(&utc.naive_utc())
                 .offset()
                 .fix()
-                .local_minus_utc() as i64,
-        ),
-        Err(_) => {
-            IpeResult::Err(format!("Time.zoneOffset: unknown timezone {:?}", zone_name).into())
-        }
+                .local_minus_utc(),
+        )),
+        Err(_) => IpeResult::Err(format!("Time.zoneOffset: unknown timezone {zone_name:?}").into()),
     }
 }
 
 /// `zoneName zone ms -> Result Error String` — short timezone abbreviation
 /// (e.g. "EST", "PDT"). Unknown zones return Err.
+#[must_use]
 pub fn time_zone_name<E: From<String>>(zone_name: String, ms: i64) -> IpeResult<E, String> {
     let utc: DateTime<Utc> = match Utc.timestamp_millis_opt(ms).single() {
         Some(t) => t,
-        None => return IpeResult::Err(format!("Time.zoneName: invalid epoch ms {}", ms).into()),
+        None => return IpeResult::Err(format!("Time.zoneName: invalid epoch ms {ms}").into()),
     };
     match zone_name.parse::<Tz>() {
         Ok(tz) => IpeResult::Ok(
@@ -517,7 +549,7 @@ pub fn time_zone_name<E: From<String>>(zone_name: String, ms: i64) -> IpeResult<
                 .format("%Z")
                 .to_string(),
         ),
-        Err(_) => IpeResult::Err(format!("Time.zoneName: unknown timezone {:?}", zone_name).into()),
+        Err(_) => IpeResult::Err(format!("Time.zoneName: unknown timezone {zone_name:?}").into()),
     }
 }
 
@@ -545,8 +577,7 @@ mod time_advanced_tests {
         let r: IpeResult<String, i64> = time_day_of_week("UTC".to_string(), T1);
         assert!(
             matches!(r, IpeResult::Ok(d) if (1..=7).contains(&d)),
-            "got {:?}",
-            r
+            "got {r:?}"
         );
     }
 
@@ -647,15 +678,15 @@ mod time_advanced_tests {
         // 1970-01-01 00:00:00 UTC = epoch 0.
         // Go's http.TimeFormat gives "Thu, 01 Jan 1970 00:00:00 GMT".
         let s = time_format_http(0);
-        assert!(s.contains("1970"), "HTTP format for epoch 0: {}", s);
-        assert!(s.ends_with("GMT"), "HTTP format must end in GMT: {}", s);
+        assert!(s.contains("1970"), "HTTP format for epoch 0: {s}");
+        assert!(s.ends_with("GMT"), "HTTP format must end in GMT: {s}");
     }
 
     #[test]
     fn test_format_rfc3339() {
         let s = time_format_rfc3339(0);
         // chrono's to_rfc3339 produces "1970-01-01T00:00:00+00:00" for epoch 0.
-        assert!(s.starts_with("1970-01-01T"), "RFC3339 for epoch 0: {}", s);
+        assert!(s.starts_with("1970-01-01T"), "RFC3339 for epoch 0: {s}");
     }
 
     #[test]

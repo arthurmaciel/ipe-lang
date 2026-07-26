@@ -23,14 +23,18 @@ fn compiled(pattern: &str) -> Option<Arc<Regex>> {
     static CACHE: OnceLock<Mutex<HashMap<String, Arc<Regex>>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     {
-        let map = cache.lock().unwrap_or_else(|e| e.into_inner());
+        let map = cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(re) = map.get(pattern) {
             return Some(Arc::clone(re));
         }
     }
     // Compile OUTSIDE the lock so a slow compile never blocks other lookups.
     let re = Arc::new(Regex::new(pattern).ok()?);
-    let mut map = cache.lock().unwrap_or_else(|e| e.into_inner());
+    let mut map = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if map.len() < REGEX_CACHE_CAP {
         // Another thread may have inserted concurrently; entry() keeps it total.
         map.entry(pattern.to_string())
@@ -40,6 +44,7 @@ fn compiled(pattern: &str) -> Option<Arc<Regex>> {
 }
 
 /// Ipê `match : String -> String -> Bool`. Pattern first, then haystack.
+#[must_use]
 pub fn regex_match(pattern: String, s: String) -> bool {
     match compiled(&pattern) {
         Some(re) => re.is_match(&s),
@@ -48,6 +53,7 @@ pub fn regex_match(pattern: String, s: String) -> bool {
 }
 
 /// Ipê `find : String -> String -> Maybe String`
+#[must_use]
 pub fn regex_find(pattern: String, s: String) -> IpeMaybe<String> {
     match compiled(&pattern) {
         Some(re) => match re.find(&s) {
@@ -59,6 +65,7 @@ pub fn regex_find(pattern: String, s: String) -> IpeMaybe<String> {
 }
 
 /// Ipê `findAll : String -> String -> List String`
+#[must_use]
 pub fn regex_find_all(pattern: String, s: String) -> Vec<String> {
     match compiled(&pattern) {
         Some(re) => re.find_iter(&s).map(|m| m.as_str().to_string()).collect(),
@@ -67,6 +74,7 @@ pub fn regex_find_all(pattern: String, s: String) -> Vec<String> {
 }
 
 /// Ipê `replace : String -> String -> String -> String` (pattern, replacement, input).
+#[must_use]
 pub fn regex_replace(pattern: String, replacement: String, s: String) -> String {
     match compiled(&pattern) {
         Some(re) => re.replace_all(&s, replacement.as_str()).to_string(),
@@ -82,10 +90,10 @@ pub fn regex_replace(pattern: String, replacement: String, s: String) -> String 
 /// (`if match[1] != 0`), so a leading zero-width match at position 0 does NOT
 /// emit a leading empty string, while interior zero-width matches still split.
 /// Rust's `Regex::split` instead emits a leading empty for the same input.
+#[must_use]
 pub fn regex_split(pattern: String, s: String) -> Vec<String> {
-    let re = match compiled(&pattern) {
-        Some(re) => re,
-        None => return vec![s],
+    let Some(re) = compiled(&pattern) else {
+        return vec![s];
     };
     // Go special-cases a non-empty pattern against empty input as one empty
     // field (`if len(re.expr) > 0 && len(s) == 0 { return []string{""} }`).
