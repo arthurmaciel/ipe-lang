@@ -1590,9 +1590,7 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
         Some((cmd, rest)) if cmd == "fix" => with_help_on_misuse("fix", run_fix(rest)),
         Some((cmd, rest)) if cmd == "fmt" => with_help_on_misuse("fmt", fmt::run_fmt(rest)),
         Some((cmd, rest)) if cmd == "lsp" => with_help_on_misuse("lsp", lsp::run_lsp(rest)),
-        Some((cmd, rest)) if cmd == "upgrade" => {
-            with_help_on_misuse("upgrade", run_upgrade(rest))
-        }
+        Some((cmd, rest)) if cmd == "upgrade" => with_help_on_misuse("upgrade", run_upgrade(rest)),
         Some((cmd, rest)) if cmd == "version" || cmd == "--version" || cmd == "-V" => {
             with_help_on_misuse("version", run_version(rest))
         }
@@ -1713,8 +1711,11 @@ fn resolve_static_plan(
             // The design's explicit opt-in notice: the C cost is acknowledged,
             // never silent.
             eprintln!(
-                "note: mimalloc adds a C toolchain and unsafe FFI, vendors C source, and \
-                 freezes it into the artifact for CVE-rebuild purposes; chosen explicitly."
+                "{}",
+                style::gutter(
+                    "note: mimalloc adds a C toolchain and unsafe FFI, vendors C source, and \
+                     freezes it into the artifact for CVE-rebuild purposes; chosen explicitly."
+                )
             );
         }
     }
@@ -1938,18 +1939,25 @@ fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
         // wasm-opt found but failed — non-fatal; the unoptimised bundle
         // is still correct. Log and continue.
         eprintln!(
-            "note: wasm-opt exited {}; bundle is unoptimised but functional",
-            status.code().unwrap_or(1)
+            "{}",
+            style::gutter(&format!(
+                "note: wasm-opt exited {}; bundle is unoptimised but functional",
+                status.code().unwrap_or(1)
+            ))
         );
     }
 
     let bundle_kb = bg_wasm.metadata().map_or(0, |m| m.len() / 1024);
+    let www = out_dir.join("www");
     eprintln!(
-        "wasm bundle ready at {www}/\n\
-         bundle size: {bundle_kb} KB ({bg})\n\
-         serve with: python3 -m http.server -d {www} 8080",
-        www = out_dir.join("www").display(),
-        bg = bg_wasm.display(),
+        "{}",
+        style::gutter(&format!(
+            "wasm bundle ready at {www}/\n\
+             bundle size: {bundle_kb} KB ({bg})\n\
+             serve with: python3 -m http.server -d {www} 8080",
+            www = www.display(),
+            bg = bg_wasm.display(),
+        ))
     );
     Ok(())
 }
@@ -2311,7 +2319,7 @@ fn run_explain(rest: &[String]) -> Result<(), CliError> {
                 ));
             }
             let page = explain_lookup(arg)?;
-            print!("{page}");
+            print!("{}", style::frame(&style::gutter(page)));
             Ok(())
         }
     }
@@ -2533,7 +2541,9 @@ fn run_package(rest: &[String]) -> Result<(), CliError> {
         Some((sub, _)) => Err(CliError::UsageOwned(format!(
             "ipe package: unknown subcommand `{sub}` (expected `audit` or `publish`)"
         ))),
-        None => Err(CliError::Usage("usage: ipe package <audit|publish> [<path>]")),
+        None => Err(CliError::Usage(
+            "usage: ipe package <audit|publish> [<path>]",
+        )),
     }
 }
 
@@ -2661,7 +2671,10 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
 
     let command = format!("curl -fsSL {INSTALL_SH_URL} | sh");
     if dry_run {
-        println!("{}", style::gutter(&format!("would run: {command}")));
+        print!(
+            "{}",
+            style::frame(&style::gutter(&format!("would run: {command}")))
+        );
         return Ok(());
     }
     if cfg!(not(unix)) {
@@ -2672,7 +2685,10 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
 
     eprintln!(
         "{}",
-        style::gutter(&format!("{} upgrading ipe via install.sh …", style::glyph::STEP))
+        style::gutter(&format!(
+            "{} upgrading ipe via install.sh …",
+            style::glyph::STEP
+        ))
     );
     let status = std::process::Command::new("sh")
         .arg("-c")

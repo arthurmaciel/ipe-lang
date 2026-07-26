@@ -13,6 +13,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::CliError;
+use crate::style;
 
 /// `src/Main.ipe` — the working counter. No substitution: this is a complete
 /// program, byte-identical for every scaffolded project.
@@ -155,7 +156,13 @@ pub fn run_upgrade_agents(rest: &[String]) -> Result<(), CliError> {
         )));
     }
     write_file(Path::new("AGENTS.md"), AGENTS_MD)?;
-    println!("wrote AGENTS.md ({} bytes)", AGENTS_MD.len());
+    print!(
+        "{}",
+        style::frame(&style::gutter(&format!(
+            "wrote AGENTS.md ({} bytes)",
+            AGENTS_MD.len()
+        )))
+    );
     Ok(())
 }
 
@@ -176,14 +183,18 @@ fn write_file(path: &Path, contents: &str) -> Result<(), CliError> {
 /// Print the friendly next-steps message. When scaffolding in place (`.`), the
 /// `cd` step is omitted.
 fn print_next_steps(target_arg: &str, project_name: &str) {
-    println!("Created Ipê project `{project_name}`.");
-    println!();
-    println!("Next steps:");
-    if target_arg == "." {
-        println!("    ipe run");
+    let run_cmd = if target_arg == "." {
+        "    ipe run".to_owned()
     } else {
-        println!("    cd {target_arg} && ipe run");
-    }
-    println!();
-    println!("Then open http://localhost:8000 and click the counter buttons.");
+        format!("    cd {target_arg} && ipe run")
+    };
+    let body = format!(
+        "Created Ipê project `{project_name}`.\n\
+         \n\
+         Next steps:\n\
+         {run_cmd}\n\
+         \n\
+         Then open http://localhost:8000 and click the counter buttons.\n"
+    );
+    print!("{}", style::frame(&style::gutter(&body)));
 }

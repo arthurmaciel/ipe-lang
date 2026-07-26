@@ -465,10 +465,18 @@ fn jail_limits() -> ipe_sandbox::ResourceLimits {
             if let Ok(v) = raw.parse::<u64>().map(|v| v.saturating_mul(scale))
                 && v > 0
             {
-                eprintln!("WARNING: jail cap override {var}={raw}");
+                eprintln!(
+                    "{}",
+                    crate::style::gutter(&format!("WARNING: jail cap override {var}={raw}"))
+                );
                 *slot = v;
             } else {
-                eprintln!("WARNING: ignoring non-numeric jail cap override {var}={raw}");
+                eprintln!(
+                    "{}",
+                    crate::style::gutter(&format!(
+                        "WARNING: ignoring non-numeric jail cap override {var}={raw}"
+                    ))
+                );
             }
         }
     };
@@ -938,7 +946,12 @@ fn run_inspector_job_unsandboxed(
     allow_build_scripts: bool,
 ) -> Result<String, CliError> {
     let io_err = |detail: String| CliError::UsageOwned(format!("ipe add: {detail}"));
-    eprintln!("WARNING: running the FFI inspector UNSANDBOXED (IPE_FFI_ALLOW_UNSANDBOXED=1)");
+    eprintln!(
+        "{}",
+        crate::style::gutter(
+            "WARNING: running the FFI inspector UNSANDBOXED (IPE_FFI_ALLOW_UNSANDBOXED=1)"
+        )
+    );
     let scoped_tmp = make_scratch_dir(scratch_hint)?;
     let manifest_path = match job {
         InspectorJob::Manifest { entries } => Some(write_inspector_manifest(&scoped_tmp, entries)?),
@@ -1061,12 +1074,15 @@ fn install_wrapper(
     let (pkg, paths) = ipe_ffi::driver::install_from_inspection(cache, &doc_text)
         .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
     let iface = ipe_ffi::interface::crate_interface(&pkg);
-    println!(
-        "added wrapper `{}`: {} bindings ({} skipped) -> {}",
-        pkg.name(),
-        iface.bindings.len(),
-        iface.skipped.len(),
-        paths.interface.display()
+    print!(
+        "{}",
+        crate::style::frame(&crate::style::gutter(&format!(
+            "added wrapper `{}`: {} bindings ({} skipped) -> {}",
+            pkg.name(),
+            iface.bindings.len(),
+            iface.skipped.len(),
+            paths.interface.display()
+        )))
     );
     Ok(())
 }
@@ -1140,11 +1156,14 @@ fn enforce_wrapper_capabilities(
             .collect();
         if !undeclared.is_empty() {
             eprintln!(
-                "note: the wrapper's source appears to reach {} that it did not declare. \
-                 The runtime jail will still contain any undeclared effect (it fails closed at \
-                 the OS boundary), but an honest declaration is the consent surface a user sees — \
-                 consider declaring it.",
-                undeclared.join(", ")
+                "{}",
+                crate::style::gutter(&format!(
+                    "note: the wrapper's source appears to reach {} that it did not declare. \
+                     The runtime jail will still contain any undeclared effect (it fails closed at \
+                     the OS boundary), but an honest declaration is the consent surface a user sees — \
+                     consider declaring it.",
+                    undeclared.join(", ")
+                ))
             );
         }
     }
@@ -1153,25 +1172,27 @@ fn enforce_wrapper_capabilities(
         ipe_ffi::capability_scan::Verdict::Admit { declared } => {
             let contains_native_ffi =
                 declared.contains(&ipe_ffi::capability_scan::Capability::NativeFfi);
-            if declared.is_empty() {
-                println!("wrapper capability check: no capabilities — pure compute.");
+            let cap_line = if declared.is_empty() {
+                "wrapper capability check: no capabilities — pure compute.".to_owned()
             } else {
                 let names: Vec<&str> = declared.iter().map(|c| c.as_str()).collect();
-                println!(
+                format!(
                     "wrapper capability check: admitted and isolated by the runtime jail — {}.",
                     names.join(", ")
-                );
-            }
-            // Loud consent on native-ffi: inference is blind past it, so the
-            // declared set is the ceiling and the jail contains (not proves) it.
-            if contains_native_ffi {
-                println!(
-                    "  note: this wrapper crosses into native `Rust.` code (native-ffi). Ipê \
-                     cannot infer its true effects — the runtime jail CONTAINS it (an undeclared \
-                     syscall fails closed), but does not PROVE the declared set is complete. \
-                     Installing is informed consent to the declared capabilities."
-                );
-            }
+                )
+            };
+            let consent_note = if contains_native_ffi {
+                "\n  note: this wrapper crosses into native `Rust.` code (native-ffi). Ipê \
+                 cannot infer its true effects — the runtime jail CONTAINS it (an undeclared \
+                 syscall fails closed), but does not PROVE the declared set is complete. \
+                 Installing is informed consent to the declared capabilities."
+            } else {
+                ""
+            };
+            print!(
+                "{}",
+                crate::style::frame(&crate::style::gutter(&format!("{cap_line}{consent_note}")))
+            );
             Ok(())
         }
         ipe_ffi::capability_scan::Verdict::Refuse { reasons, proposed } => {
@@ -1369,13 +1390,16 @@ fn add_one(
     let (pkg, paths) = ipe_ffi::driver::install_from_inspection(cache, &doc_text)
         .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
     let iface = ipe_ffi::interface::crate_interface(&pkg);
-    println!(
-        "added `{}` v{}: {} bindings ({} skipped) -> {}",
-        pkg.name(),
-        pkg.version(),
-        iface.bindings.len(),
-        iface.skipped.len(),
-        paths.interface.display()
+    print!(
+        "{}",
+        crate::style::frame(&crate::style::gutter(&format!(
+            "added `{}` v{}: {} bindings ({} skipped) -> {}",
+            pkg.name(),
+            pkg.version(),
+            iface.bindings.len(),
+            iface.skipped.len(),
+            paths.interface.display()
+        )))
     );
     Ok(())
 }
