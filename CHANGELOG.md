@@ -10,6 +10,24 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.19](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.18...ipe-v0.1.19) (2026-07-26)
+
+
+### Features
+
+* **cli:** apply 2-space gutter + frame to all human-facing output ([#164](https://github.com/arthurmaciel/ipe-lang/issues/164)) ([5956c10](https://github.com/arthurmaciel/ipe-lang/commit/5956c107e4bcea26f07be381092ae70264ca8cc3))
+* **cli:** distribute AGENTS.md — ipe init writes it + ipe upgrade-agents refreshes it ([#146](https://github.com/arthurmaciel/ipe-lang/issues/146)) ([#158](https://github.com/arthurmaciel/ipe-lang/issues/158)) ([15d2096](https://github.com/arthurmaciel/ipe-lang/commit/15d20968fffc4863b2dda2cee0919711049a2126))
+* **cli:** frame + gutter human output uniformly (part of [#148](https://github.com/arthurmaciel/ipe-lang/issues/148)) ([#153](https://github.com/arthurmaciel/ipe-lang/issues/153)) ([474cd59](https://github.com/arthurmaciel/ipe-lang/commit/474cd5985589f8c748eb95f802bf6559e973be2e))
+* **cli:** ipe package publish — compute the index entry and open the index PR ([#151](https://github.com/arthurmaciel/ipe-lang/issues/151)) ([373455e](https://github.com/arthurmaciel/ipe-lang/commit/373455e8770dddedd621506319d18add610e42da))
+* **cli:** ipe upgrade — self-update via the release installer ([#145](https://github.com/arthurmaciel/ipe-lang/issues/145)) ([#161](https://github.com/arthurmaciel/ipe-lang/issues/161)) ([cba4090](https://github.com/arthurmaciel/ipe-lang/commit/cba4090ac18ce955539e29ec639465431703cea5))
+* **cli:** show human-friendly build progress ([#143](https://github.com/arthurmaciel/ipe-lang/issues/143)) ([#160](https://github.com/arthurmaciel/ipe-lang/issues/160)) ([d06705f](https://github.com/arthurmaciel/ipe-lang/commit/d06705ff01f518379d332fd0e5c5d0c8f912470c))
+* **cli:** suggest the nearest command when one is mistyped ([#147](https://github.com/arthurmaciel/ipe-lang/issues/147)) ([#162](https://github.com/arthurmaciel/ipe-lang/issues/162)) ([3c1326c](https://github.com/arthurmaciel/ipe-lang/commit/3c1326cc0e8a711f95fd70005b950c6fb560250a))
+
+
+### Bug Fixes
+
+* **backend:** skip the rustfmt normalization pass when rustfmt is absent ([#156](https://github.com/arthurmaciel/ipe-lang/issues/156)) ([ab384ca](https://github.com/arthurmaciel/ipe-lang/commit/ab384cad3f105caa660991d9cca20da3a0e03d5d))
+
 ## [0.1.18](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.17...ipe-v0.1.18) (2026-07-26)
 
 
