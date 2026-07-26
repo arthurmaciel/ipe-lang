@@ -62,7 +62,7 @@ fn version_default_is_human_and_guttered() {
         r.stdout
             .lines()
             .find(|l| !l.trim().is_empty())
-            .map_or(false, |l| l.starts_with("  ipe ")),
+            .is_some_and(|l| l.starts_with("  ipe ")),
         "human version must be guttered: {:?}",
         r.stdout
     );

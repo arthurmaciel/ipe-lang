@@ -1095,11 +1095,11 @@ fn warn_if_memory_store() {
 fn report_restart_outcome(outcome: &ipe_watch::RestartOutcome) {
     match outcome {
         ipe_watch::RestartOutcome::Spawned => {
-            eprintln!("{}", crate::style::gutter("[ipe watch] app is up"))
+            eprintln!("{}", crate::style::gutter("[ipe watch] app is up"));
         }
         ipe_watch::RestartOutcome::UnchangedBinary => {}
         ipe_watch::RestartOutcome::Restarted => {
-            eprintln!("{}", crate::style::gutter("[ipe watch] app restarted"))
+            eprintln!("{}", crate::style::gutter("[ipe watch] app restarted"));
         }
         ipe_watch::RestartOutcome::RespawnedLastGood { broken } => eprintln!(
             "{}",
