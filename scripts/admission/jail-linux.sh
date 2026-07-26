@@ -21,8 +21,10 @@
 set -eu
 
 FIXTURE="${1:-tests/fixtures/admission/untrusted-build.sh}"
-SCRATCH="$(mktemp -d /tmp/admission-scratch-XXXXXX)"
-SECCOMP_FILTER="$(mktemp /tmp/admission-seccomp-XXXXXX)"
+# Use /var/tmp, not /tmp: bwrap mounts --tmpfs /tmp which would hide any
+# /tmp/... bind-mount.  /var/tmp survives the --tmpfs /tmp overlay.
+SCRATCH="$(mktemp -d /var/tmp/admission-scratch-XXXXXX)"
+SECCOMP_FILTER="$(mktemp /var/tmp/admission-seccomp-XXXXXX)"
 TIMEOUT_SECS="${ADMISSION_TIMEOUT_SECS:-120}"
 
 cleanup() { rm -rf "$SCRATCH" "$SECCOMP_FILTER"; }
