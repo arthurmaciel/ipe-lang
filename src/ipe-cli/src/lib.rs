@@ -1550,6 +1550,9 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
     }
     match args.split_first() {
         Some((cmd, rest)) if cmd == "init" => with_help_on_misuse("init", init::run_init(rest)),
+        Some((cmd, rest)) if cmd == "upgrade-agents" => {
+            with_help_on_misuse("upgrade-agents", init::run_upgrade_agents(rest))
+        }
         Some((cmd, rest)) if cmd == "build" => with_help_on_misuse("build", run_build(rest)),
         Some((cmd, rest)) if cmd == "run" => with_help_on_misuse("run", run_run(rest)),
         Some((cmd, rest)) if cmd == "exec" => with_help_on_misuse("exec", run_exec(rest)),
