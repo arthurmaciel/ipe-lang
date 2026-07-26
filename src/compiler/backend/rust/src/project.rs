@@ -134,7 +134,7 @@ fn run_rustfmt(source: &str) -> DResult<String> {
         detail,
     };
 
-    let mut child = Command::new("rustfmt")
+    let child = Command::new("rustfmt")
         .arg("--edition")
         .arg(EMITTED_EDITION)
         .arg("--style-edition")
@@ -142,12 +142,21 @@ fn run_rustfmt(source: &str) -> DResult<String> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            fmt_bug(format!(
+        .spawn();
+    // `rustfmt` is an optional normalization pass — the emitter already produces
+    // well-formed, cargo-buildable Rust. When the component is absent (a machine
+    // without `rustfmt` installed), skip formatting and return the emitted source
+    // unchanged rather than failing the build; only a genuine spawn error remains
+    // a compiler bug.
+    let mut child = match child {
+        Ok(child) => child,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(source.to_owned()),
+        Err(e) => {
+            return Err(fmt_bug(format!(
                 "cannot spawn `rustfmt` (a pinned-toolchain component): {e}"
-            ))
-        })?;
+            )));
+        }
+    };
 
     child
         .stdin
