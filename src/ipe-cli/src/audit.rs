@@ -436,10 +436,13 @@ fn capability_consistency(prepared: &Prepared) -> Result<(), CliError> {
             // Surfaced loudly per §1b: a package the user consents to as crossing
             // into opaque native code, whose true effect set cannot be inferred
             // from Ipê alone beyond the `native-ffi` marker itself.
-            println!(
-                "package audit: note — `{}` exercises the `native-ffi` capability; its \
-                 native effects cannot be inferred from Ipê alone.",
-                prepared.manifest.name
+            print!(
+                "{}",
+                crate::style::frame(&crate::style::gutter(&format!(
+                    "package audit: note — `{}` exercises the `native-ffi` capability; its \
+                     native effects cannot be inferred from Ipê alone.",
+                    prepared.manifest.name
+                )))
             );
         }
         return Ok(());
@@ -502,10 +505,13 @@ fn enforced_semver(prepared: &Prepared, index_root: Option<&Path>) -> Result<(),
     let index_root = index_root.map_or_else(crate::resolve::index_root, Path::to_path_buf);
     // Not in the index ⇒ a first submission; no predecessor to enforce.
     let Ok(entry) = crate::index::read_entry(&index_root, &prepared.manifest.name) else {
-        println!(
-            "package audit: `{}` has no previously published version in the index — \
-             skipping the enforced-semver check (first version).",
-            prepared.manifest.name
+        print!(
+            "{}",
+            crate::style::frame(&crate::style::gutter(&format!(
+                "package audit: `{}` has no previously published version in the index — \
+                 skipping the enforced-semver check (first version).",
+                prepared.manifest.name
+            )))
         );
         return Ok(());
     };
@@ -517,10 +523,13 @@ fn enforced_semver(prepared: &Prepared, index_root: Option<&Path>) -> Result<(),
         .filter(|v| v.version < new_version)
         .max_by(|a, b| a.version.cmp(&b.version))
     else {
-        println!(
-            "package audit: `{}` has no published version below {new_version} — \
-             skipping the enforced-semver check (first version).",
-            prepared.manifest.name
+        print!(
+            "{}",
+            crate::style::frame(&crate::style::gutter(&format!(
+                "package audit: `{}` has no published version below {new_version} — \
+                 skipping the enforced-semver check (first version).",
+                prepared.manifest.name
+            )))
         );
         return Ok(());
     };
@@ -637,9 +646,12 @@ fn supply_chain(prepared: &Prepared) -> Result<(), CliError> {
             // never actually skipped there. Locally, skip that scan with a loud
             // warning; the lockfile hash-integrity half still runs.
             eprintln!(
-                "warning: supply-chain advisory scan skipped — cargo-deny is not installed \
-                 (`cargo install cargo-deny`). The package index enforces it; lockfile hash \
-                 integrity is still verified."
+                "{}",
+                crate::style::gutter(
+                    "warning: supply-chain advisory scan skipped — cargo-deny is not installed \
+                     (`cargo install cargo-deny`). The package index enforces it; lockfile hash \
+                     integrity is still verified."
+                )
             );
             verify_locked_dependency_hashes(prepared)
         }

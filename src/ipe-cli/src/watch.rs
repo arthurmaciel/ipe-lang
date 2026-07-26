@@ -548,9 +548,12 @@ fn run_inner(
     let scope = ipe_watch::WatchScope::build(&root_dir, &entry_dir)
         .map_err(|e| CliError::UsageOwned(e.to_string()))?;
     eprintln!(
-        "[ipe watch] watching {} ({} source files)",
-        scope.root().display(),
-        scope.file_count()
+        "{}",
+        crate::style::gutter(&format!(
+            "[ipe watch] watching {} ({} source files)",
+            scope.root().display(),
+            scope.file_count()
+        ))
     );
 
     let (raw_tx, raw_rx) = mpsc::channel::<PathBuf>();
@@ -677,7 +680,12 @@ fn run_inner(
             if let Err(e) = ipe_watch::install_sigterm_forwarder(move || {
                 let _ = evt_tx.send(OrchestratorEvent::Shutdown);
             }) {
-                eprintln!("[ipe watch] warning: could not install SIGTERM handler: {e}");
+                eprintln!(
+                    "{}",
+                    crate::style::gutter(&format!(
+                        "[ipe watch] warning: could not install SIGTERM handler: {e}"
+                    ))
+                );
             }
         }
     }
@@ -736,7 +744,7 @@ fn run_inner(
                 let resolved = match resolve_project_sources(&opts.entry, None) {
                     Ok(r) => r,
                     Err(e) => {
-                        eprintln!("[ipe watch] {e}");
+                        eprintln!("{}", crate::style::gutter(&format!("[ipe watch] {e}")));
                         // This cycle's `generation` bump and cargo-kill
                         // already happened above, so without a scheduled
                         // retry the save that triggered this cycle is lost
@@ -758,7 +766,10 @@ fn run_inner(
                 let ffi_prep = match crate::ffi::prepare_ffi(&mut sources, &resolved.blame_path) {
                     Ok(p) => p,
                     Err(e) => {
-                        eprintln!("[ipe watch] FFI catalog error: {e}");
+                        eprintln!(
+                            "{}",
+                            crate::style::gutter(&format!("[ipe watch] FFI catalog error: {e}"))
+                        );
                         continue;
                     }
                 };
@@ -867,7 +878,12 @@ fn run_inner(
                         emit(opts, WatchEvent::CompileCancelled { generation: g });
                     }
                     CompileOutcome::Red(msg) => {
-                        eprintln!("[ipe watch] build failed (last-good binary stays up):\n{msg}");
+                        eprintln!(
+                            "{}",
+                            crate::style::gutter(&format!(
+                                "[ipe watch] build failed (last-good binary stays up):\n{msg}"
+                            ))
+                        );
                         emit(opts, WatchEvent::CompileFailed { generation: g });
                     }
                     CompileOutcome::Green(emitted) => {
@@ -875,7 +891,12 @@ fn run_inner(
                         if let Err(e) =
                             write_emitted_project(&emitted, &opts.out_dir, &opts.runtime_dir, None)
                         {
-                            eprintln!("[ipe watch] failed to write emitted project: {e}");
+                            eprintln!(
+                                "{}",
+                                crate::style::gutter(&format!(
+                                    "[ipe watch] failed to write emitted project: {e}"
+                                ))
+                            );
                             continue;
                         }
                         current_is_live = is_ipe_live_project(&emitted);
@@ -888,14 +909,22 @@ fn run_inner(
                         // milliseconds by the time this line prints.
                         if generation == 1 {
                             eprintln!(
-                                "[ipe watch] cold build (first run) — this can take a while…"
+                                "{}",
+                                crate::style::gutter(
+                                    "[ipe watch] cold build (first run) — this can take a while…"
+                                )
                             );
                         } else {
-                            eprintln!("[ipe watch] rebuilding…");
+                            eprintln!("{}", crate::style::gutter("[ipe watch] rebuilding…"));
                         }
                         match spawn_cargo_build(&opts.out_dir, generation, evt_tx.clone()) {
                             Ok(child) => cargo_child = Some(child),
-                            Err(e) => eprintln!("[ipe watch] cannot start cargo build: {e}"),
+                            Err(e) => eprintln!(
+                                "{}",
+                                crate::style::gutter(&format!(
+                                    "[ipe watch] cannot start cargo build: {e}"
+                                ))
+                            ),
                         }
                     }
                 }
@@ -915,7 +944,10 @@ fn run_inner(
                     }
                     CargoOutcome::Red(msg) => {
                         eprintln!(
-                            "[ipe watch] cargo build failed (last-good binary stays up):\n{msg}"
+                            "{}",
+                            crate::style::gutter(&format!(
+                                "[ipe watch] cargo build failed (last-good binary stays up):\n{msg}"
+                            ))
                         );
                         emit(opts, WatchEvent::CargoFailed { generation: g });
                     }
@@ -1050,34 +1082,47 @@ fn spawn_command(exe_path: &Path, env: &[(String, String)]) -> Command {
 fn warn_if_memory_store() {
     if std::env::var("IPE_LIVE_STORE").as_deref() == Ok("memory") {
         eprintln!(
-            "[ipe watch] warning: IPE_LIVE_STORE=memory is set — session state will NOT \
-             survive a watch-triggered restart. Unset it (watch defaults to sqlite) or set \
-             IPE_LIVE_STORE=sqlite explicitly to keep your session across rebuilds."
+            "{}",
+            crate::style::gutter(
+                "[ipe watch] warning: IPE_LIVE_STORE=memory is set — session state will NOT \
+                 survive a watch-triggered restart. Unset it (watch defaults to sqlite) or set \
+                 IPE_LIVE_STORE=sqlite explicitly to keep your session across rebuilds."
+            )
         );
     }
 }
 
 fn report_restart_outcome(outcome: &ipe_watch::RestartOutcome) {
     match outcome {
-        ipe_watch::RestartOutcome::Spawned => eprintln!("[ipe watch] app is up"),
+        ipe_watch::RestartOutcome::Spawned => {
+            eprintln!("{}", crate::style::gutter("[ipe watch] app is up"));
+        }
         ipe_watch::RestartOutcome::UnchangedBinary => {}
-        ipe_watch::RestartOutcome::Restarted => eprintln!("[ipe watch] app restarted"),
+        ipe_watch::RestartOutcome::Restarted => {
+            eprintln!("{}", crate::style::gutter("[ipe watch] app restarted"));
+        }
         ipe_watch::RestartOutcome::RespawnedLastGood { broken } => eprintln!(
-            "[ipe watch] new binary failed its readiness probe ({}); kept the previous \
-             last-good binary running instead",
-            broken.display()
+            "{}",
+            crate::style::gutter(&format!(
+                "[ipe watch] new binary failed its readiness probe ({}); kept the previous \
+                 last-good binary running instead",
+                broken.display()
+            ))
         ),
         ipe_watch::RestartOutcome::NothingRunning {
             broken,
             last_good_error,
         } => {
             eprintln!(
-                "[ipe watch] new binary failed its readiness probe ({}); no previous \
-                 last-good binary could be brought up{}",
-                broken.display(),
-                last_good_error
-                    .as_ref()
-                    .map_or_else(String::new, |e| format!(" ({e})"))
+                "{}",
+                crate::style::gutter(&format!(
+                    "[ipe watch] new binary failed its readiness probe ({}); no previous \
+                     last-good binary could be brought up{}",
+                    broken.display(),
+                    last_good_error
+                        .as_ref()
+                        .map_or_else(String::new, |e| format!(" ({e})"))
+                ))
             );
         }
     }

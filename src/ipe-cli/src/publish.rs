@@ -389,18 +389,27 @@ struct PrPlan {
 
 /// Print the computed entry and the intended PR, touching no network.
 fn print_dry_run(entry_toml: &str, plan: &PrPlan) {
-    println!("ipe package publish --dry-run: computed index entry\n");
-    println!("--- {} ---", plan.entry_file);
-    print!("{entry_toml}");
-    if !entry_toml.ends_with('\n') {
-        println!();
-    }
-    println!("\n--- intended pull request ---");
-    println!("  target repo: {}", plan.index_repo);
-    println!("  branch:      {}", plan.branch);
-    println!("  file:        {}", plan.entry_file);
-    println!("  title:       {}", plan.title);
-    println!("\nNo network was touched (--dry-run).");
+    let toml_block = if entry_toml.ends_with('\n') {
+        entry_toml.to_owned()
+    } else {
+        format!("{entry_toml}\n")
+    };
+    let body = format!(
+        "ipe package publish --dry-run: computed index entry\n\
+         \n\
+         --- {} ---\n\
+         {toml_block}\
+         \n\
+         --- intended pull request ---\n\
+           target repo: {}\n\
+           branch:      {}\n\
+           file:        {}\n\
+           title:       {}\n\
+         \n\
+         No network was touched (--dry-run).",
+        plan.entry_file, plan.index_repo, plan.branch, plan.entry_file, plan.title,
+    );
+    print!("{}", crate::style::frame(&crate::style::gutter(&body)));
 }
 
 /// Open the index PR over the network. Thin and non-privileged: it requires a
@@ -550,7 +559,11 @@ mod tests {
         std::fs::create_dir_all(&packages).expect("packages dir");
 
         let version = sample_version("1.2.0", caps(&[Capability::Network]));
-        let toml = render_entry("http-extras", "arthurmaciel", std::slice::from_ref(&version));
+        let toml = render_entry(
+            "http-extras",
+            "arthurmaciel",
+            std::slice::from_ref(&version),
+        );
         std::fs::write(packages.join("http-extras.toml"), &toml).expect("write entry");
 
         let parsed = index::read_entry(&root, "http-extras").expect("entry parses");
@@ -570,7 +583,11 @@ mod tests {
 
         let version = sample_version(
             "0.1.0",
-            caps(&[Capability::Network, Capability::NativeFfi, Capability::Clock]),
+            caps(&[
+                Capability::Network,
+                Capability::NativeFfi,
+                Capability::Clock,
+            ]),
         );
         let toml = render_entry("risky", "arthurmaciel", std::slice::from_ref(&version));
         std::fs::write(packages.join("risky.toml"), &toml).expect("write entry");
@@ -638,8 +655,7 @@ mod tests {
         std::fs::create_dir_all(root.join("packages")).expect("packages dir");
 
         let v = sample_version("0.1.0", caps(&[]));
-        let toml =
-            merge_into_entry(&root, "brand-new", "arthurmaciel", &v).expect("first publish");
+        let toml = merge_into_entry(&root, "brand-new", "arthurmaciel", &v).expect("first publish");
         std::fs::write(root.join("packages").join("brand-new.toml"), &toml).expect("write");
 
         let parsed = index::read_entry(&root, "brand-new").expect("entry parses");
@@ -683,7 +699,11 @@ mod tests {
     #[test]
     fn dry_run_prints_the_entry_and_pr_plan() {
         let version = sample_version("1.2.0", caps(&[Capability::Network]));
-        let toml = render_entry("http-extras", "arthurmaciel", std::slice::from_ref(&version));
+        let toml = render_entry(
+            "http-extras",
+            "arthurmaciel",
+            std::slice::from_ref(&version),
+        );
         let plan = PrPlan {
             index_repo: DEFAULT_INDEX_REPO.to_owned(),
             entry_file: "packages/http-extras.toml".to_owned(),
