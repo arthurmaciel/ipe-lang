@@ -35,8 +35,11 @@ $guid = [System.Guid]::NewGuid()
 $suffix = $guid.ToString("N").Substring(0, 8)
 $ScratchVol = "admission-scratch-$suffix"
 
-$TempDir = [System.IO.Path]::GetTempPath()
-$TempScript = [System.IO.Path]::Combine($TempDir, "probe-$suffix.ps1")
+# Docker Windows bind-mounts require a directory source (not a file).
+# Use a dedicated probe directory containing the script.
+$TempDir = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "probe-dir-$suffix")
+[System.IO.Directory]::CreateDirectory($TempDir) | Out-Null
+$TempScript = [System.IO.Path]::Combine($TempDir, "probe.ps1")
 
 # Probe script: runs inside the Windows container.
 # Written as a here-string; no interpolation needed (literal @'...'@).
@@ -75,10 +78,13 @@ if ($netBlocked) {
     exit 2
 }
 
-# probe 3: filesystem escape attempt
+# probe 3: verify host filesystem not reachable via UNC path.
+# Windows process-isolation containers do not expose host drives via UNC
+# unless explicitly mounted.  Writing to a UNC path that points to the host
+# should fail with a network error (and --network none means CIFS also fails).
 $fsBlocked = $false
 try {
-    [System.IO.File]::WriteAllText("C:\Windows\System32\jail-escape-probe", "escape")
+    [System.IO.File]::WriteAllText("\\localhost\C$\jail-escape-probe", "escape")
     $fsBlocked = $false
 } catch {
     $fsBlocked = $true
@@ -99,9 +105,10 @@ exit 0
 try {
     docker volume create $ScratchVol | Out-Null
 
-    # Use forward slashes for docker -v paths to avoid backslash escaping issues.
-    $TempScriptFwd = $TempScript.Replace('\', '/')
-    $MountProbe = "${TempScriptFwd}:C:/probe.ps1:ro"
+    # Docker Windows bind-mounts require a directory source (not a file).
+    # Mount the probe directory as C:\probe (ro) inside the container.
+    $TempDirFwd = $TempDir.Replace('\', '/')
+    $MountProbe = "${TempDirFwd}:C:/probe"
     $MountScratch = "${ScratchVol}:C:/scratch"
 
     $DockerArgs = @(
@@ -114,7 +121,7 @@ try {
         '-v', $MountScratch,
         'mcr.microsoft.com/windows/servercore:ltsc2022',
         'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
-        '-File', 'C:\probe.ps1'
+        '-File', 'C:\probe\probe.ps1'
     )
 
     $Proc = Start-Process docker -ArgumentList $DockerArgs -PassThru -NoNewWindow
@@ -131,6 +138,6 @@ try {
     }
     Write-Host "Windows jail: all probes passed."
 } finally {
-    if (Test-Path $TempScript) { Remove-Item -Force $TempScript }
+    if (Test-Path $TempDir) { Remove-Item -Recurse -Force $TempDir }
     docker volume rm -f $ScratchVol 2>$null | Out-Null
 }
