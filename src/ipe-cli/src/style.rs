@@ -26,7 +26,7 @@ pub const REPO_URL: &str = "https://github.com/arthurmaciel/ipe-lang";
 /// call site formats it; the installer mirrors the rendered text.
 #[must_use]
 pub fn report_bugs_footer() -> String {
-    format!("Found any bugs? Please report them at {REPO_URL}/issues.")
+    format!("If you find any bugs, please report them at {REPO_URL}/issues.")
 }
 
 /// The product header line, `Ipê language - v{version} - {REPO_URL}`.
@@ -65,6 +65,20 @@ pub fn gutter(text: &str) -> String {
         out.push_str(newline);
     }
     out
+}
+
+/// Frame a human block with exactly one leading and one trailing newline.
+///
+/// A command's output opens and closes with a blank edge — a consistent
+/// breathing frame around the guttered prose. Any surrounding newlines in `body`
+/// are normalised to one each.
+///
+/// Machine output (`--plain` / `--json`, a `run` child's stdout) is NEVER framed
+/// — it stays flush and unwrapped for `grep` / `jq`, like the [`gutter`] it also
+/// skips.
+#[must_use]
+pub fn frame(body: &str) -> String {
+    format!("\n{}\n", body.trim_matches('\n'))
 }
 
 /// The status glyphs that lead a line of progress chatter: a step bullet, a
@@ -185,6 +199,16 @@ mod tests {
         assert_eq!(gutter("tail"), "  tail");
         // The gutter is exactly the two-space SSOT width.
         assert_eq!(GUTTER, "  ");
+    }
+
+    #[test]
+    fn frame_wraps_a_block_in_one_leading_and_trailing_newline() {
+        // A bare body gains exactly one newline on each edge.
+        assert_eq!(frame("  body"), "\n  body\n");
+        // Surrounding newlines are normalised to one each (never doubled).
+        assert_eq!(frame("\n\n  page\n\n"), "\n  page\n");
+        // Interior blank lines are preserved.
+        assert_eq!(frame("a\n\nb"), "\na\n\nb\n");
     }
 
     #[test]

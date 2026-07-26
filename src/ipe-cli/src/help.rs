@@ -66,6 +66,13 @@ const COMMANDS: &[Command] = &[
         }],
     },
     Command {
+        name: "upgrade-agents",
+        summary: "Refresh AGENTS.md — the Ipê authoring reference — in the current directory.",
+        args: "",
+        args_desc: "",
+        options: &[],
+    },
+    Command {
         name: "build",
         summary: "Compile a program to a native or WebAssembly artifact.",
         args: "[<path>]",
@@ -217,14 +224,29 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "package",
-        summary: "Audit a package against the Tier-1 quality gate before publishing.",
-        args: "audit [<path>]",
-        args_desc: "The subcommand (audit) and the project directory or ipe.toml to audit \
+        summary: "Audit a package against the Tier-1 quality gate, or publish it to the index.",
+        args: "<audit|publish> [<path>]",
+        args_desc: "The subcommand (audit or publish) and the project directory or ipe.toml \
                     (defaults to the current project).",
-        options: &[Opt {
-            flag: "[--index <dir>]",
-            desc: "audit: read the previous published version from this index checkout",
-        }],
+        options: &[
+            Opt {
+                flag: "[--index <dir|repo>]",
+                desc: "audit: read the previous published version from this index checkout; \
+                       publish: the index repo the PR targets",
+            },
+            Opt {
+                flag: "[--dry-run]",
+                desc: "publish: print the computed entry and intended PR, touch no network",
+            },
+            Opt {
+                flag: "[--source <url>]",
+                desc: "publish: the source URL to pin (overrides the git remote)",
+            },
+            Opt {
+                flag: "[--rev <sha>]",
+                desc: "publish: the revision to pin (overrides the committed HEAD)",
+            },
+        ],
     },
     Command {
         name: "explain",
@@ -322,7 +344,15 @@ const MOST_USED: &[&str] = &["init", "run", "watch"];
 const SECTIONS: &[Section] = &[
     Section {
         title: "Development",
-        commands: &["init", "build", "run", "watch", "fix", "fmt"],
+        commands: &[
+            "init",
+            "upgrade-agents",
+            "build",
+            "run",
+            "watch",
+            "fix",
+            "fmt",
+        ],
     },
     Section {
         title: "Using external packages",
@@ -438,7 +468,7 @@ fn render_top_level(p: &Palette) -> String {
     out.push('\n');
     let _ = writeln!(out, "{}{}{}", p.dim, report_bugs_footer(), p.reset);
     out.push('\n');
-    out
+    gutter(&out)
 }
 
 /// Render one command's `--help` page: summary, synopsis, the positional

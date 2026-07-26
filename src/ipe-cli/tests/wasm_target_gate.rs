@@ -1,4 +1,4 @@
-//! `--target wasm` build gates (spec: `docs/architecture/wasm-target.md`).
+//! `--target wasm` build gates (spec: `docs/adr/0042-wasm-client-target.md`).
 //!
 //! Layer 1 — a server-only kernel named in a wasm build fails at compile time
 //! with IPE-N0029 (`NameError::ServerOnlyKernelForWasm`), never at cargo

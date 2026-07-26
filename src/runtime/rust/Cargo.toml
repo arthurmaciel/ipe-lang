@@ -95,7 +95,7 @@ libc = "0.2"
 uuid = { version = "1", features = ["v4", "v7", "js"] }
 # `Random.*` / `Crypto.randomBytes` / `Crypto.randomToken` browser substitute:
 # the `js` feature backs `getrandom()` with `crypto.getRandomValues` (the exact
-# mechanism `docs/architecture/wasm-target.md` Q3 names). Direct dep (not just
+# mechanism `docs/adr/0042-wasm-client-target.md` Q3 names). Direct dep (not just
 # transitively via uuid) so `random.rs`/`crypto.rs` can call it without pulling
 # `aes-gcm` just for its `OsRng` re-export.
 getrandom = { version = "0.2", features = ["js"] }

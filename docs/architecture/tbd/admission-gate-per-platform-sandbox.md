@@ -1,8 +1,9 @@
 # Admission gate: per-platform sandbox matrix
 
-Status: plan (tbd). Extends the SP4 package gate
-(`package-coordination-sp4-gate-plan.md`, §0 where-it-runs, §2 sandboxed native
-build, §3 fail-closed isolation) and complements ADR 0040 / ADR 0041.
+Status: plan (tbd). Extends the shipped SP4 package gate — its decision is
+recorded in `docs/adr/0044-package-coordination-manifest-index-gate.md` (the
+where-it-runs, sandboxed-native-build, and fail-closed-isolation aspects) — and
+complements ADR 0040 / ADR 0041.
 
 Fenced blocks are illustrative unless the prose says otherwise.
 
