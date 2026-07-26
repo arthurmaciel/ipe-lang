@@ -26,7 +26,7 @@ jobs:
       - name: Test cargo detection with a non-existent version
         shell: bash
         run: |
-          output=$(IPE_INSTALL_DIR=/tmp/ipe-test sh scripts/install.sh IPE_VERSION=v999.0.0 2>&1 || true)
+          output=$(IPE_VERSION=v999.0.0 IPE_INSTALL_DIR=/tmp/ipe-test sh scripts/install.sh 2>&1 || true)
           echo "$output"
           # cargo must be detected (runners always have Rust)
           echo "$output" | grep -q 'Found cargo' || { echo "FAIL: cargo not detected"; exit 1; }
