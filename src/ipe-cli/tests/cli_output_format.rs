@@ -46,7 +46,7 @@ fn run(args: &[&str]) -> Run {
 /// (`network`, `clock`), for the capabilities-form assertions.
 fn sample_entry() -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../examples/sky/02-go-stdlib/src/Main.ipe");
+        .join("../../examples/sky/ipe/02-go-stdlib/src/Main.ipe");
     path.to_string_lossy().into_owned()
 }
 
