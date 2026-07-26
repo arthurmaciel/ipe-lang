@@ -30,6 +30,7 @@ pub mod lockfile;
 mod lsp;
 pub mod pkg;
 pub mod project;
+pub mod publish;
 pub mod resolve;
 pub mod run_sandbox;
 pub mod style;
@@ -133,6 +134,12 @@ pub enum CliError {
     /// let an unsafe or dishonest version through is a security hole, so it is
     /// always a typed error, never a warning.
     PackageAudit(audit::Rejection),
+    /// `ipe package publish` declined to proceed. Carries the typed
+    /// [`publish::Refusal`] naming the precondition that failed (a dirty working
+    /// tree, an unpushed HEAD, an already-published version, or a missing token).
+    /// A publish precondition is a hard, typed refusal — never a warning — because
+    /// a merged index entry must pin an immutable, reproducible revision.
+    Publish(publish::Refusal),
     /// A known command was misused (bad or missing arguments, an unknown flag).
     /// Carries the specific reason and the command name; [`fmt::Display`] renders
     /// the reason followed by that command's full, indented `--help` page — the
@@ -223,6 +230,7 @@ impl std::fmt::Display for CliError {
                  version must be at least {floor}."
             ),
             Self::PackageAudit(rejection) => write!(f, "{rejection}"),
+            Self::Publish(refusal) => write!(f, "ipe package publish refused: {refusal}"),
             // The reason, then the command's full `--help` page (indented,
             // coloured for a terminal). Rendered against stderr because misuse
             // output goes there. A known command always has a help page; the
@@ -2476,19 +2484,22 @@ pub(crate) fn lower_entry(entry: &Path) -> Result<ipe_ir::Program, CliError> {
 /// `ipe capabilities <entry.ipe>` — print the program's inferred security
 /// capabilities, one per line in sorted order, or `none` when the program is
 /// pure. Read-only analysis: nothing is emitted or written.
-/// `ipe package <subcommand>` — package-authoring commands. Today the one
-/// subcommand is `audit`, the SP4 Tier-1 package gate.
+/// `ipe package <subcommand>` — package-authoring commands: `audit` (the SP4
+/// Tier-1 package gate) and `publish` (run the gate, compute the index entry, and
+/// open the index PR).
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on a missing or unknown subcommand; the audit's own
-/// errors (a build failure or a [`CliError::PackageAudit`] reject) otherwise.
+/// [`CliError::UsageOwned`] on a missing or unknown subcommand; the subcommand's
+/// own errors (a build failure, a [`CliError::PackageAudit`] reject, or a
+/// [`CliError::Publish`] refusal) otherwise.
 fn run_package(rest: &[String]) -> Result<(), CliError> {
     match rest.split_first() {
         Some((sub, tail)) if sub == "audit" => audit::run_audit(tail),
+        Some((sub, tail)) if sub == "publish" => publish::run_publish(tail),
         Some((sub, _)) => Err(CliError::UsageOwned(format!(
-            "ipe package: unknown subcommand `{sub}` (expected `audit`)"
+            "ipe package: unknown subcommand `{sub}` (expected `audit` or `publish`)"
         ))),
-        None => Err(CliError::Usage("usage: ipe package audit [<path>]")),
+        None => Err(CliError::Usage("usage: ipe package <audit|publish> [<path>]")),
     }
 }
 
