@@ -22,6 +22,9 @@ TMPBASE="${TMPDIR:-/tmp}"
 SCRATCH="$(mktemp -d "${TMPBASE}admission-scratch-XXXXXX")"
 TIMEOUT_SECS="${ADMISSION_TIMEOUT_SECS:-120}"
 PROFILE_FILE="$(mktemp "${TMPBASE}admission-sbpl-XXXXXX.sb")"
+# Forwarded into the jail so the enforce run and the unjailed control run target
+# the SAME fs-escape path (the SBPL profile denies file-write* outside scratch).
+ESCAPE_PATH="${ESCAPE_PATH:-/usr/jail-escape-probe}"
 
 cleanup() { rm -rf "$SCRATCH" "$PROFILE_FILE"; }
 trap cleanup EXIT
@@ -61,6 +64,7 @@ cat > "$PROFILE_FILE" << SBPL
 SBPL
 
 export SCRATCH_DIR="$SCRATCH"
+export ESCAPE_PATH
 
 # macOS ships `gtimeout` (GNU coreutils, Homebrew), not POSIX `timeout`.
 if command -v gtimeout >/dev/null 2>&1; then

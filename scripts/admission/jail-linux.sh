@@ -26,6 +26,9 @@ FIXTURE="${1:-tests/fixtures/admission/untrusted-build.sh}"
 SCRATCH="$(mktemp -d /var/tmp/admission-scratch-XXXXXX)"
 SECCOMP_FILTER="$(mktemp /var/tmp/admission-seccomp-XXXXXX)"
 TIMEOUT_SECS="${ADMISSION_TIMEOUT_SECS:-120}"
+# Forwarded into the jail so the enforce run and the unjailed control run target
+# the SAME fs-escape path (bwrap makes it read-only via --ro-bind / /).
+ESCAPE_PATH="${ESCAPE_PATH:-/usr/jail-escape-probe}"
 
 cleanup() { rm -rf "$SCRATCH" "$SECCOMP_FILTER"; }
 trap cleanup EXIT
@@ -166,4 +169,5 @@ timeout "$TIMEOUT_SECS" \
         --die-with-parent \
         --seccomp 4 \
         --setenv SCRATCH_DIR "$SCRATCH" \
+        --setenv ESCAPE_PATH "$ESCAPE_PATH" \
         sh "$FIXTURE_ABS"

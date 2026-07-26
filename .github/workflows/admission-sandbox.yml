@@ -11,6 +11,10 @@
 #   • scrubbed env
 #   • a benign build SUCCEEDS inside the jail (no false-deny)
 #
+# Each platform also runs a POSITIVE CONTROL outside the jail: the same net +
+# fs-escape actions must SUCCEED there, so a block under the jail is proven to be
+# the jail — not an unreachable host or an already-unwritable path.
+#
 # This is the reusable substrate the SP4 admission gate will wrap. It does NOT
 # depend on `ipe package audit`; it jails an arbitrary build command and proves
 # the jail holds. See docs/architecture/tbd/admission-gate-per-platform-sandbox.md
@@ -70,7 +74,7 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install bubblewrap and python3
         run: |
@@ -80,9 +84,18 @@ jobs:
       - name: Make scripts executable
         run: chmod +x scripts/admission/jail-linux.sh tests/fixtures/admission/untrusted-build.sh
 
+      # Positive control: OUTSIDE the jail, as the same root principal, net +
+      # fs-escape must SUCCEED — so a block in the enforce run below can only be
+      # the jail, not an unreachable host or an already-unwritable path.
+      - name: Positive control (no jail — forbidden actions must succeed)
+        env:
+          ESCAPE_PATH: ${{ github.workspace }}/admission-escape-probe
+        run: sudo -E env PROBE_MODE=control ESCAPE_PATH="$ESCAPE_PATH" sh tests/fixtures/admission/untrusted-build.sh
+
       - name: Run admission jail
         env:
           ADMISSION_TIMEOUT_SECS: '60'
+          ESCAPE_PATH: ${{ github.workspace }}/admission-escape-probe
         # sudo: bwrap needs root to set up uid/gid maps on GHA runners
         # (the runner user has no /etc/subuid entry).
         run: sudo -E scripts/admission/jail-linux.sh tests/fixtures/admission/untrusted-build.sh
@@ -95,7 +108,7 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install bubblewrap and python3
         run: |
@@ -105,9 +118,16 @@ jobs:
       - name: Make scripts executable
         run: chmod +x scripts/admission/jail-linux.sh tests/fixtures/admission/untrusted-build.sh
 
+      # Positive control: OUTSIDE the jail, as the same root principal (see linux-x64).
+      - name: Positive control (no jail — forbidden actions must succeed)
+        env:
+          ESCAPE_PATH: ${{ github.workspace }}/admission-escape-probe
+        run: sudo -E env PROBE_MODE=control ESCAPE_PATH="$ESCAPE_PATH" sh tests/fixtures/admission/untrusted-build.sh
+
       - name: Run admission jail
         env:
           ADMISSION_TIMEOUT_SECS: '60'
+          ESCAPE_PATH: ${{ github.workspace }}/admission-escape-probe
         # sudo: bwrap needs root to set up uid/gid maps on GHA runners
         run: sudo -E scripts/admission/jail-linux.sh tests/fixtures/admission/untrusted-build.sh
 
@@ -121,14 +141,23 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Make scripts executable
         run: chmod +x scripts/admission/jail-macos.sh tests/fixtures/admission/untrusted-build.sh
 
+      # Positive control: OUTSIDE the jail, as the same user principal, net +
+      # fs-escape must SUCCEED (the workspace path is outside the SBPL allow-list
+      # jailed, but user-writable unjailed).
+      - name: Positive control (no jail — forbidden actions must succeed)
+        env:
+          ESCAPE_PATH: ${{ github.workspace }}/admission-escape-probe
+        run: PROBE_MODE=control ESCAPE_PATH="$ESCAPE_PATH" sh tests/fixtures/admission/untrusted-build.sh
+
       - name: Run admission jail
         env:
           ADMISSION_TIMEOUT_SECS: '60'
+          ESCAPE_PATH: ${{ github.workspace }}/admission-escape-probe
         run: scripts/admission/jail-macos.sh tests/fixtures/admission/untrusted-build.sh
 
   # ── Windows x64 ────────────────────────────────────────────────────────────
@@ -147,7 +176,7 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # GHA windows-2022 runners run Moby Engine (not Docker Desktop).
       # Docker is pre-installed; Windows container support requires the
@@ -170,6 +199,21 @@ jobs:
         run: docker pull mcr.microsoft.com/windows/servercore:ltsc2022
         shell: powershell
 
+      # Positive control on the host (outside the container): the same net
+      # target the container is denied must be reachable here, so the container's
+      # block is `--network none`, not an unreachable host. (Host-FS isolation is
+      # proven directly by the container's read-only root + unmounted host FS.)
+      - name: Positive control (no container — net must succeed on host)
+        run: |
+          $c = New-Object System.Net.Sockets.TcpClient
+          $ar = $c.BeginConnect("github.com", 443, $null, $null)
+          $ok = $ar.AsyncWaitHandle.WaitOne(5000, $false)
+          if (-not $ok) { Write-Error "control: github.com:443 unreachable on host"; exit 4 }
+          try { $c.EndConnect($ar) } catch { Write-Error "control: connect failed: $_"; exit 4 }
+          $c.Close()
+          Write-Host "PROBE net control: github.com:443 reachable on host -- OK"
+        shell: powershell
+
       - name: Run admission jail
         env:
           ADMISSION_TIMEOUT_SECS: '90'
@@ -190,7 +234,7 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Run admission jail inside FreeBSD VM
         uses: vmactions/freebsd-vm@v1
@@ -200,5 +244,12 @@ jobs:
             pkg install -y python3
           run: |
             chmod +x scripts/admission/jail-freebsd.sh tests/fixtures/admission/untrusted-build.sh
-            ADMISSION_TIMEOUT_SECS=60 \
+            # Shared escape path: root-owned repo dir — root-writable unjailed
+            # (control), unwritable to the jailed `nobody` (enforce).
+            ESCAPE_PATH="$(pwd)/admission-escape-probe"
+            echo "== positive control (no jail — forbidden actions must succeed) =="
+            PROBE_MODE=control ESCAPE_PATH="$ESCAPE_PATH" \
+              sh tests/fixtures/admission/untrusted-build.sh
+            echo "== enforce (jailed — forbidden actions must be blocked) =="
+            ADMISSION_TIMEOUT_SECS=60 ESCAPE_PATH="$ESCAPE_PATH" \
               scripts/admission/jail-freebsd.sh tests/fixtures/admission/untrusted-build.sh
