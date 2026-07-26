@@ -1,0 +1,12 @@
+name = "fyne-stopwatch"
+version = "0.1.0"
+entry = "src/Main.ipe"
+port = 8000
+
+[source]
+root = "src"
+
+["go.dependencies"]
+"fyne.io/fyne/v2" = "latest"
+"fyne.io/fyne/v2/app" = "latest"
+"fyne.io/fyne/v2/widget" = "latest"

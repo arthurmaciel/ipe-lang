@@ -1,0 +1,225 @@
+module Lib.Auth exposing (verifyToken, signOut, getUserById, isAdmin, getSessionUser)
+
+import Ipe.Prelude exposing (..)
+import Ipe.Maybe exposing (..)
+import Ipe.Result as Result
+import Ipe.Task as Task
+import Ipe.List as List
+import Ipe.Dict as Dict
+import Ipe.String as String
+import Ipe.Log exposing (println)
+import Github.Com.Google.Uuid as Uuid
+import Firebase.Google.Com.Go.V4 as Firebase
+import Firebase.Google.Com.Go.V4.Auth as FirebaseAuth
+import Google.Golang.Org.Api.Option as Option
+import Context
+import Fmt
+import Lib.Db as Db
+import Ipe.Error as Error exposing (Error(..), ErrorKind(..))
+import Ipe.System
+
+
+ctx =
+    Context.background ()
+
+
+adminEmails _ =
+    let
+        envAdmins =
+            Result.withDefault "" (Task.run (System.getenv "ADMIN_EMAILS"))
+    in
+        if envAdmins == "" then
+            [ "admin@example.com" ]
+
+        else
+            String.split "," envAdmins
+    -- Idempotent upsert using firebase_uid as document ID.
+    -- Concurrent calls from onAuthStateChanged can never create duplicates
+    -- because Firestore Set with merge is atomic at the document level.
+    -- No query-then-create race condition.
+
+
+isAdmin : Dict String String -> Bool
+isAdmin user =
+    Db.getBool "is_admin" user
+
+
+-- ══════════════════════════════════════════════════════
+-- FIREBASE AUTH CLIENT (lazy — initialised on first use,
+-- after .env has been loaded by the Sky.Live runtime)
+-- ══════════════════════════════════════════════════════
+getAuthClient _ =
+    let
+        credFile =
+            Result.withDefault
+                ""
+                (Task.run (System.getenv "GOOGLE_APPLICATION_CREDENTIALS"))
+        opts =
+            if credFile == "" then
+                []
+
+            else
+                case Option.withCredentialsFile credFile of
+
+                    Ok opt ->
+                        [ opt ]
+
+                    Err _ ->
+                        []
+        appResult = Firebase.newApp ctx (js "nil") opts
+    in
+        case appResult of
+
+            Ok app_ ->
+                Firebase.appAuth app_ ctx
+
+            Err e ->
+                Err e
+
+
+-- ══════════════════════════════════════════════════════
+-- VERIFY TOKEN
+-- ══════════════════════════════════════════════════════
+claimString key claims =
+    case Dict.get key claims of
+
+        Just val ->
+            Fmt.sprint [ val ]
+
+        Nothing ->
+            ""
+
+
+verifyToken idToken =
+    case getAuthClient () of
+
+        Ok client ->
+            case FirebaseAuth.clientVerifyIDToken client ctx idToken of
+
+                Ok token ->
+                    -- tokenUID + tokenClaims are FFI getters returning
+                    -- Result Error _; unwrap before downstream use.
+                    let
+                        uid =
+                            case FirebaseAuth.tokenUID token of
+
+                                Ok u ->
+                                    u
+
+                                Err _ ->
+                                    ""
+                        claims =
+                            case FirebaseAuth.tokenClaims token of
+
+                                Ok c ->
+                                    c
+
+                                Err _ ->
+                                    Dict.empty
+                        email = claimString "email" claims
+                        name = claimString "name" claims
+                        _ =
+                            println
+                                ("[AUTH] Firebase token verified for: " ++ email
+                                    ++ " (uid: "
+                                    ++ uid
+                                    ++ ")")
+                    in
+                        findOrCreateUser uid email name
+
+                Err e ->
+                    let
+                        _ =
+                            println
+                                ("[AUTH] Firebase token verification failed: "
+                                    ++ errorToString e)
+                    in
+                        Err
+                            (Error.permissionDenied
+                                |> Error.withMessage
+                                       "Authentication failed. Please try again.")
+
+        Err e ->
+            let
+                _ =
+                    println
+                        ("[AUTH] Firebase auth client error: " ++ errorToString e)
+            in
+                Err (Error.network "Authentication service unavailable.")
+
+
+findOrCreateUser uid email name =
+    let
+        isAdminUser = List.member email (adminEmails ())
+        adminStr =
+            if isAdminUser then
+                "true"
+
+            else
+                "false"
+        upsertData =
+            Dict.fromList
+                -- Set with merge: updates email/name/admin but preserves
+                -- existing fields (phone, address) from previous writes.
+                [ ( "id", uid )
+                , ( "firebase_uid", uid )
+                , ( "email", email )
+                , ( "name", name )
+                , ( "is_admin", Db.boolVal isAdminUser )
+                ]
+        _ = Db.setDoc "users" uid upsertData
+        -- Read back full document (includes address fields etc.)
+        result = Db.getDoc "users" uid
+    in
+        case result of
+
+            Ok maybeUser ->
+                case maybeUser of
+
+                    Just user ->
+                        if Db.getBool "suspended" user then
+                            Err
+                                (Error.permissionDenied
+                                    |> Error.withMessage
+                                           "Account suspended. Please contact support.")
+
+                        else
+                            let
+                                _ =
+                                    println
+                                        ("[AUTH] Signed in: " ++ email
+                                            ++ " (admin: "
+                                            ++ adminStr
+                                            ++ ")")
+                            in
+                                Ok user
+
+                    Nothing ->
+                        Err (Error.io "Failed to load user profile.")
+
+            Err e ->
+                Err e
+
+
+-- ══════════════════════════════════════════════════════
+-- SESSION
+-- ══════════════════════════════════════════════════════
+signOut =
+    let
+        _ = println "[AUTH] User signed out"
+    in
+        ()
+
+
+getUserById userId =
+    Db.getDoc "users" userId
+
+
+getSessionUser userId =
+    case getUserById userId of
+
+        Ok maybeUser ->
+            maybeUser
+
+        Err _ ->
+            Nothing

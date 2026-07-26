@@ -41,7 +41,7 @@ field is ordinary state the app updates itself.
 
 The reference already grew the same capability: Ipê v0.16.7+ has an
 optional `onNavigate : Page -> Msg` cfg field
-(`../sky/runtime-go/rt/live.go:2727-2740`, dispatch sites at 2949, 3073,
+(`upstream:runtime-go/rt/live.go:2727-2740`, dispatch sites at 2949, 3073,
 3099) — when set, the framework dispatches the Msg through `update`
 after every URL-driven route change; when nil, routes apply silently
 (pre-v0.16.7 behaviour). So the *mechanism* half of #155 is
@@ -206,7 +206,7 @@ dispatch — popstate-shaped and nav-shaped requests both route through
 the update queue in `Dispatch` mode; `SetPage` mode bit-identical to
 current behaviour.
 
-Reference cross-check: run the `onNavigate` fixture against `../sky`
+Reference cross-check: run the `onNavigate` fixture against upstream Sky
 (which mutates-then-notifies) once, record the difference in the
 divergence entry, and mark the fixture `oracle_divergence = true` with
 that reason. All absent-field fixtures stay byte-equivalent to the Go

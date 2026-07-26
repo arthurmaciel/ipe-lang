@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 /// A full Webview app whose `view : Model -> Html` omits the message parameter.
 /// The `onPress = Just Bump` button pins the inferred message type to the
 /// concrete `Msg`, so the arity-filled return must solve to `Html<MainMsg>`.
-/// Message-pinning mirrors `examples/sky/31-webview-stopwatch-ui`.
+/// Message-pinning mirrors `examples/sky/ipe/31-webview-stopwatch-ui`.
 const BARE_HTML_VIEW_APP: &str = r#"module Main exposing (main)
 import Ipe.Prelude exposing (..)
 import Ipe.Webview as Webview

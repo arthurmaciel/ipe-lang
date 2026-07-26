@@ -51,7 +51,7 @@ output-changing Ipê departure.
   (`src/compiler/syntax/src/ast.rs:150-156`); the canonicaliser later
   desugars `{{expr}}` interpolation and `\{{` / `\\` escapes into a
   `++` chain, mirroring the reference's `desugarMultiline`.
-- **Reference:** `../sky/src/Sky/Parse/String.hs:23-37` returns
+- **Reference:** `upstream:src/Sky/Parse/String.hs:23-37` returns
   `MultiLine (T.unpack content)` — verbatim; `findTripleClose`
   (lines 176–188) does no processing. Zero margin stripping.
 - **Corpus:** 19 upstream examples use `"""`, essentially all as
@@ -209,6 +209,6 @@ Golden/E2E (`IPE_E2E=1`):
 - One pre-existing multiline golden re-recorded with the divergence
   flag, demonstrating the bookkeeping flow end-to-end.
 
-Reference cross-check: run `m133_sql_shape` source through `../sky`
+Reference cross-check: run `m133_sql_shape` source through upstream Sky
 once and archive its verbatim output inside the divergence entry (the
 before/after pair is the documentation of the departure).

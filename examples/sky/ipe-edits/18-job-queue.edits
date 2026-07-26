@@ -1,0 +1,30 @@
+# Add type annotations for two polymorphic view helpers.
+#
+# After the token rewrite, viewJob and viewSnapshot remain fully polymorphic
+# because their record-field access is consistent with multiple types; Ipê
+# reports IPE-L0102. Add explicit annotations so the type-checker can
+# monomorphise them.
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+viewJob job =
+"""
+replace:
+"""
+viewJob : Job -> Html Msg
+viewJob job =
+"""
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+viewSnapshot snap =
+"""
+replace:
+"""
+viewSnapshot : Snapshot -> Html Msg
+viewSnapshot snap =
+"""

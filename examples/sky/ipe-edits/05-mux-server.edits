@@ -1,0 +1,51 @@
+# Port Go net/http + gorilla/mux to Ipe.Http.Server (whole-file overwrite).
+#
+# Upstream Sky used Net.Http + Github.Com.Gorilla.Mux (Go FFI). This is a total
+# reimplementation on Ipe.Http.Server, which provides behaviour-equivalent typed
+# route dispatch: Server.get/post match path patterns, each handler receives a
+# typed Request and returns `Task Error Response`. The three routes (/, /echo,
+# /ping) and their response bodies are preserved verbatim. A whole-file
+# replacement (no `find:`) is correct here because none of the upstream body
+# survives the port.
+
+[[edit]]
+file: src/Main.ipe
+replace:
+"""
+module Main exposing (main)
+
+import Ipe.Prelude exposing (..)
+import Ipe.Task as Task
+import Ipe.Log exposing (println)
+import Ipe.Http.Server as Server
+import Ipe.Http.Server exposing (Handler, Request, Response)
+import Ipe.Error exposing (Error)
+
+
+indexHandler : Handler
+indexHandler _req =
+    Task.succeed (Server.text "Welcome to Sky Mux Server!")
+
+
+echoHandler : Handler
+echoHandler _req =
+    Task.succeed (Server.text "echo received")
+
+
+pingHandler : Handler
+pingHandler _req =
+    Task.succeed (Server.text "pong")
+
+
+main : Task Error ()
+main =
+    let
+        _ = println "Server starting on port 8000"
+    in
+        Server.listen
+            8000
+            [ Server.get "/" indexHandler
+            , Server.post "/echo" echoHandler
+            , Server.get "/ping" pingHandler
+            ]
+"""

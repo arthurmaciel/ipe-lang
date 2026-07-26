@@ -11,10 +11,10 @@
 # This is a "does the real upstream example (patched) build+run on ipe" proof.
 #
 # HOW AN EXAMPLE IS MATERIALISED (scripts/lib/mirror.sh):
-#   1. Copy ../sky/examples/<name> (network fallback: fetch anzellai/sky) into
-#      examples/sky/<name>/ (git-ignored — regenerated each run).
+#   1. Fetch examples/<name> from upstream GitHub (anzellai/sky) — the raw tree
+#      lands in examples/sky/original/<name>/, its Ipê port in examples/sky/ipe/<name>/.
 #   2. Apply examples/sky/rename-map.tsv (the shared Sky→Ipe token rewrite) and
-#      then the OPTIONAL examples/sky/ipe-patches/<name>.patch semantic delta.
+#      then the OPTIONAL examples/sky/ipe-edits/<name>.edits semantic delta.
 #
 # The BUILD step, per example:
 #   ( cd <example> && ipe build <ipe.toml | src/Main.ipe> --out out/rust )
@@ -77,34 +77,30 @@ say() { echo "$@" | tee -a "$RUNLOG"; }
 diag() { printf '%s/%s.%s.%s\n' "$HIST" "$1" "$STAMP" "$2"; }
 say "=== Ipê EXAMPLES sweep @ $STAMP (repo: $REPO · ipe: $IPE_BIN) ==="
 
-# ── Mirror the upstream Sky examples into examples/sky/ (always) ──────────────
-# The sweep IS the mirror sweep: every in-scope example is a real upstream Sky
-# example, materialised + patched at run time. A missing upstream source for an
-# individual example surfaces as a no-source RED row (below), never a silent skip.
+# ── Regenerate the examples/sky/{original,ipe} trees from upstream (always) ───
+# The sweep regenerates every in-scope example from the CURRENT upstream Sky
+# (raw → examples/sky/original/, transformed+edited → examples/sky/ipe/) and
+# builds/runs the ports. A missing upstream source for an individual example
+# surfaces as a no-source RED row (below), never a silent skip.
 MIRROR_OK=1
 if ! mirror_sky_examples; then
-  echo "WARN: no upstream Sky example source located (../sky sibling absent + network fetch failed)." >&2
+  echo "WARN: no upstream Sky example source located (network fetch from anzellai/sky failed — offline?)." >&2
   MIRROR_OK=0
 fi
 
 # ── Fail loud on unpatched new upstream examples ─────────────────────────────
 # Any upstream dir with a Sky entry point that is NOT listed in the manifest is
-# an unpatched new example — it must be added (with a verified patch) before the
+# an unpatched new example — it must be added (with verified edits) before the
 # sweep can pass. `rust` is not an example (a helper crate), so it is excluded.
 UNPATCHED_NEW_EXAMPLES=()
 _manifest_names="$(sky_example_names 2>/dev/null)" || _manifest_names=""
-_src="$(sky_upstream_dir 2>/dev/null)" || _src=""
-if [ -n "$_src" ]; then
-  while IFS= read -r _udir; do
-    [ -d "$_udir" ] || continue
-    _uname="$(basename "$_udir")"
-    [ "$_uname" = rust ] && continue
-    [ -f "$_udir/src/Main.sky" ] || [ -f "$_udir/src/Main.ipe" ] || continue
-    if ! printf '%s\n' "$_manifest_names" | rg -q "^${_uname}$"; then
-      UNPATCHED_NEW_EXAMPLES+=("$_uname")
-    fi
-  done < <(find "$_src" -mindepth 1 -maxdepth 1 -type d | sort)
-fi
+while IFS= read -r _uname; do
+  [ -z "$_uname" ] && continue
+  [ "$_uname" = rust ] && continue
+  if ! printf '%s\n' "$_manifest_names" | rg -q "^${_uname}$"; then
+    UNPATCHED_NEW_EXAMPLES+=("$_uname")
+  fi
+done < <(sky_upstream_names_network 2>/dev/null | sort)
 if [ "${#UNPATCHED_NEW_EXAMPLES[@]}" -gt 0 ]; then
   say ""
   say "ERROR: upstream Sky has example(s) NOT in examples/sky/manifest.toml — add them with a verified patch:"
@@ -249,21 +245,21 @@ run_for() {
   esac
 }
 
-# ── Build the example list (build_set over the mirrored examples/sky set) ─────
-# build_set (lib/examples.sh) folds in examples/sky/* and drops Go-FFI examples.
+# ── Build the example list (build_set over the examples/sky/ipe ports) ────────
+# build_set (lib/examples.sh) folds in examples/sky/ipe/* and drops Go-FFI examples.
 # RUST_EXAMPLES overrides with an explicit subset (basenames or paths).
 EXAMPLES=()
 if [ -n "${RUST_EXAMPLES:-}" ]; then
   for e in $RUST_EXAMPLES; do
     if [ -d "$e" ]; then EXAMPLES+=("${e%/}")
-    elif [ -d "examples/sky/$e" ]; then EXAMPLES+=("examples/sky/$e")
+    elif [ -d "examples/sky/ipe/$e" ]; then EXAMPLES+=("examples/sky/ipe/$e")
     else e="examples/${e#examples/}"; EXAMPLES+=("${e%/}"); fi
   done
 else
   while IFS= read -r d; do EXAMPLES+=("$d"); done < <(build_set)
 fi
 
-say ""; say ">>> EXAMPLES SWEEP  (in-scope set DERIVED in lib/examples.sh; upstream mirror + ipe-patches applied by lib/mirror.sh)"
+say ""; say ">>> EXAMPLES SWEEP  (in-scope set DERIVED in lib/examples.sh; ports regenerated into examples/sky/ipe/ by lib/mirror.sh)"
 ROWS="$HIST/rows-$STAMP.tsv"; : >"$ROWS"
 WARNS="$HIST/warnings-$STAMP.tsv"; : >"$WARNS"
 DCUR=""
@@ -273,20 +269,20 @@ if [ "${#UNPATCHED_NEW_EXAMPLES[@]}" -gt 0 ]; then
   for _un in "${UNPATCHED_NEW_EXAMPLES[@]}"; do
     [ -z "$_un" ] && continue
     printf '%s\t%s\t%s\t%s\n' "$_un" "unpatched-new-example" "—" \
-      "upstream example not in examples/sky/manifest.toml — add + verify patch first" \
+      "upstream example not in examples/sky/manifest.toml — add + verify edits first" \
       >>"$ROWS"
   done
 fi
 
-# A manifest example whose source could not be mirrored (no ../sky sibling AND
-# no network) is a RED no-source row — never a silent skip.
+# A manifest example whose source could not be mirrored (upstream fetch failed)
+# is a RED no-source row — never a silent skip.
 if [ "$MIRROR_OK" = 1 ]; then
   while IFS= read -r _mn; do
     [ -z "$_mn" ] && continue
-    is_out_of_scope "examples/sky/$_mn" 2>/dev/null && continue
-    [ -f "examples/sky/$_mn/src/Main.ipe" ] && continue
-    if [ -d "examples/sky/$_mn" ] && \
-       find "examples/sky/$_mn" -mindepth 2 -name 'Main.ipe' -print -quit 2>/dev/null | rg -q .; then
+    is_out_of_scope "examples/sky/ipe/$_mn" 2>/dev/null && continue
+    [ -f "examples/sky/ipe/$_mn/src/Main.ipe" ] && continue
+    if [ -d "examples/sky/ipe/$_mn" ] && \
+       find "examples/sky/ipe/$_mn" -mindepth 2 -name 'Main.ipe' -print -quit 2>/dev/null | rg -q .; then
       # Materialised, but a multi-app COMPOSITE: sub-apps each carry their own
       # src/Main.ipe under a nested dir, so the flat per-dir sweep has no single
       # entry to build. A structural SKIP, not a failure — building the sub-apps
@@ -313,6 +309,15 @@ for d in "${EXAMPLES[@]}"; do
   [ -f "$d/src/Main.ipe" ] || continue
   DCUR="$d"
   shape="$(example_shape "$d")"
+
+  # A manifest example marked `blocked` exercises an Ipê feature not yet
+  # implemented (a tracked compiler gap, not a mirror defect). Documented SKIP,
+  # never a surprise RED and never a silent pass.
+  blocked_reason="$(_manifest_blocked "$n" 2>/dev/null)" || blocked_reason=""
+  if [ -n "$blocked_reason" ]; then
+    printf '%s\t%s\t%s\t%s\n' "$n" "blocked" "skip" "$blocked_reason" >>"$ROWS"
+    continue
+  fi
 
   # A `[rust.dependencies]` example needs a sandboxed `ipe install` to generate
   # its shim-free Rust-SDK bindings (into a gitignored .ipe/cache/ffi/rust) before

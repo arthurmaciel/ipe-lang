@@ -644,7 +644,7 @@ only to pre-empt mis-listing (see AGENTS.md "Agent learnings").
   green).
 
 ### B24 — Prescriptive TEA `init` signature (Live → `LiveReq`; Tui/Webview → `()`) (#180)
-- **Reference:** `../sky/src/Sky/Type/Constrain/Expression.hs:2665-2695` leaves
+- **Reference:** `upstream:src/Sky/Type/Constrain/Expression.hs:2665-2695` leaves
   `Live.app`'s `init` argument a **free type var** (`req`), and models the
   request as a heterogeneous `map[string]any` accessed via `Dict.get "path"
   req`. It does this for a Go-runtime reason (keep the untyped map compatible
@@ -685,10 +685,22 @@ only to pre-empt mis-listing (see AGENTS.md "Agent learnings").
 
 ---
 
+### B25 — `Jwt.encode`/`decode` (HS256) reject a signing secret under 32 bytes
+- **Ipê:** the HS256 kernel (`src/runtime/rust/src/jwt.rs`) fails closed with
+  `jwt-encode: HS256 secret must be at least 32 bytes (RFC 7518 §3.2)` when the
+  key is shorter than 32 bytes (256 bits). The reference accepted any-length
+  key. *Rationale:* security — an HMAC key below the hash-output size is
+  low-entropy and forgeable; a 1-byte key mints a token anyone can re-sign. This
+  is the same 32-byte floor `auth.rs` / `Ipe.Auth` enforce, closed for a direct
+  `Jwt.*` caller that bypasses `Ipe.Auth`. A short-key example must adopt a
+  >=32-byte secret (e.g. the `00-standard-libs` port's `ipe-edits`).
+
+---
+
 ## 3. Architectural divergences (compiler + runtime structure)
 
 These are structural consequences of porting a Haskell compiler that emits
-Go/Rust into a Rust compiler that emits Rust. Confirmed against `../sky`
+Go/Rust into a Rust compiler that emits Rust. Confirmed against upstream Sky
 (`feat/runtime-rust`) and the Ipê tree.
 
 ### A1 — Rust-all-the-way `skyc` vs a Haskell compiler
@@ -1001,7 +1013,7 @@ API-shape review):
   - Mutual / let-rec tail-call optimization is out of scope for the current TCO
     (self-recursion only).
 - **`Task` error-channel scheme is monomorphic (`fail`/`mapError`/`onError`)**
-  — Sky declares `fail : e -> Task e a` (`../sky/sky-stdlib/Sky/Core/Task.sky:51`),
+  — Sky declares `fail : e -> Task e a` (`upstream:sky-stdlib/Sky/Core/Task.sky:51`),
   polymorphic in the error type. Ipê pins all three combinators to the
   concrete `Error` type: `fail : Error -> Task Error a`,
   `mapError : (Error -> Error) -> Task Error a -> Task Error a`,
@@ -1044,7 +1056,7 @@ API-shape review):
   currency** — `Money.add`/`sub` return `Err` when the two values have
   different currencies; `Money.sumOf` returns `Err` if any list element has the
   wrong currency. This is a **sanctioned divergence** from upstream
-  (`../sky/sky-stdlib/Std/Money.sky:304-317`), which returns the left operand
+  (`upstream:sky-stdlib/Std/Money.sky:304-317`), which returns the left operand
   unchanged on mismatch. The principled change makes invalid states
   unrepresentable: a currency mismatch is a typed `Err`, not a silently wrong
   money value. `compare`/`lt`/`lte`/`gt`/`gte` still compare amounts only and
@@ -1172,7 +1184,7 @@ API-shape review):
 
 - **Live.route non-String payload (#106) — PORT, not a divergence.**
   `routed-live-app-design.md` classifies `Live.route : String -> page ->
-  LiveRoute` typing (#106) as "✅ done (Port — matches `../sky`)." The latent
+  LiveRoute` typing (#106) as "✅ done (Port — matches upstream Sky)." The latent
   E0308 for non-String page constructor payloads (`emit_live.rs:135`) is a
   known bug to fix, not a sanctioned divergence. Not added to the ledger.
 
@@ -1303,7 +1315,7 @@ API-shape review):
 
 
 ### B-GridTracksRaw — `Ui.gridTracksRaw` native kernel vs reference sentinel `AttrStyle "__gridTracks"`
-- **Reference:** `../sky/sky-stdlib/Std/Ui/Grid.sky` implements `tracks`/`columns`/`rows`
+- **Reference:** `upstream:sky-stdlib/Std/Ui/Grid.sky` implements `tracks`/`columns`/`rows`
   as `AttrStyle "__gridTracks" (cols ++ "|" ++ rows)` — a pure-Ipê sentinel consumed
   by the reference renderer's `findGridTemplate` (Ui.ipe:2539) before raw-style emission.
 - **Port:** Uses a native `Ui.gridTracksRaw : String -> String -> Attribute msg` kernel
@@ -1321,7 +1333,7 @@ API-shape review):
 
 
 ### B-ErrorADT — real `Error ErrorKind ErrorInfo` (backlog #85/#160)
-- **Reference:** `../sky/sky-stdlib/Sky/Core/Error.sky` defines `Error = Error
+- **Reference:** `upstream:sky-stdlib/Sky/Core/Error.sky` defines `Error = Error
   ErrorKind ErrorInfo` (11-variant `ErrorKind`, `ErrorInfo = { message, details :
   Maybe ErrorDetails }`, `ErrorDetails` a 5-variant union with `FfiPanic`/
   `TypeMismatch`/`HttpStatus`/`JsonDecode`/`Custom` payloads), constructed via Go
@@ -1480,7 +1492,7 @@ API-shape review):
 
 ### B-DbDecMoney — `Db.Decode.money` returns `Decoder (Decimal, String)`, not `Decoder Money` (backlog #34)
 
-- **Reference:** the Go backend's `DbDec_money` (`../sky/runtime-go/rt/
+- **Reference:** the Go backend's `DbDec_money` (`upstream:runtime-go/rt/
   db_decoder.go:202-244`) returns a full `Decoder Money`, constructing the
   Ipê `Money` ADT directly at the runtime layer (including resolving the
   3-letter ISO code to a `Currency` ADT variant via a hand-rolled
@@ -1523,7 +1535,7 @@ API-shape review):
 
 - **Reference:** the Haskell backend compiles a compiled-source stdlib module's
   point-free binding `f = Ffi.kernel "Module_function"` and rewrites `f`'s call
-  sites to the kernel at LOWERING (`../sky/src/Sky/Build/Compile.hs`
+  sites to the kernel at LOWERING (`upstream:src/Sky/Build/Compile.hs`
   `collectKernelAliases` → `_lc_kernelAlias`), typing the alias against the
   binding's own Ipê annotation. An `Ffi.kernel` string that names no kernel is
   not structurally rejected at that boundary — Go's dynamically-typed runtime
@@ -1580,7 +1592,7 @@ API-shape review):
 
 ### B-UiEventsFnArg — `Ipe.Ui.Events.onSubmit`/`onInput` take a handler function, not a bare Msg
 
-- **Reference:** upstream `Ipe.Ui.Events` (`../sky/sky-stdlib/Std/Ui/Events.sky`)
+- **Reference:** upstream `Ipe.Ui.Events` (`upstream:sky-stdlib/Std/Ui/Events.sky`)
   re-exports `onSubmit : a -> Attribute b` and `onInput : msg -> Attribute msg`
   — the arg is a bare value, matching upstream `Ipe.Ui`'s permissive event
   kernels.
@@ -1647,7 +1659,7 @@ API-shape review):
 ### B-FfiAsyncBridge — async-FFI wrapper hardening: JoinError redaction funnel, abort-on-drop cancel guard, process-global runtime
 
 Three upgrades over the reference's async wrapper body
-(`../sky/src/Sky/Build/Rust/Ffi.hs`, the `Box::pin(async move {
+(`upstream:src/Sky/Build/Rust/Ffi.hs`, the `Box::pin(async move {
 tokio::task::spawn(…).await })` three-arm match), adopted per
 `docs/architecture/async-ffi-bridge-design.md` §1.1/§4:
 

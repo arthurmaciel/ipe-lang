@@ -2,7 +2,7 @@
 
 > **Guardian synthesis.** Reconciles three independent fresh designs (A1
 > completeness+taxonomy, A2 invalid-states-at-registration, A3 soundness+prune)
-> against the `../sky` upstream learnings (B), critiqued in **strict principle
+> against the upstream Sky upstream learnings (B), critiqued in **strict principle
 > order**: (1) security (2) correctness (3) soundness (4) efficiency
 > (5) **COMPLETENESS** (6) readability, under **"PARSE, DON'T VALIDATE"** and
 > **"MAKE INVALID STATES UNREPRESENTABLE."** COMPLETENESS is first-class: #76 is
@@ -48,12 +48,12 @@ and completes* that work rather than starting cold.
 row type makes an unbacked-reachable member unrepresentable, structured as a
 `PortStatus { Backed(Backing) | Deferred(reason) }` completeness ledger, with
 `Backing` collapsing the tag-as-data and value-as-data families onto a handful
-of generic kernels — grafting `../sky`'s narrow render/escape security kernels,
+of generic kernels — grafting upstream Sky's narrow render/escape security kernels,
 `SafeAttrName`, the depth cap, and the typed handler ADT.**
 
 Concretely this is **Fresh Design A1's taxonomy and generic Tagged kernels,
 organised under A2's `PortStatus`/`Deferred` ledger**, with A3's tag-faithful
-soundness fix (kill the `html_p_` collapse), and the following `../sky` grafts:
+soundness fix (kill the `html_p_` collapse), and the following upstream Sky grafts:
 the ~5-kernel render/escape boundary, `SafeAttrName` parse-don't-validate,
 `MAX_HTML_DEPTH` bounded descent, URL-scheme sanitiser + Go-equivalent escape
 set, and typed `OnMsg`/`OnInput`/`OnForm` handler variants.
@@ -96,7 +96,7 @@ set, and typed `OnMsg`/`OnInput`/`OnForm` handler variants.
 6. **Readability (P6).** One declarative `MEMBERS` table replaces the three
    parallel string arrays + the scattered `lower.rs` string folds.
 
-### The `../sky` pure-Sky north-star (grafted as direction, not as the #76 fix)
+### The upstream Sky pure-Sky north-star (grafted as direction, not as the #76 fix)
 
 Upstream's *actual* completeness mechanism is that `Ipe.Ui`/`Ipe.Html` are
 **100% pure Ipê** compiled through ordinary lowering, backing only ~4-5
@@ -281,7 +281,7 @@ docs/divergences-from-sky.md             (layout-sentinel divergence; numeric-en
   rejected; PARSE, DON'T VALIDATE. The manifest is the single enumeration and
   `qual_vars` is *derived* from it, so no two lists can drift.
 
-**From `../sky` (B) — grafts vs rejects:**
+**From upstream Sky (B) — grafts vs rejects:**
 
 - **Pure-Ipê-source stdlib as the *immediate* #76 fix (B ADOPT)** — **rejected
   as the immediate deliverable, adopted as north-star.** Weighed critically: it

@@ -388,7 +388,7 @@ module-name computation `sky/…/Rust/Ffi.hs:262-292`; kernel-name
   concrete keeps dropping (over-drop). The generator never re-derives Send-ness.
 
 **Honest scope.** M-G proves the *bridge* on a small async crate. Large async
-SDKs (firestore/firebase/stripe) stay hand-shimmed even in `../sky` and are
+SDKs (firestore/firebase/stripe) stay hand-shimmed even in upstream Sky and are
 **not** marketed shim-free.
 
 **Rationale.** Preserve "well-typed Ipê never panics" across the boundary while

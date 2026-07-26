@@ -10,7 +10,7 @@ Related specs: the shipped language server, recorded in
 code actions, the verified-edit gate), `incremental-compilation-and-watch.md` /
 `salsa-incremental-compilation-2026-07-11.md` (the query layer a lint query
 joins), `divergence-policy.md`. Reference departure: the Ipê compiler
-(`../sky`) ships **no lint subsystem** — no lint pass, no lint CLI command, no
+(upstream Sky) ships **no lint subsystem** — no lint pass, no lint CLI command, no
 per-site suppression (verified against `src/Ipê/` and the CLI surface; its
 `Ipê/Lsp/Diag.hs` republishes compiler diagnostics only). This tool is an
 intentional capability **beyond** the reference, ledgered in
