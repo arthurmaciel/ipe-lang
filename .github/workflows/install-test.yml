@@ -1,0 +1,50 @@
+name: install test
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/install.sh'
+  workflow_dispatch: {}
+
+concurrency:
+  group: install-test-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  cargo-detection:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test cargo detection with a non-existent version
+        shell: bash
+        run: |
+          output=$(IPE_INSTALL_DIR=/tmp/ipe-test sh scripts/install.sh IPE_VERSION=v999.0.0 2>&1 || true)
+          echo "$output"
+          # cargo must be detected (runners always have Rust)
+          echo "$output" | grep -q 'Found cargo' || { echo "FAIL: cargo not detected"; exit 1; }
+          # the no-binary path must suggest building from source
+          echo "$output" | grep -q 'Build from source' || { echo "FAIL: no build hint"; exit 1; }
+          echo "=== cargo detection test: PASS ==="
+
+  full-install-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run full install (latest release)
+        shell: bash
+        run: |
+          output=$(IPE_INSTALL_DIR=/tmp/ipe-full-test sh scripts/install.sh 2>&1)
+          echo "$output"
+          echo "$output" | grep -q 'successfully installed' || { echo "FAIL: install not reported"; exit 1; }
+          echo "$output" | grep -q 'Found cargo' || { echo "FAIL: cargo not detected"; exit 1; }
+          /tmp/ipe-full-test/ipe --version
+          echo "=== full install test: PASS ==="
