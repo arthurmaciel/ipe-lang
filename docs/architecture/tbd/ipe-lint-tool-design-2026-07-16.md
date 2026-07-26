@@ -5,8 +5,9 @@ Status: design-only (no code). Companion design:
 rule) — the two share the directive infrastructure, the fix machinery, and the
 LSP quick-fix surface, and this document fixes the boundary between them.
 
-Related specs: `ipe-lsp.md` (diagnostics publishing, code actions, the G2
-`VerifiedEdit` gate, hazard L-A), `incremental-compilation-and-watch.md` /
+Related specs: the shipped language server, recorded in
+`docs/adr/0034-language-server-salsa-second-consumer.md` (diagnostics publishing,
+code actions, the verified-edit gate), `incremental-compilation-and-watch.md` /
 `salsa-incremental-compilation-2026-07-11.md` (the query layer a lint query
 joins), `divergence-policy.md`. Reference departure: the Ipê compiler
 (`../sky`) ships **no lint subsystem** — no lint pass, no lint CLI command, no
@@ -322,7 +323,8 @@ closed-union rule (companion design) — one grammar, one parser, one table.
 
 ## 8. LSP integration
 
-Per `ipe-lsp.md` Q3(c): compiler-sourced lints surface directly; `sky_lint`
+Per the shipped LSP design (`docs/adr/0034-language-server-salsa-second-consumer.md`):
+compiler-sourced lints surface directly; `sky_lint`
 extends that set without changing the mechanism. The LSP calls the same
 `sky_lint::run(module_inputs, config)` entry the CLI uses (v0: on the batch
 backend, after each successful check; salsa: as a derived `lint(file)` query

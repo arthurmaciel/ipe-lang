@@ -12,8 +12,8 @@ governs the case where a jail is present. The Linux jail, `ipe run` wiring, the
 `ipe build` artifact profile + `ipe exec` launcher, and the per-target
 admit-and-isolate hand-off are in place; macOS/other platforms are the documented
 refuse-gap. Implementation lives in `ipe_sandbox` (`run_jail`, `seccomp`) and the
-CLI (`run_sandbox`, `ffi`); the design is in
-`docs/architecture/tbd/runtime-capability-sandbox-plan.md`.
+CLI (`run_sandbox`, `ffi`); the design rationale is recorded here and in the
+amending ADRs 0040 and 0041.
 
 ## Context
 

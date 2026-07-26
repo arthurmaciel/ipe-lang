@@ -5,9 +5,13 @@ Status: design-only (no code). Companion design:
 infrastructure, the `Suggestion` fix machinery, and the LSP quick-fix surface.
 
 Related: `src/compiler/types/src/exhaust.rs` (the Maranget usefulness pass this
-rule extends), `ipe-lsp.md` Q3(b)/(c) + G2 (the code-action counterweight),
+rule extends), the shipped language server (the code-action counterweight —
+recorded in `docs/adr/0034-language-server-salsa-second-consumer.md`),
 `src/compiler/diagnostics/explain/IPE-T0010.md` (whose teaching narrative this
 rule makes true — see §2), `docs/divergences-from-elm.md` (ledger entry).
+
+> References below to `ipe-lsp.md` mean the shipped language-server design now
+> recorded in `docs/adr/0034-language-server-salsa-second-consumer.md`.
 
 This is a **departure from Elm** (and from the Ipê reference, which follows
 Elm here): both accept `_ ->` as a catch-all over any type. Ipê will refuse a
