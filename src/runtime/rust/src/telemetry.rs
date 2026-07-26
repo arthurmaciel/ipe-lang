@@ -3,7 +3,7 @@
 //! Always compiled (so `Ipe.Log.*` can feed it regardless of features); the
 //! Ipe.Live `console` module exposes it over HTTP. Bounded ring buffers (logs +
 //! errors) plus monotonic request/error counters. Mirrors the in-RAM tier of
-//! Go's console (`runtime-go/rt/console*.go`), minus the SQLite spill.
+//! Go's console (`runtime-go/rt/console*.go`), minus the `SQLite` spill.
 //!
 //! No panic vectors: a poisoned lock recovers via `into_inner()` (the data is
 //! plain records — a panic mid-push can't corrupt invariants); all reads/writes
@@ -54,8 +54,7 @@ static ERRORS_TOTAL: AtomicU64 = AtomicU64::new(0);
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_millis() as u64)
 }
 
 #[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
@@ -64,7 +63,9 @@ fn now_ms() -> u64 {
 }
 
 fn push_bounded<T>(ring: &Mutex<VecDeque<T>>, cap: usize, e: T) {
-    let mut g = ring.lock().unwrap_or_else(|p| p.into_inner());
+    let mut g = ring
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if g.len() >= cap {
         g.pop_front();
     }
@@ -135,7 +136,9 @@ pub fn record_span(name: &str, dur_us: u64, ok: bool) {
 
 /// Most-recent `limit` spans as a JSON array.
 pub fn spans_json(limit: usize) -> String {
-    let g = SPANS.lock().unwrap_or_else(|p| p.into_inner());
+    let g = SPANS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let n = g.len();
     let items: Vec<String> = g
         .iter()
@@ -155,6 +158,7 @@ pub fn spans_json(limit: usize) -> String {
 
 /// Production gate (Go's `productionFromEnv`): `ENV` then `IPE_ENV`; unset OR a
 /// dev marker (`dev`/`development`/`local`) → dev (false); anything else → true.
+#[must_use]
 pub fn production_from_env() -> bool {
     let mut e = crate::system::read_env_var("ENV")
         .unwrap_or_default()
@@ -187,22 +191,21 @@ pub fn production_from_env() -> bool {
 /// Rendered as a sibling of `#ipe-root` on the Live path (so a body patch never
 /// blows it away); `position:fixed` pins it bottom-right and `pointer-events`
 /// stays default so the link is clickable.
+#[must_use]
 pub fn dev_console_banner(base: &str) -> String {
     if !base.is_empty() || production_from_env() {
         return String::new();
     }
     if matches!(
         crate::system::read_env_var("IPE_DEV_BANNER").as_deref(),
-        Ok("off") | Ok("0")
+        Ok("off" | "0")
     ) {
         return String::new();
     }
     if matches!(
         crate::system::read_env_var("IPE_CONSOLE_EMBED").as_deref(),
-        Ok("off") | Ok("0") | Ok("false")
-    ) || crate::system::read_env_var("IPE_CONSOLE_AUTH")
-        .map(|v| v == "off")
-        .unwrap_or(false)
+        Ok("off" | "0" | "false")
+    ) || crate::system::read_env_var("IPE_CONSOLE_AUTH").is_ok_and(|v| v == "off")
     {
         return String::new();
     }
@@ -237,35 +240,33 @@ pub fn dev_console_banner(base: &str) -> String {
 /// Insert `banner` just before the LAST case-insensitive `</body>` tag (Go
 /// parity: `injectDevBanner`, `dev_banner.go`). Falls back to appending when no
 /// `</body>` is present (body-only fragments). An empty banner is a no-op.
+#[must_use]
 pub fn inject_dev_banner(body: &str, banner: &str) -> String {
     if banner.is_empty() {
         return body.to_string();
     }
     let low = body.to_ascii_lowercase();
-    match low.rfind("</body>") {
-        // `idx` is the byte offset of the ASCII "</body>" in the lowercased copy;
-        // `to_ascii_lowercase` is byte-length-preserving on ASCII and never
-        // touches multi-byte UTF-8 lead/continuation bytes, so `idx` is a valid
-        // char boundary in `body` too — the `body[..idx]` / `body[idx..]` slices
-        // cannot split a codepoint (no panic).
-        Some(idx) => {
-            let mut out = String::with_capacity(body.len() + banner.len());
-            out.push_str(&body[..idx]);
-            out.push_str(banner);
-            out.push_str(&body[idx..]);
-            out
-        }
-        None => {
-            let mut out = String::with_capacity(body.len() + banner.len());
-            out.push_str(body);
-            out.push_str(banner);
-            out
-        }
+    // `idx` is the byte offset of the ASCII "</body>" in the lowercased copy;
+    // `to_ascii_lowercase` is byte-length-preserving on ASCII and never
+    // touches multi-byte UTF-8 lead/continuation bytes, so `idx` is a valid
+    // char boundary in `body` too — the `body[..idx]` / `body[idx..]` slices
+    // cannot split a codepoint (no panic).
+    if let Some(idx) = low.rfind("</body>") {
+        let mut out = String::with_capacity(body.len() + banner.len());
+        out.push_str(&body[..idx]);
+        out.push_str(banner);
+        out.push_str(&body[idx..]);
+        out
+    } else {
+        let mut out = String::with_capacity(body.len() + banner.len());
+        out.push_str(body);
+        out.push_str(banner);
+        out
     }
 }
 
 /// `Some(value)` when responses run in cross-origin-iframe mode
-/// (`IPE_LIVE_FRAME_ANCESTORS` set — the IpeDeploy control-plane embeds the
+/// (`IPE_LIVE_FRAME_ANCESTORS` set — the `IpeDeploy` control-plane embeds the
 /// console). Snapshotted once into a `OnceLock` so env is read only once
 /// (eliminates the TOCTOU window where a dynamic env mutation could split the
 /// cookie name / CSP framing decision within a single request).
@@ -297,6 +298,7 @@ pub fn frame_ancestors() -> Option<&'static str> {
 /// response path, rt.go:7838). Returned as owned `(name, value)` pairs so each
 /// caller splices them into its response builder only when the header is unset
 /// (an explicit handler override wins).
+#[must_use]
 pub fn security_headers() -> Vec<(&'static str, String)> {
     let mut h: Vec<(&'static str, String)> = vec![
         // Go parity.
@@ -419,7 +421,9 @@ pub fn metric_inc(name: &str, labels: &[(&str, &str)], by: u64) {
         name: name.to_string(),
         labels: norm_labels(labels),
     };
-    let mut g = REGISTRY.lock().unwrap_or_else(|p| p.into_inner());
+    let mut g = REGISTRY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     match g.entry(key).or_insert(MetricValue::Counter(0)) {
         MetricValue::Counter(c) => *c = c.saturating_add(by),
         MetricValue::Gauge(_) | MetricValue::Histogram { .. } => {}
@@ -434,7 +438,9 @@ pub fn metric_add_gauge(name: &str, labels: &[(&str, &str)], delta: i64) {
         name: name.to_string(),
         labels: norm_labels(labels),
     };
-    let mut g = REGISTRY.lock().unwrap_or_else(|p| p.into_inner());
+    let mut g = REGISTRY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     match g.entry(key).or_insert(MetricValue::Gauge(0)) {
         MetricValue::Gauge(v) => *v = v.saturating_add(delta).max(0),
         MetricValue::Counter(_) | MetricValue::Histogram { .. } => {}
@@ -442,7 +448,7 @@ pub fn metric_add_gauge(name: &str, labels: &[(&str, &str)], delta: i64) {
 }
 
 /// Record a latency/duration `v` (seconds) into a labeled histogram (creating it
-/// with the BucketsLatency boundaries first). Cumulative: bumps every bucket
+/// with the `BucketsLatency` boundaries first). Cumulative: bumps every bucket
 /// whose boundary `>= v` (Go's `Observe`). Labels MUST be low-cardinality (see
 /// `MetricKey.labels`) — callers pass `&[]` or a bounded class, NEVER a raw path.
 pub fn metric_observe(name: &str, labels: &[(&str, &str)], v: f64) {
@@ -457,7 +463,9 @@ pub fn metric_observe(name: &str, labels: &[(&str, &str)], v: f64) {
         name: name.to_string(),
         labels: norm_labels(labels),
     };
-    let mut g = REGISTRY.lock().unwrap_or_else(|p| p.into_inner());
+    let mut g = REGISTRY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let entry = g.entry(key).or_insert_with(|| MetricValue::Histogram {
         boundaries: LATENCY_BUCKETS.to_vec(),
         buckets: vec![0; LATENCY_BUCKETS.len()],
@@ -485,7 +493,7 @@ pub fn metric_observe(name: &str, labels: &[(&str, &str)], v: f64) {
 
 /// Extract the BOUNDED variant name from a `Debug` value, for use as a
 /// low-cardinality metric label (e.g. `ipe_live_msg_seconds{name}` — Go parity
-/// with msg_logging.go). Returns ONLY the leading Rust-identifier characters of
+/// with `msg_logging.go`). Returns ONLY the leading Rust-identifier characters of
 /// the `{:?}` rendering — the enum variant name — and NEVER any payload field.
 ///
 /// CARDINALITY GUARD (load-bearing): a derived-`Debug` enum renders as `Variant`
@@ -521,7 +529,7 @@ pub fn variant_name<M: std::fmt::Debug>(m: &M) -> String {
         }
     }
     let mut sink = Prefix { buf: String::new() };
-    let _ = write!(sink, "{:?}", m); // ignore the deliberate halt error
+    let _ = write!(sink, "{m:?}"); // ignore the deliberate halt error
 
     // Take the leading Rust identifier only.
     let mut name = String::new();
@@ -614,26 +622,28 @@ fn render_labels(labels: &[(String, String)]) -> String {
 }
 
 /// Render the registry as Prometheus text exposition (0.0.4). `# HELP`/`# TYPE`
-/// are emitted once per metric name (BTree groups same-name series adjacently).
+/// are emitted once per metric name (`BTree` groups same-name series adjacently).
 pub fn write_prom() -> String {
-    let g = REGISTRY.lock().unwrap_or_else(|p| p.into_inner());
+    use std::fmt::Write as _;
+    let g = REGISTRY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut out = String::new();
     let mut last_name: Option<&str> = None;
     for (key, val) in g.iter() {
         if last_name != Some(key.name.as_str()) {
-            out.push_str(&format!(
-                "# HELP {} {}\n# TYPE {} {}\n",
-                key.name,
-                metric_help(&key.name),
-                key.name,
-                prom_type_token(val)
-            ));
+            let _ = writeln!(out, "# HELP {} {}", key.name, metric_help(&key.name));
+            let _ = writeln!(out, "# TYPE {} {}", key.name, prom_type_token(val));
             last_name = Some(key.name.as_str());
         }
         let labels = render_labels(&key.labels);
         match val {
-            MetricValue::Counter(c) => out.push_str(&format!("{}{} {}\n", key.name, labels, c)),
-            MetricValue::Gauge(gv) => out.push_str(&format!("{}{} {}\n", key.name, labels, gv)),
+            MetricValue::Counter(c) => {
+                let _ = writeln!(out, "{}{} {}", key.name, labels, c);
+            }
+            MetricValue::Gauge(gv) => {
+                let _ = writeln!(out, "{}{} {}", key.name, labels, gv);
+            }
             MetricValue::Histogram {
                 boundaries,
                 buckets,
@@ -644,26 +654,23 @@ pub fn write_prom() -> String {
                 // writeHistogram). buckets[i] already holds the cumulative count.
                 for (i, b) in boundaries.iter().enumerate() {
                     let c = buckets.get(i).copied().unwrap_or(0);
-                    out.push_str(&format!(
-                        "{}_bucket{} {}\n",
+                    let _ = writeln!(
+                        out,
+                        "{}_bucket{} {}",
                         key.name,
                         render_labels_with_le(&key.labels, &format_float(*b)),
                         c
-                    ));
+                    );
                 }
-                out.push_str(&format!(
-                    "{}_bucket{} {}\n",
+                let _ = writeln!(
+                    out,
+                    "{}_bucket{} {}",
                     key.name,
                     render_labels_with_le(&key.labels, "+Inf"),
                     count
-                ));
-                out.push_str(&format!(
-                    "{}_sum{} {}\n",
-                    key.name,
-                    labels,
-                    format_float(*sum)
-                ));
-                out.push_str(&format!("{}_count{} {}\n", key.name, labels, count));
+                );
+                let _ = writeln!(out, "{}_sum{} {}", key.name, labels, format_float(*sum));
+                let _ = writeln!(out, "{}_count{} {}", key.name, labels, count);
             }
         }
     }
@@ -672,21 +679,27 @@ pub fn write_prom() -> String {
 
 /// Most-recent `limit` log entries, oldest→newest.
 pub fn recent_logs(limit: usize) -> Vec<LogEntry> {
-    let g = LOGS.lock().unwrap_or_else(|p| p.into_inner());
+    let g = LOGS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let n = g.len();
     g.iter().skip(n.saturating_sub(limit)).cloned().collect()
 }
 
 /// Most-recent `limit` error entries, oldest→newest.
 pub fn recent_errors(limit: usize) -> Vec<LogEntry> {
-    let g = ERRORS.lock().unwrap_or_else(|p| p.into_inner());
+    let g = ERRORS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let n = g.len();
     g.iter().skip(n.saturating_sub(limit)).cloned().collect()
 }
 
 /// Minimal JSON string escaping for hand-built console payloads (avoids coupling
 /// the always-compiled sink to serde).
+#[must_use]
 pub fn json_escape(s: &str) -> String {
+    use std::fmt::Write as _;
     let mut out = String::with_capacity(s.len() + 2);
     for c in s.chars() {
         match c {
@@ -695,7 +708,11 @@ pub fn json_escape(s: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            // cast is safe: we just checked c as u32 < 0x20
+            #[allow(clippy::cast_sign_loss)]
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
             // U+2028 LINE SEPARATOR / U+2029 PARAGRAPH SEPARATOR are valid JSON
             // but are JS line terminators — unescaped, they break this payload
             // when it is embedded in an inline <script> block (the console
@@ -709,6 +726,7 @@ pub fn json_escape(s: &str) -> String {
 }
 
 /// Render a log-entry slice as a JSON array.
+#[must_use]
 pub fn entries_json(entries: &[LogEntry]) -> String {
     let items: Vec<String> = entries
         .iter()
@@ -739,6 +757,20 @@ mod tests {
         assert_eq!(json_escape("\u{0001}"), "\\u0001");
     }
 
+    // Synthetic Debug types for `variant_name_extracts_only_the_bounded_variant_ident`.
+    struct LongIdent;
+    impl std::fmt::Debug for LongIdent {
+        fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, "{}", "A".repeat(200))
+        }
+    }
+    struct NonIdent;
+    impl std::fmt::Debug for NonIdent {
+        fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, "(weird")
+        }
+    }
+
     #[test]
     fn variant_name_extracts_only_the_bounded_variant_ident() {
         #[derive(Debug)]
@@ -764,23 +796,11 @@ mod tests {
 
         // A >64-byte leading ident truncates to 64 without leaking (synthetic
         // Debug — real Ipê variant idents are short; this proves the cap).
-        struct LongIdent;
-        impl std::fmt::Debug for LongIdent {
-            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                write!(f, "{}", "A".repeat(200))
-            }
-        }
         let n = variant_name(&LongIdent);
         assert_eq!(n.len(), 64);
         assert!(n.chars().all(|c| c == 'A'));
 
         // A Debug rendering that doesn't start with an ident char → "Msg".
-        struct NonIdent;
-        impl std::fmt::Debug for NonIdent {
-            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                write!(f, "(weird")
-            }
-        }
         assert_eq!(variant_name(&NonIdent), "Msg");
     }
 

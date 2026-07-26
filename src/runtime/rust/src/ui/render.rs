@@ -71,6 +71,7 @@ fn color_css(c: &Color) -> String {
 /// `../ipe` reference's `onPseudo pc attrs = AttrPseudoRule pc
 /// (mediaQueryRulesCss attrs)`, which folds attrs through the SAME collector
 /// used for the main `style=""` attribute — one collector, two call sites).
+#[allow(clippy::too_many_lines)]
 pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
     // Single shared buffer with a running `;` separator — replaces the former
     // per-declaration `Vec<String>` + `join(";")` (efficiency-audit §6 medium:
@@ -436,7 +437,9 @@ fn render_nearby_overlays<M: Clone>(attrs: &[Attribute<M>]) -> Vec<Html<M>> {
 /// explicit user-supplied tag (already validated by the Ipê stdlib).
 fn tag_for_description(desc: &Description) -> &'static str {
     match desc {
-        Description::NoDescription => "div",
+        Description::NoDescription
+        | Description::DescLivePolite
+        | Description::DescLiveAssertive => "div",
         Description::DescMain => "main",
         Description::DescNavigation => "nav",
         Description::DescContentInfo => "footer",
@@ -450,7 +453,6 @@ fn tag_for_description(desc: &Description) -> &'static str {
             _ => "h6",
         },
         Description::DescLabel(_) => "label",
-        Description::DescLivePolite | Description::DescLiveAssertive => "div",
         Description::DescButton => "button",
         Description::DescParagraph => "p",
     }
@@ -536,6 +538,7 @@ fn render_node_as<M: Clone>(
 /// Wraps the element in a full-viewport flex-column page wrapper, then renders
 /// the root element with the given root attributes applied. Mirrors the Ipê Go
 /// runtime's `layout` output shape.
+#[must_use]
 pub fn ui_layout<M: Clone>(attrs: Vec<Attribute<M>>, elem: Element<M>) -> Html<M> {
     // Root element rendered with the caller's root attrs applied.
     let root_style = build_style_string(&attrs);
@@ -578,6 +581,7 @@ pub fn ui_layout<M: Clone>(attrs: Vec<Attribute<M>>, elem: Element<M>) -> Html<M
 /// a fn accepting any `C` and silently dropping it would produce wrong HTML
 /// (exit-0-cargo-ok-but-wrong-output). The cfg's `wrapper_attrs`/`root_attrs`
 /// are extracted at the emit site and passed here explicitly.
+#[must_use]
 pub fn ui_layout_with_vecs<M: Clone>(
     wrapper_attrs: Vec<Attribute<M>>,
     root_attrs: Vec<Attribute<M>>,

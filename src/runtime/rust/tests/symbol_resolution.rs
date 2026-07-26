@@ -74,6 +74,24 @@ const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
     "list_map_consume",
 ];
 
+fn walk(dir: &std::path::Path, fn_re: &regex::Regex, out: &mut HashSet<String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            walk(&path, fn_re, out);
+        } else if path.extension().and_then(|e| e.to_str()) == Some("rs")
+            && let Ok(content) = std::fs::read_to_string(&path)
+        {
+            for cap in fn_re.captures_iter(&content) {
+                out.insert(cap[1].to_string());
+            }
+        }
+    }
+}
+
 #[test]
 fn every_kernel_name_resolves_to_runtime_fn() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -105,25 +123,6 @@ fn every_kernel_name_resolves_to_runtime_fn() {
     let runtime_src_dir = root.join("src");
     let mut runtime_fns: HashSet<String> = HashSet::new();
     let fn_re = regex::Regex::new(r"pub fn ([a-z_][a-z0-9_]*)").expect("fn_re");
-
-    fn walk(dir: &std::path::Path, fn_re: &regex::Regex, out: &mut HashSet<String>) {
-        let entries = match std::fs::read_dir(dir) {
-            Ok(e) => e,
-            Err(_) => return,
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                walk(&path, fn_re, out);
-            } else if path.extension().and_then(|e| e.to_str()) == Some("rs")
-                && let Ok(content) = std::fs::read_to_string(&path)
-            {
-                for cap in fn_re.captures_iter(&content) {
-                    out.insert(cap[1].to_string());
-                }
-            }
-        }
-    }
 
     walk(&runtime_src_dir, &fn_re, &mut runtime_fns);
     assert!(

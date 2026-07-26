@@ -136,37 +136,48 @@ impl IpeError {
         )
     }
 
+    #[must_use]
     pub fn io(message: String) -> Self {
         Self::with(IpeErrorKind::Io, message)
     }
+    #[must_use]
     pub fn network(message: String) -> Self {
         Self::with(IpeErrorKind::Network, message)
     }
+    #[must_use]
     pub fn ffi(message: String) -> Self {
         Self::with(IpeErrorKind::Ffi, message)
     }
+    #[must_use]
     pub fn decode(message: String) -> Self {
         Self::with(IpeErrorKind::Decode, message)
     }
+    #[must_use]
     pub fn invalid_input(message: String) -> Self {
         Self::with(IpeErrorKind::InvalidInput, message)
     }
+    #[must_use]
     pub fn conflict(message: String) -> Self {
         Self::with(IpeErrorKind::Conflict, message)
     }
+    #[must_use]
     pub fn unavailable(message: String) -> Self {
         Self::with(IpeErrorKind::Unavailable, message)
     }
+    #[must_use]
     pub fn unexpected(message: String) -> Self {
         Self::with(IpeErrorKind::Unexpected, message)
     }
     /// Nullary in the Ipê surface — pre-built, fixed message.
+    #[must_use]
     pub fn timeout() -> Self {
         Self::with(IpeErrorKind::Timeout, "operation timed out".to_owned())
     }
+    #[must_use]
     pub fn not_found() -> Self {
         Self::with(IpeErrorKind::NotFound, "not found".to_owned())
     }
+    #[must_use]
     pub fn permission_denied() -> Self {
         Self::with(
             IpeErrorKind::PermissionDenied,

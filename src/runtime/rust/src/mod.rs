@@ -1,6 +1,47 @@
 // Ipe Runtime — all modules (for standalone crate compilation).
 // In generated projects, this file is overridden by the compiler.
 
+// ── Pedantic-lint policy for the public emitter API ──────────────────────────
+//
+// `needless_pass_by_value`: Every `pub fn` in this crate is emitter-facing API
+// called by generated Rust code that passes owned `String`/`Vec<T>` values.
+// Changing to `&str`/`&[T]` would require a coordinated emitter change; the
+// lint is correct in general but wrong at this API boundary.
+//
+// `implicit_hasher`: Public functions that accept `HashMap` parameters are part
+// of the emitter-facing API. Generalising over `S: BuildHasher` is correct in
+// library code but requires a matching emitter change to pass the correct hasher
+// at call sites; deferred to the emitter/runtime co-evolution task.
+//
+// `cast_possible_truncation` / `cast_sign_loss` / `cast_precision_loss` /
+// `cast_possible_wrap` / `cast_lossless`: The runtime bridges Ipê's uniform
+// `i64` integer type to Rust APIs that use `u32`, `usize`, `f64`, etc.
+// Ipê's type system guarantees all integer values are valid `i64`; kernel
+// pre-conditions narrow the domain further (e.g. a char code is always in
+// 0..=0x10FFFF, list indices are always non-negative). Converting these to
+// `u32`/`usize`/`f64` at the bridge is correct under those invariants but
+// cannot be proven locally. Replacing every bridge cast with `TryFrom` would
+// propagate fallibility throughout the runtime without adding safety — the
+// caller (emitted code) cannot recover from a type-system invariant violation
+// in any way other than returning an Ipe error, which the runtime already
+// does. Where an actual runtime boundary (e.g. a value read from JSON or from
+// the environment) CAN violate the invariant, checked conversion is already used.
+//
+// `many_single_char_names`: Combinator functions in `core.rs` (map2/map3/map4…)
+// use `A,B,C,D` as type parameters and `a,b,c,d` as their corresponding bound
+// values. Single-letter names ARE the idiomatic form for n-ary products in a
+// functional-style combinator; renaming would reduce, not improve, clarity.
+#![allow(
+    clippy::needless_pass_by_value,
+    clippy::implicit_hasher,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_lossless,
+    clippy::many_single_char_names
+)]
+
 #![cfg_attr(
     not(test),
     deny(

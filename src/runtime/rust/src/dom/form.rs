@@ -20,6 +20,12 @@ use crate::html::FormData;
 // urlencoded string (round-tripped through the same crate so values are escaped),
 // then deserialize into `T`. A missing required field → `Err` → no Msg dispatched
 // (the `OnForm` closure maps `Err` to `None`), unchanged.
+/// Decode a browser `FormData` payload into a typed value `T`.
+///
+/// # Errors
+///
+/// Returns an error string when the form data cannot be URL-encoded or when
+/// the encoded pairs cannot be deserialized into `T`.
 pub fn decode_form<T: serde::de::DeserializeOwned>(fd: FormData) -> Result<T, String> {
     let pairs: Vec<(String, String)> = fd.into_iter().collect();
     let encoded = serde_urlencoded::to_string(&pairs).map_err(|e| e.to_string())?;
@@ -31,6 +37,7 @@ pub fn decode_form<T: serde::de::DeserializeOwned>(fd: FormData) -> Result<T, St
 /// async logger) — we `eprintln!` a warn line (same plain style as the runtime
 /// logger's error path) and return `None` so the live loop dispatches no Msg.
 /// The codegen-emitted `onSubmit` closure calls this.
+#[must_use]
 pub fn decode_form_or_warn<T: serde::de::DeserializeOwned>(fd: FormData) -> Option<T> {
     match decode_form::<T>(fd) {
         Ok(t) => Some(t),
@@ -245,7 +252,7 @@ mod tests {
         // UNBOUNDED in `T` — a `IpeMaybe<NonDefault>` field still has a default.
         struct NonDefault;
         assert!(crate::core::IpeMaybe::<String>::default().is_nothing());
-        let _unbounded: crate::core::IpeMaybe<NonDefault> = Default::default();
+        let _unbounded: crate::core::IpeMaybe<NonDefault> = crate::core::IpeMaybe::default();
     }
 
     // A form-target carrying a NON-Default field (here a `bool`-keyed ADT

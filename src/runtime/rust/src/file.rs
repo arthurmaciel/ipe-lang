@@ -1,5 +1,5 @@
 // File kernel stubs — generic over E.
-use super::*;
+use super::{IpeTask, ok_res, IpeResult, str_err, from_u8_slice};
 
 // ── shared blocking-pool helper ───────────────────────────────────────
 //
@@ -37,6 +37,9 @@ where
 }
 
 #[cfg(not(feature = "tokio"))]
+// `async` is required here to match the tokio variant's signature; callers
+// always use `.await` to work with both feature configurations uniformly.
+#[allow(clippy::unused_async)]
 async fn run_blocking<T, F>(f: F) -> Result<T, String>
 where
     F: FnOnce() -> Result<T, String> + Send + 'static,
@@ -62,23 +65,23 @@ fn file_read_ceiling() -> u64 {
 
 fn file_read_file_sync(path: &str, cap: u64) -> Result<String, String> {
     use std::io::Read;
-    let f = std::fs::File::open(path).map_err(|e| format!("{}", e))?;
+    let f = std::fs::File::open(path).map_err(|e| format!("{e}"))?;
     // take(cap + 1): if the source yields more than `cap` bytes we still
     // stop at a bounded read and report an error rather than OOM.
     let mut buf = String::new();
     let read = f
         .take(cap.saturating_add(1))
         .read_to_string(&mut buf)
-        .map_err(|e| format!("{}", e))?;
+        .map_err(|e| format!("{e}"))?;
     if read as u64 > cap {
         return Err(format!(
-            "file exceeds read ceiling of {} bytes (raise IPE_FILE_READ_MAX or use File.readFileLimit): {}",
-            cap, path
+            "file exceeds read ceiling of {cap} bytes (raise IPE_FILE_READ_MAX or use File.readFileLimit): {path}"
         ));
     }
     Ok(buf)
 }
 
+#[must_use]
 pub fn file_read_file<E: Send + From<String> + 'static>(path: String) -> IpeTask<E, String> {
     Box::pin(async move {
         let cap = file_read_ceiling();
@@ -90,9 +93,10 @@ pub fn file_read_file<E: Send + From<String> + 'static>(path: String) -> IpeTask
 }
 
 fn file_write_file_sync(path: &str, content: &str) -> Result<(), String> {
-    std::fs::write(path, content).map_err(|e| format!("{}", e))
+    std::fs::write(path, content).map_err(|e| format!("{e}"))
 }
 
+#[must_use]
 pub fn file_write_file<E: Send + From<String> + 'static>(
     path: String,
     content: String,
@@ -105,6 +109,7 @@ pub fn file_write_file<E: Send + From<String> + 'static>(
     })
 }
 
+#[must_use]
 pub fn file_exists<E: Send + 'static>(path: String) -> IpeTask<E, bool> {
     Box::pin(async move {
         // Infallible closure — `run_blocking`'s `Err` arm is unreachable here
@@ -121,17 +126,19 @@ pub fn file_exists<E: Send + 'static>(path: String) -> IpeTask<E, bool> {
 
 /// Alias of `file_remove` (the `remove` contract). Kept as a public name for
 /// ABI stability; delegates so the two never drift.
+#[must_use]
 pub fn file_delete<E: Send + From<String> + 'static>(path: String) -> IpeTask<E, ()> {
     file_remove(path)
 }
 
 fn file_mkdir_all_sync(path: &str) -> Result<(), String> {
-    std::fs::create_dir_all(path).map_err(|e| format!("{}", e))
+    std::fs::create_dir_all(path).map_err(|e| format!("{e}"))
 }
 
 /// `Ipe.File.mkdirAll : String -> Task Error ()` — create the directory
 /// and every missing parent (mkdir -p). Already-exists is `Ok` (matching
 /// `std::fs::create_dir_all`); a real I/O failure is `Err`.
+#[must_use]
 pub fn file_mkdir_all<E: Send + From<String> + 'static>(path: String) -> IpeTask<E, ()> {
     Box::pin(async move {
         match run_blocking(move || file_mkdir_all_sync(&path)).await {
@@ -145,16 +152,15 @@ pub fn file_mkdir_all<E: Send + From<String> + 'static>(path: String) -> IpeTask
 
 fn file_read_file_limit_sync(path: &str, cap: u64) -> Result<String, String> {
     use std::io::Read as _;
-    let f = std::fs::File::open(path).map_err(|e| format!("{}", e))?;
+    let f = std::fs::File::open(path).map_err(|e| format!("{e}"))?;
     let mut buf = String::new();
     let read = f
         .take(cap.saturating_add(1))
         .read_to_string(&mut buf)
-        .map_err(|e| format!("{}", e))?;
+        .map_err(|e| format!("{e}"))?;
     if read as u64 > cap {
         return Err(format!(
-            "file exceeds {}-byte limit (stopped reading at the limit — actual size not reported to bound memory use): {}",
-            cap, path
+            "file exceeds {cap}-byte limit (stopped reading at the limit — actual size not reported to bound memory use): {path}"
         ));
     }
     Ok(buf)
@@ -175,6 +181,7 @@ fn file_read_file_limit_sync(path: &str, cap: u64) -> Result<String, String> {
 /// as `compression.rs`'s `gunzip`/`zstdDecompress` decompression-bomb check)
 /// removes the race window structurally: there is only one syscall
 /// sequence, so there is nothing left to race against.
+#[must_use]
 pub fn file_read_file_limit<E: Send + From<String> + 'static>(
     path: String,
     limit: i64,
@@ -195,7 +202,7 @@ pub fn file_read_file_limit<E: Send + From<String> + 'static>(
 fn file_read_file_bytes_sync(path: &str) -> Result<Vec<i64>, String> {
     const DEFAULT_CAP: u64 = 10 * 1024 * 1024;
     use std::io::Read as _;
-    let f = std::fs::File::open(path).map_err(|e| format!("{}", e))?;
+    let f = std::fs::File::open(path).map_err(|e| format!("{e}"))?;
     let mut buf = Vec::new();
     // Read `DEFAULT_CAP + 1` bytes in one pass and check the ACTUAL bytes
     // read, same idiom as `file_read_file_sync` / `file_read_file_limit_sync`
@@ -205,11 +212,10 @@ fn file_read_file_bytes_sync(path: &str) -> Result<Vec<i64>, String> {
     let read = f
         .take(DEFAULT_CAP.saturating_add(1))
         .read_to_end(&mut buf)
-        .map_err(|e| format!("{}", e))?;
+        .map_err(|e| format!("{e}"))?;
     if read as u64 > DEFAULT_CAP {
         return Err(format!(
-            "file exceeds {}-byte limit (stopped reading at the limit — actual size not reported to bound memory use): {}",
-            DEFAULT_CAP, path
+            "file exceeds {DEFAULT_CAP}-byte limit (stopped reading at the limit — actual size not reported to bound memory use): {path}"
         ));
     }
     Ok(from_u8_slice(&buf))
@@ -221,6 +227,7 @@ fn file_read_file_bytes_sync(path: &str) -> Result<Vec<i64>, String> {
 /// cap is an `Err`, never a silent truncation (sibling fix to
 /// `readFileLimit`'s TOCTOU close, commit 706f026). For text content with
 /// guaranteed UTF-8, prefer `readFile` / `readFileLimit`.
+#[must_use]
 pub fn file_read_file_bytes<E: Send + From<String> + 'static>(
     path: String,
 ) -> IpeTask<E, Vec<i64>> {
@@ -240,14 +247,15 @@ fn file_append_sync(path: &str, content: &str) -> Result<(), String> {
         .append(true)
         .create(true)
         .open(path)
-        .map_err(|e| format!("{}", e))?;
+        .map_err(|e| format!("{e}"))?;
     f.write_all(content.as_bytes())
-        .map_err(|e| format!("{}", e))
+        .map_err(|e| format!("{e}"))
 }
 
 /// `Ipe.File.append : String -> String -> Task Error ()`
 /// Append `content` to the end of the file at `path`, creating it if absent.
 /// Mirrors Go's `os.OpenFile(…, O_APPEND|O_CREATE|O_WRONLY, 0644)`.
+#[must_use]
 pub fn file_append<E: Send + From<String> + 'static>(
     path: String,
     content: String,
@@ -263,12 +271,13 @@ pub fn file_append<E: Send + From<String> + 'static>(
 // ─── Removal ───────────────────────────────────────────────────────────────
 
 fn file_remove_sync(path: &str) -> Result<(), String> {
-    std::fs::remove_file(path).map_err(|e| format!("{}", e))
+    std::fs::remove_file(path).map_err(|e| format!("{e}"))
 }
 
 /// `Ipe.File.remove : String -> Task Error ()`
 /// Remove the file at `path`. Returns `Err` on any I/O failure (including
 /// "not found"). Mirrors Go's `os.Remove`.
+#[must_use]
 pub fn file_remove<E: Send + From<String> + 'static>(path: String) -> IpeTask<E, ()> {
     Box::pin(async move {
         match run_blocking(move || file_remove_sync(&path)).await {
@@ -285,10 +294,10 @@ fn file_read_dir_sync(path: &str) -> Result<Vec<String>, String> {
     // (`rd.flatten()` would discard `Err` items mid-walk, omitting entries
     // a transient stat/readdir failure touched — Go's `os.ReadDir` surfaces
     // such an error rather than returning a truncated list).
-    let rd = std::fs::read_dir(path).map_err(|e| format!("{}", e))?;
+    let rd = std::fs::read_dir(path).map_err(|e| format!("{e}"))?;
     let mut names: Vec<String> = Vec::new();
     for entry in rd {
-        let entry = entry.map_err(|e| format!("{}", e))?;
+        let entry = entry.map_err(|e| format!("{e}"))?;
         names.push(entry.file_name().to_string_lossy().into_owned());
     }
     Ok(names)
@@ -297,6 +306,7 @@ fn file_read_dir_sync(path: &str) -> Result<Vec<String>, String> {
 /// `Ipe.File.readDir : String -> Task Error (List String)`
 /// Return the names (not full paths) of all entries in the directory at
 /// `path`, in filesystem order. Mirrors Go's `os.ReadDir` → `e.Name()`.
+#[must_use]
 pub fn file_read_dir<E: Send + From<String> + 'static>(path: String) -> IpeTask<E, Vec<String>> {
     Box::pin(async move {
         match run_blocking(move || file_read_dir_sync(&path)).await {
@@ -310,13 +320,13 @@ pub fn file_read_dir<E: Send + From<String> + 'static>(path: String) -> IpeTask<
 /// Returns `Ok(true)` when `path` exists and is a directory, `Ok(false)` when
 /// it exists and is not a directory, and `Ok(false)` (not `Err`) when the path
 /// does not exist — matching Go's shape (`os.Stat` error → `false`).
+#[must_use]
 pub fn file_is_dir<E: Send + 'static>(path: String) -> IpeTask<E, bool> {
     Box::pin(async move {
         // Same infallible-closure shape as `file_exists` above.
         let is_dir = run_blocking(move || {
             Ok(std::fs::metadata(&path)
-                .map(|m| m.is_dir())
-                .unwrap_or(false))
+                .is_ok_and(|m| m.is_dir()))
         })
         .await
         .unwrap_or(false);
@@ -334,6 +344,7 @@ pub fn file_is_dir<E: Send + 'static>(path: String) -> IpeTask<E, bool> {
 /// Implementation: retry loop with a monotonic-time + process-ID suffix until
 /// exclusive creation succeeds (`O_CREAT|O_EXCL` semantics via
 /// `OpenOptions::create_new`). No `tempfile` crate needed (pure `std`).
+#[must_use]
 pub fn file_temp_file<E: Send + From<String> + 'static>(prefix: String) -> IpeTask<E, String> {
     Box::pin(async move {
         match run_blocking(move || make_temp_path(&prefix, false)).await {
@@ -347,6 +358,7 @@ pub fn file_temp_file<E: Send + From<String> + 'static>(prefix: String) -> IpeTa
 /// Create a uniquely-named directory in the system temp directory, using
 /// `prefix` as the directory name prefix. Returns the absolute path.
 /// The caller is responsible for removing the directory when done.
+#[must_use]
 pub fn file_temp_dir<E: Send + From<String> + 'static>(prefix: String) -> IpeTask<E, String> {
     Box::pin(async move {
         match run_blocking(move || make_temp_path(&prefix, true)).await {
@@ -360,7 +372,7 @@ pub fn file_temp_dir<E: Send + From<String> + 'static>(prefix: String) -> IpeTas
 /// (`is_dir=true`) in the system temp directory, returning its absolute path.
 ///
 /// Uses a monotonic-time nanos + process-ID suffix and retries up to 32 times
-/// to get an exclusive slot (the same approach libc tempfile() uses).  No
+/// to get an exclusive slot (the same approach libc `tempfile()` uses).  No
 /// external crate needed.
 fn make_temp_path(prefix: &str, is_dir: bool) -> Result<String, String> {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -379,9 +391,8 @@ fn make_temp_path(prefix: &str, is_dir: bool) -> Result<String, String> {
     for attempt in 0u32..32 {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.subsec_nanos())
-            .unwrap_or(attempt);
-        let name = format!("{}{}{:08x}{:04x}", prefix, pid, nanos, attempt);
+            .map_or(attempt, |d| d.subsec_nanos());
+        let name = format!("{prefix}{pid}{nanos:08x}{attempt:04x}");
         let path = base.join(&name);
         if is_dir {
             // Owner-only (0700) on Unix — a temp dir created with the default
@@ -395,9 +406,9 @@ fn make_temp_path(prefix: &str, is_dir: bool) -> Result<String, String> {
                 builder.mode(0o700);
             }
             match builder.create(&path) {
-                Ok(_) => return Ok(path.to_string_lossy().into_owned()),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(e) => return Err(format!("{}", e)),
+                Ok(()) => return Ok(path.to_string_lossy().into_owned()),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(format!("{e}")),
             }
         } else {
             // Owner-only (0600) on Unix — same rationale; Go's CreateTemp is 0600.
@@ -410,8 +421,8 @@ fn make_temp_path(prefix: &str, is_dir: bool) -> Result<String, String> {
             }
             match opts.open(&path) {
                 Ok(_) => return Ok(path.to_string_lossy().into_owned()),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(e) => return Err(format!("{}", e)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(format!("{e}")),
             }
         }
     }
@@ -423,12 +434,13 @@ fn make_temp_path(prefix: &str, is_dir: bool) -> Result<String, String> {
 fn file_copy_sync(src: &str, dst: &str) -> Result<(), String> {
     std::fs::copy(src, dst)
         .map(|_| ())
-        .map_err(|e| format!("{}", e))
+        .map_err(|e| format!("{e}"))
 }
 
 /// `Ipe.File.copy : String -> String -> Task Error ()`
 /// Copy the file at `src` to `dst`, creating or overwriting `dst`.
 /// Mirrors Go's `io.Copy(out, in)` pattern.
+#[must_use]
 pub fn file_copy<E: Send + From<String> + 'static>(src: String, dst: String) -> IpeTask<E, ()> {
     Box::pin(async move {
         match run_blocking(move || file_copy_sync(&src, &dst)).await {
@@ -439,12 +451,13 @@ pub fn file_copy<E: Send + From<String> + 'static>(src: String, dst: String) -> 
 }
 
 fn file_rename_sync(src: &str, dst: &str) -> Result<(), String> {
-    std::fs::rename(src, dst).map_err(|e| format!("{}", e))
+    std::fs::rename(src, dst).map_err(|e| format!("{e}"))
 }
 
 /// `Ipe.File.rename : String -> String -> Task Error ()`
 /// Rename (move) the file or directory at `src` to `dst`.
 /// Mirrors Go's `os.Rename`.
+#[must_use]
 pub fn file_rename<E: Send + From<String> + 'static>(src: String, dst: String) -> IpeTask<E, ()> {
     Box::pin(async move {
         match run_blocking(move || file_rename_sync(&src, &dst)).await {

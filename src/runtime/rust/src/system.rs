@@ -1,5 +1,5 @@
 // System helpers — some generic over E (when returning IpeTask).
-use super::*;
+use super::{IpeTask, ok_res, IpeResult, str_err, IpeMaybe};
 
 // `std::env::set_var`/`remove_var` are documented as NOT thread-safe: a mutator
 // can reallocate the C `environ` block while another thread READS it
@@ -19,7 +19,7 @@ static ENV_LOCK: std::sync::RwLock<()> = std::sync::RwLock::new(());
 /// so every non-test process-env read in the crate routes through this one lock —
 /// that's what makes the reader↔mutator serialisation true by construction.
 pub(crate) fn read_env_var(key: &str) -> Result<String, std::env::VarError> {
-    let _guard = ENV_LOCK.read().unwrap_or_else(|p| p.into_inner());
+    let _guard = ENV_LOCK.read().unwrap_or_else(std::sync::PoisonError::into_inner);
     std::env::var(key)
 }
 
@@ -42,7 +42,7 @@ pub(crate) fn locked_set_var(key: &str, val: &str) {
     if key.is_empty() || key.contains('=') || key.contains('\0') || val.contains('\0') {
         return;
     }
-    let _guard = ENV_LOCK.write().unwrap_or_else(|p| p.into_inner());
+    let _guard = ENV_LOCK.write().unwrap_or_else(std::sync::PoisonError::into_inner);
     // SAFETY: `set_var` is `unsafe` in Rust 2024 because a concurrent reader
     // walking `environ` can race the mutation. The exclusive `ENV_LOCK` write
     // guard held here excludes every Ipê-originated reader (all route through
@@ -60,7 +60,7 @@ pub(crate) fn locked_set_var_if_absent(key: &str, val: &str) {
     if key.is_empty() || key.contains('=') || key.contains('\0') || val.contains('\0') {
         return;
     }
-    let _guard = ENV_LOCK.write().unwrap_or_else(|p| p.into_inner());
+    let _guard = ENV_LOCK.write().unwrap_or_else(std::sync::PoisonError::into_inner);
     if std::env::var_os(key).is_none() {
         // SAFETY: held under the exclusive `ENV_LOCK` write guard, which excludes
         // every Ipê-originated reader (all take the shared read lock) — see
@@ -75,13 +75,14 @@ pub(crate) fn locked_remove_var(key: &str) {
     if key.is_empty() || key.contains('=') || key.contains('\0') {
         return;
     }
-    let _guard = ENV_LOCK.write().unwrap_or_else(|p| p.into_inner());
+    let _guard = ENV_LOCK.write().unwrap_or_else(std::sync::PoisonError::into_inner);
     // SAFETY: held under the exclusive `ENV_LOCK` write guard, which excludes
     // every Ipê-originated reader (all take the shared read lock) — see
     // `locked_set_var`.
     unsafe { std::env::remove_var(key) };
 }
 
+#[must_use]
 pub fn system_args<E: Send + 'static>(_: ()) -> IpeTask<E, Vec<String>> {
     Box::pin(async move { ok_res(std::env::args().skip(1).collect()) })
 }
@@ -115,6 +116,9 @@ where
 }
 
 #[cfg(not(feature = "tokio"))]
+// `async` is required here to match the tokio variant's signature; callers
+// always use `.await` to work with both feature configurations uniformly.
+#[allow(clippy::unused_async)]
 async fn run_blocking<T, F>(f: F) -> Result<T, String>
 where
     F: FnOnce() -> Result<T, String> + Send + 'static,
@@ -127,7 +131,7 @@ fn process_run_sync(cmd: &str, args: &[String]) -> Result<std::process::Output, 
     std::process::Command::new(cmd)
         .args(args)
         .output()
-        .map_err(|e| format!("{}: {}", cmd, e))
+        .map_err(|e| format!("{cmd}: {e}"))
 }
 
 /// `Ipe.Process.run : String -> List String -> Task Error String` — run a
@@ -144,6 +148,7 @@ fn process_run_sync(cmd: &str, args: &[String]) -> Result<std::process::Output, 
 /// The actual `Command::output()` wait is offloaded via `run_blocking`
 /// (see the module-level doc comment above) so a long-running subprocess
 /// can't stall the tokio worker thread polling this future.
+#[must_use]
 pub fn process_run<E: Send + From<String> + 'static>(
     cmd: String,
     args: Vec<String>,
@@ -222,36 +227,36 @@ pub fn system_exit(code: i64) -> ! {
 /// Task, or `Err` when unset. Returning a `IpeTask` (not a bare `String`) is
 /// required for parity: `getenv` is Task-typed in the stdlib, so a bare `String`
 /// fails to type-check in any `Task.andThen`/`Task.run` position. Returning `Err`
-/// on unset (rather than `Ok("")`) mirrors Go's `System_getenv` ErrNotFound
+/// on unset (rather than `Ok("")`) mirrors Go's `System_getenv` `ErrNotFound`
 /// short-circuit so a chained Task fails identically on both backends. The
 /// string-based error follows `system_cwd`'s convention — the generic `E` bound
 /// can only build `From<String>`, so the kind is coarser than Go's typed
-/// NotFound (shared limitation with `system_cwd`). NOTE: `getenvOr` stays a bare
+/// `NotFound` (shared limitation with `system_cwd`). NOTE: `getenvOr` stays a bare
 /// `String` (the default plugs the missing case at the call site).
+#[must_use]
 pub fn system_getenv<E: Send + From<String> + 'static>(key: String) -> IpeTask<E, String> {
     Box::pin(async move {
-        match read_env_var(&key) {
-            Ok(v) => ok_res(v),
-            Err(_) => {
-                let msg = format!("environment variable {:?} is not set", key);
-                IpeResult::Err(str_err(&msg))
-            }
+        if let Ok(v) = read_env_var(&key) { ok_res(v) } else {
+            let msg = format!("environment variable {key:?} is not set");
+            IpeResult::Err(str_err(&msg))
         }
     })
 }
 /// `Ipe.System.getenvOr key default` — the env var, or `default` when unset.
+#[must_use]
 pub fn system_getenv_or(key: String, default: String) -> String {
     read_env_var(&key).unwrap_or(default)
 }
 
 /// `System.getenvInt key : String -> Task Error Int`. Unset → `Err` (Go's
-/// ErrNotFound); set-but-not-an-int → `Err` (Go's ErrFfi). The string-based error
+/// `ErrNotFound`); set-but-not-an-int → `Err` (Go's `ErrFfi`). The string-based error
 /// follows the generic-`E` convention (coarser than Go's typed kinds; shared with
 /// `getenv`/`cwd`).
+#[must_use]
 pub fn system_getenv_int<E: Send + From<String> + 'static>(key: String) -> IpeTask<E, i64> {
     Box::pin(async move {
         let r: Result<i64, String> = match read_env_var(&key) {
-            Err(_) => Err(format!("environment variable {:?} is not set", key)),
+            Err(_) => Err(format!("environment variable {key:?} is not set")),
             Ok(v) => v
                 .trim()
                 .parse::<i64>()
@@ -259,7 +264,7 @@ pub fn system_getenv_int<E: Send + From<String> + 'static>(key: String) -> IpeTa
                 // string: env vars are a primary secret store and this message
                 // flows out via Task Error → Error.toString → operator logs /
                 // user surface. Mirror system_getenv (key only).
-                .map_err(|_| format!("env {}: not a valid int", key)),
+                .map_err(|_| format!("env {key}: not a valid int")),
         };
         match r {
             Ok(n) => ok_res(n),
@@ -270,16 +275,17 @@ pub fn system_getenv_int<E: Send + From<String> + 'static>(key: String) -> IpeTa
 
 /// `System.getenvBool key : String -> Task Error Bool`. Matches Go's truthy/falsy
 /// table: `true/yes/1/on/y/t` → true; `false/no/0/off/n/f`/empty → false; unset →
-/// `Err` (NotFound); anything else → `Err` (not-a-bool).
+/// `Err` (`NotFound`); anything else → `Err` (not-a-bool).
+#[must_use]
 pub fn system_getenv_bool<E: Send + From<String> + 'static>(key: String) -> IpeTask<E, bool> {
     Box::pin(async move {
         let r: Result<bool, String> = match read_env_var(&key) {
-            Err(_) => Err(format!("environment variable {:?} is not set", key)),
+            Err(_) => Err(format!("environment variable {key:?} is not set")),
             Ok(v) => match v.trim().to_lowercase().as_str() {
                 "true" | "yes" | "1" | "on" | "y" | "t" => Ok(true),
                 "false" | "no" | "0" | "off" | "n" | "f" | "" => Ok(false),
                 // Key only — never echo the env var VALUE (secret-store leak).
-                _ => Err(format!("env {}: not a valid bool", key)),
+                _ => Err(format!("env {key}: not a valid bool")),
             },
         };
         match r {
@@ -293,6 +299,7 @@ pub fn system_getenv_bool<E: Send + From<String> + 'static>(key: String) -> IpeT
 /// vector to match Go's `System_getArg` (`os.Args[n]` — index 0 is the program
 /// name, UNLIKE `System.args` which skips it); out-of-range / negative →
 /// `Ok Nothing`. Never `Err` (mirrors Go).
+#[must_use]
 pub fn system_get_arg<E: Send + 'static>(n: i64) -> IpeTask<E, IpeMaybe<String>> {
     Box::pin(async move {
         let out = if n < 0 {
@@ -307,6 +314,7 @@ pub fn system_get_arg<E: Send + 'static>(n: i64) -> IpeTask<E, IpeMaybe<String>>
     })
 }
 
+#[must_use]
 pub fn system_setenv<E: Send + 'static>(key: String, val: String) -> IpeTask<E, ()> {
     Box::pin(async move {
         locked_set_var(&key, &val);
@@ -314,6 +322,7 @@ pub fn system_setenv<E: Send + 'static>(key: String, val: String) -> IpeTask<E, 
     })
 }
 
+#[must_use]
 pub fn system_unsetenv<E: Send + 'static>(key: String) -> IpeTask<E, ()> {
     Box::pin(async move {
         locked_remove_var(&key);
@@ -322,17 +331,19 @@ pub fn system_unsetenv<E: Send + 'static>(key: String) -> IpeTask<E, ()> {
 }
 
 /// `System.cwd : () -> Task Error String`.
+#[must_use]
 pub fn system_cwd<E: Send + From<String> + 'static>(_: ()) -> IpeTask<E, String> {
     Box::pin(async move {
         match std::env::current_dir() {
             Ok(p) => ok_res(p.to_string_lossy().into_owned()),
-            Err(e) => IpeResult::Err(str_err(&format!("{}", e))),
+            Err(e) => IpeResult::Err(str_err(&format!("{e}"))),
         }
     })
 }
 
 /// `System.getcwd : () -> Task Error String` — backward-compat alias for `cwd`.
 /// Go: `func System_getcwd(unit any) any { return System_cwd(unit) }`.
+#[must_use]
 pub fn system_getcwd<E: Send + From<String> + 'static>(unit: ()) -> IpeTask<E, String> {
     system_cwd(unit)
 }
@@ -372,6 +383,7 @@ fn system_load_env_sync() {
 /// use. Real-world impact is low (`.env` is small and read once at startup),
 /// but on a slow/network filesystem an inline read would stall the tokio
 /// worker thread polling this future.
+#[must_use]
 pub fn system_load_env<E: Send + 'static>(_: ()) -> IpeTask<E, ()> {
     Box::pin(async move {
         // `run_blocking`'s `Err` arm (the blocking task panicked) is folded

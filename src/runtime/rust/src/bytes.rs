@@ -17,6 +17,7 @@ use super::IpeMaybe;
 // ── Arity-0 ──────────────────────────────────────────────────────────────
 
 /// `Bytes.empty : Bytes` — the empty byte buffer.
+#[must_use]
 pub fn bytes_empty() -> Vec<u8> {
     Vec::new()
 }
@@ -24,11 +25,13 @@ pub fn bytes_empty() -> Vec<u8> {
 // ── Arity-1 ──────────────────────────────────────────────────────────────
 
 /// `Bytes.length : Bytes -> Int` — the number of bytes in the buffer.
+#[must_use]
 pub fn bytes_length(b: Vec<u8>) -> i64 {
     b.len() as i64
 }
 
 /// `Bytes.isEmpty : Bytes -> Bool`.
+#[must_use]
 pub fn bytes_is_empty(b: Vec<u8>) -> bool {
     b.is_empty()
 }
@@ -37,6 +40,7 @@ pub fn bytes_is_empty(b: Vec<u8>) -> bool {
 ///
 /// Every Ipê `String` is valid UTF-8 (the Ipê type system enforces this), so
 /// this conversion is total and always succeeds.
+#[must_use]
 pub fn bytes_from_string(s: String) -> Vec<u8> {
     s.into_bytes()
 }
@@ -44,6 +48,7 @@ pub fn bytes_from_string(s: String) -> Vec<u8> {
 /// `Bytes.toString : Bytes -> Maybe String` — UTF-8-decode bytes into a string.
 ///
 /// Returns `Just s` when the buffer is valid UTF-8, `Nothing` otherwise.
+#[must_use]
 pub fn bytes_to_string(b: Vec<u8>) -> IpeMaybe<String> {
     match String::from_utf8(b) {
         Ok(s) => IpeMaybe::Just(s),
@@ -55,6 +60,7 @@ pub fn bytes_to_string(b: Vec<u8>) -> IpeMaybe<String> {
 ///
 /// Accepts lowercase and uppercase hex digits. Returns `Nothing` when the
 /// input has an odd number of characters or contains any non-hex character.
+#[must_use]
 pub fn bytes_from_hex(s: String) -> IpeMaybe<Vec<u8>> {
     // Odd-length inputs can never be valid hex (every byte needs two digits).
     if !s.len().is_multiple_of(2) {
@@ -67,6 +73,7 @@ pub fn bytes_from_hex(s: String) -> IpeMaybe<Vec<u8>> {
 }
 
 /// `Bytes.toHex : Bytes -> String` — hex-encode bytes (lowercase output).
+#[must_use]
 pub fn bytes_to_hex(b: Vec<u8>) -> String {
     hex::encode(b)
 }
@@ -74,6 +81,7 @@ pub fn bytes_to_hex(b: Vec<u8>) -> String {
 /// `Bytes.fromBase64 : String -> Maybe Bytes` — standard (RFC 4648) base-64 decode.
 ///
 /// Returns `Nothing` on invalid padding or non-base-64 characters.
+#[must_use]
 pub fn bytes_from_base64(s: String) -> IpeMaybe<Vec<u8>> {
     match B64.decode(s.as_bytes()) {
         Ok(bytes) => IpeMaybe::Just(bytes),
@@ -82,6 +90,7 @@ pub fn bytes_from_base64(s: String) -> IpeMaybe<Vec<u8>> {
 }
 
 /// `Bytes.toBase64 : Bytes -> String` — standard (RFC 4648) base-64 encode.
+#[must_use]
 pub fn bytes_to_base64(b: Vec<u8>) -> String {
     B64.encode(b)
 }
@@ -89,6 +98,7 @@ pub fn bytes_to_base64(b: Vec<u8>) -> String {
 // ── Arity-2 ──────────────────────────────────────────────────────────────
 
 /// `Bytes.append : Bytes -> Bytes -> Bytes` — concatenate two byte buffers.
+#[must_use]
 pub fn bytes_append(a: Vec<u8>, b: Vec<u8>) -> Vec<u8> {
     let mut out = a;
     out.extend_from_slice(&b);
@@ -105,6 +115,7 @@ pub fn bytes_append(a: Vec<u8>, b: Vec<u8>) -> Vec<u8> {
 /// - `start >= end` (after normalisation) returns the empty buffer.
 ///
 /// No `panic` / raw indexing — all bounds are validated before slicing.
+#[must_use]
 pub fn bytes_slice(start: i64, end: i64, b: Vec<u8>) -> Vec<u8> {
     let len = b.len() as i64;
 
@@ -127,7 +138,7 @@ pub fn bytes_slice(start: i64, end: i64, b: Vec<u8>) -> Vec<u8> {
     // Safety: s and e are both ≤ len (clamped above), and s < e.
     // Use `.get(s..e)` to satisfy the no-indexing clippy gate; the bounds
     // check above guarantees this never returns None.
-    b.get(s..e).map(|sl| sl.to_vec()).unwrap_or_default()
+    b.get(s..e).map(<[u8]>::to_vec).unwrap_or_default()
 }
 
 #[cfg(test)]

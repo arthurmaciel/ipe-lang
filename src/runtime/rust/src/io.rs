@@ -1,5 +1,5 @@
 // Ipe.Io — line-oriented stdio. All effectful, so IpeTask-returning.
-use super::*;
+use super::{IpeTask, ok_res, IpeResult, str_err};
 
 use std::io::Write;
 
@@ -9,12 +9,13 @@ use std::io::Write;
 ///
 /// AUD-09: capped at 1 MiB via a `Take`-wrapped reader. Unbounded, a caller
 /// piping input with no newline (or a misbehaving/adversarial source) could
-/// grow `line` without limit (an OOM / DoS vector). Over the cap,
+/// grow `line` without limit (an OOM / `DoS` vector). Over the cap,
 /// `read_line` stops at the byte limit (a truncated line, no newline found)
 /// rather than allocating without bound — the same truncate-not-OOM
 /// trade-off `File.readFileLimit` already makes.
 const IO_READ_LINE_CAP_BYTES: u64 = 1024 * 1024;
 
+#[must_use]
 pub fn io_read_line<E: Send + From<String> + 'static>(_: ()) -> IpeTask<E, String> {
     Box::pin(async move {
         let mut line = String::new();
@@ -26,12 +27,13 @@ pub fn io_read_line<E: Send + From<String> + 'static>(_: ()) -> IpeTask<E, Strin
                 let trimmed = line.trim_end_matches(['\n', '\r']).to_string();
                 ok_res(trimmed)
             }
-            Err(e) => IpeResult::Err(str_err(&format!("{}", e))),
+            Err(e) => IpeResult::Err(str_err(&format!("{e}"))),
         }
     })
 }
 
 /// `Io.writeStdout : String -> Task Error ()`. Writes verbatim (no newline).
+#[must_use]
 pub fn io_write_stdout<E: Send + From<String> + 'static>(s: String) -> IpeTask<E, ()> {
     Box::pin(async move {
         let r = (|| {
@@ -41,12 +43,13 @@ pub fn io_write_stdout<E: Send + From<String> + 'static>(s: String) -> IpeTask<E
         })();
         match r {
             Ok(()) => ok_res(()),
-            Err(e) => IpeResult::Err(str_err(&format!("{}", e))),
+            Err(e) => IpeResult::Err(str_err(&format!("{e}"))),
         }
     })
 }
 
 /// `Io.writeStderr : String -> Task Error ()`. Writes verbatim (no newline).
+#[must_use]
 pub fn io_write_stderr<E: Send + From<String> + 'static>(s: String) -> IpeTask<E, ()> {
     Box::pin(async move {
         let r = (|| {
@@ -56,7 +59,7 @@ pub fn io_write_stderr<E: Send + From<String> + 'static>(s: String) -> IpeTask<E
         })();
         match r {
             Ok(()) => ok_res(()),
-            Err(e) => IpeResult::Err(str_err(&format!("{}", e))),
+            Err(e) => IpeResult::Err(str_err(&format!("{e}"))),
         }
     })
 }

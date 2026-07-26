@@ -4,7 +4,7 @@
 //! index, histogram counts, …) maps to `HashMap<i64, V>` and a `Dict String v`
 //! to `HashMap<String, V>`. Keys are `Ord` for the deterministic sorted
 //! iteration Ipê guarantees; `Hash + Eq` for the map ops. Codegen emits the
-//! key type from the `Dict k v` annotation (TypeRenderer renders `HashMap<k,v>`;
+//! key type from the `Dict k v` annotation (`TypeRenderer` renders `HashMap<k,v>`;
 //! empty-dict turbofish pins both K and V from the expected type). The
 //! `IpeDict<T>` alias stays for the String-keyed runtime structs (db rows).
 
@@ -15,6 +15,7 @@ use std::hash::Hash;
 pub type IpeDict<T> = HashMap<String, T>;
 
 /// `Dict.empty : Dict k v`.
+#[must_use]
 pub fn dict_empty<K, V>() -> HashMap<K, V> {
     HashMap::new()
 }
@@ -37,6 +38,7 @@ pub fn dict_get<K: Hash + Eq, V: Clone>(k: K, d: HashMap<K, V>) -> IpeMaybe<V> {
 
 /// `Dict.keys : Dict k v -> List k`. Returns keys in sorted order so
 /// iteration is deterministic (matches Ipê's _fieldIndex emission contract).
+#[must_use]
 pub fn dict_keys<K: Ord, V>(d: HashMap<K, V>) -> Vec<K> {
     let mut keys: Vec<K> = d.into_keys().collect();
     keys.sort();
@@ -45,6 +47,7 @@ pub fn dict_keys<K: Ord, V>(d: HashMap<K, V>) -> Vec<K> {
 
 /// `Dict.values : Dict k v -> List v`. Key-sorted for determinism, matching
 /// `dict_keys` (Ipê Dicts iterate in sorted-key order).
+#[must_use]
 pub fn dict_values<K: Ord, V: Clone>(d: HashMap<K, V>) -> Vec<V> {
     let mut pairs: Vec<(K, V)> = d.into_iter().collect();
     pairs.sort_by(|a, b| a.0.cmp(&b.0));
@@ -53,6 +56,7 @@ pub fn dict_values<K: Ord, V: Clone>(d: HashMap<K, V>) -> Vec<V> {
 
 /// `Dict.toList : Dict k v -> List (k, v)`. Key-sorted for determinism,
 /// matching `dict_keys` / `dict_values` (Ipê Dicts iterate in sorted-key order).
+#[must_use]
 pub fn dict_to_list<K: Ord, V: Clone>(d: HashMap<K, V>) -> Vec<(K, V)> {
     let mut pairs: Vec<(K, V)> = d.into_iter().collect();
     pairs.sort_by(|a, b| a.0.cmp(&b.0));
@@ -72,16 +76,19 @@ pub fn dict_member<K: Hash + Eq, V>(k: K, d: HashMap<K, V>) -> bool {
 }
 
 /// `Dict.fromList : List (k, v) -> Dict k v`.
+#[must_use]
 pub fn dict_from_list<K: Hash + Eq, V>(pairs: Vec<(K, V)>) -> HashMap<K, V> {
     pairs.into_iter().collect()
 }
 
 /// `Dict.size : Dict k v -> Int`. Returns the number of key/value pairs.
+#[must_use]
 pub fn dict_size<K, V>(d: HashMap<K, V>) -> i64 {
     d.len() as i64
 }
 
 /// `Dict.isEmpty : Dict k v -> Bool`.
+#[must_use]
 pub fn dict_is_empty<K, V>(d: HashMap<K, V>) -> bool {
     d.is_empty()
 }
@@ -89,6 +96,7 @@ pub fn dict_is_empty<K, V>(d: HashMap<K, V>) -> bool {
 /// `Dict.union : Dict k v -> Dict k v -> Dict k v`.
 /// Left-biased: `a`'s bindings win on collision (matches Go's `Dict_union` —
 /// Go inserts `mb` first then `ma` overwrites, so `ma` wins).
+#[must_use]
 pub fn dict_union<K: Hash + Eq + Clone, V: Clone>(
     a: HashMap<K, V>,
     b: HashMap<K, V>,
@@ -179,12 +187,14 @@ where
 
 /// `Dict.intersect : Dict k v -> Dict k v -> Dict k v` — keep the entries of
 /// the first dict whose key also appears in the second (values from the first).
+#[must_use]
 pub fn dict_intersect<K: Hash + Eq, V>(a: HashMap<K, V>, b: HashMap<K, V>) -> HashMap<K, V> {
     a.into_iter().filter(|(k, _)| b.contains_key(k)).collect()
 }
 
 /// `Dict.diff : Dict k v -> Dict k v -> Dict k v` — keep the entries of the
 /// first dict whose key does NOT appear in the second.
+#[must_use]
 pub fn dict_diff<K: Hash + Eq, V>(a: HashMap<K, V>, b: HashMap<K, V>) -> HashMap<K, V> {
     a.into_iter().filter(|(k, _)| !b.contains_key(k)).collect()
 }

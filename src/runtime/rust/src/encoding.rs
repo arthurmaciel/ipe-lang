@@ -74,6 +74,7 @@ pub(crate) fn form_url_decode(s: &str) -> String {
 /// Ipê `base64Encode : String -> String` — encodes the input's UTF-8 bytes
 /// (Go parity: `base64.StdEncoding.EncodeToString([]byte(s))`). Non-ASCII
 /// matches Go rather than silently truncating codepoints > 255.
+#[must_use]
 pub fn base64_encode(s: String) -> String {
     B64.encode(s.as_bytes())
 }
@@ -82,6 +83,7 @@ pub fn base64_encode(s: String) -> String {
 /// requires them to be valid UTF-8 (the Ipê `String` invariant), so
 /// `base64Decode (base64Encode s) == Ok s` for every `String s`. Non-UTF-8
 /// payloads surface as `Err` (raw-byte round-tripping lives on `Ipe.Bytes`).
+#[must_use]
 pub fn base64_decode<E: From<String>>(s: String) -> IpeResult<E, String> {
     match B64.decode(s.as_bytes()) {
         Ok(bytes) => match String::from_utf8(bytes) {
@@ -90,13 +92,14 @@ pub fn base64_decode<E: From<String>>(s: String) -> IpeResult<E, String> {
                 IpeResult::Err(format!("base64: decoded bytes are not valid UTF-8: {e}").into())
             }
         },
-        Err(e) => IpeResult::Err(format!("base64: {}", e).into()),
+        Err(e) => IpeResult::Err(format!("base64: {e}").into()),
     }
 }
 
 /// Ipê `urlEncode : String -> String` — Go url.QueryEscape semantics: space
 /// becomes `+` (not %20); the ASCII unreserved set (`A-Za-z0-9` plus `-_.~`)
 /// is left verbatim; every other byte is percent-encoded.
+#[must_use]
 pub fn url_encode(s: String) -> String {
     // QUERY encodes space as %20 (it is in the set); QueryEscape uses '+'.
     // '+' itself is not in the unreserved set, so it encodes to %2B first —
@@ -106,19 +109,21 @@ pub fn url_encode(s: String) -> String {
         .replace("%20", "+")
 }
 
-/// Ipê `urlDecode : String -> Result Error String` — QueryUnescape: `+` -> space,
+/// Ipê `urlDecode : String -> Result Error String` — `QueryUnescape`: `+` -> space,
 /// then percent-decode (so a literal `%2B` round-trips back to `+`).
+#[must_use]
 pub fn url_decode<E: From<String>>(s: String) -> IpeResult<E, String> {
     let spaced = s.replace('+', " ");
     match percent_decode_str(&spaced).decode_utf8() {
         Ok(cow) => IpeResult::Ok(cow.into_owned()),
-        Err(e) => IpeResult::Err(format!("urlDecode: {}", e).into()),
+        Err(e) => IpeResult::Err(format!("urlDecode: {e}").into()),
     }
 }
 
 /// Ipê `hexEncode : String -> String` — encodes the input's UTF-8 bytes
 /// (Go parity: `hex.EncodeToString([]byte(s))`). Non-ASCII matches Go rather
 /// than truncating codepoints > 255.
+#[must_use]
 pub fn encoding_hex_encode(s: String) -> String {
     hex::encode(s.as_bytes())
 }
@@ -129,6 +134,7 @@ pub fn encoding_hex_encode(s: String) -> String {
 /// (e.g. the hex of a raw digest) surface as `Err`; use `Ipe.Bytes.fromHex` to
 /// round-trip arbitrary bytes. (jwt.rs owns its own `hex::decode` on raw
 /// `&[u8]` and never routes through this kernel.)
+#[must_use]
 pub fn encoding_hex_decode<E: From<String>>(s: String) -> IpeResult<E, String> {
     match hex::decode(&s) {
         Ok(bytes) => match String::from_utf8(bytes) {
@@ -137,7 +143,7 @@ pub fn encoding_hex_decode<E: From<String>>(s: String) -> IpeResult<E, String> {
                 IpeResult::Err(format!("hexDecode: decoded bytes are not valid UTF-8: {e}").into())
             }
         },
-        Err(e) => IpeResult::Err(format!("hexDecode: {}", e).into()),
+        Err(e) => IpeResult::Err(format!("hexDecode: {e}").into()),
     }
 }
 
@@ -153,16 +159,19 @@ pub fn encoding_hex_decode<E: From<String>>(s: String) -> IpeResult<E, String> {
 // routes through `IpeError: From<String>` (classified `Unexpected`).
 
 /// Generated-code alias for `base64_decode` with `E = IpeError`.
+#[must_use]
 pub fn ipe_base64_decode(s: String) -> IpeResult<crate::error::IpeError, String> {
     base64_decode(s)
 }
 
 /// Generated-code alias for `url_decode` with `E = IpeError`.
+#[must_use]
 pub fn ipe_url_decode(s: String) -> IpeResult<crate::error::IpeError, String> {
     url_decode(s)
 }
 
 /// Generated-code alias for `encoding_hex_decode` with `E = IpeError`.
+#[must_use]
 pub fn ipe_encoding_hex_decode(s: String) -> IpeResult<crate::error::IpeError, String> {
     encoding_hex_decode(s)
 }

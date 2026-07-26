@@ -1,6 +1,6 @@
 //! Ipe.Basics kernels: modBy + errorToString.
 //!
-//! Mirrors Go's runtime-go/rt/rt.go (Basics_modByT, etc.).
+//! Mirrors Go's runtime-go/rt/rt.go (`Basics_modByT`, etc.).
 
 /// Ipê `modBy : Int -> Int -> Int`. Divisor-first convention (Elm/pipeline order).
 /// Mirrors Go's `Basics_modByT` exactly:
@@ -13,6 +13,7 @@
 /// (the mathematical result is 0).  `checked_rem` returns `None` for that case;
 /// we map it to r = 0, which is the correct mathematical remainder and leaves
 /// the adjust condition (`0 < 0`) false, so the final result is 0.
+#[must_use]
 pub fn basics_mod_by(divisor: i64, n: i64) -> i64 {
     if divisor == 0 {
         return 0;
@@ -78,6 +79,7 @@ pub fn basics_always<A, B>(x: A, _y: B) -> A {
 }
 
 /// Ipê `not : Bool -> Bool` — boolean negation.
+#[must_use]
 pub fn basics_not(b: bool) -> bool {
     !b
 }
@@ -119,6 +121,7 @@ pub fn basics_negate<T: ::core::ops::Neg<Output = T>>(x: T) -> T {
 /// per concrete type, with `f64`'s negation (never overflows) passing
 /// through unchanged.
 pub trait SaturatingNeg: Sized {
+    #[must_use]
     fn saturating_neg(self) -> Self;
 }
 impl SaturatingNeg for i64 {

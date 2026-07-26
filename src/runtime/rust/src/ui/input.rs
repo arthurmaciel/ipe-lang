@@ -59,26 +59,31 @@ impl<M> crate::stringify::IpeStringify for Placeholder<M> {
 // ---- Label constructors -----------------------------------------------------
 
 /// `Input.labelAbove : List (Attribute msg) -> Element msg -> Label msg`
+#[must_use]
 pub fn input_label_above_<M>(attrs: Vec<Attribute<M>>, el: Element<M>) -> Label<M> {
     Label::Label(LabelPosition::AbovePos, attrs, el)
 }
 
 /// `Input.labelBelow : List (Attribute msg) -> Element msg -> Label msg`
+#[must_use]
 pub fn input_label_below_<M>(attrs: Vec<Attribute<M>>, el: Element<M>) -> Label<M> {
     Label::Label(LabelPosition::BelowPos, attrs, el)
 }
 
 /// `Input.labelLeft : List (Attribute msg) -> Element msg -> Label msg`
+#[must_use]
 pub fn input_label_left_<M>(attrs: Vec<Attribute<M>>, el: Element<M>) -> Label<M> {
     Label::Label(LabelPosition::LeftPos, attrs, el)
 }
 
 /// `Input.labelRight : List (Attribute msg) -> Element msg -> Label msg`
+#[must_use]
 pub fn input_label_right_<M>(attrs: Vec<Attribute<M>>, el: Element<M>) -> Label<M> {
     Label::Label(LabelPosition::RightPos, attrs, el)
 }
 
 /// `Input.labelHidden : String -> Label msg`
+#[must_use]
 pub fn input_label_hidden_<M>(s: String) -> Label<M> {
     Label::LabelHidden(s)
 }
@@ -86,6 +91,7 @@ pub fn input_label_hidden_<M>(s: String) -> Label<M> {
 // ---- Placeholder constructor -------------------------------------------------
 
 /// `Input.placeholder : List (Attribute msg) -> Element msg -> Placeholder msg`
+#[must_use]
 pub fn input_placeholder_<M>(attrs: Vec<Attribute<M>>, content: Element<M>) -> Placeholder<M> {
     Placeholder { attrs, content }
 }
@@ -417,6 +423,7 @@ impl<M> crate::stringify::IpeStringify for RadioOption<M> {
 /// `Input.option : String -> Element msg -> RadioOption msg`
 ///
 /// Constructs a `RadioOption` from a wire value string and a label element.
+#[must_use]
 pub fn input_option_<M>(value: String, label: Element<M>) -> RadioOption<M> {
     RadioOption { value, label }
 }

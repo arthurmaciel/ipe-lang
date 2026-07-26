@@ -14,7 +14,7 @@
 // When adding a new security-bearing random value, route it through `OsRng`, NOT
 // through any `lcg_*` / `random_*` fn here. (Audit finding: low/weak-crypto —
 // recorded as an invariant so a future change can't silently violate it.)
-use super::*;
+use super::{IpeMaybe, IpeTask, ok_res, IpeResult, str_err};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static LCG_STATE: AtomicU64 = AtomicU64::new(0);
@@ -60,8 +60,8 @@ pub(crate) fn lcg_next() -> u64 {
     let mut state = LCG_STATE.load(Ordering::Relaxed);
     loop {
         let next = state
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         match LCG_STATE.compare_exchange_weak(state, next, Ordering::Relaxed, Ordering::Relaxed) {
             Ok(_) => return next,
             Err(observed) => state = observed,
@@ -73,27 +73,29 @@ pub(crate) fn lcg_next() -> u64 {
 //    seedStep / Random_seededInt/Float/Choice (runtime-go/rt/rt.go). Pure. ──
 
 fn seed_step(z_in: i64) -> i64 {
-    let mut z = (z_in as u64).wrapping_add(0x9E3779B97F4A7C15);
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+    let mut z = (z_in as u64).wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     z = z ^ (z >> 31);
     z as i64
 }
 
 /// `Random.seededIntRaw : Int -> Int -> Int -> (Int, Int)` → (value, newSeed).
+#[must_use]
 pub fn random_seeded_int(s: i64, lo: i64, hi: i64) -> (i64, i64) {
     let next = seed_step(s);
     if hi <= lo {
         return (lo, next);
     }
     // i128 width so `hi - lo + 1` never overflows i64 (hi=MAX, lo=MIN panicked).
-    let width = (hi as i128 - lo as i128 + 1) as u128;
-    let off = ((next as u64 >> 33) as u128) % width;
-    let v = (lo as i128 + off as i128) as i64; // in [lo, hi] -> fits i64
+    let width = (i128::from(hi) - i128::from(lo) + 1) as u128;
+    let off = u128::from(next as u64 >> 33) % width;
+    let v = (i128::from(lo) + off as i128) as i64; // in [lo, hi] -> fits i64
     (if v < lo { lo } else { v }, next)
 }
 
 /// `Random.seededFloatRaw : Int -> (Float, Int)` → (value in [0,1), newSeed).
+#[must_use]
 pub fn random_seeded_float(s: i64) -> (f64, i64) {
     let next = seed_step(s);
     let f = (next as u64 >> 11) as f64 / (1u64 << 53) as f64;
@@ -101,6 +103,7 @@ pub fn random_seeded_float(s: i64) -> (f64, i64) {
 }
 
 /// `Random.seededChoiceRaw : Int -> List a -> (Maybe a, Int)`.
+#[must_use]
 pub fn random_seeded_choice<T: Clone>(s: i64, items: Vec<T>) -> (IpeMaybe<T>, i64) {
     let next = seed_step(s);
     if items.is_empty() {
@@ -113,6 +116,7 @@ pub fn random_seeded_choice<T: Clone>(s: i64, items: Vec<T>) -> (IpeMaybe<T>, i6
     }
 }
 
+#[must_use]
 pub fn random_int<E: Send + 'static>(lo: i64, hi: i64) -> IpeTask<E, i64> {
     Box::pin(async move {
         lcg_init();
@@ -138,6 +142,7 @@ pub fn random_int<E: Send + 'static>(lo: i64, hi: i64) -> IpeTask<E, i64> {
     })
 }
 
+#[must_use]
 pub fn random_float<E: Send + 'static>(lo: f64, hi: f64) -> IpeTask<E, f64> {
     Box::pin(async move {
         lcg_init();
@@ -159,6 +164,7 @@ pub fn random_float<E: Send + 'static>(lo: f64, hi: f64) -> IpeTask<E, f64> {
     })
 }
 
+#[must_use]
 pub fn random_choice<E: Send + From<String> + 'static>(items: Vec<String>) -> IpeTask<E, String> {
     Box::pin(async move {
         lcg_init();
@@ -174,6 +180,7 @@ pub fn random_choice<E: Send + From<String> + 'static>(items: Vec<String>) -> Ip
 /// Returns `Ok Nothing` on empty list, `Ok (Just elem)` otherwise — never Err.
 /// Matches Go's `Random_choiceMaybe` which uses `Ok(makeMaybeNothing())` /
 /// `Ok(makeMaybeJust(...))`.
+#[must_use]
 pub fn random_choice_maybe<E: Send + 'static, T: Clone + Send + 'static>(
     items: Vec<T>,
 ) -> IpeTask<E, IpeMaybe<T>> {
@@ -196,6 +203,7 @@ pub fn random_choice_maybe<E: Send + 'static, T: Clone + Send + 'static>(
 /// `Random.shuffle : List a -> Task Error (List a)` — Fisher-Yates.
 /// Matches Go's `Random_shuffle` which uses `mrand.Shuffle` over a copy of
 /// the list (input not mutated).
+#[must_use]
 pub fn random_shuffle<E: Send + 'static, T: Clone + Send + 'static>(
     items: Vec<T>,
 ) -> IpeTask<E, Vec<T>> {
@@ -217,6 +225,7 @@ pub fn random_shuffle<E: Send + 'static, T: Clone + Send + 'static>(
 /// Each tuple is `(weight, value)`; picks proportionally by weight. Non-positive
 /// weights are skipped. Returns `Ok Nothing` when every weight is ≤ 0 or the
 /// list is empty — matches Go's `Random_weighted`.
+#[must_use]
 pub fn random_weighted<E: Send + 'static, T: Clone + Send + 'static>(
     items: Vec<(f64, T)>,
 ) -> IpeTask<E, IpeMaybe<T>> {

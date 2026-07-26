@@ -100,13 +100,15 @@ fn is_known(code: &str) -> bool {
 
 // ── Property kernels ───────────────────────────────────────────────
 
+#[must_use]
 pub fn money_minor_units(code: String) -> i64 {
     match lookup_currency(&code) {
-        Some(c) => c.minor_units as i64,
+        Some(c) => i64::from(c.minor_units),
         None => 2,
     }
 }
 
+#[must_use]
 pub fn money_symbol(code: String) -> String {
     let upper = code.trim().to_uppercase();
     match lookup_currency(&upper) {
@@ -115,6 +117,7 @@ pub fn money_symbol(code: String) -> String {
     }
 }
 
+#[must_use]
 pub fn money_currency_name(code: String) -> String {
     let upper = code.trim().to_uppercase();
     match lookup_currency(&upper) {
@@ -123,6 +126,7 @@ pub fn money_currency_name(code: String) -> String {
     }
 }
 
+#[must_use]
 pub fn money_is_known_currency(code: String) -> bool {
     is_known(&code)
 }
@@ -130,6 +134,7 @@ pub fn money_is_known_currency(code: String) -> bool {
 // ── Format kernels ─────────────────────────────────────────────────
 
 /// `format : Code -> Decimal -> String` — "$12.34" / "-$12.34".
+#[must_use]
 pub fn money_format(code: String, amount: Decimal) -> String {
     let upper = code.trim().to_uppercase();
     let (minor, symbol) = match lookup_currency(&upper) {
@@ -145,13 +150,14 @@ pub fn money_format(code: String, amount: Decimal) -> String {
     let rounded = abs.round_dp_with_strategy(minor, RoundingStrategy::MidpointAwayFromZero);
     let fixed = format!("{:.*}", minor as usize, rounded);
     if neg {
-        format!("-{}{}", symbol, fixed)
+        format!("-{symbol}{fixed}")
     } else {
-        format!("{}{}", symbol, fixed)
+        format!("{symbol}{fixed}")
     }
 }
 
 /// `formatWithCode : Code -> Decimal -> String` — "12.34 USD" for B2B output.
+#[must_use]
 pub fn money_format_with_code(code: String, amount: Decimal) -> String {
     let upper = code.trim().to_uppercase();
     let minor = match lookup_currency(&upper) {
@@ -175,26 +181,29 @@ fn rates() -> &'static Mutex<HashMap<(String, String), RD>> {
 
 /// `setRate : Code -> Code -> Decimal -> Result Error ()`.
 /// Negative or zero rate → error. Inverse auto-registered.
+#[must_use]
 pub fn money_set_rate<E: From<String>>(
     from: String,
     to: String,
     rate: Decimal,
 ) -> IpeResult<E, ()> {
+    // Reject absurd codes (real ISO-4217 / crypto tickers are ≤ ~5 chars; 16 is
+    // generous) so the registry key can't be a memory-amplification vector.
+    const MAX_CODE_LEN: usize = 16;
+    // Bound the registry: distinct (from,to) pairs would otherwise accumulate
+    // without limit (memory-DoS). Updating an existing pair is always allowed.
+    const MAX_RATES: usize = 4096;
     if rate.0.is_zero() || rate.0.is_sign_negative() {
         return IpeResult::Err("Money.setRate: rate must be positive".to_string().into());
     }
     let from = from.trim().to_uppercase();
     let to = to.trim().to_uppercase();
-    // Reject absurd codes (real ISO-4217 / crypto tickers are ≤ ~5 chars; 16 is
-    // generous) so the registry key can't be a memory-amplification vector.
-    const MAX_CODE_LEN: usize = 16;
     if from.len() > MAX_CODE_LEN || to.len() > MAX_CODE_LEN {
         return IpeResult::Err("Money.setRate: currency code too long".to_string().into());
     }
-    let mut map = rates().lock().unwrap_or_else(|e| e.into_inner());
-    // Bound the registry: distinct (from,to) pairs would otherwise accumulate
-    // without limit (memory-DoS). Updating an existing pair is always allowed.
-    const MAX_RATES: usize = 4096;
+    let mut map = rates()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if map.len() >= MAX_RATES && !map.contains_key(&(from.clone(), to.clone())) {
         return IpeResult::Err("Money.setRate: rate registry is full".to_string().into());
     }
@@ -223,29 +232,33 @@ pub fn money_set_rate<E: From<String>>(
 
 /// `getRate : Code -> Code -> Result Error Decimal`.
 /// from == to returns 1.0; else looks up. Missing → Err.
+#[must_use]
 pub fn money_get_rate<E: From<String>>(from: String, to: String) -> IpeResult<E, Decimal> {
     let from = from.trim().to_uppercase();
     let to = to.trim().to_uppercase();
     if from == to {
         return IpeResult::Ok(Decimal(RD::from(1)));
     }
-    let map = rates().lock().unwrap_or_else(|e| e.into_inner());
+    let map = rates()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     match map.get(&(from.clone(), to.clone())) {
         Some(r) => IpeResult::Ok(Decimal(*r)),
-        None => {
-            IpeResult::Err(format!("Money.getRate: no rate registered for {}→{}", from, to).into())
-        }
+        None => IpeResult::Err(format!("Money.getRate: no rate registered for {from}→{to}").into()),
     }
 }
 
 /// `hasRate : Code -> Code -> Bool`.
+#[must_use]
 pub fn money_has_rate(from: String, to: String) -> bool {
     let from = from.trim().to_uppercase();
     let to = to.trim().to_uppercase();
     if from == to {
         return true;
     }
-    let map = rates().lock().unwrap_or_else(|e| e.into_inner());
+    let map = rates()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     map.contains_key(&(from, to))
 }
 
@@ -253,8 +266,11 @@ pub fn money_has_rate(from: String, to: String) -> bool {
 /// The compiled-source `Ipe.Money.clearRates` is a point-free `Ffi.kernel`
 /// alias of type `() -> Result Error ()`, so the emit passes a unit argument
 /// (matching the arity-1 unit-kernel convention, e.g. `uuid_v4(_: ())`).
+#[must_use]
 pub fn money_clear_rates<E: From<String>>(_: ()) -> IpeResult<E, ()> {
-    let mut map = rates().lock().unwrap_or_else(|e| e.into_inner());
+    let mut map = rates()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     map.clear();
     IpeResult::Ok(())
 }
@@ -271,6 +287,7 @@ pub fn money_clear_rates<E: From<String>>(_: ()) -> IpeResult<E, ()> {
 /// as an `unwrap`. On overflow (astronomically large amounts or exotic `places`
 /// values) the function returns an empty Vec rather than panicking; normal
 /// monetary amounts (< 10^15 major units) are unaffected.
+#[must_use]
 pub fn money_allocate(places: i64, parts: i64, amount: Decimal) -> Vec<Decimal> {
     if parts <= 0 {
         return Vec::new();
@@ -297,13 +314,11 @@ pub fn money_allocate(places: i64, parts: i64, amount: Decimal) -> Vec<Decimal> 
         None => return Vec::new(),
     };
     // checked_mul + checked_sub: base × parts and total_minor − that.
-    let base_times_parts = match base.checked_mul(parts_dec) {
-        Some(v) => v,
-        None => return Vec::new(),
+    let Some(base_times_parts) = base.checked_mul(parts_dec) else {
+        return Vec::new();
     };
-    let remainder = match total_minor.checked_sub(base_times_parts) {
-        Some(v) => v,
-        None => return Vec::new(),
+    let Some(remainder) = total_minor.checked_sub(base_times_parts) else {
+        return Vec::new();
     };
     // `remainder` is integer-VALUED (both operands were `.trunc()`'d) but its
     // Decimal scale may be > 0, so `to_string()` can render "3.00" — which
@@ -375,7 +390,8 @@ mod tests {
     // next via an unwrap on a poisoned lock.
     fn rate_test_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+        LOCK.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     #[test]
