@@ -8,14 +8,19 @@ fn main() -> ExitCode {
     match ipe::run_cli(&args) {
         Ok(()) => ExitCode::SUCCESS,
         // An unknown command, or a per-command misuse, shows a full help page on
-        // its own; the `ipe: ` prefix belongs to short diagnostics, not a help
-        // screen. A command misuse leads with its own reason line before the page.
+        // its own (already guttered); the `ipe: ` prefix belongs to short
+        // diagnostics, not a help screen. A command misuse leads with its own
+        // reason line before the page. Both are framed with a blank edge so every
+        // command's output opens and closes with a newline.
         Err(err @ (ipe::CliError::UnknownCommand | ipe::CliError::CommandUsage { .. })) => {
-            eprintln!("{err}");
+            eprint!("{}", ipe::style::frame(&err.to_string()));
             ExitCode::FAILURE
         }
         Err(err) => {
-            eprintln!("ipe: {err}");
+            eprint!(
+                "{}",
+                ipe::style::frame(&ipe::style::gutter(&format!("ipe: {err}")))
+            );
             ExitCode::FAILURE
         }
     }

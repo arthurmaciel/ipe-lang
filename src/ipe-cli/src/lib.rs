@@ -174,7 +174,7 @@ impl std::fmt::Display for CliError {
             Self::UsageOwned(hint) => write!(f, "{hint}"),
             // The top-level help, coloured for a terminal. Rendered against
             // stderr because misuse output goes to stderr.
-            Self::UnknownCommand => f.write_str(help::top_level(&std::io::stderr()).trim_start()),
+            Self::UnknownCommand => f.write_str(&help::top_level(&std::io::stderr())),
             Self::Io { path, source } => write!(f, "io error at {}: {source}", path.display()),
             Self::Pipeline { file, src, diag } => {
                 f.write_str(&render(diag, &file.to_string_lossy(), src))
@@ -237,7 +237,7 @@ impl std::fmt::Display for CliError {
             // `None` fallback (never taken for a known command) degrades to the
             // top-level screen rather than panicking.
             Self::CommandUsage { command, reason } => {
-                writeln!(f, "{reason}")?;
+                writeln!(f, "{}", crate::style::gutter(reason))?;
                 let page = help::command(command, &std::io::stderr())
                     .unwrap_or_else(|| help::top_level(&std::io::stderr()));
                 f.write_str(page.trim_end_matches('\n'))
@@ -2578,7 +2578,7 @@ fn render_capabilities(
                     );
                 }
             }
-            style::gutter(&body)
+            style::frame(&style::gutter(&body))
         }
     }
 }
@@ -2606,7 +2606,7 @@ fn render_version(format: cli_args::OutputFormat, _stream: &impl std::io::IsTerm
     match format {
         Plain => format!("{version}\n"),
         Json => format!("{{\"version\":{version:?}}}\n"),
-        Human => style::gutter(&format!("ipe {version}\n")),
+        Human => style::frame(&style::gutter(&format!("ipe {version}\n"))),
     }
 }
 

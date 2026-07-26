@@ -451,7 +451,7 @@ fn render_top_level(p: &Palette) -> String {
     out.push('\n');
     let _ = writeln!(out, "{}{}{}", p.dim, report_bugs_footer(), p.reset);
     out.push('\n');
-    out
+    gutter(&out)
 }
 
 /// Render one command's `--help` page: summary, synopsis, the positional

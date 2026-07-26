@@ -138,14 +138,17 @@ pub fn run_audit(rest: &[String]) -> Result<(), CliError> {
     enforced_semver(&prepared, index_root.as_deref())?;
     supply_chain(&prepared)?;
 
-    println!(
-        "package audit: {} {} — all Tier-1 checks passed.",
-        prepared.manifest.name,
-        prepared
-            .manifest
-            .version
-            .as_ref()
-            .map_or_else(|| "(unversioned)".to_owned(), ToString::to_string)
+    print!(
+        "{}",
+        crate::style::frame(&crate::style::gutter(&format!(
+            "package audit: {} {} — all Tier-1 checks passed.",
+            prepared.manifest.name,
+            prepared
+                .manifest
+                .version
+                .as_ref()
+                .map_or_else(|| "(unversioned)".to_owned(), ToString::to_string)
+        )))
     );
     Ok(())
 }
