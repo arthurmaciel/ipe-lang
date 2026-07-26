@@ -246,6 +246,11 @@ const COMMANDS: &[Command] = &[
                 flag: "[--rev <sha>]",
                 desc: "publish: the revision to pin (overrides the committed HEAD)",
             },
+            Opt {
+                flag: "[--fork <owner>]",
+                desc: "publish: the owner of your index fork to push to (defaults to the source \
+                       owner)",
+            },
         ],
     },
     Command {

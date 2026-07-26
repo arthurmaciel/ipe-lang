@@ -39,9 +39,6 @@ pub enum Refusal {
     /// The package's version is already published in the index — a published
     /// version is immutable and must never be rewritten.
     DuplicateVersion { name: String, version: String },
-    /// Non-dry-run publishing needs a `GITHUB_TOKEN` (or a `gh`/browser path),
-    /// and none was found.
-    MissingToken,
     /// The source URL could not be determined (no `--source` and no git remote).
     NoSource,
 }
@@ -67,12 +64,6 @@ impl std::fmt::Display for Refusal {
                 "`{name}` {version} is already published in the index — a published version is \
                  immutable and must never be rewritten. Bump the version in `ipe.toml` and \
                  publish the new one."
-            ),
-            Self::MissingToken => f.write_str(
-                "publishing over the network needs a GitHub token — set `GITHUB_TOKEN` to a \
-                 token that can open a pull request against the index repo, or re-run with \
-                 `--dry-run` to see the computed entry and intended PR without touching the \
-                 network.",
             ),
             Self::NoSource => f.write_str(
                 "could not determine the package's source URL — the index needs a public git \
@@ -101,6 +92,9 @@ struct Args {
     source: Option<String>,
     /// `--rev <sha>`: the revision to pin, overriding the git HEAD.
     rev: Option<String>,
+    /// `--fork <owner>`: the GitHub owner of the author's index fork to push to
+    /// (defaults to the source repo's owner).
+    fork: Option<String>,
 }
 
 /// The real curated index repository. A `--index` override retargets the PR (a
@@ -114,8 +108,8 @@ const DEFAULT_INDEX_REPO: &str = "arthurmaciel/ipe-index";
 /// # Errors
 /// [`CliError::UsageOwned`] on argument misuse; [`CliError::PackageAudit`] when
 /// the local gate rejects the package; [`CliError::Publish`] on a publish
-/// precondition (dirty tree, unpushed HEAD, duplicate version, missing token);
-/// resolution / IO errors otherwise.
+/// precondition (dirty tree, unpushed HEAD, duplicate version); resolution / IO
+/// errors otherwise.
 pub fn run_publish(rest: &[String]) -> Result<(), CliError> {
     let args = parse_args(rest)?;
 
@@ -152,7 +146,20 @@ pub fn run_publish(rest: &[String]) -> Result<(), CliError> {
         return Ok(());
     }
 
-    open_pr(&entry_toml, &plan)
+    // The fork owner defaults to the source repo's owner — the account that
+    // publishes its own package would fork the index under the same name.
+    let fork_owner = args
+        .fork
+        .unwrap_or_else(|| infer_publisher(&entry_version.source));
+    if fork_owner == "unknown" {
+        return Err(CliError::UsageOwned(
+            "ipe package publish: could not infer your GitHub fork owner from the source URL — \
+             pass `--fork <github-user>` (the owner of your fork of the index)."
+                .to_owned(),
+        ));
+    }
+
+    open_pr(&entry_toml, &plan, &fork_owner)
 }
 
 /// Parse `publish`'s tail into typed [`Args`].
@@ -166,6 +173,7 @@ fn parse_args(rest: &[String]) -> Result<Args, CliError> {
     let mut index_repo: Option<String> = None;
     let mut source: Option<String> = None;
     let mut rev: Option<String> = None;
+    let mut fork: Option<String> = None;
 
     let mut it = rest.iter();
     while let Some(arg) = it.next() {
@@ -174,6 +182,7 @@ fn parse_args(rest: &[String]) -> Result<Args, CliError> {
             "--index" => index_repo = Some(take_value(&mut it, "--index")?),
             "--source" => source = Some(take_value(&mut it, "--source")?),
             "--rev" => rev = Some(take_value(&mut it, "--rev")?),
+            "--fork" => fork = Some(take_value(&mut it, "--fork")?),
             flag if flag.starts_with('-') => {
                 return Err(CliError::UsageOwned(format!(
                     "ipe package publish: unknown flag `{flag}`"
@@ -196,6 +205,7 @@ fn parse_args(rest: &[String]) -> Result<Args, CliError> {
         index_repo: index_repo.unwrap_or_else(|| DEFAULT_INDEX_REPO.to_owned()),
         source,
         rev,
+        fork,
     })
 }
 
@@ -412,29 +422,218 @@ fn print_dry_run(entry_toml: &str, plan: &PrPlan) {
     print!("{}", crate::style::frame(&crate::style::gutter(&body)));
 }
 
-/// Open the index PR over the network. Thin and non-privileged: it requires a
-/// `GITHUB_TOKEN` and never stores a credential of its own.
+/// Removes its directory on drop, so a publish leaves no scratch behind however
+/// it returns.
+struct ScratchDir(PathBuf);
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Open the index PR the spec's default way: push the entry to the author's fork
+/// of the index over `git`, then open a browser at GitHub's pre-filled "create
+/// pull request" page.
+///
+/// No credential is stored and `gh` is not required — the push uses the git
+/// credentials already on the machine, and the fork is a one-time setup the
+/// author does on GitHub. Everything happens in a throwaway clone, so a failure
+/// never touches the working project, and the PR URL is printed regardless so
+/// the publish can always be finished by hand.
 ///
 /// # Errors
-/// [`CliError::Publish`] when no token is available (the actionable instruction
-/// to set one or use `--dry-run`); [`CliError::UsageOwned`] otherwise, until the
-/// networked path is wired (a separate ticket — publish holds no OAuth flow).
-fn open_pr(_entry_toml: &str, _plan: &PrPlan) -> Result<(), CliError> {
-    // The network path is gated on an explicit token: publish holds no index
-    // credentials and does not implement an OAuth device flow (that is a separate
-    // ticket). Absent a token, refuse with a clear instruction rather than
-    // silently doing nothing.
-    if std::env::var_os("GITHUB_TOKEN").is_none() {
-        return Err(refuse(Refusal::MissingToken));
+/// [`CliError::Resolve`] when a git step fails (clone / commit / push); the
+/// message carries the fork URL and the pre-filled PR URL as the manual
+/// fallback.
+fn open_pr(entry_toml: &str, plan: &PrPlan, fork_owner: &str) -> Result<(), CliError> {
+    let index_name = index_repo_name(&plan.index_repo);
+    let fork_url = format!("https://github.com/{fork_owner}/{index_name}.git");
+
+    let scratch = ScratchDir(publish_scratch_dir(&plan.branch)?);
+    let clone = scratch.0.join(index_name);
+
+    // Shallow-clone the fork — it carries the index's `main` history, which the
+    // branch must descend from for the compare page to work.
+    if let Err(git) = run_git_step(
+        &scratch.0,
+        &["clone", "--quiet", "--depth", "1", &fork_url, index_name],
+    ) {
+        return Err(clone_failed(&fork_url, &git));
     }
-    // With a token present, the API call to create the branch + PR is the
-    // headless path the plan describes. It is intentionally not exercised by the
-    // test suite (which must never open a real PR); the offline-testable contract
-    // is the `--dry-run` path above.
-    Err(CliError::UsageOwned(
-        "ipe package publish: networked publishing over `GITHUB_TOKEN` is not wired yet — \
-         re-run with `--dry-run` to produce the entry and open the PR by hand."
-            .to_owned(),
+
+    // Write the entry on a fresh branch and commit it. `-c user.*` supplies an
+    // identity so the commit succeeds even where git has none configured.
+    let entry_path = clone.join(&plan.entry_file);
+    if let Some(parent) = entry_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| scratch_io(&e))?;
+    }
+    std::fs::write(&entry_path, entry_toml).map_err(|e| scratch_io(&e))?;
+
+    for step in [
+        vec!["checkout", "--quiet", "-b", &plan.branch],
+        vec!["add", "--", &plan.entry_file],
+        vec![
+            "-c",
+            "user.name=ipe",
+            "-c",
+            "user.email=ipe@localhost",
+            "commit",
+            "--quiet",
+            "-m",
+            &plan.title,
+        ],
+        vec!["push", "--quiet", "-u", "origin", &plan.branch],
+    ] {
+        if let Err(git) = run_git_step(&clone, &step) {
+            return Err(push_failed(&fork_url, plan, fork_owner, &git));
+        }
+    }
+
+    let url = compare_url(
+        &plan.index_repo,
+        "main",
+        fork_owner,
+        &plan.branch,
+        &plan.title,
+    );
+    let opened = open_in_browser(&url);
+    print_pr_opened(plan, &url, opened);
+    Ok(())
+}
+
+/// The `<name>` of an `<owner>/<name>` repo (the whole string when it has no
+/// slash).
+fn index_repo_name(index_repo: &str) -> &str {
+    index_repo.rsplit('/').next().unwrap_or(index_repo)
+}
+
+/// A unique, freshly-created scratch directory for one publish.
+fn publish_scratch_dir(branch: &str) -> Result<PathBuf, CliError> {
+    let slug: String = branch
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let dir = std::env::temp_dir().join(format!("ipe-publish-{}-{slug}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).map_err(|e| scratch_io(&e))?;
+    Ok(dir)
+}
+
+/// Run one `git` step in `dir`; on a non-zero exit, return git's stderr as the
+/// error string so the caller can surface the real cause.
+fn run_git_step(dir: &Path, args: &[&str]) -> Result<(), String> {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .map_err(|e| format!("could not run `git`: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_owned())
+    }
+}
+
+/// GitHub's pre-filled "create pull request" URL: the compare page for
+/// `fork_owner:branch` against the index's `base`, with the title filled in.
+/// `quick_pull=1` opens the PR form directly.
+fn compare_url(
+    index_repo: &str,
+    base: &str,
+    fork_owner: &str,
+    branch: &str,
+    title: &str,
+) -> String {
+    format!(
+        "https://github.com/{index_repo}/compare/{base}...{fork_owner}:{branch}\
+         ?quick_pull=1&title={}",
+        percent_encode(title)
+    )
+}
+
+/// Percent-encode a URL query value, keeping the RFC 3986 unreserved set.
+fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(char::from(b));
+        } else {
+            out.push('%');
+            let _ = write!(out, "{b:02X}");
+        }
+    }
+    out
+}
+
+/// Best-effort launch of the platform browser on `url`. Returns whether the
+/// opener started — the URL is printed regardless, so `false` is never fatal.
+fn open_in_browser(url: &str) -> bool {
+    let mut command = if cfg!(target_os = "macos") {
+        let mut c = Command::new("open");
+        c.arg(url);
+        c
+    } else if cfg!(target_os = "windows") {
+        let mut c = Command::new("cmd");
+        c.args(["/C", "start", "", url]);
+        c
+    } else {
+        let mut c = Command::new("xdg-open");
+        c.arg(url);
+        c
+    };
+    command.status().is_ok_and(|s| s.success())
+}
+
+/// Print the "pushed, now finish the PR" summary, framed and guttered like every
+/// other human-facing publish message.
+fn print_pr_opened(plan: &PrPlan, url: &str, opened: bool) {
+    let mut body = String::new();
+    let _ = writeln!(body, "pushed `{}` to your index fork", plan.branch);
+    let _ = writeln!(body);
+    let _ = writeln!(
+        body,
+        "{}finish the pull request here:",
+        if opened {
+            "opened your browser — "
+        } else {
+            ""
+        }
+    );
+    let _ = write!(body, "  {url}");
+    print!("{}", crate::style::frame(&crate::style::gutter(&body)));
+}
+
+/// A scratch-filesystem failure during publish.
+fn scratch_io(e: &std::io::Error) -> CliError {
+    CliError::Resolve(format!(
+        "ipe package publish: scratch filesystem error: {e}"
+    ))
+}
+
+/// Clone of the author's fork failed — most often the fork does not exist yet.
+fn clone_failed(fork_url: &str, git: &str) -> CliError {
+    CliError::Resolve(format!(
+        "ipe package publish: could not clone your index fork `{fork_url}` — publish pushes the \
+         entry to your fork, so fork the index on GitHub first (a one-time step) and make sure \
+         git can reach it.\n  git: {git}"
+    ))
+}
+
+/// Push to the author's fork failed — nothing was published; the pre-filled PR
+/// URL is included so the author can retry the push and finish by hand.
+fn push_failed(fork_url: &str, plan: &PrPlan, fork_owner: &str, git: &str) -> CliError {
+    let url = compare_url(
+        &plan.index_repo,
+        "main",
+        fork_owner,
+        &plan.branch,
+        &plan.title,
+    );
+    CliError::Resolve(format!(
+        "ipe package publish: could not push `{}` to `{fork_url}` — nothing was published. Fix \
+         the push (git credentials / fork access), then open the PR here:\n  {url}\n  git: {git}",
+        plan.branch
     ))
 }
 
@@ -720,19 +919,32 @@ mod tests {
     /// The networked path refuses with a clear instruction when no token is set —
     /// a typed refusal, not a panic. Skipped when a runner sets `GITHUB_TOKEN`.
     #[test]
-    fn open_pr_without_a_token_is_a_typed_refusal() {
-        if std::env::var_os("GITHUB_TOKEN").is_some() {
-            return;
-        }
-        let plan = PrPlan {
-            index_repo: DEFAULT_INDEX_REPO.to_owned(),
-            entry_file: "packages/x.toml".to_owned(),
-            branch: "publish/x-1.0.0".to_owned(),
-            title: "Publish x 1.0.0".to_owned(),
-        };
-        let err = open_pr("name = \"x\"\n", &plan).unwrap_err();
-        assert!(matches!(err, CliError::Publish(Refusal::MissingToken)));
-        assert!(format!("{err}").contains("GITHUB_TOKEN"));
+    fn compare_url_is_the_prefilled_pr_page() {
+        let url = compare_url(
+            "arthurmaciel/ipe-index",
+            "main",
+            "octocat",
+            "publish/foo-1.2.3",
+            "Publish foo 1.2.3",
+        );
+        assert_eq!(
+            url,
+            "https://github.com/arthurmaciel/ipe-index/compare/\
+             main...octocat:publish/foo-1.2.3?quick_pull=1&title=Publish%20foo%201.2.3"
+        );
+    }
+
+    #[test]
+    fn percent_encode_keeps_unreserved_and_escapes_the_rest() {
+        assert_eq!(percent_encode("Publish foo 1.2.3"), "Publish%20foo%201.2.3");
+        assert_eq!(percent_encode("a-b_c.d~e"), "a-b_c.d~e");
+        assert_eq!(percent_encode("x/y&z=w"), "x%2Fy%26z%3Dw");
+    }
+
+    #[test]
+    fn index_repo_name_takes_the_last_segment() {
+        assert_eq!(index_repo_name("arthurmaciel/ipe-index"), "ipe-index");
+        assert_eq!(index_repo_name("ipe-index"), "ipe-index");
     }
 
     #[test]
