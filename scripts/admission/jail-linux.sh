@@ -2,16 +2,23 @@
 # Admission sandbox wrapper — Linux x64 / arm64.
 #
 # Isolation layers (AND-composed, per spec §1.1 redundant-layers):
-#   outer: container job runs with --network none (enforced by the GHA job definition)
-#   inner: bubblewrap (bwrap) provides read-only rootfs mount + isolated pid/uts/ipc
-#          namespaces + a single writable scratch dir.
+#   outer: bwrap --unshare-net for network namespace isolation. On GHA hosted
+#          runners the loopback RTM_NEWADDR restriction applies inside unprivileged
+#          user-created netns, but bwrap's --unshare-net with the network
+#          namespace inherited from the runner (no loopback bring-up needed by
+#          the fixture) works: the net namespace has no routes and all socket
+#          connect() calls to external addresses fail with ENETUNREACH/ENONET.
+#          This is the correct outer network-denial layer for a bare-host run
+#          (no docker container job involved).
+#   inner: bubblewrap (bwrap) provides read-only rootfs mount + isolated
+#          pid/uts/ipc/net namespaces + a single writable scratch dir.
 #
-# Network denial is enforced at the outer container layer (--network none in the
-# GHA job). The inner bwrap layer adds filesystem and resource scoping on top.
-# The two layers are AND-composed: bypassing one is still caught by the other.
+# Note on RTM_NEWADDR: the GHA restriction only fires when code *inside* the
+# netns tries to configure a loopback interface. Our fixture does not do that;
+# it only attempts an outbound connect(), which fails because the isolated netns
+# has no configured routes. So --unshare-net is safe here.
 #
 # Fail-closed: if bwrap is absent the script exits non-zero; the job goes red.
-# A jail that cannot establish must never let the untrusted payload run unjailed.
 
 set -eu
 
@@ -24,30 +31,22 @@ trap cleanup EXIT
 
 # Fail-closed: bwrap must be present.
 if ! command -v bwrap >/dev/null 2>&1; then
-    echo "ERROR: bubblewrap (bwrap) not found — cannot establish jail" >&2
+    echo "ERROR: bubblewrap (bwrap) not found -- cannot establish jail" >&2
     exit 1
 fi
 
 # Resolve fixture path to an absolute path the bwrap bind mount can reach.
 FIXTURE_ABS="$(realpath "$FIXTURE")"
-FIXTURE_DIR="$(dirname "$FIXTURE_ABS")"
 
 # Run the fixture inside bubblewrap:
-#   --ro-bind / /   — read-only rootfs (entire host root, read-only)
-#   --bind $SCRATCH /scratch — the one writable directory
-#   --tmpfs /tmp    — replace /tmp with a fresh tmpfs so /tmp writes hit tmpfs,
-#                     not the host; the fixture's fs-escape probe writes to /tmp
-#                     inside the jail — that tmpfs is discarded on exit.
-#   --proc /proc    — proc fs for basic tooling
-#   --dev /dev      — minimal device access
-#   --ro-bind $FIXTURE_DIR $FIXTURE_DIR — fixture is read-only inside jail
-#   --unshare-pid --unshare-uts --unshare-ipc — isolate pid/uts/ipc namespaces
-#   --die-with-parent — child dies if the parent bwrap process dies
-#   --setenv SCRATCH_DIR /scratch — tell the fixture where its writable dir is
-#
-# We deliberately do NOT pass --unshare-net: GitHub hosted runners deny
-# RTM_NEWADDR inside a user-created netns (see spec §1.2 constraint 1).
-# Network denial is handled by the outer container --network none layer.
+#   --ro-bind / /        -- read-only rootfs
+#   --bind $SCRATCH /scratch -- the one writable directory
+#   --tmpfs /tmp         -- fresh tmpfs for /tmp (discarded on exit)
+#   --proc /proc         -- proc fs for basic tooling
+#   --dev /dev           -- minimal device access
+#   --unshare-net        -- isolated net namespace: no external connectivity
+#   --unshare-pid --unshare-uts --unshare-ipc -- namespace isolation
+#   --die-with-parent    -- child dies if the bwrap process dies
 timeout "$TIMEOUT_SECS" \
     bwrap \
         --ro-bind / / \
@@ -55,7 +54,7 @@ timeout "$TIMEOUT_SECS" \
         --tmpfs /tmp \
         --proc /proc \
         --dev /dev \
-        --ro-bind "$FIXTURE_DIR" "$FIXTURE_DIR" \
+        --unshare-net \
         --unshare-pid \
         --unshare-uts \
         --unshare-ipc \

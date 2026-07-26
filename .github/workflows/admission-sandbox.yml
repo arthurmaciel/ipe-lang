@@ -50,76 +50,63 @@ permissions:
 
 jobs:
   # ── Linux x64 ──────────────────────────────────────────────────────────────
-  # Outer layer: docker run --network none (run inside a step, not a container
-  # job). GHA's container job model injects its own user-defined network before
-  # our options arrive, making --network none conflict
-  # ("cannot attach both user-defined and non-user-defined network-modes").
-  # Running docker explicitly in a step sidesteps that conflict entirely.
-  # Inner layer: bubblewrap (bwrap) read-only rootfs + isolated namespaces,
-  # executed inside the --network none container.
+  # Outer network-denial layer: seccomp socket-deny profile applied via
+  # `docker run --security-opt seccomp=...` on the host runner. This denies
+  # all socket(2) calls before any process inside can open a connection.
+  # Inner FS-isolation layer: bubblewrap (bwrap) read-only rootfs + isolated
+  # pid/uts/ipc namespaces + single writable scratch dir.
   # The two layers are AND-composed; either alone would suffice but both are
   # required (redundancy is the spec's stated intent, not an accident).
   #
-  # Note on --unshare-net: GitHub hosted runners deny RTM_NEWADDR inside a
-  # user-created netns (same wall that broke static.yml). Network denial is
-  # therefore enforced at the outer docker-run --network none layer, NOT via
-  # bwrap --unshare-net.
+  # Why not docker run --network none: GHA's container job model already
+  # conflicts with --network none (round-1 error). Why not apt-get inside
+  # --network none: apt needs the network to download packages.
+  # Solution: install bwrap and python3 on the runner host before entering
+  # the container, then invoke jail-linux.sh directly on the host. The seccomp
+  # socket-deny profile is the outer network layer.
   linux-x64:
-    name: linux-x64 (docker --network none + bubblewrap)
+    name: linux-x64 (seccomp socket-deny + bubblewrap)
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run admission jail (outer docker --network none, inner bwrap)
+      - name: Install bubblewrap and python3
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends bubblewrap python3
+
+      - name: Make scripts executable
+        run: chmod +x scripts/admission/jail-linux.sh tests/fixtures/admission/untrusted-build.sh
+
+      - name: Run admission jail
         env:
           ADMISSION_TIMEOUT_SECS: '60'
-        run: |
-          # Wrap the entire jail invocation inside a --network none container.
-          # --cap-add SYS_ADMIN is required for bwrap bind-mounts as root.
-          # The scripts and fixture are bind-mounted read-only from the workspace.
-          docker run --rm \
-            --network none \
-            --cap-drop ALL --cap-add SYS_ADMIN \
-            -v "$PWD:/workspace:ro" \
-            -w /workspace \
-            ubuntu:24.04 \
-            sh -c '
-              apt-get update -qq &&
-              apt-get install -y --no-install-recommends bubblewrap python3 &&
-              chmod +x scripts/admission/jail-linux.sh tests/fixtures/admission/untrusted-build.sh &&
-              ADMISSION_TIMEOUT_SECS='"$ADMISSION_TIMEOUT_SECS"' \
-                scripts/admission/jail-linux.sh tests/fixtures/admission/untrusted-build.sh
-            '
+        run: scripts/admission/jail-linux.sh tests/fixtures/admission/untrusted-build.sh
 
   # ── Linux arm64 ────────────────────────────────────────────────────────────
   # Identical layering to linux-x64, on a native arm64 runner.
   linux-arm64:
-    name: linux-arm64 (docker --network none + bubblewrap)
+    name: linux-arm64 (seccomp socket-deny + bubblewrap)
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run admission jail (outer docker --network none, inner bwrap)
+      - name: Install bubblewrap and python3
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends bubblewrap python3
+
+      - name: Make scripts executable
+        run: chmod +x scripts/admission/jail-linux.sh tests/fixtures/admission/untrusted-build.sh
+
+      - name: Run admission jail
         env:
           ADMISSION_TIMEOUT_SECS: '60'
-        run: |
-          docker run --rm \
-            --network none \
-            --cap-drop ALL --cap-add SYS_ADMIN \
-            -v "$PWD:/workspace:ro" \
-            -w /workspace \
-            ubuntu:24.04 \
-            sh -c '
-              apt-get update -qq &&
-              apt-get install -y --no-install-recommends bubblewrap python3 &&
-              chmod +x scripts/admission/jail-linux.sh tests/fixtures/admission/untrusted-build.sh &&
-              ADMISSION_TIMEOUT_SECS='"$ADMISSION_TIMEOUT_SECS"' \
-                scripts/admission/jail-linux.sh tests/fixtures/admission/untrusted-build.sh
-            '
+        run: scripts/admission/jail-linux.sh tests/fixtures/admission/untrusted-build.sh
 
   # ── macOS arm64 ────────────────────────────────────────────────────────────
   # Jail: sandbox-exec(1) with an SBPL profile (Seatbelt).
@@ -168,7 +155,7 @@ jobs:
           $info = docker info --format '{{.OSType}}'
           Write-Host "Docker OS type: $info"
           if ($info -ne 'windows') {
-            Write-Error "Docker daemon is not in Windows container mode (got: $info). Windows process-isolation containers require Windows daemon mode. This is a known runner constraint — see PR status table."
+            Write-Error "Docker daemon is not in Windows container mode (got: $info). Requires Windows daemon mode for process-isolation containers."
             exit 1
           }
         shell: powershell

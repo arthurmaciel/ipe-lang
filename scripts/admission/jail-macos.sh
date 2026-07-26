@@ -12,9 +12,13 @@
 set -eu
 
 FIXTURE="${1:-tests/fixtures/admission/untrusted-build.sh}"
-SCRATCH="$(mktemp -d /tmp/admission-scratch-XXXXXX)"
+# Use $TMPDIR if set (macOS sets it to an app-specific tmp dir that is fully
+# writable by the current user without additional SIP/sandbox restrictions).
+# Fall back to /tmp if $TMPDIR is unset.
+TMPBASE="${TMPDIR:-/tmp}"
+SCRATCH="$(mktemp -d "${TMPBASE}admission-scratch-XXXXXX")"
 TIMEOUT_SECS="${ADMISSION_TIMEOUT_SECS:-120}"
-PROFILE_FILE="$(mktemp /tmp/admission-sbpl-XXXXXX.sb)"
+PROFILE_FILE="$(mktemp "${TMPBASE}admission-sbpl-XXXXXX.sb")"
 
 cleanup() { rm -rf "$SCRATCH" "$PROFILE_FILE"; }
 trap cleanup EXIT
