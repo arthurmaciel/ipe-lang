@@ -2539,7 +2539,7 @@ fn render_capabilities(
                     );
                 }
             }
-            style::gutter(&body)
+            style::frame(&style::gutter(&body))
         }
     }
 }
@@ -2567,7 +2567,7 @@ fn render_version(format: cli_args::OutputFormat, _stream: &impl std::io::IsTerm
     match format {
         Plain => format!("{version}\n"),
         Json => format!("{{\"version\":{version:?}}}\n"),
-        Human => style::gutter(&format!("ipe {version}\n")),
+        Human => style::frame(&style::gutter(&format!("ipe {version}\n"))),
     }
 }
 
