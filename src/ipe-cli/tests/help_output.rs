@@ -94,7 +94,7 @@ fn top_level_help_lists_every_command_and_section() {
         "the how-to-read footer sentence must be removed"
     );
     assert!(
-        r.stdout.contains("Found any bugs? Please report them at"),
+        r.stdout.contains("If you find any bugs, please report them at"),
         "the report-bugs footer must remain"
     );
 }

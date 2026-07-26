@@ -67,7 +67,7 @@ fn installer_mirrors_the_repo_url_and_bug_footer() {
     // The success footer's fixed phrase must match the SSOT footer verbatim,
     // and the URL it points at must be the SSOT URL.
     let footer = style::report_bugs_footer();
-    let phrase = "Found any bugs? Please report them at ";
+    let phrase = "If you find any bugs, please report them at ";
     assert!(
         footer.starts_with(phrase),
         "the style footer phrase changed — update this test and install.sh"
