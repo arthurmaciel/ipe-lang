@@ -27,6 +27,7 @@ pub mod help;
 pub mod index;
 pub mod init;
 pub mod lockfile;
+pub mod login;
 mod lsp;
 pub mod pkg;
 pub mod project;
@@ -1587,6 +1588,7 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
             with_help_on_misuse("remove", pkg::run_remove(rest))
         }
         Some((cmd, rest)) if cmd == "package" => with_help_on_misuse("package", run_package(rest)),
+        Some((cmd, rest)) if cmd == "login" => with_help_on_misuse("login", login::run_login(rest)),
         Some((cmd, rest)) if cmd == "fix" => with_help_on_misuse("fix", run_fix(rest)),
         Some((cmd, rest)) if cmd == "fmt" => with_help_on_misuse("fmt", fmt::run_fmt(rest)),
         Some((cmd, rest)) if cmd == "lsp" => with_help_on_misuse("lsp", lsp::run_lsp(rest)),

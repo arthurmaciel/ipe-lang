@@ -254,6 +254,22 @@ const COMMANDS: &[Command] = &[
         ],
     },
     Command {
+        name: "login",
+        summary: "Authorize ipe with GitHub (device flow) and store a publish token.",
+        args: "",
+        args_desc: "",
+        options: &[
+            Opt {
+                flag: "[--status]",
+                desc: "report whether a token is stored",
+            },
+            Opt {
+                flag: "[--logout]",
+                desc: "remove the stored token",
+            },
+        ],
+    },
+    Command {
         name: "explain",
         summary: "Explain a diagnostic code, or list every code with no argument.",
         args: "[<code>]",
@@ -365,7 +381,7 @@ const SECTIONS: &[Section] = &[
     },
     Section {
         title: "Package authoring",
-        commands: &["package"],
+        commands: &["login", "package"],
     },
     Section {
         title: "Foreign-function interface (FFI)",
