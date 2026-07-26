@@ -75,9 +75,13 @@ if [ "$MODE" = check ]; then
       echo "regen --check: transform/edits failed for $name" >&2; drift=1; continue
     fi
     checked=$((checked+1))
-    if ! diff -qr "examples/sky/ipe/$name" "$tmp/$name" >/dev/null 2>&1; then
+    # Exclude gitignored build artefacts (out/, target/, .ipe caches, …): a local
+    # `ipe build`/`run` leaves them in the working tree, but the fresh transform
+    # never builds, so they are not drift.
+    dx=(-x out -x target -x sky-out -x .ipe -x .ipecache -x .ipedeps -x node_modules -x .sky-src)
+    if ! diff -qr "${dx[@]}" "examples/sky/ipe/$name" "$tmp/$name" >/dev/null 2>&1; then
       echo "regen --check: examples/sky/ipe/$name differs from re-deriving it from original/:" >&2
-      diff -qr "examples/sky/ipe/$name" "$tmp/$name" 2>&1 | sed 's/^/  /' >&2
+      diff -qr "${dx[@]}" "examples/sky/ipe/$name" "$tmp/$name" 2>&1 | sed 's/^/  /' >&2
       drift=1
     fi
   done
