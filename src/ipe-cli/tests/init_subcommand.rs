@@ -24,7 +24,13 @@ fn init_scaffolds_project_files() {
     let result = ipe::run_cli(&args);
     assert!(result.is_ok(), "init must succeed: {result:?}");
 
-    for rel in ["ipe.toml", "src/Main.ipe", "README.md", ".gitignore"] {
+    for rel in [
+        "ipe.toml",
+        "src/Main.ipe",
+        "README.md",
+        ".gitignore",
+        "AGENTS.md",
+    ] {
         assert!(
             target.join(rel).is_file(),
             "expected scaffold file {rel} to exist"
