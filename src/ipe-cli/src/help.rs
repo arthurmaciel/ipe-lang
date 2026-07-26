@@ -217,14 +217,29 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "package",
-        summary: "Audit a package against the Tier-1 quality gate before publishing.",
-        args: "audit [<path>]",
-        args_desc: "The subcommand (audit) and the project directory or ipe.toml to audit \
+        summary: "Audit a package against the Tier-1 quality gate, or publish it to the index.",
+        args: "<audit|publish> [<path>]",
+        args_desc: "The subcommand (audit or publish) and the project directory or ipe.toml \
                     (defaults to the current project).",
-        options: &[Opt {
-            flag: "[--index <dir>]",
-            desc: "audit: read the previous published version from this index checkout",
-        }],
+        options: &[
+            Opt {
+                flag: "[--index <dir|repo>]",
+                desc: "audit: read the previous published version from this index checkout; \
+                       publish: the index repo the PR targets",
+            },
+            Opt {
+                flag: "[--dry-run]",
+                desc: "publish: print the computed entry and intended PR, touch no network",
+            },
+            Opt {
+                flag: "[--source <url>]",
+                desc: "publish: the source URL to pin (overrides the git remote)",
+            },
+            Opt {
+                flag: "[--rev <sha>]",
+                desc: "publish: the revision to pin (overrides the committed HEAD)",
+            },
+        ],
     },
     Command {
         name: "explain",
