@@ -6663,7 +6663,7 @@ fn collect_generic_result_aliases(
             // var.  Lifetimes / consts make the alias un-substitutable here.
             let is_type_param = p.get("kind").and_then(|k| k.get("type")).is_some();
             if let (true, Some(n)) = (is_type_param, p.get("name").and_then(|n| n.as_str())) {
-                params.push(n.to_string())
+                params.push(n.to_string());
             } else {
                 all_type_params = false;
                 break;
