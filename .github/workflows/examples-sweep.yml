@@ -79,7 +79,7 @@ jobs:
       CARGO_NET_RETRY: '5'
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Free disk before the cache restore + builds (Linux runners ship ~14 GB).
       - name: Free disk space (Linux)
@@ -96,7 +96,7 @@ jobs:
 
       # Cache the shared cargo target + registry (ipe + emitted-crate deps).
       - name: Cache cargo target
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -205,7 +205,7 @@ jobs:
 
       - name: Upload sweep scoreboard
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: examples-sweep-${{ matrix.os }}
           path: |
@@ -240,12 +240,12 @@ jobs:
       REPO: ${{ github.workspace }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo target
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -292,7 +292,7 @@ jobs:
     continue-on-error: true
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: BUILD cli examples inside FreeBSD VM
         uses: vmactions/freebsd-vm@v1

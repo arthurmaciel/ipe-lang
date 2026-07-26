@@ -52,7 +52,7 @@ jobs:
             ext: '.exe'
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Build the tagged commit for both triggers: the release event's tag,
           # or the manually-dispatched tag input.
@@ -85,7 +85,7 @@ jobs:
           else
             tar czf "${{ matrix.artifact }}.tar.gz" "ipe${{ matrix.ext }}" "ipe-ffi-inspector${{ matrix.ext }}"
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: |
@@ -97,7 +97,7 @@ jobs:
   build-freebsd:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.release.tag_name || github.event.inputs.tag }}
       - name: Build in FreeBSD VM
@@ -112,7 +112,7 @@ jobs:
             cp target/release/ipe dist/ipe
             cp target/release/ipe-ffi-inspector dist/ipe-ffi-inspector
             tar czf dist/ipe-freebsd-x64.tar.gz -C dist ipe ipe-ffi-inspector
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ipe-freebsd-x64
           path: dist/ipe-freebsd-x64.tar.gz
@@ -123,10 +123,10 @@ jobs:
     needs: [build, build-freebsd]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.release.tag_name || github.event.inputs.tag }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
       - name: Stage assets + checksums
