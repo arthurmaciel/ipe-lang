@@ -1,12 +1,19 @@
-# Adapt the Money tests to Ipê's fail-closed Money API.
+# Adapt the Money + Jwt tests to Ipê's fail-closed APIs.
 #
-# Upstream Sky's Money.add / Money.sumOf return a bare Money; Ipê's Ipe.Money.add
-# and Ipe.Money.sumOf return `Result Error Money` so a currency mismatch fails
-# closed instead of producing a silently-wrong sum (a sanctioned soundness
-# divergence, recorded in docs/divergences-from-sky.md). Both sums here are
-# same-currency and therefore always Ok, so unwrap them with Result.withDefault
-# (the module is already imported) before formatting. The asserted outputs are
-# unchanged.
+# Money: upstream Sky's Money.add / Money.sumOf return a bare Money; Ipê's
+# Ipe.Money.add and Ipe.Money.sumOf return `Result Error Money` so a currency
+# mismatch fails closed instead of producing a silently-wrong sum (a sanctioned
+# soundness divergence, recorded in docs/divergences-from-sky.md). Both sums here
+# are same-currency and therefore always Ok, so unwrap them with
+# Result.withDefault (the module is already imported) before formatting. The
+# asserted outputs are unchanged.
+#
+# Jwt: Ipê's HS256 kernel rejects a signing secret shorter than 32 bytes
+# (RFC 7518 §3.2) — a sanctioned security divergence from Sky, which accepted
+# weak keys. Upstream's "topsecret" (9 bytes) makes `Jwt.encode` fail closed, so
+# the test is re-keyed with a >=32-byte secret; the forged-signature case uses a
+# DISTINCT >=32-byte key so it tests a real signature mismatch, not key-length
+# rejection. Asserted outcomes are unchanged.
 
 [[edit]]
 file: src/Main.ipe
@@ -28,4 +35,27 @@ total = Money.sumOf Money.USD parts
 replace:
 """
 total = Result.withDefault (Money.zero Money.USD) (Money.sumOf Money.USD parts)
+"""
+
+[[edit]]
+file: src/Main.ipe
+all: true
+find:
+"""
+"topsecret"
+"""
+replace:
+"""
+"ipe-jwt-hs256-test-secret-0123456789"
+"""
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+"wrong-key"
+"""
+replace:
+"""
+"ipe-jwt-hs256-wrong-secret-9876543210"
 """
