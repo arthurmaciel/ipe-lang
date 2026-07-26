@@ -30,6 +30,7 @@ pub mod lockfile;
 mod lsp;
 pub mod pkg;
 pub mod project;
+pub mod publish;
 pub mod resolve;
 pub mod run_sandbox;
 pub mod style;
@@ -133,6 +134,12 @@ pub enum CliError {
     /// let an unsafe or dishonest version through is a security hole, so it is
     /// always a typed error, never a warning.
     PackageAudit(audit::Rejection),
+    /// `ipe package publish` declined to proceed. Carries the typed
+    /// [`publish::Refusal`] naming the precondition that failed (a dirty working
+    /// tree, an unpushed HEAD, an already-published version, or a missing token).
+    /// A publish precondition is a hard, typed refusal — never a warning — because
+    /// a merged index entry must pin an immutable, reproducible revision.
+    Publish(publish::Refusal),
     /// A known command was misused (bad or missing arguments, an unknown flag).
     /// Carries the specific reason and the command name; [`fmt::Display`] renders
     /// the reason followed by that command's full, indented `--help` page — the
@@ -167,7 +174,7 @@ impl std::fmt::Display for CliError {
             Self::UsageOwned(hint) => write!(f, "{hint}"),
             // The top-level help, coloured for a terminal. Rendered against
             // stderr because misuse output goes to stderr.
-            Self::UnknownCommand => f.write_str(help::top_level(&std::io::stderr()).trim_start()),
+            Self::UnknownCommand => f.write_str(&help::top_level(&std::io::stderr())),
             Self::Io { path, source } => write!(f, "io error at {}: {source}", path.display()),
             Self::Pipeline { file, src, diag } => {
                 f.write_str(&render(diag, &file.to_string_lossy(), src))
@@ -223,13 +230,14 @@ impl std::fmt::Display for CliError {
                  version must be at least {floor}."
             ),
             Self::PackageAudit(rejection) => write!(f, "{rejection}"),
+            Self::Publish(refusal) => write!(f, "ipe package publish refused: {refusal}"),
             // The reason, then the command's full `--help` page (indented,
             // coloured for a terminal). Rendered against stderr because misuse
             // output goes there. A known command always has a help page; the
             // `None` fallback (never taken for a known command) degrades to the
             // top-level screen rather than panicking.
             Self::CommandUsage { command, reason } => {
-                writeln!(f, "{reason}")?;
+                writeln!(f, "{}", crate::style::gutter(reason))?;
                 let page = help::command(command, &std::io::stderr())
                     .unwrap_or_else(|| help::top_level(&std::io::stderr()));
                 f.write_str(page.trim_end_matches('\n'))
@@ -1550,6 +1558,9 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
     }
     match args.split_first() {
         Some((cmd, rest)) if cmd == "init" => with_help_on_misuse("init", init::run_init(rest)),
+        Some((cmd, rest)) if cmd == "upgrade-agents" => {
+            with_help_on_misuse("upgrade-agents", init::run_upgrade_agents(rest))
+        }
         Some((cmd, rest)) if cmd == "build" => with_help_on_misuse("build", run_build(rest)),
         Some((cmd, rest)) if cmd == "run" => with_help_on_misuse("run", run_run(rest)),
         Some((cmd, rest)) if cmd == "exec" => with_help_on_misuse("exec", run_exec(rest)),
@@ -1747,6 +1758,20 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
         wasm_hydrate_mode: false,
     };
 
+    // Human-friendly progress: the compile+emit below is otherwise silent, so
+    // bracket it with a start/done line. Shown only on an interactive terminal so
+    // piped / CI output stays clean; status goes to stderr (stdout carries data).
+    let show_progress = {
+        use std::io::IsTerminal as _;
+        std::io::stderr().is_terminal()
+    };
+    if show_progress {
+        eprintln!(
+            "{}",
+            style::gutter(&format!("{} building {entry}", style::glyph::STEP))
+        );
+    }
+
     // No ipe.toml found: compile entry + all sibling .ipe files in the same
     // directory. Byte-identical to `build` when the directory holds only the
     // entry file (regression-covered by the golden suite).
@@ -1788,6 +1813,17 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
             let profile = run_sandbox::build_profile(&resolved, driver)?;
             run_sandbox::write_build_artifacts(&out_dir, &profile)?;
         }
+    }
+
+    if show_progress {
+        eprintln!(
+            "{}",
+            style::gutter(&format!(
+                "{} built → {}",
+                style::glyph::OK,
+                out_dir.display()
+            ))
+        );
     }
     Ok(())
 }
@@ -2448,19 +2484,22 @@ pub(crate) fn lower_entry(entry: &Path) -> Result<ipe_ir::Program, CliError> {
 /// `ipe capabilities <entry.ipe>` — print the program's inferred security
 /// capabilities, one per line in sorted order, or `none` when the program is
 /// pure. Read-only analysis: nothing is emitted or written.
-/// `ipe package <subcommand>` — package-authoring commands. Today the one
-/// subcommand is `audit`, the SP4 Tier-1 package gate.
+/// `ipe package <subcommand>` — package-authoring commands: `audit` (the SP4
+/// Tier-1 package gate) and `publish` (run the gate, compute the index entry, and
+/// open the index PR).
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on a missing or unknown subcommand; the audit's own
-/// errors (a build failure or a [`CliError::PackageAudit`] reject) otherwise.
+/// [`CliError::UsageOwned`] on a missing or unknown subcommand; the subcommand's
+/// own errors (a build failure, a [`CliError::PackageAudit`] reject, or a
+/// [`CliError::Publish`] refusal) otherwise.
 fn run_package(rest: &[String]) -> Result<(), CliError> {
     match rest.split_first() {
         Some((sub, tail)) if sub == "audit" => audit::run_audit(tail),
+        Some((sub, tail)) if sub == "publish" => publish::run_publish(tail),
         Some((sub, _)) => Err(CliError::UsageOwned(format!(
-            "ipe package: unknown subcommand `{sub}` (expected `audit`)"
+            "ipe package: unknown subcommand `{sub}` (expected `audit` or `publish`)"
         ))),
-        None => Err(CliError::Usage("usage: ipe package audit [<path>]")),
+        None => Err(CliError::Usage("usage: ipe package <audit|publish> [<path>]")),
     }
 }
 
@@ -2539,7 +2578,7 @@ fn render_capabilities(
                     );
                 }
             }
-            style::gutter(&body)
+            style::frame(&style::gutter(&body))
         }
     }
 }
@@ -2567,7 +2606,7 @@ fn render_version(format: cli_args::OutputFormat, _stream: &impl std::io::IsTerm
     match format {
         Plain => format!("{version}\n"),
         Json => format!("{{\"version\":{version:?}}}\n"),
-        Human => style::gutter(&format!("ipe {version}\n")),
+        Human => style::frame(&style::gutter(&format!("ipe {version}\n"))),
     }
 }
 

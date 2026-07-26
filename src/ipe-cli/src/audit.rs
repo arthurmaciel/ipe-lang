@@ -7,8 +7,8 @@
 //! pre-flight; the index CI re-runs the SAME [`run_audit`] path as the
 //! authoritative gate, so the two verdicts cannot diverge.
 //!
-//! The four Tier-1 checks (see `docs/architecture/tbd/
-//! package-coordination-sp4-gate-plan.md` §1), each wired to existing machinery:
+//! The four Tier-1 checks (see
+//! `docs/adr/0044-package-coordination-manifest-index-gate.md`), each wired to existing machinery:
 //!
 //! 1. **Provenance panic-scan** — author-supplied FFI wrapper Rust
 //!    (`*_bindings.rs` in the project's FFI cache) is scanned with the SAME token
@@ -138,14 +138,17 @@ pub fn run_audit(rest: &[String]) -> Result<(), CliError> {
     enforced_semver(&prepared, index_root.as_deref())?;
     supply_chain(&prepared)?;
 
-    println!(
-        "package audit: {} {} — all Tier-1 checks passed.",
-        prepared.manifest.name,
-        prepared
-            .manifest
-            .version
-            .as_ref()
-            .map_or_else(|| "(unversioned)".to_owned(), ToString::to_string)
+    print!(
+        "{}",
+        crate::style::frame(&crate::style::gutter(&format!(
+            "package audit: {} {} — all Tier-1 checks passed.",
+            prepared.manifest.name,
+            prepared
+                .manifest
+                .version
+                .as_ref()
+                .map_or_else(|| "(unversioned)".to_owned(), ToString::to_string)
+        )))
     );
     Ok(())
 }

@@ -1,7 +1,12 @@
 # A direct WebAssembly backend for Ipê
 
-> **Status:** design proposal, pre-implementation. Sibling to the design-locked
-> `wasm-target.md`, which chose IR → Rust → `wasm32` and *rejected* a direct
+> **Note:** the shipped client-WASM target this document contrasts itself with —
+> the IR → Rust → `wasm32` route that *rejected* a direct IR → WASM backend — is
+> now recorded in `docs/adr/0042-wasm-client-target.md`. In-text references below
+> to `wasm-target.md` mean that ADR.
+>
+> **Status:** design proposal, pre-implementation. Sibling to the shipped
+> client-WASM target, which chose IR → Rust → `wasm32` and *rejected* a direct
 > IR → WASM backend. This document argues for building that rejected backend as
 > an *additional, selectable* target, on the six principles, and specifies it in
 > full. It does not retire the Rust-via-wasm path; it sits beside it.

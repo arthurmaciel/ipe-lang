@@ -57,6 +57,16 @@ fn entry_path(index_root: &Path, name: &str) -> PathBuf {
     index_root.join("packages").join(format!("{name}.toml"))
 }
 
+/// Whether the package's entry file exists in the index checkout at `index_root`.
+///
+/// Publish uses this to distinguish a first publish (no file — create it) from a
+/// present-but-unreadable entry (a real error to surface), rather than treating
+/// every read failure as "absent".
+#[must_use]
+pub fn entry_file_exists(index_root: &Path, name: &str) -> bool {
+    entry_path(index_root, name).is_file()
+}
+
 /// Read and parse the index entry for `name` from an index checkout rooted at
 /// `index_root` (which holds `packages/<name>.toml`).
 ///
