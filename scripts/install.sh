@@ -29,20 +29,20 @@ fi
 
 # Friendly status lines. A leading "•" bullet keeps the log scannable; all
 # progress chatter goes to stderr so `curl … | sh` keeps stdout clean.
-step() { printf '%s•%s %s\n' "$C_YELLOW" "$C_RESET" "$1" >&2; }
-info() { printf '  %s%s%s\n' "$C_DIM" "$1" "$C_RESET" >&2; }
-done_() { printf '%s✓%s %s\n' "$C_GREEN" "$C_RESET" "$1" >&2; }
+step() { printf '  %s•%s %s\n' "$C_YELLOW" "$C_RESET" "$1" >&2; }
+info() { printf '    %s%s%s\n' "$C_DIM" "$1" "$C_RESET" >&2; }
+done_() { printf '  %s✓%s %s\n' "$C_GREEN" "$C_RESET" "$1" >&2; }
 
 # die MESSAGE — a blank line, a red "error:" label, then the message dimmed and
 # indented beneath it, then exit non-zero. Mirrors the CLI's failure shape.
 die() {
-  printf '\n  There was an %serror%s:\n      %s%s%s\n' \
+  printf '\n    There was an %serror%s:\n        %s%s%s\n' \
     "$C_RED" "$C_RESET" "$C_DIM" "$1" "$C_RESET" >&2
   exit 1
 }
 
 banner() {
-  printf '\n%s%sIpê language%s %s- %s%s\n\n' \
+  printf '\n  %s%sIpê language%s %s- %s%s\n\n' \
     "$C_BOLD" "$C_YELLOW" "$C_RESET" "$C_DIM" "$1" "$C_RESET" >&2
 }
 
@@ -119,9 +119,9 @@ if curl -fsSL -o /dev/null -I --max-time 10 "$url" 2>/dev/null; then
 else
   info "No prebuilt binary for $tag on $plat-$cpu."
   if [ -n "${IPE_VERSION:-}" ] && [ "$IS_TTY" = 1 ] && [ -r /dev/tty ]; then
-    printf '\n  %sNo prebuilt ipe %s binary for %s-%s.%s\n' \
+    printf '\n    %sNo prebuilt ipe %s binary for %s-%s.%s\n' \
       "$C_BOLD" "$ver" "$plat" "$cpu" "$C_RESET" >&2
-    printf '  Install the %slatest%s release instead? [Y/n] ' \
+    printf '    Install the %slatest%s release instead? [Y/n] ' \
       "$C_BOLD" "$C_RESET" >&2
     ans=''
     if IFS= read -r ans < /dev/tty 2>/dev/null; then
@@ -185,57 +185,78 @@ if command -v cargo >/dev/null 2>&1; then
   fi
 else
   info "Rust is not installed."
-  case "$plat" in
-    linux|darwin|freebsd)
-      rustup_cmd="curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
-      ;;
-    windows)
-      rustup_url="https://win.rustup.rs/x86_64"
-      ;;
-  esac
-  if [ "$IS_TTY" = 1 ] && [ -r /dev/tty ]; then
-    printf '\n  %sRust is not installed.%s\n' "$C_BOLD" "$C_RESET" >&2
-    case "$plat" in
-      linux|darwin|freebsd)
-        printf '  Install Rust via %srustup%s? [Y/n] ' \
-          "$C_BOLD" "$C_RESET" >&2
-        ;;
-      windows)
-        printf '  Download the Rust installer from:\n    %s%s%s\n' \
-          "$C_DIM" "$rustup_url" "$C_RESET" >&2
-        printf '  Open the link and run the installer? [Y/n] ' >&2
-        ;;
-    esac
+  if [ -f "$HOME/.cargo/env" ] && [ "$IS_TTY" = 1 ] && [ -r /dev/tty ]; then
+    printf '\n    %sRust seems installed but not on your %sPATH%s.%s\n' \
+      "$C_BOLD" "$C_RESET" "$C_BOLD" "$C_RESET" >&2
+    printf '    Source %s~/.cargo/env%s now? [Y/n] ' \
+      "$C_BOLD" "$C_RESET" >&2
     ans=''
     if IFS= read -r ans < /dev/tty 2>/dev/null; then
       case "$ans" in
         ''|[Yy]|[Yy][Ee][Ss])
-          case "$plat" in
-            linux|darwin|freebsd)
-              step "Installing Rust via rustup…"
-              if eval "$rustup_cmd" -y 2>/dev/null; then
-                if [ -f "$HOME/.cargo/env" ]; then
-                  # shellcheck source=/dev/null
-                  . "$HOME/.cargo/env"
-                fi
-                if command -v cargo >/dev/null 2>&1; then
-                  cargo_ok=1
-                  info "Rust installed ($(cargo version | cut -d' ' -f2))."
-                fi
-              else
-                info "rustup exited non-zero — check https://rustup.rs for manual install."
-              fi
-              ;;
-            windows)
-              info "Download the installer from: $rustup_url"
-              ;;
-          esac
+          # shellcheck source=/dev/null
+          . "$HOME/.cargo/env"
+          if command -v cargo >/dev/null 2>&1; then
+            cargo_ok=1
+            done_ "Rust now available ($(cargo version | cut -d' ' -f2))."
+          fi
           ;;
       esac
     fi
   fi
   if [ "$cargo_ok" != 1 ]; then
-    info "Install Rust later: https://rustup.rs"
+    case "$plat" in
+      linux|darwin|freebsd)
+        rustup_cmd="curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+        ;;
+      windows)
+        rustup_url="https://win.rustup.rs/x86_64"
+        ;;
+    esac
+    if [ "$IS_TTY" = 1 ] && [ -r /dev/tty ]; then
+      printf '\n    %sRust is not installed.%s\n' "$C_BOLD" "$C_RESET" >&2
+      case "$plat" in
+        linux|darwin|freebsd)
+          printf '    Install Rust via %srustup%s? [Y/n] ' \
+            "$C_BOLD" "$C_RESET" >&2
+          ;;
+        windows)
+          printf '    Download the Rust installer from:\n      %s%s%s\n' \
+            "$C_DIM" "$rustup_url" "$C_RESET" >&2
+          printf '    Open the link and run the installer? [Y/n] ' >&2
+          ;;
+      esac
+      ans=''
+      if IFS= read -r ans < /dev/tty 2>/dev/null; then
+        case "$ans" in
+          ''|[Yy]|[Yy][Ee][Ss])
+            case "$plat" in
+              linux|darwin|freebsd)
+                step "Installing Rust via rustup…"
+                if eval "$rustup_cmd" -y 2>/dev/null; then
+                  if [ -f "$HOME/.cargo/env" ]; then
+                    # shellcheck source=/dev/null
+                    . "$HOME/.cargo/env"
+                  fi
+                  if command -v cargo >/dev/null 2>&1; then
+                    cargo_ok=1
+                    info "Rust installed ($(cargo version | cut -d' ' -f2))."
+                  fi
+                else
+                  info "rustup exited non-zero — check https://rustup.rs for manual install."
+                fi
+                ;;
+              windows)
+                info "Download the installer from: $rustup_url"
+                ;;
+            esac
+            ;;
+        esac
+      fi
+    fi
+    if [ "$cargo_ok" != 1 ]; then
+      info "Install Rust later: https://rustup.rs"
+    fi
   fi
 fi
 
@@ -356,7 +377,7 @@ render_progress() {
         eta="$(fmt_eta "$remain")"
       fi
     fi
-    printf '\r%s%s%s  %s%3d%%%s [%s%s%s]  %s / %s  %sETA %s%s\033[K' \
+    printf '\r  %s%s%s  %s%3d%%%s [%s%s%s]  %s / %s  %sETA %s%s\033[K' \
       "$C_YELLOW" "$glyph" "$C_RESET" \
       "$C_BOLD" "$pct" "$C_RESET" \
       "$C_YELLOW" "$bar" "$C_RESET" \
@@ -364,7 +385,7 @@ render_progress() {
       "$C_DIM" "$eta" "$C_RESET" >&2
   else
     # Unknown total: spinner + downloaded bytes + elapsed.
-    printf '\r%s%s%s  %s downloaded  %s%ds elapsed%s\033[K' \
+    printf '\r  %s%s%s  %s downloaded  %s%ds elapsed%s\033[K' \
       "$C_YELLOW" "$glyph" "$C_RESET" \
       "$(human "$rp_got")" \
       "$C_DIM" "$elapsed" "$C_RESET" >&2
@@ -582,18 +603,18 @@ end
 # activation_hint — the two commands to activate PATH in the CURRENT shell: run
 # ipe onto PATH directly, or source the env file the edited rc now loads.
 activation_hint() {
-  printf '  To use %sipe%s right now, run:\n' "$C_BOLD" "$C_RESET" >&2
-  printf '      %s%s%s\n' "$C_DIM" "$PATH_NOW" "$C_RESET" >&2
-  printf '  or reload the updated startup file with:\n' >&2
-  printf '      %s%s%s\n\n' "$C_DIM" "$SOURCE_NOW" "$C_RESET" >&2
+  printf '    To use %sipe%s right now, run:\n' "$C_BOLD" "$C_RESET" >&2
+  printf '        %s%s%s\n' "$C_DIM" "$PATH_NOW" "$C_RESET" >&2
+  printf '    or reload the updated startup file with:\n' >&2
+  printf '        %s%s%s\n\n' "$C_DIM" "$SOURCE_NOW" "$C_RESET" >&2
 }
 
 # manual_path_hint — the do-it-yourself fallback when we did not edit the rc:
 # source our env file (already written) from the shell's startup file yourself.
 manual_path_hint() {
-  printf '  Add ipe to your PATH by putting this line in %s%s%s:\n' \
+  printf '    Add ipe to your PATH by putting this line in %s%s%s:\n' \
     "$C_YELLOW" "$RC_FILE" "$C_RESET" >&2
-  printf '      %s%s%s\n\n' "$C_DIM" "$RC_SOURCE_LINE" "$C_RESET" >&2
+  printf '        %s%s%s\n\n' "$C_DIM" "$RC_SOURCE_LINE" "$C_RESET" >&2
 }
 
 # persist_path — put INSTALL_DIR on PATH for good: write our managed env files,
@@ -619,11 +640,11 @@ persist_path() {
     return 0
   fi
 
-  printf '\n%s%s is not on your PATH yet.%s\n' "$C_BOLD" "$INSTALL_DIR" "$C_RESET" >&2
-  printf '  Add it to %s%s%s so every shell finds %sipe%s?\n' \
+  printf '\n  %s%s is not on your PATH yet.%s\n' "$C_BOLD" "$INSTALL_DIR" "$C_RESET" >&2
+  printf '    Add it to %s%s%s so every shell finds %sipe%s?\n' \
     "$C_YELLOW" "$RC_FILE" "$C_RESET" "$C_BOLD" "$C_RESET" >&2
-  printf '      %s%s%s\n' "$C_DIM" "$RC_SOURCE_LINE" "$C_RESET" >&2
-  printf '  Update it now? [Y/n] ' >&2
+  printf '        %s%s%s\n' "$C_DIM" "$RC_SOURCE_LINE" "$C_RESET" >&2
+  printf '    Update it now? [Y/n] ' >&2
 
   # A successful read of an empty line (bare ENTER) means yes; a failed read
   # (closed tty / EOF) is NOT consent — default to leaving the file untouched.
@@ -660,7 +681,7 @@ fi
 
 # Success banner: the green word carries the good news; the footer mirrors the
 # CLI's "report bugs" line (kept in sync with the style SSOT by a drift test).
-printf '\n  Ipê %s was %ssuccessfully%s installed!\n' \
+printf '\n    Ipê %s was %ssuccessfully%s installed!\n' \
   "$ver" "$C_GREEN" "$C_RESET" >&2
-printf '  Found any bugs? Please report them at https://github.com/%s/issues.\n\n' \
+printf '\n    If you find any bugs, please report them at https://github.com/%s/issues.\n\n' \
   "$REPO" >&2
