@@ -282,6 +282,6 @@ fn init_unknown_flag_rejected() {
 fn top_level_unknown_command_rejected() {
     assert!(matches!(
         ipe::run_cli(&v(&["frobnicate"])),
-        Err(CliError::UnknownCommand)
+        Err(CliError::UnknownCommand { .. })
     ));
 }

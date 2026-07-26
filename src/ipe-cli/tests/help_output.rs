@@ -195,6 +195,32 @@ fn unknown_command_shows_help_on_stderr_and_fails() {
 }
 
 #[test]
+fn mistyped_command_suggests_the_nearest_match() {
+    let r = run(&["biuld"]);
+    assert!(!r.ok, "a mistyped command must exit non-zero");
+    assert!(
+        r.stderr.contains("unknown command `biuld`"),
+        "the typed token must be echoed, got:\n{}",
+        r.stderr
+    );
+    assert!(
+        r.stderr.contains("maybe `build`?"),
+        "a near-miss must suggest the closest command, got:\n{}",
+        r.stderr
+    );
+}
+
+#[test]
+fn wildly_unknown_command_offers_no_misleading_guess() {
+    let r = run(&["definitely-not-a-command"]);
+    assert!(
+        !r.stderr.contains("maybe `"),
+        "a token far from every command must not guess, got:\n{}",
+        r.stderr
+    );
+}
+
+#[test]
 fn every_command_has_a_help_page_via_flag_and_via_help_word() {
     for cmd in COMMANDS {
         for form in [[*cmd, "--help"], ["help", *cmd]] {
