@@ -26,7 +26,7 @@ pub const REPO_URL: &str = "https://github.com/arthurmaciel/ipe-lang";
 /// call site formats it; the installer mirrors the rendered text.
 #[must_use]
 pub fn report_bugs_footer() -> String {
-    format!("Found any bugs? Please report them at {REPO_URL}/issues.")
+    format!("If you find a bug, please report it at {REPO_URL}/issues.")
 }
 
 /// The product header line, `Ipê language - v{version} - {REPO_URL}`.

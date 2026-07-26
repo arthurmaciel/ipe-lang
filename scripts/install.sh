@@ -683,5 +683,5 @@ fi
 # CLI's "report bugs" line (kept in sync with the style SSOT by a drift test).
 printf '\n    Ipê %s was %ssuccessfully%s installed!\n' \
   "$ver" "$C_GREEN" "$C_RESET" >&2
-printf '\n    Found any bugs? Please report them at https://github.com/%s/issues.\n\n' \
+printf '\n    If you find a bug, please report it at https://github.com/%s/issues.\n\n' \
   "$REPO" >&2
