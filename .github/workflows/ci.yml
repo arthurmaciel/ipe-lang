@@ -182,7 +182,7 @@ jobs:
   # (gate blind spot, 2026-07-11: `full` ⊇ `live`; a default-only gate shows
   # green while these are red). `full` turns on every optional feature so
   # this job is the one place those regression tests run in CI. The local
-  # gate recipes (scripts/progressive-development/context.md +
+  # gate recipes (misc/scripts/progressive-development/context.md +
   # autopilot.sh) carry the mirroring
   # `cargo nextest run -p ipe-runtime-rust --features full` lane — keep them
   # in sync with this job.
