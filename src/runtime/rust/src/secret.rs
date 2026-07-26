@@ -53,7 +53,7 @@
 //!
 //! # WASM hydration-island boundary (out of scope, not gated here)
 //!
-//! `docs/architecture/wasm-target.md` §Q6 documents a future
+//! `docs/adr/0042-wasm-client-target.md` §Q6 documents a future
 //! `HydrationState` field-type gate that must reject any field whose type
 //! transitively contains `Secret` (or any other server-only/secret-bearing
 //! type) at the `HydrationState` declaration. That gate has NOTHING TO GATE

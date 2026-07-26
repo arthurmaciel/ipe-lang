@@ -7,8 +7,8 @@
 //! pre-flight; the index CI re-runs the SAME [`run_audit`] path as the
 //! authoritative gate, so the two verdicts cannot diverge.
 //!
-//! The four Tier-1 checks (see `docs/architecture/tbd/
-//! package-coordination-sp4-gate-plan.md` §1), each wired to existing machinery:
+//! The four Tier-1 checks (see
+//! `docs/adr/0044-package-coordination-manifest-index-gate.md`), each wired to existing machinery:
 //!
 //! 1. **Provenance panic-scan** — author-supplied FFI wrapper Rust
 //!    (`*_bindings.rs` in the project's FFI cache) is scanned with the SAME token

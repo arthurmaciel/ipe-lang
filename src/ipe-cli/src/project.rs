@@ -79,7 +79,7 @@ pub struct ProjectManifest {
     pub capabilities: BTreeSet<Capability>,
 }
 
-/// `[wasm]` `ipe.toml` section (spec: `docs/architecture/wasm-target.md` Q6
+/// `[wasm]` `ipe.toml` section (spec: `docs/adr/0042-wasm-client-target.md` Q6
 /// "Opt-in mechanism").
 ///
 /// ```toml

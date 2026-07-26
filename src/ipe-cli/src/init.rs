@@ -25,6 +25,12 @@ const README_MD: &str = include_str!("../templates/README.md.in");
 /// `.gitignore` — no substitution; the same ignore set fits every project.
 const GITIGNORE: &str = include_str!("../templates/gitignore.in");
 
+/// `AGENTS.md` — the Ipê authoring reference, embedded from the repository root
+/// so every scaffolded project (and `ipe upgrade-agents`) ships the same
+/// self-contained guide an agent or developer needs to write Ipê. No
+/// substitution: it is byte-identical for every project.
+const AGENTS_MD: &str = include_str!("../../../AGENTS.md");
+
 /// `ipe init [<name>] [--force]`.
 ///
 /// With `<name>`, create the directory `<name>/` and scaffold inside it, using
@@ -128,6 +134,28 @@ fn scaffold(target_dir: &Path, project_name: &str) -> Result<(), CliError> {
         &README_MD.replace("{name}", project_name),
     )?;
     write_file(&target_dir.join(".gitignore"), GITIGNORE)?;
+    write_file(&target_dir.join("AGENTS.md"), AGENTS_MD)?;
+    Ok(())
+}
+
+/// `ipe upgrade-agents` — (re)write `AGENTS.md` in the current directory.
+///
+/// Writes the version of the Ipê authoring reference this `ipe` ships, so an
+/// existing project can refresh it as the reference evolves. Overwrites any
+/// existing `AGENTS.md` (that is the point — it is a generated, non-hand-edited
+/// reference).
+///
+/// # Errors
+/// [`CliError::UsageOwned`] on any unexpected argument; [`CliError::Io`] when the
+/// file cannot be written.
+pub fn run_upgrade_agents(rest: &[String]) -> Result<(), CliError> {
+    if let Some(arg) = rest.first() {
+        return Err(CliError::UsageOwned(format!(
+            "upgrade-agents: unexpected argument `{arg}` (it takes none)"
+        )));
+    }
+    write_file(Path::new("AGENTS.md"), AGENTS_MD)?;
+    println!("wrote AGENTS.md ({} bytes)", AGENTS_MD.len());
     Ok(())
 }
 

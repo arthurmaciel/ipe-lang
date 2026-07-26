@@ -956,7 +956,7 @@ pub enum IrType {
     /// never round-trip through a session store or any other serialisation
     /// path (this is ALSO the WASM hydration-island containment predicate a
     /// future `HydrationState` field-type gate consults, per
-    /// `docs/architecture/wasm-target.md` §Q6 — nothing to build yet, the
+    /// `docs/adr/0042-wasm-client-target.md` §Q6 — nothing to build yet, the
     /// target does not exist). `Debug` and the Ipê-facing `IpeStringify` (the
     /// trait backing `toString` / interpolation / `Log.*With`) are BOTH
     /// hand-written on the runtime type to ALWAYS render a fixed
