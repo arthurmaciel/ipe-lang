@@ -110,6 +110,144 @@ ver="${tag#ipe-}"
 base="https://github.com/$REPO/releases/download/$tag"
 url="$base/$artifact.$ext"
 
+# ── Check prebuilt binary availability ──────────────────────────────
+step "Checking for prebuilt binaries…"
+have_bin=0
+if curl -fsSL -o /dev/null -I --max-time 10 "$url" 2>/dev/null; then
+  have_bin=1
+  done_ "Prebuilt binary available for $plat-$cpu."
+else
+  info "No prebuilt binary for $tag on $plat-$cpu."
+  if [ -n "${IPE_VERSION:-}" ] && [ "$IS_TTY" = 1 ] && [ -r /dev/tty ]; then
+    printf '\n  %sNo prebuilt ipe %s binary for %s-%s.%s\n' \
+      "$C_BOLD" "$ver" "$plat" "$cpu" "$C_RESET" >&2
+    printf '  Install the %slatest%s release instead? [Y/n] ' \
+      "$C_BOLD" "$C_RESET" >&2
+    ans=''
+    if IFS= read -r ans < /dev/tty 2>/dev/null; then
+      case "$ans" in
+        ''|[Yy]|[Yy][Ee][Ss])
+          step "Resolving the latest release…"
+          resp="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest")" \
+            || die "Could not reach GitHub."
+          tag="$(printf '%s\n' "$resp" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)"
+          [ -n "$tag" ] || die "Could not parse latest release tag."
+          ver="${tag#ipe-}"
+          base="https://github.com/$REPO/releases/download/$tag"
+          url="$base/$artifact.$ext"
+          if curl -fsSL -o /dev/null -I --max-time 10 "$url" 2>/dev/null; then
+            have_bin=1
+            done_ "Prebuilt binary available for $plat-$cpu."
+          else
+            info "Latest release also has no binary for $plat-$cpu."
+          fi
+          ;;
+      esac
+    fi
+  fi
+fi
+
+# ── Minimum Rust version (for building from source) ─────────────────
+# Kept in sync with the workspace Cargo.toml: edition = "2024" requires
+# Rust >= 1.85 (stable since 2025-02-20).
+MIN_CARGO_VERSION="1.85.0"
+
+# version_gte MAJ MIN PATCH MAJ MIN PATCH — true when A >= B.
+version_gte() {
+  a1="$1"; a2="$2"; a3="$3"
+  b1="$4"; b2="$5"; b3="$6"
+  [ "$a1" -gt "$b1" ] && return 0
+  [ "$a1" -lt "$b1" ] && return 1
+  [ "$a2" -gt "$b2" ] && return 0
+  [ "$a2" -lt "$b2" ] && return 1
+  [ "$a3" -ge "$b3" ]
+}
+
+# ── Check Rust toolchain ────────────────────────────────────────────
+step "Checking Rust toolchain…"
+cargo_ok=0
+if command -v cargo >/dev/null 2>&1; then
+  cargo_ver_raw="$(cargo version 2>/dev/null | cut -d' ' -f2)"
+  cargo_ver="${cargo_ver_raw%%-*}"
+  cargo_major="$(printf '%s\n' "$cargo_ver" | cut -d. -f1)"
+  cargo_minor="$(printf '%s\n' "$cargo_ver" | cut -d. -f2)"
+  cargo_patch="$(printf '%s\n' "$cargo_ver" | cut -d. -f3)"
+  cargo_patch="${cargo_patch:-0}"
+  min_major="$(printf '%s\n' "$MIN_CARGO_VERSION" | cut -d. -f1)"
+  min_minor="$(printf '%s\n' "$MIN_CARGO_VERSION" | cut -d. -f2)"
+  min_patch="$(printf '%s\n' "$MIN_CARGO_VERSION" | cut -d. -f3)"
+  if version_gte "$cargo_major" "$cargo_minor" "$cargo_patch" \
+                  "$min_major" "$min_minor" "$min_patch"; then
+    cargo_ok=1
+    done_ "Found cargo $cargo_ver_raw (>= $MIN_CARGO_VERSION)."
+  else
+    info "Found cargo $cargo_ver_raw (< required $MIN_CARGO_VERSION)."
+  fi
+else
+  info "Rust is not installed."
+  case "$plat" in
+    linux|darwin|freebsd)
+      rustup_cmd="curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+      ;;
+    windows)
+      rustup_url="https://win.rustup.rs/x86_64"
+      ;;
+  esac
+  if [ "$IS_TTY" = 1 ] && [ -r /dev/tty ]; then
+    printf '\n  %sRust is not installed.%s\n' "$C_BOLD" "$C_RESET" >&2
+    case "$plat" in
+      linux|darwin|freebsd)
+        printf '  Install Rust via %srustup%s? [Y/n] ' \
+          "$C_BOLD" "$C_RESET" >&2
+        ;;
+      windows)
+        printf '  Download the Rust installer from:\n    %s%s%s\n' \
+          "$C_DIM" "$rustup_url" "$C_RESET" >&2
+        printf '  Open the link and run the installer? [Y/n] ' >&2
+        ;;
+    esac
+    ans=''
+    if IFS= read -r ans < /dev/tty 2>/dev/null; then
+      case "$ans" in
+        ''|[Yy]|[Yy][Ee][Ss])
+          case "$plat" in
+            linux|darwin|freebsd)
+              step "Installing Rust via rustup…"
+              if eval "$rustup_cmd" -y 2>/dev/null; then
+                if [ -f "$HOME/.cargo/env" ]; then
+                  # shellcheck source=/dev/null
+                  . "$HOME/.cargo/env"
+                fi
+                if command -v cargo >/dev/null 2>&1; then
+                  cargo_ok=1
+                  info "Rust installed ($(cargo version | cut -d' ' -f2))."
+                fi
+              else
+                info "rustup exited non-zero — check https://rustup.rs for manual install."
+              fi
+              ;;
+            windows)
+              info "Download the installer from: $rustup_url"
+              ;;
+          esac
+          ;;
+      esac
+    fi
+  fi
+  if [ "$cargo_ok" != 1 ]; then
+    info "Install Rust later: https://rustup.rs"
+  fi
+fi
+
+# ── Bail out when no binary is available ────────────────────────────
+if [ "$have_bin" != 1 ]; then
+  if [ "$cargo_ok" = 1 ]; then
+    die "No prebuilt binary for $tag on $plat-$cpu. Build from source: cargo install --git https://github.com/$REPO ipe"
+  else
+    die "No prebuilt binary for $tag on $plat-$cpu. Install Rust first, then build from source."
+  fi
+fi
+
 # ── Download the binary with a friendly progress display ─────────────────────
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 pkg="$tmp/pkg.$ext"
