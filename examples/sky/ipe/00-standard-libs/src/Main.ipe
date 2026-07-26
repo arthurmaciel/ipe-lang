@@ -611,7 +611,7 @@ jwtClaimSet =
 
 jwtHsToken : Result Error String
 jwtHsToken =
-    Jwt.encode (Jwt.hs256 "topsecret") jwtClaimSet
+    Jwt.encode (Jwt.hs256 "ipe-jwt-hs256-test-secret-0123456789") jwtClaimSet
 
 
 jwtDecodeOk : String -> Int -> String -> Bool
@@ -645,7 +645,7 @@ jwtSuite =
                   case jwtHsToken of
 
                       Ok tok ->
-                          Test.isTrue (jwtDecodeOk "topsecret" 1000 tok)
+                          Test.isTrue (jwtDecodeOk "ipe-jwt-hs256-test-secret-0123456789" 1000 tok)
 
                       Err _ ->
                           Test.isTrue False)
@@ -655,7 +655,7 @@ jwtSuite =
                   case jwtHsToken of
 
                       Ok tok ->
-                          Test.isFalse (jwtDecodeOk "wrong-key" 1000 tok)
+                          Test.isFalse (jwtDecodeOk "ipe-jwt-hs256-wrong-secret-9876543210" 1000 tok)
 
                       Err _ ->
                           Test.isTrue False)
@@ -665,7 +665,7 @@ jwtSuite =
                   case jwtHsToken of
 
                       Ok tok ->
-                          Test.isFalse (jwtDecodeOk "topsecret" 99999999999 tok)
+                          Test.isFalse (jwtDecodeOk "ipe-jwt-hs256-test-secret-0123456789" 99999999999 tok)
 
                       Err _ ->
                           Test.isTrue False)

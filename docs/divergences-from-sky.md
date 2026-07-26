@@ -685,6 +685,18 @@ only to pre-empt mis-listing (see AGENTS.md "Agent learnings").
 
 ---
 
+### B25 — `Jwt.encode`/`decode` (HS256) reject a signing secret under 32 bytes
+- **Ipê:** the HS256 kernel (`src/runtime/rust/src/jwt.rs`) fails closed with
+  `jwt-encode: HS256 secret must be at least 32 bytes (RFC 7518 §3.2)` when the
+  key is shorter than 32 bytes (256 bits). The reference accepted any-length
+  key. *Rationale:* security — an HMAC key below the hash-output size is
+  low-entropy and forgeable; a 1-byte key mints a token anyone can re-sign. This
+  is the same 32-byte floor `auth.rs` / `Ipe.Auth` enforce, closed for a direct
+  `Jwt.*` caller that bypasses `Ipe.Auth`. A short-key example must adopt a
+  >=32-byte secret (e.g. the `00-standard-libs` port's `ipe-edits`).
+
+---
+
 ## 3. Architectural divergences (compiler + runtime structure)
 
 These are structural consequences of porting a Haskell compiler that emits
