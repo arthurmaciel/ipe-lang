@@ -6183,7 +6183,7 @@ pub enum KernelId {
 /// unless [`StdlibKernel::available_on`] explicitly allows it (default-deny —
 /// a newly added kernel is unrepresentable client-side until audited and
 /// allowed, so the forgotten state is the safe state; see
-/// `docs/architecture/wasm-target.md` Q5 Layer 1).
+/// `docs/adr/0042-wasm-client-target.md` Q5 Layer 1).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub enum Target {
     /// The native host binary (server / CLI / TUI / desktop).
@@ -6199,7 +6199,7 @@ impl StdlibKernel {
     ///
     /// Everything is available natively. The `WasmClient` arm is the
     /// default-deny allowlist over the capability matrix
-    /// (`docs/architecture/wasm-target.md` Q3): the pure/fallible-pure
+    /// (`docs/adr/0042-wasm-client-target.md` Q3): the pure/fallible-pure
     /// families plus the whole `Ipe.Ui`/`Ipe.Html`/`Ipe.Css` render surface
     /// compile wholesale; effect kernels appear here ONLY once their browser
     /// substitute exists in the runtime `wasm` module (tagging earlier would
