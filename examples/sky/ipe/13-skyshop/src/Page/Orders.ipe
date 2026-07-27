@@ -4,67 +4,65 @@ import Ipe.Prelude exposing (..)
 import Ipe.Maybe exposing (..)
 import Ipe.List as List
 import Ipe.String as String
-import Ipe.Html exposing (..)
 import Ipe.Html as Html
-import Ipe.Html.Attributes exposing (..)
-import Ipe.Html.Attributes as Attr
-import Ipe.Html.Events exposing (onClick)
+import Ipe.Ui as Ui
+import Ipe.Ui exposing (Element)
+import Ipe.Ui.Background as Background
+import Ipe.Ui.Border as Border
+import Ipe.Ui.Font as Font
+import Ipe.Ui.Region as Region
 import State exposing (..)
 import Ui.Layout as Layout
 import Lib.Db as Db
 import Lib.Money as Money
 import Lib.Translation as Tr
-import Tailwind exposing (..)
-import Tailwind.Responsive as Responsive
 
 
 -- ══════════════════════════════════════════════════════
 -- ORDER LIST
 -- ══════════════════════════════════════════════════════
+viewOrders : Model -> Html.Html Msg
 viewOrders model =
-    Layout.page
-        model
-        (case model.user of
+    Ui.layout []
+        (Layout.shell
+            model
+            (case model.user of
 
-            Nothing ->
-                div
-                    [ tw [ textCenter, py16 ] ]
-                    [ a
-                          [ href "/auth/signin"
-                          , attribute "sky-nav" ""
-                          , tw
-                                [ bgBlue600
-                                , textWhite
-                                , px6
-                                , py3
-                                , roundedLg
-                                , fontSemibold
-                                ]
-                          ]
-                          [ text (Tr.t model.lang "nav.signin") ]
-                    ]
+                Nothing ->
+                    Ui.column
+                        [ Ui.width Ui.fill, Ui.paddingXY 0 64, Font.alignCenter ]
+                        [ Layout.primaryButton
+                              (Navigate AuthSignInPage)
+                              (Tr.t model.lang "nav.signin")
+                        ]
 
-            Just _ ->
-                div
-                    []
-                    [ Html.h1
-                          [ tw [ text3xl, fontBold, mb6 ] ]
-                          [ text (Tr.t model.lang "order.title") ]
-                    , if List.isEmpty model.orders then
-                          div
-                              [ tw [ textCenter, py16, textGray500 ] ]
-                              [ text (Tr.t model.lang "order.empty") ]
+                Just _ ->
+                    Ui.column
+                        [ Ui.width Ui.fill, Ui.spacing 24 ]
+                        [ Ui.el
+                              [ Region.heading 1
+                              , Font.size 30
+                              , Font.bold
+                              , Font.color Layout.ink
+                              ]
+                              (Ui.text (Tr.t model.lang "order.title"))
+                        , if List.isEmpty model.orders then
+                              Ui.el
+                                  [ Ui.width Ui.fill
+                                  , Ui.paddingXY 0 64
+                                  , Font.alignCenter
+                                  , Font.color Layout.muted
+                                  ]
+                                  (Ui.text (Tr.t model.lang "order.empty"))
 
-                      else
-                          div
-                              [ tw [ flexCol, gap4 ] ]
-                              (List.map (viewOrderCard model) model.orders)
-                    ])
+                          else
+                              Ui.column
+                                  [ Ui.width Ui.fill, Ui.spacing 16 ]
+                                  (List.map (viewOrderCard model) model.orders)
+                        ]))
 
 
--- ══════════════════════════════════════════════════════
--- ORDER DETAIL
--- ══════════════════════════════════════════════════════
+viewOrderCard : Model -> Dict String String -> Element Msg
 viewOrderCard model order =
     let
         orderId = Db.getField "id" order
@@ -72,86 +70,96 @@ viewOrderCard model order =
         totalAmount = Db.getInt "total_amount" order
         totalCurrency = Db.getField "total_currency" order
         createdAt = Db.getField "created_at" order
-        stateBg = stateColor state
+        colors = stateColors state
     in
-        a
-            [ href ("/order/" ++ orderId)
-            , attribute "sky-nav" ""
-            , tw
-                  [ bgWhite
-                  , roundedXl
-                  , shadow
-                  , p6
-                  , flex
-                  , justifyBetween
-                  , itemsCenter
-                  , block
-                  ]
+        Ui.button
+            [ Ui.width Ui.fill
+            , Background.color Layout.cardBg
+            , Border.rounded 12
+            , Border.width 1
+            , Border.color Layout.hairline
+            , Ui.padding 24
             ]
-            [ div
-                  []
-                  [ div
-                        [ tw [ flex, gap3, itemsCenter, mb2 ] ]
-                        [ span
-                              [ tw [ fontSemibold, textGray900 ] ]
-                              [ text
-                                    (Money.formatPrice totalAmount totalCurrency)
-                              ]
-                        , span
-                              [ tw [ textXs, px2, py1, roundedFull, fontMedium ]
-                              , stateBg
-                              ]
-                              [ text (Tr.tCartState model.lang state) ]
-                        ]
-                  , span
-                        [ tw [ textSm, textGray500 ] ]
-                        [ text
-                              (Tr.t model.lang "order.placed" ++ ": "
-                                  ++ createdAt)
-                        ]
-                  ]
-            ]
+            { onPress = Just (Navigate (OrderPage orderId))
+            , label =
+                  Ui.row
+                      [ Ui.width Ui.fill ]
+                      [ Ui.column
+                            [ Ui.spacing 8 ]
+                            [ Ui.row
+                                  [ Ui.spacing 12 ]
+                                  [ Ui.el
+                                        [ Font.semiBold, Font.color Layout.ink ]
+                                        (Ui.text
+                                            (Money.formatPrice totalAmount totalCurrency))
+                                  , Layout.badge
+                                        colors.fg
+                                        colors.bg
+                                        (Tr.tCartState model.lang state)
+                                  ]
+                            , Ui.el
+                                  [ Font.size 14, Font.color Layout.muted ]
+                                  (Ui.text
+                                      (Tr.t model.lang "order.placed" ++ ": " ++ createdAt))
+                            ]
+                      ]
+            }
 
 
-stateColor state =
+type alias StateColors =
+    { fg : Ui.Color, bg : Ui.Color }
+
+
+stateColors : String -> StateColors
+stateColors state =
     case state of
 
         "ordered" ->
-            tw [ bgBlue100, textBlue700 ]
+            { fg = Ui.rgb 29 78 216, bg = Ui.rgb 219 234 254 }
 
         "shipped" ->
-            tw [ bgYellow100, textYellow500 ]
+            { fg = Ui.rgb 161 98 7, bg = Ui.rgb 254 249 195 }
 
         "delivered" ->
-            tw [ bgGreen100, textGreen700 ]
+            { fg = Ui.rgb 21 128 61, bg = Ui.rgb 220 252 231 }
 
         "cancelled" ->
-            tw [ bgRed100, textRed700 ]
+            { fg = Ui.rgb 185 28 28, bg = Ui.rgb 254 226 226 }
 
         "refunded" ->
-            tw [ bgGray100, textGray600 ]
+            { fg = Ui.rgb 75 85 99, bg = Ui.rgb 243 244 246 }
 
         "pending" ->
-            tw [ bgOrange100, textOrange500 ]
+            { fg = Ui.rgb 194 65 12, bg = Ui.rgb 255 237 213 }
 
         _ ->
-            tw [ bgGray100, textGray600 ]
+            { fg = Ui.rgb 75 85 99, bg = Ui.rgb 243 244 246 }
 
 
+-- ══════════════════════════════════════════════════════
+-- ORDER DETAIL
+-- ══════════════════════════════════════════════════════
+viewOrder : Model -> Html.Html Msg
 viewOrder model =
-    Layout.page
-        model
-        (case model.order of
+    Ui.layout []
+        (Layout.shell
+            model
+            (case model.order of
 
-            Just order ->
-                viewOrderDetail model order
+                Just order ->
+                    viewOrderDetail model order
 
-            Nothing ->
-                div
-                    [ tw [ textCenter, py16, textGray500 ] ]
-                    [ text (Tr.t model.lang "common.loading") ])
+                Nothing ->
+                    Ui.el
+                        [ Ui.width Ui.fill
+                        , Ui.paddingXY 0 64
+                        , Font.alignCenter
+                        , Font.color Layout.muted
+                        ]
+                        (Ui.text (Tr.t model.lang "common.loading"))))
 
 
+viewOrderDetail : Model -> Dict String String -> Element Msg
 viewOrderDetail model order =
     let
         lang = model.lang
@@ -167,113 +175,112 @@ viewOrderDetail model order =
         shippingCity = Db.getField "shipping_city" order
         shippingCountry = Db.getField "shipping_country" order
         shippingPostcode = Db.getField "shipping_postcode" order
+        colors = stateColors state
     in
-        div
-            []
-            [ div
-                  [ tw [ mb4 ] ]
-                  [ a
-                        [ href "/orders"
-                        , attribute "sky-nav" ""
-                        , tw [ textSm, textBlue600 ]
-                        ]
-                        [ text ("< " ++ Tr.t lang "common.back") ]
-                  ]
-            , div
-                  [ tw [ bgWhite, roundedXl, shadow, p6, mb6 ] ]
-                  [ div
-                        [ tw [ flex, justifyBetween, itemsCenter, mb6 ] ]
-                        [ Html.h1
-                              [ tw [ text2xl, fontBold ] ]
-                              [ text (Tr.t lang "order.detail") ]
-                        , span
-                              [ tw [ px3, py1, roundedFull, fontMedium, textSm ]
-                              , stateColor state
-                              ]
-                              [ text (Tr.tCartState lang state) ]
-                        ]
-                  , div
-                        [ tw
-                              [ grid
-                              , gridCols1
-                              , Responsive.sm gridCols2
-                              , gap4
-                              , mb6
-                              ]
-                        ]
-                        [ div
-                              []
-                              [ span
-                                    [ tw [ textSm, textGray500, block ] ]
-                                    [ text (Tr.t lang "cart.total") ]
-                              , span
-                                    [ tw [ text2xl, fontBold ] ]
-                                    [ text
-                                          (Money.formatPrice
-                                              totalAmount
-                                              totalCurrency)
-                                    ]
-                              ]
-                        , div
-                              []
-                              [ span
-                                    [ tw [ textSm, textGray500, block ] ]
-                                    [ text (Tr.t lang "order.placed") ]
-                              , span [ tw [ fontMedium ] ] [ text createdAt ]
-                              ]
-                        ]
-                  , if shippingName != "" then
-                        div
-                            [ tw [ borderT, borderGray200, pt4, mb4 ] ]
-                            [ Html.h3
-                                  [ tw [ fontSemibold, mb2 ] ]
-                                  [ text (Tr.t lang "order.shipping") ]
-                            , p
-                                  [ tw [ textSm, textGray600 ] ]
-                                  [ text shippingName ]
-                            , p
-                                  [ tw [ textSm, textGray600 ] ]
-                                  [ text shippingEmail ]
-                            , p
-                                  [ tw [ textSm, textGray600 ] ]
-                                  [ text shippingPhone ]
-                            , p
-                                  [ tw [ textSm, textGray600 ] ]
-                                  [ text
-                                        (shippingLine1 ++ ", " ++ shippingCity
-                                            ++ " "
-                                            ++ shippingPostcode
-                                            ++ ", "
-                                            ++ shippingCountry)
+        Ui.column
+            [ Ui.width Ui.fill, Ui.spacing 24 ]
+            [ Ui.button
+                  [ Font.size 14, Font.color Layout.brand ]
+                  { onPress = Just (Navigate OrdersPage)
+                  , label = Ui.text ("< " ++ Tr.t lang "common.back")
+                  }
+            , Layout.card
+                  [ Ui.width Ui.fill ]
+                  (Ui.column
+                      [ Ui.width Ui.fill, Ui.spacing 24 ]
+                      [ Ui.row
+                            [ Ui.width Ui.fill ]
+                            [ Ui.el
+                                  [ Region.heading 1
+                                  , Font.size 22
+                                  , Font.bold
+                                  , Font.color Layout.ink
+                                  ]
+                                  (Ui.text (Tr.t lang "order.detail"))
+                            , Ui.el [ Ui.width Ui.fill ] Ui.none
+                            , Layout.badge
+                                  colors.fg
+                                  colors.bg
+                                  (Tr.tCartState lang state)
+                            ]
+                      , Ui.row
+                            [ Ui.width Ui.fill, Ui.spacing 16 ]
+                            [ Ui.column
+                                  [ Ui.spacing 4 ]
+                                  [ Ui.el
+                                        [ Font.size 14, Font.color Layout.muted ]
+                                        (Ui.text (Tr.t lang "cart.total"))
+                                  , Ui.el
+                                        [ Font.size 22, Font.bold, Font.color Layout.ink ]
+                                        (Ui.text
+                                            (Money.formatPrice totalAmount totalCurrency))
+                                  ]
+                            , Ui.column
+                                  [ Ui.spacing 4 ]
+                                  [ Ui.el
+                                        [ Font.size 14, Font.color Layout.muted ]
+                                        (Ui.text (Tr.t lang "order.placed"))
+                                  , Ui.el
+                                        [ Font.weight 500, Font.color Layout.ink ]
+                                        (Ui.text createdAt)
                                   ]
                             ]
+                      , if shippingName /= "" then
+                            Ui.column
+                                [ Ui.spacing 4 ]
+                                [ Ui.el
+                                      [ Font.semiBold, Font.color Layout.ink ]
+                                      (Ui.text (Tr.t lang "order.shipping"))
+                                , detailLine shippingName
+                                , detailLine shippingEmail
+                                , detailLine shippingPhone
+                                , detailLine
+                                      (shippingLine1 ++ ", " ++ shippingCity
+                                          ++ " "
+                                          ++ shippingPostcode
+                                          ++ ", "
+                                          ++ shippingCountry)
+                                ]
 
-                    else
-                        text ""
-                  , if remarks != "" then
-                        div
-                            [ tw [ borderT, borderGray200, pt4, mb4 ] ]
-                            [ Html.h3
-                                  [ tw [ fontSemibold, mb2 ] ]
-                                  [ text "Remarks" ]
-                            , p [ tw [ textSm, textGray600 ] ] [ text remarks ]
+                        else
+                            Ui.none
+                      , if remarks /= "" then
+                            Ui.column
+                                [ Ui.spacing 4 ]
+                                [ Ui.el
+                                      [ Font.semiBold, Font.color Layout.ink ]
+                                      (Ui.text "Remarks")
+                                , detailLine remarks
+                                ]
+
+                        else
+                            Ui.none
+                      ])
+            , Layout.card
+                  [ Ui.width Ui.fill ]
+                  (Ui.column
+                      [ Ui.width Ui.fill, Ui.spacing 12 ]
+                      [ Ui.el
+                            [ Font.semiBold
+                            , Font.size 18
+                            , Font.color Layout.ink
                             ]
-
-                    else
-                        text ""
-                  ]
-            , div
-                  [ tw [ bgWhite, roundedXl, shadow, p6 ] ]
-                  [ Html.h2
-                        [ tw [ fontSemibold, textLg, mb4 ] ]
-                        [ text (Tr.t lang "order.items") ]
-                  , div
-                        [ tw [ flexCol, gap3 ] ]
-                        (List.map viewOrderItem model.orderItems)
-                  ]
+                            (Ui.text (Tr.t lang "order.items"))
+                      , Ui.column
+                            [ Ui.width Ui.fill, Ui.spacing 12 ]
+                            (List.map viewOrderItem model.orderItems)
+                      ])
             ]
 
 
+detailLine : String -> Element Msg
+detailLine txt =
+    Ui.el
+        [ Font.size 14, Font.color (Ui.rgb 75 85 99) ]
+        (Ui.text txt)
+
+
+viewOrderItem : Dict String String -> Element Msg
 viewOrderItem item =
     let
         title = Db.getField "title" item
@@ -289,124 +296,103 @@ viewOrderItem item =
                 price
         lineTotal_ = Money.formatPrice (effectivePrice * qty) currency
     in
-        div
-            [ tw
-                  [ flex
-                  , justifyBetween
-                  , itemsCenter
-                  , py3
-                  , borderB
-                  , borderGray100
-                  ]
+        Ui.row
+            [ Ui.width Ui.fill
+            , Ui.paddingXY 0 12
+            , Border.widthEach { top = 0, right = 0, bottom = 1, left = 0 }
+            , Border.color Layout.hairline
             ]
-            [ div
-                  []
-                  [ span [ tw [ fontMedium ] ] [ text title ]
-                  , span
-                        [ tw [ textSm, textGray500, ml2 ] ]
-                        [ text ("x" ++ String.fromInt qty) ]
+            [ Ui.row
+                  [ Ui.spacing 8 ]
+                  [ Ui.el
+                        [ Font.weight 500, Font.color Layout.ink ]
+                        (Ui.text title)
+                  , Ui.el
+                        [ Font.size 14, Font.color Layout.muted ]
+                        (Ui.text ("x" ++ String.fromInt qty))
                   ]
-            , span [ tw [ fontSemibold ] ] [ text lineTotal_ ]
+            , Ui.el [ Ui.width Ui.fill ] Ui.none
+            , Ui.el
+                  [ Font.semiBold, Font.color Layout.ink ]
+                  (Ui.text lineTotal_)
             ]
 
 
 -- ══════════════════════════════════════════════════════
 -- ORDER SUCCESS
 -- ══════════════════════════════════════════════════════
+viewOrderSuccess : Model -> Html.Html Msg
 viewOrderSuccess model =
-    Layout.page
-        model
-        (div
-            [ tw [ textCenter, py16 ] ]
-            [ case model.order of
+    Ui.layout []
+        (Layout.shell
+            model
+            (Ui.column
+                [ Ui.width Ui.fill, Ui.paddingXY 0 64, Font.alignCenter ]
+                [ case model.order of
 
-                  Just order ->
-                      let
-                          state = Db.getField "state" order
-                      in
-                          if state == "ordered" || state == "shipped" || state
-                              == "delivered" then
-                              div
-                                  []
-                                  [ div
-                                        [ tw
-                                              [ w16
-                                              , h16
-                                              , bgGreen100
-                                              , roundedFull
-                                              , flex
-                                              , itemsCenter
-                                              , justifyCenter
-                                              , mxAuto
-                                              , mb4
-                                              ]
-                                        ]
-                                        [ span
-                                              [ tw [ text2xl, textGreen600 ] ]
-                                              [ text "✓" ]
-                                        ]
-                                  , Html.h1
-                                        [ tw [ text2xl, fontBold, mb4 ] ]
-                                        [ text (Tr.t model.lang "order.success")
-                                        ]
-                                  , a
-                                        [ href
-                                              ("/order/"
-                                                  ++ Db.getField "id" order)
-                                        , attribute "sky-nav" ""
-                                        , tw
-                                              [ bgBlue600
-                                              , textWhite
-                                              , px6
-                                              , py3
-                                              , roundedLg
-                                              , fontSemibold
-                                              , inlineBlock
-                                              ]
-                                        ]
-                                        [ text (Tr.t model.lang "order.detail")
-                                        ]
-                                  ]
+                      Just order ->
+                          let
+                              state = Db.getField "state" order
+                          in
+                              if state == "ordered" || state == "shipped" || state == "delivered" then
+                                  viewSuccessOk model order
 
-                          else
-                              div
-                                  []
-                                  [ Html.h1
-                                        [ tw
-                                              [ text2xl
-                                              , fontBold
-                                              , mb4
-                                              , textRed600
-                                              ]
-                                        ]
-                                        [ text (Tr.t model.lang "order.failed")
-                                        ]
-                                  , p
-                                        [ tw [ textGray500, mb4 ] ]
-                                        [ text
-                                              (Tr.t model.lang "order.status"
-                                                  ++ ": "
-                                                  ++ Tr.tCartState
-                                                         model.lang
-                                                         state)
-                                        ]
-                                  , a
-                                        [ href "/cart"
-                                        , attribute "sky-nav" ""
-                                        , tw [ textBlue600 ]
-                                        ]
-                                        [ text
-                                              (Tr.t
-                                                  model.lang
-                                                  "cart.continueShopping")
-                                        ]
-                                  ]
+                              else
+                                  viewSuccessFailed model state
 
-                  Nothing ->
-                      div
-                          []
-                          [ p
-                                [ tw [ textGray500 ] ]
-                                [ text (Tr.t model.lang "order.processing") ]
-                          ]
-            ])
+                      Nothing ->
+                          Ui.el
+                              [ Font.color Layout.muted ]
+                              (Ui.text (Tr.t model.lang "order.processing"))
+                ]))
+
+
+viewSuccessOk : Model -> Dict String String -> Element Msg
+viewSuccessOk model order =
+    Ui.column
+        [ Ui.width Ui.fill, Ui.spacing 16, Font.alignCenter ]
+        [ Ui.el
+              [ Ui.width (Ui.px 64)
+              , Ui.height (Ui.px 64)
+              , Background.color (Ui.rgb 220 252 231)
+              , Border.rounded 999
+              , Font.alignCenter
+              , Font.size 24
+              , Font.color Layout.success
+              ]
+              (Ui.text "✓")
+        , Ui.el
+              [ Region.heading 1
+              , Font.size 22
+              , Font.bold
+              , Font.color Layout.ink
+              ]
+              (Ui.text (Tr.t model.lang "order.success"))
+        , Layout.primaryButton
+              (Navigate (OrderPage (Db.getField "id" order)))
+              (Tr.t model.lang "order.detail")
+        ]
+
+
+viewSuccessFailed : Model -> String -> Element Msg
+viewSuccessFailed model state =
+    Ui.column
+        [ Ui.width Ui.fill, Ui.spacing 16, Font.alignCenter ]
+        [ Ui.el
+              [ Region.heading 1
+              , Font.size 22
+              , Font.bold
+              , Font.color (Ui.rgb 220 38 38)
+              ]
+              (Ui.text (Tr.t model.lang "order.failed"))
+        , Ui.el
+              [ Font.color Layout.muted ]
+              (Ui.text
+                  (Tr.t model.lang "order.status" ++ ": "
+                      ++ Tr.tCartState model.lang state))
+        , Ui.button
+              [ Font.color Layout.brand, Font.size 14 ]
+              { onPress = Just (Navigate CartPage)
+              , label = Ui.text (Tr.t model.lang "cart.continueShopping")
+              }
+        ]

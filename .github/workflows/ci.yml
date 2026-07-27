@@ -158,17 +158,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Build ipe
         run: cargo build --release -p ipe
-      - name: Emit + build + run (examples/01-hello-world)
+      - name: Emit + build + run (examples/sky/ipe/01-hello-world)
         run: |
           set -euo pipefail
           IPE="$PWD/target/release/ipe"
-          cd examples/01-hello-world
+          cd examples/sky/ipe/01-hello-world
           "$IPE" build ipe.toml --out out/rust
           cd out/rust
           cargo build --release
           OUT="$(cargo run --release --quiet)"
           echo "emitted-binary output: $OUT"
-          echo "$OUT" | grep -q 'Hello from Ipe!'
+          # The mirror port preserves the upstream greeting string verbatim (the
+          # token rewrite never touches string literals).
+          echo "$OUT" | grep -q 'Hello from Sky!'
 
   # `ipe-runtime-rust`'s `default = []` leaves `compression`/`csv`/`config`/
   # `tokio` (and every other optional feature) OFF, so the `test` job above

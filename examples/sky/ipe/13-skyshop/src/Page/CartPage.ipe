@@ -4,137 +4,156 @@ import Ipe.Prelude exposing (..)
 import Ipe.Maybe exposing (..)
 import Ipe.List as List
 import Ipe.String as String
-import Ipe.Html exposing (..)
 import Ipe.Html as Html
-import Ipe.Html.Attributes exposing (..)
-import Ipe.Html.Attributes as Attr
-import Ipe.Html.Events exposing (onClick, onInput)
+import Ipe.Ui as Ui
+import Ipe.Ui exposing (Element)
+import Ipe.Ui.Background as Background
+import Ipe.Ui.Border as Border
+import Ipe.Ui.Font as Font
+import Ipe.Ui.Input as Input
+import Ipe.Ui.Region as Region
 import State exposing (..)
 import Ui.Layout as Layout
 import Lib.Db as Db
 import Lib.Money as Money
 import Lib.Products as Products
 import Lib.Translation as Tr
-import Tailwind exposing (..)
-import Tailwind.Responsive as Responsive
 
 
+-- ══════════════════════════════════════════════════════
+-- CART PAGE
+-- ══════════════════════════════════════════════════════
+viewCart : Model -> Html.Html Msg
 viewCart model =
-    Layout.page
-        model
-        (case model.user of
+    Ui.layout []
+        (Layout.shell
+            model
+            (case model.user of
 
-            Nothing ->
-                viewSignInPrompt model
+                Nothing ->
+                    viewSignInPrompt model
 
-            Just _ ->
-                viewCartContent model)
+                Just _ ->
+                    viewCartContent model))
 
 
+viewSignInPrompt : Model -> Element Msg
 viewSignInPrompt model =
-    div
-        [ tw [ textCenter, py20 ] ]
-        [ div [ Layout.emptyIconSm ] [ text "Cart" ]
-        , Html.h2
-              [ tw [ text2xl, fontBold, mb2, textGray900 ] ]
-              [ text (Tr.t model.lang "cart.signinTitle") ]
-        , p
-              [ tw [ textGray500, mb6 ] ]
-              [ text (Tr.t model.lang "cart.signinPrompt") ]
-        , a
-              [ href "/auth/signin", attribute "sky-nav" "", Layout.btnPrimary ]
-              [ text (Tr.t model.lang "nav.signin") ]
+    Ui.column
+        [ Ui.width Ui.fill
+        , Ui.paddingXY 0 80
+        , Ui.spacing 16
+        , Font.alignCenter
+        ]
+        [ Ui.el
+              [ Region.heading 2
+              , Font.size 24
+              , Font.bold
+              , Font.color Layout.ink
+              ]
+              (Ui.text (Tr.t model.lang "cart.signinTitle"))
+        , Ui.el
+              [ Font.color Layout.muted ]
+              (Ui.text (Tr.t model.lang "cart.signinPrompt"))
+        , Layout.primaryButton (Navigate AuthSignInPage) (Tr.t model.lang "nav.signin")
         ]
 
 
+viewCartContent : Model -> Element Msg
 viewCartContent model =
     let
         lang = model.lang
     in
-        div
-            []
-            [ Html.h1
-                  [ tw [ text3xl, fontBold, mb2, textGray900 ] ]
-                  [ text (Tr.t lang "cart.title") ]
-            , if model.checkoutUrl != "" then
+        Ui.column
+            [ Ui.width Ui.fill, Ui.spacing 24 ]
+            [ Ui.el
+                  [ Region.heading 1
+                  , Font.size 30
+                  , Font.bold
+                  , Font.color Layout.ink
+                  ]
+                  (Ui.text (Tr.t lang "cart.title"))
+            , if model.checkoutUrl /= "" then
                   viewCheckoutRedirect model
 
               else if List.isEmpty model.cartItems then
                   viewEmptyCart model
 
               else
-                  div
-                      []
-                      [ p
-                            [ tw [ textGray500, mt1, mb6 ] ]
-                            [ text
-                                  (String.fromInt (List.length model.cartItems)
-                                      ++ " items")
-                            ]
-                      , div
-                            [ tw
-                                  [ flex
-                                  , flexCol
-                                  , Responsive.lg flexRow
-                                  , gap8
-                                  , itemsStart
-                                  ]
-                            ]
-                            [ div [ tw [ flex1 ] ] [ viewCartItems model ]
-                            , div
-                                  [ tw
-                                        [ wFull
-                                        , Responsive.lg w96
-                                        , Responsive.lg shrink0
-                                        ]
-                                  ]
-                                  [ viewCartSummary model ]
+                  Ui.column
+                      [ Ui.width Ui.fill, Ui.spacing 24 ]
+                      [ Ui.el
+                            [ Font.color Layout.muted ]
+                            (Ui.text
+                                (String.fromInt (List.length model.cartItems)
+                                    ++ " items"))
+                      , Ui.row
+                            [ Ui.width Ui.fill, Ui.spacing 32 ]
+                            [ Ui.el [ Ui.width Ui.fill ] (viewCartItems model)
+                            , viewCartSummary model
                             ]
                       ]
             ]
 
 
+viewCheckoutRedirect : Model -> Element Msg
 viewCheckoutRedirect model =
-    div
-        [ tw [ textCenter, py16 ] ]
-        [ div [ class "spinner" ] []
-        , p
-              [ tw [ textLg, fontMedium, mb2, textGray900 ] ]
-              [ text (Tr.t model.lang "cart.redirecting") ]
-        , p
-              [ tw [ textSm, textGray500, mb6 ] ]
-              [ text (Tr.t model.lang "cart.redirectHint") ]
-        , a
-              [ href model.checkoutUrl, Layout.btnPrimary ]
-              [ text (Tr.t model.lang "cart.goToPayment") ]
-        , div [ attribute "data-sky-redirect" model.checkoutUrl ] []
+    Ui.column
+        [ Ui.width Ui.fill
+        , Ui.paddingXY 0 64
+        , Ui.spacing 12
+        , Font.alignCenter
+        ]
+        [ Ui.el
+              [ Font.size 18
+              , Font.weight 500
+              , Font.color Layout.ink
+              ]
+              (Ui.text (Tr.t model.lang "cart.redirecting"))
+        , Ui.el
+              [ Font.size 14, Font.color Layout.muted ]
+              (Ui.text (Tr.t model.lang "cart.redirectHint"))
+        , Layout.primaryButton StartCheckout (Tr.t model.lang "cart.goToPayment")
         ]
 
 
+viewEmptyCart : Model -> Element Msg
 viewEmptyCart model =
-    div
-        [ tw [ textCenter, py20 ] ]
-        [ div [ Layout.emptyIcon ] [ text "~" ]
-        , Html.h2
-              [ tw [ textXl, fontSemibold, mb2, textGray900 ] ]
-              [ text (Tr.t model.lang "cart.empty") ]
-        , p
-              [ tw [ textGray500, mb6 ] ]
-              [ text (Tr.t model.lang "cart.startShopping") ]
-        , a
-              [ href "/products", attribute "sky-nav" "", Layout.btnPrimary ]
-              [ text (Tr.t model.lang "cart.continueShopping") ]
+    Ui.column
+        [ Ui.width Ui.fill
+        , Ui.paddingXY 0 80
+        , Ui.spacing 16
+        , Font.alignCenter
+        ]
+        [ Ui.el
+              [ Region.heading 2
+              , Font.size 20
+              , Font.semiBold
+              , Font.color Layout.ink
+              ]
+              (Ui.text (Tr.t model.lang "cart.empty"))
+        , Ui.el
+              [ Font.color Layout.muted ]
+              (Ui.text (Tr.t model.lang "cart.startShopping"))
+        , Layout.primaryButton
+              (Navigate ProductsPage)
+              (Tr.t model.lang "cart.continueShopping")
         ]
 
 
+viewCartItems : Model -> Element Msg
 viewCartItems model =
-    div [ Layout.card ] (List.map (viewCartItem model) model.cartItems)
+    Layout.card
+        [ Ui.width Ui.fill ]
+        (Ui.column
+            [ Ui.width Ui.fill, Ui.spacing 16 ]
+            (List.map (viewCartItem model) model.cartItems))
 
 
+viewCartItem : Model -> Dict String String -> Element Msg
 viewCartItem model item =
     let
         itemId = Db.getField "id" item
-        productId = Db.getField "product_id" item
         title = Db.getField "title" item
         pricing = Money.formatPriceFromRow item
         qty = Db.getInt "quantity" item
@@ -148,66 +167,57 @@ viewCartItem model item =
             else
                 price
         lineTotal_ = Money.formatPrice (effectivePrice * qty) currency
-        images = Products.listProductImages productId
-        thumb =
-            case List.head images of
-
-                Just img ->
-                    Db.getField "data" img
-
-                Nothing ->
-                    ""
     in
-        div
-            [ Layout.cartItem ]
-            [ if thumb != "" then
-                  img [ src thumb, alt title, Layout.cartThumb ]
-
-              else
-                  div [ Layout.cartThumbPlaceholder ] [ text "~" ]
-            , div
-                  [ tw [ flex1 ] ]
-                  [ Html.h3
-                        [ tw [ fontMedium, textGray900, textSm ] ]
-                        [ text title ]
-                  , div
-                        [ tw [ textXs, textGray500, mt1 ] ]
-                        [ text (pricing.original ++ " each") ]
+        Ui.row
+            [ Ui.width Ui.fill, Ui.spacing 16 ]
+            [ Ui.el
+                  [ Ui.width (Ui.px 56)
+                  , Ui.height (Ui.px 56)
+                  , Background.color (Ui.rgb 243 244 246)
+                  , Border.rounded 6
                   ]
-            , div
-                  [ tw [ flex, itemsCenter, gap3 ] ]
-                  [ div
-                        [ tw [ flex, itemsCenter, gap1 ] ]
-                        [ button
-                              [ onClick
-                                    (UpdateCartItemQty
-                                        itemId
-                                        (String.fromInt (qty - 1)))
-                              , Layout.qtyBtn
-                              ]
-                              [ text "-" ]
-                        , span
-                              [ tw [ w8, textCenter, fontSemibold, textSm ] ]
-                              [ text (String.fromInt qty) ]
-                        , button
-                              [ onClick
-                                    (UpdateCartItemQty
-                                        itemId
-                                        (String.fromInt (qty + 1)))
-                              , Layout.qtyBtn
-                              ]
-                              [ text "+" ]
+                  Ui.none
+            , Ui.column
+                  [ Ui.width Ui.fill, Ui.spacing 4 ]
+                  [ Ui.el
+                        [ Font.weight 500
+                        , Font.size 14
+                        , Font.color Layout.ink
                         ]
-                  , span
-                        [ Layout.lineTotal, style "min-width:80px" ]
-                        [ text lineTotal_ ]
-                  , button
-                        [ onClick (RemoveCartItem itemId), Layout.removeBtn ]
-                        [ text (Tr.t model.lang "cart.remove") ]
+                        (Ui.text title)
+                  , Ui.el
+                        [ Font.size 12, Font.color Layout.muted ]
+                        (Ui.text (pricing.original ++ " each"))
                   ]
+            , Ui.row
+                  [ Ui.spacing 8 ]
+                  [ Layout.secondaryButton
+                        (UpdateCartItemQty itemId (String.fromInt (qty - 1)))
+                        "-"
+                  , Ui.el
+                        [ Ui.width (Ui.px 32)
+                        , Font.alignCenter
+                        , Font.semiBold
+                        , Font.size 14
+                        , Font.color Layout.ink
+                        ]
+                        (Ui.text (String.fromInt qty))
+                  , Layout.secondaryButton
+                        (UpdateCartItemQty itemId (String.fromInt (qty + 1)))
+                        "+"
+                  ]
+            , Ui.el
+                  [ Ui.width (Ui.px 80)
+                  , Font.alignCenter
+                  , Font.semiBold
+                  , Font.color Layout.ink
+                  ]
+                  (Ui.text lineTotal_)
+            , Layout.dangerButton (RemoveCartItem itemId) (Tr.t model.lang "cart.remove")
             ]
 
 
+viewCartSummary : Model -> Element Msg
 viewCartSummary model =
     let
         lang = model.lang
@@ -228,85 +238,88 @@ viewCartSummary model =
                 Nothing ->
                     "GBP"
     in
-        div
-            [ tw [ bgWhite, roundedLg, border, borderGray200, p6, sticky ]
-            , style "top:80px"
-            ]
-            [ Html.h3
-                  [ tw [ fontSemibold, textGray900, mb4 ] ]
-                  [ text (Tr.t lang "cart.orderSummary") ]
-            , div
-                  [ tw [ mb4 ] ]
-                  [ label
-                        [ Layout.formLabel_ ]
-                        [ text (Tr.t lang "cart.remarks") ]
-                  , textarea
-                        [ value model.cartRemarks
-                        , onInput UpdateRemarks
-                        , rows 3
-                        , Layout.formInput
-                        , placeholder (Tr.t lang "cart.deliveryInstructions")
-                        ]
-                        []
-                  ]
-            , div
-                  [ tw [ borderT, borderGray200, mt4, pt4 ] ]
-                  [ div
-                        [ tw [ flex, justifyBetween, itemsCenter, mb1 ] ]
-                        [ span
-                              [ tw [ textSm, textGray500 ] ]
-                              [ text (Tr.t lang "cart.subtotal") ]
-                        , span
-                              [ tw [ fontMedium ] ]
-                              [ text
-                                    (Money.formatPrice totalAmount totalCurrency)
-                              ]
-                        ]
-                  , div
-                        [ tw [ flex, justifyBetween, itemsCenter, mb1 ] ]
-                        [ span
-                              [ tw [ textSm, textGray500 ] ]
-                              [ text (Tr.t lang "cart.shipping") ]
-                        , span
-                              [ tw [ textSm, textGreen600, fontMedium ] ]
-                              [ text (Tr.t lang "cart.shippingFree") ]
-                        ]
-                  , div
-                        [ tw
-                              [ flex
-                              , justifyBetween
-                              , itemsCenter
-                              , mt4
-                              , pt4
-                              , borderT
-                              , borderGray200
-                              ]
-                        ]
-                        [ span
-                              [ tw [ textLg, fontBold, textGray900 ] ]
-                              [ text (Tr.t lang "cart.total") ]
-                        , span
-                              [ tw [ text2xl, fontBold, textGray900 ] ]
-                              [ text
-                                    (Money.formatPrice totalAmount totalCurrency)
-                              ]
-                        ]
-                  ]
-            , button
-                  [ onClick StartCheckout, Layout.btnCheckout ]
-                  [ text (Tr.t lang "cart.checkout") ]
-            , a
-                  [ href "/products"
-                  , attribute "sky-nav" ""
-                  , tw
-                        [ block
-                        , textCenter
-                        , mt3
-                        , textSm
-                        , textBlue500
-                        , fontMedium
-                        , hover textBlue700
-                        ]
-                  ]
-                  [ text (Tr.t lang "cart.continueShopping") ]
-            ]
+        Ui.el
+            [ Ui.width (Ui.px 360) ]
+            (Layout.card
+                [ Ui.width Ui.fill ]
+                (Ui.column
+                    [ Ui.width Ui.fill, Ui.spacing 16 ]
+                    [ Ui.el
+                          [ Font.semiBold, Font.color Layout.ink ]
+                          (Ui.text (Tr.t lang "cart.orderSummary"))
+                    , Ui.column
+                          [ Ui.width Ui.fill, Ui.spacing 4 ]
+                          [ Ui.el
+                                [ Font.size 14, Font.color Layout.muted ]
+                                (Ui.text (Tr.t lang "cart.remarks"))
+                          , Input.text
+                                [ Ui.width Ui.fill ]
+                                { onChange = UpdateRemarks
+                                , text = model.cartRemarks
+                                , placeholder =
+                                      Just
+                                          (Input.placeholder
+                                              []
+                                              (Ui.text
+                                                  (Tr.t lang "cart.deliveryInstructions")))
+                                , label = Input.labelHidden "remarks"
+                                }
+                          ]
+                    , Ui.column
+                          [ Ui.width Ui.fill, Ui.spacing 4 ]
+                          [ summaryRow
+                                (Tr.t lang "cart.subtotal")
+                                (Money.formatPrice totalAmount totalCurrency)
+                                Layout.muted
+                          , shippingRow lang
+                          ]
+                    , Ui.row
+                          [ Ui.width Ui.fill ]
+                          [ Ui.el
+                                [ Font.size 18, Font.bold, Font.color Layout.ink ]
+                                (Ui.text (Tr.t lang "cart.total"))
+                          , Ui.el [ Ui.width Ui.fill ] Ui.none
+                          , Ui.el
+                                [ Font.size 22, Font.bold, Font.color Layout.ink ]
+                                (Ui.text (Money.formatPrice totalAmount totalCurrency))
+                          ]
+                    , Layout.primaryButton StartCheckout (Tr.t lang "cart.checkout")
+                    , Ui.button
+                          [ Font.color Layout.brand
+                          , Font.size 14
+                          , Font.weight 500
+                          , Ui.width Ui.fill
+                          , Font.alignCenter
+                          ]
+                          { onPress = Just (Navigate ProductsPage)
+                          , label = Ui.text (Tr.t lang "cart.continueShopping")
+                          }
+                    ]))
+
+
+summaryRow : String -> String -> Ui.Color -> Element Msg
+summaryRow leftLabel rightLabel rightColor =
+    Ui.row
+        [ Ui.width Ui.fill ]
+        [ Ui.el
+              [ Font.size 14, Font.color Layout.muted ]
+              (Ui.text leftLabel)
+        , Ui.el [ Ui.width Ui.fill ] Ui.none
+        , Ui.el
+              [ Font.weight 500, Font.color rightColor ]
+              (Ui.text rightLabel)
+        ]
+
+
+shippingRow : String -> Element Msg
+shippingRow lang =
+    Ui.row
+        [ Ui.width Ui.fill ]
+        [ Ui.el
+              [ Font.size 14, Font.color Layout.muted ]
+              (Ui.text (Tr.t lang "cart.shipping"))
+        , Ui.el [ Ui.width Ui.fill ] Ui.none
+        , Ui.el
+              [ Font.size 14, Font.weight 500, Font.color Layout.success ]
+              (Ui.text (Tr.t lang "cart.shippingFree"))
+        ]

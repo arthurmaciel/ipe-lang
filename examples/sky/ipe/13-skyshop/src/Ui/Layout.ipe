@@ -1,778 +1,213 @@
 module Ui.Layout exposing
-    ( page
-    , adminPage
-    , btnPrimary
-    , btnPrimaryLg
-    , btnSecondary
-    , btnCheckout
-    , btnDangerOutline
-    , btnState
+    ( shell
+    , adminShell
+    , brand
+    , brandAccent
+    , pageBg
+    , cardBg
+    , ink
+    , muted
+    , hairline
+    , danger
+    , success
     , card
-    , cardHeader
-    , cardBody
-    , cardSection
-    , cardFooter
-    , formInput
-    , formLabel_
-    , qtyBtn
-    , emptyIcon
-    , emptyIconSm
-    , adminThumb
-    , adminThumbPlaceholder
-    , notificationSuccess
-    , notificationError
-    , sidebarLink_
-    , sidebarLinkActive
-    , tableHeader_
-    , adminRow
-    , badge_
-    , badgeLive
-    , badgeDraft
-    , badgeOrdered
-    , badgeShipped
-    , badgeDelivered
-    , badgeCancelled
-    , badgeRefunded
-    , badgePending
-    , infoCard_
-    , infoCardLabel
-    , cartItem
-    , cartThumb
-    , cartThumbPlaceholder
-    , lineTotal
-    , removeBtn
-    , galleryMain
-    , galleryThumb
-    , galleryPlaceholder
-    , imgPlaceholder
-    , objectCover_
-    , uploadZone
-    , imgCardSquare
-    , imgOverlayDelete
-    , h2_
+    , primaryButton
+    , secondaryButton
+    , dangerButton
+    , sectionHeading
+    , badge
+    , notificationBanner
     )
 
 import Ipe.Prelude exposing (..)
 import Ipe.Maybe exposing (..)
 import Ipe.List as List
 import Ipe.String as String
-import Ipe.Html exposing (..)
-import Ipe.Html as Html
-import Ipe.Html.Attributes exposing (..)
-import Ipe.Html.Attributes as Attr
-import Ipe.Css as Css
-import Ipe.Html.Events exposing (onClick)
+import Ipe.Ui as Ui
+import Ipe.Ui exposing (Element)
+import Ipe.Ui.Background as Background
+import Ipe.Ui.Border as Border
+import Ipe.Ui.Font as Font
+import Ipe.Ui.Region as Region
 import State exposing (..)
 import Lib.Db as Db
 import Lib.Auth as Auth
 import Lib.Translation as Tr
-import Lib.OAuth as OAuth
-import Tailwind exposing (..)
-import Tailwind.Responsive as Responsive
-
-
--- Aliases to avoid collision with Std.Html heading elements
-h2_ =
-    ( "class", "h-2" )
-
-
-h5_ =
-    ( "class", "h-5" )
-
-
-h6_ =
-    ( "class", "h-6" )
 
 
 -- ══════════════════════════════════════════════════════
--- STYLE HELPERS
+-- COLOUR PALETTE (faithful to skyshop's Tailwind design)
 -- ══════════════════════════════════════════════════════
-btnPrimary =
-    tw
-        [ textSm
-        , fontSemibold
-        , textWhite
-        , bgBlue600
-        , px5
-        , py2
-        , roundedMd
-        , inlineBlock
-        , hover bgBlue700
-        , transitionColors
-        ]
+brand : Ui.Color
+brand =
+    Ui.rgb 37 99 235             -- blue-600
 
 
-btnPrimaryLg =
-    tw
-        [ wFull
-        , textBase
-        , fontSemibold
-        , textWhite
-        , bgBlue600
-        , py3
-        , roundedMd
-        , block
-        , textCenter
-        , hover bgBlue700
-        , transitionColors
-        ]
+brandAccent : Ui.Color
+brandAccent =
+    Ui.rgb 22 163 74             -- green-600 (checkout / CTA)
 
 
-btnSecondary =
-    tw
-        [ textSm
-        , fontMedium
-        , textGray500
-        , px5
-        , py2
-        , border
-        , borderGray200
-        , roundedMd
-        , inlineBlock
-        , hover borderGray400
-        , hover textGray900
-        , transitionColors
-        ]
+pageBg : Ui.Color
+pageBg =
+    Ui.rgb 248 250 252           -- slate-50
 
 
-btnCheckout =
-    tw
-        [ wFull
-        , mt5
-        , bgGreen600
-        , textWhite
-        , py3
-        , roundedMd
-        , fontSemibold
-        , textBase
-        , hover bgGreen700
-        , transitionColors
-        ]
+cardBg : Ui.Color
+cardBg =
+    Ui.rgb 255 255 255
 
 
-btnDangerOutline =
-    tw
-        [ textSm
-        , fontMedium
-        , textRed500
-        , px4
-        , py2
-        , border
-        , borderRed200
-        , roundedMd
-        , bgWhite
-        , hover bgRed50
-        , transitionColors
-        ]
+ink : Ui.Color
+ink =
+    Ui.rgb 26 32 44              -- gray-900
 
 
-btnState =
-    tw
-        [ textSm
-        , fontMedium
-        , px4
-        , py2
-        , border
-        , borderGray200
-        , roundedMd
-        , bgWhite
-        , textGray700
-        , hover bgGray100
-        , transitionColors
-        ]
+muted : Ui.Color
+muted =
+    Ui.rgb 107 114 128           -- gray-500
 
 
-card =
-    tw [ bgWhite, roundedLg, border, borderGray200, overflowHidden ]
+hairline : Ui.Color
+hairline =
+    Ui.rgb 229 231 235           -- gray-200
 
 
-cardHeader =
-    tw [ p6, borderB, borderGray100 ]
+danger : Ui.Color
+danger =
+    Ui.rgb 239 68 68             -- red-500
 
 
-cardBody =
-    tw [ p6 ]
-
-
-cardSection =
-    tw [ p6, borderT, borderGray100 ]
-
-
-cardFooter =
-    tw [ p6, borderT, borderGray100, flex, itemsCenter, justifyBetween ]
-
-
-formInput =
-    tw
-        [ wFull
-        , border
-        , borderGray300
-        , roundedLg
-        , px3
-        , py2
-        , textSm
-        , bgWhite
-        , focus borderBlue500
-        , focus ring2
-        , focus ringBlue500
-        ]
-
-
-formLabel_ =
-    tw [ block, textSm, fontSemibold, textGray700, mb1 ]
-
-
-qtyBtn =
-    tw
-        [ w8
-        , h8
-        , flex
-        , itemsCenter
-        , justifyCenter
-        , border
-        , borderGray300
-        , roundedMd
-        , textBase
-        , textGray700
-        , bgWhite
-        , hover bgGray100
-        ]
-
-
-emptyIcon =
-    tw
-        [ w20
-        , h20
-        , roundedFull
-        , bgGray100
-        , flex
-        , itemsCenter
-        , justifyCenter
-        , mxAuto
-        , mb6
-        , text3xl
-        , textGray400
-        ]
-
-
-emptyIconSm =
-    tw
-        [ w16
-        , h16
-        , roundedFull
-        , bgGray100
-        , flex
-        , itemsCenter
-        , justifyCenter
-        , mxAuto
-        , mb6
-        , textXl
-        , textGray400
-        ]
-
-
-adminThumb =
-    tw [ w10, h10, roundedMd, objectCover, shrink0 ]
-
-
-adminThumbPlaceholder =
-    tw
-        [ w10
-        , h10
-        , roundedMd
-        , shrink0
-        , bgGray100
-        , flex
-        , itemsCenter
-        , justifyCenter
-        , textGray400
-        , textXs
-        ]
-
-
-notificationSuccess =
-    tw
-        [ flex
-        , itemsCenter
-        , gap3
-        , px4
-        , py3
-        , roundedMd
-        , textSm
-        , fontMedium
-        , bgGreen50
-        , textGreen700
-        , border
-        , borderGreen500
-        ]
-
-
-notificationError =
-    tw
-        [ flex
-        , itemsCenter
-        , gap3
-        , px4
-        , py3
-        , roundedMd
-        , textSm
-        , fontMedium
-        , bgRed50
-        , textRed700
-        , border
-        , borderRed500
-        ]
-
-
-sidebarLink_ =
-    tw
-        [ block
-        , textSm
-        , fontMedium
-        , textGray500
-        , px3
-        , py2
-        , roundedMd
-        , mb1
-        , hover textGray900
-        , hover bgGray100
-        ]
-
-
-sidebarLinkActive =
-    tw
-        [ block
-        , textSm
-        , fontSemibold
-        , textBlue600
-        , bgBlue50
-        , px3
-        , py2
-        , roundedMd
-        , mb1
-        ]
-
-
-tableHeader_ =
-    tw
-        [ px6
-        , py3
-        , textXs
-        , fontSemibold
-        , uppercase
-        , textGray500
-        , borderB
-        , borderGray200
-        , bgGray50
-        ]
-
-
-adminRow =
-    tw [ flex, itemsCenter, px6, py4, borderB, borderGray100, hover bgGray50 ]
-
-
-badge_ =
-    tw [ textXs, fontSemibold, px2, py1, roundedFull, inlineBlock ]
-
-
-badgeLive =
-    tw
-        [ textXs
-        , fontSemibold
-        , px2
-        , py1
-        , roundedFull
-        , inlineBlock
-        , textGreen600
-        , bgGreen50
-        ]
-
-
-badgeDraft =
-    tw
-        [ textXs
-        , fontSemibold
-        , px2
-        , py1
-        , roundedFull
-        , inlineBlock
-        , textGray500
-        , bgGray100
-        ]
-
-
-badgeOrdered =
-    tw
-        [ textXs
-        , fontSemibold
-        , px2
-        , py1
-        , roundedFull
-        , inlineBlock
-        , textBlue700
-        , bgBlue50
-        ]
-
-
-badgeShipped =
-    tw
-        [ textXs
-        , fontSemibold
-        , px2
-        , py1
-        , roundedFull
-        , inlineBlock
-        , textYellow500
-        , bgYellow100
-        ]
-
-
-badgeDelivered =
-    tw
-        [ textXs
-        , fontSemibold
-        , px2
-        , py1
-        , roundedFull
-        , inlineBlock
-        , textGreen600
-        , bgGreen50
-        ]
-
-
-badgeCancelled =
-    tw
-        [ textXs
-        , fontSemibold
-        , px2
-        , py1
-        , roundedFull
-        , inlineBlock
-        , textRed600
-        , bgRed50
-        ]
-
-
-badgeRefunded =
-    tw
-        [ textXs
-        , fontSemibold
-        , px2
-        , py1
-        , roundedFull
-        , inlineBlock
-        , textGray500
-        , bgGray100
-        ]
-
-
-badgePending =
-    tw
-        [ textXs
-        , fontSemibold
-        , px2
-        , py1
-        , roundedFull
-        , inlineBlock
-        , textOrange500
-        , bgOrange100
-        ]
-
-
-infoCard_ =
-    tw [ bgWhite, roundedLg, border, borderGray200, p5 ]
-
-
-infoCardLabel =
-    tw [ textXs, fontSemibold, uppercase, textGray400, block, mb2 ]
-
-
-cartItem =
-    tw [ flex, itemsCenter, gap4, px6, py5, borderB, borderGray100 ]
-
-
-cartThumb =
-    tw [ w16, h16, roundedMd, objectCover, shrink0 ]
-
-
-cartThumbPlaceholder =
-    tw
-        [ w16
-        , h16
-        , roundedMd
-        , shrink0
-        , bgGray100
-        , flex
-        , itemsCenter
-        , justifyCenter
-        , textGray400
-        ]
-
-
-lineTotal =
-    tw [ fontSemibold, textGray900, textRight ]
-
-
-removeBtn =
-    tw [ textXs, textRed500, px2, py1, roundedSm, hover bgRed50 ]
-
-
-galleryMain =
-    tw [ aspectSquare, roundedLg, overflowHidden, border, borderGray200 ]
-
-
-galleryThumb =
-    tw
-        [ aspectSquare
-        , roundedMd
-        , overflowHidden
-        , border
-        , borderGray200
-        , cursorPointer
-        ]
-
-
-galleryPlaceholder =
-    tw
-        [ aspectSquare
-        , roundedLg
-        , wFull
-        , bgGray100
-        , flex
-        , itemsCenter
-        , justifyCenter
-        , textGray400
-        ]
-
-
-imgPlaceholder =
-    tw
-        [ bgGray100
-        , flex
-        , itemsCenter
-        , justifyCenter
-        , textGray400
-        , textSm
-        , wFull
-        , hFull
-        ]
-
-
-objectCover_ =
-    tw [ wFull, hFull, objectCover ]
-
-
-uploadZone =
-    tw
-        [ flex
-        , gap3
-        , itemsCenter
-        , p4
-        , border2
-        , borderDashed
-        , borderGray200
-        , roundedMd
-        , bgGray50
-        ]
-
-
-imgCardSquare =
-    tw
-        [ relative
-        , aspectSquare
-        , roundedMd
-        , overflowHidden
-        , border
-        , borderGray200
-        ]
-
-
-imgOverlayDelete =
-    tw
-        [ absolute
-        , top1
-        , right1
-        , w6
-        , h6_
-        , bgGray900
-        , textWhite
-        , roundedFull
-        , textXs
-        , flex
-        , itemsCenter
-        , justifyCenter
-        ]
+success : Ui.Color
+success =
+    Ui.rgb 22 163 74
 
 
 -- ══════════════════════════════════════════════════════
--- LAYOUT
+-- REUSABLE PRIMITIVES
 -- ══════════════════════════════════════════════════════
-page model content =
-    div
-        [ tw [ minHScreen, flex, flexCol ] ]
-        [ styles
-        , globalStyles
-        , raw (OAuth.firebaseAuthScript ())
-        , viewHeader model
-        , viewNotification model
-        , div [ tw [ flex1, maxW7xl, mxAuto, wFull, px4, py8 ] ] [ content ]
-        , viewFooter model
-        , viewSignOutTrigger model
+card : List (Ui.Attribute Msg) -> Element Msg -> Element Msg
+card extra content =
+    Ui.el
+        ([ Background.color cardBg
+         , Border.rounded 8
+         , Border.width 1
+         , Border.color hairline
+         , Ui.padding 24
+         ]
+            ++ extra)
+        content
+
+
+primaryButton : Msg -> String -> Element Msg
+primaryButton msg label =
+    Ui.button
+        [ Background.color brand
+        , Background.hoverColor (Ui.rgb 29 78 216)
+        , Font.color (Ui.rgb 255 255 255)
+        , Font.size 14
+        , Font.semiBold
+        , Border.rounded 6
+        , Ui.paddingXY 20 8
         ]
+        { onPress = Just msg, label = Ui.text label }
 
 
-viewSignOutTrigger model =
-    if model.signOutPending == True then
-        div [ attribute "data-sky-eval" "skySignOut()" ] []
+secondaryButton : Msg -> String -> Element Msg
+secondaryButton msg label =
+    Ui.button
+        [ Background.color cardBg
+        , Border.width 1
+        , Border.color hairline
+        , Font.color muted
+        , Font.size 14
+        , Border.rounded 6
+        , Ui.paddingXY 20 8
+        ]
+        { onPress = Just msg, label = Ui.text label }
 
-    else
-        text ""
+
+dangerButton : Msg -> String -> Element Msg
+dangerButton msg label =
+    Ui.button
+        [ Background.color cardBg
+        , Border.width 1
+        , Border.color (Ui.rgb 254 202 202)
+        , Font.color danger
+        , Font.size 14
+        , Border.rounded 6
+        , Ui.paddingXY 16 8
+        ]
+        { onPress = Just msg, label = Ui.text label }
 
 
-adminPage model content =
-    case model.user of
+sectionHeading : String -> Element Msg
+sectionHeading txt =
+    Ui.el
+        [ Region.heading 2, Font.size 24, Font.bold, Font.color ink ]
+        (Ui.text txt)
 
-        Just user ->
-            if Auth.isAdmin user then
-                div
-                    [ tw [ minHScreen, flex, flexCol ] ]
-                    [ styles
-                    , globalStyles
-                    , viewHeader model
-                    , viewNotification model
-                    , div
-                          [ tw [ flex1, wFull, px4, py8 ] ]
-                          [ div
-                                [ tw
-                                      [ flex
-                                      , flexCol
-                                      , Responsive.lg flexRow
-                                      , gap6
-                                      , maxW7xl
-                                      , mxAuto
-                                      ]
-                                ]
-                                [ adminSidebar model
-                                , div [ tw [ flex1, minW0 ] ] [ content ]
-                                ]
-                          ]
-                    , viewFooter model
-                    ]
 
-            else
-                page
-                    model
-                    (div
-                        [ tw [ textCenter, py20 ] ]
-                        [ Html.h2
-                              [ tw [ text2xl, fontBold, textGray400 ] ]
-                              [ text "Access denied" ]
-                        ])
-
-        Nothing ->
-            page
-                model
-                (div
-                    [ tw [ textCenter, py20 ] ]
-                    [ Html.h2
-                          [ tw [ text2xl, fontBold, textGray400 ] ]
-                          [ text "Please sign in" ]
-                    ])
+badge : Ui.Color -> Ui.Color -> String -> Element Msg
+badge fg bg txt =
+    Ui.el
+        [ Background.color bg
+        , Font.color fg
+        , Font.size 12
+        , Font.semiBold
+        , Border.rounded 999
+        , Ui.paddingXY 8 4
+        ]
+        (Ui.text txt)
 
 
 -- ══════════════════════════════════════════════════════
 -- HEADER
 -- ══════════════════════════════════════════════════════
-viewHeader model =
+navLink : String -> Page -> Element Msg
+navLink label target =
+    Ui.button
+        [ Font.color muted
+        , Background.hoverColor (Ui.rgb 243 244 246)
+        , Font.size 14
+        , Font.weight 500
+        , Border.rounded 6
+        , Ui.paddingXY 12 6
+        ]
+        { onPress = Just (Navigate target), label = Ui.text label }
+
+
+header : Model -> Element Msg
+header model =
     let
         lang = model.lang
     in
-        headerNode
-            [ tw [ bgWhite, borderB, borderGray200, sticky, top0, z50 ]
-            , style "backdrop-filter:blur(8px);background:rgba(255,255,255,.95)"
+        Ui.row
+            [ Ui.width Ui.fill
+            , Ui.paddingXY 24 12
+            , Ui.spacing 16
+            , Background.color cardBg
+            , Border.widthEach { top = 0, right = 0, bottom = 1, left = 0 }
+            , Border.color hairline
+            , Region.navigation
             ]
-            [ div
-                  [ tw
-                        [ maxW7xl
-                        , mxAuto
-                        , px4
-                        , flex
-                        , itemsCenter
-                        , justifyBetween
-                        , h16
-                        ]
+            [ Ui.el
+                  [ Region.heading 1
+                  , Font.color ink
+                  , Font.size 22
+                  , Font.extraBold
                   ]
-                  [ div
-                        [ tw [ flex, itemsCenter, gap6 ] ]
-                        [ a
-                              [ href "/"
-                              , attribute "sky-nav" ""
-                              , tw [ text2xl, fontExtrabold, textGray900 ]
-                              ]
-                              [ text (Tr.t lang "app.name") ]
-                        , nav
-                              [ tw [ hidden_, Responsive.md flex, gap1 ] ]
-                              [ navLink "/" (Tr.t lang "nav.home") model
-                              , navLink
-                                    "/products"
-                                    (Tr.t lang "nav.products")
-                                    model
-                              ]
-                        ]
-                  , div
-                        [ tw [ flex, itemsCenter, gap4 ] ]
-                        [ langToggle model, viewUserNav model ]
-                  ]
+                  (Ui.text (Tr.t lang "app.name"))
+            , navLink (Tr.t lang "nav.home") HomePage
+            , navLink (Tr.t lang "nav.products") ProductsPage
+            , Ui.el [ Ui.width Ui.fill ] Ui.none
+            , languageToggle model
+            , userNav model
             ]
 
 
-navLink url label model =
-    let
-        isActive =
-            case model.page of
-
-                HomePage ->
-                    url == "/"
-
-                ProductsPage ->
-                    url == "/products"
-
-                ProductPage _ ->
-                    url == "/products"
-
-                _ ->
-                    False
-    in
-        a
-            [ href url
-            , attribute "sky-nav" ""
-            , if isActive then
-                  tw
-                      [ textSm
-                      , fontMedium
-                      , textBlue600
-                      , bgBlue50
-                      , px3
-                      , py1
-                      , roundedMd
-                      ]
-
-              else
-                  tw
-                      [ textSm
-                      , fontMedium
-                      , textGray500
-                      , px3
-                      , py1
-                      , roundedMd
-                      , hover textGray900
-                      , hover bgGray100
-                      ]
-            ]
-            [ text label ]
-
-
-langToggle model =
+languageToggle : Model -> Element Msg
+languageToggle model =
     let
         nextLang =
             if model.lang == "en" then
@@ -787,479 +222,178 @@ langToggle model =
             else
                 "EN"
     in
-        button
-            [ onClick (SetLang nextLang)
-            , tw
-                  [ textXs
-                  , fontSemibold
-                  , textGray500
-                  , border
-                  , borderGray200
-                  , roundedMd
-                  , px2
-                  , py1
-                  , bgWhite
-                  , hover borderGray400
-                  , hover textGray900
-                  ]
+        Ui.button
+            [ Font.color muted
+            , Font.size 12
+            , Font.semiBold
+            , Border.width 1
+            , Border.color hairline
+            , Border.rounded 6
+            , Ui.paddingXY 8 4
             ]
-            [ text label ]
+            { onPress = Just (SetLang nextLang), label = Ui.text label }
 
 
-viewUserNav model =
+userNav : Model -> Element Msg
+userNav model =
     let
         lang = model.lang
     in
         case model.user of
 
             Just user ->
-                div
-                    [ tw [ flex, itemsCenter, gap4 ] ]
-                    [ a
-                          [ href "/cart"
-                          , attribute "sky-nav" ""
-                          , tw
-                                [ textSm
-                                , fontMedium
-                                , textGray500
-                                , relative
-                                , px3
-                                , py1
-                                , roundedMd
-                                , hover textGray900
-                                , hover bgGray100
-                                ]
-                          ]
-                          [ span [] [ text (Tr.t lang "nav.cart") ]
-                          , viewCartBadge model
-                          ]
-                    , a
-                          [ href "/orders"
-                          , attribute "sky-nav" ""
-                          , tw
-                                [ textSm
-                                , fontMedium
-                                , textGray500
-                                , px3
-                                , py1
-                                , roundedMd
-                                , hover textGray900
-                                , hover bgGray100
-                                ]
-                          ]
-                          [ text (Tr.t lang "nav.orders") ]
-                    , viewAdminLink model user
-                    , div
-                          [ tw
-                                [ flex
-                                , itemsCenter
-                                , gap2
-                                , bgGray50
-                                , border
-                                , borderGray200
-                                , roundedFull
-                                , px3
-                                , py1
-                                ]
-                          ]
-                          [ span
-                                [ tw [ textSm, fontMedium ] ]
-                                [ text (Db.getField "name" user) ]
-                          , button
-                                [ onClick DoSignOut
-                                , tw
-                                      [ textXs
-                                      , fontMedium
-                                      , textRed500
-                                      , px2
-                                      , py1
-                                      , roundedSm
-                                      , hover bgRed50
-                                      ]
-                                ]
-                                [ text (Tr.t lang "nav.signout") ]
-                          ]
+                Ui.row
+                    [ Ui.spacing 12 ]
+                    [ cartLink model
+                    , navLink (Tr.t lang "nav.orders") OrdersPage
+                    , adminLink user lang
+                    , Ui.el [ Font.color ink, Font.size 14, Font.weight 500 ]
+                        (Ui.text (Db.getField "name" user))
+                    , dangerButton DoSignOut (Tr.t lang "nav.signout")
                     ]
 
             Nothing ->
-                div
-                    [ tw [ flex, itemsCenter, gap3 ] ]
-                    [ a
-                          [ href "/auth/signin"
-                          , attribute "sky-nav" ""
-                          , btnPrimary
-                          ]
-                          [ text (Tr.t lang "nav.signin") ]
-                    ]
+                primaryButton (Navigate AuthSignInPage) (Tr.t lang "nav.signin")
 
 
-viewAdminLink model user =
+cartLink : Model -> Element Msg
+cartLink model =
+    let
+        count = List.length model.cartItems
+        label =
+            if count > 0 then
+                Tr.t model.lang "nav.cart" ++ " (" ++ String.fromInt count ++ ")"
+
+            else
+                Tr.t model.lang "nav.cart"
+    in
+        navLink label CartPage
+
+
+adminLink : Dict String String -> String -> Element Msg
+adminLink user lang =
     if Auth.isAdmin user then
-        a
-            [ href "/admin/products"
-            , attribute "sky-nav" ""
-            , tw
-                  [ textXs
-                  , fontSemibold
-                  , textPurple600
-                  , bgPurple50
-                  , px2
-                  , py1
-                  , roundedMd
-                  , hover bgPurple100
-                  ]
+        Ui.button
+            [ Background.color (Ui.rgb 243 232 255)
+            , Font.color (Ui.rgb 147 51 234)
+            , Font.size 12
+            , Font.semiBold
+            , Border.rounded 6
+            , Ui.paddingXY 8 4
             ]
-            [ text (Tr.t model.lang "nav.admin") ]
+            { onPress = Just (Navigate AdminProductsPage)
+            , label = Ui.text (Tr.t lang "nav.admin")
+            }
 
     else
-        text ""
-
-
-viewCartBadge model =
-    let
-        itemCount = List.length model.cartItems
-    in
-        if itemCount > 0 then
-            span
-                [ tw
-                      [ absolute
-                      , bgRed500
-                      , textWhite
-                      , textXs
-                      , fontBold
-                      , roundedFull
-                      , flex
-                      , itemsCenter
-                      , justifyCenter
-                      , w5
-                      , h5_
-                      ]
-                , style "top:-4px;right:-4px;font-size:.625rem"
-                ]
-                [ text (String.fromInt itemCount) ]
-
-        else
-            text ""
-
-
--- ══════════════════════════════════════════════════════
--- NOTIFICATION
--- ══════════════════════════════════════════════════════
-viewNotification model =
-    if model.notification == "" then
-        text ""
-
-    else
-        let
-            notifStyle =
-                if model.notificationType == "error" then
-                    notificationError
-
-                else
-                    notificationSuccess
-        in
-            div
-                [ tw [ maxW7xl, mxAuto, px4, mt4 ] ]
-                [ div
-                      [ notifStyle, style "animation:slideDown .2s ease" ]
-                      [ span [ tw [ flex1 ] ] [ text model.notification ]
-                      , button
-                            [ onClick DismissNotification
-                            , tw [ textBase, opacity50, px1, hover opacity100 ]
-                            ]
-                            [ text "x" ]
-                      ]
-                ]
-
-
--- ══════════════════════════════════════════════════════
--- ADMIN SIDEBAR
--- ══════════════════════════════════════════════════════
-adminSidebar model =
-    let
-        lang = model.lang
-    in
-        div
-            [ tw [ wFull, Responsive.lg w48, shrink0, pt2 ] ]
-            [ div
-                  [ tw [ px3, py2, mb2 ] ]
-                  [ span
-                        [ tw [ textXs, uppercase, fontBold, textGray400 ] ]
-                        [ text (Tr.t lang "nav.admin") ]
-                  ]
-            , div
-                  [ tw [ flex, flexRow, Responsive.lg flexCol, gap1, flexWrap ]
-                  ]
-                  [ adminSidebarLink "/admin/products" "admin.products" model
-                  , adminSidebarLink "/admin/orders" "admin.orders" model
-                  ]
-            , div
-                  [ tw [ borderT, borderGray200, mt4, pt4 ] ]
-                  [ a
-                        [ href "/", attribute "sky-nav" "", sidebarLink_ ]
-                        [ text "View Store" ]
-                  ]
-            ]
-
-
-adminSidebarLink url key model =
-    let
-        lang = model.lang
-        isActive =
-            case model.page of
-
-                AdminProductsPage ->
-                    url == "/admin/products"
-
-                AdminNewProductPage ->
-                    url == "/admin/products"
-
-                AdminEditProductPage _ ->
-                    url == "/admin/products"
-
-                AdminOrdersPage ->
-                    url == "/admin/orders"
-
-                AdminOrderPage _ ->
-                    url == "/admin/orders"
-
-                _ ->
-                    False
-    in
-        a
-            [ href url
-            , attribute "sky-nav" ""
-            , if isActive then
-                  sidebarLinkActive
-
-              else
-                  sidebarLink_
-            ]
-            [ text (Tr.t lang key) ]
+        Ui.none
 
 
 -- ══════════════════════════════════════════════════════
 -- FOOTER
 -- ══════════════════════════════════════════════════════
-viewFooter model =
+footer : Model -> Element Msg
+footer model =
     let
         lang = model.lang
     in
-        footerNode
-            [ tw [ bgWhite, borderT, borderGray200, ( "margin-top", "auto" ) ] ]
-            [ div
-                  [ tw [ maxW7xl, mxAuto, px4 ] ]
-                  [ div
-                        [ tw
-                              [ grid
-                              , gridCols1
-                              , Responsive.md gridCols3
-                              , gap8
-                              , py12
-                              ]
-                        ]
-                        [ div
-                              []
-                              [ Html.h4
-                                    [ tw [ fontBold, textGray900, mb3 ] ]
-                                    [ text (Tr.t lang "app.name") ]
-                              , p
-                                    [ tw [ textSm, textGray500, leadingRelaxed ]
-                                    ]
-                                    [ text (Tr.t lang "footer.tagline") ]
-                              ]
-                        , div
-                              []
-                              [ Html.h4
-                                    [ tw
-                                          [ fontBold
-                                          , textGray900
-                                          , mb3
-                                          , textSm
-                                          , uppercase
-                                          ]
-                                    ]
-                                    [ text (Tr.t lang "footer.quickLinks") ]
-                              , div
-                                    [ tw [ flex, flexCol, gap2 ] ]
-                                    [ a
-                                          [ href "/products"
-                                          , attribute "sky-nav" ""
-                                          , tw [ textSm, textGray500 ]
-                                          ]
-                                          [ text (Tr.t lang "nav.products") ]
-                                    , a
-                                          [ href "/cart"
-                                          , attribute "sky-nav" ""
-                                          , tw [ textSm, textGray500 ]
-                                          ]
-                                          [ text (Tr.t lang "nav.cart") ]
-                                    , a
-                                          [ href "/orders"
-                                          , attribute "sky-nav" ""
-                                          , tw [ textSm, textGray500 ]
-                                          ]
-                                          [ text (Tr.t lang "nav.orders") ]
-                                    ]
-                              ]
-                        , div
-                              []
-                              [ Html.h4
-                                    [ tw
-                                          [ fontBold
-                                          , textGray900
-                                          , mb3
-                                          , textSm
-                                          , uppercase
-                                          ]
-                                    ]
-                                    [ text (Tr.t lang "footer.legal") ]
-                              , div
-                                    [ tw [ flex, flexCol, gap2 ] ]
-                                    [ a
-                                          [ href "/privacy-policy"
-                                          , attribute "sky-nav" ""
-                                          , tw [ textSm, textGray500 ]
-                                          ]
-                                          [ text (Tr.t lang "footer.privacy") ]
-                                    , a
-                                          [ href "/terms"
-                                          , attribute "sky-nav" ""
-                                          , tw [ textSm, textGray500 ]
-                                          ]
-                                          [ text (Tr.t lang "footer.terms") ]
-                                    ]
-                              ]
-                        ]
-                  , div
-                        [ tw [ borderT, borderGray200, py6, textCenter ] ]
-                        [ p
-                              [ tw [ textSm, textGray400 ] ]
-                              [ text ("2024 " ++ Tr.t lang "footer.copyright") ]
-                        ]
-                  ]
+        Ui.row
+            [ Ui.width Ui.fill
+            , Ui.paddingXY 24 24
+            , Ui.spacing 16
+            , Background.color cardBg
+            , Border.widthEach { top = 1, right = 0, bottom = 0, left = 0 }
+            , Border.color hairline
+            , Region.footer
+            ]
+            [ Ui.el [ Font.color muted, Font.size 12 ]
+                (Ui.text (Tr.t lang "footer.tagline"))
+            , Ui.el [ Ui.width Ui.fill ] Ui.none
+            , Ui.el [ Font.color muted, Font.size 12 ]
+                (Ui.text ("© 2024 " ++ Tr.t lang "footer.copyright"))
             ]
 
 
 -- ══════════════════════════════════════════════════════
--- GLOBAL STYLES (minimal - only what Tailwind can't do)
+-- NOTIFICATION
 -- ══════════════════════════════════════════════════════
-globalStyles =
-    styleNode
-        []
-        (Css.stylesheet
-            [ Css.rule
-                  "*"
-                  [ Css.rawProp "margin:0"
-                  , Css.rawProp "padding:0"
-                  , Css.rawProp "box-sizing:border-box"
-                  ]
-            , Css.rule
-                  "body"
-                  [ Css.rawProp
-                        "font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif"
-                  , Css.rawProp "line-height:1.6"
-                  , Css.rawProp "color:#1a202c"
-                  , Css.rawProp "background:#f8fafc"
-                  ]
-            , Css.rule
-                  "a"
-                  [ Css.rawProp "text-decoration:none"
-                  , Css.rawProp "color:inherit"
-                  ]
-            , Css.rule
-                  "img"
-                  [ Css.rawProp "max-width:100%"
-                  , Css.rawProp "height:auto"
-                  , Css.rawProp "display:block"
-                  ]
-            , Css.rule
-                  "button"
-                  [ Css.rawProp "cursor:pointer"
-                  , Css.rawProp "border:none"
-                  , Css.rawProp "background:none"
-                  , Css.rawProp "font-family:inherit"
-                  ]
-            , Css.rule
-                  "input,textarea,select"
-                  [ Css.rawProp "font-family:inherit"
-                  , Css.rawProp "font-size:inherit"
-                  , Css.rawProp "outline:none"
-                  ]
-            , Css.rule
-                  ".line-through"
-                  [ Css.rawProp "text-decoration:line-through" ]
-            , Css.rule ".product-card" [ Css.rawProp "transition:all .2s ease" ]
-            , Css.rule
-                  ".product-card:hover"
-                  [ Css.rawProp "border-color:#cbd5e1"
-                  , Css.rawProp "box-shadow:0 4px 12px rgba(0,0,0,.08)"
-                  , Css.rawProp "transform:translateY(-2px)"
-                  ]
-            , Css.rule
-                  ".product-card:hover img"
-                  [ Css.rawProp "transform:scale(1.03)" ]
-            , Css.rule
-                  ".product-card img"
-                  [ Css.rawProp "transition:transform .3s ease" ]
-            , Css.rule
-                  ".toggle"
-                  [ Css.rawProp "width:44px"
-                  , Css.rawProp "height:24px"
-                  , Css.rawProp "border-radius:12px"
-                  , Css.rawProp "position:relative"
-                  , Css.rawProp "transition:background .15s ease"
-                  ]
-            , Css.rule ".toggle-on" [ Css.rawProp "background:#2563eb" ]
-            , Css.rule ".toggle-off" [ Css.rawProp "background:#d1d5db" ]
-            , Css.rule
-                  ".toggle-knob"
-                  [ Css.rawProp "width:20px"
-                  , Css.rawProp "height:20px"
-                  , Css.rawProp "background:#fff"
-                  , Css.rawProp "border-radius:50%"
-                  , Css.rawProp "position:absolute"
-                  , Css.rawProp "top:2px"
-                  , Css.rawProp "transition:all .15s ease"
-                  , Css.rawProp "box-shadow:0 1px 3px rgba(0,0,0,.15)"
-                  ]
-            , Css.rule ".toggle-knob-on" [ Css.rawProp "right:2px" ]
-            , Css.rule ".toggle-knob-off" [ Css.rawProp "left:2px" ]
-            , Css.rule
-                  ".spinner"
-                  [ Css.rawProp "width:48px"
-                  , Css.rawProp "height:48px"
-                  , Css.rawProp "border:3px solid #e2e8f0"
-                  , Css.rawProp "border-top-color:#3b82f6"
-                  , Css.rawProp "border-radius:50%"
-                  , Css.rawProp "animation:spin 1s linear infinite"
-                  , Css.rawProp "margin:0 auto 1.5rem"
-                  ]
-            , Css.rule
-                  ".qty-input"
-                  [ Css.rawProp "width:3.5rem"
-                  , Css.rawProp "text-align:center"
-                  , Css.rawProp "font-weight:600"
-                  , Css.rawProp "border:1px solid #d1d5db"
-                  , Css.rawProp "border-left:none"
-                  , Css.rawProp "border-right:none"
-                  , Css.rawProp "height:32px"
-                  , Css.rawProp "font-size:.875rem"
-                  ]
-            , Css.keyframes
-                  "slideDown"
-                  [ Css.frame
-                        "from"
-                        [ Css.rawProp "opacity:0"
-                        , Css.rawProp "transform:translateY(-8px)"
-                        ]
-                  , Css.frame
-                        "to"
-                        [ Css.rawProp "opacity:1"
-                        , Css.rawProp "transform:translateY(0)"
-                        ]
-                  ]
-            , Css.keyframes
-                  "spin"
-                  [ Css.frame "to" [ Css.rawProp "transform:rotate(360deg)" ] ]
-            ])
+notificationBanner : Model -> Element Msg
+notificationBanner model =
+    if model.notification == "" then
+        Ui.none
+
+    else
+        let
+            isError = model.notificationType == "error"
+            fg =
+                if isError then
+                    Ui.rgb 185 28 28
+
+                else
+                    Ui.rgb 21 128 61
+            bg =
+                if isError then
+                    Ui.rgb 254 242 242
+
+                else
+                    Ui.rgb 240 253 244
+            bd =
+                if isError then
+                    danger
+
+                else
+                    success
+        in
+            Ui.row
+                [ Ui.width Ui.fill
+                , Background.color bg
+                , Border.color bd
+                , Border.width 1
+                , Border.rounded 6
+                , Ui.paddingXY 16 12
+                , Ui.spacing 12
+                ]
+                [ Ui.el [ Font.color fg, Font.size 14, Ui.width Ui.fill ]
+                    (Ui.text model.notification)
+                , Ui.button
+                    [ Font.color fg, Font.size 14 ]
+                    { onPress = Just DismissNotification, label = Ui.text "✕" }
+                ]
+
+
+-- ══════════════════════════════════════════════════════
+-- PAGE SHELLS — header + notification + content + footer
+-- ══════════════════════════════════════════════════════
+shell : Model -> Element Msg -> Element Msg
+shell model content =
+    Ui.column
+        [ Ui.width Ui.fill, Background.color pageBg, Ui.spacing 0 ]
+        [ header model
+        , Ui.column
+              [ Ui.width Ui.fill, Ui.paddingXY 24 32, Ui.spacing 24 ]
+              [ notificationBanner model, content ]
+        , footer model
+        ]
+
+
+adminShell : Model -> Element Msg -> Element Msg
+adminShell model content =
+    case model.user of
+
+        Just user ->
+            if Auth.isAdmin user then
+                shell model content
+
+            else
+                shell
+                    model
+                    (Ui.el
+                        [ Ui.paddingXY 0 80, Font.color muted, Font.size 22 ]
+                        (Ui.text "Access denied"))
+
+        Nothing ->
+            shell
+                model
+                (Ui.el
+                    [ Ui.paddingXY 0 80, Font.color muted, Font.size 22 ]
+                    (Ui.text "Please sign in"))

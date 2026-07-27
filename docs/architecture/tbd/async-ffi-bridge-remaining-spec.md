@@ -8,7 +8,7 @@
 > it.
 >
 > **ACCEPTANCE METRIC (unchanged, restated verbatim):** skyshop transposed
-> into a NEW `examples/13-skyshop/` building and running with **ZERO shim
+> into a NEW `examples/sky/ipe/13-skyshop/` building and running with **ZERO shim
 > crates** (firestore 0.49 + async-stripe rc.6 + rs-firebase-admin-sdk 4.3
 > auto-FFI-bound direct) + **used-set-only DCE** (emitted `src/ffi.rs`
 > contains only the reached wrappers), with **THE SEAL holding end-to-end**
@@ -269,14 +269,14 @@ claims JSON round-trips. Used-set DCE count recorded.
 
 ---
 
-## 4. skyshop-transpose — `examples/13-skyshop/` (ACCEPTANCE)
+## 4. skyshop-transpose — `examples/sky/ipe/13-skyshop/` (ACCEPTANCE)
 
 **Source of the transposition:** `upstream:examples/rust/skyshop-rs/src/`
 (READ-ONLY; already the FFI-shaped app: `Lib/Db.sky`, `Lib/Stripe.sky`,
 `Lib/Auth.sky` are thin wrappers over the three shims), cross-checked
-against `upstream:examples/13-skyshop/` (Go original) for `static/`, `e2e.json`
+against `examples/sky/original/13-skyshop/` (Go original) for `static/`, `e2e.json`
 behavior shapes, and anything skyshop-rs diverged on. ~8.2k lines across
-Main/State/9 Lib/7 Page/1 Ui modules. Our `examples/13-skyshop/` slot is
+Main/State/9 Lib/7 Page/1 Ui modules. Our `examples/sky/ipe/13-skyshop/` slot is
 free.
 
 ### 4.1 Manifest
@@ -381,7 +381,7 @@ emulator path (§3.3): production refuses emulator config.
    emulator cannot cover is recorded as an honest residual in the example
    README, never faked green.
 3. **Zero-shim assertion**: no `wrappers/`, no `file://` git dep, no local
-   path dep anywhere under `examples/13-skyshop/`; the only Rust the app
+   path dep anywhere under `examples/sky/ipe/13-skyshop/`; the only Rust the app
    links beyond the emitted project + vendored runtime is the real SDK
    crates from crates.io.
 4. **Used-set DCE proof**: emitted `src/ffi.rs` wrapper count per crate

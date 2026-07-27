@@ -121,7 +121,7 @@ declare. `ipe capabilities <entry>` prints that inferred set as a human report b
 default; `--plain` gives the bare names, one per line, for a script:
 
 ```
-$ ipe capabilities --plain examples/sky/02-go-stdlib/src/Main.ipe
+$ ipe capabilities --plain examples/sky/ipe/02-go-stdlib/src/Main.ipe
 network
 clock
 ```
@@ -243,7 +243,7 @@ rustup target add x86_64-unknown-linux-musl
 sudo apt-get install musl-tools   # or equivalent on your distro
 
 # Build a static binary (x86_64 Linux, dlmalloc allocator — the default):
-cd examples/01-hello-world
+cd examples/sky/ipe/01-hello-world
 ipe build ipe.toml --out out/rust --static
 cd out/rust
 cargo build --release --target x86_64-unknown-linux-musl

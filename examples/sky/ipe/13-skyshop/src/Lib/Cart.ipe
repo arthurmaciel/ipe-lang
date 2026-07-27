@@ -27,11 +27,18 @@ import Ipe.List as List
 import Ipe.Dict as Dict
 import Ipe.String as String
 import Ipe.Log exposing (println)
-import Github.Com.Google.Uuid as Uuid
+import Ipe.Task as Task
+import Ipe.Uuid as Uuid
 import Lib.Db as Db
 import Ipe.Error as Error exposing (Error(..), ErrorKind(..))
 
 
+newId : String
+newId =
+    Result.withDefault "" (Task.run (Uuid.v4 ()))
+
+
+getOrCreateCart : String -> Result Error (Dict String String)
 getOrCreateCart userId =
     let
         cartId = userId ++ "-cart"
@@ -52,6 +59,7 @@ getOrCreateCart userId =
                 Err e
 
 
+createCart : String -> Result Error (Dict String String)
 createCart userId =
     let
         cartId = userId ++ "-cart"
@@ -84,13 +92,6 @@ createCart userId =
                 Err e
 
 
--- getCart returns Result Error (Maybe Cart). Three cases at the
--- TEA call site:
---   Ok (Just cart) — cart exists; render normally
---   Ok Nothing     — cart genuinely doesn't exist; render empty state
---   Err e          — DB / FFI failure; set model.notification, render
---                    error banner. The update loop is the natural
---                    place to convert boundary failures into UX.
 getCart cartId =
     Db.getDoc "carts" cartId
 
@@ -142,9 +143,6 @@ enrichCartItem item =
                 item
 
 
--- getCartWithItems returns (Result Error (Maybe Cart), List Item).
--- Callers pattern-match on the Result and convert Err to a
--- notification in update.
 getCartWithItems cartId =
     let
         cartResult = getCart cartId
@@ -160,6 +158,7 @@ getCartWithItems cartId =
         ( cartResult, items )
 
 
+addItem : String -> String -> Int -> Result Error ()
 addItem cartId productId quantity =
     let
         existingItems =
@@ -185,7 +184,7 @@ addItem cartId productId quantity =
 
             Nothing ->
                 let
-                    itemId = Result.withDefault "" (Uuid.newString ())
+                    itemId = newId
                     itemData =
                         Dict.fromList
                             [ ( "id", itemId )
@@ -199,6 +198,7 @@ addItem cartId productId quantity =
                     Ok ()
 
 
+updateItemQty : String -> Int -> Result Error ()
 updateItemQty itemId quantity =
     if quantity <= 0 then
         removeItem itemId
@@ -219,6 +219,7 @@ updateItemQty itemId quantity =
                 Ok ()
 
 
+removeItem : String -> Result Error ()
 removeItem itemId =
     case Db.getDoc "cart_items" itemId of
 
@@ -227,7 +228,7 @@ removeItem itemId =
                 cartId = Db.getField "cart_id" item
                 _ = Db.deleteDoc "cart_items" itemId
             in
-                if cartId != "" then
+                if cartId /= "" then
                     let
                         _ = recalculateTotal cartId
                     in
@@ -391,7 +392,7 @@ setShipping docId name email phone line1 line2 city country postcode =
 
 checkoutToOrder cartId =
     let
-        orderId = Result.withDefault "" (Uuid.newString ())
+        orderId = newId
     in
         case Db.getDoc "carts" cartId of
 
@@ -414,10 +415,7 @@ checkoutToOrder cartId =
                         List.map
                             (\item ->
                                 let
-                                    itemId =
-                                        Result.withDefault
-                                            ""
-                                            (Uuid.newString ())
+                                    itemId = newId
                                     enriched = enrichCartItem item
                                     orderItem =
                                         Dict.insert
@@ -445,8 +443,6 @@ checkoutToOrder cartId =
                 Err (Error.notFound |> Error.withMessage "Cart not found.")
 
 
--- Same shape as getCart: Result Error (Maybe Order). update converts
--- Err to a notification; view renders the banner.
 getOrder orderId =
     Db.getDoc "orders" orderId
 
@@ -460,10 +456,6 @@ getOrderItems orderId =
         orderId
 
 
--- getOrderWithItems returns (Result Error (Maybe Order), List Item).
--- The order tuple-element preserves the Result so callers can react
--- to a DB failure separately from "no such order". Items default to
--- empty when order is absent or fetch failed.
 getOrderWithItems orderId =
     let
         orderResult = getOrder orderId

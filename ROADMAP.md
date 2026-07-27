@@ -39,7 +39,7 @@ Where Ipê came from, and where it's going.
 - **FFI, async SDKs** — the async bridge binds real SDK crates
   (`async-stripe`, `firestore`, `rs-firebase-admin-sdk`): async methods lower
   to `Task Error a` call sites, cross-crate builder params admit by resolved
-  type identity, and the full skyshop storefront (`examples/13-skyshop`)
+  type identity, and the full skyshop storefront (`examples/sky/ipe/13-skyshop`)
   builds shim-free through THE SEAL. Remaining: broaden the honest-drop set
   (trait-generic params, fallible typed IDs).
 - **Static compilation, more targets** — aarch64, and a fully C-free build.

@@ -30,6 +30,9 @@ SKY_TRANSFORM="${SKY_TRANSFORM:-$REPO/scripts/lib/sky-to-ipe-transform.py}"
 SKY_EDITS_APPLY="${SKY_EDITS_APPLY:-$REPO/scripts/lib/apply-ipe-edits.py}"
 SKY_RENAME_MAP="${SKY_RENAME_MAP:-$REPO/examples/sky/rename-map.tsv}"
 SKY_EDITS_DIR="${SKY_EDITS_DIR:-$REPO/examples/sky/ipe-edits}"
+# Per-example whole-port override trees (a structural rebuild that replaces the
+# transformed port; the edits/rename-map are skipped for an overridden example).
+SKY_OVERRIDE_DIR="${SKY_OVERRIDE_DIR:-$REPO/examples/sky/ipe-overrides}"
 # Committed output trees: the raw upstream snapshot and the runnable Ipê port.
 SKY_ORIGINAL_DIR="${SKY_ORIGINAL_DIR:-$REPO/examples/sky/original}"
 SKY_IPE_DIR="${SKY_IPE_DIR:-$REPO/examples/sky/ipe}"
@@ -123,16 +126,34 @@ sky_mirror_one() {
 
 # ── sky_transform_one <name> <orig-src> <ipe-dst>: raw tree -> Ipê port ───────
 # Derives the Ipê port in <ipe-dst> from an already-materialised raw tree
-# <orig-src> (no network): rename every *.sky -> *.ipe, rename sky.toml ->
-# ipe.toml (rewriting its `entry` key), apply the rename-map token rewrite, then
-# apply the optional content-anchored ipe-edits/<name>.edits semantic delta.
+# <orig-src> (no network). Two mutually-exclusive modes:
+#
+#   • OVERRIDE — if examples/sky/ipe-overrides/<name>/ exists, the port IS that
+#     tree, copied wholesale; the token rewrite + edits are skipped entirely.
+#     This is for a port that is a structural REBUILD of the upstream example
+#     rather than a transform of it (e.g. a Go-FFI example reimplemented on
+#     Rust-crate FFI), where a per-line edit cannot express the delta and files
+#     are added/removed. The raw upstream stays in examples/sky/original/<name>/
+#     as the reference the rebuild diverges from.
+#   • TRANSFORM (default) — rename every *.sky -> *.ipe, rename sky.toml ->
+#     ipe.toml (rewriting its `entry` key), apply the rename-map token rewrite,
+#     then the optional content-anchored ipe-edits/<name>.edits semantic delta.
+#
 # Returns 0 on success, 2 when an edit fails to apply (a real regression to
 # surface, never ignore). Offline + deterministic — the basis of `--check`.
 sky_transform_one() {
   local name="$1" orig="$2" ipe="$3"
   rm -rf "$ipe"
-  # The Ipê port starts as a copy of the raw snapshot, then is transformed.
   mkdir -p "$ipe"
+
+  # OVERRIDE mode: the committed override tree is the port verbatim.
+  local override="$SKY_OVERRIDE_DIR/$name"
+  if [ -d "$override" ]; then
+    cp -rf "$override/." "$ipe/"
+    return 0
+  fi
+
+  # TRANSFORM mode: the Ipê port starts as a copy of the raw snapshot.
   cp -rf "$orig/." "$ipe/"
 
   # *.sky -> *.ipe (source extension rename).
