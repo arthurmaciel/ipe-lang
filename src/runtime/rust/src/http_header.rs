@@ -1,4 +1,4 @@
-//! Canonical HTTP header-name casing, shared by Ipe.Live and Ipe.Http.Server.
+//! Canonical HTTP header-name casing, shared by Ipe.Web and Ipe.Http.Server.
 //!
 //! Go stores request header names in canonical MIME case
 //! (`textproto.CanonicalMIMEHeaderKey`: `content-type` -> `Content-Type`,

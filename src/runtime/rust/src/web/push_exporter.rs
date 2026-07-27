@@ -1,6 +1,6 @@
 //! Observability federation — child→parent telemetry push.
 //!
-//! When a Rust Live app runs as a sub-app under a parent (`IPE_PARENT_URL` set),
+//! When a Rust Web app runs as a sub-app under a parent (`IPE_PARENT_URL` set),
 //! this background exporter batches its logs + spans and POSTs them every
 //! `IPE_OBSERVABILITY_PUSH_INTERVAL_MS` (default 2000) to the parent's
 //! `/_ipe/observability/ingest` — the symmetric counterpart to the receiver in

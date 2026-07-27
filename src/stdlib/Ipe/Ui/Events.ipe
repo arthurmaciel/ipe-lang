@@ -8,7 +8,7 @@ module Ipe.Ui.Events exposing (onClick, onSubmit, onInput)
 -- Tier 1 ships static rendering only — the AttrEvent constructor
 -- is recorded on the Element but the inline-style renderer drops
 -- it. Tier 2 wires AttrEvent through Ipe.Html.Events for actual
--- Ipe.Live event dispatch.
+-- Ipe.Web event dispatch.
 
 import Ipe.Prelude exposing (..)
 import Ipe.Ui as Ui

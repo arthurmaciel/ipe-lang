@@ -59,11 +59,11 @@ const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
     // ── Dead: emit_expr's DbDefaultMigration arm emits the `Migration`
     //         record struct literal inline; this name string is never emitted.
     "db_default_migration",
-    // ── Dead: emit_live_route generates a closure expression, not a function
+    // ── Dead: emit_web_route generates a closure expression, not a function
     //         call. ──────────────────────────────────────────────────────────
-    "live_route",
-    // ── Dead: emit_cli_call synthesises the CLI entry-point block inline. ───
-    "ipe_cli_program_",
+    "web_route",
+    // ── Dead: emit_console_call synthesises the CLI entry-point block inline. ───
+    "ipe_console_app_",
     // ── Dead: emit_ui_call emits ipe_runtime_rust::ui::render::ui_layout_with_vecs
     //         for UiLayoutWith; the bare "ui_layout_with" name is not used.
     //         Note: ui_layout_with_vecs IS in the runtime; this entry is for

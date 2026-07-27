@@ -2,7 +2,7 @@
 //!
 //! These types mirror `ipe-stdlib/Std/Ui.ipe`'s ADTs **variant-for-variant and
 //! field-for-field**. They live in the runtime (not generated per-project) so
-//! that every backend — Ipe.Live (→ HTML), Ipe.Tui (→ ANSI cells), Ipe.Webview
+//! that every backend — Ipe.Web (→ HTML), Ipe.Tui (→ ANSI cells), Ipe.WebView
 //! (→ native webview) — renders the SAME structured `Element` tree to its own
 //! target, exactly as the Go backend does (`runtime-go/rt/tui_ui.go` walks the
 //! structured Element ADT directly; it never round-trips through CSS).

@@ -12,7 +12,7 @@ module Ipe.Ui.Responsive exposing (DeviceClass(..), classifyDevice, deviceClassT
 --   width <  1920  → Desktop
 --   width >= 1920  → BigDesktop
 --
--- Ipe.Live apps typically read the viewport from a window-size
+-- Ipe.Web apps typically read the viewport from a window-size
 -- subscription (Sub.windowSize) and stash it in the model; the
 -- view passes width into classifyDevice once and dispatches.
 

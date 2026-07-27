@@ -1,7 +1,7 @@
 -- | Ipe.PubSub — Task-shaped publish, callable from ANY context.
 --
 -- A complement to `Ipe.Cmd.publish` (which only fires from a
--- Ipe.Live `update` return). `Ipe.PubSub.publish` returns a
+-- Ipe.Web `update` return). `Ipe.PubSub.publish` returns a
 -- `Task Error Int` you can run from raw `Ipe.Http.Server` `api`
 -- handlers, post-init goroutines, scheduled jobs, callbacks from
 -- external systems — anywhere you'd otherwise have no `Cmd msg`
@@ -9,13 +9,13 @@
 --
 -- The Task resolves with the count of subscribers that received
 -- the broadcast (the same `Int` `app.Publish` returns inside the
--- update-loop path), or `Err Unavailable` when no `Live.app` is
+-- update-loop path), or `Err Unavailable` when no `Web.app` is
 -- running in this process (a CLI tool, an isolated unit test, a
 -- pure `Ipe.Http.Server` process).
 --
 -- Scope (matches `Ipe.Cmd.publish`): in-process only in v0.15.x.
 -- The same `topicRegistry` backs both APIs, so a publish from a
--- raw handler reaches every subscribed Ipe.Live session in the
+-- raw handler reaches every subscribed Ipe.Web session in the
 -- same process, with identical ordering + echo semantics.
 --
 -- See `docs/ipelive/pubsub.md` for the decision matrix and
@@ -41,7 +41,7 @@ import Ipe.Task as Task
 
 
 -- | `publish topic payload` — broadcast `payload` on `topic` to
--- every Ipe.Live session in this process whose `subscriptions`
+-- every Ipe.Web session in this process whose `subscriptions`
 -- includes `Sub.subscribeTopic topic _`.
 --
 -- Returns the count of subscribers that received the broadcast.
@@ -52,9 +52,9 @@ import Ipe.Task as Task
 -- (one bump per publish, before fan-out). Pair with a durable
 -- write (DB row, append-only log) when persistence matters.
 --
--- Errors with `Unavailable` when no `Live.app` is registered in
+-- Errors with `Unavailable` when no `Web.app` is registered in
 -- this process. CLI tools / pure HTTP servers / unit tests that
--- never start a `Live.app` see this; production deploys never
+-- never start a `Web.app` see this; production deploys never
 -- should.
 publish : String -> any -> Task Error Int
 publish =
@@ -71,7 +71,7 @@ publish =
 -- of the wire protocol so the broker can self-suppress at the
 -- network edge, saving the receiving node a local-registry hop.
 --
--- Same Err(Unavailable) semantics as `publish` when no `Live.app` is
+-- Same Err(Unavailable) semantics as `publish` when no `Web.app` is
 -- registered in this process.
 publishNoEcho : String -> any -> Task Error Int
 publishNoEcho =

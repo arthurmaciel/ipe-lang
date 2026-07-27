@@ -53,7 +53,7 @@ pub enum WsClientMessage {
 
 /// Ipe.WebSocket.CloseCode — bridged so the runtime can build close codes
 /// for onClose's toMsg. Variant names match the Ipê constructors. Carries the
-/// same serde derives as [`WsClientMessage`] for the same Live-`Msg` reason.
+/// same serde derives as [`WsClientMessage`] for the same Web-`Msg` reason.
 #[allow(non_snake_case)]
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum WsCloseCode {

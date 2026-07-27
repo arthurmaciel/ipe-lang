@@ -1,7 +1,7 @@
 -- | Ipe.WebSocket — outbound WebSocket client.
 --
 -- Opens a long-lived bidirectional connection to a peer.  Incoming
--- frames surface as `Sub` events on a Ipe.Live update loop (mirror
+-- frames surface as `Sub` events on a Ipe.Web update loop (mirror
 -- of `Ipe.Http.Stream.chunks`); outbound `send` writes a text
 -- or binary frame from the calling goroutine.
 --
@@ -25,7 +25,7 @@
 --
 --  4. `WebSocket.close sock` — release the connection.  Idempotent.
 --
--- Session lifecycle: when a Ipe.Live session is evicted (TTL OR
+-- Session lifecycle: when a Ipe.Web session is evicted (TTL OR
 -- explicit Delete) the runtime closes every owned socket
 -- automatically — app code is NEVER responsible for cleanup on
 -- disconnect.
@@ -37,7 +37,7 @@
 -- Backpressure: `send` blocks up to the consumer-stall timeout
 -- (30 s).  The bounded read channel (64 frames) provides
 -- per-socket backpressure to the upstream when the user's update
--- loop falls behind — Ipe.Live's existing
+-- loop falls behind — Ipe.Web's existing
 -- `ipe_live_sse_drops_total` covers spillover.
 --
 -- See `examples/33-websocket-echo` for the canonical pattern.

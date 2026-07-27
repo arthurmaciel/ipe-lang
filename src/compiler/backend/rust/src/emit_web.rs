@@ -1,14 +1,14 @@
-//! Emission for `Ipe.Live` / `Ipe.Live` app-entry kernels.
+//! Emission for `Ipe.Web` / `Ipe.Web` app-entry kernels.
 //!
 //! Wires three of the four Live kernels:
 //!
-//! * [`KernelFn::LiveApp`] — `Live.app cfg` → `ipe_runtime::live::live_app(…)`
-//!   for single-page apps, or `live_app_routed(…)` when the Model carries a
+//! * [`KernelFn::WebApp`] — `Web.app cfg` → `ipe_runtime::web::web_app(…)`
+//!   for single-page apps, or `web_app_routed(…)` when the Model carries a
 //!   `page` field (the six-field cfg scheme with `routes` / `notFound`).
-//! * [`KernelFn::LiveRoute`] — `Live.route pattern ctor` →
-//!   `ipe_runtime::live::route::Route::new(…)`.
-//! * [`KernelFn::LiveRenderStatic`] — `Live.renderStatic view model` →
-//!   `ipe_runtime::live::live_render_static(…)`.
+//! * [`KernelFn::WebRoute`] — `Web.route pattern ctor` →
+//!   `ipe_runtime::web::route::Route::new(…)`.
+//! * [`KernelFn::WebRenderStatic`] — `Web.renderStatic view model` →
+//!   `ipe_runtime::web::web_render_static(…)`.
 //!
 //! # Correctness constraints (MAKE INVALID STATES UNREPRESENTABLE)
 //!
@@ -18,8 +18,8 @@
 //!   the `Option<Page>` builder so `match_routes` routes to `not_found`
 //!   rather than silently substituting a zero-value default (§B-route-param).
 //! * Store kind / path are read from process env at call time, not compiled in.
-//! * `Live.appRouted` is a vestigial alias routed through the same
-//!   `lower_app_entry_cfg` path as `Live.app`; its arm here is a
+//! * `Web.appRouted` is a vestigial alias routed through the same
+//!   `lower_app_entry_cfg` path as `Web.app`; its arm here is a
 //!   defensive invariant check.
 
 use ipe_diagnostics::{DResult, Diagnostic, LowerError, Span};
@@ -29,17 +29,17 @@ use crate::EmitCtx;
 use crate::emit_expr::emit_expr_at;
 use crate::emit_types::{GenericScope, render_type};
 
-/// Dispatch a `Ipe.Live` / `Ipe.Live` kernel call.
+/// Dispatch a `Ipe.Web` / `Ipe.Web` kernel call.
 ///
 /// Returns `Some(emitted)` for all four Live kernels; `None` for any variant
 /// that is not a Live kernel (the caller routes to this function only for
-/// `k.is_live()` variants, but a defensive `None` for unknown variants avoids
+/// `k.is_web()` variants, but a defensive `None` for unknown variants avoids
 /// a catchall `_` arm).
 ///
 /// Called from `emit_ui_call`.
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
-pub fn emit_live_call(
+pub fn emit_web_call(
     ctx: &EmitCtx,
     callee: &Callee,
     args: &[Expr],
@@ -52,77 +52,77 @@ pub fn emit_live_call(
     };
 
     match k {
-        // ── Live.app { init, update, view, subscriptions, routes, notFound } ──
+        // ── Web.app { init, update, view, subscriptions, routes, notFound } ──
         //
-        // The six-field cfg scheme. `emit_live_app_inner` branches
-        // on the Model's `page` field: routed apps take `live_app_routed`
-        // (routes + notFound + set_page); single-page apps take `live_app`.
-        KernelFn::LiveApp => {
+        // The six-field cfg scheme. `emit_web_app_inner` branches
+        // on the Model's `page` field: routed apps take `web_app_routed`
+        // (routes + notFound + set_page); single-page apps take `web_app`.
+        KernelFn::WebApp => {
             let [cfg_e] = args else {
                 return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_live_call::LiveApp",
-                    detail: format!("Live.app requires 1 argument, got {}", args.len()),
+                    where_: "ipe_backend_rust::emit_web_call::WebApp",
+                    detail: format!("Web.app requires 1 argument, got {}", args.len()),
                 });
             };
             // Unreachable for well-typed source: a non-literal cfg is rejected
             // at lower with IPE-L0119 (Feature::LetBoundAppCfg); this guard is a
-            // defensive invariant, mirroring the `LiveAppRouted` precedent.
+            // defensive invariant, mirroring the `WebAppRouted` precedent.
             let Expr::Record(fields) = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_live_call::LiveApp",
-                    detail: "Live.app cfg must be an inline record literal; \
+                    where_: "ipe_backend_rust::emit_web_call::WebApp",
+                    detail: "Web.app cfg must be an inline record literal; \
                              a non-literal cfg is rejected at lower with IPE-L0119"
                         .into(),
                 });
             };
-            emit_live_app_inner(ctx, fields, indent, child, generics)
+            emit_web_app_inner(ctx, fields, indent, child, generics)
         }
 
-        // ── Live.appRouted — vestigial alias of `Live.app` ─────────────────
+        // ── Web.appRouted — vestigial alias of `Web.app` ─────────────────
         //
-        // The lower stage routes `Live.appRouted` through the same
-        // `lower_app_entry_cfg` path as `Live.app` (the reference has ONE
-        // `Live.app` that branches at emit time), so the alias takes the same
-        // `emit_live_app_inner` branch here.  A non-literal cfg is rejected at
-        // lower with IPE-L0119 exactly as for `Live.app`; the guard below is
+        // The lower stage routes `Web.appRouted` through the same
+        // `lower_app_entry_cfg` path as `Web.app` (the reference has ONE
+        // `Web.app` that branches at emit time), so the alias takes the same
+        // `emit_web_app_inner` branch here.  A non-literal cfg is rejected at
+        // lower with IPE-L0119 exactly as for `Web.app`; the guard below is
         // the same defensive invariant.
-        KernelFn::LiveAppRouted => {
+        KernelFn::WebAppRouted => {
             let [cfg_e] = args else {
                 return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_live_call::LiveAppRouted",
-                    detail: format!("Live.appRouted requires 1 argument, got {}", args.len()),
+                    where_: "ipe_backend_rust::emit_web_call::WebAppRouted",
+                    detail: format!("Web.appRouted requires 1 argument, got {}", args.len()),
                 });
             };
             let Expr::Record(fields) = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_live_call::LiveAppRouted",
-                    detail: "Live.appRouted cfg must be an inline record literal; \
+                    where_: "ipe_backend_rust::emit_web_call::WebAppRouted",
+                    detail: "Web.appRouted cfg must be an inline record literal; \
                              a non-literal cfg is rejected at lower with IPE-L0119"
                         .into(),
                 });
             };
-            emit_live_app_inner(ctx, fields, indent, child, generics)
+            emit_web_app_inner(ctx, fields, indent, child, generics)
         }
 
-        // ── Live.route pattern ctor ─────────────────────────────────────────
-        KernelFn::LiveRoute => emit_live_route(ctx, args, indent, child, generics),
+        // ── Web.route pattern ctor ─────────────────────────────────────────
+        KernelFn::WebRoute => emit_web_route(ctx, args, indent, child, generics),
 
-        // ── Live.renderStatic view model ────────────────────────────────────
+        // ── Web.renderStatic view model ────────────────────────────────────
         //
-        // `Live.renderStatic : (Model -> Html Msg) -> Model -> Task Error ()`
+        // `Web.renderStatic : (Model -> Html Msg) -> Model -> Task Error ()`
         //
-        // Emits: `ipe_runtime::live::live_render_static(view, model)`
-        KernelFn::LiveRenderStatic => {
+        // Emits: `ipe_runtime::web::web_render_static(view, model)`
+        KernelFn::WebRenderStatic => {
             let [view_e, model_e] = args else {
                 return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_live_call::LiveRenderStatic",
-                    detail: format!("Live.renderStatic requires 2 arguments, got {}", args.len()),
+                    where_: "ipe_backend_rust::emit_web_call::WebRenderStatic",
+                    detail: format!("Web.renderStatic requires 2 arguments, got {}", args.len()),
                 });
             };
             let view_s = emit_expr_at(ctx, view_e, indent, child, generics)?;
             let model_s = emit_expr_at(ctx, model_e, indent, child, generics)?;
             Ok(Some(format!(
-                "ipe_runtime::live::live_render_static({view_s}, {model_s})"
+                "ipe_runtime::web::web_render_static({view_s}, {model_s})"
             )))
         }
 
@@ -131,11 +131,11 @@ pub fn emit_live_call(
     }
 }
 
-// ── `Live.route` ──────────────────────────────────────────────────────────────
+// ── `Web.route` ──────────────────────────────────────────────────────────────
 
-/// Emit `Live.route pattern builder` → `Route::new(&pattern, closure)`.
+/// Emit `Web.route pattern builder` → `Route::new(&pattern, closure)`.
 ///
-/// `Live.route : String -> builder -> LiveRoute page`.
+/// `Web.route : String -> builder -> WebRoute page`.
 /// The builder argument is one of:
 ///
 /// * A page-constructor reference ([`Expr::Ctor`], nullary or partial — the
@@ -162,7 +162,7 @@ pub fn emit_live_call(
 /// (`ExprEmitter.hs:1823`). The type-directed path is a sanctioned divergence —
 /// strictly safer (catches Int/Float/Bool mismatches at compile time instead
 /// of emitting E0308). See `docs/divergences-from-sky.md` §B-route-param.
-fn emit_live_route(
+fn emit_web_route(
     ctx: &EmitCtx,
     args: &[Expr],
     indent: usize,
@@ -171,8 +171,8 @@ fn emit_live_route(
 ) -> DResult<Option<String>> {
     let [pattern_e, builder_e] = args else {
         return Err(Diagnostic::CompilerBug {
-            where_: "ipe_backend_rust::emit_live_call::LiveRoute",
-            detail: format!("Live.route requires 2 arguments, got {}", args.len()),
+            where_: "ipe_backend_rust::emit_web_call::WebRoute",
+            detail: format!("Web.route requires 2 arguments, got {}", args.len()),
         });
     };
     let pattern_s = emit_expr_at(ctx, pattern_e, indent, child, generics)?;
@@ -291,17 +291,17 @@ fn emit_live_route(
     // deref-coerces to `&str` at the call site.  Variable references also
     // type as `String`, so `&var` is equally correct.
     Ok(Some(format!(
-        "ipe_runtime::live::route::Route::new(&{pattern_s}, {build_closure})"
+        "ipe_runtime::web::route::Route::new(&{pattern_s}, {build_closure})"
     )))
 }
 
-// ── Non-routed `live_app` ──────────────────────────────────────────────────────
+// ── Non-routed `web_app` ──────────────────────────────────────────────────────
 
-/// Emit `ipe_runtime::live::live_app(init, update, view, subs, store, path)`.
+/// Emit `ipe_runtime::web::web_app(init, update, view, subs, store, path)`.
 ///
 /// The `init` function is passed directly — after B1 constrain, the solver pins
-/// its first parameter type to `LiveReq`, so the emitted Rust function already
-/// has signature `fn(_req: LiveReq) -> (Model, IpeCmd<Msg>)`.
+/// its first parameter type to `WebReq`, so the emitted Rust function already
+/// has signature `fn(_req: WebReq) -> (Model, IpeCmd<Msg>)`.
 ///
 /// `update` is `Fn(Msg, Model) -> (Model, IpeCmd<Msg>)` — multi-param Ipê
 /// functions are lowered as uncurried Rust fns, matching the runtime bound.
@@ -311,7 +311,7 @@ fn emit_live_route(
 ///
 /// # Function-field emission
 ///
-/// `live_app`'s generic parameters carry `+ Send + Sync + 'static` bounds on
+/// `web_app`'s generic parameters carry `+ Send + Sync + 'static` bounds on
 /// the function arguments.  A named Rust `fn` item satisfies these bounds
 /// implicitly (the compiler's blanket impl covers all `fn` pointers and
 /// non-capturing function items).  By contrast, a `Box<dyn Fn(...)>` as emitted
@@ -319,10 +319,10 @@ fn emit_live_route(
 /// bounds without explicit annotation — `Box<dyn Fn(...) + Send + Sync>` is a
 /// different type from `Box<dyn Fn(...)>`.
 ///
-/// For this reason, `emit_live_fn` is used instead of `emit_expr_at` for the
+/// For this reason, `emit_web_fn` is used instead of `emit_expr_at` for the
 /// four function-typed cfg fields: it emits a raw function name for
 /// `FuncValue` expressions, satisfying the bound directly.
-fn emit_live_app_inner(
+fn emit_web_app_inner(
     ctx: &EmitCtx,
     fields: &[(ipe_intern::Symbol, Expr)],
     indent: usize,
@@ -334,7 +334,7 @@ fn emit_live_app_inner(
     let view_e = lookup_field(ctx, fields, "view")?;
     let subs_e = lookup_field(ctx, fields, "subscriptions")?;
 
-    // seal: gate the Model type against `live_app`'s serde+Clone+PartialEq
+    // seal: gate the Model type against `web_app`'s serde+Clone+PartialEq
     // bound BEFORE emitting. A non-serialisable Model (e.g. a field of type
     // `Cmd`/`Sub`/`Task`/`Decoder`/`Db`/function, or `Html`/`Element`/`Color`)
     // would otherwise `ipe`-succeed and then `cargo`-fail on the missing trait.
@@ -343,16 +343,16 @@ fn emit_live_app_inner(
         crate::emit_model_gate::check_admissible_model(
             ctx,
             model_ty,
-            ipe_diagnostics::AppShape::Live,
+            ipe_diagnostics::AppShape::Web,
         )?;
     }
 
-    // seal: gate the Msg type against `live_app`'s Clone+Send+Sync+Debug
+    // seal: gate the Msg type against `web_app`'s Clone+Send+Sync+Debug
     // bound. The predicate is ir_type_is_derivable (NOT serde) — Msg is never
     // persisted, so Html-carrying Msg is accepted. A Cmd/Sub/Task/function in
     // Msg would cargo-fail; the gate makes it a fail-closed IPE-L0122 error.
     if let Some(msg_ty) = crate::emit_model_gate::msg_ty_of_update(update_e) {
-        crate::emit_model_gate::check_admissible_msg(ctx, msg_ty, ipe_diagnostics::AppShape::Live)?;
+        crate::emit_model_gate::check_admissible_msg(ctx, msg_ty, ipe_diagnostics::AppShape::Web)?;
     }
 
     // H24: the compile-time Model schema tag, computed from the SAME
@@ -376,10 +376,10 @@ fn emit_live_app_inner(
     // the emitted call arg readable.
     let tag_const = format!("const IPE_LIVE_MODEL_SCHEMA_TAG: [u8; 32] = [{tag_bytes}];");
 
-    let init_s = emit_live_fn(ctx, init_e, indent, child, generics)?;
-    let update_s = emit_live_fn(ctx, update_e, indent, child, generics)?;
-    let view_s = emit_live_fn(ctx, view_e, indent, child, generics)?;
-    let subs_s = emit_live_fn(ctx, subs_e, indent, child, generics)?;
+    let init_s = emit_web_fn(ctx, init_e, indent, child, generics)?;
+    let update_s = emit_web_fn(ctx, update_e, indent, child, generics)?;
+    let view_s = emit_web_fn(ctx, view_e, indent, child, generics)?;
+    let subs_s = emit_web_fn(ctx, subs_e, indent, child, generics)?;
 
     // Browser target: the same cfg drives the client sink. No session store
     // (the model lives in the tab), so no store args and no schema tag. The
@@ -400,9 +400,9 @@ fn emit_live_app_inner(
     //
     // Recover the Model from `view : Model -> Html Msg`'s first parameter.
     // If the Model record has a `page` field, this is a routed app → emit
-    // `live_app_routed` with `routes`, `notFound`, and a generated `set_page`
+    // `web_app_routed` with `routes`, `notFound`, and a generated `set_page`
     // closure.  Otherwise drop routes/notFound and emit the single-page
-    // `live_app`.
+    // `web_app`.
     //
     // `routes` and `notFound` are always present as required cfg fields
     // (constrain.rs kernel scheme) but are only forwarded to the runtime in the
@@ -424,7 +424,7 @@ fn emit_live_app_inner(
         );
         return Ok(Some(format!(
             "{{ {tag_const} \
-             ipe_runtime::live::live_app_routed(\
+             ipe_runtime::web::web_app_routed(\
              {init_s}, \
              {update_s}, \
              {view_s}, \
@@ -446,7 +446,7 @@ fn emit_live_app_inner(
     // switch stores without recompilation (`IPE_LIVE_STORE` / `IPE_LIVE_STORE_PATH`).
     Ok(Some(format!(
         "{{ {tag_const} \
-         ipe_runtime::live::live_app(\
+         ipe_runtime::web::web_app(\
          {init_s}, \
          {update_s}, \
          {view_s}, \
@@ -527,7 +527,7 @@ fn builder_fn_params(e: &Expr) -> Option<Vec<&IrType>> {
 /// Returns `Some((model_ty, page_ty))` when:
 /// - `view` is an `Expr::FuncValue` OR an `Expr::Lambda` whose first parameter
 ///   type is recoverable (`emit_model_gate::fn_param_ty` handles both shapes,
-///   so a routed lambda `view` is not misrouted to the non-routed `live_app`,
+///   so a routed lambda `view` is not misrouted to the non-routed `web_app`,
 ///   which would discard `routes`/`notFound`),
 /// - the Model is an `IrType::Record`, and
 /// - one of its fields resolves to the Ipê identifier `"page"`.
@@ -553,7 +553,7 @@ fn routed_page_field<'a>(ctx: &EmitCtx, view_e: &'a Expr) -> Option<(&'a IrType,
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Emit a cfg-field expression for `live_app` / `live_app_routed`.
+/// Emit a cfg-field expression for `web_app` / `web_app_routed`.
 ///
 /// The runtime entry's four function-typed slots (`FInit`/`FUpdate`/`FView`/
 /// `FSubs`) are GENERIC type parameters bounded `Fn(...) -> R + Send + Sync +
@@ -583,7 +583,7 @@ fn routed_page_field<'a>(ctx: &EmitCtx, view_e: &'a Expr) -> Option<(&'a IrType,
 /// typed by its binding site; if it is not `Send + Sync` the cargo error carries
 /// a clear trait-bound message — the correct fail-closed behaviour, and a shape
 /// the reference frontend also cannot produce for these slots.
-fn emit_live_fn(
+fn emit_web_fn(
     ctx: &EmitCtx,
     e: &Expr,
     indent: usize,
@@ -622,9 +622,9 @@ fn lookup_field<'f>(
         }
     }
     Err(Diagnostic::CompilerBug {
-        where_: "ipe_backend_rust::emit_live_call",
+        where_: "ipe_backend_rust::emit_web_call",
         detail: format!(
-            "required Live.app cfg field `{name}` not found; \
+            "required Web.app cfg field `{name}` not found; \
              available fields: [{}]",
             fields
                 .iter()
@@ -678,8 +678,8 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::WebSocketServerCfg => "WebSocketServerCfg",
         IrType::Ui { .. } => "Element",
         IrType::UiPlain(_) => "UiAttribute",
-        IrType::LiveReq => "LiveReq",
-        IrType::LiveRoute(_) => "LiveRoute",
+        IrType::WebReq => "WebReq",
+        IrType::WebRoute(_) => "WebRoute",
         IrType::Order => "Order",
         IrType::Decimal => "Decimal",
         IrType::ErrorKind => "ErrorKind",
@@ -733,7 +733,7 @@ mod schema_tag_tests {
     }
 
     /// The `{ init, update, view, subscriptions }` config record a single-page
-    /// TEA program passes to `live_app`, over the given `model` type. `syms` are
+    /// TEA program passes to `web_app`, over the given `model` type. `syms` are
     /// the field symbols in declaration order (init, update, view, subscriptions).
     fn single_page_live_cfg(model: &IrType, syms: [ipe_intern::Symbol; 4]) -> Expr {
         let [init_sym, update_sym, view_sym, subs_sym] = syms;
@@ -742,7 +742,7 @@ mod schema_tag_tests {
         Expr::Record(vec![
             (
                 init_sym,
-                func_value(0, IrType::Fun(vec![IrType::LiveReq], Box::new(pair()))),
+                func_value(0, IrType::Fun(vec![IrType::WebReq], Box::new(pair()))),
             ),
             (
                 update_sym,
@@ -777,7 +777,7 @@ mod schema_tag_tests {
         ])
     }
 
-    /// The emitted `live_app(...)` call carries the compile-time Model schema
+    /// The emitted `web_app(...)` call carries the compile-time Model schema
     /// tag: a `const IPE_LIVE_MODEL_SCHEMA_TAG: [u8; 32] = [...]` declaration
     /// plus that identifier as the call's new final argument (H24 — the
     /// session store rejects a checkpoint whose tag differs BEFORE
@@ -806,7 +806,7 @@ mod schema_tag_tests {
                 uses_tea: false,
                 uses_server: false,
                 uses_ui: false,
-                uses_live: true,
+                uses_web: true,
                 uses_tui: false,
                 uses_webview: false,
                 uses_css: false,
@@ -831,15 +831,15 @@ mod schema_tag_tests {
         let model = IrType::Record(BTreeMap::from([(count, IrType::Int)]));
         let cfg = single_page_live_cfg(&model, [init_sym, update_sym, view_sym, subs_sym]);
 
-        let out = super::emit_live_call(
+        let out = super::emit_web_call(
             &ctx,
-            &Callee::Kernel(KernelFn::LiveApp),
+            &Callee::Kernel(KernelFn::WebApp),
             &[cfg],
             0,
             0,
             GenericScope::new(&[]),
         )?
-        .expect("LiveApp must emit");
+        .expect("WebApp must emit");
 
         assert!(
             out.contains("const IPE_LIVE_MODEL_SCHEMA_TAG: [u8; 32] = ["),
@@ -847,12 +847,12 @@ mod schema_tag_tests {
         );
         assert!(
             out.contains("IPE_LIVE_MODEL_SCHEMA_TAG)"),
-            "the emitted live_app call must pass the tag identifier as its \
+            "the emitted web_app call must pass the tag identifier as its \
              final argument, got:\n{out}"
         );
         assert!(
-            out.contains("ipe_runtime::live::live_app("),
-            "single-page cfg must still route to live_app, got:\n{out}"
+            out.contains("ipe_runtime::web::web_app("),
+            "single-page cfg must still route to web_app, got:\n{out}"
         );
         Ok(())
     }

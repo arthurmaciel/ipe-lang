@@ -10,7 +10,7 @@
 //! stdlib module reaches the empty-home sentinel (stdlib imports are
 //! skipped by both the dep-injection loop and the `qualifier_paths`
 //! construction), `is_html` always fails and BOTH the bare-exposed form
-//! (`Ipe.Live.Head.pairToAttr`) and the qualified form
+//! (`Ipe.Web.Head.pairToAttr`) and the qualified form
 //! (`Ipe.Ui.Chart.svgRootAttrs`) mis-lower `Attribute msg` to
 //! `ui::element::Attribute` while their `Attr.attribute` bodies produce
 //! `html::Attribute` — an exit-0-then-cargo-fail E0308 SEAL violation.

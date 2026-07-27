@@ -1,4 +1,4 @@
-//! Honest end-to-end tests for `Ipe.Live` / `Ipe.Live` — `Live.app`, `Ui.layout`,
+//! Honest end-to-end tests for `Ipe.Web` / `Ipe.Web` — `Web.app`, `Ui.layout`,
 //! `Ui.column`, `Ui.el`, `Ui.onClick`, `Ui.text`, and `String.fromInt`.
 //!
 //! All tests are gated on `IPE_E2E=1`.  Without it they return early so the
@@ -6,7 +6,7 @@
 //!
 //! ## Architecture
 //!
-//! 1. A minimal Ipe.Live counter program is written to a temp dir.
+//! 1. A minimal Ipe.Web counter program is written to a temp dir.
 //! 2. `ipe::build` compiles it (parse → canon → types → lower → emit Rust).
 //! 3. `e2e_support::build_rust_binary` runs `cargo build` on the emitted project —
 //!    the shared Cargo target (`~/.cargo/config.toml`) lets axum/tokio/serde
@@ -15,11 +15,11 @@
 //! 5. The binary is spawned with `IPE_LIVE_PORT=<port>` and `IPE_CSRF=off`.
 //!    `IPE_CSRF=off` disables the double-submit cookie check so test GETs
 //!    exercise the full page render without cookie plumbing.
-//! 6. Readiness: reads the child's stderr until `[ipe.live] listening on`.
+//! 6. Readiness: reads the child's stderr until `[ipe.web] listening on`.
 //! 7. `GET /` is sent via raw `TcpStream`; the response body must contain
 //!    the initial counter value rendered as `>0<`, proving the full Live
 //!    pipeline ran:
-//!    `live_app → init → view → render_page → HTML served`.
+//!    `web_app → init → view → render_page → HTML served`.
 //!
 //! Run:
 //!
@@ -38,10 +38,10 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 // ── Ipê program ───────────────────────────────────────────────────────────────
 
-/// A minimal Ipe.Live counter app.
+/// A minimal Ipe.Web counter app.
 ///
 /// Kernels exercised:
-/// - `Live.app`     — constrain scheme + serde derives
+/// - `Web.app`     — constrain scheme + serde derives
 /// - `Ui.layout`    — converts Element tree to HTML
 /// - `Ui.column`    — vertical layout
 /// - `Ui.el`        — generic element container with onClick attribute
@@ -55,7 +55,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// function is not a raw kernel — it is defined in ipe-stdlib as a Ipê function.
 const IPE_LIVE_COUNTER: &str = r#"module Main exposing (main)
 
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 
 type Msg = Increment | Decrement
@@ -88,7 +88,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Live.app
+    Web.app
         { init = init
         , update = update
         , view = view
@@ -98,7 +98,7 @@ main =
         }
 "#;
 
-/// Serde-derive gating seal: a `Ipe.Live` program with a NON-Model view-helper
+/// Serde-derive gating seal: a `Ipe.Web` program with a NON-Model view-helper
 /// record that holds an `Html` field (`Section = { title : String, body : Html
 /// Msg }`) and a plain-data Model.
 ///
@@ -106,14 +106,14 @@ main =
 /// NOT serde-supporting. The emitter gates the serde derive on the per-record
 /// serde flag, not the `CDPeq` flag — gating it on `CDPeq` would force
 /// `#[derive(..., serde::Serialize, serde::Deserialize)]` onto `Section` under
-/// `uses_live` → `ipe` exit 0 then `cargo build` E0277 (`Html<MainMsg>:
+/// `uses_web` → `ipe` exit 0 then `cargo build` E0277 (`Html<MainMsg>:
 /// Serialize` unsatisfied). So `Section` keeps its `CDPeq` derive WITHOUT serde
 /// and the project is cargo-buildable. The Model (`{ count : Int }`)
 /// is plain data and still gets serde. The Model-admissibility gate is NOT
 /// tripped because the non-serde record is a view helper, not the Model.
 const IPE_LIVE_HTML_HELPER: &str = r#"module Main exposing (main)
 
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 
 type Msg = Increment | Decrement
@@ -148,7 +148,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Live.app
+    Web.app
         { init = init
         , update = update
         , view = view
@@ -158,11 +158,11 @@ main =
         }
 "#;
 
-/// Inline-lambda subscriptions seal — BUILD-ONLY: a routed `Ipe.Live` app whose
+/// Inline-lambda subscriptions seal — BUILD-ONLY: a routed `Ipe.Web` app whose
 /// `subscriptions` cfg field is an INLINE LAMBDA (`\_ -> Sub.none`) rather than
 /// a top-level `fn` reference must compile end-to-end.
 ///
-/// `live_app_routed`'s four function slots (`FInit`/`FUpdate`/`FView`/`FSubs`)
+/// `web_app_routed`'s four function slots (`FInit`/`FUpdate`/`FView`/`FSubs`)
 /// are GENERIC type params bounded `Fn(..) -> R + Send + Sync + 'static`. A
 /// top-level `subscriptions` reference emits as a bare `fn` item (implicitly
 /// `Send + Sync`). An inline lambda emitted through the general `emit_expr_at`
@@ -183,7 +183,7 @@ main =
 /// Propagates any pipeline or Cargo build failure as a test error.
 const IPE_LIVE_LAMBDA_SUBS: &str = r#"module Main exposing (main)
 
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 
 type Msg = Increment | Decrement
@@ -213,30 +213,30 @@ view model =
             ])
 
 main =
-    Live.app
+    Web.app
         { init = init
         , update = update
         , view = view
         , subscriptions = \_ -> Sub.none
-        , routes = [ Live.route "/" HomePage ]
+        , routes = [ Web.route "/" HomePage ]
         , notFound = HomePage
         }
 "#;
 
-/// A routed Ipe.Live app: two pages, nullary page ctors, `routes`/`notFound`
-/// supplied. The Model carries a `page` field → `emit_live_app_inner` takes
-/// the T5 routed branch and emits `live_app_routed` instead of `live_app`.
+/// A routed Ipe.Web app: two pages, nullary page ctors, `routes`/`notFound`
+/// supplied. The Model carries a `page` field → `emit_web_app_inner` takes
+/// the T5 routed branch and emits `web_app_routed` instead of `web_app`.
 ///
 /// Exercises the full T5 emit path through the compiler:
-/// - open-record unification of the 6-field `Live.app` cfg (T2/T3)
-/// - `routed_page_field` detection in `emit_live_app_inner` (T5)
+/// - open-record unification of the 6-field `Web.app` cfg (T2/T3)
+/// - `routed_page_field` detection in `emit_web_app_inner` (T5)
 /// - `set_page` closure generation (T5)
-/// - `live_app_routed` runtime entry (already ported in `runtime/`)
+/// - `web_app_routed` runtime entry (already ported in `runtime/`)
 ///
 /// This is the same structure as `examples/09-live-counter/src/Main.ipe`.
 const IPE_LIVE_ROUTED: &str = r#"module Main exposing (main)
 
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 
 type Page
@@ -277,12 +277,12 @@ subscriptions _model =
     Sub.none
 
 main =
-    Live.app
+    Web.app
         { init = init
         , update = update
         , view = view
         , subscriptions = subscriptions
-        , routes = [ Live.route "/" CounterPage, Live.route "/about" AboutPage ]
+        , routes = [ Web.route "/" CounterPage, Web.route "/about" AboutPage ]
         , notFound = CounterPage
         }
 "#;
@@ -337,7 +337,7 @@ fn pick_ephemeral_port() -> Result<u16, BoxError> {
         .local_addr()
         .map_err(|e| -> BoxError { format!("cannot read ephemeral port: {e}").into() })?
         .port();
-    // Drop `listener` here — releases the port for the Ipê Live server.
+    // Drop `listener` here — releases the port for the Ipê Web server.
     Ok(port)
 }
 
@@ -352,7 +352,7 @@ impl Drop for ProcessGuard {
 }
 
 /// Spawn the Ipê Live binary and wait until it signals readiness via
-/// `[ipe.live] listening on` on stderr.
+/// `[ipe.web] listening on` on stderr.
 ///
 /// # Errors
 ///
@@ -364,27 +364,25 @@ fn spawn_and_wait_ready(
     port: u16,
 ) -> Result<ProcessGuard, BoxError> {
     let mut child = Command::new(exe)
-        // Ipe.Live reads its port from IPE_LIVE_PORT (default 8000).
+        // Ipe.Web reads its port from IPE_LIVE_PORT (default 8000).
         .env("IPE_LIVE_PORT", port.to_string())
         // Disable the double-submit CSRF check so raw TcpStream GETs work.
         .env("IPE_CSRF", "off")
         // Disable the dev console proxy. The console child binary is pre-built
         // and cached on this machine; without this gate it is spawned on its
-        // own ephemeral port and emits its own `[ipe.live] listening on`
+        // own ephemeral port and emits its own `[ipe.web] listening on`
         // to the inherited stderr pipe before the parent app has bound its
         // port. The test sees that line, declares the server ready, and then
         // immediately tries to connect to the parent's port — which is not
         // bound yet — getting ECONNREFUSED. Setting IPE_CONSOLE_EMBED=off
         // makes gate_allows() return false so no child is spawned and the
-        // only `[ipe.live] listening on` line in the stderr pipe is the
+        // only `[ipe.web] listening on` line in the stderr pipe is the
         // parent's own (emitted AFTER the TCP listener is bound).
         .env("IPE_CONSOLE_EMBED", "off")
         .stderr(Stdio::piped())
         .stdout(Stdio::null())
         .spawn()
-        .map_err(|e| -> BoxError {
-            format!("{test_name}: cannot spawn Live binary: {e}").into()
-        })?;
+        .map_err(|e| -> BoxError { format!("{test_name}: cannot spawn Web binary: {e}").into() })?;
 
     let stderr = child
         .stderr
@@ -400,21 +398,20 @@ fn spawn_and_wait_ready(
             let _ = child.kill();
             let _ = child.wait();
             return Err(
-                format!("{test_name}: Ipe Live did not signal readiness within 10 s").into(),
+                format!("{test_name}: Ipe Web did not signal readiness within 10 s").into(),
             );
         }
         line.clear();
         match reader.read_line(&mut line) {
             Ok(0) => {
                 let _ = child.wait();
-                return Err(format!(
-                    "{test_name}: Ipe Live process exited before signalling ready"
-                )
-                .into());
+                return Err(
+                    format!("{test_name}: Ipe Web process exited before signalling ready").into(),
+                );
             }
             Ok(_) => {
-                // The live runtime emits: `[ipe.live] listening on http://0.0.0.0:<port>`
-                if line.contains("[ipe.live] listening on") {
+                // The web runtime emits: `[ipe.web] listening on http://0.0.0.0:<port>`
+                if line.contains("[ipe.web] listening on") {
                     return Ok(ProcessGuard(child));
                 }
             }
@@ -448,7 +445,7 @@ fn http_send(
     body: Option<&[u8]>,
 ) -> Result<(String, String), BoxError> {
     let mut stream = TcpStream::connect(addr).map_err(|e| -> BoxError {
-        format!("{test_name}: cannot connect to Ipe Live server: {e}").into()
+        format!("{test_name}: cannot connect to Ipe Web server: {e}").into()
     })?;
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
@@ -565,17 +562,17 @@ fn extract_hid_for_open_tag(html: &str, tag: &str) -> Option<String> {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-/// `GET /` on a Ipe.Live counter app returns an HTML page containing the
+/// `GET /` on a Ipe.Web counter app returns an HTML page containing the
 /// initial counter value rendered as the text node `>0<`.
 ///
-/// This test proves the FULL Ipe.Live pipeline end-to-end:
+/// This test proves the FULL Ipe.Web pipeline end-to-end:
 ///
 /// ```text
 /// Ipê source
 ///   → ipe (parse → canon → types → lower → emit Rust with "live" feature)
 ///   → cargo build
-///   → ipe_runtime::live::live_app(init, update, view, subs, …)
-///   → init(LiveReq) → (Model{count:0}, Cmd::None)
+///   → ipe_runtime::web::web_app(init, update, view, subs, …)
+///   → init(WebReq) → (Model{count:0}, Cmd::None)
 ///   → view(model)   → Html tree with text node "0"
 ///   → render_page   → full HTML document
 ///   → axum HTTP response
@@ -586,7 +583,7 @@ fn extract_hid_for_open_tag(html: &str, tag: &str) -> Option<String> {
 /// false positives from CSS values, ipe-ids, or other numeric occurrences in
 /// the generated page markup.
 ///
-/// The `live` Cargo feature is injected by `emit_program` when `uses_live` is
+/// The `live` Cargo feature is injected by `emit_program` when `uses_web` is
 /// set.  Without the constraint scheme the build would fail with `exit 0 then
 /// cargo fail` (constraint scheme missing) or `cargo build error` (serde
 /// derives absent).
@@ -629,13 +626,13 @@ fn live_get_root_contains_initial_count() -> Result<(), BoxError> {
     Ok(())
 }
 
-/// Compile-only: the Ipe.Live counter emits a Cargo project with the `"live"`
+/// Compile-only: the Ipe.Web counter emits a Cargo project with the `"live"`
 /// feature in the default feature list.
 ///
 /// This is a BUILD-ONLY test — it does not spawn the binary.  A successful
 /// `cargo build` is the assertion.  If `serde::Serialize / Deserialize` derives
 /// are absent on the `Msg` enum and `Model` struct, `cargo build` will fail
-/// with a trait-bound error from `ipe_runtime::live::live_app`.
+/// with a trait-bound error from `ipe_runtime::web::web_app`.
 ///
 /// # Errors
 ///
@@ -651,7 +648,7 @@ fn live_counter_build_only() -> Result<(), BoxError> {
     Ok(())
 }
 
-/// Serde-derive gating seal — BUILD-ONLY: a Ipe.Live program with a NON-Model
+/// Serde-derive gating seal — BUILD-ONLY: a Ipe.Web program with a NON-Model
 /// view-helper record holding an `Html` field must compile end-to-end.
 ///
 /// A successful `ipe` + `cargo build` IS the assertion. Gating serde on the
@@ -673,7 +670,7 @@ fn live_html_helper_record_build_only() -> Result<(), BoxError> {
 }
 
 /// Inline-lambda subscriptions seal — BUILD-ONLY: an inline-lambda
-/// `subscriptions` cfg field on a routed `Live.app` must compile end-to-end.
+/// `subscriptions` cfg field on a routed `Web.app` must compile end-to-end.
 /// See `IPE_LIVE_LAMBDA_SUBS` for the full rationale — a lambda pinned to
 /// `Box<dyn Fn + Send>` (no `Sync`) instead of emitted unboxed into the generic
 /// `FSubs` slot makes this `ipe` exit 0 then `cargo build` E0277
@@ -805,17 +802,17 @@ fn live_onclick_increments_counter() -> Result<(), BoxError> {
     Ok(())
 }
 
-/// T5 seal — BUILD-ONLY: a routed `Live.app` with a `page` field in the Model
+/// T5 seal — BUILD-ONLY: a routed `Web.app` with a `page` field in the Model
 /// must compile and produce a Cargo project that links against
-/// `live_app_routed` rather than `live_app`.
+/// `web_app_routed` rather than `web_app`.
 ///
 /// This regression-tests the full T3→T5 emit path:
 /// - T3: 6-field open-record constraint passes type-checking.
 /// - T5: `routed_page_field` detects the `page` field in the Model and the
-///   emitter branches to `live_app_routed` with a generated `set_page` closure.
+///   emitter branches to `web_app_routed` with a generated `set_page` closure.
 ///
 /// A successful `ipe` + `cargo build` is the assertion.  If T5 emits
-/// `live_app` instead of `live_app_routed`, or emits a malformed `set_page`
+/// `web_app` instead of `web_app_routed`, or emits a malformed `set_page`
 /// closure, `cargo build` surfaces the type mismatch.
 ///
 /// # Errors
@@ -831,7 +828,7 @@ fn live_routed_app_build_only() -> Result<(), BoxError> {
     Ok(())
 }
 
-/// Pub/sub seal — BUILD-ONLY: a Ipe.Live app that uses `Cmd.publish` and
+/// Pub/sub seal — BUILD-ONLY: a Ipe.Web app that uses `Cmd.publish` and
 /// `Sub.subscribeTopic` must compile end-to-end without a `CompilerBug`
 /// diagnostic.
 ///
@@ -853,7 +850,7 @@ fn live_routed_app_build_only() -> Result<(), BoxError> {
 /// Propagates any pipeline or Cargo build failure as a test error.
 const IPE_PUBSUB_LIVE: &str = r#"module Main exposing (main)
 
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 
 type Msg
@@ -908,7 +905,7 @@ view model =
             ])
 
 main =
-    Live.app
+    Web.app
         { init = init
         , update = update
         , view = view
@@ -941,7 +938,7 @@ fn live_pubsub_cmd_publish_and_sub_subscribe_topic_build_only() -> Result<(), Bo
 /// present; without it the emitted project would fail with E0425 (seal violation).
 const IPE_PUBSUB_RECORD_PAYLOAD: &str = r#"module Main exposing (main)
 
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 
 type alias CartItem =
@@ -991,7 +988,7 @@ view model =
             ])
 
 main =
-    Live.app
+    Web.app
         { init = init
         , update = update
         , view = view
@@ -1031,7 +1028,7 @@ fn live_pubsub_publish_polymorphic_record_payload_build_only() -> Result<(), Box
 /// forwarding the box itself — see that arm's comment for the full mechanism.
 const IPE_ONSUBMIT_TYPED_RECORD: &str = r#"module Main exposing (main)
 
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 
 type alias Creds =
@@ -1074,7 +1071,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Live.app
+    Web.app
         { init = init
         , update = update
         , view = view
@@ -1226,7 +1223,7 @@ fn live_onsubmit_typed_record_dispatches_decoded_payload() -> Result<(), BoxErro
 /// (`ipe_backend_rust::emit_expr`'s `is_definitely_not_callable` gate).
 const IPE_ONSUBMIT_BARE_MSG: &str = r#"module Main exposing (main)
 
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onSubmit, onInput)
@@ -1275,7 +1272,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Live.app
+    Web.app
         { init = init
         , update = update
         , view = view
@@ -1430,7 +1427,7 @@ fn live_onsubmit_bare_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
 /// `onSubmit` payload is a RECORD literal, `Msg` is a record alias.
 const IPE_ONSUBMIT_RECORD_LITERAL: &str = r#"module Main exposing (main)
 
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onSubmit)
@@ -1463,7 +1460,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Live.app
+    Web.app
         { init = init
         , update = update
         , view = view
@@ -1476,7 +1473,7 @@ main =
 /// `onSubmit` payload is a TUPLE literal, `Msg` is a tuple alias.
 const IPE_ONSUBMIT_TUPLE_LITERAL: &str = r#"module Main exposing (main)
 
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onSubmit)
@@ -1513,7 +1510,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Live.app
+    Web.app
         { init = init
         , update = update
         , view = view
@@ -1526,7 +1523,7 @@ main =
 /// `onSubmit` payload is a LIST literal, `Msg` is a list alias.
 const IPE_ONSUBMIT_LIST_LITERAL: &str = r#"module Main exposing (main)
 
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onSubmit)
@@ -1559,7 +1556,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Live.app
+    Web.app
         { init = init
         , update = update
         , view = view
@@ -1653,7 +1650,7 @@ fn live_onsubmit_list_literal_build_only() -> Result<(), BoxError> {
 /// classifier would misroute to the decoder path.
 const IPE_ONSUBMIT_VAR_BOUND_MSG: &str = r#"module Main exposing (main)
 
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onSubmit, onInput)
@@ -1706,7 +1703,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Live.app
+    Web.app
         { init = init
         , update = update
         , view = view
@@ -1837,7 +1834,7 @@ fn live_onsubmit_var_bound_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
 /// let-bound closure to `Arc<dyn Fn + Send + Sync>` at its declaration.
 const IPE_ONSUBMIT_LET_BOUND_HANDLER: &str = r#"module Main exposing (main)
 
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 
 type alias Creds =
@@ -1883,7 +1880,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Live.app
+    Web.app
         { init = init
         , update = update
         , view = view
@@ -1904,7 +1901,7 @@ main =
 /// `flows_into_sync_kernel_call` must be alias-transparent to reach the root.
 const IPE_ONSUBMIT_LET_ALIAS_CHAIN: &str = r#"module Main exposing (main)
 
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 
 type alias Creds =
@@ -1951,7 +1948,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Live.app
+    Web.app
         { init = init
         , update = update
         , view = view
@@ -2010,7 +2007,7 @@ fn live_onsubmit_let_alias_chain_build_only() -> Result<(), BoxError> {
 /// `examples/12-ipevote`: form at `/auth/signup`, `notFound` = board).
 const IPE_ONSUBMIT_ROUTED_FORM: &str = r#"module Main exposing (main)
 
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 
 type Page
@@ -2063,12 +2060,12 @@ subscriptions _model =
     Sub.none
 
 main =
-    Live.app
+    Web.app
         { init = init
         , update = update
         , view = view
         , subscriptions = subscriptions
-        , routes = [ Live.route "/" FormPage, Live.route "/about" AboutPage ]
+        , routes = [ Web.route "/" FormPage, Web.route "/about" AboutPage ]
         , notFound = AboutPage
         }
 "#;

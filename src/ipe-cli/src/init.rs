@@ -3,7 +3,7 @@
 //! `ipe init <name>` creates `<name>/` and fills it; `ipe init .` (or no
 //! argument) scaffolds in the current directory, following the same convention
 //! as `cargo new` / `cargo init`. The scaffold is a minimal, working
-//! [`Ipe.Live`] counter: a Model holding an `Int` count, `Increment` /
+//! [`Ipe.Web`] counter: a Model holding an `Int` count, `Increment` /
 //! `Decrement` messages, and a two-button view — a real program that
 //! `ipe build` compiles and `ipe run` serves.
 //!

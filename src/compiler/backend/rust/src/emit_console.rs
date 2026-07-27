@@ -1,9 +1,9 @@
-//! Emission for `Ipe.Cli` / `Ipe.Cli` app-entry kernel.
+//! Emission for `Ipe.Console` / `Ipe.Console` app-entry kernel.
 //!
 //! Wires one Cli kernel:
 //!
-//! * [`KernelFn::CliProgram`] — `Cli.program cfg` →
-//!   `ipe_runtime::cli_program(init, update, view, subscriptions, on_line)`.
+//! * [`KernelFn::ConsoleApp`] — `Console.app cfg` →
+//!   `ipe_runtime::console_app(init, update, view, subscriptions, on_line)`.
 //!   View returns `String` (printed to stdout on each state change).
 //!   5-field closed cfg: init / update / view / subscriptions / onLine.
 //!
@@ -16,7 +16,7 @@
 //!   line and returns a `Msg` (not `Option`).  There is no total way to fabricate
 //!   a `Msg` without the handler; omitting it would leave `FOnLine` generic
 //!   unconstrained (Rust E0282) or produce a runtime-panic/unsound path.
-//! * Function fields are emitted via `emit_cli_fn` (raw function name for
+//! * Function fields are emitted via `emit_console_fn` (raw function name for
 //!   `FuncValue`, fallback to `emit_expr_at` for lambdas).  A named `fn` item
 //!   satisfies `Send + Sync + 'static` via the blanket impl; a `Box<dyn Fn>` does
 //!   not without explicit bound annotation.
@@ -30,13 +30,13 @@ use crate::EmitCtx;
 use crate::emit_expr::{callee_name, emit_expr_at};
 use crate::emit_types::GenericScope;
 
-/// Dispatch a `Ipe.Cli` / `Ipe.Cli` kernel call.
+/// Dispatch a `Ipe.Console` / `Ipe.Console` kernel call.
 ///
-/// Returns `Some(emitted)` for `CliProgram`; `None` for any other variant
-/// (defensive — the caller already guards on `k.is_cli()`).
+/// Returns `Some(emitted)` for `ConsoleApp`; `None` for any other variant
+/// (defensive — the caller already guards on `k.is_console()`).
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
-pub fn emit_cli_call(
+pub fn emit_console_call(
     ctx: &EmitCtx,
     callee: &Callee,
     args: &[Expr],
@@ -49,29 +49,29 @@ pub fn emit_cli_call(
     };
 
     match k {
-        // ── Cli.program { init, update, view, subscriptions, onLine } ──────
+        // ── Console.app { init, update, view, subscriptions, onLine } ──────
         //
         // view : Model -> String
-        // Runtime entry: `ipe_runtime::cli_program(init, update, view, subs, on_line)`
-        KernelFn::CliProgram => {
+        // Runtime entry: `ipe_runtime::console_app(init, update, view, subs, on_line)`
+        KernelFn::ConsoleApp => {
             let [cfg_e] = args else {
                 return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_cli_call::CliProgram",
-                    detail: format!("Cli.program requires 1 argument, got {}", args.len()),
+                    where_: "ipe_backend_rust::emit_console_call::ConsoleApp",
+                    detail: format!("Console.app requires 1 argument, got {}", args.len()),
                 });
             };
             // Unreachable for well-typed source: a non-literal cfg is rejected
             // at lower with IPE-L0119 (Feature::LetBoundAppCfg); this guard is a
-            // defensive invariant, mirroring the `LiveAppRouted` precedent.
+            // defensive invariant, mirroring the `WebAppRouted` precedent.
             let Expr::Record(fields) = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_cli_call::CliProgram",
-                    detail: "Cli.program cfg must be an inline record literal; \
+                    where_: "ipe_backend_rust::emit_console_call::ConsoleApp",
+                    detail: "Console.app cfg must be an inline record literal; \
                              a non-literal cfg is rejected at lower with IPE-L0119"
                         .into(),
                 });
             };
-            emit_cli_inner(ctx, fields, indent, child, generics)
+            emit_console_inner(ctx, fields, indent, child, generics)
         }
 
         // Any non-Cli kernel variant: let the standard path handle it.
@@ -81,15 +81,15 @@ pub fn emit_cli_call(
 
 // ── Internal ──────────────────────────────────────────────────────────────────
 
-/// Emit `ipe_runtime::cli_program(init, update, view, subs, on_line)`.
+/// Emit `ipe_runtime::console_app(init, update, view, subs, on_line)`.
 ///
 /// # Function-field emission
 ///
 /// Same discipline as `emit_tui_inner`: named `fn` items are emitted via
-/// `emit_cli_fn` (raw identifier), which satisfies `Send + Sync + 'static` via
+/// `emit_console_fn` (raw identifier), which satisfies `Send + Sync + 'static` via
 /// the blanket impl.  A `Box<dyn Fn>` (from the fallback `emit_expr_at` path)
 /// does NOT carry these bounds without explicit annotation.
-fn emit_cli_inner(
+fn emit_console_inner(
     ctx: &EmitCtx,
     fields: &[(ipe_intern::Symbol, Expr)],
     indent: usize,
@@ -104,7 +104,7 @@ fn emit_cli_inner(
     let subs_e = lookup_field(ctx, fields, "subscriptions")?;
     let on_line_e = lookup_field(ctx, fields, "onLine")?;
 
-    // seal: gate the Model against `cli_program`'s `Clone` bound. A
+    // seal: gate the Model against `console_app`'s `Clone` bound. A
     // non-clonable (non-derivable) Model — a field of type `Cmd`/`Sub`/`Task`/
     // `Decoder`/`Db`/function — would otherwise `ipe`-succeed then
     // `cargo`-fail; the gate makes it a fail-closed `IPE-L0120` error.
@@ -116,14 +116,14 @@ fn emit_cli_inner(
         )?;
     }
 
-    let init_s = emit_cli_fn(ctx, init_e, indent, child, generics)?;
-    let update_s = emit_cli_fn(ctx, update_e, indent, child, generics)?;
-    let view_s = emit_cli_fn(ctx, view_e, indent, child, generics)?;
-    let subs_s = emit_cli_fn(ctx, subs_e, indent, child, generics)?;
-    let on_line_s = emit_cli_fn(ctx, on_line_e, indent, child, generics)?;
+    let init_s = emit_console_fn(ctx, init_e, indent, child, generics)?;
+    let update_s = emit_console_fn(ctx, update_e, indent, child, generics)?;
+    let view_s = emit_console_fn(ctx, view_e, indent, child, generics)?;
+    let subs_s = emit_console_fn(ctx, subs_e, indent, child, generics)?;
+    let on_line_s = emit_console_fn(ctx, on_line_e, indent, child, generics)?;
 
     Ok(Some(format!(
-        "ipe_runtime::cli_program(\
+        "ipe_runtime::console_app(\
          {init_s}, \
          {update_s}, \
          {view_s}, \
@@ -143,7 +143,7 @@ fn emit_cli_inner(
 ///
 /// For any other expression (lambda, local variable, etc.) falls back to the
 /// general [`emit_expr_at`] emitter.
-fn emit_cli_fn(
+fn emit_console_fn(
     ctx: &EmitCtx,
     e: &Expr,
     indent: usize,
@@ -172,7 +172,7 @@ fn lookup_field<'f>(
         }
     }
     Err(Diagnostic::CompilerBug {
-        where_: "ipe_backend_rust::emit_cli_call",
+        where_: "ipe_backend_rust::emit_console_call",
         detail: format!(
             "required Cli cfg field `{name}` not found; \
              available fields: [{}]",

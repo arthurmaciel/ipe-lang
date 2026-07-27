@@ -812,7 +812,7 @@ fn csrf_legit_post_with_matching_token_allowed() -> Result<(), BoxError> {
 /// `Secure` attribute is gated on the REQUEST-scoped TLS signal
 /// (`X-Forwarded-Proto: https`, only honoured when the operator opts in via
 /// `IPE_TRUSTED_PROXY`), not just a process-wide `ENV` snapshot — closing
-/// the same ENV-vs-TLS gap already fixed for the Ipe.Live session cookie
+/// the same ENV-vs-TLS gap already fixed for the Ipe.Web session cookie
 /// (`src/runtime/rust/src/live/mod.rs::page_response`,
 /// `request_is_https`). The `server.rs` side needed a real design
 /// adaptation (not a copy-paste of the session-cookie fix): the signal has

@@ -1,4 +1,4 @@
-//! `LiveReq` — the typed request context passed to a Ipe.Live `init`.
+//! `WebReq` — the typed request context passed to a Ipe.Web `init`.
 //!
 //! Mirrors the modern Go `req` record: `req.path` / `req.query` /
 //! `req.method` are strings; `req.params` / `req.headers` / `req.cookies` are
@@ -8,15 +8,15 @@
 
 use crate::dict::IpeDict;
 
-pub use crate::dom::req::LiveReq;
+pub use crate::dom::req::WebReq;
 
-/// Build a `LiveReq` from the incoming request parts + the matched route params.
+/// Build a `WebReq` from the incoming request parts + the matched route params.
 pub fn live_req(
     method: &axum::http::Method,
     uri: &axum::http::Uri,
     headers: &axum::http::HeaderMap,
     params: IpeDict<String>,
-) -> LiveReq {
+) -> WebReq {
     let mut hdrs: IpeDict<String> = IpeDict::new();
     for (k, v) in headers.iter() {
         if let Ok(val) = v.to_str() {
@@ -38,7 +38,7 @@ pub fn live_req(
             }
         }
     }
-    LiveReq {
+    WebReq {
         path: uri.path().to_string(),
         query: uri.query().unwrap_or("").to_string(),
         method: method.as_str().to_string(),

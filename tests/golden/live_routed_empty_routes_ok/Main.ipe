@@ -4,15 +4,15 @@ module Main exposing (main)
 --
 -- `routes = []` emits a typed empty vec (`Vec::<Route<…>>::new()`).  The
 -- runtime `Route<Page>` struct has NO default type parameter, so the
--- pre-round-4 `IrType::LiveRoute` rendering (a bare
+-- pre-round-4 `IrType::WebRoute` rendering (a bare
 -- `ipe_runtime::live::route::Route`) made this ipec-0 program cargo-fail with
 -- E0107 ("missing generics for struct `route::Route`") — an
--- exit-0-then-cargo-fail seal violation.  Post-fix `IrType::LiveRoute(page)`
+-- exit-0-then-cargo-fail seal violation.  Post-fix `IrType::WebRoute(page)`
 -- threads the page type through the lowerer and renders `Route<MainPage>`.
 --
 -- ipec MUST exit 0 AND the emitted project MUST cargo-build.
 
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 
 type Page
@@ -46,7 +46,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Live.app
+    Web.app
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [], notFound = CounterPage
         }

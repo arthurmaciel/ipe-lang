@@ -599,7 +599,7 @@ fn effect_secret_concat_rejected() {
     assert_rejected("effect_secret_concat", &src, "IPE-T0001");
 }
 
-/// A `Secret` in a `Ipe.Live` app Model must be rejected — `Secret` is non-serde
+/// A `Secret` in a `Ipe.Web` app Model must be rejected — `Secret` is non-serde
 /// by design, so it can never round-trip through the session store. IPE-L0120
 /// (Model not admissible) at compile time, never a runtime session-store leak.
 #[test]
@@ -607,7 +607,7 @@ fn effect_secret_in_live_model() {
     let src = "module Main exposing (main)\n\
          import Ipe.Prelude exposing (..)\n\
          import Ipe.Secret as Secret\n\
-         import Ipe.Live exposing (app)\n\
+         import Ipe.Web exposing (app)\n\
          import Ipe.Cmd as Cmd\n\
          import Ipe.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
@@ -668,7 +668,7 @@ fn wasm_server_only_kernel_native_ok() {
     }
 }
 
-/// A routed `Live.app` (Model with a `page` field + a non-empty `routes` list)
+/// A routed `Web.app` (Model with a `page` field + a non-empty `routes` list)
 /// under `--target wasm` must be rejected at target-gate time. The routing
 /// path names a server-only kernel that has no wasm denotation, so the earlier
 /// canon-stage target gate (IPE-N0029) fires before the emit-stage routed-app
@@ -680,7 +680,7 @@ fn wasm_server_only_kernel_native_ok() {
 fn wasm_routed_app_rejected() {
     let src = "module Main exposing (main)\n\
          import Ipe.Prelude exposing (..)\n\
-         import Ipe.Live exposing (app, route)\n\
+         import Ipe.Web exposing (app, route)\n\
          import Ipe.Cmd as Cmd\n\
          import Ipe.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
@@ -744,7 +744,7 @@ fn lower_float_set_element() {
 fn lower_let_bound_app_cfg() {
     let src = "module Main exposing (main)\n\
          import Ipe.Prelude exposing (..)\n\
-         import Ipe.Live exposing (app)\n\
+         import Ipe.Web exposing (app)\n\
          import Ipe.Cmd as Cmd\n\
          import Ipe.Sub as Sub\n\
          import Ipe.Ui as Ui\n\

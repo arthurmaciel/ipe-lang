@@ -43,7 +43,7 @@ type Msg
 
 
 -- The #179 shape: polymorphic `msg`, bare exposed `Attribute`, html-producing
--- body. This is the exact signature of `Ipe.Live.Head.pairToAttr`.
+-- body. This is the exact signature of `Ipe.Web.Head.pairToAttr`.
 pairToAttr : (String, String) -> Attribute msg
 pairToAttr pair =
     Attr.attribute (fst pair) (snd pair)

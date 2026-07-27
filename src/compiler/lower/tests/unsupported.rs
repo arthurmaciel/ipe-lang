@@ -1524,12 +1524,12 @@ fn over_application_with_partial_surplus_eta_expands() -> DResult<()> {
 
 #[test]
 fn let_bound_live_app_cfg_is_unsupported() -> DResult<()> {
-    // `Live.app cfg` where `cfg` is a plain local var (not a record literal)
+    // `Web.app cfg` where `cfg` is a plain local var (not a record literal)
     // must lower to IPE-L0119 at the argument span — never an ICE, never the
     // misleading IPE-L0107 first-class-function message.
     let mut i = Interner::new();
     let main = i.intern("main")?;
-    let live = i.intern("Live")?;
+    let live = i.intern("Web")?;
     let app = i.intern("app")?;
     let cfg = i.intern("cfg")?;
     let callee = Located::new(
@@ -1565,11 +1565,11 @@ fn let_bound_live_app_cfg_is_unsupported() -> DResult<()> {
 
 #[test]
 fn let_bound_webview_window_is_unsupported() -> DResult<()> {
-    // `Webview.app { …, window = win }` where `win` is a local var must lower
+    // `WebView.app { …, window = win }` where `win` is a local var must lower
     // to IPE-L0119 at the window value span, not an emit-stage CompilerBug.
     let mut i = Interner::new();
     let main = i.intern("main")?;
-    let webview = i.intern("Webview")?;
+    let webview = i.intern("WebView")?;
     let app = i.intern("app")?;
     let init = i.intern("init")?;
     let update = i.intern("update")?;

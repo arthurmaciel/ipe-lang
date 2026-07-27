@@ -226,7 +226,7 @@ where
 ///
 /// `spec` is "METHOD /path" (e.g. "POST /v1/generate"); an omitted method
 /// matches any verb. Mirrors Go's `Server_api`. The CSRF-exemption Go performs
-/// (`WithoutCsrf`) is a browser-session / double-submit concern from Ipe.Live
+/// (`WithoutCsrf`) is a browser-session / double-submit concern from Ipe.Web
 /// with no analogue on the Rust HTTP server, so it has no effect here.
 pub fn server_api<E, H>(spec: String, h: H) -> ServerRoute
 where
@@ -468,7 +468,7 @@ async fn build_request(
             }
             // Store under Go's canonical MIME casing (`content-type` ->
             // `Content-Type`), aligning with Go's request-header storage and the
-            // Ipe.Live path, so `server_header` (which canonicalises its lookup
+            // Ipe.Web path, so `server_header` (which canonicalises its lookup
             // key) matches any caller casing.
             headers.insert(
                 crate::http_header::canonical_header(k.as_str()),

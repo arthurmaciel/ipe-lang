@@ -949,7 +949,7 @@ pub fn db_query_params<E: Send + From<String> + 'static>(
 ///
 /// Ipê's `getString : String -> row -> String` is polymorphic in `row`; the
 /// row can be a query result (`Dict String String`), a pub/sub `Dict` payload,
-/// or the typed `LiveReq` an `init` handler receives. `IpeRow` is the seam that
+/// or the typed `WebReq` an `init` handler receives. `IpeRow` is the seam that
 /// lets the Rust accessors stay generic and monomorphise per row type — no
 /// `dyn Any`, no panic (an absent field reads as `""`).
 pub trait IpeRow {
@@ -969,13 +969,13 @@ impl IpeRow for IpeDict<String> {
 // the named field; `params`/`headers`/`cookies` are searched for any other key.
 //
 // INVARIANT: `db` must build WITHOUT `live` — a DB-only server / CLI app does not
-// pull in Ipe.Live. `super::LiveReq` is a `live`-only type, so this impl (the ONLY
-// `live` dependency in this module) stays behind `#[cfg(feature = "live")]`. Do not
+// pull in Ipe.Web. `super::WebReq` is a `web`-only type, so this impl (the ONLY
+// `live` dependency in this module) stays behind `#[cfg(feature = "web")]`. Do not
 // reference `live`-only items from `db`-gated code without the same gate. Enforced
 // by CI job `runtime-feature-combos` (.github/workflows/ci.yml), which builds
-// `--no-default-features --features db` (no live) under `-D warnings`.
-#[cfg(feature = "live")]
-impl IpeRow for super::LiveReq {
+// `--no-default-features --features db` (no web) under `-D warnings`.
+#[cfg(feature = "web")]
+impl IpeRow for super::WebReq {
     fn ipe_get(&self, field: &str) -> String {
         match field {
             "path" => self.path.clone(),
@@ -2591,14 +2591,14 @@ mod tests {
     // `Db.getString "path" req` on an `init` handler's typed
     // request reads the named struct field; params/headers/cookies back any
     // other key; absent -> "" (total).
-    #[cfg(feature = "live")]
+    #[cfg(feature = "web")]
     #[test]
     fn ipe_row_livereq_named_fields_and_dicts() {
         let mut params: HashMap<String, String> = HashMap::new();
         params.insert("slug".into(), "general".into());
         let mut cookies: HashMap<String, String> = HashMap::new();
         cookies.insert("ipe_sid".into(), "abc".into());
-        let req = crate::LiveReq {
+        let req = crate::WebReq {
             path: "/chat/general".into(),
             query: "x=1".into(),
             method: "GET".into(),

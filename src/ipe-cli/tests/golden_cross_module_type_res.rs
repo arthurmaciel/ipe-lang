@@ -73,7 +73,7 @@ fn ex10_live_component_exits_zero() {
     );
 }
 
-/// Example 19 (ipeforum) — 8-module Ipe.Live app.
+/// Example 19 (ipeforum) — 8-module Ipe.Web app.
 ///
 /// Two regressions covered by this test:
 ///

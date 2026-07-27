@@ -127,7 +127,7 @@ pub(crate) fn broker<T: Clone + Send + 'static>() -> Arc<Broker<T>> {
     }
 }
 
-// ─── Live-running flag (for PubSub.publish's Unavailable) ───────────────────
+// ─── Web-running flag (for PubSub.publish's Unavailable) ───────────────────
 
 static LIVE_RUNNING: AtomicBool = AtomicBool::new(false);
 
@@ -145,7 +145,7 @@ fn live_running() -> bool {
 
 /// `PubSub.publish topic payload : Task Error Int` — callable from any context
 /// (raw handlers, post-init, scheduled jobs). Resolves to the subscriber count,
-/// or an error when no Live app is running in this process (Go's `Unavailable`).
+/// or an error when no Web app is running in this process (Go's `Unavailable`).
 /// Server-side publishes carry an empty origin, so echo-default is a no-op.
 pub fn pubsub_publish<T, E>(topic: String, payload: T) -> IpeTask<E, i64>
 where
@@ -155,7 +155,7 @@ where
     Box::pin(async move {
         if !live_running() {
             return IpeResult::Err(E::from(
-                "PubSub.publish: no Live.app running in this process".to_string(),
+                "PubSub.publish: no Web.app running in this process".to_string(),
             ));
         }
         ok_res(broker::<T>().publish(&topic, payload, "", false))
@@ -171,7 +171,7 @@ where
     Box::pin(async move {
         if !live_running() {
             return IpeResult::Err(E::from(
-                "PubSub.publishNoEcho: no Live.app running in this process".to_string(),
+                "PubSub.publishNoEcho: no Web.app running in this process".to_string(),
             ));
         }
         ok_res(broker::<T>().publish(&topic, payload, "", true))
@@ -208,7 +208,7 @@ tokio::task_local! {
     static SESSION_SID: String;
 }
 
-/// Run `f` with `sid` available to `current_session_sid()`. The Live dispatch
+/// Run `f` with `sid` available to `current_session_sid()`. The Web dispatch
 /// loop wraps subscription (re)materialisation in this scope.
 pub fn with_session_sid<R>(sid: String, f: impl FnOnce() -> R) -> R {
     SESSION_SID.sync_scope(sid, f)
@@ -306,7 +306,7 @@ mod tests {
 
     use std::sync::{Arc, Mutex};
 
-    // Drive a subscriber the way the Live loop does: inside with_session_sid,
+    // Drive a subscriber the way the Web loop does: inside with_session_sid,
     // materialise the Source, then collect emitted Msgs.
     async fn collect_one(
         owner_sid: &str,
@@ -341,7 +341,7 @@ mod tests {
         // LIVE_RUNNING starts false; no serve_live runs in a unit test.
         let t: IpeTask<String, i64> = pubsub_publish::<u8, String>("t".to_string(), 1);
         match t.await {
-            IpeResult::Err(e) => assert!(e.contains("no Live.app")),
+            IpeResult::Err(e) => assert!(e.contains("no Web.app")),
             IpeResult::Ok(_) => panic!("expected Err Unavailable"),
         }
     }
@@ -350,7 +350,7 @@ mod tests {
     async fn pubsub_publish_no_echo_errs_without_live_app() {
         let t: IpeTask<String, i64> = pubsub_publish_no_echo::<u8, String>("t".to_string(), 1);
         match t.await {
-            IpeResult::Err(e) => assert!(e.contains("no Live.app")),
+            IpeResult::Err(e) => assert!(e.contains("no Web.app")),
             IpeResult::Ok(_) => panic!("expected Err Unavailable"),
         }
     }

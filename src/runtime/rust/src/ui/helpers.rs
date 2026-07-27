@@ -1258,7 +1258,7 @@ pub fn ui_form_<M: Clone>(attrs: Vec<Attribute<M>>, children: Vec<Element<M>>) -
 /// Builds `Event::OnForm` directly: the handler `f`'s argument type `T` is
 /// recovered by ordinary Rust generic inference from `f`'s own monomorphized
 /// signature at the codegen call site (never type-erased at runtime). The
-/// Ipe.Live dispatch layer (`HandlerIndex::resolve_form`) decodes the wire
+/// Ipe.Web dispatch layer (`HandlerIndex::resolve_form`) decodes the wire
 /// `FormData` into `T` via a re-encoded x-www-form-urlencoded round trip
 /// (`live::form::decode_form_or_warn` — type-directed per-field coercion, NOT
 /// a JSON path), matching the Go backend's `json.Unmarshal` semantics at the
@@ -1277,7 +1277,7 @@ pub fn ui_form_<M: Clone>(attrs: Vec<Attribute<M>>, children: Vec<Element<M>>) -
 /// (`ipe_backend_rust::emit_expr`'s `KernelFn::UiOnSubmit` arm) closes this
 /// by re-wrapping the boxed value in a freshly-declared closure at the call
 /// site rather than forwarding the box itself.
-#[cfg(any(feature = "live", feature = "wasm-client"))]
+#[cfg(any(feature = "web", feature = "wasm-client"))]
 pub fn ui_on_submit_<M, T, F>(f: F) -> Attribute<M>
 where
     T: serde::de::DeserializeOwned,
@@ -1294,7 +1294,7 @@ where
 /// Non-`live` builds (Ipe.Tui without the HTTP form wire): `Ui.onSubmit` was
 /// already inert everywhere before this fix, so this degrades to a
 /// structural no-op — not a regression, Tui has no form-submit wire concept.
-#[cfg(not(any(feature = "live", feature = "wasm-client")))]
+#[cfg(not(any(feature = "web", feature = "wasm-client")))]
 pub fn ui_on_submit_<M, T, F: Fn(T) -> M>(_f: F) -> Attribute<M> {
     Attribute::NoAttribute
 }
@@ -1312,8 +1312,8 @@ pub fn ui_on_submit_<M, T, F: Fn(T) -> M>(_f: F) -> Attribute<M> {
 /// Deliberately does NOT route through `decode_form_or_warn` — there is no
 /// payload type to decode into, and a spurious decode failure on a real form's
 /// fields would silently swallow the submit. Always fires. `M: Clone` is not a
-/// new requirement — every Ipe.Live `Msg` is already `Clone` by construction.
-#[cfg(any(feature = "live", feature = "wasm-client"))]
+/// new requirement — every Ipe.Web `Msg` is already `Clone` by construction.
+#[cfg(any(feature = "web", feature = "wasm-client"))]
 pub fn ui_on_submit_fixed_<M: Clone + Send + Sync + 'static>(msg: M) -> Attribute<M> {
     Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnForm(
         "submit".into(),
@@ -1322,7 +1322,7 @@ pub fn ui_on_submit_fixed_<M: Clone + Send + Sync + 'static>(msg: M) -> Attribut
 }
 
 /// Non-`live` builds — same degrade-to-no-op rationale as `ui_on_submit_`.
-#[cfg(not(any(feature = "live", feature = "wasm-client")))]
+#[cfg(not(any(feature = "web", feature = "wasm-client")))]
 pub fn ui_on_submit_fixed_<M>(_msg: M) -> Attribute<M> {
     Attribute::NoAttribute
 }
@@ -1486,7 +1486,7 @@ pub fn ui_on_pseudo_<M: Clone>(pc: PseudoClass, attrs: Vec<Attribute<M>>) -> Att
 /// `data-ipe-mq-q` (the query) + `data-ipe-mq-rules` (the attrs folded
 /// through the SAME `render::build_style_string` collector as the inline
 /// `style=""` path and `Ui.onPseudo`, so every value-as-data attr inherits
-/// the `SafeCssValue` gate) marker pair.  The Ipe.Live / Ipe.Webview render
+/// the `SafeCssValue` gate) marker pair.  The Ipe.Web / Ipe.WebView render
 /// pipelines consume the markers post-`assign_ipe_ids` via
 /// `live::style_inject::apply_style_injections` (`build_mq`), emitting a
 /// ipe-id-scoped `<style data-ipe-mq="<sid>">@media <q> {

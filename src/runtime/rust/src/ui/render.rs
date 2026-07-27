@@ -349,7 +349,7 @@ fn collect_html_attrs<M: Clone>(attrs: &[Attribute<M>]) -> Vec<HtmlAttribute<M>>
     // build on it) are collected into ONE `data-ipe-pc-rules` marker attr,
     // wire-format `"<tag>|<css>||<tag2>|<css2>"` — consumed by
     // `ipe_runtime::live::style_inject::build_pc` (called post-`assign_ipe_ids`
-    // from the Ipe.Live / Ipe.Webview render pipelines), which expands it into
+    // from the Ipe.Web / Ipe.WebView render pipelines), which expands it into
     // a ipe-id-scoped `<style>` block. Multiple entries with the SAME tag are
     // NOT merged (each keeps its own `tag|css` segment) — matches the `../ipe`
     // reference's `injectPseudoClassStyles` wire contract.

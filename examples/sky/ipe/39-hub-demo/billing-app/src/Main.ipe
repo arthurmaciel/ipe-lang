@@ -23,7 +23,7 @@ import Ipe.Task as Task
 import Ipe.Cmd as Cmd
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
-import Ipe.Live exposing (app, route)
+import Ipe.Web exposing (app, route)
 import Ipe.Log as Log
 import Ipe.Sub as Sub
 

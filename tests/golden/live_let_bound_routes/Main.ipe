@@ -1,20 +1,20 @@
 module Main exposing (main)
 
 -- IPE-I0001 regression: a top-level `routeTable` binding whose type is inferred
--- as `List LiveRoute` (the opaque route-descriptor type) MUST type-check and
+-- as `List WebRoute` (the opaque route-descriptor type) MUST type-check and
 -- lower successfully.  Before #106 / #108 this pattern caused an ICE because
 -- the emitter assumed all route-list elements were inlined Expr::Ctor nodes.
 --
 -- Exercises:
---   * The `Live.route` kernel is correctly typed in `constrain.rs` (String ->
---     page -> LiveRoute) so `routeTable` resolves to `List LiveRoute`.
+--   * The `Web.route` kernel is correctly typed in `constrain.rs` (String ->
+--     page -> WebRoute) so `routeTable` resolves to `List WebRoute`.
 --   * The T3 open-record scheme accepts `routes = routeTable` (not inline).
 --   * `emit_live_app_inner` (T5) lowers the `routes` field as a normal
 --     expression (not a literal `[...]` — the list is a top-level ref).
 --   * The `routed_page_field` helper sees the `page` field in the Model and
 --     emits `live_app_routed` (not `live_app`).
 
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 
 type Page
@@ -55,14 +55,14 @@ subscriptions _model =
     Sub.none
 
 -- The route table is a top-level binding — its type is inferred as
--- `List LiveRoute`.  This is the IPE-I0001 shape.
+-- `List WebRoute`.  This is the IPE-I0001 shape.
 routeTable =
-    [ Live.route "/" CounterPage
-    , Live.route "/about" AboutPage
+    [ Web.route "/" CounterPage
+    , Web.route "/about" AboutPage
     ]
 
 main =
-    Live.app
+    Web.app
         { init = init
         , update = update
         , view = view

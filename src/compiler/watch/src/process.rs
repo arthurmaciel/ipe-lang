@@ -86,10 +86,10 @@ fn sha256(bytes: &[u8]) -> [u8; 32] {
 /// How readiness is probed for a freshly spawned candidate.
 ///
 /// Chosen by the caller from what it knows about the emitted project
-/// (Ipe.Live apps expose `/_ipe/readyz`; everything else falls back to a
+/// (Ipe.Web apps expose `/_ipe/readyz`; everything else falls back to a
 /// plain TCP connect on the configured port, and finally to "did it stay
 /// alive" for a program that binds no port at all — matching the design
-/// doc's own bifurcation: "readiness probe (`/_ipe/readyz` for Ipe.Live;
+/// doc's own bifurcation: "readiness probe (`/_ipe/readyz` for Ipe.Web;
 /// alive + optional health for CLI)").
 #[derive(Debug, Clone, Copy)]
 pub enum ReadinessCheck {

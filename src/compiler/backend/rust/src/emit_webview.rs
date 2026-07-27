@@ -1,8 +1,8 @@
-//! Emission for `Ipe.Webview` / `Ipe.Webview` app-entry kernel.
+//! Emission for `Ipe.WebView` / `Ipe.WebView` app-entry kernel.
 //!
 //! Wires one Webview kernel:
 //!
-//! * [`KernelFn::WebviewApp`] — `Webview.app cfg` →
+//! * [`KernelFn::WebViewApp`] — `Webview.app cfg` →
 //!   `ipe_runtime::webview::webview_app(init, update, view, subs, window_cfg)`.
 //!   5-field closed cfg: init / update / view / subscriptions / window,
 //!   where `window = { title : String, size : (Int, Int) }`.
@@ -15,7 +15,7 @@
 //!   be an inline 2-element `Expr::Tuple`. Any non-literal shape is rejected at
 //!   lower with `IPE-L0119` (`Feature::LetBoundAppCfg`); these emit-site guards
 //!   are unreachable-by-construction defensive invariants (defence-in-depth,
-//!   mirroring the `LiveAppRouted`/`IPE-L0118` precedent).
+//!   mirroring the `WebAppRouted`/`IPE-L0118` precedent).
 //! * Function fields (init/update/view/subscriptions) are emitted via
 //!   `emit_webview_fn` (raw function name for `FuncValue`, fallback to
 //!   `emit_expr_at`). A named `fn` item satisfies `Send + Sync + 'static` via
@@ -34,7 +34,7 @@ use crate::EmitCtx;
 use crate::emit_expr::{callee_name, emit_expr_at};
 use crate::emit_types::GenericScope;
 
-/// Dispatch a `Ipe.Webview` / `Ipe.Webview` kernel call.
+/// Dispatch a `Ipe.WebView` / `Ipe.WebView` kernel call.
 ///
 /// Returns `Some(emitted)` for `WebviewApp`; `None` for any other variant
 /// (defensive — the caller already guards on `k.is_webview()`).
@@ -58,7 +58,7 @@ pub fn emit_webview_call(
         // view : Model -> Html Msg   (view wraps Ui.layout [] element → Html)
         // window : { title : String, size : (Int, Int) }
         // Runtime entry: `ipe_runtime::webview::webview_app(init, update, view, subs, window)`
-        KernelFn::WebviewApp => {
+        KernelFn::WebViewApp => {
             let [cfg_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_webview_call::WebviewApp",
@@ -67,7 +67,7 @@ pub fn emit_webview_call(
             };
             // Unreachable for well-typed source: a non-literal cfg is rejected
             // at lower with IPE-L0119 (Feature::LetBoundAppCfg); this guard is a
-            // defensive invariant, mirroring the `LiveAppRouted` precedent.
+            // defensive invariant, mirroring the `WebAppRouted` precedent.
             let Expr::Record(fields) = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_webview_call::WebviewApp",
@@ -97,7 +97,7 @@ pub fn emit_webview_call(
 /// Both checks emit [`Diagnostic::CompilerBug`] on failure — they are unreachable
 /// for well-typed source: a non-literal `window`/`size` is rejected at lower with
 /// IPE-L0119 (`Feature::LetBoundAppCfg`), so these guards are defensive
-/// invariants, mirroring the `LiveAppRouted` precedent.
+/// invariants, mirroring the `WebAppRouted` precedent.
 ///
 /// # Function-field emission
 ///
@@ -127,17 +127,17 @@ fn emit_webview_app_inner(
         crate::emit_model_gate::check_admissible_model(
             ctx,
             model_ty,
-            ipe_diagnostics::AppShape::Webview,
+            ipe_diagnostics::AppShape::WebView,
         )?;
     }
 
     // seal: gate the Msg type against `webview_app`'s Clone+Send bound.
-    // Same derivable predicate as Live/Tui — Msg is never persisted.
+    // Same derivable predicate as Web/Tui — Msg is never persisted.
     if let Some(msg_ty) = crate::emit_model_gate::msg_ty_of_update(update_e) {
         crate::emit_model_gate::check_admissible_msg(
             ctx,
             msg_ty,
-            ipe_diagnostics::AppShape::Webview,
+            ipe_diagnostics::AppShape::WebView,
         )?;
     }
 
@@ -195,14 +195,14 @@ fn emit_webview_app_inner(
          {update_s}, \
          {view_s}, \
          {subs_s}, \
-         ipe_runtime::webview::WebviewWindowCfg {{ title: {title_s}, size: ({w_s}, {h_s}) }}\
+         ipe_runtime::webview::WebViewWindowCfg {{ title: {title_s}, size: ({w_s}, {h_s}) }}\
          )"
     )))
 }
 
 /// Emit a cfg-field expression for a Webview app-entry kernel.
 ///
-/// Mirrors `emit_live_fn` (`emit_live.rs`) and `emit_tui_fn` (`emit_tui.rs`)
+/// Mirrors `emit_live_fn` (`emit_web.rs`) and `emit_tui_fn` (`emit_tui.rs`)
 /// exactly: for a named function reference ([`Expr::FuncValue`]), emits the raw
 /// callee name (e.g. `Main_init`) rather than a boxed closure. A named function
 /// item satisfies `Fn(…) + Send + Sync + 'static` via the compiler's blanket impl.

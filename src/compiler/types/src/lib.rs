@@ -408,17 +408,17 @@ fn infer_core(
     // [`RequestFields`]); intern it once here so the immutable-borrow
     // `resolve_deferred` pass can resolve `req.<field>` accesses.
     let req_fields = lift!(RequestFields::build(interner));
-    // The opaque `LiveReq` type (Ipe.Live `init`'s per-session request context)
-    // has a fixed field set too (see [`LiveReqFields`]); intern it once here so
+    // The opaque `WebReq` type (Ipe.Web `init`'s per-session request context)
+    // has a fixed field set too (see [`WebReqFields`]); intern it once here so
     // `req.path` / `req.cookies` accesses resolve against the runtime struct.
-    let live_req_fields = lift!(LiveReqFields::build(interner));
+    let web_req_fields = lift!(WebReqFields::build(interner));
     // The nominal error-payload types `PanicInfo`/`TypeInfo`/`ErrorInfo`
     // resolve field accesses the same way (SEAL fix — see
     // [`ErrorRecordFields`]).
     let err_fields = lift!(ErrorRecordFields::build(interner));
     let builtin_field_tables = BuiltinFieldTables {
         req: &req_fields,
-        live_req: &live_req_fields,
+        web_req: &web_req_fields,
         err: &err_fields,
     };
     // Unlike the other post-solve passes, `resolve_deferred` returns the failing
@@ -435,7 +435,7 @@ fn infer_core(
         &generated.record_updates,
     )?;
 
-    // Per-route page witnesses: each `Live.route pattern ctor`
+    // Per-route page witnesses: each `Web.route pattern ctor`
     // relates its builder argument's settled type to the route's page type —
     // a nullary builder witnesses the page directly, a params-consuming
     // constructor (`String -> Page`) witnesses it with its result type.  Must
@@ -454,7 +454,7 @@ fn infer_core(
     // them but MUST NOT treat them as compilation failures.
     let mut warnings: Vec<Diagnostic> = Vec::new();
 
-    // For routed `Live.app` calls: if the now-settled Model type has a `page`
+    // For routed `Web.app` calls: if the now-settled Model type has a `page`
     // field, the `notFound` type must match that field's type.  Non-routed
     // apps (Model has no `page` field) are silently skipped — UNLESS the app
     // declared a non-empty `routes` list, in which case the routes are ignored
@@ -1159,21 +1159,21 @@ impl RequestFields {
     }
 }
 
-/// The fixed field set of the opaque `LiveReq` type — the per-session request
-/// context passed to a Ipe.Live `init` callback.
+/// The fixed field set of the opaque `WebReq` type — the per-session request
+/// context passed to a Ipe.Web `init` callback.
 ///
-/// Mirrors [`RequestFields`] exactly: `LiveReq` is an opaque nullary `Con` at
+/// Mirrors [`RequestFields`] exactly: `WebReq` is an opaque nullary `Con` at
 /// the type level (so `init : {} -> …` fails closed with IPE-T0001 against the
-/// prescriptive `LiveReq -> (Model, Cmd Msg)` scheme, and no bare record literal
+/// prescriptive `WebReq -> (Model, Cmd Msg)` scheme, and no bare record literal
 /// can masquerade as the runtime struct), but its fields stay READABLE. The
 /// deferred [`FieldAccess`] pass resolves `req.path` / `req.cookies` against this
 /// table; the emit side needs no synthesised record — a field access lowers to
 /// `(req).<field>.clone()` (see `emit_expr` `Access`), reading the
-/// `ipe_runtime::live::LiveReq` struct directly. Every field name + type here
+/// `ipe_runtime::web::WebReq` struct directly. Every field name + type here
 /// matches that struct (`path`/`query`/`method` = bare `String`;
 /// `params`/`headers`/`cookies` = `Dict String String`, i.e. `IpeDict<String>`).
-struct LiveReqFields {
-    /// The `"LiveReq"` type-constructor symbol (opaque Ipe.Live request Con).
+struct WebReqFields {
+    /// The `"WebReq"` type-constructor symbol (opaque Ipe.Web request Con).
     con: Symbol,
     /// The `"String"` type-constructor symbol.
     string: Symbol,
@@ -1184,16 +1184,16 @@ struct LiveReqFields {
     fields: BTreeMap<Symbol, bool>,
 }
 
-impl LiveReqFields {
+impl WebReqFields {
     /// Intern the field set once (idempotent). Called with the mutable interner
     /// before the immutable-borrow [`resolve_deferred`] pass.
     fn build(interner: &mut Interner) -> DResult<Self> {
-        let con = interner.intern("LiveReq")?;
+        let con = interner.intern("WebReq")?;
         let string = interner.intern("String")?;
         let dict = interner.intern("Dict")?;
         let mut fields = BTreeMap::new();
         // (field name, is `Dict String String`?) — matches
-        // `ipe_runtime::live::LiveReq` (see `src/runtime/rust/src/live/req.rs`).
+        // `ipe_runtime::web::WebReq` (see `src/runtime/rust/src/web/req.rs`).
         for (name, is_dict) in [
             ("path", false),
             ("query", false),
@@ -1213,7 +1213,7 @@ impl LiveReqFields {
     }
 
     /// Build the union-find variable for `field`'s type, or `None` when `field`
-    /// is not a member of `LiveReq` (→ a genuine IPE-T0012).
+    /// is not a member of `WebReq` (→ a genuine IPE-T0012).
     fn field_var(&self, uf: &mut UnionFind<Content>, field: Symbol) -> DResult<Option<VarId>> {
         let string_var = |uf: &mut UnionFind<Content>| {
             uf.fresh(Content::Structure(FlatType::Con {
@@ -1246,8 +1246,8 @@ impl LiveReqFields {
 struct BuiltinFieldTables<'a> {
     /// Opaque server `Ipe.Http.Server.Request` field table.
     req: &'a RequestFields,
-    /// Opaque Ipe.Live `LiveReq` field table.
-    live_req: &'a LiveReqFields,
+    /// Opaque Ipe.Web `WebReq` field table.
+    web_req: &'a WebReqFields,
     /// Nominal error-payload (`PanicInfo`/`TypeInfo`/`ErrorInfo`) field tables.
     err: &'a ErrorRecordFields,
 }
@@ -1399,7 +1399,7 @@ enum Peek {
     /// open record (Flex tail, growable) from a closed one (`EmptyRecord`).
     Record(Option<VarId>, VarId),
     Req,
-    LiveReq,
+    WebReq,
     ErrCon(Symbol),
     Deferred,
     Missing,
@@ -1446,14 +1446,14 @@ fn field_access_state(
         {
             Peek::Req
         }
-        // The opaque `LiveReq` Con (Ipe.Live `init`'s per-session request)
+        // The opaque `WebReq` Con (Ipe.Web `init`'s per-session request)
         // resolves the same way against its fixed field set (see
-        // [`LiveReqFields`]); `req.path` type-checks, the emit reads
-        // `ipe_runtime::live::LiveReq` directly.
+        // [`WebReqFields`]); `req.path` type-checks, the emit reads
+        // `ipe_runtime::web::WebReq` directly.
         Content::Structure(FlatType::Con { name, args, .. })
-            if *name == tables.live_req.con && args.is_empty() =>
+            if *name == tables.web_req.con && args.is_empty() =>
         {
-            Peek::LiveReq
+            Peek::WebReq
         }
         // `PanicInfo` / `TypeInfo` / `ErrorInfo` are opaque nominal Cons
         // (SEAL fix) whose field sets are fixed (see
@@ -1484,7 +1484,7 @@ fn field_access_state(
             }
         }
         Peek::Req => found_or_missing(tables.req.field_var(uf, field)?),
-        Peek::LiveReq => found_or_missing(tables.live_req.field_var(uf, field)?),
+        Peek::WebReq => found_or_missing(tables.web_req.field_var(uf, field)?),
         Peek::ErrCon(name) => found_or_missing(tables.err.field_var(uf, name, field)?),
         Peek::Deferred => FieldState::Deferred,
         Peek::Missing => FieldState::Missing,
@@ -1670,7 +1670,7 @@ fn resolve_one_record_update(
             if args.is_empty()
                 && (tables.err.owns(*name)
                     || *name == tables.req.con
-                    || *name == tables.live_req.con) =>
+                    || *name == tables.web_req.con) =>
         {
             RuPeek::BuiltinCon(*name)
         }
@@ -1715,25 +1715,25 @@ fn resolve_one_record_update(
 
 /// Discharge every deferred per-route page witness.
 ///
-/// For each `Live.route pattern builder` reference: follow the builder
+/// For each `Web.route pattern builder` reference: follow the builder
 /// variable's settled structure and peel its leading `_ -> rest` arrows —
 /// each arrow is one `:param` payload slot of a params-consuming page
 /// constructor (`String -> Page`, `String -> String -> Page`, …; the emit
 /// tier separately gates the payload types to `String`/`Int`/`Float`/`Bool`).
 /// What remains after peeling is the PAGE type the route builds; unify it
-/// with the route's page variable, which the `K::LiveRoute` scheme threads
-/// into `LiveRoute page` and thence (through `List (LiveRoute var(2))` in the
-/// `K::LiveApp` scheme) into `notFound` and `Model.page`.
+/// with the route's page variable, which the `K::WebRoute` scheme threads
+/// into `WebRoute page` and thence (through `List (WebRoute var(2))` in the
+/// `K::WebApp` scheme) into `notFound` and `Model.page`.
 ///
-/// * Nullary builder (`Live.route "/" HomePage` — no arrows) → the builder IS
+/// * Nullary builder (`Web.route "/" HomePage` — no arrows) → the builder IS
 ///   the page: unify directly.
-/// * Param constructor (`Live.route "/u/:id" UserPage`) → peel `String ->`,
+/// * Param constructor (`Web.route "/u/:id" UserPage`) → peel `String ->`,
 ///   unify the result — the canonical corpus shape, falsely IPE-T0001'd by
 ///   the pre-round-4 shared-variable scheme.
-/// * Wrong-ADT constructor (`Live.route "/" Increment` in a `Page` app) →
+/// * Wrong-ADT constructor (`Web.route "/" Increment` in a `Page` app) →
 ///   the peeled result (`Msg`) fails unification → IPE-T0001 at this route's
 ///   span.
-/// * A builder that never settled (an unapplied `Live.route "/"` value) has a
+/// * A builder that never settled (an unapplied `Web.route "/"` value) has a
 ///   flex root — not an arrow — and unifies with the page variable directly,
 ///   which merely links the two variables (sound: no structure is invented).
 ///
@@ -1759,19 +1759,19 @@ fn resolve_route_witness_checks(
             fuel -= 1;
         }
         // Unify the built page type with the route's page variable.  A
-        // mismatch is a normal IPE-T0001 blamed at the `Live.route` span.
+        // mismatch is a normal IPE-T0001 blamed at the `Web.route` span.
         unify(uf, budget, interner, check.span, cur, check.page_var)?;
     }
     Ok(())
 }
 
-/// For routed `Live.app` calls: if the settled Model type has a `page` field,
+/// For routed `Web.app` calls: if the settled Model type has a `page` field,
 /// the `notFound` type must match (IPE-T0001) — the `set_page` closure emitted
 /// by the backend already assumes this invariant.  Non-routed apps (Model has
 /// no `page` field) are silently skipped, so a blanket open-row projection is
 /// never needed and every non-routed app continues to pass.
 ///
-/// The detection criterion (`page` field presence) mirrors `emit_live.rs`'s
+/// The detection criterion (`page` field presence) mirrors `emit_web.rs`'s
 /// `routed_page_field` helper: both agree on what "routed" means, ensuring the
 /// type-check gate and the emit gate fire on exactly the same programs.
 fn resolve_routed_live_checks(
@@ -1816,9 +1816,9 @@ fn resolve_routed_live_checks(
             // non-routed runtime path and silently ignored. This compiles
             // (matching the Go reference's `applyRoute` no-op), but it is
             // almost always a mistake — usually a mis-named `page` field. Emit
-            // the IPE-L0124 warning at the `Live.app` span.
+            // the IPE-L0124 warning at the `Web.app` span.
             //
-            // `route_count` is the total number of `Live.route` references in
+            // `route_count` is the total number of `Web.route` references in
             // the compile unit. In the common single-app-per-program case this
             // equals this app's route count exactly; the rare multi-app case
             // (only sub-apps, which are separate binaries in practice) could
@@ -3290,7 +3290,7 @@ mod tests {
         );
     }
 
-    /// IPE-L0124: a `Live.app` with a non-empty `routes` list
+    /// IPE-L0124: a `Web.app` with a non-empty `routes` list
     /// whose Model has NO `page` field emits a **warning**, not an error. The
     /// program still type-checks (Go's `applyRoute` no-ops the same shape); the
     /// warning flags the likely mis-named routed-page field.

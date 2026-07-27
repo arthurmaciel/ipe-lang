@@ -311,7 +311,7 @@ pub fn build(entry: &Path, out_dir: &Path, runtime_dir: &Path) -> Result<(), Cli
 ///
 /// # Errors
 /// As [`build`], plus [`CliError::StaticRefusal`] when the emitted app shape
-/// cannot be static (an `Ipe.Webview` app under a static plan).
+/// cannot be static (an `Ipe.WebView` app under a static plan).
 pub fn build_with_options(
     entry: &Path,
     out_dir: &Path,
@@ -1130,7 +1130,7 @@ pub fn compile_prepared(
 /// Under a static plan (see `docs/architecture/static-compilation.md`) the
 /// intended project additionally gets the planned allocator feature spliced
 /// into `Cargo.toml` and a generated `.cargo/config.toml` — and an
-/// `Ipe.Webview` shape is refused BEFORE any file is written (a webview app
+/// `Ipe.WebView` shape is refused BEFORE any file is written (a webview app
 /// links the system webview; a "static" artifact would be a lie). A
 /// non-static build removes a stale generated config so `+crt-static` can
 /// never leak from an earlier static build into later ones.
@@ -3515,7 +3515,7 @@ main =
     /// `ipe_main` definition site.
     #[test]
     fn task_run_main_emits_ipetask_not_iperesult() {
-        // A minimal Ipe.Cli-style program: main = task |> Task.run
+        // A minimal Ipe.Console-style program: main = task |> Task.run
         // A shape prone to E0308 in the emitted Rust.
         const SRC: &str = "\
 module Main exposing (main)
