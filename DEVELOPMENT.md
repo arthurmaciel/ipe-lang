@@ -363,7 +363,7 @@ and the branch is up to date with `main`.
 requires):
 
 - `fmt` — `cargo fmt --all -- --check`
-- `clippy` — `cargo clippy --all-targets --workspace -- -D clippy::cargo -D clippy::complexity -D clippy::correctness -D clippy::pedantic -D clippy::perf -D clippy::style -D warnings`. The `-D` lint set is belt-and-braces over the `[workspace.lints.clippy]` deny-set — `unwrap_used` / `expect_used` / `panic` / `indexing_slicing` / `unreachable` / `todo` / `unimplemented` / `pedantic` / `nursery` / `perf` / `cargo` — plus `clippy.toml`'s `disallowed-methods` (`process::abort`, `panic_any`, the `*_unchecked` UB paths). Fix the code; never `#[allow]` around them (tests may `unwrap`/`expect` per `clippy.toml`).
+- `clippy` — `cargo clippy --all-targets --workspace -- -D warnings`. The command carries no lint flags of its own: the enforced set is the SSOT in root `Cargo.toml` `[workspace.lints.clippy]` (the broad groups + a cherry-picked `restriction` slice, two `cargo` lints allowed as workspace noise) plus `clippy.toml`'s `disallowed-methods` (`process::abort`, `panic_any`, the `*_unchecked` UB paths). Change policy there, in one place. Fix the code; never `#[allow]` around a lint (tests may `unwrap`/`expect` per `clippy.toml`).
 - `test` — the nextest unit/integration suite (E2E tests no-op without
   `IPE_E2E`)
 - `cargo-deny` — the supply-chain gate (see below)

@@ -38,7 +38,13 @@ edition = "2024"
 version = "0.1.20" # x-release-please-version
 license = "Apache-2.0"
 
+# THE SSOT for the workspace clippy policy. Every `cargo clippy` — in CI and in
+# the docs — is just `-- -D warnings`; it inherits this set, so what is enforced
+# is changed in ONE place. Enable as much as is actionable: the broad groups
+# plus a cherry-picked slice of `restriction`, with two `cargo` lints allowed
+# where they are noise for this workspace.
 [workspace.lints.clippy]
+# Cherry-picked `restriction` lints (the group is deliberately NOT enabled whole).
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
@@ -46,10 +52,24 @@ indexing_slicing = "deny"
 unreachable = "deny"
 todo = "deny"
 unimplemented = "deny"
-pedantic = "deny"
-nursery = "deny"
-perf = "deny"
-cargo = "deny"
+# The broad lint GROUPS, at priority -1 so the specific allows below override them.
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "deny", priority = -1 }
+style = { level = "deny", priority = -1 }
+complexity = { level = "deny", priority = -1 }
+perf = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+cargo = { level = "deny", priority = -1 }
+# Two `clippy::cargo` lints that are noise for THIS workspace; the rest of the
+# group stays enforced (wildcard deps, feature-name hygiene):
+#  - cargo_common_metadata wants publish metadata (description / license / …) on
+#    every crate, but the internal compiler crates are implementation detail,
+#    never published separately — only `ipe` ships.
+#  - multiple_crate_versions fires on transitive deps pulling different majors
+#    (e.g. `bitflags` 1 and 2) — not something this workspace's code controls.
+cargo_common_metadata = "allow"
+multiple_crate_versions = "allow"
 
 # The workspace's ~180 golden test binaries each statically link the full
 # compiler rlib set. With debuginfo on, `ld` must relocate a debug-symbol table

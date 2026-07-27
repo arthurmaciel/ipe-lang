@@ -15,10 +15,10 @@ Gating steps, cheapest → most expensive (measured/observed on this box):
 | ipe type-check / lowering (one example) | sub-sec–secs | compute (~0 tok) |
 | `remeasure.sh` sweep (incremental/cached) | ~6–30 s | compute |
 | no-panic fuzzer (30 iters) | ~1.5 min | compute |
-| `cargo clippy -p <crate> --all-targets -- -D clippy::cargo -D clippy::complexity -D clippy::correctness -D clippy::pedantic -D clippy::perf -D clippy::style -D warnings` (sccache-warm) | ~30 s–2 min | compute |
+| `cargo clippy -p <crate> --all-targets -- -D warnings` (sccache-warm) | ~30 s–2 min | compute |
 | adversarial **review** (1 Opus agent, no build) | ~1–3 min | **tokens (~$0.5)** |
 | **audit** (1 Opus agent, all landed diffs) | ~1–3 min | **tokens (~$0.5–1)** |
-| `cargo clippy --workspace -- -D clippy::cargo -D clippy::complexity -D clippy::correctness -D clippy::pedantic -D clippy::perf -D clippy::style -D warnings` (incremental, warm) | ~min | compute |
+| `cargo clippy --workspace -- -D warnings` (incremental, warm) | ~min | compute |
 | **`cargo test --workspace`** | **min warm → ~50 min cold** | **compute (the ceiling)** |
 
 Load-bearing facts:
@@ -63,7 +63,7 @@ GUARDIAN:    Opus design(+early-out) → Sonnet impl → clippy -p → review �
 ```
 
 **Per-lane self-checks (parallel, sccache, per-lane target — NO workspace test):**
-1. `cargo clippy -p <changed-crate> --all-targets -- -D clippy::cargo -D clippy::complexity -D clippy::correctness -D clippy::pedantic -D clippy::perf -D clippy::style -D warnings` — compile + lint the changed
+1. `cargo clippy -p <changed-crate> --all-targets -- -D warnings` — compile + lint the changed
    crate. Bail on error/warning. (~1 min)
 2. **review** (Opus, reads diff, no build) — the *dominant kill*; runs before any
    ipe rebuild so doomed fixes don't pay for a compiler build. Bail on REJECT.

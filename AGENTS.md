@@ -970,11 +970,11 @@ Before declaring compiler/runtime work done, run the same hardened gate CI enfor
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --all-targets --workspace -- -D clippy::cargo -D clippy::complexity -D clippy::correctness -D clippy::pedantic -D clippy::perf -D clippy::style -D warnings
+cargo clippy --all-targets --workspace -- -D warnings
 cargo nextest run --workspace          # E2E tests no-op without IPE_E2E=1
 ```
 
-The workspace `[workspace.lints.clippy]` deny-set (`unwrap_used`, `expect_used`, `panic`, `indexing_slicing`, `unreachable`, `todo`, `unimplemented`, `pedantic`, `nursery`) and `clippy.toml`'s `disallowed-methods` (`process::abort`, `panic_any`, the `*_unchecked` UB paths) apply to every build. Fix the code — never `#[allow]` around them (tests may `unwrap`/`expect` per `clippy.toml`).
+The enforced lint set is the SSOT in root `Cargo.toml` `[workspace.lints.clippy]` (the broad groups + a cherry-picked `restriction` slice) plus `clippy.toml`'s `disallowed-methods` (`process::abort`, `panic_any`, the `*_unchecked` UB paths); the command above carries no lint flags of its own, so policy changes in one place. Fix the code — never `#[allow]` around a lint (tests may `unwrap`/`expect` per `clippy.toml`).
 
 ## Build & test CLI
 
