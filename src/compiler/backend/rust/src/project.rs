@@ -180,14 +180,16 @@ fn run_rustfmt(source: &str) -> DResult<String> {
         .map_err(|e| fmt_bug(format!("rustfmt produced non-UTF-8 output: {e}")))
 }
 
-/// The golden program, embedded at compile time. The fixed runtime-bindings
-/// block (kernel wrappers, golden lines 45–127) is an exact substring of it.
-const GOLDEN: &str = include_str!("../../../../../tests/golden/basics/main.rs");
+/// The canonical emit template, embedded at compile time. The fixed
+/// runtime-bindings block (kernel wrappers) is an exact substring of it. This is
+/// a hand-maintained template file, NOT a golden fixture, so no `tests/golden/*`
+/// file is an input to codegen.
+const GOLDEN: &str = include_str!("../templates/main.rs");
 
-/// The project `Cargo.toml`, embedded verbatim from the golden. The backend
-/// emits the same manifest for every program (dependency set is fixed by the
-/// runtime).
-const CARGO_TOML: &str = include_str!("../../../../../tests/golden/basics/Cargo.toml");
+/// The project `Cargo.toml`, embedded verbatim from the manifest template. The
+/// backend emits the same manifest for every program (dependency set is fixed by
+/// the runtime).
+const CARGO_TOML: &str = include_str!("../templates/Cargo.toml");
 
 /// The generated `ipe_runtime/mod.rs` — the curated set of runtime modules whose
 /// dependencies are satisfied by [`CARGO_TOML`]. The vendored runtime source
@@ -195,11 +197,10 @@ const CARGO_TOML: &str = include_str!("../../../../../tests/golden/basics/Cargo.
 /// pull crates outside the base manifest); the driver overwrites it with this
 /// trimmed version. The backend emits a fixed base module set, then appends the
 /// modules a program's kernels require.
-const RUNTIME_MOD_RS: &str = include_str!("../../../../../tests/golden/basics/ipe_runtime/mod.rs");
+const RUNTIME_MOD_RS: &str = include_str!("../templates/ipe_runtime/mod.rs");
 
 /// The generated `ipe_runtime/config.rs` (DB/config bindings — empty by default).
-const RUNTIME_CONFIG_RS: &str =
-    include_str!("../../../../../tests/golden/basics/ipe_runtime/config.rs");
+const RUNTIME_CONFIG_RS: &str = include_str!("../templates/ipe_runtime/config.rs");
 
 // ── Browser-WASM manifest + runtime module set ─────────────────────────────
 

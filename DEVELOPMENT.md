@@ -86,6 +86,16 @@ byte-identity of emit (fast, no cargo). `IPE_E2E=1` = build+run
 emitted project (THE SEAL: ipe-0 ⇒ cargo-0). Oracle files regenerated
 ONLY by `cargo run -p refresh-oracle -- <golden>` — NEVER hand-edited.
 
+After an emit-changing compiler change, regenerate every golden's expected
+emit (`main.rs`, and where checked in `Cargo.toml` + `ipe_mods/*.rs`) with
+`cargo run -p regen-goldens` (or `-- <name>…` for named goldens). It emits
+through the `ipe` library — the same path the goldens assert on — so on an
+unchanged compiler it is a no-op (`git status` stays clean). It touches only
+the emitted artifacts, never the oracle files or the Ipê sources. The emit
+templates the codegen embeds live in `src/compiler/backend/rust/templates/` — a
+hand-maintained source, NOT a golden — so no golden is an input to codegen and
+`basics` regenerates like any other.
+
 **Build & cache (8 cores / 15 GB RAM → RAM-BOUND, not core-bound):**
 `~/.cargo/config.toml` sets `rustc-wrapper = sccache`, `mold` linker,
 `incremental = false`, `jobs = 2` — OOM guard **per cargo invocation**
