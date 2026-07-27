@@ -26,6 +26,8 @@
 //! exit, signal, or ambiguous state decodes to a non-`Clean` outcome.
 
 use std::ffi::OsString;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -223,6 +225,13 @@ pub fn build_in_jail(
         Ok(fd) => fd,
         Err(defect) => return JailOutcome::Unavailable { defect },
     };
+    // Own the memfd so it is closed when this function returns. bwrap reads the
+    // seccomp filter by fd number during jail setup — before the child runs — so
+    // closing it after the child is waited on is safe. Unlike the run jail
+    // (which `exec`s and never returns), this build jail RETURNS and is called
+    // once per axis in the audit tightening loop; a raw fd would leak one memfd
+    // per call in the long-lived audit/CI process.
+    let seccomp_owned = unsafe { OwnedFd::from_raw_fd(seccomp_fd) };
 
     let host_env = |k: &str| std::env::var_os(k);
     let argv = run_jail_argv(
@@ -231,12 +240,17 @@ pub fn build_in_jail(
         scoped_tmp,
         working_tree,
         extra_ro_binds,
-        Some(seccomp_fd),
+        Some(seccomp_owned.as_raw_fd()),
         &host_env,
         payload,
     );
 
-    spawn_and_decode(&argv)
+    let outcome = spawn_and_decode(&argv);
+    // `seccomp_owned` drops here (after the child has been waited on inside
+    // `spawn_and_decode`), closing the memfd. Keep it explicit so the ordering
+    // is not subject to a future reorder.
+    drop(seccomp_owned);
+    outcome
 }
 
 /// Non-Linux stub: the returning build jail is a documented refuse-gap off
