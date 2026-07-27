@@ -1,0 +1,72 @@
+[package]
+name = "ipe-app"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["tokio", "crypto", "json"]
+tokio = []
+crypto = []
+json = []
+db = []
+web = []
+redis_store = []
+webview = []
+tui = []
+websocket_client = []
+# Declared but inert on native targets: the vendored runtime gates its browser
+# sink on `cfg(all(target_arch = "wasm32", feature = "wasm-client"))`. Declaring
+# the feature keeps rustc's check-cfg quiet without pulling any wasm glue (only
+# a wasm32 build ever activates it, via the WASM manifest template).
+wasm-client = []
+alloc_dlmalloc = ["dep:dlmalloc"]
+alloc_mimalloc = ["dep:mimalloc"]
+
+[dependencies]
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
+dlmalloc = { version = "0.2", features = ["global"], optional = true }
+mimalloc = { version = "0.1", optional = true, default-features = false }
+serde_json = "1"
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_urlencoded = "0.7"
+regex = "1"
+unicode-general-category = "1"
+base64 = "0.22"
+hex = "0.4"
+percent-encoding = "2"
+chrono = "0.4"
+chrono-tz = "0.10"
+rust_decimal = { version = "1", features = ["serde"] }
+hmac = "0.12"
+sha1 = "0.10"
+md-5 = "0.10"
+subtle = "2"
+zeroize = "1"
+rsa = { version = "0.9", features = ["sha2"] }
+aes-gcm = "0.10"
+chacha20poly1305 = "0.10"
+pbkdf2 = "0.12"
+flate2 = "1"
+zstd = "0.13"
+csv = "1"
+jsonwebtoken = "9"
+uuid = { version = "1", features = ["v4", "v7"] }
+bcrypt = "0.17"
+toml = "0.8"
+serde_yaml = "0.9"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "stream"] }
+url = "2"
+futures-util = "0.3"
+
+[profile.dev]
+debug = 0
+incremental = true
+overflow-checks = false
+
+[profile.release]
+strip = true
+
+# Detach this generated crate from any ancestor cargo workspace so it builds
+# hermetically even when emitted inside another workspace tree.
+[workspace]

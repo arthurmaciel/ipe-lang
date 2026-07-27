@@ -3659,6 +3659,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "regen-goldens"
+version = "0.1.20"
+dependencies = [
+ "ipe",
+]
+
+[[package]]
 name = "regex"
 version = "1.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

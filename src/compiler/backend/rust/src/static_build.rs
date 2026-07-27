@@ -251,9 +251,9 @@ mod tests {
     };
     use ipe_diagnostics::DResult;
 
-    /// The golden base manifest — the exact text every emitted `Cargo.toml`
+    /// The base manifest template — the exact text every emitted `Cargo.toml`
     /// starts from.
-    const CARGO_TOML: &str = include_str!("../../../../../tests/golden/basics/Cargo.toml");
+    const CARGO_TOML: &str = include_str!("../templates/Cargo.toml");
 
     fn default_line(manifest: &str) -> &str {
         manifest

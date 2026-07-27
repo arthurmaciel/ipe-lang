@@ -1,0 +1,16 @@
+[package]
+name = "regen-goldens"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "regen-goldens"
+path = "src/main.rs"
+
+[dependencies]
+ipe = { path = "../../src/ipe-cli" }
+
+[lints]
+workspace = true
