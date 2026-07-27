@@ -1,6 +1,6 @@
 # `ipe doc` — API documentation generation
 
-Status: design proposal, pending review. No implementation yet.
+Status: design proposal, no implementation yet.
 
 ## Purpose
 
@@ -17,13 +17,17 @@ Ipê follows Elm's design where one exists, and Elm's package docs are the
 reference. Elm compiles a package to a `docs.json` — an array of module records,
 each with its doc-comment and its exposed unions, aliases, and values (name +
 type + comment). The rendered package page is a view over that JSON. Ipê adopts
-the same split:
+the same split, and — because Completeness is a first-class value — ships all
+three renderings in the first cut rather than deferring the reader-facing one:
 
 1. **`docs.json`** — the machine-readable source of truth (one record per
-   exposed module). Stable schema so a future package index, LSP hover, and the
-   curated GitHub index can all consume it without re-parsing source.
-2. **A rendered view** — Markdown by default (readable in a repo and on GitHub);
-   HTML is a later addition, not part of the first cut.
+   exposed module). Stable, versioned schema so a package index, LSP hover, and
+   the curated GitHub index can all consume it without re-parsing source. Every
+   other rendering is a pure view over this JSON.
+2. **Markdown** — one file per module, readable in a repo and on GitHub.
+3. **HTML** — a self-contained static site (an index page + one page per module,
+   plus CSS), openable from the filesystem with no server. This is the primary
+   reader-facing surface, not a later increment.
 
 ## Inputs (all already produced by the pipeline)
 
@@ -36,40 +40,76 @@ the same split:
   aliases render identically to compiler output).
 - **Source location** — file + line of each exposed binding, for a
   jump-to-source link.
+- **Resolved names** — the canonicaliser's resolved identity for every type and
+  value mentioned in a signature or doc-comment (module + name), so a reference
+  can be linked to its definition without heuristic text matching.
+
+## Cross-module references and links
+
+Every documented entry gets a **stable anchor** derived from its module + name
+(e.g. `Ipe.String#toUpper`), identical across all three renderings so a
+`docs.json` consumer, a Markdown reader, and the HTML site agree on one address
+per entry.
+
+A **cross-reference** is any type or value name appearing in a rendered
+signature (or a doc-comment's `` `backticked` `` code span) that resolves — via
+the canonicaliser's already-computed resolved names, never a text guess — to an
+entry documented in this package. Each such reference becomes a link to that
+entry's anchor:
+
+- A type in a signature (`toInt : String -> Maybe Int`) links each named type
+  (`String`, `Maybe`, `Int`) to its definition when that definition is in the
+  package; built-ins with no in-package definition render as plain text.
+- A reference to a definition in **another module** of the same package links
+  across module pages (the "cross-module reference" case).
+- In HTML the link is an `<a href>`; in Markdown a relative link + `#anchor`; in
+  `docs.json` a structured `{ module, name }` reference the consumer resolves.
+
+Navigation the HTML site provides: an **index page** listing every module;
+per-module a table of contents of its exposed entries; and each entry's
+**jump-to-source** link (file + line). A reference to a definition outside the
+package (another package, or the stdlib when documenting a user package) renders
+as plain text in the first cut — inter-*package* linking needs the package index
+and is tracked separately.
 
 ## Command surface
 
-Proposed surface — illustrative only, not yet implemented (nothing to run):
+Illustrative only — the design's target shape, not yet implemented (nothing to
+run):
 
 ```
-ipe doc [PATH] [--out DIR] [--format markdown|json] [--check]
+ipe doc [PATH] [--out DIR] [--format markdown|json|html|all] [--check]
 ```
 
 - `PATH` — a package directory (default `.`) or a single `.ipe` module.
-- `--out` — output directory (default `doc/`); writes `docs.json` and, for
-  Markdown, one file per module.
-- `--format` — `markdown` (default) or `json` (emit only `docs.json`).
+- `--out` — output directory (default `doc/`); writes `docs.json`, and per the
+  format the Markdown files and/or the HTML site.
+- `--format` — `all` (default: `docs.json` + Markdown + HTML), or one of
+  `markdown` / `json` / `html`.
 - `--check` — write nothing; exit non-zero if any exposed binding lacks a
-  doc-comment. This is the CI-gateable honest-surface check: a package's public
-  API is fully documented or the gate fails.
+  doc-comment. The CI-gateable honest-surface check: a package's public API is
+  fully documented or the gate fails.
 
-Following the honest-surface rule, the command ships only what works: the first
-cut is `markdown` + `json` + `--check` over a single package. HTML output and
-cross-package linking are separate, later increments and are not advertised
-until implemented.
+Honest-surface still holds — the command ships only what works — but the target
+for the first cut now includes HTML, cross-module references, and links, not a
+deferred increment. What remains explicitly out of the first cut: inter-*package*
+linking (needs the package index), full-text search, and hosting.
 
 ## Boundaries
 
 - No network, no hosting — `ipe doc` only reads local source and writes local
-  files. Publishing/serving is out of scope (a later `ipe package` concern).
+  files. The HTML is static and self-contained (relative links, bundled CSS),
+  openable via `file://`. Publishing/serving is out of scope (a later
+  `ipe package` concern).
 - Signatures come from the checker, so `ipe doc` runs the front end (parse →
   canon → typecheck) but never the emit tier — it needs types, not code.
 - `docs.json` schema is versioned from the first release so downstream consumers
-  can rely on it.
+  can rely on it; the anchor scheme is part of that contract.
 
-## MVP cut
+## First cut
 
-Single package → `docs.json` + per-module Markdown from the exposing list,
-`-- |` comments, checker signatures, and source locations, plus `--check`.
-Everything else (HTML, search, cross-links, hosting) is deferred and tracked
-separately.
+Single package → `docs.json` + per-module Markdown + a self-contained HTML site,
+from the exposing list, `-- |` comments, checker signatures, source locations,
+and canonicaliser-resolved cross-references (intra- and inter-module links +
+stable per-entry anchors), plus `--check`. Deferred and tracked separately:
+inter-package linking, search, and hosting.
