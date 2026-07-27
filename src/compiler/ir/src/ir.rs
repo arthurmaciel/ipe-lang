@@ -87,24 +87,24 @@ pub struct Module {
     /// `KernelFn::is_ui()` variant.  The backend reads this flag to decide
     /// whether to add `pub mod ui;` to the emitted `ipe_runtime/mod.rs`.
     pub uses_ui: bool,
-    /// `true` when the lowerer detected at least one `Ipe.Live` / `Ipe.Live`
-    /// kernel call (`Live.app`, `Live.appRouted`, `Live.route`, etc.) in the
+    /// `true` when the lowerer detected at least one `Ipe.Web` / `Ipe.Web`
+    /// kernel call (`Web.app`, `Web.appRouted`, `Web.route`, etc.) in the
     /// module's function bodies.
     ///
     /// Set by `ipe_lower` when any call site resolves to a
-    /// `KernelFn::is_live()` variant.
-    pub uses_live: bool,
+    /// `KernelFn::is_web()` variant.
+    pub uses_web: bool,
     /// `true` when the lowerer detected at least one `Ipe.Tui` / `Ipe.Tui`
     /// kernel call (`Tui.app`, `Tui.program`) in the module's function bodies.
     ///
     /// Set by `ipe_lower` when any call site resolves to a
     /// `KernelFn::is_tui()` variant.
     pub uses_tui: bool,
-    /// `true` when the lowerer detected at least one `Ipe.Webview`
+    /// `true` when the lowerer detected at least one `Ipe.WebView`
     /// kernel call (`Webview.app`) in the module's function bodies.
     ///
     /// Set by `ipe_lower` when any call site resolves to a
-    /// `KernelFn::is_webview()` variant.  Implies `uses_live` for the
+    /// `KernelFn::is_webview()` variant.  Implies `uses_web` for the
     /// runtime dependency chain (webview pulls live transitively).
     pub uses_webview: bool,
     /// `true` when the lowerer detected at least one `Ipe.CssSafety`
@@ -295,7 +295,7 @@ impl BoundSet {
     /// `Db.get*` field accessor (`Db.getString`/`getInt`/`getBool`/`getField`)
     /// gains `ipe_runtime::db::IpeRow` so the generic body type-checks and
     /// monomorphises per call site against the row's real shape (a query result
-    /// `Dict String String`, a pub/sub `Dict` payload, or the typed `LiveReq` an
+    /// `Dict String String`, a pub/sub `Dict` payload, or the typed `WebReq` an
     /// `init` handler receives). The runtime's `db_get_*` helpers are generic
     /// over `R: IpeRow`; without this bound the emitted body's `db_get_string(_,
     /// &payload)` call cannot prove `payload: IpeRow` (E0277). Added ONLY to the
@@ -812,7 +812,7 @@ pub enum IrType {
     /// `maxRedirects`, `method`, `timeout`, `url`) and folds it to this opaque
     /// variant instead of synthesising a backend record struct, so call sites
     /// that pass the value to `http_stream_open` / `http_request` kernels see
-    /// the correct runtime type.  Never stored in a Ipe.Live Model.
+    /// the correct runtime type.  Never stored in a Ipe.Web Model.
     HttpRequest,
     // ── Ipe.Http.Server.WebSocket opaque type handles ──────────────────
     /// `WebSocketServer` — opaque per-peer WebSocket handle.  Renders as
@@ -820,7 +820,7 @@ pub enum IrType {
     ///
     /// Passed to every `WsServerCfg` callback as the first argument; also
     /// accepted by `Ws.sendToClient` / `Ws.sendBinaryToClient` /
-    /// `Ws.broadcast` / `Ws.closeClient`.  Never stored in a Ipe.Live Model.
+    /// `Ws.broadcast` / `Ws.closeClient`.  Never stored in a Ipe.Web Model.
     WebSocketServer,
     /// `WebSocketServerCfg` — opaque WebSocket server configuration.  Renders
     /// as `WsServerCfg<IpeError>`.
@@ -862,18 +862,18 @@ pub enum IrType {
     /// | `Description`     | `ipe_runtime::ui::element::Description`           |
     /// | `LayoutContext`   | `ipe_runtime::ui::element::LayoutContext`          |
     UiPlain(UiPlain),
-    /// `LiveReq` — opaque request type threaded through `Live.app`'s `init`
-    /// callback.  Rendered as `ipe_runtime::live::LiveReq`.
-    LiveReq,
-    /// `LiveRoute page` — route descriptor returned by `Live.route`, carrying
+    /// `WebReq` — opaque request type threaded through `Web.app`'s `init`
+    /// callback.  Rendered as `ipe_runtime::web::WebReq`.
+    WebReq,
+    /// `WebRoute page` — route descriptor returned by `Web.route`, carrying
     /// the page type it builds. Rendered as
-    /// `ipe_runtime::live::route::Route<Page>`. The runtime `Route<Page>`
+    /// `ipe_runtime::web::route::Route<Page>`. The runtime `Route<Page>`
     /// struct has NO default type parameter, so the page argument is
     /// load-bearing: rendering a bare `Route` is an E0107 `cargo` failure
     /// whenever the type reaches a rendered position
     /// (an empty `routes = []` literal's `Vec::<…>::new()` turbofish, or a
     /// let-bound route table's fn signature).
-    LiveRoute(Box<Self>),
+    WebRoute(Box<Self>),
     /// The built-in `Order` type — the result of `Basics.compare`.
     ///
     /// Renders as `ipe_runtime::IpeOrder` (the `#[repr(u8)]` enum exposed from
@@ -959,7 +959,7 @@ pub enum IrType {
     ///
     /// Renders as `ipe_runtime::db::SqlFragment`. Fully `Clone + PartialEq`
     /// (derivable), but NOT serde — it is a query-building value, never
-    /// persisted to a Live session store. `Debug` is hand-written on the
+    /// persisted to a Web session store. `Debug` is hand-written on the
     /// runtime type to show SQL text + bind COUNT only, never bind values (a
     /// bind may carry a revealed secret).
     SqlFragment,
@@ -991,7 +991,7 @@ pub enum IrType {
     /// constructs the runtime struct the `cache_new_raw` kernel takes, rather
     /// than a backend-synthesised `RecMaxBytes…` struct that would mismatch it
     /// (E0308). Fully `Clone` (derivable on the runtime struct); never stored in
-    /// a Ipe.Live Model.
+    /// a Ipe.Web Model.
     CacheCfg,
 
     /// `Ipe.Cache.stats`'s return record `{ hits : Int, misses : Int,
@@ -1015,7 +1015,7 @@ pub enum IrType {
     /// constructs the runtime struct the `web_socket_connect_with` kernel takes,
     /// rather than a backend-synthesised `RecHeaders…` struct that would mismatch
     /// it (E0308). Fully `Clone` (derivable on the runtime struct); never stored
-    /// in a Ipe.Live Model.
+    /// in a Ipe.Web Model.
     WebSocketClientCfg,
 
     /// `Ipe.Csv`'s document record `{ header : List String, rows : List (List
@@ -1028,7 +1028,7 @@ pub enum IrType {
     /// `csv_parse` kernel's `CsvDoc` return is field-accessed via `.header` /
     /// `.rows` — rather than a backend-synthesised `RecHeaderRows` struct that
     /// would mismatch it (E0308). Fully `Clone` (derivable on the runtime
-    /// struct); never stored in a Ipe.Live Model.
+    /// struct); never stored in a Ipe.Web Model.
     CsvDoc,
 
     /// `Ipe.Email`'s message record — 9 fields `{ from, to, cc, bcc, subject,
@@ -1144,7 +1144,7 @@ pub enum UiPlain {
 ///   [`IrType::ServerResponse`] / [`IrType::ServerRoute`] /
 ///   [`IrType::ServerCookie`] / [`IrType::StreamWriter`] /
 ///   [`IrType::HttpRequest`] / [`IrType::WebSocketServer`] /
-///   [`IrType::WebSocketServerCfg`] / [`IrType::LiveReq`] / [`IrType::LiveRoute`]
+///   [`IrType::WebSocketServerCfg`] / [`IrType::WebReq`] / [`IrType::WebRoute`]
 ///   (each lacks at least `PartialEq`).
 /// * the two `Clone`-only `Ipe.Html` carriers [`UiCtor::HtmlAttribute`] /
 ///   [`UiCtor::HtmlEvent`] (they hold `Arc<dyn Fn>` event handlers).
@@ -1257,10 +1257,10 @@ pub fn ir_type_is_derivable(
         | IrType::EmailSesConfig
         | IrType::EmailSmtpConfig
         | IrType::EmailProvider
-        | IrType::LiveReq
+        | IrType::WebReq
         // `Route<Page>` holds an `Arc<dyn Fn>` builder — never derivable/serde
         // regardless of its page argument.
-        | IrType::LiveRoute(_) => false,
+        | IrType::WebRoute(_) => false,
         // Transparent carriers: derivable iff every carried element is.
         IrType::Maybe(e) | IrType::List(e) | IrType::Set(e) => {
             ir_type_is_derivable(e, enum_derivable)
@@ -1282,9 +1282,9 @@ pub fn ir_type_is_derivable(
 /// Total predicate: does the Rust type that [`IrType`] renders to derive
 /// `serde::Serialize` **and** `serde::de::DeserializeOwned`?
 ///
-/// This is the authoritative admissibility gate for a `Ipe.Live` / `Ipe.Live`
+/// This is the authoritative admissibility gate for a `Ipe.Web` / `Ipe.Web`
 /// **Model**: the live runtime persists the Model to the session store, so
-/// `live_app` bounds it "Serialize + `DeserializeOwned` + Clone + `PartialEq`".
+/// `web_app` bounds it "Serialize + `DeserializeOwned` + Clone + `PartialEq`".
 /// Without this gate a well-typed program that stores a non-serialisable value
 /// in its Model `ipe`-succeeds and then `cargo`-fails on the missing `serde`
 /// bound (the seal hole this gate closes).
@@ -1294,7 +1294,7 @@ pub fn ir_type_is_derivable(
 /// `ir_type_is_serde(t) ⇒ ir_type_is_derivable(t)` structurally (the two arms
 /// that differ both demote to `false` here). Consequently a serde-admissible
 /// Model automatically satisfies the `Clone + PartialEq` half of the bound too —
-/// the Live gate needs only this one predicate.
+/// the Web gate needs only this one predicate.
 ///
 /// serde-OK leaves (render to a `serde`-deriving Rust type):
 /// * primitives `Int` / `Float` / `Bool` / `Str` / `Char` / `Unit`,
@@ -1336,7 +1336,7 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         // `Order` (LT/EQ/GT) is a plain no-payload enum; IpeOrder derives serde.
         // `Decimal` is a Copy newtype; rust_decimal supports serde via feature.
         // `IpeErrorKind`/`IpeError`/`IpeErrorDetails` derive serde — `Error`
-        // must serialize to round-trip through a Live session store (e.g. a
+        // must serialize to round-trip through a Web session store (e.g. a
         // Model's `historyError : Maybe Error` field). The nominal payload
         // types `IpeErrorInfo`/`IpePanicInfo`/`IpeTypeInfo` derive serde for
         // the same reason (they ride inside `Error`; SEAL fix).
@@ -1380,7 +1380,7 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         | IrType::SqlFragment
         // `Secret` must NEVER round-trip through serde (session store, JSON
         // encode, anything) — derivable (see `ir_type_is_derivable`) but not
-        // serde. This is the load-bearing gate that makes a `Ipe.Live` Model
+        // serde. This is the load-bearing gate that makes a `Ipe.Web` Model
         // field of type `Secret` a compile-time IPE-L0120, not a session-store
         // leak.
         | IrType::Secret
@@ -1403,10 +1403,10 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         // `WsHandle` / `WsServerCfg` are opaque handles; not serde.
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
-        | IrType::LiveReq
+        | IrType::WebReq
         // `Route<Page>` holds an `Arc<dyn Fn>` builder — never derivable/serde
         // regardless of its page argument.
-        | IrType::LiveRoute(_) => false,
+        | IrType::WebRoute(_) => false,
         // Transparent carriers: serde-OK iff every carried element is.
         IrType::Maybe(e) | IrType::List(e) | IrType::Set(e) => ir_type_is_serde(e, enum_serde),
         IrType::Result(a, b) | IrType::Dict(a, b) => {
@@ -1493,7 +1493,7 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
         | IrType::UiPlain(_)
-        | IrType::LiveReq
+        | IrType::WebReq
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
@@ -1525,7 +1525,7 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         // `Element<M>` / `Html<M>` and `Route<Page>` recurse on their type
         // parameter — the runtime carriers derive `Clone` over a `Clone` param.
         IrType::Ui { msg, .. } => carrier_is_clone(msg),
-        IrType::LiveRoute(page) => carrier_is_clone(page),
+        IrType::WebRoute(page) => carrier_is_clone(page),
     }
 }
 
@@ -3456,7 +3456,7 @@ mod tests {
                 uses_tea: false,
                 uses_server: false,
                 uses_ui: false,
-                uses_live: false,
+                uses_web: false,
                 uses_tui: false,
                 uses_webview: false,
                 uses_css: false,
@@ -3743,7 +3743,7 @@ mod tests {
             IrType::Db,
             IrType::Fun(vec![IrType::Int], Box::new(IrType::Int)),
             IrType::ServerRequest,
-            IrType::LiveReq,
+            IrType::WebReq,
         ];
         for t in bad {
             assert!(!ir_type_is_serde(&t, &all_serde), "{t:?} must NOT be serde");
@@ -3773,7 +3773,7 @@ mod tests {
 
     /// `SqlFragment`: fully derivable (Clone + `PartialEq`) but
     /// deliberately NOT serde — it is a query-building value, never persisted
-    /// to a Live session store.
+    /// to a Web session store.
     #[test]
     fn sqlfragment_derivable_but_not_serde() {
         let t = IrType::SqlFragment;
@@ -3789,7 +3789,7 @@ mod tests {
 
     /// `Secret`: fully derivable (Clone + `PartialEq`) but
     /// deliberately NOT serde — a `Secret` must never round-trip through a
-    /// Live session store or any other serialisation path. Guards the
+    /// Web session store or any other serialisation path. Guards the
     /// derive-blast-radius property: a record containing a `Secret`
     /// field must still get `Clone`/`Debug`/`==` (proved by
     /// `serde_poisons_carriers_transitively`-style coverage below).
@@ -3951,7 +3951,7 @@ mod serde_persistence_tests {
                 uses_tea: false,
                 uses_server: false,
                 uses_ui: false,
-                uses_live: false,
+                uses_web: false,
                 uses_tui: false,
                 uses_webview: false,
                 uses_css: false,
@@ -4018,7 +4018,7 @@ mod serde_persistence_tests {
                 uses_tea: false,
                 uses_server: false,
                 uses_ui: false,
-                uses_live: false,
+                uses_web: false,
                 uses_tui: false,
                 uses_webview: false,
                 uses_css: false,

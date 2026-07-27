@@ -1,12 +1,12 @@
-//! A ROUTED app whose `view` is an inline LAMBDA must emit `live_app_routed`,
-//! not silently fall back to the non-routed `live_app`.
+//! A ROUTED app whose `view` is an inline LAMBDA must emit `web_app_routed`,
+//! not silently fall back to the non-routed `web_app`.
 //!
 //! ## Background
 //!
-//! `emit_live::routed_page_field` recovers the Model from the cfg's `view`
+//! `emit_web::routed_page_field` recovers the Model from the cfg's `view`
 //! field via `emit_model_gate::model_ty_of_view`. If that helper matched
 //! ONLY `Expr::FuncValue`, a lambda `view` would return `None` and the emitter
-//! silently choose the single-page `live_app` — `routes` and `notFound`
+//! silently choose the single-page `web_app` — `routes` and `notFound`
 //! DISCARDED with no diagnostic (ipe-0, cargo-0, wrong runtime behaviour: a
 //! silent wrong-accept, worse than a cargo failure). Meanwhile the type tier's
 //! `RoutedLiveCheck` reads the SOLVER's Model and classifies the
@@ -28,7 +28,7 @@ use std::path::PathBuf;
 /// LAMBDA `view`. Plain-data Model, so the admissibility gate passes —
 /// isolating the routed-detection behaviour.
 const LIVE_LAMBDA_VIEW_ROUTED: &str = r#"module Main exposing (main)
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 type Page = CounterPage | AboutPage
 type Msg = Increment
@@ -42,11 +42,11 @@ update msg model =
 subscriptions : Model -> Sub Msg
 subscriptions _model = Sub.none
 main =
-    Live.app
+    Web.app
         { init = init, update = update
         , view = \model -> Ui.layout [] (Ui.text (String.fromInt model.count))
         , subscriptions = subscriptions
-        , routes = [ Live.route "/" CounterPage, Live.route "/about" AboutPage ]
+        , routes = [ Web.route "/" CounterPage, Web.route "/about" AboutPage ]
         , notFound = CounterPage
         }
 "#;
@@ -70,11 +70,11 @@ fn compile() -> Option<Result<(), ipe::CliError>> {
     Some(ipe::build(&entry, &out, &runtime))
 }
 
-/// The lambda-view routed app must be ipe-0 AND emit `live_app_routed` with
-/// its routes wired — never silently emit the non-routed `live_app` and drop
+/// The lambda-view routed app must be ipe-0 AND emit `web_app_routed` with
+/// its routes wired — never silently emit the non-routed `web_app` and drop
 /// `routes`/`notFound`.
 #[test]
-fn lambda_view_routed_app_emits_live_app_routed() {
+fn lambda_view_routed_app_emits_web_app_routed() {
     let Some(result) = compile() else {
         return;
     };
@@ -86,10 +86,10 @@ fn lambda_view_routed_app_emits_live_app_routed() {
     let main_rs = std::fs::read_to_string(out_dir().join("src").join("main.rs"))
         .expect("emitted main.rs must exist");
     assert!(
-        main_rs.contains("live_app_routed"),
+        main_rs.contains("web_app_routed"),
         "#108 hole 2: a routed app with a LAMBDA `view` must emit \
-         `live_app_routed` — the FuncValue-only recovery silently emitted the \
-         non-routed `live_app` (routes/notFound discarded, no diagnostic)",
+         `web_app_routed` — the FuncValue-only recovery silently emitted the \
+         non-routed `web_app` (routes/notFound discarded, no diagnostic)",
     );
     assert!(
         main_rs.contains("route::Route::new"),
@@ -103,7 +103,7 @@ fn lambda_view_routed_app_cargo_builds() {
     if std::env::var("IPE_E2E").is_err() {
         return;
     }
-    lambda_view_routed_app_emits_live_app_routed();
+    lambda_view_routed_app_emits_web_app_routed();
 
     let target = std::env::temp_dir()
         .join("r4")

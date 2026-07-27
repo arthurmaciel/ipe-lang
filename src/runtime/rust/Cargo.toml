@@ -166,9 +166,9 @@ cache_kernel = ["tokio"]
 tui = ["unicode-width", "crossterm", "tokio"]
 # Real native-window Webview backend (opt-in; needs the system webview dev libs).
 # NOT in `full` — default/CI builds compile the cross-platform stub instead.
-# Pulls `live` to reuse its Html renderer + event-dispatch (HandlerIndex) for the
+# Pulls `web` to reuse its Html renderer + event-dispatch (HandlerIndex) for the
 # in-process IPC bridge.
-webview = ["wry", "tao", "live"]
+webview = ["wry", "tao", "web"]
 config = ["json", "toml", "serde_yaml"]
 server = ["tokio", "axum", "tower-http", "futures-util"]
 # `url`: the reqwest-free `ssrf` module parses URLs via the `url` crate (which
@@ -183,13 +183,13 @@ email = ["tokio", "reqwest", "lettre", "serde_json", "sha2", "http_client"]
 # HTTP client — so it pulls `url`, not `http_client`. (Was `http_client` in
 # batch-19; option B factored the validators into the reqwest-free `ssrf` module.)
 websocket_client = ["tokio", "tokio-tungstenite", "futures-util", "url"]
-# `aes-gcm` (CSRF cookie AEAD — live/csrf.rs) + `sha2` (client-JS SRI integrity
-# hash — live/mod.rs) are used by always-compiled-under-live code. Generated Live
-# projects get them via the always-on `crypto` default; the standalone `live`
+# `aes-gcm` (CSRF cookie AEAD — web/csrf.rs) + `sha2` (client-JS SRI integrity
+# hash — web/mod.rs) are used by always-compiled-under-web code. Generated Web
+# projects get them via the always-on `crypto` default; the standalone `web`
 # feature must pull them directly. (`subtle` for the constant-time compare is a
 # non-optional dep; `OsRng` rides in with `aes-gcm`.) serde is non-optional now.
-live = ["server", "http_client", "serde_json", "async-trait", "aes-gcm", "sha2"]
-full = ["async", "json", "db", "redis_store", "crypto", "compression", "csv_kernel", "cache_kernel", "tui", "config", "server", "http_client", "email", "websocket_client", "live"]
+web = ["server", "http_client", "serde_json", "async-trait", "aes-gcm", "sha2"]
+full = ["async", "json", "db", "redis_store", "crypto", "compression", "csv_kernel", "cache_kernel", "tui", "config", "server", "http_client", "email", "websocket_client", "web"]
 # Browser-WASM TEA sink (`src/wasm/`): mount + patch-apply + delegated events.
 # Compiles only on wasm32 (the module is target-cfg'd); NOT in `full` — native
 # builds never link the wasm glue.

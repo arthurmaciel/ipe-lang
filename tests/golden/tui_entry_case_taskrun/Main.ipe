@@ -9,9 +9,9 @@ import Ipe.Log exposing (println)
 -- build` with two INDEPENDENT E0308 errors, both on the entry-point shape
 -- `main = case <Maybe String scrutinee> of Just "literal" -> task |>
 -- Task.run; _ -> task |> Task.run` (the Ipe.Tui `argv`-dispatch idiom:
--- `case List.head argsList of Just "live" -> Live.app {...} |> Task.run; _
+-- `case List.head argsList of Just "live" -> Web.app {...} |> Task.run; _
 -- -> Tui.app {...} |> Task.run`, minimised down to plain `println`/`Task`
--- calls so the fixture needs no Ipe.Tui / Ipe.Live dependency).
+-- calls so the fixture needs no Ipe.Tui / Ipe.Web dependency).
 --
 -- Defect 1 — string-literal ctor-payload sub-pattern: `Just "live"` lowered
 -- the nested literal straight to a bare `Pat::Str`, emitted as

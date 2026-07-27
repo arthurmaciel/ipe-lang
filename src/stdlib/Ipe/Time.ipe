@@ -3,7 +3,7 @@
 -- Clock reads (`now`, `unixMillis`) return `Task Error Int` (the
 -- value is the milliseconds since the Unix epoch).  Pure helpers
 -- (`format*`, `timeString`, `addMillis`, `diffMillis`) work on the
--- integer millisecond value directly.  `every` is the Ipe.Live /
+-- integer millisecond value directly.  `every` is the Ipe.Web /
 -- Ipe.Tui subscription helper that emits a `Sub msg` every N ms.
 module Ipe.Time exposing
     ( now, unixMillis, sleep
@@ -70,7 +70,7 @@ diffMillis = Ffi.kernel "Time_diffMillis"
 -- Subscriptions
 
 
--- | `every intervalMillis msg` -- Ipe.Live / Ipe.Tui subscription
+-- | `every intervalMillis msg` -- Ipe.Web / Ipe.Tui subscription
 -- that emits `msg` every `intervalMillis` milliseconds.
 every : Int -> msg -> Sub msg
 every = Ffi.kernel "Time_every"

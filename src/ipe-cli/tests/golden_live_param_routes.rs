@@ -3,9 +3,9 @@
 //!
 //! ## Background
 //!
-//! A `Live.route : String -> page -> LiveRoute page` scheme sharing ONE type
+//! A `Web.route : String -> page -> WebRoute page` scheme sharing ONE type
 //! variable between the builder argument and the page type would make
-//! `Live.route "/u/:id" UserPage` (with `UserPage : String -> Page`) force
+//! `Web.route "/u/:id" UserPage` (with `UserPage : String -> Page`) force
 //! `Page ≟ String -> Page` — a false IPE-T0001 on EVERY param-route app, which
 //! also makes the emit tier's `route_param_get` conversion path dead code.
 //!
@@ -77,7 +77,7 @@ fn compile_src(test_name: &str, source: &str) -> Option<Result<(), CliError>> {
 /// Both must witness the same page type (`Page`) — pre-round-4 this was the
 /// false-IPE-T0001 shape.
 const MIXED_NULLARY_AND_PARAM: &str = r#"module Main exposing (main)
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 type Page = CounterPage | UserPage String
 type Msg = Increment
@@ -93,9 +93,9 @@ view model = Ui.layout [] (Ui.text (String.fromInt model.count))
 subscriptions : Model -> Sub Msg
 subscriptions _model = Sub.none
 main =
-    Live.app
+    Web.app
         { init = init, update = update, view = view, subscriptions = subscriptions
-        , routes = [ Live.route "/" CounterPage, Live.route "/u/:id" UserPage ]
+        , routes = [ Web.route "/" CounterPage, Web.route "/u/:id" UserPage ]
         , notFound = CounterPage
         }
 "#;
@@ -105,7 +105,7 @@ main =
 /// `Other ≟ Page` → IPE-T0001. Pins that the witness peel does not blanket-
 /// accept every function-shaped builder.
 const WRONG_ADT_PARAM_CTOR: &str = r#"module Main exposing (main)
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 type Page = CounterPage
 type Other = WrongCtor String
@@ -122,9 +122,9 @@ view model = Ui.layout [] (Ui.text (String.fromInt model.count))
 subscriptions : Model -> Sub Msg
 subscriptions _model = Sub.none
 main =
-    Live.app
+    Web.app
         { init = init, update = update, view = view, subscriptions = subscriptions
-        , routes = [ Live.route "/u/:id" WrongCtor ]
+        , routes = [ Web.route "/u/:id" WrongCtor ]
         , notFound = CounterPage
         }
 "#;
@@ -151,8 +151,8 @@ fn param_route_solo_compiles_and_emits_param_conversion() {
          `:param` to the page constructor (route_param_get path)",
     );
     assert!(
-        main_rs.contains("live_app_routed"),
-        "#108: the param-route app must emit `live_app_routed`",
+        main_rs.contains("web_app_routed"),
+        "#108: the param-route app must emit `web_app_routed`",
     );
 }
 

@@ -2028,8 +2028,8 @@ mod tests {
         // canonical side):
         //   Basics, Attr, Event                    — non-module prelude names
         //   Ipe.Html, Ipe.Ui, Ipe.Html.Attributes,
-        //   Ipe.Html.Events, Ipe.Live, Ipe.Tui, Ipe.Webview  — Ipe.* aliases
-        //   Ipe.Html, Ipe.Ui, Ipe.Live, Ipe.Tui    — Ipê.* aliases
+        //   Ipe.Html.Events, Ipe.Web, Ipe.Tui, Ipe.WebView  — Ipe.* aliases
+        //   Ipe.Html, Ipe.Ui, Ipe.Web, Ipe.Tui    — Ipê.* aliases
         //
         // Note: QUALIFIER_ALIASES clone their members INCLUDING the id, so the
         // alias entries are correct by construction.  The exclusion exists only
@@ -2043,12 +2043,12 @@ mod tests {
             "Ipe.Ui",
             "Ipe.Html.Attributes",
             "Ipe.Html.Events",
-            "Ipe.Live",
+            "Ipe.Web",
             "Ipe.Tui",
-            "Ipe.Webview",
+            "Ipe.WebView",
             "Ipe.Html",
             "Ipe.Ui",
-            "Ipe.Live",
+            "Ipe.Web",
             "Ipe.Tui",
         ]
         .into_iter()
@@ -2878,17 +2878,17 @@ mod tests {
 
     #[test]
     fn stdlib_exposing_brings_value_into_unqualified_scope() {
-        // `import Ipe.Live exposing (app, route)` → bare `app` resolves to the
-        // same `VarKernel { module: Live, name: app }` a `Live.app` reference
+        // `import Ipe.Web exposing (app, route)` → bare `app` resolves to the
+        // same `VarKernel { module: Web, name: app }` a `Web.app` reference
         // would. Previously this was `IPE-N0001` "app not found".
         let src = "module Main exposing (main)\n\
-                   import Ipe.Live exposing (app, route)\n\n\
+                   import Ipe.Web exposing (app, route)\n\n\
                    main = app\n";
         let Some((m, i)) = canon_src(src) else {
             assert!(false_marker(), "exposing (app, route) must canonicalise");
             return;
         };
-        assert_main_is_kernel(&m, &i, "Live", "app");
+        assert_main_is_kernel(&m, &i, "Web", "app");
     }
 
     #[test]
@@ -2911,7 +2911,7 @@ mod tests {
         // module surfaces `NameNotExposed`, never a dangling unqualified binding.
         let err = canon_err(
             "module Main exposing (main)\n\
-             import Ipe.Live exposing (bogusFn)\n\
+             import Ipe.Web exposing (bogusFn)\n\
              main = 0\n",
         );
         let Some(Diagnostic::Name {
@@ -2923,7 +2923,7 @@ mod tests {
             return;
         };
         assert_eq!(&**name, "bogusFn");
-        assert_eq!(&**module, "Ipe.Live");
+        assert_eq!(&**module, "Ipe.Web");
     }
 
     #[test]
@@ -2933,7 +2933,7 @@ mod tests {
         // rule that importing a name and defining it locally clash.
         let err = canon_err(
             "module Main exposing (main)\n\
-             import Ipe.Live exposing (app)\n\
+             import Ipe.Web exposing (app)\n\
              app = 1\n\
              main = 0\n",
         );
@@ -3150,7 +3150,7 @@ mod tests {
         // with a local `app` (`DuplicateValue`) — unlike a wildcard member.
         let err = canon_err(
             "module Main exposing (main)\n\
-             import Ipe.Live exposing (app)\n\
+             import Ipe.Web exposing (app)\n\
              app = 1\n\
              main = 0\n",
         );

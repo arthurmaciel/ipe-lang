@@ -29,13 +29,13 @@ fn program(name: Symbol, types: Vec<TypeDef>, funcs: Vec<Func>) -> Program {
     program_with_live(name, types, funcs, false)
 }
 
-/// Like [`program`] but lets the test set `uses_live`, so the emitter takes the
-/// Ipe.Live serde-derive path (SEAL gate exercise).
+/// Like [`program`] but lets the test set `uses_web`, so the emitter takes the
+/// Ipe.Web serde-derive path (SEAL gate exercise).
 fn program_with_live(
     name: Symbol,
     types: Vec<TypeDef>,
     funcs: Vec<Func>,
-    uses_live: bool,
+    uses_web: bool,
 ) -> Program {
     Program {
         modules: vec![Module {
@@ -46,8 +46,8 @@ fn program_with_live(
             records: vec![],
             uses_tea: false,
             uses_server: false,
-            uses_ui: uses_live,
-            uses_live,
+            uses_ui: uses_web,
+            uses_web,
             uses_tui: false,
             uses_webview: false,
             uses_css: false,
@@ -248,7 +248,7 @@ fn enum_with_function_payload_has_no_derive() -> DResult<()> {
     Ok(())
 }
 
-/// seal: in a `Ipe.Live` program, a NON-Model view-helper record that holds
+/// seal: in a `Ipe.Web` program, a NON-Model view-helper record that holds
 /// an `Html` field is `CDPeq`-supporting (`Html<M>` derives `Clone, Debug,
 /// PartialEq`) but NOT serde-supporting (`Html<M>` is not `Serialize`). Gating
 /// the serde derive on the `CDPeq` flag (`is_derivable`) would force
@@ -344,7 +344,7 @@ fn live_html_helper_record_gets_cdpeq_without_serde() -> DResult<()> {
     let (_model_cdpeq, model_serde) = derive_flavours(&src, "RecCount");
     assert!(
         model_serde,
-        "plain-data record in a Live program must still get serde:\n{src}"
+        "plain-data record in a Web program must still get serde:\n{src}"
     );
     Ok(())
 }

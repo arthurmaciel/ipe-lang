@@ -17,14 +17,14 @@
 
 mod crate_specs;
 mod doc;
-mod emit_cli;
+mod emit_console;
 mod emit_doc;
 mod emit_expr;
-mod emit_live;
 mod emit_model_gate;
 mod emit_model_schema;
 mod emit_tui;
 mod emit_types;
+mod emit_web;
 mod emit_webview;
 mod naming;
 mod preamble;
@@ -346,9 +346,9 @@ pub(crate) struct RecordStruct {
     /// Computed once at [`EmitCtx::build`] against the whole-program enum-serde
     /// fixpoint. STRICTLY implies [`Self::is_derivable`] (serde-OK leaves are a
     /// subset of derivable leaves). The emitter reads this flag — NOT
-    /// `is_derivable` — to gate the serde derive under `uses_live`, so a
+    /// `is_derivable` — to gate the serde derive under `uses_web`, so a
     /// `CDPeq`-but-not-serde record (a view-helper holding `Html` / `Element` /
-    /// `Color` / a `UiPlain` value) in a Ipe.Live program never gets serde forced
+    /// `Color` / a `UiPlain` value) in a Ipe.Web program never gets serde forced
     /// onto it and therefore never exit-0-then-cargo-fails on `E0277` (upholds
     /// the SEAL).
     pub is_serde: bool,
@@ -418,16 +418,16 @@ pub(crate) struct EmitCtx<'a> {
     /// When set, [`crate::project::emit_program`] appends
     /// `pub mod ui;` to the emitted `ipe_runtime/mod.rs`.
     pub(crate) uses_ui: bool,
-    /// `true` when the program uses at least one `Ipe.Live` / `Ipe.Live`
+    /// `true` when the program uses at least one `Ipe.Web` / `Ipe.Web`
     /// app-entry kernel.  When set, the emitted project gains the `"live"`
     /// Cargo feature, serde derives on all emitted types, and
     /// `ipe_runtime::live` wired into the runtime module set.
-    pub(crate) uses_live: bool,
+    pub(crate) uses_web: bool,
     /// `true` when the program uses at least one `Ipe.Tui` / `Ipe.Tui`
     /// app-entry kernel.  When set, the emitted project gains the `"tui"`
     /// Cargo feature and the tui module is wired into `ipe_runtime/mod.rs`.
     pub(crate) uses_tui: bool,
-    /// `true` when the program uses at least one `Ipe.Webview` app-entry kernel.
+    /// `true` when the program uses at least one `Ipe.WebView` app-entry kernel.
     /// When set, the emitted project gains the `"webview"` Cargo feature
     /// (which transitively pulls `"live"`) and the main entry is switched to
     /// `block_on_current_thread` (tao/Cocoa requires the process main thread).
@@ -525,7 +525,7 @@ pub(crate) struct EmitCtx<'a> {
     /// monotone whole-program fixpoint parallel to [`Self::enum_derivable`]: an
     /// enum is non-serde iff some variant payload reaches a non-serde leaf (the
     /// non-derivable set PLUS the `Clone`-only UI value/carrier types, per
-    /// [`ipe_ir::ir_type_is_serde`]). Read by the Ipe.Live app-entry Model gate
+    /// [`ipe_ir::ir_type_is_serde`]). Read by the Ipe.Web app-entry Model gate
     /// (upholds the SEAL). Whole-program so cross-module `IrType::Enum`
     /// references resolve soundly.
     enum_serde: BTreeMap<(ModPath, Symbol), bool>,
@@ -765,7 +765,7 @@ impl<'a> EmitCtx<'a> {
         // monotonically demoted if any variant payload reaches a non-serde leaf
         // or a (currently-estimated) non-serde enum. Non-serde only propagates
         // (true → false), so the loop reaches a fixpoint in at most `enum count`
-        // passes. Read by the Ipe.Live Model-admissibility gate.
+        // passes. Read by the Ipe.Web Model-admissibility gate.
         let mut enum_serde: BTreeMap<(ModPath, Symbol), bool> =
             enum_variants.keys().map(|k| (k.clone(), true)).collect();
         loop {
@@ -820,8 +820,8 @@ impl<'a> EmitCtx<'a> {
             // consulting the parallel enum-serde fixpoint. Strictly implies
             // `is_derivable` (serde-OK leaves ⊂ derivable leaves), so a record
             // never gets serde without CDPeq. Gates the serde derive under
-            // `uses_live` so a CDPeq-but-not-serde record (Html/Element/Color/
-            // UiPlain field) in a Live program is not forced to serde.
+            // `uses_web` so a CDPeq-but-not-serde record (Html/Element/Color/
+            // UiPlain field) in a Web program is not forced to serde.
             let is_serde = {
                 let lookup = |home: &ModPath, name: Symbol| {
                     enum_serde
@@ -900,10 +900,10 @@ impl<'a> EmitCtx<'a> {
         // detect whether any Ipe.Http.Server kernel is used.
         let uses_server = program.modules.iter().any(|m| m.uses_server);
 
-        // detect Ipe.Ui / Ipe.Html / Ipe.Live / Ipe.Tui / Ipe.Webview usage.
-        let (uses_ui, uses_live, uses_tui, uses_webview) = (
+        // detect Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.WebView usage.
+        let (uses_ui, uses_web, uses_tui, uses_webview) = (
             program.modules.iter().any(|m| m.uses_ui),
-            program.modules.iter().any(|m| m.uses_live),
+            program.modules.iter().any(|m| m.uses_web),
             program.modules.iter().any(|m| m.uses_tui),
             program.modules.iter().any(|m| m.uses_webview),
         );
@@ -932,7 +932,7 @@ impl<'a> EmitCtx<'a> {
             uses_tea,
             uses_server,
             uses_ui,
-            uses_live,
+            uses_web,
             uses_tui,
             uses_webview,
             uses_css,
@@ -1017,7 +1017,7 @@ impl<'a> EmitCtx<'a> {
     /// Resolved from the whole-program serde fixpoint computed at
     /// [`Self::build`]. A symbol that is not a user enum defaults to `true`
     /// (builtins are distinct `IrType` variants and never reach this lookup as a
-    /// bare enum name). Used by the Ipe.Live Model-admissibility gate.
+    /// bare enum name). Used by the Ipe.Web Model-admissibility gate.
     pub(crate) fn enum_is_serde(&self, home: &ModPath, sym: Symbol) -> bool {
         self.enum_serde
             .get(&(home.clone(), sym))
@@ -1540,7 +1540,7 @@ fn collect_record_shapes(
         // nullary plain types (`Length`, `Color`, …) and the opaque live
         // request handle carry no record shapes of their own.
         | IrType::UiPlain(_)
-        | IrType::LiveReq
+        | IrType::WebReq
         // `Order` (LT/EQ/GT) is a primitive leaf — no record shape.
         // `Decimal` is a Copy newtype — no record shape.
         | IrType::Order
@@ -1572,9 +1572,9 @@ fn collect_record_shapes(
         | IrType::EmailSesConfig
         | IrType::EmailSmtpConfig
         | IrType::EmailProvider => {}
-        // `LiveRoute page` is page-parametric — descend in case the page type
+        // `WebRoute page` is page-parametric — descend in case the page type
         // carries a nested record shape.
-        IrType::LiveRoute(page) => {
+        IrType::WebRoute(page) => {
             collect_record_shapes(interner, page, shapes)?;
         }
         // `Ui { ctor, msg }` is a msg-parametric wrapper — descend into
@@ -1690,7 +1690,7 @@ fn type_reaches_enum(
         // nullary plain types and the opaque live request handle are
         // pointer-sized — they cannot form an infinite-size cycle.
         | IrType::UiPlain(_)
-        | IrType::LiveReq
+        | IrType::WebReq
         // `Order` is a primitive value — no cycle risk.
         // `Decimal` is a Copy newtype — no cycle risk.
         | IrType::Order
@@ -1724,7 +1724,7 @@ fn type_reaches_enum(
         | IrType::EmailProvider => false,
         // `Route<Page>` stores its `not_found`/built pages by value — a page
         // type reaching `target` through a route is a genuine size edge.
-        IrType::LiveRoute(page) => type_reaches_enum(page, target, enums, visited),
+        IrType::WebRoute(page) => type_reaches_enum(page, target, enums, visited),
         // `Ui { ctor, msg }` — descend into `msg`.
         IrType::Ui { msg, .. } => type_reaches_enum(msg, target, enums, visited),
     }
@@ -1775,7 +1775,7 @@ fn contains_generic(ty: &IrType) -> bool {
         // nullary plain types and the opaque live request handle are
         // monomorphic.
         | IrType::UiPlain(_)
-        | IrType::LiveReq
+        | IrType::WebReq
         // `Order` is monomorphic — no generic parameters.
         // `Decimal` is monomorphic — no generic parameters.
         | IrType::Order
@@ -1805,9 +1805,9 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::EmailSesConfig
         | IrType::EmailSmtpConfig
         | IrType::EmailProvider => false,
-        // `LiveRoute page` is parametric on `page`; check if it carries a
+        // `WebRoute page` is parametric on `page`; check if it carries a
         // generic.
-        IrType::LiveRoute(page) => contains_generic(page),
+        IrType::WebRoute(page) => contains_generic(page),
         // `Ui { ctor, msg }` is parametric on `msg`; check if `msg` carries
         // a generic.
         IrType::Ui { msg, .. } => contains_generic(msg),
@@ -1884,7 +1884,7 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         // nullary plain types and the opaque live request handle
         // contribute no generics.
         | IrType::UiPlain(_)
-        | IrType::LiveReq
+        | IrType::WebReq
         // `Order` is monomorphic — no generics to collect.
         // `Decimal` is monomorphic — no generics to collect.
         | IrType::Order
@@ -1913,8 +1913,8 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::EmailSesConfig
         | IrType::EmailSmtpConfig
         | IrType::EmailProvider => {}
-        // `LiveRoute page` may carry generic parameters through `page`.
-        IrType::LiveRoute(page) => collect_generics(page, out),
+        // `WebRoute page` may carry generic parameters through `page`.
+        IrType::WebRoute(page) => collect_generics(page, out),
         // `Ui { ctor, msg }` may carry generic parameters through `msg`.
         IrType::Ui { msg, .. } => collect_generics(msg, out),
     }
@@ -2206,7 +2206,7 @@ fn match_template(
         // nullary plain types (`Length`, `Color`, …) and the opaque live
         // request handle are monomorphic — must equal exactly.
         | IrType::UiPlain(_)
-        | IrType::LiveReq
+        | IrType::WebReq
         // `Order` is a monomorphic leaf — must equal exactly.
         // `Decimal` is a monomorphic leaf — must equal exactly.
         | IrType::Order
@@ -2241,10 +2241,10 @@ fn match_template(
                 Err(mismatch())
             }
         }
-        // `LiveRoute page` is parametric on `page` — recurse into the page
+        // `WebRoute page` is parametric on `page` — recurse into the page
         // argument.
-        IrType::LiveRoute(tp) => match concrete {
-            IrType::LiveRoute(cp) => match_template(tp, cp, subst),
+        IrType::WebRoute(tp) => match concrete {
+            IrType::WebRoute(cp) => match_template(tp, cp, subst),
             _ => Err(mismatch()),
         },
         // `Ui { ctor, msg }` is parametric on `msg`; match the ctor tag
@@ -2441,7 +2441,7 @@ mod record_struct_namespace_tests {
                 uses_tea: false,
                 uses_server: false,
                 uses_ui: false,
-                uses_live: false,
+                uses_web: false,
                 uses_tui: false,
                 uses_webview: false,
                 uses_css: false,
@@ -2518,7 +2518,7 @@ mod record_struct_namespace_tests {
                 uses_tea: false,
                 uses_server: false,
                 uses_ui: false,
-                uses_live: false,
+                uses_web: false,
                 uses_tui: false,
                 uses_webview: false,
                 uses_css: false,

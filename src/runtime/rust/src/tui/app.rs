@@ -1,6 +1,6 @@
 //! Ipe.Tui — the `tui_app` TEA loop.
 //!
-//! Mirrors `cli_program` (tea.rs) exactly — same `CliEvent` channel, `SubManager`
+//! Mirrors `console_app` (tea.rs) exactly — same `CliEvent` channel, `SubManager`
 //! (so `Sub.every` → Tick works) and `cli_run_cmd` (so `Cmd.perform` works) — but
 //! reads RAW key bytes (raw mode + `decode_key`) instead of stdin lines, and
 //! paints into the alternate screen. A Ipe.Tui app quits by calling `System.exit`
@@ -376,7 +376,7 @@ where
 }
 
 /// `Tui.app` — terminal TEA driver for a `view : Model -> Element msg`. The
-/// `Ipe.Ui` Element is the SAME structured tree Ipe.Live renders to HTML; here it
+/// `Ipe.Ui` Element is the SAME structured tree Ipe.Web renders to HTML; here it
 /// is laid out to ANSI cells by walking the typed attributes (`tui::layout`), and
 /// `Ipe.Ui.Input.*` widgets become focusables: Tab / Shift-Tab (and Up/Down on a
 /// non-input focus) cycle focus; typing edits the focused text input (dispatching

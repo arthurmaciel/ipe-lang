@@ -225,16 +225,16 @@ const TOSTRING_CORE: &str = include_str!("../Ipe/ToString.ipe");
 /// Disjoint from `STDLIB_MODULE_QUALIFIERS` (no `"Test"` entry exists there).
 const IPE_TEST: &str = include_str!("../Ipe/Test.ipe");
 
-/// `Ipe.Live.Head` — typed `<head>` helpers for Ipe.Live per-page injection.
+/// `Ipe.Web.Head` — typed `<head>` helpers for Ipe.Web per-page injection.
 ///
 /// Faithfully ported from `../ipe/ipe-stdlib/Std/Live/Head.ipe`.
 /// All helpers delegate to existing kernel qualifiers (`Html` / `Attr`) —
-/// no new kernel variants required.  `Ipe.Live.Head` is NOT in
-/// `STDLIB_MODULE_QUALIFIERS` (that table only has `Ipe.Live` → `"Live"`),
+/// no new kernel variants required.  `Ipe.Web.Head` is NOT in
+/// `STDLIB_MODULE_QUALIFIERS` (that table only has `Ipe.Web` → `"Web"`),
 /// so the disjointness invariant holds.
 ///
-/// Unblocks `38-composite-ui-multibackend` (N0004: Ipe.Live.Head).
-const STD_LIVE_HEAD: &str = include_str!("../Ipe/Live/Head.ipe");
+/// Unblocks `38-composite-ui-multibackend` (N0004: Ipe.Web.Head).
+const STD_LIVE_HEAD: &str = include_str!("../Ipe/Web/Head.ipe");
 
 /// `Ipe.Ui.Responsive` — device-class helpers for responsive layout branching.
 ///
@@ -401,11 +401,11 @@ const STD_CSV: &str = include_str!("../Ipe/Csv.ipe");
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_EMAIL: &str = include_str!("../Ipe/Email.ipe");
 
-/// `Ipe.Live.Console` — typed console identity + builder helpers (compiled source).
+/// `Ipe.Web.Console` — typed console identity + builder helpers (compiled source).
 ///
 /// Pure Ipê; no Ffi.kernel calls.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
-const STD_LIVE_CONSOLE: &str = include_str!("../Ipe/Live/Console.ipe");
+const STD_LIVE_CONSOLE: &str = include_str!("../Ipe/Web/Console.ipe");
 
 /// `Ipe.PubSub` — Task-shaped publish, callable from any context (compiled source).
 ///
@@ -458,7 +458,7 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         source: IPE_TEST,
     },
     CompiledStdModule {
-        dotted: "Ipe.Live.Head",
+        dotted: "Ipe.Web.Head",
         source: STD_LIVE_HEAD,
     },
     CompiledStdModule {
@@ -522,7 +522,7 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         source: STD_EMAIL,
     },
     CompiledStdModule {
-        dotted: "Ipe.Live.Console",
+        dotted: "Ipe.Web.Console",
         source: STD_LIVE_CONSOLE,
     },
     CompiledStdModule {

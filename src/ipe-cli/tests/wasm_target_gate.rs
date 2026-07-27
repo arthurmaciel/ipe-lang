@@ -49,7 +49,7 @@ fn pure_ui_app_emits_wasm_project() {
         "module Main exposing (main)\n\
          import Ipe.Prelude exposing (..)\n\
          import Ipe.String as String\n\
-         import Ipe.Live exposing (app)\n\
+         import Ipe.Web exposing (app)\n\
          import Ipe.Cmd as Cmd\n\
          import Ipe.Sub as Sub\n\
          import Ipe.Ui as Ui\n\

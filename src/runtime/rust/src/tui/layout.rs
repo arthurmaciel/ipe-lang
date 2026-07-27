@@ -1,6 +1,6 @@
 //! Element → ANSI frame — the structured Ipe.Tui renderer + focus/input model.
 //!
-//! Walks the shared `ipe_runtime::ui::Element` tree (the SAME tree Ipe.Live
+//! Walks the shared `ipe_runtime::ui::Element` tree (the SAME tree Ipe.Web
 //! renders to HTML) and lays it out to terminal cells by reading the TYPED
 //! attributes directly — never CSS. Mirrors Go's `tui_ui.go`. Recognises the
 //! `Ipe.Ui.Input.*` widgets (`TaggedNode "input"/"textarea"/"button"` carrying

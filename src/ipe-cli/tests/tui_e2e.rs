@@ -55,7 +55,7 @@
 /// `String -> Msg` which conflicts with its use in `update`/`subscriptions`.
 ///
 /// Note: `view` returns `Element Msg` (NOT wrapped in `Ui.layout` → `Html Msg`
-/// like Ipe.Live).  The Tui runtime renders the Element tree directly to ANSI
+/// like Ipe.Web).  The Tui runtime renders the Element tree directly to ANSI
 /// cells; there is no HTML step.
 const IPE_TUI_COUNTER: &str = r"module Main exposing (main)
 
@@ -287,7 +287,7 @@ fn tui_onkey_record_typechecks() {
 /// * constrain: `Tui.app` correctly types the 5-field cfg with a
 ///   record-typed `onKey : KeyEvent -> Msg` handler.
 /// * lower: the cfg record literal bypasses IPE-L0107 (same exemption
-///   as `Live.app`).
+///   as `Web.app`).
 /// * emit: `emit_tui_call` delegates to `tui_app_ui(…)` with the five
 ///   handler arguments correctly emitted, including the `|kind, value|` wrapper.
 /// * manifest: `tui_cargo_toml` adds `"tui"` to default features,

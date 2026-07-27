@@ -4,7 +4,7 @@
 //! the `telemetry` ring buffers, and a `/_ipe/observability/ingest` POST that
 //! folds a sub-app's batched logs into the same rings.
 //!
-//! Unlike Go (which spawns the console as a child Ipe.Live process and reverse-
+//! Unlike Go (which spawns the console as a child Ipe.Web process and reverse-
 //! proxies it), the Rust console is served in-process directly off the Live
 //! router — no extra process, same data. No panic vectors.
 

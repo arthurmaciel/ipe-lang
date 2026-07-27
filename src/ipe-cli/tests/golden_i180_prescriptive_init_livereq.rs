@@ -2,22 +2,22 @@
 //!
 //! ## Background
 //!
-//! Ipê pins `Live.app`'s `init` to `LiveReq -> (Model, Cmd Msg)` (mandatory)
+//! Ipê pins `Web.app`'s `init` to `WebReq -> (Model, Cmd Msg)` (mandatory)
 //! rather than the reference's permissive free `req` type var. Two properties
 //! are pinned here:
 //!
-//! 1. **Prescription is enforced.** A `Live.app` whose `init` declares `{}` (or
-//!    any non-`LiveReq` shape) is a clear compile-time IPE-T0001 at the `init`
-//!    cfg field (`expected LiveReq, found {}`) — not a raw unification failure
+//! 1. **Prescription is enforced.** A `Web.app` whose `init` declares `{}` (or
+//!    any non-`WebReq` shape) is a clear compile-time IPE-T0001 at the `init`
+//!    cfg field (`expected WebReq, found {}`) — not a raw unification failure
 //!    and not a deferred `cargo` break.
 //!
-//! 2. **`LiveReq` fields are readable.** `LiveReq` is an opaque nullary `Con`
+//! 2. **`WebReq` fields are readable.** `WebReq` is an opaque nullary `Con`
 //!    at the type level (so no bare record literal can masquerade as the runtime
 //!    struct — the make-invalid-states-unrepresentable posture shared with the
 //!    opaque server `Request`), but its fixed field set is READABLE via the
-//!    deferred `FieldAccess` pass (`LiveReqFields`). `init req = ... req.path`
+//!    deferred `FieldAccess` pass (`WebReqFields`). `init req = ... req.path`
 //!    type-checks and lowers to `(req).path.clone()`, reading
-//!    `ipe_runtime::live::LiveReq` directly — no synthesised record.
+//!    `ipe_runtime::web::WebReq` directly — no synthesised record.
 //!
 //! Full design: `docs/adr/0021-tea-state-engine-and-prescriptive-init.md`;
 //! divergence B24 in `docs/divergences-from-sky.md`.
@@ -28,16 +28,16 @@
 
 use std::path::PathBuf;
 
-/// A `Live.app` whose `init : LiveReq -> …` READS `req.path` into the Model.
+/// A `Web.app` whose `init : WebReq -> …` READS `req.path` into the Model.
 /// Non-routed for brevity; plain-data Model so the the admissibility gate
 /// passes, isolating the init-field + field-access behaviour.
 const LIVE_INIT_READS_REQ_PATH: &str = r#"module Main exposing (main)
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 type Page = HomePage
 type Msg = Noop
 type alias Model = { page : Page, path : String }
-init : LiveReq -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init req = ( { page = HomePage, path = req.path }, Cmd.none )
 update : Msg -> Model -> ( Model, Cmd Msg )
 update _msg model = ( model, Cmd.none )
@@ -46,18 +46,18 @@ view model = Ui.layout [] (Ui.text model.path)
 subscriptions : Model -> Sub Msg
 subscriptions _model = Sub.none
 main =
-    Live.app
+    Web.app
         { init = init, update = update, view = view
         , subscriptions = subscriptions
-        , routes = [ Live.route "/" HomePage ]
+        , routes = [ Web.route "/" HomePage ]
         , notFound = HomePage
         }
 "#;
 
-/// The SAME app but with `init : {} -> …` — the non-`LiveReq` shape the
+/// The SAME app but with `init : {} -> …` — the non-`WebReq` shape the
 /// prescriptive scheme must reject with a clear IPE-T0001.
 const LIVE_INIT_UNIT_REJECTED: &str = r#"module Main exposing (main)
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 type Page = HomePage
 type Msg = Noop
@@ -71,10 +71,10 @@ view _model = Ui.layout [] (Ui.text "hi")
 subscriptions : Model -> Sub Msg
 subscriptions _model = Sub.none
 main =
-    Live.app
+    Web.app
         { init = init, update = update, view = view
         , subscriptions = subscriptions
-        , routes = [ Live.route "/" HomePage ]
+        , routes = [ Web.route "/" HomePage ]
         , notFound = HomePage
         }
 "#;
@@ -98,9 +98,9 @@ fn compile(fixture: &str, tag: &str, out: &PathBuf) -> Option<Result<(), ipe::Cl
     Some(ipe::build(&entry, out, &runtime))
 }
 
-/// `init : LiveReq -> …` reading `req.path` must be ipe-0 and emit
-/// `(req).path.clone()` against the runtime `LiveReq` struct — proving the
-/// `LiveReqFields` deferred field-access resolution + concrete lowering.
+/// `init : WebReq -> …` reading `req.path` must be ipe-0 and emit
+/// `(req).path.clone()` against the runtime `WebReq` struct — proving the
+/// `WebReqFields` deferred field-access resolution + concrete lowering.
 #[test]
 fn live_init_reads_req_path_field() {
     let out = ok_out_dir();
@@ -109,14 +109,14 @@ fn live_init_reads_req_path_field() {
     };
     assert!(
         result.is_ok(),
-        "#180: `init : LiveReq -> …` reading `req.path` must be ipe-0, got: {:?}",
+        "#180: `init : WebReq -> …` reading `req.path` must be ipe-0, got: {:?}",
         result.err(),
     );
     let main_rs = std::fs::read_to_string(out.join("src").join("main.rs"))
         .expect("emitted main.rs must exist");
     assert!(
-        main_rs.contains("ipe_runtime::live::LiveReq"),
-        "#180: the emitted init must take the concrete `ipe_runtime::live::LiveReq`",
+        main_rs.contains("ipe_runtime::web::WebReq"),
+        "#180: the emitted init must take the concrete `ipe_runtime::web::WebReq`",
     );
     assert!(
         main_rs.contains("(req).path.clone()"),
@@ -126,7 +126,7 @@ fn live_init_reads_req_path_field() {
 }
 
 /// `init : {} -> …` must be rejected with a clear IPE-T0001 naming the expected
-/// `LiveReq` — the prescriptive scheme, fail-closed at ipe time.
+/// `WebReq` — the prescriptive scheme, fail-closed at ipe time.
 #[test]
 fn live_init_unit_is_rejected() {
     let out = std::env::temp_dir().join("i180_init_unit_out");
@@ -134,17 +134,17 @@ fn live_init_unit_is_rejected() {
         return;
     };
     let err = result.expect_err(
-        "#180: `init : {} -> …` on a Live.app must be a compile error under the \
-         prescriptive LiveReq scheme",
+        "#180: `init : {} -> …` on a Web.app must be a compile error under the \
+         prescriptive WebReq scheme",
     );
     let rendered = format!("{err:?}");
     assert!(
-        rendered.contains("LiveReq"),
-        "#180: the rejection must name the expected `LiveReq` type, got: {rendered}",
+        rendered.contains("WebReq"),
+        "#180: the rejection must name the expected `WebReq` type, got: {rendered}",
     );
 }
 
-/// `IPE_E2E` tier: the `init : LiveReq` project must cargo-build (isolated
+/// `IPE_E2E` tier: the `init : WebReq` project must cargo-build (isolated
 /// target dir) — the SEAL check that ipe-0 implies cargo-0.
 #[test]
 fn live_init_reads_req_path_cargo_builds() {
@@ -164,7 +164,7 @@ fn live_init_reads_req_path_cargo_builds() {
         .expect("cargo must spawn");
     assert!(
         build.status.success(),
-        "#180: the `init : LiveReq` project must cargo-build\n--- cargo stderr ---\n{}",
+        "#180: the `init : WebReq` project must cargo-build\n--- cargo stderr ---\n{}",
         String::from_utf8_lossy(&build.stderr),
     );
 }

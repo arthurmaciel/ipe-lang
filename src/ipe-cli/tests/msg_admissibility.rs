@@ -1,6 +1,6 @@
-//! The `Ipe.Live` / `Ipe.Tui` / `Ipe.Webview` app-entry Msg-admissibility gate.
+//! The `Ipe.Web` / `Ipe.Tui` / `Ipe.WebView` app-entry Msg-admissibility gate.
 //!
-//! `live_app` bounds its Msg `Clone + Send + Sync + Debug + 'static`;
+//! `web_app` bounds its Msg `Clone + Send + Sync + Debug + 'static`;
 //! `tui_app` / `webview_app` bound it `Clone + Send + 'static`. Without the
 //! gate, a Msg storing a non-admissible value (`Cmd` / `Sub` / `Task` /
 //! `Decoder` / `Db` / a function) makes `ipe` exit 0 and then `cargo build`
@@ -9,7 +9,7 @@
 //!
 //! KEY ASYMMETRY: `Html`-carrying Msg MUST be ACCEPTED. The predicate is
 //! `ir_type_is_derivable` (NOT serde) — `Html` derives Clone+Debug+PartialEq
-//! and is therefore admissible in a Msg, unlike in a `Ipe.Live` Model (where
+//! and is therefore admissible in a Msg, unlike in a `Ipe.Web` Model (where
 //! serde is required). This fixture is the critical acceptance case.
 //!
 //! These tests are COMPILE-ONLY (they run the `ipe` pipeline + write the
@@ -63,10 +63,10 @@ fn assert_accepted(test_name: &str, source: &str) -> Result<(), BoxError> {
 
 // ── Rejection fixtures ────────────────────────────────────────────────────────
 
-/// `Ipe.Live` app: Msg variant carries a `Cmd`. Must be rejected with IPE-L0125.
+/// `Ipe.Web` app: Msg variant carries a `Cmd`. Must be rejected with IPE-L0125.
 const LIVE_CMD_MSG: &str = r"module Main exposing (main)
 
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 
 type Msg
@@ -96,13 +96,13 @@ subscriptions _model =
     Sub.none
 
 main =
-    Live.app
+    Web.app
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [], notFound = Tick
         }
 ";
 
-/// `Ipe.Live` app: Msg variant carries a function. A declared function-typed
+/// `Ipe.Web` app: Msg variant carries a function. A declared function-typed
 /// payload is sound on its own (derive-demotion keeps the emitted enum's
 /// derives correct), so it is NOT rejected at the declaration site
 /// (`IPE-L0114`); it falls through to the MORE PRECISE Msg-admissibility
@@ -110,7 +110,7 @@ main =
 /// bound because of the embedded function, `IPE-L0125`.
 const LIVE_FN_MSG: &str = r"module Main exposing (main)
 
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 
 type Msg
@@ -140,17 +140,17 @@ subscriptions _model =
     Sub.none
 
 main =
-    Live.app
+    Web.app
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [], notFound = Noop
         }
 ";
 
-/// `Ipe.Live` app: `update` is an inline lambda; Msg carries a `Cmd`.
+/// `Ipe.Web` app: `update` is an inline lambda; Msg carries a `Cmd`.
 /// Exercises the `fn_param_ty` Lambda recovery path for Msg.
 const LIVE_LAMBDA_UPDATE_CMD_MSG: &str = r"module Main exposing (main)
 
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 
 type Msg
@@ -172,7 +172,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Live.app
+    Web.app
         { init = init
         , update = \msg model ->
             case msg of
@@ -280,14 +280,14 @@ main =
 
 // ── Acceptance fixtures ───────────────────────────────────────────────────────
 
-/// CRITICAL asymmetry fixture: `Ipe.Live` Msg carries `Html Msg`.
+/// CRITICAL asymmetry fixture: `Ipe.Web` Msg carries `Html Msg`.
 /// `Html` derives Clone+Debug+PartialEq (derivable) but is NOT serde.
 /// The Msg gate uses derivable (not serde), so this MUST be ACCEPTED (ipe-0).
 /// If the gate incorrectly used serde, this would be rejected — breaking the
 /// invariant that Msg and Model use different admissibility predicates.
 const LIVE_HTML_MSG: &str = r"module Main exposing (main)
 
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 
 type Msg
@@ -317,16 +317,16 @@ subscriptions _model =
     Sub.none
 
 main =
-    Live.app
+    Web.app
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [], notFound = Noop
         }
 ";
 
-/// Plain-data Msg + `Ipe.Live` app — the normal happy path. Must be accepted.
+/// Plain-data Msg + `Ipe.Web` app — the normal happy path. Must be accepted.
 const LIVE_PLAIN_MSG: &str = r"module Main exposing (main)
 
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 
 type Msg
@@ -359,7 +359,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Live.app
+    Web.app
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [], notFound = Reset
         }

@@ -303,7 +303,7 @@ fn cache_builds_and_runs() {
 }
 
 // ── Ipe.PubSub ─────────────────────────────────────────────────────────
-// PubSub.publish : String -> any -> Task Error Int.  No Live.app runs in this
+// PubSub.publish : String -> any -> Task Error Int.  No Web.app runs in this
 // probe so publish resolves to Err(Unavailable) — Task.onError swallows it and
 // the program prints the marker.  The test asserts ipe-0 ⇒ cargo-0 ⇒ exit-0.
 

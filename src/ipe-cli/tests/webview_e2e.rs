@@ -1,4 +1,4 @@
-//! End-to-end tests for `Ipe.Webview` / `Ipe.Webview` — `Webview.app`,
+//! End-to-end tests for `Ipe.WebView` / `Ipe.WebView` — `Webview.app`,
 //! `Ui.layout`, `Ui.column`, `Ui.el`, `Ui.text`, `Ui.button`, and
 //! `String.fromInt`.
 //!
@@ -7,7 +7,7 @@
 //!
 //! ## Architecture
 //!
-//! 1. A minimal Ipe.Webview counter program is written to a temp dir.
+//! 1. A minimal Ipe.WebView counter program is written to a temp dir.
 //! 2. `ipe::build` compiles it (parse → canon → types → lower → emit Rust).
 //! 3. `e2e_support::build_rust_binary` runs `cargo build` on the emitted project —
 //!    the shared Cargo target lets wry/tao/webkit2gtk compile once and be reused.
@@ -33,7 +33,7 @@
 //! IPE_E2E=1 cargo test webview_e2e
 //! ```
 
-/// A minimal Ipe.Webview counter app exercising the `Webview.app` wiring.
+/// A minimal Ipe.WebView counter app exercising the `Webview.app` wiring.
 ///
 /// Kernels exercised:
 /// - `Webview.app`   — constrain scheme + 5-field cfg with nested
@@ -49,7 +49,7 @@
 /// Note: `view` wraps the Element tree in `Ui.layout [] (...) -> Html Msg`
 /// (unlike Ipe.Tui, which renders the Element tree directly to ANSI cells).
 /// This is required: the Webview runtime drives the same HTML renderer as
-/// Ipe.Live — `Html Msg` is the bridge type.
+/// Ipe.Web — `Html Msg` is the bridge type.
 ///
 /// Note: `init` takes `()` (unit), matching `Ty::Unit` in the constrain
 /// scheme.  Using `Ty::Tuple([])` (empty tuple) is NOT equivalent — the two
@@ -64,7 +64,7 @@
 /// record literal — required by the G4 gate in `emit_webview.rs`.
 const IPE_WEBVIEW_COUNTER: &str = r#"module Main exposing (main)
 
-import Ipe.Webview as Webview
+import Ipe.WebView as Webview
 import Ipe.Ui as Ui
 import Ipe.Cmd as Cmd
 import Ipe.Sub as Sub
@@ -158,7 +158,7 @@ fn is_missing_linux_webview_system_libs(err: &str) -> bool {
     err.contains("cargo build failed") && err.contains("pkg-config exited with status code 1")
 }
 
-/// Tier-A: ipe compiles the Ipe.Webview counter, the emitted Rust project
+/// Tier-A: ipe compiles the Ipe.WebView counter, the emitted Rust project
 /// links (with the `webview` + `wry` + `tao` deps from the promoted default
 /// features), and the binary exists.
 ///
@@ -166,7 +166,7 @@ fn is_missing_linux_webview_system_libs(err: &str) -> bool {
 /// - constrain: `Webview.app` correctly types the 5-field cfg
 ///   (`init/update/view/subscriptions/window` with nested `{ title, size }`).
 /// - lower: the cfg record literal bypasses IPE-L0107 (same exemption
-///   as `Live.app` and `Tui.app`).
+///   as `Web.app` and `Tui.app`).
 /// - emit: `emit_webview_call` → `emit_webview_app_inner` (G4 gate:
 ///   `window` is inline record, `size` is inline 2-tuple) → `webview_app(…)`.
 /// - manifest: `webview_cargo_toml` adds `"webview"` to default
@@ -189,13 +189,13 @@ fn webview_counter_build_only() -> Result<(), BoxError> {
             // `wry`/`tao` link against the system `webkit2gtk`/`glib` dev
             // packages on Linux, which this runner does not install
             // (`examples-sweep.yml` documents the same gap: "webview
-            // examples don't build on ipe during phase 1"; `Ipe.Webview` is
+            // examples don't build on ipe during phase 1"; `Ipe.WebView` is
             // macOS-first per CLAUDE.md). This is an environment gap, not a
             // codegen regression — THE SEAL (ipe exit-0 ⇒ cargo exit-0) is
             // unproven on Linux here, never asserted false-green.
             println!(
                 "LOUD-SKIP: Tier-A (webview build) — system `webkit2gtk`/`glib` dev \
-                 packages not installed on this runner (Ipe.Webview is macOS-first; \
+                 packages not installed on this runner (Ipe.WebView is macOS-first; \
                  Linux support is tracked, not yet CI-verified). Install \
                  `libwebkit2gtk-4.1-dev libglib2.0-dev` to run this test for real."
             );
@@ -289,7 +289,7 @@ fn webview_counter_tier_b() -> Result<(), BoxError> {
 /// lower gate instead rejects it with `IPE-L0119` at the offending span.
 const IPE_WEBVIEW_LET_BOUND_WINDOW: &str = r#"module Main exposing (main)
 
-import Ipe.Webview as Webview
+import Ipe.WebView as Webview
 import Ipe.Ui as Ui
 import Ipe.Cmd as Cmd
 import Ipe.Sub as Sub

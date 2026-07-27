@@ -1,4 +1,4 @@
-//! `LiveReq` — the typed request context passed to a TEA `init`.
+//! `WebReq` — the typed request context passed to a TEA `init`.
 //!
 //! Target-neutral: the server builds it from the incoming HTTP parts
 //! (`live::req::live_req`), the browser-WASM client synthesises it from
@@ -7,7 +7,7 @@
 use crate::dict::IpeDict;
 
 #[derive(Clone, Debug)]
-pub struct LiveReq {
+pub struct WebReq {
     pub path: String,
     pub query: String,
     pub method: String,

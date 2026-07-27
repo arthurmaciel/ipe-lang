@@ -67,11 +67,11 @@ where
     }
 }
 
-// Main-thread driver for the Ipe.Webview entry shape.
+// Main-thread driver for the Ipe.WebView entry shape.
 //
 // `block_on` (above) drives the entry future on a SPAWNED OS thread (so a
 // panic inside the future can be `.join()`-mapped to an `Err` instead of
-// aborting the process). That spawn is fatal for Ipe.Webview: tao/winit's
+// aborting the process). That spawn is fatal for Ipe.WebView: tao/winit's
 // `EventLoop` and Cocoa's `NSApplication` MUST be created and run on the
 // process's TRUE main thread on macOS (a hard Cocoa requirement — there is no
 // any-thread escape hatch), and Windows likewise expects the main thread. The

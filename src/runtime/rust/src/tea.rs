@@ -1,9 +1,9 @@
-//! Ipê TEA runtime core — Cmd/Sub + the Ipe.Cli line-oriented loop.
+//! Ipê TEA runtime core — Cmd/Sub + the Ipe.Console line-oriented loop.
 //!
 //! Cmd/Sub are generic over the message type M (NOT `any`): the intermediate
 //! value `a` in `Cmd.perform` is erased inside a boxed M-producing future, but M
 //! stays concrete. Step 1 (this file) ships the types, the simple kernels, and a
-//! blocking Cli.program loop (stdin -> onLine -> update -> view). Sub.every
+//! blocking Console.app loop (stdin -> onLine -> update -> view). Sub.every
 //! tickers + async Cmd.perform delivery land in steps 2-3 (a subManager + an
 //! mpsc msg channel + tokio::select over stdin and the channel).
 
@@ -18,7 +18,7 @@ pub enum IpeCmd<M> {
     Batch(Vec<IpeCmd<M>>),
     Perform(PerformThunk<M>),
     /// pub/sub broadcast. The thunk receives the publishing session's sid (the
-    /// origin), injected by the Live dispatch loop, and returns the subscriber
+    /// origin), injected by the Web dispatch loop, and returns the subscriber
     /// count. Not generic over the payload type T — T is captured inside the
     /// thunk (the same erasure-free pattern as `Perform`'s boxed future).
     Publish(Box<dyn FnOnce(&str) -> i64 + Send>),
@@ -287,7 +287,7 @@ where
 /// Internal loop event: a raw stdin line (Cli), a decoded key as (kind, value)
 /// (Tui — Strings keep this free of the feature-gated TuiKey type), a ticker or
 /// subscription Msg, a resolved `Cmd.perform`/`Task.attempt` result, or EOF.
-/// Shared by `cli_program` and `tui_app` so both reuse `SubManager` (Tick) +
+/// Shared by `console_app` and `tui_app` so both reuse `SubManager` (Tick) +
 /// `cli_run_cmd`.
 ///
 /// `PerformDone` and `Msg` carry the same payload but are kept distinct so the
@@ -298,7 +298,7 @@ where
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) enum CliEvent<M> {
     Line(String),
-    // Constructed only by the `tui` raw-key reader; cli_program matches it
+    // Constructed only by the `tui` raw-key reader; console_app matches it
     // defensively (keys are ignored under Cli). In a non-tui build the variant
     // is never constructed but must remain in the shared enum for that arm.
     #[cfg_attr(not(feature = "tui"), allow(dead_code))]
@@ -455,23 +455,23 @@ pub(crate) fn cli_run_cmd_tracked<M: Send + 'static>(
             });
         }
         IpeCmd::Publish(thunk) => {
-            // No Live session in a Cli program; publish with an empty origin
+            // No Web session in a Cli program; publish with an empty origin
             // (no subscriber's owner_sid matches "" → echo-default no-op).
             let _ = thunk("");
         }
     }
 }
 
-// ─── Ipe.Cli — line-oriented TEA loop ──────────────────────────────────────
+// ─── Ipe.Console — line-oriented TEA loop ──────────────────────────────────────
 
-/// Cli.program { init, update, view, subscriptions, onLine } : Task Error ().
+/// Console.app { init, update, view, subscriptions, onLine } : Task Error ().
 ///
 /// init -> fire cmd -> subs -> view; then fold each event (stdin line via
 /// onLine, ticker/Cmd.perform Msg) through update -> re-fire cmd -> re-subs ->
 /// view, until stdin EOF. Stdin is read on a blocking task; tickers + perform
 /// results merge into the same single-threaded update sequence via one channel.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn cli_program<Model, Msg, E, FInit, FUpdate, FView, FSubs, FOnLine>(
+pub fn console_app<Model, Msg, E, FInit, FUpdate, FView, FSubs, FOnLine>(
     init: FInit,
     update: FUpdate,
     view: FView,
@@ -500,7 +500,7 @@ where
         // stays parked on `lines()` until the next stdin line (or process exit).
         // Benign for a one-shot Cli `main` (the process is exiting anyway); a
         // shutdown flag wouldn't help since the read blocks until the next line
-        // regardless. Do NOT compose `cli_program` under a cancelling parent or
+        // regardless. Do NOT compose `console_app` under a cancelling parent or
         // invoke it twice in one process without first accounting for this.
         let line_tx = tx.clone();
         std::thread::spawn(move || {
@@ -544,7 +544,7 @@ where
         // the cursor stays on the prompt line for the user's input. An app that
         // wants each render on its own line supplies its own trailing "\n"
         // in its `view` string, exactly as the Go contract requires — see
-        // `tests/golden/cli_program_view_separator` for a fixture that
+        // `tests/golden/console_app_view_separator` for a fixture that
         // deliberately does NOT do this and therefore glues renders
         // together, matching Go byte-for-byte.
         let _ = std::io::stdout().write_all(view(model.clone()).as_bytes());

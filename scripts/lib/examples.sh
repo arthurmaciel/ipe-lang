@@ -16,8 +16,8 @@
 # Provides (all FUNCTIONS — call them, don't read arrays):
 #   all_examples            → every candidate example dir, one per line (no trailing /).
 #   is_out_of_scope <dir>   → exit 0 IFF Go-FFI (imports an unresolvable Go-pkg module).
-#   is_web_example  <dir>   → exit 0 IFF Ipe.Live / Ipe.Http.Server (browser-drivable).
-#   example_shape   <dir>   → wasm|tui|webview|fyne|server|live|cli
+#   is_web_example  <dir>   → exit 0 IFF Ipe.Web / Ipe.Http.Server (browser-drivable).
+#   example_shape   <dir>   → wasm|tui|webview|fyne|web|program
 #   build_set               → all_examples − Go-FFI (the BUILD sweep set).
 #   run_set / perf_set      → == build_set.
 
@@ -164,14 +164,14 @@ is_live_network_cli() {
   return 1
 }
 
-# ── is_web_example <dir>: Ipe.Live OR Ipe.Http.Server (browser-drivable) ─────
+# ── is_web_example <dir>: Ipe.Web OR Ipe.Http.Server (browser-drivable) ─────
 is_web_example() {
-  _shape_match "$1/src" 'Ipe\.Live|Live\.app|Server\.listen|Ipe\.Http\.Server'
+  _shape_match "$1/src" 'Ipe\.Web|Web\.app|Server\.listen|Ipe\.Http\.Server'
 }
 
 # ── is_wasm_example <dir>: has a [wasm] section in ipe.toml ─────────────────
 # The wasm shape is the only one detected from the project manifest rather than
-# from source imports, because `Live.app` also appears in wasm examples (the
+# from source imports, because `Web.app` also appears in wasm examples (the
 # same function emits `wasm_app` under --target wasm). The ipe.toml `[wasm]`
 # section is the authoritative build-time signal.
 is_wasm_example() {
@@ -210,15 +210,15 @@ _shape_match() { # $1=src dir  $2=regex
 example_shape() {
   local d="$1" s="$1/src"
   # wasm: detected from ipe.toml [wasm] section, not from source imports,
-  # because Live.app also appears in wasm sources (it emits wasm_app under
-  # --target wasm). Check this BEFORE the live/server shape match.
+  # because Web.app also appears in wasm sources (it emits wasm_app under
+  # --target wasm). Check this BEFORE the web/program shape match.
   if   is_wasm_example "$d";                                then echo wasm
   elif _shape_match "$s" 'Ipe\.Tui|Tui\.app';               then echo tui
-  elif _shape_match "$s" 'Ipe\.Webview|Webview\.app';        then echo webview
+  elif _shape_match "$s" 'Ipe\.WebView|WebView\.app';        then echo webview
   elif _shape_match "$s" 'Fyne';                             then echo fyne
-  elif _shape_match "$s" 'Ipe\.Live|Live\.app';              then echo live
-  elif _shape_match "$s" 'Server\.listen|Ipe\.Http\.Server'; then echo server
-  else echo cli; fi
+  elif _shape_match "$s" 'Ipe\.Web|Web\.app';                then echo web
+  elif _shape_match "$s" 'Server\.listen|Ipe\.Http\.Server'; then echo program
+  else echo program; fi
 }
 
 # ── build_set: all_examples minus Go-FFI (unresolvable-import examples) ──────

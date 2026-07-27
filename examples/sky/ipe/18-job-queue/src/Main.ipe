@@ -11,7 +11,7 @@ import Ipe.Random as Random
 import Ipe.Crypto as Crypto
 import Ipe.Error as Error exposing (Error)
 import Ipe.Db as Db
-import Ipe.Live as Live exposing (app, route)
+import Ipe.Web as Live exposing (app, route)
 import Ipe.Html exposing (..)
 import Ipe.Html.Events exposing (onClick)
 import Ipe.Cmd as Cmd

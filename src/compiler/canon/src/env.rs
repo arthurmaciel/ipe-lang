@@ -109,11 +109,11 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Html"], "Html"),
     (&["Ipe", "Html", "Attributes"], "Attr"),
     (&["Ipe", "Html", "Events"], "Event"),
-    (&["Ipe", "Live"], "Live"),
+    (&["Ipe", "Web"], "Web"),
     (&["Ipe", "Tui"], "Tui"),
-    (&["Ipe", "Webview"], "Webview"),
+    (&["Ipe", "WebView"], "WebView"),
     // ── Effect stdlib modules ───────────────────────────────────────────────
-    (&["Ipe", "Cli"], "Cli"),
+    (&["Ipe", "Console"], "Console"),
     (&["Ipe", "Auth"], "Auth"),
     (&["Ipe", "Http", "Server", "Stream"], "Stream"),
     (&["Ipe", "Http", "Stream"], "HttpStream"),
@@ -1495,15 +1495,15 @@ impl Env {
                     "onMsg",
                 ],
             ),
-            // ── Ipe.Live / Ipe.Live app-entry kernels ────────────────────────────
-            ("Live", &["app", "appRouted", "route", "renderStatic"]),
+            // ── Ipe.Web / Ipe.Web app-entry kernels ──────────────────────────────
+            ("Web", &["app", "appRouted", "route", "renderStatic"]),
             // ── Ipe.Tui / Ipe.Tui app-entry kernels ──────────────────────────────
             ("Tui", &["app", "program"]),
-            // ── Ipe.Webview / Ipe.Webview app-entry kernel ───────────────────────
-            ("Webview", &["app"]),
+            // ── Ipe.WebView / Ipe.WebView app-entry kernel ───────────────────────
+            ("WebView", &["app"]),
             // ── Effect stdlib modules ─────────────────────────────────────────────
-            // Ipe.Cli / Ipe.Cli — line-oriented TEA app-entry (fully wired).
-            ("Cli", &["program"]),
+            // Ipe.Console — line-oriented TEA app-entry (fully wired). — line-oriented TEA app-entry (fully wired).
+            ("Console", &["app"]),
             // Ipe.Auth / Ipe.Auth — authentication helpers (fail-closed: no lower
             // arm yet → IPE-L0108 at lower time; canon registration removes N0004).
             (
@@ -1626,12 +1626,12 @@ impl Env {
             ("Ipe.Ui", "Ui"),
             ("Ipe.Html.Attributes", "Attr"),
             ("Ipe.Html.Events", "Event"),
-            ("Ipe.Live", "Live"),
+            ("Ipe.Web", "Web"),
             ("Ipe.Tui", "Tui"),
-            ("Ipe.Webview", "Webview"),
+            ("Ipe.WebView", "WebView"),
             ("Ipe.Log", "Log"),
             // ── Effect stdlib module aliases ──────────────────────────────────────
-            ("Ipe.Cli", "Cli"),
+            ("Ipe.Console", "Console"),
             ("Ipe.Auth", "Auth"),
             ("Ipe.Http.Server.Stream", "Stream"),
             ("Ipe.Http.Stream", "HttpStream"),

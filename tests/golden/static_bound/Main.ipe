@@ -18,7 +18,7 @@ import Ipe.Log exposing (println)
 -- `msg: 'static`; the emitted `linkNode`/`pairToAttr` functions carried only
 -- `<T1: Clone>`.
 --
--- This is EXACTLY the `Ipe.Live.Head.link` shape — `List.map pairToAttr attrs`
+-- This is EXACTLY the `Ipe.Web.Head.link` shape — `List.map pairToAttr attrs`
 -- boxes the `msg`-generic `pairToAttr` into a `+ 'static` trait object.
 --
 -- Fix (`BoundSet::STATIC` + `body_boxes_generic_callback` in `ipe_lower`): a

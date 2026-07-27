@@ -9,9 +9,9 @@
 //! `msg: 'static`; the emitted `linkNode`/`pairToAttr` functions carried only
 //! `<T1: Clone>`.
 //!
-//! This is EXACTLY the `Ipe.Live.Head.link` shape (the two examples
+//! This is EXACTLY the `Ipe.Web.Head.link` shape (the two examples
 //! `37-composite-live-shop` / `38-composite-ui-multibackend` that surfaced the
-//! bug both import `Ipe.Live.Head`).
+//! bug both import `Ipe.Web.Head`).
 //!
 //! Fix (`crates/ipe_ir/src/ir.rs` `BoundSet::STATIC` + `crates/ipe_lower`'s
 //! `body_boxes_generic_callback`): a generic that flows, inside the body, into a

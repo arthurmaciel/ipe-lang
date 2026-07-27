@@ -1,5 +1,5 @@
--- | Ipe.Live.Console — types exposed for the optional `consoleAuth`
--- field on `Live.app` cfg (v0.16.0+).
+-- | Ipe.Web.Console — types exposed for the optional `consoleAuth`
+-- field on `Web.app` cfg (v0.16.0+).
 --
 -- The `consoleAuth` callback is row-polymorphic, optional, and has
 -- shape `Request -> Task Error (Maybe Identity)`.  When the framework
@@ -13,14 +13,14 @@
 -- Use this when the app already has an SSO / multi-tenant session
 -- middleware: thread it into `consoleAuth` and the embedded console
 -- inherits the same auth surface — no second token to provision.
-module Ipe.Live.Console exposing
+module Ipe.Web.Console exposing
     ( Identity
     , defaultIdentity
     , withEmail, withClaim, withClaims
     )
 
--- | Ipe.Live.Console — types exposed for the optional `consoleAuth`
--- field on `Live.app` cfg (v0.16.0).
+-- | Ipe.Web.Console — types exposed for the optional `consoleAuth`
+-- field on `Web.app` cfg (v0.16.0).
 --
 -- The `consoleAuth` callback is row-polymorphic, optional, and has
 -- shape:
@@ -40,7 +40,7 @@ module Ipe.Live.Console exposing
 --
 -- Example shape:
 --
---     import Ipe.Live.Console exposing (Identity)
+--     import Ipe.Web.Console exposing (Identity)
 --     import Ipe.Dict as Dict
 --
 --     identifyAdmin : Request -> Task Error (Maybe Identity)
@@ -60,7 +60,7 @@ module Ipe.Live.Console exposing
 --                     Task.succeed Nothing
 --
 --     main =
---         Live.app
+--         Web.app
 --             { init = init, update = update, view = view
 --             , subscriptions = subscriptions
 --             , routes = routes, notFound = HomePage

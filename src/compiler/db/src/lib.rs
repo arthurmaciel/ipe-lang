@@ -682,7 +682,7 @@ pub type TypecheckResult = Result<Arc<ipe_types::SolvedTypes>, (Diagnostic, Vec<
 /// [`ipe_types::unionfind`]-backed constraint graph over the ENTIRE linked
 /// module (`Builder::run`), and its post-solve passes — Boundary Scheme
 /// Promotion, the field-access/record-update deferred-resolution fixpoint,
-/// routed-`Live.app` witness checks — all operate over that single joint
+/// routed-`Web.app` witness checks — all operate over that single joint
 /// constraint set. Splitting this into a true `typecheck(ModuleId)` query
 /// would require re-deriving Ipê's cross-module generalization semantics on
 /// top of a scoped per-module solve seeded from deps' TYPED interfaces

@@ -16,7 +16,7 @@
 //!   [`CARGO_CONFIG_MARKER`] so the driver can recognise (and, on a later
 //!   non-static build, remove) a file it generated.
 //! * [`manifest_is_webview`] is the typed app-shape probe the driver's
-//!   webview-under-static refusal reads: an `Ipe.Webview` app links the
+//!   webview-under-static refusal reads: an `Ipe.WebView` app links the
 //!   system webview and can never be a static artifact.
 //!
 //! Anchored-`replacen` surgery with fail-loud [`Diagnostic::CompilerBug`] on
@@ -212,7 +212,7 @@ pub fn staticize_manifest(base: &str, allocator: StaticAllocator) -> DResult<Str
     Ok(out)
 }
 
-/// Whether the emitted manifest is an `Ipe.Webview` app.
+/// Whether the emitted manifest is an `Ipe.WebView` app.
 ///
 /// Read from the `default = [...]` feature list the backend computed (the
 /// machine-readable app-shape record every `*_cargo_toml` surgery

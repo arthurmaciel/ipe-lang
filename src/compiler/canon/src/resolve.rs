@@ -79,7 +79,7 @@ const TYPE_EXPANSION_NODE_LIMIT: u32 = 100_000;
 /// Request 2203, Response 2204, Route 2205, Cookie 2206, Html 2221,
 /// Element 2236, Attribute 2254, Event 2279, Length 2295, HAlign 2297,
 /// VAlign 2298, Location 2299, PseudoClass 2300, Description 2301,
-/// LayoutContext 2302, LiveReq 2304.
+/// LayoutContext 2302, WebReq 2304.
 /// ```
 ///
 /// `SqlFragment` is not in this citation list; see its own arm in
@@ -93,7 +93,7 @@ const TYPE_EXPANSION_NODE_LIMIT: u32 = 100_000;
 ///   * `Value` — matched *after* the `enum_variants` guard, so a user
 ///     `type Value` already wins; it is not a silent-override hole.
 ///   * `Color`, `Length`, `HAlign`, `VAlign`, `Location`, `PseudoClass`,
-///     `Description`, `LayoutContext`, `LiveReq` — the nullary Ipe.Ui / Ipe.Live
+///     `Description`, `LayoutContext`, `WebReq` — the nullary Ipe.Ui / Ipe.Web
 ///     opaque names. Leaving them UNRESERVED is what lets a user ADT — and,
 ///     crucially, a compiled-source `Ipe.Css` type (`Color` / `Length` / …) —
 ///     declare them; the home-aware guard keeps the genuine Ipe.Ui
@@ -145,7 +145,7 @@ const RESERVED_BUILTIN_TYPES: &[&str] = &[
     "PseudoClass",
     "Description",
     "LayoutContext",
-    "LiveReq",
+    "WebReq",
 ];
 
 /// Extra built-in type names that are handled by the lowerer's explicit arms
@@ -159,7 +159,7 @@ const RESERVED_BUILTIN_TYPES: &[&str] = &[
 ///
 /// The names below are absent from `RESERVED_BUILTIN_TYPES` because they are
 /// either:
-/// * Nullary Ipe.Ui/Ipe.Live opaque names whose lowerer arm sits BELOW the
+/// * Nullary Ipe.Ui/Ipe.Web opaque names whose lowerer arm sits BELOW the
 ///   `enum_variants` guard (so a user `type Color` wins by its real home) — and
 ///   therefore can never be shadowed in a user annotation either; OR
 /// * Additional opaque kernel types added after the original reservation list
@@ -182,9 +182,9 @@ const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
     "PseudoClass",
     "Description",
     "LayoutContext",
-    "LiveReq",
-    // Ipe.Live / Ipe.Http.Server / Ipe.Http.Server.WebSocket opaque types.
-    "LiveRoute",
+    "WebReq",
+    // Ipe.Web / Ipe.Http.Server / Ipe.Http.Server.WebSocket opaque types.
+    "WebRoute",
     "StreamWriter",
     "HttpRequest",
     "WebSocketServer",
@@ -247,11 +247,11 @@ const KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES: &[&str] = &[
     "Value",
     // `Handler -> Handler` middleware alias from Ipe.Http.Middleware.
     "Middleware",
-    // Ipe.Live session object.
+    // Ipe.Web session object.
     "Session",
-    // Ipe.Live session store.
+    // Ipe.Web session store.
     "Store",
-    // Virtual DOM node (Ipe.Live diff engine).
+    // Virtual DOM node (Ipe.Web diff engine).
     "VNode",
 ];
 
@@ -293,7 +293,7 @@ fn builtin_container_arity(name: Option<&str>) -> Option<usize> {
 /// [`ModuleOrigin::EmbeddedStdlib`] module is permitted to DEFINE, while a
 /// [`ModuleOrigin::User`] module stays rejected (IPE-N0026).
 ///
-/// These are exactly the nullary Ipe.Ui / Ipe.Live opaque names that sit
+/// These are exactly the nullary Ipe.Ui / Ipe.Web opaque names that sit
 /// BELOW the home-aware `enum_variants` guard in the lowerer
 /// (`ipe_lower::ir_type_from_ty` + `ir_type_from_canon`). Because the lowerer
 /// keys a program-defined `type Length` under its real `(home, name)`
@@ -324,7 +324,7 @@ const STDLIB_DEFINABLE_UI_TYPES: &[&str] = &[
     "PseudoClass",
     "Description",
     "LayoutContext",
-    "LiveReq",
+    "WebReq",
 ];
 
 /// The subset of [`RESERVED_BUILTIN_TYPES`] that a trusted
@@ -1099,7 +1099,7 @@ const HOME_SENSITIVE_BUILTIN_TYPES: &[&str] = &["Attribute", "Event"];
 /// `is_html = home contains "Html"`. Without this fold, a bare `Attribute`
 /// exposed from a stdlib Html module reaches the empty-home sentinel (stdlib
 /// imports are skipped by the dep-injection loop), so `is_html` fails and the
-/// `Ipe.Live.Head.pairToAttr : (String,String) -> Attribute msg` shape
+/// `Ipe.Web.Head.pairToAttr : (String,String) -> Attribute msg` shape
 /// mis-lowers to `ui::element::Attribute` while its `Attr.attribute` body
 /// produces `html::Attribute` — an exit-0-then-cargo-fail E0308 SEAL violation.
 /// The bare path resolves via `resolve_unqualified_type_home`, which consults
@@ -1828,7 +1828,7 @@ fn synthesize_record_alias_ctors(
         // the emitted Rust fail to build. Two disjoint non-derivable shapes:
         //
         //   * a raw function — directly (`{ handler : Int -> Msg }`, config-record
-        //     aliases like `Live.app`'s cfg) OR nested inside a derive carrier
+        //     aliases like `Web.app`'s cfg) OR nested inside a derive carrier
         //     (`{ xs : List (Int -> Int) }`, `{ f : Maybe (Int -> Int) }`,
         //     `{ p : (Int -> Int, Bool) }`, `{ g : Result e (Int -> Int) }`, a
         //     nested record). For a DIRECT arrow the lowerer's own

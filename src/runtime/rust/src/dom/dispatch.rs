@@ -195,7 +195,7 @@ mod tests {
 
     // ui_on_submit_ only has a real impl under the `live` or `wasm-client`
     // feature; without it the stub returns NoAttribute and the test would panic.
-    #[cfg(any(feature = "live", feature = "wasm-client"))]
+    #[cfg(any(feature = "web", feature = "wasm-client"))]
     #[test]
     fn ui_on_submit_dispatches_via_onform_not_onraw() {
         use crate::ui::element::Attribute as UiAttribute;

@@ -248,7 +248,7 @@ pub fn offer_span(ts_ms: u64, name: &str, dur_us: u64, ok: bool) {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "live")]
+    #[cfg(feature = "web")]
     use super::super::core::IpeResult;
     use super::*;
     use sqlx::Row;
@@ -326,7 +326,7 @@ mod tests {
         // contract end-to-end. `hub_list_services` is a `live`-gated reader, so
         // this leg only runs when `live` is compiled in (a `db`-only build has
         // no hub); the write/mapping asserts above hold in either configuration.
-        #[cfg(feature = "live")]
+        #[cfg(feature = "web")]
         {
             let n: IpeResult<String, Vec<String>> =
                 super::super::live::hub::hub_list_services(path.clone()).await;

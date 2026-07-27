@@ -1,9 +1,9 @@
-//! Routed `Live.app` with `routes = []` and a wrong `notFound` type must be
+//! Routed `Web.app` with `routes = []` and a wrong `notFound` type must be
 //! rejected by ipe with IPE-T0001.
 //!
 //! ## Background
 //!
-//! `LiveRoute` is phantom-parametric (`LiveRoute page`) so route CONSTRUCTORS
+//! `WebRoute` is phantom-parametric (`WebRoute page`) so route CONSTRUCTORS
 //! force `var(2)` (the page type) to match.  But with an EMPTY `routes = []`
 //! list there is no constructor to witness `var(2)`, so `var(2)` would be
 //! pinned only by `notFound` — any type would satisfy it.  Then `notFound = 5`
@@ -34,10 +34,10 @@ use ipe::CliError;
 // ── Inline source strings for T4d/T4f/MIX and non-routed regression ──────────
 
 /// T4d: non-empty routes, but `notFound` is the wrong ADT type (Msg not Page).
-/// Part A's `LiveRoute page` parametric fix pins `var(2)` via route ctors to
+/// Part A's `WebRoute page` parametric fix pins `var(2)` via route ctors to
 /// `Page`; `notFound = Increment` (Msg) then fails unification → IPE-T0001.
 const T4D_NONEMPTY_ROUTES_WRONG_NOTFOUND: &str = r#"module Main exposing (main)
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 type Page = CounterPage | AboutPage
 type Msg = Increment
@@ -49,9 +49,9 @@ update msg model =
 view model = Ui.layout [] (Ui.text (String.fromInt model.count))
 subscriptions _model = Sub.none
 main =
-    Live.app
+    Web.app
         { init = init, update = update, view = view, subscriptions = subscriptions
-        , routes = [ Live.route "/" CounterPage, Live.route "/about" AboutPage ]
+        , routes = [ Web.route "/" CounterPage, Web.route "/about" AboutPage ]
         , notFound = Increment
         }
 "#;
@@ -60,7 +60,7 @@ main =
 /// The route ctor forces `var(2) = Msg`; `notFound = CounterPage` (Page) then
 /// fails unification → IPE-T0001.
 const T4F_WRONG_ROUTE_CTOR_CORRECT_NOTFOUND: &str = r#"module Main exposing (main)
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 type Page = CounterPage | AboutPage
 type Msg = Increment
@@ -72,9 +72,9 @@ update msg model =
 view model = Ui.layout [] (Ui.text (String.fromInt model.count))
 subscriptions _model = Sub.none
 main =
-    Live.app
+    Web.app
         { init = init, update = update, view = view, subscriptions = subscriptions
-        , routes = [ Live.route "/" Increment ]
+        , routes = [ Web.route "/" Increment ]
         , notFound = CounterPage
         }
 "#;
@@ -82,7 +82,7 @@ main =
 /// MIX: non-empty routes with mixed types — one correct route ctor, one wrong
 /// route ctor. All route ctors share `var(2)`; the wrong ctor forces a mismatch.
 const MIX_MIXED_ROUTE_CTORS: &str = r#"module Main exposing (main)
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 type Page = CounterPage | AboutPage
 type Msg = Increment
@@ -94,21 +94,21 @@ update msg model =
 view model = Ui.layout [] (Ui.text (String.fromInt model.count))
 subscriptions _model = Sub.none
 main =
-    Live.app
+    Web.app
         { init = init, update = update, view = view, subscriptions = subscriptions
-        , routes = [ Live.route "/" CounterPage, Live.route "/inc" Increment ]
+        , routes = [ Web.route "/" CounterPage, Web.route "/inc" Increment ]
         , notFound = CounterPage
         }
 "#;
 
-/// Non-routed regression: a plain Live.app with Model = `{ count : Int }` (no
+/// Non-routed regression: a plain Web.app with Model = `{ count : Int }` (no
 /// `page` field) and `notFound = Increment` (Msg).  Part B's hook MUST NOT fire
 /// here — the Model has no `page` field, so we skip the check.
 ///
 /// Type annotations are required to pass the lowerer (mirrors `LIVE_GOOD` in
 /// `model_admissibility.rs`).
 const NON_ROUTED_LIVE: &str = r"module Main exposing (main)
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 type Msg = Increment
 type alias Model = { count : Int }
@@ -123,13 +123,13 @@ view model = Ui.layout [] (Ui.text (String.fromInt model.count))
 subscriptions : Model -> Sub Msg
 subscriptions _model = Sub.none
 main =
-    Live.app
+    Web.app
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [], notFound = Increment
         }
 ";
 
-/// `Live.app` with a NON-EMPTY `routes` list but Model has
+/// `Web.app` with a NON-EMPTY `routes` list but Model has
 /// no `page` field.  The Go oracle (`tools/oracle/bin/ipe`) compiles this fine
 /// (Go's `applyRoute` calls `RecordUpdate(model, {"Page": page})` which is a
 /// silent no-op when the `Page` field is absent).  This shape must compile on
@@ -138,7 +138,7 @@ main =
 /// Shape mirrors `examples/24-tui-kitchen-sink` (single nullary route, no
 /// `page` field in Model).
 const NON_ROUTED_LIVE_WITH_NONEMPTY_ROUTES: &str = r#"module Main exposing (main)
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 type Page = MainPage
 type Msg = Increment
@@ -154,9 +154,9 @@ view model = Ui.layout [] (Ui.text (String.fromInt model.count))
 subscriptions : Model -> Sub Msg
 subscriptions _model = Sub.none
 main =
-    Live.app
+    Web.app
         { init = init, update = update, view = view, subscriptions = subscriptions
-        , routes = [ Live.route "/" MainPage ]
+        , routes = [ Web.route "/" MainPage ]
         , notFound = MainPage
         }
 "#;
@@ -220,7 +220,7 @@ fn routed_empty_routes_int_notfound_is_ipe_t0001() {
     assert_eq!(
         got,
         Some(ipe_diagnostics::IPE_T0001),
-        "#108 R1: routed Live.app with empty routes and Int notFound \
+        "#108 R1: routed Web.app with empty routes and Int notFound \
          must be rejected with IPE-T0001, got: {result:?}",
     );
 }
@@ -246,7 +246,7 @@ fn routed_empty_routes_wrong_ctor_notfound_is_ipe_t0001() {
     assert_eq!(
         got,
         Some(ipe_diagnostics::IPE_T0001),
-        "#108 R2: routed Live.app with empty routes and wrong-ADT notFound \
+        "#108 R2: routed Web.app with empty routes and wrong-ADT notFound \
          must be rejected with IPE-T0001, got: {result:?}",
     );
 }
@@ -266,7 +266,7 @@ fn routed_correct_app_compiles() {
     };
     assert!(
         result.is_ok(),
-        "#108 positive control: well-typed routed Live.app must compile, got: {:?}",
+        "#108 positive control: well-typed routed Web.app must compile, got: {:?}",
         result.err(),
     );
 }
@@ -298,7 +298,7 @@ fn t4d_nonempty_routes_wrong_notfound_is_ipe_t0001() {
 
 /// T4f: non-empty routes, route ctor from wrong ADT, correct notFound.
 ///
-/// A route ctor `Live.route "/" Increment` forces `var(2) = Msg`.  The correct
+/// A route ctor `Web.route "/" Increment` forces `var(2) = Msg`.  The correct
 /// `notFound = CounterPage` (Page) then fails unification → IPE-T0001.
 #[test]
 fn t4f_wrong_route_ctor_is_ipe_t0001() {
@@ -336,7 +336,7 @@ fn mix_mixed_route_ctors_is_ipe_t0001() {
     );
 }
 
-/// Non-routed regression: plain `Live.app` with Model = `{ count : Int }` (no
+/// Non-routed regression: plain `Web.app` with Model = `{ count : Int }` (no
 /// `page` field) and `notFound = Increment` (Msg) must compile cleanly.
 ///
 /// Part B's post-solve hook MUST NOT fire here: the Model has no `page` field,
@@ -348,7 +348,7 @@ fn non_routed_live_app_compiles() {
     };
     assert!(
         result.is_ok(),
-        "NON-ROUTED regression: plain Live.app (no `page` field) must compile, got: {:?}",
+        "NON-ROUTED regression: plain Web.app (no `page` field) must compile, got: {:?}",
         result.err(),
     );
 }
@@ -361,7 +361,7 @@ fn non_routed_live_app_compiles() {
 // parameter — so the pre-round-4 bare `Route` rendering made a WELL-TYPED
 // routed app (`notFound = CounterPage`, matching `page : Page`) ipe-0 and
 // then cargo-fail with E0107 ("missing generics for struct `route::Route`").
-// Post-fix `IrType::LiveRoute(page)` renders `Route<MainPage>`.
+// Post-fix `IrType::WebRoute(page)` renders `Route<MainPage>`.
 
 /// The emitted-project dir for the well-typed empty-routes golden.
 fn empty_routes_ok_out() -> PathBuf {
@@ -400,8 +400,8 @@ fn routed_empty_routes_well_typed_compiles_and_renders_route_page() {
          `Route<MainPage>` (bare `Route` is the E0107 cargo failure)",
     );
     assert!(
-        main_rs.contains("live_app_routed"),
-        "#108: a Model with a `page` field must emit `live_app_routed`",
+        main_rs.contains("web_app_routed"),
+        "#108: a Model with a `page` field must emit `web_app_routed`",
     );
 }
 
@@ -435,18 +435,18 @@ fn routed_empty_routes_well_typed_cargo_builds() {
 
 // ── Non-empty routes, no `page` field → non-routed path ──────────────────────
 //
-// The Go oracle compiles a `Live.app` with non-empty `routes` but no `page`
+// The Go oracle compiles a `Web.app` with non-empty `routes` but no `page`
 // field in Model — `applyRoute` calls `RecordUpdate(model, {"Page": page})`
 // which silently no-ops when `Page` is absent.  This shape must not be gated
-// stricter than the reference; the non-routed path (`live_app`) is emitted
+// stricter than the reference; the non-routed path (`web_app`) is emitted
 // instead.
 
-/// `Live.app` with a non-empty `routes` list but Model has no `page`
+/// `Web.app` with a non-empty `routes` list but Model has no `page`
 /// field must compile on the non-routed path (mirrors `examples/24-tui-
 /// kitchen-sink` and `examples/25-ipe-console`).
 ///
 /// Before fix: ipec returned IPE-L0124 (gate was overly strict vs. Go oracle).
-/// After fix: ipe exits 0 and emits `live_app` (not `live_app_routed`).
+/// After fix: ipe exits 0 and emits `web_app` (not `web_app_routed`).
 #[test]
 fn non_routed_with_nonempty_routes_compiles() {
     let Some(result) = compile_src("non_routed_nonempty", NON_ROUTED_LIVE_WITH_NONEMPTY_ROUTES)
@@ -455,7 +455,7 @@ fn non_routed_with_nonempty_routes_compiles() {
     };
     assert!(
         result.is_ok(),
-        "#153 regression: Live.app with non-empty routes but no `page` field \
+        "#153 regression: Web.app with non-empty routes but no `page` field \
          must compile on the non-routed path (Go oracle accepts this shape), \
          got: {:?}",
         result.err(),

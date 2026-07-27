@@ -2,7 +2,7 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Ipe.String as String
-import Ipe.Live as Live
+import Ipe.Web as Live
 import Ipe.Ui as Ui exposing (Element)
 import Ipe.Ui.Background as Background
 import Ipe.Ui.Border as Border

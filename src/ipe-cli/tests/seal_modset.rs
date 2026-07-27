@@ -70,7 +70,7 @@ const BARE: &str = "module Main exposing (main)\n\
     import Ipe.Log exposing (println)\n\
     main = println \"bare\"\n";
 
-/// `Cmd.publish` with NO Live/server/TEA-app kernel. `cmd_publish` lives in
+/// `Cmd.publish` with NO Web/server/TEA-app kernel. `cmd_publish` lives in
 /// `live::pubsub`; the shape must pull in the `live` module (and, transitively,
 /// `tea`). Was E0425 `cmd_publish` before the fix.
 const CMD_PUBLISH: &str = "module Main exposing (main)\n\
@@ -81,7 +81,7 @@ const CMD_PUBLISH: &str = "module Main exposing (main)\n\
     pubCmd = Cmd.publish \"topic\" \"hello\"\n\
     main = println \"cmdpublish\"\n";
 
-/// `Sub.subscribeTopic` with no Live kernel. `sub_subscribe_topic` lives in
+/// `Sub.subscribeTopic` with no Web kernel. `sub_subscribe_topic` lives in
 /// `live::pubsub`. Was E0425 `sub_subscribe_topic` before the fix.
 const SUB_SUBSCRIBE: &str = "module Main exposing (main)\n\
     import Ipe.Prelude exposing (..)\n\
@@ -92,13 +92,13 @@ const SUB_SUBSCRIBE: &str = "module Main exposing (main)\n\
     subFor = Sub.subscribeTopic \"topic\" Got\n\
     main = println \"subtopic\"\n";
 
-/// `Live.renderStatic` from a CLI `main` (live WITHOUT any TEA/server kernel).
-/// The `live` module's `use crate::tea::{IpeCmd, IpeSub}` is unconditional, so
+/// `Web.renderStatic` from a CLI `main` (web WITHOUT any TEA/server kernel).
+/// The `web` module's `use crate::tea::{IpeCmd, IpeSub}` is unconditional, so
 /// `tea` must be declared even though no `Cmd`/`Sub` kernel is named. Was E0432
 /// `crate::tea` before the fix.
 const LIVE_RENDER_STATIC: &str = "module Main exposing (main)\n\
     import Ipe.Prelude exposing (..)\n\
-    import Ipe.Live as Live\n\
+    import Ipe.Web as Web\n\
     import Ipe.Html as Html\n\
     import Ipe.Task as Task\n\
     type alias Model = { title : String }\n\
@@ -106,7 +106,7 @@ const LIVE_RENDER_STATIC: &str = "module Main exposing (main)\n\
     viewStatic model =\n    \
         Html.node \"div\" [] [ Html.text model.title ]\n\
     main =\n    \
-        Live.renderStatic viewStatic { title = \"hi\" } |> Task.run\n";
+        Web.renderStatic viewStatic { title = \"hi\" } |> Task.run\n";
 
 /// `HttpStream.chunks` where the `StreamId` arrives as a parameter (no `open`
 /// in the module set). `sub_subscribe_stream` + `IpeStreamId` live in
@@ -155,7 +155,7 @@ fn live_render_static_cli_builds() {
         return;
     }
     emit_and_build("live_render_static", LIVE_RENDER_STATIC)
-        .expect("Live.renderStatic must declare tea (was E0432 crate::tea)");
+        .expect("Web.renderStatic must declare tea (was E0432 crate::tea)");
 }
 
 #[test]

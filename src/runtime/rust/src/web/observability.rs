@@ -1,5 +1,5 @@
-//! Ipe.Live observability endpoints — the operator surface mounted on every
-//! Live app, mirroring Go's `runtime-go/rt/observability.go`:
+//! Ipe.Web observability endpoints — the operator surface mounted on every
+//! Web app, mirroring Go's `runtime-go/rt/observability.go`:
 //!
 //! - `GET /_ipe/healthz`  — liveness probe, always `{"status":"ok"}`.
 //! - `GET /_ipe/readyz`   — readiness probe, `{"status":"ready"}` (200) or
@@ -307,7 +307,7 @@ mod tests {
     // Regression: a panicking handler must become a 500 (not an unwound, dropped
     // connection) AND still be counted by `track` as status 500 — the Go-parity
     // contract for the new `CatchPanicLayer` placed INNER of `track` in the
-    // Ipe.Live router. Well-typed Ipê can't panic (the no-panic thesis), so this
+    // Ipe.Web router. Well-typed Ipê can't panic (the no-panic thesis), so this
     // defense-in-depth floor can only be exercised from a test handler that
     // deliberately panics. NOTE: `.unwrap()`/`.expect()` are denied on ALL
     // targets (incl. tests); `panic!` and `match Infallible {}` are the allowed
@@ -332,7 +332,7 @@ mod tests {
             panic!("token=SECRET123 internal /etc/secret leaked")
         }
 
-        // Mirror the real Ipe.Live nesting: track( catch_panic( handler ) ) with
+        // Mirror the real Ipe.Web nesting: track( catch_panic( handler ) ) with
         // the REAL shared responder. csrf is omitted — it only acts on mutating
         // methods, so a GET panic exercises the catch_panic→500 path + track's
         // post-`next.run` metering identically.
