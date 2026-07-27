@@ -359,6 +359,12 @@ in the merge queue.
 (`gh pr merge <N> --auto --squash`) → it merges the moment the gate is green
 and the branch is up to date with `main`.
 
+**One PR per unit of functionality.** Before opening a PR, check for an open PR
+already covering that functionality (`gh pr list`). If one exists, extend it —
+push commits to its branch, or comment on it — instead of opening a second.
+Parallel PRs for the same feature diverge and conflict, and reviewing them twice
+wastes the reviewer's time. Open a new PR only for genuinely separate work.
+
 **The fast required gate** (target: minutes — the checks branch protection
 requires):
 
