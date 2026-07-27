@@ -377,7 +377,7 @@ pub fn title(c: Code) -> &'static str {
         IPE_L0104 => "only Task () is supported yet",
         IPE_L0105 => "parameter destructuring not supported yet",
         IPE_L0106 => "top-level function needs a type signature",
-        IPE_L0107 => "function value in a record field not supported yet",
+        IPE_L0107 => "function value in a record field not supported here",
         IPE_L0108 => "kernel function not available yet",
         IPE_L0110 => "partial or over-application not supported yet",
         IPE_L0111 => "updating a generic record is not supported yet",
