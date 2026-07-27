@@ -172,6 +172,7 @@ pub fn run_audit(rest: &[String]) -> Result<(), CliError> {
         declared: &prepared.manifest.capabilities,
         has_rust_deps: !prepared.manifest.rust_dependencies.is_empty(),
         root: &prepared.manifest.root,
+        emitted_dir: &prepared.emitted_dir,
         probe_fixture: tier2_probe_fixture(),
     })?;
 

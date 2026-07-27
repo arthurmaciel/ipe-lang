@@ -133,22 +133,31 @@ argv = [ /usr/bin/env PROBE_MODE=tier2 TIER2_AXIS=<sel> SCRATCH_DIR=… ESCAPE_P
   fixed exit-owner; the untrusted, generated-from-package material is confined to
   the child's build. The wrapper never trusts anything the child wrote.
 
-**The wrapper's tier2 denial signal for a real build.** For the build-time floor
-(b), a withheld-axis syscall inside the untrusted `cargo build` is killed by
-seccomp/bwrap and surfaces as the child's non-zero/killed exit. The wrapper must
-map "child build failed *and* the withheld axis was the cause" to the per-axis
-code, and "child build failed for an ordinary compile/link reason" to a
-non-per-axis, non-zero exit (decoded `BuildFailed`, `build_jail.rs:174`).
-Distinguishing these is the denial-vs-error mechanic of the campaign design (its
-§2.4): the wrapper performs the *same* fixed axis probe it does today (a socket /
-out-of-scratch write) **after** the child build, under the same withheld-axis
-jail, and emits the per-axis code from *its own* probe result — never from
-parsing the child's build log. This keeps the denial signal wrapper-owned even
-when the untrusted child is a real build: the child's failure alone is
-`BuildFailed`; a wrapper-owned axis denial is `Denied{axis}`. An axis the child's
-build genuinely reached will *also* trip the wrapper's post-build probe under the
-same withheld jail, because the jail withholds that axis for the whole confined
-session.
+**The wrapper's tier2 denial signal for a real build.** A fixed axis probe on the
+FULL declared-scoped run is unsound: a socket / out-of-scratch write the wrapper
+performs unconditionally *fabricates* a capability demand the package never made,
+so no declared set other than `{network, filesystem}` could ever certify (a
+benign `[network]`-only package's fixed filesystem probe is denied → reject). The
+sound signal splits by run:
+
+- **Full declared-scoped run (`TIER2_AXIS=none`): child-exit-only, NO fixed axis
+  probe.** A withheld axis is withheld by capability *removal* (the net namespace
+  is unshared; the escape path is not bound writable), so a build that reaches it
+  is killed / errors → the child's non-zero exit decodes to `BuildFailed`. A build
+  that *caught* the denial and exited anyway performed **no effect** (a caught
+  denial is a no-op), so the child's clean exit is positive proof it reached no
+  withheld axis → `Clean`. The child build is a fixed `cargo build` of a probe
+  crate whose `main` we generate (address-of refs, no author `main`), so the
+  untrusted crate cannot own this exit's meaning. Used-but-undeclared thus
+  collapses into build-fails-in-jail on the full run: both reject, only the
+  diagnostic differs (axis naming is traded for not fabricating a demand). A
+  non-zero child with no axis probe run maps to a distinct non-per-axis exit
+  (`TIER2_EXIT_BUILD_FAILED`, decoded `BuildFailed`) — the load-bearing hinge: the
+  wrapper never exits clean when the child build failed.
+- **Tightening run (`TIER2_AXIS=<the one withheld axis>`): the single-axis fixed
+  probe.** Here the axis is one the author *declared*, so probing it fabricates no
+  demand: the run can only *keep* the axis (probe denied → axis needed) or reject,
+  never certify. This is the legitimate, bounded use of the fixed probe.
 
 ---
 
