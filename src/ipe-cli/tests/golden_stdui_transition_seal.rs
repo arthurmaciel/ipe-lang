@@ -34,7 +34,7 @@ import Ipe.Ui.Transition as Transition
 
 
 main =
-    println
+    Io.println
         (Html.htmlRender
             (Ui.layout []
                 (Ui.column []
