@@ -32,9 +32,17 @@
 //!    graph, plus the resolver's content-hash re-assertion over any Ipê package
 //!    dependencies (verify-before-trust, re-checked at publish).
 //!
-//! Deferred (not this layer): native Tier-2 sandboxed build + fail-closed
-//! capability enforcement (blocked on FFI Tier 2), and run-time sandbox
-//! isolation hardening. Those land with the FFI Tier 2 capability work.
+//! For a native-bearing package (one declaring the `native-ffi` axis or binding
+//! a `[rust.dependencies]` crate) a fifth check, [`crate::audit_native::native_tier2`],
+//! runs after the four Tier-1 checks: it builds and exercises the package's
+//! native code inside a jail scoped to its declared capability set and
+//! reconciles observed-vs-declared, fail-closed (ADR 0046). It genuinely
+//! certifies only the one wired-and-proven platform (`linux-x64`); other
+//! platforms remain a documented refuse-to-certify and the surface never claims
+//! Tier-2 for them.
+//!
+//! Deferred (not this layer): Tier-2 on macOS / Windows / FreeBSD (each promotes
+//! as its jail lands), and run-time sandbox isolation hardening.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -45,8 +53,12 @@ use ipe_ir::Capability;
 use crate::CliError;
 use crate::project::{self, ProjectManifest};
 
-/// The four Tier-1 checks, in the fixed order [`run_audit`] runs them. Naming the
-/// check that rejected lets the diagnostic say exactly which gate failed.
+/// The package-gate checks, in the fixed order [`run_audit`] runs them. Naming
+/// the check that rejected lets the diagnostic say exactly which gate failed.
+///
+/// The first four are the universal Tier-1 checks; [`Self::NativeTier2`] is the
+/// native-code capability-enforcement check, appended only for native-bearing
+/// packages (ADR 0046).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Check {
     /// 1a — abrupt-failure token scan over author-supplied FFI wrapper Rust.
@@ -57,6 +69,10 @@ pub enum Check {
     Semver,
     /// 1d — `cargo-deny` + content-hash integrity over the dependency graph.
     SupplyChain,
+    /// Tier-2 — differential-confinement enforcement of a native package's
+    /// declared capability set against what its built+exercised native code
+    /// actually demands.
+    NativeTier2,
 }
 
 impl Check {
@@ -67,6 +83,7 @@ impl Check {
             Self::Capability => "capability consistency",
             Self::Semver => "enforced semver",
             Self::SupplyChain => "supply chain",
+            Self::NativeTier2 => "native Tier-2 capability enforcement",
         }
     }
 }
@@ -112,6 +129,15 @@ struct Prepared {
     emitted_dir: PathBuf,
 }
 
+/// The absolute path to the wrapper-owned Tier-2 admission probe fixture, from
+/// this crate's location in the workspace. Tier-2 copies it into the jail's
+/// scratch and runs it as the exit-owning wrapper (ADR 0046).
+fn tier2_probe_fixture() -> PathBuf {
+    // `CARGO_MANIFEST_DIR` is `.../src/ipe-cli`; the fixture lives at the repo
+    // root under `tests/fixtures/admission/`.
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/admission/untrusted-build.sh")
+}
+
 /// `ipe package audit [<path>]` — run the full Tier-1 gate on the working
 /// package and exit non-zero with the failing check's diagnostic.
 ///
@@ -138,19 +164,51 @@ pub fn run_audit(rest: &[String]) -> Result<(), CliError> {
     enforced_semver(&prepared, index_root.as_deref())?;
     supply_chain(&prepared)?;
 
+    // Tier-2 (native-bearing packages only): build + exercise the native code
+    // under a declared-scoped jail and reconcile observed-vs-declared,
+    // fail-closed (ADR 0046). A pure Ipê package skips it; Tier-1 already gated
+    // it exactly.
+    let tier2 = crate::audit_native::native_tier2(&crate::audit_native::NativeAudit {
+        declared: &prepared.manifest.capabilities,
+        has_rust_deps: !prepared.manifest.rust_dependencies.is_empty(),
+        root: &prepared.manifest.root,
+        probe_fixture: tier2_probe_fixture(),
+    })?;
+
+    let version = prepared
+        .manifest
+        .version
+        .as_ref()
+        .map_or_else(|| "(unversioned)".to_owned(), ToString::to_string);
     print!(
         "{}",
-        crate::style::frame(&crate::style::gutter(&format!(
-            "package audit: {} {} — all Tier-1 checks passed.",
-            prepared.manifest.name,
-            prepared
-                .manifest
-                .version
-                .as_ref()
-                .map_or_else(|| "(unversioned)".to_owned(), ToString::to_string)
+        crate::style::frame(&crate::style::gutter(&passing_summary(
+            &prepared.manifest.name,
+            &version,
+            &tier2
         )))
     );
     Ok(())
+}
+
+/// Compose the passing summary, advertising Tier-2 ONLY for what genuinely ran
+/// (the honest surface, ADR 0046). A pure Ipê package's summary is Tier-1 only,
+/// with the standing note that Tier-2 does not apply. A native package certified
+/// on `linux-x64` names that platform and narrows — never drops — the note that
+/// the other platforms are not yet certified.
+fn passing_summary(name: &str, version: &str, tier2: &crate::audit_native::Tier2Outcome) -> String {
+    use crate::audit_native::Tier2Outcome;
+    match tier2 {
+        Tier2Outcome::SkippedPureIpe => format!(
+            "package audit: {name} {version} — all Tier-1 checks passed. (Pure Ipê package: \
+             native Tier-2 does not apply.)"
+        ),
+        Tier2Outcome::Certified { platform } => format!(
+            "package audit: {name} {version} — all Tier-1 checks passed; native Tier-2 capability \
+             enforcement passed on: {platform}. Tier-2 has not yet been run on other platforms \
+             (macOS / Windows / FreeBSD), so this version is not certified native-clean for them."
+        ),
+    }
 }
 
 /// Parse `ipe package audit`'s tail: an optional positional `<path>` and an
