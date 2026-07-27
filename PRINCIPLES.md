@@ -133,9 +133,10 @@ tracked blocker**. A green obtained by deleting the red is a FAILURE.
 
 When a lint or gate fires, fix the code — never the lint level, never the gate.
 
-- **Clippy deny-set** (root `Cargo.toml` `[workspace.lints.clippy]`, all
-  `"deny"`): `unwrap_used`, `expect_used`, `panic`, `indexing_slicing`,
-  `unreachable`, `todo`, `unimplemented`, `pedantic`, `nursery`. `pedantic`
+- **Clippy deny-set** — enforced by root `Cargo.toml` `[workspace.lints.clippy]`
+  (the SSOT: the broad groups + a cherry-picked `restriction` slice, with two
+  `cargo` lints allowed as workspace noise). Change the policy there, never in a
+  command — every `cargo clippy` is just `-- -D warnings`. `pedantic`
   includes `doc_markdown`: code identifiers in doc (`///`/`//!`) and `//`
   comments MUST be backticked (`` `CloneOk` ``, `` `Vec<T>` ``,
   `` `--all-targets` ``). Applies to `tests/*.rs` too (the `--all-targets`
@@ -183,8 +184,7 @@ Master only ever advances to a full-gate-certified sha.
   -p ipe-runtime-rust --features full` (LOAD-BEARING — the runtime's
   `default = []` means the workspace run skips every feature-gated test,
   including the entire `live::*` surface); `cargo test --workspace --doc`;
-  `cargo clippy --workspace --all-targets -- -D warnings -W clippy::pedantic
-  -W clippy::correctness -W clippy::style -W clippy::complexity`; fuzz + full
+  `cargo clippy --workspace --all-targets -- -D warnings`; fuzz + full
   examples sweep. Full-green → certify the batch + advance master. Full-red →
   reset to the last certified sha + re-queue.
 - The two gates MUST agree on lint scope, and the cheap gate is never
