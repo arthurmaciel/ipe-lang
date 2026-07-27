@@ -143,7 +143,7 @@ pub enum Refusal {
     /// with a hard heap cap — deferred until an arena design passes the
     /// no-unsafe gate (design amendment A1).
     TalcRequiresArenaDesign,
-    /// The program is an `Ipe.Webview` app; it links the system webview and
+    /// The program is an `Ipe.WebView` app; it links the system webview and
     /// can never be a static artifact.
     WebviewStatic,
     /// The rustup toolchain has no std for the target.
@@ -189,7 +189,7 @@ impl fmt::Display for Refusal {
             ),
             Self::WebviewStatic => write!(
                 f,
-                "an Ipe.Webview app cannot be built --static: it links the system webview \
+                "an Ipe.WebView app cannot be built --static: it links the system webview \
                  (WebKit/WebView2), which has no static form"
             ),
             Self::TargetNotInstalled { triple } => write!(

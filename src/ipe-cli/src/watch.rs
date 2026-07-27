@@ -150,7 +150,7 @@ pub struct WatchOptions {
     pub runtime_dir: PathBuf,
     /// The port injected as `IPE_LIVE_PORT` for the spawned child and probed
     /// for `/_ipe/readyz` when the emitted project is detected as a
-    /// Ipe.Live app. Harmless (ignored) for every other app shape.
+    /// Ipe.Web app. Harmless (ignored) for every other app shape.
     pub port: u16,
     pub debounce: ipe_watch::DebounceConfig,
     pub restart_timeouts: ipe_watch::RestartTimeouts,
@@ -707,9 +707,9 @@ fn run_inner(
     let mut cargo_child: Option<Arc<std::sync::Mutex<Child>>> = None;
     // Set at `CompileDone` (Green), consumed at `CargoDone` (Green) — the
     // readiness strategy is a property of the SOURCE (does it call
-    // `Live.app`?), decided once per generation right after emit, not
+    // `Web.app`?), decided once per generation right after emit, not
     // re-derived from the built executable (which carries no such marker).
-    let mut current_is_live = false;
+    let mut current_is_web = false;
 
     // Kick off the first build immediately — don't wait for a file event.
     if evt_tx.send(OrchestratorEvent::FsBatch).is_err() {
@@ -899,7 +899,7 @@ fn run_inner(
                             );
                             continue;
                         }
-                        current_is_live = is_ipe_live_project(&emitted);
+                        current_is_web = is_ipe_web_project(&emitted);
                         // Design doc "First-run vs warm-run UX": the cold
                         // (first) build pays the full dependency-compile
                         // cost and can take minutes; every subsequent
@@ -952,7 +952,7 @@ fn run_inner(
                         emit(opts, WatchEvent::CargoFailed { generation: g });
                     }
                     CargoOutcome::Green(exe_path) => {
-                        let readiness = if current_is_live {
+                        let readiness = if current_is_web {
                             ipe_watch::ReadinessCheck::HttpReadyz { port: opts.port }
                         } else {
                             ipe_watch::ReadinessCheck::AliveGrace {
@@ -1012,22 +1012,22 @@ fn run_inner(
     Ok(())
 }
 
-/// Detection heuristic for readiness strategy: the backend's Ipe.Live entry
-/// point emission always contains the literal `ipe_runtime::live::live_app`
-/// call (`crates/ipe_backend_rust/src/emit_live.rs`) — deterministic,
+/// Detection heuristic for readiness strategy: the backend's Ipe.Web entry
+/// point emission always contains the literal `ipe_runtime::web::web_app`
+/// call (`crates/ipe_backend_rust/src/emit_web.rs`) — deterministic,
 /// compiler-controlled text, not user input, so a substring check is sound
-/// here (unlike parsing arbitrary user text). Ipe.Live apps get the
+/// here (unlike parsing arbitrary user text). Ipe.Web apps get the
 /// precise `/_ipe/readyz` probe; every other shape (Ipe.Http.Server has no
 /// readiness endpoint yet, and its listen port is a Ipê-source-level
 /// argument this driver cannot statically know) falls back to
 /// `AliveGrace` — matching the design doc's own readiness bifurcation
-/// ("`/_ipe/readyz` for Ipe.Live; alive + optional health for CLI").
-fn is_ipe_live_project(emitted: &ipe_backend::EmittedProject) -> bool {
+/// ("`/_ipe/readyz` for Ipe.Web; alive + optional health for CLI").
+fn is_ipe_web_project(emitted: &ipe_backend::EmittedProject) -> bool {
     emitted
         .files
         .iter()
         .find(|(rel, _)| rel.as_str() == "src/main.rs")
-        .is_some_and(|(_, text)| text.contains("ipe_runtime::live::live_app"))
+        .is_some_and(|(_, text)| text.contains("ipe_runtime::web::web_app"))
 }
 
 /// Build the child process's environment.
@@ -1036,7 +1036,7 @@ fn is_ipe_live_project(emitted: &ipe_backend::EmittedProject) -> bool {
 /// port — harmless (ignored) for whichever app shape didn't ask for it, and
 /// what lets a `Ipe.Http.Server` fixture that reads `IPE_SERVER_PORT` (the
 /// convention this repo's own `server_e2e.rs` test suite already
-/// establishes) be driven by `--port` exactly like a Ipe.Live app is.
+/// establishes) be driven by `--port` exactly like a Ipe.Web app is.
 ///
 /// Also provides the watch-scoped half of session continuity —
 /// default the dev session store to `sqlite` (persisted under `out_dir`,

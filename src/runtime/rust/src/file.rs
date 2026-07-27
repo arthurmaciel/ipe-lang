@@ -5,7 +5,7 @@ use super::{IpeResult, IpeTask, from_u8_slice, ok_res, str_err};
 //
 // Every kernel in this module does a blocking `std::fs` syscall inside its
 // `Box::pin(async move { ... })` body. On a tokio worker thread (the shape
-// every generated Ipe.Live/Ipe.Http.Server/Ipe.Console/Ipe.Tui app runs under),
+// every generated Ipe.Web/Ipe.Http.Server/Ipe.Console/Ipe.Tui app runs under),
 // a blocking syscall stalls that worker for its full duration — reactor
 // starvation under concurrent load, or a real multi-second stall on a
 // slow/network filesystem. `run_blocking` offloads the closure to tokio's

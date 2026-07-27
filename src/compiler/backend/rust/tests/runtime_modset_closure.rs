@@ -74,7 +74,7 @@ fn module_for_mask(name: ipe_intern::Symbol, mask: u16) -> Module {
         uses_tea: f(0),
         uses_server: f(1),
         uses_ui,
-        uses_live: f(3),
+        uses_web: f(3),
         uses_tui,
         uses_webview: f(5),
         uses_css: f(6),
@@ -268,13 +268,13 @@ fn emitted_modset_is_closed_over_every_flag_combo() {
 }
 
 /// Guard the specific witnesses of the previously-live breaches at the flag
-/// level: a `uses_live` shape must declare `tea` (live/pubsub `use crate::tea`),
+/// level: a `uses_web` shape must declare `tea` (web/pubsub `use crate::tea`),
 /// and a `uses_server` shape must declare both `tea` and `http_stream`.
 #[test]
 fn live_shape_declares_tea() {
     let mut interner = Interner::new();
     let main = interner.intern("Main").expect("intern Main");
-    // uses_live only (bit 3).
+    // uses_web only (bit 3).
     let prog = Program {
         modules: vec![module_for_mask(main, 1 << 3)],
     };
@@ -282,8 +282,8 @@ fn live_shape_declares_tea() {
     let mod_rs = emitted.files.get("src/ipe_runtime/mod.rs").expect("mod.rs");
     let declared = declared_modules(mod_rs);
     assert!(
-        declared.contains("tea") && declared.contains("live"),
-        "uses_live must declare both `live` and `tea`; got {declared:?}"
+        declared.contains("tea") && declared.contains("web"),
+        "uses_web must declare both `web` and `tea`; got {declared:?}"
     );
 }
 

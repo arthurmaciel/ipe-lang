@@ -4,7 +4,7 @@
 //! A session's LIVE state (the tokio driver, SSE channel, rebuilt `HandlerIndex`)
 //! is always per-process. A persistent backend additionally keeps a serialized
 //! **checkpoint** of the model (+ metadata) so a returning cookie / a restart can
-//! reconstruct the session. `get` therefore returns either a `Live` handle (the
+//! reconstruct the session. `get` therefore returns either a `Web` handle (the
 //! in-process session, owns its driver) or a `Cold` model (decoded from the
 //! checkpoint; the caller spawns a fresh driver seeded with it).
 
@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 /// Wire-format epoch for the Model schema tag (H24). Must equal the
 /// backend's `emit_model_schema::WIRE_EPOCH` — the epoch is folded into the
-/// compile-time `IPE_LIVE_MODEL_SCHEMA_TAG` each generated Ipe.Live binary
+/// compile-time `IPE_LIVE_MODEL_SCHEMA_TAG` each generated Ipe.Web binary
 /// carries. Bumped ONLY when the tag framing / blob encoding itself changes
 /// shape (domain-separation convention), never for a Model change — the
 /// Model's own shape is covered by the structural half of the hash.
@@ -63,9 +63,9 @@ fn decode_checkpoint<Model: serde::de::DeserializeOwned>(
 /// The in-process live session (owns its driver goroutine + SSE channel).
 pub type SessionHandle<Model, Msg> = Arc<Mutex<SessionEntry<Model, Msg>>>;
 
-/// Result of a store lookup. `Live` = the in-process session (reuse it). `Cold`
+/// Result of a store lookup. `Web` = the in-process session (reuse it). `Cold`
 /// = a model decoded from a persistent checkpoint (the caller hydrates: spawn a
-/// fresh driver seeded with this model). Memory stores only ever return `Live`.
+/// fresh driver seeded with this model). Memory stores only ever return `Web`.
 pub enum StoreHit<Model, Msg> {
     Live(SessionHandle<Model, Msg>),
     Cold(Model),

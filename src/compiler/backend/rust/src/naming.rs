@@ -996,16 +996,16 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::HtmlEscapeText => "html_escape_text_",
         KernelFn::HtmlEscapeAttr => "html_escape_attr_",
         KernelFn::HtmlAttrToString => "html_attr_to_string_",
-        // ── Ipe.Live app-entry kernels ──────────────────────────────────
-        KernelFn::LiveApp => "live_app",
-        KernelFn::LiveAppRouted => "live_app_routed",
-        KernelFn::LiveRoute => "live_route",
-        KernelFn::LiveRenderStatic => "live_render_static",
+        // ── Ipe.Web app-entry kernels ───────────────────────────────────
+        KernelFn::WebApp => "web_app",
+        KernelFn::WebAppRouted => "web_app_routed",
+        KernelFn::WebRoute => "web_route",
+        KernelFn::WebRenderStatic => "web_render_static",
         // ── Ipe.Tui app-entry kernels ───────────────────────────────────
         KernelFn::TuiProgram => "tui_app",
         KernelFn::TuiApp => "tui_app_ui",
-        // ── Ipe.Webview app-entry kernel ────────────────────────────────
-        KernelFn::WebviewApp => "webview_app",
+        // ── Ipe.WebView app-entry kernel ────────────────────────────────
+        KernelFn::WebViewApp => "webview_app",
         // ── Ipe.Ui element builders ──────────────────────────────────────
         KernelFn::UiNone => "ui_none_",
         KernelFn::UiText => "ui_text_",

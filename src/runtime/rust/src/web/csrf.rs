@@ -1,4 +1,4 @@
-//! Ipe.Live CSRF protection + security response headers.
+//! Ipe.Web CSRF protection + security response headers.
 //!
 //! Mirror of Go's `csrf_middleware.go` (double-submit cookie) + `setSecurityHeaders`
 //! (live.go), with a few hardening additions over the Go oracle:
@@ -11,7 +11,7 @@
 //!   - `X-Content-Type-Options: nosniff` + a restrictive `Permissions-Policy`
 //!     beyond Go's header set.
 //!
-//! The Ipe.Live client POSTs JSON to `/_ipe/event` with an `X-Ipe-Csrf` header
+//! The Ipe.Web client POSTs JSON to `/_ipe/event` with an `X-Ipe-Csrf` header
 //! (never a form body), so the middleware validates header-vs-cookie WITHOUT
 //! reading the request body — no buffering, no body-consumption hazard.
 
@@ -190,7 +190,7 @@ fn origin_mismatch(headers: &HeaderMap) -> bool {
 }
 
 /// The axum middleware. Validates CSRF on mutating, non-exempt requests; passes
-/// everything else through. Reads only headers (the Ipe.Live POST body is JSON
+/// everything else through. Reads only headers (the Ipe.Web POST body is JSON
 /// with the token in `X-Ipê-Csrf`, so no body buffering is needed).
 pub async fn csrf_middleware(
     req: axum::extract::Request,

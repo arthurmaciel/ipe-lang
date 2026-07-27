@@ -115,7 +115,7 @@ pub fn set_env_default(key: &str, val: &str) {
 // ===========================================
 // Disconnected-store placeholders (closure-Model `Default`)
 // ===========================================
-// A Ipe.Live Model with function-typed fields (`Arc<dyn Fn(..) -> IpeTask<..>>`,
+// A Ipe.Web Model with function-typed fields (`Arc<dyn Fn(..) -> IpeTask<..>>`,
 // e.g. the console's `store`) can't be serialized, so the codegen serde-skips
 // those fields and reconstructs them via `Default` from these helpers. Each is a
 // closure of the right arity that yields a STRUCTURED `Task` error (never a
@@ -226,7 +226,7 @@ pub fn to_array<E: From<String>, T: Clone, const N: usize>(xs: &[T]) -> IpeResul
 // ===========================================
 // The serde derive is UNCONDITIONAL but its impls are generic-BOUND (the macro
 // emits `impl<T: Serialize> … for IpeMaybe<T>`), so a `IpeMaybe<NonSerde>` is
-// unaffected — yet a Ipe.Live model carrying a `Maybe X` field (X serde-able)
+// unaffected — yet a Ipe.Web model carrying a `Maybe X` field (X serde-able)
 // serialises for the session store. Without this, any model with a `Maybe`/
 // `Result` field failed E0277. NOTE: `serde` is therefore a NON-OPTIONAL dep in
 // the runtime crate (core.rs is always compiled) — do NOT re-add `optional = true`.
@@ -864,10 +864,10 @@ pub fn classify_and_log_panic(payload: &(dyn std::any::Any + Send)) -> String {
 /// The JSON body for a server `CatchPanicLayer` 500: classifies + logs the panic
 /// SERVER-SIDE (errId) via `classify_and_log_panic`, then returns a body carrying
 /// ONLY the errId — NEVER the panic message. The SINGLE source of the 500 body
-/// shape, shared by Ipe.Http.Server and Ipe.Live (each wraps it in a 500 Response
+/// shape, shared by Ipe.Http.Server and Ipe.Web (each wraps it in a 500 Response
 /// at its own `CatchPanicLayer::custom` site). Axum-free, so it lives in the
 /// always-compiled `core` — the generated project includes `server.rs` only for
-/// Ipe.Http.Server apps, so a Live-only app can't reference a server-module fn.
+/// Ipe.Http.Server apps, so a Web-only app can't reference a server-module fn.
 ///
 /// SECURITY: `err_id` (8 lowercase-hex chars) is the ONLY value interpolated; the
 /// rest is a fixed literal. A panic message (free-form, may carry secrets / PII /

@@ -376,7 +376,7 @@ where
 }
 
 /// `Tui.app` — terminal TEA driver for a `view : Model -> Element msg`. The
-/// `Ipe.Ui` Element is the SAME structured tree Ipe.Live renders to HTML; here it
+/// `Ipe.Ui` Element is the SAME structured tree Ipe.Web renders to HTML; here it
 /// is laid out to ANSI cells by walking the typed attributes (`tui::layout`), and
 /// `Ipe.Ui.Input.*` widgets become focusables: Tab / Shift-Tab (and Up/Down on a
 /// non-input focus) cycle focus; typing edits the focused text input (dispatching

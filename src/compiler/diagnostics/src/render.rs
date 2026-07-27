@@ -582,7 +582,7 @@ fn lower_label(msg: &LowerError) -> String {
         ),
         LowerError::RouteBuilderUnsupportedShape => {
             "this page builder shape is not supported — inline a constructor or lambda \
-             at the `Live.route` call site"
+             at the `Web.route` call site"
                 .to_string()
         }
         LowerError::RouteParamUnsupportedType {
@@ -731,7 +731,7 @@ const fn feature_label(f: Feature) -> &'static str {
              lowerer [feature: nested-payload-patterns]"
         }
         Feature::WasmRoutedApp => {
-            "a routed Live.app (Model with a `page` field + `routes`) has no \
+            "a routed Web.app (Model with a `page` field + `routes`) has no \
              browser client router yet — under `--target wasm` use a \
              single-page Model (no `page` field) for now \
              [feature: wasm-routed-app]"
@@ -775,14 +775,14 @@ const fn feature_label(f: Feature) -> &'static str {
              Rust backend capability [feature: float-keyed-collection]"
         }
         Feature::RoutedLiveApp => {
-            "`Live.appRouted` is not yet wired on the Rust backend — \
-             use the non-routed `Live.app` \
+            "`Web.appRouted` is not yet wired on the Rust backend — \
+             use the non-routed `Web.app` \
              { init, update, view, subscriptions } form for now \
              [feature: routed-live-app]"
         }
         Feature::LetBoundAppCfg => {
-            "the cfg for an app entry point (`Live.app` / `Tui.app` / `Tui.program` / \
-             `Webview.app`), and for `Webview.app` its nested `window` record and \
+            "the cfg for an app entry point (`Web.app` / `Tui.app` / `Tui.program` / \
+             `WebView.app`), and for `WebView.app` its nested `window` record and \
              `window.size` tuple, must be written inline as a record/tuple literal, \
              not a let-bound variable [feature: let-bound-app-cfg]"
         }

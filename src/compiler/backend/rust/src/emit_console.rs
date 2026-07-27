@@ -62,7 +62,7 @@ pub fn emit_console_call(
             };
             // Unreachable for well-typed source: a non-literal cfg is rejected
             // at lower with IPE-L0119 (Feature::LetBoundAppCfg); this guard is a
-            // defensive invariant, mirroring the `LiveAppRouted` precedent.
+            // defensive invariant, mirroring the `WebAppRouted` precedent.
             let Expr::Record(fields) = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_console_call::ConsoleApp",

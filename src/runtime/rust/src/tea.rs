@@ -18,7 +18,7 @@ pub enum IpeCmd<M> {
     Batch(Vec<IpeCmd<M>>),
     Perform(PerformThunk<M>),
     /// pub/sub broadcast. The thunk receives the publishing session's sid (the
-    /// origin), injected by the Live dispatch loop, and returns the subscriber
+    /// origin), injected by the Web dispatch loop, and returns the subscriber
     /// count. Not generic over the payload type T — T is captured inside the
     /// thunk (the same erasure-free pattern as `Perform`'s boxed future).
     Publish(Box<dyn FnOnce(&str) -> i64 + Send>),
@@ -455,7 +455,7 @@ pub(crate) fn cli_run_cmd_tracked<M: Send + 'static>(
             });
         }
         IpeCmd::Publish(thunk) => {
-            // No Live session in a Cli program; publish with an empty origin
+            // No Web session in a Cli program; publish with an empty origin
             // (no subscriber's owner_sid matches "" → echo-default no-op).
             let _ = thunk("");
         }

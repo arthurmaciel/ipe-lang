@@ -181,7 +181,7 @@ pub use cache::*;
 
 #[cfg(feature = "tui")]
 pub mod tui;
-// NB: no `pub use tui::*` — its `diff` module name collides with live's `diff`.
+// NB: no `pub use tui::*` — its `diff` module name collides with web's `diff`.
 // Re-export only the kernels generated code calls unqualified: `tui_app`
 // (String view, `Tui.program`) + `tui_app_ui` (Element view, `Tui.app`).
 #[cfg(feature = "tui")]
@@ -197,7 +197,7 @@ pub use uuid_kernel::*;
 pub mod secret;
 pub use secret::*;
 
-// Canonical HTTP header-name casing, shared by Ipe.Live, Ipe.Http.Server AND
+// Canonical HTTP header-name casing, shared by Ipe.Web, Ipe.Http.Server AND
 // the outbound `http_client` response path (`http_client` does NOT
 // imply `server`, so `server`-only gating would break an `http_client`-only
 // build). Gated on the union of its consumers; a default-features build
@@ -284,16 +284,16 @@ pub mod ws_client;
 pub use ws_client::*;
 
 // Ipe.Html / Ipe.Ui render surface — the Html/Attribute/Event ADTs + renderer +
-// htmlXxx kernel wrappers. Pure (std only), so always available; a non-Live
-// Ipe.Ui app renders via Html.toString without the `live` server module. The
-// live module re-exports from here.
+// htmlXxx kernel wrappers. Pure (std only), so always available; a non-Web
+// Ipe.Ui app renders via Html.toString without the `web` server module. The
+// web module re-exports from here.
 pub mod html;
 pub use html::*;
 
 // Target-neutral DOM data path (diff → `Vec<Patch>`, handler index, form
-// decode). Pure over `html`; shared by the Live SSE wire, the Webview bridge,
-// and the browser-WASM sink. NOT glob-re-exported at the root: `live` already
-// lifts its items, and a second root glob would shadow-collide under `live`.
+// decode). Pure over `html`; shared by the Web SSE wire, the Webview bridge,
+// and the browser-WASM sink. NOT glob-re-exported at the root: `web` already
+// lifts its items, and a second root glob would shadow-collide under `web`.
 pub mod dom;
 
 // Shared CSS/style injection-safety encoders (SafeCssValue / SafeCssPropertyName
@@ -312,29 +312,29 @@ pub mod css;
 pub use css::*;
 
 // In-process telemetry sink (log/error rings + request counters) — always
-// compiled so `Ipe.Log.*` can feed it; the Ipe.Live `console` module serves it.
+// compiled so `Ipe.Log.*` can feed it; the Ipe.Web `console` module serves it.
 pub mod telemetry;
 
 // Ipe.Ui shared element tree — the general UI abstraction (Element/Attribute/
-// Length/Color/...). Backends (Live/Tui/Webview) each render it to their target.
+// Length/Color/...). Backends (Web/Tui/WebView) each render it to their target.
 // Referenced by qualified path (`ipe_runtime::ui::*`) from generated code; NOT
 // glob-re-exported (its `Attribute` would collide with html's).
 pub mod ui;
 
-// Ipe.Webview — native desktop window backend (a TEA app, so gated on the async
+// Ipe.WebView — native desktop window backend (a TEA app, so gated on the async
 // runtime like `tea`). The cross-platform floor (a stub returning a graceful Err)
-// keeps `import Ipe.Webview` linking everywhere; the real wry/tao window backend
+// keeps `import Ipe.WebView` linking everywhere; the real wry/tao window backend
 // needs the system webview dev libs (staged behind the webview design doc).
 // Mirrors Go's webview_stub.go.
 #[cfg(feature = "tokio")]
 pub mod webview;
 #[cfg(feature = "tokio")]
-pub use webview::{WebviewAppCfg, WebviewWindowCfg, webview_app};
+pub use webview::{WebViewAppCfg, WebViewWindowCfg, webview_app};
 
-#[cfg(feature = "live")]
-pub mod live;
-#[cfg(feature = "live")]
-pub use live::*;
+#[cfg(feature = "web")]
+pub mod web;
+#[cfg(feature = "web")]
+pub use web::*;
 
 pub mod ffi_polyfills;
 pub use ffi_polyfills::*;

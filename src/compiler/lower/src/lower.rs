@@ -1221,9 +1221,9 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::WebSocketServerCfg
         | IrType::Generic(_)
         // nullary plain types (`Length`, `Color`, etc.) trivially contain no
-        // functions.  `LiveReq` is an opaque handle with no `Fn` fields.
+        // functions.  `WebReq` is an opaque handle with no `Fn` fields.
         | IrType::UiPlain(_)
-        | IrType::LiveReq
+        | IrType::WebReq
         // `Order` (LT/EQ/GT) is a primitive leaf — no embedded function.
         // `Decimal` is a Copy newtype — no embedded function.
         // `ErrorKind`/`Error`/`ErrorDetails` and the nominal error-payload
@@ -1253,9 +1253,9 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::EmailSesConfig
         | IrType::EmailSmtpConfig
         | IrType::EmailProvider => false,
-        // `LiveRoute page` carries the page type it builds — recurse (the
+        // `WebRoute page` carries the page type it builds — recurse (the
         // route's own builder closure is runtime-internal, not a Ipê `Fn`).
-        IrType::LiveRoute(page) => ir_contains_fun(page),
+        IrType::WebRoute(page) => ir_contains_fun(page),
         IrType::Enum { args, .. } => args.iter().any(ir_contains_fun),
         IrType::Maybe(elem) | IrType::List(elem) => ir_contains_fun(elem),
         IrType::Result(err, ok) => ir_contains_fun(err) || ir_contains_fun(ok),
@@ -1320,7 +1320,7 @@ fn clone_class(interner: &Interner, t: &IrType) -> CloneClass {
         | IrType::WebSocketServer => CloneClass::CopyLeaf,
         // Runtime-verified Clone types.
         // Str(String), Bytes(Vec<u8>), Json(serde_json::Value), Db(Arc-backed),
-        // UiPlain (element.rs derives Clone), LiveReq (req.rs derives Clone).
+        // UiPlain (element.rs derives Clone), WebReq (req.rs derives Clone).
         // Error: IpeError derives Clone (not Copy — carries a heap `String`).
         // ErrorDetails: IpeErrorDetails derives Clone (not Copy — carries
         // heap-allocated `String`/`Vec<String>` payloads).
@@ -1340,7 +1340,7 @@ fn clone_class(interner: &Interner, t: &IrType) -> CloneClass {
         | IrType::Json
         | IrType::Db
         | IrType::UiPlain(_)
-        | IrType::LiveReq
+        | IrType::WebReq
         | IrType::Error
         | IrType::ErrorDetails
         | IrType::ErrorInfo
@@ -1408,9 +1408,9 @@ fn clone_class(interner: &Interner, t: &IrType) -> CloneClass {
             CloneClass::NonClone
         }
         IrType::Enum { args, .. } => clone_class_named_composite(interner, args.iter()),
-        // Ui{msg} / LiveRoute(page) — recurse on the message/page type-param.
+        // Ui{msg} / WebRoute(page) — recurse on the message/page type-param.
         IrType::Ui { msg, .. } => clone_class_composite(interner, std::iter::once(msg.as_ref())),
-        IrType::LiveRoute(page) => clone_class_composite(interner, std::iter::once(page.as_ref())),
+        IrType::WebRoute(page) => clone_class_composite(interner, std::iter::once(page.as_ref())),
     }
 }
 
@@ -4042,7 +4042,7 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         | IrType::Cmd(inner)
         | IrType::Sub(inner)
         | IrType::Set(inner)
-        | IrType::LiveRoute(inner)
+        | IrType::WebRoute(inner)
         | IrType::Ui { msg: inner, .. } => ir_type_mentions_generic(inner, tv),
         IrType::Result(a, b) | IrType::Dict(a, b) => {
             ir_type_mentions_generic(a, tv) || ir_type_mentions_generic(b, tv)
@@ -4075,7 +4075,7 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
         | IrType::UiPlain(_)
-        | IrType::LiveReq
+        | IrType::WebReq
         | IrType::Order
         | IrType::Decimal
         | IrType::ErrorKind
@@ -4278,7 +4278,7 @@ fn apply_kernel_type_param_bounds(
         // the tvar appears in the TYPE of a boxed callback (a `FuncValue` /
         // lambda passed to a HOF like `List.map`), not as an accessed value
         // binder, so it has its own structural walk over the whole body. `List.map
-        // pairToAttr attrs` in `Ipe.Live.Head.link` boxes the `T{n}`-generic
+        // pairToAttr attrs` in `Ipe.Web.Head.link` boxes the `T{n}`-generic
         // `pairToAttr` into `Box<dyn Fn(..) -> Attribute<T{n}> + Send + 'static>`,
         // which E0310s without `T{n}: 'static`.
         if body_boxes_generic_callback(*tv, body) {
@@ -4552,7 +4552,7 @@ fn ir_type_has_ffi_foreign_handle(interner: &Interner, ty: &IrType) -> bool {
             .values()
             .any(|e| ir_type_has_ffi_foreign_handle(interner, e)),
         IrType::Ui { msg, .. } => ir_type_has_ffi_foreign_handle(interner, msg),
-        IrType::LiveRoute(page) => ir_type_has_ffi_foreign_handle(interner, page),
+        IrType::WebRoute(page) => ir_type_has_ffi_foreign_handle(interner, page),
         _ => false,
     }
 }
@@ -5736,11 +5736,11 @@ struct KernelUsage {
     css: bool,
     /// Any Ipe.Auth kernel.
     auth: bool,
-    /// Any Ipe.Live kernel.
-    live: bool,
+    /// Any Ipe.Web kernel.
+    web: bool,
     /// Any Ipe.Tui kernel.
     tui: bool,
-    /// Any Ipe.Webview kernel.
+    /// Any Ipe.WebView kernel.
     webview: bool,
     /// Any outbound `Ipe.WebSocket` client kernel — gates the
     /// `websocket_client` Cargo feature + `ws_client` runtime module.
@@ -5777,7 +5777,7 @@ impl KernelUsage {
             && self.ui
             && self.css
             && self.auth
-            && self.live
+            && self.web
             && self.tui
             && self.webview
             && self.websocket
@@ -5800,7 +5800,7 @@ impl KernelUsage {
         self.ui |= k.is_ui();
         self.css |= k.is_css();
         self.auth |= k.is_auth();
-        self.live |= k.is_live();
+        self.web |= k.is_web();
         self.tui |= k.is_tui();
         self.webview |= k.is_webview();
         self.websocket |= k.is_websocket_client();
@@ -5812,7 +5812,7 @@ impl KernelUsage {
         // that module here — decoupled from the `is_*` emit-dispatch predicates so
         // the module-set stays closed without perturbing codegen routing.
         match k.required_runtime_module() {
-            Some(RuntimeModule::Live) => self.live = true,
+            Some(RuntimeModule::Web) => self.web = true,
             Some(RuntimeModule::Server) => self.server = true,
             None => {}
         }
@@ -7785,7 +7785,7 @@ impl<'a> Lowerer<'a> {
                     || f.params.iter().any(|(_, t)| ir_type_mentions_server(t))
             });
 
-        // detect Ipe.Ui / Ipe.Html / Ipe.Live / Ipe.Tui / Ipe.Webview usage.
+        // detect Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.WebView usage.
         // TUI runtime files (tui/app.rs, tui/layout.rs, tui/focus.rs) import
         // `super::super::ui` and `super::super::html` unconditionally, so
         // `uses_ui` must be true whenever `uses_tui` is true — even when the
@@ -7794,7 +7794,7 @@ impl<'a> Lowerer<'a> {
         // (kernels that trigger `uses_ui`).
         let uses_tui = kernel_usage.tui;
         let uses_ui = kernel_usage.ui || uses_tui;
-        let uses_live = kernel_usage.live;
+        let uses_web = kernel_usage.web;
         let uses_webview = kernel_usage.webview;
 
         // detect Ipe.Css (Ipe.CssSafety) leaf-kernel usage. Independent
@@ -7833,7 +7833,7 @@ impl<'a> Lowerer<'a> {
             uses_tea,
             uses_server,
             uses_ui,
-            uses_live,
+            uses_web,
             uses_tui,
             uses_webview,
             uses_css,
@@ -8206,7 +8206,7 @@ impl<'a> Lowerer<'a> {
                 if !ty_contains_var(ty) {
                     let ir = self.ir_type_from_ty(ty, Span::DUMMY)?;
                     // G-b gate: skip records whose IR carries a function type.
-                    // The `Live.app` cfg record has function-typed fields
+                    // The `Web.app` cfg record has function-typed fields
                     // (init/update/view/subscriptions); emitting a Rust struct
                     // for it would need `Box<dyn Fn>` fields, which cannot
                     // derive `Clone`/`Debug`/`PartialEq`.  The cfg record is
@@ -9357,8 +9357,8 @@ impl<'a> Lowerer<'a> {
                         msg: Box::new(msg),
                     })
                 }
-                // Ipe.Live opaque types in annotations (mirrors `ir_type_from_ty`).
-                "LiveReq" => Ok(IrType::LiveReq),
+                // Ipe.Web opaque types in annotations (mirrors `ir_type_from_ty`).
+                "WebReq" => Ok(IrType::WebReq),
                 // `StreamId` / `ChunkEvent` — builtin-registered Http.Stream ADTs
                 // (no synthetic EnumDef injection, so not in enum_variants).
                 // Mirrors the `ir_type_from_ty` arms added for these types.
@@ -9390,22 +9390,22 @@ impl<'a> Lowerer<'a> {
                 "WebSocketServer" => Ok(IrType::WebSocketServer),
                 // `WebSocketServerCfg` — opaque WsServerCfg<IpeError>.
                 "WebSocketServerCfg" => Ok(IrType::WebSocketServerCfg),
-                // `LiveRoute page` is parametric on the page type it builds:
-                // a bare `LiveRoute` annotation cannot
-                // type-check (the solver's `LiveRoute` Con carries exactly one
+                // `WebRoute page` is parametric on the page type it builds:
+                // a bare `WebRoute` annotation cannot
+                // type-check (the solver's `WebRoute` Con carries exactly one
                 // argument, so a 0-arg annotation is a Con-arity IPE-T0001
                 // before lowering); a miss here is an invariant violation.
-                "LiveRoute" if args.len() == 1 => {
+                "WebRoute" if args.len() == 1 => {
                     let page = self.ir_type_from_canon(
                         args.first().ok_or_else(|| {
                             bug(
                                 "ipe_lower::ir_type_from_canon",
-                                "LiveRoute applied without its page type",
+                                "WebRoute applied without its page type",
                             )
                         })?,
                         generics,
                     )?;
-                    Ok(IrType::LiveRoute(Box::new(page)))
+                    Ok(IrType::WebRoute(Box::new(page)))
                 }
                 // ── Ipe.Ui.Input parametric types ──────────────────────────
                 "Label" if args.len() == 1 => {
@@ -9483,13 +9483,13 @@ impl<'a> Lowerer<'a> {
                 // consistency. Supports bare `Value` annotations
                 // on user functions (kernel-implicit Prelude type).
                 // `Claims` maps to the same opaque JSON accumulator.
-                // ── Kernel-implicit opaque server / Ipe.Live types ────────
+                // ── Kernel-implicit opaque server / Ipe.Web types ────────
                 // These names are registered in `KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES`
                 // in ipe_canon so they pass N0002 without an explicit import.
                 // They all carry zero type arguments at the annotation level.
                 // `Handler` / `Middleware` — Ipe.Http.Server function aliases.
-                // `Session` / `Store` — Ipe.Live session-management opaques.
-                // `VNode` — Ipe.Live virtual-DOM node.
+                // `Session` / `Store` — Ipe.Web session-management opaques.
+                // `VNode` — Ipe.Web virtual-DOM node.
                 // All map to `IrType::Json` (universal opaque serde_json::Value) so
                 // they can flow through the runtime without a dedicated Rust struct.
                 "Value" | "Claims" | "Handler" | "Middleware" | "Session" | "Store" | "VNode" => {
@@ -10120,9 +10120,9 @@ impl<'a> Lowerer<'a> {
             // of these builtin constructors, so those arms can never silently
             // override a user `type Int = …` / `type Html = …`.
             //
-            // The nullary Ipe.Ui / Ipe.Live opaque names (`Length` / `Color` /
+            // The nullary Ipe.Ui / Ipe.Web opaque names (`Length` / `Color` /
             // `HAlign` / `VAlign` / `Location` / `PseudoClass` / `Description` /
-            // `LayoutContext` / `LiveReq`) and `Value` are the exceptions:
+            // `LayoutContext` / `WebReq`) and `Value` are the exceptions:
             // moved them BELOW the `enum_variants` guard so a program union
             // of the same name (a user ADT or a compiled-source `Ipe.Css` type)
             // wins by its `(home, name)` identity, and only a genuine opaque
@@ -10168,7 +10168,7 @@ impl<'a> Lowerer<'a> {
                 "PanicInfo" => Ok(IrType::PanicInfo),
                 "TypeInfo" => Ok(IrType::TypeInfo),
                 "Char" => Ok(IrType::Char),
-                // ── Kernel-implicit opaque server / Ipe.Live types ────────
+                // ── Kernel-implicit opaque server / Ipe.Web types ────────
                 // Mirror of the `ir_type_from_canon` arms added at the same
                 // time: these are the HM-solved-type counterparts that fire when
                 // the type is propagated via the region map rather than read from
@@ -10343,7 +10343,7 @@ impl<'a> Lowerer<'a> {
                 //    BOTH `Ipe.Ui.Attribute` and `Ipe.Html.Attribute` exist —
                 //    check the module path, never just the name).
                 // 3. Plain Ui types (`Length`, `Color`, …) are nullary — no msg.
-                // 4. `LiveReq` maps to `IrType::LiveReq` (opaque init arg).
+                // 4. `WebReq` maps to `IrType::WebReq` (opaque init arg).
                 "Html" if args.len() == 1 => {
                     let msg = self.ir_type_from_ty_ui_msg(
                         args.first().ok_or_else(|| {
@@ -10468,7 +10468,7 @@ impl<'a> Lowerer<'a> {
                     })
                 }
                 // ── Program-defined enum guard (home-aware) ──────────────
-                // Checked BEFORE the bare-name Ipe.Ui / Ipe.Live opaque arms
+                // Checked BEFORE the bare-name Ipe.Ui / Ipe.Web opaque arms
                 // below, mirroring `ir_type_from_canon`'s ordering (the annotated
                 // path already places its enum guard ahead of every non-reserved
                 // name) so the inferred (ty) path and the annotated (canon) path
@@ -10528,28 +10528,28 @@ impl<'a> Lowerer<'a> {
                 "PseudoClass" => Ok(IrType::UiPlain(UiPlain::PseudoClass)),
                 "Description" => Ok(IrType::UiPlain(UiPlain::Description)),
                 "LayoutContext" => Ok(IrType::UiPlain(UiPlain::LayoutContext)),
-                // ── Ipe.Live opaque types ─────────────────────────────────
-                "LiveReq" => Ok(IrType::LiveReq),
-                // `LiveRoute page` — the route descriptor produced by
-                // `Live.route`, parametric on the page type it builds.
-                // The solver's `LiveRoute` Con always carries exactly one
+                // ── Ipe.Web opaque types ─────────────────────────────────
+                "WebReq" => Ok(IrType::WebReq),
+                // `WebRoute page` — the route descriptor produced by
+                // `Web.route`, parametric on the page type it builds.
+                // The solver's `WebRoute` Con always carries exactly one
                 // argument (constrain's `live_route(page)` builder), so the
                 // page type is threaded into the IR and rendered as
                 // `Route<Page>` — the runtime `Route` struct has no default
                 // type parameter, so dropping the argument is an E0107 cargo
                 // failure in any rendered position (empty-vec turbofish /
                 // fn signatures of let-bound route tables).
-                "LiveRoute" if args.len() == 1 => {
+                "WebRoute" if args.len() == 1 => {
                     let page = self.ir_type_from_ty(
                         args.first().ok_or_else(|| {
                             bug(
                                 "ipe_lower::ir_type_from_ty",
-                                "LiveRoute Con without its page type argument",
+                                "WebRoute Con without its page type argument",
                             )
                         })?,
                         span,
                     )?;
-                    Ok(IrType::LiveRoute(Box::new(page)))
+                    Ok(IrType::WebRoute(Box::new(page)))
                 }
                 // The opaque JSON value type (`Value = any` in Ipê). A concrete
                 // `Con { name: "Value" }` reaches here only from the schemed
@@ -11716,11 +11716,11 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
-    /// Lower the `Live.app` cfg record literal, intentionally omitting the
+    /// Lower the `Web.app` cfg record literal, intentionally omitting the
     /// per-field [`Self::reject_function_valued_field`] gate (the L0107 exemption).
     ///
     /// Only a *direct* record literal in the single-argument position of a
-    /// `KernelFn::LiveApp` call reaches here — the callee-peeked intercept in
+    /// `KernelFn::WebApp` call reaches here — the callee-peeked intercept in
     /// [`Self::lower_call`] enforces the exemption boundary.  A non-literal cfg
     /// (let-bound, piped, etc.) still goes through `lower_expr`, which fires
     /// [`Self::reject_function_through_type_var`] for function-embedding types —
@@ -11764,7 +11764,7 @@ impl<'a> Lowerer<'a> {
         let canon::Expr_::Record(fields) = &arg0.value else {
             return Err(unsupported(arg0.span, Feature::LetBoundAppCfg));
         };
-        if matches!(peek, Callee::Kernel(KernelFn::WebviewApp)) {
+        if matches!(peek, Callee::Kernel(KernelFn::WebViewApp)) {
             self.reject_non_literal_webview_window(fields)?;
         }
         self.lower_app_cfg_record(fields)
@@ -11793,13 +11793,13 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
-    /// Lower the page-builder argument of a `Live.route pattern builder` call.
+    /// Lower the page-builder argument of a `Web.route pattern builder` call.
     ///
     /// A BARE payload constructor (`UserPage` with `UserPage : String -> Page`
     /// — the canonical `:param` route shape) lowers to a zero-arg
     /// [`Expr::Ctor`] carrier instead of tripping the general
     /// `Feature::CtorAsFunction` gate: in this one position the constructor is
-    /// never a first-class function value — `emit_live_call::LiveRoute` folds
+    /// never a first-class function value — `emit_live_call::WebRoute` folds
     /// it into the route's builder closure, applying one type-directed
     /// `params.get(i)` conversion per declared payload field.
     ///
@@ -11839,7 +11839,7 @@ impl<'a> Lowerer<'a> {
         // `ir_type_from_ty` conversion) is gated here on its own region type.
         self.reject_float_keyed_collection(call_span)?;
 
-        // App-entry / Live.route intercepts — see the helper.
+        // App-entry / Web.route intercepts — see the helper.
         match self.intercept_live_kernel_call(callee, args)? {
             Intercepted::Done(e) => Ok(e),
             Intercepted::Fallthrough(peeked) => {
@@ -11864,8 +11864,8 @@ impl<'a> Lowerer<'a> {
         if let canon::Expr_::VarKernel { .. } | canon::Expr_::VarTopLevel { .. } = &callee.value {
             let peek = self.lower_callee(callee)?;
             match &peek {
-                // ── Live.app cfg literal (L0107 exemption) ────────────
-                Callee::Kernel(KernelFn::LiveApp) if args.len() == 1 => {
+                // ── Web.app cfg literal (L0107 exemption) ────────────
+                Callee::Kernel(KernelFn::WebApp) if args.len() == 1 => {
                     // `args.len() == 1` is the match guard above; `first()` is
                     // always `Some` here.  Using `first()` instead of `args[0]`
                     // keeps `clippy::indexing_slicing` clean.
@@ -11886,7 +11886,7 @@ impl<'a> Lowerer<'a> {
                 // ── Tui.app / Tui.program / Webview.app / Console.app cfg literal
                 //    (L0107 exemption) ──
                 //
-                // Same pattern as `Live.app`: intercept the single cfg-record arg
+                // Same pattern as `Web.app`: intercept the single cfg-record arg
                 // BEFORE the uniform `lower_expr` path so function-typed fields
                 // (init/update/view/subscriptions/onKey) do not trip IPE-L0107.
                 // TuiApp / TuiProgram.
@@ -11903,7 +11903,7 @@ impl<'a> Lowerer<'a> {
                 Callee::Kernel(
                     KernelFn::TuiApp
                     | KernelFn::TuiProgram
-                    | KernelFn::WebviewApp
+                    | KernelFn::WebViewApp
                     | KernelFn::ConsoleApp,
                 ) if args.len() == 1 => {
                     if let Some(arg0) = args.first() {
@@ -11968,14 +11968,14 @@ impl<'a> Lowerer<'a> {
                         }));
                     }
                 }
-                // T4: `Live.appRouted` is a vestigial alias — the
-                // reference has ONE `Live.app` that branches at emit time
-                // (emit_live.rs T5).  Route it through the same
-                // `lower_app_entry_cfg` path as `Live.app` so any code that
+                // T4: `Web.appRouted` is a vestigial alias — the
+                // reference has ONE `Web.app` that branches at emit time
+                // (emit_web.rs T5).  Route it through the same
+                // `lower_app_entry_cfg` path as `Web.app` so any code that
                 // still calls the deprecated form compiles rather than hitting
-                // IPE-L0118.  The emit branch (T5) will select `live_app` vs
+                // IPE-L0118.  The emit branch (T5) will select `web_app` vs
                 // `live_app_routed` based on whether the Model has a `page` field.
-                Callee::Kernel(KernelFn::LiveAppRouted) if args.len() == 1 => {
+                Callee::Kernel(KernelFn::WebAppRouted) if args.len() == 1 => {
                     if let Some(arg0) = args.first() {
                         let lowered_cfg = self.lower_app_entry_cfg(&peek, arg0)?;
                         return Ok(Intercepted::Done(Expr::Call {
@@ -11986,21 +11986,21 @@ impl<'a> Lowerer<'a> {
                         }));
                     }
                 }
-                // ── `Live.route pattern PageCtor` builder peephole ──
+                // ── `Web.route pattern PageCtor` builder peephole ──
                 //
                 // The canonical param-route shape passes a BARE payload
-                // constructor as the page builder (`Live.route "/u/:id"
+                // constructor as the page builder (`Web.route "/u/:id"
                 // UserPage` with `UserPage : String -> Page`).  The uniform
                 // `lower_expr` path rejects a bare payload-constructor
                 // reference (`Feature::CtorAsFunction`) because a general
                 // first-class constructor value is unsupported — but in THIS
                 // position the constructor never becomes a first-class
-                // function: `emit_live_call::LiveRoute` compiles it into the
+                // function: `emit_live_call::WebRoute` compiles it into the
                 // route's `move |params| Ctor(param0, …)` builder closure (the
                 // `route_param_get` type-directed conversion path).  Lower it
                 // directly to a zero-arg `Expr::Ctor` carrier, mirroring the
                 // exemption precedent of the app-cfg intercepts above.
-                Callee::Kernel(KernelFn::LiveRoute) if args.len() == 2 => {
+                Callee::Kernel(KernelFn::WebRoute) if args.len() == 2 => {
                     if let (Some(pattern_e), Some(builder_e)) = (args.first(), args.get(1)) {
                         let lowered_pattern = self.lower_expr(pattern_e)?;
                         let lowered_builder = self.lower_route_builder(builder_e)?;
@@ -14332,16 +14332,16 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HtmlOnKeyUp
                 | KernelFn::HtmlOnBool
                 // ── app-entry stubs — arity 1 ────────────────────────────
-                // `Live.app : LiveAppCfg model msg -> Task Error ()`
-                | KernelFn::LiveApp
-                // `Live.appRouted : LiveAppCfg model msg -> Task Error ()`
-                | KernelFn::LiveAppRouted
+                // `Web.app : WebAppCfg model msg -> Task Error ()`
+                | KernelFn::WebApp
+                // `Web.appRouted : WebAppCfg model msg -> Task Error ()`
+                | KernelFn::WebAppRouted
                 // `Tui.program : TuiCfg model msg -> Task Error ()`
                 | KernelFn::TuiProgram
                 // `Tui.app : TuiCfg model msg -> Task Error ()`
                 | KernelFn::TuiApp
                 // `Webview.app : WebviewCfg model msg -> Task Error ()`
-                | KernelFn::WebviewApp
+                | KernelFn::WebViewApp
                 // `Console.app : CliCfg model msg -> Task Error ()`
                 | KernelFn::ConsoleApp
                 // Ipe.Html.Attributes fixed-key builders (`String`/`Bool`
@@ -14412,7 +14412,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HtmlToString,
             ) => Ok(1),
             // Arity 2: `Ui.layout attrs elem`, `Ui.layoutWith cfg elem`,
-            //          `Live.route path ctor`, `Live.renderStatic cfg path`.
+            //          `Web.route path ctor`, `Web.renderStatic cfg path`.
             Callee::Kernel(
                 // `Ui.layout : List (Attribute msg) -> Element msg -> Html msg`
                 KernelFn::UiLayout
@@ -14574,11 +14574,11 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HtmlHtmlNode
                 // `Html.headNode : List (Attribute msg) -> List (Html msg) -> Html msg`
                 | KernelFn::HtmlHeadNode
-                // `Live.route : String -> page -> LiveRoute` (`page` is a
+                // `Web.route : String -> page -> WebRoute` (`page` is a
                 // bare polymorphic value — nullary ctor OR `String -> Page`)
-                | KernelFn::LiveRoute
-                // `Live.renderStatic : LiveAppCfg model msg -> String -> Task Error String`
-                | KernelFn::LiveRenderStatic
+                | KernelFn::WebRoute
+                // `Web.renderStatic : WebAppCfg model msg -> String -> Task Error String`
+                | KernelFn::WebRenderStatic
                 // generic `Attr.attribute k v` / `Attr.boolAttribute k b`.
                 | KernelFn::HtmlAttribute
                 | KernelFn::HtmlBoolAttribute
@@ -16033,16 +16033,16 @@ impl<'a> Lowerer<'a> {
                     // ── Ipe.Ui.Keyed ──────────────────────────────────────────
                     ("Keyed", "column") => Ok(Callee::Kernel(KernelFn::KeyedColumn)),
                     ("Keyed", "row") => Ok(Callee::Kernel(KernelFn::KeyedRow)),
-                    // ── Ipe.Live / Ipe.Live app-entry kernels ─────────────
-                    ("Live", "app") => Ok(Callee::Kernel(KernelFn::LiveApp)),
-                    ("Live", "appRouted") => Ok(Callee::Kernel(KernelFn::LiveAppRouted)),
-                    ("Live", "route") => Ok(Callee::Kernel(KernelFn::LiveRoute)),
-                    ("Live", "renderStatic") => Ok(Callee::Kernel(KernelFn::LiveRenderStatic)),
+                    // ── Ipe.Web / Ipe.Web app-entry kernels ───────────────
+                    ("Web", "app") => Ok(Callee::Kernel(KernelFn::WebApp)),
+                    ("Web", "appRouted") => Ok(Callee::Kernel(KernelFn::WebAppRouted)),
+                    ("Web", "route") => Ok(Callee::Kernel(KernelFn::WebRoute)),
+                    ("Web", "renderStatic") => Ok(Callee::Kernel(KernelFn::WebRenderStatic)),
                     // ── Ipe.Tui / Ipe.Tui app-entry kernels ──────────────
                     ("Tui", "program") => Ok(Callee::Kernel(KernelFn::TuiProgram)),
                     ("Tui", "app") => Ok(Callee::Kernel(KernelFn::TuiApp)),
-                    // ── Ipe.Webview / Ipe.Webview app-entry kernel ────────
-                    ("Webview", "app") => Ok(Callee::Kernel(KernelFn::WebviewApp)),
+                    // ── Ipe.WebView / Ipe.WebView app-entry kernel ────────
+                    ("WebView", "app") => Ok(Callee::Kernel(KernelFn::WebViewApp)),
                     // ── Ipe.Console / Ipe.Console app-entry kernel ──────────────
                     ("Console", "app") => Ok(Callee::Kernel(KernelFn::ConsoleApp)),
                     // ── Ipe.Auth / Ipe.Auth — auth helpers ──────────────
@@ -17834,7 +17834,7 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::Cmd(inner)
         | IrType::Sub(inner)
         | IrType::Decoder(inner)
-        | IrType::LiveRoute(inner) => {
+        | IrType::WebRoute(inner) => {
             collect_ir_generic_syms(inner, out);
         }
         IrType::Result(a, b) | IrType::Dict(a, b) => {
@@ -17896,7 +17896,7 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::WebSocketServerCfg
         | IrType::UiPlain(_)
         | IrType::Decimal
-        | IrType::LiveReq
+        | IrType::WebReq
         | IrType::SqlFragment
         | IrType::Secret
         // Cache config / stats + Csv document are non-parametric — no generic

@@ -540,7 +540,7 @@ pub enum TypeError {
     NonExhaustiveCase { missing: Box<[Box<str>]> },
     /// Two arms cover the same constructor (warning). [IPE-T0011]
     RedundantCaseBranch { constructor: Box<str> },
-    /// `Live.app` carries a non-empty `routes` list but the Model type has no
+    /// `Web.app` carries a non-empty `routes` list but the Model type has no
     /// `page` field, so the routes are forwarded to the non-routed path and
     /// never update the Model (warning — the program still compiles, matching
     /// the Go reference's silent no-op). Usually a mis-named routed-page field.
@@ -655,7 +655,7 @@ pub enum Feature {
     /// and honoring it by reference would require matching the
     /// whole arm by reference — a materially larger redesign. [IPE-L0128]
     AliasOverRefutablePayload,
-    /// A routed `Live.app` (Model with a `page` field + `routes`) compiled
+    /// A routed `Web.app` (Model with a `page` field + `routes`) compiled
     /// with `--target wasm`. The browser client runs the single-page loop
     /// today; the client-side router is a staged follow-up. [IPE-L0129]
     WasmRoutedApp,
@@ -702,13 +702,13 @@ pub enum Feature {
     /// `cargo` rejects. Divergence from Ipê, rationale: Rust backend capability.
     /// [IPE-L0117]
     FloatKeyedCollection,
-    /// `Live.appRouted` (the URL-routing variant of the `Ipe.Live` entry point)
-    /// is not yet wired on the Rust backend. Use the non-routed `Live.app` with
+    /// `Web.appRouted` (the URL-routing variant of the `Ipe.Web` entry point)
+    /// is not yet wired on the Rust backend. Use the non-routed `Web.app` with
     /// `init`/`update`/`view`/`subscriptions` until routing support lands.
     /// [IPE-L0118]
     RoutedLiveApp,
-    /// The cfg record for an app entry point (`Live.app` / `Tui.app` /
-    /// `Tui.program` / `Webview.app`) — or, for `Webview.app`, its nested
+    /// The cfg record for an app entry point (`Web.app` / `Tui.app` /
+    /// `Tui.program` / `WebView.app`) — or, for `WebView.app`, its nested
     /// `window` record and `window.size` tuple — was written as a let-bound
     /// variable (or any non-record expression) rather than an inline record
     /// literal. The Rust backend reads the cfg's field expressions directly at
@@ -753,16 +753,16 @@ pub enum Feature {
 /// required-trait wording rendered for [`LowerError::InadmissibleAppModel`].
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum AppShape {
-    /// `Ipe.Live` / `Ipe.Live` — the Model is persisted to the session store, so
+    /// `Ipe.Web` — the Model is persisted to the session store, so
     /// it must be `serde`-serialisable (as well as `Clone` + `PartialEq`).
-    Live,
-    /// `Ipe.Tui` / `Ipe.Tui` — the Model is kept in memory, so it must be
+    Web,
+    /// `Ipe.Tui` — the Model is kept in memory, so it must be
     /// `Clone`.
     Tui,
-    /// `Ipe.Webview` / `Ipe.Webview` — the Model is kept in memory, so it must
+    /// `Ipe.WebView` — the Model is kept in memory, so it must
     /// be `Clone`.
-    Webview,
-    /// `Ipe.Console` / `Ipe.Console` — the Model is kept in memory, so it must be
+    WebView,
+    /// `Ipe.Console` — the Model is kept in memory, so it must be
     /// `Clone`.
     Cli,
 }
@@ -788,7 +788,7 @@ pub enum ModelLeaf {
     Handle,
     /// A view value — `Html` / `Element` / a UI `Attribute` / a `Color` or other
     /// `Ipe.Ui` plain value. Clonable and comparable, but not serialisable; only
-    /// reachable as the offending leaf for a `Ipe.Live` Model.
+    /// reachable as the offending leaf for a `Ipe.Web` Model.
     ViewValue,
 }
 
@@ -831,7 +831,7 @@ pub enum LowerError {
     /// parameters, which exceeds the `curry1`..`curry10` helpers in the runtime.
     /// [IPE-L0121]
     DecodeSucceedArityTooHigh { n: usize },
-    /// A `Live.route` pattern has a different number of `:param` segments than
+    /// A `Web.route` pattern has a different number of `:param` segments than
     /// the page-constructor has payload fields. The extra params would be
     /// silently discarded or the constructor could never be fully applied.
     /// [IPE-L0122]
@@ -843,11 +843,11 @@ pub enum LowerError {
         /// How many payload fields the page constructor declares.
         ctor_payload_count: usize,
     },
-    /// A `Live.route` page builder is not a page constructor, inline lambda, or
+    /// A `Web.route` page builder is not a page constructor, inline lambda, or
     /// named function — the Rust backend cannot emit a type-directed params
     /// closure for a let-bound variable or computed expression. [IPE-L0123]
     RouteBuilderUnsupportedShape,
-    /// A `Live.route` page-constructor payload field has a type that cannot be
+    /// A `Web.route` page-constructor payload field has a type that cannot be
     /// decoded from a URL `:param` string (only `String`, `Int`, `Float`, and
     /// `Bool` are supported). [IPE-L0123]
     RouteParamUnsupportedType {
@@ -1315,12 +1315,12 @@ fn type_help(msg: &TypeError) -> Vec<HelpLine> {
 #[must_use]
 pub fn inadmissible_model_message(app: AppShape, field: &str, leaf: ModelLeaf) -> String {
     let (shape, requirement) = match app {
-        AppShape::Live => (
-            "Ipe.Live",
+        AppShape::Web => (
+            "Ipe.Web",
             "serialisable (it is persisted to the session store)",
         ),
         AppShape::Tui => ("Ipe.Tui", "clonable"),
-        AppShape::Webview => ("Ipe.Webview", "clonable"),
+        AppShape::WebView => ("Ipe.WebView", "clonable"),
         AppShape::Cli => ("Ipe.Console", "clonable"),
     };
     let leaf_phrase = match leaf {
@@ -1352,9 +1352,9 @@ pub fn inadmissible_model_message(app: AppShape, field: &str, leaf: ModelLeaf) -
 #[must_use]
 pub fn inadmissible_msg_message(app: AppShape, field: &str, leaf: ModelLeaf) -> String {
     let shape = match app {
-        AppShape::Live => "Ipe.Live",
+        AppShape::Web => "Ipe.Web",
         AppShape::Tui => "Ipe.Tui",
-        AppShape::Webview => "Ipe.Webview",
+        AppShape::WebView => "Ipe.WebView",
         AppShape::Cli => "Ipe.Console",
     };
     let leaf_phrase = match leaf {
@@ -1422,7 +1422,7 @@ fn lower_help(msg: &LowerError) -> Vec<HelpLine> {
             .into_boxed_str(),
         )],
         LowerError::RouteBuilderUnsupportedShape => vec![HelpLine::Note(
-            "inline the constructor or lambda directly at the `Live.route` call site; \
+            "inline the constructor or lambda directly at the `Web.route` call site; \
              a let-bound variable or computed expression cannot be used as a page builder."
                 .into(),
         )],

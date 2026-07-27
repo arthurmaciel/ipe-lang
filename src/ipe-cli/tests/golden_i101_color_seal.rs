@@ -1,5 +1,5 @@
 //! Seal — the home-aware enum guard in `ipe_lower::ir_type_from_ty` must
-//! win over the bare-name Ipe.Ui / Ipe.Live opaque arms.
+//! win over the bare-name Ipe.Ui / Ipe.Web opaque arms.
 //!
 //! Matching the bare name `"Color"` (→ `IrType::UiPlain(UiPlain::Color)`)
 //! BEFORE the `enum_variants` guard would hijack a program-defined `type Color`

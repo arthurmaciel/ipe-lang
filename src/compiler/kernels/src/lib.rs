@@ -35,12 +35,12 @@ pub enum KernelClass {
     Tea,
     /// `Ipe.Ui` / `Ipe.Html` element and attribute builders.
     Ui,
-    /// `Ipe.Live` app-entry kernels.
-    Live,
+    /// `Ipe.Web` app-entry kernels.
+    Web,
     /// `Ipe.Tui` app-entry kernels.
     Tui,
-    /// `Ipe.Webview` app-entry kernel.
-    Webview,
+    /// `Ipe.WebView` app-entry kernel.
+    WebView,
     /// `Ipe.Console` / `Ipe.Console` app-entry kernel.
     Console,
     /// Reserved for the FFI kernel tier.
@@ -66,9 +66,9 @@ pub enum KernelClass {
 /// already pulls in returns `None` — no second table to keep in sync.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RuntimeModule {
-    /// The `live` feature-module (`ipe_runtime::live::*`, incl. `pubsub`).
-    /// Declared by the `uses_live` `mod.rs` append.
-    Live,
+    /// The `web` feature-module (`ipe_runtime::web::*`, incl. `pubsub`).
+    /// Declared by the `uses_web` `mod.rs` append.
+    Web,
     /// The `server` feature-module set (`ipe_runtime::server` +
     /// `server_stream` + `http_stream`). Declared by the `uses_server` append.
     Server,
@@ -1011,16 +1011,16 @@ pub enum StdlibKernel {
     HtmlAttribute,     // `attribute : String -> String -> Attribute msg`
     HtmlBoolAttribute, // `boolAttribute : String -> Bool -> Attribute msg`
     HtmlNoAttr,        // `noAttr : Attribute msg`
-    // ── Ipe.Live app-entry kernels ───────────────────────────────────────
-    LiveApp,
-    LiveAppRouted,
-    LiveRoute,
-    LiveRenderStatic,
+    // ── Ipe.Web app-entry kernels ───────────────────────────────────────
+    WebApp,
+    WebAppRouted,
+    WebRoute,
+    WebRenderStatic,
     // ── Ipe.Tui app-entry kernels ────────────────────────────────────────
     TuiProgram,
     TuiApp,
-    // ── Ipe.Webview app-entry kernel ─────────────────────────────────────
-    WebviewApp,
+    // ── Ipe.WebView app-entry kernel ─────────────────────────────────────
+    WebViewApp,
     // ── event-attribute builders ─────────────────────────────────────────
     UiOnClick,
     UiOnFocus,
@@ -1681,7 +1681,7 @@ impl StdlibKernel {
                 emit,
             }
         }
-        use KernelClass::{Db, Live, Pure, Server, Tea, Tui, Ui, Webview};
+        use KernelClass::{Db, Pure, Server, Tea, Tui, Ui, Web, WebView};
         match self {
             // ── Log ─────────────────────────────────────────────────────────
             // Qualifier "Log" is installed via `install_builtin_vars` as an
@@ -2578,16 +2578,16 @@ impl StdlibKernel {
             Self::HtmlAttribute => d("Attr", "attribute", 2, Ui, "html_named_attr_"),
             Self::HtmlBoolAttribute => d("Attr", "boolAttribute", 2, Ui, "html_bool_named_attr_"),
             Self::HtmlNoAttr => d("Attr", "noAttr", 0, Ui, "html_no_attr_"),
-            // ── Ipe.Live app-entry kernels ───────────────────────────────
-            Self::LiveApp => d("Live", "app", 1, Live, "live_app"),
-            Self::LiveAppRouted => d("Live", "appRouted", 1, Live, "live_app_routed"),
-            Self::LiveRoute => d("Live", "route", 2, Live, "live_route"),
-            Self::LiveRenderStatic => d("Live", "renderStatic", 2, Live, "live_render_static"),
+            // ── Ipe.Web app-entry kernels ───────────────────────────────
+            Self::WebApp => d("Web", "app", 1, Web, "web_app"),
+            Self::WebAppRouted => d("Web", "appRouted", 1, Web, "web_app_routed"),
+            Self::WebRoute => d("Web", "route", 2, Web, "web_route"),
+            Self::WebRenderStatic => d("Web", "renderStatic", 2, Web, "web_render_static"),
             // ── Ipe.Tui app-entry kernels ────────────────────────────────
             Self::TuiProgram => d("Tui", "program", 1, Tui, "tui_app"),
             Self::TuiApp => d("Tui", "app", 1, Tui, "tui_app_ui"),
-            // ── Ipe.Webview app-entry kernel ─────────────────────────────
-            Self::WebviewApp => d("Webview", "app", 1, Webview, "webview_app"),
+            // ── Ipe.WebView app-entry kernel ─────────────────────────────
+            Self::WebViewApp => d("WebView", "app", 1, WebView, "webview_app"),
             // ── event-attribute builders ─────────────────────────────────
             Self::UiOnClick => d("Ui", "onClick", 1, Ui, "ui_on_click_"),
             Self::UiOnFocus => d("Ui", "onFocus", 1, Ui, "ui_on_focus_"),
@@ -3842,16 +3842,16 @@ impl StdlibKernel {
         // member absent from ALL is minted with id=None and rides the
         // `Ty::Var(u32::MAX)` fallback.
         Self::HtmlStyleNode,
-        // Live
-        Self::LiveApp,
-        Self::LiveAppRouted,
-        Self::LiveRoute,
-        Self::LiveRenderStatic,
+        // Web
+        Self::WebApp,
+        Self::WebAppRouted,
+        Self::WebRoute,
+        Self::WebRenderStatic,
         // Tui
         Self::TuiProgram,
         Self::TuiApp,
-        // Webview
-        Self::WebviewApp,
+        // WebView
+        Self::WebViewApp,
         // event-attribute builders
         Self::UiOnClick,
         Self::UiOnFocus,
@@ -4271,15 +4271,15 @@ impl StdlibKernel {
             // — the `live` module. Without this the `live` append never fires and
             // the emitted `main.rs` references undefined `cmd_publish` (E0425).
             Self::CmdPublish | Self::CmdPublishNoEcho | Self::SubSubscribeTopic => {
-                Some(RuntimeModule::Live)
+                Some(RuntimeModule::Web)
             }
             // `pubsub_publish` / `pubsub_publish_no_echo` are `class = Tea` and
-            // also `is_live`, so the `live` append fires via the `is_live` path in
+            // also `is_web`, so the `live` append fires via the `is_web` path in
             // the lowerer. Recording them here too keeps this function the complete
             // SSOT: every kernel whose emitted symbol diverges from its class's
             // module home is listed, whether or not a parallel predicate already
             // covers it.
-            Self::PubSubPublish | Self::PubSubPublishNoEcho => Some(RuntimeModule::Live),
+            Self::PubSubPublish | Self::PubSubPublishNoEcho => Some(RuntimeModule::Web),
             // `HttpStream.chunks` is `class = Pure` but emits `sub_subscribe_stream`
             // and the `IpeStreamId` type, both defined in `ipe_runtime::http_stream`
             // — declared only by the `server` append. Its siblings
@@ -5007,13 +5007,13 @@ impl StdlibKernel {
             | Self::HtmlAttribute
             | Self::HtmlBoolAttribute
             | Self::HtmlNoAttr
-            | Self::LiveApp
-            | Self::LiveAppRouted
-            | Self::LiveRoute
-            | Self::LiveRenderStatic
+            | Self::WebApp
+            | Self::WebAppRouted
+            | Self::WebRoute
+            | Self::WebRenderStatic
             | Self::TuiProgram
             | Self::TuiApp
-            | Self::WebviewApp
+            | Self::WebViewApp
             | Self::UiOnClick
             | Self::UiOnFocus
             | Self::UiOnBlur
@@ -6086,18 +6086,18 @@ impl StdlibKernel {
         })
     }
 
-    /// `true` when this variant belongs to the `Ipe.Live` app-entry subsystem.
+    /// `true` when this variant belongs to the `Ipe.Web` app-entry subsystem.
     #[must_use]
-    pub const fn is_live(self) -> bool {
+    pub const fn is_web(self) -> bool {
         matches!(
             self,
-            Self::LiveApp
-                | Self::LiveAppRouted
-                | Self::LiveRoute
-                | Self::LiveRenderStatic
+            Self::WebApp
+                | Self::WebAppRouted
+                | Self::WebRoute
+                | Self::WebRenderStatic
                 // PubSub.publish / publishNoEcho live in `ipe_runtime::live::pubsub`
                 // (gated by the `live` Cargo feature). A program that uses either —
-                // even without a Live.app — must have the `live` feature enabled so
+                // even without a Web.app — must have the `live` feature enabled so
                 // `pubsub_publish` / `pubsub_publish_no_echo` are in scope.
                 | Self::PubSubPublish
                 | Self::PubSubPublishNoEcho
@@ -6110,10 +6110,10 @@ impl StdlibKernel {
         matches!(self, Self::TuiProgram | Self::TuiApp)
     }
 
-    /// `true` when this variant is the `Ipe.Webview` app-entry kernel.
+    /// `true` when this variant is the `Ipe.WebView` app-entry kernel.
     #[must_use]
     pub const fn is_webview(self) -> bool {
-        matches!(self, Self::WebviewApp)
+        matches!(self, Self::WebViewApp)
     }
 
     /// `true` when this variant is the `Ipe.Console` / `Ipe.Console` app-entry kernel.
@@ -6222,12 +6222,12 @@ impl StdlibKernel {
             // Background/Input/Region/Lazy/Keyed) — probe-verified to
             // compile to wasm32 as part of the runtime floor.
             KernelClass::Ui => true,
-            // `Live.app` gains a browser denotation via the runtime `wasm`
-            // sink (`wasm_app`). Routed apps (`Live.route` / the routed
+            // `Web.app` gains a browser denotation via the runtime `wasm`
+            // sink (`wasm_app`). Routed apps (`Web.route` / the routed
             // branch) stay out until the client router lands — tagging the
             // route kernel now would emit `Route::new` against a runtime
             // module the wasm crate does not vendor (a SEAL breach).
-            KernelClass::Live => matches!(self, Self::LiveApp),
+            KernelClass::Web => matches!(self, Self::WebApp),
             // TEA wiring the wasm scheduler drives today. `Cmd.perform` runs
             // on the browser microtask queue; `Sub.every`/`Time.every` run on
             // `gloo-timers` (`wasm::subs::SubManager`); `Cmd.publish` /
@@ -6363,7 +6363,7 @@ impl StdlibKernel {
             KernelClass::Db
             | KernelClass::Server
             | KernelClass::Tui
-            | KernelClass::Webview
+            | KernelClass::WebView
             | KernelClass::Console
             | KernelClass::Ffi => false,
         }
@@ -6453,8 +6453,8 @@ mod tests {
             StdlibKernel::EmailSend,
             StdlibKernel::IoReadLine,
             StdlibKernel::TaskPerform,
-            StdlibKernel::LiveRenderStatic,
-            StdlibKernel::LiveRoute,
+            StdlibKernel::WebRenderStatic,
+            StdlibKernel::WebRoute,
             // Crypto: only the entropy pair (`randomBytes`/`randomToken`) has
             // a wasm substitute; hashing/AEAD/RSA stay denied (M4 scope cut,
             // NOT a qualifier-wide allow — see `wasm_client_available`).
@@ -6480,7 +6480,7 @@ mod tests {
             StdlibKernel::UiButton,
             StdlibKernel::HtmlDiv,
             StdlibKernel::CssSafetySafeValue,
-            StdlibKernel::LiveApp,
+            StdlibKernel::WebApp,
             StdlibKernel::CmdNone,
             StdlibKernel::CmdPerform,
             StdlibKernel::SubNone,
@@ -6583,8 +6583,8 @@ mod tests {
     /// symbols (`pubsub_publish`, `pubsub_publish_no_echo`) live in
     /// `ipe_runtime::live::pubsub` — the `live` feature-module.  This test is
     /// the SSOT invariant: `required_runtime_module` MUST return
-    /// `Some(RuntimeModule::Live)` for both so that any future code path relying
-    /// solely on this function (rather than `is_live`) cannot silently omit the
+    /// `Some(RuntimeModule::Web)` for both so that any future code path relying
+    /// solely on this function (rather than `is_web`) cannot silently omit the
     /// `live` append and produce an E0425 at `cargo build` time.
     #[test]
     fn pubsub_kernels_require_live_module() {
@@ -6592,14 +6592,14 @@ mod tests {
 
         assert_eq!(
             StdlibKernel::PubSubPublish.required_runtime_module(),
-            Some(RuntimeModule::Live),
-            "PubSubPublish must map to RuntimeModule::Live — \
+            Some(RuntimeModule::Web),
+            "PubSubPublish must map to RuntimeModule::Web — \
              pubsub_publish is defined in ipe_runtime::live::pubsub"
         );
         assert_eq!(
             StdlibKernel::PubSubPublishNoEcho.required_runtime_module(),
-            Some(RuntimeModule::Live),
-            "PubSubPublishNoEcho must map to RuntimeModule::Live — \
+            Some(RuntimeModule::Web),
+            "PubSubPublishNoEcho must map to RuntimeModule::Web — \
              pubsub_publish_no_echo is defined in ipe_runtime::live::pubsub"
         );
     }

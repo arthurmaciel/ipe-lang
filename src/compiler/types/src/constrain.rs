@@ -340,25 +340,25 @@ struct Builtins {
     lw_wrapper_attrs: Symbol,
     /// `"rootAttrs"` — the second field in the `Ui.layoutWith` config record.
     lw_root_attrs: Symbol,
-    // ── Ipe.Live / Ipe.Live opaque type constructor symbols ───────────────────
-    /// `"LiveReq"` — opaque request threaded through `Live.app`'s `init`.
-    live_req: Symbol,
-    /// `"LiveRoute"` — opaque route descriptor returned by `Live.route`.
+    // ── Ipe.Web / Ipe.Web opaque type constructor symbols ───────────────────
+    /// `"WebReq"` — opaque request threaded through `Web.app`'s `init`.
+    web_req: Symbol,
+    /// `"WebRoute"` — opaque route descriptor returned by `Web.route`.
     live_route_con: Symbol,
     // ── Live cfg record field name symbols ───────────────────────────────────────
-    /// `"init"` — the init field of the `Live.app` config record.
+    /// `"init"` — the init field of the `Web.app` config record.
     live_f_init: Symbol,
-    /// `"update"` — the update field of the `Live.app` config record.
+    /// `"update"` — the update field of the `Web.app` config record.
     live_f_update: Symbol,
-    /// `"view"` — the view field of the `Live.app` config record.
+    /// `"view"` — the view field of the `Web.app` config record.
     live_f_view: Symbol,
-    /// `"subscriptions"` — the subscriptions field of the `Live.app` config record.
+    /// `"subscriptions"` — the subscriptions field of the `Web.app` config record.
     live_f_subscriptions: Symbol,
-    /// `"routes"` — the routes field of the `Live.appRouted` config record.
+    /// `"routes"` — the routes field of the `Web.appRouted` config record.
     /// Reserved for a future split scheme between `app` and `appRouted`.
     #[allow(dead_code)]
     live_f_routes: Symbol,
-    /// `"notFound"` — the notFound field of the `Live.appRouted` config record.
+    /// `"notFound"` — the notFound field of the `Web.appRouted` config record.
     /// Reserved for a future split scheme between `app` and `appRouted`.
     #[allow(dead_code)]
     live_f_not_found: Symbol,
@@ -646,9 +646,9 @@ impl Builtins {
             json_value: interner.intern("Value")?,
             lw_wrapper_attrs: interner.intern("wrapperAttrs")?,
             lw_root_attrs: interner.intern("rootAttrs")?,
-            // Ipe.Live / Ipe.Live opaque types + cfg field names.
-            live_req: interner.intern("LiveReq")?,
-            live_route_con: interner.intern("LiveRoute")?,
+            // Ipe.Web / Ipe.Web opaque types + cfg field names.
+            web_req: interner.intern("WebReq")?,
+            live_route_con: interner.intern("WebRoute")?,
             live_f_init: interner.intern("init")?,
             live_f_update: interner.intern("update")?,
             live_f_view: interner.intern("view")?,
@@ -1266,10 +1266,10 @@ pub struct Builder<'a> {
     field_accesses: Vec<FieldAccess>,
     /// Deferred record-update obligations, resolved after the main solve.
     record_updates: Vec<RecordUpdate>,
-    /// Deferred routed-Live.app type checks, resolved after the main solve.
+    /// Deferred routed-Web.app type checks, resolved after the main solve.
     routed_live_checks: Vec<RoutedLiveCheck>,
-    /// Deferred per-route page-witness checks (one per `Live.route` reference),
-    /// resolved after the main solve, BEFORE the routed-Live.app checks.
+    /// Deferred per-route page-witness checks (one per `Web.route` reference),
+    /// resolved after the main solve, BEFORE the routed-Web.app checks.
     route_witness_checks: Vec<RouteWitnessCheck>,
     /// The type scheme of every data constructor declared in this module, keyed
     /// by constructor name. A constructor is a (possibly generic) function
@@ -1416,15 +1416,15 @@ pub struct RecordUpdate {
     pub home: Vec<Symbol>,
 }
 
-/// A deferred post-solve check for routed `Live.app` configurations.
+/// A deferred post-solve check for routed `Web.app` configurations.
 ///
-/// `Live.app`'s cfg row accepts both routed apps (Model has a `page : Page`
+/// `Web.app`'s cfg row accepts both routed apps (Model has a `page : Page`
 /// field) and non-routed apps (Model has no `page` field) through the same
 /// open-record scheme.  The distinction cannot be expressed as a plain HM
 /// constraint at build time (a conditional `{ page : var(2) | ρ }` projection
 /// would break every non-routed app whose Model has no `page` field).
 ///
-/// Instead, the constrain pass pushes one `RoutedLiveCheck` per `Live.app`
+/// Instead, the constrain pass pushes one `RoutedLiveCheck` per `Web.app`
 /// call site and defers the gate to [`crate::resolve_routed_live_checks`],
 /// which runs after the main solve when the Model type has settled:
 ///
@@ -1434,31 +1434,31 @@ pub struct RecordUpdate {
 ///   from the emitted `set_page` closure.
 /// * If Model has no `page` field → non-routed → no validation; passes.
 pub struct RoutedLiveCheck {
-    /// `var(0)` from the `K::LiveApp` scheme instantiation — the Model type.
+    /// `var(0)` from the `K::WebApp` scheme instantiation — the Model type.
     pub model_var: VarId,
-    /// `var(2)` from the `K::LiveApp` scheme instantiation — the `notFound` type.
+    /// `var(2)` from the `K::WebApp` scheme instantiation — the `notFound` type.
     pub not_found_var: VarId,
-    /// The `Live.app { … }` call span; used to blame a type mismatch.
+    /// The `Web.app { … }` call span; used to blame a type mismatch.
     pub span: Span,
 }
 
-/// A deferred per-route page-witness check for `Live.route`.
+/// A deferred per-route page-witness check for `Web.route`.
 ///
-/// `Live.route : String -> builder -> LiveRoute page` types its second
+/// `Web.route : String -> builder -> WebRoute page` types its second
 /// argument with a variable (`builder`, var(1)) DISTINCT from the result's
 /// page variable (`page`, var(0)), because the argument is legitimately either
 /// shape:
 ///
-/// * a nullary page VALUE — `Live.route "/" HomePage` (builder : `Page`), or
+/// * a nullary page VALUE — `Web.route "/" HomePage` (builder : `Page`), or
 /// * a params-consuming page CONSTRUCTOR —
-///   `Live.route "/apps/:slug" AppDetailPage` (builder : `String -> Page`;
+///   `Web.route "/apps/:slug" AppDetailPage` (builder : `String -> Page`;
 ///   multi-`:param` routes curry further: `String -> String -> Page`, …).
 ///
 /// A single shared variable (the pre-round-4 scheme) forced
 /// `Page ≟ String -> Page` on every param route — a false IPE-T0001 on the
 /// canonical corpus shape.  A plain HM constraint cannot express the
 /// disjunction, so the constrain pass pushes one `RouteWitnessCheck` per
-/// `Live.route` reference and defers it to
+/// `Web.route` reference and defers it to
 /// [`crate::resolve_route_witness_checks`], which runs after the main solve:
 ///
 /// * Follow `builder_var`'s settled structure, peeling leading `_ -> rest`
@@ -1468,18 +1468,18 @@ pub struct RoutedLiveCheck {
 ///
 /// A nullary route therefore witnesses `page` directly, a param constructor
 /// witnesses it with its result type, and a wrong-ADT constructor
-/// (`Live.route "/" Increment` in a `Page`-routed app) still fails unification
+/// (`Web.route "/" Increment` in a `Page`-routed app) still fails unification
 /// with IPE-T0001 at this route's span.  Runs BEFORE
 /// [`crate::resolve_routed_live_checks`] so route constructors pin the page
 /// variable before the `notFound ≟ Model.page` gate reads it.
 pub struct RouteWitnessCheck {
-    /// `var(1)` from the `K::LiveRoute` scheme instantiation — the route's
+    /// `var(1)` from the `K::WebRoute` scheme instantiation — the route's
     /// page-builder argument type.
     pub builder_var: VarId,
-    /// `var(0)` from the `K::LiveRoute` scheme instantiation — the page type
-    /// carried by the resulting `LiveRoute page`.
+    /// `var(0)` from the `K::WebRoute` scheme instantiation — the page type
+    /// carried by the resulting `WebRoute page`.
     pub page_var: VarId,
-    /// The `Live.route` reference span; used to blame a type mismatch.
+    /// The `Web.route` reference span; used to blame a type mismatch.
     pub span: Span,
 }
 
@@ -1501,7 +1501,7 @@ pub struct Generated {
     pub untyped: BTreeMap<(Vec<Symbol>, Symbol), VarId>,
     pub field_accesses: Vec<FieldAccess>,
     pub record_updates: Vec<RecordUpdate>,
-    /// Deferred routed-Live.app checks, resolved after the main solve.
+    /// Deferred routed-Web.app checks, resolved after the main solve.
     pub routed_live_checks: Vec<RoutedLiveCheck>,
     /// Deferred per-route page-witness checks, resolved after the main solve
     /// (before `routed_live_checks`).
@@ -2981,9 +2981,9 @@ impl<'a> Builder<'a> {
                 }
                 return Ok(var);
             }
-            // `Live.app` — post-solve routed-Live check.
+            // `Web.app` — post-solve routed-Live check.
             //
-            // The open-record cfg scheme for K::LiveApp is shared by both routed
+            // The open-record cfg scheme for K::WebApp is shared by both routed
             // apps (Model has a `page : Page` field) and non-routed apps (Model
             // has no `page` field).  We cannot express the conditional
             // `Model.page ≡ notFound` constraint at build time because a blanket
@@ -2994,7 +2994,7 @@ impl<'a> Builder<'a> {
             // the Model var (var index 0) and notFound var (var index 2), then
             // push a `RoutedLiveCheck` so `resolve_routed_live_checks` can run
             // the gate after the HM solver settles.
-            if matches!(k, StdlibKernel::LiveApp) {
+            if matches!(k, StdlibKernel::WebApp) {
                 let ty = self.stdlib_scheme(k).ok_or(Diagnostic::Lower {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
@@ -3009,19 +3009,19 @@ impl<'a> Builder<'a> {
                 }
                 return Ok(var);
             }
-            // `Live.route` — per-route page witness.
+            // `Web.route` — per-route page witness.
             //
             // The scheme types the page-builder argument with var(1) DISTINCT
             // from the result's page var(0): the argument is EITHER a nullary
-            // page value (`Live.route "/" HomePage`) OR a params-consuming
-            // constructor (`Live.route "/apps/:slug" AppDetailPage` — type
+            // page value (`Web.route "/" HomePage`) OR a params-consuming
+            // constructor (`Web.route "/apps/:slug" AppDetailPage` — type
             // `String -> Page`).  That disjunction is not expressible as a
             // plain HM constraint, so — like `RoutedLiveCheck` above — the
             // relation is deferred: record both instantiated vars and push a
             // `RouteWitnessCheck`; `resolve_route_witness_checks` peels the
             // builder's settled leading arrows and unifies the resulting page
             // type with var(0) after the main solve.
-            if matches!(k, StdlibKernel::LiveRoute) {
+            if matches!(k, StdlibKernel::WebRoute) {
                 let ty = self.stdlib_scheme(k).ok_or(Diagnostic::Lower {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
@@ -3044,7 +3044,7 @@ impl<'a> Builder<'a> {
         // `StdlibKernel` id. There is no legacy string-keyed `kernel_ty`
         // table carrying a `Ty::Var(u32::MAX)` exit-0 sentinel for un-typed
         // kernels. A `None` id (FFI `Rust.*`) or an excluded bucket
-        // (`LiveAppRouted` — unlowered) misses the registry and is
+        // (`WebAppRouted` — unlowered) misses the registry and is
         // fail-closed with IPE-L0108 (loud) via `kernel_scheme_or_unsupported`,
         // never silently typed as a free variable that `cargo` later rejects.
         let _ = (module, name); // retained for diagnostics
@@ -4028,23 +4028,23 @@ impl<'a> Builder<'a> {
             name: self.builtins.jwt_algorithm,
             args: Vec::new(),
         };
-        let live_req = || Ty::Con {
+        let web_req = || Ty::Con {
             module: Vec::new(),
-            name: self.builtins.live_req,
+            name: self.builtins.web_req,
             args: Vec::new(),
         };
-        // `live_route(page)` — `LiveRoute page` is parametric on the page type.
+        // `live_route(page)` — `WebRoute page` is parametric on the page type.
         // Its purpose is to carry the page type through HM unification so that
-        //   routes : List (LiveRoute var(2))            [K::LiveApp]
-        //   Live.route : String -> builder -> LiveRoute page  [K::LiveRoute]
+        //   routes : List (WebRoute var(2))            [K::WebApp]
+        //   Web.route : String -> builder -> WebRoute page  [K::WebRoute]
         //   notFound : var(2)
         // all share ONE page type variable.  A `notFound = 5` in a routed app
-        // that also uses `Live.route "/" CounterPage` sets `var(2) = Page`
+        // that also uses `Web.route "/" CounterPage` sets `var(2) = Page`
         // (through the per-route witness — see [`RouteWitnessCheck`]) and then
         // forces `5 : Page` → IPE-T0001.  Seal fix — the
         // "exit-0-then-cargo-fail E0308" class.  Since round 4 the arg is no
         // longer phantom at the IR level: the lowerer threads it into
-        // `IrType::LiveRoute(page)` so the backend renders `Route<Page>`.
+        // `IrType::WebRoute(page)` so the backend renders `Route<Page>`.
         let live_route = |page: Ty| Ty::Con {
             module: Vec::new(),
             name: self.builtins.live_route_con,
@@ -5078,7 +5078,7 @@ impl<'a> Builder<'a> {
                 ipe_kernels::HtmlEventShape::Raw => fun(var(1), html_attr(var(0))),
             },
 
-            // ── Ipe.Live app-entry (open 6-field scheme) ──
+            // ── Ipe.Web app-entry (open 6-field scheme) ──
             //
             // Mirrors `../ipe/src/Ipe/Type/Constrain/Expression.hs:2674-2695`.
             // The cfg record is OPEN (row variable `var(3)` = `appExt`) so the
@@ -5091,26 +5091,26 @@ impl<'a> Builder<'a> {
             //   var(0) = model      var(1) = msg
             //   var(2) = page       var(3) = appExt (open row tail)
             //
-            // `routes : List LiveRoute` and `notFound : page` are required fields
+            // `routes : List WebRoute` and `notFound : page` are required fields
             // even for non-routed apps (they default to `[]` / `CounterPage`).
             // The emit stage branches on Model.page at code-gen time
-            // (emit_live.rs T5) — not at type time.
+            // (emit_web.rs T5) — not at type time.
             //
             // Removes #[allow(dead_code)] from `live_f_routes` / `live_f_not_found`.
-            K::LiveApp => {
+            K::WebApp => {
                 let init_ret = tuple2(var(0), cmd(var(1)));
                 let cfg_rec = Ty::Record(
                     {
                         let mut m = BTreeMap::new();
-                        m.insert(self.builtins.live_f_init, fun(live_req(), init_ret.clone()));
+                        m.insert(self.builtins.live_f_init, fun(web_req(), init_ret.clone()));
                         m.insert(
                             self.builtins.live_f_update,
                             fun(var(1), fun(var(0), init_ret)),
                         );
                         m.insert(self.builtins.live_f_view, fun(var(0), html_t(var(1))));
                         m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
-                        // routes : List (LiveRoute page)  — page = var(2).
-                        // Parametrising LiveRoute on the page type variable
+                        // routes : List (WebRoute page)  — page = var(2).
+                        // Parametrising WebRoute on the page type variable
                         // connects each route ctor's page type to `notFound`'s
                         // page type through the SAME var(2), so a type mismatch
                         // between them is caught here (IPE-T0001) instead of
@@ -5125,7 +5125,7 @@ impl<'a> Builder<'a> {
                 );
                 fun(cfg_rec, task_unit())
             }
-            // `Live.route : String -> builder -> LiveRoute page`
+            // `Web.route : String -> builder -> WebRoute page`
             // with builder = var(1) DISTINCT from page = var(0).
             //
             // The second argument is either a nullary page VALUE
@@ -5146,13 +5146,13 @@ impl<'a> Builder<'a> {
             // ctor witnesses it with its RESULT type; a wrong-ADT ctor still
             // fails unification → IPE-T0001.
             //
-            // The result `LiveRoute page` places every route of a list in
-            // `List (LiveRoute var(2))` (K::LiveApp scheme), so all routes AND
+            // The result `WebRoute page` places every route of a list in
+            // `List (WebRoute var(2))` (K::WebApp scheme), so all routes AND
             // `notFound : var(2)` share one page variable.  The page arg is no
             // longer phantom at the IR level: the lowerer threads it into
-            // `IrType::LiveRoute(page)` and the backend renders `Route<Page>`.
-            K::LiveRoute => fun(string(), fun(var(1), live_route(var(0)))),
-            K::LiveRenderStatic => fun(fun(var(0), html_t(var(1))), fun(var(0), task_unit())),
+            // `IrType::WebRoute(page)` and the backend renders `Route<Page>`.
+            K::WebRoute => fun(string(), fun(var(1), live_route(var(0)))),
+            K::WebRenderStatic => fun(fun(var(0), html_t(var(1))), fun(var(0), task_unit())),
 
             // ── Ipe.Tui app-entry ──────────────────────────────────────────────
             //
@@ -5271,14 +5271,14 @@ impl<'a> Builder<'a> {
                     },
                     // Closed cfg record — like `Tui.app` / `Webview.app`, the
                     // Cli cfg takes exactly its named fields (the open
-                    // row is a `Live.app`-only surface).
+                    // row is a `Web.app`-only surface).
                     RowTail::Closed,
                 );
                 fun(cfg_rec, task_unit())
             }
 
-            // ── Ipe.Webview app-entry (already schemed in kernel_ty) ──
-            K::WebviewApp => {
+            // ── Ipe.WebView app-entry (already schemed in kernel_ty) ──
+            K::WebViewApp => {
                 let tup = tuple2(var(0), cmd(var(1)));
                 let window_ty = Ty::Record(
                     {
@@ -5455,16 +5455,16 @@ impl<'a> Builder<'a> {
                 fun(string(), result(error_ty(), string()))
             }
 
-            // ── Ipe.Html / Ipe.Ui / Ipe.Live rendering (42) ──
+            // ── Ipe.Html / Ipe.Ui / Ipe.Web rendering (42) ──
             // The Html/Ui/Background/Border/Font rendering family. `attr(m)` /
             // `elem_t(m)` / `html_t(m)` are the msg-polymorphic opaque cons;
             // `length()` / `color()` are the nullary value cons. Each is a
             // genuine `Ty::Var(u32::MAX)` hole (legacy `kernel_ty` has no Html/
             // Ui/Background/Border/Font arm), so all land in FIRST_SCHEMED.
             // Verified vs runtime fn params + lower `callee_arity` per
-            // docs/adr/0020-html-ui-live-kernel-arity-tripwire.md. `Live.appRouted`
+            // docs/adr/0020-html-ui-live-kernel-arity-tripwire.md. `Web.appRouted`
             // is EXCLUDED (REACHABLE_BUT_UNLOWERED) — its lowering is
-            // `Feature::RoutedLiveApp` unsupported, so a caller fails closed.
+            // `Feature::RoutedWebApp` unsupported, so a caller fails closed.
 
             // Ipe.Html serialise / escape (arity 1).
             K::HtmlRender => fun(html_t(var(0)), string()),
@@ -6348,8 +6348,8 @@ impl<'a> Builder<'a> {
             // compile in `ipe_types` until it is either schemed above or added to
             // one of the two exclusion buckets below).
             //
-            //  * `Live.appRouted` — REACHABLE_BUT_UNLOWERED: has a runtime fn +
-            //    qualifier, but its lowering is `Feature::RoutedLiveApp`
+            //  * `Web.appRouted` — REACHABLE_BUT_UNLOWERED: has a runtime fn +
+            //    qualifier, but its lowering is `Feature::RoutedWebApp`
             //    unsupported and its type is a closed record, not a curried `Ty`.
             //    A caller fails closed at type-check until routed lowering lands.
             //
@@ -6360,7 +6360,7 @@ impl<'a> Builder<'a> {
             //  * `Sub.subscribeTopic` / `Cmd.publish` / `Cmd.publishNoEcho` /
             //    `PubSub.publish` / `PubSub.publishNoEcho` are wired and have
             //    their schemes above; not in this arm.
-            K::LiveAppRouted => return None,
+            K::WebAppRouted => return None,
 
             // ── Ipe.Auth (9 kernels) ──────────────────────────────────────
             // hashPassword : String -> Result Error String
@@ -7907,15 +7907,15 @@ mod registry_phase_c_tests {
             K::UiOnKeyUp,
             K::UiOnBool,
             K::UiOnSubmit,
-            // Ipe.Live app-entry (3)
-            K::LiveApp,
-            K::LiveRoute,
-            K::LiveRenderStatic,
+            // Ipe.Web app-entry (3)
+            K::WebApp,
+            K::WebRoute,
+            K::WebRenderStatic,
             // Ipe.Tui app-entry (2)
             K::TuiApp,
             K::TuiProgram,
-            // Ipe.Webview app-entry (1)
-            K::WebviewApp,
+            // Ipe.WebView app-entry (1)
+            K::WebViewApp,
             // Ipe.Html styleNode (1 — F7; parity checked by
             // stdlib_scheme_matches_legacy).
             K::HtmlStyleNode,
@@ -8236,11 +8236,11 @@ mod registry_phase_c_tests {
             K::EncodingUrlDecode,
             K::EncodingHexEncode,
             K::EncodingHexDecode,
-            // Ipe.Html / Ipe.Ui / Ipe.Live rendering family (42).
+            // Ipe.Html / Ipe.Ui / Ipe.Web rendering family (42).
             // All genuine `Ty::Var(u32::MAX)` holes (legacy `kernel_ty` has no
             // Html/Ui/Background/Border/Font arm). Verified vs runtime + lower
             // `callee_arity` in docs/adr/0020-html-ui-live-kernel-arity-tripwire.md.
-            // `LiveAppRouted` is EXCLUDED here — it is `REACHABLE_BUT_UNLOWERED`.
+            // `WebAppRouted` is EXCLUDED here — it is `REACHABLE_BUT_UNLOWERED`.
             K::HtmlRender,
             K::HtmlEscapeText,
             K::HtmlEscapeAttr,
@@ -8757,14 +8757,14 @@ mod registry_phase_c_tests {
     /// qualifier (so a user program can name them — distinct from
     /// `KNOWN_UNBACKED`, which has no runtime fn), but their LOWERING is not yet
     /// implemented, so `stdlib_scheme` intentionally leaves them un-schemed and a
-    /// caller fails closed. `Live.appRouted` lowering is `Feature::RoutedLiveApp`
+    /// caller fails closed. `Web.appRouted` lowering is `Feature::RoutedWebApp`
     /// unsupported (`lower.rs`); its type is a closed config record, not a simple
     /// curried `Ty`. When routed-live lowering lands it moves to `FIRST_SCHEMED`
     /// with the dedicated `Ty::Record` arm (design table Option A). Excluded from
     /// `stdlib_scheme_total_over_reachable` until then.
     const REACHABLE_BUT_UNLOWERED: &[StdlibKernel] = {
         use StdlibKernel as K;
-        &[K::LiveAppRouted]
+        &[K::WebAppRouted]
     };
 
     /// KNOWN-UNBACKED kernels: present in `StdlibKernel::ALL` (so they carry a

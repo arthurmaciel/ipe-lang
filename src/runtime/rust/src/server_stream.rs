@@ -281,7 +281,7 @@ pub fn serve_streaming_sentinel(r: &ServerResponse) -> Option<axum::response::Re
     if !r.contentType.is_empty() {
         builder = builder.header("content-type", r.contentType.clone());
     }
-    // Disable proxy buffering for SSE — same hint the Ipe.Live SSE path sends.
+    // Disable proxy buffering for SSE — same hint the Ipe.Web SSE path sends.
     builder = builder.header("x-accel-buffering", "no");
     builder = builder.header("cache-control", "no-cache");
     for (k, v) in &r.headers {

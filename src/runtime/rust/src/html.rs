@@ -32,7 +32,7 @@ pub enum Attribute<M> {
 /// Variant names mirror the Ipê stdlib `Ipe.Html.Attributes.Event` ADT
 /// (`OnMsg | OnString | OnBool | OnForm`). `OnString`/`OnBool` carry
 /// `Arc<dyn Fn(..) -> msg>` (not bare fn pointers) so the handler can be a
-/// CAPTURING closure — exactly as the Go backend allows. A faithful Ipe.Live
+/// CAPTURING closure — exactly as the Go backend allows. A faithful Ipe.Web
 /// app's `onChange = \s -> toMsg (parse s default)` captures locals; a bare
 /// fn-pointer field rejected that. Bare ctors / non-capturing fns coerce into
 /// `Arc::new` fine; capturing closures box into the trait object.
@@ -84,7 +84,7 @@ impl<M> std::fmt::Debug for Attribute<M> {
 }
 
 // Structural equality only: (variant kind, event name). The message payload /
-// closure is deliberately ignored. Ipe.Live's diff is structure-only — it just
+// closure is deliberately ignored. Ipe.Web's diff is structure-only — it just
 // decides whether a DOM node carries a listener of a given event name. The
 // actual handler lives server-side in the per-session handler_index, which is
 // REBUILT from the fresh view on every commit, so the diff never needs to
@@ -141,7 +141,7 @@ const VOID: &[&str] = &[
 /// void element because `render_into` emits no children for void tags.
 /// Its sole consumer is `live/style_inject.rs`, so it is `live`-gated (webview
 /// enables `live` too); a non-live build that gained a caller would fail loud.
-#[cfg(feature = "live")]
+#[cfg(feature = "web")]
 pub(crate) fn is_void(tag: &str) -> bool {
     VOID.contains(&tag)
 }
@@ -655,7 +655,7 @@ fn sanitise_url_attr<'a>(name: &str, value: &'a str) -> &'a str {
     }
 }
 
-/// Sanitise an attribute `(name, value)` pair destined for a Ipe.Live SSE
+/// Sanitise an attribute `(name, value)` pair destined for a Ipe.Web SSE
 /// patch that the browser applies via `setAttribute`. Returns the safe pair to
 /// set, or `None` to DROP the attribute entirely.
 ///
@@ -773,8 +773,8 @@ fn set_attr<M>(attrs: &mut Vec<Attribute<M>>, key: &str, val: &str) {
 // These match the kernel names used in ipe-stdlib Ipe.Html.ipe — the Ipê-side
 // helpers (render, escapeHtml, escapeAttr, attrToString) route here on the Rust
 // backend. The codegen converts "htmlRender" → `html_render_()`, etc. Kept in
-// this standalone module (not under live/) so a non-Live Ipe.Html / Ipe.Ui app
-// renders via Html.toString without pulling the Ipe.Live server machinery.
+// this standalone module (not under live/) so a non-Web Ipe.Html / Ipe.Ui app
+// renders via Html.toString without pulling the Ipe.Web server machinery.
 
 /// `Ffi.callPure "htmlRender"` — render an Html tree to an HTML string.
 #[must_use]
@@ -898,7 +898,7 @@ pub fn html_on_bool_<M>(
 /// arm) closes this by re-wrapping the boxed value in a freshly-declared
 /// closure at the call site instead of forwarding the box itself — see that
 /// arm's comment for the full mechanism.
-#[cfg(any(feature = "live", feature = "wasm-client"))]
+#[cfg(any(feature = "web", feature = "wasm-client"))]
 #[must_use]
 pub fn html_on_raw_<M, T, F>(name: String, payload: F) -> Attribute<M>
 where
@@ -919,7 +919,7 @@ where
 /// degrading to a structural no-op attribute here is not a regression for
 /// Tui — it was never functional there and Tui has no form-submit wire
 /// concept.
-#[cfg(not(any(feature = "live", feature = "wasm-client")))]
+#[cfg(not(any(feature = "web", feature = "wasm-client")))]
 pub fn html_on_raw_<M, T, F: Fn(T) -> M>(_name: String, _payload: F) -> Attribute<M> {
     Attribute::NoAttr
 }
@@ -938,11 +938,11 @@ pub fn html_on_raw_<M, T, F: Fn(T) -> M>(_name: String, _payload: F) -> Attribut
 /// swallowing the submit (`decode_form_or_warn` returns `None` — "dispatch no
 /// Msg" — on any decode error). Always fires.
 ///
-/// `M: Clone` is not a new requirement: every `Ipe.Live` `Msg` type is
+/// `M: Clone` is not a new requirement: every `Ipe.Web` `Msg` type is
 /// already `Clone` by construction (`HandlerIndex<M: Clone>` — every wire
 /// event handler, including plain `onClick`'s `Event::OnMsg`, already clones
 /// the dispatched value).
-#[cfg(any(feature = "live", feature = "wasm-client"))]
+#[cfg(any(feature = "web", feature = "wasm-client"))]
 #[must_use]
 pub fn html_on_raw_fixed_<M: Clone + Send + Sync + 'static>(name: String, msg: M) -> Attribute<M> {
     Attribute::EventAttr(Event::OnForm(
@@ -953,7 +953,7 @@ pub fn html_on_raw_fixed_<M: Clone + Send + Sync + 'static>(name: String, msg: M
 
 /// Non-`live` builds — same degrade-to-no-op rationale as `html_on_raw_`
 /// above.
-#[cfg(not(any(feature = "live", feature = "wasm-client")))]
+#[cfg(not(any(feature = "web", feature = "wasm-client")))]
 pub fn html_on_raw_fixed_<M>(_name: String, _msg: M) -> Attribute<M> {
     Attribute::NoAttr
 }
@@ -1590,7 +1590,7 @@ mod tests {
         assert!(!render_html(&n).contains("<script"));
     }
 
-    #[cfg(feature = "live")]
+    #[cfg(feature = "web")]
     #[test]
     fn sse_patch_shares_the_policy() {
         // #10 — SSE patch attributes route through the same name+scheme gate.
@@ -1600,7 +1600,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "live")]
+    #[cfg(feature = "web")]
     fn html_on_submit_dispatches_via_onform() {
         // Mirror of dispatch.rs's ui_on_submit_dispatches_via_onform_not_onraw,
         // exercising Ipe.Html.Events.onSubmit's backing fn directly.

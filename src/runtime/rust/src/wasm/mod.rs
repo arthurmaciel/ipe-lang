@@ -1,6 +1,6 @@
 //! Browser-WASM TEA sink — mount, patch-apply, delegated events, scheduler.
 //!
-//! The same data path as the Ipe.Live SSE wire, with the transport swapped
+//! The same data path as the Ipe.Web SSE wire, with the transport swapped
 //! for in-process calls: `view` → `Html<M>` (`ui/render.rs`) →
 //! `dom::diff` → `Vec<Patch>` → typed `web-sys` DOM mutation. One diff
 //! algorithm, two consumers (the SSE client and this sink), so behaviour
@@ -21,7 +21,7 @@
 //! `Sub.every`/`Time.every` (via `subs::SubManager`, `gloo-timers`) and
 //! `Cmd.publish`/`PubSub.publish`/`Sub.subscribeTopic` (via `pubsub`, an
 //! in-tab broker) are the M4 Cmd/Sub browser bridge — see each submodule's
-//! doc comment. Routed Live apps stay out of scope (M5's client-entry
+//! doc comment. Routed Web apps stay out of scope (M5's client-entry
 //! reachability closure + router).
 
 #![allow(clippy::type_complexity)] // TEA fn-quadruples are inherent here
@@ -34,14 +34,14 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
 use crate::core::{IpeResult, IpeTask};
-use crate::dom::{HandlerIndex, LiveReq, build_index, diff::Patch, diff::diff};
+use crate::dom::{HandlerIndex, WebReq, build_index, diff::Patch, diff::diff};
 use crate::html::{FormData, Html, assign_ipe_ids, render_html};
 use crate::tea::{IpeCmd, IpeSub};
 
 pub mod pubsub;
 mod subs;
 
-/// Root ipe-id path — matches the Live/Webview renderers so a future
+/// Root ipe-id path — matches the Web/WebView renderers so a future
 /// SSR-adopt path sees identical ids.
 const ROOT_IPE_ID: &str = "r";
 
@@ -76,9 +76,9 @@ pub fn run_start<E: std::fmt::Debug + 'static>(task: IpeTask<E, ()>) {
     });
 }
 
-/// `Live.app` compiled for the browser: mount into `document.body`, then run
+/// `Web.app` compiled for the browser: mount into `document.body`, then run
 /// the update→diff→patch loop locally. Session stores do not exist client-side;
-/// `init` receives a `LiveReq` synthesised from `location` + `document.cookie`.
+/// `init` receives a `WebReq` synthesised from `location` + `document.cookie`.
 pub fn wasm_app<E, Model, Msg, FInit, FUpdate, FView, FSubs>(
     init: FInit,
     update: FUpdate,
@@ -89,7 +89,7 @@ where
     E: From<String> + 'static,
     Model: Clone + 'static,
     Msg: Clone + 'static,
-    FInit: Fn(LiveReq) -> (Model, IpeCmd<Msg>) + 'static,
+    FInit: Fn(WebReq) -> (Model, IpeCmd<Msg>) + 'static,
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + 'static,
     FView: Fn(Model) -> Html<Msg> + 'static,
     FSubs: Fn(Model) -> IpeSub<Msg> + 'static,
@@ -150,7 +150,7 @@ where
 
 thread_local! {
     /// Distinct origin token per mounted app instance — the wasm analogue of
-    /// a Live session's sid, used ONLY to scope `Cmd.publish`/`PubSub.publish`
+    /// a Web session's sid, used ONLY to scope `Cmd.publish`/`PubSub.publish`
     /// echo-suppression (`wasm::pubsub`) to the mount instance that owns a
     /// given `Sub.subscribeTopic`. Monotonic within one wasm module instance
     /// (a fresh page load always resets it), so two `wasm_app`/`wasm::mount`
@@ -205,7 +205,7 @@ fn mount_app<Model, Msg, FInit, FUpdate, FView, FSubs>(
 where
     Model: Clone + 'static,
     Msg: Clone + 'static,
-    FInit: Fn(LiveReq) -> (Model, IpeCmd<Msg>) + 'static,
+    FInit: Fn(WebReq) -> (Model, IpeCmd<Msg>) + 'static,
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + 'static,
     FView: Fn(Model) -> Html<Msg> + 'static,
     FSubs: Fn(Model) -> IpeSub<Msg> + 'static,
@@ -321,7 +321,7 @@ fn document() -> Result<web_sys::Document, String> {
 }
 
 /// Rebuild the row-poly `req` record from the browser environment.
-fn synthesize_req(document: &web_sys::Document) -> Result<LiveReq, String> {
+fn synthesize_req(document: &web_sys::Document) -> Result<WebReq, String> {
     let window = web_sys::window().ok_or("no window")?;
     let loc = window.location();
     let path = loc.pathname().unwrap_or_default();
@@ -341,7 +341,7 @@ fn synthesize_req(document: &web_sys::Document) -> Result<LiveReq, String> {
         }
     }
 
-    Ok(LiveReq {
+    Ok(WebReq {
         path,
         query: raw_query,
         method: "GET".to_owned(),

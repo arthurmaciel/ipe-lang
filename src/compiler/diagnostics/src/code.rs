@@ -212,29 +212,29 @@ pub const IPE_L0115: Code = Code("IPE-L0115");
 pub const IPE_L0116: Code = Code("IPE-L0116");
 /// `Float` is not a valid `Set` element or `Dict` key on the Rust backend
 pub const IPE_L0117: Code = Code("IPE-L0117");
-/// `Live.appRouted` is not yet supported — use `Live.app` (non-routed) for now
+/// `Web.appRouted` is not yet supported — use `Web.app` (non-routed) for now
 pub const IPE_L0118: Code = Code("IPE-L0118");
 /// an app-entry cfg must be an inline record literal, not a let-bound variable
 pub const IPE_L0119: Code = Code("IPE-L0119");
-/// a Live/Tui/Webview app Model is not admissible for that app shape's runtime
-/// bound (Live needs serde+Clone+PartialEq; Tui/Webview need Clone)
+/// a Web/Tui/WebView app Model is not admissible for that app shape's runtime
+/// bound (Web needs serde+Clone+PartialEq; Tui/WebView need Clone)
 pub const IPE_L0120: Code = Code("IPE-L0120");
 /// `JsonDec.succeed` / `Db.Decode.succeed` constructor arity exceeds 10
 /// (the maximum supported by `curry1`..`curry10` in the runtime)
 pub const IPE_L0121: Code = Code("IPE-L0121");
-/// `Live.route` pattern `:param` count does not match the page-constructor
+/// `Web.route` pattern `:param` count does not match the page-constructor
 /// payload count; the route can never deliver the right number of arguments
 pub const IPE_L0122: Code = Code("IPE-L0122");
-/// `Live.route` page builder is neither a page constructor, an inline lambda,
+/// `Web.route` page builder is neither a page constructor, an inline lambda,
 /// nor a named function — the Rust backend cannot emit a type-directed closure
 pub const IPE_L0123: Code = Code("IPE-L0123");
-/// `Live.app` routes list is non-empty but Model has no `page` field.
+/// `Web.app` routes list is non-empty but Model has no `page` field.
 ///
 /// The routes are forwarded to the non-routed runtime path and never update the
 /// Model. Emitted as a **warning** (Go's `applyRoute` silently no-ops the same
 /// shape, so this compiles) to flag the likely mis-named routed-page field.
 pub const IPE_L0124: Code = Code("IPE-L0124");
-/// inadmissible Msg type in a Live/Tui/Webview app.
+/// inadmissible Msg type in a Web/Tui/WebView app.
 ///
 /// The Msg type's Rust rendering would not satisfy the runtime's
 /// `Clone + Send + Sync + Debug + 'static` bound — converts a
@@ -248,7 +248,7 @@ pub const IPE_L0127: Code = Code("IPE-L0127");
 /// an `as`-alias in a refutable match-arm position whose inner pattern needs
 /// Rust-level runtime dispatch (a nested constructor / literal / list pattern)
 pub const IPE_L0128: Code = Code("IPE-L0128");
-/// A routed `Live.app` under `--target wasm` (client router not yet built).
+/// A routed `Web.app` under `--target wasm` (client router not yet built).
 pub const IPE_L0129: Code = Code("IPE-L0129");
 /// a foreign opaque FFI handle (possibly non-`Clone`) is used more than once
 pub const IPE_L0130: Code = Code("IPE-L0130");
@@ -387,18 +387,18 @@ pub fn title(c: Code) -> &'static str {
         IPE_L0115 => "tuple pattern not supported here yet",
         IPE_L0116 => "refutable pattern-discrimination shape not supported yet",
         IPE_L0117 => "Float is not a valid Set element or Dict key on the Rust backend",
-        IPE_L0118 => "`Live.appRouted` is not yet supported — use `Live.app` (non-routed) for now",
+        IPE_L0118 => "`Web.appRouted` is not yet supported — use `Web.app` (non-routed) for now",
         IPE_L0119 => "app entry cfg must be an inline record literal",
         IPE_L0120 => "app Model is not admissible for this app shape",
         IPE_L0121 => "`JsonDec.succeed` / `Db.Decode.succeed` constructor arity exceeds 10",
-        IPE_L0122 => "`Live.route` `:param` count does not match page-constructor payload count",
-        IPE_L0123 => "`Live.route` page builder is not a constructor, lambda, or named function",
-        IPE_L0124 => "`Live.app` routes list is non-empty but Model has no `page` field",
+        IPE_L0122 => "`Web.route` `:param` count does not match page-constructor payload count",
+        IPE_L0123 => "`Web.route` page builder is not a constructor, lambda, or named function",
+        IPE_L0124 => "`Web.app` routes list is non-empty but Model has no `page` field",
         IPE_L0125 => "app Msg is not admissible for this app shape",
         IPE_L0126 => "non-Clone capture in a closure is not yet supported",
         IPE_L0127 => "a value holding a function is used more than once",
         IPE_L0128 => "alias over a dispatch-needing nested pattern not supported yet",
-        IPE_L0129 => "routed Live.app not supported under --target wasm yet",
+        IPE_L0129 => "routed Web.app not supported under --target wasm yet",
         IPE_L0130 => "a foreign opaque FFI handle is used more than once",
         IPE_L0131 => "a row-polymorphic record annotation is not yet emittable",
         IPE_L0200 => "expression nests too deeply for the backend",

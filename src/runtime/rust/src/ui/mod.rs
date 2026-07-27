@@ -1,5 +1,5 @@
-//! `Ipe.Ui` shared element tree — the general UI abstraction that Ipe.Live,
-//! Ipe.Tui, and Ipe.Webview each render to their own target. The codegen maps the
+//! `Ipe.Ui` shared element tree — the general UI abstraction that Ipe.Web,
+//! Ipe.Tui, and Ipe.WebView each render to their own target. The codegen maps the
 //! Ipê `Ipe.Ui.*` types onto these via `runtimeOpaqueTypes` (qualified path
 //! `ipe_runtime::ui::*`), so this module is intentionally NOT glob-re-exported at
 //! the crate root (its `Attribute` would collide with `html::Attribute`).

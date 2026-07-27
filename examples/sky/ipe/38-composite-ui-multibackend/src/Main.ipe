@@ -22,11 +22,11 @@ import Ipe.System as System
 import Ipe.Task as Task
 import Ipe.Time as Time
 import Ipe.Cmd as Cmd
-import Ipe.Live as Live
+import Ipe.Web as Live
 import Ipe.Sub as Sub
 import Ipe.Sub exposing (Sub)
 import Ipe.Tui as Tui
-import Ipe.Webview as Webview
+import Ipe.WebView as Webview
 import Head
 import State exposing (..)
 import Update exposing (update)

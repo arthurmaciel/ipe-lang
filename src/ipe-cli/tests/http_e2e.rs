@@ -282,7 +282,7 @@ fn http_ssrf_deny_loopback() -> Result<(), BoxError> {
         return Ok(());
     }
 
-    // Live loopback fixture: an open, reachable port. Excludes connection-refused
+    // Web loopback fixture: an open, reachable port. Excludes connection-refused
     // as an alternative explanation for the DENIED result — only the SSRF guard
     // can produce it. The fixture would answer `200 hi` if the guard let the
     // request through.

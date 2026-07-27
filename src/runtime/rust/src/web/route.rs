@@ -1,7 +1,7 @@
-//! URL routing for `Live.app` — `Route<Page>` + matching, mirroring Go's
+//! URL routing for `Web.app` — `Route<Page>` + matching, mirroring Go's
 //! `matchRoute` / `applyRouteWithParams` (runtime-go/rt/live.go).
 //!
-//! Each `Live.route pattern ctor` lowers (codegen peephole) to a `Route` whose
+//! Each `Web.route pattern ctor` lowers (codegen peephole) to a `Route` whose
 //! `build` closure applies the captured `:param` strings to the page
 //! constructor. `match_routes` picks the first matching route in declaration
 //! order and builds its page, falling back to `not_found`.
@@ -93,7 +93,7 @@ pub fn match_routes<Page: Clone>(routes: &[Route<Page>], not_found: &Page, path:
 }
 
 /// Go `matchAnyRoute` parity: does `path` match ANY declared route? With no
-/// routes only `/` is a page URL (the single-page `Live.app` shape). The page
+/// routes only `/` is a page URL (the single-page `Web.app` shape). The page
 /// handler uses this to keep unrouted GETs (browser noise like
 /// `/favicon.ico`, asset probes, unknown paths) from re-routing a live
 /// session's model — an unrouted re-route would rebuild the handler index
@@ -201,7 +201,7 @@ mod tests {
         assert!(!matches_any(&rs, "/favicon.ico"));
         assert!(!matches_any(&rs, "/nope"));
 
-        // Empty route table (single-page `Live.app`): only `/` is a page URL.
+        // Empty route table (single-page `Web.app`): only `/` is a page URL.
         let none: Vec<Route<Page>> = Vec::new();
         assert!(matches_any(&none, "/"));
         assert!(!matches_any(&none, "/favicon.ico"));

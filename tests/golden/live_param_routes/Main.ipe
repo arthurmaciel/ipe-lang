@@ -4,9 +4,9 @@ module Main exposing (main)
 -- constructor page builder, the CANONICAL corpus shape
 -- (AGENTS.md: `route "/apps/:slug" AppDetailPage`).
 --
--- The pre-round-4 `Live.route : String -> page -> LiveRoute page` scheme
+-- The pre-round-4 `Web.route : String -> page -> WebRoute page` scheme
 -- shared ONE type variable between the builder argument and the page, so
--- `Live.route "/u/:id" UserPage` (builder : String -> Page) forced
+-- `Web.route "/u/:id" UserPage` (builder : String -> Page) forced
 -- `Page ≟ String -> Page` → a false IPE-T0001 on every param-route app, and
 -- the emit tier's `route_param_get` conversion path was dead code.
 --
@@ -14,7 +14,7 @@ module Main exposing (main)
 -- into one routes list, ipec exits 0, the emitted project cargo-builds, and
 -- a GET on `/u/:id` delivers the captured param to the page constructor.
 
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 
 type Page
@@ -54,8 +54,8 @@ subscriptions _model =
     Sub.none
 
 main =
-    Live.app
+    Web.app
         { init = init, update = update, view = view, subscriptions = subscriptions
-        , routes = [ Live.route "/" CounterPage, Live.route "/u/:id" UserPage ]
+        , routes = [ Web.route "/" CounterPage, Web.route "/u/:id" UserPage ]
         , notFound = CounterPage
         }

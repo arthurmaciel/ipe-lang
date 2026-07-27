@@ -7,7 +7,7 @@ import Ipe.Css exposing (..)
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onClick)
-import Ipe.Live exposing (app, route)
+import Ipe.Web exposing (app, route)
 import Ipe.Log as Log
 import Ipe.Sub as Sub
 

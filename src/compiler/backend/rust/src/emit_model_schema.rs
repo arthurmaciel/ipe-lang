@@ -1,4 +1,4 @@
-//! Structural fingerprint of a Ipe.Live Model type (H24).
+//! Structural fingerprint of a Ipe.Web Model type (H24).
 //!
 //! `model_schema_tag` computes a SHA-256 hash of the Model type's structural
 //! shape, folded with a hand-maintained wire-format epoch constant. The
@@ -26,7 +26,7 @@
 //!   asymmetry with record fields is deliberate and load-bearing — records
 //!   are emitted name-sorted; enum variants are emitted in declaration order.
 //! * The match over [`IrType`] is EXHAUSTIVE (no `_ =>`), mirroring
-//!   `emit_live::ir_type_display_name`, so a future variant is a compile
+//!   `emit_web::ir_type_display_name`, so a future variant is a compile
 //!   error here too. Non-serde-admissible variants still get total, panic-free
 //!   arms — they can never reach this function on a well-typed program (the
 //!   Model-admissibility gate runs first), but a total match is cheaper to
@@ -186,7 +186,7 @@ fn hash_ty(ctx: &EmitCtx, ty: &IrType, h: &mut Sha256, fuel: u32) -> DResult<()>
         IrType::HttpRequest => h.update([TAG_HTTP_REQUEST]),
         IrType::WebSocketServer => h.update([TAG_WEBSOCKET_SERVER]),
         IrType::WebSocketServerCfg => h.update([TAG_WEBSOCKET_SERVER_CFG]),
-        IrType::LiveReq => h.update([TAG_LIVE_REQ]),
+        IrType::WebReq => h.update([TAG_LIVE_REQ]),
         IrType::Order => h.update([TAG_ORDER]),
         IrType::Decimal => h.update([TAG_DECIMAL]),
         IrType::ErrorKind => h.update([TAG_ERROR_KIND]),
@@ -235,7 +235,7 @@ fn hash_ty(ctx: &EmitCtx, ty: &IrType, h: &mut Sha256, fuel: u32) -> DResult<()>
             h.update([TAG_SUB]);
             hash_ty(ctx, inner, h, next)?;
         }
-        IrType::LiveRoute(page) => {
+        IrType::WebRoute(page) => {
             h.update([TAG_LIVE_ROUTE]);
             hash_ty(ctx, page, h, next)?;
         }
@@ -478,7 +478,7 @@ mod tests {
                 uses_tea: false,
                 uses_server: false,
                 uses_ui: false,
-                uses_live: false,
+                uses_web: false,
                 uses_tui: false,
                 uses_webview: false,
                 uses_css: false,
@@ -656,9 +656,9 @@ mod tests {
     #[test]
     fn wire_epoch_matches_runtime_constant() {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../runtime/rust/src/live/store.rs");
+            .join("../../../runtime/rust/src/web/store.rs");
         let text = std::fs::read_to_string(&path)
-            .expect("wire-epoch drift guard: cannot read runtime live/store.rs");
+            .expect("wire-epoch drift guard: cannot read runtime web/store.rs");
         let needle = format!(
             "pub const LIVE_MODEL_SCHEMA_WIRE_VERSION: &str = \"{}\";",
             super::WIRE_EPOCH

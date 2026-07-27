@@ -1,5 +1,5 @@
--- | Ipe.Live.Head — typed `<head>` helpers for Ipe.Live per-page injection (v0.15.58+).
-module Ipe.Live.Head exposing
+-- | Ipe.Web.Head — typed `<head>` helpers for Ipe.Web per-page injection (v0.15.58+).
+module Ipe.Web.Head exposing
     ( title
     , meta
     , metaProperty
@@ -10,9 +10,9 @@ module Ipe.Live.Head exposing
     , rss
     )
 
--- | Ipe.Live.Head — typed helpers for emitting per-page <head>
--- content from a Ipe.Live app via the optional `head : Model ->
--- List (Html msg)` field on `Live.app`.
+-- | Ipe.Web.Head — typed helpers for emitting per-page <head>
+-- content from a Ipe.Web app via the optional `head : Model ->
+-- List (Html msg)` field on `Web.app`.
 --
 -- The runtime calls the user-supplied `head` callback once per
 -- full GET (initial page load / ipe-nav navigation) and splices
@@ -40,7 +40,7 @@ module Ipe.Live.Head exposing
 --
 -- Typical usage:
 --
---     import Ipe.Live.Head as Head
+--     import Ipe.Web.Head as Head
 --
 --     headFor : Model -> List (Html Msg)
 --     headFor model =

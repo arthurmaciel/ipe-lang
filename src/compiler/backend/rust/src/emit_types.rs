@@ -359,15 +359,15 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
             UiPlain::Description => "ipe_runtime::ui::element::Description".to_owned(),
             UiPlain::LayoutContext => "ipe_runtime::ui::element::LayoutContext".to_owned(),
         },
-        // Live types — render to qualified runtime paths.
-        IrType::LiveReq => "ipe_runtime::live::LiveReq".to_owned(),
+        // Web types — render to qualified runtime paths.
+        IrType::WebReq => "ipe_runtime::web::WebReq".to_owned(),
         // `Route<Page>` has NO default type parameter in the runtime
-        // (`live/route.rs`), so the page argument MUST be rendered: a bare
+        // (`web/route.rs`), so the page argument MUST be rendered: a bare
         // `Route` is an E0107 cargo failure in every rendered position — the
         // empty `routes = []` literal's `Vec::<…>::new()` turbofish and any
         // let-bound route table's fn signature.
-        IrType::LiveRoute(page) => format!(
-            "ipe_runtime::live::route::Route<{}>",
+        IrType::WebRoute(page) => format!(
+            "ipe_runtime::web::route::Route<{}>",
             render_type(ctx, page, generics)?
         ),
         IrType::Tuple(elems) => {
@@ -687,18 +687,18 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
     // one. serde-support ⊊ CDPeq-support: a `Clone + Debug + PartialEq` enum whose
     // payload reaches a `Html` / `Element` / `Color` / `UiPlain` value (serde-less
     // but derivable) must NOT be forced to `serde::Serialize` / `Deserialize` —
-    // doing so under `uses_live` is an exit-0-then-cargo-fail (E0277). Such an enum
+    // doing so under `uses_web` is an exit-0-then-cargo-fail (E0277). Such an enum
     // still gets its `#[derive(Clone, Debug, PartialEq)]` (self_derivable), just
     // without serde, so it stays cargo-buildable. `enum_is_serde ⇒ enum_is_derivable`
     // (the serde fixpoint is a demotion of the derivable one), so serde is never
     // added without CDPeq. The app-entry Model gate independently rejects a
-    // NON-serde type used AS a Live/Tui/Webview Model; this gate covers every OTHER
-    // (non-Model) emitted type in a Live program.
+    // NON-serde type used AS a Web/Tui/WebView Model; this gate covers every OTHER
+    // (non-Model) emitted type in a Web program.
     let self_serde = ctx.enum_is_serde(&def.home, def.name);
-    // When the program uses Ipe.Live, model types must implement serde traits
+    // When the program uses Ipe.Web, model types must implement serde traits
     // so the session store can serialise/deserialise them. The live runtime
     // requires `Model: serde::Serialize + serde::de::DeserializeOwned`.
-    let serde_derives = if self_serde && ctx.uses_live {
+    let serde_derives = if self_serde && ctx.uses_web {
         ", serde::Serialize, serde::Deserialize"
     } else {
         ""
@@ -831,14 +831,14 @@ pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> 
     //
     // seal: the serde derive is gated on `rec.is_serde` (the per-record serde
     // fixpoint), NOT `rec.is_derivable`. A CDPeq-but-not-serde record — e.g. a
-    // view-helper `{ title : String, body : Html Msg }` in a Ipe.Live program —
+    // view-helper `{ title : String, body : Html Msg }` in a Ipe.Web program —
     // keeps its `#[derive(Clone, Debug, PartialEq)]` but is NOT forced to
     // `serde::Serialize` / `Deserialize`, which would be an exit-0-then-cargo-fail
     // (E0277: `Html<Msg>: Serialize` unsatisfied). `is_serde ⇒ is_derivable`
     // (serde-OK leaves ⊂ derivable leaves), so serde is never added without CDPeq.
     // The app-entry Model gate independently rejects a non-serde type used AS a
-    // Live/Tui/Webview Model; this gate covers every OTHER (non-Model) record.
-    let serde_derives = if rec.is_serde && ctx.uses_live {
+    // Web/Tui/WebView Model; this gate covers every OTHER (non-Model) record.
+    let serde_derives = if rec.is_serde && ctx.uses_web {
         ", serde::Serialize, serde::Deserialize"
     } else {
         ""

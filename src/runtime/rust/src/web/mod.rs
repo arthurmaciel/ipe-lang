@@ -1,4 +1,4 @@
-//! Ipe.Live on the Rust backend — HTTP-first render + SSE patch loop.
+//! Ipe.Web on the Rust backend — HTTP-first render + SSE patch loop.
 //! Generic over the app's (Model, Msg); no `any`, static dispatch only.
 // Re-exported from the target-neutral `dom` module (shared with the
 // browser-WASM sink); module aliases keep `live::diff::Patch`-style paths valid.
@@ -67,7 +67,7 @@ const SESSION_LOST_BODY: &str = "session not found";
 
 // ─── Client assets ────────────────────────────────────────────────────────────
 
-/// The browser-side Ipe.Live client, extracted verbatim from Go's
+/// The browser-side Ipe.Web client, extracted verbatim from Go's
 /// `liveJSWithCfgAndCsrfWithBase` template (runtime-go/rt/live.go:5853-7490).
 /// The 12 header `%`-verb lines are replaced with static literals;
 /// the two `%%` CSS escapes are un-escaped to `%`.
@@ -81,7 +81,7 @@ const CLIENT_JS: &str = include_str!("client.js");
 ///     `integrity="sha256-<base64full>"` SRI attribute value.
 ///
 /// Both are derived from the same digest, computed once and interned.
-/// The `sha2` crate is unconditionally available in every generated Live project
+/// The `sha2` crate is unconditionally available in every generated Web project
 /// (`default` features always include `crypto` which gates `sha2`).
 static CLIENT_JS_HASH: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
 
@@ -106,7 +106,7 @@ pub fn client_js_path() -> String {
     format!("/_ipe/client.{}.js", hex16)
 }
 
-/// Minimal CSS reset injected into every Ipe.Live page.
+/// Minimal CSS reset injected into every Ipe.Web page.
 /// Ported verbatim from Go's `liveBaseCSS` (runtime-go/rt/live.go:3847-3858).
 const BASE_CSS: &str = concat!(
     "*,*::before,*::after{box-sizing:border-box}",
@@ -123,8 +123,8 @@ const BASE_CSS: &str = concat!(
 // ─── Page renders ─────────────────────────────────────────────────────────────
 
 /// Render `view(model)` to a full HTML page and print it — the static
-/// render path (the interactive server is `live_app`).
-pub fn live_render_static<E, Model, Msg, FView>(view: FView, model: Model) -> IpeTask<E, ()>
+/// render path (the interactive server is `web_app`).
+pub fn web_render_static<E, Model, Msg, FView>(view: FView, model: Model) -> IpeTask<E, ()>
 where
     E: Send + 'static,
     Model: Send + 'static,
@@ -364,7 +364,7 @@ fn dev_console_banner(base: &str) -> String {
     crate::telemetry::dev_console_banner(base)
 }
 
-// ─── live_app: axum mount + per-session TEA driver over SSE ─────────────────
+// ─── web_app: axum mount + per-session TEA driver over SSE ─────────────────
 
 use crate::tea::{IpeCmd, IpeSub};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -445,25 +445,25 @@ type ParamResolver = Arc<dyn Fn(&str) -> crate::dict::IpeDict<String> + Send + S
 type RouteMatched = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
 /// Shared axum state: the session store + Arc'd TEA callbacks.
-struct LiveState<Model, Msg, FInit, FUpdate, FView, FSubs> {
+struct WebState<Model, Msg, FInit, FUpdate, FView, FSubs> {
     store: Arc<dyn store::SessionStore<Model, Msg>>,
     init: Arc<FInit>,
     update: Arc<FUpdate>,
     view: Arc<FView>,
     subs: Arc<FSubs>,
     /// Maps the freshly-`init`'d model + GET path to the model whose `page`
-    /// field reflects the matched route. `live_app` passes identity (no
-    /// routing); `live_app_routed` captures the route table + page-setter.
-    /// `Page`/`set_page` are erased into this boxed closure, so `LiveState`
+    /// field reflects the matched route. `web_app` passes identity (no
+    /// routing); `web_app_routed` captures the route table + page-setter.
+    /// `Page`/`set_page` are erased into this boxed closure, so `WebState`
     /// keeps its original 6 type params.
     route_resolver: RouteResolver<Model>,
     /// Maps a GET path to the matched route's `:name`→value params (for
     /// `req.params`). Model-independent so the page handler can build `req`
-    /// BEFORE calling `init`. `live_app` returns empty; `live_app_routed`
+    /// BEFORE calling `init`. `web_app` returns empty; `web_app_routed`
     /// captures the route table.
     param_resolver: ParamResolver,
     /// Does a GET path match a declared route? (Go `matchAnyRoute` parity —
-    /// `live_app` treats only `/` as routed; `live_app_routed` captures the
+    /// `web_app` treats only `/` as routed; `web_app_routed` captures the
     /// route table.) An unrouted GET must never re-route a live session's
     /// model or rebuild its handler index: that wipes the handlers of the
     /// page the browser is showing, silently killing every subsequent event
@@ -479,10 +479,10 @@ struct LiveState<Model, Msg, FInit, FUpdate, FView, FSubs> {
 
 // Manual Clone — derive would demand Clone on the closures (they're behind Arc).
 impl<Model, Msg, FInit, FUpdate, FView, FSubs> Clone
-    for LiveState<Model, Msg, FInit, FUpdate, FView, FSubs>
+    for WebState<Model, Msg, FInit, FUpdate, FView, FSubs>
 {
     fn clone(&self) -> Self {
-        LiveState {
+        WebState {
             store: self.store.clone(),
             init: self.init.clone(),
             update: self.update.clone(),
@@ -506,7 +506,7 @@ fn max_sessions() -> usize {
         .unwrap_or(50_000)
 }
 
-/// RAII admission slot: decrements `LiveState::session_count` exactly once when
+/// RAII admission slot: decrements `WebState::session_count` exactly once when
 /// the owning `drive_session` task exits (any path). Paired 1:1 with the
 /// `fetch_add` reservation at the session-create site — the ONLY decrement.
 struct SessionSlot {
@@ -623,7 +623,7 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
     subs: Arc<FSubs>,
     store: Arc<dyn store::SessionStore<Model, Msg>>,
     sid: String,
-    // Admission-control slot: decrements LiveState::session_count on driver exit.
+    // Admission-control slot: decrements WebState::session_count on driver exit.
     _slot: SessionSlot,
 ) where
     // PartialEq: the `noop` signal compares old vs new Model by structural
@@ -780,7 +780,7 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
 /// (no uuid crate / uuid_kernel module dependency, since the generated
 /// A fresh session id: **128 bits from the OS CSPRNG**, hex-encoded.
 ///
-/// SECURITY: the sid is the SOLE bearer credential for a Ipe.Live session
+/// SECURITY: the sid is the SOLE bearer credential for a Ipe.Web session
 /// (`sid_from_cookie` + `store.get` authorise every event off it). It MUST be
 /// unpredictable. The prior scheme — `clock_nanos XOR counter` through
 /// splitmix64 — was an invertible bijection over low-entropy, partly-known
@@ -858,7 +858,7 @@ fn cookie_path_for(base: &str) -> String {
 }
 
 /// Normalised sub-app base path, read from `IPE_LIVE_BASE_PATH`. Empty when
-/// unset (root-mounted app → byte-identical to a standalone Live server). When
+/// unset (root-mounted app → byte-identical to a standalone Web server). When
 /// set (this app runs as a reverse-proxied sub-app — e.g. the bundled console
 /// mounted at `/_ipe/console`), the value is threaded into `render_page_full`
 /// so the client JS prefixes `/_ipe/event` + `/_ipe/sse` with it. The browser
@@ -1200,7 +1200,7 @@ where
 
     // Print to stdout (Go uses `fmt.Println`, which is stdout). The leading
     // newline keeps the `^C` echo on its own line, matching Go.
-    println!("\nIpe.Live shutting down…");
+    println!("\nIpe.Web shutting down…");
 
     // Flip readyz → draining so orchestrators stop routing new traffic while
     // in-flight requests finish (Go: `SetReady(false)`).
@@ -1248,7 +1248,7 @@ where
     // `<-sigCh; os.Exit(130)`). Spawned (not awaited).
     tokio::spawn(async {
         wait_for_term_or_int().await;
-        eprintln!("Ipe.Live: forcing exit (second signal)");
+        eprintln!("Ipe.Web: forcing exit (second signal)");
         console_proxy::shutdown_console();
         flush_exporters().await;
         std::process::exit(130); // 128 + SIGINT(2)
@@ -1286,18 +1286,18 @@ async fn wait_for_term_or_int() {
     }
 }
 
-/// `Ipe.Live.app { init, update, view, subscriptions }` — serve via axum.
+/// `Ipe.Web.app { init, update, view, subscriptions }` — serve via axum.
 ///
 /// HTTP-first: a GET renders the full page with the embedded client, opens a
 /// per-session TEA loop, and serves an SSE patch channel + a POST event
 /// endpoint. The driver diffs view-over-view and pushes patches over SSE.
 ///
-/// `init` receives a typed `req::LiveReq` (path/query/method/params/headers/
+/// `init` receives a typed `req::WebReq` (path/query/method/params/headers/
 /// cookies) built from the incoming request; the driver calls `init(req)` so a
 /// req-reader can bootstrap session state on first render. A non-req init is
-/// monomorphised to ignore the threaded `LiveReq`.
+/// monomorphised to ignore the threaded `WebReq`.
 #[allow(clippy::too_many_arguments)]
-pub fn live_app<E, Model, Msg, FInit, FUpdate, FView, FSubs>(
+pub fn web_app<E, Model, Msg, FInit, FUpdate, FView, FSubs>(
     init: FInit,
     update: FUpdate,
     view: FView,
@@ -1313,7 +1313,7 @@ where
     // Debug: forwarded through serve_live → drive_session for the
     // ipe_live_msg_seconds{name} label. Generated Msg enums always derive Debug.
     Msg: Clone + Send + Sync + std::fmt::Debug + 'static,
-    FInit: Fn(req::LiveReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
+    FInit: Fn(req::WebReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
     FSubs: Fn(Model) -> IpeSub<Msg> + Send + Sync + 'static,
@@ -1322,7 +1322,7 @@ where
         let store =
             store::choose_store::<Model, Msg>(&store_kind, &store_path, live_ttl(), schema_tag)
                 .await;
-        let state = LiveState {
+        let state = WebState {
             store,
             init: Arc::new(init),
             update: Arc::new(update),
@@ -1340,16 +1340,16 @@ where
     })
 }
 
-/// `Ipe.Live.app { …, routes, notFound }` with URL routing — serve via axum.
+/// `Ipe.Web.app { …, routes, notFound }` with URL routing — serve via axum.
 ///
-/// Identical to `live_app` except a `route_resolver` is built from the route
+/// Identical to `web_app` except a `route_resolver` is built from the route
 /// table + page-setter: on each GET it matches the path to a `Page` value
 /// (param strings applied via the route closures) and writes it into the
 /// freshly-`init`'d model's `page` field via `set_page`. `Page`/`FSetPage`
-/// are erased into the boxed resolver, so `serve_live`/`LiveState` keep the
+/// are erased into the boxed resolver, so `serve_live`/`WebState` keep the
 /// original 6 type params.
 #[allow(clippy::too_many_arguments)]
-pub fn live_app_routed<E, Model, Msg, Page, FInit, FUpdate, FView, FSubs, FSetPage>(
+pub fn web_app_routed<E, Model, Msg, Page, FInit, FUpdate, FView, FSubs, FSetPage>(
     init: FInit,
     update: FUpdate,
     view: FView,
@@ -1369,7 +1369,7 @@ where
     // ipe_live_msg_seconds{name} label. Generated Msg enums always derive Debug.
     Msg: Clone + Send + Sync + std::fmt::Debug + 'static,
     Page: Clone + Send + Sync + 'static,
-    FInit: Fn(req::LiveReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
+    FInit: Fn(req::WebReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
     FSubs: Fn(Model) -> IpeSub<Msg> + Send + Sync + 'static,
@@ -1390,7 +1390,7 @@ where
         let store =
             store::choose_store::<Model, Msg>(&store_kind, &store_path, live_ttl(), schema_tag)
                 .await;
-        let state = LiveState {
+        let state = WebState {
             store,
             init: Arc::new(init),
             update: Arc::new(update),
@@ -1491,18 +1491,18 @@ async fn serve_noise_from_static_root(path: &str) -> Option<axum::response::Resp
     )
 }
 
-/// Shared server setup for `live_app` / `live_app_routed`: nested HTTP
+/// Shared server setup for `web_app` / `web_app_routed`: nested HTTP
 /// handlers (`page` / `sse_handler` / `event_handler`), router + bind/serve.
 /// The only per-entry difference (the `route_resolver`) lives on `state`.
 async fn serve_live<E, Model, Msg, FInit, FUpdate, FView, FSubs>(
-    state: LiveState<Model, Msg, FInit, FUpdate, FView, FSubs>,
+    state: WebState<Model, Msg, FInit, FUpdate, FView, FSubs>,
 ) -> IpeResult<E, ()>
 where
     E: From<String> + Send + 'static,
     Model: Clone + PartialEq + Send + 'static,
     // Debug: forwarded to drive_session for the ipe_live_msg_seconds{name} label.
     Msg: Clone + Send + std::fmt::Debug + 'static,
-    FInit: Fn(req::LiveReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
+    FInit: Fn(req::WebReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
     FSubs: Fn(Model) -> IpeSub<Msg> + Send + Sync + 'static,
@@ -1516,7 +1516,7 @@ where
     {
         // ── GET page (root + any path) ────────────────────────────────────
         async fn page<Model, Msg, FInit, FUpdate, FView, FSubs>(
-            State(st): State<LiveState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
+            State(st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
             method: axum::http::Method,
             uri: axum::http::Uri,
             headers: axum::http::HeaderMap,
@@ -1526,13 +1526,13 @@ where
             // Debug: the GET handler creates a session and spawns drive_session,
             // which needs the bound for the ipe_live_msg_seconds{name} label.
             Msg: Clone + Send + std::fmt::Debug + 'static,
-            FInit: Fn(req::LiveReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
+            FInit: Fn(req::WebReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
             FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
             FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
             FSubs: Fn(Model) -> IpeSub<Msg> + Send + Sync + 'static,
         {
             // Cookie-based session lifecycle (Go store.Get on every GET):
-            //   * Live hit  → reuse the in-process session; re-apply routing for
+            //   * Web hit  → reuse the in-process session; re-apply routing for
             //                 this GET's path + re-render (no new driver).
             //   * Cold hit  → a persisted model (post-restart / different replica);
             //                 hydrate a fresh driver seeded with it (no init).
@@ -1681,7 +1681,7 @@ where
 
         // ── GET /_ipe/sse ─────────────────────────────────────────────────
         async fn sse_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
-            State(st): State<LiveState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
+            State(st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
             headers: axum::http::HeaderMap,
         ) -> Response
         where
@@ -1826,7 +1826,7 @@ where
 
         // ── POST /_ipe/event ──────────────────────────────────────────────
         async fn event_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
-            State(st): State<LiveState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
+            State(st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
             headers: axum::http::HeaderMap,
             body: axum::body::Bytes,
         ) -> Response
@@ -1936,7 +1936,7 @@ where
                 }
             }
             // Real patches flow over SSE from the driver; ack with an empty list.
-            // X-Ipê-Live: 1 marks this as a genuine Ipe.Live response (the client
+            // X-Ipê-Live: 1 marks this as a genuine Ipe.Web response (the client
             // treats a 200 WITHOUT it as a wedged-proxy signal).
             (
                 StatusCode::OK,
@@ -2040,14 +2040,14 @@ where
             );
 
         router = if use_console_proxy {
-            // Real bundled Ipe.Live console, spawned as a child + proxied. The
+            // Real bundled Ipe.Web console, spawned as a child + proxied. The
             // child process logs its OWN `session store: …` line + a
             // `reverse-proxy ready` line (console_proxy), so the parent does not
             // duplicate the inline-mount log here.
             console_proxy::proxy_routes(router)
         } else {
             // In-process console (plain-HTML shell + JSON APIs). Go mounts the
-            // console as an in-process Ipe.Live sub-app that inits its OWN session
+            // console as an in-process Ipe.Web sub-app that inits its OWN session
             // store, so Go logs the memory-store line TWICE (root + console) and
             // then the inline-mount line (console.go:328). The Rust in-process
             // console has no separate store, so we emit the matching SECOND store
@@ -2057,7 +2057,7 @@ where
             if console_proxy::gate_allows() {
                 eprintln!("{}", store::memory_store_log_line(live_ttl()));
                 eprintln!(
-                    "[ipe.console] inline console mounted as Ipe.Live sub-app at /_ipe/console mode={}",
+                    "[ipe.console] inline console mounted as Ipe.Web sub-app at /_ipe/console mode={}",
                     console::console_auth_mode_label()
                 );
             }
@@ -2115,7 +2115,7 @@ where
             // panic SERVER-SIDE (errId, via core::panic_500_body) and returns a 500
             // carrying ONLY the errId — never the panic message (no info leak).
             // Symmetric with Ipe.Http.Server (the body shape is shared in `core`;
-            // the Live router can't reference `server.rs` — a Live-only generated
+            // the Web router can't reference `server.rs` — a Web-only generated
             // project doesn't include it).
             .layer(tower_http::catch_panic::CatchPanicLayer::custom(
                 |err: Box<dyn std::any::Any + Send + 'static>| {
@@ -2140,13 +2140,13 @@ where
         let addr = format!("0.0.0.0:{port}");
         let listener = match tokio::net::TcpListener::bind(&addr).await {
             Ok(l) => l,
-            Err(e) => return IpeResult::Err(format!("Live.app: bind {addr}: {e}").into()),
+            Err(e) => return IpeResult::Err(format!("Web.app: bind {addr}: {e}").into()),
         };
         // Bind-address line (stderr, Rust-specific — carries the 0.0.0.0 bind).
-        eprintln!("[ipe.live] listening on http://{addr}");
-        // Go-parity user-facing line (stdout, `fmt.Printf("Ipe.Live listening on
+        eprintln!("[ipe.web] listening on http://{addr}");
+        // Go-parity user-facing line (stdout, `fmt.Printf("Ipe.Web listening on
         // :%d\n", port)` — live.go:3546).
-        println!("Ipe.Live listening on :{port}");
+        println!("Ipe.Web listening on :{port}");
         // Graceful shutdown (Go parity — live.go:3503): trap SIGINT/SIGTERM,
         // print the shutdown line, drain in-flight requests, and return cleanly so
         // the IpeTask resolves Ok → the generated entry exits 0 (NOT 130). A
@@ -2156,7 +2156,7 @@ where
             .await
         {
             Ok(()) => ok_res(()),
-            Err(e) => IpeResult::Err(format!("Live.app: serve: {e}").into()),
+            Err(e) => IpeResult::Err(format!("Web.app: serve: {e}").into()),
         }
     }
 }
@@ -2181,7 +2181,7 @@ fn sid_from_cookie(headers: &axum::http::HeaderMap) -> Option<String> {
 // The Ipe.Html `Ffi.callPure "htmlXxx"` kernel wrappers (html_render_,
 // html_escape_text_, html_escape_attr_, html_attr_to_string_) now live in the
 // standalone top-level `ipe_runtime::html` module (re-exported here via
-// `use super::*`), so a non-Live Ipe.Html / Ipe.Ui render doesn't pull this
+// `use super::*`), so a non-Web Ipe.Html / Ipe.Ui render doesn't pull this
 // server module in.
 
 #[cfg(test)]

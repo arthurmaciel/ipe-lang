@@ -93,7 +93,7 @@ pub fn emit_tui_call(
             };
             // Unreachable for well-typed source: a non-literal cfg is rejected
             // at lower with IPE-L0119 (Feature::LetBoundAppCfg); this guard is a
-            // defensive invariant, mirroring the `LiveAppRouted` precedent.
+            // defensive invariant, mirroring the `WebAppRouted` precedent.
             let Expr::Record(fields) = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_tui_call::TuiApp",
@@ -118,7 +118,7 @@ pub fn emit_tui_call(
             };
             // Unreachable for well-typed source: a non-literal cfg is rejected
             // at lower with IPE-L0119 (Feature::LetBoundAppCfg); this guard is a
-            // defensive invariant, mirroring the `LiveAppRouted` precedent.
+            // defensive invariant, mirroring the `WebAppRouted` precedent.
             let Expr::Record(fields) = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_tui_call::TuiProgram",
@@ -343,7 +343,7 @@ fn on_key_struct_literal(
 
 /// Emit a cfg-field expression for a Tui app-entry kernel.
 ///
-/// Mirrors `emit_live_fn` in `emit_live.rs` exactly: for a named function
+/// Mirrors `emit_live_fn` in `emit_web.rs` exactly: for a named function
 /// reference ([`Expr::FuncValue`]), emits the raw callee name (e.g.
 /// `Main_on_key`) rather than a boxed closure.  A named function item satisfies
 /// `Fn(…) + Send + Sync + 'static` via the compiler's blanket impl; a

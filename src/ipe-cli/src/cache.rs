@@ -969,7 +969,7 @@ mod tests {
                 uses_tea: false,
                 uses_server: false,
                 uses_ui: false,
-                uses_live: false,
+                uses_web: false,
                 uses_tui: false,
                 uses_webview: false,
                 uses_css: false,
@@ -1130,7 +1130,7 @@ mod tests {
         // injection-shaped payload instead of a legal identifier.
         fs::write(
             &path,
-            br#"{"modules":[{"name":["x; std::process::exit(1); //"],"types":[],"funcs":[],"entry":null,"records":[],"uses_tea":false,"uses_server":false,"uses_ui":false,"uses_live":false,"uses_tui":false,"uses_webview":false,"uses_css":false,"uses_auth":false}]}"#,
+            br#"{"modules":[{"name":["x; std::process::exit(1); //"],"types":[],"funcs":[],"entry":null,"records":[],"uses_tea":false,"uses_server":false,"uses_ui":false,"uses_web":false,"uses_tui":false,"uses_webview":false,"uses_css":false,"uses_auth":false}]}"#,
         )
         .expect("write must succeed");
 

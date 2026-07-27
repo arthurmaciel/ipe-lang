@@ -49,8 +49,8 @@ fn init_scaffolds_project_files() {
 
     let main = fs::read_to_string(target.join("src/Main.ipe")).unwrap_or_default();
     assert!(
-        main.contains("Ipe.Live") && main.contains("Increment") && main.contains("Decrement"),
-        "Main.ipe must be the Ipe.Live counter"
+        main.contains("Ipe.Web") && main.contains("Increment") && main.contains("Decrement"),
+        "Main.ipe must be the Ipe.Web counter"
     );
 
     let _ = fs::remove_dir_all(&dir);

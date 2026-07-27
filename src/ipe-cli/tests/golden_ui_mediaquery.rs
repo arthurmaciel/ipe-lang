@@ -25,7 +25,7 @@
 //!   the producer — neither marker renders, no `<script>` appears, and the
 //!   child still renders.
 //!
-//! (Plain `Html.render` keeps the markers visible; the Live/Webview pipelines
+//! (Plain `Html.render` keeps the markers visible; the Web/WebView pipelines
 //! expand them via `apply_style_injections` into the ipe-id-scoped
 //! `<style data-ipe-mq="<sid>">@media <q> { [ipe-id="<sid>"] { <rules> } }
 //! </style>` block — that half is pinned by the runtime unit tests in

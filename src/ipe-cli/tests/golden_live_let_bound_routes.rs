@@ -1,21 +1,21 @@
-//! IPE-I0001 regression — `List LiveRoute` via a let-bound top-level binding.
+//! IPE-I0001 regression — `List WebRoute` via a let-bound top-level binding.
 //!
 //! ## Background
 //!
-//! `Live.route` is typed `String -> page -> LiveRoute` (opaque).  A top-level
-//! `routeTable` binding whose elements are `Live.route …` calls therefore has
-//! inferred type `List LiveRoute`.  The `routes = routeTable` field of the
-//! `Live.app` cfg must accept that type (T3 open-record scheme), and the emitter
+//! `Web.route` is typed `String -> page -> WebRoute` (opaque).  A top-level
+//! `routeTable` binding whose elements are `Web.route …` calls therefore has
+//! inferred type `List WebRoute`.  The `routes = routeTable` field of the
+//! `Web.app` cfg must accept that type (T3 open-record scheme), and the emitter
 //! must lower the `routes` expression as a normal Expr ref — NOT assume it is an
 //! inline `[Expr::Ctor, …]` literal.
 //!
 //! ## What is tested
 //!
-//! * `routeTable` (top-level, not inlined in the cfg) type-checks as `List LiveRoute`.
-//! * The T3 open-record scheme (`routes : List LiveRoute` row field) accepts a
+//! * `routeTable` (top-level, not inlined in the cfg) type-checks as `List WebRoute`.
+//! * The T3 open-record scheme (`routes : List WebRoute` row field) accepts a
 //!   let-bound reference, not only an inline literal.
-//! * `emit_live_app_inner` lowers `routes = routeTable` (an `Expr::Var` ref) correctly.
-//! * `routed_page_field` detects the `page` field and emits `live_app_routed`.
+//! * `emit_web_app_inner` lowers `routes = routeTable` (an `Expr::Var` ref) correctly.
+//! * `routed_page_field` detects the `page` field and emits `web_app_routed`.
 //! * No ICE — the full ipe pipeline (parse → canon → types → lower → emit) exits Ok.
 //!
 //! This is a pure ipe-pipeline check (no cargo build / runtime binary required)
@@ -46,15 +46,15 @@ fn run_ipec() -> Option<Result<(), ipe::CliError>> {
     Some(ipe::build(&entry, &out, &runtime))
 }
 
-/// IPE-I0001 regression: a `Live.app` whose `routes` field references a
-/// top-level `routeTable` binding (type `List LiveRoute`) MUST compile
+/// IPE-I0001 regression: a `Web.app` whose `routes` field references a
+/// top-level `routeTable` binding (type `List WebRoute`) MUST compile
 /// through the full ipe pipeline without an ICE.
 ///
 /// Pre-regression: the emitter assumed all `routes` elements were inlined
 /// `Expr::Ctor` nodes and panicked (ICE) on a let-bound reference.
 /// Post-fix (T5): the `routes` field is lowered as a normal expression;
 /// individual route-closure builders are only inspected at the call sites of
-/// `Live.route`, not at the list-collection level.
+/// `Web.route`, not at the list-collection level.
 #[test]
 fn live_let_bound_routes_compiles_no_ice() {
     let Some(result) = run_ipec() else {
@@ -70,8 +70,8 @@ fn live_let_bound_routes_compiles_no_ice() {
 // ── round-4 hole 1: the let-bound golden must also CARGO-build ───────
 //
 // `routeTable`'s top-level fn signature renders the binding's inferred type
-// `List (LiveRoute Page)`. Pre-round-4 `IrType::LiveRoute` rendered a bare
-// `ipe_runtime::live::route::Route` — but the runtime `Route<Page>` has NO
+// `List (WebRoute Page)`. Pre-round-4 `IrType::WebRoute` rendered a bare
+// `ipe_runtime::web::route::Route` — but the runtime `Route<Page>` has NO
 // default type parameter, so THIS golden itself was ipe-0 then cargo-fail
 // (E0107) at the `routeTable` signature. Post-fix the signature renders
 // `Vec<Route<MainPage>>`.

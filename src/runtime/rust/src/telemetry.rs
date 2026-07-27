@@ -1,7 +1,7 @@
 //! In-process telemetry sink — the data the Ipê Console renders.
 //!
 //! Always compiled (so `Ipe.Log.*` can feed it regardless of features); the
-//! Ipe.Live `console` module exposes it over HTTP. Bounded ring buffers (logs +
+//! Ipe.Web `console` module exposes it over HTTP. Bounded ring buffers (logs +
 //! errors) plus monotonic request/error counters. Mirrors the in-RAM tier of
 //! Go's console (`runtime-go/rt/console*.go`), minus the `SQLite` spill.
 //!
@@ -97,23 +97,23 @@ fn spill_span(_ts_ms: u64, _name: &str, _dur_us: u64, _ok: bool) {}
 /// stub keeps the always-compiled sink reqwest/tokio-free for non-live programs.
 /// Each exporter is independently env-gated and a non-blocking drop-on-full
 /// offer, so this never blocks or panics the caller.
-#[cfg(feature = "live")]
+#[cfg(feature = "web")]
 #[inline]
 fn export_log(ts_ms: u64, level: &str, message: &str) {
     crate::live::push_exporter::offer_log(ts_ms, level, message);
     crate::live::hub_exporter::offer_log(ts_ms, level, message);
 }
-#[cfg(not(feature = "live"))]
+#[cfg(not(feature = "web"))]
 #[inline]
 fn export_log(_ts_ms: u64, _level: &str, _message: &str) {}
 
-#[cfg(feature = "live")]
+#[cfg(feature = "web")]
 #[inline]
 fn export_span(ts_ms: u64, name: &str, dur_us: u64, ok: bool) {
     crate::live::push_exporter::offer_span(ts_ms, name, dur_us, ok);
     crate::live::hub_exporter::offer_span(ts_ms, name, dur_us, ok);
 }
-#[cfg(not(feature = "live"))]
+#[cfg(not(feature = "web"))]
 #[inline]
 fn export_span(_ts_ms: u64, _name: &str, _dur_us: u64, _ok: bool) {}
 
@@ -175,7 +175,7 @@ pub fn production_from_env() -> bool {
 }
 
 /// Floating "🔍 Console" link injected into every dev-mode `text/html` response
-/// — both the Ipe.Live page path and every buffered Ipe.Http.Server response
+/// — both the Ipe.Web page path and every buffered Ipe.Http.Server response
 /// (Go parity: `devBannerHTML`, `dev_banner.go`). Lives here (the always-compiled
 /// telemetry module) rather than under `live` so the server path (`server.rs`,
 /// where the `live` module is DCE'd out of server-only builds) can reach it too.
@@ -188,7 +188,7 @@ pub fn production_from_env() -> bool {
 /// suppression only ever makes bodies match MORE often across odd configs, and
 /// the sweep's env (nothing set) hits the injecting path either way.
 ///
-/// Rendered as a sibling of `#ipe-root` on the Live path (so a body patch never
+/// Rendered as a sibling of `#ipe-root` on the Web path (so a body patch never
 /// blows it away); `position:fixed` pins it bottom-right and `pointer-events`
 /// stays default so the link is clickable.
 #[must_use]
@@ -294,7 +294,7 @@ pub fn frame_ancestors() -> Option<&'static str> {
 }
 
 /// Safe-by-default security response headers (Go parity: `setSecurityHeaders`,
-/// live.go:3557 — applied on both the Ipe.Live page path and the Ipe.Http.Server
+/// live.go:3557 — applied on both the Ipe.Web page path and the Ipe.Http.Server
 /// response path, rt.go:7838). Returned as owned `(name, value)` pairs so each
 /// caller splices them into its response builder only when the header is unset
 /// (an explicit handler override wins).
@@ -340,7 +340,7 @@ pub fn record_log(level: &str, message: &str) {
     export_log(ts, level, message);
 }
 
-/// Record one served HTTP request (called from the Live counter middleware).
+/// Record one served HTTP request (called from the Web counter middleware).
 pub fn record_request(status: u16) {
     REQUESTS_TOTAL.fetch_add(1, Ordering::Relaxed);
     if status >= 500 {
@@ -507,7 +507,7 @@ pub fn metric_observe(name: &str, labels: &[(&str, &str)], v: f64) {
 /// A capped writer halts the `Debug` render after a small prefix, so a giant
 /// payload field can't even force a full-`Debug` allocation on the hot dispatch
 /// path. Result capped at 64 bytes; an empty extraction falls back to `"Msg"`.
-/// Shared (not Live-specific) so Tui/Webview dispatch can record the same metric.
+/// Shared (not Web-specific) so Tui/WebView dispatch can record the same metric.
 pub fn variant_name<M: std::fmt::Debug>(m: &M) -> String {
     use std::fmt::Write;
     // Sink accepting at most CAP bytes, then signalling "stop" via Err so
@@ -587,7 +587,7 @@ fn metric_help(name: &str) -> &'static str {
         "ipe_live_requests_total" => "Total HTTP requests served, by method and status.",
         "ipe_live_sse_drops_total" => "SSE patches dropped due to a full per-session buffer.",
         "ipe_live_sse_connections_total" => "Total SSE connections opened.",
-        "ipe_live_sessions_active" => "Currently-active Ipe.Live sessions.",
+        "ipe_live_sessions_active" => "Currently-active Ipe.Web sessions.",
         "ipe_live_errors_total" => "Total responses with a 5xx status.",
         "ipe_live_request_seconds" => "HTTP request latency in seconds.",
         "ipe_live_msg_seconds" => "Msg-handling latency in seconds, by Msg variant name.",

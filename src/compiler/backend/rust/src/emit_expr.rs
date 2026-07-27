@@ -2611,7 +2611,7 @@ fn lookup_field<'f>(
 /// The `Ipe.Ui.Input.*` runtime functions (`input_text_`, `input_slider_`,
 /// `input_checkbox_`, `input_radio_`, …) take their callback fields (`onChange`,
 /// checkbox `icon`) as `Arc<dyn Fn(_) -> _ + Send + Sync + 'static>` — the same
-/// shared-callback shape every Ipe.Ui / Ipe.Live event slot uses. But an
+/// shared-callback shape every Ipe.Ui / Ipe.Web event slot uses. But an
 /// `onChange` field expression lowers as an ordinary value: a bare
 /// `Msg`-constructor eta-expands to a plain lambda, and both [`emit_lambda`] and
 /// [`emit_func_value`] pin `Box::new(..)` for every non-Server/WS `Fun` shape
@@ -2718,9 +2718,9 @@ fn emit_arc_callback_field(
 /// The render kernels (`UiLayout`, `UiLayoutWith`, `HtmlRender`,
 /// `HtmlEscapeText`, `HtmlEscapeAttr`, `HtmlAttrToString`) emit calls to
 /// `ipe_runtime::ui::render::*` and `ipe_runtime::html::*` here. The app-entry
-/// kernels (`LiveApp`, `LiveAppRouted`, `LiveRoute`, `LiveRenderStatic`,
+/// kernels (`WebApp`, `WebAppRouted`, `WebRoute`, `WebRenderStatic`,
 /// `TuiProgram`, `TuiApp`, `WebviewApp`) delegate to their respective
-/// `emit_live` / `emit_tui` emitters.
+/// `emit_web` / `emit_tui` emitters.
 ///
 /// Returns `None` for any kernel that is not a Ui / Live / Tui / Webview
 /// variant, letting the standard call path handle it.
@@ -2740,7 +2740,7 @@ fn emit_ui_call(
         return Ok(None);
     };
     // Only handle Ui / Live / Tui / Webview / Cli kernels.
-    if !k.is_ui() && !k.is_live() && !k.is_tui() && !k.is_webview() && !k.is_console() {
+    if !k.is_ui() && !k.is_web() && !k.is_tui() && !k.is_webview() && !k.is_console() {
         return Ok(None);
     }
     match k {
@@ -5658,20 +5658,20 @@ fn emit_ui_call(
         // `noAttr : Attribute msg` — nullary identity attribute.
         KernelFn::HtmlNoAttr => Ok(Some("ipe_runtime::html::html_no_attr_()".to_owned())),
 
-        // ── Live app-entry kernels ────────────────────────────────────────────
-        // Delegate to `emit_live::emit_live_call`; it returns `Some(s)` for the
-        // four Live variants and `None` for anything else (the `_ => None` arm).
-        // A `None` here is an internal error (the `is_live()` guard above already
-        // filtered to Live variants), so promote it to a `CompilerBug`.
-        KernelFn::LiveApp
-        | KernelFn::LiveAppRouted
-        | KernelFn::LiveRoute
-        | KernelFn::LiveRenderStatic => {
-            let s = crate::emit_live::emit_live_call(ctx, callee, args, indent, child, generics)?
+        // ── Web app-entry kernels ─────────────────────────────────────────────
+        // Delegate to `emit_web::emit_web_call`; it returns `Some(s)` for the
+        // four Web variants and `None` for anything else (the `_ => None` arm).
+        // A `None` here is an internal error (the `is_web()` guard above already
+        // filtered to Web variants), so promote it to a `CompilerBug`.
+        KernelFn::WebApp
+        | KernelFn::WebAppRouted
+        | KernelFn::WebRoute
+        | KernelFn::WebRenderStatic => {
+            let s = crate::emit_web::emit_web_call(ctx, callee, args, indent, child, generics)?
                 .ok_or_else(|| Diagnostic::CompilerBug {
-                where_: "ipe_backend_rust::emit_ui_call",
-                detail: format!("emit_live returned None for Live kernel {k:?} — missing arm"),
-            })?;
+                    where_: "ipe_backend_rust::emit_ui_call",
+                    detail: format!("emit_web returned None for Web kernel {k:?} — missing arm"),
+                })?;
             Ok(Some(s))
         }
 
@@ -5694,7 +5694,7 @@ fn emit_ui_call(
         // the WebviewApp variant and `None` for anything else. A `None` here is an
         // internal error (the `k.is_webview()` guard above already filtered), so
         // promote it to a `CompilerBug`.
-        KernelFn::WebviewApp => {
+        KernelFn::WebViewApp => {
             let s =
                 crate::emit_webview::emit_webview_call(ctx, callee, args, indent, child, generics)?
                     .ok_or_else(|| Diagnostic::CompilerBug {
@@ -5712,11 +5712,14 @@ fn emit_ui_call(
         // internal error (the `k.is_console()` guard above already filtered), so
         // promote it to a `CompilerBug`.
         KernelFn::ConsoleApp => {
-            let s = crate::emit_console::emit_console_call(ctx, callee, args, indent, child, generics)?
-                .ok_or_else(|| Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call",
-                    detail: format!("emit_console returned None for Cli kernel {k:?} — missing arm"),
-                })?;
+            let s =
+                crate::emit_console::emit_console_call(ctx, callee, args, indent, child, generics)?
+                    .ok_or_else(|| Diagnostic::CompilerBug {
+                        where_: "ipe_backend_rust::emit_ui_call",
+                        detail: format!(
+                            "emit_console returned None for Cli kernel {k:?} — missing arm"
+                        ),
+                    })?;
             Ok(Some(s))
         }
 
@@ -5840,7 +5843,7 @@ fn emit_ui_call(
         _ => Err(Diagnostic::CompilerBug {
             where_: "ipe_backend_rust::emit_ui_call",
             detail: format!(
-                "UI/Live/Tui/Webview/Cli kernel {k:?} has no emit arm — add it to emit_ui_call"
+                "UI/Web/Tui/WebView/Console kernel {k:?} has no emit arm — add it to emit_ui_call"
             ),
         }),
     }
@@ -5976,7 +5979,7 @@ fn emit_json_decoder_call(
 /// of `expr` (0 at the function body); it gates the bounded-emit guard and is
 /// independent of `indent` (the textual indentation of `match` arms).
 ///
-/// `pub(crate)` so that `emit_live` can call it directly (Live kernel bodies
+/// `pub(crate)` so that `emit_web` can call it directly (Live kernel bodies
 /// emit sub-expressions at the same depth level as their enclosing expression).
 #[allow(clippy::too_many_lines)]
 pub fn emit_expr_at(
@@ -6185,7 +6188,7 @@ pub fn emit_expr_at(
                 {
                     return Ok(result);
                 }
-                // Ipe.Ui / Ipe.Html / Ipe.Live / Ipe.Tui / Ipe.Webview kernels.
+                // Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.WebView kernels.
                 if let Some(result) =
                     emit_ui_call(ctx, callee, args, *on_form, indent, child, generics)?
                 {
@@ -8525,9 +8528,9 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     // Elide the outer `task_run(...)` wrapper: use the inner task expression as
     // the body and convert the return type from `Result(Error, A)` to `Task(A)`.
     //
-    // This is not always a FLAT `Call(TaskRun, …)` body — the Ipe.Tui / Ipe.Live
+    // This is not always a FLAT `Call(TaskRun, …)` body — the Ipe.Tui / Ipe.Web
     // `argv`-dispatch idiom branches on `System.args` before picking which app to
-    // run, e.g. `main = case List.head argsList of Just "live" -> Live.app cfg
+    // run, e.g. `main = case List.head argsList of Just "live" -> Web.app cfg
     // |> Task.run; _ -> Tui.app cfg |> Task.run`. Every arm still tail-calls
     // `Task.run`, so the SAME elision must apply — otherwise `ipe_main` keeps
     // its `IpeResult<E, A>` return type and `block_on(ipe_main())` mismatches
@@ -8838,7 +8841,7 @@ fn ty_mentions_var_under_fn(ty: &IrType, sym: Symbol, under_fn: bool) -> bool {
         | IrType::Decoder(inner)
         | IrType::Cmd(inner)
         | IrType::Sub(inner)
-        | IrType::LiveRoute(inner) => ty_mentions_var_under_fn(inner, sym, under_fn),
+        | IrType::WebRoute(inner) => ty_mentions_var_under_fn(inner, sym, under_fn),
         IrType::Result(a, b) | IrType::Dict(a, b) => {
             ty_mentions_var_under_fn(a, sym, under_fn) || ty_mentions_var_under_fn(b, sym, under_fn)
         }

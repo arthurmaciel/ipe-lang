@@ -1,7 +1,7 @@
 //! Pre-built console child + reverse-proxy.
 //!
 //! Replaces the in-process `console.rs` plain-HTML shell with the **real bundled
-//! Ipe.Live console**, spawned as a child process and reverse-proxied at
+//! Ipe.Web console**, spawned as a child process and reverse-proxied at
 //! `/_ipe/console/*`. The console binary is **pre-built at the user's `ipe build`
 //! time** into a shared cache — at runtime this module only `exec`s it,
 //! never builds. See `runtime-rust/README.md` §"Rust vs Go — divergent strategies"
@@ -24,7 +24,7 @@ const CONSOLE_BIN_ENV: &str = "IPE_CONSOLE_BIN";
 /// The mount prefix. The parent proxies everything under this path to the child
 /// and STRIPS the prefix before forwarding (the strip convention — see the
 /// module doc): the child's router stays root-relative, identical to a
-/// standalone Live app. The child only learns the prefix via `IPE_LIVE_BASE_PATH`
+/// standalone Web app. The child only learns the prefix via `IPE_LIVE_BASE_PATH`
 /// (so its rendered `/_ipe/event` / `/_ipe/sse` URLs come back prefixed and we
 /// strip them again on the way in).
 const CONSOLE_BASE: &str = "/_ipe/console";
@@ -471,7 +471,7 @@ pub async fn ensure_console_proxy() -> bool {
     // Bound the upstream hop so a wedged child can't accumulate in-flight
     // requests without limit. `connect_timeout` caps the TCP handshake; a
     // `read_timeout` (per-read inactivity, NOT a total `.timeout`) caps a child
-    // that accepts the connection then stalls — set well above the Ipe.Live SSE
+    // that accepts the connection then stalls — set well above the Ipe.Web SSE
     // heartbeat (~15 s) + TTL (~35 s) so long-lived `/_ipe/sse` streams are not
     // severed. `.build()` only fails on a TLS-backend init error (we use none
     // for loopback http); fall back to the default client rather than panic.
@@ -487,7 +487,7 @@ pub async fn ensure_console_proxy() -> bool {
         })
         .is_err()
     {
-        // Already initialised once (shouldn't happen — one Live server per process).
+        // Already initialised once (shouldn't happen — one Web server per process).
         eprintln!("[ipe.console] proxy already initialised; keeping the first mount");
     }
     // NOTE: child teardown on shutdown is now owned by the ONE coherent
@@ -503,7 +503,7 @@ pub async fn ensure_console_proxy() -> bool {
 
 /// Add the reverse-proxy routes (`/_ipe/console` + `/_ipe/console/*rest`) to a
 /// router. Generic over the app state `S` because `proxy_entry` is state-free —
-/// so this composes into the main `Router<LiveState<…>>` before `with_state`,
+/// so this composes into the main `Router<WebState<…>>` before `with_state`,
 /// keeping the proxy under the same `track` middleware as every other route.
 /// Call only when `ensure_console_proxy().await` returned `true`.
 pub fn proxy_routes<S>(router: axum::Router<S>) -> axum::Router<S>

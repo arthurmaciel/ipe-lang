@@ -16,7 +16,7 @@
 //! `with_session_sid`), so `Cmd.publishNoEcho` from one mounted app
 //! instance suppresses only THAT instance's own `Sub.subscribeTopic`
 //! listeners, never a different instance's (the multi-mount-in-one-tab case,
-//! e.g. several `Ipe.Webview`-style embeds on one page). `PubSub.publish`
+//! e.g. several `Ipe.WebView`-style embeds on one page). `PubSub.publish`
 //! (the raw-handler-callable Task-tier form) carries no owning instance —
 //! same as native's server-side `pubsub_publish`, which also publishes with
 //! an empty origin and therefore never self-suppresses.
@@ -188,7 +188,7 @@ pub fn cmd_publish_no_echo<T: Clone + Send + 'static, M>(topic: String, payload:
 /// context (e.g. a `Cmd.perform`-fired Task, not only `update`'s return).
 /// Publishes with an empty origin (matches native's raw-handler-callable
 /// arm), so it never self-suppresses via echo. Always available once this
-/// code runs — unlike native's `Live.app`, there is no server-bootstrap race
+/// code runs — unlike native's `Web.app`, there is no server-bootstrap race
 /// to gate on.
 pub fn pubsub_publish<T: Clone + Send + 'static, E>(topic: String, payload: T) -> IpeTask<E, i64> {
     Box::pin(async move { ok_res(broker::<T>().publish(&topic, payload, "", false)) })

@@ -1,10 +1,10 @@
-//! The `Ipe.Live` / `Ipe.Tui` / `Ipe.Webview` app-entry
+//! The `Ipe.Web` / `Ipe.Tui` / `Ipe.WebView` app-entry
 //! Model-admissibility gate.
 //!
-//! `live_app` bounds its Model `serde::Serialize + serde::de::DeserializeOwned +
+//! `web_app` bounds its Model `serde::Serialize + serde::de::DeserializeOwned +
 //! Clone + PartialEq`; `tui_app` / `webview_app` bound it `Clone`. Before the
 //! gate, a Model storing a non-admissible value (`Cmd` / `Sub` / `Task` /
-//! `Decoder` / `Db` / a function — or, for Live only, `Html` / `Element` /
+//! `Decoder` / `Db` / a function — or, for Web only, `Html` / `Element` /
 //! `Color`) made `ipe` exit 0 and then `cargo build` fail on the missing trait
 //! bound. The gate converts that into a fail-closed `IPE-L0120` diagnostic.
 //!
@@ -60,7 +60,7 @@ fn assert_accepted(test_name: &str, source: &str) -> Result<(), BoxError> {
 
 const LIVE_GOOD: &str = r"module Main exposing (main)
 
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 
 type Msg = Increment
@@ -86,7 +86,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Live.app
+    Web.app
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [], notFound = Increment
         }
@@ -94,7 +94,7 @@ main =
 
 const LIVE_CMD_MODEL: &str = r"module Main exposing (main)
 
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 
 type Msg = Tick
@@ -120,7 +120,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Live.app
+    Web.app
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [], notFound = Tick
         }
@@ -128,7 +128,7 @@ main =
 
 const LIVE_HTML_MODEL: &str = r#"module Main exposing (main)
 
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 
 type Msg = Tick
@@ -154,19 +154,19 @@ subscriptions _model =
     Sub.none
 
 main =
-    Live.app
+    Web.app
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [], notFound = Tick
         }
 "#;
 
-// A `Secret` Model field must be rejected for `Ipe.Live` — a
+// A `Secret` Model field must be rejected for `Ipe.Web` — a
 // `Secret` must NEVER round-trip through the session store. `Secret` is
 // NON-serde by design (`ir_type_is_serde(Secret) = false`), so this is the
 // SAME mechanism as `LIVE_CMD_MODEL` / `LIVE_HTML_MODEL` above, not a new gate.
 const LIVE_SECRET_MODEL: &str = r#"module Main exposing (main)
 
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 
 type Msg = Tick
@@ -192,7 +192,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Live.app
+    Web.app
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [], notFound = Tick
         }
@@ -293,13 +293,13 @@ fn live_model_with_cmd_field_is_rejected() -> Result<(), BoxError> {
 }
 
 /// The CDPeq-but-not-serde case: `Html` is `Clone`/`PartialEq` but not `serde`,
-/// so a `Ipe.Live` Model storing it is rejected (unlike Tui/Webview).
+/// so a `Ipe.Web` Model storing it is rejected (unlike Tui/Webview).
 #[test]
 fn live_model_with_html_field_is_rejected() -> Result<(), BoxError> {
     assert_rejected_with("live_html", LIVE_HTML_MODEL, "IPE-L0120")
 }
 
-/// `Secret` in a Live Model is a compile-time `IPE-L0120`, never
+/// `Secret` in a Web Model is a compile-time `IPE-L0120`, never
 /// a session-store leak — see `LIVE_SECRET_MODEL`'s doc comment.
 #[test]
 fn live_model_with_secret_field_is_rejected() -> Result<(), BoxError> {
@@ -332,7 +332,7 @@ fn tui_model_with_cmd_field_is_rejected() -> Result<(), BoxError> {
 /// it with IPE-L0120.
 const LIVE_LAMBDA_VIEW_CMD_MODEL: &str = r"module Main exposing (main)
 
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 
 type Msg = Tick
@@ -354,7 +354,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Live.app
+    Web.app
         { init = init, update = update
         , view = \model -> Ui.layout [] (Ui.text (String.fromInt model.count))
         , subscriptions = subscriptions
@@ -366,7 +366,7 @@ main =
 /// ACCEPTED — proves the Lambda arm recovers the Model without false-rejecting.
 const LIVE_LAMBDA_VIEW_GOOD: &str = r"module Main exposing (main)
 
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 
 type Msg = Increment
@@ -388,7 +388,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Live.app
+    Web.app
         { init = init, update = update
         , view = \model -> Ui.layout [] (Ui.text (String.fromInt model.count))
         , subscriptions = subscriptions

@@ -1,17 +1,17 @@
-//! Model-admissibility gate for `Ipe.Live` / `Ipe.Tui` / `Ipe.Webview`
+//! Model-admissibility gate for `Ipe.Web` / `Ipe.Tui` / `Ipe.WebView`
 //! app-entry kernels.
 //!
 //! The app entry threads a **Model** state type through `init` / `update` /
 //! `view`. Each runtime entry bounds that Model:
 //!
-//! * `live_app` — `Model: serde::Serialize + serde::de::DeserializeOwned +
+//! * `web_app` — `Model: serde::Serialize + serde::de::DeserializeOwned +
 //!   Clone + PartialEq + Send + Sync + 'static` (the Model is persisted to the
 //!   session store), so a non-serde Model is inadmissible.
 //! * `tui_app` / `webview_app` — `Model: Clone + Send + 'static`, so a
 //!   non-`Clone` (i.e. non-derivable) Model is inadmissible.
 //!
 //! Without this gate a well-typed program storing a `Cmd` / `Sub` / `Task` /
-//! `Decoder` / `Db` / function — or, for `Ipe.Live`, an `Html` / `Element` /
+//! `Decoder` / `Db` / function — or, for `Ipe.Web`, an `Html` / `Element` /
 //! `Color` — in its Model `ipe`-succeeds and then `cargo`-fails on the missing
 //! trait bound. This module extracts the Model type from the app cfg's `view`
 //! function and, if it fails the required predicate, returns a fail-closed
@@ -40,7 +40,7 @@ use crate::EmitCtx;
 /// This is the SHARED recovery primitive for (a) the Model gate, (b) the
 /// lambda-`view` path (a lambda `view` returns its Model here rather than
 /// `None`, so it is not silently skipped), and (c) the routed-vs-non-routed
-/// emit branch (`emit_live::routed_page_field`), keeping the type-tier
+/// emit branch (`emit_web::routed_page_field`), keeping the type-tier
 /// `RoutedLiveCheck` and the emit-tier detection in agreement on lambda-shaped
 /// cfg fields.
 #[must_use]
@@ -57,7 +57,7 @@ pub fn fn_param_ty(e: &Expr, idx: usize) -> Option<&IrType> {
 
 /// Extract the Model type from an app cfg's `view` field expression.
 ///
-/// `view : Model -> Html Msg` (Live/Webview) / `Model -> Element Msg` (Tui) is
+/// `view : Model -> Html Msg` (Web/WebView) / `Model -> Element Msg` (Tui) is
 /// either a named function reference ([`Expr::FuncValue`]) or an inline lambda
 /// ([`Expr::Lambda`]); the Model is the first parameter type in both shapes
 /// (see [`fn_param_ty`], which is Lambda-aware).
@@ -90,10 +90,10 @@ pub fn msg_ty_of_update(update_e: &Expr) -> Option<&IrType> {
 
 /// Gate the Msg type of an app entry against the runtime's derivable bound.
 ///
-/// All three app shapes (`Live`, `Tui`, `Webview`) require their Msg to be
+/// All three app shapes (`Web`, `Tui`, `Webview`) require their Msg to be
 /// clonable and sendable. The compiler derives `Clone + Debug + PartialEq` for
 /// any "derivable" type, which covers the `Send + Sync + Debug + 'static`
-/// required by `live_app` and `Clone + Send + 'static` required by `tui_app` /
+/// required by `web_app` and `Clone + Send + 'static` required by `tui_app` /
 /// `webview_app`. The predicate used is always [`ir_type_is_derivable`] (NOT
 /// serde) — Msg is never persisted, so `Html`-carrying Msg variants are
 /// **accepted** (Html derives Clone+Debug+PartialEq) while Cmd/Sub/Task/
@@ -128,10 +128,10 @@ pub fn check_admissible_msg(ctx: &EmitCtx, msg_ty: &IrType, app: AppShape) -> DR
 
 /// Gate the Model type of an app entry against the runtime bound `app` requires.
 ///
-/// * [`AppShape::Live`] → the Model must satisfy [`ir_type_is_serde`] (which
-///   structurally implies `Clone + PartialEq`, so the full `live_app` bound is
+/// * [`AppShape::Web`] → the Model must satisfy [`ir_type_is_serde`] (which
+///   structurally implies `Clone + PartialEq`, so the full `web_app` bound is
 ///   covered by this one predicate).
-/// * [`AppShape::Tui`] / [`AppShape::Webview`] → the Model must satisfy
+/// * [`AppShape::Tui`] / [`AppShape::WebView`] → the Model must satisfy
 ///   [`ir_type_is_derivable`] (the backend derives `Clone` iff a type is
 ///   derivable, and Tui/Webview need only `Clone`).
 ///
@@ -142,8 +142,8 @@ pub fn check_admissible_msg(ctx: &EmitCtx, msg_ty: &IrType, app: AppShape) -> DR
 /// diagnostics). Normal plain-data Models pass unchanged.
 pub fn check_admissible_model(ctx: &EmitCtx, model_ty: &IrType, app: AppShape) -> DResult<()> {
     let ok = match app {
-        AppShape::Live => ir_type_is_serde(model_ty, &|home, name| ctx.enum_is_serde(home, name)),
-        AppShape::Tui | AppShape::Webview | AppShape::Cli => {
+        AppShape::Web => ir_type_is_serde(model_ty, &|home, name| ctx.enum_is_serde(home, name)),
+        AppShape::Tui | AppShape::WebView | AppShape::Cli => {
             ir_type_is_derivable(model_ty, &|home, name| ctx.enum_is_derivable(home, name))
         }
     };
@@ -166,8 +166,8 @@ pub fn check_admissible_model(ctx: &EmitCtx, model_ty: &IrType, app: AppShape) -
 /// Return whether `ty` satisfies the admissibility predicate for `app`.
 fn admissible(ctx: &EmitCtx, ty: &IrType, app: AppShape) -> bool {
     match app {
-        AppShape::Live => ir_type_is_serde(ty, &|home, name| ctx.enum_is_serde(home, name)),
-        AppShape::Tui | AppShape::Webview | AppShape::Cli => {
+        AppShape::Web => ir_type_is_serde(ty, &|home, name| ctx.enum_is_serde(home, name)),
+        AppShape::Tui | AppShape::WebView | AppShape::Cli => {
             ir_type_is_derivable(ty, &|home, name| ctx.enum_is_derivable(home, name))
         }
     }
@@ -260,8 +260,8 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         // `WsHandle` / `WsServerCfg` are opaque handles — not valid Model leaves.
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
-        | IrType::LiveReq
-        | IrType::LiveRoute(_)
+        | IrType::WebReq
+        | IrType::WebRoute(_)
         // Cache config / stats + Csv document are kernel-boundary data records,
         // not serde, never persisted to a session store — not valid Model
         // leaves.
@@ -277,12 +277,12 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         | IrType::EmailSmtpConfig
         | IrType::EmailProvider
         // `SqlFragment` is a query-building value, never
-        // persisted to a Live session store — not a valid Model leaf.
+        // persisted to a Web session store — not a valid Model leaf.
         | IrType::SqlFragment
-        // `Secret` must never round-trip through a Live session
+        // `Secret` must never round-trip through a Web session
         // store — not a valid Model leaf. This is the `blame()` classification
         // consulted ONLY after `admissible()` (which uses `ir_type_is_serde`,
-        // `false` for `Secret`) has already rejected a Live Model containing
+        // `false` for `Secret`) has already rejected a Web Model containing
         // one, so a `Secret` Model field is a compile-time IPE-L0120 naming
         // this leaf, never a session-store leak.
         | IrType::Secret

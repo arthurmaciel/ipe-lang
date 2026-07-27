@@ -10,7 +10,7 @@ module Main exposing (main)
 -- Before Part B: ipec exited 0 (the empty-routes hole let var(2) = Int slip
 -- through), then cargo rejected the emitted `set_page` closure with E0308.
 
-import Ipe.Live as Live
+import Ipe.Web as Web
 import Ipe.Ui as Ui
 
 type Page
@@ -41,7 +41,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Live.app
+    Web.app
         { init = init
         , update = update
         , view = view

@@ -2,7 +2,7 @@
 //! the per-commit handler index, and typed form decoding.
 //!
 //! These are pure over `crate::html` (no tokio, no server dependency) and are
-//! shared by every patch consumer: the Ipe.Live SSE wire, the Webview IPC
+//! shared by every patch consumer: the Ipe.Web SSE wire, the Webview IPC
 //! bridge, and the browser-WASM client sink. `live::mod` re-exports them so
 //! existing `live::diff::Patch`-style paths stay valid.
 

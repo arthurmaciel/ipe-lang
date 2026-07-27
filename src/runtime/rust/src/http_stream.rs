@@ -16,7 +16,7 @@
 //! The Sub-tier `chunks` (dispatching `ChunkEvent` Msgs into a TEA update loop)
 //! is ported via `sub_subscribe_stream` + the bridged `ChunkEvent` enum below —
 //! it drives a `Console.app` (or any `console_app`-hosted) TEA loop, the same
-//! way `ws_client`'s `onMessage` does. (The Ipe.Live *web* SSE driver remains a
+//! way `ws_client`'s `onMessage` does. (The Ipe.Web *web* SSE driver remains a
 //! separate deferred arc; this is the in-process Sub path.)
 //!
 //! `StreamId` stays a generated Ipê enum (`StreamId Int`); these kernels only

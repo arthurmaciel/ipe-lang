@@ -39,8 +39,8 @@
 //!   `HashMap`/`BTreeMap` key use, and any serde round-trip, are Rust type
 //!   errors at codegen time — a fail-CLOSED outcome, never a silent leak.
 //!   NOT serde ALSO means `Secret` is unconditionally Model-inadmissible for
-//!   `Ipe.Live` (`ir_type_is_serde` gates the Live Model — see
-//!   `ipe_ir::ir_type_is_serde` — so a `Live` app storing a `Secret` in its
+//!   `Ipe.Web` (`ir_type_is_serde` gates the Web Model — see
+//!   `ipe_ir::ir_type_is_serde` — so a `Web` app storing a `Secret` in its
 //!   Model is a compile-time `IPE-L0120`, never a session-store leak).
 //! * `Drop` — zeroizes the backing buffer (`zeroize::Zeroize`) so the
 //!   plaintext does not linger in freed heap memory after the `Secret` goes

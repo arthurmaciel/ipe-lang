@@ -193,10 +193,10 @@ impl<'a> SafeCssValue<'a> {
 /// fail-closed) the moment any declaration carries a breakout. A block of only
 /// empty declarations yields `None`.
 ///
-/// `cfg(feature = "live")`-gated: its only callers are the `live` style sink's
+/// `cfg(feature = "web")`-gated: its only callers are the `live` style sink's
 /// `build_mq` / `build_pc` (`live/style_inject.rs`), which are themselves under
 /// that feature — so the helper is dead code in a runtime built without `live`.
-#[cfg(feature = "live")]
+#[cfg(feature = "web")]
 pub(crate) fn sink_safe_declaration_list(rules: &str) -> Option<&str> {
     let mut any = false;
     for decl in rules.split(';') {
@@ -231,10 +231,10 @@ pub(crate) fn sink_safe_declaration_list(rules: &str) -> Option<&str> {
 /// (a nested `{` inside a block lands in a declaration and is rejected by the
 /// same policy), or an empty body.
 ///
-/// `cfg(feature = "live")`-gated for the same reason as
+/// `cfg(feature = "web")`-gated for the same reason as
 /// [`sink_safe_declaration_list`]: its only caller is the `live` style sink's
 /// `build_anim` (`live/style_inject.rs`).
-#[cfg(feature = "live")]
+#[cfg(feature = "web")]
 pub(crate) fn sink_safe_keyframes_body(body: &str) -> Option<&str> {
     let mut rest = body.trim_start();
     if rest.is_empty() {
@@ -265,7 +265,7 @@ pub(crate) fn sink_safe_keyframes_body(body: &str) -> Option<&str> {
 /// (ASCII-case-insensitive) or a percentage with an optional single decimal
 /// point (`0%`, `12.5%`). Anything else — including every breakout char — is
 /// rejected, so no escape/obfuscation can hide in the selector slot.
-#[cfg(feature = "live")]
+#[cfg(feature = "web")]
 fn is_safe_keyframe_selector(sel: &str) -> bool {
     let s = sel.trim();
     !s.is_empty()
@@ -534,7 +534,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "live")]
+    #[cfg(feature = "web")]
     #[test]
     fn keyframes_body_accepts_legit_bodies_byte_identical() {
         for b in [
@@ -554,7 +554,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "live")]
+    #[cfg(feature = "web")]
     #[test]
     fn keyframes_body_rejects_breakout() {
         for b in [
