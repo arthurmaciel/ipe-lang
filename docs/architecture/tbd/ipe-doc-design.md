@@ -75,27 +75,45 @@ and is tracked separately.
 ## Command surface
 
 Illustrative only — the design's target shape, not yet implemented (nothing to
-run):
+run). `ipe doc` has three **mutually-exclusive modes**, so the raw flags are
+parsed into a closed value at the CLI boundary — an invalid combination is not
+representable downstream (make-invalid-states-unrepresentable, parse don't
+validate):
+
+    DocMode = Generate { out : Path, format : Format }   -- write the docs to disk
+            | Serve    { port : Maybe Port }             -- build the HTML, preview it locally
+            | Check                                       -- verify coverage, produce nothing
+
+There is no `Serve { format }` or `Check { port }` to construct, so no code past
+the parser can hold an invalid mix. Each mode is surfaced as its own subcommand
+carrying ONLY its valid flags (Elm-style — `elm make` / `elm reactor`):
 
 ```
-ipe doc [PATH] [--out DIR] [--format markdown|json|html|all] [--serve] [--port N] [--check]
+ipe doc [PATH] [--out DIR] [--format markdown|json|html|all]   -- generate (bare `ipe doc`)
+ipe doc serve [PATH] [--port N]                                 -- local preview
+ipe doc check [PATH]                                            -- coverage gate
 ```
 
-- `PATH` — a package directory (default `.`) or a single `.ipe` module.
-- `--out` — output directory (default `doc/`); writes `docs.json`, and per the
-  format the Markdown files and/or the HTML site.
-- `--format` — `all` (default: `docs.json` + Markdown + HTML), or one of
-  `markdown` / `json` / `html`.
-- `--serve` — build the HTML site and serve it locally at
-  `http://127.0.0.1:<port>`, opening it in the browser. The port defaults to an
-  **auto-selected free one**: bind `127.0.0.1:0`, let the OS assign an open port,
-  then report and open exactly that one — so `ipe doc --serve` never fails on a
-  busy fixed port. `--port N` pins a specific port instead (and errors if it is
-  taken, rather than silently picking another). Loopback-only and read-only — a
-  local preview convenience, never an external listener.
-- `--check` — write nothing; exit non-zero if any exposed binding lacks a
-  doc-comment. The CI-gateable honest-surface check: a package's public API is
-  fully documented or the gate fails.
+- `PATH` — a package directory (default `.`) or a single `.ipe` module (every mode).
+- **generate** (the bare `ipe doc`): writes `docs.json` plus the `--format`
+  renderings to `--out` (default `doc/`). `--format` is `all` (default:
+  `docs.json` + Markdown + HTML) or one of `markdown` / `json` / `html`.
+- **serve**: builds the HTML site and serves it read-only on `http://127.0.0.1`,
+  opening the browser. The port defaults to an **auto-selected free one** — bind
+  `127.0.0.1:0`, then report and open the port the OS assigned, so it never fails
+  on a busy fixed port; `--port N` pins one and errors if it is taken. Serving is
+  always HTML and persists nothing, so `--format` and `--out` do not apply — to
+  keep files, run generate.
+- **check**: exits non-zero if any exposed binding lacks a doc-comment — a
+  pass/fail CI gate that writes nothing and serves nothing, so it takes neither
+  `--out`/`--format` nor `--port`.
+
+Why modes and not one flag bag: `--port` is meaningless without a server,
+`--format`/`--out` are meaningless when serving HTML or checking, and `--check`
+produces nothing to serve. Splitting the modes into subcommands makes
+`ipe doc check --port 8080` and `ipe doc serve --format json` *unwriteable*, not
+merely rejected after the fact — the invalid state has no representation, so no
+runtime check has to defend against it.
 
 Honest-surface still holds — the command ships only what works — but the target
 for the first cut now includes HTML, cross-module references, and links, not a
