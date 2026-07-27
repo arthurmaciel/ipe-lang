@@ -78,7 +78,7 @@ Illustrative only — the design's target shape, not yet implemented (nothing to
 run):
 
 ```
-ipe doc [PATH] [--out DIR] [--format markdown|json|html|all] [--check]
+ipe doc [PATH] [--out DIR] [--format markdown|json|html|all] [--serve] [--port N] [--check]
 ```
 
 - `PATH` — a package directory (default `.`) or a single `.ipe` module.
@@ -86,6 +86,13 @@ ipe doc [PATH] [--out DIR] [--format markdown|json|html|all] [--check]
   format the Markdown files and/or the HTML site.
 - `--format` — `all` (default: `docs.json` + Markdown + HTML), or one of
   `markdown` / `json` / `html`.
+- `--serve` — build the HTML site and serve it locally at
+  `http://127.0.0.1:<port>`, opening it in the browser. The port defaults to an
+  **auto-selected free one**: bind `127.0.0.1:0`, let the OS assign an open port,
+  then report and open exactly that one — so `ipe doc --serve` never fails on a
+  busy fixed port. `--port N` pins a specific port instead (and errors if it is
+  taken, rather than silently picking another). Loopback-only and read-only — a
+  local preview convenience, never an external listener.
 - `--check` — write nothing; exit non-zero if any exposed binding lacks a
   doc-comment. The CI-gateable honest-surface check: a package's public API is
   fully documented or the gate fails.
@@ -97,10 +104,12 @@ linking (needs the package index), full-text search, and hosting.
 
 ## Boundaries
 
-- No network, no hosting — `ipe doc` only reads local source and writes local
-  files. The HTML is static and self-contained (relative links, bundled CSS),
-  openable via `file://`. Publishing/serving is out of scope (a later
-  `ipe package` concern).
+- The HTML is static and self-contained (relative links, bundled CSS), openable
+  via `file://` or previewed with `--serve`. `--serve` binds loopback only
+  (`127.0.0.1`) and serves the already-built static files read-only — no writes,
+  no external interface. *Remote* publishing/hosting stays out of scope (a later
+  `ipe package` concern); `--serve` is a local preview of that static output, not
+  a publish path.
 - Signatures come from the checker, so `ipe doc` runs the front end (parse →
   canon → typecheck) but never the emit tier — it needs types, not code.
 - `docs.json` schema is versioned from the first release so downstream consumers
