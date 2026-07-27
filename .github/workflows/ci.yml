@@ -344,3 +344,70 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           IPE_BIN: ${{ github.workspace }}/target/release/ipe
         run: bash scripts/sky-compare.sh
+
+  # macOS Tier-2 native-code enforcement — the ONLY real verification of the
+  # macOS jail's deny behaviour. The Rust unit tests prove the SBPL LOWERING on
+  # any host, but only a real macOS runner exercises `sandbox-exec`. This job is
+  # that proof, and it is fail-closed by design:
+  #
+  #   1. It asserts `sandbox-exec` is present and REFUSES to certify (exits non-
+  #      zero) if it is absent — never a skip-green. An un-run jail is never
+  #      counted as vouching (ADR 0046 refuse-to-certify).
+  #   2. It runs the admission enforce-vs-control DUALITY: the forbidden net +
+  #      fs-escape actions must SUCCEED outside the jail (positive control) and be
+  #      DENIED inside it (enforce). The control proves a denial came from the
+  #      jail, not from an unreachable host — so a "clean" Tier-2 result can never
+  #      be a false pass from a broken/unreachable jail.
+  #   3. It runs the `audit_native` E2E under `IPE_E2E=1`, which drives the real
+  #      reconciler through the real `sandbox-exec` jail (the macOS `build_in_jail`
+  #      path): a used-but-undeclared axis rejects naming the axis, and a benign
+  #      package declaring exactly its axes certifies.
+  macos-tier2:
+    name: macos-tier2 (sandbox-exec — the real macOS jail proof)
+    runs-on: macos-latest
+    if: github.event_name != 'pull_request'   # slow: push/nightly only, off the required PR gate
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+
+      # Fail-closed primitive check: an absent sandbox-exec is a hard failure, not
+      # a skip — the macOS jail cannot be verified without it, and an unverified
+      # platform is NEVER counted as admitted (refuse-to-certify).
+      - name: Assert the macOS jail primitive is present (refuse-to-certify)
+        run: |
+          if ! command -v sandbox-exec >/dev/null 2>&1; then
+            echo "ERROR: sandbox-exec absent on this macOS runner — the Tier-2 jail cannot be verified; refusing to certify (this is a hard failure, never a skip-green)." >&2
+            exit 1
+          fi
+          echo "sandbox-exec present: $(command -v sandbox-exec)"
+
+      - name: Make admission scripts executable
+        run: chmod +x scripts/admission/jail-macos.sh tests/fixtures/admission/untrusted-build.sh
+
+      # Positive control (OUTSIDE the jail): the same net + fs-escape actions must
+      # SUCCEED, so a block under `enforce` below can only be the jail — not an
+      # unreachable host or an already-unwritable path.
+      - name: Admission positive control (no jail — forbidden actions must succeed)
+        env:
+          ESCAPE_PATH: ${{ github.workspace }}/admission-escape-probe
+        run: PROBE_MODE=control ESCAPE_PATH="$ESCAPE_PATH" sh tests/fixtures/admission/untrusted-build.sh
+
+      # Enforce (INSIDE the jail): net + fs-escape must be DENIED. Paired with the
+      # control above, this is the duality that proves the denial is the jail's.
+      - name: Admission enforce (jailed — forbidden actions must be blocked)
+        env:
+          ADMISSION_TIMEOUT_SECS: '60'
+          ESCAPE_PATH: ${{ github.workspace }}/admission-escape-probe
+        run: scripts/admission/jail-macos.sh tests/fixtures/admission/untrusted-build.sh
+
+      # The real reconciler through the real sandbox-exec jail (the macOS
+      # build_in_jail path): used-but-undeclared rejects, benign certifies.
+      - name: audit_native E2E through the real macOS jail
+        env:
+          IPE_E2E: "1"
+          IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
+        run: cargo nextest run -p ipe --test audit_native --profile ci
