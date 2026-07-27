@@ -115,7 +115,7 @@ fn hostile_std_squat_is_ipe_n0025() {
         root.join("src").join("Main.ipe"),
         "module Main exposing (main)\n\
          import Ipe.Palette exposing (Shade(..), toHex)\n\
-         main = println (toHex Dark)\n",
+         main = Io.println (toHex Dark)\n",
     )
     .expect("write Main.ipe");
 

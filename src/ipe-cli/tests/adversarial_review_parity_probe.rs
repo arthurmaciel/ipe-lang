@@ -264,7 +264,7 @@ const BASE: &str = "module Main exposing (main)\n\
      apply2 f =\n    f \"hello\" \"world\"\n\n\
      pageStr : Page -> String\n\
      pageStr p =\n    case p of\n        Home a b -> a ++ \" \" ++ b\n\n\
-     main =\n    let g = mk in\n    let p1 = g \"first\" \"second\" in\n    let p2 = apply2 mk in\n    println (pageStr p1 ++ \"|\" ++ pageStr p2)\n";
+     main =\n    let g = mk in\n    let p1 = g \"first\" \"second\" in\n    let p2 = apply2 mk in\n    Io.println (pageStr p1 ++ \"|\" ++ pageStr p2)\n";
 
 // Same as BASE but with a top-level binding literally named `eta_0` — the
 // exact string the lowerer's fresh-name pool would mint FIRST for this
@@ -279,7 +279,7 @@ const WITH_ETA0_COLLISION: &str = "module Main exposing (main)\n\
      apply2 f =\n    f \"hello\" \"world\"\n\n\
      pageStr : Page -> String\n\
      pageStr p =\n    case p of\n        Home a b -> a ++ \" \" ++ b\n\n\
-     main =\n    let g = mk in\n    let p1 = g \"first\" \"second\" in\n    let p2 = apply2 mk in\n    println (pageStr p1 ++ \"|\" ++ pageStr p2 ++ String.fromInt eta_0)\n";
+     main =\n    let g = mk in\n    let p1 = g \"first\" \"second\" in\n    let p2 = apply2 mk in\n    Io.println (pageStr p1 ++ \"|\" ++ pageStr p2 ++ String.fromInt eta_0)\n";
 
 /// #1 + #2: grow (introduce an `eta_0`-colliding user identifier) then shrink
 /// (remove it) then re-grow (add it back) — three warm revisions, each
@@ -342,11 +342,11 @@ const UTIL_TEMP_RENAME: &str = "module Lib.Util exposing (bumpTemp)\n\nbumpTemp 
 const MAIN_USES_UTIL: &str = "module Main exposing (main)\n\
      import Ipe.Prelude exposing (..)\n\
      import Lib.Util exposing (bump)\n\n\
-     main = println (String.fromInt (bump 41))\n";
+     main = Io.println (String.fromInt (bump 41))\n";
 const MAIN_USES_UTIL_TEMP: &str = "module Main exposing (main)\n\
      import Ipe.Prelude exposing (..)\n\
      import Lib.Util exposing (bumpTemp)\n\n\
-     main = println (String.fromInt (bumpTemp 41))\n";
+     main = Io.println (String.fromInt (bumpTemp 41))\n";
 
 /// #4: an identifier rename A -> B -> A (round-tripping back to the ORIGINAL
 /// spelling) within an otherwise-stable module set — not a module rename,

@@ -192,7 +192,7 @@ fn transitive_server_import_fails_naming_the_exact_chain() {
         &srcdir,
         "module Main exposing (main)\n\
          import Ipe.Prelude exposing (..)\n\
-         import Ipe.Log as Log\n\
+         import Ipe.Io as Io\n\
          import View exposing (label)\n\
          \n\
          main =\n\

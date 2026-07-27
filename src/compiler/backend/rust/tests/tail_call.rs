@@ -88,7 +88,7 @@ fn emit_count_main_rs(tco: bool) -> DResult<String> {
         body: count_body,
     };
 
-    // main = println (String.fromInt (count 5 0))
+    // main = Io.println (String.fromInt (count 5 0))
     let main_fn = Func {
         id: MAIN_ID,
         name: main,

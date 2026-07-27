@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! useUnit u = 7
-//! main = println (String.fromInt (useUnit ()))  -- 7
+//! main = Io.println (String.fromInt (useUnit ()))  -- 7
 //! ```
 //!
 //! Behavioural-parity oracle: the Go reference compiler at

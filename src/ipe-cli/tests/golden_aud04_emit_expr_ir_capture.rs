@@ -122,7 +122,7 @@ fn aud04_record_field_collision_compiles_and_runs() {
         "record_field_collision",
         "aud04_record_field_collision_emit",
     );
-    // The final `println (String.fromInt count)` must still print "3" —
+    // The final `Io.println (String.fromInt count)` must still print "3" —
     // proves the outer `count` binding survived the record-literal-adjacent
     // effect unmolested.
     assert_e2e_output("record_field_collision", "3");

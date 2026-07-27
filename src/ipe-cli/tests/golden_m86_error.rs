@@ -5,7 +5,7 @@
 //!
 //! ## Golden catalogue
 //!
-//! * `error_module` — `Task.onError (\e -> println (Error.toString e))
+//! * `error_module` — `Task.onError (\e -> Io.println (Error.toString e))
 //!   (Task.fail (Error.unexpected "boom"))`. Exercises the whole minimal Error
 //!   surface end-to-end: `Error.unexpected` (message constructor, `String ->
 //!   Error`), `Task.fail` on an `Error`-channel value, `Task.onError` with an

@@ -368,7 +368,7 @@ fn sources_of(pairs: &[(&[&str], &str)]) -> UserSources {
 const MAIN_V1: &str = "module Main exposing (main)\n\
      import Ipe.Prelude exposing (..)\n\
      import Lib.Util exposing (bump)\n\n\
-     main = println (String.fromInt (bump 41))\n";
+     main = Io.println (String.fromInt (bump 41))\n";
 const UTIL_V1: &str = "module Lib.Util exposing (bump)\n\nbump x = x + 1\n";
 const UTIL_BODY_EDIT: &str = "module Lib.Util exposing (bump)\n\nbump x = x + 2\n";
 const UTIL_WIDENED: &str =
@@ -378,18 +378,18 @@ const UTIL_FLIPPED: &str =
 const MAIN_FLIPPED: &str = "module Main exposing (main)\n\
      import Ipe.Prelude exposing (..)\n\
      import Lib.Util exposing (bump)\n\n\
-     main = println (bump \"x\")\n";
+     main = Io.println (bump \"x\")\n";
 const EXTRA_MOD: &str = "module Lib.Extra exposing (offset)\n\noffset = 100\n";
 const MAIN_WITH_EXTRA: &str = "module Main exposing (main)\n\
      import Ipe.Prelude exposing (..)\n\
      import Lib.Util exposing (bump)\n\
      import Lib.Extra exposing (offset)\n\n\
-     main = println (String.fromInt (bump offset))\n";
+     main = Io.println (String.fromInt (bump offset))\n";
 const HELPER_MOD: &str = "module Lib.Helper exposing (bump)\n\nbump x = x + 1\n";
 const MAIN_RENAMED: &str = "module Main exposing (main)\n\
      import Ipe.Prelude exposing (..)\n\
      import Lib.Helper exposing (bump)\n\n\
-     main = println (String.fromInt (bump 41))\n";
+     main = Io.println (String.fromInt (bump 41))\n";
 
 /// The scripted adversarial sequence from the plan: body-only edit, export
 /// widening, export type flip, red edit, module add, module delete, module
@@ -467,7 +467,7 @@ const WATCH_PROBE_V0: &str = "module Main exposing (main)\n\n\
      applyTwice g x =\n    g (g x)\n\n\
      compose : (Int -> Int) -> Int -> Int\n\
      compose f =\n    \\x -> applyTwice f x\n\n\
-     main =\n    println (String.fromInt (compose (\\n -> n + 1) 3))\n";
+     main =\n    Io.println (String.fromInt (compose (\\n -> n + 1) 3))\n";
 
 /// One save-cycle in `ipe watch` that adds a brand-new top-level identifier
 /// — the sharpest symbol-numbering probe (a warm db interns it at a tail id;

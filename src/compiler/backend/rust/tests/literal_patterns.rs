@@ -30,7 +30,7 @@
 //! ```text
 //! type Wrap = MkWrap Int
 //! f w = case w of MkWrap (x as y) -> y
-//! main = println (String.fromInt (f (MkWrap 7)))      -- prints 7
+//! main = Io.println (String.fromInt (f (MkWrap 7)))      -- prints 7
 //! ```
 //!
 //! (hand-verified in a temp dir → stdout `7\n`, exit 0).
@@ -301,7 +301,7 @@ fn alias_program(interner: &mut Interner) -> DResult<(Program, Symbol, Symbol)> 
         body: Expr::Match(ipe_ir::Match::new(Expr::Var(w), arms, &[mk_wrap])?),
     };
 
-    // main = println (String.fromInt (f (MkWrap 7)))
+    // main = Io.println (String.fromInt (f (MkWrap 7)))
     let main_fn = Func {
         id: FuncId::from_raw(1),
         name: main,

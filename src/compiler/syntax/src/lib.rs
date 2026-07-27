@@ -94,7 +94,7 @@ mod tests {
             type_annotation: Some(loc(ty)),
         };
 
-        // main = println (String.fromInt (update Increment 0))
+        // main = Io.println (String.fromInt (update Increment 0))
         let inner_call = loc(Expr_::Call(
             Box::new(loc(Expr_::VarLocal(update))),
             vec![loc(Expr_::VarLocal(increment)), loc(Expr_::Int(0))],

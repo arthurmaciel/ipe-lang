@@ -9,7 +9,7 @@
 //!
 //! ```text
 //! unwrap m = case m of Som x -> x + 1 ; Non -> 0
-//! main = println (String.fromInt (unwrap (Som 41)))      -- prints 42
+//! main = Io.println (String.fromInt (unwrap (Som 41)))      -- prints 42
 //! ```
 //!
 //! Behavioural-parity oracle: the Go reference compiler at

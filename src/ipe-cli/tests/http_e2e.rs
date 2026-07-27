@@ -138,7 +138,7 @@ import Ipe.Http as Http
 
 main =
     Task.andThen
-        (\resp -> println (String.fromInt resp.status ++ "\n" ++ resp.body))
+        (\resp -> Io.println (String.fromInt resp.status ++ "\n" ++ resp.body))
         (Http.get (System.getenvOr "IPE_HTTP_TEST_URL" "http://127.0.0.1:1"))
 "#;
 
@@ -148,7 +148,7 @@ import Ipe.Http as Http
 
 main =
     Task.andThen
-        (\resp -> println (String.fromInt resp.status ++ "\n" ++ resp.body))
+        (\resp -> Io.println (String.fromInt resp.status ++ "\n" ++ resp.body))
         (Http.post (System.getenvOr "IPE_HTTP_TEST_URL" "http://127.0.0.1:1") "ping")
 "#;
 
@@ -167,9 +167,9 @@ import Ipe.Http as Http
 
 main =
     Task.onError
-        (\e -> println "DENIED")
+        (\e -> Io.println "DENIED")
         (Task.andThen
-            (\resp -> println (String.fromInt resp.status))
+            (\resp -> Io.println (String.fromInt resp.status))
             (Http.get (System.getenvOr "IPE_HTTP_TEST_URL" "http://127.0.0.1:1")))
 "#;
 

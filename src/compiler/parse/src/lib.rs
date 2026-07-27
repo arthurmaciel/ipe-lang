@@ -256,7 +256,7 @@ mod tests {
         let Ok(m) = result else { return };
         let main = find_value(&m, &i, "main");
         assert!(main.is_some(), "main present");
-        // main = println (String.fromInt (update Increment 0))
+        // main = Io.println (String.fromInt (update Increment 0))
         let inner = main.and_then(|mv| match &mv.body.value {
             Expr_::Call(_, outer_args) => outer_args.first(),
             _ => None,

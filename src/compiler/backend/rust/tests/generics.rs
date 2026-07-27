@@ -18,7 +18,7 @@
 //! main =
 //!     let n = identity 40
 //!         flag = identity (1 == 1)
-//!     in println (String.fromInt (if flag then n + 2 else n))
+//!     in Io.println (String.fromInt (if flag then n + 2 else n))
 //! ```
 //!
 //! to stdout `42\n`, exit 0 (hand-verified in a temp dir; the Go backend emits
@@ -47,7 +47,7 @@ use ipe_ir::{
 /// main =
 ///     let n = identity 40
 ///         flag = identity (1 == 1)
-///     in println (String.fromInt (if flag then n + 2 else n))
+///     in Io.println (String.fromInt (if flag then n + 2 else n))
 /// ```
 ///
 /// `identity` quantifies the single type variable `a` (used structurally, pure
@@ -105,7 +105,7 @@ fn build_identity_program(interner: &mut Interner) -> DResult<Program> {
         }),
         else_: Box::new(Expr::Var(n)),
     };
-    // println (String.fromInt <chosen>)
+    // Io.println (String.fromInt <chosen>)
     let print = Expr::Call {
         callee: Callee::Kernel(KernelFn::IoPrintln),
         args: vec![Expr::Call {
@@ -207,7 +207,7 @@ fn emits_generic_function_signature() -> DResult<()> {
 /// ```ipe
 /// double x = x + x          -- Number  → T1: Add<Output = T1> + Copy
 /// max a b = if a > b then a else b  -- Comparable → T1: PartialOrd + Copy
-/// main = println (String.fromInt (double (max 20 21)))
+/// main = Io.println (String.fromInt (double (max 20 21)))
 /// ```
 fn build_bounded_program(interner: &mut Interner) -> DResult<Program> {
     let main_mod = interner.intern("Main")?;
@@ -261,7 +261,7 @@ fn build_bounded_program(interner: &mut Interner) -> DResult<Program> {
         },
     };
 
-    // main = println (String.fromInt (double (max 20 21)))
+    // main = Io.println (String.fromInt (double (max 20 21)))
     let max_call = Expr::Call {
         callee: Callee::Func(max_id),
         args: vec![Expr::Int(20), Expr::Int(21)],
