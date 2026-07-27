@@ -142,10 +142,14 @@ fn a_native_bearing_package_with_no_probeable_entrypoint_fails_closed() {
 }
 
 // ===========================================================================
-// Real-jail differential confinement (Linux + IPE_E2E=1)
+// Real-jail differential confinement (wired platforms + IPE_E2E=1)
+//
+// On Linux/x86_64 the jail is bwrap+seccomp; on macOS it is sandbox-exec. The
+// reconciler and the fixture are the SAME on both — only the jail primitive
+// probed in `e2e_tools` differs.
 // ===========================================================================
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(any(all(target_os = "linux", target_arch = "x86_64"), target_os = "macos"))]
 mod real_jail {
     use super::PathBuf;
     use std::collections::BTreeSet;
@@ -160,8 +164,8 @@ mod real_jail {
     use ipe_sandbox::build_jail::build_in_jail;
     use ipe_sandbox::run_jail::{RunJailTools, SandboxProfile};
 
-    /// `build_in_jail` mutates the process-global fd table (a `memfd`); serialize
-    /// the jailed runs so parallel `--test-threads` cannot race.
+    /// `build_in_jail` mutates the process-global fd table (a `memfd`) on Linux;
+    /// serialize the jailed runs so parallel `--test-threads` cannot race.
     static JAIL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn fixture_path() -> PathBuf {
@@ -169,19 +173,42 @@ mod real_jail {
             .join("../../tests/fixtures/admission/untrusted-build.sh")
     }
 
-    /// Skip unless `IPE_E2E=1`, the jail tools are present, AND a jail can
+    /// Probe the host for the jail primitive, returning the [`RunJailTools`] the
+    /// jail is built from (bwrap+prlimit on Linux; sandbox-exec on macOS, whose
+    /// fields the jail ignores). `None` when the primitive is absent.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    fn probe_tools() -> Option<RunJailTools> {
+        let caps = ipe_sandbox::probe();
+        Some(RunJailTools {
+            bwrap: caps.bwrap?,
+            prlimit: caps.prlimit?,
+            timeout: caps.timeout,
+        })
+    }
+
+    /// macOS: the jail primitive is `sandbox-exec`; the `RunJailTools` fields are
+    /// unused by the macOS `build_in_jail` (a present-primitive placeholder).
+    #[cfg(target_os = "macos")]
+    fn probe_tools() -> Option<RunJailTools> {
+        let path = std::env::var_os("PATH")?;
+        let sandbox_exec = std::env::split_paths(&path)
+            .map(|d| d.join("sandbox-exec"))
+            .find(|p| p.is_file())?;
+        Some(RunJailTools {
+            bwrap: sandbox_exec.clone(),
+            prlimit: sandbox_exec,
+            timeout: None,
+        })
+    }
+
+    /// Skip unless `IPE_E2E=1`, the jail primitive is present, AND a jail can
     /// actually be established here (a `/bin/true` canary settles it once) —
     /// mirroring the sandbox crate's gate. Never a false pass.
     fn e2e_tools() -> Option<RunJailTools> {
         if std::env::var_os("IPE_E2E").is_none_or(|v| v != "1") {
             return None;
         }
-        let caps = ipe_sandbox::probe();
-        let tools = RunJailTools {
-            bwrap: caps.bwrap?,
-            prlimit: caps.prlimit?,
-            timeout: caps.timeout,
-        };
+        let tools = probe_tools()?;
         if !jail_can_establish(&tools) {
             return None;
         }
@@ -355,8 +382,13 @@ mod real_jail {
     }
 
     #[test]
-    fn the_certified_platform_is_linux_x64() {
+    fn the_certified_platform_names_this_host_jail() {
+        // The certify label names exactly the wired jail on THIS host, so a
+        // certify never claims a platform whose jail did not run.
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
         assert_eq!(CERTIFIED_PLATFORM, "linux-x64");
+        #[cfg(target_os = "macos")]
+        assert_eq!(CERTIFIED_PLATFORM, "macos-arm64");
     }
 
     // ── real untrusted `cargo build` as the wrapper's child (the certify path) ──

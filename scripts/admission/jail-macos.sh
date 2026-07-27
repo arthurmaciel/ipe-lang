@@ -25,6 +25,15 @@ PROFILE_FILE="$(mktemp "${TMPBASE}admission-sbpl-XXXXXX.sb")"
 # Forwarded into the jail so the enforce run and the unjailed control run target
 # the SAME fs-escape path (the SBPL profile denies file-write* outside scratch).
 ESCAPE_PATH="${ESCAPE_PATH:-/usr/jail-escape-probe}"
+# The probe contract the fixture asserts inside the jail. `enforce` (default) is
+# the isolation-proof matrix; `tier2` is the differential-confinement run whose
+# per-axis exit code names the demanded-but-withheld axis. This static SBPL
+# denies BOTH network and out-of-scratch writes, so a tier2 run under it observes
+# both axes as denied (the enforce contract and tier2's both-axis case coincide).
+# `TIER2_AXIS` selects which axis a tier2 run exercises. Forwarded so a caller can
+# select the contract; sandbox-exec inherits the parent env, so these pass through.
+PROBE_MODE="${PROBE_MODE:-enforce}"
+TIER2_AXIS="${TIER2_AXIS:-both}"
 
 cleanup() { rm -rf "$SCRATCH" "$PROFILE_FILE"; }
 trap cleanup EXIT
@@ -65,6 +74,14 @@ SBPL
 
 export SCRATCH_DIR="$SCRATCH"
 export ESCAPE_PATH
+export PROBE_MODE
+export TIER2_AXIS
+
+# Any positional arguments after the fixture are the untrusted child build a
+# tier2 run passes to the wrapper (the wrapper runs them as its child before its
+# own axis probe). In enforce mode there are none. Shift the fixture off so the
+# rest are forwarded verbatim.
+shift 2>/dev/null || true
 
 # macOS ships `gtimeout` (GNU coreutils, Homebrew), not POSIX `timeout`.
 if command -v gtimeout >/dev/null 2>&1; then
@@ -79,8 +96,8 @@ fi
 if [ -n "$TIMEOUT_CMD" ]; then
     "$TIMEOUT_CMD" "$TIMEOUT_SECS" \
         sandbox-exec -f "$PROFILE_FILE" \
-            sh "$FIXTURE_ABS"
+            sh "$FIXTURE_ABS" "$@"
 else
     sandbox-exec -f "$PROFILE_FILE" \
-        sh "$FIXTURE_ABS"
+        sh "$FIXTURE_ABS" "$@"
 fi
