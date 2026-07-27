@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Bytes as Bytes
+import Ipe.Io as Io
 
 fromHexOrEmpty : String -> Bytes
 fromHexOrEmpty s =
@@ -19,4 +20,4 @@ main =
 
         binary = Bytes.toHex (fromHexOrEmpty "9efe")
     in
-    println (String.join " " [ hex, roundtrip, binary ])
+    Io.println (String.join " " [ hex, roundtrip, binary ])

@@ -8,6 +8,7 @@ module Main exposing (main)
 -- the thunk is `Fn` (re-callable) and both decodes succeed.
 
 import Ipe.Json.Decode as JsonDec
+import Ipe.Io as Io
 
 
 main =
@@ -19,10 +20,10 @@ main =
         Ok a ->
             case r2 of
                 Ok b ->
-                    println (a ++ "," ++ b)
+                    Io.println (a ++ "," ++ b)
 
                 Err _ ->
-                    println "err2"
+                    Io.println "err2"
 
         Err _ ->
-            println "err1"
+            Io.println "err1"

@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- (a) `++` on List Int
@@ -23,7 +23,7 @@ greeting =
 
 
 main =
-    println
+    Io.println
         (String.fromInt (List.length ints)
             ++ " "
             ++ String.fromInt (List.length pairs)

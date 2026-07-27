@@ -1,8 +1,9 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 half : Float
 half = 3.0 / 2.0
 
 main =
-    println (String.fromFloat half)
+    Io.println (String.fromFloat half)

@@ -11,7 +11,7 @@ import Ipe.Prelude exposing (..)
 import Ipe.Result as Result
 import Ipe.Maybe exposing (..)
 import Ipe.String as String
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Ipe.Cmd as Cmd
 import State exposing (..)
 import Lib.Auth as Auth
@@ -23,7 +23,7 @@ import Ipe.Error as Error exposing (Error(..), ErrorKind(..))
 handleSignInSuccess user model =
     let
         ideas = Result.withDefault [] (Ideas.getIdeas "newest" "all" "")
-        _ = println ("[AUTH] Sign-in: " ++ Db.getField "email" user)
+        _ = Io.println ("[AUTH] Sign-in: " ++ Db.getField "email" user)
     in
         ( { model | currentUser = Just user
           , ideas = ideas
@@ -48,7 +48,7 @@ handleSignIn model =
 
         Err e ->
             let
-                _ = println ("[AUTH ERROR] sign-in: " ++ Error.toString e)
+                _ = Io.println ("[AUTH ERROR] sign-in: " ++ Error.toString e)
                 userMsg =
                     case e of
 
@@ -73,7 +73,7 @@ handleSignUpSuccess userId model =
         Err e ->
             let
                 _ =
-                    println
+                    Io.println
                         ("[AUTH ERROR] post-signup lookup: " ++ Error.toString e)
             in
                 ( { model | authError = "Account created but auto-login failed. Please sign in."
@@ -93,7 +93,7 @@ handleSignUpSuccess userId model =
             let
                 ideas =
                     Result.withDefault [] (Ideas.getIdeas "newest" "all" "")
-                _ = println ("[AUTH] Sign-up success: " ++ userId)
+                _ = Io.println ("[AUTH] Sign-up success: " ++ userId)
             in
                 ( { model | currentUser = Just user
                   , ideas = ideas
@@ -119,7 +119,7 @@ handleSignUpValidated model =
 
         Err e ->
             let
-                _ = println ("[AUTH ERROR] sign-up: " ++ Error.toString e)
+                _ = Io.println ("[AUTH ERROR] sign-up: " ++ Error.toString e)
                 userMsg = Error.toString e
             in
                 ( { model | authError = userMsg }, Cmd.none )
@@ -143,7 +143,7 @@ handleSignUp model =
 
 handleSignOut model =
     let
-        _ = println "[AUTH] User signed out"
+        _ = Io.println "[AUTH] User signed out"
     in
         ( { model | currentUser = Nothing
           , page = BoardPage

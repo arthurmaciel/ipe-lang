@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- Row-polymorphic RESULT field access. `bump`'s row variable flows from its
@@ -30,4 +30,4 @@ grown =
 
 
 main =
-    println (ada.name ++ " " ++ grown.name)
+    Io.println (ada.name ++ " " ++ grown.name)

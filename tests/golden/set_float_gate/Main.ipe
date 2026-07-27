@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Set as Set
+import Ipe.Io as Io
 
 
 floats : Set Float
@@ -9,4 +10,4 @@ floats =
 
 
 main =
-    println (String.fromInt (Set.size floats))
+    Io.println (String.fromInt (Set.size floats))

@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Dict as Dict
+import Ipe.Io as Io
 
 
 prices : Dict Float Int
@@ -9,4 +10,4 @@ prices =
 
 
 main =
-    println (String.fromInt (Dict.size prices))
+    Io.println (String.fromInt (Dict.size prices))

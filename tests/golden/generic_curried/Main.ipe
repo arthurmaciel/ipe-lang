@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- F10 (#121 seal). `pairWith : a -> b -> (a, b)` has def-arity 1.
 -- T6 fires for the first-class reify site (Fun([Str, Int], (Str, Int))).
@@ -19,4 +20,4 @@ useFirst f =
 
 
 main =
-    println "unreachable"
+    Io.println "unreachable"

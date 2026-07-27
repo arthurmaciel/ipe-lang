@@ -42,6 +42,7 @@ fn program(name: Symbol, types: Vec<TypeDef>, funcs: Vec<Func>) -> Program {
             uses_websocket: false,
             uses_email: false,
             uses_env_public: false,
+            uses_debug: false,
             uses_ffi: false,
         }],
     }
@@ -253,6 +254,7 @@ fn cross_module_type_name_collision_is_rejected() -> DResult<()> {
                 uses_websocket: false,
                 uses_email: false,
                 uses_env_public: false,
+                uses_debug: false,
                 uses_ffi: false,
             },
             Module {
@@ -272,6 +274,7 @@ fn cross_module_type_name_collision_is_rejected() -> DResult<()> {
                 uses_websocket: false,
                 uses_email: false,
                 uses_env_public: false,
+                uses_debug: false,
                 uses_ffi: false,
             },
         ],

@@ -4,6 +4,7 @@ module Main exposing (main)
 -- Applies f to each element, keeps only Just results, unwraps them.
 
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 parsePositive : Int -> Maybe String
 parsePositive n =
@@ -17,4 +18,4 @@ main =
         inputs = [ -1, 2, 0, 5, -3, 10 ]
         results = List.filterMap parsePositive inputs
     in
-    println (String.join "," results)
+    Io.println (String.join "," results)

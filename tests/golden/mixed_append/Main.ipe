@@ -1,7 +1,8 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- `++` (prec 5) binds tighter than `|>` (prec 0).
 -- `"a" ++ "b" |> String.toUpper` = `("a" ++ "b") |> String.toUpper` = "AB".
 main =
-    "a" ++ "b" |> String.toUpper |> println
+    "a" ++ "b" |> String.toUpper |> Io.println

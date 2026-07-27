@@ -3,6 +3,7 @@ module Main exposing (main)
 import Ipe.Html as Html
 import Ipe.Ui as Ui
 import Ipe.Ui.Font as Font
+import Ipe.Io as Io
 
 
 -- Phase-0 Ipe.Ui regression: `Ui.layout` turbofish must use the enclosing
@@ -22,4 +23,4 @@ staticView msg =
 
 
 main =
-    println (Html.htmlRender (staticView Tick))
+    Io.println (Html.htmlRender (staticView Tick))

@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- Strings must be HTML-escaped exactly as Go's json.Marshal does by default:
 --   "  -> \"      (also serde)
@@ -10,4 +11,4 @@ module Main exposing (main)
 -- The value below carries all six. serde does NOT escape < > & U+2028 U+2029 by
 -- default, so this pins the GoFormatter HTML-escape pass.
 main =
-    println (JsonEnc.encode 0 (JsonEnc.string "say \"hi\" a<b>c&d e f"))
+    Io.println (JsonEnc.encode 0 (JsonEnc.string "say \"hi\" a<b>c&d e f"))

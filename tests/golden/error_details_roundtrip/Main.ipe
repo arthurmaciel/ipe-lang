@@ -15,7 +15,7 @@ module Main exposing (main)
 -- registration type-checks) without being constructed.
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 describeDetails : Maybe ErrorDetails -> String
@@ -62,15 +62,15 @@ main =
             Error.withDetails (Custom "custom detail") base
 
         _ =
-            println (describe base)
+            Io.println (describe base)
 
         _ =
-            println (describe withHttp)
+            Io.println (describe withHttp)
 
         _ =
-            println (describe withJson)
+            Io.println (describe withJson)
 
         _ =
-            println (describe withCustom)
+            Io.println (describe withCustom)
     in
-    println "done"
+    Io.println "done"

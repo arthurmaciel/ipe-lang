@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- A concrete anonymous record whose fields include TWO function values
@@ -30,7 +30,7 @@ apply c =
 
 
 main =
-    println
+    Io.println
         (apply
             { onChange = String.length
             , format = String.fromInt

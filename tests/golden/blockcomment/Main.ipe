@@ -1,8 +1,9 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 {- A plain block comment — the em-dash inside must not confuse the scanner. -}
 
 {- outer level {- inner nested level -} back to the outer level, still a comment -}
 
 main =
-    println "ok"
+    Io.println "ok"

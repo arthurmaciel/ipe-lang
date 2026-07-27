@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Error as Error
+import Ipe.Io as Io
 
 -- Task.onError with a lambda: `e` must be inferred as `Error` (not a free
 -- variable) so the handler compiles without IPE-L0102 ("polymorphic
@@ -10,5 +11,5 @@ import Ipe.Error as Error
 -- below rather than a bare string literal.
 main =
     Task.onError
-        (\e -> println "recovered")
+        (\e -> Io.println "recovered")
         (Task.fail (Error.unexpected "an error"))

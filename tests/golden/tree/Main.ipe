@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- A directly self-recursive ADT: `Node` carries two `Tree` fields, which the
 -- backend boxes so the Rust enum stays finite-sized, balanced by `Box::new` at
@@ -13,4 +14,4 @@ sumTree t =
         Node l n r -> sumTree l + n + sumTree r
 
 main =
-    println (String.fromInt (sumTree (Node (Node Leaf 3 Leaf) 4 (Node Leaf 5 Leaf))))
+    Io.println (String.fromInt (sumTree (Node (Node Leaf 3 Leaf) 4 (Node Leaf 5 Leaf))))

@@ -190,7 +190,7 @@ pub enum Doc {
     ///     PLACE at the CURRENT indent (not one step deeper), then glues `close`
     ///     onto the element's closing line — `f(g(\n    x,\n))`. No trailing comma,
     ///     no per-element break. This nests: a chain of single-argument calls all
-    ///     glue their heads (`log_println(string_from_int(list_length(\n …))`).
+    ///     glue their heads (`io_println(string_from_int(list_length(\n …))`).
     ///   * ONE-PER-LINE — otherwise (more than one element, or the sole element is
     ///     not a combinable multiline construct): each element on its own line at
     ///     one indent step, a break-conditional trailing comma (unless

@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- A function value laundered into a constructor payload THROUGH a type variable:
 -- `Mk : a -> Box a` applied as `Mk (\n -> n + 1)` instantiates the payload to
@@ -16,4 +17,4 @@ unwrap b =
         Mk f -> f 1
 
 main =
-    println (String.fromInt (unwrap (Mk (\n -> n + 1))))
+    Io.println (String.fromInt (unwrap (Mk (\n -> n + 1))))

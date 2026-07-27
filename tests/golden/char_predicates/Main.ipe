@@ -4,6 +4,7 @@ import Ipe.Prelude exposing (..)
 import Ipe.Char as Char
 import Ipe.String as String
 import Ipe.List as List
+import Ipe.Io as Io
 
 
 -- Count the chars in a string that satisfy a predicate.
@@ -26,4 +27,4 @@ main =
         alnum =
             countBy Char.isAlphaNum sample
     in
-    println (String.join " " (List.map String.fromInt [ hex, oct, alnum ]))
+    Io.println (String.join " " (List.map String.fromInt [ hex, oct, alnum ]))

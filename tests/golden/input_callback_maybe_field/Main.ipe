@@ -3,6 +3,7 @@ module Main exposing (main)
 import Ipe.Html as Html
 import Ipe.Ui as Ui
 import Ipe.Ui.Input as Input
+import Ipe.Io as Io
 
 
 -- #178 regression lock (SEAL: ipec-0 ⇒ cargo-0).
@@ -81,4 +82,4 @@ controlBar filter maxPrice sort notify =
 
 
 main =
-    println (controlBar "" 5000 "name" False)
+    Io.println (controlBar "" 5000 "name" False)

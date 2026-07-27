@@ -4,7 +4,7 @@ import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
 import Ipe.Dict as Dict
 import Ipe.Db as Db
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- FALSE-POSITIVE guard: a wildcard `any` param used ONLY as a Db row (which
@@ -26,4 +26,4 @@ main =
         payload =
             Dict.fromList [ ( "k", "v" ) ]
     in
-    println (grab payload "p")
+    Io.println (grab payload "p")

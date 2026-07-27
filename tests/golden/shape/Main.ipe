@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- A concrete (non-generic) payload ADT: `Circle` carries one field, `Rect` two.
 type Shape = Circle Int | Rect Int Int
@@ -11,4 +12,4 @@ area s =
         Rect w h -> w * h
 
 main =
-    println (String.fromInt (area (Rect 4 5) + area (Circle 2)))
+    Io.println (String.fromInt (area (Rect 4 5) + area (Circle 2)))

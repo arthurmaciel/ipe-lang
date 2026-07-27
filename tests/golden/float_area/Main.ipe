@@ -1,9 +1,10 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 area : Float -> Float
 area r =
     3.14 * r * r
 
 main =
-    println (String.fromFloat (area 2.0))
+    Io.println (String.fromFloat (area 2.0))

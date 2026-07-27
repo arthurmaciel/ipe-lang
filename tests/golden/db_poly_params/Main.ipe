@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- T0001 regression (IPE-T0001 poly-params fix):
 --   `Db.exec` / `Db.query` accept `List a` (polymorphic params), so callers may
@@ -42,7 +43,7 @@ main =
                                 [ SqlNull (SqlString ""), SqlInt 42, SqlBool True ]
                     in
                     Task.andThen
-                        (\rows -> println (String.fromInt (List.length rows)))
+                        (\rows -> Io.println (String.fromInt (List.length rows)))
                         (Db.query txconn "SELECT v FROM t" [])
                 )
         )

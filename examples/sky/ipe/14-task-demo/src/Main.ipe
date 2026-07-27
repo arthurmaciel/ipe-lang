@@ -3,7 +3,7 @@ module Main exposing (main)
 import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
 import Ipe.Error as Error exposing (Error)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 main =
@@ -30,7 +30,7 @@ printResult label result =
     case result of
 
         Ok val ->
-            println (label ++ ": " ++ val)
+            Io.println (label ++ ": " ++ val)
 
         Err e ->
-            println (label ++ " error: " ++ Error.toString e)
+            Io.println (label ++ " error: " ++ Error.toString e)

@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- Uuid.parse: a canonical UUID string round-trips; an invalid string yields Nothing.
 main =
@@ -9,7 +10,7 @@ main =
 
         valid = Uuid.parse validId
     in
-    println
+    Io.println
         (case invalid of
             Nothing ->
                 case valid of

@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- M5b-db golden: Db.Decode.nullable — distinguishes SQL NULL from non-null rows.
 -- Exercises the IrType::Decoder(Maybe T) type fixed in constrain.rs (M5b-db).
@@ -28,7 +29,7 @@ main =
                     in
                     Task.andThen
                         (\results ->
-                            println
+                            Io.println
                                 (String.join ","
                                     (List.map
                                         (\m ->

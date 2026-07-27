@@ -2,7 +2,7 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Ipe.List as List
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- #174 — a multi-arm / refutable tuple `case` on a NON-literal (variable)
@@ -68,4 +68,4 @@ main =
         n2 = nested ( 200, ( False, 9 ) )
     in
     -- 7 + 0 + 10 + 20 + 30 + 105 + 200 == 372
-    println (String.fromInt (f + p + c1 + c2 + c3 + n1 + n2))
+    Io.println (String.fromInt (f + p + c1 + c2 + c3 + n1 + n2))

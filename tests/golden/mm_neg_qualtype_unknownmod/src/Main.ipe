@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- m-negative gate: the annotation references `Bogus.Box`, but no module named
 -- `Bogus` is imported or exists. Canonicalisation must reject this with
@@ -10,4 +11,4 @@ answer =
     42
 
 main =
-    println (String.fromInt answer)
+    Io.println (String.fromInt answer)

@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Http as Http
+import Ipe.Io as Io
 
 
 -- Http builder chain test: verifies that Http.defaultRequest / Http.withMethod /
@@ -21,7 +22,7 @@ printReq req =
 
 
 main =
-    println
+    Io.println
         (printReq
             (Http.withBody "hello"
                 (Http.withHeader "B" "2"

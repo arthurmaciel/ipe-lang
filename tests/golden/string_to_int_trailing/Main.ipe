@@ -1,9 +1,10 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 main =
     case String.toInt "1 " of
         Just n ->
-            println (String.fromInt n)
+            Io.println (String.fromInt n)
 
         Nothing ->
-            println "Nothing"
+            Io.println "Nothing"

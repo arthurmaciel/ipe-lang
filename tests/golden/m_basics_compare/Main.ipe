@@ -1,7 +1,8 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 main =
-    println
+    Io.println
         (case compare 1 2 of
             LT -> "LT"
             EQ -> "EQ"

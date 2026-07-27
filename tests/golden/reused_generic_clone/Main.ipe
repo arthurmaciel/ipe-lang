@@ -2,7 +2,7 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- BACKLOG #189 regression — a reused-by-value generic param clone gap (SEAL).
@@ -36,4 +36,4 @@ dup x =
 
 main : Task Error ()
 main =
-    println (dup 42 ++ dup "hi")
+    Io.println (dup 42 ++ dup "hi")

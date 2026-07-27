@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- `Math.min` / `Math.max` are `Comparable a => a -> a -> a` (Elm `Basics.min`).
 -- The shared type variable carries the ORDERING obligation, exactly like the
@@ -24,4 +25,4 @@ main =
         _ =
             pickMin apply apply
     in
-    println (String.fromInt 0)
+    Io.println (String.fromInt 0)

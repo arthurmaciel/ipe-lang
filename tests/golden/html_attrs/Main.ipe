@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
+import Ipe.Io as Io
 
 
 -- #76: Ipe.Html.Attributes family end-to-end golden. Exercises fixed-key
@@ -13,7 +14,7 @@ import Ipe.Html.Attributes exposing (..)
 
 
 main =
-    println
+    Io.println
         (render
             (div
                 [ class "app", id "main" ]

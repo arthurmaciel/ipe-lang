@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- #90 T4 sound-companion of `lambda_param_reuse_gated`: a fn-carrying
 -- LAMBDA parameter CALLED twice (callee position, `f 1` / `f 2`) is
@@ -11,4 +12,4 @@ main =
     let
         applyTwice = \f -> f 1 + f 2
     in
-    println (String.fromInt (applyTwice (\x -> x + 1)))
+    Io.println (String.fromInt (applyTwice (\x -> x + 1)))

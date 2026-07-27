@@ -16,7 +16,7 @@ import Ipe.Result as Result
 import Ipe.Task as Task
 import Ipe.Pure as Pure
 import Ipe.Error as Error exposing (Error)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Ipe.System
 import State exposing (Transaction, EnrichedRow)
 import Decode
@@ -58,10 +58,10 @@ runReport useJson nowStr =
             let
                 enriched = List.map Compute.enrich txs
                 report = Report.buildReport nowStr enriched
-                _ = println (Report.renderText report)
-                _ = println ""
-                _ = println "--- JSON ---"
-                _ = println (Report.encodeReport report)
+                _ = Io.println (Report.renderText report)
+                _ = Io.println ""
+                _ = Io.println "--- JSON ---"
+                _ = Io.println (Report.encodeReport report)
             in
                 Task.succeed ()
 
@@ -90,6 +90,6 @@ sampleJson =
 reportError : Error -> Task Error ()
 reportError e =
     let
-        _ = println ("Error: " ++ Error.toString e)
+        _ = Io.println ("Error: " ++ Error.toString e)
     in
         System.exit 1

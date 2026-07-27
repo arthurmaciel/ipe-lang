@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- `Task Error Int Bool` (3 type arguments) is ill-formed: `Task` takes exactly
 -- an error channel and a success type. Before #32 this ICE'd with a generic
@@ -9,4 +10,4 @@ doThing s =
     Task.succeed 42
 
 main =
-    println "test"
+    Io.println "test"

@@ -2,7 +2,7 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Ipe.String as String
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- AUD-04 witness 1 (string-literal corruption).
@@ -21,5 +21,5 @@ import Ipe.Log exposing (println)
 -- second (count is still usable after the effect).
 main =
     let count = 3 in
-    let _ = println "the count is" in
-    println (String.fromInt count)
+    let _ = Io.println "the count is" in
+    Io.println (String.fromInt count)

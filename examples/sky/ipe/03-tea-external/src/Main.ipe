@@ -4,14 +4,14 @@ import Ipe.Prelude exposing (..)
 import Ipe.Result as Result
 import Ipe.Task as Task
 import Ipe.Crypto as Crypto
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 main =
     case Task.run (Crypto.randomToken 16) of
 
         Ok token ->
-            println ("Generated UUID: " ++ token)
+            Io.println ("Generated UUID: " ++ token)
 
         Err e ->
-            println ("Failed to generate UUID: " ++ errorToString e)
+            Io.println ("Failed to generate UUID: " ++ errorToString e)

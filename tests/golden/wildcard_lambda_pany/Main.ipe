@@ -18,7 +18,7 @@ module Main exposing (main)
 import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
 import Ipe.Error as Error exposing (Error)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- Shape 1 & 2: wildcard lambda inside a task chain.
@@ -46,14 +46,14 @@ main =
         ( okResult, errResult ) = runPipeline
         _ =
             case okResult of
-                Ok v  -> println ("ok: " ++ v)
-                Err e -> println ("ok-path error: " ++ Error.toString e)
+                Ok v  -> Io.println ("ok: " ++ v)
+                Err e -> Io.println ("ok-path error: " ++ Error.toString e)
         _ =
             case errResult of
-                Ok _  -> println "err-path should not reach Ok"
-                Err e -> println ("err: " ++ Error.toString e)
+                Ok _  -> Io.println "err-path should not reach Ok"
+                Err e -> Io.println ("err: " ++ Error.toString e)
         ignoreResult = Task.run (ignore 42)
     in
         case ignoreResult of
-            Ok v  -> println ("ignore: " ++ v)
-            Err e -> println ("ignore error: " ++ Error.toString e)
+            Ok v  -> Io.println ("ignore: " ++ v)
+            Err e -> Io.println ("ignore error: " ++ Error.toString e)

@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Lib exposing (Status(..), label, seedAndCount)
+import Ipe.Io as Io
 
 
 {-| A `Main`-owned helper (Rust name `main_summary`) — uses `Lib`'s `label`
@@ -14,5 +15,5 @@ summary count =
 
 main =
     Task.andThen
-        (\count -> println (summary count))
+        (\count -> Io.println (summary count))
         seedAndCount

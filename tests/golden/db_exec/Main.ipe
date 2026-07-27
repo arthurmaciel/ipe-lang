@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- M5b-db golden: SqlValue-parameterized Db.exec + Db.query on in-memory SQLite.
 -- Db.withTransaction pins all DDL + DML + SELECT to ONE pool connection so the
@@ -28,7 +29,7 @@ main =
                     in
                     Task.andThen
                         (\rows ->
-                            println
+                            Io.println
                                 (String.join "\n"
                                     (List.map
                                         (\row ->

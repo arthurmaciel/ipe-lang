@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- sha256 / sha512 / sha1 / md5 of "abc" — standard known test vectors.
 main =
@@ -11,4 +12,4 @@ main =
 
         m = Crypto.md5 "abc"
     in
-    println (String.join " " [ h256, h512, h1, m ])
+    Io.println (String.join " " [ h256, h512, h1, m ])

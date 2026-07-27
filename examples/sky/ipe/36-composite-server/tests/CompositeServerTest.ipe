@@ -14,7 +14,7 @@ import Ipe.Json.Decode as JsonDec
 import Ipe.Json.Encode as JsonEnc
 import Ipe.Encoding as Encoding
 import Ipe.Test as Test exposing (Test, TestResult(..))
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import State exposing (Credentials, AuthClaims, Todo)
 import Auth
 import Routes.Auth as AuthRoutes

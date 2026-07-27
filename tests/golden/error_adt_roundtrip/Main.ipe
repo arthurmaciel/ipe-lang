@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 main =
@@ -29,11 +29,11 @@ main =
                         Unavailable -> "Unavailable"
                         Unexpected -> "Unexpected"
 
-                _ = println (Error.toString e1)
-                _ = println info.message
-                _ = println kindName
-                _ = println (if Error.isRetryable e1 then "retryable" else "not-retryable")
-                _ = println (if Error.isRetryable e2 then "retryable" else "not-retryable")
-                _ = println (Error.toString e3)
+                _ = Io.println (Error.toString e1)
+                _ = Io.println info.message
+                _ = Io.println kindName
+                _ = Io.println (if Error.isRetryable e1 then "retryable" else "not-retryable")
+                _ = Io.println (if Error.isRetryable e2 then "retryable" else "not-retryable")
+                _ = Io.println (Error.toString e3)
             in
-            println "done"
+            Io.println "done"

@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- R4: let-bound decoder used twice (Decoder reuse → thunk).
 -- Exercises Fix C: the decoder is thunked so each decodeString call
@@ -24,6 +25,6 @@ main =
     case r1 of
         Ok label1 ->
             case r2 of
-                Ok label2 -> println (label1 ++ "\n" ++ label2)
-                Err _ -> println "err2"
-        Err _ -> println "err1"
+                Ok label2 -> Io.println (label1 ++ "\n" ++ label2)
+                Err _ -> Io.println "err2"
+        Err _ -> Io.println "err1"

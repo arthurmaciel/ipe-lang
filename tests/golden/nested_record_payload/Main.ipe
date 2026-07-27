@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 -- #158 Class-4 item C, Repro 2: a record sub-pattern nested inside a
 -- constructor payload (`Ok { name }`). Used to fail-closed with IPE-L0112
@@ -24,4 +24,4 @@ describe r =
 
 
 main =
-    println (describe (Ok { name = "Ada", age = 30 }))
+    Io.println (describe (Ok { name = "Ada", age = 30 }))

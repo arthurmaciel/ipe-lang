@@ -7,6 +7,7 @@ module Main exposing (main)
 --   the task_map targets) proves field access compiles for the response side.
 import Ipe.Http as Http
 import Ipe.Dict as Dict
+import Ipe.Io as Io
 
 
 main =
@@ -21,7 +22,7 @@ main =
 
         headerVal = Maybe.withDefault "missing" (Dict.get "X-Test" resp.headers)
     in
-    println
+    Io.println
         (String.join "\n"
             [ req.url
             , String.fromInt resp.status

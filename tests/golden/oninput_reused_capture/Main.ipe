@@ -5,7 +5,7 @@ import Ipe.Task as Task
 import Ipe.Html as Html
 import Ipe.Ui as Ui exposing (Element)
 import Ipe.Ui.Input as Input
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- #193 D5: Ui.onInput with a reused non-Copy capture.
@@ -58,4 +58,4 @@ main =
         row =
             itemRow { id = 3, name = "apple" }
     in
-    println (Html.render (Ui.layout [] row))
+    Io.println (Html.render (Ui.layout [] row))

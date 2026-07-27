@@ -17,7 +17,7 @@ import Ipe.Result as Result
 import Ipe.List as List
 import Ipe.Dict as Dict
 import Ipe.String as String
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Ipe.Error as Error exposing (Error(..))
 import Ipe.Task as Task
 import Ipe.Uuid as Uuid
@@ -44,13 +44,13 @@ listAllProducts =
             case result of
 
                 Ok products ->
-                    println
+                    Io.println
                         ("[PRODUCTS] Loaded "
                             ++ String.fromInt (List.length products)
                             ++ " products")
 
                 Err e ->
-                    println ("[PRODUCTS] ERROR loading products: " ++ Error.toString e)
+                    Io.println ("[PRODUCTS] ERROR loading products: " ++ Error.toString e)
     in
         Result.withDefault [] result
 
@@ -162,7 +162,7 @@ createProduct title summary category priceAmount priceCurrency priceDiscount sto
 
             Ok _ ->
                 let
-                    _ = println ("[PRODUCT] Created: " ++ title)
+                    _ = Io.println ("[PRODUCT] Created: " ++ title)
                 in
                     Ok productId
 
@@ -191,7 +191,7 @@ updateProduct productId title summary category priceAmount priceCurrency priceDi
 
             Ok _ ->
                 let
-                    _ = println ("[PRODUCT] Updated: " ++ productId)
+                    _ = Io.println ("[PRODUCT] Updated: " ++ productId)
                 in
                     Ok productId
 
@@ -219,7 +219,7 @@ deleteProduct productId =
                 (\item -> Db.deleteDoc "cart_items" (Db.getField "id" item))
                 cartItems
         result = Db.deleteDoc "products" productId
-        _ = println ("[PRODUCT] Deleted: " ++ productId)
+        _ = Io.println ("[PRODUCT] Deleted: " ++ productId)
     in
         case result of
 
@@ -258,7 +258,7 @@ addProductImage productId imageData =
 
             Ok _ ->
                 let
-                    _ = println ("[IMAGE] Added to product: " ++ productId)
+                    _ = Io.println ("[IMAGE] Added to product: " ++ productId)
                 in
                     Ok imageId
 
@@ -270,7 +270,7 @@ deleteProductImage : String -> Result Error ()
 deleteProductImage imageId =
     let
         result = Db.deleteDoc "product_images" imageId
-        _ = println ("[IMAGE] Deleted: " ++ imageId)
+        _ = Io.println ("[IMAGE] Deleted: " ++ imageId)
     in
         case result of
 

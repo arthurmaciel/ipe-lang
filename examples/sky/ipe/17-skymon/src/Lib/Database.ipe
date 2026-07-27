@@ -6,7 +6,7 @@ import Ipe.Dict as Dict
 import Ipe.System as System
 import Ipe.Task as Task
 import Ipe.Db as Db
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Ipe.Error as Error exposing (Error(..), ErrorKind(..))
 
 
@@ -25,7 +25,7 @@ conn =
         Err e ->
             let
                 _ =
-                    println
+                    Io.println
                         ("[FATAL] Cannot open skymon.db: " ++ Error.toString e)
             in
                 System.exit 1
@@ -72,7 +72,7 @@ queryOrLog label queryStr args =
         Err e ->
             let
                 _ =
-                    println ("[DB ERROR] " ++ label ++ ": " ++ Error.toString e)
+                    Io.println ("[DB ERROR] " ++ label ++ ": " ++ Error.toString e)
             in
                 []
 
@@ -86,6 +86,6 @@ execOrLog label queryStr args =
         Err e ->
             let
                 _ =
-                    println ("[DB ERROR] " ++ label ++ ": " ++ Error.toString e)
+                    Io.println ("[DB ERROR] " ++ label ++ ": " ++ Error.toString e)
             in
                 ()

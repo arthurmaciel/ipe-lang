@@ -4,7 +4,7 @@ import Ipe.Prelude exposing (..)
 import Ipe.Jwt as Jwt
 import Ipe.Json.Encode as JsonEnc
 import Ipe.Result as Result
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- #217 contract-drift regression: `Jwt.withClaim` takes a `JsonEnc.Value`
@@ -26,10 +26,10 @@ main =
     case token of
         Ok t ->
             if String.length t > 20 then
-                println "ok"
+                Io.println "ok"
 
             else
-                println "short"
+                Io.println "short"
 
         Err _ ->
-            println "err"
+            Io.println "err"

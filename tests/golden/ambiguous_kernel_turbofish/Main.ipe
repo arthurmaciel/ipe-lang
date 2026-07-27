@@ -14,7 +14,7 @@ import Ipe.Task as Task
 import Ipe.String as String
 import Ipe.Error as Error
 import Ipe.Decimal as Dec
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- `List.head []` — element type free; result discarded to a Bool.
@@ -126,4 +126,4 @@ main =
                 ++ "," ++ String.fromInt dictKeysEmpty
                 ++ "," ++ String.fromInt setEmptyCount
     in
-    println (verdict ++ " " ++ counts)
+    Io.println (verdict ++ " " ++ counts)

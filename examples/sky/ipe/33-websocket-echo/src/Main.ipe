@@ -7,7 +7,7 @@ import Ipe.Error exposing (Error)
 import Ipe.Http.Server as Server
 import Ipe.Http.Server exposing (Request, Response)
 import Ipe.Http.Server.WebSocket as Ws
-import Ipe.Log as Log
+import Ipe.Io as Io
 
 
 -- | WebSocket echo demo — the canonical pattern for v0.15.46
@@ -68,25 +68,25 @@ handleWs req =
 
 onConnect : Ws.WebSocketServer -> Task Error ()
 onConnect _ =
-    Log.println "[ws] client connected"
+    Io.println "[ws] client connected"
 
 
 onMessage : Ws.WebSocketServer -> String -> Task Error ()
 onMessage sock msg =
     let
-        _ = Log.println ("[ws] received: " ++ msg)
+        _ = Io.println ("[ws] received: " ++ msg)
     in
         Ws.sendToClient sock ("echo: " ++ msg)
 
 
 onClose : Ws.WebSocketServer -> Task Error ()
 onClose _ =
-    Log.println "[ws] client gone"
+    Io.println "[ws] client gone"
 
 
 onError : Ws.WebSocketServer -> Error -> Task Error ()
 onError _ _ =
-    Log.println "[ws] error"
+    Io.println "[ws] error"
 
 
 main : Task Error ()

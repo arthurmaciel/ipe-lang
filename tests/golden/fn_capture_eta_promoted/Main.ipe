@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 
 -- #221 minimal trigger: `guarded`'s body partially applies the SIBLING
@@ -20,4 +21,4 @@ main =
         guarded f = wrap (inc f)
         r = guarded 1 2
     in
-        println (String.fromInt r)
+        Io.println (String.fromInt r)

@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 
 -- F6 (#121 seal) — RE-CLASSIFIED to ACCEPT by the #221 fn-value Arc-carrier
@@ -19,4 +20,4 @@ compose f =
 
 
 main =
-    println (String.fromInt (compose (\n -> n + 1) 3))
+    Io.println (String.fromInt (compose (\n -> n + 1) 3))

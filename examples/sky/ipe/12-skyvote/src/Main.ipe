@@ -7,7 +7,7 @@ import Ipe.List as List
 import Ipe.String as String
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Ipe.Web exposing (app, route)
 import Ipe.Html.Events exposing (onClick)
 import Ipe.Cmd as Cmd
@@ -36,7 +36,7 @@ init : a -> ( Model, Cmd Msg )
 init _req =
     let
         _ = Schema.initDb
-        _ = println "[APP] SkyVote initialised"
+        _ = Io.println "[APP] SkyVote initialised"
         ideas = Result.withDefault [] (Ideas.getIdeas "newest" "all" "")
     in
         ( { page = BoardPage
@@ -225,7 +225,7 @@ logActivity event targetId userId =
             Err e ->
                 let
                     _ =
-                        println
+                        Io.println
                             ("[ACTIVITY ERROR] " ++ event ++ ": "
                                 ++ Error.toString e)
                 in
@@ -319,7 +319,7 @@ handleToggleVoteAuth ideaId user model =
 
             Err e ->
                 let
-                    _ = println ("[VOTE ERROR] " ++ Error.toString e)
+                    _ = Io.println ("[VOTE ERROR] " ++ Error.toString e)
                 in
                     ( { model | notification = "Could not record your vote: " ++ Error.toString e
                       }
@@ -375,7 +375,7 @@ doSubmitComment user model =
 
             Err e ->
                 let
-                    _ = println ("[COMMENT ERROR] " ++ Error.toString e)
+                    _ = Io.println ("[COMMENT ERROR] " ++ Error.toString e)
                 in
                     ( { model | notification = "Could not post comment: " ++ Error.toString e
                       }
@@ -457,7 +457,7 @@ doCreateIdea user model =
 
             Err e ->
                 let
-                    _ = println ("[IDEA ERROR] " ++ Error.toString e)
+                    _ = Io.println ("[IDEA ERROR] " ++ Error.toString e)
                 in
                     ( { model | notification = "Could not submit idea: " ++ Error.toString e
                       }

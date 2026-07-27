@@ -3,6 +3,7 @@ module Main exposing (main)
 import Ipe.Html as Html
 import Ipe.Ui as Ui
 import Ipe.Ui.Lazy as Lazy
+import Ipe.Io as Io
 
 
 -- i146 regression: LazyLazy..LazyLazy5 emit arms.
@@ -36,4 +37,4 @@ staticHtml =
 
 
 main =
-    println staticHtml
+    Io.println staticHtml

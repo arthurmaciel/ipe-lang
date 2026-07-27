@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 describe : Result String Int -> Int
 describe r =
@@ -7,4 +8,4 @@ describe r =
         Err _ -> 0
 
 main =
-    println (String.fromInt (describe (Ok 7)))
+    Io.println (String.fromInt (describe (Ok 7)))

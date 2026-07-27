@@ -7,7 +7,7 @@ import Ipe.Result as Result
 import Ipe.String as String
 import Ipe.Task as Task
 import Ipe.Time as Time
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 main =
@@ -15,22 +15,22 @@ main =
         nowStr =
             Time.now () |> Task.run |> Result.map Time.timeString
                 |> Result.withDefault "unknown"
-        _ = println ("Current time: " ++ nowStr)
+        _ = Io.println ("Current time: " ++ nowStr)
         data = "Hello, Sky!"
         -- v0.10.0: Crypto.sha256 returns the hex digest directly
         -- (was: Sha256.sum256 + Hex.encodeToString chain).
-        _ = println ("SHA256 of 'Hello, Sky!': " ++ Crypto.sha256 data)
-        _ = println "Sending HTTP request..."
+        _ = Io.println ("SHA256 of 'Hello, Sky!': " ++ Crypto.sha256 data)
+        _ = Io.println "Sending HTTP request..."
         httpResult = Task.run (Http.get "https://httpbin.org/get")
         _ =
             case httpResult of
 
                 Ok resp ->
-                    println
+                    Io.println
                         ("HTTP response received, body length: "
                             ++ String.fromInt (String.length resp.body))
 
                 Err e ->
-                    println ("HTTP error: " ++ errorToString e)
+                    Io.println ("HTTP error: " ++ errorToString e)
     in
         ()

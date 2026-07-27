@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 -- #90 T3 green twin: `Result.mapError` with an arity-1 callback. The Ok
 -- payload is pinned to Int via `check`'s annotation (an UNPINNED payload
@@ -19,4 +19,4 @@ check r =
         Err msg -> msg
 
 main =
-    println (check (Result.mapError tag (Err "boom")))
+    Io.println (check (Result.mapError tag (Err "boom")))

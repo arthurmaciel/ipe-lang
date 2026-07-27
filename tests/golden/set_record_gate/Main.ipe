@@ -1,7 +1,8 @@
 module Main exposing (main)
 
 import Ipe.Set as Set
+import Ipe.Io as Io
 
 
 main =
-    println (String.fromInt (Set.size (Set.insert { x = 1 } Set.empty)))
+    Io.println (String.fromInt (Set.size (Set.insert { x = 1 } Set.empty)))

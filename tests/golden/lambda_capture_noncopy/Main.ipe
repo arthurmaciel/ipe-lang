@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- F4 (#121 seal). A lambda captures a non-`Copy` local.
 -- `prefix : String` (CloneOk) is captured by `\x -> String.append prefix x`.
@@ -18,4 +19,4 @@ tag prefix items =
 
 
 main =
-    println (tag "ipe-" [ "one", "two" ])
+    Io.println (tag "ipe-" [ "one", "two" ])

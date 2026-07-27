@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 -- Regression fixture for the BACKLOG Critical row "Name-only HttpRequest-shape
 -- false-positive fold": a record literal that shares the CANONICAL
@@ -22,7 +22,7 @@ sumFields c =
 
 
 main =
-    println
+    Io.println
         (String.fromInt
             (sumFields
                 { body = 1

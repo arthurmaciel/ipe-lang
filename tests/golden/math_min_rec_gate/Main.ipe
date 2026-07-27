@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- Companion to `math_min_fn_gate` for a RECORD value. `Math.min` carries the
 -- ORDERING obligation (`Comparable a => a -> a -> a`), so the `pickMin` forwarder
@@ -22,4 +23,4 @@ main =
         _ =
             pickMin rec rec
     in
-    println (String.fromInt 0)
+    Io.println (String.fromInt 0)

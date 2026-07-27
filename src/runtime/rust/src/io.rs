@@ -63,3 +63,39 @@ pub fn io_write_stderr<E: Send + From<String> + 'static>(s: String) -> IpeTask<E
         }
     })
 }
+
+/// `Io.println : String -> Task Error ()`. Writes the message followed by a
+/// single `\n` to stdout, then flushes.
+#[must_use]
+pub fn io_println<E: Send + From<String> + 'static>(msg: String) -> IpeTask<E, ()> {
+    Box::pin(async move {
+        let r = (|| {
+            let mut out = std::io::stdout();
+            out.write_all(msg.as_bytes())?;
+            out.write_all(b"\n")?;
+            out.flush()
+        })();
+        match r {
+            Ok(()) => ok_res(()),
+            Err(e) => IpeResult::Err(str_err(&format!("{e}"))),
+        }
+    })
+}
+
+/// `Io.eprintln : String -> Task Error ()`. Writes the message followed by a
+/// single `\n` to stderr, then flushes.
+#[must_use]
+pub fn io_eprintln<E: Send + From<String> + 'static>(msg: String) -> IpeTask<E, ()> {
+    Box::pin(async move {
+        let r = (|| {
+            let mut err = std::io::stderr();
+            err.write_all(msg.as_bytes())?;
+            err.write_all(b"\n")?;
+            err.flush()
+        })();
+        match r {
+            Ok(()) => ok_res(()),
+            Err(e) => IpeResult::Err(str_err(&format!("{e}"))),
+        }
+    })
+}

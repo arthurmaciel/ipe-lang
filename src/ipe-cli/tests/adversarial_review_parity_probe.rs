@@ -75,6 +75,7 @@ fn cold_compile(user: &UserSources) -> CompileOutcome {
         ipe_ir::Target::Native,
         Vec::new(),
         false,
+        false,
     );
     ipe::compile_prepared(
         &db,
@@ -166,6 +167,7 @@ impl WarmSession {
                 None,
                 ipe_ir::Target::Native,
                 Vec::new(),
+                false,
                 false,
             ));
         }

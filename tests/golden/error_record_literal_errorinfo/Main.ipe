@@ -8,7 +8,7 @@ module Main exposing (main)
 -- See tests/golden/error_record_literal_panicinfo/.
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 main =
@@ -16,4 +16,4 @@ main =
         err =
             Error Io { message = "disk full", details = Nothing }
     in
-    println (Error.toString err)
+    Io.println (Error.toString err)

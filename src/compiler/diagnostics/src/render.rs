@@ -592,6 +592,10 @@ fn lower_label(msg: &LowerError) -> String {
             "payload field {field_index} has type `{type_name}`, which cannot be decoded \
              from a URL `:param` string"
         ),
+        LowerError::DevOnlyKernelInProduction { kernel } => format!(
+            "`{kernel}` is a development-only debugging escape hatch and cannot be used \
+             in a production build (`ipe build --optimize`)"
+        ),
     }
 }
 

@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- #90 T3 aliasing-shape audit: RECORD-FIELD extraction of a bare
 -- `Result.andMap` reference. This shape is closed, but NOT by the T3
@@ -19,5 +20,5 @@ add3 a b c =
 main =
     let wrapper = { combiner = Result.andMap } in
     case wrapper.combiner (Ok 1) (Ok add3) of
-        Ok _ -> println "ok"
-        Err _ -> println "err"
+        Ok _ -> Io.println "ok"
+        Err _ -> Io.println "err"

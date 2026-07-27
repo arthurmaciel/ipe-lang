@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- #90 Stage 1 residual seal hole — Maybe variant of the let-bound
 -- constructor-wrapped closure (see let_bound_fn_payload for the full
@@ -13,4 +14,4 @@ main =
     let
         f = Just (\x -> x * 2)
     in
-    println (String.fromInt (applyIt f))
+    Io.println (String.fromInt (applyIt f))

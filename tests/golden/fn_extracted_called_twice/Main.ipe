@@ -1,11 +1,12 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- #90 T4: calling an extracted function value MORE THAN ONCE is sound — a
 -- `Box<dyn Fn>` call borrows (`Fn::call(&self, ..)`), never moves. Only a
 -- second NON-CALL use of the same binding is rejected (IPE-L0127,
 -- see fn_carrier_reuse_gated).
 main =
-    println (String.fromInt (case Just (\x -> x + 1) of
+    Io.println (String.fromInt (case Just (\x -> x + 1) of
         Just f -> f 1 + f 2
         Nothing -> 0))

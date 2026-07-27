@@ -2,7 +2,7 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Dep exposing (Color(..))
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 type Color = Warm | Cool
 
@@ -13,4 +13,4 @@ describe c =
         Cool -> "cool"
 
 main =
-    println (describe Warm)
+    Io.println (describe Warm)

@@ -2,7 +2,7 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- #193 D3 seal: a fn-value passed as argument (consuming position) in each of
@@ -36,4 +36,4 @@ applyEither flag f =
 
 main : Task Error ()
 main =
-    println (String.fromInt (applyEither True (\n -> n + 1)))
+    Io.println (String.fromInt (applyEither True (\n -> n + 1)))

@@ -110,7 +110,7 @@ fn wrap_program(i: &mut Interner) -> DResult<Program> {
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),
         body: Expr::Call {
-            callee: Callee::Kernel(KernelFn::LogPrintln),
+            callee: Callee::Kernel(KernelFn::IoPrintln),
             args: vec![Expr::Call {
                 callee: Callee::Kernel(KernelFn::StringFromInt),
                 args: vec![Expr::Call {
@@ -150,6 +150,7 @@ fn wrap_program(i: &mut Interner) -> DResult<Program> {
             uses_websocket: false,
             uses_email: false,
             uses_env_public: false,
+            uses_debug: false,
             uses_ffi: false,
         }],
     })
@@ -212,6 +213,7 @@ fn unit_value_and_type_render() -> DResult<()> {
             uses_websocket: false,
             uses_email: false,
             uses_env_public: false,
+            uses_debug: false,
             uses_ffi: false,
         }],
     };

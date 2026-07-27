@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- HMAC-SHA256 / HMAC-SHA512 — RFC 4231 test case 1.
 -- key = 0x0b repeated 20 times (byte value 11 = vertical tab)
@@ -14,4 +15,4 @@ main =
 
         h512 = Crypto.hmacSha512 key2 "Hi There"
     in
-    println (String.join " " [ h256, h512 ])
+    Io.println (String.join " " [ h256, h512 ])

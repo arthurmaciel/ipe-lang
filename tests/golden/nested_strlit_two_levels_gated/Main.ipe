@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 -- Adversarial-review sibling gap (Finding A) of the #158 C2 string-literal
 -- ctor-payload desugaring: a `PStr` sub-pattern nested TWO levels deep in a
@@ -28,4 +28,4 @@ f nested =
 
 
 main =
-    println (f (Just (Just "x")))
+    Io.println (f (Just (Just "x")))

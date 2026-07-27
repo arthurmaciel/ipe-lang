@@ -5750,6 +5750,10 @@ struct KernelUsage {
     /// The `Ipe.Env` `Env.public` kernel — gates emitting the per-project
     /// `env_public.rs` (built from `ipe.toml`'s `[wasm] publicEnv` allowlist).
     env_public: bool,
+    /// Any development-only `Debug.*` escape hatch (`Debug.log`). Recorded
+    /// unconditionally here; a PRODUCTION build (`--optimize`) rejects it at
+    /// emit demand (IPE-L0140). A development build ignores the flag.
+    debug: bool,
     /// Any foreign-crate FFI wrapper call ([`Callee::Ffi`]) — gates the
     /// emitted `mod ffi;` declaration + bound-crate `Cargo.toml` deps.
     ffi: bool,
@@ -5783,6 +5787,7 @@ impl KernelUsage {
             && self.websocket
             && self.email
             && self.env_public
+            && self.debug
             && self.ffi
     }
 
@@ -5806,6 +5811,7 @@ impl KernelUsage {
         self.websocket |= k.is_websocket_client();
         self.email |= matches!(k, KernelFn::EmailSend);
         self.env_public |= matches!(k, KernelFn::EnvPublic);
+        self.debug |= k.is_dev_only();
         // A kernel whose emitted symbol lives in a feature-module its emit-class
         // does not pull in (e.g. `Cmd.publish`'s `cmd_publish` in `live::pubsub`,
         // `HttpStream.chunks`'s `sub_subscribe_stream` in `http_stream`) forces
@@ -7824,6 +7830,10 @@ impl<'a> Lowerer<'a> {
         // `mod ffi;` and appends the bound crates' Cargo.toml dep lines.
         let uses_ffi = kernel_usage.ffi;
 
+        // detect development-only `Debug.*` escape-hatch usage — a production
+        // build rejects it (IPE-L0140); recorded unconditionally here.
+        let uses_debug = kernel_usage.debug;
+
         let module = Module {
             name: ModPath(self.m.name.clone()),
             types: types_ir,
@@ -7841,6 +7851,7 @@ impl<'a> Lowerer<'a> {
             uses_websocket,
             uses_email,
             uses_env_public,
+            uses_debug,
             uses_ffi,
         };
         Ok(Program {
@@ -13473,7 +13484,6 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::CharIsAlphaNum
                 | KernelFn::CharIsHexDigit
                 | KernelFn::CharIsOctDigit
-                | KernelFn::LogPrintln
                 | KernelFn::LogInfo
                 | KernelFn::LogDebug
                 | KernelFn::LogWarn
@@ -13604,6 +13614,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::IoReadLine
                 | KernelFn::IoWriteStdout
                 | KernelFn::IoWriteStderr
+                | KernelFn::IoPrintln
+                | KernelFn::IoEprintln
                 // ── Time arity-1 ────────────────────────────────────────
                 | KernelFn::TimeNow
                 | KernelFn::TimeSleep
@@ -13759,6 +13771,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::LogDebugWith
                 | KernelFn::LogWarnWith
                 | KernelFn::LogErrorWith
+                // ── Debug.log — String -> a -> a (arity 2) ───────────────────
+                | KernelFn::DebugLog
                 | KernelFn::MaybeWithDefault
                 | KernelFn::MaybeMap
                 | KernelFn::MaybeAndThen
@@ -15035,7 +15049,6 @@ impl<'a> Lowerer<'a> {
                     return Ok(Callee::Kernel(*sk));
                 }
                 match (self.resolve(*module)?, self.resolve(*name)?) {
-                    ("Log", "println") => Ok(Callee::Kernel(KernelFn::LogPrintln)),
                     ("Log", "info") => Ok(Callee::Kernel(KernelFn::LogInfo)),
                     ("Log", "debug") => Ok(Callee::Kernel(KernelFn::LogDebug)),
                     ("Log", "warn") => Ok(Callee::Kernel(KernelFn::LogWarn)),
@@ -15473,6 +15486,9 @@ impl<'a> Lowerer<'a> {
                     ("Io", "readLine") => Ok(Callee::Kernel(KernelFn::IoReadLine)),
                     ("Io", "writeStdout") => Ok(Callee::Kernel(KernelFn::IoWriteStdout)),
                     ("Io", "writeStderr") => Ok(Callee::Kernel(KernelFn::IoWriteStderr)),
+                    ("Io", "println") => Ok(Callee::Kernel(KernelFn::IoPrintln)),
+                    ("Io", "eprintln") => Ok(Callee::Kernel(KernelFn::IoEprintln)),
+                    ("Debug", "log") => Ok(Callee::Kernel(KernelFn::DebugLog)),
                     // ── Time kernels ────────────────────────────────────
                     ("Time", "now") => Ok(Callee::Kernel(KernelFn::TimeNow)),
                     ("Time", "sleep") => Ok(Callee::Kernel(KernelFn::TimeSleep)),

@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- A3 (#147 seal). `Wrap : String -> Box` passed as a higher-order function
 -- argument: `applyMk Wrap "hello"` — the callee slot is typed `String -> Box`.
@@ -19,4 +20,4 @@ applyMk f s = f s
 
 main =
     let b = applyMk Wrap "hello" in
-    println (unwrap b)
+    Io.println (unwrap b)

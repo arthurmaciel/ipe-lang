@@ -68,6 +68,7 @@ fn program(name: Symbol, funcs: Vec<Func>, entry: Option<FuncId>) -> Program {
             uses_websocket: false,
             uses_email: false,
             uses_env_public: false,
+            uses_debug: false,
             uses_ffi: false,
         }],
     }
@@ -130,7 +131,7 @@ fn getx_program(interner: &mut Interner) -> DResult<Program> {
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),
         body: Expr::Call {
-            callee: Callee::Kernel(KernelFn::LogPrintln),
+            callee: Callee::Kernel(KernelFn::IoPrintln),
             args: vec![Expr::Call {
                 callee: Callee::Kernel(KernelFn::StringFromInt),
                 args: vec![Expr::Call {

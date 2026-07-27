@@ -3,6 +3,7 @@ module Main exposing (main)
 import Ipe.Prelude exposing (..)
 import B exposing (fromB)
 import C exposing (fromC)
+import Ipe.Io as Io
 
 main =
-    println (String.fromInt (fromB + fromC))
+    Io.println (String.fromInt (fromB + fromC))

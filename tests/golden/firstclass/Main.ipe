@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- A higher-order function: a function-typed parameter, applied twice.
 applyTwice : (Int -> Int) -> Int -> Int
@@ -18,4 +19,4 @@ main =
     let b = applyTwice inc 1 in
     let g = makeInc 0 in
     let c = g 40 in
-    println (String.fromInt (a + b + c))
+    Io.println (String.fromInt (a + b + c))

@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- backlog #44 golden: `Auth.signToken` / `Auth.verifyToken` are re-typed to
 -- take `Secret` (not `String`) at the signing-key position — "secrets are
@@ -15,10 +16,10 @@ main =
         Ok token ->
             case Auth.verifyToken signingKey token of
                 Ok claims ->
-                    println (Maybe.withDefault "?" (Dict.get "sub" claims))
+                    Io.println (Maybe.withDefault "?" (Dict.get "sub" claims))
 
                 Err _ ->
-                    println "verify-failed"
+                    Io.println "verify-failed"
 
         Err _ ->
-            println "sign-failed"
+            Io.println "sign-failed"

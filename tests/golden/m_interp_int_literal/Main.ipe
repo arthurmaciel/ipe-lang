@@ -2,7 +2,7 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Ipe.String as String
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 main =
@@ -10,4 +10,4 @@ main =
         tag = "o"
         msg = """item={{tag}} count={{String.fromInt 54}} total={{String.fromInt 51}}"""
     in
-    println msg
+    Io.println msg

@@ -6,7 +6,7 @@
 module Main exposing (main, showAny, eqOrShow)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 showAny : a -> String
 showAny x =
@@ -20,4 +20,4 @@ eqOrShow x y =
         errorToString x ++ " /= " ++ errorToString y
 
 main =
-    println (showAny 42 ++ " " ++ eqOrShow "hi" "hi" ++ " " ++ eqOrShow 1 2)
+    Io.println (showAny 42 ++ " " ++ eqOrShow "hi" "hi" ++ " " ++ eqOrShow 1 2)

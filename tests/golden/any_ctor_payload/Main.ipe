@@ -12,7 +12,7 @@ module Main exposing (main)
 -- Seal: ipec exit 0 AND cargo build green.
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 type Msg
     = BroadcastMsg any
@@ -25,4 +25,4 @@ handleMsg msg =
         Ignored        -> "ignored"
 
 main =
-    println (handleMsg Ignored)
+    Io.println (handleMsg Ignored)

@@ -3,6 +3,7 @@ module Main exposing (main)
 import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.List as List
+import Ipe.Io as Io
 
 
 main =
@@ -69,7 +70,7 @@ main =
             else
                 1
     in
-    println
+    Io.println
         (String.join " "
             [ lft
             , rgt

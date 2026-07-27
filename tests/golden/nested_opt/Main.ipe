@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- Same top-level constructor across several arms, discriminated by a NESTED
 -- constructor sub-pattern. `Som (Som x)` and `Som Non` both head-match `Som`
@@ -17,4 +18,4 @@ f oo =
 
 -- 42 + 7 + 3 = 52, the same value the Go reference compiler prints.
 main =
-    println (String.fromInt (f (Som (Som 42)) + f (Som Non) + f Non))
+    Io.println (String.fromInt (f (Som (Som 42)) + f (Som Non) + f Non))

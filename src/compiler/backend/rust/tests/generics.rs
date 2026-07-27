@@ -107,7 +107,7 @@ fn build_identity_program(interner: &mut Interner) -> DResult<Program> {
     };
     // println (String.fromInt <chosen>)
     let print = Expr::Call {
-        callee: Callee::Kernel(KernelFn::LogPrintln),
+        callee: Callee::Kernel(KernelFn::IoPrintln),
         args: vec![Expr::Call {
             callee: Callee::Kernel(KernelFn::StringFromInt),
             args: vec![chosen],
@@ -155,6 +155,7 @@ fn build_identity_program(interner: &mut Interner) -> DResult<Program> {
             uses_websocket: false,
             uses_email: false,
             uses_env_public: false,
+            uses_debug: false,
             uses_ffi: false,
         }],
     })
@@ -274,7 +275,7 @@ fn build_bounded_program(interner: &mut Interner) -> DResult<Program> {
         on_form: OnFormKind::NotForm,
     };
     let main_body = Expr::Call {
-        callee: Callee::Kernel(KernelFn::LogPrintln),
+        callee: Callee::Kernel(KernelFn::IoPrintln),
         args: vec![Expr::Call {
             callee: Callee::Kernel(KernelFn::StringFromInt),
             args: vec![double_call],
@@ -312,6 +313,7 @@ fn build_bounded_program(interner: &mut Interner) -> DResult<Program> {
             uses_websocket: false,
             uses_email: false,
             uses_env_public: false,
+            uses_debug: false,
             uses_ffi: false,
         }],
     })

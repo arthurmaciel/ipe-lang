@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Ipe.String as String
+import Ipe.Io as Io
 
 type Color = Red | Green | Blue
 
@@ -13,4 +14,4 @@ label c =
         Blue -> "blue"
 
 main =
-    println (label Green)
+    Io.println (label Green)

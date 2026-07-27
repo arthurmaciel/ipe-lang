@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- Unannotated record + updates at TOP-LEVEL bindings whose base is a sibling
@@ -22,6 +22,6 @@ retired =
 
 
 main =
-    println
+    Io.println
         (retired.name ++ " " ++ String.fromInt retired.age ++ " "
             ++ String.fromInt retired.active)

@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 -- #158 Class-4 item C, THE decisive soundness test: `Just []` is a valid value
 -- of `Maybe (List Int)` that must FALL THROUGH the `Just (h :: t)` arm to the
@@ -19,4 +19,4 @@ f m =
 
 
 main =
-    println (String.fromInt (f (Just [])))
+    Io.println (String.fromInt (f (Just [])))

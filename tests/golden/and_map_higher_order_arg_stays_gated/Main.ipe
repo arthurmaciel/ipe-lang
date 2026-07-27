@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- #90 T3 residual gate, HIGHER-ORDER-ARGUMENT aliasing shape: `Result.andMap`
 -- passed bare as an ARGUMENT expression to another function, which applies it
@@ -24,5 +25,5 @@ add3 a b c =
 
 main =
     case applyAM Result.andMap (Ok 1) (Ok add3) of
-        Ok _ -> println "ok"
-        Err _ -> println "err"
+        Ok _ -> Io.println "ok"
+        Err _ -> Io.println "err"

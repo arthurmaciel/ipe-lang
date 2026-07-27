@@ -2,7 +2,7 @@ module Main exposing (main)
 
 import Ipe.Task as Task
 import Ipe.Crypto as Crypto
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 -- Minimal reproduction of the 18-job-queue withErrorReporting pattern:
 -- a polymorphic helper `wrap : String -> Task Error a -> Task Error a`
@@ -33,4 +33,4 @@ main =
         _ =
             Task.run ok
     in
-        println "ok"
+        Io.println "ok"

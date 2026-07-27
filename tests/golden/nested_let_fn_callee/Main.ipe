@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- #151 seal — let-fn captured in a nested anonymous lambda (callee position).
 --
@@ -28,4 +29,4 @@ main =
         result =
             applyInner 10
     in
-    println (String.join ", " (List.map String.fromInt result))
+    Io.println (String.join ", " (List.map String.fromInt result))

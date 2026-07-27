@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Lib1
 import Lib2
 
@@ -55,7 +55,7 @@ main =
                 "SELECT name FROM items ORDER BY name"
                 []
     in
-    println
+    Io.println
         (String.join ","
             (List.map (\row -> Db.getString "name" row) rows)
         )

@@ -1,7 +1,8 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- Backward pipe `<|`: right-associative at precedence 0.
 -- `<|` is looser than `+`, so `1 + 2` groups first.
 main =
-    println <| String.fromInt <| 1 + 2
+    Io.println <| String.fromInt <| 1 + 2

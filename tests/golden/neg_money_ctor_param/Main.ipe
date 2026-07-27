@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- Negative regression: `amount (Money d _) = d` is a refutable param on a
 -- single-constructor union — must still be rejected as IPE-T0015.
@@ -11,4 +12,4 @@ amount : Money -> Int
 amount (Money d _) = d
 
 main =
-    println (String.fromInt (amount (Money 42 "USD")))
+    Io.println (String.fromInt (amount (Money 42 "USD")))

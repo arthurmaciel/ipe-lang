@@ -1,6 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- #56 proof-matrix shape P4: a CLOSED record annotation (no row var) called
@@ -15,4 +15,4 @@ getName rec =
 
 
 main =
-    println (getName { name = "Ada", age = 36 })
+    Io.println (getName { name = "Ada", age = 36 })

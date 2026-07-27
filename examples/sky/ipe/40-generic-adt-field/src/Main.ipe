@@ -14,7 +14,7 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Ipe.String as String
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 type alias Payload a =
     { value : a
@@ -40,6 +40,6 @@ getInt b =
 main =
     let
         _ =
-            println (String.fromInt (getInt (Filled { value = 9, tag = "x" })))
+            Io.println (String.fromInt (getInt (Filled { value = 9, tag = "x" })))
     in
-        println (String.fromInt (getInt Empty))
+        Io.println (String.fromInt (getInt Empty))

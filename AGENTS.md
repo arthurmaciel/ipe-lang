@@ -13,7 +13,7 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 type Msg = Increment | Decrement
 
@@ -24,7 +24,7 @@ update msg count =
         Decrement -> count - 1
 
 main =
-    println (String.fromInt (update Increment 0))
+    Io.println (String.fromInt (update Increment 0))
 ```
 
 `|>` `<|` pipelines | `::` cons | `\x -> x + 1` lambdas | `let…in`
@@ -169,7 +169,7 @@ side effect fires:
 
 ```elm
 let
-    _ = println "step 1"             -- auto-forced
+    _ = Io.println "step 1"          -- auto-forced
     _ = Log.infoWith "saving" [...]  -- auto-forced
 in
     continue
@@ -258,12 +258,13 @@ app code.
 | `Random` | `Ipe.Random` | int, float, range, choice, shuffle, weighted (entropy-backed); seed, seededInt, seededFloat, seededChoice (deterministic) |
 | `Http` | `Ipe.Http` | get, post, request (custom method/headers/body/timeout via `HttpRequest`), defaultRequest/withMethod/withHeader/withTimeout/withBody builders, parseQuery; typed `HttpResponse = { status : Int, body : String, headers : Dict String String }` |
 | `File` | `Ipe.File` | readFile, readFileLimit, readFileBytes, writeFile, append, exists, remove, mkdirAll, readDir, isDir, tempFile, tempDir, copy, rename |
-| `Io` | `Ipe.Io` | readLine, writeStdout, writeStderr |
+| `Io` | `Ipe.Io` | readLine, writeStdout, writeStderr, println, eprintln (println/eprintln write a line + trailing newline to stdout/stderr) |
 | `System` | `Ipe.System` | args, getArg, getenv, getenvOr (bare), getenvInt, getenvBool, setenv, unsetenv, cwd, loadEnv, exit |
 | `Process` | `Ipe.Process` | run (subprocess) |
 | `Db` | `Ipe.Db` | open, connect, close, exec, execRaw, query, insertRow, getById, updateById, deleteById, findOneByField, findManyByField, findByConditions, unsafeFindWhere, queryDecode, withTransaction, migrate (versioned forward-only schema migrations + `_ipe_migrations` + checksum guard), getField, getString, getInt, getBool. **Typed param binding**: `SqlValue` ADT (`SqlString`/`SqlInt`/`SqlFloat`/`SqlBool`/`SqlBytes`/`SqlDecimal`/`SqlTime`/`SqlMoney`/`SqlNull SqlValue`) — mixed-type SQL params as homogeneous `List SqlValue` for `INSERT … VALUES (?, ?, ?)` mixing `String + Maybe Int + Bool`. 8 `fromMaybe*` helpers for nullable columns. `SqlField` (`SetField SqlValue`/`OmitField`) + `Db.updateFields conn table whereCols setFields` for PATCH w/ column-omit; `Db.insertFields conn table fields` = INSERT counterpart (`OmitField` cols drop from SQL so DB applies DEFAULT; all-omit → `INSERT … DEFAULT VALUES`); `Db.insertFieldsReturning conn table fields projection decoder` appends `RETURNING <projection>`, decodes via `Ipe.Db.Decode`. Money serialises lossless as `"ISO_CODE AMOUNT"` TEXT, paired w/ `Db.Decode.money`. `Maybe a` params bind directly (nil/unwrapped). `nullable : Decoder a -> Decoder (Maybe a)`. |
 | `Auth` | `Ipe.Auth` | register, login, setRole (Task) + hashPassword, hashPasswordCost, verifyPassword, passwordStrength, signToken, verifyToken (Result); signTokenWithClaims/verifyTokenWithAlgorithm — typed-builder aliases over `Ipe.Jwt` for fine-grained algorithm+claims control |
-| `Log` | `Ipe.Log` | println, debug, info, warn, error, debugWith, infoWith, warnWith, errorWith |
+| `Log` | `Ipe.Log` | debug, info, warn, error, debugWith, infoWith, warnWith, errorWith — observability only (levelled, timestamped, telemetry-mirrored). For a bare line use `Io.println` / `Io.eprintln`. |
+| `Debug` | `Ipe.Debug` | log : String -> a -> a — DEV-ONLY escape hatch (Elm-style). Prints `"label: value"` to stderr, returns the value unchanged. A production build (`ipe build --optimize`) REJECTS any `Debug.*` use (IPE-L0140). |
 | `Trace` | `Ipe.Trace` | span, event, attr — opt-in app-level tracing spans. Tier-1 spans (HTTP/session/Msg/DB/Auth/Http/File) automatic. |
 | `Server` | `Ipe.Http.Server` | param, queryParam, header, getCookie, static (Layer 3 surface); higher-level `get/post/listen/text/json/html` are kernel-only |
 | `Stream` | `Ipe.Http.Server.Stream` | stream, emit, finish, withContentType — server-side streaming HTTP responses (SSE/LLM token forwarding/chunked downloads). Mirror of `Ipe.Core.Http.Stream`. Sync bridge: `Ipe.Core.Http.Stream.forEachChunk hdl body` drains an upstream stream from inside a plain Ipe.Http.Server handler (relay shape). |
@@ -983,6 +984,8 @@ ipe init [name]                    # new project
 ipe build src/Main.ipe             # compile → out/app
 ipe build src/Main.ipe --target wasm   # browser-WASM project (cdylib + www/ shell)
 ipe run src/Main.ipe               # build + run
+ipe build src/Main.ipe --optimize  # PRODUCTION build; rejects any Debug.* use
+                                   #  (IPE-L0140), like Elm's --optimize
 ipe build|run … --static           # fully-static musl single binary (dlmalloc
                                    #  default; --target <triple> --allocator
                                    #  <auto|system|dlmalloc|talc|mimalloc>

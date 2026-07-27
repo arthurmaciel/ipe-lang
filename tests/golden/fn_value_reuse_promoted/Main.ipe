@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 
 -- #221 fn-value REUSE promotion: a pure fn-typed `let` binding consumed more
@@ -27,4 +28,4 @@ main =
         a = apply double 3
         b = apply double 4
     in
-        println (String.fromInt (a + b + h1 10 + h2 20))
+        Io.println (String.fromInt (a + b + h1 10 + h2 20))
