@@ -5,7 +5,7 @@ import Ipe.Maybe exposing (..)
 import Ipe.Dict as Dict
 
 -- ══════════════════════════════════════════════════════
--- MODEL
+-- MODEL (faithful port of examples/sky/original/13-skyshop State.sky)
 -- ══════════════════════════════════════════════════════
 type alias Model =
     { page : Page
@@ -44,6 +44,7 @@ type alias Model =
     , signOutPending : Bool
     }
 
+
 -- ══════════════════════════════════════════════════════
 -- PAGES
 -- ══════════════════════════════════════════════════════
@@ -64,6 +65,7 @@ type Page
     | PrivacyPolicyPage
     | TermsPage
     | NotFoundPage
+
 
 -- ══════════════════════════════════════════════════════
 -- MESSAGES
@@ -150,6 +152,7 @@ emptyModel =
 -- ══════════════════════════════════════════════════════
 -- CONSTANTS
 -- ══════════════════════════════════════════════════════
+allCategories : List String
 allCategories =
     [ "Accessories"
     , "Bags"
@@ -162,6 +165,7 @@ allCategories =
     ]
 
 
+allCartStates : List String
 allCartStates =
     [ "ongoing"
     , "pending"
@@ -173,5 +177,6 @@ allCartStates =
     ]
 
 
+allCurrencies : List String
 allCurrencies =
     [ "GBP", "HKD", "USD" ]

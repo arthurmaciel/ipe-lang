@@ -88,7 +88,8 @@ the example out of scope. They are listed in `manifest.toml` with `go_ffi = true
 so the sweep knows they exist and does not FAIL LOUD, but never tries to build
 them.
 
-`13-skyshop` has a first-class Ipê-native counterpart at `examples/13-skyshop/`:
-the same storefront rebuilt on the shim-free auto-FFI (real `firestore` /
-`rs-firebase-admin-sdk` / `async-stripe` crates), a behaviour-level port kept as
-an ordinary in-tree example.
+`13-skyshop` has a first-class Ipê-native rebuild on the shim-free auto-FFI (real
+`firestore` / `rs-firebase-admin-sdk` / `async-stripe` crates). Because it is a
+structural rebuild, not a token transform of the upstream, it ships as a
+**whole-port override** — `examples/sky/ipe-overrides/13-skyshop/` becomes the
+`ipe/` port verbatim (see [`ipe-overrides/README.md`](ipe-overrides/README.md)).

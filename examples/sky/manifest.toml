@@ -31,7 +31,9 @@
 #
 # FORMAT: one [[example]] section per Sky-derived example.
 #   name         = upstream directory name
-#   patch        = "rename-map" | "rename-map+ipe-edit"
+#   patch        = "rename-map" | "rename-map+ipe-edit" | "override"
+#                  ("override" = a whole-port rebuild lives in
+#                  examples/sky/ipe-overrides/<name>/; the transform is skipped)
 #   go_ffi       = true if the example imports Go packages (excluded from Rust
 #                  build; checked by is_out_of_scope in lib/examples.sh)
 #   blocked      = OPTIONAL reason string when the example exercises an Ipê
@@ -330,7 +332,7 @@ notes = "imports Fyne.Io.Fyne.V2 — Go GUI FFI; no portable Rust-native GUI equ
 
 [[example]]
 name = "13-skyshop"
-patch = "rename-map"
+patch = "override"
 go_ffi = true
-notes = "sky mirror excluded; native Ipê port at examples/13-skyshop/ (firestore+stripe via Rust-crate FFI) is in build_set but skipped by needs_ffi_install until ipe install cache is populated"
+notes = "upstream is a Go-FFI storefront; the Ipê port is a whole-port override at examples/sky/ipe-overrides/13-skyshop/ (firestore+stripe via Rust-crate FFI), skipped by needs_ffi_install until an ipe install cache is populated"
 

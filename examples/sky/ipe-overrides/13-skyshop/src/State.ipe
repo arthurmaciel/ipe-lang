@@ -5,7 +5,7 @@ import Ipe.Maybe exposing (..)
 import Ipe.Dict as Dict
 
 -- ══════════════════════════════════════════════════════
--- MODEL (faithful port of examples/13-skyshop State.sky)
+-- MODEL (faithful port of examples/sky/original/13-skyshop State.sky)
 -- ══════════════════════════════════════════════════════
 type alias Model =
     { page : Page

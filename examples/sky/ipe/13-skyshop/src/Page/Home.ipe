@@ -4,407 +4,345 @@ import Ipe.Prelude exposing (..)
 import Ipe.Maybe exposing (..)
 import Ipe.List as List
 import Ipe.String as String
-import Ipe.Html exposing (..)
 import Ipe.Html as Html
-import Ipe.Html.Attributes exposing (..)
-import Ipe.Html.Attributes as Attr
-import Ipe.Html.Events exposing (onClick, onInput)
+import Ipe.Ui as Ui
+import Ipe.Ui exposing (Element)
+import Ipe.Ui.Background as Background
+import Ipe.Ui.Border as Border
+import Ipe.Ui.Font as Font
+import Ipe.Ui.Input as Input
+import Ipe.Ui.Region as Region
 import State exposing (..)
 import Ui.Layout as Layout
 import Lib.Db as Db
 import Lib.Money as Money
 import Lib.Translation as Tr
 import Lib.Products as Products
-import Tailwind exposing (..)
-import Tailwind.Responsive as Responsive
 
 
 -- ══════════════════════════════════════════════════════
 -- HOME PAGE
 -- ══════════════════════════════════════════════════════
+viewHome : Model -> Html.Html Msg
 viewHome model =
-    Layout.page
-        model
-        (div
-            []
-            [ viewHero model
-            , viewCategoryBar model
-            , viewFeaturedProducts model
-            ])
+    Ui.layout []
+        (Layout.shell
+            model
+            (Ui.column
+                [ Ui.width Ui.fill, Ui.spacing 32 ]
+                [ hero model
+                , categoryBar model
+                , featuredProducts model
+                ]))
 
 
-viewHero model =
+hero : Model -> Element Msg
+hero model =
     let
         lang = model.lang
     in
-        div
-            [ tw
-                  [ bgGray900
-                  , textWhite
-                  , roundedXl
-                  , p6
-                  , Responsive.md p12
-                  , mb10
-                  , textCenter
-                  ]
-            , style
-                  "background:linear-gradient(135deg,#0f172a 0%,#1e293b 50%,#334155 100%)"
+        Ui.column
+            [ Ui.width Ui.fill
+            , Ui.paddingXY 32 40
+            , Ui.spacing 12
+            , Background.color (Ui.rgb 15 23 42)
+            , Border.rounded 12
             ]
-            [ p
-                  [ tw [ textSm, uppercase, fontBold, textBlue400, mb3 ]
-                  , style "letter-spacing:.1em"
+            [ Ui.el
+                  [ Font.color (Ui.rgb 96 165 250)
+                  , Font.size 12
+                  , Font.bold
                   ]
-                  [ text (Tr.t lang "hero.badge") ]
-            , Html.h1
-                  [ tw
-                        [ text3xl
-                        , Responsive.md text5xl
-                        , fontBold
-                        , textWhite
-                        , mb4
-                        ]
-                  , style "line-height:1.1;letter-spacing:-.025em"
+                  (Ui.text (String.toUpper (Tr.t lang "hero.badge")))
+            , Ui.el
+                  [ Region.heading 1
+                  , Font.color (Ui.rgb 255 255 255)
+                  , Font.size 36
+                  , Font.bold
                   ]
-                  [ text (Tr.t lang "app.name") ]
-            , p
-                  [ tw
-                        [ textBase
-                        , Responsive.md textLg
-                        , textGray400
-                        , mb8
-                        , mxAuto
-                        ]
-                  , style "max-width:480px"
-                  ]
-                  [ text (Tr.t lang "hero.subtitle") ]
-            , div
-                  [ tw [ flex, justifyCenter, gap3 ] ]
-                  [ a
-                        [ href "/products"
-                        , attribute "sky-nav" ""
-                        , tw
-                              [ inlineFlex
-                              , itemsCenter
-                              , gap2
-                              , bgWhite
-                              , textGray900
-                              , px6
-                              , py3
-                              , roundedMd
-                              , fontSemibold
-                              , textSm
-                              , hover bgGray100
-                              ]
-                        ]
-                        [ text (Tr.t lang "hero.cta") ]
-                  ]
+                  (Ui.text (Tr.t lang "app.name"))
+            , Ui.paragraph
+                  [ Font.color (Ui.rgb 156 163 175), Font.size 16 ]
+                  [ Ui.text (Tr.t lang "hero.subtitle") ]
+            , Layout.primaryButton (Navigate ProductsPage) (Tr.t lang "hero.cta")
             ]
 
 
-viewCategoryBar model =
-    div
-        [ tw [ mb8, flex, flexWrap, gap2, justifyCenter ] ]
-        (List.map
-            (\cat ->
-                a
-                    [ href "/products"
-                    , attribute "sky-nav" ""
-                    , onClick (SetCategoryFilter cat)
-                    , tw
-                          [ inlineBlock
-                          , px4
-                          , py2
-                          , roundedFull
-                          , textSm
-                          , fontMedium
-                          , textGray500
-                          , bgGray100
-                          , hover bgGray200
-                          , hover textGray900
-                          ]
-                    ]
-                    [ text (Tr.tCategory model.lang cat) ])
-            (List.take 6 allCategories))
+categoryBar : Model -> Element Msg
+categoryBar model =
+    Ui.wrappedRow
+        [ Ui.spacing 8, Ui.width Ui.fill ]
+        (List.map (categoryChip model) (List.take 6 allCategories))
 
 
-viewFeaturedProducts model =
+categoryChip : Model -> String -> Element Msg
+categoryChip model cat =
+    Ui.button
+        [ Background.color (Ui.rgb 243 244 246)
+        , Background.hoverColor (Ui.rgb 229 231 235)
+        , Font.color Layout.muted
+        , Font.size 14
+        , Font.weight 500
+        , Border.rounded 999
+        , Ui.paddingXY 16 8
+        ]
+        { onPress = Just (SetCategoryFilter cat)
+        , label = Ui.text (Tr.tCategory model.lang cat)
+        }
+
+
+featuredProducts : Model -> Element Msg
+featuredProducts model =
     let
         featured = List.take 8 model.products
     in
-        div
-            []
-            [ div
-                  [ tw [ flex, justifyBetween, itemsCenter, mb6 ] ]
-                  [ Html.h2
-                        [ tw [ text2xl, fontBold, textGray900 ] ]
-                        [ text (Tr.t model.lang "home.featured") ]
-                  , a
-                        [ href "/products"
-                        , attribute "sky-nav" ""
-                        , tw [ textSm, fontSemibold, textBlue600 ]
-                        ]
-                        [ text (Tr.t model.lang "home.viewAll") ]
+        Ui.column
+            [ Ui.width Ui.fill, Ui.spacing 16 ]
+            [ Ui.row
+                  [ Ui.width Ui.fill ]
+                  [ Layout.sectionHeading (Tr.t model.lang "home.featured")
+                  , Ui.el [ Ui.width Ui.fill ] Ui.none
+                  , Ui.button
+                        [ Font.color Layout.brand, Font.size 14, Font.semiBold ]
+                        { onPress = Just (Navigate ProductsPage)
+                        , label = Ui.text (Tr.t model.lang "home.viewAll")
+                        }
                   ]
-            , viewProductGrid model featured
+            , productGrid model featured
             ]
 
 
 -- ══════════════════════════════════════════════════════
 -- PRODUCTS PAGE
 -- ══════════════════════════════════════════════════════
+viewProducts : Model -> Html.Html Msg
 viewProducts model =
-    Layout.page
-        model
-        (div
-            []
-            [ div
-                  [ tw [ mb8 ] ]
-                  [ Html.h1
-                        [ tw [ text3xl, fontBold, textGray900 ] ]
-                        [ text (Tr.t model.lang "nav.products") ]
-                  , p
-                        [ tw [ textGray500, mt1 ] ]
-                        [ text (Tr.t model.lang "hero.browse") ]
-                  ]
-            , viewToolbar model
-            , viewProductGrid model model.products
-            ])
+    Ui.layout []
+        (Layout.shell
+            model
+            (Ui.column
+                [ Ui.width Ui.fill, Ui.spacing 24 ]
+                [ Ui.column
+                      [ Ui.spacing 4 ]
+                      [ Ui.el
+                            [ Region.heading 1
+                            , Font.size 30
+                            , Font.bold
+                            , Font.color Layout.ink
+                            ]
+                            (Ui.text (Tr.t model.lang "nav.products"))
+                      , Ui.el [ Font.color Layout.muted ]
+                            (Ui.text (Tr.t model.lang "hero.browse"))
+                      ]
+                , toolbar model
+                , productGrid model model.products
+                ]))
 
 
-viewToolbar model =
+toolbar : Model -> Element Msg
+toolbar model =
     let
         lang = model.lang
     in
-        div
-            [ tw [ mb8, flex, flexCol, gap4 ] ]
-            [ input
-                  [ type_ "text"
-                  , placeholder (Tr.t lang "product.search")
-                  , value model.search
-                  , onInput SetSearch
-                  , Layout.formInput
-                  ]
-            , div
-                  [ tw [ flex, flexWrap, gap2 ] ]
-                  ([ filterBtn
-                        "all"
-                        (Tr.t lang "product.all")
-                        model.categoryFilter
-                  ]
-                      ++ List.map
+        Ui.column
+            [ Ui.width Ui.fill, Ui.spacing 16 ]
+            [ Input.text
+                  [ Ui.width Ui.fill ]
+                  { onChange = SetSearch
+                  , text = model.search
+                  , placeholder =
+                        Just (Input.placeholder [] (Ui.text (Tr.t lang "product.search")))
+                  , label = Input.labelHidden "search"
+                  }
+            , Ui.wrappedRow
+                  [ Ui.spacing 8 ]
+                  (filterChip model "all" (Tr.t lang "product.all")
+                      :: List.map
                              (\cat ->
-                                 filterBtn
-                                     cat
-                                     (Tr.tCategory lang cat)
-                                     model.categoryFilter)
+                                 filterChip model cat (Tr.tCategory lang cat))
                              allCategories)
-            , div
-                  [ tw [ flex, gap2, itemsCenter ] ]
-                  [ span
-                        [ tw [ textSm, textGray500, mr2 ] ]
-                        [ text (Tr.t lang "product.sortBy") ]
-                  , sortBtn
-                        "newest"
-                        (Tr.t lang "product.sort.newest")
-                        model.sortBy
-                  , sortBtn
-                        "price"
-                        (Tr.t lang "product.sort.price")
-                        model.sortBy
-                  , sortBtn
-                        "title"
-                        (Tr.t lang "product.sort.title")
-                        model.sortBy
-                  , button
-                        [ onClick ToggleSortDir, Layout.qtyBtn ]
-                        [ text
-                              (if model.sortDir == "asc" then
-                                  "↑"
-
-                              else
-                                  "↓")
+            , Ui.row
+                  [ Ui.spacing 8 ]
+                  [ Ui.el [ Font.color Layout.muted, Font.size 14 ]
+                        (Ui.text (Tr.t lang "product.sortBy"))
+                  , sortChip model "newest" (Tr.t lang "product.sort.newest")
+                  , sortChip model "price" (Tr.t lang "product.sort.price")
+                  , sortChip model "title" (Tr.t lang "product.sort.title")
+                  , Ui.button
+                        [ Border.width 1
+                        , Border.color Layout.hairline
+                        , Border.rounded 6
+                        , Ui.paddingXY 10 6
+                        , Font.color Layout.ink
                         ]
+                        { onPress = Just ToggleSortDir
+                        , label =
+                              Ui.text
+                                  (if model.sortDir == "asc" then
+                                      "↑"
+
+                                  else
+                                      "↓")
+                        }
                   ]
             ]
 
 
-filterBtn filterValue label activeFilter =
-    button
-        [ onClick (SetCategoryFilter filterValue)
-        , if activeFilter == filterValue then
-              tw
-                  [ textSm
-                  , px4
-                  , py1
-                  , roundedFull
-                  , fontSemibold
-                  , bgBlue600
-                  , textWhite
-                  , border
-                  , borderBlue600
-                  ]
+filterChip : Model -> String -> String -> Element Msg
+filterChip model value label =
+    let
+        active = model.categoryFilter == value
+    in
+        Ui.button
+            [ Background.color
+                  (if active then
+                      Layout.brand
 
-          else
-              tw
-                  [ textSm
-                  , px4
-                  , py1
-                  , roundedFull
-                  , fontMedium
-                  , bgWhite
-                  , textGray500
-                  , border
-                  , borderGray200
-                  , hover borderGray400
-                  ]
-        ]
-        [ text label ]
+                  else
+                      Layout.cardBg)
+            , Font.color
+                  (if active then
+                      Ui.rgb 255 255 255
+
+                  else
+                      Layout.muted)
+            , Border.width 1
+            , Border.color
+                  (if active then
+                      Layout.brand
+
+                  else
+                      Layout.hairline)
+            , Font.size 14
+            , Border.rounded 999
+            , Ui.paddingXY 16 6
+            ]
+            { onPress = Just (SetCategoryFilter value), label = Ui.text label }
 
 
-sortBtn sortValue label activeSort =
-    button
-        [ onClick (SetSortBy sortValue)
-        , if activeSort == sortValue then
-              tw
-                  [ textSm
-                  , px3
-                  , py1
-                  , roundedMd
-                  , fontSemibold
-                  , bgGray900
-                  , textWhite
-                  , border
-                  , borderGray900
-                  ]
+sortChip : Model -> String -> String -> Element Msg
+sortChip model value label =
+    let
+        active = model.sortBy == value
+    in
+        Ui.button
+            [ Background.color
+                  (if active then
+                      Layout.ink
 
-          else
-              tw
-                  [ textSm
-                  , px3
-                  , py1
-                  , roundedMd
-                  , fontMedium
-                  , bgWhite
-                  , textGray500
-                  , border
-                  , borderGray200
-                  , hover borderGray400
-                  ]
-        ]
-        [ text label ]
+                  else
+                      Layout.cardBg)
+            , Font.color
+                  (if active then
+                      Ui.rgb 255 255 255
+
+                  else
+                      Layout.muted)
+            , Border.width 1
+            , Border.color
+                  (if active then
+                      Layout.ink
+
+                  else
+                      Layout.hairline)
+            , Font.size 14
+            , Border.rounded 6
+            , Ui.paddingXY 12 6
+            ]
+            { onPress = Just (SetSortBy value), label = Ui.text label }
 
 
 -- ══════════════════════════════════════════════════════
 -- PRODUCT GRID
 -- ══════════════════════════════════════════════════════
-viewProductGrid model products =
+productGrid : Model -> List (Dict String String) -> Element Msg
+productGrid model products =
     if List.isEmpty products then
-        div
-            [ tw [ textCenter, py16 ] ]
-            [ div [ Layout.emptyIcon ] [ text "~" ]
-            , p
-                  [ tw [ textGray500 ] ]
-                  [ text (Tr.t model.lang "product.noResults") ]
+        Ui.el
+            [ Ui.width Ui.fill
+            , Ui.paddingXY 24 48
+            , Font.color Layout.muted
+            , Font.alignCenter
             ]
+            (Ui.text (Tr.t model.lang "product.noResults"))
 
     else
-        div
-            [ tw [ grid, gap6 ]
-            , style "grid-template-columns:repeat(auto-fill,minmax(260px,1fr))"
-            ]
-            (List.map (viewProductCard model) products)
+        Ui.wrappedRow
+            [ Ui.spacing 16, Ui.width Ui.fill ]
+            (List.map (productCard model) products)
 
 
-viewProductCard model product =
+productCard : Model -> Dict String String -> Element Msg
+productCard model product =
     let
         productId = Db.getField "id" product
         title = Db.getField "title" product
         category = Db.getField "category" product
         pricing = Money.formatPriceFromRow product
         stock = Db.getInt "stock" product
-        images = Products.listProductImages productId
-        firstImage =
-            case List.head images of
-
-                Just img ->
-                    Db.getField "data" img
-
-                Nothing ->
-                    ""
     in
-        a
-            [ href ("/product/" ++ productId)
-            , attribute "sky-nav" ""
-            , tw
-                  [ bgWhite
-                  , roundedLg
-                  , overflowHidden
-                  , border
-                  , borderGray200
-                  , block
-                  , group
-                  ]
-            , class "product-card"
+        Ui.column
+            [ Ui.width (Ui.px 260)
+            , Ui.spacing 8
+            , Background.color Layout.cardBg
+            , Border.rounded 8
+            , Border.width 1
+            , Border.color Layout.hairline
+            , Ui.padding 16
             ]
-            [ div
-                  [ style "aspect-ratio:4/3;overflow:hidden" ]
-                  [ if firstImage != "" then
-                        img [ src firstImage, alt title, Layout.objectCover_ ]
-
-                    else
-                        div
-                            [ Layout.imgPlaceholder, style "aspect-ratio:4/3" ]
-                            [ text "No image" ]
+            [ Ui.el
+                  [ Ui.width Ui.fill
+                  , Ui.height (Ui.px 140)
+                  , Background.color (Ui.rgb 243 244 246)
+                  , Border.rounded 6
+                  , Font.alignCenter
+                  , Font.color Layout.muted
+                  , Font.size 12
                   ]
-            , div
-                  [ tw [ p4 ] ]
-                  [ div
-                        [ tw [ flex, justifyBetween, itemsCenter, mb2 ] ]
-                        [ span
-                              [ tw
-                                    [ textXs
-                                    , fontSemibold
-                                    , uppercase
-                                    , textBlue500
-                                    ]
-                              , style "letter-spacing:.1em"
-                              ]
-                              [ text (Tr.tCategory model.lang category) ]
-                        , viewStockDot stock
-                        ]
-                  , Html.h3
-                        [ tw [ fontSemibold, textGray900, mb2 ] ]
-                        [ text title ]
-                  , viewPrice pricing
+                  (Ui.text category)
+            , Ui.row
+                  [ Ui.width Ui.fill ]
+                  [ Ui.el
+                        [ Font.color (Ui.rgb 59 130 246), Font.size 11, Font.bold ]
+                        (Ui.text (String.toUpper (Tr.tCategory model.lang category)))
+                  , Ui.el [ Ui.width Ui.fill ] Ui.none
+                  , stockDot stock
                   ]
+            , Ui.el
+                  [ Font.color Layout.ink, Font.size 15, Font.semiBold ]
+                  (Ui.text title)
+            , priceView pricing
+            , Layout.primaryButton (Navigate (ProductPage productId)) (Tr.t model.lang "product.addToCart")
             ]
 
 
-viewPrice pricing =
+priceView : Money.Price -> Element Msg
+priceView pricing =
     if pricing.hasDiscount then
-        div
-            [ tw [ flex, gap2, itemsCenter ] ]
-            [ span
-                  [ tw [ fontBold, textLg, textRed600 ] ]
-                  [ text pricing.discounted ]
-            , span
-                  [ tw [ textSm, textGray400 ], class "line-through" ]
-                  [ text pricing.original ]
+        Ui.row
+            [ Ui.spacing 8 ]
+            [ Ui.el [ Font.color (Ui.rgb 220 38 38), Font.size 18, Font.bold ]
+                (Ui.text pricing.discounted)
+            , Ui.el [ Font.color Layout.muted, Font.size 14 ]
+                (Ui.text pricing.original)
             ]
 
     else
-        div
-            []
-            [ span
-                  [ tw [ fontBold, textLg, textGray900 ] ]
-                  [ text pricing.original ]
-            ]
+        Ui.el [ Font.color Layout.ink, Font.size 18, Font.bold ]
+            (Ui.text pricing.original)
 
 
-viewStockDot : Int -> Html Msg
-viewStockDot stock =
-    if stock == 0 then
-        span [ tw [ w2, Layout.h2_, roundedFull, bgRed500, inlineBlock ] ] []
+stockDot : Int -> Element Msg
+stockDot stock =
+    Ui.el
+        [ Ui.width (Ui.px 8)
+        , Ui.height (Ui.px 8)
+        , Border.rounded 999
+        , Background.color
+              (if stock == 0 then
+                  Layout.danger
 
-    else
-        span [ tw [ w2, Layout.h2_, roundedFull, bgGreen500, inlineBlock ] ] []
+              else
+                  Layout.success)
+        ]
+        Ui.none

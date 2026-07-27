@@ -19,15 +19,24 @@ import Ipe.Dict as Dict
 import Ipe.String as String
 import Ipe.Log exposing (println)
 import Ipe.Error as Error exposing (Error(..))
-import Github.Com.Google.Uuid as Uuid
+import Ipe.Task as Task
+import Ipe.Uuid as Uuid
 import Lib.Db as Db
+
+
+-- Entropy is an effect: `Uuid.v4 : () -> Task Error String`; fold it
+-- synchronously like the other environment reads in this app.
+newId : String
+newId =
+    Result.withDefault "" (Task.run (Uuid.v4 ()))
 
 
 listProducts : List (Dict String String)
 listProducts =
-    Db.queryWhereOrLog "Products.listProducts" "products" "published" "==" True
+    Db.queryWhereOrLog "Products.listProducts" "products" "published" "==" "true"
 
 
+listAllProducts : List (Dict String String)
 listAllProducts =
     let
         result = Db.queryDocs "products"
@@ -41,15 +50,11 @@ listAllProducts =
                             ++ " products")
 
                 Err e ->
-                    println
-                        ("[PRODUCTS] ERROR loading products: " ++ errorToString e)
+                    println ("[PRODUCTS] ERROR loading products: " ++ Error.toString e)
     in
         Result.withDefault [] result
 
 
--- getProduct returns Result Error (Maybe Product). update converts
--- Err to a notification (db down → "We can't load products right now,
--- try again"); Ok Nothing → "Product not found"; Ok (Just p) → render.
 getProduct : String -> Result Error (Maybe (Dict String String))
 getProduct productId =
     Db.getDoc "products" productId
@@ -57,15 +62,11 @@ getProduct productId =
 
 searchProducts : String -> String -> String -> String -> List (Dict String String)
 searchProducts query category sortBy sortDir =
-    let
-        allProducts = listProducts
-        filtered =
-            allProducts |> filterByCategory category |> filterBySearch query
-                |> sortProducts sortBy sortDir
-    in
-        filtered
+    listProducts |> filterByCategory category |> filterBySearch query
+        |> sortProducts sortBy sortDir
 
 
+filterByCategory : String -> List (Dict String String) -> List (Dict String String)
 filterByCategory category products =
     if category == "all" || category == "" then
         products
@@ -74,6 +75,7 @@ filterByCategory category products =
         List.filter (\p -> Db.getField "category" p == category) products
 
 
+filterBySearch : String -> List (Dict String String) -> List (Dict String String)
 filterBySearch query products =
     if query == "" then
         products
@@ -93,18 +95,19 @@ filterBySearch query products =
                 products
 
 
+-- Original used List.sortBy, which is no longer in the Sky.Core.List surface
+-- (Rust-backend kernel gap). Faithful behaviour via a pure-Sky insertion sort
+-- on a numeric key — sorts by effective price; title sort is a stable no-op
+-- (matches the original, which sorted title by a constant key).
+sortProducts : String -> String -> List (Dict String String) -> List (Dict String String)
 sortProducts sortBy sortDir products =
     let
         sorted =
             if sortBy == "price" then
-                List.sortBy
+                insertionSortByKey
                     (\p ->
-                        Db.getInt "price_amount" p
-                            - Db.getInt "price_discount" p)
+                        Db.getInt "price_amount" p - Db.getInt "price_discount" p)
                     products
-
-            else if sortBy == "title" then
-                List.sortBy (\_ -> 0) products
 
             else
                 products
@@ -116,9 +119,30 @@ sortProducts sortBy sortDir products =
             sorted
 
 
+-- Pure-Sky stable insertion sort keyed by an Int extractor.
+insertionSortByKey : (Dict String String -> Int) -> List (Dict String String) -> List (Dict String String)
+insertionSortByKey keyOf items =
+    List.foldl (\item acc -> insertByKey keyOf item acc) [] items
+
+
+insertByKey keyOf item sortedAcc =
+    case sortedAcc of
+
+        [] ->
+            [item]
+
+        x :: rest ->
+            if keyOf item <= keyOf x then
+                item :: sortedAcc
+
+            else
+                x :: insertByKey keyOf item rest
+
+
+createProduct : String -> String -> String -> Int -> String -> Int -> Int -> Bool -> Result Error String
 createProduct title summary category priceAmount priceCurrency priceDiscount stock published =
     let
-        productId = Result.withDefault "" (Uuid.newString ())
+        productId = newId
         productData =
             Dict.fromList
                 [ ( "id", productId )
@@ -146,6 +170,7 @@ createProduct title summary category priceAmount priceCurrency priceDiscount sto
                 Err e
 
 
+updateProduct : String -> String -> String -> String -> Int -> String -> Int -> Int -> Bool -> Result Error String
 updateProduct productId title summary category priceAmount priceCurrency priceDiscount stock published =
     let
         productData =
@@ -174,6 +199,7 @@ updateProduct productId title summary category priceAmount priceCurrency priceDi
                 Err e
 
 
+deleteProduct : String -> Result Error ()
 deleteProduct productId =
     let
         images = listProductImages productId
@@ -213,9 +239,10 @@ listProductImages productId =
         productId
 
 
+addProductImage : String -> String -> Result Error String
 addProductImage productId imageData =
     let
-        imageId = Result.withDefault "" (Uuid.newString ())
+        imageId = newId
         existingImages = listProductImages productId
         nextPosition = String.fromInt (List.length existingImages)
         imageDoc =
@@ -239,6 +266,7 @@ addProductImage productId imageData =
                 Err e
 
 
+deleteProductImage : String -> Result Error ()
 deleteProductImage imageId =
     let
         result = Db.deleteDoc "product_images" imageId
