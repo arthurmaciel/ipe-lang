@@ -3,7 +3,7 @@ module Main exposing (main)
 import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.List as List
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- Non-alphabetical declared order, MIXED types: a mis-order would be a type
@@ -59,10 +59,10 @@ sumValues =
 
 main =
     let
-        _ = println (String.fromInt row.zebra ++ "/" ++ row.apple)
-        _ = println (String.fromInt pair.first ++ "," ++ String.fromInt pair.second)
-        _ = println (String.fromInt (mkPair 4).second)
-        _ = println (String.fromInt boxed.value ++ boxed.tag)
-        _ = println (String.fromInt sumValues)
+        _ = Io.println (String.fromInt row.zebra ++ "/" ++ row.apple)
+        _ = Io.println (String.fromInt pair.first ++ "," ++ String.fromInt pair.second)
+        _ = Io.println (String.fromInt (mkPair 4).second)
+        _ = Io.println (String.fromInt boxed.value ++ boxed.tag)
+        _ = Io.println (String.fromInt sumValues)
     in
-    println "ok"
+    Io.println "ok"

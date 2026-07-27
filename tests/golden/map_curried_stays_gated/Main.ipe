@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 -- #90 T3 (5th attempt, generalized): `Maybe.map` with a CURRIED callback —
 -- the callback's result `b` instantiates to a residual arrow, but the
@@ -15,5 +15,5 @@ add a b =
 
 main =
     case Maybe.map add (Just 1) of
-        Just g -> println (String.fromInt (g 2))
-        Nothing -> println "none"
+        Just g -> Io.println (String.fromInt (g 2))
+        Nothing -> Io.println "none"

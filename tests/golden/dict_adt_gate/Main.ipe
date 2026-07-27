@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Dict as Dict
+import Ipe.Io as Io
 
 
 type Color
@@ -9,4 +10,4 @@ type Color
 
 
 main =
-    println (String.fromInt (Dict.size (Dict.insert Red 1 Dict.empty)))
+    Io.println (String.fromInt (Dict.size (Dict.insert Red 1 Dict.empty)))

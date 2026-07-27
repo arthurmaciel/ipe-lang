@@ -139,7 +139,6 @@ pub struct StdlibDecl {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum StdlibKernel {
     // ── Log ─────────────────────────────────────────────────────────────────
-    LogPrintln,
     LogInfo,
     LogDebug,
     LogWarn,
@@ -607,6 +606,15 @@ pub enum StdlibKernel {
     IoReadLine,
     IoWriteStdout,
     IoWriteStderr,
+    /// `Io.println : String -> Task Error ()` — write message + newline to stdout.
+    IoPrintln,
+    /// `Io.eprintln : String -> Task Error ()` — write message + newline to stderr.
+    IoEprintln,
+    // ── Debug (development-only) ──────────────────────────────────────────────
+    /// `Debug.log : String -> a -> a` — print `"label: value"` to stderr, return
+    /// the value unchanged. The one deliberate impure escape hatch; a production
+    /// build (`ipe build --optimize`) rejects any use (IPE-L0140).
+    DebugLog,
     // ── Time (non-TEA) ──────────────────────────────────────────────────────
     TimeNow,
     TimeSleep,
@@ -1688,7 +1696,6 @@ impl StdlibKernel {
             // unqualified name; it is NOT in the canon `QUALIFIERS` table.
             // The tripwire test skips it because "Log" is absent from
             // `env.qual_vars`.
-            Self::LogPrintln => d("Log", "println", 1, Pure, "log_println"),
             Self::LogInfo => d("Log", "info", 1, Pure, "log_info"),
             Self::LogDebug => d("Log", "debug", 1, Pure, "log_debug"),
             Self::LogWarn => d("Log", "warn", 1, Pure, "log_warn"),
@@ -2179,6 +2186,9 @@ impl StdlibKernel {
             Self::IoReadLine => d("Io", "readLine", 1, Pure, "io_read_line"),
             Self::IoWriteStdout => d("Io", "writeStdout", 1, Pure, "io_write_stdout"),
             Self::IoWriteStderr => d("Io", "writeStderr", 1, Pure, "io_write_stderr"),
+            Self::IoPrintln => d("Io", "println", 1, Pure, "io_println"),
+            Self::IoEprintln => d("Io", "eprintln", 1, Pure, "io_eprintln"),
+            Self::DebugLog => d("Debug", "log", 2, Pure, "debug_log"),
             // ── Time (non-TEA) ──────────────────────────────────────────────
             Self::TimeNow => d("Time", "now", 1, Pure, "time_now"),
             Self::TimeSleep => d("Time", "sleep", 1, Pure, "time_sleep"),
@@ -3123,7 +3133,6 @@ impl StdlibKernel {
     /// entries.
     pub const ALL: &'static [Self] = &[
         // Log
-        Self::LogPrintln,
         Self::LogInfo,
         Self::LogDebug,
         Self::LogWarn,
@@ -3503,6 +3512,10 @@ impl StdlibKernel {
         Self::IoReadLine,
         Self::IoWriteStdout,
         Self::IoWriteStderr,
+        Self::IoPrintln,
+        Self::IoEprintln,
+        // Debug (development-only)
+        Self::DebugLog,
         // Time (non-TEA)
         Self::TimeNow,
         Self::TimeSleep,
@@ -4450,8 +4463,7 @@ impl StdlibKernel {
             | Self::RandomInt
             | Self::RandomFloat
             | Self::RandomChoice => Some(Capability::Random),
-            Self::LogPrintln
-            | Self::LogInfo
+            Self::LogInfo
             | Self::LogDebug
             | Self::LogWarn
             | Self::LogError
@@ -4459,6 +4471,7 @@ impl StdlibKernel {
             | Self::LogDebugWith
             | Self::LogWarnWith
             | Self::LogErrorWith
+            | Self::DebugLog
             | Self::StringFromInt
             | Self::StringFromFloat
             | Self::StringLength
@@ -4801,6 +4814,8 @@ impl StdlibKernel {
             | Self::IoReadLine
             | Self::IoWriteStdout
             | Self::IoWriteStderr
+            | Self::IoPrintln
+            | Self::IoEprintln
             | Self::TimeIsLeapYear
             | Self::TimeDaysInMonth
             | Self::SystemExit
@@ -5285,6 +5300,15 @@ impl StdlibKernel {
     }
 
     /// `true` when this variant belongs to the TEA (`Cmd` / `Sub` /
+    /// A development-only escape hatch (the `Ipe.Debug` family). Rejected in a
+    /// PRODUCTION build (`ipe build --optimize`, IPE-L0140) rather than
+    /// silently stripped or shipped. The single SSOT for "which kernels are
+    /// dev-only" — the lowerer's usage scan and every gate consult this.
+    #[must_use]
+    pub const fn is_dev_only(self) -> bool {
+        matches!(self, Self::DebugLog)
+    }
+
     /// `Time.every`) subsystem, including reserved pub/sub variants.
     #[must_use]
     pub const fn is_tea(self) -> bool {
@@ -6429,7 +6453,9 @@ mod tests {
         );
         assert_eq!(StdlibKernel::UuidV4.capability(), Some(Capability::Random));
         assert_eq!(StdlibKernel::StringToUpper.capability(), None);
-        assert_eq!(StdlibKernel::LogPrintln.capability(), None);
+        assert_eq!(StdlibKernel::LogInfo.capability(), None);
+        assert_eq!(StdlibKernel::IoPrintln.capability(), None);
+        assert_eq!(StdlibKernel::DebugLog.capability(), None);
         // `Env.public` reads a build-time constant, not the live environment.
         assert_eq!(StdlibKernel::EnvPublic.capability(), None);
     }
@@ -6484,7 +6510,6 @@ mod tests {
             StdlibKernel::CmdNone,
             StdlibKernel::CmdPerform,
             StdlibKernel::SubNone,
-            StdlibKernel::LogPrintln,
             StdlibKernel::LogInfo,
             StdlibKernel::LogErrorWith,
             StdlibKernel::RandomInt,

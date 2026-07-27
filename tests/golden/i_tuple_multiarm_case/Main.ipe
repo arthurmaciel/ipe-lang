@@ -2,7 +2,7 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Ipe.List as List
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- A MULTI-arm `case` on a LITERAL tuple whose columns are cons patterns plus a
@@ -40,4 +40,4 @@ main =
         summed = List.length (zipSum [1, 2, 3] [10, 20, 30] [])
         c = classify True False
     in
-        println (String.fromInt (summed + c))
+        Io.println (String.fromInt (summed + c))

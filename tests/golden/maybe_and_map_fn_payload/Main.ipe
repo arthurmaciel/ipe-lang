@@ -1,7 +1,8 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- #90 Stage 1: `Just f` holding a function used to trip IPE-L0114
 -- unconditionally, making `Maybe.andMap` unusable.
 main =
-    println (String.fromInt (Maybe.withDefault 0 (Just (\x -> x * 2) |> Maybe.andMap (Just 21))))
+    Io.println (String.fromInt (Maybe.withDefault 0 (Just (\x -> x * 2) |> Maybe.andMap (Just 21))))

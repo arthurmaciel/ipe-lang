@@ -13,7 +13,7 @@ import Ipe.Prelude exposing (..)
 import Ipe.Maybe exposing (..)
 import Ipe.List as List
 import Ipe.String as String
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Ipe.Crypto as Crypto
 import Lib.Db as Db
 import Ipe.Error as Error exposing (Error)
@@ -31,7 +31,7 @@ createIdea title description category authorId =
             Ok _ ->
                 let
                     _ =
-                        println
+                        Io.println
                             ("[IDEA] Created: " ++ title ++ " by " ++ authorId)
                 in
                     Ok id
@@ -124,7 +124,7 @@ toggleVote ideaId userId =
                         Ok _ ->
                             let
                                 _ =
-                                    println
+                                    Io.println
                                         ("[VOTE] Removed: " ++ userId ++ " on "
                                             ++ ideaId)
                             in
@@ -148,7 +148,7 @@ toggleVote ideaId userId =
                             Ok _ ->
                                 let
                                     _ =
-                                        println
+                                        Io.println
                                             ("[VOTE] Added: " ++ userId ++ " on "
                                                 ++ ideaId)
                                 in
@@ -167,7 +167,7 @@ hasVoted ideaId userId =
         Err e ->
             let
                 _ =
-                    println ("[DB ERROR] Ideas.hasVoted: " ++ Error.toString e)
+                    Io.println ("[DB ERROR] Ideas.hasVoted: " ++ Error.toString e)
             in
                 False
 
@@ -191,7 +191,7 @@ getVoteCount ideaId =
         Err e ->
             let
                 _ =
-                    println
+                    Io.println
                         ("[DB ERROR] Ideas.getVoteCount: " ++ Error.toString e)
             in
                 "0"
@@ -218,7 +218,7 @@ updateStatus ideaId newStatus =
         Ok _ ->
             let
                 _ =
-                    println
+                    Io.println
                         ("[IDEA] Status changed: " ++ ideaId ++ " -> "
                             ++ newStatus)
             in

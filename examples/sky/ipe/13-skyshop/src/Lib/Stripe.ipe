@@ -15,7 +15,7 @@ import Ipe.Task as Task
 import Ipe.List as List
 import Ipe.Dict as Dict
 import Ipe.String as String
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Ipe.System as System
 import Lib.Db as Db
 import Ipe.Error as Error exposing (Error(..), ErrorKind(..))
@@ -185,7 +185,7 @@ createCheckoutSession cartId items userId userName userEmail remarks =
         successUrl = domainUrl () ++ "/order/" ++ cartId ++ "/success"
         cancelUrl = domainUrl () ++ "/cart"
         _ =
-            println
+            Io.println
                 ("[STRIPE] Creating checkout session for cart: " ++ cartId)
     in
         buildLineItems items
@@ -303,7 +303,7 @@ paymentStatusFromSession cartId session =
         if status == "complete" && paymentStatus == "paid" then
             let
                 _ =
-                    println
+                    Io.println
                         ("[STRIPE] Payment verified for cart: " ++ cartId)
             in
                 Ok
@@ -344,7 +344,7 @@ deductStock orderId =
             else
                 orderItems
         _ = List.map deductItemStock items
-        _ = println ("[STOCK] Deducted for order: " ++ orderId)
+        _ = Io.println ("[STOCK] Deducted for order: " ++ orderId)
     in
         ()
 

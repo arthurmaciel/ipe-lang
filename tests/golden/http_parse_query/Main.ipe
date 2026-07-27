@@ -11,6 +11,7 @@ module Main exposing (main)
 --   "x" → absent       (key not present)
 import Ipe.Http as Http
 import Ipe.Dict as Dict
+import Ipe.Io as Io
 
 
 main =
@@ -21,4 +22,4 @@ main =
         cVal = Maybe.withDefault "MISSING" (Dict.get "c" parsed)
         xVal = Maybe.withDefault "absent" (Dict.get "x" parsed)
     in
-    println (String.join "\n" [ aVal, bVal, cVal, xVal ])
+    Io.println (String.join "\n" [ aVal, bVal, cVal, xVal ])

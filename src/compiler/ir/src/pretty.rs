@@ -347,7 +347,6 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::CharIsAlphaNum => "Char.isAlphaNum",
         KernelFn::CharIsHexDigit => "Char.isHexDigit",
         KernelFn::CharIsOctDigit => "Char.isOctDigit",
-        KernelFn::LogPrintln => "Log.println",
         KernelFn::LogInfo => "Log.info",
         KernelFn::LogDebug => "Log.debug",
         KernelFn::LogWarn => "Log.warn",
@@ -650,6 +649,10 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::IoReadLine => "Io.readLine",
         KernelFn::IoWriteStdout => "Io.writeStdout",
         KernelFn::IoWriteStderr => "Io.writeStderr",
+        KernelFn::IoPrintln => "Io.println",
+        KernelFn::IoEprintln => "Io.eprintln",
+        // ── Debug kernel (dev-only) ─────────────────────────────────────
+        KernelFn::DebugLog => "Debug.log",
         // ── Time kernels ────────────────────────────────────────────────
         KernelFn::TimeNow => "Time.now",
         KernelFn::TimeSleep => "Time.sleep",
@@ -2026,7 +2029,7 @@ mod tests {
             params: vec![],
             ret: IrType::Task(Box::new(IrType::Unit)),
             body: Expr::Call {
-                callee: Callee::Kernel(KernelFn::LogPrintln),
+                callee: Callee::Kernel(KernelFn::IoPrintln),
                 args: vec![Expr::Call {
                     callee: Callee::Kernel(KernelFn::StringFromInt),
                     args: vec![Expr::Int(1)],
@@ -2120,6 +2123,7 @@ mod tests {
                 uses_websocket: false,
                 uses_email: false,
                 uses_env_public: false,
+                uses_debug: false,
                 uses_ffi: false,
             }],
         })
@@ -2225,6 +2229,7 @@ program
                 uses_websocket: false,
                 uses_email: false,
                 uses_env_public: false,
+                uses_debug: false,
                 uses_ffi: false,
             }],
         };
@@ -2292,6 +2297,7 @@ program
                 uses_websocket: false,
                 uses_email: false,
                 uses_env_public: false,
+                uses_debug: false,
                 uses_ffi: false,
             }],
         };
@@ -2362,6 +2368,7 @@ program
                 uses_websocket: false,
                 uses_email: false,
                 uses_env_public: false,
+                uses_debug: false,
                 uses_ffi: false,
             }],
         };
@@ -2417,6 +2424,7 @@ program
                 uses_websocket: false,
                 uses_email: false,
                 uses_env_public: false,
+                uses_debug: false,
                 uses_ffi: false,
             }],
         };
@@ -2481,6 +2489,7 @@ program
                 uses_websocket: false,
                 uses_email: false,
                 uses_env_public: false,
+                uses_debug: false,
                 uses_ffi: false,
             }],
         };
@@ -2537,6 +2546,7 @@ program
                 uses_websocket: false,
                 uses_email: false,
                 uses_env_public: false,
+                uses_debug: false,
                 uses_ffi: false,
             }],
         };
@@ -2635,6 +2645,7 @@ program
                 uses_websocket: false,
                 uses_email: false,
                 uses_env_public: false,
+                uses_debug: false,
                 uses_ffi: false,
             }],
         };
@@ -2733,6 +2744,7 @@ program
                 uses_websocket: false,
                 uses_email: false,
                 uses_env_public: false,
+                uses_debug: false,
                 uses_ffi: false,
             }],
         };
@@ -2776,6 +2788,7 @@ program
                 uses_websocket: false,
                 uses_email: false,
                 uses_env_public: false,
+                uses_debug: false,
                 uses_ffi: false,
             }],
         };
@@ -2823,6 +2836,7 @@ program
                 uses_email: false,
                 uses_ffi: false,
                 uses_env_public: false,
+                uses_debug: false,
             }],
         })
     }

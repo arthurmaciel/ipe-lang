@@ -7,6 +7,7 @@ module Main exposing (main)
 -- unbounded `singleton_set::<T>` that `cargo` cannot build.
 
 import Ipe.Set as Set
+import Ipe.Io as Io
 
 
 type Color
@@ -24,4 +25,4 @@ main =
         _ =
             singletonSet Red
     in
-    println (String.fromInt 0)
+    Io.println (String.fromInt 0)

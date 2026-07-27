@@ -2,7 +2,7 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Lib exposing (am2)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 add3 : Int -> Int -> Int -> Int
 add3 a b c =
@@ -10,5 +10,5 @@ add3 a b c =
 
 main =
     case am2 (Ok 1) (Ok add3) of
-        Ok _ -> println "ok"
-        Err _ -> println "err"
+        Ok _ -> Io.println "ok"
+        Err _ -> Io.println "err"

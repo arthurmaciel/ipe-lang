@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Set as Set
+import Ipe.Io as Io
 
 
 addTo : a -> Set a -> Set a
@@ -9,4 +10,4 @@ addTo x s =
 
 
 main =
-    println (String.fromInt (Set.size (addTo 4 (Set.fromList [ 1, 2, 3 ]))))
+    Io.println (String.fromInt (Set.size (addTo 4 (Set.fromList [ 1, 2, 3 ]))))

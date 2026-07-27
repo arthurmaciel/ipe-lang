@@ -4,13 +4,13 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Ipe.String as String
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Zipper exposing (Zipper)
 
 
 main =
     let
         z = Zipper.singleton 42
-        _ = println (String.fromInt (Zipper.current z))
+        _ = Io.println (String.fromInt (Zipper.current z))
     in
         ()

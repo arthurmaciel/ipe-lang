@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Dep exposing (composed)
+import Ipe.Io as Io
 
 
 -- `main`'s body is byte-sized so that (in Main's own byte-namespace) it
@@ -15,6 +16,6 @@ import Dep exposing (composed)
 -- pad line to position the body inside the collision window
 -- pad line to position the body inside the collision window
 main =
-    println
+    Io.println
         (String.fromInt
             (0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0))

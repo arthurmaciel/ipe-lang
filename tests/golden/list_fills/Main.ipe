@@ -3,6 +3,7 @@ module Main exposing (main)
 import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.Maybe as Maybe
+import Ipe.Io as Io
 
 
 -- Descending Order comparator for List.sortWith.
@@ -69,4 +70,4 @@ main =
         nums =
             [ total, prod, hi, lo, one, rep, gaps, big, keys, vals, sortedHead, descHead, map2Sum, map3Sum ]
     in
-    println (String.join " " (List.map String.fromInt nums))
+    Io.println (String.join " " (List.map String.fromInt nums))

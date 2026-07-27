@@ -34,7 +34,7 @@ import Ipe.Task as Task
 import Ipe.Error as Error exposing (Error)
 import Ipe.Http as Http exposing (HttpRequest)
 import Ipe.Http.Stream as HttpStream exposing (StreamId, ChunkEvent(..))
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onSubmit)

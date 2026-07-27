@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 -- #90 T3 (5th attempt): the hazard reaches the ERROR channel too —
 -- `Result.mapError`'s callback result `f` must not be an arrow.
@@ -11,5 +11,5 @@ mk a b =
 
 main =
     case Result.mapError mk (Err 1) of
-        Ok _ -> println "ok"
-        Err g -> println (String.fromInt (g 2))
+        Ok _ -> Io.println "ok"
+        Err g -> Io.println (String.fromInt (g 2))

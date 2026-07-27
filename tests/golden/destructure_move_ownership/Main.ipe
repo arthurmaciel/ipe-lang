@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- #224 SEAL breach: a `let (a, b) = pair` destructure binder used to emit a
@@ -23,4 +23,4 @@ combine pair =
 
 main : Task Error ()
 main =
-    println (combine ( "x", "y" ))
+    Io.println (combine ( "x", "y" ))

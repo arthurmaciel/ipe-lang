@@ -6,7 +6,7 @@ import Ipe.Task as Task
 import Ipe.Error exposing (Error)
 import Ipe.Http.Server as Server
 import Ipe.Http.Server exposing (Request, Response)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- #217 contract-drift regression: `Ipe.Http.Server.Response` is a record
@@ -39,4 +39,4 @@ statusOf r =
 
 
 main =
-    println (String.fromInt (statusOf custom))
+    Io.println (String.fromInt (statusOf custom))

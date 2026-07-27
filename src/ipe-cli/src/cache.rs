@@ -118,7 +118,7 @@ use sha2::{Digest, Sha256};
 /// Domain-separation tag for the content-address hash — bumped whenever the
 /// key's ingredient set changes shape (never for a value change within the
 /// same shape; that is what the hash itself captures).
-const KEY_TAG: &[u8] = b"ipec-build-cache-key-v1";
+const KEY_TAG: &[u8] = b"ipec-build-cache-key-v2";
 
 /// Domain-separation tag for the version-epoch hash.
 const EPOCH_TAG: &[u8] = b"ipec-build-cache-epoch-v1";
@@ -234,12 +234,21 @@ pub fn compute_project_key(
     db_driver: DbDriver,
     target: ipe_ir::Target,
     wasm_public_env: &[String],
+    production: bool,
 ) -> String {
     let mut hasher = Sha256::new();
     update_len_prefixed(&mut hasher, KEY_TAG);
     // The target changes the emitted manifest/entry shape — a native-keyed
     // entry must never serve a wasm build (or vice versa).
     update_len_prefixed(&mut hasher, format!("{target:?}").as_bytes());
+
+    // A PRODUCTION build (`--optimize`) rejects any `Debug.*` use (IPE-L0140),
+    // so its outcome differs from a development build for a Debug-using program
+    // (error vs emitted project). Keying on it keeps the two builds' cache
+    // entries disjoint — a dev-cached project is never served to `--optimize`,
+    // and vice versa. (For a Debug-free program the emitted bytes are identical
+    // either way; the extra key bit only costs a one-time cold entry.)
+    hasher.update([u8::from(production)]);
 
     let entry_len = u64::try_from(entry_path.len()).unwrap_or(u64::MAX);
     hasher.update(entry_len.to_le_bytes());
@@ -591,6 +600,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
         );
         let b = compute_project_key(
             &sources,
@@ -599,6 +609,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
         );
         assert_eq!(a, b, "same inputs must hash to the same key");
     }
@@ -613,6 +624,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
         );
         if let Some(main) = sources.get_mut(&vec!["Main".to_owned()]) {
             main.1.push_str("\n-- comment\n");
@@ -624,6 +636,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
         );
         assert_ne!(base, edited, "a body edit must change the key");
     }
@@ -638,6 +651,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
         );
         let postgres = compute_project_key(
             &sources,
@@ -646,8 +660,38 @@ mod tests {
             DbDriver::Postgres,
             ipe_ir::Target::Native,
             &[],
+            false,
         );
         assert_ne!(sqlite, postgres, "the SQL driver is part of the key");
+    }
+
+    /// A `--optimize` (production) build rejects any `Debug.*` use (IPE-L0140),
+    /// so its outcome differs from a development build for a Debug-using
+    /// program. The key must separate the two so a dev-cached project is never
+    /// served to `--optimize` (or vice versa) — the tier-1 proof of the emit
+    /// demand's production gate.
+    #[test]
+    fn key_changes_with_production() {
+        let (sources, injected) = sample_sources();
+        let dev = compute_project_key(
+            &sources,
+            &injected,
+            &entry(),
+            DbDriver::Sqlite,
+            ipe_ir::Target::Native,
+            &[],
+            false,
+        );
+        let prod = compute_project_key(
+            &sources,
+            &injected,
+            &entry(),
+            DbDriver::Sqlite,
+            ipe_ir::Target::Native,
+            &[],
+            true,
+        );
+        assert_ne!(dev, prod, "the production flag is part of the key");
     }
 
     /// `[wasm] publicEnv` only affects the final emit stage (the generated
@@ -665,6 +709,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
         );
         let with_allowlist = compute_project_key(
             &sources,
@@ -673,6 +718,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &["API_BASE_URL".to_owned()],
+            false,
         );
         assert_ne!(
             empty_allowlist, with_allowlist,
@@ -690,6 +736,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
         );
         let b = compute_project_key(
             &sources,
@@ -698,6 +745,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
         );
         assert_ne!(a, b, "the entry module path is part of the key");
     }
@@ -712,6 +760,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
         );
 
         let mut added = sources.clone();
@@ -729,6 +778,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
         );
         assert_ne!(base, with_extra, "adding a module must change the key");
 
@@ -741,6 +791,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
         );
         assert_ne!(
             base, without_prelude,
@@ -766,6 +817,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
         );
         let b = compute_project_key(
             &sources,
@@ -774,6 +826,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
         );
         assert_ne!(a, b, "the trust-origin flag is part of the key");
     }
@@ -800,6 +853,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
         );
         let b = compute_project_key(
             &right,
@@ -808,6 +862,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
         );
         assert_ne!(a, b, "differently-segmented module paths must not collide");
     }
@@ -924,7 +979,7 @@ mod tests {
                         args: vec![],
                     },
                     Expr::Call {
-                        callee: Callee::Kernel(KernelFn::LogPrintln),
+                        callee: Callee::Kernel(KernelFn::IoPrintln),
                         args: vec![],
                         pin: CallPin::None,
                         on_form: OnFormKind::NotForm,
@@ -938,7 +993,7 @@ mod tests {
                         args: vec![],
                     },
                     Expr::Call {
-                        callee: Callee::Kernel(KernelFn::LogPrintln),
+                        callee: Callee::Kernel(KernelFn::IoPrintln),
                         args: vec![],
                         pin: CallPin::None,
                         on_form: OnFormKind::NotForm,
@@ -988,6 +1043,7 @@ mod tests {
                 uses_websocket: false,
                 uses_email: false,
                 uses_env_public: false,
+                uses_debug: false,
                 uses_ffi: false,
             }],
         })

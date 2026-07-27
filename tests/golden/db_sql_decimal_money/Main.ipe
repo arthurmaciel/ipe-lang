@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- M5b-db golden: SqlDecimal + SqlMoney params in Db.exec + Db.query.
 -- Proves both new ctors are reachable end-to-end: canon name table,
@@ -22,7 +23,7 @@ main =
                     in
                     Task.andThen
                         (\rows ->
-                            println
+                            Io.println
                                 (String.join "\n"
                                     (List.map
                                         (\row ->

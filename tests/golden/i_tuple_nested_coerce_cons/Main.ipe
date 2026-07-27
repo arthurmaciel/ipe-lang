@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- #174 fix-up — PROBE G. A coercing leaf (a CONS sub-pattern, `PCons`) nested
@@ -35,4 +35,4 @@ classify v =
 
 
 main =
-    println (String.fromInt (classify ( ( [ 9 ], 5 ), A )))
+    Io.println (String.fromInt (classify ( ( [ 9 ], 5 ), A )))

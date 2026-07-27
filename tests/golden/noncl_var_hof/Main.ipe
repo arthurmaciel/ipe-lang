@@ -1,7 +1,7 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 -- #149 seal. A function-typed let-binding `go` forwarded as a HOF
 -- callback to `Task.andThen` via the |> operator:
@@ -23,4 +23,4 @@ step s =
 
 main =
     let go = step in
-    Task.succeed "hello" |> Task.andThen go |> Task.andThen println
+    Task.succeed "hello" |> Task.andThen go |> Task.andThen Io.println

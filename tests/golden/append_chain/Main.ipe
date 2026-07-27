@@ -1,8 +1,9 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 sentence : String
 sentence = "a" ++ "b" ++ "c" ++ "d"
 
 main =
-    println sentence
+    Io.println sentence

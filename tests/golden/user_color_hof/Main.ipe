@@ -3,6 +3,7 @@ module Main exposing (main)
 import Ipe.Html as Html
 import Ipe.Ui as Ui
 import Ipe.Ui.Background as Background
+import Ipe.Io as Io
 
 
 -- #101 regression. A user `type Color` must resolve to its OWN enum
@@ -47,4 +48,4 @@ styled =
 
 
 main =
-    println (applyTo (\c -> name c) Magenta ++ "\n" ++ styled)
+    Io.println (applyTo (\c -> name c) Magenta ++ "\n" ++ styled)

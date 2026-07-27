@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- Small-N sibling of `tco_count` for the Go-parity byte-diff (the 2,000,000-iter
 -- run is reserved for the constant-stack proof; the Go oracle need only confirm
@@ -14,4 +15,4 @@ count n acc =
 
 
 main =
-    println (String.fromInt (count 1000 0))
+    Io.println (String.fromInt (count 1000 0))

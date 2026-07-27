@@ -8,7 +8,7 @@ import Ipe.Prelude exposing (..)
 import Ipe.Result as Result
 import Ipe.String as String
 import Ipe.Error as Error exposing (Error)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 -- 5. Pipeline with optional fields
 type alias UserProfile =
@@ -319,45 +319,45 @@ traverseExample =
 -- ============================================================
 main =
     let
-        _ = println "=== Sky JSON Examples ==="
-        _ = println ""
-        _ = println "1. Simple encoding:"
-        _ = println encodeSimple
-        _ = println ""
-        _ = println "2. Complex encoding:"
-        _ = println encodeComplex
-        _ = println ""
-        _ = println "3. Simple decoding (map2):"
-        _ = println decodeSimpleExample
-        _ = println ""
-        _ = println "4. Pipeline decoding:"
-        _ = println pipelineExample
-        _ = println ""
-        _ = println "5. Optional fields:"
-        _ = println optionalExample
-        _ = println ""
-        _ = println "6. Nested at:"
-        _ = println nestedExample
-        _ = println ""
-        _ = println "7. List of objects:"
-        _ = println listExample
-        _ = println ""
-        _ = println "8. Roundtrip:"
-        _ = println roundtrip
-        _ = println ""
-        _ = println "9. oneOf (flexible):"
-        _ = println flexibleExample
-        _ = println ""
-        _ = println "10. Result.map3 (heterogeneous combine):"
-        _ = println combineHeterogeneousExample
-        _ = println ""
-        _ = println "11. Result.combine (homogeneous list):"
-        _ = println combineHomogeneousExample
-        _ = println ""
-        _ = println "12. Result.traverse:"
-        _ = println traverseExample
+        _ = Io.println "=== Sky JSON Examples ==="
+        _ = Io.println ""
+        _ = Io.println "1. Simple encoding:"
+        _ = Io.println encodeSimple
+        _ = Io.println ""
+        _ = Io.println "2. Complex encoding:"
+        _ = Io.println encodeComplex
+        _ = Io.println ""
+        _ = Io.println "3. Simple decoding (map2):"
+        _ = Io.println decodeSimpleExample
+        _ = Io.println ""
+        _ = Io.println "4. Pipeline decoding:"
+        _ = Io.println pipelineExample
+        _ = Io.println ""
+        _ = Io.println "5. Optional fields:"
+        _ = Io.println optionalExample
+        _ = Io.println ""
+        _ = Io.println "6. Nested at:"
+        _ = Io.println nestedExample
+        _ = Io.println ""
+        _ = Io.println "7. List of objects:"
+        _ = Io.println listExample
+        _ = Io.println ""
+        _ = Io.println "8. Roundtrip:"
+        _ = Io.println roundtrip
+        _ = Io.println ""
+        _ = Io.println "9. oneOf (flexible):"
+        _ = Io.println flexibleExample
+        _ = Io.println ""
+        _ = Io.println "10. Result.map3 (heterogeneous combine):"
+        _ = Io.println combineHeterogeneousExample
+        _ = Io.println ""
+        _ = Io.println "11. Result.combine (homogeneous list):"
+        _ = Io.println combineHomogeneousExample
+        _ = Io.println ""
+        _ = Io.println "12. Result.traverse:"
+        _ = Io.println traverseExample
     in
-        println "Done!"
+        Io.println "Done!"
 
 
 Profile : String -> Int -> Bool -> Profile

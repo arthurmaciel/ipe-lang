@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- A function value reaching a record field THROUGH a type variable:
 -- `wrap`'s field `value : a` instantiates to `Int -> Int` at this call,
@@ -14,4 +15,4 @@ unwrap r = r.value
 
 main =
     let f = unwrap (wrap (\n -> n + 1)) in
-    println (String.fromInt (f 41))
+    Io.println (String.fromInt (f 41))

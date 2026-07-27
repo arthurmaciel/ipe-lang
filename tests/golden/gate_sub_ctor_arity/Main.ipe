@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- #32 review follow-up: a mis-arity `Sub` in a CTOR PAYLOAD (`Sub` takes
 -- exactly one message type) used to ICE via lower_enum → ir_type_from_canon.
@@ -10,4 +11,4 @@ type J
 
 
 main =
-    println "x"
+    Io.println "x"

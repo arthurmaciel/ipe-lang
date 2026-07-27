@@ -21,7 +21,7 @@ import Ipe.Time as Time
 import Ipe.Pure as Pure
 import Ipe.Error as Error exposing (Error)
 import Ipe.System
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Ipe.Db as Db
 import Ipe.Cache as Cache
 import Migrations
@@ -77,14 +77,14 @@ runMigrate cfg =
                               (\applied ->
                                   let
                                       _ =
-                                          println
+                                          Io.println
                                               ("Applied "
                                                   ++ String.fromInt
                                                          (List.length applied)
                                                   ++ " migration(s)")
                                       _ =
                                           List.map
-                                              (\n -> println ("  - " ++ n))
+                                              (\n -> Io.println ("  - " ++ n))
                                               applied
                                   in
                                       Db.close db))
@@ -94,7 +94,7 @@ runServer : Config -> Task Error ()
 runServer cfg =
     if String.length cfg.jwtSecret < 32 then
         let
-            _ = println "ERROR: IPE_AUTH_TOKEN_SECRET must be >= 32 bytes."
+            _ = Io.println "ERROR: IPE_AUTH_TOKEN_SECRET must be >= 32 bytes."
         in
             Task.fail
                 (Error.invalidInput "IPE_AUTH_TOKEN_SECRET must be >= 32 bytes")
@@ -128,7 +128,7 @@ startApp cfg db bootMs =
                    (\cache ->
                        let
                            _ =
-                               println
+                               Io.println
                                    ("composite-server listening on :"
                                        ++ String.fromInt cfg.port)
                        in
@@ -138,6 +138,6 @@ startApp cfg db bootMs =
 reportError : Error -> Task Error ()
 reportError e =
     let
-        _ = println ("[fatal] " ++ Error.toString e)
+        _ = Io.println ("[fatal] " ++ Error.toString e)
     in
         System.exit 1

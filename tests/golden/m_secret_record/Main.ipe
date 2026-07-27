@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- backlog #44 golden: a record containing a `Secret` field stays fully
 -- derivable (`Clone` / `Debug` / `PartialEq`) — proves the derive-blast-radius
@@ -33,4 +34,4 @@ boolStr flag =
         "F"
 
 main =
-    println (boolStr (cfg1 == cfg2) ++ boolStr (cfg1 == cfg3) ++ cfg3.label)
+    Io.println (boolStr (cfg1 == cfg2) ++ boolStr (cfg1 == cfg3) ++ cfg3.label)

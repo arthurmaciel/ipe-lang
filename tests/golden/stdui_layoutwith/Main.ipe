@@ -3,6 +3,7 @@ module Main exposing (main)
 import Ipe.Html as Html
 import Ipe.Ui as Ui
 import Ipe.Ui.Font as Font
+import Ipe.Io as Io
 
 
 -- Phase-0 Ipe.Ui smoke test: Ui.layoutWith with inline cfg literal.
@@ -13,7 +14,7 @@ import Ipe.Ui.Font as Font
 
 
 main =
-    println
+    Io.println
         (Html.htmlRender
             (Ui.layoutWith
                 { wrapperAttrs = [ Ui.padding 12 ]

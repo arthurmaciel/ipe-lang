@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- A tuple param whose ELEMENT is refutable (`Just x`): the tuple as a whole is
 -- refutable, so the IPE-T0015 gate blames the offending sub-pattern. This is the
@@ -9,4 +10,4 @@ f : (Int, Maybe Int) -> Int
 f = \( a, Just x ) -> a + x
 
 main =
-    println (String.fromInt (f ( 1, Just 2 )))
+    Io.println (String.fromInt (f ( 1, Just 2 )))

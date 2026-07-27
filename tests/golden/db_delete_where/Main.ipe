@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- M5b-db golden: Db.deleteWhere with a typed SqlFragment predicate (backlog #61).
 -- Inserts three rows, deletes the one matching `Sql.eq (Sql.column "name")
@@ -39,7 +40,7 @@ main =
                                         names =
                                             List.map (\r -> Db.getString "name" r) rows
                                     in
-                                    println (String.fromInt deletedCount ++ ":" ++ String.join "," names)
+                                    Io.println (String.fromInt deletedCount ++ ":" ++ String.join "," names)
                                 )
                                 (Db.query txconn "SELECT * FROM products ORDER BY name" [])
                         )

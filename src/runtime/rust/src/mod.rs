@@ -371,6 +371,9 @@ pub use list::*;
 pub mod io;
 pub use io::*;
 
+pub mod debug;
+pub use debug::*;
+
 // auth.rs's external deps are `bcrypt` (crypto), `jsonwebtoken`/`serde_json`
 // (json), AND `sqlx`/`Db` (db — register/login/setRole write the user table).
 // Gate on ALL THREE: the old `all(db, json)` gate omitted `crypto`, so a

@@ -7,6 +7,7 @@ module Main exposing (main)
 -- Expected: Alice|Bob
 
 import Ipe.Json.Decode as JsonDec
+import Ipe.Io as Io
 
 
 buildDecoders : () -> { nameDecoder : JsonDec.Decoder String, ageDecoder : JsonDec.Decoder Int }
@@ -29,7 +30,7 @@ main =
     in
     case ( r1, r2 ) of
         ( Ok a, Ok b ) ->
-            println (a ++ "|" ++ b)
+            Io.println (a ++ "|" ++ b)
 
         _ ->
-            println "err"
+            Io.println "err"

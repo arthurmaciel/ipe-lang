@@ -25,7 +25,7 @@ import Ipe.Task as Task
 import Ipe.Db as Db
 import Ipe.Error as Error exposing (Error)
 import Ipe.System
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- Top-level pipeline:
@@ -73,7 +73,7 @@ reportError : Error -> Task Error ()
 reportError e =
     let
         _ = Log.errorWith "todo-cli" [ "error", Error.toString e ]
-        _ = println ("Error: " ++ Error.toString e)
+        _ = Io.println ("Error: " ++ Error.toString e)
     in
         System.exit 1
 
@@ -97,7 +97,7 @@ addTodo conn todoTitle =
                (\_ ->
                    let
                        _ = Log.infoWith "Action" [ "Added:", todoTitle ]
-                       _ = println ("Added: " ++ todoTitle)
+                       _ = Io.println ("Added: " ++ todoTitle)
                    in
                        ())
 
@@ -110,22 +110,22 @@ listTodos conn =
                    if List.isEmpty rows then
                        let
                            _ =
-                               println
+                               Io.println
                                    "No todos yet. Add one with: ./app add \"My task\""
                        in
                            ()
 
                    else
                        let
-                           _ = println "Your TODOs:"
+                           _ = Io.println "Your TODOs:"
                            -- v0.10.0: List.map over a Task discards
                            -- the resulting list of thunks unforced.
                            -- Fold the prints into a single String so a
-                           -- single `println` call fires the side
+                           -- single `Io.println` call fires the side
                            -- effect.
                            lines = List.map formatTodo rows
-                           _ = println (String.join "\n" lines)
-                           _ = println ""
+                           _ = Io.println (String.join "\n" lines)
+                           _ = Io.println ""
                        in
                            ())
 
@@ -151,7 +151,7 @@ markDone conn idStr =
         |> Task.map
                (\_ ->
                    let
-                       _ = println ("Marked as done: " ++ idStr)
+                       _ = Io.println ("Marked as done: " ++ idStr)
                    in
                        ())
 
@@ -162,7 +162,7 @@ markUndone conn idStr =
         |> Task.map
                (\_ ->
                    let
-                       _ = println ("Marked as not done: " ++ idStr)
+                       _ = Io.println ("Marked as not done: " ++ idStr)
                    in
                        ())
 
@@ -173,7 +173,7 @@ removeTodo conn idStr =
         |> Task.map
                (\_ ->
                    let
-                       _ = println ("Removed todo: " ++ idStr)
+                       _ = Io.println ("Removed todo: " ++ idStr)
                    in
                        ())
 
@@ -184,7 +184,7 @@ clearDone conn =
         |> Task.map
                (\_ ->
                    let
-                       _ = println "Cleared completed todos"
+                       _ = Io.println "Cleared completed todos"
                    in
                        ())
 
@@ -193,15 +193,15 @@ showUsage : Task Error ()
 showUsage =
     let
         _ = Log.info "Sky TODO - A simple todo manager"
-        _ = println ""
-        _ = println "Usage:"
-        _ = println "  ./app add <title>     Add a new todo"
-        _ = println "  ./app list            List all todos"
-        _ = println "  ./app done <id>       Mark a todo as done"
-        _ = println "  ./app undone <id>     Mark a todo as not done"
-        _ = println "  ./app remove <id>     Delete a todo"
-        _ = println "  ./app clear           Remove all completed todos"
-        _ = println ""
+        _ = Io.println ""
+        _ = Io.println "Usage:"
+        _ = Io.println "  ./app add <title>     Add a new todo"
+        _ = Io.println "  ./app list            List all todos"
+        _ = Io.println "  ./app done <id>       Mark a todo as done"
+        _ = Io.println "  ./app undone <id>     Mark a todo as not done"
+        _ = Io.println "  ./app remove <id>     Delete a todo"
+        _ = Io.println "  ./app clear           Remove all completed todos"
+        _ = Io.println ""
     in
         Task.succeed ()
 
@@ -217,7 +217,7 @@ runCommand conn cmd cmdArg =
         "add" ->
             if cmdArg == "" then
                 let
-                    _ = println "Usage: ./app add <title>"
+                    _ = Io.println "Usage: ./app add <title>"
                 in
                     Task.succeed ()
 
@@ -230,7 +230,7 @@ runCommand conn cmd cmdArg =
         "done" ->
             if cmdArg == "" then
                 let
-                    _ = println "Usage: ./app done <id>"
+                    _ = Io.println "Usage: ./app done <id>"
                 in
                     Task.succeed ()
 
@@ -240,7 +240,7 @@ runCommand conn cmd cmdArg =
         "undone" ->
             if cmdArg == "" then
                 let
-                    _ = println "Usage: ./app undone <id>"
+                    _ = Io.println "Usage: ./app undone <id>"
                 in
                     Task.succeed ()
 
@@ -250,7 +250,7 @@ runCommand conn cmd cmdArg =
         "remove" ->
             if cmdArg == "" then
                 let
-                    _ = println "Usage: ./app remove <id>"
+                    _ = Io.println "Usage: ./app remove <id>"
                 in
                     Task.succeed ()
 

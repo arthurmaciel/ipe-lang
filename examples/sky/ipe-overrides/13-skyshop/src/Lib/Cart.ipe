@@ -26,7 +26,7 @@ import Ipe.Result as Result
 import Ipe.List as List
 import Ipe.Dict as Dict
 import Ipe.String as String
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Ipe.Task as Task
 import Ipe.Uuid as Uuid
 import Lib.Db as Db
@@ -317,7 +317,7 @@ setCartState docId newState =
                 updatedDoc = Dict.insert "state" newState doc
                 result = Db.setDoc collection docId updatedDoc
                 _ =
-                    println
+                    Io.println
                         ("[ORDER] State changed: " ++ docId ++ " -> " ++ newState)
             in
                 case result of
@@ -432,7 +432,7 @@ checkoutToOrder cartId =
                                     Db.setDoc "order_items" itemId orderItem)
                             cartItems
                     _ =
-                        println
+                        Io.println
                             ("[CHECKOUT] Created order " ++ orderId
                                 ++ " from cart "
                                 ++ cartId)

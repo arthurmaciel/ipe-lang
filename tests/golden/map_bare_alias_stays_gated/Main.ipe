@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 -- #90 T3 (5th attempt): bare point-free re-export of `Result.map` (the
 -- revert-incident Bug-3 shape, replayed against the map family) — the
@@ -15,5 +15,5 @@ add a b =
 
 main =
     case myMap add (Ok 1) of
-        Ok g -> println (String.fromInt (g 2))
-        Err _ -> println "err"
+        Ok g -> Io.println (String.fromInt (g 2))
+        Err _ -> Io.println "err"

@@ -2,7 +2,7 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Ipe.Json.Decode as Decode
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- ROUND-2 SEAL FAIL-CLOSED (#82). Same opaque-wrapper-field alias as
@@ -23,4 +23,4 @@ value =
 
 main : Task Error ()
 main =
-    println "ok"
+    Io.println "ok"

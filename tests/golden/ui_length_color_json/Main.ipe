@@ -3,6 +3,7 @@ module Main exposing (main)
 import Ipe.Html as Html
 import Ipe.Ui as Ui
 import Ipe.Ui.Background as Background
+import Ipe.Io as Io
 
 
 -- Registry Phase-D (#69) end-to-end gate. Exercises the newly-schemed
@@ -42,4 +43,4 @@ json =
 
 
 main =
-    println (ui ++ "\n" ++ json)
+    Io.println (ui ++ "\n" ++ json)

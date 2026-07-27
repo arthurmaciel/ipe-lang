@@ -9,7 +9,7 @@ import Ipe.Http as Http
 import Ipe.Task as Task
 import Ipe.Crypto as Crypto
 import Ipe.Db as Db
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Lib.Database as Database
 import Ipe.Error as Error exposing (Error(..), ErrorKind(..))
 
@@ -173,7 +173,7 @@ fireAlert alert currentValue =
                 condition
                 threshold
                 notifyType
-        _ = println ("[ALERT] " ++ message)
+        _ = Io.println ("[ALERT] " ++ message)
     in
         if notifyType == "webhook" then
             logFireResult
@@ -200,7 +200,7 @@ logFireResult kind target result =
         Err e ->
             let
                 _ =
-                    println
+                    Io.println
                         ("[ALERT ERROR] " ++ kind ++ " " ++ target ++ ": "
                             ++ Error.toString e)
             in

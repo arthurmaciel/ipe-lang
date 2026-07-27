@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- NEGATIVE: `++` on Int should fail with IPE-T0014 (Appendable obligation
@@ -13,4 +13,4 @@ v =
 
 
 main =
-    println (String.fromInt v)
+    Io.println (String.fromInt v)

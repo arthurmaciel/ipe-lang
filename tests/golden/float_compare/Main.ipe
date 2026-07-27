@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 bigger : Bool
 bigger =
@@ -10,4 +11,4 @@ chosen =
     if bigger then 1.5e3 else 2e-2
 
 main =
-    println (String.fromFloat chosen)
+    Io.println (String.fromFloat chosen)

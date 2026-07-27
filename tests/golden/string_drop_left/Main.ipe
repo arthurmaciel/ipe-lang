@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 main =
-    println (String.dropLeft 2 "héllo")
+    Io.println (String.dropLeft 2 "héllo")

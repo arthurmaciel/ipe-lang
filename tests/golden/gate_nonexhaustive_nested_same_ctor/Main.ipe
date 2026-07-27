@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- A NESTED non-exhaustive `case`: the `Som` arm only matches when its inner
 -- value is itself `Som`, so `Som Non` is uncovered. With the same-top-ctor
@@ -15,4 +16,4 @@ f oo =
         Non -> 0
 
 main =
-    println (String.fromInt (f Non))
+    Io.println (String.fromInt (f Non))

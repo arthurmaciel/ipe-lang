@@ -7,6 +7,7 @@ module Main exposing (main)
 -- four `Ipe.CssSafety` leaf kernels are Rust.
 import Ipe.Prelude exposing (..)
 import Ipe.Css exposing (..)
+import Ipe.Io as Io
 
 
 -- Benign: renders exactly (Go byte-parity — same pure-Ipe fold).
@@ -70,7 +71,7 @@ benignKeyframes =
 
 
 main =
-    println
+    Io.println
         (benign
             ++ "\n---\n"
             ++ attackValue

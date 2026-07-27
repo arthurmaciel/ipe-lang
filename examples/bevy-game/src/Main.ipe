@@ -18,7 +18,7 @@ module Main exposing (main)
 import Ipe.Prelude exposing (..)
 import Ipe.Result as Result
 import Ipe.String as String
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Ipe.Error as Error exposing (Error)
 import Rust.Bevy_ecs as Ecs
 
@@ -31,7 +31,7 @@ step label op world =
             (\next ->
                 let
                     _ =
-                        println ("[world] " ++ label)
+                        Io.println ("[world] " ++ label)
                 in
                     next
             )
@@ -44,7 +44,7 @@ play =
             (\world ->
                 let
                     _ =
-                        println "bevy_ecs World created."
+                        Io.println "bevy_ecs World created."
                 in
                     world
             )
@@ -68,10 +68,10 @@ main =
     case play of
 
         Ok count ->
-            println
+            Io.println
                 ("headless bevy_ecs world tick finished; final entity count = "
                     ++ String.fromInt count
                 )
 
         Err err ->
-            println ("bevy_ecs error: " ++ Error.toString err)
+            Io.println ("bevy_ecs error: " ++ Error.toString err)

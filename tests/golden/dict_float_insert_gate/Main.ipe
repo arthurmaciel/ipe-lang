@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Dict as Dict
+import Ipe.Io as Io
 
 
 main =
@@ -8,4 +9,4 @@ main =
         d =
             Dict.insert 1.5 "hello" Dict.empty
     in
-    println (String.fromInt (Dict.size d))
+    Io.println (String.fromInt (Dict.size d))

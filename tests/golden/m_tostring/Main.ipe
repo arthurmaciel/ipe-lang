@@ -1,8 +1,8 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 main =
-    println (toString 42 ++ " " ++ toString True ++ " " ++ toString 3)
+    Io.println (toString 42 ++ " " ++ toString True ++ " " ++ toString 3)

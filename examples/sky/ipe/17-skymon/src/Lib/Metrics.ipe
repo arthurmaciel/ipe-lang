@@ -10,7 +10,7 @@ import Ipe.Task as Task
 import Ipe.Crypto as Crypto
 import Ipe.Json.Decode as Decode
 import Ipe.Db as Db
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Lib.Database as Database
 import Lib.SafeQuery as SafeQuery
 import Ipe.Error as Error exposing (Error(..), ErrorKind(..))
@@ -103,7 +103,7 @@ runSafeQuery dsn query =
             let
                 typedErr = e
                 _ =
-                    println
+                    Io.println
                         ("[METRIC ERROR] runSafeQuery/open: "
                             ++ Error.toString typedErr)
             in
@@ -122,7 +122,7 @@ runSafeQueryWithConn extConn query =
             let
                 typedErr = e
                 _ =
-                    println
+                    Io.println
                         ("[METRIC ERROR] runSafeQuery: "
                             ++ Error.toString typedErr)
             in
@@ -175,7 +175,7 @@ runHttpMetric metric =
                     let
                         typedErr = e
                         _ =
-                            println
+                            Io.println
                                 ("[METRIC ERROR] runHttpMetric " ++ url ++ ": "
                                     ++ Error.toString typedErr)
                     in
@@ -206,7 +206,7 @@ runApiMetric metric =
                     let
                         typedErr = e
                         _ =
-                            println
+                            Io.println
                                 ("[METRIC ERROR] runApiMetric " ++ url ++ ": "
                                     ++ Error.toString typedErr)
                     in

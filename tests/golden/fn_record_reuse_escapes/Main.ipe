@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- The record-of-functions ESCAPES its defining function (`mk` RETURNS it), so
@@ -19,4 +19,4 @@ use c =
 
 
 main =
-    println (String.fromInt (use (mk 3)))
+    Io.println (String.fromInt (use (mk 3)))

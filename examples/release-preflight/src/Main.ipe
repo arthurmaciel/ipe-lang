@@ -4,7 +4,7 @@ import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
 import Ipe.Error as Error exposing (Error)
 import Ipe.String as String
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- A release-preflight script in the non-TEA `Program` shape: a plain `main`
@@ -15,22 +15,22 @@ import Ipe.Log exposing (println)
 --
 --     main =
 --         let version = "1.4.0" in
---         println ("Preflight for v" ++ version)
+--         Io.println ("Preflight for v" ++ version)
 --             |> Task.andThen (\_ ->
 --                 Task.parallel [ checkBuild, checkChangelog, checkGitClean ]
 --                     |> Task.andThen (\results ->
---                         println (report version results)))
+--                         Io.println (report version results)))
 --
 -- The `do` block below IS that chain — read top-to-bottom instead of nested.
 main =
     do
         version = "1.4.0"                        -- `=`  : a pure value, no effect
-        println ("Preflight for v" ++ version)   -- bare : run for its effect, discard the ()
+        Io.println ("Preflight for v" ++ version)   -- bare : run for its effect, discard the ()
         results <- parallelDo                    -- `<-` : run all three at once, bind the List
             checkBuild
             checkChangelog
             checkGitClean
-        println (report version results)
+        Io.println (report version results)
 
 
 -- Three independent checks. Each returns a status line; `parallelDo` needs them

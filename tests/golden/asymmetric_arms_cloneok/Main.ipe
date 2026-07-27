@@ -2,7 +2,7 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- #193 regression: asymmetric-arm clone-hoist, CloneOk binding (String).
@@ -66,8 +66,8 @@ main =
         r3 = formatTag2 True "ipe"
         r4 = formatTag2 False "ipe"
 
-        _ = println r1
-        _ = println r2
-        _ = println r3
+        _ = Io.println r1
+        _ = Io.println r2
+        _ = Io.println r3
     in
-    println r4
+    Io.println r4

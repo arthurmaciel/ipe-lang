@@ -1,8 +1,9 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 firstOr : Int -> List Int -> Int
 firstOr d xs =
     d
 
 main =
-    println (String.fromInt (firstOr 7 (1 :: 2 :: [3, 4, 5])))
+    Io.println (String.fromInt (firstOr 7 (1 :: 2 :: [3, 4, 5])))

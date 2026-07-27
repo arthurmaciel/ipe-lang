@@ -1,9 +1,10 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 main =
     let
         same = if (1, 2) == (1, 2) then 1 else 0
         diff = if (1, 2) == (1, 3) then 10 else 0
     in
-    println (String.fromInt (same + diff))
+    Io.println (String.fromInt (same + diff))

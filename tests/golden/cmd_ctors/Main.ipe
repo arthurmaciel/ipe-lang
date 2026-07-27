@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- M5c: Cmd.none / Cmd.batch construct-only gate.
 -- Constructs Cmd values and discards them; confirms that Cmd.none infers
@@ -9,4 +10,4 @@ main =
         c = Cmd.perform (Task.succeed 1) (\r -> 0)
         _ = Cmd.batch [c, Cmd.none]
     in
-    println "ok"
+    Io.println "ok"

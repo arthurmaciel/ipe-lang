@@ -9,7 +9,7 @@ import Ipe.Dict as Dict
 import Ipe.Crypto as Crypto
 import Ipe.Task as Task
 import Ipe.Db as Db
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Ipe.System as System
 import Ipe.Error as Error exposing (Error(..), ErrorKind(..))
 
@@ -37,7 +37,7 @@ dbConn =
         Err e ->
             let
                 _ =
-                    println
+                    Io.println
                         ("[FATAL] Cannot open skychess.db: " ++ Error.toString e)
             in
                 System.exit 1

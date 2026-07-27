@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 type alias Box = { value : Int }
 
@@ -11,4 +12,4 @@ main =
     let
         r = { value = 1 }
     in
-    println (String.fromInt ((wrap 41).value + (r).value))
+    Io.println (String.fromInt ((wrap 41).value + (r).value))

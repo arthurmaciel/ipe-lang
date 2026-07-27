@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 
 -- #221 fn-typed PARAM captured by an eta-synthesized closure: `apply f`
@@ -23,4 +24,4 @@ compose2 f a b =
 
 
 main =
-    println (String.fromInt (compose2 (\n -> n + 5) 1 2))
+    Io.println (String.fromInt (compose2 (\n -> n + 5) 1 2))

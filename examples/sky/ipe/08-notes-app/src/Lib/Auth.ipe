@@ -15,7 +15,7 @@ import Ipe.Result as Result
 import Ipe.List as List
 import Ipe.String as String
 import Ipe.Error as Error exposing (Error)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Github.Com.Google.Uuid as Uuid
 import Ipe.Auth as Auth
 import Lib.Db as Db
@@ -51,14 +51,14 @@ createUser email password =
     let
         passHash = hashPassword password
         token = generateToken ()
-        _ = println ""
-        _ = println "=========================================="
-        _ = println "[Email Service] New user registration"
-        _ = println ("[Email Service] To: " ++ email)
-        _ = println "[Email Service] Verify your email at:"
-        _ = println ("  http://localhost:8000/auth/verify?token=" ++ token)
-        _ = println "=========================================="
-        _ = println ""
+        _ = Io.println ""
+        _ = Io.println "=========================================="
+        _ = Io.println "[Email Service] New user registration"
+        _ = Io.println ("[Email Service] To: " ++ email)
+        _ = Io.println "[Email Service] Verify your email at:"
+        _ = Io.println ("  http://localhost:8000/auth/verify?token=" ++ token)
+        _ = Io.println "=========================================="
+        _ = Io.println ""
         result =
             Db.exec
                 "INSERT INTO users (email, password_hash, verification_token) VALUES (?, ?, ?)"

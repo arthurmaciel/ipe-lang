@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- M5b-db golden: Db.findOneByField + Db.findManyByField (backlog follow-up —
 -- arity fixed by #70, but no golden E2E coverage until this fixture).
@@ -44,7 +45,7 @@ module Main exposing (main)
 --                         else
 --                             String.join "," (List.map String.fromInt xs)
 --                 in
---                 println r
+--                 Io.println r
 --             )
 --             (Task.succeed [ 1, 2, 3 ])
 --
@@ -143,7 +144,7 @@ main =
                                                             else
                                                                 joined4
                                                     in
-                                                    println (r1 ++ "\n" ++ r2 ++ "\n" ++ r3 ++ "\n" ++ r4)
+                                                    Io.println (r1 ++ "\n" ++ r2 ++ "\n" ++ r3 ++ "\n" ++ r4)
                                                 )
                                                 (Db.findManyByField txconn "items" "category" "mineral")
                                         )

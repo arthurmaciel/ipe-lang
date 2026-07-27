@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- Arg-swap foreclosure (#49): the jump reassigns `a := b; b := a`. A naive
 -- sequential write would clobber (`a` overwritten before `b` reads it) →
@@ -21,4 +22,4 @@ main =
         ( x, y ) =
             go 1 2 [ 0, 0, 0 ]
     in
-    println (String.fromInt x ++ "," ++ String.fromInt y)
+    Io.println (String.fromInt x ++ "," ++ String.fromInt y)

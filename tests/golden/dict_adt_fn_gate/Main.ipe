@@ -9,6 +9,7 @@ module Main exposing (main)
 -- and surfaces IPE-T0001; both fail closed with no Rust emitted.)
 
 import Ipe.Dict as Dict
+import Ipe.Io as Io
 
 
 type Color
@@ -26,4 +27,4 @@ main =
         _ =
             singletonDict Red 42
     in
-    println (String.fromInt 0)
+    Io.println (String.fromInt 0)

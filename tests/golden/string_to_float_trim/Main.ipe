@@ -1,9 +1,10 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 main =
     case String.toFloat " 1.5 " of
         Just f ->
-            println (String.fromFloat f)
+            Io.println (String.fromFloat f)
 
         Nothing ->
-            println "Nothing"
+            Io.println "Nothing"

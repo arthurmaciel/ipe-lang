@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- IPE-L0105 lambda / function parameter patterns (#96), the positive surface.
 -- Every binding position below is IRREFUTABLE, so each lowers to a synthetic
@@ -46,7 +47,7 @@ countdown (n, acc) =
         _ -> countdown (n - 1, acc + n)
 
 main =
-    println
+    Io.println
         (String.fromInt
             (applyI (\_ -> 42) 0
                 + applyP (\( a, b ) -> a + b) ( 1, 2 )

@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- Positive control for #138: `Request` is in RESERVED_BUILTIN_TYPES and gets
 -- the empty-home sentinel by design, so it must compile even without an explicit
@@ -12,4 +13,4 @@ getPath : Request -> String
 getPath _ = "/"
 
 main =
-    println "ok"
+    Io.println "ok"

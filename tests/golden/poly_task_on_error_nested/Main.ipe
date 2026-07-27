@@ -3,7 +3,7 @@ module Main exposing (main)
 import Ipe.Task as Task
 import Ipe.Crypto as Crypto
 import Ipe.Error as Error exposing (Error)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 -- #164 seal — E0308 pair. `withErrorReporting` mirrors
 -- `examples/18-job-queue`'s helper of the same name: a polymorphic function
@@ -52,7 +52,7 @@ main =
     in
         case ( okResult, failResult ) of
             ( Ok v, Err e ) ->
-                println (v ++ " | " ++ Error.toString e)
+                Io.println (v ++ " | " ++ Error.toString e)
 
             _ ->
-                println "unexpected"
+                Io.println "unexpected"

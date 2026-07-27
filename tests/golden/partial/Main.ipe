@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- Two-parameter function; partially applied below.
 add : Int -> Int -> Int
@@ -18,4 +19,4 @@ main =
     let p = f 3 in
     let o = over 1 2 in
     let h = applyTwice (add 1) 5 in
-    println (String.fromInt (p + o + h))
+    Io.println (String.fromInt (p + o + h))

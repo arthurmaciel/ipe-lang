@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 main =
-    println (if True then "yes" else "no")
+    Io.println (if True then "yes" else "no")

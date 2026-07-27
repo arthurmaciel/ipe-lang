@@ -4,6 +4,7 @@ import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import ModA exposing (useA)
 import ModB exposing (makeB)
+import Ipe.Io as Io
 
 -- `Token` is UNQUALIFIED and NOT imported as a type here -> canonicaliser
 -- falls back to unwrap_or_default() -> home = [].  Does ModB's TokB flow
@@ -13,4 +14,4 @@ relay t =
     useA t
 
 main =
-    println (relay makeB)
+    Io.println (relay makeB)

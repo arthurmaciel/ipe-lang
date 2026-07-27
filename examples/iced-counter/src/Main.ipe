@@ -37,8 +37,8 @@ module Main exposing (main)
 -- `iced` (network-gated), so a checked-in import of it could not be built in CI.
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 main =
-    println "iced-counter: Counter/Message define-type forwarders wired (construct from Ipê); closure->run handoff pending (see README)."
+    Io.println "iced-counter: Counter/Message define-type forwarders wired (construct from Ipê); closure->run handoff pending (see README)."

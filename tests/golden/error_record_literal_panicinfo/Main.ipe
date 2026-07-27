@@ -8,7 +8,7 @@ module Main exposing (main)
 -- E0308 `expected IpePanicInfo, found RecMessageStack`.
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 describe : ErrorDetails -> String
@@ -31,4 +31,4 @@ describe details =
 
 
 main =
-    println (describe (FfiPanic { message = "boom", stack = [] }))
+    Io.println (describe (FfiPanic { message = "boom", stack = [] }))

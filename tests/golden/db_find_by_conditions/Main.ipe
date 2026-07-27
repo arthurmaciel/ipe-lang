@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- M5b-db golden: Db.findByConditions with a Dict String String conditions map.
 -- Inserts two rows then queries with {"name": "apple"} — only the apple row
@@ -39,7 +40,7 @@ main =
                                 score =
                                     Db.getInt "score" row
                             in
-                            println (name ++ ":" ++ String.fromInt score)
+                            Io.println (name ++ ":" ++ String.fromInt score)
                         )
                         (Db.findByConditions txconn "items" (Dict.fromList [ ( "name", "apple" ) ]))
                 )

@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 firstOf : (Int, Int) -> Int
 firstOf t = if t == (41, 7) then 41 else 0
@@ -8,4 +9,4 @@ secondOf : (Int, Int) -> Int
 secondOf t = if t == (41, 7) then 7 else 0
 
 main =
-    println (String.fromInt (firstOf (41, 7) + secondOf (41, 7)))
+    Io.println (String.fromInt (firstOf (41, 7) + secondOf (41, 7)))

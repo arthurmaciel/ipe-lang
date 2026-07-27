@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- A record `type alias` whose field embeds a function NESTED inside a derive
@@ -16,4 +16,4 @@ type alias Handlers =
 
 
 main =
-    println "ok"
+    Io.println "ok"

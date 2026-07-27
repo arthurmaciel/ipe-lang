@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- c01 (#130 seal). A user-defined enum (no payload fields) is captured by
 -- a `List.map` lambda and used on every element.
@@ -24,4 +25,4 @@ colorName c =
 main =
     let color = Green in
     let names = List.map (\_ -> colorName color) [ 1, 2, 3 ] in
-    println (String.join "," names)
+    Io.println (String.join "," names)

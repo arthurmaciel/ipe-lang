@@ -13,13 +13,14 @@ import Chess.Ai as Ai
 import Lib.Games as Games
 import State exposing (Model, Msg)
 import Ipe.Error as Error exposing (Error(..), ErrorKind(..))
+import Ipe.Io as Io
 
 
 -- logIfErr inspects a Result and logs with a tag if it's Err.
 -- Returns the underlying () so it composes in let-bindings without
 -- silently discarding failures the way `_ = Result.withDefault ()`
 -- did. Real apps would also surface this to the user (notification,
--- error-recovery flow); chess uses println so the failure shows in
+-- error-recovery flow); chess uses Io.println so the failure shows in
 -- the server log without breaking the game-play path.
 logIfErr : String -> Result Error () -> ()
 logIfErr tag r =
@@ -31,7 +32,7 @@ logIfErr tag r =
         Err e ->
             let
                 _ =
-                    println
+                    Io.println
                         ("[CHESS][persist-fail] " ++ tag ++ ": "
                             ++ Error.toString e)
             in
@@ -112,18 +113,18 @@ executeBlackMove model =
         to = snd movePair
         pieces = Board.allPiecesOfColour Black model.board
         _ =
-            println
+            Io.println
                 ("[AI] Black pieces: " ++ String.fromInt (List.length pieces))
         allMoves = Move.allLegalMoves Black model.board model
         _ =
-            println
+            Io.println
                 ("[AI] Legal moves: " ++ String.fromInt (List.length allMoves))
         _ =
-            println
+            Io.println
                 ("[AI] Best: " ++ String.fromInt from ++ "->"
                     ++ String.fromInt to)
         _ =
-            println
+            Io.println
                 ("[AI] First 10: "
                     ++ String.join
                            " "

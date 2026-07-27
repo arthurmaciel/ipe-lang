@@ -14,7 +14,7 @@ module Main exposing (main)
 import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.Task as Task
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- Shape A — param captured into Task.map's nested closure AND consumed by the
@@ -26,8 +26,8 @@ recordAction label =
         |> Task.map
                (\_ ->
                    let
-                       _ = println ("Added: " ++ label)
-                       _ = println ("Confirmed: " ++ label)
+                       _ = Io.println ("Added: " ++ label)
+                       _ = Io.println ("Confirmed: " ++ label)
                    in
                        ())
 
@@ -40,7 +40,7 @@ runPipeline conn =
         |> Task.andThen
                (\_ ->
                    let
-                       _ = println ("using " ++ conn)
+                       _ = Io.println ("using " ++ conn)
                    in
                        recordAction conn)
 
@@ -54,14 +54,14 @@ listItems =
                (\rows ->
                    if List.isEmpty rows then
                        let
-                           _ = println "empty"
+                           _ = Io.println "empty"
                        in
                            ()
 
                    else
                        let
                            joined = String.join "," rows
-                           _ = println joined
+                           _ = Io.println joined
                        in
                            ())
 

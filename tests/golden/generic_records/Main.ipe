@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 wrap : a -> { value : a }
 wrap x = { value = x }
@@ -8,4 +9,4 @@ unwrap : { value : a } -> a
 unwrap r = r.value
 
 main =
-    println (String.fromInt (unwrap (wrap 42)))
+    Io.println (String.fromInt (unwrap (wrap 42)))

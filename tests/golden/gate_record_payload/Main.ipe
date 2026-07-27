@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- A RECORD sub-pattern nested inside a constructor payload (`Box { x }`).
 -- Once the IPE-L0112 nested-record-carrier gap; #158 (Class 4 item C) closed it
@@ -13,4 +14,4 @@ f b =
         Box { x } -> x
 
 main =
-    println (String.fromInt (f (Box { x = 5 })))
+    Io.println (String.fromInt (f (Box { x = 5 })))

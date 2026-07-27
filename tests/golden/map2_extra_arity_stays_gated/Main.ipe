@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 -- #90 T3 (5th attempt): `Maybe.map2` with an arity-3 callback — the
 -- runtime kernel applies exactly TWO arguments; the residual arrow on the
@@ -13,5 +13,5 @@ add3 a b c =
 
 main =
     case Maybe.map2 add3 (Just 1) (Just 2) of
-        Just g -> println (String.fromInt (g 3))
-        Nothing -> println "none"
+        Just g -> Io.println (String.fromInt (g 3))
+        Nothing -> Io.println "none"

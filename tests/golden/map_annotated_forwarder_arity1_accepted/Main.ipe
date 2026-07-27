@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 -- #90 T3 green twin of map_annotated_forwarder_curried_is_t0014:
 -- the SAME annotated map forwarder at an arity-1 callback must stay
@@ -17,5 +17,5 @@ inc n =
 
 main =
     case mmap inc (Ok 41) of
-        Ok n -> println (String.fromInt n)
-        Err _ -> println "err"
+        Ok n -> Io.println (String.fromInt n)
+        Err _ -> Io.println "err"

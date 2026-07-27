@@ -2,7 +2,7 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Ipe.Maybe as Maybe
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 main =
@@ -19,7 +19,7 @@ main =
         notFound =
             Maybe.withDefault (-1) (List.find (\x -> x > 100) [ 1, 2, 3 ])
     in
-    println
+    Io.println
         ((if hasBig then "T" else "F")
             ++ (if allPos then "T" else "F")
             ++ " "

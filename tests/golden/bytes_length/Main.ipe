@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Bytes as Bytes
+import Ipe.Io as Io
 
 main =
     let
@@ -12,4 +13,4 @@ main =
 
         isEmpty1 = if Bytes.isEmpty (Bytes.fromString "x") then 1 else 0
     in
-    println (String.join " " [ String.fromInt e, String.fromInt s, String.fromInt isEmpty0, String.fromInt isEmpty1 ])
+    Io.println (String.join " " [ String.fromInt e, String.fromInt s, String.fromInt isEmpty0, String.fromInt isEmpty1 ])

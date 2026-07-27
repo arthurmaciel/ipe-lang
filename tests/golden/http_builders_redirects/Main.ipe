@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Http as Http
+import Ipe.Io as Io
 
 
 -- #33 §6.2 — the three Go-parity builders added on top of the M5b set:
@@ -27,7 +28,7 @@ printReq req =
 
 
 main =
-    println
+    Io.println
         (printReq
             (Http.withMaxRedirects 3
                 (Http.withFollowRedirects False

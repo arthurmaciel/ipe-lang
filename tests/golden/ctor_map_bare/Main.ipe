@@ -2,6 +2,7 @@ module Main exposing (main)
 import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.String as String
+import Ipe.Io as Io
 
 -- A1 (#147 seal). `Wrap : Int -> Box` (arity 1) is passed bare to
 -- `List.map` — the lowerer eta-expands it into a `|eta_0| Box::Wrap(eta_0)` closure.
@@ -17,4 +18,4 @@ unbox b =
 main =
     let boxes = List.map Wrap [1, 2, 3] in
     let ns = List.map unbox boxes in
-    println (String.join ", " (List.map String.fromInt ns))
+    Io.println (String.join ", " (List.map String.fromInt ns))

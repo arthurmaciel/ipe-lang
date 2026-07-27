@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Bytes as Bytes
+import Ipe.Io as Io
 
 main =
     let
@@ -10,4 +11,4 @@ main =
 
         oob = Bytes.length (Bytes.slice 2 100 (Bytes.fromString "Hello!"))
     in
-    println (String.join " " [ middle, String.fromInt none, String.fromInt oob ])
+    Io.println (String.join " " [ middle, String.fromInt none, String.fromInt oob ])

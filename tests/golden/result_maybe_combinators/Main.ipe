@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 
 -- A 3-arg builder passed to `Result.map3` / `Maybe.map3` as a MULTI-ARG
@@ -155,42 +156,42 @@ showML m =
 main =
     let
         _ =
-            println (showR m3ok)
+            Io.println (showR m3ok)
 
         _ =
-            println (showR m3err)
+            Io.println (showR m3err)
 
         _ =
-            println (showRL combOk)
+            Io.println (showRL combOk)
 
         _ =
-            println (showRL combErr)
+            Io.println (showRL combErr)
 
         _ =
-            println (showRL travOk)
+            Io.println (showRL travOk)
 
         _ =
-            println (showRL travErr)
+            Io.println (showRL travErr)
 
         _ =
-            println (showM m3just)
+            Io.println (showM m3just)
 
         _ =
-            println (showM m3nothing)
+            Io.println (showM m3nothing)
 
         _ =
-            println (showML mcombOk)
+            Io.println (showML mcombOk)
 
         _ =
-            println (showML mcombNothing)
+            Io.println (showML mcombNothing)
 
         _ =
-            println (showR m4ok)
+            Io.println (showR m4ok)
 
         _ =
-            println (showR m5ok)
+            Io.println (showR m5ok)
 
         _ =
-            println (showR m5err)
+            Io.println (showR m5err)
     in
-    println "done"
+    Io.println "done"

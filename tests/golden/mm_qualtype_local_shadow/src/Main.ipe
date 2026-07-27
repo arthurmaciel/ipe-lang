@@ -3,6 +3,7 @@ module Main exposing (main)
 import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Counter
+import Ipe.Io as Io
 
 -- Main defines its own `type Msg`, shadowing `Counter.Msg` in the
 -- unqualified scope.  The qualified annotation on `wrap` must still
@@ -31,4 +32,4 @@ main =
         result =
             Counter.apply Counter.initial 0
     in
-        println (String.fromInt result)
+        Io.println (String.fromInt result)

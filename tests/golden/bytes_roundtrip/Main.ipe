@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Bytes as Bytes
+import Ipe.Io as Io
 
 toStringOr : String -> Bytes -> String
 toStringOr fallback b =
@@ -28,4 +29,4 @@ main =
 
         appended = Bytes.toHex (Bytes.append (Bytes.fromString "Hi!") (Bytes.fromString "Hi!"))
     in
-    println (String.join " " [ asciiStr, binaryStr, appended ])
+    Io.println (String.join " " [ asciiStr, binaryStr, appended ])

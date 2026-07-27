@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- m2lex golden: integer division at the i64::MIN // -1 corner.
 --
@@ -17,4 +18,4 @@ minInt =
     (-9223372036854775807) - 1
 
 main =
-    println (String.fromInt (minInt // (-1)))
+    Io.println (String.fromInt (minInt // (-1)))

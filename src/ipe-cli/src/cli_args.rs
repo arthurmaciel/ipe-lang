@@ -235,6 +235,11 @@ pub struct BuildArgs {
     pub runtime: Option<String>,
     /// `--fix` — apply machine-applicable fixes before building.
     pub fix: bool,
+    /// `--optimize` — a PRODUCTION build. Rejects any development-only
+    /// `Debug.*` escape hatch (IPE-L0140). Mirrors Elm's `--optimize` gate on
+    /// its own `Debug` module. Does not compose with `--emit-ir` (which stops
+    /// before the emit demand the gate runs on).
+    pub production: bool,
     /// The emit surface (IR dump vs project emit).
     pub mode: BuildMode,
 }
@@ -257,6 +262,7 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
     let mut runtime: Option<String> = None;
     let mut emit_ir = false;
     let mut fix = false;
+    let mut production = false;
     let mut static_flags = StaticFlags::default();
     while let Some(flag) = it.next() {
         if static_flags.consume(flag, &mut it, "build")? {
@@ -277,6 +283,7 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
             )?,
             "--emit-ir" => emit_ir = true,
             "--fix" => fix = true,
+            "--optimize" => production = true,
             other => {
                 return Err(CliError::UsageOwned(format!(
                     "ipe build: unknown flag `{other}`"
@@ -323,6 +330,11 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
                 "--emit-ir does not compose with --allow-slow-allocator",
             ));
         }
+        if production {
+            return Err(CliError::Usage(
+                "--emit-ir does not compose with --optimize",
+            ));
+        }
         BuildMode::EmitIr
     } else if wasm {
         // Clear the pseudo-triple so it never enters static resolution.
@@ -343,6 +355,7 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
         entry,
         runtime,
         fix,
+        production,
         mode,
     })
 }

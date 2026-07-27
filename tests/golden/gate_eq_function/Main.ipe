@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- `eq2` constrains `a` to Equatable (its body compares with `==`). A function is
 -- the one shape `==` cannot handle — Rust derives `PartialEq` for primitives,
@@ -16,4 +17,4 @@ main =
     let bad = eq2 apply apply
         n = if bad then 1 else 0
     in
-    println (String.fromInt n)
+    Io.println (String.fromInt n)

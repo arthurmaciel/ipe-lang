@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- Inline if-then-else.
 absVal : Int -> Int
@@ -24,4 +25,4 @@ main =
         c = classify (0 - 3)
         total = a + b + c
     in
-    println (String.fromInt total)
+    Io.println (String.fromInt total)

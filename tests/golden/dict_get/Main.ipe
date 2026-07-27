@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Ipe.Dict as Dict
 import Ipe.Maybe as Maybe
+import Ipe.Io as Io
 
 main =
-    println (String.fromInt (Maybe.withDefault (-1) (Dict.get "a" (Dict.insert "a" 42 Dict.empty))))
+    Io.println (String.fromInt (Maybe.withDefault (-1) (Dict.get "a" (Dict.insert "a" 42 Dict.empty))))

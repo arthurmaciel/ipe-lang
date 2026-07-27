@@ -1126,6 +1126,12 @@ pub struct BuildConfig {
     /// to emit the `#[wasm_bindgen] pub fn hydrate(…)` export (M7 SSR +
     /// hydration island parse + adopt path).
     pub wasm_hydrate_mode: bool,
+    /// `true` for a PRODUCTION build (`ipe build --optimize`). Development-only
+    /// escape hatches (`Debug.*`) are rejected at emit demand (IPE-L0140) so a
+    /// shipped program never carries a debug window. Lives on `BuildConfig`
+    /// (not `SourceRoot`) so toggling it re-runs only [`emit_project`], never
+    /// [`lower_program`] / [`typecheck`].
+    pub production: bool,
 }
 
 /// The memoized result of emitting the linked, lowered program to Rust
@@ -1162,6 +1168,28 @@ pub fn emit_project(
     use ipe_backend::Backend as _;
 
     let program = lower_program(db, root, entry)?;
+
+    // Production gate: a `--optimize` build rejects any development-only
+    // `Debug.*` escape hatch (IPE-L0140) rather than silently stripping or
+    // shipping it. The `uses_debug` flag is set unconditionally by the
+    // lowerer, so this gate lives on the emit demand (which DOES depend on
+    // `config`) — toggling `--optimize` never re-runs lower/typecheck.
+    if config.production(db)
+        && let Some(home) = program
+            .modules
+            .iter()
+            .find(|m| m.uses_debug)
+            .map(|m| m.name.0.clone())
+    {
+        let diag = Diagnostic::Lower {
+            span: ipe_diagnostics::Span::DUMMY,
+            msg: ipe_diagnostics::LowerError::DevOnlyKernelInProduction {
+                kernel: "Debug.log".into(),
+            },
+        };
+        return Err((diag, home));
+    }
+
     let driver = config.db_driver(db);
     let ffi = config.ffi(db).clone();
     let target = config.target(db);

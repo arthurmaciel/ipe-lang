@@ -12,7 +12,8 @@ module Main exposing (main)
 import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.Palette exposing (Shade(..), toHex, Length(..), lengthPx)
+import Ipe.Io as Io
 
 
 main =
-    println (toHex Dark ++ " " ++ String.fromInt (lengthPx (Px 42)))
+    Io.println (toHex Dark ++ " " ++ String.fromInt (lengthPx (Px 42)))

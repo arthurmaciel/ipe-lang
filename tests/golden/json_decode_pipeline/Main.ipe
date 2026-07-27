@@ -22,7 +22,7 @@ import Ipe.Json.Decode.Pipeline as Pipeline
 import Ipe.Prelude exposing (..)
 import Ipe.Result as Result
 import Ipe.String as String
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 type alias Transaction =
@@ -85,7 +85,7 @@ main =
     in
     case tx of
         Ok t ->
-            println
+            Io.println
                 (t.account
                     ++ " "
                     ++ Result.withDefault "?" lbl
@@ -94,4 +94,4 @@ main =
                 )
 
         Err _ ->
-            println "err"
+            Io.println "err"

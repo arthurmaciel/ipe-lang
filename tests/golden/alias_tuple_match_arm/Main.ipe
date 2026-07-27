@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 -- #99: an `as`-alias over a dispatch-free tuple inside a by-value ctor
 -- payload. Pre-fix this emitted `Just(w @ (a, b))` over a non-Copy
@@ -18,4 +18,4 @@ describe m =
             "none"
 
 main =
-    println (describe (Just ("hello", "world")))
+    Io.println (describe (Just ("hello", "world")))

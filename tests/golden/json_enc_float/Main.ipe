@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- Float encoding must byte-match Go's encoding/json floatEncoder, not serde's
 -- Ryū default. Go uses decimal ('f') form unless |x| < 1e-6 or |x| >= 1e21, in
@@ -10,7 +11,7 @@ module Main exposing (main)
 --   1.23e17  -> "123000000000000000"      (< 1e21 → decimal)
 -- bool/null scalars ride along.
 main =
-    println
+    Io.println
         (String.join " "
             [ JsonEnc.encode 0 (JsonEnc.float 1.5)
             , JsonEnc.encode 0 (JsonEnc.float 1e20)

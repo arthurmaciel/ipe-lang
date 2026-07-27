@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 -- #90 T3 green twin: `Maybe.map2` with an exact-arity-2 callback must stay
 -- accepted (the intermediate `b -> v` arrow inside the scheme is the
@@ -12,5 +12,5 @@ add a b =
 
 main =
     case Maybe.map2 add (Just 40) (Just 2) of
-        Just n -> println (String.fromInt n)
-        Nothing -> println "none"
+        Just n -> Io.println (String.fromInt n)
+        Nothing -> Io.println "none"

@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 main =
-    println (String.fromInt (List.foldr (\x a -> x - a) 0 [1, 2, 3]))
+    Io.println (String.fromInt (List.foldr (\x a -> x - a) 0 [1, 2, 3]))

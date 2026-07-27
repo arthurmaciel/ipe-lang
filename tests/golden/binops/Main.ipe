@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- Comparison + boolean operators, type-checked, lowered, and emitted.
 -- (`>` `<` `&&`)
@@ -20,4 +21,4 @@ sameOrDiffers a b =
 -- Arithmetic precedence: `*` binds tighter than `+`/`-`, both left-assoc.
 -- 2 + (3 * 4) - 1 = 13.
 main =
-    println (String.fromInt (2 + 3 * 4 - 1))
+    Io.println (String.fromInt (2 + 3 * 4 - 1))

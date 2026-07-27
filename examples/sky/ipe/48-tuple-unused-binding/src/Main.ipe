@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- A tuple destructure in a `let` that IGNORES some elements. `pattern_test`
@@ -20,4 +20,4 @@ main =
     let
         ( a, b, c ) = triple
     in
-        println (b ++ " " ++ String.fromInt a)
+        Io.println (b ++ " " ++ String.fromInt a)

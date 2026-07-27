@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 
 -- #183 SEAL positive: `Result.mapError`'s handler is a wildcard lambda
@@ -12,4 +13,4 @@ import Ipe.Prelude exposing (..)
 -- then-cargo-fail SEAL breach). Since the input is `Ok`, the handler never
 -- runs; `Result.withDefault` unwraps the `Ok` and prints "concrete".
 main =
-    println (Result.withDefault "def" (Result.mapError (\_ -> Error.invalidInput "x") (Ok "concrete")))
+    Io.println (Result.withDefault "def" (Result.mapError (\_ -> Error.invalidInput "x") (Ok "concrete")))

@@ -11,6 +11,7 @@ module Main exposing (main)
 -- and surfaces IPE-T0001; both fail closed with no Rust emitted.)
 
 import Ipe.Set as Set
+import Ipe.Io as Io
 
 
 singletonSet : a -> Set a
@@ -28,4 +29,4 @@ main =
         _ =
             singletonSet rec
     in
-    println (String.fromInt 0)
+    Io.println (String.fromInt 0)

@@ -3,6 +3,7 @@ module Main exposing (main)
 import Ipe.Prelude exposing (..)
 import Ipe.Set as Set
 import Ipe.List as List
+import Ipe.Io as Io
 
 
 main =
@@ -38,7 +39,7 @@ main =
             else
                 0
     in
-    println
+    Io.println
         (String.join " "
             (List.map String.fromInt
                 [ total, totalR, doubledSize, evensSize, bigSize, one, emptyFlag ]

@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- A literal arm AFTER a wildcard catch-all can never match — it is redundant
 -- (IPE-T0011).
@@ -10,4 +11,4 @@ f n =
         1 -> 1
 
 main =
-    println (String.fromInt (f 7))
+    Io.println (String.fromInt (f 7))

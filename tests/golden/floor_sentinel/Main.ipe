@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- Floor sentinel: EVERY top constructor is covered (`Som` and `Non`), and inside
 -- `Som` both inner constructors are covered (`Som …` and `Non`). The only gap is
@@ -23,4 +24,4 @@ f oo =
         Non -> 0
 
 main =
-    println (String.fromInt (f Non))
+    Io.println (String.fromInt (f Non))
