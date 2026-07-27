@@ -34,7 +34,7 @@
 )]
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use ipe_sandbox::build_jail::{CapabilityAxis, JailOutcome, build_in_jail};
 use ipe_sandbox::run_jail::{FilesystemScope, RunJailTools, SandboxProfile};
@@ -130,39 +130,50 @@ fn ro_binds() -> Vec<PathBuf> {
 fn run_fixture(
     tools: &RunJailTools,
     profile: &SandboxProfile,
-    scoped: &PathBuf,
+    scoped: &Path,
     axis: &str,
     escape_path: &str,
 ) -> JailOutcome {
-    // The env the fixture reads. `run_jail_argv` scrubs the env with
-    // `--clearenv`, re-exporting only the profile's `env_allowlist` (plus
-    // PATH/TMPDIR/LANG). So the probe contract vars must be on the allowlist to
-    // survive the scrub — this test sets them via a profile whose env_allowlist
-    // names them and a host_env-backed run. `build_in_jail` reads the real host
-    // env, so export them into this process first.
-    unsafe {
-        std::env::set_var("PROBE_MODE", "tier2");
-        std::env::set_var("TIER2_AXIS", axis);
-        std::env::set_var("SCRATCH_DIR", scoped);
-        std::env::set_var("ESCAPE_PATH", escape_path);
-    }
-    let profile = SandboxProfile {
-        env_allowlist: vec![
-            "PROBE_MODE".to_owned(),
-            "TIER2_AXIS".to_owned(),
-            "SCRATCH_DIR".to_owned(),
-            "ESCAPE_PATH".to_owned(),
-        ],
-        ..profile.clone()
-    };
+    // The env the fixture reads (`PROBE_MODE`/`TIER2_AXIS`/`SCRATCH_DIR`/
+    // `ESCAPE_PATH`). These are PER-TEST data, not host state, so they must NOT
+    // travel through the process-global environment: `std::env::set_var` mutates
+    // a table shared by every parallel `--test-threads` worker, and the four
+    // tests would race — thread A's argv could be built from thread B's
+    // `SCRATCH_DIR`/`TIER2_AXIS`, so a probe writes into a sibling's (deleted)
+    // scratch, `set -eu` aborts, and the run decodes to a spurious exit-2
+    // BuildFailed. Instead, thread the config through the PAYLOAD via `env
+    // NAME=VALUE … /bin/sh script`: `env` runs inside the jail (after
+    // `--clearenv`) and sets exactly the child's environment. Each
+    // `build_in_jail` call carries its own config with zero shared state, and the
+    // primitive's host-env re-export contract is left untouched.
+    //
     // The fixture lives in the repo tree, which the jail masks (only the scratch
     // mount and the ro tool binds are visible inside). Copy it into the scratch —
     // the one writable mount — so the jailed shell can read it.
     let jailed_fixture = scoped.join("untrusted-build.sh");
     std::fs::copy(fixture_path(), &jailed_fixture).expect("copy fixture into scratch");
-    let payload: Vec<OsString> = vec![OsString::from("/bin/sh"), jailed_fixture.into_os_string()];
+    let payload: Vec<OsString> = vec![
+        OsString::from("/usr/bin/env"),
+        OsString::from("PROBE_MODE=tier2"),
+        env_assignment("TIER2_AXIS", axis.as_ref()),
+        env_assignment("SCRATCH_DIR", scoped.as_os_str()),
+        env_assignment("ESCAPE_PATH", escape_path.as_ref()),
+        OsString::from("/bin/sh"),
+        jailed_fixture.into_os_string(),
+    ];
     let _guard = JAIL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    build_in_jail(tools, &profile, scoped, scoped, &ro_binds(), &payload)
+    build_in_jail(tools, profile, scoped, scoped, &ro_binds(), &payload)
+}
+
+/// Build a single `NAME=VALUE` argument for `env(1)`. The value is an `OsStr` so
+/// a path with non-UTF-8 bytes survives; the test paths are the process-id/
+/// thread-id scratch dirs, which are ASCII, but keeping it `OsString`-typed
+/// avoids a lossy `to_string_lossy` round-trip.
+fn env_assignment(name: &str, value: &std::ffi::OsStr) -> OsString {
+    let mut assignment = OsString::from(name);
+    assignment.push("=");
+    assignment.push(value);
+    assignment
 }
 
 /// The declared-scoped profile a real Tier-2 probe runs under: `subprocess`
