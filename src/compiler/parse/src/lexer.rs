@@ -35,6 +35,8 @@ pub enum Tok {
     If,
     Then,
     Else,
+    Do,
+    ParallelDo,
     // Punctuation / operators.
     LParen,
     RParen,
@@ -52,6 +54,8 @@ pub enum Tok {
     Pipe,
     Colon,
     Arrow,
+    /// A `do`-block bind lead-in `<-` (`p <- task`).
+    LeftArrow,
     /// A lambda lead-in `\` (`\x -> e`).
     Backslash,
     DotDot,
@@ -275,6 +279,8 @@ fn keyword(text: &str) -> Option<Tok> {
         "if" => Some(Tok::If),
         "then" => Some(Tok::Then),
         "else" => Some(Tok::Else),
+        "do" => Some(Tok::Do),
+        "parallelDo" => Some(Tok::ParallelDo),
         _ => None,
     }
 }
@@ -701,7 +707,7 @@ fn lex_symbol(lx: &mut Lexer, c: char, lo: u32) -> DResult<Tok> {
                 _ => Tok::Slash,
             }
         }
-        // `<` has four forms: `<=`, `<|`, `<<`, and bare `<`.
+        // `<` has five forms: `<=`, `<|`, `<<`, `<-`, and bare `<`.
         '<' => {
             lx.advance();
             match lx.peek() {
@@ -716,6 +722,10 @@ fn lex_symbol(lx: &mut Lexer, c: char, lo: u32) -> DResult<Tok> {
                 Some('<') => {
                     lx.advance();
                     Tok::LtLt
+                }
+                Some('-') => {
+                    lx.advance();
+                    Tok::LeftArrow
                 }
                 _ => Tok::Lt,
             }

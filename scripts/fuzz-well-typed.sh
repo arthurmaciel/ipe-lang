@@ -776,7 +776,7 @@ run_iter() {
             local corpus_src=""
             for _corpus_cand in \
                 "$REPO/examples/sky/ipe/01-hello-world/src/Main.ipe" \
-                "$REPO/examples/14-task-demo/src/Main.ipe"; do
+                "$REPO/examples/sky/ipe/14-task-demo/src/Main.ipe"; do
                 [[ -f "$_corpus_cand" ]] && { corpus_src="$_corpus_cand"; break; }
             done
             if [[ -n "$corpus_src" ]]; then
@@ -794,7 +794,7 @@ run_iter() {
                 local composite_corpus=""
                 for _cc in \
                     "$REPO/examples/sky/ipe/01-hello-world/src/Main.ipe" \
-                    "$REPO/examples/14-task-demo/src/Main.ipe"; do
+                    "$REPO/examples/sky/ipe/14-task-demo/src/Main.ipe"; do
                     [[ -f "$_cc" ]] && { composite_corpus="$_cc"; break; }
                 done
                 if [[ -n "$composite_corpus" ]]; then

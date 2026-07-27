@@ -78,11 +78,17 @@ runtime jail's per-target posture).
 ## Consequences
 
 - Only platforms whose jail is wired and proven can certify a native package.
-  This first cut certifies **linux-x64** only. Other platforms are a
+  The wired platforms are **linux-x64** (bwrap + a seccomp socket-deny filter)
+  and **macos-arm64** (`sandbox-exec` under a Seatbelt SBPL profile). The
+  confinement is not forked per platform: both lower the SAME capability profile —
+  Linux to a bwrap argv + seccomp program, macOS to an SBPL profile — and both
+  decode the SAME wrapper-owned per-axis exit-code contract, so the reconciler and
+  the admit predicate are identical across platforms. Other platforms are a
   refuse-to-certify: the version is not marked admitted for them, and the audit
-  surface says so — it never claims Tier-2 for a platform it did not run on. As
-  each platform's jail lands it promotes to blocking, exactly as the runtime
-  jail's per-target posture does.
+  surface says so — it never claims Tier-2 for a platform it did not run on, and a
+  certify names exactly the platform whose jail ran. As each remaining platform's
+  jail lands it promotes to blocking, exactly as the runtime jail's per-target
+  posture does.
 - The audit spends bounded extra effort: one jailed build+probe for the
   declared-scoped run, plus one per removable axis for the tightening pass. The
   axis set is tiny and the jail caps wall-clock and resources, so an untrusted

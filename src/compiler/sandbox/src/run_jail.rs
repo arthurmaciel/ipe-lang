@@ -38,6 +38,10 @@ use std::path::{Path, PathBuf};
 use ipe_diagnostics::{Code, IPE_F4413};
 use ipe_kernels::Capability;
 
+// The seccomp program is the Linux/x86_64 lowering of the subprocess axis; off
+// that target no argv/seccomp this crate builds would confine the app (the
+// documented refuse-gap), so the import is Linux-only.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use crate::seccomp;
 
 // ── the database axis (a run-jail input, resolved from ipe.toml) ─────────────
@@ -896,8 +900,17 @@ pub fn exec_in_run_jail(
     })
 }
 
-/// Non-Linux stub: the run jail is a documented refuse-gap off Linux/x86_64.
+/// Off `Linux/x86_64` the run jail is a documented refuse-gap.
+///
+/// # Errors
+///
+/// Always [`RunJailDefect::UnsupportedPlatform`]: no sound run jail can be built
+/// off `Linux/x86_64`, so a capability-bearing program refuses to run here rather
+/// than run unconfined.
+// Kept a plain `fn` (not `const fn`) so its signature matches the Linux
+// `exec_in_run_jail`, which cannot be `const`.
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+#[allow(clippy::missing_const_for_fn)]
 pub fn exec_in_run_jail(
     _tools: &RunJailTools,
     _profile: &SandboxProfile,

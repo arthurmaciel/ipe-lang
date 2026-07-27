@@ -375,7 +375,14 @@ promotion rule verbatim.
    loop; the two negative + two positive fixtures (§5.2). Advertise Tier-2 for
    `linux-x64` only. This is the first admitting improvement and stands alone.
 3. **macOS Tier-2.** Same reconciler over the `sandbox-exec` SBPL jail; promote
-   macOS from advisory to blocking; extend the passing line.
+   macOS from advisory to blocking; extend the passing line. **Wired.** The macOS
+   `build_in_jail` lowers the SAME `SandboxProfile` to a Seatbelt SBPL profile
+   (`sbpl_from_profile`) enforced by `sandbox-exec`, decoding the SAME per-axis
+   exit-code contract; the reconciler is unchanged. The SBPL lowering is pure
+   text, unit-tested on any host; the jail's runtime deny behaviour is the
+   `macos-tier2` CI job on a real `macos-latest` runner, which pairs the admission
+   enforce-vs-control duality with the `audit_native` E2E through the real jail
+   and refuses to certify (hard-fails) if `sandbox-exec` is absent.
 4. **Windows / FreeBSD Tier-2.** As each platform's jail is proven
    (Windows-container availability; FreeBSD infra), promote it. Until then
    each is a documented refuse-to-certify (§3.3).

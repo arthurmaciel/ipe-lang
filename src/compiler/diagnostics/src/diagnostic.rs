@@ -46,6 +46,8 @@ pub enum TokenKind {
     If,
     Then,
     Else,
+    Do,
+    ParallelDo,
     LParen,
     RParen,
     LBrace,
@@ -60,6 +62,8 @@ pub enum TokenKind {
     Pipe,
     Colon,
     Arrow,
+    /// `<-` — the `do`-block bind arrow.
+    LeftArrow,
     /// A lambda lead-in `\`.
     Backslash,
     DotDot,

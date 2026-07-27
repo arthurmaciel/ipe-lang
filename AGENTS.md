@@ -964,6 +964,18 @@ Current compiler limitations to work around when writing code.
     continuation line) parses cleanly. Continuation INSIDE type body
     (`T1\n    -> T2`) unsupported — extract `type alias` for whole arrow type.
 
+## Rust workspace gate
+
+Before declaring compiler/runtime work done, run the same hardened gate CI enforces — not a weaker `-p <crate> -- -D warnings` subset:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --all-targets --workspace -- -W clippy::pedantic -W clippy::correctness -W clippy::style -W clippy::complexity -D warnings
+cargo nextest run --workspace          # E2E tests no-op without IPE_E2E=1
+```
+
+The workspace `[workspace.lints.clippy]` deny-set (`unwrap_used`, `expect_used`, `panic`, `indexing_slicing`, `unreachable`, `todo`, `unimplemented`, `pedantic`, `nursery`) and `clippy.toml`'s `disallowed-methods` (`process::abort`, `panic_any`, the `*_unchecked` UB paths) apply to every build. Fix the code — never `#[allow]` around them (tests may `unwrap`/`expect` per `clippy.toml`).
+
 ## Build & test CLI
 
 ```bash
