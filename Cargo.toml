@@ -25,6 +25,7 @@ members = [
     "tools/e2e-support",
     "src/runtime/rust",
     "tools/ipe-ffi-inspector",
+    "tools/regen-goldens",
     "src/playground",
 ]
 # `tools/panic-scan` carries its own `[workspace]` so it builds standalone as a
