@@ -176,7 +176,14 @@ pub fn hash_tree(root: &Path) -> Result<String, (PathBuf, std::io::Error)> {
 
 /// Depth-first collect every regular file under `dir` as `(relative_path,
 /// absolute_path)`, with the relative path expressed in forward slashes so the
-/// hash is identical across platforms. The `.git` directory is skipped.
+/// hash is identical across platforms.
+///
+/// Hidden (dot-prefixed) directories are skipped. These hold VCS and local
+/// tooling metadata — `.git`, a code indexer's `.tokensave`, an editor's
+/// `.vscode`/`.idea` — never a package's published source, which lives in named
+/// directories. Excluding them keeps the content hash a function of the source
+/// alone, so a fetched checkout hashes identically no matter what local tools
+/// have dropped a scratch directory into it.
 fn collect_files(
     base: &Path,
     dir: &Path,
@@ -188,7 +195,11 @@ fn collect_files(
         let path = entry.path();
         let file_type = entry.file_type().map_err(|e| (path.clone(), e))?;
         if file_type.is_dir() {
-            if path.file_name().is_some_and(|n| n == ".git") {
+            if path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with('.'))
+            {
                 continue;
             }
             collect_files(base, &path, out)?;
