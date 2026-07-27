@@ -1,0 +1,978 @@
+//! Tier-2 native-code capability enforcement — differential confinement.
+//!
+//! Tier-1 (`audit.rs`) proves capability honesty over the Ipê-inferable set.
+//! Where a package crosses into native `Rust.` code it carries the `native-ffi`
+//! axis, and inference is blind past that marker. Tier-2 turns "declared on the
+//! author's word" into "observed under confinement and reconciled": it builds
+//! and exercises the package's native code inside a jail scoped to *exactly* the
+//! declared capability set, then reconciles observed-vs-declared, fail-closed on
+//! every mismatch (ADR 0046).
+//!
+//! ## The observation is by denial, not by tracing
+//!
+//! No syscall tracer exists. Instead the reconciler reads the *outcome* of a
+//! declared-scoped jailed run: a withheld axis the native code demands surfaces
+//! as a denial ([`ipe_sandbox::build_jail::JailOutcome::Denied`]) naming the
+//! axis (used-but-undeclared); a declared axis the code never needs is found by
+//! *tightening* — removing that axis and re-running — cross-checked against the
+//! static wrapper scan so the check never pushes an author to under-declare a
+//! genuinely-present capability.
+//!
+//! ## The untrusted build is a CHILD of our probe wrapper
+//!
+//! The single most security-load-bearing structural rule: the untrusted
+//! `cargo build` must never be the top-level payload of the jail, or the package
+//! would own its own `exit(0)` and could forge a [`JailOutcome::Clean`]. The
+//! probe wrapper we author is always the payload's first element; the untrusted
+//! build is passed to it as a subordinate argument. [`ProbePayload`] makes that
+//! unrepresentable: it can only be constructed with the wrapper first, so no
+//! call site can invert the relationship.
+
+use std::collections::BTreeSet;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+
+use ipe_ir::Capability;
+use ipe_sandbox::build_jail::{CapabilityAxis, JailOutcome};
+use ipe_sandbox::run_jail::{DatabaseAxis, RunJailDefect, RunJailTools, SandboxProfile};
+
+use crate::CliError;
+use crate::audit::{Check, Rejection};
+
+/// The one platform whose jail is wired and proven, so Tier-2 may certify on it.
+///
+/// Every other platform is a refuse-to-certify (ADR 0046) — never claimed in the
+/// honest surface, never counted as vouching.
+pub const CERTIFIED_PLATFORM: &str = "linux-x64";
+
+/// A capability axis Tier-2 can differentially confine — the axes the probe
+/// wrapper can actually exercise a denial on.
+///
+/// Only these two carry an OS control the declared-scoped jail can withhold and
+/// the wrapper can name on denial. `clock`/`random` carry no OS control (and are
+/// exempt from the tightening pass, matching the runtime jail's exemption);
+/// `native-ffi` is an epistemic marker, not an exercisable effect; `database`,
+/// `env`, and `subprocess` are not yet probeable and so are not tightened here.
+/// Making the non-probeable axes unrepresentable means a tightening pass can only
+/// ever remove an axis the probe genuinely observes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TightenableAxis {
+    /// The `network` axis — a socket the probe opens.
+    Network,
+    /// The `filesystem` axis — an out-of-scratch write the probe attempts.
+    Filesystem,
+}
+
+impl TightenableAxis {
+    /// The declared [`Capability`] this axis corresponds to.
+    #[must_use]
+    pub const fn capability(self) -> Capability {
+        match self {
+            Self::Network => Capability::Network,
+            Self::Filesystem => Capability::Filesystem,
+        }
+    }
+
+    /// The wire name the fixture's `TIER2_AXIS` selector uses and the diagnostic
+    /// names.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        self.capability().as_str()
+    }
+
+    /// The confinement outcome that names *this* axis as denied.
+    #[must_use]
+    const fn denial(self) -> CapabilityAxis {
+        match self {
+            Self::Network => CapabilityAxis::Network,
+            Self::Filesystem => CapabilityAxis::Filesystem,
+        }
+    }
+
+    /// The declared capabilities that are tightenable, in a stable order — the
+    /// axes the tightening pass iterates over.
+    fn tightenable_of(declared: &BTreeSet<Capability>) -> Vec<Self> {
+        let mut out = Vec::new();
+        if declared.contains(&Capability::Network) {
+            out.push(Self::Network);
+        }
+        if declared.contains(&Capability::Filesystem) {
+            out.push(Self::Filesystem);
+        }
+        out
+    }
+}
+
+/// Whether a package carries native code Tier-2 must confine.
+///
+/// A package is native-bearing when it declares the `native-ffi` axis OR binds
+/// any `[rust.dependencies]` crate — either crosses into code whose true effect
+/// set inference cannot prove. A pure Ipê package (neither) is structurally
+/// bounded by inference and Tier-1 already proved it exactly; Tier-2 skips it.
+#[must_use]
+pub fn is_native_bearing(declared: &BTreeSet<Capability>, has_rust_deps: bool) -> bool {
+    has_rust_deps || declared.contains(&Capability::NativeFfi)
+}
+
+/// The wrapper-owned payload for one jailed probe run.
+///
+/// Structurally enforces the child-of-wrapper rule (ADR 0046): the probe wrapper
+/// script we author owns the per-axis exit-code contract, and the untrusted
+/// build command is only ever appended AFTER it, as a strictly subordinate tail
+/// the wrapper runs as its child. A denial in the untrusted build surfaces as
+/// the wrapper's exit, never the build's own `exit(0)`. There is no constructor
+/// that puts the untrusted build ahead of the wrapper, so no call site can
+/// invert the relationship and let the package forge a clean exit.
+///
+/// `invocation_prefix` (e.g. `env NAME=VALUE … /bin/sh`) is the fixed, trusted
+/// launcher that runs the wrapper under a scrubbed environment; it is exit-
+/// transparent (it propagates the wrapper's exit unchanged). The wrapper script
+/// follows it, then any wrapper flags, then — last — the untrusted build.
+pub struct ProbePayload {
+    argv: Vec<OsString>,
+}
+
+impl ProbePayload {
+    /// Build a payload: the exit-transparent `invocation_prefix`, then the
+    /// exit-owning `wrapper` script, then the untrusted build command as a
+    /// strictly subordinate tail the wrapper runs as its child.
+    ///
+    /// `untrusted_build` is the package's `cargo build`/probe command; the
+    /// wrapper is responsible for translating a denied syscall in that child into
+    /// the per-axis exit code, so the untrusted tail never owns the exit the
+    /// decoder reads.
+    #[must_use]
+    pub fn wrapper_owned(
+        invocation_prefix: &[OsString],
+        wrapper: &Path,
+        untrusted_build: &[OsString],
+    ) -> Self {
+        let mut argv = Vec::with_capacity(invocation_prefix.len() + 1 + untrusted_build.len());
+        argv.extend(invocation_prefix.iter().cloned());
+        argv.push(wrapper.as_os_str().to_owned());
+        argv.extend(untrusted_build.iter().cloned());
+        Self { argv }
+    }
+
+    /// The full argv: prefix, then wrapper, then the untrusted tail. The only
+    /// reader is the jail spawn path.
+    #[must_use]
+    pub fn argv(&self) -> &[OsString] {
+        &self.argv
+    }
+}
+
+/// Runs the wrapper-owned probe under a declared-scoped jail, returning the
+/// decoded outcome.
+///
+/// Abstracted so the reconciler is a pure function of observed outcomes:
+/// production wires it to the real jail ([`build_in_jail`]); tests drive the
+/// whole fail-closed matrix deterministically without spawning bwrap.
+///
+/// `withheld` is the axis this run confines away (`None` = the full
+/// declared-scoped run; `Some(axis)` = the tightening run with `axis` removed),
+/// so an implementation exercises exactly that axis and a denial names it
+/// unambiguously.
+///
+/// [`build_in_jail`]: ipe_sandbox::build_jail::build_in_jail
+pub trait ProbeRunner {
+    /// Run the probe under `profile`, withholding `withheld` (or the full
+    /// declared set when `None`), and return the decoded outcome.
+    fn run(&self, profile: &SandboxProfile, withheld: Option<TightenableAxis>) -> JailOutcome;
+}
+
+/// The static wrapper scan's verdict on whether an axis is *reachable* in the
+/// package's author Rust — the laundering-path cross-check for declared-but-unused.
+///
+/// (ADR 0046.) Abstracted so the reconciler stays pure and testable.
+pub trait StaticReachability {
+    /// Whether the static scan proposes that the wrapper reaches `axis`. A
+    /// declared-but-unused reject fires only when this is `false` AND the tighten
+    /// pass agrees the axis is removable — so Tier-2 never forces an author to
+    /// drop a declaration for a capability the static scan can still see.
+    fn reaches(&self, axis: TightenableAxis) -> bool;
+}
+
+/// Lower a declared capability set to the [`SandboxProfile`] the reconciler
+/// confines to.
+///
+/// Uses the SAME `profile_from_capabilities` the runtime jail uses — so what
+/// Tier-2 confines a build to and what the shipped artifact is confined to at run
+/// time cannot drift (ADR 0046).
+///
+/// `subprocess` is force-granted on top of the declared set: the probe wrapper
+/// forks a helper (to open a socket / attempt an out-of-scratch write), and that
+/// fork must not itself read as the denial under test. The withheld axis — not
+/// the ability to spawn the helper — is what the run observes.
+///
+/// # Errors
+/// [`Rejection`] carrying [`Check::NativeTier2`] when the profile cannot be
+/// lowered (an unresolvable database axis) — fail-closed, never a mis-lowered
+/// jail.
+pub fn scoped_profile(declared: &BTreeSet<Capability>) -> Result<SandboxProfile, Rejection> {
+    // `database` is not a tightenable probe axis here; lower it to a filesystem
+    // scope (the conservative concrete axis) so a declared `database` does not
+    // trip the unresolvable-driver refusal. The tightening loop only removes
+    // network/filesystem, so this never changes a tightening verdict.
+    let db_axis = if declared.contains(&Capability::Database) {
+        DatabaseAxis::Filesystem
+    } else {
+        DatabaseAxis::NotApplicable
+    };
+    let env_allowlist: Vec<String> = Vec::new();
+    let mut profile = ipe_sandbox::run_jail::profile_from_capabilities(
+        declared,
+        &BTreeSet::new(),
+        db_axis,
+        &env_allowlist,
+    )
+    .map_err(|e| Rejection {
+        check: Check::NativeTier2,
+        message: format!(
+            "could not lower the declared capability set to a jail profile ({e}) — refusing to \
+             confine a native build under an unresolvable profile"
+        ),
+    })?;
+    // The probe forks a helper; grant subprocess so that fork is not the denial.
+    profile.subprocess = true;
+    Ok(profile)
+}
+
+/// The declared set with one tightenable axis removed — the tightening run's
+/// scope. Removing `network` drops the profile's net grant; removing
+/// `filesystem` drops the working-tree read-write scope.
+fn tightened_profile(
+    declared: &BTreeSet<Capability>,
+    remove: TightenableAxis,
+) -> Result<SandboxProfile, Rejection> {
+    let mut narrowed = declared.clone();
+    narrowed.remove(&remove.capability());
+    scoped_profile(&narrowed)
+}
+
+/// Reconcile a native package's observed behaviour against its declared set,
+/// fail-closed on the full §2.3 matrix (ADR 0046).
+///
+/// Pure over the two abstracted observers so the whole matrix is unit-testable
+/// without a real jail.
+///
+/// The admit path is a single conjunction:
+/// 1. the declared-scoped run is [`JailOutcome::Clean`] (no withheld axis
+///    demanded — no used-but-undeclared), and
+/// 2. no declared tightenable axis is removable *and* statically-unreached
+///    (no declared-but-unused).
+///
+/// Every other outcome is a typed reject:
+/// - [`JailOutcome::Denied`] on the declared-scoped run → **used-but-undeclared**;
+/// - [`JailOutcome::BuildFailed`] → **build-fails-in-jail**;
+/// - [`JailOutcome::Unavailable`] → **sandbox-unavailable** (reject the platform);
+/// - a tightening run that stays [`JailOutcome::Clean`] with an axis removed, when
+///   the static scan agrees the axis is unreached → **declared-but-unused**.
+///
+/// # Errors
+/// [`Rejection`] with [`Check::NativeTier2`] on any non-admit branch.
+pub fn reconcile_native(
+    declared: &BTreeSet<Capability>,
+    runner: &dyn ProbeRunner,
+    static_scan: &dyn StaticReachability,
+    scoped: &SandboxProfile,
+) -> Result<(), Rejection> {
+    // 1. The declared-scoped run. The only clean-eligible observation.
+    match runner.run(scoped, None) {
+        JailOutcome::Clean => {}
+        JailOutcome::Denied { axis } => {
+            return Err(used_but_undeclared(axis));
+        }
+        JailOutcome::BuildFailed { reason } => {
+            return Err(build_failed(&reason));
+        }
+        JailOutcome::Unavailable { defect } => {
+            return Err(sandbox_unavailable(&defect));
+        }
+    }
+
+    // 2. The tightening pass: for each declared tightenable axis, remove it and
+    //    re-run. If the run STILL passes clean with the axis withheld, the axis
+    //    was not needed — but only reject as declared-but-unused when the static
+    //    scan ALSO agrees the axis is unreached (the laundering-path mitigation).
+    for axis in TightenableAxis::tightenable_of(declared) {
+        let narrowed = tightened_profile(declared, axis)?;
+        match runner.run(&narrowed, Some(axis)) {
+            // Still clean with the axis removed: the axis is removable.
+            JailOutcome::Clean => {
+                if static_scan.reaches(axis) {
+                    // The tighten says removable, but the static scan still sees
+                    // the axis reached: do NOT flag unused (it would push the
+                    // author to under-declare a genuinely-present capability).
+                    continue;
+                }
+                return Err(declared_but_unused(axis));
+            }
+            // Removing the axis produced a denial naming it — the axis IS needed,
+            // so it is not over-broad. Not a reject.
+            JailOutcome::Denied { axis: denied } if denied == axis.denial() => {}
+            // A denial naming a DIFFERENT axis under this tightening run is an
+            // ambiguous observation (the run should exercise exactly `axis`);
+            // fail-closed rather than reason about it.
+            JailOutcome::Denied { axis: other } => {
+                return Err(ambiguous_tighten(axis, other));
+            }
+            JailOutcome::BuildFailed { reason } => {
+                return Err(build_failed(&reason));
+            }
+            JailOutcome::Unavailable { defect } => {
+                return Err(sandbox_unavailable(&defect));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Build the used-but-undeclared reject naming the demanded axis.
+fn used_but_undeclared(axis: CapabilityAxis) -> Rejection {
+    Rejection {
+        check: Check::NativeTier2,
+        message: format!(
+            "the package's native code demanded the `{}` capability under a jail scoped to its \
+             declared set — a hidden effect the consumer never consented to. Declare `{}` (if the \
+             effect is intended) or remove the native code that reaches it.",
+            axis.as_str(),
+            axis.as_str()
+        ),
+    }
+}
+
+/// Build the declared-but-unused reject naming the over-broad axis.
+fn declared_but_unused(axis: TightenableAxis) -> Rejection {
+    Rejection {
+        check: Check::NativeTier2,
+        message: format!(
+            "the declared `{axis}` capability is never demanded by the package's native code, and \
+             the static wrapper scan does not reach it either — an over-broad claim. The declared \
+             set must be exactly the consent surface; remove `{axis}`.",
+            axis = axis.as_str()
+        ),
+    }
+}
+
+/// Build the build-fails-in-jail reject (an ordinary compile/link/test error,
+/// distinct from a capability denial).
+fn build_failed(reason: &str) -> Rejection {
+    Rejection {
+        check: Check::NativeTier2,
+        message: format!(
+            "the package's native code failed to build or pass its probe under the declared-scoped \
+             jail (not a capability denial): {reason}"
+        ),
+    }
+}
+
+/// Build the sandbox-unavailable reject — the jail could not be established on a
+/// platform that should have one. Never a silent skip on `linux-x64`.
+fn sandbox_unavailable(defect: &RunJailDefect) -> Rejection {
+    Rejection {
+        check: Check::NativeTier2,
+        message: format!(
+            "no capability jail could be established to confine the native build on \
+             {CERTIFIED_PLATFORM} ({defect}) — refusing to certify a native package whose code was \
+             never confined. The untrusted build is never run unconfined on an admitting path."
+        ),
+    }
+}
+
+/// Build the ambiguous-tighten reject — a tightening run named an axis other
+/// than the one it was exercising. Fail-closed on an observation we cannot trust.
+fn ambiguous_tighten(exercising: TightenableAxis, named: CapabilityAxis) -> Rejection {
+    Rejection {
+        check: Check::NativeTier2,
+        message: format!(
+            "a tightening run exercising the `{}` axis observed a denial naming `{}` instead — an \
+             ambiguous observation the reconciler will not reason past. Refusing to certify \
+             (fail-closed).",
+            exercising.as_str(),
+            named.as_str()
+        ),
+    }
+}
+
+// ===========================================================================
+// The audit entry point
+// ===========================================================================
+
+/// What Tier-2 did for a package — consumed by the audit's honest surface so it
+/// advertises Tier-2 only for what genuinely ran (never a claim about an unwired
+/// platform).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Tier2Outcome {
+    /// The package is pure Ipê (not native-bearing): Tier-2 skipped it. Tier-1
+    /// still fully gated it.
+    SkippedPureIpe,
+    /// The package's native code was built + exercised under a declared-scoped
+    /// jail on `platform` and reconciled clean. The one certify path.
+    Certified {
+        /// The platform Tier-2 genuinely ran and reconciled on.
+        platform: &'static str,
+    },
+}
+
+/// The inputs Tier-2 reads from the already-built package.
+pub struct NativeAudit<'a> {
+    /// The manifest-declared capability set (the consent surface).
+    pub declared: &'a BTreeSet<Capability>,
+    /// Whether the manifest binds any `[rust.dependencies]` crate.
+    pub has_rust_deps: bool,
+    /// The package root (the FFI wrapper cache lives under `.ipe/cache/ffi/rust`).
+    pub root: &'a Path,
+    /// The absolute path to the wrapper-owned admission probe fixture.
+    pub probe_fixture: PathBuf,
+}
+
+/// The static-scan reachability over the package's author FFI wrapper Rust.
+///
+/// Re-uses [`ipe_ffi::capability_scan`] — the laundering-path cross-check for the
+/// declared-but-unused reject. A wrapper the scan cannot enumerate (an opacity
+/// trigger) is treated as reaching EVERY tightenable axis: fail-closed, so an
+/// unenumerable wrapper can never enable a declared-but-unused reject that would
+/// push the author to under-declare.
+pub struct WrapperScan {
+    reaches: BTreeSet<Capability>,
+}
+
+impl WrapperScan {
+    /// Scan every `_bindings.rs` under the package's FFI cache. Any opacity
+    /// trigger (native FFI, unenumerable module, non-lexing source) is
+    /// conservatively read as reaching all tightenable axes.
+    ///
+    /// # Errors
+    /// [`CliError::Io`] on a failure to read the FFI wrapper cache.
+    pub fn over_package(root: &Path) -> Result<Self, CliError> {
+        let cache_root = root.join(".ipe/cache/ffi/rust");
+        if !cache_root.is_dir() {
+            // No author wrapper Rust: the static scan sees no reachable axis, so
+            // it cannot veto a declared-but-unused reject. That is the correct
+            // conservative reading — with no wrapper source, a declared axis that
+            // the probe never demands is genuinely over-broad.
+            return Ok(Self {
+                reaches: BTreeSet::new(),
+            });
+        }
+        let mut sources: Vec<(String, String)> = Vec::new();
+        let mut files: Vec<PathBuf> = Vec::new();
+        collect_bindings(&cache_root, &mut files)?;
+        files.sort();
+        for file in files {
+            let src = std::fs::read_to_string(&file).map_err(|e| CliError::Io {
+                path: file.clone(),
+                source: e,
+            })?;
+            sources.push((file.display().to_string(), src));
+        }
+        let outcome = ipe_ffi::capability_scan::scan_sources(
+            sources.iter().map(|(f, s)| (f.as_str(), s.as_str())),
+        );
+        let mut reaches: BTreeSet<Capability> = outcome.proposed.clone();
+        if !outcome.opacities.is_empty() {
+            // An unenumerable wrapper: assume it reaches every tightenable axis
+            // so it can never license a declared-but-unused reject.
+            reaches.insert(Capability::Network);
+            reaches.insert(Capability::Filesystem);
+        }
+        Ok(Self { reaches })
+    }
+}
+
+impl StaticReachability for WrapperScan {
+    fn reaches(&self, axis: TightenableAxis) -> bool {
+        self.reaches.contains(&axis.capability())
+    }
+}
+
+/// Recursively collect every `_bindings.rs` file under `dir`.
+///
+/// # Errors
+/// [`CliError::Io`] on a directory-read failure.
+fn collect_bindings(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), CliError> {
+    let entries = std::fs::read_dir(dir).map_err(|e| CliError::Io {
+        path: dir.to_path_buf(),
+        source: e,
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|e| CliError::Io {
+            path: dir.to_path_buf(),
+            source: e,
+        })?;
+        let path = entry.path();
+        let file_type = entry.file_type().map_err(|e| CliError::Io {
+            path: path.clone(),
+            source: e,
+        })?;
+        if file_type.is_dir() {
+            collect_bindings(&path, out)?;
+        } else if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with("_bindings.rs"))
+        {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
+/// Run Tier-2 native enforcement over an already-built package (ADR 0046).
+///
+/// A pure Ipê package (not native-bearing) returns [`Tier2Outcome::SkippedPureIpe`]
+/// — Tier-1 already proved it exactly.
+///
+/// A native-bearing package is reconciled by differential confinement over its
+/// declared set on the certified platform. The reconciler ([`reconcile_native`])
+/// is sound and proven end-to-end against the real jail — but it can only observe
+/// what a **probe** actually exercises of the native surface (§2.2). This first
+/// cut wires no per-package probe entrypoint that lets the *package's own* native
+/// code drive the differential probe, so there is nothing for Tier-2 to exercise.
+/// Per the fail-closed probe-coverage rule (ADR 0046: "a native package that
+/// exposes no probeable entrypoint is never silently admitted as clean"), a
+/// native-bearing package is therefore **rejected as un-exercised**, never
+/// certified. It is never admitted on a stand-in probe whose actions Tier-2, not
+/// the package, chose — that would be a false clean.
+///
+/// # Errors
+/// [`CliError::PackageAudit`] carrying a [`Check::NativeTier2`] [`Rejection`] for
+/// a native-bearing package (un-exercised, fail-closed).
+#[allow(clippy::unnecessary_wraps)] // uniform with the Tier-1 checks' Result shape
+pub fn native_tier2(audit: &NativeAudit) -> Result<Tier2Outcome, CliError> {
+    if !is_native_bearing(audit.declared, audit.has_rust_deps) {
+        return Ok(Tier2Outcome::SkippedPureIpe);
+    }
+    Err(CliError::PackageAudit(no_probeable_entrypoint()))
+}
+
+/// The un-exercised reject: a native-bearing package with no probeable entrypoint
+/// for the differential probe to drive. Fail-closed — never a silent clean.
+fn no_probeable_entrypoint() -> Rejection {
+    Rejection {
+        check: Check::NativeTier2,
+        message: format!(
+            "this package is native-bearing (it declares `native-ffi` or binds a Rust dependency), \
+             but exposes no capability-probe entrypoint for Tier-2 to exercise its native code \
+             under a declared-scoped jail on {CERTIFIED_PLATFORM}. Tier-2 refuses to certify a \
+             native package it cannot exercise, rather than admit it un-observed (fail-closed)."
+        ),
+    }
+}
+
+/// The read-only tool binds the wrapper needs re-exposed past the jail's tmpfs
+/// masks (the interpreters `/bin/sh`, `/usr/bin/env`, python3/nc for the net
+/// probe). Only existing paths are bound.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[must_use]
+pub fn default_ro_binds() -> Vec<PathBuf> {
+    [
+        PathBuf::from("/usr"),
+        PathBuf::from("/bin"),
+        PathBuf::from("/lib"),
+        PathBuf::from("/lib64"),
+    ]
+    .into_iter()
+    .filter(|p| p.exists())
+    .collect()
+}
+
+/// The production probe runner: establishes the real Linux jail and runs the
+/// wrapper-owned probe under it via [`build_in_jail`], so the untrusted build is
+/// a child of our exit-owning wrapper.
+///
+/// Public so an end-to-end test can drive [`reconcile_native`] through the REAL
+/// jail exactly as production does, proving the wiring (a denial names the axis,
+/// a clean run requires the probe's positive clean exit) at the OS boundary.
+///
+/// [`build_in_jail`]: ipe_sandbox::build_jail::build_in_jail
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub struct JailProbeRunner<'a> {
+    tools: &'a RunJailTools,
+    wrapper: PathBuf,
+    scoped_tmp: PathBuf,
+    working_tree: PathBuf,
+    ro_binds: Vec<PathBuf>,
+    /// The axes the native code (the wrapper stand-in) actually EXERCISES on the
+    /// full declared-scoped run — a property of the code, not of the declaration,
+    /// so a used-but-undeclared axis (exercised but not declared, hence withheld)
+    /// is observed as a denial. The tightening runs override this with the single
+    /// axis under test.
+    exercised: Vec<TightenableAxis>,
+    /// The untrusted build command the wrapper runs as its child (may be empty
+    /// in the first cut, where the wrapper's own probes are the exercise).
+    untrusted_build: Vec<OsString>,
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+impl<'a> JailProbeRunner<'a> {
+    /// Build a jail-backed runner over an established set of jail `tools`, the
+    /// exit-owning `wrapper` script (readable inside the jail — the caller must
+    /// place it in the scratch), the always-writable `scoped_tmp`, the
+    /// filesystem-axis-gated `working_tree`, the read-only tool `ro_binds`, and
+    /// the axes the native code `exercised` on the full run. `untrusted_build` is
+    /// the strictly subordinate build tail (empty in the first cut).
+    #[must_use]
+    pub const fn new(
+        tools: &'a RunJailTools,
+        wrapper: PathBuf,
+        scoped_tmp: PathBuf,
+        working_tree: PathBuf,
+        ro_binds: Vec<PathBuf>,
+        exercised: Vec<TightenableAxis>,
+        untrusted_build: Vec<OsString>,
+    ) -> Self {
+        Self {
+            tools,
+            wrapper,
+            scoped_tmp,
+            working_tree,
+            ro_binds,
+            exercised,
+            untrusted_build,
+        }
+    }
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+impl ProbeRunner for JailProbeRunner<'_> {
+    fn run(&self, profile: &SandboxProfile, withheld: Option<TightenableAxis>) -> JailOutcome {
+        // The axis selector the fixture reads. On the full declared-scoped run it
+        // is the set the native code EXERCISES (so an exercised-but-withheld axis
+        // is denied); on a tightening run it is the single axis under test.
+        let axis_sel: OsString = match withheld {
+            Some(a) => OsString::from(a.as_str()),
+            None => match exercised_selector(&self.exercised) {
+                Some(sel) => OsString::from(sel),
+                // The native code exercises no tightenable axis, so a
+                // declared-scoped jail cannot deny it: Clean by construction,
+                // never a forged payload exit.
+                None => return JailOutcome::Clean,
+            },
+        };
+        // The fs-escape target lives in the WORKING TREE (bound read-write only
+        // when the filesystem axis is granted), not the always-writable scratch —
+        // so the write succeeds under a filesystem-granted jail and is denied
+        // under a filesystem-withholding one, making the axis differentially
+        // observable.
+        let escape = self.working_tree.join("tier2-escape-probe");
+        // The fixed, trusted, exit-transparent launcher: `env NAME=VALUE … /bin/sh`
+        // runs the wrapper under a scrubbed environment (per-run config travels
+        // through the payload, never the process-global environment). It
+        // propagates the wrapper's exit unchanged.
+        let invocation_prefix = vec![
+            OsString::from("/usr/bin/env"),
+            OsString::from("PROBE_MODE=tier2"),
+            assignment("TIER2_AXIS", axis_sel.as_os_str()),
+            assignment("SCRATCH_DIR", self.scoped_tmp.as_os_str()),
+            assignment("ESCAPE_PATH", escape.as_os_str()),
+            OsString::from("/bin/sh"),
+        ];
+        // The wrapper script owns the exit contract; the untrusted build is a
+        // strictly subordinate tail it runs as its child (ProbePayload enforces
+        // the ordering). The untrusted build can never own the exit.
+        let payload =
+            ProbePayload::wrapper_owned(&invocation_prefix, &self.wrapper, &self.untrusted_build);
+        ipe_sandbox::build_jail::build_in_jail(
+            self.tools,
+            profile,
+            &self.scoped_tmp,
+            &self.working_tree,
+            &self.ro_binds,
+            payload.argv(),
+        )
+    }
+}
+
+/// The fixture's `TIER2_AXIS` value for a set of exercised axes: `both`,
+/// `network`, `filesystem`, or `None` when the native code exercises no
+/// tightenable axis (the caller then produces a Clean-by-construction outcome
+/// without a spawn).
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn exercised_selector(exercised: &[TightenableAxis]) -> Option<&'static str> {
+    let net = exercised.contains(&TightenableAxis::Network);
+    let fs = exercised.contains(&TightenableAxis::Filesystem);
+    match (net, fs) {
+        (true, true) => Some("both"),
+        (true, false) => Some("network"),
+        (false, true) => Some("filesystem"),
+        (false, false) => None,
+    }
+}
+
+/// Build a single `NAME=VALUE` token for `env(1)`. The value is an `OsStr` so a
+/// scratch path with non-UTF-8 bytes survives without a lossy round-trip.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn assignment(name: &str, value: &std::ffi::OsStr) -> OsString {
+    let mut a = OsString::from(name);
+    a.push("=");
+    a.push(value);
+    a
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn set(caps: &[Capability]) -> BTreeSet<Capability> {
+        caps.iter().copied().collect()
+    }
+
+    /// A scripted runner: answers each `(withheld)` query from a fixed table so a
+    /// test drives the exact matrix branch it targets. An unlisted query is a
+    /// deliberate `BuildFailed` (never accidentally clean).
+    struct ScriptedRunner {
+        /// Outcome for the full declared-scoped run (`withheld == None`).
+        full: JailOutcome,
+        /// Outcome for each tightening run keyed by the withheld axis name.
+        tighten: std::collections::BTreeMap<&'static str, JailOutcome>,
+    }
+
+    impl ProbeRunner for ScriptedRunner {
+        fn run(&self, _profile: &SandboxProfile, withheld: Option<TightenableAxis>) -> JailOutcome {
+            withheld.map_or_else(
+                || self.full.clone(),
+                |a| {
+                    self.tighten.get(a.as_str()).cloned().unwrap_or_else(|| {
+                        JailOutcome::BuildFailed {
+                            reason: "unscripted tighten query".to_owned(),
+                        }
+                    })
+                },
+            )
+        }
+    }
+
+    /// A static scan that reports a fixed reachable set.
+    struct FixedScan {
+        reaches: BTreeSet<Capability>,
+    }
+
+    impl StaticReachability for FixedScan {
+        fn reaches(&self, axis: TightenableAxis) -> bool {
+            self.reaches.contains(&axis.capability())
+        }
+    }
+
+    fn scan(reaches: &[Capability]) -> FixedScan {
+        FixedScan {
+            reaches: reaches.iter().copied().collect(),
+        }
+    }
+
+    fn scripted(full: JailOutcome, tighten: &[(&'static str, JailOutcome)]) -> ScriptedRunner {
+        ScriptedRunner {
+            full,
+            tighten: tighten.iter().cloned().collect(),
+        }
+    }
+
+    fn profile() -> SandboxProfile {
+        SandboxProfile::maximally_isolated()
+    }
+
+    #[test]
+    fn native_bearing_is_rust_deps_or_declared_native_ffi() {
+        assert!(!is_native_bearing(&set(&[Capability::Network]), false));
+        assert!(is_native_bearing(&set(&[Capability::NativeFfi]), false));
+        assert!(is_native_bearing(&BTreeSet::new(), true));
+        assert!(!is_native_bearing(&BTreeSet::new(), false));
+    }
+
+    #[test]
+    fn a_used_but_undeclared_axis_rejects_naming_it() {
+        // Declared `[]`; the declared-scoped run is DENIED naming network — a
+        // hidden effect. Reject naming the network axis.
+        let declared = BTreeSet::new();
+        let runner = scripted(
+            JailOutcome::Denied {
+                axis: CapabilityAxis::Network,
+            },
+            &[],
+        );
+        let r = reconcile_native(&declared, &runner, &scan(&[]), &profile())
+            .expect_err("a denied withheld axis must reject");
+        assert_eq!(r.check, Check::NativeTier2);
+        assert!(r.message.contains("network"), "{}", r.message);
+        assert!(r.message.contains("hidden effect"), "{}", r.message);
+    }
+
+    #[test]
+    fn a_used_but_undeclared_filesystem_axis_rejects_naming_filesystem() {
+        let declared = set(&[Capability::Clock]);
+        let runner = scripted(
+            JailOutcome::Denied {
+                axis: CapabilityAxis::Filesystem,
+            },
+            &[],
+        );
+        let r = reconcile_native(&declared, &runner, &scan(&[]), &profile())
+            .expect_err("a denied filesystem axis must reject");
+        assert!(r.message.contains("filesystem"), "{}", r.message);
+    }
+
+    #[test]
+    fn a_declared_but_unused_axis_rejects_when_static_scan_agrees() {
+        // Declares network; the declared-scoped run is clean, the tighten run
+        // (network removed) STAYS clean, and the static scan does NOT reach
+        // network → over-broad → reject.
+        let declared = set(&[Capability::Network]);
+        let runner = scripted(JailOutcome::Clean, &[("network", JailOutcome::Clean)]);
+        let r = reconcile_native(&declared, &runner, &scan(&[]), &profile())
+            .expect_err("an unused declared axis must reject");
+        assert!(r.message.contains("network"), "{}", r.message);
+        assert!(r.message.contains("over-broad"), "{}", r.message);
+    }
+
+    #[test]
+    fn a_declared_but_unused_axis_is_not_flagged_when_the_static_scan_still_reaches_it() {
+        // The tighten says removable, but the static scan STILL reaches network —
+        // flagging would push the author to under-declare a present capability
+        // (the laundering path). Do not reject on the tighten alone → admit.
+        let declared = set(&[Capability::Network]);
+        let runner = scripted(JailOutcome::Clean, &[("network", JailOutcome::Clean)]);
+        reconcile_native(
+            &declared,
+            &runner,
+            &scan(&[Capability::Network]),
+            &profile(),
+        )
+        .expect("static scan reaches the axis → not flagged unused → admit");
+    }
+
+    #[test]
+    fn a_needed_declared_axis_is_not_over_broad() {
+        // Declares network; the tighten run (network removed) is DENIED naming
+        // network — the axis IS needed, so it is not over-broad → admit.
+        let declared = set(&[Capability::Network]);
+        let runner = scripted(
+            JailOutcome::Clean,
+            &[(
+                "network",
+                JailOutcome::Denied {
+                    axis: CapabilityAxis::Network,
+                },
+            )],
+        );
+        reconcile_native(&declared, &runner, &scan(&[]), &profile())
+            .expect("a needed declared axis must admit");
+    }
+
+    #[test]
+    fn a_build_failure_in_jail_rejects_distinctly_from_a_denial() {
+        let declared = BTreeSet::new();
+        let runner = scripted(
+            JailOutcome::BuildFailed {
+                reason: "rustc error E0308".to_owned(),
+            },
+            &[],
+        );
+        let r = reconcile_native(&declared, &runner, &scan(&[]), &profile())
+            .expect_err("a build failure must reject");
+        assert!(r.message.contains("failed to build"), "{}", r.message);
+        assert!(
+            !r.message.contains("hidden effect"),
+            "must not be a used-but-undeclared diagnostic: {}",
+            r.message
+        );
+    }
+
+    #[test]
+    fn sandbox_unavailable_rejects_the_platform_never_skips() {
+        let declared = BTreeSet::new();
+        let runner = scripted(
+            JailOutcome::Unavailable {
+                defect: RunJailDefect::PrimitiveUnavailable {
+                    missing: vec!["bwrap"],
+                },
+            },
+            &[],
+        );
+        let r = reconcile_native(&declared, &runner, &scan(&[]), &profile())
+            .expect_err("an unavailable jail must reject, never skip");
+        assert!(r.message.contains(CERTIFIED_PLATFORM), "{}", r.message);
+        assert!(r.message.contains("never run unconfined"), "{}", r.message);
+    }
+
+    #[test]
+    fn a_benign_package_declaring_exactly_its_axes_admits() {
+        // Declares network; the declared-scoped run is clean; the tighten run
+        // (network removed) is DENIED naming network (the axis is needed) → the
+        // declaration is exactly right → admit.
+        let declared = set(&[Capability::Network]);
+        let runner = scripted(
+            JailOutcome::Clean,
+            &[(
+                "network",
+                JailOutcome::Denied {
+                    axis: CapabilityAxis::Network,
+                },
+            )],
+        );
+        reconcile_native(
+            &declared,
+            &runner,
+            &scan(&[Capability::Network]),
+            &profile(),
+        )
+        .expect("a benign package declaring exactly its axes must admit");
+    }
+
+    #[test]
+    fn a_clean_package_with_no_declared_axes_admits() {
+        // Declares nothing tightenable; the declared-scoped run is clean; no
+        // tightening pass runs → admit.
+        let declared = set(&[Capability::Clock]);
+        let runner = scripted(JailOutcome::Clean, &[]);
+        reconcile_native(&declared, &runner, &scan(&[]), &profile())
+            .expect("a clock-only native package with a clean probe must admit");
+    }
+
+    #[test]
+    fn an_ambiguous_tighten_denial_naming_a_different_axis_rejects() {
+        // Declares network AND filesystem; the network-tighten run is DENIED
+        // naming filesystem — an observation the reconciler will not reason past.
+        let declared = set(&[Capability::Network, Capability::Filesystem]);
+        let runner = scripted(
+            JailOutcome::Clean,
+            &[(
+                "network",
+                JailOutcome::Denied {
+                    axis: CapabilityAxis::Filesystem,
+                },
+            )],
+        );
+        let r = reconcile_native(&declared, &runner, &scan(&[]), &profile())
+            .expect_err("an axis-mismatched denial must reject fail-closed");
+        assert!(r.message.contains("ambiguous"), "{}", r.message);
+    }
+
+    #[test]
+    fn the_probe_payload_puts_the_wrapper_before_the_untrusted_build() {
+        // The child-of-wrapper structural rule: the exit-owning wrapper precedes
+        // the untrusted build, which is only ever a strictly subordinate tail.
+        let prefix = vec![OsString::from("/usr/bin/env"), OsString::from("/bin/sh")];
+        let wrapper = PathBuf::from("/probe/untrusted-build.sh");
+        let untrusted = vec![OsString::from("cargo"), OsString::from("build")];
+        let payload = ProbePayload::wrapper_owned(&prefix, &wrapper, &untrusted);
+        let argv = payload.argv();
+        // The untrusted build is never at argv[0] — the trusted prefix is.
+        assert_eq!(argv.first(), Some(&OsString::from("/usr/bin/env")));
+        assert_eq!(argv.last(), Some(&OsString::from("build")));
+        // The wrapper script strictly precedes the untrusted build command.
+        let wrapper_idx = argv
+            .iter()
+            .position(|a| a == &OsString::from("/probe/untrusted-build.sh"))
+            .expect("wrapper present");
+        let cargo_idx = argv
+            .iter()
+            .position(|a| a == &OsString::from("cargo"))
+            .expect("untrusted build present");
+        assert!(
+            wrapper_idx < cargo_idx,
+            "the wrapper must precede the untrusted build: {argv:?}"
+        );
+    }
+}

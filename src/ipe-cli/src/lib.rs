@@ -17,6 +17,7 @@
 
 pub mod api_surface;
 pub mod audit;
+pub mod audit_native;
 pub mod build_plan;
 mod cache;
 pub mod cli_args;
