@@ -1,0 +1,28 @@
+module Main exposing (main)
+
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
+
+
+-- A record holding TWO function values reused as a value (each field read is a
+-- non-call value-use of the whole record, so the record is consumed > 1×). The
+-- fn-value-reuse promotion flips the fn fields to the `Arc<dyn Fn>` carrier so
+-- the record is `Clone` and reusable; without it this is IPE-L0127 (param) and
+-- IPE-L0107 (literal).
+apply : { onChange : String -> Int
+, format : Int -> String
+, label : String
+, count : Int
+} -> String
+apply c =
+    c.label ++ ": " ++ c.format (c.onChange "hello" + c.count)
+
+
+main =
+    println
+        (apply
+            { onChange = String.length
+            , format = String.fromInt
+            , label = "len"
+            , count = 3
+            })

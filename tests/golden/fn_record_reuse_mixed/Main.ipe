@@ -1,0 +1,17 @@
+module Main exposing (main)
+
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
+
+
+-- A MIXED composite: an Arc-eligible fn field `f` alongside a NonClone `Task`
+-- field `t`. Flipping `f` to the `Arc` carrier does NOT make the whole record
+-- `Clone` (`Task` is not `Clone`), so reuse stays fail-closed (IPE-L0127),
+-- never an `E0382` on the partially-clonable record.
+use : { f : Int -> Int, t : Task Error Int } -> Int
+use c =
+    c.f 1 + c.f 2
+
+
+main =
+    println "unused"
