@@ -222,7 +222,6 @@ go_ffi = false
 name = "47-func-field-record"
 patch = "rename-map"
 go_ffi = false
-blocked = "IPE-L0127: function-value-reuse (a function value used more than once) is not yet supported (#178)"
 
 [[example]]
 name = "48-tuple-unused-binding"

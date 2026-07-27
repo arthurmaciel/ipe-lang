@@ -8109,6 +8109,12 @@ fn emit_apply(
 /// `emit_func_value` and `emit_lambda` route through here so the two emit paths
 /// can never drift.
 pub fn wants_arc_ctor(ty: &IrType) -> bool {
+    // A promoted `SharedFun` slot renders `Arc<dyn Fn>` (`render_type`), so its
+    // value must be built with `Arc::new`, not `Box::new` — the two carriers are
+    // distinct Rust types and mixing them is an E0308.
+    if matches!(ty, IrType::SharedFun(_, _)) {
+        return true;
+    }
     matches!(ty,
         IrType::Fun(params, ret)
             if (matches!(params.as_slice(), [IrType::ServerRequest])

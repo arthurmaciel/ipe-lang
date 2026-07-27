@@ -657,7 +657,7 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::List(_) => "List",
         IrType::Tuple(_) => "Tuple",
         IrType::Record(_) => "record",
-        IrType::Fun(_, _) | IrType::FnOnceChain(_, _) => "function",
+        IrType::Fun(_, _) | IrType::SharedFun(_, _) | IrType::FnOnceChain(_, _) => "function",
         IrType::Generic(_) => "generic",
         IrType::Dict(_, _) => "Dict",
         IrType::Set(_) => "Set",

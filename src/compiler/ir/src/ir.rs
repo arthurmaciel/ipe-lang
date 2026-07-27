@@ -646,6 +646,24 @@ pub enum IrType {
     /// nullary `Fn() -> R`, distinct from `ret` alone. The lowerer is the sole
     /// producer; the backend stays total over any parameter vector it receives.
     Fun(Vec<Self>, Box<Self>),
+    /// [`Self::Fun`]'s reference-counted sibling: same `params -> ret`, but its
+    /// carrier is `Arc<dyn Fn(..) -> R + Send + Sync + 'static>` instead of
+    /// `Box<dyn Fn(..)>`. `Arc` is `Clone` (a refcount bump), so a binding whose
+    /// type embeds a `SharedFun` slot can be duplicated for reuse — the whole
+    /// point of the carrier.
+    ///
+    /// Produced ONLY by the fn-value-reuse promotion (`ipe_lower`): a contained,
+    /// whole-clonable composite fn value (a `Maybe`/`Result`/record/user-union
+    /// payload holding a function, reused more than once) has its `Fun` slots
+    /// flipped to `SharedFun` so the composite becomes `Clone`. Every non-promoted
+    /// function value keeps the lean `Box` carrier of [`Self::Fun`]. The two are
+    /// distinct Rust types (`Arc<..>` vs `Box<..>`) with no coercion, so the
+    /// promotion is admissible only when the value provably never reaches a
+    /// position where a `Box`/`impl Fn` carrier would be required — the
+    /// containment precondition the promotion pass enforces.
+    ///
+    /// Same param/ret invariant as [`Self::Fun`].
+    SharedFun(Vec<Self>, Box<Self>),
     /// A CURRIED chain of one-shot closures `T0 -> (T1 -> ( ... -> R))`,
     /// carried as its parameter list (one per curry level, in application
     /// order) and the FINAL, non-function return type.
@@ -1215,6 +1233,9 @@ pub fn ir_type_is_derivable(
         | IrType::Decoder(_)
         | IrType::Db
         | IrType::Fun(_, _)
+        // The promoted `Arc<dyn Fn>` carrier is `Clone` but still lacks `Debug`
+        // and `PartialEq`, so it is exactly as non-derivable as `Fun`.
+        | IrType::SharedFun(_, _)
         // A curried `Box<dyn FnOnce>` chain is exactly as non-derivable as
         // `Fun` (it renders to the same family of boxed trait objects).
         | IrType::FnOnceChain(_, _)
@@ -1342,6 +1363,8 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         | IrType::Decoder(_)
         | IrType::Db
         | IrType::Fun(_, _)
+        // Same family as `Fun` — the `Arc<dyn Fn>` promoted carrier is never serde.
+        | IrType::SharedFun(_, _)
         // Same family as `Fun` — a boxed `FnOnce` chain is never serde.
         | IrType::FnOnceChain(_, _)
         | IrType::ServerRequest
@@ -1405,7 +1428,8 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
 ///
 /// The carrier model is POSITION-TYPED (mirroring the reference backend): a
 /// first-class function value's default carrier is `Box<dyn Fn(..) -> R + Send +
-/// 'static>` — NOT `Clone` — so [`IrType::Fun`] is `false` here. `Arc<dyn Fn>`
+/// Sync + 'static>` — NOT `Clone` — so [`IrType::Fun`] is `false` here.
+/// `Arc<dyn Fn>`
 /// does not satisfy an `impl Fn` bound (std has no `impl Fn for Arc<F>`), so a
 /// universal Arc carrier is unsound across the HOF-kernel surface; instead the
 /// lowerer promotes exactly the fn-value BINDINGS that are captured at closure
@@ -1478,7 +1502,10 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         | IrType::EmailAttachment
         | IrType::EmailSesConfig
         | IrType::EmailSmtpConfig
-        | IrType::EmailProvider => true,
+        | IrType::EmailProvider
+        // The promoted `Arc<dyn Fn>` fn carrier: `Arc` is `Clone` (a refcount
+        // bump), so a `SharedFun` slot never poisons its enclosing composite.
+        | IrType::SharedFun(_, _) => true,
         // Non-`Clone` default carriers. `Fun`'s default carrier is `Box<dyn Fn>`
         // (position-typed model — the `Clone` `Arc` carrier exists only at
         // promoted binding sites, see [`fun_value_arc_promotable`]).
@@ -1519,14 +1546,21 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
 ///   satisfy the runtime's `Box<dyn FnOnce>` pipeline slots.
 /// * [`IrType::Decoder`] — a nominal runtime struct, not a first-class function
 ///   value; its inner `Box<dyn Fn>` field is a runtime implementation detail.
-/// * Composites carrying a `Fun` (`Maybe (Int -> Int)`, tuples, records, …) —
-///   their carrier is the composite (`IpeMaybe<Box<dyn Fn>>`); promoting the
-///   inner slot would require type-position carrier changes across every
-///   constructor and consumer, so their capture/reuse stays fail-closed
-///   (IPE-L0126 / IPE-L0127).
+///
+/// A composite carrying a `Fun` (`Maybe (Int -> Int)`, a record-of-functions, …)
+/// is NOT a bare fn value and so is not this predicate's concern — its own
+/// carrier is the composite (`IpeMaybe<Box<dyn Fn>>`). The composite reuse path
+/// has its own whole-value promotability decision
+/// ([`shared_fun_promotable_shapes`] in `ipe_lower`), which flips the composite's
+/// inner `Fun` slots to [`IrType::SharedFun`] rather than the whole value's own
+/// carrier.
+///
+/// An already-promoted [`IrType::SharedFun`] is trivially eligible — it is
+/// already the `Clone` `Arc` carrier — so re-running the bare-`Fun` promotion
+/// over it is a sound no-op.
 #[must_use]
 pub const fn fun_value_arc_promotable(ty: &IrType) -> bool {
-    matches!(ty, IrType::Fun(_, _))
+    matches!(ty, IrType::Fun(_, _) | IrType::SharedFun(_, _))
 }
 
 /// An expression in the typed IR.

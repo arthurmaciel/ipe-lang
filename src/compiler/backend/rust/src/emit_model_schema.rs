@@ -151,6 +151,7 @@ const TAG_EMAIL_ATTACHMENT: u8 = 51;
 const TAG_EMAIL_SES_CONFIG: u8 = 52;
 const TAG_EMAIL_SMTP_CONFIG: u8 = 53;
 const TAG_EMAIL_PROVIDER: u8 = 54;
+const TAG_SHARED_FUN: u8 = 55;
 /// Fuel exhaustion marker — distinct from every variant tag.
 const TAG_FUEL_EXHAUSTED: u8 = 0xFF;
 
@@ -280,6 +281,17 @@ fn hash_ty(ctx: &EmitCtx, ty: &IrType, h: &mut Sha256, fuel: u32) -> DResult<()>
             // but kept total (a panic-free arm is cheaper than an
             // "unreachable" one, and needs no change if the gate loosens).
             h.update([TAG_FUN]);
+            update_count(h, params.len());
+            for p in params {
+                hash_ty(ctx, p, h, next)?;
+            }
+            hash_ty(ctx, ret, h, next)?;
+        }
+        IrType::SharedFun(params, ret) => {
+            // A distinct Rust type from `Fun` (`Arc<dyn Fn>` vs `Box<dyn Fn>`),
+            // so a distinct schema tag. Never serde-admissible — unreachable
+            // behind the Model gate, kept total.
+            h.update([TAG_SHARED_FUN]);
             update_count(h, params.len());
             for p in params {
                 hash_ty(ctx, p, h, next)?;
