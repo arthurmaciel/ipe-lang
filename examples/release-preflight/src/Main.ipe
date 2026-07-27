@@ -1,0 +1,56 @@
+module Main exposing (main)
+
+import Ipe.Prelude exposing (..)
+import Ipe.Task as Task
+import Ipe.Error as Error exposing (Error)
+import Ipe.String as String
+import Ipe.Log exposing (println)
+
+
+-- A release-preflight script in the non-TEA `Program` shape: a plain `main`
+-- you drive with tasks (no init/update/view loop). It announces the run, fires
+-- three independent checks CONCURRENTLY, then prints a report.
+--
+-- Written by hand, the same logic is a right-drifting `Task.andThen` pyramid:
+--
+--     main =
+--         let version = "1.4.0" in
+--         println ("Preflight for v" ++ version)
+--             |> Task.andThen (\_ ->
+--                 Task.parallel [ checkBuild, checkChangelog, checkGitClean ]
+--                     |> Task.andThen (\results ->
+--                         println (report version results)))
+--
+-- The `do` block below IS that chain — read top-to-bottom instead of nested.
+main =
+    do
+        version = "1.4.0"                        -- `=`  : a pure value, no effect
+        println ("Preflight for v" ++ version)   -- bare : run for its effect, discard the ()
+        results <- parallelDo                    -- `<-` : run all three at once, bind the List
+            checkBuild
+            checkChangelog
+            checkGitClean
+        println (report version results)
+
+
+-- Three independent checks. Each returns a status line; `parallelDo` needs them
+-- to share a type (here `Task Error String`), and awaits them all — latency is
+-- the slowest check, not their sum.
+checkBuild : Task Error String
+checkBuild =
+    Task.succeed "build     ok  — artifact present"
+
+
+checkChangelog : Task Error String
+checkChangelog =
+    Task.succeed "changelog ok  — entry for this version"
+
+
+checkGitClean : Task Error String
+checkGitClean =
+    Task.succeed "git       ok  — working tree clean"
+
+
+report : String -> List String -> String
+report version results =
+    "v" ++ version ++ " preflight passed:\n  " ++ String.join "\n  " results

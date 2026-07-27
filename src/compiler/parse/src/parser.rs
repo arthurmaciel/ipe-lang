@@ -81,6 +81,8 @@ const fn tok_kind(t: &Tok) -> TokenKind {
         Tok::If => TokenKind::If,
         Tok::Then => TokenKind::Then,
         Tok::Else => TokenKind::Else,
+        Tok::Do => TokenKind::Do,
+        Tok::ParallelDo => TokenKind::ParallelDo,
         Tok::LParen => TokenKind::LParen,
         Tok::RParen => TokenKind::RParen,
         Tok::LBrace => TokenKind::LBrace,
@@ -92,6 +94,7 @@ const fn tok_kind(t: &Tok) -> TokenKind {
         Tok::Pipe => TokenKind::Pipe,
         Tok::Colon => TokenKind::Colon,
         Tok::Arrow => TokenKind::Arrow,
+        Tok::LeftArrow => TokenKind::LeftArrow,
         Tok::Backslash => TokenKind::Backslash,
         Tok::DotDot => TokenKind::DotDot,
         Tok::Dot => TokenKind::Dot,
@@ -121,6 +124,22 @@ const fn tok_kind(t: &Tok) -> TokenKind {
         Tok::Str(_) | Tok::TripleStr(_) => TokenKind::Str,
         Tok::Char(_) => TokenKind::Char,
     }
+}
+
+/// One statement inside a `do` block, before desugaring to `Task.andThen`.
+///
+/// `Bind` and `Let` carry the span of their `<-` / `=` operator token: the
+/// desugar stamps its synthetic nodes with that span (never an operand's), so
+/// the type checker's `(home, span)` region map cannot collide a synthetic node
+/// with a real one — the same discipline the `>>` / `<<` desugar uses.
+enum DoStmt {
+    /// `p <- e` — run the task `e` and bind its result to `p` for the rest.
+    Bind(Pattern, Span, Expr),
+    /// `p = e` — a pure `let` binding in scope for the rest of the block.
+    Let(Pattern, Span, Expr),
+    /// `e` — run the task `e`; a non-final one discards its result, the final
+    /// one is the block's value.
+    Run(Expr),
 }
 
 impl<'a> Parser<'a> {
@@ -1198,6 +1217,12 @@ impl<'a> Parser<'a> {
         if self.peek_kind() == Some(&Tok::If) {
             return self.parse_if(threshold, depth + 1);
         }
+        if self.peek_kind() == Some(&Tok::Do) {
+            return self.parse_do(threshold, depth + 1);
+        }
+        if self.peek_kind() == Some(&Tok::ParallelDo) {
+            return self.parse_parallel_do(threshold, depth + 1);
+        }
         if self.peek_kind() == Some(&Tok::Backslash) {
             return self.parse_lambda(threshold, depth + 1);
         }
@@ -2031,6 +2056,202 @@ impl<'a> Parser<'a> {
             Located::new(span, Expr_::Lambda(params, Box::new(rhs)))
         };
         Ok(LetBinding { pat, body })
+    }
+
+    /// Parse a `do` block — an aligned sequence of statements desugared to a
+    /// `Task.andThen` chain. Statement forms: `p <- e` (run `e`, bind its result
+    /// to `p`), `p = e` (a pure `let`), and bare `e` (run for effect). The last
+    /// statement is the block's result expression.
+    ///
+    /// Desugaring, bottom-up over the tail `rest`:
+    /// - `⟦(p <- e); rest⟧ = Task.andThen (\p -> ⟦rest⟧) e`
+    /// - `⟦(p =  e); rest⟧ = let p = e in ⟦rest⟧`
+    /// - `⟦e ; rest⟧       = Task.andThen (\_ -> ⟦rest⟧) e`
+    /// - `⟦e⟧              = e`
+    ///
+    /// Because the desugar names `Task.andThen`, the enclosing module must have
+    /// `Ipe.Task` in scope as `Task` (the usual `import Ipe.Task as Task`).
+    fn parse_do(&mut self, _threshold: u32, depth: u32) -> DResult<Expr> {
+        if depth > MAX_DEPTH {
+            return Err(self.too_deep(Construct::Expression));
+        }
+        let do_tok = self.bump(Construct::Expression)?;
+        let Some(first) = self.peek() else {
+            return Err(Diagnostic::Parse {
+                span: self.eof_err_span(),
+                msg: ParseError::UnexpectedEof {
+                    construct: Construct::Expression,
+                },
+            });
+        };
+        let block_col = first.col;
+        let mut stmts = Vec::new();
+        loop {
+            stmts.push(self.parse_do_statement(block_col, depth + 1)?);
+            if !self
+                .peek()
+                .is_some_and(|t| layout::aligned_at(t, block_col))
+            {
+                break;
+            }
+        }
+        self.desugar_do(do_tok.span, stmts)
+    }
+
+    /// Parse one `do`-block statement. A leading lowercase name (or `_`) directly
+    /// followed by `<-` or `=` is a bind / let; anything else is a bare run.
+    fn parse_do_statement(&mut self, block_col: u32, depth: u32) -> DResult<DoStmt> {
+        let head_is_binder = matches!(self.peek_kind(), Some(Tok::Ident(_) | Tok::Underscore));
+        let next = self.toks.get(self.pos + 1).map(|t| &t.kind);
+        let is_bind = next == Some(&Tok::LeftArrow);
+        let is_let = next == Some(&Tok::Equals);
+        if head_is_binder && (is_bind || is_let) {
+            let head = self.bump(Construct::Expression)?;
+            let pat = match &head.kind {
+                Tok::Underscore => Located::new(head.span, Pattern_::PAnything),
+                Tok::Ident(text) => {
+                    if text.contains('.')
+                        || text.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+                    {
+                        return Err(Self::malformed_let(
+                            head.span,
+                            LetDefect::BindingNameNotLower,
+                        ));
+                    }
+                    let sym = self.interner.intern(text)?;
+                    Located::new(head.span, Pattern_::PVar(sym))
+                }
+                _ => {
+                    return Err(Diagnostic::Parse {
+                        span: head.span,
+                        msg: ParseError::Unexpected,
+                    });
+                }
+            };
+            let op = self.bump(Construct::Expression)?; // consume `<-` or `=`
+            let rhs = self.parse_expr(block_col, depth + 1)?;
+            Ok(if is_bind {
+                DoStmt::Bind(pat, op.span, rhs)
+            } else {
+                DoStmt::Let(pat, op.span, rhs)
+            })
+        } else {
+            let e = self.parse_expr(block_col, depth + 1)?;
+            Ok(DoStmt::Run(e))
+        }
+    }
+
+    /// Fold the parsed statements into the `Task.andThen` chain (see
+    /// [`Self::parse_do`]). The block must end in a result expression.
+    fn desugar_do(&mut self, do_span: Span, stmts: Vec<DoStmt>) -> DResult<Expr> {
+        let mut rev = stmts.into_iter().rev();
+        let Some(last) = rev.next() else {
+            return Err(Diagnostic::Parse {
+                span: do_span,
+                msg: ParseError::Unexpected,
+            });
+        };
+        let mut acc = match last {
+            DoStmt::Run(e) => e,
+            DoStmt::Bind(pat, ..) | DoStmt::Let(pat, ..) => {
+                return Err(Diagnostic::Parse {
+                    span: pat.span,
+                    msg: ParseError::Unexpected,
+                });
+            }
+        };
+        for stmt in rev {
+            acc = match stmt {
+                DoStmt::Bind(pat, op_span, task) => {
+                    // Lambda gets a zero-width span at the operator's start; the
+                    // call/callee get the full operator span. Distinct, so the
+                    // post-order parent `Call` cannot overwrite the lambda arrow.
+                    let lam_span = Span::new(op_span.lo, op_span.lo);
+                    self.task_and_then(pat, lam_span, op_span, acc, task)?
+                }
+                DoStmt::Run(task) => {
+                    // A bare run has no operator token: the lambda takes a
+                    // zero-width span at the task's end, the call at its start —
+                    // distinct, and sharing no operand.
+                    let lam_span = Span::new(task.span.hi, task.span.hi);
+                    let call_span = Span::new(task.span.lo, task.span.lo);
+                    let wild = Located::new(lam_span, Pattern_::PAnything);
+                    self.task_and_then(wild, lam_span, call_span, acc, task)?
+                }
+                DoStmt::Let(pat, op_span, body) => Located::new(
+                    op_span,
+                    Expr_::Let(vec![LetBinding { pat, body }], Box::new(acc)),
+                ),
+            };
+        }
+        // Re-stamp the whole block with the `do` keyword's (unique) span.
+        Ok(Located::new(do_span, acc.value))
+    }
+
+    /// Build `Task.andThen (\pat -> cont) task`. The lambda carries `lam_span`
+    /// and the call/callee carry `call_span` — distinct, and neither an
+    /// operand's — so the type checker's post-order `(home, span)` region map
+    /// records the lambda's arrow without the parent call overwriting it.
+    fn task_and_then(
+        &mut self,
+        pat: Pattern,
+        lam_span: Span,
+        call_span: Span,
+        cont: Expr,
+        task: Expr,
+    ) -> DResult<Expr> {
+        let task_mod = self.interner.intern("Task")?;
+        let and_then = self.interner.intern("andThen")?;
+        let callee = Located::new(call_span, Expr_::VarQual(task_mod, and_then));
+        let lam = Located::new(lam_span, Expr_::Lambda(vec![pat], Box::new(cont)));
+        Ok(Located::new(
+            call_span,
+            Expr_::Call(Box::new(callee), vec![lam, task]),
+        ))
+    }
+
+    /// Parse a `parallelDo` block — aligned same-typed task expressions run
+    /// concurrently, their results collected in order. Desugars to
+    /// `Task.parallel [e1, ..., eN] : Task Error (List a)`. Nest it in a `do`
+    /// (`results <- parallelDo …`) to consume the collected list. `Ipe.Task`
+    /// must be in scope as `Task`.
+    fn parse_parallel_do(&mut self, _threshold: u32, depth: u32) -> DResult<Expr> {
+        if depth > MAX_DEPTH {
+            return Err(self.too_deep(Construct::Expression));
+        }
+        let pd_tok = self.bump(Construct::Expression)?;
+        let Some(first) = self.peek() else {
+            return Err(Diagnostic::Parse {
+                span: self.eof_err_span(),
+                msg: ParseError::UnexpectedEof {
+                    construct: Construct::Expression,
+                },
+            });
+        };
+        let block_col = first.col;
+        let mut elems = Vec::new();
+        loop {
+            elems.push(self.parse_expr(block_col, depth + 1)?);
+            if !self
+                .peek()
+                .is_some_and(|t| layout::aligned_at(t, block_col))
+            {
+                break;
+            }
+        }
+        // The synthetic list argument takes a zero-width span at the keyword's
+        // start; the `Task.parallel` reference and the call take the full keyword
+        // span. Distinct (and never an element's), so the post-order parent
+        // `Call` cannot overwrite the list's `List` region type.
+        let list_span = Span::new(pd_tok.span.lo, pd_tok.span.lo);
+        let list = Located::new(list_span, Expr_::List(elems));
+        let task_mod = self.interner.intern("Task")?;
+        let parallel = self.interner.intern("parallel")?;
+        let callee = Located::new(pd_tok.span, Expr_::VarQual(task_mod, parallel));
+        Ok(Located::new(
+            pd_tok.span,
+            Expr_::Call(Box::new(callee), vec![list]),
+        ))
     }
 
     // ---- patterns ---------------------------------------------------------
