@@ -957,7 +957,7 @@ fn libc_fcntl_setfd(fd: i32, flags: i32) -> std::io::Result<()> {
 /// the filesystem (nothing to race or tamper on disk) and the fd is
 /// self-cleaning when closed.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-fn write_seccomp_memfd(bytes: &[u8]) -> Result<i32, RunJailDefect> {
+pub(crate) fn write_seccomp_memfd(bytes: &[u8]) -> Result<i32, RunJailDefect> {
     let spawn = |detail: String| RunJailDefect::Spawn { detail };
     let name = c"ipe-seccomp";
     // SAFETY: `memfd_create` with a valid NUL-terminated name and 0 flags
