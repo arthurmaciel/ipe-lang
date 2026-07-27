@@ -398,8 +398,8 @@ mod tests {
         else {
             return;
         };
-        assert_eq!(i.resolve(*module), Some("Log"));
-        assert_eq!(i.resolve(*name), Some("Io.println"));
+        assert_eq!(i.resolve(*module), Some("Io"));
+        assert_eq!(i.resolve(*name), Some("println"));
         assert_eq!(outer_args.len(), 1);
 
         // String.fromInt → VarKernel { String, fromInt }.
@@ -526,29 +526,34 @@ mod tests {
 
     #[test]
     fn unknown_value_suggests_close_name() {
-        // `printn` is one edit from the in-scope kernel value `Io.println`.
-        let err = canon_err("module Main exposing (main)\n\nmain = printn\n");
+        // `printn` is one edit from the `Ipe.Io` member `println`.
+        let err = canon_err("module Main exposing (main)\n\nmain = Io.printn\n");
         assert!(
             matches!(
                 &err,
                 Some(Diagnostic::Name {
-                    msg: NameError::ValueNotFound { .. },
+                    msg: NameError::NoSuchMember { .. },
                     ..
                 })
             ),
-            "expected ValueNotFound, got {err:?}"
+            "expected NoSuchMember, got {err:?}"
         );
         let Some(Diagnostic::Name {
-            msg: NameError::ValueNotFound { name, suggestions },
+            msg:
+                NameError::NoSuchMember {
+                    member,
+                    suggestions,
+                    ..
+                },
             ..
         }) = err
         else {
             return;
         };
-        assert_eq!(&*name, "printn");
+        assert_eq!(&*member, "printn");
         assert!(
-            suggestions.iter().any(|s| &**s == "Io.println"),
-            "suggestions should include `Io.println`, got {suggestions:?}"
+            suggestions.iter().any(|s| &**s == "println"),
+            "suggestions should include `println`, got {suggestions:?}"
         );
     }
 
