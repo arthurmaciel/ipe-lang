@@ -202,7 +202,6 @@ go_ffi = false
 name = "43-composition"
 patch = "rename-map"
 go_ffi = false
-blocked = "IPE-P0001: the `>>` / `<<` function-composition operators are not yet parsed (#177)"
 
 [[example]]
 name = "44-record-update"

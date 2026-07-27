@@ -87,6 +87,12 @@ pub enum Tok {
     /// The backward-pipe operator `<|`. Lexed as ONE token (maximal munch of
     /// `<`), so `<|` never reaches the parser as `Lt` then `Pipe`.
     LtPipe,
+    /// The forward-composition operator `>>`. Lexed as ONE token (maximal munch
+    /// of `>`), so `>>` never reaches the parser as two adjacent [`Tok::Gt`].
+    GtGt,
+    /// The backward-composition operator `<<`. Lexed as ONE token (maximal munch
+    /// of `<`), so `<<` never reaches the parser as two adjacent [`Tok::Lt`].
+    LtLt,
     // Literals / names.
     /// A (possibly dotted) identifier, e.g. `count`, `Msg`, `String.fromInt`.
     Ident(String),
@@ -695,7 +701,7 @@ fn lex_symbol(lx: &mut Lexer, c: char, lo: u32) -> DResult<Tok> {
                 _ => Tok::Slash,
             }
         }
-        // `<` has three forms: `<=`, `<|`, and bare `<`.
+        // `<` has four forms: `<=`, `<|`, `<<`, and bare `<`.
         '<' => {
             lx.advance();
             match lx.peek() {
@@ -707,10 +713,28 @@ fn lex_symbol(lx: &mut Lexer, c: char, lo: u32) -> DResult<Tok> {
                     lx.advance();
                     Tok::LtPipe
                 }
+                Some('<') => {
+                    lx.advance();
+                    Tok::LtLt
+                }
                 _ => Tok::Lt,
             }
         }
-        '>' => one_or_two(lx, '=', Tok::Ge, Tok::Gt),
+        // `>` has three forms: `>=`, `>>`, and bare `>`.
+        '>' => {
+            lx.advance();
+            match lx.peek() {
+                Some('=') => {
+                    lx.advance();
+                    Tok::Ge
+                }
+                Some('>') => {
+                    lx.advance();
+                    Tok::GtGt
+                }
+                _ => Tok::Gt,
+            }
+        }
         // `&` and `.` are valid ONLY as their two-char forms (`&&`, `..`);
         // a lone first char is a typed lex error rather than a token.
         '&' => return two_char_only(lx, lo, '&', Tok::AmpAmp, ParseError::UnknownChar('&')),

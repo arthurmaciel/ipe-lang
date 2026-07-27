@@ -664,6 +664,47 @@ mod tests {
     }
 
     #[test]
+    fn composition_operators_lex_as_single_tokens() {
+        use lexer::{Tok, lex};
+        let kinds = |src: &str| -> Vec<Tok> {
+            lex(src).map_or_else(
+                |_| Vec::new(),
+                |toks| toks.into_iter().map(|t| t.kind).collect(),
+            )
+        };
+        // `>>` is a single GtGt token (forward composition), not two Gt.
+        assert_eq!(kinds(">>"), vec![Tok::GtGt]);
+        // `<<` is a single LtLt token (backward composition), not two Lt.
+        assert_eq!(kinds("<<"), vec![Tok::LtLt]);
+        // Bare `>` / `<` and the comparison forms are unaffected.
+        assert_eq!(kinds(">"), vec![Tok::Gt]);
+        assert_eq!(kinds("<"), vec![Tok::Lt]);
+        assert_eq!(kinds(">="), vec![Tok::Ge]);
+        assert_eq!(kinds("<="), vec![Tok::Le]);
+        // `<|` / `|>` still win their maximal munch (not confused with `<<`/`>>`).
+        assert_eq!(kinds("<|"), vec![Tok::LtPipe]);
+        // Maximal munch takes exactly two: `>>>` is `>>` then a trailing `>`.
+        assert_eq!(kinds(">>>"), vec![Tok::GtGt, Tok::Gt]);
+        assert_eq!(kinds("<<<"), vec![Tok::LtLt, Tok::Lt]);
+        // In context.
+        assert_eq!(kinds(">> g"), vec![Tok::GtGt, Tok::Ident("g".to_owned())]);
+    }
+
+    #[test]
+    fn composition_operators_parse_in_expression() {
+        // Both composition operators must parse in a flat Binops chain.
+        let mut i = Interner::new();
+        let src = format!("{HDR}h =\n    inc >> dbl\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "`>>` must parse: {m:?}");
+
+        let mut i2 = Interner::new();
+        let src2 = format!("{HDR}h =\n    inc << dbl\n");
+        let m2 = parse_module(&src2, &mut i2);
+        assert!(m2.is_ok(), "`<<` must parse: {m2:?}");
+    }
+
+    #[test]
     fn pipe_operator_parses_in_expression() {
         // Both pipe operators must parse in a flat Binops chain.
         let mut i = Interner::new();
