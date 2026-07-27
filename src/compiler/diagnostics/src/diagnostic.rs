@@ -87,6 +87,10 @@ pub enum TokenKind {
     PipeGt,
     /// The backward-pipe operator `<|`.
     LtPipe,
+    /// The forward-composition operator `>>`.
+    GtGt,
+    /// The backward-composition operator `<<`.
+    LtLt,
     Ident,
     Int,
     /// A floating-point literal `1.5`, `3.0`, `1.5e3`.

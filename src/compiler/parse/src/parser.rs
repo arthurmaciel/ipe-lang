@@ -113,6 +113,8 @@ const fn tok_kind(t: &Tok) -> TokenKind {
         Tok::PipePipe => TokenKind::PipePipe,
         Tok::PipeGt => TokenKind::PipeGt,
         Tok::LtPipe => TokenKind::LtPipe,
+        Tok::GtGt => TokenKind::GtGt,
+        Tok::LtLt => TokenKind::LtLt,
         Tok::Ident(_) => TokenKind::Ident,
         Tok::Int(_) => TokenKind::Int,
         Tok::Float(_) => TokenKind::Float,
@@ -1120,6 +1122,8 @@ impl<'a> Parser<'a> {
             Tok::PipePipe => "||",
             Tok::PipeGt => "|>",
             Tok::LtPipe => "<|",
+            Tok::GtGt => ">>",
+            Tok::LtLt => "<<",
             Tok::ColonColon => "::",
             _ => return None,
         };

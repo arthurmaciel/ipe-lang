@@ -3063,6 +3063,11 @@ const fn op_precedence(op: &str) -> (i32, Assoc) {
         // `<|` is right-associative: `f <| g <| x` = `f <| (g <| x)`.
         b"|>" => (0, Assoc::Left),
         b"<|" => (0, Assoc::Right),
+        // Elm-exact composition precedence: tightest operators (prec 9).
+        // `<<` is right-associative: `f << g << h` = `f << (g << h)`.
+        // `>>` is left-associative (`(f >> g) >> h`) — that is exactly the `9 L`
+        // catch-all below, so it needs no arm of its own.
+        b"<<" => (9, Assoc::Right),
         _ => (9, Assoc::Left),
     }
 }
@@ -3216,6 +3221,31 @@ fn combine_binop(
         return Ok(Located::new(
             span,
             canon::Expr_::Call(Box::new(lhs), vec![rhs]),
+        ));
+    }
+    // Composition operators eta-expand to a lambda over one fresh parameter:
+    //   `f >> g`  ≡  `\x -> g (f x)`   (left-to-right composition)
+    //   `f << g`  ≡  `\x -> f (g x)`   (right-to-left composition)
+    // The parameter name is derived from the operator's source span, so it is
+    // unique per occurrence. Its `compose_` prefix is distinct from every fresh
+    // pool the lowerer mints (`eta_`/`cap_`/`arg_`/…), so it cannot alias an
+    // eta-expansion name; a user binding the same name would be harmlessly
+    // shadowed, since this lambda's body references only the (already-resolved)
+    // `f`/`g` operands and its own parameter.
+    let op_text = interner.resolve(op.value);
+    if op_text == Some(">>") || op_text == Some("<<") {
+        let forward = op_text == Some(">>");
+        let param = interner.intern(&format!("compose_{}_{}", span.lo, span.hi))?;
+        // `>>` applies `f` (lhs) first then `g` (rhs); `<<` applies `g` (rhs)
+        // first then `f` (lhs). `inner` is the first application, `outer` wraps it.
+        let (first, second) = if forward { (lhs, rhs) } else { (rhs, lhs) };
+        let arg = Located::new(span, canon::Expr_::VarLocal(param));
+        let inner = Located::new(span, canon::Expr_::Call(Box::new(first), vec![arg]));
+        let outer = Located::new(span, canon::Expr_::Call(Box::new(second), vec![inner]));
+        let pat = Located::new(span, canon::Pattern_::PVar(param));
+        return Ok(Located::new(
+            span,
+            canon::Expr_::Lambda(vec![pat], Box::new(outer)),
         ));
     }
     let func = resolve_op_func(op.value, interner)?;
