@@ -11,6 +11,12 @@
 #   enforce (default) — inside the jail: NET and FS-escape must be BLOCKED.
 #   control           — outside the jail: NET and FS-escape must SUCCEED, so a
 #                       blocked result under `enforce` can only come from the jail.
+#   tier2             — inside a jail scoped to a package's DECLARED capability
+#                       set (differential confinement): a DENIED action names the
+#                       axis the native code demanded but the declared set
+#                       withheld (used-but-undeclared). The exit code is the
+#                       wrapper-owned per-axis denial signal the Tier-2 decoder
+#                       reads — never scraped from the payload's stdout.
 #
 # Probes:
 #   BENIGN — write to SCRATCH_DIR; must succeed (false-deny = test failure).
@@ -20,11 +26,20 @@
 #            renders read-only/denied but that the control principal can write).
 #
 # Exit codes:
-#   0  probes consistent with PROBE_MODE
-#   2  enforce: net was NOT blocked
-#   3  enforce: fs-escape was NOT blocked
-#   4  control: net was NOT reachable
-#   5  control: fs-escape path was NOT writable
+#   0   probes consistent with PROBE_MODE (tier2: no withheld axis demanded)
+#   2   enforce: net was NOT blocked
+#   3   enforce: fs-escape was NOT blocked
+#   4   control: net was NOT reachable
+#   5   control: fs-escape path was NOT writable
+#   10  tier2: network denied — the native code demanded the withheld `network`
+#       axis (used-but-undeclared)
+#   11  tier2: fs-escape denied — the native code demanded the withheld
+#       `filesystem` axis (used-but-undeclared)
+#
+# The tier2 codes 10/11 live in a range disjoint from the enforce/control codes
+# 2–5 so a differential denial can never be confused with a broken-jail control
+# failure. They are the single source of truth mirrored by the Rust build-jail
+# decoder (`CapabilityAxis::from_exit_code`), asserted equal in the crate tests.
 
 set -eu
 
@@ -33,6 +48,11 @@ SCRATCH="${SCRATCH_DIR:-}"
 ESCAPE_PATH="${ESCAPE_PATH:-/usr/jail-escape-probe}"
 NET_HOST="${NET_HOST:-github.com}"
 NET_PORT="${NET_PORT:-443}"
+# In tier2 mode, which axes the probe exercises: `network`, `filesystem`, or
+# `both` (default). A Tier-2 caller confining one withheld axis exercises exactly
+# that axis, so a denial names it unambiguously and a granted-but-unrouted host
+# cannot masquerade as the wrong axis. Ignored outside tier2 mode.
+TIER2_AXIS="${TIER2_AXIS:-both}"
 
 # Attempt to write the fs-escape probe. In a function so a failed output
 # redirection (read-only/denied target) is caught quietly instead of leaking
@@ -72,7 +92,16 @@ if [ -n "$SCRATCH" ]; then
 fi
 
 # ── probe 2: network attempt ──────────────────────────────────────────────────
-if net_connect; then NET_CONNECTED=1; else NET_CONNECTED=0; fi
+# In tier2 mode, skip the net probe when the caller selected the filesystem axis
+# only — so a granted-but-unrouted host cannot trip a spurious network denial.
+if [ "$PROBE_MODE" = "tier2" ] && [ "$TIER2_AXIS" = "filesystem" ]; then
+    NET_CONNECTED=1
+    echo "PROBE net tier2: skipped (axis=filesystem)"
+elif net_connect; then
+    NET_CONNECTED=1
+else
+    NET_CONNECTED=0
+fi
 
 case "$PROBE_MODE" in
     control)
@@ -81,6 +110,16 @@ case "$PROBE_MODE" in
         else
             echo "PROBE net control: $NET_HOST:$NET_PORT UNREACHABLE — FAIL"
             exit 4
+        fi
+        ;;
+    tier2)
+        # Differential confinement: a DENIED net attempt means the native code
+        # demanded the `network` axis the declared-scoped jail withheld. Name it.
+        if [ "$NET_CONNECTED" -eq 0 ]; then
+            echo "PROBE net tier2: denied — the code demanded the withheld network axis"
+            exit 10
+        else
+            echo "PROBE net tier2: reached — network axis not withheld/not demanded"
         fi
         ;;
     *)
@@ -99,6 +138,14 @@ esac
 # jail: owned by root, the jailed process runs as nobody). The control run uses
 # the SAME path with the SAME principal, so a blocked write under `enforce`
 # proves jail enforcement rather than a mere pre-existing permission denial.
+# In tier2 mode, skip the fs-escape probe when the caller selected the network
+# axis only — the run then proves a CLEAN outcome (exit 0) for the network case.
+if [ "$PROBE_MODE" = "tier2" ] && [ "$TIER2_AXIS" = "network" ]; then
+    echo "PROBE fs-escape tier2: skipped (axis=network)"
+    echo "All probes passed ($PROBE_MODE)."
+    exit 0
+fi
+
 if fs_write 2>/dev/null; then FS_WROTE=1; else FS_WROTE=0; fi
 
 case "$PROBE_MODE" in
@@ -109,6 +156,17 @@ case "$PROBE_MODE" in
         else
             echo "PROBE fs-escape control: $ESCAPE_PATH NOT writable — FAIL"
             exit 5
+        fi
+        ;;
+    tier2)
+        # Differential confinement: a DENIED out-of-scratch write means the code
+        # demanded the `filesystem` axis the declared-scoped jail withheld.
+        if [ "$FS_WROTE" -eq 0 ]; then
+            echo "PROBE fs-escape tier2: denied — the code demanded the withheld filesystem axis"
+            exit 11
+        else
+            echo "PROBE fs-escape tier2: wrote — filesystem axis not withheld/not demanded"
+            rm -f "$ESCAPE_PATH" 2>/dev/null || true
         fi
         ;;
     *)
