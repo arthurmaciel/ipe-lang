@@ -25,7 +25,7 @@ use ipe_ir::{
     KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RuntimeModule, TypeDef, UiCtor,
     UiPlain, Variant, fun_value_arc_promotable, is_dispatch_free, is_irrefutable,
 };
-use ipe_types::{SolvedTypes, Ty, TyBounds};
+use ipe_types::{RowTail, SolvedTypes, Ty, TyBounds};
 
 /// One lowered function parameter: its (possibly synthetic) binder name and its
 /// IR type.
@@ -1188,8 +1188,10 @@ fn ir_type_mentions_server(ty: &IrType) -> bool {
 
 fn ir_contains_fun(ty: &IrType) -> bool {
     match ty {
-        // A curried `FnOnce` chain is the same boxed-closure family as `Fun`.
-        IrType::Fun(_, _) | IrType::FnOnceChain(_, _) => true,
+        // A curried `FnOnce` chain is the same boxed-closure family as `Fun`; the
+        // promoted `Arc<dyn Fn>` (`SharedFun`) is still a function value, so the
+        // reuse gate must keep seeing it as fn-bearing.
+        IrType::Fun(_, _) | IrType::SharedFun(_, _) | IrType::FnOnceChain(_, _) => true,
         // `IpeTask<E,A>`, `IpeCmd<M>`, `IpeSub<M>` are opaque runtime types; the
         // inner type parameter might itself embed a function, so recurse.
         IrType::Task(inner) | IrType::Cmd(inner) | IrType::Sub(inner) => ir_contains_fun(inner),
@@ -1363,7 +1365,11 @@ fn clone_class(interner: &Interner, t: &IrType) -> CloneClass {
         | IrType::EmailAttachment
         | IrType::EmailSesConfig
         | IrType::EmailSmtpConfig
-        | IrType::EmailProvider => CloneClass::CloneOk,
+        | IrType::EmailProvider
+        // The promoted `Arc<dyn Fn>` carrier is `Clone` (a refcount bump), so a
+        // `SharedFun` slot is `CloneOk` — this is what lets a composite carrying
+        // it become clonable and so reusable.
+        | IrType::SharedFun(_, _) => CloneClass::CloneOk,
         // Non-Clone: function-typed, task, decoder, Cmd, Sub.
         // Also Generic(_) until T5 (which injects `T: Clone`).
         IrType::Fun(_, _)
@@ -4044,7 +4050,9 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         IrType::Tuple(items) => items.iter().any(|t| ir_type_mentions_generic(t, tv)),
         IrType::Enum { args, .. } => args.iter().any(|t| ir_type_mentions_generic(t, tv)),
         IrType::Record(fields) => fields.values().any(|t| ir_type_mentions_generic(t, tv)),
-        IrType::Fun(params, ret) | IrType::FnOnceChain(params, ret) => {
+        IrType::Fun(params, ret)
+        | IrType::SharedFun(params, ret)
+        | IrType::FnOnceChain(params, ret) => {
             params.iter().any(|t| ir_type_mentions_generic(t, tv))
                 || ir_type_mentions_generic(ret, tv)
         }
@@ -6550,6 +6558,306 @@ pub struct Lowerer<'a> {
     /// IPE-L0126 instead of emitting a `.clone()` on a non-`Clone` `Box`
     /// (E0599 — a SEAL break). Cleared per def.
     deferred_fun_captures: std::cell::RefCell<BTreeMap<Symbol, Span>>,
+    /// Anon-record FIELD-NAME SETS (sorted field [`Symbol`]s) whose function
+    /// fields the fn-value-reuse promotion flips from `Box<dyn Fn>`
+    /// ([`IrType::Fun`]) to the `Clone` `Arc<dyn Fn>` carrier
+    /// ([`IrType::SharedFun`]), so a record-of-functions can be reused. Computed
+    /// ONCE over the whole module's solved types before any def is lowered
+    /// ([`shared_fun_promotable_shapes`]), so the flip is CONSISTENT across every
+    /// occurrence of a set (the synthesised struct is keyed by field name, so a
+    /// half-flipped set would be an `ipe`-time `CompilerBug` or an
+    /// `Arc`-vs-`Box` `E0308`). A set is present ONLY when it provably satisfies
+    /// the whole-value containment + whole-clonable precondition; every other
+    /// composite fn value stays fail-closed (IPE-L0107 / IPE-L0127). Immutable
+    /// after construction.
+    shared_fun_shapes: BTreeSet<Vec<Symbol>>,
+}
+
+// ── Fn-value-reuse composite promotion: promotable-shape analysis ────────
+//
+// A record-of-functions (a closed anon record with ≥1 function field, e.g.
+// `{ onChange : String -> Int, format : Int -> String, label : String }`)
+// cannot be reused today: its `Box<dyn Fn>` field carrier is not `Clone`, so
+// the synthesised struct is not `Clone`, so a second value-use double-moves
+// (IPE-L0127) — and the field literal is itself rejected up front (IPE-L0107).
+// Flipping the function fields to the `Clone` `Arc<dyn Fn>` carrier
+// ([`IrType::SharedFun`]) makes the whole record `Clone` and reusable.
+//
+// The flip is per FIELD-NAME SET, not per binding: the synthesised Rust struct
+// is keyed by field name (`ipe_backend_rust::record_struct_name`), so every
+// occurrence of a set — each parameter annotation AND each record literal —
+// MUST agree on `Arc` vs `Box`, or the backend either raises a one-type-per-
+// field-set `CompilerBug` or emits an `Arc`-vs-`Box` `E0308`. So a set is
+// flipped only when EVERY occurrence, program-wide, is provably safe.
+//
+// Safe (all must hold over every solved-type occurrence of the set):
+//   * ≥1 field is a function (`Ty::Fun`);
+//   * every NON-function field is a concretely-clonable leaf/carrier — no type
+//     variable, no `Task`/`Cmd`/`Sub`/`Decoder`/opaque handle (which would keep
+//     the struct non-`Clone` even after the flip → `E0382`);
+//   * the record is CONTAINED: it appears only in a function-PARAMETER or bare
+//     value position, never in a function RETURN, never nested inside another
+//     composite (a `Maybe`/`List`/tuple/record/`Con` arg), and never carries a
+//     type variable — so no binding of it can escape its defining function and
+//     no `Arc`-carried value can reach a polymorphic frontier where it would
+//     have to unify with a `Box`-carried sibling (`E0308`).
+// "Unknown ⇒ not contained": any position the walk cannot classify defaults to
+// forbidden. Over-conservatism only rejects sound programs (they stay
+// fail-closed); it never admits an unsound flip.
+
+/// One occurrence-context classification for the containment walk.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ShapePosition {
+    /// A function-parameter or bare top-level value position — a record here
+    /// does not escape and is not unified through a polymorphic frontier.
+    Contained,
+    /// A function-return, nested-in-composite, or otherwise
+    /// non-locally-analysable position — a record here may escape.
+    Escaping,
+}
+
+/// Compute the anon-record FIELD-NAME SETS whose function fields are safe to
+/// flip to the `Arc<dyn Fn>` carrier ([`IrType::SharedFun`]), per the module
+/// doc above. Scans every solved type in the program (`env` + `regions`); a set
+/// is returned ONLY if every occurrence is contained and whole-clonable.
+fn shared_fun_promotable_shapes(
+    _m: &canon::Module,
+    types: &SolvedTypes,
+    interner: &Interner,
+) -> BTreeSet<Vec<Symbol>> {
+    let mut candidates: BTreeSet<Vec<Symbol>> = BTreeSet::new();
+    let mut disqualified: BTreeSet<Vec<Symbol>> = BTreeSet::new();
+    for ty in types.env.values().chain(types.regions.values()) {
+        walk_shape_contain(
+            interner,
+            ty,
+            ShapePosition::Contained,
+            &mut candidates,
+            &mut disqualified,
+        );
+    }
+    candidates
+        .into_iter()
+        .filter(|s| !disqualified.contains(s))
+        .collect()
+}
+
+/// Structural containment walk (see [`shared_fun_promotable_shapes`]). Records a
+/// record-of-functions field-set as a candidate on first sight; disqualifies it
+/// if it appears in an [`ShapePosition::Escaping`] position, carries a type
+/// variable, or has a non-clonable non-function field.
+fn walk_shape_contain(
+    interner: &Interner,
+    ty: &Ty,
+    position: ShapePosition,
+    candidates: &mut BTreeSet<Vec<Symbol>>,
+    disqualified: &mut BTreeSet<Vec<Symbol>>,
+) {
+    match ty {
+        Ty::Fun(arg, ret) => {
+            // A function's argument stays contained; its return is escaping (a
+            // record returned from a function flows to an unknown caller scope).
+            walk_shape_contain(
+                interner,
+                arg,
+                ShapePosition::Contained,
+                candidates,
+                disqualified,
+            );
+            walk_shape_contain(
+                interner,
+                ret,
+                ShapePosition::Escaping,
+                candidates,
+                disqualified,
+            );
+        }
+        Ty::Record(fields, tail) => {
+            if let Some(key) = record_of_functions_key(ty) {
+                candidates.insert(key.clone());
+                let contained = position == ShapePosition::Contained;
+                let whole_clonable = fields.iter().all(|(_, f)| {
+                    matches!(f, Ty::Fun(_, _)) || ty_is_definitely_clonable(interner, f)
+                });
+                let closed = matches!(tail, RowTail::Closed);
+                if !contained || !whole_clonable || !closed {
+                    disqualified.insert(key);
+                }
+            }
+            // Any record nested INSIDE this record's fields is itself in an
+            // escaping (storage) position; and a function field's own param/ret
+            // types never introduce a promotable record (they are checked for
+            // nested records too). Recurse every field as escaping.
+            for f in fields.values() {
+                walk_shape_contain(
+                    interner,
+                    f,
+                    ShapePosition::Escaping,
+                    candidates,
+                    disqualified,
+                );
+            }
+        }
+        // Every other composite stores its elements — a record reached through
+        // one has escaped its defining scope. Recurse as escaping so a nested
+        // record-of-functions is disqualified, never silently admitted.
+        Ty::Tuple(elems) => {
+            for e in elems {
+                walk_shape_contain(
+                    interner,
+                    e,
+                    ShapePosition::Escaping,
+                    candidates,
+                    disqualified,
+                );
+            }
+        }
+        Ty::Con { args, .. } => {
+            for a in args {
+                walk_shape_contain(
+                    interner,
+                    a,
+                    ShapePosition::Escaping,
+                    candidates,
+                    disqualified,
+                );
+            }
+        }
+        Ty::Var(_) | Ty::Unit => {}
+    }
+}
+
+/// The sorted field-name-set key of an [`IrType::Record`] carrying ≥1
+/// [`IrType::Fun`] field, or `None` otherwise. The promotion key format
+/// mirrors [`record_of_functions_key`] (sorted field [`Symbol`]s).
+fn ir_record_of_functions_key(fields: &BTreeMap<Symbol, IrType>) -> Option<Vec<Symbol>> {
+    if !fields.values().any(|f| matches!(f, IrType::Fun(_, _))) {
+        return None;
+    }
+    let mut key: Vec<Symbol> = fields.keys().copied().collect();
+    key.sort_unstable();
+    Some(key)
+}
+
+/// Flip the `Fun` fields of every promotable [`IrType::Record`] in `ty` to the
+/// `Arc<dyn Fn>` carrier ([`IrType::SharedFun`]). `promotable` is the
+/// whole-program set computed by [`shared_fun_promotable_shapes`]; a record
+/// whose field-name set is absent is left byte-identical, so a non-promoted
+/// program's emitted Rust is unchanged. Recurses so a promotable record nested
+/// under a (non-promoted) carrier is still flipped consistently with its
+/// standalone occurrences.
+fn flip_promotable_record_slots(ty: IrType, promotable: &BTreeSet<Vec<Symbol>>) -> IrType {
+    let recur = |t: IrType| flip_promotable_record_slots(t, promotable);
+    match ty {
+        IrType::Record(fields) => {
+            let promote =
+                ir_record_of_functions_key(&fields).is_some_and(|key| promotable.contains(&key));
+            let flipped: BTreeMap<Symbol, IrType> = fields
+                .into_iter()
+                .map(|(name, fty)| {
+                    let fty = match fty {
+                        IrType::Fun(ps, r) if promote => IrType::SharedFun(ps, r),
+                        other => recur(other),
+                    };
+                    (name, fty)
+                })
+                .collect();
+            IrType::Record(flipped)
+        }
+        IrType::Maybe(e) => IrType::Maybe(Box::new(recur(*e))),
+        IrType::List(e) => IrType::List(Box::new(recur(*e))),
+        IrType::Set(e) => IrType::Set(Box::new(recur(*e))),
+        IrType::Result(a, b) => IrType::Result(Box::new(recur(*a)), Box::new(recur(*b))),
+        IrType::Dict(a, b) => IrType::Dict(Box::new(recur(*a)), Box::new(recur(*b))),
+        IrType::Tuple(es) => IrType::Tuple(es.into_iter().map(recur).collect()),
+        IrType::Enum { home, name, args } => IrType::Enum {
+            home,
+            name,
+            args: args.into_iter().map(recur).collect(),
+        },
+        IrType::Fun(ps, r) => IrType::Fun(ps.into_iter().map(recur).collect(), Box::new(recur(*r))),
+        IrType::SharedFun(ps, r) => {
+            IrType::SharedFun(ps.into_iter().map(recur).collect(), Box::new(recur(*r)))
+        }
+        // Every other carrier holds no `IrType::Record` a promotion could reach,
+        // or is a leaf — returned unchanged.
+        other => other,
+    }
+}
+
+/// Convert a promotable record's function-valued FIELD VALUE to the `Arc<dyn
+/// Fn>` carrier so it constructs with `Arc::new`, matching the `SharedFun`
+/// struct field the type-side flip produced. A top-level-function reference
+/// ([`Expr::FuncValue`]) re-stamps its `ty` from `Fun` to `SharedFun` (which
+/// routes `emit_func_value` through `Arc::new` via `wants_arc_ctor`); an inline
+/// lambda becomes an [`Expr::SharedLambda`] (which `emit_shared_lambda` builds
+/// with `Arc::new`). Any other value shape is a non-function field left
+/// unchanged. This is the value-side companion of
+/// [`flip_promotable_record_slots`]; the two MUST agree so struct field and
+/// field literal share one carrier (else an `Arc`-vs-`Box` `E0308`).
+fn promote_fn_field_value_carrier(value: Expr) -> Expr {
+    match value {
+        Expr::FuncValue {
+            callee,
+            ty: IrType::Fun(ps, r),
+        } => Expr::FuncValue {
+            callee,
+            ty: IrType::SharedFun(ps, r),
+        },
+        Expr::Lambda { params, ret, body } => Expr::SharedLambda { params, ret, body },
+        other => other,
+    }
+}
+
+/// The sorted field-name-set key of a closed anon record carrying ≥1 function
+/// field, or `None` for any other type / a record with no function field.
+fn record_of_functions_key(ty: &Ty) -> Option<Vec<Symbol>> {
+    let Ty::Record(fields, RowTail::Closed) = ty else {
+        return None;
+    };
+    if !fields.values().any(|f| matches!(f, Ty::Fun(_, _))) {
+        return None;
+    }
+    let mut key: Vec<Symbol> = fields.keys().copied().collect();
+    key.sort_unstable();
+    Some(key)
+}
+
+/// Is a NON-function record field a concretely-clonable type — a leaf or
+/// transparent carrier whose emitted Rust derives `Clone`? Fail-closed: a type
+/// variable, an effect/handle wrapper, or any shape this walk does not
+/// positively recognise as clonable returns `false`, which disqualifies the
+/// enclosing record from promotion.
+fn ty_is_definitely_clonable(interner: &Interner, ty: &Ty) -> bool {
+    match ty {
+        Ty::Unit => true,
+        // Fail closed: a type variable's `Clone`-ness is the caller's
+        // instantiation (unknown here); a bare `Fun` reaching a NON-fn field is a
+        // `Box<dyn Fn>` the flip did not convert; an open row is an unresolved
+        // record the exact-key struct machinery does not synthesise.
+        Ty::Var(_) | Ty::Fun(_, _) | Ty::Record(_, RowTail::Open(_)) => false,
+        Ty::Tuple(elems) => elems.iter().all(|e| ty_is_definitely_clonable(interner, e)),
+        Ty::Record(fields, RowTail::Closed) => fields
+            .values()
+            .all(|f| ty_is_definitely_clonable(interner, f)),
+        Ty::Con { name, args, .. } => {
+            // The effect / decoder constructors carry boxed closures/futures and
+            // are never `Clone` — a record field of one keeps the struct
+            // non-`Clone` even after the fn-slot flip (`E0382` on reuse). Every
+            // other `Con` (`Int`/`String`/`Bool`/`Char`/`Float`/`Bytes`/`Maybe`/
+            // `List`/`Result`/`Dict`/`Set`/a user enum) derives `Clone` iff its
+            // args do. Unknown opaque handles are conservatively rejected by
+            // requiring clonable args AND a non-effect name; a nullary unknown
+            // `Con` (e.g. an opaque handle) is admitted only if its emitted Rust
+            // is `Clone` — which the whole-program derivability fixpoint later
+            // re-checks, so an over-admission here still cannot break the SEAL
+            // (the struct's own `is_clone` gate is the final authority).
+            let effect = interner
+                .resolve(*name)
+                .is_some_and(|n| matches!(n, "Task" | "Cmd" | "Sub" | "Decoder"));
+            !effect && args.iter().all(|a| ty_is_definitely_clonable(interner, a))
+        }
+    }
 }
 
 /// The interned symbols of the built-in `Maybe` / `Result` types and their
@@ -7215,6 +7523,7 @@ impl<'a> Lowerer<'a> {
             fn_is_async: Cell::new(false),
             promotable_fn_binders: std::cell::RefCell::new(BTreeSet::new()),
             deferred_fun_captures: std::cell::RefCell::new(BTreeMap::new()),
+            shared_fun_shapes: shared_fun_promotable_shapes(m, types, interner),
         }
     }
 
@@ -9355,7 +9664,14 @@ impl<'a> Lowerer<'a> {
                 for (name, fty) in fields {
                     ir_fields.insert(*name, self.ir_type_from_canon(fty, generics)?);
                 }
-                Ok(IrType::Record(ir_fields))
+                // fn-value-reuse promotion (annotation path — twin of the
+                // solved-`Ty` flip in `ir_type_from_ty`): a promotable
+                // record-of-functions carries its fn slots on the `Arc<dyn Fn>`
+                // carrier, so the annotated parameter agrees with the literal.
+                Ok(flip_promotable_record_slots(
+                    IrType::Record(ir_fields),
+                    &self.shared_fun_shapes,
+                ))
             }
             // A row-polymorphic record annotation has no single field set to emit
             // (mechanism deferred; see `canon_type_has_open_row`). Every signature
@@ -10372,7 +10688,14 @@ impl<'a> Lowerer<'a> {
                 for (name, field_ty) in fields {
                     lowered.insert(*name, self.ir_type_from_ty(field_ty, span)?);
                 }
-                Ok(IrType::Record(lowered))
+                // fn-value-reuse promotion: flip a promotable record-of-functions'
+                // `Box<dyn Fn>` slots to the `Clone` `Arc<dyn Fn>` carrier so the
+                // struct is `Clone` and reusable. A non-promotable set is left
+                // byte-identical.
+                Ok(flip_promotable_record_slots(
+                    IrType::Record(lowered),
+                    &self.shared_fun_shapes,
+                ))
             }
             // An inferred function type in value position (a lambda, or a
             // function-typed parameter/binding). Flatten the curried arrow chain
@@ -11025,10 +11348,31 @@ impl<'a> Lowerer<'a> {
                 // field-NAME order (the backend names struct-literal fields, so
                 // write order is free), making the lowering deterministic
                 // regardless of source order or interning order.
+                //
+                // fn-value-reuse promotion: a record whose field-name set is
+                // promotable ([`Self::shared_fun_shapes`]) carries its function
+                // fields on the `Arc<dyn Fn>` carrier, so those field VALUES must
+                // construct with `Arc::new` — the literal-side of the same flip
+                // the record's TYPE gets in `ir_type_from_ty`. Such a literal is
+                // NOT rejected by the first-class-function-field gate (IPE-L0107):
+                // the promoted struct is `Clone` and carries the fn field soundly.
+                let promotable = {
+                    let mut key: Vec<Symbol> = fields.iter().map(|(n, _)| *n).collect();
+                    key.sort_unstable();
+                    self.shared_fun_shapes.contains(&key)
+                };
                 let mut lowered: Vec<(Symbol, Expr)> = Vec::with_capacity(fields.len());
                 for (name, value) in fields {
-                    self.reject_function_valued_field(value)?;
-                    lowered.push((*name, self.lower_expr(value)?));
+                    if !promotable {
+                        self.reject_function_valued_field(value)?;
+                    }
+                    let lowered_value = self.lower_expr(value)?;
+                    let lowered_value = if promotable {
+                        promote_fn_field_value_carrier(lowered_value)
+                    } else {
+                        lowered_value
+                    };
+                    lowered.push((*name, lowered_value));
                 }
                 lowered.sort_by(|a, b| {
                     self.resolve(a.0)
@@ -17512,7 +17856,9 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
                 collect_ir_generic_syms(v, out);
             }
         }
-        IrType::Fun(params, ret) | IrType::FnOnceChain(params, ret) => {
+        IrType::Fun(params, ret)
+        | IrType::SharedFun(params, ret)
+        | IrType::FnOnceChain(params, ret) => {
             for p in params {
                 collect_ir_generic_syms(p, out);
             }

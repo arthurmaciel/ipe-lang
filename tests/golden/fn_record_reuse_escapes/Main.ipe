@@ -1,0 +1,22 @@
+module Main exposing (main)
+
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
+
+
+-- The record-of-functions ESCAPES its defining function (`mk` RETURNS it), so
+-- the whole-value containment precondition fails: the shape stays fail-closed
+-- and the escaping literal is rejected (IPE-L0107), never an Arc that could
+-- reach a caller scope the lowerer cannot re-dispatch.
+mk : Int -> { f : Int -> Int, n : Int }
+mk x =
+    { f = \y -> y + x, n = x }
+
+
+use : { f : Int -> Int, n : Int } -> Int
+use c =
+    c.f c.n + c.f c.n
+
+
+main =
+    println (String.fromInt (use (mk 3)))

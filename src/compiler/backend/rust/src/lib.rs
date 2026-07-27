@@ -352,6 +352,17 @@ pub(crate) struct RecordStruct {
     /// onto it and therefore never exit-0-then-cargo-fails on `E0277` (upholds
     /// the SEAL).
     pub is_serde: bool,
+    /// `true` iff every field's DEFAULT emitted carrier is `Clone` (see
+    /// [`ipe_ir::carrier_is_clone`]) — a strictly WEAKER property than
+    /// [`Self::is_derivable`], because the promoted `Arc<dyn Fn>` fn carrier
+    /// ([`ipe_ir::IrType::SharedFun`]) is `Clone` but neither `Debug` nor
+    /// `PartialEq`. A record that is `is_clone` but not `is_derivable` gets a
+    /// HAND-WRITTEN `impl Clone` (never the `CDPeq` derive), which is what lets
+    /// the fn-value-reuse promotion duplicate a reused record-of-functions —
+    /// without it, `c.clone()` would be an `ipe`-0-then-cargo-fail `E0599`
+    /// (SEAL break). `is_derivable ⇒ is_clone` (a `CDPeq` type is `Clone`), so
+    /// the two flags never disagree in the derivable direction.
+    pub is_clone: bool,
 }
 
 /// Shared emission context: the interner plus the precomputed Ipê → Rust name
@@ -822,6 +833,12 @@ impl<'a> EmitCtx<'a> {
                     .iter()
                     .all(|(_, ty)| ipe_ir::ir_type_is_serde(ty, &lookup))
             };
+            // A record whose every field carrier is `Clone` (including the
+            // promoted `Arc<dyn Fn>` `SharedFun` slot) gets a hand-written
+            // `impl Clone` when it is not fully `CDPeq`-derivable — the property
+            // the fn-value-reuse promotion relies on to duplicate a reused
+            // record-of-functions.
+            let is_clone = fields.iter().all(|(_, ty)| ipe_ir::carrier_is_clone(ty));
             record_by_fieldset.insert(key, record_structs.len());
             record_structs.push(RecordStruct {
                 name,
@@ -829,6 +846,7 @@ impl<'a> EmitCtx<'a> {
                 type_params,
                 is_derivable,
                 is_serde,
+                is_clone,
             });
         }
 
@@ -1459,12 +1477,12 @@ fn collect_record_shapes(
                 entry.push(fields);
             }
         }
-        // Same treatment as `Fun` — a curried `FnOnce` chain contributes no
-        // struct of its own, but its levels may carry record shapes.
-        IrType::Fun(params, ret) | IrType::FnOnceChain(params, ret) => {
-            // A function type contributes no struct of its own, but its
-            // parameter and return types may carry record shapes (e.g. a
-            // callback over a record).
+        // A function type (`Fun` / `Arc`-carried `SharedFun` / curried
+        // `FnOnceChain`) contributes no struct of its own, but its param/return
+        // types may carry record shapes (e.g. a callback over a record).
+        IrType::Fun(params, ret)
+        | IrType::SharedFun(params, ret)
+        | IrType::FnOnceChain(params, ret) => {
             for param in params {
                 collect_record_shapes(interner, param, shapes)?;
             }
@@ -1477,23 +1495,15 @@ fn collect_record_shapes(
                 collect_record_shapes(interner, arg, shapes)?;
             }
         }
-        // `Maybe a` / `Result e a` carry no struct of their own, but their
-        // element types may (`Maybe { x : Int }`).
-        IrType::Maybe(elem) | IrType::List(elem) => {
+        // `Maybe a` / `List a` / `Set a` carry no struct of their own, but their
+        // element type may (`Maybe { x : Int }`).
+        IrType::Maybe(elem) | IrType::List(elem) | IrType::Set(elem) => {
             collect_record_shapes(interner, elem, shapes)?;
         }
-        IrType::Result(err, ok) => {
-            collect_record_shapes(interner, err, shapes)?;
-            collect_record_shapes(interner, ok, shapes)?;
-        }
-        // `Dict k v` / `Set a` carry no struct of their own, but their element
-        // types may (`Dict String { x : Int }`).
-        IrType::Dict(k, v) => {
-            collect_record_shapes(interner, k, shapes)?;
-            collect_record_shapes(interner, v, shapes)?;
-        }
-        IrType::Set(a) => {
+        // `Result e a` / `Dict k v` — descend into both element types.
+        IrType::Result(a, b) | IrType::Dict(a, b) => {
             collect_record_shapes(interner, a, shapes)?;
+            collect_record_shapes(interner, b, shapes)?;
         }
         // `Decoder<T>`, `IpeTask<E,A>`, `IpeCmd<M>`, `IpeSub<M>` are opaque
         // aliases; descend into the inner type for any nested record shape.
@@ -1671,6 +1681,8 @@ fn type_reaches_enum(
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
         | IrType::Fun(_, _)
+        // The promoted `Arc<dyn Fn>` carrier is pointer-sized — no size cycle.
+        | IrType::SharedFun(_, _)
         // A curried `FnOnce` chain is the same boxed-trait-object shape as
         // `Fun` — pointer-sized, no size-cycle risk.
         | IrType::FnOnceChain(_, _)
@@ -1725,7 +1737,9 @@ fn contains_generic(ty: &IrType) -> bool {
         IrType::Generic(_) => true,
         IrType::Tuple(elems) => elems.iter().any(contains_generic),
         IrType::Record(map) => map.values().any(contains_generic),
-        IrType::Fun(params, ret) | IrType::FnOnceChain(params, ret) => {
+        IrType::Fun(params, ret)
+        | IrType::SharedFun(params, ret)
+        | IrType::FnOnceChain(params, ret) => {
             params.iter().any(contains_generic) || contains_generic(ret)
         }
         IrType::Enum { args, .. } => args.iter().any(contains_generic),
@@ -1819,7 +1833,9 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
                 collect_generics(v, out);
             }
         }
-        IrType::Fun(params, ret) | IrType::FnOnceChain(params, ret) => {
+        IrType::Fun(params, ret)
+        | IrType::SharedFun(params, ret)
+        | IrType::FnOnceChain(params, ret) => {
             for p in params {
                 collect_generics(p, out);
             }
@@ -2070,6 +2086,18 @@ fn match_template(
         },
         IrType::Fun(tp, tr) => match concrete {
             IrType::Fun(cp, cr) if tp.len() == cp.len() => {
+                for (t, c) in tp.iter().zip(cp.iter()) {
+                    match_template(t, c, subst)?;
+                }
+                match_template(tr, cr, subst)
+            }
+            _ => Err(mismatch()),
+        },
+        // Same structural-shape matching as `Fun` — the promoted `Arc<dyn Fn>`
+        // carrier reconciles only against another `SharedFun` (a `Box`-carried
+        // `Fun` is a distinct Rust type).
+        IrType::SharedFun(tp, tr) => match concrete {
+            IrType::SharedFun(cp, cr) if tp.len() == cp.len() => {
                 for (t, c) in tp.iter().zip(cp.iter()) {
                     match_template(t, c, subst)?;
                 }

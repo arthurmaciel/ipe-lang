@@ -1608,6 +1608,7 @@ fn ir_type_contains_non_serde(ty: &IrType) -> bool {
         // primitives, or types explicitly documented as non-serde
         // (Secret, SqlFragment).
         IrType::Fun(..)
+        | IrType::SharedFun(..)
         | IrType::FnOnceChain(..)
         | IrType::Ui { .. }
         | IrType::UiPlain(_)
