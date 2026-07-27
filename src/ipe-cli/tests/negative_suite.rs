@@ -481,13 +481,13 @@ fn type_non_exhaustive_case() {
 #[test]
 fn exhaust_builtin_adt_nested_nonexhaustive() {
     let src = format!(
-        "{HEAD}import Ipe.Log exposing (println)\n\
+        "{HEAD}import Ipe.Io as Io\n\
          describe : Maybe ErrorKind -> String\n\
          describe m =\n    case m of\n        \
          Just Io      -> \"io\"\n        \
          Just Network -> \"net\"\n        \
          Nothing      -> \"none\"\n\n\
-         main = println (describe Nothing)\n"
+         main = Io.println (describe Nothing)\n"
     );
     assert_rejected("exhaust_builtin_adt_nested", &src, "IPE-T0010");
 }
@@ -499,11 +499,11 @@ fn exhaust_builtin_adt_nested_nonexhaustive() {
 #[test]
 fn exhaust_builtin_adt_toplevel_nonexhaustive() {
     let src = format!(
-        "{HEAD}import Ipe.Log exposing (println)\n\
+        "{HEAD}import Ipe.Io as Io\n\
          classify : ErrorKind -> String\n\
          classify k =\n    case k of\n        \
          Io      -> \"io\"\n        Network -> \"net\"\n\n\
-         main = println (classify Io)\n"
+         main = Io.println (classify Io)\n"
     );
     assert_rejected("exhaust_builtin_toplevel", &src, "IPE-T0010");
 }
@@ -563,7 +563,7 @@ fn type_record_update_on_builtin() {
     let src = format!(
         "{HEAD}f : PanicInfo -> PanicInfo\n\
          f p =\n    {{ p | message = \"x\" }}\n\
-         main =\n    println \"never\"\n"
+         main =\n    Io.println \"never\"\n"
     );
     assert_rejected("type_update_builtin", &src, "IPE-T0017");
 }

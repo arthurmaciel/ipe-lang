@@ -28,7 +28,7 @@ fn deep_right_assoc_chain_does_not_crash() {
     let mut src = String::with_capacity(N * 10 + 300);
     src.push_str(
         "module Main exposing (main)\nimport Ipe.Prelude exposing (..)\n\
-         import Ipe.Log exposing (println)\n\nmain =\n    println (",
+         import Ipe.Io as Io\n\nmain =\n    Io.println (",
     );
     src.push_str(r#""a""#);
     for _ in 0..N {

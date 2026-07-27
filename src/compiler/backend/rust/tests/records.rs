@@ -20,7 +20,7 @@
 //! mk a    = { x = a, y = 2 }
 //! bumpX p = { p | x = 5 }
 //! getX p  = p.x
-//! main    = println (String.fromInt (getX (bumpX (mk 1))))
+//! main    = Io.println (String.fromInt (getX (bumpX (mk 1))))
 //! ```
 //!
 //! to stdout `5\n`, exit 0 (hand-verified in a temp dir). The
@@ -138,7 +138,7 @@ fn record_trio(interner: &mut Interner) -> DResult<Program> {
             field_ty: IrType::Int,
         },
     };
-    // main = Log.println (String.fromInt (getX (bumpX (mk 1))))
+    // main = Io.println (String.fromInt (getX (bumpX (mk 1))))
     let main_fn = Func {
         id: FuncId::from_raw(3),
         name: main,

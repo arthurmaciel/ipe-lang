@@ -3279,7 +3279,7 @@ mod tests {
         let index = code_index();
         let lines = index.lines().count();
         assert_eq!(lines, ALL_CODES.len(), "one line per code");
-        assert_eq!(ALL_CODES.len(), 105, "taxonomy is 105 codes");
+        assert_eq!(ALL_CODES.len(), 106, "taxonomy is 106 codes");
         assert!(
             index.contains("IPE-T0001  type mismatch"),
             "index pairs code with title"
@@ -3388,7 +3388,7 @@ mod tests {
              wrap x =\n    { value = x }\n\n\
              unwrap : { value : a } -> a\n\
              unwrap r =\n    r.value\n\n\
-             main = println (String.fromInt (unwrap (wrap 42)))\n";
+             main = Io.println (String.fromInt (unwrap (wrap 42)))\n";
 
         if std::env::var("IPE_E2E").is_err() {
             return;
@@ -3489,7 +3489,7 @@ module Main exposing (main)
 import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
 import Ipe.Error as Error exposing (Error)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 main =
     let
@@ -3499,8 +3499,8 @@ main =
                     |> Task.andThen (\\_ -> Task.succeed \"unreachable\"))
     in
         case result of
-            Ok val -> println val
-            Err e  -> println (Error.toString e)
+            Ok val -> Io.println val
+            Err e  -> Io.println (Error.toString e)
 ";
 
         let runtime = resolve_runtime();
@@ -3553,10 +3553,10 @@ main =
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 main =
-    println \"hello from task run\" |> Task.run
+    Io.println \"hello from task run\" |> Task.run
 ";
 
         let runtime = resolve_runtime();
@@ -3645,7 +3645,7 @@ main =
         // Entry module: src/Main.ipe — imports Helper
         fs::write(
             src.join("Main.ipe"),
-            "module Main exposing (main)\nimport Helper\nmain = println (String.fromInt Helper.answer)\n",
+            "module Main exposing (main)\nimport Helper\nmain = Io.println (String.fromInt Helper.answer)\n",
         )
         .expect("write Main.ipe");
 
@@ -3688,7 +3688,7 @@ main =
         let main_path = src.join("Main.ipe");
         fs::write(
             &main_path,
-            "module Main exposing (main)\nimport Helper\nmain = println (String.fromInt Helper.broken)\n",
+            "module Main exposing (main)\nimport Helper\nmain = Io.println (String.fromInt Helper.broken)\n",
         )
         .expect("write Main.ipe");
 
@@ -3794,7 +3794,7 @@ main =
         // Main.ipe: imports both; the error is in Lib, not Main or Pad.
         fs::write(
             src.join("Main.ipe"),
-            "module Main exposing (main)\nimport Lib\nimport Pad\nmain = println (String.fromInt Lib.bad)\n",
+            "module Main exposing (main)\nimport Lib\nimport Pad\nmain = Io.println (String.fromInt Lib.bad)\n",
         )
         .expect("write Main.ipe");
 

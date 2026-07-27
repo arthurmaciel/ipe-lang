@@ -12,7 +12,7 @@
 //!   exhaustive [`ipe_ir::Match`] built through the validating
 //!   [`ipe_ir::Match::new`], its binops to [`ipe_ir::BinOp`]);
 //! * `main` → the module's `entry` function;
-//! * kernel references (`Log.println`, `String.fromInt`) → [`ipe_ir::Callee::Kernel`];
+//! * kernel references (`Io.println`, `String.fromInt`) → [`ipe_ir::Callee::Kernel`];
 //! * top-level references (`Main.update`) → [`ipe_ir::Callee::Func`].
 //!
 //! Lowering is *type-directed*: every [`ipe_ir::IrType`] slot is filled from the

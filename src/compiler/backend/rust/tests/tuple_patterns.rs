@@ -17,7 +17,7 @@
 //! type alias IntPair = (Int, Int)
 //! type Wrap = MkWrap IntPair
 //! fstOf w = case w of MkWrap (a, b) -> a
-//! main = println (String.fromInt (fstOf (MkWrap (3, 4))))      -- prints 3
+//! main = Io.println (String.fromInt (fstOf (MkWrap (3, 4))))      -- prints 3
 //! ```
 //!
 //! to stdout `3\n`, exit 0 (hand-verified in a temp dir). The `end_to_end_*`
@@ -101,7 +101,7 @@ fn wrap_program(i: &mut Interner) -> DResult<Program> {
         body: Expr::Match(ipe_ir::Match::new(Expr::Var(w), arms, &[mk_wrap])?),
     };
 
-    // main = Log.println (String.fromInt (fstOf (MkWrap (3, 4))))
+    // main = Io.println (String.fromInt (fstOf (MkWrap (3, 4))))
     let main_fn = Func {
         id: FuncId::from_raw(1),
         name: main,

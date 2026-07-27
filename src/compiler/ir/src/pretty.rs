@@ -2008,7 +2008,7 @@ mod tests {
     use ipe_diagnostics::DResult;
 
     /// Build the canonical program: a `Main` module with a `Msg` enum and a
-    /// `main` function whose body is `Log.println (String.fromInt 1)`, plus a
+    /// `main` function whose body is `Io.println (String.fromInt 1)`, plus a
     /// `tick` function with a `Match` over `Msg`.
     #[allow(clippy::too_many_lines)]
     fn m0_program(i: &mut Interner) -> DResult<Program> {
@@ -2140,7 +2140,7 @@ program
   module Main
     type Msg = Increment | Decrement
     fn#0 main() -> Task Error ()
-      Call kernel Log.println
+      Call kernel Io.println
         Call kernel String.fromInt
           Int 1
     fn#1 tick(m : Msg, count : Int) -> Int
