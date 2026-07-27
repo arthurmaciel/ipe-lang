@@ -26,7 +26,12 @@
 #            renders read-only/denied but that the control principal can write).
 #
 # Exit codes:
-#   0   probes consistent with PROBE_MODE (tier2: no withheld axis demanded)
+#   0   probes consistent with PROBE_MODE (tier2: build clean + no withheld axis)
+#   6   tier2: the untrusted child build failed for an ordinary (non-capability)
+#       reason with NO withheld axis demanded — an ordinary build-fails-in-jail.
+#       Decodes to BuildFailed (a reject), never Clean. THE LOAD-BEARING HINGE:
+#       the wrapper NEVER exits 0 when the child build failed, or a broken build
+#       would forge a clean certify.
 #   2   enforce: net was NOT blocked
 #   3   enforce: fs-escape was NOT blocked
 #   4   control: net was NOT reachable
@@ -49,9 +54,13 @@ ESCAPE_PATH="${ESCAPE_PATH:-/usr/jail-escape-probe}"
 NET_HOST="${NET_HOST:-github.com}"
 NET_PORT="${NET_PORT:-443}"
 # In tier2 mode, which axes the probe exercises: `network`, `filesystem`, or
-# `both` (default). A Tier-2 caller confining one withheld axis exercises exactly
-# that axis, so a denial names it unambiguously and a granted-but-unrouted host
-# cannot masquerade as the wrong axis. Ignored outside tier2 mode.
+# `both`, or `none`. A Tier-2 caller confining one withheld axis exercises
+# exactly that axis, so a denial names it unambiguously and a granted-but-unrouted
+# host cannot masquerade as the wrong axis. `none` selects the full-run
+# child-exit-only mode: no fixed axis probe runs (it would fabricate a demand the
+# package never made), and the verdict is the child build's own exit — the sound
+# signal for the full declared-scoped run of a real build (see below). Ignored
+# outside tier2 mode.
 TIER2_AXIS="${TIER2_AXIS:-both}"
 
 # Attempt to write the fs-escape probe. In a function so a failed output
@@ -89,6 +98,44 @@ PYEOF
 if [ -n "$SCRATCH" ]; then
     printf 'benign-write\n' > "$SCRATCH/ok.txt"
     echo "PROBE benign: wrote $SCRATCH/ok.txt — OK"
+fi
+
+# ── tier2: run the untrusted child build (the positional argv) ────────────────
+# The wrapper runs its positional argv ($@) as a CHILD before its own fixed axis
+# probe. A withheld-axis syscall inside the child is killed by the jail; that
+# same withheld axis also trips the wrapper's post-build probe below (the jail
+# withholds the axis for the whole session), so the per-axis code names it. A
+# child that fails for an ordinary reason with no axis demanded is code 6
+# (BuildFailed) at the end — the wrapper NEVER exits 0 when the child failed.
+CHILD_STATUS=0
+if [ "$PROBE_MODE" = "tier2" ] && [ "$#" -gt 0 ]; then
+    # Disable `set -e` around the child so a non-zero exit is captured, not fatal.
+    set +e
+    "$@"
+    CHILD_STATUS=$?
+    set -e
+    echo "PROBE child-build tier2: exit $CHILD_STATUS"
+fi
+
+# ── tier2 full declared-scoped run (TIER2_AXIS=none): child-exit-only ─────────
+# On the FULL declared-scoped real-build run the wrapper runs NO fixed axis probe:
+# a fixed probe would fabricate a capability demand the package never made (a
+# socket / out-of-scratch write the build did not do), so no declared set other
+# than {network,filesystem} could ever certify. Instead the signal is the child
+# build's own exit: a withheld axis is withheld by capability REMOVAL (the net
+# namespace is unshared; the escape path is not bound writable), so a build that
+# reaches it is killed / errors → non-zero → BuildFailed. A build that caught the
+# error and exited anyway performed NO effect (a caught denial is a no-op), so
+# exit 0 is positive proof the build reached no withheld axis. The child build we
+# run is a fixed `cargo build` of a generated probe crate (our argv, our probe
+# main), so the untrusted crate cannot own this exit's meaning.
+if [ "$PROBE_MODE" = "tier2" ] && [ "$TIER2_AXIS" = "none" ]; then
+    if [ "$CHILD_STATUS" -ne 0 ]; then
+        echo "PROBE full-run tier2: child build failed (exit $CHILD_STATUS) — BuildFailed"
+        exit 6
+    fi
+    echo "PROBE full-run tier2: child build clean — no withheld axis reached"
+    exit 0
 fi
 
 # ── probe 2: network attempt ──────────────────────────────────────────────────
@@ -142,6 +189,12 @@ esac
 # axis only — the run then proves a CLEAN outcome (exit 0) for the network case.
 if [ "$PROBE_MODE" = "tier2" ] && [ "$TIER2_AXIS" = "network" ]; then
     echo "PROBE fs-escape tier2: skipped (axis=network)"
+    # No axis was denied above; a non-zero child build here is an ordinary
+    # build failure (BuildFailed), never a clean certify.
+    if [ "$CHILD_STATUS" -ne 0 ]; then
+        echo "PROBE child-build tier2: ordinary failure (exit $CHILD_STATUS), no axis demanded"
+        exit 6
+    fi
     echo "All probes passed ($PROBE_MODE)."
     exit 0
 fi
@@ -179,5 +232,12 @@ case "$PROBE_MODE" in
         fi
         ;;
 esac
+
+# The load-bearing hinge (tier2): no withheld axis was denied above, so a
+# non-zero child build here is an ORDINARY build failure — never a clean certify.
+if [ "$PROBE_MODE" = "tier2" ] && [ "$CHILD_STATUS" -ne 0 ]; then
+    echo "PROBE child-build tier2: ordinary failure (exit $CHILD_STATUS), no axis demanded"
+    exit 6
+fi
 
 echo "All probes passed ($PROBE_MODE)."

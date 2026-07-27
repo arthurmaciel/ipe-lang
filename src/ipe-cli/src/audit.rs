@@ -172,6 +172,7 @@ pub fn run_audit(rest: &[String]) -> Result<(), CliError> {
         declared: &prepared.manifest.capabilities,
         has_rust_deps: !prepared.manifest.rust_dependencies.is_empty(),
         root: &prepared.manifest.root,
+        emitted_dir: &prepared.emitted_dir,
         probe_fixture: tier2_probe_fixture(),
     })?;
 
@@ -205,8 +206,10 @@ fn passing_summary(name: &str, version: &str, tier2: &crate::audit_native::Tier2
         ),
         Tier2Outcome::Certified { platform } => format!(
             "package audit: {name} {version} — all Tier-1 checks passed; native Tier-2 capability \
-             enforcement passed on: {platform}. Tier-2 has not yet been run on other platforms \
-             (macOS / Windows / FreeBSD), so this version is not certified native-clean for them."
+             enforcement (build+link reachability of the package's FFI bindings under a \
+             declared-scoped jail) passed on: {platform}. Tier-2 has not yet been run on other \
+             platforms (macOS / Windows / FreeBSD), so this version is not certified native-clean \
+             for them."
         ),
     }
 }
