@@ -417,6 +417,23 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
                 parts.join(", ")
             )
         }
+        // The promoted reference-counted fn carrier: `Arc<dyn Fn(..) -> R + Send
+        // + Sync + 'static>`. `Arc` is `Clone` (a refcount bump), so a composite
+        // holding this slot is itself `Clone` and can be duplicated for reuse.
+        // Same trait-object bound as the `Box` carrier below — the ONLY
+        // difference is the smart pointer — so the swap is capture-transparent
+        // (every capture the `Box` form admits, the `Arc` form admits too).
+        IrType::SharedFun(params, ret) => {
+            let mut parts = Vec::with_capacity(params.len());
+            for param in params {
+                parts.push(render_type(ctx, param, generics)?);
+            }
+            let ret = render_type(ctx, ret, generics)?;
+            format!(
+                "::std::sync::Arc<dyn Fn({}) -> {ret} + Send + Sync + 'static>",
+                parts.join(", ")
+            )
+        }
         IrType::Fun(params, ret) => {
             // A first-class function value is a boxed trait object
             // `Box<dyn Fn(T0, ...) -> R + Send + Sync + 'static>`. The
@@ -831,11 +848,46 @@ pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> 
     } else {
         String::new()
     };
+    // seal: a record that is `Clone` but NOT fully `CDPeq`-derivable — the
+    // fn-value-reuse promotion's record-of-functions, whose `Arc<dyn Fn>`
+    // (`SharedFun`) fields are `Clone` yet neither `Debug` nor `PartialEq` — gets
+    // a HAND-WRITTEN `impl Clone` (cloning every field, an `Arc::clone` refcount
+    // bump on each fn slot). Without it, a reused promoted record's `.clone()`
+    // would be an `ipe`-0-then-cargo-fail `E0599`. A fully-derivable record takes
+    // the derive above instead, so the two paths never both emit a `Clone` impl.
+    let clone_impl = if rec.is_clone && !rec.is_derivable {
+        let field_clones: Vec<String> = rec
+            .fields
+            .iter()
+            .map(|(field_name, _)| {
+                let ident = mangle_reserved(field_name.clone());
+                format!("            {ident}: self.{ident}.clone(),")
+            })
+            .collect();
+        format!(
+            "impl{impl_clone_bounds} Clone for {name}{use_clause} {{
+    fn clone(&self) -> Self {{
+        Self {{
+{}
+        }}
+    }}
+}}
+",
+            field_clones.join("\n"),
+            impl_clone_bounds = if params.is_empty() {
+                String::new()
+            } else {
+                format!("<{}>", params.join(", "))
+            },
+        )
+    } else {
+        String::new()
+    };
     Ok(format!(
         "{derive_prefix}pub struct {name}{decl_clause} {{
 {fields_block}
 }}
-impl{impl_bounds} IpeStringify for {name}{use_clause} {{
+{clone_impl}impl{impl_bounds} IpeStringify for {name}{use_clause} {{
     fn ipe_show(&self) -> String {{
         {body}
     }}

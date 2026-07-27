@@ -215,24 +215,13 @@ fn ir_type_name_at(interner: &Interner, ty: &IrType, depth: u16) -> String {
                 format!("{{ {inner} }}")
             }
         }
-        IrType::Fun(params, ret) => {
-            // Source-like arrow form `T0 -> T1 -> R`. A nullary function type
-            // shows its unit parameter explicitly so it stays distinct from its
-            // bare return type.
-            let mut parts: Vec<String> = params
-                .iter()
-                .map(|t| ir_type_name_at(interner, t, depth))
-                .collect();
-            if parts.is_empty() {
-                parts.push("()".to_owned());
-            }
-            parts.push(ir_type_name_at(interner, ret, depth));
-            parts.join(" -> ")
-        }
-        // Same source-like arrow rendering as `Fun` — the FnOnce-vs-Fn
-        // distinction is a backend Rust-emission concern, invisible at the
-        // IR pretty-printer's source-facing level.
-        IrType::FnOnceChain(params, ret) => {
+        // All three function carriers share one source-like arrow form `T0 ->
+        // T1 -> R` (a nullary shows its unit parameter explicitly). The
+        // Box-vs-Arc-vs-FnOnce carrier distinction is a backend Rust-emission
+        // concern, invisible at the IR pretty-printer's source-facing level.
+        IrType::Fun(params, ret)
+        | IrType::SharedFun(params, ret)
+        | IrType::FnOnceChain(params, ret) => {
             let mut parts: Vec<String> = params
                 .iter()
                 .map(|t| ir_type_name_at(interner, t, depth))
