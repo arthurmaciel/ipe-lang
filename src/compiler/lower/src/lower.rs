@@ -11883,7 +11883,7 @@ impl<'a> Lowerer<'a> {
                         }));
                     }
                 }
-                // ── Tui.app / Tui.program / Webview.app / Cli.program cfg literal
+                // ── Tui.app / Tui.program / Webview.app / Console.app cfg literal
                 //    (L0107 exemption) ──
                 //
                 // Same pattern as `Live.app`: intercept the single cfg-record arg
@@ -11894,9 +11894,9 @@ impl<'a> Lowerer<'a> {
                 //   value (no functions); `lower_app_entry_cfg` additionally
                 //   requires that record — and its `size` tuple — to be inline
                 //   literals (the G4 emit gates).
-                // CliProgram — 5-field cfg (init/update/view/subscriptions/
+                // ConsoleApp — 5-field cfg (init/update/view/subscriptions/
                 //   onLine), all function-typed; without this arm every real
-                //   `Cli.program` call would trip IPE-L0107 and the emit_cli
+                //   `Console.app` call would trip IPE-L0107 and the emit_console
                 //   path could never fire.
                 // A non-literal cfg (let-bound, piped, etc.) is rejected here with
                 // IPE-L0119 at the argument span — fail-closed, never an ICE.
@@ -11904,7 +11904,7 @@ impl<'a> Lowerer<'a> {
                     KernelFn::TuiApp
                     | KernelFn::TuiProgram
                     | KernelFn::WebviewApp
-                    | KernelFn::CliProgram,
+                    | KernelFn::ConsoleApp,
                 ) if args.len() == 1 => {
                     if let Some(arg0) = args.first() {
                         // Borrow `peek` for the gate BEFORE moving it below.
@@ -14342,8 +14342,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::TuiApp
                 // `Webview.app : WebviewCfg model msg -> Task Error ()`
                 | KernelFn::WebviewApp
-                // `Cli.program : CliCfg model msg -> Task Error ()`
-                | KernelFn::CliProgram
+                // `Console.app : CliCfg model msg -> Task Error ()`
+                | KernelFn::ConsoleApp
                 // Ipe.Html.Attributes fixed-key builders (`String`/`Bool`
                 // -> Attribute msg).
                 | KernelFn::HtmlAttrClass
@@ -16043,8 +16043,8 @@ impl<'a> Lowerer<'a> {
                     ("Tui", "app") => Ok(Callee::Kernel(KernelFn::TuiApp)),
                     // ── Ipe.Webview / Ipe.Webview app-entry kernel ────────
                     ("Webview", "app") => Ok(Callee::Kernel(KernelFn::WebviewApp)),
-                    // ── Ipe.Cli / Ipe.Cli app-entry kernel ──────────────
-                    ("Cli", "program") => Ok(Callee::Kernel(KernelFn::CliProgram)),
+                    // ── Ipe.Console / Ipe.Console app-entry kernel ──────────────
+                    ("Console", "app") => Ok(Callee::Kernel(KernelFn::ConsoleApp)),
                     // ── Ipe.Auth / Ipe.Auth — auth helpers ──────────────
                     ("Auth", "hashPassword") => Ok(Callee::Kernel(KernelFn::AuthHashPassword)),
                     ("Auth", "hashPasswordCost") => {

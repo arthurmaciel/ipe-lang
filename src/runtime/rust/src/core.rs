@@ -823,7 +823,7 @@ fn short_err_id() -> String {
 /// Extract a panic payload's message, classify it, emit the structured/plain
 /// server-side log line (honouring `IPE_LOG_FORMAT=json`), and RETURN the 8-hex
 /// correlation errId. SHARED by the exit-on-panic hook (`install_panic_classifier`,
-/// used for Ipe.Cli/Tui binaries) and the server/live `CatchPanicLayer` responder
+/// used for Ipe.Console/Tui binaries) and the server/live `CatchPanicLayer` responder
 /// (`server::panic_response`).
 ///
 /// Two load-bearing properties:
@@ -879,7 +879,7 @@ pub fn panic_500_body(payload: &(dyn std::any::Any + Send)) -> String {
 
 /// Install the classifying panic hook. Idempotent in effect (re-installing just
 /// replaces the hook). Called at the top of generated `fn main()` for non-server
-/// shapes (Ipe.Cli/Tui); server/live binaries rely on the per-request
+/// shapes (Ipe.Console/Tui); server/live binaries rely on the per-request
 /// `CatchPanicLayer` instead (so a handler panic returns a 500, not exit).
 ///
 /// **Design note — hook logs then RESUMES the unwind (never calls exit).** Calling

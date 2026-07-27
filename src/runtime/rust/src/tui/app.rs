@@ -1,6 +1,6 @@
 //! Ipe.Tui — the `tui_app` TEA loop.
 //!
-//! Mirrors `cli_program` (tea.rs) exactly — same `CliEvent` channel, `SubManager`
+//! Mirrors `console_app` (tea.rs) exactly — same `CliEvent` channel, `SubManager`
 //! (so `Sub.every` → Tick works) and `cli_run_cmd` (so `Cmd.perform` works) — but
 //! reads RAW key bytes (raw mode + `decode_key`) instead of stdin lines, and
 //! paints into the alternate screen. A Ipe.Tui app quits by calling `System.exit`

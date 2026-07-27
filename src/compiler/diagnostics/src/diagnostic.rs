@@ -762,7 +762,7 @@ pub enum AppShape {
     /// `Ipe.Webview` / `Ipe.Webview` — the Model is kept in memory, so it must
     /// be `Clone`.
     Webview,
-    /// `Ipe.Cli` / `Ipe.Cli` — the Model is kept in memory, so it must be
+    /// `Ipe.Console` / `Ipe.Console` — the Model is kept in memory, so it must be
     /// `Clone`.
     Cli,
 }
@@ -1321,7 +1321,7 @@ pub fn inadmissible_model_message(app: AppShape, field: &str, leaf: ModelLeaf) -
         ),
         AppShape::Tui => ("Ipe.Tui", "clonable"),
         AppShape::Webview => ("Ipe.Webview", "clonable"),
-        AppShape::Cli => ("Ipe.Cli", "clonable"),
+        AppShape::Cli => ("Ipe.Console", "clonable"),
     };
     let leaf_phrase = match leaf {
         ModelLeaf::Function => "a function",
@@ -1355,7 +1355,7 @@ pub fn inadmissible_msg_message(app: AppShape, field: &str, leaf: ModelLeaf) -> 
         AppShape::Live => "Ipe.Live",
         AppShape::Tui => "Ipe.Tui",
         AppShape::Webview => "Ipe.Webview",
-        AppShape::Cli => "Ipe.Cli",
+        AppShape::Cli => "Ipe.Console",
     };
     let leaf_phrase = match leaf {
         ModelLeaf::Function => "a function",

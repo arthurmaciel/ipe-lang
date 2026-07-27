@@ -2740,7 +2740,7 @@ fn emit_ui_call(
         return Ok(None);
     };
     // Only handle Ui / Live / Tui / Webview / Cli kernels.
-    if !k.is_ui() && !k.is_live() && !k.is_tui() && !k.is_webview() && !k.is_cli() {
+    if !k.is_ui() && !k.is_live() && !k.is_tui() && !k.is_webview() && !k.is_console() {
         return Ok(None);
     }
     match k {
@@ -5707,15 +5707,15 @@ fn emit_ui_call(
         }
 
         // ── Cli app-entry kernel ─────────────────────────────────────────────
-        // Delegate to `emit_cli::emit_cli_call`; it returns `Some(s)` for
-        // the CliProgram variant and `None` for anything else. A `None` here is an
-        // internal error (the `k.is_cli()` guard above already filtered), so
+        // Delegate to `emit_console::emit_console_call`; it returns `Some(s)` for
+        // the ConsoleApp variant and `None` for anything else. A `None` here is an
+        // internal error (the `k.is_console()` guard above already filtered), so
         // promote it to a `CompilerBug`.
-        KernelFn::CliProgram => {
-            let s = crate::emit_cli::emit_cli_call(ctx, callee, args, indent, child, generics)?
+        KernelFn::ConsoleApp => {
+            let s = crate::emit_console::emit_console_call(ctx, callee, args, indent, child, generics)?
                 .ok_or_else(|| Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call",
-                    detail: format!("emit_cli returned None for Cli kernel {k:?} — missing arm"),
+                    detail: format!("emit_console returned None for Cli kernel {k:?} — missing arm"),
                 })?;
             Ok(Some(s))
         }

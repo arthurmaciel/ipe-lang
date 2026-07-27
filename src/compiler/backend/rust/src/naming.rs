@@ -1328,9 +1328,9 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::HtmlOnBool => "html_on_bool_",
         KernelFn::HtmlOnSubmit => "html_on_raw_",
         // ── Cli app-entry ───────────────────────────────────────────────
-        // CliProgram is emitted via the dedicated emit_cli_call path;
+        // ConsoleApp is emitted via the dedicated emit_console_call path;
         // kernel_name is kept for match exhaustiveness.
-        KernelFn::CliProgram => "ipe_cli_program_",
+        KernelFn::ConsoleApp => "ipe_console_app_",
         // ── Ipe.Auth runtime function names (auth.rs) ──────────────────
         KernelFn::AuthHashPassword => "auth_hash_password",
         KernelFn::AuthHashPasswordCost => "auth_hash_password_cost",

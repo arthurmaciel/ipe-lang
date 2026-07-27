@@ -381,7 +381,7 @@ struct Builtins {
     /// Typed as `(Int, Int)` — width × height in logical pixels.
     webview_f_size: Symbol,
     // ── Cli cfg record field name symbols ──────────────────────────────
-    /// `"onLine"` — the onLine field of the `Cli.program` config record.
+    /// `"onLine"` — the onLine field of the `Console.app` config record.
     /// Typed as `String -> Msg` — called once per stdin line.
     cli_f_on_line: Symbol,
     // ── Ui.button cfg record field name symbols ───────────────────────────────
@@ -5250,14 +5250,14 @@ impl<'a> Builder<'a> {
                 fun(cfg_rec, task_unit())
             }
 
-            // ── Ipe.Cli / Ipe.Cli app-entry ─────────────────────
-            // `Cli.program : { init : () -> (model, Cmd msg)
+            // ── Ipe.Console / Ipe.Console app-entry ─────────────────────
+            // `Console.app : { init : () -> (model, Cmd msg)
             //                , update : msg -> model -> (model, Cmd msg)
             //                , view : model -> String
             //                , subscriptions : model -> Sub msg
             //                , onLine : String -> msg
             //                } -> Task () ()`
-            K::CliProgram => {
+            K::ConsoleApp => {
                 let tup = tuple2(var(0), cmd(var(1)));
                 let cfg_rec = Ty::Record(
                     {
@@ -8450,8 +8450,8 @@ mod registry_phase_c_tests {
             K::FontDisabledColor,
             K::FontHoverSize,
             K::HtmlAttrTabindex,
-            // Ipe.Cli / Ipe.Cli app-entry — brand-new kernel, no legacy oracle.
-            K::CliProgram,
+            // Ipe.Console / Ipe.Console app-entry — brand-new kernel, no legacy oracle.
+            K::ConsoleApp,
             // ── Ipe.Auth (9 kernels) — schemed + lowered, moved from REACHABLE_BUT_UNLOWERED ──
             K::AuthHashPassword,
             K::AuthHashPasswordCost,

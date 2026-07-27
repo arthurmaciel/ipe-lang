@@ -113,7 +113,7 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Tui"], "Tui"),
     (&["Ipe", "Webview"], "Webview"),
     // ── Effect stdlib modules ───────────────────────────────────────────────
-    (&["Ipe", "Cli"], "Cli"),
+    (&["Ipe", "Console"], "Console"),
     (&["Ipe", "Auth"], "Auth"),
     (&["Ipe", "Http", "Server", "Stream"], "Stream"),
     (&["Ipe", "Http", "Stream"], "HttpStream"),
@@ -1502,8 +1502,8 @@ impl Env {
             // ── Ipe.Webview / Ipe.Webview app-entry kernel ───────────────────────
             ("Webview", &["app"]),
             // ── Effect stdlib modules ─────────────────────────────────────────────
-            // Ipe.Cli / Ipe.Cli — line-oriented TEA app-entry (fully wired).
-            ("Cli", &["program"]),
+            // Ipe.Console — line-oriented TEA app-entry (fully wired). — line-oriented TEA app-entry (fully wired).
+            ("Console", &["app"]),
             // Ipe.Auth / Ipe.Auth — authentication helpers (fail-closed: no lower
             // arm yet → IPE-L0108 at lower time; canon registration removes N0004).
             (
@@ -1631,7 +1631,7 @@ impl Env {
             ("Ipe.Webview", "Webview"),
             ("Ipe.Log", "Log"),
             // ── Effect stdlib module aliases ──────────────────────────────────────
-            ("Ipe.Cli", "Cli"),
+            ("Ipe.Console", "Console"),
             ("Ipe.Auth", "Auth"),
             ("Ipe.Http.Server.Stream", "Stream"),
             ("Ipe.Http.Stream", "HttpStream"),

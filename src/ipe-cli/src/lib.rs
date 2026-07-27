@@ -3515,7 +3515,7 @@ main =
     /// `ipe_main` definition site.
     #[test]
     fn task_run_main_emits_ipetask_not_iperesult() {
-        // A minimal Ipe.Cli-style program: main = task |> Task.run
+        // A minimal Ipe.Console-style program: main = task |> Task.run
         // A shape prone to E0308 in the emitted Rust.
         const SRC: &str = "\
 module Main exposing (main)

@@ -1187,7 +1187,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::HtmlOnKeyUp => "Event.onKeyUp",
         KernelFn::HtmlOnBool => "Event.onBool",
         // ── Cli app-entry + Auth + Stream + HttpStream ─────────────────
-        KernelFn::CliProgram => "Cli.program",
+        KernelFn::ConsoleApp => "Console.app",
         KernelFn::AuthHashPassword => "Auth.hashPassword",
         KernelFn::AuthHashPasswordCost => "Auth.hashPasswordCost",
         KernelFn::AuthVerifyPassword => "Auth.verifyPassword",

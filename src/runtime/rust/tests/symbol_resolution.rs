@@ -62,8 +62,8 @@ const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
     // ── Dead: emit_live_route generates a closure expression, not a function
     //         call. ──────────────────────────────────────────────────────────
     "live_route",
-    // ── Dead: emit_cli_call synthesises the CLI entry-point block inline. ───
-    "ipe_cli_program_",
+    // ── Dead: emit_console_call synthesises the CLI entry-point block inline. ───
+    "ipe_console_app_",
     // ── Dead: emit_ui_call emits ipe_runtime_rust::ui::render::ui_layout_with_vecs
     //         for UiLayoutWith; the bare "ui_layout_with" name is not used.
     //         Note: ui_layout_with_vecs IS in the runtime; this entry is for

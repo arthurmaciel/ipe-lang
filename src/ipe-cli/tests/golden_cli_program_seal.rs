@@ -1,13 +1,13 @@
-//! Seal — `Cli.program` app-entry kernel, end to end.
+//! Seal — `Console.app` app-entry kernel, end to end.
 //!
 //! Regression for the L0107-exemption gap found at reconcile time: the
-//! `Cli.program` cfg record carries five function-typed fields
-//! (init/update/view/subscriptions/onLine), so without `KernelFn::CliProgram`
+//! `Console.app` cfg record carries five function-typed fields
+//! (init/update/view/subscriptions/onLine), so without `KernelFn::ConsoleApp`
 //! in the app-entry cfg intercept (`lower.rs`) EVERY real call tripped
-//! `IPE-L0107: function value in a record field` and the `emit_cli` path was
+//! `IPE-L0107: function value in a record field` and the `emit_console` path was
 //! unreachable dead code.  This test pins the full pipeline:
 //! constrain scheme (closed 5-field cfg, `RowTail::Closed`) → lower
-//! app-entry intercept → `emit_cli_call` → `ipe_runtime::cli_program`.
+//! app-entry intercept → `emit_console_call` → `ipe_runtime::console_app`.
 //!
 //! Asserts ipe-0 ∧ cargo-0 ∧ run-0.  The runtime prints `view model` once at
 //! start; the harness runs the binary with stdin at EOF (`Command::output`
@@ -16,7 +16,7 @@
 //! Gated on `IPE_E2E=1`. Run:
 //!
 //! ```text
-//! IPE_E2E=1 cargo test -p ipe --test golden_i111_cli_program_seal
+//! IPE_E2E=1 cargo test -p ipe --test golden_i111_console_app_seal
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -29,15 +29,15 @@ fn repo_root() -> PathBuf {
 }
 
 #[test]
-fn cli_program_ipec_cargo_and_run_zero() {
+fn console_app_ipec_cargo_and_run_zero() {
     if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
     let root = repo_root();
-    let dir = root.join("tests").join("golden").join("cli_program_seal");
+    let dir = root.join("tests").join("golden").join("console_app_seal");
     let entry = dir.join("Main.ipe");
-    let out = std::env::temp_dir().join("ipec_i111_cli_program_seal_e2e");
+    let out = std::env::temp_dir().join("ipec_i111_console_app_seal_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -48,7 +48,7 @@ fn cli_program_ipec_cargo_and_run_zero() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "ipe build must succeed for cli_program_seal: {:?}",
+        "ipe build must succeed for console_app_seal: {:?}",
         built.err()
     );
 
@@ -56,21 +56,21 @@ fn cli_program_ipec_cargo_and_run_zero() {
     let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
         .expect("emitted main.rs must exist");
     assert!(
-        emitted.contains("ipe_runtime::cli_program("),
-        "emitted main.rs must call ipe_runtime::cli_program; got:\n{emitted}"
+        emitted.contains("ipe_runtime::console_app("),
+        "emitted main.rs must call ipe_runtime::console_app; got:\n{emitted}"
     );
 
     // cargo-0 ∧ run-0: the binary builds, renders the initial view, exits 0.
-    let outcome = support::build_and_run_emitted("cli_program_seal", &out);
+    let outcome = support::build_and_run_emitted("console_app_seal", &out);
     assert_eq!(
         outcome.exit_code,
         Some(0),
-        "Cli.program binary must exit 0 on stdin EOF; got {:?}",
+        "Console.app binary must exit 0 on stdin EOF; got {:?}",
         outcome.exit_code
     );
     assert!(
         outcome.stdout.contains("lines: 0"),
-        "Cli.program must render the initial view on start; got: {:?}",
+        "Console.app must render the initial view on start; got: {:?}",
         outcome.stdout
     );
 }

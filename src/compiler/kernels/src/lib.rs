@@ -41,8 +41,8 @@ pub enum KernelClass {
     Tui,
     /// `Ipe.Webview` app-entry kernel.
     Webview,
-    /// `Ipe.Cli` / `Ipe.Cli` app-entry kernel.
-    Cli,
+    /// `Ipe.Console` / `Ipe.Console` app-entry kernel.
+    Console,
     /// Reserved for the FFI kernel tier.
     Ffi,
 }
@@ -1171,8 +1171,8 @@ pub enum StdlibKernel {
     HtmlAttrTabindex, // Int → HtmlAttr
     HtmlAttrRows,     // Int → HtmlAttr  (<textarea rows="N">)
     // ── Effect stdlib modules ────────────────────────────────────────
-    // Ipe.Cli / Ipe.Cli — line-oriented TEA app-entry (fully wired).
-    CliProgram,
+    // Ipe.Console / Ipe.Console — line-oriented TEA app-entry (fully wired).
+    ConsoleApp,
     // Ipe.Auth / Ipe.Auth — authentication helpers (fail-closed: no lower arm
     // yet → IPE-L0108 at lower time; qualified registration removes N0004).
     AuthHashPassword,
@@ -2702,8 +2702,8 @@ impl StdlibKernel {
             Self::HtmlAttrTabindex => d("Attr", "tabindex", 1, Ui, "html_attr_tabindex_"),
             Self::HtmlAttrRows => d("Attr", "rows", 1, Ui, "html_attr_rows_"),
             // ── Effect stdlib modules ────────────────────────────────────
-            // Ipe.Cli / Ipe.Cli app-entry.
-            Self::CliProgram => d("Cli", "program", 1, KernelClass::Cli, "cli_program"),
+            // Ipe.Console / Ipe.Console app-entry.
+            Self::ConsoleApp => d("Console", "app", 1, KernelClass::Console, "console_app"),
             // Ipe.Auth / Ipe.Auth (fail-closed: qual-registered only, no lower arm).
             Self::AuthHashPassword => d("Auth", "hashPassword", 1, Pure, "auth_hash_password"),
             Self::AuthHashPasswordCost => d(
@@ -3941,7 +3941,7 @@ impl StdlibKernel {
         Self::HtmlAttrTabindex,
         Self::HtmlAttrRows,
         // ── Effect stdlib modules ────────────────────────────────────────
-        Self::CliProgram,
+        Self::ConsoleApp,
         Self::AuthHashPassword,
         Self::AuthHashPasswordCost,
         Self::AuthVerifyPassword,
@@ -5100,7 +5100,7 @@ impl StdlibKernel {
             | Self::FontHoverSize
             | Self::HtmlAttrTabindex
             | Self::HtmlAttrRows
-            | Self::CliProgram
+            | Self::ConsoleApp
             | Self::AuthHashPassword
             | Self::AuthHashPasswordCost
             | Self::AuthVerifyPassword
@@ -6116,10 +6116,10 @@ impl StdlibKernel {
         matches!(self, Self::WebviewApp)
     }
 
-    /// `true` when this variant is the `Ipe.Cli` / `Ipe.Cli` app-entry kernel.
+    /// `true` when this variant is the `Ipe.Console` / `Ipe.Console` app-entry kernel.
     #[must_use]
-    pub const fn is_cli(self) -> bool {
-        matches!(self, Self::CliProgram)
+    pub const fn is_console(self) -> bool {
+        matches!(self, Self::ConsoleApp)
     }
 
     /// `true` when this variant belongs to the `Ipe.CssSafety` leaf
@@ -6359,12 +6359,12 @@ impl StdlibKernel {
                 matches!(self, Self::EnvPublic)
             }
             // Server-only surfaces: no browser denotation, ever (Db/Server)
-            // or until a dedicated backend exists (Tui/Webview/Cli/Ffi).
+            // or until a dedicated backend exists (Tui/Webview/Console/Ffi).
             KernelClass::Db
             | KernelClass::Server
             | KernelClass::Tui
             | KernelClass::Webview
-            | KernelClass::Cli
+            | KernelClass::Console
             | KernelClass::Ffi => false,
         }
     }

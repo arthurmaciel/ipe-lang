@@ -17,7 +17,7 @@
 
 mod crate_specs;
 mod doc;
-mod emit_cli;
+mod emit_console;
 mod emit_doc;
 mod emit_expr;
 mod emit_live;

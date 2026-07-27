@@ -1,4 +1,4 @@
-//! Go-oracle parity check for `Cli.program`'s view printer. A
+//! Go-oracle parity check for `Console.app`'s view printer. A
 //! `view` that doesn't append its own trailing newline gets renders glued
 //! together with NOTHING in between, and exactly ONE trailing newline after
 //! the event loop exits. This matches `runtime-go/rt/cli.go`'s
@@ -15,7 +15,7 @@
 //! Gated on `IPE_E2E=1`. Run:
 //!
 //! ```text
-//! IPE_E2E=1 cargo test -p ipe --test golden_i122_cli_program_separator
+//! IPE_E2E=1 cargo test -p ipe --test golden_i122_console_app_separator
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -28,7 +28,7 @@ fn repo_root() -> PathBuf {
 }
 
 #[test]
-fn cli_program_glues_consecutive_renders_matching_go_oracle() {
+fn console_app_glues_consecutive_renders_matching_go_oracle() {
     if std::env::var("IPE_E2E").is_err() {
         return;
     }
@@ -37,9 +37,9 @@ fn cli_program_glues_consecutive_renders_matching_go_oracle() {
     let dir = root
         .join("tests")
         .join("golden")
-        .join("cli_program_view_separator");
+        .join("console_app_view_separator");
     let entry = dir.join("Main.ipe");
-    let out = std::env::temp_dir().join("ipec_i122_cli_program_view_separator_e2e");
+    let out = std::env::temp_dir().join("ipec_i122_console_app_view_separator_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -51,7 +51,7 @@ fn cli_program_glues_consecutive_renders_matching_go_oracle() {
 
     // Two stdin lines → two loop-body renders (count 0 → 1 → 2), then EOF.
     let outcome =
-        support::build_and_run_emitted_with_stdin("cli_program_view_separator", &out, b"a\nb\n");
+        support::build_and_run_emitted_with_stdin("console_app_view_separator", &out, b"a\nb\n");
 
     assert_eq!(outcome.exit_code, Some(0));
     // Go-parity: renders glue together (view supplies no separator of its
@@ -59,7 +59,7 @@ fn cli_program_glues_consecutive_renders_matching_go_oracle() {
     let expected = "lines: 0lines: 1lines: 2\n";
     assert_eq!(
         outcome.stdout, expected,
-        "Cli.program must match Go's cliPrintView contract (no per-render \
+        "Console.app must match Go's cliPrintView contract (no per-render \
          newline, one trailing newline at exit), got: {:?}",
         outcome.stdout
     );
