@@ -278,13 +278,13 @@ jobs:
       # BUILD-only proof for the two deterministic cli examples (no flock, no
       # RUN). This exercises the Windows cargo invocation, path handling, and
       # MSVC link path without needing the full sweep harness.
-      - name: BUILD cli examples (01-hello-world, 02-append)
+      - name: BUILD cli examples (hello-world, json)
         env:
           IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
         run: |
           set -euo pipefail
           IPE="$CARGO_TARGET_DIR/release/ipe.exe"
-          for ex in examples/01-hello-world examples/02-append; do
+          for ex in examples/sky/ipe/01-hello-world examples/sky/ipe/06-json; do
             echo "=== BUILD $ex ==="
             cd "$REPO/$ex"
             "$IPE" build ipe.toml --out out/rust
@@ -322,7 +322,7 @@ jobs:
             export CARGO_NET_RETRY=5
             cargo build --release -p ipe
             IPE="$CARGO_TARGET_DIR/release/ipe"
-            for ex in examples/01-hello-world examples/02-append; do
+            for ex in examples/sky/ipe/01-hello-world examples/sky/ipe/06-json; do
               echo "=== BUILD $ex ==="
               cd "$ex"
               "$IPE" build ipe.toml --out out/rust
