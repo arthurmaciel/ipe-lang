@@ -1,6 +1,8 @@
 <div align="center">
-    <img width="249" height="250" alt="Yellow Ipê (Handroanthus serratifolius)" src="https://github.com/user-attachments/assets/21bc26b9-2360-4667-8306-99fc07c6fda3" />
+    <img width="250" height="251" alt="Yellow Ipê (Handroanthus serratifolius)" src="https://github.com/user-attachments/assets/870f8739-69ab-4b05-af6a-b56c3e615e1c" />
 </div>
+
+<br />
 
 [![CI](https://github.com/arthurmaciel/ipe-lang/actions/workflows/ci.yml/badge.svg)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/ci.yml)
 [![admission-sandbox](https://github.com/arthurmaciel/ipe-lang/actions/workflows/admission-sandbox.yml/badge.svg)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/admission-sandbox.yml)
@@ -8,7 +10,6 @@
 [![static](https://github.com/arthurmaciel/ipe-lang/actions/workflows/static.yml/badge.svg)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/static.yml)
 [![install-smoke](https://github.com/arthurmaciel/ipe-lang/actions/workflows/install-smoke.yml/badge.svg)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/install-smoke.yml)
 
-<sub>Every gating workflow is shown; green is advertised only when all are green. `examples-sweep` and `panic-scan` are report-only (non-gating) and intentionally omitted.</sub>
 
 # Ipê language
 
@@ -22,7 +23,7 @@
 
 **Ipê**, pronounced [/ip'e/](https://ipa-reader.com/?text=%09ip%E2%80%B2e&voice=Vitoria), is a "thick-barked" [tree](https://en.wikipedia.org/wiki/Handroanthus_serratifolius) native from South and Central Americas. 
 
-The Ipê programming language aims to be a community-centerd and explicitly [principled](https://github.com/arthurmaciel/ipe-lang/blob/main/PRINCIPLES.md) programming language. 
+The Ipê programming language aims to be a community-centered programming language.  Check out our [principles](https://github.com/arthurmaciel/ipe-lang/blob/main/PRINCIPLES.md) to understand more about our social and technical values.
 
 It pairs [Elm](https://elm-lang.org/)'s syntax with [Sky](https://sky-lang.org/)'s batteries-included runtime — the
 standard library, effect system, and application framework (web, API, CLI,
@@ -64,7 +65,8 @@ Prefer building from source?
 ```sh
 git clone https://github.com/arthurmaciel/ipe-lang
 cd ipe-lang
-cargo build --release`.
+cargo build --release<img width="512" height="512" alt="android-chrome-512x512" src="https://github.com/user-attachments/assets/6683d11b-9eb1-440b-82fa-17a67c6b8a4a" />
+
 ```
 
 ## Contents
