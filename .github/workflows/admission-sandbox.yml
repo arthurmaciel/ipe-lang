@@ -200,11 +200,11 @@ jobs:
           try { $os = (docker info --format '{{.OSType}}' 2>$null) } catch { $os = '' }
           Write-Host "Docker OS type: '$os'"
           if ($os -eq 'windows') {
-            "available=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            'available=true' | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           } else {
-            "available=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-            Write-Warning "Windows-container Docker unavailable on this hosted runner (OSType='$os'). The Windows admission-sandbox jail is UNVERIFIED here — skipping the proof, not passing it. See issue #186."
-            "## windows-x64 admission-sandbox: SKIPPED (unverified)`n`nGitHub-hosted ``windows-2022`` runners do not provide a Windows-container-mode Docker daemon, so the process-isolation jail proof cannot run here. This is a documented environmental skip — **not** a passing proof; the Windows jail is UNVERIFIED on hosted CI. Run on a self-hosted Windows-container-capable runner to verify (issue #186)." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+            'available=false' | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Warning "Windows-container Docker unavailable on this hosted runner (OSType='$os'); skipping the Windows admission-sandbox proof (not passing it). See issue 186."
+            'windows-x64 admission-sandbox: SKIPPED (unverified). GitHub-hosted windows-2022 runners do not provide a Windows-container-mode Docker daemon, so the process-isolation jail proof cannot run here. This is a documented environmental skip, not a passing proof; the Windows jail is UNVERIFIED on hosted CI. Run on a self-hosted Windows-container-capable runner to verify (issue 186).' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           }
 
       # servercore:ltsc2022 ships PowerShell and matches the windows-2022 host OS
