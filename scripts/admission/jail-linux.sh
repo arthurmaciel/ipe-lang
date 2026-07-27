@@ -29,6 +29,11 @@ TIMEOUT_SECS="${ADMISSION_TIMEOUT_SECS:-120}"
 # Forwarded into the jail so the enforce run and the unjailed control run target
 # the SAME fs-escape path (bwrap makes it read-only via --ro-bind / /).
 ESCAPE_PATH="${ESCAPE_PATH:-/usr/jail-escape-probe}"
+# The probe contract the fixture asserts inside the jail. `enforce` (default)
+# is the isolation-proof matrix; `tier2` is the differential-confinement run
+# whose per-axis exit code names the demanded-but-withheld axis. Forwarded so a
+# Tier-2 caller can select the contract; bwrap `--clearenv` scrubs it otherwise.
+PROBE_MODE="${PROBE_MODE:-enforce}"
 
 cleanup() { rm -rf "$SCRATCH" "$SECCOMP_FILTER"; }
 trap cleanup EXIT
@@ -170,4 +175,5 @@ timeout "$TIMEOUT_SECS" \
         --seccomp 4 \
         --setenv SCRATCH_DIR "$SCRATCH" \
         --setenv ESCAPE_PATH "$ESCAPE_PATH" \
+        --setenv PROBE_MODE "$PROBE_MODE" \
         sh "$FIXTURE_ABS"
