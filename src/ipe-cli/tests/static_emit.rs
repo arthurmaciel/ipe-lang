@@ -401,7 +401,7 @@ fn tls_stays_rustls_with_bundled_roots_in_every_manifest_source() {
     );
 }
 
-/// Full static proof (THE SEAL, end to end): emit `examples/01-hello-world`
+/// Full static proof (THE SEAL, end to end): emit `examples/sky/ipe/01-hello-world`
 /// under the dlmalloc static plan, `cargo build` it standalone for musl with
 /// CWD = the emitted crate dir (cargo discovers `.cargo/config.toml` from
 /// CWD, not from `--manifest-path`), then assert the binary is genuinely
@@ -414,6 +414,8 @@ fn end_to_end_static_binary_is_static_and_runs() {
     let root = repo_root();
     let entry = root
         .join("examples")
+        .join("sky")
+        .join("ipe")
         .join("01-hello-world")
         .join("src")
         .join("Main.ipe");
@@ -489,6 +491,8 @@ fn ipe_run_static_builds_and_executes_a_static_binary() {
     let root = repo_root();
     let entry = root
         .join("examples")
+        .join("sky")
+        .join("ipe")
         .join("01-hello-world")
         .join("src")
         .join("Main.ipe");

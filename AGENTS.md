@@ -1000,7 +1000,7 @@ ipe --version
 `out/`. Always `cd` into project/example dir first:
 
 ```bash
-cd examples/01-hello-world && ipe build src/Main.ipe
+cd examples/sky/ipe/01-hello-world && ipe build src/Main.ipe
 ```
 
 `ipe check` ≡ `ipe build` (both invoke Rust build on emitted code). Run

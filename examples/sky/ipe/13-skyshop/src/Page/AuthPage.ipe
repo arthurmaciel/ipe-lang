@@ -1,91 +1,122 @@
 module Page.AuthPage exposing (viewSignIn)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Html exposing (..)
 import Ipe.Html as Html
-import Ipe.Html.Attributes exposing (..)
-import Ipe.Html.Attributes as Attr
+import Ipe.Ui as Ui
+import Ipe.Ui exposing (Element)
+import Ipe.Ui.Background as Background
+import Ipe.Ui.Border as Border
+import Ipe.Ui.Font as Font
+import Ipe.Ui.Region as Region
 import State exposing (..)
 import Ui.Layout as Layout
 import Lib.Translation as Tr
-import Tailwind exposing (..)
 
 
+-- ══════════════════════════════════════════════════════
+-- SIGN IN
+-- ══════════════════════════════════════════════════════
+-- DIVERGENCE FROM THE ORIGINAL (examples/sky/original/13-skyshop Page/AuthPage.sky):
+-- the original injects a client-side Firebase Auth <script> and the OAuth
+-- buttons call `skySignIn('google')` / `skySignIn('facebook')` in raw JS. Std.Ui
+-- has NO raw-HTML / script-injection primitive (see Lib/OAuth.firebaseAuthScript,
+-- now a no-op), so the OAuth client SDK cannot be injected from the view.
+--
+-- Sign-in is therefore re-expressed as Std.Ui buttons that drive the
+-- `FirebaseAuth <token>` Msg directly — the real `rs-firebase-admin-sdk`
+-- binding verifies the supplied id token server-side via
+-- Lib.Auth.verifyToken. Each provider button submits a canned dev id token so
+-- the sign-in path stays exercisable without a real browser OAuth round-trip.
+-- The page layout (welcome heading, two provider buttons, terms notice, error
+-- slot) stays faithful to the original.
+viewSignIn : Model -> Html.Html Msg
 viewSignIn model =
     let
         lang = model.lang
     in
-        Layout.page
-            model
-            (div
-                [ tw [ maxWSm, mxAuto, py12 ] ]
-                [ div
-                      [ tw [ bgWhite, roundedXl, shadow, p8 ] ]
-                      [ Html.h1
-                            [ tw [ text2xl, fontBold, mb6, textCenter ] ]
-                            [ text (Tr.t lang "auth.welcome") ]
-                      , div
-                            [ id "auth-error"
-                            , tw
-                                  [ bgRed50
-                                  , textRed700
-                                  , p3
-                                  , roundedMd
-                                  , mb4
-                                  , textSm
-                                  ]
-                            , style "display:none"
+        Ui.layout []
+            (Layout.shell
+                model
+                (Layout.card []
+                    (Ui.column
+                        [ Ui.width Ui.fill, Ui.spacing 24 ]
+                        [ Ui.el
+                            [ Region.heading 1
+                            , Ui.width Ui.fill
+                            , Font.alignCenter
+                            , Font.size 24
+                            , Font.bold
+                            , Font.color Layout.ink
                             ]
-                            [ text model.authError ]
-                      , div
-                            [ tw [ flexCol, gap4 ] ]
-                            [ button
-                                  [ attribute "onclick" "skySignIn('google')"
-                                  , tw
-                                        [ wFull
-                                        , bgWhite
-                                        , textGray700
-                                        , py3
-                                        , px4
-                                        , roundedLg
-                                        , fontSemibold
-                                        , textCenter
-                                        , border
-                                        , borderGray300
-                                        , flex
-                                        , itemsCenter
-                                        , justifyCenter
-                                        , gap3
-                                        , hover bgGray50
-                                        , transitionColors
-                                        , cursorPointer
-                                        ]
-                                  ]
-                                  [ text "Sign in with Google" ]
-                            , button
-                                  [ attribute "onclick" "skySignIn('facebook')"
-                                  , tw
-                                        [ wFull
-                                        , bgBlue600
-                                        , textWhite
-                                        , py3
-                                        , px4
-                                        , roundedLg
-                                        , fontSemibold
-                                        , textCenter
-                                        , flex
-                                        , itemsCenter
-                                        , justifyCenter
-                                        , gap3
-                                        , hover bgBlue700
-                                        , transitionColors
-                                        , cursorPointer
-                                        ]
-                                  ]
-                                  [ text "Sign in with Facebook" ]
+                            (Ui.text (Tr.t lang "auth.welcome"))
+                        , authError model
+                        , Ui.column
+                            [ Ui.width Ui.fill, Ui.spacing 16 ]
+                            [ googleButton
+                            , facebookButton
                             ]
-                      , p
-                            [ tw [ textCenter, textSm, textGray500, mt6 ] ]
-                            [ text (Tr.t lang "auth.terms_notice") ]
-                      ]
-                ])
+                        , Ui.el
+                            [ Ui.width Ui.fill
+                            , Font.alignCenter
+                            , Font.size 14
+                            , Font.color Layout.muted
+                            ]
+                            (Ui.text (Tr.t lang "auth.terms_notice"))
+                        ])))
+
+
+-- Error slot — mirrors the original's `#auth-error` div (hidden when empty).
+authError : Model -> Element Msg
+authError model =
+    if model.authError == "" then
+        Ui.none
+
+    else
+        Ui.el
+            [ Ui.width Ui.fill
+            , Background.color (Ui.rgb 254 242 242)
+            , Font.color (Ui.rgb 185 28 28)
+            , Font.size 14
+            , Border.rounded 6
+            , Ui.paddingXY 16 12
+            ]
+            (Ui.text model.authError)
+
+
+-- Dev id tokens: the firebase ID-token binding verifies these to a flat identity row.
+googleButton : Element Msg
+googleButton =
+    Ui.button
+        [ Ui.width Ui.fill
+        , Background.color Layout.cardBg
+        , Background.hoverColor (Ui.rgb 249 250 251)
+        , Font.color (Ui.rgb 55 65 81)
+        , Font.size 14
+        , Font.semiBold
+        , Font.alignCenter
+        , Border.width 1
+        , Border.color (Ui.rgb 209 213 219)
+        , Border.rounded 8
+        , Ui.paddingXY 16 12
+        ]
+        { onPress = Just (FirebaseAuth "dev-google-token")
+        , label = Ui.text "Sign in with Google"
+        }
+
+
+facebookButton : Element Msg
+facebookButton =
+    Ui.button
+        [ Ui.width Ui.fill
+        , Background.color Layout.brand
+        , Background.hoverColor (Ui.rgb 29 78 216)
+        , Font.color (Ui.rgb 255 255 255)
+        , Font.size 14
+        , Font.semiBold
+        , Font.alignCenter
+        , Border.rounded 8
+        , Ui.paddingXY 16 12
+        ]
+        { onPress = Just (FirebaseAuth "dev-facebook-token")
+        , label = Ui.text "Sign in with Facebook"
+        }

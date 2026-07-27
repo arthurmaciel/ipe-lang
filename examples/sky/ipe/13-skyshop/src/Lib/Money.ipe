@@ -5,6 +5,10 @@ import Ipe.String as String
 import Ipe.Maybe as Maybe
 import Lib.Db as Db
 
+
+-- The original skyshop Money does plain integer-pence arithmetic (no
+-- Std.Money/Decimal), so this is a byte-faithful port — portable to the Rust
+-- backend with no decimal shim needed.
 type alias Price =
     { original : String
     , discounted : String

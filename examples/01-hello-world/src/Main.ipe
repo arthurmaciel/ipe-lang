@@ -1,8 +1,0 @@
-module Main exposing (main)
-
-import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
-
-
-main =
-    println "Hello from Ipe!"

@@ -16,7 +16,7 @@ import Lib.Translation as Tr
 -- ══════════════════════════════════════════════════════
 -- SIGN IN
 -- ══════════════════════════════════════════════════════
--- DIVERGENCE FROM THE ORIGINAL (examples/13-skyshop Page/AuthPage.sky):
+-- DIVERGENCE FROM THE ORIGINAL (examples/sky/original/13-skyshop Page/AuthPage.sky):
 -- the original injects a client-side Firebase Auth <script> and the OAuth
 -- buttons call `skySignIn('google')` / `skySignIn('facebook')` in raw JS. Std.Ui
 -- has NO raw-HTML / script-injection primitive (see Lib/OAuth.firebaseAuthScript,
