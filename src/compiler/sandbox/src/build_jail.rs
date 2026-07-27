@@ -49,6 +49,15 @@ use crate::seccomp;
 /// declared-scoped jail succeeded — no withheld axis was demanded.
 pub const AXIS_EXIT_CLEAN: i32 = 0;
 
+/// The wrapper's untrusted child build failed for an ordinary (non-capability)
+/// reason and no withheld axis was demanded — an ordinary build-fails-in-jail.
+///
+/// It is NOT a per-axis denial, so it decodes to [`JailOutcome::BuildFailed`]
+/// (a reject), never [`JailOutcome::Clean`]. The load-bearing hinge: the wrapper
+/// never exits `AXIS_EXIT_CLEAN` when the child build failed, or a broken build
+/// would forge a clean certify.
+pub const TIER2_EXIT_BUILD_FAILED: i32 = 6;
+
 /// The probe's network action was denied by the jail — the native code demanded
 /// the `network` axis the declared-scoped jail withheld.
 pub const AXIS_EXIT_NETWORK: i32 = 10;
@@ -370,6 +379,18 @@ mod tests {
         let o = JailOutcome::decode(None);
         assert!(matches!(o, JailOutcome::BuildFailed { .. }));
         assert!(!o.is_clean());
+    }
+
+    #[test]
+    fn the_tier2_build_failed_hinge_decodes_to_build_failed_never_clean() {
+        // The wrapper's ordinary-child-build-failure code (6) MUST decode to a
+        // reject, never Clean — the hinge on which a false certify would turn.
+        let o = JailOutcome::decode(Some(TIER2_EXIT_BUILD_FAILED));
+        assert!(matches!(o, JailOutcome::BuildFailed { .. }), "got {o:?}");
+        assert!(!o.is_clean());
+        // It is NOT a per-axis denial (disjoint from 10/11 and from the clean 0).
+        assert!(CapabilityAxis::from_exit_code(TIER2_EXIT_BUILD_FAILED).is_none());
+        assert_ne!(TIER2_EXIT_BUILD_FAILED, AXIS_EXIT_CLEAN);
     }
 
     #[test]

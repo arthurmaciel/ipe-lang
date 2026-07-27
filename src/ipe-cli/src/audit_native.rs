@@ -162,6 +162,65 @@ impl ProbePayload {
     }
 }
 
+/// The exercise the wrapper-owned probe drives under the jail.
+///
+/// Make-invalid-states-unrepresentable: an empty untrusted build is a false-clean
+/// stand-in — a run whose only exercise is the wrapper's own fixed axis probe,
+/// which Tier-2 (not the package) chose. Certifying on it would launder a clean
+/// the package never earned. So the two shapes are distinct types:
+///
+/// - [`Self::WrapperProbeOnly`] runs no untrusted build; the wrapper's fixed axis
+///   probe is the whole exercise. It is the enforce/control test shape (a broken
+///   jail cannot masquerade as clean), and it is NEVER a certify-eligible run:
+///   `native_tier2` refuses to construct `Certified` from it.
+/// - [`Self::RealBuild`] carries the package's OWN `cargo build` argv, guaranteed
+///   non-empty by its only constructor. This is the single exercise a `Certified`
+///   verdict may rest on — positive proof of a confined clean build+link of the
+///   package's native surface.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProbeExercise {
+    /// No untrusted build: the wrapper's fixed axis probe is the whole exercise
+    /// (the enforce/control fixture shape). Never certify-eligible.
+    WrapperProbeOnly,
+    /// The package's own `cargo build` argv — non-empty by construction — run as
+    /// the wrapper's child. The only certify-eligible exercise.
+    RealBuild(Vec<OsString>),
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+impl ProbeExercise {
+    /// A real untrusted build over a non-empty `argv`, or `None` when `argv` is
+    /// empty (an empty build is not a real exercise — the caller then rejects
+    /// rather than certify on a vacuous run).
+    #[must_use]
+    pub fn real_build(argv: Vec<OsString>) -> Option<Self> {
+        if argv.is_empty() {
+            None
+        } else {
+            Some(Self::RealBuild(argv))
+        }
+    }
+
+    /// The untrusted-build tail the wrapper runs as its child: the argv for a
+    /// real build, empty for the wrapper-probe-only shape.
+    #[must_use]
+    fn tail(&self) -> &[OsString] {
+        match self {
+            Self::WrapperProbeOnly => &[],
+            Self::RealBuild(argv) => argv,
+        }
+    }
+
+    /// Whether this exercise is a real, non-empty untrusted build — the sub-PR 2
+    /// guardian gate on `Certified`: a certify may only rest on positive proof of
+    /// a confined build, never on the wrapper's own stand-in probe.
+    #[must_use]
+    pub const fn is_real_build(&self) -> bool {
+        matches!(self, Self::RealBuild(_))
+    }
+}
+
 /// Runs the wrapper-owned probe under a declared-scoped jail, returning the
 /// decoded outcome.
 ///
@@ -424,6 +483,10 @@ pub struct NativeAudit<'a> {
     pub has_rust_deps: bool,
     /// The package root (the FFI wrapper cache lives under `.ipe/cache/ffi/rust`).
     pub root: &'a Path,
+    /// The directory the package's app crate was emitted into (`src/main.rs`,
+    /// `src/ffi.rs` carrying the FFI wrappers, and `Cargo.toml`). The Tier-2 probe
+    /// crate is emitted into it and its `cargo build` is the untrusted exercise.
+    pub emitted_dir: &'a Path,
     /// The absolute path to the wrapper-owned admission probe fixture.
     pub probe_fixture: PathBuf,
 }
@@ -526,26 +589,286 @@ fn collect_bindings(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), CliError> 
 /// — Tier-1 already proved it exactly.
 ///
 /// A native-bearing package is reconciled by differential confinement over its
-/// declared set on the certified platform. The reconciler ([`reconcile_native`])
-/// is sound and proven end-to-end against the real jail — but it can only observe
-/// what a **probe** actually exercises of the native surface (§2.2). This first
-/// cut wires no per-package probe entrypoint that lets the *package's own* native
-/// code drive the differential probe, so there is nothing for Tier-2 to exercise.
-/// Per the fail-closed probe-coverage rule (ADR 0046: "a native package that
-/// exposes no probeable entrypoint is never silently admitted as clean"), a
-/// native-bearing package is therefore **rejected as un-exercised**, never
-/// certified. It is never admitted on a stand-in probe whose actions Tier-2, not
-/// the package, chose — that would be a false clean.
+/// declared set on the certified platform:
+///
+/// 1. Gather the DCE-survivor wrapper set over the package's own inspected
+///    bindings (the SAME survivor gate the interface emitter uses). An empty set
+///    is un-exercisable ⇒ reject ([`no_probeable_entrypoint`], kept). An
+///    unenumerable / opaque binding is read fail-closed.
+/// 2. Emit a link-reachability probe crate that references every surviving
+///    wrapper (never invokes one) into the emitted app crate, so building it
+///    links the package's whole foreign surface.
+/// 3. Establish the declared-scoped jail and run [`reconcile_native`] with the
+///    probe crate's REAL `cargo build` as the untrusted, wrapper-owned exercise.
+///
+/// [`Tier2Outcome::Certified`] is constructed at EXACTLY ONE site, only on
+/// `Ok(())` from the reconciler, only on `linux-x86_64`, and only when the
+/// exercise was a real (non-empty) untrusted build — the sub-PR 2 guardian gate.
+/// Every other branch is a typed reject or a non-certifying platform note.
 ///
 /// # Errors
-/// [`CliError::PackageAudit`] carrying a [`Check::NativeTier2`] [`Rejection`] for
-/// a native-bearing package (un-exercised, fail-closed).
-#[allow(clippy::unnecessary_wraps)] // uniform with the Tier-1 checks' Result shape
+/// [`CliError::PackageAudit`] carrying a [`Check::NativeTier2`] [`Rejection`] on
+/// any non-admit branch (empty surface, opaque bindings, build-fails-in-jail,
+/// used-but-undeclared, declared-but-unused, ambiguous tighten, sandbox-
+/// unavailable); [`CliError::Io`] on a probe-emit failure.
 pub fn native_tier2(audit: &NativeAudit) -> Result<Tier2Outcome, CliError> {
     if !is_native_bearing(audit.declared, audit.has_rust_deps) {
         return Ok(Tier2Outcome::SkippedPureIpe);
     }
-    Err(CliError::PackageAudit(no_probeable_entrypoint()))
+    native_tier2_on_platform(audit)
+}
+
+/// The one platform where Tier-2 can certify: gather survivors, emit the probe,
+/// establish the jail, reconcile, and construct the SINGLE `Certified`.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn native_tier2_on_platform(audit: &NativeAudit) -> Result<Tier2Outcome, CliError> {
+    // 1. The DCE-survivor surface. Empty ⇒ un-exercisable ⇒ reject (never a
+    //    vacuous clean). The package cannot narrow it — it is derived from the
+    //    package's own inspected bindings, not authored by the package.
+    let wrapper_paths = gather_survivor_paths(audit.root)?;
+    if wrapper_paths.is_empty() {
+        return Err(CliError::PackageAudit(no_probeable_entrypoint()));
+    }
+
+    // 2. Emit the link-reachability probe crate into the emitted app crate and
+    //    build its `cargo build` argv (the untrusted, wrapper-owned exercise).
+    let scratch = probe_scratch_dir(audit.root);
+    let build_argv = emit_probe_and_build_argv(audit.emitted_dir, &wrapper_paths, &scratch)?;
+    let Some(exercise) = ProbeExercise::real_build(build_argv) else {
+        // A non-empty survivor set always yields a non-empty build argv, so this
+        // is unreachable; fail-closed rather than certify a vacuous run.
+        return Err(CliError::PackageAudit(no_probeable_entrypoint()));
+    };
+
+    // 3. Establish the declared-scoped jail. A missing primitive surfaces from
+    //    the reconciler as `Unavailable` ⇒ sandbox-unavailable reject (never a
+    //    silent skip on Linux).
+    let caps = ipe_sandbox::probe();
+    let (Some(bwrap), Some(prlimit)) = (caps.bwrap, caps.prlimit) else {
+        return Err(CliError::PackageAudit(sandbox_unavailable(
+            &RunJailDefect::PrimitiveUnavailable {
+                missing: vec!["bwrap or prlimit"],
+            },
+        )));
+    };
+    let tools = RunJailTools {
+        bwrap,
+        prlimit,
+        timeout: caps.timeout,
+    };
+
+    // The wrapper the jail runs must be readable inside the scratch; copy the
+    // trusted fixture in (it owns the per-axis exit contract).
+    let wrapper = scratch.join("untrusted-build.sh");
+    std::fs::copy(&audit.probe_fixture, &wrapper).map_err(|e| CliError::Io {
+        path: wrapper.clone(),
+        source: e,
+    })?;
+    let working_tree = scratch.join("worktree");
+    std::fs::create_dir_all(&working_tree).map_err(|e| CliError::Io {
+        path: working_tree.clone(),
+        source: e,
+    })?;
+
+    let scoped = scoped_profile(audit.declared).map_err(CliError::PackageAudit)?;
+    // On the real-build path the exercise IS the child cargo build: the full
+    // declared-scoped run is child-exit-only (no fixed axis probe, which would
+    // fabricate a demand the package never made), and each tightening run probes
+    // the single declared axis under test. The `exercised` field below is unused
+    // on this path (it drives only the wrapper-probe-only shape's full run).
+    let mut ro_binds = default_ro_binds();
+    ro_binds.extend(toolchain_ro_binds());
+    let runner = JailProbeRunner::new(
+        &tools,
+        wrapper,
+        scratch.clone(),
+        working_tree,
+        ro_binds,
+        // Unused on the real-build path (the full run is child-exit-only and the
+        // tightening runs probe the single declared axis under test), but the
+        // field is shared with the wrapper-probe-only shape.
+        vec![TightenableAxis::Network, TightenableAxis::Filesystem],
+        exercise,
+    );
+    let static_scan = WrapperScan::over_package(audit.root)?;
+
+    let verdict = reconcile_native(audit.declared, &runner, &static_scan, &scoped);
+    // Best-effort scratch cleanup; a leftover scratch is inert.
+    let _ = std::fs::remove_dir_all(&scratch);
+
+    verdict.map_err(CliError::PackageAudit)?;
+
+    // ── THE SINGLE `Certified` CONSTRUCTION SITE ──────────────────────────────
+    // Reached only when: the package is native-bearing (checked above), the
+    // survivor surface was non-empty, the exercise was a REAL non-empty untrusted
+    // build (`runner.is_real_build()`), the host is linux-x86_64 (this `cfg`),
+    // and the reconciler returned `Ok(())` (declared-scoped `Clean` + no
+    // removable-and-unreached axis). Any weaker condition returned above.
+    if runner.is_real_build() {
+        Ok(Tier2Outcome::Certified {
+            platform: CERTIFIED_PLATFORM,
+        })
+    } else {
+        // Unreachable — `exercise` is a `RealBuild` by construction here — but a
+        // wrapper-probe-only run must NEVER certify, so fail-closed rather than
+        // trust the flow.
+        Err(CliError::PackageAudit(no_probeable_entrypoint()))
+    }
+}
+
+/// Off the one wired platform Tier-2 NEVER constructs `Certified`: it prints a
+/// pre-flight note and rejects fail-closed (a non-Linux host cannot confine the
+/// build, so it cannot vouch for the native surface). Only the CI matrix on a
+/// wired platform admits (ADR 0046).
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+fn native_tier2_on_platform(_audit: &NativeAudit) -> Result<Tier2Outcome, CliError> {
+    Err(CliError::PackageAudit(Rejection {
+        check: Check::NativeTier2,
+        message: format!(
+            "native Tier-2 capability enforcement is wired only on {CERTIFIED_PLATFORM}; this host \
+             is not that platform, so the native surface cannot be confined and reconciled here. \
+             Tier-2 refuses to certify a native package on an unwired platform (fail-closed) — the \
+             index CI matrix certifies on the wired platform."
+        ),
+    }))
+}
+
+/// The Tier-2 probe scratch directory under the OS temp root, keyed by the
+/// package root and this process so concurrent audits never collide.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn probe_scratch_dir(root: &Path) -> PathBuf {
+    let slug: String = root
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("pkg")
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    std::env::temp_dir().join(format!("ipe-tier2-probe-{slug}-{}", std::process::id()))
+}
+
+/// The union of every installed crate's DCE-survivor wrapper paths, re-derived
+/// from the TRUSTED `<slug>.pkg.json` source of record (never the on-disk
+/// `_bindings.rs` text, which the loader does not trust).
+///
+/// A package binding a Rust dependency whose cache is present but decodes to no
+/// survivors returns an empty set (the caller rejects it). A cache that cannot be
+/// read fails closed as an IO error.
+///
+/// # Errors
+/// [`CliError::Io`] on a cache read failure; [`CliError::PackageAudit`] when a
+/// `pkg.json` cannot be decoded (an unusable inspection must never seed a certify).
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn gather_survivor_paths(root: &Path) -> Result<Vec<String>, CliError> {
+    let cache_root = root.join(".ipe/cache/ffi/rust");
+    if !cache_root.is_dir() {
+        return Ok(Vec::new());
+    }
+    let entries = std::fs::read_dir(&cache_root).map_err(|e| CliError::Io {
+        path: cache_root.clone(),
+        source: e,
+    })?;
+    let mut pkg_jsons: Vec<PathBuf> = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| CliError::Io {
+            path: cache_root.clone(),
+            source: e,
+        })?;
+        let path = entry.path();
+        if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with(".pkg.json"))
+        {
+            pkg_jsons.push(path);
+        }
+    }
+    pkg_jsons.sort();
+    let mut paths: BTreeSet<String> = BTreeSet::new();
+    for pkg_json in pkg_jsons {
+        let text = std::fs::read_to_string(&pkg_json).map_err(|e| CliError::Io {
+            path: pkg_json.clone(),
+            source: e,
+        })?;
+        let pkg = ipe_ffi::pkginfo::PkgInfo::decode_json(&text).map_err(|e| {
+            CliError::PackageAudit(Rejection {
+                check: Check::NativeTier2,
+                message: format!(
+                    "the FFI inspection `{}` could not be decoded ({e}); Tier-2 refuses to certify \
+                     a package whose native surface it cannot enumerate (fail-closed)",
+                    pkg_json.display()
+                ),
+            })
+        })?;
+        let slug = ipe_ffi::driver::slugify(pkg.name());
+        paths.extend(ipe_ffi::probe::surviving_wrapper_paths(&pkg, &slug));
+    }
+    Ok(paths.into_iter().collect())
+}
+
+/// Emit the link-reachability probe crate into the emitted app crate and return
+/// the `cargo build` argv that builds it under the jail.
+///
+/// The probe is a second binary target whose crate root (`src/tier2_probe.rs`)
+/// declares `mod ffi;` and references every surviving wrapper at
+/// `crate::ffi::<slug>::<ident>`, so building it links the whole foreign surface.
+/// The build is `--offline` with a scratch-local target dir: crate sources are
+/// vendored/pre-fetched before the jailed build (design §5), so an ordinary build
+/// needs no network, and a build that DOES reach the network is a genuine,
+/// deterministic used-but-undeclared signal — not flake.
+///
+/// # Errors
+/// [`CliError::Io`] when the probe source or the patched manifest cannot be
+/// written.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn emit_probe_and_build_argv(
+    emitted_dir: &Path,
+    wrapper_paths: &[String],
+    scratch: &Path,
+) -> Result<Vec<OsString>, CliError> {
+    std::fs::create_dir_all(scratch).map_err(|e| CliError::Io {
+        path: scratch.to_path_buf(),
+        source: e,
+    })?;
+    // The probe bin's crate root declares `mod ffi;` (a bin is its own crate root,
+    // so it re-reads the SSOT `src/ffi.rs`) then references the survivors.
+    let mut probe_src = String::from("mod ffi;\n");
+    probe_src.push_str(&ipe_ffi::probe::emit_probe_main(wrapper_paths));
+    let probe_file = emitted_dir.join("src").join("tier2_probe.rs");
+    std::fs::write(&probe_file, &probe_src).map_err(|e| CliError::Io {
+        path: probe_file.clone(),
+        source: e,
+    })?;
+
+    // Append the probe `[[bin]]` to the emitted manifest (idempotent: a re-audit
+    // rewrites the whole file from the emitted base + this one appended target).
+    let manifest_path = emitted_dir.join("Cargo.toml");
+    let base = std::fs::read_to_string(&manifest_path).map_err(|e| CliError::Io {
+        path: manifest_path.clone(),
+        source: e,
+    })?;
+    let bin_stanza = "\n[[bin]]\nname = \"tier2_probe\"\npath = \"src/tier2_probe.rs\"\n";
+    if !base.contains("name = \"tier2_probe\"") {
+        let patched = format!("{base}{bin_stanza}");
+        std::fs::write(&manifest_path, patched).map_err(|e| CliError::Io {
+            path: manifest_path.clone(),
+            source: e,
+        })?;
+    }
+
+    let target_dir = scratch.join("target");
+    let cargo = absolute_cargo().unwrap_or_else(|| PathBuf::from("cargo"));
+    Ok(vec![
+        cargo.into_os_string(),
+        OsString::from("build"),
+        OsString::from("--offline"),
+        OsString::from("--bin"),
+        OsString::from("tier2_probe"),
+        OsString::from("--manifest-path"),
+        manifest_path.into_os_string(),
+        OsString::from("--target-dir"),
+        target_dir.into_os_string(),
+    ])
 }
 
 /// The un-exercised reject: a native-bearing package with no probeable entrypoint
@@ -579,6 +902,72 @@ pub fn default_ro_binds() -> Vec<PathBuf> {
     .collect()
 }
 
+/// The read-only toolchain binds a real `cargo build` needs inside the jail.
+///
+/// The Cargo home (`~/.cargo` or `$CARGO_HOME` — the `cargo`/`rustc` shims and the
+/// registry cache of pre-fetched crate sources) and the Rustup home (`~/.rustup`
+/// or `$RUSTUP_HOME` — the actual toolchain binaries the shims resolve to). Bound
+/// READ-ONLY: the jail's own scratch-local target dir is the only writable output,
+/// so binding the toolchain read-only cannot let the untrusted build escape. Only
+/// existing paths are bound.
+///
+/// These are ADDED to [`default_ro_binds`] on the real-build path only; the
+/// wrapper-probe-only control fixture needs no toolchain, so its bind set is
+/// unchanged.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[must_use]
+pub fn toolchain_ro_binds() -> Vec<PathBuf> {
+    let home_dir = |var: &str, fallback: &str| -> Option<PathBuf> {
+        std::env::var_os(var)
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(fallback)))
+    };
+    [
+        home_dir("CARGO_HOME", ".cargo"),
+        home_dir("RUSTUP_HOME", ".rustup"),
+    ]
+    .into_iter()
+    .flatten()
+    .filter(|p| p.exists())
+    .collect()
+}
+
+/// The Cargo/Rustup home env the jailed `cargo build` needs to resolve its
+/// toolchain: `CARGO_HOME`, `RUSTUP_HOME`, and `HOME` (the shims' fallback). Only
+/// present, existing homes are returned; the wrapper sets them in the payload's
+/// own env, never the process-global environment.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn cargo_home_env() -> Vec<(String, std::ffi::OsString)> {
+    let home = |var: &str, fallback: &str| -> Option<std::ffi::OsString> {
+        std::env::var_os(var)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(fallback).into()))
+            .filter(|p| Path::new(p).exists())
+    };
+    let mut out: Vec<(String, std::ffi::OsString)> = Vec::new();
+    if let Some(v) = home("CARGO_HOME", ".cargo") {
+        out.push(("CARGO_HOME".to_owned(), v));
+    }
+    if let Some(v) = home("RUSTUP_HOME", ".rustup") {
+        out.push(("RUSTUP_HOME".to_owned(), v));
+    }
+    if let Some(h) = std::env::var_os("HOME").filter(|p| Path::new(p).exists()) {
+        out.push(("HOME".to_owned(), h));
+    }
+    out
+}
+
+/// The absolute path to `cargo`, resolved from `PATH` (the in-jail PATH is a
+/// fixed `/usr/bin:/bin`, so a bare `cargo` is unfindable inside the jail; the
+/// toolchain bind makes the absolute path executable). `None` when cargo is not
+/// on the host `PATH`.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn absolute_cargo() -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|p| p.join("cargo"))
+        .find(|p| p.is_file())
+}
+
 /// The production probe runner: establishes the real Linux jail and runs the
 /// wrapper-owned probe under it via [`build_in_jail`], so the untrusted build is
 /// a child of our exit-owning wrapper.
@@ -601,9 +990,10 @@ pub struct JailProbeRunner<'a> {
     /// is observed as a denial. The tightening runs override this with the single
     /// axis under test.
     exercised: Vec<TightenableAxis>,
-    /// The untrusted build command the wrapper runs as its child (may be empty
-    /// in the first cut, where the wrapper's own probes are the exercise).
-    untrusted_build: Vec<OsString>,
+    /// The exercise the wrapper drives: the package's OWN `cargo build` as the
+    /// wrapper's child (the certify-eligible shape), or the wrapper's fixed axis
+    /// probe alone (the enforce/control shape, never certify-eligible).
+    exercise: ProbeExercise,
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -612,8 +1002,8 @@ impl<'a> JailProbeRunner<'a> {
     /// exit-owning `wrapper` script (readable inside the jail — the caller must
     /// place it in the scratch), the always-writable `scoped_tmp`, the
     /// filesystem-axis-gated `working_tree`, the read-only tool `ro_binds`, and
-    /// the axes the native code `exercised` on the full run. `untrusted_build` is
-    /// the strictly subordinate build tail (empty in the first cut).
+    /// the axes the native code `exercised` on the full run. `exercise` is the
+    /// strictly subordinate build tail (or the wrapper-probe-only shape).
     #[must_use]
     pub const fn new(
         tools: &'a RunJailTools,
@@ -622,7 +1012,7 @@ impl<'a> JailProbeRunner<'a> {
         working_tree: PathBuf,
         ro_binds: Vec<PathBuf>,
         exercised: Vec<TightenableAxis>,
-        untrusted_build: Vec<OsString>,
+        exercise: ProbeExercise,
     ) -> Self {
         Self {
             tools,
@@ -631,24 +1021,42 @@ impl<'a> JailProbeRunner<'a> {
             working_tree,
             ro_binds,
             exercised,
-            untrusted_build,
+            exercise,
         }
+    }
+
+    /// Whether this runner drives a real, non-empty untrusted build — the
+    /// [`Tier2Outcome::Certified`] guard reads it so a certify can never rest on
+    /// the wrapper-probe-only stand-in shape.
+    #[must_use]
+    pub const fn is_real_build(&self) -> bool {
+        self.exercise.is_real_build()
     }
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 impl ProbeRunner for JailProbeRunner<'_> {
     fn run(&self, profile: &SandboxProfile, withheld: Option<TightenableAxis>) -> JailOutcome {
-        // The axis selector the fixture reads. On the full declared-scoped run it
-        // is the set the native code EXERCISES (so an exercised-but-withheld axis
-        // is denied); on a tightening run it is the single axis under test.
+        // The axis selector the fixture reads.
+        //
+        // - A TIGHTENING run (`Some(axis)`) probes exactly that one axis. The axis
+        //   is one the author DECLARED, so probing it fabricates no demand: the
+        //   run can only KEEP the axis (denied → needed) or reject, never certify.
+        // - The FULL declared-scoped run (`None`) of a REAL build is child-exit-
+        //   only (`none`): NO fixed axis probe runs, because a fixed probe would
+        //   fabricate a demand the package never made, so no declared set other
+        //   than {network,filesystem} could ever certify. The verdict is the child
+        //   build's own exit (a withheld axis is withheld by capability removal, so
+        //   a build reaching it fails; a build that caught the error did no effect).
+        // - The FULL run of the wrapper-probe-only shape (the enforce/control test
+        //   fixture) keeps the fixed-probe selector over the axes it EXERCISES.
         let axis_sel: OsString = match withheld {
             Some(a) => OsString::from(a.as_str()),
+            None if self.exercise.is_real_build() => OsString::from("none"),
             None => match exercised_selector(&self.exercised) {
                 Some(sel) => OsString::from(sel),
-                // The native code exercises no tightenable axis, so a
-                // declared-scoped jail cannot deny it: Clean by construction,
-                // never a forged payload exit.
+                // The stand-in exercises no tightenable axis, so a declared-scoped
+                // jail cannot deny it: Clean by construction, never a forged exit.
                 None => return JailOutcome::Clean,
             },
         };
@@ -662,19 +1070,30 @@ impl ProbeRunner for JailProbeRunner<'_> {
         // runs the wrapper under a scrubbed environment (per-run config travels
         // through the payload, never the process-global environment). It
         // propagates the wrapper's exit unchanged.
-        let invocation_prefix = vec![
+        let mut invocation_prefix = vec![
             OsString::from("/usr/bin/env"),
             OsString::from("PROBE_MODE=tier2"),
             assignment("TIER2_AXIS", axis_sel.as_os_str()),
             assignment("SCRATCH_DIR", self.scoped_tmp.as_os_str()),
             assignment("ESCAPE_PATH", escape.as_os_str()),
-            OsString::from("/bin/sh"),
         ];
+        // A real `cargo build` inside the scrubbed jail needs the toolchain homes
+        // to resolve (the `cargo`/`rustc` rustup shims read `CARGO_HOME`/
+        // `RUSTUP_HOME`, falling back to `$HOME`). These are passed through the
+        // payload's own env — never the process-global environment — and the homes
+        // are bound read-only, so the untrusted build can read the toolchain but
+        // cannot write it. On the wrapper-probe-only shape they are absent.
+        if self.exercise.is_real_build() {
+            for (name, value) in cargo_home_env() {
+                invocation_prefix.push(assignment(&name, value.as_os_str()));
+            }
+        }
+        invocation_prefix.push(OsString::from("/bin/sh"));
         // The wrapper script owns the exit contract; the untrusted build is a
         // strictly subordinate tail it runs as its child (ProbePayload enforces
         // the ordering). The untrusted build can never own the exit.
         let payload =
-            ProbePayload::wrapper_owned(&invocation_prefix, &self.wrapper, &self.untrusted_build);
+            ProbePayload::wrapper_owned(&invocation_prefix, &self.wrapper, self.exercise.tail());
         ipe_sandbox::build_jail::build_in_jail(
             self.tools,
             profile,

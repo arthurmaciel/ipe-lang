@@ -29,6 +29,7 @@ pub mod interface;
 pub mod naming;
 pub mod num_coerce;
 pub mod pkginfo;
+pub mod probe;
 pub mod typeref;
 pub mod unify;
 pub mod wrapper;
