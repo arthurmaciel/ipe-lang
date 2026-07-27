@@ -26,6 +26,7 @@ use std::path::{Path, PathBuf};
 
 use ipe_diagnostics::{Code, IPE_F4410};
 
+pub mod build_jail;
 pub mod run_jail;
 pub mod seccomp;
 
