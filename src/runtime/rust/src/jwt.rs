@@ -112,6 +112,25 @@ pub(crate) fn now_unix_seconds() -> i64 {
     }
 }
 
+/// The HMAC-key floor for HS256, in bytes (256 bits — RFC 7518 §3.2).
+pub(crate) const HS256_MIN_SECRET_BYTES: usize = 32;
+
+/// Build the diagnostic for an HS256 secret below the 32-byte floor. Written to
+/// be unmistakable that this is a deliberate policy, not a defect in the
+/// caller's program: it names the actual length, says so in plain words, and
+/// gives the one-line fix. `op` is the operation label (e.g. `"jwt-encode"`).
+pub(crate) fn hs256_short_secret_msg(op: &str, actual_len: usize) -> String {
+    format!(
+        "{op}: the HS256 secret is {actual_len} byte(s), but Ipê requires at least \
+         {HS256_MIN_SECRET_BYTES} (256 bits, RFC 7518 §3.2). This is an intentional Ipê \
+         security policy, NOT a bug in your program: an HMAC key shorter than the \
+         SHA-256 output is low-entropy and lets an attacker forge tokens. Use a \
+         secret of at least {HS256_MIN_SECRET_BYTES} bytes (generate one with \
+         `head -c 32 /dev/urandom | base64`), supplied via configuration such as an \
+         environment variable rather than a short literal."
+    )
+}
+
 /// Ipê `Jwt_encodeHs256 : String -> String -> Result Error String`
 ///
 /// Byte-identical to the Go backend's `Jwt.encode (Jwt.hs256 secret) claims`.
@@ -125,12 +144,8 @@ pub fn jwt_encode_hs256<E: From<String>>(
     // a weakly-keyed token. This mirrors the 32-byte floor auth.rs enforces and
     // Ipe.Auth applies upstream, closing the gap for a direct misconfigured
     // Jwt.* caller that bypasses Ipe.Auth.
-    if secret.len() < 32 {
-        return IpeResult::Err(
-            "jwt-encode: HS256 secret must be at least 32 bytes (RFC 7518 §3.2)"
-                .to_string()
-                .into(),
-        );
+    if secret.len() < HS256_MIN_SECRET_BYTES {
+        return IpeResult::Err(hs256_short_secret_msg("jwt-encode", secret.len()).into());
     }
     let payload = match payload_json(&claims_json) {
         Ok(p) => p,
@@ -161,12 +176,8 @@ pub fn jwt_decode_hs256<E: From<String>>(secret: String, token: String) -> IpeRe
     // Reject verification under a sub-32-byte HMAC key — see jwt_encode_hs256.
     // A token "verified" with a low-entropy key carries no real authenticity
     // guarantee; mirror the 32-byte floor in auth.rs / Ipe.Auth (RFC 7518 §3.2).
-    if secret.len() < 32 {
-        return IpeResult::Err(
-            "jwt-decode: HS256 secret must be at least 32 bytes (RFC 7518 §3.2)"
-                .to_string()
-                .into(),
-        );
+    if secret.len() < HS256_MIN_SECRET_BYTES {
+        return IpeResult::Err(hs256_short_secret_msg("jwt-decode", secret.len()).into());
     }
     // Pre-reject on the full RFC 7519 NumericDate domain (integer, negative,
     // fractional) before jsonwebtoken's `exp - 1` u64 subtraction can underflow.
@@ -544,10 +555,8 @@ pub fn ipe_jwt_decode(
     // 2. Verify the signature only — disable jsonwebtoken's built-in time checks.
     //    We apply reference-exact time validation manually below.
     if let Some(secret) = algorithm_descriptor.strip_prefix("HS256:") {
-        if secret.len() < 32 {
-            return IpeResult::Err(
-                "jwt-decode: HS256 secret must be at least 32 bytes (RFC 7518 §3.2)".into(),
-            );
+        if secret.len() < HS256_MIN_SECRET_BYTES {
+            return IpeResult::Err(hs256_short_secret_msg("jwt-decode", secret.len()).into());
         }
         let key = DecodingKey::from_secret(secret.as_bytes());
         let mut val = Validation::new(Algorithm::HS256);

@@ -122,11 +122,9 @@ pub fn auth_sign_token<E: From<String>>(
     claims: HashMap<String, String>,
     expiry_seconds: i64,
 ) -> IpeResult<E, String> {
-    if secret.len() < 32 {
+    if secret.len() < crate::jwt::HS256_MIN_SECRET_BYTES {
         return IpeResult::Err(
-            "auth.signToken: secret must be ≥32 bytes"
-                .to_string()
-                .into(),
+            crate::jwt::hs256_short_secret_msg("auth.signToken", secret.len()).into(),
         );
     }
     // A negative TTL must NOT mint a token. Without this guard a negative
@@ -173,11 +171,9 @@ pub fn auth_verify_token<E: From<String>>(
     secret: String,
     token: String,
 ) -> IpeResult<E, HashMap<String, String>> {
-    if secret.len() < 32 {
+    if secret.len() < crate::jwt::HS256_MIN_SECRET_BYTES {
         return IpeResult::Err(
-            "auth.verifyToken: secret must be ≥32 bytes"
-                .to_string()
-                .into(),
+            crate::jwt::hs256_short_secret_msg("auth.verifyToken", secret.len()).into(),
         );
     }
     // Pre-reject on the full RFC 7519 NumericDate domain (negative, fractional,
