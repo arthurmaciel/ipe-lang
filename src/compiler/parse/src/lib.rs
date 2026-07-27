@@ -299,6 +299,90 @@ mod tests {
     /// A well-formed module header so a per-construct test isolates the body.
     const HDR: &str = "module Main exposing (main)\n";
 
+    /// Whether `e` is a call of `Task.<name>`.
+    fn is_task_call(e: &Expr_, i: &Interner, name: &str) -> bool {
+        matches!(
+            e,
+            Expr_::Call(callee, _)
+                if matches!(&callee.value, Expr_::VarQual(q, n)
+                    if i.resolve(*q) == Some("Task") && i.resolve(*n) == Some(name))
+        )
+    }
+
+    #[test]
+    fn do_bind_desugars_to_task_and_then() {
+        // `x <- task` becomes `Task.andThen (\x -> rest) task`.
+        let mut i = Interner::new();
+        let src = format!("{HDR}main =\n    do\n        x <- task\n        other x\n");
+        let m = parse_module(&src, &mut i).expect("do block parses");
+        let main = find_value(&m, &i, "main").expect("main present");
+        assert!(
+            is_task_call(&main.body.value, &i, "andThen"),
+            "expected a `Task.andThen` call, got {:?}",
+            main.body.value
+        );
+        if let Expr_::Call(_, args) = &main.body.value {
+            assert!(
+                matches!(args.first().map(|a| &a.value), Some(Expr_::Lambda(..))),
+                "andThen's first argument must be the continuation lambda"
+            );
+        }
+    }
+
+    #[test]
+    fn do_pure_let_desugars_to_let() {
+        // `x = value` inside `do` is a pure `let`, not a Task bind.
+        let mut i = Interner::new();
+        let src = format!("{HDR}main =\n    do\n        x = value\n        use x\n");
+        let m = parse_module(&src, &mut i).expect("do block parses");
+        let main = find_value(&m, &i, "main").expect("main present");
+        assert!(
+            matches!(&main.body.value, Expr_::Let(binds, _) if binds.len() == 1),
+            "expected `let x = value in …`, got {:?}",
+            main.body.value
+        );
+    }
+
+    #[test]
+    fn do_bare_line_desugars_to_and_then_with_wildcard() {
+        // A bare effectful line chains via `Task.andThen` with a `\_ -> …` lambda.
+        let mut i = Interner::new();
+        let src = format!("{HDR}main =\n    do\n        step\n        done\n");
+        let m = parse_module(&src, &mut i).expect("do block parses");
+        let main = find_value(&m, &i, "main").expect("main present");
+        assert!(is_task_call(&main.body.value, &i, "andThen"));
+        if let Expr_::Call(_, args) = &main.body.value {
+            assert!(
+                matches!(
+                    args.first().map(|a| &a.value),
+                    Some(Expr_::Lambda(pats, _))
+                        if matches!(pats.first().map(|p| &p.value), Some(Pattern_::PAnything))
+                ),
+                "a bare run must discard the result via a wildcard lambda"
+            );
+        }
+    }
+
+    #[test]
+    fn parallel_do_desugars_to_task_parallel_of_a_list() {
+        // `parallelDo` over aligned tasks becomes `Task.parallel [a, b, c]`.
+        let mut i = Interner::new();
+        let src = format!("{HDR}main =\n    parallelDo\n        a\n        b\n        c\n");
+        let m = parse_module(&src, &mut i).expect("parallelDo block parses");
+        let main = find_value(&m, &i, "main").expect("main present");
+        assert!(
+            is_task_call(&main.body.value, &i, "parallel"),
+            "expected a `Task.parallel` call, got {:?}",
+            main.body.value
+        );
+        if let Expr_::Call(_, args) = &main.body.value {
+            assert!(
+                matches!(args.first().map(|a| &a.value), Some(Expr_::List(elems)) if elems.len() == 3),
+                "parallelDo must collect its lines into a 3-element list"
+            );
+        }
+    }
+
     #[test]
     fn full_operator_set_parses_into_a_binops_chain() {
         // Every core operator must lex + parse; the body becomes a flat
