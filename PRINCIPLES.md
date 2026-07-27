@@ -183,8 +183,7 @@ Master only ever advances to a full-gate-certified sha.
   -p ipe-runtime-rust --features full` (LOAD-BEARING — the runtime's
   `default = []` means the workspace run skips every feature-gated test,
   including the entire `live::*` surface); `cargo test --workspace --doc`;
-  `cargo clippy --workspace --all-targets -- -D warnings -W clippy::pedantic
-  -W clippy::correctness -W clippy::style -W clippy::complexity`; fuzz + full
+  `cargo clippy --workspace --all-targets -- -D clippy::cargo -D clippy::complexity -D clippy::correctness -D clippy::pedantic -D clippy::perf -D clippy::style -D warnings`; fuzz + full
   examples sweep. Full-green → certify the batch + advance master. Full-red →
   reset to the last certified sha + re-queue.
 - The two gates MUST agree on lint scope, and the cheap gate is never

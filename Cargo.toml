@@ -48,6 +48,8 @@ todo = "deny"
 unimplemented = "deny"
 pedantic = "deny"
 nursery = "deny"
+perf = "deny"
+cargo = "deny"
 
 # The workspace's ~180 golden test binaries each statically link the full
 # compiler rlib set. With debuginfo on, `ld` must relocate a debug-symbol table

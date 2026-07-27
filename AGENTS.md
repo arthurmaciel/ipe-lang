@@ -970,7 +970,7 @@ Before declaring compiler/runtime work done, run the same hardened gate CI enfor
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --all-targets --workspace -- -W clippy::pedantic -W clippy::correctness -W clippy::style -W clippy::complexity -D warnings
+cargo clippy --all-targets --workspace -- -D clippy::cargo -D clippy::complexity -D clippy::correctness -D clippy::pedantic -D clippy::perf -D clippy::style -D warnings
 cargo nextest run --workspace          # E2E tests no-op without IPE_E2E=1
 ```
 
