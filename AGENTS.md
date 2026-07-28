@@ -48,10 +48,29 @@ ship Mustache/Handlebars/shell-script placeholders downstream without Ipê
 hijacking. `\\` collapses to single literal backslash; other `\X`
 sequences preserved verbatim (regex `\d+`, paths `\test`, etc).
 
-### Prelude (autoloaded via `Ipe.Prelude exposing (..)`)
+### Auto-import: three tiers (ADR 0047)
 
-`Result (Ok/Err)`, `Maybe (Just/Nothing)`, `identity`, `not`, `always`,
-`fst`, `snd`, `clamp`, `modBy`, `errorToString`.
+Two tiers are ambient — in scope with no `import`; a third requires an explicit
+`import`.
+
+- **Tier A — `Ipe.Basics`.** The grammar-level surface, unqualified in every
+  module: the arithmetic/comparison/function operators (`+ - * / // ^`,
+  `== /= < > <= >=`, `<| |> << >>`, `++`), the base types
+  `Int`/`Float`/`Char`/`String`, `Bool` with `not`/`&&`/`||`/`xor`, `Order` with
+  `LT`/`EQ`/`GT`, `Never`/`never`, `identity`/`always`, and the numeric helpers
+  `min`/`max`/`abs`/`clamp`/`negate`/`compare`.
+- **Tier B — core type vocabulary.** Ambient with normal local shadowing: the
+  types `List`, `Maybe`, `Result` and their constructors `Just`/`Nothing`,
+  `Ok`/`Err`, plus `True`/`False`. A local `map` binds without a diagnostic.
+- **Tier C — everything else.** Every other stdlib qualifier
+  (`String`/`Dict`/`Http`/`Json.Decode`/…) needs its own `import Ipe.X` and is
+  used qualified, so the import list is a complete inventory of a module's
+  capabilities.
+
+Do NOT open a value-flooding prelude: `import Ipe.Prelude exposing (..)` is
+retired (`Ipe.Prelude` survives only as a backward-compatible alias of
+`Ipe.Basics` — first-party sources no longer name it). Tiers A and B are
+ambient, so nothing is lost by dropping the line.
 
 ## When users ask for an app — the architecture decision matrix
 
@@ -60,14 +79,17 @@ Production-grade code no survive guesswork.
 
 ### The six decisions to confirm
 
-1. **App shape** — match matrix. Ipe.Web=web UI, Ipe.Http.Server=headless
-   API, Ipe.Console=line-oriented TEA, Program (plain `main`)=one-shot/cron,
-   Ipe.Tui=terminal UI, Ipe.WebView=desktop.
+1. **App shape** — match matrix. The four TEA shapes live under `Ipe.Tea.*`:
+   `Ipe.Tea.Web`=web UI, `Ipe.Tea.Console`=line-oriented TEA,
+   `Ipe.Tea.Tui`=terminal UI, `Ipe.Tea.WebView`=desktop. `Ipe.Http.Server`=headless
+   API and a plain `main` (one-shot/cron) are both the non-TEA **Program** shape.
+   Importing anything under `Ipe.Tea.*` marks a module a TEA app; a plain-`main`
+   Program that imports a `Ipe.Tea.*` shape is rejected (IPE-N0033).
 2. **Persistence** — SQLite (single-file, embeds) / PostgreSQL / Firestore /
    Redis / none.
 3. **Auth** — none / `Ipe.Auth` (cookies+JWT, you own users) / OAuth
    (Google/GitHub) / external (Auth0/Clerk/Cognito).
-4. **Ipe.Live session store** — memory (dev only) / sqlite / redis / postgres
+4. **Web-app session store** — memory (dev only) / sqlite / redis / postgres
    / firestore. Required even when user picks different primary DB.
 5. **Deployment target** — local binary / Docker / Cloud Run / Kubernetes / VM.
 6. **Observability scope** — local logs only / per-app embedded console / OTel
@@ -79,14 +101,14 @@ Ask one focused question per ambiguity; no guess heroically.
 
 | User wants…                              | Use                | Entry point shape                  | Notes |
 |------------------------------------------|--------------------|------------------------------------|-------|
-| Web app (forms, real-time, UI state)     | **Ipe.Web**        | `Web.app cfg`                      | HTTP-first; SSE patches; sessions + cookies + routing built in. |
+| Web app (forms, real-time, UI state)     | **Ipe.Tea.Web**        | `Web.app cfg`                      | HTTP-first; SSE patches; sessions + cookies + routing built in. |
 | HTTP / JSON API (no browser UI)          | **Ipe.Http.Server**| `Server.listen 8000 [...]`         | Routes + middleware (CORS / rate-limit / logging / basic-auth). |
-| Multi-tenant SaaS / dashboard            | **Ipe.Web + auth-app gate** | `Web.app { consoleAuth = … }` | Tenant scope enforced at SQL layer. |
+| Multi-tenant SaaS / dashboard            | **Ipe.Tea.Web + auth-app gate** | `Web.app { consoleAuth = … }` | Tenant scope enforced at SQL layer. |
 | Background job / cron worker             | **Program** (plain `main`) | `main = Task.run scheduledWork`    | No UI loop; `Task.parallel` for fan-out. |
-| Line-oriented interactive tool           | **Ipe.Console**    | `Console.app cfg`                  | Managed stdin-driven TEA loop (init/update/view/onLine). |
-| Terminal UI (TUI)                        | **Ipe.Tui**        | `Tui.program cfg`                  | Same view code as Ipe.Web. |
+| Line-oriented interactive tool           | **Ipe.Tea.Console**    | `Console.app cfg`                  | Managed stdin-driven TEA loop (init/update/view/onLine). |
+| Terminal UI (TUI)                        | **Ipe.Tea.Tui**        | `Tui.app cfg`                  | Same `Element` view as Ipe.Tea.Web. |
 | One-shot CLI tool                        | **Program** (plain `main`) | `main = Task.run cliCmd`           | Argparse via `System.args`. |
-| Desktop app                              | **Ipe.WebView**    | `WebView.app cfg`                  | macOS today; Linux / Windows later. |
+| Desktop app                              | **Ipe.Tea.WebView**    | `WebView.app cfg`                  | macOS today; Linux / Windows later. |
 | WebSocket-driven feed                    | **Ipe.Http.Server.WebSocket** | `Server.upgrade req` | Bidirectional. |
 | Server-sent stream (LLM tokens, SSE)     | **Ipe.Http.Server.Stream** | `Server.Stream.emit` | Mirror of `Ipe.Http.Stream`. |
 
@@ -115,7 +137,7 @@ name = "<project>"
 version = "0.1.0"
 entry = "src/Main.ipe"
 
-[live]                          # Ipe.Live apps only
+[live]                          # Ipe.Tea.Web apps only
 port = 8000
 store = "sqlite"                # memory / sqlite / redis / postgres / firestore
 storePath = "sessions.db"
@@ -205,7 +227,7 @@ entry boundary (CLI `main`, `Cmd.perform`, HTTP handler return) executes them.
 
 Per app shape: CLI → `Task.run … |> Task.onError reportError`;
 Ipe.Http.Server → `Task.onError` recovers to 4xx/5xx Response;
-Ipe.Live → `Cmd.perform task ResultMsg`, dispatch updates
+Ipe.Tea.Web → `Cmd.perform task ResultMsg`, dispatch updates
 `notification` / `historyError` in Model.
 
 ## Standard library
@@ -224,7 +246,7 @@ app code.
 
 | Module | Path | Key functions |
 |---|---|---|
-| `Basics` | `Ipe.Basics` (autoloaded via `Ipe.Prelude`) | identity, always, not, toString, modBy, clamp, fst, snd, compare, negate, abs, sqrt, min, max |
+| `Basics` | `Ipe.Basics` (Tier A — ambient, no import; see Auto-import) | identity, always, not, toString, modBy, clamp, fst, snd, compare, negate, abs, sqrt, min, max |
 | `String` | `Ipe.String` | length, reverse, append, split, join, contains/containsIn, startsWith/startsWithIn, endsWith/endsWithIn (haystack-first In-suffixed), toInt, fromInt, toFloat, fromFloat, toUpper, toLower, trim/trimStart/trimEnd, replace, slice, dropLeft, dropRight (Elm-shaped rune-based), isEmpty, fromChar, toList, fromList, repeat, padLeft, padRight, casefold, equalFold, isEmail, isUrl, words, lines, concat |
 | `List` | `Ipe.List` | map, filter, foldl, foldr, length, head, tail, take, drop, append, concat, concatMap, reverse, member, any, all, range, zip, find, isEmpty, indexedMap, cons + reverseHelp/indexedMapHelp |
 | `Dict` | `Ipe.Dict` (kernel) | empty, insert, get, remove, member, keys, values, toList, fromList, map, foldl, union |
@@ -253,7 +275,8 @@ app code.
 | `Task` | `Ipe.Task` | succeed, fail, map, andThen, perform, sequence, parallel, lazy, run, fromResult, andThenResult, mapError, onError; **retryWith** + `RetryPolicy e` + `ShouldRetry e` ADT (RetryAlways \| RetryWhen (e -> Bool)). Build via linearBackoff/exponentialBackoff/defaultRetryPolicy; decorate via withJitter/withMaxAttempts/withBaseMs/withKind/withRetryOn. |
 | `Cmd` | `Ipe.Cmd` | none, batch, perform, publish (echo-by-default pub/sub from update return), publishNoEcho (opt-out echo) |
 | `Sub` | `Ipe.Sub` | none, every, batch, subscribeTopic (pub/sub receive) |
-| `PubSub` | `Ipe.PubSub` | publish (Task-shaped, callable from raw `api` handlers/post-init/scheduled jobs; complements `Cmd.publish`), publishNoEcho (Task-shaped no-echo) |
+| `PubSub` | `Ipe.PubSub` | publish (Task-shaped, callable wherever a broadcast bus runs — a Web-app process, or `Err` in a plain CLI; complements `Ipe.Tea.Web.PubSub.publish`), publishNoEcho (Task-shaped no-echo) |
+| `Tea.Web.PubSub` | `Ipe.Tea.Web.PubSub` | publish, publishNoEcho (Cmd-shaped, returned from a Web `update`), subscribeTopic (Sub-shaped, declared in `subscriptions`) — the TEA-loop broadcast surface (importing it marks the module a TEA app) |
 | `Time` | `Ipe.Time` | now, sleep, every, unixMillis, format/formatISO8601/formatRFC3339/formatHTTP, addMillis, diffMillis, timeString |
 | `Ipe.Time` | `Ipe.Time` | IANA zones, addMonths/Years (month-end CLAMPED), dayOfWeek (ISO Mon=1..Sun=7), weekOfYear (ISO 8601), startOfDay/Week/Month/Year, diffDays/Hours/Minutes/Seconds; `*Utc` infallible companions (`dayOfWeekUtc`/`startOfDayUtc`/`yearUtc`/etc — `Int -> Int`, plug "UTC" at call site). |
 | `Random` | `Ipe.Random` | int, float, range, choice, shuffle, weighted (entropy-backed); seed, seededInt, seededFloat, seededChoice (deterministic) |
@@ -270,8 +293,8 @@ app code.
 | `Server` | `Ipe.Http.Server` | param, queryParam, header, getCookie, static (Layer 3 surface); higher-level `get/post/listen/text/json/html` are kernel-only |
 | `Stream` | `Ipe.Http.Server.Stream` | stream, emit, finish, withContentType — server-side streaming HTTP responses (SSE/LLM token forwarding/chunked downloads). Mirror of `Ipe.Core.Http.Stream`. Sync bridge: `Ipe.Core.Http.Stream.forEachChunk hdl body` drains an upstream stream from inside a plain Ipe.Http.Server handler (relay shape). |
 | `Middleware` | `Ipe.Http.Middleware` | withCors, withLogging, withBasicAuth, withRateLimit |
-| `Head` | `Ipe.Live.Head` | Per-page `<head>` injection — `title`/`meta`/`metaProperty` (OG)/`link`/`canonical`/`jsonLd`/`themeColor`/`rss`. Opt in via optional `head : Model -> List (Html msg)` field on `Live.app` cfg. |
-| `Console` | `Ipe.Live.Console` | `Identity` type alias (`{ subject, email, claims : Dict String String }`) for optional row-poly `consoleAuth : Request -> Task Error (Maybe Identity)` field on `Live.app` cfg. |
+| `Head` | `Ipe.Web.Head` | Per-page `<head>` injection — `title`/`meta`/`metaProperty` (OG)/`link`/`canonical`/`jsonLd`/`themeColor`/`rss`. Opt in via optional `head : Model -> List (Html msg)` field on `Web.app` cfg. |
+| `Console` | `Ipe.Web.Console` | `Identity` type alias (`{ subject, email, claims : Dict String String }`) for optional row-poly `consoleAuth : Request -> Task Error (Maybe Identity)` field on `Web.app` cfg. |
 | `RateLimit` | `Ipe.Http.RateLimit` | allow |
 | `WebSocket` | `Ipe.WebSocket` (client) + `Ipe.Http.Server.WebSocket` (server) | Bidirectional sockets. Client: `connect`/`connectWith`/`send`/`sendBinary`/`close`/`closeWithCode` (Task-tier) + `onOpen`/`onMessage`/`onClose`/`onError` (Sub-tier). Server: `upgrade` (returns from a Ipe.Http.Server handler) + `sendToClient`/`sendBinaryToClient`/`broadcast`/`closeClient`. Server production gate: empty `originPatterns` returns 403 when `ENV=production`. |
 | `Cache` | `Ipe.Cache` | LRU+TTL in-memory cache, `Cache k v` parametric on key+value. `CacheCfg` w/ `defaultCfg` + `withMaxEntries`/`withTTL`/`withMaxBytes`. `new`/`get`/`put`/`remove`/`clear`/`size`/`stats`. |
@@ -290,13 +313,13 @@ app code.
 `default*` ctor + `with*` builder per field — always compose via builders
 so future field additions no break call sites.
 
-## Ipe.Live + Ipe.Http.Server
+## Ipe.Tea.Web + Ipe.Http.Server
 
-### Live.app shape
+### Web.app shape
 
 ```elm
 main =
-    Live.app
+    Web.app
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [ route "/" HomePage, route "/about" AboutPage ]
         , notFound = HomePage
@@ -305,7 +328,10 @@ main =
 
 HTTP-first (full HTML on load, patches on events), SSE subscriptions,
 session stores (memory/sqlite/redis/postgres/firestore), type-safe events,
-VNode diffing.
+VNode diffing. `Web.app` takes `view : Model -> Element Msg` — the portable
+`Ipe.Ui` view shared with `Ipe.Tea.WebView`/`Ipe.Tea.Tui` (the framework applies
+`Ui.layout` internally). For direct DOM control, `Web.appHtml` takes
+`view : Model -> Html Msg` (raw `Ipe.Html`, no wrap).
 
 **`init` is per-session, not per-page-reload.** First request from browser
 w/ no `ipe_sid` cookie fires `init`. Browser reload while session alive
@@ -339,17 +365,17 @@ Apps ignoring `req` build unchanged (row-poly extension).
 
 ### Per-page `<head>` injection
 
-Optional `head : Model -> List (Html msg)` field on `Live.app` cfg.
+Optional `head : Model -> List (Html msg)` field on `Web.app` cfg.
 Runtime calls once per full GET (initial load + ipe-nav navigation),
 splices returned list into `<head>` after required `<meta charset>`/
 `<meta viewport>`/`<meta ipe-base>` tags. HM sig row-open — apps omitting
 field type-check and build unchanged.
 
 ```elm
-import Ipe.Live.Head as Head
+import Ipe.Web.Head as Head
 
 main =
-    Live.app
+    Web.app
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [ route "/" HomePage, route "/blog/:slug" BlogPostPage ]
         , notFound = HomePage
@@ -370,7 +396,7 @@ headFor model =
     ]
 ```
 
-`Ipe.Live.Head` helpers (all return `Html msg`):
+`Ipe.Web.Head` helpers (all return `Html msg`):
 
 | Helper | Emits |
 |---|---|
@@ -452,7 +478,7 @@ use `data-ipe-path` for URL updates.
 
 **Auth gates around routes.** For public-vs-authenticated apps:
 
-- Let Ipe.Live route URL to page as usual.
+- Let Ipe.Tea.Web route URL to page as usual.
 - In `pageBody`/view, outer-case on `model.session`: signed-out always
   renders sign-in surface regardless of page.
 - Use single `currentPath : Model -> String` (not per-page `pathForPage`)
@@ -556,7 +582,7 @@ Bottom-pinned, three states:
   retrying in background so healed proxy recovers w/o refresh.
 
 Localise via `status = { reconnecting = "Reconnexion…", offline =
-"Connexion perdue" }` on `Live.app` cfg record. Partial overrides fall
+"Connexion perdue" }` on `Web.app` cfg record. Partial overrides fall
 back to English defaults. Strings rendered via `textContent` (never
 `innerHTML`).
 
@@ -603,7 +629,7 @@ Response` still works. Same pattern works for any function-typed alias:
 
 ### Dev console
 
-Every Ipe.Live/Ipe.Http.Server app auto-mounts `Ipe.Ui` dev console at
+Every Ipe.Tea.Web/Ipe.Http.Server app auto-mounts `Ipe.Ui` dev console at
 `/_ipe/console` in dev mode, alongside structured logging, Prometheus
 `/_ipe/metrics` endpoint, distributed tracing. In production (`ENV`≠dev)
 console + banner removed and metrics require auth.
@@ -637,7 +663,7 @@ view model =
 
 1. **Forms with sensitive inputs use `Ui.form` + `onSubmit DoSignIn`, NOT
    `onInput` per keystroke on password fields.** See password pattern in
-   Ipe.Live section.
+   Ipe.Tea.Web section.
 
 2. **Real `<input>` elements use `Ui.input`, NOT `Ui.el [htmlAttribute
    "type" "text"]`.** `Ui.el` builds Node rendering as `<div>` — browsers
@@ -737,8 +763,8 @@ cascade, page background image).
   `DarkMode`, `LightMode`, `ReducedMotion`, `TouchDevice`, `Portrait`,
   `Landscape`, `Custom Int Int` (minPx maxPx; 0=unset). `Ui.mediaQuery
   query [attrs] child` = escape hatch for raw CSS media-query string.
-  Ipe.Tui ignores `<style>`; Ipe.Webview honours media queries identically
-  to Ipe.Live. Pick `Ui.breakpoint` when transition needs no typed Msg;
+  Ipe.Tea.Tui ignores `<style>`; Ipe.Tea.WebView honours media queries
+  identically to Ipe.Tea.Web. Pick `Ui.breakpoint` when transition needs no typed Msg;
   pick `Ipe.Ui.Responsive` when it does.
 - **Transitions + animations** (`Ipe.Ui.Transition`/`Ipe.Ui.Animation`/
   `Ipe.Ui.Transform`) — typed CSS transitions + keyframe animations on
@@ -804,10 +830,12 @@ Ui.input
 Callback receives data URL. Decode w/ `Ipe.Encoding.base64Decode` → upload
 via `Http.post`. Ensure `[live] maxBodyBytes` ≥ your `fileMaxSize`.
 
-## Ipe.Tui
+## Ipe.Tea.Tui
 
-TEA backend rendering `Ipe.Ui` to ANSI cells. Same
-`init`/`update`/`view`/`subscriptions` shape as Ipe.Live.
+TEA backend rendering `Ipe.Ui` to ANSI cells (`import Ipe.Tea.Tui as Tui`).
+Same `init`/`update`/`view`/`subscriptions` shape as Ipe.Tea.Web. `Tui.app`
+takes `view : Model -> Element Msg` (the portable `Ipe.Ui` tree); the raw-frame
+variant `Tui.program` takes `view : Model -> String`.
 
 ```elm
 type alias Cfg model msg =
@@ -816,7 +844,7 @@ type alias Cfg model msg =
     , view          : model -> Element msg
     , subscriptions : model -> Sub msg
     , onKey         : KeyEvent -> msg                  -- optional
-    , guard         : msg -> model -> Result Error ()  -- optional; same as Live.app's guard
+    , guard         : msg -> model -> Result Error ()  -- optional; same as Web.app's guard
     , canvasWidth   : Int                              -- default 1280 logical px
     , canvasHeight  : Int                              -- default 720
     }
@@ -830,40 +858,35 @@ of Ipe.Ui primitives; unsupported attrs (gradients, fine letter-spacing,
 image fills) emit deduped warning (`IPE_TUI_QUIET=1` suppresses). Wide chars
 (CJK+emoji+ZWJ) supported.
 
-**Ipe.Cli password mode** — `Cli.readPassword : () -> Task Error String`
-reads stdin w/ echo disabled; password never echoes and never lands in
-scrollback.
+## Ipe.Tea.WebView (desktop)
 
-## Ipe.Webview (desktop)
-
-Cross-backend mirror of `Live.app`+`Tui.app` — same TEA shape, native
+Cross-backend mirror of `Web.app`+`Tui.app` — same TEA shape, native
 desktop window via system webview. No HTTP server, no SSE, no session store.
 
 ```elm
-import Ipe.Webview as Webview
+import Ipe.Tea.WebView as WebView
 
 main =
-    Webview.app
+    WebView.app
         { init = init
         , update = update
-        , view = view                  -- view : Model -> Element msg
+        , view = view                  -- view : Model -> Element Msg
         , subscriptions = subscriptions
         , window = { title = "Ipê App", size = ( 800, 600 ) }
         }
-        |> Task.run
 ```
 
-Same `view` fn paints identically across Ipe.Live (web), Ipe.Tui
-(terminal), Ipe.Webview (desktop). `WindowCfg` closed (`{ title :
-String, size : (Int, Int) }`) today; macOS supported first.
-
-**Ipe.Ui convention** — `view` fn MUST wrap output in `Ui.layout []
-(...)` to convert `Element` → `Html` before rendering. Raw `Ui.column
-[...]` body produces blank window (same convention as Ipe.Live).
+Same `view : Model -> Element Msg` paints identically across `Ipe.Tea.Web`
+(web), `Ipe.Tea.Tui` (terminal), and `Ipe.Tea.WebView` (desktop) — the
+framework applies `Ui.layout` internally, so the view returns the raw
+`Element` with no wrap. `WindowCfg` is closed (`{ title : String, size :
+(Int, Int) }`) today; macOS supported first. For direct DOM control,
+`WebView.appHtml` takes `view : Model -> Html Msg` (raw `Ipe.Html`, no
+`Ui.layout` wrap).
 
 ## Browser-WASM target (`--target wasm`)
 
-`ipe build --target wasm` compiles single-page `Live.app` program to
+`ipe build --target wasm` compiles single-page `Web.app` program to
 browser bundle: emitted project = `cdylib` crate (wasm-bindgen glue, no
 tokio/axum/sqlx) plus static `www/` shell (CSP `script-src 'self'
 'wasm-unsafe-eval'` — no JS eval). Bundle w/
@@ -1002,7 +1025,7 @@ ipe doc --serve [--port 8080]      # browsable HTTP doc server
 ipe doc --tui                      # interactive terminal doc browser
 ipe doc --list                     # list every documented module
 ipe doctor [--fix] [--verbose]     # project / environment health checks
-ipe console [--port 8025]          # standalone Ipe.Ui console (--tui for the Ipe.Tui backend)
+ipe console [--port 8025]          # standalone Ipe.Ui console (--tui for the Ipe.Tea.Tui backend)
 ipe add <package>                  # add an FFI binding
 ipe remove <package>
 ipe install                        # regen missing FFI + deps
