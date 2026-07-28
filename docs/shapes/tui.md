@@ -17,6 +17,9 @@ There are two, differing only in what `view` returns:
 - `main = Tui.program cfg` — `view : Model -> String`, a raw frame painted
   verbatim. Use it when you want to draw the terminal yourself.
 
+See [Views: Ui, Html, and Css](../ui.md) for the `Element` vocabulary shared with
+the graphical shapes.
+
 Either `cfg` is a record of `init` / `update` / `view` / `subscriptions` /
 `onKey`, where `onKey : { kind : String, value : String } -> Msg` maps a key
 event to a message.

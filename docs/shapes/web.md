@@ -12,7 +12,9 @@ a clear error.
 
 `main = Web.app cfg`, where `cfg` is a record of
 `init` / `update` / `view` / `subscriptions` plus `routes` and `notFound` for
-URL routing. `view` returns `Html Msg`, built with the typed `Ipe.Ui` DSL.
+URL routing. The view type is `view : Model -> Html Msg`; it is built with the
+portable `Ipe.Ui` layout vocabulary and turned into `Html` by a top-level
+`Ui.layout [] element` (see [Views: Ui, Html, and Css](../ui.md)).
 
 ## Minimal example
 

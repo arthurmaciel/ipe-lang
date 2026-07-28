@@ -15,8 +15,11 @@ one that ends in `"\n"` puts each frame on its own line.
 ## Entry point
 
 `main = Console.app cfg`, where `cfg` is a record of
-`init` / `update` / `view` / `subscriptions` / `onLine`. `view` returns a
-`String`, and `onLine : String -> Msg` maps each input line to a message.
+`init` / `update` / `view` / `subscriptions` / `onLine`. The view type is
+`view : Model -> String` (printed to stdout verbatim), and
+`onLine : String -> Msg` maps each input line to a message. A Console view is
+plain text — it does not use the `Ipe.Ui` element tree (see
+[Views: Ui, Html, and Css](../ui.md)).
 
 ## Minimal example
 

@@ -10,7 +10,10 @@ shipping a web stack. The `Model` is kept in memory as a plain value.
 
 `main = WebView.app cfg`, where `cfg` is a record of
 `init` / `update` / `view` / `subscriptions` plus a `window` record
-(`{ title : String, size : ( Int, Int ) }`). `view` returns `Html Msg`.
+(`{ title : String, size : ( Int, Int ) }`). The view type is
+`view : Model -> Html Msg` — the same as [Web](web.md), built with `Ipe.Ui` and
+wrapped by a top-level `Ui.layout [] element` (see
+[Views: Ui, Html, and Css](../ui.md)).
 
 ## Minimal example
 
