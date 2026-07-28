@@ -110,7 +110,11 @@ fn dep_parse_error_is_blamed_on_the_dep_not_the_importer() {
 
 /// Convert an LSP position back to a byte offset (UTF-16 encoding) and apply a
 /// single-hunk `TextEdit`, returning the new document text.
-#[allow(clippy::expect_used, clippy::indexing_slicing)] // test helper
+#[allow(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation
+)] // test helper: len_utf16 is 1 or 2
 fn apply_edit(text: &str, edit: &TextEdit) -> String {
     let to_byte = |pos: lsp_types::Position| -> usize {
         let mut line_start = 0usize;

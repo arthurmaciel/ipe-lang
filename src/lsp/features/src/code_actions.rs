@@ -308,21 +308,18 @@ fn add_import_action(
         let after_header_line = offset_to_position(text, header_end, encoding).line as usize;
         let (_, line_end) = line_byte_range(text, after_header_line);
         (line_end, format!("\nimport {import_module}\n"))
+    } else if let Some((_, start)) = imports
+        .iter()
+        .find(|(path, _)| path.as_str() > import_module.as_str())
+    {
+        // Insert before the first existing import that sorts after the new one.
+        (*start, format!("import {import_module}\n"))
     } else {
-        // Insert before the first existing import that sorts after the new one;
-        // if none, append after the last import line.
-        match imports
-            .iter()
-            .find(|(path, _)| path.as_str() > import_module.as_str())
-        {
-            Some((_, start)) => (*start, format!("import {import_module}\n")),
-            None => {
-                let last_line_start = imports.iter().map(|(_, s)| *s).max().unwrap_or(0);
-                let last_line = offset_to_position(text, last_line_start, encoding).line as usize;
-                let (_, line_end) = line_byte_range(text, last_line);
-                (line_end, format!("import {import_module}\n"))
-            }
-        }
+        // Sorts last: append after the final import line.
+        let last_line_start = imports.iter().map(|(_, s)| *s).max().unwrap_or(0);
+        let last_line = offset_to_position(text, last_line_start, encoding).line as usize;
+        let (_, line_end) = line_byte_range(text, last_line);
+        (line_end, format!("import {import_module}\n"))
     };
 
     let insert_pos = offset_to_position(text, insert_byte, encoding);
