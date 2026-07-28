@@ -125,27 +125,25 @@ actionButton msg label =
         { onPress = Just msg, label = Ui.text label }
 
 
-view : Model -> Html Msg
+view : Model -> Element Msg
 view model =
-    Ui.layout []
-        (Ui.column
-            [ Ui.spacing 14, Ui.padding 32 ]
-            [ Ui.el [ Font.size 20, Font.bold ] (Ui.text "M4 Ipe.WebSocket client substitute")
-            , Ui.row [ Ui.spacing 12 ]
-                [ actionButton Connect "Connect"
-                , actionButton SendHello "Send \"hello-from-browser\""
-                , actionButton Disconnect "Disconnect"
-                ]
-            , Ui.row [ Ui.spacing 12 ]
-                [ Ui.el [ Font.bold ] (Ui.text "status:")
-                , Ui.el [ Ui.htmlAttribute "id" "ws-status" ] (Ui.text model.status)
-                ]
-            , Ui.row [ Ui.spacing 12 ]
-                [ Ui.el [ Font.bold ] (Ui.text "last frame:")
-                , Ui.el [ Ui.htmlAttribute "id" "ws-last-frame" ] (Ui.text model.lastFrame)
-                ]
+    Ui.column
+        [ Ui.spacing 14, Ui.padding 32 ]
+        [ Ui.el [ Font.size 20, Font.bold ] (Ui.text "M4 Ipe.WebSocket client substitute")
+        , Ui.row [ Ui.spacing 12 ]
+            [ actionButton Connect "Connect"
+            , actionButton SendHello "Send \"hello-from-browser\""
+            , actionButton Disconnect "Disconnect"
             ]
-        )
+        , Ui.row [ Ui.spacing 12 ]
+            [ Ui.el [ Font.bold ] (Ui.text "status:")
+            , Ui.el [ Ui.htmlAttribute "id" "ws-status" ] (Ui.text model.status)
+            ]
+        , Ui.row [ Ui.spacing 12 ]
+            [ Ui.el [ Font.bold ] (Ui.text "last frame:")
+            , Ui.el [ Ui.htmlAttribute "id" "ws-last-frame" ] (Ui.text model.lastFrame)
+            ]
+        ]
 
 
 main =

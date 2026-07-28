@@ -622,8 +622,8 @@ fn effect_secret_in_live_model() {
          update _msg model = ( model, Cmd.none )\n\
          subscriptions : Model -> Sub Msg\n\
          subscriptions _model = Sub.none\n\
-         view : Model -> Html Msg\n\
-         view _model = Ui.layout [] (Ui.text \"hi\")\n\
+         view : Model -> Element Msg\n\
+         view _model = Ui.text \"hi\"\n\
          \n\
          main =\n\
          \x20   app\n\
@@ -698,8 +698,8 @@ fn wasm_routed_app_rejected() {
          subscriptions : Model -> Sub Msg\n\
          subscriptions _model = Sub.none\n\
          \n\
-         view : Model -> Html Msg\n\
-         view _model = Ui.layout [] (Ui.text \"hi\")\n\
+         view : Model -> Element Msg\n\
+         view _model = Ui.text \"hi\"\n\
          \n\
          main =\n\
          \x20   app\n\
@@ -759,8 +759,8 @@ fn lower_let_bound_app_cfg() {
          update _msg model = ( model, Cmd.none )\n\
          subscriptions : Model -> Sub Msg\n\
          subscriptions _model = Sub.none\n\
-         view : Model -> Html Msg\n\
-         view _model = Ui.layout [] (Ui.text \"hi\")\n\
+         view : Model -> Element Msg\n\
+         view _model = Ui.text \"hi\"\n\
          \n\
          main =\n\
          \x20   let cfg =\n\

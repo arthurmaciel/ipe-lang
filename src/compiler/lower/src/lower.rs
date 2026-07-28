@@ -11807,7 +11807,10 @@ impl<'a> Lowerer<'a> {
         let canon::Expr_::Record(fields) = &arg0.value else {
             return Err(unsupported(arg0.span, Feature::LetBoundAppCfg));
         };
-        if matches!(peek, Callee::Kernel(KernelFn::WebViewApp)) {
+        if matches!(
+            peek,
+            Callee::Kernel(KernelFn::WebViewApp | KernelFn::WebViewAppHtml)
+        ) {
             self.reject_non_literal_webview_window(fields)?;
         }
         self.lower_app_cfg_record(fields)
@@ -11907,8 +11910,8 @@ impl<'a> Lowerer<'a> {
         if let canon::Expr_::VarKernel { .. } | canon::Expr_::VarTopLevel { .. } = &callee.value {
             let peek = self.lower_callee(callee)?;
             match &peek {
-                // ── Web.app cfg literal (L0107 exemption) ────────────
-                Callee::Kernel(KernelFn::WebApp) if args.len() == 1 => {
+                // ── Web.app / Web.appHtml cfg literal (L0107 exemption) ──
+                Callee::Kernel(KernelFn::WebApp | KernelFn::WebAppHtml) if args.len() == 1 => {
                     // `args.len() == 1` is the match guard above; `first()` is
                     // always `Some` here.  Using `first()` instead of `args[0]`
                     // keeps `clippy::indexing_slicing` clean.
@@ -11947,6 +11950,7 @@ impl<'a> Lowerer<'a> {
                     KernelFn::TuiApp
                     | KernelFn::TuiProgram
                     | KernelFn::WebViewApp
+                    | KernelFn::WebViewAppHtml
                     | KernelFn::ConsoleApp,
                 ) if args.len() == 1 => {
                     if let Some(arg0) = args.first() {
@@ -14380,6 +14384,8 @@ impl<'a> Lowerer<'a> {
                 // ── app-entry stubs — arity 1 ────────────────────────────
                 // `Web.app : WebAppCfg model msg -> Task Error ()`
                 | KernelFn::WebApp
+                // `Web.appHtml : WebAppCfg model msg -> Task Error ()` (raw-Html view)
+                | KernelFn::WebAppHtml
                 // `Web.appRouted : WebAppCfg model msg -> Task Error ()`
                 | KernelFn::WebAppRouted
                 // `Tui.program : TuiCfg model msg -> Task Error ()`
@@ -14388,6 +14394,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::TuiApp
                 // `Webview.app : WebviewCfg model msg -> Task Error ()`
                 | KernelFn::WebViewApp
+                // `Webview.appHtml : WebviewCfg model msg -> Task Error ()` (raw-Html view)
+                | KernelFn::WebViewAppHtml
                 // `Console.app : CliCfg model msg -> Task Error ()`
                 | KernelFn::ConsoleApp
                 // Ipe.Html.Attributes fixed-key builders (`String`/`Bool`
@@ -16083,6 +16091,7 @@ impl<'a> Lowerer<'a> {
                     ("Keyed", "row") => Ok(Callee::Kernel(KernelFn::KeyedRow)),
                     // ── Ipe.Web / Ipe.Web app-entry kernels ───────────────
                     ("Web", "app") => Ok(Callee::Kernel(KernelFn::WebApp)),
+                    ("Web", "appHtml") => Ok(Callee::Kernel(KernelFn::WebAppHtml)),
                     ("Web", "appRouted") => Ok(Callee::Kernel(KernelFn::WebAppRouted)),
                     ("Web", "route") => Ok(Callee::Kernel(KernelFn::WebRoute)),
                     ("Web", "renderStatic") => Ok(Callee::Kernel(KernelFn::WebRenderStatic)),
@@ -16091,6 +16100,7 @@ impl<'a> Lowerer<'a> {
                     ("Tui", "app") => Ok(Callee::Kernel(KernelFn::TuiApp)),
                     // ── Ipe.WebView / Ipe.WebView app-entry kernel ────────
                     ("WebView", "app") => Ok(Callee::Kernel(KernelFn::WebViewApp)),
+                    ("WebView", "appHtml") => Ok(Callee::Kernel(KernelFn::WebViewAppHtml)),
                     // ── Ipe.Console / Ipe.Console app-entry kernel ──────────────
                     ("Console", "app") => Ok(Callee::Kernel(KernelFn::ConsoleApp)),
                     // ── Ipe.Auth / Ipe.Auth — auth helpers ──────────────
