@@ -1536,6 +1536,13 @@ fn canon_collect_pat_binds(pat: &canon::Pattern, bound: &mut BTreeSet<Symbol>) {
             canon_collect_pat_binds(head, bound);
             canon_collect_pat_binds(tail, bound);
         }
+        // Every alternative of an or-pattern binds the identical name set (proved
+        // in canon), so the first alternative's binds are the whole set.
+        canon::Pattern_::POr(alts) => {
+            if let Some(first) = alts.first() {
+                canon_collect_pat_binds(first, bound);
+            }
+        }
     }
 }
 
@@ -3626,6 +3633,14 @@ fn collect_pvars_inner(pat: &canon::Pattern_, out: &mut Vec<Symbol>) {
         canon::Pattern_::PRecord(fields) => {
             for f in fields {
                 out.push(f.value);
+            }
+        }
+        // An or-pattern's alternatives all bind the same names (proved in
+        // canon), so the first alternative's binders are the whole arm's set —
+        // one entry per name, never a per-alternative duplicate.
+        canon::Pattern_::POr(alts) => {
+            if let Some(first) = alts.first() {
+                collect_pvars_inner(&first.value, out);
             }
         }
         // Leaf patterns: no bindings.
@@ -5998,6 +6013,9 @@ fn pat_binds_symbol(pat: &Pat, target: Symbol) -> bool {
             prefix.iter().any(|p| pat_binds_symbol(p, target))
                 || rest.as_deref().is_some_and(|p| pat_binds_symbol(p, target))
         }
+        // Every alternative of an or-pattern binds the same names, so it binds
+        // `target` iff any (equivalently, the first) alternative does.
+        Pat::Or(alts) => alts.iter().any(|p| pat_binds_symbol(p, target)),
     }
 }
 
@@ -6307,6 +6325,14 @@ fn pat_bound_symbols(pat: &Pat, out: &mut BTreeSet<Symbol>) {
                 pat_bound_symbols(p, out);
             }
         }
+        // Every alternative of an or-pattern binds the same names, so the first
+        // alternative's binders are the whole set — collecting one avoids
+        // duplicating a name once per alternative.
+        Pat::Or(alts) => {
+            if let Some(first) = alts.first() {
+                pat_bound_symbols(first, out);
+            }
+        }
     }
 }
 
@@ -6356,7 +6382,10 @@ fn mask_pattern_except(pat: &Pat, keep: Symbol) -> Pat {
         | Pat::Char(_)
         | Pat::Str(_)
         | Pat::Ctor { .. }
-        | Pat::Slice { .. } => pat.clone(),
+        | Pat::Slice { .. }
+        // An or-pattern is refutable, so it never appears in a destructure-
+        // thunk-eligible (irrefutable) binder; kept total by cloning.
+        | Pat::Or(_) => pat.clone(),
     }
 }
 
@@ -9048,7 +9077,10 @@ impl<'a> Lowerer<'a> {
             | canon::Pattern_::PChar(_)
             | canon::Pattern_::PStr(_)
             | canon::Pattern_::PList(_)
-            | canon::Pattern_::PCons(_, _) => Err(bug(
+            | canon::Pattern_::PCons(_, _)
+            // An or-pattern discriminates, so it is refutable in a binding
+            // position — rejected upstream by IPE-T0015. Fail closed.
+            | canon::Pattern_::POr(_) => Err(bug(
                 "ipe_lower::lower_param",
                 "refutable parameter pattern reached the lowerer — the IPE-T0015 \
                  irrefutability gate should have rejected it",
@@ -16311,6 +16343,18 @@ impl<'a> Lowerer<'a> {
             canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _) => {
                 Err(unsupported(p.span, Feature::NestedCtorDiscrimination))
             }
+            // A nested or-pattern inside a constructor payload (`Wrap (Red |
+            // Green)`) lowers each alternative through this same payload lowerer
+            // into a [`Pat::Or`]; the backend renders `Wrap(Red | Green)`, which
+            // Rust accepts. Bindings shared across the alternatives (proved in
+            // canon/types) resolve directly, with the body emitted once.
+            canon::Pattern_::POr(alts) => {
+                let lowered = alts
+                    .iter()
+                    .map(|a| self.lower_payload_pat(a))
+                    .collect::<DResult<Vec<_>>>()?;
+                Ok(Pat::Or(lowered))
+            }
         }
     }
 
@@ -16335,12 +16379,14 @@ impl<'a> Lowerer<'a> {
             // A constructor or literal element is REFUTABLE — it could fail to
             // match — so it cannot bind irrefutably in a `let` / parameter
             // destructure. This is the tuple-pattern gap (IPE-L0115), surfaced
-            // fail-closed.
+            // fail-closed. An or-pattern is likewise refutable (rejected in a
+            // binding position by IPE-T0015 upstream) and joins the same gap.
             canon::Pattern_::PCtor { .. }
             | canon::Pattern_::PInt(_)
             | canon::Pattern_::PBool(_)
             | canon::Pattern_::PChar(_)
-            | canon::Pattern_::PStr(_) => Err(unsupported(p.span, Feature::TuplePatternMatch)),
+            | canon::Pattern_::PStr(_)
+            | canon::Pattern_::POr(_) => Err(unsupported(p.span, Feature::TuplePatternMatch)),
             // An alias `inner as name` is irrefutable exactly when `inner` is, so
             // it recurses: a refutable inner surfaces the same IPE-L0115 gap.
             canon::Pattern_::PAlias(inner, name) => Ok(Pat::Alias(
@@ -16584,6 +16630,9 @@ impl<'a> Lowerer<'a> {
             | canon::Pattern_::PInt(_)
             | canon::Pattern_::PBool(_)
             | canon::Pattern_::PChar(_) => false,
+            // An or-pattern needs the coerced-column path iff any alternative
+            // does — recurse into every alternative.
+            canon::Pattern_::POr(alts) => alts.iter().any(Self::col_needs_literal_tuple_path),
         }
     }
 
@@ -17403,6 +17452,9 @@ impl<'a> Lowerer<'a> {
                         .as_deref()
                         .is_some_and(Self::arm_has_dispatch_needing_alias)
             }
+            // An or-pattern carries a dispatch-needing alias iff any alternative
+            // does — recurse into every alternative.
+            Pat::Or(alts) => alts.iter().any(Self::arm_has_dispatch_needing_alias),
             Pat::Var(_)
             | Pat::Wildcard
             | Pat::Int(_)
@@ -17534,6 +17586,19 @@ impl<'a> Lowerer<'a> {
             // A list (`[a, b]`) or cons (`x :: xs`) case-arm head flattens to the
             // slice-shaped IR [`Pat::Slice`].
             canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _) => self.lower_list_arm_pat(p),
+            // An or-pattern `p1 | p2 | …` lowers each alternative through this
+            // same arm lowerer into a single [`Pat::Or`]. The backend renders it
+            // as the native Rust or-pattern `p1 | p2 | …` with the arm body
+            // emitted ONCE — every alternative binds the same names (proved in
+            // canon/types), so a single body reads those binders whichever
+            // alternative matched. No body duplication.
+            canon::Pattern_::POr(alts) => {
+                let lowered = alts
+                    .iter()
+                    .map(|a| self.lower_arm_pat(a))
+                    .collect::<DResult<Vec<_>>>()?;
+                Ok(Pat::Or(lowered))
+            }
         }
     }
 
