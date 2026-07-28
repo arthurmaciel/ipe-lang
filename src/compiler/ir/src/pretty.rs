@@ -893,6 +893,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::HtmlAttrToString => "Html.attrToString",
         // ── Ipe.Web app-entry kernels ───────────────────────────────────
         KernelFn::WebApp => "Web.app",
+        KernelFn::WebAppHtml => "Web.appHtml",
         KernelFn::WebAppRouted => "Web.appRouted",
         KernelFn::WebRoute => "Web.route",
         KernelFn::WebRenderStatic => "Web.renderStatic",
@@ -901,6 +902,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::TuiApp => "Tui.app",
         // ── Ipe.WebView app-entry kernel ─────────────────────────────────
         KernelFn::WebViewApp => "WebView.app",
+        KernelFn::WebViewAppHtml => "WebView.appHtml",
         // ── Ipe.Ui element builders ──────────────────────────────────────
         KernelFn::UiNone => "Ui.none",
         KernelFn::UiText => "Ui.text",
