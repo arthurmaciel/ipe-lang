@@ -322,6 +322,18 @@ const COMMANDS: &[Command] = &[
         ],
     },
     Command {
+        name: "doc",
+        summary: "Generate API documentation (docs.json + Markdown) for a package, or check coverage.",
+        args: "[check] [<path>]",
+        args_desc: "The package to document — a directory or a single .ipe file (defaults to the \
+                    current project). A leading `check` verifies doc-comment coverage instead of \
+                    writing files.",
+        options: &[Opt {
+            flag: "[--out <dir>]",
+            desc: "write the documentation to <dir> (default: doc/); generate only",
+        }],
+    },
+    Command {
         name: "lsp",
         summary: "Run the language server over stdio.",
         args: "",
@@ -393,6 +405,7 @@ const SECTIONS: &[Section] = &[
             "explain",
             "capabilities",
             "diff",
+            "doc",
             "lsp",
             "upgrade",
             "version",

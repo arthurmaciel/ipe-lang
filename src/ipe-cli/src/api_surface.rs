@@ -113,7 +113,15 @@ impl std::error::Error for DiffError {}
 ///
 /// `root` may be a directory (walked for `*.ipe`) or a single `.ipe` file
 /// (taken as a one-module `Main`-shaped package).
-fn read_tree(root: &Path) -> Result<BTreeMap<ModulePath, (PathBuf, String)>, DiffError> {
+///
+/// Public so `ipe doc` (which documents the same tree `ipe diff` compares) reads
+/// modules through the identical discovery rule — one `src/`-aware walk, one
+/// single-file fallback — rather than a divergent second copy.
+///
+/// # Errors
+/// [`DiffError::Io`] on a read failure and [`DiffError::Empty`] when the tree
+/// carries no `.ipe` modules.
+pub fn read_tree(root: &Path) -> Result<BTreeMap<ModulePath, (PathBuf, String)>, DiffError> {
     let discovered = if root.is_dir() {
         // A conventional package keeps modules under `src/`; fall back to the
         // root itself when there is no `src/` (a flat fixture tree).
