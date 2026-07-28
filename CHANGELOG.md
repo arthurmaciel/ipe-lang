@@ -10,6 +10,41 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.21](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.20...ipe-v0.1.21) (2026-07-28)
+
+
+### Features
+
+* **audit:** macOS Tier-2 native enforcement ([#149](https://github.com/arthurmaciel/ipe-lang/issues/149) sub-PR 4) ([#196](https://github.com/arthurmaciel/ipe-lang/issues/196)) ([a97d8ee](https://github.com/arthurmaciel/ipe-lang/commit/a97d8ee6cd9eb179a32eeaacfe3915f407d6f7d1))
+* **audit:** Tier-2 exercise harness — Tier-2 now certifies native packages on Linux ([#149](https://github.com/arthurmaciel/ipe-lang/issues/149) sub-PR 3) ([#193](https://github.com/arthurmaciel/ipe-lang/issues/193)) ([ebd579e](https://github.com/arthurmaciel/ipe-lang/commit/ebd579e54c5ddb3a9c690853db39df8c20f4f41e))
+* **audit:** Tier-2 native differential-confinement reconciler + fail-closed gate ([#149](https://github.com/arthurmaciel/ipe-lang/issues/149) sub-PR 2) ([#192](https://github.com/arthurmaciel/ipe-lang/issues/192)) ([5bcac8c](https://github.com/arthurmaciel/ipe-lang/commit/5bcac8c8a24f797a5ae6739e6681bd3dbf85cd6b))
+* **ci:** harden clippy gate to pedantic/correctness/style/complexity ([#167](https://github.com/arthurmaciel/ipe-lang/issues/167)) ([206b5d0](https://github.com/arthurmaciel/ipe-lang/commit/206b5d0665ac128dbdf0f33bf1001383d781fc24))
+* **cli:** headless PR-open for ipe package publish ([#171](https://github.com/arthurmaciel/ipe-lang/issues/171)) ([#175](https://github.com/arthurmaciel/ipe-lang/issues/175)) ([4eca539](https://github.com/arthurmaciel/ipe-lang/commit/4eca539d40ed3582235531fbca3de969441ee77a))
+* **cli:** ipe doc — API documentation generation ([#141](https://github.com/arthurmaciel/ipe-lang/issues/141)) ([#223](https://github.com/arthurmaciel/ipe-lang/issues/223)) ([ac5c1e4](https://github.com/arthurmaciel/ipe-lang/commit/ac5c1e4386c22b84a9d87b444a96fb92912a5658))
+* **cli:** ipe doc — HTML site, cross-reference linking, serve ([#222](https://github.com/arthurmaciel/ipe-lang/issues/222)) ([#225](https://github.com/arthurmaciel/ipe-lang/issues/225)) ([dc312c9](https://github.com/arthurmaciel/ipe-lang/commit/dc312c9da2775ba35b2a8e843edfa3ef635f8c0a))
+* **cli:** ipe login — GitHub device-code OAuth for a publish token ([#138](https://github.com/arthurmaciel/ipe-lang/issues/138)) ([#170](https://github.com/arthurmaciel/ipe-lang/issues/170)) ([0672c1d](https://github.com/arthurmaciel/ipe-lang/commit/0672c1d15625a31eae277c9b4b5f42d5bb2608a8))
+* **examples:** network-only Sky mirror with committed trees + anchored edits ([#181](https://github.com/arthurmaciel/ipe-lang/issues/181)) ([6831ad6](https://github.com/arthurmaciel/ipe-lang/commit/6831ad6059b67209986b57a1eca98cd7a6ac86bd))
+* **lower,backend:** function-value reuse for contained record-of-functions ([#178](https://github.com/arthurmaciel/ipe-lang/issues/178)) ([#185](https://github.com/arthurmaciel/ipe-lang/issues/185)) ([fe1d6f0](https://github.com/arthurmaciel/ipe-lang/commit/fe1d6f0cbb01616fc38d21f52c5c93074b29cd2c))
+* **parse:** `do` and `parallelDo` notation ([#199](https://github.com/arthurmaciel/ipe-lang/issues/199)) ([659e4ed](https://github.com/arthurmaciel/ipe-lang/commit/659e4ed8b4b7962304b6f1ad7d4f745eee2e0fcc))
+* **parse:** the `>>` / `<<` function-composition operators ([#177](https://github.com/arthurmaciel/ipe-lang/issues/177)) ([#183](https://github.com/arthurmaciel/ipe-lang/issues/183)) ([0b15f88](https://github.com/arthurmaciel/ipe-lang/commit/0b15f88f0678f6498e85d50aeed50103f733061b))
+* **patterns:** or-patterns (| alternatives) in case…of ([#214](https://github.com/arthurmaciel/ipe-lang/issues/214)) ([#233](https://github.com/arthurmaciel/ipe-lang/issues/233)) ([3011fd2](https://github.com/arthurmaciel/ipe-lang/commit/3011fd261ed7aa3ebd365090704d5a557589063b))
+* **sandbox:** macOS run-jail SBPL arm → JailForTarget::Holds on macOS ([#198](https://github.com/arthurmaciel/ipe-lang/issues/198)) ([#212](https://github.com/arthurmaciel/ipe-lang/issues/212)) ([6349f77](https://github.com/arthurmaciel/ipe-lang/commit/6349f77c6bd71440532b7d55d9338b60368fb203))
+* **sandbox:** Tier-2 audit — build-jail outcome primitive + design ([#149](https://github.com/arthurmaciel/ipe-lang/issues/149) sub-PR 1) ([#191](https://github.com/arthurmaciel/ipe-lang/issues/191)) ([045b43b](https://github.com/arthurmaciel/ipe-lang/commit/045b43bba6c5b1762a9fef448950e7cb9097d60e))
+* **sandbox:** Windows runtime run-jail arm (partial per-axis confinement) ([#215](https://github.com/arthurmaciel/ipe-lang/issues/215)) ([#220](https://github.com/arthurmaciel/ipe-lang/issues/220)) ([1a1094c](https://github.com/arthurmaciel/ipe-lang/commit/1a1094ce18e4be2817c8baecea4bbca3ecaa7d3c))
+* **stdlib:** Io.println/eprintln kernels + dev-only Debug.log, remove Log.println ([#207](https://github.com/arthurmaciel/ipe-lang/issues/207)) ([957da73](https://github.com/arthurmaciel/ipe-lang/commit/957da73a67fab3f583143636862903a34f5b77fd))
+* **tooling:** regen-goldens tool + decouple emit template from golden fixture ([#206](https://github.com/arthurmaciel/ipe-lang/issues/206)) ([7a50d87](https://github.com/arthurmaciel/ipe-lang/commit/7a50d87e19751d56062294d4cb13072c054f6ec1))
+
+
+### Bug Fixes
+
+* **audit:** honest surface — Tier-2 certifies linux-x64 AND macos-arm64 ([#149](https://github.com/arthurmaciel/ipe-lang/issues/149)) ([#229](https://github.com/arthurmaciel/ipe-lang/issues/229)) ([064add5](https://github.com/arthurmaciel/ipe-lang/commit/064add5e27cb065a2c0095557e8ff85f5b72d0db))
+* **ci:** ASCII-only PowerShell in the Windows admission-sandbox skip step ([#189](https://github.com/arthurmaciel/ipe-lang/issues/189)) ([b7dadc7](https://github.com/arthurmaciel/ipe-lang/commit/b7dadc7558fcaf7634404a989dfed9f50f013630))
+* **ci:** repoint static.yml + fuzz to relocated example homes (post-[#188](https://github.com/arthurmaciel/ipe-lang/issues/188)) ([#194](https://github.com/arthurmaciel/ipe-lang/issues/194)) ([768f1c4](https://github.com/arthurmaciel/ipe-lang/commit/768f1c409842a38930ca8800364636ef69c6cb64))
+* **cli:** inject the compiled-source stdlib closure in capability inference ([#169](https://github.com/arthurmaciel/ipe-lang/issues/169)) ([#176](https://github.com/arthurmaciel/ipe-lang/issues/176)) ([7cb173b](https://github.com/arthurmaciel/ipe-lang/commit/7cb173b5ed5a8f7dd68446feef0cc5d971893c70))
+* **examples:** wasm-* build — Ipe.Live→Ipe.Web + wasm-safe async, add to sweep ([#209](https://github.com/arthurmaciel/ipe-lang/issues/209)) ([#227](https://github.com/arthurmaciel/ipe-lang/issues/227)) ([e840919](https://github.com/arthurmaciel/ipe-lang/commit/e8409198ded0b673e63425d3f2acf9497875e3b1))
+* **resolve:** exclude hidden dirs from the package content hash ([#201](https://github.com/arthurmaciel/ipe-lang/issues/201)) ([25734c1](https://github.com/arthurmaciel/ipe-lang/commit/25734c147a7dab22ec39be9c22d58e32f53c902a))
+* **sweep:** honest cli exit-code gate + self-explanatory HS256 error ([#182](https://github.com/arthurmaciel/ipe-lang/issues/182)) ([b49098a](https://github.com/arthurmaciel/ipe-lang/commit/b49098a387db3b46b79774ee6b55f589f6fe010d))
+
 ## [0.1.20](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.19...ipe-v0.1.20) (2026-07-26)
 
 
