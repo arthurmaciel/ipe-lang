@@ -19,7 +19,7 @@
 //! This fixture is tuned so the failing `Dep.ipe` access sits at a byte offset
 //! that the old heuristic mis-attributes to `Main.ipe` (its `main` body span
 //! numerically contains the offset with a smaller `lo_dist` than `Dep`'s `bad`
-//! body). This must render `--> Dep.ipe:15`, not the `--> Main.ipe:9` the old
+//! body). This must render `--> Dep.ipe:14`, not the `--> Main.ipe:9` the old
 //! heuristic produces.
 //!
 //! Run:
@@ -65,8 +65,8 @@ fn t0012_field_error_attributes_to_owning_module() {
     };
     assert!(err.contains("IPE-T0012"), "expected IPE-T0012, got:\n{err}");
     assert!(
-        err.contains("Dep.ipe:15"),
-        "field error must attribute to the owning module Dep.ipe:15, got:\n{err}"
+        err.contains("Dep.ipe:14"),
+        "field error must attribute to the owning module Dep.ipe:14, got:\n{err}"
     );
     assert!(
         !err.contains("Main.ipe"),
