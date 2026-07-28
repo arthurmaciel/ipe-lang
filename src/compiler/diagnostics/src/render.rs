@@ -536,6 +536,16 @@ fn type_label(msg: &TypeError) -> Option<String> {
         TypeError::RefutablePatternParameter => {
             Some("this parameter pattern can fail to match".to_string())
         }
+        TypeError::OrPatternBindingMismatch { names } => {
+            let listed = names
+                .iter()
+                .map(|n| format!("`{n}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Some(format!(
+                "the alternatives of this or-pattern bind different variables ({listed})"
+            ))
+        }
         TypeError::TaskArity { carrier, found } => Some(if *carrier == "Task" {
             format!(
                 "`Task` takes an error type and a success type (`Task Error a`), \
