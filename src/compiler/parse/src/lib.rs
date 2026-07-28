@@ -1102,6 +1102,78 @@ mod tests {
     }
 
     #[test]
+    fn or_pattern_parses_as_por_of_alternatives() {
+        // `Up | Down -> …` parses as a two-alternative `POr` at the arm head.
+        let mut i = Interner::new();
+        let src =
+            format!("{HDR}v : Int\nv =\n    case n of\n        Up | Down -> 1\n        _ -> 0\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "or-pattern must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let Some(Expr_::Case(_, arms)) = find_value(&m, &i, "v").map(|v| &v.body.value) else {
+            assert!(black_box_false(), "v body is a Case");
+            return;
+        };
+        assert!(
+            arms.first().is_some_and(|(p, _)| matches!(
+                &p.value,
+                Pattern_::POr(alts) if alts.len() == 2
+            )),
+            "first arm head is a 2-alternative POr, got {:?}",
+            arms.first().map(|(p, _)| &p.value)
+        );
+    }
+
+    #[test]
+    fn or_pattern_binds_looser_than_cons() {
+        // `x :: xs | [] -> …` parses as `(x :: xs) | ([])`, i.e. a POr whose
+        // first alternative is a PCons — `|` is looser than `::`.
+        let mut i = Interner::new();
+        let src = format!(
+            "{HDR}v : Int\nv =\n    case n of\n        x :: xs | [] -> 1\n        _ -> 0\n"
+        );
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "cons-or pattern must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let Some(Expr_::Case(_, arms)) = find_value(&m, &i, "v").map(|v| &v.body.value) else {
+            assert!(black_box_false(), "v body is a Case");
+            return;
+        };
+        assert!(
+            arms.first().is_some_and(|(p, _)| matches!(
+                &p.value,
+                Pattern_::POr(alts)
+                    if alts.len() == 2
+                        && matches!(alts.first().map(|a| &a.value), Some(Pattern_::PCons(_, _)))
+            )),
+            "first arm head is `(x :: xs) | []`, got {:?}",
+            arms.first().map(|(p, _)| &p.value)
+        );
+    }
+
+    #[test]
+    fn leading_or_bar_is_a_parse_error() {
+        // A stray leading `|` (`| A -> …`) is a parse error, not an empty POr.
+        assert_ne!(
+            err_code(&format!(
+                "{HDR}v =\n    case n of\n        | Up -> 1\n        _ -> 0\n"
+            )),
+            "OK"
+        );
+    }
+
+    #[test]
+    fn trailing_or_bar_is_a_parse_error() {
+        // A stray trailing `|` (`A | -> …`) is a parse error.
+        assert_ne!(
+            err_code(&format!(
+                "{HDR}v =\n    case n of\n        Up | -> 1\n        _ -> 0\n"
+            )),
+            "OK"
+        );
+    }
+
+    #[test]
     fn unterminated_string_is_p0014() {
         assert_eq!(err_code(&format!("{HDR}s =\n    \"oops\n")), "IPE-P0014");
     }
