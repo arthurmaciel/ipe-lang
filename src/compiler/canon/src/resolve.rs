@@ -948,8 +948,11 @@ fn check_program_tea_import_gate(
     };
     let (ipe_sym, tea_sym) = tea_ipe;
     let tea_import = m.imports.iter().find(|imp| {
-        let p = &imp.name.value;
-        p.len() >= 3 && p[0] == ipe_sym && p[1] == tea_sym
+        // `Ipe.Tea.<Shape>`: at least three segments whose first two are Ipe, Tea.
+        matches!(
+            imp.name.value.as_slice(),
+            [first, second, _, ..] if *first == ipe_sym && *second == tea_sym
+        )
     });
     let Some(tea_import) = tea_import else {
         return Ok(());
@@ -977,17 +980,20 @@ fn check_program_tea_import_gate(
     Err(Diagnostic::Name {
         span: tea_import.name.span,
         msg: NameError::ProgramImportsTeaShape {
-            module: path_to_dot_string(interner, &tea_import.name.value).into(),
+            module: path_to_dot_string(interner, &tea_import.name.value),
         },
     })
 }
 
 /// Does this `main` body head-call a TEA shape entry ([`TEA_APP_ENTRIES`])?
 ///
-/// Peels the two forms a TEA `main` takes — an application `entry { … }` and a
-/// point-free `main = \… -> entry …` lambda — down to the head expression, then
-/// checks whether it is a shape-entry `VarKernel`. Only the head matters: a
-/// Program's `main` never reduces to a shape-entry kernel at its head.
+/// Peels the forms a TEA `main` takes — an application `entry { … }`, a
+/// point-free `main = \… -> entry …` lambda, and a `let cfg = { … } in entry
+/// cfg` — down to the head expression, then checks whether it is a shape-entry
+/// `VarKernel`. Only the head matters: a Program's `main` never reduces to a
+/// shape-entry kernel at its head. Peeling `let` keeps a let-bound-config app
+/// classified as a TEA app so its malformed config reaches the precise
+/// `IPE-L0119` lowering diagnostic instead of the coarser IPE-N0033 gate.
 fn main_head_is_tea_entry(body: &canon::Expr, interner: &Interner) -> bool {
     let mut node = body;
     loop {
@@ -996,9 +1002,14 @@ fn main_head_is_tea_entry(body: &canon::Expr, interner: &Interner) -> bool {
             canon::Expr_::Call(callee, _) => node = callee,
             // `main = \req -> entry { cfg }` — the lambda body is the head.
             canon::Expr_::Lambda(_, inner) => node = inner,
+            // `main = let cfg = { … } in entry cfg` — the `in` body is the head.
+            // A let-bound config is still a TEA-app entry (the head-called shape
+            // kernel is under the `in`), so a malformed one reaches its precise
+            // `IPE-L0119` lowering diagnostic rather than being misread as a
+            // Program under IPE-N0033.
+            canon::Expr_::Let(_, body) => node = body,
             canon::Expr_::VarKernel { module, name, .. } => {
-                let (Some(m), Some(n)) =
-                    (interner.resolve(*module), interner.resolve(*name))
+                let (Some(m), Some(n)) = (interner.resolve(*module), interner.resolve(*name))
                 else {
                     return false;
                 };
