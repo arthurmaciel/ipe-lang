@@ -2247,6 +2247,7 @@ dependencies = [
  "ipe_diagnostics",
  "ipe_kernels",
  "serde",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

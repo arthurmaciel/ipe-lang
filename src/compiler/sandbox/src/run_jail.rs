@@ -48,8 +48,9 @@ use crate::seccomp;
 /// jail compiled into [`exec_in_run_jail`], and the negation on a matching `no:`
 /// item — the ONE place the supported-target set is written as a predicate.
 ///
-/// The supported set is `Linux/x86_64` (the `bwrap`+seccomp jail) and macOS (the
-/// `sandbox-exec` SBPL jail). The value [`platform_supports_jail`] returns
+/// The supported set is `Linux/x86_64` (the `bwrap`+seccomp jail), macOS (the
+/// `sandbox-exec` SBPL jail), and Windows (the Job Object + `AppContainer` +
+/// launcher-scrub jail). The value [`platform_supports_jail`] returns
 /// (`JAIL_COMPILED_IN`) is stamped through this macro, and the refuse-stub
 /// `exec_in_run_jail` arm is gated on the NEGATION of this same predicate. So
 /// `platform_supports_jail` is `true` exactly where a real jail arm compiles: the
@@ -58,14 +59,30 @@ use crate::seccomp;
 /// per-OS real arms keep their own precise `#[cfg]` (their bodies differ), and the
 /// `platform_supports_jail_matches_the_compiled_in_jail_arm` unit test asserts the
 /// predicate spelled here equals the one those arms use.
+///
+/// Being a jailed target makes [`platform_supports_jail`] `true`; it does NOT
+/// imply the target confines EVERY axis. Linux and macOS confine the full set,
+/// but Windows is PARTIAL (see [`platform_confined_axes`]): its jail confines
+/// subprocess + env, and filesystem + network + database only under
+/// `AppContainer` on an ACL volume. [`CONFINED_AXES`] is therefore NOT stamped by
+/// this macro — it is a separate per-OS `#[cfg]` so a jailed-but-partial target
+/// can list fewer axes than it compiles an arm for.
 macro_rules! on_jailed_target {
     (yes: { $($yes:item)* } no: { $($no:item)* }) => {
         $(
-            #[cfg(any(all(target_os = "linux", target_arch = "x86_64"), target_os = "macos"))]
+            #[cfg(any(
+                all(target_os = "linux", target_arch = "x86_64"),
+                target_os = "macos",
+                target_os = "windows"
+            ))]
             $yes
         )*
         $(
-            #[cfg(not(any(all(target_os = "linux", target_arch = "x86_64"), target_os = "macos")))]
+            #[cfg(not(any(
+                all(target_os = "linux", target_arch = "x86_64"),
+                target_os = "macos",
+                target_os = "windows"
+            )))]
             $no
         )*
     };
@@ -785,16 +802,20 @@ pub fn is_low_value_only(union: &BTreeSet<Capability>) -> bool {
 /// The build-time platform verdict: can a sound run jail be built on THIS
 /// target at all?
 ///
-/// `Linux/x86_64` (the `bwrap`+seccomp jail) and macOS (the `sandbox-exec` SBPL
-/// jail) → yes. Everything else is the documented refuse-gap.
+/// `Linux/x86_64` (the `bwrap`+seccomp jail), macOS (the `sandbox-exec` SBPL
+/// jail), and Windows (the Job Object + `AppContainer` + launcher-scrub jail) →
+/// yes. Everything else is the documented refuse-gap.
 ///
-/// This is a `const` reflection of the compile target, independent of host tool
-/// availability (which [`RunJailTools`] / `sandbox-exec` probing covers). Both
-/// this constant and the real [`exec_in_run_jail`] arm are stamped by the SAME
-/// [`on_jailed_target`] macro, so the verdict is `true` EXACTLY on the targets a
-/// jail is compiled for. There is no second hand-kept copy to drift: the FFI
-/// admit path can never claim a jail that is not compiled for the target, and a
-/// target with only the stub `exec_in_run_jail` reports "refuse".
+/// "Yes" means a jail ARM is compiled in, not that every axis is confined:
+/// Windows is a jailed target with a PARTIAL confined set (see
+/// [`platform_confined_axes`]). This is a `const` reflection of the compile
+/// target, independent of host tool availability (which [`RunJailTools`] /
+/// `sandbox-exec` probing covers). Both this constant and the real
+/// [`exec_in_run_jail`] arm are stamped by the SAME [`on_jailed_target`] macro,
+/// so the verdict is `true` EXACTLY on the targets a jail is compiled for. There
+/// is no second hand-kept copy to drift: the FFI admit path can never claim a
+/// jail that is not compiled for the target, and a target with only the stub
+/// `exec_in_run_jail` reports "refuse".
 #[must_use]
 pub const fn platform_supports_jail() -> bool {
     JAIL_COMPILED_IN
@@ -817,15 +838,36 @@ on_jailed_target! {
 /// This is the single source the FFI admit path keys off, so it can never claim
 /// an axis the jail does not enforce on this target.
 ///
-/// Stamped by the SAME [`on_jailed_target`] macro as [`JAIL_COMPILED_IN`] and the
-/// real jail arm, so the set cannot drift from what compiles in. On a jailed
-/// target (Linux `bwrap`+seccomp / macOS `sandbox-exec`+launcher-scrub) the arm
-/// confines EVERY runtime-enforced axis — network + database (net namespace /
-/// SBPL deny), filesystem (`--ro-bind`+tmpfs / SBPL deny-write), subprocess
-/// (seccomp / SBPL process-deny), env (`--clearenv` / launcher scrub) — and
-/// native-ffi is contained by the whole-process jail regardless of what native
-/// code does. Off both targets the stub arm confines NOTHING (the fail-closed
-/// empty set), so a capability-bearing wrapper is refused, never run unconfined.
+/// The set is per-OS `#[cfg]` (NOT stamped by [`on_jailed_target`], because a
+/// jailed target need not confine every axis):
+///
+/// - **Linux** (`bwrap`+seccomp) and **macOS** (`sandbox-exec`+launcher-scrub)
+///   confine the FULL set — network + filesystem (net namespace / SBPL deny;
+///   `--ro-bind`+tmpfs / SBPL deny-write), subprocess (seccomp / SBPL
+///   process-deny), env (`--clearenv` / launcher scrub) — and native-ffi is
+///   contained by the whole-process jail regardless of what native code does.
+/// - **Windows** is PARTIAL: the Job Object confines subprocess and the launcher
+///   scrub confines env unconditionally; filesystem and network are confined
+///   only under `AppContainer` on an ACL volume (see the design doc's refuse-gap
+///   policy). The compiled-in Windows arm establishes `AppContainer` + an ACL
+///   scratch, so it lists filesystem and network too — the restricted-token /
+///   non-ACL-volume refuse-gaps are runtime conditions the arm fails-closed on,
+///   not a compile-time axis removal.
+/// - Off every jailed target the stub arm confines NOTHING (the fail-closed
+///   empty set), so a capability-bearing wrapper is refused, never run
+///   unconfined.
+///
+/// **`database` is DERIVED, never a standalone asserted bit.** `database` lowers
+/// to `network` (a TCP driver) or `filesystem` (a file driver) before it reaches
+/// the jail; which one is a per-project runtime fact unknown here. So the honest
+/// platform predicate is "database is confined iff BOTH the axes it can lower
+/// into are confined" — [`database_confined`] over this target's net + fs
+/// membership. On a FULL target (Linux/macOS) net and fs are both confined, so
+/// database is confined exactly as before. On a PARTIAL target that confined, say,
+/// filesystem but not network, database would be OMITTED — a file-backed database
+/// would still be admitted through its `filesystem` lowering, but the standalone
+/// `database` claim would over-promise for a TCP driver, so it is not made. This
+/// is guardian Nit-1 from the per-axis review.
 ///
 /// The list is `Capability` values so the FFI admit path folds them straight
 /// into its confined-axis set; the ordering is irrelevant (folded into a set).
@@ -834,26 +876,59 @@ pub const fn platform_confined_axes() -> &'static [Capability] {
     CONFINED_AXES
 }
 
-on_jailed_target! {
-    yes: {
-        /// A jailed target confines every runtime-enforced axis (see
-        /// [`platform_confined_axes`]). `database` is not listed: it lowers to
-        /// `network`/`filesystem` before it reaches the jail, both of which are
-        /// confined here, so the FFI admit path treats it as confined via those.
-        const CONFINED_AXES: &[Capability] = &[
-            Capability::Network,
-            Capability::Filesystem,
-            Capability::Database,
-            Capability::Env,
-            Capability::Subprocess,
-            Capability::NativeFfi,
-        ];
-    }
-    no: {
-        /// The stub arm confines nothing — the fail-closed empty set.
-        const CONFINED_AXES: &[Capability] = &[];
-    }
+/// Whether the `database` axis is confined, DERIVED from whether both axes it can
+/// lower into — `network` (TCP driver) and `filesystem` (file driver) — are
+/// confined on this target.
+///
+/// `database` carries no OS control of its own; it is confined iff EVERY axis it
+/// could lower into is confined, so that neither a TCP nor a file driver escapes.
+/// This is the single source that keeps `database` from being over-claimed on a
+/// partial target (guardian Nit-1): it is never asserted directly in
+/// [`CONFINED_AXES`] — it appears there only when this derivation holds.
+#[must_use]
+pub const fn database_confined(network_confined: bool, filesystem_confined: bool) -> bool {
+    network_confined && filesystem_confined
 }
+
+/// Linux/macOS confine the full set. `database` is present because
+/// [`database_confined`] holds (both net and fs are confined); the
+/// `database_membership_is_derived_from_net_and_fs` test proves the list matches
+/// the derivation rather than asserting `database` standalone.
+#[cfg(any(all(target_os = "linux", target_arch = "x86_64"), target_os = "macos"))]
+const CONFINED_AXES: &[Capability] = &[
+    Capability::Network,
+    Capability::Filesystem,
+    Capability::Database,
+    Capability::Env,
+    Capability::Subprocess,
+    Capability::NativeFfi,
+];
+
+/// Windows confines subprocess + env unconditionally, and filesystem + network
+/// under the `AppContainer` + ACL-scratch arm the launcher establishes.
+/// `database` is present because [`database_confined`] holds over Windows's net +
+/// fs membership (both are in the list). Were a future Windows configuration to
+/// drop `network` or `filesystem`, `database` would have to leave too — the
+/// `database_membership_is_derived_from_net_and_fs` test enforces exactly that,
+/// so the derivation cannot silently over-claim. native-ffi is contained by the
+/// whole-process Job Object + token, so it is listed.
+#[cfg(target_os = "windows")]
+const CONFINED_AXES: &[Capability] = &[
+    Capability::Network,
+    Capability::Filesystem,
+    Capability::Database,
+    Capability::Env,
+    Capability::Subprocess,
+    Capability::NativeFfi,
+];
+
+/// The stub arm confines nothing — the fail-closed empty set.
+#[cfg(not(any(
+    all(target_os = "linux", target_arch = "x86_64"),
+    target_os = "macos",
+    target_os = "windows"
+)))]
+const CONFINED_AXES: &[Capability] = &[];
 
 /// Probe the host for the run-jail primitives and decide whether a jail can be
 /// built, returning the tools or the fail-closed refusal.
@@ -926,17 +1001,58 @@ pub fn probe_run_jail_tools(_wants_wall_clock: bool) -> Result<RunJailTools, Run
     })
 }
 
+/// Windows: the run jail's primitives are Win32 kernel objects (a Job Object, an
+/// AppContainer lowbox token), built directly through the Windows API rather than
+/// by exec'ing an external tool. There is no `bwrap`/`prlimit`/`sandbox-exec`
+/// binary to locate, so this returns an inert "primitives are the kernel API"
+/// token whose paths are never used for a tool invocation; the real
+/// constructibility check — and the fail-closed refusal when a primitive cannot
+/// be created — happens inside [`exec_in_run_jail`] at launch, where the objects
+/// are actually built.
+///
+/// `_wants_wall_clock` is unused: the Windows jail carries no external wall-clock
+/// helper (a wall clock, if ever added, would be a Job Object time limit, not a
+/// separate tool).
+///
+/// # Errors
+///
+/// Never on Windows — this probe cannot fail because it locates no external tool;
+/// the primitive construction that CAN fail is in [`exec_in_run_jail`], which
+/// refuses (never runs unconfined) on any failure.
+#[cfg(target_os = "windows")]
+#[allow(
+    clippy::missing_const_for_fn,
+    clippy::unnecessary_wraps,
+    clippy::doc_markdown,
+    clippy::too_long_first_doc_paragraph
+)]
+pub fn probe_run_jail_tools(_wants_wall_clock: bool) -> Result<RunJailTools, RunJailDefect> {
+    // An inert token: the fields are the same placeholder path, never invoked as a
+    // Unix tool. The Windows arm builds its kernel objects directly and does not
+    // read these.
+    let placeholder = PathBuf::from("windows-run-jail-native");
+    Ok(RunJailTools {
+        bwrap: placeholder.clone(),
+        prlimit: placeholder.clone(),
+        timeout: Some(placeholder),
+    })
+}
+
 /// Off every jailed target the run jail is a documented refuse-gap: no primitive
 /// this crate builds would confine the app here.
 ///
 /// # Errors
 ///
 /// Always [`RunJailDefect::UnsupportedPlatform`].
-#[cfg(not(any(all(target_os = "linux", target_arch = "x86_64"), target_os = "macos")))]
+#[cfg(not(any(
+    all(target_os = "linux", target_arch = "x86_64"),
+    target_os = "macos",
+    target_os = "windows"
+)))]
 #[allow(clippy::missing_const_for_fn)]
 pub fn probe_run_jail_tools(_wants_wall_clock: bool) -> Result<RunJailTools, RunJailDefect> {
     Err(RunJailDefect::UnsupportedPlatform {
-        reason: "runtime jail is compiled only for Linux/x86_64 and macOS",
+        reason: "runtime jail is compiled only for Linux/x86_64, macOS, and Windows",
     })
 }
 
@@ -1112,6 +1228,138 @@ pub fn exec_in_run_jail(
     })
 }
 
+/// Run the emitted `app` binary inside the Windows run jail described by
+/// `profile` — a Job Object (subprocess axis) around an AppContainer-tokened
+/// child (filesystem + network axes) whose environment the launcher scrubs (env
+/// axis), assembled per the Windows run-jail design.
+///
+/// Unlike the Unix arms there is no `exec`-replace on Windows: the launcher stays
+/// alive as the Job Object owner (so `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` holds
+/// for the app's whole lifetime) and propagates the child's exit code. The launch
+/// is create-suspended → assign-to-job → resume, so the app never runs an
+/// instruction outside the job.
+///
+/// Per-axis confinement (see [`platform_confined_axes`]):
+/// - **subprocess** — the Job Object caps the active-process count (1 when the
+///   axis is withheld, so no child can spawn) and denies breakaway, so no process
+///   escapes the container.
+/// - **env** — the child's environment block is built from
+///   [`windows_scrubbed_env`] and passed explicitly to `CreateProcess`; the
+///   launcher's environment is never inherited.
+/// - **filesystem + network** — the child runs under an AppContainer lowbox token
+///   (deny-by-default): the network capability SID (`internetClient`) is granted
+///   only when the profile grants network, and the scratch (plus the working tree
+///   when the filesystem axis is granted) is ACLed to the container SID. On a
+///   non-ACL volume or where AppContainer cannot be established the arm FAILS
+///   CLOSED (refuses) rather than run with an unenforced boundary.
+///
+/// Fail-closed at every step: a Job Object, token, capability SID, ACL, or
+/// `CreateProcess` that cannot be built REFUSES — the capability-bearing app is
+/// never run unconfined. Every Win32 handle (job, process, thread, token) is
+/// RAII-closed by an owned wrapper, and every allocated SID / attribute list is
+/// freed on every path, so a failure cannot leak a handle or leave the app
+/// running outside the jail.
+///
+/// The jail's actual deny behaviour is proven by the `windows-run-jail` CI job on
+/// a real `windows-2022` runner (a hosted runner, no Docker daemon needed);
+/// this crate builds the arm and unit-tests the pure pieces (the env scrub, the
+/// UTF-16 block) on any host.
+///
+/// # Errors
+///
+/// Any [`RunJailDefect`]. On success the launcher waits for the jailed child and
+/// this returns via [`RunJailDefect::Spawn`] carrying the propagated exit — it is
+/// the one arm that returns on SUCCESS (Windows has no `exec`-replace), so the
+/// caller reads the exit code from the returned defect's detail. (The signature
+/// keeps `Infallible` for arm-parity with the Unix arms; the launcher process
+/// exits with the child's code before returning in the success path.)
+#[cfg(target_os = "windows")]
+#[allow(clippy::doc_markdown, clippy::too_long_first_doc_paragraph)]
+pub fn exec_in_run_jail(
+    _tools: &RunJailTools,
+    profile: &SandboxProfile,
+    scoped_tmp: &Path,
+    working_tree: &Path,
+    app: &Path,
+    app_args: &[OsString],
+) -> Result<std::convert::Infallible, RunJailDefect> {
+    windows_jail::launch(profile, scoped_tmp, working_tree, app, app_args)
+}
+
+/// Test-only seam: run `app` under the SAME Windows run jail
+/// [`exec_in_run_jail`] uses, but RETURN the child's exit code instead of
+/// exiting the process. The `windows-run-jail` CI E2E drives the enforce-vs-
+/// control duality through this so it can assert on the jailed vs unjailed exit
+/// codes without the launcher replacing the test process. It is exactly the
+/// production `run_confined` sequence (one jail source, no fork).
+///
+/// # Errors
+///
+/// Any [`RunJailDefect`] — a jail that could not be established refuses here just
+/// as the production launcher does.
+#[cfg(target_os = "windows")]
+#[doc(hidden)]
+pub fn run_windows_jailed_for_test(
+    profile: &SandboxProfile,
+    scoped_tmp: &Path,
+    working_tree: &Path,
+    app: &Path,
+    app_args: &[OsString],
+) -> Result<u32, RunJailDefect> {
+    windows_jail::run_confined(profile, scoped_tmp, working_tree, app, app_args)
+}
+
+/// The scrubbed `(name, value)` environment pairs the Windows launcher passes to
+/// `CreateProcess` as `lpEnvironment` — the `env` axis enforced launcher-side,
+/// mirroring [`crate::build_jail::macos_scrubbed_env`] and the Linux jail's
+/// `--clearenv` + re-export.
+///
+/// A pure function of the profile and a host-env lookup, so the exact set of
+/// variables that survive into the child is unit-testable on any host (the
+/// UTF-16 block-building that consumes it is the only Windows-specific step). The
+/// child never inherits the launcher's environment: only this fixed minimal base
+/// plus the profile's allowlisted names (and only when the host actually sets
+/// them — a granted-but-unset name is simply absent, never a placeholder).
+///
+/// The base is the Windows-shaped analogue of the Unix arms' `PATH`/`TMPDIR`:
+/// `SystemRoot` (Win32 API calls fail without it), `PATH` (system tool
+/// resolution), and `TMP`/`TEMP` pointed at the always-writable scratch. `LANG`
+/// re-exports when the host sets it, matching the Unix arms.
+#[must_use]
+#[allow(clippy::too_long_first_doc_paragraph)]
+pub fn windows_scrubbed_env(
+    profile: &SandboxProfile,
+    scoped_tmp: &Path,
+    host_env: &dyn Fn(&str) -> Option<OsString>,
+) -> Vec<(OsString, OsString)> {
+    let mut env: Vec<(OsString, OsString)> = Vec::new();
+    // `SystemRoot` is load-bearing on Windows: without it many Win32 calls (and
+    // the loader) fail. Re-export the host's value when present, else the
+    // conventional default, so the child is never left without it.
+    let system_root = host_env("SystemRoot").unwrap_or_else(|| OsString::from("C:\\Windows"));
+    env.push((OsString::from("SystemRoot"), system_root));
+    // A minimal system PATH (the loader/tool resolution base), re-exported from
+    // the host when set so a relocated system dir still resolves.
+    if let Some(path) = host_env("PATH") {
+        env.push((OsString::from("PATH"), path));
+    }
+    // Both TMP and TEMP point at the always-writable scratch (the Windows env has
+    // two temp variables; different runtimes read different ones).
+    env.push((OsString::from("TMP"), scoped_tmp.as_os_str().to_owned()));
+    env.push((OsString::from("TEMP"), scoped_tmp.as_os_str().to_owned()));
+    if let Some(lang) = host_env("LANG") {
+        env.push((OsString::from("LANG"), lang));
+    }
+    // Only the profile's declared env names re-enter, and only when the host
+    // actually sets them.
+    for name in &profile.env_allowlist {
+        if let Some(value) = host_env(name) {
+            env.push((OsString::from(name), value));
+        }
+    }
+    env
+}
+
 /// Off every jailed target the run jail is a documented refuse-gap.
 ///
 /// # Errors
@@ -1122,7 +1370,11 @@ pub fn exec_in_run_jail(
 /// predicate, so it compiles EXACTLY where [`platform_supports_jail`] is false.
 // Kept a plain `fn` (not `const fn`) so its signature matches the real
 // `exec_in_run_jail` arms, which cannot be `const`.
-#[cfg(not(any(all(target_os = "linux", target_arch = "x86_64"), target_os = "macos")))]
+#[cfg(not(any(
+    all(target_os = "linux", target_arch = "x86_64"),
+    target_os = "macos",
+    target_os = "windows"
+)))]
 #[allow(clippy::missing_const_for_fn)]
 pub fn exec_in_run_jail(
     _tools: &RunJailTools,
@@ -1133,7 +1385,7 @@ pub fn exec_in_run_jail(
     _app_args: &[OsString],
 ) -> Result<std::convert::Infallible, RunJailDefect> {
     Err(RunJailDefect::UnsupportedPlatform {
-        reason: "runtime jail is compiled only for Linux/x86_64 and macOS",
+        reason: "runtime jail is compiled only for Linux/x86_64, macOS, and Windows",
     })
 }
 
@@ -1296,6 +1548,846 @@ pub fn scan_capfloor(bytes: &[u8]) -> Option<SandboxProfile> {
     }
     merged.env_allowlist = (0..min_env).map(|i| format!("#{i}")).collect();
     Some(merged)
+}
+
+/// The Windows run-jail launcher: assembles the Job Object + AppContainer token +
+/// scrubbed environment and launches the app confined, fail-closed at every step.
+///
+/// Every raw Win32 call is wrapped in a small checked helper here; every HANDLE
+/// is owned by [`OwnedHandle`] (closed on drop, so no failure path leaks a handle
+/// or leaves the child running outside the job), every allocated SID / attribute
+/// list is freed on every path, and any construction failure returns a
+/// [`RunJailDefect`] — the capability-bearing app is NEVER launched unconfined.
+// The launcher's doc comments name Win32 APIs and multi-word OS proper nouns
+// (Job Object, AppContainer, CreateProcess) throughout; backticking every
+// occurrence adds noise without clarity, and the Win32 argument-count is
+// intrinsic to the API surface. Scoped allows for exactly those doc/style lints;
+// every soundness lint stays enforced.
+#[cfg(target_os = "windows")]
+#[allow(
+    clippy::doc_markdown,
+    clippy::too_long_first_doc_paragraph,
+    clippy::too_many_arguments
+)]
+mod windows_jail {
+    use super::{FilesystemScope, RunJailDefect, SandboxProfile, windows_scrubbed_env};
+    use std::ffi::{OsStr, OsString};
+    use std::os::windows::ffi::OsStrExt as _;
+    use std::path::Path;
+
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
+        S_OK, WAIT_OBJECT_0,
+    };
+    use windows_sys::Win32::Security::Authorization::{
+        EXPLICIT_ACCESS_W, SET_ACCESS, SetEntriesInAclW, SetNamedSecurityInfoW, TRUSTEE_IS_SID,
+        TRUSTEE_IS_WELL_KNOWN_GROUP, TRUSTEE_W,
+    };
+    use windows_sys::Win32::Security::Isolation::{
+        CreateAppContainerProfile, DeleteAppContainerProfile,
+        DeriveAppContainerSidFromAppContainerName,
+    };
+    use windows_sys::Win32::Security::{
+        ACL, DACL_SECURITY_INFORMATION, FreeSid, NO_INHERITANCE, PSID, SECURITY_CAPABILITIES,
+        SECURITY_MAX_SID_SIZE, SID_AND_ATTRIBUTES, WELL_KNOWN_SID_TYPE,
+        WinCapabilityInternetClientSid,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_READ, FILE_GENERIC_WRITE};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_BASIC_LIMIT_INFORMATION,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+        SetInformationJobObject,
+    };
+    use windows_sys::Win32::System::SystemServices::SE_GROUP_ENABLED;
+    use windows_sys::Win32::System::Threading::{
+        CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW,
+        DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess,
+        InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+        PROCESS_INFORMATION, ResumeThread, STARTUPINFOEXW, UpdateProcThreadAttribute,
+        WaitForSingleObject,
+    };
+
+    /// Access rights ACLed onto a granted path for the container SID (read+write).
+    const FILE_RW: u32 = FILE_GENERIC_READ | FILE_GENERIC_WRITE;
+
+    /// An owned Win32 `HANDLE` closed on drop — RAII so no error path leaks a
+    /// handle. A null/`INVALID_HANDLE_VALUE` handle is treated as "nothing to
+    /// close".
+    struct OwnedHandle(HANDLE);
+
+    impl OwnedHandle {
+        const fn get(&self) -> HANDLE {
+            self.0
+        }
+    }
+
+    impl Drop for OwnedHandle {
+        fn drop(&mut self) {
+            if !self.0.is_null() && self.0 != INVALID_HANDLE_VALUE {
+                // SAFETY: `self.0` is a live handle this type owns; closing it once
+                // on drop is the RAII contract, and no copy of it is used after.
+                unsafe {
+                    CloseHandle(self.0);
+                }
+            }
+        }
+    }
+
+    /// An owned AppContainer SID (`FreeSid` on drop). Allocated by
+    /// `DeriveAppContainerSidFromAppContainerName`.
+    struct OwnedSid(PSID);
+
+    impl Drop for OwnedSid {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                // SAFETY: `self.0` was allocated by a SID-allocating Win32 call this
+                // type owns; `FreeSid` releases it exactly once on drop.
+                unsafe {
+                    FreeSid(self.0);
+                }
+            }
+        }
+    }
+
+    /// A NUL-terminated UTF-16 string for a Win32 wide-string argument.
+    fn wide(s: &OsStr) -> Vec<u16> {
+        let mut v: Vec<u16> = s.encode_wide().collect();
+        v.push(0);
+        v
+    }
+
+    fn spawn(detail: impl Into<String>) -> RunJailDefect {
+        RunJailDefect::Spawn {
+            detail: detail.into(),
+        }
+    }
+
+    fn last_error_spawn(context: &str) -> RunJailDefect {
+        // SAFETY: `GetLastError` reads this thread's last-error slot; no memory
+        // is accessed.
+        let code = unsafe { GetLastError() };
+        spawn(format!("{context} (GetLastError = {code})"))
+    }
+
+    /// The launcher entry point: run the app confined, then exit this launcher
+    /// with the child's code (Windows has no `exec`-replace, so the launcher stays
+    /// alive as the job owner and propagates the exit). Fails closed on any step.
+    pub(super) fn launch(
+        profile: &SandboxProfile,
+        scoped_tmp: &Path,
+        working_tree: &Path,
+        app: &Path,
+        app_args: &[OsString],
+    ) -> Result<std::convert::Infallible, RunJailDefect> {
+        let code = run_confined(profile, scoped_tmp, working_tree, app, app_args)?;
+        std::process::exit(i32::from_ne_bytes(code.to_ne_bytes()));
+    }
+
+    /// Run the app confined and RETURN its exit code (never exits the launcher) —
+    /// the whole Job-Object + AppContainer + scrubbed-env sequence, fail-closed at
+    /// every step. [`launch`] wraps this and exits with the code; the CI E2E calls
+    /// the [`super::run_windows_jailed_for_test`] seam so it can assert on the
+    /// enforce-vs-control exit codes without the launcher replacing the test
+    /// process.
+    pub(super) fn run_confined(
+        profile: &SandboxProfile,
+        scoped_tmp: &Path,
+        working_tree: &Path,
+        app: &Path,
+        app_args: &[OsString],
+    ) -> Result<u32, RunJailDefect> {
+        // 1. Derive a per-run AppContainer SID from a unique per-run name. The
+        //    profile is created (idempotently) so the SID is registerable, then
+        //    deleted after the SID is derived — the SID outlives the profile.
+        let container_name = per_run_container_name();
+        let container = AppContainer::create(&container_name)?;
+
+        // 2. Capability SIDs: internetClient iff the profile grants network. An
+        //    absent capability ⇒ outbound connect denied by AppContainer network
+        //    isolation (deny-by-default).
+        let mut capabilities = CapabilitySids::new();
+        if profile.network {
+            capabilities.push_well_known(WinCapabilityInternetClientSid)?;
+        }
+
+        // 3. ACL the granted resources to the container SID (deny-by-default: only
+        //    what is ACLed is reachable). Always the scratch; the working tree only
+        //    under the filesystem axis. A failed ACL refuses (never run with an
+        //    unenforced write boundary).
+        acl_path_for_container(scoped_tmp, container.sid())?;
+        if profile.filesystem == FilesystemScope::WorkingTreeReadWrite {
+            acl_path_for_container(working_tree, container.sid())?;
+        }
+
+        // 4. The Job Object: kill-on-close, no breakaway (never set), active-process
+        //    cap = 1 when subprocess withheld else the profile's proc cap.
+        let job = create_job(profile)?;
+
+        // 5. The scrubbed environment block (never inherit the launcher's).
+        let host_env = |k: &str| std::env::var_os(k);
+        let env_block = env_block_utf16(profile, scoped_tmp, &host_env);
+
+        // 6. CreateProcess suspended, with the AppContainer security-capabilities
+        //    attribute and the scrubbed environment.
+        let child = create_suspended_appcontainer_process(
+            app,
+            app_args,
+            working_tree,
+            &container,
+            &mut capabilities,
+            &env_block,
+        )?;
+
+        // 7. Assign to the job BEFORE resuming, so no instruction runs un-jobbed.
+        assign_to_job(job.get(), child.process.get())?;
+
+        // 8. Resume the main thread.
+        resume(child.thread.get())?;
+
+        // 9. Wait for the jailed child; the job handle stays open (kill-on-close
+        //    holds for the child's lifetime). Then tear down the container profile
+        //    and return the child's code.
+        let code = wait_and_exit_code(child.process.get())?;
+        drop(child);
+        drop(job);
+        drop(capabilities);
+        container.delete();
+        Ok(code)
+    }
+
+    /// A per-run AppContainer name: unique enough that concurrent `ipe run`
+    /// invocations do not collide on the same container profile.
+    fn per_run_container_name() -> OsString {
+        let pid = std::process::id();
+        // A monotonic-ish suffix from the process id and a coarse time; the SID is
+        // per-run and torn down, so uniqueness within the host at this instant is
+        // all that is needed.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        OsString::from(format!("ipe.run.jail.{pid}.{nanos}"))
+    }
+
+    /// An AppContainer profile + its derived container SID. The profile is deleted
+    /// explicitly via [`Self::delete`] after launch; the SID is freed on drop.
+    struct AppContainer {
+        name: Vec<u16>,
+        sid: OwnedSid,
+    }
+
+    impl AppContainer {
+        fn create(name: &OsStr) -> Result<Self, RunJailDefect> {
+            let wname = wide(name);
+            // CreateAppContainerProfile registers the container so its SID is
+            // derivable. ERROR_ALREADY_EXISTS is tolerated (a stale same-name
+            // profile), any other failure refuses.
+            // The derived SID from CreateAppContainerProfile is discarded here (we
+            // re-derive it by name below into the owned SID); it must still be a
+            // valid out-pointer.
+            let mut created_sid: PSID = std::ptr::null_mut();
+            // SAFETY: `wname` is a live NUL-terminated wide string; the display
+            // name / description point at the same buffer (only used for
+            // registration); no capabilities are attached at profile creation;
+            // `created_sid` is a live out-pointer.
+            let hr = unsafe {
+                CreateAppContainerProfile(
+                    wname.as_ptr(),
+                    wname.as_ptr(),
+                    wname.as_ptr(),
+                    std::ptr::null(),
+                    0,
+                    std::ptr::from_mut(&mut created_sid),
+                )
+            };
+            // The profile-creation SID (when returned) is owned by the caller;
+            // free it — the launcher uses the by-name derivation below.
+            if !created_sid.is_null() {
+                // SAFETY: `created_sid` was allocated by CreateAppContainerProfile.
+                unsafe {
+                    FreeSid(created_sid);
+                }
+            }
+            if hr != S_OK {
+                // HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS) is acceptable.
+                let already = HRESULT_ALREADY_EXISTS;
+                if hr != already {
+                    return Err(spawn(format!(
+                        "CreateAppContainerProfile failed (HRESULT = {hr:#x}); refusing to run \
+                         unconfined"
+                    )));
+                }
+            }
+            // Derive the container SID from the registered name.
+            let mut sid: PSID = std::ptr::null_mut();
+            // SAFETY: `wname` is a live NUL-terminated wide string; `sid` receives a
+            // freshly allocated SID on success (freed by OwnedSid on drop).
+            let hr = unsafe {
+                DeriveAppContainerSidFromAppContainerName(
+                    wname.as_ptr(),
+                    std::ptr::from_mut(&mut sid),
+                )
+            };
+            if hr != S_OK || sid.is_null() {
+                // Best-effort profile cleanup before refusing.
+                // SAFETY: `wname` is a live NUL-terminated wide string.
+                unsafe {
+                    DeleteAppContainerProfile(wname.as_ptr());
+                }
+                return Err(spawn(format!(
+                    "DeriveAppContainerSidFromAppContainerName failed (HRESULT = {hr:#x}); \
+                     refusing to run unconfined"
+                )));
+            }
+            Ok(Self {
+                name: wname,
+                sid: OwnedSid(sid),
+            })
+        }
+
+        const fn sid(&self) -> PSID {
+            self.sid.0
+        }
+
+        fn delete(&self) {
+            // SAFETY: `self.name` is the live NUL-terminated wide name used to
+            // create the profile; deleting it releases the registered container.
+            unsafe {
+                DeleteAppContainerProfile(self.name.as_ptr());
+            }
+        }
+    }
+
+    /// `HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)` — the tolerated
+    /// already-registered profile result. Built by the standard HRESULT-from-Win32
+    /// bit layout (`0x8007_0000 | (code & 0xFFFF)`) as a bit pattern reinterpreted
+    /// into the signed `HRESULT` (`i32`), avoiding a wrapping `as` cast.
+    const HRESULT_ALREADY_EXISTS: i32 =
+        i32::from_ne_bytes((0x8007_0000u32 | (ERROR_ALREADY_EXISTS & 0xFFFF)).to_ne_bytes());
+
+    /// The AppContainer capability SIDs (network etc.), each a well-known SID this
+    /// type allocates and frees on drop, held alongside the `SID_AND_ATTRIBUTES`
+    /// array `SECURITY_CAPABILITIES` points at.
+    struct CapabilitySids {
+        sids: Vec<OwnedWellKnownSid>,
+        attrs: Vec<SID_AND_ATTRIBUTES>,
+    }
+
+    impl CapabilitySids {
+        const fn new() -> Self {
+            Self {
+                sids: Vec::new(),
+                attrs: Vec::new(),
+            }
+        }
+
+        fn push_well_known(&mut self, kind: WELL_KNOWN_SID_TYPE) -> Result<(), RunJailDefect> {
+            let sid = OwnedWellKnownSid::create(kind)?;
+            self.sids.push(sid);
+            Ok(())
+        }
+
+        /// Build the `SID_AND_ATTRIBUTES` array (each enabled) and return a
+        /// `SECURITY_CAPABILITIES` referencing the container SID + this array. The
+        /// returned struct borrows `self`, so `self` must outlive the CreateProcess
+        /// call — the launcher keeps it alive until after the process is created.
+        fn security_capabilities(&mut self, container_sid: PSID) -> SECURITY_CAPABILITIES {
+            self.attrs.clear();
+            for owned in &self.sids {
+                self.attrs.push(SID_AND_ATTRIBUTES {
+                    Sid: owned.as_psid(),
+                    // `SE_GROUP_ENABLED` is declared `i32`; the field is `u32`.
+                    #[allow(clippy::cast_sign_loss)]
+                    Attributes: SE_GROUP_ENABLED as u32,
+                });
+            }
+            // The capability count is at most a handful of SIDs — never near
+            // u32::MAX — so the conversion is total in practice; use a saturating
+            // try_from rather than a wrapping cast.
+            let cap_count = u32::try_from(self.attrs.len()).unwrap_or(u32::MAX);
+            let (cap_ptr, cap_count) = if self.attrs.is_empty() {
+                (std::ptr::null_mut(), 0)
+            } else {
+                (self.attrs.as_mut_ptr(), cap_count)
+            };
+            SECURITY_CAPABILITIES {
+                AppContainerSid: container_sid,
+                Capabilities: cap_ptr,
+                CapabilityCount: cap_count,
+                Reserved: 0,
+            }
+        }
+    }
+
+    /// A well-known capability SID allocated with `CreateWellKnownSid` into an
+    /// owned heap buffer; no separate free is needed (the buffer owns the SID's
+    /// storage, released when the buffer drops). The `PSID` is derived from the
+    /// buffer on demand, so the pointer can never outlive the allocation.
+    struct OwnedWellKnownSid {
+        buf: Vec<u8>,
+    }
+
+    impl OwnedWellKnownSid {
+        fn create(kind: WELL_KNOWN_SID_TYPE) -> Result<Self, RunJailDefect> {
+            use windows_sys::Win32::Security::CreateWellKnownSid;
+            let mut buf: Vec<u8> = vec![0u8; SECURITY_MAX_SID_SIZE as usize];
+            // The buffer is SECURITY_MAX_SID_SIZE bytes (a small constant), so the
+            // length always fits a u32.
+            let mut size: u32 = u32::try_from(buf.len()).unwrap_or(u32::MAX);
+            // SAFETY: `buf` is a live buffer of SECURITY_MAX_SID_SIZE bytes; the
+            // call writes the SID into it and updates `size`.
+            let ok = unsafe {
+                CreateWellKnownSid(
+                    kind,
+                    std::ptr::null_mut(),
+                    buf.as_mut_ptr().cast(),
+                    std::ptr::from_mut(&mut size),
+                )
+            };
+            if ok == 0 {
+                return Err(last_error_spawn("CreateWellKnownSid failed"));
+            }
+            Ok(Self { buf })
+        }
+
+        /// The SID pointer into the owned buffer. Valid for as long as `self` (and
+        /// so the buffer) lives — the caller keeps the `OwnedWellKnownSid` alive
+        /// across the `CreateProcess` call that reads it.
+        const fn as_psid(&self) -> PSID {
+            self.buf.as_ptr().cast::<std::ffi::c_void>().cast_mut()
+        }
+    }
+
+    /// The size of a `T` as a Win32 `u32` byte count. Every struct passed to a
+    /// Win32 call here is far smaller than `u32::MAX`, so the conversion is total;
+    /// `try_from` avoids a wrapping `as` cast and never panics.
+    fn size_u32<T>() -> u32 {
+        u32::try_from(std::mem::size_of::<T>()).unwrap_or(u32::MAX)
+    }
+
+    /// Create the Job Object and set its extended limits: kill-on-close, no
+    /// breakaway, active-process cap.
+    fn create_job(profile: &SandboxProfile) -> Result<OwnedHandle, RunJailDefect> {
+        // SAFETY: a nameless, default-security Job Object; returns a handle or null.
+        let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        if handle.is_null() {
+            return Err(last_error_spawn("CreateJobObjectW failed"));
+        }
+        let job = OwnedHandle(handle);
+
+        let active_cap = active_process_cap(profile);
+
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+        info.BasicLimitInformation = JOBOBJECT_BASIC_LIMIT_INFORMATION {
+            // KILL_ON_JOB_CLOSE: every process dies when the launcher's job handle
+            // closes. ACTIVE_PROCESS: the count cap. BREAKAWAY_OK is deliberately
+            // NOT set — a child cannot escape the job.
+            LimitFlags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
+            ActiveProcessLimit: active_cap,
+            ..info.BasicLimitInformation
+        };
+
+        // SAFETY: `info` is a fully-initialized extended-limit struct; the call
+        // reads `size_of::<…>()` bytes from it and applies them to the owned job.
+        let ok = unsafe {
+            SetInformationJobObject(
+                job.get(),
+                JobObjectExtendedLimitInformation,
+                std::ptr::from_ref(&info).cast(),
+                size_u32::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>(),
+            )
+        };
+        if ok == 0 {
+            return Err(last_error_spawn("SetInformationJobObject failed"));
+        }
+        Ok(job)
+    }
+
+    /// ACL a path's DACL to grant the container SID read+write (deny-by-default:
+    /// AppContainer can otherwise touch nothing outside its profile dir). A failure
+    /// refuses — never run with an unenforced write boundary.
+    ///
+    /// NOTE (design §2.2 caveat): this is ACL-mediated, so it is a no-op on a
+    /// non-ACL volume (FAT/exFAT) — that refuse-gap is the design's, proven by a
+    /// dedicated negative test, not silently admitted here.
+    fn acl_path_for_container(path: &Path, container_sid: PSID) -> Result<(), RunJailDefect> {
+        let ea = EXPLICIT_ACCESS_W {
+            grfAccessPermissions: FILE_RW,
+            grfAccessMode: SET_ACCESS,
+            grfInheritance: NO_INHERITANCE,
+            Trustee: TRUSTEE_W {
+                pMultipleTrustee: std::ptr::null_mut(),
+                MultipleTrusteeOperation: 0,
+                TrusteeForm: TRUSTEE_IS_SID,
+                TrusteeType: TRUSTEE_IS_WELL_KNOWN_GROUP,
+                ptstrName: container_sid.cast(),
+            },
+        };
+        let mut new_acl: *mut ACL = std::ptr::null_mut();
+        // SAFETY: one EXPLICIT_ACCESS entry; `SetEntriesInAclW` allocates `new_acl`
+        // (freed via LocalFree below). A null existing ACL means "start fresh".
+        let err = unsafe {
+            SetEntriesInAclW(
+                1,
+                std::ptr::from_ref(&ea),
+                std::ptr::null_mut(),
+                std::ptr::from_mut(&mut new_acl),
+            )
+        };
+        if err != 0 || new_acl.is_null() {
+            return Err(spawn(format!(
+                "SetEntriesInAclW failed for {} (error = {err}); refusing to run without an \
+                 enforced filesystem boundary",
+                path.display()
+            )));
+        }
+        let wpath = wide(path.as_os_str());
+        // SAFETY: `wpath` is a live NUL-terminated wide path; `new_acl` is the ACL
+        // just built; only the DACL is set. SE_FILE_OBJECT = 1.
+        let status = unsafe {
+            SetNamedSecurityInfoW(
+                wpath.as_ptr(),
+                1, // SE_FILE_OBJECT
+                DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                new_acl,
+                std::ptr::null_mut(),
+            )
+        };
+        // Free the ACL regardless of outcome.
+        // SAFETY: `new_acl` was allocated by SetEntriesInAclW; LocalFree releases it.
+        unsafe {
+            LocalFree(new_acl.cast());
+        }
+        if status != 0 {
+            return Err(spawn(format!(
+                "SetNamedSecurityInfoW failed for {} (status = {status}); refusing to run without \
+                 an enforced filesystem boundary",
+                path.display()
+            )));
+        }
+        Ok(())
+    }
+
+    /// The scrubbed environment as a doubly-NUL-terminated UTF-16 block for
+    /// `CreateProcess` `lpEnvironment` (with `CREATE_UNICODE_ENVIRONMENT`).
+    fn env_block_utf16(
+        profile: &SandboxProfile,
+        scoped_tmp: &Path,
+        host_env: &dyn Fn(&str) -> Option<OsString>,
+    ) -> Vec<u16> {
+        let pairs = windows_scrubbed_env(profile, scoped_tmp, host_env);
+        let mut block: Vec<u16> = Vec::new();
+        for (name, value) in pairs {
+            // `NAME=VALUE\0`
+            block.extend(name.encode_wide());
+            block.push(u16::from(b'='));
+            block.extend(value.encode_wide());
+            block.push(0);
+        }
+        // A doubly-NUL terminator (an extra NUL after the last entry). An empty
+        // block is still two NULs so `CreateProcess` sees a valid empty env.
+        block.push(0);
+        block
+    }
+
+    /// The created child's owned process + thread handles.
+    struct Child {
+        process: OwnedHandle,
+        thread: OwnedHandle,
+    }
+
+    /// CreateProcess suspended with the AppContainer security-capabilities
+    /// attribute and the scrubbed environment. The command line is built from the
+    /// app path + args with proper quoting; there is no shell.
+    fn create_suspended_appcontainer_process(
+        app: &Path,
+        app_args: &[OsString],
+        working_tree: &Path,
+        container: &AppContainer,
+        capabilities: &mut CapabilitySids,
+        env_block: &[u16],
+    ) -> Result<Child, RunJailDefect> {
+        // The attribute list carrying the security-capabilities (AppContainer)
+        // attribute.
+        let mut attr_size: usize = 0;
+        // SAFETY: first call with a null list and a zeroed size queries the required
+        // size (documented pattern); it returns 0 with ERROR_INSUFFICIENT_BUFFER.
+        unsafe {
+            InitializeProcThreadAttributeList(
+                std::ptr::null_mut(),
+                1,
+                0,
+                std::ptr::from_mut(&mut attr_size),
+            );
+        }
+        if attr_size == 0 {
+            return Err(spawn("InitializeProcThreadAttributeList sizing failed"));
+        }
+        let mut attr_buf: Vec<u8> = vec![0u8; attr_size];
+        let attr_list = attr_buf.as_mut_ptr().cast();
+        // SAFETY: `attr_buf` is `attr_size` bytes; initialises the list for 1 attr.
+        let ok = unsafe {
+            InitializeProcThreadAttributeList(attr_list, 1, 0, std::ptr::from_mut(&mut attr_size))
+        };
+        if ok == 0 {
+            return Err(last_error_spawn("InitializeProcThreadAttributeList failed"));
+        }
+        // The list must be deleted on every path once initialised.
+        let _attr_guard = AttrListGuard(attr_list);
+
+        let mut sec_caps = capabilities.security_capabilities(container.sid());
+        // SAFETY: `attr_list` is initialised; `sec_caps` is a live struct that
+        // outlives the CreateProcess call (kept in this scope), pointed at by the
+        // attribute. The size is that struct's size.
+        let ok = unsafe {
+            UpdateProcThreadAttribute(
+                attr_list,
+                0,
+                PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES as usize,
+                std::ptr::from_mut(&mut sec_caps).cast(),
+                std::mem::size_of::<SECURITY_CAPABILITIES>(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        if ok == 0 {
+            return Err(last_error_spawn("UpdateProcThreadAttribute failed"));
+        }
+
+        let mut si: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
+        si.StartupInfo.cb = size_u32::<STARTUPINFOEXW>();
+        si.lpAttributeList = attr_list;
+
+        let mut cmdline = build_command_line(app, app_args);
+        let mut wdir = wide(working_tree.as_os_str());
+        // The env block is `*const c_void` (cast from the u16 slice).
+        let env_ptr = env_block.as_ptr().cast::<std::ffi::c_void>().cast_mut();
+
+        let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+        // SAFETY: `cmdline` is a mutable NUL-terminated wide buffer (CreateProcessW
+        // may write to it); `env_ptr` is the doubly-NUL wide env block;
+        // `wdir` is a live wide path; `si` carries the initialised attribute list;
+        // `pi` receives the process/thread handles. CREATE_SUSPENDED so the child
+        // does not run before it is assigned to the job.
+        let ok = unsafe {
+            CreateProcessW(
+                std::ptr::null(),
+                cmdline.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0, // do not inherit handles
+                CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
+                env_ptr,
+                wdir.as_mut_ptr(),
+                std::ptr::from_mut(&mut si).cast(),
+                std::ptr::from_mut(&mut pi),
+            )
+        };
+        if ok == 0 {
+            return Err(last_error_spawn("CreateProcessW (AppContainer) failed"));
+        }
+        Ok(Child {
+            process: OwnedHandle(pi.hProcess),
+            thread: OwnedHandle(pi.hThread),
+        })
+    }
+
+    /// A proc-thread attribute list deleted on drop.
+    struct AttrListGuard(*mut std::ffi::c_void);
+
+    impl Drop for AttrListGuard {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                // SAFETY: `self.0` is an initialised attribute list this guard owns.
+                unsafe {
+                    DeleteProcThreadAttributeList(self.0);
+                }
+            }
+        }
+    }
+
+    /// Build the child command line: the app path plus each arg, each token quoted
+    /// per the Win32 command-line convention. There is NO shell — this is the
+    /// argument vector CreateProcess parses, so the shell-injection class does not
+    /// exist.
+    fn build_command_line(app: &Path, app_args: &[OsString]) -> Vec<u16> {
+        let mut s = OsString::new();
+        push_quoted(&mut s, app.as_os_str());
+        for arg in app_args {
+            s.push(OsStr::new(" "));
+            push_quoted(&mut s, arg);
+        }
+        wide(&s)
+    }
+
+    /// Append `arg` to `out` quoted per the CommandLineToArgvW rules (wrap in
+    /// double quotes, backslash-escape embedded quotes and trailing backslashes).
+    fn push_quoted(out: &mut OsString, arg: &OsStr) {
+        out.push(OsStr::new("\""));
+        let text = arg.to_string_lossy();
+        let mut backslashes = 0usize;
+        let mut escaped = String::new();
+        for ch in text.chars() {
+            match ch {
+                '\\' => {
+                    backslashes += 1;
+                    escaped.push('\\');
+                }
+                '"' => {
+                    // Double the run of backslashes preceding a quote, then escape
+                    // the quote itself.
+                    for _ in 0..backslashes {
+                        escaped.push('\\');
+                    }
+                    backslashes = 0;
+                    escaped.push('\\');
+                    escaped.push('"');
+                }
+                other => {
+                    backslashes = 0;
+                    escaped.push(other);
+                }
+            }
+        }
+        // Double a trailing backslash run so the closing quote is not escaped.
+        for _ in 0..backslashes {
+            escaped.push('\\');
+        }
+        out.push(OsStr::new(&escaped));
+        out.push(OsStr::new("\""));
+    }
+
+    fn assign_to_job(job: HANDLE, process: HANDLE) -> Result<(), RunJailDefect> {
+        // SAFETY: both are live handles owned by the caller; assigning the process
+        // to the job before resume is the documented no-un-jobbed-instruction order.
+        let ok = unsafe { AssignProcessToJobObject(job, process) };
+        if ok == 0 {
+            return Err(last_error_spawn("AssignProcessToJobObject failed"));
+        }
+        Ok(())
+    }
+
+    fn resume(thread: HANDLE) -> Result<(), RunJailDefect> {
+        // SAFETY: `thread` is the live suspended main thread handle owned by the
+        // caller; resuming it starts the (now jobbed, tokened) child.
+        let prev = unsafe { ResumeThread(thread) };
+        if prev == u32::MAX {
+            return Err(last_error_spawn("ResumeThread failed"));
+        }
+        Ok(())
+    }
+
+    /// Wait for the child and read its exit code. The job handle must stay open in
+    /// the caller across this wait so KILL_ON_JOB_CLOSE holds for the child's life.
+    fn wait_and_exit_code(process: HANDLE) -> Result<u32, RunJailDefect> {
+        // SAFETY: `process` is a live handle owned by the caller; an infinite wait
+        // blocks until the child exits.
+        let w = unsafe { WaitForSingleObject(process, u32::MAX) };
+        if w != WAIT_OBJECT_0 {
+            return Err(last_error_spawn(
+                "WaitForSingleObject on the jailed child failed",
+            ));
+        }
+        let mut code: u32 = 0;
+        // SAFETY: `process` is a live handle; `code` receives the exit code.
+        let ok = unsafe { GetExitCodeProcess(process, std::ptr::from_mut(&mut code)) };
+        if ok == 0 {
+            return Err(last_error_spawn("GetExitCodeProcess failed"));
+        }
+        Ok(code)
+    }
+
+    /// The Job Object active-process cap for a profile: 1 when subprocess is
+    /// withheld (only the app itself), else the profile's proc cap (min 1).
+    /// Extracted so the cap policy is unit-testable without a live Job Object.
+    fn active_process_cap(profile: &SandboxProfile) -> u32 {
+        if profile.subprocess {
+            u32::try_from(profile.limits.proc_cap)
+                .unwrap_or(u32::MAX)
+                .max(1)
+        } else {
+            1
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::super::{RunResourceLimits, SandboxProfile};
+        use super::*;
+
+        fn profile_with_env(names: &[&str]) -> SandboxProfile {
+            SandboxProfile {
+                env_allowlist: names.iter().map(|s| (*s).to_owned()).collect(),
+                ..SandboxProfile::maximally_isolated()
+            }
+        }
+
+        #[test]
+        fn env_block_is_doubly_nul_terminated_and_scrubbed() {
+            let profile = profile_with_env(&["ALLOWED"]);
+            let host = |k: &str| match k {
+                "ALLOWED" => Some(OsString::from("yes")),
+                "SECRET" => Some(OsString::from("leak")),
+                "SystemRoot" => Some(OsString::from("C:\\Windows")),
+                _ => None,
+            };
+            let block = env_block_utf16(&profile, Path::new("C:\\scratch"), &host);
+            // Ends in two NULs (last entry's NUL + block terminator).
+            assert_eq!(block.last().copied(), Some(0));
+            let decoded = String::from_utf16_lossy(&block);
+            assert!(decoded.contains("ALLOWED=yes"), "{decoded:?}");
+            // A non-allowlisted host var must NOT appear.
+            assert!(!decoded.contains("SECRET"), "{decoded:?}");
+            assert!(!decoded.contains("leak"), "{decoded:?}");
+            // The scrubbed base is present.
+            assert!(decoded.contains("SystemRoot="), "{decoded:?}");
+            assert!(decoded.contains("TMP=C:\\scratch"), "{decoded:?}");
+        }
+
+        #[test]
+        fn command_line_quotes_each_arg_and_has_no_shell() {
+            let cmd = build_command_line(
+                Path::new("C:\\apps\\my app.exe"),
+                &[OsString::from("plain"), OsString::from("has space")],
+            );
+            let s = String::from_utf16_lossy(&cmd);
+            // The app path with a space is quoted.
+            assert!(s.starts_with("\"C:\\apps\\my app.exe\""), "{s:?}");
+            assert!(s.contains("\"plain\""), "{s:?}");
+            assert!(s.contains("\"has space\""), "{s:?}");
+            // No shell metacharacters are interpreted — it is a direct argv.
+            assert!(!s.contains("cmd.exe"), "{s:?}");
+            assert!(!s.contains(" /c "), "{s:?}");
+        }
+
+        #[test]
+        fn embedded_quotes_are_escaped() {
+            let mut out = OsString::new();
+            push_quoted(&mut out, OsStr::new("a\"b"));
+            let s = out.to_string_lossy();
+            assert_eq!(s, "\"a\\\"b\"", "{s:?}");
+        }
+
+        #[test]
+        fn active_process_cap_is_one_when_subprocess_withheld() {
+            // A pure profile (subprocess absent) must cap the job at 1 process, so
+            // no child can spawn.
+            let withheld = SandboxProfile::maximally_isolated();
+            assert!(!withheld.subprocess);
+            let granted = SandboxProfile {
+                subprocess: true,
+                limits: RunResourceLimits {
+                    proc_cap: 8,
+                    ..RunResourceLimits::default()
+                },
+                ..SandboxProfile::maximally_isolated()
+            };
+            assert_eq!(active_process_cap(&withheld), 1);
+            assert_eq!(active_process_cap(&granted), 8);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1736,13 +2828,65 @@ mod tests {
         // edit that flips one without the other fails this test.
         let compiled_in_here = cfg!(any(
             all(target_os = "linux", target_arch = "x86_64"),
-            target_os = "macos"
+            target_os = "macos",
+            target_os = "windows"
         ));
         assert_eq!(
             platform_supports_jail(),
             compiled_in_here,
             "platform_supports_jail() must equal the compiled-in run-jail predicate"
         );
+    }
+
+    #[test]
+    fn database_membership_is_derived_from_net_and_fs() {
+        // Guardian Nit-1: `database` is confined iff BOTH axes it can lower into
+        // (network for a TCP driver, filesystem for a file driver) are confined —
+        // never a standalone asserted bit. This asserts the compiled-in
+        // `CONFINED_AXES` on THIS host agrees with the `database_confined`
+        // derivation, so a partial target that dropped net or fs could not keep
+        // an over-claimed `database`.
+        let axes = platform_confined_axes();
+        let net = axes.contains(&Capability::Network);
+        let fs = axes.contains(&Capability::Filesystem);
+        let db = axes.contains(&Capability::Database);
+        assert_eq!(
+            db,
+            database_confined(net, fs),
+            "database membership must equal database_confined(net, fs): net={net}, fs={fs}"
+        );
+    }
+
+    #[test]
+    fn database_confined_requires_both_net_and_fs() {
+        // The derivation itself: only both-confined yields a confined database.
+        assert!(database_confined(true, true));
+        assert!(!database_confined(true, false));
+        assert!(!database_confined(false, true));
+        assert!(!database_confined(false, false));
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn windows_is_a_jailed_target_with_the_partial_arm_axes() {
+        // Windows has a real (non-stub) run-jail arm, so it is a jailed target.
+        assert!(platform_supports_jail());
+        // The compiled-in Windows arm establishes the Job Object (subprocess), the
+        // launcher scrub (env), and AppContainer + an ACL scratch (filesystem +
+        // network), and fails closed when AppContainer/ACL is unavailable — so it
+        // lists those axes plus the whole-process-contained native-ffi and the
+        // net+fs-derived database.
+        let axes = platform_confined_axes();
+        for cap in [
+            Capability::Subprocess,
+            Capability::Env,
+            Capability::Filesystem,
+            Capability::Network,
+            Capability::NativeFfi,
+            Capability::Database,
+        ] {
+            assert!(axes.contains(&cap), "Windows must confine {cap:?}");
+        }
     }
 
     #[test]
