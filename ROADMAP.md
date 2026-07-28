@@ -11,8 +11,9 @@ Where Ipê came from, and where it's going.
 - **The stdlib** — Elm-shaped core (String/List/Dict/Maybe/Result/…) plus
   Ipe's batteries: HTTP, Live (SSR + real-time), SQL, auth, email, cache,
   pub/sub, WebSockets — one `Task Error a` effect boundary.
-- **Five app shapes** — `Ipe.Live`, `Ipe.Http.Server`, `Ipe.Cli`, `Ipe.Tui`,
-  `Ipe.Webview` — three of them (Live/Tui/Webview) share one `Ipe.Ui` view.
+- **Five app shapes** — the four TEA shapes `Ipe.Tea.Web`, `Ipe.Tea.WebView`,
+  `Ipe.Tea.Tui`, `Ipe.Tea.Console`, plus the plain `Program` — three of them
+  (Web/WebView/TUI) share one `Ipe.Ui` `view : Model -> Element Msg`.
 - **Incremental compilation** — a salsa-backed query engine; `ipe watch`
   recompiles only what changed.
 - **Static compilation** — `ipe build --static` emits a fully-static musl
