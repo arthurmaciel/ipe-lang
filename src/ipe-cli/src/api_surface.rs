@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use ipe_diagnostics::{Diagnostic, TyDoc, render_ty};
-use ipe_types::{Ty, TypedInterface, VarNamer, ty_to_doc};
+use ipe_types::{Ty, TypedInterface, VarNamer, canon_type_to_doc, ty_to_doc};
 
 use crate::project;
 
@@ -43,6 +43,14 @@ pub struct PublicApi {
 pub struct ModuleApi {
     /// Exported value name → its α-canonicalised type signature.
     pub values: BTreeMap<String, String>,
+    /// Exported value name → its resolved type document.
+    ///
+    /// The same type the string in [`Self::values`] renders, kept in its
+    /// structured [`TyDoc`] form so a consumer (`ipe doc`'s cross-reference
+    /// linker) can reach each constructor's already-resolved module + name
+    /// rather than re-parsing the flat string. `ipe diff` reads only the string;
+    /// this is threaded alongside it, not in place of it.
+    pub value_types: BTreeMap<String, TyDoc>,
     /// Exported union type name → its exported shape.
     pub unions: BTreeMap<String, UnionApi>,
 }
@@ -55,6 +63,10 @@ pub struct UnionApi {
     pub params: usize,
     /// Constructor name → its argument signatures, in declaration order.
     pub ctors: BTreeMap<String, Vec<String>>,
+    /// Constructor name → its arguments' resolved type documents, in declaration
+    /// order (parallel to [`Self::ctors`]). Threaded for cross-reference linking;
+    /// `ipe diff` reads only the string form above.
+    pub ctor_types: BTreeMap<String, Vec<TyDoc>>,
 }
 
 /// Why a package's public API could not be extracted.
@@ -165,16 +177,17 @@ pub fn read_tree(root: &Path) -> Result<BTreeMap<ModulePath, (PathBuf, String)>,
     Ok(sources)
 }
 
-/// Render a generalized scheme's [`Ty`] into its canonical signature string.
+/// Render a generalized scheme's [`Ty`] into its resolved [`TyDoc`].
 ///
 /// A FRESH [`VarNamer`] per scheme assigns type variables stable first-seen
-/// letters, so two schemes render to the same string exactly when they are equal
-/// up to variable renaming (α-equivalence) — the equivalence a public type
-/// signature must be compared under.
-fn signature(ty: &Ty, interner: &ipe_intern::Interner) -> Result<String, Diagnostic> {
+/// letters, so two schemes render to the same string (via [`render_ty`]) exactly
+/// when they are equal up to variable renaming (α-equivalence) — the equivalence
+/// a public type signature must be compared under. The `TyDoc`'s `Con` nodes also
+/// carry each type's resolved module + name, which `ipe doc` threads through for
+/// cross-reference linking.
+fn signature_doc(ty: &Ty, interner: &ipe_intern::Interner) -> Result<TyDoc, Diagnostic> {
     let mut namer = VarNamer::new();
-    let doc: TyDoc = ty_to_doc(ty, interner, &mut namer)?;
-    Ok(render_ty(&doc))
+    ty_to_doc(ty, interner, &mut namer)
 }
 
 /// Project one module's [`TypedInterface`] into a [`ModuleApi`].
@@ -189,12 +202,14 @@ fn project_interface(
     };
 
     let mut values = BTreeMap::new();
+    let mut value_types = BTreeMap::new();
     for (name, scheme) in &interface.values {
         let Some(name) = interner.resolve(*name) else {
             continue;
         };
-        let sig = signature(&scheme.ty, interner).map_err(typecheck_err)?;
-        values.insert(name.to_owned(), sig);
+        let doc = signature_doc(&scheme.ty, interner).map_err(typecheck_err)?;
+        values.insert(name.to_owned(), render_ty(&doc));
+        value_types.insert(name.to_owned(), doc);
     }
 
     let mut unions = BTreeMap::new();
@@ -203,26 +218,35 @@ fn project_interface(
             continue;
         };
         let mut ctors = BTreeMap::new();
+        let mut ctor_types = BTreeMap::new();
         for ctor in &union.ctors {
             let Some(ctor_name) = interner.resolve(ctor.name) else {
                 continue;
             };
             let mut args = Vec::with_capacity(ctor.args.len());
+            let mut arg_docs = Vec::with_capacity(ctor.args.len());
             for arg in &ctor.args {
                 args.push(type_signature(arg, interner).map_err(typecheck_err)?);
+                arg_docs.push(canon_type_to_doc(arg, interner).map_err(typecheck_err)?);
             }
             ctors.insert(ctor_name.to_owned(), args);
+            ctor_types.insert(ctor_name.to_owned(), arg_docs);
         }
         unions.insert(
             name.to_owned(),
             UnionApi {
                 params: union.vars.len(),
                 ctors,
+                ctor_types,
             },
         );
     }
 
-    Ok(ModuleApi { values, unions })
+    Ok(ModuleApi {
+        values,
+        value_types,
+        unions,
+    })
 }
 
 /// α-canonicalising name assignment for a constructor's type variables: each

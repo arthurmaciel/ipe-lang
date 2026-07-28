@@ -233,16 +233,19 @@ and the offending line, capability, version, or dependency.
 Each exposed binding is documented with its checker-inferred type signature (the
 exact type the compiler sees, never re-parsed), its `-- |` doc-comment, and the
 module it belongs to. The machine-readable `docs.json` is the source of truth —
-one record per exposed module — and the per-module Markdown is a view over it.
+one record per exposed module — and the per-module Markdown and the
+self-contained HTML site are both views over it.
 
 ```
-$ ipe doc                          # write docs/ for the current project
+$ ipe doc                          # write doc/ (docs.json + Markdown + HTML) for the current project
 $ ipe doc path/to/pkg --out site   # or a specific package, to a chosen directory
+$ ipe doc --format html            # write only one rendering (markdown | json | html | all)
+$ ipe doc serve                    # build the HTML site and preview it on loopback
 $ ipe doc check                    # a CI gate: exit non-zero if a binding is undocumented
 ```
 
 For a small package the generator reports what it wrote and `docs.json` carries
-the versioned surface:
+the versioned surface, including the cross-references each signature resolves to:
 
 ```
 $ ipe doc path/to/shapes --out doc
@@ -259,7 +262,10 @@ $ cat doc/docs.json
         {
           "name": "area",
           "signature": "Shapes.Shape -> Float",
-          "comment": "`area shape` — the area of `shape`."
+          "comment": "`area shape` — the area of `shape`.",
+          "references": [
+            { "module": "Shapes", "name": "Shape", "anchor": "Shapes#Shape" }
+          ]
         }
       ]
     }
@@ -267,8 +273,28 @@ $ cat doc/docs.json
 }
 ```
 
+Every type name in a rendered signature that resolves — via the canonicaliser's
+own resolved identity, never a text guess — to a type documented in the package
+becomes a link to that entry's stable anchor (`Shapes#Shape`, identical across
+`docs.json`, Markdown, and HTML). A built-in with no in-package definition (like
+`Float`) stays plain text. The HTML site is fully self-contained (an index page,
+one page per module, and a bundled `style.css`), so it opens straight from the
+filesystem over `file://` — no server needed.
+
+`ipe doc serve` is a local preview of that same HTML site, served read-only on
+loopback only. The port defaults to an auto-selected free one, so it never fails
+on a busy fixed port; `--port N` pins one and errors if it is taken:
+
+```
+$ ipe doc serve path/to/shapes
+serving docs at http://127.0.0.1:42121/ (read-only, loopback; Ctrl-C to stop)
+```
+
 `ipe doc check` writes nothing and exits non-zero when an exposed value or type
 lacks a doc-comment, naming each gap — a coverage gate you can wire into CI.
+
+Still tracked for later: inter-*package* linking (needs the package index),
+full-text search, and remote hosting.
 
 ## Editor setup (LSP)
 
