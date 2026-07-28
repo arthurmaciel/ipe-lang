@@ -607,7 +607,7 @@ fn effect_secret_in_live_model() {
     let src = "module Main exposing (main)\n\
          import Ipe.Prelude exposing (..)\n\
          import Ipe.Secret as Secret\n\
-         import Ipe.Web exposing (app)\n\
+         import Ipe.Tea.Web exposing (app)\n\
          import Ipe.Cmd as Cmd\n\
          import Ipe.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
@@ -680,7 +680,7 @@ fn wasm_server_only_kernel_native_ok() {
 fn wasm_routed_app_rejected() {
     let src = "module Main exposing (main)\n\
          import Ipe.Prelude exposing (..)\n\
-         import Ipe.Web exposing (app, route)\n\
+         import Ipe.Tea.Web exposing (app, route)\n\
          import Ipe.Cmd as Cmd\n\
          import Ipe.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
@@ -744,7 +744,7 @@ fn lower_float_set_element() {
 fn lower_let_bound_app_cfg() {
     let src = "module Main exposing (main)\n\
          import Ipe.Prelude exposing (..)\n\
-         import Ipe.Web exposing (app)\n\
+         import Ipe.Tea.Web exposing (app)\n\
          import Ipe.Cmd as Cmd\n\
          import Ipe.Sub as Sub\n\
          import Ipe.Ui as Ui\n\

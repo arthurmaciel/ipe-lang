@@ -21,7 +21,7 @@ wrapped by a top-level `Ui.layout [] element` (see
 module Main exposing (main)
 
 import Ipe.String as String
-import Ipe.WebView as WebView
+import Ipe.Tea.WebView as WebView
 import Ipe.Cmd as Cmd
 import Ipe.Sub as Sub
 import Ipe.Ui as Ui

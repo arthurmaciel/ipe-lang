@@ -77,7 +77,7 @@ fn compile_src(test_name: &str, source: &str) -> Option<Result<(), CliError>> {
 /// Both must witness the same page type (`Page`) — pre-round-4 this was the
 /// false-IPE-T0001 shape.
 const MIXED_NULLARY_AND_PARAM: &str = r#"module Main exposing (main)
-import Ipe.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 type Page = CounterPage | UserPage String
 type Msg = Increment
@@ -105,7 +105,7 @@ main =
 /// `Other ≟ Page` → IPE-T0001. Pins that the witness peel does not blanket-
 /// accept every function-shaped builder.
 const WRONG_ADT_PARAM_CTOR: &str = r#"module Main exposing (main)
-import Ipe.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 type Page = CounterPage
 type Other = WrongCtor String

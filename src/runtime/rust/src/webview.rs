@@ -25,7 +25,7 @@
 //! Two builds: the real backend is behind the opt-in `webview` Cargo feature
 //! (needs the system webview dev libraries); otherwise a stub returning a graceful
 //! `Err` is compiled (mirrors Go's `webview_stub.go` on non-darwin), so a program
-//! that `import Ipe.WebView`s always links + never panics. No panic vectors: the
+//! that `import Ipe.Tea.WebView`s always links + never panics. No panic vectors: the
 //! stub returns `Err`; the real path routes every fallible call through `Err`.
 
 use super::core::IpeTask;

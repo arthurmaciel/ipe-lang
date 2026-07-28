@@ -9,7 +9,7 @@ module Main exposing (main)
 --   * reset button    → counter returns to 0
 
 import Ipe.String as String
-import Ipe.Web exposing (app)
+import Ipe.Tea.Web exposing (app)
 import Ipe.Cmd as Cmd
 import Ipe.Sub as Sub
 import Ipe.Ui as Ui

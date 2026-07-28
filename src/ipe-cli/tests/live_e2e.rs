@@ -55,7 +55,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// function is not a raw kernel — it is defined in ipe-stdlib as a Ipê function.
 const IPE_LIVE_COUNTER: &str = r#"module Main exposing (main)
 
-import Ipe.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 
 type Msg = Increment | Decrement
@@ -113,7 +113,7 @@ main =
 /// tripped because the non-serde record is a view helper, not the Model.
 const IPE_LIVE_HTML_HELPER: &str = r#"module Main exposing (main)
 
-import Ipe.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 
 type Msg = Increment | Decrement
@@ -183,7 +183,7 @@ main =
 /// Propagates any pipeline or Cargo build failure as a test error.
 const IPE_LIVE_LAMBDA_SUBS: &str = r#"module Main exposing (main)
 
-import Ipe.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 
 type Msg = Increment | Decrement
@@ -236,7 +236,7 @@ main =
 /// This is the same structure as `examples/09-live-counter/src/Main.ipe`.
 const IPE_LIVE_ROUTED: &str = r#"module Main exposing (main)
 
-import Ipe.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 
 type Page
@@ -850,7 +850,7 @@ fn live_routed_app_build_only() -> Result<(), BoxError> {
 /// Propagates any pipeline or Cargo build failure as a test error.
 const IPE_PUBSUB_LIVE: &str = r#"module Main exposing (main)
 
-import Ipe.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 
 type Msg
@@ -938,7 +938,7 @@ fn live_pubsub_cmd_publish_and_sub_subscribe_topic_build_only() -> Result<(), Bo
 /// present; without it the emitted project would fail with E0425 (seal violation).
 const IPE_PUBSUB_RECORD_PAYLOAD: &str = r#"module Main exposing (main)
 
-import Ipe.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 
 type alias CartItem =
@@ -1028,7 +1028,7 @@ fn live_pubsub_publish_polymorphic_record_payload_build_only() -> Result<(), Box
 /// forwarding the box itself — see that arm's comment for the full mechanism.
 const IPE_ONSUBMIT_TYPED_RECORD: &str = r#"module Main exposing (main)
 
-import Ipe.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 
 type alias Creds =
@@ -1223,7 +1223,7 @@ fn live_onsubmit_typed_record_dispatches_decoded_payload() -> Result<(), BoxErro
 /// (`ipe_backend_rust::emit_expr`'s `is_definitely_not_callable` gate).
 const IPE_ONSUBMIT_BARE_MSG: &str = r#"module Main exposing (main)
 
-import Ipe.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onSubmit, onInput)
@@ -1427,7 +1427,7 @@ fn live_onsubmit_bare_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
 /// `onSubmit` payload is a RECORD literal, `Msg` is a record alias.
 const IPE_ONSUBMIT_RECORD_LITERAL: &str = r#"module Main exposing (main)
 
-import Ipe.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onSubmit)
@@ -1473,7 +1473,7 @@ main =
 /// `onSubmit` payload is a TUPLE literal, `Msg` is a tuple alias.
 const IPE_ONSUBMIT_TUPLE_LITERAL: &str = r#"module Main exposing (main)
 
-import Ipe.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onSubmit)
@@ -1523,7 +1523,7 @@ main =
 /// `onSubmit` payload is a LIST literal, `Msg` is a list alias.
 const IPE_ONSUBMIT_LIST_LITERAL: &str = r#"module Main exposing (main)
 
-import Ipe.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onSubmit)
@@ -1650,7 +1650,7 @@ fn live_onsubmit_list_literal_build_only() -> Result<(), BoxError> {
 /// classifier would misroute to the decoder path.
 const IPE_ONSUBMIT_VAR_BOUND_MSG: &str = r#"module Main exposing (main)
 
-import Ipe.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onSubmit, onInput)
@@ -1834,7 +1834,7 @@ fn live_onsubmit_var_bound_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
 /// let-bound closure to `Arc<dyn Fn + Send + Sync>` at its declaration.
 const IPE_ONSUBMIT_LET_BOUND_HANDLER: &str = r#"module Main exposing (main)
 
-import Ipe.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 
 type alias Creds =
@@ -1901,7 +1901,7 @@ main =
 /// `flows_into_sync_kernel_call` must be alias-transparent to reach the root.
 const IPE_ONSUBMIT_LET_ALIAS_CHAIN: &str = r#"module Main exposing (main)
 
-import Ipe.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 
 type alias Creds =
@@ -2007,7 +2007,7 @@ fn live_onsubmit_let_alias_chain_build_only() -> Result<(), BoxError> {
 /// `examples/12-ipevote`: form at `/auth/signup`, `notFound` = board).
 const IPE_ONSUBMIT_ROUTED_FORM: &str = r#"module Main exposing (main)
 
-import Ipe.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 
 type Page

@@ -64,7 +64,7 @@
 /// record literal — required by the G4 gate in `emit_webview.rs`.
 const IPE_WEBVIEW_COUNTER: &str = r#"module Main exposing (main)
 
-import Ipe.WebView as Webview
+import Ipe.Tea.WebView as Webview
 import Ipe.Ui as Ui
 import Ipe.Cmd as Cmd
 import Ipe.Sub as Sub
@@ -289,7 +289,7 @@ fn webview_counter_tier_b() -> Result<(), BoxError> {
 /// lower gate instead rejects it with `IPE-L0119` at the offending span.
 const IPE_WEBVIEW_LET_BOUND_WINDOW: &str = r#"module Main exposing (main)
 
-import Ipe.WebView as Webview
+import Ipe.Tea.WebView as Webview
 import Ipe.Ui as Ui
 import Ipe.Cmd as Cmd
 import Ipe.Sub as Sub
