@@ -35,7 +35,13 @@ fn union(params: usize, ctors: &[(&str, &[&str])]) -> UnionApi {
             )
         })
         .collect();
-    UnionApi { params, ctors }
+    // `ctor_types` is threaded for `ipe doc`'s cross-references; `ipe diff` reads
+    // only the string form, so these classification tests leave it empty.
+    UnionApi {
+        params,
+        ctors,
+        ctor_types: BTreeMap::new(),
+    }
 }
 
 #[test]

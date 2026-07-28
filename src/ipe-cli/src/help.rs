@@ -323,15 +323,25 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "doc",
-        summary: "Generate API documentation (docs.json + Markdown) for a package, or check coverage.",
-        args: "[check] [<path>]",
+        summary: "Generate API documentation (docs.json + Markdown + HTML) for a package, preview it, or check coverage.",
+        args: "[serve|check] [<path>]",
         args_desc: "The package to document — a directory or a single .ipe file (defaults to the \
-                    current project). A leading `check` verifies doc-comment coverage instead of \
-                    writing files.",
-        options: &[Opt {
-            flag: "[--out <dir>]",
-            desc: "write the documentation to <dir> (default: doc/); generate only",
-        }],
+                    current project). A leading `serve` builds the HTML site and previews it on \
+                    loopback; `check` verifies doc-comment coverage instead of writing files.",
+        options: &[
+            Opt {
+                flag: "[--out <dir>]",
+                desc: "write the documentation to <dir> (default: doc/); generate only",
+            },
+            Opt {
+                flag: "[--format markdown|json|html|all]",
+                desc: "which renderings to write beside docs.json (default: all); generate only",
+            },
+            Opt {
+                flag: "[--port <n>]",
+                desc: "pin the serve port (default: an auto-selected free one); serve only",
+            },
+        ],
     },
     Command {
         name: "lsp",
