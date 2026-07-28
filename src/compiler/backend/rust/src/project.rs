@@ -471,16 +471,26 @@ pub fn ipe_start() {
 ";
 
 /// The `[wasm] mode = "hydrate"` second entry: parses island JSON as the
-/// user-declared `HydrationState` type (convention: `MainHydrationState`),
-/// converts via `fromHydrationState` (convention: `main_from_hydration_state`),
-/// and adopts the server-rendered DOM.  On any parse error it falls back to
-/// a clean `ipe_main()` init (fault-tolerant: no white screen on a tampered
-/// or stale island blob).
-const WASM_HYDRATE_ENTRY: &str = "\
+/// user-declared `HydrationState` type, converts via `fromHydrationState`
+/// (`main_from_hydration_state`), and adopts the server-rendered DOM.  On any
+/// parse error it falls back to a clean `ipe_main()` init (fault-tolerant: no
+/// white screen on a tampered or stale island blob).
+///
+/// `hydration_state_ty` is the Rust type name resolved by
+/// [`EmitCtx::resolve_hydration_state_rust_name`] — the SAME name the emitted
+/// `main_from_hydration_state` signature uses, so the parse target and the
+/// projection's parameter type are one identical type (a record alias
+/// `{ count : Int }` yields its synthesised `RecCount`, a named ADT yields
+/// `MainHydrationState`, etc.). Interpolating it — rather than hardcoding a
+/// convention name the record-alias emitter never produces — is what makes the
+/// emitted crate compile (issue #224).
+fn wasm_hydrate_entry(hydration_state_ty: &str) -> String {
+    format!(
+        "\
 #[wasm_bindgen::prelude::wasm_bindgen]
-pub fn hydrate(model_json: &str) {
-    match serde_json::from_str::<crate::MainHydrationState>(model_json) {
-        Ok(hs) => {
+pub fn hydrate(model_json: &str) {{
+    match serde_json::from_str::<crate::{hydration_state_ty}>(model_json) {{
+        Ok(hs) => {{
             let model = crate::main_from_hydration_state(hs);
             ipe_runtime::wasm::run_start(ipe_runtime::wasm::wasm_adopt_app::<
                 String, _, _, _, _, _,
@@ -490,24 +500,30 @@ pub fn hydrate(model_json: &str) {
                 crate::main_view,
                 crate::main_subscriptions,
             ));
-        }
-        Err(e) => {
+        }}
+        Err(e) => {{
             ipe_runtime::wasm::console_warn(&format!(
-                \"hydrate: island JSON rejected ({e}); falling back to clean init\"
+                \"hydrate: island JSON rejected ({{e}}); falling back to clean init\"
             ));
             ipe_runtime::wasm::run_start(ipe_main());
-        }
-    }
+        }}
+    }}
+}}
+"
+    )
 }
-";
 
 /// [`epilogue`] with the native `fn main` block replaced by [`WASM_ENTRY`],
-/// and — when `ctx.wasm_hydrate_mode` — a second `hydrate` wasm-bindgen
-/// export for fault-tolerant SSR takeover (M7 §"Fault-tolerant hydrate").
+/// and — when `ctx.wasm_hydrate_mode` AND the program declares a
+/// `fromHydrationState` projection — a second `hydrate` wasm-bindgen export for
+/// fault-tolerant SSR takeover (M7 §"Fault-tolerant hydrate").
 ///
-/// Convention-based naming: the entry module is always `Main`, so the Rust
-/// names are `MainHydrationState` (the `HydrationState` type alias) and
-/// `main_from_hydration_state` (the `fromHydrationState` projection).
+/// The island parse target is [`EmitCtx::hydration_state_rust_name`], resolved
+/// from `fromHydrationState`'s parameter through the same renderer that emits
+/// its `main_from_hydration_state` signature — so the two agree on ONE type
+/// name and the emitted crate compiles (issue #224). A hydrate-mode program
+/// with no `fromHydrationState` has no island type to name, so it emits only
+/// the `ipe_start` entry (the runtime still boots via a clean init).
 fn epilogue_wasm(ctx: &EmitCtx) -> DResult<String> {
     const BANNER: &str = "// ===========================================\n// ENTRY POINT\n";
     let full = epilogue()?;
@@ -522,8 +538,10 @@ fn epilogue_wasm(ctx: &EmitCtx) -> DResult<String> {
     out.push_str(BANNER);
     out.push_str("// ===========================================\n\n");
     out.push_str(WASM_ENTRY);
-    if ctx.wasm_hydrate_mode {
-        out.push_str(WASM_HYDRATE_ENTRY);
+    if ctx.wasm_hydrate_mode
+        && let Some(ty) = ctx.hydration_state_rust_name.as_deref()
+    {
+        out.push_str(&wasm_hydrate_entry(ty));
     }
     Ok(out)
 }
