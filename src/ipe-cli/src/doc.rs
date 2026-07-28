@@ -1256,6 +1256,9 @@ fn render_html_module(module: &ModuleDoc, index: &AnchorIndex) -> String {
 /// `std::net::TcpListener`. It binds `127.0.0.1` only; `port` `None` lets the OS
 /// assign a free port (bind `:0`), `Some(n)` pins one and errors if it is taken.
 ///
+/// The default browser is opened on the served URL; a headless caller sets
+/// `IPE_DOC_NO_OPEN` to skip that (the URL is printed either way).
+///
 /// # Errors
 /// [`CliError::Io`] if the loopback port cannot be bound (a pinned port already
 /// in use), plus any error from [`build_docs`].
@@ -1273,7 +1276,12 @@ fn serve(path: &Path, port: Option<u16>) -> Result<(), CliError> {
 
     let url = format!("http://{bound}/");
     println!("serving docs at {url} (read-only, loopback; Ctrl-C to stop)");
-    open_in_browser(&url);
+    // A headless caller (CI, a test, a remote shell) opts out of the browser pop
+    // with `IPE_DOC_NO_OPEN`; the URL is already printed, so the preview stays
+    // reachable.
+    if std::env::var_os("IPE_DOC_NO_OPEN").is_none() {
+        open_in_browser(&url);
+    }
 
     // A single dropped connection must not take the server down; `flatten` skips
     // the `Err`s and serves each accepted stream.

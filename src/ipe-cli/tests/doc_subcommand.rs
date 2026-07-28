@@ -170,8 +170,8 @@ fn serve_binds_a_free_port_and_serves_the_index() -> io::Result<()> {
     let mut child = Command::new(env!("CARGO_BIN_EXE_ipe"))
         .args(["doc", "serve", as_str(&pkg)])
         .env("NO_COLOR", "1")
-        // Never let the preview pop a browser in CI.
-        .env("BROWSER", "true")
+        // Never let the preview pop (or spawn) a browser opener under test.
+        .env("IPE_DOC_NO_OPEN", "1")
         .stdout(std::process::Stdio::piped())
         .spawn()?;
 
