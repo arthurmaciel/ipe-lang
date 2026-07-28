@@ -25,17 +25,22 @@ Two facts follow from the stub, and both are unsafe-by-omission:
    users cannot install any network/filesystem/subprocess wrapper at all.
 
 Windows has no single `sandbox-exec` equivalent. Confinement is *assembled* from
-several primitives, and — critically — not every profile axis maps to a primitive
-that holds as cleanly as the Linux/macOS arms do. This document maps each
-`SandboxProfile` axis to a concrete Windows enforcement mechanism, specifies the
-launcher flow, and states which axes a Windows primitive can honestly enforce and
-which must **refuse-gap** rather than over-claim.
+several primitives. Every profile axis maps to a Windows primitive that confines
+it: `subprocess` and `env` map as cleanly as the Linux/macOS arms; `filesystem`
+and `network` are confined by AppContainer, whose one dependency — that the
+filesystem carries persistent ACLs — is closed at launch by a runtime probe that
+**fails closed**. This document maps each `SandboxProfile` axis to a concrete
+Windows enforcement mechanism, specifies the launcher flow, and states how each
+axis is confined.
 
 The governing principle, inherited from the macOS arm's review: **`Holds` must
 mean every axis the admit path trusts is actually confined by the emitted jail.**
 The macOS review caught an over-claim on the `subprocess` and `env` axes (Seatbelt
-does not scrub env; the launcher must). Windows raises the same question on more
-axes, so the honest answer is likely a *partial* verdict — see §4.
+does not scrub env; the launcher must). Windows honours the same principle by
+confining every axis with a primitive and, where a primitive has a precondition
+that admit-time cannot verify (the volume must persist ACLs for the AppContainer
+filesystem boundary to hold), closing that precondition with a runtime probe that
+refuses to launch when it is unmet — see §4.
 
 ---
 
@@ -121,19 +126,26 @@ grant-per-axis model the profile wants, and it mirrors the Linux/macOS arms:
   one scoped-writable scratch (ACLed to the container SID). `WorkingTreeReadWrite`
   → additionally ACL the working tree for the container SID.
 
-**Recommendation: AppContainer.** It is the only Windows primitive that models
-network as a positive per-capability grant (the restricted token cannot deny
-sockets cleanly) and gives per-path filesystem ACLs deny-by-default. The restricted
-token is the fallback *only* where AppContainer is unavailable, and — because it
-cannot enforce network — a restricted-token-only host must **refuse-gap the network
-axis** (§4), never silently run a network wrapper uncontained.
+**Choice: AppContainer.** It is the only Windows primitive that models network as a
+positive per-capability grant (the restricted token cannot deny sockets cleanly)
+and gives per-path filesystem ACLs deny-by-default, so both the `filesystem` and
+`network` axes are confined by it. The restricted token is not used for these axes:
+it cannot enforce network, so a network wrapper under it would run uncontained.
+AppContainer confines both axes, and both are therefore in the confined set (§4).
 
-Caveat carried forward to §4: AppContainer filesystem isolation is *ACL-mediated*,
-not a namespace remap. It denies-by-default correctly, but a path already ACLed
-permissive-to-all (or on a filesystem without ACLs, e.g. a FAT/exFAT volume) is not
-contained by the container SID. The Linux `--ro-bind /` + tmpfs mask has no such
-dependency. This is a real edge the design must test for (§5) and, if it cannot be
-closed, name as a refuse-gap on non-ACL volumes.
+The one dependency to close: AppContainer filesystem isolation is *ACL-mediated*,
+not a namespace remap. It denies-by-default correctly, but the container SID ACL is
+a no-op on a filesystem that does not persist ACLs — a FAT/exFAT volume, a
+redirected `TEMP`, or some network shares — where the write boundary would not
+hold. The Linux `--ro-bind /` + tmpfs mask has no such dependency. The launcher
+closes this at run time with a **`FILE_PERSISTENT_ACLS` probe that fails closed**:
+before launch it calls `GetVolumeInformationW` on every path it is about to ACL for
+the container SID — always the scoped-writable scratch, and the working tree when
+that is bound read-write — and if any of those volumes does not report
+`FILE_PERSISTENT_ACLS`, the launcher **refuses to run** rather than launch the app
+with an unenforced filesystem boundary. The filesystem axis is thus confined on
+every volume the app is allowed to run on, because a volume that cannot enforce the
+boundary is refused before the app starts.
 
 ### 2.3 env → launcher-side scrub before `CreateProcess`
 
@@ -172,11 +184,12 @@ admissible-with-consent on a `Holds` target is honest on Windows too.
 - **subprocess** → Job Object (`KILL_ON_JOB_CLOSE`, `ACTIVE_PROCESS` cap =
   1-when-withheld, `BREAKAWAY_OK` denied). **Holds.**
 - **filesystem** → AppContainer per-path ACL, deny-by-default, scratch + optional
-  working-tree ACLed to the container SID. **Holds on ACL volumes; refuse-gap on
-  non-ACL volumes.**
+  working-tree ACLed to the container SID, guarded by a launch-time
+  `FILE_PERSISTENT_ACLS` probe (`GetVolumeInformationW`) that refuses to run on a
+  volume that cannot persist ACLs. **Holds — confined by AppContainer, fail-closed
+  on non-ACL volumes.**
 - **network** → AppContainer network capability SID (`internetClient*`), absent ⇒
-  outbound denied. **Holds under AppContainer; refuse-gap under a restricted-token
-  fallback.**
+  outbound denied. **Holds — confined by AppContainer.**
 - **env** → launcher-side scrub + explicit `lpEnvironment` to `CreateProcess`
   (never inherit). **Holds.**
 - **native-ffi** → no dedicated primitive; contained by the Job Object + token via
@@ -200,6 +213,9 @@ must be attached *before* the app runs its first instruction. Illustrative order
 3. ACL the resources the profile grants to the container SID:
    - always: the one scoped-writable scratch dir,
    - iff filesystem granted: the working tree (read-write).
+   Before ACLing each, probe its volume with GetVolumeInformationW; if any does not
+   report FILE_PERSISTENT_ACLS, refuse to run (the container SID ACL would be a
+   no-op there, leaving the write boundary unenforced).
 4. Create the Job Object:
    - KILL_ON_JOB_CLOSE, no BREAKAWAY_OK,
    - ACTIVE_PROCESS = 1 when subprocess withheld, else proc_cap.
@@ -226,9 +242,9 @@ difference from the two Unix arms, not a confinement gap.
 
 ---
 
-## 4. Single-source predicate reuse and per-axis honesty
+## 4. Single-source predicate reuse and axis honesty
 
-### 4.1 The `on_jailed_target!` predicate must include Windows only for what holds
+### 4.1 The `on_jailed_target!` predicate must include Windows only when it holds
 
 The Linux/macOS arms are stamped by the single-source `on_jailed_target!` macro:
 `platform_supports_jail()` returns `JAIL_COMPILED_IN`, and the real
@@ -240,47 +256,40 @@ Windows is added to the `yes:` set of `on_jailed_target!`, then the real Windows
 on Windows — the two cannot drift, and the
 `platform_supports_jail_matches_the_compiled_in_jail_arm` test keeps them in lock.
 
-### 4.2 The all-or-nothing verdict is too coarse for Windows
+### 4.2 The admit-time verdict and the run-time boundary check
 
-`JailForTarget` is today an all-or-nothing boolean: `Holds` (every runtime-enforced
-axis contained) or `RefuseGap` (none). That is exactly right for Linux and macOS,
-where a single primitive (`bwrap`+seccomp / `sandbox-exec`) either establishes and
-confines *all* axes or is absent. Windows breaks that assumption: under the
-restricted-token fallback, or on a non-ACL volume, **some axes hold and others do
-not**. A single boolean forces a false choice — claim `Holds` and over-claim the
-uncontained axis (the exact bug the macOS review caught), or claim `RefuseGap` and
-refuse wrappers whose only capabilities are the ones Windows *can* contain.
+`JailForTarget` is an all-or-nothing boolean at admit time: `Holds` (every
+runtime-enforced axis contained) or `RefuseGap` (none). That is right for Linux and
+macOS, where a single primitive (`bwrap`+seccomp / `sandbox-exec`) either
+establishes and confines *all* axes or is absent. Windows meets the same bar: the
+Job Object confines `subprocess`, the launcher scrub confines `env`, and
+AppContainer confines both `filesystem` and `network`, so all four axes are in the
+confined set and the Windows verdict is `Holds`.
 
-The sound representation is the **per-axis jail-capability set** direction: model a
-jail as a *set of confined axes* rather than one boolean, and admit a wrapper iff
-**every axis it declares (and every axis the scan proposes) is in the jail's
-confined set for the target.** `is_runtime_unenforceable_for` already takes a
-`JailForTarget` and answers per-capability; the extension is to let that target
-carry a per-axis set instead of a two-valued enum, so a Windows host that confines
-`subprocess`+`filesystem`+`env` but not `network` admits a filesystem wrapper and
-refuses a network one — each honestly. **This document assumes that representation;
-the Windows arm should land on top of it, not re-introduce a boolean.** Until it
-exists, the conservative Windows verdict is `RefuseGap` for any axis set that
-includes a not-yet-provable axis — refuse, never over-claim.
+The one axis whose primitive carries a run-time precondition is `filesystem`: the
+AppContainer ACL only binds on a volume that persists ACLs. That precondition is
+not an admit-time property of the wrapper — the same wrapper is contained on an
+NTFS working tree and would not be on a redirected FAT `TEMP` — so it is not
+resolved by weakening the admit verdict, but by the launcher's `FILE_PERSISTENT_ACLS`
+probe (§2.2, §3), which **fails closed**: if any volume it is about to ACL cannot
+persist ACLs, the launcher refuses to run. The admit path trusts the filesystem
+axis, and the run-time probe guarantees the boundary the admit path trusted is
+actually enforced — the app never runs with an unenforced filesystem boundary.
 
-### 4.3 Refuse-gap policy per axis
+### 4.3 How each axis is confined
 
-Applying §2's verdicts through the per-axis representation:
+- `subprocess` → Job Object (active-process cap, no breakaway). Confined.
+- `env` → launcher-side scrub + explicit `lpEnvironment`. Confined.
+- `filesystem` → AppContainer per-path ACL, deny-by-default, guarded at launch by
+  the `FILE_PERSISTENT_ACLS` probe that refuses to run on a volume that cannot
+  persist ACLs. Confined; fail-closed rather than run with an unenforced boundary.
+- `network` → AppContainer network capability SID; absent ⇒ outbound denied.
+  Confined.
 
-- `subprocess`, `env` → always in the confined set on Windows (Job Object; launcher
-  scrub). Admissible.
-- `filesystem` → in the confined set **only** when the scratch/working-tree live on
-  an ACL-bearing volume; on a non-ACL volume the axis is **refuse-gapped** (the
-  container SID ACL is a no-op there), so a filesystem wrapper refuses rather than
-  running with an unenforced write boundary.
-- `network` → in the confined set **only** under AppContainer; under the
-  restricted-token fallback the axis is **refuse-gapped** (a restricted token
-  cannot deny sockets), so a network wrapper refuses.
-
-No axis is ever silently admitted-and-run-unconfined. Where a Windows primitive
-cannot enforce an axis, that axis leaves the confined set and the wrapper refuses —
-the honest per-target posture, identical in spirit to the pre-jail refuse-until-jail
-rule but now per-axis instead of whole-platform.
+No axis is ever silently run unconfined. Where a run-time condition would leave a
+boundary unenforced (a non-ACL volume for the filesystem axis), the launcher
+refuses before the app starts rather than over-claim — the honest per-target
+posture, identical in spirit to the pre-jail refuse-until-jail rule.
 
 ---
 
@@ -331,11 +340,13 @@ Provable on hosted `windows-2022`, each as an enforce-vs-control pair:
   outbound egress — a self-hosted Windows runner, or a hosted job explicitly
   confirmed to allow the control connection. The enforce half is always hosted-safe;
   only the control half is at risk.
-- **non-ACL-volume filesystem edge (§2.2 caveat).** Proving the refuse-gap on a
-  FAT/exFAT volume needs a volume of that filesystem attached, which a hosted image
-  does not provide by default. This is a *negative* proof (the axis refuses there),
-  so it can be a unit/integration test with a mounted VHD image rather than a live
-  volume — but if that cannot be arranged hosted, it is self-hosted.
+- **non-ACL-volume fail-closed refusal (§2.2).** Proving that the launcher refuses
+  to run when the scratch/working-tree volume cannot persist ACLs needs a
+  non-ACL-persisting volume (FAT/exFAT) attached, which a hosted image does not
+  provide by default. This is a *negative* proof (the launcher refuses there rather
+  than run with an unenforced boundary), so it can be a unit/integration test with a
+  mounted VHD image rather than a live volume — but if that cannot be arranged
+  hosted, it is self-hosted.
 
 Everything else — subprocess, env, and the enforce half of network and filesystem —
 is provable on a plain hosted `windows-2022` runner with no Docker daemon. The job
@@ -355,9 +366,6 @@ absent, then run the per-axis duality.
   only about `exec_in_run_jail` — the jail around the *already-admitted, emitted
   app* at `ipe run`. The two share vocabulary (Job Objects, AppContainer) but not
   code paths or CI jobs.
-- **The per-axis jail-capability representation is a prerequisite, designed
-  elsewhere.** This document assumes it and states why the Windows arm needs it
-  (§4.2); it does not specify that representation's own shape.
 - **Resource limits** (`RunResourceLimits`) are not a confinement axis and are not
   mapped here; the Job Object can additionally carry memory/CPU limits, which is a
   refinement, not part of the axis→primitive contract.
