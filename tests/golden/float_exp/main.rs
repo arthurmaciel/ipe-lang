@@ -58,9 +58,6 @@ pub fn log_warn(msg: String) -> IpeTask<()> {
 pub fn log_error(msg: String) -> IpeTask<()> {
     ipe_runtime::log::log_error(msg)
 }
-pub fn log_println(msg: String) -> IpeTask<()> {
-    ipe_runtime::log::log_println(msg)
-}
 pub fn log_info_with<A: IpeStringify>(msg: String, attrs: Vec<A>) -> IpeTask<()> {
     ipe_runtime::log::log_info_with(msg, attrs)
 }
@@ -165,6 +162,12 @@ pub fn io_write_stdout(s: String) -> IpeTask<()> {
 pub fn io_write_stderr(s: String) -> IpeTask<()> {
     ipe_runtime::io::io_write_stderr(s)
 }
+pub fn io_println(msg: String) -> IpeTask<()> {
+    ipe_runtime::io::io_println(msg)
+}
+pub fn io_eprintln(msg: String) -> IpeTask<()> {
+    ipe_runtime::io::io_eprintln(msg)
+}
 // ── System kernels (M5a) ───────────────────────────────────────────────────
 pub fn system_getenv(key: String) -> IpeTask<String> {
     ipe_runtime::system::system_getenv(key)
@@ -245,7 +248,7 @@ pub fn main_large() -> f64 {
     1000000000000000000000.0
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(format!(
+    io_println(format!(
         "{}{}",
         string_from_float(crate::main_small()),
         format!(

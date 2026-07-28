@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 firstOr0 : List Int -> Int
 firstOr0 xs =
@@ -6,4 +7,4 @@ firstOr0 xs =
         x :: rest -> x
 
 main =
-    println (String.fromInt (firstOr0 [1, 2, 3]))
+    Io.println (String.fromInt (firstOr0 [1, 2, 3]))

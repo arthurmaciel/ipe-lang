@@ -50,6 +50,8 @@ const CRYPTO: &str = include_str!("../Ipe/Crypto.ipe");
 const TASK: &str = include_str!("../Ipe/Task.ipe");
 /// `Ipe.Io` — standard-I/O effect kernels.
 const IO: &str = include_str!("../Ipe/Io.ipe");
+/// `Ipe.Debug` — development-only `Debug.log` escape hatch (kernel-only).
+const DEBUG: &str = include_str!("../Ipe/Debug.ipe");
 /// `Ipe.Time` — time effect kernels.
 const TIME: &str = include_str!("../Ipe/Time.ipe");
 /// `Ipe.System` — process / environment effect kernels.
@@ -132,6 +134,10 @@ pub const MODULES: &[StdModule] = &[
     StdModule {
         name: "Ipe.Io",
         source: IO,
+    },
+    StdModule {
+        name: "Ipe.Debug",
+        source: DEBUG,
     },
     StdModule {
         name: "Ipe.Time",

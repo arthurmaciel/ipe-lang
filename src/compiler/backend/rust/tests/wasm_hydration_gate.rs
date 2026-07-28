@@ -57,6 +57,7 @@ fn hydrate_program(interner: &mut Interner, fields: Vec<IrType>) -> DResult<Prog
             uses_websocket: false,
             uses_email: false,
             uses_env_public: false,
+            uses_debug: false,
             uses_ffi: false,
         }],
     })
@@ -136,6 +137,7 @@ fn no_hydration_state_type_passes_gate() -> DResult<()> {
             uses_websocket: false,
             uses_email: false,
             uses_env_public: false,
+            uses_debug: false,
             uses_ffi: false,
         }],
     };
@@ -177,6 +179,7 @@ fn hydrate_export_present_in_spine() -> DResult<()> {
             uses_websocket: false,
             uses_email: false,
             uses_env_public: false,
+            uses_debug: false,
             uses_ffi: false,
         }],
     };

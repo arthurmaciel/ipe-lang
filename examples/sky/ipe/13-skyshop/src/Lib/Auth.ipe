@@ -7,7 +7,7 @@ import Ipe.Task as Task
 import Ipe.List as List
 import Ipe.Dict as Dict
 import Ipe.String as String
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Ipe.System as System
 import Lib.Db as Db
 import Ipe.Error as Error exposing (Error(..), ErrorKind(..))
@@ -72,7 +72,7 @@ verifyToken idToken =
                 email = claimField "email" claims
                 name = claimField "name" claims
                 _ =
-                    println
+                    Io.println
                         ("[AUTH] Firebase token verified for: " ++ email
                             ++ " (uid: "
                             ++ uid
@@ -82,7 +82,7 @@ verifyToken idToken =
 
         Err _ ->
             let
-                _ = println "[AUTH] Firebase token verification failed"
+                _ = Io.println "[AUTH] Firebase token verification failed"
             in
                 Err
                     (Error.permissionDenied
@@ -125,7 +125,7 @@ findOrCreateUser uid email name =
                         else
                             let
                                 _ =
-                                    println
+                                    Io.println
                                         ("[AUTH] Signed in: " ++ email
                                             ++ " (admin: "
                                             ++ adminStr
@@ -146,7 +146,7 @@ findOrCreateUser uid email name =
 
 signOut =
     let
-        _ = println "[AUTH] User signed out"
+        _ = Io.println "[AUTH] User signed out"
     in
         ()
 

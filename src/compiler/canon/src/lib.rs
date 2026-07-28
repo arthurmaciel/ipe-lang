@@ -381,7 +381,7 @@ mod tests {
             return;
         };
 
-        // main = println (String.fromInt (update Increment 0))
+        // main = Io.println (String.fromInt (update Increment 0))
         let outer = as_call(body);
         assert!(
             matches!(outer, Some((Expr_::VarKernel { .. }, _))),
@@ -398,7 +398,7 @@ mod tests {
         else {
             return;
         };
-        assert_eq!(i.resolve(*module), Some("Log"));
+        assert_eq!(i.resolve(*module), Some("Io"));
         assert_eq!(i.resolve(*name), Some("println"));
         assert_eq!(outer_args.len(), 1);
 
@@ -526,26 +526,31 @@ mod tests {
 
     #[test]
     fn unknown_value_suggests_close_name() {
-        // `printn` is one edit from the in-scope kernel value `println`.
-        let err = canon_err("module Main exposing (main)\n\nmain = printn\n");
+        // `printn` is one edit from the `Ipe.Io` member `println`.
+        let err = canon_err("module Main exposing (main)\n\nmain = Io.printn\n");
         assert!(
             matches!(
                 &err,
                 Some(Diagnostic::Name {
-                    msg: NameError::ValueNotFound { .. },
+                    msg: NameError::NoSuchMember { .. },
                     ..
                 })
             ),
-            "expected ValueNotFound, got {err:?}"
+            "expected NoSuchMember, got {err:?}"
         );
         let Some(Diagnostic::Name {
-            msg: NameError::ValueNotFound { name, suggestions },
+            msg:
+                NameError::NoSuchMember {
+                    member,
+                    suggestions,
+                    ..
+                },
             ..
         }) = err
         else {
             return;
         };
-        assert_eq!(&*name, "printn");
+        assert_eq!(&*member, "printn");
         assert!(
             suggestions.iter().any(|s| &**s == "println"),
             "suggestions should include `println`, got {suggestions:?}"
@@ -1812,11 +1817,11 @@ mod tests {
              type Color = Red | Green | Blue\n",
             "module Main exposing (main)\n\
              import Dep exposing (Color(..))\n\
-             import Ipe.Log exposing (println)\n\n\
+             import Ipe.Io as Io\n\n\
              type Color = Warm | Cool\n\n\
              describe : Color -> String\n\
              describe c =\n    case c of\n        Warm -> \"warm\"\n        Cool -> \"cool\"\n\n\
-             main =\n    println (describe Warm)\n",
+             main =\n    Io.println (describe Warm)\n",
         );
         assert!(
             matches!(
@@ -1840,9 +1845,9 @@ mod tests {
              type Color = Red | Green | Blue\n",
             "module Main exposing (main)\n\
              import Dep exposing (Color(..))\n\
-             import Ipe.Log exposing (println)\n\n\
+             import Ipe.Io as Io\n\n\
              type alias Color = Int\n\n\
-             main =\n    println \"hi\"\n",
+             main =\n    Io.println \"hi\"\n",
         );
         assert!(
             matches!(
@@ -1867,11 +1872,11 @@ mod tests {
             "module Dep exposing (Color(..))\n\
              type Color = Red | Green | Blue\n",
             "module Main exposing (main)\n\
-             import Ipe.Log exposing (println)\n\n\
+             import Ipe.Io as Io\n\n\
              type Color = Warm | Cool\n\n\
              describe : Color -> String\n\
              describe c =\n    case c of\n        Warm -> \"warm\"\n        Cool -> \"cool\"\n\n\
-             main =\n    println (describe Warm)\n",
+             main =\n    Io.println (describe Warm)\n",
         );
         assert!(
             err.is_none(),
@@ -1890,7 +1895,7 @@ mod tests {
             "module Main exposing (main)\n\
              type Color = Warm\n\
              type Color = Cool\n\n\
-             main =\n    println \"hi\"\n",
+             main =\n    Io.println \"hi\"\n",
         );
         let Some(Diagnostic::Name {
             msg: NameError::DuplicateType { first, .. },
@@ -2893,16 +2898,16 @@ mod tests {
 
     #[test]
     fn stdlib_exposing_println_resolves_unqualified() {
-        // `import Ipe.Log exposing (println)` → bare `println` resolves via the
-        // exposing path to `VarKernel { module: Log, name: println }`.
+        // `import Ipe.Io exposing (println)` → bare `println` resolves via the
+        // exposing path to `VarKernel { module: Io, name: println }`.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Log exposing (println)\n\n\
+                   import Ipe.Io exposing (println)\n\n\
                    main = println\n";
         let Some((m, i)) = canon_src(src) else {
             assert!(false_marker(), "exposing (println) must canonicalise");
             return;
         };
-        assert_main_is_kernel(&m, &i, "Log", "println");
+        assert_main_is_kernel(&m, &i, "Io", "println");
     }
 
     #[test]

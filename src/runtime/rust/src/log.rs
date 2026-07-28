@@ -12,8 +12,8 @@
 // `IPE_LOG_FORMAT=json` switches to the JSON shape. Each line is also mirrored
 // into the telemetry ring (the Ipê Console reads it).
 //
-// `Log.println` is a SEPARATE bare line with NO prefix (Go's `Log_println` is a
-// raw `fmt.Println`); codegen routes it to `log_println`, never to `log_info`.
+// `Log` is observability-only: bare line printing (no timestamp, no level) is
+// `Ipe.Io` (`Io.println` / `Io.eprintln`, `io.rs`), not a `Log` member.
 use super::*;
 
 const LOG_LEVEL_DEBUG: i32 = 0;
@@ -179,17 +179,6 @@ fn log_emit(level: i32, level_name: &str, msg: &str) {
     } else {
         write_stdout_line(&line);
     }
-}
-
-/// `Log.println : String -> Task Error ()` — Go's `Log_println` is a bare
-/// `fmt.Println`: NO timestamp, NO level, straight to stdout. Still mirrored into
-/// the telemetry ring at info level so the console surfaces it.
-pub fn log_println<E: Send + 'static>(msg: String) -> IpeTask<E, ()> {
-    Box::pin(async move {
-        super::telemetry::record_log("info", &msg);
-        write_stdout_line(&msg);
-        ok_res(())
-    })
 }
 
 pub fn log_info<E: Send + 'static>(msg: String) -> IpeTask<E, ()> {

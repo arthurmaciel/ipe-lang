@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- `JsonDec.oneOf` tries decoders in order; the first success wins.
 -- The decoder is inlined at each `decodeString` call so Rust's ownership
@@ -23,10 +24,10 @@ main =
         Ok s1 ->
             case r2 of
                 Ok s2 ->
-                    println (s1 ++ " " ++ s2)
+                    Io.println (s1 ++ " " ++ s2)
 
                 Err _ ->
-                    println "err2"
+                    Io.println "err2"
 
         Err _ ->
-            println "err1"
+            Io.println "err1"

@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- A record holding TWO function values reused as a value (each field read is a
@@ -19,7 +19,7 @@ apply c =
 
 
 main =
-    println
+    Io.println
         (apply
             { onChange = String.length
             , format = String.fromInt

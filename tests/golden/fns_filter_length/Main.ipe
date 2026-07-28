@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 main =
-    println (String.fromInt (List.length (List.filter (\x -> x > 2) [1, 2, 3, 4])))
+    Io.println (String.fromInt (List.length (List.filter (\x -> x > 2) [1, 2, 3, 4])))

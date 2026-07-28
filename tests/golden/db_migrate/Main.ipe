@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- M5b-db golden: Db.migrate — versioned forward-only schema migrations.
 -- All operations run inside a single withTransaction so the in-memory SQLite
@@ -19,7 +20,7 @@ main =
                         (\applied1 ->
                             Task.andThen
                                 (\applied2 ->
-                                    println
+                                    Io.println
                                         (String.join "," applied1
                                             ++ "|"
                                             ++ String.join "," applied2

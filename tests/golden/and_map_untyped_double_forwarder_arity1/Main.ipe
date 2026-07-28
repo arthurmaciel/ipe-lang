@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 -- #90 T3 green twin of and_map_untyped_double_forwarder_curried:
 -- same UNANNOTATED same-module double-forwarder shape, arity-1 payload —
@@ -20,5 +20,5 @@ inc n =
 
 main =
     case am2 (Ok 41) (Ok inc) of
-        Ok n -> println (String.fromInt n)
-        Err _ -> println "err"
+        Ok n -> Io.println (String.fromInt n)
+        Err _ -> Io.println "err"

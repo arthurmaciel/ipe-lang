@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- A MIXED composite: an Arc-eligible fn field `f` alongside a NonClone `Task`
@@ -14,4 +14,4 @@ use c =
 
 
 main =
-    println "unused"
+    Io.println "unused"

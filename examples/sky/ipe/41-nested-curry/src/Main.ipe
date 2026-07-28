@@ -8,7 +8,7 @@ module Main exposing (main)
 -- (`((makeAdder 1) 2) 3`) of the result must work.
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 q : Int -> Int -> Int -> Int -> Int
@@ -23,7 +23,7 @@ makeAdder a =
 
 main =
     let
-        _ = println (String.fromInt (q 1 2 3 4))
-        _ = println (String.fromInt (makeAdder 1 2 3))
+        _ = Io.println (String.fromInt (q 1 2 3 4))
+        _ = Io.println (String.fromInt (makeAdder 1 2 3))
     in
-        println (String.fromInt (((makeAdder 1) 2) 3))
+        Io.println (String.fromInt (((makeAdder 1) 2) 3))

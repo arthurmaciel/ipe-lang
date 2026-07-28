@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 small : Float
 small = 0.00001
@@ -8,4 +9,4 @@ large : Float
 large = 1.0e21
 
 main =
-    println (String.fromFloat small ++ "|" ++ String.fromFloat large)
+    Io.println (String.fromFloat small ++ "|" ++ String.fromFloat large)

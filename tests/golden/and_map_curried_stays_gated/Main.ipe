@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- #90 T3 residual gate: a CURRIED (arity >= 2) payload function through
 -- `andMap` stays rejected — the IR flattens curried arrows, so the first
@@ -8,7 +9,7 @@ import Ipe.Prelude exposing (..)
 -- (Stage 2, not implemented). Must stay a clean IPE-L0114, never a silent
 -- accept that later cargo-fails.
 main =
-    println (String.fromInt (Maybe.withDefault 0
+    Io.println (String.fromInt (Maybe.withDefault 0
         (Just (\a b -> a + b)
             |> Maybe.andMap (Just 1)
             |> Maybe.andMap (Just 2))))

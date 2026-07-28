@@ -8,7 +8,7 @@ import Ipe.String as String
 import Ipe.Result as Result
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Ipe.Web exposing (app, route)
 import Ipe.Html.Events exposing (onClick, onInput)
 import Ipe.Cmd as Cmd
@@ -33,7 +33,7 @@ init : a -> ( Model, Cmd Msg )
 init _req =
     let
         _ = Schema.initDb
-        _ = println "[SkyMon] Initialised"
+        _ = Io.println "[SkyMon] Initialised"
     in
         ( { page = DashboardPage
           , session = Nothing

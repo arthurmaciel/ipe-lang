@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 double : a -> a
 double x = x + x
@@ -8,4 +9,4 @@ doubleFloat : Float -> Float
 doubleFloat x = double x
 
 main =
-    println (String.fromInt (double 21))
+    Io.println (String.fromInt (double 21))

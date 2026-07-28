@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- M5b-db golden: Db.queryDecode with Db.Decode.string — typed row decoder path.
 -- Exercises IrType::Decoder(String) introduced in constrain.rs for the M5b-db fix.
@@ -25,7 +26,7 @@ main =
                                 [ SqlString "bob" ]
                     in
                     Task.andThen
-                        (\names -> println (String.join "," names))
+                        (\names -> Io.println (String.join "," names))
                         (Db.queryDecode txconn
                             "SELECT n FROM names ORDER BY n"
                             []

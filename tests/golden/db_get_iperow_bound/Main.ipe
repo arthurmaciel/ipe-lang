@@ -4,7 +4,7 @@ import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
 import Ipe.Dict as Dict
 import Ipe.Db as Db
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- BACKLOG #177 regression — `examples/27-multi-session-chat`'s cargo build.
@@ -52,4 +52,4 @@ main =
         row =
             decodeRow payload
     in
-    println (row.author ++ "," ++ row.text)
+    Io.println (row.author ++ "," ++ row.text)

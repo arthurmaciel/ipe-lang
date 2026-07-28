@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Encoding as Encoding
+import Ipe.Io as Io
 
 -- Non-ASCII text under Encoding.base64Encode / hexEncode — GO PARITY (task #55a).
 --
@@ -21,4 +22,4 @@ main =
 
         hexed = Encoding.hexEncode "café"
     in
-    println (String.join " " [ "café", b64, hexed ])
+    Io.println (String.join " " [ "café", b64, hexed ])

@@ -82,6 +82,7 @@ fn module_for_mask(name: ipe_intern::Symbol, mask: u16) -> Module {
         uses_websocket: f(8),
         uses_email: f(9),
         uses_env_public: f(10),
+        uses_debug: false,
         uses_ffi: false,
     }
 }

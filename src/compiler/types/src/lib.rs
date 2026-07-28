@@ -2244,7 +2244,7 @@ mod tests {
         assert!(solved.is_ok(), "inference must succeed");
         let Ok(solved) = solved else { return };
 
-        // main = println (String.fromInt (update Increment 0))
+        // main = Io.println (String.fromInt (update Increment 0))
         let main_def = m
             .defs
             .iter()
@@ -2487,7 +2487,7 @@ mod tests {
              import ModA exposing (useInt)\n\n\
              useBool : Bool\n\
              useBool =\n    ident (0 == 0)\n\n\
-             main =\n    println (String.fromInt useInt)\n",
+             main =\n    Io.println (String.fromInt useInt)\n",
         );
         let Some((m, mut i)) = link_modules(&[LIB1_IDENT, mid, main]) else {
             return;
@@ -2525,7 +2525,7 @@ mod tests {
              import ModA exposing (ints)\n\n\
              bools : List Bool\n\
              bools =\n    empty\n\n\
-             main =\n    println (String.fromInt (List.length ints + List.length bools))\n",
+             main =\n    Io.println (String.fromInt (List.length ints + List.length bools))\n",
         );
         let Some((m, mut i)) = link_modules(&[lib, mid, main]) else {
             return;
@@ -2552,7 +2552,7 @@ mod tests {
              twice x =\n    ident (ident x)\n\n\
              useInt : Int\n\
              useInt =\n    twice 5\n\n\
-             main =\n    println (String.fromInt useInt)\n",
+             main =\n    Io.println (String.fromInt useInt)\n",
         );
         let Some((m, mut i)) = link_modules(&[LIB1_IDENT, main]) else {
             return;
@@ -2585,7 +2585,7 @@ mod tests {
              import Lib1 exposing (isEven)\n\n\
              result : Bool\n\
              result =\n    isEven 4\n\n\
-             main =\n    println (String.fromInt (if result then 1 else 0))\n",
+             main =\n    Io.println (String.fromInt (if result then 1 else 0))\n",
         );
         let Some((m, mut i)) = link_modules(&[lib, main]) else {
             return;
@@ -2618,7 +2618,7 @@ mod tests {
              import Lib1 exposing (getName)\n\n\
              name : String\n\
              name =\n    getName { name = \"Ada\" }\n\n\
-             main =\n    println name\n",
+             main =\n    Io.println name\n",
         );
         let Some((m, mut i)) = link_modules(&[lib, main]) else {
             return;
@@ -2652,7 +2652,7 @@ mod tests {
              import ModA exposing (aName)\n\n\
              bName : String\n\
              bName =\n    getName { name = \"Bea\", age = 9 }\n\n\
-             main =\n    println (aName ++ bName)\n",
+             main =\n    Io.println (aName ++ bName)\n",
         );
         let Some((m, mut i)) = link_modules(&[lib, mid, main]) else {
             return;
@@ -2689,7 +2689,7 @@ mod tests {
             "module Main exposing (main)\n\n\
              import Ipe.Prelude exposing (..)\n\
              import Lib1 exposing (setName)\n\n\
-             main =\n    println ((setName { name = \"Ada\" } \"Bea\").name)\n",
+             main =\n    Io.println ((setName { name = \"Ada\" } \"Bea\").name)\n",
         );
         let Some((m, mut i)) = link_modules(&[lib, main]) else {
             return;
@@ -2746,7 +2746,7 @@ mod tests {
              import ModA exposing (sumInt)\n\n\
              sumFloat : Float\n\
              sumFloat =\n    plus 1.0 2.0\n\n\
-             main =\n    println (String.fromInt sumInt)\n",
+             main =\n    Io.println (String.fromInt sumInt)\n",
         );
         let Some((m, mut i)) = link_modules(&[lib, mid, main]) else {
             return;
@@ -2774,7 +2774,7 @@ mod tests {
                    useInt =\n    f 5\n\
                    useBool : Bool\n\
                    useBool =\n    f (0 == 0)\n\
-                   main =\n    println (String.fromInt useInt)\n";
+                   main =\n    Io.println (String.fromInt useInt)\n";
         let Some((m, mut i)) = canon_src(src) else {
             return;
         };
@@ -2810,7 +2810,7 @@ mod tests {
                    type Msg = Increment | Decrement\n\
                    h : Int\n\
                    h = Increment\n\
-                   main =\n    println (String.fromInt 0)\n";
+                   main =\n    Io.println (String.fromInt 0)\n";
         let Some((m, mut i)) = canon_src(src) else {
             return;
         };
@@ -2948,7 +2948,7 @@ mod tests {
                    import Ipe.Prelude exposing (..)\n\
                    f : PanicInfo -> PanicInfo\n\
                    f p =\n    { p | message = \"x\" }\n\
-                   main =\n    println \"never\"\n";
+                   main =\n    Io.println \"never\"\n";
         let parsed = canon_src(src);
         assert!(
             parsed.is_some(),
@@ -2988,7 +2988,7 @@ mod tests {
                    import Ipe.Prelude exposing (..)\n\
                    f : Int -> Int\n\
                    f n =\n    if n > 0 then n else 0\n\
-                   main =\n    println (String.fromInt (f 1))\n";
+                   main =\n    Io.println (String.fromInt (f 1))\n";
         let Some((m, mut i)) = canon_src(src) else {
             return;
         };
@@ -3012,7 +3012,7 @@ mod tests {
                    import Ipe.Prelude exposing (..)\n\
                    f : Int -> Int\n\
                    f n =\n    if n then 1 else 0\n\
-                   main =\n    println (String.fromInt (f 1))\n";
+                   main =\n    Io.println (String.fromInt (f 1))\n";
         let Some((m, mut i)) = canon_src(src) else {
             return;
         };
@@ -3038,7 +3038,7 @@ mod tests {
                    type Msg = Increment | Decrement\n\
                    f : Int -> Int\n\
                    f n =\n    if n > 0 then 1 else Increment\n\
-                   main =\n    println (String.fromInt (f 1))\n";
+                   main =\n    Io.println (String.fromInt (f 1))\n";
         let Some((m, mut i)) = canon_src(src) else {
             return;
         };
@@ -3063,7 +3063,7 @@ mod tests {
                    import Ipe.Prelude exposing (..)\n\
                    g : Int\n\
                    g a = 0\n\
-                   main =\n    println (String.fromInt 0)\n";
+                   main =\n    Io.println (String.fromInt 0)\n";
         let Some((m, mut i)) = canon_src(src) else {
             return;
         };
@@ -3097,7 +3097,7 @@ mod tests {
                    type Msg = Increment | Decrement\n\
                    f : Msg -> Int\n\
                    f msg =\n        case msg of\n            Increment -> 1\n\
-                   main =\n    println (String.fromInt 0)\n";
+                   main =\n    Io.println (String.fromInt 0)\n";
         let Some((m, mut i)) = canon_src(src) else {
             return;
         };
@@ -3131,7 +3131,7 @@ mod tests {
                    import Ipe.Prelude exposing (..)\n\
                    f : Maybe Int -> Int\n\
                    f (Just x) = x\n\
-                   main =\n    println (String.fromInt 0)\n";
+                   main =\n    Io.println (String.fromInt 0)\n";
         let Some((m, mut i)) = canon_src(src) else {
             return;
         };
@@ -3156,7 +3156,7 @@ mod tests {
                    import Ipe.Prelude exposing (..)\n\
                    apply : (Maybe Int -> Int) -> Int\n\
                    apply f = f (Just 1)\n\
-                   main =\n    println (String.fromInt (apply (\\(Just x) -> x)))\n";
+                   main =\n    Io.println (String.fromInt (apply (\\(Just x) -> x)))\n";
         let Some((m, mut i)) = canon_src(src) else {
             return;
         };
@@ -3181,7 +3181,7 @@ mod tests {
                    import Ipe.Prelude exposing (..)\n\
                    f : Int -> (Int, Int) -> Int\n\
                    f _ (a, b) = a + b\n\
-                   main =\n    println (String.fromInt (f 9 (1, 2)))\n";
+                   main =\n    Io.println (String.fromInt (f 9 (1, 2)))\n";
         let Some((m, mut i)) = canon_src(src) else {
             return;
         };
@@ -3204,7 +3204,7 @@ mod tests {
                    f : Msg -> Int\n\
                    f msg =\n        case msg of\n            Increment -> 1\n\
                    \x20           Decrement -> 2\n            Increment -> 3\n\
-                   main =\n    println (String.fromInt 0)\n";
+                   main =\n    Io.println (String.fromInt 0)\n";
         let Some((m, mut i)) = canon_src(src) else {
             return;
         };
@@ -3264,7 +3264,7 @@ mod tests {
                    view n =\n        wrap [ n, n + 1 ] [ n - 1 ]\n\
                    wrap : List Int -> List Int -> List Int\n\
                    wrap a b =\n        List.append a b\n\
-                   main =\n    println (String.fromInt (step Reset 0))\n";
+                   main =\n    Io.println (String.fromInt (step Reset 0))\n";
         let Some((m, mut i)) = canon_src(src) else {
             return;
         };
@@ -3407,7 +3407,7 @@ mod tests {
                    f : Opt (Opt Int) -> Int\n\
                    f o =\n        case o of\n            Som (Som x) -> x\n\
                    \x20           Non -> 0\n\
-                   main =\n    println (String.fromInt 0)\n";
+                   main =\n    Io.println (String.fromInt 0)\n";
         let Some((m, mut i)) = canon_src(src) else {
             return;
         };
@@ -3448,7 +3448,7 @@ mod tests {
                    f : Opt (Opt Int) -> Int\n\
                    f o =\n        case o of\n            Som x -> 1\n\
                    \x20           Som (Som y) -> y\n            Non -> 0\n\
-                   main =\n    println (String.fromInt 0)\n";
+                   main =\n    Io.println (String.fromInt 0)\n";
         let Some((m, mut i)) = canon_src(src) else {
             return;
         };
@@ -3489,7 +3489,7 @@ mod tests {
                    f : Opt (Opt Int) -> Int\n\
                    f o =\n        case o of\n            Som (Som x) -> x\n\
                    \x20           Som Non -> 0\n            Non -> 0\n\
-                   main =\n    println (String.fromInt 0)\n";
+                   main =\n    Io.println (String.fromInt 0)\n";
         let Some((m, mut i)) = canon_src(src) else {
             return;
         };
@@ -3508,7 +3508,7 @@ mod tests {
         let src = "module Main exposing (main)\n\
                    import Ipe.Prelude exposing (..)\n\
                    f x = x x\n\
-                   main =\n    println (String.fromInt 0)\n";
+                   main =\n    Io.println (String.fromInt 0)\n";
         let Some((m, mut i)) = canon_src(src) else {
             return;
         };
@@ -3989,7 +3989,7 @@ mod tests {
                    useInt =\n    identity 5\n\
                    useBool : Bool\n\
                    useBool =\n    identity (0 == 0)\n\
-                   main =\n    println (String.fromInt useInt)\n";
+                   main =\n    Io.println (String.fromInt useInt)\n";
         let Some((m, mut i)) = canon_src(src) else {
             return;
         };
@@ -4084,7 +4084,7 @@ mod tests {
                    import Ipe.Prelude exposing (..)\n\
                    bad : a -> b\n\
                    bad x =\n    x\n\
-                   main =\n    println (String.fromInt 0)\n";
+                   main =\n    Io.println (String.fromInt 0)\n";
         let Some((m, mut i)) = canon_src(src) else {
             return;
         };
@@ -4112,7 +4112,7 @@ mod tests {
                    import Ipe.Prelude exposing (..)\n\
                    f : a -> a\n\
                    f x =\n    x + 1\n\
-                   main =\n    println (String.fromInt 0)\n";
+                   main =\n    Io.println (String.fromInt 0)\n";
         let Some((m, mut i)) = canon_src(src) else {
             return;
         };
@@ -4211,7 +4211,7 @@ mod tests {
                    useInt =\n    ident 5\n\
                    useBool : Bool\n\
                    useBool =\n    ident (0 == 0)\n\
-                   main =\n    println (String.fromInt useInt)\n";
+                   main =\n    Io.println (String.fromInt useInt)\n";
         let Some((m, mut i)) = canon_src(src) else {
             return;
         };
@@ -4246,7 +4246,7 @@ mod tests {
                    import Ipe.Prelude exposing (..)\n\
                    double : a -> a\n\
                    double x =\n    x + x\n\
-                   main =\n    println (String.fromInt (double 21))\n";
+                   main =\n    Io.println (String.fromInt (double 21))\n";
         let Some((m, mut i)) = canon_src(src) else {
             return;
         };
@@ -4271,7 +4271,7 @@ mod tests {
                    import Ipe.Prelude exposing (..)\n\
                    maxOf : a -> a -> a\n\
                    maxOf p q =\n    if p > q then p else q\n\
-                   main =\n    println (String.fromInt (maxOf 3 7))\n";
+                   main =\n    Io.println (String.fromInt (maxOf 3 7))\n";
         let Some((m, mut i)) = canon_src(src) else {
             return;
         };
@@ -4298,7 +4298,7 @@ mod tests {
                    double x =\n    x + x\n\
                    doubleFloat : Float -> Float\n\
                    doubleFloat x =\n    double x\n\
-                   main =\n    println (String.fromInt (double 21))\n";
+                   main =\n    Io.println (String.fromInt (double 21))\n";
         let Some((m, mut i)) = canon_src(src) else {
             return;
         };
@@ -4318,7 +4318,7 @@ mod tests {
                    double x =\n    x + x\n\
                    doubleBool : Bool -> Bool\n\
                    doubleBool x =\n    double x\n\
-                   main =\n    println (String.fromInt 0)\n";
+                   main =\n    Io.println (String.fromInt 0)\n";
         let Some((m, mut i)) = canon_src(src) else {
             return;
         };
@@ -4369,7 +4369,7 @@ mod tests {
                    toF x =\n    x\n\
                    v : Float\n\
                    v =\n    toF 100\n\
-                   main =\n    println (String.fromInt 0)\n";
+                   main =\n    Io.println (String.fromInt 0)\n";
         let Some((m, mut i)) = canon_src(src) else {
             return;
         };
@@ -4390,7 +4390,7 @@ mod tests {
                    toI x =\n    x\n\
                    v : Int\n\
                    v =\n    toI 1.5\n\
-                   main =\n    println (String.fromInt 0)\n";
+                   main =\n    Io.println (String.fromInt 0)\n";
         let Some((m, mut i)) = canon_src(src) else {
             return;
         };
@@ -4411,7 +4411,7 @@ mod tests {
                    import Ipe.Prelude exposing (..)\n\
                    f : a -> a\n\
                    f x =\n    x + 1\n\
-                   main =\n    println (String.fromInt 0)\n";
+                   main =\n    Io.println (String.fromInt 0)\n";
         let Some((m, mut i)) = canon_src(src) else {
             return;
         };
@@ -4527,7 +4527,7 @@ mod tests {
             "module Main exposing (main)\n\n\
              import Ipe.Prelude exposing (..)\n\
              import Lib1 exposing (listLen)\n\n\
-             main =\n    println (String.fromInt (listLen [ 90, 35 ]))\n",
+             main =\n    Io.println (String.fromInt (listLen [ 90, 35 ]))\n",
         );
         let Some((m, mut i)) = link_modules(&[lib, main]) else {
             return;

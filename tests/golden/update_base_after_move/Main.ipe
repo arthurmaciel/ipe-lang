@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 {-| #193 regression — record-UPDATE base is a borrow (`(rec).clone()`) that
@@ -60,4 +60,4 @@ main =
         ( same, idle ) =
             bump False { tag = "zzz", score = 7 }
     in
-    println (updated.tag ++ " " ++ String.fromInt updated.score ++ " " ++ note ++ " | " ++ same.tag ++ " " ++ idle)
+    Io.println (updated.tag ++ " " ++ String.fromInt updated.score ++ " " ++ note ++ " | " ++ same.tag ++ " " ++ idle)

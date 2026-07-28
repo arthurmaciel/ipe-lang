@@ -50,10 +50,10 @@ Prefer to start from scratch? A minimal script program is just:
 -- src/Main.ipe
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 main =
-    println "Hello from Ipê!"
+    Io.println "Hello from Ipê!"
 ```
 
 ```sh

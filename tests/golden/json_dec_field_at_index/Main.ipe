@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- `JsonDec.field` — read a named key from a JSON object.
 -- `JsonDec.at`    — follow a path of keys into nested objects.
@@ -27,7 +28,7 @@ main =
                 Ok score ->
                     case r3 of
                         Ok b ->
-                            println
+                            Io.println
                                 (name
                                     ++ " "
                                     ++ String.fromInt score
@@ -41,10 +42,10 @@ main =
                                 )
 
                         Err _ ->
-                            println "err3"
+                            Io.println "err3"
 
                 Err _ ->
-                    println "err2"
+                    Io.println "err2"
 
         Err _ ->
-            println "err1"
+            Io.println "err1"

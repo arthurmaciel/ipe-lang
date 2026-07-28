@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- Anonymous-record-annotated bindings whose fields are in NON-sorted decl order
@@ -30,4 +30,4 @@ older =
 
 
 main =
-    println (older.name ++ " " ++ String.fromInt older.age)
+    Io.println (older.name ++ " " ++ String.fromInt older.age)

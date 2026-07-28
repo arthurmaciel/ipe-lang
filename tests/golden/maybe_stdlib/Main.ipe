@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 unwrap : Maybe Int -> Int
 unwrap m =
@@ -7,4 +8,4 @@ unwrap m =
         Nothing -> 0
 
 main =
-    println (String.fromInt (unwrap (Just 42)))
+    Io.println (String.fromInt (unwrap (Just 42)))

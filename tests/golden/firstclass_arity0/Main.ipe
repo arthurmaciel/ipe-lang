@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- F2 (#121 seal). `handler : String -> Page` is a NULLARY def (def-arity 0):
 -- no explicit parameter pattern, just `handler = mkPage "hello"`.
@@ -31,4 +32,4 @@ main =
     let p = applyF handler "world" in
     case p of
         Home a b ->
-            println (a ++ " " ++ b)
+            Io.println (a ++ " " ++ b)

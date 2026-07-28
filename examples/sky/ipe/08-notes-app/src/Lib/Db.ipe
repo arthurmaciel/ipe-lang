@@ -6,7 +6,7 @@ import Ipe.Dict as Dict
 import Ipe.System as System
 import Ipe.Task as Task
 import Ipe.Error as Error exposing (Error)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Ipe.Db as Db
 
 
@@ -28,7 +28,7 @@ conn =
         Err e ->
             let
                 _ =
-                    println
+                    Io.println
                         ("[FATAL] Cannot open skynotes.db: " ++ Error.toString e)
             in
                 System.exit 1

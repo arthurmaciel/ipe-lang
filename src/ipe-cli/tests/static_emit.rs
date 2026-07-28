@@ -27,9 +27,9 @@ fn write_hello(dir: &Path) -> std::io::Result<PathBuf> {
         &entry,
         "module Main exposing (main)\n\
          import Ipe.Prelude exposing (..)\n\
-         import Ipe.Log exposing (println)\n\
+         import Ipe.Io as Io\n\
          \n\
-         main =\n    println \"static hello\"\n",
+         main =\n    Io.println \"static hello\"\n",
     )?;
     Ok(entry)
 }

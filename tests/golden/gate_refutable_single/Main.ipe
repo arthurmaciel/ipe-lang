@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- A SINGLE-arm tuple `case` whose first element is a constructor sub-pattern
 -- (`Wrap x`). The carrier type has exactly one constructor, so the arm is
@@ -21,4 +22,4 @@ f pair =
         (Wrap x, b) -> x + b
 
 main =
-    println (String.fromInt (f (Wrap 1, 2)))
+    Io.println (String.fromInt (f (Wrap 1, 2)))

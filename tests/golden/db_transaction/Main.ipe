@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Error as Error
+import Ipe.Io as Io
 
 -- M5b-db golden: withTransaction COMMIT path and ROLLBACK-on-error path.
 -- Uses a file-backed SQLite DB (/tmp/ipe_txn_golden.db) so all pool connections
@@ -28,7 +29,7 @@ main =
                             -- SELECT on pool: file-backed shared DB shows only "hello".
                             Task.andThen
                                 (\rows ->
-                                    println
+                                    Io.println
                                         (String.join ","
                                             (List.map (\r -> Db.getString "msg" r) rows)
                                         )

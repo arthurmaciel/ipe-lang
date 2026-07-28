@@ -41,7 +41,7 @@ import Ipe.Ui.Animation as Animation
 
 
 main =
-    println
+    Io.println
         (Html.htmlRender
             (Ui.layout []
                 (Ui.el

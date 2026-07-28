@@ -3,7 +3,7 @@ module Main exposing (main)
 import Ipe.Prelude exposing (..)
 import Ipe.Error as Error
 import Ipe.Task as Task
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 -- Adversarial-review sibling gap (Finding B) of the case-branched entry-point
 -- Task.run elision (`tui_entry_case_taskrun`, same BACKLOG "24-tui-kitchen-
@@ -43,4 +43,4 @@ main =
             Err e
 
         Ok cfg ->
-            println ("validated " ++ String.fromInt cfg) |> Task.run
+            Io.println ("validated " ++ String.fromInt cfg) |> Task.run

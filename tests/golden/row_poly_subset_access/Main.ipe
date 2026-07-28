@@ -1,6 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- #56 proof-matrix shape P2: an unannotated top-level getter, called once
@@ -28,4 +28,4 @@ ada =
 
 
 main =
-    println (getName ada)
+    Io.println (getName ada)

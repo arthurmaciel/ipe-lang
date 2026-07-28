@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Ipe.List as List
 import Ipe.Set as Set
+import Ipe.Io as Io
 
 
 main =
@@ -12,4 +13,4 @@ main =
         s =
             Set.fromList floats
     in
-    println (String.fromInt (Set.size s))
+    Io.println (String.fromInt (Set.size s))

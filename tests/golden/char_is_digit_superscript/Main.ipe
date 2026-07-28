@@ -1,7 +1,8 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 main =
     if Char.isDigit '²' then
-        println "True"
+        Io.println "True"
     else
-        println "False"
+        Io.println "False"

@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- Regression: Jwt.decode : Algorithm -> Int -> String -> Result Error String
 -- Tests caller-supplied `now` expiry/nbf validation matching reference semantics.
@@ -27,12 +28,12 @@ main =
     in
     case Jwt.encode (Jwt.hs256 secret) claimsWithTime of
         Err _ ->
-            println "encode-error"
+            Io.println "encode-error"
 
         Ok tok ->
             case Jwt.encode (Jwt.hs256 secret) claimsNoTime of
                 Err _ ->
-                    println "encode-error"
+                    Io.println "encode-error"
 
                 Ok tokNoTime ->
                     let
@@ -50,4 +51,4 @@ main =
 
                         r7 = checkWith wrongSecret 500 tok
                     in
-                    println (r1 ++ " " ++ r2 ++ " " ++ r3 ++ " " ++ r4 ++ " " ++ r5 ++ " " ++ r6 ++ " " ++ r7)
+                    Io.println (r1 ++ " " ++ r2 ++ " " ++ r3 ++ " " ++ r4 ++ " " ++ r5 ++ " " ++ r6 ++ " " ++ r7)

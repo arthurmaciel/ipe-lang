@@ -2233,9 +2233,9 @@ mod p0_tests {
             Doc::text(")"),
             true,
         );
-        let doc = Doc::call_args(Doc::text("log_println("), vec![mid], Doc::text(")"), true);
+        let doc = Doc::call_args(Doc::text("io_println("), vec![mid], Doc::text(")"), true);
         let got = render(&doc, RenderConfig::default());
-        let expected = "log_println(string_to_upper(format!(\n    \"{}{}\",\n    \"a\".to_string(),\n    \"b\".to_string()\n)))";
+        let expected = "io_println(string_to_upper(format!(\n    \"{}{}\",\n    \"a\".to_string(),\n    \"b\".to_string()\n)))";
         assert_eq!(
             got, expected,
             "\n--- got ---\n{got}\n--- want ---\n{expected}"

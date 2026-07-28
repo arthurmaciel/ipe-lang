@@ -73,6 +73,8 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Json", "Decode", "Pipeline"], "JsonDecP"),
     (&["Ipe", "Task"], "Task"),
     (&["Ipe", "Io"], "Io"),
+    // `Ipe.Debug` — development-only `Debug.log` escape hatch (kernel-only).
+    (&["Ipe", "Debug"], "Debug"),
     (&["Ipe", "Time"], "Time"),
     (&["Ipe", "System"], "System"),
     (&["Ipe", "Random"], "Random"),
@@ -364,7 +366,6 @@ impl Env {
     fn install_builtin_vars(&mut self, interner: &mut Interner) -> DResult<()> {
         let basics = interner.intern("Basics")?;
         let error_sym = interner.intern("Error")?;
-        let log = interner.intern("Log")?;
         for (name, module, func) in [
             ("identity", basics, "identity"),
             ("always", basics, "always"),
@@ -381,7 +382,6 @@ impl Env {
             // `Some(StdlibKernel::ErrorToString)` and the type-checker
             // can look up its scheme without hitting IPE-L0108.
             ("errorToString", error_sym, "toString"),
-            ("println", log, "println"),
             // ── Basics numerics ─────────────────────────────────────────────
             ("negate", basics, "negate"),
             ("abs", basics, "abs"),
@@ -597,14 +597,15 @@ impl Env {
                     "stripStyleClose",
                 ],
             ),
-            // `Ipe.Log` — qualified form (`import Ipe.Log as Log`). `println`/
+            // `Ipe.Log` — qualified form (`import Ipe.Log as Log`).
             // `info`/`debug`/`warn`/`error` are backed; the `*With`
             // variants take Stringify-bounded attrs and stay fail-closed
             // (IPE-L0108) until the Stringify obligation is added.
+            // `Log` is observability-only — line printing lives in `Ipe.Io`
+            // (`Io.println` / `Io.eprintln`).
             (
                 "Log",
                 &[
-                    "println",
                     "info",
                     "debug",
                     "warn",
@@ -881,8 +882,20 @@ impl Env {
                     "withKind",
                 ],
             ),
-            // `Ipe.Io` — I/O effects.
-            ("Io", &["readLine", "writeStdout", "writeStderr"]),
+            // `Ipe.Io` — I/O effects. `println`/`eprintln` write a line
+            // (message + trailing newline) to stdout/stderr respectively.
+            (
+                "Io",
+                &[
+                    "readLine",
+                    "writeStdout",
+                    "writeStderr",
+                    "println",
+                    "eprintln",
+                ],
+            ),
+            // `Ipe.Debug` — dev-only escape hatch. `log : String -> a -> a`.
+            ("Debug", &["log"]),
             // `Ipe.Time` — time effects + TEA tick subscription.
             (
                 "Time",

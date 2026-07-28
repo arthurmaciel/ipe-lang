@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 -- #158 C2 string-literal ctor-payload desugaring (depth 1, direct arg):
 -- `Just "live"` desugars to a fresh `String` binder in that ctor-arg slot plus
@@ -20,4 +20,4 @@ f m =
 
 
 main =
-    println (f (Just "live"))
+    Io.println (f (Just "live"))

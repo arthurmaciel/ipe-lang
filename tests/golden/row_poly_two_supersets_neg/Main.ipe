@@ -1,6 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- #56 proof-matrix shape P6 (the class-1 "Boundary Scheme Promotion"
@@ -22,4 +22,4 @@ main =
         getName rec =
             rec.name
     in
-    println (getName { name = "Ada", age = 36 } ++ getName { name = "Bo", id = 7 })
+    Io.println (getName { name = "Ada", age = 36 } ++ getName { name = "Bo", id = 7 })

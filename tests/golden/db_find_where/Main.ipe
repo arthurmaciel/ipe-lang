@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- M5b-db golden: Db.findWhere with a typed SqlFragment predicate (backlog #61).
 -- Replaces the removed Db.unsafeFindWhere raw-string golden: the WHERE clause
@@ -42,7 +43,7 @@ main =
                                 qty =
                                     Db.getInt "qty" row
                             in
-                            println (name ++ ":" ++ String.fromInt qty)
+                            Io.println (name ++ ":" ++ String.fromInt qty)
                         )
                         -- Typed WHERE clause: SQL injection via a naive
                         -- string-concatenated WHERE is a compile-time type

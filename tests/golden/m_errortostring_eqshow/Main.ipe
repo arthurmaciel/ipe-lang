@@ -1,7 +1,7 @@
 module Main exposing (main, eqShow)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 eqShow : a -> a -> String
 eqShow x y =
@@ -11,4 +11,4 @@ eqShow x y =
         errorToString y
 
 main =
-    println (eqShow 42 42)
+    Io.println (eqShow 42 42)

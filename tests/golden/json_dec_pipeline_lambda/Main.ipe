@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- R1: `JsonDec.succeed (\name age -> …)` — multi-arg lambda curry.
 -- Exercises Fix A case 2 (lambda → curry2).
@@ -15,5 +16,5 @@ main =
                 "{\"name\":\"Alice\",\"age\":30}"
     in
     case r1 of
-        Ok label1 -> println label1
-        Err _ -> println "err1"
+        Ok label1 -> Io.println label1
+        Err _ -> Io.println "err1"

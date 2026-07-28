@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 main =
-    println (String.fromInt (List.foldl (\acc x -> acc + x) 0 [1, 2, 3, 4]))
+    Io.println (String.fromInt (List.foldl (\acc x -> acc + x) 0 [1, 2, 3, 4]))

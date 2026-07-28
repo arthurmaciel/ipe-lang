@@ -3,6 +3,7 @@ module Main exposing (main)
 import Ipe.Html as Html
 import Ipe.Ui as Ui
 import Ipe.Ui.Region as Region
+import Ipe.Io as Io
 
 
 -- #117 seal — every Ipe.Ui.Region member used inside Ui.layout.
@@ -27,4 +28,4 @@ view =
 
 
 main =
-    println view
+    Io.println view

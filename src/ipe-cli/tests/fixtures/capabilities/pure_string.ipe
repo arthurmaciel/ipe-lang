@@ -1,8 +1,8 @@
 module Main exposing (main)
 
 import Ipe.String as String
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 main : Task ()
 main =
-    println (String.toUpper "hello")
+    Io.println (String.toUpper "hello")

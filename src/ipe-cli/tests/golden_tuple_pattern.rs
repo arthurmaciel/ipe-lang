@@ -7,7 +7,7 @@
 //! ```text
 //! fst (a, b) = a ; snd (a, b) = b
 //! pairSum = case (1, 2) of (a, b) -> a + b
-//! main = println (String.fromInt (fst (41, 99) + snd (7, 2) + pairSum))  -- 46
+//! main = Io.println (String.fromInt (fst (41, 99) + snd (7, 2) + pairSum))  -- 46
 //! ```
 //!
 //! Behavioural-parity oracle: the Go reference compiler at

@@ -65,11 +65,11 @@ fn run_audit(pkg: &Path, index: &Path) -> (bool, String, String) {
 const PURE_MAIN: &str = "module Main exposing (main)\n\
                          \n\
                          import Ipe.String as String\n\
-                         import Ipe.Log exposing (println)\n\
+                         import Ipe.Io as Io\n\
                          \n\
                          main : Task ()\n\
                          main =\n\
-                         \x20   println (String.toUpper \"hello\")\n";
+                         \x20   Io.println (String.toUpper \"hello\")\n";
 
 /// A program that makes a network request — its inferred capability set is
 /// `{network}`.
@@ -77,12 +77,12 @@ const NETWORK_MAIN: &str = "module Main exposing (main)\n\
                             \n\
                             import Ipe.Http as Http\n\
                             import Ipe.Task as Task\n\
-                            import Ipe.Log exposing (println)\n\
+                            import Ipe.Io as Io\n\
                             \n\
                             main : Task ()\n\
                             main =\n\
                             \x20   Http.get \"http://example.com\"\n\
-                            \x20       |> Task.andThen (\\_ -> println \"done\")\n";
+                            \x20       |> Task.andThen (\\_ -> Io.println \"done\")\n";
 
 /// An empty index checkout root (no `packages/` entries) — used when a package
 /// has no published predecessor, so the enforced-semver check skips.
@@ -172,17 +172,17 @@ fn an_unimported_sibling_capability_rejects() {
         &pkg,
         "name = \"sibling-pkg\"\nversion = \"0.1.0\"\n\n[source]\nroot = \"src\"\n",
         // Pure Main — does NOT import Extra.
-        "module Main exposing (main)\n\nimport Ipe.Log exposing (println)\n\n\
-         main : Task ()\nmain =\n\x20   println \"hi\"\n",
+        "module Main exposing (main)\n\nimport Ipe.Io as Io\n\n\
+         main : Task ()\nmain =\n\x20   Io.println \"hi\"\n",
     );
     // An exposed sibling that reaches the network, unimported by Main.
     std::fs::write(
         pkg.join("src").join("Extra.ipe"),
         "module Extra exposing (fetch)\n\nimport Ipe.Http as Http\n\
-         import Ipe.Task as Task\nimport Ipe.Log exposing (println)\n\n\
+         import Ipe.Task as Task\nimport Ipe.Io as Io\n\n\
          fetch : Task ()\nfetch =\n\
          \x20   Http.get \"http://example.com\"\n\
-         \x20       |> Task.andThen (\\_ -> println \"done\")\n",
+         \x20       |> Task.andThen (\\_ -> Io.println \"done\")\n",
     )
     .expect("write Extra");
     let index = empty_index("sibling-cap");
@@ -210,8 +210,8 @@ fn a_semver_underbump_rejects() {
     std::fs::write(pkg.join("ipe.toml"), manifest).expect("write ipe.toml");
     std::fs::write(
         pkg.join("src").join("Main.ipe"),
-        "module Main exposing (main)\n\nimport Ipe.Log exposing (println)\n\n\
-         main : Task ()\nmain =\n\x20   println \"hi\"\n",
+        "module Main exposing (main)\n\nimport Ipe.Io as Io\n\n\
+         main : Task ()\nmain =\n\x20   Io.println \"hi\"\n",
     )
     .expect("write Main");
     std::fs::write(
@@ -228,8 +228,8 @@ fn a_semver_underbump_rejects() {
         "0.1.0",
         "module Lib exposing (double)\n\nimport Ipe.Prelude exposing (..)\n\n\n\
          double : Int -> Int\ndouble n =\n\x20   n + n\n",
-        "module Main exposing (main)\n\nimport Ipe.Log exposing (println)\n\n\
-         main : Task ()\nmain =\n\x20   println \"hi\"\n",
+        "module Main exposing (main)\n\nimport Ipe.Io as Io\n\n\
+         main : Task ()\nmain =\n\x20   Io.println \"hi\"\n",
     );
 
     let (ok, stdout, stderr) = run_audit(&pkg, &index.index_root);

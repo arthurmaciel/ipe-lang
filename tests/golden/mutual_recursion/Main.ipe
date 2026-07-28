@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- Mutually-recursive ADTs: each enum's payload field is the *other* enum, so the
 -- type-size cycle Even -> Odd -> Even is closed only through enum-payload edges.
@@ -20,4 +21,4 @@ countEven e =
         ESucc o -> 1 + countOdd o
 
 main =
-    println (String.fromInt (countOdd (OSucc (ESucc (OSucc (ESucc (OSucc EZero)))))))
+    Io.println (String.fromInt (countOdd (OSucc (ESucc (OSucc (ESucc (OSucc EZero)))))))

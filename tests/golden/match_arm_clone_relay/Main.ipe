@@ -2,7 +2,7 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- #222 SEAL breach: a match-arm-bound variable (`name`, CloneOk `String`) read
@@ -36,4 +36,4 @@ handle m =
 
 main : Task Error ()
 main =
-    Task.andThen (\s -> println s) (handle (Just "bob"))
+    Task.andThen (\s -> Io.println s) (handle (Just "bob"))

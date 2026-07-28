@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 main =
@@ -24,7 +24,7 @@ main =
         f =
             modBy 3 10
     in
-    println
+    Io.println
         ((if a then "T" else "F")
             ++ " "
             ++ String.fromInt (b + c + d + e + f)

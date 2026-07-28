@@ -3,7 +3,7 @@ module Main exposing (main)
 import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
 import Ipe.Email as Email
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 -- SEAL fixture for backlog #210 "Ipe.Email family": a typed `EmailMessage`
 -- built via `defaultMessage` + `with*` builders is fed DIRECTLY to
@@ -44,5 +44,5 @@ main =
                     )
     in
     Email.send provider message
-        |> Task.andThen (\_ -> Task.succeed (println "sent"))
-        |> Task.onError (\_ -> Task.succeed (println "failed"))
+        |> Task.andThen (\_ -> Task.succeed (Io.println "sent"))
+        |> Task.onError (\_ -> Task.succeed (Io.println "failed"))

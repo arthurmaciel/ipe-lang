@@ -295,6 +295,11 @@ pub struct BuildOptions {
     /// to clean `ipe_main()` with a console warning (fault-tolerant hydrate — see
     /// spec Q6 §"Fault-tolerant hydrate — parse, don't unwrap").
     pub wasm_hydrate_mode: bool,
+    /// `true` for a PRODUCTION build (`ipe build --optimize`). Threaded into
+    /// [`ipe_db::BuildConfig::production`] so the emit demand rejects any
+    /// development-only `Debug.*` escape hatch (IPE-L0140). Default `false`
+    /// (a development build).
+    pub production: bool,
 }
 
 /// Build `entry` into a Rust Cargo project under `out_dir`, vendoring the
@@ -623,6 +628,7 @@ fn compile_modules_observed(
         db_driver,
         options.target,
         &options.wasm_public_env,
+        options.production,
     );
     let epoch = cache_dir.and_then(|_| cache::derive_epoch());
     if let (Some(root), Some(epoch)) = (cache_dir, epoch.as_deref())
@@ -648,6 +654,28 @@ fn compile_modules_observed(
             std::sync::Arc::new(std::sync::Mutex::new(ipe_intern::Interner::new()));
         if let Some(program) = cache::try_load_ir(root, epoch, &ir_key, &fresh_interner) {
             use ipe_backend::Backend as _;
+            // Production gate on the IR-cache fast path: this path bypasses
+            // `emit_project` (the DB layer where the gate normally runs), so a
+            // cached IR that uses a development-only `Debug.*` escape hatch must
+            // be rejected here too (IPE-L0140) — otherwise `--optimize` would
+            // ship the debug window whenever the IR tier happened to hit.
+            if options.production && program.modules.iter().any(|m| m.uses_debug) {
+                let diag = Diagnostic::Lower {
+                    span: ipe_diagnostics::Span::DUMMY,
+                    msg: ipe_diagnostics::LowerError::DevOnlyKernelInProduction {
+                        kernel: "Debug.log".into(),
+                    },
+                };
+                let src = std::fs::read_to_string(blame_path).unwrap_or_default();
+                return (
+                    Err(CliError::Pipeline {
+                        file: blame_path.to_path_buf(),
+                        src,
+                        diag,
+                    }),
+                    CacheOutcome::IrHit,
+                );
+            }
             let emit_result = {
                 let guard = fresh_interner
                     .lock()
@@ -705,6 +733,7 @@ fn compile_modules_observed(
         options.target,
         options.wasm_public_env.clone(),
         options.wasm_hydrate_mode,
+        options.production,
     );
 
     let emitted = match compile_prepared(&db, source_root, &sources, entry_path, blame_path, config)
@@ -1781,6 +1810,7 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
         },
         wasm_public_env: Vec::new(),
         wasm_hydrate_mode: false,
+        production: args.production,
     };
 
     // Human-friendly progress: the compile+emit below is otherwise silent, so
@@ -2001,12 +2031,14 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
     let manifest = discover_manifest(&entry_path)?;
     let static_plan = resolve_static_plan(cli_layer, manifest.as_deref())?;
     // `ipe run` builds and executes a native process; a browser bundle has no
-    // native entry to run, so this path is always the native target.
+    // native entry to run, so this path is always the native target. `ipe run`
+    // is a DEVELOPMENT execution, so `Debug.*` is allowed (production = false).
     let options = BuildOptions {
         static_plan,
         target: ipe_ir::Target::Native,
         wasm_public_env: Vec::new(),
         wasm_hydrate_mode: false,
+        production: false,
     };
 
     manifest.as_ref().map_or_else(
@@ -3247,7 +3279,7 @@ mod tests {
         let index = code_index();
         let lines = index.lines().count();
         assert_eq!(lines, ALL_CODES.len(), "one line per code");
-        assert_eq!(ALL_CODES.len(), 105, "taxonomy is 105 codes");
+        assert_eq!(ALL_CODES.len(), 106, "taxonomy is 106 codes");
         assert!(
             index.contains("IPE-T0001  type mismatch"),
             "index pairs code with title"
@@ -3356,7 +3388,7 @@ mod tests {
              wrap x =\n    { value = x }\n\n\
              unwrap : { value : a } -> a\n\
              unwrap r =\n    r.value\n\n\
-             main = println (String.fromInt (unwrap (wrap 42)))\n";
+             main = Io.println (String.fromInt (unwrap (wrap 42)))\n";
 
         if std::env::var("IPE_E2E").is_err() {
             return;
@@ -3457,7 +3489,7 @@ module Main exposing (main)
 import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
 import Ipe.Error as Error exposing (Error)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 main =
     let
@@ -3467,8 +3499,8 @@ main =
                     |> Task.andThen (\\_ -> Task.succeed \"unreachable\"))
     in
         case result of
-            Ok val -> println val
-            Err e  -> println (Error.toString e)
+            Ok val -> Io.println val
+            Err e  -> Io.println (Error.toString e)
 ";
 
         let runtime = resolve_runtime();
@@ -3521,10 +3553,10 @@ main =
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 main =
-    println \"hello from task run\" |> Task.run
+    Io.println \"hello from task run\" |> Task.run
 ";
 
         let runtime = resolve_runtime();
@@ -3613,7 +3645,7 @@ main =
         // Entry module: src/Main.ipe — imports Helper
         fs::write(
             src.join("Main.ipe"),
-            "module Main exposing (main)\nimport Helper\nmain = println (String.fromInt Helper.answer)\n",
+            "module Main exposing (main)\nimport Helper\nmain = Io.println (String.fromInt Helper.answer)\n",
         )
         .expect("write Main.ipe");
 
@@ -3656,7 +3688,7 @@ main =
         let main_path = src.join("Main.ipe");
         fs::write(
             &main_path,
-            "module Main exposing (main)\nimport Helper\nmain = println (String.fromInt Helper.broken)\n",
+            "module Main exposing (main)\nimport Helper\nmain = Io.println (String.fromInt Helper.broken)\n",
         )
         .expect("write Main.ipe");
 
@@ -3762,7 +3794,7 @@ main =
         // Main.ipe: imports both; the error is in Lib, not Main or Pad.
         fs::write(
             src.join("Main.ipe"),
-            "module Main exposing (main)\nimport Lib\nimport Pad\nmain = println (String.fromInt Lib.bad)\n",
+            "module Main exposing (main)\nimport Lib\nimport Pad\nmain = Io.println (String.fromInt Lib.bad)\n",
         )
         .expect("write Main.ipe");
 

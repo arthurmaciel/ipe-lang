@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- A tuple pattern in a function parameter: the generic `fst` / `snd`
 -- projections. `(a, b)` destructures the single tuple argument irrefutably.
@@ -17,4 +18,4 @@ pairSum =
 
 -- 41 + 2 + 3 = 46, the same value the Go reference compiler prints.
 main =
-    println (String.fromInt (fst (41, 99) + snd (7, 2) + pairSum))
+    Io.println (String.fromInt (fst (41, 99) + snd (7, 2) + pairSum))

@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- Soundness regression for Limitation #8 (Rust backend): the REACHABLE List
 -- pipeline runs in CONSTANT native stack. `range` / `map` / `foldr` route to
@@ -10,7 +11,7 @@ module Main exposing (main)
 -- so the value is deterministic (500000) and independent of the sum's width.
 
 main =
-    println
+    Io.println
         (String.fromInt
             (List.foldr
                 (\x acc -> acc + 1)

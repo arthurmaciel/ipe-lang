@@ -3,7 +3,7 @@ module Main exposing (main)
 import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
 import Ipe.Time as Time
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- #218 SEAL breach: a let-bound function (`insertRow`) read ONLY at
@@ -40,5 +40,5 @@ save n =
 main : Task Error ()
 main =
     Task.andThen
-        (\total -> println ("total=" ++ String.fromInt total))
+        (\total -> Io.println ("total=" ++ String.fromInt total))
         (save "abc")

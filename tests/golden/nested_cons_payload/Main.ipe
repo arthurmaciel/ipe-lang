@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 -- #158 Class-4 item C, Repro 1: a cons sub-pattern nested inside a constructor
 -- payload (`Just (h :: t)`). Used to fail-closed with IPE-L0116 because a
@@ -19,4 +19,4 @@ f m =
 
 
 main =
-    println (String.fromInt (f (Just [ 1, 2, 3 ])))
+    Io.println (String.fromInt (f (Just [ 1, 2, 3 ])))

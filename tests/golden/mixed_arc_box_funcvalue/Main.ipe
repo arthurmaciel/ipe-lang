@@ -4,7 +4,7 @@ import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
 import Ipe.Html as Html
 import Ipe.Ui as Ui exposing (Element)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- BACKLOG #172 regression, shape (2): a promoted Arc-root handler and a
@@ -52,4 +52,4 @@ loginForm flag =
 
 main : Task Error ()
 main =
-    println (Html.render (Ui.layout [] (loginForm True)))
+    Io.println (Html.render (Ui.layout [] (loginForm True)))

@@ -4,6 +4,7 @@ import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onClick)
 import Ipe.String as String
+import Ipe.Io as Io
 
 
 -- i139 regression: polymorphic function with attribute lists.
@@ -35,4 +36,4 @@ counterView toMsg n =
 
 
 main =
-    println (render (counterView Wrap 0))
+    Io.println (render (counterView Wrap 0))

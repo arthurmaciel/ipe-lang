@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- Decode a JSON array of integers; print the length of the resulting list.
 -- Exercises `JsonDec.list` (which wraps an element decoder in a factory so
@@ -6,7 +7,7 @@ module Main exposing (main)
 main =
     case JsonDec.decodeString (JsonDec.list JsonDec.int) "[1,2,3]" of
         Ok ns ->
-            println (String.fromInt (List.length ns))
+            Io.println (String.fromInt (List.length ns))
 
         Err _ ->
-            println "got error"
+            Io.println "got error"

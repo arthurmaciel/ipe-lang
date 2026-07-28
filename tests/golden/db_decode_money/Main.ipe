@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- #34 golden: `Db.Decode.money` kernel wiring end-to-end.
 --
@@ -49,7 +50,7 @@ main =
                         (\okLine ->
                             Task.andThen
                                 (\badLine ->
-                                    println (okLine ++ "\n" ++ badLine)
+                                    Io.println (okLine ++ "\n" ++ badLine)
                                 )
                                 (Task.onError
                                     (\_ -> Task.succeed "malformed:caught")

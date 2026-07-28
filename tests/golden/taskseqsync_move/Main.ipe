@@ -2,7 +2,6 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
-import Ipe.Log exposing (println)
 
 
 -- AUD-04 witness 4 (TaskSeqSync use-after-move — the one AUD-04 site with
@@ -25,4 +24,4 @@ helper msg =
 
 
 main =
-    println (helper "hello-msg")
+    Io.println (helper "hello-msg")

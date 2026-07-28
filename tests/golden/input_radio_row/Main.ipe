@@ -3,6 +3,7 @@ module Main exposing (main)
 import Ipe.Html as Html
 import Ipe.Ui as Ui
 import Ipe.Ui.Input as Input
+import Ipe.Io as Io
 
 
 -- i155 regression: Input.radio, Input.radioRow, and Input.option must
@@ -45,4 +46,4 @@ viewRadioRow selected =
 
 
 main =
-    println (viewRadio "red" ++ viewRadioRow "blue")
+    Io.println (viewRadio "red" ++ viewRadioRow "blue")

@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 type Shape
@@ -32,4 +32,4 @@ main =
         adtNullary =
             toString Empty
     in
-    println (scalar ++ " | " ++ record ++ " | " ++ adtPayload ++ " | " ++ adtNullary)
+    Io.println (scalar ++ " | " ++ record ++ " | " ++ adtPayload ++ " | " ++ adtNullary)

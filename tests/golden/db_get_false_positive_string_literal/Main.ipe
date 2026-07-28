@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- #177 false-positive probe C: wildcard-`any` param, body has the STRING
@@ -17,4 +17,4 @@ labelFor x =
 
 main : Task Error ()
 main =
-    println (labelFor 7)
+    Io.println (labelFor 7)

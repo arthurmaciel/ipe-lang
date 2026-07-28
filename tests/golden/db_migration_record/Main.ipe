@@ -3,7 +3,7 @@ module Main exposing (main)
 import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
 import Ipe.Db as Db
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- #217 contract-drift regression: `Ipe.Db.Migration` is a record alias
@@ -35,5 +35,5 @@ runMigrations =
 
 main =
     Task.andThen
-        (\names -> println ("applied:" ++ String.fromInt (List.length names)))
+        (\names -> Io.println ("applied:" ++ String.fromInt (List.length names)))
         (Task.onError (\_ -> Task.succeed []) runMigrations)

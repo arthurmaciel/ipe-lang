@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 tf : Bool -> String
@@ -76,7 +76,7 @@ main =
         s4 =
             String.containsIn "hello" "xyz"
     in
-    println
+    Io.println
         ("andThen "
             ++ String.fromInt v1
             ++ " "

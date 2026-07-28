@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- R9: named builder + required+optional record decoder (the task's literal ask).
 -- Exercises Fix A case 1 (named function FuncValue — the existing passing shape).
@@ -29,5 +30,5 @@ main =
                 "{\"username\":\"ipedev\"}"
     in
     case r1 of
-        Ok p -> println (describe p)
-        Err _ -> println "err1"
+        Ok p -> Io.println (describe p)
+        Err _ -> Io.println "err1"

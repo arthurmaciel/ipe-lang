@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- E3 acceptance: a WELL-FORMED `Task Error Int` (arity 2) embedded in a
 -- constructor payload is NOT rejected. The declaration lowers to a `Variant`
@@ -18,4 +19,4 @@ label j =
         Job _ -> "job"
 
 main =
-    println "ok"
+    Io.println "ok"

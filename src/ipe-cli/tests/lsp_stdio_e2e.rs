@@ -11,13 +11,13 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 const CLEAN: &str = "module Main exposing (main)\n\n\
-    import Ipe.Log exposing (println)\n\n\
-    main = println \"hi\"\n";
+    import Ipe.Io as Io\n\n\
+    main = Io.println \"hi\"\n";
 const TYPE_ERROR: &str = "module Main exposing (main)\n\n\
-    import Ipe.Log exposing (println)\n\n\
+    import Ipe.Io as Io\n\n\
     answer : Int\n\
     answer = \"nope\"\n\n\
-    main = println \"hi\"\n";
+    main = Io.println \"hi\"\n";
 
 /// Kills the spawned server on scope exit so a failing assertion never
 /// leaks an `ipe lsp` process.

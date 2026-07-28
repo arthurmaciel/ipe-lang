@@ -2,9 +2,9 @@ module Main exposing (main)
 
 import Ipe.Http as Http
 import Ipe.Task as Task
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 main : Task ()
 main =
     Http.get "http://example.com"
-        |> Task.andThen (\_ -> println "done")
+        |> Task.andThen (\_ -> Io.println "done")

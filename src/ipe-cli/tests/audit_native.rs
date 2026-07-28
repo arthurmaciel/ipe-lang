@@ -70,11 +70,11 @@ fn run_audit(pkg: &Path, index: &Path) -> (bool, String, String) {
 const PURE_MAIN: &str = "module Main exposing (main)\n\
                          \n\
                          import Ipe.String as String\n\
-                         import Ipe.Log exposing (println)\n\
+                         import Ipe.Io as Io\n\
                          \n\
                          main : Task ()\n\
                          main =\n\
-                         \x20   println (String.toUpper \"hello\")\n";
+                         \x20   Io.println (String.toUpper \"hello\")\n";
 
 #[test]
 fn a_pure_ipe_package_skips_tier2_while_tier1_still_gates() {

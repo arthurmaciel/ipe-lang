@@ -5,7 +5,7 @@ import Ipe.Task as Task
 import Ipe.Html as Html
 import Ipe.Ui as Ui exposing (Element)
 import Ipe.Ui.Input as Input
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- BACKLOG #191 regression — a non-Copy binding captured into an Input `Arc`
@@ -64,4 +64,4 @@ main =
         row =
             habitRow { id = 7, name = "water", done = False }
     in
-    println (Html.render (Ui.layout [] row))
+    Io.println (Html.render (Ui.layout [] row))

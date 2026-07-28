@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Ipe.Html as Html
 import Ipe.Ui as Ui
+import Ipe.Io as Io
 
 
 -- Phase-1a regression sentinel (issue #43): `staticHtml` has return type
@@ -24,4 +25,4 @@ staticHtml =
 
 
 main =
-    println staticHtml
+    Io.println staticHtml

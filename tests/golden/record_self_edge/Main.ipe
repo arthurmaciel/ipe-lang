@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 type RChain = REnd | RNode { rest : RChain, val : Int }
 
@@ -10,4 +11,4 @@ sumR c =
         RNode rec -> rec.val + sumR rec.rest
 
 main =
-    println (String.fromInt (sumR (RNode { rest = RNode { rest = REnd, val = 2 }, val = 3 })))
+    Io.println (String.fromInt (sumR (RNode { rest = RNode { rest = REnd, val = 2 }, val = 3 })))

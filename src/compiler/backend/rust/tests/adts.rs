@@ -21,11 +21,11 @@
 //! ```text
 //! -- Maybe:
 //! unwrap m = case m of Just x -> x ; Nothing -> 0
-//! main = println (String.fromInt (unwrap (Just 5)))            -- prints 5
+//! main = Io.println (String.fromInt (unwrap (Just 5)))            -- prints 5
 //!
 //! -- Tree:
 //! sumTree t = case t of Leaf -> 0 ; Node l n r -> sumTree l + n + sumTree r
-//! main = println (String.fromInt (sumTree (Node (Node Leaf 3 Leaf) 4 (Node Leaf 5 Leaf))))  -- prints 12
+//! main = Io.println (String.fromInt (sumTree (Node (Node Leaf 3 Leaf) 4 (Node Leaf 5 Leaf))))  -- prints 12
 //! ```
 //!
 //! to stdout `5\n` / `12\n`, exit 0. The two `end_to_end_*` tests (gated on
@@ -129,7 +129,7 @@ fn maybe_program(i: &mut Interner) -> DResult<Program> {
         ret: IrType::Int,
         body: Expr::Match(Match::new(Expr::Var(m), arms, &[just, nothing])?),
     };
-    // main = Log.println (String.fromInt (unwrap (Just 5)))
+    // main = Io.println (String.fromInt (unwrap (Just 5)))
     let main_fn = Func {
         id: FuncId::from_raw(1),
         name: main,
@@ -138,7 +138,7 @@ fn maybe_program(i: &mut Interner) -> DResult<Program> {
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),
         body: Expr::Call {
-            callee: Callee::Kernel(KernelFn::LogPrintln),
+            callee: Callee::Kernel(KernelFn::IoPrintln),
             args: vec![Expr::Call {
                 callee: Callee::Kernel(KernelFn::StringFromInt),
                 args: vec![Expr::Call {
@@ -178,6 +178,7 @@ fn maybe_program(i: &mut Interner) -> DResult<Program> {
             uses_websocket: false,
             uses_email: false,
             uses_env_public: false,
+            uses_debug: false,
             uses_ffi: false,
         }],
     })
@@ -284,7 +285,7 @@ fn tree_sum_fn(interner: &mut Interner, syms: &TreeSyms) -> DResult<Func> {
     })
 }
 
-/// `main = println (String.fromInt (sumTree (Node (Node Leaf 3 Leaf) 4
+/// `main = Io.println (String.fromInt (sumTree (Node (Node Leaf 3 Leaf) 4
 /// (Node Leaf 5 Leaf))))` at `FuncId(1)`.
 fn tree_main_fn(interner: &mut Interner, syms: &TreeSyms) -> DResult<Func> {
     let main = interner.intern("main")?;
@@ -314,7 +315,7 @@ fn tree_main_fn(interner: &mut Interner, syms: &TreeSyms) -> DResult<Func> {
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),
         body: Expr::Call {
-            callee: Callee::Kernel(KernelFn::LogPrintln),
+            callee: Callee::Kernel(KernelFn::IoPrintln),
             args: vec![Expr::Call {
                 callee: Callee::Kernel(KernelFn::StringFromInt),
                 args: vec![Expr::Call {
@@ -356,6 +357,7 @@ fn tree_program(interner: &mut Interner) -> DResult<Program> {
             uses_websocket: false,
             uses_email: false,
             uses_env_public: false,
+            uses_debug: false,
             uses_ffi: false,
         }],
     })
@@ -500,6 +502,7 @@ fn concrete_multi_field_enum_emits() -> DResult<()> {
             uses_websocket: false,
             uses_email: false,
             uses_env_public: false,
+            uses_debug: false,
             uses_ffi: false,
         }],
     };

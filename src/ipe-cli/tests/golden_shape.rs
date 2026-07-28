@@ -8,7 +8,7 @@
 //!
 //! ```text
 //! area s = case s of Circle r -> r * r * 3 ; Rect w h -> w * h
-//! main = println (String.fromInt (area (Rect 4 5) + area (Circle 2)))  -- 32
+//! main = Io.println (String.fromInt (area (Rect 4 5) + area (Circle 2)))  -- 32
 //! ```
 //!
 //! Behavioural-parity oracle: the Go reference compiler at

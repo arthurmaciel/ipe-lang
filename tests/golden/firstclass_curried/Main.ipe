@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- F1 (#121 seal). `mk : String -> (String -> Page)` has def-arity 1.
 -- At two first-class reify sites the slot type is `Fun([Str, Str], Page)` —
@@ -43,4 +44,4 @@ main =
     let g = mk in
     let p1 = g "first" "second" in
     let p2 = apply2 mk in
-    println (pageStr p1 ++ "|" ++ pageStr p2 ++ "|" ++ tag "ipe-" [ "a", "b" ])
+    Io.println (pageStr p1 ++ "|" ++ pageStr p2 ++ "|" ++ tag "ipe-" [ "a", "b" ])

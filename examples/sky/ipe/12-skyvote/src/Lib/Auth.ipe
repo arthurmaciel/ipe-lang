@@ -5,7 +5,7 @@ import Ipe.Maybe exposing (..)
 import Ipe.List as List
 import Ipe.Result as Result
 import Ipe.String as String
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Ipe.Crypto as Crypto
 import Ipe.Auth as Auth
 import Lib.Db as Db
@@ -46,7 +46,7 @@ createUser username email password =
             Ok _ ->
                 let
                     _ =
-                        println
+                        Io.println
                             ("[AUTH] User created: " ++ username ++ " (" ++ email
                                 ++ ")")
                 in
@@ -75,7 +75,7 @@ authenticateUser email password =
                 Nothing ->
                     let
                         _ =
-                            println
+                            Io.println
                                 ("[AUTH] Sign-in failed (not found): " ++ email)
                     in
                         Err
@@ -90,7 +90,7 @@ authenticateUser email password =
                         if verifyPassword password storedHash then
                             let
                                 _ =
-                                    println
+                                    Io.println
                                         ("[AUTH] Sign-in success: " ++ email)
                             in
                                 Ok user
@@ -98,7 +98,7 @@ authenticateUser email password =
                         else
                             let
                                 _ =
-                                    println
+                                    Io.println
                                         ("[AUTH] Sign-in failed (bad password): "
                                             ++ email)
                             in

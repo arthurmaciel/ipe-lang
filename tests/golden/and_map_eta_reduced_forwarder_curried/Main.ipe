@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 -- #90 T3: ETA-REDUCED annotated forwarder (`am2 = am1`, no params) — the
 -- bare reference to `am1` still records a SchemeApp whose obligated `b`
@@ -20,5 +20,5 @@ add3 a b c =
 
 main =
     case am2 (Ok 1) (Ok add3) of
-        Ok _ -> println "ok"
-        Err _ -> println "err"
+        Ok _ -> Io.println "ok"
+        Err _ -> Io.println "err"

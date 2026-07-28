@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- #90 T4 residual gate, revert-incident Bug 1 regression: a fn-carrying,
 -- non-Clone LAMBDA parameter (as opposed to a Def param / let-binding /
@@ -20,4 +21,4 @@ main =
     let
         apply2 = \mf -> consume mf + consume mf
     in
-    println (String.fromInt (apply2 (Just (\x -> x + 1))))
+    Io.println (String.fromInt (apply2 (Just (\x -> x + 1))))

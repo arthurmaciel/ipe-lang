@@ -405,7 +405,7 @@ pub fn ipe_jwt_claims() -> JsonValue {
 /// carries none of `Secret`'s excluded surfaces — no `Debug`/`Display`/
 /// `IpeStringify`/serde — the moment the key leaves this function. Without
 /// the seal, `Algorithm` shared the plain `String` IR representation, so a
-/// well-typed program could `println (Jwt.hs256 secret)` or log the
+/// well-typed program could `Io.println (Jwt.hs256 secret)` or log the
 /// descriptor and leak the key verbatim. `ipe_jwt_encode` / `ipe_jwt_decode`
 /// are the only two call sites that `secret_reveal` it, to parse out the
 /// algorithm tag and the key in one pass.

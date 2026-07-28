@@ -392,7 +392,6 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::CharIsAlphaNum => "char_is_alpha_num",
         KernelFn::CharIsHexDigit => "char_is_hex_digit",
         KernelFn::CharIsOctDigit => "char_is_oct_digit",
-        KernelFn::LogPrintln => "log_println",
         KernelFn::LogInfo => "log_info",
         KernelFn::LogDebug => "log_debug",
         KernelFn::LogWarn => "log_warn",
@@ -753,6 +752,10 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::IoReadLine => "io_read_line",
         KernelFn::IoWriteStdout => "io_write_stdout",
         KernelFn::IoWriteStderr => "io_write_stderr",
+        KernelFn::IoPrintln => "io_println",
+        KernelFn::IoEprintln => "io_eprintln",
+        // ── Debug kernel (dev-only) ─────────────────────────────────────
+        KernelFn::DebugLog => "debug_log",
         // ── Time kernels ────────────────────────────────────────────────
         KernelFn::TimeNow => "time_now",
         KernelFn::TimeSleep => "time_sleep",
@@ -1548,7 +1551,10 @@ mod tests {
     fn kernel_names() {
         assert_eq!(kernel_name(KernelFn::StringFromInt), "string_from_int");
         assert_eq!(kernel_name(KernelFn::StringFromFloat), "string_from_float");
-        assert_eq!(kernel_name(KernelFn::LogPrintln), "log_println");
+        assert_eq!(kernel_name(KernelFn::LogInfo), "log_info");
+        assert_eq!(kernel_name(KernelFn::IoPrintln), "io_println");
+        assert_eq!(kernel_name(KernelFn::IoEprintln), "io_eprintln");
+        assert_eq!(kernel_name(KernelFn::DebugLog), "debug_log");
         // ── Http kernels ──────────────────────────────────────────────
         assert_eq!(kernel_name(KernelFn::HttpGet), "http_get");
         assert_eq!(kernel_name(KernelFn::HttpPost), "http_post");

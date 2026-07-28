@@ -1,11 +1,12 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- A decoder applied to a value of the wrong type must return `Err`.
 -- `JsonDec.int` on the string `"not an int"` must fail.
 main =
     case JsonDec.decodeString JsonDec.int "\"not an int\"" of
         Ok _ ->
-            println "ok"
+            Io.println "ok"
 
         Err _ ->
-            println "got error"
+            Io.println "got error"

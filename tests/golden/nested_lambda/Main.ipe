@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- One declared parameter but a three-arrow type: the body is a nested lambda
 -- chain `\b -> \c -> ...`. The lowerer flattens the chain into a single
@@ -17,4 +18,4 @@ main =
     let over = f 1 2 3 in
     -- Both paths compute 1 + 2 + 3 = 6; print the shared value so a divergence
     -- between the two reshapes would change the output.
-    println (String.fromInt (if exact == over then exact else 0))
+    Io.println (String.fromInt (if exact == over then exact else 0))

@@ -123,6 +123,8 @@ fn compile_inner(source: &str) -> Result<ipe_backend::EmittedProject, String> {
         ipe_ir::Target::WasmClient,
         Vec::new(),
         false,
+        // The browser playground is a development surface — Debug.* is allowed.
+        false,
     );
 
     // Per-module canonicalisation in dep-first order — purely for BLAME

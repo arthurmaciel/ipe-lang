@@ -26,7 +26,7 @@ import Ipe.Dict as Dict
 import Ipe.Task as Task
 import Ipe.Time as Time
 import Ipe.Error as Error exposing (Error(..), ErrorKind(..))
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Ipe.System as System
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
@@ -80,7 +80,7 @@ dbConn =
         Err e ->
             let
                 _ =
-                    println
+                    Io.println
                         ("[FATAL] cannot open chat.db: " ++ Error.toString e)
             in
                 System.exit 1

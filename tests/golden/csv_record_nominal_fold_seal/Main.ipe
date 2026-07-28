@@ -2,7 +2,7 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Ipe.Csv as Csv
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 -- Regression fixture for the BACKLOG row "Ipe.Csv record literal vs nominal
 -- CsvDoc mismatch at the kernel boundary": a record literal of the canonical
@@ -37,4 +37,4 @@ headerCount =
 
 
 main =
-    println (String.fromInt headerCount)
+    Io.println (String.fromInt headerCount)

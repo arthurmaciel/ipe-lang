@@ -2,7 +2,7 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- Regression — `toString` on a wildcard `any` param.
@@ -23,4 +23,4 @@ render x =
 
 main : Task Error ()
 main =
-    println (render 42)
+    Io.println (render 42)

@@ -9,7 +9,7 @@ module Main exposing (main)
 -- rejects it. See lower_record's mixed-struct case.
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 wrap : a -> { val : a
@@ -29,7 +29,7 @@ box v =
 
 main =
     let
-        _ = println (wrap "hi").val
-        _ = println (wrap "hi").tag
+        _ = Io.println (wrap "hi").val
+        _ = Io.println (wrap "hi").tag
     in
-        println (String.fromInt (box "x").count)
+        Io.println (String.fromInt (box "x").count)

@@ -30,7 +30,7 @@
 //! ```text
 //! type Wrap = MkWrap Int
 //! f w = case w of MkWrap (x as y) -> y
-//! main = println (String.fromInt (f (MkWrap 7)))      -- prints 7
+//! main = Io.println (String.fromInt (f (MkWrap 7)))      -- prints 7
 //! ```
 //!
 //! (hand-verified in a temp dir → stdout `7\n`, exit 0).
@@ -137,7 +137,7 @@ fn tag_program(interner: &mut Interner, payload: Pat) -> DResult<Program> {
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),
         body: Expr::Call {
-            callee: Callee::Kernel(KernelFn::LogPrintln),
+            callee: Callee::Kernel(KernelFn::IoPrintln),
             args: vec![Expr::Call {
                 callee: Callee::Kernel(KernelFn::StringFromInt),
                 args: vec![Expr::Call {
@@ -177,6 +177,7 @@ fn tag_program(interner: &mut Interner, payload: Pat) -> DResult<Program> {
             uses_websocket: false,
             uses_email: false,
             uses_env_public: false,
+            uses_debug: false,
             uses_ffi: false,
         }],
     })
@@ -300,7 +301,7 @@ fn alias_program(interner: &mut Interner) -> DResult<(Program, Symbol, Symbol)> 
         body: Expr::Match(ipe_ir::Match::new(Expr::Var(w), arms, &[mk_wrap])?),
     };
 
-    // main = println (String.fromInt (f (MkWrap 7)))
+    // main = Io.println (String.fromInt (f (MkWrap 7)))
     let main_fn = Func {
         id: FuncId::from_raw(1),
         name: main,
@@ -309,7 +310,7 @@ fn alias_program(interner: &mut Interner) -> DResult<(Program, Symbol, Symbol)> 
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),
         body: Expr::Call {
-            callee: Callee::Kernel(KernelFn::LogPrintln),
+            callee: Callee::Kernel(KernelFn::IoPrintln),
             args: vec![Expr::Call {
                 callee: Callee::Kernel(KernelFn::StringFromInt),
                 args: vec![Expr::Call {
@@ -350,6 +351,7 @@ fn alias_program(interner: &mut Interner) -> DResult<(Program, Symbol, Symbol)> 
                 uses_websocket: false,
                 uses_email: false,
                 uses_env_public: false,
+                uses_debug: false,
                 uses_ffi: false,
             }],
         },

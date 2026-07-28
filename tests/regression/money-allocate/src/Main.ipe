@@ -8,7 +8,7 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Ipe.Money as Money exposing (Money, Currency(..))
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Ipe.Task as Task
 import Ipe.System as System
 
@@ -75,4 +75,4 @@ main =
             else
                 System.exit 1
         )
-        (println report)
+        (Io.println report)

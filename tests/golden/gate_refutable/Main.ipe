@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 type Opt = Som Int | Non
 
@@ -12,4 +13,4 @@ f pair =
         (Non, b) -> b
 
 main =
-    println (String.fromInt (f (Som 1, 2)))
+    Io.println (String.fromInt (f (Som 1, 2)))

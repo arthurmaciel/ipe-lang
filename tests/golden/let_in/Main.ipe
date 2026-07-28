@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- Single-binding let inside a function body.
 double : Int -> Int
@@ -18,4 +19,4 @@ triple n =
 -- Inline let in the entry point binds the combined result.
 main =
     let total = double 5 + triple 4 in
-    println (String.fromInt total)
+    Io.println (String.fromInt total)

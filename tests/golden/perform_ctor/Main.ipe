@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- M5c: Cmd.perform construct-only gate.
 -- Constructs a Cmd.perform value and discards it; confirms type+emit+link
@@ -8,4 +9,4 @@ main =
     let
         _ = Cmd.perform (Task.succeed 1) (\r -> 0)
     in
-    println "ok"
+    Io.println "ok"

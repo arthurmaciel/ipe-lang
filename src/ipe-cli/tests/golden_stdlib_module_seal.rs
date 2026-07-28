@@ -107,7 +107,7 @@ fn seal_module(slug: &str, main: &str, expected: &str) {
 
 const REGEX_MAIN: &str = "module Main exposing (main)\n\
     import Ipe.Prelude exposing (..)\n\
-    import Ipe.Log exposing (println)\n\
+    import Ipe.Io as Io\n\
     import Ipe.Regex as Regex\n\n\
     hit : String\n\
     hit = if Regex.match \"\\\\d+\" \"a1\" then \"MATCH\" else \"NOMATCH\"\n\n\
@@ -123,7 +123,7 @@ const REGEX_MAIN: &str = "module Main exposing (main)\n\
     allDigits = String.join \",\" (Regex.findAll \"\\\\d\" \"a1b2c3\")\n\n\
     parts : String\n\
     parts = String.join \"|\" (Regex.split \",\" \"a,b,c\")\n\n\
-    main = println (hit ++ \" \" ++ miss ++ \" \" ++ sub ++ \" \" ++ firstDigits ++ \" \" ++ allDigits ++ \" \" ++ parts)\n";
+    main = Io.println (hit ++ \" \" ++ miss ++ \" \" ++ sub ++ \" \" ++ firstDigits ++ \" \" ++ allDigits ++ \" \" ++ parts)\n";
 
 #[test]
 fn regex_resolves_and_emits() {
@@ -141,11 +141,11 @@ fn regex_builds_and_runs() {
 
 const PATH_MAIN: &str = "module Main exposing (main)\n\
     import Ipe.Prelude exposing (..)\n\
-    import Ipe.Log exposing (println)\n\
+    import Ipe.Io as Io\n\
     import Ipe.Path as Path\n\n\
     abs : String\n\
     abs = if Path.isAbsolute \"/a/b\" then \"ABS\" else \"REL\"\n\n\
-    main = println (Path.base \"/a/b/c.txt\" ++ \" \" ++ Path.dir \"/a/b/c.txt\" ++ \" \" ++ Path.ext \"/a/b/c.txt\" ++ \" \" ++ abs)\n";
+    main = Io.println (Path.base \"/a/b/c.txt\" ++ \" \" ++ Path.dir \"/a/b/c.txt\" ++ \" \" ++ Path.ext \"/a/b/c.txt\" ++ \" \" ++ abs)\n";
 
 #[test]
 fn path_resolves_and_emits() {
@@ -167,7 +167,7 @@ fn path_builds_and_runs() {
 const PURE_MAIN: &str = "module Main exposing (main)\n\
     import Ipe.Prelude exposing (..)\n\
     import Ipe.Task as Task\n\
-    import Ipe.Log exposing (println)\n\
+    import Ipe.Io as Io\n\
     import Ipe.Pure as Pure\n\n\
     genId : Task Error String\n\
     genId = Pure.uuidV4 ()\n\n\
@@ -175,7 +175,7 @@ const PURE_MAIN: &str = "module Main exposing (main)\n\
     \x20   let\n\
     \x20       _ = genId\n\
     \x20   in\n\
-    \x20   println \"PURE_OK\"\n";
+    \x20   Io.println \"PURE_OK\"\n";
 
 #[test]
 fn pure_resolves_and_emits() {
@@ -192,7 +192,7 @@ fn pure_builds_and_runs() {
 const TRACE_MAIN: &str = "module Main exposing (main)\n\
     import Ipe.Prelude exposing (..)\n\
     import Ipe.Task as Task\n\
-    import Ipe.Log exposing (println)\n\
+    import Ipe.Io as Io\n\
     import Ipe.Trace as Trace\n\n\
     work : Task Error String\n\
     work = Trace.span \"unit\" (Task.succeed \"TRACE_OK\")\n\n\
@@ -202,7 +202,7 @@ const TRACE_MAIN: &str = "module Main exposing (main)\n\
     \x20       _ = Trace.attr \"k\" \"v\"\n\
     \x20       _ = work\n\
     \x20   in\n\
-    \x20   println \"TRACE_OK\"\n";
+    \x20   Io.println \"TRACE_OK\"\n";
 
 #[test]
 fn trace_resolves_and_emits() {
@@ -220,14 +220,14 @@ const COMPRESSION_MAIN: &str = "module Main exposing (main)\n\
     import Ipe.Prelude exposing (..)\n\
     import Ipe.Task as Task\n\
     import Ipe.Bytes as Bytes\n\
-    import Ipe.Log exposing (println)\n\
+    import Ipe.Io as Io\n\
     import Ipe.Compression as Compression\n\n\
     roundTrip : Task Error Bytes\n\
     roundTrip =\n\
     \x20   Compression.gzip (Bytes.fromString \"hello\") |> Task.andThen Compression.gunzip\n\n\
     main =\n\
     \x20   Task.map (\\b -> \"GZ:\" ++ Maybe.withDefault \"?\" (Bytes.toString b)) roundTrip\n\
-    \x20       |> Task.andThen (\\msg -> println msg)\n";
+    \x20       |> Task.andThen (\\msg -> Io.println msg)\n";
 
 #[test]
 fn compression_resolves_and_emits() {
@@ -243,14 +243,14 @@ fn compression_builds_and_runs() {
 
 const CSV_MAIN: &str = "module Main exposing (main)\n\
     import Ipe.Prelude exposing (..)\n\
-    import Ipe.Log exposing (println)\n\
+    import Ipe.Io as Io\n\
     import Ipe.Csv as Csv\n\n\
     headerLine : String\n\
     headerLine =\n\
     \x20   case Csv.parse \"a,b\\n1,2\" of\n\
     \x20       Ok doc -> String.join \"|\" doc.header\n\
     \x20       Err _ -> \"ERR\"\n\n\
-    main = println headerLine\n";
+    main = Io.println headerLine\n";
 
 #[test]
 fn csv_resolves_and_emits() {
@@ -274,7 +274,7 @@ fn csv_builds_and_runs() {
 const CACHE_MAIN: &str = "module Main exposing (main)\n\
     import Ipe.Prelude exposing (..)\n\
     import Ipe.Task as Task\n\
-    import Ipe.Log exposing (println)\n\
+    import Ipe.Io as Io\n\
     import Ipe.Cache as Cache\n\n\
     program : Task Error String\n\
     program =\n\
@@ -289,7 +289,7 @@ const CACHE_MAIN: &str = "module Main exposing (main)\n\
     \x20                   |> Task.map (\\found -> Maybe.withDefault \"miss\" found)\n\
     \x20           )\n\n\
     main =\n\
-    \x20   program |> Task.andThen (\\v -> println (\"CACHE:\" ++ v))\n";
+    \x20   program |> Task.andThen (\\v -> Io.println (\"CACHE:\" ++ v))\n";
 
 #[test]
 fn cache_resolves_and_emits() {
@@ -312,13 +312,13 @@ const PUBSUB_MAIN: &str = "module Main exposing (main)\n\
     import Ipe.Task as Task\n\
     import Ipe.Json.Encode as JsonEnc\n\
     import Ipe.PubSub as PubSub\n\
-    import Ipe.Log exposing (println)\n\n\
+    import Ipe.Io as Io\n\n\
     main =\n\
     \x20   let\n\
     \x20       _ = PubSub.publish \"t\" (JsonEnc.string \"hi\")\n\
     \x20               |> Task.onError (\\_ -> Task.succeed 0)\n\
     \x20   in\n\
-    \x20   println \"PUBSUB_OK\"\n";
+    \x20   Io.println \"PUBSUB_OK\"\n";
 
 #[test]
 fn pubsub_resolves_and_emits() {
@@ -345,7 +345,7 @@ fn pubsub_builds_and_runs() {
 const CONFIG_MAIN: &str = "module Main exposing (main)\n\
     import Ipe.Prelude exposing (..)\n\
     import Ipe.Config as Config\n\
-    import Ipe.Log exposing (println)\n\n\
+    import Ipe.Io as Io\n\n\
     hostD : Config.Decoder String\n\
     hostD = Config.field \"host\" Config.string\n\n\
     portD : Config.Decoder Int\n\
@@ -372,7 +372,7 @@ const CONFIG_MAIN: &str = "module Main exposing (main)\n\
     \x20       n = Maybe.withDefault \"none\" (Result.withDefault Nothing (Config.decodeYaml yaml noteD))\n\
     \x20       j = Result.withDefault \"?\" (Config.decodeJson json hostD)\n\
     \x20   in\n\
-    \x20   println (\"CONFIG:\" ++ h ++ \":\" ++ String.fromInt p ++ \":\" ++ t ++ \":\" ++ n ++ \":\" ++ j)\n";
+    \x20   Io.println (\"CONFIG:\" ++ h ++ \":\" ++ String.fromInt p ++ \":\" ++ t ++ \":\" ++ n ++ \":\" ++ j)\n";
 
 #[test]
 fn config_resolves_and_emits() {

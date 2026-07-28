@@ -2,8 +2,9 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Dep exposing (bad)
+import Ipe.Io as Io
 
 main =
-    println
+    Io.println
         (String.fromInt
             (bad + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0))

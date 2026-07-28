@@ -1,7 +1,8 @@
 module Main exposing (main)
 
 import Ipe.Dict as Dict
+import Ipe.Io as Io
 
 
 main =
-    println (String.fromInt (Dict.size (Dict.fromList [ (1.0, "a"), (2.0, "b") ])))
+    Io.println (String.fromInt (Dict.size (Dict.fromList [ (1.0, "a"), (2.0, "b") ])))

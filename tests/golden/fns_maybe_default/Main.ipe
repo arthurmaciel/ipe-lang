@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 main =
-    println (String.fromInt (Maybe.withDefault 0 (Just 5)))
+    Io.println (String.fromInt (Maybe.withDefault 0 (Just 5)))

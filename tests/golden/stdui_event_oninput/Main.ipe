@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Ipe.Html as Html
 import Ipe.Html.Events as Event
+import Ipe.Io as Io
 
 
 -- #107 POSITIVE sentinel: `Ipe.Html.Events.onInput` produces a
@@ -28,4 +29,4 @@ staticHtml =
 
 
 main =
-    println staticHtml
+    Io.println staticHtml

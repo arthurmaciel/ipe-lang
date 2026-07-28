@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 -- #158 residual scope (fail-closed, IPE-L0116): a `case` whose nested-cons arm
 -- is exhaustive at the IPE level (`Just (h::t)` + `Just []` cover every `Just`,
@@ -24,4 +24,4 @@ f m =
 
 
 main =
-    println (String.fromInt (f (Just [ 1, 2 ])))
+    Io.println (String.fromInt (f (Just [ 1, 2 ])))

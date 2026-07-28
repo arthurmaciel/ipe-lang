@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- #174 fix-up — PROBE E. A coercing leaf (a string LITERAL, `PStr`) nested
@@ -36,4 +36,4 @@ classify v =
 
 
 main =
-    println (String.fromInt (classify ( ( "x", 5 ), A )))
+    Io.println (String.fromInt (classify ( ( "x", 5 ), A )))

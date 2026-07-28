@@ -4,6 +4,7 @@ import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import ModA exposing (lenA)
 import ModB exposing (makeB)
+import Ipe.Io as Io
 
 -- relay param unqualified `Token` -> home=[]; feeds ModA.lenA (ModA.Token)
 -- while caller supplies a ModB.Token. If inference bridges via [] and
@@ -13,4 +14,4 @@ relay t =
     lenA t
 
 main =
-    println (String.fromInt (relay makeB))
+    Io.println (String.fromInt (relay makeB))

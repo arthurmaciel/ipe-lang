@@ -1770,6 +1770,7 @@ mod tests {
                 uses_websocket: false,
                 uses_email: false,
                 uses_env_public: false,
+                uses_debug: false,
                 uses_ffi: false,
             }],
         };
@@ -2323,6 +2324,7 @@ mod tests {
                 uses_websocket: false,
                 uses_email: false,
                 uses_env_public: false,
+                uses_debug: false,
                 uses_ffi: false,
             }],
         };
@@ -2917,6 +2919,7 @@ mod tests {
                 uses_websocket: false,
                 uses_email: false,
                 uses_env_public: false,
+                uses_debug: false,
                 uses_ffi: false,
             }],
         };
@@ -3301,6 +3304,7 @@ mod tests {
                 uses_websocket: false,
                 uses_email: false,
                 uses_env_public: false,
+                uses_debug: false,
                 uses_ffi: false,
             }],
         };

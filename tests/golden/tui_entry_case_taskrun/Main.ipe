@@ -2,7 +2,7 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 -- Minimal repro for the `24-tui-kitchen-sink` SEAL violation (BACKLOG "Sweep
 -- to green" row): `ipec build` exits 0 but the emitted crate fails `cargo
@@ -10,7 +10,7 @@ import Ipe.Log exposing (println)
 -- `main = case <Maybe String scrutinee> of Just "literal" -> task |>
 -- Task.run; _ -> task |> Task.run` (the Ipe.Tui `argv`-dispatch idiom:
 -- `case List.head argsList of Just "live" -> Web.app {...} |> Task.run; _
--- -> Tui.app {...} |> Task.run`, minimised down to plain `println`/`Task`
+-- -> Tui.app {...} |> Task.run`, minimised down to plain `Io.println`/`Task`
 -- calls so the fixture needs no Ipe.Tui / Ipe.Web dependency).
 --
 -- Defect 1 — string-literal ctor-payload sub-pattern: `Just "live"` lowered
@@ -33,7 +33,7 @@ mode =
 main =
     case mode of
         Just "live" ->
-            println "live mode" |> Task.run
+            Io.println "live mode" |> Task.run
 
         _ ->
-            println "default mode" |> Task.run
+            Io.println "default mode" |> Task.run

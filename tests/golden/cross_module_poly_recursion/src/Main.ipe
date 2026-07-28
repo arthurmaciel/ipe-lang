@@ -2,9 +2,9 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Lib
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 main =
     let a = if Lib.evenLen [90, 35, 32, 77] then "E" else "O" in
     let b = if Lib.evenLen [ "ors" ] then "E" else "O" in
-    println (a ++ b)
+    Io.println (a ++ b)

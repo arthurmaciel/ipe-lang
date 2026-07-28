@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- M5b-db golden: Db.insertFields with SetField/OmitField + Db.updateFields.
 -- OmitField columns are excluded from generated SQL; the DB applies DEFAULT.
@@ -36,7 +37,7 @@ main =
                             in
                             Task.andThen
                                 (\after ->
-                                    println
+                                    Io.println
                                         (String.join
                                             ","
                                             (List.map

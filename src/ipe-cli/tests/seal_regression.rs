@@ -186,14 +186,14 @@ const HEAD: &str = "module Main exposing (main)\nimport Ipe.Prelude exposing (..
 #[test]
 fn value_local_shadowing_toplevel_fn_compiles_and_runs() {
     let src = format!(
-        "{HEAD}import Ipe.Log exposing (println)\n\
+        "{HEAD}import Ipe.Io as Io\n\
          update : Int -> Int -> Int\n\
          update a b = a + b\n\n\
          shadowed : Int -> String\n\
          shadowed n =\n    \
          let\n        main_update = n\n    in\n    \
          String.fromInt (update main_update 5)\n\n\
-         main = println (shadowed 3)\n"
+         main = Io.println (shadowed 3)\n"
     );
     // update main_update 5 = update 3 5 = 8.
     assert_accepted("value_local_shadow", &src, "8\n");
@@ -208,14 +208,14 @@ fn value_local_shadowing_toplevel_fn_compiles_and_runs() {
 #[test]
 fn fn_local_shadowing_toplevel_fn_invokes_the_toplevel() {
     let src = format!(
-        "{HEAD}import Ipe.Log exposing (println)\n\
+        "{HEAD}import Ipe.Io as Io\n\
          helper : Int -> Int\n\
          helper x = x + 1\n\n\
          compute : Int -> Int\n\
          compute n =\n    \
          let\n        main_helper = \\y -> y * 2\n    in\n    \
          main_helper (helper n)\n\n\
-         main = println (String.fromInt (compute 10))\n"
+         main = Io.println (String.fromInt (compute 10))\n"
     );
     // helper 10 = 11 (top-level, +1); local doubles: 11 * 2 = 22. A wrong-call
     // binding `helper` to the local lambda would give (10*2)=20 doubled = 40.
@@ -234,10 +234,10 @@ fn fn_local_shadowing_toplevel_fn_invokes_the_toplevel() {
 #[test]
 fn user_local_named_like_a_mangled_keyword_compiles() {
     let src = format!(
-        "{HEAD}import Ipe.Log exposing (println)\n\
+        "{HEAD}import Ipe.Io as Io\n\
          main =\n    \
          let\n        match_ = 7\n    in\n    \
-         println (String.fromInt match_)\n"
+         Io.println (String.fromInt match_)\n"
     );
     assert_accepted("user_match_underscore", &src, "7\n");
 }
@@ -259,10 +259,10 @@ fn multi_module_distinct_mod_idents_compile() {
             "Main.ipe",
             "module Main exposing (main)\n\
              import Ipe.Prelude exposing (..)\n\
-             import Ipe.Log exposing (println)\n\
+             import Ipe.Io as Io\n\
              import Lib.Util exposing (greeting)\n\
              import Helper exposing (shout)\n\
-             main = println (shout greeting)\n",
+             main = Io.println (shout greeting)\n",
         ),
         (
             "Lib/Util.ipe",
@@ -295,11 +295,11 @@ fn qualified_dep_alias_expands_without_exposing() {
             "Main.ipe",
             "module Main exposing (main)\n\
              import Ipe.Prelude exposing (..)\n\
-             import Ipe.Log exposing (println)\n\
+             import Ipe.Io as Io\n\
              import Lib.Money as Money\n\
              view : Money.Price -> String\n\
              view p = p.original\n\
-             main = println (view (Money.mk \"10\"))\n",
+             main = Io.println (view (Money.mk \"10\"))\n",
         ),
         (
             "Lib/Money.ipe",

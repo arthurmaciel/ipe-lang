@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- JWT RS256: sign with RSA private key (PKCS#8), verify with public key (SPKI).
 -- Test key pair is RSA-2048 generated for this test only; never used outside tests.
@@ -24,4 +25,4 @@ main =
                         Ok _ ->
                             "ok"
     in
-    println result
+    Io.println result

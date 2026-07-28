@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- A second unrecognised escape (`\z`), this time in scrutinee position. Same
 -- single-character invariant, same IPE-P0015 floor: the malformed char literal
@@ -11,4 +12,4 @@ grade c =
         _ -> 0
 
 main =
-    println (String.fromInt (grade '\z'))
+    Io.println (String.fromInt (grade '\z'))

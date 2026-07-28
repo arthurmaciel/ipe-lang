@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- A bare integer-literal lambda param `\1 ->` is refutable. It is caught even
 -- EARLIER than the IPE-T0015 gate: the parser's param grammar does not admit a
@@ -9,4 +10,4 @@ f : Int -> Int
 f = \1 -> 0
 
 main =
-    println (String.fromInt (f 1))
+    Io.println (String.fromInt (f 1))

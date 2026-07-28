@@ -238,7 +238,7 @@ fn sources_of(pairs: &[(&[&str], &str)]) -> UserSources {
 const MAIN_V1: &str = "module Main exposing (main)\n\
      import Ipe.Prelude exposing (..)\n\
      import Lib.Util exposing (bump)\n\n\
-     main = println (String.fromInt (bump 41))\n";
+     main = Io.println (String.fromInt (bump 41))\n";
 // Annotated export → engageable closed interface.
 const UTIL_V1: &str = "module Lib.Util exposing (bump)\n\nbump : Int -> Int\nbump x = x + 1\n";
 const UTIL_BODY_EDIT: &str =
@@ -253,13 +253,13 @@ const UTIL_FLIPPED: &str =
 const MAIN_FLIPPED: &str = "module Main exposing (main)\n\
      import Ipe.Prelude exposing (..)\n\
      import Lib.Util exposing (bump)\n\n\
-     main = println (bump \"x\")\n";
+     main = Io.println (bump \"x\")\n";
 const EXTRA_MOD: &str = "module Lib.Extra exposing (offset)\n\noffset : Int\noffset = 100\n";
 const MAIN_WITH_EXTRA: &str = "module Main exposing (main)\n\
      import Ipe.Prelude exposing (..)\n\
      import Lib.Util exposing (bump)\n\
      import Lib.Extra exposing (offset)\n\n\
-     main = println (String.fromInt (bump offset))\n";
+     main = Io.println (String.fromInt (bump offset))\n";
 
 /// Body-only edit, export widening, unannotated (open-interface) flip,
 /// export type flip (red then green), module add, module delete — warm

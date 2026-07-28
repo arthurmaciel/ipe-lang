@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- JsonDec.int matches Go's lenient `int(f)`: every JSON number unmarshals to a
 -- float, then truncates toward zero — it does NOT reject non-integral numbers.
@@ -16,7 +17,7 @@ main =
 
         s = Result.withDefault "?" (JsonDec.decodeString JsonDec.string "\"hello\"")
     in
-    println
+    Io.println
         (String.join " "
             [ String.fromInt a, String.fromInt b, String.fromInt c, s ]
         )
