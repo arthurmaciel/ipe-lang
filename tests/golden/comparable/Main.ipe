@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 maxOf : a -> a -> a
 maxOf p q = if p > q then p else q

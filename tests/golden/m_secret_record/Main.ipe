@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Secret
 
 -- backlog #44 golden: a record containing a `Secret` field stays fully
 -- derivable (`Clone` / `Debug` / `PartialEq`) — proves the derive-blast-radius

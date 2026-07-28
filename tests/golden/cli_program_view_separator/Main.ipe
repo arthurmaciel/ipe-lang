@@ -7,6 +7,9 @@ module Main exposing (main)
 -- each render on its own line appends "\n" itself, as Go requires.
 
 import Ipe.Cli as Cli
+import Ipe.Cmd
+import Ipe.String
+import Ipe.Sub
 
 type Msg
     = LineReceived String

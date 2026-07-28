@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- IPE-L0110 (#216) seal: partial + over-application of a first-class function
 -- VALUE. The named-callee path already eta-expands (`add 2` -> `\n -> add(2,

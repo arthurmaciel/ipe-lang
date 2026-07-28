@@ -1,5 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Crypto
+import Ipe.String
 
 -- sha256 / sha512 / sha1 / md5 of "abc" — standard known test vectors.
 main =

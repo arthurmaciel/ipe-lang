@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- Two `case` arms head-match the SAME top constructor (`Wrap`) and discriminate
 -- on a nested LITERAL sub-pattern: `Wrap 0` versus `Wrap n`. With the prior

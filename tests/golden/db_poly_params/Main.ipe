@@ -1,5 +1,9 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Db
+import Ipe.List
+import Ipe.String
+import Ipe.Task
 
 -- T0001 regression (IPE-T0001 poly-params fix):
 --   `Db.exec` / `Db.query` accept `List a` (polymorphic params), so callers may

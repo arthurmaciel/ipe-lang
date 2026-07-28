@@ -1,5 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.List
+import Ipe.String
 
 -- #151 seal — let-fn captured in a nested anonymous lambda (callee position).
 --

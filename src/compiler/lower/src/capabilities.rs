@@ -44,6 +44,10 @@ mod tests {
     fn pure_program_has_no_capabilities() {
         let caps = caps_of(
             "module Main exposing (main)\nmain : Task ()\nmain =\n    Io.println (String.toUpper \"hi\")\n",
+import Ipe.Http
+import Ipe.Io
+import Ipe.String
+import Ipe.Task
         );
         assert_eq!(caps, Some(std::collections::BTreeSet::new()));
     }
@@ -63,6 +67,10 @@ mod tests {
     fn file_and_env_program_infers_both() {
         let caps = caps_of(
             "module Main exposing (main)\nmain : Task ()\nmain =\n    Task.andThen (\\_ -> File.writeFile \"/tmp/x\" (System.getenvOr \"HOME\" \"/\")) (Io.println \"go\")\n",
+import Ipe.File
+import Ipe.Io
+import Ipe.System
+import Ipe.Task
         );
         assert_eq!(
             caps,

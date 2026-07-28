@@ -12,6 +12,7 @@ module Main exposing (main)
 
 import Ipe.Set as Set
 import Ipe.Io as Io
+import Ipe.String
 
 
 singletonSet : a -> Set a

@@ -1,5 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Result
+import Ipe.String
 
 main =
     Io.println (String.fromInt (Result.withDefault 0 (Result.map (\x -> x + 1) (Ok 2))))

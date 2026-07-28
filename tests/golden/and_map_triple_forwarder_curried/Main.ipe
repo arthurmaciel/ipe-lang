@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.Result
 
 -- #90 T3: TRIPLE forwarder — the escape chain is arbitrarily deep; the
 -- fail-closed arm rejects at the FIRST hop (`am1` inside `am2`), so depth

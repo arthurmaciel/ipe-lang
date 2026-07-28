@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.String
 
 -- #158 Class-4 item C, THE decisive soundness test: `Just []` is a valid value
 -- of `Maybe (List Int)` that must FALL THROUGH the `Just (h :: t)` arm to the

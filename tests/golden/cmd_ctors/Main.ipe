@@ -1,5 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Cmd
+import Ipe.Task
 
 -- M5c: Cmd.none / Cmd.batch construct-only gate.
 -- Constructs Cmd values and discards them; confirms that Cmd.none infers

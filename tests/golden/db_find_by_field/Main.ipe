@@ -1,5 +1,9 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Db
+import Ipe.List
+import Ipe.String
+import Ipe.Task
 
 -- M5b-db golden: Db.findOneByField + Db.findManyByField (backlog follow-up —
 -- arity fixed by #70, but no golden E2E coverage until this fixture).

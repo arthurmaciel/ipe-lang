@@ -3,6 +3,7 @@ module Main exposing (main)
 import Ipe.List as List
 import Ipe.Maybe as Maybe
 import Ipe.Io as Io
+import Ipe.String
 
 
 -- Descending Order comparator for List.sortWith.

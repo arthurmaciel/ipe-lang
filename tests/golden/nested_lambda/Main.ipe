@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- One declared parameter but a three-arrow type: the body is a nested lambda
 -- chain `\b -> \c -> ...`. The lowerer flattens the chain into a single

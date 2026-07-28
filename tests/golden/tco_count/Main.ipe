@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- Deep self-tail-recursion (#49): 2,000,000 iterations. Without TCO the Rust
 -- backend recurses and overflows the thread stack (SIGABRT — an unclassifiable

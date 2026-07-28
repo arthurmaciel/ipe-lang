@@ -8,6 +8,7 @@ module Main exposing (main)
 -- See tests/golden/error_record_literal_panicinfo/.
 
 import Ipe.Io as Io
+import Ipe.Error
 
 
 main =

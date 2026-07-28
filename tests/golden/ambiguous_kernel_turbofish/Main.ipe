@@ -14,6 +14,7 @@ import Ipe.String as String
 import Ipe.Error as Error
 import Ipe.Decimal as Dec
 import Ipe.Io as Io
+import Ipe.Result
 
 
 -- `List.head []` — element type free; result discarded to a Bool.

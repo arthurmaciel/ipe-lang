@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- `eq2` compares its two arguments with `==`. Equality works for any type that
 -- is not a function, so the body constrains `a` to the Equatable super-type and

@@ -1,6 +1,8 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.Result
+import Ipe.String
 
 -- #90 T3 (5th attempt): the hazard reaches the ERROR channel too —
 -- `Result.mapError`'s callback result `f` must not be an arrow.

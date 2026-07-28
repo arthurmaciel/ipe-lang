@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- Character literal pattern with a wildcard catch-all.
 grade : Char -> Int

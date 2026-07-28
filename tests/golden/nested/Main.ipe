@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- A nested TUPLE pattern inside a constructor payload: `Wrap (a, c)`.
 type Box a = Wrap a | Empty

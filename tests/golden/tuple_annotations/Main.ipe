@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 firstOf : (Int, Int) -> Int
 firstOf t = if t == (41, 7) then 41 else 0

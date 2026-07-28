@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Ipe.Encoding as Encoding
 import Ipe.Io as Io
+import Ipe.String
 
 -- Go url.QueryEscape leaves the ASCII unreserved set (A-Za-z0-9 plus the four
 -- marks `-` `_` `.` `~`) verbatim, while `+` and `@` ARE escaped (%2B / %40).

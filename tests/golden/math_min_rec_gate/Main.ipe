@@ -1,5 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Math
+import Ipe.String
 
 -- Companion to `math_min_fn_gate` for a RECORD value. `Math.min` carries the
 -- ORDERING obligation (`Comparable a => a -> a -> a`), so the `pickMin` forwarder

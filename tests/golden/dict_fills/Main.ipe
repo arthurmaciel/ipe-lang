@@ -4,6 +4,7 @@ import Ipe.Dict as Dict
 import Ipe.List as List
 import Ipe.Maybe as Maybe
 import Ipe.Io as Io
+import Ipe.String
 
 
 bump : Maybe Int -> Maybe Int

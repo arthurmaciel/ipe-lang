@@ -4,6 +4,7 @@ import Ipe.Html as Html
 import Ipe.Ui as Ui
 import Ipe.Ui.Input as Input
 import Ipe.Io as Io
+import Ipe.String
 
 
 -- #178 regression lock (SEAL: ipec-0 ⇒ cargo-0).

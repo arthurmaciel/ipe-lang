@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- REFUTABLE def-head param `f (Just x) =`: the same rule holds for a function
 -- head, not just a lambda — one shared irrefutability gate. IPE-T0015.

@@ -16,6 +16,9 @@ module Main exposing (main)
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.String
+import Ipe.Sub
 
 type Page
     = CounterPage

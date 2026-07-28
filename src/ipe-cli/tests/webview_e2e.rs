@@ -66,6 +66,7 @@ import Ipe.Tea.WebView as Webview
 import Ipe.Ui as Ui
 import Ipe.Cmd as Cmd
 import Ipe.Sub as Sub
+import Ipe.String
 
 type Msg
     = Increment
@@ -290,6 +291,7 @@ import Ipe.Tea.WebView as Webview
 import Ipe.Ui as Ui
 import Ipe.Cmd as Cmd
 import Ipe.Sub as Sub
+import Ipe.String
 
 type Msg
     = Increment

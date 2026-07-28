@@ -1,5 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.List
+import Ipe.String
 
 main =
     Io.println (String.fromInt (List.length (String.split "" "abc")))

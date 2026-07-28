@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- A concrete (non-generic) payload ADT: `Circle` carries one field, `Rect` two.
 type Shape = Circle Int | Rect Int Int

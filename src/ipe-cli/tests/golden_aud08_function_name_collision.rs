@@ -72,6 +72,7 @@ fn distinct_functions_folding_to_the_same_rust_name_are_rejected() {
                  import Ipe.Io as Io\n\
                  import UiBorder\n\
                  import Ui\n\n\
+import Ipe.String
                  main = Io.println (String.fromInt (UiBorder.rounded 1 + Ui.borderRounded 1))\n",
             ),
         ],
@@ -137,6 +138,7 @@ fn distinct_functions_with_distinct_rust_names_are_accepted() {
                  import Ipe.Prelude exposing (..)\n\
                  import Ipe.Io as Io\n\
                  import Lib\n\n\
+import Ipe.String
                  main = Io.println (String.fromInt (Lib.helper 1))\n",
             ),
         ],

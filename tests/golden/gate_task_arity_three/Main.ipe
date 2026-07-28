@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Task
 
 -- `Task Error Int Bool` (3 type arguments) is ill-formed: `Task` takes exactly
 -- an error channel and a success type. Before #32 this ICE'd with a generic

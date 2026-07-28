@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 
 -- c14 (#130 seal) — RE-CLASSIFIED to ACCEPT by the #221 fn-value Arc-carrier

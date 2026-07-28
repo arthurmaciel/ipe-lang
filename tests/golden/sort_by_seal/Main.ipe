@@ -4,6 +4,8 @@ module Main exposing (main)
 -- Stable sort by a key projection. Preserves insertion order for equal keys.
 
 import Ipe.Io as Io
+import Ipe.List
+import Ipe.String
 
 type alias Person =
     { name : String, age : Int }

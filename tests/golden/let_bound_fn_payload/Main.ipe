@@ -1,5 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Result
+import Ipe.String
 
 -- #90 Stage 1 residual seal hole (found by the 5th-attempt adversarial review,
 -- bisected to cd9bb1c): a LET-BOUND constructor-wrapped closure later passed to

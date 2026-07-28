@@ -173,6 +173,7 @@ fn an_unimported_sibling_capability_rejects() {
         "name = \"sibling-pkg\"\nversion = \"0.1.0\"\n\n[source]\nroot = \"src\"\n",
         // Pure Main — does NOT import Extra.
         "module Main exposing (main)\n\nimport Ipe.Io as Io\n\n\
+import Ipe.Io
          main : Task ()\nmain =\n\x20   Io.println \"hi\"\n",
     );
     // An exposed sibling that reaches the network, unimported by Main.
@@ -180,6 +181,8 @@ fn an_unimported_sibling_capability_rejects() {
         pkg.join("src").join("Extra.ipe"),
         "module Extra exposing (fetch)\n\nimport Ipe.Http as Http\n\
          import Ipe.Task as Task\nimport Ipe.Io as Io\n\n\
+import Ipe.Http
+import Ipe.Io
          fetch : Task ()\nfetch =\n\
          \x20   Http.get \"http://example.com\"\n\
          \x20       |> Task.andThen (\\_ -> Io.println \"done\")\n",
@@ -211,12 +214,14 @@ fn a_semver_underbump_rejects() {
     std::fs::write(
         pkg.join("src").join("Main.ipe"),
         "module Main exposing (main)\n\nimport Ipe.Io as Io\n\n\
+import Ipe.Io
          main : Task ()\nmain =\n\x20   Io.println \"hi\"\n",
     )
     .expect("write Main");
     std::fs::write(
         pkg.join("src").join("Lib.ipe"),
         "module Lib exposing (double)\n\nimport Ipe.Prelude exposing (..)\n\n\n\
+import Ipe.String
          double : Int -> String\ndouble n =\n\x20   String.fromInt (n + n)\n",
     )
     .expect("write new Lib");
@@ -229,6 +234,7 @@ fn a_semver_underbump_rejects() {
         "module Lib exposing (double)\n\nimport Ipe.Prelude exposing (..)\n\n\n\
          double : Int -> Int\ndouble n =\n\x20   n + n\n",
         "module Main exposing (main)\n\nimport Ipe.Io as Io\n\n\
+import Ipe.Io
          main : Task ()\nmain =\n\x20   Io.println \"hi\"\n",
     );
 

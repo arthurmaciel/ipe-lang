@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Ipe.Error as Error
 import Ipe.Io as Io
+import Ipe.Task
 
 -- #86: the `Error` module qualifier. `Error.unexpected` builds a message-
 -- carrying Error (String-backed in this minimal slice); `Task.fail` raises it on

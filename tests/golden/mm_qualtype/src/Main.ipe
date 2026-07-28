@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Lib exposing (Box(..), unbox)
 import Ipe.Io as Io
+import Ipe.String
 
 -- The annotation names the type with its module qualifier: `Lib.Box Int`.
 -- Exercises qualified-type-name resolution in a signature across modules.

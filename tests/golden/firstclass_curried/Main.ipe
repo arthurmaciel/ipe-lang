@@ -1,5 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.List
+import Ipe.String
 
 -- F1 (#121 seal). `mk : String -> (String -> Page)` has def-arity 1.
 -- At two first-class reify sites the slot type is `Fun([Str, Str], Page)` —

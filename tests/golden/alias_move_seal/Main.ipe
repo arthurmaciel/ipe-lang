@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- IPE-L0105 by-VALUE alias binding — the partial-move (E0382) seal.
 --

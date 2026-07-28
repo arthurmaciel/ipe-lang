@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Ipe.Set as Set
 import Ipe.Io as Io
+import Ipe.String
 
 
 addTo : a -> Set a -> Set a

@@ -1,6 +1,8 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.Result
+import Ipe.String
 
 -- #90 T3, the 13th shape (found by this pass's adversarial self-review,
 -- NOT by any earlier attempt or review): a user-written applicative

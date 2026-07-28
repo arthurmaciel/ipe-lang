@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- A self-edge routed through a TUPLE payload: `ChainNode`'s field is the tuple
 -- `(Chain, Int)`, which reaches `Chain` again, so the type-size cycle is closed

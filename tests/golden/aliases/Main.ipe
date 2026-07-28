@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- A non-parametric type alias for a domain quantity.
 type alias Count = Int

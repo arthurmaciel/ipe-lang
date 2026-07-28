@@ -1,5 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Math
+import Ipe.String
 
 main =
     Io.println (String.fromFloat (Math.pow 2.0 10.0))

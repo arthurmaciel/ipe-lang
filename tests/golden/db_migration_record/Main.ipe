@@ -3,6 +3,8 @@ module Main exposing (main)
 import Ipe.Task as Task
 import Ipe.Db as Db
 import Ipe.Io as Io
+import Ipe.List
+import Ipe.String
 
 
 -- #217 contract-drift regression: `Ipe.Db.Migration` is a record alias

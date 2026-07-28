@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- A fully-parametric identity: the type variable `a` is used structurally
 -- (pure pass-through), so it lowers to a Rust generic `fn ...<T1>(x: T1) -> T1`.

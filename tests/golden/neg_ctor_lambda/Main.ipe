@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- REFUTABLE lambda param `\(Just x) ->`: `Just x` fails to match `Nothing`, so a
 -- parameter (a binding position) can never be a constructor pattern. Rejected up

@@ -1,6 +1,8 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.Result
+import Ipe.String
 
 -- #90 T3 green twin: `Result.map` with an exact-arity-1 callback must stay
 -- accepted — the obligation binds only the callback's final result.

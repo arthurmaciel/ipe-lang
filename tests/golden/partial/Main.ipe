@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- Two-parameter function; partially applied below.
 add : Int -> Int -> Int

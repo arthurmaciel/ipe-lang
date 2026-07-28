@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Cmd
 
 -- M5c under-determined-msg gate (IPE-L0102).
 -- `Cmd.none` is used in isolation: nothing in the expression tree anchors the

@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- Same top-level constructor across several arms, discriminated by a NESTED
 -- constructor sub-pattern. `Som (Som x)` and `Som Non` both head-match `Som`

@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- F8 (#121 seal). Three-arrow curried fn: `mk3 : String -> Int -> Bool -> String`
 -- with def-arity 1 (single pattern `a`).  The slot type `Fun([Str, Int, Bool], Str)`
