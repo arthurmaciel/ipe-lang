@@ -329,7 +329,7 @@ mod tests {
         #[cfg(feature = "web")]
         {
             let n: IpeResult<String, Vec<String>> =
-                super::super::live::hub::hub_list_services(path.clone()).await;
+                super::super::web::hub::hub_list_services(path.clone()).await;
             assert!(
                 matches!(n, IpeResult::Ok(ref v) if v == &vec!["tsvc".to_string()]),
                 "{n:?}"

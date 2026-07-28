@@ -96,10 +96,10 @@ jobs:
           components: clippy
       - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
-      # db WITHOUT live — the load-bearing invariant.
+      # db WITHOUT web — the load-bearing invariant.
       - run: cargo clippy -p ipe-runtime-rust --no-default-features --features db --all-targets -- -D warnings
-      # db WITH live — the pair must also stay co-buildable.
-      - run: cargo clippy -p ipe-runtime-rust --no-default-features --features db,live --all-targets -- -D warnings
+      # db WITH web — the pair must also stay co-buildable.
+      - run: cargo clippy -p ipe-runtime-rust --no-default-features --features db,web --all-targets -- -D warnings
 
   # WASM floor: the pure kernel set (incl. the whole Ipe.Ui render surface) and
   # the json leg must keep compiling to wasm32-unknown-unknown — the substrate
