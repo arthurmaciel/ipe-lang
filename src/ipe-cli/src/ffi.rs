@@ -1111,16 +1111,19 @@ fn install_wrapper(
 /// runtime-enforced axis is admitted only where the jail actually holds. The
 /// deploy target is unknown at install, so the honest proxy is this host's jail
 /// capability — `ipe add` and `ipe run` typically run on the same machine. It is
-/// derived solely from [`ipe_sandbox::run_jail::platform_supports_jail`] (itself
-/// single-sourced to the compiled-in `exec_in_run_jail` arm), so a refuse-gap
-/// host is still refused (never admitted-and-run-unconfined) and a jail-holds
-/// host admits-and-isolates.
-const fn jail_for_host() -> ipe_ffi::capability_scan::JailForTarget {
-    if ipe_sandbox::run_jail::platform_supports_jail() {
-        ipe_ffi::capability_scan::JailForTarget::Holds
-    } else {
-        ipe_ffi::capability_scan::JailForTarget::RefuseGap
+/// built from [`ipe_sandbox::run_jail::platform_confined_axes`] — the SET of
+/// runtime-enforced axes the compiled-in `exec_in_run_jail` arm actually confines
+/// on this host, single-sourced to that arm by the `on_jailed_target!` macro. So
+/// the admit path can never claim an axis the jail does not enforce: a full-set
+/// host (Linux/macOS) admits-and-isolates every axis, an empty-set (stub) host
+/// refuse-gaps every axis, and a future partial-coverage host admits only the
+/// axes it confines.
+fn jail_for_host() -> ipe_ffi::capability_scan::JailForTarget {
+    let mut confined = ipe_ffi::capability_scan::CapabilitySet::EMPTY;
+    for &axis in ipe_sandbox::run_jail::platform_confined_axes() {
+        confined = confined.with(axis);
     }
+    ipe_ffi::capability_scan::JailForTarget::Holds(confined)
 }
 
 fn enforce_wrapper_capabilities(
@@ -1154,26 +1157,28 @@ fn enforce_wrapper_capabilities(
 
     // A best-effort honesty smell test on the declaration: surface an obvious
     // under-declaration (the scan proposes an axis the author did not declare)
-    // even when the jail will contain it. This is DEFEATABLE and never the
-    // boundary — the jail is — but it nudges an honest declaration.
-    if jail == ipe_ffi::capability_scan::JailForTarget::Holds {
-        let undeclared: Vec<&str> = scan
-            .proposed
-            .difference(declared)
-            .map(|c| c.as_str())
-            .collect();
-        if !undeclared.is_empty() {
-            eprintln!(
-                "{}",
-                crate::style::gutter(&format!(
-                    "note: the wrapper's source appears to reach {} that it did not declare. \
-                     The runtime jail will still contain any undeclared effect (it fails closed at \
-                     the OS boundary), but an honest declaration is the consent surface a user sees — \
-                     consider declaring it.",
-                    undeclared.join(", ")
-                ))
-            );
-        }
+    // that the jail nonetheless CONFINES on this host. An undeclared axis the
+    // jail does NOT confine is refused by the reconcile below, so it is not a
+    // "will still contain" note. This is DEFEATABLE and never the boundary — the
+    // jail is — but it nudges an honest declaration.
+    let confined = jail.confined();
+    let undeclared: Vec<&str> = scan
+        .proposed
+        .difference(declared)
+        .filter(|c| confined.confines(**c))
+        .map(|c| c.as_str())
+        .collect();
+    if !undeclared.is_empty() {
+        eprintln!(
+            "{}",
+            crate::style::gutter(&format!(
+                "note: the wrapper's source appears to reach {} that it did not declare. \
+                 The runtime jail will still contain any undeclared effect (it fails closed at \
+                 the OS boundary), but an honest declaration is the consent surface a user sees — \
+                 consider declaring it.",
+                undeclared.join(", ")
+            ))
+        );
     }
 
     match ipe_ffi::capability_scan::reconcile_for(declared, &scan, &non_std_deps, jail) {
@@ -2380,34 +2385,45 @@ mod tests {
 
     #[test]
     fn jail_for_host_tracks_the_compiled_in_run_jail() {
-        // The admit hand-off must equal the run-jail's own compiled-in verdict:
-        // a jail-holds host admits-and-isolates, a refuse-gap host refuses. This
-        // is the single source that stops the admit path claiming a jail the
-        // target does not compile in.
+        // The admit hand-off must equal the run-jail's own compiled-in confined
+        // set: a jailed host confines the full set (admit-and-isolate), a stub
+        // host confines the empty set (refuse-gap). This is the single source
+        // that stops the admit path claiming a jail the target does not compile
+        // in — `jail_for_host` folds exactly `platform_confined_axes()`.
         let expected = if ipe_sandbox::run_jail::platform_supports_jail() {
-            ipe_ffi::capability_scan::JailForTarget::Holds
+            ipe_ffi::capability_scan::JailForTarget::FULLY_CONFINED
         } else {
-            ipe_ffi::capability_scan::JailForTarget::RefuseGap
+            ipe_ffi::capability_scan::JailForTarget::REFUSE_GAP
         };
         assert_eq!(jail_for_host(), expected);
+        // The confined set is exactly the run-jail's single-sourced axis list.
+        let mut from_axes = ipe_ffi::capability_scan::CapabilitySet::EMPTY;
+        for &axis in ipe_sandbox::run_jail::platform_confined_axes() {
+            from_axes = from_axes.with(axis);
+        }
+        assert_eq!(jail_for_host().confined(), from_axes);
     }
 
     #[test]
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     fn jail_for_host_holds_on_linux_x86_64() {
+        // Linux/x86_64 confines every runtime-enforced axis → the full set.
         assert_eq!(
             jail_for_host(),
-            ipe_ffi::capability_scan::JailForTarget::Holds
+            ipe_ffi::capability_scan::JailForTarget::FULLY_CONFINED
         );
+        assert!(jail_for_host().confined().is_full());
     }
 
     #[test]
     #[cfg(target_os = "macos")]
     fn jail_for_host_holds_on_macos() {
+        // macOS confines every runtime-enforced axis → the full set.
         assert_eq!(
             jail_for_host(),
-            ipe_ffi::capability_scan::JailForTarget::Holds
+            ipe_ffi::capability_scan::JailForTarget::FULLY_CONFINED
         );
+        assert!(jail_for_host().confined().is_full());
     }
 
     #[test]

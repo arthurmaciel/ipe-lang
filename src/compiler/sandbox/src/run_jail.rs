@@ -812,6 +812,49 @@ on_jailed_target! {
     }
 }
 
+/// The runtime-enforced axes the compiled-in [`exec_in_run_jail`] arm confines.
+///
+/// This is the single source the FFI admit path keys off, so it can never claim
+/// an axis the jail does not enforce on this target.
+///
+/// Stamped by the SAME [`on_jailed_target`] macro as [`JAIL_COMPILED_IN`] and the
+/// real jail arm, so the set cannot drift from what compiles in. On a jailed
+/// target (Linux `bwrap`+seccomp / macOS `sandbox-exec`+launcher-scrub) the arm
+/// confines EVERY runtime-enforced axis — network + database (net namespace /
+/// SBPL deny), filesystem (`--ro-bind`+tmpfs / SBPL deny-write), subprocess
+/// (seccomp / SBPL process-deny), env (`--clearenv` / launcher scrub) — and
+/// native-ffi is contained by the whole-process jail regardless of what native
+/// code does. Off both targets the stub arm confines NOTHING (the fail-closed
+/// empty set), so a capability-bearing wrapper is refused, never run unconfined.
+///
+/// The list is `Capability` values so the FFI admit path folds them straight
+/// into its confined-axis set; the ordering is irrelevant (folded into a set).
+#[must_use]
+pub const fn platform_confined_axes() -> &'static [Capability] {
+    CONFINED_AXES
+}
+
+on_jailed_target! {
+    yes: {
+        /// A jailed target confines every runtime-enforced axis (see
+        /// [`platform_confined_axes`]). `database` is not listed: it lowers to
+        /// `network`/`filesystem` before it reaches the jail, both of which are
+        /// confined here, so the FFI admit path treats it as confined via those.
+        const CONFINED_AXES: &[Capability] = &[
+            Capability::Network,
+            Capability::Filesystem,
+            Capability::Database,
+            Capability::Env,
+            Capability::Subprocess,
+            Capability::NativeFfi,
+        ];
+    }
+    no: {
+        /// The stub arm confines nothing — the fail-closed empty set.
+        const CONFINED_AXES: &[Capability] = &[];
+    }
+}
+
 /// Probe the host for the run-jail primitives and decide whether a jail can be
 /// built, returning the tools or the fail-closed refusal.
 ///
