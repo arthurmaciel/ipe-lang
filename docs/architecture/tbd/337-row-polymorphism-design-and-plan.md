@@ -23,7 +23,7 @@ The **type layer already models rows correctly** and is not the blocker:
   field access (`FieldAccess`) and open-record growth in `resolve_deferred`
   (`src/compiler/types/src/lib.rs`).
 - Open records are *produced* today only for three kernel schemes
-  (`Live.app` / `Tui.app` / `Tui.program`) via `RowTail::Open(3)` in
+  (`Web.app` / `Tui.app` / `Tui.program`) via `RowTail::Open(3)` in
   `constrain.rs`.
 
 The **end-to-end gaps** (the work) are:

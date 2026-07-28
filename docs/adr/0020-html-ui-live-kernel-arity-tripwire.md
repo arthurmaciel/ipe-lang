@@ -4,7 +4,7 @@ Status: Accepted
 
 ## Context
 
-43 kernels in the Ipe.Html / Ipe.Ui / Ipe.Live rendering family were typed as
+43 kernels in the Ipe.Html / Ipe.Ui / Ipe.Web rendering family were typed as
 `Ty::Var(u32::MAX)` — the fallback hole that lets a call slip past the
 type-checker and fail at `cargo`. Closing them requires a correct
 `stdlib_scheme` arm per kernel, and the scheme's arrow-count must agree with the

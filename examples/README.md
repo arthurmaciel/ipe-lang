@@ -12,7 +12,7 @@ that builds with `ipe build` and targets the Rust backend.
 | `wasm-effects` | wasm/live | `Sub.every` timer and `Cmd.perform` side-effects exercised end-to-end in a browser via the Cmd/Sub bridge (gloo-timers). |
 | `wasm-websocket` | wasm/live | `Ipe.WebSocket` client substitute: connect / onOpen / send / onMessage / close / onClose against a real WebSocket server in-browser. |
 | `wasm-env-public` | wasm/live | `Ipe.Env.public` build-time config embedding: an allowlisted `API_BASE_URL` variable injected at compile time and readable in WASM at run time. |
-| `wasm-spa` | wasm | SPA target: a pure-client single-page application with full TEA loop running in the browser. Uses `Live.app` which emits `wasm_app` under `--target wasm`. |
+| `wasm-spa` | wasm | SPA target: a pure-client single-page application with full TEA loop running in the browser. Uses `Web.app` which emits `wasm_app` under `--target wasm`. |
 | `wasm-hydration` | wasm | SSR hydration: server-side initial render (paint) followed by WASM client takeover. |
 | `console-repl` | console | An accumulator-calculator REPL over `Console.app`: each stdin line is a command (`add`/`sub`/`mul`/`reset`/`quit`) folded into a running total. |
 | `tui-counter` | tui | A terminal counter over `Tui.app`, rendering the same shared `Ipe.Ui` view as the Web and WebView counters. |

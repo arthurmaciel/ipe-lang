@@ -4,22 +4,22 @@ Status: Accepted
 
 ## Context
 
-Several web-security gaps across the Ipe.Live and Ipe.Http.Server runtime
+Several web-security gaps across the Ipe.Web and Ipe.Http.Server runtime
 surfaces needed closing. The code is the source of truth for the *how*; this
 ADR preserves the security *why* and the invariants that must keep holding,
 since a stale procedural spec would mislead but the decisions below are
 durable.
 
-Note: Ipe.Live's own CSRF (`live/csrf.rs`) was already complete and wired
+Note: Ipe.Web's own CSRF (`live/csrf.rs`) was already complete and wired
 end-to-end (`__Host-` prefixed double-submit cookie, constant-time compare,
-axum middleware layer); Ipe.Live's own CSRF half was already complete and wired end-to-end. What these decisions
+axum middleware layer); Ipe.Web's own CSRF half was already complete and wired end-to-end. What these decisions
 cover is the surrounding surface.
 
 ## Decision
 
 ### 1. Headless `Ipe.Http.Middleware.withCsrf` is a separate, feature-safe impl
 
-Ipe.Live's `csrf.rs` **cannot be reused verbatim** for the headless
+Ipe.Web's `csrf.rs` **cannot be reused verbatim** for the headless
 `Ipe.Http.Server` API. `csrf.rs` is gated by the `live` Cargo feature, which
 pulls in `aes-gcm`; the `server` feature alone does not. `Ipe.Http.Middleware`
 kernels register under the `Server` region and must build standalone under
@@ -29,7 +29,7 @@ kernels register under the `Server` region and must build standalone under
 approved security-bearing randomness source per the runtime's own SECURITY
 INVARIANT convention).
 
-Intentional design differences from Ipe.Live's CSRF (not shortcuts):
+Intentional design differences from Ipe.Web's CSRF (not shortcuts):
 
 - **How the client learns the token.** No page render exists for a headless API,
   so the cookie is **non-`HttpOnly`** — same-origin client JS reads it and
@@ -79,13 +79,13 @@ the configured allowlist.
 `live_max_body_bytes()` read `IPE_LIVE_MAX_BODY_BYTES` without a `> 0` filter, so
 `IPE_LIVE_MAX_BODY_BYTES=0` made every `/_ipe/event` POST 413. It must
 `.filter(|&n| n > 0)` before falling back to the default, matching
-`server.rs::max_body()`. The env var is shared between the Ipe.Live event
+`server.rs::max_body()`. The env var is shared between the Ipe.Web event
 endpoint and the Ipe.Http.Server default, so the floor behaviour must be
 identical on both sides.
 
 ## Consequences
 
-- The two CSRF implementations (Ipe.Live blanket-layer with HttpOnly +
+- The two CSRF implementations (Ipe.Web blanket-layer with HttpOnly +
   page-embedded token; headless per-route double-submit with non-HttpOnly
   cookie) are deliberately different and must stay feature-partitioned: the
   headless path may only use crates unconditional under `--features server`.

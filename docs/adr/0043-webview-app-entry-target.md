@@ -4,7 +4,7 @@ Date: 2026-07-25
 
 ## Status
 
-Accepted and implemented. `Webview.app` is wired end to end: the runtime lives in
+Accepted and implemented. `WebView.app` is wired end to end: the runtime lives in
 `src/runtime/rust/src/webview.rs` (`webview_app`, `WebviewWindowCfg`), emission in
 `src/compiler/backend/rust/src/emit_webview.rs`, with the IR kernel
 (`KernelFn::WebviewApp`), the callee resolution `("Webview","app") → WebviewApp`, the
@@ -28,10 +28,10 @@ window (the app compiles, then dies on first paint).
 
 ## Decision
 
-`Webview.app` takes a single closed five-field record, every field required:
+`WebView.app` takes a single closed five-field record, every field required:
 
 ```
-Webview.app :
+WebView.app :
   { init          : () -> (Model, Cmd Msg)
   , update        : Msg -> Model -> (Model, Cmd Msg)
   , view          : Model -> Html Msg

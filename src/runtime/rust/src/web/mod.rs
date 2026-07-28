@@ -392,7 +392,7 @@ pub struct SessionEntry<Model, Msg> {
 struct PatchEnvelope<'a> {
     #[serde(rename = "globalSeq")]
     global_seq: u64,
-    patches: &'a [crate::live::diff::Patch],
+    patches: &'a [crate::dom::diff::Patch],
 }
 
 /// Wire shape POSTed by the browser client to `/_ipe/event`
@@ -2187,7 +2187,7 @@ fn sid_from_cookie(headers: &axum::http::HeaderMap) -> Option<String> {
 #[cfg(test)]
 mod reload_push_tests {
     use super::*;
-    use crate::live::store::{MemoryStore, SessionHandle, SessionStore};
+    use crate::web::store::{MemoryStore, SessionHandle, SessionStore};
     use std::time::Duration;
     use tokio::sync::mpsc::channel;
 

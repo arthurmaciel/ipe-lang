@@ -1,17 +1,17 @@
 # 29-webview-threejs-spike
 
 Spike validating that **Three.js + WebGL2 + animation** work
-end-to-end inside a native Ipe.Webview desktop window — driven
+end-to-end inside a native Ipe.WebView desktop window — driven
 entirely by the Ipê compiler, no hand-rolled glue.
 
 This example used to be a two-process spike: a Ipe.Http.Server on
 one side + a hand-rolled `webview_go` shim on the other. After
-bug #370 landed (Ipe.Webview now spawns a 127.0.0.1 loopback http
+bug #370 landed (Ipe.WebView now spawns a 127.0.0.1 loopback http
 server when `ipe.toml`'s `[live].static` is set), the whole
 two-process dance collapses into a single Ipê source file.
 
 > **What this proves**: the same Ipê source you'd write for a
-> Ipe.Live page works for a desktop Ipe.Webview app — relative
+> Ipe.Web page works for a desktop Ipe.WebView app — relative
 > paths (`/static/three.min.js`) resolve correctly because the
 > webview is pointed at a real `http://127.0.0.1:<free>` origin
 > instead of `about:blank`.
@@ -61,7 +61,7 @@ just escalated — flag in the PR.
 
 ```
 ipe.toml                 ← [live].static = "static" — the bug #370 gate
-src/Main.ipe             ← Webview.app cfg + view that emits the HUD + canvas + script tags
+src/Main.ipe             ← WebView.app cfg + view that emits the HUD + canvas + script tags
 static/three.min.js      ← Three.js r158 UMD build (vendored, ~636 KB)
 static/scene.js          ← Animated 3D scene + HUD probes
 static/style.css         ← HUD + canvas chrome
@@ -82,7 +82,7 @@ still exposes a global `THREE` — perfect for a zero-build spike.
 
 When `ipe.toml` declares `[live].static = "static"`, the Ipe
 compiler emits a `SetIpeDefault("LIVE_STATIC_DIR", "static")`
-into the program's `init()`. At runtime, `Ipe.Webview` checks
+into the program's `init()`. At runtime, `Ipe.WebView` checks
 that env var:
 
 - **Set** (this example): spawns `http.Server` on `127.0.0.1:0`

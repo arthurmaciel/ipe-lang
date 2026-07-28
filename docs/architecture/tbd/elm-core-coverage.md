@@ -328,7 +328,7 @@ Program construction and effect-manager plumbing.
 
 | Function / Type | Signature | Ipê status |
 |---|---|---|
-| `worker` | `{ init : flags -> ( model, Cmd msg ), update : msg -> model -> ( model, Cmd msg ), subscriptions : model -> Sub msg } -> Program flags model msg` | n/a (Ipê program entry is `Live.app` / `Tui.app` / `Webview.app`, not `Platform.worker`) |
+| `worker` | `{ init : flags -> ( model, Cmd msg ), update : msg -> model -> ( model, Cmd msg ), subscriptions : model -> Sub msg } -> Program flags model msg` | n/a (Ipê program entry is `Web.app` / `Tui.app` / `WebView.app`, not `Platform.worker`) |
 | `sendToApp` | `Router msg a -> msg -> Task x ()` | n/a (effect-manager plumbing; Ipê has no user-defined effect managers / `Router`) |
 | `sendToSelf` | `Router a msg -> msg -> Task x ()` | n/a (effect-manager plumbing) |
 
@@ -587,7 +587,7 @@ Four elm/core modules have **no** Ipê counterpart at all:
 
 Additionally, **`Process`** and **`Platform`** are effectively absent as
 user-facing surfaces: `Platform.worker`/`sendToApp`/`sendToSelf` are `n/a` (Ipê
-programs are `Live.app`/`Tui.app`/`Webview.app`; there are no user effect
+programs are `Web.app`/`Tui.app`/`WebView.app`; there are no user effect
 managers or `Router`), and `Process.spawn`/`kill` plus the `ProcessId`/`Id` type
 are missing (only `Time.sleep` covers `Process.sleep`).
 

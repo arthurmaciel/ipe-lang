@@ -1,6 +1,6 @@
 //! Ipe.WebView — native desktop window backend.
 //!
-//! `Webview.app { init, update, view, subscriptions, window }` opens a native
+//! `WebView.app { init, update, view, subscriptions, window }` opens a native
 //! system webview (`wry` ≥0.55 + `tao` ≥0.35: WKWebView on macOS, WebView2 on
 //! Windows, WebKitGTK on Linux — webkit2gtk-4.1 + libsoup-3.0) and runs the same
 //! TEA loop as Ipe.Web, reusing Ipe.Web's `Html` renderer + event dispatch
@@ -70,7 +70,7 @@ mod imp {
     {
         Box::pin(async move {
             IpeResult::Err(
-                "Webview.app: this Ipe build has no native webview backend. Rebuild \
+                "WebView.app: this Ipe build has no native webview backend. Rebuild \
                  with `--features webview` on a machine with the webview dev \
                  libraries (Linux: webkit2gtk + libsoup; macOS: WKWebView; Windows: \
                  the Edge WebView2 runtime)."
@@ -170,7 +170,7 @@ mod imp {
         (render_html(&tree), index)
     }
 
-    /// Real `Webview.app` — opens a native window and runs the TEA loop on the
+    /// Real `WebView.app` — opens a native window and runs the TEA loop on the
     /// event-loop thread. DOM events arrive over IPC, resolve to Msgs via the
     /// reused `HandlerIndex`, drive `update`, and re-render via `evaluate_script`.
     ///
@@ -229,7 +229,7 @@ mod imp {
                 .build(&event_loop)
             {
                 Ok(win) => win,
-                Err(e) => return IpeResult::Err(format!("Webview.app: window: {e}").into()),
+                Err(e) => return IpeResult::Err(format!("WebView.app: window: {e}").into()),
             };
 
             let (mut model, _cmd0) = init(());
@@ -265,7 +265,7 @@ mod imp {
             };
             let webview = match built {
                 Ok(wv) => wv,
-                Err(e) => return IpeResult::Err(format!("Webview.app: webview: {e}").into()),
+                Err(e) => return IpeResult::Err(format!("WebView.app: webview: {e}").into()),
             };
 
             event_loop.run(move |event, _target, control_flow| {
