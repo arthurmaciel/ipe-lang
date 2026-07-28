@@ -4,7 +4,7 @@ A terminal user interface in [The Elm Architecture](https://guide.elm-lang.org/a
 A TUI app takes over the terminal, renders `view` to the screen, and turns each
 keystroke into a `Msg` via `onKey`. Choose it for interactive command-line UIs —
 pickers, dashboards, wizards — that redraw in place. The `Model` is kept in
-memory, so it only needs `Clone`.
+memory as a plain value.
 
 ## Entry points
 
@@ -137,9 +137,20 @@ main =
         }
 ```
 
-Build it with `ipe build examples/tui-counter`. Running the binary takes over
-the terminal and adjusts the count on each key; because it drives a real
-terminal, run it in a terminal session rather than in CI.
+## Running it
+
+Build the example, then run it:
+
+```sh
+ipe build examples/tui-counter
+ipe run examples/tui-counter
+```
+
+`ipe build` compiles the program to a binary. Running it takes over the
+terminal, draws the counter, and adjusts the count on each key — the arrow keys
+and `+`/`-` change the value, `r` resets, `q` quits. Because it drives a real
+terminal, run it in an interactive terminal session; it has no headless mode, so
+CI can build it but cannot exercise the keystroke loop.
 
 ## Example
 
