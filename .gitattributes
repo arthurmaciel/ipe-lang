@@ -4,3 +4,9 @@
 # Windows checkout with autocrlf must never rewrite them to CRLF, or the anchor
 # splice fails (IPE-I0203: golden anchor not found) and byte compares diverge.
 tests/golden/** text eol=lf
+
+# The Rust backend embeds its emit templates via include_str! and splices them
+# at "\n" anchors (e.g. "// USER TYPES\n" in main.rs). A Windows autocrlf
+# checkout that rewrote them to CRLF makes the anchor search fail (IPE-I0203:
+# golden anchor not found), so pin the whole templates tree to LF.
+src/compiler/backend/rust/templates/** text eol=lf

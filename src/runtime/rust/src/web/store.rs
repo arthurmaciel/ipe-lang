@@ -764,7 +764,7 @@ mod go_format_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::live::{Html, build_index};
+    use crate::web::{Html, build_index};
     use tokio::sync::mpsc::channel;
 
     // A minimal SessionEntry<(), ()> for exercising the store's TTL/touch logic.
