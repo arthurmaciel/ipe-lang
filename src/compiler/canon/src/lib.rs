@@ -527,7 +527,8 @@ mod tests {
     #[test]
     fn unknown_value_suggests_close_name() {
         // `printn` is one edit from the `Ipe.Io` member `println`.
-        let err = canon_err("module Main exposing (main)\n\nmain = Io.printn\n");
+        let err =
+            canon_err("module Main exposing (main)\nimport Ipe.Io as Io\n\nmain = Io.printn\n");
         assert!(
             matches!(
                 &err,
@@ -579,7 +580,7 @@ mod tests {
     fn suggestions_sorted_by_distance_then_name() {
         // Several `List`/`Basics` members sit at equal edit distance from
         // `ma`; assert the rendered list is `(distance, name)`-sorted.
-        let err = canon_err("module Main exposing (main)\n\nmain = List.ma\n");
+        let err = canon_err("module Main exposing (main)\nimport Ipe.List\n\nmain = List.ma\n");
         let Some(Diagnostic::Name {
             msg: NameError::NoSuchMember { suggestions, .. },
             ..
@@ -623,7 +624,8 @@ mod tests {
     fn known_qualifier_missing_member_is_no_such_member() {
         // `fromInr` is one edit (substitution) from the `String` member
         // `fromInt`.
-        let err = canon_err("module Main exposing (main)\n\nmain = String.fromInr\n");
+        let err =
+            canon_err("module Main exposing (main)\nimport Ipe.String\n\nmain = String.fromInr\n");
         let Some(Diagnostic::Name {
             msg:
                 NameError::NoSuchMember {
@@ -704,6 +706,43 @@ mod tests {
             return;
         };
         assert_eq!(&*qualifier, "Widgets");
+    }
+
+    /// ADR 0047 Tier C: a KNOWN stdlib qualifier (`String`) used with no
+    /// `import Ipe.String` is the teachable must-import diagnostic (IPE-N0034)
+    /// naming the exact module to add — NOT a silent resolve against the
+    /// pre-installed catalog, and NOT the generic unknown-module error.
+    #[test]
+    fn tier_c_known_unimported_qualifier_demands_its_import() {
+        let err = canon_err("module Main exposing (main)\n\nmain = String.fromInt 0\n");
+        let Some(Diagnostic::Name {
+            msg:
+                NameError::StdlibImportRequired {
+                    qualifier,
+                    import_path,
+                },
+            ..
+        }) = err
+        else {
+            assert!(false_marker(), "expected StdlibImportRequired (IPE-N0034)");
+            return;
+        };
+        assert_eq!(&*qualifier, "String");
+        assert_eq!(&*import_path, "Ipe.String");
+    }
+
+    /// The counterpart to the gate: WITH `import Ipe.String`, the same qualified
+    /// use resolves — so the diagnostic fires strictly on the missing import,
+    /// never on a real, imported stdlib module.
+    #[test]
+    fn tier_c_qualifier_resolves_once_its_module_is_imported() {
+        let opt = canon_src(
+            "module Main exposing (main)\nimport Ipe.String\n\nmain = String.fromInt 0\n",
+        );
+        assert!(
+            opt.is_some(),
+            "a Tier-C qualifier must resolve once its module is imported"
+        );
     }
 
     #[test]
