@@ -3014,7 +3014,7 @@ impl<'a> Builder<'a> {
             // the Model var (var index 0) and notFound var (var index 2), then
             // push a `RoutedLiveCheck` so `resolve_routed_live_checks` can run
             // the gate after the HM solver settles.
-            if matches!(k, StdlibKernel::WebApp) {
+            if matches!(k, StdlibKernel::WebApp | StdlibKernel::WebAppHtml) {
                 let ty = self.stdlib_scheme(k).ok_or(Diagnostic::Lower {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
@@ -5161,7 +5161,17 @@ impl<'a> Builder<'a> {
             // (emit_web.rs T5) — not at type time.
             //
             // Removes #[allow(dead_code)] from `live_f_routes` / `live_f_not_found`.
-            K::WebApp => {
+            K::WebApp | K::WebAppHtml => {
+                // `view : Model -> Element Msg` for `WebApp` (the framework
+                // applies `Ui.layout` internally, unifying the graphical shapes
+                // on `Element`); `view : Model -> Html Msg` for the raw-`Html`
+                // escape `WebAppHtml`. Every other cfg field is identical, so
+                // the two share one scheme body that differs only in `view`.
+                let view_ret = if matches!(k, K::WebAppHtml) {
+                    html_t(var(1))
+                } else {
+                    elem_t(var(1))
+                };
                 let init_ret = tuple2(var(0), cmd(var(1)));
                 let cfg_rec = Ty::Record(
                     {
@@ -5171,7 +5181,7 @@ impl<'a> Builder<'a> {
                             self.builtins.live_f_update,
                             fun(var(1), fun(var(0), init_ret)),
                         );
-                        m.insert(self.builtins.live_f_view, fun(var(0), html_t(var(1))));
+                        m.insert(self.builtins.live_f_view, fun(var(0), view_ret));
                         m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
                         // routes : List (WebRoute page)  — page = var(2).
                         // Parametrising WebRoute on the page type variable
@@ -5342,7 +5352,16 @@ impl<'a> Builder<'a> {
             }
 
             // ── Ipe.WebView app-entry (already schemed in kernel_ty) ──
-            K::WebViewApp => {
+            //
+            // `view : Model -> Element Msg` for `WebViewApp` (framework applies
+            // `Ui.layout`, same unification as Web); `view : Model -> Html Msg`
+            // for the raw-`Html` escape `WebViewAppHtml`.
+            K::WebViewApp | K::WebViewAppHtml => {
+                let view_ret = if matches!(k, K::WebViewAppHtml) {
+                    html_t(var(1))
+                } else {
+                    elem_t(var(1))
+                };
                 let tup = tuple2(var(0), cmd(var(1)));
                 let window_ty = Ty::Record(
                     {
@@ -5358,7 +5377,7 @@ impl<'a> Builder<'a> {
                         let mut m = BTreeMap::new();
                         m.insert(self.builtins.live_f_init, fun(Ty::Unit, tup.clone()));
                         m.insert(self.builtins.live_f_update, fun(var(1), fun(var(0), tup)));
-                        m.insert(self.builtins.live_f_view, fun(var(0), html_t(var(1))));
+                        m.insert(self.builtins.live_f_view, fun(var(0), view_ret));
                         m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
                         m.insert(self.builtins.webview_f_window, window_ty);
                         m
@@ -7969,15 +7988,17 @@ mod registry_phase_c_tests {
             K::UiOnKeyUp,
             K::UiOnBool,
             K::UiOnSubmit,
-            // Ipe.Web app-entry (3)
+            // Ipe.Web app-entry (4)
             K::WebApp,
+            K::WebAppHtml,
             K::WebRoute,
             K::WebRenderStatic,
             // Ipe.Tui app-entry (2)
             K::TuiApp,
             K::TuiProgram,
-            // Ipe.WebView app-entry (1)
+            // Ipe.WebView app-entry (2)
             K::WebViewApp,
+            K::WebViewAppHtml,
             // Ipe.Html styleNode (1 — F7; parity checked by
             // stdlib_scheme_matches_legacy).
             K::HtmlStyleNode,

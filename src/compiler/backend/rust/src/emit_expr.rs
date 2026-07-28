@@ -5674,6 +5674,7 @@ fn emit_ui_call(
         // A `None` here is an internal error (the `is_web()` guard above already
         // filtered to Web variants), so promote it to a `CompilerBug`.
         KernelFn::WebApp
+        | KernelFn::WebAppHtml
         | KernelFn::WebAppRouted
         | KernelFn::WebRoute
         | KernelFn::WebRenderStatic => {
@@ -5704,7 +5705,7 @@ fn emit_ui_call(
         // the WebviewApp variant and `None` for anything else. A `None` here is an
         // internal error (the `k.is_webview()` guard above already filtered), so
         // promote it to a `CompilerBug`.
-        KernelFn::WebViewApp => {
+        KernelFn::WebViewApp | KernelFn::WebViewAppHtml => {
             let s =
                 crate::emit_webview::emit_webview_call(ctx, callee, args, indent, child, generics)?
                     .ok_or_else(|| Diagnostic::CompilerBug {

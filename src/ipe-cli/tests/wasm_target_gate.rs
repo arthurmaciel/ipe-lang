@@ -69,10 +69,9 @@ fn pure_ui_app_emits_wasm_project() {
          subscriptions : Model -> Sub Msg\n\
          subscriptions _model = Sub.none\n\
          \n\
-         view : Model -> Html Msg\n\
+         view : Model -> Element Msg\n\
          view model =\n\
-         \x20   Ui.layout []\n\
-         \x20       (Ui.button [] { onPress = Just Increment, label = Ui.text (String.fromInt model.count) })\n\
+         \x20   Ui.button [] { onPress = Just Increment, label = Ui.text (String.fromInt model.count) }\n\
          \n\
          main =\n\
          \x20   app\n\

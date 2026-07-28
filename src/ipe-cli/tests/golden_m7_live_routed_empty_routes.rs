@@ -46,7 +46,7 @@ init _req = ( { page = CounterPage, count = 0 }, Cmd.none )
 update msg model =
     case msg of
         Increment -> ( { model | count = model.count + 1 }, Cmd.none )
-view model = Ui.layout [] (Ui.text (String.fromInt model.count))
+view model = Ui.text (String.fromInt model.count)
 subscriptions _model = Sub.none
 main =
     Web.app
@@ -69,7 +69,7 @@ init _req = ( { page = CounterPage, count = 0 }, Cmd.none )
 update msg model =
     case msg of
         Increment -> ( { model | count = model.count + 1 }, Cmd.none )
-view model = Ui.layout [] (Ui.text (String.fromInt model.count))
+view model = Ui.text (String.fromInt model.count)
 subscriptions _model = Sub.none
 main =
     Web.app
@@ -91,7 +91,7 @@ init _req = ( { page = CounterPage, count = 0 }, Cmd.none )
 update msg model =
     case msg of
         Increment -> ( { model | count = model.count + 1 }, Cmd.none )
-view model = Ui.layout [] (Ui.text (String.fromInt model.count))
+view model = Ui.text (String.fromInt model.count)
 subscriptions _model = Sub.none
 main =
     Web.app
@@ -118,8 +118,8 @@ update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
         Increment -> ( { model | count = model.count + 1 }, Cmd.none )
-view : Model -> Html Msg
-view model = Ui.layout [] (Ui.text (String.fromInt model.count))
+view : Model -> Element Msg
+view model = Ui.text (String.fromInt model.count)
 subscriptions : Model -> Sub Msg
 subscriptions _model = Sub.none
 main =
@@ -149,8 +149,8 @@ update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
         Increment -> ( { model | count = model.count + 1 }, Cmd.none )
-view : Model -> Html Msg
-view model = Ui.layout [] (Ui.text (String.fromInt model.count))
+view : Model -> Element Msg
+view model = Ui.text (String.fromInt model.count)
 subscriptions : Model -> Sub Msg
 subscriptions _model = Sub.none
 main =

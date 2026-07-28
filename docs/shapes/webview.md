@@ -11,9 +11,13 @@ shipping a web stack. The `Model` is kept in memory as a plain value.
 `main = WebView.app cfg`, where `cfg` is a record of
 `init` / `update` / `view` / `subscriptions` plus a `window` record
 (`{ title : String, size : ( Int, Int ) }`). The view type is
-`view : Model -> Html Msg` — the same as [Web](web.md), built with `Ipe.Ui` and
-wrapped by a top-level `Ui.layout [] element` (see
-[Views: Ui, Html, and Css](../ui.md)).
+`view : Model -> Element Msg` — the same portable `Ipe.Ui` view as
+[Web](web.md) and [TUI](tui.md); the framework applies `Ui.layout` internally to
+render it into the window (see [Views: Ui, Html, and Css](../ui.md)).
+
+For direct DOM control, `WebView.appHtml` is the raw-`Html` escape entry
+(symmetric with [Web](web.md#entry-point)'s `Web.appHtml`): the same `cfg` with
+`view : Model -> Html Msg`, authored with `Ipe.Html` and no `Ui.layout` wrap.
 
 ## Minimal example
 
@@ -48,17 +52,15 @@ update msg model =
             ( { model | count = model.count + 1 }, Cmd.none )
 
 
-view : Model -> Html Msg
+view : Model -> Element Msg
 view model =
-    Ui.layout []
-        (Ui.column [ Ui.spacing 16, Ui.padding 32 ]
-            [ Ui.el [ Font.size 24, Font.bold ] (Ui.text "Ipê WebView")
-            , Ui.button [ Ui.padding 12 ]
-                { onPress = Just Increment
-                , label = Ui.text ("count: " ++ String.fromInt model.count)
-                }
-            ]
-        )
+    Ui.column [ Ui.spacing 16, Ui.padding 32 ]
+        [ Ui.el [ Font.size 24, Font.bold ] (Ui.text "Ipê WebView")
+        , Ui.button [ Ui.padding 12 ]
+            { onPress = Just Increment
+            , label = Ui.text ("count: " ++ String.fromInt model.count)
+            }
+        ]
 
 
 subscriptions : Model -> Sub Msg

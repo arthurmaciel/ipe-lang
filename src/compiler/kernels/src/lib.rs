@@ -1021,6 +1021,10 @@ pub enum StdlibKernel {
     HtmlNoAttr,        // `noAttr : Attribute msg`
     // ── Ipe.Web app-entry kernels ───────────────────────────────────────
     WebApp,
+    /// `Web.appHtml` — the raw-`Html` escape entry. Identical cfg to `WebApp`
+    /// except `view : Model -> Html Msg` (no framework `Ui.layout` wrap), for
+    /// apps that author the DOM directly. See ADR 0048 point 4.
+    WebAppHtml,
     WebAppRouted,
     WebRoute,
     WebRenderStatic,
@@ -1029,6 +1033,9 @@ pub enum StdlibKernel {
     TuiApp,
     // ── Ipe.WebView app-entry kernel ─────────────────────────────────────
     WebViewApp,
+    /// `WebView.appHtml` — the raw-`Html` escape entry, symmetric with
+    /// `WebAppHtml`: `view : Model -> Html Msg`, no `Ui.layout` wrap.
+    WebViewAppHtml,
     // ── event-attribute builders ─────────────────────────────────────────
     UiOnClick,
     UiOnFocus,
@@ -2590,6 +2597,7 @@ impl StdlibKernel {
             Self::HtmlNoAttr => d("Attr", "noAttr", 0, Ui, "html_no_attr_"),
             // ── Ipe.Web app-entry kernels ───────────────────────────────
             Self::WebApp => d("Web", "app", 1, Web, "web_app"),
+            Self::WebAppHtml => d("Web", "appHtml", 1, Web, "web_app"),
             Self::WebAppRouted => d("Web", "appRouted", 1, Web, "web_app_routed"),
             Self::WebRoute => d("Web", "route", 2, Web, "web_route"),
             Self::WebRenderStatic => d("Web", "renderStatic", 2, Web, "web_render_static"),
@@ -2598,6 +2606,7 @@ impl StdlibKernel {
             Self::TuiApp => d("Tui", "app", 1, Tui, "tui_app_ui"),
             // ── Ipe.WebView app-entry kernel ─────────────────────────────
             Self::WebViewApp => d("WebView", "app", 1, WebView, "webview_app"),
+            Self::WebViewAppHtml => d("WebView", "appHtml", 1, WebView, "webview_app"),
             // ── event-attribute builders ─────────────────────────────────
             Self::UiOnClick => d("Ui", "onClick", 1, Ui, "ui_on_click_"),
             Self::UiOnFocus => d("Ui", "onFocus", 1, Ui, "ui_on_focus_"),
@@ -3857,6 +3866,7 @@ impl StdlibKernel {
         Self::HtmlStyleNode,
         // Web
         Self::WebApp,
+        Self::WebAppHtml,
         Self::WebAppRouted,
         Self::WebRoute,
         Self::WebRenderStatic,
@@ -3865,6 +3875,7 @@ impl StdlibKernel {
         Self::TuiApp,
         // WebView
         Self::WebViewApp,
+        Self::WebViewAppHtml,
         // event-attribute builders
         Self::UiOnClick,
         Self::UiOnFocus,
@@ -5023,12 +5034,14 @@ impl StdlibKernel {
             | Self::HtmlBoolAttribute
             | Self::HtmlNoAttr
             | Self::WebApp
+            | Self::WebAppHtml
             | Self::WebAppRouted
             | Self::WebRoute
             | Self::WebRenderStatic
             | Self::TuiProgram
             | Self::TuiApp
             | Self::WebViewApp
+            | Self::WebViewAppHtml
             | Self::UiOnClick
             | Self::UiOnFocus
             | Self::UiOnBlur
@@ -6116,6 +6129,7 @@ impl StdlibKernel {
         matches!(
             self,
             Self::WebApp
+                | Self::WebAppHtml
                 | Self::WebAppRouted
                 | Self::WebRoute
                 | Self::WebRenderStatic
@@ -6137,7 +6151,7 @@ impl StdlibKernel {
     /// `true` when this variant is the `Ipe.WebView` app-entry kernel.
     #[must_use]
     pub const fn is_webview(self) -> bool {
-        matches!(self, Self::WebViewApp)
+        matches!(self, Self::WebViewApp | Self::WebViewAppHtml)
     }
 
     /// `true` when this variant is the `Ipe.Console` / `Ipe.Console` app-entry kernel.
@@ -6251,7 +6265,7 @@ impl StdlibKernel {
             // branch) stay out until the client router lands — tagging the
             // route kernel now would emit `Route::new` against a runtime
             // module the wasm crate does not vendor (a SEAL breach).
-            KernelClass::Web => matches!(self, Self::WebApp),
+            KernelClass::Web => matches!(self, Self::WebApp | Self::WebAppHtml),
             // TEA wiring the wasm scheduler drives today. `Cmd.perform` runs
             // on the browser microtask queue; `Sub.every`/`Time.every` run on
             // `gloo-timers` (`wasm::subs::SubManager`); `Cmd.publish` /
