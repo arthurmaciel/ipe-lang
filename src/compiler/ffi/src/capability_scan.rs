@@ -134,67 +134,204 @@ const BARE_IDENTS: &[(&str, Capability)] = &[
     ("OpenOptions", Capability::Filesystem),
 ];
 
-/// Whether the runtime capability jail holds for a wrapper's run/deploy target.
+/// The set of runtime-enforced axes a target's jail actually confines at the OS
+/// boundary.
 ///
-/// This is the load-bearing per-target condition of the refuse-until-jail →
-/// admit-and-isolate hand-off: admitting a real-capability wrapper is safe ONLY
-/// where the jail actually confines it. Admitting globally would, on a
-/// refuse-gap platform (macOS without the Seatbelt path, Windows, BSD), mean
-/// admit-and-run-**unconfined** — strictly worse than refusing.
+/// A `Copy` bitset over the runtime-enforced axes (network, filesystem,
+/// database, env, subprocess, native-ffi). It is the honest per-target
+/// vocabulary the admit path keys off: an axis is confined iff it is a member.
+/// Clock/random are never members (they are non-determinism, not an isolation
+/// surface — they are enforceable on every target, jail or none).
+///
+/// This lets a target confine a PARTIAL set. A Windows host that confines
+/// subprocess+filesystem+env via Job Objects + launcher scrub but cannot deny
+/// sockets under a restricted-token fallback carries a set WITHOUT `network`,
+/// so a filesystem wrapper admits and a network wrapper refuse-gaps — each
+/// honestly, without over-claiming the uncontained axis.
+///
+/// Make-invalid-states-unrepresentable: there is no "fully contained" flag
+/// distinct from the set — a target is fully contained iff its set equals
+/// [`Self::FULL`] ([`Self::is_full`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CapabilitySet {
+    /// One bit per runtime-enforced axis (see [`Self::AXES`]). A bitset keeps
+    /// the type `Copy` so the admit-path predicates stay `const fn`.
+    bits: u8,
+}
+
+impl CapabilitySet {
+    /// The runtime-enforced axes, in bit order. These are exactly the
+    /// capabilities whose runtime effects need OS confinement — the axes for
+    /// which "is this axis in the jail's confined set?" is a real question.
+    /// Clock/random are deliberately absent (never an isolation surface).
+    ///
+    /// A jail confines a target's app on some subset of these; membership in a
+    /// [`CapabilitySet`] answers, per axis, whether THIS target's jail does.
+    pub const AXES: &'static [Capability] = &[
+        Capability::Network,
+        Capability::Filesystem,
+        Capability::Database,
+        Capability::Env,
+        Capability::Subprocess,
+        Capability::NativeFfi,
+    ];
+
+    /// The empty confined set — the old `RefuseGap` posture: the jail confines
+    /// no runtime-enforced axis, so every such axis is refused. The fail-closed
+    /// default for an unknown or stub target.
+    pub const EMPTY: Self = Self { bits: 0 };
+
+    /// The full confined set — every runtime-enforced axis contained, the old
+    /// all-or-nothing `Holds` posture. Linux (bwrap+seccomp) and macOS
+    /// (sandbox-exec+launcher-scrub) confine all axes, so this is their set.
+    pub const FULL: Self = Self {
+        bits: (1 << Self::AXES.len()) - 1,
+    };
+
+    /// The bit index of a runtime-enforced axis, or `None` for clock/random
+    /// (which are not confinement axes and can never be set members).
+    const fn axis_bit(cap: Capability) -> Option<u8> {
+        match cap {
+            Capability::Network => Some(0),
+            Capability::Filesystem => Some(1),
+            Capability::Database => Some(2),
+            Capability::Env => Some(3),
+            Capability::Subprocess => Some(4),
+            Capability::NativeFfi => Some(5),
+            Capability::Clock | Capability::Random => None,
+        }
+    }
+
+    /// Whether the jail confines `cap` on this target. Clock/random are never
+    /// members: they are non-determinism, so the question does not apply and the
+    /// answer is a plain `false` (not-a-member), which the unenforceable check
+    /// reads correctly (they are enforceable regardless of the jail).
+    #[must_use]
+    pub const fn confines(self, cap: Capability) -> bool {
+        match Self::axis_bit(cap) {
+            Some(bit) => self.bits & (1 << bit) != 0,
+            None => false,
+        }
+    }
+
+    /// The confined set with `cap` added. A no-op for clock/random (not
+    /// confinement axes). Used to construct a partial set axis by axis.
+    #[must_use]
+    pub const fn with(self, cap: Capability) -> Self {
+        match Self::axis_bit(cap) {
+            Some(bit) => Self {
+                bits: self.bits | (1 << bit),
+            },
+            None => self,
+        }
+    }
+
+    /// Whether this target confines EVERY runtime-enforced axis — the sole
+    /// meaning of "fully contained". A partial set is never full, so partial
+    /// coverage cannot masquerade as total.
+    #[must_use]
+    pub const fn is_full(self) -> bool {
+        self.bits == Self::FULL.bits
+    }
+
+    /// Whether this target confines NO runtime-enforced axis — the refuse-gap
+    /// posture on every axis.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.bits == 0
+    }
+}
+
+/// Which runtime-enforced axes a wrapper's run/deploy target actually confines
+/// at the OS boundary — the honest, PER-AXIS condition of the refuse-until-jail
+/// → admit-and-isolate hand-off.
+///
+/// Admitting a real-capability wrapper is safe only on the axes the jail
+/// actually confines. A single target-wide boolean would force over-claiming on
+/// a target (Windows under a restricted-token fallback, a non-ACL volume) where
+/// some axes hold and others do not — the exact admit-and-run-unconfined hazard
+/// the macOS review caught. So the verdict carries the SET of confined axes and
+/// the admit path decides per axis.
+///
+/// Linux and macOS confine every runtime-enforced axis, so their set is
+/// [`CapabilitySet::FULL`] and behaviour is identical to the old all-or-nothing
+/// `Holds`. A refuse-gap target carries [`CapabilitySet::EMPTY`], identical to
+/// the old `RefuseGap`. There is no separate `RefuseGap` variant: it is exactly
+/// `Holds(CapabilitySet::EMPTY)`, so "no axis confined" is unrepresentable in
+/// two different ways.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JailForTarget {
-    /// The runtime jail holds on this target (`Linux`/`x86_64` in the first
-    /// cut): a runtime-enforced axis is contained, so the wrapper may be
-    /// admitted and isolated.
-    Holds,
-    /// The target is in the documented refuse-gap: no jail confines the emitted
-    /// app there, so the refuse-until-jail posture STAYS — a runtime-enforced
-    /// axis is refused rather than admitted-and-run-unconfined.
-    RefuseGap,
+    /// The jail confines exactly the runtime-enforced axes in this set. A
+    /// runtime-enforced axis IN the set is contained (admissible); an axis NOT
+    /// in the set is still unenforceable (refuse-gapped for that axis alone).
+    /// [`CapabilitySet::FULL`] is the old whole-target `Holds`;
+    /// [`CapabilitySet::EMPTY`] is the old whole-target `RefuseGap`.
+    Holds(CapabilitySet),
+}
+
+impl JailForTarget {
+    /// A whole-target refuse-gap: no axis confined. The conservative default
+    /// when the target's jail status is unknown.
+    pub const REFUSE_GAP: Self = Self::Holds(CapabilitySet::EMPTY);
+
+    /// A whole-target jail that confines every runtime-enforced axis (Linux,
+    /// macOS). The old all-or-nothing `Holds`.
+    pub const FULLY_CONFINED: Self = Self::Holds(CapabilitySet::FULL);
+
+    /// The set of axes this target's jail confines.
+    #[must_use]
+    pub const fn confined(self) -> CapabilitySet {
+        match self {
+            Self::Holds(set) => set,
+        }
+    }
 }
 
 /// Whether a capability's runtime effects Ipê CANNOT contain for the given
-/// target.
+/// target — decided PER AXIS against the jail's confined set.
 ///
-/// The hand-off (ADR 0038): once the runtime jail lands, a runtime-enforced axis
-/// on a [`JailForTarget::Holds`] target is *contained* (an undeclared syscall
-/// fails closed at the OS boundary), so it is admissible. On a
-/// [`JailForTarget::RefuseGap`] target no jail exists, so the axis is still
-/// unenforceable and refused — the honest per-target posture.
+/// The hand-off (ADR 0038): a runtime-enforced axis IN the target's confined set
+/// is *contained* (an undeclared syscall fails closed at the OS boundary), so it
+/// is admissible. An axis NOT in the confined set has no jail confining it, so it
+/// is still unenforceable and refused — the honest per-target, per-axis posture.
+/// A full-set target ([`CapabilitySet::FULL`], i.e. Linux/macOS) contains every
+/// axis, so nothing is unenforceable; an empty-set target
+/// ([`CapabilitySet::EMPTY`]) confines nothing, so every runtime-enforced axis is
+/// unenforceable — identical to the old all-or-nothing verdict.
 ///
-/// [`Capability::NativeFfi`] is special: on a jail-holds target it is
-/// *contained* (the jail confines the whole process regardless of what native
-/// code does), so it is admissible-with-loud-consent, NOT refused. On a
-/// refuse-gap target it stays unenforceable.
+/// [`Capability::NativeFfi`] is a runtime-enforced axis: where the jail confines
+/// it (it is a member of the set) the whole process is contained regardless of
+/// what native code does, so it is admissible-with-loud-consent; where it is not
+/// confined it stays unenforceable.
 ///
 /// [`Capability::Clock`] and [`Capability::Random`] are never unenforceable:
-/// they are non-determinism, not exfiltration, and carry no isolation surface.
+/// they are non-determinism, not exfiltration, carry no isolation surface, and
+/// are never members of a [`CapabilitySet`] — so this returns `false` for them
+/// on every target.
 #[must_use]
 pub const fn is_runtime_unenforceable_for(cap: Capability, jail: JailForTarget) -> bool {
-    match jail {
-        // Jail holds: every axis is contained at the OS boundary → admissible.
-        JailForTarget::Holds => false,
-        // Refuse-gap: the runtime-enforced axes remain unenforceable.
-        JailForTarget::RefuseGap => match cap {
-            Capability::Network
-            | Capability::Filesystem
-            | Capability::Database
-            | Capability::Env
-            | Capability::Subprocess
-            | Capability::NativeFfi => true,
-            Capability::Clock | Capability::Random => false,
-        },
+    match cap {
+        // Non-determinism, never an isolation surface: enforceable everywhere.
+        Capability::Clock | Capability::Random => false,
+        // A runtime-enforced axis is unenforceable exactly where the target's
+        // jail does NOT confine it.
+        Capability::Network
+        | Capability::Filesystem
+        | Capability::Database
+        | Capability::Env
+        | Capability::Subprocess
+        | Capability::NativeFfi => !jail.confined().confines(cap),
     }
 }
 
 /// The pre-jail refuse-until-jail predicate.
 ///
 /// Preserved for callers that have not yet threaded a target through; equivalent
-/// to [`is_runtime_unenforceable_for`] with [`JailForTarget::RefuseGap`] — the
+/// to [`is_runtime_unenforceable_for`] with [`JailForTarget::REFUSE_GAP`] — the
 /// conservative default (refuse) when the target's jail status is unknown.
 #[must_use]
 pub const fn is_runtime_unenforceable(cap: Capability) -> bool {
-    is_runtime_unenforceable_for(cap, JailForTarget::RefuseGap)
+    is_runtime_unenforceable_for(cap, JailForTarget::REFUSE_GAP)
 }
 
 /// An OPAQUE construct the token scan cannot see past.
@@ -281,8 +418,11 @@ impl ScanOutcome {
 
     /// The proposed capabilities Ipê cannot enforce at run **for the given
     /// target** — the subset of [`Self::proposed`] for which admission would be
-    /// unenforced. On a [`JailForTarget::Holds`] target this is empty (the jail
-    /// contains every axis).
+    /// unenforced. Decided per axis: a proposed axis is unenforceable exactly
+    /// where the target's jail does not confine it, so on a
+    /// [`CapabilitySet::FULL`] target this is empty (every axis contained) and on
+    /// a [`CapabilitySet::EMPTY`] target it is every runtime-enforced proposed
+    /// axis.
     #[must_use]
     pub fn unenforceable_for(&self, jail: JailForTarget) -> BTreeSet<Capability> {
         self.proposed
@@ -297,7 +437,7 @@ impl ScanOutcome {
     /// threaded a target through.
     #[must_use]
     pub fn unenforceable(&self) -> BTreeSet<Capability> {
-        self.unenforceable_for(JailForTarget::RefuseGap)
+        self.unenforceable_for(JailForTarget::REFUSE_GAP)
     }
 
     /// Whether the scan alone forces a refuse for the given target: it found an
@@ -312,7 +452,7 @@ impl ScanOutcome {
     /// posture (no jail).
     #[must_use]
     pub fn must_refuse(&self) -> bool {
-        self.must_refuse_for(JailForTarget::RefuseGap)
+        self.must_refuse_for(JailForTarget::REFUSE_GAP)
     }
 }
 
@@ -579,22 +719,26 @@ impl std::fmt::Display for RefuseReason {
 }
 
 /// Reconcile a wrapper's declared capability set against the scan of its source,
-/// and decide admissibility **for a given target's jail status**.
+/// and decide admissibility **per axis against the target's confined set**.
 ///
 /// The hand-off (ADR 0038): the refuse-until-jail posture is lifted to
-/// admit-and-isolate *only per-target where the jail holds*.
+/// admit-and-isolate on exactly the axes the target's jail confines. Each check
+/// is per axis against [`JailForTarget::confined`]:
 ///
-/// - On a [`JailForTarget::RefuseGap`] target (no jail), the pre-jail rule holds
-///   unchanged: any runtime-enforced axis (declared or inferred), any opaque
-///   construct, and any non-`std` dependency **refuse** — admitting would run
-///   native code unconfined.
-/// - On a [`JailForTarget::Holds`] target, the jail *contains* the wrapper: an
-///   undeclared syscall fails closed at the OS boundary. So a runtime-enforced
-///   axis is **admitted and isolated**; an opaque construct or a non-`std`
-///   dependency is **admitted-because-contained** (the static scan is a
-///   best-effort honesty smell, never the boundary — ADR 0038's "contained, not
-///   caught"). The declared set is the consent surface, surfaced loudly on
-///   `native-ffi`.
+/// - A declared or inferred runtime-enforced axis is **admitted** where the jail
+///   confines it (contained at the OS boundary), and **refused** where it does
+///   not. A [`CapabilitySet::FULL`] target (Linux/macOS) admits every axis,
+///   identical to the old whole-target `Holds`; a [`CapabilitySet::EMPTY`] target
+///   refuses every runtime-enforced axis, identical to the old `RefuseGap`. A
+///   partial-coverage target admits the axes it confines and refuses the rest.
+/// - An opaque construct (native FFI, an unenumerable module, a non-lexing file)
+///   or a non-`std` dependency hides which axes the wrapper actually reaches, so
+///   it is safe **only where the jail confines EVERY runtime-enforced axis**
+///   ([`CapabilitySet::is_full`]) — there, the boundary contains whatever hides
+///   (contained, not caught). On a partial or empty set the hidden effect could
+///   fall on an unconfined axis, so it **refuses**. This is the same
+///   whole-target guarantee as before on a full set, tightened to honesty on a
+///   partial one.
 ///
 /// `non_std_deps` is the wrapper crate's non-`std` dependency names.
 #[must_use]
@@ -604,20 +748,10 @@ pub fn reconcile_for(
     non_std_deps: &[String],
     jail: JailForTarget,
 ) -> Verdict {
-    // On a jail-holds target, the OS boundary contains every axis, opaque
-    // construct, and dependency effect. The wrapper is admitted-and-isolated:
-    // an undeclared effect fails closed at runtime (contained, not caught).
-    if jail == JailForTarget::Holds {
-        return Verdict::Admit {
-            declared: declared.clone(),
-        };
-    }
-
-    // Refuse-gap target: the pre-jail refuse-until-jail rule, unchanged.
     let mut reasons = Vec::new();
 
     // A declared unenforceable capability: the author's own claim names an
-    // effect we cannot contain here.
+    // effect the jail does not confine on this target's axis.
     for &cap in declared {
         if is_runtime_unenforceable_for(cap, jail) {
             reasons.push(RefuseReason::DeclaredUnenforceable { cap });
@@ -630,15 +764,20 @@ pub fn reconcile_for(
             reasons.push(RefuseReason::InferredUnenforceable { cap });
         }
     }
-    // Opaque constructs — the scan cannot vouch for completeness.
-    for opacity in &scan.opacities {
-        reasons.push(RefuseReason::Opaque {
-            opacity: opacity.clone(),
-        });
-    }
-    // Non-std dependencies — capabilities can hide in a dependency's source.
-    for name in non_std_deps {
-        reasons.push(RefuseReason::NonStdDependency { name: name.clone() });
+
+    // Opaque constructs and non-`std` dependencies hide WHICH axes are reached,
+    // so they are only contained where the jail confines EVERY runtime-enforced
+    // axis. On a partial or empty confined set the hidden effect could land on
+    // an unconfined axis, so refuse.
+    if !jail.confined().is_full() {
+        for opacity in &scan.opacities {
+            reasons.push(RefuseReason::Opaque {
+                opacity: opacity.clone(),
+            });
+        }
+        for name in non_std_deps {
+            reasons.push(RefuseReason::NonStdDependency { name: name.clone() });
+        }
     }
 
     if reasons.is_empty() {
@@ -655,14 +794,14 @@ pub fn reconcile_for(
 
 /// Reconcile under the conservative refuse-gap posture (no jail) — preserved for
 /// callers that have not yet threaded a target through. Equivalent to
-/// [`reconcile_for`] with [`JailForTarget::RefuseGap`].
+/// [`reconcile_for`] with [`JailForTarget::REFUSE_GAP`].
 #[must_use]
 pub fn reconcile(
     declared: &BTreeSet<Capability>,
     scan: &ScanOutcome,
     non_std_deps: &[String],
 ) -> Verdict {
-    reconcile_for(declared, scan, non_std_deps, JailForTarget::RefuseGap)
+    reconcile_for(declared, scan, non_std_deps, JailForTarget::REFUSE_GAP)
 }
 
 /// Parse a raw `[rust.wrapper] capabilities = [...]` list into a typed set.
@@ -973,7 +1112,7 @@ mod tests {
         // contained → nothing is unenforceable.
         for cap in Capability::ALL {
             assert!(
-                !is_runtime_unenforceable_for(*cap, JailForTarget::Holds),
+                !is_runtime_unenforceable_for(*cap, JailForTarget::FULLY_CONFINED),
                 "{cap:?} must be enforceable (contained) where the jail holds"
             );
         }
@@ -983,7 +1122,7 @@ mod tests {
     fn on_a_refuse_gap_target_the_runtime_axes_stay_unenforceable() {
         // A refuse-gap target keeps the pre-jail posture.
         for cap in Capability::ALL {
-            let unenf = is_runtime_unenforceable_for(*cap, JailForTarget::RefuseGap);
+            let unenf = is_runtime_unenforceable_for(*cap, JailForTarget::REFUSE_GAP);
             match cap {
                 Capability::Clock | Capability::Random => assert!(!unenf, "{cap:?}"),
                 _ => assert!(unenf, "{cap:?} stays refused on a refuse-gap target"),
@@ -1001,11 +1140,11 @@ mod tests {
             "pub fn f() { let _ = std::net::TcpStream::connect(\"x\"); }",
         );
         assert!(matches!(
-            reconcile_for(&declared, &scan, &[], JailForTarget::RefuseGap),
+            reconcile_for(&declared, &scan, &[], JailForTarget::REFUSE_GAP),
             Verdict::Refuse { .. }
         ));
         assert!(matches!(
-            reconcile_for(&declared, &scan, &[], JailForTarget::Holds),
+            reconcile_for(&declared, &scan, &[], JailForTarget::FULLY_CONFINED),
             Verdict::Admit { .. }
         ));
     }
@@ -1017,11 +1156,11 @@ mod tests {
         // on a refuse-gap target.
         let scan = scan_source("lib.rs", "extern \"C\" { fn getpid() -> i32; }");
         assert!(matches!(
-            reconcile_for(&BTreeSet::new(), &scan, &[], JailForTarget::RefuseGap),
+            reconcile_for(&BTreeSet::new(), &scan, &[], JailForTarget::REFUSE_GAP),
             Verdict::Refuse { .. }
         ));
         assert!(matches!(
-            reconcile_for(&BTreeSet::new(), &scan, &[], JailForTarget::Holds),
+            reconcile_for(&BTreeSet::new(), &scan, &[], JailForTarget::FULLY_CONFINED),
             Verdict::Admit { .. }
         ));
     }
@@ -1036,7 +1175,7 @@ mod tests {
                 &BTreeSet::new(),
                 &scan,
                 &["reqwest".to_owned()],
-                JailForTarget::RefuseGap
+                JailForTarget::REFUSE_GAP
             ),
             Verdict::Refuse { .. }
         ));
@@ -1045,9 +1184,212 @@ mod tests {
                 &BTreeSet::new(),
                 &scan,
                 &["reqwest".to_owned()],
-                JailForTarget::Holds
+                JailForTarget::FULLY_CONFINED
             ),
             Verdict::Admit { .. }
         ));
+    }
+
+    // ── the per-axis (partial-coverage) representation ───────────────────────
+
+    #[test]
+    fn a_partial_set_is_never_full_and_a_full_set_is_never_partial() {
+        // make-invalid-states-unrepresentable: the ONLY way to say "fully
+        // contained" is a set equal to FULL. A subset is never full.
+        assert!(CapabilitySet::FULL.is_full());
+        assert!(!CapabilitySet::EMPTY.is_full());
+        assert!(CapabilitySet::EMPTY.is_empty());
+        let partial = CapabilitySet::EMPTY
+            .with(Capability::Subprocess)
+            .with(Capability::Filesystem)
+            .with(Capability::Env);
+        assert!(!partial.is_full(), "a strict subset must not read as full");
+        assert!(!partial.is_empty());
+        assert!(partial.confines(Capability::Subprocess));
+        assert!(!partial.confines(Capability::Network));
+    }
+
+    #[test]
+    fn clock_and_random_are_never_confined_members_but_stay_enforceable() {
+        // Non-determinism axes are never members of a confined set, yet
+        // `is_runtime_unenforceable_for` reports them enforceable on every
+        // target — they carry no isolation surface.
+        for set in [CapabilitySet::EMPTY, CapabilitySet::FULL] {
+            for cap in [Capability::Clock, Capability::Random] {
+                assert!(!set.confines(cap), "{cap:?} is never a member");
+                assert!(!is_runtime_unenforceable_for(
+                    cap,
+                    JailForTarget::Holds(set)
+                ));
+            }
+        }
+    }
+
+    /// A hypothetical Windows-shaped partial-coverage target: Job Objects +
+    /// launcher scrub confine subprocess/env/filesystem, but a restricted-token
+    /// fallback cannot deny sockets, so `network` (and `database`, which lowers
+    /// to network) leave the confined set.
+    fn windows_partial_target() -> JailForTarget {
+        JailForTarget::Holds(
+            CapabilitySet::EMPTY
+                .with(Capability::Subprocess)
+                .with(Capability::Env)
+                .with(Capability::Filesystem)
+                .with(Capability::NativeFfi),
+        )
+    }
+
+    #[test]
+    fn a_partial_target_admits_confined_axes_and_refuse_gaps_the_rest() {
+        // The load-bearing per-axis proof: on a target that confines filesystem
+        // but NOT network, a filesystem wrapper admits while a network wrapper
+        // refuses — each honestly, no over-claim.
+        let jail = windows_partial_target();
+
+        // Filesystem is confined → enforceable → admitted.
+        assert!(!is_runtime_unenforceable_for(Capability::Filesystem, jail));
+        let fs_scan = scan_source("lib.rs", "pub fn f() { std::fs::read(\"a\"); }");
+        assert!(matches!(
+            reconcile_for(&set(&[Capability::Filesystem]), &fs_scan, &[], jail),
+            Verdict::Admit { .. }
+        ));
+
+        // Network is NOT confined → unenforceable → refused for that axis alone.
+        assert!(is_runtime_unenforceable_for(Capability::Network, jail));
+        let net_scan = scan_source(
+            "lib.rs",
+            "pub fn f() { std::net::TcpStream::connect(\"x\"); }",
+        );
+        let v = reconcile_for(&set(&[Capability::Network]), &net_scan, &[], jail);
+        let (reasons, _) = refusal(&v).expect("a network wrapper refuses on a no-network target");
+        assert!(
+            reasons.iter().any(|r| matches!(
+                r,
+                RefuseReason::DeclaredUnenforceable { cap } if *cap == Capability::Network
+            )),
+            "{reasons:?}"
+        );
+    }
+
+    #[test]
+    fn a_partial_target_refuses_a_wrapper_reaching_one_confined_and_one_gapped_axis() {
+        // A wrapper reaching BOTH a confined (filesystem) and a gapped (network)
+        // axis refuses on the gapped axis only — the confined axis contributes no
+        // reason, proving the decision is per axis, not whole-wrapper.
+        let jail = windows_partial_target();
+        let scan = scan_source(
+            "lib.rs",
+            "pub fn f() { std::fs::read(\"a\"); std::net::TcpStream::connect(\"x\"); }",
+        );
+        let v = reconcile_for(&BTreeSet::new(), &scan, &[], jail);
+        let (reasons, _) = refusal(&v).expect("the network axis forces a refuse");
+        assert!(
+            reasons.iter().any(|r| matches!(
+                r,
+                RefuseReason::InferredUnenforceable { cap } if *cap == Capability::Network
+            )),
+            "{reasons:?}"
+        );
+        assert!(
+            !reasons.iter().any(|r| matches!(
+                r,
+                RefuseReason::InferredUnenforceable { cap } if *cap == Capability::Filesystem
+            )),
+            "the confined filesystem axis must not contribute a refuse reason: {reasons:?}"
+        );
+    }
+
+    #[test]
+    fn a_partial_target_refuses_an_opaque_wrapper_because_hidden_axes_may_be_gapped() {
+        // An opaque construct hides WHICH axes are reached, so it is only safe on
+        // a FULL set. On a partial set (even one confining native-ffi) the hidden
+        // effect could land on the unconfined network axis → refuse.
+        let jail = windows_partial_target();
+        let scan = scan_source("lib.rs", "extern \"C\" { fn getpid() -> i32; }");
+        assert!(
+            matches!(
+                &reconcile_for(&BTreeSet::new(), &scan, &[], jail),
+                Verdict::Refuse { reasons, .. }
+                    if reasons.iter().any(|r| matches!(r, RefuseReason::Opaque { .. }))
+            ),
+            "a partial target must refuse an opaque wrapper"
+        );
+    }
+
+    #[test]
+    fn a_partial_target_refuses_a_non_std_dep_because_hidden_axes_may_be_gapped() {
+        // A non-std dependency's effects are invisible, so — like an opaque
+        // construct — it is contained only on a FULL set.
+        let jail = windows_partial_target();
+        let scan = scan_source("lib.rs", "pub fn f() -> i64 { 0 }");
+        assert!(
+            matches!(
+                &reconcile_for(&BTreeSet::new(), &scan, &["reqwest".to_owned()], jail),
+                Verdict::Refuse { reasons, .. }
+                    if reasons.iter().any(|r| matches!(r, RefuseReason::NonStdDependency { .. }))
+            ),
+            "a partial target must refuse a non-std-dependency wrapper"
+        );
+    }
+
+    #[test]
+    fn a_full_set_behaves_identically_to_the_old_all_or_nothing_holds() {
+        // Behaviour-preservation for Linux/macOS: FULLY_CONFINED (== FULL set)
+        // yields the same verdicts the old whole-target `Holds` did — every axis
+        // enforceable, and every previously-refused wrapper (network, opaque,
+        // non-std dep) now admitted-and-isolated.
+        assert!(JailForTarget::FULLY_CONFINED.confined().is_full());
+        for cap in Capability::ALL {
+            assert!(
+                !is_runtime_unenforceable_for(*cap, JailForTarget::FULLY_CONFINED),
+                "{cap:?} must be enforceable on a full-set target"
+            );
+        }
+        let net = scan_source(
+            "lib.rs",
+            "pub fn f() { std::net::TcpStream::connect(\"x\"); }",
+        );
+        assert!(matches!(
+            reconcile_for(
+                &set(&[Capability::Network]),
+                &net,
+                &[],
+                JailForTarget::FULLY_CONFINED
+            ),
+            Verdict::Admit { .. }
+        ));
+        let opaque = scan_source("lib.rs", "extern \"C\" { fn getpid() -> i32; }");
+        assert!(matches!(
+            reconcile_for(
+                &BTreeSet::new(),
+                &opaque,
+                &[],
+                JailForTarget::FULLY_CONFINED
+            ),
+            Verdict::Admit { .. }
+        ));
+        assert!(matches!(
+            reconcile_for(
+                &BTreeSet::new(),
+                &scan_source("lib.rs", "pub fn f() -> i64 { 0 }"),
+                &["reqwest".to_owned()],
+                JailForTarget::FULLY_CONFINED
+            ),
+            Verdict::Admit { .. }
+        ));
+    }
+
+    #[test]
+    fn an_empty_set_behaves_identically_to_the_old_refuse_gap() {
+        // The other behaviour-preservation edge: EMPTY set == old `RefuseGap` —
+        // every runtime-enforced axis refused, opaque + non-std-dep refused.
+        assert!(JailForTarget::REFUSE_GAP.confined().is_empty());
+        for cap in Capability::ALL {
+            let unenf = is_runtime_unenforceable_for(*cap, JailForTarget::REFUSE_GAP);
+            match cap {
+                Capability::Clock | Capability::Random => assert!(!unenf, "{cap:?}"),
+                _ => assert!(unenf, "{cap:?} stays refused on an empty-set target"),
+            }
+        }
     }
 }
