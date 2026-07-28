@@ -44,36 +44,34 @@ subscriptions _model =
     Sub.none
 
 
-view : Model -> Html Msg
+view : Model -> Element Msg
 view model =
-    Ui.layout []
-        (Ui.column
-            [ Ui.spacing 16, Ui.padding 32, Ui.centerX ]
-            [ Ui.el
-                [ Font.size 20, Font.bold ]
-                (Ui.text "Ipê counter")
-            , Ui.row
-                [ Ui.spacing 12 ]
-                [ Ui.button
-                    [ Ui.padding 12
-                    , Background.color (Ui.rgb 37 99 235)
-                    , Font.color (Ui.rgb 255 255 255)
-                    , Border.rounded 8
-                    ]
-                    { onPress = Just Decrement, label = Ui.text "-" }
-                , Ui.el
-                    [ Font.size 32, Font.bold ]
-                    (Ui.text (String.fromInt model.count))
-                , Ui.button
-                    [ Ui.padding 12
-                    , Background.color (Ui.rgb 37 99 235)
-                    , Font.color (Ui.rgb 255 255 255)
-                    , Border.rounded 8
-                    ]
-                    { onPress = Just Increment, label = Ui.text "+" }
+    Ui.column
+        [ Ui.spacing 16, Ui.padding 32, Ui.centerX ]
+        [ Ui.el
+            [ Font.size 20, Font.bold ]
+            (Ui.text "Ipê counter")
+        , Ui.row
+            [ Ui.spacing 12 ]
+            [ Ui.button
+                [ Ui.padding 12
+                , Background.color (Ui.rgb 37 99 235)
+                , Font.color (Ui.rgb 255 255 255)
+                , Border.rounded 8
                 ]
+                { onPress = Just Decrement, label = Ui.text "-" }
+            , Ui.el
+                [ Font.size 32, Font.bold ]
+                (Ui.text (String.fromInt model.count))
+            , Ui.button
+                [ Ui.padding 12
+                , Background.color (Ui.rgb 37 99 235)
+                , Font.color (Ui.rgb 255 255 255)
+                , Border.rounded 8
+                ]
+                { onPress = Just Increment, label = Ui.text "+" }
             ]
-        )
+        ]
 
 
 main =
