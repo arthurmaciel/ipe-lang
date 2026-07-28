@@ -1,5 +1,4 @@
 module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- A RECORD sub-pattern nested inside a constructor payload (`Box { x }`).

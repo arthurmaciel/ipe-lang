@@ -15,7 +15,6 @@ module Main exposing (main)
 --   * `info.details` / `p.message` / `p.stack` / `t.expected` / `t.actual`
 --     — every fixed field of the three nominal types is read somewhere.
 
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 

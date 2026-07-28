@@ -1,6 +1,5 @@
 module B exposing (fromB)
 
-import Ipe.Prelude exposing (..)
 import D exposing (base)
 
 fromB : Int

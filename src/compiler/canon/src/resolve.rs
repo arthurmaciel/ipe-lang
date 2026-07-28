@@ -222,7 +222,7 @@ const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
     "ErrorInfo",
 ];
 
-/// Kernel-implicit Prelude type names that are globally in scope in
+/// Kernel-implicit built-in type names that are globally in scope in
 /// every Ipê program but are NOT declared by any compiled `.ipe` source file —
 /// they are resolved by the runtime as opaque handles.
 ///
@@ -236,7 +236,7 @@ const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
 /// yet (`Handler` / `Middleware` / `Session` / `Store` /
 /// `VNode`). Registering them here is the canon-level fix; lowerer arms complete
 /// the end-to-end path.
-const KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES: &[&str] = &[
+const KERNEL_IMPLICIT_BUILTIN_TYPE_NAMES: &[&str] = &[
     // `Request -> Task Error Response` alias from Ipe.Http.Server.
     "Handler",
     // `Html msg` — the top-level rendered HTML node type from Ipe.Html / Ipe.Ui.
@@ -262,7 +262,7 @@ const KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES: &[&str] = &[
 /// opaque type.
 ///
 /// The union of the reserved set (`IPE-N0026`), the lowerer's extra
-/// explicit-arm names, and the kernel-implicit prelude type names — the
+/// explicit-arm names, and the kernel-implicit built-in type names — the
 /// SINGLE source of truth for "is this a built-in type name". Downstream
 /// crates that must agree with canon's reservation — the FFI interface
 /// generator's shadow gate, notably — call THIS rather than re-listing the
@@ -272,7 +272,7 @@ const KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES: &[&str] = &[
 pub fn is_reserved_builtin_type_name(name: &str) -> bool {
     RESERVED_BUILTIN_TYPES.contains(&name)
         || EXTRA_BUILTIN_TYPE_NAMES.contains(&name)
-        || KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES.contains(&name)
+        || KERNEL_IMPLICIT_BUILTIN_TYPE_NAMES.contains(&name)
 }
 
 /// The fixed type-argument arity of a built-in CONTAINER constructor, or
@@ -635,7 +635,7 @@ pub fn canonicalise_module_in_project(
 
     // IPE-N0025: `Ipe` is reserved for the compiler's own stdlib. User modules
     // whose first path segment is `Ipe` are rejected here so they never shadow
-    // prelude symbols downstream. An EmbeddedStdlib module is the ONE legitimate
+    // stdlib symbols downstream. An EmbeddedStdlib module is the ONE legitimate
     // definer of an `Ipe.…` home, so it is exempt — but ONLY because the driver
     // vouched for its provenance (unforgeable tag), never because the text says
     // `module Ipe.…`.
@@ -973,7 +973,7 @@ fn register_stdlib_import_aliases(
 ///
 /// * Only **VALUE** exposures ([`src::Exposed::Value`], lowercase names) are
 ///   handled. Capitalized **TYPE** exposures (`exposing (Element)`,
-///   `exposing (Error)`) are kernel-implicit Prelude types resolved by a
+///   `exposing (Error)`) are kernel-implicit built-in types resolved by a
 ///   separate mechanism and are deliberately left untouched — treating them as
 ///   value members would spuriously reject every `exposing (SomeType)`.
 /// * The registered [`VarHome::Kernel`] is **cloned verbatim** from the
@@ -997,11 +997,11 @@ fn register_stdlib_import_aliases(
 /// here: open imports have low priority (a local definition shadows them without
 /// error), which is a different, non-strict insertion discipline than the
 /// explicit list above. Flooding every member into `seen_values` would wrongly
-/// turn a legal local shadow of a Prelude name (e.g. a user `map`) into a
-/// `DuplicateValue` and regress the corpus. The common wildcard case
-/// (`import Ipe.Prelude exposing (..)`) already works via the pre-installed
-/// Prelude builtins + qualified access; correct open-import member flooding
-/// remains a follow-up.
+/// turn a legal local shadow of an ambient name (e.g. a user `map`) into a
+/// `DuplicateValue` and regress the corpus. The ambient Tier-A (`Ipe.Basics`)
+/// and Tier-B (`Maybe`/`Result`/`List` + their constructors) names already
+/// resolve via the pre-installed built-ins + qualified access, so no open
+/// value-flood import is needed for them.
 ///
 /// # Errors
 /// [`NameError::NameNotExposed`] / [`NameError::DuplicateValue`]; or
@@ -1262,7 +1262,7 @@ fn fold_html_stdlib_qualifier_homes(
 ///   this name"), and the name resolves at the same priority as a top-level
 ///   binding.
 /// * **Wildcard `exposing (..)`** inserts into `env.wildcard_vars` ONLY — never
-///   into `seen_values`, so a local / explicit-exposed / synth-ctor / prelude
+///   into `seen_values`, so a local / explicit-exposed / synth-ctor / built-in
 ///   name of the same spelling SILENTLY shadows it at resolve time ("fill in the
 ///   rest"). [`resolve_var`] consults this tier last.
 ///
@@ -1568,7 +1568,7 @@ fn canonicalise_with_env(
     inject_stdlib_exposed_type_homes(m, type_home_map, interner)?;
     // Flood every member of an `import Ipê.*/Ipe.* exposing (..)` stdlib
     // module into the LOW-PRIORITY wildcard tier. Deliberately does NOT touch
-    // `seen_values` — a local / explicit-exposed / synth-ctor / prelude name of
+    // `seen_values` — a local / explicit-exposed / synth-ctor / built-in name of
     // the same spelling silently shadows a wildcard member (see the fn doc);
     // cross-wildcard clashes surface only at an ambiguous use site.
     inject_stdlib_wildcard_values(m, env, interner)?;
@@ -1684,7 +1684,7 @@ fn canonicalise_with_env(
 /// so this canon-side synthesis gate and the lowerer's
 /// `embeds_nonderivable_function` agree on which record-alias fields carry a
 /// buildable constructor. Matched by name only, sound because these are
-/// kernel-implicit Prelude type constructors a user program cannot redefine.
+/// kernel-implicit built-in type constructors a user program cannot redefine.
 fn is_opaque_boxed_wrapper_canon(interner: &Interner, name: Symbol) -> bool {
     matches!(
         interner.resolve(name),
@@ -2984,7 +2984,7 @@ fn resolve_var(name: Symbol, span: Span, env: &Env, interner: &Interner) -> DRes
         });
     }
     if let Some(home) = env.lookup_var(name) {
-        // A local / top-level / explicit-exposed / prelude binding wins over any
+        // A local / top-level / explicit-exposed / built-in binding wins over any
         // wildcard-exposed member of the same spelling (silent shadow).
         return Ok(var_home_to_expr(name, home));
     }
@@ -3430,7 +3430,7 @@ fn resolve_unqualified_type_home(name: Symbol, ctx: &TypeCtx) -> DResult<Vec<Sym
     let name_s = ctx.interner.resolve(name).unwrap_or("");
     if RESERVED_BUILTIN_TYPES.contains(&name_s)
         || EXTRA_BUILTIN_TYPE_NAMES.contains(&name_s)
-        || KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES.contains(&name_s)
+        || KERNEL_IMPLICIT_BUILTIN_TYPE_NAMES.contains(&name_s)
     {
         // Empty-home sentinel: the lowerer's per-name explicit arm resolves it.
         return Ok(Vec::new());

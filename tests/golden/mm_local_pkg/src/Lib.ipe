@@ -1,6 +1,5 @@
 module Lib exposing (greeting, Color(..))
 
-import Ipe.Prelude exposing (..)
 
 type Color = Red | Blue
 

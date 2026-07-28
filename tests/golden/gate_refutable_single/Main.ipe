@@ -1,5 +1,4 @@
 module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- A SINGLE-arm tuple `case` whose first element is a constructor sub-pattern

@@ -8,7 +8,6 @@ module Main exposing (main)
 --   * decrement button → counter decrements
 --   * reset button    → counter returns to 0
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.Web exposing (app)
 import Ipe.Cmd as Cmd

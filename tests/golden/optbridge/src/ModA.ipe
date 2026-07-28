@@ -1,6 +1,5 @@
 module ModA exposing (Token(..), makeA, lenA)
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 
 type Token = TokA String

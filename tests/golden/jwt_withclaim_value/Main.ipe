@@ -1,6 +1,5 @@
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Jwt as Jwt
 import Ipe.Json.Encode as JsonEnc
 import Ipe.Result as Result

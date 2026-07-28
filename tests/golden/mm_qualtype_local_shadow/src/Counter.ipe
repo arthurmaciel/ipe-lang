@@ -1,6 +1,5 @@
 module Counter exposing (Msg(..), initial, apply)
 
-import Ipe.Prelude exposing (..)
 
 -- Internal messages — same name as Main's Msg to trigger the shadow.
 type Msg

@@ -39,7 +39,6 @@ module Ipe.Ui.Transform exposing
 -- Use these helpers ONLY inside `Ui.animate` keyframes — they're
 -- not `Attribute msg` values and won't apply to a plain element
 -- without an animation wrapper.
-import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.String as String
 

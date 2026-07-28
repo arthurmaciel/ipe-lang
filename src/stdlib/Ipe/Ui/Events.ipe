@@ -10,7 +10,6 @@ module Ipe.Ui.Events exposing (onClick, onSubmit, onInput)
 -- it. Tier 2 wires AttrEvent through Ipe.Html.Events for actual
 -- Ipe.Web event dispatch.
 
-import Ipe.Prelude exposing (..)
 import Ipe.Ui as Ui
 
 

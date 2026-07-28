@@ -1,6 +1,5 @@
 module ModB exposing (Token(..), makeB)
 
-import Ipe.Prelude exposing (..)
 
 type Token = TokB String
 

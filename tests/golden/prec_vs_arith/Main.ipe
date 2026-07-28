@@ -1,5 +1,4 @@
 module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- Precedence: `+` (prec 6) binds tighter than `|>` (prec 0).

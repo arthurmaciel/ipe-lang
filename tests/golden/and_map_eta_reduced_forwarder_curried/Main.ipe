@@ -1,6 +1,5 @@
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- #90 T3: ETA-REDUCED annotated forwarder (`am2 = am1`, no params) — the

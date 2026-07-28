@@ -6,7 +6,6 @@ module Main exposing (main)
 -- CO-INCR-002: allocate into negative total must distribute cents toward zero
 --              so the parts sum back to the original amount exactly.
 
-import Ipe.Prelude exposing (..)
 import Ipe.Money as Money exposing (Money, Currency(..))
 import Ipe.Io as Io
 import Ipe.Task as Task

@@ -9527,7 +9527,7 @@ impl<'a> Lowerer<'a> {
                 // on user functions (kernel-implicit Prelude type).
                 // `Claims` maps to the same opaque JSON accumulator.
                 // ── Kernel-implicit opaque server / Ipe.Web types ────────
-                // These names are registered in `KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES`
+                // These names are registered in `KERNEL_IMPLICIT_BUILTIN_TYPE_NAMES`
                 // in ipe_canon so they pass N0002 without an explicit import.
                 // They all carry zero type arguments at the annotation level.
                 // `Handler` / `Middleware` — Ipe.Http.Server function aliases.

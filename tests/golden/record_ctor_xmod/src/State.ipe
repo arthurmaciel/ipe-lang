@@ -1,6 +1,5 @@
 module State exposing (Account)
 
-import Ipe.Prelude exposing (..)
 
 
 -- A record alias defined here; its value-level auto-constructor must be

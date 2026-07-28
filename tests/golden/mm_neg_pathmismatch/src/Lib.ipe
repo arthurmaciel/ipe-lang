@@ -1,4 +1,3 @@
 module WrongName exposing (val)
-import Ipe.Prelude exposing (..)
 val : Int
 val = 1

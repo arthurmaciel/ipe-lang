@@ -17,7 +17,6 @@ shipping a web stack. The `Model` is kept in memory as a plain value.
 ```ipe
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.WebView as WebView
 import Ipe.Cmd as Cmd
