@@ -156,6 +156,61 @@ stick?" confusion.
   ambient DOM access — the same unbounded surface as the forbidden eval seam,
   only spelled differently. Ports keep the boundary declared and decoded.
 
+## Relationship to Rust FFI
+
+The port is a boundary to non-Ipê code, and so is the Rust FFI. They look like
+two features until you notice that the axis that decides *whether something
+should be a port* is not the target language (JS vs Rust) but the **trust and
+execution model of the far side**. On that axis, browser JS and
+capability-isolated Rust land in the same place, and pure in-process Rust lands
+somewhere else.
+
+| Far side | Nature | Right boundary |
+|---|---|---|
+| Browser JS | untrusted, async, across a serialization boundary | port — decode inbound, project outbound, `Cmd`/`Sub` |
+| Async Rust, or Tier-2 **sandboxed** Rust | semi-trusted or isolated, async, across a process/serialization boundary | port |
+| Pure, in-process, synchronous Rust | trusted, synchronous, same address space | direct typed binding — not a port |
+
+The bottom row is why "use ports for Rust too" is wrong as a blanket rule. A
+pure total Rust function — a parser, a hash — should surface as an ordinary Ipê
+value (`let h = blake3 bytes`), not a `Cmd` round-trip. Routing it through an
+async port would discard three things the direct binding already has:
+synchronous values, compile-time-known types (the FFI inspector has already read
+the Rust signature, so there is nothing to decode), and speed — while buying no
+Security, because in-process trusted code has no untrusted boundary to guard.
+Parse-don't-validate argues *against* a port here: do not re-validate at runtime
+what was parsed at compile time.
+
+The top two rows are where a port is exactly right, and the FFI subsystem
+already grows a port-shaped boundary there on its own:
+
+- **Async Rust.** An async Rust call returns a future; its natural Ipê surface is
+  a `Task` with an inbound completion — an outbound port plus its response. See
+  [async-ffi-bridge-design.md](async-ffi-bridge-design.md); it is ports to Rust
+  under a different name.
+- **Tier-2 sandboxed Rust.** The moment a Rust wrapper declares a capability and
+  runs in the run jail, it is no longer in-process — it is a confined subprocess
+  behind a serialization boundary the caller does not fully trust. That is a port
+  in every respect: a narrow declared surface (the wrapper's declared
+  capabilities play the role `JsMsg` plays here), a request serialized across the
+  boundary, a response **decoded and validated** because the isolated side is
+  only semi-trusted, and an effect, so a `Task`. The jail is the transport.
+
+### One boundary, pluggable transport
+
+The three cases are one abstraction with a pluggable transport and a trust flag:
+
+- transport ∈ { browser (the server→browser stream), sandboxed subprocess (the
+  jail's pipe), async in-process (the bridge) };
+- the shared machinery is identical across all three — a declared narrow surface,
+  decode-inbound / project-outbound, one schema for both directions, and effects
+  expressed as `Task` / `Cmd` / `Sub`;
+- the trust flag decides only whether the inbound side gets the decode gate:
+  browser always, sandboxed Rust yes, trusted in-process Rust no (direct
+  binding). The isolation is what promotes a Rust call from a direct binding to a
+  port — so the sandbox and the JS port are not two mechanisms that rhyme, they
+  are one boundary discipline seen through two transports.
+
 ## Boundaries
 
 - Design-only; nothing here is implemented. It defines the *shape* of a future
