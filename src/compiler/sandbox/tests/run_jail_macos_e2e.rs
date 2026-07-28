@@ -114,9 +114,13 @@ fn isolated() -> SandboxProfile {
     SandboxProfile::maximally_isolated()
 }
 
+// Subprocess is granted alongside network because the network probe runs the
+// external `nc` binary, which must `exec`; network is the axis this profile
+// proves, so subprocess is held constant (granted) across enforce and control.
 fn net_granted() -> SandboxProfile {
     SandboxProfile {
         network: true,
+        subprocess: true,
         ..SandboxProfile::maximally_isolated()
     }
 }
@@ -149,7 +153,14 @@ fn undeclared_network_is_denied_under_the_run_jail_but_succeeds_under_control() 
         let _ = std::fs::remove_dir_all(&scratch);
         return; // no outbound route on this runner — nothing to prove.
     }
-    let jailed = run_jailed(&isolated(), &scratch, connect);
+    // Subprocess is granted so the external `nc` probe can `exec`; network is the
+    // only withheld axis, so a denied connect is attributable to the network rule
+    // (not to the subprocess-exec denial).
+    let net_withheld = SandboxProfile {
+        subprocess: true,
+        ..SandboxProfile::maximally_isolated()
+    };
+    let jailed = run_jailed(&net_withheld, &scratch, connect);
     let _ = std::fs::remove_dir_all(&scratch);
     assert_ne!(
         jailed,
