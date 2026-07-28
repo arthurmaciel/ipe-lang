@@ -18,3 +18,7 @@ Four shapes follow [The Elm Architecture](https://guide.elm-lang.org/architectur
 
 Web, WebView, and TUI (via `Tui.app`) share the same `Ipe.Ui` view code, so one
 `view : Model -> Element Msg` renders on web, desktop, and terminal.
+
+See [Views: Ui, Html, and Css](../ui.md) for the view vocabularies (`Ipe.Ui`,
+`Ipe.Html`, `Ipe.Css`), how to intermix them, each shape's exact `view` type, and
+static rendering.
