@@ -2382,14 +2382,15 @@ mod tests {
         );
     }
 
-    /// `Ipe.PubSub.publish` / `publishNoEcho` are a first-class qualified
-    /// surface: the `"PubSub"` qualifier IS registered in `env.qual_vars`, and
-    /// each member is schemed (`String -> a -> Task Error Int`) with a runtime fn
-    /// and an emit arm. This asserts the qualifier resolves and both members are
-    /// present — the reachable-and-schemed invariant, the inverse of the former
-    /// "unbacked, absent from `qual_vars`" state.
+    /// `Ipe.PubSub` (the top-level, Task-shaped publish surface) is a
+    /// COMPILED-SOURCE stdlib module (`src/stdlib/Ipe/PubSub.ipe`), so the bare
+    /// `"PubSub"` KERNEL qualifier must NOT be registered in `env.qual_vars`
+    /// (kernel qualifier OR compiled-source — never both). `Ipe.PubSub.publish`
+    /// resolves through the compiled module's `Ffi.kernel "PubSub_publish"` alias,
+    /// whose fast-path mints a `VarKernel` with a concrete kernel id — so the
+    /// `stdlib_scheme` totality flip stays sound without a `qual_vars` entry.
     #[test]
-    fn pubsub_qualifier_registered_and_reachable() {
+    fn pubsub_kernel_qualifier_absent_compiled_source() {
         use ipe_intern::Interner;
 
         let mut interner = Interner::new();
@@ -2399,17 +2400,12 @@ mod tests {
         let env = Env::initial(vec![], &mut interner)
             .expect("Env::initial must not fail in the tripwire test");
 
-        let members = env
-            .qual_vars
-            .get(&pubsub)
-            .expect("PubSub qualifier must be registered in env.qual_vars");
-        for name in ["publish", "publishNoEcho"] {
-            let name_sym = interner.intern(name).expect("tripwire: intern name OOM");
-            assert!(
-                members.contains_key(&name_sym),
-                "Ipe.PubSub.{name} must resolve as a qualified member",
-            );
-        }
+        assert!(
+            !env.qual_vars.contains_key(&pubsub),
+            "The `PubSub` kernel qualifier must stay OUT of env.qual_vars — \
+             `Ipe.PubSub` is a compiled-source module resolved via the \
+             `Ffi.kernel \"PubSub_publish\"` alias, not a kernel qualifier.",
+        );
     }
 
     // ─────────────────────────────────────────────────────────────────────────

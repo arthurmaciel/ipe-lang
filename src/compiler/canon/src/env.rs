@@ -1016,16 +1016,14 @@ impl Env {
                     "subscribeWebSocket",
                 ],
             ),
-            // ── Ipe.PubSub — Task-shaped top-level publish surface ───────────────
-            // NOT TEA-loop machinery: `publish` / `publishNoEcho` return
-            // `Task Error Int`, callable wherever a broadcast bus runs (i.e. a
-            // process running an `Ipe.Web` live app). Backed by runtime
-            // `pubsub_publish` / `pubsub_publish_no_echo` in web/pubsub.rs; these
-            // kernels are `class = Web` (see `StdlibKernel::decl`), so a caller
-            // outside the TEA loop pulls in the `web`/`live` runtime module, never
-            // the `Cmd`/`Sub` (`tea` module) aliases. Registering the qualifier
-            // here makes `Ipe.PubSub.publish` a first-class qualified call.
-            ("PubSub", &["publish", "publishNoEcho"]),
+            // `Ipe.PubSub` (the top-level, Task-shaped publish surface) is a
+            // COMPILED-SOURCE stdlib module (`src/stdlib/Ipe/PubSub.ipe`), so it
+            // stays OUT of this kernel-qualifier table (kernel qualifier here OR
+            // compiled-source — never both). Its `publish` / `publishNoEcho` bodies
+            // are `Ffi.kernel "PubSub_publish"` / `"PubSub_publishNoEcho"`; the
+            // alias fast-path (`detect_kernel_alias`) splits `"PubSub_publish"` →
+            // the canonical `("PubSub", "publish")` kernel (`class = Web`,
+            // Task-shaped — NOT TEA-loop machinery).
             // ── Db kernels ──────────────────────────────────────────────────────
             // `Ipe.Db` — database connection + query surface.
             // All effect-returning kernels (Task Error …) and pure helpers

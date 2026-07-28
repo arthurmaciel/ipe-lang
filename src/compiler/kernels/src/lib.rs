@@ -2336,10 +2336,11 @@ impl StdlibKernel {
             // TEA-loop machinery. `class = Web` because its runtime symbols live
             // in `ipe_runtime::live::pubsub` (the Web/live module), the same home
             // as `Web.renderStatic`; it is excluded from `is_tea()` so it never
-            // pulls in the `Cmd`/`Sub` (`tea` module) aliases. The qualifier is
-            // registered in canon `QUALIFIERS`, so `Ipe.PubSub.publish` resolves
-            // as a first-class qualified call (not only through the `Ffi.kernel`
-            // alias).
+            // pulls in the `Cmd`/`Sub` (`tea` module) aliases. `Ipe.PubSub` is a
+            // compiled-source module, so `Ipe.PubSub.publish` resolves through its
+            // `Ffi.kernel "PubSub_publish"` alias to this `("PubSub", "publish")`
+            // canonical kernel — the `"PubSub"` qualifier is intentionally NOT in
+            // canon `QUALIFIERS` (compiled-source, not a kernel qualifier).
             Self::PubSubPublish => d("PubSub", "publish", 2, Web, "pubsub_publish"),
             Self::PubSubPublishNoEcho => {
                 d("PubSub", "publishNoEcho", 2, Web, "pubsub_publish_no_echo")
@@ -3141,10 +3142,13 @@ impl StdlibKernel {
     ///
     /// # Exclusions
     ///
-    /// None. `PubSubPublish` / `PubSubPublishNoEcho` carry their own `"PubSub"`
-    /// `QUALIFIERS` entry (the Task-shaped top-level publish surface), and
-    /// `CmdPublish` / `CmdPublishNoEcho` carry their `"Cmd"` entries — every
-    /// variant here has a matching canon `QUALIFIERS` member.
+    /// `PubSubPublish` / `PubSubPublishNoEcho` are in `ALL` but their `"PubSub"`
+    /// qualifier is not a kernel-`QUALIFIERS` entry — `Ipe.PubSub` is a
+    /// compiled-source module, so it is resolved through the `Ffi.kernel
+    /// "PubSub_publish"` alias, not a canon qualifier. The tripwire skips a
+    /// qualifier absent from `qual_vars`, so this is an automatic skip, not a
+    /// hand-maintained exclusion. `CmdPublish` / `CmdPublishNoEcho` carry their
+    /// own `"Cmd"` `QUALIFIERS` entries.
     pub const ALL: &'static [Self] = &[
         // Log
         Self::LogInfo,
