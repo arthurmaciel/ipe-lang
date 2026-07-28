@@ -48,22 +48,20 @@ subscriptions _model =
     Sub.none
 
 
-view : Model -> Html Msg
+view : Model -> Element Msg
 view model =
-    Ui.layout []
-        (Ui.column
-            [ Ui.spacing 14, Ui.padding 32 ]
-            [ Ui.el [ Ui.htmlAttribute "id" "public-env-heading" ] (Ui.text "Ipe.Env.public build-time config")
-            , Ui.row [ Ui.spacing 12 ]
-                [ Ui.el [] (Ui.text "API_BASE_URL:")
-                , Ui.el [ Ui.htmlAttribute "id" "api-base-url" ] (Ui.text model.apiBaseUrl)
-                ]
-            , Ui.row [ Ui.spacing 12 ]
-                [ Ui.el [] (Ui.text "IPE_AUTH_TOKEN_SECRET (must read as none):")
-                , Ui.el [ Ui.htmlAttribute "id" "secret-probe" ] (Ui.text model.secretProbe)
-                ]
+    Ui.column
+        [ Ui.spacing 14, Ui.padding 32 ]
+        [ Ui.el [ Ui.htmlAttribute "id" "public-env-heading" ] (Ui.text "Ipe.Env.public build-time config")
+        , Ui.row [ Ui.spacing 12 ]
+            [ Ui.el [] (Ui.text "API_BASE_URL:")
+            , Ui.el [ Ui.htmlAttribute "id" "api-base-url" ] (Ui.text model.apiBaseUrl)
             ]
-        )
+        , Ui.row [ Ui.spacing 12 ]
+            [ Ui.el [] (Ui.text "IPE_AUTH_TOKEN_SECRET (must read as none):")
+            , Ui.el [ Ui.htmlAttribute "id" "secret-probe" ] (Ui.text model.secretProbe)
+            ]
+        ]
 
 
 main =

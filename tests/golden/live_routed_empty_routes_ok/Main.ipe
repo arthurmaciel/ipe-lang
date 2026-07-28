@@ -37,9 +37,9 @@ update msg model =
         Increment ->
             ( { model | count = model.count + 1 }, Cmd.none )
 
-view : Model -> Html Msg
+view : Model -> Element Msg
 view model =
-    Ui.layout [] (Ui.text (String.fromInt model.count))
+    Ui.text (String.fromInt model.count)
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
