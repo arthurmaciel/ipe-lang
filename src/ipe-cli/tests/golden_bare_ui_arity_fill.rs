@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 /// Message-pinning mirrors `examples/sky/ipe/31-webview-stopwatch-ui`.
 const BARE_HTML_VIEW_APP: &str = r#"module Main exposing (main)
 import Ipe.Prelude exposing (..)
-import Ipe.WebView as Webview
+import Ipe.Tea.WebView as Webview
 import Ipe.Cmd as Cmd
 import Ipe.Sub as Sub
 import Ipe.Ui as Ui

@@ -59,7 +59,7 @@
 /// cells; there is no HTML step.
 const IPE_TUI_COUNTER: &str = r"module Main exposing (main)
 
-import Ipe.Tui as Tui
+import Ipe.Tea.Tui as Tui
 import Ipe.Ui as Ui
 
 type alias KeyEvent = { kind : String, value : String }
@@ -117,7 +117,7 @@ main =
 // directly.
 const IPE_TUI_PROGRAM_ONKEY_RECORD: &str = r#"module Main exposing (main)
 
-import Ipe.Tui as Tui
+import Ipe.Tea.Tui as Tui
 
 type alias KeyEvent = { kind : String, value : String }
 

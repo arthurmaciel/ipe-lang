@@ -14,7 +14,7 @@ module Main exposing (main)
 -- into one routes list, ipec exits 0, the emitted project cargo-builds, and
 -- a GET on `/u/:id` delivers the captured param to the page constructor.
 
-import Ipe.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 
 type Page

@@ -98,7 +98,7 @@ const SUB_SUBSCRIBE: &str = "module Main exposing (main)\n\
 /// `crate::tea` before the fix.
 const LIVE_RENDER_STATIC: &str = "module Main exposing (main)\n\
     import Ipe.Prelude exposing (..)\n\
-    import Ipe.Web as Web\n\
+    import Ipe.Tea.Web as Web\n\
     import Ipe.Html as Html\n\
     import Ipe.Task as Task\n\
     type alias Model = { title : String }\n\
