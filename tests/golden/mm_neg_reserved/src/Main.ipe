@@ -1,4 +1,3 @@
 module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import Ipe exposing (val)
 main = Task.succeed ()

@@ -108,7 +108,7 @@ fn i138_kernel_implicit_positive_exits_zero() {
 
 /// `Value` is a kernel-implicit Prelude type that was missing from all
 /// three builtin allowlists (`RESERVED_BUILTIN_TYPES`, `EXTRA_BUILTIN_TYPE_NAMES`,
-/// `KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES` — newly added by the fix).
+/// `KERNEL_IMPLICIT_BUILTIN_TYPE_NAMES` — newly added by the fix).
 /// After the fix it must receive the empty-home sentinel and compile clean.
 /// The lowerer handles `Value` via an explicit arm (`IrType::Json`) placed
 /// after the `enum_variants` guard.

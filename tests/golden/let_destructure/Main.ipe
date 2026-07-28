@@ -1,5 +1,4 @@
 module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- The two irrefutable LET-destructure examples from M3b-2, each evaluating to 42:

@@ -1,5 +1,4 @@
 module Lib exposing (visible)
-import Ipe.Prelude exposing (..)
 visible : Int
 visible = 1
 hidden : Int

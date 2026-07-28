@@ -3,7 +3,6 @@ module Main exposing (main)
 -- #119 seal — List.sortBy : (a -> comparable) -> List a -> List a
 -- Stable sort by a key projection. Preserves insertion order for equal keys.
 
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 type alias Person =

@@ -1,5 +1,4 @@
 module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- Partial ctor application: `Node Leaf 1` supplies 2 of 3 args to a ctor

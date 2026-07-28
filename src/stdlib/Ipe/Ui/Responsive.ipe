@@ -16,7 +16,6 @@ module Ipe.Ui.Responsive exposing (DeviceClass(..), classifyDevice, deviceClassT
 -- subscription (Sub.windowSize) and stash it in the model; the
 -- view passes width into classifyDevice once and dispatches.
 
-import Ipe.Prelude exposing (..)
 
 
 type DeviceClass

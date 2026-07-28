@@ -7,11 +7,11 @@
 //! `ipe-stdlib` sources; embedding a copy (rather than `include_str!`-ing an
 //! out-of-repo path) keeps the build portable and the toolchain hermetic.
 //!
-//! `Ipe.Prelude` resolves to `Basics` (the Prelude re-exports the
-//! non-numeric basics, exactly as the reference compiler maps it). The source
-//! is ordinary Ipê: the same parser that reads user code reads it (the
-//! `parses` test proves it), so it is the substrate the import resolver
-//! compiles.
+//! `Ipe.Basics` is the canonical implicit module (ADR 0047). `Ipe.Prelude`
+//! resolves to the same `Basics` source as a retained backward-compatibility
+//! alias — first-party sources no longer name it. The source is ordinary Ipê:
+//! the same parser that reads user code reads it (the `parses` test proves it),
+//! so it is the substrate the import resolver compiles.
 #![forbid(unsafe_code)]
 
 /// One embedded standard-library module: its dotted name and its Ipê source.
@@ -83,8 +83,8 @@ const REGEX: &str = include_str!("../Ipe/Regex.ipe");
 
 /// Every embedded `Ipe` module, keyed by its dotted import name.
 ///
-/// `Ipe.Prelude` is intentionally absent here: it is not a source file but
-/// an alias for `Basics` (the Prelude re-exports the non-numeric basics), so
+/// `Ipe.Prelude` is intentionally absent here: it is not a source file but a
+/// retained backward-compatibility alias for the canonical `Ipe.Basics`, so
 /// [`source`] maps it onto `Basics` rather than a distinct entry.
 pub const MODULES: &[StdModule] = &[
     StdModule {
@@ -164,9 +164,8 @@ pub const MODULES: &[StdModule] = &[
 /// The embedded Ipê source for a dotted `Ipe` module name, or `None` when
 /// the name is not one of the embedded modules.
 ///
-/// `Ipe.Prelude` resolves to the `Basics` source (the Prelude is an alias
-/// re-export of the non-numeric basics, matching the reference compiler's
-/// `("Ipe.Prelude", "Basics")` mapping).
+/// `Ipe.Prelude` resolves to the `Basics` source as a retained
+/// backward-compatibility alias for the canonical `Ipe.Basics` (ADR 0047).
 #[must_use]
 pub fn source(module_name: &str) -> Option<&'static str> {
     if module_name == "Ipe.Prelude" {

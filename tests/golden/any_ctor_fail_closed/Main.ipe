@@ -7,7 +7,6 @@ module Main exposing (main)
 -- Passing the payload to `String.length : String -> Int` gives
 -- Dict String String ≠ String → IPE-T0001.
 
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 type Msg

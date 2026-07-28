@@ -1,6 +1,5 @@
 module Dep exposing (composed)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
 import Ipe.Error exposing (Error)
 

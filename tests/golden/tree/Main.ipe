@@ -1,5 +1,4 @@
 module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- A directly self-recursive ADT: `Node` carries two `Tree` fields, which the

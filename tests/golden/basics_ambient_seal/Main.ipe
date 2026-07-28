@@ -1,0 +1,20 @@
+module Main exposing (main)
+
+-- SEAL for ADR 0047 (issue #231): Tier-A (`identity`, `not`, `always`) and
+-- Tier-B (`Maybe`/`Just`/`Nothing`, `Bool`/`True`/`False`) are ambient with no
+-- import line, while the Tier-C module `Ipe.String` is reached through its
+-- explicit import. The program compiles and runs to exit 0.
+import Ipe.Io as Io
+import Ipe.String as String
+
+label : Bool -> Maybe String
+label flag =
+    if not (always False flag) then
+        Just (String.join "-" [ "a", "b" ])
+    else
+        Nothing
+
+main =
+    case label True of
+        Just s -> Io.println (identity s)
+        Nothing -> Io.println "none"

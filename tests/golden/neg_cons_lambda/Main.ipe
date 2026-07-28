@@ -1,5 +1,4 @@
 module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- A cons param `\(x :: xs) ->`: `x :: xs` fails to match `[]`, so it is refutable

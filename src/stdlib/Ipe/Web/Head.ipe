@@ -66,7 +66,6 @@ module Ipe.Web.Head exposing
 --   `Attribute msg` resolve correctly as builtins.
 
 
-import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.Html as Html exposing (Html)
 import Ipe.Html.Attributes as Attr exposing (Attribute)

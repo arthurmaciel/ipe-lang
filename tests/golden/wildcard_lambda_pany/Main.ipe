@@ -15,7 +15,6 @@ module Main exposing (main)
 -- Expected: ipec-0 AND cargo-0 on the emitted project; output contains
 -- "ok: done" and "err: intentional".
 
-import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
 import Ipe.Error as Error exposing (Error)
 import Ipe.Io as Io

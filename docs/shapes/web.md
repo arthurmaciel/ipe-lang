@@ -21,7 +21,6 @@ portable `Ipe.Ui` layout vocabulary and turned into `Html` by a top-level
 ```ipe
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.Web exposing (app)
 import Ipe.Cmd as Cmd

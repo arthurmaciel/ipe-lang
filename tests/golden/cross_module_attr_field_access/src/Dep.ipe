@@ -1,6 +1,5 @@
 module Dep exposing (bad)
 
-import Ipe.Prelude exposing (..)
 
 bad =
     let

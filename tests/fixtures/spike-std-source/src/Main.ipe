@@ -9,7 +9,6 @@ module Main exposing (main)
 -- #103: Ipe.Palette now also defines `type Length` (a reserved built-in name),
 -- proving an EmbeddedStdlib module can define + export a reserved type that a
 -- user module could not. `Px` / `lengthPx` exercise it end-to-end.
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.Palette exposing (Shade(..), toHex, Length(..), lengthPx)
 import Ipe.Io as Io

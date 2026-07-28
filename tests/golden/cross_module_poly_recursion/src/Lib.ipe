@@ -1,6 +1,5 @@
 module Lib exposing (evenLen, oddLen)
 
-import Ipe.Prelude exposing (..)
 
 -- Mutually-recursive untyped pair, polymorphic in the element type. The
 -- boundary promotion must generalize the GROUP so importers can use it at

@@ -1,6 +1,5 @@
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Http as Http
 import Ipe.Http.Stream as HttpStream exposing (StreamId)
 import Ipe.Task as Task

@@ -1,5 +1,4 @@
 module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- REFUTABLE lambda param `\(Just x) ->`: `Just x` fails to match `Nothing`, so a

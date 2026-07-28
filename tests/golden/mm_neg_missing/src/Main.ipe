@@ -1,4 +1,3 @@
 module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import DoesNotExist exposing (foo)
 main = Task.succeed ()

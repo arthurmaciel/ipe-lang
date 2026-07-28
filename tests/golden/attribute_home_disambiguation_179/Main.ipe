@@ -29,7 +29,6 @@ module Main exposing (main)
 -- oracle_divergence = true: ipec's own correct output, not a Go oracle diff —
 -- this asserts the Attribute newtype identity through a runnable render.
 
-import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.String as String
 import Ipe.Html as Html exposing (Html)

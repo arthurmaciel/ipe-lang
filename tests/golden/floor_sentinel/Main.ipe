@@ -1,5 +1,4 @@
 module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- Floor sentinel: EVERY top constructor is covered (`Som` and `Non`), and inside

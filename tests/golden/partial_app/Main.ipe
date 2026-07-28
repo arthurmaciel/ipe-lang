@@ -1,5 +1,4 @@
 module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- IPE-L0110 (#216) seal: partial + over-application of a first-class function

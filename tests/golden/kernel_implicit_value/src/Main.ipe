@@ -1,6 +1,5 @@
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- Positive control for #138 completeness regression: `Value` is a

@@ -20,7 +20,6 @@ wrapped by a top-level `Ui.layout [] element` (see
 ```ipe
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.WebView as WebView
 import Ipe.Cmd as Cmd

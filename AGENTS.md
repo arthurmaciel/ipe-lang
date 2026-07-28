@@ -11,7 +11,6 @@
 
 ```elm
 module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
 import Ipe.Io as Io
 

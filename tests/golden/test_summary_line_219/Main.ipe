@@ -5,7 +5,6 @@ module Main exposing (main, tests)
 -- With three passing tests the emitted binary must print exactly
 -- "3 passed, 0 failed (3 total)" and exit 0.
 
-import Ipe.Prelude exposing (..)
 import Ipe.Test as Test exposing (Test)
 
 

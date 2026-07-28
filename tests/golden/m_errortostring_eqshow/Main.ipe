@@ -1,6 +1,5 @@
 module Main exposing (main, eqShow)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 eqShow : a -> a -> String

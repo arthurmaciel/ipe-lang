@@ -1,5 +1,4 @@
 module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- A REFUTABLE `let` destructure: the binder `(Wrap x)` is a constructor pattern,

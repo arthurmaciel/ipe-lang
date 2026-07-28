@@ -1,6 +1,5 @@
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- #90 T3: UNANNOTATED same-module double forwarder — `am2` shares one

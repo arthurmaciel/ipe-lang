@@ -30,7 +30,6 @@ module Main exposing (main)
 --      (the runtime's __ipeReviveScripts shim revives them after
 --      the initial HTML lands in the document — same hardening
 --      Ipe.Live uses).
-import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
 import Ipe.Webview as Webview
 import Ipe.Cmd as Cmd
