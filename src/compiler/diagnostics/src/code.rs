@@ -610,7 +610,7 @@ mod tests {
 
     #[test]
     fn taxonomy_code_count_is_pinned() {
-        assert_eq!(ALL_CODES.len(), 109);
+        assert_eq!(ALL_CODES.len(), 110);
     }
 
     #[test]
