@@ -147,12 +147,17 @@ capability-mode and jail primitives:
   scratch always and the working tree only when the axis is granted, so an
   out-of-scratch write under a withholding profile is denied — the same
   observable the other arms produce.
-- **The subprocess axis is enforced by descriptor rights, not by omission.** A
-  withheld subprocess axis must be a genuine kernel denial of process creation
-  (restricting the exec right / the jail's process posture), not merely "we did
-  not grant a way to spawn" — an arm that only *omits* a spawn primitive would
-  read a native `fork` as `Clean`. If the platform cannot deny process creation
-  for the withheld case, that is a refuse-gap (`Unavailable`), not a `Clean`.
+- **The subprocess axis is enforced by a kernel denial, not by omission.** A
+  withheld subprocess axis must be a genuine kernel denial of process creation.
+  Under Capsicum, plain `fork` still returns in capability mode, so the denial
+  comes from `exec`/`fexecve` being unreachable and `pdfork` ungranted, or from a
+  `jail(2)` posture — not from "we did not grant a way to spawn". Subprocess and
+  env are *confined but not differentially probed*: only `Network` and
+  `Filesystem` are `Denied { axis }`-nameable, so a denied withheld-subprocess
+  surfaces as the killed child's `BuildFailed` (still a reject, still
+  fail-closed), not a `Clean`. Omission is the real hazard — it denies nothing,
+  running the build unconfined; if the platform cannot deny process creation for
+  the withheld case, that is a refuse-gap (`Unavailable`), never a `Clean`.
 
 ### Alternatives rejected
 
@@ -205,8 +210,10 @@ capability-mode and jail primitives:
   spawning — not after — and that the ACL is applied to the container SID, not a
   no-op.
 - **The FreeBSD subprocess axis is a genuine denial.** Confirm a withheld
-  subprocess axis denies process creation at the kernel boundary (a native `fork`
-  is denied), not merely by omitting a spawn primitive.
+  subprocess axis denies process creation at the kernel boundary — the chosen
+  primitive must block the `fork` family *and* `pdfork`/exec (plain `fork`
+  survives `cap_enter` alone), not merely omit a spawn primitive. Its observable
+  is the killed child's `BuildFailed`, not a named `Denied { axis }`.
 - **Every resource is released on every path**, including the error paths — no
   Job Object, token, SID, descriptor, or jail leaks across the tightening loop's
   per-axis calls.
@@ -215,7 +222,10 @@ capability-mode and jail primitives:
 - **A red-canary fixture rejects on each newly-promoted platform**: a native
   package that opens a socket while declaring `[]` must decode to
   `Denied { axis: Network }` and reject, on that platform's real runner, before the
-  platform is advertised as certifying.
+  platform is advertised as certifying. The canary must demand a differentially
+  probed axis (`Network` or `Filesystem`) — a subprocess- or env-based canary
+  decodes to `BuildFailed`, not `Denied { axis }`, and would not exercise the
+  axis-naming path the fixture guards.
 
 ## Conventions
 
