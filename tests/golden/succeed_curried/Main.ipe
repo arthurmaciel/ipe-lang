@@ -8,6 +8,7 @@ module Main exposing (main)
 
 import Ipe.Json.Decode as JsonDec
 import Ipe.Json.Decode.Pipeline as Pipe
+import Ipe.Io as Io
 
 
 mkPair : String -> (Int -> String)
@@ -25,7 +26,7 @@ decoder =
 main =
     case JsonDec.decodeString decoder "{\"k\":\"val\",\"v\":99}" of
         Ok s ->
-            println s
+            Io.println s
 
         Err _ ->
-            println "decode-error"
+            Io.println "decode-error"

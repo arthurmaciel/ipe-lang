@@ -1,6 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- #56 proof-matrix shapes P5 + P7: a subset record PATTERN over a superset
@@ -40,4 +40,4 @@ main =
             case leader of
                 { name } -> name
     in
-    println (leaderName ++ ": " ++ joined)
+    Io.println (leaderName ++ ": " ++ joined)

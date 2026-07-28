@@ -15,14 +15,14 @@ use crate::code::{
     IPE_L0105, IPE_L0106, IPE_L0107, IPE_L0108, IPE_L0110, IPE_L0111, IPE_L0112, IPE_L0113,
     IPE_L0114, IPE_L0115, IPE_L0116, IPE_L0117, IPE_L0118, IPE_L0119, IPE_L0120, IPE_L0121,
     IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127, IPE_L0128, IPE_L0129,
-    IPE_L0130, IPE_L0131, IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003, IPE_N0004, IPE_N0005,
-    IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023,
-    IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029, IPE_N0030, IPE_N0031,
-    IPE_N0032, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013,
-    IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030,
-    IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_T0001,
-    IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014,
-    IPE_T0015, IPE_T0016, IPE_T0017, Severity,
+    IPE_L0130, IPE_L0131, IPE_L0140, IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003, IPE_N0004,
+    IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021, IPE_N0022,
+    IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029, IPE_N0030,
+    IPE_N0031, IPE_N0032, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012,
+    IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021,
+    IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062,
+    IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013,
+    IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, Severity,
 };
 use crate::span::Span;
 
@@ -860,6 +860,14 @@ pub enum LowerError {
         /// Short display name of the unsupported IR type.
         type_name: Box<str>,
     },
+    /// A development-only `Debug.*` escape hatch (`Debug.log`) was used in a
+    /// PRODUCTION build (`ipe build --optimize`). Debug values are for local
+    /// inspection only; a production build rejects them rather than silently
+    /// stripping the call or shipping a stray stderr write. [IPE-L0140]
+    DevOnlyKernelInProduction {
+        /// The dotted kernel name (e.g. `Debug.log`).
+        kernel: Box<str>,
+    },
 }
 
 // ===========================================================================
@@ -1152,6 +1160,7 @@ const fn lower_code(msg: &LowerError) -> Code {
         LowerError::RouteBuilderUnsupportedShape | LowerError::RouteParamUnsupportedType { .. } => {
             IPE_L0123
         }
+        LowerError::DevOnlyKernelInProduction { .. } => IPE_L0140,
     }
 }
 
@@ -1439,6 +1448,14 @@ fn lower_help(msg: &LowerError) -> Vec<HelpLine> {
                  decoded from a URL `:param` string. Change the field type to `String`, \
                  `Int`, `Float`, or `Bool`, or use a nullary constructor for routes \
                  without `:param` segments."
+            )
+            .into_boxed_str(),
+        )],
+        LowerError::DevOnlyKernelInProduction { kernel } => vec![HelpLine::Note(
+            format!(
+                "`{kernel}` is a development-only debugging tool. Remove it before \
+                 shipping, or drop `--optimize` for a development build. To log in \
+                 production, use `Io.eprintln` or `Log.info`."
             )
             .into_boxed_str(),
         )],

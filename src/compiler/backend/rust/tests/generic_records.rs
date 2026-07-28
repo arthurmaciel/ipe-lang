@@ -20,7 +20,7 @@
 //! wrap x = { value = x }
 //! unwrap : { value : a } -> a
 //! unwrap r = r.value
-//! main = println (String.fromInt (unwrap (wrap 42)))
+//! main = Io.println (String.fromInt (unwrap (wrap 42)))
 //! ```
 //!
 //! to stdout `42\n`, exit 0 (hand-verified in a temp dir). The `end_to_end_*`
@@ -60,6 +60,7 @@ fn program(name: Symbol, funcs: Vec<Func>, records: Vec<IrType>, entry: Option<F
             uses_websocket: false,
             uses_email: false,
             uses_env_public: false,
+            uses_debug: false,
             uses_ffi: false,
         }],
     }
@@ -122,7 +123,7 @@ fn wrap_unwrap_program(interner: &mut Interner) -> DResult<Program> {
             field_ty: IrType::Generic(b),
         },
     };
-    // main = println (String.fromInt (unwrap (wrap 42)))
+    // main = Io.println (String.fromInt (unwrap (wrap 42)))
     let main_fn = Func {
         id: FuncId::from_raw(2),
         name: main,
@@ -131,7 +132,7 @@ fn wrap_unwrap_program(interner: &mut Interner) -> DResult<Program> {
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),
         body: Expr::Call {
-            callee: Callee::Kernel(KernelFn::LogPrintln),
+            callee: Callee::Kernel(KernelFn::IoPrintln),
             args: vec![Expr::Call {
                 callee: Callee::Kernel(KernelFn::StringFromInt),
                 args: vec![Expr::Call {

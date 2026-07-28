@@ -12,7 +12,7 @@
 //!   exhaustive [`ipe_ir::Match`] built through the validating
 //!   [`ipe_ir::Match::new`], its binops to [`ipe_ir::BinOp`]);
 //! * `main` → the module's `entry` function;
-//! * kernel references (`Log.println`, `String.fromInt`) → [`ipe_ir::Callee::Kernel`];
+//! * kernel references (`Io.println`, `String.fromInt`) → [`ipe_ir::Callee::Kernel`];
 //! * top-level references (`Main.update`) → [`ipe_ir::Callee::Func`].
 //!
 //! Lowering is *type-directed*: every [`ipe_ir::IrType`] slot is filled from the
@@ -360,7 +360,7 @@ mod tests {
         assert!(main.params.is_empty());
         assert_eq!(main.ret, IrType::Task(Box::new(IrType::Unit)));
 
-        // main = println (String.fromInt (update Increment 0))
+        // main = Io.println (String.fromInt (update Increment 0))
         assert!(
             matches!(&main.body, Expr::Call { .. }),
             "main body is a call"
@@ -368,7 +368,7 @@ mod tests {
         let Expr::Call { callee, args, .. } = &main.body else {
             return;
         };
-        assert_eq!(*callee, Callee::Kernel(KernelFn::LogPrintln));
+        assert_eq!(*callee, Callee::Kernel(KernelFn::IoPrintln));
         assert_eq!(args.len(), 1);
 
         let Some(Expr::Call {

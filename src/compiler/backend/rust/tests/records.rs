@@ -20,7 +20,7 @@
 //! mk a    = { x = a, y = 2 }
 //! bumpX p = { p | x = 5 }
 //! getX p  = p.x
-//! main    = println (String.fromInt (getX (bumpX (mk 1))))
+//! main    = Io.println (String.fromInt (getX (bumpX (mk 1))))
 //! ```
 //!
 //! to stdout `5\n`, exit 0 (hand-verified in a temp dir). The
@@ -60,6 +60,7 @@ fn program(name: Symbol, funcs: Vec<Func>, entry: Option<FuncId>) -> Program {
             uses_websocket: false,
             uses_email: false,
             uses_env_public: false,
+            uses_debug: false,
             uses_ffi: false,
         }],
     }
@@ -137,7 +138,7 @@ fn record_trio(interner: &mut Interner) -> DResult<Program> {
             field_ty: IrType::Int,
         },
     };
-    // main = Log.println (String.fromInt (getX (bumpX (mk 1))))
+    // main = Io.println (String.fromInt (getX (bumpX (mk 1))))
     let main_fn = Func {
         id: FuncId::from_raw(3),
         name: main,
@@ -146,7 +147,7 @@ fn record_trio(interner: &mut Interner) -> DResult<Program> {
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),
         body: Expr::Call {
-            callee: Callee::Kernel(KernelFn::LogPrintln),
+            callee: Callee::Kernel(KernelFn::IoPrintln),
             args: vec![Expr::Call {
                 callee: Callee::Kernel(KernelFn::StringFromInt),
                 args: vec![Expr::Call {

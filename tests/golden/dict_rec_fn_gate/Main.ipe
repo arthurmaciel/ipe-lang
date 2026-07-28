@@ -9,6 +9,7 @@ module Main exposing (main)
 -- emitting an unbounded `singleton_dict::<T, V>` that `cargo` cannot build.
 
 import Ipe.Dict as Dict
+import Ipe.Io as Io
 
 
 singletonDict : a -> v -> Dict a v
@@ -26,4 +27,4 @@ main =
         _ =
             singletonDict rec 42
     in
-    println (String.fromInt 0)
+    Io.println (String.fromInt 0)

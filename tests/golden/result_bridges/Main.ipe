@@ -4,6 +4,7 @@ import Ipe.Prelude exposing (..)
 import Ipe.Result as Result
 import Ipe.Maybe as Maybe
 import Ipe.List as List
+import Ipe.Io as Io
 
 
 -- toMaybe : Result e a -> Maybe a  (Ok → Just, Err → Nothing)
@@ -22,7 +23,7 @@ main =
         defaulted =
             Result.withDefault 99 (Result.fromMaybe "missing" Nothing)
     in
-    println
+    Io.println
         (String.join " "
             (List.map String.fromInt [ okVal, errVal, roundTrip, defaulted ])
         )

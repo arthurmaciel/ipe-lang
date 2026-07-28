@@ -1,6 +1,6 @@
 -- | Ipe.Io — standard-I/O effect kernels (Layer 3 Ipe source, M5a).
 module Ipe.Io exposing
-    ( readLine, writeStdout, writeStderr
+    ( readLine, writeStdout, writeStderr, println, eprintln
     )
 
 
@@ -15,3 +15,9 @@ writeStdout = Ffi.kernel "Io_writeStdout"
 
 writeStderr : String -> Task Error ()
 writeStderr = Ffi.kernel "Io_writeStderr"
+
+println : String -> Task Error ()
+println = Ffi.kernel "Io_println"
+
+eprintln : String -> Task Error ()
+eprintln = Ffi.kernel "Io_eprintln"

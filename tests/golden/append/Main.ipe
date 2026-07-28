@@ -1,8 +1,9 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 greet : String -> String
 greet name = "hi, " ++ name ++ "!"
 
 main =
-    println (greet "world")
+    Io.println (greet "world")

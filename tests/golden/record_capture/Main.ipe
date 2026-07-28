@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- c02 (#130 seal). An all-Int record alias is captured by a `List.map`
 -- lambda on each element.
@@ -21,4 +22,4 @@ translate p dx =
 main =
     let origin = { x = 0, y = 5 } in
     let results = List.map (\dx -> translate origin dx) [ 1, 2, 3 ] in
-    println (String.join " " results)
+    Io.println (String.join " " results)

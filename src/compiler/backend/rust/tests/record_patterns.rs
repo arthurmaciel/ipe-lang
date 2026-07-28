@@ -22,11 +22,11 @@
 //! ```text
 //! -- record destructure:
 //! getX r = let { x, y } = r in x
-//! main = println (String.fromInt (getX { x = 7, y = 2 }))           -- prints 7
+//! main = Io.println (String.fromInt (getX { x = 7, y = 2 }))           -- prints 7
 //!
 //! -- nested tuple in a record field:
 //! sx r = let { point, tag } = r ; (a, b) = point in a + b + tag
-//! main = println (String.fromInt (sx { point = (3, 4), tag = 5 }))  -- prints 12
+//! main = Io.println (String.fromInt (sx { point = (3, 4), tag = 5 }))  -- prints 12
 //! ```
 //!
 //! to stdout `7\n` / `12\n`, exit 0 (hand-verified in a temp dir against the Go
@@ -68,6 +68,7 @@ fn program(name: Symbol, funcs: Vec<Func>, entry: Option<FuncId>) -> Program {
             uses_websocket: false,
             uses_email: false,
             uses_env_public: false,
+            uses_debug: false,
             uses_ffi: false,
         }],
     }
@@ -121,7 +122,7 @@ fn getx_program(interner: &mut Interner) -> DResult<Program> {
             body: Box::new(Expr::Var(x)),
         },
     };
-    // main = println (String.fromInt (getX { x = 7, y = 2 }))
+    // main = Io.println (String.fromInt (getX { x = 7, y = 2 }))
     let main_fn = Func {
         id: FuncId::from_raw(1),
         name: main,
@@ -130,7 +131,7 @@ fn getx_program(interner: &mut Interner) -> DResult<Program> {
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),
         body: Expr::Call {
-            callee: Callee::Kernel(KernelFn::LogPrintln),
+            callee: Callee::Kernel(KernelFn::IoPrintln),
             args: vec![Expr::Call {
                 callee: Callee::Kernel(KernelFn::StringFromInt),
                 args: vec![Expr::Call {

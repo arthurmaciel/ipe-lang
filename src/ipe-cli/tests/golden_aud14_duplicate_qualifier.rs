@@ -51,7 +51,7 @@ fn distinct_modules_sharing_an_explicit_alias_is_rejected() {
                 "module Main exposing (main)\n\
                  import A as Utils\n\
                  import B as Utils\n\n\
-                 main = println Utils.format\n",
+                 main = Io.println Utils.format\n",
             ),
         ],
     );
@@ -107,7 +107,7 @@ fn same_module_reimported_under_same_alias_is_accepted() {
                 "module Main exposing (main)\n\
                  import A as Utils\n\
                  import A as Utils\n\n\
-                 main = println Utils.format\n",
+                 main = Io.println Utils.format\n",
             ),
         ],
     );

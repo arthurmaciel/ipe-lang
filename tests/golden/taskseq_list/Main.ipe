@@ -4,7 +4,8 @@ import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.String as String
 import Ipe.Task as Task
-import Ipe.Log as Log exposing (println)
+import Ipe.Log as Log
+import Ipe.Io as Io
 
 
 -- AUD-04 witness 3 (multi-use Task-list let-inlining, near a colliding
@@ -31,4 +32,4 @@ main =
     let _ = Log.info "run tasks" in
     let n1 = List.length tasks in
     let n2 = List.length tasks in
-    println (String.fromInt (n1 + n2))
+    Io.println (String.fromInt (n1 + n2))

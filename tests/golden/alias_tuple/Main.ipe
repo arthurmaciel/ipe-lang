@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- An `as` alias can wrap a *destructuring* pattern: `(a, b) as whole` binds the
 -- whole matched tuple to `whole` AND its two elements to `a` and `b`, all in
@@ -16,4 +17,4 @@ combine pair =
             (a + b) + (x - y)
 
 main =
-    println (String.fromInt (combine (10, 3)))
+    Io.println (String.fromInt (combine (10, 3)))

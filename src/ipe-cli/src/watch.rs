@@ -827,6 +827,8 @@ fn run_inner(
                         ipe_ir::Target::Native,
                         resolved.wasm_public_env.clone(),
                         false,
+                        // `ipe watch` is a development loop — Debug.* is allowed.
+                        false,
                     );
                     config = Some(cfg);
                     cfg

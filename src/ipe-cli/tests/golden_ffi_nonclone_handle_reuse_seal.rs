@@ -99,7 +99,7 @@ fn nonclone_handle_reused_fails_closed_before_cargo() {
         &tmp,
         "module Main exposing (main)\n\
          import Ipe.Prelude exposing (..)\n\
-         import Ipe.Log exposing (println)\n\
+         import Ipe.Io as Io\n\
          import Ipe.Result as Result\n\
          import Ipe.String as String\n\
          import Rust.Handle_demo as H\n\n\
@@ -112,8 +112,8 @@ fn nonclone_handle_reused_fails_closed_before_cargo() {
          \x20       Result.map2 (\\x y -> x + y) a b\n\n\
          main =\n\
          \x20   case Result.andThen readTwice (H.new_from_widget ()) of\n\
-         \x20       Ok n -> println (String.fromInt n)\n\
-         \x20       Err _ -> println \"err\"\n",
+         \x20       Ok n -> Io.println (String.fromInt n)\n\
+         \x20       Err _ -> Io.println \"err\"\n",
     );
     assert!(
         wrote,
@@ -162,7 +162,7 @@ fn nonclone_handle_threaded_linearly_builds() {
         &tmp,
         "module Main exposing (main)\n\
          import Ipe.Prelude exposing (..)\n\
-         import Ipe.Log exposing (println)\n\
+         import Ipe.Io as Io\n\
          import Ipe.Result as Result\n\
          import Ipe.String as String\n\
          import Rust.Handle_demo as H\n\n\
@@ -176,8 +176,8 @@ fn nonclone_handle_threaded_linearly_builds() {
          \x20           )\n\n\
          main =\n\
          \x20   case Result.andThen readTwice (H.new_from_widget ()) of\n\
-         \x20       Ok n -> println (String.fromInt n)\n\
-         \x20       Err _ -> println \"err\"\n",
+         \x20       Ok n -> Io.println (String.fromInt n)\n\
+         \x20       Err _ -> Io.println \"err\"\n",
     );
     assert!(
         wrote,

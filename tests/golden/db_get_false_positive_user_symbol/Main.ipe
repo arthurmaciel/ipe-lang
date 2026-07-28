@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 dbGetLabel : String -> String
@@ -23,4 +23,4 @@ render x =
 
 main : Task Error ()
 main =
-    println (render 99)
+    Io.println (render 99)

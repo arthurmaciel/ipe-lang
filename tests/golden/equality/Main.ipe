@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- `eq2` compares its two arguments with `==`. Equality works for any type that
 -- is not a function, so the body constrains `a` to the Equatable super-type and
@@ -23,4 +24,4 @@ main =
         flag = eqBool (0 == 0) (1 == 1)
         n = if same && diff && flag then 42 else 0
     in
-    println (String.fromInt n)
+    Io.println (String.fromInt n)

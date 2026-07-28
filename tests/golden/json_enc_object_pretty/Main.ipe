@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- Nested object: { name, age, tags:[...] } encoded at indent=2 (pretty).
 -- Go: json.MarshalIndent(val, "", "  ") — 2-space indent, keys sorted.
@@ -11,4 +12,4 @@ main =
                 , ( "tags", JsonEnc.list JsonEnc.string [ "go", "rust" ] )
                 ]
     in
-    println (JsonEnc.encode 2 v)
+    Io.println (JsonEnc.encode 2 v)

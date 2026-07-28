@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- Forward pipe chain: `|>` left-associative at precedence 0.
 -- [1,2,3] |> List.map (+1) |> List.length == 3
@@ -8,4 +9,4 @@ main =
         |> List.map (\x -> x + 1)
         |> List.length
         |> String.fromInt
-        |> println
+        |> Io.println

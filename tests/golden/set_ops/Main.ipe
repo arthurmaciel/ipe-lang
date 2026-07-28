@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Set as Set
+import Ipe.Io as Io
 
 main =
     let
@@ -9,4 +10,4 @@ main =
         i = Set.size (Set.intersect (Set.fromList [1, 2, 3]) (Set.fromList [2, 3, 4]))
         s = Set.size (Set.fromList [1, 1, 2, 2, 3])
     in
-    println (String.join " " [String.fromInt u, String.fromInt d, String.fromInt i, String.fromInt s])
+    Io.println (String.join " " [String.fromInt u, String.fromInt d, String.fromInt i, String.fromInt s])

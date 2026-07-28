@@ -9,7 +9,7 @@ import Ipe.Task as Task
 import Ipe.Crypto as Crypto
 import Ipe.Process as Process
 import Ipe.Db as Db
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Ipe.System as System
 import Lib.Database as Database
 import Ipe.Error as Error exposing (Error(..), ErrorKind(..))
@@ -108,7 +108,7 @@ getSession sessionId =
         Err e ->
             let
                 _ =
-                    println ("[AUTH ERROR] getSession: " ++ Error.toString e)
+                    Io.println ("[AUTH ERROR] getSession: " ++ Error.toString e)
             in
                 Err e
 

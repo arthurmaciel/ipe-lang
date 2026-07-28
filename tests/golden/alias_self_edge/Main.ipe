@@ -2,7 +2,7 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Ipe.String as String
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 -- #99 self-edge regression (found by the #99 review, f15): an `as`-alias
 -- over a CYCLIC self-edge (recursive) constructor field is boxed
@@ -28,4 +28,4 @@ main =
     -- Node (Node (Leaf "hi")): outer Node arm reads child + w, each recurses
     -- into Node (Leaf "hi") -> 1 + size (Leaf "hi") + size (Leaf "hi")
     --   = 1 + (1 + 2 + 2) + (1 + 2 + 2) = 1 + 5 + 5 = 11
-    println (String.fromInt (size (Node (Node (Leaf "hi")))))
+    Io.println (String.fromInt (size (Node (Node (Leaf "hi")))))

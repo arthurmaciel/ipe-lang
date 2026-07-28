@@ -5,7 +5,7 @@ import Ipe.Http as Http
 import Ipe.Http.Stream as HttpStream exposing (StreamId)
 import Ipe.Task as Task
 import Ipe.Error as Error exposing (Error)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- i148 regression: HttpStream.open must return Task Error StreamId
@@ -30,4 +30,4 @@ main =
         -- So result : Result Error StreamId
         result = Task.run (HttpStream.open req)
     in
-        Task.run (println (handleOpen result))
+        Task.run (Io.println (handleOpen result))

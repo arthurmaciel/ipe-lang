@@ -96,6 +96,7 @@ fn body_edit_reexecutes_only_the_edited_module_file() {
         ipe_ir::Target::Native,
         Vec::new(),
         false,
+        false,
     );
 
     // Warm the session: demand the top-level manifest once. On a genuine

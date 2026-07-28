@@ -1,9 +1,10 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- #90 Stage 1: `Ok f` holding a function used to trip IPE-L0114 unconditionally,
 -- making `Result.andMap` unusable. The construction is sound: `Ok`/`Err`
 -- construct the runtime `IpeResult` enum, whose derives are generic-bounded, so
 -- `IpeResult<E, Box<dyn Fn(..)->R>>` compiles regardless of the payload.
 main =
-    println (String.fromInt (Result.withDefault 0 (Ok (\x -> x + 1) |> Result.andMap (Ok 2))))
+    Io.println (String.fromInt (Result.withDefault 0 (Ok (\x -> x + 1) |> Result.andMap (Ok 2))))

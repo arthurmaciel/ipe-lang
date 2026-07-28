@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Lib1
 import Lib2
 
@@ -14,4 +14,4 @@ import Lib2
 -- the emitted `params` nor `ret`, so `cargo build` failed E0283 at this
 -- call site ("cannot infer type of the type parameter").
 main =
-    println (Lib1.getName Lib2.samplePerson)
+    Io.println (Lib1.getName Lib2.samplePerson)

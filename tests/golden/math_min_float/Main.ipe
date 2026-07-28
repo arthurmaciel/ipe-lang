@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 main =
-    println (String.fromFloat (Math.min 0.4 1.3))
+    Io.println (String.fromFloat (Math.min 0.4 1.3))

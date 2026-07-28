@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- m1 parser gate: a let-bound *function* (a let binding with parameters, as
 -- opposed to a plain value). `inc` closes over nothing and is applied inside
@@ -9,4 +10,4 @@ main =
         inc n =
             n + 1
     in
-    println (String.fromInt (inc 29))
+    Io.println (String.fromInt (inc 29))

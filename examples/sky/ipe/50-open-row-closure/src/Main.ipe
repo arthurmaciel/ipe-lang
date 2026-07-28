@@ -23,7 +23,7 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Ipe.List as List
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 type alias Contact =
     { email : String
@@ -55,6 +55,6 @@ main =
             [ { email = "a@x.com", primary = False, verified = True }
             , { email = "b@x.com", primary = True, verified = True }
             ]
-        _ = println (pickPrimary contacts)
+        _ = Io.println (pickPrimary contacts)
     in
-        println "done"
+        Io.println "done"

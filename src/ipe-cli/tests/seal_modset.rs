@@ -64,11 +64,11 @@ fn skip() -> bool {
 
 // ── Program shapes ──────────────────────────────────────────────────────────
 
-/// Baseline: a bare `println` program. Emits only the base module set.
+/// Baseline: a bare `Io.println` program. Emits only the base module set.
 const BARE: &str = "module Main exposing (main)\n\
     import Ipe.Prelude exposing (..)\n\
-    import Ipe.Log exposing (println)\n\
-    main = println \"bare\"\n";
+    import Ipe.Io as Io\n\
+    main = Io.println \"bare\"\n";
 
 /// `Cmd.publish` with NO Web/server/TEA-app kernel. `cmd_publish` lives in
 /// `live::pubsub`; the shape must pull in the `live` module (and, transitively,
@@ -76,21 +76,21 @@ const BARE: &str = "module Main exposing (main)\n\
 const CMD_PUBLISH: &str = "module Main exposing (main)\n\
     import Ipe.Prelude exposing (..)\n\
     import Ipe.Cmd as Cmd\n\
-    import Ipe.Log exposing (println)\n\
+    import Ipe.Io as Io\n\
     pubCmd : Cmd msg\n\
     pubCmd = Cmd.publish \"topic\" \"hello\"\n\
-    main = println \"cmdpublish\"\n";
+    main = Io.println \"cmdpublish\"\n";
 
 /// `Sub.subscribeTopic` with no Web kernel. `sub_subscribe_topic` lives in
 /// `live::pubsub`. Was E0425 `sub_subscribe_topic` before the fix.
 const SUB_SUBSCRIBE: &str = "module Main exposing (main)\n\
     import Ipe.Prelude exposing (..)\n\
     import Ipe.Sub as Sub\n\
-    import Ipe.Log exposing (println)\n\
+    import Ipe.Io as Io\n\
     type Msg = Got String\n\
     subFor : Sub Msg\n\
     subFor = Sub.subscribeTopic \"topic\" Got\n\
-    main = println \"subtopic\"\n";
+    main = Io.println \"subtopic\"\n";
 
 /// `Web.renderStatic` from a CLI `main` (web WITHOUT any TEA/server kernel).
 /// The `web` module's `use crate::tea::{IpeCmd, IpeSub}` is unconditional, so
@@ -115,11 +115,11 @@ const LIVE_RENDER_STATIC: &str = "module Main exposing (main)\n\
 const HTTP_STREAM_CHUNKS: &str = "module Main exposing (main)\n\
     import Ipe.Prelude exposing (..)\n\
     import Ipe.Http.Stream as HttpStream exposing (StreamId, ChunkEvent(..))\n\
-    import Ipe.Log exposing (println)\n\
+    import Ipe.Io as Io\n\
     type Msg = Chunked ChunkEvent\n\
     subFor : StreamId -> Sub Msg\n\
     subFor sid = HttpStream.chunks sid Chunked\n\
-    main = println \"streamchunks\"\n";
+    main = Io.println \"streamchunks\"\n";
 
 // ── The gate: every shape emits AND cargo-builds ────────────────────────────
 

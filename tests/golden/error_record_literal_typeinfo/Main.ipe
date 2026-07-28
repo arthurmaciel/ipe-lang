@@ -5,7 +5,7 @@ module Main exposing (main)
 -- time (IPE-T0001). See tests/golden/error_record_literal_panicinfo/.
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 describe : ErrorDetails -> String
@@ -19,4 +19,4 @@ describe details =
 
 
 main =
-    println (describe (TypeMismatch { expected = "Int", actual = "String" }))
+    Io.println (describe (TypeMismatch { expected = "Int", actual = "String" }))

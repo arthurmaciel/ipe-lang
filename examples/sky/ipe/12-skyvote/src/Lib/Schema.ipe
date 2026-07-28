@@ -1,7 +1,7 @@
 module Lib.Schema exposing (initDb)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Lib.Db as Db
 import Ipe.Error as Error exposing (Error)
 
@@ -19,7 +19,7 @@ runMigration label sql =
         Err e ->
             let
                 _ =
-                    println
+                    Io.println
                         ("[SCHEMA ERROR] " ++ label ++ ": " ++ Error.toString e)
             in
                 ()

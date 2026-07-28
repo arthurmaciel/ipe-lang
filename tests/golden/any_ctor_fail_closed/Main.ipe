@@ -8,7 +8,7 @@ module Main exposing (main)
 -- Dict String String ≠ String → IPE-T0001.
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 type Msg
     = BroadcastMsg any
@@ -22,4 +22,4 @@ handleMsg msg =
         Ignored              -> 0
 
 main =
-    println (String.fromInt (handleMsg Ignored))
+    Io.println (String.fromInt (handleMsg Ignored))

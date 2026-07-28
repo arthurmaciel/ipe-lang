@@ -2,7 +2,7 @@ module Main exposing (main)
 
 import Ipe.Json.Decode as JsonDec exposing (Decoder)
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 addN : Int -> Int -> Int
@@ -40,7 +40,7 @@ main =
         r1 = JsonDec.decodeString appliedDecoder j
         r2 = JsonDec.decodeString appliedViaAndThen j
     in
-    println
+    Io.println
         (String.fromInt (Result.withDefault 0 r1)
             ++ " "
             ++ String.fromInt (Result.withDefault 0 r2)

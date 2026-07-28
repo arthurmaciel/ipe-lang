@@ -2,6 +2,7 @@ module Main exposing (main)
 import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.String as String
+import Ipe.Io as Io
 
 -- A2 (#147 seal). `Tagged : String -> Int -> Item` (arity 2).
 -- `Tagged "item"` partially applies one arg, returning `Int -> Item`.
@@ -18,4 +19,4 @@ showItem i =
 main =
     let tag = Tagged "item" in
     let items = List.map tag [10, 20, 30] in
-    println (String.join ", " (List.map showItem items))
+    Io.println (String.join ", " (List.map showItem items))

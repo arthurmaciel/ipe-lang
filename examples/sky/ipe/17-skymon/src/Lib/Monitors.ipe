@@ -9,7 +9,7 @@ import Ipe.Http as Http
 import Ipe.Task as Task
 import Ipe.Crypto as Crypto
 import Ipe.Db as Db
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Lib.Database as Database
 import Ipe.Error as Error exposing (Error(..), ErrorKind(..))
 
@@ -70,7 +70,7 @@ checkEndpoint url =
             let
                 typedErr = e
                 _ =
-                    println
+                    Io.println
                         ("[MONITOR ERROR] checkEndpoint " ++ url ++ ": "
                             ++ Error.toString typedErr)
             in

@@ -1,9 +1,10 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 main =
     let
         p = { x = 1, y = 2 }
         q = { p | x = 41 }
     in
-    println (String.fromInt (q.x + p.y))
+    Io.println (String.fromInt (q.x + p.y))

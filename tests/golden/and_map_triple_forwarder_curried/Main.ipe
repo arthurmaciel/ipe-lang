@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 -- #90 T3: TRIPLE forwarder — the escape chain is arbitrarily deep; the
 -- fail-closed arm rejects at the FIRST hop (`am1` inside `am2`), so depth
@@ -24,5 +24,5 @@ add3 a b c =
 
 main =
     case am3 (Ok 1) (Ok add3) of
-        Ok _ -> println "ok"
-        Err _ -> println "err"
+        Ok _ -> Io.println "ok"
+        Err _ -> Io.println "err"

@@ -3,7 +3,7 @@ module Main exposing (main)
 import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
 import Ipe.Crypto as Crypto
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- #225 leanness (efficiency, ADR-0002): a param captured ONCE into a SINGLE
@@ -27,4 +27,4 @@ report msg =
 
 main : Task Error ()
 main =
-    Task.andThen (\s -> println s) (report "hello")
+    Task.andThen (\s -> Io.println s) (report "hello")

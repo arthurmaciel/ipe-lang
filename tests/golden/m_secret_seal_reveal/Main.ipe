@@ -1,11 +1,12 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- backlog #44 golden: `Secret.fromString` is the seal; `Secret.reveal` is the
 -- single greppable un-parse; `Secret.redacted` is the explicit "<redacted>"
 -- accessor. Plaintext-grep-guard (see `golden_secret.rs`): the marker
 -- "sk_live_zx9K3_MARKER" appears in THIS SOURCE exactly once (sealed right
 -- here) and the compiled binary's stdout is asserted to contain it exactly
--- once too (from the deliberate `Secret.reveal` println below) — proving
+-- once too (from the deliberate `Secret.reveal` Io.println below) — proving
 -- `Secret.redacted` never echoes it.
 
 secretVal =
@@ -13,6 +14,6 @@ secretVal =
 
 main =
     let
-        _ = println (Secret.redacted secretVal)
+        _ = Io.println (Secret.redacted secretVal)
     in
-    println (Secret.reveal secretVal)
+    Io.println (Secret.reveal secretVal)

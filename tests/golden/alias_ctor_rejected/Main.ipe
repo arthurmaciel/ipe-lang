@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 type Wrap
     = Wrap (Maybe Int)
@@ -20,4 +20,4 @@ describe w =
             "none"
 
 main =
-    println (describe (Wrap (Just 1)))
+    Io.println (describe (Wrap (Just 1)))

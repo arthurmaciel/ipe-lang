@@ -1,6 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- Proof-matrix row P8: the first-class accessor `.name` used as a value.
@@ -20,4 +20,4 @@ people =
 
 
 main =
-    println (String.join ", " (List.map .name people))
+    Io.println (String.join ", " (List.map .name people))

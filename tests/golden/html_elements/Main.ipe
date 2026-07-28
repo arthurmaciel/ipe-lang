@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
+import Ipe.Io as Io
 
 
 -- #76 batch 2: Ipe.Html ELEMENT family end-to-end golden. Proves the tag-as-data
@@ -13,7 +14,7 @@ import Ipe.Html.Attributes exposing (..)
 
 
 main =
-    println
+    Io.println
         (render
             (section
                 [ class "wrap" ]

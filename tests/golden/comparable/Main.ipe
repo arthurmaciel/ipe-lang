@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 maxOf : a -> a -> a
 maxOf p q = if p > q then p else q
@@ -9,4 +10,4 @@ main =
         bigChar = maxOf 'a' 'z'
         bonus = if bigChar > 'y' then bigInt else 0
     in
-    println (String.fromInt bonus)
+    Io.println (String.fromInt bonus)

@@ -1,9 +1,10 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- The unit value `()` as a function argument; `useUnit` ignores it.
 useUnit : () -> Int
 useUnit u = 7
 
 main =
-    println (String.fromInt (useUnit ()))
+    Io.println (String.fromInt (useUnit ()))

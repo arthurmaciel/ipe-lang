@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- IPE-L0105 by-VALUE alias binding — the partial-move (E0382) seal.
 --
@@ -49,7 +50,7 @@ nestedPos (h, ((c, d) as inner)) =
     String.append (String.append h c) (String.append d (String.append e f))
 
 main =
-    println
+    Io.println
         (String.append
             (String.append
                 (String.append (paramPos ( "p", "q" )) (casePos ( "r", "s" )))

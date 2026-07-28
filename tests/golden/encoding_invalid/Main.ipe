@@ -1,11 +1,12 @@
 module Main exposing (main)
 
 import Ipe.Encoding as Encoding
+import Ipe.Io as Io
 
 main =
     case Encoding.base64Decode "not-valid-base64!!" of
         Ok _ ->
-            println "ok"
+            Io.println "ok"
 
         Err _ ->
-            println "invalid"
+            Io.println "invalid"

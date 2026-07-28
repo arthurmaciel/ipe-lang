@@ -9,7 +9,7 @@
 //!
 //! ```text
 //! sumTree t = case t of Leaf -> 0 ; Node l n r -> sumTree l + n + sumTree r
-//! main = println (String.fromInt (sumTree (Node (Node Leaf 3 Leaf) 4 (Node Leaf 5 Leaf))))  -- 12
+//! main = Io.println (String.fromInt (sumTree (Node (Node Leaf 3 Leaf) 4 (Node Leaf 5 Leaf))))  -- 12
 //! ```
 //!
 //! Behavioural-parity oracle: the Go reference compiler at

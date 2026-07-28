@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- Uuid.v4 / Uuid.v7 are `() -> Task Error String` (entropy is an EFFECT,
 -- task #54): each call re-evaluates and draws fresh entropy, so they are
@@ -36,7 +37,7 @@ main =
 
                                                 versionOk7 = String.slice 14 15 verId7 == "7"
                                             in
-                                            println
+                                            Io.println
                                                 (if lenOk4 && versionOk4 && parseOk && lenOk7 && versionOk7 then
                                                     "ok"
 

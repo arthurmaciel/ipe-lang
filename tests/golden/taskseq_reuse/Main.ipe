@@ -2,7 +2,7 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- #193 taskseq/pipeline reuse: a CloneOk binding captured into a task_and_then
@@ -31,11 +31,11 @@ main =
     in
     Task.andThen
         (\result ->
-            println result
+            Io.println result
         )
         (Task.andThen
             (\_ ->
                 runQuery conn
             )
-            (println ("connecting to " ++ conn))
+            (Io.println ("connecting to " ++ conn))
         )

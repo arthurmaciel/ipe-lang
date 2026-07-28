@@ -35,7 +35,7 @@ import Ipe.String as String
 import Ipe.Json.Encode as JsonEnc
 import Ipe.Task as Task
 import Ipe.System as System
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Ipe.Error as Error exposing (Error(..), ErrorKind(..))
 import Rust.Firestore as Fs exposing (FirestoreDb)
 
@@ -106,7 +106,7 @@ withDb use =
 
 initDb _ =
     let
-        _ = println "[DB] firestore client configured (shim-free auto-FFI)"
+        _ = Io.println "[DB] firestore client configured (shim-free auto-FFI)"
     in
         ()
 
@@ -344,7 +344,7 @@ queryWhereOrLog label collection field op value =
 
         Err e ->
             let
-                _ = println ("[DB ERROR] " ++ label ++ ": " ++ Error.toString e)
+                _ = Io.println ("[DB ERROR] " ++ label ++ ": " ++ Error.toString e)
             in
                 []
 
@@ -356,7 +356,7 @@ queryWhereOrderOrLog label collection field op value orderField dir =
 
         Err e ->
             let
-                _ = println ("[DB ERROR] " ++ label ++ ": " ++ Error.toString e)
+                _ = Io.println ("[DB ERROR] " ++ label ++ ": " ++ Error.toString e)
             in
                 []
 
@@ -368,6 +368,6 @@ queryDocsOrLog label collection =
 
         Err e ->
             let
-                _ = println ("[DB ERROR] " ++ label ++ ": " ++ Error.toString e)
+                _ = Io.println ("[DB ERROR] " ++ label ++ ": " ++ Error.toString e)
             in
                 []

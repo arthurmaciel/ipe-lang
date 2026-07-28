@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Error as Error
+import Ipe.Io as Io
 
 -- #86: the `Error` module qualifier. `Error.unexpected` builds a message-
 -- carrying Error (String-backed in this minimal slice); `Task.fail` raises it on
@@ -11,4 +12,4 @@ import Ipe.Error as Error
 -- kind-prefixed rendering (`Unexpected: boom`) awaits the rich `ErrorKind` ADT
 -- (#85) — hence this golden is marked `oracle_divergence`.
 main =
-    Task.onError (\e -> println (Error.toString e)) (Task.fail (Error.unexpected "boom"))
+    Task.onError (\e -> Io.println (Error.toString e)) (Task.fail (Error.unexpected "boom"))

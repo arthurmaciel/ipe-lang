@@ -24,7 +24,7 @@ const GOLDEN_CARGO: &str = include_str!("../../../../../tests/golden/basics/Carg
 ///     case msg of
 ///         Increment -> count + 1
 ///         Decrement -> count - 1
-/// main = println (String.fromInt (update Increment 0))
+/// main = Io.println (String.fromInt (update Increment 0))
 /// ```
 #[allow(clippy::too_many_lines)]
 fn build_m0(interner: &mut Interner) -> DResult<Program> {
@@ -100,7 +100,7 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),
         body: Expr::Call {
-            callee: Callee::Kernel(KernelFn::LogPrintln),
+            callee: Callee::Kernel(KernelFn::IoPrintln),
             args: vec![Expr::Call {
                 callee: Callee::Kernel(KernelFn::StringFromInt),
                 args: vec![Expr::Call {
@@ -157,6 +157,7 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
             uses_websocket: false,
             uses_email: false,
             uses_env_public: false,
+            uses_debug: false,
             uses_ffi: false,
         }],
     })
@@ -221,7 +222,7 @@ fn build_no_user_items(interner: &mut Interner) -> DResult<Program> {
     let main = interner.intern("main")?;
     let main_id = FuncId::from_raw(0);
 
-    // `main = println "hi"` — no user types, and the single `main` function's
+    // `main = Io.println "hi"` — no user types, and the single `main` function's
     // body is a kernel call, so no user-defined helper functions are emitted.
     let main_fn = Func {
         id: main_id,
@@ -231,7 +232,7 @@ fn build_no_user_items(interner: &mut Interner) -> DResult<Program> {
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),
         body: Expr::Call {
-            callee: Callee::Kernel(KernelFn::LogPrintln),
+            callee: Callee::Kernel(KernelFn::IoPrintln),
             args: vec![Expr::Str("hi".to_owned())],
             pin: CallPin::None,
             on_form: OnFormKind::NotForm,
@@ -256,6 +257,7 @@ fn build_no_user_items(interner: &mut Interner) -> DResult<Program> {
             uses_websocket: false,
             uses_email: false,
             uses_env_public: false,
+            uses_debug: false,
             uses_ffi: false,
         }],
     })

@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- Boolean literal patterns: a `True` + `False` pair is a closed, exhaustive
 -- cover of `Bool` (no wildcard required).
@@ -10,4 +11,4 @@ toInt b =
         False -> 0
 
 main =
-    println (String.fromInt (toInt (0 == 0)))
+    Io.println (String.fromInt (toInt (0 == 0)))

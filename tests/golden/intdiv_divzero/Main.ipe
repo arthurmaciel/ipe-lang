@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- m2lex negative gate: integer division by zero through `//`. The divisor flows
 -- in as a function parameter so it is opaque at the division site (a literal
@@ -12,4 +13,4 @@ divBy d =
     10 // d
 
 main =
-    println (String.fromInt (divBy 0))
+    Io.println (String.fromInt (divBy 0))

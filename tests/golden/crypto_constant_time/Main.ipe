@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- constantTimeEqual : constant-time byte comparison.
 -- "abc" == "abc" → True ; "abc" == "abd" → False
@@ -19,4 +20,4 @@ main =
             else
                 "false"
     in
-    println (String.join " " [ a, b ])
+    Io.println (String.join " " [ a, b ])

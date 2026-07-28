@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 wrap : a -> { value : a }
 wrap x = { value = x }
@@ -10,4 +11,4 @@ unwrap r = r.value
 main =
     let n = unwrap (wrap 40) in
     let flag = unwrap (wrap (1 == 1)) in
-    println (String.fromInt (if flag then n + 2 else n))
+    Io.println (String.fromInt (if flag then n + 2 else n))

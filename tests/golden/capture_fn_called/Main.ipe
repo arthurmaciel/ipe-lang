@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- F5 (#121 seal) — CONTROL. A lambda captures a function-typed local in
 -- CALLEE position (it calls `f`, not forwards it).
@@ -19,4 +20,4 @@ main =
     let f = add 1 in
     let result = List.map (\x -> f x) xs in
     let strs = List.map String.fromInt result in
-    println (String.join ", " strs)
+    Io.println (String.join ", " strs)

@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- Value-param double-use (#49): the jump's new `a` is `a + b` and its new `b` is
 -- the OLD `a` — both jump args read the current `a`. The temporaries-first
@@ -18,4 +19,4 @@ go n a b =
 
 
 main =
-    println (String.fromInt (go 5 1 0))
+    Io.println (String.fromInt (go 5 1 0))

@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- An `as` alias binds the whole matched value alongside its inner pattern, and
 -- a trailing variable is an irrefutable catch-all.
@@ -10,4 +11,4 @@ f n =
         (m as k) -> k + m
 
 main =
-    println (String.fromInt (f 7))
+    Io.println (String.fromInt (f 7))

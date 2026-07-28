@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 toStr : List Int -> String
@@ -47,7 +47,7 @@ main =
         emptyF =
             List.isEmpty [ 1 ]
     in
-    println
+    Io.println
         (toStr a
             ++ " "
             ++ toStr c

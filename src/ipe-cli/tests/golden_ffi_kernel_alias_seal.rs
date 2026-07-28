@@ -50,11 +50,11 @@ fn unknown_kernel_alias_is_rejected_at_compile_time() {
         &tmp,
         "module Main exposing (main)\n\
          import Ipe.Prelude exposing (..)\n\
-         import Ipe.Log exposing (println)\n\n\
+         import Ipe.Io as Io\n\n\
          bogus : String -> String\n\
          bogus =\n\
          \x20   Ffi.kernel \"NoSuchKernel_xyz\"\n\n\
-         main = println (bogus \"x\")\n",
+         main = Io.println (bogus \"x\")\n",
     );
     assert!(wrote, "must write the fixture project to a temp dir");
 
@@ -109,11 +109,11 @@ fn malformed_kernel_alias_string_is_rejected() {
         &tmp,
         "module Main exposing (main)\n\
          import Ipe.Prelude exposing (..)\n\
-         import Ipe.Log exposing (println)\n\n\
+         import Ipe.Io as Io\n\n\
          bogus : String -> String\n\
          bogus =\n\
          \x20   Ffi.kernel \"NoUnderscoreHere\"\n\n\
-         main = println (bogus \"x\")\n",
+         main = Io.println (bogus \"x\")\n",
     );
     assert!(wrote, "must write the fixture project to a temp dir");
 
@@ -151,11 +151,11 @@ fn registered_kernel_alias_resolves_and_builds() {
         &tmp,
         "module Main exposing (main)\n\
          import Ipe.Prelude exposing (..)\n\
-         import Ipe.Log exposing (println)\n\n\
+         import Ipe.Io as Io\n\n\
          shout : String -> String\n\
          shout =\n\
          \x20   Ffi.kernel \"String_toUpper\"\n\n\
-         main = println (shout \"hi\")\n",
+         main = Io.println (shout \"hi\")\n",
     );
     assert!(wrote, "must write the fixture project to a temp dir");
 

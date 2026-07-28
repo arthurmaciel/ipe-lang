@@ -3,6 +3,7 @@ module Main exposing (main)
 import Ipe.Html as Html
 import Ipe.Ui as Ui
 import Ipe.Ui.Input as Input
+import Ipe.Io as Io
 
 
 -- i148 regression: Input.slider must type-check and lower without IPE-N0005.
@@ -27,4 +28,4 @@ view vol =
 
 
 main =
-    println (view 42)
+    Io.println (view 42)

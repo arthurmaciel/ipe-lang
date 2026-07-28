@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 -- #90 T3 green twin: `Result.map` with an exact-arity-1 callback must stay
 -- accepted — the obligation binds only the callback's final result.
@@ -11,5 +11,5 @@ inc n =
 
 main =
     case Result.map inc (Ok 41) of
-        Ok n -> println (String.fromInt n)
-        Err _ -> println "err"
+        Ok n -> Io.println (String.fromInt n)
+        Err _ -> Io.println "err"

@@ -7,7 +7,7 @@
 //! ```text
 //! wrap n = { value = n }
 //! r = { value = 1 }
-//! main = println (String.fromInt ((wrap 41).value + (r).value))  -- 42
+//! main = Io.println (String.fromInt ((wrap 41).value + (r).value))  -- 42
 //! ```
 //!
 //! `(wrap 41).value` covers field access on a *call* result; `(r).value` covers

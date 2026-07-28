@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 type alias Person =
     { name : String, age : Int }
@@ -25,4 +25,4 @@ f r =
 
 
 main =
-    println (f (Ok (Just { name = "Ada", age = 30 })))
+    Io.println (f (Ok (Just { name = "Ada", age = 30 })))

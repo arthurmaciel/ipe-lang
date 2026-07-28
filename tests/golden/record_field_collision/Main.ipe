@@ -2,7 +2,8 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Ipe.String as String
-import Ipe.Log as Log exposing (println)
+import Ipe.Log as Log
+import Ipe.Io as Io
 
 
 type alias RecCount =
@@ -16,7 +17,7 @@ fieldOf r =
 
 -- AUD-04 witness 2 (record-field-name corruption — the "seal breach" case).
 --
--- `count` is captured free in `rest` (`println (String.fromInt count)`) and
+-- `count` is captured free in `rest` (`Io.println (String.fromInt count)`) and
 -- the auto-forced `effect` constructs a record LITERAL whose field is named
 -- `count` too — same identifier text, unrelated binding.
 --
@@ -32,4 +33,4 @@ fieldOf r =
 main =
     let count = 3 in
     let _ = Log.info (String.fromInt (fieldOf { count = 99 })) in
-    println (String.fromInt count)
+    Io.println (String.fromInt count)

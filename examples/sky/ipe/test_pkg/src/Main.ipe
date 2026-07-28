@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 main =
@@ -9,4 +9,4 @@ main =
         list = [ 1, 2, 3 ]
         _ = list
     in
-        println "List ready"
+        Io.println "List ready"

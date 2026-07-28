@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- R3: plain value `JsonDec.succeed 42`.
 -- Exercises Fix A case 3 (factory-wrap for plain value).
@@ -12,5 +13,5 @@ main =
                 "{}"
     in
     case r1 of
-        Ok n -> println (String.fromInt n)
-        Err _ -> println "err1"
+        Ok n -> Io.println (String.fromInt n)
+        Err _ -> Io.println "err1"

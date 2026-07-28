@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- JWT HS256: encode with a fixed 32-byte key and claims, then decode.
 -- Two separate bindings for the secret avoid double-move of the String.
@@ -24,4 +25,4 @@ main =
                         Ok _ ->
                             "ok"
     in
-    println result
+    Io.println result

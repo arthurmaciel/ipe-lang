@@ -7,7 +7,7 @@ import Ipe.List as List
 import Ipe.String as String
 import Ipe.Http.Server as Server
 import Ipe.Http.Server exposing (Request, Response)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Lib.Db as Db
 import Lib.Auth as Auth
 import Lib.Notes as Notes
@@ -27,7 +27,7 @@ runInit label result =
         Err e ->
             let
                 _ =
-                    println
+                    Io.println
                         ("[NOTES ERROR] initDb " ++ label ++ ": "
                             ++ Error.toString e)
             in
@@ -101,7 +101,7 @@ requireAuth req onUser =
                 Err e ->
                     let
                         _ =
-                            println
+                            Io.println
                                 ("[NOTES ERROR] session lookup: "
                                     ++ Error.toString e)
                     in
@@ -165,7 +165,7 @@ handleSignIn req =
                             Err e ->
                                 let
                                     _ =
-                                        println
+                                        Io.println
                                             ("[NOTES ERROR] sign-in createSession: "
                                                 ++ Error.toString e)
                                     userMsg =
@@ -177,7 +177,7 @@ handleSignIn req =
                 Err e ->
                     let
                         _ =
-                            println
+                            Io.println
                                 ("[NOTES ERROR] sign-in: " ++ Error.toString e)
                         userMsg =
                             case e of
@@ -226,7 +226,7 @@ handleSignUp req =
                     Err e ->
                         let
                             _ =
-                                println
+                                Io.println
                                     ("[NOTES ERROR] sign-up: "
                                         ++ Error.toString e)
                             userMsg = Error.toString e
@@ -244,7 +244,7 @@ handleForgotPassword req =
             email = Server.formValue "email" req
             resetToken = Auth.generateToken ()
             _ =
-                println
+                Io.println
                     ("[Email Service] Password reset for: " ++ email ++ " "
                         ++ resetToken)
         in
@@ -275,7 +275,7 @@ handleVerify req =
                 Err e ->
                     let
                         _ =
-                            println
+                            Io.println
                                 ("[NOTES ERROR] verify: " ++ Error.toString e)
                     in
                         Task.succeed
@@ -298,7 +298,7 @@ handleSignOut req =
                 Err e ->
                     let
                         _ =
-                            println
+                            Io.println
                                 ("[NOTES ERROR] sign-out: " ++ Error.toString e)
                     in
                         ()
@@ -331,7 +331,7 @@ handleNotesList req =
                         Err e ->
                             let
                                 _ =
-                                    println
+                                    Io.println
                                         ("[NOTES ERROR] list: "
                                             ++ Error.toString e)
                             in
@@ -363,7 +363,7 @@ handleNewNote req =
                                 Err e ->
                                     let
                                         _ =
-                                            println
+                                            Io.println
                                                 ("[NOTES ERROR] createNote: "
                                                     ++ Error.toString e)
                                     in
@@ -398,7 +398,7 @@ handleViewNote req =
                         Err e ->
                             let
                                 _ =
-                                    println
+                                    Io.println
                                         ("[NOTES ERROR] getNote: "
                                             ++ Error.toString e)
                             in
@@ -433,7 +433,7 @@ handleEditNote req =
                                 Err e ->
                                     let
                                         _ =
-                                            println
+                                            Io.println
                                                 ("[NOTES ERROR] updateNote: "
                                                     ++ Error.toString e)
                                     in
@@ -464,7 +464,7 @@ handleEditNote req =
                             Err e ->
                                 let
                                     _ =
-                                        println
+                                        Io.println
                                             ("[NOTES ERROR] getNote (edit): "
                                                 ++ Error.toString e)
                                 in
@@ -493,7 +493,7 @@ handleDeleteNote req =
                         Err e ->
                             let
                                 _ =
-                                    println
+                                    Io.println
                                         ("[NOTES ERROR] deleteNote: "
                                             ++ Error.toString e)
                             in
@@ -509,12 +509,12 @@ handleDeleteNote req =
 main =
     let
         _ = initDb ()
-        _ = println ""
-        _ = println "==========================================="
-        _ = println " SkyNotes server running"
-        _ = println " http://localhost:8000"
-        _ = println "==========================================="
-        _ = println ""
+        _ = Io.println ""
+        _ = Io.println "==========================================="
+        _ = Io.println " SkyNotes server running"
+        _ = Io.println " http://localhost:8000"
+        _ = Io.println "==========================================="
+        _ = Io.println ""
     in
         Server.listen
             8000

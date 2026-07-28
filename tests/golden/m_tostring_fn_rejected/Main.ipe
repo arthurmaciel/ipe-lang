@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 addOne : Int -> Int
@@ -10,4 +10,4 @@ addOne x =
 
 
 main =
-    println (toString addOne)
+    Io.println (toString addOne)

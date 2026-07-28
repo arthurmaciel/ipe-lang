@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Set as Set
+import Ipe.Io as Io
 
 main =
-    println (if Set.member 3 (Set.fromList [1, 2, 3]) then "True" else "False")
+    Io.println (if Set.member 3 (Set.fromList [1, 2, 3]) then "True" else "False")

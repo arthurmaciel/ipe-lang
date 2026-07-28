@@ -1,9 +1,10 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- POSITIVE CONTROL (AUD-12): x has only a Number obligation (no Append).
 -- Must still default to Int after the fix.
 f x = x + 1
 
 main =
-    println (String.fromInt (f 5))
+    Io.println (String.fromInt (f 5))

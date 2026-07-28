@@ -16,7 +16,7 @@ module Main exposing (main)
 --     — every fixed field of the three nominal types is read somewhere.
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 describePanic : PanicInfo -> String
@@ -61,9 +61,9 @@ main =
             Error.withDetails (Custom "custom detail") base
 
         _ =
-            println (describe base)
+            Io.println (describe base)
 
         _ =
-            println (describe withCustom)
+            Io.println (describe withCustom)
     in
-    println "done"
+    Io.println "done"

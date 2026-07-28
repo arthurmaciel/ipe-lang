@@ -32,7 +32,7 @@
 //!   `cmd_none` infers `msg` from a sibling in the batch.
 //! * `sub_ctors` — `Sub.every 1000 0` and `Sub.batch [Sub.none, Sub.every
 //!   500 1]` discarded; proves `sub_none` infers `msg` from a sibling.
-//! * `gate_undetermined_msg` — `let _ = Cmd.none in println "ok"` must
+//! * `gate_undetermined_msg` — `let _ = Cmd.none in Io.println "ok"` must
 //!   surface IPE-L0102 (free `msg` type variable), never emit cargo-failing Rust.
 //!
 //! Run:
@@ -83,7 +83,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
 
 // ── Cmd.perform construct-only ────────────────────────────────────────────────
 
-/// `let _ = Cmd.perform (Task.succeed 1) (\_ -> 0) in println "ok"`.
+/// `let _ = Cmd.perform (Task.succeed 1) (\_ -> 0) in Io.println "ok"`.
 /// Constructs a `IpeCmd<i64>` thunk and discards it; confirms `cmd_perform`
 /// wiring through type-checker, lowerer, emitter, and runtime link.
 /// Output: `"ok"`.
@@ -142,7 +142,7 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code)
     );
 }
 
-/// `let _ = Cmd.none in println "ok"` — `Cmd.none` appears in isolation with
+/// `let _ = Cmd.none in Io.println "ok"` — `Cmd.none` appears in isolation with
 /// no sibling to pin its `msg` type.  The HM solver leaves `msg` as a free
 /// type variable; ipe must exit 1 with IPE-L0102, never emit Rust that
 /// `cargo build` rejects with E0282 ("type annotations needed for

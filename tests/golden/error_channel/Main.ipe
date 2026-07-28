@@ -1,16 +1,17 @@
 module Main exposing (main)
 
 import Ipe.Error as Error
+import Ipe.Io as Io
 
 -- Task.fail creates a failed task; Task.onError recovers it with a handler.
--- The lambda `\e -> println "recovered"` names the error parameter `e` but
+-- The lambda `\e -> Io.println "recovered"` names the error parameter `e` but
 -- ignores it; `e` is typed `Error` by the kernel's fixed handler signature —
 -- the pin that resolved the IPE-L0102 free-variable bug.  Previously this
--- golden used `Task.onError println` to pin `e : String` as a workaround;
--- with the handler-parameter now anchored to `Error`, passing `println`
+-- golden used `Task.onError Io.println` to pin `e : String` as a workaround;
+-- with the handler-parameter now anchored to `Error`, passing `Io.println`
 -- (String -> Task ()) as the handler would cause a String/Error mismatch, so
 -- we use a lambda instead.  `Task.fail` itself is pinned to `Error -> Task
 -- Error a` (the class-7 db_transaction/error-channel fix), hence the
 -- `Error.unexpected` wrap below rather than a bare string literal.
 main =
-    Task.onError (\e -> println "recovered") (Task.fail (Error.unexpected "an error"))
+    Task.onError (\e -> Io.println "recovered") (Task.fail (Error.unexpected "an error"))

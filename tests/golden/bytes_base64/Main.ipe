@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Bytes as Bytes
+import Ipe.Io as Io
 
 fromBase64OrEmpty : String -> Bytes
 fromBase64OrEmpty s =
@@ -19,4 +20,4 @@ main =
 
         binary = Bytes.toBase64 (fromBase64OrEmpty "nv4=")
     in
-    println (String.join " " [ b64, roundtrip, binary ])
+    Io.println (String.join " " [ b64, roundtrip, binary ])

@@ -4,6 +4,7 @@ module Main exposing (main)
 -- Stable sort by a key projection. Preserves insertion order for equal keys.
 
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 type alias Person =
     { name : String, age : Int }
@@ -18,4 +19,4 @@ main =
         sorted = List.sortBy (\p -> p.age) people
         names = List.map (\p -> p.name) sorted
     in
-    println (String.join "," names)
+    Io.println (String.join "," names)

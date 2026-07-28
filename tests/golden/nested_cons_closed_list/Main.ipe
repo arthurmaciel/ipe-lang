@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 -- #158 Class-4 item C: a CLOSED list literal nested in a constructor payload
 -- (`Just [a, b]`). Lowers to an EXACT-length guard (`.len() == 2`) plus indexed
@@ -18,4 +18,4 @@ f m =
 
 
 main =
-    println (String.fromInt (f (Just [ 10, 20 ])))
+    Io.println (String.fromInt (f (Just [ 10, 20 ])))

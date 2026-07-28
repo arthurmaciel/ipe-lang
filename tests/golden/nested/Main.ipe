@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- A nested TUPLE pattern inside a constructor payload: `Wrap (a, c)`.
 type Box a = Wrap a | Empty
@@ -36,4 +37,4 @@ letParts =
 
 -- 3 + 5 + 42 + 33 = 83, the same value the Go reference compiler prints.
 main =
-    println (String.fromInt (boxSum (Wrap (1, 2)) + label (Node Leaf 5 Leaf) + recSum { x = 20, y = 22 } + letParts))
+    Io.println (String.fromInt (boxSum (Wrap (1, 2)) + label (Node Leaf 5 Leaf) + recSum { x = 20, y = 22 } + letParts))

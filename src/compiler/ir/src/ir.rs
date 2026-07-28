@@ -160,6 +160,13 @@ pub struct Module {
     /// and append `pub mod env_public; pub use env_public::*;` to the
     /// emitted `ipe_runtime/mod.rs`.
     pub uses_env_public: bool,
+    /// `true` when the lowerer detected at least one development-only
+    /// `Debug.*` escape-hatch call (`Debug.log`) in the module's function
+    /// bodies. Set unconditionally (regardless of build profile) at the same
+    /// choke point as the other `uses_*` flags; a PRODUCTION build
+    /// (`ipe build --optimize`) reads it at emit demand to reject the program
+    /// (IPE-L0140), while a development build ignores it.
+    pub uses_debug: bool,
     /// `true` when the lowerer lowered at least one [`Callee::Ffi`] call —
     /// a foreign-crate wrapper forwarder from a driver-generated FFI
     /// interface module. The backend reads this flag to declare `mod ffi;`
@@ -3421,7 +3428,7 @@ mod tests {
             params: vec![],
             ret: IrType::Task(Box::new(IrType::Unit)),
             body: Expr::Call {
-                callee: Callee::Kernel(KernelFn::LogPrintln),
+                callee: Callee::Kernel(KernelFn::IoPrintln),
                 args: vec![Expr::Call {
                     callee: Callee::Kernel(KernelFn::StringFromInt),
                     args: vec![Expr::Int(1)],
@@ -3464,6 +3471,7 @@ mod tests {
                 uses_websocket: false,
                 uses_email: false,
                 uses_env_public: false,
+                uses_debug: false,
                 uses_ffi: false,
             }],
         };
@@ -3959,6 +3967,7 @@ mod serde_persistence_tests {
                 uses_websocket: false,
                 uses_email: false,
                 uses_env_public: false,
+                uses_debug: false,
                 uses_ffi: false,
             }],
         })
@@ -4007,7 +4016,7 @@ mod serde_persistence_tests {
                     params: vec![],
                     ret: IrType::Unit,
                     body: Expr::Call {
-                        callee: Callee::Kernel(KernelFn::LogPrintln),
+                        callee: Callee::Kernel(KernelFn::IoPrintln),
                         args: vec![],
                         pin: CallPin::None,
                         on_form: OnFormKind::NotForm,
@@ -4026,6 +4035,7 @@ mod serde_persistence_tests {
                 uses_websocket: false,
                 uses_email: false,
                 uses_env_public: false,
+                uses_debug: false,
                 uses_ffi: false,
             }],
         };
@@ -4033,7 +4043,7 @@ mod serde_persistence_tests {
             let _guard = SerdeInternerGuard::install(Arc::clone(&interner));
             serde_json::to_string(&program).expect("serialize must succeed")
         };
-        let tampered = json.replace("\"LogPrintln\"", "\"NotARealKernelVariant\"");
+        let tampered = json.replace("\"IoPrintln\"", "\"NotARealKernelVariant\"");
         let _guard = SerdeInternerGuard::install(Arc::clone(&interner));
         let result: Result<Program, _> = serde_json::from_str(&tampered);
         assert!(

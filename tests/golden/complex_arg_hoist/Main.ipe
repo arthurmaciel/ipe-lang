@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- c13 (#130 seal). Partial application where the SUPPLIED ARG is a complex
 -- expression (not a bare Var), and the resulting partial is called twice.
@@ -25,4 +26,4 @@ main =
     let f = mk (String.append base suffix) in
     let r1 = f "!" in
     let r2 = f "?" in
-    println (r1 ++ " " ++ r2)
+    Io.println (r1 ++ " " ++ r2)

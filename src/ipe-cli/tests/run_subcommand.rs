@@ -73,7 +73,7 @@ fn run_unknown_flag_returns_usage_error() {
 /// Unix `exec` replacement.  It is skipped unless `IPE_E2E=1` is set.
 #[test]
 fn run_subcommand_builds_and_executes_hello_program() {
-    const SRC: &str = "module Main exposing (main)\n\nmain = println \"hello from run\"\n";
+    const SRC: &str = "module Main exposing (main)\n\nmain = Io.println \"hello from run\"\n";
 
     if std::env::var("IPE_E2E").is_err() {
         return;

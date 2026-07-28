@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 
 -- #161 regression. `List.filter` / `List.any` called with a predicate that
@@ -39,7 +39,7 @@ main =
         noneAboveTen =
             List.any (isAbove 10) items
     in
-    println
+    Io.println
         (String.fromInt (List.length aboveThree)
             ++ (if anyAboveFive then "T" else "F")
             ++ (if noneAboveTen then "T" else "F")

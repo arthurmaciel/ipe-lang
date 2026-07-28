@@ -33,7 +33,7 @@ import Ipe.Ui.Grid as Grid
 
 
 main =
-    println
+    Io.println
         (Html.htmlRender
             (Ui.layout []
                 (Ui.column []

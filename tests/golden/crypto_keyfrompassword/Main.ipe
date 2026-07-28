@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Io as Io
 
 -- aesKeyFromPassword is deterministic: same password+salt → same key.
 -- Derive the key twice independently; encrypt with key1, decrypt with key2.
@@ -26,4 +27,4 @@ main =
                 Err _ ->
                     "encrypt-failed"
     in
-    println result
+    Io.println result

@@ -2981,6 +2981,26 @@ impl<'a> Builder<'a> {
                 }
                 return Ok(var);
             }
+            // `Debug.log : String -> a -> a` — the value `a` (shared by the
+            // argument and result, raw scheme-var 0) carries the STRINGIFY
+            // obligation (the runtime stringifies it through the same
+            // `IpeStringify` path as `Basics.toString`). Same `stdlib_scheme` +
+            // tie shape as `Log.*With`: tying the ONE super-var to both
+            // positions keeps `Debug.log Int 5` (concrete, satisfies `show`)
+            // accepted while a bare-function value fails closed — no spurious
+            // IPE-L0108 for a well-typed showable value.
+            if matches!(k, StdlibKernel::DebugLog) {
+                let ty = self.stdlib_scheme(k).ok_or(Diagnostic::Lower {
+                    span,
+                    msg: LowerError::Unsupported(Feature::Kernels),
+                })?;
+                let (var, vars) = self.instantiate_tracked(&ty)?;
+                if let Some(&value_var) = vars.get(&0) {
+                    let s = self.super_var(TyBounds::show(), span)?;
+                    self.eq(span, value_var, s);
+                }
+                return Ok(var);
+            }
             // `Web.app` — post-solve routed-Live check.
             //
             // The open-record cfg scheme for K::WebApp is shared by both routed
@@ -4302,7 +4322,6 @@ impl<'a> Builder<'a> {
             K::MathMin | K::MathMax => fun(var(0), fun(var(0), var(0))),
 
             // ── Log ──
-            K::LogPrintln => fun(string(), task_unit()),
             // info/debug/warn/error : String -> Task Error (). The
             // *With variants (List (String, a) attrs) are Stringify-bounded and
             // stay fail-closed until a Stringify obligation is added.
@@ -4574,12 +4593,21 @@ impl<'a> Builder<'a> {
             // ── Io / File / System: String -> Task () ──
             K::IoWriteStdout
             | K::IoWriteStderr
+            | K::IoPrintln
+            | K::IoEprintln
             | K::FileRemove
             | K::FileMkdirAll
             | K::FileDelete
             | K::SystemUnsetenv => fun(string(), task_unit()),
             // () -> Task String
             K::IoReadLine | K::SystemCwd => fun(Ty::Unit, task(string())),
+            // ── Debug (dev-only) ──
+            // `Debug.log : String -> a -> a`. BASE scheme only; the argument /
+            // result share `var(0)`, which carries the STRINGIFY obligation
+            // (`show`), tied in `constrain_var_kernel` (like `Log.*With`). A
+            // production build rejects any use before this scheme is reached
+            // (IPE-L0140, `reject_dev_only_kernels`).
+            K::DebugLog => fun(string(), fun(var(0), var(0))),
 
             // ── Time ──
             K::TimeNow | K::TimeUnixMillis => fun(Ty::Unit, task(int())),
@@ -7598,8 +7626,6 @@ mod registry_phase_c_tests {
     const RELOCATED: &[StdlibKernel] = {
         use StdlibKernel as K;
         &[
-            // Log (1)
-            K::LogPrintln,
             // String (2)
             K::StringFromInt,
             K::StringFromFloat,
@@ -8189,6 +8215,11 @@ mod registry_phase_c_tests {
             K::LogDebugWith,
             K::LogWarnWith,
             K::LogErrorWith,
+            // Io line-printers (Ipê-new — no legacy oracle).
+            K::IoPrintln,
+            K::IoEprintln,
+            // Debug.log (Ipê-new — dev-only; Stringify obligation on `a`).
+            K::DebugLog,
             // `Basics.clamp` — first-schemed hole; carries the `Comparable a`
             // (Ord) obligation, base scheme in `stdlib_scheme`.
             K::BasicsClamp,

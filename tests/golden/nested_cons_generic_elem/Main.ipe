@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 
 -- #158: a nested-cons payload whose element type flows through a GENERIC
 -- function parameter (`firstOr : b -> Maybe (List b) -> b`). The backend emits
@@ -18,4 +18,4 @@ firstOr dflt m =
 
 
 main =
-    println (String.fromInt (firstOr 0 (Just [ 1, 2 ])))
+    Io.println (String.fromInt (firstOr 0 (Just [ 1, 2 ])))

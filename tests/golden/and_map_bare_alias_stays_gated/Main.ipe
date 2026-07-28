@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
 
 -- #90 T3 residual gate, revert-incident Bug 3 regression (the shape that
 -- caused the THIRD revert): a BARE, POINT-FREE top-level re-export of
@@ -22,5 +23,5 @@ myAndMap = Result.andMap
 
 main =
     case myAndMap (Ok 1) (Ok add3) of
-        Ok _ -> println "ok"
-        Err _ -> println "err"
+        Ok _ -> Io.println "ok"
+        Err _ -> Io.println "err"

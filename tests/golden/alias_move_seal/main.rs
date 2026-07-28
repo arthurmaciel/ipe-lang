@@ -58,9 +58,6 @@ pub fn log_warn(msg: String) -> IpeTask<()> {
 pub fn log_error(msg: String) -> IpeTask<()> {
     ipe_runtime::log::log_error(msg)
 }
-pub fn log_println(msg: String) -> IpeTask<()> {
-    ipe_runtime::log::log_println(msg)
-}
 pub fn log_info_with<A: IpeStringify>(msg: String, attrs: Vec<A>) -> IpeTask<()> {
     ipe_runtime::log::log_info_with(msg, attrs)
 }
@@ -164,6 +161,12 @@ pub fn io_write_stdout(s: String) -> IpeTask<()> {
 }
 pub fn io_write_stderr(s: String) -> IpeTask<()> {
     ipe_runtime::io::io_write_stderr(s)
+}
+pub fn io_println(msg: String) -> IpeTask<()> {
+    ipe_runtime::io::io_println(msg)
+}
+pub fn io_eprintln(msg: String) -> IpeTask<()> {
+    ipe_runtime::io::io_eprintln(msg)
 }
 // ── System kernels (M5a) ───────────────────────────────────────────────────
 pub fn system_getenv(key: String) -> IpeTask<String> {
@@ -281,7 +284,7 @@ pub fn main_nested_pos(arg_1: (String, (String, String))) -> String {
     })
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_append(
+    io_println(string_append(
         string_append(
             string_append(
                 crate::main_param_pos(("p".to_string(), "q".to_string())),
