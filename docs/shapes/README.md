@@ -12,9 +12,9 @@ Four shapes follow [The Elm Architecture](https://guide.elm-lang.org/architectur
 |-------|-------------|------------|
 | [Web](web.md) | `Web.app` | Server-driven web apps — HTML over the wire, SSE patches, sessions, routing. |
 | [WebView](webview.md) | `WebView.app` | Native desktop apps rendering the same `Ipe.Ui` view in a system webview. |
-| [TUI](tui.md) | `Tui.program` | Terminal UIs driven by keystrokes. |
+| [TUI](tui.md) | `Tui.app` | Terminal UIs driven by keystrokes, rendering the same `Ipe.Ui` view. |
 | [Console](console.md) | `Console.app` | Line-oriented interactive tools — a managed stdin-driven TEA loop. |
 | [Program](program.md) | plain `main` | Scripts, one-shot tools, cron jobs, and HTTP servers — no TEA loop. |
 
-The two graphical shapes (Web, WebView) share the same `Ipe.Ui` view code, so
-one view renders on web and desktop.
+Web, WebView, and TUI (via `Tui.app`) share the same `Ipe.Ui` view code, so one
+`view : Model -> Element Msg` renders on web, desktop, and terminal.
