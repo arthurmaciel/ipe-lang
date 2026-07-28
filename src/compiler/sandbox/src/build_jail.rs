@@ -411,7 +411,7 @@ pub fn build_in_jail(
     // pre-spawn `FILE_PERSISTENT_ACLS` probe, a failed `CreateProcessW`) is a
     // `RunJailDefect` → `Unavailable`; the untrusted build never runs unconfined.
     match crate::run_jail::build_windows_jailed(profile, scoped_tmp, working_tree, payload) {
-        Ok(code) => JailOutcome::decode(win_exit_to_i32(code)),
+        Ok(code) => JailOutcome::decode(Some(win_exit_to_i32(code))),
         Err(defect) => JailOutcome::Unavailable { defect },
     }
 }
@@ -425,15 +425,15 @@ pub fn build_in_jail(
 /// saturates to a value that [`JailOutcome::decode`] treats as `BuildFailed`
 /// (fail-closed — never `Clean`, never a spurious named denial).
 #[cfg(any(target_os = "windows", test))]
-const fn win_exit_to_i32(code: u32) -> Option<i32> {
+const fn win_exit_to_i32(code: u32) -> i32 {
     // A reinterpreting cast would fold `0x8000_0000..` into negative codes that
     // could alias a legitimate signed value; instead clamp anything past
     // `i32::MAX` to `i32::MAX`, which decodes to `BuildFailed`.
     #[allow(clippy::cast_possible_wrap)]
     if code <= i32::MAX as u32 {
-        Some(code as i32)
+        code as i32
     } else {
-        Some(i32::MAX)
+        i32::MAX
     }
 }
 
@@ -776,11 +776,16 @@ mod freebsd_jail {
         // A withheld subprocess axis MUST be a genuine kernel denial of process
         // creation, not mere omission (ADR 0051). `rctl(8)` with
         // `jail:NAME:maxproc:deny=1` is the jail posture that denies `fork`/
-        // `pdfork`/`exec` of a new process at the kernel boundary. When the axis is
-        // withheld we require rctl; if it is unavailable we CANNOT deny process
-        // creation for this jail, so that is a refuse-gap (`Unavailable`), never a
-        // silent `Clean`. When subprocess is granted no such rule is added (the
-        // differential net/fs probes need to fork their helper).
+        // `pdfork`/`exec` of a new process at the kernel boundary: the rule is
+        // pre-registered by jail name and the kernel enforces it when the jail is
+        // created below (the documented rctl.conf pre-registration pattern). It
+        // requires the `racct`/`rctl` kernel facility; if that facility is off,
+        // `rctl -a` fails and this refuses (`Unavailable`) — a withheld-subprocess
+        // jail that cannot deny process creation is a refuse-gap, never a silent
+        // `Clean` that ran the build unconfined. When subprocess is GRANTED no such
+        // rule is added, so the differentially-probed net/fs canary (which grants
+        // subprocess so the probe can fork its python3/nc/rm helper) does not depend
+        // on rctl at all.
         let rctl = if profile.subprocess {
             None
         } else {
@@ -1382,22 +1387,25 @@ mod tests {
             AXIS_EXIT_FILESYSTEM,
         ] {
             let mapped = win_exit_to_i32(u32::try_from(code).expect("small code"));
-            assert_eq!(mapped, Some(code), "code {code} must round-trip");
+            assert_eq!(mapped, code, "code {code} must round-trip");
         }
     }
 
     #[test]
     fn windows_clean_exit_decodes_to_clean_and_only_clean() {
-        assert_eq!(JailOutcome::decode(win_exit_to_i32(0)), JailOutcome::Clean);
+        assert_eq!(
+            JailOutcome::decode(Some(win_exit_to_i32(0))),
+            JailOutcome::Clean
+        );
         // A network / filesystem denial names its axis after the u32 bridge.
         assert_eq!(
-            JailOutcome::decode(win_exit_to_i32(10)),
+            JailOutcome::decode(Some(win_exit_to_i32(10))),
             JailOutcome::Denied {
                 axis: CapabilityAxis::Network
             }
         );
         assert_eq!(
-            JailOutcome::decode(win_exit_to_i32(11)),
+            JailOutcome::decode(Some(win_exit_to_i32(11))),
             JailOutcome::Denied {
                 axis: CapabilityAxis::Filesystem
             }
@@ -1410,7 +1418,7 @@ mod tests {
         // never alias a per-axis code or the clean 0 — it saturates to a value that
         // decodes to BuildFailed. Fail-closed: ambiguity can never admit.
         for code in [0x8000_0000u32, 0xC000_0005u32, u32::MAX] {
-            let outcome = JailOutcome::decode(win_exit_to_i32(code));
+            let outcome = JailOutcome::decode(Some(win_exit_to_i32(code)));
             assert!(
                 matches!(outcome, JailOutcome::BuildFailed { .. }),
                 "high-bit exit {code:#x} must decode to BuildFailed, got {outcome:?}"
