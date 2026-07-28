@@ -12,7 +12,7 @@ module Main exposing (main)
 --
 -- ipec MUST exit 0 AND the emitted project MUST cargo-build.
 
-import Ipe.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 
 type Page

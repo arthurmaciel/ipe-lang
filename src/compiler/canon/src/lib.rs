@@ -2944,11 +2944,11 @@ mod tests {
 
     #[test]
     fn stdlib_exposing_brings_value_into_unqualified_scope() {
-        // `import Ipe.Web exposing (app, route)` → bare `app` resolves to the
+        // `import Ipe.Tea.Web exposing (app, route)` → bare `app` resolves to the
         // same `VarKernel { module: Web, name: app }` a `Web.app` reference
         // would. Previously this was `IPE-N0001` "app not found".
         let src = "module Main exposing (main)\n\
-                   import Ipe.Web exposing (app, route)\n\n\
+                   import Ipe.Tea.Web exposing (app, route)\n\n\
                    main = app\n";
         let Some((m, i)) = canon_src(src) else {
             assert!(false_marker(), "exposing (app, route) must canonicalise");
@@ -2977,7 +2977,7 @@ mod tests {
         // module surfaces `NameNotExposed`, never a dangling unqualified binding.
         let err = canon_err(
             "module Main exposing (main)\n\
-             import Ipe.Web exposing (bogusFn)\n\
+             import Ipe.Tea.Web exposing (bogusFn)\n\
              main = 0\n",
         );
         let Some(Diagnostic::Name {
@@ -2989,7 +2989,7 @@ mod tests {
             return;
         };
         assert_eq!(&**name, "bogusFn");
-        assert_eq!(&**module, "Ipe.Web");
+        assert_eq!(&**module, "Ipe.Tea.Web");
     }
 
     #[test]
@@ -2999,7 +2999,7 @@ mod tests {
         // rule that importing a name and defining it locally clash.
         let err = canon_err(
             "module Main exposing (main)\n\
-             import Ipe.Web exposing (app)\n\
+             import Ipe.Tea.Web exposing (app)\n\
              app = 1\n\
              main = 0\n",
         );
@@ -3216,7 +3216,7 @@ mod tests {
         // with a local `app` (`DuplicateValue`) — unlike a wildcard member.
         let err = canon_err(
             "module Main exposing (main)\n\
-             import Ipe.Web exposing (app)\n\
+             import Ipe.Tea.Web exposing (app)\n\
              app = 1\n\
              main = 0\n",
         );

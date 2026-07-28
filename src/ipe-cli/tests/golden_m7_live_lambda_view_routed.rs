@@ -28,7 +28,7 @@ use std::path::PathBuf;
 /// LAMBDA `view`. Plain-data Model, so the admissibility gate passes —
 /// isolating the routed-detection behaviour.
 const LIVE_LAMBDA_VIEW_ROUTED: &str = r#"module Main exposing (main)
-import Ipe.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 type Page = CounterPage | AboutPage
 type Msg = Increment

@@ -895,7 +895,129 @@ pub fn canonicalise_module_in_project(
     }
     exports.scope_aliases = scope_aliases;
 
+    // IPE-N0033 (ADR 0048): a Program importing any `Ipe.Tea.*` shape is a
+    // contradiction. Skip stdlib origins — the embedded `Ipe.Web.Head` /
+    // `Ipe.Web.Console` helpers are static and never import a shape, and only
+    // USER modules are subject to the Program/TEA distinction.
+    if origin == ModuleOrigin::User {
+        check_program_tea_import_gate(m, &canon_mod, interner)?;
+    }
+
     Ok((canon_mod, exports))
+}
+
+/// The TEA app-entry kernels, keyed `(canonical qualifier, entry name)`. A
+/// module whose `main` head-calls one of these is a TEA app; any other `main`
+/// (a plain `Task`) is a Program. Kept in lockstep with the app-entry rows of
+/// `env::QUALIFIERS` (`Web.app`/`appRouted`, `Tui.app`/`program`,
+/// `Console.app`, `WebView.app`).
+const TEA_APP_ENTRIES: &[(&str, &str)] = &[
+    ("Web", "app"),
+    ("Web", "appRouted"),
+    ("Tui", "app"),
+    ("Tui", "program"),
+    ("Console", "app"),
+    ("WebView", "app"),
+];
+
+/// IPE-N0033: reject a Program (plain-`main` module) that imports any
+/// `Ipe.Tea.*` shape module.
+///
+/// The rule is exactly ADR 0048's structural marker: importing anything under
+/// `Ipe.Tea.*` marks a module a TEA app. A module is a TEA app iff its `main`
+/// head-calls one of [`TEA_APP_ENTRIES`]; every other `main` is a Program. So a
+/// module that imports a `Ipe.Tea.*` shape but whose `main` is not a shape entry
+/// is a Program-importing-a-shape contradiction, reported at the offending
+/// import span. The `Ipe.Ui` / `Ipe.Html` / `Ipe.Css` data + static-render
+/// modules are deliberately top-level, so a Program that builds a `Ui` tree and
+/// renders it with a `Task` never trips this gate.
+///
+/// # Errors
+/// [`Diagnostic::Name`] (IPE-N0033) when a plain-`main` module imports a
+/// `Ipe.Tea.*` shape.
+fn check_program_tea_import_gate(
+    m: &src::Module,
+    canon_mod: &canon::Module,
+    interner: &Interner,
+) -> DResult<()> {
+    // A `Ipe.Tea.*` import: path length ≥ 3 with first two segments Ipe, Tea.
+    let Some(tea_ipe) = interner.lookup("Ipe").zip(interner.lookup("Tea")) else {
+        // Neither `Ipe` nor `Tea` interned in this build → no shape can be
+        // imported; nothing to gate.
+        return Ok(());
+    };
+    let (ipe_sym, tea_sym) = tea_ipe;
+    let tea_import = m.imports.iter().find(|imp| {
+        // `Ipe.Tea.<Shape>`: at least three segments whose first two are Ipe, Tea.
+        matches!(
+            imp.name.value.as_slice(),
+            [first, second, _, ..] if *first == ipe_sym && *second == tea_sym
+        )
+    });
+    let Some(tea_import) = tea_import else {
+        return Ok(());
+    };
+
+    // The module is a TEA app iff its `main` head-calls a shape entry.
+    let main_sym = interner.lookup("main");
+    let main_is_app_entry = main_sym.is_some_and(|main_sym| {
+        canon_mod
+            .defs
+            .iter()
+            .find(|d| d.name().value == main_sym)
+            .is_some_and(|d| {
+                let body = match d {
+                    canon::Def::Untyped { body, .. } | canon::Def::Typed { body, .. } => body,
+                };
+                main_head_is_tea_entry(body, interner)
+            })
+    });
+
+    if main_is_app_entry {
+        return Ok(());
+    }
+
+    Err(Diagnostic::Name {
+        span: tea_import.name.span,
+        msg: NameError::ProgramImportsTeaShape {
+            module: path_to_dot_string(interner, &tea_import.name.value),
+        },
+    })
+}
+
+/// Does this `main` body head-call a TEA shape entry ([`TEA_APP_ENTRIES`])?
+///
+/// Peels the forms a TEA `main` takes — an application `entry { … }`, a
+/// point-free `main = \… -> entry …` lambda, and a `let cfg = { … } in entry
+/// cfg` — down to the head expression, then checks whether it is a shape-entry
+/// `VarKernel`. Only the head matters: a Program's `main` never reduces to a
+/// shape-entry kernel at its head. Peeling `let` keeps a let-bound-config app
+/// classified as a TEA app so its malformed config reaches the precise
+/// `IPE-L0119` lowering diagnostic instead of the coarser IPE-N0033 gate.
+fn main_head_is_tea_entry(body: &canon::Expr, interner: &Interner) -> bool {
+    let mut node = body;
+    loop {
+        match &node.value {
+            // `entry { cfg }` / `entry a b` — the callee is the head.
+            canon::Expr_::Call(callee, _) => node = callee,
+            // `main = \req -> entry { cfg }` — the lambda body is the head.
+            canon::Expr_::Lambda(_, inner) => node = inner,
+            // `main = let cfg = { … } in entry cfg` — the `in` body is the head.
+            // A let-bound config is still a TEA-app entry (the head-called shape
+            // kernel is under the `in`), so a malformed one reaches its precise
+            // `IPE-L0119` lowering diagnostic rather than being misread as a
+            // Program under IPE-N0033.
+            canon::Expr_::Let(_, body) => node = body,
+            canon::Expr_::VarKernel { module, name, .. } => {
+                let (Some(m), Some(n)) = (interner.resolve(*module), interner.resolve(*name))
+                else {
+                    return false;
+                };
+                return TEA_APP_ENTRIES.contains(&(m, n));
+            }
+            _ => return false,
+        }
+    }
 }
 
 /// Register user import aliases for stdlib (`Ipê.*` / `Ipe.*`) modules.

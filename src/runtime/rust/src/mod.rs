@@ -323,7 +323,7 @@ pub mod ui;
 
 // Ipe.WebView — native desktop window backend (a TEA app, so gated on the async
 // runtime like `tea`). The cross-platform floor (a stub returning a graceful Err)
-// keeps `import Ipe.WebView` linking everywhere; the real wry/tao window backend
+// keeps `import Ipe.Tea.WebView` linking everywhere; the real wry/tao window backend
 // needs the system webview dev libs (staged behind the webview design doc).
 // Mirrors Go's webview_stub.go.
 #[cfg(feature = "tokio")]
