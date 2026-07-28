@@ -58,6 +58,19 @@ jobs:
               - '**/*wasm*'
               - '.github/workflows/ci.yml'
 
+  # Fail-closed guard against clone bloat: a commit that tracks a build artifact
+  # (a target/ directory, an .rlib/.rmeta/.o/.a/.so/.dylib/.wasm blob) or any file
+  # over 5 MiB turns this red. Regenerable build output committed once bloats every
+  # future clone and can only be purged from history by a human-run rewrite
+  # (docs/architecture/tbd/prune-git-history-from-binaries.md); this keeps the tree
+  # clean going forward. No toolchain needed — pure git + shell, so it stays on the
+  # fast required PR path.
+  artifact-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: ./scripts/ci/artifact-guard.sh
+
   fmt:
     runs-on: ubuntu-latest
     steps:
