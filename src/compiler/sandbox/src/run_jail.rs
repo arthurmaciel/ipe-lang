@@ -44,6 +44,33 @@ use ipe_kernels::Capability;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use crate::seccomp;
 
+/// Stamp `$item` with the `#[cfg(...)]` for the targets that HAVE a real run
+/// jail compiled into [`exec_in_run_jail`], and the negation on a matching `no:`
+/// item — the ONE place the supported-target set is written as a predicate.
+///
+/// The supported set is `Linux/x86_64` (the `bwrap`+seccomp jail) and macOS (the
+/// `sandbox-exec` SBPL jail). The value [`platform_supports_jail`] returns
+/// (`JAIL_COMPILED_IN`) is stamped through this macro, and the refuse-stub
+/// `exec_in_run_jail` arm is gated on the NEGATION of this same predicate. So
+/// `platform_supports_jail` is `true` exactly where a real jail arm compiles: the
+/// admit verdict (`Holds` vs `RefuseGap`) and the jail actually compiled in cannot
+/// drift, and a target with only the stub arm reports "refuse", fail-closed. The
+/// per-OS real arms keep their own precise `#[cfg]` (their bodies differ), and the
+/// `platform_supports_jail_matches_the_compiled_in_jail_arm` unit test asserts the
+/// predicate spelled here equals the one those arms use.
+macro_rules! on_jailed_target {
+    (yes: { $($yes:item)* } no: { $($no:item)* }) => {
+        $(
+            #[cfg(any(all(target_os = "linux", target_arch = "x86_64"), target_os = "macos"))]
+            $yes
+        )*
+        $(
+            #[cfg(not(any(all(target_os = "linux", target_arch = "x86_64"), target_os = "macos")))]
+            $no
+        )*
+    };
+}
+
 // ── the database axis (a run-jail input, resolved from ipe.toml) ─────────────
 
 /// How `Capability::Database` lowers for this project.
@@ -756,34 +783,50 @@ pub fn is_low_value_only(union: &BTreeSet<Capability>) -> bool {
 }
 
 /// The build-time platform verdict: can a sound run jail be built on THIS
-/// target at all? Linux with `x86_64` seccomp support → yes. Everything else is
-/// the documented refuse-gap.
+/// target at all?
+///
+/// `Linux/x86_64` (the `bwrap`+seccomp jail) and macOS (the `sandbox-exec` SBPL
+/// jail) → yes. Everything else is the documented refuse-gap.
 ///
 /// This is a `const` reflection of the compile target, independent of host tool
-/// availability (which [`RunJailTools`] probing covers). On a non-Linux or
-/// non-`x86_64` target no argv/seccomp this crate builds would confine the app,
-/// so the honest answer is "refuse", never "run unconfined".
+/// availability (which [`RunJailTools`] / `sandbox-exec` probing covers). Both
+/// this constant and the real [`exec_in_run_jail`] arm are stamped by the SAME
+/// [`on_jailed_target`] macro, so the verdict is `true` EXACTLY on the targets a
+/// jail is compiled for. There is no second hand-kept copy to drift: the FFI
+/// admit path can never claim a jail that is not compiled for the target, and a
+/// target with only the stub `exec_in_run_jail` reports "refuse".
 #[must_use]
 pub const fn platform_supports_jail() -> bool {
-    cfg!(all(target_os = "linux", target_arch = "x86_64"))
+    JAIL_COMPILED_IN
 }
 
-/// Probe the host for the run-jail tools and decide whether a jail can be built,
-/// returning the tools or the fail-closed refusal.
+on_jailed_target! {
+    yes: {
+        /// True on the targets [`exec_in_run_jail`] has a real (non-stub) arm.
+        /// Stamped by [`on_jailed_target`] so it cannot disagree with the arm.
+        const JAIL_COMPILED_IN: bool = true;
+    }
+    no: {
+        /// False on the targets [`exec_in_run_jail`] is only the refuse stub.
+        const JAIL_COMPILED_IN: bool = false;
+    }
+}
+
+/// Probe the host for the run-jail primitives and decide whether a jail can be
+/// built, returning the tools or the fail-closed refusal.
 ///
-/// `wants_wall_clock` = the profile sets a wall-clock cap, so `timeout` is
-/// additionally required. `bwrap` and `prlimit` are always required.
+/// The required primitives are per-OS, so this function is cfg-split to match the
+/// same platforms [`exec_in_run_jail`] confines: on `Linux/x86_64` it requires
+/// `bwrap` + `prlimit` (+ `timeout` when the profile sets a wall clock); on macOS
+/// it requires `sandbox-exec`. Off both it is the refuse-gap. `wants_wall_clock`
+/// selects whether `timeout` is additionally required (Linux only).
 ///
 /// # Errors
 ///
-/// [`RunJailDefect::UnsupportedPlatform`] on a non-Linux/x86_64 target;
-/// [`RunJailDefect::PrimitiveUnavailable`] when a required host tool is absent.
+/// [`RunJailDefect::UnsupportedPlatform`] off every jailed target;
+/// [`RunJailDefect::PrimitiveUnavailable`] when a required primitive is absent.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub fn probe_run_jail_tools(wants_wall_clock: bool) -> Result<RunJailTools, RunJailDefect> {
-    if !platform_supports_jail() {
-        return Err(RunJailDefect::UnsupportedPlatform {
-            reason: "runtime jail is Linux/x86_64-only in the first cut",
-        });
-    }
     let caps = crate::probe();
     let mut missing: Vec<&'static str> = Vec::new();
     if caps.bwrap.is_none() {
@@ -798,7 +841,7 @@ pub fn probe_run_jail_tools(wants_wall_clock: bool) -> Result<RunJailTools, RunJ
     if !missing.is_empty() {
         return Err(RunJailDefect::PrimitiveUnavailable { missing });
     }
-    // `platform_supports_jail` + the probes above guarantee these are `Some`.
+    // The probes above guarantee these are `Some`.
     let (Some(bwrap), Some(prlimit)) = (caps.bwrap, caps.prlimit) else {
         return Err(RunJailDefect::PrimitiveUnavailable {
             missing: vec!["bwrap", "prlimit"],
@@ -808,6 +851,49 @@ pub fn probe_run_jail_tools(wants_wall_clock: bool) -> Result<RunJailTools, RunJ
         bwrap,
         prlimit,
         timeout: caps.timeout,
+    })
+}
+
+/// macOS: probe for `sandbox-exec`, the run jail's only primitive.
+///
+/// The `bwrap`/`prlimit` tools the Linux jail needs do not apply. The macOS
+/// [`exec_in_run_jail`] arm re-resolves `sandbox-exec` itself and does NOT read
+/// the returned tools, so the returned [`RunJailTools`] is an inert "primitive
+/// present" token whose fields all hold the resolved `sandbox-exec` path (never
+/// used for a Linux tool invocation on macOS). Fail-closed: an absent
+/// `sandbox-exec` refuses.
+///
+/// `_wants_wall_clock` is unused on macOS: the SBPL run jail carries no external
+/// wall-clock helper.
+///
+/// # Errors
+///
+/// [`RunJailDefect::PrimitiveUnavailable`] when `sandbox-exec` is absent.
+#[cfg(target_os = "macos")]
+pub fn probe_run_jail_tools(_wants_wall_clock: bool) -> Result<RunJailTools, RunJailDefect> {
+    let Some(sandbox_exec) = crate::build_jail::find_in_path("sandbox-exec") else {
+        return Err(RunJailDefect::PrimitiveUnavailable {
+            missing: vec!["sandbox-exec"],
+        });
+    };
+    Ok(RunJailTools {
+        bwrap: sandbox_exec.clone(),
+        prlimit: sandbox_exec.clone(),
+        timeout: Some(sandbox_exec),
+    })
+}
+
+/// Off every jailed target the run jail is a documented refuse-gap: no primitive
+/// this crate builds would confine the app here.
+///
+/// # Errors
+///
+/// Always [`RunJailDefect::UnsupportedPlatform`].
+#[cfg(not(any(all(target_os = "linux", target_arch = "x86_64"), target_os = "macos")))]
+#[allow(clippy::missing_const_for_fn)]
+pub fn probe_run_jail_tools(_wants_wall_clock: bool) -> Result<RunJailTools, RunJailDefect> {
+    Err(RunJailDefect::UnsupportedPlatform {
+        reason: "runtime jail is compiled only for Linux/x86_64 and macOS",
     })
 }
 
@@ -900,16 +986,100 @@ pub fn exec_in_run_jail(
     })
 }
 
-/// Off `Linux/x86_64` the run jail is a documented refuse-gap.
+/// Run the emitted `app` binary inside the macOS `sandbox-exec` Seatbelt jail
+/// described by `profile`, replacing the current process on success (Unix
+/// `exec`).
+///
+/// The macOS counterpart to the `Linux/x86_64` [`exec_in_run_jail`]: it lowers
+/// the SAME [`SandboxProfile`] to a Seatbelt SBPL profile via the SAME
+/// [`crate::build_jail::sbpl_from_profile`] the Tier-2 `build_in_jail` uses —
+/// there is ONE SBPL generator, so what confines a Tier-2 build and what confines
+/// the shipped app at run time cannot drift. It writes the profile into the
+/// always-writable scratch and `exec`s `sandbox-exec -f <profile> <app> <args>`.
+/// There is NO shell token anywhere — the payload is a direct argv, so the
+/// quoting/injection class does not exist.
+///
+/// The SBPL enforces the network, filesystem, and subprocess axes; the `env` axis
+/// is enforced HERE in the launcher (Seatbelt cannot scrub env): the environment
+/// is cleared and only the profile's allowlisted names re-exported, via the SAME
+/// [`crate::build_jail::macos_scrubbed_env`] the build jail and the e2e use — so
+/// all four runtime-enforced axes are contained, matching the Linux jail, and the
+/// FFI admit path's `Holds` verdict is honest on macOS.
+///
+/// `scoped_tmp` is the one always-writable scratch (also where the SBPL profile
+/// is written); `working_tree` is writable only when the profile grants the
+/// filesystem axis. Fail-closed: an absent `sandbox-exec`, an unwritable profile,
+/// or a failed `exec` REFUSES — the capability-bearing app is never run
+/// unconfined.
+///
+/// The jail's actual deny behaviour is proven by the `macos-run-jail` CI job on a
+/// real macOS runner; this crate builds the arm and unit-tests the pure SBPL
+/// lowering on any host, but only a macOS runner exercises `sandbox-exec`.
+///
+/// # Errors
+///
+/// Any [`RunJailDefect`]; on success it does not return.
+#[cfg(target_os = "macos")]
+pub fn exec_in_run_jail(
+    _tools: &RunJailTools,
+    profile: &SandboxProfile,
+    scoped_tmp: &Path,
+    working_tree: &Path,
+    app: &Path,
+    app_args: &[OsString],
+) -> Result<std::convert::Infallible, RunJailDefect> {
+    use std::os::unix::process::CommandExt as _;
+
+    // `sandbox-exec` is the mandatory macOS jail primitive. Absent ⇒ refuse; the
+    // capability-bearing app is never run unconfined.
+    let Some(sandbox_exec) = crate::build_jail::find_in_path("sandbox-exec") else {
+        return Err(RunJailDefect::PrimitiveUnavailable {
+            missing: vec!["sandbox-exec"],
+        });
+    };
+
+    // Lower the SAME profile through the SAME SBPL generator the build jail uses,
+    // and write it into the always-writable scratch (never a shared temp path
+    // that could race or persist).
+    let sbpl = crate::build_jail::sbpl_from_profile(profile, scoped_tmp, working_tree);
+    let profile_file = scoped_tmp.join("ipe-run.sb");
+    if let Err(e) = std::fs::write(&profile_file, sbpl.as_bytes()) {
+        return Err(RunJailDefect::Spawn {
+            detail: format!("could not write the SBPL run-jail profile: {e}"),
+        });
+    }
+
+    // argv: sandbox-exec -f <profile> <app> <app_args…>. Direct argv, no shell.
+    let mut cmd = std::process::Command::new(&sandbox_exec);
+    cmd.arg("-f").arg(&profile_file).arg(app).args(app_args);
+    // Enforce the `env` axis in the launcher (Seatbelt cannot scrub env): clear
+    // the inherited environment and re-export ONLY the scrubbed base plus the
+    // profile's allowlisted names, mirroring the Linux jail's `--clearenv`. The
+    // scrub is the SAME `macos_scrubbed_env` the e2e proves, so what confines the
+    // env at run time and what the test asserts cannot drift.
+    let host_env = |k: &str| std::env::var_os(k);
+    cmd.env_clear();
+    for (name, value) in crate::build_jail::macos_scrubbed_env(profile, scoped_tmp, &host_env) {
+        cmd.env(name, value);
+    }
+    let err = cmd.exec();
+    // `exec` only returns on failure; the scratch profile is inert either way.
+    Err(RunJailDefect::Spawn {
+        detail: err.to_string(),
+    })
+}
+
+/// Off every jailed target the run jail is a documented refuse-gap.
 ///
 /// # Errors
 ///
 /// Always [`RunJailDefect::UnsupportedPlatform`]: no sound run jail can be built
-/// off `Linux/x86_64`, so a capability-bearing program refuses to run here rather
-/// than run unconfined.
-// Kept a plain `fn` (not `const fn`) so its signature matches the Linux
-// `exec_in_run_jail`, which cannot be `const`.
-#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+/// here, so a capability-bearing program refuses to run rather than run
+/// unconfined. This arm is gated on the negation of the [`on_jailed_target`]
+/// predicate, so it compiles EXACTLY where [`platform_supports_jail`] is false.
+// Kept a plain `fn` (not `const fn`) so its signature matches the real
+// `exec_in_run_jail` arms, which cannot be `const`.
+#[cfg(not(any(all(target_os = "linux", target_arch = "x86_64"), target_os = "macos")))]
 #[allow(clippy::missing_const_for_fn)]
 pub fn exec_in_run_jail(
     _tools: &RunJailTools,
@@ -920,7 +1090,7 @@ pub fn exec_in_run_jail(
     _app_args: &[OsString],
 ) -> Result<std::convert::Infallible, RunJailDefect> {
     Err(RunJailDefect::UnsupportedPlatform {
-        reason: "runtime jail is Linux/x86_64-only in the first cut",
+        reason: "runtime jail is compiled only for Linux/x86_64 and macOS",
     })
 }
 
@@ -1512,6 +1682,40 @@ mod tests {
         assert!(parse_capfloor("garbage").is_err());
         assert!(parse_capfloor("ipe-capfloor 2 net=true").is_err());
         assert!(parse_capfloor("ipe-capfloor 1 fs=bogus").is_err());
+    }
+
+    #[test]
+    fn platform_supports_jail_matches_the_compiled_in_jail_arm() {
+        // The single-source guard: `platform_supports_jail()` returns exactly the
+        // `on_jailed_target!` predicate (the value stamped onto `JAIL_COMPILED_IN`
+        // by the same macro that selects the real `exec_in_run_jail` arm). This
+        // spells that predicate independently and asserts equality, so a future
+        // edit that flips one without the other fails this test.
+        let compiled_in_here = cfg!(any(
+            all(target_os = "linux", target_arch = "x86_64"),
+            target_os = "macos"
+        ));
+        assert_eq!(
+            platform_supports_jail(),
+            compiled_in_here,
+            "platform_supports_jail() must equal the compiled-in run-jail predicate"
+        );
+    }
+
+    #[test]
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    fn linux_x86_64_is_a_jail_holds_target() {
+        // On the Linux/x86_64 build host the run jail is compiled in, so the FFI
+        // admit predicate must see a jail-holds target.
+        assert!(platform_supports_jail());
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_is_a_jail_holds_target() {
+        // On macOS the sandbox-exec SBPL run-jail arm is compiled in, so the FFI
+        // admit predicate flips to jail-holds.
+        assert!(platform_supports_jail());
     }
 
     #[test]

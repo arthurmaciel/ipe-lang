@@ -262,7 +262,9 @@ pub fn build_in_jail(
         payload,
     );
 
-    let outcome = spawn_and_decode(&argv);
+    // The Linux jail's env is scrubbed inside the bwrap argv (`--clearenv` +
+    // allowlisted re-export), so no launcher-side env override is needed here.
+    let outcome = spawn_and_decode(&argv, None);
     // `seccomp_owned` drops here (after the child has been waited on inside
     // `spawn_and_decode`), closing the memfd. Keep it explicit so the ordering
     // is not subject to a future reorder.
@@ -339,7 +341,13 @@ pub fn build_in_jail(
     argv.push(profile_file.clone().into_os_string());
     argv.extend(payload.iter().cloned());
 
-    let outcome = spawn_and_decode(&argv);
+    // Enforce the `env` axis in the launcher (Seatbelt cannot scrub env),
+    // mirroring the run jail and the Linux build jail's bwrap `--clearenv`, so a
+    // Tier-2 build is confined on the env axis exactly as the shipped app is.
+    let host_env = |k: &str| std::env::var_os(k);
+    let scrubbed_env = macos_scrubbed_env(profile, scoped_tmp, &host_env);
+
+    let outcome = spawn_and_decode(&argv, Some(&scrubbed_env));
     // Best-effort cleanup; a leftover profile in the scratch is inert.
     let _ = std::fs::remove_file(&profile_file);
     outcome
@@ -370,8 +378,15 @@ pub fn build_in_jail(
 /// A spawn failure is [`JailOutcome::Unavailable`] (the payload never ran); a
 /// wait failure is a [`JailOutcome::BuildFailed`] (the jail ran but its result
 /// is unobservable — never clean).
+///
+/// `env_override`, when `Some`, clears the inherited environment and sets exactly
+/// the given `(name, value)` pairs — the macOS jails' `env`-axis enforcement (the
+/// Linux jail scrubs env inside bwrap, so it passes `None`).
 #[cfg(any(all(target_os = "linux", target_arch = "x86_64"), target_os = "macos"))]
-fn spawn_and_decode(argv: &[OsString]) -> JailOutcome {
+fn spawn_and_decode(
+    argv: &[OsString],
+    env_override: Option<&[(OsString, OsString)]>,
+) -> JailOutcome {
     let Some((program, rest)) = argv.split_first() else {
         return JailOutcome::Unavailable {
             defect: RunJailDefect::Spawn {
@@ -379,10 +394,15 @@ fn spawn_and_decode(argv: &[OsString]) -> JailOutcome {
             },
         };
     };
-    let child = std::process::Command::new(program)
-        .args(rest)
-        .stdin(std::process::Stdio::null())
-        .spawn();
+    let mut command = std::process::Command::new(program);
+    command.args(rest).stdin(std::process::Stdio::null());
+    if let Some(pairs) = env_override {
+        command.env_clear();
+        for (name, value) in pairs {
+            command.env(name, value);
+        }
+    }
+    let child = command.spawn();
     let mut child = match child {
         Ok(c) => c,
         Err(e) => {
@@ -424,11 +444,23 @@ fn spawn_and_decode(argv: &[OsString]) -> JailOutcome {
 ///   blanket `(deny file-write*)` withholds every other path, so an
 ///   out-of-scratch write under a filesystem-withholding profile is denied and
 ///   the `filesystem` axis is observable.
+/// - **subprocess**: withheld (`!profile.subprocess`) ⇒ `(deny process-exec*)`
+///   and `(deny process-fork)`, mirroring the Linux jail's seccomp denial of
+///   the task-creation family. A `fork`/`exec` under a subprocess-withholding
+///   profile is denied, so the `subprocess` axis is observable — and the
+///   `native-ffi`-via-exec escape (opaque native code shelling out) is closed.
+///   Granted ⇒ no process denial, so the allow-default base leaves spawning
+///   reachable.
 ///
 /// The scratch and (when granted) the working tree are written as `(subpath …)`
 /// allow rules so the probe's benign write and a granted filesystem effect
 /// succeed; the system temp locations the shell itself uses are always allowed
 /// so the jail does not false-deny the launcher.
+///
+/// The `env` axis is NOT enforced here: Seatbelt cannot scrub environment
+/// variables, so the run/build launcher clears the environment down to the
+/// profile's `env_allowlist` (mirroring the Linux jail's `--clearenv`) BEFORE
+/// handing control to `sandbox-exec`. See [`macos_scrubbed_env`].
 #[cfg(any(target_os = "macos", test))]
 #[must_use]
 pub fn sbpl_from_profile(
@@ -480,16 +512,70 @@ pub fn sbpl_from_profile(
     // them prevents a false-deny of the launcher itself (never a threat path —
     // they are not the differentially-confined out-of-scratch escape target).
     s.push_str("(allow file-write* (subpath \"/private/var/folders\"))\n");
-    s.push_str("(allow file-write* (subpath \"/private/tmp\"))\n");
+    s.push_str("(allow file-write* (subpath \"/private/tmp\"))\n\n");
+
+    // Subprocess: deny process creation unless the profile grants it. This
+    // mirrors the Linux jail's seccomp denial of the task-creation family
+    // (`fork`/`vfork`/`clone`/`exec`), so a subprocess-withholding profile
+    // confines the app to a single process on BOTH platforms — and closes the
+    // `native-ffi`-via-exec escape (opaque native code shelling out to a helper).
+    // When granted, no denial is emitted, so the allow-default base leaves
+    // spawning reachable.
+    if !profile.subprocess {
+        s.push_str("(deny process-exec*)\n");
+        s.push_str("(deny process-fork)\n");
+    }
 
     s
 }
 
+/// The environment the macOS launcher `exec`s `sandbox-exec` under — the `env`
+/// axis's enforcement point.
+///
+/// Seatbelt cannot scrub environment variables, so — exactly as the Linux jail's
+/// `--clearenv` + allowlisted re-export does inside `run_jail_argv` — the macOS
+/// launcher clears the inherited environment down to a fixed minimal base
+/// (`PATH`, `TMPDIR`) plus `LANG` (when the host sets it) plus ONLY the names in
+/// `profile.env_allowlist` (when the host sets them). A name absent from the
+/// host is simply not re-exported (never a placeholder); a name the profile does
+/// not allow is absent from the child even if the host sets it.
+///
+/// PURE — it maps a host-env lookup to the child's `(name, value)` pairs — so the
+/// exact scrub surface is unit-testable on any host and provable by the e2e
+/// duality (`sandbox-exec` inherits exactly this env), with no second env list to
+/// drift from the launcher.
+///
+/// `TMPDIR` is set to the always-writable scratch, matching the Linux jail (the
+/// child's temp writes land in the one writable mount, not a masked host temp).
+#[cfg(any(target_os = "macos", test))]
+#[must_use]
+pub fn macos_scrubbed_env(
+    profile: &SandboxProfile,
+    scoped_tmp: &Path,
+    host_env: &dyn Fn(&str) -> Option<OsString>,
+) -> Vec<(OsString, OsString)> {
+    let mut env: Vec<(OsString, OsString)> = Vec::new();
+    // The fixed minimal base, mirroring the Linux jail's re-exported allowlist.
+    env.push((OsString::from("PATH"), OsString::from("/usr/bin:/bin")));
+    env.push((OsString::from("TMPDIR"), scoped_tmp.as_os_str().to_owned()));
+    if let Some(lang) = host_env("LANG") {
+        env.push((OsString::from("LANG"), lang));
+    }
+    // Only the profile's declared env names re-enter, and only when the host
+    // actually sets them (granted-but-unset ⇒ simply absent, never a placeholder).
+    for name in &profile.env_allowlist {
+        if let Some(value) = host_env(name) {
+            env.push((OsString::from(name), value));
+        }
+    }
+    env
+}
+
 /// Resolve a program name to an absolute path via `PATH`, or `None` when absent.
-/// The macOS jail refuses (fail-closed) when its `sandbox-exec` primitive is
-/// missing.
+/// The macOS build and run jails both refuse (fail-closed) when their
+/// `sandbox-exec` primitive is missing, so the resolver is shared.
 #[cfg(target_os = "macos")]
-fn find_in_path(bin: &str) -> Option<PathBuf> {
+pub(crate) fn find_in_path(bin: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
         .map(|dir| dir.join(bin))
@@ -718,6 +804,135 @@ mod tests {
         assert!(
             !sbpl.contains("(allow file-write* (subpath \"/w\"))"),
             "no working-tree write on the isolated floor: {sbpl}"
+        );
+    }
+
+    fn with_subprocess(subprocess: bool) -> SandboxProfile {
+        SandboxProfile {
+            subprocess,
+            ..SandboxProfile::maximally_isolated()
+        }
+    }
+
+    #[test]
+    fn sbpl_denies_process_creation_when_the_subprocess_axis_is_withheld() {
+        // Withheld subprocess ⇒ both process-creation denials present, mirroring
+        // the Linux seccomp denial of the task-creation family. This also closes
+        // the native-ffi-via-exec escape.
+        let sbpl = sbpl_from_profile(
+            &with_subprocess(false),
+            Path::new("/tmp/scratch"),
+            Path::new("/work/tree"),
+        );
+        assert!(sbpl.contains("(deny process-exec*)"), "{sbpl}");
+        assert!(sbpl.contains("(deny process-fork)"), "{sbpl}");
+    }
+
+    #[test]
+    fn sbpl_allows_process_creation_when_the_subprocess_axis_is_granted() {
+        // Granted subprocess ⇒ NO process denial, so the allow-default base
+        // leaves spawning reachable (no false-deny of a granted axis).
+        let sbpl = sbpl_from_profile(
+            &with_subprocess(true),
+            Path::new("/tmp/scratch"),
+            Path::new("/work/tree"),
+        );
+        assert!(
+            !sbpl.contains("(deny process-exec"),
+            "subprocess granted must emit no process-exec denial: {sbpl}"
+        );
+        assert!(
+            !sbpl.contains("(deny process-fork)"),
+            "subprocess granted must emit no process-fork denial: {sbpl}"
+        );
+    }
+
+    #[test]
+    fn maximally_isolated_sbpl_denies_all_four_confinement_axes() {
+        // The floor enforces every runtime-enforced axis Seatbelt CAN enforce:
+        // network, filesystem, subprocess. (Env is enforced by the launcher, not
+        // the SBPL — see `macos_scrubbed_env`.) This is the `Holds`-is-honest
+        // invariant: `Holds` may only claim axes the jail actually confines.
+        let sbpl = sbpl_from_profile(
+            &SandboxProfile::maximally_isolated(),
+            Path::new("/s"),
+            Path::new("/w"),
+        );
+        assert!(sbpl.contains("(deny network*)"), "network: {sbpl}");
+        assert!(sbpl.contains("(deny file-write*)"), "filesystem: {sbpl}");
+        assert!(
+            sbpl.contains("(deny process-exec*)"),
+            "subprocess exec: {sbpl}"
+        );
+        assert!(
+            sbpl.contains("(deny process-fork)"),
+            "subprocess fork: {sbpl}"
+        );
+    }
+
+    // ── the macOS env-axis launcher scrub (pure — runs on any host) ───────────
+
+    fn env_map(pairs: &[(&str, &str)]) -> std::collections::HashMap<String, OsString> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), OsString::from(*v)))
+            .collect()
+    }
+
+    #[test]
+    fn scrubbed_env_keeps_only_the_base_when_no_env_axis_is_granted() {
+        // An env-withholding profile re-exports only the fixed base (PATH, TMPDIR,
+        // and LANG when the host sets it); every other host var is dropped.
+        let host = env_map(&[("SECRET", "leak"), ("LANG", "en_US.UTF-8")]);
+        let lookup = |k: &str| host.get(k).cloned();
+        let env = macos_scrubbed_env(
+            &SandboxProfile::maximally_isolated(),
+            Path::new("/tmp/scratch"),
+            &lookup,
+        );
+        let names: Vec<&str> = env
+            .iter()
+            .map(|(n, _)| n.to_str().unwrap_or_default())
+            .collect();
+        assert!(names.contains(&"PATH"), "{names:?}");
+        assert!(names.contains(&"TMPDIR"), "{names:?}");
+        assert!(names.contains(&"LANG"), "{names:?}");
+        assert!(
+            !names.contains(&"SECRET"),
+            "a non-allowlisted host var must be dropped: {names:?}"
+        );
+        // TMPDIR is the scratch, matching the Linux jail.
+        let tmpdir = env
+            .iter()
+            .find(|(n, _)| n == "TMPDIR")
+            .map(|(_, v)| v.clone());
+        assert_eq!(tmpdir, Some(OsString::from("/tmp/scratch")));
+    }
+
+    #[test]
+    fn scrubbed_env_re_exports_only_allowlisted_names_that_the_host_sets() {
+        // A granted env name that the host sets re-enters; a granted name the host
+        // does NOT set is simply absent (never a placeholder); a host var not on
+        // the allowlist stays dropped.
+        let host = env_map(&[("ALLOWED", "yes"), ("SECRET", "leak")]);
+        let lookup = |k: &str| host.get(k).cloned();
+        let profile = SandboxProfile {
+            env_allowlist: vec!["ALLOWED".to_owned(), "GRANTED_BUT_UNSET".to_owned()],
+            ..SandboxProfile::maximally_isolated()
+        };
+        let env = macos_scrubbed_env(&profile, Path::new("/s"), &lookup);
+        let by_name: std::collections::HashMap<String, OsString> = env
+            .iter()
+            .map(|(n, v)| (n.to_string_lossy().into_owned(), v.clone()))
+            .collect();
+        assert_eq!(by_name.get("ALLOWED"), Some(&OsString::from("yes")));
+        assert!(
+            !by_name.contains_key("GRANTED_BUT_UNSET"),
+            "a granted-but-unset name must be absent, not a placeholder"
+        );
+        assert!(
+            !by_name.contains_key("SECRET"),
+            "a non-allowlisted host var must be dropped even when the host sets it"
         );
     }
 }
