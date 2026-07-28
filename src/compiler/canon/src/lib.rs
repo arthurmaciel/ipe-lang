@@ -2989,7 +2989,7 @@ mod tests {
             return;
         };
         assert_eq!(&**name, "bogusFn");
-        assert_eq!(&**module, "Ipe.Web");
+        assert_eq!(&**module, "Ipe.Tea.Web");
     }
 
     #[test]
