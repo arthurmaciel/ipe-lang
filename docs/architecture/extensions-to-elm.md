@@ -310,3 +310,12 @@ annotations + record update, and identical core syntax (pipelines, cons, lambdas
 One **planned** language divergence is filed separately: closed-union `case`
 refusing catch-all arms (see the exhaustive-case finite-ADT design under
 `docs/architecture/`).
+
+One **shipped** syntax extension goes beyond Elm's `case…of`: **or-patterns**
+(`|` alternatives), e.g. `Up | Down -> "vertical"` and, with shared bindings,
+`Circle r | Square r -> area r`. Elm has no or-patterns; this is Rust / OCaml
+parity. Every alternative must bind the identical set of variables at identical
+types (checked as IPE-T0019 / a type mismatch), and an or-pattern participates
+in exhaustiveness by row expansion — `Red | Green | Blue` counts as full
+coverage of a three-constructor union. See the or-patterns design under
+`docs/architecture/`.
