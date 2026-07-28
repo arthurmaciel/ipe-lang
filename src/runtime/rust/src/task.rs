@@ -1,7 +1,14 @@
 // Task combinators — generic over error type E.
 use super::*;
 use std::future::ready;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::OnceLock;
+
+// The tokio-backed async spine (`block_on`, the shared reactor, foreign-task
+// abort guards) has no denotation on `wasm32-unknown-unknown`: the browser
+// client runs on a single event loop with no OS threads for `tokio::spawn`,
+// and `tokio` is not a wasm dependency. The whole spine is gated off for wasm;
+// the wasm client drives its TEA loop through `web_sys`/`wasm-bindgen` instead.
 
 /// Process-global tokio runtime shared by every `block_on` entry.
 ///
@@ -11,8 +18,10 @@ use std::sync::OnceLock;
 /// between entries, so a handle crossing two entries hits a dead reactor. One
 /// shared runtime keeps every reactor-registered handle live for the process
 /// lifetime; a shared reactor is strictly more available than a fresh one.
+#[cfg(not(target_arch = "wasm32"))]
 static GLOBAL_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
+#[cfg(not(target_arch = "wasm32"))]
 fn global_runtime() -> Result<&'static tokio::runtime::Runtime, String> {
     if let Some(rt) = GLOBAL_RUNTIME.get() {
         return Ok(rt);
@@ -27,8 +36,10 @@ fn global_runtime() -> Result<&'static tokio::runtime::Runtime, String> {
 /// completion (`Task.parallel` early-cancel drops the losing wrapper future),
 /// so a cancelled FFI call cannot keep producing side effects. `defuse`
 /// disarms after a normal join.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct AbortOnDrop(Option<tokio::task::AbortHandle>);
 
+#[cfg(not(target_arch = "wasm32"))]
 impl AbortOnDrop {
     #[must_use]
     pub fn new(handle: tokio::task::AbortHandle) -> Self {
@@ -40,6 +51,7 @@ impl AbortOnDrop {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for AbortOnDrop {
     fn drop(&mut self) {
         if let Some(h) = self.0.take() {
