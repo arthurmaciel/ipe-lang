@@ -1,6 +1,5 @@
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Dep exposing (Color(..))
 import Ipe.Io as Io
 

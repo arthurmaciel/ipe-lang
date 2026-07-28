@@ -191,3 +191,15 @@ fn string_to_int_trailing_space_is_nothing() {
 fn string_to_float_surrounding_space_is_just() {
     assert_runs_and_matches_oracle("string_to_float_trim");
 }
+
+// ── ADR 0047 (#231): Tier-A/B ambient + Tier-C explicit-import SEAL ────────────
+
+/// SEAL for the three-tier auto-import model: Tier-A (`identity`/`not`/
+/// `always`) and Tier-B (`Maybe`/`Just`/`Nothing`, `True`/`False`) resolve with
+/// NO import, while the Tier-C module `Ipe.String` is reached through its
+/// explicit `import Ipe.String as String`. The program compiles and runs to
+/// exit 0, printing `a-b`.
+#[test]
+fn basics_ambient_with_explicit_tier_c_import_runs() {
+    assert_runs_and_matches_oracle("basics_ambient_seal");
+}

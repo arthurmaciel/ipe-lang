@@ -1,5 +1,4 @@
 module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- #90 T4 sound-companion of `lambda_param_reuse_gated`: a fn-carrying

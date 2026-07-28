@@ -11,7 +11,6 @@ module Main exposing (main)
 -- `Fn` closure"). This fixture pins ipec-0 ⇒ cargo-0 ⇒ correct run for every
 -- sub-shape.
 
-import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.Task as Task
 import Ipe.Io as Io

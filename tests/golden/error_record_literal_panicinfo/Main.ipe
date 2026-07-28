@@ -7,7 +7,6 @@ module Main exposing (main)
 -- accepted (exit 0) and the emitted project failed `cargo build` with
 -- E0308 `expected IpePanicInfo, found RecMessageStack`.
 
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 

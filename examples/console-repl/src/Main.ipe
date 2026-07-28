@@ -17,7 +17,6 @@ module Main exposing (main)
 -- that is not one of those commands prints a friendly error line and leaves the
 -- total unchanged.
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.System as System
 import Ipe.Console exposing (app)

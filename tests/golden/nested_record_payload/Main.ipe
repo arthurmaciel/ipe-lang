@@ -1,6 +1,5 @@
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- #158 Class-4 item C, Repro 2: a record sub-pattern nested inside a

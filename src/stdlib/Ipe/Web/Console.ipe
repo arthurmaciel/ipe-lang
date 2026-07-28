@@ -73,7 +73,6 @@ module Ipe.Web.Console exposing
 -- will treat any non-empty Identity as authorised in v0.16.0.
 
 
-import Ipe.Prelude exposing (..)
 import Ipe.Dict as Dict exposing (Dict)
 
 

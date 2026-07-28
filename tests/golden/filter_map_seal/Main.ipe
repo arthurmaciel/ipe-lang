@@ -3,7 +3,6 @@ module Main exposing (main)
 -- #119 seal — List.filterMap : (a -> Maybe b) -> List a -> List b
 -- Applies f to each element, keeps only Just results, unwraps them.
 
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 parsePositive : Int -> Maybe String

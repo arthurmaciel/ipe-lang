@@ -7,7 +7,6 @@ module Main exposing (main)
 -- `Error.withMessage` / `Error.withDetails` modifiers).
 -- See tests/golden/error_record_literal_panicinfo/.
 
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 

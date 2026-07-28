@@ -1,6 +1,5 @@
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- #90 T3, documented PRECISION LOSS (design doc §3.3, extended in the 5th

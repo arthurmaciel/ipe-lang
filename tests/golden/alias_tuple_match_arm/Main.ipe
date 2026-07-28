@@ -1,6 +1,5 @@
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- #99: an `as`-alias over a dispatch-free tuple inside a by-value ctor

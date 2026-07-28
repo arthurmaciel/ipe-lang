@@ -1,6 +1,5 @@
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Error as Error
 import Ipe.Task as Task
 import Ipe.Io as Io

@@ -1,6 +1,5 @@
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Json.Decode as Decode
 import Ipe.Io as Io
 

@@ -36,7 +36,6 @@ module Main exposing (main)
 -- module only exists after `ipe install` runs the sandboxed inspector over real
 -- `iced` (network-gated), so a checked-in import of it could not be built in CI.
 
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 

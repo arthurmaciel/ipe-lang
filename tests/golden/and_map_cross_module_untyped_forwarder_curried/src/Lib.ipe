@@ -1,6 +1,5 @@
 module Lib exposing (am2)
 
-import Ipe.Prelude exposing (..)
 
 -- #90 T3: cross-module UNANNOTATED double forwarder — `am2` goes through
 -- Boundary Scheme Promotion (`promote_untyped_boundaries`), quantifying the

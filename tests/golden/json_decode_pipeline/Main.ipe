@@ -19,7 +19,6 @@ module Main exposing (main)
 -- flows into an `Arc<dyn Fn + Send + Sync>` callback slot.
 import Ipe.Json.Decode as JsonDec exposing (Decoder)
 import Ipe.Json.Decode.Pipeline as Pipeline
-import Ipe.Prelude exposing (..)
 import Ipe.Result as Result
 import Ipe.String as String
 import Ipe.Io as Io

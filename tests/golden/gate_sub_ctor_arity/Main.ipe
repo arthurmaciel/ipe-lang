@@ -1,6 +1,5 @@
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- #32 review follow-up: a mis-arity `Sub` in a CTOR PAYLOAD (`Sub` takes

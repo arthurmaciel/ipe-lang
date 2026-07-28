@@ -1,6 +1,5 @@
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- #158 residual scope (fail-closed, IPE-L0116): a `case` whose nested-cons arm

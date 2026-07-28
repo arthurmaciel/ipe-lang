@@ -1,5 +1,4 @@
 module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- #90 Stage 1: `Ok f` holding a function used to trip IPE-L0114 unconditionally,

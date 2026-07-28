@@ -4,7 +4,6 @@ module Main exposing (main)
 -- runtime's `IpeTypeInfo`. A bare record literal must be REJECTED at `ipec`
 -- time (IPE-T0001). See tests/golden/error_record_literal_panicinfo/.
 
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 

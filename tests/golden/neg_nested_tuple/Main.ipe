@@ -1,5 +1,4 @@
 module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- A tuple param whose ELEMENT is refutable (`Just x`): the tuple as a whole is

@@ -645,6 +645,67 @@ mod tests {
         );
     }
 
+    /// ADR 0047 Tier A (`Ipe.Basics`) and Tier B (core type vocabulary) are
+    /// ambient: a module reaches for `identity` / `always` / `not`, the type
+    /// names `Maybe` / `Result` / `List`, and the constructors `Just` /
+    /// `Nothing` / `Ok` / `Err` / `True` / `False` with NO import line. This is
+    /// what makes the retired `import Ipe.Prelude exposing (..)` value-flood
+    /// redundant.
+    #[test]
+    fn tier_a_and_b_resolve_ambiently_without_import() {
+        let src = "module Main exposing (main)\n\
+                   \n\
+                   wrap : Int -> Maybe (Result String (List Int))\n\
+                   wrap n =\n\
+                   \x20   if not (always False n) then\n\
+                   \x20       Just (Ok [ identity n ])\n\
+                   \x20   else\n\
+                   \x20       Nothing\n\
+                   \n\
+                   main =\n\
+                   \x20   case wrap 1 of\n\
+                   \x20       Just _ -> LT\n\
+                   \x20       Nothing -> GT\n";
+        let opt = canon_src(src);
+        assert!(
+            opt.is_some(),
+            "Tier-A/B names must canonicalise with no import line"
+        );
+    }
+
+    /// ADR 0047 Tier B allows a local definition to shadow a core-vocabulary
+    /// name without a diagnostic — a user `map` binds locally.
+    #[test]
+    fn tier_b_name_may_be_shadowed_locally() {
+        let src = "module Main exposing (map)\n\
+                   \n\
+                   map : Int -> Int\n\
+                   map n = n\n";
+        let opt = canon_src(src);
+        assert!(
+            opt.is_some(),
+            "a local `map` must shadow the ambient vocabulary without a diagnostic"
+        );
+    }
+
+    /// ADR 0047 Tier C: a qualified reference to a module the compiler does not
+    /// place in ambient scope fails to resolve (IPE-N0004) at its use site,
+    /// never a silent success — the import list stays a complete inventory of a
+    /// file's capabilities.
+    #[test]
+    fn tier_c_unimported_qualifier_is_unknown_module() {
+        let err = canon_err("module Main exposing (main)\n\nmain = Widgets.render 0\n");
+        let Some(Diagnostic::Name {
+            msg: NameError::UnknownModule { qualifier, .. },
+            ..
+        }) = err
+        else {
+            assert!(false_marker(), "expected UnknownModule (IPE-N0004)");
+            return;
+        };
+        assert_eq!(&*qualifier, "Widgets");
+    }
+
     #[test]
     fn unknown_constructor_pattern_is_constructor_not_found() {
         let src = "module Main exposing (main)\n\n\

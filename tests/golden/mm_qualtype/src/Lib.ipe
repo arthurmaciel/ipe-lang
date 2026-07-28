@@ -1,6 +1,5 @@
 module Lib exposing (Box(..), unbox)
 
-import Ipe.Prelude exposing (..)
 
 type Box a
     = Box a
