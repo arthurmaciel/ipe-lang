@@ -302,6 +302,22 @@ These are not per-value gaps but whole-model choices; they explain why several
   use. Deliberate no-magic choice: the import list is a complete inventory of a
   file's capabilities. Decided in
   [`docs/adr/0047-basics-and-tiered-auto-import.md`](../adr/0047-basics-and-tiered-auto-import.md).
+- **TEA namespace is `Ipe.Tea`, not `Platform`.** Ipê collects the four
+  managed-update-loop shapes under `Ipe.Tea.{Web,WebView,Tui,Console}`, and the
+  distinction "is this a TEA app?" is one structural rule — *does the module
+  import anything under `Ipe.Tea.*`?*. Elm names its runtime plumbing `Platform`
+  and has no non-TEA program shape, so every Elm program is a TEA program; Ipê
+  additionally has a plain `main : Task …` **Program** shape, so the meaningful
+  axis is specifically *the managed loop*, which `Tea` names and `Platform` does
+  not. Decided in
+  [`docs/adr/0048-tea-shape-relocation.md`](../adr/0048-tea-shape-relocation.md).
+- **Per-shape typed `.app`, not a unified entry.** Each `Ipe.Tea.<Shape>` exposes
+  its own precisely-typed `.app` (Tui also `program`), because the `view` type
+  genuinely differs per shape (`Element` for the graphical shapes, `String` for
+  `Tui.program`/`Console`). This mirrors Elm's split of `Browser.sandbox` /
+  `element` / `document` into separate typed entries rather than one config ADT,
+  and is what keeps invalid states unrepresentable without higher-kinded types.
+  Same ADR.
 
 ---
 
