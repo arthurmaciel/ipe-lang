@@ -543,3 +543,116 @@ jobs:
         env:
           IPE_E2E: "1"
         run: cargo nextest run -p ipe_sandbox --test run_jail_windows_e2e --profile ci
+
+  # ─── Windows Tier-2 BUILD-jail proof (the returning build jail, ADR 0051) ────
+  # The differential-confinement half on Windows: a REAL proof of the Windows
+  # returning build jail's deny behaviour (`build_in_jail`, not the run jail).
+  # The arm reuses the SAME Job Object + AppContainer + launcher-scrub sequence
+  # the run jail uses, but RETURNS a decoded `JailOutcome`. Like the run-jail
+  # proof this needs NO Docker Windows daemon — a Job Object / AppContainer is a
+  # plain Win32 sequence, provable on a hosted `windows-2022` runner. Fail-closed:
+  #
+  #   1. It asserts the build-jail primitives are constructible and REFUSES to
+  #      certify (exits non-zero) if not — never a skip-green. Until this job is
+  #      green on a real runner, Windows Tier-2 stays refuse-to-certify
+  #      (`build_in_jail` returns `Unavailable`), never admitting unconfined.
+  #   2. It runs the build_jail_windows_e2e RED-CANARY: a socket opened while the
+  #      declared-scoped jail withholds `network` must decode to
+  #      `Denied { axis: Network }` (a differentially-probed axis), an
+  #      out-of-scratch write under a filesystem-withholding jail to
+  #      `Denied { axis: Filesystem }`, and a benign in-scratch build to `Clean`.
+  #      IPE_E2E=1 arms the real jailed runs.
+  #
+  # The non-ACL-volume filesystem refuse-gap (the `FILE_PERSISTENT_ACLS` probe)
+  # is unit-tested host-independently; exercising it live needs a mounted
+  # FAT/exFAT volume a hosted image does not provide (a self-hosted runner axis).
+  windows-tier2:
+    name: windows-tier2 (Job Object + AppContainer — the real Windows build-jail proof)
+    runs-on: windows-2022
+    if: github.event_name != 'pull_request'   # slow: push/nightly only, off the required PR gate
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+
+      # Fail-closed primitive check: a Job Object must be creatable and PowerShell
+      # (the jailed probe host) must resolve. A failure is refuse-to-certify (hard
+      # failure, never a skip-green) — an unverified platform is never admitted.
+      - name: Assert the Windows build-jail primitives are present (refuse-to-certify)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sig = @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class J {
+            [DllImport("kernel32.dll", SetLastError=true)]
+            public static extern IntPtr CreateJobObjectW(IntPtr a, IntPtr b);
+            [DllImport("kernel32.dll", SetLastError=true)]
+            public static extern bool CloseHandle(IntPtr h);
+          }
+          '@
+          Add-Type -TypeDefinition $sig
+          $job = [J]::CreateJobObjectW([IntPtr]::Zero, [IntPtr]::Zero)
+          if ($job -eq [IntPtr]::Zero) {
+            Write-Error "CreateJobObjectW failed — the Windows build jail cannot be verified; refusing to certify (hard failure, never a skip-green)."
+            exit 1
+          }
+          [void][J]::CloseHandle($job)
+          if (-not (Get-Command powershell.exe -ErrorAction SilentlyContinue)) {
+            Write-Error "powershell.exe absent — the build-jail E2E probe cannot run; refusing to certify."
+            exit 1
+          }
+          Write-Output "Windows build-jail primitives present (Job Object creatable; powershell.exe resolved)."
+
+      # The build jail's red-canary through the real Job Object + AppContainer
+      # token: a socket under a network-withholding jail decodes to
+      # Denied { Network }, an out-of-scratch write to Denied { Filesystem }, and a
+      # benign in-scratch build to Clean. IPE_E2E=1 arms the real jailed runs.
+      - name: build_jail_windows E2E through the real Windows build jail
+        env:
+          IPE_E2E: "1"
+        run: cargo nextest run -p ipe_sandbox --test build_jail_windows_e2e --profile ci
+
+  # ─── FreeBSD Tier-2 BUILD-jail proof (the returning build jail, ADR 0051) ────
+  # FreeBSD's differential-confinement half: a REAL proof of the FreeBSD returning
+  # build jail (`build_in_jail`), which lowers the axes onto a scratch-rooted
+  # jail(2) established via the jail(8) CLI (ip4/ip6=disable for network, an
+  # unprivileged jail user over a chowned scratch for filesystem, an rctl
+  # maxproc:deny rule for a withheld subprocess axis). No native FreeBSD GitHub
+  # runner exists, so this runs inside a vmactions/freebsd-vm VM (root by default,
+  # required to create jails), reusing the admission-sandbox freebsd infra.
+  # Fail-closed: until this job is green on a real runner, FreeBSD Tier-2 stays
+  # refuse-to-certify (`build_in_jail` returns `Unavailable`), never admitting
+  # unconfined. The red-canary demands a differentially-probed axis
+  # (Denied { Network } / Denied { Filesystem }); a benign build is Clean.
+  freebsd-tier2:
+    name: freebsd-tier2 (jail(8) inside vmactions VM — the real FreeBSD build-jail proof)
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'   # slow VM boot: push/nightly only
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - name: build_jail_freebsd E2E through the real FreeBSD build jail
+        uses: vmactions/freebsd-vm@v1
+        with:
+          usesh: true
+          prepare: |
+            pkg install -y rust python3
+          run: |
+            # Fail-closed primitive check: jail(8) and rctl(8) must be present, or
+            # the FreeBSD build jail cannot be verified — refuse to certify (hard
+            # failure, never a skip-green).
+            if ! command -v jail >/dev/null 2>&1; then
+              echo "ERROR: jail(8) absent — the FreeBSD build jail cannot be verified; refusing to certify." >&2
+              exit 1
+            fi
+            if ! command -v rctl >/dev/null 2>&1; then
+              echo "ERROR: rctl(8) absent — a withheld-subprocess jail cannot deny process creation; refusing to certify." >&2
+              exit 1
+            fi
+            # The red-canary through the real jail(8): IPE_E2E=1 arms the runs.
+            IPE_E2E=1 cargo test -p ipe_sandbox --test build_jail_freebsd_e2e -- --nocapture
