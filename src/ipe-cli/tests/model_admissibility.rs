@@ -77,9 +77,9 @@ update msg model =
         Increment ->
             ( { model | count = model.count + 1 }, Cmd.none )
 
-view : Model -> Html Msg
+view : Model -> Element Msg
 view model =
-    Ui.layout [] (Ui.text (String.fromInt model.count))
+    Ui.text (String.fromInt model.count)
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
@@ -111,9 +111,9 @@ update msg model =
         Tick ->
             ( { model | count = model.count + 1 }, Cmd.none )
 
-view : Model -> Html Msg
+view : Model -> Element Msg
 view model =
-    Ui.layout [] (Ui.text (String.fromInt model.count))
+    Ui.text (String.fromInt model.count)
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
@@ -145,9 +145,9 @@ update msg model =
         Tick ->
             ( { model | count = model.count + 1 }, Cmd.none )
 
-view : Model -> Html Msg
+view : Model -> Element Msg
 view model =
-    Ui.layout [] (Ui.text (String.fromInt model.count))
+    Ui.text (String.fromInt model.count)
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
@@ -183,9 +183,9 @@ update msg model =
         Tick ->
             ( { model | count = model.count + 1 }, Cmd.none )
 
-view : Model -> Html Msg
+view : Model -> Element Msg
 view model =
-    Ui.layout [] (Ui.text (String.fromInt model.count))
+    Ui.text (String.fromInt model.count)
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
@@ -356,7 +356,7 @@ subscriptions _model =
 main =
     Web.app
         { init = init, update = update
-        , view = \model -> Ui.layout [] (Ui.text (String.fromInt model.count))
+        , view = \model -> Ui.text (String.fromInt model.count)
         , subscriptions = subscriptions
         , routes = [], notFound = Tick
         }
@@ -390,7 +390,7 @@ subscriptions _model =
 main =
     Web.app
         { init = init, update = update
-        , view = \model -> Ui.layout [] (Ui.text (String.fromInt model.count))
+        , view = \model -> Ui.text (String.fromInt model.count)
         , subscriptions = subscriptions
         , routes = [], notFound = Increment
         }

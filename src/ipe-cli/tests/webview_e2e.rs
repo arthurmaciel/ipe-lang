@@ -38,7 +38,6 @@
 /// Kernels exercised:
 /// - `Webview.app`   — constrain scheme + 5-field cfg with nested
 ///   `window = { title, size }` (G4 gate)
-/// - `Ui.layout`     — wraps Element → Html (view must return Html Msg)
 /// - `Ui.column`     — vertical layout container
 /// - `Ui.el`         — generic element container with `Ui.onClick` event attr
 /// - `Ui.onClick`    — binds a click event to a Msg constructor
@@ -46,10 +45,9 @@
 /// - `String.fromInt` — displays the counter value
 /// - `Cmd.none` / `Sub.none` — baseline TEA primitives
 ///
-/// Note: `view` wraps the Element tree in `Ui.layout [] (...) -> Html Msg`
-/// (unlike Ipe.Tui, which renders the Element tree directly to ANSI cells).
-/// This is required: the Webview runtime drives the same HTML renderer as
-/// Ipe.Web — `Html Msg` is the bridge type.
+/// Note: `view` returns `Element Msg` — the same portable Ipe.Ui view as
+/// Ipe.Web and Ipe.Tui. The framework applies `Ui.layout` internally to render
+/// the Element tree through the Webview runtime's HTML renderer.
 ///
 /// Note: `init` takes `()` (unit), matching `Ty::Unit` in the constrain
 /// scheme.  Using `Ty::Tuple([])` (empty tuple) is NOT equivalent — the two
@@ -88,14 +86,13 @@ update msg model =
         Decrement ->
             ( { model | count = model.count - 1 }, Cmd.none )
 
-view : Model -> Html Msg
+view : Model -> Element Msg
 view model =
-    Ui.layout []
-        (Ui.column []
-            [ Ui.el [ Ui.onClick Increment ] (Ui.text "+")
-            , Ui.text (String.fromInt model.count)
-            , Ui.el [ Ui.onClick Decrement ] (Ui.text "-")
-            ])
+    Ui.column []
+        [ Ui.el [ Ui.onClick Increment ] (Ui.text "+")
+        , Ui.text (String.fromInt model.count)
+        , Ui.el [ Ui.onClick Decrement ] (Ui.text "-")
+        ]
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
@@ -313,14 +310,13 @@ update msg model =
         Decrement ->
             ( { model | count = model.count - 1 }, Cmd.none )
 
-view : Model -> Html Msg
+view : Model -> Element Msg
 view model =
-    Ui.layout []
-        (Ui.column []
-            [ Ui.el [ Ui.onClick Increment ] (Ui.text "+")
-            , Ui.text (String.fromInt model.count)
-            , Ui.el [ Ui.onClick Decrement ] (Ui.text "-")
-            ])
+    Ui.column []
+        [ Ui.el [ Ui.onClick Increment ] (Ui.text "+")
+        , Ui.text (String.fromInt model.count)
+        , Ui.el [ Ui.onClick Decrement ] (Ui.text "-")
+        ]
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =

@@ -44,7 +44,7 @@ subscriptions _model = Sub.none
 main =
     Web.app
         { init = init, update = update
-        , view = \model -> Ui.layout [] (Ui.text (String.fromInt model.count))
+        , view = \model -> Ui.text (String.fromInt model.count)
         , subscriptions = subscriptions
         , routes = [ Web.route "/" CounterPage, Web.route "/about" AboutPage ]
         , notFound = CounterPage
