@@ -153,8 +153,8 @@ pub fn resolve_refusal(
         return Err(CliError::UsageOwned(format!(
             "{defect}\n  This program reaches native Rust code ({}) whose effects cannot be \
              proven safe, and no capability jail is available on this platform. Install a jail \
-             primitive (bwrap on Linux), or set {OVERRIDE_ENV}=1 to run it unconfined at your own \
-             risk (never in CI).",
+             primitive (bwrap on Linux, sandbox-exec on macOS), or set {OVERRIDE_ENV}=1 to run it \
+             unconfined at your own risk (never in CI).",
             names.join(", ")
         )));
     }
