@@ -4,10 +4,9 @@ A server-driven web app in [The Elm Architecture](https://guide.elm-lang.org/arc
 The server holds the `Model`, renders `view` to HTML, and streams patches to the
 browser as `update` runs; the browser sends events back. Choose it for forms,
 dashboards, and real-time UIs where the state of record lives on the server.
-Because the `Model` is persisted to the session store, it must be
-serialisable (`serde` + `Clone` + `PartialEq`) — the compiler rejects a `Model`
-carrying a function, `Cmd`, or view value with a clear error rather than a
-`cargo` trait-bound failure.
+Because the `Model` is persisted to the session store, it must be a plain value
+— the compiler rejects a `Model` carrying a function, `Cmd`, or view value with
+a clear error.
 
 ## Entry point
 
@@ -90,8 +89,29 @@ main =
         }
 ```
 
-This is the program `ipe init` scaffolds — run `ipe init myapp` to get a working
-Web project, then `ipe run` it.
+This is the program `ipe init` scaffolds.
+
+## Running it
+
+Scaffold the Web project, then run it:
+
+```sh
+ipe init myapp
+```
+
+```text
+  Created Ipê project `myapp`.
+
+  Next steps:
+      cd myapp && ipe run
+
+  Then open http://localhost:8000 and click the counter buttons.
+```
+
+`ipe run` serves the counter over HTTP on `http://localhost:8000`. Because the
+UI is driven in a browser, open that address and click the buttons to see
+`update` run and the view patch — a Web app needs a browser, not just a
+terminal.
 
 ## Targeting the browser
 

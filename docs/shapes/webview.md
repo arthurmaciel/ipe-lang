@@ -4,7 +4,7 @@ A native desktop app in [The Elm Architecture](https://guide.elm-lang.org/archit
 It renders the same `Ipe.Ui` view as the [Web](web.md) shape, but inside a
 system webview window instead of a browser served over HTTP — one binary, no
 server process. Choose it for local desktop tools that want a rich UI without
-shipping a web stack. The `Model` is kept in memory, so it only needs `Clone`.
+shipping a web stack. The `Model` is kept in memory as a plain value.
 
 ## Entry point
 
@@ -74,5 +74,15 @@ main =
         }
 ```
 
-Build it with `ipe build`; running the binary opens a native window. Because it
-needs a display, run it on a desktop session rather than in CI.
+## Running it
+
+Build the binary with `ipe build`, then run it:
+
+```sh
+ipe build
+ipe run
+```
+
+Running it opens a native window titled `Ipê WebView` with a counting button.
+Because it opens a system window, run it on a desktop session with a display
+rather than headless in CI.

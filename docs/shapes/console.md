@@ -5,7 +5,7 @@ A line-oriented interactive tool in [The Elm Architecture](https://guide.elm-lan
 standard input and output: it renders `view` to stdout, reads one line at a
 time, turns each into a `Msg` via `onLine`, and re-renders. Choose it for
 REPL-style prompts and stdin-driven tools that want managed state without a
-full terminal UI. The `Model` is kept in memory, so it only needs `Clone`.
+full terminal UI. The `Model` is kept in memory as a plain value.
 
 At start it renders the initial `view` once, then waits for input; at end of
 input (EOF) it exits 0. A render is written verbatim, with no automatic
@@ -157,19 +157,27 @@ main =
         }
 ```
 
-Run it with `ipe run examples/console-repl`, then type commands:
+## Running it
+
+Run the example and feed it a few commands. Because it reads standard input, you
+can type interactively or pipe a scripted session:
+
+```sh
+printf 'add 5\nmul 10\nquit\n' | ipe run examples/console-repl
+```
 
 ```text
 ready
 = 0
-> add 5
-added 5
+> added 5
 = 5
-> mul 10
-multiplied by 10
+> multiplied by 10
 = 50
-> quit
+>
 ```
+
+Each render ends in the `> ` prompt; `add 5` folds into the running total,
+`mul 10` multiplies it, and `quit` exits 0.
 
 ## Example
 
