@@ -1,32 +1,21 @@
-# Console
-
-A line-oriented interactive tool in [The Elm Architecture](https://guide.elm-lang.org/architecture/).
-`Console.app` runs the same TEA loop as the graphical shapes, but its channel is
-standard input and output: it renders `view` to stdout, reads one line at a
-time, turns each into a `Msg` via `onLine`, and re-renders. Choose it for
-REPL-style prompts and stdin-driven tools that want managed state without a
-full terminal UI. The `Model` is kept in memory, so it only needs `Clone`.
-
-At start it renders the initial `view` once, then waits for input; at end of
-input (EOF) it exits 0. A render is written verbatim, with no automatic
-newline — a `view` that ends in `"> "` leaves the cursor on the prompt line, and
-one that ends in `"\n"` puts each frame on its own line.
-
-## Entry point
-
-`main = Console.app cfg`, where `cfg` is a record of
-`init` / `update` / `view` / `subscriptions` / `onLine`. `view` returns a
-`String`, and `onLine : String -> Msg` maps each input line to a message.
-
-## Minimal example
-
-An accumulator calculator: each line is a command, `update` folds it into a
-running total, and `view` prints the last outcome, the total, and a prompt.
-Parsing happens once at the edge (`onLine` builds a `Command`), so `update` only
-ever folds well-formed commands.
-
-```ipe
 module Main exposing (main)
+
+-- An accumulator calculator as a Console REPL: the same TEA loop as the
+-- graphical shapes, driven by standard input. `Console.app` renders `view` to
+-- stdout, reads one line at a time, turns each into a `Msg` via `onLine`, folds
+-- it through `update`, and re-renders.
+--
+-- Each line is a command:
+--
+--     add N    add N to the running total
+--     sub N    subtract N
+--     mul N    multiply by N
+--     reset    set the total back to 0
+--     quit     exit (end-of-input also exits)
+--
+-- `view` prints the last outcome and the current total, then a prompt. Anything
+-- that is not one of those commands prints a friendly error line and leaves the
+-- total unchanged.
 
 import Ipe.Prelude exposing (..)
 import Ipe.String as String
@@ -36,6 +25,8 @@ import Ipe.Cmd as Cmd
 import Ipe.Sub as Sub
 
 
+-- A parsed input line. Parsing happens once, at the edge (`onLine`), so `update`
+-- only ever folds well-formed commands and never re-inspects raw text.
 type Command
     = Add Int
     | Sub Int
@@ -87,12 +78,17 @@ update msg model =
                     ( model, Cmd.perform (System.exit 0) (\_ -> Entered (Unknown "")) )
 
                 Unknown raw ->
-                    ( { model | outcome = "?  unknown command: " ++ raw }, Cmd.none )
+                    ( { model | outcome = "?  unknown command: " ++ raw ++ "  (try: add N, sub N, mul N, reset, quit)" }
+                    , Cmd.none
+                    )
 
 
 view : Model -> String
 view model =
-    model.outcome ++ "\n= " ++ String.fromInt model.total ++ "\n> "
+    model.outcome
+        ++ "\n= "
+        ++ String.fromInt model.total
+        ++ "\n> "
 
 
 subscriptions : Model -> Sub Msg
@@ -100,6 +96,8 @@ subscriptions _model =
     Sub.none
 
 
+-- Parse one input line into a `Command`. A bare command word (`reset` / `quit`)
+-- takes no argument; the arithmetic commands take a single integer argument.
 onLine : String -> Msg
 onLine line =
     Entered (parse (String.trim line))
@@ -132,6 +130,8 @@ parse line =
             Unknown line
 
 
+-- An arithmetic command is a verb plus exactly one integer argument. Anything
+-- else — no argument, extra words, or a non-integer — is reported as unknown.
 parseBinary : (Int -> Command) -> List String -> String -> Command
 parseBinary build rest line =
     case rest of
@@ -155,23 +155,3 @@ main =
         , subscriptions = subscriptions
         , onLine = onLine
         }
-```
-
-Run it with `ipe run examples/console-repl`, then type commands:
-
-```text
-ready
-= 0
-> add 5
-added 5
-= 5
-> mul 10
-multiplied by 10
-= 50
-> quit
-```
-
-## Example
-
-[`examples/console-repl/`](../../examples/console-repl/) — the program above,
-with a friendly hint on unknown input.

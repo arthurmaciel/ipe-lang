@@ -1,4 +1,4 @@
-name = "console-counter"
+name = "tui-counter"
 version = "0.1.0"
 entry = "src/Main.ipe"
 backend = "rust"
