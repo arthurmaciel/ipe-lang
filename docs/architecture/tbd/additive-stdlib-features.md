@@ -3,7 +3,7 @@
 > Read-only design of the additive stdlib surfaces named in
 > `docs/divergences-review.md` §6 (missing divergences) and the
 > `Array`/`Bitwise`/`Tuple` gap from `docs/divergences-from-elm.md` R5,
-> against the Elm-core catalog in `docs/architecture/elm-core-coverage.md`.
+> against the Elm-core catalog in `docs/architecture/tbd/elm-core-coverage.md`.
 > Nothing here is implemented — this is the shape, the backing, the registry
 > fit, the effort, and the roadmap slot for each.
 >
