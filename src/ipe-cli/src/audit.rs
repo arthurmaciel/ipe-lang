@@ -37,12 +37,15 @@
 //! runs after the four Tier-1 checks: it builds and exercises the package's
 //! native code inside a jail scoped to its declared capability set and
 //! reconciles observed-vs-declared, fail-closed (ADR 0046). It genuinely
-//! certifies only the one wired-and-proven platform (`linux-x64`); other
-//! platforms remain a documented refuse-to-certify and the surface never claims
-//! Tier-2 for them.
+//! certifies only the wired-and-proven platforms (`linux-x64` under
+//! bwrap+seccomp, `macos-arm64` under `sandbox-exec` Seatbelt); other platforms
+//! remain a documented refuse-to-certify and the surface never claims Tier-2 for
+//! them.
 //!
-//! Deferred (not this layer): Tier-2 on macOS / Windows / FreeBSD (each promotes
-//! as its jail lands), and run-time sandbox isolation hardening.
+//! Deferred (not this layer): Tier-2 on Windows and FreeBSD (each promotes when
+//! its returning build jail lands — the run-jail arm alone does not suffice,
+//! since Tier-2 confines through the build jail), and run-time sandbox isolation
+//! hardening.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -195,8 +198,9 @@ pub fn run_audit(rest: &[String]) -> Result<(), CliError> {
 /// Compose the passing summary, advertising Tier-2 ONLY for what genuinely ran
 /// (the honest surface, ADR 0046). A pure Ipê package's summary is Tier-1 only,
 /// with the standing note that Tier-2 does not apply. A native package certified
-/// on `linux-x64` names that platform and narrows — never drops — the note that
-/// the other platforms are not yet certified.
+/// on a wired platform (`linux-x64` or `macos-arm64`) names that platform and
+/// narrows — never drops — the note that the other platforms are not yet
+/// certified.
 fn passing_summary(name: &str, version: &str, tier2: &crate::audit_native::Tier2Outcome) -> String {
     use crate::audit_native::Tier2Outcome;
     match tier2 {
@@ -207,9 +211,9 @@ fn passing_summary(name: &str, version: &str, tier2: &crate::audit_native::Tier2
         Tier2Outcome::Certified { platform } => format!(
             "package audit: {name} {version} — all Tier-1 checks passed; native Tier-2 capability \
              enforcement (build+link reachability of the package's FFI bindings under a \
-             declared-scoped jail) passed on: {platform}. Tier-2 has not yet been run on other \
-             platforms (macOS / Windows / FreeBSD), so this version is not certified native-clean \
-             for them."
+             declared-scoped jail) passed on: {platform}. Tier-2 has not yet been run on the \
+             not-yet-wired platforms (Windows / FreeBSD), so this version is not certified \
+             native-clean for them."
         ),
     }
 }
