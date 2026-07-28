@@ -2189,6 +2189,16 @@ pub enum Pat {
         prefix: Vec<Self>,
         rest: Option<Box<Self>>,
     },
+    /// An or-pattern `p0 | p1 | …` — matches if ANY alternative matches. Each
+    /// alternative is an arbitrary [`Pat`] and recurses. Every alternative binds
+    /// the identical set of names at identical types (proved upstream in
+    /// canon/types), so a single copy of the arm body reads those binders
+    /// regardless of which alternative matched. The backend renders this as the
+    /// native Rust or-pattern `p0 | p1 | …`, joining the rendered sub-patterns
+    /// with ` | `, with the arm body emitted exactly once. Refutable (it
+    /// discriminates). Invariant: length ≥ 2 — the lowerer never wraps a lone
+    /// alternative.
+    Or(Vec<Self>),
 }
 
 /// Whether a pattern matches EVERY value of its scrutinee type.
@@ -2201,6 +2211,11 @@ pub fn is_irrefutable(pat: &Pat) -> bool {
     match pat {
         Pat::Wildcard | Pat::Var(_) => true,
         Pat::Alias(inner, _) => is_irrefutable(inner),
+        // An or-pattern is irrefutable only if every alternative is — in practice
+        // never for a well-formed `≥ 2` or-pattern (two distinct irrefutable
+        // alternatives are redundant), so it routes through the refutable
+        // `Match` path.
+        Pat::Or(alts) => alts.iter().all(is_irrefutable),
         Pat::Int(_)
         | Pat::Bool(_)
         | Pat::Char(_)
@@ -2246,7 +2261,11 @@ pub fn is_dispatch_free(pat: &Pat) -> bool {
         Pat::Alias(inner, _) => is_dispatch_free(inner),
         Pat::Tuple(elems) => elems.iter().all(is_dispatch_free),
         Pat::Record(fields) => fields.iter().all(|(_, p)| is_dispatch_free(p)),
-        Pat::Int(_)
+        // An or-pattern always discriminates (a well-formed `≥ 2` alternative
+        // set selects between shapes), so it is never dispatch-free — grouped
+        // with the other refutable, dispatch-needing leaves.
+        Pat::Or(_)
+        | Pat::Int(_)
         | Pat::Bool(_)
         | Pat::Char(_)
         | Pat::Str(_)
@@ -2266,6 +2285,9 @@ pub fn is_list_shaped(pat: &Pat) -> bool {
     match pat {
         Pat::Slice { .. } | Pat::Wildcard | Pat::Var(_) => true,
         Pat::Alias(inner, _) => is_list_shaped(inner),
+        // An or-pattern is list-shaped iff every alternative is (`[] | [_]`),
+        // so a list `case` written with alternatives still reads as list-shaped.
+        Pat::Or(alts) => alts.iter().all(is_list_shaped),
         Pat::Int(_)
         | Pat::Bool(_)
         | Pat::Char(_)
@@ -2286,6 +2308,10 @@ pub fn is_ctor_headed(pat: &Pat) -> bool {
     match pat {
         Pat::Ctor { .. } => true,
         Pat::Alias(inner, _) => is_ctor_headed(inner),
+        // An or-pattern is constructor-headed iff every alternative is
+        // (`Red | Green`), so an alternative-written enum cover reads as a
+        // constructor-discrimination arm set.
+        Pat::Or(alts) => alts.iter().all(is_ctor_headed),
         Pat::Wildcard
         | Pat::Var(_)
         | Pat::Int(_)
@@ -2309,6 +2335,8 @@ pub fn is_product_shaped(pat: &Pat) -> bool {
     match pat {
         Pat::Tuple(_) | Pat::Wildcard | Pat::Var(_) => true,
         Pat::Alias(inner, _) => is_product_shaped(inner),
+        // An or-pattern is product-shaped iff every alternative is.
+        Pat::Or(alts) => alts.iter().all(is_product_shaped),
         Pat::Int(_)
         | Pat::Bool(_)
         | Pat::Char(_)
