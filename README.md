@@ -103,16 +103,17 @@ One language, five ways to ship. Pick the entry point that matches your app.
 
 | Shape | Entry point | Use it for | TEA |
 |---|---|---|---|
-| `Ipe.Live` | `Live.app` | Web apps — server-rendered HTML, real-time SSE patches, sessions | ✓ |
-| `Ipe.Http.Server` | `Server.listen` | Headless HTTP / JSON APIs | |
-| `Ipe.Cli` | `Task.run` | One-shot tools and cron jobs | |
-| `Ipe.Tui` | `Tui.app` | Terminal UIs | ✓ |
-| `Ipe.Webview` | `Webview.app` | Native desktop apps | ✓ |
+| [`Ipe.Web`](docs/shapes/web.md) | `Web.app` | Web apps — server-rendered HTML, real-time SSE patches, sessions | ✓ |
+| [`Ipe.WebView`](docs/shapes/webview.md) | `WebView.app` | Native desktop apps | ✓ |
+| [`Ipe.Tui`](docs/shapes/tui.md) | `Tui.program` | Terminal UIs | ✓ |
+| [`Ipe.Console`](docs/shapes/console.md) | `Console.app` | Line-oriented interactive tools | ✓ |
+| [`Program`](docs/shapes/program.md) | plain `main` | Scripts, one-shot tools, cron jobs, HTTP servers | |
 
-The three ✓ shapes follow [The Elm Architecture](https://guide.elm-lang.org/architecture/)
-(`init` / `update` / `view` / `subscriptions`) — and share the **same
-`Ipe.Ui` view code**, so one view renders on web, terminal, and desktop.
-See [`examples/`](examples/) for a program of each shape.
+The four ✓ shapes follow [The Elm Architecture](https://guide.elm-lang.org/architecture/)
+(`init` / `update` / `view` / `subscriptions`) — and the two graphical ones share
+the **same `Ipe.Ui` view code**, so one view renders on web and desktop.
+See [`docs/shapes/`](docs/shapes/README.md) for a guide to each shape, and
+[`examples/`](examples/) for runnable programs.
 
 ## Capabilities
 

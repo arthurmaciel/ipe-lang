@@ -1,0 +1,56 @@
+module Main exposing (main)
+
+-- A line-oriented Console app: the same TEA loop as the browser shapes, driven
+-- by standard input. `Console.app` reads one line at a time, turns each into a
+-- `Msg` via `onLine`, folds it through `update`, and re-renders `view` to stdout.
+-- On start it renders the initial `view` once, then waits for input; at EOF it
+-- exits 0.
+
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+import Ipe.Console exposing (app)
+
+
+type Msg
+    = GotLine String
+
+
+type alias Model =
+    { lines : Int }
+
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { lines = 0 }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        GotLine _line ->
+            ( { model | lines = model.lines + 1 }, Cmd.none )
+
+
+view : Model -> String
+view model =
+    "lines: " ++ String.fromInt model.lines
+
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+onLine : String -> Msg
+onLine line =
+    GotLine line
+
+
+main =
+    app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , onLine = onLine
+        }

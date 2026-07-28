@@ -61,8 +61,9 @@ Production-grade code no survive guesswork.
 
 ### The six decisions to confirm
 
-1. **App shape** — match matrix. Ipe.Live=web UI, Ipe.Http.Server=headless
-   API, Ipe.Cli=one-shot/cron, Ipe.Tui=terminal UI, Ipe.Webview=desktop.
+1. **App shape** — match matrix. Ipe.Web=web UI, Ipe.Http.Server=headless
+   API, Ipe.Console=line-oriented TEA, Program (plain `main`)=one-shot/cron,
+   Ipe.Tui=terminal UI, Ipe.WebView=desktop.
 2. **Persistence** — SQLite (single-file, embeds) / PostgreSQL / Firestore /
    Redis / none.
 3. **Auth** — none / `Ipe.Auth` (cookies+JWT, you own users) / OAuth
@@ -79,13 +80,14 @@ Ask one focused question per ambiguity; no guess heroically.
 
 | User wants…                              | Use                | Entry point shape                  | Notes |
 |------------------------------------------|--------------------|------------------------------------|-------|
-| Web app (forms, real-time, UI state)     | **Ipe.Live**       | `Ipe.Live.app cfg`                 | HTTP-first; SSE patches; sessions + cookies + routing built in. |
+| Web app (forms, real-time, UI state)     | **Ipe.Web**        | `Web.app cfg`                      | HTTP-first; SSE patches; sessions + cookies + routing built in. |
 | HTTP / JSON API (no browser UI)          | **Ipe.Http.Server**| `Server.listen 8000 [...]`         | Routes + middleware (CORS / rate-limit / logging / basic-auth). |
-| Multi-tenant SaaS / dashboard            | **Ipe.Live + auth-app gate** | `Live.app { consoleAuth = … }` | Tenant scope enforced at SQL layer. |
-| Background job / cron worker             | **Ipe.Cli**        | `main = Task.run scheduledWork`    | No UI loop; `Task.parallel` for fan-out. |
-| Terminal UI (TUI)                        | **Ipe.Tui**        | `Ipe.Tui.app cfg`                  | Same view code as Ipe.Live. |
-| One-shot CLI tool                        | **Ipe.Cli**        | `main = Task.run cliCmd`           | Argparse via `System.args`. |
-| Desktop app                              | **Ipe.Webview**    | `Ipe.Webview.app cfg`              | macOS today; Linux / Windows later. |
+| Multi-tenant SaaS / dashboard            | **Ipe.Web + auth-app gate** | `Web.app { consoleAuth = … }` | Tenant scope enforced at SQL layer. |
+| Background job / cron worker             | **Program** (plain `main`) | `main = Task.run scheduledWork`    | No UI loop; `Task.parallel` for fan-out. |
+| Line-oriented interactive tool           | **Ipe.Console**    | `Console.app cfg`                  | Managed stdin-driven TEA loop (init/update/view/onLine). |
+| Terminal UI (TUI)                        | **Ipe.Tui**        | `Tui.program cfg`                  | Same view code as Ipe.Web. |
+| One-shot CLI tool                        | **Program** (plain `main`) | `main = Task.run cliCmd`           | Argparse via `System.args`. |
+| Desktop app                              | **Ipe.WebView**    | `WebView.app cfg`                  | macOS today; Linux / Windows later. |
 | WebSocket-driven feed                    | **Ipe.Http.Server.WebSocket** | `Server.upgrade req` | Bidirectional. |
 | Server-sent stream (LLM tokens, SSE)     | **Ipe.Http.Server.Stream** | `Server.Stream.emit` | Mirror of `Ipe.Http.Stream`. |
 
