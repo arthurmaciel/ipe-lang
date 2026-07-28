@@ -1,0 +1,90 @@
+module Main exposing (main)
+
+-- | task-publish — the top-level, Task-shaped `Ipe.PubSub.publish`.
+--
+-- `Ipe.PubSub.publish : String -> any -> Task Error Int` broadcasts a payload
+-- on a topic and resolves to the number of subscribers that received it. It is
+-- a `Task`, not a `Cmd`, so it is usable from any context that produces a
+-- `Task` — here it is bridged into the TEA loop with `Cmd.perform`.
+--
+-- The broadcast bus lives in the running Web/live runtime, so `publish`
+-- succeeds while an `Ipe.Tea.Web` app is serving in this process and resolves
+-- to `Err` otherwise (a plain CLI process with no bus). This app IS such a
+-- context: it runs `Web.app`, so a `publish` fired from `update` reaches every
+-- session subscribed to the topic. The `Published (Result Error Int)` message
+-- carries the outcome back into the model, so the subscriber count is shown.
+--
+-- Contrast with `Ipe.Tea.Web.PubSub`, the Web-shape-scoped TEA-side broadcast
+-- (`publish` / `subscribeTopic` return `Cmd msg` / `Sub msg`): that is the form
+-- to reach for when you are already inside the managed loop and want a `Cmd`
+-- directly. This example uses the top-level Task form on purpose, to show it
+-- composing through `Cmd.perform`.
+
+
+import Ipe.Tea.Web as Web
+import Ipe.PubSub as PubSub
+import Ipe.Ui as Ui
+
+
+type Msg
+    = Publish
+    | Published (Result Error Int)
+    | Ignored
+
+
+type alias Model =
+    { lastCount : Int }
+
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { lastCount = 0 }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Publish ->
+            -- `PubSub.publish` is a Task; `Cmd.perform` runs it and routes its
+            -- result back as `Published`.
+            ( model
+            , Cmd.perform (PubSub.publish "room" "hello") Published
+            )
+
+        Published result ->
+            case result of
+                Ok count ->
+                    ( { model | lastCount = count }, Cmd.none )
+
+                Err _ ->
+                    -- No bus in this process (e.g. before the server bound its
+                    -- port): keep the model unchanged.
+                    ( model, Cmd.none )
+
+        Ignored ->
+            ( model, Cmd.none )
+
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+view : Model -> Element Msg
+view model =
+    Ui.column []
+        [ Ui.button []
+            { onPress = Just Publish, label = Ui.text "Broadcast" }
+        , Ui.text ("last subscriber count: " ++ String.fromInt model.lastCount)
+        ]
+
+
+main =
+    Web.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = Ignored
+        }

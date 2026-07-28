@@ -2382,41 +2382,30 @@ mod tests {
         );
     }
 
-    /// The `KNOWN_UNBACKED` kernels (`PubSub.publish` /
-    /// `PubSub.publishNoEcho`) are UNREACHABLE from any user program: their
-    /// `"PubSub"` qualifier is absent from `env.qual_vars`, so canonicalisation
-    /// never mints a `VarKernel` for them. This is the fact that keeps the
-    /// `stdlib_scheme` totality flip sound — the `None` arm the
-    /// two `PubSub` variants return can never be hit on a real resolution path.
-    ///
-    /// Mirrors `ipe_types` `KNOWN_UNBACKED` (guarded there by
-    /// `known_unbacked_never_schemed`); enumerated here directly because that
-    /// const is private to `ipe_types`.
+    /// `Ipe.PubSub` (the top-level, Task-shaped publish surface) is a
+    /// COMPILED-SOURCE stdlib module (`src/stdlib/Ipe/PubSub.ipe`), so the bare
+    /// `"PubSub"` KERNEL qualifier must NOT be registered in `env.qual_vars`
+    /// (kernel qualifier OR compiled-source — never both). `Ipe.PubSub.publish`
+    /// resolves through the compiled module's `Ffi.kernel "PubSub_publish"` alias,
+    /// whose fast-path mints a `VarKernel` with a concrete kernel id — so the
+    /// `stdlib_scheme` totality flip stays sound without a `qual_vars` entry.
     #[test]
-    fn known_unbacked_disjoint_from_qual_vars() {
+    fn pubsub_kernel_qualifier_absent_compiled_source() {
         use ipe_intern::Interner;
-        use ipe_kernels::StdlibKernel;
 
         let mut interner = Interner::new();
+        let pubsub = interner
+            .intern("PubSub")
+            .expect("tripwire: intern PubSub OOM");
         let env = Env::initial(vec![], &mut interner)
             .expect("Env::initial must not fail in the tripwire test");
 
-        for sk in [
-            StdlibKernel::PubSubPublish,
-            StdlibKernel::PubSubPublishNoEcho,
-        ] {
-            let qual = sk.decl().qualifier;
-            let Ok(qual_sym) = interner.intern(qual) else {
-                continue;
-            };
-            assert!(
-                !env.qual_vars.contains_key(&qual_sym),
-                "KNOWN_UNBACKED {sk:?} qualifier {qual:?} IS present in \
-                 env.qual_vars — it is reachable, so the stdlib_scheme None arm \
-                 could be hit and the Phase E totality flip would be unsound. \
-                 Either scheme it or remove it from qual_vars.",
-            );
-        }
+        assert!(
+            !env.qual_vars.contains_key(&pubsub),
+            "The `PubSub` kernel qualifier must stay OUT of env.qual_vars — \
+             `Ipe.PubSub` is a compiled-source module resolved via the \
+             `Ffi.kernel \"PubSub_publish\"` alias, not a kernel qualifier.",
+        );
     }
 
     // ─────────────────────────────────────────────────────────────────────────
