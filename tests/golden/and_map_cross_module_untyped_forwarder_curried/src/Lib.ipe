@@ -1,4 +1,5 @@
 module Lib exposing (am2)
+import Ipe.Result
 
 
 -- #90 T3: cross-module UNANNOTATED double forwarder — `am2` goes through

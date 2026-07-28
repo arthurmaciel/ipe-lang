@@ -39,6 +39,9 @@ use ipe::CliError;
 const T4D_NONEMPTY_ROUTES_WRONG_NOTFOUND: &str = r#"module Main exposing (main)
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.String
+import Ipe.Sub
 type Page = CounterPage | AboutPage
 type Msg = Increment
 type alias Model = { page : Page, count : Int }
@@ -62,6 +65,9 @@ main =
 const T4F_WRONG_ROUTE_CTOR_CORRECT_NOTFOUND: &str = r#"module Main exposing (main)
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.String
+import Ipe.Sub
 type Page = CounterPage | AboutPage
 type Msg = Increment
 type alias Model = { page : Page, count : Int }
@@ -84,6 +90,9 @@ main =
 const MIX_MIXED_ROUTE_CTORS: &str = r#"module Main exposing (main)
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.String
+import Ipe.Sub
 type Page = CounterPage | AboutPage
 type Msg = Increment
 type alias Model = { page : Page, count : Int }
@@ -110,6 +119,9 @@ main =
 const NON_ROUTED_LIVE: &str = r"module Main exposing (main)
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.String
+import Ipe.Sub
 type Msg = Increment
 type alias Model = { count : Int }
 init : a -> ( Model, Cmd Msg )
@@ -140,6 +152,9 @@ main =
 const NON_ROUTED_LIVE_WITH_NONEMPTY_ROUTES: &str = r#"module Main exposing (main)
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.String
+import Ipe.Sub
 type Page = MainPage
 type Msg = Increment
 type alias Model = { count : Int }

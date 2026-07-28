@@ -1,5 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
+import Ipe.Task
 
 -- Task.succeed wraps a pure value into a Task; Task.andThen chains effects.
 main =

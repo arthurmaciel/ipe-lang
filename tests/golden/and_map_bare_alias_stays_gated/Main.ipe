@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Result
 
 -- #90 T3 residual gate, revert-incident Bug 3 regression (the shape that
 -- caused the THIRD revert): a BARE, POINT-FREE top-level re-export of

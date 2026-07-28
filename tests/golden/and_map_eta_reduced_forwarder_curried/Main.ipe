@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.Result
 
 -- #90 T3: ETA-REDUCED annotated forwarder (`am2 = am1`, no params) — the
 -- bare reference to `am1` still records a SchemeApp whose obligated `b`

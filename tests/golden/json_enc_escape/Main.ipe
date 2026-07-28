@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Json.Encode
 
 -- Strings must be HTML-escaped exactly as Go's json.Marshal does by default:
 --   "  -> \"      (also serde)

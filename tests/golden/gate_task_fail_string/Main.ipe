@@ -1,4 +1,6 @@
 module Main exposing (main)
+import Ipe.Error
+import Ipe.Task
 
 -- `Task.fail "plain string"` must be REJECTED: the class-7 fix pins
 -- `Task.fail : Error -> Task Error a` (was over-polymorphic `fun(var(1),

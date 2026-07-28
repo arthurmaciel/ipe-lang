@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- #104 seal: a `CloneOk` let-binding (`s : String`) used more than once in
 -- its scope.  Without T5, `string_length(s)` moves `s` in emitted Rust; the

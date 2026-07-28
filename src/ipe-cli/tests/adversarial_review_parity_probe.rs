@@ -257,6 +257,7 @@ fn sources_of(pairs: &[(&[&str], &str)]) -> UserSources {
 const MAIN: &[&str] = &["Main"];
 
 const BASE: &str = "module Main exposing (main)\n\
+import Ipe.Io
      type Page = Home String String\n\n\
      mk : String -> (String -> Page)\n\
      mk s =\n    \\t -> Home s t\n\n\
@@ -271,6 +272,8 @@ const BASE: &str = "module Main exposing (main)\n\
 // program if nothing were reserved. This is the sharpest possible probe of
 // `Interner::set_fresh_avoid`: the pool MUST skip past this real user name.
 const WITH_ETA0_COLLISION: &str = "module Main exposing (main)\n\
+import Ipe.Io
+import Ipe.String
      type Page = Home String String\n\n\
      eta_0 = 999\n\n\
      mk : String -> (String -> Page)\n\
@@ -342,10 +345,14 @@ const UTIL_TEMP_RENAME: &str = "module Lib.Util exposing (bumpTemp)\n\nbumpTemp 
 const MAIN_USES_UTIL: &str = "module Main exposing (main)\n\
      import Ipe.Prelude exposing (..)\n\
      import Lib.Util exposing (bump)\n\n\
+import Ipe.Io
+import Ipe.String
      main = Io.println (String.fromInt (bump 41))\n";
 const MAIN_USES_UTIL_TEMP: &str = "module Main exposing (main)\n\
      import Ipe.Prelude exposing (..)\n\
      import Lib.Util exposing (bumpTemp)\n\n\
+import Ipe.Io
+import Ipe.String
      main = Io.println (String.fromInt (bumpTemp 41))\n";
 
 /// #4: an identifier rename A -> B -> A (round-tripping back to the ORIGINAL

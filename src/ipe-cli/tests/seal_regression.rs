@@ -171,6 +171,8 @@ fn assert_accepted_project(name: &str, files: &[(&str, &str)], expected_stdout: 
 }
 
 const HEAD: &str = "module Main exposing (main)\nimport Ipe.Prelude exposing (..)\n";
+import Ipe.Io
+import Ipe.String
 
 // ===========================================================================
 // CO-BACKEND-001 — a local must never shadow a bare-emitted top-level fn.
@@ -275,6 +277,7 @@ fn multi_module_distinct_mod_idents_compile() {
             "Helper.ipe",
             "module Helper exposing (shout)\n\
              import Ipe.Prelude exposing (..)\n\
+import Ipe.String
              shout : String -> String\n\
              shout s = String.toUpper s\n",
         ),

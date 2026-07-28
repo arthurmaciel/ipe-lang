@@ -61,6 +61,9 @@ const IPE_TUI_COUNTER: &str = r"module Main exposing (main)
 
 import Ipe.Tea.Tui as Tui
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.String
+import Ipe.Sub
 
 type alias KeyEvent = { kind : String, value : String }
 
@@ -118,6 +121,7 @@ main =
 const IPE_TUI_PROGRAM_ONKEY_RECORD: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Tui as Tui
+import Ipe.Cmd
 
 type alias KeyEvent = { kind : String, value : String }
 

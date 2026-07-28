@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- c13 (#130 seal). Partial application where the SUPPLIED ARG is a complex
 -- expression (not a bare Var), and the resulting partial is called twice.

@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.String
 
 -- Regression fixture for the BACKLOG Critical row "Name-only HttpRequest-shape
 -- false-positive fold": a record literal that shares the CANONICAL

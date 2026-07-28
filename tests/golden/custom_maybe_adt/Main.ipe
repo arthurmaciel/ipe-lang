@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- A generic algebraic data type with a payload-carrying constructor.
 -- `Som a` carries one field; `Non` is nullary. Construction (`Som 41`) and a

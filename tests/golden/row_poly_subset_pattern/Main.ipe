@@ -1,5 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.List
+import Ipe.String
 
 
 -- #56 proof-matrix shapes P5 + P7: a subset record PATTERN over a superset

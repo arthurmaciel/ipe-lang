@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.String
 
 
 -- #221 minimal trigger: `guarded`'s body partially applies the SIBLING

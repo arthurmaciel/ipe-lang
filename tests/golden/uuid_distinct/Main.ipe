@@ -1,5 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Task
+import Ipe.Uuid
 
 -- SOUNDNESS regression (task #54): entropy is an EFFECT, not a memoizable pure
 -- value. `Uuid.v4 : () -> Task Error String`, so two separate `Uuid.v4 ()`

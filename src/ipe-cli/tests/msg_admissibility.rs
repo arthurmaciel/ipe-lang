@@ -68,6 +68,9 @@ const LIVE_CMD_MSG: &str = r"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.String
+import Ipe.Sub
 
 type Msg
     = Tick
@@ -112,6 +115,9 @@ const LIVE_FN_MSG: &str = r"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.String
+import Ipe.Sub
 
 type Msg
     = Noop
@@ -152,6 +158,9 @@ const LIVE_LAMBDA_UPDATE_CMD_MSG: &str = r"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.String
+import Ipe.Sub
 
 type Msg
     = Tick
@@ -189,6 +198,9 @@ const TUI_CMD_MSG: &str = r"module Main exposing (main)
 
 import Ipe.Tea.Tui as Tui
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.String
+import Ipe.Sub
 
 type Msg
     = Increment
@@ -238,6 +250,9 @@ const TUI_FN_MSG: &str = r"module Main exposing (main)
 
 import Ipe.Tea.Tui as Tui
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.String
+import Ipe.Sub
 
 type Msg
     = NoOp
@@ -289,6 +304,9 @@ const LIVE_HTML_MSG: &str = r"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.String
+import Ipe.Sub
 
 type Msg
     = Noop
@@ -328,6 +346,9 @@ const LIVE_PLAIN_MSG: &str = r"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.String
+import Ipe.Sub
 
 type Msg
     = Increment

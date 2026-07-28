@@ -62,6 +62,9 @@ const LIVE_GOOD: &str = r"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.String
+import Ipe.Sub
 
 type Msg = Increment
 
@@ -96,6 +99,9 @@ const LIVE_CMD_MODEL: &str = r"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.String
+import Ipe.Sub
 
 type Msg = Tick
 
@@ -130,6 +136,9 @@ const LIVE_HTML_MODEL: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.String
+import Ipe.Sub
 
 type Msg = Tick
 
@@ -168,6 +177,10 @@ const LIVE_SECRET_MODEL: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.Secret
+import Ipe.String
+import Ipe.Sub
 
 type Msg = Tick
 
@@ -202,6 +215,9 @@ const TUI_GOOD: &str = r"module Main exposing (main)
 
 import Ipe.Tea.Tui as Tui
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.String
+import Ipe.Sub
 
 type Msg = Increment | NoOp
 
@@ -244,6 +260,9 @@ const TUI_CMD_MODEL: &str = r"module Main exposing (main)
 
 import Ipe.Tea.Tui as Tui
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.String
+import Ipe.Sub
 
 type Msg = Increment | NoOp
 
@@ -334,6 +353,9 @@ const LIVE_LAMBDA_VIEW_CMD_MODEL: &str = r"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.String
+import Ipe.Sub
 
 type Msg = Tick
 
@@ -368,6 +390,9 @@ const LIVE_LAMBDA_VIEW_GOOD: &str = r"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.String
+import Ipe.Sub
 
 type Msg = Increment
 

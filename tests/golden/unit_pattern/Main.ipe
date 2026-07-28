@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- The unit value `()` as a function argument; `useUnit` ignores it.
 useUnit : () -> Int

@@ -1,5 +1,8 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Json.Decode
+import Ipe.List
+import Ipe.String
 
 -- R4-variant: let-bound decoder passed to decode_list factory.
 -- Exercises Fix C × decode_list factory composition:

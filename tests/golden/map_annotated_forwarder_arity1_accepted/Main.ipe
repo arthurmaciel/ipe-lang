@@ -1,6 +1,8 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.Result
+import Ipe.String
 
 -- #90 T3 green twin of map_annotated_forwarder_curried_is_t0014:
 -- the SAME annotated map forwarder at an arity-1 callback must stay

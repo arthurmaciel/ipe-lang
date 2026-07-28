@@ -63,6 +63,7 @@ main =
 const BARE_ATTRIBUTE_HELPER: &str = r#"module Main exposing (main)
 import Ipe.Prelude exposing (..)
 import Ipe.Ui as Ui
+import Ipe.Task
 padAttr : Attribute
 padAttr =
     Ui.padding 4

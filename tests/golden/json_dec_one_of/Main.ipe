@@ -1,5 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Json.Decode
+import Ipe.String
 
 -- `JsonDec.oneOf` tries decoders in order; the first success wins.
 -- The decoder is inlined at each `decodeString` call so Rust's ownership

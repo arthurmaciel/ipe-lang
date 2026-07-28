@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Ipe.Error as Error
 import Ipe.Io as Io
+import Ipe.Task
 
 -- Task.onError with a lambda: `e` must be inferred as `Error` (not a free
 -- variable) so the handler compiles without IPE-L0102 ("polymorphic

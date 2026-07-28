@@ -2,6 +2,8 @@ module Main exposing (main)
 
 import Ipe.Http as Http
 import Ipe.Io as Io
+import Ipe.List
+import Ipe.String
 
 
 -- Http builder chain test: verifies that Http.defaultRequest / Http.withMethod /

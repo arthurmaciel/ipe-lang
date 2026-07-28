@@ -3,6 +3,7 @@ module Main exposing (main)
 import Ipe.Error as Error
 import Ipe.Task as Task
 import Ipe.Io as Io
+import Ipe.String
 
 -- Adversarial-review sibling gap (Finding B) of the case-branched entry-point
 -- Task.run elision (`tui_entry_case_taskrun`, same BACKLOG "24-tui-kitchen-

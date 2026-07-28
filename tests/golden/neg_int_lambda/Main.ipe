@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- A bare integer-literal lambda param `\1 ->` is refutable. It is caught even
 -- EARLIER than the IPE-T0015 gate: the parser's param grammar does not admit a

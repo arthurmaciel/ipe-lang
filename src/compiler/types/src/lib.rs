@@ -2946,6 +2946,7 @@ mod tests {
         // dedicated `BuiltinRecordUpdate` (IPE-T0017) naming the type.
         let src = "module Main exposing (main)\n\
                    import Ipe.Prelude exposing (..)\n\
+                   import Ipe.Io as Io\n\
                    f : PanicInfo -> PanicInfo\n\
                    f p =\n    { p | message = \"x\" }\n\
                    main =\n    Io.println \"never\"\n";

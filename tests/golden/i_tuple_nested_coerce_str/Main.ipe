@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.String
 
 
 -- #174 fix-up — PROBE E. A coercing leaf (a string LITERAL, `PStr`) nested

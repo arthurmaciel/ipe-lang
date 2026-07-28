@@ -3,6 +3,9 @@ module Main exposing (main)
 import Ipe.Io as Io
 import Lib1
 import Lib2
+import Ipe.Db
+import Ipe.List
+import Ipe.String
 
 
 -- BACKLOG #165 regression (see `Lib1.ipe` for the full incident writeup).

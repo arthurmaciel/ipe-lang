@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Ipe.Task as Task
 import Ipe.Log as Log
+import Ipe.Secret
 
 -- backlog #44 golden: logging a `Secret` directly is safe BY CONSTRUCTION —
 -- `Log.infoWith`'s attr-list element carries the Stringify obligation

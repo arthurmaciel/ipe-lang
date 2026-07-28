@@ -3,6 +3,7 @@ module Main exposing (main)
 import Ipe.Set as Set
 import Ipe.List as List
 import Ipe.Io as Io
+import Ipe.String
 
 
 main =

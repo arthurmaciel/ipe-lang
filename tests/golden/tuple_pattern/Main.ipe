@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- A tuple pattern in a function parameter: the generic `fst` / `snd`
 -- projections. `(a, b)` destructures the single tuple argument irrefutably.

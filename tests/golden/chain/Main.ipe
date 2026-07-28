@@ -1,5 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.List
+import Ipe.String
 
 -- Forward pipe chain: `|>` left-associative at precedence 0.
 -- [1,2,3] |> List.map (+1) |> List.length == 3

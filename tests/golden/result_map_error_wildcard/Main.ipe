@@ -1,6 +1,8 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.Error
+import Ipe.Result
 
 
 -- #183 SEAL positive: `Result.mapError`'s handler is a wildcard lambda

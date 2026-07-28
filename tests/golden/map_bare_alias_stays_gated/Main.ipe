@@ -1,6 +1,8 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.Result
+import Ipe.String
 
 -- #90 T3 (5th attempt): bare point-free re-export of `Result.map` (the
 -- revert-incident Bug-3 shape, replayed against the map family) — the

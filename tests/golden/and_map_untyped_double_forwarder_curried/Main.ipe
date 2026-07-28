@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.Result
 
 -- #90 T3: UNANNOTATED same-module double forwarder — `am2` shares one
 -- monomorphic variable set with its call site (CLocal semantics), so the

@@ -1,5 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Maybe
+import Ipe.String
 
 -- #90 Stage 1 residual seal hole — Maybe variant of the let-bound
 -- constructor-wrapped closure (see let_bound_fn_payload for the full

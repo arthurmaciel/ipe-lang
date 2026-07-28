@@ -1,5 +1,8 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Json.Decode
+import Ipe.List
+import Ipe.String
 
 -- Decode a JSON array of integers; print the length of the resulting list.
 -- Exercises `JsonDec.list` (which wraps an element decoder in a factory so

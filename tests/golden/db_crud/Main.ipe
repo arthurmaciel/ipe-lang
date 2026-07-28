@@ -1,5 +1,8 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Db
+import Ipe.Dict
+import Ipe.Task
 
 -- M5b-db golden: insertRow → getById → updateById → deleteById CRUD cycle.
 -- Exercises the upstream-parity `Dict String String` row surface for

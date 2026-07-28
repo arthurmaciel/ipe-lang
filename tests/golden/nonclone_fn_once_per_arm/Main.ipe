@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Ipe.Task as Task
 import Ipe.Io as Io
+import Ipe.String
 
 
 -- #193 D3 seal: a fn-value passed as argument (consuming position) in each of

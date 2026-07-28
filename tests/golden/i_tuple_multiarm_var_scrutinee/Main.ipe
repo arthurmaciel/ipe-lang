@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Ipe.List as List
 import Ipe.Io as Io
+import Ipe.String
 
 
 -- #174 — a multi-arm / refutable tuple `case` on a NON-literal (variable)

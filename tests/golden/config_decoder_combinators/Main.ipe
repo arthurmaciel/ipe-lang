@@ -10,6 +10,10 @@ module Main exposing (main)
 import Ipe.Cli as Cli
 import Ipe.Config as Config
 import Ipe.Dict as Dict
+import Ipe.Cmd
+import Ipe.List
+import Ipe.String
+import Ipe.Sub
 
 type Msg
     = GotLine String

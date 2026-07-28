@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- A lambda bound to a name, then applied: `inc 41` is 42.
 -- A lambda capturing an outer local: `(\x -> x + n) 5` with n = 10 is 15.

@@ -2,6 +2,7 @@ module Dep exposing (composed)
 
 import Ipe.Task as Task
 import Ipe.Error exposing (Error)
+import Ipe.Http.Server
 
 
 -- The forwarded capture must be a GENUINELY non-Clone carrier (a `Task`) so

@@ -561,7 +561,8 @@ fn type_too_many_params() {
 #[test]
 fn type_record_update_on_builtin() {
     let src = format!(
-        "{HEAD}f : PanicInfo -> PanicInfo\n\
+        "{HEAD}import Ipe.Io as Io\n\
+         f : PanicInfo -> PanicInfo\n\
          f p =\n    {{ p | message = \"x\" }}\n\
          main =\n    Io.println \"never\"\n"
     );

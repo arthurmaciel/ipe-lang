@@ -1,6 +1,8 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.Result
+import Ipe.String
 
 -- #90 T3 boundary pin: `Result.andThen` needs NO obligation — its callback
 -- result is `Con`-headed in the scheme itself, so a curried callback is a

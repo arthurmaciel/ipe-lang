@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.String
 
 
 -- The record-of-functions ESCAPES its defining function (`mk` RETURNS it), so

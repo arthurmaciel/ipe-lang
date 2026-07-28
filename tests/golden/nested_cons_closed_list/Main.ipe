@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.String
 
 -- #158 Class-4 item C: a CLOSED list literal nested in a constructor payload
 -- (`Just [a, b]`). Lowers to an EXACT-length guard (`.len() == 2`) plus indexed

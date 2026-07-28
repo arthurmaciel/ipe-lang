@@ -2,6 +2,8 @@ module Main exposing (main)
 
 import Lib exposing (Status(..), label, seedAndCount)
 import Ipe.Io as Io
+import Ipe.String
+import Ipe.Task
 
 
 {-| A `Main`-owned helper (Rust name `main_summary`) — uses `Lib`'s `label`

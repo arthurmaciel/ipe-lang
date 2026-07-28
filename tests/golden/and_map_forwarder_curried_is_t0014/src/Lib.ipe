@@ -1,4 +1,5 @@
 module Lib exposing (andMapAlias)
+import Ipe.Result
 
 
 -- #90 T3.residual — see the sibling `and_map_cross_module_wrapper_accepted`

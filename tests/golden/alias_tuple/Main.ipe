@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- An `as` alias can wrap a *destructuring* pattern: `(a, b) as whole` binds the
 -- whole matched tuple to `whole` AND its two elements to `a` and `b`, all in

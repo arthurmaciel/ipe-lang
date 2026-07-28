@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- Partial ctor application: `Node Leaf 1` supplies 2 of 3 args to a ctor
 -- of arity 3, leaving one `Tree` arg still needed.  Since #147 this is

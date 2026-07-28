@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Jwt
 
 -- Regression: Jwt.decode : Algorithm -> Int -> String -> Result Error String
 -- Tests caller-supplied `now` expiry/nbf validation matching reference semantics.

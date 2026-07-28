@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- A higher-order function: a function-typed parameter, applied twice.
 applyTwice : (Int -> Int) -> Int -> Int

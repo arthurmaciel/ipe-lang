@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- Precedence: `+` (prec 6) binds tighter than `|>` (prec 0).
 -- `2 + 3 |> String.fromInt` groups as `(2+3) |> String.fromInt` = "5".

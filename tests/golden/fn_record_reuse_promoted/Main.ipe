@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.String
 
 
 -- A record holding TWO function values reused as a value (each field read is a

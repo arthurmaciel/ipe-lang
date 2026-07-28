@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.Db
 
 
 -- #177 false-positive probe C: wildcard-`any` param, body has the STRING

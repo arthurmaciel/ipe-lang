@@ -9,6 +9,9 @@ module Main exposing (main)
 -- initial view once at stdin EOF and exits 0.
 
 import Ipe.Cli as Cli
+import Ipe.Cmd
+import Ipe.String
+import Ipe.Sub
 
 type ChildMsg
     = ChildTick

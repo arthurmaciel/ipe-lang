@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Result
 
 -- #90 Stage 1 residual gate, revert-incident Bug 2 regression:
 -- `Result.andMap`'s partial application is first bound to a `let`

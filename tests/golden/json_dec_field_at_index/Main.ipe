@@ -1,5 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Json.Decode
+import Ipe.String
 
 -- `JsonDec.field` — read a named key from a JSON object.
 -- `JsonDec.at`    — follow a path of keys into nested objects.

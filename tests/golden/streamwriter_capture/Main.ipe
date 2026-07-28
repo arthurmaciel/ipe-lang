@@ -15,6 +15,7 @@ module Main exposing (main)
 import Ipe.Http.Server as Server
 import Ipe.Http.Server.Stream as Stream
 import Ipe.Task as Task
+import Ipe.String
 
 emitTick : Stream.StreamWriter -> Int -> Task Error ()
 emitTick writer n =

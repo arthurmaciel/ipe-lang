@@ -1,5 +1,9 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Auth
+import Ipe.Dict
+import Ipe.Maybe
+import Ipe.Secret
 
 -- backlog #44 golden: `Auth.signToken` / `Auth.verifyToken` are re-typed to
 -- take `Secret` (not `String`) at the signing-key position — "secrets are

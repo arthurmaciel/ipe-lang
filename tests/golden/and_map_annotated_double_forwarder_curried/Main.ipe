@@ -1,6 +1,8 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.Math
+import Ipe.Result
 
 -- #90 T3, the 12th shape (the one that broke the 4th attempt, revert
 -- 2a7b0d6): an ANNOTATED DOUBLE FORWARDER. `am1`'s obligated `b`
