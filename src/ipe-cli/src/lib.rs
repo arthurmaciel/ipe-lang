@@ -3655,7 +3655,7 @@ main =
         // Entry module: src/Main.ipe — imports Helper
         fs::write(
             src.join("Main.ipe"),
-            "module Main exposing (main)\nimport Helper\nmain = Io.println (String.fromInt Helper.answer)\n",
+            "module Main exposing (main)\nimport Helper\nimport Ipe.Io\nimport Ipe.String\nmain = Io.println (String.fromInt Helper.answer)\n",
         )
         .expect("write Main.ipe");
 
@@ -3698,7 +3698,7 @@ main =
         let main_path = src.join("Main.ipe");
         fs::write(
             &main_path,
-            "module Main exposing (main)\nimport Helper\nmain = Io.println (String.fromInt Helper.broken)\n",
+            "module Main exposing (main)\nimport Helper\nimport Ipe.Io\nimport Ipe.String\nmain = Io.println (String.fromInt Helper.broken)\n",
         )
         .expect("write Main.ipe");
 
@@ -3804,7 +3804,7 @@ main =
         // Main.ipe: imports both; the error is in Lib, not Main or Pad.
         fs::write(
             src.join("Main.ipe"),
-            "module Main exposing (main)\nimport Lib\nimport Pad\nmain = Io.println (String.fromInt Lib.bad)\n",
+            "module Main exposing (main)\nimport Lib\nimport Pad\nimport Ipe.Io\nimport Ipe.String\nmain = Io.println (String.fromInt Lib.bad)\n",
         )
         .expect("write Main.ipe");
 
