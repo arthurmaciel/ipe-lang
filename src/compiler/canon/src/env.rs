@@ -118,6 +118,13 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Tea", "Web"], "Web"),
     (&["Ipe", "Tea", "Tui"], "Tui"),
     (&["Ipe", "Tea", "WebView"], "WebView"),
+    // `Ipe.Tea.Web.PubSub` — the Web-shape-scoped TEA-side broadcast surface:
+    // `publish` / `publishNoEcho` (Cmd forms, fired from `update`) and
+    // `subscribeTopic` (Sub form, declared in `subscriptions`). Distinct from the
+    // top-level Task-shaped `Ipe.PubSub`: these return `Cmd msg` / `Sub msg`, so
+    // they are TEA-loop machinery and importing this path marks the module a TEA
+    // app (IPE-N0033). Its members re-export the canonical `Cmd` / `Sub` kernels.
+    (&["Ipe", "Tea", "Web", "PubSub"], "TeaWebPubSub"),
     // ── Effect stdlib modules ───────────────────────────────────────────────
     (&["Ipe", "Tea", "Console"], "Console"),
     (&["Ipe", "Auth"], "Auth"),
@@ -985,7 +992,6 @@ impl Env {
             // ── TEA Cmd / Sub kernels ───────────────────────────────────────────
             // `Cmd.publish` / `Cmd.publishNoEcho` are backed by runtime
             // `cmd_publish` / `cmd_publish_no_echo` in live/pubsub.rs.
-            // The `PubSub.*` qualifier is not registered here.
             // `Sub.subscribeTopic` is backed by runtime `sub_subscribe_topic`
             // in live/pubsub.rs; emit path uses the standard N-arg route.
             (
@@ -1010,6 +1016,14 @@ impl Env {
                     "subscribeWebSocket",
                 ],
             ),
+            // `Ipe.PubSub` (the top-level, Task-shaped publish surface) is a
+            // COMPILED-SOURCE stdlib module (`src/stdlib/Ipe/PubSub.ipe`), so it
+            // stays OUT of this kernel-qualifier table (kernel qualifier here OR
+            // compiled-source — never both). Its `publish` / `publishNoEcho` bodies
+            // are `Ffi.kernel "PubSub_publish"` / `"PubSub_publishNoEcho"`; the
+            // alias fast-path (`detect_kernel_alias`) splits `"PubSub_publish"` →
+            // the canonical `("PubSub", "publish")` kernel (`class = Web`,
+            // Task-shaped — NOT TEA-loop machinery).
             // ── Db kernels ──────────────────────────────────────────────────────
             // `Ipe.Db` — database connection + query surface.
             // All effect-returning kernels (Task Error …) and pure helpers
@@ -1631,6 +1645,21 @@ impl Env {
             ("Html", "htmlAttrToString", "attrToString"),
         ];
 
+        // ── Cross-qualifier member re-exports ────────────────────────────────
+        // A member exposed under a NEW qualifier whose backing kernel lives under
+        // a DIFFERENT canonical qualifier. The `VarHome::Kernel` carries the
+        // CANONICAL module + name symbols, so the lowerer's kernel match arms
+        // (`("Cmd", "publish")`, `("Sub", "subscribeTopic")`) fire unchanged; only
+        // the resolution qualifier differs. Used to give the Web-shape-scoped
+        // `Ipe.Tea.Web.PubSub` (canonical `TeaWebPubSub`) its TEA-side broadcast
+        // members, which aggregate two canonical kernel families (`Cmd` + `Sub`).
+        const CROSS_QUALIFIER_MEMBERS: &[(&str, &str, &str, &str)] = &[
+            // (new_qualifier, member_name, canonical_qualifier, canonical_name)
+            ("TeaWebPubSub", "publish", "Cmd", "publish"),
+            ("TeaWebPubSub", "publishNoEcho", "Cmd", "publishNoEcho"),
+            ("TeaWebPubSub", "subscribeTopic", "Sub", "subscribeTopic"),
+        ];
+
         // ── Qualifier module aliases (Ipe.X / Ipê.X → short canonical) ────────
         // Clones every entry from the canonical qualifier's member map into the
         // alias qualifier key. Because each entry already holds
@@ -1738,6 +1767,25 @@ impl Env {
                 .entry(qual_sym)
                 .or_default()
                 .insert(alias_sym, home);
+        }
+
+        for (new_qual, member, canon_qual, canon_name) in CROSS_QUALIFIER_MEMBERS {
+            let new_qual_sym = interner.intern(new_qual)?;
+            let member_sym = interner.intern(member)?;
+            let canon_qual_sym = interner.intern(canon_qual)?;
+            let canon_name_sym = interner.intern(canon_name)?;
+            // Resolve the id against the CANONICAL (qualifier, name) key so the
+            // fast path in `lower_callee` still works; the VarHome carries the
+            // canonical module + name so the lowerer's match arms are unaffected.
+            let id = self
+                .stdlib_index
+                .get(&(canon_qual_sym, canon_name_sym))
+                .copied();
+            let home = VarHome::Kernel(id, canon_qual_sym, canon_name_sym);
+            Rc::make_mut(&mut self.qual_vars)
+                .entry(new_qual_sym)
+                .or_default()
+                .insert(member_sym, home);
         }
 
         for (alias, canonical) in QUALIFIER_ALIASES {
