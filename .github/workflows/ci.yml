@@ -458,3 +458,88 @@ jobs:
         env:
           IPE_E2E: "1"
         run: cargo nextest run -p ipe_sandbox --test run_jail_macos_e2e --profile ci
+
+  # ─── Windows run-jail proof (the RUNTIME jail, not the build jail) ───────────
+  # The security half of the SEAL on Windows: a REAL proof of the Windows run
+  # jail's deny behaviour (the jail around the EMITTED app at `ipe run`). The
+  # Windows arm assembles its confinement from Win32 kernel primitives — a Job
+  # Object (subprocess), an AppContainer lowbox token (filesystem + network), and
+  # a launcher-side environment scrub (env). The Rust unit tests prove the pure
+  # pieces (the env scrub, the UTF-16 block, the active-process cap) on any host;
+  # only a real Windows runner exercises the kernel objects.
+  #
+  # Crucially this needs NO Docker Windows container daemon (unlike the separate
+  # admission/build-jail windows-x64 job, which does and is a documented skip on
+  # hosted runners): a Job Object / AppContainer / restricted token is a plain
+  # Win32 API sequence, so the RUNTIME run jail is provable on a hosted
+  # `windows-2022` runner. The job is fail-closed by design:
+  #
+  #   1. It asserts the run-jail primitives are constructible and REFUSES to
+  #      certify (exits non-zero) if they are not — never a skip-green.
+  #   2. It runs the run_jail_windows_e2e enforce-vs-control DUALITY per axis:
+  #      a child spawn / out-of-scratch write / non-allowlisted env var / outbound
+  #      connect must behave one way under the jail and the opposite under control,
+  #      so a denial can only be the jail's — never an unreachable host or an
+  #      already-unwritable path.
+  #
+  # Hosted-provable axes: subprocess, env, filesystem, and the ENFORCE half of
+  # network. The network POSITIVE control (a connect that must succeed unjailed)
+  # needs real outbound egress; if the hosted runner blocks egress the network
+  # test skips its own control (design §5.2) and that axis's positive control
+  # needs a self-hosted runner. The non-ACL-volume filesystem refuse-gap (design
+  # §5.2) also needs a mounted FAT/exFAT volume a hosted image does not provide.
+  windows-run-jail:
+    name: windows-run-jail (Job Object + AppContainer — the real Windows run-jail proof)
+    runs-on: windows-2022
+    if: github.event_name != 'pull_request'   # slow: push/nightly only, off the required PR gate
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+
+      # Fail-closed primitive check: assert the runtime-jail primitives are
+      # constructible on this runner. A failure to build a Job Object /
+      # AppContainer profile is a hard failure (refuse-to-certify), never a skip —
+      # an unverified platform is NEVER counted as jail-holds. PowerShell is the
+      # jailed probe host the E2E launches, so its presence is also asserted.
+      - name: Assert the Windows run-jail primitives are present (refuse-to-certify)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # A Job Object must be creatable.
+          $sig = @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class J {
+            [DllImport("kernel32.dll", SetLastError=true)]
+            public static extern IntPtr CreateJobObjectW(IntPtr a, IntPtr b);
+            [DllImport("kernel32.dll", SetLastError=true)]
+            public static extern bool CloseHandle(IntPtr h);
+          }
+          '@
+          Add-Type -TypeDefinition $sig
+          $job = [J]::CreateJobObjectW([IntPtr]::Zero, [IntPtr]::Zero)
+          if ($job -eq [IntPtr]::Zero) {
+            Write-Error "CreateJobObjectW failed — the Windows run jail cannot be verified; refusing to certify (hard failure, never a skip-green)."
+            exit 1
+          }
+          [void][J]::CloseHandle($job)
+          # PowerShell (the jailed probe host) must resolve.
+          if (-not (Get-Command powershell.exe -ErrorAction SilentlyContinue)) {
+            Write-Error "powershell.exe absent — the run-jail E2E probe cannot run; refusing to certify."
+            exit 1
+          }
+          Write-Output "Windows run-jail primitives present (Job Object creatable; powershell.exe resolved)."
+
+      # The run jail's enforce-vs-control duality through the real Job Object +
+      # AppContainer token: an undeclared child spawn / out-of-scratch write /
+      # non-allowlisted env var / outbound connect is DENIED under the jail while
+      # the same action SUCCEEDS under control, and a granted axis is not
+      # false-denied. IPE_E2E=1 arms the real jailed runs.
+      - name: run_jail_windows E2E through the real Windows run jail
+        env:
+          IPE_E2E: "1"
+        run: cargo nextest run -p ipe_sandbox --test run_jail_windows_e2e --profile ci

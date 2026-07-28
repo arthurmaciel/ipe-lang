@@ -358,6 +358,9 @@ pub fn build_in_jail(
 /// [`crate::run_jail::exec_in_run_jail`].
 #[cfg(not(any(all(target_os = "linux", target_arch = "x86_64"), target_os = "macos")))]
 #[must_use]
+// Kept a plain `fn` (not `const fn`) so its signature matches the real
+// `build_in_jail` arms, which cannot be `const` (they spawn a process).
+#[allow(clippy::missing_const_for_fn)]
 pub fn build_in_jail(
     _tools: &RunJailTools,
     _profile: &SandboxProfile,
