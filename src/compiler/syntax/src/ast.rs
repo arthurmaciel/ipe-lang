@@ -286,6 +286,14 @@ pub enum Pattern_ {
     /// deconstruction. `(x :: xs)` binds the first element to `head` and the rest
     /// to `tail`. Mirrors the Haskell compiler's `Src.PCons`.
     PCons(Box<Pattern>, Box<Pattern>),
+    /// An or-pattern `p1 | p2 | …` — matches if ANY alternative matches. Every
+    /// alternative binds the identical set of variables at identical types
+    /// (enforced in canon/types); each alternative is an arbitrary sub-pattern
+    /// and recurses. Invariant: length ≥ 2 — the parser never wraps a lone
+    /// pattern, mirroring the arity-≥-2 invariant on [`Self::PTuple`]. The `|`
+    /// binds looser than everything else in a pattern (ctor application, `::`,
+    /// `as`), so each alternative is a complete cons/`as` pattern.
+    POr(Vec<Pattern>),
 }
 
 /// Type-annotation node.
