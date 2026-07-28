@@ -22,7 +22,7 @@ portable `Ipe.Ui` layout vocabulary and turned into `Html` by a top-level
 module Main exposing (main)
 
 import Ipe.String as String
-import Ipe.Web exposing (app)
+import Ipe.Tea.Web exposing (app)
 import Ipe.Cmd as Cmd
 import Ipe.Sub as Sub
 import Ipe.Ui as Ui

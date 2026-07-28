@@ -110,11 +110,17 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Html"], "Html"),
     (&["Ipe", "Html", "Attributes"], "Attr"),
     (&["Ipe", "Html", "Events"], "Event"),
-    (&["Ipe", "Web"], "Web"),
-    (&["Ipe", "Tui"], "Tui"),
-    (&["Ipe", "WebView"], "WebView"),
+    // ── Ipe.Tea.<Shape> managed-update-loop shapes (ADR 0048) ────────────────
+    // The four TEA shapes live under `Ipe.Tea.*`; the canonical short qualifier
+    // ("Web"/"Tui"/…) is preserved so every lower.rs kernel match arm is
+    // unchanged. Importing any `Ipe.Tea.*` module marks the module a TEA app —
+    // a plain-`main` Program that imports one is rejected (IPE-N0033).
+    (&["Ipe", "Tea", "Web"], "Web"),
+    (&["Ipe", "Tea", "Tui"], "Tui"),
+    (&["Ipe", "Tea", "WebView"], "WebView"),
     // ── Effect stdlib modules ───────────────────────────────────────────────
-    (&["Ipe", "Console"], "Console"),
+    (&["Ipe", "Tea", "Console"], "Console"),
+    (&["Ipe", "Auth"], "Auth"),
     (&["Ipe", "Auth"], "Auth"),
     (&["Ipe", "Http", "Server", "Stream"], "Stream"),
     (&["Ipe", "Http", "Stream"], "HttpStream"),
@@ -1638,12 +1644,13 @@ impl Env {
             ("Ipe.Ui", "Ui"),
             ("Ipe.Html.Attributes", "Attr"),
             ("Ipe.Html.Events", "Event"),
-            ("Ipe.Web", "Web"),
-            ("Ipe.Tui", "Tui"),
-            ("Ipe.WebView", "WebView"),
+            // ── Ipe.Tea.<Shape> shape aliases (ADR 0048) ──────────────────────
+            ("Ipe.Tea.Web", "Web"),
+            ("Ipe.Tea.Tui", "Tui"),
+            ("Ipe.Tea.WebView", "WebView"),
             ("Ipe.Log", "Log"),
             // ── Effect stdlib module aliases ──────────────────────────────────────
-            ("Ipe.Console", "Console"),
+            ("Ipe.Tea.Console", "Console"),
             ("Ipe.Auth", "Auth"),
             ("Ipe.Http.Server.Stream", "Stream"),
             ("Ipe.Http.Stream", "HttpStream"),

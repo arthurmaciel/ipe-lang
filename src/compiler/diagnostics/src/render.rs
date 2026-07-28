@@ -469,6 +469,12 @@ fn name_label(msg: &NameError) -> Option<String> {
                 "alias expansion exceeded the {what} limit of {limit}"
             ))
         }
+        NameError::ProgramImportsTeaShape { module } => Some(format!(
+            "this module has a plain `main` (a Program) but imports `{module}`; \
+             a module that imports any `Ipe.Tea.*` shape is a TEA app, so give \
+             `main` a shape entry (`Web.app` / `Tui.app` / `Console.app` / \
+             `WebView.app`), or drop the `{module}` import if this is a Program"
+        )),
         NameError::Unknown => None,
     }
 }

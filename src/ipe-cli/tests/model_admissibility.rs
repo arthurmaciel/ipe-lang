@@ -60,7 +60,7 @@ fn assert_accepted(test_name: &str, source: &str) -> Result<(), BoxError> {
 
 const LIVE_GOOD: &str = r"module Main exposing (main)
 
-import Ipe.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 
 type Msg = Increment
@@ -94,7 +94,7 @@ main =
 
 const LIVE_CMD_MODEL: &str = r"module Main exposing (main)
 
-import Ipe.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 
 type Msg = Tick
@@ -128,7 +128,7 @@ main =
 
 const LIVE_HTML_MODEL: &str = r#"module Main exposing (main)
 
-import Ipe.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 
 type Msg = Tick
@@ -166,7 +166,7 @@ main =
 // SAME mechanism as `LIVE_CMD_MODEL` / `LIVE_HTML_MODEL` above, not a new gate.
 const LIVE_SECRET_MODEL: &str = r#"module Main exposing (main)
 
-import Ipe.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 
 type Msg = Tick
@@ -200,7 +200,7 @@ main =
 
 const TUI_GOOD: &str = r"module Main exposing (main)
 
-import Ipe.Tui as Tui
+import Ipe.Tea.Tui as Tui
 import Ipe.Ui as Ui
 
 type Msg = Increment | NoOp
@@ -242,7 +242,7 @@ main =
 
 const TUI_CMD_MODEL: &str = r"module Main exposing (main)
 
-import Ipe.Tui as Tui
+import Ipe.Tea.Tui as Tui
 import Ipe.Ui as Ui
 
 type Msg = Increment | NoOp
@@ -332,7 +332,7 @@ fn tui_model_with_cmd_field_is_rejected() -> Result<(), BoxError> {
 /// it with IPE-L0120.
 const LIVE_LAMBDA_VIEW_CMD_MODEL: &str = r"module Main exposing (main)
 
-import Ipe.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 
 type Msg = Tick
@@ -366,7 +366,7 @@ main =
 /// ACCEPTED — proves the Lambda arm recovers the Model without false-rejecting.
 const LIVE_LAMBDA_VIEW_GOOD: &str = r"module Main exposing (main)
 
-import Ipe.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 
 type Msg = Increment

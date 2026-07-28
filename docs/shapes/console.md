@@ -33,7 +33,7 @@ module Main exposing (main)
 
 import Ipe.String as String
 import Ipe.System as System
-import Ipe.Console exposing (app)
+import Ipe.Tea.Console exposing (app)
 import Ipe.Cmd as Cmd
 import Ipe.Sub as Sub
 
