@@ -124,7 +124,7 @@ jobs:
           docker build -t ipe-static-proof "$WORK"
           OUT="$(docker run --rm ipe-static-proof)"
           echo "scratch output: $OUT"
-          echo "$OUT" | grep -q 'Hello from Ipe!'
+          echo "$OUT" | grep -q 'Hello from Sky!'
 
       # Advisory gate over the FROZEN dependency set (the emitted lockfile is
       # exactly what is baked into the static artifact).
@@ -218,7 +218,7 @@ jobs:
           BIN="$CARGO_TARGET_DIR/$STATIC_TRIPLE/release/ipe-app"
           OUT="$(qemu-aarch64-static "$BIN")"
           echo "qemu output: $OUT"
-          echo "$OUT" | grep -q 'Hello from Ipe!'
+          echo "$OUT" | grep -q 'Hello from Sky!'
 
       - name: Upload frozen-deps manifest (arm64)
         if: always()
@@ -298,7 +298,7 @@ jobs:
           EXE="$CARGO_TARGET_DIR/release/ipe-app.exe"
           OUT="$("$EXE")"
           echo "emitted-binary output: $OUT"
-          echo "$OUT" | grep -q 'Hello from Ipe!'
+          echo "$OUT" | grep -q 'Hello from Sky!'
 
       - name: Upload frozen-deps manifest (windows)
         if: always()
