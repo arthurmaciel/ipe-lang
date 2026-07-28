@@ -70,9 +70,9 @@ fn distinct_functions_folding_to_the_same_rust_name_are_rejected() {
                 "module Main exposing (main)\n\
                  import Ipe.Prelude exposing (..)\n\
                  import Ipe.Io as Io\n\
+                 import Ipe.String\n\
                  import UiBorder\n\
                  import Ui\n\n\
-import Ipe.String
                  main = Io.println (String.fromInt (UiBorder.rounded 1 + Ui.borderRounded 1))\n",
             ),
         ],
