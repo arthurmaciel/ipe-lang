@@ -353,10 +353,158 @@ pub fn build_in_jail(
     outcome
 }
 
-/// Non-Linux, non-macOS stub: the returning build jail is a documented
-/// refuse-gap off the wired platforms, mirroring
-/// [`crate::run_jail::exec_in_run_jail`].
-#[cfg(not(any(all(target_os = "linux", target_arch = "x86_64"), target_os = "macos")))]
+/// Run `payload` inside a Windows Job Object + AppContainer jail lowered from
+/// `profile`, wait for it, and return the decoded [`JailOutcome`] (Windows).
+///
+/// The Windows counterpart to the `Linux/x86_64` and macOS [`build_in_jail`]: it
+/// lowers the SAME [`SandboxProfile`] through the SAME Win32 sequence the run jail
+/// uses ([`crate::run_jail::build_windows_jailed`] → `windows_jail::run_confined`)
+/// — a Job Object (subprocess axis, kill-on-close so no orphan survives the audit
+/// call), an AppContainer lowbox token (filesystem + network axes: the
+/// `internetClient` capability SID is added iff `profile.network`, and the scratch
+/// — plus the working tree when the filesystem axis is granted — is ACLed to the
+/// container SID), and a launcher-side environment scrub (env axis). So a build
+/// observed under Tier-2 is confined exactly as the shipped artifact is at run
+/// time (one jail source, no fork).
+///
+/// The `FILE_PERSISTENT_ACLS` volume probe gates the launch BEFORE spawn: on a
+/// volume that does not persist+enforce DACLs the ACL boundary is a no-op, so the
+/// jail refuses ([`JailOutcome::Unavailable`]) rather than run the untrusted build
+/// with a silently-unconfined filesystem axis (the probe lives inside
+/// `windows_jail::run_confined`, ahead of `CreateProcessW`).
+///
+/// `extra_ro_binds` is unused on Windows (AppContainer filters an existing view of
+/// the real filesystem rather than constructing a bind-mount namespace); it is
+/// accepted so the entry has the same signature on every platform.
+///
+/// A jail that cannot be established (a Job Object / token / capability SID / ACL
+/// / attribute list / `CreateProcessW` that cannot be built, or a non-ACL scratch
+/// volume) yields [`JailOutcome::Unavailable`] — the untrusted payload is never
+/// run unconfined on any path. Fail-closed. Every kernel object is RAII-released
+/// on every path, so the audit's per-axis tightening loop leaks nothing.
+///
+/// The jail's actual deny behaviour is proven by the `windows-tier2` CI job on a
+/// real `windows-2022` runner (a hosted runner — a Job Object / AppContainer is a
+/// plain Win32 sequence, no Docker Windows daemon needed); this crate builds the
+/// arm and unit-tests the pure pieces on any host.
+///
+/// # Errors
+///
+/// This function does not return `Err`: every failure to establish or run the
+/// jail is folded into a non-`Clean` [`JailOutcome`].
+#[cfg(target_os = "windows")]
+#[must_use]
+#[allow(clippy::doc_markdown, clippy::too_long_first_doc_paragraph)]
+pub fn build_in_jail(
+    _tools: &RunJailTools,
+    profile: &SandboxProfile,
+    scoped_tmp: &Path,
+    working_tree: &Path,
+    _extra_ro_binds: &[PathBuf],
+    payload: &[OsString],
+) -> JailOutcome {
+    // The Windows jail RETURNS the child's exit code (Windows has no `exec`-
+    // replace), which decodes through the SAME `JailOutcome::decode` the Linux
+    // and macOS arms use: `0` is the sole `Clean` branch; a per-axis code names
+    // the axis; any ambiguous exit is `BuildFailed`. A jail that could not be
+    // established (a missing primitive, a non-ACL scratch volume gated by the
+    // pre-spawn `FILE_PERSISTENT_ACLS` probe, a failed `CreateProcessW`) is a
+    // `RunJailDefect` → `Unavailable`; the untrusted build never runs unconfined.
+    match crate::run_jail::build_windows_jailed(profile, scoped_tmp, working_tree, payload) {
+        Ok(code) => JailOutcome::decode(Some(win_exit_to_i32(code))),
+        Err(defect) => JailOutcome::Unavailable { defect },
+    }
+}
+
+/// Map a Windows process exit code (`u32` from `GetExitCodeProcess`) to the
+/// signed exit the wrapper-owned per-axis contract is decoded against.
+///
+/// The Tier-2 probe's exit codes (`0`, `6`, `10`, `11`) are small non-negative
+/// values that round-trip identically; a value above `i32::MAX` (a process that
+/// exited with a high-bit code) cannot be a recognised per-axis code, so it
+/// saturates to a value that [`JailOutcome::decode`] treats as `BuildFailed`
+/// (fail-closed — never `Clean`, never a spurious named denial).
+#[cfg(any(target_os = "windows", test))]
+const fn win_exit_to_i32(code: u32) -> i32 {
+    // A reinterpreting cast would fold `0x8000_0000..` into negative codes that
+    // could alias a legitimate signed value; instead clamp anything past
+    // `i32::MAX` to `i32::MAX`, which decodes to `BuildFailed`.
+    #[allow(clippy::cast_possible_wrap)]
+    if code <= i32::MAX as u32 {
+        code as i32
+    } else {
+        i32::MAX
+    }
+}
+
+/// Run `payload` inside a FreeBSD `jail(8)` lowered from `profile`, wait for it,
+/// and return the decoded [`JailOutcome`] (FreeBSD).
+///
+/// The FreeBSD counterpart to the other [`build_in_jail`] arms. FreeBSD has no
+/// run-jail arm today, so this introduces the returning build-jail lowering
+/// directly onto a scratch-rooted `jail(2)` (established via the `jail(8)` CLI —
+/// the same external-primitive shape the macOS arm uses with `sandbox-exec`, so
+/// no new `unsafe` FFI is introduced). Per ADR 0051 the `jail(2)` posture is a
+/// sanctioned alternative to `cap_enter` for lowering the axes:
+///
+/// - **network** — `ip4=disable ip6=disable` (plus `allow.raw_sockets=0`): a
+///   process in the jail has no global network namespace, so an outbound socket
+///   under a network-withholding profile is denied → the probe's exit-`10`
+///   decodes to `Denied { network }`.
+/// - **filesystem** — the jail runs as an unprivileged user (`exec.jail_user`)
+///   whose only writable directory is the scratch (owned by that user); an
+///   out-of-scratch write is denied → exit-`11` decodes to `Denied { filesystem }`.
+///   When the filesystem axis is granted the working tree is made writable to the
+///   same user so a granted effect is not false-denied.
+/// - **subprocess** — a withheld subprocess axis is a genuine kernel denial of
+///   process creation, not mere omission: the jail is created with a process
+///   limit (`children.max=0`) so `fork`/`pdfork`/`exec` of a NEW process inside
+///   the jail is denied by the kernel. Its observable is the killed child's
+///   `BuildFailed` (subprocess is confined-but-not-differentially-probed — only
+///   `Network`/`Filesystem` are `Denied { axis }`-nameable), a reject either way.
+/// - **env** — scrubbed in the launcher (a jail does not scrub the inherited
+///   environment), via the SAME allowlist the macOS/Windows arms use.
+///
+/// `extra_ro_binds` is unused on FreeBSD (the jail chroots an existing view of the
+/// real filesystem rather than building a bind-mount namespace); it is accepted so
+/// the entry has the same signature on every platform.
+///
+/// A jail that cannot be established (`jail` absent, a scratch that cannot be
+/// created/chowned, a `jail(8)` invocation that fails to enter the jail) yields
+/// [`JailOutcome::Unavailable`] — the untrusted payload is never run unconfined on
+/// any path. Fail-closed. The scratch is removed on return so nothing leaks across
+/// the audit's per-axis tightening loop.
+///
+/// The jail's actual deny behaviour is proven by the `freebsd-tier2` CI job inside
+/// a `vmactions/freebsd-vm` VM (no native FreeBSD GitHub runner exists); this
+/// crate builds the arm and unit-tests the pure lowering on any host.
+///
+/// # Errors
+///
+/// This function does not return `Err`: every failure to establish or run the
+/// jail is folded into a non-`Clean` [`JailOutcome`].
+#[cfg(target_os = "freebsd")]
+#[must_use]
+#[allow(clippy::doc_markdown, clippy::too_long_first_doc_paragraph)]
+pub fn build_in_jail(
+    _tools: &RunJailTools,
+    profile: &SandboxProfile,
+    scoped_tmp: &Path,
+    working_tree: &Path,
+    _extra_ro_binds: &[PathBuf],
+    payload: &[OsString],
+) -> JailOutcome {
+    freebsd_jail::build_in_jail(profile, scoped_tmp, working_tree, payload)
+}
+
+/// Off Linux/x86_64, macOS, Windows, and FreeBSD the returning build jail is a
+/// documented refuse-gap, mirroring [`crate::run_jail::exec_in_run_jail`].
+#[cfg(not(any(
+    all(target_os = "linux", target_arch = "x86_64"),
+    target_os = "macos",
+    target_os = "windows",
+    target_os = "freebsd"
+)))]
 #[must_use]
 // Kept a plain `fn` (not `const fn`) so its signature matches the real
 // `build_in_jail` arms, which cannot be `const` (they spawn a process).
@@ -371,7 +519,7 @@ pub fn build_in_jail(
 ) -> JailOutcome {
     JailOutcome::Unavailable {
         defect: RunJailDefect::UnsupportedPlatform {
-            reason: "build jail is wired only on Linux/x86_64 and macOS",
+            reason: "build jail is wired only on Linux/x86_64, macOS, Windows, and FreeBSD",
         },
     }
 }
@@ -550,7 +698,11 @@ pub fn sbpl_from_profile(
 ///
 /// `TMPDIR` is set to the always-writable scratch, matching the Linux jail (the
 /// child's temp writes land in the one writable mount, not a masked host temp).
-#[cfg(any(target_os = "macos", test))]
+///
+/// The FreeBSD build-jail arm reuses this SAME function (a jail does not scrub the
+/// inherited environment either), so there is ONE launcher-side env allowlist for
+/// every non-Linux arm — no second list that can drift from `profile.env_allowlist`.
+#[cfg(any(target_os = "macos", target_os = "freebsd", test))]
 #[must_use]
 pub fn macos_scrubbed_env(
     profile: &SandboxProfile,
@@ -575,14 +727,292 @@ pub fn macos_scrubbed_env(
 }
 
 /// Resolve a program name to an absolute path via `PATH`, or `None` when absent.
-/// The macOS build and run jails both refuse (fail-closed) when their
-/// `sandbox-exec` primitive is missing, so the resolver is shared.
-#[cfg(target_os = "macos")]
+/// The macOS build/run jails (`sandbox-exec`) and the FreeBSD build jail (`jail`)
+/// both refuse (fail-closed) when their mandatory primitive is missing, so the
+/// resolver is shared.
+#[cfg(any(target_os = "macos", target_os = "freebsd"))]
 pub(crate) fn find_in_path(bin: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
         .map(|dir| dir.join(bin))
         .find(|candidate| candidate.is_file())
+}
+
+/// The FreeBSD returning build-jail arm: establish a scratch-rooted `jail(2)`
+/// (via the `jail(8)` CLI) lowering the profile's axes, scrub the env in the
+/// launcher, run the payload confined, wait, and decode the exit into a
+/// [`JailOutcome`] — fail-closed at every establishment step.
+#[cfg(target_os = "freebsd")]
+mod freebsd_jail {
+    use super::{JailOutcome, find_in_path, macos_scrubbed_env};
+    use crate::run_jail::{FilesystemScope, RunJailDefect, SandboxProfile};
+    use std::ffi::OsString;
+    use std::path::Path;
+
+    /// The unprivileged user the jailed payload runs as. Its only writable
+    /// directory is the scratch (chowned to it below), so an out-of-scratch write
+    /// is denied by ownership — the observable of a withheld filesystem axis.
+    const JAIL_USER: &str = "nobody";
+
+    /// Run `payload` inside a `jail(8)`-established jail lowered from `profile` and
+    /// decode the outcome. See [`super::build_in_jail`] (FreeBSD) for the per-axis
+    /// lowering and the fail-closed contract.
+    pub(super) fn build_in_jail(
+        profile: &SandboxProfile,
+        scoped_tmp: &Path,
+        working_tree: &Path,
+        payload: &[OsString],
+    ) -> JailOutcome {
+        // `jail` is the mandatory primitive. Absent ⇒ refuse; the untrusted build
+        // is never run unconfined.
+        let Some(jail_bin) = find_in_path("jail") else {
+            return JailOutcome::Unavailable {
+                defect: RunJailDefect::PrimitiveUnavailable {
+                    missing: vec!["jail"],
+                },
+            };
+        };
+
+        // A withheld subprocess axis MUST be a genuine kernel denial of process
+        // creation, not mere omission (ADR 0051). `rctl(8)` with
+        // `jail:NAME:maxproc:deny=1` is the jail posture that denies `fork`/
+        // `pdfork`/`exec` of a new process at the kernel boundary: the rule is
+        // pre-registered by jail name and the kernel enforces it when the jail is
+        // created below (the documented rctl.conf pre-registration pattern). It
+        // requires the `racct`/`rctl` kernel facility; if that facility is off,
+        // `rctl -a` fails and this refuses (`Unavailable`) — a withheld-subprocess
+        // jail that cannot deny process creation is a refuse-gap, never a silent
+        // `Clean` that ran the build unconfined. When subprocess is GRANTED no such
+        // rule is added, so the differentially-probed net/fs canary (which grants
+        // subprocess so the probe can fork its python3/nc/rm helper) does not depend
+        // on rctl at all.
+        let rctl = if profile.subprocess {
+            None
+        } else {
+            match find_in_path("rctl") {
+                Some(path) => Some(path),
+                None => {
+                    return JailOutcome::Unavailable {
+                        defect: RunJailDefect::PrimitiveUnavailable {
+                            // Without rctl a withheld-subprocess jail cannot deny
+                            // process creation — a refuse-gap, never an unconfined run.
+                            missing: vec!["rctl"],
+                        },
+                    };
+                }
+            }
+        };
+
+        // The scratch must be writable to the unprivileged jail user; the launcher
+        // (root on the FreeBSD CI VM, as jail creation requires) chowns it. A
+        // failed chown refuses — a scratch the payload cannot write is a broken
+        // jail, never run.
+        if let Err(defect) = chown_to_jail_user(scoped_tmp) {
+            return JailOutcome::Unavailable { defect };
+        }
+        if profile.filesystem == FilesystemScope::WorkingTreeReadWrite
+            && let Err(defect) = chown_to_jail_user(working_tree)
+        {
+            return JailOutcome::Unavailable { defect };
+        }
+
+        let jail_name = per_run_jail_name();
+        let argv = jail_argv(&jail_bin, &jail_name, profile, working_tree, payload);
+
+        // Env scrub in the launcher (the jail does not scrub the inherited env),
+        // via the SAME allowlist the macOS/Windows arms use — one env list.
+        let host_env = |k: &str| std::env::var_os(k);
+        let scrubbed = macos_scrubbed_env(profile, scoped_tmp, &host_env);
+
+        // Apply the rctl process-cap rule (withheld subprocess only) BEFORE the
+        // jail runs, then remove it on return regardless of outcome so nothing
+        // leaks across the audit's per-axis tightening loop.
+        let _rctl_guard = match &rctl {
+            Some(rctl_bin) => match RctlRule::apply(rctl_bin, &jail_name) {
+                Ok(guard) => Some(guard),
+                Err(defect) => return JailOutcome::Unavailable { defect },
+            },
+            None => None,
+        };
+
+        let outcome = spawn_and_decode(&argv, &scrubbed);
+        // The jail is `persist=0`, so it is torn down when the payload exits; the
+        // scratch chown is inert. Nothing else to release beyond the rctl guard.
+        outcome
+    }
+
+    /// Build the `jail -c … command=<payload>` argv lowering the profile's axes.
+    ///
+    /// - `path=/` chroots the jail to the live root (read-only to the
+    ///   unprivileged user except the chowned scratch/working tree).
+    /// - `ip4=disable ip6=disable allow.raw_sockets=0` withhold the network
+    ///   namespace unconditionally when the axis is absent; when granted, the host
+    ///   network is inherited.
+    /// - `exec.jail_user=nobody` runs the payload unprivileged so an out-of-scratch
+    ///   write is denied by ownership.
+    /// - `persist=0` tears the jail down when the payload exits (no orphan jail).
+    fn jail_argv(
+        jail_bin: &Path,
+        jail_name: &str,
+        profile: &SandboxProfile,
+        working_tree: &Path,
+        payload: &[OsString],
+    ) -> Vec<OsString> {
+        let mut argv: Vec<OsString> = Vec::new();
+        argv.push(jail_bin.as_os_str().to_owned());
+        argv.push(OsString::from("-c"));
+        argv.push(OsString::from(format!("name={jail_name}")));
+        argv.push(OsString::from("path=/"));
+        argv.push(OsString::from("host.hostname=ipe-tier2-jail"));
+        // Network: withheld ⇒ no IPv4/IPv6/raw sockets at all (a socket is denied
+        // → the probe's exit-10 decodes to Denied { network }). Granted ⇒ inherit
+        // the host network so a granted effect is not false-denied.
+        if profile.network {
+            argv.push(OsString::from("ip4=inherit"));
+            argv.push(OsString::from("ip6=inherit"));
+        } else {
+            argv.push(OsString::from("ip4=disable"));
+            argv.push(OsString::from("ip6=disable"));
+            argv.push(OsString::from("allow.raw_sockets=0"));
+        }
+        argv.push(OsString::from("allow.sysvipc=0"));
+        argv.push(OsString::from("persist=0"));
+        argv.push(OsString::from(format!("exec.jail_user={JAIL_USER}")));
+        // The working tree is made writable to the jail user (chowned by the
+        // caller) only when the filesystem axis is granted, so a granted effect is
+        // not false-denied; when withheld it stays owned by the launcher and the
+        // unprivileged payload cannot write it. No extra jail parameter is needed —
+        // the ownership on the chrooted path is the boundary.
+        let _ = working_tree;
+        // The command: the payload as a single shell-free argv. `jail(8)` takes the
+        // command as `command=<program> <args…>`; each token is a distinct argv
+        // element so there is no shell interpretation of the payload.
+        let mut command = OsString::from("command=");
+        for (i, tok) in payload.iter().enumerate() {
+            if i > 0 {
+                command.push(" ");
+            }
+            command.push(tok);
+        }
+        argv.push(command);
+        argv
+    }
+
+    /// Chown `path` to the unprivileged jail user so the confined payload can write
+    /// its scratch. Uses the `chown(8)` CLI (no new `unsafe` FFI); a failure refuses.
+    fn chown_to_jail_user(path: &Path) -> Result<(), RunJailDefect> {
+        let Some(chown) = find_in_path("chown") else {
+            return Err(RunJailDefect::PrimitiveUnavailable {
+                missing: vec!["chown"],
+            });
+        };
+        let status = std::process::Command::new(chown)
+            .arg(JAIL_USER)
+            .arg(path)
+            .status();
+        match status {
+            Ok(s) if s.success() => Ok(()),
+            Ok(s) => Err(RunJailDefect::Spawn {
+                detail: format!("chown {} to {JAIL_USER} failed ({s})", path.display()),
+            }),
+            Err(e) => Err(RunJailDefect::Spawn {
+                detail: format!("could not run chown for {}: {e}", path.display()),
+            }),
+        }
+    }
+
+    /// A per-run jail name unique enough that concurrent audit calls do not collide.
+    fn per_run_jail_name() -> String {
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        format!("ipe_tier2_{pid}_{nanos}")
+    }
+
+    /// An `rctl(8)` process-cap rule (`jail:NAME:maxproc:deny=1`) applied for a
+    /// withheld-subprocess jail and removed on drop, so a withheld subprocess axis
+    /// is a genuine kernel denial of process creation and no rule leaks across the
+    /// audit loop.
+    struct RctlRule {
+        rctl_bin: std::path::PathBuf,
+        rule: String,
+    }
+
+    impl RctlRule {
+        fn apply(rctl_bin: &Path, jail_name: &str) -> Result<Self, RunJailDefect> {
+            let rule = format!("jail:{jail_name}:maxproc:deny=1");
+            let status = std::process::Command::new(rctl_bin)
+                .arg("-a")
+                .arg(&rule)
+                .status();
+            match status {
+                Ok(s) if s.success() => Ok(Self {
+                    rctl_bin: rctl_bin.to_path_buf(),
+                    rule,
+                }),
+                Ok(s) => Err(RunJailDefect::Spawn {
+                    detail: format!(
+                        "rctl could not deny process creation for the withheld-subprocess jail \
+                         ({s}); refusing to run without a kernel process-creation denial"
+                    ),
+                }),
+                Err(e) => Err(RunJailDefect::Spawn {
+                    detail: format!("could not run rctl to deny process creation: {e}"),
+                }),
+            }
+        }
+    }
+
+    impl Drop for RctlRule {
+        fn drop(&mut self) {
+            // Best-effort removal of the rule this guard added; a leftover rule on a
+            // torn-down (`persist=0`) jail is inert, but remove it so the audit loop
+            // leaves no residue.
+            let _ = std::process::Command::new(&self.rctl_bin)
+                .arg("-r")
+                .arg(&self.rule)
+                .status();
+        }
+    }
+
+    /// Spawn the jail argv with the scrubbed environment, wait, and decode the exit
+    /// into a [`JailOutcome`]. A spawn failure is `Unavailable` (the payload never
+    /// ran); a wait failure is `BuildFailed` (the jail ran but its result is
+    /// unobservable — never clean); the exit code decodes through the SAME
+    /// [`JailOutcome::decode`] the other arms use.
+    fn spawn_and_decode(argv: &[OsString], scrubbed: &[(OsString, OsString)]) -> JailOutcome {
+        let Some((program, rest)) = argv.split_first() else {
+            return JailOutcome::Unavailable {
+                defect: RunJailDefect::Spawn {
+                    detail: "empty jail argv".to_owned(),
+                },
+            };
+        };
+        let mut command = std::process::Command::new(program);
+        command.args(rest).stdin(std::process::Stdio::null());
+        command.env_clear();
+        for (name, value) in scrubbed {
+            command.env(name, value);
+        }
+        let child = match command.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                return JailOutcome::Unavailable {
+                    defect: RunJailDefect::Spawn {
+                        detail: e.to_string(),
+                    },
+                };
+            }
+        };
+        let mut child = child;
+        match child.wait() {
+            Ok(status) => JailOutcome::decode(status.code()),
+            Err(e) => JailOutcome::BuildFailed {
+                reason: format!("could not await the jailed probe: {e}"),
+            },
+        }
+    }
 }
 
 #[cfg(test)]
@@ -937,5 +1367,63 @@ mod tests {
             !by_name.contains_key("SECRET"),
             "a non-allowlisted host var must be dropped even when the host sets it"
         );
+    }
+
+    // ── the Windows exit-code mapping (pure — runs on any host) ───────────────
+    //
+    // The Windows arm reads a `u32` from `GetExitCodeProcess` and decodes it
+    // through the SAME `JailOutcome::decode` the other arms use. These prove the
+    // `u32 -> i32` bridge keeps the wrapper-owned per-axis contract intact and
+    // fails closed on an out-of-range code.
+
+    #[test]
+    fn windows_exit_maps_the_per_axis_codes_identically() {
+        // The wrapper-owned codes (clean/build-failed/network/filesystem) round-trip
+        // unchanged, so the Windows arm decodes them exactly as the Unix arms do.
+        for code in [
+            AXIS_EXIT_CLEAN,
+            TIER2_EXIT_BUILD_FAILED,
+            AXIS_EXIT_NETWORK,
+            AXIS_EXIT_FILESYSTEM,
+        ] {
+            let mapped = win_exit_to_i32(u32::try_from(code).expect("small code"));
+            assert_eq!(mapped, code, "code {code} must round-trip");
+        }
+    }
+
+    #[test]
+    fn windows_clean_exit_decodes_to_clean_and_only_clean() {
+        assert_eq!(
+            JailOutcome::decode(Some(win_exit_to_i32(0))),
+            JailOutcome::Clean
+        );
+        // A network / filesystem denial names its axis after the u32 bridge.
+        assert_eq!(
+            JailOutcome::decode(Some(win_exit_to_i32(10))),
+            JailOutcome::Denied {
+                axis: CapabilityAxis::Network
+            }
+        );
+        assert_eq!(
+            JailOutcome::decode(Some(win_exit_to_i32(11))),
+            JailOutcome::Denied {
+                axis: CapabilityAxis::Filesystem
+            }
+        );
+    }
+
+    #[test]
+    fn windows_high_bit_exit_is_build_failed_never_clean_or_denied() {
+        // A high-bit exit code (a process that exited with e.g. 0xC000_0005) must
+        // never alias a per-axis code or the clean 0 — it saturates to a value that
+        // decodes to BuildFailed. Fail-closed: ambiguity can never admit.
+        for code in [0x8000_0000u32, 0xC000_0005u32, u32::MAX] {
+            let outcome = JailOutcome::decode(Some(win_exit_to_i32(code)));
+            assert!(
+                matches!(outcome, JailOutcome::BuildFailed { .. }),
+                "high-bit exit {code:#x} must decode to BuildFailed, got {outcome:?}"
+            );
+            assert!(!outcome.is_clean());
+        }
     }
 }
