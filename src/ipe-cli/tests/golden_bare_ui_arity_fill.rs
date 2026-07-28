@@ -18,16 +18,18 @@
 
 use std::path::{Path, PathBuf};
 
-/// A full Webview app whose `view : Model -> Html` omits the message parameter.
-/// The `onPress = Just Bump` button pins the inferred message type to the
-/// concrete `Msg`, so the arity-filled return must solve to `Html<MainMsg>`.
-/// Message-pinning mirrors `examples/sky/ipe/31-webview-stopwatch-ui`.
+/// A full Webview app whose `view : Model -> Html` omits the message parameter,
+/// wired through the raw-`Html` escape entry `Webview.appHtml` (the shape that
+/// takes a `Model -> Html Msg` view directly). The `onPress = Just Bump` button
+/// pins the inferred message type to the concrete `Msg`, so the arity-filled
+/// return must solve to `Html<MainMsg>`.
 const BARE_HTML_VIEW_APP: &str = r#"module Main exposing (main)
 import Ipe.Prelude exposing (..)
 import Ipe.Tea.WebView as Webview
 import Ipe.Cmd as Cmd
 import Ipe.Sub as Sub
 import Ipe.Ui as Ui
+import Ipe.Html as Html
 type alias Model = { n : Int }
 type Msg = Bump
 init : () -> ( Model, Cmd Msg )
@@ -44,7 +46,7 @@ view model =
         (Ui.button []
             { onPress = Just Bump, label = Ui.text "x" })
 main =
-    Webview.app
+    Webview.appHtml
         { init = init
         , update = update
         , view = view

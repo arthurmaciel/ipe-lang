@@ -87,9 +87,9 @@ update msg model =
         WithEffect _ ->
             ( model, Cmd.none )
 
-view : Model -> Html Msg
+view : Model -> Element Msg
 view model =
-    Ui.layout [] (Ui.text (String.fromInt model.count))
+    Ui.text (String.fromInt model.count)
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
@@ -131,9 +131,9 @@ update msg model =
         SetHandler _ ->
             ( model, Cmd.none )
 
-view : Model -> Html Msg
+view : Model -> Element Msg
 view model =
-    Ui.layout [] (Ui.text (String.fromInt model.count))
+    Ui.text (String.fromInt model.count)
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
@@ -163,9 +163,9 @@ init : a -> ( Model, Cmd Msg )
 init _req =
     ( { count = 0 }, Cmd.none )
 
-view : Model -> Html Msg
+view : Model -> Element Msg
 view model =
-    Ui.layout [] (Ui.text (String.fromInt model.count))
+    Ui.text (String.fromInt model.count)
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
@@ -308,9 +308,9 @@ update msg model =
         CachedView _ ->
             ( model, Cmd.none )
 
-view : Model -> Html Msg
+view : Model -> Element Msg
 view model =
-    Ui.layout [] (Ui.text (String.fromInt model.count))
+    Ui.text (String.fromInt model.count)
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
@@ -350,9 +350,9 @@ update msg model =
         SetLabel _ ->
             ( model, Cmd.none )
 
-view : Model -> Html Msg
+view : Model -> Element Msg
 view model =
-    Ui.layout [] (Ui.text (String.fromInt model.count))
+    Ui.text (String.fromInt model.count)
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
