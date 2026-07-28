@@ -77,6 +77,54 @@ v1.4.0 preflight passed:
 It announces the run, fires the three checks concurrently with `parallelDo`,
 then prints the report and exits 0.
 
+## Views as data: static rendering
+
+`Ipe.Ui`, `Ipe.Html`, and `Ipe.Css` are top-level modules available to **any**
+shape, not just the TEA ones — they are view *data types*. The boundary between a
+Program and an app shape is the **live update loop**, not the data types. A
+Program can build a `Html` or `Ui` tree and render it **once**, with no
+`init` / `update` / `view` cycle.
+
+Turn a tree into a string with `Html.render`:
+
+```ipe
+Html.render : Html msg -> String
+```
+
+or, as an effect, write it out with `Web.renderStatic`:
+
+```ipe
+Web.renderStatic : (Model -> Html Msg) -> Model -> Task Error ()
+```
+
+```ipe
+module Main exposing (main)
+
+import Ipe.Prelude exposing (..)
+import Ipe.Html as Html
+import Ipe.Html.Attributes as Attr
+import Ipe.Io as Io
+
+
+page : Html msg
+page =
+    Html.div [ Attr.class "report" ]
+        [ Html.h1 [] [ Html.text "Nightly report" ]
+        , Html.p [] [ Html.text "All checks passed." ]
+        ]
+
+
+main =
+    Io.println (Html.render page)
+```
+
+There is no runtime loop here, so **event handlers are inert**: an `onClick` on a
+statically rendered node has nothing to dispatch to. A Program builds static
+trees (an `Html Never`-style tree with no live messages); the tags, attributes,
+and text render, but interactivity needs an app shape. See
+[Views: Ui, Html, and Css](../ui.md) for the full vocabulary and the
+`Ui.html` / `Ui.layout` bridges.
+
 ## Example
 
 [`examples/release-preflight/`](../../examples/release-preflight/) — the program above.
