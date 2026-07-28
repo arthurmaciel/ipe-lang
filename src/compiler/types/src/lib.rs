@@ -3236,6 +3236,133 @@ mod tests {
         }
     }
 
+    #[test]
+    fn or_pattern_covering_all_ctors_is_exhaustive_no_t0010() {
+        // `Red | Green | Blue -> …` enumerates the whole union in one arm, with
+        // NO wildcard. Row expansion makes the matrix cover all three
+        // constructors, so IPE-T0010 does NOT fire — the case type-checks.
+        let src = "module Main exposing (main)\n\
+                   import Ipe.Prelude exposing (..)\n\
+                   type Color = Red | Green | Blue\n\
+                   name : Color -> Int\n\
+                   name c =\n        case c of\n            Red | Green | Blue -> 1\n\
+                   main =\n    Io.println (String.fromInt (name Red))\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        assert!(
+            r.is_ok(),
+            "an or-pattern enumerating the whole union is exhaustive (no IPE-T0010), got {r:?}"
+        );
+    }
+
+    #[test]
+    fn or_pattern_redundant_alternative_is_flagged_t0011() {
+        // `Red | Green` then `Green | Blue`: the second `Green` alternative is
+        // already covered → IPE-T0011 (Warning), but the arm stays reachable via
+        // `Blue`, so the program still type-checks.
+        let src = "module Main exposing (main)\n\
+                   import Ipe.Prelude exposing (..)\n\
+                   type Color = Red | Green | Blue\n\
+                   label : Color -> Int\n\
+                   label c =\n        case c of\n\
+                   \x20           Red | Green -> 1\n\
+                   \x20           Green | Blue -> 2\n\
+                   main =\n    Io.println (String.fromInt (label Blue))\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        let types = r.expect("a per-alternative redundancy is a warning, not an error");
+        let redundant: Vec<_> = types
+            .warnings
+            .iter()
+            .filter(|w| {
+                matches!(
+                    w,
+                    Diagnostic::Type {
+                        msg: TypeError::RedundantCaseBranch { .. },
+                        ..
+                    }
+                )
+            })
+            .collect();
+        assert_eq!(
+            redundant.len(),
+            1,
+            "exactly the second `Green` alternative is redundant, got {redundant:?}"
+        );
+    }
+
+    #[test]
+    fn internally_redundant_or_pattern_is_flagged_t0011() {
+        // `Red | Red` — the second alternative is not useful against the first.
+        let src = "module Main exposing (main)\n\
+                   import Ipe.Prelude exposing (..)\n\
+                   type Color = Red | Green | Blue\n\
+                   f : Color -> Int\n\
+                   f c =\n        case c of\n\
+                   \x20           Red | Red -> 1\n\
+                   \x20           Green -> 2\n            Blue -> 3\n\
+                   main =\n    Io.println (String.fromInt (f Green))\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        let types = r.expect("an internally-redundant or-pattern is a warning, not an error");
+        let redundant = types
+            .warnings
+            .iter()
+            .filter(|w| {
+                matches!(
+                    w,
+                    Diagnostic::Type {
+                        msg: TypeError::RedundantCaseBranch { .. },
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(
+            redundant, 1,
+            "the duplicate `Red` alternative is flagged once, got {redundant}"
+        );
+    }
+
+    #[test]
+    fn or_pattern_binding_set_mismatch_is_t0019_in_canon() {
+        // `Circle r | Dot -> r`: `r` is bound by the left alternative but not the
+        // right. Canon rejects it fail-fast with IPE-T0019 (before types run).
+        let src = "module Main exposing (main)\n\
+                   import Ipe.Prelude exposing (..)\n\
+                   type Shape = Circle Int | Dot\n\
+                   bad : Shape -> Int\n\
+                   bad s =\n        case s of\n            Circle r | Dot -> r\n\
+                   main =\n    Io.println (String.fromInt 0)\n";
+        let mut i = Interner::new();
+        let parsed = ipe_parse::parse_module(src, &mut i).expect("source parses");
+        let r = ipe_canon::canonicalise(&parsed, &mut i);
+        assert!(
+            matches!(
+                r,
+                Err(Diagnostic::Type {
+                    msg: TypeError::OrPatternBindingMismatch { .. },
+                    ..
+                })
+            ),
+            "expected IPE-T0019 OrPatternBindingMismatch, got {r:?}"
+        );
+        if let Err(Diagnostic::Type {
+            msg: TypeError::OrPatternBindingMismatch { names },
+            ..
+        }) = r
+        {
+            let names: Vec<&str> = names.iter().map(AsRef::as_ref).collect();
+            assert_eq!(names, vec!["r"], "the message names the diverging binder");
+        }
+    }
+
     /// Regression against the IPE-T0011 false-positive class (the ex10-shaped
     /// bug): a `case` whose arms cover every constructor of a closed union
     /// EXACTLY ONCE — no trailing `_`, no redundant arm — must emit ZERO

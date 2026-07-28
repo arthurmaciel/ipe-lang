@@ -184,48 +184,95 @@ enum UPat {
     Ctor(Head, Vec<Self>),
 }
 
-/// Abstract a resolved pattern into a [`UPat`]. Variables, wildcards, and
-/// field-pun record patterns all become [`UPat::Wild`] (each matches its value
-/// unconditionally and binds names only). Constructor and tuple patterns recurse.
-fn to_upat(p: &canon::Pattern_) -> UPat {
+/// Abstract a resolved pattern into one-or-more [`UPat`] rows.
+///
+/// Every non-or pattern abstracts to a single [`UPat`] (variables, wildcards,
+/// and field-pun records become [`UPat::Wild`]; constructor / tuple / list
+/// patterns recurse). An **or-pattern** `p1 | p2 | …` expands by *row
+/// expansion* — the standard Maranget treatment — into the union of its
+/// alternatives' abstractions, so `A | B` becomes the two rows `A` and `B`. A
+/// nested or-pattern inside a constructor / tuple / cons sub-position multiplies
+/// its column, so the enclosing pattern expands into the **cartesian product**
+/// over every sub-position's abstractions (two independent 2-way or-patterns in
+/// one pattern produce 4 rows). Because the expanded matrix is literally the
+/// one the hand-written alternatives would produce, the usefulness algorithm's
+/// coverage / redundancy proofs carry over unchanged — no new [`Head`] and no
+/// re-proving.
+fn expand_upats(p: &canon::Pattern_) -> Vec<UPat> {
     match p {
         canon::Pattern_::PAnything | canon::Pattern_::PVar(_) | canon::Pattern_::PRecord(_) => {
-            UPat::Wild
+            vec![UPat::Wild]
         }
         canon::Pattern_::PCtor {
             home, name, args, ..
-        } => UPat::Ctor(
-            Head::Adt(home.clone(), *name),
-            args.iter().map(|a| to_upat(&a.value)).collect(),
-        ),
-        canon::Pattern_::PTuple(elems) => UPat::Ctor(
-            Head::Tuple(elems.len()),
-            elems.iter().map(|e| to_upat(&e.value)).collect(),
-        ),
+        } => cartesian(args.iter().map(|a| expand_upats(&a.value)).collect())
+            .into_iter()
+            .map(|combo| UPat::Ctor(Head::Adt(home.clone(), *name), combo))
+            .collect(),
+        canon::Pattern_::PTuple(elems) => {
+            cartesian(elems.iter().map(|e| expand_upats(&e.value)).collect())
+                .into_iter()
+                .map(|combo| UPat::Ctor(Head::Tuple(elems.len()), combo))
+                .collect()
+        }
         // Literal leaves abstract to a zero-arity head of their value.
-        canon::Pattern_::PInt(n) => UPat::Ctor(Head::Int(*n), Vec::new()),
-        canon::Pattern_::PBool(b) => UPat::Ctor(Head::Bool(*b), Vec::new()),
-        canon::Pattern_::PChar(c) => UPat::Ctor(Head::Char(c.clone()), Vec::new()),
-        canon::Pattern_::PStr(s) => UPat::Ctor(Head::Str(s.clone()), Vec::new()),
+        canon::Pattern_::PInt(n) => vec![UPat::Ctor(Head::Int(*n), Vec::new())],
+        canon::Pattern_::PBool(b) => vec![UPat::Ctor(Head::Bool(*b), Vec::new())],
+        canon::Pattern_::PChar(c) => vec![UPat::Ctor(Head::Char(c.clone()), Vec::new())],
+        canon::Pattern_::PStr(s) => vec![UPat::Ctor(Head::Str(s.clone()), Vec::new())],
         // An alias is transparent for coverage — it matches exactly what its
-        // inner pattern matches.
-        canon::Pattern_::PAlias(inner, _) => to_upat(&inner.value),
+        // inner pattern matches (and expands the same way).
+        canon::Pattern_::PAlias(inner, _) => expand_upats(&inner.value),
         // `List` is the closed two-constructor type `Nil | Cons`. A cons pattern
         // `head :: tail` abstracts to a [`Head::Cons`] over its two sub-patterns;
         // a list literal `[a, b, c]` desugars to the right-nested cons spine
         // `a :: b :: c :: []` so its coverage (and a missing-case witness) is
-        // judged with the SAME `Nil | Cons` signature.
+        // judged with the SAME `Nil | Cons` signature. Each sub-position expands,
+        // so a nested or-pattern multiplies the rows cartesian-wise.
         canon::Pattern_::PCons(head, tail) => {
-            UPat::Ctor(Head::Cons, vec![to_upat(&head.value), to_upat(&tail.value)])
+            cartesian(vec![expand_upats(&head.value), expand_upats(&tail.value)])
+                .into_iter()
+                .map(|combo| UPat::Ctor(Head::Cons, combo))
+                .collect()
         }
         canon::Pattern_::PList(elems) => {
-            let mut acc = UPat::Ctor(Head::Nil, Vec::new());
+            let mut rows = vec![UPat::Ctor(Head::Nil, Vec::new())];
             for e in elems.iter().rev() {
-                acc = UPat::Ctor(Head::Cons, vec![to_upat(&e.value), acc]);
+                let heads = expand_upats(&e.value);
+                let mut next = Vec::with_capacity(heads.len() * rows.len());
+                for h in &heads {
+                    for tail in &rows {
+                        next.push(UPat::Ctor(Head::Cons, vec![h.clone(), tail.clone()]));
+                    }
+                }
+                rows = next;
             }
-            acc
+            rows
         }
+        // An or-pattern expands to the union of its alternatives' rows.
+        canon::Pattern_::POr(alts) => alts.iter().flat_map(|a| expand_upats(&a.value)).collect(),
     }
+}
+
+/// The cartesian product of per-column row sets: given each sub-position's
+/// abstraction rows, produce every combination that picks one row per position,
+/// in column order. An empty input (a nullary constructor) yields the single
+/// empty combination `[[]]`; an empty column (unreachable — every abstraction
+/// yields ≥ 1 row) short-circuits to no combinations, keeping the function total.
+fn cartesian(columns: Vec<Vec<UPat>>) -> Vec<Vec<UPat>> {
+    let mut acc: Vec<Vec<UPat>> = vec![Vec::new()];
+    for column in columns {
+        let mut next = Vec::with_capacity(acc.len() * column.len());
+        for prefix in &acc {
+            for choice in &column {
+                let mut row = prefix.clone();
+                row.push(choice.clone());
+                next.push(row);
+            }
+        }
+        acc = next;
+    }
+    acc
 }
 
 /// Does `p` reference a name this end-of-checking pass cannot analyse soundly
@@ -268,6 +315,13 @@ fn pattern_uses_unknown_ctor(p: &canon::Pattern_, sigs: &Sigs) -> bool {
         canon::Pattern_::PList(elems) => elems
             .iter()
             .any(|e| pattern_uses_unknown_ctor(&e.value, sigs)),
+        // An or-pattern is analysable iff every alternative is — any alternative
+        // referencing an unknown constructor excludes the whole `case` from the
+        // matrix walk, so no expansion is attempted against an incomplete
+        // signature.
+        canon::Pattern_::POr(alts) => alts
+            .iter()
+            .any(|a| pattern_uses_unknown_ctor(&a.value, sigs)),
     }
 }
 
@@ -292,7 +346,10 @@ fn refutable_span(pat: &canon::Pattern) -> Option<Span> {
         | canon::Pattern_::PChar(_)
         | canon::Pattern_::PStr(_)
         | canon::Pattern_::PList(_)
-        | canon::Pattern_::PCons(_, _) => Some(pat.span),
+        | canon::Pattern_::PCons(_, _)
+        // An or-pattern discriminates (it selects between alternatives), so in a
+        // binding position it is refutable and blamed as a whole (IPE-T0015).
+        | canon::Pattern_::POr(_) => Some(pat.span),
     }
 }
 
@@ -477,15 +534,15 @@ fn check_case(
         return Ok(());
     }
 
-    let rows: Vec<UPat> = branches.iter().map(|br| to_upat(&br.pat.value)).collect();
-
     // Redundancy: an arm is redundant when its pattern is not useful against the
-    // arms before it (those already cover every value it would match). Reported
-    // by the arm's top-level constructor name, mirroring the reference diagnostic. The
-    // prior-arm matrix grows one row per step, so no indexing is needed.
-    let mut prior: Vec<Vec<UPat>> = Vec::with_capacity(rows.len());
-    for (br, row) in branches.iter().zip(rows.iter()) {
-        let q = [row.clone()];
+    // arms before it (those already cover every value it would match). An
+    // or-pattern is checked at ALTERNATIVE granularity — each alternative
+    // expands to its own row(s), so a covered alternative is flagged at its own
+    // span even when the rest of the arm is still reachable (`Red | Green` then
+    // `Green | Blue` flags only the second `Green`). The prior matrix grows one
+    // row per expanded alternative, so no indexing is needed.
+    let mut prior: Vec<Vec<UPat>> = Vec::new();
+    for br in branches {
         // A tuple / record arm is reported through the dedicated multi-arm
         // product gate at lowering (IPE-L0115), which gives a clearer message
         // than "redundant branch"; redundancy reporting covers the constructor /
@@ -494,21 +551,41 @@ fn check_case(
             br.pat.value,
             canon::Pattern_::PTuple(_) | canon::Pattern_::PRecord(_)
         );
-        if !is_product && useful(&prior, &q, sigs, 1).is_empty() {
-            // IPE-T0011 is Severity::Warning: collect it but do not abort.
-            warnings.push(Diagnostic::Type {
-                span: br.pat.span,
-                msg: TypeError::RedundantCaseBranch {
-                    constructor: arm_label(&br.pat.value, interner)?,
-                },
-            });
+        // The redundancy unit is the alternative: `(span, label-pattern, rows)`.
+        // A non-or arm is a single unit spanning the whole pattern.
+        let units: Vec<(Span, &canon::Pattern_)> = match &br.pat.value {
+            canon::Pattern_::POr(alts) => alts.iter().map(|a| (a.span, &a.value)).collect(),
+            other => vec![(br.pat.span, other)],
+        };
+        for (span, unit_pat) in units {
+            let rows = expand_upats(unit_pat);
+            let alternative_covered = rows
+                .iter()
+                .all(|row| useful(&prior, std::slice::from_ref(row), sigs, 1).is_empty());
+            if !is_product && alternative_covered {
+                // IPE-T0011 is Severity::Warning: collect it but do not abort.
+                warnings.push(Diagnostic::Type {
+                    span,
+                    msg: TypeError::RedundantCaseBranch {
+                        constructor: arm_label(unit_pat, interner)?,
+                    },
+                });
+            }
+            for row in rows {
+                prior.push(vec![row]);
+            }
         }
-        prior.push(vec![row.clone()]);
     }
 
     // Exhaustiveness: the wildcard row is useful against the arm matrix exactly
-    // when some value escapes every arm. Each witness is a missing pattern.
-    let matrix: Vec<Vec<UPat>> = rows.into_iter().map(|p| vec![p]).collect();
+    // when some value escapes every arm. Each witness is a missing pattern. Every
+    // branch expands (an or-pattern into one row per alternative), so an arm
+    // enumerating a union via `A | B | C` covers all three constructors.
+    let matrix: Vec<Vec<UPat>> = branches
+        .iter()
+        .flat_map(|br| expand_upats(&br.pat.value))
+        .map(|p| vec![p])
+        .collect();
     let witnesses = useful(&matrix, &[UPat::Wild], sigs, WITNESS_CAP);
     if witnesses.is_empty() {
         return Ok(());
@@ -873,6 +950,12 @@ fn arm_label(p: &canon::Pattern_, interner: &Interner) -> DResult<Box<str>> {
         canon::Pattern_::PRecord(_) => "{…}".to_owned(),
         canon::Pattern_::PList(_) => "[…]".to_owned(),
         canon::Pattern_::PCons(_, _) => "_ :: _".to_owned(),
+        // Label an or-pattern by its first alternative; a redundant SINGLE
+        // alternative is reported against that alternative directly.
+        canon::Pattern_::POr(alts) => match alts.first() {
+            Some(first) => return arm_label(&first.value, interner),
+            None => "_".to_owned(),
+        },
     };
     Ok(s.into_boxed_str())
 }

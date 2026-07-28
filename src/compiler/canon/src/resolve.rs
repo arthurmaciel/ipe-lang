@@ -3,7 +3,9 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use ipe_diagnostics::{AliasExpansionKind, DResult, Diagnostic, Located, NameError, Span};
+use ipe_diagnostics::{
+    AliasExpansionKind, DResult, Diagnostic, Located, NameError, Span, TypeError,
+};
 use ipe_intern::{Interner, Symbol};
 use ipe_kernels::StdlibKernel;
 use ipe_syntax as src;
@@ -2619,6 +2621,67 @@ fn bind_pattern_names(p: &src::Pattern_, env: &mut Env) {
             bind_pattern_names(&head.value, env);
             bind_pattern_names(&tail.value, env);
         }
+        src::Pattern_::POr(alts) => {
+            // Every alternative binds the identical name set (proved in
+            // `canonicalise_pattern`), so binding the FIRST alternative's names
+            // introduces the whole or-pattern's common binder set exactly once.
+            if let Some(first) = alts.first() {
+                bind_pattern_names(&first.value, env);
+            }
+        }
+    }
+}
+
+/// The set of variable names a source pattern binds. Wildcards and literals bind
+/// nothing; a nested or-pattern contributes its (already-consistent) common set,
+/// taken from its first alternative. Used to prove or-pattern binder-set
+/// equality fail-fast in canon (IPE-T0019).
+fn bound_name_set(p: &src::Pattern_) -> std::collections::BTreeSet<Symbol> {
+    let mut names = std::collections::BTreeSet::new();
+    collect_bound_names(p, &mut names);
+    names
+}
+
+fn collect_bound_names(p: &src::Pattern_, names: &mut std::collections::BTreeSet<Symbol>) {
+    match p {
+        src::Pattern_::PAnything
+        | src::Pattern_::PInt(_)
+        | src::Pattern_::PBool(_)
+        | src::Pattern_::PChar(_)
+        | src::Pattern_::PStr(_) => {}
+        src::Pattern_::PVar(name) => {
+            names.insert(*name);
+        }
+        src::Pattern_::PCtor(_, _, args) => {
+            for a in args {
+                collect_bound_names(&a.value, names);
+            }
+        }
+        src::Pattern_::PTuple(elems) | src::Pattern_::PList(elems) => {
+            for e in elems {
+                collect_bound_names(&e.value, names);
+            }
+        }
+        src::Pattern_::PRecord(fields) => {
+            for f in fields {
+                names.insert(f.value);
+            }
+        }
+        src::Pattern_::PAlias(inner, name) => {
+            collect_bound_names(&inner.value, names);
+            names.insert(name.value);
+        }
+        src::Pattern_::PCons(head, tail) => {
+            collect_bound_names(&head.value, names);
+            collect_bound_names(&tail.value, names);
+        }
+        src::Pattern_::POr(alts) => {
+            // A nested or-pattern's alternatives are already proved equal in
+            // `canonicalise_pattern`; contribute the first alternative's set.
+            if let Some(first) = alts.first() {
+                collect_bound_names(&first.value, names);
+            }
+        }
     }
 }
 
@@ -2688,6 +2751,47 @@ fn canonicalise_pattern(
             let can_head = canonicalise_pattern(head, env, interner)?;
             let can_tail = canonicalise_pattern(tail, env, interner)?;
             canon::Pattern_::PCons(Box::new(can_head), Box::new(can_tail))
+        }
+        src::Pattern_::POr(alts) => {
+            // Fail-fast binder-set equality (IPE-T0019): every alternative must
+            // bind the identical set of names. The set-equality half is purely
+            // syntactic and checked here, before the solver; the same-type half
+            // rides the post-solve type-mismatch path. The parser guarantees
+            // `≥ 2` alternatives, so `split_first` always yields a reference.
+            let Some((first, rest)) = alts.split_first() else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "canon::canonicalise_pattern",
+                    detail: "an or-pattern reached canon with no alternatives".to_owned(),
+                });
+            };
+            let reference = bound_name_set(&first.value);
+            for alt in rest {
+                let this = bound_name_set(&alt.value);
+                if this != reference {
+                    // The offending names are those bound by some alternative but
+                    // not all — the symmetric difference from the reference set.
+                    let mut differing = reference
+                        .symmetric_difference(&this)
+                        .copied()
+                        .collect::<Vec<_>>();
+                    differing.sort_unstable();
+                    let mut rendered = Vec::with_capacity(differing.len());
+                    for sym in differing {
+                        rendered.push(name_str(interner, sym)?);
+                    }
+                    return Err(Diagnostic::Type {
+                        span: alt.span,
+                        msg: TypeError::OrPatternBindingMismatch {
+                            names: rendered.into_boxed_slice(),
+                        },
+                    });
+                }
+            }
+            let mut can_alts = Vec::with_capacity(alts.len());
+            for alt in alts {
+                can_alts.push(canonicalise_pattern(alt, env, interner)?);
+            }
+            canon::Pattern_::POr(can_alts)
         }
     };
     Ok(Located::new(span, node))
