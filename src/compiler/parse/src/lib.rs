@@ -154,18 +154,23 @@ mod tests {
                     && items.first().is_some_and(|e| matches!(e.value, Exposed::Value(_)))
         ));
 
-        // One import: Ipe.Prelude exposing (..).
-        assert_eq!(m.imports.len(), 1);
-        if let Some(imp) = m.imports.first() {
-            let segs: Vec<&str> = imp
-                .name
+        // Two imports: `Ipe.Prelude exposing (..)`, then `Ipe.Io as Io`.
+        assert_eq!(m.imports.len(), 2);
+        let seg_names = |imp: &ipe_syntax::Import| -> Vec<&str> {
+            imp.name
                 .value
                 .iter()
                 .filter_map(|&s| i.resolve(s))
-                .collect();
-            assert_eq!(segs, ["Ipe", "Prelude"]);
+                .collect()
+        };
+        if let Some(imp) = m.imports.first() {
+            assert_eq!(seg_names(imp), ["Ipe", "Prelude"]);
             assert!(imp.alias.is_none());
             assert!(matches!(imp.exposing.value, Exposing::All));
+        }
+        if let Some(imp) = m.imports.get(1) {
+            assert_eq!(seg_names(imp), ["Ipe", "Io"]);
+            assert_eq!(imp.alias.and_then(|s| i.resolve(s)), Some("Io"));
         }
 
         // One union: Msg { Increment, Decrement }.
@@ -228,14 +233,15 @@ mod tests {
             }
         }
 
-        // `main`: no patterns, no annotation, nested Call body.
+        // `main`: no patterns, no annotation, nested Call body whose callee is the
+        // qualified `Io.println` (a `VarQual`).
         let main = find_value(&m, &i, "main");
         assert!(main.is_some(), "main value present");
         if let Some(mval) = main {
             assert!(mval.patterns.is_empty());
             assert!(mval.type_annotation.is_none());
             assert!(
-                matches!(&mval.body.value, Expr_::Call(c, _) if matches!(c.value, Expr_::VarLocal(_)))
+                matches!(&mval.body.value, Expr_::Call(c, _) if matches!(c.value, Expr_::VarQual(_, _)))
             );
             if let Expr_::Call(_, args) = &mval.body.value {
                 assert_eq!(args.len(), 1);
