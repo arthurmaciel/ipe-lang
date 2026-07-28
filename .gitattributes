@@ -10,3 +10,33 @@ tests/golden/** text eol=lf
 # checkout that rewrote them to CRLF makes the anchor search fail (IPE-I0203:
 # golden anchor not found), so pin the whole templates tree to LF.
 src/compiler/backend/rust/templates/** text eol=lf
+
+# Binary artifact classes. Marking these `binary` (= `-text -diff`) stops git
+# from attempting line-ending normalization, text diffs, or three-way merges on
+# non-text content — which would corrupt the bytes and produce useless diffs.
+# Build output (*.rlib/*.rmeta/*.a/*.o/*.so/*.dylib/*.wasm) should never be
+# committed at all (see .gitignore + the artifact-guard CI job), but if one
+# slips in, git must treat it as opaque bytes. Images and archives are legit
+# tracked fixtures (example snapshots, vendored assets) and are likewise binary.
+*.rlib   binary
+*.rmeta  binary
+*.a      binary
+*.o      binary
+*.so     binary
+*.dylib  binary
+*.dll    binary
+*.exe    binary
+*.wasm   binary
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.ico    binary
+*.webp   binary
+*.pdf    binary
+*.zip    binary
+*.gz     binary
+*.tar    binary
+*.bz2    binary
+*.xz     binary
+*.zst    binary
