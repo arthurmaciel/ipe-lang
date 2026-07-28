@@ -890,6 +890,44 @@ pub const fn database_confined(network_confined: bool, filesystem_confined: bool
     network_confined && filesystem_confined
 }
 
+/// The `FILE_PERSISTENT_ACLS` filesystem-capability bit as reported by
+/// `GetVolumeInformationW`'s `lpFileSystemFlags`. A volume that clears this bit
+/// (FAT/exFAT, some redirected `%TEMP%` and network shares) neither persists nor
+/// enforces DACLs: `SetNamedSecurityInfoW` returns `ERROR_SUCCESS` while
+/// persisting/enforcing nothing.
+///
+/// It is written here as the raw Win32 value (kept in lockstep with
+/// `windows_sys::Win32::System::SystemServices::FILE_PERSISTENT_ACLS`) so the
+/// [`volume_flags_confine_filesystem`] decision is a pure, cross-platform
+/// function unit-testable on any host, not gated behind `cfg(windows)`.
+///
+/// Consumed by the Windows arm (the `const _` lockstep assertion) and by the
+/// cross-platform unit tests; on a non-Windows non-test build it has no caller,
+/// hence the scoped `dead_code` allow.
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+pub(crate) const FILE_PERSISTENT_ACLS_FLAG: u32 = 0x0000_0008;
+
+/// The typed "parse the volume capability" decision: given the filesystem flags
+/// `GetVolumeInformationW` reports for a volume, is the ACL boundary the Windows
+/// run-jail arm relies on actually enforceable there?
+///
+/// The Windows arm confines `filesystem` (and, via [`database_confined`],
+/// `database`) by `ACLing` the scratch/working-tree DACL to the container SID.
+/// That boundary is a NO-OP on a volume without `FILE_PERSISTENT_ACLS`, where
+/// `SetNamedSecurityInfoW` succeeds without persisting or enforcing anything. So
+/// the ACL claim is honest only when this bit is present.
+///
+/// `true` ⇒ the volume persists+enforces DACLs, so the arm may proceed to ACL and
+/// launch. `false` ⇒ the arm must fail closed (never launch on a volume where the
+/// ACL boundary the admit path already trusted is a no-op). This is the parse
+/// step: probe once → a typed proceed/refuse decision, not an inference from a
+/// success return that does not mean what the caller assumed.
+#[must_use]
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+pub(crate) const fn volume_flags_confine_filesystem(filesystem_flags: u32) -> bool {
+    filesystem_flags & FILE_PERSISTENT_ACLS_FLAG != 0
+}
+
 /// Linux/macOS confine the full set. `database` is present because
 /// [`database_confined`] holds (both net and fs are confined); the
 /// `database_membership_is_derived_from_net_and_fs` test proves the list matches
@@ -1581,35 +1619,43 @@ mod windows_jail {
     };
     use windows_sys::Win32::Security::Authorization::{
         EXPLICIT_ACCESS_W, SET_ACCESS, SetEntriesInAclW, SetNamedSecurityInfoW, TRUSTEE_IS_SID,
-        TRUSTEE_IS_WELL_KNOWN_GROUP, TRUSTEE_W,
+        TRUSTEE_IS_USER, TRUSTEE_IS_WELL_KNOWN_GROUP, TRUSTEE_W,
     };
     use windows_sys::Win32::Security::Isolation::{
         CreateAppContainerProfile, DeleteAppContainerProfile,
         DeriveAppContainerSidFromAppContainerName,
     };
     use windows_sys::Win32::Security::{
-        ACL, DACL_SECURITY_INFORMATION, FreeSid, NO_INHERITANCE, PSID, SECURITY_CAPABILITIES,
-        SECURITY_MAX_SID_SIZE, SID_AND_ATTRIBUTES, WELL_KNOWN_SID_TYPE,
-        WinCapabilityInternetClientSid,
+        ACL, DACL_SECURITY_INFORMATION, FreeSid, GetTokenInformation, NO_INHERITANCE, PSID,
+        SECURITY_CAPABILITIES, SECURITY_MAX_SID_SIZE, SID_AND_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
+        TokenUser, WELL_KNOWN_SID_TYPE, WinCapabilityInternetClientSid,
     };
-    use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_READ, FILE_GENERIC_WRITE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_GENERIC_READ, FILE_GENERIC_WRITE, GetVolumeInformationW, GetVolumePathNameW,
+    };
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_BASIC_LIMIT_INFORMATION,
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
         SetInformationJobObject,
     };
-    use windows_sys::Win32::System::SystemServices::SE_GROUP_ENABLED;
+    use windows_sys::Win32::System::SystemServices::{FILE_PERSISTENT_ACLS, SE_GROUP_ENABLED};
     use windows_sys::Win32::System::Threading::{
         CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW,
-        DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess,
-        InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
-        PROCESS_INFORMATION, ResumeThread, STARTUPINFOEXW, UpdateProcThreadAttribute,
-        WaitForSingleObject,
+        DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess,
+        GetExitCodeProcess, InitializeProcThreadAttributeList, OpenProcessToken,
+        PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, PROCESS_INFORMATION, ResumeThread,
+        STARTUPINFOEXW, UpdateProcThreadAttribute, WaitForSingleObject,
     };
 
     /// Access rights ACLed onto a granted path for the container SID (read+write).
     const FILE_RW: u32 = FILE_GENERIC_READ | FILE_GENERIC_WRITE;
+
+    /// Keep the pure, cross-platform [`super::FILE_PERSISTENT_ACLS_FLAG`] (used by
+    /// the host-independent volume-capability decision + its unit tests) in
+    /// lockstep with the real Win32 value from `windows-sys`. If they ever diverge
+    /// this fails the Windows build.
+    const _: () = assert!(super::FILE_PERSISTENT_ACLS_FLAG == FILE_PERSISTENT_ACLS);
 
     /// An owned Win32 `HANDLE` closed on drop — RAII so no error path leaks a
     /// handle. A null/`INVALID_HANDLE_VALUE` handle is treated as "nothing to
@@ -1715,8 +1761,17 @@ mod windows_jail {
         //    what is ACLed is reachable). Always the scratch; the working tree only
         //    under the filesystem axis. A failed ACL refuses (never run with an
         //    unenforced write boundary).
+        //
+        //    Before ACLing, PROVE each path lives on a volume that persists+enforces
+        //    DACLs (`FILE_PERSISTENT_ACLS`). On a non-ACL volume (FAT/exFAT) the ACL
+        //    is a silent no-op — `SetNamedSecurityInfoW` returns success while
+        //    enforcing nothing — so the filesystem boundary the admit path already
+        //    trusted would not exist. The probe fails closed, keeping the
+        //    always-confined `Filesystem` claim honest.
+        probe_volume_persists_acls(scoped_tmp)?;
         acl_path_for_container(scoped_tmp, container.sid())?;
         if profile.filesystem == FilesystemScope::WorkingTreeReadWrite {
+            probe_volume_persists_acls(working_tree)?;
             acl_path_for_container(working_tree, container.sid())?;
         }
 
@@ -2003,33 +2058,76 @@ mod windows_jail {
         Ok(job)
     }
 
-    /// ACL a path's DACL to grant the container SID read+write (deny-by-default:
-    /// AppContainer can otherwise touch nothing outside its profile dir). A failure
-    /// refuses — never run with an unenforced write boundary.
+    /// ACL a path's DACL to grant read+write to exactly two trustees — the
+    /// AppContainer SID (so the sandboxed process can reach its scratch/working
+    /// tree) and the launcher's own user SID (so this process and SYSTEM keep the
+    /// access post-run cleanup — `remove_dir_all(scoped_tmp)` — needs). Everyone
+    /// else stays implicitly denied: this is a fresh DACL with only these two
+    /// grants, so deny-by-default holds. The launcher grant does NOT widen the
+    /// sandboxed app's reach: the AppContainer process runs as the container SID,
+    /// never as the launcher user. A failure refuses — never run with an
+    /// unenforced write boundary.
     ///
-    /// NOTE (design §2.2 caveat): this is ACL-mediated, so it is a no-op on a
-    /// non-ACL volume (FAT/exFAT) — that refuse-gap is the design's, proven by a
-    /// dedicated negative test, not silently admitted here.
+    /// The caller must have already established, via
+    /// [`probe_volume_persists_acls`], that `path` lives on a volume with
+    /// `FILE_PERSISTENT_ACLS`; on a non-ACL volume (FAT/exFAT) `SetNamedSecurityInfoW`
+    /// would return success while enforcing nothing, so the probe fails closed
+    /// upstream rather than letting this establish a no-op boundary. That
+    /// probe → refuse decision is unit-tested through the pure
+    /// [`super::volume_flags_confine_filesystem`].
     fn acl_path_for_container(path: &Path, container_sid: PSID) -> Result<(), RunJailDefect> {
-        let ea = EXPLICIT_ACCESS_W {
-            grfAccessPermissions: FILE_RW,
-            grfAccessMode: SET_ACCESS,
-            grfInheritance: NO_INHERITANCE,
-            Trustee: TRUSTEE_W {
-                pMultipleTrustee: std::ptr::null_mut(),
-                MultipleTrusteeOperation: 0,
-                TrusteeForm: TRUSTEE_IS_SID,
-                TrusteeType: TRUSTEE_IS_WELL_KNOWN_GROUP,
-                ptstrName: container_sid.cast(),
-            },
+        // The launcher's user SID, kept alive in an owned buffer for the whole
+        // `SetEntriesInAclW` call (the EXPLICIT_ACCESS entry borrows the SID by
+        // pointer).
+        let launcher_sid_buf = launcher_user_sid_buffer()?;
+        // SAFETY: `launcher_sid_buf` holds a live `TOKEN_USER` whose `User.Sid`
+        // points into the same buffer; the read is a plain field access of a
+        // populated, correctly aligned structure that outlives every use below.
+        let launcher_sid: PSID = unsafe {
+            let token_user = launcher_sid_buf.as_ptr().cast::<TOKEN_USER>();
+            (*token_user).User.Sid
         };
+        if launcher_sid.is_null() {
+            return Err(spawn(format!(
+                "launcher user SID was null for {}; refusing to run without a cleanup grant",
+                path.display()
+            )));
+        }
+        let entries = [
+            EXPLICIT_ACCESS_W {
+                grfAccessPermissions: FILE_RW,
+                grfAccessMode: SET_ACCESS,
+                grfInheritance: NO_INHERITANCE,
+                Trustee: TRUSTEE_W {
+                    pMultipleTrustee: std::ptr::null_mut(),
+                    MultipleTrusteeOperation: 0,
+                    TrusteeForm: TRUSTEE_IS_SID,
+                    TrusteeType: TRUSTEE_IS_WELL_KNOWN_GROUP,
+                    ptstrName: container_sid.cast(),
+                },
+            },
+            EXPLICIT_ACCESS_W {
+                grfAccessPermissions: FILE_RW,
+                grfAccessMode: SET_ACCESS,
+                grfInheritance: NO_INHERITANCE,
+                Trustee: TRUSTEE_W {
+                    pMultipleTrustee: std::ptr::null_mut(),
+                    MultipleTrusteeOperation: 0,
+                    TrusteeForm: TRUSTEE_IS_SID,
+                    TrusteeType: TRUSTEE_IS_USER,
+                    ptstrName: launcher_sid.cast(),
+                },
+            },
+        ];
         let mut new_acl: *mut ACL = std::ptr::null_mut();
-        // SAFETY: one EXPLICIT_ACCESS entry; `SetEntriesInAclW` allocates `new_acl`
+        // SAFETY: two EXPLICIT_ACCESS entries in a live array; both trustee SIDs
+        // outlive the call (`container_sid` owned by the caller, `launcher_sid`
+        // pinned by `launcher_sid_buf`). `SetEntriesInAclW` allocates `new_acl`
         // (freed via LocalFree below). A null existing ACL means "start fresh".
         let err = unsafe {
             SetEntriesInAclW(
-                1,
-                std::ptr::from_ref(&ea),
+                2,
+                entries.as_ptr(),
                 std::ptr::null_mut(),
                 std::ptr::from_mut(&mut new_acl),
             )
@@ -2068,6 +2166,130 @@ mod windows_jail {
             )));
         }
         Ok(())
+    }
+
+    /// Query the launcher process's own user SID into an owned buffer. The
+    /// returned `Vec<u64>` holds a `TOKEN_USER` whose `User.Sid` points back into
+    /// the same allocation, so the buffer must outlive every use of that pointer.
+    /// `u64` elements give the allocation 8-byte alignment, which `TOKEN_USER`
+    /// (containing a pointer) requires. Fail-closed: any failed Win32 call refuses.
+    fn launcher_user_sid_buffer() -> Result<Vec<u64>, RunJailDefect> {
+        let mut token: HANDLE = std::ptr::null_mut();
+        // SAFETY: `GetCurrentProcess` is a pseudo-handle (never closed); we request
+        // TOKEN_QUERY and receive an owned token handle in `token`.
+        let opened = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw mut token) };
+        if opened == 0 || token.is_null() {
+            return Err(last_error_spawn(
+                "OpenProcessToken failed for the launcher token",
+            ));
+        }
+        let token = OwnedHandle(token);
+        // First call: learn the required buffer length (expected to fail with
+        // ERROR_INSUFFICIENT_BUFFER while writing `needed`).
+        let mut needed: u32 = 0;
+        // SAFETY: null buffer with zero length is the documented size-probe form;
+        // `needed` receives the byte count.
+        unsafe {
+            GetTokenInformation(
+                token.get(),
+                TokenUser,
+                std::ptr::null_mut(),
+                0,
+                &raw mut needed,
+            );
+        }
+        if needed == 0 {
+            return Err(last_error_spawn(
+                "GetTokenInformation size probe reported zero length for the launcher token",
+            ));
+        }
+        // Round the byte count up to whole `u64` words so the allocation is both
+        // large enough and 8-byte aligned.
+        let words = (needed as usize).div_ceil(std::mem::size_of::<u64>());
+        let mut buffer: Vec<u64> = vec![0u64; words];
+        let mut written: u32 = 0;
+        // SAFETY: `buffer` is at least `needed` bytes and 8-byte aligned;
+        // `GetTokenInformation` fills a `TOKEN_USER` (its embedded SID points
+        // within the same allocation).
+        let ok = unsafe {
+            GetTokenInformation(
+                token.get(),
+                TokenUser,
+                buffer.as_mut_ptr().cast(),
+                needed,
+                &raw mut written,
+            )
+        };
+        if ok == 0 {
+            return Err(last_error_spawn(
+                "GetTokenInformation failed to read the launcher user SID",
+            ));
+        }
+        Ok(buffer)
+    }
+
+    /// Establish, at the boundary, that `path` lives on a volume whose filesystem
+    /// persists and enforces DACLs (`FILE_PERSISTENT_ACLS`) — the precondition the
+    /// ACL-mediated [`acl_path_for_container`] boundary silently depends on.
+    ///
+    /// On a volume WITHOUT that bit (FAT/exFAT — a USB stick, a redirected
+    /// `%TEMP%`, some network shares), `SetNamedSecurityInfoW` returns success
+    /// while persisting/enforcing NOTHING, so the ACL would be a no-op and the
+    /// sandboxed app would run with the filesystem UNCONFINED even though the admit
+    /// path already trusted it. Probe once with `GetVolumeInformationW`, parse the
+    /// flags through the pure [`super::volume_flags_confine_filesystem`], and refuse
+    /// (fail closed) when the bit is absent. Any probe failure also refuses.
+    fn probe_volume_persists_acls(path: &Path) -> Result<(), RunJailDefect> {
+        const MAX_PATH_WCHARS: u32 = 260;
+        // `GetVolumeInformationW` needs a volume root, not an arbitrary path;
+        // resolve the mount point of `path` first.
+        let wpath = wide(path.as_os_str());
+        let mut root: Vec<u16> = vec![0u16; MAX_PATH_WCHARS as usize];
+        // SAFETY: `wpath` is a live NUL-terminated wide path; `root` is a
+        // `MAX_PATH_WCHARS`-element buffer receiving the NUL-terminated volume
+        // mount point.
+        let got_root =
+            unsafe { GetVolumePathNameW(wpath.as_ptr(), root.as_mut_ptr(), MAX_PATH_WCHARS) };
+        if got_root == 0 {
+            return Err(last_error_spawn(&format!(
+                "GetVolumePathNameW failed for {}; refusing to run without proving the volume \
+                 persists ACLs",
+                path.display()
+            )));
+        }
+        let mut fs_flags: u32 = 0;
+        // SAFETY: `root` is a live NUL-terminated wide root path; we pass null for
+        // the name/serial/component outputs we do not need and a live `fs_flags`
+        // out-param; no volume/filesystem name buffers are requested.
+        let got_info = unsafe {
+            GetVolumeInformationW(
+                root.as_ptr(),
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &raw mut fs_flags,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if got_info == 0 {
+            return Err(last_error_spawn(&format!(
+                "GetVolumeInformationW failed for {}; refusing to run without proving the volume \
+                 persists ACLs",
+                path.display()
+            )));
+        }
+        if super::volume_flags_confine_filesystem(fs_flags) {
+            Ok(())
+        } else {
+            Err(spawn(format!(
+                "the volume backing {} lacks FILE_PERSISTENT_ACLS (flags = {fs_flags:#x}); its \
+                 ACLs are not enforced, so the filesystem boundary would be a no-op — refusing to \
+                 run",
+                path.display()
+            )))
+        }
     }
 
     /// The scrubbed environment as a doubly-NUL-terminated UTF-16 block for
@@ -2396,6 +2618,45 @@ mod tests {
 
     fn set(caps: &[Capability]) -> BTreeSet<Capability> {
         caps.iter().copied().collect()
+    }
+
+    // The volume-capability decision the Windows run-jail arm uses to keep its
+    // always-confined `Filesystem` claim honest. These exercise the pure
+    // `volume_flags_confine_filesystem` on the raw filesystem-flags value, so they
+    // run on ANY host — no self-hosted FAT/exFAT runner is needed for the negative
+    // proof. The Windows arm's `probe_volume_persists_acls` feeds
+    // `GetVolumeInformationW`'s flags straight into this function and fails closed
+    // on `false`.
+
+    #[test]
+    fn volume_without_persistent_acls_refuses() {
+        // FAT/exFAT-style flags: the FILE_PERSISTENT_ACLS bit is clear. Even with
+        // other capability bits set (case-preserving, unicode-on-disk), the
+        // decision is refuse — the ACL boundary would be a no-op there.
+        let no_acls = 0x0000_0001 | 0x0000_0002 | 0x0000_0004; // not FILE_PERSISTENT_ACLS
+        assert!(
+            !volume_flags_confine_filesystem(no_acls),
+            "a volume without FILE_PERSISTENT_ACLS must refuse (flags = {no_acls:#x})"
+        );
+        // Exactly zero flags also refuses.
+        assert!(!volume_flags_confine_filesystem(0));
+    }
+
+    #[test]
+    fn volume_with_persistent_acls_proceeds() {
+        // NTFS-style flags: the FILE_PERSISTENT_ACLS bit is set.
+        assert!(volume_flags_confine_filesystem(FILE_PERSISTENT_ACLS_FLAG));
+        // Set alongside unrelated capability bits, it still proceeds.
+        let ntfs_like = FILE_PERSISTENT_ACLS_FLAG | 0x0000_0001 | 0x0000_0002 | 0x0010_0000;
+        assert!(volume_flags_confine_filesystem(ntfs_like));
+    }
+
+    #[test]
+    fn persistent_acls_flag_is_the_win32_bit() {
+        // The pure flag value must equal the documented Win32 FILE_PERSISTENT_ACLS
+        // (0x8). On Windows a `const _` assertion additionally ties it to
+        // `windows-sys`; this keeps the value pinned on every host.
+        assert_eq!(FILE_PERSISTENT_ACLS_FLAG, 0x0000_0008);
     }
 
     #[test]
