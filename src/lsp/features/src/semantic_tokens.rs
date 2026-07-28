@@ -375,6 +375,11 @@ fn push_pattern_tokens(
             push_pattern_tokens(raw, h, interner);
             push_pattern_tokens(raw, t, interner);
         }
+        ipe_syntax::Pattern_::POr(alts) => {
+            for alt in alts {
+                push_pattern_tokens(raw, alt, interner);
+            }
+        }
     }
 }
 

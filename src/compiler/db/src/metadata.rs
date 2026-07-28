@@ -354,5 +354,12 @@ fn walk_pat(pat: &Pat, types: &mut BTreeSet<(ModPath, Symbol)>) {
                 walk_pat(rest, types);
             }
         }
+        // An or-pattern's alternatives may each reference distinct enum
+        // identities (`Circle r | Square r`), so every alternative is walked.
+        Pat::Or(alts) => {
+            for alt in alts {
+                walk_pat(alt, types);
+            }
+        }
     }
 }
