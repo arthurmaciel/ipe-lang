@@ -21,8 +21,8 @@ harvest every `AttrPseudoRule` on an element into ONE
 `data-ipe-pc-rules` HTML attribute — the marker the downstream
 `live::style_inject::apply_style_injections` pass converts into a `<style>`
 block. (Previously `collect_html_attrs`'s catch-all `_ => {}` silently swallowed
-it, so pseudo-class styling rendered to nothing in *every* backend — Ipe.Live,
-Ipe.Webview, and any bare `render_html` caller.)
+it, so pseudo-class styling rendered to nothing in *every* backend — Ipe.Web,
+Ipe.WebView, and any bare `render_html` caller.)
 
 The wire format is a fixed contract shared between the encoder and decoder — do
 not re-invent it:

@@ -1612,7 +1612,7 @@ mod tests {
         let attr: Attribute<String> = html_on_raw_("submit".to_owned(), |o: Order| o.item);
         let mut t: Html<String> = Html::HElement("form".into(), vec![attr], vec![]);
         assign_ipe_ids(&mut t, "r");
-        let idx = crate::live::build_index(&t);
+        let idx = crate::dom::build_index(&t);
 
         // Must dispatch via resolve_form (Event::OnForm), never resolve()'s
         // positional-args path — there is no Event::OnRaw any more.

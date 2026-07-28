@@ -1,4 +1,4 @@
-//! End-to-end tests for `Ipe.WebView` / `Ipe.WebView` — `Webview.app`,
+//! End-to-end tests for `Ipe.WebView` — `WebView.app`,
 //! `Ui.layout`, `Ui.column`, `Ui.el`, `Ui.text`, `Ui.button`, and
 //! `String.fromInt`.
 //!
@@ -33,10 +33,10 @@
 //! IPE_E2E=1 cargo test webview_e2e
 //! ```
 
-/// A minimal Ipe.WebView counter app exercising the `Webview.app` wiring.
+/// A minimal Ipe.WebView counter app exercising the `WebView.app` wiring.
 ///
 /// Kernels exercised:
-/// - `Webview.app`   — constrain scheme + 5-field cfg with nested
+/// - `WebView.app`   — constrain scheme + 5-field cfg with nested
 ///   `window = { title, size }` (G4 gate)
 /// - `Ui.layout`     — wraps Element → Html (view must return Html Msg)
 /// - `Ui.column`     — vertical layout container
@@ -102,7 +102,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Webview.app
+    WebView.app
         { init = init
         , update = update
         , view = view
@@ -163,7 +163,7 @@ fn is_missing_linux_webview_system_libs(err: &str) -> bool {
 /// features), and the binary exists.
 ///
 /// Assertions:
-/// - constrain: `Webview.app` correctly types the 5-field cfg
+/// - constrain: `WebView.app` correctly types the 5-field cfg
 ///   (`init/update/view/subscriptions/window` with nested `{ title, size }`).
 /// - lower: the cfg record literal bypasses IPE-L0107 (same exemption
 ///   as `Web.app` and `Tui.app`).
@@ -328,7 +328,7 @@ subscriptions _model =
 
 main =
     let win = { title = "Counter", size = ( 400, 300 ) } in
-    Webview.app
+    WebView.app
         { init = init
         , update = update
         , view = view
@@ -337,7 +337,7 @@ main =
         }
 "#;
 
-/// End-to-end guard: a let-bound `window` on `Webview.app` must produce a clean
+/// End-to-end guard: a let-bound `window` on `WebView.app` must produce a clean
 /// user-facing `IPE-L0119` diagnostic during lowering — NOT an
 /// internal-compiler-error (`IPE-I0001`) from the emit-stage G4 `Expr::Record`
 /// guard. Compile-only (`ipe::build`) — no `cargo build`, so it runs fast and

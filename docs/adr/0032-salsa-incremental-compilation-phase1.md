@@ -50,5 +50,5 @@ they never reimplement parsing, name resolution, or type inference.
   file-watcher integration) are separate efforts; Phase 1 delivers the DB + front-
   end queries that both require.
 - Hot-reload (`ipe watch` + `ipe lsp`) must never open a dynamic-code / `eval` hole:
-  Ipe.Live's no-`data-ipe-eval` + strict-CSP (no `unsafe-eval`) posture is a hard
+  Ipe.Web's no-`data-ipe-eval` + strict-CSP (no `unsafe-eval`) posture is a hard
   invariant at every reload level.

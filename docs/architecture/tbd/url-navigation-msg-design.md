@@ -5,7 +5,7 @@
 > Spec+plan written 2026-07-10. Design-only; no code has changed.
 >
 > **One-line decision:** add the reference's optional
-> `onNavigate : page -> msg` cfg field to `Live.app` (row-poly absorbed,
+> `onNavigate : page -> msg` cfg field to `Web.app` (row-poly absorbed,
 > deferred-check typed), have the runtime dispatch the resulting Msg
 > through `update` on every URL-driven route change, and **redefine** the
 > existing magic `page`-field mutation as the *desugaring of the absent
@@ -50,10 +50,10 @@ sugar over onNavigate") is Ipê editorial.
 
 ## Decision
 
-### D1 — Surface: optional `onNavigate : page -> msg` on `Live.app` cfg
+### D1 — Surface: optional `onNavigate : page -> msg` on `Web.app` cfg
 
 Same field name, position, and semantics as the reference. It rides the
-existing open row tail (`RowTail::Open(3)`) of the `Live.app` cfg scheme
+existing open row tail (`RowTail::Open(3)`) of the `Web.app` cfg scheme
 (`src/compiler/types/src/constrain.rs:4028-4055`), so no required-field
 change and no breakage for existing apps.
 
@@ -147,7 +147,7 @@ Constrain (`src/compiler/types/src/constrain.rs`):
 1. Intern `live_f_on_navigate` symbol next to `live_f_routes`/
    `live_f_not_found` (≈lines 290–297, interning at ≈519–520).
 2. Add an `OnNavigateCheck { cfg_row_var, page_var, msg_var, span }`
-   deferred check pushed per `Live.app` call site (mirror
+   deferred check pushed per `Web.app` call site (mirror
    `RoutedLiveCheck`, `constrain.rs:1148-1155`); resolve it in
    `src/compiler/types/src/lib.rs` next to `resolve_routed_live_checks`
    (≈864–955): if the settled row has `onNavigate`, unify with

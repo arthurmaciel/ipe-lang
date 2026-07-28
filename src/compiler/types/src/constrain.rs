@@ -372,7 +372,7 @@ struct Builtins {
     /// `"value"` — field of the pinned `KeyEvent` record in the `onKey` scheme.
     tui_f_key_value: Symbol,
     // ── Webview cfg record field name symbols ─────────────────────────────────
-    /// `"window"` — the window field of the `Webview.app` config record.
+    /// `"window"` — the window field of the `WebView.app` config record.
     /// Typed as a closed record `{ title : String, size : (Int, Int) }`.
     webview_f_window: Symbol,
     /// `"title"` — the title field inside the Webview window config record.
@@ -5333,7 +5333,7 @@ impl<'a> Builder<'a> {
                         m.insert(self.builtins.cli_f_on_line, fun(string(), var(1)));
                         m
                     },
-                    // Closed cfg record — like `Tui.app` / `Webview.app`, the
+                    // Closed cfg record — like `Tui.app` / `WebView.app`, the
                     // Cli cfg takes exactly its named fields (the open
                     // row is a `Web.app`-only surface).
                     RowTail::Closed,

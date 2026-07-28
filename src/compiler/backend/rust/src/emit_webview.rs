@@ -2,7 +2,7 @@
 //!
 //! Wires one Webview kernel:
 //!
-//! * [`KernelFn::WebViewApp`] — `Webview.app cfg` →
+//! * [`KernelFn::WebViewApp`] — `WebView.app cfg` →
 //!   `ipe_runtime::webview::webview_app(init, update, view, subs, window_cfg)`.
 //!   5-field closed cfg: init / update / view / subscriptions / window,
 //!   where `window = { title : String, size : (Int, Int) }`.
@@ -53,7 +53,7 @@ pub fn emit_webview_call(
     };
 
     match k {
-        // ── Webview.app { init, update, view, subscriptions, window } ──────
+        // ── WebView.app { init, update, view, subscriptions, window } ──────
         //
         // view : Model -> Html Msg   (view wraps Ui.layout [] element → Html)
         // window : { title : String, size : (Int, Int) }
@@ -62,7 +62,7 @@ pub fn emit_webview_call(
             let [cfg_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_webview_call::WebviewApp",
-                    detail: format!("Webview.app requires 1 argument, got {}", args.len()),
+                    detail: format!("WebView.app requires 1 argument, got {}", args.len()),
                 });
             };
             // Unreachable for well-typed source: a non-literal cfg is rejected
@@ -71,7 +71,7 @@ pub fn emit_webview_call(
             let Expr::Record(fields) = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_webview_call::WebviewApp",
-                    detail: "Webview.app cfg must be an inline record literal; \
+                    detail: "WebView.app cfg must be an inline record literal; \
                              a non-literal cfg is rejected at lower with IPE-L0119"
                         .into(),
                 });
@@ -147,7 +147,7 @@ fn emit_webview_app_inner(
     let Expr::Record(win_fields) = window_e else {
         return Err(Diagnostic::CompilerBug {
             where_: "ipe_backend_rust::emit_webview_app_inner::G4_window",
-            detail: "Webview.app `window` field must be an inline record literal \
+            detail: "WebView.app `window` field must be an inline record literal \
                      `{ title = ..., size = (..., ...) }`; \
                      a let-bound WindowCfg variable is rejected at lower with IPE-L0119"
                 .into(),
@@ -163,7 +163,7 @@ fn emit_webview_app_inner(
     let Expr::Tuple(size_elems) = size_e else {
         return Err(Diagnostic::CompilerBug {
             where_: "ipe_backend_rust::emit_webview_app_inner::G4_size",
-            detail: "Webview.app `window.size` must be an inline 2-tuple literal `(w, h)`; \
+            detail: "WebView.app `window.size` must be an inline 2-tuple literal `(w, h)`; \
                      a let-bound size variable is rejected at lower with IPE-L0119"
                 .into(),
         });
@@ -172,7 +172,7 @@ fn emit_webview_app_inner(
         return Err(Diagnostic::CompilerBug {
             where_: "ipe_backend_rust::emit_webview_app_inner::G4_size_arity",
             detail: format!(
-                "Webview.app `window.size` must be a 2-tuple `(Int, Int)` (width, height), \
+                "WebView.app `window.size` must be a 2-tuple `(Int, Int)` (width, height), \
                  but got a {}-element tuple",
                 size_elems.len()
             ),

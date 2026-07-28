@@ -74,10 +74,10 @@ For more information about this error, try `rustc --explain E0507`.
 ## 20-cli-counter
 Compare to Go
 
-## 24-tui-kitchen-sink Got a warning[IPE-L0124]: `Live.app` routes list is non-empty but Model has no `page` field
+## 24-tui-kitchen-sink Got a warning[IPE-L0124]: `Web.app` routes list is non-empty but Model has no `page` field
    --> src/Main.ipe:497:13
     |
-497 |             Live.app
+497 |             Web.app
     |             ^^^^^^^^ 1 route(s) declared but the Model has no `page` field — routing is disabled and the routes are ignored
     |
     = note: the `routes` list has 1 route(s) but the Model has no `page` field, so routing is disabled and every URL serves the same app. The routed-page field must be named exactly `page` (of the `Page` ADT whose constructors appear as route destinations). Rename the field to `page`, or remove the `routes` list if routing is not needed.
@@ -87,7 +87,7 @@ Multiline is not working.
 Have to compare with Go
 
 25-ipe-console  
-warning[IPE-L0124]: `Live.app` routes list is non-empty but Model has no `page` field
+warning[IPE-L0124]: `Web.app` routes list is non-empty but Model has no `page` field
   --> src/Main.ipe:62:5
    |
 62 |     app
@@ -106,9 +106,9 @@ Sending message is not working - it even appears on a second browser tab, but th
 ## 28-streaming-chat   
 2026/07/15 23:39:36 [ipe.live] session store: memory (ttl=30m0s)
 2026/07/15 23:39:36 [ipe.live] session store: memory (ttl=30m0s)
-[ipe.console] inline console mounted as Ipe.Live sub-app at /_ipe/console mode=dev-open
+[ipe.console] inline console mounted as Ipe.Web sub-app at /_ipe/console mode=dev-open
 [ipe.live] listening on http://0.0.0.0:8000
-Ipe.Live listening on :8000
+Ipe.Web listening on :8000
 [error] ForeignError (ref 1df6ffd5): reqwest::Error { kind: Request, url: "http://localhost:8765/stream", source: hyper_util::client::legacy::Error(Connect, ConnectError("tcp connect error", 127.0.0.1:8765, Os { code: 111, kind: ConnectionRefused, message: "Connection refused" })) }
 [error] ForeignError (ref 1a718632): reqwest::Error { kind: Request, url: "http://localhost:8765/stream", source: hyper_util::client::legacy::Error(Connect, ConnectError("tcp connect error", 127.0.0.1:8765, Os { code: 111, kind: ConnectionRefused, message: "Connection refused" })) }
 [error] ForeignError (ref 03102b26): reqwest::Error { kind: Request, url: "http://localhost:8765/stream", source: hyper_util::client::legacy::Error(Connect, ConnectError("tcp connect error", 127.0.0.1:8765, Os { code: 111, kind: ConnectionRefused, message: "Connection refused" })) }
@@ -334,7 +334,7 @@ OK, but compare with Go
 
 ## 38-composite-ui-multibackend
 "$IPEC_BIN" build src/Main.ipe --out out/rust && cargo +nightly build -Z unstable-options --manifest-path out/rust/Cargo.toml --artifact-dir ./out/rust/target/debug/ &&  ./out/rust/target/debug/ipe-app 
-warning[IPE-L0124]: `Live.app` routes list is non-empty but Model has no `page` field
+warning[IPE-L0124]: `Web.app` routes list is non-empty but Model has no `page` field
    --> src/View.ipe:123:48
     |
 123 |             , statTile "7-day avg" (ToString.fromInt weekAvg ++ "%")

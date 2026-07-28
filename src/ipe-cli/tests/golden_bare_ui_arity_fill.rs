@@ -44,7 +44,7 @@ view model =
         (Ui.button []
             { onPress = Just Bump, label = Ui.text "x" })
 main =
-    Webview.app
+    WebView.app
         { init = init
         , update = update
         , view = view
@@ -123,7 +123,7 @@ fn emitted_program_sources(out: &Path) -> String {
     acc
 }
 
-/// `view : Model -> Html` (bare) wired through `Webview.app` must be ipe-0 and
+/// `view : Model -> Html` (bare) wired through `WebView.app` must be ipe-0 and
 /// emit the CONCRETE `Html<MainMsg>` return — the arity-fill's message parameter
 /// resolved from the body's solved type, never `Html<()>` or `Html<T1>`.
 #[test]

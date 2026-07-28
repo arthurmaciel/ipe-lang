@@ -100,8 +100,8 @@ fn spill_span(_ts_ms: u64, _name: &str, _dur_us: u64, _ok: bool) {}
 #[cfg(feature = "web")]
 #[inline]
 fn export_log(ts_ms: u64, level: &str, message: &str) {
-    crate::live::push_exporter::offer_log(ts_ms, level, message);
-    crate::live::hub_exporter::offer_log(ts_ms, level, message);
+    crate::web::push_exporter::offer_log(ts_ms, level, message);
+    crate::web::hub_exporter::offer_log(ts_ms, level, message);
 }
 #[cfg(not(feature = "web"))]
 #[inline]
@@ -110,8 +110,8 @@ fn export_log(_ts_ms: u64, _level: &str, _message: &str) {}
 #[cfg(feature = "web")]
 #[inline]
 fn export_span(ts_ms: u64, name: &str, dur_us: u64, ok: bool) {
-    crate::live::push_exporter::offer_span(ts_ms, name, dur_us, ok);
-    crate::live::hub_exporter::offer_span(ts_ms, name, dur_us, ok);
+    crate::web::push_exporter::offer_span(ts_ms, name, dur_us, ok);
+    crate::web::hub_exporter::offer_span(ts_ms, name, dur_us, ok);
 }
 #[cfg(not(feature = "web"))]
 #[inline]

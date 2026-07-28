@@ -9,8 +9,8 @@ existing entry point.
 ## Goals and constraints
 
 - **Least-intrusive.** Existing entries stay byte-identical:
-  `main = Task.run cmd` (one-shot CLI), `Live.app`, `Server.listen`,
-  `Tui.app`, `Webview.app`. TEA-for-CLI is a *new value you may choose*,
+  `main = Task.run cmd` (one-shot CLI), `Web.app`, `Server.listen`,
+  `Tui.app`, `WebView.app`. TEA-for-CLI is a *new value you may choose*,
   never a mode forced onto anything.
 - **Easiest-to-implement.** Maximum reuse of the already-ported TEA
   runtime. The smallest possible new surface.
@@ -58,9 +58,9 @@ Ipê entry is view-less, and output is an ordinary `Cmd`.
 
 | Shape | TEA today? | TEA option | How |
 |---|---|---|---|
-| Ipe.Live (web) | yes | unchanged | `Live.app { init, update, view, subscriptions, routes, … }` |
+| Ipe.Web (web) | yes | unchanged | `Web.app { init, update, view, subscriptions, routes, … }` |
 | Ipe.Tui (terminal) | yes | unchanged | `Tui.app cfg` |
-| Ipe.Webview (desktop) | yes | unchanged | `Webview.app cfg` |
+| Ipe.WebView (desktop) | yes | unchanged | `WebView.app cfg` |
 | **Reactive / long-running CLI, daemon, worker** | no | **NEW — opt-in** | `Ipe.Worker.program { init, update, subscriptions } \|> Task.run` (headless, no view; output via `Cmd`) |
 | One-shot CLI (`main = Task.run cmd`) | n/a | **declined** | keep the one-shot entry; a pure transform gains nothing from a loop |
 | Ipe.Http.Server (routes + handlers) | no | **declined in the request path**; optional **sidecar** | `Handler = Request -> Task Error Response` stays; a `Ipe.Worker.program` may run *alongside* the server owning shared state, coordinated via pub/sub |
@@ -91,7 +91,7 @@ Ipe.Worker.program : WorkerCfg model msg -> Task Error ()
 - `Flags` is a **row-open record** `{ args : List String }` (argv),
   extensible later (`cwd`, `env`) without breaking call sites — same
   discipline as `Live`'s `req` evolution.
-- The cfg is `Live.app`'s cfg **minus** `view` / `routes` / `notFound`,
+- The cfg is `Web.app`'s cfg **minus** `view` / `routes` / `notFound`,
   i.e. exactly Elm's `Platform.worker`.
 
 **Rationale.** A `Model -> String` that the runtime auto-writes to stdout
@@ -103,7 +103,7 @@ parse-don't-validate: `init` parses raw argv into a typed Model with no
 `System.args` round-trip.
 
 **Coexistence.** `Worker.program cfg` returns `Task Error ()`, so it uses
-the identical `|> Task.run` tail already used by `Tui.app` / `Webview.app`.
+the identical `|> Task.run` tail already used by `Tui.app` / `WebView.app`.
 The compiler needs no new `main`-recognition rule. The default one-shot
 `main = Task.run cmd` is untouched.
 
@@ -174,7 +174,7 @@ is preserved, cross-source interleaving is nondeterministic (documented).
 
 **Rejected as ill-fitting:** raw keypresses / cursor / cell rendering
 (that is Ipe.Tui's raw-mode reader — do not absorb it); DOM / SSE events
-(Ipe.Live only); an HTTP request as a Sub (that is the Server handler
+(Ipe.Web only); an HTTP request as a Sub (that is the Server handler
 lifecycle — see Q5). Boundary rule: a **Sub** is an ongoing event stream;
 a one-shot read ("read this whole file") is a **`Cmd.perform`**, not a
 Sub.
@@ -439,7 +439,7 @@ is open.
   handler tasks) and should be cheap to `Clone` / share by `Arc` so a
   handler can hold its loaded snapshot across `.await` points without
   pinning the worker's next publish.
-- **Ipe.Live / Tui / Webview:** already TEA; unchanged.
+- **Ipe.Web / Tui / Webview:** already TEA; unchanged.
 
 ## Q6 — Migration and opt-in ergonomics
 

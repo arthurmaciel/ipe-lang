@@ -101,7 +101,7 @@ pub struct Module {
     /// `KernelFn::is_tui()` variant.
     pub uses_tui: bool,
     /// `true` when the lowerer detected at least one `Ipe.WebView`
-    /// kernel call (`Webview.app`) in the module's function bodies.
+    /// kernel call (`WebView.app`) in the module's function bodies.
     ///
     /// Set by `ipe_lower` when any call site resolves to a
     /// `KernelFn::is_webview()` variant.  Implies `uses_web` for the

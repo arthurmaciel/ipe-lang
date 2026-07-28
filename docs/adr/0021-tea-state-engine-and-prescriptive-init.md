@@ -16,7 +16,7 @@ data (`Cmd`/`Sub`). `view` is an *optional projection* of the Model, not part of
 TEA's core.** This lets CLI (`Task.run` pipeline) and Http.Server (`listen`
 router) be correct *non-TEA* shapes without forcing `init` onto them.
 
-For reactive shapes (Ipe.Live, Ipe.Tui, Ipe.Webview) `init` is mandatory, and
+For reactive shapes (Ipe.Web, Ipe.Tui, Ipe.WebView) `init` is mandatory, and
 its argument is **prescriptive, not inferred**: `init : LiveReq -> (Model, Cmd
 Msg)` for Live (per-session request context), `init : () -> (Model, Cmd Msg)`
 for Tui/Webview (no non-ambient per-invocation context). The **effects-authority

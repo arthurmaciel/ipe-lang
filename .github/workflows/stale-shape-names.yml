@@ -1,0 +1,23 @@
+# Hard gate: no stale app-shape names after the Live->Web / Webview->WebView
+# rename. `Ipe.Live` / `Live.app` / `Ipe.Webview` / `Webview.app` no longer
+# resolve; a scaffold or doc that names them is broken or misleading. This is
+# the same class of gap that shipped a `ipe init` template emitting `Ipe.Live`
+# that would not compile. See scripts/ci/stale-shape-names-guard.sh.
+name: stale-shape-names
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  stale-shape-names:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: No stale Live/Webview shape names
+        run: bash scripts/ci/stale-shape-names-guard.sh
