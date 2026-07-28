@@ -2382,39 +2382,32 @@ mod tests {
         );
     }
 
-    /// The `KNOWN_UNBACKED` kernels (`PubSub.publish` /
-    /// `PubSub.publishNoEcho`) are UNREACHABLE from any user program: their
-    /// `"PubSub"` qualifier is absent from `env.qual_vars`, so canonicalisation
-    /// never mints a `VarKernel` for them. This is the fact that keeps the
-    /// `stdlib_scheme` totality flip sound — the `None` arm the
-    /// two `PubSub` variants return can never be hit on a real resolution path.
-    ///
-    /// Mirrors `ipe_types` `KNOWN_UNBACKED` (guarded there by
-    /// `known_unbacked_never_schemed`); enumerated here directly because that
-    /// const is private to `ipe_types`.
+    /// `Ipe.PubSub.publish` / `publishNoEcho` are a first-class qualified
+    /// surface: the `"PubSub"` qualifier IS registered in `env.qual_vars`, and
+    /// each member is schemed (`String -> a -> Task Error Int`) with a runtime fn
+    /// and an emit arm. This asserts the qualifier resolves and both members are
+    /// present — the reachable-and-schemed invariant, the inverse of the former
+    /// "unbacked, absent from qual_vars" state.
     #[test]
-    fn known_unbacked_disjoint_from_qual_vars() {
+    fn pubsub_qualifier_registered_and_reachable() {
         use ipe_intern::Interner;
-        use ipe_kernels::StdlibKernel;
 
         let mut interner = Interner::new();
+        let pubsub = interner
+            .intern("PubSub")
+            .expect("tripwire: intern PubSub OOM");
         let env = Env::initial(vec![], &mut interner)
             .expect("Env::initial must not fail in the tripwire test");
 
-        for sk in [
-            StdlibKernel::PubSubPublish,
-            StdlibKernel::PubSubPublishNoEcho,
-        ] {
-            let qual = sk.decl().qualifier;
-            let Ok(qual_sym) = interner.intern(qual) else {
-                continue;
-            };
+        let members = env
+            .qual_vars
+            .get(&pubsub)
+            .expect("PubSub qualifier must be registered in env.qual_vars");
+        for name in ["publish", "publishNoEcho"] {
+            let name_sym = interner.intern(name).expect("tripwire: intern name OOM");
             assert!(
-                !env.qual_vars.contains_key(&qual_sym),
-                "KNOWN_UNBACKED {sk:?} qualifier {qual:?} IS present in \
-                 env.qual_vars — it is reachable, so the stdlib_scheme None arm \
-                 could be hit and the Phase E totality flip would be unsound. \
-                 Either scheme it or remove it from qual_vars.",
+                members.contains_key(&name_sym),
+                "Ipe.PubSub.{name} must resolve as a qualified member",
             );
         }
     }

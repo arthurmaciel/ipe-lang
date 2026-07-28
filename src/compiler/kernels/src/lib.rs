@@ -2332,11 +2332,17 @@ impl StdlibKernel {
             Self::CmdPublishNoEcho => d("Cmd", "publishNoEcho", 2, Tea, "cmd_publish_no_echo"),
             // Qualifier "Sub" IS in qual_vars but "subscribeTopic" is NOT yet.
             Self::SubSubscribeTopic => d("Sub", "subscribeTopic", 2, Tea, "sub_subscribe_topic"),
-            // Qualifier "PubSub" is NOT yet in qual_vars — safe to put in ALL
-            // (tripwire skips unknown qualifiers), but kept out for clarity.
-            Self::PubSubPublish => d("PubSub", "publish", 2, Tea, "pubsub_publish"),
+            // `Ipe.PubSub` is the Task-shaped top-level publish surface — NOT
+            // TEA-loop machinery. `class = Web` because its runtime symbols live
+            // in `ipe_runtime::live::pubsub` (the Web/live module), the same home
+            // as `Web.renderStatic`; it is excluded from `is_tea()` so it never
+            // pulls in the `Cmd`/`Sub` (`tea` module) aliases. The qualifier is
+            // registered in canon `QUALIFIERS`, so `Ipe.PubSub.publish` resolves
+            // as a first-class qualified call (not only through the `Ffi.kernel`
+            // alias).
+            Self::PubSubPublish => d("PubSub", "publish", 2, Web, "pubsub_publish"),
             Self::PubSubPublishNoEcho => {
-                d("PubSub", "publishNoEcho", 2, Tea, "pubsub_publish_no_echo")
+                d("PubSub", "publishNoEcho", 2, Web, "pubsub_publish_no_echo")
             }
             // ── Ipe.Http.Server / Middleware / RateLimit ─────────────────────
             Self::ServerGet => d("Server", "get", 2, Server, "server_get"),
@@ -3135,11 +3141,10 @@ impl StdlibKernel {
     ///
     /// # Exclusions
     ///
-    /// `PubSubPublish` / `PubSubPublishNoEcho` are in `ALL` but use a
-    /// PubSub-qualifier skip in the parity-matrix tripwire (their qualifier is
-    /// not yet registered in `QUALIFIERS`).  There are no `Cmd.*` exclusions:
-    /// `CmdPublish` and `CmdPublishNoEcho` carry their own `QUALIFIERS`
-    /// entries.
+    /// None. `PubSubPublish` / `PubSubPublishNoEcho` carry their own `"PubSub"`
+    /// `QUALIFIERS` entry (the Task-shaped top-level publish surface), and
+    /// `CmdPublish` / `CmdPublishNoEcho` carry their `"Cmd"` entries — every
+    /// variant here has a matching canon `QUALIFIERS` member.
     pub const ALL: &'static [Self] = &[
         // Log
         Self::LogInfo,
@@ -3632,8 +3637,8 @@ impl StdlibKernel {
         Self::SubMap,
         Self::SubSubscribeTopic,
         Self::TimeEvery,
-        // TEA: PubSub reserved (qualifier "PubSub" not yet in qual_vars →
-        // tripwire skips; kept here so they appear in the registry index)
+        // Ipe.PubSub — Task-shaped top-level publish (qualifier "PubSub" in
+        // canon QUALIFIERS; class = Web, not TEA-loop machinery)
         Self::PubSubPublish,
         Self::PubSubPublishNoEcho,
         // Ipe.Http.Server / Middleware / RateLimit
@@ -4297,12 +4302,13 @@ impl StdlibKernel {
             Self::CmdPublish | Self::CmdPublishNoEcho | Self::SubSubscribeTopic => {
                 Some(RuntimeModule::Web)
             }
-            // `pubsub_publish` / `pubsub_publish_no_echo` are `class = Tea` and
+            // `pubsub_publish` / `pubsub_publish_no_echo` are `class = Web` and
             // also `is_web`, so the `live` append fires via the `is_web` path in
             // the lowerer. Recording them here too keeps this function the complete
             // SSOT: every kernel whose emitted symbol diverges from its class's
             // module home is listed, whether or not a parallel predicate already
-            // covers it.
+            // covers it. (`class = Web`'s home is the `web` module; the symbols
+            // live in its `live::pubsub` submodule, gated by the `live` feature.)
             Self::PubSubPublish | Self::PubSubPublishNoEcho => Some(RuntimeModule::Web),
             // `HttpStream.chunks` is `class = Pure` but emits `sub_subscribe_stream`
             // and the `IpeStreamId` type, both defined in `ipe_runtime::http_stream`
@@ -5340,8 +5346,6 @@ impl StdlibKernel {
                 | Self::CmdPublish
                 | Self::CmdPublishNoEcho
                 | Self::SubSubscribeTopic
-                | Self::PubSubPublish
-                | Self::PubSubPublishNoEcho
                 | Self::HttpStreamChunks
                 | Self::SubSubscribeWebSocket
         )
@@ -6133,9 +6137,11 @@ impl StdlibKernel {
                 | Self::WebAppRouted
                 | Self::WebRoute
                 | Self::WebRenderStatic
-                // PubSub.publish / publishNoEcho live in `ipe_runtime::live::pubsub`
-                // (gated by the `live` Cargo feature). A program that uses either —
-                // even without a Web.app — must have the `live` feature enabled so
+                // The Task-shaped `PubSub.publish` / `publishNoEcho` are not
+                // app-entry kernels, but they share the `web` module: their
+                // symbols live in `ipe_runtime::live::pubsub` (gated by the `live`
+                // Cargo feature). A program that uses either — even without a
+                // Web.app — must have the `live` feature enabled so
                 // `pubsub_publish` / `pubsub_publish_no_echo` are in scope.
                 | Self::PubSubPublish
                 | Self::PubSubPublishNoEcho
@@ -6265,13 +6271,20 @@ impl StdlibKernel {
             // branch) stay out until the client router lands — tagging the
             // route kernel now would emit `Route::new` against a runtime
             // module the wasm crate does not vendor (a SEAL breach).
-            KernelClass::Web => matches!(self, Self::WebApp | Self::WebAppHtml),
+            // `PubSub.publish` / `publishNoEcho` are `class = Web` (Task-shaped,
+            // not TEA-loop) and route through the in-tab broker (`wasm::pubsub`),
+            // the same M4 Cmd/Sub browser-effects bridge the TEA-side pub/sub uses.
+            KernelClass::Web => matches!(
+                self,
+                Self::WebApp | Self::WebAppHtml | Self::PubSubPublish | Self::PubSubPublishNoEcho
+            ),
             // TEA wiring the wasm scheduler drives today. `Cmd.perform` runs
             // on the browser microtask queue; `Sub.every`/`Time.every` run on
             // `gloo-timers` (`wasm::subs::SubManager`); `Cmd.publish` /
-            // `Cmd.publishNoEcho` / `Sub.subscribeTopic` / `PubSub.publish` /
-            // `PubSub.publishNoEcho` route through the in-tab broker
-            // (`wasm::pubsub`) — the M4 Cmd/Sub browser-effects bridge.
+            // `Cmd.publishNoEcho` / `Sub.subscribeTopic` route through the in-tab
+            // broker (`wasm::pubsub`) — the M4 Cmd/Sub browser-effects bridge.
+            // (The Task-shaped `PubSub.publish` / `publishNoEcho` are `class = Web`
+            // and handled in the `KernelClass::Web` arm above.)
             // `SubSubscribeWebSocket` (the WebSocket client's onOpen/
             // onMessage/onClose/onError receive surface) routes through
             // `ws_client.rs`'s wasm32 arm — `web_sys::WebSocket`'s
@@ -6291,8 +6304,6 @@ impl StdlibKernel {
                     | Self::CmdPublish
                     | Self::CmdPublishNoEcho
                     | Self::SubSubscribeTopic
-                    | Self::PubSubPublish
-                    | Self::PubSubPublishNoEcho
                     | Self::SubSubscribeWebSocket
             ),
             KernelClass::Pure => {

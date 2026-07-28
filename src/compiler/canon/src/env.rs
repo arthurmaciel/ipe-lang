@@ -985,7 +985,6 @@ impl Env {
             // ── TEA Cmd / Sub kernels ───────────────────────────────────────────
             // `Cmd.publish` / `Cmd.publishNoEcho` are backed by runtime
             // `cmd_publish` / `cmd_publish_no_echo` in live/pubsub.rs.
-            // The `PubSub.*` qualifier is not registered here.
             // `Sub.subscribeTopic` is backed by runtime `sub_subscribe_topic`
             // in live/pubsub.rs; emit path uses the standard N-arg route.
             (
@@ -1010,6 +1009,16 @@ impl Env {
                     "subscribeWebSocket",
                 ],
             ),
+            // ── Ipe.PubSub — Task-shaped top-level publish surface ───────────────
+            // NOT TEA-loop machinery: `publish` / `publishNoEcho` return
+            // `Task Error Int`, callable wherever a broadcast bus runs (i.e. a
+            // process running an `Ipe.Web` live app). Backed by runtime
+            // `pubsub_publish` / `pubsub_publish_no_echo` in web/pubsub.rs; these
+            // kernels are `class = Web` (see `StdlibKernel::decl`), so a caller
+            // outside the TEA loop pulls in the `web`/`live` runtime module, never
+            // the `Cmd`/`Sub` (`tea` module) aliases. Registering the qualifier
+            // here makes `Ipe.PubSub.publish` a first-class qualified call.
+            ("PubSub", &["publish", "publishNoEcho"]),
             // ── Db kernels ──────────────────────────────────────────────────────
             // `Ipe.Db` — database connection + query surface.
             // All effect-returning kernels (Task Error …) and pure helpers

@@ -2235,23 +2235,8 @@ fn emit_tea_call(
         // `Cmd.publishNoEcho : String -> Dict String String -> Cmd msg`
         // Both map to the standard N-arg emit path (runtime live/pubsub.rs).
         KernelFn::CmdPublish | KernelFn::CmdPublishNoEcho => Ok(None),
-        // ── Ipe.PubSub.publish / publishNoEcho ────────────────────────────
-        // `pubsub_publish<T, E>(topic, payload) -> IpeTask<E, i64>` — T (payload)
-        // infers from arg 1; E (error) appears ONLY in the IpeTask<E, i64> result,
-        // so anchor it to IpeError with `<_, IpeError>` (T first, E second).
-        // Mirror of the CsvParse `::<IpeError>` anchor; two generic slots because T
-        // precedes E.  `pubsub_publish` is re-exported at ipe_runtime root via
-        // `pub use live::*`, so no full path needed in the emitted crate.
-        KernelFn::PubSubPublish | KernelFn::PubSubPublishNoEcho => {
-            let topic_e = arg!(0, "topic")?;
-            let payload_e = arg!(1, "payload")?;
-            let topic_s = emit_expr_at(ctx, topic_e, indent, child, generics)?;
-            let payload_s = emit_expr_at(ctx, payload_e, indent, child, generics)?;
-            let name = kernel_name(*k); // "pubsub_publish" / "pubsub_publish_no_echo"
-            Ok(Some(format!(
-                "{name}::<_, IpeError>({topic_s}, {payload_s})"
-            )))
-        }
+        // (`Ipe.PubSub.publish` / `publishNoEcho` are `class = Web`, Task-shaped —
+        // emitted in `emit_ui_call`, not here. They are not TEA-loop kernels.)
         // ── Ipe.WebSocket: onOpen / onMessage / onClose / onError ───────────
         // `Sub_subscribeWebSocket : Int -> String -> (any -> msg) -> Sub msg`.
         //
@@ -5847,6 +5832,33 @@ fn emit_ui_call(
             let e_s = emit_expr_at(ctx, e_e, indent, child, generics)?;
             Ok(Some(format!(
                 "ipe_runtime::ui::lazy::lazy_lazy5_(move |_a, _b, _c, _d, _e| ({f_s})(_a, _b, _c, _d, _e), {a_s}, {b_s}, {c_s}, {d_s}, {e_s})"
+            )))
+        }
+
+        // ── Ipe.PubSub.publish / publishNoEcho ────────────────────────────
+        // `pubsub_publish<T, E>(topic, payload) -> IpeTask<E, i64>` — T (payload)
+        // infers from arg 1; E (error) appears ONLY in the IpeTask<E, i64> result,
+        // so anchor it to IpeError with `<_, IpeError>` (T first, E second).
+        // Mirror of the CsvParse `::<IpeError>` anchor; two generic slots because T
+        // precedes E.  `pubsub_publish` is re-exported at ipe_runtime root via
+        // `pub use live::*`, so no full path needed in the emitted crate. These are
+        // `class = Web` (Task-shaped), not TEA-loop kernels — the runtime bus lives
+        // in the `web` module's `live::pubsub`, hence their home here.
+        KernelFn::PubSubPublish | KernelFn::PubSubPublishNoEcho => {
+            let [topic_e, payload_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "ipe_backend_rust::emit_ui_call::PubSubPublish",
+                    detail: format!(
+                        "PubSub.publish requires exactly 2 arguments, got {}",
+                        args.len()
+                    ),
+                });
+            };
+            let topic_s = emit_expr_at(ctx, topic_e, indent, child, generics)?;
+            let payload_s = emit_expr_at(ctx, payload_e, indent, child, generics)?;
+            let name = kernel_name(*k); // "pubsub_publish" / "pubsub_publish_no_echo"
+            Ok(Some(format!(
+                "{name}::<_, IpeError>({topic_s}, {payload_s})"
             )))
         }
 
