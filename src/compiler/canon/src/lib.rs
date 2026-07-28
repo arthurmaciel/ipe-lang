@@ -2387,7 +2387,7 @@ mod tests {
     /// each member is schemed (`String -> a -> Task Error Int`) with a runtime fn
     /// and an emit arm. This asserts the qualifier resolves and both members are
     /// present — the reachable-and-schemed invariant, the inverse of the former
-    /// "unbacked, absent from qual_vars" state.
+    /// "unbacked, absent from `qual_vars`" state.
     #[test]
     fn pubsub_qualifier_registered_and_reachable() {
         use ipe_intern::Interner;
