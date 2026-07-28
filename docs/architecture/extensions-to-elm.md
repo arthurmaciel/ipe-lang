@@ -85,11 +85,12 @@ decisions live here.
 - **Numerics namespace.** `round`/`floor`/`sqrt`/trig/`e`/`pi` live under
   `Ipe.Math` (renamed `ceiling→ceil`, `truncate→trunc`), not the zero-import
   `Basics`. `Basics.compare`/`modBy`/`negate` are registered qualifiers with no
-  typed kernel arm today. Open decision: re-export the `Math.*` numerics through
-  the default prelude to match Elm's ergonomics. Filed in the gap plan.
-- **No `Order` ADT.** `compare` is an opaque three-way kernel result; there is no
-  first-class `LT`/`EQ`/`GT`. `List.sortWith` is a kernel. Exposing `Order`
-  to user code is an open surface decision.
+  typed kernel arm today. The ambient-`Basics` set (which numerics/math are
+  auto-imported unqualified) is fixed by
+  [`docs/adr/0047-basics-and-tiered-auto-import.md`](../adr/0047-basics-and-tiered-auto-import.md).
+- **`Order` ADT.** `compare` returns a three-way result; `Order` with
+  `LT`/`EQ`/`GT` is part of the ambient core surface fixed by ADR 0047.
+  `List.sortWith` is a kernel.
 - **No composition/power operators.** `(>>)`, `(<<)`, `(^)` are absent; only the
   `(|>)`/`(<|)` pipes exist.
 
@@ -294,6 +295,13 @@ These are not per-value gaps but whole-model choices; they explain why several
   `Ipe.Compression`, `Ipe.Csv`, `Ipe.Http.Server`, `Ipe.Log`/`Trace` are additive
   extensions justified by the server/native target. They are **extensions**, not
   divergences to reconcile against Elm.
+- **Stricter Tier-C import surface.** Only `Ipe.Basics` and the core type
+  vocabulary (`List`/`Maybe`/`Result` + their constructors, `Bool`, `Order`) are
+  ambient. Every other stdlib module requires an explicit `import` and is used
+  qualified — where Elm makes stdlib modules ambiently available for qualified
+  use. Deliberate no-magic choice: the import list is a complete inventory of a
+  file's capabilities. Decided in
+  [`docs/adr/0047-basics-and-tiered-auto-import.md`](../adr/0047-basics-and-tiered-auto-import.md).
 
 ---
 
@@ -303,9 +311,10 @@ Listed so they are not mis-sold as Ipê inventions — they match Elm 0.19.x: no
 higher-kinded types, no custom operators, no `where` clauses, negative-literal
 arguments need parens (`f (-1)`), exhaustive `case…of`, extensible record
 annotations + record update, and identical core syntax (pipelines, cons, lambdas,
-`let`/`case`, module/import, `type`/`type alias`). Prelude names
+`let`/`case`, module/import, `type`/`type alias`). The ambient unqualified names
 (`Ok`/`Err`/`Just`/`Nothing`/`identity`/`always`/`not`/`fst`/`snd`/`clamp`/
-`modBy`) match Elm's exposure.
+`modBy`) match Elm's `Basics` exposure; the import surface *around* them is
+stricter (see §6, ADR 0047).
 
 One **planned** language divergence is filed separately: closed-union `case`
 refusing catch-all arms (see the exhaustive-case finite-ADT design under
