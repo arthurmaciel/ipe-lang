@@ -1347,6 +1347,40 @@ pub fn run_windows_jailed_for_test(
     windows_jail::run_confined(profile, scoped_tmp, working_tree, app, app_args)
 }
 
+/// Run `payload` under the SAME Windows jail sequence [`exec_in_run_jail`] uses —
+/// a Job Object (subprocess) around an AppContainer-tokened, env-scrubbed child
+/// (filesystem + network + env) — and RETURN the child's exit code, so the
+/// returning Tier-2 build jail ([`crate::build_jail::build_in_jail`]) can decode
+/// it into a [`crate::build_jail::JailOutcome`] rather than replacing the process.
+///
+/// `payload[0]` is the program and the rest its arguments (the same
+/// `&[OsString]` shape the Linux/macOS build-jail arms take). The confinement is
+/// the production [`windows_jail::run_confined`] sequence — one jail source, no
+/// fork — so a build observed under Tier-2 is confined exactly as the shipped
+/// artifact is at run time. Every kernel object (job / token / SID / attribute
+/// list) is RAII-released on every path, so the audit's per-axis tightening loop
+/// leaks nothing across calls.
+///
+/// # Errors
+///
+/// Any [`RunJailDefect`] — a jail that cannot be established (a missing primitive,
+/// a non-ACL scratch volume, a `CreateProcessW` failure) refuses here exactly as
+/// the production launcher does; the untrusted build is never run unconfined.
+#[cfg(target_os = "windows")]
+pub(crate) fn build_windows_jailed(
+    profile: &SandboxProfile,
+    scoped_tmp: &Path,
+    working_tree: &Path,
+    payload: &[OsString],
+) -> Result<u32, RunJailDefect> {
+    let Some((app, args)) = payload.split_first() else {
+        return Err(RunJailDefect::Spawn {
+            detail: "empty build-jail payload".to_owned(),
+        });
+    };
+    windows_jail::run_confined(profile, scoped_tmp, working_tree, Path::new(app), args)
+}
+
 /// The scrubbed `(name, value)` environment pairs the Windows launcher passes to
 /// `CreateProcess` as `lpEnvironment` — the `env` axis enforced launcher-side,
 /// mirroring [`crate::build_jail::macos_scrubbed_env`] and the Linux jail's
