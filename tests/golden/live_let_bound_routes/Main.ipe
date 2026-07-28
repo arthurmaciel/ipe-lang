@@ -43,12 +43,11 @@ update msg model =
         Navigate p ->
             ( { model | page = p }, Cmd.none )
 
-view : Model -> Html Msg
+view : Model -> Element Msg
 view model =
-    Ui.layout []
-        (Ui.column []
-            [ Ui.text (String.fromInt model.count)
-            ])
+    Ui.column []
+        [ Ui.text (String.fromInt model.count)
+        ]
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =

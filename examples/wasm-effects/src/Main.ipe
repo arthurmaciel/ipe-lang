@@ -160,31 +160,29 @@ actionButton msg label =
         { onPress = Just msg, label = Ui.text label }
 
 
-view : Model -> Html Msg
+view : Model -> Element Msg
 view model =
-    Ui.layout []
-        (Ui.column
-            [ Ui.spacing 14, Ui.padding 32 ]
-            [ Ui.el [ Font.size 20, Font.bold ] (Ui.text "M4 Cmd/Sub browser-effects bridge")
-            , labelled "ticks (Sub.every):" (Ui.el [] (Ui.text (String.fromInt model.ticks)))
-            , Ui.row [ Ui.spacing 12 ]
-                [ actionButton LogClicked "Log.info"
-                , Ui.el [] (Ui.text model.lastLog)
-                ]
-            , Ui.row [ Ui.spacing 12 ]
-                [ actionButton RollDice "Random.int 1 6"
-                , Ui.el [] (Ui.text ("dice: " ++ String.fromInt model.dice))
-                ]
-            , Ui.row [ Ui.spacing 12 ]
-                [ actionButton PingClicked "PubSub.publish"
-                , Ui.el [] (Ui.text ("pings received: " ++ String.fromInt model.pings ++ " / " ++ model.lastPing))
-                ]
-            , Ui.row [ Ui.spacing 12 ]
-                [ actionButton FetchClicked "Http.get"
-                , Ui.el [] (Ui.text model.fetchStatus)
-                ]
+    Ui.column
+        [ Ui.spacing 14, Ui.padding 32 ]
+        [ Ui.el [ Font.size 20, Font.bold ] (Ui.text "M4 Cmd/Sub browser-effects bridge")
+        , labelled "ticks (Sub.every):" (Ui.el [] (Ui.text (String.fromInt model.ticks)))
+        , Ui.row [ Ui.spacing 12 ]
+            [ actionButton LogClicked "Log.info"
+            , Ui.el [] (Ui.text model.lastLog)
             ]
-        )
+        , Ui.row [ Ui.spacing 12 ]
+            [ actionButton RollDice "Random.int 1 6"
+            , Ui.el [] (Ui.text ("dice: " ++ String.fromInt model.dice))
+            ]
+        , Ui.row [ Ui.spacing 12 ]
+            [ actionButton PingClicked "PubSub.publish"
+            , Ui.el [] (Ui.text ("pings received: " ++ String.fromInt model.pings ++ " / " ++ model.lastPing))
+            ]
+        , Ui.row [ Ui.spacing 12 ]
+            [ actionButton FetchClicked "Http.get"
+            , Ui.el [] (Ui.text model.fetchStatus)
+            ]
+        ]
 
 
 main =

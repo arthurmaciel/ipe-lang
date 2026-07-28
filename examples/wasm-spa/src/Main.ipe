@@ -56,49 +56,47 @@ subscriptions _model =
     Sub.none
 
 
-view : Model -> Html Msg
+view : Model -> Element Msg
 view model =
-    Ui.layout []
-        (Ui.column
-            [ Ui.spacing 20, Ui.padding 40, Ui.centerX ]
-            [ Ui.el
-                [ Font.size 24, Font.bold ]
-                (Ui.text "Ipê WASM SPA")
-            , Ui.el
-                [ Font.size 48
-                , Font.bold
-                , Ui.htmlAttribute "data-testid" "counter"
-                ]
-                (Ui.text (String.fromInt model.count))
-            , Ui.row
-                [ Ui.spacing 12 ]
-                [ Ui.button
-                    [ Ui.padding 14
-                    , Background.color (Ui.rgb 37 99 235)
-                    , Font.color (Ui.rgb 255 255 255)
-                    , Border.rounded 8
-                    , Ui.htmlAttribute "data-testid" "decrement"
-                    ]
-                    { onPress = Just Decrement, label = Ui.text "−" }
-                , Ui.button
-                    [ Ui.padding 14
-                    , Background.color (Ui.rgb 37 99 235)
-                    , Font.color (Ui.rgb 255 255 255)
-                    , Border.rounded 8
-                    , Ui.htmlAttribute "data-testid" "increment"
-                    ]
-                    { onPress = Just Increment, label = Ui.text "+" }
-                ]
-            , Ui.button
-                [ Ui.padding 10
-                , Background.color (Ui.rgb 107 114 128)
-                , Font.color (Ui.rgb 255 255 255)
-                , Border.rounded 6
-                , Ui.htmlAttribute "data-testid" "reset"
-                ]
-                { onPress = Just Reset, label = Ui.text "Reset" }
+    Ui.column
+        [ Ui.spacing 20, Ui.padding 40, Ui.centerX ]
+        [ Ui.el
+            [ Font.size 24, Font.bold ]
+            (Ui.text "Ipê WASM SPA")
+        , Ui.el
+            [ Font.size 48
+            , Font.bold
+            , Ui.htmlAttribute "data-testid" "counter"
             ]
-        )
+            (Ui.text (String.fromInt model.count))
+        , Ui.row
+            [ Ui.spacing 12 ]
+            [ Ui.button
+                [ Ui.padding 14
+                , Background.color (Ui.rgb 37 99 235)
+                , Font.color (Ui.rgb 255 255 255)
+                , Border.rounded 8
+                , Ui.htmlAttribute "data-testid" "decrement"
+                ]
+                { onPress = Just Decrement, label = Ui.text "−" }
+            , Ui.button
+                [ Ui.padding 14
+                , Background.color (Ui.rgb 37 99 235)
+                , Font.color (Ui.rgb 255 255 255)
+                , Border.rounded 8
+                , Ui.htmlAttribute "data-testid" "increment"
+                ]
+                { onPress = Just Increment, label = Ui.text "+" }
+            ]
+        , Ui.button
+            [ Ui.padding 10
+            , Background.color (Ui.rgb 107 114 128)
+            , Font.color (Ui.rgb 255 255 255)
+            , Border.rounded 6
+            , Ui.htmlAttribute "data-testid" "reset"
+            ]
+            { onPress = Just Reset, label = Ui.text "Reset" }
+        ]
 
 
 main =
