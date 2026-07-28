@@ -1,33 +1,16 @@
-# TUI
-
-A terminal user interface in [The Elm Architecture](https://guide.elm-lang.org/architecture/).
-A TUI app takes over the terminal, renders `view` to the screen, and turns each
-keystroke into a `Msg` via `onKey`. Choose it for interactive command-line UIs —
-pickers, dashboards, wizards — that redraw in place. The `Model` is kept in
-memory, so it only needs `Clone`.
-
-## Entry points
-
-There are two, differing only in what `view` returns:
-
-- `main = Tui.app cfg` — `view : Model -> Element Msg`, the **same typed
-  `Ipe.Ui` element tree** the [Web](web.md) and [WebView](webview.md) shapes
-  render. The runtime walks the tree and paints it to terminal cells, so one
-  `view` function renders on web, desktop, and terminal.
-- `main = Tui.program cfg` — `view : Model -> String`, a raw frame painted
-  verbatim. Use it when you want to draw the terminal yourself.
-
-Either `cfg` is a record of `init` / `update` / `view` / `subscriptions` /
-`onKey`, where `onKey : { kind : String, value : String } -> Msg` maps a key
-event to a message.
-
-## Minimal example
-
-The [Web](web.md) counter's `view`, rendered under TUI via `Tui.app` — the same
-`Ipe.Ui` column, row, buttons, and text.
-
-```ipe
 module Main exposing (main)
+
+-- A terminal counter built from the SAME shared `Ipe.Ui` vocabulary that the Web
+-- and WebView shapes render. `Tui.app` takes a `view : Model -> Element Msg`;
+-- the runtime walks that typed element tree and paints it to terminal cells,
+-- exactly as the browser and webview shapes paint the same tree to HTML. One
+-- `view` function, three shapes.
+--
+-- Keys:
+--     + or Up      increment
+--     - or Down    decrement
+--     r            reset to zero
+--     q            quit (Ctrl-C also quits)
 
 import Ipe.Prelude exposing (..)
 import Ipe.String as String
@@ -82,6 +65,9 @@ update msg model =
             ( model, Cmd.none )
 
 
+-- The same `Ipe.Ui` element tree the Web and WebView counters build. Under those
+-- shapes it is wrapped in `Ui.layout` to yield `Html Msg`; the Tui runtime
+-- renders the bare `Element Msg` tree directly to ANSI cells.
 view : Model -> Element Msg
 view model =
     Ui.column [ Ui.spacing 16, Ui.padding 32, Ui.centerX ]
@@ -123,6 +109,9 @@ onKey key =
     else if key.kind == "char" && key.value == "q" then
         Quit
 
+    else if key.kind == "ctrl" && key.value == "c" then
+        Quit
+
     else
         NoOp
 
@@ -135,14 +124,3 @@ main =
         , subscriptions = subscriptions
         , onKey = onKey
         }
-```
-
-Build it with `ipe build examples/tui-counter`. Running the binary takes over
-the terminal and adjusts the count on each key; because it drives a real
-terminal, run it in a terminal session rather than in CI.
-
-## Example
-
-[`examples/tui-counter/`](../../examples/tui-counter/) — the program above. The
-same `Ipe.Ui` view also backs the [Web](web.md) and [WebView](webview.md)
-counters.
