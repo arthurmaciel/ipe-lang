@@ -206,6 +206,15 @@ jobs:
             Write-Warning "Windows-container Docker unavailable on this hosted runner (OSType='$os'); skipping the Windows admission-sandbox proof (not passing it). See issue 186."
             'windows-x64 admission-sandbox: SKIPPED (unverified). GitHub-hosted windows-2022 runners do not provide a Windows-container-mode Docker daemon, so the process-isolation jail proof cannot run here. This is a documented environmental skip, not a passing proof; the Windows jail is UNVERIFIED on hosted CI. Run on a self-hosted Windows-container-capable runner to verify (issue 186).' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           }
+          # A missing/Linux-mode daemon makes `docker info` exit non-zero, which
+          # leaves $LASTEXITCODE set; the GitHub `powershell` wrapper appends
+          # `exit $LASTEXITCODE`, so without this the detection step itself would
+          # go RED on the very hosted runners it is meant to skip cleanly on.
+          # This is a capability probe, not the proof: reset the code and exit 0
+          # so the skip path is neutral. The real proof runs only when
+          # available == true (gated steps below) and stays fail-closed there.
+          $global:LASTEXITCODE = 0
+          exit 0
 
       # servercore:ltsc2022 ships PowerShell and matches the windows-2022 host OS
       # version (required for process-isolation containers — host and container
