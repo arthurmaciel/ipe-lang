@@ -1105,6 +1105,24 @@ fn install_wrapper(
 /// # Errors
 /// [`CliError::Io`] on a read failure; [`CliError::UsageOwned`] when the
 /// reconcile refuses the wrapper (naming every reason and the proposed set).
+/// The jail-holds verdict for THIS host — the admit path's per-target hand-off.
+///
+/// The refuse-until-jail → admit-and-isolate hand-off is per-target: a
+/// runtime-enforced axis is admitted only where the jail actually holds. The
+/// deploy target is unknown at install, so the honest proxy is this host's jail
+/// capability — `ipe add` and `ipe run` typically run on the same machine. It is
+/// derived solely from [`ipe_sandbox::run_jail::platform_supports_jail`] (itself
+/// single-sourced to the compiled-in `exec_in_run_jail` arm), so a refuse-gap
+/// host is still refused (never admitted-and-run-unconfined) and a jail-holds
+/// host admits-and-isolates.
+const fn jail_for_host() -> ipe_ffi::capability_scan::JailForTarget {
+    if ipe_sandbox::run_jail::platform_supports_jail() {
+        ipe_ffi::capability_scan::JailForTarget::Holds
+    } else {
+        ipe_ffi::capability_scan::JailForTarget::RefuseGap
+    }
+}
+
 fn enforce_wrapper_capabilities(
     wrapper_dir: &Path,
     declared: &BTreeSet<ipe_ffi::capability_scan::Capability>,
@@ -1132,17 +1150,7 @@ fn enforce_wrapper_capabilities(
     // capabilities live in source the scan never opens.
     let non_std_deps = wrapper_non_std_dependencies(wrapper_dir)?;
 
-    // The refuse-until-jail → admit-and-isolate hand-off is per-target: a
-    // runtime-enforced axis is admitted only where the jail actually holds. The
-    // deploy target is unknown at install, so the honest proxy is THIS host's
-    // jail capability — `ipe add` and `ipe run` typically run on the same
-    // machine. On a refuse-gap host the wrapper is still refused (never
-    // admitted-and-run-unconfined).
-    let jail = if ipe_sandbox::run_jail::platform_supports_jail() {
-        ipe_ffi::capability_scan::JailForTarget::Holds
-    } else {
-        ipe_ffi::capability_scan::JailForTarget::RefuseGap
-    };
+    let jail = jail_for_host();
 
     // A best-effort honesty smell test on the declaration: surface an obvious
     // under-declaration (the scan proposes an axis the author did not declare)
@@ -2369,6 +2377,38 @@ fn merge_provides(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jail_for_host_tracks_the_compiled_in_run_jail() {
+        // The admit hand-off must equal the run-jail's own compiled-in verdict:
+        // a jail-holds host admits-and-isolates, a refuse-gap host refuses. This
+        // is the single source that stops the admit path claiming a jail the
+        // target does not compile in.
+        let expected = if ipe_sandbox::run_jail::platform_supports_jail() {
+            ipe_ffi::capability_scan::JailForTarget::Holds
+        } else {
+            ipe_ffi::capability_scan::JailForTarget::RefuseGap
+        };
+        assert_eq!(jail_for_host(), expected);
+    }
+
+    #[test]
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    fn jail_for_host_holds_on_linux_x86_64() {
+        assert_eq!(
+            jail_for_host(),
+            ipe_ffi::capability_scan::JailForTarget::Holds
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn jail_for_host_holds_on_macos() {
+        assert_eq!(
+            jail_for_host(),
+            ipe_ffi::capability_scan::JailForTarget::Holds
+        );
+    }
 
     #[test]
     fn manifest_rust_dependencies_table_parses_both_spellings() {

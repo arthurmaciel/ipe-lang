@@ -411,3 +411,50 @@ jobs:
           IPE_E2E: "1"
           IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
         run: cargo nextest run -p ipe --test audit_native --profile ci
+
+  # macOS RUN-jail enforcement — the ONLY real verification of the macOS run
+  # jail's deny behaviour (the jail around the EMITTED app at `ipe run`, as
+  # opposed to the Tier-2 build jail above). The Rust unit tests prove the SBPL
+  # LOWERING on any host, but only a real macOS runner exercises the
+  # `sandbox-exec` run jail. This job drives the RUN jail through the SAME
+  # `sbpl_from_profile` the production `exec_in_run_jail` macOS arm uses (one SBPL
+  # source, no fork), and is fail-closed by design:
+  #
+  #   1. It asserts `sandbox-exec` is present and REFUSES to certify (exits non-
+  #      zero) if it is absent — never a skip-green. An un-run jail is never
+  #      counted as vouching for the run-jail deny behaviour.
+  #   2. It runs the run_jail_macos_e2e enforce-vs-control DUALITY: a net connect
+  #      and an out-of-scratch write must SUCCEED unjailed (control) and be DENIED
+  #      under the profile's run jail (enforce), so a denial can only be the jail's
+  #      — never an unreachable host or an already-unwritable path.
+  macos-run-jail:
+    name: macos-run-jail (sandbox-exec — the real macOS run-jail proof)
+    runs-on: macos-latest
+    if: github.event_name != 'pull_request'   # slow: push/nightly only, off the required PR gate
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+
+      # Fail-closed primitive check: an absent sandbox-exec is a hard failure, not
+      # a skip — the run jail cannot be verified without it, and an unverified
+      # platform is NEVER counted as jail-holds (refuse-to-certify).
+      - name: Assert the macOS jail primitive is present (refuse-to-certify)
+        run: |
+          if ! command -v sandbox-exec >/dev/null 2>&1; then
+            echo "ERROR: sandbox-exec absent on this macOS runner — the run jail cannot be verified; refusing to certify (this is a hard failure, never a skip-green)." >&2
+            exit 1
+          fi
+          echo "sandbox-exec present: $(command -v sandbox-exec)"
+
+      # The run jail's enforce-vs-control duality through the real sandbox-exec
+      # jail: an undeclared net connect / out-of-scratch write is DENIED under the
+      # jail while the same action SUCCEEDS under control, and a granted axis is
+      # not false-denied. IPE_E2E=1 arms the real jailed runs.
+      - name: run_jail_macos E2E through the real macOS run jail
+        env:
+          IPE_E2E: "1"
+        run: cargo nextest run -p ipe_sandbox --test run_jail_macos_e2e --profile ci
