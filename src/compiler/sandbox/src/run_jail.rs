@@ -999,6 +999,13 @@ pub fn exec_in_run_jail(
 /// There is NO shell token anywhere — the payload is a direct argv, so the
 /// quoting/injection class does not exist.
 ///
+/// The SBPL enforces the network, filesystem, and subprocess axes; the `env` axis
+/// is enforced HERE in the launcher (Seatbelt cannot scrub env): the environment
+/// is cleared and only the profile's allowlisted names re-exported, via the SAME
+/// [`crate::build_jail::macos_scrubbed_env`] the build jail and the e2e use — so
+/// all four runtime-enforced axes are contained, matching the Linux jail, and the
+/// FFI admit path's `Holds` verdict is honest on macOS.
+///
 /// `scoped_tmp` is the one always-writable scratch (also where the SBPL profile
 /// is written); `working_tree` is writable only when the profile grants the
 /// filesystem axis. Fail-closed: an absent `sandbox-exec`, an unwritable profile,
@@ -1045,6 +1052,16 @@ pub fn exec_in_run_jail(
     // argv: sandbox-exec -f <profile> <app> <app_args…>. Direct argv, no shell.
     let mut cmd = std::process::Command::new(&sandbox_exec);
     cmd.arg("-f").arg(&profile_file).arg(app).args(app_args);
+    // Enforce the `env` axis in the launcher (Seatbelt cannot scrub env): clear
+    // the inherited environment and re-export ONLY the scrubbed base plus the
+    // profile's allowlisted names, mirroring the Linux jail's `--clearenv`. The
+    // scrub is the SAME `macos_scrubbed_env` the e2e proves, so what confines the
+    // env at run time and what the test asserts cannot drift.
+    let host_env = |k: &str| std::env::var_os(k);
+    cmd.env_clear();
+    for (name, value) in crate::build_jail::macos_scrubbed_env(profile, scoped_tmp, &host_env) {
+        cmd.env(name, value);
+    }
     let err = cmd.exec();
     // `exec` only returns on failure; the scratch profile is inert either way.
     Err(RunJailDefect::Spawn {
