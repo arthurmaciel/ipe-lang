@@ -1514,11 +1514,14 @@ impl Env {
                 ],
             ),
             // ── Ipe.Web / Ipe.Web app-entry kernels ──────────────────────────────
-            ("Web", &["app", "appRouted", "route", "renderStatic"]),
+            (
+                "Web",
+                &["app", "appHtml", "appRouted", "route", "renderStatic"],
+            ),
             // ── Ipe.Tui / Ipe.Tui app-entry kernels ──────────────────────────────
             ("Tui", &["app", "program"]),
             // ── Ipe.WebView / Ipe.WebView app-entry kernel ───────────────────────
-            ("WebView", &["app"]),
+            ("WebView", &["app", "appHtml"]),
             // ── Effect stdlib modules ─────────────────────────────────────────────
             // Ipe.Console — line-oriented TEA app-entry (fully wired). — line-oriented TEA app-entry (fully wired).
             ("Console", &["app"]),
