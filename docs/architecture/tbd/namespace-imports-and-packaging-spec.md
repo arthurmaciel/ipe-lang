@@ -1,8 +1,7 @@
 # Namespace, imports & packaging redesign — spec
 
 > **Status: Accepted (design) — not yet implemented.** Becomes an ADR once
-> landed (per `docs/adr/README.md`). Supersedes `flat-namespace-redesign.md`
-> (which covered only the Ipê.Core+Std flatten; this subsumes it).
+> landed (per `docs/adr/README.md`).
 >
 > Scope: the canonical import surface for the language after the Ipê→Ipê rename.
 > Governs first-party stdlib, the FFI boundary, local modules, and third-party
@@ -27,14 +26,14 @@ The namespace *encodes the trust boundary*:
 
 Collapses today's `Ipe.*` **and** `Ipe.*` into the single `Ipe.*` surface.
 
-### D2. `Ipe.` is canonical; common core is auto-preluded bare
+### D2. The implicit ambient surface — see the tiered-auto-import ADR
 
-`Ipe.List` is the canonical, enforced name. The common core (`List`, `String`,
-`Dict`, `Maybe`, `Result`, `Task`, …) is auto-preluded so everyday code writes
-bare `List.map` — Elm-terse — while `Ipe.List` remains the unambiguous long
-form. Principle: **loud on the dangerous thing (`Rust.`), quiet on the safe
-default.** The prelude set is a fixed, documented list; everything else under
-`Ipe.` is an explicit `import`.
+`Ipe.List` is the canonical, enforced name. Which core names are ambient without
+an import — and the rule that library functions are always explicit and
+qualified — is decided in
+[`docs/adr/0047-basics-and-tiered-auto-import.md`](../../adr/0047-basics-and-tiered-auto-import.md)
+(`Ipe.Basics` + Tier A/B implicit, Tier C explicit). Principle: **loud on the
+dangerous thing (`Rust.`), quiet on the safe default.**
 
 ### D3. Name-shadowing: precedence + explicit alias, never global reservation
 
@@ -42,10 +41,10 @@ The `Ipe.` *prefix* is reserved (D1). Bare *names* are **not** reserved across
 the ecosystem — reserving the word `List` would punish library authors and make
 every future stdlib module a backward-compat break.
 
-- Bare `List` always resolves to the preluded `Ipe.List`.
+- Bare `List` always resolves to the canonical `Ipe.List`.
 - A third-party module may be named `List`; it does **not** silently shadow the
-  prelude. Using it requires an explicit alias: `import Acme.List as L`, or a
-  deliberate, visible `import Acme.List as List` to rebind.
+  ambient name. Using it requires an explicit alias: `import Acme.List as L`, or
+  a deliberate, visible `import Acme.List as List` to rebind.
 - **Silent shadow → compile error; explicit `as` shadow → allowed.** The reader
   always knows bare `List` = stdlib unless a visible `as List` says otherwise.
 
