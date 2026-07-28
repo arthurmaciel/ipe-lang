@@ -1,6 +1,5 @@
 module Lib exposing (Status(..), label, seedAndCount)
 
-import Ipe.Prelude exposing (..)
 
 
 {-| A small user enum owned by `Lib` — its Rust name (`LibStatus`) proves the

@@ -1,5 +1,4 @@
 module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- REFUTABLE def-head param `f (Just x) =`: the same rule holds for a function

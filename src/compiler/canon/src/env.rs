@@ -45,7 +45,6 @@ use crate::resolve::ModuleOrigin;
 pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     // ── Ipe.* pure + effect modules ────────────────────────────────────
     (&["Ipe", "Basics"], "Basics"),
-    (&["Ipe", "Prelude"], "Basics"), // Prelude re-exports Basics
     (&["Ipe", "String"], "String"),
     (&["Ipe", "Char"], "Char"),
     (&["Ipe", "List"], "List"),
@@ -244,7 +243,7 @@ impl Env {
         Ok(env)
     }
 
-    /// Register the Prelude-exposed built-in constructors so `Just` / `Nothing` /
+    /// Register the ambient (Tier-B) built-in constructors so `Just` / `Nothing` /
     /// `Ok` / `Err` / `True` / `False` resolve as constructors — both as value
     /// expressions and in `case` patterns — without an explicit import. These
     /// belong to the built-in `Maybe a` / `Result e a` / `Bool` types, which have
@@ -358,8 +357,8 @@ impl Env {
         }
     }
 
-    /// Built-in unqualified variables (from the Prelude). Supported subset of
-    /// `Environment.builtinVars`.
+    /// Built-in unqualified variables (the Tier-A `Ipe.Basics` surface).
+    /// Supported subset of `Environment.builtinVars`.
     ///
     /// Must run AFTER `install_prelude_qualifiers` so `stdlib_index` is
     /// populated and the id fast-path can be threaded in.
@@ -375,7 +374,7 @@ impl Env {
             ("clamp", basics, "clamp"),
             ("fst", basics, "fst"),
             ("snd", basics, "snd"),
-            // `errorToString` is the Prelude-exposed unqualified form of
+            // `errorToString` is the Basics-exposed unqualified form of
             // `Error.toString`.  The kernel declaration uses module="Error" /
             // func="toString", so the stdlib_index key is (Error, toString).
             // We must register with the same key so `id` resolves to

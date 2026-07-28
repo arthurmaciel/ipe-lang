@@ -1,6 +1,5 @@
 module Lib exposing (andMapAlias)
 
-import Ipe.Prelude exposing (..)
 
 -- #90 T3.residual — see the sibling `and_map_cross_module_wrapper_accepted`
 -- fixture for the ACCEPTED (arity-1) companion of this same wrapper. This

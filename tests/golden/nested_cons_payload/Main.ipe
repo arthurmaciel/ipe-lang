@@ -1,6 +1,5 @@
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- #158 Class-4 item C, Repro 1: a cons sub-pattern nested inside a constructor

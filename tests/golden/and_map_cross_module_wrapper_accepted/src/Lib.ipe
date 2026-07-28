@@ -1,6 +1,5 @@
 module Lib exposing (andMapAlias)
 
-import Ipe.Prelude exposing (..)
 
 -- #90 T3.residual fixture (design doc §4 "T3.residual" row): an ANNOTATED
 -- wrapper around `Result.andMap`, exported and reused cross-module at two

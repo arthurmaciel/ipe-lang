@@ -1,5 +1,4 @@
 module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- A parametric type alias: `Pair a` is a homogeneous 2-tuple. The parameter

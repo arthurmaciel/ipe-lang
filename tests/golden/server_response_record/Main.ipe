@@ -1,6 +1,5 @@
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Dict as Dict
 import Ipe.Task as Task
 import Ipe.Error exposing (Error)

@@ -1,5 +1,4 @@
 module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- A NESTED non-exhaustive `case`: the `Som` arm only matches when its inner

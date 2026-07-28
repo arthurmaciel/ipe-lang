@@ -5,7 +5,6 @@
 -- (which also needs Eq via `==`) exercises the Eq+Stringify union.
 module Main exposing (main, showAny, eqOrShow)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 showAny : a -> String

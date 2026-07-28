@@ -1,5 +1,4 @@
 module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- A self-edge routed through a TUPLE payload: `ChainNode`'s field is the tuple

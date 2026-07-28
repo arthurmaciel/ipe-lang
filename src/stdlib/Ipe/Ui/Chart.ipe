@@ -28,7 +28,6 @@ module Ipe.Ui.Chart exposing
     , heatmap
     )
 
-import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.Math as Math
 import Ipe.String as String

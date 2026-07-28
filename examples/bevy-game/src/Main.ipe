@@ -15,7 +15,6 @@ module Main exposing (main)
 -- (bevy's `World` is `!Clone`) cannot be duplicated, so a linear thread is the
 -- only shape the shim-free FFI can compile — see examples/sky/BLOCKERS.md.
 
-import Ipe.Prelude exposing (..)
 import Ipe.Result as Result
 import Ipe.String as String
 import Ipe.Io as Io

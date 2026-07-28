@@ -1,5 +1,4 @@
 module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- A3 (#147 seal). `Wrap : String -> Box` passed as a higher-order function

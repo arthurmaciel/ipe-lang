@@ -6,7 +6,6 @@ module Main exposing (main)
 -- (ipec-0 ⟹ cargo-0). Each line below is such an ambiguous shape; the printed
 -- output proves the runtime behaviour is still correct, not just that it builds.
 
-import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.Dict as Dict
 import Ipe.Set as Set

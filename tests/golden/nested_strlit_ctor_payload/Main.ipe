@@ -1,6 +1,5 @@
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- #158 C2 string-literal ctor-payload desugaring (depth 1, direct arg):

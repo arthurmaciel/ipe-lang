@@ -1,5 +1,4 @@
 module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- #90 T4 residual gate: a fn-carrying, non-Clone `let`-binding used in TWO

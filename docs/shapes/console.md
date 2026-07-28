@@ -31,7 +31,6 @@ ever folds well-formed commands.
 ```ipe
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.System as System
 import Ipe.Console exposing (app)

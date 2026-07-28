@@ -1,5 +1,4 @@
 module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- POSITIVE CONTROL (AUD-12): x has only a Number obligation (no Append).

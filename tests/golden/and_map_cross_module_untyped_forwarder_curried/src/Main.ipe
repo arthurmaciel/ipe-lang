@@ -1,6 +1,5 @@
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Lib exposing (am2)
 import Ipe.Io as Io
 

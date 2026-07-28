@@ -1,6 +1,5 @@
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Dict as Dict
 import Ipe.List as List
 import Ipe.Maybe as Maybe

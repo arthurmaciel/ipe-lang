@@ -32,7 +32,6 @@ The [Web](web.md) counter's `view`, rendered under TUI via `Tui.app` — the sam
 ```ipe
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.System as System
 import Ipe.Tui as Tui

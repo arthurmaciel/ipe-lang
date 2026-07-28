@@ -8,7 +8,6 @@ module Main exposing (main)
 -- prove the kernel returns `Nothing` for any key outside the allowlist,
 -- never a live read of the raw process/host environment.
 
-import Ipe.Prelude exposing (..)
 import Ipe.Env as Env
 import Ipe.Web exposing (app)
 import Ipe.Cmd as Cmd

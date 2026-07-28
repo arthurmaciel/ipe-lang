@@ -20,7 +20,6 @@ An HTTP / JSON API is a Program too — its `main` builds routes with
 ```ipe
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
 import Ipe.Error as Error exposing (Error)
 import Ipe.String as String

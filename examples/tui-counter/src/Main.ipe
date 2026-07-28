@@ -12,7 +12,6 @@ module Main exposing (main)
 --     r            reset to zero
 --     q            quit (Ctrl-C also quits)
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.System as System
 import Ipe.Tui as Tui

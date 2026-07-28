@@ -1,5 +1,4 @@
 module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- Two `case` arms head-match the SAME top constructor (`Wrap`) and discriminate

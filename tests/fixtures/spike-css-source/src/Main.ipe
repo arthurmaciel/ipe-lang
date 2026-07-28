@@ -5,7 +5,6 @@ module Main exposing (main)
 -- CONSTRUCTION (value gate, property-name gate, selector gate) with the
 -- `stripStyleClose` breakout floor. `Ipe.Css` is compiled pure Ipe; only the
 -- four `Ipe.CssSafety` leaf kernels are Rust.
-import Ipe.Prelude exposing (..)
 import Ipe.Css exposing (..)
 import Ipe.Io as Io
 

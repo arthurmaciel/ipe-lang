@@ -1,6 +1,5 @@
 module D exposing (base)
 
-import Ipe.Prelude exposing (..)
 
 base : Int
 base = 42

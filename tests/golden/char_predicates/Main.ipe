@@ -1,6 +1,5 @@
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Char as Char
 import Ipe.String as String
 import Ipe.List as List

@@ -14,7 +14,6 @@ module Main exposing (main)
 -- arms only (proving their `PanicInfo`/`TypeInfo` record-payload ADT
 -- registration type-checks) without being constructed.
 
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 

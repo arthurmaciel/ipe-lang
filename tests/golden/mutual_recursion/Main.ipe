@@ -1,5 +1,4 @@
 module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- Mutually-recursive ADTs: each enum's payload field is the *other* enum, so the

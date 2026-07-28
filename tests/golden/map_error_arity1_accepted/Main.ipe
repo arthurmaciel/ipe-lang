@@ -1,6 +1,5 @@
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 -- #90 T3 green twin: `Result.mapError` with an arity-1 callback. The Ok

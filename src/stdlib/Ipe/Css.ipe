@@ -74,7 +74,6 @@ module Ipe.Css exposing
 --     to the Go oracle (the same pure-Ipe render); only an attack string
 --     diverges (it is neutralised) — a sanctioned security divergence.
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.List as List
 import Ipe.CssSafety exposing (safeValue, safePropName, safeSelector, stripStyleClose)

@@ -154,8 +154,9 @@ mod tests {
                     && items.first().is_some_and(|e| matches!(e.value, Exposed::Value(_)))
         ));
 
-        // Two imports: `Ipe.Prelude exposing (..)`, then `Ipe.Io as Io`.
-        assert_eq!(m.imports.len(), 2);
+        // One import: `Ipe.Io as Io`. (Basics/Tier-B are ambient, so no
+        // explicit `import Ipe.Prelude exposing (..)`.)
+        assert_eq!(m.imports.len(), 1);
         let seg_names = |imp: &ipe_syntax::Import| -> Vec<&str> {
             imp.name
                 .value
@@ -164,13 +165,9 @@ mod tests {
                 .collect()
         };
         if let Some(imp) = m.imports.first() {
-            assert_eq!(seg_names(imp), ["Ipe", "Prelude"]);
-            assert!(imp.alias.is_none());
-            assert!(matches!(imp.exposing.value, Exposing::All));
-        }
-        if let Some(imp) = m.imports.get(1) {
             assert_eq!(seg_names(imp), ["Ipe", "Io"]);
             assert_eq!(imp.alias.and_then(|s| i.resolve(s)), Some("Io"));
+            assert!(matches!(&imp.exposing.value, Exposing::List(items) if items.is_empty()));
         }
 
         // One union: Msg { Increment, Decrement }.

@@ -23,7 +23,6 @@ module Ipe.Money exposing
     , setRate, getRate, hasRate, clearRates, convert
     )
 
-import Ipe.Prelude exposing (..)
 import Ipe.Ffi as Ffi
 import Ipe.List as List
 import Ipe.Error as Error exposing (Error)

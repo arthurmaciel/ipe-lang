@@ -49,7 +49,6 @@ Prefer to start from scratch? A minimal script program is just:
 ```elm
 -- src/Main.ipe
 module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 main =
