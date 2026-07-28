@@ -43,7 +43,7 @@ use ipe_diagnostics::{DResult, Diagnostic, Span, TypeError};
 use ipe_intern::{Interner, Symbol};
 
 pub use constrain::kernel_type_table;
-pub use doc::{VarNamer, letters, ty_to_doc};
+pub use doc::{VarNamer, canon_type_to_doc, letters, ty_to_doc};
 pub use solve::{BUDGET_ENV, Budget, DEFAULT_SOLVER_BUDGET};
 pub use ty::{RowTail, Ty, TyBounds, is_solver_var, tag_solver_var, untag_solver_var};
 
