@@ -13,13 +13,21 @@ module Main exposing (main)
 --   * `fromHydrationState` converts the hydration record to the app Model.
 --   * The first client diff is empty — SSR and client view are deterministic.
 --   * A tampered / missing island falls back to clean init (count = 0).
+--
+-- KNOWN GAP (issue #224): the emitted `hydrate()` glue references a
+-- `MainHydrationState` type the record-alias emitter does not produce, so this
+-- example does not yet `cargo build` for wasm. It is excluded from the examples
+-- sweep until that codegen defect is fixed; the source below is already on the
+-- current Web shape + Html.Attributes/Events API.
 
 import Ipe.Prelude exposing (..)
 import Ipe.String as String
-import Ipe.Live exposing (app)
+import Ipe.Web exposing (app)
 import Ipe.Cmd as Cmd
 import Ipe.Sub as Sub
 import Ipe.Html as Html
+import Ipe.Html.Attributes as Attr
+import Ipe.Html.Events exposing (onClick)
 
 
 -- The island type: only serialisable fields.
@@ -74,21 +82,21 @@ view model =
     Html.div []
         [ Html.h1 [] [ Html.text "Ipê Hydration Counter" ]
         , Html.p
-            [ Html.attribute "data-testid" "count" ]
+            [ Attr.attribute "data-testid" "count" ]
             [ Html.text (String.fromInt model.count) ]
         , Html.button
-            [ Html.attribute "data-testid" "increment"
-            , Html.onClick Increment
+            [ Attr.attribute "data-testid" "increment"
+            , onClick Increment
             ]
             [ Html.text "+" ]
         , Html.button
-            [ Html.attribute "data-testid" "decrement"
-            , Html.onClick Decrement
+            [ Attr.attribute "data-testid" "decrement"
+            , onClick Decrement
             ]
             [ Html.text "−" ]
         , Html.button
-            [ Html.attribute "data-testid" "reset"
-            , Html.onClick Reset
+            [ Attr.attribute "data-testid" "reset"
+            , onClick Reset
             ]
             [ Html.text "Reset" ]
         ]
