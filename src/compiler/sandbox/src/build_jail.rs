@@ -486,10 +486,10 @@ pub fn sbpl_from_profile(
 }
 
 /// Resolve a program name to an absolute path via `PATH`, or `None` when absent.
-/// The macOS jail refuses (fail-closed) when its `sandbox-exec` primitive is
-/// missing.
+/// The macOS build and run jails both refuse (fail-closed) when their
+/// `sandbox-exec` primitive is missing, so the resolver is shared.
 #[cfg(target_os = "macos")]
-fn find_in_path(bin: &str) -> Option<PathBuf> {
+pub(crate) fn find_in_path(bin: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
         .map(|dir| dir.join(bin))
