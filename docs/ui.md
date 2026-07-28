@@ -125,10 +125,12 @@ page =
         ]
 ```
 
-This is why the [Web](shapes/web.md) and [WebView](shapes/webview.md) `view`
-returns `Html Msg` but is written with `Ipe.Ui`: the top-level `Ui.layout []
-element` turns the portable `Element` tree into the `Html` node the DOM runtime
-mounts.
+`Ui.layout` is what the framework applies internally for the
+[Web](shapes/web.md) and [WebView](shapes/webview.md) shapes: their `view`
+returns the portable `Element Msg`, and the framework wraps it in `Ui.layout []`
+to produce the `Html` node the DOM runtime mounts. You reach for `Ui.layout`
+directly only when nesting a `Ui` subtree inside a hand-written `Html` tree (for
+example under `Web.appHtml`).
 
 ## Static rendering
 
@@ -153,13 +155,23 @@ without adopting an app shape.
 
 ## Per-shape `view` types
 
-The four app shapes differ only in what `view` returns:
+The graphical shapes — Web, WebView, and TUI — share ONE `view` type,
+`Model -> Element Msg`, so a view is portable across them and switching shape is a
+one-line change of the imported module. `Web.appHtml` / `WebView.appHtml` are the
+raw-`Html` escape entries for direct DOM control; `Tui.program` and `Console.app`
+paint a `String` frame, a genuinely different medium.
 
 | Shape | Entry | `view` type | Renders to |
 |---|---|---|---|
-| [Web](shapes/web.md) | `Web.app` | `Model -> Html Msg` | DOM (`Ui.layout` wraps the `Element`) |
-| [WebView](shapes/webview.md) | `WebView.app` | `Model -> Html Msg` | native webview DOM (`Ui.layout` wraps the `Element`) |
+| [Web](shapes/web.md) | `Web.app` | `Model -> Element Msg` | DOM (framework applies `Ui.layout`) |
+| [Web](shapes/web.md) | `Web.appHtml` | `Model -> Html Msg` | DOM (raw `Html`, no `Ui.layout` wrap) |
+| [WebView](shapes/webview.md) | `WebView.app` | `Model -> Element Msg` | native webview DOM (framework applies `Ui.layout`) |
+| [WebView](shapes/webview.md) | `WebView.appHtml` | `Model -> Html Msg` | native webview DOM (raw `Html`, no `Ui.layout` wrap) |
 | [TUI](shapes/tui.md) | `Tui.app` | `Model -> Element Msg` | ANSI terminal cells |
 | [TUI](shapes/tui.md) | `Tui.program` | `Model -> String` | raw ANSI frame, painted verbatim |
 | [Console](shapes/console.md) | `Console.app` | `Model -> String` | stdout, printed verbatim |
 | [Program](shapes/program.md) | plain `main` | *(none)* | — (static rendering only) |
+
+`Html` is reached two ways: `Ui.html` embeds a raw `Html` node inside an
+`Element` tree (any graphical shape), and `Web.appHtml` / `WebView.appHtml` take a
+whole-view `Model -> Html Msg` for apps that author the DOM directly.
