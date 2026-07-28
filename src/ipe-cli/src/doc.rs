@@ -8,15 +8,28 @@
 //! invalid flag combination is unrepresentable downstream (parse, don't validate;
 //! make-invalid-states-unrepresentable):
 //!
-//! * `ipe doc [PATH] [--out DIR]` — generate `docs.json` + per-module Markdown.
+//! * `ipe doc [PATH] [--out DIR] [--format markdown|json|html|all]` — generate
+//!   `docs.json` plus the selected human-facing renderings.
+//! * `ipe doc serve [PATH] [--port N]` — build the HTML site and preview it
+//!   read-only on `http://127.0.0.1:<port>` (loopback only; the port defaults to
+//!   an auto-selected free one).
 //! * `ipe doc check [PATH]` — a coverage gate that writes nothing and exits
 //!   non-zero when an exposed binding lacks a doc-comment.
 //!
 //! The machine-readable [`docs.json`](DocsJson) is the source of truth — one
 //! record per exposed module, with the module's doc-comment and its exposed
-//! unions and values (name + type + comment). The Markdown rendering is a pure
-//! view over that same in-memory model. The schema is versioned
-//! ([`DOCS_JSON_VERSION`]) so a downstream consumer can rely on it.
+//! unions and values (name + type + comment + resolved cross-references). Both
+//! the Markdown and the self-contained HTML site are pure views over that same
+//! in-memory model. The schema is versioned ([`DOCS_JSON_VERSION`]) so a
+//! downstream consumer can rely on it.
+//!
+//! ## Cross-references
+//!
+//! Every type name in a rendered signature that resolves — via the
+//! canonicaliser's already-computed [`TyDoc`] identity, never a text guess — to a
+//! type documented in this package becomes a link to that entry's stable anchor
+//! (`Module#Name`, identical across json / Markdown / HTML). A built-in with no
+//! in-package definition (e.g. `Int`) renders as plain text.
 //!
 //! ## Two provenances, joined by name
 //!
@@ -28,12 +41,15 @@
 //! ([`scan_doc_comments`]) that is joined to the checked surface by binding name.
 //! Neither pass runs the emit tier — `ipe doc` needs types, not code.
 //!
-//! What this first cut does not do (tracked as follow-ups): a self-contained HTML
-//! site, cross-reference links between entries, and a local `serve` preview.
+//! Still out of scope (tracked separately): inter-*package* linking (needs the
+//! package index), full-text search, and remote hosting. `serve` is a local
+//! read-only preview of the static site, never a publish path.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+
+use ipe_diagnostics::TyDoc;
 
 use crate::CliError;
 use crate::api_surface::{ModuleApi, ModulePath, PublicApi, UnionApi, extract_tree, read_tree};
@@ -43,20 +59,61 @@ use crate::api_surface::{ModuleApi, ModulePath, PublicApi, UnionApi, extract_tre
 /// mis-reading it.
 pub const DOCS_JSON_VERSION: u32 = 1;
 
+/// Which renderings `ipe doc` writes — a closed set, so an unknown `--format`
+/// value is rejected at the CLI boundary rather than carried downstream.
+///
+/// `docs.json` (the machine-readable source of truth) is always written; a
+/// [`Format`] selects which human-facing view(s) are written beside it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Format {
+    /// `docs.json` only — the machine-readable source of truth.
+    Json,
+    /// `docs.json` + per-module Markdown.
+    Markdown,
+    /// `docs.json` + the self-contained HTML site.
+    Html,
+    /// `docs.json` + Markdown + HTML (the default).
+    All,
+}
+
+impl Format {
+    /// Whether this format writes the per-module Markdown.
+    const fn wants_markdown(self) -> bool {
+        matches!(self, Self::Markdown | Self::All)
+    }
+
+    /// Whether this format writes the self-contained HTML site.
+    const fn wants_html(self) -> bool {
+        matches!(self, Self::Html | Self::All)
+    }
+}
+
 /// What `ipe doc` was asked to do — a closed set.
 ///
 /// No code past the parser can hold an invalid mix
-/// (make-invalid-states-unrepresentable). `Generate` carries the one flag it
-/// accepts (`--out`); `Check` carries none, so `ipe doc check --out X` has no
-/// representation to construct.
+/// (make-invalid-states-unrepresentable). `Generate` carries only its own flags
+/// (`--out`, `--format`); `Serve` carries only `--port`; `Check` carries none —
+/// so `ipe doc check --out X`, `ipe doc serve --format json`, and
+/// `ipe doc --port N` have no representation to construct.
 #[derive(Debug, PartialEq, Eq)]
 pub enum DocMode {
-    /// Write `docs.json` and the per-module Markdown to `out`.
+    /// Write `docs.json` and the selected renderings to `out`.
     Generate {
         /// The package to document — a directory or a single `.ipe` file.
         path: PathBuf,
         /// Where the rendered documentation is written.
         out: PathBuf,
+        /// Which human-facing renderings are written beside `docs.json`.
+        format: Format,
+    },
+    /// Build the HTML site and serve it read-only on loopback.
+    Serve {
+        /// The package to document — a directory or a single `.ipe` file.
+        path: PathBuf,
+        /// The loopback port to bind. `None` auto-selects a free one (bind
+        /// `127.0.0.1:0`, let the OS assign); `Some(n)` pins it and errors if it
+        /// is taken.
+        port: Option<u16>,
     },
     /// Verify every exposed binding is documented; write nothing.
     Check {
@@ -71,35 +128,59 @@ const DEFAULT_OUT: &str = "doc";
 /// The default package path when a positional is omitted — the current project.
 const DEFAULT_PATH: &str = ".";
 
+/// The `ipe doc` subcommand a leading token selects. The bare form (no leading
+/// subcommand) is `generate`.
+enum Sub {
+    Generate,
+    Serve,
+    Check,
+}
+
 /// Parse `ipe doc`'s argument tail into a [`DocMode`].
 ///
-/// The bare form is `generate`; a leading `check` selects the coverage gate.
-/// `--out` is a `generate`-only flag, so it is rejected under `check` at this
-/// boundary rather than silently ignored downstream.
+/// The bare form is `generate`; a leading `serve` or `check` selects that
+/// subcommand. Each subcommand accepts ONLY its own flags — `--out`/`--format`
+/// under `generate`, `--port` under `serve`, none under `check` — so a flag
+/// meaningless for the chosen subcommand is rejected here rather than carried
+/// into an unrepresentable [`DocMode`].
 ///
 /// # Errors
 /// [`CliError::Usage`] / [`CliError::UsageOwned`] naming the exact problem: an
-/// unknown flag, a `generate`-only flag under `check`, a repeated `--out`, a
-/// missing `--out` value, or a second positional path.
+/// unknown flag, a flag meaningless for the chosen subcommand, a repeated or
+/// value-less flag, an unknown `--format`, a malformed `--port`, or a second
+/// positional path.
 pub fn parse_doc(rest: &[String]) -> Result<DocMode, CliError> {
     let mut it = rest.iter().peekable();
 
-    // A leading `check` selects the check subcommand; anything else is a
-    // positional path (or a flag) of the bare `generate` form.
-    let is_check = matches!(it.peek(), Some(first) if first.as_str() == "check");
-    if is_check {
-        it.next();
-    }
+    let sub = match it.peek().map(|s| s.as_str()) {
+        Some("serve") => {
+            it.next();
+            Sub::Serve
+        }
+        Some("check") => {
+            it.next();
+            Sub::Check
+        }
+        _ => Sub::Generate,
+    };
 
     let mut path: Option<String> = None;
     let mut out: Option<String> = None;
+    let mut format: Option<Format> = None;
+    let mut port: Option<u16> = None;
     while let Some(arg) = it.next() {
         match arg.as_str() {
-            "--out" if is_check => {
-                return Err(CliError::Usage(
-                    "ipe doc check writes nothing, so it takes no --out; run `ipe doc` to \
-                     generate files",
-                ));
+            "--out" | "--format" if !matches!(sub, Sub::Generate) => {
+                return Err(CliError::UsageOwned(format!(
+                    "ipe doc {}: {arg} is a generate-only flag; run `ipe doc` to write files",
+                    sub_name(&sub)
+                )));
+            }
+            "--port" if !matches!(sub, Sub::Serve) => {
+                return Err(CliError::UsageOwned(format!(
+                    "ipe doc {}: --port applies only to `ipe doc serve`",
+                    sub_name(&sub)
+                )));
             }
             "--out" => {
                 let value = it
@@ -110,6 +191,26 @@ pub fn parse_doc(rest: &[String]) -> Result<DocMode, CliError> {
                     return Err(CliError::Usage("ipe doc: --out given more than once"));
                 }
                 out = Some(value);
+            }
+            "--format" => {
+                let value = it
+                    .next()
+                    .ok_or(CliError::Usage("ipe doc: --format needs a value"))?;
+                if format.is_some() {
+                    return Err(CliError::Usage("ipe doc: --format given more than once"));
+                }
+                format = Some(parse_format(value)?);
+            }
+            "--port" => {
+                let value = it
+                    .next()
+                    .ok_or(CliError::Usage("ipe doc serve: --port needs a number"))?;
+                if port.is_some() {
+                    return Err(CliError::Usage(
+                        "ipe doc serve: --port given more than once",
+                    ));
+                }
+                port = Some(parse_port(value)?);
             }
             flag if flag.starts_with('-') => {
                 return Err(CliError::UsageOwned(format!(
@@ -128,13 +229,50 @@ pub fn parse_doc(rest: &[String]) -> Result<DocMode, CliError> {
     }
 
     let path = PathBuf::from(path.as_deref().unwrap_or(DEFAULT_PATH));
-    if is_check {
-        Ok(DocMode::Check { path })
-    } else {
-        Ok(DocMode::Generate {
+    Ok(match sub {
+        Sub::Generate => DocMode::Generate {
             path,
             out: PathBuf::from(out.as_deref().unwrap_or(DEFAULT_OUT)),
-        })
+            format: format.unwrap_or(Format::All),
+        },
+        Sub::Serve => DocMode::Serve { path, port },
+        Sub::Check => DocMode::Check { path },
+    })
+}
+
+/// The subcommand's name for an error message.
+const fn sub_name(sub: &Sub) -> &'static str {
+    match sub {
+        Sub::Generate => "generate",
+        Sub::Serve => "serve",
+        Sub::Check => "check",
+    }
+}
+
+/// Parse a `--format` value into a [`Format`], rejecting an unknown spelling.
+fn parse_format(value: &str) -> Result<Format, CliError> {
+    match value {
+        "json" => Ok(Format::Json),
+        "markdown" => Ok(Format::Markdown),
+        "html" => Ok(Format::Html),
+        "all" => Ok(Format::All),
+        other => Err(CliError::UsageOwned(format!(
+            "ipe doc: unknown --format `{other}` (want markdown | json | html | all)"
+        ))),
+    }
+}
+
+/// Parse a `--port` value into a `u16`, rejecting a non-numeric or out-of-range
+/// value (and `0`, which would silently auto-select — omit `--port` for that).
+fn parse_port(value: &str) -> Result<u16, CliError> {
+    match value.parse::<u16>() {
+        Ok(0) => Err(CliError::Usage(
+            "ipe doc serve: --port 0 is not a real port; omit --port to auto-select a free one",
+        )),
+        Ok(p) => Ok(p),
+        Err(_) => Err(CliError::UsageOwned(format!(
+            "ipe doc serve: --port `{value}` is not a port number (1-65535)"
+        ))),
     }
 }
 
@@ -147,7 +285,8 @@ pub fn parse_doc(rest: &[String]) -> Result<DocMode, CliError> {
 /// coverage report when `check` finds an undocumented binding.
 pub fn run_doc(rest: &[String]) -> Result<(), CliError> {
     match parse_doc(rest)? {
-        DocMode::Generate { path, out } => generate(&path, &out),
+        DocMode::Generate { path, out, format } => generate(&path, &out, format),
+        DocMode::Serve { path, port } => serve(&path, port),
         DocMode::Check { path } => check(&path),
     }
 }
@@ -183,6 +322,11 @@ pub struct ValueDoc {
     pub name: String,
     /// Its checker-inferred, α-canonicalised type signature.
     pub signature: String,
+    /// The same signature in its resolved [`TyDoc`] form, whose type-constructor
+    /// nodes carry the canonicaliser's resolved module + name. Cross-references
+    /// are computed from this — never from the flat string — so a link is a real
+    /// resolved identity, not a text match.
+    pub signature_ty: TyDoc,
     /// Its `-- |` doc-comment, empty when it has none.
     pub comment: String,
 }
@@ -207,6 +351,9 @@ pub struct CtorDoc {
     pub name: String,
     /// Its argument signatures, in declaration order.
     pub args: Vec<String>,
+    /// Its arguments' resolved type documents, in declaration order (parallel to
+    /// [`Self::args`]), for cross-reference linking.
+    pub arg_types: Vec<TyDoc>,
 }
 
 /// A binding whose doc-comment is missing, reported by [`check`].
@@ -253,6 +400,7 @@ fn module_doc(module_path: &ModulePath, api: &ModuleApi, comments: &DocComments)
         .map(|(name, signature)| ValueDoc {
             name: name.clone(),
             signature: signature.clone(),
+            signature_ty: api.value_types.get(name).cloned().unwrap_or(TyDoc::Unit),
             comment: comments.get(name).unwrap_or_default(),
         })
         .collect();
@@ -272,6 +420,7 @@ fn union_doc(name: &str, union: &UnionApi, comments: &DocComments) -> UnionDoc {
         .map(|(ctor_name, args)| CtorDoc {
             name: ctor_name.clone(),
             args: args.clone(),
+            arg_types: union.ctor_types.get(ctor_name).cloned().unwrap_or_default(),
         })
         .collect();
     UnionDoc {
@@ -427,24 +576,238 @@ fn is_value_name(word: &str) -> bool {
     }
 }
 
-/// Generate `docs.json` and per-module Markdown for the package at `path`,
+/// The set of type constructors this package documents, so a reference in a
+/// signature can be resolved to an in-package definition (and only then linked).
+///
+/// A `(module, type-name)` pair is present exactly when that module exposes that
+/// union type. A `TyDoc::Con` whose resolved `(module, name)` is absent — a
+/// built-in like `Int`, or a type from another package — is left as plain text,
+/// never a dangling link.
+struct AnchorIndex {
+    types: BTreeSet<(String, String)>,
+}
+
+impl AnchorIndex {
+    /// Build the index from every module's exposed union types.
+    fn build(docs: &DocsJson) -> Self {
+        let mut types = BTreeSet::new();
+        for module in &docs.modules {
+            for union in &module.unions {
+                types.insert((module.name.clone(), union.name.clone()));
+            }
+        }
+        Self { types }
+    }
+
+    /// The link target for a type constructor resolved to `(module, name)`, or
+    /// `None` when it is not documented in this package.
+    fn type_ref(&self, module: &str, name: &str) -> Option<TypeRef> {
+        if self.types.contains(&(module.to_owned(), name.to_owned())) {
+            Some(TypeRef {
+                module: module.to_owned(),
+                name: name.to_owned(),
+            })
+        } else {
+            None
+        }
+    }
+}
+
+/// A resolved, in-package type reference — the address a cross-reference links
+/// to. The anchor is `Module#Name`, identical across json, Markdown, and HTML.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TypeRef {
+    module: String,
+    name: String,
+}
+
+impl TypeRef {
+    /// The stable logical anchor `Module#Name`, shared by every rendering — the
+    /// address a `docs.json` consumer records.
+    fn anchor(&self) -> String {
+        format!("{}#{}", self.module, self.name)
+    }
+
+    /// The physical link to this entry within a rendered site of extension `ext`
+    /// (`html` or `md`): `Module-stem.ext#Name`. Deterministic from the logical
+    /// anchor, so json / Markdown / HTML all point at the one entry.
+    fn href(&self, ext: &str) -> String {
+        format!("{}.{ext}#{}", module_stem(&self.module), self.name)
+    }
+}
+
+/// The stem of a module's page filename (`Ipe.String` → `Ipe-String`), shared by
+/// its `.md` and `.html` pages so an anchor address is the same in both.
+fn module_stem(module: &str) -> String {
+    module.replace('.', "-")
+}
+
+/// One piece of a rendered signature: either plain text, or an in-package type
+/// reference to link. A [`TyDoc`] renders to a flat sequence of these, so a
+/// renderer emits links (HTML `<a>`, Markdown `[…](…)`) without re-parsing the
+/// string.
+enum SigPiece {
+    /// Literal text (punctuation, arrows, variables, built-in type names).
+    Text(String),
+    /// An in-package type name that links to its definition.
+    Link { text: String, target: TypeRef },
+}
+
+/// Render a value's signature [`TyDoc`] into a flat piece sequence, linking every
+/// type constructor that resolves to an in-package definition.
+fn signature_pieces(ty: &TyDoc, index: &AnchorIndex) -> Vec<SigPiece> {
+    let mut pieces = Vec::new();
+    push_ty(ty, index, Prec::Top, &mut pieces);
+    pieces
+}
+
+/// Precedence context for parenthesising, mirroring [`render_ty`]'s own rules so
+/// the linked rendering reads identically to the flat string.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Prec {
+    /// Top level — no parentheses added.
+    Top,
+    /// Left of an arrow — a nested arrow is parenthesised.
+    FunLhs,
+    /// A constructor argument — a nested application or arrow is parenthesised.
+    Arg,
+}
+
+/// Append literal text to the piece sequence, coalescing with a trailing text
+/// piece so links stay whole tokens.
+fn push_text(pieces: &mut Vec<SigPiece>, text: &str) {
+    if let Some(SigPiece::Text(last)) = pieces.last_mut() {
+        last.push_str(text);
+    } else {
+        pieces.push(SigPiece::Text(text.to_owned()));
+    }
+}
+
+/// Walk a [`TyDoc`] at the given precedence, emitting text and link pieces.
+fn push_ty(ty: &TyDoc, index: &AnchorIndex, prec: Prec, pieces: &mut Vec<SigPiece>) {
+    match ty {
+        TyDoc::Unit => push_text(pieces, "()"),
+        TyDoc::Var(v) => push_text(pieces, v),
+        TyDoc::Con { module, name, args } => {
+            let parens = prec == Prec::Arg && !args.is_empty();
+            if parens {
+                push_text(pieces, "(");
+            }
+            let head = if module.is_empty() {
+                name.to_string()
+            } else {
+                format!("{module}.{name}")
+            };
+            match index.type_ref(module, name) {
+                Some(target) => pieces.push(SigPiece::Link { text: head, target }),
+                None => push_text(pieces, &head),
+            }
+            for arg in args {
+                push_text(pieces, " ");
+                push_ty(arg, index, Prec::Arg, pieces);
+            }
+            if parens {
+                push_text(pieces, ")");
+            }
+        }
+        TyDoc::Fun(a, b) => {
+            let parens = prec != Prec::Top;
+            if parens {
+                push_text(pieces, "(");
+            }
+            push_ty(a, index, Prec::FunLhs, pieces);
+            push_text(pieces, " -> ");
+            push_ty(b, index, Prec::Top, pieces);
+            if parens {
+                push_text(pieces, ")");
+            }
+        }
+        TyDoc::Tuple(elems) => {
+            push_text(pieces, "(");
+            for (i, e) in elems.iter().enumerate() {
+                if i > 0 {
+                    push_text(pieces, ", ");
+                }
+                push_ty(e, index, Prec::Top, pieces);
+            }
+            push_text(pieces, ")");
+        }
+        TyDoc::Record(fields) => {
+            if fields.is_empty() {
+                push_text(pieces, "{}");
+                return;
+            }
+            push_text(pieces, "{ ");
+            for (i, (fname, fty)) in fields.iter().enumerate() {
+                if i > 0 {
+                    push_text(pieces, ", ");
+                }
+                push_text(pieces, &format!("{fname} : "));
+                push_ty(fty, index, Prec::Top, pieces);
+            }
+            push_text(pieces, " }");
+        }
+    }
+}
+
+/// The distinct in-package type references a signature resolves to, in
+/// first-seen order — the structured cross-references `docs.json` records.
+fn signature_references(ty: &TyDoc, index: &AnchorIndex) -> Vec<TypeRef> {
+    let mut refs = Vec::new();
+    for piece in signature_pieces(ty, index) {
+        if let SigPiece::Link { target, .. } = piece
+            && !refs.contains(&target)
+        {
+            refs.push(target);
+        }
+    }
+    refs
+}
+
+/// The renderings written for one `ipe doc` generate call, keyed by output
+/// filename, so `generate` and `serve` share exactly one site builder.
+fn render_site(docs: &DocsJson, format: Format) -> BTreeMap<String, String> {
+    let index = AnchorIndex::build(docs);
+    let mut files = BTreeMap::new();
+
+    files.insert("docs.json".to_owned(), render_json(docs));
+
+    if format.wants_markdown() {
+        for module in &docs.modules {
+            files.insert(
+                format!("{}.md", module_stem(&module.name)),
+                render_markdown(module, &index),
+            );
+        }
+    }
+
+    if format.wants_html() {
+        files.insert("index.html".to_owned(), render_html_index(docs));
+        files.insert("style.css".to_owned(), STYLE_CSS.to_owned());
+        for module in &docs.modules {
+            files.insert(
+                format!("{}.html", module_stem(&module.name)),
+                render_html_module(module, &index),
+            );
+        }
+    }
+
+    files
+}
+
+/// Generate `docs.json` and the selected renderings for the package at `path`,
 /// writing them under `out`.
 ///
 /// # Errors
 /// As [`build_docs`], plus [`CliError::Io`] on a write failure.
-fn generate(path: &Path, out: &Path) -> Result<(), CliError> {
+fn generate(path: &Path, out: &Path, format: Format) -> Result<(), CliError> {
     let docs = build_docs(path)?;
+    let files = render_site(&docs, format);
 
     std::fs::create_dir_all(out).map_err(|e| crate::io_err(out, e))?;
-
-    let json_path = out.join("docs.json");
-    std::fs::write(&json_path, render_json(&docs)).map_err(|e| crate::io_err(&json_path, e))?;
-
-    for module in &docs.modules {
-        let md_name = format!("{}.md", module.name.replace('.', "-"));
-        let md_path = out.join(&md_name);
-        std::fs::write(&md_path, render_markdown(module))
-            .map_err(|e| crate::io_err(&md_path, e))?;
+    for (name, contents) in &files {
+        let file_path = out.join(name);
+        std::fs::write(&file_path, contents).map_err(|e| crate::io_err(&file_path, e))?;
     }
 
     println!(
@@ -518,12 +881,13 @@ fn check(path: &Path) -> Result<(), CliError> {
 /// key order is fixed and the whole document is a deterministic function of the
 /// model, so a consumer diffing two runs sees only real API changes.
 fn render_json(docs: &DocsJson) -> String {
+    let index = AnchorIndex::build(docs);
     let mut out = String::new();
     out.push_str("{\n");
     let _ = writeln!(out, "  \"version\": {},", docs.version);
     out.push_str("  \"modules\": [\n");
     for (i, module) in docs.modules.iter().enumerate() {
-        render_module_json(&mut out, module);
+        render_module_json(&mut out, module, &index);
         out.push_str(if i + 1 < docs.modules.len() {
             ",\n"
         } else {
@@ -535,7 +899,7 @@ fn render_json(docs: &DocsJson) -> String {
 }
 
 /// Render one module object into the JSON buffer at a fixed two-space indent.
-fn render_module_json(out: &mut String, module: &ModuleDoc) {
+fn render_module_json(out: &mut String, module: &ModuleDoc, index: &AnchorIndex) {
     out.push_str("    {\n");
     let _ = writeln!(out, "      \"name\": {},", json_string(&module.name));
     let _ = writeln!(out, "      \"comment\": {},", json_string(&module.comment));
@@ -590,9 +954,31 @@ fn render_module_json(out: &mut String, module: &ModuleDoc) {
         );
         let _ = writeln!(
             out,
-            "          \"comment\": {}",
+            "          \"comment\": {},",
             json_string(&value.comment)
         );
+        // The in-package cross-references this signature resolves to — the
+        // structured form a `docs.json` consumer resolves, with the anchor
+        // shared by the Markdown and HTML renderings.
+        let refs = signature_references(&value.signature_ty, index);
+        out.push_str("          \"references\": [");
+        for (k, r) in refs.iter().enumerate() {
+            out.push_str(if k == 0 { "\n" } else { ",\n" });
+            out.push_str("            {\n");
+            let _ = writeln!(out, "              \"module\": {},", json_string(&r.module));
+            let _ = writeln!(out, "              \"name\": {},", json_string(&r.name));
+            let _ = writeln!(
+                out,
+                "              \"anchor\": {}",
+                json_string(&r.anchor())
+            );
+            out.push_str("            }");
+        }
+        out.push_str(if refs.is_empty() {
+            "]\n"
+        } else {
+            "\n          ]\n"
+        });
         out.push_str("        }");
     }
     out.push_str(if module.values.is_empty() {
@@ -626,9 +1012,37 @@ fn json_string(s: &str) -> String {
     out
 }
 
+/// The type-parameter suffix a union type displays (`Maybe` at arity 1 → ` a`).
+fn union_params(params: usize) -> String {
+    if params == 0 {
+        return String::new();
+    }
+    let names: Vec<String> = (0..params)
+        .map(|i| ipe_types::letters(u32::try_from(i).unwrap_or(u32::MAX)).to_string())
+        .collect();
+    format!(" {}", names.join(" "))
+}
+
+/// Render a signature's pieces as Markdown: an in-package type is a
+/// `[Type](page#anchor)` link, everything else is inline `` `code` ``.
+fn markdown_signature(pieces: &[SigPiece]) -> String {
+    let mut out = String::new();
+    for piece in pieces {
+        match piece {
+            SigPiece::Text(t) => {
+                let _ = write!(out, "`{t}`");
+            }
+            SigPiece::Link { text, target } => {
+                let _ = write!(out, "[`{text}`]({})", target.href("md"));
+            }
+        }
+    }
+    out
+}
+
 /// Render one module's documentation as Markdown — a pure view over its
-/// [`ModuleDoc`].
-fn render_markdown(module: &ModuleDoc) -> String {
+/// [`ModuleDoc`], with in-package type references linked via `index`.
+fn render_markdown(module: &ModuleDoc, index: &AnchorIndex) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "# {}\n", module.name);
     if !module.comment.is_empty() {
@@ -638,25 +1052,21 @@ fn render_markdown(module: &ModuleDoc) -> String {
     if !module.unions.is_empty() {
         out.push_str("## Types\n\n");
         for union in &module.unions {
-            let params = if union.params == 0 {
-                String::new()
-            } else {
-                let names: Vec<String> = (0..union.params)
-                    .map(|i| ipe_types::letters(u32::try_from(i).unwrap_or(u32::MAX)).to_string())
-                    .collect();
-                format!(" {}", names.join(" "))
-            };
-            let _ = writeln!(out, "### `{}{}`\n", union.name, params);
+            let _ = writeln!(out, "### `{}{}`\n", union.name, union_params(union.params));
             if !union.comment.is_empty() {
                 let _ = writeln!(out, "{}\n", union.comment);
             }
             for ctor in &union.ctors {
-                let rendered = if ctor.args.is_empty() {
-                    ctor.name.clone()
+                if ctor.args.is_empty() {
+                    let _ = writeln!(out, "- `{}`", ctor.name);
                 } else {
-                    format!("{} {}", ctor.name, ctor.args.join(" "))
-                };
-                let _ = writeln!(out, "- `{rendered}`");
+                    let mut line = format!("`{} `", ctor.name);
+                    for arg in &ctor.arg_types {
+                        line.push_str(&markdown_signature(&signature_pieces(arg, index)));
+                        line.push(' ');
+                    }
+                    let _ = writeln!(out, "- {}", line.trim_end());
+                }
             }
             out.push('\n');
         }
@@ -665,13 +1075,289 @@ fn render_markdown(module: &ModuleDoc) -> String {
     if !module.values.is_empty() {
         out.push_str("## Values\n\n");
         for value in &module.values {
-            let _ = writeln!(out, "### `{} : {}`\n", value.name, value.signature);
+            let sig = markdown_signature(&signature_pieces(&value.signature_ty, index));
+            let _ = writeln!(out, "### `{}`\n", value.name);
+            let _ = writeln!(out, "`{} :` {}\n", value.name, sig);
             if !value.comment.is_empty() {
                 let _ = writeln!(out, "{}\n", value.comment);
             }
         }
     }
     out
+}
+
+// ===========================================================================
+// HTML site — a self-contained static rendering over the same `DocsJson` model.
+// ===========================================================================
+
+/// The bundled stylesheet the HTML site links, written once beside the pages so
+/// the site is self-contained and opens over `file://` with no network fetch.
+const STYLE_CSS: &str = "\
+:root { color-scheme: light dark; }
+body {
+  font: 16px/1.6 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  margin: 0; padding: 2rem; max-width: 52rem; margin-inline: auto;
+}
+h1 { font-size: 1.6rem; } h2 { font-size: 1.2rem; margin-top: 2rem; }
+a { color: #2563eb; text-decoration: none; } a:hover { text-decoration: underline; }
+nav.crumb { margin-bottom: 1.5rem; font-size: 0.9rem; }
+ul.modules { list-style: none; padding: 0; }
+ul.modules li { margin: 0.3rem 0; }
+section.entry { border-top: 1px solid #8883; padding-top: 0.5rem; margin-top: 1.5rem; }
+section.entry h3 { margin: 0 0 0.3rem; font-size: 1.05rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+pre.sig { background: #8881; padding: 0.4rem 0.6rem; border-radius: 4px; overflow-x: auto; }
+p.comment { margin: 0.4rem 0 0; }
+";
+
+/// Escape the five characters an HTML text/attribute context requires, so a type
+/// name or a doc-comment can never inject markup.
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Render a signature's pieces as HTML: an in-package type is an `<a href>` to
+/// its anchor, everything else is escaped text.
+fn html_signature(pieces: &[SigPiece]) -> String {
+    let mut out = String::new();
+    for piece in pieces {
+        match piece {
+            SigPiece::Text(t) => out.push_str(&html_escape(t)),
+            SigPiece::Link { text, target } => {
+                let _ = write!(
+                    out,
+                    "<a href=\"{}\">{}</a>",
+                    html_escape(&target.href("html")),
+                    html_escape(text)
+                );
+            }
+        }
+    }
+    out
+}
+
+/// Wrap a page body in the shared HTML shell (doctype, `<head>` linking the
+/// bundled stylesheet, `<body>`).
+fn html_page(title: &str, body: &str) -> String {
+    format!(
+        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n\
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
+         <title>{}</title>\n<link rel=\"stylesheet\" href=\"style.css\">\n</head>\n\
+         <body>\n{body}</body>\n</html>\n",
+        html_escape(title)
+    )
+}
+
+/// Render the index page — the package's module list, each linking to its page.
+fn render_html_index(docs: &DocsJson) -> String {
+    let mut body = String::from("<h1>API documentation</h1>\n<ul class=\"modules\">\n");
+    for module in &docs.modules {
+        let _ = writeln!(
+            body,
+            "<li><a href=\"{}.html\">{}</a></li>",
+            html_escape(&module_stem(&module.name)),
+            html_escape(&module.name)
+        );
+    }
+    body.push_str("</ul>\n");
+    html_page("API documentation", &body)
+}
+
+/// Render one module's page — its doc-comment, its exposed types and values,
+/// each entry carrying a stable `id` anchor and its cross-linked signature.
+fn render_html_module(module: &ModuleDoc, index: &AnchorIndex) -> String {
+    let mut body =
+        String::from("<nav class=\"crumb\"><a href=\"index.html\">&larr; all modules</a></nav>\n");
+    let _ = writeln!(body, "<h1>{}</h1>", html_escape(&module.name));
+    if !module.comment.is_empty() {
+        let _ = writeln!(
+            body,
+            "<p class=\"comment\">{}</p>",
+            html_escape(&module.comment)
+        );
+    }
+
+    if !module.unions.is_empty() {
+        body.push_str("<h2>Types</h2>\n");
+        for union in &module.unions {
+            let _ = writeln!(
+                body,
+                "<section class=\"entry\" id=\"{}\">\n<h3><code>{}{}</code></h3>",
+                html_escape(&union.name),
+                html_escape(&union.name),
+                html_escape(&union_params(union.params))
+            );
+            if !union.comment.is_empty() {
+                let _ = writeln!(
+                    body,
+                    "<p class=\"comment\">{}</p>",
+                    html_escape(&union.comment)
+                );
+            }
+            for ctor in &union.ctors {
+                body.push_str("<pre class=\"sig\">");
+                body.push_str(&html_escape(&ctor.name));
+                for arg in &ctor.arg_types {
+                    body.push(' ');
+                    body.push_str(&html_signature(&signature_pieces(arg, index)));
+                }
+                body.push_str("</pre>\n");
+            }
+            body.push_str("</section>\n");
+        }
+    }
+
+    if !module.values.is_empty() {
+        body.push_str("<h2>Values</h2>\n");
+        for value in &module.values {
+            let sig = html_signature(&signature_pieces(&value.signature_ty, index));
+            let _ = writeln!(
+                body,
+                "<section class=\"entry\" id=\"{}\">\n<h3><code>{}</code></h3>\n\
+                 <pre class=\"sig\">{} : {sig}</pre>",
+                html_escape(&value.name),
+                html_escape(&value.name),
+                html_escape(&value.name)
+            );
+            if !value.comment.is_empty() {
+                let _ = writeln!(
+                    body,
+                    "<p class=\"comment\">{}</p>",
+                    html_escape(&value.comment)
+                );
+            }
+            body.push_str("</section>\n");
+        }
+    }
+
+    html_page(&module.name, &body)
+}
+
+// ===========================================================================
+// serve — a read-only, loopback-only preview of the built HTML site.
+// ===========================================================================
+
+/// Build the HTML site for the package at `path` and serve it read-only on
+/// loopback, blocking until interrupted.
+///
+/// The site is built once in memory (never written to disk — to keep files, run
+/// `ipe doc`), then served from a single-threaded blocking HTTP/1.1 loop over
+/// `std::net::TcpListener`. It binds `127.0.0.1` only; `port` `None` lets the OS
+/// assign a free port (bind `:0`), `Some(n)` pins one and errors if it is taken.
+///
+/// # Errors
+/// [`CliError::Io`] if the loopback port cannot be bound (a pinned port already
+/// in use), plus any error from [`build_docs`].
+fn serve(path: &Path, port: Option<u16>) -> Result<(), CliError> {
+    use std::net::TcpListener;
+
+    let docs = build_docs(path)?;
+    let site = render_site(&docs, Format::Html);
+
+    let addr = format!("127.0.0.1:{}", port.unwrap_or(0));
+    let listener = TcpListener::bind(&addr).map_err(|e| crate::io_err(Path::new(&addr), e))?;
+    let bound = listener
+        .local_addr()
+        .map_err(|e| crate::io_err(Path::new(&addr), e))?;
+
+    let url = format!("http://{bound}/");
+    println!("serving docs at {url} (read-only, loopback; Ctrl-C to stop)");
+    open_in_browser(&url);
+
+    // A single dropped connection must not take the server down; `flatten` skips
+    // the `Err`s and serves each accepted stream.
+    for mut conn in listener.incoming().flatten() {
+        serve_one(&mut conn, &site);
+    }
+    Ok(())
+}
+
+/// Serve one HTTP/1.1 request from the in-memory `site`, read-only.
+///
+/// Reads the request line, maps its path to a built file (`/` → `index.html`),
+/// and writes the file with its content type — or a `404` when the path names no
+/// built file. Only `GET`/`HEAD`-shaped requests are honoured; the body, if any,
+/// is ignored (nothing here writes or executes).
+fn serve_one(conn: &mut std::net::TcpStream, site: &BTreeMap<String, String>) {
+    use std::io::{BufRead, BufReader, Write};
+
+    let mut reader = BufReader::new(match conn.try_clone() {
+        Ok(c) => c,
+        Err(_) => return,
+    });
+    let mut request_line = String::new();
+    if reader.read_line(&mut request_line).is_err() {
+        return;
+    }
+
+    let path = request_line.split_whitespace().nth(1).unwrap_or("/");
+    let name = serve_file_name(path);
+
+    let response = site.get(&name).map_or_else(
+        || http_response("404 Not Found", "text/plain; charset=utf-8", "not found\n"),
+        |body| http_response("200 OK", content_type(&name), body),
+    );
+    let _ = conn.write_all(response.as_bytes());
+    let _ = conn.flush();
+}
+
+/// Map a request path to a built-file key: `/` (or empty) → `index.html`,
+/// otherwise the leading `/` is stripped and any `?query`/`#frag` dropped. The
+/// result is a bare filename — a `..` or nested path simply misses the flat site
+/// map and 404s, so no traversal can escape it.
+fn serve_file_name(path: &str) -> String {
+    let path = path.split(['?', '#']).next().unwrap_or(path);
+    let trimmed = path.trim_start_matches('/');
+    if trimmed.is_empty() {
+        "index.html".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+/// The content type for a built file, by extension.
+fn content_type(name: &str) -> &'static str {
+    match Path::new(name).extension().and_then(|e| e.to_str()) {
+        Some("html") => "text/html; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("json") => "application/json; charset=utf-8",
+        Some("md") => "text/markdown; charset=utf-8",
+        _ => "text/plain; charset=utf-8",
+    }
+}
+
+/// A complete HTTP/1.1 response with an explicit `Content-Length` and a
+/// `Connection: close` (the loop serves one request per connection).
+fn http_response(status: &str, content_type: &str, body: &str) -> String {
+    format!(
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+/// Best-effort open of `url` in the default browser. A failure is silent — the
+/// URL is already printed, so the preview is reachable regardless.
+fn open_in_browser(url: &str) {
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(target_os = "windows") {
+        "explorer"
+    } else {
+        "xdg-open"
+    };
+    let _ = std::process::Command::new(opener).arg(url).spawn();
 }
 
 #[cfg(test)]
@@ -690,6 +1376,7 @@ mod tests {
             DocMode::Generate {
                 path: PathBuf::from("."),
                 out: PathBuf::from("doc"),
+                format: Format::All,
             }
         );
     }
@@ -702,8 +1389,74 @@ mod tests {
             DocMode::Generate {
                 path: PathBuf::from("pkg"),
                 out: PathBuf::from("site"),
+                format: Format::All,
             }
         );
+    }
+
+    #[test]
+    fn parse_format_selects_a_single_rendering() {
+        let m = parse_doc(&s(&["--format", "html"])).expect("format html");
+        assert_eq!(
+            m,
+            DocMode::Generate {
+                path: PathBuf::from("."),
+                out: PathBuf::from("doc"),
+                format: Format::Html,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_rejects_unknown_format() {
+        assert!(matches!(
+            parse_doc(&s(&["--format", "pdf"])),
+            Err(CliError::UsageOwned(_))
+        ));
+    }
+
+    #[test]
+    fn parse_serve_auto_selects_port() {
+        let m = parse_doc(&s(&["serve", "pkg"])).expect("serve");
+        assert_eq!(
+            m,
+            DocMode::Serve {
+                path: PathBuf::from("pkg"),
+                port: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_serve_pins_a_port() {
+        let m = parse_doc(&s(&["serve", "--port", "8080"])).expect("serve port");
+        assert_eq!(
+            m,
+            DocMode::Serve {
+                path: PathBuf::from("."),
+                port: Some(8080),
+            }
+        );
+    }
+
+    #[test]
+    fn serve_rejects_generate_flags() {
+        // `--format`/`--out` are meaningless when serving HTML — unrepresentable
+        // in `DocMode::Serve`, so rejected at the boundary.
+        assert!(parse_doc(&s(&["serve", "--format", "json"])).is_err());
+        assert!(parse_doc(&s(&["serve", "--out", "x"])).is_err());
+    }
+
+    #[test]
+    fn generate_rejects_port_flag() {
+        // `--port` has no meaning without a server; unrepresentable in Generate.
+        assert!(parse_doc(&s(&["--port", "8080"])).is_err());
+    }
+
+    #[test]
+    fn serve_rejects_malformed_port() {
+        assert!(parse_doc(&s(&["serve", "--port", "nope"])).is_err());
+        assert!(parse_doc(&s(&["serve", "--port", "0"])).is_err());
     }
 
     #[test]
@@ -734,7 +1487,7 @@ mod tests {
         // so it is rejected at the boundary, not silently ignored.
         assert!(matches!(
             parse_doc(&s(&["check", "--out", "x"])),
-            Err(CliError::Usage(_))
+            Err(CliError::UsageOwned(_))
         ));
     }
 
@@ -793,9 +1546,19 @@ mod tests {
         assert_eq!(json_string("a\"b\\c\n"), "\"a\\\"b\\\\c\\n\"");
     }
 
-    #[test]
-    fn markdown_renders_module_values_and_types() {
-        let module = ModuleDoc {
+    /// A resolved type-constructor `TyDoc`, e.g. `con("M", "Color", [])`.
+    fn con(module: &str, name: &str, args: Vec<TyDoc>) -> TyDoc {
+        TyDoc::Con {
+            module: module.into(),
+            name: name.into(),
+            args: args.into_boxed_slice(),
+        }
+    }
+
+    /// A one-module package documenting a `Color` type and a `paint` value whose
+    /// signature mentions both the in-package `Color` and the built-in `Int`.
+    fn color_module() -> ModuleDoc {
+        ModuleDoc {
             name: "M".to_owned(),
             comment: "A module.".to_owned(),
             unions: vec![UnionDoc {
@@ -804,21 +1567,140 @@ mod tests {
                 ctors: vec![CtorDoc {
                     name: "Red".to_owned(),
                     args: vec![],
+                    arg_types: vec![],
                 }],
                 comment: "A color.".to_owned(),
             }],
             values: vec![ValueDoc {
-                name: "foo".to_owned(),
-                signature: "Int".to_owned(),
-                comment: "The foo.".to_owned(),
+                name: "paint".to_owned(),
+                signature: "M.Color -> Int".to_owned(),
+                // `M.Color` is in-package (links); `Int` is a built-in (plain).
+                signature_ty: TyDoc::Fun(
+                    Box::new(con("M", "Color", vec![])),
+                    Box::new(con("", "Int", vec![])),
+                ),
+                comment: "The paint.".to_owned(),
             }],
-        };
-        let md = render_markdown(&module);
+        }
+    }
+
+    fn one_module_docs(module: ModuleDoc) -> DocsJson {
+        DocsJson {
+            version: DOCS_JSON_VERSION,
+            modules: vec![module],
+        }
+    }
+
+    #[test]
+    fn markdown_renders_module_values_and_types() {
+        let module = color_module();
+        let docs = one_module_docs(color_module());
+        let index = AnchorIndex::build(&docs);
+        let md = render_markdown(&module, &index);
         assert!(md.contains("# M"));
         assert!(md.contains("A module."));
         assert!(md.contains("### `Color`"));
         assert!(md.contains("- `Red`"));
-        assert!(md.contains("### `foo : Int`"));
-        assert!(md.contains("The foo."));
+        assert!(md.contains("### `paint`"));
+        assert!(md.contains("The paint."));
+    }
+
+    #[test]
+    fn cross_reference_links_in_package_type_and_not_a_builtin() {
+        let module = color_module();
+        let docs = one_module_docs(color_module());
+        let index = AnchorIndex::build(&docs);
+        let value = module.values.first().expect("one value");
+        let pieces = signature_pieces(&value.signature_ty, &index);
+
+        // `M.Color` resolves in-package → a link to its anchor.
+        let linked: Vec<&TypeRef> = pieces
+            .iter()
+            .filter_map(|p| match p {
+                SigPiece::Link { target, .. } => Some(target),
+                SigPiece::Text(_) => None,
+            })
+            .collect();
+        assert_eq!(linked.len(), 1, "exactly the in-package type links");
+        let only = linked.first().expect("one linked type");
+        assert_eq!(only.anchor(), "M#Color");
+        assert_eq!(only.href("html"), "M.html#Color");
+
+        // The whole rendered text still reads as the signature, `Int` inline.
+        let html = html_signature(&pieces);
+        assert!(
+            html.contains("<a href=\"M.html#Color\">M.Color</a>"),
+            "{html}"
+        );
+        assert!(
+            html.contains("-&gt; Int"),
+            "the builtin stays plain: {html}"
+        );
+        assert!(
+            !html.contains(">Int</a>"),
+            "no link is emitted for a builtin"
+        );
+    }
+
+    #[test]
+    fn json_records_the_cross_reference() {
+        let docs = one_module_docs(color_module());
+        let json = render_json(&docs);
+        assert!(json.contains("\"anchor\": \"M#Color\""), "{json}");
+        // The built-in `Int` produces no reference entry.
+        assert!(!json.contains("\"name\": \"Int\""), "{json}");
+    }
+
+    #[test]
+    fn html_index_and_module_pages_are_self_contained() {
+        let module = color_module();
+        let docs = one_module_docs(color_module());
+        let index = AnchorIndex::build(&docs);
+
+        let idx = render_html_index(&docs);
+        assert!(idx.contains("<!DOCTYPE html>"));
+        assert!(idx.contains("href=\"style.css\""), "links the bundled CSS");
+        assert!(
+            idx.contains("href=\"M.html\">M</a>"),
+            "lists the module: {idx}"
+        );
+
+        let page = render_html_module(&module, &index);
+        assert!(
+            page.contains("id=\"Color\""),
+            "the type has a stable anchor"
+        );
+        assert!(
+            page.contains("id=\"paint\""),
+            "the value has a stable anchor"
+        );
+        assert!(
+            page.contains("<a href=\"M.html#Color\">M.Color</a>"),
+            "the in-package type links: {page}"
+        );
+    }
+
+    #[test]
+    fn html_escapes_markup_in_names_and_comments() {
+        assert_eq!(html_escape("a<b>&\"'"), "a&lt;b&gt;&amp;&quot;&#39;");
+    }
+
+    #[test]
+    fn serve_file_name_maps_root_and_strips_query() {
+        assert_eq!(serve_file_name("/"), "index.html");
+        assert_eq!(serve_file_name(""), "index.html");
+        assert_eq!(serve_file_name("/M.html"), "M.html");
+        assert_eq!(serve_file_name("/style.css?v=1"), "style.css");
+        // A traversal attempt is just a filename that misses the flat map.
+        assert_eq!(serve_file_name("/../etc/passwd"), "../etc/passwd");
+    }
+
+    #[test]
+    fn http_response_has_length_and_close() {
+        let r = http_response("200 OK", "text/html; charset=utf-8", "hi");
+        assert!(r.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(r.contains("Content-Length: 2\r\n"));
+        assert!(r.contains("Connection: close\r\n"));
+        assert!(r.ends_with("\r\n\r\nhi"));
     }
 }
