@@ -10,5 +10,24 @@ ipe_diagnostics = { path = "../diagnostics" }
 ipe_kernels = { path = "../kernels" }
 serde = { version = "1", features = ["derive"] }
 
+# The Windows run-jail arm builds its confinement primitives directly through the
+# Win32 kernel API (Job Object, AppContainer lowbox token, capability SIDs, ACLs,
+# CreateProcess with an extended startup-info attribute list). `windows-sys` is
+# the same crate (and the 0.61 major already resolved in the workspace lockfile)
+# the rest of the dependency tree pulls in; only the features the arm calls are
+# enabled so the build surface stays minimal.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_AppLocker",
+    "Win32_Security_Isolation",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+    "Win32_System_SystemServices",
+    "Win32_Storage_FileSystem",
+] }
+
 [lints]
 workspace = true
