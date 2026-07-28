@@ -58,8 +58,24 @@ report version results =
     "v" ++ version ++ " preflight passed:\n  " ++ String.join "\n  " results
 ```
 
-Run it with `ipe run examples/release-preflight`; it announces the run, fires
-three checks concurrently, then prints a report and exits 0.
+## Running it
+
+Run the example:
+
+```sh
+ipe run examples/release-preflight
+```
+
+```text
+Preflight for v1.4.0
+v1.4.0 preflight passed:
+  build     ok  — artifact present
+  changelog ok  — entry for this version
+  git       ok  — working tree clean
+```
+
+It announces the run, fires the three checks concurrently with `parallelDo`,
+then prints the report and exits 0.
 
 ## Example
 
