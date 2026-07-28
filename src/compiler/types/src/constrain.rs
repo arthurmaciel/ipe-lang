@@ -3573,6 +3573,42 @@ impl<'a> Builder<'a> {
                 self.constrain_pattern(local, head, elem)?;
                 self.constrain_pattern(local, tail, list)
             }
+            // An or-pattern `p1 | p2 | …`: every alternative is constrained
+            // against the SAME scrutinee variable, and its binders are unified
+            // name-by-name with the first alternative's, so the arm body reads
+            // one binder environment. Canon already proved the alternatives bind
+            // the identical name set (IPE-T0019); unifying each shared name's
+            // var here is the same-type half of the rule — a failure surfaces as
+            // the ordinary IPE-T0001 mismatch attributed to the alternative. The
+            // body is constrained ONCE afterwards, in `local`, never per
+            // alternative.
+            canon::Pattern_::POr(alts) => {
+                let Some((first, rest)) = alts.split_first() else {
+                    return Err(Diagnostic::CompilerBug {
+                        where_: STAGE,
+                        detail: "an or-pattern reached type inference with no alternatives"
+                            .to_owned(),
+                    });
+                };
+                // The first alternative binds directly into the shared `local`.
+                self.constrain_pattern(local, first, scrut_var)?;
+                for alt in rest {
+                    let mut alt_local: BTreeMap<Symbol, VarId> = BTreeMap::new();
+                    self.constrain_pattern(&mut alt_local, alt, scrut_var)?;
+                    // Unify each of this alternative's binders with the reference
+                    // binder of the same name established by the first alternative.
+                    for (name, var) in alt_local {
+                        if let Some(reference) = local.get(&name).copied() {
+                            self.eq(alt.span, reference, var);
+                        } else {
+                            // Unreachable: canon proved every alternative binds
+                            // the same names. Adopt the binder rather than drop it.
+                            local.insert(name, var);
+                        }
+                    }
+                }
+                Ok(())
+            }
         }
     }
 

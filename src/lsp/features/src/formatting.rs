@@ -476,6 +476,14 @@ fn push_pattern(out: &mut String, pat: &ipe_syntax::Pattern, interner: &ipe_inte
             out.push_str(" :: ");
             push_pattern(out, t, interner);
         }
+        ipe_syntax::Pattern_::POr(alts) => {
+            for (i, alt) in alts.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(" | ");
+                }
+                push_pattern(out, alt, interner);
+            }
+        }
     }
 }
 
