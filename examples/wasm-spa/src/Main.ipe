@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 -- M6 Target A MVP: a pure-client SPA that exercises the full TEA loop in the
--- browser. Uses Ipe.Live.app which emits `wasm_app` under --target wasm.
+-- browser. Uses Ipe.Web.app which emits `wasm_app` under --target wasm.
 --
 -- Verified interactions (see scripts/lib/wasm-verify.mjs):
 --   * increment button → counter increments
@@ -10,7 +10,7 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Ipe.String as String
-import Ipe.Live exposing (app)
+import Ipe.Web exposing (app)
 import Ipe.Cmd as Cmd
 import Ipe.Sub as Sub
 import Ipe.Ui as Ui
