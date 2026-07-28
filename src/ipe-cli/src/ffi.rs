@@ -2386,22 +2386,35 @@ mod tests {
     #[test]
     fn jail_for_host_tracks_the_compiled_in_run_jail() {
         // The admit hand-off must equal the run-jail's own compiled-in confined
-        // set: a jailed host confines the full set (admit-and-isolate), a stub
-        // host confines the empty set (refuse-gap). This is the single source
-        // that stops the admit path claiming a jail the target does not compile
-        // in — `jail_for_host` folds exactly `platform_confined_axes()`.
-        let expected = if ipe_sandbox::run_jail::platform_supports_jail() {
-            ipe_ffi::capability_scan::JailForTarget::FULLY_CONFINED
-        } else {
-            ipe_ffi::capability_scan::JailForTarget::REFUSE_GAP
-        };
-        assert_eq!(jail_for_host(), expected);
-        // The confined set is exactly the run-jail's single-sourced axis list.
+        // set, whatever that set is: this is the single source that stops the
+        // admit path claiming a jail the target does not compile in —
+        // `jail_for_host` folds EXACTLY `platform_confined_axes()`, so the two
+        // cannot drift on any target (full, partial, or empty).
         let mut from_axes = ipe_ffi::capability_scan::CapabilitySet::EMPTY;
         for &axis in ipe_sandbox::run_jail::platform_confined_axes() {
             from_axes = from_axes.with(axis);
         }
+        assert_eq!(
+            jail_for_host(),
+            ipe_ffi::capability_scan::JailForTarget::Holds(from_axes)
+        );
         assert_eq!(jail_for_host().confined(), from_axes);
+
+        // A non-empty compiled-in axis list must mean the platform is a jailed
+        // target (and vice-versa): a stub host confines nothing. This keeps the
+        // predicate and the axis list in lock without assuming the set is FULL —
+        // a jailed target may be PARTIAL (Windows).
+        if ipe_sandbox::run_jail::platform_supports_jail() {
+            assert!(
+                !from_axes.is_empty(),
+                "a jailed host must confine at least one axis"
+            );
+        } else {
+            assert!(
+                from_axes.is_empty(),
+                "a stub host must confine no axis (refuse-gap)"
+            );
+        }
     }
 
     #[test]
@@ -2424,6 +2437,35 @@ mod tests {
             ipe_ffi::capability_scan::JailForTarget::FULLY_CONFINED
         );
         assert!(jail_for_host().confined().is_full());
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn jail_for_host_confines_the_partial_windows_set() {
+        // Windows is a jailed target with a PARTIAL confined set: the admit path
+        // must fold EXACTLY the run-jail's single-sourced axis list — never
+        // assume FULL. subprocess + env + filesystem + network + native-ffi are
+        // confined by the Job Object + AppContainer + launcher scrub (with
+        // filesystem/network fail-closed at runtime off an ACL volume), and
+        // database is derived from net + fs.
+        let confined = jail_for_host().confined();
+        use ipe_ffi::capability_scan::Capability;
+        for cap in [
+            Capability::Subprocess,
+            Capability::Env,
+            Capability::Filesystem,
+            Capability::Network,
+            Capability::NativeFfi,
+            Capability::Database,
+        ] {
+            assert!(confined.confines(cap), "Windows must confine {cap:?}");
+        }
+        // The fold must equal the run-jail's own list — no drift, no over-claim.
+        let mut from_axes = ipe_ffi::capability_scan::CapabilitySet::EMPTY;
+        for &axis in ipe_sandbox::run_jail::platform_confined_axes() {
+            from_axes = from_axes.with(axis);
+        }
+        assert_eq!(confined, from_axes);
     }
 
     #[test]
