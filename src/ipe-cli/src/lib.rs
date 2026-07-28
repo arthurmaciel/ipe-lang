@@ -22,6 +22,7 @@ pub mod build_plan;
 mod cache;
 pub mod cli_args;
 pub mod diff;
+pub mod doc;
 pub mod ffi;
 pub mod fmt;
 pub mod help;
@@ -145,6 +146,12 @@ pub enum CliError {
     /// A publish precondition is a hard, typed refusal — never a warning — because
     /// a merged index entry must pin an immutable, reproducible revision.
     Publish(publish::Refusal),
+    /// `ipe doc check` found one or more exposed bindings without a doc-comment.
+    /// Carries the ready-to-print coverage report. This is a legitimate gate
+    /// result — the check ran correctly and the package is under-documented — not
+    /// a command misuse, so it exits non-zero with the report alone and never the
+    /// command's `--help` page.
+    DocCoverage(String),
     /// A known command was misused (bad or missing arguments, an unknown flag).
     /// Carries the specific reason and the command name; [`fmt::Display`] renders
     /// the reason followed by that command's full, indented `--help` page — the
@@ -242,6 +249,7 @@ impl std::fmt::Display for CliError {
                 "version {proposed} does not clear the required {required} bump — the new \
                  version must be at least {floor}."
             ),
+            Self::DocCoverage(report) => f.write_str(report),
             Self::PackageAudit(rejection) => write!(f, "{rejection}"),
             Self::Publish(refusal) => write!(f, "ipe package publish refused: {refusal}"),
             // The reason, then the command's full `--help` page (indented,
@@ -1539,6 +1547,7 @@ const USAGE: &str = "usage:\n  \
      ipe explain [<code>]\n  \
      ipe rust  <add|remove|install> [<args>...]\n  \
      ipe diff  <old> <new>\n  \
+     ipe doc   [check] [<path>]\n  \
      ipe lsp\n  \
      ipe version\n\n  \
      Run `ipe <command> --help` for options.";
@@ -1612,6 +1621,7 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
             with_help_on_misuse("capabilities", run_capabilities(rest))
         }
         Some((cmd, rest)) if cmd == "diff" => with_help_on_misuse("diff", diff::run_diff(rest)),
+        Some((cmd, rest)) if cmd == "doc" => with_help_on_misuse("doc", doc::run_doc(rest)),
         Some((cmd, rest)) if cmd == "rust" => with_help_on_misuse("rust", ffi::run_rust(rest)),
         Some((cmd, rest)) if cmd == "add" => with_help_on_misuse("add", pkg::run_add(rest)),
         Some((cmd, rest)) if cmd == "remove" => {
@@ -3151,7 +3161,7 @@ fn write_and_rename(tmp: &Path, target: &Path, contents: &str) -> Result<(), Cli
     Ok(())
 }
 
-fn io_err(path: &Path, source: std::io::Error) -> CliError {
+pub(crate) fn io_err(path: &Path, source: std::io::Error) -> CliError {
     CliError::Io {
         path: path.to_path_buf(),
         source,

@@ -227,6 +227,49 @@ A clean package prints `all Tier-1 checks passed`; a failing one names the check
 and the offending line, capability, version, or dependency.
 -->
 
+## Documenting a package
+
+`ipe doc` generates reference documentation for a package from its own source.
+Each exposed binding is documented with its checker-inferred type signature (the
+exact type the compiler sees, never re-parsed), its `-- |` doc-comment, and the
+module it belongs to. The machine-readable `docs.json` is the source of truth —
+one record per exposed module — and the per-module Markdown is a view over it.
+
+```
+$ ipe doc                          # write docs/ for the current project
+$ ipe doc path/to/pkg --out site   # or a specific package, to a chosen directory
+$ ipe doc check                    # a CI gate: exit non-zero if a binding is undocumented
+```
+
+For a small package the generator reports what it wrote and `docs.json` carries
+the versioned surface:
+
+```
+$ ipe doc path/to/shapes --out doc
+documented 1 module to doc
+$ cat doc/docs.json
+{
+  "version": 1,
+  "modules": [
+    {
+      "name": "Shapes",
+      "comment": "Shapes — a tiny geometry library.",
+      "unions": [ … ],
+      "values": [
+        {
+          "name": "area",
+          "signature": "Shapes.Shape -> Float",
+          "comment": "`area shape` — the area of `shape`."
+        }
+      ]
+    }
+  ]
+}
+```
+
+`ipe doc check` writes nothing and exits non-zero when an exposed value or type
+lacks a doc-comment, naming each gap — a coverage gate you can wire into CI.
+
 ## Editor setup (LSP)
 
 `ipe lsp` speaks JSON-RPC over stdio — type-directed completion, go-to-definition,
