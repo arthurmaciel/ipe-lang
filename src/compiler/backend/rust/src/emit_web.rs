@@ -37,7 +37,7 @@ use crate::emit_types::{GenericScope, render_type};
 /// `WebView.appHtml` take `view : Model -> Html Msg` and pass through
 /// ([`ViewWrap::RawHtml`]). See ADR 0048 point 4.
 #[derive(Clone, Copy)]
-pub(crate) enum ViewWrap {
+pub enum ViewWrap {
     /// `view : Model -> Element Msg` — wrap in `Ui.layout` to produce `Html`.
     Layout,
     /// `view : Model -> Html Msg` — pass the view straight through.
@@ -48,7 +48,7 @@ pub(crate) enum ViewWrap {
 /// mounts. Under [`ViewWrap::Layout`] the emitted `Element`-returning view is
 /// closed over and threaded through `ui_layout` (empty attrs, the `Ui.layout []`
 /// the ADR specifies); under [`ViewWrap::RawHtml`] the view is returned as-is.
-pub(crate) fn wrap_view(view_wrap: ViewWrap, view_s: &str) -> String {
+pub fn wrap_view(view_wrap: ViewWrap, view_s: &str) -> String {
     match view_wrap {
         ViewWrap::RawHtml => view_s.to_owned(),
         // A `move` closure capturing the emitted view (a named `fn` item or a
