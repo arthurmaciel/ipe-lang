@@ -22,7 +22,7 @@ use crate::code::{
     IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021,
     IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062,
     IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013,
-    IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, Severity,
+    IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0019, Severity,
 };
 use crate::span::Span;
 
@@ -591,6 +591,15 @@ pub enum TypeError {
     /// emitted panic arm, no `DoS`/500 surface). The offending sub-pattern's span
     /// rides on the wrapping [`Diagnostic::Type`]. [IPE-T0015]
     RefutablePatternParameter,
+    /// An **or-pattern** `p1 | p2 | …` whose alternatives do not all bind the
+    /// **same set of variable names**. The arm body reads a binder without
+    /// knowing which alternative matched, so every name it might read must be
+    /// bound on every alternative at one type. `names` lists the variables bound
+    /// by some but not all alternatives (the name-set difference), in sorted
+    /// order for a deterministic message. Checked fail-fast in canon, before the
+    /// solver runs; the same-name / different-type half rides the standard
+    /// [`TypeError::TypeMismatch`] path instead. [IPE-T0019]
+    OrPatternBindingMismatch { names: Box<[Box<str>]> },
     /// A `Task` type constructor applied to a number of type arguments other than
     /// 1 (the internal unary form `Task a`) or 2 (the canonical user annotation
     /// `Task Error a`). Reachable from source because canonicalisation validates
@@ -1042,6 +1051,7 @@ impl Diagnostic {
                 | TypeError::CtorPatternArity { .. }
                 | TypeError::SuperTypeUnsatisfied { .. }
                 | TypeError::RefutablePatternParameter
+                | TypeError::OrPatternBindingMismatch { .. }
                 | TypeError::TaskArity { .. } => Severity::Error,
             },
             Self::CompilerBug { .. } => Severity::Bug,
@@ -1145,6 +1155,7 @@ const fn type_code(msg: &TypeError) -> Code {
         TypeError::CtorPatternArity { .. } => IPE_T0013,
         TypeError::SuperTypeUnsatisfied { .. } => IPE_T0014,
         TypeError::RefutablePatternParameter => IPE_T0015,
+        TypeError::OrPatternBindingMismatch { .. } => IPE_T0019,
         TypeError::TaskArity { .. } => IPE_T0016,
     }
 }
@@ -1298,6 +1309,22 @@ fn type_help(msg: &TypeError) -> Vec<HelpLine> {
             .collect(),
         TypeError::RefutablePatternParameter => {
             vec![HelpLine::Hint(Hint::IrrefutableParameterRequired)]
+        }
+        TypeError::OrPatternBindingMismatch { names } => {
+            let listed = names
+                .iter()
+                .map(|n| format!("`{n}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            vec![HelpLine::Note(
+                format!(
+                    "the arm body reads a bound variable without knowing which \
+                     alternative matched, so every alternative must bind the same \
+                     variables. {listed} is bound by some alternatives but not all. \
+                     Add the missing binding to every alternative, or drop it."
+                )
+                .into_boxed_str(),
+            )]
         }
         TypeError::RoutedAppMissingPageField { route_count } => vec![HelpLine::Note(
             format!(

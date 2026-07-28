@@ -2256,8 +2256,37 @@ impl<'a> Parser<'a> {
 
     // ---- patterns ---------------------------------------------------------
 
-    /// A full pattern, gathering constructor sub-patterns (case-arm position).
+    /// A full pattern (case-arm position). The `|` or-pattern separator binds
+    /// looser than everything else in a pattern (constructor application, `::`,
+    /// `as`), so a full pattern is one-or-more cons/`as` alternatives joined by
+    /// `|`. A single alternative is returned unwrapped; two or more become a
+    /// [`Pattern_::POr`] spanning the first through the last.
     fn parse_pattern(&mut self, depth: u32) -> DResult<Pattern> {
+        if depth > MAX_DEPTH {
+            return Err(self.too_deep(Construct::Pattern));
+        }
+        let first = self.parse_cons_as(depth + 1)?;
+        if self.peek_kind() != Some(&Tok::Pipe) {
+            return Ok(first);
+        }
+        let start = first.span;
+        let mut end = first.span;
+        let mut alts = vec![first];
+        while self.peek_kind() == Some(&Tok::Pipe) {
+            self.bump(Construct::Pattern)?;
+            let alt = self.parse_cons_as(depth + 1)?;
+            end = alt.span;
+            alts.push(alt);
+        }
+        let span = Self::span_merge(start, end);
+        Ok(Located::new(span, Pattern_::POr(alts)))
+    }
+
+    /// A cons/`as` pattern — a full pattern *below* the or-pattern layer:
+    /// constructor application, then `::`, then a postfix `as` alias. This is the
+    /// grammar an or-pattern alternative and a cons tail both sit at, so neither
+    /// consumes a following `|` (`x :: xs | []` parses as `(x :: xs) | []`).
+    fn parse_cons_as(&mut self, depth: u32) -> DResult<Pattern> {
         if depth > MAX_DEPTH {
             return Err(self.too_deep(Construct::Pattern));
         }
@@ -2287,7 +2316,7 @@ impl<'a> Parser<'a> {
         // `PCons(a, PCons(b, rest))`.
         let pat = if self.peek_kind() == Some(&Tok::ColonColon) {
             self.bump(Construct::Pattern)?;
-            let tail = self.parse_pattern(depth + 1)?;
+            let tail = self.parse_cons_as(depth + 1)?;
             let span = Self::span_merge(pat.span, tail.span);
             Located::new(span, Pattern_::PCons(Box::new(pat), Box::new(tail)))
         } else {

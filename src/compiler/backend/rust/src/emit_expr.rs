@@ -142,6 +142,13 @@ fn pat_bound_symbols(pat: &Pat, out: &mut std::collections::BTreeSet<Symbol>) {
                 pat_bound_symbols(p, out);
             }
         }
+        // Every alternative of an or-pattern binds the same names, so the first
+        // alternative's binders are the whole set.
+        Pat::Or(alts) => {
+            if let Some(first) = alts.first() {
+                pat_bound_symbols(first, out);
+            }
+        }
     }
 }
 
@@ -512,6 +519,9 @@ fn pat_binds_target(pat: &Pat, target: Symbol) -> bool {
             prefix.iter().any(|p| pat_binds_target(p, target))
                 || rest.as_deref().is_some_and(|p| pat_binds_target(p, target))
         }
+        // Every alternative binds the same names, so it binds `target` iff any
+        // (equivalently the first) alternative does.
+        Pat::Or(alts) => alts.iter().any(|p| pat_binds_target(p, target)),
     }
 }
 
@@ -7012,6 +7022,12 @@ fn collect_str_rebinds(ctx: &EmitCtx, pat: &Pat, out: &mut String) -> DResult<()
         | Pat::Tuple(_)
         | Pat::Record(_)
         | Pat::Slice { .. } => Ok(()),
+        // Every alternative of an or-pattern binds the same names at the same
+        // types, so rebinding via the first alternative produces the one correct
+        // set of `let` rebinds (one per name, never per-alternative).
+        Pat::Or(alts) => alts
+            .first()
+            .map_or(Ok(()), |first| collect_str_rebinds(ctx, first, out)),
     }
 }
 
@@ -7050,6 +7066,13 @@ fn list_binder_rebinds(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
         | Pat::Ctor { .. }
         | Pat::Tuple(_)
         | Pat::Record(_) => {}
+        // Every alternative binds the same names at the same types, so the first
+        // alternative's rebinds are the whole arm's set.
+        Pat::Or(alts) => {
+            if let Some(first) = alts.first() {
+                out.push_str(&list_binder_rebinds(ctx, first)?);
+            }
+        }
     }
     Ok(out)
 }
@@ -7090,6 +7113,11 @@ fn collect_elem_rebinds(ctx: &EmitCtx, pat: &Pat, out: &mut String) -> DResult<(
         | Pat::Char(_)
         | Pat::Str(_)
         | Pat::Slice { .. } => Ok(()),
+        // Every alternative binds the same names at the same types; rebind via
+        // the first alternative.
+        Pat::Or(alts) => alts
+            .first()
+            .map_or(Ok(()), |first| collect_elem_rebinds(ctx, first, out)),
     }
 }
 
@@ -7112,6 +7140,11 @@ fn collect_list_rebinds(ctx: &EmitCtx, pat: &Pat, out: &mut String) -> DResult<(
         | Pat::Tuple(_)
         | Pat::Record(_)
         | Pat::Slice { .. } => Ok(()),
+        // Every alternative binds the same names at the same types; rebind via
+        // the first alternative.
+        Pat::Or(alts) => alts
+            .first()
+            .map_or(Ok(()), |first| collect_list_rebinds(ctx, first, out)),
     }
 }
 
@@ -7242,6 +7275,19 @@ fn render_pat(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
                 None => Ok(format!("[{}]", parts.join(", "))),
             }
         }
+        // An or-pattern renders as the native Rust or-pattern `p0 | p1 | …`,
+        // joining each rendered alternative with ` | `. Every alternative binds
+        // the same names (proved upstream), so the ONE arm body reads them
+        // whichever alternative matched — no body duplication. Rust resolves
+        // overlap and ordering across alternatives exactly as it does across
+        // arms.
+        Pat::Or(alts) => {
+            let mut parts = Vec::with_capacity(alts.len());
+            for alt in alts {
+                parts.push(render_pat(ctx, alt)?);
+            }
+            Ok(parts.join(" | "))
+        }
     }
 }
 
@@ -7269,7 +7315,10 @@ fn pat_contains_alias(pat: &Pat) -> bool {
         | Pat::Str(_)
         | Pat::Ctor { .. }
         | Pat::Record(_)
-        | Pat::Slice { .. } => false,
+        | Pat::Slice { .. }
+        // An or-pattern is refutable, so it never appears in a by-value
+        // irrefutable binder.
+        | Pat::Or(_) => false,
     }
 }
 
@@ -7289,6 +7338,8 @@ fn pat_contains_alias_in_arm(pat: &Pat) -> bool {
             prefix.iter().any(pat_contains_alias_in_arm)
                 || rest.as_deref().is_some_and(pat_contains_alias_in_arm)
         }
+        // An or-pattern carries an alias iff any alternative does.
+        Pat::Or(alts) => alts.iter().any(pat_contains_alias_in_arm),
         Pat::Var(_) | Pat::Wildcard | Pat::Int(_) | Pat::Bool(_) | Pat::Char(_) | Pat::Str(_) => {
             false
         }
@@ -7316,6 +7367,8 @@ fn pat_contains_str_in_arm(pat: &Pat) -> bool {
         Pat::Tuple(elems) => elems.iter().any(pat_contains_str_in_arm),
         Pat::Ctor { args, .. } => args.iter().any(pat_contains_str_in_arm),
         Pat::Record(fields) => fields.iter().any(|(_, p)| pat_contains_str_in_arm(p)),
+        // An or-pattern carries a by-value string leaf iff any alternative does.
+        Pat::Or(alts) => alts.iter().any(pat_contains_str_in_arm),
         Pat::Var(_)
         | Pat::Wildcard
         | Pat::Int(_)
@@ -7341,6 +7394,7 @@ fn pat_contains_str_in_arm(pat: &Pat) -> bool {
 /// into the SAME prelude slot `emit_ctor_arm_pat`'s cyclic-self-edge
 /// unboxing already uses (`unbox_lines`) or `emit_whole_arm_head`'s
 /// `prelude` return.
+#[allow(clippy::too_many_lines)] // one arm per IR pattern shape — a rendering table, not branching logic
 fn render_arm_pat_alias_safe(
     ctx: &EmitCtx,
     pat: &Pat,
@@ -7462,6 +7516,33 @@ fn render_arm_pat_alias_safe(
                      arms must route through render_pat directly"
                 .to_owned(),
         }),
+        // An or-pattern reaching the alias-safe body carries an alias or a
+        // by-value string leaf inside SOME alternative. A per-alternative match
+        // guard cannot attach to one branch of a Rust or-pattern, so a
+        // string-literal alternative is the residual guarded-alternative case
+        // (design §4.3) — fail closed rather than emit an invalid guarded
+        // or-pattern. An alias-only or-pattern renders each alternative through
+        // this same alias-safe renderer (its clone-split prelude binds the
+        // shared names) and joins with ` | `.
+        Pat::Or(alts) => {
+            if alts.iter().any(pat_contains_str_in_arm) {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "ipe_backend_rust::render_arm_pat_alias_safe",
+                    detail: "a by-value string-literal leaf inside an or-pattern \
+                             alternative needs a per-alternative match guard, which \
+                             a Rust or-pattern cannot carry; the lowerer's residual \
+                             shared-continuation fallback should have handled it"
+                        .to_owned(),
+                });
+            }
+            let mut parts = Vec::with_capacity(alts.len());
+            for alt in alts {
+                parts.push(render_arm_pat_alias_safe(
+                    ctx, alt, counter, prelude, guards,
+                )?);
+            }
+            Ok(parts.join(" | "))
+        }
         // `Pat::Str` is intercepted above (binder + guard); the remaining
         // leaves render directly.
         Pat::Var(_) | Pat::Wildcard | Pat::Int(_) | Pat::Bool(_) | Pat::Char(_) => {
@@ -7553,7 +7634,10 @@ fn push_binding_stmts(
         | Pat::Str(_)
         | Pat::Ctor { .. }
         | Pat::Record(_)
-        | Pat::Slice { .. } => Err(Diagnostic::CompilerBug {
+        | Pat::Slice { .. }
+        // An or-pattern is refutable, so it is never a by-value irrefutable
+        // binder; reaching here is an invariant violation.
+        | Pat::Or(_) => Err(Diagnostic::CompilerBug {
             where_: "ipe_backend_rust::push_binding_stmts",
             detail: "an aliased binder resolved to a non-alias, non-tuple shape".to_owned(),
         }),

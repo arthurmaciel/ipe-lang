@@ -1429,6 +1429,11 @@ fn pat_name_at(interner: &Interner, pat: &Pat, depth: u16) -> String {
                 |r| format!("[{parts}, {} @ ..]", pat_name_at(interner, r, depth)),
             )
         }
+        Pat::Or(alts) => alts
+            .iter()
+            .map(|p| pat_name_at(interner, p, depth))
+            .collect::<Vec<_>>()
+            .join(" | "),
     }
 }
 

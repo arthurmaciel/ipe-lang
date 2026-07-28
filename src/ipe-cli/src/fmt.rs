@@ -1147,6 +1147,10 @@ impl Printer<'_> {
             Pattern_::PAlias(inner, name) => {
                 format!("{} as {}", self.pattern(&inner.value), self.sym(name.value))
             }
+            Pattern_::POr(alts) => {
+                let parts: Vec<String> = alts.iter().map(|a| self.pattern(&a.value)).collect();
+                parts.join(" | ")
+            }
         }
     }
 
@@ -1155,7 +1159,11 @@ impl Printer<'_> {
     fn pattern_atom(&self, p: &Pattern_) -> String {
         match p {
             Pattern_::PCtor(_, _, args) if !args.is_empty() => format!("({})", self.pattern(p)),
-            Pattern_::PCons(..) | Pattern_::PAlias(..) => format!("({})", self.pattern(p)),
+            // An or-pattern binds loosest, so in any atom position (ctor arg,
+            // cons head) it must be parenthesised to keep its grouping.
+            Pattern_::PCons(..) | Pattern_::PAlias(..) | Pattern_::POr(..) => {
+                format!("({})", self.pattern(p))
+            }
             _ => self.pattern(p),
         }
     }

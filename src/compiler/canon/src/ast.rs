@@ -283,6 +283,12 @@ pub enum Pattern_ {
     PList(Vec<Pattern>),
     /// A cons pattern `head :: tail` — binds the first element and the rest.
     PCons(Box<Pattern>, Box<Pattern>),
+    /// An or-pattern `p1 | p2 | …` — matches if ANY alternative matches. Every
+    /// alternative binds the identical set of variables (name-set equality is
+    /// proved fail-fast in canon; per-name type equality post-solve in types).
+    /// Each alternative is an arbitrary sub-pattern and recurses. Invariant:
+    /// length ≥ 2.
+    POr(Vec<Pattern>),
 }
 
 impl Pattern_ {
@@ -307,12 +313,14 @@ impl Pattern_ {
     /// | [`Self::PTuple`] | all elements irrefutable |
     /// | [`Self::PAlias`] | inner irrefutable |
     /// | [`Self::PCtor`], [`Self::PInt`], [`Self::PBool`], [`Self::PChar`], [`Self::PStr`], [`Self::PList`], [`Self::PCons`] | `false` |
+    /// | [`Self::POr`] | all alternatives irrefutable (in practice never — a well-formed or-pattern discriminates) |
     #[must_use]
     pub fn is_irrefutable(&self) -> bool {
         match self {
             Self::PVar(_) | Self::PAnything | Self::PRecord(_) => true,
             Self::PTuple(elems) => elems.iter().all(|e| e.value.is_irrefutable()),
             Self::PAlias(inner, _) => inner.value.is_irrefutable(),
+            Self::POr(alts) => alts.iter().all(|a| a.value.is_irrefutable()),
             Self::PCtor { .. }
             | Self::PInt(_)
             | Self::PBool(_)
