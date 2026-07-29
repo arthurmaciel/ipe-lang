@@ -130,10 +130,12 @@ pub enum Expr_ {
     VarTopLevel { module: Vec<Symbol>, name: Symbol },
     /// A stdlib kernel function.  `id` carries the pre-resolved
     /// [`StdlibKernel`] variant when the kernel is registered in the
-    /// `stdlib_index`; `None` for entries not wired there (string-match
-    /// fallback path in `lower_callee`).  `module` and `name` are retained for
+    /// `stdlib_index`.  It is `None` for a reference with no registry backing:
+    /// a reachable-but-unbacked reserved member (which then fails closed with
+    /// IPE-L0108 at type-check), or a node routed through the string-match
+    /// fallback path in `lower_callee`.  `module` and `name` are retained for
     /// diagnostics, the type-constraint kernel-scheme lookup, and that
-    /// string-match fallback.
+    /// fallback.
     VarKernel {
         id: Option<StdlibKernel>,
         module: Symbol,
