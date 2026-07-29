@@ -23,11 +23,11 @@ import State exposing (Msg)
 file: src/Lib/Auth.ipe
 find:
 """
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 """
 replace:
 """
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Ipe.System as System
 """
 

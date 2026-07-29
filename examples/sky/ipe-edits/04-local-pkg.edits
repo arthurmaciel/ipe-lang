@@ -1,0 +1,17 @@
+# Keep the doc comment accurate after the println move.
+#
+# println/eprintln moved from Std.Log to Ipe.Io (imported as Io), so the code
+# call site is Io.println. This comment names that identifier, so requalify it to
+# match — the transform rewrites code only and never touches a comment, so a
+# documentary reference to a moved value is corrected here.
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+    -- println takes a single String; concat the prefix and the
+"""
+replace:
+"""
+    -- Io.println takes a single String; concat the prefix and the
+"""

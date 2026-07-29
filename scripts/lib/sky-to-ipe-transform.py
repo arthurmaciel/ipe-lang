@@ -5,6 +5,13 @@ The examples-sweep mirrors an upstream Sky example verbatim, then runs this
 transform to turn `Sky.Core.*` / `Sky.Http.*` / `Sky.Ffi` / `Sky.Test` / `Std.*`
 module qualifiers into their `Ipe.*` equivalents (see examples/sky/rename-map.tsv).
 
+Beyond the qualifier-prefix rename, a small MEMBER-MOVE pass relocates named
+values that changed module between Sky and Ipê: `println`/`eprintln` moved from
+`Std.Log` to `Ipe.Io`, so both the import statement and every call site are
+rewritten together (an exposed bare `println` -> `Io.println`; a `Log.println`
+alias call -> `Io.println`). A `Std.Log` import used only for its remaining
+members (infoWith/errorWith/…) is left to the ordinary prefix rename (-> Ipe.Log).
+
 The one hard rule: rewrite CODE only, never a string literal or a comment. Sky
 example prose ("Sky.Live Counter", the "Std.Ui showcase" label, a window title)
 must stay byte-identical — both because a syntactic patch may not change program
@@ -75,7 +82,14 @@ def rewrite_code(segment: str, pairs: list[tuple[str, str]]) -> str:
     return "".join(out)
 
 
-def transform(text: str, pairs: list[tuple[str, str]]) -> str:
+def walk_code(text: str, code_fn) -> str:
+    """Rebuild `text`, passing each CODE segment through `code_fn`.
+
+    `code_fn(segment) -> str` sees only code — never a string literal or a
+    comment, which are copied verbatim. This is the single place that knows Sky's
+    lexical spans, so every code-only rewrite (the qualifier prefix rename, the
+    stdlib member move) shares one correct string/comment skipper.
+    """
     out: list[str] = []
     i = 0
     n = len(text)
@@ -84,7 +98,7 @@ def transform(text: str, pairs: list[tuple[str, str]]) -> str:
     def flush_code(end: int) -> None:
         nonlocal code_start
         if end > code_start:
-            out.append(rewrite_code(text[code_start:end], pairs))
+            out.append(code_fn(text[code_start:end]))
         code_start = end
 
     while i < n:
@@ -141,7 +155,7 @@ def transform(text: str, pairs: list[tuple[str, str]]) -> str:
                     k = text.find("}}", j + 2)
                     k = n if k == -1 else k
                     out.append("{{")
-                    out.append(rewrite_code(text[j + 2 : k], pairs))
+                    out.append(code_fn(text[j + 2 : k]))
                     out.append("}}")
                     j = k + 2
                     seg_start = j
@@ -178,6 +192,200 @@ def transform(text: str, pairs: list[tuple[str, str]]) -> str:
 
     flush_code(n)
     return "".join(out)
+
+
+def transform(text: str, pairs: list[tuple[str, str]]) -> str:
+    """Apply the qualifier-prefix rename to every code span (rename-map.tsv)."""
+    return walk_code(text, lambda seg: rewrite_code(seg, pairs))
+
+
+# ── Stdlib member move (Std.Log's println/eprintln -> Ipe.Io) ─────────────────
+# A member move is NOT a qualifier-prefix rename (which rename-map.tsv expresses):
+# it takes named values OUT of one module and puts them in ANOTHER, so the import
+# statement and every call site must change together. `println`/`eprintln` moved
+# from Std.Log to Ipe.Io; Std.Log's remaining members (infoWith/errorWith/…) still
+# map by prefix to Ipe.Log, so a file that uses only those is untouched here and
+# handled by the ordinary Std. -> Ipe. row.
+#
+# Each entry: source module -> (target module path, target import alias, moved
+# member names). Longest-prefix concerns don't apply — a member move keys off the
+# whole module qualifier, not a dotted prefix.
+MEMBER_MOVES: dict[str, tuple[str, str, frozenset[str]]] = {
+    "Std.Log": ("Ipe.Io", "Io", frozenset({"println", "eprintln"})),
+}
+
+
+def _rewrite_calls(text: str, src_alias: str, dst_alias: str, members: frozenset[str]) -> str:
+    """Requalify moved call sites in CODE only: `<src>.m`/bare `m` -> `<dst>.m`.
+
+    `src_alias` is the import alias the moved members were reached through in the
+    source file — the module's own `as` alias (`Log.println`), or "" when they were
+    exposed unqualified (bare `println`). Only the listed members are touched, so a
+    same-alias non-moved reference (`Log.infoWith`) is left for the prefix rename.
+    """
+    def on_code(seg: str) -> str:
+        out: list[str] = []
+        i = 0
+        n = len(seg)
+        while i < n:
+            left_ok = i == 0 or not (seg[i - 1].isalnum() or seg[i - 1] == "_")
+            matched = False
+            if left_ok:
+                for m in members:
+                    tok = f"{src_alias}.{m}" if src_alias else m
+                    end = i + len(tok)
+                    # Right boundary: the token must not be the head of a longer
+                    # identifier (`printlnRaw`) or itself qualify a further member.
+                    right = seg[end] if end < n else ""
+                    if seg.startswith(tok, i) and not (right.isalnum() or right in ("_", ".")):
+                        out.append(f"{dst_alias}.{m}")
+                        i = end
+                        matched = True
+                        break
+            if not matched:
+                out.append(seg[i])
+                i += 1
+        return "".join(out)
+
+    return walk_code(text, on_code)
+
+
+def apply_member_moves(text: str) -> str:
+    """Move stdlib members to their new home: rewrite the import + its call sites.
+
+    For each moved source module actually imported by the file:
+      • `import <Src> exposing (m, …)` where every exposed name moved to one
+        target -> `import <Target> as <Alias>`, and bare `m` -> `<Alias>.m`.
+      • `import <Src> as A` used ONLY with moved members -> `import <Target> as
+        <Alias>`, and `A.m` -> `<Alias>.m`. If the file also uses a NON-moved
+        `A.x`, the import is left untouched (the prefix rename maps <Src> -> its
+        Ipe.* module) and only the moved `A.m` sites are requalified.
+    Runs BEFORE the prefix rename, while the source qualifier is still spelled
+    `Std.*`. Imports live at the start of a line and never inside a string or
+    comment, so the import scan is line-oriented; call-site rewrites go through
+    walk_code so strings/comments stay verbatim.
+    """
+    for src_mod, (dst_mod, dst_alias, members) in MEMBER_MOVES.items():
+        lines = text.split("\n")
+        exposing_hit = False
+        alias_name: str | None = None
+        new_lines: list[str] = []
+        for line in lines:
+            stripped = line.lstrip()
+            if stripped.startswith("import ") and _import_module(stripped) == src_mod:
+                indent = line[: len(line) - len(stripped)]
+                rest = stripped[len("import ") :]
+                exposed = _exposing_names(rest)
+                alias = _import_alias(rest)
+                if exposed is not None and exposed and exposed <= members:
+                    # Pure exposed-move: the whole import becomes the target one.
+                    new_lines.append(f"{indent}import {dst_mod} as {dst_alias}")
+                    exposing_hit = True
+                    continue
+                if alias is not None and exposed is None:
+                    # `import Src as A` — decide by how A is used below.
+                    alias_name = alias
+            new_lines.append(line)
+        text = "\n".join(new_lines)
+
+        if exposing_hit:
+            text = _rewrite_calls(text, "", dst_alias, members)
+
+        if alias_name is not None:
+            uses_moved, uses_nonmoved = _alias_member_usage(text, alias_name, members)
+            if uses_moved and not uses_nonmoved:
+                # The alias is used ONLY for moved members — retarget its import to
+                # the new home and requalify the call sites. An import that uses a
+                # non-moved member (Log.infoWith), or none at all, is left for the
+                # ordinary Std. -> Ipe. prefix rename (-> Ipe.Log).
+                text = _retarget_alias_import(text, src_mod, dst_mod, dst_alias)
+                text = _rewrite_calls(text, alias_name, dst_alias, members)
+    return text
+
+
+def _import_module(stripped_import: str) -> str:
+    """Module path of a `import <path> …` line (stripped of leading space)."""
+    rest = stripped_import[len("import ") :]
+    head = rest.split(None, 1)
+    return head[0] if head else ""
+
+
+def _import_alias(rest: str) -> str | None:
+    """The `A` in `import <path> as A …`, or None."""
+    toks = rest.split()
+    for k in range(len(toks) - 1):
+        if toks[k] == "as":
+            return toks[k + 1]
+    return None
+
+
+def _exposing_names(rest: str) -> frozenset[str] | None:
+    """Names in `import <path> exposing (a, b)`, or None if no `exposing`.
+
+    Returns an empty set for `exposing ()`; an `exposing (..)` wildcard yields a
+    set containing ".." so it never satisfies `<= members` (a wildcard export is
+    never a clean member move).
+    """
+    idx = rest.find("exposing")
+    if idx == -1:
+        return None
+    open_paren = rest.find("(", idx)
+    close_paren = rest.find(")", open_paren)
+    if open_paren == -1 or close_paren == -1:
+        return frozenset()
+    inner = rest[open_paren + 1 : close_paren]
+    return frozenset(tok.strip() for tok in inner.split(",") if tok.strip())
+
+
+def _alias_member_usage(text: str, alias: str, members: frozenset[str]) -> tuple[bool, bool]:
+    """How the file uses `alias.<name>` in CODE: (uses_moved, uses_nonmoved).
+
+    `uses_moved` is True if some `alias.m` names a moved member; `uses_nonmoved`
+    is True if some `alias.x` names anything else. A file that never references the
+    alias yields (False, False) — its import is an ordinary prefix rename.
+    """
+    seen_moved = [False]
+    seen_other = [False]
+
+    def on_code(seg: str) -> str:
+        i = 0
+        n = len(seg)
+        needle = alias + "."
+        while True:
+            j = seg.find(needle, i)
+            if j == -1:
+                break
+            left_ok = j == 0 or not (seg[j - 1].isalnum() or seg[j - 1] == "_")
+            k = j + len(needle)
+            m = k
+            while m < n and (seg[m].isalnum() or seg[m] == "_"):
+                m += 1
+            name = seg[k:m]
+            if left_ok and name:
+                if name in members:
+                    seen_moved[0] = True
+                else:
+                    seen_other[0] = True
+            i = j + len(needle)
+        return seg
+
+    walk_code(text, on_code)
+    return seen_moved[0], seen_other[0]
+
+
+def _retarget_alias_import(text: str, src_mod: str, dst_mod: str, dst_alias: str) -> str:
+    """Rewrite the `import <src_mod> as A` line to `import <dst_mod> as <alias>`."""
+    out_lines = []
+    for line in text.split("\n"):
+        stripped = line.lstrip()
+        if stripped.startswith("import ") and _import_module(stripped) == src_mod \
+                and _import_alias(stripped[len("import ") :]) is not None \
+                and _exposing_names(stripped[len("import ") :]) is None:
+            indent = line[: len(line) - len(stripped)]
+            out_lines.append(f"{indent}import {dst_mod} as {dst_alias}")
+        else:
+            out_lines.append(line)
+    return "\n".join(out_lines)
 
 
 def prefix_bare_imports(text: str, bare: frozenset[str]) -> str:
@@ -232,7 +440,9 @@ def main(argv: list[str]) -> int:
     for path in rest[1:]:
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
-        new = prefix_bare_imports(transform(text, pairs), bare)
+        # Member moves run first (while the source qualifier is still `Std.*`),
+        # then the qualifier-prefix rename, then bare-stdlib prefixing.
+        new = prefix_bare_imports(transform(apply_member_moves(text), pairs), bare)
         if new != text:
             with open(path, "w", encoding="utf-8") as fh:
                 fh.write(new)
