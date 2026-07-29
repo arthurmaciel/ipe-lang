@@ -5,10 +5,10 @@ module Main exposing (main)
 -- `Task.attempt : (Result Error a -> msg) -> Task Error a -> Cmd msg` bridges a
 -- Task into a Cmd from `init`, mapping the settled Result to a Msg. Proves the
 -- combinator lowers to the runtime `cmd_perform`, the emitted crate builds, and
--- the program runs: `Cli.program` renders the initial view once at stdin EOF and
+-- the program runs: `Console.app` renders the initial view once at stdin EOF and
 -- exits 0.
 
-import Ipe.Cli as Cli
+import Ipe.Tea.Console as Console
 import Ipe.Task as Task
 import Ipe.Cmd
 import Ipe.String
@@ -57,7 +57,7 @@ onLine line =
     GotLine line
 
 main =
-    Cli.program
+    Console.app
         { init = init
         , update = update
         , view = view
