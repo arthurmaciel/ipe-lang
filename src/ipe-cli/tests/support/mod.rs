@@ -320,7 +320,7 @@ pub fn build_and_run_emitted(golden_name: &str, emitted_dir: &Path) -> RunOutcom
 /// code.
 ///
 /// Used by goldens that drive an interactive/line-oriented loop (e.g.
-/// `Console.app`) past its first stdin read, which [`build_and_run_emitted`]
+/// `Terminal.appLines`) past its first stdin read, which [`build_and_run_emitted`]
 /// cannot exercise since it runs the binary with stdin already at EOF.
 ///
 /// # Panics

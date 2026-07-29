@@ -164,7 +164,7 @@ fn is_missing_linux_webview_system_libs(err: &str) -> bool {
 /// - constrain: `Webview.app` correctly types the 5-field cfg
 ///   (`init/update/view/subscriptions/window` with nested `{ title, size }`).
 /// - lower: the cfg record literal bypasses IPE-L0107 (same exemption
-///   as `Web.app` and `Tui.app`).
+///   as `Web.app` and `Terminal.appScreen`).
 /// - emit: `emit_webview_call` → `emit_webview_app_inner` (G4 gate:
 ///   `window` is inline record, `size` is inline 2-tuple) → `webview_app(…)`.
 /// - manifest: `webview_cargo_toml` adds `"webview"` to default

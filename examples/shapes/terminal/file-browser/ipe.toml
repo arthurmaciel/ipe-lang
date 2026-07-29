@@ -1,4 +1,4 @@
-name = "tui-counter"
+name = "file-browser"
 version = "0.1.0"
 entry = "src/Main.ipe"
 backend = "rust"

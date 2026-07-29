@@ -62,7 +62,7 @@ report version results =
 Run the example:
 
 ```sh
-ipe run examples/release-preflight
+ipe run examples/shapes/program/release-preflight
 ```
 
 ```text
@@ -126,4 +126,4 @@ and text render, but interactivity needs an app shape. See
 
 ## Example
 
-[`examples/release-preflight/`](../../examples/release-preflight/) — the program above.
+[`examples/shapes/program/release-preflight/`](../../examples/shapes/program/release-preflight/) — the program above.

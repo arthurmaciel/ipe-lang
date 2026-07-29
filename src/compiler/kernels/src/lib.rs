@@ -37,12 +37,10 @@ pub enum KernelClass {
     Ui,
     /// `Ipe.Web` app-entry kernels.
     Web,
-    /// `Ipe.Tui` app-entry kernels.
-    Tui,
+    /// `Ipe.Terminal` app-entry kernels (`appScreen`, `appLines`).
+    Terminal,
     /// `Ipe.WebView` app-entry kernel.
     WebView,
-    /// `Ipe.Console` / `Ipe.Console` app-entry kernel.
-    Console,
     /// Reserved for the FFI kernel tier.
     Ffi,
 }
@@ -788,6 +786,9 @@ pub enum StdlibKernel {
     UiNone,
     UiText,
     UiHtml,
+    /// `Ui.cells : List (List Char) -> Element msg` — a raw terminal cell grid
+    /// embedded as an island inside an `Ipe.Ui` view under `Terminal.appScreen`.
+    UiCells,
     UiEl,
     UiRow,
     UiColumn,
@@ -1021,21 +1022,15 @@ pub enum StdlibKernel {
     HtmlNoAttr,        // `noAttr : Attribute msg`
     // ── Ipe.Web app-entry kernels ───────────────────────────────────────
     WebApp,
-    /// `Web.appHtml` — the raw-`Html` escape entry. Identical cfg to `WebApp`
-    /// except `view : Model -> Html Msg` (no framework `Ui.layout` wrap), for
-    /// apps that author the DOM directly. See ADR 0048 point 4.
-    WebAppHtml,
     WebAppRouted,
     WebRoute,
     WebRenderStatic,
-    // ── Ipe.Tui app-entry kernels ────────────────────────────────────────
-    TuiProgram,
-    TuiApp,
+    // ── Ipe.Terminal app-entry kernels ───────────────────────────────────
+    /// `Terminal.appScreen` — full-screen TEA entry, `view : Model -> Element
+    /// Msg`, driven by `onKey`.
+    TerminalAppScreen,
     // ── Ipe.WebView app-entry kernel ─────────────────────────────────────
     WebViewApp,
-    /// `WebView.appHtml` — the raw-`Html` escape entry, symmetric with
-    /// `WebAppHtml`: `view : Model -> Html Msg`, no `Ui.layout` wrap.
-    WebViewAppHtml,
     // ── event-attribute builders ─────────────────────────────────────────
     UiOnClick,
     UiOnFocus,
@@ -1186,8 +1181,9 @@ pub enum StdlibKernel {
     HtmlAttrTabindex, // Int → HtmlAttr
     HtmlAttrRows,     // Int → HtmlAttr  (<textarea rows="N">)
     // ── Effect stdlib modules ────────────────────────────────────────
-    // Ipe.Console / Ipe.Console — line-oriented TEA app-entry (fully wired).
-    ConsoleApp,
+    // `Terminal.appLines` — line-oriented TEA app-entry, `view : Model ->
+    // String`, driven by `onLine`.
+    TerminalAppLines,
     // Ipe.Auth / Ipe.Auth — authentication helpers (fail-closed: no lower arm
     // yet → IPE-L0108 at lower time; qualified registration removes N0004).
     AuthHashPassword,
@@ -1696,7 +1692,7 @@ impl StdlibKernel {
                 emit,
             }
         }
-        use KernelClass::{Db, Pure, Server, Tea, Tui, Ui, Web, WebView};
+        use KernelClass::{Db, Pure, Server, Tea, Terminal, Ui, Web, WebView};
         match self {
             // ── Log ─────────────────────────────────────────────────────────
             // Qualifier "Log" is installed via `install_builtin_vars` as an
@@ -2408,6 +2404,7 @@ impl StdlibKernel {
             Self::UiNone => d("Ui", "none", 0, Ui, "ui_none_"),
             Self::UiText => d("Ui", "text", 1, Ui, "ui_text_"),
             Self::UiHtml => d("Ui", "html", 1, Ui, "ui_html_"),
+            Self::UiCells => d("Ui", "cells", 1, Ui, "ui_cells_"),
             Self::UiEl => d("Ui", "el", 2, Ui, "ui_el_"),
             Self::UiRow => d("Ui", "row", 2, Ui, "ui_row_"),
             Self::UiColumn => d("Ui", "column", 2, Ui, "ui_column_"),
@@ -2604,16 +2601,13 @@ impl StdlibKernel {
             Self::HtmlNoAttr => d("Attr", "noAttr", 0, Ui, "html_no_attr_"),
             // ── Ipe.Web app-entry kernels ───────────────────────────────
             Self::WebApp => d("Web", "app", 1, Web, "web_app"),
-            Self::WebAppHtml => d("Web", "appHtml", 1, Web, "web_app"),
             Self::WebAppRouted => d("Web", "appRouted", 1, Web, "web_app_routed"),
             Self::WebRoute => d("Web", "route", 2, Web, "web_route"),
             Self::WebRenderStatic => d("Web", "renderStatic", 2, Web, "web_render_static"),
-            // ── Ipe.Tui app-entry kernels ────────────────────────────────
-            Self::TuiProgram => d("Tui", "program", 1, Tui, "tui_app"),
-            Self::TuiApp => d("Tui", "app", 1, Tui, "tui_app_ui"),
+            // ── Ipe.Terminal app-entry kernels ───────────────────────────
+            Self::TerminalAppScreen => d("Terminal", "appScreen", 1, Terminal, "tui_app_ui"),
             // ── Ipe.WebView app-entry kernel ─────────────────────────────
             Self::WebViewApp => d("WebView", "app", 1, WebView, "webview_app"),
-            Self::WebViewAppHtml => d("WebView", "appHtml", 1, WebView, "webview_app"),
             // ── event-attribute builders ─────────────────────────────────
             Self::UiOnClick => d("Ui", "onClick", 1, Ui, "ui_on_click_"),
             Self::UiOnFocus => d("Ui", "onFocus", 1, Ui, "ui_on_focus_"),
@@ -2728,8 +2722,8 @@ impl StdlibKernel {
             Self::HtmlAttrTabindex => d("Attr", "tabindex", 1, Ui, "html_attr_tabindex_"),
             Self::HtmlAttrRows => d("Attr", "rows", 1, Ui, "html_attr_rows_"),
             // ── Effect stdlib modules ────────────────────────────────────
-            // Ipe.Console / Ipe.Console app-entry.
-            Self::ConsoleApp => d("Console", "app", 1, KernelClass::Console, "console_app"),
+            // Ipe.Terminal line-oriented app-entry.
+            Self::TerminalAppLines => d("Terminal", "appLines", 1, Terminal, "console_app"),
             // Ipe.Auth / Ipe.Auth (fail-closed: qual-registered only, no lower arm).
             Self::AuthHashPassword => d("Auth", "hashPassword", 1, Pure, "auth_hash_password"),
             Self::AuthHashPasswordCost => d(
@@ -3686,6 +3680,7 @@ impl StdlibKernel {
         Self::UiNone,
         Self::UiText,
         Self::UiHtml,
+        Self::UiCells,
         Self::UiEl,
         Self::UiRow,
         Self::UiColumn,
@@ -3875,16 +3870,13 @@ impl StdlibKernel {
         Self::HtmlStyleNode,
         // Web
         Self::WebApp,
-        Self::WebAppHtml,
         Self::WebAppRouted,
         Self::WebRoute,
         Self::WebRenderStatic,
-        // Tui
-        Self::TuiProgram,
-        Self::TuiApp,
+        // Terminal
+        Self::TerminalAppScreen,
         // WebView
         Self::WebViewApp,
-        Self::WebViewAppHtml,
         // event-attribute builders
         Self::UiOnClick,
         Self::UiOnFocus,
@@ -3974,7 +3966,7 @@ impl StdlibKernel {
         Self::HtmlAttrTabindex,
         Self::HtmlAttrRows,
         // ── Effect stdlib modules ────────────────────────────────────────
-        Self::ConsoleApp,
+        Self::TerminalAppLines,
         Self::AuthHashPassword,
         Self::AuthHashPasswordCost,
         Self::AuthVerifyPassword,
@@ -4870,6 +4862,7 @@ impl StdlibKernel {
             | Self::UiNone
             | Self::UiText
             | Self::UiHtml
+            | Self::UiCells
             | Self::UiEl
             | Self::UiRow
             | Self::UiColumn
@@ -5044,14 +5037,11 @@ impl StdlibKernel {
             | Self::HtmlBoolAttribute
             | Self::HtmlNoAttr
             | Self::WebApp
-            | Self::WebAppHtml
             | Self::WebAppRouted
             | Self::WebRoute
             | Self::WebRenderStatic
-            | Self::TuiProgram
-            | Self::TuiApp
+            | Self::TerminalAppScreen
             | Self::WebViewApp
-            | Self::WebViewAppHtml
             | Self::UiOnClick
             | Self::UiOnFocus
             | Self::UiOnBlur
@@ -5138,7 +5128,7 @@ impl StdlibKernel {
             | Self::FontHoverSize
             | Self::HtmlAttrTabindex
             | Self::HtmlAttrRows
-            | Self::ConsoleApp
+            | Self::TerminalAppLines
             | Self::AuthHashPassword
             | Self::AuthHashPasswordCost
             | Self::AuthVerifyPassword
@@ -5475,6 +5465,7 @@ impl StdlibKernel {
                 | Self::UiNone
                 | Self::UiText
                 | Self::UiHtml
+                | Self::UiCells
                 | Self::UiEl
                 | Self::UiRow
                 | Self::UiColumn
@@ -6137,7 +6128,6 @@ impl StdlibKernel {
         matches!(
             self,
             Self::WebApp
-                | Self::WebAppHtml
                 | Self::WebAppRouted
                 | Self::WebRoute
                 | Self::WebRenderStatic
@@ -6152,22 +6142,22 @@ impl StdlibKernel {
         )
     }
 
-    /// `true` when this variant belongs to the `Ipe.Tui` app-entry subsystem.
+    /// `true` when this variant is the `Ipe.Terminal` full-screen app-entry.
     #[must_use]
     pub const fn is_tui(self) -> bool {
-        matches!(self, Self::TuiProgram | Self::TuiApp)
+        matches!(self, Self::TerminalAppScreen)
     }
 
     /// `true` when this variant is the `Ipe.WebView` app-entry kernel.
     #[must_use]
     pub const fn is_webview(self) -> bool {
-        matches!(self, Self::WebViewApp | Self::WebViewAppHtml)
+        matches!(self, Self::WebViewApp)
     }
 
-    /// `true` when this variant is the `Ipe.Console` / `Ipe.Console` app-entry kernel.
+    /// `true` when this variant is the `Ipe.Terminal` line-oriented app-entry.
     #[must_use]
     pub const fn is_console(self) -> bool {
-        matches!(self, Self::ConsoleApp)
+        matches!(self, Self::TerminalAppLines)
     }
 
     /// `true` when this variant belongs to the `Ipe.CssSafety` leaf
@@ -6280,7 +6270,7 @@ impl StdlibKernel {
             // the same M4 Cmd/Sub browser-effects bridge the TEA-side pub/sub uses.
             KernelClass::Web => matches!(
                 self,
-                Self::WebApp | Self::WebAppHtml | Self::PubSubPublish | Self::PubSubPublishNoEcho
+                Self::WebApp | Self::PubSubPublish | Self::PubSubPublishNoEcho
             ),
             // TEA wiring the wasm scheduler drives today. `Cmd.perform` runs
             // on the browser microtask queue; `Sub.every`/`Time.every` run on
@@ -6412,12 +6402,11 @@ impl StdlibKernel {
                 matches!(self, Self::EnvPublic)
             }
             // Server-only surfaces: no browser denotation, ever (Db/Server)
-            // or until a dedicated backend exists (Tui/Webview/Console/Ffi).
+            // or until a dedicated backend exists (Terminal/WebView/Ffi).
             KernelClass::Db
             | KernelClass::Server
-            | KernelClass::Tui
+            | KernelClass::Terminal
             | KernelClass::WebView
-            | KernelClass::Console
             | KernelClass::Ffi => false,
         }
     }

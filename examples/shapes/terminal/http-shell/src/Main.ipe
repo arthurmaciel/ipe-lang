@@ -1,0 +1,164 @@
+module Main exposing (main)
+
+-- An HTTP query shell over `Terminal.appLines`: a line-driven TEA loop that
+-- reads a command from standard input, performs a real `Http.get`, and prints
+-- the response status and body.
+--
+-- Each line is a command:
+--
+--     get <url>    fetch <url> and show its status + body
+--     quit         exit (end-of-input also exits)
+--
+-- `onLine` parses one line into a `Command` at the edge, so `update` only ever
+-- folds well-formed input. A `get` command performs the request as a `Task` and
+-- routes its settled `Result` back through `Fetched`, keeping the fetch off the
+-- input thread. `view` prints the last outcome, then a prompt.
+
+import Ipe.String as String
+import Ipe.System as System
+import Ipe.Tea.Terminal as Terminal
+import Ipe.Http as Http
+import Ipe.Task as Task
+import Ipe.Cmd as Cmd
+import Ipe.Sub as Sub
+
+
+-- A parsed input line. Parsing happens once, in `onLine`, so `update` never
+-- re-inspects raw text.
+type Command
+    = Get String
+    | Quit
+    | Blank
+    | Unknown String
+
+
+-- What a completed fetch reports back: just the status line and body, projected
+-- from the full `Http.HttpResponse` at the Task boundary (see `summarise`).
+type alias Fetch =
+    { status : Int, body : String }
+
+
+type Msg
+    = Entered Command
+    | Fetched (Result Error Fetch)
+
+
+type alias Model =
+    { outcome : String
+    , requests : Int
+    }
+
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { outcome = "ready — type: get <url>", requests = 0 }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Entered command ->
+            case command of
+                Get url ->
+                    ( { model
+                        | outcome = "fetching " ++ url ++ " ..."
+                        , requests = model.requests + 1
+                      }
+                    , Task.attempt Fetched (Task.map summarise (Http.get url))
+                    )
+
+                Quit ->
+                    ( model, Cmd.perform (System.exit 0) (\_ -> Entered Blank) )
+
+                Blank ->
+                    ( model, Cmd.none )
+
+                Unknown raw ->
+                    ( { model
+                        | outcome = "?  unknown command: " ++ raw ++ "  (try: get <url>, quit)"
+                      }
+                    , Cmd.none
+                    )
+
+        Fetched result ->
+            case result of
+                Ok fetch ->
+                    ( { model
+                        | outcome =
+                            "HTTP "
+                                ++ String.fromInt fetch.status
+                                ++ "\n"
+                                ++ fetch.body
+                      }
+                    , Cmd.none
+                    )
+
+                Err _ ->
+                    ( { model | outcome = "request failed (network error or bad URL)" }
+                    , Cmd.none
+                    )
+
+
+-- Project the full HTTP response down to the status + body the shell shows.
+-- The response record carries `status` / `body` / `headers`; we keep the first
+-- two and let the field access pin the rest.
+summarise : { status : Int, body : String, headers : Dict String String } -> Fetch
+summarise response =
+    { status = response.status, body = response.body }
+
+
+view : Model -> String
+view model =
+    "── http-shell ── ("
+        ++ String.fromInt model.requests
+        ++ " request(s))\n"
+        ++ model.outcome
+        ++ "\n> "
+
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+-- Parse one input line into a `Command`. The verb is the first whitespace-
+-- separated word; `get` takes the rest of the line as the URL.
+onLine : String -> Msg
+onLine line =
+    let
+        trimmed =
+            String.trim line
+    in
+    Entered (parse trimmed (String.words trimmed))
+
+
+parse : String -> List String -> Command
+parse line words =
+    case words of
+        [] ->
+            Blank
+
+        verb :: rest ->
+            if verb == "get" then
+                case rest of
+                    url :: [] ->
+                        Get url
+
+                    _ ->
+                        Unknown line
+
+            else if verb == "quit" then
+                Quit
+
+            else
+                Unknown line
+
+
+main =
+    Terminal.appLines
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , onLine = onLine
+        }

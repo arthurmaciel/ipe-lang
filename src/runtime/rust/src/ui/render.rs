@@ -484,6 +484,17 @@ fn render_element_depth<M: Clone>(elem: Element<M>, depth: usize) -> Html<M> {
         Element::Empty => Html::HText(String::new()),
         Element::Text(s) => Html::HText(s),
         Element::Raw(html) => html,
+        // `Ui.cells` is terminal-only and is rejected before reaching the Web
+        // backend (see the shape admissibility gate). This total fallback keeps
+        // the match exhaustive: degrade the grid to its text rows.
+        Element::Cells(grid) => {
+            let text = grid
+                .into_iter()
+                .map(|row| row.into_iter().collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n");
+            Html::HText(text)
+        }
         Element::Node(desc, attrs, kids) => {
             render_node_as(tag_for_description(&desc), &attrs, kids, depth)
         }

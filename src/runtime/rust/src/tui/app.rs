@@ -67,11 +67,11 @@ fn tui_teardown() {
 struct TuiGuard;
 
 impl TuiGuard {
-    /// String-view driver (`tui_app` / `Tui.program`) — no mouse reporting.
+    /// String-view driver (`tui_app`, the raw-cell path) — no mouse reporting.
     fn enter() -> Result<Self, String> {
         Self::enter_with(false)
     }
-    /// Element-view driver (`tui_app_ui` / `Tui.app`) — enables mouse reporting
+    /// Element-view driver (`tui_app_ui` / `Terminal.appScreen`) — enables mouse reporting
     /// for focus-click + wheel scroll.
     fn enter_mouse() -> Result<Self, String> {
         Self::enter_with(true)
@@ -310,8 +310,9 @@ where
     })
 }
 
-/// `Tui.program` — terminal TEA driver for a `view : Model -> String` (the raw
-/// frame is painted verbatim). `on_key` receives the decoded key's
+/// `tui_app` — terminal TEA driver for a `view : Model -> String` (the raw
+/// frame is painted verbatim), the vehicle for the `Ui.cells` raw-cell escape.
+/// `on_key` receives the decoded key's
 /// `(kind, value)` and yields a `Msg` (the codegen wraps the user's
 /// `onKey : KeyEvent -> Msg` so the `{ kind, value }` record is built there).
 #[allow(clippy::type_complexity)]
@@ -375,7 +376,7 @@ where
     fs2
 }
 
-/// `Tui.app` — terminal TEA driver for a `view : Model -> Element msg`. The
+/// `Terminal.appScreen` — terminal TEA driver for a `view : Model -> Element msg`. The
 /// `Ipe.Ui` Element is the SAME structured tree Ipe.Web renders to HTML; here it
 /// is laid out to ANSI cells by walking the typed attributes (`tui::layout`), and
 /// `Ipe.Ui.Input.*` widgets become focusables: Tab / Shift-Tab (and Up/Down on a

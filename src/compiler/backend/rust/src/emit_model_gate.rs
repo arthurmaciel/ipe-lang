@@ -115,7 +115,7 @@ pub fn check_admissible_msg(ctx: &EmitCtx, msg_ty: &IrType, app: AppShape) -> DR
     }
 
     // Inadmissible: traverse with Tui shape (uses derivable, correct for Msg).
-    let (field, leaf) = blame(ctx, msg_ty, AppShape::Tui);
+    let (field, leaf) = blame(ctx, msg_ty, AppShape::TerminalScreen);
     Err(Diagnostic::Lower {
         span: Span::DUMMY,
         msg: LowerError::InadmissibleAppMsg {
@@ -131,7 +131,7 @@ pub fn check_admissible_msg(ctx: &EmitCtx, msg_ty: &IrType, app: AppShape) -> DR
 /// * [`AppShape::Web`] → the Model must satisfy [`ir_type_is_serde`] (which
 ///   structurally implies `Clone + PartialEq`, so the full `web_app` bound is
 ///   covered by this one predicate).
-/// * [`AppShape::Tui`] / [`AppShape::WebView`] → the Model must satisfy
+/// * [`AppShape::TerminalScreen`] / [`AppShape::WebView`] → the Model must satisfy
 ///   [`ir_type_is_derivable`] (the backend derives `Clone` iff a type is
 ///   derivable, and Tui/Webview need only `Clone`).
 ///
@@ -143,7 +143,7 @@ pub fn check_admissible_msg(ctx: &EmitCtx, msg_ty: &IrType, app: AppShape) -> DR
 pub fn check_admissible_model(ctx: &EmitCtx, model_ty: &IrType, app: AppShape) -> DResult<()> {
     let ok = match app {
         AppShape::Web => ir_type_is_serde(model_ty, &|home, name| ctx.enum_is_serde(home, name)),
-        AppShape::Tui | AppShape::WebView | AppShape::Cli => {
+        AppShape::TerminalScreen | AppShape::WebView | AppShape::TerminalLines => {
             ir_type_is_derivable(model_ty, &|home, name| ctx.enum_is_derivable(home, name))
         }
     };
@@ -167,7 +167,7 @@ pub fn check_admissible_model(ctx: &EmitCtx, model_ty: &IrType, app: AppShape) -
 fn admissible(ctx: &EmitCtx, ty: &IrType, app: AppShape) -> bool {
     match app {
         AppShape::Web => ir_type_is_serde(ty, &|home, name| ctx.enum_is_serde(home, name)),
-        AppShape::Tui | AppShape::WebView | AppShape::Cli => {
+        AppShape::TerminalScreen | AppShape::WebView | AppShape::TerminalLines => {
             ir_type_is_derivable(ty, &|home, name| ctx.enum_is_derivable(home, name))
         }
     }

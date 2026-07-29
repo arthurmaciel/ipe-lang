@@ -98,20 +98,19 @@ cargo build --release<img width="512" height="512" alt="android-chrome-512x512" 
 
 ## Code shapes
 
-One language, five ways to ship. Pick the entry point that matches your app.
+One language, four ways to ship. Pick the entry point that matches your app.
 
 | Shape | Entry point | Use it for | TEA |
 |---|---|---|---|
 | [`Ipe.Tea.Web`](docs/shapes/web.md) | `Web.app` | Web apps — server-rendered HTML, real-time SSE patches, sessions | ✓ |
 | [`Ipe.Tea.WebView`](docs/shapes/webview.md) | `WebView.app` | Native desktop apps | ✓ |
-| [`Ipe.Tea.Tui`](docs/shapes/tui.md) | `Tui.app` | Terminal UIs | ✓ |
-| [`Ipe.Tea.Console`](docs/shapes/console.md) | `Console.app` | Line-oriented interactive tools | ✓ |
+| [`Ipe.Tea.Terminal`](docs/shapes/terminal.md) | `Terminal.appScreen` / `Terminal.appLines` | Terminal UIs (`appScreen`) and line-oriented REPLs (`appLines`) | ✓ |
 | [`Program`](docs/shapes/program.md) | plain `main` | Scripts, one-shot tools, cron jobs, HTTP servers | |
 
-The four ✓ shapes follow [The Elm Architecture](https://guide.elm-lang.org/architecture/)
-(`init` / `update` / `view` / `subscriptions`) — and Web, WebView, and TUI share
-the **same `Ipe.Ui` view code**, so one `view : Model -> Element Msg` renders on
-web, desktop, and terminal.
+The three ✓ shapes follow [The Elm Architecture](https://guide.elm-lang.org/architecture/)
+(`init` / `update` / `view` / `subscriptions`) — and Web, WebView, and
+`Terminal.appScreen` share the **same `Ipe.Ui` view code**, so one
+`view : Model -> Element Msg` renders on web, desktop, and terminal.
 See [`docs/shapes/`](docs/shapes/README.md) for a guide to each shape, and
 [`examples/`](examples/) for runnable programs.
 

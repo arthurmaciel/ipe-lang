@@ -3,7 +3,7 @@
 //! Cmd/Sub are generic over the message type M (NOT `any`): the intermediate
 //! value `a` in `Cmd.perform` is erased inside a boxed M-producing future, but M
 //! stays concrete. Step 1 (this file) ships the types, the simple kernels, and a
-//! blocking Console.app loop (stdin -> onLine -> update -> view). Sub.every
+//! blocking Terminal.appLines loop (stdin -> onLine -> update -> view). Sub.every
 //! tickers + async Cmd.perform delivery land in steps 2-3 (a subManager + an
 //! mpsc msg channel + tokio::select over stdin and the channel).
 
@@ -462,9 +462,9 @@ pub(crate) fn cli_run_cmd_tracked<M: Send + 'static>(
     }
 }
 
-// ─── Ipe.Console — line-oriented TEA loop ──────────────────────────────────────
+// ─── Ipe.Terminal — line-oriented TEA loop ─────────────────────────────────────
 
-/// Console.app { init, update, view, subscriptions, onLine } : Task Error ().
+/// Terminal.appLines { init, update, view, subscriptions, onLine } : Task Error ().
 ///
 /// init -> fire cmd -> subs -> view; then fold each event (stdin line via
 /// onLine, ticker/Cmd.perform Msg) through update -> re-fire cmd -> re-subs ->

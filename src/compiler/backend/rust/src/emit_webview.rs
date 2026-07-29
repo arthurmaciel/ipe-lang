@@ -33,11 +33,11 @@ use ipe_ir::{Callee, Expr, KernelFn};
 use crate::EmitCtx;
 use crate::emit_expr::{callee_name, emit_expr_at};
 use crate::emit_types::GenericScope;
-use crate::emit_web::{ViewWrap, wrap_view};
+use crate::emit_web::wrap_view;
 
-/// Dispatch a `Ipe.WebView` / `Ipe.WebView` kernel call.
+/// Dispatch a `Ipe.WebView` kernel call.
 ///
-/// Returns `Some(emitted)` for `WebviewApp`; `None` for any other variant
+/// Returns `Some(emitted)` for `WebViewApp`; `None` for any other variant
 /// (defensive — the caller already guards on `k.is_webview()`).
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
@@ -57,8 +57,8 @@ pub fn emit_webview_call(
         // ── Webview.app { init, update, view, subscriptions, window } ──────
         //
         // view : Model -> Element Msg — the framework applies `Ui.layout`
-        //   internally (`ViewWrap::Layout`), unifying the graphical shapes on
-        //   `Element`.
+        //   internally, unifying the graphical shapes on `Element`. Raw HTML is
+        //   reached through the `Ui.html` node inside this `Element` view.
         // window : { title : String, size : (Int, Int) }
         // Runtime entry: `ipe_runtime::webview::webview_app(init, update, view, subs, window)`
         KernelFn::WebViewApp => {
@@ -79,32 +79,10 @@ pub fn emit_webview_call(
                         .into(),
                 });
             };
-            emit_webview_app_inner(ctx, fields, indent, child, generics, ViewWrap::Layout)
+            emit_webview_app_inner(ctx, fields, indent, child, generics)
         }
 
-        // ── Webview.appHtml — the raw-`Html` escape entry ─────────────────
-        //
-        // Symmetric with `Web.appHtml`: `view : Model -> Html Msg`, passed
-        // straight through with no `Ui.layout` wrap (`ViewWrap::RawHtml`).
-        KernelFn::WebViewAppHtml => {
-            let [cfg_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_webview_call::WebviewAppHtml",
-                    detail: format!("Webview.appHtml requires 1 argument, got {}", args.len()),
-                });
-            };
-            let Expr::Record(fields) = cfg_e else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_webview_call::WebviewAppHtml",
-                    detail: "Webview.appHtml cfg must be an inline record literal; \
-                             a non-literal cfg is rejected at lower with IPE-L0119"
-                        .into(),
-                });
-            };
-            emit_webview_app_inner(ctx, fields, indent, child, generics, ViewWrap::RawHtml)
-        }
-
-        // Any non-Webview kernel variant: let the standard path handle it.
+        // Any non-WebView kernel variant: let the standard path handle it.
         _ => Ok(None),
     }
 }
@@ -136,7 +114,6 @@ fn emit_webview_app_inner(
     indent: usize,
     child: u16,
     generics: GenericScope,
-    view_wrap: ViewWrap,
 ) -> DResult<Option<String>> {
     // All five fields are required — fail-closed on any miss (compiler bug, not
     // user error: the constrain scheme enforces the 5-field shape upstream).
@@ -209,9 +186,9 @@ fn emit_webview_app_inner(
     let update_s = emit_webview_fn(ctx, update_e, indent, child, generics)?;
     let view_raw_s = emit_webview_fn(ctx, view_e, indent, child, generics)?;
     // `WebView.app`'s `view : Model -> Element Msg` is wrapped with `Ui.layout`
-    // (framework-applied); `WebView.appHtml`'s `view : Model -> Html Msg` passes
-    // through. Same unification point as `Web.app` (see `emit_web::wrap_view`).
-    let view_s = wrap_view(view_wrap, &view_raw_s);
+    // (framework-applied). Same unification point as `Web.app` (see
+    // `emit_web::wrap_view`).
+    let view_s = wrap_view(&view_raw_s);
     let subs_s = emit_webview_fn(ctx, subs_e, indent, child, generics)?;
     // `title` may be any String-typed expression.
     let title_s = emit_expr_at(ctx, title_e, indent, child, generics)?;

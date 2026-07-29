@@ -2714,11 +2714,11 @@ fn emit_arc_callback_field(
 /// `HtmlEscapeText`, `HtmlEscapeAttr`, `HtmlAttrToString`) emit calls to
 /// `ipe_runtime::ui::render::*` and `ipe_runtime::html::*` here. The app-entry
 /// kernels (`WebApp`, `WebAppRouted`, `WebRoute`, `WebRenderStatic`,
-/// `TuiProgram`, `TuiApp`, `WebviewApp`) delegate to their respective
-/// `emit_web` / `emit_tui` emitters.
+/// `TerminalAppScreen`, `TerminalAppLines`, `WebViewApp`) delegate to their
+/// respective `emit_web` / `emit_tui` / `emit_console` / `emit_webview` emitters.
 ///
-/// Returns `None` for any kernel that is not a Ui / Live / Tui / Webview
-/// variant, letting the standard call path handle it.
+/// Returns `None` for any kernel that is not a `Ui` / `Web` / `Terminal` /
+/// `WebView` variant, letting the standard call path handle it.
 #[allow(clippy::too_many_lines)] // declarative UI kernel dispatch — must list every variant explicitly
 #[allow(clippy::many_single_char_names)] // r/g/b/a/k are conventional names for colour channels and kernel var
 #[inline(never)]
@@ -2926,6 +2926,35 @@ fn emit_ui_call(
             };
             let h = emit_expr_at(ctx, h_e, indent, child, generics)?;
             Ok(Some(format!("ipe_runtime::ui::helpers::ui_html_({h})")))
+        }
+
+        // `Ui.cells : List (List Char) -> Element msg` — raw terminal cell grid,
+        // painted as an island inside an `Ipe.Ui` view under `Terminal.appScreen`.
+        KernelFn::UiCells => {
+            // seal (SECURITY, fail-closed): `Ui.cells` paints raw terminal cells
+            // and has no browser denotation. In a Web/WebView build its runtime
+            // helper degrades to plain text, so it would ipe-succeed and silently
+            // render wrong. Reject it here — the one point it is emitted — with a
+            // shape-keyed IPE-L0132, converting a wrong-render into an ipe error.
+            if ctx.uses_web || ctx.uses_webview {
+                let app = if ctx.uses_webview {
+                    ipe_diagnostics::AppShape::WebView
+                } else {
+                    ipe_diagnostics::AppShape::Web
+                };
+                return Err(Diagnostic::Lower {
+                    span: Span::DUMMY,
+                    msg: LowerError::UiCellsInWebShape(app),
+                });
+            }
+            let [grid_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "ipe_backend_rust::emit_ui_call::UiCells",
+                    detail: format!("Ui.cells requires 1 argument, got {}", args.len()),
+                });
+            };
+            let grid = emit_expr_at(ctx, grid_e, indent, child, generics)?;
+            Ok(Some(format!("ipe_runtime::ui::helpers::ui_cells_({grid})")))
         }
 
         // `Ui.el : List (Attribute msg) -> Element msg -> Element msg`
@@ -5659,7 +5688,6 @@ fn emit_ui_call(
         // A `None` here is an internal error (the `is_web()` guard above already
         // filtered to Web variants), so promote it to a `CompilerBug`.
         KernelFn::WebApp
-        | KernelFn::WebAppHtml
         | KernelFn::WebAppRouted
         | KernelFn::WebRoute
         | KernelFn::WebRenderStatic => {
@@ -5671,16 +5699,18 @@ fn emit_ui_call(
             Ok(Some(s))
         }
 
-        // ── Tui app-entry kernels ────────────────────────────────────────────
+        // ── Terminal full-screen app-entry ───────────────────────────────────
         // Delegate to `emit_tui::emit_tui_call`; it returns `Some(s)` for the
-        // two Tui variants and `None` for anything else.  A `None` here is an
+        // `appScreen` variant and `None` for anything else. A `None` here is an
         // internal error (the `k.is_tui()` guard already filtered), so promote
         // it to a `CompilerBug`.
-        KernelFn::TuiProgram | KernelFn::TuiApp => {
+        KernelFn::TerminalAppScreen => {
             let s = crate::emit_tui::emit_tui_call(ctx, callee, args, indent, child, generics)?
                 .ok_or_else(|| Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call",
-                    detail: format!("emit_tui returned None for Tui kernel {k:?} — missing arm"),
+                    detail: format!(
+                        "emit_tui returned None for Terminal kernel {k:?} — missing arm"
+                    ),
                 })?;
             Ok(Some(s))
         }
@@ -5690,7 +5720,7 @@ fn emit_ui_call(
         // the WebviewApp variant and `None` for anything else. A `None` here is an
         // internal error (the `k.is_webview()` guard above already filtered), so
         // promote it to a `CompilerBug`.
-        KernelFn::WebViewApp | KernelFn::WebViewAppHtml => {
+        KernelFn::WebViewApp => {
             let s =
                 crate::emit_webview::emit_webview_call(ctx, callee, args, indent, child, generics)?
                     .ok_or_else(|| Diagnostic::CompilerBug {
@@ -5702,18 +5732,18 @@ fn emit_ui_call(
             Ok(Some(s))
         }
 
-        // ── Cli app-entry kernel ─────────────────────────────────────────────
+        // ── Terminal line-oriented app-entry ─────────────────────────────────
         // Delegate to `emit_console::emit_console_call`; it returns `Some(s)` for
-        // the ConsoleApp variant and `None` for anything else. A `None` here is an
-        // internal error (the `k.is_console()` guard above already filtered), so
-        // promote it to a `CompilerBug`.
-        KernelFn::ConsoleApp => {
+        // the `appLines` variant and `None` for anything else. A `None` here is
+        // an internal error (the `k.is_console()` guard above already filtered),
+        // so promote it to a `CompilerBug`.
+        KernelFn::TerminalAppLines => {
             let s =
                 crate::emit_console::emit_console_call(ctx, callee, args, indent, child, generics)?
                     .ok_or_else(|| Diagnostic::CompilerBug {
                         where_: "ipe_backend_rust::emit_ui_call",
                         detail: format!(
-                            "emit_console returned None for Cli kernel {k:?} — missing arm"
+                            "emit_console returned None for Terminal kernel {k:?} — missing arm"
                         ),
                     })?;
             Ok(Some(s))
@@ -8625,10 +8655,11 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     // Elide the outer `task_run(...)` wrapper: use the inner task expression as
     // the body and convert the return type from `Result(Error, A)` to `Task(A)`.
     //
-    // This is not always a FLAT `Call(TaskRun, …)` body — the Ipe.Tui / Ipe.Web
-    // `argv`-dispatch idiom branches on `System.args` before picking which app to
-    // run, e.g. `main = case List.head argsList of Just "live" -> Web.app cfg
-    // |> Task.run; _ -> Tui.app cfg |> Task.run`. Every arm still tail-calls
+    // This is not always a FLAT `Call(TaskRun, …)` body — the Ipe.Terminal /
+    // Ipe.Web `argv`-dispatch idiom branches on `System.args` before picking which
+    // app to run, e.g. `main = case List.head argsList of Just "live" -> Web.app
+    // cfg |> Task.run; _ -> Terminal.appScreen cfg |> Task.run`. Every arm still
+    // tail-calls
     // `Task.run`, so the SAME elision must apply — otherwise `ipe_main` keeps
     // its `IpeResult<E, A>` return type and `block_on(ipe_main())` mismatches
     // exactly as the flat case would (a real SEAL violation found on

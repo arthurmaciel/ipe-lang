@@ -1,14 +1,10 @@
-//! Emission for `Ipe.Tui` / `Ipe.Tui` app-entry kernels.
+//! Emission for the `Ipe.Terminal` full-screen app-entry.
 //!
-//! Wires the two Tui kernels:
-//!
-//! * [`KernelFn::TuiApp`] — `Tui.app cfg` → `ipe_runtime::tui::tui_app_ui(…)`.
-//!   View returns `Element<Msg>` (the Ipe.Ui typed element tree, rendered to ANSI
-//!   cells by the runtime).  5-field cfg (init / update / view / subscriptions /
-//!   onKey) with an open row tail for optional fields.
-//! * [`KernelFn::TuiProgram`] — `Tui.program cfg` → `ipe_runtime::tui::tui_app(…)`.
-//!   View returns `String` (the raw ANSI frame, painted verbatim).  Same 5-field
-//!   cfg shape.
+//! * [`KernelFn::TerminalAppScreen`] — `Terminal.appScreen cfg` →
+//!   `ipe_runtime::tui::tui_app_ui(…)`. View returns `Element<Msg>` (the Ipe.Ui
+//!   typed element tree, rendered to ANSI cells by the runtime). 5-field cfg
+//!   (init / update / view / subscriptions / onKey) with an open row tail for
+//!   optional fields.
 //!
 //! # `onKey` dispatch bridge
 //!
@@ -61,9 +57,9 @@ use crate::EmitCtx;
 use crate::emit_expr::{callee_name, emit_expr_at};
 use crate::emit_types::GenericScope;
 
-/// Dispatch a `Ipe.Tui` / `Ipe.Tui` kernel call.
+/// Dispatch an `Ipe.Terminal` full-screen kernel call.
 ///
-/// Returns `Some(emitted)` for `TuiApp` and `TuiProgram`; `None` for any other
+/// Returns `Some(emitted)` for `TerminalAppScreen`; `None` for any other
 /// variant (defensive — the caller already guards on `k.is_tui()`).
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
@@ -80,15 +76,15 @@ pub fn emit_tui_call(
     };
 
     match k {
-        // ── Tui.app { init, update, view, subscriptions, onKey } ───────────
+        // ── Terminal.appScreen { init, update, view, subscriptions, onKey } ─
         //
         // view : Model -> Element Msg
         // Runtime entry: `ipe_runtime::tui::tui_app_ui(init, update, view, subs, on_key)`
-        KernelFn::TuiApp => {
+        KernelFn::TerminalAppScreen => {
             let [cfg_e] = args else {
                 return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_tui_call::TuiApp",
-                    detail: format!("Tui.app requires 1 argument, got {}", args.len()),
+                    where_: "ipe_backend_rust::emit_tui_call::TerminalAppScreen",
+                    detail: format!("Terminal.appScreen requires 1 argument, got {}", args.len()),
                 });
             };
             // Unreachable for well-typed source: a non-literal cfg is rejected
@@ -96,50 +92,23 @@ pub fn emit_tui_call(
             // defensive invariant, mirroring the `WebAppRouted` precedent.
             let Expr::Record(fields) = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_tui_call::TuiApp",
-                    detail: "Tui.app cfg must be an inline record literal; \
+                    where_: "ipe_backend_rust::emit_tui_call::TerminalAppScreen",
+                    detail: "Terminal.appScreen cfg must be an inline record literal; \
                              a non-literal cfg is rejected at lower with IPE-L0119"
                         .into(),
                 });
             };
-            emit_tui_inner(ctx, fields, "tui_app_ui", indent, child, generics)
+            emit_tui_inner(ctx, fields, indent, child, generics)
         }
 
-        // ── Tui.program { init, update, view, subscriptions, onKey } ───────
-        //
-        // view : Model -> String   (raw ANSI frame, painted verbatim)
-        // Runtime entry: `ipe_runtime::tui::tui_app(init, update, view, subs, on_key)`
-        KernelFn::TuiProgram => {
-            let [cfg_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_tui_call::TuiProgram",
-                    detail: format!("Tui.program requires 1 argument, got {}", args.len()),
-                });
-            };
-            // Unreachable for well-typed source: a non-literal cfg is rejected
-            // at lower with IPE-L0119 (Feature::LetBoundAppCfg); this guard is a
-            // defensive invariant, mirroring the `WebAppRouted` precedent.
-            let Expr::Record(fields) = cfg_e else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_tui_call::TuiProgram",
-                    detail: "Tui.program cfg must be an inline record literal; \
-                             a non-literal cfg is rejected at lower with IPE-L0119"
-                        .into(),
-                });
-            };
-            emit_tui_inner(ctx, fields, "tui_app", indent, child, generics)
-        }
-
-        // Any non-Tui kernel variant: let the standard path handle it.
+        // Any non-Terminal kernel variant: let the standard path handle it.
         _ => Ok(None),
     }
 }
 
 // ── Internal ──────────────────────────────────────────────────────────────────
 
-/// Emit `ipe_runtime::tui::<entry>(init, update, view, subs, on_key)`.
-///
-/// `entry` is either `"tui_app_ui"` (Element view) or `"tui_app"` (String view).
+/// Emit `ipe_runtime::tui::tui_app_ui(init, update, view, subs, on_key)`.
 ///
 /// # Function-field emission
 ///
@@ -150,7 +119,6 @@ pub fn emit_tui_call(
 fn emit_tui_inner(
     ctx: &EmitCtx,
     fields: &[(ipe_intern::Symbol, Expr)],
-    entry: &str,
     indent: usize,
     child: u16,
     generics: GenericScope,
@@ -172,14 +140,18 @@ fn emit_tui_inner(
         crate::emit_model_gate::check_admissible_model(
             ctx,
             model_ty,
-            ipe_diagnostics::AppShape::Tui,
+            ipe_diagnostics::AppShape::TerminalScreen,
         )?;
     }
 
     // seal: gate the Msg type against `tui_app`'s Clone+Send bound.
     // Same derivable predicate as Live — Msg is never persisted.
     if let Some(msg_ty) = crate::emit_model_gate::msg_ty_of_update(update_e) {
-        crate::emit_model_gate::check_admissible_msg(ctx, msg_ty, ipe_diagnostics::AppShape::Tui)?;
+        crate::emit_model_gate::check_admissible_msg(
+            ctx,
+            msg_ty,
+            ipe_diagnostics::AppShape::TerminalScreen,
+        )?;
     }
 
     let init_s = emit_tui_fn(ctx, init_e, indent, child, generics)?;
@@ -192,7 +164,7 @@ fn emit_tui_inner(
     let on_key_s = emit_tui_on_key(ctx, on_key_e, indent, child, generics)?;
 
     Ok(Some(format!(
-        "ipe_runtime::tui::{entry}(\
+        "ipe_runtime::tui::tui_app_ui(\
          {init_s}, \
          {update_s}, \
          {view_s}, \
@@ -247,7 +219,7 @@ fn emit_tui_on_key(
         return emit_on_key_record_wrapper(ctx, callee, rec_fields);
     }
     // Lambda whose first parameter is a record: bind the emitted closure and
-    // apply it inside the flat wrapper. The `TuiApp` / `TuiProgram` schemes pin
+    // apply it inside the flat wrapper. The `TerminalAppScreen` scheme pins
     // `onKey`'s parameter to the closed `{ kind : String, value : String }`
     // record, so a well-typed lambda always lands here — leaving it unwrapped
     // was an exit-0-then-cargo-fail hole (the 1-arg closure broke the

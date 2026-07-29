@@ -15,14 +15,15 @@ use crate::code::{
     IPE_L0105, IPE_L0106, IPE_L0107, IPE_L0108, IPE_L0110, IPE_L0111, IPE_L0112, IPE_L0113,
     IPE_L0114, IPE_L0115, IPE_L0116, IPE_L0117, IPE_L0118, IPE_L0119, IPE_L0120, IPE_L0121,
     IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127, IPE_L0128, IPE_L0129,
-    IPE_L0130, IPE_L0131, IPE_L0140, IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003, IPE_N0004,
-    IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021, IPE_N0022,
-    IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029, IPE_N0030,
-    IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010,
-    IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018,
-    IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060,
-    IPE_P0061, IPE_P0062, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011,
-    IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0019, Severity,
+    IPE_L0130, IPE_L0131, IPE_L0132, IPE_L0140, IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003,
+    IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021,
+    IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029,
+    IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_P0001, IPE_P0002, IPE_P0003,
+    IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017,
+    IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050,
+    IPE_P0060, IPE_P0061, IPE_P0062, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010,
+    IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0019,
+    Severity,
 };
 use crate::span::Span;
 
@@ -737,8 +738,8 @@ pub enum Feature {
     /// `init`/`update`/`view`/`subscriptions` until routing support lands.
     /// [IPE-L0118]
     RoutedLiveApp,
-    /// The cfg record for an app entry point (`Web.app` / `Tui.app` /
-    /// `Tui.program` / `WebView.app`) — or, for `WebView.app`, its nested
+    /// The cfg record for an app entry point (`Web.app` / `Terminal.appScreen`
+    /// / `Terminal.appLines` / `WebView.app`) — or, for `WebView.app`, its nested
     /// `window` record and `window.size` tuple — was written as a let-bound
     /// variable (or any non-record expression) rather than an inline record
     /// literal. The Rust backend reads the cfg's field expressions directly at
@@ -786,15 +787,15 @@ pub enum AppShape {
     /// `Ipe.Web` — the Model is persisted to the session store, so
     /// it must be `serde`-serialisable (as well as `Clone` + `PartialEq`).
     Web,
-    /// `Ipe.Tui` — the Model is kept in memory, so it must be
-    /// `Clone`.
-    Tui,
+    /// `Ipe.Terminal` `appScreen` — the Model is kept in memory, so it
+    /// must be `Clone`.
+    TerminalScreen,
     /// `Ipe.WebView` — the Model is kept in memory, so it must
     /// be `Clone`.
     WebView,
-    /// `Ipe.Console` — the Model is kept in memory, so it must be
-    /// `Clone`.
-    Cli,
+    /// `Ipe.Terminal` `appLines` — the Model is kept in memory, so it
+    /// must be `Clone`.
+    TerminalLines,
 }
 
 /// The category of the non-admissible payload found inside a Model.
@@ -831,10 +832,10 @@ pub enum ModelLeaf {
 pub enum LowerError {
     /// A feature the lowerer does not implement. [IPE-L01##]
     Unsupported(Feature),
-    /// A `Live`/`Tui`/`Webview` app-entry Model type whose Rust rendering does
-    /// not satisfy the runtime bound the entry requires (`Live` needs
+    /// A `Live`/`Terminal`/`WebView` app-entry Model type whose Rust rendering
+    /// does not satisfy the runtime bound the entry requires (`Live` needs
     /// `serde::Serialize + serde::de::DeserializeOwned + Clone + PartialEq`;
-    /// `Tui`/`Webview` need `Clone`). `app` drives the wording, `field` names the
+    /// `Terminal`/`WebView` need `Clone`). `app` drives the wording, `field` names the
     /// offending Model field (empty when the Model is not a record), and `leaf`
     /// categorises the payload. Converts a would-be `cargo` trait-bound failure
     /// into a fail-closed `ipe` error. [IPE-L0120]
@@ -843,8 +844,8 @@ pub enum LowerError {
         field: Box<str>,
         leaf: ModelLeaf,
     },
-    /// A `Live`/`Tui`/`Webview` app-entry Msg type whose Rust rendering does
-    /// not satisfy the runtime bound the entry requires (`Live`/`Tui`/`Webview`
+    /// A `Live`/`Terminal`/`WebView` app-entry Msg type whose Rust rendering does
+    /// not satisfy the runtime bound the entry requires (`Live`/`Terminal`/`WebView`
     /// all need `Clone + Send + 'static`; `Live` additionally needs `Sync +
     /// Debug`). The predicate used is `ir_type_is_derivable` (NOT serde), so
     /// `Html`/`Element`/`Color`-carrying Msg variants are accepted (they derive
@@ -894,6 +895,13 @@ pub enum LowerError {
         /// The dotted kernel name (e.g. `Debug.log`).
         kernel: Box<str>,
     },
+    /// `Ui.cells` (a raw terminal cell grid) appears in a `Web`/`WebView`
+    /// program. It paints directly to the terminal and has no denotation in a
+    /// browser view, so it is admissible only under the `Terminal` shape
+    /// (`Terminal.appScreen` / `Terminal.appLines`). The carried [`AppShape`] is
+    /// the web-family shape that rejected it — the SECURITY-tier fail-closed
+    /// gate converts a would-be wrong-render into an ipe-time error. [IPE-L0132]
+    UiCellsInWebShape(AppShape),
 }
 
 // ===========================================================================
@@ -1191,6 +1199,7 @@ const fn lower_code(msg: &LowerError) -> Code {
             IPE_L0123
         }
         LowerError::DevOnlyKernelInProduction { .. } => IPE_L0140,
+        LowerError::UiCellsInWebShape(_) => IPE_L0132,
     }
 }
 
@@ -1380,9 +1389,8 @@ pub fn inadmissible_model_message(app: AppShape, field: &str, leaf: ModelLeaf) -
             "Ipe.Web",
             "serialisable (it is persisted to the session store)",
         ),
-        AppShape::Tui => ("Ipe.Tui", "clonable"),
+        AppShape::TerminalScreen | AppShape::TerminalLines => ("Ipe.Terminal", "clonable"),
         AppShape::WebView => ("Ipe.WebView", "clonable"),
-        AppShape::Cli => ("Ipe.Console", "clonable"),
     };
     let leaf_phrase = match leaf {
         ModelLeaf::Function => "a function",
@@ -1414,9 +1422,8 @@ pub fn inadmissible_model_message(app: AppShape, field: &str, leaf: ModelLeaf) -
 pub fn inadmissible_msg_message(app: AppShape, field: &str, leaf: ModelLeaf) -> String {
     let shape = match app {
         AppShape::Web => "Ipe.Web",
-        AppShape::Tui => "Ipe.Tui",
+        AppShape::TerminalScreen | AppShape::TerminalLines => "Ipe.Terminal",
         AppShape::WebView => "Ipe.WebView",
-        AppShape::Cli => "Ipe.Console",
     };
     let leaf_phrase = match leaf {
         ModelLeaf::Function => "a function",
@@ -1506,6 +1513,13 @@ fn lower_help(msg: &LowerError) -> Vec<HelpLine> {
                  production, use `Io.eprintln` or `Log.info`."
             )
             .into_boxed_str(),
+        )],
+        LowerError::UiCellsInWebShape(_) => vec![HelpLine::Note(
+            "`Ui.cells` paints a raw character grid onto the terminal, which a browser \
+             cannot render. Use it only under `Terminal.appScreen` / `Terminal.appLines`; \
+             for the same content in a Web/WebView view, render it with `Ui.text` (or a \
+             `Ui.column` of rows) instead."
+                .into(),
         )],
     }
 }

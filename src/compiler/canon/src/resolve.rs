@@ -909,17 +909,14 @@ pub fn canonicalise_module_in_project(
 /// The TEA app-entry kernels, keyed `(canonical qualifier, entry name)`. A
 /// module whose `main` head-calls one of these is a TEA app; any other `main`
 /// (a plain `Task`) is a Program. Kept in lockstep with the app-entry rows of
-/// `env::QUALIFIERS` (`Web.app`/`appHtml`/`appRouted`, `Tui.app`/`program`,
-/// `Console.app`, `WebView.app`/`appHtml`).
+/// `env::QUALIFIERS` (`Web.app`/`appRouted`, `Terminal.appScreen`/`appLines`,
+/// `WebView.app`).
 const TEA_APP_ENTRIES: &[(&str, &str)] = &[
     ("Web", "app"),
-    ("Web", "appHtml"),
     ("Web", "appRouted"),
-    ("Tui", "app"),
-    ("Tui", "program"),
-    ("Console", "app"),
+    ("Terminal", "appScreen"),
+    ("Terminal", "appLines"),
     ("WebView", "app"),
-    ("WebView", "appHtml"),
 ];
 
 /// IPE-N0033: reject a Program (plain-`main` module) that imports any

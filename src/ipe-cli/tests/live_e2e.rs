@@ -1,4 +1,4 @@
-//! Honest end-to-end tests for `Ipe.Web` / `Ipe.Web` — `Web.appHtml`, `Ui.layout`,
+//! Honest end-to-end tests for `Ipe.Web` / `Ipe.Web` — `Web.app`, `Ui.layout`,
 //! `Ui.column`, `Ui.el`, `Ui.onClick`, `Ui.text`, and `String.fromInt`.
 //!
 //! All tests are gated on `IPE_E2E=1`.  Without it they return early so the
@@ -41,7 +41,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// A minimal Ipe.Web counter app.
 ///
 /// Kernels exercised:
-/// - `Web.appHtml`     — constrain scheme + serde derives
+/// - `Web.app`     — constrain scheme + serde derives
 /// - `Ui.layout`    — converts Element tree to HTML
 /// - `Ui.column`    — vertical layout
 /// - `Ui.el`        — generic element container with onClick attribute
@@ -77,8 +77,8 @@ update msg model =
         Decrement ->
             ( { model | count = model.count - 1 }, Cmd.none )
 
-view : Model -> Html Msg
-view model =
+htmlView : Model -> Html Msg
+htmlView model =
     Ui.layout []
         (Ui.column []
             [ Ui.el [ Ui.onClick Increment ] (Ui.text "+")
@@ -90,8 +90,12 @@ subscriptions : Model -> Sub Msg
 subscriptions _model =
     Sub.none
 
+view : Model -> Element Msg
+view model =
+    Ui.html (htmlView model)
+
 main =
-    Web.appHtml
+    Web.app
         { init = init
         , update = update
         , view = view
@@ -144,8 +148,8 @@ update msg model =
         Decrement ->
             ( { model | count = model.count - 1 }, Cmd.none )
 
-view : Model -> Html Msg
-view model =
+htmlView : Model -> Html Msg
+htmlView model =
     Ui.layout []
         (renderSection { title = "Count", body = Ui.layout [] (Ui.text (String.fromInt model.count)) })
 
@@ -153,8 +157,12 @@ subscriptions : Model -> Sub Msg
 subscriptions _model =
     Sub.none
 
+view : Model -> Element Msg
+view model =
+    Ui.html (htmlView model)
+
 main =
-    Web.appHtml
+    Web.app
         { init = init
         , update = update
         , view = view
@@ -213,16 +221,20 @@ update msg model =
         Decrement ->
             ( { model | count = model.count - 1 }, Cmd.none )
 
-view : Model -> Html Msg
-view model =
+htmlView : Model -> Html Msg
+htmlView model =
     Ui.layout []
         (Ui.column []
             [ Ui.el [ Ui.onClick Increment ] (Ui.text "+")
             , Ui.text (String.fromInt model.count)
             ])
 
+view : Model -> Element Msg
+view model =
+    Ui.html (htmlView model)
+
 main =
-    Web.appHtml
+    Web.app
         { init = init
         , update = update
         , view = view
@@ -237,7 +249,7 @@ main =
 /// the T5 routed branch and emits `web_app_routed` instead of `web_app`.
 ///
 /// Exercises the full T5 emit path through the compiler:
-/// - open-record unification of the 6-field `Web.appHtml` cfg (T2/T3)
+/// - open-record unification of the 6-field `Web.app` cfg (T2/T3)
 /// - `routed_page_field` detection in `emit_web_app_inner` (T5)
 /// - `set_page` closure generation (T5)
 /// - `web_app_routed` runtime entry (already ported in `runtime/`)
@@ -276,8 +288,8 @@ update msg model =
         GoCounter ->
             ( { model | page = CounterPage }, Cmd.none )
 
-view : Model -> Html Msg
-view model =
+htmlView : Model -> Html Msg
+htmlView model =
     Ui.layout []
         (Ui.column []
             [ Ui.text (String.fromInt model.count)
@@ -288,8 +300,12 @@ subscriptions : Model -> Sub Msg
 subscriptions _model =
     Sub.none
 
+view : Model -> Element Msg
+view model =
+    Ui.html (htmlView model)
+
 main =
-    Web.appHtml
+    Web.app
         { init = init
         , update = update
         , view = view
@@ -682,7 +698,7 @@ fn live_html_helper_record_build_only() -> Result<(), BoxError> {
 }
 
 /// Inline-lambda subscriptions seal — BUILD-ONLY: an inline-lambda
-/// `subscriptions` cfg field on a routed `Web.appHtml` must compile end-to-end.
+/// `subscriptions` cfg field on a routed `Web.app` must compile end-to-end.
 /// See `IPE_LIVE_LAMBDA_SUBS` for the full rationale — a lambda pinned to
 /// `Box<dyn Fn + Send>` (no `Sync`) instead of emitted unboxed into the generic
 /// `FSubs` slot makes this `ipe` exit 0 then `cargo build` E0277
@@ -814,7 +830,7 @@ fn live_onclick_increments_counter() -> Result<(), BoxError> {
     Ok(())
 }
 
-/// T5 seal — BUILD-ONLY: a routed `Web.appHtml` with a `page` field in the Model
+/// T5 seal — BUILD-ONLY: a routed `Web.app` with a `page` field in the Model
 /// must compile and produce a Cargo project that links against
 /// `web_app_routed` rather than `web_app`.
 ///
@@ -915,15 +931,19 @@ sendMessage model =
     in
     Cmd.publish chatTopic payload
 
-view : Model -> Html Msg
-view model =
+htmlView : Model -> Html Msg
+htmlView model =
     Ui.layout []
         (Ui.column []
             [ Ui.text (String.fromInt (List.length model.received))
             ])
 
+view : Model -> Element Msg
+view model =
+    Ui.html (htmlView model)
+
 main =
-    Web.appHtml
+    Web.app
         { init = init
         , update = update
         , view = view
@@ -1002,15 +1022,19 @@ subscriptions : Model -> Sub Msg
 subscriptions _model =
     Sub.subscribeTopic cartTopic AddItem
 
-view : Model -> Html Msg
-view model =
+htmlView : Model -> Html Msg
+htmlView model =
     Ui.layout []
         (Ui.column []
             [ Ui.text (String.fromInt (List.length model.items))
             ])
 
+view : Model -> Element Msg
+view model =
+    Ui.html (htmlView model)
+
 main =
-    Web.appHtml
+    Web.app
         { init = init
         , update = update
         , view = view
@@ -1077,8 +1101,8 @@ update msg model =
         DoSignIn creds ->
             ( { model | lastUsername = creds.username }, Cmd.none )
 
-view : Model -> Html Msg
-view model =
+htmlView : Model -> Html Msg
+htmlView model =
     Ui.layout []
         (Ui.column []
             [ Ui.form
@@ -1094,8 +1118,12 @@ subscriptions : Model -> Sub Msg
 subscriptions _model =
     Sub.none
 
+view : Model -> Element Msg
+view model =
+    Ui.html (htmlView model)
+
 main =
-    Web.appHtml
+    Web.app
         { init = init
         , update = update
         , view = view
@@ -1276,8 +1304,8 @@ update msg model =
         Confirm ->
             ( { model | confirmed = True }, Cmd.none )
 
-view : Model -> Html Msg
-view model =
+htmlView : Model -> Html Msg
+htmlView model =
     div []
         [ form
             [ onSubmit Confirm ]
@@ -1297,8 +1325,12 @@ subscriptions : Model -> Sub Msg
 subscriptions _model =
     Sub.none
 
+view : Model -> Element Msg
+view model =
+    Ui.html (htmlView model)
+
 main =
-    Web.appHtml
+    Web.app
         { init = init
         , update = update
         , view = view
@@ -1474,8 +1506,8 @@ update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     ( { model | last = msg.action }, Cmd.none )
 
-view : Model -> Html Msg
-view model =
+htmlView : Model -> Html Msg
+htmlView model =
     div []
         [ form
             [ onSubmit { action = "confirmed" } ]
@@ -1487,8 +1519,12 @@ subscriptions : Model -> Sub Msg
 subscriptions _model =
     Sub.none
 
+view : Model -> Element Msg
+view model =
+    Ui.html (htmlView model)
+
 main =
-    Web.appHtml
+    Web.app
         { init = init
         , update = update
         , view = view
@@ -1526,8 +1562,8 @@ update msg model =
     in
     ( { model | last = label }, Cmd.none )
 
-view : Model -> Html Msg
-view model =
+htmlView : Model -> Html Msg
+htmlView model =
     div []
         [ form
             [ onSubmit ( "confirmed", 1 ) ]
@@ -1539,8 +1575,12 @@ subscriptions : Model -> Sub Msg
 subscriptions _model =
     Sub.none
 
+view : Model -> Element Msg
+view model =
+    Ui.html (htmlView model)
+
 main =
-    Web.appHtml
+    Web.app
         { init = init
         , update = update
         , view = view
@@ -1576,8 +1616,8 @@ update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     ( { model | count = List.length msg }, Cmd.none )
 
-view : Model -> Html Msg
-view model =
+htmlView : Model -> Html Msg
+htmlView model =
     div []
         [ form
             [ onSubmit [ "a", "b", "c" ] ]
@@ -1589,8 +1629,12 @@ subscriptions : Model -> Sub Msg
 subscriptions _model =
     Sub.none
 
+view : Model -> Element Msg
+view model =
+    Ui.html (htmlView model)
+
 main =
-    Web.appHtml
+    Web.app
         { init = init
         , update = update
         , view = view
@@ -1713,8 +1757,8 @@ update msg model =
         DoSignUp ->
             ( { model | confirmed = True }, Cmd.none )
 
-view : Model -> Html Msg
-view model =
+htmlView : Model -> Html Msg
+htmlView model =
     let
         m =
             DoSignUp
@@ -1738,8 +1782,12 @@ subscriptions : Model -> Sub Msg
 subscriptions _model =
     Sub.none
 
+view : Model -> Element Msg
+view model =
+    Ui.html (htmlView model)
+
 main =
-    Web.appHtml
+    Web.app
         { init = init
         , update = update
         , view = view
@@ -1897,8 +1945,8 @@ update msg model =
         DoSignIn creds ->
             ( { model | lastUsername = creds.username }, Cmd.none )
 
-view : Model -> Html Msg
-view model =
+htmlView : Model -> Html Msg
+htmlView model =
     let
         handler = \c -> DoSignIn c
     in
@@ -1917,8 +1965,12 @@ subscriptions : Model -> Sub Msg
 subscriptions _model =
     Sub.none
 
+view : Model -> Element Msg
+view model =
+    Ui.html (htmlView model)
+
 main =
-    Web.appHtml
+    Web.app
         { init = init
         , update = update
         , view = view
@@ -1966,8 +2018,8 @@ update msg model =
         DoSignIn creds ->
             ( { model | lastUsername = creds.username }, Cmd.none )
 
-view : Model -> Html Msg
-view model =
+htmlView : Model -> Html Msg
+htmlView model =
     let
         handler = \c -> DoSignIn c
         inner = handler
@@ -1987,8 +2039,12 @@ subscriptions : Model -> Sub Msg
 subscriptions _model =
     Sub.none
 
+view : Model -> Element Msg
+view model =
+    Ui.html (htmlView model)
+
 main =
-    Web.appHtml
+    Web.app
         { init = init
         , update = update
         , view = view
@@ -2079,8 +2135,8 @@ update msg model =
         DoSignIn creds ->
             ( { model | lastUsername = creds.username }, Cmd.none )
 
-view : Model -> Html Msg
-view model =
+htmlView : Model -> Html Msg
+htmlView model =
     case model.page of
         AboutPage ->
             Ui.layout [] (Ui.text "about")
@@ -2101,8 +2157,12 @@ subscriptions : Model -> Sub Msg
 subscriptions _model =
     Sub.none
 
+view : Model -> Element Msg
+view model =
+    Ui.html (htmlView model)
+
 main =
-    Web.appHtml
+    Web.app
         { init = init
         , update = update
         , view = view

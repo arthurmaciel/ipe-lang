@@ -94,8 +94,8 @@ pub struct Module {
     /// Set by `ipe_lower` when any call site resolves to a
     /// `KernelFn::is_web()` variant.
     pub uses_web: bool,
-    /// `true` when the lowerer detected at least one `Ipe.Tui` / `Ipe.Tui`
-    /// kernel call (`Tui.app`, `Tui.program`) in the module's function bodies.
+    /// `true` when the lowerer detected the `Ipe.Terminal` full-screen
+    /// app-entry (`Terminal.appScreen`) in the module's function bodies.
     ///
     /// Set by `ipe_lower` when any call site resolves to a
     /// `KernelFn::is_tui()` variant.

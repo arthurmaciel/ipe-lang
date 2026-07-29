@@ -11807,10 +11807,7 @@ impl<'a> Lowerer<'a> {
         let canon::Expr_::Record(fields) = &arg0.value else {
             return Err(unsupported(arg0.span, Feature::LetBoundAppCfg));
         };
-        if matches!(
-            peek,
-            Callee::Kernel(KernelFn::WebViewApp | KernelFn::WebViewAppHtml)
-        ) {
+        if matches!(peek, Callee::Kernel(KernelFn::WebViewApp)) {
             self.reject_non_literal_webview_window(fields)?;
         }
         self.lower_app_cfg_record(fields)
@@ -11910,8 +11907,8 @@ impl<'a> Lowerer<'a> {
         if let canon::Expr_::VarKernel { .. } | canon::Expr_::VarTopLevel { .. } = &callee.value {
             let peek = self.lower_callee(callee)?;
             match &peek {
-                // ── Web.app / Web.appHtml cfg literal (L0107 exemption) ──
-                Callee::Kernel(KernelFn::WebApp | KernelFn::WebAppHtml) if args.len() == 1 => {
+                // ── Web.app cfg literal (L0107 exemption) ──
+                Callee::Kernel(KernelFn::WebApp) if args.len() == 1 => {
                     // `args.len() == 1` is the match guard above; `first()` is
                     // always `Some` here.  Using `first()` instead of `args[0]`
                     // keeps `clippy::indexing_slicing` clean.
@@ -11929,29 +11926,24 @@ impl<'a> Lowerer<'a> {
                         }));
                     }
                 }
-                // ── Tui.app / Tui.program / Webview.app / Console.app cfg literal
-                //    (L0107 exemption) ──
+                // ── Terminal.appScreen / WebView.app / Terminal.appLines cfg
+                //    literal (L0107 exemption) ──
                 //
                 // Same pattern as `Web.app`: intercept the single cfg-record arg
                 // BEFORE the uniform `lower_expr` path so function-typed fields
                 // (init/update/view/subscriptions/onKey) do not trip IPE-L0107.
-                // TuiApp / TuiProgram.
-                // WebviewApp — the extra `window` field is a plain record
+                // WebViewApp — the extra `window` field is a plain record
                 //   value (no functions); `lower_app_entry_cfg` additionally
                 //   requires that record — and its `size` tuple — to be inline
                 //   literals (the G4 emit gates).
-                // ConsoleApp — 5-field cfg (init/update/view/subscriptions/
-                //   onLine), all function-typed; without this arm every real
-                //   `Console.app` call would trip IPE-L0107 and the emit_console
-                //   path could never fire.
+                // Terminal.appLines — 5-field cfg (init/update/view/
+                //   subscriptions/onLine), all function-typed; without this arm
+                //   every real `appLines` call would trip IPE-L0107 and the
+                //   emit_console path could never fire.
                 // A non-literal cfg (let-bound, piped, etc.) is rejected here with
                 // IPE-L0119 at the argument span — fail-closed, never an ICE.
                 Callee::Kernel(
-                    KernelFn::TuiApp
-                    | KernelFn::TuiProgram
-                    | KernelFn::WebViewApp
-                    | KernelFn::WebViewAppHtml
-                    | KernelFn::ConsoleApp,
+                    KernelFn::TerminalAppScreen | KernelFn::WebViewApp | KernelFn::TerminalAppLines,
                 ) if args.len() == 1 => {
                     if let Some(arg0) = args.first() {
                         // Borrow `peek` for the gate BEFORE moving it below.
@@ -14259,6 +14251,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiText
                 // `Ui.html : Html msg -> Element msg`
                 | KernelFn::UiHtml
+                // `Ui.cells : List (List Char) -> Element msg`
+                | KernelFn::UiCells
                 // ── Ui attribute builders — arity 1 ──────────────────────
                 // `Ui.spacing : Int -> Attribute msg`
                 | KernelFn::UiSpacing
@@ -14384,20 +14378,14 @@ impl<'a> Lowerer<'a> {
                 // ── app-entry stubs — arity 1 ────────────────────────────
                 // `Web.app : WebAppCfg model msg -> Task Error ()`
                 | KernelFn::WebApp
-                // `Web.appHtml : WebAppCfg model msg -> Task Error ()` (raw-Html view)
-                | KernelFn::WebAppHtml
                 // `Web.appRouted : WebAppCfg model msg -> Task Error ()`
                 | KernelFn::WebAppRouted
-                // `Tui.program : TuiCfg model msg -> Task Error ()`
-                | KernelFn::TuiProgram
-                // `Tui.app : TuiCfg model msg -> Task Error ()`
-                | KernelFn::TuiApp
-                // `Webview.app : WebviewCfg model msg -> Task Error ()`
+                // `Terminal.appScreen : TerminalCfg model msg -> Task Error ()`
+                | KernelFn::TerminalAppScreen
+                // `WebView.app : WebViewCfg model msg -> Task Error ()`
                 | KernelFn::WebViewApp
-                // `Webview.appHtml : WebviewCfg model msg -> Task Error ()` (raw-Html view)
-                | KernelFn::WebViewAppHtml
-                // `Console.app : CliCfg model msg -> Task Error ()`
-                | KernelFn::ConsoleApp
+                // `Terminal.appLines : TerminalCfg model msg -> Task Error ()`
+                | KernelFn::TerminalAppLines
                 // Ipe.Html.Attributes fixed-key builders (`String`/`Bool`
                 // -> Attribute msg).
                 | KernelFn::HtmlAttrClass
@@ -15724,6 +15712,7 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "none") => Ok(Callee::Kernel(KernelFn::UiNone)),
                     ("Ui", "text") => Ok(Callee::Kernel(KernelFn::UiText)),
                     ("Ui", "html") => Ok(Callee::Kernel(KernelFn::UiHtml)),
+                    ("Ui", "cells") => Ok(Callee::Kernel(KernelFn::UiCells)),
                     ("Ui", "el") => Ok(Callee::Kernel(KernelFn::UiEl)),
                     ("Ui", "row") => Ok(Callee::Kernel(KernelFn::UiRow)),
                     ("Ui", "column") => Ok(Callee::Kernel(KernelFn::UiColumn)),
@@ -16089,20 +16078,16 @@ impl<'a> Lowerer<'a> {
                     // ── Ipe.Ui.Keyed ──────────────────────────────────────────
                     ("Keyed", "column") => Ok(Callee::Kernel(KernelFn::KeyedColumn)),
                     ("Keyed", "row") => Ok(Callee::Kernel(KernelFn::KeyedRow)),
-                    // ── Ipe.Web / Ipe.Web app-entry kernels ───────────────
+                    // ── Ipe.Web app-entry kernels ─────────────────────────
                     ("Web", "app") => Ok(Callee::Kernel(KernelFn::WebApp)),
-                    ("Web", "appHtml") => Ok(Callee::Kernel(KernelFn::WebAppHtml)),
                     ("Web", "appRouted") => Ok(Callee::Kernel(KernelFn::WebAppRouted)),
                     ("Web", "route") => Ok(Callee::Kernel(KernelFn::WebRoute)),
                     ("Web", "renderStatic") => Ok(Callee::Kernel(KernelFn::WebRenderStatic)),
-                    // ── Ipe.Tui / Ipe.Tui app-entry kernels ──────────────
-                    ("Tui", "program") => Ok(Callee::Kernel(KernelFn::TuiProgram)),
-                    ("Tui", "app") => Ok(Callee::Kernel(KernelFn::TuiApp)),
-                    // ── Ipe.WebView / Ipe.WebView app-entry kernel ────────
+                    // ── Ipe.Terminal app-entry kernels ────────────────────
+                    ("Terminal", "appScreen") => Ok(Callee::Kernel(KernelFn::TerminalAppScreen)),
+                    ("Terminal", "appLines") => Ok(Callee::Kernel(KernelFn::TerminalAppLines)),
+                    // ── Ipe.WebView app-entry kernel ──────────────────────
                     ("WebView", "app") => Ok(Callee::Kernel(KernelFn::WebViewApp)),
-                    ("WebView", "appHtml") => Ok(Callee::Kernel(KernelFn::WebViewAppHtml)),
-                    // ── Ipe.Console / Ipe.Console app-entry kernel ──────────────
-                    ("Console", "app") => Ok(Callee::Kernel(KernelFn::ConsoleApp)),
                     // ── Ipe.Auth / Ipe.Auth — auth helpers ──────────────
                     ("Auth", "hashPassword") => Ok(Callee::Kernel(KernelFn::AuthHashPassword)),
                     ("Auth", "hashPasswordCost") => {
