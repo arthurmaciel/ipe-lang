@@ -1,4 +1,4 @@
-//! Honest end-to-end tests for `Ipe.Web` / `Ipe.Web` — `Web.app`, `Ui.layout`,
+//! Honest end-to-end tests for `Ipe.Web` / `Ipe.Web` — `Web.appHtml`, `Ui.layout`,
 //! `Ui.column`, `Ui.el`, `Ui.onClick`, `Ui.text`, and `String.fromInt`.
 //!
 //! All tests are gated on `IPE_E2E=1`.  Without it they return early so the
@@ -41,7 +41,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// A minimal Ipe.Web counter app.
 ///
 /// Kernels exercised:
-/// - `Web.app`     — constrain scheme + serde derives
+/// - `Web.appHtml`     — constrain scheme + serde derives
 /// - `Ui.layout`    — converts Element tree to HTML
 /// - `Ui.column`    — vertical layout
 /// - `Ui.el`        — generic element container with onClick attribute
@@ -91,7 +91,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Web.app
+    Web.appHtml
         { init = init
         , update = update
         , view = view
@@ -154,7 +154,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Web.app
+    Web.appHtml
         { init = init
         , update = update
         , view = view
@@ -222,7 +222,7 @@ view model =
             ])
 
 main =
-    Web.app
+    Web.appHtml
         { init = init
         , update = update
         , view = view
@@ -237,7 +237,7 @@ main =
 /// the T5 routed branch and emits `web_app_routed` instead of `web_app`.
 ///
 /// Exercises the full T5 emit path through the compiler:
-/// - open-record unification of the 6-field `Web.app` cfg (T2/T3)
+/// - open-record unification of the 6-field `Web.appHtml` cfg (T2/T3)
 /// - `routed_page_field` detection in `emit_web_app_inner` (T5)
 /// - `set_page` closure generation (T5)
 /// - `web_app_routed` runtime entry (already ported in `runtime/`)
@@ -289,7 +289,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Web.app
+    Web.appHtml
         { init = init
         , update = update
         , view = view
@@ -682,7 +682,7 @@ fn live_html_helper_record_build_only() -> Result<(), BoxError> {
 }
 
 /// Inline-lambda subscriptions seal — BUILD-ONLY: an inline-lambda
-/// `subscriptions` cfg field on a routed `Web.app` must compile end-to-end.
+/// `subscriptions` cfg field on a routed `Web.appHtml` must compile end-to-end.
 /// See `IPE_LIVE_LAMBDA_SUBS` for the full rationale — a lambda pinned to
 /// `Box<dyn Fn + Send>` (no `Sync`) instead of emitted unboxed into the generic
 /// `FSubs` slot makes this `ipe` exit 0 then `cargo build` E0277
@@ -814,7 +814,7 @@ fn live_onclick_increments_counter() -> Result<(), BoxError> {
     Ok(())
 }
 
-/// T5 seal — BUILD-ONLY: a routed `Web.app` with a `page` field in the Model
+/// T5 seal — BUILD-ONLY: a routed `Web.appHtml` with a `page` field in the Model
 /// must compile and produce a Cargo project that links against
 /// `web_app_routed` rather than `web_app`.
 ///
@@ -923,7 +923,7 @@ view model =
             ])
 
 main =
-    Web.app
+    Web.appHtml
         { init = init
         , update = update
         , view = view
@@ -1010,7 +1010,7 @@ view model =
             ])
 
 main =
-    Web.app
+    Web.appHtml
         { init = init
         , update = update
         , view = view
@@ -1095,7 +1095,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Web.app
+    Web.appHtml
         { init = init
         , update = update
         , view = view
@@ -1298,7 +1298,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Web.app
+    Web.appHtml
         { init = init
         , update = update
         , view = view
@@ -1488,7 +1488,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Web.app
+    Web.appHtml
         { init = init
         , update = update
         , view = view
@@ -1540,7 +1540,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Web.app
+    Web.appHtml
         { init = init
         , update = update
         , view = view
@@ -1590,7 +1590,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Web.app
+    Web.appHtml
         { init = init
         , update = update
         , view = view
@@ -1739,7 +1739,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Web.app
+    Web.appHtml
         { init = init
         , update = update
         , view = view
@@ -1873,6 +1873,7 @@ const IPE_ONSUBMIT_LET_BOUND_HANDLER: &str = r#"module Main exposing (main)
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 import Ipe.Cmd
+import Ipe.Sub
 
 type alias Creds =
     { username : String
@@ -1917,7 +1918,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Web.app
+    Web.appHtml
         { init = init
         , update = update
         , view = view
@@ -1941,6 +1942,7 @@ const IPE_ONSUBMIT_LET_ALIAS_CHAIN: &str = r#"module Main exposing (main)
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 import Ipe.Cmd
+import Ipe.Sub
 
 type alias Creds =
     { username : String
@@ -1986,7 +1988,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Web.app
+    Web.appHtml
         { init = init
         , update = update
         , view = view
@@ -2100,7 +2102,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Web.app
+    Web.appHtml
         { init = init
         , update = update
         , view = view
