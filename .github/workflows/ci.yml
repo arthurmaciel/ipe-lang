@@ -9,7 +9,7 @@ name: CI
 #     A PR merges only when these pass; branch protection lists them as the
 #     required checks.
 #   • PUSH to main + nightly SCHEDULE — the SLOW non-blocking checks: the full
-#     6-shard e2e (THE SEAL in full), live sky-parity, miri, and the runtime
+#     6-shard e2e (THE SEAL in full), miri, and the runtime
 #     feature-combo / full-feature builds. These never gate a PR; they catch
 #     regressions post-merge and on the nightly dep/upstream-drift sweep.
 #   • wasm-floor runs on PRs only when wasm-relevant paths change (paths: filter
@@ -245,10 +245,7 @@ jobs:
   # every `ipe`-exit-0 golden's emitted Cargo project must `cargo build` + run).
   # Sharded across 6 runners via nextest partitioning. Each golden self-anchors
   # its behaviour against a captured `expected.txt` (the Ipê-native regression
-  # anchor). LIVE upstream-Sky behavioural parity — running the same example
-  # through the released `sky` and diffing — lives in the dedicated `sky-parity`
-  # job below (goldens are Ipê-native and carry no `.sky` counterpart). The
-  # cached expected_go.txt / oracle.meta Go oracle is retired.
+  # anchor). The cached expected_go.txt / oracle.meta Go oracle is retired.
   #
   # The Ipê runtime lives IN-REPO at src/runtime/rust/src (the `ipe-runtime-rust`
   # crate); `ipe::resolve_runtime()` finds it by walking up from the repo root, so
