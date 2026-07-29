@@ -1253,6 +1253,7 @@ impl Env {
                     "wrappedRow",
                     "grid",
                     "html",
+                    "cells",
                     // ── attribute builders ───────────────────────────────────
                     "spacing",
                     "padding",

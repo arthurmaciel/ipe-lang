@@ -14251,6 +14251,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiText
                 // `Ui.html : Html msg -> Element msg`
                 | KernelFn::UiHtml
+                // `Ui.cells : List (List Char) -> Element msg`
+                | KernelFn::UiCells
                 // ── Ui attribute builders — arity 1 ──────────────────────
                 // `Ui.spacing : Int -> Attribute msg`
                 | KernelFn::UiSpacing
@@ -15710,6 +15712,7 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "none") => Ok(Callee::Kernel(KernelFn::UiNone)),
                     ("Ui", "text") => Ok(Callee::Kernel(KernelFn::UiText)),
                     ("Ui", "html") => Ok(Callee::Kernel(KernelFn::UiHtml)),
+                    ("Ui", "cells") => Ok(Callee::Kernel(KernelFn::UiCells)),
                     ("Ui", "el") => Ok(Callee::Kernel(KernelFn::UiEl)),
                     ("Ui", "row") => Ok(Callee::Kernel(KernelFn::UiRow)),
                     ("Ui", "column") => Ok(Callee::Kernel(KernelFn::UiColumn)),

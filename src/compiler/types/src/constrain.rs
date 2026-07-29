@@ -5498,6 +5498,7 @@ impl<'a> Builder<'a> {
             K::UiNone => elem_t(var(0)),
             K::UiText => fun(string(), elem_t(var(0))),
             K::UiHtml => fun(html_t(var(0)), elem_t(var(0))),
+            K::UiCells => fun(list(list(char())), elem_t(var(0))),
 
             // Ipe.Ui / Font attribute builders — nullary (arity 0).
             K::UiCenterX
@@ -8273,6 +8274,7 @@ mod registry_phase_c_tests {
             K::UiNone,
             K::UiText,
             K::UiHtml,
+            K::UiCells,
             // UiParagraph / UiTextColumn live in RELOCATED (hole XOR relocation).
             K::UiSpacing,
             K::UiPadding,

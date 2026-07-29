@@ -1012,6 +1012,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::UiNone => "ui_none_",
         KernelFn::UiText => "ui_text_",
         KernelFn::UiHtml => "ui_html_",
+        KernelFn::UiCells => "ui_cells_",
         KernelFn::UiEl => "ui_el_",
         KernelFn::UiRow => "ui_row_",
         KernelFn::UiColumn => "ui_column_",

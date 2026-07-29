@@ -1363,6 +1363,25 @@ fn render_node<M: Clone>(
                 hits: vec![],
             }
         }
+        Element::Cells(grid) => {
+            // `Ui.cells`: a raw cell grid, painted verbatim — one row per line,
+            // each rune sanitized like the `Element::Text` path. This restores
+            // the full-screen raw-paint capability inside an `Ipe.Ui` view.
+            let lines: Vec<Vec<Run>> = grid
+                .iter()
+                .map(|row| {
+                    let text: String = row.iter().copied().map(sanitize_rune).collect();
+                    vec![Run {
+                        text,
+                        style: inherited,
+                    }]
+                })
+                .collect();
+            Rendered {
+                block: Block { lines },
+                hits: vec![],
+            }
+        }
         Element::Raw(h) => {
             // `Ui.html` (Ipe.Html escape hatch): the terminal can't render markup,
             // so degrade to the node's TEXT content (word-wrapped) instead of a
