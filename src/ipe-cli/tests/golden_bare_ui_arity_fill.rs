@@ -18,7 +18,7 @@
 
 use std::path::{Path, PathBuf};
 
-/// A full WebView app whose inner `rawView : Model -> Html` omits the message
+/// A full `WebView` app whose inner `rawView : Model -> Html` omits the message
 /// parameter, reached through the `Ui.html` escape node inside the single
 /// `Element` view. The `onPress = Just Bump` button pins the inferred message
 /// type to the concrete `Msg`, so the arity-filled inner `Html` return must
