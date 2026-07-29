@@ -14,8 +14,8 @@ that builds with `ipe build` and targets the Rust backend.
 | `wasm-env-public` | wasm/live | `Ipe.Env.public` build-time config embedding: an allowlisted `API_BASE_URL` variable injected at compile time and readable in WASM at run time. |
 | `wasm-spa` | wasm | SPA target: a pure-client single-page application with full TEA loop running in the browser. Uses `Live.app` which emits `wasm_app` under `--target wasm`. |
 | `wasm-hydration` | wasm | SSR hydration: server-side initial render (paint) followed by WASM client takeover. |
-| `console-repl` | console | An accumulator-calculator REPL over `Console.app`: each stdin line is a command (`add`/`sub`/`mul`/`reset`/`quit`) folded into a running total. |
-| `tui-counter` | tui | A terminal counter over `Tui.app`, rendering the same shared `Ipe.Ui` view as the Web and WebView counters. |
+| `terminal-repl` | terminal | An accumulator-calculator REPL over `Terminal.appLines`: each stdin line is a command (`add`/`sub`/`mul`/`reset`/`quit`) folded into a running total. |
+| `terminal-counter` | terminal | A terminal counter over `Terminal.appScreen`, rendering the same shared `Ipe.Ui` view as the Web and WebView counters. |
 | `task-publish` | web/live | The top-level, Task-shaped `Ipe.PubSub.publish` (`String -> any -> Task Error Int`) fired from a `Ipe.Tea.Web` app's `update` via `Cmd.perform`, with the subscriber count routed back into the model. Shows the Task form composing where a broadcast bus runs. |
 
 ## Sky-derived examples

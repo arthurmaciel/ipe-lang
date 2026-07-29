@@ -8,10 +8,11 @@ import Ipe.List
 -- to green" row): `ipec build` exits 0 but the emitted crate fails `cargo
 -- build` with two INDEPENDENT E0308 errors, both on the entry-point shape
 -- `main = case <Maybe String scrutinee> of Just "literal" -> task |>
--- Task.run; _ -> task |> Task.run` (the Ipe.Tui `argv`-dispatch idiom:
+-- Task.run; _ -> task |> Task.run` (the Ipe.Terminal `argv`-dispatch idiom:
 -- `case List.head argsList of Just "live" -> Web.app {...} |> Task.run; _
--- -> Tui.app {...} |> Task.run`, minimised down to plain `Io.println`/`Task`
--- calls so the fixture needs no Ipe.Tui / Ipe.Web dependency).
+-- -> Terminal.appScreen {...} |> Task.run`, minimised down to plain
+-- `Io.println`/`Task` calls so the fixture needs no Ipe.Terminal / Ipe.Web
+-- dependency).
 --
 -- Defect 1 — string-literal ctor-payload sub-pattern: `Just "live"` lowered
 -- the nested literal straight to a bare `Pat::Str`, emitted as

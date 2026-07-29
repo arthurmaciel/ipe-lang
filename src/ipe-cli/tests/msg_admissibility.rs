@@ -196,7 +196,7 @@ main =
 /// `Ipe.Tui` app: Msg variant carries a `Cmd`. Must be rejected with IPE-L0125.
 const TUI_CMD_MSG: &str = r"module Main exposing (main)
 
-import Ipe.Tea.Tui as Tui
+import Ipe.Tea.Terminal as Terminal
 import Ipe.Ui as Ui
 import Ipe.Cmd
 import Ipe.String
@@ -238,7 +238,7 @@ onKey _event =
     NoOp
 
 main =
-    Tui.app
+    Terminal.appScreen
         { init = init, update = update, view = view
         , subscriptions = subscriptions, onKey = onKey
         }
@@ -248,7 +248,7 @@ main =
 /// `LIVE_FN_MSG` — falls through to the Msg gate, `IPE-L0125`.
 const TUI_FN_MSG: &str = r"module Main exposing (main)
 
-import Ipe.Tea.Tui as Tui
+import Ipe.Tea.Terminal as Terminal
 import Ipe.Ui as Ui
 import Ipe.Cmd
 import Ipe.String
@@ -287,7 +287,7 @@ onKey _event =
     NoOp
 
 main =
-    Tui.app
+    Terminal.appScreen
         { init = init, update = update, view = view
         , subscriptions = subscriptions, onKey = onKey
         }
