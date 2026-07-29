@@ -1035,8 +1035,9 @@ fn main_uses_program_legal_tea_member(body: &canon::Expr, interner: &Interner) -
                     .iter()
                     .any(|a| main_uses_program_legal_tea_member(a, interner))
         }
-        canon::Expr_::Lambda(_, inner) => main_uses_program_legal_tea_member(inner, interner),
-        canon::Expr_::Let(_, inner) => main_uses_program_legal_tea_member(inner, interner),
+        canon::Expr_::Lambda(_, inner) | canon::Expr_::Let(_, inner) => {
+            main_uses_program_legal_tea_member(inner, interner)
+        }
         canon::Expr_::Binop { lhs, rhs, .. } => {
             main_uses_program_legal_tea_member(lhs, interner)
                 || main_uses_program_legal_tea_member(rhs, interner)
