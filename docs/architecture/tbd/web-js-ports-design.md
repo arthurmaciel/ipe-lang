@@ -90,6 +90,43 @@ one-way state mirror — every channel shares a root across both sides. From eac
 side's local view, `send` means "push to the other party" — the direction is
 implicit in which side you are on, as with a socket.
 
+## Declaring a port — no new language construct
+
+There is no `port module` keyword or special module kind. A port is expressed
+with primitives Ipê already has:
+
+- **Outbound command** is a `Cmd`: `Js.send : a -> Cmd msg` (the `JsCmd` ADT's
+  wire encoder is derived). `update` returns `Js.send PlayChime` — or the
+  generated per-variant `playChime`.
+- **Inbound intent** is a `Sub`: `Js.subscribe : Decoder a -> (a -> msg) -> Sub msg`,
+  wired in `subscriptions`.
+- **State mirror** is a field on the shape's cfg record — `sync : Model -> JsState`,
+  alongside `view`, diffed the same way.
+
+```
+-- App/Ports.ipe — the audit surface is these two closed ADTs
+type JsMsg = LocationFixed { lat : Float, lng : Float } | PaymentAuthorized { token : String }
+type JsCmd = PlayChime | ScrollTo { anchor : String }
+
+update msg model =
+    case msg of
+        Chimed                  -> ( model, Js.send PlayChime )   -- outbound: a Cmd (or `playChime`)
+        GotJs (LocationFixed c) -> ( { model | at = c }, Cmd.none )
+
+subscriptions model = Js.subscribe receiveJsMsg GotJs            -- inbound: a Sub
+
+main = Web.app { init, update, view, subscriptions, sync = projectJs }  -- state mirror: a cfg field
+```
+
+The auditable "everything JS can do" surface is the two closed ADTs `JsMsg` and
+`JsCmd` — read those two declarations and you have seen the whole boundary.
+Colocating them (with `sync` and any custom decoder) in one `App.Ports` module is
+a readability convention, not a compiler construct. Encoders/decoders derive from
+the ADT by default and are hand-writable for a custom wire format; the mandatory
+concrete-ADT seal applies to `Js.send`'s argument and `Js.subscribe`'s decoder
+type. Shape is inferred from the entry kernel and everything is configured by
+records + `Cmd`/`Sub`, so ports reuse that machinery rather than adding syntax.
+
 ## Two decisions that keep the boundary honest
 
 ### The boundary type must be a concrete ADT — a mandatory seal
@@ -268,6 +305,40 @@ port** (your own audited JS handler) until it graduates to a first-party kernel 
 the port is the escape valve precisely because packages cannot introduce host
 access.
 
+## Custom elements — the typed visual-widget tier
+
+Ports carry imperative effects and out-of-band data; they have no place in the
+view tree. A **visual** third-party widget — a map, a chart, a date-picker —
+belongs *in* the view, and gets its own boundary: a custom element.
+
+`Ui.customElement : String -> List (Attribute msg) -> List (Element msg) -> Element msg`
+renders a `<tag …>` node that composes through the existing DOM-patch channel; the
+browser's custom-element machinery instantiates the JS-backed widget. Attributes
+flow in (Ipê-typed, encoded); events flow out through typed decoders into `Msg` —
+the same decode-at-the-boundary discipline as a port, with the mandatory
+concrete-ADT seal on the event decoder. The developer wraps the primitive in a
+typed constructor:
+
+```
+map : { lat : Float, lng : Float, onMarkerClick : MarkerId -> msg } -> Element msg
+map cfg =
+    Ui.customElement "ipe-map"
+        [ Ui.attrFloat "lat" cfg.lat
+        , Ui.attrFloat "lng" cfg.lng
+        , Ui.onCustom "marker-click" (Decode.map cfg.onMarkerClick markerId)
+        ]
+        []
+```
+
+The widget's JS is a checked-in `customElements.define('ipe-map', …)`, loaded at
+build, never `eval`'d — the same audit model as a port handler. It works on both
+browser transports (server-driven renders the tag in DOM patches; client-WASM
+instantiates it via `web-sys`) and, being DOM, not on the Terminal shape.
+
+**Decision rule:** visual-in-the-view → custom element; imperative effect or
+out-of-band data → port. `Ui.html` embeds *static* raw HTML; a custom element is
+its typed, live, interactive counterpart.
+
 ## Relationship to Rust FFI
 
 The port is a boundary to non-Ipê code, and so is the Rust FFI. The axis that
@@ -282,10 +353,8 @@ Async Rust and Tier-2 sandboxed Rust are ports under a different name — see
 
 ## Alternatives considered
 
-- **Custom elements.** JS widgets encapsulated as DOM nodes with typed attributes
-  and events, composing through the existing DOM-patch channel. Complementary, not
-  competing: the right tool for a *visual* widget embedded in the view, whereas
-  ports are for imperative effects and out-of-band data.
+- **Custom elements** — kept, not rejected: the typed visual-widget tier,
+  complementary to ports. See "Custom elements" above.
 - **Hooks / lifecycle callbacks** (arbitrary JS on node mount/update). Rejected as
   the primary boundary: the callback body is untyped JS with ambient DOM access —
   the unbounded surface of the forbidden eval seam, only spelled differently.
