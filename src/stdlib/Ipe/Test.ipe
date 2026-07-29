@@ -155,7 +155,7 @@ runWithPrefix prefix tests =
 
 println : String -> Task Error ()
 println =
-    Ffi.kernel "Log_println"
+    Ffi.kernel "Io_println"
 
 
 summarise : List ( String, TestResult ) -> Bool

@@ -1,6 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
-import Ipe.Json.Decode
+import Ipe.Json.Decode as JsonDec
 
 -- A decoder applied to a value of the wrong type must return `Err`.
 -- `JsonDec.int` on the string `"not an int"` must fail.

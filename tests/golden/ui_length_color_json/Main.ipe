@@ -4,7 +4,7 @@ import Ipe.Html as Html
 import Ipe.Ui as Ui
 import Ipe.Ui.Background as Background
 import Ipe.Io as Io
-import Ipe.Json.Encode
+import Ipe.Json.Encode as JsonEnc
 
 
 -- Registry Phase-D (#69) end-to-end gate. Exercises the newly-schemed

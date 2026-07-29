@@ -1070,6 +1070,16 @@ fn register_stdlib_import_aliases(
         // a later `Alias.member` / `X.member` resolves instead of raising N0034.
         // A bare `import Ipe.String` names `String` both as canonical and alias.
         env.mark_stdlib_qualifier_imported(alias);
+        // A bare `import Ipe.X.Y` (no explicit `as`) also names the module under
+        // its CANONICAL qualifier — which for a dotted-canonical module such as
+        // `Ipe.Db.Decode` (canonical `Db.Decode`) is the multi-segment form the
+        // parser produces from `Db.Decode.member`, and which no `as` alias can
+        // spell. Marking the canonical too keeps `X.Y.member` resolving without an
+        // alias. An explicit `as Alias` names a single qualifier on purpose, so it
+        // does not pull the canonical into scope.
+        if import.alias.is_none() {
+            env.mark_stdlib_qualifier_imported(canonical);
+        }
         if alias == canonical {
             // Already registered under its canonical name — nothing to clone. The
             // gate above already recorded it (alias == canonical here).
