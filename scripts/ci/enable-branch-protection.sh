@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Enable branch protection on `main` so the branch is green by construction:
 # every change lands through a PR whose FAST required gate is green, and merges
-# are auto-merged the moment that gate passes. The slow checks (e2e, sky-parity,
-# miri, feature-combos, examples-sweep) run post-merge on push + nightly and do
+# are auto-merged the moment that gate passes. The slow checks (e2e, miri,
+# feature-combos, examples-sweep) run post-merge on push + nightly and do
 # NOT gate the PR — see .github/workflows/{ci,security}.yml.
 #
 # ── RUN THIS AFTER IN-FLIGHT DIRECT-PUSH LANES DRAIN ─────────────────────────
@@ -16,7 +16,7 @@
 #   fmt, clippy, test   — .github/workflows/ci.yml
 #   seal-smoke          — .github/workflows/ci.yml (build+run one emitted example)
 #   cargo-deny          — .github/workflows/security.yml (supply-chain)
-# The slow jobs (e2e, sky-parity, miri, runtime-*, wasm-floor, examples-sweep)
+# The slow jobs (e2e, miri, runtime-*, wasm-floor, examples-sweep)
 # are deliberately NOT listed — they self-skip on pull_request or run advisory.
 #
 # `strict: false`: PRs do NOT have to be up to date with `main` before merging.
