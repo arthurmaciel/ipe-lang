@@ -122,6 +122,18 @@ Ipê's `Ipe.Config` is a single decoder surface — `string`/`int`/`float`/`bool
   APIs. The load-bearing `map2..8`/`oneOf`/`maybe`/`index`/`keyValuePairs`/`dict`
   combinator set is now present, closing the record/union-decoding gap.
 
+Two runtime **behaviour** divergences (audited in
+[`behaviour-verdicts.md`](behaviour-verdicts.md)):
+
+- **`int` is strict.** `Decode.int` / `Config.int` yield a typed `Err` on a
+  non-integer JSON number (`1.5`) or one past `Int` range (`1e21`); an integral
+  float (`1.0`) still decodes. This matches Elm and satisfies parse-don't-validate
+  — a decoder yields an integer or a rejection, never a silent truncation.
+- **Object keys encode sorted.** `Encode.object` emits keys in lexicographic
+  order (serde's `BTreeMap`), not the insertion order Elm preserves. Both are
+  deterministic; sorted matches the Go oracle the example sweep diffs against, so
+  Correctness keeps it. *(keep-ours divergence.)*
+
 ### 3.2 `elm/time` → `Ipe.Time`
 
 Elm models time as pure values (`Posix`, `Zone`, `Weekday`, `Month`) plus `Cmd`
@@ -269,6 +281,14 @@ width, which does not affect `String` semantics.
 
 Ipê also adds `casefold`/`equalFold`/`isEmail`/`isUrl` and the haystack-first
 `containsIn`/`startsWithIn`/`endsWithIn` pipeline companions beyond Elm's set.
+
+`String.fromFloat` follows Go's `strconv.FormatFloat(f,'g',-1,64)` shape rather
+than Elm's JS `String(f)`. It agrees with Elm on the common cases (an integral
+float drops its fraction; the shortest round-tripping digits are used, so
+`0.1 + 0.2` is `"0.30000000000000004"`) and diverges on two shape details: Go
+pads the exponent to two digits (`1e-07` vs Elm's `1e-7`) and keeps negative
+zero's sign (`-0` vs Elm's `0`). Go-oracle Correctness keeps ours; see
+[`behaviour-verdicts.md`](behaviour-verdicts.md). *(keep-ours divergence.)*
 
 ---
 

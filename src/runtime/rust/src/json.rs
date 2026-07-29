@@ -382,15 +382,28 @@ pub fn json_decode_string<E: From<String> + 'static>() -> Decoder<E, String> {
 }
 pub fn json_decode_int<E: From<String> + 'static>() -> Decoder<E, i64> {
     Decoder::new(
-        // Go parity: `JsonDec_int` unmarshals every JSON number to `float64`,
-        // then returns `int(f)` — a truncation-toward-zero, NOT a reject of
-        // non-integral numbers. So `3.5` decodes to `3` and `1e2` to `100`,
-        // matching Go. `as_f64` accepts any JSON number (Rust's `f64 as i64`
-        // truncates toward zero, exactly like Go's `int(f)`); a non-number is
-        // the only `Err`.
-        Box::new(|v| match v.as_f64() {
-            Some(f) => decode_ok(f as i64),
-            None => decode_err_str("expected int".into()),
+        // Parse-don't-validate: an integer decoder yields an integer or a typed
+        // rejection — never a silently truncated value. A fractional number
+        // (`1.5`) or a magnitude past `i64` (`1e21`) is malformed input for an
+        // `Int` field, so it fails closed rather than smuggling in a lossily
+        // coerced value. An integral JSON number written in float form (`1.0`)
+        // still decodes, matching a caller's intent. `serde_json::Number::as_i64`
+        // performs exactly this: `Some` iff the number is an integer in range.
+        Box::new(|v| match v {
+            JsonVal::Number(n) => match n.as_i64() {
+                Some(i) => decode_ok(i),
+                // `1.0` is stored as a float; recover it when it is integral and
+                // representable, still rejecting `1.5` and out-of-range values.
+                None => match n.as_f64() {
+                    Some(f)
+                        if f.fract() == 0.0 && (i64::MIN as f64..=i64::MAX as f64).contains(&f) =>
+                    {
+                        decode_ok(f as i64)
+                    }
+                    _ => decode_err_str("expected int, got a non-integer number".into()),
+                },
+            },
+            _ => decode_err_str("expected int".into()),
         }),
         vec![],
     )
@@ -1789,5 +1802,146 @@ mod key_value_pairs_tests {
         let dec = decode_key_value_pairs::<String, i64>(json_decode_int);
         let v: JsonVal = serde_json::json!({});
         assert!(matches!((dec.run)(&v), IpeResult::Ok(ref p) if p.is_empty()));
+    }
+}
+
+// Behaviour verdicts audited against Elm's documented `elm/json` semantics.
+// Each test pins one verdict from `docs/elm-coverage/behaviour-verdicts.md`.
+#[cfg(test)]
+mod elm_behaviour_verdicts {
+    use super::*;
+
+    // Verdict: fix-to-most-correct. Elm's `Decode.int` rejects non-integer
+    // numbers; parse-don't-validate forbids the old silent truncation. `1.5`
+    // and `1e21` (past i64) fail closed; `1` and integral-float `1.0` decode.
+    #[test]
+    fn int_decoder_accepts_plain_integer() {
+        let dec = json_decode_int::<String>();
+        assert!(matches!(
+            (dec.run)(&serde_json::json!(42)),
+            IpeResult::Ok(42)
+        ));
+    }
+    #[test]
+    fn int_decoder_accepts_integral_float() {
+        let dec = json_decode_int::<String>();
+        assert!(matches!(
+            (dec.run)(&serde_json::json!(1.0)),
+            IpeResult::Ok(1)
+        ));
+    }
+    #[test]
+    fn int_decoder_rejects_fractional() {
+        let dec = json_decode_int::<String>();
+        assert!(matches!(
+            (dec.run)(&serde_json::json!(1.5)),
+            IpeResult::Err(_)
+        ));
+    }
+    #[test]
+    fn int_decoder_rejects_out_of_range_magnitude() {
+        let dec = json_decode_int::<String>();
+        assert!(matches!(
+            (dec.run)(&serde_json::json!(1e21)),
+            IpeResult::Err(_)
+        ));
+    }
+    #[test]
+    fn int_decoder_rejects_non_number() {
+        let dec = json_decode_int::<String>();
+        assert!(matches!(
+            (dec.run)(&serde_json::json!("7")),
+            IpeResult::Err(_)
+        ));
+    }
+
+    // Verdict: keep-ours (documented divergence). JSON object keys are emitted
+    // in sorted (lexicographic) order — serde_json's `Map` is a `BTreeMap`
+    // (no `preserve_order`). Elm preserves the insertion order of the list
+    // given to `Encode.object`. Sorted output is deterministic and matches the
+    // Go oracle the example sweep diffs against; changing it would break Go
+    // parity and needs an ordered-map dependency.
+    #[test]
+    fn encode_object_keys_are_sorted_not_insertion_order() {
+        let val = json_enc_object(vec![
+            ("name".to_string(), json_enc_string("Alice".to_string())),
+            ("age".to_string(), json_enc_int(30)),
+            ("active".to_string(), json_enc_bool(true)),
+        ]);
+        let out = json_enc_encode(0, val);
+        assert_eq!(out, r#"{"active":true,"age":30,"name":"Alice"}"#);
+    }
+
+    // Verdict: keep-Elm (already matches). `nullable` yields `Nothing` on JSON
+    // null, `Just x` on a value the inner decoder accepts, and propagates the
+    // inner decoder's error otherwise — Elm's `Json.Decode.nullable` contract.
+    #[cfg(feature = "config")]
+    #[test]
+    fn nullable_null_is_nothing() {
+        let dec = super::super::config_decode::config_nullable::<String, i64>(json_decode_int());
+        assert!(matches!(
+            (dec.run)(&serde_json::json!(null)),
+            IpeResult::Ok(IpeMaybe::Nothing)
+        ));
+    }
+    #[cfg(feature = "config")]
+    #[test]
+    fn nullable_value_is_just() {
+        let dec = super::super::config_decode::config_nullable::<String, i64>(json_decode_int());
+        assert!(matches!(
+            (dec.run)(&serde_json::json!(5)),
+            IpeResult::Ok(IpeMaybe::Just(5))
+        ));
+    }
+    #[cfg(feature = "config")]
+    #[test]
+    fn nullable_non_null_inner_failure_propagates() {
+        let dec = super::super::config_decode::config_nullable::<String, i64>(json_decode_int());
+        assert!(matches!(
+            (dec.run)(&serde_json::json!("nope")),
+            IpeResult::Err(_)
+        ));
+    }
+
+    // Verdict: keep-Elm (already matches). `oneOf` returns the first branch that
+    // succeeds; an empty branch list (or all-failing) is an `Err`, never a panic.
+    #[test]
+    fn one_of_returns_first_success() {
+        let decoders = vec![json_decode_int::<String>(), json_decode_int::<String>()];
+        let dec = decode_one_of(decoders);
+        assert!(matches!((dec.run)(&serde_json::json!(9)), IpeResult::Ok(9)));
+    }
+    #[test]
+    fn one_of_empty_is_err_not_panic() {
+        let dec = decode_one_of::<String, i64>(vec![]);
+        assert!(matches!(
+            (dec.run)(&serde_json::json!(1)),
+            IpeResult::Err(_)
+        ));
+    }
+    #[test]
+    fn one_of_all_fail_is_err() {
+        let decoders = vec![json_decode_int::<String>()];
+        let dec = decode_one_of(decoders);
+        assert!(matches!(
+            (dec.run)(&serde_json::json!("x")),
+            IpeResult::Err(_)
+        ));
+    }
+
+    // Verdict: keep-ours (documented divergence). JSON number rendering routes
+    // through the Go floatEncoder shape (`go_format_f64`), so integral floats
+    // drop the fraction (`1.0` -> `1`) and the shortest round-tripping digits
+    // are used (`0.1 + 0.2` -> `0.30000000000000004`), matching the Go oracle.
+    #[test]
+    fn encode_float_integral_drops_fraction() {
+        assert_eq!(json_enc_encode(0, json_enc_float(1.0)), "1");
+    }
+    #[test]
+    fn encode_float_shortest_round_trip() {
+        assert_eq!(
+            json_enc_encode(0, json_enc_float(0.1 + 0.2)),
+            "0.30000000000000004"
+        );
     }
 }
