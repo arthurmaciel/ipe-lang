@@ -1,6 +1,5 @@
 //! `program_metadata()`: the coarse, LOCKED whole-program
-//! DCE-reachability seam (spec §5 row 5; `docs/architecture/
-//! incremental-compilation-and-watch.md`'s `program_metadata()` row).
+//! DCE-reachability seam.
 //!
 //! **Deliberately NOT firewalled behind an interface summary.** The design
 //! spec's own locked decision (hazard H6: "Global DCE/mono firewalled behind

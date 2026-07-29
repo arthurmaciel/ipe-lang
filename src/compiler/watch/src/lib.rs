@@ -23,8 +23,7 @@
 //!   SIGTERM disposition must not be touched) forwards into its shutdown
 //!   channel.
 //!
-//! Authoritative design: `docs/architecture/incremental-compilation-and-watch.md`
-//! §Q2.
+//! Decision record: `docs/adr/0032-salsa-incremental-compilation-phase1.md`.
 
 pub mod coalesce;
 pub mod process;

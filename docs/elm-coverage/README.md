@@ -14,9 +14,9 @@
 >    that Elm core has no counterpart for.
 >
 > The prioritized plan for closing the `missing` rows lives in
-> [`tbd/elm-coverage-gap-plan.md`](tbd/elm-coverage-gap-plan.md). The exhaustive
+> [`gap-plan.md`](gap-plan.md). The exhaustive
 > per-value `elm/core` table lives in
-> [`tbd/elm-core-coverage.md`](tbd/elm-core-coverage.md); this doc summarizes it
+> [`elm-core-coverage.md`](elm-core-coverage.md); this doc summarizes it
 > and extends the audit to the rest of the `elm/*` org.
 
 Ipê's target — typed Rust producing server, native, TUI, and desktop binaries —
@@ -45,7 +45,7 @@ below are stated as engineering trade-offs, not corrections.
 | `elm/virtual-dom` | Internal to the runtimes, not a user surface | **excluded** — §4 |
 | `elm/browser` | No counterpart; replaced by `Ipe.Live` / `Ipe.Tui` / `Ipe.Webview` | **excluded** — §4 |
 
-Headline `elm/core` count (from [`tbd/elm-core-coverage.md`](tbd/elm-core-coverage.md),
+Headline `elm/core` count (from [`elm-core-coverage.md`](elm-core-coverage.md),
 264 exposed values across 17 modules): **185 present · 15 diverged · 61 missing ·
 3 n/a**, plus 13 of 20 exposed types present. (The `List`/`Dict`/`Set`/`Result`/
 `Char`/`String` pure-`elm/core` fills closed the bulk of the former gap; the
@@ -57,7 +57,7 @@ remaining `missing` rows are `Dict.merge` and the whole absent modules — see �
 
 Statuses are `✓ present` / `~ diverged` / `✗ missing` / `n/a excluded`. The
 authoritative per-value table with signatures is
-[`tbd/elm-core-coverage.md`](tbd/elm-core-coverage.md); only the summary and the
+[`elm-core-coverage.md`](elm-core-coverage.md); only the summary and the
 decisions live here.
 
 | Module | Present | Diverged | Missing | Notes |
@@ -333,8 +333,7 @@ annotations + record update, and identical core syntax (pipelines, cons, lambdas
 stricter (see §6, ADR 0047).
 
 One **planned** language divergence is filed separately: closed-union `case`
-refusing catch-all arms (see the exhaustive-case finite-ADT design under
-`docs/architecture/`).
+refusing catch-all arms (tracked as a GitHub issue).
 
 One **shipped** syntax extension goes beyond Elm's `case…of`: **or-patterns**
 (`|` alternatives), e.g. `Up | Down -> "vertical"` and, with shared bindings,
@@ -342,5 +341,5 @@ One **shipped** syntax extension goes beyond Elm's `case…of`: **or-patterns**
 parity. Every alternative must bind the identical set of variables at identical
 types (checked as IPE-T0019 / a type mismatch), and an or-pattern participates
 in exhaustiveness by row expansion — `Red | Green | Blue` counts as full
-coverage of a three-constructor union. See the or-patterns design under
-`docs/architecture/`.
+coverage of a three-constructor union. This is ledgered in
+[`../divergences-from-sky.md`](../divergences-from-sky.md) §6.3.

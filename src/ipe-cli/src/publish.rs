@@ -1,7 +1,6 @@
 //! `ipe package publish` — prepare a package's index entry and open the index PR.
 //!
-//! Publish is a thin, non-privileged helper (design:
-//! `docs/architecture/tbd/package-publish-and-index-plan.md`). It runs the same
+//! Publish is a thin, non-privileged helper. It runs the same
 //! [`crate::audit::run_audit`] gate the author and the index CI run, computes the
 //! [`crate::index::EntryVersion`] for the working package, merges it into the
 //! package's `packages/<name>.toml` entry file, and opens a pull request against

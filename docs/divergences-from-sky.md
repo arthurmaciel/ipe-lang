@@ -104,9 +104,9 @@ recorded reference.
   (the ASCII goldens round-trip identically; `jwt.rs` owns its own base64/hex).
 - **Deferred (#55b):** the runtime-internal binary pipelines (`compression.rs`,
   `email.rs`, `ws_client.rs`) still use the Latin-1 `sky_bytes`/`bytes_to_sky`
-  helpers because they have no Ipê-facing module in the ipe port yet; #55b
-  migrates them onto `Bytes`(`Vec<u8>`) and deletes the helpers. See
-  `docs/architecture/encoding-bytes-migration.md`.
+  helpers because they have no Ipê-facing module in the ipe port yet; a
+  follow-up migrates them onto `Bytes`(`Vec<u8>`) and deletes the helpers
+  (tracked as a GitHub issue).
 
 ### B4 — `Ipe.Money.allocate` over a negative total
 - **Differs:** Ipê distributes the residue toward zero by sign so the shares sum
@@ -1660,8 +1660,7 @@ API-shape review):
 
 Three upgrades over the reference's async wrapper body
 (`upstream:src/Sky/Build/Rust/Ffi.hs`, the `Box::pin(async move {
-tokio::task::spawn(…).await })` three-arm match), adopted per
-`docs/architecture/async-ffi-bridge-design.md` §1.1/§4:
+tokio::task::spawn(…).await })` three-arm match):
 
 - **JoinError through the redaction funnel.** The reference's panic arm emits
   a bare `str_err("foreign async call panicked")` — no correlation id, no
@@ -1847,6 +1846,5 @@ gate, and LSP surfacing as diagnostics + quick-fix code actions. Rule
 catalogue v1: dead code, case hygiene, Elm-family pitfalls, and security
 smells (`Task String` errors, Float-money, password-`onInput`,
 `data-sky-eval`). Capability-only divergence: lint never changes what the
-compiler accepts, so Go-oracle parity is unaffected. Design + spec + phased
-plan: `docs/architecture/ipe-lint-tool-design-2026-07-16.md`. Filed
-2026-07-16 (backlog #207); implementation not started.
+compiler accepts, so Go-oracle parity is unaffected. Tracked as a GitHub
+issue; implementation not started.

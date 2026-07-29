@@ -2,10 +2,9 @@
 # artifact-guard — fail-closed check that no build artifact or oversized blob is
 # git-tracked. Regenerable build output (a `target/` directory, an `.rlib` /
 # `.rmeta`, an object/library/wasm blob) bloats every clone forever, and once in
-# history it can only be removed by a human-run history rewrite (git-filter-repo;
-# see docs/architecture/tbd/prune-git-history-from-binaries.md). This guard is
-# the mechanical enforcement that keeps the tree clean AFTER that rewrite: a
-# commit that adds such a file turns CI red.
+# history it can only be removed by a human-run history rewrite (git-filter-repo).
+# This guard is the mechanical enforcement that keeps the tree clean AFTER that
+# rewrite: a commit that adds such a file turns CI red.
 #
 # It inspects the working tree via `git ls-files` (the whole tracked set), so it
 # is exact whether run in CI or locally, and needs no diff base. Exit 0 = clean,
@@ -53,8 +52,7 @@ done < <(git ls-files -z)
 
 if [ "$fail" -ne 0 ]; then
   note "FAIL — remove the artifact from the index (git rm --cached <path>) and add a .gitignore rule."
-  note "If a history rewrite is needed to purge it from past commits, that is a human-run step:"
-  note "  docs/architecture/tbd/prune-git-history-from-binaries.md"
+  note "If a history rewrite is needed to purge it from past commits, that is a human-run step (git-filter-repo)."
   exit 1
 fi
 
