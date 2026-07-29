@@ -388,7 +388,7 @@ requires):
   output). A fast proxy for THE SEAL; the full 6-shard `e2e` runs post-merge.
 
 **Slow checks** run on push-to-`main` + a nightly `schedule`, never on a PR:
-the full 6-shard `e2e` (THE SEAL in full), live `sky-parity`, `miri`, the
+the full 6-shard `e2e` (THE SEAL in full), `miri`, the
 runtime feature-combo / full-feature builds, and `examples-sweep`. `wasm-floor`
 is off the always-required PR path — on a PR it runs only when wasm-relevant
 files change (a `paths` filter), plus nightly. Triggers live in

@@ -3394,6 +3394,8 @@ mod tests {
     #[test]
     fn generic_record_program_builds_and_prints_forty_two() {
         const SRC: &str = "module Main exposing (main)\n\n\
+             import Ipe.Io\n\
+             import Ipe.String\n\n\
              wrap : a -> { value : a }\n\
              wrap x =\n    { value = x }\n\n\
              unwrap : { value : a } -> a\n\

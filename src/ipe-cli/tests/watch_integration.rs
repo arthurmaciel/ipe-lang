@@ -33,7 +33,11 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 fn server_fixture(body: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.Http.Server as Server\n\n\
+         import Ipe.Http.Server as Server\n\
+         import Ipe.Maybe\n\
+         import Ipe.String\n\
+         import Ipe.System\n\
+         import Ipe.Task\n\n\
          main =\n    \
              let port = Maybe.withDefault 8080 (String.toInt (System.getenvOr \"IPE_SERVER_PORT\" \"8080\"))\n    \
              in\n    \

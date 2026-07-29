@@ -1,7 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
-import Ipe.Json.Decode
-import Ipe.Json.Decode.Pipeline
+import Ipe.Json.Decode as JsonDec
+import Ipe.Json.Decode.Pipeline as JsonDecP
 import Ipe.String
 
 -- R1: `JsonDec.succeed (\name age -> …)` — multi-arg lambda curry.

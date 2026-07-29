@@ -1,6 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
 import Ipe.Db
+import Ipe.Db.Decode
 import Ipe.Decimal
 import Ipe.List
 import Ipe.String
