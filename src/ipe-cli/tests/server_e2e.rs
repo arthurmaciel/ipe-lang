@@ -53,6 +53,10 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 const IPE_SERVER_PROGRAM: &str = r#"module Main exposing (main)
 
 import Ipe.Http.Server as Server
+import Ipe.Maybe
+import Ipe.String
+import Ipe.System
+import Ipe.Task
 
 main =
     let port = Maybe.withDefault 8080 (String.toInt (System.getenvOr "IPE_SERVER_PORT" "8080"))
@@ -236,6 +240,10 @@ fn spawn_and_wait_ready_with_env(
 const IPE_POST_ECHO_PROGRAM: &str = r#"module Main exposing (main)
 
 import Ipe.Http.Server as Server
+import Ipe.Maybe
+import Ipe.String
+import Ipe.System
+import Ipe.Task
 
 main =
     let port = Maybe.withDefault 8080 (String.toInt (System.getenvOr "IPE_SERVER_PORT" "8080"))
@@ -253,6 +261,10 @@ main =
 const IPE_INTROSPECT_PROGRAM: &str = r#"module Main exposing (main)
 
 import Ipe.Http.Server as Server
+import Ipe.Maybe
+import Ipe.String
+import Ipe.System
+import Ipe.Task
 
 main =
     let port = Maybe.withDefault 8080 (String.toInt (System.getenvOr "IPE_SERVER_PORT" "8080"))
@@ -278,6 +290,10 @@ const IPE_SERVER_AND_DB_PROGRAM: &str = r#"module Main exposing (main)
 
 import Ipe.Http.Server as Server
 import Ipe.Db as Db
+import Ipe.Maybe
+import Ipe.String
+import Ipe.System
+import Ipe.Task
 
 main =
     Task.andThen
@@ -299,6 +315,10 @@ const IPE_CSRF_PROGRAM: &str = r#"module Main exposing (main)
 
 import Ipe.Http.Server as Server
 import Ipe.Http.Middleware as Middleware
+import Ipe.Maybe
+import Ipe.String
+import Ipe.System
+import Ipe.Task
 
 handle : Server.Request -> Task Error Server.Response
 handle _req =

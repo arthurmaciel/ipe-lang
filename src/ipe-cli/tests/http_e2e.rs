@@ -135,6 +135,10 @@ fn start_fixture(
 const IPE_HTTP_GET_PROGRAM: &str = r#"module Main exposing (main)
 
 import Ipe.Http as Http
+import Ipe.Io
+import Ipe.String
+import Ipe.System
+import Ipe.Task
 
 main =
     Task.andThen
@@ -145,6 +149,10 @@ main =
 const IPE_HTTP_POST_PROGRAM: &str = r#"module Main exposing (main)
 
 import Ipe.Http as Http
+import Ipe.Io
+import Ipe.String
+import Ipe.System
+import Ipe.Task
 
 main =
     Task.andThen
@@ -164,6 +172,10 @@ main =
 const IPE_HTTP_SSRF_PROGRAM: &str = r#"module Main exposing (main)
 
 import Ipe.Http as Http
+import Ipe.Io
+import Ipe.String
+import Ipe.System
+import Ipe.Task
 
 main =
     Task.onError
