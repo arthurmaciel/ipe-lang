@@ -79,9 +79,9 @@ Production-grade code no survive guesswork.
 
 ### The six decisions to confirm
 
-1. **App shape** — match matrix. The four TEA shapes live under `Ipe.Tea.*`:
-   `Ipe.Tea.Web`=web UI, `Ipe.Tea.Console`=line-oriented TEA,
-   `Ipe.Tea.Tui`=terminal UI, `Ipe.Tea.WebView`=desktop. `Ipe.Http.Server`=headless
+1. **App shape** — match matrix. The three TEA shapes live under `Ipe.Tea.*`:
+   `Ipe.Tea.Web`=web UI, `Ipe.Tea.Terminal`=terminal UI (`appScreen`) and
+   line-oriented REPL (`appLines`), `Ipe.Tea.WebView`=desktop. `Ipe.Http.Server`=headless
    API and a plain `main` (one-shot/cron) are both the non-TEA **Program** shape.
    Importing anything under `Ipe.Tea.*` marks a module a TEA app; a plain-`main`
    Program that imports a `Ipe.Tea.*` shape is rejected (IPE-N0033).
@@ -105,8 +105,8 @@ Ask one focused question per ambiguity; no guess heroically.
 | HTTP / JSON API (no browser UI)          | **Ipe.Http.Server**| `Server.listen 8000 [...]`         | Routes + middleware (CORS / rate-limit / logging / basic-auth). |
 | Multi-tenant SaaS / dashboard            | **Ipe.Tea.Web + auth-app gate** | `Web.app { consoleAuth = … }` | Tenant scope enforced at SQL layer. |
 | Background job / cron worker             | **Program** (plain `main`) | `main = Task.run scheduledWork`    | No UI loop; `Task.parallel` for fan-out. |
-| Line-oriented interactive tool           | **Ipe.Tea.Console**    | `Console.app cfg`                  | Managed stdin-driven TEA loop (init/update/view/onLine). |
-| Terminal UI (TUI)                        | **Ipe.Tea.Tui**        | `Tui.app cfg`                  | Same `Element` view as Ipe.Tea.Web. |
+| Line-oriented interactive tool           | **Ipe.Tea.Terminal**   | `Terminal.appLines cfg`            | Managed stdin-driven TEA loop (init/update/view/onLine). |
+| Terminal UI (TUI)                        | **Ipe.Tea.Terminal**   | `Terminal.appScreen cfg`           | Same `Element` view as Ipe.Tea.Web. |
 | One-shot CLI tool                        | **Program** (plain `main`) | `main = Task.run cliCmd`           | Argparse via `System.args`. |
 | Desktop app                              | **Ipe.Tea.WebView**    | `WebView.app cfg`                  | macOS today; Linux / Windows later. |
 | WebSocket-driven feed                    | **Ipe.Http.Server.WebSocket** | `Server.upgrade req` | Bidirectional. |
@@ -329,9 +329,9 @@ main =
 HTTP-first (full HTML on load, patches on events), SSE subscriptions,
 session stores (memory/sqlite/redis/postgres/firestore), type-safe events,
 VNode diffing. `Web.app` takes `view : Model -> Element Msg` — the portable
-`Ipe.Ui` view shared with `Ipe.Tea.WebView`/`Ipe.Tea.Tui` (the framework applies
-`Ui.layout` internally). For direct DOM control, `Web.appHtml` takes
-`view : Model -> Html Msg` (raw `Ipe.Html`, no wrap).
+`Ipe.Ui` view shared with `Ipe.Tea.WebView`/`Ipe.Tea.Terminal` (the framework
+applies `Ui.layout` internally). For direct DOM control, drop raw `Ipe.Html` into
+the view through the `Ui.html : Html msg -> Element msg` node.
 
 **`init` is per-session, not per-page-reload.** First request from browser
 w/ no `ipe_sid` cookie fires `init`. Browser reload while session alive
@@ -763,7 +763,7 @@ cascade, page background image).
   `DarkMode`, `LightMode`, `ReducedMotion`, `TouchDevice`, `Portrait`,
   `Landscape`, `Custom Int Int` (minPx maxPx; 0=unset). `Ui.mediaQuery
   query [attrs] child` = escape hatch for raw CSS media-query string.
-  Ipe.Tea.Tui ignores `<style>`; Ipe.Tea.WebView honours media queries
+  Ipe.Tea.Terminal ignores `<style>`; Ipe.Tea.WebView honours media queries
   identically to Ipe.Tea.Web. Pick `Ui.breakpoint` when transition needs no typed Msg;
   pick `Ipe.Ui.Responsive` when it does.
 - **Transitions + animations** (`Ipe.Ui.Transition`/`Ipe.Ui.Animation`/
@@ -830,12 +830,14 @@ Ui.input
 Callback receives data URL. Decode w/ `Ipe.Encoding.base64Decode` → upload
 via `Http.post`. Ensure `[live] maxBodyBytes` ≥ your `fileMaxSize`.
 
-## Ipe.Tea.Tui
+## Ipe.Tea.Terminal
 
-TEA backend rendering `Ipe.Ui` to ANSI cells (`import Ipe.Tea.Tui as Tui`).
-Same `init`/`update`/`view`/`subscriptions` shape as Ipe.Tea.Web. `Tui.app`
-takes `view : Model -> Element Msg` (the portable `Ipe.Ui` tree); the raw-frame
-variant `Tui.program` takes `view : Model -> String`.
+TEA backend for the terminal (`import Ipe.Tea.Terminal as Terminal`). Same
+`init`/`update`/`view`/`subscriptions` shape as Ipe.Tea.Web, two entries by
+drive axis: `Terminal.appScreen` renders `Ipe.Ui` to ANSI cells with
+`view : Model -> Element Msg` (the portable `Ipe.Ui` tree, keystroke-driven via
+`onKey`); `Terminal.appLines` is the line-oriented REPL with
+`view : Model -> String` and `onLine : String -> Msg`.
 
 ```elm
 type alias Cfg model msg =
@@ -849,7 +851,7 @@ type alias Cfg model msg =
     , canvasHeight  : Int                              -- default 720
     }
 
-main = Tui.app cfg |> Task.run
+main = Terminal.appScreen cfg |> Task.run
 ```
 
 **Logical-pixel canvas** — `canvasWidth × canvasHeight` defines design
@@ -860,7 +862,7 @@ image fills) emit deduped warning (`IPE_TUI_QUIET=1` suppresses). Wide chars
 
 ## Ipe.Tea.WebView (desktop)
 
-Cross-backend mirror of `Web.app`+`Tui.app` — same TEA shape, native
+Cross-backend mirror of `Web.app`+`Terminal.appScreen` — same TEA shape, native
 desktop window via system webview. No HTTP server, no SSE, no session store.
 
 ```elm
@@ -877,12 +879,11 @@ main =
 ```
 
 Same `view : Model -> Element Msg` paints identically across `Ipe.Tea.Web`
-(web), `Ipe.Tea.Tui` (terminal), and `Ipe.Tea.WebView` (desktop) — the
-framework applies `Ui.layout` internally, so the view returns the raw
-`Element` with no wrap. `WindowCfg` is closed (`{ title : String, size :
-(Int, Int) }`) today; macOS supported first. For direct DOM control,
-`WebView.appHtml` takes `view : Model -> Html Msg` (raw `Ipe.Html`, no
-`Ui.layout` wrap).
+(web), `Ipe.Tea.Terminal` (terminal, `appScreen`), and `Ipe.Tea.WebView`
+(desktop) — the framework applies `Ui.layout` internally, so the view returns the
+raw `Element` with no wrap. `WindowCfg` is closed (`{ title : String, size :
+(Int, Int) }`) today; macOS supported first. For direct DOM control, drop raw
+`Ipe.Html` into the view through the `Ui.html : Html msg -> Element msg` node.
 
 ## Browser-WASM target (`--target wasm`)
 
@@ -1025,7 +1026,7 @@ ipe doc --serve [--port 8080]      # browsable HTTP doc server
 ipe doc --tui                      # interactive terminal doc browser
 ipe doc --list                     # list every documented module
 ipe doctor [--fix] [--verbose]     # project / environment health checks
-ipe console [--port 8025]          # standalone Ipe.Ui console (--tui for the Ipe.Tea.Tui backend)
+ipe console [--port 8025]          # standalone Ipe.Ui console (--tui for the Ipe.Tea.Terminal backend)
 ipe add <package>                  # add an FFI binding
 ipe remove <package>
 ipe install                        # regen missing FFI + deps

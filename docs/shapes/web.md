@@ -13,15 +13,16 @@ a clear error.
 `main = Web.app cfg`, where `cfg` is a record of
 `init` / `update` / `view` / `subscriptions` plus `routes` and `notFound` for
 URL routing. The view type is `view : Model -> Element Msg` — the portable
-`Ipe.Ui` layout vocabulary shared with [WebView](webview.md) and [TUI](tui.md).
-The framework applies `Ui.layout` internally to turn that `Element` into the DOM,
-so a Web view is the same shape as a TUI view and switching between the two is a
-one-line change of the imported shape (see [Views: Ui, Html, and Css](../ui.md)).
+`Ipe.Ui` layout vocabulary shared with [WebView](webview.md) and
+[Terminal](terminal.md). The framework applies `Ui.layout` internally to turn
+that `Element` into the DOM, so a Web view is the same shape as a Terminal view
+and switching between the two is a one-line change of the imported shape (see
+[Views: Ui, Html, and Css](../ui.md)).
 
 When you need direct DOM control — a tag or attribute `Ipe.Ui` does not
-expose — reach for `Web.appHtml`, the raw-`Html` escape entry. Its `cfg` is
-identical except `view : Model -> Html Msg`: the view is authored with `Ipe.Html`
-and handed to the runtime with no `Ui.layout` wrap.
+expose — author it with `Ipe.Html` and drop it into the `Element` view through
+the `Ui.html : Html msg -> Element msg` node. Raw HTML is reached as a node
+inside the one `Element` view, not through a separate entry point.
 
 ## Minimal example
 

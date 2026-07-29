@@ -12,12 +12,13 @@ shipping a web stack. The `Model` is kept in memory as a plain value.
 `init` / `update` / `view` / `subscriptions` plus a `window` record
 (`{ title : String, size : ( Int, Int ) }`). The view type is
 `view : Model -> Element Msg` — the same portable `Ipe.Ui` view as
-[Web](web.md) and [TUI](tui.md); the framework applies `Ui.layout` internally to
-render it into the window (see [Views: Ui, Html, and Css](../ui.md)).
+[Web](web.md) and [Terminal](terminal.md); the framework applies `Ui.layout`
+internally to render it into the window (see
+[Views: Ui, Html, and Css](../ui.md)).
 
-For direct DOM control, `WebView.appHtml` is the raw-`Html` escape entry
-(symmetric with [Web](web.md#entry-point)'s `Web.appHtml`): the same `cfg` with
-`view : Model -> Html Msg`, authored with `Ipe.Html` and no `Ui.layout` wrap.
+For direct DOM control, author it with `Ipe.Html` and drop it into the `Element`
+view through the `Ui.html : Html msg -> Element msg` node (the same raw-HTML
+escape [Web](web.md#entry-point) uses).
 
 ## Minimal example
 
