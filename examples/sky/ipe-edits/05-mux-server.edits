@@ -16,7 +16,7 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Ipe.Http.Server as Server
 import Ipe.Http.Server exposing (Handler, Request, Response)
 import Ipe.Error exposing (Error)
@@ -40,7 +40,7 @@ pingHandler _req =
 main : Task Error ()
 main =
     let
-        _ = println "Server starting on port 8000"
+        _ = Io.println "Server starting on port 8000"
     in
         Server.listen
             8000

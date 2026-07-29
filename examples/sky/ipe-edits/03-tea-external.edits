@@ -10,7 +10,7 @@ file: src/Main.ipe
 find:
 """
 import Ipe.Result as Result
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 import Github.Com.Google.Uuid as Uuid
 """
 replace:
@@ -18,7 +18,7 @@ replace:
 import Ipe.Result as Result
 import Ipe.Task as Task
 import Ipe.Crypto as Crypto
-import Ipe.Log exposing (println)
+import Ipe.Io as Io
 """
 
 [[edit]]

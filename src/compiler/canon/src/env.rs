@@ -484,6 +484,8 @@ impl Env {
             // `Some(StdlibKernel::ErrorToString)` and the type-checker
             // can look up its scheme without hitting IPE-L0108.
             ("errorToString", error_sym, "toString"),
+            // Three-way comparison — `compare : comparable -> comparable -> Order`.
+            ("compare", basics, "compare"),
             // ── Basics numerics ─────────────────────────────────────────────
             ("negate", basics, "negate"),
             ("abs", basics, "abs"),

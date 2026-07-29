@@ -1689,6 +1689,7 @@ mod windows_jail {
     /// the host-independent volume-capability decision + its unit tests) in
     /// lockstep with the real Win32 value from `windows-sys`. If they ever diverge
     /// this fails the Windows build.
+    // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); it fails the build if the cross-platform flag drifts from the Win32 constant [ledger #boundary]
     const _: () = assert!(super::FILE_PERSISTENT_ACLS_FLAG == FILE_PERSISTENT_ACLS);
 
     /// An owned Win32 `HANDLE` closed on drop — RAII so no error path leaks a
@@ -1761,6 +1762,7 @@ mod windows_jail {
         app_args: &[OsString],
     ) -> Result<std::convert::Infallible, RunJailDefect> {
         let code = run_confined(profile, scoped_tmp, working_tree, app, app_args)?;
+        // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — jail exec process control: the launcher is the job owner and replaces itself with the confined child's exit code (returns Infallible) [ledger #boundary]
         std::process::exit(i32::from_ne_bytes(code.to_ne_bytes()));
     }
 

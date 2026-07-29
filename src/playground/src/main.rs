@@ -335,6 +335,7 @@ async fn main() {
         }
         Err(e) => {
             error!("{e}");
+            // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — playground binary `main` startup boundary: no ipe binary means nothing to serve [ledger #boundary]
             std::process::exit(1);
         }
     };
@@ -346,6 +347,7 @@ async fn main() {
         }
         Err(e) => {
             error!("{e}");
+            // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — playground binary `main` startup boundary: no runtime dir means nothing to serve [ledger #boundary]
             std::process::exit(1);
         }
     };
@@ -403,12 +405,14 @@ async fn main() {
         Ok(l) => l,
         Err(e) => {
             error!("failed to bind {addr}: {e}");
+            // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — playground binary `main` bind boundary: cannot open the listening socket [ledger #boundary]
             std::process::exit(1);
         }
     };
 
     if let Err(e) = axum::serve(listener, app).await {
         error!("server error: {e}");
+        // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — playground binary `main` serve boundary: the server loop returned an error [ledger #boundary]
         std::process::exit(1);
     }
 }
