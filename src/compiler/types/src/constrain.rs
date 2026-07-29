@@ -3014,7 +3014,7 @@ impl<'a> Builder<'a> {
             // the Model var (var index 0) and notFound var (var index 2), then
             // push a `RoutedLiveCheck` so `resolve_routed_live_checks` can run
             // the gate after the HM solver settles.
-            if matches!(k, StdlibKernel::WebApp | StdlibKernel::WebAppHtml) {
+            if matches!(k, StdlibKernel::WebApp) {
                 let ty = self.stdlib_scheme(k).ok_or(Diagnostic::Lower {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
@@ -5161,17 +5161,12 @@ impl<'a> Builder<'a> {
             // (emit_web.rs T5) — not at type time.
             //
             // Removes #[allow(dead_code)] from `live_f_routes` / `live_f_not_found`.
-            K::WebApp | K::WebAppHtml => {
-                // `view : Model -> Element Msg` for `WebApp` (the framework
-                // applies `Ui.layout` internally, unifying the graphical shapes
-                // on `Element`); `view : Model -> Html Msg` for the raw-`Html`
-                // escape `WebAppHtml`. Every other cfg field is identical, so
-                // the two share one scheme body that differs only in `view`.
-                let view_ret = if matches!(k, K::WebAppHtml) {
-                    html_t(var(1))
-                } else {
-                    elem_t(var(1))
-                };
+            K::WebApp => {
+                // `view : Model -> Element Msg`; the framework applies
+                // `Ui.layout` internally, unifying the graphical shapes on
+                // `Element`. Raw HTML is reached through the `Ui.html` node
+                // inside this single `Element` view.
+                let view_ret = elem_t(var(1));
                 let init_ret = tuple2(var(0), cmd(var(1)));
                 let cfg_rec = Ty::Record(
                     {
@@ -5228,31 +5223,12 @@ impl<'a> Builder<'a> {
             K::WebRoute => fun(string(), fun(var(1), live_route(var(0)))),
             K::WebRenderStatic => fun(fun(var(0), html_t(var(1))), fun(var(0), task_unit())),
 
-            // ── Ipe.Tui app-entry ──────────────────────────────────────────────
+            // ── Ipe.Terminal full-screen app-entry (`appScreen`) ────────────────
             //
-            // Haskell reference (`Ipe/Type/Constrain/Expression.hs`):
-            //
-            //   Tui.app   – 4 required fields; `onKey` optional via open row.
-            //               view : model -> any  (Element for Ipe.Ui, String for
-            //               raw ANSI; Haskell uses `any` wildcard).
-            //   Tui.program – 5 required fields including `onKey : any -> msg`.
-            //               `any` means the key-event type is UNCONSTRAINED —
-            //               the user's `KeyEvent = { kind, value }` record alias
-            //               unifies freely.  view : model -> String.
-            //
-            // Rust-port divergence (see docs/divergences-from-sky.md):
-            //
-            //   `onKey` is REQUIRED in both `TuiApp` and `TuiProgram` because the
-            //   Rust runtime's `tui_app_ui` / `tui_app` entry takes a concrete
-            //   `FOnKey: Fn(String, String) -> Msg` bound (no `Option` form), so
-            //   we cannot fabricate a `Msg` when the handler is absent.  When the
-            //   Rust runtime gains an `Option<FOnKey>` overload, `TuiApp` can be
-            //   relaxed to match the Haskell open-row (optional) spec.
-            //
-            //   `view` for `TuiApp` is typed `model -> Element msg` (not the
-            //   Haskell `model -> any`) because `tui_app_ui` takes
-            //   `FView: Fn(Model) -> Element<Msg>`.  A `TuiApp` with a String view
-            //   should use `TuiProgram` instead.
+            // `view : Model -> Element Msg`, driven by `onKey`. `onKey` is
+            // REQUIRED because the runtime's `tui_app_ui` entry takes a concrete
+            // `FOnKey: Fn(String, String) -> Msg` bound (no `Option` form), so a
+            // `Msg` cannot be fabricated when the handler is absent.
             //
             // Variable assignment:
             //   var(0) = model
@@ -5260,15 +5236,11 @@ impl<'a> Builder<'a> {
             //   var(3) = appExt     (open-row tail, absorbs guard/canvasWidth/…)
             //
             // `onKey`'s parameter is PINNED to the closed record
-            // `{ kind : String, value : String }` (the KeyEvent shape). The
-            // Haskell reference types it `any -> msg` and Go fails at RUNTIME
-            // when the handler param isn't the KeyEvent shape; we fail at
-            // compile time instead (same sanctioned tightening as the Model /
-            // Msg admissibility gates). An unconstrained var here was an
-            // exit-0-then-cargo-fail hole: `onKey : String -> Msg` type-checked
-            // but the emitted 1-arg fn broke the runtime's
-            // `FOnKey: Fn(String, String) -> Msg` bound (E0593).
-            K::TuiApp => {
+            // `{ kind : String, value : String }` (the KeyEvent shape): the
+            // emitted handler must satisfy the runtime's
+            // `FOnKey: Fn(String, String) -> Msg` bound, so an unconstrained
+            // param would type-check yet break `cargo build` (E0593).
+            K::TerminalAppScreen => {
                 let key_event = Ty::Record(
                     {
                         let mut k = BTreeMap::new();
@@ -5295,43 +5267,15 @@ impl<'a> Builder<'a> {
                 );
                 fun(cfg_rec, task_unit())
             }
-            K::TuiProgram => {
-                let key_event = Ty::Record(
-                    {
-                        let mut k = BTreeMap::new();
-                        k.insert(self.builtins.tui_f_key_kind, string());
-                        k.insert(self.builtins.tui_f_key_value, string());
-                        k
-                    },
-                    RowTail::Closed,
-                );
-                let tup = tuple2(var(0), cmd(var(1)));
-                let cfg_rec = Ty::Record(
-                    {
-                        let mut m = BTreeMap::new();
-                        m.insert(self.builtins.live_f_init, fun(Ty::Unit, tup.clone()));
-                        m.insert(self.builtins.live_f_update, fun(var(1), fun(var(0), tup)));
-                        m.insert(self.builtins.live_f_view, fun(var(0), string()));
-                        m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
-                        // onKey : { kind : String, value : String } -> msg (pinned —
-                        // see the `K::TuiApp` comment above for the seal rationale).
-                        m.insert(self.builtins.tui_f_on_key, fun(key_event, var(1)));
-                        m
-                    },
-                    // Open row: absorbs optional fields (guard, canvasWidth, canvasHeight, …).
-                    RowTail::Open(3),
-                );
-                fun(cfg_rec, task_unit())
-            }
 
-            // ── Ipe.Console / Ipe.Console app-entry ─────────────────────
-            // `Console.app : { init : () -> (model, Cmd msg)
-            //                , update : msg -> model -> (model, Cmd msg)
-            //                , view : model -> String
-            //                , subscriptions : model -> Sub msg
-            //                , onLine : String -> msg
-            //                } -> Task () ()`
-            K::ConsoleApp => {
+            // ── Ipe.Terminal line-oriented app-entry (`appLines`) ───────────────
+            // `Terminal.appLines : { init : () -> (model, Cmd msg)
+            //                      , update : msg -> model -> (model, Cmd msg)
+            //                      , view : model -> String
+            //                      , subscriptions : model -> Sub msg
+            //                      , onLine : String -> msg
+            //                      } -> Task () ()`
+            K::TerminalAppLines => {
                 let tup = tuple2(var(0), cmd(var(1)));
                 let cfg_rec = Ty::Record(
                     {
@@ -5343,8 +5287,8 @@ impl<'a> Builder<'a> {
                         m.insert(self.builtins.cli_f_on_line, fun(string(), var(1)));
                         m
                     },
-                    // Closed cfg record — like `Tui.app` / `Webview.app`, the
-                    // Cli cfg takes exactly its named fields (the open
+                    // Closed cfg record — like `appScreen` / `WebView.app`, the
+                    // line cfg takes exactly its named fields (the open
                     // row is a `Web.app`-only surface).
                     RowTail::Closed,
                 );
@@ -5353,15 +5297,11 @@ impl<'a> Builder<'a> {
 
             // ── Ipe.WebView app-entry (already schemed in kernel_ty) ──
             //
-            // `view : Model -> Element Msg` for `WebViewApp` (framework applies
-            // `Ui.layout`, same unification as Web); `view : Model -> Html Msg`
-            // for the raw-`Html` escape `WebViewAppHtml`.
-            K::WebViewApp | K::WebViewAppHtml => {
-                let view_ret = if matches!(k, K::WebViewAppHtml) {
-                    html_t(var(1))
-                } else {
-                    elem_t(var(1))
-                };
+            // `view : Model -> Element Msg`; the framework applies `Ui.layout`,
+            // the same unification as Web. Raw HTML is reached through the
+            // `Ui.html` node inside this single `Element` view.
+            K::WebViewApp => {
+                let view_ret = elem_t(var(1));
                 let tup = tuple2(var(0), cmd(var(1)));
                 let window_ty = Ty::Record(
                     {
@@ -7988,17 +7928,14 @@ mod registry_phase_c_tests {
             K::UiOnKeyUp,
             K::UiOnBool,
             K::UiOnSubmit,
-            // Ipe.Web app-entry (4)
+            // Ipe.Web app-entry (3)
             K::WebApp,
-            K::WebAppHtml,
             K::WebRoute,
             K::WebRenderStatic,
-            // Ipe.Tui app-entry (2)
-            K::TuiApp,
-            K::TuiProgram,
-            // Ipe.WebView app-entry (2)
+            // Ipe.Terminal app-entry (1)
+            K::TerminalAppScreen,
+            // Ipe.WebView app-entry (1)
             K::WebViewApp,
-            K::WebViewAppHtml,
             // Ipe.Html styleNode (1 — F7; parity checked by
             // stdlib_scheme_matches_legacy).
             K::HtmlStyleNode,
@@ -8538,8 +8475,8 @@ mod registry_phase_c_tests {
             K::FontDisabledColor,
             K::FontHoverSize,
             K::HtmlAttrTabindex,
-            // Ipe.Console / Ipe.Console app-entry — brand-new kernel, no legacy oracle.
-            K::ConsoleApp,
+            // Ipe.Terminal line-oriented app-entry.
+            K::TerminalAppLines,
             // ── Ipe.Auth (9 kernels) — schemed + lowered, moved from REACHABLE_BUT_UNLOWERED ──
             K::AuthHashPassword,
             K::AuthHashPasswordCost,

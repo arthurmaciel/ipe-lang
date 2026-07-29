@@ -893,16 +893,13 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::HtmlAttrToString => "Html.attrToString",
         // ── Ipe.Web app-entry kernels ───────────────────────────────────
         KernelFn::WebApp => "Web.app",
-        KernelFn::WebAppHtml => "Web.appHtml",
         KernelFn::WebAppRouted => "Web.appRouted",
         KernelFn::WebRoute => "Web.route",
         KernelFn::WebRenderStatic => "Web.renderStatic",
-        // ── Ipe.Tui app-entry kernels ────────────────────────────────────
-        KernelFn::TuiProgram => "Tui.program",
-        KernelFn::TuiApp => "Tui.app",
+        // ── Ipe.Terminal app-entry kernels ───────────────────────────────
+        KernelFn::TerminalAppScreen => "Terminal.appScreen",
         // ── Ipe.WebView app-entry kernel ─────────────────────────────────
         KernelFn::WebViewApp => "WebView.app",
-        KernelFn::WebViewAppHtml => "WebView.appHtml",
         // ── Ipe.Ui element builders ──────────────────────────────────────
         KernelFn::UiNone => "Ui.none",
         KernelFn::UiText => "Ui.text",
@@ -1191,8 +1188,8 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::HtmlOnKeyDown => "Event.onKeyDown",
         KernelFn::HtmlOnKeyUp => "Event.onKeyUp",
         KernelFn::HtmlOnBool => "Event.onBool",
-        // ── Cli app-entry + Auth + Stream + HttpStream ─────────────────
-        KernelFn::ConsoleApp => "Console.app",
+        // ── Terminal line app-entry + Auth + Stream + HttpStream ───────
+        KernelFn::TerminalAppLines => "Terminal.appLines",
         KernelFn::AuthHashPassword => "Auth.hashPassword",
         KernelFn::AuthHashPasswordCost => "Auth.hashPasswordCost",
         KernelFn::AuthVerifyPassword => "Auth.verifyPassword",

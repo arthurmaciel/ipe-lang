@@ -1000,15 +1000,14 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::HtmlEscapeAttr => "html_escape_attr_",
         KernelFn::HtmlAttrToString => "html_attr_to_string_",
         // ── Ipe.Web app-entry kernels ───────────────────────────────────
-        KernelFn::WebApp | KernelFn::WebAppHtml => "web_app",
+        KernelFn::WebApp => "web_app",
         KernelFn::WebAppRouted => "web_app_routed",
         KernelFn::WebRoute => "web_route",
         KernelFn::WebRenderStatic => "web_render_static",
-        // ── Ipe.Tui app-entry kernels ───────────────────────────────────
-        KernelFn::TuiProgram => "tui_app",
-        KernelFn::TuiApp => "tui_app_ui",
+        // ── Ipe.Terminal app-entry kernels ──────────────────────────────
+        KernelFn::TerminalAppScreen => "tui_app_ui",
         // ── Ipe.WebView app-entry kernel ────────────────────────────────
-        KernelFn::WebViewApp | KernelFn::WebViewAppHtml => "webview_app",
+        KernelFn::WebViewApp => "webview_app",
         // ── Ipe.Ui element builders ──────────────────────────────────────
         KernelFn::UiNone => "ui_none_",
         KernelFn::UiText => "ui_text_",
@@ -1330,10 +1329,10 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         | KernelFn::HtmlOnKeyUp => "html_on_string_",
         KernelFn::HtmlOnBool => "html_on_bool_",
         KernelFn::HtmlOnSubmit => "html_on_raw_",
-        // ── Cli app-entry ───────────────────────────────────────────────
-        // ConsoleApp is emitted via the dedicated emit_console_call path;
+        // ── Terminal line app-entry ─────────────────────────────────────
+        // TerminalAppLines is emitted via the dedicated emit_console_call path;
         // kernel_name is kept for match exhaustiveness.
-        KernelFn::ConsoleApp => "ipe_console_app_",
+        KernelFn::TerminalAppLines => "ipe_console_app_",
         // ── Ipe.Auth runtime function names (auth.rs) ──────────────────
         KernelFn::AuthHashPassword => "auth_hash_password",
         KernelFn::AuthHashPasswordCost => "auth_hash_password_cost",

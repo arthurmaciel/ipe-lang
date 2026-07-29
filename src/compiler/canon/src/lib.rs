@@ -2133,8 +2133,8 @@ mod tests {
         // canonical side):
         //   Basics, Attr, Event                    — non-module prelude names
         //   Ipe.Html, Ipe.Ui, Ipe.Html.Attributes,
-        //   Ipe.Html.Events, Ipe.Web, Ipe.Tui, Ipe.WebView  — Ipe.* aliases
-        //   Ipe.Html, Ipe.Ui, Ipe.Web, Ipe.Tui    — Ipê.* aliases
+        //   Ipe.Html.Events, Ipe.Web, Ipe.Terminal, Ipe.WebView  — Ipe.* aliases
+        //   Ipe.Html, Ipe.Ui, Ipe.Web, Ipe.Terminal    — Ipê.* aliases
         //
         // Note: QUALIFIER_ALIASES clone their members INCLUDING the id, so the
         // alias entries are correct by construction.  The exclusion exists only
@@ -2149,12 +2149,12 @@ mod tests {
             "Ipe.Html.Attributes",
             "Ipe.Html.Events",
             "Ipe.Web",
-            "Ipe.Tui",
+            "Ipe.Terminal",
             "Ipe.WebView",
             "Ipe.Html",
             "Ipe.Ui",
             "Ipe.Web",
-            "Ipe.Tui",
+            "Ipe.Terminal",
         ]
         .into_iter()
         .collect();

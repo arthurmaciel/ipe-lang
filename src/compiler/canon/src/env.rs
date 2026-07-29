@@ -112,11 +112,11 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Html", "Events"], "Event"),
     // ── Ipe.Tea.<Shape> managed-update-loop shapes (ADR 0048) ────────────────
     // The four TEA shapes live under `Ipe.Tea.*`; the canonical short qualifier
-    // ("Web"/"Tui"/…) is preserved so every lower.rs kernel match arm is
+    // ("Web"/"Terminal"/…) is preserved so every lower.rs kernel match arm is
     // unchanged. Importing any `Ipe.Tea.*` module marks the module a TEA app —
     // a plain-`main` Program that imports one is rejected (IPE-N0033).
     (&["Ipe", "Tea", "Web"], "Web"),
-    (&["Ipe", "Tea", "Tui"], "Tui"),
+    (&["Ipe", "Tea", "Terminal"], "Terminal"),
     (&["Ipe", "Tea", "WebView"], "WebView"),
     // `Ipe.Tea.Web.PubSub` — the Web-shape-scoped TEA-side broadcast surface:
     // `publish` / `publishNoEcho` (Cmd forms, fired from `update`) and
@@ -126,7 +126,6 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     // app (IPE-N0033). Its members re-export the canonical `Cmd` / `Sub` kernels.
     (&["Ipe", "Tea", "Web", "PubSub"], "TeaWebPubSub"),
     // ── Effect stdlib modules ───────────────────────────────────────────────
-    (&["Ipe", "Tea", "Console"], "Console"),
     (&["Ipe", "Auth"], "Auth"),
     (&["Ipe", "Auth"], "Auth"),
     (&["Ipe", "Http", "Server", "Stream"], "Stream"),
@@ -1618,18 +1617,14 @@ impl Env {
                     "onMsg",
                 ],
             ),
-            // ── Ipe.Web / Ipe.Web app-entry kernels ──────────────────────────────
-            (
-                "Web",
-                &["app", "appHtml", "appRouted", "route", "renderStatic"],
-            ),
-            // ── Ipe.Tui / Ipe.Tui app-entry kernels ──────────────────────────────
-            ("Tui", &["app", "program"]),
-            // ── Ipe.WebView / Ipe.WebView app-entry kernel ───────────────────────
-            ("WebView", &["app", "appHtml"]),
-            // ── Effect stdlib modules ─────────────────────────────────────────────
-            // Ipe.Console — line-oriented TEA app-entry (fully wired). — line-oriented TEA app-entry (fully wired).
-            ("Console", &["app"]),
+            // ── Ipe.Web app-entry kernels ────────────────────────────────────────
+            ("Web", &["app", "appRouted", "route", "renderStatic"]),
+            // ── Ipe.Terminal app-entry kernels ───────────────────────────────────
+            // `appScreen` (full screen, `onKey`) and `appLines` (line stream,
+            // `onLine`) — one terminal TEA shape, two drive axes.
+            ("Terminal", &["appScreen", "appLines"]),
+            // ── Ipe.WebView app-entry kernel ─────────────────────────────────────
+            ("WebView", &["app"]),
             // Ipe.Auth / Ipe.Auth — authentication helpers (fail-closed: no lower
             // arm yet → IPE-L0108 at lower time; canon registration removes N0004).
             (
@@ -1769,11 +1764,10 @@ impl Env {
             ("Ipe.Html.Events", "Event"),
             // ── Ipe.Tea.<Shape> shape aliases (ADR 0048) ──────────────────────
             ("Ipe.Tea.Web", "Web"),
-            ("Ipe.Tea.Tui", "Tui"),
+            ("Ipe.Tea.Terminal", "Terminal"),
             ("Ipe.Tea.WebView", "WebView"),
             ("Ipe.Log", "Log"),
             // ── Effect stdlib module aliases ──────────────────────────────────────
-            ("Ipe.Tea.Console", "Console"),
             ("Ipe.Auth", "Auth"),
             ("Ipe.Http.Server.Stream", "Stream"),
             ("Ipe.Http.Stream", "HttpStream"),

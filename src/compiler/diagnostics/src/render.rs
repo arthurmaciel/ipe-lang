@@ -478,8 +478,9 @@ fn name_label(msg: &NameError) -> Option<String> {
         NameError::ProgramImportsTeaShape { module } => Some(format!(
             "this module has a plain `main` (a Program) but imports `{module}`; \
              a module that imports any `Ipe.Tea.*` shape is a TEA app, so give \
-             `main` a shape entry (`Web.app` / `Tui.app` / `Console.app` / \
-             `WebView.app`), or drop the `{module}` import if this is a Program"
+             `main` a shape entry (`Web.app` / `Terminal.appScreen` / \
+             `Terminal.appLines` / `WebView.app`), or drop the `{module}` import \
+             if this is a Program"
         )),
         NameError::Unknown => None,
     }
@@ -807,7 +808,8 @@ const fn feature_label(f: Feature) -> &'static str {
              [feature: routed-live-app]"
         }
         Feature::LetBoundAppCfg => {
-            "the cfg for an app entry point (`Web.app` / `Tui.app` / `Tui.program` / \
+            "the cfg for an app entry point (`Web.app` / `Terminal.appScreen` / \
+             `Terminal.appLines` / \
              `WebView.app`), and for `WebView.app` its nested `window` record and \
              `window.size` tuple, must be written inline as a record/tuple literal, \
              not a let-bound variable [feature: let-bound-app-cfg]"

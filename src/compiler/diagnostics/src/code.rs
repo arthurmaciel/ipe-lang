@@ -225,8 +225,8 @@ pub const IPE_L0117: Code = Code("IPE-L0117");
 pub const IPE_L0118: Code = Code("IPE-L0118");
 /// an app-entry cfg must be an inline record literal, not a let-bound variable
 pub const IPE_L0119: Code = Code("IPE-L0119");
-/// a Web/Tui/WebView app Model is not admissible for that app shape's runtime
-/// bound (Web needs serde+Clone+PartialEq; Tui/WebView need Clone)
+/// a Web/Terminal/WebView app Model is not admissible for that app shape's
+/// runtime bound (Web needs serde+Clone+PartialEq; Terminal/WebView need Clone)
 pub const IPE_L0120: Code = Code("IPE-L0120");
 /// `JsonDec.succeed` / `Db.Decode.succeed` constructor arity exceeds 10
 /// (the maximum supported by `curry1`..`curry10` in the runtime)
@@ -243,7 +243,7 @@ pub const IPE_L0123: Code = Code("IPE-L0123");
 /// Model. Emitted as a **warning** (Go's `applyRoute` silently no-ops the same
 /// shape, so this compiles) to flag the likely mis-named routed-page field.
 pub const IPE_L0124: Code = Code("IPE-L0124");
-/// inadmissible Msg type in a Web/Tui/WebView app.
+/// inadmissible Msg type in a Web/Terminal/WebView app.
 ///
 /// The Msg type's Rust rendering would not satisfy the runtime's
 /// `Clone + Send + Sync + Debug + 'static` bound — converts a

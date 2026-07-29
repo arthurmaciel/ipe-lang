@@ -21,8 +21,8 @@
 //!
 //! At the solver level, [`FlatType::EmptyRecord`] is the closed-tail sentinel
 //! (mirrors `EmptyRecord1`); an open tail is a plain [`Content::Flex`] variable.
-//! The only open records currently are the `Web.app` / `Tui.app` /
-//! `Webview.app` kernel cfg records, which absorb optional fields
+//! The only open records currently are the `Web.app` / `Terminal.appScreen` /
+//! `WebView.app` kernel cfg records, which absorb optional fields
 //! (`head` / `consoleAuth` / `guard` / `status` / `onKey` …) without forcing
 //! every app to enumerate empty optionals.
 

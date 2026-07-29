@@ -2714,11 +2714,11 @@ fn emit_arc_callback_field(
 /// `HtmlEscapeText`, `HtmlEscapeAttr`, `HtmlAttrToString`) emit calls to
 /// `ipe_runtime::ui::render::*` and `ipe_runtime::html::*` here. The app-entry
 /// kernels (`WebApp`, `WebAppRouted`, `WebRoute`, `WebRenderStatic`,
-/// `TuiProgram`, `TuiApp`, `WebviewApp`) delegate to their respective
-/// `emit_web` / `emit_tui` emitters.
+/// `TerminalAppScreen`, `TerminalAppLines`, `WebViewApp`) delegate to their
+/// respective `emit_web` / `emit_tui` / `emit_console` / `emit_webview` emitters.
 ///
-/// Returns `None` for any kernel that is not a Ui / Live / Tui / Webview
-/// variant, letting the standard call path handle it.
+/// Returns `None` for any kernel that is not a `Ui` / `Web` / `Terminal` /
+/// `WebView` variant, letting the standard call path handle it.
 #[allow(clippy::too_many_lines)] // declarative UI kernel dispatch — must list every variant explicitly
 #[allow(clippy::many_single_char_names)] // r/g/b/a/k are conventional names for colour channels and kernel var
 #[inline(never)]
@@ -5659,7 +5659,6 @@ fn emit_ui_call(
         // A `None` here is an internal error (the `is_web()` guard above already
         // filtered to Web variants), so promote it to a `CompilerBug`.
         KernelFn::WebApp
-        | KernelFn::WebAppHtml
         | KernelFn::WebAppRouted
         | KernelFn::WebRoute
         | KernelFn::WebRenderStatic => {
@@ -5671,16 +5670,18 @@ fn emit_ui_call(
             Ok(Some(s))
         }
 
-        // ── Tui app-entry kernels ────────────────────────────────────────────
+        // ── Terminal full-screen app-entry ───────────────────────────────────
         // Delegate to `emit_tui::emit_tui_call`; it returns `Some(s)` for the
-        // two Tui variants and `None` for anything else.  A `None` here is an
+        // `appScreen` variant and `None` for anything else. A `None` here is an
         // internal error (the `k.is_tui()` guard already filtered), so promote
         // it to a `CompilerBug`.
-        KernelFn::TuiProgram | KernelFn::TuiApp => {
+        KernelFn::TerminalAppScreen => {
             let s = crate::emit_tui::emit_tui_call(ctx, callee, args, indent, child, generics)?
                 .ok_or_else(|| Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call",
-                    detail: format!("emit_tui returned None for Tui kernel {k:?} — missing arm"),
+                    detail: format!(
+                        "emit_tui returned None for Terminal kernel {k:?} — missing arm"
+                    ),
                 })?;
             Ok(Some(s))
         }
@@ -5690,7 +5691,7 @@ fn emit_ui_call(
         // the WebviewApp variant and `None` for anything else. A `None` here is an
         // internal error (the `k.is_webview()` guard above already filtered), so
         // promote it to a `CompilerBug`.
-        KernelFn::WebViewApp | KernelFn::WebViewAppHtml => {
+        KernelFn::WebViewApp => {
             let s =
                 crate::emit_webview::emit_webview_call(ctx, callee, args, indent, child, generics)?
                     .ok_or_else(|| Diagnostic::CompilerBug {
@@ -5702,18 +5703,18 @@ fn emit_ui_call(
             Ok(Some(s))
         }
 
-        // ── Cli app-entry kernel ─────────────────────────────────────────────
+        // ── Terminal line-oriented app-entry ─────────────────────────────────
         // Delegate to `emit_console::emit_console_call`; it returns `Some(s)` for
-        // the ConsoleApp variant and `None` for anything else. A `None` here is an
-        // internal error (the `k.is_console()` guard above already filtered), so
-        // promote it to a `CompilerBug`.
-        KernelFn::ConsoleApp => {
+        // the `appLines` variant and `None` for anything else. A `None` here is
+        // an internal error (the `k.is_console()` guard above already filtered),
+        // so promote it to a `CompilerBug`.
+        KernelFn::TerminalAppLines => {
             let s =
                 crate::emit_console::emit_console_call(ctx, callee, args, indent, child, generics)?
                     .ok_or_else(|| Diagnostic::CompilerBug {
                         where_: "ipe_backend_rust::emit_ui_call",
                         detail: format!(
-                            "emit_console returned None for Cli kernel {k:?} — missing arm"
+                            "emit_console returned None for Terminal kernel {k:?} — missing arm"
                         ),
                     })?;
             Ok(Some(s))
