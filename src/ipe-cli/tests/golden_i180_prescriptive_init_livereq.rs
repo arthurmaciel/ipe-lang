@@ -62,6 +62,7 @@ const LIVE_INIT_UNIT_REJECTED: &str = r#"module Main exposing (main)
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 import Ipe.Cmd
+import Ipe.Sub
 type Page = HomePage
 type Msg = Noop
 type alias Model = { page : Page }
