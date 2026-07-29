@@ -343,3 +343,16 @@ types (checked as IPE-T0019 / a type mismatch), and an or-pattern participates
 in exhaustiveness by row expansion — `Red | Green | Blue` counts as full
 coverage of a three-constructor union. This is ledgered in
 [`../divergences-from-sky.md`](../divergences-from-sky.md) §6.3.
+
+A second **shipped** divergence narrows a collection-key constraint. `Float` is
+`comparable`, so Elm accepts `Set Float` and `Dict Float v`; Ipê's type checker
+accepts them too, but lowering rejects them (IPE-L0117). Two reasons compound: a
+`Float` key is a silent correctness footgun — exact-key lookups over *computed*
+floats miss (`0.1 + 0.2 ≠ 0.3`) — and Rust's `f64` is neither `Ord` (backs
+`Set` as `BTreeSet`) nor `Hash`/`Eq` (backs `Dict` as `HashMap`). This is
+deliberate and permanent: a total-order wrapper would make the collection
+representable but not safe, trading a compile error for a silent runtime bug —
+which the precedence order (Correctness over Completeness) forbids. Use an
+`Int`/`String`/`Char`/`Bool` key, key on a stable identifier and store the
+`Float` in the value position, or quantise to `Int` minor units. Run
+`ipe explain IPE-L0117` for the full rationale.
