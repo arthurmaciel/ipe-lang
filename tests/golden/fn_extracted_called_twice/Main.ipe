@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- #90 T4: calling an extracted function value MORE THAN ONCE is sound — a
 -- `Box<dyn Fn>` call borrows (`Fn::call(&self, ..)`), never moves. Only a

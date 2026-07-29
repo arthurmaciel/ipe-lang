@@ -1,5 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Cmd
+import Ipe.Task
 
 -- M5c: Cmd.perform construct-only gate.
 -- Constructs a Cmd.perform value and discards it; confirms type+emit+link

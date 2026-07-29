@@ -1,5 +1,10 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Db
+import Ipe.List
+import Ipe.Db.Sql
+import Ipe.String
+import Ipe.Task
 
 -- M5b-db golden: Ipe.Db.Sql combinator coverage (backlog #61).
 -- Exercises every Sql.* combinator at least once: column, param via

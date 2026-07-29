@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Secret
 
 -- backlog #44 golden: `Secret.fromString` is the seal; `Secret.reveal` is the
 -- single greppable un-parse; `Secret.redacted` is the explicit "<redacted>"

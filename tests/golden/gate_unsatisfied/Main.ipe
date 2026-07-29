@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- `double` needs Number (its body adds `a` to itself). Instantiating it at Bool
 -- asks for `Bool + Bool`, which has no meaning, so the use is rejected here

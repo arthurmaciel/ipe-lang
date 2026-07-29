@@ -4,6 +4,9 @@ module Main exposing (main)
 -- Expected: ipec-0 AND cargo-0 on the emitted project.
 
 import Ipe.Cli as Cli
+import Ipe.Cmd
+import Ipe.String
+import Ipe.Sub
 
 type Msg = GotLine String
 

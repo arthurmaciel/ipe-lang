@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- A literal arm AFTER a wildcard catch-all can never match — it is redundant
 -- (IPE-T0011).

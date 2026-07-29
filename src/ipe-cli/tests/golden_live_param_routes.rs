@@ -79,6 +79,9 @@ fn compile_src(test_name: &str, source: &str) -> Option<Result<(), CliError>> {
 const MIXED_NULLARY_AND_PARAM: &str = r#"module Main exposing (main)
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.String
+import Ipe.Sub
 type Page = CounterPage | UserPage String
 type Msg = Increment
 type alias Model = { page : Page, count : Int }
@@ -107,6 +110,9 @@ main =
 const WRONG_ADT_PARAM_CTOR: &str = r#"module Main exposing (main)
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.String
+import Ipe.Sub
 type Page = CounterPage
 type Other = WrongCtor String
 type Msg = Increment

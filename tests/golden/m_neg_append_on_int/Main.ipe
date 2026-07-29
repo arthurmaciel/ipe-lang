@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.String
 
 
 -- NEGATIVE: `++` on Int should fail with IPE-T0014 (Appendable obligation

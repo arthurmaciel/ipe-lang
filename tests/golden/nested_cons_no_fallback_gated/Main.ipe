@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.String
 
 -- #158 residual scope (fail-closed, IPE-L0116): a `case` whose nested-cons arm
 -- is exhaustive at the IPE level (`Just (h::t)` + `Just []` cover every `Just`,

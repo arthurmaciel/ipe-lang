@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- Negative regression: `amount (Money d _) = d` is a refutable param on a
 -- single-constructor union — must still be rejected as IPE-T0015.

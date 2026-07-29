@@ -1,4 +1,6 @@
 module Main exposing (main)
+import Ipe.Db
+import Ipe.Task
 
 -- backlog #61 negative gate: a naive string-concatenated WHERE clause is a
 -- compile-time IPE-T0001 type mismatch at Db.findWhere (String vs

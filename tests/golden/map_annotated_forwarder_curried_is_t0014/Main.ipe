@@ -1,6 +1,8 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.Result
+import Ipe.String
 
 -- #90 T3 (5th attempt): annotated generic forwarder around `Result.map`,
 -- instantiated at a curried callback — the deferred SchemeApp path

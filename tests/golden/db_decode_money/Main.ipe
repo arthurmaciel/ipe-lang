@@ -1,5 +1,10 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Db
+import Ipe.Decimal
+import Ipe.List
+import Ipe.String
+import Ipe.Task
 
 -- #34 golden: `Db.Decode.money` kernel wiring end-to-end.
 --

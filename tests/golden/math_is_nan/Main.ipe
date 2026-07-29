@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Math
 
 main =
     if Math.isNaN Math.nan then

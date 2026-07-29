@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- m1 parser gate: a let-bound *function* (a let binding with parameters, as
 -- opposed to a plain value). `inc` closes over nothing and is applied inside

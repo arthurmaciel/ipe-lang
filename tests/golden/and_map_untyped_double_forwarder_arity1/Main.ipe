@@ -1,6 +1,8 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.Result
+import Ipe.String
 
 -- #90 T3 green twin of and_map_untyped_double_forwarder_curried:
 -- same UNANNOTATED same-module double-forwarder shape, arity-1 payload —

@@ -1,5 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Maybe
+import Ipe.String
 
 -- #90 T3 residual gate: a CURRIED (arity >= 2) payload function through
 -- `andMap` stays rejected — the IR flattens curried arrows, so the first

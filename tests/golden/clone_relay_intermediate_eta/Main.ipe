@@ -3,6 +3,7 @@ module Main exposing (main)
 import Ipe.Task as Task
 import Ipe.Time as Time
 import Ipe.Io as Io
+import Ipe.String
 
 
 -- #218 SEAL breach: a let-bound function (`insertRow`) read ONLY at

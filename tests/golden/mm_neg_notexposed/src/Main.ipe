@@ -1,3 +1,4 @@
 module Main exposing (main)
 import Lib exposing (hidden)
+import Ipe.Task
 main = Task.succeed ()

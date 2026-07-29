@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Uuid
 
 -- Uuid.parse: a canonical UUID string round-trips; an invalid string yields Nothing.
 main =

@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- A function value reaching a record field THROUGH a type variable:
 -- `wrap`'s field `value : a` instantiates to `Int -> Int` at this call,

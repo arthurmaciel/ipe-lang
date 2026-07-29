@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Sub
 
 -- M5c: Sub.none / Sub.batch / Sub.every construct-only gate.
 -- Constructs Sub values and discards them; confirms that Sub.none infers its

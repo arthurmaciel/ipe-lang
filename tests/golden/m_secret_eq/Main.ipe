@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Secret
 
 -- backlog #44 golden: `Secret`'s ONLY equality is the hand-written
 -- constant-time `PartialEq` (`==` is always safe by construction — see the

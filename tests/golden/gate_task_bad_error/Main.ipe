@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Task
 
 -- Task String Int must be REJECTED: the error channel must always be `Error`.
 -- `normalize_annotation_ty` validates this and emits IPE-T0001

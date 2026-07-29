@@ -1,5 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Json.Decode
+import Ipe.Json.Decode.Pipeline
 
 -- R2: 1-arg lambda `JsonDec.succeed (\name -> name ++ "!")`.
 -- Exercises Fix A case 2 with arity 1 (lambda → curry1).

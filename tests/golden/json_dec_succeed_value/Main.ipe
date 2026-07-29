@@ -1,5 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Json.Decode
+import Ipe.String
 
 -- R3: plain value `JsonDec.succeed 42`.
 -- Exercises Fix A case 3 (factory-wrap for plain value).

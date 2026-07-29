@@ -31,6 +31,7 @@ const MAIN_IPE: &str = r#"module Main exposing (main)
 import Ipe.Html as Html
 import Ipe.Ui as Ui
 import Ipe.Ui.Transition as Transition
+import Ipe.Io
 
 
 main =

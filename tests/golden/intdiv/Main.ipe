@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- m2lex parser gate: `//` integer division. Truncates toward zero (Go + Elm
 -- parity), so `-7 // 2` is `-3`, not the `-4` a floor-division would give.

@@ -9,6 +9,7 @@ module Main exposing (main)
 import Ipe.Json.Decode as JsonDec
 import Ipe.Json.Decode.Pipeline as Pipe
 import Ipe.Io as Io
+import Ipe.String
 
 
 mkPair : String -> (Int -> String)

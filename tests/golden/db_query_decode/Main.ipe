@@ -1,5 +1,8 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Db
+import Ipe.String
+import Ipe.Task
 
 -- M5b-db golden: Db.queryDecode with Db.Decode.string — typed row decoder path.
 -- Exercises IrType::Decoder(String) introduced in constrain.rs for the M5b-db fix.

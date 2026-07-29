@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Crypto
 
 -- aesKeyFromPassword is deterministic: same password+salt → same key.
 -- Derive the key twice independently; encrypt with key1, decrypt with key2.

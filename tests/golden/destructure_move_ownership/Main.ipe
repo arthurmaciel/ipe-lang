@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.String
 
 
 -- #224 SEAL breach: a `let (a, b) = pair` destructure binder used to emit a

@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Ipe.Encoding as Encoding
 import Ipe.Io as Io
+import Ipe.String
 
 -- hexEncode "Hi!" = "486921" (lowercase Go hex).
 -- Decode is done from the known constant to avoid using `encoded` twice.

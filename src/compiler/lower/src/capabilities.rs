@@ -43,7 +43,7 @@ mod tests {
     #[test]
     fn pure_program_has_no_capabilities() {
         let caps = caps_of(
-            "module Main exposing (main)\nmain : Task ()\nmain =\n    Io.println (String.toUpper \"hi\")\n",
+            "module Main exposing (main)\nimport Ipe.Io\nimport Ipe.String\nmain : Task ()\nmain =\n    Io.println (String.toUpper \"hi\")\n",
         );
         assert_eq!(caps, Some(std::collections::BTreeSet::new()));
     }
@@ -51,7 +51,7 @@ mod tests {
     #[test]
     fn http_program_infers_network() {
         let caps = caps_of(
-            "module Main exposing (main)\nmain : Task ()\nmain =\n    Task.andThen (\\_ -> Io.println \"done\") (Http.get \"http://example.com\")\n",
+            "module Main exposing (main)\nimport Ipe.Http\nimport Ipe.Io\nimport Ipe.Task\nmain : Task ()\nmain =\n    Task.andThen (\\_ -> Io.println \"done\") (Http.get \"http://example.com\")\n",
         );
         assert_eq!(
             caps,
@@ -62,7 +62,7 @@ mod tests {
     #[test]
     fn file_and_env_program_infers_both() {
         let caps = caps_of(
-            "module Main exposing (main)\nmain : Task ()\nmain =\n    Task.andThen (\\_ -> File.writeFile \"/tmp/x\" (System.getenvOr \"HOME\" \"/\")) (Io.println \"go\")\n",
+            "module Main exposing (main)\nimport Ipe.File\nimport Ipe.Io\nimport Ipe.System\nimport Ipe.Task\nmain : Task ()\nmain =\n    Task.andThen (\\_ -> File.writeFile \"/tmp/x\" (System.getenvOr \"HOME\" \"/\")) (Io.println \"go\")\n",
         );
         assert_eq!(
             caps,

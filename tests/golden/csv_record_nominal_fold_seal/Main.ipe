@@ -2,6 +2,8 @@ module Main exposing (main)
 
 import Ipe.Csv as Csv
 import Ipe.Io as Io
+import Ipe.List
+import Ipe.String
 
 -- Regression fixture for the BACKLOG row "Ipe.Csv record literal vs nominal
 -- CsvDoc mismatch at the kernel boundary": a record literal of the canonical

@@ -187,6 +187,7 @@ const HEAD: &str = "module Main exposing (main)\nimport Ipe.Prelude exposing (..
 fn value_local_shadowing_toplevel_fn_compiles_and_runs() {
     let src = format!(
         "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.String\n\
          update : Int -> Int -> Int\n\
          update a b = a + b\n\n\
          shadowed : Int -> String\n\
@@ -209,6 +210,7 @@ fn value_local_shadowing_toplevel_fn_compiles_and_runs() {
 fn fn_local_shadowing_toplevel_fn_invokes_the_toplevel() {
     let src = format!(
         "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.String\n\
          helper : Int -> Int\n\
          helper x = x + 1\n\n\
          compute : Int -> Int\n\
@@ -235,6 +237,7 @@ fn fn_local_shadowing_toplevel_fn_invokes_the_toplevel() {
 fn user_local_named_like_a_mangled_keyword_compiles() {
     let src = format!(
         "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.String\n\
          main =\n    \
          let\n        match_ = 7\n    in\n    \
          Io.println (String.fromInt match_)\n"
@@ -275,6 +278,7 @@ fn multi_module_distinct_mod_idents_compile() {
             "Helper.ipe",
             "module Helper exposing (shout)\n\
              import Ipe.Prelude exposing (..)\n\
+             import Ipe.String\n\
              shout : String -> String\n\
              shout s = String.toUpper s\n",
         ),

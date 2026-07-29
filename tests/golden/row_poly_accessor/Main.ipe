@@ -1,5 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.List
+import Ipe.String
 
 
 -- Proof-matrix row P8: the first-class accessor `.name` used as a value.

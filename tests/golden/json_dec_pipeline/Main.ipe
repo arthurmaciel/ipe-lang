@@ -1,5 +1,8 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Json.Decode
+import Ipe.Json.Decode.Pipeline
+import Ipe.String
 
 -- Pipeline-style record decoding using `JsonDec.succeed` + `JsonDecP.required`
 -- + `JsonDecP.optional`.

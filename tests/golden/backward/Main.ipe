@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- Backward pipe `<|`: right-associative at precedence 0.
 -- `<|` is looser than `+`, so `1 + 2` groups first.

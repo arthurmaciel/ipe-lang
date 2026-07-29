@@ -1,5 +1,10 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Db
+import Ipe.List
+import Ipe.Db.Sql
+import Ipe.String
+import Ipe.Task
 
 -- M5b-db golden: Db.deleteWhere with a typed SqlFragment predicate (backlog #61).
 -- Inserts three rows, deletes the one matching `Sql.eq (Sql.column "name")

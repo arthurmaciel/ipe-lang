@@ -8,6 +8,7 @@ module Main exposing (main)
 -- Dict String String ≠ String → IPE-T0001.
 
 import Ipe.Io as Io
+import Ipe.String
 
 type Msg
     = BroadcastMsg any

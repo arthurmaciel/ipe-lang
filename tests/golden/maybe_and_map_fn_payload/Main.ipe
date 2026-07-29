@@ -1,5 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Maybe
+import Ipe.String
 
 -- #90 Stage 1: `Just f` holding a function used to trip IPE-L0114
 -- unconditionally, making `Maybe.andMap` unusable.

@@ -1,6 +1,8 @@
 module Lib1 exposing (queryOrLog, execOrLog)
 
 import Ipe.System as System
+import Ipe.Db
+import Ipe.Task
 
 
 -- BACKLOG #165 regression: a Ipe-defined WRAPPER function around `Db.exec` /

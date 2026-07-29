@@ -1,6 +1,8 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.Cmd
+import Ipe.String
 
 -- #32 review follow-up: a mis-arity `Cmd` ANNOTATION (`Cmd` takes exactly
 -- one message type) used to ICE (IPE-I0001) via ir_type_from_canon's

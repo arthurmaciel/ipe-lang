@@ -44,6 +44,7 @@ double n =
 const V2_BREAKING: &str = r"module Lib exposing (double)
 
 import Ipe.Prelude exposing (..)
+import Ipe.String
 
 
 double : Int -> String

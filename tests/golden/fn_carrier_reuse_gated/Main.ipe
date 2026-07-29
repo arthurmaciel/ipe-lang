@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- #90 T4 residual gate: a fn-carrying, non-Clone `let`-binding used in TWO
 -- consuming (argument) positions has no sound rewrite (`Box<dyn Fn>` is not

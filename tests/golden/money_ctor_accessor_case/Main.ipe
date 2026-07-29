@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- Positive regression: single-constructor union with case-expression accessors.
 -- `unwrap` must compile clean (irrefutable case, not refutable param).

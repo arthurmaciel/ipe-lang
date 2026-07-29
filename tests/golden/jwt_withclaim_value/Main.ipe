@@ -4,6 +4,7 @@ import Ipe.Jwt as Jwt
 import Ipe.Json.Encode as JsonEnc
 import Ipe.Result as Result
 import Ipe.Io as Io
+import Ipe.String
 
 
 -- #217 contract-drift regression: `Jwt.withClaim` takes a `JsonEnc.Value`

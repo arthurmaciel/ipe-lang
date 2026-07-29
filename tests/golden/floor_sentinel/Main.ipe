@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- Floor sentinel: EVERY top constructor is covered (`Som` and `Non`), and inside
 -- `Som` both inner constructors are covered (`Som …` and `Non`). The only gap is

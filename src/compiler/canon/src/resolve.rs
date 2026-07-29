@@ -1064,8 +1064,15 @@ fn register_stdlib_import_aliases(
         let alias = import
             .alias
             .unwrap_or_else(|| dep_path.last().copied().unwrap_or_else(name_zero));
+        // Tier-C import gate (ADR 0047): this `import Ipe.X [as Alias]` brings the
+        // qualifier into scope under the name the user will actually type. Record
+        // that name (the alias, or — via the fall-through below — the canonical) so
+        // a later `Alias.member` / `X.member` resolves instead of raising N0034.
+        // A bare `import Ipe.String` names `String` both as canonical and alias.
+        env.mark_stdlib_qualifier_imported(alias);
         if alias == canonical {
-            // Already registered under its canonical name — nothing to clone.
+            // Already registered under its canonical name — nothing to clone. The
+            // gate above already recorded it (alias == canonical here).
             continue;
         }
         // Clone the canonical qualifier's members under the alias key. The cloned
@@ -3210,6 +3217,21 @@ fn resolve_qual_var(
     env: &Env,
     interner: &Interner,
 ) -> DResult<canon::Expr_> {
+    // Tier-C import gate (ADR 0047): a known stdlib qualifier used WITHOUT its
+    // import is the teachable must-import diagnostic (IPE-N0034), naming the exact
+    // `Ipe.*` module to add — NOT a silent resolve against the pre-installed
+    // catalog, and NOT the generic "unknown module" (the module is known; the
+    // import is missing). Checked before the member lookup, since the catalog
+    // members are present regardless of import.
+    if let Some(import_path) = env.stdlib_import_required(qualifier) {
+        return Err(Diagnostic::Name {
+            span,
+            msg: NameError::StdlibImportRequired {
+                qualifier: name_str(interner, qualifier)?,
+                import_path: path_to_dot_string(interner, import_path),
+            },
+        });
+    }
     let Some(members) = env.qual_members(qualifier) else {
         // The qualifier itself is unknown: suggest from the known qualifiers
         // (kernel modules + import aliases).
@@ -3722,15 +3744,32 @@ fn canonicalise_type(
             // qualifier is sufficient to accept the annotation and look the type
             // up in `type_home_map` as usual.
             let qualifier_str = ctx.interner.resolve(*qualifier).unwrap_or("");
-            if !qualifier_str.is_empty() && !ctx.env.qual_vars.contains_key(qualifier) {
-                let sugg = suggestions(*qualifier, ctx.env.qual_vars.keys().copied(), ctx.interner);
-                return Err(Diagnostic::Name {
-                    span: ctx.ann_span,
-                    msg: NameError::UnknownModule {
-                        qualifier: qualifier_str.into(),
-                        suggestions: sugg,
-                    },
-                });
+            if !qualifier_str.is_empty() {
+                // Tier-C import gate (ADR 0047): a KNOWN stdlib module qualifier on
+                // a type (`Dict.Dict`, `JsonDec.Decoder`) used without importing it
+                // is the teachable IPE-N0034, naming the module to add — checked
+                // before the unknown-qualifier fallback, since the catalog
+                // qualifier is present in `qual_vars` regardless of import.
+                if let Some(import_path) = ctx.env.stdlib_import_required(*qualifier) {
+                    return Err(Diagnostic::Name {
+                        span: ctx.ann_span,
+                        msg: NameError::StdlibImportRequired {
+                            qualifier: qualifier_str.into(),
+                            import_path: path_to_dot_string(ctx.interner, import_path),
+                        },
+                    });
+                }
+                if !ctx.env.qual_vars.contains_key(qualifier) {
+                    let sugg =
+                        suggestions(*qualifier, ctx.env.qual_vars.keys().copied(), ctx.interner);
+                    return Err(Diagnostic::Name {
+                        span: ctx.ann_span,
+                        msg: NameError::UnknownModule {
+                            qualifier: qualifier_str.into(),
+                            suggestions: sugg,
+                        },
+                    });
+                }
             }
             // Type arguments are canonicalised under the current substitution
             // (they appear at the use site) regardless of whether `name` is an

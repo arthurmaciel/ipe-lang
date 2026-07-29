@@ -146,6 +146,8 @@ pub const IPE_N0031: Code = Code("IPE-N0031");
 pub const IPE_N0032: Code = Code("IPE-N0032");
 /// a plain-`main` Program imports a managed-update-loop shape under `Ipe.Tea.*`
 pub const IPE_N0033: Code = Code("IPE-N0033");
+/// a known standard-library module is used qualified without importing it
+pub const IPE_N0034: Code = Code("IPE-N0034");
 
 // ---------------------------------------------------------------------------
 // Type (IPE-T####)
@@ -367,6 +369,7 @@ pub fn title(c: Code) -> &'static str {
         IPE_N0031 => "built-in container type applied to the wrong number of arguments",
         IPE_N0032 => "type alias expansion too deep or too large",
         IPE_N0033 => "a Program may not import a managed-update-loop shape",
+        IPE_N0034 => "standard-library module used without importing it",
         IPE_T0001 => "type mismatch",
         IPE_T0002 => "infinite type",
         IPE_T0003 => "type inference exceeded its step budget",
@@ -502,6 +505,7 @@ fn front_end_explain_page(c: Code) -> Option<&'static str> {
         IPE_N0031 => Some(include_str!("../explain/IPE-N0031.md")),
         IPE_N0032 => Some(include_str!("../explain/IPE-N0032.md")),
         IPE_N0033 => Some(include_str!("../explain/IPE-N0033.md")),
+        IPE_N0034 => Some(include_str!("../explain/IPE-N0034.md")),
         IPE_T0001 => Some(include_str!("../explain/IPE-T0001.md")),
         IPE_T0002 => Some(include_str!("../explain/IPE-T0002.md")),
         IPE_T0003 => Some(include_str!("../explain/IPE-T0003.md")),
@@ -589,15 +593,15 @@ pub const ALL_CODES: &[Code] = &[
     IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_N0001, IPE_N0002,
     IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020,
     IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028,
-    IPE_N0029, IPE_N0031, IPE_N0032, IPE_N0033, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004,
-    IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017,
-    IPE_T0019, IPE_L0100, IPE_L0101, IPE_L0102, IPE_L0103, IPE_L0104, IPE_L0105, IPE_L0106,
-    IPE_L0107, IPE_L0108, IPE_L0110, IPE_L0111, IPE_L0112, IPE_L0113, IPE_L0114, IPE_L0115,
-    IPE_L0116, IPE_L0117, IPE_L0118, IPE_L0119, IPE_L0120, IPE_L0121, IPE_L0122, IPE_L0123,
-    IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127, IPE_L0128, IPE_L0129, IPE_L0130, IPE_L0131,
-    IPE_L0140, IPE_L0200, IPE_F4400, IPE_F4401, IPE_F4402, IPE_F4410, IPE_F4411, IPE_F4412,
-    IPE_F4413, IPE_I0001, IPE_I0010, IPE_I0011, IPE_I0100, IPE_I0101, IPE_I0102, IPE_I0103,
-    IPE_I0200, IPE_I0201, IPE_I0202, IPE_I0203,
+    IPE_N0029, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_T0001, IPE_T0002, IPE_T0003,
+    IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016,
+    IPE_T0017, IPE_T0019, IPE_L0100, IPE_L0101, IPE_L0102, IPE_L0103, IPE_L0104, IPE_L0105,
+    IPE_L0106, IPE_L0107, IPE_L0108, IPE_L0110, IPE_L0111, IPE_L0112, IPE_L0113, IPE_L0114,
+    IPE_L0115, IPE_L0116, IPE_L0117, IPE_L0118, IPE_L0119, IPE_L0120, IPE_L0121, IPE_L0122,
+    IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127, IPE_L0128, IPE_L0129, IPE_L0130,
+    IPE_L0131, IPE_L0140, IPE_L0200, IPE_F4400, IPE_F4401, IPE_F4402, IPE_F4410, IPE_F4411,
+    IPE_F4412, IPE_F4413, IPE_I0001, IPE_I0010, IPE_I0011, IPE_I0100, IPE_I0101, IPE_I0102,
+    IPE_I0103, IPE_I0200, IPE_I0201, IPE_I0202, IPE_I0203,
 ];
 
 #[cfg(test)]
@@ -606,7 +610,7 @@ mod tests {
 
     #[test]
     fn taxonomy_code_count_is_pinned() {
-        assert_eq!(ALL_CODES.len(), 108);
+        assert_eq!(ALL_CODES.len(), 109);
     }
 
     #[test]
@@ -624,7 +628,7 @@ mod tests {
             assert!(s.starts_with("IPE-"), "{s} bad prefix");
             assert!(seen.insert(s), "{s} duplicated");
         }
-        assert_eq!(seen.len(), 108);
+        assert_eq!(seen.len(), 109);
     }
 
     /// CI coverage gate: every taxonomy code has a conforming explain page.

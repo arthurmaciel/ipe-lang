@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- Matching a tuple with MORE THAN ONE arm needs product/literal-pattern
 -- exhaustiveness — the tuple-pattern gap (IPE-L0115).

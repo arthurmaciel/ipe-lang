@@ -1,5 +1,9 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Db
+import Ipe.List
+import Ipe.String
+import Ipe.Task
 
 -- M5b-db golden: Db.Decode.nullable — distinguishes SQL NULL from non-null rows.
 -- Exercises the IrType::Decoder(Maybe T) type fixed in constrain.rs (M5b-db).
