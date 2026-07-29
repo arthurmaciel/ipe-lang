@@ -491,6 +491,16 @@ pub(crate) struct EmitCtx<'a> {
     /// The Rust type name for the emitted `SqlField` enum (e.g. `MainSqlField`).
     /// `None` when `uses_db` is `false`.
     pub(crate) sqlfield_rust_name: Option<String>,
+    /// The Rust type the `[wasm] mode = "hydrate"` glue must name as the island
+    /// parse target — the `HydrationState` type the user's `fromHydrationState`
+    /// projection takes. Resolved through the SAME [`emit_types::render_type`]
+    /// the emitted `main_from_hydration_state` signature uses, so the glue and
+    /// the signature reference one identical type name and cannot drift (a record
+    /// alias `{ count : Int }` resolves to its synthesised `RecCount`, a named
+    /// ADT to `MainHydrationState`, etc.). `None` when the program declares no
+    /// `fromHydrationState` (a hydrate-mode program with no explicit projection);
+    /// the glue then falls back to a clean `ipe_main()` init.
+    pub(crate) hydration_state_rust_name: Option<String>,
     /// Type nominal identity `(home, name)` → Rust type name (e.g.
     /// `(["Main"], Msg)` → `MainMsg`, `(["Lib"], Color)` → `LibColor`). Keyed by
     /// `(home, name)` — not `name` alone — so two modules each declaring `type
@@ -924,7 +934,7 @@ impl<'a> EmitCtx<'a> {
         // detect foreign-crate FFI wrapper usage.
         let uses_ffi = program.modules.iter().any(|m| m.uses_ffi);
 
-        Ok(Self {
+        let mut ctx = Self {
             interner,
             uses_db,
             db_driver,
@@ -946,6 +956,7 @@ impl<'a> EmitCtx<'a> {
             wasm_hydrate_mode,
             sqlvalue_rust_name,
             sqlfield_rust_name,
+            hydration_state_rust_name: None,
             enum_names,
             variant_fields,
             enum_variants,
@@ -954,7 +965,45 @@ impl<'a> EmitCtx<'a> {
             func_names,
             record_structs,
             record_by_fieldset,
-        })
+        };
+        // Resolve the `HydrationState` type name through the same renderer the
+        // emitted `main_from_hydration_state` signature uses, so the wasm-hydrate
+        // glue references EXACTLY that type (single source of truth — no drift
+        // between glue and signature). Needs the fully-built `ctx` because
+        // `render_type` reads its enum/record tables. Only meaningful under
+        // `wasm_hydrate_mode`; skip the walk otherwise.
+        if wasm_hydrate_mode {
+            ctx.hydration_state_rust_name = ctx.resolve_hydration_state_rust_name(program)?;
+        }
+        Ok(ctx)
+    }
+
+    /// The Rust type name of the `HydrationState` island-parse target, resolved
+    /// from the user's `fromHydrationState` projection's parameter type through
+    /// [`emit_types::render_type`] — the identical renderer that produces the
+    /// emitted `main_from_hydration_state` signature. Returns `None` when the
+    /// program declares no `fromHydrationState` function (the glue then never
+    /// names a hydration type and falls straight through to a clean init).
+    fn resolve_hydration_state_rust_name(&self, program: &Program) -> DResult<Option<String>> {
+        for module in &program.modules {
+            for func in &module.funcs {
+                if self.interner.resolve(func.name) != Some("fromHydrationState") {
+                    continue;
+                }
+                let Some((_, param_ty)) = func.params.first() else {
+                    // A `fromHydrationState` with no parameter cannot name an
+                    // island type — treat as absent (fall through to clean init).
+                    return Ok(None);
+                };
+                // The `HydrationState` island type is monomorphic (the M7
+                // field-type gate admits only serialisable, non-generic leaves),
+                // so an empty generic scope is exact.
+                let rendered =
+                    emit_types::render_type(self, param_ty, emit_types::GenericScope::new(&[]))?;
+                return Ok(Some(rendered));
+            }
+        }
+        Ok(None)
     }
 
     /// Is `home` a driver-generated FFI interface module (`Rust.*`)? The
