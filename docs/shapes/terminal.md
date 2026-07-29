@@ -142,17 +142,19 @@ main =
         }
 ```
 
-Build and run it:
+The counter above is a minimal illustration of the shape. For a real-world
+`appScreen` program — a keyboard-driven directory browser — build and run the
+`file-browser` demo:
 
 ```sh
-ipe build examples/terminal-counter
-ipe run examples/terminal-counter
+ipe build examples/shapes/terminal/file-browser
+ipe run examples/shapes/terminal/file-browser
 ```
 
-Running it takes over the terminal, draws the counter, and adjusts the count on
-each key — the arrow keys and `+`/`-` change the value, `r` resets, `q` quits.
-Because it drives a real terminal, run it in an interactive terminal session; it
-has no headless mode, so CI can build it but cannot exercise the keystroke loop.
+Running it takes over the terminal and draws a live view; the arrow keys (or
+`j`/`k`) move the selection and `q` quits. Because it drives a real terminal, run
+it in an interactive terminal session; it has no headless mode, so CI can build
+it but cannot exercise the keystroke loop.
 
 ## `Terminal.appLines` — line-oriented REPL
 
@@ -310,30 +312,98 @@ main =
         }
 ```
 
-Run it and feed it a few commands. Because it reads standard input, you can type
-interactively or pipe a scripted session:
+The accumulator REPL above is a minimal illustration. For a real-world
+`appLines` program — an HTTP query shell — run the `http-shell` demo. Because it
+reads standard input, you can type interactively or pipe a scripted session:
 
 ```sh
-printf 'add 5\nmul 10\nquit\n' | ipe run examples/terminal-repl
+printf 'bogus\nquit\n' | ipe run examples/shapes/terminal/http-shell
 ```
+
+Each render ends in the `> ` prompt; a `get <url>` line performs a real
+`Http.get` and prints the response status + body, an unrecognised line prints a
+hint, and `quit` (or end-of-input) exits 0.
+
+## `Ui.cells` — a raw cell-grid island
+
+Most of an `appScreen` view is built from the shared `Ipe.Ui` builders, laid out
+by the runtime. When you need to paint a region cell by cell — a hexdump, a
+sparkline, a game board — drop a `Ui.cells` island into the tree:
 
 ```text
-ready
-= 0
-> added 5
-= 5
-> multiplied by 10
-= 50
->
+Ui.cells : List (List Char) -> Element msg
 ```
 
-Each render ends in the `> ` prompt; `add 5` folds into the running total,
-`mul 10` multiplies it, and `quit` exits 0.
+Each inner list is one row of characters; the terminal paints them verbatim, one
+row per line, and the surrounding `Ui.column` / `Ui.row` still lays the rest of
+the view out normally. `Ui.cells` is **terminal-only** — it has no browser
+denotation, so using it under the `Web` or `WebView` shape is rejected at compile
+time with [`IPE-L0132`](../../src/compiler/diagnostics/explain/IPE-L0132.md).
+
+Here it paints a small grid inside an otherwise-structured view:
+
+```ipe
+module Main exposing (main)
+
+import Ipe.Tea.Terminal as Terminal
+import Ipe.Cmd as Cmd
+import Ipe.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Ui exposing (Element)
+
+type Msg
+    = NoOp
+
+type alias Model =
+    { count : Int }
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update _msg model =
+    ( model, Cmd.none )
+
+view : Model -> Element Msg
+view _model =
+    Ui.column [ Ui.spacing 8, Ui.padding 16 ]
+        [ Ui.text "a raw cell grid island:"
+        , Ui.cells
+            [ [ '#', '.', '.', '.' ]
+            , [ '.', '#', '#', '.' ]
+            , [ '.', '.', '.', '#' ]
+            ]
+        ]
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+type alias KeyEvent =
+    { kind : String, value : String }
+
+onKey : KeyEvent -> Msg
+onKey _key =
+    NoOp
+
+main =
+    Terminal.appScreen
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , onKey = onKey
+        }
+```
+
+The [`file-browser`](../../examples/shapes/terminal/file-browser/) demo uses this
+to render a live hexdump of the selected file's bytes.
 
 ## Examples
 
-- [`examples/terminal-counter/`](../../examples/terminal-counter/) — the
-  `appScreen` counter above. The same `Ipe.Ui` view also backs the
-  [Web](web.md) and [WebView](webview.md) counters.
-- [`examples/terminal-repl/`](../../examples/terminal-repl/) — the `appLines`
-  accumulator REPL above.
+- [`examples/shapes/terminal/file-browser/`](../../examples/shapes/terminal/file-browser/)
+  — a keyboard-driven directory browser over `Terminal.appScreen`, with a raw
+  `Ui.cells` hexdump island.
+- [`examples/shapes/terminal/http-shell/`](../../examples/shapes/terminal/http-shell/)
+  — an HTTP query shell over `Terminal.appLines`.

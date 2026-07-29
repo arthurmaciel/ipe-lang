@@ -1,0 +1,362 @@
+module Main exposing (main)
+
+-- A keyboard-driven directory browser over `Terminal.appScreen`. The runtime
+-- walks a typed `Ipe.Ui` `Element` tree and paints it to terminal cells; inside
+-- that structured view sits a raw `Ui.cells` island — a hexdump of the selected
+-- file's first bytes, painted character by character.
+--
+-- Keys:
+--     Up / k       move the selection up
+--     Down / j     move the selection down
+--     Enter        read the selected file and show its hexdump
+--     q            quit (Ctrl-C also quits)
+--
+-- `File.readDir` lists the working directory once at startup; selecting a file
+-- performs `File.readFileBytes` as a `Task`, and its settled bytes are rendered
+-- as the `Ui.cells` grid. `Ui.cells` is terminal-only: this same program in the
+-- Web or WebView shape would be rejected at compile time (IPE-L0132).
+
+import Ipe.String as String
+import Ipe.System as System
+import Ipe.Tea.Terminal as Terminal
+import Ipe.File as File
+import Ipe.Task as Task
+import Ipe.Cmd as Cmd
+import Ipe.Sub as Sub
+import Ipe.List as List
+import Ipe.Ui as Ui
+import Ipe.Ui exposing (Element)
+import Ipe.Ui.Font as Font
+
+
+type Msg
+    = Listed (Result Error (List String))
+    | Opened (Result Error (List Int))
+    | MoveUp
+    | MoveDown
+    | Open
+    | Quit
+    | NoOp
+
+
+type alias Model =
+    { entries : List String
+    , selected : Int
+    , status : String
+
+    -- The selected file's first bytes, or an empty list before anything is
+    -- opened. Rendered as the `Ui.cells` hexdump island.
+    , bytes : List Int
+    }
+
+
+-- Cap on how many bytes the hexdump reads and shows, so a large file never
+-- floods the terminal.
+dumpLimit : Int
+dumpLimit =
+    128
+
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { entries = [], selected = 0, status = "reading .", bytes = [] }
+    , Task.attempt Listed (File.readDir ".")
+    )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Listed result ->
+            case result of
+                Ok names ->
+                    ( { model | entries = names, selected = 0, status = "ready" }
+                    , Cmd.none
+                    )
+
+                Err _ ->
+                    ( { model | status = "could not read the directory" }, Cmd.none )
+
+        Opened result ->
+            case result of
+                Ok fileBytes ->
+                    ( { model | bytes = List.take dumpLimit fileBytes, status = "opened" }
+                    , Cmd.none
+                    )
+
+                Err _ ->
+                    ( { model | bytes = [], status = "could not read that file" }, Cmd.none )
+
+        MoveUp ->
+            ( { model | selected = clampIndex model (model.selected - 1) }, Cmd.none )
+
+        MoveDown ->
+            ( { model | selected = clampIndex model (model.selected + 1) }, Cmd.none )
+
+        Open ->
+            case selectedName model of
+                Just name ->
+                    ( { model | status = "opening " ++ name ++ " ..." }
+                    , Task.attempt Opened (File.readFileBytes name)
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        Quit ->
+            ( model, Cmd.perform (System.exit 0) (\_ -> NoOp) )
+
+        NoOp ->
+            ( model, Cmd.none )
+
+
+-- Keep a candidate selection index inside `[0, length - 1]`.
+clampIndex : Model -> Int -> Int
+clampIndex model candidate =
+    let
+        last =
+            List.length model.entries - 1
+    in
+    if candidate < 0 then
+        0
+
+    else if candidate > last then
+        max 0 last
+
+    else
+        candidate
+
+
+selectedName : Model -> Maybe String
+selectedName model =
+    listAt model.selected model.entries
+
+
+listAt : Int -> List String -> Maybe String
+listAt index items =
+    List.head (List.drop index items)
+
+
+view : Model -> Element Msg
+view model =
+    Ui.column [ Ui.spacing 12, Ui.padding 16 ]
+        [ Ui.el [ Font.bold ] (Ui.text "Ipê file browser")
+        , Ui.text model.status
+        , Ui.column [ Ui.spacing 2 ] (List.indexedMap (entryRow model.selected) model.entries)
+        , Ui.el [ Font.bold ] (Ui.text "hexdump:")
+
+        -- The raw cell-grid island: a hexdump of the opened file's bytes,
+        -- painted directly to the terminal.
+        , Ui.cells (hexdump model.bytes)
+        ]
+
+
+-- One directory entry, highlighted (a leading `>`) when it is the selection.
+entryRow : Int -> Int -> String -> Element Msg
+entryRow selected index name =
+    let
+        marker =
+            if index == selected then
+                "> "
+
+            else
+                "  "
+    in
+    Ui.text (marker ++ name)
+
+
+-- ── Hexdump: List Int → List (List Char) ─────────────────────────────────────
+--
+-- Sixteen bytes per row, each byte as two hex digits separated by a space. An
+-- empty byte list yields a single hint row so the island is never blank.
+hexdump : List Int -> List (List Char)
+hexdump bytes =
+    case bytes of
+        [] ->
+            [ String.toList "(press Enter on a file to dump its bytes)" ]
+
+        _ ->
+            -- Tag each byte with its position, group by row (position // 16),
+            -- then render each group. `List.indexedMap` consumes `bytes` once,
+            -- so the whole pipeline stays within Ipê's linear-use discipline.
+            List.map hexRow (rowsOf 16 (List.indexedMap withIndex bytes))
+
+
+withIndex : Int -> Int -> ( Int, Int )
+withIndex index byte =
+    ( index, byte )
+
+
+-- Fold a positioned byte stream into fixed-width rows: a new row starts every
+-- `width` positions. One left fold, so the input list is consumed exactly once.
+rowsOf : Int -> List ( Int, Int ) -> List (List Int)
+rowsOf width tagged =
+    List.reverse
+        (List.map List.reverse
+            (List.foldl (addToRows width) [] tagged)
+        )
+
+
+addToRows : Int -> ( Int, Int ) -> List (List Int) -> List (List Int)
+addToRows width entry rows =
+    let
+        position =
+            first entry
+
+        byte =
+            second entry
+    in
+    if modBy width position == 0 then
+        -- Start a new row (rows accumulate reversed; `rowsOf` un-reverses).
+        [ byte ] :: rows
+
+    else
+        case rows of
+            current :: rest ->
+                (byte :: current) :: rest
+
+            [] ->
+                [ [ byte ] ]
+
+
+first : ( Int, Int ) -> Int
+first pair =
+    let
+        ( a, _ ) =
+            pair
+    in
+    a
+
+
+second : ( Int, Int ) -> Int
+second pair =
+    let
+        ( _, b ) =
+            pair
+    in
+    b
+
+
+hexRow : List Int -> List Char
+hexRow rowBytes =
+    String.toList (String.join " " (List.map hexByte rowBytes))
+
+
+-- A byte (0..255) as two hex digits, e.g. 72 → "48".
+hexByte : Int -> String
+hexByte byte =
+    let
+        hi =
+            byte // 16
+
+        lo =
+            byte - hi * 16
+    in
+    String.fromChar (hexDigit hi) ++ String.fromChar (hexDigit lo)
+
+
+hexDigit : Int -> Char
+hexDigit n =
+    case n of
+        10 ->
+            'a'
+
+        11 ->
+            'b'
+
+        12 ->
+            'c'
+
+        13 ->
+            'd'
+
+        14 ->
+            'e'
+
+        15 ->
+            'f'
+
+        _ ->
+            digitChar n
+
+
+digitChar : Int -> Char
+digitChar n =
+    case n of
+        1 ->
+            '1'
+
+        2 ->
+            '2'
+
+        3 ->
+            '3'
+
+        4 ->
+            '4'
+
+        5 ->
+            '5'
+
+        6 ->
+            '6'
+
+        7 ->
+            '7'
+
+        8 ->
+            '8'
+
+        9 ->
+            '9'
+
+        _ ->
+            '0'
+
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+type alias KeyEvent =
+    { kind : String
+    , value : String
+    }
+
+
+onKey : KeyEvent -> Msg
+onKey key =
+    if key.kind == "up" then
+        MoveUp
+
+    else if key.kind == "down" then
+        MoveDown
+
+    else if key.kind == "enter" then
+        Open
+
+    else if key.kind == "char" && key.value == "k" then
+        MoveUp
+
+    else if key.kind == "char" && key.value == "j" then
+        MoveDown
+
+    else if key.kind == "char" && key.value == "q" then
+        Quit
+
+    else if key.kind == "ctrl" && key.value == "c" then
+        Quit
+
+    else
+        NoOp
+
+
+main =
+    Terminal.appScreen
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , onKey = onKey
+        }
