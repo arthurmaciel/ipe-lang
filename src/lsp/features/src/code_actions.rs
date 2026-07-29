@@ -11,6 +11,9 @@
 //!   line.
 //! - `IPE-N0003` (missing type annotation): "Add type annotation" — insert the
 //!   inferred type annotation above the binding.
+//! - `IPE-N0034` (standard-library module used without importing it): "Add
+//!   import `Ipe.X`" — insert the named `import Ipe.X` line into the module's
+//!   import block, alphabetically among the existing imports.
 //!
 //! The provider is deliberately conservative: it only acts on codes it can
 //! fix with a single-hunk text edit that it can prove correct. Unknown codes
@@ -98,6 +101,15 @@ pub fn code_actions(
                 if let Some(action) =
                     add_type_annotation_action(view, module, uri, diag, text, encoding)
                 {
+                    actions.push(CodeActionOrCommand::CodeAction(action));
+                }
+            }
+            "IPE-N0034" => {
+                // Standard-library module used without importing it — insert the
+                // named `import Ipe.X` line. The diagnostic names the exact module
+                // to add (`add `import Ipe.X` to use it`); we insert it in the
+                // module's import block, sorted among the existing imports.
+                if let Some(action) = add_import_action(view, module, uri, diag, text, encoding) {
                     actions.push(CodeActionOrCommand::CodeAction(action));
                 }
             }
@@ -233,6 +245,126 @@ fn add_type_annotation_action(
         disabled: None,
         data: None,
     })
+}
+
+/// Quick-fix that inserts the `import Ipe.X` line named by an IPE-N0034
+/// diagnostic into the module's import block.
+///
+/// The module to add is read from the diagnostic message, which the compiler
+/// renders as `… add `import Ipe.X` to use it`: the exact `import` clause is
+/// backtick-quoted, so we lift the module path out of that clause verbatim
+/// rather than reconstructing it. The line is inserted alphabetically among the
+/// existing `import` lines (import order is not significant to the compiler, so
+/// a sorted position is both valid and predictable); with no existing imports
+/// it goes just below the `module … exposing (…)` header, separated by a blank
+/// line to match first-party formatting.
+fn add_import_action(
+    view: DbView<'_>,
+    module: &[String],
+    uri: &Url,
+    diag: &Diagnostic,
+    text: &str,
+    encoding: PositionEncoding,
+) -> Option<CodeAction> {
+    let import_module = import_module_from_message(&diag.message)?;
+
+    let DbView { db, root, .. } = view;
+    let files = root.files(db);
+    let &file = files.get(module)?;
+    let parsed = ipe_db::parse(db, file).ok()?;
+
+    // Existing imports as (dotted-path, byte offset of the import declaration).
+    // The import keyword starts at the beginning of the line that its module
+    // path begins on, so we snap each path span back to its line start.
+    let interner = db.interner().lock();
+    let mut imports: Vec<(String, usize)> = Vec::with_capacity(parsed.imports.len());
+    for imp in &parsed.imports {
+        let dotted: Option<Vec<&str>> = imp
+            .name
+            .value
+            .iter()
+            .map(|&s| interner.resolve(s))
+            .collect();
+        let Some(segs) = dotted else { continue };
+        let path = segs.join(".");
+        let line = offset_to_position(text, imp.name.span.lo as usize, encoding).line as usize;
+        let (line_start, _) = line_byte_range(text, line);
+        imports.push((path, line_start));
+    }
+    // The last byte of the header's `exposing (...)` clause: where an
+    // import-less module's new import block begins.
+    let header_end = parsed.exposing.span.hi as usize;
+    drop(interner);
+
+    // Do not offer the action if the import already exists (the diagnostic
+    // would be stale) — a duplicate insert never fixes anything.
+    if imports.iter().any(|(path, _)| *path == import_module) {
+        return None;
+    }
+
+    let (insert_byte, new_text) = if imports.is_empty() {
+        // No imports yet: open the block just after the header, one blank line
+        // down, matching the `module …\n\n\nimport …` first-party convention.
+        let after_header_line = offset_to_position(text, header_end, encoding).line as usize;
+        let (_, line_end) = line_byte_range(text, after_header_line);
+        (line_end, format!("\nimport {import_module}\n"))
+    } else if let Some((_, start)) = imports
+        .iter()
+        .find(|(path, _)| path.as_str() > import_module.as_str())
+    {
+        // Insert before the first existing import that sorts after the new one.
+        (*start, format!("import {import_module}\n"))
+    } else {
+        // Sorts last: append after the final import line.
+        let last_line_start = imports.iter().map(|(_, s)| *s).max().unwrap_or(0);
+        let last_line = offset_to_position(text, last_line_start, encoding).line as usize;
+        let (_, line_end) = line_byte_range(text, last_line);
+        (line_end, format!("import {import_module}\n"))
+    };
+
+    let insert_pos = offset_to_position(text, insert_byte, encoding);
+    let edit = TextEdit {
+        range: Range {
+            start: insert_pos,
+            end: insert_pos,
+        },
+        new_text,
+    };
+    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+    changes.insert(uri.clone(), vec![edit]);
+    Some(CodeAction {
+        title: format!("Add import {import_module}"),
+        kind: Some(CodeActionKind::QUICKFIX),
+        diagnostics: Some(vec![diag.clone()]),
+        edit: Some(WorkspaceEdit {
+            changes: Some(changes),
+            document_changes: None,
+            change_annotations: None,
+        }),
+        command: None,
+        is_preferred: Some(true),
+        disabled: None,
+        data: None,
+    })
+}
+
+/// Lift the `Ipe.X` module path out of an IPE-N0034 message.
+///
+/// The message ends with `add `import Ipe.X` to use it`. We take the content of
+/// the backtick pair whose contents begin with `import `, then strip that
+/// keyword — yielding the dotted module path (`Ipe.X`) verbatim. Returns `None`
+/// if the message does not carry a backtick-quoted `import` clause, so a
+/// reworded or unrelated diagnostic simply produces no action.
+fn import_module_from_message(message: &str) -> Option<String> {
+    for clause in message.split('`') {
+        if let Some(rest) = clause.strip_prefix("import ") {
+            let module = rest.trim();
+            if !module.is_empty() {
+                return Some(module.to_owned());
+            }
+        }
+    }
+    None
 }
 
 /// Returns `(start_byte, end_byte)` for `line` (0-based), where `end_byte`
