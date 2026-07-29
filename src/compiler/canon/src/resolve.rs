@@ -1795,7 +1795,7 @@ fn canonicalise_with_env(
         if let Some(alias) = detect_kernel_alias(&v.value, env, interner)? {
             env.vars.insert(
                 name,
-                VarHome::Kernel(Some(alias.id), alias.module, alias.function),
+                VarHome::Kernel(alias.id, alias.module, alias.function),
             );
             kernel_aliases.insert(name, alias);
         } else {
@@ -2337,10 +2337,7 @@ fn inject_dep_exports(
         // qualified `Alias.f` routes straight to the kernel dispatch — never a
         // `TopLevel(dep_path)` reference to a def the alias module never emits.
         if let Some(alias) = dep.kernel_aliases.get(&v) {
-            qual_map.insert(
-                v,
-                VarHome::Kernel(Some(alias.id), alias.module, alias.function),
-            );
+            qual_map.insert(v, VarHome::Kernel(alias.id, alias.module, alias.function));
         } else {
             qual_map.insert(v, VarHome::TopLevel(dep_path.clone()));
         }
@@ -2402,7 +2399,7 @@ fn check_and_inject_value(
     // `publish` to a non-existent `TopLevel` def.
     let home = kernel_alias.map_or_else(
         || VarHome::TopLevel(dep_path.to_vec()),
-        |a| VarHome::Kernel(Some(a.id), a.module, a.function),
+        |a| VarHome::Kernel(a.id, a.module, a.function),
     );
     env.vars.insert(name, home);
     Ok(())
@@ -3201,9 +3198,16 @@ fn var_home_to_expr(name: Symbol, home: &VarHome) -> canon::Expr_ {
             name,
         },
         VarHome::Kernel(id, m, f) => canon::Expr_::VarKernel {
-            id: *id,
+            id: Some(*id),
             module: *m,
             name: *f,
+        },
+        // A reachable-but-unbacked member: no registry id, so the type stage
+        // fails closed with IPE-L0108 rather than resolving to a scheme.
+        VarHome::ReservedKernel { module, name } => canon::Expr_::VarKernel {
+            id: None,
+            module: *module,
+            name: *name,
         },
     }
 }
@@ -3311,9 +3315,15 @@ fn resolve_qual_var(
     };
     match members.get(&name) {
         Some(VarHome::Kernel(id, m, f)) => Ok(canon::Expr_::VarKernel {
-            id: *id,
+            id: Some(*id),
             module: *m,
             name: *f,
+        }),
+        // Reachable-but-unbacked member: no registry id, IPE-L0108 at type-check.
+        Some(VarHome::ReservedKernel { module, name }) => Ok(canon::Expr_::VarKernel {
+            id: None,
+            module: *module,
+            name: *name,
         }),
         Some(VarHome::TopLevel(module)) => Ok(canon::Expr_::VarTopLevel {
             module: module.clone(),
