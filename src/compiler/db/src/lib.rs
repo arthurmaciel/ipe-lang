@@ -1,9 +1,7 @@
 #![forbid(unsafe_code)]
 //! `ipe_db` — the salsa incremental-compilation database.
 //!
-//! Authoritative design: `docs/architecture/incremental-compilation-and-watch.md`
-//! (locked Q1–Q4). Scope + decisions ledger:
-//! `docs/architecture/salsa-incremental-compilation-2026-07-11.md`.
+//! Decision record: `docs/adr/0032-salsa-incremental-compilation-phase1.md`.
 //!
 //! The earliest front-end stages sit behind memoized salsa queries:
 //!

@@ -677,7 +677,6 @@ if ! on_path; then
   export PATH="$INSTALL_DIR:$PATH"
   persist_path
 fi
-"$INSTALL_DIR/ipe" --version >&2 || true
 
 # Success banner: the green word carries the good news; the footer mirrors the
 # CLI's "report bugs" line (kept in sync with the style SSOT by a drift test).
