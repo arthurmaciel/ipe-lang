@@ -349,6 +349,17 @@ job is marked `continue-on-error` until a musl-capable AArch64 C linker is
 confirmed available on the runner. Remove `continue-on-error` from
 `.github/workflows/static.yml` `linux-static-arm64` once the job turns green.
 
+## Faster builds
+
+`ipe build` / `ipe run` compile an emitted Rust project, so most of the time is
+`rustc` + linking. Optional per-machine tools — a compilation cache
+([sccache](https://github.com/mozilla/sccache)), a fast linker
+([mold](https://github.com/rui314/mold) / [lld](https://lld.llvm.org/)), and a
+fast debug codegen backend
+([cranelift](https://github.com/rust-lang/rustc_codegen_cranelift)) — cut that
+substantially. See [docs/rust-perf-improvement.md](docs/rust-perf-improvement.md)
+for per-platform install and `~/.cargo/config.toml` recipes.
+
 ## Support
 
 Contributions are **very** welcome!
