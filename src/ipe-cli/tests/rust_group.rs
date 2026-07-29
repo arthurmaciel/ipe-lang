@@ -22,14 +22,16 @@ fn run(args: &[&str]) -> (bool, String, String) {
 
 #[test]
 fn bare_rust_prints_group_help_and_succeeds() {
-    let (ok, stdout, _) = run(&["rust"]);
-    assert!(ok, "`ipe rust` alone must exit 0");
-    for sub in ["add", "remove", "install"] {
-        assert!(
-            stdout.contains(sub),
-            "group help must list the `{sub}` subcommand, got:\n{stdout}"
-        );
-    }
+    let (bare_ok, bare_stdout, _) = run(&["rust"]);
+    let (help_ok, help_stdout, _) = run(&["rust", "--help"]);
+    assert!(bare_ok, "`ipe rust` alone must exit 0");
+    assert!(help_ok, "`ipe rust --help` must exit 0");
+    // Single source of truth: bare `ipe rust` emits exactly its `--help` page,
+    // never a separate group-help string that can drift from it.
+    assert_eq!(
+        bare_stdout, help_stdout,
+        "bare `ipe rust` output must equal `ipe rust --help` byte-for-byte"
+    );
 }
 
 #[test]

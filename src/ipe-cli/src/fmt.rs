@@ -96,28 +96,6 @@ impl fmt::Display for FmtError {
     }
 }
 
-/// fmt's own usage text, printed for `ipe fmt --help`.
-const FMT_USAGE: &str = "\
-ipe fmt — format Ipê source to the canonical (elm-format-compatible) style
-
-USAGE:
-    ipe fmt [<path>] [--check]
-    ipe fmt --stdin [--check]
-
-ARGS:
-    <path>    A .ipe file, or a directory / project to format every .ipe under
-              (default: the current directory `.`)
-
-OPTIONS:
-    --check   Do not write. Exit non-zero if any file (or stdin) is not already
-              formatted (CI-friendly, like `cargo fmt --check`).
-    --stdin   Read from stdin, write formatted result to stdout. Mutually
-              exclusive with <path>. For editor integration and pipes.
-    --help    Print this message.
-
-By default `ipe fmt` rewrites each file in place. With `--stdin`, formatted
-output goes to stdout (no file is modified).";
-
 /// Run the `fmt` subcommand.
 ///
 /// # Errors
@@ -128,8 +106,12 @@ output goes to stdout (no file is modified).";
 pub fn run_fmt(rest: &[String]) -> Result<(), CliError> {
     // `--help` / `-h` is a request for output, not an error — honour it before
     // the typed parse (which treats every dashed token as a flag to validate).
+    // The page is the single source of truth in `help::command`, identical to
+    // what the top-level dispatcher prints for `ipe fmt --help`.
     if rest.iter().any(|a| a == "--help" || a == "-h") {
-        println!("{FMT_USAGE}");
+        if let Some(page) = crate::help::command("fmt", &std::io::stdout()) {
+            print!("{page}");
+        }
         return Ok(());
     }
     let mode = crate::cli_args::parse_fmt(rest)?;

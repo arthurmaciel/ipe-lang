@@ -183,10 +183,16 @@ const COMMANDS: &[Command] = &[
         summary: "Format Ipê source files.",
         args: "[<path>]",
         args_desc: "A file or directory to format (`.` for the current directory).",
-        options: &[Opt {
-            flag: "[--check]",
-            desc: "report unformatted files without rewriting them",
-        }],
+        options: &[
+            Opt {
+                flag: "[--check]",
+                desc: "report unformatted files without rewriting them",
+            },
+            Opt {
+                flag: "[--stdin]",
+                desc: "format stdin to stdout (for editors and pipes); excludes <path>",
+            },
+        ],
     },
     Command {
         name: "add",

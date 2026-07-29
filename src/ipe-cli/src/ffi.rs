@@ -1417,29 +1417,20 @@ fn add_one(
     Ok(())
 }
 
-/// The `ipe rust` group help, printed when the group is invoked bare.
-const RUST_GROUP_HELP: &str = "\
-ipe rust — manage Rust crates as foreign-function dependencies.
-
-Subcommands:
-  add <crate>[@<version>] [--features a,b] [--yes]  inspect and cache a crate
-  remove <crate>                                    drop a cached crate
-  install [--yes] [--allow-build-scripts]           (re)inspect every [rust.dependencies] crate
-
-Run `ipe rust <subcommand> --help` for a subcommand's options.
-";
-
 /// `ipe rust <add|remove|install> …` — the Rust foreign-function group.
 ///
-/// Bare `ipe rust` prints the group help. Every subcommand dispatches to the
-/// existing FFI command body unchanged.
+/// Bare `ipe rust` prints the group's own `--help` page (the single source of
+/// truth in `help::command`). Every subcommand dispatches to the existing FFI
+/// command body unchanged.
 ///
 /// # Errors
 /// [`CliError`] on an unknown subcommand or any subcommand failure.
 pub fn run_rust(rest: &[String]) -> Result<(), CliError> {
     match rest.split_first() {
         None => {
-            print!("{RUST_GROUP_HELP}");
+            if let Some(page) = crate::help::command("rust", &std::io::stdout()) {
+                print!("{page}");
+            }
             Ok(())
         }
         Some((sub, args)) if sub == "add" => run_add(args),
