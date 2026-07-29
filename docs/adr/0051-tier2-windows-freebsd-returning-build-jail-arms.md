@@ -187,6 +187,18 @@ capability-mode and jail primitives:
   as one whose jail actually ran. Until an arm lands, its platform stays
   refuse-to-certify: `build_in_jail` returns `Unavailable` there and Tier-2 never
   claims a certification it did not run.
+- A landed arm is necessary but not sufficient for *audit-layer* promotion. The
+  audit's Tier-2 probe drives `build_in_jail` with a POSIX-shell probe wrapper
+  through a `/usr/bin/env … /bin/sh` invocation prefix (`audit_native`'s
+  `JailProbeRunner`). **FreeBSD** has `/bin/sh`, so its landed arm promotes the
+  audit layer mechanically (a `cfg`-gate + a `jail(8)` tool-confirm): FreeBSD
+  certifies as `freebsd-x64`. **Windows** runs `payload[0]` directly through
+  `CreateProcessW` (no shell), so the shell probe wrapper cannot drive its jail;
+  Windows audit-layer certification additionally needs a Windows-native probe
+  wrapper (a `.ps1` fixture implementing the same per-axis exit contract) and a
+  Windows invocation prefix. Until that lands, Windows stays refuse-to-certify in
+  the audit layer even though its `build_in_jail` arm is proven by the
+  `windows-tier2` `build_jail_windows_e2e` red-canary.
 - The admit predicate is unchanged: a single conjunction over `JailOutcome`
   (`Clean` on the declared-scoped run, no axis removable). Adding a platform arm
   adds a lowering, never a new admit branch — no non-`Clean` outcome may ever reach

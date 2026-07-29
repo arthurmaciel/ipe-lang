@@ -536,6 +536,13 @@ jobs:
   # The non-ACL-volume filesystem refuse-gap (the `FILE_PERSISTENT_ACLS` probe)
   # is unit-tested host-independently; exercising it live needs a mounted
   # FAT/exFAT volume a hosted image does not provide (a self-hosted runner axis).
+  #
+  # This job does NOT run the audit-layer `audit_native` E2E: the audit's Tier-2
+  # probe wrapper is a POSIX shell fixture driven through a `/usr/bin/env … /bin/sh`
+  # invocation prefix, and the Windows jail runs `payload[0]` directly through
+  # `CreateProcessW` (no shell). A Windows-native probe wrapper is needed before
+  # the audit can certify `windows-x64`, so Windows stays refuse-to-certify in the
+  # audit layer; this job proves only the Windows `build_in_jail` deny behaviour.
   windows-tier2:
     name: windows-tier2 (Job Object + AppContainer — the real Windows build-jail proof)
     runs-on: windows-2022
@@ -599,6 +606,13 @@ jobs:
   # refuse-to-certify (`build_in_jail` returns `Unavailable`), never admitting
   # unconfined. The red-canary demands a differentially-probed axis
   # (Denied { Network } / Denied { Filesystem }); a benign build is Clean.
+  #
+  # This job ALSO runs the audit-layer `audit_native` E2E inside the VM: the
+  # reconciler drives the FreeBSD `build_in_jail` through `JailProbeRunner` (the
+  # SAME POSIX-shell probe wrapper the Linux/macOS jobs use — FreeBSD has
+  # `/bin/sh`), certifying a benign package as `freebsd-x64` and rejecting a
+  # used-but-undeclared axis. So FreeBSD is a real certifying platform in the
+  # audit layer, not only a build-jail deny proof.
   freebsd-tier2:
     name: freebsd-tier2 (jail(8) inside vmactions VM — the real FreeBSD build-jail proof)
     runs-on: ubuntu-latest
@@ -626,3 +640,11 @@ jobs:
             fi
             # The red-canary through the real jail(8): IPE_E2E=1 arms the runs.
             IPE_E2E=1 cargo test -p ipe_sandbox --test build_jail_freebsd_e2e -- --nocapture
+            # The audit-layer certify path through the real jail(8): the reconciler
+            # drives the FreeBSD build_in_jail via JailProbeRunner. A used-but-
+            # undeclared axis rejects naming the axis (the red-canary), and a benign
+            # package declaring exactly its axes certifies as freebsd-x64. IPE_E2E=1
+            # arms the real jailed runs; this exercises the certify+reject the
+            # windows-2022/macos jobs prove on their platforms.
+            IPE_E2E=1 IPE_RUNTIME_DIR="$GITHUB_WORKSPACE/src/runtime/rust/src" \
+              cargo test -p ipe --test audit_native -- --nocapture
