@@ -1,47 +1,48 @@
-# Web-shape JS integration — network-spanning typed ports
+# JS integration — one typed port, two transports
 
-Status: design proposal, no implementation yet.
+Status: design proposal, no implementation yet. The Ipê sketches are
+**illustrative of the proposed surface** — this capability does not exist yet, so
+they are not runnable; they show intended types, not shipped API. The names
+(`jsInbound`, `sendToJs`, `viewJs`, `ipe.send`/`onCommand`/`onState`) are
+placeholders under active review — see "Naming (open)".
 
 ## The problem
 
-The Web shape is server-driven TEA: `Model`, `update`, and `view` run on the
-server; the browser is a thin client that applies DOM patches streamed over the
-server→browser event stream and reports user events back through
-`data-ipe-ev-<name>` markers. Ipê never runs in the browser.
+An Ipê app reaches the browser two ways. In the **server-driven Web shape**,
+`Model`/`update`/`view` run on the server and the browser is a thin client
+applying streamed DOM patches. In the **client-WASM target** (ADR-0042) the same
+`init`/`update`/`view` app is compiled to WebAssembly and runs *in* the browser,
+patching the real DOM via `web-sys`. Either way, some things only the browser can
+do — a third-party map or charting widget, `WebAudio`, `Geolocation`,
+`IndexedDB`, a payment SDK — and Ipê needs an expression for them.
 
-That leaves a gap. Some things only the browser can do — a third-party map or
-charting widget, `WebAudio`, `Geolocation`, `IndexedDB`, a payment SDK — and
-Ipê has no expression for them. The client currently carries a
-`data-ipe-eval` / `new Function` seam for this, which AGENTS.md forbids: it
-executes server-supplied strings in the browser, an unbounded code-injection
-surface with no type at the boundary.
-
-We need a JS boundary that is **explicit, typed, and secure**: every byte that
-crosses it passes a total decoder or a typed projection, and the set of things
-JS can do is declared, not open-ended.
+The client historically carried a `data-ipe-eval` / `new Function` seam for this,
+which AGENTS.md forbids: it executes supplied strings in the browser, an
+unbounded code-injection surface with no type at the boundary. We need a JS
+boundary that is **explicit, typed, and secure**: every byte that crosses passes
+a total decoder or a typed projection, and the set of things JS can do is
+declared, not open-ended.
 
 ## The reference, and the twist
 
 Elm's answer is **ports**: the one sanctioned JS boundary, two one-way typed
-channels — `Value -> Cmd msg` outbound, `(Value -> msg) -> Sub msg` inbound,
-with decoding on the Elm side. Ports are async message passing with no return
-value, which is what keeps the pure core pure.
+channels — `Value -> Cmd msg` outbound, `(Value -> msg) -> Sub msg` inbound, with
+decoding on the Elm side. Async message passing, no return value, which keeps the
+pure core pure.
 
-The twist for the Web shape: Elm's ports are *in-browser* (Elm and JS share a
-process), but here the TEA loop is on the **server** and JS is in the
-**browser**, so the port spans the network. The shape of the API is Elm's; the
-hazards are distributed-systems hazards Elm never had to face.
+Elm's ports are in-browser (Elm and JS share a process). Ipê has *both* that case
+(client-WASM) and a network-spanning case (server-driven Web, where the TEA loop
+is on the server and JS is in the browser). The developer-facing surface is one
+and the same; the compiler lowers it per target.
 
-## Chosen design: three typed, schema-guarded channels
+## The surface: three typed, schema-guarded channels
 
 A single declared *port module* names, in one place, everything that may cross
-the JS boundary. It compiles to three channels. The Ipê sketches below are
-**illustrative of the proposed surface** — this capability does not exist yet,
-so they are not runnable; they show the intended types, not shipped API.
+the JS boundary. It compiles to three channels.
 
 ### 1. Inbound intent — `jsInbound : Decoder JsMsg`
 
-JS sends a message; the server decodes it into a typed value before `update`
+JS sends a message; the runtime decodes it into a typed value before `update`
 ever sees it.
 
 ```
@@ -53,25 +54,25 @@ jsInbound : Decoder JsMsg
 ```
 
 The decoder **is** the security gate — parse-don't-validate at the trust
-boundary. The server never handles a raw blob, only `Result DecodeError JsMsg`.
+boundary. The core never handles a raw blob, only `Result DecodeError JsMsg`.
 
 ### 2. Outbound projection — `viewJs : Model -> JsState`
 
-A declarative slice of state that JS should always mirror (the data behind a
-chart, a map's marker set). It is a *second view*: a pure projection with its
-own encoder, diffed and streamed over the same server→browser channel as the
-DOM patches, re-emitted only when the projection changes.
+A declarative slice of state JS should mirror (the data behind a chart, a map's
+markers). It is a *second view*: a pure projection with its own encoder,
+delivered on the same outbound channel as the DOM patches, re-emitted only when
+it changes.
 
 ```
-viewJs : Model -> JsState        -- derived, publishable projection
+viewJs : Model -> JsState
 encodeJsState : JsState -> Value
 ```
 
 ### 3. Outbound command — `sendToJs : JsCmd -> Cmd Msg`
 
-A one-shot imperative effect that is not state (play a sound, fire an analytics
-event, open a file picker) — the classic Elm outbound port, encoded and
-delivered to a JS handler.
+A one-shot imperative effect that is not state (play a sound, fire analytics,
+open a file picker) — the classic Elm outbound port, encoded and delivered to a
+JS handler.
 
 ```
 type JsCmd = PlayChime | ScrollTo { anchor : String }
@@ -80,147 +81,198 @@ sendToJs : JsCmd -> Cmd Msg
 
 | Channel | Direction | Kind |
 |---|---|---|
-| `jsInbound : Decoder JsMsg` | JS → server | intent, decoded at the trust boundary |
-| `viewJs : Model -> JsState` | server → JS | declarative projection, diffed |
-| `sendToJs : JsCmd -> Cmd Msg` | server → JS | imperative one-shot effect |
+| `jsInbound : Decoder JsMsg` | JS → core | intent, decoded at the trust boundary |
+| `viewJs : Model -> JsState` | core → JS | declarative projection, diffed |
+| `sendToJs : JsCmd -> Cmd Msg` | core → JS | imperative one-shot effect |
+
+## Two decisions that keep the boundary honest
+
+### The boundary type must be a concrete ADT — a mandatory seal
+
+A port's declared inbound/outbound type MUST be a concrete declared type, never
+`Json.Value` (nor any opaque passthrough). `Decoder JsMsg` where `JsMsg` is a
+real sum type — the compiler **rejects** `Decoder Value`:
+
+```
+jsInbound : Decoder Value
+--                  ^^^^^ rejected: a JS-port boundary type must be a declared
+--                  concrete type. Name the messages JS may send as a sum type.
+```
+
+This is the single rule that structurally forecloses Elm's `Value` free-for-all:
+the untyped channel *cannot be spelled*. It is fail-closed by construction
+(Security #1) and make-invalid-states-unrepresentable pointed at the boundary
+type itself — an opaque port is exactly the "silent flexible variable that defers
+failure downstream" the fundamental rules forbid. A genuinely opaque passthrough
+is expressed by *naming* it (`type RawJson = RawJson String`), so "not
+interpreted here" is explicit and greppable, not an untyped hole — Completeness
+(#5) is kept without conceding Security (#1).
+
+Advisory (warn-but-allow) is rejected: it leaves the permissive branch reachable,
+and a lower principle (the Readability/Completeness convenience of `Value`) can
+never justify compromising Security.
+
+### One closed ADT per direction, with generated per-variant senders
+
+The published JS surface is a single closed `JsCmd` / `JsMsg` sum type, not a set
+of scattered per-function port declarations. The closed type **is** the attack
+surface as one auditable object (read one `type JsMsg`, see everything JS can do),
+and the inbound `case jsMsg of` is exhaustive — publish a new variant and every
+handler fails to compile until it is handled. Per-function ports (Elm's `port
+playTone : … -> Cmd msg`) scatter the surface and let an inbound port be silently
+forgotten in `subscriptions`; the single ADT makes "published but unhandled"
+unrepresentable.
+
+Elm's per-function *ergonomics* are recovered without giving up the closed type:
+the compiler generates a per-variant sender, so call sites read directly.
+
+```
+sendToJs PlayChime      -- the primitive
+playChime               -- generated: = sendToJs PlayChime
+```
+
+One closed type for Security + exhaustiveness; generated sugar for Readability.
 
 ## Three refinements that make it principled
 
-### `JsMsg` is a distinct, narrow ADT — never all of `Msg`
+- **`JsMsg` is a distinct, narrow ADT — never all of `Msg`.** The browser is
+  fully attacker-controlled. "The messages JS may send" must not be the internal
+  `Msg` type — that would hand an attacker every transition the state machine can
+  reach (`AdminPurge`, `SetBalance`). `JsMsg` is a separate small type the runtime
+  maps into `Msg`; an attacker can only name transitions explicitly published.
+- **`viewJs` is a projection, never the raw `Model`.** The same discipline the DOM
+  already has (ship `view model`, never the Model). Raw field access into the
+  Model for the JS stream is structurally impossible; secrets cannot leak because
+  they are never in `JsState`. (Rationale shifts by target — see below.)
+- **One schema, both directions.** `jsInbound`'s decoder and `viewJs`'s encoder
+  are two faces of one declared port type, so browser and core cannot drift on
+  wire format.
 
-The browser is fully attacker-controlled: anyone can open devtools and call the
-send API with any payload. So "the messages JS may send" must **not** be the
-internal `Msg` type — that would hand an attacker every transition the state
-machine can reach, including ones the UI never exposes (`AdminPurge`,
-`SetBalance`). `JsMsg` is a separate, deliberately small type; the server maps
-it into `Msg`. An attacker can only name transitions that were explicitly
-published. This is make-invalid-states-unrepresentable applied to the attack
-surface itself.
+## One boundary, two orthogonal flags
 
-### `viewJs` is a projection, never the raw `Model`
+The boundary to non-Ipê code is one abstraction. What varies across cases is two
+*independent* flags — conflating them is what left client-WASM without a home:
 
-Sending "part of the Model" to JS sends it to the browser, i.e. to the user.
-The Model may hold other users' data, server tokens, or unpublished computed
-state. The discipline already exists for the DOM — you never ship the raw Model
-to the screen, you ship `view model` — and it applies unchanged here: `viewJs`
-is the one place that decides what leaves the server on this channel. Raw field
-access into the Model for the JS stream is structurally impossible; secrets
-cannot leak because they are never in `JsState`.
+- **Trust → decode gate.** Is the far side trusted? Untrusted (browser JS,
+  sandboxed Rust) → the inbound decode gate is **ON**. Trusted (pure in-process
+  Rust) → a direct typed binding, no gate. Keyed on trust, **never on transport**:
+  browser JS is attacker-controlled whether it sits across a network or in the
+  same page, so in-process ≠ trusted.
+- **Ordering → staleness layer.** Does the transport preserve ordering against the
+  runtime? Network / async-unordered → sequence tokens (optimistic concurrency).
+  In-process-ordered → **no tokens**. Keyed on transport latency, never on trust.
 
-### One schema, both directions
+| Far side | Transport | Trust → gate | Ordering → tokens |
+|---|---|---|---|
+| Browser JS, server-driven Web | network (server↔browser stream) | untrusted → ON | unordered → tokens |
+| Browser JS, client-WASM | in-process (wasm-bindgen, same page) | untrusted → ON | ordered → none |
+| Tier-2 sandboxed Rust | subprocess pipe (the run jail) | semi-trusted → ON | unordered → tokens |
+| Async in-process Rust | the async bridge | trusted far side, async | (Task completion) |
+| Pure in-process Rust | same address space | trusted → OFF (direct binding) | ordered → none |
 
-`jsInbound`'s decoder and `viewJs`'s encoder are the two faces of a single
-declared port type, so the browser and server cannot drift on wire format.
-Parse-don't-validate holds on both ends of one contract.
+The port is declared once; `--target` picks the transport; these two flags decide
+what the lowering emits.
 
-## The hazard Elm does not have: stale reads and ordering
+## Per-target lowering
+
+| | Server-driven Web | Client-WASM |
+|---|---|---|
+| TEA loop runs | server | browser (WASM) |
+| Transport | network stream | in-process (wasm-bindgen) |
+| Inbound gate (`jsInbound`) | ON | **ON** — unchanged; in-process ≠ trusted |
+| `sendToJs` delivery | encode → stream → `ipe.onCommand` | direct dispatch, same tick |
+| `viewJs` projection | encode → **diff** → stream deltas | direct in-memory handoff |
+| Sequence tokens | present | **absent** — single-threaded, ordered, like real Elm |
+| Developer surface | `jsInbound`/`sendToJs`/`viewJs` | **identical** |
+| App's JS glue | `ipe.send`/`onCommand`/`onState` | **identical** |
+
+Two runtime implementations of the `ipe` object (one posts over the network, one
+calls into the WASM instance); the app's handlers and the Ipê port declarations
+are byte-identical across both. This is ADR-0042's "one backend, inherit don't
+fork" applied to the JS boundary: **write once, deploy server-driven or client
+bundle unchanged.**
+
+## Stale reads and ordering — the network-only hazard
 
 Elm ports are in-process and single-threaded, so inbound messages are ordered
-against the runtime. Here JS acts on a `JsState` it received over the network,
-then sends a `JsMsg` — but by the time the server folds that message the Model
-has already moved on. **JS always holds a stale, read-only replica.** The design
-answers this explicitly:
+against the runtime. **Client-WASM inherits that** — no staleness, no tokens. Only
+the **server-driven** transport has the distributed hazard: JS acts on a `JsState`
+it received over the network, then sends a `JsMsg`, but by the time the server
+folds it the Model has moved on. JS always holds a stale, read-only replica.
 
-- `JsState` is authoritative-server and read-only. JS never "writes" it; it
-  sends *intents* (`JsMsg`), and the server reconciles them against the current
-  Model. A `JsMsg` is a request, not an assertion about state.
+- `JsState` is authoritative-server and read-only. JS never "writes" it; it sends
+  *intents* (`JsMsg`), and the server reconciles them against the current Model. A
+  `JsMsg` is a request, not an assertion about state.
 - When an intent must be conditional on what JS saw, it carries a **sequence
-  token** taken from the `JsState` it was derived from, and `update` may reject
-  or rebase an intent whose token is stale (optimistic concurrency). The token
-  is part of the projection's schema, not something the developer wires by hand.
+  token** taken from the `JsState` it was derived from, and `update` may reject or
+  rebase a stale intent (optimistic concurrency).
 
-## Developer mental model
+Because tokens are the *ordering flag's* machinery, they are **opt-in** (only
+conditional intents take one) and **auto-elided under client-WASM** (in-process
+ordering already guarantees freshness, so the token variant compiles to a no-op).
+Portable code pays zero client-side tax. The token-carrying surface is designed
+in "Versioned intents (opt-in)".
 
-There are now three server↔browser channels: framework-owned DOM patches
-(out), framework-owned `data-ipe-ev-*` events (in), and this developer-owned
-port (both ways). The rule that keeps it comprehensible is unchanged: **the only
-way to change server state is to send a message.** `JsState` is explicitly a
-read-only replica, not a source of truth, so a developer who mutates it in JS
-sees no server effect — because state changes travel only as `JsMsg` intents.
-Framing the projection as read-only is what prevents the "why didn't my JS edit
-stick?" confusion.
+## `viewJs`'s rationale shifts by target
 
-## Alternatives considered
+Server-side, `viewJs` is a **secret boundary**: the Model holds server state that
+must not reach the browser. Client-side the Model is already in the browser, so
+`viewJs` is an **encapsulation boundary**: host and third-party page scripts see
+only the declared typed slice, not the internal Model shape — with a residual
+secret role against *other* scripts sharing the page. Same mechanism, both
+motivations hold; `viewJs` is not dead weight client-side.
 
-- **Network-spanning ports (chosen).** Typed, minimal, Elm-aligned; every
-  crossing is a decoder or a projection. The imperative/declarative split
-  (`sendToJs` vs `viewJs`) covers both one-shot effects and always-in-sync data.
-- **Custom elements.** JS widgets encapsulated as DOM nodes with typed
-  attributes and events, composing through the existing DOM-patch channel. This
-  is complementary, not competing: it is the right tool for a *visual* widget
-  embedded in the view, whereas ports are for imperative side effects and
-  out-of-band data. A later design can add custom elements on top; they do not
-  replace ports.
-- **Hooks / lifecycle callbacks** (run arbitrary JS on node mount/update).
-  Rejected as the primary boundary: the callback body is untyped JS with
-  ambient DOM access — the same unbounded surface as the forbidden eval seam,
-  only spelled differently. Ports keep the boundary declared and decoded.
+## Versioned intents (opt-in)
+
+To be designed: the surface of a token-carrying conditional intent — how an intent
+opts into optimistic concurrency, how `update` sees and rebases a stale one, and
+how the whole layer elides under client-WASM.
+
+## Naming (open)
+
+`jsInbound` / `sendToJs` / `viewJs` and the JS-side `ipe.send` / `onCommand` /
+`onState` are placeholders; the naming axis is inconsistent (direction vs
+view-variant vs verb+target) and under review.
 
 ## Relationship to Rust FFI
 
-The port is a boundary to non-Ipê code, and so is the Rust FFI. They look like
-two features until you notice that the axis that decides *whether something
-should be a port* is not the target language (JS vs Rust) but the **trust and
-execution model of the far side**. On that axis, browser JS and
-capability-isolated Rust land in the same place, and pure in-process Rust lands
-somewhere else.
+The port is a boundary to non-Ipê code, and so is the Rust FFI. The axis that
+decides *whether something is a port* is not the target language (JS vs Rust) but
+the **trust and execution model of the far side** — the same trust/ordering flags
+above. Browser JS and capability-isolated Rust land on the port side; pure
+in-process Rust lands on the direct-binding side.
 
-| Far side | Nature | Right boundary |
-|---|---|---|
-| Browser JS | untrusted, async, across a serialization boundary | port — decode inbound, project outbound, `Cmd`/`Sub` |
-| Async Rust, or Tier-2 **sandboxed** Rust | semi-trusted or isolated, async, across a process/serialization boundary | port |
-| Pure, in-process, synchronous Rust | trusted, synchronous, same address space | direct typed binding — not a port |
+A pure total Rust function — a parser, a hash — should surface as an ordinary Ipê
+value (`let h = blake3 bytes`), not a `Cmd` round-trip: it has a trusted,
+synchronous, same-address-space far side (gate OFF, ordered), so parse-don't-
+validate argues *against* re-validating at runtime what was parsed at compile
+time. Async Rust (a `Task` with an inbound completion) and Tier-2 sandboxed Rust
+(a narrow declared capability, serialized across the jail, decoded because the
+isolated side is only semi-trusted) are ports under a different name — see
+[async-ffi-bridge-design.md](async-ffi-bridge-design.md).
 
-The bottom row is why "use ports for Rust too" is wrong as a blanket rule. A
-pure total Rust function — a parser, a hash — should surface as an ordinary Ipê
-value (`let h = blake3 bytes`), not a `Cmd` round-trip. Routing it through an
-async port would discard three things the direct binding already has:
-synchronous values, compile-time-known types (the FFI inspector has already read
-the Rust signature, so there is nothing to decode), and speed — while buying no
-Security, because in-process trusted code has no untrusted boundary to guard.
-Parse-don't-validate argues *against* a port here: do not re-validate at runtime
-what was parsed at compile time.
+## Alternatives considered
 
-The top two rows are where a port is exactly right, and the FFI subsystem
-already grows a port-shaped boundary there on its own:
-
-- **Async Rust.** An async Rust call returns a future; its natural Ipê surface is
-  a `Task` with an inbound completion — an outbound port plus its response. See
-  [async-ffi-bridge-design.md](async-ffi-bridge-design.md); it is ports to Rust
-  under a different name.
-- **Tier-2 sandboxed Rust.** The moment a Rust wrapper declares a capability and
-  runs in the run jail, it is no longer in-process — it is a confined subprocess
-  behind a serialization boundary the caller does not fully trust. That is a port
-  in every respect: a narrow declared surface (the wrapper's declared
-  capabilities play the role `JsMsg` plays here), a request serialized across the
-  boundary, a response **decoded and validated** because the isolated side is
-  only semi-trusted, and an effect, so a `Task`. The jail is the transport.
-
-### One boundary, pluggable transport
-
-The three cases are one abstraction with a pluggable transport and a trust flag:
-
-- transport ∈ { browser (the server→browser stream), sandboxed subprocess (the
-  jail's pipe), async in-process (the bridge) };
-- the shared machinery is identical across all three — a declared narrow surface,
-  decode-inbound / project-outbound, one schema for both directions, and effects
-  expressed as `Task` / `Cmd` / `Sub`;
-- the trust flag decides only whether the inbound side gets the decode gate:
-  browser always, sandboxed Rust yes, trusted in-process Rust no (direct
-  binding). The isolation is what promotes a Rust call from a direct binding to a
-  port — so the sandbox and the JS port are not two mechanisms that rhyme, they
-  are one boundary discipline seen through two transports.
+- **Custom elements.** JS widgets encapsulated as DOM nodes with typed attributes
+  and events, composing through the existing DOM-patch channel. Complementary, not
+  competing: the right tool for a *visual* widget embedded in the view, whereas
+  ports are for imperative effects and out-of-band data. A later design can add
+  them on top.
+- **Hooks / lifecycle callbacks** (arbitrary JS on node mount/update). Rejected as
+  the primary boundary: the callback body is untyped JS with ambient DOM access —
+  the unbounded surface of the forbidden eval seam, only spelled differently.
 
 ## Boundaries
 
-- Design-only; nothing here is implemented. It defines the *shape* of a future
-  capability, not a schedule.
+- Design-only; nothing here is implemented.
+- Applies to both browser execution models — server-driven Web **and** client-WASM
+  — via the one surface + two transports. WebView (its own host bridge) and the
+  Terminal shape (no JS) are out of scope.
 - The JS-side runtime surface is a small fixed API — an intent sender, a
-  projection subscription, and a command handler registry (e.g. `ipe.send`,
-  `ipe.onState`, `ipe.onCommand`) — never `eval`/`new Function`. It replaces the
-  `data-ipe-eval` seam, which this design removes.
-- WebView and TUI are out of scope: WebView has its own host bridge and TUI has
-  no JS. This is specific to the Web shape's server↔browser split.
+  projection subscription, and a command handler registry — never `eval` /
+  `new Function`. It replaces the `data-ipe-eval` seam, which this design removes.
 - Capability inference: a program that declares a JS port is exercising the
-  browser-scripting capability and is classified accordingly, the same as any
-  other effectful surface.
+  browser-scripting capability and is classified accordingly.
+- Where a stable browser API (Geolocation, storage, WebAudio) should instead be a
+  first-class typed module rather than a hand-written port is an open question —
+  see "kernel vs package" discussion.
