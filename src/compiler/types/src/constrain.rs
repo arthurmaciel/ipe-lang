@@ -363,7 +363,7 @@ struct Builtins {
     #[allow(dead_code)]
     live_f_not_found: Symbol,
     // ── Tui cfg record field name symbols ─────────────────────────────────────
-    /// `"onKey"` — the onKey field of the `Tui.app` / `Tui.program` config record.
+    /// `"onKey"` — the onKey field of the `Terminal.appScreen` config record.
     /// Typed `{ kind : String, value : String } -> msg`; the backend bridges the
     /// record handler onto the runtime bound `FOnKey: Fn(String, String) -> Msg`.
     tui_f_on_key: Symbol,
@@ -381,7 +381,7 @@ struct Builtins {
     /// Typed as `(Int, Int)` — width × height in logical pixels.
     webview_f_size: Symbol,
     // ── Cli cfg record field name symbols ──────────────────────────────
-    /// `"onLine"` — the onLine field of the `Console.app` config record.
+    /// `"onLine"` — the onLine field of the `Terminal.appLines` config record.
     /// Typed as `String -> Msg` — called once per stdin line.
     cli_f_on_line: Symbol,
     // ── Ui.button cfg record field name symbols ───────────────────────────────

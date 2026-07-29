@@ -1,8 +1,8 @@
 module Main exposing (main)
 
--- An accumulator calculator as a Console REPL: the same TEA loop as the
--- graphical shapes, driven by standard input. `Console.app` renders `view` to
--- stdout, reads one line at a time, turns each into a `Msg` via `onLine`, folds
+-- An accumulator calculator as a terminal line REPL: the same TEA loop as the
+-- graphical shapes, driven by standard input. `Terminal.appLines` renders `view`
+-- to stdout, reads one line at a time, turns each into a `Msg` via `onLine`, folds
 -- it through `update`, and re-renders.
 --
 -- Each line is a command:
@@ -19,7 +19,7 @@ module Main exposing (main)
 
 import Ipe.String as String
 import Ipe.System as System
-import Ipe.Tea.Console exposing (app)
+import Ipe.Tea.Terminal exposing (appLines)
 import Ipe.Cmd as Cmd
 import Ipe.Sub as Sub
 
@@ -147,7 +147,7 @@ parseBinary build rest line =
 
 
 main =
-    app
+    appLines
         { init = init
         , update = update
         , view = view

@@ -1,20 +1,20 @@
-//! End-to-end tests for `Ipe.Tui` / `Ipe.Tui` — `Tui.app`, `Ui.column`,
+//! End-to-end tests for `Ipe.Terminal` `appScreen` — `Ui.column`,
 //! `Ui.el`, `Ui.text`, and `String.fromInt`.
 //!
 //! Non-E2E tests (no `IPE_E2E` required):
 //! - `tui_onkey_record_typechecks` — ipe-level regression for the `onKey :
-//!   KeyEvent -> Msg` record scheme fix (T0001); verifies both `Tui.app` and
-//!   `Tui.program` accept a single-argument record-typed key handler and that
-//!   the emitter generates the bridging wrapper closure.
+//!   KeyEvent -> Msg` record scheme fix (T0001); verifies `Terminal.appScreen`
+//!   accepts a single-argument record-typed key handler and that the emitter
+//!   generates the bridging wrapper closure.
 //!
 //! E2E tests (gated on `IPE_E2E=1`):
-//! - `tui_counter_build_only` — full ipe + cargo build with `Tui.app` and
-//!   a `KeyEvent -> Msg` handler (a `String -> String -> Msg` curried shape is
-//!   not valid under the scheme).
+//! - `tui_counter_build_only` — full ipe + cargo build with `Terminal.appScreen`
+//!   and a `KeyEvent -> Msg` handler (a `String -> String -> Msg` curried shape
+//!   is not valid under the scheme).
 //!
 //! ## Architecture
 //!
-//! 1. A minimal Ipe.Tui counter program is written to a temp dir.
+//! 1. A minimal Ipe.Terminal counter program is written to a temp dir.
 //! 2. `ipe::build` compiles it (parse → canon → types → lower → emit Rust).
 //! 3. `e2e_support::build_rust_binary` runs `cargo build` on the emitted project —
 //!    the shared Cargo target lets crossterm/tokio compile once and be reused.
@@ -25,7 +25,7 @@
 //! proof that the full pipeline works:
 //!
 //! ```text
-//! Tui.app cfg → constrain → lower → emit_tui_call →
+//! Terminal.appScreen cfg → constrain → lower → emit_tui_call →
 //!     ipe_runtime::tui::tui_app_ui(init, update, view, subs, on_key)
 //! ```
 //!
@@ -40,7 +40,7 @@
 //! IPE_E2E=1 cargo test tui_e2e
 //! ```
 
-/// A minimal `Tui.app` counter exercising the `Tui.app` scheme.
+/// A minimal `Terminal.appScreen` counter exercising the `appScreen` scheme.
 ///
 /// `onKey` is a SINGLE-argument record handler — `KeyEvent -> Msg` — matching
 /// the Haskell reference scheme (`any -> msg`).  The emitter generates the
@@ -59,7 +59,7 @@
 /// cells; there is no HTML step.
 const IPE_TUI_COUNTER: &str = r"module Main exposing (main)
 
-import Ipe.Tea.Tui as Tui
+import Ipe.Tea.Terminal as Terminal
 import Ipe.Ui as Ui
 import Ipe.Cmd
 import Ipe.String
@@ -99,7 +99,7 @@ onKey _ =
     NoOp
 
 main =
-    Tui.app
+    Terminal.appScreen
         { init = init
         , update = update
         , view = view
@@ -107,60 +107,6 @@ main =
         , onKey = onKey
         }
 ";
-
-/// Minimal `Tui.program` source exercising `onKey : KeyEvent -> Msg` (record
-/// handler) and `view : Model -> String` (the Tui.program–specific view shape).
-// Note: `r#"..."#` is needed because the Ipê source contains `""` (an empty
-// string literal) which would terminate a plain `r"..."` raw string early.
-//
-// Unlike `IPE_TUI_COUNTER`, this program does NOT pipe through `Task.run`
-// at the `main` level — `Task.run : Task Error a -> a` keeps `a` polymorphic
-// when `main` has no type annotation, causing IPE-L0102.  `Tui.program` already
-// returns `Task Unit`, which is a concrete type the module entry accepts
-// directly.
-const IPE_TUI_PROGRAM_ONKEY_RECORD: &str = r#"module Main exposing (main)
-
-import Ipe.Tea.Tui as Tui
-import Ipe.Cmd
-import Ipe.Sub
-
-type alias KeyEvent = { kind : String, value : String }
-
-type Msg = NoOp
-
-type alias Model = { dummy : Int }
-
-init : () -> ( Model, Cmd Msg )
-init _ =
-    ( { dummy = 0 }, Cmd.none )
-
-update : Msg -> Model -> ( Model, Cmd Msg )
-update msg model =
-    case msg of
-        NoOp ->
-            ( model, Cmd.none )
-
-view : Model -> String
-view _ =
-    ""
-
-subscriptions : Model -> Sub Msg
-subscriptions _ =
-    Sub.none
-
-onKey : KeyEvent -> Msg
-onKey _ =
-    NoOp
-
-main =
-    Tui.program
-        { init = init
-        , update = update
-        , view = view
-        , subscriptions = subscriptions
-        , onKey = onKey
-        }
-"#;
 
 /// Shared error type for E2E helpers.
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -193,15 +139,15 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::Pat
     Ok(std::path::PathBuf::from(exe))
 }
 
-/// **Regression for T0001 / examples 21–22**: both `Tui.app` and `Tui.program`
-/// must accept `onKey : KeyEvent -> Msg` where `KeyEvent = { kind : String,
+/// **Regression for T0001**: `Terminal.appScreen` must accept
+/// `onKey : KeyEvent -> Msg` where `KeyEvent = { kind : String,
 /// value : String }` (a SINGLE-argument record handler).
 ///
 /// Typing `onKey` as `String -> String -> Msg` (two curried String arguments)
-/// in both schemes would cause `IPE-T0001` at the `Tui.program` / `Tui.app`
-/// call site, since example code uses the record-alias shape.
+/// would cause `IPE-T0001` at the `Terminal.appScreen` call site, since example
+/// code uses the record-alias shape.
 ///
-/// After the fix, both schemes PIN the key-event argument to the closed
+/// After the fix, the scheme PINS the key-event argument to the closed
 /// record `{ kind : String, value : String }` (the Haskell reference types it
 /// `any -> msg` and Go fails at runtime on non-KeyEvent handlers; we fail at
 /// compile time — same sanctioned tightening as the Model / Msg gates).
@@ -249,8 +195,8 @@ fn tui_onkey_record_typechecks() {
             .unwrap_or_else(|_| String::new())
     }
 
-    // ── 1. Tui.app with `onKey : KeyEvent -> Msg` ────────────────────────────
-    let app_rs = compile_ok("tui_app", IPE_TUI_COUNTER);
+    // ── Terminal.appScreen with `onKey : KeyEvent -> Msg` ────────────────────
+    let app_rs = compile_ok("terminal_app_screen", IPE_TUI_COUNTER);
     if app_rs.is_empty() {
         return; // runtime unavailable — structural assertions skipped
     }
@@ -258,38 +204,25 @@ fn tui_onkey_record_typechecks() {
     // The emitter must produce the bridging wrapper closure.
     assert!(
         app_rs.contains("|kind: String, value: String|"),
-        "Tui.app emitted Rust must contain the `|kind: String, value: String|` \
+        "Terminal.appScreen emitted Rust must contain the `|kind: String, value: String|` \
          wrapper closure (onKey record bridge); got:\n{app_rs}"
     );
     // The record struct `RecKindValue` must be referenced inside the wrapper.
     assert!(
         app_rs.contains("RecKindValue"),
-        "Tui.app emitted Rust must reference `RecKindValue` struct in the wrapper; \
+        "Terminal.appScreen emitted Rust must reference `RecKindValue` struct in the wrapper; \
          got:\n{app_rs}"
-    );
-
-    // ── 2. Tui.program with `onKey : KeyEvent -> Msg` ────────────────────────
-    let prog_rs = compile_ok("tui_program", IPE_TUI_PROGRAM_ONKEY_RECORD);
-
-    assert!(
-        prog_rs.contains("|kind: String, value: String|"),
-        "Tui.program emitted Rust must contain the `|kind: String, value: String|` \
-         wrapper closure; got:\n{prog_rs}"
-    );
-    assert!(
-        prog_rs.contains("RecKindValue"),
-        "Tui.program emitted Rust must reference `RecKindValue` struct; got:\n{prog_rs}"
     );
 }
 
-/// Compile-only: the Ipe.Tui counter emits a Cargo project with the `"tui"`
+/// Compile-only: the Ipe.Terminal counter emits a Cargo project with the `"tui"`
 /// feature in the default feature list, `crossterm` and `unicode-width` deps,
 /// and `ipe_runtime::tui::tui_app_ui` in the `main` function.
 ///
 /// This is a BUILD-ONLY test — it does not spawn the binary (Tui requires a
 /// real TTY).  A successful `cargo build` is the assertion:
 ///
-/// * constrain: `Tui.app` correctly types the 5-field cfg with a
+/// * constrain: `Terminal.appScreen` correctly types the 5-field cfg with a
 ///   record-typed `onKey : KeyEvent -> Msg` handler.
 /// * lower: the cfg record literal bypasses IPE-L0107 (same exemption
 ///   as `Web.app`).

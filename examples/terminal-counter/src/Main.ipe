@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 -- A terminal counter built from the SAME shared `Ipe.Ui` vocabulary that the Web
--- and WebView shapes render. `Tui.app` takes a `view : Model -> Element Msg`;
+-- and WebView shapes render. `Terminal.appScreen` takes a `view : Model -> Element Msg`;
 -- the runtime walks that typed element tree and paints it to terminal cells,
 -- exactly as the browser and webview shapes paint the same tree to HTML. One
 -- `view` function, three shapes.
@@ -14,7 +14,7 @@ module Main exposing (main)
 
 import Ipe.String as String
 import Ipe.System as System
-import Ipe.Tea.Tui as Tui
+import Ipe.Tea.Terminal as Terminal
 import Ipe.Cmd as Cmd
 import Ipe.Sub as Sub
 import Ipe.Ui as Ui
@@ -65,7 +65,7 @@ update msg model =
 
 
 -- The same `Ipe.Ui` element tree the Web and WebView counters build. Under those
--- shapes it is wrapped in `Ui.layout` to yield `Html Msg`; the Tui runtime
+-- shapes it is wrapped in `Ui.layout` to yield `Html Msg`; the Terminal runtime
 -- renders the bare `Element Msg` tree directly to ANSI cells.
 view : Model -> Element Msg
 view model =
@@ -116,7 +116,7 @@ onKey key =
 
 
 main =
-    Tui.app
+    Terminal.appScreen
         { init = init
         , update = update
         , view = view
