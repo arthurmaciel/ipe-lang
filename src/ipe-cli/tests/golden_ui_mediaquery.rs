@@ -13,8 +13,8 @@
 //! ## What is tested
 //!
 //! * `ipe build` compiles `tests/golden/ui_mediaquery/Main.ipe`
-//!   (canon → types → lower → Rust backend) — i.e. `Ui.mediaQuery` is no
-//!   longer a `deliberately_unbacked_members` hole.
+//!   (canon → types → lower → Rust backend) — i.e. `Ui.mediaQuery` is a
+//!   backed kernel end to end, not a reachable-but-unbacked reserved member.
 //! * The emitted Rust project `cargo build`s and the binary runs and exits 0.
 //! * `Ui.mediaQuery "(min-width: 768px)" [Background.color …] child` renders
 //!   the wrapper with BOTH markers: the verbatim query and the

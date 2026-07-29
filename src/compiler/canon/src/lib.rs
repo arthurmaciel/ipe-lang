@@ -2012,7 +2012,7 @@ mod tests {
         );
     }
 
-    /// **Tripwire: registry ↔ canon parity, a full subset gate.**
+    /// **Tripwire: registry ↔ canon parity.**
     ///
     /// Forward direction (registry → canon): for every
     /// [`ipe_kernels::StdlibKernel`] variant in `ALL`, if the variant's
@@ -2026,15 +2026,13 @@ mod tests {
     /// aliases) are NOT an error.  Qualifiers absent from `qual_vars` entirely
     /// (e.g. `"Log"`, `"PubSub"`) are skipped automatically.
     ///
-    /// Reverse direction (canon → registry, "G1"): for every non-excluded
-    /// qualifier's members, `VarHome::Kernel(Some(sk), ..)` entries are
-    /// checked for exact id propagation. As a FULL SUBSET GATE it additionally
-    /// asserts no non-excluded member sits on `VarHome::Kernel(None, ..)` — i.e. every
-    /// kernel the resolver/canon layer recognises (every `qual_vars` member,
-    /// short of the deliberately-excluded alias namespaces and the
-    /// structurally-unreachable `KNOWN_UNBACKED` set proven disjoint by
-    /// [`known_unbacked_disjoint_from_qual_vars`]) resolves to a concrete
-    /// [`ipe_kernels::StdlibKernel`] id.
+    /// Reverse direction (canon → registry, "G1"): every
+    /// `VarHome::Kernel(sk, ..)` entry is checked for exact kernel propagation
+    /// against `stdlib_index`. A separate "is there a kernel at all" subset gate
+    /// is no longer needed: "a reachable member with no backing kernel" is not a
+    /// representable state — a member is either a backed `Kernel` or an explicit
+    /// `VarHome::ReservedKernel`. The reserved set is asserted against a fixed
+    /// allowlist so it cannot drift.
     ///
     /// **Scope note (this crate has no dependency on `ipe_types`):** this
     /// test proves `QUALIFIERS` (env.rs) stays consistent with
@@ -2049,7 +2047,7 @@ mod tests {
     /// untouched — don't treat `canon_equals_registry` as a substitute
     /// regression test for it.
     #[test]
-    #[allow(clippy::too_many_lines)] // declarative tripwire — two subset-gate directions + a documented exception table; splitting would obscure the invariant
+    #[allow(clippy::too_many_lines)] // declarative tripwire — forward + reverse parity directions plus the reserved-category allowlist; splitting would obscure the invariant
     fn canon_equals_registry() {
         use crate::env::VarHome;
         use ipe_intern::Interner;
@@ -2106,144 +2104,30 @@ mod tests {
         }
 
         // ── G1 reverse check: canon → registry ───────────────────────────────
-        // For every qual_vars entry that carries id = Some(actual_sk) (i.e.
-        // was resolved against stdlib_index at parse time), verify that the
-        // stored id EXACTLY MATCHES stdlib_index[(qual, name)].  A second pass
-        // additionally proves the reverse direction is a FULL
-        // SUBSET GATE: every non-excluded qual_vars member must resolve to a
-        // concrete id in the first place — a `VarHome::Kernel(None, ..)` here
-        // means QUALIFIERS in env.rs names a member with NO matching
-        // StdlibKernel::ALL entry, an anti-drift bug in this crate's own
-        // table (not, by itself, the exit-0-then-cargo-fail hole -- that
-        // hole is independently closed on the types side by
-        // ipe_types::constrain::kernel_scheme_or_unsupported, which this
-        // test does not exercise; see the doc comment above).
+        // For every `VarHome::Kernel(actual_sk, m, f)` entry, verify the carried
+        // kernel EXACTLY MATCHES `stdlib_index[(m, f)]` — proving
+        // install_prelude_qualifiers stored the kernel it read from
+        // stdlib_index, not a transposed or stale copy.
         //
-        // SCOPE — propagation wiring AND totality: verifies that
-        // install_prelude_qualifiers stored the id it read from stdlib_index,
-        // not some transposed or stale copy, AND that every reachable member
-        // has an id at all.  It does NOT verify injectivity
-        // of decl() (covered by ipe_kernels::tests::no_colliding_qualifier_name_pairs)
-        // and does NOT verify decl-equiv-legacy equivalence (covered by
+        // With the totality fix there is no separate "is there a kernel at all"
+        // subset gate to run: a reachable member is either `Kernel(sk, ..)`
+        // (backed by construction — this loop checks it points at the RIGHT sk)
+        // or `ReservedKernel { .. }` (the explicit reserved category, asserted
+        // against a fixed allowlist below). "A reachable member with no backing
+        // kernel" is no longer a representable state, so a `Kernel(None, ..)`
+        // hole cannot arise for the gate to catch.
+        //
+        // SCOPE: verifies propagation wiring. It does NOT verify injectivity of
+        // decl() (covered by ipe_kernels::tests::no_colliding_qualifier_name_pairs)
+        // nor decl-equiv-legacy equivalence (covered by
         // ipe_lower::tests::decl_equiv_legacy_match).
-        //
-        // Excluded qualifier namespaces (sanctioned aliases — their members
-        // share ids with the canonical qualifier but have DIFFERENT qual_syms,
-        // so stdlib_index keys differ; the forward check already covers the
-        // canonical side):
-        //   Basics, Attr, Event                    — non-module prelude names
-        //   Ipe.Html, Ipe.Ui, Ipe.Html.Attributes,
-        //   Ipe.Html.Events, Ipe.Web, Ipe.Terminal, Ipe.WebView  — Ipe.* aliases
-        //   Ipe.Html, Ipe.Ui, Ipe.Web, Ipe.Terminal    — Ipê.* aliases
-        //
-        // Note: QUALIFIER_ALIASES clone their members INCLUDING the id, so the
-        // alias entries are correct by construction.  The exclusion exists only
-        // because stdlib_index is keyed by (canonical_qual, name) so a lookup
-        // for (alias_qual, name) would return None — giving a false failure.
-        let excluded_quals: std::collections::BTreeSet<&str> = [
-            "Basics",
-            "Attr",
-            "Event",
-            "Ipe.Html",
-            "Ipe.Ui",
-            "Ipe.Html.Attributes",
-            "Ipe.Html.Events",
-            "Ipe.Web",
-            "Ipe.Terminal",
-            "Ipe.WebView",
-            "Ipe.Html",
-            "Ipe.Ui",
-            "Ipe.Web",
-            "Ipe.Terminal",
-        ]
-        .into_iter()
-        .collect();
-
-        // Deliberately-unbacked-but-reachable members. `excluded_quals` is
-        // qualifier-granular and would blind the whole gate for e.g. String's
-        // ~30 real kernels; a single known-holdout member needs a
-        // member-granular exception instead.
-        // Unlike `excluded_quals` (alias namespaces that resolve elsewhere),
-        // these are genuine `id = None` holes: `QUALIFIERS` in env.rs names
-        // them (so they parse + canonicalise) but `ipe_kernels::StdlibKernel`
-        // has NO variant for them yet (confirmed by grepping
-        // `crates/ipe_kernels/src/lib.rs` for each — zero hits). They already
-        // fail CLOSED at type-check today with a loud IPE-L0108
-        // (`error[IPE-L0108]: kernel function not available yet`) via
-        // `constrain_var_kernel`'s existing `id.and_then(..)` — never
-        // silently — so listing them here does not violate the
-        // exit-0-then-cargo-fail property this gate exists to protect; it makes
-        // the fail-closed state explicit and machine-checked instead
-        // of an untracked hole the gate would otherwise panic on.
-        //
-        // Two are deliberate holdouts documented in
-        // `crates/ipe/tests/golden_core_stdlib.rs`'s header comment:
-        //   - `String.toChar` — no runtime fn; ambiguous Char-vs-Maybe-Char
-        //     semantics.
-        //   - `Basics.toString` — polymorphic `a -> String` needs a
-        //     Display/Stringify bound HM cannot express; already excluded via
-        //     the "Basics" qualifier-level entry above, listed here too for
-        //     self-documentation (harmless duplicate — `excluded_quals` skips
-        //     the whole qualifier before this set is even consulted).
-        //
-        // The remaining 20 are a CANON-side hole one layer earlier than the
-        // `docs/adr/0020-html-ui-live-kernel-arity-tripwire.md` derivation,
-        // which only audited kernels that already had a `StdlibKernel` id (a
-        // TYPES-side `Ty::Var(u32::MAX)`-class hole); these have no id at all
-        // yet. Each is a real Ipe.Ui / Ipe.Html surface named in `QUALIFIERS`
-        // (env.rs) with no matching `ipe_kernels::StdlibKernel::decl()` entry —
-        // i.e. not-yet-ported advanced UI features (pseudo-classes, media
-        // queries, gradients, HTML-document-level nodes), not typos or drift.
-        // Implementing 20 kernels with real runtime backing is out of scope
-        // for the exhaustiveness gate.
-        let deliberately_unbacked_members: std::collections::BTreeSet<(&str, &str)> = [
-            ("String", "toChar"),
-            ("Basics", "toString"),
-            // Ipe.Ui — sized elements / attrs / pseudo-classes / media queries.
-            ("Ui", "image"),
-            ("Ui", "disabled"),
-            ("Ui", "paddingEach"),
-            ("Ui", "clipX"),
-            ("Ui", "clipY"),
-            ("Ui", "scrollbarX"),
-            ("Ui", "scrollbarY"),
-            ("Ui", "onFile"),
-            // ("Ui", "mediaQuery") — REMOVED 2026-07-11: backed by
-            // `StdlibKernel::UiMediaQuery` (runtime `ui_media_query_` +
-            // `live::style_inject::build_mq` consumer). The last of the 20
-            // deferred members from this list to be wired; see
-            // docs/adr/0019-ui-mediaquery-safe-boundary.md.
-            ("Ui", "onPseudo"),
-            ("Ui", "hover"),
-            ("Ui", "focus"),
-            ("Ui", "focusVisible"),
-            ("Ui", "active"),
-            // Ipe.Html — document-level nodes + display helper.
-            ("Html", "toString"),
-            ("Html", "voidNode"),
-            ("Html", "doctype"),
-            ("Html", "titleNode"),
-            ("Html", "htmlNode"),
-            ("Html", "headNode"),
-            // Ipe.Ui.Background — gradients.
-            ("Background", "linearGradient"),
-        ]
-        .into_iter()
-        .collect();
-
-        // G1 forward-propagation check: every
-        // `VarHome::Kernel(Some(actual_sk), m, f)` entry's id must match
-        // `stdlib_index[(m, f)]` exactly.
         for (qual_sym, members) in env.qual_vars.iter() {
             let qual_str = interner.resolve(*qual_sym).unwrap_or("<unknown>");
-            if excluded_quals.contains(qual_str) {
-                continue;
-            }
             for (name_sym, home) in members {
-                if let VarHome::Kernel(Some(actual_sk), m, f) = home {
-                    // This entry carries a pre-resolved id — verify it
-                    // against stdlib_index using the CANONICAL (module, name)
-                    // stored in VarHome, not the qual_vars KEY.
+                if let VarHome::Kernel(actual_sk, m, f) = home {
+                    // The carried kernel is verified against stdlib_index using
+                    // the CANONICAL (module, name) stored in VarHome, not the
+                    // qual_vars KEY.
                     //
                     // For plain entries: m == qual_sym, f == name_sym.
                     // For FUNC_ALIASES: name_sym is the ALIAS (e.g.
@@ -2251,6 +2135,11 @@ mod tests {
                     // "render").  stdlib_index is keyed by
                     // (qual_sym, canonical_name), so using (m, f) is always
                     // correct for both.
+                    //
+                    // Alias namespaces (`Attr`, `Event`, the `Ipe.*` clones)
+                    // carry the canonical kernel + canonical (m, f) symbols, so
+                    // the same (m, f) lookup validates them too — no qualifier
+                    // needs excluding.
                     let expected = env.stdlib_index.get(&(*m, *f));
                     let name_str = interner.resolve(*name_sym).unwrap_or("<unknown>");
                     let canon_str = interner.resolve(*f).unwrap_or("<unknown>");
@@ -2258,7 +2147,7 @@ mod tests {
                         Some(actual_sk),
                         expected,
                         "G1 reverse: VarHome::Kernel in qual_vars[{qual_str:?}][{name_str:?}] \
-                         (canonical fn={canon_str:?}) has id={actual_sk:?} but \
+                         (canonical fn={canon_str:?}) carries kernel {actual_sk:?} but \
                          stdlib_index has {expected:?}; \
                          install_prelude_qualifiers propagation is incorrect",
                     );
@@ -2266,158 +2155,106 @@ mod tests {
             }
         }
 
-        // Subset gate: every non-excluded qual_vars member
-        // must resolve to a concrete StdlibKernel id. Pulled into a free
-        // function (below) so `qual_vars_subset_gate_catches_unbacked_member`
-        // can prove — with a tiny synthetic fixture, no full `Env::initial`
-        // needed — that the gate actually fires on a genuine miss, not just
-        // that it stays silent on the real (currently clean-of-undocumented-
-        // holes) table.
-        let unbacked = qual_vars_none_violations(
-            &env.qual_vars,
-            &interner,
-            &excluded_quals,
-            &deliberately_unbacked_members,
-        );
-        assert!(
-            unbacked.is_empty(),
-            "Task 3 subset gate: every non-excluded qual_vars member must \
-             resolve to a concrete StdlibKernel id (a `None` here means \
-             QUALIFIERS in env.rs names a member with NO matching \
-             StdlibKernel::ALL entry; either add the missing StdlibKernel \
-             variant + scheme, or add the qualifier/member to the \
-             excluded_quals / deliberately_unbacked_members exclusion sets \
-             above with a comment explaining why it is deliberately \
-             unbacked, mirroring KNOWN_UNBACKED in constrain.rs). {} \
-             violation(s):\n{}",
-            unbacked.len(),
-            unbacked.join("\n"),
+        // Reserved-category gate: the reachable-but-unbacked members
+        // (`VarHome::ReservedKernel`) must be EXACTLY this allowlist. A member
+        // dropping off (once it gains a `StdlibKernel`) or a new one appearing
+        // both fail here, so the reserved set cannot silently drift — the same
+        // anti-drift protection the old subset gate gave, now over the explicit
+        // reserved variant instead of a `None` inside `Kernel`.
+        //
+        // `String.toChar` — no runtime fn; ambiguous Char-vs-Maybe-Char
+        // semantics. Documented in
+        // `src/ipe-cli/tests/golden_core_stdlib.rs`'s header. It fails closed at
+        // type-check with IPE-L0108 (`kernel function not available yet`)
+        // because a `ReservedKernel` lowers to `VarKernel { id: None, .. }`.
+        let reserved_allowlist: std::collections::BTreeSet<(&str, &str)> =
+            std::iter::once(("String", "toChar")).collect();
+        let reserved_actual = reserved_kernel_members(&env.qual_vars, &interner);
+        assert_eq!(
+            reserved_actual, reserved_allowlist,
+            "reserved-category gate: VarHome::ReservedKernel members must be \
+             exactly the documented allowlist. A member here that gained a \
+             StdlibKernel must move from ReservedKernel to Kernel (remove it \
+             from the allowlist); a genuinely new unbacked member must gain a \
+             StdlibKernel variant + scheme, or be added to the allowlist with a \
+             comment explaining why it is deliberately unbacked.\n\
+             actual={reserved_actual:?}\nexpected={reserved_allowlist:?}",
         );
     }
 
-    /// Core of the subset gate: collect one description string
-    /// per `VarHome::Kernel(None, ..)` member found in `qual_vars`, skipping
-    /// qualifiers in `excluded_quals` and `(qualifier, name)` pairs in
-    /// `deliberately_unbacked_members`. An empty return means every
-    /// non-excluded, non-deliberately-unbacked member resolves to a concrete
-    /// `StdlibKernel` id — the property the gate exists to enforce
-    /// (`crates/ipe_canon/src/lib.rs`'s `canon_equals_registry`).
-    fn qual_vars_none_violations(
+    /// Collect the `(qualifier, name)` pairs of every reachable-but-unbacked
+    /// member — the [`crate::env::VarHome::ReservedKernel`] entries — in
+    /// `qual_vars`. `canon_equals_registry` asserts the result equals the fixed
+    /// reserved allowlist, so the reserved set cannot drift.
+    fn reserved_kernel_members<'a>(
         qual_vars: &std::collections::BTreeMap<
             ipe_intern::Symbol,
             std::collections::BTreeMap<ipe_intern::Symbol, crate::env::VarHome>,
         >,
-        interner: &ipe_intern::Interner,
-        excluded_quals: &std::collections::BTreeSet<&str>,
-        deliberately_unbacked_members: &std::collections::BTreeSet<(&str, &str)>,
-    ) -> Vec<String> {
+        interner: &'a ipe_intern::Interner,
+    ) -> std::collections::BTreeSet<(&'a str, &'a str)> {
         use crate::env::VarHome;
 
-        let mut unbacked = Vec::new();
-        for (qual_sym, members) in qual_vars {
-            let qual_str = interner.resolve(*qual_sym).unwrap_or("<unknown>");
-            if excluded_quals.contains(qual_str) {
-                continue;
-            }
-            for (name_sym, home) in members {
-                let name_str = interner.resolve(*name_sym).unwrap_or("<unknown>");
-                if deliberately_unbacked_members.contains(&(qual_str, name_str)) {
-                    continue;
-                }
-                if let VarHome::Kernel(None, m, f) = home {
-                    let m_str = interner.resolve(*m).unwrap_or("<unknown>");
-                    let f_str = interner.resolve(*f).unwrap_or("<unknown>");
-                    unbacked.push(format!(
-                        "qual_vars[{qual_str:?}][{name_str:?}] is \
-                         VarHome::Kernel(None, {m_str:?}, {f_str:?})",
-                    ));
+        let mut reserved = std::collections::BTreeSet::new();
+        for members in qual_vars.values() {
+            for home in members.values() {
+                if let VarHome::ReservedKernel { module, name } = home {
+                    let m_str = interner.resolve(*module).unwrap_or("<unknown>");
+                    let n_str = interner.resolve(*name).unwrap_or("<unknown>");
+                    reserved.insert((m_str, n_str));
                 }
             }
         }
-        unbacked
+        reserved
     }
 
-    /// **Regression proof**: the subset gate
-    /// (`qual_vars_none_violations`, exercised for real by
-    /// `canon_equals_registry`) actually FIRES on a kernel-without-scheme,
-    /// rather than being a check that just happens to stay silent on today's
-    /// (already-clean-of-undocumented-holes) table. This is the direct,
-    /// durable proof that the gate provably catches the exact
-    /// exit-0-then-cargo-fail defect class `PRINCIPLES.md` names: "a kernel
-    /// that the resolver recognises but the type-scheme table does not cover."
-    ///
-    /// Builds a minimal synthetic `qual_vars`-shaped fixture — bypassing
-    /// `Env::initial` entirely — with one qualifier holding a
-    /// `VarHome::Kernel(None, ..)` member that is in neither exclusion set,
-    /// and asserts the gate reports exactly that violation.
+    /// **Regression proof**: the reserved-category gate
+    /// (`reserved_kernel_members`, exercised for real by
+    /// `canon_equals_registry`) actually SEES a reachable-but-unbacked member,
+    /// rather than being a check that just happens to stay silent. A synthetic
+    /// `qual_vars`-shaped fixture — bypassing `Env::initial` entirely — holds
+    /// one `VarHome::ReservedKernel` member, and the collector must report
+    /// exactly that pair (and nothing when the member is a backed `Kernel`).
     #[test]
-    fn qual_vars_subset_gate_catches_unbacked_member() {
+    fn reserved_kernel_members_collects_unbacked() {
         use crate::env::VarHome;
         use ipe_intern::Interner;
+        use ipe_kernels::StdlibKernel;
 
         let mut interner = Interner::new();
         let qual_sym = interner.intern("Totally.Fake").expect("intern OOM");
         let name_sym = interner.intern("madeUpKernel").expect("intern OOM");
 
+        // A reachable member with no backing kernel — the reserved category.
         let mut members = std::collections::BTreeMap::new();
-        // A kernel the resolver recognises (it is a real qual_vars member)
-        // but the type-scheme table cannot possibly cover, because — like
-        // real drift such as `Ui.image` / `Html.doctype` — no matching
-        // `StdlibKernel::ALL` entry exists for it at all.
-        members.insert(name_sym, VarHome::Kernel(None, qual_sym, name_sym));
-
+        members.insert(
+            name_sym,
+            VarHome::ReservedKernel {
+                module: qual_sym,
+                name: name_sym,
+            },
+        );
         let mut qual_vars = std::collections::BTreeMap::new();
         qual_vars.insert(qual_sym, members);
 
-        let excluded_quals: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
-        let deliberately_unbacked_members: std::collections::BTreeSet<(&str, &str)> =
-            std::collections::BTreeSet::new();
-
-        let violations = qual_vars_none_violations(
-            &qual_vars,
-            &interner,
-            &excluded_quals,
-            &deliberately_unbacked_members,
-        );
-
+        let reserved = reserved_kernel_members(&qual_vars, &interner);
         assert_eq!(
-            violations.len(),
-            1,
-            "expected exactly one violation for the synthetic unbacked \
-             member, got {violations:?}",
-        );
-        assert!(
-            violations
-                .iter()
-                .any(|v| v.contains("Totally.Fake") && v.contains("madeUpKernel")),
-            "violation message doesn't name the synthetic kernel: {violations:?}",
+            reserved,
+            std::iter::once(("Totally.Fake", "madeUpKernel")).collect(),
+            "collector must report exactly the synthetic reserved member",
         );
 
-        // Sanity check on the OTHER direction: excluding the qualifier makes
-        // the same fixture report zero violations, proving the exclusion
-        // mechanism itself works (not just that the detector fires
-        // unconditionally).
-        let excluded_this_time: std::collections::BTreeSet<&str> =
-            std::iter::once("Totally.Fake").collect();
-        let violations_excluded = qual_vars_none_violations(
-            &qual_vars,
-            &interner,
-            &excluded_this_time,
-            &deliberately_unbacked_members,
+        // A backed `Kernel` member is NOT reserved — the collector skips it.
+        let mut backed = std::collections::BTreeMap::new();
+        backed.insert(
+            name_sym,
+            VarHome::Kernel(StdlibKernel::BasicsIdentity, qual_sym, name_sym),
         );
+        let mut backed_vars = std::collections::BTreeMap::new();
+        backed_vars.insert(qual_sym, backed);
         assert!(
-            violations_excluded.is_empty(),
-            "expected zero violations once the qualifier is excluded, got {violations_excluded:?}",
-        );
-
-        // And via the member-granular exception set.
-        let member_excluded: std::collections::BTreeSet<(&str, &str)> =
-            std::iter::once(("Totally.Fake", "madeUpKernel")).collect();
-        let violations_member_excluded =
-            qual_vars_none_violations(&qual_vars, &interner, &excluded_quals, &member_excluded);
-        assert!(
-            violations_member_excluded.is_empty(),
-            "expected zero violations once the member is excluded, got {violations_member_excluded:?}",
+            reserved_kernel_members(&backed_vars, &interner).is_empty(),
+            "a backed Kernel member must not be reported as reserved",
         );
     }
 

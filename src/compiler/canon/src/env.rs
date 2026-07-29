@@ -141,14 +141,25 @@ pub enum VarHome {
     Local,
     /// A top-level binding of the named module.
     TopLevel(Vec<Symbol>),
-    /// A stdlib kernel function.
+    /// A stdlib kernel function that is backed by a concrete [`StdlibKernel`]
+    /// registry entry.
     ///
-    /// `id` is `Some` when the kernel resolves against `stdlib_index` at
-    /// parse time (the fast path in `lower_callee`); `None` for entries
-    /// present in `qual_vars` but not wired into the registry (the
-    /// string-match fallback in `lower_callee`).  `module` and `name` are
-    /// always present for diagnostics and that fallback path.
-    Kernel(Option<StdlibKernel>, Symbol, Symbol),
+    /// A reachable qualifier member can only be registered as this variant by
+    /// carrying its backing kernel, so "a reachable member with no backing
+    /// kernel" is not a representable state: reachability implies a backing
+    /// kernel by construction. `module` and `name` are the canonical symbols
+    /// used for diagnostics and the type-constraint scheme lookup.
+    Kernel(StdlibKernel, Symbol, Symbol),
+    /// A stdlib qualifier member that is reachable (users may name it) but has
+    /// no backing [`StdlibKernel`] yet — the explicit reserved category.
+    ///
+    /// A reference resolves through name resolution (so it never surfaces the
+    /// "unknown member" diagnostic), then fails closed at type-check with
+    /// IPE-L0108 (`kernel function not available yet`) because it carries no
+    /// registry id. This variant is the sole, named home for a
+    /// deliberately-unbacked-yet-reachable member; there is no `None` hiding
+    /// inside [`Self::Kernel`].
+    ReservedKernel { module: Symbol, name: Symbol },
 }
 
 /// One origin of a wildcard-exposed stdlib value member.
@@ -164,6 +175,25 @@ pub struct WildcardOrigin {
     pub home: VarHome,
     /// The user's import path, used only to render the ambiguity diagnostic.
     pub dep_path: Vec<Symbol>,
+}
+
+/// Resolve a qualifier member's `(module, name)` to its [`VarHome`], choosing
+/// the variant by whether a backing [`StdlibKernel`] exists in `index`.
+///
+/// A hit yields [`VarHome::Kernel`] carrying the concrete kernel; a miss yields
+/// [`VarHome::ReservedKernel`] — the explicit reserved category for a reachable
+/// member with no backing kernel. This is the single construction point that
+/// makes "reachable ⇒ backed" hold by construction: a member can never be
+/// registered as a backed `Kernel` without an actual registry entry.
+fn kernel_home(
+    index: &BTreeMap<(Symbol, Symbol), StdlibKernel>,
+    module: Symbol,
+    name: Symbol,
+) -> VarHome {
+    match index.get(&(module, name)) {
+        Some(&k) => VarHome::Kernel(k, module, name),
+        None => VarHome::ReservedKernel { module, name },
+    }
 }
 
 /// Where a constructor resolves to.
@@ -496,8 +526,8 @@ impl Env {
         ] {
             let key = interner.intern(name)?;
             let func_sym = interner.intern(func)?;
-            let id = self.stdlib_index.get(&(module, func_sym)).copied();
-            self.vars.insert(key, VarHome::Kernel(id, module, func_sym));
+            self.vars
+                .insert(key, kernel_home(&self.stdlib_index, module, func_sym));
         }
         Ok(())
     }
@@ -1786,8 +1816,8 @@ impl Env {
             ("Ipe.Decimal", "Decimal"),
         ];
 
-        // Build stdlib_index FIRST so all VarHome::Kernel(id, ..)
-        // insertions below can look up the pre-resolved id.
+        // Build stdlib_index FIRST so every `kernel_home` call below can look
+        // up the backing kernel and pick `Kernel` vs `ReservedKernel`.
         // Derived from StdlibKernel::ALL + decl() — anti-drift by construction.
         // Skip internal-only qualifiers (e.g. "_internal_").
         for sk in StdlibKernel::ALL {
@@ -1805,8 +1835,8 @@ impl Env {
             let mut module = BTreeMap::new();
             for func in *funcs {
                 let func_sym = interner.intern(func)?;
-                // Thread the pre-resolved id into VarHome so
-                // lower_callee can use the fast path for registered kernels.
+                // Resolve the backing kernel so lower_callee can use the fast
+                // path for registered kernels.
                 //
                 // `Ipe.Html.Events` (`Event`) resolves to the DEDICATED
                 // `Html*` event kernels (`HtmlOnClick` …), which produce
@@ -1816,25 +1846,19 @@ impl Env {
                 // the `Ui` event kernels, which produce the `Ipe.Ui.Attribute`
                 // variant — that makes `button [ onClick Msg ]` fail to unify.) `onMsg`
                 // is the generic alias for `onClick`. All members are registered
-                // under `(Event, name)` in `stdlib_index`, so the id is always
-                // `Some` and `lower_callee`'s fast path returns the `Html*`
-                // kernel directly.
-                let (mod_sym, name_sym, id) = if *qual == "Event" {
+                // under `(Event, name)` in `stdlib_index`, so `kernel_home`
+                // yields a backed `Kernel` and `lower_callee`'s fast path returns
+                // the `Html*` kernel directly.
+                let name_sym = if *qual == "Event" {
                     let canonical = if *func == "onMsg" { "onClick" } else { *func };
-                    let canon_sym = interner.intern(canonical)?;
-                    (
-                        qual_sym,
-                        canon_sym,
-                        self.stdlib_index.get(&(qual_sym, canon_sym)).copied(),
-                    )
+                    interner.intern(canonical)?
                 } else {
-                    (
-                        qual_sym,
-                        func_sym,
-                        self.stdlib_index.get(&(qual_sym, func_sym)).copied(),
-                    )
+                    func_sym
                 };
-                module.insert(func_sym, VarHome::Kernel(id, mod_sym, name_sym));
+                module.insert(
+                    func_sym,
+                    kernel_home(&self.stdlib_index, qual_sym, name_sym),
+                );
             }
             Rc::make_mut(&mut self.qual_vars)
                 .entry(qual_sym)
@@ -1848,9 +1872,9 @@ impl Env {
             let canonical_sym = interner.intern(canonical)?;
             // VarHome stores the CANONICAL module + fn symbols so lower.rs
             // match arms (`("Html", "render")`) work without any changes.
-            // The id is resolved against the CANONICAL (qual, name) key.
-            let id = self.stdlib_index.get(&(qual_sym, canonical_sym)).copied();
-            let home = VarHome::Kernel(id, qual_sym, canonical_sym);
+            // The backing kernel is resolved against the CANONICAL (qual, name)
+            // key.
+            let home = kernel_home(&self.stdlib_index, qual_sym, canonical_sym);
             Rc::make_mut(&mut self.qual_vars)
                 .entry(qual_sym)
                 .or_default()
@@ -1862,14 +1886,11 @@ impl Env {
             let member_sym = interner.intern(member)?;
             let canon_qual_sym = interner.intern(canon_qual)?;
             let canon_name_sym = interner.intern(canon_name)?;
-            // Resolve the id against the CANONICAL (qualifier, name) key so the
-            // fast path in `lower_callee` still works; the VarHome carries the
-            // canonical module + name so the lowerer's match arms are unaffected.
-            let id = self
-                .stdlib_index
-                .get(&(canon_qual_sym, canon_name_sym))
-                .copied();
-            let home = VarHome::Kernel(id, canon_qual_sym, canon_name_sym);
+            // Resolve the backing kernel against the CANONICAL (qualifier, name)
+            // key so the fast path in `lower_callee` still works; the VarHome
+            // carries the canonical module + name so the lowerer's match arms
+            // are unaffected.
+            let home = kernel_home(&self.stdlib_index, canon_qual_sym, canon_name_sym);
             Rc::make_mut(&mut self.qual_vars)
                 .entry(new_qual_sym)
                 .or_default()
