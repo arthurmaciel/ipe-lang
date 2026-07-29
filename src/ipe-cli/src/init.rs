@@ -49,9 +49,17 @@ pub fn run_init(rest: &[String]) -> Result<(), CliError> {
     for arg in rest {
         match arg.as_str() {
             "--force" => force = true,
-            flag if flag.starts_with('-') => return Err(CliError::Usage(crate::USAGE)),
+            flag if flag.starts_with('-') => {
+                return Err(CliError::UsageOwned(format!(
+                    "ipe init: unknown flag {flag:?}"
+                )));
+            }
             positional if target_arg.is_none() => target_arg = Some(positional.to_owned()),
-            _ => return Err(CliError::Usage(crate::USAGE)),
+            other => {
+                return Err(CliError::UsageOwned(format!(
+                    "ipe init: unexpected argument {other:?}"
+                )));
+            }
         }
     }
 

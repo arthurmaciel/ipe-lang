@@ -1532,25 +1532,12 @@ pub fn resolve_runtime() -> Result<PathBuf, CliError> {
     Err(CliError::RuntimeNotFound)
 }
 
-/// The per-command usage hint shown when a command receives bad arguments.
-/// Kept short — one synopsis line per command — so the error is easy to scan.
-/// Full option descriptions live in `ipe <command> --help`.
-const USAGE: &str = "usage:\n  \
-     ipe init  [<name>]\n  \
-     ipe build [<path>]\n  \
-     ipe run   [<path>]\n  \
-     ipe watch [<path>]\n  \
-     ipe fix   <path>\n  \
-     ipe fmt   [<path>]\n  \
-     ipe add   <package>\n  \
-     ipe remove <package>\n  \
-     ipe explain [<code>]\n  \
-     ipe rust  <add|remove|install> [<args>...]\n  \
-     ipe diff  <old> <new>\n  \
-     ipe doc   [check] [<path>]\n  \
-     ipe lsp\n  \
-     ipe version\n\n  \
-     Run `ipe <command> --help` for options.";
+/// The misuse reason shown when `build` / `run` / `watch` are invoked with no
+/// entry and none can be discovered. Just the reason — the command's own
+/// `--help` page (appended by [`CliError::CommandUsage`]) carries the synopsis
+/// and options, so this never re-lists them.
+const NO_ENTRY: &str = "nothing to build here — pass a source file or run inside a project (an ipe.toml, \
+     or a src/Main.ipe)";
 
 /// A request for help asks for output, not an error: it prints to stdout and
 /// exits successfully. Returned by [`intercept_help`] so [`run_cli`] can honour
@@ -1684,7 +1671,7 @@ fn default_entry() -> Result<String, CliError> {
     if std::path::Path::new("src/Main.ipe").exists() {
         return Ok("src/Main.ipe".to_owned());
     }
-    Err(CliError::Usage(USAGE))
+    Err(CliError::Usage(NO_ENTRY))
 }
 
 /// `ipe watch [<path>]` — rebuild and re-run on every source change
