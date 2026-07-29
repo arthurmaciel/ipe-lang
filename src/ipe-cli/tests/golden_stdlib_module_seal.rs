@@ -109,6 +109,7 @@ const REGEX_MAIN: &str = "module Main exposing (main)\n\
     import Ipe.Prelude exposing (..)\n\
     import Ipe.Io as Io\n\
     import Ipe.Regex as Regex\n\n\
+import Ipe.String
     hit : String\n\
     hit = if Regex.match \"\\\\d+\" \"a1\" then \"MATCH\" else \"NOMATCH\"\n\n\
     miss : String\n\
@@ -222,6 +223,7 @@ const COMPRESSION_MAIN: &str = "module Main exposing (main)\n\
     import Ipe.Bytes as Bytes\n\
     import Ipe.Io as Io\n\
     import Ipe.Compression as Compression\n\n\
+import Ipe.Maybe
     roundTrip : Task Error Bytes\n\
     roundTrip =\n\
     \x20   Compression.gzip (Bytes.fromString \"hello\") |> Task.andThen Compression.gunzip\n\n\
@@ -245,6 +247,7 @@ const CSV_MAIN: &str = "module Main exposing (main)\n\
     import Ipe.Prelude exposing (..)\n\
     import Ipe.Io as Io\n\
     import Ipe.Csv as Csv\n\n\
+import Ipe.String
     headerLine : String\n\
     headerLine =\n\
     \x20   case Csv.parse \"a,b\\n1,2\" of\n\
@@ -276,6 +279,7 @@ const CACHE_MAIN: &str = "module Main exposing (main)\n\
     import Ipe.Task as Task\n\
     import Ipe.Io as Io\n\
     import Ipe.Cache as Cache\n\n\
+import Ipe.Maybe
     program : Task Error String\n\
     program =\n\
     \x20   let\n\
@@ -346,6 +350,10 @@ const CONFIG_MAIN: &str = "module Main exposing (main)\n\
     import Ipe.Prelude exposing (..)\n\
     import Ipe.Config as Config\n\
     import Ipe.Io as Io\n\n\
+import Ipe.List
+import Ipe.Maybe
+import Ipe.Result
+import Ipe.String
     hostD : Config.Decoder String\n\
     hostD = Config.field \"host\" Config.string\n\n\
     portD : Config.Decoder Int\n\

@@ -405,6 +405,12 @@ fn name_label(msg: &NameError) -> Option<String> {
         NameError::TypeNotFound { .. } => Some("unknown type".to_string()),
         NameError::ConstructorNotFound { .. } => Some("unknown constructor".to_string()),
         NameError::UnknownModule { qualifier, .. } => Some(format!("unknown module `{qualifier}`")),
+        NameError::StdlibImportRequired {
+            qualifier,
+            import_path,
+        } => Some(format!(
+            "`{qualifier}` is a standard-library module; add `import {import_path}` to use it"
+        )),
         NameError::NoSuchMember { module, member, .. } => {
             Some(format!("`{module}` has no member `{member}`"))
         }

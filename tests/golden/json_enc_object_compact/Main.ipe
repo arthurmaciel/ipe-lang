@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Json.Encode
 
 -- Nested object: { name, age, tags:[...] } encoded at indent=0 (compact).
 -- Go: json.Marshal(map[string]any{}) sorts keys alphabetically →

@@ -1,5 +1,8 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Char
+import Ipe.Crypto
+import Ipe.String
 
 -- HMAC-SHA256 / HMAC-SHA512 — RFC 4231 test case 1.
 -- key = 0x0b repeated 20 times (byte value 11 = vertical tab)

@@ -1,5 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.List
+import Ipe.String
 
 -- F4 (#121 seal). A lambda captures a non-`Copy` local.
 -- `prefix : String` (CloneOk) is captured by `\x -> String.append prefix x`.

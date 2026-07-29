@@ -29,6 +29,8 @@ fn runtime() -> PathBuf {
 /// default `cargo test` gate per the Class 7 spec's two-tier test strategy).
 const MAIN_IPE: &str = "\
 module Main exposing (main)
+import Ipe.Db
+import Ipe.Task
 
 main =
     Task.andThen

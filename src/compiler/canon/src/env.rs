@@ -5,7 +5,7 @@
 //! Iteration order is never observable (lookups only), but the tables are
 //! `BTreeMap`s so the structure is deterministic regardless of insertion order.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use ipe_diagnostics::DResult;
@@ -228,6 +228,30 @@ pub struct Env {
     /// `canon_equals_registry` tripwire test can validate parity with
     /// `qual_vars` without touching any downstream path.
     pub stdlib_index: Rc<BTreeMap<(Symbol, Symbol), StdlibKernel>>,
+    /// **Tier-C import gate: the known stdlib qualifiers.**
+    ///
+    /// Every canonical stdlib qualifier that carries kernel members in
+    /// [`Self::qual_vars`] at initial build, MINUS the Tier-A `Basics`
+    /// qualifier — i.e. exactly the Tier-C qualifiers of ADR 0047 (`String`,
+    /// `List`, `Dict`, `Http`, `Json.Decode`, …). A qualifier in this set
+    /// resolves ONLY when the module was imported (recorded in
+    /// [`Self::imported_stdlib_quals`]); a use of one that was NOT imported is
+    /// the teachable must-import diagnostic (IPE-N0034), NOT a silent resolve.
+    ///
+    /// Built once at [`Env::initial`] time, before any `import` is processed, so
+    /// it names precisely the ambient catalog — user-module import aliases
+    /// (registered later) are never members and so are never gated.
+    ///
+    /// `Rc` so the per-scope `env.clone()` is a refcount bump, not a deep copy.
+    pub gated_stdlib_quals: Rc<BTreeMap<Symbol, Vec<Symbol>>>,
+    /// **Tier-C import gate: the qualifiers this module actually imported.**
+    ///
+    /// A qualifier (canonical short-name, its `as`-alias, or the last-segment
+    /// default) is inserted here by [`crate::resolve::register_stdlib_import_aliases`]
+    /// when its `Ipe.*` module is imported. A Tier-C qualifier resolves iff it is
+    /// present here; anything absent surfaces IPE-N0034. Non-gated qualifiers
+    /// (user modules, the Tier-A `Basics`) never consult this set.
+    pub imported_stdlib_quals: BTreeSet<Symbol>,
     /// The module's driver-vouched trust provenance. `Ffi.binding` bodies
     /// resolve ONLY under [`ModuleOrigin::FfiInterface`]; any other origin
     /// falls through to ordinary qualified-name resolution (and fails there —
@@ -253,7 +277,74 @@ impl Env {
         env.install_prelude_qualifiers(interner)?;
         env.install_builtin_ctors(interner)?;
         env.install_builtin_vars(interner)?;
+        // Freeze the Tier-C import gate: every qualifier now in `qual_vars` is an
+        // ambient stdlib catalog entry. All of them EXCEPT Tier-A `Basics` require
+        // an explicit import to be used (ADR 0047), so record them (each with the
+        // canonical `Ipe.*` path a diagnostic tells the user to import) here, before
+        // any user import is processed.
+        env.freeze_stdlib_import_gate(interner)?;
         Ok(env)
+    }
+
+    /// Populate [`Self::gated_stdlib_quals`] — the Tier-C import-gate catalog.
+    ///
+    /// Runs after every ambient qualifier is installed and before any user import
+    /// is seen, so it captures exactly the stdlib qualifiers whose members are
+    /// pre-installed in [`Self::qual_vars`]. `Basics` (Tier A) is excluded — it is
+    /// auto-imported and needs no `import`. For each gated canonical qualifier the
+    /// value is the canonical `Ipe.*` import path (segment symbols), used verbatim
+    /// in the IPE-N0034 "must import `Ipe.X`" diagnostic.
+    ///
+    /// # Errors
+    /// [`ipe_diagnostics::Diagnostic::CompilerBug`] if interning `Basics` or a path
+    /// segment exhausts the interner.
+    fn freeze_stdlib_import_gate(&mut self, interner: &mut Interner) -> DResult<()> {
+        let basics = interner.intern("Basics")?;
+        // canonical short-name → its preferred `Ipe.*` import path. The FIRST
+        // table entry naming a canonical wins, so a module with several import
+        // paths (rare) suggests its primary one deterministically.
+        let mut canon_to_path: BTreeMap<Symbol, Vec<Symbol>> = BTreeMap::new();
+        for (path, canonical) in STDLIB_MODULE_QUALIFIERS {
+            let canon_sym = interner.intern(canonical)?;
+            if canon_sym == basics {
+                continue; // Tier A: no import required.
+            }
+            if !self.qual_vars.contains_key(&canon_sym) {
+                continue; // defensive: only gate qualifiers that carry members.
+            }
+            let mut segs = Vec::with_capacity(path.len());
+            for seg in *path {
+                segs.push(interner.intern(seg)?);
+            }
+            canon_to_path.entry(canon_sym).or_insert(segs);
+        }
+        self.gated_stdlib_quals = Rc::new(canon_to_path);
+        Ok(())
+    }
+
+    /// Record that a Tier-C stdlib qualifier `q` (a canonical short-name, its
+    /// `as`-alias, or last-segment default) has been brought into scope by an
+    /// `import`. Idempotent.
+    pub fn mark_stdlib_qualifier_imported(&mut self, q: Symbol) {
+        self.imported_stdlib_quals.insert(q);
+    }
+
+    /// The Tier-C import-gate verdict for a used qualifier.
+    ///
+    /// Returns `Some(import_path)` when `qualifier` names a known Tier-C stdlib
+    /// module that the current module did NOT import — the caller then raises the
+    /// teachable IPE-N0034 "must import `Ipe.X`" diagnostic naming that path.
+    /// Returns `None` when the qualifier is either not a gated stdlib module (a
+    /// user alias, or Tier-A `Basics`) or was imported — in both cases ordinary
+    /// resolution proceeds.
+    #[must_use]
+    pub fn stdlib_import_required(&self, qualifier: Symbol) -> Option<&[Symbol]> {
+        if self.imported_stdlib_quals.contains(&qualifier) {
+            return None;
+        }
+        self.gated_stdlib_quals
+            .get(&qualifier)
+            .map(std::vec::Vec::as_slice)
     }
 
     /// Register the ambient (Tier-B) built-in constructors so `Just` / `Nothing` /

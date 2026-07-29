@@ -1,6 +1,11 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.Error
+import Ipe.List
+import Ipe.Maybe
+import Ipe.Result
+import Ipe.String
 
 
 -- A 3-arg builder passed to `Result.map3` / `Maybe.map3` as a MULTI-ARG

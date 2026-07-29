@@ -1,5 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.List
+import Ipe.String
 
 -- Soundness regression for Limitation #8 (Rust backend): the REACHABLE List
 -- pipeline runs in CONSTANT native stack. `range` / `map` / `foldr` route to

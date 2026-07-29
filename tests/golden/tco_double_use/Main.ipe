@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- Value-param double-use (#49): the jump's new `a` is `a + b` and its new `b` is
 -- the OLD `a` — both jump args read the current `a`. The temporaries-first

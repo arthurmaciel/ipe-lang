@@ -1,4 +1,6 @@
 module Lib exposing (andMapAlias)
+import Ipe.Math
+import Ipe.Result
 
 
 -- #90 T3.residual fixture (design doc §4 "T3.residual" row): an ANNOTATED

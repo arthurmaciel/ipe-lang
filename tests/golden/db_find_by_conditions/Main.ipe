@@ -1,5 +1,11 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Db
+import Ipe.Dict
+import Ipe.List
+import Ipe.Maybe
+import Ipe.String
+import Ipe.Task
 
 -- M5b-db golden: Db.findByConditions with a Dict String String conditions map.
 -- Inserts two rows then queries with {"name": "apple"} — only the apple row

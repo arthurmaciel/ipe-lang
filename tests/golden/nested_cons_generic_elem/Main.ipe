@@ -1,6 +1,8 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.List
+import Ipe.String
 
 -- #158: a nested-cons payload whose element type flows through a GENERIC
 -- function parameter (`firstOr : b -> Maybe (List b) -> b`). The backend emits

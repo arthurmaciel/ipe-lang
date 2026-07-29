@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- Int is an OPEN type: literal arms without a wildcard / variable catch-all do
 -- NOT cover every value, so this `case` is non-exhaustive (IPE-T0010).

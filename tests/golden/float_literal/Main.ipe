@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 half : Float
 half = 3.0 / 2.0

@@ -1,4 +1,5 @@
 module Main exposing (main)
 import ModA exposing (ColorA)
 import ModB exposing (ColorA)
+import Ipe.Task
 main = Task.succeed ()

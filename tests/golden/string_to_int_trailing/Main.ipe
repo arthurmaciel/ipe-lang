@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 main =
     case String.toInt "1 " of

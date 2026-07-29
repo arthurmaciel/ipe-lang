@@ -4,6 +4,8 @@ module Main exposing (main)
 -- Applies f to each element, keeps only Just results, unwraps them.
 
 import Ipe.Io as Io
+import Ipe.List
+import Ipe.String
 
 parsePositive : Int -> Maybe String
 parsePositive n =

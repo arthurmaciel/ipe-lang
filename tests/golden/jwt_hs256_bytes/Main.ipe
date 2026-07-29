@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Jwt
 
 -- JWT HS256 byte-parity: emit the token for a fixed 32-byte key + claims and
 -- print it verbatim. The emitted token is byte-identical to the genuine

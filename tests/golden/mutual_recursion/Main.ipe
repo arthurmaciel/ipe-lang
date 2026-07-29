@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- Mutually-recursive ADTs: each enum's payload field is the *other* enum, so the
 -- type-size cycle Even -> Odd -> Even is closed only through enum-payload edges.

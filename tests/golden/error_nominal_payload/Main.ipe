@@ -16,6 +16,9 @@ module Main exposing (main)
 --     — every fixed field of the three nominal types is read somewhere.
 
 import Ipe.Io as Io
+import Ipe.Error
+import Ipe.List
+import Ipe.String
 
 
 describePanic : PanicInfo -> String

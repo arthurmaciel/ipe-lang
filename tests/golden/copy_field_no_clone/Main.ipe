@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- #142/AUD-09 type-directed Copy elision on record-field access.
 --

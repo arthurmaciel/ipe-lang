@@ -1,5 +1,9 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Db
+import Ipe.List
+import Ipe.String
+import Ipe.Task
 
 -- M5b-db golden: Db.insertFields with SetField/OmitField + Db.updateFields.
 -- OmitField columns are excluded from generated SQL; the DB applies DEFAULT.

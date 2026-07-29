@@ -1,4 +1,5 @@
 module Main exposing (main)
+import Ipe.Secret
 
 -- backlog #44 negative gate: `Secret` does NOT implement the `++` append
 -- obligation (`Appendable a => a -> a -> a`, pinned to `String` / `List _`

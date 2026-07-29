@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- A directly self-recursive ADT: `Node` carries two `Tree` fields, which the
 -- backend boxes so the Rust enum stays finite-sized, balanced by `Box::new` at

@@ -1,5 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.List
+import Ipe.String
 
 -- Multiline leading-operator pipeline inside a let binding.
 -- Tests that layout continuation works with `|>` on continuation lines.

@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- POSITIVE CONTROL (AUD-12): x has only a Number obligation (no Append).
 -- Must still default to Int after the fix.

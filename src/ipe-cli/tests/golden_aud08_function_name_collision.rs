@@ -6,13 +6,16 @@
 //! definition the emitter's map keeps last silently winning).
 //!
 //! `module_value`'s fold is not injective over the (home, name) split:
-//! `["UiBorder"]/"rounded"` and `["Ui"]/"borderRounded"` both fold to
-//! `ui_border_rounded` (verified against `to_snake_case`'s exact algorithm —
-//! an interior uppercase char always emits a `_` boundary, so `UiBorder_rounded`
-//! and `Ui_borderRounded` produce byte-identical output). Because `ui` is a
-//! kernel namespace, both names are further disambiguated with a `user_` prefix
-//! (the user-module-vs-kernel guard), so the shared identifier the collision
-//! guard reports is `user_ui_border_rounded`. Mirrors the sibling
+//! `["ZuiBorder"]/"rounded"` and `["Zui"]/"borderRounded"` both fold to
+//! `zui_border_rounded` (verified against `to_snake_case`'s exact algorithm —
+//! an interior uppercase char always emits a `_` boundary, so `ZuiBorder_rounded`
+//! and `Zui_borderRounded` produce byte-identical output). `zui` is NOT a kernel
+//! namespace, so no `user_` disambiguation prefix applies, and the shared
+//! identifier the collision guard reports is `zui_border_rounded`. The module
+//! names are DELIBERATELY not `Ui`/`UiBorder`: `Ui` is a reserved Tier-C stdlib
+//! qualifier (`Ipe.Ui`), so a bare `Ui.borderRounded` would raise IPE-N0034
+//! (demanding `import Ipe.Ui`) and mask the fold-collision this test covers;
+//! `Zui`/`ZuiBorder` are non-reserved names that fold identically. Mirrors the sibling
 //! enum-name collision guard (`crates/ipe_backend_rust/src/lib.rs`, the
 //! `enum_names.values().any(...)` check ~10 lines above the guard this
 //! test covers).
@@ -52,15 +55,15 @@ fn distinct_functions_folding_to_the_same_rust_name_are_rejected() {
         &tmp,
         &[
             (
-                "UiBorder.ipe",
-                "module UiBorder exposing (rounded)\n\
+                "ZuiBorder.ipe",
+                "module ZuiBorder exposing (rounded)\n\
                  import Ipe.Prelude exposing (..)\n\n\
                  rounded : Int -> Int\n\
                  rounded x = x\n",
             ),
             (
-                "Ui.ipe",
-                "module Ui exposing (borderRounded)\n\
+                "Zui.ipe",
+                "module Zui exposing (borderRounded)\n\
                  import Ipe.Prelude exposing (..)\n\n\
                  borderRounded : Int -> Int\n\
                  borderRounded x = x + 1\n",
@@ -70,9 +73,10 @@ fn distinct_functions_folding_to_the_same_rust_name_are_rejected() {
                 "module Main exposing (main)\n\
                  import Ipe.Prelude exposing (..)\n\
                  import Ipe.Io as Io\n\
-                 import UiBorder\n\
-                 import Ui\n\n\
-                 main = Io.println (String.fromInt (UiBorder.rounded 1 + Ui.borderRounded 1))\n",
+                 import Ipe.String\n\
+                 import ZuiBorder\n\
+                 import Zui\n\n\
+                 main = Io.println (String.fromInt (ZuiBorder.rounded 1 + Zui.borderRounded 1))\n",
             ),
         ],
     );
@@ -86,8 +90,8 @@ fn distinct_functions_folding_to_the_same_rust_name_are_rejected() {
     let Err(err) = built else {
         assert!(
             false_marker(),
-            "expected a DuplicateValue rejection for UiBorder.rounded vs \
-             Ui.borderRounded (both fold to `user_ui_border_rounded`), but ipec \
+            "expected a DuplicateValue rejection for ZuiBorder.rounded vs \
+             Zui.borderRounded (both fold to `zui_border_rounded`), but ipec \
              build SUCCEEDED — the collision would silently emit two Rust \
              fns sharing one name"
         );
@@ -108,7 +112,7 @@ fn distinct_functions_folding_to_the_same_rust_name_are_rejected() {
         );
         return;
     };
-    assert_eq!(&**name, "user_ui_border_rounded");
+    assert_eq!(&**name, "zui_border_rounded");
 }
 
 /// Positive control: two functions in different modules whose names do NOT
@@ -137,6 +141,7 @@ fn distinct_functions_with_distinct_rust_names_are_accepted() {
                  import Ipe.Prelude exposing (..)\n\
                  import Ipe.Io as Io\n\
                  import Lib\n\n\
+import Ipe.String
                  main = Io.println (String.fromInt (Lib.helper 1))\n",
             ),
         ],

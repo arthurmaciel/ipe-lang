@@ -1,5 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Result
+import Ipe.String
 
 -- #90 Stage 1: `Ok f` holding a function used to trip IPE-L0114 unconditionally,
 -- making `Result.andMap` unusable. The construction is sound: `Ok`/`Err`

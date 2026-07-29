@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- A SINGLE-arm tuple `case` whose first element is a constructor sub-pattern
 -- (`Wrap x`). The carrier type has exactly one constructor, so the arm is

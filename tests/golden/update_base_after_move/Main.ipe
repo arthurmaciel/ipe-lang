@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.String
 
 
 {-| #193 regression — record-UPDATE base is a borrow (`(rec).clone()`) that

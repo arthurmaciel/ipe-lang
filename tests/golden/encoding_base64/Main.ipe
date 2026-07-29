@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Ipe.Encoding as Encoding
 import Ipe.Io as Io
+import Ipe.String
 
 -- base64Encode "hello" = "aGVsbG8=" and base64Decode "aGVsbG8=" = "hello".
 -- Uses a known constant on the decode side to avoid moving `encoded` twice.

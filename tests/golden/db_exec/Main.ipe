@@ -1,5 +1,9 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Db
+import Ipe.List
+import Ipe.String
+import Ipe.Task
 
 -- M5b-db golden: SqlValue-parameterized Db.exec + Db.query on in-memory SQLite.
 -- Db.withTransaction pins all DDL + DML + SELECT to ONE pool connection so the

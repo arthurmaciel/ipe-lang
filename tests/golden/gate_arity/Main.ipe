@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- `Node` declares three fields; this pattern binds only two — IPE-T0013.
 type Tree = Leaf | Node Tree Int Tree

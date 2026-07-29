@@ -1,5 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.List
+import Ipe.String
 
 -- #112 seal: a `CloneOk` local (`prefix : String`) captured by a `move`
 -- closure AND used again after the closure.  Without T5, the `move` closure

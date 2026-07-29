@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- A bracket-list lambda param `\[a] ->` is refutable (fails on `[]` and longer
 -- lists). Like `\1 ->`, the parser's param grammar rejects a bare list pattern

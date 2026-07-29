@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- Boolean literal patterns: a `True` + `False` pair is a closed, exhaustive
 -- cover of `Bool` (no wildcard required).

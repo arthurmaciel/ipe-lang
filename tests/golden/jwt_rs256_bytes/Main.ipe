@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Jwt
 
 -- JWT RS256 byte-parity: emit the token for the fixed test RSA-2048 key + claims
 -- and print it verbatim. RS256 (PKCS#1 v1.5) is deterministic, so the emitted

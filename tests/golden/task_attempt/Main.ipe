@@ -10,6 +10,9 @@ module Main exposing (main)
 
 import Ipe.Cli as Cli
 import Ipe.Task as Task
+import Ipe.Cmd
+import Ipe.String
+import Ipe.Sub
 
 type Msg
     = Loaded (Result Error Int)

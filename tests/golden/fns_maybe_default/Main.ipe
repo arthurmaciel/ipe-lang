@@ -1,5 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Maybe
+import Ipe.String
 
 main =
     Io.println (String.fromInt (Maybe.withDefault 0 (Just 5)))

@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- A second unrecognised escape (`\z`), this time in scrutinee position. Same
 -- single-character invariant, same IPE-P0015 floor: the malformed char literal

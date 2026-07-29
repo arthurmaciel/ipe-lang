@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- A NESTED non-exhaustive `case`: the `Som` arm only matches when its inner
 -- value is itself `Som`, so `Som Non` is uncovered. With the same-top-ctor

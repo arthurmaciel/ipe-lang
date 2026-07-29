@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Ipe.Error as Error
 import Ipe.Io as Io
+import Ipe.Task
 
 -- Task.fail creates a failed task; Task.onError recovers it with a handler.
 -- The lambda `\e -> Io.println "recovered"` names the error parameter `e` but

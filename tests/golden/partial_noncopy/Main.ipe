@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- F3 (#121 seal). `mk s` is a PARTIAL APPLICATION of a non-`Copy` var.
 -- `s : String` is CloneOk.  T4 rewrites the supplied `Var(s)` in the

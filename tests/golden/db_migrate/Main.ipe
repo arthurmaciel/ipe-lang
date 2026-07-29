@@ -1,5 +1,8 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Db
+import Ipe.String
+import Ipe.Task
 
 -- M5b-db golden: Db.migrate — versioned forward-only schema migrations.
 -- All operations run inside a single withTransaction so the in-memory SQLite

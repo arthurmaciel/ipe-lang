@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- NEGATIVE (AUD-12): x has both Append and Number obligations.
 -- Before the fix, ipec defaulted x to Int and accepted silently;

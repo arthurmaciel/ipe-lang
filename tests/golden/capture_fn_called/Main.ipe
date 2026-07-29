@@ -1,5 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.List
+import Ipe.String
 
 -- F5 (#121 seal) — CONTROL. A lambda captures a function-typed local in
 -- CALLEE position (it calls `f`, not forwards it).

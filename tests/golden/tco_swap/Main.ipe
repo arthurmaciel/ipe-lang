@@ -1,5 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.String
 
 -- Arg-swap foreclosure (#49): the jump reassigns `a := b; b := a`. A naive
 -- sequential write would clobber (`a` overwritten before `b` reads it) →

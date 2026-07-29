@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Ipe.List as List
 import Ipe.Io as Io
+import Ipe.String
 
 
 -- A MULTI-arm `case` on a LITERAL tuple whose columns are cons patterns plus a

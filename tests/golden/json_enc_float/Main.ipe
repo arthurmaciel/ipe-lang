@@ -1,5 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Json.Encode
+import Ipe.String
 
 -- Float encoding must byte-match Go's encoding/json floatEncoder, not serde's
 -- Ryū default. Go uses decimal ('f') form unless |x| < 1e-6 or |x| >= 1e21, in

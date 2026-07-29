@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Ipe.Encoding as Encoding
 import Ipe.Io as Io
+import Ipe.String
 
 -- Non-ASCII text under Encoding.base64Encode / hexEncode — GO PARITY (task #55a).
 --

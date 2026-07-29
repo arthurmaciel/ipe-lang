@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Ipe.Bytes as Bytes
 import Ipe.Io as Io
+import Ipe.String
 
 main =
     let

@@ -1,5 +1,8 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.List
+import Ipe.String
+import Ipe.Task
 
 -- IPE-L0105 lambda / function parameter patterns (#96), the positive surface.
 -- Every binding position below is IRREFUTABLE, so each lowers to a synthetic
