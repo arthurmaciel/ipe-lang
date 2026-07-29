@@ -4,7 +4,9 @@
 
 use ipe_db::{IpeDatabase, ModuleOrigin, SourceFile, SourceRoot};
 use ipe_lsp_features::PositionEncoding;
+use ipe_lsp_features::code_actions::{DbView, code_actions};
 use ipe_lsp_features::diagnostics::{ModuleDiagnostics, collect, to_lsp};
+use lsp_types::{CodeActionOrCommand, Range, TextEdit, Url};
 
 fn file(db: &IpeDatabase, path: &[&str], text: &str) -> SourceFile {
     SourceFile::new(
@@ -103,6 +105,188 @@ fn dep_parse_error_is_blamed_on_the_dep_not_the_importer() {
     assert!(
         diags_for(&all, &["Main"]).diagnostics.is_empty(),
         "the importer must not replay its dep's diagnostic"
+    );
+}
+
+/// Convert an LSP position back to a byte offset (UTF-16 encoding) and apply a
+/// single-hunk `TextEdit`, returning the new document text.
+#[allow(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation
+)] // test helper: len_utf16 is 1 or 2
+fn apply_edit(text: &str, edit: &TextEdit) -> String {
+    let to_byte = |pos: lsp_types::Position| -> usize {
+        let mut line_start = 0usize;
+        for (i, l) in text.split('\n').enumerate() {
+            if i == pos.line as usize {
+                // character is a UTF-16 offset within the line.
+                let mut utf16 = 0u32;
+                for (b, ch) in l.char_indices() {
+                    if utf16 >= pos.character {
+                        return line_start + b;
+                    }
+                    utf16 += ch.len_utf16() as u32;
+                }
+                return line_start + l.len();
+            }
+            line_start += l.len() + 1;
+        }
+        text.len()
+    };
+    let start = to_byte(edit.range.start);
+    let end = to_byte(edit.range.end);
+    let mut out = String::with_capacity(text.len() + edit.new_text.len());
+    out.push_str(&text[..start]);
+    out.push_str(&edit.new_text);
+    out.push_str(&text[end..]);
+    out
+}
+
+/// IPE-N0034 quick-fix: a Tier-C stdlib qualifier used without its import
+/// yields an "Add import `Ipe.X`" code action whose edit, once applied, clears
+/// the diagnostic (SEAL — the program compiles).
+#[test]
+fn add_import_quick_fix_inserts_the_missing_import_and_clears_the_diagnostic() {
+    // `String.fromInt` names the Tier-C `Ipe.String` module with no import.
+    let src = "module Main exposing (main)\n\nmain = String.fromInt 0\n";
+    let mut db = IpeDatabase::new();
+    let entry = file(&db, &["Main"], src);
+    let root = root_of(&db, &[(&["Main"], entry)]);
+
+    // The real compiler diagnostic must be IPE-N0034.
+    let all = collect(&db, root, entry);
+    let main = diags_for(&all, &["Main"]);
+    assert_eq!(main.diagnostics.len(), 1, "one diagnostic on Main");
+    let diag = main.diagnostics.first().expect("one diagnostic");
+    assert_eq!(diag.code().as_str(), "IPE-N0034");
+    let lsp_diag = to_lsp(diag, src, PositionEncoding::Utf16);
+
+    // The code action offers the correctly-named insert.
+    let uri = Url::from_file_path("/fake/Main.ipe").expect("uri");
+    let full_range = Range {
+        start: lsp_diag.range.start,
+        end: lsp_diag.range.end,
+    };
+    let actions = code_actions(
+        DbView {
+            db: &db,
+            root,
+            entry,
+        },
+        &["Main".to_owned()],
+        &uri,
+        full_range,
+        std::slice::from_ref(&lsp_diag),
+        src,
+        PositionEncoding::Utf16,
+    );
+    let action = actions
+        .into_iter()
+        .find_map(|a| match a {
+            CodeActionOrCommand::CodeAction(action) => Some(action),
+            CodeActionOrCommand::Command(_) => None,
+        })
+        .expect("one CodeAction for IPE-N0034");
+    assert_eq!(action.title, "Add import Ipe.String");
+    let edit = action
+        .edit
+        .as_ref()
+        .and_then(|e| e.changes.as_ref())
+        .and_then(|c| c.values().next())
+        .and_then(|v| v.first())
+        .expect("edit present");
+    assert!(
+        edit.new_text.contains("import Ipe.String"),
+        "inserts the named import, got {:?}",
+        edit.new_text
+    );
+
+    // SEAL: applying the edit makes the program compile — N0034 is gone.
+    let fixed = apply_edit(src, edit);
+    assert!(
+        fixed.contains("\nimport Ipe.String\n"),
+        "the fixed source carries the import: {fixed:?}"
+    );
+    assert!(ipe_db::set_text_if_changed(&mut db, entry, &fixed));
+    let all = collect(&db, root, entry);
+    assert!(
+        diags_for(&all, &["Main"]).diagnostics.is_empty(),
+        "after applying the quick-fix the module is clean, got {:?}",
+        diags_for(&all, &["Main"]).diagnostics
+    );
+}
+
+/// The insert is sorted among existing imports, not just appended.
+#[test]
+fn add_import_quick_fix_sorts_among_existing_imports() {
+    // `Ipe.String` should land between `Ipe.List` and `Ipe.Task`.
+    let src = "module Main exposing (main)\n\n\
+        import Ipe.List as List\n\
+        import Ipe.Task as Task\n\n\
+        main = String.fromInt (List.length [])\n";
+    let mut db = IpeDatabase::new();
+    let entry = file(&db, &["Main"], src);
+    let root = root_of(&db, &[(&["Main"], entry)]);
+
+    let all = collect(&db, root, entry);
+    let main = diags_for(&all, &["Main"]);
+    let diag = main
+        .diagnostics
+        .iter()
+        .find(|d| d.code().as_str() == "IPE-N0034")
+        .expect("an IPE-N0034 diagnostic");
+    let lsp_diag = to_lsp(diag, src, PositionEncoding::Utf16);
+
+    let uri = Url::from_file_path("/fake/Main.ipe").expect("uri");
+    let range = Range {
+        start: lsp_diag.range.start,
+        end: lsp_diag.range.end,
+    };
+    let actions = code_actions(
+        DbView {
+            db: &db,
+            root,
+            entry,
+        },
+        &["Main".to_owned()],
+        &uri,
+        range,
+        std::slice::from_ref(&lsp_diag),
+        src,
+        PositionEncoding::Utf16,
+    );
+    let action = actions
+        .into_iter()
+        .find_map(|a| match a {
+            CodeActionOrCommand::CodeAction(action) => Some(action),
+            CodeActionOrCommand::Command(_) => None,
+        })
+        .expect("one CodeAction for IPE-N0034");
+    let edit = action
+        .edit
+        .as_ref()
+        .and_then(|e| e.changes.as_ref())
+        .and_then(|c| c.values().next())
+        .and_then(|v| v.first())
+        .expect("edit present");
+
+    let fixed = apply_edit(src, edit);
+    let list_at = fixed.find("import Ipe.List").expect("List present");
+    let string_at = fixed.find("import Ipe.String").expect("String inserted");
+    let task_at = fixed.find("import Ipe.Task").expect("Task present");
+    assert!(
+        list_at < string_at && string_at < task_at,
+        "String sorts between List and Task: {fixed:?}"
+    );
+
+    // SEAL: the sorted insert also compiles.
+    assert!(ipe_db::set_text_if_changed(&mut db, entry, &fixed));
+    let all = collect(&db, root, entry);
+    assert!(
+        diags_for(&all, &["Main"]).diagnostics.is_empty(),
+        "sorted insert compiles, got {:?}",
+        diags_for(&all, &["Main"]).diagnostics
     );
 }
 
