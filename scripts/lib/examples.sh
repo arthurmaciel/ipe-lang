@@ -32,7 +32,7 @@
 # without it they fall out of every sweep set and a stale shape rename (e.g.
 # Ipe.Live → Ipe.Web) rots them silently.
 all_examples() {
-  local d globs=(examples/[0-9]*/ examples/wasm-*/ examples/rust/*/ \
+  local d globs=(examples/[0-9]*/ examples/wasm-*/ examples/rust/*/ examples/shapes/*/*/ \
                  examples/sky/ipe/[0-9]*/ examples/sky/ipe/simple/ examples/sky/ipe/test_pkg/)
   for d in "${globs[@]}"; do
     [ -d "$d" ] || continue

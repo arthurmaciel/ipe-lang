@@ -21,7 +21,7 @@
 -- same process, with identical ordering + echo semantics.
 --
 -- See `docs/shapes/web.md` for the two homes and their contexts,
--- and `examples/task-publish` for the canonical pattern.
+-- and `examples/shapes/web/task-publish` for the canonical pattern.
 --
 -- The pub/sub fan-out comes in two flavours:
 --   * `publish`        — echo-by-default. Server-side publishes

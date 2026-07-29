@@ -146,7 +146,7 @@ an `update` via `Cmd.perform`, or wherever else you hold a `Task`. Callable from
 any context, but the broadcast bus only exists while a Web/live app is running
 in the process, so a publish outside one resolves to `Err` (a plain CLI process
 has no bus). It is *not* TEA-loop machinery — it lives at the top level and does
-not mark a module a TEA app. The [`task-publish`](../../examples/task-publish/)
+not mark a module a TEA app. The [`task-publish`](../../examples/shapes/web/task-publish/)
 example fires it from a Web app's `update`.
 
 **`Ipe.Tea.Web.PubSub` — the Web-shape-scoped, Cmd/Sub-shaped surface.**
