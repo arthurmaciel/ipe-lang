@@ -1,12 +1,11 @@
 module Main exposing (main)
 
--- #122 Go-oracle parity fixture: `view` deliberately supplies no trailing
--- newline of its own, so consecutive renders glue together on stdout
--- ("lines: 0lines: 1lines: 2") with exactly one trailing newline at exit --
--- matching Go's `cliPrintView` contract byte-for-byte. An app that wants
--- each render on its own line appends "\n" itself, as Go requires.
+-- View-separator fixture: `view` deliberately supplies no trailing newline of
+-- its own, so consecutive renders glue together on stdout
+-- ("lines: 0lines: 1lines: 2") with exactly one trailing newline at exit. An
+-- app that wants each render on its own line appends "\n" itself.
 
-import Ipe.Cli as Cli
+import Ipe.Tea.Console as Console
 import Ipe.Cmd
 import Ipe.String
 import Ipe.Sub
@@ -40,7 +39,7 @@ onLine l =
     LineReceived l
 
 main =
-    Cli.program
+    Console.app
         { init = init
         , update = update
         , view = view

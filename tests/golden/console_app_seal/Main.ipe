@@ -1,9 +1,9 @@
 module Main exposing (main)
 
--- #111 reconciler fixture: Cli.program is FULLY WIRED.
+-- #111 reconciler fixture: Console.app is FULLY WIRED.
 -- Expected: ipec-0 AND cargo-0 on the emitted project.
 
-import Ipe.Cli as Cli
+import Ipe.Tea.Console as Console
 import Ipe.Cmd
 import Ipe.String
 import Ipe.Sub
@@ -35,7 +35,7 @@ onLine line =
     GotLine line
 
 main =
-    Cli.program
+    Console.app
         { init = init
         , update = update
         , view = view
