@@ -245,8 +245,7 @@ fn hydrate_glue_type_name_matches_emitted_struct_and_compiles_for_wasm() {
     let target_installed = std::process::Command::new("rustc")
         .args(["--print", "target-list"])
         .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).contains("wasm32-unknown-unknown"))
-        .unwrap_or(false);
+        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("wasm32-unknown-unknown"));
     if !target_installed {
         return;
     }
