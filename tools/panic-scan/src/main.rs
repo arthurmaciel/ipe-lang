@@ -17,10 +17,7 @@ const SKIP_SEGMENTS: &[&str] = &["tests", "templates"];
 fn main() -> ExitCode {
     let mut found = false;
     for path in std::env::args().skip(1) {
-        if path
-            .split('/')
-            .any(|seg| SKIP_SEGMENTS.contains(&seg))
-        {
+        if path.split('/').any(|seg| SKIP_SEGMENTS.contains(&seg)) {
             continue;
         }
         let src = match std::fs::read_to_string(&path) {
