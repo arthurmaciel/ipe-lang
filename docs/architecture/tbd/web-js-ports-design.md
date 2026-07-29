@@ -359,6 +359,43 @@ Async Rust and Tier-2 sandboxed Rust are ports under a different name — see
   the primary boundary: the callback body is untyped JS with ambient DOM access —
   the unbounded surface of the forbidden eval seam, only spelled differently.
 
+## Implementation sequencing
+
+Phased by dependency; the two transports reuse infrastructure that already
+exists (the server→browser DOM-patch stream + `data-ipe-ev` reverse channel for
+server-driven; the ADR-0042 Cmd/Sub browser bridge + wasm DOM sink for
+client-WASM), so no new transport has to be built from scratch.
+
+**Can start now:**
+
+1. **Port primitives + the mandatory ADT seal (land together).** `Js.send : a ->
+   Cmd msg` and `Js.subscribe : Decoder a -> (a -> msg) -> Sub msg` as
+   Cmd/Sub kernels reusing the existing effect machinery; the seal is a
+   canon/types rule rejecting `Decoder Value` / opaque types at a port boundary
+   (Security #1, lands with the primitives it guards). Derived ADT
+   encoder/decoder by default.
+2. **`sync` cfg field.** A projection field on `Web.app`/`WebView.app`, diffed and
+   streamed by the same machinery as the DOM patches server-side, handed over
+   in-memory client-side.
+3. **Generated per-variant senders.** A desugar over the `JsCmd` ADT (`playChime`
+   = `Js.send PlayChime`); small, follows the primitives.
+4. **The fixed JS runtime API** `ipe.send` / `onReceive` / `onSync`, in two
+   implementations (network + wasm), each plugging into its existing transport.
+   This step removes the `data-ipe-eval` / `new Function` seam.
+
+**Follow-on, independent:**
+
+5. **Custom elements** — `Ui.customElement` + typed attribute encoders / event
+   decoders, over the existing DOM-patch channel. Separate node family; not on the
+   port core's critical path.
+6. **Browser-API kernels** (`Ipe.Browser.Geolocation`, storage, WebAudio, …) —
+   each an independent target-gated kernel + `web-sys` denotation, added
+   incrementally as demand appears; graduating a capability off the typed port.
+
+The optimistic-concurrency stance is documentation only (the typed-precondition
+pattern needs no build). Order: (1)+seal → (2)+(3)+(4) per transport, in parallel
+→ (5), (6) as independent follow-ons.
+
 ## Boundaries
 
 - Design-only; nothing here is implemented.
