@@ -863,6 +863,40 @@ mod tests {
         assert_eq!(string_from_float(-1.5), "-1.5");
     }
 
+    // ── Elm behaviour verdicts (float formatting) ─────────────────────────────
+    // `String.fromFloat` follows Go's `strconv.FormatFloat(f,'g',-1,64)` shape,
+    // the correctness anchor the example sweep diffs against. Where that shape
+    // diverges from Elm's JS `String(f)`, the divergence is recorded in
+    // `docs/elm-coverage/behaviour-verdicts.md` (verdict: keep-ours). These
+    // tests pin the exact points of agreement and divergence.
+
+    // Agrees with Elm: an integral float drops its fraction.
+    #[test]
+    fn verdict_integral_float_has_no_fraction() {
+        assert_eq!(string_from_float(1.0), "1");
+    }
+
+    // Agrees with Elm: the shortest round-tripping digits are emitted, so
+    // `0.1 + 0.2` surfaces its true binary value rather than a rounded "0.3".
+    #[test]
+    fn verdict_shortest_round_trip_digits() {
+        assert_eq!(string_from_float(0.1 + 0.2), "0.30000000000000004");
+    }
+
+    // Diverges from Elm: Go's 'g' pads the exponent to two digits (`1e-07`);
+    // Elm's JS `String(1e-7)` yields `1e-7`. Go parity wins (documented).
+    #[test]
+    fn verdict_small_exponent_is_two_digit_padded_unlike_elm() {
+        assert_eq!(string_from_float(1e-7), "1e-07");
+    }
+
+    // Diverges from Elm: Go keeps negative zero's sign (`-0`); Elm's JS
+    // `String(-0)` collapses it to `0`. Go parity wins (documented).
+    #[test]
+    fn verdict_negative_zero_keeps_sign_unlike_elm() {
+        assert_eq!(string_from_float(-0.0), "-0");
+    }
+
     // ── New kernels ───────────────────────────────────────────────────────────
 
     // string_concat
