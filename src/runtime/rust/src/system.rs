@@ -228,6 +228,7 @@ pub fn system_exit(code: i64) -> ! {
     // NOT run on std::process::exit, so without this a Ipe.Tui `System.exit` quit
     // would leave the TTY in raw mode + the alternate screen (needing `reset`).
     run_exit_hook();
+    // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — this IS the `System.exit` kernel: the Ipê program requested process termination with `code` [ledger #boundary]
     std::process::exit(code as i32)
 }
 

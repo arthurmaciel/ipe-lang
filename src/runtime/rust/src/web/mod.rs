@@ -1240,6 +1240,7 @@ where
         // after the first teardown call (shutdown_console is idempotent).
         console_proxy::shutdown_console();
         flush_exporters().await;
+        // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — Ipe.Web server shutdown boundary: the grace timer won the drain race, exit zero [ledger #boundary]
         std::process::exit(0);
     });
 
@@ -1251,6 +1252,7 @@ where
         eprintln!("Ipe.Web: forcing exit (second signal)");
         console_proxy::shutdown_console();
         flush_exporters().await;
+        // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — Ipe.Web server shutdown boundary: a second interrupt forces exit 130 (128 + SIGINT) [ledger #boundary]
         std::process::exit(130); // 128 + SIGINT(2)
     });
     // Return → axum drains in-flight connections → serve future resolves Ok

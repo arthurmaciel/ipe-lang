@@ -1079,6 +1079,7 @@ pub fn db_migrate_apply<E: Send + From<String> + 'static>(
                 if op == "migrate" {
                     eprintln!("db: {} failed", $ctx);
                     let _ = std::io::Write::flush(&mut std::io::stderr());
+                    // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — `ipe db migrate` CLI-op boundary: a migration infra failure exits the process (library path returns a Task Err instead) [ledger #boundary]
                     std::process::exit(1);
                 }
                 return IpeResult::Err($err);
@@ -1164,8 +1165,10 @@ pub fn db_migrate_apply<E: Send + From<String> + 'static>(
                     "\ndb: drift detected — an applied migration's SQL was edited. \
                      Restore its original text, or ship a new compensating migration."
                 );
+                // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — `ipe db migrate` status-op boundary: drift detected, exit non-zero [ledger #boundary]
                 std::process::exit(1);
             }
+            // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — `ipe db migrate` status-op boundary: clean status, exit zero [ledger #boundary]
             std::process::exit(0);
         }
 
@@ -1182,6 +1185,7 @@ pub fn db_migrate_apply<E: Send + From<String> + 'static>(
                             "db: migration '{name}' changed after it was applied — checksum mismatch"
                         );
                         let _ = std::io::Write::flush(&mut std::io::stderr());
+                        // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — `ipe db migrate` CLI-op boundary: applied migration changed (checksum mismatch), exit non-zero [ledger #boundary]
                         std::process::exit(1);
                     }
                     return IpeResult::Err(
@@ -1243,6 +1247,7 @@ pub fn db_migrate_apply<E: Send + From<String> + 'static>(
                 println!("db: applied {} migration(s): {}", out.len(), out.join(", "));
             }
             let _ = std::io::Write::flush(&mut std::io::stdout());
+            // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — `ipe db migrate` CLI-op boundary: migrations applied, exit zero [ledger #boundary]
             std::process::exit(0);
         }
         IpeResult::Ok(out)

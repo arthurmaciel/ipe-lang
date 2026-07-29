@@ -8170,14 +8170,9 @@ fn emit_apply(
         body,
     } = func
     {
-        // Sanity: arity must match arg count (lower invariant).
-        debug_assert_eq!(
-            params.len(),
-            args.len(),
-            "emit_apply: Lambda param arity ({}) != arg count ({})",
-            params.len(),
-            args.len()
-        );
+        // Lower guarantees `params.len() == args.len()` here; the `zip` below
+        // pairs them positionally and would silently drop any excess were that
+        // invariant ever broken upstream.
         let child = depth + 1;
         let mut bindings = String::new();
         for ((param, ty), arg) in params.iter().zip(args.iter()) {

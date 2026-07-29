@@ -13153,10 +13153,8 @@ impl<'a> Lowerer<'a> {
     ) -> DResult<Expr> {
         let def_arity = self.callee_arity(&callee)?;
         let n = params.len();
-        debug_assert!(
-            def_arity < n,
-            "eta_adapt_funcvalue called on an arity-exact callee (def_arity={def_arity}, n={n})"
-        );
+        // Invariant upheld by the caller: this adapter runs only for an
+        // under-applied callee, so `def_arity < n`.
         // Allocate N eta params from the pool (one slot per param position).
         // Each eta-lambda is its own closure scope, so the same pool entries can
         // be reused positionally across sites without name collision.

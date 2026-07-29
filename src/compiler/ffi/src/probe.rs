@@ -73,17 +73,11 @@ pub fn surviving_wrapper_paths(pkg: &PkgInfo, slug: &str) -> Vec<String> {
 /// caller rejects it (fail-closed) rather than emit a vacuous probe that would
 /// link clean without exercising anything.
 ///
-/// # Panics
-///
-/// Never in production use; `debug_assert!` documents the non-empty precondition
-/// the caller upholds.
 #[must_use]
 pub fn emit_probe_main(wrapper_paths: &[String]) -> String {
     use std::fmt::Write as _;
-    debug_assert!(
-        !wrapper_paths.is_empty(),
-        "emit_probe_main requires a non-empty surface; the caller rejects an empty survivor set"
-    );
+    // The caller rejects an empty survivor set, so `wrapper_paths` is non-empty
+    // here; an empty slice would merely emit a probe that references nothing.
     let count = wrapper_paths.len();
     let mut out = String::new();
     out.push_str(

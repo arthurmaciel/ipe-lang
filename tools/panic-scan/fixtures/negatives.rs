@@ -18,6 +18,18 @@ fn n12() { let r = r#"raw .unwrap() panic!()"#; } // raw string literal
 fn n13() { let _ = value.expected; }          // field named 'expected'
 fn n14() { let _ = o.unwrap_none(); }         // not in the banned set
 
+// Sanctioned sites: a real construct carrying the audit marker on its own line,
+// or on the line directly above it, is a reviewed ledger exception — no hit.
+fn n15() { std::process::exit(1); } // IPE-RUST-AUDIT:ACCEPTED — boundary exit [ledger #X]
+// IPE-RUST-AUDIT:ACCEPTED — provably-dead branch [ledger #X]
+fn n16() { let _ = o.expect("dead branch"); }
+fn n17() {
+    // IPE-RUST-AUDIT:ACCEPTED — marker on the line above a multi-line construct
+    panic!(
+        "sanctioned multi-line"
+    );
+}
+
 #[cfg(test)]
 mod tests {
     // Real constructs here are TEST code and must be ignored by the production scan.
