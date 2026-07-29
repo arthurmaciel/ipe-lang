@@ -737,8 +737,8 @@ pub enum Feature {
     /// `init`/`update`/`view`/`subscriptions` until routing support lands.
     /// [IPE-L0118]
     RoutedLiveApp,
-    /// The cfg record for an app entry point (`Web.app` / `Tui.app` /
-    /// `Tui.program` / `WebView.app`) — or, for `WebView.app`, its nested
+    /// The cfg record for an app entry point (`Web.app` / `Terminal.appScreen`
+    /// / `Terminal.appLines` / `WebView.app`) — or, for `WebView.app`, its nested
     /// `window` record and `window.size` tuple — was written as a let-bound
     /// variable (or any non-record expression) rather than an inline record
     /// literal. The Rust backend reads the cfg's field expressions directly at
@@ -786,15 +786,15 @@ pub enum AppShape {
     /// `Ipe.Web` — the Model is persisted to the session store, so
     /// it must be `serde`-serialisable (as well as `Clone` + `PartialEq`).
     Web,
-    /// `Ipe.Tui` — the Model is kept in memory, so it must be
-    /// `Clone`.
-    Tui,
+    /// `Ipe.Terminal` `appScreen` — the Model is kept in memory, so it
+    /// must be `Clone`.
+    TerminalScreen,
     /// `Ipe.WebView` — the Model is kept in memory, so it must
     /// be `Clone`.
     WebView,
-    /// `Ipe.Console` — the Model is kept in memory, so it must be
-    /// `Clone`.
-    Cli,
+    /// `Ipe.Terminal` `appLines` — the Model is kept in memory, so it
+    /// must be `Clone`.
+    TerminalLines,
 }
 
 /// The category of the non-admissible payload found inside a Model.
@@ -831,10 +831,10 @@ pub enum ModelLeaf {
 pub enum LowerError {
     /// A feature the lowerer does not implement. [IPE-L01##]
     Unsupported(Feature),
-    /// A `Live`/`Tui`/`Webview` app-entry Model type whose Rust rendering does
-    /// not satisfy the runtime bound the entry requires (`Live` needs
+    /// A `Live`/`Terminal`/`WebView` app-entry Model type whose Rust rendering
+    /// does not satisfy the runtime bound the entry requires (`Live` needs
     /// `serde::Serialize + serde::de::DeserializeOwned + Clone + PartialEq`;
-    /// `Tui`/`Webview` need `Clone`). `app` drives the wording, `field` names the
+    /// `Terminal`/`WebView` need `Clone`). `app` drives the wording, `field` names the
     /// offending Model field (empty when the Model is not a record), and `leaf`
     /// categorises the payload. Converts a would-be `cargo` trait-bound failure
     /// into a fail-closed `ipe` error. [IPE-L0120]
@@ -843,8 +843,8 @@ pub enum LowerError {
         field: Box<str>,
         leaf: ModelLeaf,
     },
-    /// A `Live`/`Tui`/`Webview` app-entry Msg type whose Rust rendering does
-    /// not satisfy the runtime bound the entry requires (`Live`/`Tui`/`Webview`
+    /// A `Live`/`Terminal`/`WebView` app-entry Msg type whose Rust rendering does
+    /// not satisfy the runtime bound the entry requires (`Live`/`Terminal`/`WebView`
     /// all need `Clone + Send + 'static`; `Live` additionally needs `Sync +
     /// Debug`). The predicate used is `ir_type_is_derivable` (NOT serde), so
     /// `Html`/`Element`/`Color`-carrying Msg variants are accepted (they derive
@@ -1380,9 +1380,8 @@ pub fn inadmissible_model_message(app: AppShape, field: &str, leaf: ModelLeaf) -
             "Ipe.Web",
             "serialisable (it is persisted to the session store)",
         ),
-        AppShape::Tui => ("Ipe.Tui", "clonable"),
+        AppShape::TerminalScreen | AppShape::TerminalLines => ("Ipe.Terminal", "clonable"),
         AppShape::WebView => ("Ipe.WebView", "clonable"),
-        AppShape::Cli => ("Ipe.Console", "clonable"),
     };
     let leaf_phrase = match leaf {
         ModelLeaf::Function => "a function",
@@ -1414,9 +1413,8 @@ pub fn inadmissible_model_message(app: AppShape, field: &str, leaf: ModelLeaf) -
 pub fn inadmissible_msg_message(app: AppShape, field: &str, leaf: ModelLeaf) -> String {
     let shape = match app {
         AppShape::Web => "Ipe.Web",
-        AppShape::Tui => "Ipe.Tui",
+        AppShape::TerminalScreen | AppShape::TerminalLines => "Ipe.Terminal",
         AppShape::WebView => "Ipe.WebView",
-        AppShape::Cli => "Ipe.Console",
     };
     let leaf_phrase = match leaf {
         ModelLeaf::Function => "a function",

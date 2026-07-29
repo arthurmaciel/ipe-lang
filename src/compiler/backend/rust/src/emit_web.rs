@@ -29,44 +29,27 @@ use crate::EmitCtx;
 use crate::emit_expr::emit_expr_at;
 use crate::emit_types::{GenericScope, render_type};
 
-/// Whether the framework applies `Ui.layout` to the app's `view` before handing
-/// it to the runtime sink.
-///
-/// `Web.app` / `WebView.app` take `view : Model -> Element Msg` and are wrapped
-/// with [`ViewWrap::Layout`]; the raw-`Html` escape entries `Web.appHtml` /
-/// `WebView.appHtml` take `view : Model -> Html Msg` and pass through
-/// ([`ViewWrap::RawHtml`]). See ADR 0048 point 4.
-#[derive(Clone, Copy)]
-pub enum ViewWrap {
-    /// `view : Model -> Element Msg` — wrap in `Ui.layout` to produce `Html`.
-    Layout,
-    /// `view : Model -> Html Msg` — pass the view straight through.
-    RawHtml,
-}
-
-/// Wrap an emitted view so its result type is the `Html` the runtime sink
-/// mounts. Under [`ViewWrap::Layout`] the emitted `Element`-returning view is
+/// Wrap an emitted `view : Model -> Element Msg` so its result type is the
+/// `Html` the runtime sink mounts: the emitted `Element`-returning view is
 /// closed over and threaded through `ui_layout` (empty attrs, the `Ui.layout []`
-/// the ADR specifies); under [`ViewWrap::RawHtml`] the view is returned as-is.
-pub fn wrap_view(view_wrap: ViewWrap, view_s: &str) -> String {
-    match view_wrap {
-        ViewWrap::RawHtml => view_s.to_owned(),
-        // A `move` closure capturing the emitted view (a named `fn` item or a
-        // fall-through expr) is `Fn(Model) -> Html + Send + Sync + 'static`
-        // whenever the captured view is — the same bound the runtime entry
-        // requires. `::std::vec::Vec::new()` is the empty `Ui.layout []` attr
-        // list; `ui_layout` renders `Element` → `Html`.
-        ViewWrap::Layout => format!(
-            "{{ let __view = {view_s}; \
-             move |__model| ipe_runtime::ui::render::ui_layout(::std::vec::Vec::new(), __view(__model)) }}"
-        ),
-    }
+/// framework wrap). Raw HTML is reached through the `Ui.html` node inside this
+/// `Element` view, not through a separate pass-through entry.
+pub fn wrap_view(view_s: &str) -> String {
+    // A `move` closure capturing the emitted view (a named `fn` item or a
+    // fall-through expr) is `Fn(Model) -> Html + Send + Sync + 'static`
+    // whenever the captured view is — the same bound the runtime entry
+    // requires. `::std::vec::Vec::new()` is the empty `Ui.layout []` attr
+    // list; `ui_layout` renders `Element` → `Html`.
+    format!(
+        "{{ let __view = {view_s}; \
+         move |__model| ipe_runtime::ui::render::ui_layout(::std::vec::Vec::new(), __view(__model)) }}"
+    )
 }
 
 /// Dispatch a `Ipe.Web` / `Ipe.Web` kernel call.
 ///
-/// Returns `Some(emitted)` for all four Live kernels; `None` for any variant
-/// that is not a Live kernel (the caller routes to this function only for
+/// Returns `Some(emitted)` for the Web app-entry kernels; `None` for any
+/// variant that is not one (the caller routes to this function only for
 /// `k.is_web()` variants, but a defensive `None` for unknown variants avoids
 /// a catchall `_` arm).
 ///
@@ -109,31 +92,7 @@ pub fn emit_web_call(
                         .into(),
                 });
             };
-            emit_web_app_inner(ctx, fields, indent, child, generics, ViewWrap::Layout)
-        }
-
-        // ── Web.appHtml — the raw-`Html` escape entry ────────────────────
-        //
-        // Same six-field cfg and `web_app` runtime path as `Web.app`, but the
-        // `view : Model -> Html Msg` is passed straight through with NO
-        // framework `Ui.layout` wrap: this entry hands the DOM to the runtime
-        // exactly as the developer authored it. See ADR 0048 point 4.
-        KernelFn::WebAppHtml => {
-            let [cfg_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_web_call::WebAppHtml",
-                    detail: format!("Web.appHtml requires 1 argument, got {}", args.len()),
-                });
-            };
-            let Expr::Record(fields) = cfg_e else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_web_call::WebAppHtml",
-                    detail: "Web.appHtml cfg must be an inline record literal; \
-                             a non-literal cfg is rejected at lower with IPE-L0119"
-                        .into(),
-                });
-            };
-            emit_web_app_inner(ctx, fields, indent, child, generics, ViewWrap::RawHtml)
+            emit_web_app_inner(ctx, fields, indent, child, generics)
         }
 
         // ── Web.appRouted — vestigial alias of `Web.app` ─────────────────
@@ -159,7 +118,7 @@ pub fn emit_web_call(
                         .into(),
                 });
             };
-            emit_web_app_inner(ctx, fields, indent, child, generics, ViewWrap::Layout)
+            emit_web_app_inner(ctx, fields, indent, child, generics)
         }
 
         // ── Web.route pattern ctor ─────────────────────────────────────────
@@ -386,7 +345,6 @@ fn emit_web_app_inner(
     indent: usize,
     child: u16,
     generics: GenericScope,
-    view_wrap: ViewWrap,
 ) -> DResult<Option<String>> {
     let init_e = lookup_field(ctx, fields, "init")?;
     let update_e = lookup_field(ctx, fields, "update")?;
@@ -440,11 +398,10 @@ fn emit_web_app_inner(
     let view_raw_s = emit_web_fn(ctx, view_e, indent, child, generics)?;
     // `Web.app`'s `view : Model -> Element Msg` — the framework applies
     // `Ui.layout` internally, turning the portable `Element` into the `Html`
-    // the runtime sink mounts. `Web.appHtml`'s `view : Model -> Html Msg` is
-    // passed through untouched. The wrap closes over the emitted view (a named
+    // the runtime sink mounts. The wrap closes over the emitted view (a named
     // `fn` item or the fall-through expr), so it inherits the same
     // `Fn(Model) -> Html + Send + Sync + 'static` shape the runtime requires.
-    let view_s = wrap_view(view_wrap, &view_raw_s);
+    let view_s = wrap_view(&view_raw_s);
     let subs_s = emit_web_fn(ctx, subs_e, indent, child, generics)?;
 
     // Browser target: the same cfg drives the client sink. No session store
