@@ -270,7 +270,6 @@ pub fn ipe_main() -> IpeTask<()> {
 // paths (e.g. inline let-bindings of Ffi.kernel) leave a residual call.
 #[allow(unreachable_code)]
 fn ffi_kernel_polyfill<T>(_name: String) -> T {
-    // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — emitted-program TEMPLATE, not compiler code: an unreachable residual dynamic-FFI dispatch in the generated binary [ledger #boundary]
     panic!("Ffi.kernel '{}' should not be called in Rust target", _name)
 }
 
@@ -296,7 +295,6 @@ fn main() {
         IpeResult::Ok(_) => (),
         IpeResult::Err(e) => {
             eprintln!("{:?}", e);
-            // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — emitted-program TEMPLATE, not compiler code: the generated binary's `main` boundary exits non-zero on a top-level Ipê error [ledger #boundary]
             std::process::exit(1);
         }
     }

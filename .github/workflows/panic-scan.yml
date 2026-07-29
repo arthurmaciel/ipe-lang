@@ -34,9 +34,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Build the scanner
         run: cargo build --release --manifest-path tools/panic-scan/Cargo.toml
-      - name: Scan production Rust (skips /tests/ and #[cfg(test)])
+      - name: Scan production Rust (skips /tests/, /templates/, and #[cfg(test)])
         run: |
           # `.rs` under src/ (the runtime lives at src/runtime/), excluding
-          # integration-test crates.
-          mapfile -t files < <(find src -name '*.rs' -not -path '*/tests/*')
+          # integration-test crates and the emitted-program templates (scanned
+          # by the separate package gate, not as compiler code). The scanner
+          # skips these segments too; the find prune just keeps the list small.
+          mapfile -t files < <(find src -name '*.rs' -not -path '*/tests/*' -not -path '*/templates/*')
           tools/panic-scan/target/release/panic-scan "${files[@]}"

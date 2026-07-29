@@ -35,11 +35,14 @@ Two site families carry the marker:
 
 - **Boundary constructs** — `process::exit` at a binary `main`, the `System.exit`
   kernel, the `ipe db migrate` CLI-op, the `Ipe.Web` shutdown-signal handlers, the
-  jail exec process-control, the emitted-program TEMPLATE (`backend/rust/templates/
-  main.rs`, which is the *user's generated* binary, not compiler code), the
-  compile-time `const _: () = assert!(…)` Win32-flag lockstep, and the
-  golden-tested integer division-by-zero abort. These are the sanctioned boundary
-  set of ADR-0037.
+  jail exec process-control, the compile-time `const _: () = assert!(…)`
+  Win32-flag lockstep, and the golden-tested integer division-by-zero abort. These
+  are the sanctioned boundary set of ADR-0037.
+- The emitted-program templates (`*/templates/*.rs`, copied verbatim into every
+  generated binary) are *not* compiler code and carry no marker: the scanner skips
+  a `templates/` path segment, and their emitted Rust is covered by the separate
+  emitted-output package gate. Annotating inside them would leak the audit comment
+  into every user's generated `main.rs`.
 - **Ledger #1/#2** — the structurally-dead HMAC `.expect` sites below.
 
 ## Remaining exceptions
