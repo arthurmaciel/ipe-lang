@@ -738,6 +738,32 @@ pub(crate) fn find_in_path(bin: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
+/// POSIX single-quote a token so `jail(8)`'s `command=` re-parse recovers it as
+/// exactly one word regardless of whitespace or shell metacharacters it holds.
+///
+/// The whole token is wrapped in `'…'`, and each embedded single quote is written
+/// as the standard `'\''` sequence (close the quote, an escaped literal quote,
+/// reopen the quote). Inside single quotes every other byte — including spaces and
+/// metacharacters — is literal, so the recovered word is byte-for-byte the
+/// original. Operates on raw bytes so a non-UTF-8 path token round-trips losslessly.
+/// Compiled under `test` on any Unix host so the round-trip is provable off FreeBSD.
+#[cfg(any(target_os = "freebsd", test))]
+fn shell_quote_token(tok: &std::ffi::OsStr) -> std::ffi::OsString {
+    use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+
+    let mut quoted: Vec<u8> = Vec::with_capacity(tok.as_bytes().len() + 2);
+    quoted.push(b'\'');
+    for &byte in tok.as_bytes() {
+        if byte == b'\'' {
+            quoted.extend_from_slice(b"'\\''");
+        } else {
+            quoted.push(byte);
+        }
+    }
+    quoted.push(b'\'');
+    std::ffi::OsString::from_vec(quoted)
+}
+
 /// The FreeBSD returning build-jail arm: establish a scratch-rooted `jail(2)`
 /// (via the `jail(8)` CLI) lowering the profile's axes, scrub the env in the
 /// launcher, run the payload confined, wait, and decode the exit into a
@@ -884,15 +910,18 @@ mod freebsd_jail {
         // unprivileged payload cannot write it. No extra jail parameter is needed —
         // the ownership on the chrooted path is the boundary.
         let _ = working_tree;
-        // The command: the payload as a single shell-free argv. `jail(8)` takes the
-        // command as `command=<program> <args…>`; each token is a distinct argv
-        // element so there is no shell interpretation of the payload.
+        // The command: `jail(8)`'s `command=` is a single string that `jail` itself
+        // re-parses into words before executing, so a raw token containing
+        // whitespace (a scratch, working-tree, or `CARGO_HOME` path with a space)
+        // would mis-split. Each token is POSIX single-quoted so it survives the
+        // re-split intact as exactly one word, with no shell interpretation of its
+        // contents.
         let mut command = OsString::from("command=");
         for (i, tok) in payload.iter().enumerate() {
             if i > 0 {
                 command.push(" ");
             }
-            command.push(tok);
+            command.push(super::shell_quote_token(tok));
         }
         argv.push(command);
         argv
@@ -1425,5 +1454,76 @@ mod tests {
             );
             assert!(!outcome.is_clean());
         }
+    }
+
+    #[test]
+    fn shell_quoting_survives_jail_command_resplit_intact() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+
+        // A word split of a single-quoted token: `jail(8)` re-parses `command=` on
+        // whitespace outside quotes, then strips the quotes. This mirrors that,
+        // recovering the words the confined program would receive.
+        fn resplit(command_value: &OsString) -> Vec<OsString> {
+            let mut words = Vec::new();
+            let mut current: Vec<u8> = Vec::new();
+            let mut in_quote = false;
+            let mut escaped = false;
+            let mut started = false;
+            for &b in command_value.as_bytes() {
+                if escaped {
+                    // Outside single quotes a backslash quotes the next byte
+                    // literally — this is how `'\''` yields a literal `'`.
+                    current.push(b);
+                    escaped = false;
+                    started = true;
+                    continue;
+                }
+                match b {
+                    b'\'' if !in_quote => {
+                        in_quote = true;
+                        started = true;
+                    }
+                    b'\'' if in_quote => in_quote = false,
+                    b'\\' if !in_quote => escaped = true,
+                    b' ' if !in_quote => {
+                        if started {
+                            words.push(OsString::from_vec(std::mem::take(&mut current)));
+                            started = false;
+                        }
+                    }
+                    other => {
+                        current.push(other);
+                        started = true;
+                    }
+                }
+            }
+            if started {
+                words.push(OsString::from_vec(current));
+            }
+            words
+        }
+
+        // A path with a space, an embedded single quote, and a shell metacharacter
+        // each stay one word and survive byte-for-byte.
+        let tokens = [
+            OsString::from("cargo"),
+            OsString::from("build"),
+            OsString::from("/tmp/dir with space/x"),
+            OsString::from("it's a $HOME; rm -rf /"),
+        ];
+        let mut command = OsString::from("");
+        for (i, tok) in tokens.iter().enumerate() {
+            if i > 0 {
+                command.push(" ");
+            }
+            command.push(shell_quote_token(tok));
+        }
+        assert_eq!(resplit(&command), tokens);
+
+        // A non-UTF-8 byte in the token round-trips losslessly too.
+        let raw = OsString::from_vec(vec![b'a', 0x80, b' ', b'b']);
+        let quoted = shell_quote_token(&raw);
+        assert_eq!(resplit(&quoted), vec![raw]);
     }
 }
