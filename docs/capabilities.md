@@ -65,8 +65,8 @@ inference. Ipê handles this without a blind spot:
 - The declared set is checked against the code: a capability the program uses but
   did not surface is a compile error, so a malicious effect cannot hide — it must
   appear as a capability you consented to.
-- Native FFI wrapper crates ([Tier 2](architecture/tbd/ffi-tier2-inspect-author-rust.md))
-  are **admitted and isolated by the runtime jail** on a target where the jail
+- Native FFI wrapper crates (a planned author-supplied-crate tier, tracked as a
+  GitHub issue) are **admitted and isolated by the runtime jail** on a target where the jail
   holds (Linux first). A wrapper that reaches a runtime-enforced capability
   (network, filesystem, database, environment, subprocess, native-ffi) is
   installed and then run confined to its declared-plus-inferred set — an
@@ -78,11 +78,11 @@ inference. Ipê handles this without a blind spot:
   the under-declaration).
 
 How native Rust is bound — and how its capabilities are established — is covered by
-the FFI docs: the declarative [`provide.*`](architecture/tbd/ffi-rust-type-creation-and-coverage.md)
-surface (whose shapes stay capability-inferable) and the
-[wrapper-crate tier](architecture/tbd/ffi-tier2-inspect-author-rust.md) (which
-declares capabilities, is inference-checked, and is refused unless its effects
-are containable).
+the FFI subsystem ([ADR 0033](adr/0033-ipe-rust-ffi-subsystem.md)). Two extensions
+are planned and tracked as GitHub issues: a declarative `provide.*` type-creation
+surface (whose shapes stay capability-inferable) and an author-supplied
+wrapper-crate tier (which declares capabilities, is inference-checked, and is
+refused unless its effects are containable).
 
 ## Where enforcement lives
 
@@ -122,5 +122,5 @@ trade for native speed; a VM-based runtime would bound these for free.
 ## Going deeper
 
 - The package-level trust model — how capabilities feed the package index, the
-  install-time consent flow, and the supply-chain gate — is designed in
-  [package coordination & capability-based trust](architecture/tbd/package-coordination-and-capabilities-design.md).
+  install-time consent flow, and the supply-chain gate — is decided in
+  [ADR 0044](adr/0044-package-coordination-manifest-index-gate.md).

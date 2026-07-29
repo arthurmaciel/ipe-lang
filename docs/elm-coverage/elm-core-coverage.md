@@ -673,5 +673,5 @@ sanctioned gaps in `divergences-from-elm.md`.
 - **Cmd.map / Sub.map (low-medium):** enables composing sub-components with
   different `Msg` types in the TEA update loop.
 
-`Array` and `Bitwise` have no planned pure implementation (use `List` / FFI); see
-`additive-stdlib-features.md` for the opaque-type designs if that changes.
+`Array` and `Bitwise` have no planned pure implementation (use `List` / FFI); the
+additive-surface designs, if that changes, are tracked as a GitHub issue.

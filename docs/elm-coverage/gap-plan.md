@@ -2,7 +2,7 @@
 
 > Prioritized spec + implementation plan for the **relevant-but-missing** Elm
 > API, grouped by package/subsystem. The audit and the full verdict table live
-> in [`../extensions-to-elm.md`](../extensions-to-elm.md) and
+> in [`README.md`](README.md) and
 > [`elm-core-coverage.md`](elm-core-coverage.md). This doc only plans the
 > **`missing`** rows that are worth closing — `excluded` rows are out of scope by
 > justification, not by oversight.
@@ -79,7 +79,7 @@ representation (`runtime/src/ipe_runtime/`) plus the type-scheme in
 
 ## P2 — Basics numerics + prelude ergonomics
 
-Two coupled decisions from [`../extensions-to-elm.md`](../extensions-to-elm.md) §2:
+Two coupled decisions from [`README.md`](README.md) §2:
 
 1. **Re-export `Ipe.Math` numerics through the default prelude** so `round`/
    `floor`/`sqrt`/`abs`/trig are zero-import like Elm's `Basics`. Today they need
@@ -108,7 +108,7 @@ opaque. Recommend deciding before landing `sortWith` publicly.
 circuits — a captured `Task` cannot be forwarded through a Rust closure, so pure
 `andThen`/`map` composition is unavailable, IPE-L0126). `attempt : (Result Error
 a -> msg) -> Task Error a -> Cmd msg` reuses the runtime `cmd_perform` (the
-`Cmd.perform` bridge, args swapped). See also `task-combinators.md`.
+`Cmd.perform` bridge, args swapped).
 
 ---
 
@@ -181,10 +181,10 @@ Only pursue if a consumer needs decomposed date fields; otherwise keep excluded.
 
 ---
 
-## Explicitly not planned (see exclusions in `../extensions-to-elm.md` §4)
+## Explicitly not planned (see exclusions in `README.md` §4)
 
 `Array`, `Bitwise`, `Tuple` (module), `Debug`, `elm/html`, `elm/svg`,
 `elm/virtual-dom`, `elm/browser`, `Platform.worker`/effect-managers,
 `Process.spawn`/`kill`, browser `File.Select`/`Download`. `Array`/`Bitwise` have
-no pure plan (use `List` / FFI); the opaque-type designs, if that changes, live in
-`additive-stdlib-features.md`.
+no pure plan (use `List` / FFI); the additive-surface designs, if that changes,
+are tracked as a GitHub issue.

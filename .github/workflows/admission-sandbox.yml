@@ -17,8 +17,8 @@
 #
 # This is the reusable substrate the SP4 admission gate will wrap. It does NOT
 # depend on `ipe package audit`; it jails an arbitrary build command and proves
-# the jail holds. See docs/architecture/tbd/admission-gate-per-platform-sandbox.md
-# and ADRs 0040/0041.
+# the jail holds. See ADRs 0040/0041; the per-platform admission-matrix that
+# wraps this substrate is tracked as a GitHub issue.
 #
 # Fail-closed invariant: where a jail backend CAN exist on the runner, a jail
 # that fails to establish makes that job RED, never green-by-skip — absence of a

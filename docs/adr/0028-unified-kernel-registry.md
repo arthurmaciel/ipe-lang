@@ -10,8 +10,8 @@ four more (naming, `is_*` predicates, `native_ir_type`, the zero-arity classifie
 seven hand-maintained tables that silently drift. The types table failed open:
 `constrain.rs` had a `_ => Ty::Var(u32::MAX)` catchall giving any un-schemed kernel a
 single flexible unification variable, so `ipe` accepted the call without type-checking
-its arguments — exit-0-then-cargo-fail, ~231 holes across 14 families. FFI-design
-(`docs/architecture/ffi-design.md`) also required that stdlib kernels and future FFI
+its arguments — exit-0-then-cargo-fail, ~231 holes across 14 families. The FFI subsystem
+(`docs/adr/0033-ipe-rust-ffi-subsystem.md`) also required that stdlib kernels and FFI
 kernels share one representation from the start.
 
 ## Decision

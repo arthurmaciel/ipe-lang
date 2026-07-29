@@ -1,8 +1,6 @@
 //! The on-disk build cache.
 //!
-//! Spec: `docs/architecture/salsa-incremental-compilation-2026-07-11.md`
-//! §12. Design doc: `docs/architecture/incremental-compilation-and-watch.md`
-//! §"Cross-session persistence" (**LOCKED, Option B**).
+//! Decision record: `docs/adr/0032-salsa-incremental-compilation-phase1.md`.
 //!
 //! Everything in-process is memoized, but nothing survives ACROSS process
 //! invocations — every `ipe build` starts a cold [`ipe_db::IpeDatabase`].
