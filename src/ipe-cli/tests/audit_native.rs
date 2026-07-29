@@ -7,7 +7,8 @@
 //!   while Tier-1 still fully gates it; a native-bearing package with no
 //!   probeable entrypoint is rejected by the Tier-2 check (fail-closed, never a
 //!   silent clean).
-//! - **Real-jail differential confinement** (gated on Linux + `IPE_E2E=1`):
+//! - **Real-jail differential confinement** (gated on a wired POSIX-shell
+//!   platform — `Linux/x86_64`, macOS, or FreeBSD — + `IPE_E2E=1`):
 //!   drives the reconciler through the REAL jail against the admission probe
 //!   fixture, proving at the OS boundary that a used-but-undeclared axis rejects
 //!   naming the axis, and a benign package declaring exactly its axes is
@@ -144,12 +145,19 @@ fn a_native_bearing_package_with_no_probeable_entrypoint_fails_closed() {
 // ===========================================================================
 // Real-jail differential confinement (wired platforms + IPE_E2E=1)
 //
-// On Linux/x86_64 the jail is bwrap+seccomp; on macOS it is sandbox-exec. The
-// reconciler and the fixture are the SAME on both — only the jail primitive
-// probed in `e2e_tools` differs.
+// On Linux/x86_64 the jail is bwrap+seccomp; on macOS it is sandbox-exec; on
+// FreeBSD `jail(8)`. The reconciler and the POSIX-shell fixture are the SAME on
+// all three — only the jail primitive probed in `e2e_tools` differs. (Windows is
+// not here: its returning build jail runs `payload[0]` through `CreateProcessW`
+// with no shell, so the `/usr/bin/env … /bin/sh` fixture cannot drive it; the
+// Windows deny behaviour is proven by `ipe_sandbox`'s `build_jail_windows_e2e`.)
 // ===========================================================================
 
-#[cfg(any(all(target_os = "linux", target_arch = "x86_64"), target_os = "macos"))]
+#[cfg(any(
+    all(target_os = "linux", target_arch = "x86_64"),
+    target_os = "macos",
+    target_os = "freebsd"
+))]
 mod real_jail {
     use super::PathBuf;
     use std::collections::BTreeSet;
@@ -197,6 +205,21 @@ mod real_jail {
         Some(RunJailTools {
             bwrap: sandbox_exec.clone(),
             prlimit: sandbox_exec,
+            timeout: None,
+        })
+    }
+
+    /// FreeBSD: the jail primitive is `jail(8)`; the `RunJailTools` fields are
+    /// unused by the FreeBSD `build_in_jail` (a present-primitive placeholder).
+    #[cfg(target_os = "freebsd")]
+    fn probe_tools() -> Option<RunJailTools> {
+        let path = std::env::var_os("PATH")?;
+        let jail = std::env::split_paths(&path)
+            .map(|d| d.join("jail"))
+            .find(|p| p.is_file())?;
+        Some(RunJailTools {
+            bwrap: jail.clone(),
+            prlimit: jail,
             timeout: None,
         })
     }
@@ -389,6 +412,8 @@ mod real_jail {
         assert_eq!(CERTIFIED_PLATFORM, "linux-x64");
         #[cfg(target_os = "macos")]
         assert_eq!(CERTIFIED_PLATFORM, "macos-arm64");
+        #[cfg(target_os = "freebsd")]
+        assert_eq!(CERTIFIED_PLATFORM, "freebsd-x64");
     }
 
     // ── real untrusted `cargo build` as the wrapper's child (the certify path) ──
