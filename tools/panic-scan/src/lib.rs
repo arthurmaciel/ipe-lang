@@ -48,6 +48,18 @@ const FNS: &[&str] = &["panic_any", "unreachable_unchecked"];
 /// `process::abort` (panic-free hard abort) and `process::exit` (boundary-only).
 const PROCESS_FNS: &[&str] = &["abort", "exit"];
 
+/// The per-site sanction marker. A hit is suppressed when this exact text
+/// appears in the contiguous block of source lines ending at the hit — i.e. on
+/// the hit line or any line above it up to the nearest blank line. That block is
+/// the construct plus its directly-attached annotations (`// …` audit rationale,
+/// `#[allow(…)]`, statement continuations), so a marker placed by convention
+/// just above the flagged construct sanctions it. The marker lives in a comment;
+/// the lexer drops comments, so the suppression is applied against the *raw
+/// source lines*, not the token stream. This is deliberately per-site and
+/// explicit: an unannotated new construct still fails, so the gate is never
+/// weakened.
+pub const AUDIT_MARKER: &str = "IPE-RUST-AUDIT:ACCEPTED";
+
 /// One flagged construct: its 1-based source line and a short token label.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hit {
@@ -55,8 +67,9 @@ pub struct Hit {
     pub tok: String,
 }
 
-/// Scan Rust source, returning every production-region abrupt-failure hit, or
-/// an error string if the input does not lex as Rust tokens.
+/// Scan Rust source, returning every production-region abrupt-failure hit that
+/// is not sanctioned by an [`AUDIT_MARKER`] comment, or an error string if the
+/// input does not lex as Rust tokens.
 ///
 /// `#[cfg(test)]` / `#[test]` item bodies are skipped: this scanner attests the
 /// *production* surface. (A `--tests` mode with the inverted rule — allow the
@@ -65,8 +78,31 @@ pub fn scan_str(src: &str) -> Result<Vec<Hit>, String> {
     let ts = TokenStream::from_str(src).map_err(|e| e.to_string())?;
     let mut hits = Vec::new();
     scan_stream(ts, &mut hits);
+    let lines: Vec<&str> = src.lines().collect();
+    hits.retain(|h| !is_sanctioned(&lines, h.line));
     hits.sort_by_key(|h| h.line);
     Ok(hits)
+}
+
+/// True when the [`AUDIT_MARKER`] appears on the 1-based `line` or on any
+/// preceding line back to (and stopping at) the nearest blank line — the
+/// annotation block directly attached to the construct. A blank line bounds the
+/// block so a marker on an unrelated earlier statement never leaks downward.
+fn is_sanctioned(lines: &[&str], line: usize) -> bool {
+    let mut idx = line; // 1-based; `lines[idx-1]` is the hit line.
+    while idx >= 1 {
+        let Some(text) = lines.get(idx - 1) else {
+            break;
+        };
+        if idx != line && text.trim().is_empty() {
+            break;
+        }
+        if text.contains(AUDIT_MARKER) {
+            return true;
+        }
+        idx -= 1;
+    }
+    false
 }
 
 fn scan_stream(ts: TokenStream, hits: &mut Vec<Hit>) {

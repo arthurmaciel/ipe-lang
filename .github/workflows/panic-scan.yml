@@ -13,13 +13,11 @@ on:
     branches: [main, master]
     paths:
       - 'src/**/*.rs'
-      - 'runtime/**/*.rs'
       - 'tools/panic-scan/**'
       - '.github/workflows/panic-scan.yml'
   pull_request:
     paths:
       - 'src/**/*.rs'
-      - 'runtime/**/*.rs'
       - 'tools/panic-scan/**'
       - '.github/workflows/panic-scan.yml'
   workflow_dispatch: {}
@@ -38,6 +36,7 @@ jobs:
         run: cargo build --release --manifest-path tools/panic-scan/Cargo.toml
       - name: Scan production Rust (skips /tests/ and #[cfg(test)])
         run: |
-          # `.rs` under src/ and runtime/, excluding integration-test crates.
-          mapfile -t files < <(find src runtime -name '*.rs' -not -path '*/tests/*')
+          # `.rs` under src/ (the runtime lives at src/runtime/), excluding
+          # integration-test crates.
+          mapfile -t files < <(find src -name '*.rs' -not -path '*/tests/*')
           tools/panic-scan/target/release/panic-scan "${files[@]}"

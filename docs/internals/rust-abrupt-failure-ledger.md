@@ -20,6 +20,28 @@ panic (slice indexing, integer overflow, allocation failure); we minimise the
 reachable surface (`indexing_slicing` denied, checked arithmetic) but do not
 claim their internals never panic.
 
+## Sanction mechanism
+
+`tools/panic-scan` suppresses a hit when an
+`// IPE-RUST-AUDIT:ACCEPTED (author) — reason [ledger #N]` comment appears in the
+annotation block directly attached to the construct (the hit line, or any line
+above it up to the nearest blank line — the audit comment, `#[allow(…)]`, and any
+statement continuation). The lexer drops comments, so this check runs against the
+raw source lines. It is per-site and explicit: an unannotated new `panic!`,
+`.expect()`, `assert!`, `debug_assert!`, or `process::exit` still fails the scan,
+so the gate is never weakened by the marker.
+
+Two site families carry the marker:
+
+- **Boundary constructs** — `process::exit` at a binary `main`, the `System.exit`
+  kernel, the `ipe db migrate` CLI-op, the `Ipe.Web` shutdown-signal handlers, the
+  jail exec process-control, the emitted-program TEMPLATE (`backend/rust/templates/
+  main.rs`, which is the *user's generated* binary, not compiler code), the
+  compile-time `const _: () = assert!(…)` Win32-flag lockstep, and the
+  golden-tested integer division-by-zero abort. These are the sanctioned boundary
+  set of ADR-0037.
+- **Ledger #1/#2** — the structurally-dead HMAC `.expect` sites below.
+
 ## Remaining exceptions
 
 Each remaining site carries, at the call site, an

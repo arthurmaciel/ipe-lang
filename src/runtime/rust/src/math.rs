@@ -89,6 +89,7 @@ pub fn math_abs(x: i64) -> i64 {
 #[allow(clippy::panic)]
 #[must_use]
 pub fn ipe_int_div(a: i64, b: i64) -> i64 {
+    // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — this abort IS the modeled integer division-by-zero semantics, classified and golden-tested (exit 101) [ledger #boundary]
     assert!(b != 0, "attempt to divide by zero");
     a.wrapping_div(b)
 }
