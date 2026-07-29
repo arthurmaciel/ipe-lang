@@ -10,6 +10,25 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.22](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.21...ipe-v0.1.22) (2026-07-29)
+
+
+### Features
+
+* **canon:** Prelude→Basics + three-tier auto-import ([#231](https://github.com/arthurmaciel/ipe-lang/issues/231)) ([#244](https://github.com/arthurmaciel/ipe-lang/issues/244)) ([cdd2414](https://github.com/arthurmaciel/ipe-lang/commit/cdd241481dc89e1a8c54a3a07fde7cce34b9a8a1))
+* **lsp:** add-import quick-fix for the IPE-N0034 must-import diagnostic ([#242](https://github.com/arthurmaciel/ipe-lang/issues/242)) ([#258](https://github.com/arthurmaciel/ipe-lang/issues/258)) ([9853a7c](https://github.com/arthurmaciel/ipe-lang/commit/9853a7cb82b200e40167824785c75f2696da6702))
+* **pubsub:** activate top-level Ipe.PubSub Task surface + relocate TEA-side under Ipe.Tea.Web.PubSub ([#235](https://github.com/arthurmaciel/ipe-lang/issues/235) Stage 3) ([#252](https://github.com/arthurmaciel/ipe-lang/issues/252)) ([4515bc0](https://github.com/arthurmaciel/ipe-lang/commit/4515bc06e46e58498f7ab05973c9b8aa278cd15e))
+* **resolve:** enforce Tier-C explicit-import per ADR 0047 ([#243](https://github.com/arthurmaciel/ipe-lang/issues/243)) ([#256](https://github.com/arthurmaciel/ipe-lang/issues/256)) ([e5e7760](https://github.com/arthurmaciel/ipe-lang/commit/e5e77607a0d335fdf665ce45bb9ad99f2735bc07))
+* **sandbox:** Windows + FreeBSD returning build-jail arms ([#228](https://github.com/arthurmaciel/ipe-lang/issues/228), impl of ADR 0051) ([#253](https://github.com/arthurmaciel/ipe-lang/issues/253)) ([971906c](https://github.com/arthurmaciel/ipe-lang/commit/971906ca0cb6bac94e25ac910cdb14bc3a2b8a18))
+* **shapes:** relocate TEA shapes under Ipe.Tea.&lt;Shape&gt; + Program gate + scaffold/guard ([#235](https://github.com/arthurmaciel/ipe-lang/issues/235) Stage 1, closes [#238](https://github.com/arthurmaciel/ipe-lang/issues/238)) ([#248](https://github.com/arthurmaciel/ipe-lang/issues/248)) ([a7b36fd](https://github.com/arthurmaciel/ipe-lang/commit/a7b36fd134949b5f0905444d8a1ec7763717b2e3))
+* **shapes:** unify Web/WebView view on Element + Web.appHtml raw-Html escape ([#235](https://github.com/arthurmaciel/ipe-lang/issues/235) Stage 2) ([#250](https://github.com/arthurmaciel/ipe-lang/issues/250)) ([588ad72](https://github.com/arthurmaciel/ipe-lang/commit/588ad728cbb0481c1e36c97ae1a6dadf7e55871b))
+
+
+### Bug Fixes
+
+* **sandbox:** losslessly lower FreeBSD jail command= + correct shell-free claim ([#254](https://github.com/arthurmaciel/ipe-lang/issues/254)) ([#259](https://github.com/arthurmaciel/ipe-lang/issues/259)) ([c3ab280](https://github.com/arthurmaciel/ipe-lang/commit/c3ab28078b3448a394bd5e8acefe282735ca8763))
+* **wasm:** hydrate glue references the real emitted record-alias type name ([#224](https://github.com/arthurmaciel/ipe-lang/issues/224)) ([#234](https://github.com/arthurmaciel/ipe-lang/issues/234)) ([4c256de](https://github.com/arthurmaciel/ipe-lang/commit/4c256de119d4eb47b89f6eaa1caaf53d460efed0))
+
 ## [0.1.21](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.20...ipe-v0.1.21) (2026-07-28)
 
 
