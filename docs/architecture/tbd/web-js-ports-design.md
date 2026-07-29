@@ -203,16 +203,37 @@ it the Model has moved on. JS always holds a stale, read-only replica.
 - The default is fold-against-current: an intent is an event, folded into whatever
   the Model is now — correct for the common case.
 
-### Versioned intents (open — under discussion)
+### Optimistic concurrency is typed application logic, not framework machinery
 
-Whether the framework should provide a typed opt-in for *optimistic concurrency*
-— an intent conditional on the exact `JsState` snapshot JS saw, rejected or
-rebased if the Model has since moved — is still open. The mechanism (a
-framework-managed wire version, echoed by `ipe.send`, surfaced to `update` as a
-forced fresh/stale case, auto-elided under client-WASM) is understood; whether it
-earns its place in the core design, versus leaving optimistic concurrency to the
-developer's own payload fields, is the subject of the "why would a user need it?"
-discussion — not yet decided.
+There is deliberately **no** framework version-token / `Fresh`/`Stale` mechanism.
+Optimistic concurrency — the case where blindly folding a stale intent would be
+*wrong*, not merely folded-against-current — is expressed by **naming the
+precondition the intent depends on as an explicit typed field**, which is
+parse-don't-validate applied to the intent itself:
+
+```
+-- compare-and-swap: the observed value travels in the intent, typed
+type JsMsg = SaveField { expected : FieldValue, next : FieldValue }
+
+-- update applies only if the precondition still holds
+SaveField m ->
+    if currentField model == m.expected
+    then ( setField m.next model, Cmd.none )
+    else ( rejectStale model, Cmd.none )
+```
+
+This is stronger than an opaque framework "version token" (the validate-later
+pattern the fundamental rules push against): the dependency is typed, explicit,
+and greppable. Most apparent staleness also just *dissolves* once intents
+reference **stable identities** rather than snapshot positions — a reorder that
+says "move B before A" folds against current state safely, where "move index 1 to
+0" does not.
+
+The default remains fold-against-current (an intent is an event). The one thing
+this leaves out is a *framework-forced* whole-state optimistic lock; it is
+expressible today with a developer-maintained version field, and a forced variant
+can be added later iff real usage demands it — not built speculatively (YAGNI,
+and no wire-version overhead on every fire-and-forget port).
 
 ## `sync`'s rationale shifts by target
 
