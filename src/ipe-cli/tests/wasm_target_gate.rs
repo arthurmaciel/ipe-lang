@@ -218,6 +218,84 @@ fn transitive_server_import_fails_naming_the_exact_chain() {
     );
 }
 
+/// THE HYDRATE SEAL (issue #224): the `[wasm] mode = "hydrate"` glue must name
+/// the SAME Rust type the emitted `main_from_hydration_state` signature does, so
+/// the emitted crate actually compiles for `wasm32-unknown-unknown`.
+///
+/// This COMPILE-CHECKS the emitted crate rather than string-matching the glue.
+/// The regression it guards: the glue used to hardcode `crate::MainHydrationState`
+/// on a naming convention the record-alias emitter never honours — the example's
+/// `type alias HydrationState = { count : Int }` is emitted structurally as
+/// `RecCount`, so the old glue referenced a nonexistent type (E0433) and the
+/// crate did not build. The fix threads the renderer-resolved type name into the
+/// glue; a reintroduced mismatch fails `cargo check` here.
+///
+/// Gated on `IPE_E2E=1` (needs a working cargo) AND the `wasm32-unknown-unknown`
+/// target being installed; a missing target degrades to a clean skip, never a
+/// false red.
+#[test]
+#[allow(clippy::expect_used)] // test setup: a failed emit/cargo-spawn IS the failure
+fn hydrate_glue_type_name_matches_emitted_struct_and_compiles_for_wasm() {
+    if std::env::var("IPE_E2E").is_err() {
+        return;
+    }
+    // Skip cleanly when the wasm target is not installed (cargo check would
+    // fail on a missing target — an environment gap, not a codegen defect).
+    let target_installed = std::process::Command::new("rustc")
+        .args(["--print", "target-list"])
+        .output()
+        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("wasm32-unknown-unknown"));
+    if !target_installed {
+        return;
+    }
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return;
+    };
+
+    // Emit the REAL wasm-hydration example (single source of truth) with the
+    // hydrate mode its `ipe.toml` declares.
+    let entry =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/wasm-hydration/src/Main.ipe");
+    let out = scratch("wasm_hydrate_seal").join("out");
+    let options = BuildOptions {
+        target: ipe_ir::Target::WasmClient,
+        wasm_hydrate_mode: true,
+        ..BuildOptions::default()
+    };
+    ipe::build_with_sibling_discovery_with_options(&entry, &out, &runtime, options)
+        .expect("wasm-hydration must emit under --target wasm mode=hydrate");
+
+    // The emitted glue must name the structurally-emitted struct, not a
+    // convention name the emitter never produces.
+    let main_rs = std::fs::read_to_string(out.join("src/main.rs")).expect("emitted main.rs");
+    assert!(
+        !main_rs.contains("crate::MainHydrationState"),
+        "the hydrate glue must NOT reference the nonexistent convention type \
+         `MainHydrationState` (issue #224):\n{main_rs}"
+    );
+    assert!(
+        main_rs.contains("pub fn hydrate(model_json: &str)"),
+        "the hydrate export must be emitted:\n{main_rs}"
+    );
+
+    // THE SEAL: the emitted crate must actually compile for wasm. A glue/type
+    // name mismatch is an E0433/E0425 here, turning ipe-exit-0 into a hard red.
+    let status = std::process::Command::new("cargo")
+        .args(["check", "--target", "wasm32-unknown-unknown"])
+        .current_dir(&out)
+        .env("CARGO_TARGET_DIR", out.join("target"))
+        .env("IPE_RUNTIME_DIR", &runtime)
+        .status()
+        .expect("spawn cargo check");
+    assert!(
+        status.success(),
+        "the emitted wasm-hydration crate must `cargo check` for wasm32-unknown-unknown \
+         (the hydrate glue and the emitted HydrationState struct must share ONE type name)"
+    );
+
+    let _ = std::fs::remove_dir_all(out.join("target"));
+}
+
 /// The same server-only program builds cleanly for the native target — the
 /// gate is target-keyed, not a global restriction.
 #[test]

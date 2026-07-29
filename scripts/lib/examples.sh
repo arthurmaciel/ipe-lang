@@ -132,13 +132,6 @@ is_out_of_scope() {
   # the per-commit gate. (Not vendored into this repo; the case-guard is kept for
   # parity with upstream so a future re-sync stays consistent.)
   case "$dir" in */skyshop-rs) return 0 ;; esac
-  # wasm-hydration exercises the `[wasm] mode = "hydrate"` SSR-takeover path,
-  # whose emitted `hydrate()` glue references a `MainHydrationState` type the
-  # record-alias emitter never produces (it names record aliases structurally,
-  # e.g. `RecCount`). Tracked as a backend codegen defect; excluded until fixed
-  # so the sweep gates the OTHER wasm examples without a standing RED. Tracked
-  # in issue #224; re-include this example once the hydrate glue is fixed.
-  case "$dir" in */wasm-hydration) return 0 ;; esac
   # Manifest is the SSOT for mirrored-example scope: a `go_ffi = true` upstream
   # example is out of the Rust build set by declaration, fail-closed. This is
   # belt-and-braces with the import walk below — a Go import can hide behind a

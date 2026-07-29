@@ -14,13 +14,20 @@
 //!     hydrate-mode program declares an explicit alias).
 //!   * The gate is a no-op when `wasm_hydrate_mode = false` — the same
 //!     `Secret`-fielded type compiles cleanly in non-hydrate native mode.
-//!   * The emitted spine contains `pub fn hydrate(model_json: &str)` when
-//!     `wasm_hydrate_mode = true`.
+//!   * The emitted `hydrate` glue references the SAME Rust type its
+//!     `main_from_hydration_state` signature names — the structural `RecCount`
+//!     record-alias struct, never the nonexistent `MainHydrationState`
+//!     convention name (issue #224). The compile-level SEAL (the emitted crate
+//!     actually `cargo check`s for wasm) lives in `ipe-cli`'s
+//!     `wasm_target_gate` integration test.
+//!   * A hydrate-mode program with no `fromHydrationState` projection emits no
+//!     `hydrate` glue (no island type to name).
 
 use ipe_backend_rust::RustBackend;
 use ipe_diagnostics::DResult;
 use ipe_intern::Interner;
-use ipe_ir::{EnumDef, IrType, ModPath, Module, Program, TypeDef, Variant};
+use ipe_ir::{EnumDef, Expr, Func, FuncId, IrType, ModPath, Module, Program, TypeDef, Variant};
+use std::collections::BTreeMap;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -154,12 +161,99 @@ fn gate_is_noop_for_native_mode() -> DResult<()> {
     RustBackend::new(&interner).emit_spine(&prog).map(|_| ())
 }
 
-/// The emitted spine contains the `hydrate` wasm-bindgen export when
-/// `wasm_hydrate_mode = true`.
+/// Build a wasm-hydrate `Program` whose `Main` module declares a
+/// `fromHydrationState : { count : Int } -> { count : Int }` projection — the
+/// shape of the `examples/wasm-hydration` example. The `HydrationState` type is
+/// a RECORD ALIAS, so the backend synthesises it as a structural `RecCount`
+/// struct (NOT `MainHydrationState`) — the exact regression of issue #224.
+fn hydrate_program_with_record_projection(interner: &mut Interner) -> DResult<Program> {
+    let main = interner.intern("Main")?;
+    let count = interner.intern("count")?;
+    let hs = interner.intern("hs")?;
+    let from_hs = interner.intern("fromHydrationState")?;
+    let rec = || IrType::Record(BTreeMap::from([(count, IrType::Int)]));
+    let from_hs_fn = Func {
+        id: FuncId::from_raw(1),
+        name: from_hs,
+        home: ModPath(vec![main]),
+        type_params: vec![],
+        params: vec![(hs, rec())],
+        ret: rec(),
+        // Body is irrelevant to the glue↔type-name contract this test proves;
+        // the signature's parameter type is what the glue must agree with.
+        body: Expr::Var(hs),
+    };
+    Ok(Program {
+        modules: vec![Module {
+            name: ModPath(vec![main]),
+            types: vec![],
+            funcs: vec![from_hs_fn],
+            entry: None,
+            records: vec![],
+            uses_tea: false,
+            uses_server: false,
+            uses_ui: false,
+            uses_web: false,
+            uses_tui: false,
+            uses_webview: false,
+            uses_css: false,
+            uses_auth: false,
+            uses_websocket: false,
+            uses_email: false,
+            uses_env_public: false,
+            uses_debug: false,
+            uses_ffi: false,
+        }],
+    })
+}
+
+/// The emitted `hydrate` glue references the SAME Rust type the emitted
+/// `main_from_hydration_state` signature names — the structural `RecCount`
+/// struct the record-alias emitter produces — never the nonexistent
+/// `MainHydrationState` convention name (issue #224). This is the string-level
+/// witness of the fix; the compile-level SEAL is
+/// `wasm_target_gate::hydrate_glue_type_name_matches_emitted_struct_and_compiles_for_wasm`.
 #[test]
-fn hydrate_export_present_in_spine() -> DResult<()> {
+fn hydrate_glue_references_the_emitted_record_struct_name() -> DResult<()> {
     let mut interner = Interner::new();
-    // No HydrationState — just check the export is emitted regardless.
+    let prog = hydrate_program_with_record_projection(&mut interner)?;
+    let spine = hydrate_backend(&interner).emit_spine(&prog)?;
+
+    assert!(
+        spine.contains("pub fn hydrate(model_json: &str)"),
+        "hydrate export must be present in wasm_hydrate_mode spine:\n{spine}"
+    );
+    assert!(
+        spine.contains("pub fn ipe_start()"),
+        "ipe_start export must still be present:\n{spine}"
+    );
+    // The record alias `{ count : Int }` is emitted structurally as `RecCount`.
+    // The struct is synthesised and the glue names that SAME struct (resolved
+    // through the shared `render_type`, not a hardcoded convention name).
+    assert!(
+        spine.contains("pub struct RecCount"),
+        "the `{{ count : Int }}` record alias must be synthesised as `RecCount`:\n{spine}"
+    );
+    assert!(
+        spine.contains("serde_json::from_str::<crate::RecCount>"),
+        "the hydrate glue must parse the island JSON as the SAME struct the \
+         projection takes (`RecCount`), not the nonexistent `MainHydrationState`:\n{spine}"
+    );
+    assert!(
+        !spine.contains("MainHydrationState"),
+        "the glue must not reference the convention type the emitter never \
+         produces (issue #224 regression):\n{spine}"
+    );
+    Ok(())
+}
+
+/// A hydrate-mode program with NO `fromHydrationState` projection has no island
+/// type to name, so the backend emits only the `ipe_start` entry — never a
+/// dangling `hydrate` glue that would reference an absent type. (Parse, don't
+/// validate: the glue exists only when its type source exists.)
+#[test]
+fn no_projection_emits_no_hydrate_glue() -> DResult<()> {
+    let mut interner = Interner::new();
     let main = interner.intern("Main")?;
     let prog = Program {
         modules: vec![Module {
@@ -185,12 +279,13 @@ fn hydrate_export_present_in_spine() -> DResult<()> {
     };
     let spine = hydrate_backend(&interner).emit_spine(&prog)?;
     assert!(
-        spine.contains("pub fn hydrate(model_json: &str)"),
-        "hydrate export must be present in wasm_hydrate_mode spine:\n{spine}"
-    );
-    assert!(
         spine.contains("pub fn ipe_start()"),
         "ipe_start export must still be present:\n{spine}"
+    );
+    assert!(
+        !spine.contains("pub fn hydrate(model_json: &str)"),
+        "no `fromHydrationState` projection ⇒ no hydrate glue (it would reference \
+         an absent island type):\n{spine}"
     );
     Ok(())
 }
