@@ -1,6 +1,6 @@
 module Main exposing (main)
 import Ipe.Io as Io
-import Ipe.Json.Encode
+import Ipe.Json.Encode as JsonEnc
 import Ipe.String
 
 -- Float encoding must byte-match Go's encoding/json floatEncoder, not serde's
