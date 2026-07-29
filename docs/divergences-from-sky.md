@@ -1700,7 +1700,7 @@ tokio::task::spawn(…).await })` three-arm match), adopted per
 ## 6. Planned future divergences (filed, not yet implemented)
 
 Intentional departures from the reference language, filed and (where noted)
-designed, sequenced for the post-completion program (`ROADMAP.md` §C.6).
+designed, sequenced for the post-completion program.
 Governing rules: every divergence here, if/when adopted, becomes a documented
 ledger entry above (a divergence is *documented*, never silent) and flips the
 relevant parity row from "mirrors Go" → "intentional design + rationale + own
