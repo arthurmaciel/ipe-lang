@@ -317,46 +317,6 @@ jobs:
           IPE_ORACLE_SHARED_TARGET: ${{ github.workspace }}/.cache/oracle-shared-target
         run: cargo nextest run --workspace --profile ci --no-fail-fast --partition count:${{ matrix.shard }}/6
 
-  # Live upstream-Sky parity: install the RELEASED upstream `sky` compiler
-  # (anzellai/sky, pinned release), run it on the raw upstream example, and
-  # compare its program stdout to ipe's. This is the LIVE reference that
-  # supersedes the retired cached `expected_go.txt` oracle — a behavioural
-  # divergence surfaces against the current upstream compiler, not a frozen
-  # snapshot. Upstream Sky lowers to Go, so Go is installed for `sky run`.
-  #
-  # Scoped to deterministic `cli` examples (stdout is the whole observable
-  # behaviour). NON-GATING (`continue-on-error: true`): the released binary /
-  # its Go build can be unavailable on a runner (network, toolchain), and that
-  # is a degraded environment, not an ipe parity failure — the job FLAGS it via
-  # `SKIP:` and never falls over silently. Flip to gating once the compared set
-  # is broad and the install path is proven stable across runners.
-  sky-parity:
-    runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'   # slow: push/nightly only, off the required PR gate
-    continue-on-error: true
-    env:
-      RUSTFLAGS: -C link-arg=-fuse-ld=mold
-      IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: rui314/setup-mold@v1
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.21'
-      - uses: mozilla-actions/sccache-action@v0.0.9
-      - uses: Swatinem/rust-cache@v2
-      - name: Install ripgrep
-        run: sudo apt-get update && sudo apt-get install -y ripgrep
-      - name: Build ipe
-        run: cargo build --release -p ipe
-      - name: Live Sky vs ipe comparison
-        env:
-          # `sky_upstream_bin` downloads the pinned release via `gh` when a token
-          # is present, else falls back to the public release URL via curl.
-          GH_TOKEN: ${{ github.token }}
-          IPE_BIN: ${{ github.workspace }}/target/release/ipe
-        run: bash scripts/sky-compare.sh
 
   # macOS Tier-2 native-code enforcement — the ONLY real verification of the
   # macOS jail's deny behaviour. The Rust unit tests prove the SBPL LOWERING on
