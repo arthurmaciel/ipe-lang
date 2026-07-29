@@ -179,6 +179,10 @@ pub enum Element<M> {
     Node(Description, Vec<Attribute<M>>, Vec<Element<M>>),
     TaggedNode(String, Description, Vec<Attribute<M>>, Vec<Element<M>>),
     Raw(Html<M>),
+    /// `Ui.cells`: a raw terminal cell grid (rows of characters), painted
+    /// verbatim by the terminal backend and embeddable as an island inside an
+    /// otherwise-structured `Ipe.Ui` view under `Terminal.appScreen`.
+    Cells(Vec<Vec<char>>),
 }
 
 // ─── IpeStringify for the Ipe.Ui runtime types ──────────────────────────────

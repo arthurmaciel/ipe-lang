@@ -1,8 +1,7 @@
-//! Ipe.Tui — terminal (ANSI cell) backend for the Rust target.
+//! Ipe.Terminal — terminal (ANSI cell) backend for the Rust target.
 //!
-//! TEA-shaped (`Ipe.Tui.app cfg`): the same `view : Model -> Element msg` that
-//! Ipe.Web / Ipe.WebView render, lowered to ANSI cells. See
-//! `docs/superpowers/specs/2026-06-12-s4-ipe-tui-design.md`.
+//! TEA-shaped (`Terminal.appScreen cfg`): the same `view : Model -> Element msg`
+//! that Ipe.Web / Ipe.WebView render, lowered to ANSI cells.
 
 pub mod app;
 pub mod cell;

@@ -18,13 +18,16 @@ module Main exposing (main)
 -- `MainHydrationState` type the record-alias emitter does not produce, so this
 -- example does not yet `cargo build` for wasm. It is excluded from the examples
 -- sweep until that codegen defect is fixed; the source below is already on the
--- current Web shape. It uses `Web.appHtml` (the raw-`Html` escape entry) because
--- its `view : Model -> Html Msg` authors the DOM directly with `Ipe.Html`.
+-- current Web shape. Its `htmlView : Model -> Html Msg` authors the DOM directly
+-- with `Ipe.Html`, reached through the `Ui.html` node inside the single
+-- `Element` view that `Web.app` takes.
 
 import Ipe.String as String
-import Ipe.Tea.Web exposing (appHtml)
+import Ipe.Tea.Web exposing (app)
 import Ipe.Cmd as Cmd
 import Ipe.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Ui exposing (Element)
 import Ipe.Html as Html
 import Ipe.Html.Attributes as Attr
 import Ipe.Html.Events exposing (onClick)
@@ -77,8 +80,8 @@ subscriptions _model =
     Sub.none
 
 
-view : Model -> Html Msg
-view model =
+htmlView : Model -> Html Msg
+htmlView model =
     Html.div []
         [ Html.h1 [] [ Html.text "Ipê Hydration Counter" ]
         , Html.p
@@ -102,8 +105,13 @@ view model =
         ]
 
 
+view : Model -> Element Msg
+view model =
+    Ui.html (htmlView model)
+
+
 main =
-    appHtml
+    app
         { init = init
         , update = update
         , view = view

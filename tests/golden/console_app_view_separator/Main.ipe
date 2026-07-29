@@ -5,7 +5,7 @@ module Main exposing (main)
 -- ("lines: 0lines: 1lines: 2") with exactly one trailing newline at exit. An
 -- app that wants each render on its own line appends "\n" itself.
 
-import Ipe.Tea.Console as Console
+import Ipe.Tea.Terminal as Terminal
 import Ipe.Cmd
 import Ipe.String
 import Ipe.Sub
@@ -39,7 +39,7 @@ onLine l =
     LineReceived l
 
 main =
-    Console.app
+    Terminal.appLines
         { init = init
         , update = update
         , view = view

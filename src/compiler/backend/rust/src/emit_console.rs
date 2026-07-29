@@ -1,8 +1,6 @@
-//! Emission for `Ipe.Console` / `Ipe.Console` app-entry kernel.
+//! Emission for the `Ipe.Terminal` line-oriented app-entry.
 //!
-//! Wires one Cli kernel:
-//!
-//! * [`KernelFn::ConsoleApp`] — `Console.app cfg` →
+//! * [`KernelFn::TerminalAppLines`] — `Terminal.appLines cfg` →
 //!   `ipe_runtime::console_app(init, update, view, subscriptions, on_line)`.
 //!   View returns `String` (printed to stdout on each state change).
 //!   5-field closed cfg: init / update / view / subscriptions / onLine.
@@ -30,9 +28,9 @@ use crate::EmitCtx;
 use crate::emit_expr::{callee_name, emit_expr_at};
 use crate::emit_types::GenericScope;
 
-/// Dispatch a `Ipe.Console` / `Ipe.Console` kernel call.
+/// Dispatch an `Ipe.Terminal` line-oriented kernel call.
 ///
-/// Returns `Some(emitted)` for `ConsoleApp`; `None` for any other variant
+/// Returns `Some(emitted)` for `TerminalAppLines`; `None` for any other variant
 /// (defensive — the caller already guards on `k.is_console()`).
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
@@ -49,15 +47,15 @@ pub fn emit_console_call(
     };
 
     match k {
-        // ── Console.app { init, update, view, subscriptions, onLine } ──────
+        // ── Terminal.appLines { init, update, view, subscriptions, onLine } ─
         //
         // view : Model -> String
         // Runtime entry: `ipe_runtime::console_app(init, update, view, subs, on_line)`
-        KernelFn::ConsoleApp => {
+        KernelFn::TerminalAppLines => {
             let [cfg_e] = args else {
                 return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_console_call::ConsoleApp",
-                    detail: format!("Console.app requires 1 argument, got {}", args.len()),
+                    where_: "ipe_backend_rust::emit_console_call::TerminalAppLines",
+                    detail: format!("Terminal.appLines requires 1 argument, got {}", args.len()),
                 });
             };
             // Unreachable for well-typed source: a non-literal cfg is rejected
@@ -65,8 +63,8 @@ pub fn emit_console_call(
             // defensive invariant, mirroring the `WebAppRouted` precedent.
             let Expr::Record(fields) = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_console_call::ConsoleApp",
-                    detail: "Console.app cfg must be an inline record literal; \
+                    where_: "ipe_backend_rust::emit_console_call::TerminalAppLines",
+                    detail: "Terminal.appLines cfg must be an inline record literal; \
                              a non-literal cfg is rejected at lower with IPE-L0119"
                         .into(),
                 });
@@ -112,7 +110,7 @@ fn emit_console_inner(
         crate::emit_model_gate::check_admissible_model(
             ctx,
             model_ty,
-            ipe_diagnostics::AppShape::Cli,
+            ipe_diagnostics::AppShape::TerminalLines,
         )?;
     }
 

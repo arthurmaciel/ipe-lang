@@ -1,9 +1,9 @@
 module Main exposing (main)
 
--- #111 reconciler fixture: Console.app is FULLY WIRED.
+-- #111 reconciler fixture: Terminal.appLines is FULLY WIRED.
 -- Expected: ipec-0 AND cargo-0 on the emitted project.
 
-import Ipe.Tea.Console as Console
+import Ipe.Tea.Terminal as Terminal
 import Ipe.Cmd
 import Ipe.String
 import Ipe.Sub
@@ -35,7 +35,7 @@ onLine line =
     GotLine line
 
 main =
-    Console.app
+    Terminal.appLines
         { init = init
         , update = update
         , view = view

@@ -14,9 +14,18 @@ that builds with `ipe build` and targets the Rust backend.
 | `wasm-env-public` | wasm/live | `Ipe.Env.public` build-time config embedding: an allowlisted `API_BASE_URL` variable injected at compile time and readable in WASM at run time. |
 | `wasm-spa` | wasm | SPA target: a pure-client single-page application with full TEA loop running in the browser. Uses `Live.app` which emits `wasm_app` under `--target wasm`. |
 | `wasm-hydration` | wasm | SSR hydration: server-side initial render (paint) followed by WASM client takeover. |
-| `console-repl` | console | An accumulator-calculator REPL over `Console.app`: each stdin line is a command (`add`/`sub`/`mul`/`reset`/`quit`) folded into a running total. |
-| `tui-counter` | tui | A terminal counter over `Tui.app`, rendering the same shared `Ipe.Ui` view as the Web and WebView counters. |
-| `task-publish` | web/live | The top-level, Task-shaped `Ipe.PubSub.publish` (`String -> any -> Task Error Int`) fired from a `Ipe.Tea.Web` app's `update` via `Cmd.perform`, with the subscriber count routed back into the model. Shows the Task form composing where a broadcast bus runs. |
+
+## Shape demos
+
+The per-shape demos linked from [`docs/shapes/`](../docs/shapes/) live under
+`shapes/<shape>/`:
+
+| Directory | Shape | What it demonstrates |
+|-----------|-------|----------------------|
+| `shapes/terminal/file-browser` | terminal | A keyboard-driven directory browser over `Terminal.appScreen`: `File.readDir` lists the working directory, arrow keys navigate, and the selected file's first bytes render as a raw `Ui.cells` hexdump island inside the `Ipe.Ui` view. |
+| `shapes/terminal/http-shell` | terminal | An HTTP query shell over `Terminal.appLines`: each stdin line like `get <url>` performs a real `Http.get` and prints the response status + body. |
+| `shapes/web/task-publish` | web | The top-level, Task-shaped `Ipe.PubSub.publish` (`String -> any -> Task Error Int`) fired from a `Ipe.Tea.Web` app's `update` via `Cmd.perform`, with the subscriber count routed back into the model. Shows the Task form composing where a broadcast bus runs. |
+| `shapes/program/release-preflight` | program | A plain-`main` batch program (no TEA loop): a release-preflight check run to completion. |
 
 ## Sky-derived examples
 

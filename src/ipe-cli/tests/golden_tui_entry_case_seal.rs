@@ -1,8 +1,8 @@
 //! Regression for a `24-tui-kitchen-sink` SEAL violation: `ipe build` exits 0
-//! on the Ipe.Tui `argv`-dispatch entry-point idiom (`main = case List.head
-//! argsList of Just "live" -> Web.app {...} |> Task.run; _ -> Tui.app {...} |>
-//! Task.run`) while the emitted crate fails `cargo build` with two INDEPENDENT
-//! E0308 errors.
+//! on the Ipe.Terminal `argv`-dispatch entry-point idiom (`main = case List.head
+//! argsList of Just "live" -> Web.app {...} |> Task.run; _ -> Terminal.appScreen
+//! {...} |> Task.run`) while the emitted crate fails `cargo build` with two
+//! INDEPENDENT E0308 errors.
 //! The `tui_entry_case_taskrun` fixture minimises both defects down to plain
 //! `println`/`Task` calls so this test needs no Ipe.Tui / Ipe.Web
 //! dependency.

@@ -24,9 +24,9 @@ use core::fmt::Write as _;
 
 use crate::code::{ISSUE_TRACKER_URL, Severity, title};
 use crate::diagnostic::{
-    CaseDefect, Diagnostic, Expected, ExpectedSet, ExposingDefect, Feature, HeaderDefect, HelpLine,
-    Hint, IfDefect, LetDefect, LowerError, NameError, ParseError, SpanRole, Suggestion, TokenKind,
-    TyDoc, TypeDeclDefect, TypeError,
+    AppShape, CaseDefect, Diagnostic, Expected, ExpectedSet, ExposingDefect, Feature, HeaderDefect,
+    HelpLine, Hint, IfDefect, LetDefect, LowerError, NameError, ParseError, SpanRole, Suggestion,
+    TokenKind, TyDoc, TypeDeclDefect, TypeError,
 };
 use crate::span::Span;
 
@@ -478,8 +478,9 @@ fn name_label(msg: &NameError) -> Option<String> {
         NameError::ProgramImportsTeaShape { module } => Some(format!(
             "this module has a plain `main` (a Program) but imports `{module}`; \
              a module that imports any `Ipe.Tea.*` shape is a TEA app, so give \
-             `main` a shape entry (`Web.app` / `Tui.app` / `Console.app` / \
-             `WebView.app`), or drop the `{module}` import if this is a Program"
+             `main` a shape entry (`Web.app` / `Terminal.appScreen` / \
+             `Terminal.appLines` / `WebView.app`), or drop the `{module}` import \
+             if this is a Program"
         )),
         NameError::Unknown => None,
     }
@@ -618,6 +619,24 @@ fn lower_label(msg: &LowerError) -> String {
             "`{kernel}` is a development-only debugging escape hatch and cannot be used \
              in a production build (`ipe build --optimize`)"
         ),
+        LowerError::UiCellsInWebShape(app) => format!(
+            "`Ui.cells` is terminal-only; not available in the {} shape — it paints a \
+             raw character grid directly to the terminal and has no browser rendering. \
+             Use it only under `Terminal.appScreen` / `Terminal.appLines`",
+            web_shape_label(*app)
+        ),
+    }
+}
+
+/// The web-family shape name for the [`LowerError::UiCellsInWebShape`] message.
+/// Only `Web` / `WebView` ever reach this diagnostic (the gate fires solely for
+/// those shapes); the terminal shapes share the `Web/WebView` fallback wording
+/// defensively rather than a panic.
+const fn web_shape_label(app: AppShape) -> &'static str {
+    match app {
+        AppShape::Web => "Web",
+        AppShape::WebView => "WebView",
+        AppShape::TerminalScreen | AppShape::TerminalLines => "Web/WebView",
     }
 }
 
@@ -807,7 +826,8 @@ const fn feature_label(f: Feature) -> &'static str {
              [feature: routed-live-app]"
         }
         Feature::LetBoundAppCfg => {
-            "the cfg for an app entry point (`Web.app` / `Tui.app` / `Tui.program` / \
+            "the cfg for an app entry point (`Web.app` / `Terminal.appScreen` / \
+             `Terminal.appLines` / \
              `WebView.app`), and for `WebView.app` its nested `window` record and \
              `window.size` tuple, must be written inline as a record/tuple literal, \
              not a let-bound variable [feature: let-bound-app-cfg]"
