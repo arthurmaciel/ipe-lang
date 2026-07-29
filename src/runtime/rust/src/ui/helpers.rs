@@ -43,6 +43,16 @@ pub fn ui_html_<M: Clone>(h: Html<M>) -> Element<M> {
     Element::Raw(h)
 }
 
+/// `Ui.cells : List (List Char) -> Element msg`
+///
+/// A raw terminal cell grid: each inner list is one row of characters. The
+/// terminal backend paints it verbatim, one row per line; other backends
+/// degrade it to its text rows (see `render_element`).
+#[must_use]
+pub fn ui_cells_<M>(grid: Vec<Vec<char>>) -> Element<M> {
+    Element::Cells(grid)
+}
+
 /// `Ui.el : List (Attribute msg) -> Element msg -> Element msg`
 #[must_use]
 pub fn ui_el_<M: Clone>(attrs: Vec<Attribute<M>>, ch: Element<M>) -> Element<M> {

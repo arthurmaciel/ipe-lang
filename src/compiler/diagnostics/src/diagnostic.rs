@@ -15,14 +15,15 @@ use crate::code::{
     IPE_L0105, IPE_L0106, IPE_L0107, IPE_L0108, IPE_L0110, IPE_L0111, IPE_L0112, IPE_L0113,
     IPE_L0114, IPE_L0115, IPE_L0116, IPE_L0117, IPE_L0118, IPE_L0119, IPE_L0120, IPE_L0121,
     IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127, IPE_L0128, IPE_L0129,
-    IPE_L0130, IPE_L0131, IPE_L0140, IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003, IPE_N0004,
-    IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021, IPE_N0022,
-    IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029, IPE_N0030,
-    IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010,
-    IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018,
-    IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060,
-    IPE_P0061, IPE_P0062, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011,
-    IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0019, Severity,
+    IPE_L0130, IPE_L0131, IPE_L0132, IPE_L0140, IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003,
+    IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021,
+    IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029,
+    IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_P0001, IPE_P0002, IPE_P0003,
+    IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017,
+    IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050,
+    IPE_P0060, IPE_P0061, IPE_P0062, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010,
+    IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0019,
+    Severity,
 };
 use crate::span::Span;
 
@@ -894,6 +895,13 @@ pub enum LowerError {
         /// The dotted kernel name (e.g. `Debug.log`).
         kernel: Box<str>,
     },
+    /// `Ui.cells` (a raw terminal cell grid) appears in a `Web`/`WebView`
+    /// program. It paints directly to the terminal and has no denotation in a
+    /// browser view, so it is admissible only under the `Terminal` shape
+    /// (`Terminal.appScreen` / `Terminal.appLines`). The carried [`AppShape`] is
+    /// the web-family shape that rejected it — the SECURITY-tier fail-closed
+    /// gate converts a would-be wrong-render into an ipe-time error. [IPE-L0132]
+    UiCellsInWebShape(AppShape),
 }
 
 // ===========================================================================
@@ -1191,6 +1199,7 @@ const fn lower_code(msg: &LowerError) -> Code {
             IPE_L0123
         }
         LowerError::DevOnlyKernelInProduction { .. } => IPE_L0140,
+        LowerError::UiCellsInWebShape(_) => IPE_L0132,
     }
 }
 
@@ -1504,6 +1513,13 @@ fn lower_help(msg: &LowerError) -> Vec<HelpLine> {
                  production, use `Io.eprintln` or `Log.info`."
             )
             .into_boxed_str(),
+        )],
+        LowerError::UiCellsInWebShape(_) => vec![HelpLine::Note(
+            "`Ui.cells` paints a raw character grid onto the terminal, which a browser \
+             cannot render. Use it only under `Terminal.appScreen` / `Terminal.appLines`; \
+             for the same content in a Web/WebView view, render it with `Ui.text` (or a \
+             `Ui.column` of rows) instead."
+                .into(),
         )],
     }
 }

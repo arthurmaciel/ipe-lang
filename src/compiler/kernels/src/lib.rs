@@ -786,6 +786,9 @@ pub enum StdlibKernel {
     UiNone,
     UiText,
     UiHtml,
+    /// `Ui.cells : List (List Char) -> Element msg` — a raw terminal cell grid
+    /// embedded as an island inside an `Ipe.Ui` view under `Terminal.appScreen`.
+    UiCells,
     UiEl,
     UiRow,
     UiColumn,
@@ -2401,6 +2404,7 @@ impl StdlibKernel {
             Self::UiNone => d("Ui", "none", 0, Ui, "ui_none_"),
             Self::UiText => d("Ui", "text", 1, Ui, "ui_text_"),
             Self::UiHtml => d("Ui", "html", 1, Ui, "ui_html_"),
+            Self::UiCells => d("Ui", "cells", 1, Ui, "ui_cells_"),
             Self::UiEl => d("Ui", "el", 2, Ui, "ui_el_"),
             Self::UiRow => d("Ui", "row", 2, Ui, "ui_row_"),
             Self::UiColumn => d("Ui", "column", 2, Ui, "ui_column_"),
@@ -3676,6 +3680,7 @@ impl StdlibKernel {
         Self::UiNone,
         Self::UiText,
         Self::UiHtml,
+        Self::UiCells,
         Self::UiEl,
         Self::UiRow,
         Self::UiColumn,
@@ -4857,6 +4862,7 @@ impl StdlibKernel {
             | Self::UiNone
             | Self::UiText
             | Self::UiHtml
+            | Self::UiCells
             | Self::UiEl
             | Self::UiRow
             | Self::UiColumn
@@ -5459,6 +5465,7 @@ impl StdlibKernel {
                 | Self::UiNone
                 | Self::UiText
                 | Self::UiHtml
+                | Self::UiCells
                 | Self::UiEl
                 | Self::UiRow
                 | Self::UiColumn

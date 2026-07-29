@@ -2928,6 +2928,35 @@ fn emit_ui_call(
             Ok(Some(format!("ipe_runtime::ui::helpers::ui_html_({h})")))
         }
 
+        // `Ui.cells : List (List Char) -> Element msg` — raw terminal cell grid,
+        // painted as an island inside an `Ipe.Ui` view under `Terminal.appScreen`.
+        KernelFn::UiCells => {
+            // seal (SECURITY, fail-closed): `Ui.cells` paints raw terminal cells
+            // and has no browser denotation. In a Web/WebView build its runtime
+            // helper degrades to plain text, so it would ipe-succeed and silently
+            // render wrong. Reject it here — the one point it is emitted — with a
+            // shape-keyed IPE-L0132, converting a wrong-render into an ipe error.
+            if ctx.uses_web || ctx.uses_webview {
+                let app = if ctx.uses_webview {
+                    ipe_diagnostics::AppShape::WebView
+                } else {
+                    ipe_diagnostics::AppShape::Web
+                };
+                return Err(Diagnostic::Lower {
+                    span: Span::DUMMY,
+                    msg: LowerError::UiCellsInWebShape(app),
+                });
+            }
+            let [grid_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "ipe_backend_rust::emit_ui_call::UiCells",
+                    detail: format!("Ui.cells requires 1 argument, got {}", args.len()),
+                });
+            };
+            let grid = emit_expr_at(ctx, grid_e, indent, child, generics)?;
+            Ok(Some(format!("ipe_runtime::ui::helpers::ui_cells_({grid})")))
+        }
+
         // `Ui.el : List (Attribute msg) -> Element msg -> Element msg`
         KernelFn::UiEl => {
             let [attrs_e, child_e] = args else {

@@ -904,6 +904,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::UiNone => "Ui.none",
         KernelFn::UiText => "Ui.text",
         KernelFn::UiHtml => "Ui.html",
+        KernelFn::UiCells => "Ui.cells",
         KernelFn::UiEl => "Ui.el",
         KernelFn::UiRow => "Ui.row",
         KernelFn::UiColumn => "Ui.column",
