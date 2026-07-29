@@ -57,6 +57,9 @@ const IPE_LIVE_COUNTER: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.Sub
+import Ipe.String
 
 type Msg = Increment | Decrement
 
@@ -115,6 +118,9 @@ const IPE_LIVE_HTML_HELPER: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.Sub
+import Ipe.String
 
 type Msg = Increment | Decrement
 
@@ -185,6 +191,9 @@ const IPE_LIVE_LAMBDA_SUBS: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.Sub
+import Ipe.String
 
 type Msg = Increment | Decrement
 
@@ -238,6 +247,9 @@ const IPE_LIVE_ROUTED: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.Sub
+import Ipe.String
 
 type Page
     = CounterPage
@@ -852,6 +864,12 @@ const IPE_PUBSUB_LIVE: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.Sub
+import Ipe.String
+import Ipe.List
+import Ipe.Dict
+import Ipe.Maybe
 
 type Msg
     = BroadcastMsg (Dict String String)
@@ -940,6 +958,10 @@ const IPE_PUBSUB_RECORD_PAYLOAD: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.Sub
+import Ipe.String
+import Ipe.List
 
 type alias CartItem =
     { count : Int
@@ -1030,6 +1052,8 @@ const IPE_ONSUBMIT_TYPED_RECORD: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.Sub
 
 type alias Creds =
     { username : String
@@ -1227,6 +1251,8 @@ import Ipe.Tea.Web as Web
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onSubmit, onInput)
+import Ipe.Cmd
+import Ipe.Sub
 
 type Msg
     = UpdateName String
@@ -1431,6 +1457,8 @@ import Ipe.Tea.Web as Web
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onSubmit)
+import Ipe.Cmd
+import Ipe.Sub
 
 type alias Msg =
     { action : String }
@@ -1477,6 +1505,8 @@ import Ipe.Tea.Web as Web
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onSubmit)
+import Ipe.Cmd
+import Ipe.Sub
 
 type alias Msg =
     ( String, Int )
@@ -1527,6 +1557,10 @@ import Ipe.Tea.Web as Web
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onSubmit)
+import Ipe.Cmd
+import Ipe.Sub
+import Ipe.String
+import Ipe.List
 
 type alias Msg =
     List String
@@ -1654,6 +1688,8 @@ import Ipe.Tea.Web as Web
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onSubmit, onInput)
+import Ipe.Cmd
+import Ipe.Sub
 
 type Msg
     = UpdateName String
@@ -1836,6 +1872,7 @@ const IPE_ONSUBMIT_LET_BOUND_HANDLER: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Cmd
 
 type alias Creds =
     { username : String
@@ -1903,6 +1940,7 @@ const IPE_ONSUBMIT_LET_ALIAS_CHAIN: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Cmd
 
 type alias Creds =
     { username : String
@@ -2009,6 +2047,8 @@ const IPE_ONSUBMIT_ROUTED_FORM: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Cmd
+import Ipe.Sub
 
 type Page
     = FormPage
