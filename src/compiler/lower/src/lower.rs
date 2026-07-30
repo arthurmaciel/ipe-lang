@@ -14672,7 +14672,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HtmlToString,
             ) => Ok(1),
             // Arity 2: `Ui.layout attrs elem`, `Ui.layoutWith cfg elem`,
-            //          `Web.route path ctor`, `Web.renderStatic cfg path`.
+            //          `Web.route path ctor`, `Html.renderStatic cfg path`.
             Callee::Kernel(
                 // `Ui.layout : List (Attribute msg) -> Element msg -> Html msg`
                 KernelFn::UiLayout
@@ -14837,7 +14837,7 @@ impl<'a> Lowerer<'a> {
                 // `Web.route : String -> page -> WebRoute` (`page` is a
                 // bare polymorphic value — nullary ctor OR `String -> Page`)
                 | KernelFn::WebRoute
-                // `Web.renderStatic : WebAppCfg model msg -> String -> Task Error String`
+                // `Html.renderStatic : WebAppCfg model msg -> String -> Task Error String`
                 | KernelFn::WebRenderStatic
                 // generic `Attr.attribute k v` / `Attr.boolAttribute k b`.
                 | KernelFn::HtmlAttribute
@@ -16358,7 +16358,8 @@ impl<'a> Lowerer<'a> {
                     ("Web", "app") => Ok(Callee::Kernel(KernelFn::WebApp)),
                     ("Web", "appRouted") => Ok(Callee::Kernel(KernelFn::WebAppRouted)),
                     ("Web", "route") => Ok(Callee::Kernel(KernelFn::WebRoute)),
-                    ("Web", "renderStatic") => Ok(Callee::Kernel(KernelFn::WebRenderStatic)),
+                    // `Ipe.Html.renderStatic` — shape-neutral static-render bridge.
+                    ("Html", "renderStatic") => Ok(Callee::Kernel(KernelFn::WebRenderStatic)),
                     // ── Ipe.Terminal app-entry kernels ────────────────────
                     ("Terminal", "appScreen") => Ok(Callee::Kernel(KernelFn::TerminalAppScreen)),
                     ("Terminal", "appLines") => Ok(Callee::Kernel(KernelFn::TerminalAppLines)),

@@ -7,7 +7,7 @@
 //!   `page` field (the six-field cfg scheme with `routes` / `notFound`).
 //! * [`KernelFn::WebRoute`] — `Web.route pattern ctor` →
 //!   `ipe_runtime::web::route::Route::new(…)`.
-//! * [`KernelFn::WebRenderStatic`] — `Web.renderStatic view model` →
+//! * [`KernelFn::WebRenderStatic`] — `Html.renderStatic view model` →
 //!   `ipe_runtime::web::web_render_static(…)`.
 //!
 //! # Correctness constraints (MAKE INVALID STATES UNREPRESENTABLE)
@@ -124,16 +124,16 @@ pub fn emit_web_call(
         // ── Web.route pattern ctor ─────────────────────────────────────────
         KernelFn::WebRoute => emit_web_route(ctx, args, indent, child, generics),
 
-        // ── Web.renderStatic view model ────────────────────────────────────
+        // ── Html.renderStatic view model ────────────────────────────────────
         //
-        // `Web.renderStatic : (Model -> Html Msg) -> Model -> Task Error ()`
+        // `Html.renderStatic : (Model -> Html Msg) -> Model -> Task Error ()`
         //
         // Emits: `ipe_runtime::web::web_render_static(view, model)`
         KernelFn::WebRenderStatic => {
             let [view_e, model_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_web_call::WebRenderStatic",
-                    detail: format!("Web.renderStatic requires 2 arguments, got {}", args.len()),
+                    detail: format!("Html.renderStatic requires 2 arguments, got {}", args.len()),
                 });
             };
             let view_s = emit_expr_at(ctx, view_e, indent, child, generics)?;

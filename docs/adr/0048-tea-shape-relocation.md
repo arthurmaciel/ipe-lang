@@ -31,8 +31,9 @@ Two forces made the flat top-level layout unsatisfactory:
 2. **The four graphical/console shapes disagreed on the `view` type for no
    principled reason.** Verified against the backend emitters:
    - `Web.app` → `view : Model -> Html Msg` (`emit_web.rs`, app path recovers
-     `Model` from `view`'s first parameter; `Web.renderStatic :
-     (Model -> Html Msg) -> Model -> Task Error ()`).
+     `Model` from `view`'s first parameter; `Html.renderStatic :
+     (Model -> Html Msg) -> Model -> Task Error ()` is the shape-neutral static
+     bridge, next to `Html.render`).
    - `WebView.app` → `view : Model -> Html Msg`, where the view wraps
      `Ui.layout [] element` to produce the `Html` (`emit_webview.rs`).
    - `Tui.app` → `view : Model -> Element Msg` — the `Ipe.Ui` typed element tree,
@@ -110,7 +111,8 @@ types shape-agnostic and top-level.**
 
 5. **`Ipe.Ui` / `Ipe.Html` / `Ipe.Css` stay TOP-LEVEL.** These are shape-agnostic
    **data + static-rendering** modules usable by ANY module, Program included:
-   `Html.render` and `Web.renderStatic` are `Task`-based, with no live loop. The
+   `Html.render` is pure and `Html.renderStatic` is `Task`-based, with no live
+   loop. The
    `Ipe.Tea` gate forbids only the **live-loop machinery** — the `.app` / `program`
    entries and the `Cmd` / `Sub` re-exports — and never the `Html` / `Ui` / `Css`
    data or their static renderers. A Program is free to build a `Ui` tree and

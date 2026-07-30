@@ -1007,71 +1007,12 @@ fn check_program_tea_import_gate(
         return Ok(());
     }
 
-    // `Web.renderStatic` is a one-shot static-render Program tool, not a TEA
-    // loop: a plain `main = Web.renderStatic view model |> Task.run` renders once
-    // and exits. It lives under `Ipe.Tea.Web` (so it can share the shape's view
-    // vocabulary) but does NOT make the module a TEA app, so it is a legitimate
-    // Program use of the import and must not trip this gate.
-    let main_is_program_legal = main_sym.is_some_and(|main_sym| {
-        canon_mod
-            .defs
-            .iter()
-            .find(|d| d.name().value == main_sym)
-            .is_some_and(|d| {
-                let body = match d {
-                    canon::Def::Untyped { body, .. } | canon::Def::Typed { body, .. } => body,
-                };
-                main_uses_program_legal_tea_member(body, interner)
-            })
-    });
-
-    if main_is_program_legal {
-        return Ok(());
-    }
-
     Err(Diagnostic::Name {
         span: tea_import.name.span,
         msg: NameError::ProgramImportsTeaShape {
             module: path_to_dot_string(interner, &tea_import.name.value),
         },
     })
-}
-
-/// The `Ipe.Tea.*` members a plain-`main` Program may head-call without becoming
-/// a TEA app. `Web.renderStatic` renders a view to static HTML once and returns a
-/// `Task` — it is Program machinery, not a managed-update loop.
-const PROGRAM_LEGAL_TEA_MEMBERS: &[(&str, &str)] = &[("Web", "renderStatic")];
-
-/// Does this `main` body reference a [`PROGRAM_LEGAL_TEA_MEMBERS`] entry?
-///
-/// Unlike [`main_head_is_tea_entry`] (which peels to the single head expression),
-/// a static render is typically written `Web.renderStatic view model |> Task.run`
-/// — desugared to `Task.run (Web.renderStatic …)`, so the head is `Task.run` and
-/// `renderStatic` sits in an argument. Any occurrence of a Program-legal member
-/// anywhere in `main` proves this is a static-render Program, not a TEA app.
-fn main_uses_program_legal_tea_member(body: &canon::Expr, interner: &Interner) -> bool {
-    match &body.value {
-        canon::Expr_::VarKernel { module, name, .. } => {
-            matches!(
-                (interner.resolve(*module), interner.resolve(*name)),
-                (Some(m), Some(n)) if PROGRAM_LEGAL_TEA_MEMBERS.contains(&(m, n))
-            )
-        }
-        canon::Expr_::Call(callee, args) => {
-            main_uses_program_legal_tea_member(callee, interner)
-                || args
-                    .iter()
-                    .any(|a| main_uses_program_legal_tea_member(a, interner))
-        }
-        canon::Expr_::Lambda(_, inner) | canon::Expr_::Let(_, inner) => {
-            main_uses_program_legal_tea_member(inner, interner)
-        }
-        canon::Expr_::Binop { lhs, rhs, .. } => {
-            main_uses_program_legal_tea_member(lhs, interner)
-                || main_uses_program_legal_tea_member(rhs, interner)
-        }
-        _ => false,
-    }
 }
 
 /// Does this `main` body head-call a TEA shape entry ([`TEA_APP_ENTRIES`])?

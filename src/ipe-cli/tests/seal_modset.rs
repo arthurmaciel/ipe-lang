@@ -94,20 +94,22 @@ const SUB_SUBSCRIBE: &str = "module Main exposing (main)\n\
     subFor = Sub.subscribeTopic (PubSub.topic \"topic\") Got\n\
     main = Io.println \"subtopic\"\n";
 
-/// `Web.renderStatic` from a CLI `main` (web WITHOUT any TEA/server kernel).
+/// `Html.renderStatic` from a CLI `main` (web WITHOUT any TEA/server kernel).
 /// The `web` module's `use crate::tea::{IpeCmd, IpeSub}` is unconditional, so
 /// `tea` must be declared even though no `Cmd`/`Sub` kernel is named. Was E0432
 /// `crate::tea` before the fix.
+///
+/// `renderStatic` lives under the shape-neutral `Ipe.Html`, so this Program
+/// imports NO `Ipe.Tea.*` shape and is not misclassified as a TEA app (ADR 0048).
 const LIVE_RENDER_STATIC: &str = "module Main exposing (main)\n\
     import Ipe.Prelude exposing (..)\n\
-    import Ipe.Tea.Web as Web\n\
     import Ipe.Html as Html\n\
     type alias Model = { title : String }\n\
     viewStatic : Model -> Html msg\n\
     viewStatic model =\n    \
         Html.node \"div\" [] [ Html.text model.title ]\n\
     main =\n    \
-        Web.renderStatic viewStatic { title = \"hi\" }\n";
+        Html.renderStatic viewStatic { title = \"hi\" }\n";
 
 /// `HttpStream.chunks` where the `StreamId` arrives as a parameter (no `open`
 /// in the module set). `sub_subscribe_stream` + `IpeStreamId` live in
@@ -156,7 +158,7 @@ fn live_render_static_cli_builds() {
         return;
     }
     emit_and_build("live_render_static", LIVE_RENDER_STATIC)
-        .expect("Web.renderStatic must declare tea (was E0432 crate::tea)");
+        .expect("Html.renderStatic must declare tea (was E0432 crate::tea)");
 }
 
 #[test]
