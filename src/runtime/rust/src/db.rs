@@ -841,10 +841,11 @@ pub fn db_open_with_path<E: Send + From<String> + 'static>(path: String) -> IpeT
 
 pub fn db_exec_raw<E: Send + From<String> + 'static>(conn: Db, sql: String) -> IpeTask<E, i64> {
     Box::pin(async move {
-        // `execRaw : Db -> String -> Task Error Int` — Int is the rows-affected
-        // count (Go parity: res.RowsAffected()). `as i64` matches the existing
-        // insert/update/delete sites + Go's int64() truncation (rows-affected can
-        // never realistically exceed i64::MAX).
+        // `unsafeExecRaw : Db -> String -> Task Error Int` — the verbatim-SQL
+        // escape hatch (its surface name marks the raw-SQL injection surface;
+        // parameterisable statements go through `db_exec`/`db_query`). Int is the
+        // rows-affected count. `as i64` matches the insert/update/delete sites;
+        // rows-affected can never realistically exceed i64::MAX.
         match exec_routed(&conn, sqlx::query(&sql)).await {
             Ok(res) => ok_res(res.rows_affected() as i64),
             Err(e) => IpeResult::Err(ipe_err(&e)),
@@ -2764,7 +2765,7 @@ mod tests {
         // round-trip through a SqlValue-param WHERE. `with_default` extracts the
         // Ok value (a wrong/Err result then fails the following assert).
         let db = fresh_db().await;
-        // exec/execRaw now return rows-affected (i64). DDL rows-affected is
+        // exec/unsafeExecRaw now return rows-affected (i64). DDL rows-affected is
         // driver-defined → assert Ok(_); each INSERT affects exactly 1 row.
         let mk: IpeResult<String, i64> = db_exec_raw(
             db.clone(),

@@ -35,7 +35,7 @@
 //!
 //! ## Golden catalogue
 //!
-//! * `db_exec` — `Db.open` → `Db.withTransaction` → `Db.execRaw` (DDL) →
+//! * `db_exec` — `Db.open` → `Db.withTransaction` → `Db.unsafeExecRaw` (DDL) →
 //!   `Db.exec` with `[SqlString, SqlInt]` params (two INSERTs) → `Db.query`
 //!   with empty params (SELECT ORDER BY name) → `Db.getString` / `Db.getInt`
 //!   field access → `println`. Output: `"apple:5\nbanana:3"`.
@@ -144,7 +144,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
 
 // ── Db exec + query via SqlValue params ──────────────────────────────────────
 
-/// `Db.open` → `Db.withTransaction` → `Db.execRaw` (DDL) →
+/// `Db.open` → `Db.withTransaction` → `Db.unsafeExecRaw` (DDL) →
 /// `Db.exec [SqlString "apple", SqlInt 5]` + `[SqlString "banana", SqlInt 3]`
 /// (two INSERTs) → `Db.query [] (SELECT ORDER BY name)` → `Db.getString` /
 /// `Db.getInt` → `println`. Output: `"apple:5\nbanana:3"`.

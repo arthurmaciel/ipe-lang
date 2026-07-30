@@ -724,7 +724,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::DbConnect => "Db.connect",
         KernelFn::DbOpen => "Db.open",
         KernelFn::DbClose => "Db.close",
-        KernelFn::DbExecRaw => "Db.execRaw",
+        KernelFn::DbExecRaw => "Db.unsafeExecRaw",
         KernelFn::DbExec => "Db.exec",
         KernelFn::DbQuery => "Db.query",
         KernelFn::DbQueryDecode => "Db.queryDecode",

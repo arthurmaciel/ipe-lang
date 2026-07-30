@@ -17,7 +17,7 @@ main =
                 (\txconn ->
                     let
                         _ =
-                            Db.execRaw txconn
+                            Db.unsafeExecRaw txconn
                                 "CREATE TABLE items (id TEXT PRIMARY KEY, name TEXT, notes TEXT DEFAULT 'none')"
 
                         _ =

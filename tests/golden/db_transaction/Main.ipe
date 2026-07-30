@@ -18,11 +18,11 @@ main =
         (\conn ->
             let
                 _ =
-                    Db.execRaw conn
+                    Db.unsafeExecRaw conn
                         "CREATE TABLE IF NOT EXISTS log (msg TEXT)"
 
                 _ =
-                    Db.execRaw conn "DELETE FROM log"
+                    Db.unsafeExecRaw conn "DELETE FROM log"
             in
             -- Transaction 1: INSERT "hello" + succeed → COMMIT → durable.
             Task.andThen

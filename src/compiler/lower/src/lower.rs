@@ -15739,7 +15739,7 @@ impl<'a> Lowerer<'a> {
                     ("Db", "connect") => Ok(Callee::Kernel(KernelFn::DbConnect)),
                     ("Db", "open") => Ok(Callee::Kernel(KernelFn::DbOpen)),
                     ("Db", "close") => Ok(Callee::Kernel(KernelFn::DbClose)),
-                    ("Db", "execRaw") => Ok(Callee::Kernel(KernelFn::DbExecRaw)),
+                    ("Db", "unsafeExecRaw") => Ok(Callee::Kernel(KernelFn::DbExecRaw)),
                     ("Db", "exec") => Ok(Callee::Kernel(KernelFn::DbExec)),
                     ("Db", "query") => Ok(Callee::Kernel(KernelFn::DbQuery)),
                     ("Db", "queryDecode") => Ok(Callee::Kernel(KernelFn::DbQueryDecode)),

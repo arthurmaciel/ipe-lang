@@ -25,7 +25,7 @@ main =
                 (\txconn ->
                     let
                         _ =
-                            Db.execRaw txconn
+                            Db.unsafeExecRaw txconn
                                 "CREATE TABLE t (v TEXT)"
 
                         -- (a) List Int params — T0001 regression
