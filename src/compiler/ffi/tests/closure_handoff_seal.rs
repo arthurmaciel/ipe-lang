@@ -196,6 +196,10 @@ use crate::ffi::{slug}::{{Counter, Message, UpdateFnClosure}};
 #[derive(Debug)]
 pub struct IpeError(String);
 pub fn str_err<E: From<String>>(s: &str) -> E {{ s.to_string().into() }}
+pub fn ipe_error_from_panic<E: From<String>>(c: &str, _p: Box<dyn std::any::Any + Send>) -> E {{ c.to_string().into() }}
+pub fn note_foreign_panic(_c: &str, _p: Box<dyn std::any::Any + Send>) -> String {{ String::new() }}
+pub fn note_foreign_error<T: std::fmt::Debug>(_e: T) -> String {{ String::new() }}
+pub fn ipe_error_from_foreign<T: std::fmt::Debug, E: From<String>>(_e: T) -> E {{ "external operation failed".to_string().into() }}
 impl From<String> for IpeError {{ fn from(s: String) -> Self {{ IpeError(s) }} }}
 
 // A foreign `run`-style entrypoint: it OWNS the handoffed closure handle and
