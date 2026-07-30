@@ -1699,6 +1699,12 @@ pub enum Expr {
     /// A string literal — the carried [`String`] is the already-unescaped value.
     /// The backend renders it as an owned `String` (`"…".to_string()`).
     Str(String),
+    /// A `path "…"` compile-time-validated path literal. The carried [`String`]
+    /// is the CLEANED, NUL-free, non-escaping form validated by the canonicaliser.
+    /// The backend renders it as `ipe_runtime::path::path_literal(…)`, bypassing
+    /// the runtime's `Result`-returning seal (the compiler already proved the
+    /// string is valid).
+    PathLit(String),
     /// A character literal — the carried [`String`] is the single unescaped
     /// character's text. The backend renders it as a Rust `char` literal.
     Char(String),

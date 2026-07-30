@@ -4,8 +4,8 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use ipe_diagnostics::{
-    AliasExpansionKind, CmdSubShapeMismatch, DResult, Diagnostic, Located, NameError, Span,
-    TypeError,
+    AliasExpansionKind, CmdSubShapeMismatch, DResult, Diagnostic, Located, NameError, ParseError,
+    Span, TypeError,
 };
 use ipe_intern::{Interner, Symbol};
 use ipe_kernels::StdlibKernel;
@@ -3140,6 +3140,19 @@ fn canonicalise_expr(e: &src::Expr, env: &Env, interner: &mut Interner) -> DResu
             desugar_multiline(raw, *anchor, span, env, interner)?
         }
         src::Expr_::Char(c) => canon::Expr_::Char(c.clone()),
+        // `path "…"` literal: validate at compile time, store the cleaned form.
+        src::Expr_::PathLit(raw) => match ipe_diagnostics::path_check::validate(raw) {
+            Ok(cleaned) => canon::Expr_::PathLit(cleaned),
+            Err(reason) => {
+                return Err(Diagnostic::Parse {
+                    span,
+                    msg: ParseError::InvalidPathLiteral {
+                        literal: raw.as_str().into(),
+                        reason,
+                    },
+                });
+            }
+        },
         src::Expr_::Unit => canon::Expr_::Unit,
         src::Expr_::VarLocal(name) => resolve_var(*name, span, env, interner)?,
         src::Expr_::VarQual(qual, name) => resolve_qual_var(*qual, *name, span, env, interner)?,

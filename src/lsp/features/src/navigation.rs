@@ -129,6 +129,7 @@ fn walk_for_ref_at(
         | Expr_::Int(_)
         | Expr_::Float(_)
         | Expr_::Str(_)
+        | Expr_::PathLit(_)
         | Expr_::Char(_)
         | Expr_::Unit
         | Expr_::ForeignCall { .. } => {}
@@ -210,6 +211,7 @@ fn walk_for_refs(
         | Expr_::Int(_)
         | Expr_::Float(_)
         | Expr_::Str(_)
+        | Expr_::PathLit(_)
         | Expr_::Char(_)
         | Expr_::Unit
         | Expr_::ForeignCall { .. } => {}

@@ -90,6 +90,7 @@ fn check_expr<'e>(root: &'e Expr, interner: &Interner) -> DResult<()> {
             | Expr_::Int(_)
             | Expr_::Float(_)
             | Expr_::Str(_)
+            | Expr_::PathLit(_)
             | Expr_::Char(_)
             | Expr_::Unit => {}
             Expr_::Call(f, args) => {

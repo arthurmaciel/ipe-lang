@@ -21,9 +21,9 @@ use crate::code::{
     IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035, IPE_P0001, IPE_P0002,
     IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016,
     IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041,
-    IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004,
-    IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017,
-    IPE_T0019, Severity,
+    IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_P0063, IPE_T0001, IPE_T0002, IPE_T0003,
+    IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016,
+    IPE_T0017, IPE_T0019, Severity,
 };
 use crate::span::Span;
 
@@ -333,6 +333,15 @@ pub enum ParseError {
     MalformedLet(LetDefect),
     /// An `if … then … else …` expression is malformed. [IPE-P0062]
     MalformedIf(IfDefect),
+    /// A `path "…"` literal whose string fails compile-time validation.
+    ///
+    /// `reason` names which check failed: `"nul"` (a NUL byte in the string)
+    /// or `"traversal"` (the cleaned path escapes its root via `..`). `literal`
+    /// is the original unmodified source string. [IPE-P0063]
+    InvalidPathLiteral {
+        literal: Box<str>,
+        reason: &'static str,
+    },
 }
 
 /// Errors raised during name resolution / canonicalisation.
@@ -1158,6 +1167,7 @@ const fn parse_code(msg: &ParseError) -> Code {
         ParseError::MalformedCase(_) => IPE_P0060,
         ParseError::MalformedLet(_) => IPE_P0061,
         ParseError::MalformedIf(_) => IPE_P0062,
+        ParseError::InvalidPathLiteral { .. } => IPE_P0063,
     }
 }
 
@@ -1308,7 +1318,8 @@ fn parse_help(msg: &ParseError) -> Vec<HelpLine> {
         | ParseError::TypeArgsOnNonConstructor
         | ParseError::MalformedCase(_)
         | ParseError::MalformedLet(_)
-        | ParseError::MalformedIf(_) => Vec::new(),
+        | ParseError::MalformedIf(_)
+        | ParseError::InvalidPathLiteral { .. } => Vec::new(),
     }
 }
 

@@ -1,11 +1,8 @@
 [package]
-name = "ipe_diagnostics"
+name = "ipe_path_core"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
-
-[dependencies]
-ipe_path_core = { path = "../path-core" }
 
 [lints]
 workspace = true

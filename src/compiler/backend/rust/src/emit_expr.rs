@@ -179,6 +179,7 @@ fn collect_free_vars(expr: &Expr, out: &mut std::collections::BTreeSet<Symbol>) 
         | Expr::Bool(_)
         | Expr::Float(_)
         | Expr::Str(_)
+        | Expr::PathLit(_)
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => {}
@@ -303,6 +304,7 @@ fn clone_free_target(expr: Expr, target: Symbol) -> Expr {
         | Expr::Float(_)
         | Expr::Bool(_)
         | Expr::Str(_)
+        | Expr::PathLit(_)
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => expr,
@@ -574,6 +576,7 @@ fn scan_free_target_into(expr: &Expr, target: Symbol, count: &mut usize, has_clo
         | Expr::Float(_)
         | Expr::Bool(_)
         | Expr::Str(_)
+        | Expr::PathLit(_)
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => {}
@@ -680,6 +683,7 @@ pub fn substitute_var(expr: Expr, target: Symbol, replacement: &Expr) -> Expr {
         | Expr::Float(_)
         | Expr::Bool(_)
         | Expr::Str(_)
+        | Expr::PathLit(_)
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => expr,
@@ -6063,6 +6067,13 @@ pub fn emit_expr_at(
         // `String`, never `&str`). The `{:?}` Debug form produces a valid Rust
         // string literal with deterministic escaping.
         Expr::Str(s) => Ok(format!("{s:?}.to_string()")),
+        // A compile-time-validated `path "…"` literal. The string was already
+        // validated and cleaned by the canonicaliser; emit a direct call to
+        // `path_literal` (the compiler-only bypass constructor) so no runtime
+        // re-validation is performed — the type is the proof.
+        Expr::PathLit(s) => Ok(format!(
+            "ipe_runtime::path::path_literal({s:?}.to_string())"
+        )),
         // A character literal renders as a Rust `char`. The carried text is a
         // single character (lexer invariant); `{:?}` escapes it deterministically.
         // A malformed (non-single-char) value fails closed as a `CompilerBug`:

@@ -406,6 +406,17 @@ fn parse_label(msg: &ParseError) -> Option<String> {
         ParseError::MalformedCase(defect) => Some(case_defect_str(*defect).to_string()),
         ParseError::MalformedLet(defect) => Some(let_defect_str(*defect).to_string()),
         ParseError::MalformedIf(defect) => Some(if_defect_str(*defect).to_string()),
+        ParseError::InvalidPathLiteral { literal, reason } => {
+            let detail = match *reason {
+                "nul" => {
+                    "the path contains a NUL byte (a syscall-boundary truncation / traversal risk)"
+                        .to_string()
+                }
+                "traversal" => format!("the path escapes its root via `..` traversal: {literal:?}"),
+                other => format!("invalid path: {other}"),
+            };
+            Some(detail)
+        }
         ParseError::Unexpected | ParseError::TooDeep => None,
     }
 }
