@@ -104,7 +104,7 @@ fn distinct_functions_folding_to_the_same_rust_name_are_rejected() {
     let ipe_diagnostics::Diagnostic::Name {
         msg: ipe_diagnostics::NameError::DuplicateValue { name, .. },
         ..
-    } = diag
+    } = &**diag
     else {
         assert!(
             false_marker(),

@@ -81,10 +81,18 @@ pub enum CliError {
     /// source text alongside the diagnostic so [`fmt::Display`] can render a
     /// rustc/Elm-style report (caret snippet + help + `ipe explain` pointer)
     /// rather than a debug dump.
+    ///
+    /// `diag` is boxed: a bare [`Diagnostic`] is the widest field of the
+    /// widest variant, and every one of the ~200 functions returning
+    /// `Result<_, CliError>` pays the enum's size in its `Err` slot. Boxing
+    /// this one field keeps `CliError` small — the compile-failure path (the
+    /// exceptional one) is the only place that pays for the diagnostic — while
+    /// leaving the `file`/`src` field names intact so existing pattern matches
+    /// on this variant are unaffected.
     Pipeline {
         file: PathBuf,
         src: String,
-        diag: Diagnostic,
+        diag: Box<Diagnostic>,
     },
     /// The Ipê runtime module tree could not be located.
     RuntimeNotFound,
@@ -269,6 +277,14 @@ impl std::fmt::Display for CliError {
 
 impl std::error::Error for CliError {}
 
+// `CliError` is the `Err` type of every driver `Result`, so its size is paid
+// in the `Err` slot of ~200 functions. Boxing the `Pipeline` diagnostic keeps
+// it well under clippy's `result_large_err` 128-byte threshold (80 bytes today,
+// bounded by the three-`String` variants such as `HashMismatch`); this
+// assertion fails the build if a future variant reintroduces the bloat rather
+// than boxing its payload.
+const _: () = assert!(std::mem::size_of::<CliError>() <= 96);
+
 /// Options modifying a build beyond plain source compilation — some (the
 /// static plan) apply post-emit at write time; others (`target`,
 /// `wasm_public_env`) feed the compile/emit pipeline itself.
@@ -346,7 +362,7 @@ pub fn build_with_options(
     let pipeline_err = |diag: Diagnostic| CliError::Pipeline {
         file: entry.to_path_buf(),
         src: source.clone(),
-        diag,
+        diag: Box::new(diag),
     };
     let parsed = ipe_parse::parse_module(&source, &mut name_interner).map_err(&pipeline_err)?;
     let entry_path: Vec<String> = parsed
@@ -463,7 +479,7 @@ fn collect_entry_and_siblings(entry: &Path) -> Result<CollectedSources, CliError
     let pipeline_err = |diag: Diagnostic| CliError::Pipeline {
         file: entry.to_path_buf(),
         src: source.clone(),
-        diag,
+        diag: Box::new(diag),
     };
 
     // Parse the entry to learn its declared module path.
@@ -711,7 +727,7 @@ fn compile_modules_observed(
                     Err(CliError::Pipeline {
                         file: blame_path.to_path_buf(),
                         src,
-                        diag,
+                        diag: Box::new(diag),
                     }),
                     CacheOutcome::IrHit,
                 );
@@ -891,7 +907,7 @@ pub fn compile_prepared(
         ipe_db::topo_order(db, source_root, entry_file).map_err(|diag| CliError::Pipeline {
             file: blame_path.to_path_buf(),
             src: String::new(),
-            diag,
+            diag: Box::new(diag),
         })?;
 
     // Canonicalise each module in dep-first order through the salsa query
@@ -921,7 +937,7 @@ pub fn compile_prepared(
         ipe_db::canonicalize(db, source_root, file_handle).map_err(|diag| CliError::Pipeline {
             file: path.clone(),
             src: src.clone(),
-            diag,
+            diag: Box::new(diag),
         })?;
     }
 
@@ -938,7 +954,7 @@ pub fn compile_prepared(
     let pipeline_err = |diag: ipe_diagnostics::Diagnostic| CliError::Pipeline {
         file: entry_src_path.clone(),
         src: entry_src.clone(),
-        diag,
+        diag: Box::new(diag),
     };
 
     // The coarse whole-program spine: every per-module canonical result
@@ -1066,7 +1082,11 @@ pub fn compile_prepared(
         gate_result.map_err(|diag| {
             let span = diag_span(&diag);
             let (file, src) = source_for_span(span);
-            CliError::Pipeline { file, src, diag }
+            CliError::Pipeline {
+                file,
+                src,
+                diag: Box::new(diag),
+            }
         })?;
     }
 
@@ -1084,7 +1104,11 @@ pub fn compile_prepared(
         gate_result.map_err(|diag| {
             let span = diag_span(&diag);
             let (file, src) = source_for_span(span);
-            CliError::Pipeline { file, src, diag }
+            CliError::Pipeline {
+                file,
+                src,
+                diag: Box::new(diag),
+            }
         })?;
     }
 
@@ -1113,7 +1137,11 @@ pub fn compile_prepared(
                 .cloned()
                 .unwrap_or_else(|| source_for_span(span))
         };
-        CliError::Pipeline { file, src, diag }
+        CliError::Pipeline {
+            file,
+            src,
+            diag: Box::new(diag),
+        }
     })?;
     // Print non-fatal warnings (e.g. IPE-T0011 RedundantCaseBranch) to stderr.
     // These are Severity::Warning: the build continues and exit code stays 0.
@@ -1147,7 +1175,11 @@ pub fn compile_prepared(
                     .cloned()
                     .unwrap_or_else(|| source_for_span(diag_span(&diag)))
             };
-            CliError::Pipeline { file, src, diag }
+            CliError::Pipeline {
+                file,
+                src,
+                diag: Box::new(diag),
+            }
         };
     // `ipe_db::program_metadata` — the whole-program DCE-reachability seam
     // over `lower_program`.
@@ -1243,7 +1275,7 @@ fn backend_invariant_err(diag: Diagnostic) -> CliError {
     CliError::Pipeline {
         file: PathBuf::from("Cargo.toml"),
         src: String::new(),
-        diag,
+        diag: Box::new(diag),
     }
 }
 
@@ -2609,7 +2641,7 @@ impl SourceGraph {
         CliError::Pipeline {
             file: entry.to_path_buf(),
             src: self.entry_src.clone(),
-            diag,
+            diag: Box::new(diag),
         }
     }
 }
@@ -3006,7 +3038,7 @@ pub fn infer_package_capabilities(
                     lowering_error = Some(CliError::Pipeline {
                         file: m.path.clone(),
                         src,
-                        diag,
+                        diag: Box::new(diag),
                     });
                 }
             }

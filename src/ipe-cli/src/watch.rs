@@ -261,7 +261,7 @@ pub(crate) fn resolve_project_sources(
         CliError::Pipeline {
             file: entry.to_path_buf(),
             src: source.clone(),
-            diag,
+            diag: Box::new(diag),
         }
     })?;
     let entry_module_path: Vec<String> = parsed
