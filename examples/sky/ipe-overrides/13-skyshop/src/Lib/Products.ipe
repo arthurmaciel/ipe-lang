@@ -72,7 +72,7 @@ filterByCategory category products =
         products
 
     else
-        List.filter (\p -> Db.getField "category" p == category) products
+        List.filter (\p -> Db.unsafeGetField "category" p == category) products
 
 
 filterBySearch : String -> List (Dict String String) -> List (Dict String String)
@@ -88,10 +88,10 @@ filterBySearch query products =
                 (\p ->
                     String.contains
                         lowerQuery
-                        (String.toLower (Db.getField "title" p))
+                        (String.toLower (Db.unsafeGetField "title" p))
                         || String.contains
                                lowerQuery
-                               (String.toLower (Db.getField "summary" p)))
+                               (String.toLower (Db.unsafeGetField "summary" p)))
                 products
 
 
@@ -106,7 +106,7 @@ sortProducts sortBy sortDir products =
             if sortBy == "price" then
                 insertionSortByKey
                     (\p ->
-                        Db.getInt "price_amount" p - Db.getInt "price_discount" p)
+                        Db.unsafeGetInt "price_amount" p - Db.unsafeGetInt "price_discount" p)
                     products
 
             else
@@ -205,7 +205,7 @@ deleteProduct productId =
         images = listProductImages productId
         _ =
             List.map
-                (\img -> Db.deleteDoc "product_images" (Db.getField "id" img))
+                (\img -> Db.deleteDoc "product_images" (Db.unsafeGetField "id" img))
                 images
         cartItems =
             Db.queryWhereOrLog
@@ -216,7 +216,7 @@ deleteProduct productId =
                 productId
         _ =
             List.map
-                (\item -> Db.deleteDoc "cart_items" (Db.getField "id" item))
+                (\item -> Db.deleteDoc "cart_items" (Db.unsafeGetField "id" item))
                 cartItems
         result = Db.deleteDoc "products" productId
         _ = Io.println ("[PRODUCT] Deleted: " ++ productId)

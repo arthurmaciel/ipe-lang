@@ -47,9 +47,9 @@ main =
                                                 r1 =
                                                     case before of
                                                         Just row ->
-                                                            Db.getString "name" row
+                                                            Db.unsafeGetString "name" row
                                                                 ++ "/"
-                                                                ++ Db.getString "qty" row
+                                                                ++ Db.unsafeGetString "qty" row
 
                                                         Nothing ->
                                                             "missing"
@@ -57,9 +57,9 @@ main =
                                                 r2 =
                                                     case after of
                                                         Just row ->
-                                                            Db.getString "name" row
+                                                            Db.unsafeGetString "name" row
                                                                 ++ "/"
-                                                                ++ Db.getString "qty" row
+                                                                ++ Db.unsafeGetString "qty" row
 
                                                         Nothing ->
                                                             "missing"

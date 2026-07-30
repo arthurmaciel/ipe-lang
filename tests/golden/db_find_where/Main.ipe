@@ -45,10 +45,10 @@ main =
                                     Maybe.withDefault Dict.empty (List.head rows)
 
                                 name =
-                                    Db.getString "name" row
+                                    Db.unsafeGetString "name" row
 
                                 qty =
-                                    Db.getInt "qty" row
+                                    Db.unsafeGetInt "qty" row
                             in
                             Io.println (name ++ ":" ++ String.fromInt qty)
                         )

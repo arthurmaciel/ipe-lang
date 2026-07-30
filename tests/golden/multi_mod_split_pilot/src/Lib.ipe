@@ -53,7 +53,7 @@ seedAndCount =
                     in
                     Task.map
                         (\rows -> List.length rows)
-                        (Db.query txconn "SELECT name, qty FROM widgets" [])
+                        (Db.unsafeQuery txconn "SELECT name, qty FROM widgets" [])
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")

@@ -153,13 +153,13 @@ viewCartItems model =
 viewCartItem : Model -> Dict String String -> Element Msg
 viewCartItem model item =
     let
-        itemId = Db.getField "id" item
-        title = Db.getField "title" item
+        itemId = Db.unsafeGetField "id" item
+        title = Db.unsafeGetField "title" item
         pricing = Money.formatPriceFromRow item
-        qty = Db.getInt "quantity" item
-        price = Db.getInt "price_amount" item
-        discount = Db.getInt "price_discount" item
-        currency = Db.getField "price_currency" item
+        qty = Db.unsafeGetInt "quantity" item
+        price = Db.unsafeGetInt "price_amount" item
+        discount = Db.unsafeGetInt "price_discount" item
+        currency = Db.unsafeGetField "price_currency" item
         effectivePrice =
             if discount > 0 then
                 price - discount
@@ -225,7 +225,7 @@ viewCartSummary model =
             case model.cart of
 
                 Just cart ->
-                    Db.getInt "total_amount" cart
+                    Db.unsafeGetInt "total_amount" cart
 
                 Nothing ->
                     0
@@ -233,7 +233,7 @@ viewCartSummary model =
             case model.cart of
 
                 Just cart ->
-                    Db.getField "total_currency" cart
+                    Db.unsafeGetField "total_currency" cart
 
                 Nothing ->
                     "GBP"

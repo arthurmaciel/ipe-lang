@@ -29,7 +29,7 @@ adminEmails _ =
 
 isAdmin : Dict String String -> Bool
 isAdmin user =
-    Db.getBool "is_admin" user
+    Db.unsafeGetBool "is_admin" user
 
 
 -- ══════════════════════════════════════════════════════
@@ -116,7 +116,7 @@ findOrCreateUser uid email name =
                 case maybeUser of
 
                     Just user ->
-                        if Db.getBool "suspended" user then
+                        if Db.unsafeGetBool "suspended" user then
                             Err
                                 (Error.permissionDenied
                                     |> Error.withMessage

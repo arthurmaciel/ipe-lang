@@ -65,7 +65,7 @@ handleList cfg db req =
         cfg
         req
         (\claims ->
-            Db.query
+            Db.unsafeQuery
                 db
                 "SELECT id, user_id, text, done, created_at FROM todos WHERE user_id = ? ORDER BY created_at DESC"
                 [ String.fromInt claims.userId ]

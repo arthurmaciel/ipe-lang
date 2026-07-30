@@ -43,11 +43,11 @@ main =
                                 (\rows ->
                                     let
                                         names =
-                                            List.map (\r -> Db.getString "name" r) rows
+                                            List.map (\r -> Db.unsafeGetString "name" r) rows
                                     in
                                     Io.println (String.fromInt deletedCount ++ ":" ++ String.join "," names)
                                 )
-                                (Db.query txconn "SELECT * FROM products ORDER BY name" [])
+                                (Db.unsafeQuery txconn "SELECT * FROM products ORDER BY name" [])
                         )
                         (Db.deleteWhere txconn "products" (Sql.eq (Sql.column "name") (Sql.string "gadget")))
                 )

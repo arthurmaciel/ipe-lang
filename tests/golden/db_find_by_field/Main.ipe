@@ -61,11 +61,11 @@ import Ipe.Task
 -- enumerated there — reported separately as a blocking finding.
 
 formatRow row =
-    Db.getString "name" row
+    Db.unsafeGetString "name" row
         ++ ":"
-        ++ Db.getString "category" row
+        ++ Db.unsafeGetString "category" row
         ++ ":"
-        ++ String.fromInt (Db.getInt "qty" row)
+        ++ String.fromInt (Db.unsafeGetInt "qty" row)
 
 
 formatRows rows =
@@ -123,7 +123,7 @@ main =
                                         (\many ->
                                             let
                                                 sorted =
-                                                    List.sortBy (\r -> Db.getString "name" r) many
+                                                    List.sortBy (\r -> Db.unsafeGetString "name" r) many
 
                                                 joined3 =
                                                     formatRows sorted

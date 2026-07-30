@@ -44,11 +44,11 @@ viewProduct model =
 viewProductDetail : Model -> Dict String String -> Element Msg
 viewProductDetail model product =
     let
-        title = Db.getField "title" product
-        summary = Db.getField "summary" product
-        category = Db.getField "category" product
+        title = Db.unsafeGetField "title" product
+        summary = Db.unsafeGetField "summary" product
+        category = Db.unsafeGetField "category" product
         pricing = Money.formatPriceFromRow product
-        stock = Db.getInt "stock" product
+        stock = Db.unsafeGetInt "stock" product
         images = model.productImages
         lang = model.lang
     in
@@ -243,7 +243,7 @@ viewAddToCart : Model -> Dict String String -> Int -> Element Msg
 viewAddToCart model product stock =
     let
         lang = model.lang
-        productId = Db.getField "id" product
+        productId = Db.unsafeGetField "id" product
         canAdd = stock /= 0
     in
         if canAdd then
