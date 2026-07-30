@@ -103,7 +103,7 @@ directly by the spike (a real `iced::Sandbox` around the verbatim emitter
 output), not by the `ipe build` path.
 
 ```
-cd examples/iced-counter
+cd examples/ffi/iced-counter
 ipe install --yes --allow-build-scripts   # sandboxed; writes .ipe/cache/ffi/rust (gitignored)
 ipe build                                 # blocked at the forwarder gap (see above)
 ```

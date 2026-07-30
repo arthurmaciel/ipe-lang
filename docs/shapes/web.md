@@ -124,7 +124,7 @@ terminal.
 
 `Web.app` also compiles to a pure-client single-page app under `--target wasm`,
 where the whole TEA loop runs in WebAssembly. See the WASM examples under
-[`examples/`](../../examples/) (`wasm-counter`, `wasm-spa`, `wasm-hydration`).
+[`examples/`](../../examples/) (`wasm/counter`, `wasm/spa`, `wasm/hydration`).
 
 ## Broadcasting: pub/sub
 

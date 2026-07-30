@@ -77,7 +77,7 @@ mod tests {
     fn classifies_paths() {
         assert_eq!(lang_of("crates/ipe_lower/src/compile.rs"), Lang::Rust);
         assert_eq!(lang_of("a.ipe"), Lang::Ipe);
-        assert_eq!(role_of("examples/wasm-counter/src/Main.ipe"), Role::Example);
+        assert_eq!(role_of("examples/wasm/counter/src/Main.ipe"), Role::Example);
         assert_eq!(role_of("crates/ipe_parse/src/lexer.rs"), Role::CompilerRs);
         assert_eq!(role_of("runtime/src/list.rs"), Role::RuntimeRs);
         assert_eq!(role_of("tools/ipe-index/src/main.rs"), Role::ToolRs);
