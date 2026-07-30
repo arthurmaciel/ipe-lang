@@ -440,6 +440,67 @@ struct TransitiveDep {
     version: String,
 }
 
+/// One reported member of a foreign type: a named struct field or one variant
+/// payload slot (a positional slot is named by its decimal index).
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct TypeMember {
+    name: String,
+    /// The Ipê-mapped spelling of the member's type.
+    #[serde(rename = "type")]
+    ty: String,
+    /// The rendered Rust spelling of the member's type.
+    rust_type: String,
+}
+
+/// One reported variant of a foreign enum.
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct TypeVariantDecl {
+    name: String,
+    /// "unit" | "tuple" | "struct".
+    kind: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    members: Vec<TypeMember>,
+}
+
+/// The structural facts of one crate-local public struct/enum — the evidence
+/// the generator's decode boundary classifies a type from on the
+/// transparent-or-opaque representation axis.
+///
+/// The inspector reports FACTS, fail-closed: any detection failure surfaces as
+/// `hiddenMembers`/`nonExhaustive` = true, and the generator upgrades a type
+/// to transparent only from an entry whose facts affirmatively qualify. A type
+/// with no entry, hidden members, or a non-exhaustive contract stays an opaque
+/// nominal handle.
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct ForeignTypeDecl {
+    /// The Ipê-visible nominal (same rendering as an accessor's `recvType`).
+    name: String,
+    /// The rendered Rust path (same rendering as an accessor's `recvRustType`).
+    rust_path: String,
+    /// "struct" | "enum".
+    kind: String,
+    /// `#[non_exhaustive]` on the type: its member set is NOT a stable
+    /// contract, so it must never surface as a record / closed union.
+    /// Detection failure reads as true.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    non_exhaustive: bool,
+    /// Some member is invisible or unreportable: a private / `#[doc(hidden)]`
+    /// / stripped field, a hidden or `#[non_exhaustive]` variant, or a member
+    /// whose type could not be rendered. The listed members are then a subset
+    /// of the real type and it must stay opaque.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    hidden_members: bool,
+    /// Struct fields, in declaration order (struct kind only).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    fields: Vec<TypeMember>,
+    /// Enum variants, in declaration order (enum kind only).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    variants: Vec<TypeVariantDecl>,
+}
+
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 struct PkgInfo {
@@ -485,6 +546,12 @@ struct PkgInfo {
     // type, whether reached through its definer or a re-exporter.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     foreign_type_ids: std::collections::BTreeMap<String, String>,
+    // Structural facts of every crate-local public struct/enum candidate for
+    // the transparent representation. The generator's decode classifies from
+    // these facts alone; a type without an entry is opaque by default, so the
+    // list only ever ENABLES transparency, never forces it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    types: Vec<ForeignTypeDecl>,
     // The absolute path to the author-supplied wrapper crate this package was
     // inspected from (a `--path <dir>` source), or empty for an ordinary
     // crates.io / git inspection. The generator emits a `path` dependency for a
@@ -683,6 +750,7 @@ fn main() {
                     transitive_deps: vec![],
                     features: vec![],
                     foreign_type_ids: std::collections::BTreeMap::new(),
+                    types: vec![],
                     wrapper_path: String::new(),
                 };
                 println!("{}", serde_json::to_string_pretty(&err).unwrap_or_default());
@@ -807,6 +875,7 @@ fn main() {
                 transitive_deps: vec![],
                 features: vec![],
                 foreign_type_ids: std::collections::BTreeMap::new(),
+                types: vec![],
                 wrapper_path: String::new(),
             };
             let body = serde_json::to_string_pretty(&err).unwrap_or_else(|_| {
@@ -3218,6 +3287,7 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
     let notes = facade_guidance(crate_name, functions.len(), doc);
 
     let foreign_type_ids = collect_foreign_type_ids(doc, &functions);
+    let types = collect_foreign_type_decls(index, &aliases);
     PkgInfo {
         pkg: crate_name.to_string(),
         name: crate_name.to_string(),
@@ -3231,6 +3301,7 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
         // Filled in by `inspect_crate` with the rustdoc-succeeded feature set (#100 Part B).
         features: Vec::new(),
         foreign_type_ids,
+        types,
         // Filled in by `inspect_crate` when the source was a `--path` wrapper crate.
         wrapper_path: String::new(),
     }
@@ -4246,6 +4317,193 @@ fn resolve_variant_fields(
         out.push((field_name, ty.clone(), ipe, rust));
     }
     Some(out)
+}
+
+/// True when a struct/enum declares a TYPE or CONST generic param (lifetime
+/// params elide). Such a type cannot surface transparently — its members
+/// mention unbound params. Detection failure reads generic (fail-closed).
+fn has_type_or_const_generics(data: &serde_json::Value) -> bool {
+    data.get("generics")
+        .and_then(|g| g.get("params"))
+        .and_then(|p| p.as_array())
+        .is_none_or(|params| {
+            params.iter().any(|p| {
+                p.get("kind")
+                    .is_none_or(|k| k.get("type").is_some() || k.get("const").is_some())
+            })
+        })
+}
+
+/// Collect the structural facts of every crate-local PUBLIC struct/enum the
+/// generator's transparent-or-opaque decode classifies from.
+///
+/// Facts only, fail-closed: an invisible or unrenderable member records
+/// `hidden_members = true` (that member is omitted), a hidden or
+/// `#[non_exhaustive]` VARIANT does the same, type-level `#[non_exhaustive]`
+/// records `non_exhaustive = true`, and every detection failure reads in the
+/// disqualifying direction. A generic type, a tuple/unit struct (no member
+/// names for a record), and an uninhabited enum get no entry at all —
+/// absence means opaque, so nothing here can widen the surface.
+fn collect_foreign_type_decls(
+    index: &serde_json::Map<String, serde_json::Value>,
+    aliases: &HashMap<String, String>,
+) -> Vec<ForeignTypeDecl> {
+    let mut out: Vec<ForeignTypeDecl> = Vec::new();
+    for (item_id, item) in index {
+        if item["crate_id"].as_u64().unwrap_or(1) != 0 {
+            continue;
+        }
+        if !is_public(item) || doc_hidden(item) {
+            continue;
+        }
+        let name = item["name"].as_str().unwrap_or("");
+        if name.is_empty() {
+            continue;
+        }
+        let inner = &item["inner"];
+        // The nominal renders through the same synthetic resolved_path the
+        // accessor walks use, so `name`/`rust_path` match `recvType`/
+        // `recvRustType` byte-for-byte.
+        let nominal_path = serde_json::json!({
+            "resolved_path": { "name": name, "path": name, "id": item_id, "args": null }
+        });
+        if let Some(struct_data) = inner.get("struct") {
+            if has_type_or_const_generics(struct_data) {
+                continue;
+            }
+            let Some(plain) = struct_data.get("kind").and_then(|k| k.get("plain")) else {
+                continue; // tuple / unit struct — no field names for a record
+            };
+            let Some(field_ids) = plain.get("fields").and_then(|f| f.as_array()) else {
+                continue;
+            };
+            let ipe_name = rustdoc_type_to_ipe(&nominal_path, aliases);
+            let rust_path = rustdoc_type_to_rust_str(&nominal_path);
+            if ipe_name.is_empty() || rust_path.is_empty() {
+                continue;
+            }
+            // A private field vanishes from `fields`; rustdoc records the
+            // omission in `has_stripped_fields`. Absence of the flag reads
+            // hidden (fail-closed).
+            let mut hidden = plain
+                .get("has_stripped_fields")
+                .is_none_or(|v| v.as_bool().unwrap_or(true));
+            let mut fields: Vec<TypeMember> = Vec::new();
+            for field_id in field_ids {
+                let fid = item_id_to_str(field_id);
+                let Some(field_item) = index.get(&fid) else {
+                    hidden = true;
+                    continue;
+                };
+                if !is_public(field_item) || doc_hidden(field_item) {
+                    hidden = true;
+                    continue;
+                }
+                let Some(field_name) = field_item["name"].as_str() else {
+                    hidden = true;
+                    continue;
+                };
+                let Some(field_ty) = field_item["inner"].get("struct_field") else {
+                    hidden = true;
+                    continue;
+                };
+                let ipe = rustdoc_type_to_ipe(field_ty, aliases);
+                let rust = rustdoc_type_to_rust_str(field_ty);
+                if ipe.is_empty() || rust.is_empty() {
+                    hidden = true;
+                    continue;
+                }
+                fields.push(TypeMember {
+                    name: field_name.to_string(),
+                    ty: ipe,
+                    rust_type: rust,
+                });
+            }
+            out.push(ForeignTypeDecl {
+                name: ipe_name,
+                rust_path,
+                kind: "struct".into(),
+                non_exhaustive: non_exhaustive(item),
+                hidden_members: hidden,
+                fields,
+                variants: Vec::new(),
+            });
+            continue;
+        }
+        if let Some(enum_data) = inner.get("enum") {
+            if has_type_or_const_generics(enum_data) {
+                continue;
+            }
+            let variant_ids: Vec<String> = enum_data
+                .get("variants")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().map(item_id_to_str).collect())
+                .unwrap_or_default();
+            if variant_ids.is_empty() {
+                continue; // uninhabited — no value can exist to surface
+            }
+            let ipe_name = rustdoc_type_to_ipe(&nominal_path, aliases);
+            let rust_path = rustdoc_type_to_rust_str(&nominal_path);
+            if ipe_name.is_empty() || rust_path.is_empty() {
+                continue;
+            }
+            let mut hidden = false;
+            let mut variants: Vec<TypeVariantDecl> = Vec::new();
+            for vid in &variant_ids {
+                let Some(variant_item) = index.get(vid) else {
+                    hidden = true;
+                    continue;
+                };
+                let variant_name = variant_item["name"].as_str().unwrap_or("");
+                // A doc-hidden variant still exists at runtime; a
+                // `#[non_exhaustive]` variant cannot be named in a pattern
+                // cross-crate. Either way the reported set is a subset of the
+                // real one, so the type must stay opaque.
+                if variant_name.is_empty()
+                    || doc_hidden(variant_item)
+                    || non_exhaustive(variant_item)
+                {
+                    hidden = true;
+                    continue;
+                }
+                let Some(variant_inner) = variant_item["inner"].get("variant") else {
+                    hidden = true;
+                    continue;
+                };
+                let Some((kind, field_ids)) = variant_kind(variant_inner) else {
+                    hidden = true;
+                    continue;
+                };
+                let Some(resolved) = resolve_variant_fields(&field_ids, index, aliases) else {
+                    hidden = true;
+                    continue;
+                };
+                variants.push(TypeVariantDecl {
+                    name: variant_name.to_string(),
+                    kind: kind.to_string(),
+                    members: resolved
+                        .into_iter()
+                        .map(|(member_name, _ty, ipe, rust)| TypeMember {
+                            name: member_name,
+                            ty: ipe,
+                            rust_type: rust,
+                        })
+                        .collect(),
+                });
+            }
+            out.push(ForeignTypeDecl {
+                name: ipe_name,
+                rust_path,
+                kind: "enum".into(),
+                non_exhaustive: non_exhaustive(item),
+                hidden_members: hidden,
+                fields: Vec::new(),
+                variants,
+            });
+        }
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name).then(a.rust_path.cmp(&b.rust_path)));
+    out
 }
 
 /// Emit the S3 enum bindings (ctors + tag + extractors) for one crate-local
@@ -8191,6 +8449,7 @@ fn pkg_error(name: &str, msg: &str) -> PkgInfo {
         transitive_deps: vec![],
         features: vec![],
         foreign_type_ids: std::collections::BTreeMap::new(),
+        types: vec![],
         wrapper_path: String::new(),
     }
 }
@@ -20980,6 +21239,234 @@ mod tests {
         assert!(
             !pkg.functions.iter().any(|f| f.name == "color_field"),
             "an enum field without std Clone must NOT bind a getter"
+        );
+    }
+
+    // ── transparent-representation type facts ───────────────────────────────
+
+    /// A doc with a fully-public plain struct `Point { x: i64, y: f64 }` and a
+    /// fully-visible enum `Shade` (unit `On`, tuple `Level(i64)`, struct
+    /// `Mix { amount: i64 }`), every item carrying an explicit empty `attrs`.
+    fn type_facts_doc() -> serde_json::Value {
+        serde_json::json!({
+            "root": 1,
+            "index": {
+                "1": { "name": "tm", "crate_id": 0, "visibility": "public",
+                    "inner": { "module": { "items": [ 7, 20 ], "is_crate": true } } },
+                "7": { "name": "Point", "crate_id": 0, "visibility": "public", "attrs": [],
+                    "inner": { "struct": {
+                        "kind": { "plain": { "fields": [ 8, 9 ], "has_stripped_fields": false } },
+                        "generics": { "params": [], "where_predicates": [] }
+                    } } },
+                "8": { "name": "x", "crate_id": 0, "visibility": "public", "attrs": [],
+                    "inner": { "struct_field": { "primitive": "i64" } } },
+                "9": { "name": "y", "crate_id": 0, "visibility": "public", "attrs": [],
+                    "inner": { "struct_field": { "primitive": "f64" } } },
+                "20": { "name": "Shade", "crate_id": 0, "visibility": "public", "attrs": [],
+                    "inner": { "enum": {
+                        "generics": { "params": [], "where_predicates": [] },
+                        "variants": [ 21, 22, 23 ]
+                    } } },
+                "21": { "name": "On", "crate_id": 0, "visibility": "default", "attrs": [],
+                    "inner": { "variant": { "kind": "plain" } } },
+                "22": { "name": "Level", "crate_id": 0, "visibility": "default", "attrs": [],
+                    "inner": { "variant": { "kind": { "tuple": [ 24 ] } } } },
+                "23": { "name": "Mix", "crate_id": 0, "visibility": "default", "attrs": [],
+                    "inner": { "variant": { "kind": { "struct": { "fields": [ 25 ],
+                        "has_stripped_fields": false } } } } },
+                "24": { "name": "0", "crate_id": 0, "visibility": "default", "attrs": [],
+                    "inner": { "struct_field": { "primitive": "i64" } } },
+                "25": { "name": "amount", "crate_id": 0, "visibility": "default", "attrs": [],
+                    "inner": { "struct_field": { "primitive": "i64" } } }
+            },
+            "paths": {
+                "1":  { "crate_id": 0, "path": ["tm"], "kind": "module" },
+                "7":  { "crate_id": 0, "path": ["tm","Point"], "kind": "struct" },
+                "20": { "crate_id": 0, "path": ["tm","Shade"], "kind": "enum" }
+            }
+        })
+    }
+
+    #[test]
+    fn type_facts_report_a_fully_public_struct_and_enum() {
+        let pkg = parse_rustdoc(&type_facts_doc(), "tm", "0.1.0");
+        assert_eq!(pkg.types.len(), 2, "Point and Shade must both report facts");
+        let point = pkg
+            .types
+            .iter()
+            .find(|t| t.name == "Point")
+            .expect("Point facts");
+        assert_eq!(point.kind, "struct");
+        assert!(!point.non_exhaustive, "attrs: [] must read exhaustive");
+        assert!(!point.hidden_members, "all fields public + unstripped");
+        let fields: Vec<(&str, &str, &str)> = point
+            .fields
+            .iter()
+            .map(|f| (f.name.as_str(), f.ty.as_str(), f.rust_type.as_str()))
+            .collect();
+        assert_eq!(fields, vec![("x", "Int", "i64"), ("y", "Float", "f64")]);
+        let shade = pkg
+            .types
+            .iter()
+            .find(|t| t.name == "Shade")
+            .expect("Shade facts");
+        assert_eq!(shade.kind, "enum");
+        assert!(!shade.non_exhaustive);
+        assert!(!shade.hidden_members);
+        let variants: Vec<(&str, &str, usize)> = shade
+            .variants
+            .iter()
+            .map(|v| (v.name.as_str(), v.kind.as_str(), v.members.len()))
+            .collect();
+        assert_eq!(
+            variants,
+            vec![
+                ("On", "unit", 0),
+                ("Level", "tuple", 1),
+                ("Mix", "struct", 1)
+            ]
+        );
+        assert_eq!(
+            shade
+                .variants
+                .get(1)
+                .and_then(|v| v.members.first())
+                .map(|m| m.name.as_str()),
+            Some("0"),
+            "a tuple slot is named by its decimal index"
+        );
+        assert_eq!(
+            shade
+                .variants
+                .get(2)
+                .and_then(|v| v.members.first())
+                .map(|m| m.name.as_str()),
+            Some("amount")
+        );
+    }
+
+    #[test]
+    fn type_facts_read_missing_attrs_as_non_exhaustive() {
+        let mut doc = type_facts_doc();
+        // Detection failure must read in the disqualifying direction.
+        doc["index"]["7"]
+            .as_object_mut()
+            .expect("Point item")
+            .remove("attrs");
+        let pkg = parse_rustdoc(&doc, "tm", "0.1.0");
+        let point = pkg
+            .types
+            .iter()
+            .find(|t| t.name == "Point")
+            .expect("Point facts");
+        assert!(
+            point.non_exhaustive,
+            "an item with no attrs evidence must NOT read as an exhaustive contract"
+        );
+    }
+
+    #[test]
+    fn type_facts_flag_stripped_fields_hidden() {
+        let mut doc = type_facts_doc();
+        doc["index"]["7"]["inner"]["struct"]["kind"]["plain"]["has_stripped_fields"] =
+            serde_json::json!(true);
+        let pkg = parse_rustdoc(&doc, "tm", "0.1.0");
+        let point = pkg
+            .types
+            .iter()
+            .find(|t| t.name == "Point")
+            .expect("Point facts");
+        assert!(
+            point.hidden_members,
+            "a stripped field must flag hidden members"
+        );
+
+        // The flag ABSENT entirely must read hidden too (fail-closed).
+        let mut doc = type_facts_doc();
+        doc["index"]["7"]["inner"]["struct"]["kind"]["plain"]
+            .as_object_mut()
+            .expect("plain struct kind")
+            .remove("has_stripped_fields");
+        let pkg = parse_rustdoc(&doc, "tm", "0.1.0");
+        let point = pkg
+            .types
+            .iter()
+            .find(|t| t.name == "Point")
+            .expect("Point facts");
+        assert!(
+            point.hidden_members,
+            "absence of the stripped-fields evidence must read hidden"
+        );
+    }
+
+    #[test]
+    fn type_facts_flag_non_public_field_hidden() {
+        let mut doc = type_facts_doc();
+        doc["index"]["9"]["visibility"] = serde_json::json!("crate");
+        let pkg = parse_rustdoc(&doc, "tm", "0.1.0");
+        let point = pkg
+            .types
+            .iter()
+            .find(|t| t.name == "Point")
+            .expect("Point facts");
+        assert!(
+            point.hidden_members,
+            "a pub(crate) field must flag hidden members"
+        );
+        assert_eq!(
+            point
+                .fields
+                .iter()
+                .map(|f| f.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["x"],
+            "the non-public field must not be listed"
+        );
+    }
+
+    #[test]
+    fn type_facts_skip_generic_and_tuple_structs() {
+        let mut doc = type_facts_doc();
+        // Make Point generic over T: no facts entry may survive.
+        doc["index"]["7"]["inner"]["struct"]["generics"]["params"] = serde_json::json!([
+            { "name": "T", "kind": { "type": { "bounds": [], "is_synthetic": false } } }
+        ]);
+        // Turn Shade's slot into a TUPLE struct: no field names, no entry.
+        doc["index"]["20"]["inner"] = serde_json::json!(
+            { "struct": { "kind": { "tuple": [ null ] },
+                "generics": { "params": [], "where_predicates": [] } } }
+        );
+        let pkg = parse_rustdoc(&doc, "tm", "0.1.0");
+        assert!(
+            pkg.types.is_empty(),
+            "a generic struct and a tuple struct must report no type facts"
+        );
+    }
+
+    #[test]
+    fn type_facts_flag_nonexhaustive_enum_and_hidden_variant() {
+        let pkg = parse_rustdoc(&nonexhaustive_enum_doc(), "tm", "0.1.0");
+        let color = pkg
+            .types
+            .iter()
+            .find(|t| t.name == "Color")
+            .expect("Color facts");
+        assert!(
+            color.non_exhaustive,
+            "enum-level #[non_exhaustive] must report"
+        );
+        assert!(
+            color.hidden_members,
+            "a variant-level #[non_exhaustive] variant must flag hidden members"
+        );
+        assert_eq!(
+            color
+                .variants
+                .iter()
+                .map(|v| v.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Red", "Code"],
+            "the unnameable variant must not be listed"
         );
     }
 }
