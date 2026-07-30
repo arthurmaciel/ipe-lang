@@ -64,7 +64,7 @@ try {
 
   // 2) The GitHub link points at the playground in this repo.
   const href = await page.getAttribute('a.gh', 'href');
-  if (href && href.includes('/arthurmaciel/ipe-lang') && href.includes('examples/wasm-language-playground')) {
+  if (href && href.includes('/arthurmaciel/ipe-lang') && href.includes('examples/wasm/language-playground')) {
     console.log('PASS: GitHub link resolves ->', href);
   } else { ok = false; fail('GitHub link wrong: ' + href); }
 

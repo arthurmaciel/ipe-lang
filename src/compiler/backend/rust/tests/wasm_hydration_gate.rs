@@ -163,7 +163,7 @@ fn gate_is_noop_for_native_mode() -> DResult<()> {
 
 /// Build a wasm-hydrate `Program` whose `Main` module declares a
 /// `fromHydrationState : { count : Int } -> { count : Int }` projection — the
-/// shape of the `examples/wasm-hydration` example. The `HydrationState` type is
+/// shape of the `examples/wasm/hydration` example. The `HydrationState` type is
 /// a RECORD ALIAS, so the backend synthesises it as a structural `RecCount`
 /// struct (NOT `MainHydrationState`) — the exact regression of issue #224.
 fn hydrate_program_with_record_projection(interner: &mut Interner) -> DResult<Program> {
