@@ -111,6 +111,22 @@ pub struct WasmConfig {
     pub opt_level: Option<String>,
 }
 
+impl WasmConfig {
+    /// Whether this config's `mode` implies the `WasmClient` compilation
+    /// target.
+    ///
+    /// `true` for any active mode (`"spa"`, `"hydrate"`, or any future on-value).
+    /// `false` for the explicit opt-out (`"off"`) and for the absent default
+    /// (no `[wasm]` section / no `mode` key — both leave `mode` as `None`).
+    #[must_use]
+    pub fn implies_wasm_target(&self) -> bool {
+        match self.mode.as_deref() {
+            None | Some("off") => false,
+            Some(_) => true,
+        }
+    }
+}
+
 /// The `[wasm].publicEnv` secret-name denylist (spec Q5 "Config: default-deny
 /// allowlist (+ layered secret denylist)").
 ///
@@ -1411,5 +1427,43 @@ import String
             "the error must name the offending dependency: {err}"
         );
         let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
+    }
+
+    // ── WasmConfig::implies_wasm_target ──────────────────────────────────────
+
+    #[test]
+    fn implies_wasm_target_spa_and_hydrate_are_on() {
+        assert!(
+            WasmConfig {
+                mode: Some("spa".to_owned()),
+                ..Default::default()
+            }
+            .implies_wasm_target(),
+            "mode=spa must imply wasm target"
+        );
+        assert!(
+            WasmConfig {
+                mode: Some("hydrate".to_owned()),
+                ..Default::default()
+            }
+            .implies_wasm_target(),
+            "mode=hydrate must imply wasm target"
+        );
+    }
+
+    #[test]
+    fn implies_wasm_target_off_and_absent_are_native() {
+        assert!(
+            !WasmConfig {
+                mode: Some("off".to_owned()),
+                ..Default::default()
+            }
+            .implies_wasm_target(),
+            "mode=off must not imply wasm target"
+        );
+        assert!(
+            !WasmConfig::default().implies_wasm_target(),
+            "absent mode (None) must not imply wasm target"
+        );
     }
 }
