@@ -26,8 +26,13 @@ concurrency:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    outputs:
+      # Forwarded so the lock-sync job can gate on a live release PR.
+      pr: ${{ steps.rp.outputs.pr }}
+      pr_branch: ${{ steps.rp.outputs.pr_branch }}
     steps:
       - uses: googleapis/release-please-action@v4
+        id: rp
         with:
           # A PAT, not GITHUB_TOKEN: GitHub does not trigger workflows for events
           # created by GITHUB_TOKEN, so a GITHUB_TOKEN-opened release PR never runs
@@ -37,3 +42,42 @@ jobs:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .github/.release-please-manifest.json
+
+  # Keep Cargo.lock in sync with whichever version Cargo.toml was bumped to.
+  #
+  # release-please updates Cargo.toml via the generic extra-files marker but
+  # never touches Cargo.lock, so `cargo build --locked` fails after a release
+  # and the next build dirties the lock. This job runs only when a release PR
+  # is open (not on the tag-push run where release_created=true), checks out
+  # the release branch, regenerates the lock for workspace members only, and
+  # force-pushes the result back — keeping the PR self-consistent.
+  sync-cargo-lock:
+    needs: release-please
+    # Run only when a release PR is open or was just refreshed.  When
+    # release-please fires on the merged PR it sets release_created=true and
+    # pr is empty; skip that run — the lock is already correct at that point
+    # because this job already synced it before the merge.
+    if: ${{ needs.release-please.outputs.pr != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.pr_branch }}
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Sync Cargo.lock to bumped workspace version
+        run: cargo update --workspace
+
+      - name: Commit updated Cargo.lock if changed
+        run: |
+          if git diff --quiet Cargo.lock; then
+            echo "Cargo.lock already up to date — nothing to commit."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock
+          git commit -m "chore: sync Cargo.lock to bumped workspace version"
+          git push
