@@ -117,19 +117,7 @@ pub fn render(d: &Diagnostic, file: &str, source: &str) -> String {
     }
 
     // Band 4 — help + note footer.
-    let mut footer: Vec<String> = Vec::new();
-    for line in &other_help {
-        let text = match line {
-            // A span-scoped suggestion can show the text it replaces, so it is
-            // rendered here (with source) rather than in the source-free
-            // `help_text`.
-            HelpLine::Suggest(s) => Some(suggestion_text(s, source)),
-            other => help_text(other),
-        };
-        if let Some(text) = text {
-            footer.push(text);
-        }
-    }
+    let mut footer = build_help_footer(&other_help, source);
     // Humble messaging: an internal compiler error (every `IPE-I*`) is a gap in
     // Ipê, not the reader's fault. Apologise plainly, Elm-style, and point at
     // the one issue tracker — never a raw backtrace, never false confidence.
@@ -156,11 +144,21 @@ pub fn render(d: &Diagnostic, file: &str, source: &str) -> String {
         out.push_str(&bar_pad);
         out.push_str(" |\n");
     }
+    // A footer entry may itself span several lines (a collapsed did-you-mean
+    // block). The first line carries the `= ` marker; continuation lines are
+    // aligned under it with blank gutter so the block reads as one help item.
+    let continuation = format!("{bar_pad}   ");
     for line in &footer {
-        out.push_str(&bar_pad);
-        out.push_str(" = ");
-        out.push_str(line);
-        out.push('\n');
+        for (n, part) in line.split('\n').enumerate() {
+            if n == 0 {
+                out.push_str(&bar_pad);
+                out.push_str(" = ");
+            } else {
+                out.push_str(&continuation);
+            }
+            out.push_str(part);
+            out.push('\n');
+        }
     }
 
     out
@@ -182,7 +180,19 @@ pub fn plain_message(d: &Diagnostic, source: &str) -> String {
         out.push_str(": ");
         out.push_str(&label);
     }
-    for line in &d.help() {
+    let help = d.help();
+    let mut idx = 0;
+    while let Some(line) = help.get(idx) {
+        if matches!(line, HelpLine::DidYouMean(_)) {
+            let mut names: Vec<&str> = Vec::new();
+            while let Some(HelpLine::DidYouMean(name)) = help.get(idx) {
+                names.push(name);
+                idx += 1;
+            }
+            out.push('\n');
+            out.push_str(&did_you_mean_footer(&names));
+            continue;
+        }
         let text = match line {
             HelpLine::Suggest(s) => Some(suggestion_text(s, source)),
             HelpLine::SecondarySpan { .. } => None,
@@ -192,6 +202,7 @@ pub fn plain_message(d: &Diagnostic, source: &str) -> String {
             out.push('\n');
             out.push_str(&text);
         }
+        idx += 1;
     }
     if let Diagnostic::CompilerBug { detail, .. } = d {
         if !detail.is_empty() {
@@ -651,6 +662,60 @@ const fn role_label(role: SpanRole) -> &'static str {
 // ===========================================================================
 // Help / note text
 // ===========================================================================
+
+/// Turn the non-secondary help lines into footer entries.
+///
+/// Consecutive `did you mean` lines collapse into a single
+/// `help: did you mean one of:` header + an indented candidate list (via
+/// [`did_you_mean_footer`]), so a suggestion universe of many near-misses is one
+/// help block, not one `= help:` line per candidate. Every other line renders
+/// through [`help_text`] (or [`suggestion_text`] for a source-scoped `Suggest`).
+/// An entry may itself contain newlines — the caller aligns continuation lines.
+fn build_help_footer(other_help: &[&HelpLine], source: &str) -> Vec<String> {
+    let mut footer: Vec<String> = Vec::new();
+    let mut idx = 0;
+    while let Some(line) = other_help.get(idx) {
+        if matches!(line, HelpLine::DidYouMean(_)) {
+            let mut names: Vec<&str> = Vec::new();
+            while let Some(HelpLine::DidYouMean(name)) = other_help.get(idx) {
+                names.push(name);
+                idx += 1;
+            }
+            footer.push(did_you_mean_footer(&names));
+            continue;
+        }
+        let text = match line {
+            HelpLine::Suggest(s) => Some(suggestion_text(s, source)),
+            other => help_text(other),
+        };
+        if let Some(text) = text {
+            footer.push(text);
+        }
+        idx += 1;
+    }
+    footer
+}
+
+/// Render a run of `did you mean` candidates as one footer entry.
+///
+/// A single candidate keeps the terse inline form (`help: did you mean `X`?`).
+/// Two or more collapse into a `help: did you mean one of:` header with each
+/// candidate on its own indented line — one help block instead of one
+/// `= help: did you mean` line per candidate. The returned string may contain
+/// newlines; the footer printer aligns the continuation lines.
+fn did_you_mean_footer(names: &[&str]) -> String {
+    match names {
+        [] => String::new(),
+        [only] => format!("help: did you mean `{only}`?"),
+        many => {
+            let mut block = String::from("help: did you mean one of:");
+            for name in many {
+                let _ = write!(block, "\n  `{name}`");
+            }
+            block
+        }
+    }
+}
 
 /// Render a non-secondary help line into a `<kind>: <text>` string (the leading
 /// `= ` is added by the caller). `None` drops the line.
@@ -1268,8 +1333,14 @@ mod tests {
             },
         };
         let out = render(&d, "n.ipe", "lenght\n");
-        let first = out.find("did you mean `length`?").unwrap_or(usize::MAX);
-        let second = out.find("did you mean `list`?").unwrap_or(0);
+        // Two-plus candidates collapse into one header; producer order of the
+        // candidate list is preserved (`length` before `list`).
+        assert!(
+            out.contains("did you mean one of:"),
+            "collapsed header:\n{out}"
+        );
+        let first = out.find("`length`").unwrap_or(usize::MAX);
+        let second = out.find("`list`").unwrap_or(0);
         assert!(first < second, "producer order preserved:\n{out}");
         // Stable across runs: re-render must be byte-identical.
         assert_eq!(out, render(&d, "n.ipe", "lenght\n"));
@@ -1330,6 +1401,66 @@ mod tests {
         );
         // Re-render is byte-identical (deterministic).
         assert_eq!(out, render(&d, "n.ipe", src));
+    }
+
+    #[test]
+    fn multiple_did_you_mean_collapse_to_one_header_with_indented_list() {
+        // Two-plus candidates render as ONE `did you mean one of:` help block,
+        // each candidate indented beneath — not one `= help:` line per
+        // candidate.
+        let src = "import Fooo\n";
+        let d = Diagnostic::Name {
+            span: Span::new(7, 11),
+            msg: NameError::ModuleNotFound {
+                name: "Fooo".into(),
+                suggestions: Box::new(["Foo".into(), "Food".into(), "Fool".into()]),
+            },
+        };
+        let out = render(&d, "n.ipe", src);
+        assert_eq!(
+            out.matches("did you mean").count(),
+            1,
+            "exactly one did-you-mean header, got:\n{out}"
+        );
+        assert!(
+            out.contains("= help: did you mean one of:"),
+            "collapsed header:\n{out}"
+        );
+        for name in ["Foo", "Food", "Fool"] {
+            assert!(
+                out.contains(&format!("`{name}`")),
+                "candidate `{name}` indented beneath, got:\n{out}"
+            );
+        }
+        // The candidate lines carry no `= ` marker — they belong to the block.
+        assert!(
+            !out.contains("= help: did you mean `Foo`?"),
+            "no per-candidate help line survives:\n{out}"
+        );
+        assert_eq!(out, render(&d, "n.ipe", src), "deterministic re-render");
+    }
+
+    #[test]
+    fn single_did_you_mean_keeps_the_terse_inline_form() {
+        // A lone candidate that is NOT machine-applicable (a `DidYouMean`, not a
+        // `Suggest`) keeps `help: did you mean `X`?`, never the `one of:` block.
+        let d = Diagnostic::Name {
+            span: Span::DUMMY,
+            msg: NameError::ModuleNotFound {
+                name: "Foo".into(),
+                suggestions: Box::new(["Food".into(), "Fool".into()]),
+            },
+        };
+        // Craft a genuine single-DidYouMean via `help()` directly: a two-plus
+        // suggestion list is the only ModuleNotFound path to `DidYouMean`, so a
+        // single-candidate `DidYouMean` block is exercised through the helper.
+        assert_eq!(did_you_mean_footer(&["Food"]), "help: did you mean `Food`?");
+        // And the multi-form collapses.
+        assert_eq!(
+            did_you_mean_footer(&["Food", "Fool"]),
+            "help: did you mean one of:\n  `Food`\n  `Fool`"
+        );
+        let _ = d;
     }
 
     #[test]

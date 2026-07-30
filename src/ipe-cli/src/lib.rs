@@ -964,7 +964,11 @@ fn attribute_post_link_error(
             source_for_span_in_linked(linked, home_to_source, entry, diag_span(&diag))
         })
     };
-    CliError::Pipeline { file, src, diag }
+    CliError::Pipeline {
+        file,
+        src,
+        diag: Box::new(diag),
+    }
 }
 
 /// Demand `canonicalize` for every module in dep-first order, attributing a
@@ -992,7 +996,7 @@ fn attribute_canon_errors(
         ipe_db::topo_order(db, source_root, entry_file).map_err(|diag| CliError::Pipeline {
             file: blame_path.to_path_buf(),
             src: String::new(),
-            diag,
+            diag: Box::new(diag),
         })?;
     for mod_path in topo.iter() {
         let Some((path, src)) = sources.get(mod_path) else {
@@ -1008,7 +1012,7 @@ fn attribute_canon_errors(
         ipe_db::canonicalize(db, source_root, file_handle).map_err(|diag| CliError::Pipeline {
             file: path.clone(),
             src: src.clone(),
-            diag,
+            diag: Box::new(diag),
         })?;
     }
     Ok(())
@@ -2726,7 +2730,11 @@ impl SourceGraph {
                     // one the user asked about; a link error would already have
                     // surfaced from the canon blame loop or a build.
                     let _ = link_diag;
-                    CliError::Pipeline { file, src, diag }
+                    CliError::Pipeline {
+                        file,
+                        src,
+                        diag: Box::new(diag),
+                    }
                 }
             }
         })
