@@ -306,13 +306,17 @@ pub fn main_rec_sum(r: RecXY) -> i64 {
     })
 }
 pub fn main_let_parts() -> i64 {
-    ({
-        let (a, b) = (10, 20);
+    static CELL: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+    CELL.get_or_init(|| {
         ({
-            let RecXY { x, y, .. } = RecXY { x: 1, y: 2 };
-            (((a + b) + x) + y)
+            let (a, b) = (10, 20);
+            ({
+                let RecXY { x, y, .. } = RecXY { x: 1, y: 2 };
+                (((a + b) + x) + y)
+            })
         })
     })
+    .clone()
 }
 pub fn ipe_main() -> IpeTask<()> {
     io_println(string_from_int(

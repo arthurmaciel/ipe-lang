@@ -219,9 +219,15 @@ fn unit_value_and_type_render() -> DResult<()> {
     };
     let src = emit(&i, &prog)?;
 
+    // A zero-parameter binding is a CAF (constant applicative form): its body is
+    // evaluated once behind a share-once cell, so the unit value `()` is produced
+    // inside `get_or_init`. Both the unit value and the unit return type still
+    // render as `()`.
     assert!(
-        src.contains("pub fn main_nop() -> () {\n    ()\n}"),
-        "unit value and unit return type must both render as `()`; got:\n{src}"
+        src.contains("pub fn main_nop() -> () {")
+            && src.contains("static CELL: std::sync::OnceLock<()> = std::sync::OnceLock::new();")
+            && src.contains("CELL.get_or_init(|| ()).clone()"),
+        "unit value and unit return type must both render as `()`, shared once; got:\n{src}"
     );
     Ok(())
 }

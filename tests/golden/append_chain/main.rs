@@ -242,15 +242,19 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 }
 
 pub fn main_sentence() -> String {
-    format!(
-        "{}{}",
-        "a".to_string(),
+    static CELL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    CELL.get_or_init(|| {
         format!(
             "{}{}",
-            "b".to_string(),
-            format!("{}{}", "c".to_string(), "d".to_string())
+            "a".to_string(),
+            format!(
+                "{}{}",
+                "b".to_string(),
+                format!("{}{}", "c".to_string(), "d".to_string())
+            )
         )
-    )
+    })
+    .clone()
 }
 pub fn ipe_main() -> IpeTask<()> {
     io_println(crate::main_sentence())

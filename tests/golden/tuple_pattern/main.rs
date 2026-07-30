@@ -254,10 +254,14 @@ pub fn main_snd<T1: Clone, T2: Clone>(arg_1: (T1, T2)) -> T2 {
     })
 }
 pub fn main_pair_sum() -> i64 {
-    ({
-        let (a, b) = (1, 2);
-        (a + b)
+    static CELL: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+    CELL.get_or_init(|| {
+        ({
+            let (a, b) = (1, 2);
+            (a + b)
+        })
     })
+    .clone()
 }
 pub fn ipe_main() -> IpeTask<()> {
     io_println(string_from_int(

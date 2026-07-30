@@ -242,7 +242,8 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 }
 
 pub fn main_half() -> f64 {
-    (3.0 / 2.0)
+    static CELL: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+    CELL.get_or_init(|| (3.0 / 2.0)).clone()
 }
 pub fn ipe_main() -> IpeTask<()> {
     io_println(string_from_float(crate::main_half()))
