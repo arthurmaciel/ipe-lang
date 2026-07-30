@@ -343,23 +343,33 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "doc",
-        summary: "Generate API documentation (docs.json + Markdown + HTML) for a package, preview it, or check coverage.",
-        args: "[serve|check] [<path>]",
-        args_desc: "The package to document — a directory or a single .ipe file (defaults to the \
-                    current project). A leading `serve` builds the HTML site and previews it on \
-                    loopback; `check` verifies doc-comment coverage instead of writing files.",
+        summary: "Generate API documentation (docs.json + Markdown + HTML), query the stdlib, list modules, preview, or check coverage.",
+        args: "[--list | <Module.Name> | serve | check] [<path>]",
+        args_desc: "Without a subcommand: generate docs.json + renderings for the project and stdlib. \
+                    `--list`: list all stdlib + project modules (one per line). \
+                    `<Module.Name>`: show one module's types and values with signatures (e.g. `ipe doc Ipe.List`). \
+                    `serve`: build the HTML site and preview it on loopback. \
+                    `check`: verify doc-comment coverage for project modules (stdlib is exempt).",
         options: &[
             Opt {
                 flag: "[--out <dir>]",
                 desc: "write the documentation to <dir> (default: doc/); generate only",
             },
             Opt {
-                flag: "[--format markdown|json|html|all]",
+                flag: "[--write-format markdown|json|html|all]",
                 desc: "which renderings to write beside docs.json (default: all); generate only",
             },
             Opt {
                 flag: "[--port <n>]",
                 desc: "pin the serve port (default: an auto-selected free one); serve only",
+            },
+            Opt {
+                flag: "[--plain]",
+                desc: "bare output, one entry per line; --list and <module> only",
+            },
+            Opt {
+                flag: "[--json]",
+                desc: "machine-readable JSON output; --list and <module> only",
             },
         ],
     },

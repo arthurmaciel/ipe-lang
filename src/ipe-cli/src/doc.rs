@@ -8,13 +8,20 @@
 //! invalid flag combination is unrepresentable downstream (parse, don't validate;
 //! make-invalid-states-unrepresentable):
 //!
-//! * `ipe doc [PATH] [--out DIR] [--format markdown|json|html|all]` — generate
-//!   `docs.json` plus the selected human-facing renderings.
+//! * `ipe doc [PATH] [--out DIR] [--write-format markdown|json|html|all]` — generate
+//!   `docs.json` plus the selected human-facing renderings. Includes all stdlib modules
+//!   (both compiled-source and kernel-backed) alongside the project's own modules.
+//! * `ipe doc --list [--plain|--json]` — list all stdlib modules (and project modules),
+//!   one per line. Default: guttered human output; `--plain`: bare names; `--json`:
+//!   `{"modules":[…]}`.
+//! * `ipe doc <MODULE> [--plain|--json]` — dump one module's exposed types, values, and
+//!   functions with their type signatures (e.g. `ipe doc Ipe.List`). Default: human;
+//!   `--plain`: flush-left; `--json`: stable structured record.
 //! * `ipe doc serve [PATH] [--port N]` — build the HTML site and preview it
 //!   read-only on `http://127.0.0.1:<port>` (loopback only; the port defaults to
 //!   an auto-selected free one).
 //! * `ipe doc check [PATH]` — a coverage gate that writes nothing and exits
-//!   non-zero when an exposed binding lacks a doc-comment.
+//!   non-zero when an exposed binding lacks a doc-comment. Stdlib modules are exempt.
 //!
 //! The machine-readable [`docs.json`](DocsJson) is the source of truth — one
 //! record per exposed module, with the module's doc-comment and its exposed
@@ -41,6 +48,21 @@
 //! ([`scan_doc_comments`]) that is joined to the checked surface by binding name.
 //! Neither pass runs the emit tier — `ipe doc` needs types, not code.
 //!
+//! ## Stdlib coverage
+//!
+//! Two kinds of stdlib module exist:
+//!
+//! * **Compiled-source** (`ipe_stdlib::COMPILED_STD_MODULES`): modules with embedded Ipê
+//!   source (e.g. `Ipe.Css`, `Ipe.Test`). These are type-checked through the same
+//!   pipeline as project modules; their doc-comments are scanned from the embedded source.
+//! * **Kernel-qualifier** (`ipe_canon::STDLIB_MODULE_QUALIFIERS`): modules backed by the
+//!   kernel registry (e.g. `Ipe.List`, `Ipe.String`). Type signatures come from
+//!   [`ipe_types::kernel_type_table`]; doc-comments are absent (signatures are the
+//!   contract).
+//!
+//! `ipe doc check` exempts stdlib modules from the coverage gate — signatures are
+//! sufficient; prose is optional for compiler-internal stdlib.
+//!
 //! Still out of scope (tracked separately): inter-*package* linking (needs the
 //! package index), full-text search, and remote hosting. `serve` is a local
 //! read-only preview of the static site, never a publish path.
@@ -49,23 +71,26 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use ipe_diagnostics::TyDoc;
+use ipe_diagnostics::{TyDoc, render_ty};
+use ipe_intern::Interner;
+use ipe_types::{VarNamer, kernel_type_table, ty_to_doc};
 
 use crate::CliError;
 use crate::api_surface::{ModuleApi, ModulePath, PublicApi, UnionApi, extract_tree, read_tree};
+use crate::cli_args::OutputFormat;
 
 /// The `docs.json` schema version. Bumped only on an incompatible shape change,
 /// so a consumer can refuse a document it does not understand rather than
 /// mis-reading it.
 pub const DOCS_JSON_VERSION: u32 = 1;
 
-/// Which renderings `ipe doc` writes — a closed set, so an unknown `--format`
+/// Which renderings `ipe doc` writes — a closed set, so an unknown `--write-format`
 /// value is rejected at the CLI boundary rather than carried downstream.
 ///
 /// `docs.json` (the machine-readable source of truth) is always written; a
-/// [`Format`] selects which human-facing view(s) are written beside it.
+/// [`WriteFormat`] selects which human-facing view(s) are written beside it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Format {
+pub enum WriteFormat {
     /// `docs.json` only — the machine-readable source of truth.
     Json,
     /// `docs.json` + per-module Markdown.
@@ -76,7 +101,7 @@ pub enum Format {
     All,
 }
 
-impl Format {
+impl WriteFormat {
     /// Whether this format writes the per-module Markdown.
     const fn wants_markdown(self) -> bool {
         matches!(self, Self::Markdown | Self::All)
@@ -92,9 +117,9 @@ impl Format {
 ///
 /// No code past the parser can hold an invalid mix
 /// (make-invalid-states-unrepresentable). `Generate` carries only its own flags
-/// (`--out`, `--format`); `Serve` carries only `--port`; `Check` carries none —
-/// so `ipe doc check --out X`, `ipe doc serve --format json`, and
-/// `ipe doc --port N` have no representation to construct.
+/// (`--out`, `--write-format`); `Serve` carries only `--port`; `Check` carries
+/// none; `List` and `Query` carry only `--plain`/`--json` — so mixing flags
+/// across subcommands has no representation to construct.
 #[derive(Debug, PartialEq, Eq)]
 pub enum DocMode {
     /// Write `docs.json` and the selected renderings to `out`.
@@ -104,7 +129,7 @@ pub enum DocMode {
         /// Where the rendered documentation is written.
         out: PathBuf,
         /// Which human-facing renderings are written beside `docs.json`.
-        format: Format,
+        write_format: WriteFormat,
     },
     /// Build the HTML site and serve it read-only on loopback.
     Serve {
@@ -117,8 +142,22 @@ pub enum DocMode {
     },
     /// Verify every exposed binding is documented; write nothing.
     Check {
-        /// The package to check.
+        /// The package to check (only project modules, never stdlib).
         path: PathBuf,
+    },
+    /// List all stdlib + project module names.
+    List {
+        /// The package whose modules are listed alongside stdlib (defaults to `.`).
+        path: PathBuf,
+        /// How to render the list.
+        format: OutputFormat,
+    },
+    /// Print one module's exposed types and values with their type signatures.
+    Query {
+        /// The dotted module name to look up (e.g. `Ipe.List`).
+        module: String,
+        /// How to render the result.
+        format: OutputFormat,
     },
 }
 
@@ -134,52 +173,116 @@ enum Sub {
     Generate,
     Serve,
     Check,
+    List,
+    Query(String),
+}
+
+/// Accumulated flag values while parsing `ipe doc`'s argument tail.
+#[derive(Default)]
+struct ParsedFlags {
+    path: Option<String>,
+    out: Option<String>,
+    write_format: Option<WriteFormat>,
+    port: Option<u16>,
+    output_format: Option<OutputFormat>,
 }
 
 /// Parse `ipe doc`'s argument tail into a [`DocMode`].
 ///
-/// The bare form is `generate`; a leading `serve` or `check` selects that
-/// subcommand. Each subcommand accepts ONLY its own flags — `--out`/`--format`
-/// under `generate`, `--port` under `serve`, none under `check` — so a flag
-/// meaningless for the chosen subcommand is rejected here rather than carried
-/// into an unrepresentable [`DocMode`].
+/// The bare form is `generate`; a leading `serve`, `check`, or `--list` selects
+/// that subcommand; a leading non-flag positional that looks like a dotted
+/// module name (starts with an uppercase letter) selects `query`. Each
+/// subcommand accepts ONLY its own flags, so a flag meaningless for the chosen
+/// subcommand is rejected here rather than carried into an unrepresentable
+/// [`DocMode`].
 ///
 /// # Errors
-/// [`CliError::Usage`] / [`CliError::UsageOwned`] naming the exact problem: an
-/// unknown flag, a flag meaningless for the chosen subcommand, a repeated or
-/// value-less flag, an unknown `--format`, a malformed `--port`, or a second
-/// positional path.
+/// [`CliError::Usage`] / [`CliError::UsageOwned`] naming the exact problem.
 pub fn parse_doc(rest: &[String]) -> Result<DocMode, CliError> {
     let mut it = rest.iter().peekable();
 
-    let sub = match it.peek().map(|s| s.as_str()) {
-        Some("serve") => {
-            it.next();
-            Sub::Serve
+    // Detect `--list` as a flag-style subcommand (before checking positionals).
+    let has_list_flag = rest.iter().any(|s| s == "--list");
+
+    let sub = if has_list_flag {
+        // Consume any `--list` flag found; the rest are positional/format flags.
+        Sub::List
+    } else {
+        match it.peek().map(|s| s.as_str()) {
+            Some("serve") => {
+                it.next();
+                Sub::Serve
+            }
+            Some("check") => {
+                it.next();
+                Sub::Check
+            }
+            // A dotted-path positional starting with uppercase is a module query.
+            Some(first)
+                if !first.starts_with('-')
+                    && first.chars().next().is_some_and(|c| c.is_ascii_uppercase()) =>
+            {
+                let name = (*first).to_owned();
+                it.next(); // advance past the peeked token
+                Sub::Query(name)
+            }
+            _ => Sub::Generate,
         }
-        Some("check") => {
-            it.next();
-            Sub::Check
-        }
-        _ => Sub::Generate,
     };
 
-    let mut path: Option<String> = None;
-    let mut out: Option<String> = None;
-    let mut format: Option<Format> = None;
-    let mut port: Option<u16> = None;
+    let mut flags = ParsedFlags::default();
+    parse_doc_flags(&mut it, &sub, &mut flags)?;
+
+    let path = PathBuf::from(flags.path.as_deref().unwrap_or(DEFAULT_PATH));
+    let format = flags.output_format.unwrap_or_default();
+    Ok(match sub {
+        Sub::Generate => DocMode::Generate {
+            path,
+            out: PathBuf::from(flags.out.as_deref().unwrap_or(DEFAULT_OUT)),
+            write_format: flags.write_format.unwrap_or(WriteFormat::All),
+        },
+        Sub::Serve => DocMode::Serve {
+            path,
+            port: flags.port,
+        },
+        Sub::Check => DocMode::Check { path },
+        Sub::List => DocMode::List { path, format },
+        Sub::Query(module) => DocMode::Query { module, format },
+    })
+}
+
+/// Parse the flag portion of `ipe doc`'s argument tail into [`ParsedFlags`].
+///
+/// Called from [`parse_doc`] after the leading subcommand token has been
+/// consumed. Rejects any flag that does not belong to `sub`.
+///
+/// # Errors
+/// [`CliError::Usage`] / [`CliError::UsageOwned`] for an unknown or misplaced flag.
+fn parse_doc_flags(
+    it: &mut std::iter::Peekable<std::slice::Iter<'_, String>>,
+    sub: &Sub,
+    flags: &mut ParsedFlags,
+) -> Result<(), CliError> {
     while let Some(arg) = it.next() {
         match arg.as_str() {
-            "--out" | "--format" if !matches!(sub, Sub::Generate) => {
+            // Skip the `--list` flag itself — already handled by the caller.
+            "--list" => {}
+            "--out" | "--write-format" if !matches!(sub, Sub::Generate) => {
                 return Err(CliError::UsageOwned(format!(
                     "ipe doc {}: {arg} is a generate-only flag; run `ipe doc` to write files",
-                    sub_name(&sub)
+                    sub_name(sub)
                 )));
             }
             "--port" if !matches!(sub, Sub::Serve) => {
                 return Err(CliError::UsageOwned(format!(
                     "ipe doc {}: --port applies only to `ipe doc serve`",
-                    sub_name(&sub)
+                    sub_name(sub)
+                )));
+            }
+            "--plain" | "--json" if !matches!(sub, Sub::List | Sub::Query(_)) => {
+                return Err(CliError::UsageOwned(format!(
+                    "ipe doc {}: {arg} applies only to `--list` and `<module>` queries",
+                    sub_name(sub)
                 )));
             }
             "--out" => {
@@ -187,30 +290,48 @@ pub fn parse_doc(rest: &[String]) -> Result<DocMode, CliError> {
                     .next()
                     .cloned()
                     .ok_or(CliError::Usage("ipe doc: --out needs a directory"))?;
-                if out.is_some() {
+                if flags.out.is_some() {
                     return Err(CliError::Usage("ipe doc: --out given more than once"));
                 }
-                out = Some(value);
+                flags.out = Some(value);
             }
-            "--format" => {
+            "--write-format" => {
                 let value = it
                     .next()
-                    .ok_or(CliError::Usage("ipe doc: --format needs a value"))?;
-                if format.is_some() {
-                    return Err(CliError::Usage("ipe doc: --format given more than once"));
+                    .ok_or(CliError::Usage("ipe doc: --write-format needs a value"))?;
+                if flags.write_format.is_some() {
+                    return Err(CliError::Usage(
+                        "ipe doc: --write-format given more than once",
+                    ));
                 }
-                format = Some(parse_format(value)?);
+                flags.write_format = Some(parse_write_format(value)?);
             }
             "--port" => {
                 let value = it
                     .next()
                     .ok_or(CliError::Usage("ipe doc serve: --port needs a number"))?;
-                if port.is_some() {
+                if flags.port.is_some() {
                     return Err(CliError::Usage(
                         "ipe doc serve: --port given more than once",
                     ));
                 }
-                port = Some(parse_port(value)?);
+                flags.port = Some(parse_port(value)?);
+            }
+            "--plain" => {
+                if flags.output_format.is_some() {
+                    return Err(CliError::Usage(
+                        "ipe doc: --plain and --json are mutually exclusive",
+                    ));
+                }
+                flags.output_format = Some(OutputFormat::Plain);
+            }
+            "--json" => {
+                if flags.output_format.is_some() {
+                    return Err(CliError::Usage(
+                        "ipe doc: --plain and --json are mutually exclusive",
+                    ));
+                }
+                flags.output_format = Some(OutputFormat::Json);
             }
             flag if flag.starts_with('-') => {
                 return Err(CliError::UsageOwned(format!(
@@ -218,26 +339,21 @@ pub fn parse_doc(rest: &[String]) -> Result<DocMode, CliError> {
                 )));
             }
             positional => {
-                if path.is_some() {
+                if matches!(sub, Sub::Query(_)) {
+                    return Err(CliError::Usage(
+                        "ipe doc: expected a single <module> argument",
+                    ));
+                }
+                if flags.path.is_some() {
                     return Err(CliError::Usage(
                         "ipe doc: expected a single <path> argument",
                     ));
                 }
-                path = Some(positional.to_owned());
+                flags.path = Some(positional.to_owned());
             }
         }
     }
-
-    let path = PathBuf::from(path.as_deref().unwrap_or(DEFAULT_PATH));
-    Ok(match sub {
-        Sub::Generate => DocMode::Generate {
-            path,
-            out: PathBuf::from(out.as_deref().unwrap_or(DEFAULT_OUT)),
-            format: format.unwrap_or(Format::All),
-        },
-        Sub::Serve => DocMode::Serve { path, port },
-        Sub::Check => DocMode::Check { path },
-    })
+    Ok(())
 }
 
 /// The subcommand's name for an error message.
@@ -246,18 +362,20 @@ const fn sub_name(sub: &Sub) -> &'static str {
         Sub::Generate => "generate",
         Sub::Serve => "serve",
         Sub::Check => "check",
+        Sub::List => "--list",
+        Sub::Query(_) => "<module>",
     }
 }
 
-/// Parse a `--format` value into a [`Format`], rejecting an unknown spelling.
-fn parse_format(value: &str) -> Result<Format, CliError> {
+/// Parse a `--write-format` value into a [`WriteFormat`], rejecting an unknown spelling.
+fn parse_write_format(value: &str) -> Result<WriteFormat, CliError> {
     match value {
-        "json" => Ok(Format::Json),
-        "markdown" => Ok(Format::Markdown),
-        "html" => Ok(Format::Html),
-        "all" => Ok(Format::All),
+        "json" => Ok(WriteFormat::Json),
+        "markdown" => Ok(WriteFormat::Markdown),
+        "html" => Ok(WriteFormat::Html),
+        "all" => Ok(WriteFormat::All),
         other => Err(CliError::UsageOwned(format!(
-            "ipe doc: unknown --format `{other}` (want markdown | json | html | all)"
+            "ipe doc: unknown --write-format `{other}` (want markdown | json | html | all)"
         ))),
     }
 }
@@ -285,9 +403,18 @@ fn parse_port(value: &str) -> Result<u16, CliError> {
 /// coverage report when `check` finds an undocumented binding.
 pub fn run_doc(rest: &[String]) -> Result<(), CliError> {
     match parse_doc(rest)? {
-        DocMode::Generate { path, out, format } => generate(&path, &out, format),
+        DocMode::Generate {
+            path,
+            out,
+            write_format,
+        } => generate(&path, &out, write_format),
         DocMode::Serve { path, port } => serve(&path, port),
         DocMode::Check { path } => check(&path),
+        DocMode::List { path, format } => {
+            list_modules(&path, format);
+            Ok(())
+        }
+        DocMode::Query { module, format } => query_module(&module, format),
     }
 }
 
@@ -303,7 +430,7 @@ pub struct DocsJson {
 
 /// One exposed module's documentation: its doc-comment plus its exposed unions
 /// and values.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModuleDoc {
     /// The dotted module name (`Ipe.String`).
     pub name: String,
@@ -316,7 +443,7 @@ pub struct ModuleDoc {
 }
 
 /// One exposed value's documentation.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValueDoc {
     /// The value name.
     pub name: String,
@@ -332,7 +459,7 @@ pub struct ValueDoc {
 }
 
 /// One exposed union type's documentation.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnionDoc {
     /// The union type name.
     pub name: String,
@@ -345,7 +472,7 @@ pub struct UnionDoc {
 }
 
 /// One constructor's rendered shape.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CtorDoc {
     /// The constructor name.
     pub name: String,
@@ -364,11 +491,65 @@ struct Undocumented {
     name: String,
 }
 
-/// Build the in-memory [`DocsJson`] for the package at `path`.
+/// Build the in-memory [`DocsJson`] for the package at `path`, including both
+/// project modules and all stdlib modules (compiled-source + kernel-backed).
 ///
-/// Joins the checker-provided public API (signatures + union shapes) with the
-/// source-scanned doc-comments, by binding name per module.
+/// Project modules go through the existing `extract_tree` + `read_tree` pipeline.
+/// Compiled-source stdlib modules go through the same type-checker path.
+/// Kernel-qualifier stdlib modules use [`kernel_type_table`] for signatures.
+///
+/// Modules are listed in name order: stdlib first (alphabetically), then project.
 fn build_docs(path: &Path) -> Result<DocsJson, CliError> {
+    let api: PublicApi = extract_tree(path).map_err(CliError::from)?;
+    let sources = read_tree(path).map_err(CliError::from)?;
+
+    // Collect project modules.
+    let mut project_modules: Vec<ModuleDoc> = Vec::with_capacity(api.modules.len());
+    for (module_path, module_api) in &api.modules {
+        let comments = sources
+            .get(module_path)
+            .map(|(_, src)| scan_doc_comments(src))
+            .unwrap_or_default();
+        project_modules.push(module_doc(module_path, module_api, &comments));
+    }
+
+    // Collect stdlib modules (both compiled-source and kernel-backed).
+    let stdlib = build_stdlib_docs();
+
+    // Merge: stdlib first (by name), then project (by name).
+    let mut modules = stdlib;
+    modules.extend(project_modules);
+    modules.sort_by(|a, b| a.name.cmp(&b.name));
+    // Remove duplicates: if a project module shadows a stdlib name, project wins.
+    modules.dedup_by(|later, earlier| {
+        if later.name == earlier.name {
+            // Keep later (which was project after sort if names were equal).
+            *earlier = std::mem::replace(
+                later,
+                ModuleDoc {
+                    name: String::new(),
+                    comment: String::new(),
+                    unions: Vec::new(),
+                    values: Vec::new(),
+                },
+            );
+            true
+        } else {
+            false
+        }
+    });
+    modules.retain(|m| !m.name.is_empty());
+
+    Ok(DocsJson {
+        version: DOCS_JSON_VERSION,
+        modules,
+    })
+}
+
+/// Build the in-memory [`DocsJson`] for the package at `path`, project modules only.
+///
+/// Used by `check` — stdlib modules are exempt from the coverage gate.
+fn build_project_docs(path: &Path) -> Result<DocsJson, CliError> {
     let api: PublicApi = extract_tree(path).map_err(CliError::from)?;
     let sources = read_tree(path).map_err(CliError::from)?;
 
@@ -384,6 +565,311 @@ fn build_docs(path: &Path) -> Result<DocsJson, CliError> {
         version: DOCS_JSON_VERSION,
         modules,
     })
+}
+
+/// Enumerate every stdlib module name (both compiled-source and kernel-qualifier),
+/// sorted alphabetically.
+fn stdlib_module_names() -> Vec<String> {
+    let mut names: BTreeSet<String> = BTreeSet::new();
+
+    // Compiled-source modules (Ipe.Css, Ipe.Test, …).
+    for m in ipe_stdlib::COMPILED_STD_MODULES {
+        names.insert(m.dotted.to_owned());
+    }
+
+    // Kernel-qualifier modules (Ipe.List, Ipe.String, …).
+    for (segments, _qualifier) in ipe_canon::STDLIB_MODULE_QUALIFIERS {
+        names.insert(segments.join("."));
+    }
+
+    names.into_iter().collect()
+}
+
+/// Build [`ModuleDoc`]s for every stdlib module.
+///
+/// Compiled-source modules are type-checked using the same pipeline as project
+/// modules (injecting each individually as a minimal package). Kernel-qualifier
+/// modules use [`kernel_type_table`] for type signatures; doc-comments are empty
+/// (signatures are the contract for kernel-backed stdlib).
+fn build_stdlib_docs() -> Vec<ModuleDoc> {
+    let mut modules: BTreeMap<String, ModuleDoc> = BTreeMap::new();
+
+    // ── Compiled-source stdlib modules ────────────────────────────────────────
+    // Each compiled-source module is injected as a minimal single-module package
+    // and type-checked through the standard pipeline. Signatures and unions come
+    // from the type checker; doc-comments are scanned from the embedded source.
+    // A module that fails to type-check is silently omitted — it will still
+    // appear as a name in `--list`, but without signatures.
+    for csm in ipe_stdlib::COMPILED_STD_MODULES {
+        let segments: Vec<String> = csm.dotted.split('.').map(str::to_owned).collect();
+        if let Ok(module_doc) = build_compiled_std_module_doc(&segments, csm.source) {
+            modules.insert(csm.dotted.to_owned(), module_doc);
+        }
+    }
+
+    // ── Kernel-qualifier stdlib modules ───────────────────────────────────────
+    // Signatures come from kernel_type_table; doc-comments are absent for these
+    // compiler-internal modules (signatures are the contract). If the kernel
+    // type table cannot be constructed, kernel modules are omitted (names still
+    // appear in --list via stdlib_module_names).
+    if let Ok(kernel_docs) = build_kernel_module_docs() {
+        for (name, doc) in kernel_docs {
+            modules.entry(name).or_insert(doc);
+        }
+    }
+
+    modules.into_values().collect()
+}
+
+/// Build a [`ModuleDoc`] for one compiled-source stdlib module by type-checking
+/// its embedded source through the standard pipeline.
+///
+/// The module is presented as a minimal in-memory project so the type checker
+/// processes it identically to a user module with the same source.
+fn build_compiled_std_module_doc(segments: &[String], source: &str) -> Result<ModuleDoc, CliError> {
+    use crate::api_surface::extract_from_sources;
+
+    // Build a minimal in-memory source set: just this one module.
+    let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+    let synth_path = PathBuf::from("<embedded-stdlib>").join(segments.join("."));
+    sources.insert(segments.to_vec(), (synth_path, source.to_owned()));
+
+    let api = extract_from_sources(&sources).map_err(CliError::from)?;
+
+    let module_api = api.modules.get(segments).cloned().unwrap_or_default();
+    let comments = scan_doc_comments(source);
+    let segments_vec: Vec<String> = segments.to_vec();
+    Ok(module_doc(&segments_vec, &module_api, &comments))
+}
+
+/// Build [`ModuleDoc`]s for every kernel-qualifier stdlib module.
+///
+/// The canonical qualifier table ([`ipe_canon::STDLIB_MODULE_QUALIFIERS`]) maps
+/// import path → short qualifier. The kernel type table maps
+/// [`ipe_kernels::StdlibKernel`] → Ipê type; each kernel's [`StdlibDecl`] gives
+/// the qualifier and member name. These three tables are joined here to produce
+/// per-module value lists with checker-inferred type signatures.
+fn build_kernel_module_docs() -> Result<BTreeMap<String, ModuleDoc>, CliError> {
+    // Build a reverse map from qualifier short name → full dotted module path.
+    let qualifier_to_path: BTreeMap<String, String> = ipe_canon::STDLIB_MODULE_QUALIFIERS
+        .iter()
+        .map(|(segments, qualifier)| ((*qualifier).to_owned(), segments.join(".")))
+        .collect();
+
+    // Get the full type table for all kernel functions.
+    let mut interner = Interner::new();
+    let type_table = kernel_type_table(&mut interner)
+        .map_err(|d| CliError::UsageOwned(format!("ipe doc: kernel type table error: {d:?}")))?;
+
+    // Group by module path and build ValueDoc for each kernel.
+    let mut by_module: BTreeMap<String, Vec<ValueDoc>> = BTreeMap::new();
+    for (kernel, ty) in type_table {
+        let decl = kernel.decl();
+        let Some(module_path) = qualifier_to_path.get(decl.qualifier) else {
+            continue;
+        };
+        let mut namer = VarNamer::new();
+        let Ok(ty_doc) = ty_to_doc(&ty, &interner, &mut namer) else {
+            continue; // skip kernels whose type fails to render
+        };
+        let signature = render_ty(&ty_doc);
+        by_module
+            .entry(module_path.clone())
+            .or_default()
+            .push(ValueDoc {
+                name: decl.name.to_owned(),
+                signature,
+                signature_ty: ty_doc,
+                comment: String::new(),
+            });
+    }
+
+    // Assemble ModuleDoc for each module, values in name order.
+    let mut docs: BTreeMap<String, ModuleDoc> = BTreeMap::new();
+    for (module_path, mut values) in by_module {
+        values.sort_by(|a, b| a.name.cmp(&b.name));
+        docs.insert(
+            module_path.clone(),
+            ModuleDoc {
+                name: module_path,
+                comment: String::new(),
+                unions: Vec::new(),
+                values,
+            },
+        );
+    }
+    Ok(docs)
+}
+
+/// List all stdlib + project modules, rendered per `format`.
+///
+/// `--list` output:
+/// * Human (default): guttered module names with a header.
+/// * `--plain`: one bare module name per line, no framing.
+/// * `--json`: `{"modules":["Ipe.List","Ipe.String",…]}`.
+fn list_modules(path: &Path, format: OutputFormat) {
+    use crate::style::{GUTTER, frame};
+
+    // Collect stdlib names.
+    let stdlib: Vec<String> = stdlib_module_names();
+
+    // Collect project module names (best-effort; an unresolvable project is skipped
+    // so `--list` always succeeds for stdlib).
+    let project: Vec<String> = read_tree(path).map_or_else(
+        |_| Vec::new(),
+        |sources| {
+            let mut names: Vec<String> = sources.keys().map(|p| p.join(".")).collect();
+            names.sort();
+            names
+        },
+    );
+
+    let mut all: Vec<String> = stdlib;
+    for name in &project {
+        if !all.contains(name) {
+            all.push(name.clone());
+        }
+    }
+    all.sort();
+
+    match format {
+        OutputFormat::Plain => {
+            for name in &all {
+                println!("{name}");
+            }
+        }
+        OutputFormat::Json => {
+            let list = all
+                .iter()
+                .map(|n| json_string(n))
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!("{{\"modules\":[{list}]}}");
+        }
+        OutputFormat::Human => {
+            let mut body = format!("{GUTTER}stdlib + project modules ({}):\n\n", all.len());
+            for name in &all {
+                let _ = writeln!(body, "{GUTTER}  {name}");
+            }
+            print!("{}", frame(body.trim_end_matches('\n')));
+        }
+    }
+}
+
+/// Collect project [`ModuleDoc`]s from the current directory (best-effort).
+///
+/// Returns an empty vec when the project cannot be read or typed, so `query`
+/// can still serve stdlib modules when no project is present.
+fn query_project_modules() -> Vec<ModuleDoc> {
+    read_tree(Path::new(DEFAULT_PATH)).map_or_else(
+        |_| Vec::new(),
+        |sources| {
+            let Ok(api) = extract_tree(Path::new(DEFAULT_PATH)) else {
+                return Vec::new();
+            };
+            api.modules
+                .iter()
+                .map(|(module_path, module_api)| {
+                    let comments = sources
+                        .get(module_path)
+                        .map(|(_, src)| scan_doc_comments(src))
+                        .unwrap_or_default();
+                    module_doc(module_path, module_api, &comments)
+                })
+                .collect()
+        },
+    )
+}
+
+/// Render a single [`ModuleDoc`] in human-readable guttered form.
+fn render_module_human(module: &ModuleDoc, index: &AnchorIndex) {
+    use crate::style::{GUTTER, frame};
+
+    let md = module.comment.as_str();
+    let mut body = format!("{GUTTER}{}\n\n", module.name);
+    if !md.is_empty() {
+        let _ = writeln!(body, "{GUTTER}{md}\n");
+    }
+    for union in &module.unions {
+        let _ = writeln!(
+            body,
+            "{GUTTER}  type {}{}",
+            union.name,
+            union_params(union.params)
+        );
+        if !union.comment.is_empty() {
+            let _ = writeln!(body, "{GUTTER}    {}", union.comment);
+        }
+    }
+    for value in &module.values {
+        let sig = {
+            let pieces = signature_pieces(&value.signature_ty, index);
+            let mut s = String::new();
+            for p in &pieces {
+                match p {
+                    SigPiece::Text(t) | SigPiece::Link { text: t, .. } => s.push_str(t),
+                }
+            }
+            s
+        };
+        let _ = writeln!(body, "{GUTTER}  {} : {}", value.name, sig);
+        if !value.comment.is_empty() {
+            let _ = writeln!(body, "{GUTTER}    {}", value.comment);
+        }
+    }
+    print!("{}", frame(body.trim_end_matches('\n')));
+}
+
+/// Query one module's API and render it per `format`.
+///
+/// Resolves `module_name` against stdlib + project (project overrides stdlib on
+/// a name collision). Errors with a typed message on an unknown module.
+fn query_module(module_name: &str, format: OutputFormat) -> Result<(), CliError> {
+    // Build stdlib docs; also try to find project docs from `.` (best-effort).
+    let stdlib = build_stdlib_docs();
+    let project = query_project_modules();
+
+    // Project wins over stdlib on name collision.
+    let found: Option<&ModuleDoc> = project
+        .iter()
+        .find(|m| m.name == module_name)
+        .or_else(|| stdlib.iter().find(|m| m.name == module_name));
+
+    let Some(module) = found else {
+        return Err(CliError::UsageOwned(format!(
+            "ipe doc: unknown module `{module_name}` (IPE-N0004)\n\
+             Run `ipe doc --list` to see all available modules."
+        )));
+    };
+
+    // Build a single-module DocsJson for the anchor index (cross-reference
+    // resolution within this module's own types).
+    let docs = DocsJson {
+        version: DOCS_JSON_VERSION,
+        modules: vec![module.clone()],
+    };
+    let index = AnchorIndex::build(&docs);
+
+    match format {
+        OutputFormat::Plain => {
+            // Flush-left: one entry per line, `name : signature`.
+            for union in &module.unions {
+                println!("type {}{}", union.name, union_params(union.params));
+            }
+            for value in &module.values {
+                println!("{} : {}", value.name, value.signature);
+            }
+        }
+        OutputFormat::Json => {
+            let mut out = String::new();
+            render_module_json(&mut out, module, &index);
+            println!("{out}");
+        }
+        OutputFormat::Human => {
+            render_module_human(module, &index);
+        }
+    }
+    Ok(())
 }
 
 /// Assemble one [`ModuleDoc`] from its checked API surface and its scanned
@@ -766,13 +1252,13 @@ fn signature_references(ty: &TyDoc, index: &AnchorIndex) -> Vec<TypeRef> {
 
 /// The renderings written for one `ipe doc` generate call, keyed by output
 /// filename, so `generate` and `serve` share exactly one site builder.
-fn render_site(docs: &DocsJson, format: Format) -> BTreeMap<String, String> {
+fn render_site(docs: &DocsJson, write_format: WriteFormat) -> BTreeMap<String, String> {
     let index = AnchorIndex::build(docs);
     let mut files = BTreeMap::new();
 
     files.insert("docs.json".to_owned(), render_json(docs));
 
-    if format.wants_markdown() {
+    if write_format.wants_markdown() {
         for module in &docs.modules {
             files.insert(
                 format!("{}.md", module_stem(&module.name)),
@@ -781,7 +1267,7 @@ fn render_site(docs: &DocsJson, format: Format) -> BTreeMap<String, String> {
         }
     }
 
-    if format.wants_html() {
+    if write_format.wants_html() {
         files.insert("index.html".to_owned(), render_html_index(docs));
         files.insert("style.css".to_owned(), STYLE_CSS.to_owned());
         for module in &docs.modules {
@@ -796,13 +1282,13 @@ fn render_site(docs: &DocsJson, format: Format) -> BTreeMap<String, String> {
 }
 
 /// Generate `docs.json` and the selected renderings for the package at `path`,
-/// writing them under `out`.
+/// writing them under `out`. Includes stdlib modules alongside the project.
 ///
 /// # Errors
 /// As [`build_docs`], plus [`CliError::Io`] on a write failure.
-fn generate(path: &Path, out: &Path, format: Format) -> Result<(), CliError> {
+fn generate(path: &Path, out: &Path, write_format: WriteFormat) -> Result<(), CliError> {
     let docs = build_docs(path)?;
-    let files = render_site(&docs, format);
+    let files = render_site(&docs, write_format);
 
     std::fs::create_dir_all(out).map_err(|e| crate::io_err(out, e))?;
     for (name, contents) in &files {
@@ -821,15 +1307,16 @@ fn generate(path: &Path, out: &Path, format: Format) -> Result<(), CliError> {
 
 /// Verify every exposed binding in the package at `path` carries a doc-comment.
 ///
-/// Writes nothing; exits non-zero (a [`CliError::Usage`] carrying the report)
-/// when any exposed value or union type lacks a `-- |` comment. A CI-gateable
-/// coverage check.
+/// Writes nothing; exits non-zero (a [`CliError::DocCoverage`] carrying the
+/// report) when any exposed value or union type lacks a `-- |` comment.
+/// Stdlib modules are exempt — their signatures are the contract, doc-comments
+/// are optional.
 ///
 /// # Errors
-/// As [`build_docs`], plus [`CliError::DocCoverage`] listing every undocumented
-/// binding when coverage is incomplete.
+/// As [`build_project_docs`], plus [`CliError::DocCoverage`] listing every
+/// undocumented binding when coverage is incomplete.
 fn check(path: &Path) -> Result<(), CliError> {
-    let docs = build_docs(path)?;
+    let docs = build_project_docs(path)?;
 
     let mut gaps: Vec<Undocumented> = Vec::new();
     let mut exposed = 0usize;
@@ -1266,7 +1753,7 @@ fn serve(path: &Path, port: Option<u16>) -> Result<(), CliError> {
     use std::net::TcpListener;
 
     let docs = build_docs(path)?;
-    let site = render_site(&docs, Format::Html);
+    let site = render_site(&docs, WriteFormat::Html);
 
     let addr = format!("127.0.0.1:{}", port.unwrap_or(0));
     let listener = TcpListener::bind(&addr).map_err(|e| crate::io_err(Path::new(&addr), e))?;
@@ -1384,7 +1871,7 @@ mod tests {
             DocMode::Generate {
                 path: PathBuf::from("."),
                 out: PathBuf::from("doc"),
-                format: Format::All,
+                write_format: WriteFormat::All,
             }
         );
     }
@@ -1397,30 +1884,96 @@ mod tests {
             DocMode::Generate {
                 path: PathBuf::from("pkg"),
                 out: PathBuf::from("site"),
-                format: Format::All,
+                write_format: WriteFormat::All,
             }
         );
     }
 
     #[test]
-    fn parse_format_selects_a_single_rendering() {
-        let m = parse_doc(&s(&["--format", "html"])).expect("format html");
+    fn parse_write_format_selects_a_single_rendering() {
+        let m = parse_doc(&s(&["--write-format", "html"])).expect("write-format html");
         assert_eq!(
             m,
             DocMode::Generate {
                 path: PathBuf::from("."),
                 out: PathBuf::from("doc"),
-                format: Format::Html,
+                write_format: WriteFormat::Html,
             }
         );
     }
 
     #[test]
-    fn parse_rejects_unknown_format() {
+    fn parse_rejects_unknown_write_format() {
         assert!(matches!(
-            parse_doc(&s(&["--format", "pdf"])),
+            parse_doc(&s(&["--write-format", "pdf"])),
             Err(CliError::UsageOwned(_))
         ));
+    }
+
+    #[test]
+    fn parse_list_flag_returns_list_mode() {
+        let m = parse_doc(&s(&["--list"])).expect("list");
+        assert!(matches!(m, DocMode::List { .. }));
+    }
+
+    #[test]
+    fn parse_list_flag_with_plain() {
+        let m = parse_doc(&s(&["--list", "--plain"])).expect("list plain");
+        assert!(matches!(
+            m,
+            DocMode::List {
+                format: OutputFormat::Plain,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_list_flag_with_json() {
+        let m = parse_doc(&s(&["--list", "--json"])).expect("list json");
+        assert!(matches!(
+            m,
+            DocMode::List {
+                format: OutputFormat::Json,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_module_query_returns_query_mode() {
+        let m = parse_doc(&s(&["Ipe.List"])).expect("query Ipe.List");
+        assert_eq!(
+            m,
+            DocMode::Query {
+                module: "Ipe.List".to_owned(),
+                format: OutputFormat::Human,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_module_query_with_plain() {
+        let m = parse_doc(&s(&["Ipe.String", "--plain"])).expect("query plain");
+        assert_eq!(
+            m,
+            DocMode::Query {
+                module: "Ipe.String".to_owned(),
+                format: OutputFormat::Plain,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_module_query_with_json() {
+        let m = parse_doc(&s(&["Ipe.Http", "--json"])).expect("query json");
+        assert_eq!(
+            m,
+            DocMode::Query {
+                module: "Ipe.Http".to_owned(),
+                format: OutputFormat::Json,
+            }
+        );
     }
 
     #[test]
@@ -1449,9 +2002,9 @@ mod tests {
 
     #[test]
     fn serve_rejects_generate_flags() {
-        // `--format`/`--out` are meaningless when serving HTML — unrepresentable
-        // in `DocMode::Serve`, so rejected at the boundary.
-        assert!(parse_doc(&s(&["serve", "--format", "json"])).is_err());
+        // `--write-format`/`--out` are meaningless when serving HTML —
+        // unrepresentable in `DocMode::Serve`, so rejected at the boundary.
+        assert!(parse_doc(&s(&["serve", "--write-format", "json"])).is_err());
         assert!(parse_doc(&s(&["serve", "--out", "x"])).is_err());
     }
 

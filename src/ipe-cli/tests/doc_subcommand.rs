@@ -302,7 +302,7 @@ fn help_page_describes_the_shipped_surface() {
         "help mentions the check subcommand"
     );
     // The now-shipped surface is advertised: the serve subcommand, the HTML
-    // rendering, and the --format / --port flags.
+    // rendering, and the --write-format / --port flags.
     assert!(
         stdout.contains("serve"),
         "help mentions serve, got:\n{stdout}"
@@ -312,8 +312,17 @@ fn help_page_describes_the_shipped_surface() {
         "help mentions HTML, got:\n{stdout}"
     );
     assert!(
-        stdout.contains("--format") && stdout.contains("--port"),
+        stdout.contains("--write-format") && stdout.contains("--port"),
         "help mentions the generate and serve flags, got:\n{stdout}"
+    );
+    // The new --list and module-query surface is also advertised.
+    assert!(
+        stdout.contains("--list"),
+        "help mentions --list, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("--plain") && stdout.contains("--json"),
+        "help mentions --plain/--json for queries, got:\n{stdout}"
     );
     // Still-deferred surfaces must not be advertised.
     assert!(

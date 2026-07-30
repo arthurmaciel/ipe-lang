@@ -405,6 +405,40 @@ pub fn extract_tree(root: &Path) -> Result<PublicApi, DiffError> {
     extract_from_db(&db, source_root, &user_modules)
 }
 
+/// Extract the public API surface of a set of in-memory sources.
+///
+/// All entries in `sources` are treated as user modules; the stdlib closure is
+/// injected as dependencies. Used by `ipe doc` to type-check individual
+/// compiled-source stdlib modules (which have embedded Ipê source but live
+/// outside any project tree).
+///
+/// # Errors
+/// [`DiffError`] on a typecheck failure or open interface. Returns
+/// [`DiffError::Empty`] when `sources` is empty.
+pub fn extract_from_sources(
+    sources: &BTreeMap<Vec<String>, (PathBuf, String)>,
+) -> Result<PublicApi, DiffError> {
+    if sources.is_empty() {
+        return Err(DiffError::Empty {
+            path: PathBuf::from("<empty>"),
+        });
+    }
+    let db = ipe_db::IpeDatabase::new();
+    let mut prepared = sources.clone();
+    let mut discovered: Vec<project::DiscoveredModule> = sources
+        .iter()
+        .map(|(p, (path, _))| project::DiscoveredModule {
+            path: path.clone(),
+            module_path: p.clone(),
+        })
+        .collect();
+    let injected = project::inject_compiled_std_closure(&mut prepared, &mut discovered);
+    let source_root = crate::create_source_root(&db, &prepared, &injected, &BTreeSet::new());
+
+    let user_modules: BTreeSet<Vec<String>> = sources.keys().cloned().collect();
+    extract_from_db(&db, source_root, &user_modules)
+}
+
 /// Project the public API of `user_modules` out of an already-populated database.
 ///
 /// Separated from [`extract_tree`] so the extraction logic is exercised over a
