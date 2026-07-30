@@ -33,6 +33,7 @@ Edits each file in place. Exit 0 on success.
 """
 from __future__ import annotations
 
+import re
 import sys
 
 
@@ -197,6 +198,70 @@ def walk_code(text: str, code_fn) -> str:
 def transform(text: str, pairs: list[tuple[str, str]]) -> str:
     """Apply the qualifier-prefix rename to every code span (rename-map.tsv)."""
     return walk_code(text, lambda seg: rewrite_code(seg, pairs))
+
+
+# ── Shape-scoped Cmd/Sub re-home (semantic, per-example) ──────────────────────
+# `Cmd` / `Sub` are shape-specific: user code reaches them through the app's own
+# shape (`Ipe.Tea.Web.Cmd`, `Ipe.Tea.Terminal.Sub`, …), never a global
+# `Ipe.Cmd` / `Ipe.Sub`. This is NOT a qualifier-prefix rename — the target
+# depends on the EXAMPLE's shape, which the token map cannot know — so it runs as
+# a per-example pass over the whole file set once the shape is known.
+
+# The shape-module import each example carries, keyed to its shape name. Keyed
+# off the IMPORTED SHAPE MODULE (not the entry-kernel call) so a multi-module
+# example whose `Cmd` / `Sub` import lives in a helper still re-homes onto the
+# app's shape once any of its files names the shape. `WebView` is checked before
+# `Web` so the longer name wins. The upstream Sky vocabulary (`Web` / `WebView` /
+# `Tui` / `Console` / `Cli`) and the current `Ipe.Tea.<Shape>` forms both map
+# here.
+_SHAPE_MODULES: list[tuple[str, str]] = [
+    ("Ipe.Tea.WebView", "WebView"),
+    ("Ipe.WebView", "WebView"),
+    ("Ipe.Tea.Web", "Web"),
+    ("Ipe.Web", "Web"),
+    ("Ipe.Live", "Web"),
+    ("Ipe.Tea.Terminal", "Terminal"),
+    ("Ipe.Terminal", "Terminal"),
+    ("Ipe.Tui", "Terminal"),
+    ("Ipe.Console", "Terminal"),
+    ("Ipe.Cli", "Terminal"),
+]
+
+
+def detect_shape(texts: list[str]) -> str | None:
+    """The example's TEA shape, proven from the shape module it imports.
+
+    Scans the already-prefix-renamed sources for an `import <shape module>` line
+    (`Ipe.Web`, `Ipe.Tui`, `Ipe.Tea.Terminal`, …). Returns the shape name (`Web`
+    / `Terminal` / `WebView`) or `None` when no shape module is imported (a plain
+    Program, or an example that does not use `Cmd` / `Sub`). Longer module names
+    are checked first so `Ipe.WebView` wins over `Ipe.Web`.
+    """
+    for module, shape in _SHAPE_MODULES:
+        pat = rf"^[ \t]*import[ \t]+{re.escape(module)}(?:[ \t]|$)"
+        if any(re.search(pat, t, flags=re.MULTILINE) for t in texts):
+            return shape
+    return None
+
+
+def rehome_cmd_sub(text: str, shape: str) -> str:
+    """Rewrite `import Ipe.Cmd` / `import Ipe.Sub` onto the example's shape.
+
+    Only the import module PATH moves; the `as Alias` binding (and therefore
+    every `Cmd.` / `Sub.` call site) is untouched. Matches the whole
+    `Ipe.Cmd` / `Ipe.Sub` module qualifier on an `import` line, so a longer path
+    that merely starts with it (there is none today) cannot be split.
+    """
+
+    def repl(m: "re.Match[str]") -> str:
+        return f"import Ipe.Tea.{shape}.{m.group('leaf')}{m.group('tail')}"
+
+    return re.sub(
+        r"^(?P<indent>[ \t]*)import[ \t]+Ipe\.(?P<leaf>Cmd|Sub)(?P<tail>[ \t]|$)",
+        lambda m: f"{m.group('indent')}" + repl(m),
+        text,
+        flags=re.MULTILINE,
+    )
 
 
 # ── Stdlib member move (Std.Log's println/eprintln -> Ipe.Io) ─────────────────
@@ -437,15 +502,34 @@ def main(argv: list[str]) -> int:
         )
         return 2
     pairs = load_map(rest[0])
-    for path in rest[1:]:
+    paths = rest[1:]
+
+    # Phase 1 — per-file rewrites: member moves (while the source qualifier is
+    # still `Std.*`), the qualifier-prefix rename, then bare-stdlib prefixing.
+    originals: dict[str, str] = {}
+    transformed: dict[str, str] = {}
+    for path in paths:
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
-        # Member moves run first (while the source qualifier is still `Std.*`),
-        # then the qualifier-prefix rename, then bare-stdlib prefixing.
-        new = prefix_bare_imports(transform(apply_member_moves(text), pairs), bare)
-        if new != text:
+        originals[path] = text
+        transformed[path] = prefix_bare_imports(
+            transform(apply_member_moves(text), pairs), bare
+        )
+
+    # Phase 2 — shape-scoped Cmd/Sub re-home across the whole example. The shape
+    # is proven from the entry kernel any file head-calls, so a multi-module
+    # example whose `Cmd` / `Sub` import lives in a helper still re-homes onto
+    # the app's shape. Skip when no shape entry is present (a plain Program, or
+    # an example that never imports `Cmd` / `Sub`).
+    shape = detect_shape(list(transformed.values()))
+    if shape is not None:
+        for path in paths:
+            transformed[path] = rehome_cmd_sub(transformed[path], shape)
+
+    for path in paths:
+        if transformed[path] != originals[path]:
             with open(path, "w", encoding="utf-8") as fh:
-                fh.write(new)
+                fh.write(transformed[path])
     return 0
 
 

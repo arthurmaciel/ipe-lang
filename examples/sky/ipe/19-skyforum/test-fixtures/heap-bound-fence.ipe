@@ -19,8 +19,8 @@ import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.Maybe as Maybe
 import Ipe.String as String
-import Ipe.Cmd as Cmd
-import Ipe.Sub as Sub
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
 import Ipe.Web exposing (app, route)
 import Ipe.Ui as Ui
 import Ipe.Ui exposing (Element)

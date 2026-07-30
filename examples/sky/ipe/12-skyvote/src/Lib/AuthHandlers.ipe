@@ -12,7 +12,7 @@ import Ipe.Result as Result
 import Ipe.Maybe exposing (..)
 import Ipe.String as String
 import Ipe.Io as Io
-import Ipe.Cmd as Cmd
+import Ipe.Tea.Web.Cmd as Cmd
 import State exposing (..)
 import Lib.Auth as Auth
 import Lib.Db as Db

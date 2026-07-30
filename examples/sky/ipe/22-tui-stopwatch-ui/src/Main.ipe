@@ -25,8 +25,8 @@ import Ipe.String as String
 import Ipe.System as System
 import Ipe.Task as Task
 import Ipe.Tui as Tui
-import Ipe.Cmd as Cmd
-import Ipe.Sub as Sub
+import Ipe.Tea.Terminal.Cmd as Cmd
+import Ipe.Tea.Terminal.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Ui exposing (Element)
 import Ipe.Ui.Background as Background
