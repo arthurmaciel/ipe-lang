@@ -61,8 +61,14 @@ mod tests {
 
     #[test]
     fn file_and_env_program_infers_both() {
+        // `File.writeFile` now takes a validated `Path`. This minimal
+        // single-module harness does not inject the compiled-source `Ipe.Path`
+        // module, so the `Path` value arrives as a function parameter (the
+        // reserved builtin type `Path` resolves without that injection) rather
+        // than via `Path.fromString`. The capability scan still sees the
+        // filesystem + env kernels.
         let caps = caps_of(
-            "module Main exposing (main)\nimport Ipe.File\nimport Ipe.Io\nimport Ipe.System\nimport Ipe.Task\nmain : Task ()\nmain =\n    Task.andThen (\\_ -> File.writeFile \"/tmp/x\" (System.getenvOr \"HOME\" \"/\")) (Io.println \"go\")\n",
+            "module Main exposing (main)\nimport Ipe.File\nimport Ipe.Io\nimport Ipe.System\nimport Ipe.Task\nwrite : Path -> Task ()\nwrite p =\n    File.writeFile p (System.getenvOr \"HOME\" \"/\")\nmain : Path -> Task ()\nmain p =\n    Task.andThen (\\_ -> write p) (Io.println \"go\")\n",
         );
         assert_eq!(
             caps,

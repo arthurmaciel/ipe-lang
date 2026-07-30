@@ -12180,6 +12180,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DecFromString
                 | KernelFn::DecDiv
                 | KernelFn::DecMod
+                | KernelFn::PathFromString
         ) {
             return CallPin::None;
         }
@@ -12277,7 +12278,14 @@ impl<'a> Lowerer<'a> {
             // `decimal_div` / `decimal_mod` share the same
             // `<E: From<String>>` shape and the same erased-error ambiguity as
             // `decimal_from_string` (e.g. `ipe_test_err (Dec.div a zero)`).
-            KernelFn::DecFromString | KernelFn::DecDiv | KernelFn::DecMod => match ty {
+            // `Path.fromString : String -> Result Error Path` shares the runtime
+            // `path_from_string<E: From<String>>` shape and the same erased-error
+            // E0283 as `decimal_from_string` when the `Err` arm is discarded —
+            // pin `::<IpeError>` to restore inference without changing behaviour.
+            KernelFn::DecFromString
+            | KernelFn::DecDiv
+            | KernelFn::DecMod
+            | KernelFn::PathFromString => match ty {
                 Ty::Con { name, .. } if self.interner.resolve(*name) == Some("Result") => {
                     CallPin::ErrIpeError
                 }
