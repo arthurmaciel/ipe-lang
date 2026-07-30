@@ -65,11 +65,11 @@ viewOrders model =
 viewOrderCard : Model -> Dict String String -> Element Msg
 viewOrderCard model order =
     let
-        orderId = Db.getField "id" order
-        state = Db.getField "state" order
-        totalAmount = Db.getInt "total_amount" order
-        totalCurrency = Db.getField "total_currency" order
-        createdAt = Db.getField "created_at" order
+        orderId = Db.unsafeGetField "id" order
+        state = Db.unsafeGetField "state" order
+        totalAmount = Db.unsafeGetInt "total_amount" order
+        totalCurrency = Db.unsafeGetField "total_currency" order
+        createdAt = Db.unsafeGetField "created_at" order
         colors = stateColors state
     in
         Ui.button
@@ -163,18 +163,18 @@ viewOrderDetail : Model -> Dict String String -> Element Msg
 viewOrderDetail model order =
     let
         lang = model.lang
-        state = Db.getField "state" order
-        totalAmount = Db.getInt "total_amount" order
-        totalCurrency = Db.getField "total_currency" order
-        createdAt = Db.getField "created_at" order
-        remarks = Db.getField "checkout_remarks" order
-        shippingName = Db.getField "shipping_name" order
-        shippingEmail = Db.getField "shipping_email" order
-        shippingPhone = Db.getField "shipping_phone" order
-        shippingLine1 = Db.getField "shipping_line1" order
-        shippingCity = Db.getField "shipping_city" order
-        shippingCountry = Db.getField "shipping_country" order
-        shippingPostcode = Db.getField "shipping_postcode" order
+        state = Db.unsafeGetField "state" order
+        totalAmount = Db.unsafeGetInt "total_amount" order
+        totalCurrency = Db.unsafeGetField "total_currency" order
+        createdAt = Db.unsafeGetField "created_at" order
+        remarks = Db.unsafeGetField "checkout_remarks" order
+        shippingName = Db.unsafeGetField "shipping_name" order
+        shippingEmail = Db.unsafeGetField "shipping_email" order
+        shippingPhone = Db.unsafeGetField "shipping_phone" order
+        shippingLine1 = Db.unsafeGetField "shipping_line1" order
+        shippingCity = Db.unsafeGetField "shipping_city" order
+        shippingCountry = Db.unsafeGetField "shipping_country" order
+        shippingPostcode = Db.unsafeGetField "shipping_postcode" order
         colors = stateColors state
     in
         Ui.column
@@ -283,11 +283,11 @@ detailLine txt =
 viewOrderItem : Dict String String -> Element Msg
 viewOrderItem item =
     let
-        title = Db.getField "title" item
-        qty = Db.getInt "quantity" item
-        price = Db.getInt "price_amount" item
-        discount = Db.getInt "price_discount" item
-        currency = Db.getField "price_currency" item
+        title = Db.unsafeGetField "title" item
+        qty = Db.unsafeGetInt "quantity" item
+        price = Db.unsafeGetInt "price_amount" item
+        discount = Db.unsafeGetInt "price_discount" item
+        currency = Db.unsafeGetField "price_currency" item
         effectivePrice =
             if discount > 0 then
                 price - discount
@@ -332,7 +332,7 @@ viewOrderSuccess model =
 
                       Just order ->
                           let
-                              state = Db.getField "state" order
+                              state = Db.unsafeGetField "state" order
                           in
                               if state == "ordered" || state == "shipped" || state == "delivered" then
                                   viewSuccessOk model order
@@ -369,7 +369,7 @@ viewSuccessOk model order =
               ]
               (Ui.text (Tr.t model.lang "order.success"))
         , Layout.primaryButton
-              (Navigate (OrderPage (Db.getField "id" order)))
+              (Navigate (OrderPage (Db.unsafeGetField "id" order)))
               (Tr.t model.lang "order.detail")
         ]
 

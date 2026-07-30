@@ -146,8 +146,9 @@ fn assert_runs_and_matches_oracle(name: &str) {
 
 /// `Db.open` → `Db.withTransaction` → `Db.unsafeExecRaw` (DDL) →
 /// `Db.exec [SqlString "apple", SqlInt 5]` + `[SqlString "banana", SqlInt 3]`
-/// (two INSERTs) → `Db.query [] (SELECT ORDER BY name)` → `Db.getString` /
-/// `Db.getInt` → `println`. Output: `"apple:5\nbanana:3"`.
+/// (two INSERTs) → `Db.unsafeQuery [] (SELECT ORDER BY name)` →
+/// `Db.unsafeGetString` / `Db.unsafeGetInt` → `println`.
+/// Output: `"apple:5\nbanana:3"`.
 ///
 /// Recorded sanctioned divergence (Go+cgo `SQLite` vs Rust+sqlx): the Ipê source
 /// produces identical output on both backends, but the oracle-capture toolchain
@@ -271,7 +272,7 @@ fn db_find_where() {
 
 /// `Db.exec` INSERTs three rows → `Db.deleteWhere conn "products" (Sql.eq
 /// (Sql.column "name") (Sql.string "gadget"))` → row count `1` → a follow-up
-/// `Db.query` confirms only `"gadget"` was removed → print
+/// `Db.unsafeQuery` confirms only `"gadget"` was removed → print
 /// `"1:sprocket,widget"`.
 ///
 /// Sanctioned divergence: Ipê emits Rust+sqlx; `Db.deleteWhere` has no Go
@@ -396,4 +397,19 @@ fn db_find_by_field() {
 #[test]
 fn db_decode_money() {
     assert_runs_and_matches_oracle("db_decode_money");
+}
+
+// ── Schema drift fails closed through the typed row path ──────────────────────
+
+/// A table with column `full_name` decoded by a `Db.Decode.string "name"` — the
+/// shape a `name -> full_name` rename leaves behind. The absent column makes the
+/// decoder short-circuit the whole `queryDecode` task to `Task Error`, caught via
+/// `Task.onError` into `"drift:caught"`. Pins the safety property the typed row
+/// surface exists for: schema drift is a caught `Err`, never a phantom value and
+/// never a panic.
+///
+/// Sanctioned divergence: Ipê emits Rust+sqlx; oracle is Ipê's own output.
+#[test]
+fn db_decode_drift_fails_closed() {
+    assert_runs_and_matches_oracle("db_decode_drift");
 }

@@ -275,11 +275,11 @@ productGrid model products =
 productCard : Model -> Dict String String -> Element Msg
 productCard model product =
     let
-        productId = Db.getField "id" product
-        title = Db.getField "title" product
-        category = Db.getField "category" product
+        productId = Db.unsafeGetField "id" product
+        title = Db.unsafeGetField "title" product
+        category = Db.unsafeGetField "category" product
         pricing = Money.formatPriceFromRow product
-        stock = Db.getInt "stock" product
+        stock = Db.unsafeGetInt "stock" product
     in
         Ui.column
             [ Ui.width (Ui.px 260)

@@ -116,7 +116,7 @@ requireAuth req onUser =
 
                 Ok (Just user) ->
                     let
-                        email = Db.getField "email" user
+                        email = Db.unsafeGetField "email" user
                     in
                         onUser user email
 
@@ -150,7 +150,7 @@ handleSignIn req =
 
                 Ok user ->
                     let
-                        userId = Db.getField "id" user
+                        userId = Db.unsafeGetField "id" user
                     in
                         case Auth.createSession userId of
 
@@ -321,7 +321,7 @@ handleNotesList req =
             req
             (\user email ->
                 let
-                    userId = Db.getField "id" user
+                    userId = Db.unsafeGetField "id" user
                 in
                     case Notes.getNotes userId of
 
@@ -348,7 +348,7 @@ handleNewNote req =
             req
             (\user email ->
                 let
-                    userId = Db.getField "id" user
+                    userId = Db.unsafeGetField "id" user
                 in
                     if Server.method req == "POST" then
                         let
@@ -383,7 +383,7 @@ handleViewNote req =
             req
             (\user email ->
                 let
-                    userId = Db.getField "id" user
+                    userId = Db.unsafeGetField "id" user
                     noteId =
                         Maybe.withDefault "" (Server.queryParam "id" req)
                 in
@@ -415,7 +415,7 @@ handleEditNote req =
             req
             (\user email ->
                 let
-                    userId = Db.getField "id" user
+                    userId = Db.unsafeGetField "id" user
                     noteId =
                         Maybe.withDefault "" (Server.queryParam "id" req)
                 in
@@ -447,8 +447,8 @@ handleEditNote req =
 
                             Ok (Just note) ->
                                 let
-                                    title = Db.getField "title" note
-                                    content = Db.getField "content" note
+                                    title = Db.unsafeGetField "title" note
+                                    content = Db.unsafeGetField "content" note
                                 in
                                     Server.html
                                         (View.noteFormPage
@@ -481,7 +481,7 @@ handleDeleteNote req =
             req
             (\user email ->
                 let
-                    userId = Db.getField "id" user
+                    userId = Db.unsafeGetField "id" user
                     noteId =
                         Maybe.withDefault "" (Server.queryParam "id" req)
                 in

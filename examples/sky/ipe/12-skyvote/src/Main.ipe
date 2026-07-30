@@ -307,7 +307,7 @@ handleSetSearch query model =
 handleToggleVoteAuth : String -> Dict String String -> Model -> ( Model, Cmd Msg )
 handleToggleVoteAuth ideaId user model =
     let
-        userId = Db.getField "id" user
+        userId = Db.unsafeGetField "id" user
     in
         case Ideas.toggleVote ideaId userId of
 
@@ -369,7 +369,7 @@ handleViewIdea ideaId model =
 doSubmitComment : Dict String String -> Model -> ( Model, Cmd Msg )
 doSubmitComment user model =
     let
-        userId = Db.getField "id" user
+        userId = Db.unsafeGetField "id" user
     in
         case Comments.createComment model.selectedIdeaId userId model.newComment of
 
@@ -447,7 +447,7 @@ handleBackToBoard model =
 doCreateIdea : Dict String String -> Model -> ( Model, Cmd Msg )
 doCreateIdea user model =
     let
-        userId = Db.getField "id" user
+        userId = Db.unsafeGetField "id" user
     in
         case Ideas.createIdea
                  model.submitTitle

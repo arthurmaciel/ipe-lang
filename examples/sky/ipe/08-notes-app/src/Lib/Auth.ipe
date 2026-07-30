@@ -77,8 +77,8 @@ createUser email password =
 
 checkUserCredentials password user =
     let
-        storedHash = Db.getField "password_hash" user
-        verified = Db.getField "verified" user
+        storedHash = Db.unsafeGetField "password_hash" user
+        verified = Db.unsafeGetField "verified" user
     in
         if verifyPassword password storedHash then
             if verified == "1" then
@@ -101,7 +101,7 @@ checkUserCredentials password user =
 -- Wrong email / wrong password both PermissionDenied.
 authenticateUser : String -> String -> Result Error (Dict String String)
 authenticateUser email password =
-    case Db.query
+    case Db.unsafeQuery
              "SELECT id, email, password_hash, verified FROM users WHERE email = ? LIMIT 1"
              [ email ] of
 
@@ -144,7 +144,7 @@ createSession userId =
 -- DB failures; inner Maybe is "found / not found" which is normal.
 getSessionUser : String -> Result Error (Maybe (Dict String String))
 getSessionUser sessionToken =
-    case Db.query
+    case Db.unsafeQuery
              "SELECT u.id, u.email, u.created_at FROM users u INNER JOIN sessions s ON CAST(u.id AS TEXT) = s.user_id WHERE s.token = ? LIMIT 1"
              [ sessionToken ] of
 

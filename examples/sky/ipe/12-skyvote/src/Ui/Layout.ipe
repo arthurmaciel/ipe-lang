@@ -109,7 +109,7 @@ viewAuthNav model =
                       [ text "Submit Idea" ]
                 , span
                       [ class "nav-link" ]
-                      [ text (Db.getField "username" user) ]
+                      [ text (Db.unsafeGetField "username" user) ]
                 , button
                       [ onClick DoSignOut, class "btn btn-ghost btn-sm" ]
                       [ text "Sign out" ]

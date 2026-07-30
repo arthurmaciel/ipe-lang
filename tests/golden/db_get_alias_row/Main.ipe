@@ -18,7 +18,7 @@ import Ipe.Io as Io
 --
 -- The fix makes the walk alias-transparent: `let r = payload` tracks `r` as an
 -- additional alias of the wildcard row for the rest of the `let` body, so a
--- `Db.getString _ r` obliges the bound exactly as `Db.getString _ payload`
+-- `Db.unsafeGetString _ r` obliges the bound exactly as `Db.unsafeGetString _ payload`
 -- would.
 
 
@@ -35,8 +35,8 @@ decodeRow payload =
         r =
             payload
     in
-    { author = Db.getString "author" r
-    , text = Db.getString "text" r
+    { author = Db.unsafeGetString "author" r
+    , text = Db.unsafeGetString "text" r
     }
 
 

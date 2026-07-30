@@ -8,7 +8,7 @@ import Ipe.Io as Io
 
 -- BACKLOG #177 FIX-UP 2 regression — MULTI-HOP alias chain in row position.
 --
--- `let r = payload; let r2 = r in Db.getString _ r2`: the row arg `r2` is a
+-- `let r = payload; let r2 = r in Db.unsafeGetString _ r2`: the row arg `r2` is a
 -- pure alias of `r`, itself a pure alias of the wildcard `payload`. The
 -- alias-transparent walk resolves the chain by induction — the `r`-tracked
 -- walk sees `let r2 = r` as an alias of `r` and recurses again — so the
@@ -30,8 +30,8 @@ decodeRow payload =
         r2 =
             r
     in
-    { author = Db.getString "author" r2
-    , text = Db.getString "text" r2
+    { author = Db.unsafeGetString "author" r2
+    , text = Db.unsafeGetString "text" r2
     }
 
 

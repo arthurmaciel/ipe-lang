@@ -53,9 +53,9 @@ formatPrice amount currency =
 formatPriceFromRow : Dict String String -> Price
 formatPriceFromRow row =
     let
-        amount = Db.getInt "price_amount" row
-        discount = Db.getInt "price_discount" row
-        currency = Db.getField "price_currency" row
+        amount = Db.unsafeGetInt "price_amount" row
+        discount = Db.unsafeGetInt "price_discount" row
+        currency = Db.unsafeGetField "price_currency" row
         effectivePrice =
             if discount > 0 then
                 amount - discount

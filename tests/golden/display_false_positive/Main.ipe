@@ -16,7 +16,7 @@ import Ipe.Io as Io
 -- the param does not need and does not reflect its use.
 grab : any -> String -> String
 grab row prefix =
-    toString prefix ++ ":" ++ Db.getString "k" row
+    toString prefix ++ ":" ++ Db.unsafeGetString "k" row
 
 
 main : Task Error ()

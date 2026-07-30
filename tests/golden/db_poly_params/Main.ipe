@@ -6,7 +6,7 @@ import Ipe.String
 import Ipe.Task
 
 -- T0001 regression (IPE-T0001 poly-params fix):
---   `Db.exec` / `Db.query` accept `List a` (polymorphic params), so callers may
+--   `Db.exec` / `Db.unsafeQuery` accept `List a` (polymorphic params), so callers may
 --   pass `List Int`, `List String`, or `List SqlValue` without a type mismatch.
 --
 -- This program exercises THREE param-list shapes in a single `Db.withTransaction`:
@@ -48,7 +48,7 @@ main =
                     in
                     Task.andThen
                         (\rows -> Io.println (String.fromInt (List.length rows)))
-                        (Db.query txconn "SELECT v FROM t" [])
+                        (Db.unsafeQuery txconn "SELECT v FROM t" [])
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")

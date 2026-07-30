@@ -1183,9 +1183,10 @@ impl Env {
             // ── Db kernels ──────────────────────────────────────────────────────
             // `Ipe.Db` — database connection + query surface.
             // All effect-returning kernels (Task Error …) and pure helpers
-            // (`getString`, `getInt`, `getBool`, `getField`) are registered here.
-            // `SqlValue` / `SqlField` ADT constructors are handled by
-            // `install_builtin_ctors` above; they are unqualified.
+            // (`unsafeGetString`, `unsafeGetInt`, `unsafeGetBool`,
+            // `unsafeGetField`) are registered here. `SqlValue` / `SqlField` ADT
+            // constructors are handled by `install_builtin_ctors` above; they are
+            // unqualified.
             (
                 "Db",
                 &[
@@ -1194,12 +1195,12 @@ impl Env {
                     "close",
                     "unsafeExecRaw",
                     "exec",
-                    "query",
+                    "unsafeQuery",
                     "queryDecode",
-                    "getString",
-                    "getInt",
-                    "getBool",
-                    "getField",
+                    "unsafeGetString",
+                    "unsafeGetInt",
+                    "unsafeGetBool",
+                    "unsafeGetField",
                     "insertRow",
                     "getById",
                     "updateById",

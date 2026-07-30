@@ -248,7 +248,7 @@ userNav model =
                     , navLink (Tr.t lang "nav.orders") OrdersPage
                     , adminLink user lang
                     , Ui.el [ Font.color ink, Font.size 14, Font.weight 500 ]
-                        (Ui.text (Db.getField "name" user))
+                        (Ui.text (Db.unsafeGetField "name" user))
                     , dangerButton DoSignOut (Tr.t lang "nav.signout")
                     ]
 

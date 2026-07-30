@@ -5,7 +5,7 @@ import Ipe.List
 import Ipe.String
 import Ipe.Task
 
--- M5b-db golden: SqlValue-parameterized Db.exec + Db.query on in-memory SQLite.
+-- M5b-db golden: SqlValue-parameterized Db.exec + Db.unsafeQuery on in-memory SQLite.
 -- Db.withTransaction pins all DDL + DML + SELECT to ONE pool connection so the
 -- sqlite::memory: database is visible to every operation (each connection in the
 -- 16-connection pool is a separate in-memory DB; the transaction task-local
@@ -37,15 +37,15 @@ main =
                                 (String.join "\n"
                                     (List.map
                                         (\row ->
-                                            Db.getString "name" row
+                                            Db.unsafeGetString "name" row
                                                 ++ ":"
-                                                ++ String.fromInt (Db.getInt "qty" row)
+                                                ++ String.fromInt (Db.unsafeGetInt "qty" row)
                                         )
                                         rows
                                     )
                                 )
                         )
-                        (Db.query txconn
+                        (Db.unsafeQuery txconn
                             "SELECT name, qty FROM items ORDER BY name"
                             []
                         )

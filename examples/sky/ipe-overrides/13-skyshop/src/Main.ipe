@@ -82,13 +82,13 @@ refreshCart model =
 
         Just user ->
             let
-                userId = Db.getField "id" user
+                userId = Db.unsafeGetField "id" user
             in
                 case Cart.getOrCreateCart userId of
 
                     Ok cart ->
                         let
-                            cartId = Db.getField "id" cart
+                            cartId = Db.unsafeGetField "id" cart
                             items = Cart.getCartItems cartId
                         in
                             { model | cart = Just cart, cartItems = items }
@@ -104,7 +104,7 @@ refreshOrders model =
     case model.user of
 
         Just user ->
-            { model | orders = Cart.getUserCarts (Db.getField "id" user) }
+            { model | orders = Cart.getUserCarts (Db.unsafeGetField "id" user) }
 
         Nothing ->
             { model | orders = [] }
@@ -162,14 +162,14 @@ loadEditProduct model productId =
                 images = Products.listProductImages productId
             in
                 { model | editProductId = productId
-                , editTitle = Db.getField "title" product
-                , editSummary = Db.getField "summary" product
-                , editCategory = Db.getField "category" product
-                , editPrice = Db.getInt "price_amount" product
-                , editDiscount = Db.getInt "price_discount" product
-                , editCurrency = Db.getField "price_currency" product
-                , editStock = Db.getInt "stock" product
-                , editPublished = Db.getBool "published" product
+                , editTitle = Db.unsafeGetField "title" product
+                , editSummary = Db.unsafeGetField "summary" product
+                , editCategory = Db.unsafeGetField "category" product
+                , editPrice = Db.unsafeGetInt "price_amount" product
+                , editDiscount = Db.unsafeGetInt "price_discount" product
+                , editCurrency = Db.unsafeGetField "price_currency" product
+                , editStock = Db.unsafeGetInt "stock" product
+                , editPublished = Db.unsafeGetBool "published" product
                 , productImages = images
                 , editImageData = ""
                 , notification = ""
@@ -284,14 +284,14 @@ handleAddToCart productId model =
 
         Just user ->
             let
-                userId = Db.getField "id" user
+                userId = Db.unsafeGetField "id" user
                 qty = model.quantity
             in
                 case Cart.getOrCreateCart userId of
 
                     Ok cart ->
                         let
-                            cartId = Db.getField "id" cart
+                            cartId = Db.unsafeGetField "id" cart
                             _ = Cart.addItem cartId productId qty
                             updatedModel =
                                 refreshCart
@@ -351,10 +351,10 @@ handleStartCheckout model =
 
                 Just cart ->
                     let
-                        cartId = Db.getField "id" cart
-                        userId = Db.getField "id" user
-                        userName = Db.getField "name" user
-                        userEmail = Db.getField "email" user
+                        cartId = Db.unsafeGetField "id" cart
+                        userId = Db.unsafeGetField "id" user
+                        userName = Db.unsafeGetField "name" user
+                        userEmail = Db.unsafeGetField "email" user
                         items = model.cartItems
                     in
                         if List.isEmpty items then
@@ -445,7 +445,7 @@ handleVerifyPayment orderId model =
 
             Just orderDoc ->
                 let
-                    state = Db.getField "state" orderDoc
+                    state = Db.unsafeGetField "state" orderDoc
                 in
                     if state == "ordered" || state == "shipped" || state == "delivered" then
                         ( base, Cmd.none )
@@ -765,7 +765,7 @@ handleFirebaseAuth token model =
 
         Ok user ->
             let
-                _ = Io.println ("[AUTH] Sign in: " ++ Db.getField "email" user)
+                _ = Io.println ("[AUTH] Sign in: " ++ Db.unsafeGetField "email" user)
                 newPage = resolvePostAuthPage model.page
                 updated =
                     refreshProducts

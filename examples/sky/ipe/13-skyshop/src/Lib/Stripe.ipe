@@ -102,22 +102,22 @@ currencyFromCode code =
 -- narrowing-int setter is fallible by design).
 buildLineItem item =
     let
-        price = Db.getInt "price_amount" item
-        discount = Db.getInt "price_discount" item
+        price = Db.unsafeGetInt "price_amount" item
+        discount = Db.unsafeGetInt "price_discount" item
         effectivePrice =
             if price - discount > 0 then
                 price - discount
 
             else
                 price
-        qtyRaw = Db.getInt "quantity" item
+        qtyRaw = Db.unsafeGetInt "quantity" item
         qty =
             if qtyRaw <= 0 then
                 1
 
             else
                 qtyRaw
-        currency = currencyFromCode (Db.getField "price_currency" item)
+        currency = currencyFromCode (Db.unsafeGetField "price_currency" item)
     in
         Checkout.new_from_checkout_sessionCreateCheckoutSessionLineItemsPriceData currency
             |> Result.map
@@ -126,7 +126,7 @@ buildLineItem item =
                 )
             |> Result.andThen
                 (\priceData ->
-                    Checkout.new_from_checkout_sessionProductData (Db.getField "title" item)
+                    Checkout.new_from_checkout_sessionProductData (Db.unsafeGetField "title" item)
                         |> Result.map
                             (\productData ->
                                 Checkout.product_data_set_field_from_checkout_sessionCreateCheckoutSessionLineItemsPriceData
@@ -250,7 +250,7 @@ verifyPayment orderId =
 
             Just order ->
                 let
-                    reference = Db.getField "checkout_reference" order
+                    reference = Db.unsafeGetField "checkout_reference" order
                 in
                     if reference == "" then
                         Err (Error.invalidInput "No checkout reference found.")
@@ -351,14 +351,14 @@ deductStock orderId =
 
 deductItemStock item =
     let
-        productId = Db.getField "product_id" item
-        qty = Db.getInt "quantity" item
+        productId = Db.unsafeGetField "product_id" item
+        qty = Db.unsafeGetInt "quantity" item
     in
         case Db.getDoc "products" productId of
 
             Ok (Just product) ->
                 let
-                    currentStock = Db.getInt "stock" product
+                    currentStock = Db.unsafeGetInt "stock" product
                 in
                     if currentStock >= 0 then
                         let

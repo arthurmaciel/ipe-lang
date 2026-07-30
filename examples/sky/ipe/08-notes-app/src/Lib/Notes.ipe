@@ -32,7 +32,7 @@ deleteNote noteId userId =
 -- can render a "failed to load notes" page rather than showing empty.
 getNotes : String -> Result Error (List (Dict String String))
 getNotes userId =
-    Db.query
+    Db.unsafeQuery
         "SELECT id, title, content, created_at, updated_at FROM notes WHERE user_id = ? ORDER BY updated_at DESC"
         [ userId ]
 
@@ -41,7 +41,7 @@ getNotes userId =
 -- not-found (a normal state, not an error).
 getNote : String -> String -> Result Error (Maybe (Dict String String))
 getNote noteId userId =
-    case Db.query
+    case Db.unsafeQuery
              "SELECT id, title, content, created_at, updated_at FROM notes WHERE id = ? AND user_id = ? LIMIT 1"
              [ noteId, userId ] of
 
