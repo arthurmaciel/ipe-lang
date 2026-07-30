@@ -24,7 +24,7 @@ where `view : Model -> Element Msg` is the **same typed `Ipe.Ui` element tree**
 the [Web](web.md) and [WebView](webview.md) shapes render — the runtime walks the
 tree and paints it to terminal cells, so one `view` function renders on web,
 desktop, and terminal. `onKey : { kind : String, value : String } -> Msg` maps a
-key event to a message. See [Views: Ui, Html, and Css](../ui.md) for the
+key event to a message. See [Views: Ui, Html, and Css](../language/ui.md) for the
 `Element` vocabulary shared with the graphical shapes.
 
 ### Minimal example

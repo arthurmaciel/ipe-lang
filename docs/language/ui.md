@@ -12,15 +12,15 @@ An Ipê view is built from two vocabularies and one styling module:
 
 `Ipe.Ui`, `Ipe.Html`, and `Ipe.Css` are ordinary top-level modules. They are
 available to **any** shape — they are view *data types*, not something the Elm
-Architecture owns. See [Program](shapes/program.md#views-as-data-static-rendering)
+Architecture owns. See [Program](../shapes/program.md#views-as-data-static-rendering)
 for using them with no TEA loop.
 
 ## `Ipe.Ui` — portable layout
 
 `Ipe.Ui` is the portable view vocabulary. Its central type is `Element msg`, an
 opaque layout tree that is **medium-agnostic**: the same `Element` renders to the
-browser DOM under [Web](shapes/web.md) and [WebView](shapes/webview.md), and to
-ANSI terminal cells under [Terminal](shapes/terminal.md).
+browser DOM under [Web](../shapes/web.md) and [WebView](../shapes/webview.md), and to
+ANSI terminal cells under [Terminal](../shapes/terminal.md).
 
 Element builders:
 
@@ -126,7 +126,7 @@ page =
 ```
 
 `Ui.layout` is what the framework applies internally for the
-[Web](shapes/web.md) and [WebView](shapes/webview.md) shapes: their `view`
+[Web](../shapes/web.md) and [WebView](../shapes/webview.md) shapes: their `view`
 returns the portable `Element Msg`, and the framework wraps it in `Ui.layout []`
 to produce the `Html` node the DOM runtime mounts. You reach for `Ui.layout`
 directly only when nesting a `Ui` subtree inside a hand-written `Html` tree
@@ -141,7 +141,7 @@ Html.render : Html msg -> String
 ```
 
 `Html.render` walks a `Html msg` tree and returns the serialized HTML string.
-(`Html.toString` is an alias.) Under [Web](shapes/web.md), the same idea is
+(`Html.toString` is an alias.) Under [Web](../shapes/web.md), the same idea is
 available as a `Task`:
 
 ```ipe
@@ -150,7 +150,7 @@ Web.renderStatic : (Model -> Html Msg) -> Model -> Task Error ()
 
 `Web.renderStatic` applies a `view` to a `Model` and writes the rendered HTML —
 no TEA loop, no `update`, no subscriptions. This is the bridge that lets a plain
-[Program](shapes/program.md#views-as-data-static-rendering) build and emit a view
+[Program](../shapes/program.md#views-as-data-static-rendering) build and emit a view
 without adopting an app shape.
 
 ## Per-shape `view` types
@@ -162,11 +162,11 @@ shape is a one-line change of the imported module. `Terminal.appLines` paints a
 
 | Shape | Entry | `view` type | Renders to |
 |---|---|---|---|
-| [Web](shapes/web.md) | `Web.app` | `Model -> Element Msg` | DOM (framework applies `Ui.layout`) |
-| [WebView](shapes/webview.md) | `WebView.app` | `Model -> Element Msg` | native webview DOM (framework applies `Ui.layout`) |
-| [Terminal](shapes/terminal.md) | `Terminal.appScreen` | `Model -> Element Msg` | ANSI terminal cells |
-| [Terminal](shapes/terminal.md) | `Terminal.appLines` | `Model -> String` | stdout, printed verbatim |
-| [Program](shapes/program.md) | plain `main` | *(none)* | — (static rendering only) |
+| [Web](../shapes/web.md) | `Web.app` | `Model -> Element Msg` | DOM (framework applies `Ui.layout`) |
+| [WebView](../shapes/webview.md) | `WebView.app` | `Model -> Element Msg` | native webview DOM (framework applies `Ui.layout`) |
+| [Terminal](../shapes/terminal.md) | `Terminal.appScreen` | `Model -> Element Msg` | ANSI terminal cells |
+| [Terminal](../shapes/terminal.md) | `Terminal.appLines` | `Model -> String` | stdout, printed verbatim |
+| [Program](../shapes/program.md) | plain `main` | *(none)* | — (static rendering only) |
 
 Raw `Html` is reached through the `Ui.html : Html msg -> Element msg` node, which
 embeds a hand-written `Html` subtree inside the `Element` view under any
