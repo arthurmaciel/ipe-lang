@@ -3195,6 +3195,58 @@ mod tests {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // IPE-N0034 regression: a compiled-source stdlib module that itself imports
+    // another stdlib module must not fire IPE-N0034 on its OWN import.
+    //
+    // Ipe.Money imports `Ipe.String as String` and uses `String.*` in its body.
+    // The Tier-C import gate (ADR 0047) must see that import as satisfied —
+    // `register_stdlib_import_aliases` marks the qualifier imported BEFORE
+    // `resolve_qual_var` consults `stdlib_import_required`. If that ordering
+    // were broken (e.g. the gate were checked before alias registration),
+    // every compiled-source stdlib module that imports a kernel module would
+    // fail with IPE-N0034 on its own import.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn embedded_stdlib_own_kernel_import_not_gated_n0034() {
+        // A compiled-source module (`Ipe.Money`-like) that imports `Ipe.String`
+        // and uses `String.fromInt` must NOT fire IPE-N0034 — the module's
+        // own `import Ipe.String as String` satisfies the Tier-C gate.
+        let src = "module Ipe.Money exposing (show)\n\
+             import Ipe.String as String\n\
+             show : Int -> String\n\
+             show n = String.fromInt n\n";
+        let res = canon_with_origin(src, ModuleOrigin::EmbeddedStdlib);
+        assert!(
+            res.is_ok(),
+            "EmbeddedStdlib module's own `import Ipe.String` must satisfy the Tier-C gate \
+             (no IPE-N0034): {:?}",
+            res.err()
+        );
+    }
+
+    #[test]
+    fn user_module_without_import_still_fires_n0034() {
+        // Mirror test: a USER module using `String.fromInt` without the import
+        // must STILL fire N0034 — the EmbeddedStdlib exemption above must not
+        // accidentally relax the gate for ordinary user code.
+        let err = canon_with_origin(
+            "module Main exposing (main)\nmain = String.fromInt 0\n",
+            ModuleOrigin::User,
+        );
+        assert!(
+            matches!(
+                err.as_ref().err(),
+                Some(Diagnostic::Name {
+                    msg: NameError::StdlibImportRequired { .. },
+                    ..
+                })
+            ),
+            "user module without import must still be IPE-N0034, got {err:?}"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // ModuleOrigin-gated reserved-builtin exemption.
     //
     // The unforgeable `ModuleOrigin` and the home-aware lowerer (the nullary
