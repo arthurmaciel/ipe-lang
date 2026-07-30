@@ -5,7 +5,7 @@ module Ipe.Web.Head exposing
     , metaProperty
     , link
     , canonical
-    , jsonLd
+    , unsafeJsonLd
     , themeColor
     , rss
     )
@@ -52,7 +52,7 @@ module Ipe.Web.Head exposing
 --         , Head.metaProperty "og:type" "website"
 --         , Head.themeColor "#1a1a2e"
 --         , Head.rss "/rss.xml" "Site Blog"
---         , Head.jsonLd jsonLdBlobFor model.page
+--         , Head.unsafeJsonLd jsonLdBlobFor model.page
 --         ]
 --
 -- COMPILED-SOURCE PORT NOTES (task #98):
@@ -141,19 +141,18 @@ canonical href =
         ]
 
 
--- jsonLd body — emits `<script type="application/ld+json">…</script>`
+-- unsafeJsonLd body — emits `<script type="application/ld+json">…</script>`
 -- with the raw JSON body. The renderer treats <script> bodies as
--- raw text (CDATA-like), so JSON containing `&`/`<`/`>` round-trips
--- verbatim. Build the JSON via Ipe.Json.Encode and call
--- `JsonEnc.encode` for safe escaping.
+-- raw text (CDATA-like), so the body is emitted VERBATIM — an
+-- un-escaped raw-String injection into a scripting context.
 --
--- NOTE: the runtime emits the script body verbatim — caller is
--- responsible for ensuring the JSON cannot contain `</script>` (e.g.
--- by avoiding user-controlled strings, or by escaping `<` as
--- `<` before splicing). Schema.org JSON-LD generated from
--- typed data via `Json.Encode` is always safe.
-jsonLd : String -> Html msg
-jsonLd body =
+-- The `unsafe` prefix names that risk at the surface (Db.unsafeFindWhere
+-- precedent): the caller MUST guarantee the body cannot contain
+-- `</script>` and is not user-controlled. Build the JSON from typed
+-- data (e.g. an encoder over your own record types) so the string is
+-- structurally trusted; never splice raw request input here.
+unsafeJsonLd : String -> Html msg
+unsafeJsonLd body =
     Html.script
         [ Attr.attribute "type" "application/ld+json" ]
         [ Html.text body ]

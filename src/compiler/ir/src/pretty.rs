@@ -1076,7 +1076,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::UiDescLabel => "Ui.descLabel",
         // ── Html element builders ────────────────────────────────────────
         KernelFn::HtmlTextNode => "Html.text",
-        KernelFn::HtmlRawNode => "Html.raw",
+        KernelFn::HtmlRawNode => "Html.unsafeRaw",
         KernelFn::HtmlNode => "Html.node",
         KernelFn::HtmlVoidNode => "Html.voidNode",
         KernelFn::HtmlDoctype => "Html.doctype",
