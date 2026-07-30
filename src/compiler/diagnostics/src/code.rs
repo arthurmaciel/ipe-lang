@@ -626,7 +626,7 @@ mod tests {
 
     #[test]
     fn taxonomy_code_count_is_pinned() {
-        assert_eq!(ALL_CODES.len(), 112);
+        assert_eq!(ALL_CODES.len(), 113);
     }
 
     #[test]
@@ -644,7 +644,7 @@ mod tests {
             assert!(s.starts_with("IPE-"), "{s} bad prefix");
             assert!(seen.insert(s), "{s} duplicated");
         }
-        assert_eq!(seen.len(), 112);
+        assert_eq!(seen.len(), 113);
     }
 
     /// CI coverage gate: every taxonomy code has a conforming explain page.
