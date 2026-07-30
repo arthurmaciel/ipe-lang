@@ -516,11 +516,13 @@ fn check_expr(
 
 /// Check one `case`: first redundancy (a later arm useless against the earlier
 /// ones), then exhaustiveness (the wildcard row useful against the whole arm
-/// matrix). A `case` mentioning a constructor outside this module's unions is
-/// skipped — its signature is unavailable, so it cannot be judged soundly here.
+/// matrix), and finally the wildcard-covers-known-constructors lint. A `case`
+/// mentioning a constructor outside this module's unions is skipped — its
+/// signature is unavailable, so it cannot be judged soundly here.
 ///
 /// Redundant-branch findings are pushed onto `warnings` (IPE-T0011 is a
 /// Warning-severity diagnostic that must not abort compilation).
+/// Wildcard-lint findings are also warnings (IPE-T0018).
 fn check_case(
     scrut: &canon::Expr,
     branches: &[canon::CaseBranch],
@@ -542,8 +544,29 @@ fn check_case(
     // span even when the rest of the arm is still reachable (`Red | Green` then
     // `Green | Blue` flags only the second `Green`). The prior matrix grows one
     // row per expanded alternative, so no indexing is needed.
+    //
+    // The loop also collects `prior_heads_before` so the wildcard-covers-known-
+    // constructors lint (IPE-T0018) can inspect, for each wildcard/variable arm,
+    // which column heads appeared in the arms before it.
     let mut prior: Vec<Vec<UPat>> = Vec::new();
+    // Parallel list: the column heads seen at the start of each branch's analysis
+    // (i.e., the heads BEFORE that branch's rows are added), keyed by branch
+    // index.  A `None` entry marks a non-wildcard branch.
+    let mut wildcard_arm_info: Vec<Option<(Span, Vec<Head>)>> = Vec::new();
     for br in branches {
+        // Capture the top-level column heads before this arm is added. Only
+        // record them for wildcard / variable top-level arms (the lint targets
+        // just those).
+        let is_top_level_wildcard = matches!(
+            br.pat.value,
+            canon::Pattern_::PAnything | canon::Pattern_::PVar(_)
+        );
+        wildcard_arm_info.push(if is_top_level_wildcard {
+            Some((br.pat.span, column_heads(&prior)))
+        } else {
+            None
+        });
+
         // A tuple / record arm is reported through the dedicated multi-arm
         // product gate at lowering (IPE-L0115), which gives a clearer message
         // than "redundant branch"; redundancy reporting covers the constructor /
@@ -588,24 +611,72 @@ fn check_case(
         .map(|p| vec![p])
         .collect();
     let witnesses = useful(&matrix, &[UPat::Wild], sigs, WITNESS_CAP);
-    if witnesses.is_empty() {
-        return Ok(());
+    if !witnesses.is_empty() {
+        let mut missing: Vec<Box<str>> = Vec::with_capacity(witnesses.len());
+        for w in &witnesses {
+            // Each witness is a single-column row; render its one pattern.
+            let head = w.first().unwrap_or(&UPat::Wild);
+            missing.push(render_upat(head, interner, false)?.into_boxed_str());
+        }
+        missing.dedup();
+        return Err(Diagnostic::Type {
+            span: scrut.span,
+            msg: TypeError::NonExhaustiveCase {
+                missing: missing.into_boxed_slice(),
+            },
+        });
     }
 
-    let mut missing: Vec<Box<str>> = Vec::with_capacity(witnesses.len());
-    for w in &witnesses {
-        // Each witness is a single-column row; render its one pattern.
-        let head = w.first().unwrap_or(&UPat::Wild);
-        missing.push(render_upat(head, interner, false)?.into_boxed_str());
+    // Wildcard-covers-known-constructors lint (IPE-T0018): the case is
+    // exhaustive, but a wildcard / variable arm swallows constructors a finite
+    // closed ADT (or `Bool` / `List`) could name explicitly. Warn so adding a
+    // new variant later surfaces at this match site rather than falling through
+    // silently.
+    //
+    // The lint fires when:
+    // * a top-level arm is a wildcard (`_`) or variable binder,
+    // * the arms before it introduced at least one named constructor of a
+    //   CLOSED type into the column (an ADT, `Bool`, or `List`), AND
+    // * the remaining constructors are all named (not a bare `_` witness) —
+    //   meaning the type is finite and its full signature is known.
+    //
+    // Open types (`Int`, `Char`, `String`) and tuples (always complete) do
+    // not trigger the lint because their "remaining" set is either unbounded or
+    // empty, so a wildcard is the correct spelling.
+    for info in wildcard_arm_info {
+        let Some((span, heads_before)) = info else {
+            continue;
+        };
+        // Only fire when the column before this wildcard has named constructor
+        // heads — otherwise the wildcard is matching against a type whose
+        // exhaustiveness cannot be judged (no heads → unknown type, or a type
+        // the user wrote a wildcard-only case for).
+        if heads_before.is_empty() {
+            continue;
+        }
+        // `missing_heads` tells us what constructors the wildcard covers.
+        // If every witness is a named constructor (not a bare `UPat::Wild`),
+        // the remaining set is finite and nameable — fire the lint.
+        let remaining = missing_heads(&heads_before, sigs);
+        // A bare `UPat::Wild` appears when the column's type is open (or the
+        // column head is unknown); skip in those cases.
+        let all_named = remaining.iter().all(|p| !matches!(p, UPat::Wild));
+        if !all_named || remaining.is_empty() {
+            continue;
+        }
+        let mut ctors: Vec<Box<str>> = Vec::with_capacity(remaining.len());
+        for p in &remaining {
+            ctors.push(render_upat(p, interner, false)?.into_boxed_str());
+        }
+        warnings.push(Diagnostic::Type {
+            span,
+            msg: TypeError::WildcardCoversKnownConstructors {
+                constructors: ctors.into_boxed_slice(),
+            },
+        });
     }
-    missing.dedup();
 
-    Err(Diagnostic::Type {
-        span: scrut.span,
-        msg: TypeError::NonExhaustiveCase {
-            missing: missing.into_boxed_slice(),
-        },
-    })
+    Ok(())
 }
 
 /// Maranget usefulness with witness collection. Returns up to `cap` witness rows

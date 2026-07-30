@@ -597,6 +597,17 @@ fn type_label(msg: &TypeError) -> Option<String> {
                  but here it is applied to {found} type argument(s)"
             )
         }),
+        TypeError::WildcardCoversKnownConstructors { constructors } => {
+            let listed = constructors
+                .iter()
+                .map(|c| format!("`{c}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Some(format!(
+                "this `_` covers {listed} — consider listing each constructor \
+                 explicitly so a new variant forces an update here"
+            ))
+        }
         TypeError::RoutedAppMissingPageField { route_count } => Some(format!(
             "{route_count} route(s) declared but the Model has no `page` field — \
              routing is disabled and the routes are ignored"
