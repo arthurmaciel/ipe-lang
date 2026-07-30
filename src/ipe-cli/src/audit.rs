@@ -137,10 +137,25 @@ struct Prepared {
 /// The absolute path to the wrapper-owned Tier-2 admission probe fixture, from
 /// this crate's location in the workspace. Tier-2 copies it into the jail's
 /// scratch and runs it as the exit-owning wrapper (ADR 0046).
+///
+/// The wrapper is platform-native: a POSIX `/bin/sh` script on Linux/macOS/
+/// FreeBSD (driven via a `/usr/bin/env … /bin/sh` invocation prefix), and a
+/// PowerShell `.ps1` on Windows (the Windows jail runs `payload[0]` directly
+/// through `CreateProcessW` with no shell, so `powershell.exe -File` is the
+/// interpreter). Both implement the SAME wrapper-owned per-axis exit contract
+/// the decoder reads.
 fn tier2_probe_fixture() -> PathBuf {
-    // `CARGO_MANIFEST_DIR` is `.../src/ipe-cli`; the fixture lives at the repo
+    // `CARGO_MANIFEST_DIR` is `.../src/ipe-cli`; the fixtures live at the repo
     // root under `tests/fixtures/admission/`.
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/admission/untrusted-build.sh")
+    let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/admission");
+    #[cfg(target_os = "windows")]
+    {
+        base.join("untrusted-build.ps1")
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        base.join("untrusted-build.sh")
+    }
 }
 
 /// `ipe package audit [<path>]` — run the full Tier-1 gate on the working

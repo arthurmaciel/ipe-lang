@@ -146,17 +146,20 @@ fn a_native_bearing_package_with_no_probeable_entrypoint_fails_closed() {
 // Real-jail differential confinement (wired platforms + IPE_E2E=1)
 //
 // On Linux/x86_64 the jail is bwrap+seccomp; on macOS it is sandbox-exec; on
-// FreeBSD `jail(8)`. The reconciler and the POSIX-shell fixture are the SAME on
-// all three — only the jail primitive probed in `e2e_tools` differs. (Windows is
-// not here: its returning build jail runs `payload[0]` through `CreateProcessW`
-// with no shell, so the `/usr/bin/env … /bin/sh` fixture cannot drive it; the
-// Windows deny behaviour is proven by `ipe_sandbox`'s `build_jail_windows_e2e`.)
+// FreeBSD `jail(8)`; on Windows the Job Object + AppContainer returning build
+// jail. The reconciler is the SAME on all four — only the jail primitive probed
+// in `e2e_tools` and the platform-native probe wrapper differ (the POSIX
+// `/bin/sh` `untrusted-build.sh` on Linux/macOS/FreeBSD, driven through a
+// `/usr/bin/env … /bin/sh` prefix; the Windows-native `untrusted-build.ps1` on
+// Windows, driven as `powershell.exe -File … -Tier2Axis <axis> …` because the
+// Windows jail runs `payload[0]` directly through `CreateProcessW`, no shell).
 // ===========================================================================
 
 #[cfg(any(
     all(target_os = "linux", target_arch = "x86_64"),
     target_os = "macos",
-    target_os = "freebsd"
+    target_os = "freebsd",
+    target_os = "windows"
 ))]
 mod real_jail {
     use super::PathBuf;
@@ -177,8 +180,17 @@ mod real_jail {
     static JAIL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn fixture_path() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/fixtures/admission/untrusted-build.sh")
+        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/admission");
+        // The wrapper is platform-native: `.ps1` on Windows (the jail runs it via
+        // `powershell.exe -File`, no shell), `.sh` elsewhere.
+        #[cfg(target_os = "windows")]
+        {
+            base.join("untrusted-build.ps1")
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            base.join("untrusted-build.sh")
+        }
     }
 
     /// Probe the host for the jail primitive, returning the [`RunJailTools`] the
@@ -224,8 +236,28 @@ mod real_jail {
         })
     }
 
+    /// Windows: the probe interpreter is `powershell.exe` (the
+    /// `CreateProcessW`-invokable payload[0] the Windows `build_in_jail` runs
+    /// directly, driving the `.ps1` wrapper). The `RunJailTools` fields are read
+    /// by the POSIX arms but ignored by the Windows `build_in_jail` (which builds
+    /// its Job Object + AppContainer itself) — the confirmed interpreter is a
+    /// present-primitive placeholder, so `bwrap` carries the resolved
+    /// `powershell.exe` the payload runs.
+    #[cfg(target_os = "windows")]
+    fn probe_tools() -> Option<RunJailTools> {
+        let path = std::env::var_os("PATH")?;
+        let powershell = std::env::split_paths(&path)
+            .map(|d| d.join("powershell.exe"))
+            .find(|p| p.is_file())?;
+        Some(RunJailTools {
+            bwrap: powershell.clone(),
+            prlimit: powershell,
+            timeout: None,
+        })
+    }
+
     /// Skip unless `IPE_E2E=1`, the jail primitive is present, AND a jail can
-    /// actually be established here (a `/bin/true` canary settles it once) —
+    /// actually be established here (a clean-exit canary settles it once) —
     /// mirroring the sandbox crate's gate. Never a false pass.
     fn e2e_tools() -> Option<RunJailTools> {
         if std::env::var_os("IPE_E2E").is_none_or(|v| v != "1") {
@@ -236,6 +268,26 @@ mod real_jail {
             return None;
         }
         Some(tools)
+    }
+
+    /// A trivial clean-exit payload for the establishment canary — `/bin/true` on
+    /// POSIX, `powershell.exe -Command exit 0` on Windows (the jail runs
+    /// `payload[0]` directly through `CreateProcessW`, no shell, so the canary is
+    /// the interpreter itself).
+    #[cfg(not(target_os = "windows"))]
+    fn canary_payload(_tools: &RunJailTools) -> Vec<OsString> {
+        vec![OsString::from("/bin/true")]
+    }
+
+    #[cfg(target_os = "windows")]
+    fn canary_payload(tools: &RunJailTools) -> Vec<OsString> {
+        vec![
+            tools.bwrap.clone().into_os_string(),
+            OsString::from("-NoProfile"),
+            OsString::from("-NonInteractive"),
+            OsString::from("-Command"),
+            OsString::from("exit 0"),
+        ]
     }
 
     fn jail_can_establish(tools: &RunJailTools) -> bool {
@@ -251,7 +303,7 @@ mod real_jail {
                 &scoped,
                 &scoped,
                 &default_ro_binds(),
-                &[OsString::from("/bin/true")],
+                &canary_payload(tools),
             );
             let _ = std::fs::remove_dir_all(&scoped);
             let established = outcome.is_clean();
@@ -414,6 +466,8 @@ mod real_jail {
         assert_eq!(CERTIFIED_PLATFORM, "macos-arm64");
         #[cfg(target_os = "freebsd")]
         assert_eq!(CERTIFIED_PLATFORM, "freebsd-x64");
+        #[cfg(target_os = "windows")]
+        assert_eq!(CERTIFIED_PLATFORM, "windows-x64");
     }
 
     // ── real untrusted `cargo build` as the wrapper's child (the certify path) ──
@@ -605,8 +659,14 @@ mod real_jail {
 
     fn which_cargo() -> Option<PathBuf> {
         let path = std::env::var_os("PATH")?;
+        // `cargo` on POSIX, `cargo.exe` on Windows.
+        let names: &[&str] = if cfg!(target_os = "windows") {
+            &["cargo.exe", "cargo"]
+        } else {
+            &["cargo"]
+        };
         std::env::split_paths(&path)
-            .map(|p| p.join("cargo"))
+            .flat_map(|dir| names.iter().map(move |n| dir.join(n)))
             .find(|p| p.is_file())
     }
 
