@@ -138,6 +138,48 @@ keeps the native default even when the flag is absent.
 See the complete examples under [`examples/`](../../examples/) (`wasm/counter`,
 `wasm/spa`, `wasm/hydration`).
 
+## URL routing and navigation
+
+A `Model` with a `page` field is a routed app: `routes` maps URL patterns to
+`page` values (via `Web.route`), and `notFound` is the fallback `page`. On each
+matched URL the framework reconciles the model to the page the URL names.
+
+By default that reconcile writes the matched page straight into `Model.page` —
+navigation never reaches `update`. To own navigation in `update` instead, supply
+the optional `onNavigate : page -> msg` field: every URL-driven route change is
+turned into that `Msg` and dispatched through `update`, so the page transition
+happens only through the `update` arm you write.
+
+```ipe
+type Msg
+    = Increment
+    | Navigate Page
+
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+        Navigate page ->
+            ( { model | page = page }, Cmd.none )
+
+main =
+    Web.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = routeTable
+        , notFound = HomePage
+        , onNavigate = Navigate
+        }
+```
+
+Omitting `onNavigate` is exactly the implicit form of a `Navigate` arm that sets
+`page` — the two behave identically for an app that only updates `page`. Supply
+`onNavigate` when a navigation should do more (load data for the new page, reset
+a form, record analytics).
+
 ## Broadcasting: pub/sub
 
 A Web app can broadcast a payload on a named topic to every session subscribed
