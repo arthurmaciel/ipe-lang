@@ -10,6 +10,48 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.25](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.24...ipe-v0.1.25) (2026-07-30)
+
+
+### Features
+
+* **audit:** Windows Tier-2 native .ps1 probe wrapper — promote windows-x64 to a certifying platform ([#260](https://github.com/arthurmaciel/ipe-lang/issues/260)) ([#386](https://github.com/arthurmaciel/ipe-lang/issues/386)) ([dd94474](https://github.com/arthurmaciel/ipe-lang/commit/dd9447483dbecfb836ffb1236f9604265196799b))
+* **canon,lsp:** shape-scoped Cmd/Sub + IPE-N0035 cross-shape gate + Web PubSub doc ([#302](https://github.com/arthurmaciel/ipe-lang/issues/302), [#303](https://github.com/arthurmaciel/ipe-lang/issues/303)) ([#331](https://github.com/arthurmaciel/ipe-lang/issues/331)) ([1646bb8](https://github.com/arthurmaciel/ipe-lang/commit/1646bb831df37dca448341103b1f0b4728d8e186))
+* **cli:** infer --target wasm from [wasm].mode in ipe.toml ([#320](https://github.com/arthurmaciel/ipe-lang/issues/320)) ([#366](https://github.com/arthurmaciel/ipe-lang/issues/366)) ([b2bbfc9](https://github.com/arthurmaciel/ipe-lang/commit/b2bbfc9f02042ac8f4baf54e03cf066e59777fe7))
+* **cli:** ipe verify — one-command project gate (fmt + type-check + build) ([#301](https://github.com/arthurmaciel/ipe-lang/issues/301)) ([#361](https://github.com/arthurmaciel/ipe-lang/issues/361)) ([9ce9b2a](https://github.com/arthurmaciel/ipe-lang/commit/9ce9b2aa70194b510c70ef104f75ddd1468eed83))
+* **db:** mark the raw-SQL escape hatch — Db.execRaw → Db.unsafeExecRaw ([#339](https://github.com/arthurmaciel/ipe-lang/issues/339)) ([#377](https://github.com/arthurmaciel/ipe-lang/issues/377)) ([b4e9f8f](https://github.com/arthurmaciel/ipe-lang/commit/b4e9f8f62fe3fd79a71b110c62b1dfd783bfefb4))
+* **doc:** always include stdlib; add --list and &lt;module&gt; query ([#325](https://github.com/arthurmaciel/ipe-lang/issues/325)) ([#370](https://github.com/arthurmaciel/ipe-lang/issues/370)) ([82e5a76](https://github.com/arthurmaciel/ipe-lang/commit/82e5a76eb94a1efff7b7a985ad665d1d38208d83))
+* **http:** HttpMethod ADT replaces stringly Http.method ([#343](https://github.com/arthurmaciel/ipe-lang/issues/343)) ([#364](https://github.com/arthurmaciel/ipe-lang/issues/364)) ([6b5874b](https://github.com/arthurmaciel/ipe-lang/commit/6b5874b06aaf728cdb2973b787e800615a30cccc))
+* **lexer,canon:** path "…" literal sugar for typed Path ([#358](https://github.com/arthurmaciel/ipe-lang/issues/358)) ([#373](https://github.com/arthurmaciel/ipe-lang/issues/373)) ([0b8d23b](https://github.com/arthurmaciel/ipe-lang/commit/0b8d23b98528862ffd7ad435e33f31a112791028))
+* **runtime:** Windows-aware Path.clean; drop cfg(windows) compile_error ([#359](https://github.com/arthurmaciel/ipe-lang/issues/359)) ([#368](https://github.com/arthurmaciel/ipe-lang/issues/368)) ([2609a98](https://github.com/arthurmaciel/ipe-lang/commit/2609a988b73dec8bb7fbf28aae45b7158676f22e))
+* **stdlib,types:** typed pub/sub Topic a payload contract ([#340](https://github.com/arthurmaciel/ipe-lang/issues/340)) [salvaged] ([#372](https://github.com/arthurmaciel/ipe-lang/issues/372)) ([e6ade1e](https://github.com/arthurmaciel/ipe-lang/commit/e6ade1ebde6d15f9c2e28d13f179746a1b0fa625))
+* **stdlib:** compiled Regex type + Regex.compile — invalid patterns are typed Err ([#341](https://github.com/arthurmaciel/ipe-lang/issues/341)) ([#360](https://github.com/arthurmaciel/ipe-lang/issues/360)) ([c684294](https://github.com/arthurmaciel/ipe-lang/commit/c6842945a02562779967e29ecf2459e34a0a281f))
+* **stdlib:** Ipe.Markdown — markdown → Ui.Element renderer ([#321](https://github.com/arthurmaciel/ipe-lang/issues/321)) ([#380](https://github.com/arthurmaciel/ipe-lang/issues/380)) ([d500806](https://github.com/arthurmaciel/ipe-lang/commit/d500806541ac0b2919e5205883a449db302fb450))
+* **stdlib:** locale-correct case mapping — Locale + String.toUpperIn/toLowerIn (ICU4X) ([#277](https://github.com/arthurmaciel/ipe-lang/issues/277)) ([#388](https://github.com/arthurmaciel/ipe-lang/issues/388)) ([99872dc](https://github.com/arthurmaciel/ipe-lang/commit/99872dce561bea7ffe09992fec0d965f9247b908))
+* **stdlib:** typed Ipe.Url (parse-don't-validate) + injection-safe query builder ([#347](https://github.com/arthurmaciel/ipe-lang/issues/347)) ([#383](https://github.com/arthurmaciel/ipe-lang/issues/383)) ([d455011](https://github.com/arthurmaciel/ipe-lang/commit/d455011a131a1689ba5e29ded6921d0e435437bb))
+* **stdlib:** typed Path (parse-don't-validate) + Ipe.File migration ([#334](https://github.com/arthurmaciel/ipe-lang/issues/334)) ([#357](https://github.com/arthurmaciel/ipe-lang/issues/357)) ([438f95c](https://github.com/arthurmaciel/ipe-lang/commit/438f95cdf959b53f81d326136d71f1a8d118f093))
+* **stdlib:** typed security newtypes — Crypto Key/Mac, Email EmailAddress ([#344](https://github.com/arthurmaciel/ipe-lang/issues/344)) ([#367](https://github.com/arthurmaciel/ipe-lang/issues/367)) ([a772025](https://github.com/arthurmaciel/ipe-lang/commit/a7720256edf62bdd35f81657b2f1469f78cb22c3))
+* **surface:** drop Task.run + Task.perform from the Ipê surface ([#282](https://github.com/arthurmaciel/ipe-lang/issues/282)) ([#389](https://github.com/arthurmaciel/ipe-lang/issues/389)) ([e727ad7](https://github.com/arthurmaciel/ipe-lang/commit/e727ad75cac70dd2c64a02af5d24398a4f757b24))
+* **types:** closed-union case refuses catch-all arms — IPE-T0018 fail-closed ([#276](https://github.com/arthurmaciel/ipe-lang/issues/276)) ([#392](https://github.com/arthurmaciel/ipe-lang/issues/392)) ([480433e](https://github.com/arthurmaciel/ipe-lang/commit/480433e72aa80bf8c2b4a4763ee2327987a70689))
+* **types:** exhaustiveness-aware wildcard warning IPE-T0018 ([#272](https://github.com/arthurmaciel/ipe-lang/issues/272)) ([#379](https://github.com/arthurmaciel/ipe-lang/issues/379)) ([b9f8d55](https://github.com/arthurmaciel/ipe-lang/commit/b9f8d5527b89b94836c34745eee8f330fb8b1f72))
+* **verify:** wire the test stage (Ipe.Test runner) ([#390](https://github.com/arthurmaciel/ipe-lang/issues/390)) ([11201b2](https://github.com/arthurmaciel/ipe-lang/commit/11201b2ca98c3dbaa3eba985cfc15f609e107d25))
+* **wasm:** client-side router for the WasmClient shape ([#268](https://github.com/arthurmaciel/ipe-lang/issues/268)) ([#391](https://github.com/arthurmaciel/ipe-lang/issues/391)) ([fb5d165](https://github.com/arthurmaciel/ipe-lang/commit/fb5d165ca2294f1e4983ba710305d4a1de9fa8ba))
+
+
+### Bug Fixes
+
+* **bytes:** migrate Email/attachment byte pipeline to the typed Bytes carrier ([#275](https://github.com/arthurmaciel/ipe-lang/issues/275)) ([#387](https://github.com/arthurmaciel/ipe-lang/issues/387)) ([4312307](https://github.com/arthurmaciel/ipe-lang/commit/43123076a2a7fb75c4d5add66ec24f1046ca5d5e))
+* **cli:** box the CliError::Pipeline diagnostic to shrink the driver error ([#332](https://github.com/arthurmaciel/ipe-lang/issues/332)) ([#350](https://github.com/arthurmaciel/ipe-lang/issues/350)) ([cf8add1](https://github.com/arthurmaciel/ipe-lang/commit/cf8add1fba019ef2d770ded12d6e9645167de254))
+* **cli:** ipe upgrade no-prebuilt-binary is a typed error, never shows help ([#351](https://github.com/arthurmaciel/ipe-lang/issues/351)) ([#365](https://github.com/arthurmaciel/ipe-lang/issues/365)) ([6d11ea5](https://github.com/arthurmaciel/ipe-lang/commit/6d11ea503fe40884bf086a55ac00589b991f660a))
+* **cli:** route all human-facing prose through style::gutter — closes [#354](https://github.com/arthurmaciel/ipe-lang/issues/354) ([#374](https://github.com/arthurmaciel/ipe-lang/issues/374)) ([2314b5f](https://github.com/arthurmaciel/ipe-lang/commit/2314b5f827d2a4094f636b50f78efdd6ee5a3810))
+* **diagnostics:** ipe check caret parity with build + capped/collapsed 'did you mean' ([#355](https://github.com/arthurmaciel/ipe-lang/issues/355)) ([#356](https://github.com/arthurmaciel/ipe-lang/issues/356)) ([333dac8](https://github.com/arthurmaciel/ipe-lang/commit/333dac8de51da4de06a9ccbaab287e0bcff0cf50))
+* **html:** close the raw-String HTML/script injection hole — Html.raw→unsafeRaw, Head.jsonLd→unsafeJsonLd ([#338](https://github.com/arthurmaciel/ipe-lang/issues/338)) ([#378](https://github.com/arthurmaciel/ipe-lang/issues/378)) ([c5a0181](https://github.com/arthurmaciel/ipe-lang/commit/c5a01812b8c82f3fac1dd398c04e4350cf292181))
+* **install:** success + report-bugs lines at the 2-space banner/GUTTER indent ([#353](https://github.com/arthurmaciel/ipe-lang/issues/353)) ([6d74342](https://github.com/arthurmaciel/ipe-lang/commit/6d743420f72e95f0af4b10d6b589d65e1ffffb38))
+* **path:** harden escapes_root — reject any leading all-dots (&gt;=2) element ([#384](https://github.com/arthurmaciel/ipe-lang/issues/384)) ([cc8ed1d](https://github.com/arthurmaciel/ipe-lang/commit/cc8ed1dac710cbde3b1013c403368d57fe2b67e3))
+* **stdlib:** Money.parseCurrency returns Maybe Currency (kill silent CurrencyRaw default) ([#363](https://github.com/arthurmaciel/ipe-lang/issues/363)) ([fd77fd5](https://github.com/arthurmaciel/ipe-lang/commit/fd77fd5424c4ed06cf1c8327b87b3cacad2c3875))
+* **test:** make doc-serve test robust to the framed announce line ([#375](https://github.com/arthurmaciel/ipe-lang/issues/375)) ([2412bed](https://github.com/arthurmaciel/ipe-lang/commit/2412bed2177358f6d3000ae835ff712896c02b67))
+* **web:** SSE reconnect reconciles page with connection URL ([#385](https://github.com/arthurmaciel/ipe-lang/issues/385)) ([0b45851](https://github.com/arthurmaciel/ipe-lang/commit/0b45851882b49cccaedcf52b7b1a623d621568d6))
+
 ## [0.1.24](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.23...ipe-v0.1.24) (2026-07-30)
 
 
