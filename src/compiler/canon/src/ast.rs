@@ -161,7 +161,8 @@ pub enum Expr_ {
     /// safely accept at runtime without re-validation.
     ///
     /// The canonicaliser validates the raw source string with
-    /// [`ipe_runtime::path::validate_path_literal`] and stores the cleaned result
+    /// `ipe_diagnostics::path_check::validate` (the compiler's entry onto the
+    /// shared `ipe_path_core` source of truth) and stores the cleaned result
     /// here; an invalid string is a compile error (IPE-P0063) emitted before
     /// this node is ever constructed.
     ///
