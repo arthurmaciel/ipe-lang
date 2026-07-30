@@ -431,6 +431,28 @@ mod tests {
     }
 
     #[test]
+    fn escapes_root_rejects_leading_glued_dot_run() {
+        // Defence-in-depth: `escapes_root` rejects a leading all-dots element of
+        // length >= 2 DIRECTLY, so a glued `...`/`....` a broken cleaner might
+        // ever emit is caught independently of the cleaner. Exact `..` still
+        // rejects; a real filename with dots plus other chars (`..foo`) does not.
+        for regime in [false, true] {
+            for escape in ["..", "...", "....", ".../x", "..../x"] {
+                assert!(
+                    escapes_root(escape, regime),
+                    "leading all-dots element must escape ({escape:?}, windows={regime})"
+                );
+            }
+            for keep in ["..foo", "..foo/bar", "a/b"] {
+                assert!(
+                    !escapes_root(keep, regime),
+                    "dotted filename / in-bounds path must NOT escape ({keep:?}, windows={regime})"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn unix_clean_agrees_with_go_path_clean_on_a_dotdot_corpus() {
         // `clean_with(_, false)` must match Go `path.Clean` so a glued-dot
         // regression cannot slip past the escape check. Reference values are Go
