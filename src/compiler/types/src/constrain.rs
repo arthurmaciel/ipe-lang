@@ -566,6 +566,13 @@ struct Builtins {
     /// `EmailAddress.parse : String -> Maybe EmailAddress`; extracted via
     /// `EmailAddress.toString`.  Lowered to `IrType::EmailAddress`.
     email_address: Symbol,
+    // ── Ipe.PubSub.Topic ───────────────────────────────────────────────────
+    /// `"Topic"` — the phantom topic-handle type constructor `Topic a`.
+    /// Erases to `String` at runtime (`ir_type_from_ty` maps `Topic a → Str`).
+    /// Used only in kernel type schemes (`CmdPublish`/`SubSubscribeTopic`/
+    /// `PubSubPublish`/`PubSubPublishNoEcho`/`PubSubTopic`) to share the
+    /// payload type variable `a` between publisher and subscriber.
+    topic_con: Symbol,
 }
 
 impl Builtins {
@@ -777,6 +784,8 @@ impl Builtins {
             crypto_mac: interner.intern("Mac")?,
             // ── Ipe.Email.EmailAddress ────────────────────────────────────────────
             email_address: interner.intern("EmailAddress")?,
+            // ── Ipe.PubSub.Topic ────────────────────────────────────────────────
+            topic_con: interner.intern("Topic")?,
         })
     }
 
@@ -3799,6 +3808,14 @@ impl<'a> Builder<'a> {
             name: self.builtins.sub,
             args: vec![m],
         };
+        // `topic(a)` — `Topic a` — the phantom topic-handle type.
+        // Erases to `String` at runtime; used only in kernel type schemes so
+        // that publisher and subscriber share the same payload type variable.
+        let topic = |a: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.topic_con,
+            args: vec![a],
+        };
         // `dec(inner)` — `Decoder inner` — the opaque row-decoder type shared by
         // JSON decode and Db.Decode.
         let dec = |inner: Ty| Ty::Con {
@@ -4806,11 +4823,11 @@ impl<'a> Builder<'a> {
             K::CmdMap => fun(fun(var(0), var(1)), fun(cmd(var(0)), cmd(var(1)))),
 
             // ── Cmd.publish / Cmd.publishNoEcho ──
-            // `Cmd.publish : String -> any -> Cmd msg`
-            // var(0) = msg type variable, var(1) = payload (polymorphic, like runtime T).
-            K::CmdPublish => fun(string(), fun(var(1), cmd(var(0)))),
-            // `Cmd.publishNoEcho : String -> any -> Cmd msg`
-            K::CmdPublishNoEcho => fun(string(), fun(var(1), cmd(var(0)))),
+            // `Cmd.publish : Topic a -> a -> Cmd msg`
+            // var(0) = msg, var(1) = payload type `a`
+            K::CmdPublish => fun(topic(var(1)), fun(var(1), cmd(var(0)))),
+            // `Cmd.publishNoEcho : Topic a -> a -> Cmd msg`
+            K::CmdPublishNoEcho => fun(topic(var(1)), fun(var(1), cmd(var(0)))),
 
             // ── Sub ──
             K::SubNone => sub(var(0)),
@@ -4819,18 +4836,21 @@ impl<'a> Builder<'a> {
             // `Sub.map : (a -> msg) -> Sub a -> Sub msg` — the `Sub` twin of
             // `Cmd.map`. var(0)=a (child msg), var(1)=msg (parent).
             K::SubMap => fun(fun(var(0), var(1)), fun(sub(var(0)), sub(var(1)))),
-            // `Sub.subscribeTopic : String -> (any -> msg) -> Sub msg`
-            // var(0) = payload type (the `any`), var(1) = message type.
-            K::SubSubscribeTopic => fun(string(), fun(fun(var(0), var(1)), sub(var(1)))),
+            // `Sub.subscribeTopic : Topic a -> (a -> msg) -> Sub msg`
+            // var(0) = msg, var(1) = payload type `a`
+            K::SubSubscribeTopic => fun(topic(var(1)), fun(fun(var(1), var(0)), sub(var(0)))),
 
             // ── PubSub.publish / publishNoEcho ──
-            // `PubSub.publish    : String -> a -> Task Error Int`
-            // `PubSub.publishNoEcho : String -> a -> Task Error Int`
-            // var(0) = payload (polymorphic, monomorphized by rustc — like the
-            // runtime T).  Result is `Task Error Int` (subscriber count), NOT
-            // `Cmd msg` — no `msg` type var, distinct from `Cmd.publish`.
-            K::PubSubPublish => fun(string(), fun(var(0), task(int()))),
-            K::PubSubPublishNoEcho => fun(string(), fun(var(0), task(int()))),
+            // `PubSub.publish    : Topic a -> a -> Task Error Int`
+            // `PubSub.publishNoEcho : Topic a -> a -> Task Error Int`
+            // var(0) = payload type `a`.  Result is `Task Error Int` (subscriber
+            // count), NOT `Cmd msg` — no `msg` type var, distinct from `Cmd.publish`.
+            K::PubSubPublish => fun(topic(var(0)), fun(var(0), task(int()))),
+            K::PubSubPublishNoEcho => fun(topic(var(0)), fun(var(0), task(int()))),
+
+            // `PubSub.topic : String -> Topic a`
+            // var(0) = payload type `a`
+            K::PubSubTopic => fun(string(), topic(var(0))),
 
             // ── Server ──
             K::ServerGet
@@ -8740,6 +8760,9 @@ mod registry_phase_c_tests {
             // entry) and flow through lower + emit.
             K::CmdPublish,
             K::CmdPublishNoEcho,
+            // ── PubSub.topic — Ipê-new typed-topic constructor (`String -> Topic
+            // a`); no legacy `kernel_ty` arm. Erases to the name String at emit. ─
+            K::PubSubTopic,
             // ── Ui.link + Border.widthEach ────────────────────────────────────
             // No legacy `kernel_ty` entry — pure holes.
             K::UiLink,

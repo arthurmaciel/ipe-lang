@@ -757,6 +757,10 @@ pub enum StdlibKernel {
     PubSubPublish,
     /// `PubSub.publishNoEcho` — reserved; absent from [`Self::ALL`].
     PubSubPublishNoEcho,
+    /// `PubSub.topic : String -> Topic a` — constructs a typed topic handle.
+    /// Emits as the identity function: `Topic a` erases to `String` at runtime.
+    /// Resolved exclusively through `Ffi.kernel "PubSub_topic"` in `Ipe.PubSub`.
+    PubSubTopic,
     // ── Ipe.Http.Server / Middleware / RateLimit ─────────────────────────────
     ServerGet,
     ServerPost,
@@ -2419,6 +2423,9 @@ impl StdlibKernel {
             Self::PubSubPublishNoEcho => {
                 d("PubSub", "publishNoEcho", 2, Web, "pubsub_publish_no_echo")
             }
+            // `PubSub.topic : String -> Topic a` — identity at runtime; `Topic a`
+            // erases to `String`. Arity 1. Resolved via `Ffi.kernel "PubSub_topic"`.
+            Self::PubSubTopic => d("PubSub", "topic", 1, Pure, "pubsub_topic"),
             // ── Ipe.Http.Server / Middleware / RateLimit ─────────────────────
             Self::ServerGet => d("Server", "get", 2, Server, "server_get"),
             Self::ServerPost => d("Server", "post", 2, Server, "server_post"),
@@ -3287,13 +3294,13 @@ impl StdlibKernel {
     ///
     /// # Exclusions
     ///
-    /// `PubSubPublish` / `PubSubPublishNoEcho` are in `ALL` but their `"PubSub"`
-    /// qualifier is not a kernel-`QUALIFIERS` entry — `Ipe.PubSub` is a
-    /// compiled-source module, so it is resolved through the `Ffi.kernel
-    /// "PubSub_publish"` alias, not a canon qualifier. The tripwire skips a
-    /// qualifier absent from `qual_vars`, so this is an automatic skip, not a
-    /// hand-maintained exclusion. `CmdPublish` / `CmdPublishNoEcho` carry their
-    /// own `"Cmd"` `QUALIFIERS` entries.
+    /// `PubSubPublish` / `PubSubPublishNoEcho` / `PubSubTopic` are in `ALL` but
+    /// their `"PubSub"` qualifier is not a kernel-`QUALIFIERS` entry — `Ipe.PubSub`
+    /// is a compiled-source module, so they are resolved through `Ffi.kernel
+    /// "PubSub_*"` aliases, not a canon qualifier. The tripwire skips a qualifier
+    /// absent from `qual_vars`, so this is an automatic skip, not a hand-maintained
+    /// exclusion. `CmdPublish` / `CmdPublishNoEcho` carry their own `"Cmd"`
+    /// `QUALIFIERS` entries.
     pub const ALL: &'static [Self] = &[
         // Log
         Self::LogInfo,
@@ -3795,6 +3802,8 @@ impl StdlibKernel {
         // canon QUALIFIERS; class = Web, not TEA-loop machinery)
         Self::PubSubPublish,
         Self::PubSubPublishNoEcho,
+        // `PubSub.topic` — phantom topic handle constructor (Pure, arity 1).
+        Self::PubSubTopic,
         // Ipe.Http.Server / Middleware / RateLimit
         Self::ServerGet,
         Self::ServerPost,
@@ -5031,6 +5040,7 @@ impl StdlibKernel {
             | Self::SubSubscribeTopic
             | Self::PubSubPublish
             | Self::PubSubPublishNoEcho
+            | Self::PubSubTopic
             | Self::UiLayout
             | Self::UiLayoutWith
             | Self::HtmlRender
@@ -6599,7 +6609,10 @@ impl StdlibKernel {
                 // allowlist (`option_env!` on wasm32; the SAME allowlist via
                 // `std::env::var` natively — `env_public.rs`, backend-
                 // generated per project, never vendored from the source tree).
-                matches!(self, Self::EnvPublic)
+                matches!(self, Self::EnvPublic) ||
+                // `PubSub.topic` — identity over a String; no runtime I/O.
+                // Emits as pass-through in the wasm backend (same as native).
+                matches!(self, Self::PubSubTopic)
             }
             // Server-only surfaces: no browser denotation, ever (Db/Server)
             // or until a dedicated backend exists (Terminal/WebView/Ffi).
@@ -6750,6 +6763,7 @@ mod tests {
             StdlibKernel::SubSubscribeTopic,
             StdlibKernel::PubSubPublish,
             StdlibKernel::PubSubPublishNoEcho,
+            StdlibKernel::PubSubTopic,
             StdlibKernel::WebSocketConnect,
             StdlibKernel::WebSocketSend,
             StdlibKernel::WebSocketClose,

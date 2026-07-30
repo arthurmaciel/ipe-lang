@@ -353,7 +353,7 @@ fn cache_builds_and_runs() {
 }
 
 // ── Ipe.PubSub ─────────────────────────────────────────────────────────
-// PubSub.publish : String -> any -> Task Error Int.  No Web.app runs in this
+// PubSub.publish : Topic a -> a -> Task Error Int.  No Web.app runs in this
 // probe so publish resolves to Err(Unavailable) — Task.onError swallows it and
 // the program prints the marker.  The test asserts ipe-0 ⇒ cargo-0 ⇒ exit-0.
 
@@ -365,7 +365,7 @@ const PUBSUB_MAIN: &str = "module Main exposing (main)\n\
     import Ipe.Io as Io\n\n\
     main =\n\
     \x20   let\n\
-    \x20       _ = PubSub.publish \"t\" (JsonEnc.string \"hi\")\n\
+    \x20       _ = PubSub.publish (PubSub.topic \"t\") (JsonEnc.string \"hi\")\n\
     \x20               |> Task.onError (\\_ -> Task.succeed 0)\n\
     \x20   in\n\
     \x20   Io.println \"PUBSUB_OK\"\n";
@@ -378,6 +378,102 @@ fn pubsub_resolves_and_emits() {
 #[test]
 fn pubsub_builds_and_runs() {
     seal_module("pubsub", PUBSUB_MAIN, "PUBSUB_OK");
+}
+
+// ── Ipe.PubSub typed-topic contract tests ──────────────────────────────
+//
+// Positive: publisher and subscriber share the SAME `Topic a` handle — the
+// payload type `a` unifies at compile time.  This must compile cleanly.
+//
+// Negative: publisher uses `Topic Int`, subscriber expects `Topic String` on
+// the same topic name — different `Topic a` handles, so `a` cannot unify.
+// Must be rejected as IPE-T0001.
+
+const PUBSUB_TYPED_SHARED_TOPIC: &str = "module Main exposing (main)\n\
+    import Ipe.Prelude exposing (..)\n\
+    import Ipe.Cmd as Cmd\n\
+    import Ipe.Sub as Sub\n\
+    import Ipe.PubSub as PubSub exposing (Topic)\n\
+    import Ipe.Tea.Web as Web\n\
+    import Ipe.Ui as Ui\n\
+    import Ipe.Io as Io\n\
+    type Msg = Got Int | Send\n\
+    type alias Model = { last : Int }\n\
+    scoreTopic : Topic Int\n\
+    scoreTopic = PubSub.topic \"score\"\n\
+    init _req = ( { last = 0 }, Cmd.none )\n\
+    update msg model = case msg of\n\
+    \x20   Got n -> ( { model | last = n }, Cmd.none )\n\
+    \x20   Send -> ( model, Cmd.publish scoreTopic 42 )\n\
+    subscriptions _m = Sub.subscribeTopic scoreTopic Got\n\
+    view _m = Ui.html (Ui.layout [] (Ui.text \"ok\"))\n\
+    main = Web.app { init = init, update = update, view = view\n\
+    \x20            , subscriptions = subscriptions, routes = [], notFound = Send }\n";
+
+/// Positive: publisher and subscriber both use `scoreTopic : Topic Int`.
+/// The shared `Topic a` enforces `a = Int` for both — must compile cleanly.
+#[test]
+fn pubsub_typed_shared_topic_resolves_and_emits() {
+    let _ = compile_module_probe("pubsub_typed_shared", PUBSUB_TYPED_SHARED_TOPIC);
+}
+
+/// Positive with E2E build: compiles and links.
+#[test]
+fn pubsub_typed_shared_topic_builds() {
+    if !e2e_enabled() {
+        return;
+    }
+    let _ = compile_module_probe("pubsub_typed_shared_e2e", PUBSUB_TYPED_SHARED_TOPIC)
+        .expect("typed shared Topic Int must compile end-to-end");
+}
+
+// Negative: one shared `t : Topic Int` used to `publish` an `Int` and to
+// `subscribeTopic` a `String` handler (`GotStr`). Sharing the topic value ties
+// the payload type on both sides, so `Int` (publish) and `String` (handler)
+// cannot unify → IPE-T0001.
+const PUBSUB_TOPIC_MISMATCH: &str = "module Main exposing (main)\n\
+    import Ipe.Prelude exposing (..)\n\
+    import Ipe.Cmd as Cmd\n\
+    import Ipe.Sub as Sub\n\
+    import Ipe.PubSub as PubSub exposing (Topic)\n\
+    import Ipe.Tea.Web as Web\n\
+    import Ipe.Ui as Ui\n\
+    type Msg = GotStr String | SendInt\n\
+    type alias Model = { x : Int }\n\
+    t : Topic Int\n\
+    t = PubSub.topic \"t\"\n\
+    init _req = ( { x = 0 }, Cmd.none )\n\
+    update msg model = case msg of\n\
+    \x20   GotStr _ -> ( model, Cmd.none )\n\
+    \x20   SendInt  -> ( model, Cmd.publish t 1 )\n\
+    subscriptions _m = Sub.subscribeTopic t GotStr\n\
+    view _m = Ui.html (Ui.layout [] (Ui.text \"bad\"))\n\
+    main = Web.app { init = init, update = update, view = view\n\
+    \x20            , subscriptions = subscriptions, routes = [], notFound = SendInt }\n";
+
+/// Negative: `Cmd.publish intTopic 1` with `intTopic : Topic Int` and
+/// `Sub.subscribeTopic strTopic GotStr` with `strTopic : Topic String`.
+/// `Int` and `String` do not unify — must be rejected as IPE-T0001.
+#[test]
+fn pubsub_topic_type_mismatch_is_rejected() {
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return; // runtime unavailable — skip
+    };
+    let uid = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = std::env::temp_dir().join(format!("ipec_pubsub_mismatch_{uid}"));
+    assert!(
+        write_project(&tmp, PUBSUB_TOPIC_MISMATCH),
+        "must write the pubsub_mismatch fixture"
+    );
+    let entry = tmp.join("src").join("Main.ipe");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("pubsub_mismatch_{uid}_out"));
+    let _ = fs::remove_dir_all(&out);
+    let res = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    assert!(
+        res.is_err(),
+        "mismatched Topic types (Int vs String) must be rejected; got Ok(_)"
+    );
 }
 
 // ── Ipe.Config ─────────────────────────────────────────────────────────

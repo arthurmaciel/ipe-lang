@@ -72,6 +72,10 @@ const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
     // ── Epilogue: defined in the generated-code preamble (preamble.rs), not
     //         shipped as part of the runtime library. ─────────────────────────
     "list_map_consume",
+    // ── Dead: `PubSub.topic : String -> Topic a` erases to the identity over
+    //         the topic-name String; emit_expr emits the argument directly, so
+    //         this name string never reaches a runtime call. ──────────────────
+    "pubsub_topic",
 ];
 
 fn walk(dir: &std::path::Path, fn_re: &regex::Regex, out: &mut HashSet<String>) {

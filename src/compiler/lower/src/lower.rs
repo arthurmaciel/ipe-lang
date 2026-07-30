@@ -9240,6 +9240,10 @@ impl<'a> Lowerer<'a> {
                 // `EmailAddress` is `Ipe.Email`'s opaque validated address.
                 // Backed by `ipe_runtime::email::EmailAddress`.
                 "EmailAddress" => Ok(IrType::EmailAddress),
+                // `Topic a` is `Ipe.PubSub`'s phantom topic-handle type.
+                // The type parameter `a` exists only at type-check time; at runtime
+                // a topic is just the name string.  Erase to `Str` unconditionally.
+                "Topic" if args.len() == 1 => Ok(IrType::Str),
                 "String" => Ok(IrType::Str),
                 // `Error` is Ipê's fixed error-channel type — backed by the real
                 // `ipe_runtime::error::IpeError` ADT, no
@@ -10264,6 +10268,10 @@ impl<'a> Lowerer<'a> {
                 // `EmailAddress` is `Ipe.Email`'s opaque validated address.
                 // Backed by `ipe_runtime::email::EmailAddress`.
                 "EmailAddress" => Ok(IrType::EmailAddress),
+                // `Topic a` is `Ipe.PubSub`'s phantom topic-handle type.
+                // The type parameter `a` exists only at type-check time; at runtime
+                // a topic is just the name string.  Erase to `Str` unconditionally.
+                "Topic" if args.len() == 1 => Ok(IrType::Str),
                 "String" => Ok(IrType::Str),
                 // `Error` — backed by the real `ipe_runtime::error::IpeError` ADT
                 // no longer merged with `String`. Lambda
@@ -13839,7 +13847,10 @@ impl<'a> Lowerer<'a> {
                 // `hs256 : String -> Algorithm`
                 // `rs256 : String -> Algorithm`
                 | KernelFn::JwtHs256
-                | KernelFn::JwtRs256,
+                | KernelFn::JwtRs256
+                // ── PubSub arity-1 ──────────────────────────────
+                // `PubSub.topic : String -> Topic a`
+                | KernelFn::PubSubTopic,
             ) => Ok(1),
             Callee::Kernel(
                 KernelFn::StringAppend
@@ -18369,6 +18380,7 @@ mod tests {
     const REGISTRY_ONLY_ALLOWLIST: &[KernelFn] = &[
         KernelFn::PubSubPublish,
         KernelFn::PubSubPublishNoEcho,
+        KernelFn::PubSubTopic,
         // Ipe.Regex
         KernelFn::RegexCompile,
         KernelFn::RegexMatch,

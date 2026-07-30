@@ -32,16 +32,44 @@
 --                        publishing session's own subscription is
 --                        suppressed. For a Task-shaped caller with
 --                        an empty origin this is a no-op.
-module Ipe.PubSub exposing (publish, publishNoEcho)
+module Ipe.PubSub exposing (Topic, topic, publish, publishNoEcho)
 
 import Ipe.Ffi as Ffi
 import Ipe.Error exposing (Error)
 import Ipe.Task as Task
 
 
--- | `publish topic payload` — broadcast `payload` on `topic` to
--- every Ipe.Web session in this process whose `subscriptions`
--- includes `Ipe.Tea.Web.PubSub.subscribeTopic topic _`.
+-- | Phantom topic handle.  The type parameter `a` is the payload type shared
+-- between publisher and subscriber — the compiler enforces that both sides
+-- agree on `a` at type-check time.  At runtime a `Topic a` erases to the
+-- bare topic-name string; there is no allocation or wrapper.
+--
+-- Construct with `PubSub.topic`; never construct `Topic` directly — the
+-- single opaque constructor exists only to make this a valid type declaration.
+type Topic a
+    = Topic
+
+
+-- | `topic name` — create a typed topic handle from a plain topic-name string.
+--
+-- The resulting `Topic a` carries `a` only at type-check time; at runtime it
+-- is the bare name string.  Sharing the same `Topic a` value between `publish`
+-- and `Sub.subscribeTopic` (or `Cmd.publish`) guarantees they agree on the
+-- payload type `a`.
+--
+--   chatTopic : Topic (Dict String String)
+--   chatTopic = PubSub.topic "chat"
+topic : String -> Topic a
+topic =
+    Ffi.kernel "PubSub_topic"
+
+
+-- | `publish t payload` — broadcast `payload` on topic `t` to every Ipe.Web
+-- session in this process whose `subscriptions` includes
+-- `Sub.subscribeTopic t _`.
+--
+-- The type parameter `a` must match the subscriber's handler type; mismatches
+-- are caught at compile time via the shared `Topic a` handle.
 --
 -- Returns the count of subscribers that received the broadcast.
 -- A topic with no live subscribers returns 0 (not an error).
@@ -55,22 +83,22 @@ import Ipe.Task as Task
 -- this process. CLI tools / pure HTTP servers / unit tests that
 -- never start a `Web.app` see this; production deploys never
 -- should.
-publish : String -> any -> Task Error Int
+publish : Topic a -> a -> Task Error Int
 publish =
     Ffi.kernel "PubSub_publish"
 
 
--- | `publishNoEcho topic payload` — Task-shaped publish that sets
--- the broker's skip-origin bit on the outgoing event, so the
--- publishing session's own subscription is suppressed.
+-- | `publishNoEcho t payload` — Task-shaped publish that sets the broker's
+-- skip-origin bit on the outgoing event, so the publishing session's own
+-- subscription is suppressed.
 --
--- Called server-side the difference is cosmetic: the origin is
--- empty, so no subscriber's own-sid matches it and nothing is
--- suppressed. It differs from `publish` only when the caller shares
--- an origin with one of the subscriptions.
+-- Called server-side the difference is cosmetic: the origin is empty, so no
+-- subscriber's own-sid matches it and nothing is suppressed.  It differs from
+-- `publish` only when the caller shares an origin with one of the
+-- subscriptions.
 --
--- Same `Err` semantics as `publish` when no `Web.app` is running in
--- this process.
-publishNoEcho : String -> any -> Task Error Int
+-- Same `Err` semantics as `publish` when no `Web.app` is running in this
+-- process.
+publishNoEcho : Topic a -> a -> Task Error Int
 publishNoEcho =
     Ffi.kernel "PubSub_publishNoEcho"
