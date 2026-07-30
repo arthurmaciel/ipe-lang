@@ -1,0 +1,12 @@
+module Main exposing (main)
+
+import Ipe.String as String
+import Ipe.Io as Io
+
+greeting : String -> String
+greeting name =
+    String.toUpper ("hello " ++ name)
+
+main : Task ()
+main =
+    Io.println (greeting "world")
