@@ -151,6 +151,25 @@ fn assert_rejected_wasm(name: &str, source: &str, expected: &str) {
     assert_rejected_on(name, source, expected, Target::WasmClient);
 }
 
+/// Assert that `source` compiles cleanly (the CONTRAPOSITIVE of a rejection):
+/// a well-formed program the pipeline must accept. Used to prove that a
+/// tightened surface still admits its legitimate replacement.
+#[track_caller]
+fn assert_compiles(name: &str, source: &str) {
+    match compile(name, source, Target::Native) {
+        Outcome::Skip => {}
+        Outcome::Accepted(how) if how.starts_with("compiled successfully") => {}
+        Outcome::Accepted(how) => assert!(
+            false_marker(),
+            "{name}: expected a clean compile, got a non-pipeline failure ({how})"
+        ),
+        Outcome::Rejected(got) => assert!(
+            false_marker(),
+            "{name}: expected a clean compile, but ipe REJECTED it with {got}"
+        ),
+    }
+}
+
 // A minimal well-formed prelude preamble reused across fixtures.
 const HEAD: &str = "module Main exposing (main)\nimport Ipe.Prelude exposing (..)\n";
 
@@ -331,6 +350,28 @@ fn canon_member_not_exposed() {
                import Ipe.String exposing (thisFunctionDoesNotExist)\n\
                main = 1\n";
     assert_rejected("canon_member_not_exposed", src, "IPE-N0022");
+}
+
+/// SECURITY: the un-escaped raw-String→HTML surface `Html.raw` is REMOVED — its
+/// only spelling is now the explicitly-marked `Html.unsafeRaw`, so a raw
+/// injection can never be written under a name that looks safe. The old name no
+/// longer resolves.
+#[test]
+fn security_html_raw_unmarked_is_rejected() {
+    let src = "module Main exposing (main)\n\
+               import Ipe.Html as Html\n\
+               main = Html.raw \"<b>x</b>\"\n";
+    assert_rejected("security_html_raw_unmarked", src, "IPE-N0005");
+}
+
+/// SECURITY (contrapositive): the marked replacement `Html.unsafeRaw` still
+/// compiles — the raw capability is preserved, only renamed to name the risk.
+#[test]
+fn security_html_unsafe_raw_compiles() {
+    let src = "module Main exposing (main)\n\
+               import Ipe.Html as Html\n\
+               main = Html.unsafeRaw \"<b>x</b>\"\n";
+    assert_compiles("security_html_unsafe_raw", src);
 }
 
 /// The same top-level value defined twice.

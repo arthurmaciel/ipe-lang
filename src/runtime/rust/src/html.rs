@@ -1462,6 +1462,29 @@ mod tests {
         assert!(render_html(&node).contains("if (1 < 2)"));
     }
 
+    // SECURITY: user content flows through `Html.text` (HText), which is
+    // HTML-escaped by CONSTRUCTION — a `<script>`-bearing string renders inert,
+    // never executable. Un-escaped injection is reachable ONLY through the
+    // explicitly-marked `Html.unsafeRaw` surface (HRaw), the named boundary.
+    #[test]
+    fn text_node_escapes_script_payload_by_construction() {
+        // The `Html.text` path (HText): an attacker-controlled `<script>`
+        // string is entity-escaped, so the browser sees text — not a live
+        // script element.
+        let escaped: Html<()> = Html::HText("<script>alert(1)</script>".into());
+        let out = render_html(&Html::HElement("div".into(), vec![], vec![escaped]));
+        assert!(
+            !out.contains("<script>") && out.contains("&lt;script&gt;"),
+            "user text must render escaped, never as a live <script>: {out}"
+        );
+
+        // The `Html.unsafeRaw` path (HRaw, the only un-escaped surface):
+        // verbatim by design — the `unsafe` name makes the injection explicit
+        // and greppable.
+        let raw: Html<()> = Html::HRaw("<b>trusted</b>".into());
+        assert!(render_html(&raw).contains("<b>trusted</b>"));
+    }
+
     // ── Snapshot port of ../ipe fixture `69-html-render-parity` (Go parity) ────
     #[test]
     fn fixture69_render_parity() {
