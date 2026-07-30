@@ -20,11 +20,7 @@ fn write_project(test_name: &str, main_ipe: &str) -> PathBuf {
     let src = dir.join("src");
     fs::create_dir_all(&src).expect("create src/");
     fs::write(src.join("Main.ipe"), main_ipe).expect("write Main.ipe");
-    fs::write(
-        dir.join("ipe.toml"),
-        "[project]\nname = \"dbmarker\"\n",
-    )
-    .expect("write ipe.toml");
+    fs::write(dir.join("ipe.toml"), "[project]\nname = \"dbmarker\"\n").expect("write ipe.toml");
     dir
 }
 
