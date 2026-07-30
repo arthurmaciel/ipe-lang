@@ -10,6 +10,26 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.23](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.22...ipe-v0.1.23) (2026-07-30)
+
+
+### Features
+
+* **audit:** promote Tier-2 native certification to FreeBSD; keep Windows deferred ([#149](https://github.com/arthurmaciel/ipe-lang/issues/149)) ([#261](https://github.com/arthurmaciel/ipe-lang/issues/261)) ([89fd217](https://github.com/arthurmaciel/ipe-lang/commit/89fd2176c2eb0b40513af59e18015afe25a217a5))
+* **error:** Ipe.Error inspector kernels + Ipe.Test.expectErr/kindName ([#288](https://github.com/arthurmaciel/ipe-lang/issues/288)) ([#309](https://github.com/arthurmaciel/ipe-lang/issues/309)) ([58fe06e](https://github.com/arthurmaciel/ipe-lang/commit/58fe06e1416cac40a70aeb97ad687e159f693131))
+* **shapes:** consolidate Tui+Console into Terminal + Ui.cells escape node ([#296](https://github.com/arthurmaciel/ipe-lang/issues/296)) ([d6eb635](https://github.com/arthurmaciel/ipe-lang/commit/d6eb635dc215222ecfc951b5e18f7d93ca58a2f9))
+
+
+### Bug Fixes
+
+* **backend:** emit top-level nullary bindings as evaluate-once shared values ([#315](https://github.com/arthurmaciel/ipe-lang/issues/315)) ([139922b](https://github.com/arthurmaciel/ipe-lang/commit/139922b351370a80329f744de4c67b91a95a1337))
+* **canon:** make reachable stdlib member imply backing kernel by construction ([#286](https://github.com/arthurmaciel/ipe-lang/issues/286)) ([#306](https://github.com/arthurmaciel/ipe-lang/issues/306)) ([5c3e961](https://github.com/arthurmaciel/ipe-lang/commit/5c3e96108ea7f5b18c4ead783728b9a230a50e1e))
+* **ci:** green main — compare builtin, sky-transform round-trip, panic-scan gate ([#304](https://github.com/arthurmaciel/ipe-lang/issues/304)) ([0bcc874](https://github.com/arthurmaciel/ipe-lang/commit/0bcc874db6405d084872641e1e1806bfe30b8c17))
+* **ci:** migrate Tier-C-broken examples + remove sky-parity job ([#262](https://github.com/arthurmaciel/ipe-lang/issues/262)) ([922ace3](https://github.com/arthurmaciel/ipe-lang/commit/922ace347fcd8d96809bf16895e35a65e91ed5f8))
+* **ci:** migrate Tier-C-broken examples + remove sky-parity job ([#264](https://github.com/arthurmaciel/ipe-lang/issues/264)) ([6230e9f](https://github.com/arthurmaciel/ipe-lang/commit/6230e9f66905b5ad2456a75d5fb09a67b33db6e6))
+* **cli:** route ipe analysis surfaces through the injection-aware source graph ([#310](https://github.com/arthurmaciel/ipe-lang/issues/310)) ([#313](https://github.com/arthurmaciel/ipe-lang/issues/313)) ([463baa9](https://github.com/arthurmaciel/ipe-lang/commit/463baa917139d91d5cca57da6b124693d069de27))
+* **json:** strict integer decoder + Elm behaviour verdict ledger ([#293](https://github.com/arthurmaciel/ipe-lang/issues/293)) ([#308](https://github.com/arthurmaciel/ipe-lang/issues/308)) ([f279bbe](https://github.com/arthurmaciel/ipe-lang/commit/f279bbe7d6d3d7a231623cd89615c8eb59d397a5))
+
 ## [0.1.22](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.21...ipe-v0.1.22) (2026-07-29)
 
 
