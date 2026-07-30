@@ -121,7 +121,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "verify",
-        summary: "Run the whole project gate: format, type-check, then build.",
+        summary: "Run the whole project gate: format, type-check, build, then test.",
         args: "[<path>]",
         args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
         options: &[],

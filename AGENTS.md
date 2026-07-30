@@ -1059,7 +1059,9 @@ ipe build|run … --static           # fully-static musl single binary (dlmalloc
 ipe watch src/Main.ipe             # file-watch rebuild + restart
 ipe check src/Main.ipe             # type-check only — no build, no run, no emit
 ipe fmt src/Main.ipe               # opinionated formatter (run after editing .ipe/.ipei)
-ipe test tests/MyTest.ipe          # Ipe.Test runner
+                                   # test runner: place tests/Main.ipe in the
+                                   #   project root and run `ipe verify` — the
+                                   #   test stage builds and runs it automatically
 ipe db status                      # Ipe.Db migrations: applied / pending / drift
 ipe db migrate                     # apply pending Ipe.Db migrations, then exit
 ipe doc Module                     # terminal docs

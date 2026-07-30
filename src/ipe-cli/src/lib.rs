@@ -2958,11 +2958,13 @@ type VerifyStage = fn(Option<&str>) -> Result<(), CliError>;
 /// The ordered stages `ipe verify` runs, each composing the same code path its
 /// standalone command uses. The order is the cheapest, most localised check
 /// first: a formatting scan reads source only; a type-check parses and infers
-/// but emits nothing; a build compiles all the way to an artifact.
+/// but emits nothing; a build compiles all the way to an artifact; a test run
+/// exercises the project's `tests/Main.ipe` entry (when one exists).
 const VERIFY_STAGES: &[(&str, VerifyStage)] = &[
     ("format", verify_fmt),
     ("type-check", verify_check),
     ("build", verify_build),
+    ("test", verify_test),
 ];
 
 /// Stage 1: the formatting scan — `ipe fmt --check` over `<path>` (the current
@@ -2986,16 +2988,108 @@ fn verify_build(path: Option<&str>) -> Result<(), CliError> {
     run_build(&path.map(str::to_owned).into_iter().collect::<Vec<_>>())
 }
 
+/// Stage 4: the test run — build and execute `tests/Main.ipe` if one exists.
+///
+/// The test entry is the file at `<project-root>/tests/Main.ipe` (where
+/// "project root" is the directory holding `ipe.toml`, or the directory
+/// containing the supplied `.ipe` file when no manifest exists). When that
+/// file is absent the stage passes immediately — a project with no test entry
+/// is not an error. When it exists, the test runner is compiled to a temporary
+/// output directory, the emitted Rust project is built with `cargo build`, and
+/// the resulting `ipe-app` binary is executed. A non-zero exit from the binary
+/// (propagated by `Ipe.Test.runMain`) is reported as a stage failure.
+fn verify_test(path: Option<&str>) -> Result<(), CliError> {
+    // Resolve the project root from the supplied path (or cwd defaults).
+    let entry_path = match path {
+        Some(p) => PathBuf::from(p),
+        None => PathBuf::from(default_entry()?),
+    };
+
+    // Determine the directory that is the project root: a manifest directory,
+    // or the parent of the supplied .ipe file.
+    let manifest = discover_manifest(&entry_path)?;
+    let project_root: PathBuf = manifest.as_ref().map_or_else(
+        || {
+            entry_path
+                .parent()
+                .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
+        },
+        |m| {
+            m.parent()
+                .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
+        },
+    );
+
+    let test_entry = project_root.join("tests").join("Main.ipe");
+    if !test_entry.is_file() {
+        // No test entry — the stage is vacuously green.
+        return Ok(());
+    }
+
+    let runtime_dir = resolve_runtime()?;
+
+    // Emit into a unique temp directory so concurrent verify runs do not
+    // collide and the output is never confused with the project's own `out/`.
+    let out_dir = std::env::temp_dir().join(format!("ipe_verify_test_{}", std::process::id()));
+
+    // Build the test entry. On any compile failure the stage propagates that
+    // error directly — the error is already a well-formed `CliError`.
+    build_with_sibling_discovery(&test_entry, &out_dir, &runtime_dir)?;
+
+    // Compile the emitted Rust project.
+    let cargo_status = std::process::Command::new("cargo")
+        .arg("build")
+        .current_dir(&out_dir)
+        .status()
+        .map_err(|e| CliError::Io {
+            path: out_dir.clone(),
+            source: e,
+        })?;
+    if !cargo_status.success() {
+        let code = cargo_status.code().unwrap_or(1);
+        return Err(CliError::UsageOwned(format!(
+            "cargo build of the test runner failed with exit code {code}"
+        )));
+    }
+
+    // Locate the compiled binary via `cargo metadata` so a user-level
+    // `CARGO_TARGET_DIR` pin or workspace override is respected.
+    let mut bin = cargo_target_directory(&out_dir)?;
+    bin.push("debug");
+    bin.push("ipe-app");
+
+    // Run the test binary. `Ipe.Test.runMain` exits 0 on all-pass, 1 on any
+    // failure — propagate that as a stage error.
+    let run_status = std::process::Command::new(&bin)
+        .status()
+        .map_err(|e| CliError::Io {
+            path: bin.clone(),
+            source: e,
+        })?;
+
+    // Clean up the temp output regardless of the run outcome.
+    let _ = std::fs::remove_dir_all(&out_dir);
+
+    if run_status.success() {
+        Ok(())
+    } else {
+        let code = run_status.code().unwrap_or(1);
+        Err(CliError::UsageOwned(format!(
+            "test runner exited with code {code}: one or more Ipe.Test cases failed"
+        )))
+    }
+}
+
 /// `ipe verify [<path>]` — the one-command project gate.
 ///
-/// Runs the project's checks in order — format, type-check, build — stopping at
-/// the first failure. Each stage composes the same code path its standalone
-/// command uses (`ipe fmt --check`, `ipe check`, `ipe build`), so `verify` is a
-/// faithful union of them, never a second implementation. `<path>` defaults to
-/// the current project.
+/// Runs the project's checks in order — format, type-check, build, test —
+/// stopping at the first failure. Each stage composes the same code path its
+/// standalone command uses, so `verify` is a faithful union of them, never a
+/// second implementation. `<path>` defaults to the current project.
 ///
-/// The test stage (`Ipe.Test`) is not yet wired in — there is no project-level
-/// test runner command to compose — and is tracked as a follow-up.
+/// The test stage builds and runs `tests/Main.ipe` when that file exists in the
+/// project root. A project with no `tests/Main.ipe` passes the test stage
+/// immediately — no test entry means no tests to run.
 ///
 /// # Errors
 /// [`CliError::UsageOwned`] on an unexpected option or extra argument. Otherwise

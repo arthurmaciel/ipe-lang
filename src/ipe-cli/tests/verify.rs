@@ -1,12 +1,13 @@
 //! `ipe verify` — the one-command project gate.
 //!
-//! Runs the project's checks in order — format, type-check, build — stopping at
-//! the first failure. Each stage composes the same code path its standalone
-//! command uses, so these tests assert the *composition and reporting*: an
-//! unformatted project stops at the format stage, a type-erroring but
-//! well-formatted project passes format then stops at the type-check stage, and
-//! a clean project clears every stage (the full pass, which builds, is gated on
-//! `IPE_E2E=1` so the default `cargo nextest` stays fast and offline).
+//! Runs the project's checks in order — format, type-check, build, test —
+//! stopping at the first failure. Each stage composes the same code path its
+//! standalone command uses, so these tests assert the *composition and
+//! reporting*: an unformatted project stops at the format stage, a
+//! type-erroring but well-formatted project passes format then stops at the
+//! type-check stage, and a clean project clears every stage (the full pass,
+//! which builds and runs tests, is gated on `IPE_E2E=1` so the default
+//! `cargo nextest` stays fast and offline).
 
 use std::error::Error;
 use std::path::{Path, PathBuf};
@@ -72,7 +73,7 @@ fn type_error_project_stops_at_the_type_check_stage() -> TestResult {
         "the type diagnostic must be shown, got stderr:\n{stderr}"
     );
     assert!(
-        !stdout.contains("stage 3/3"),
+        !stdout.contains("stage 3/4"),
         "verify must stop before the build stage, got stdout:\n{stdout}"
     );
     Ok(())
@@ -107,7 +108,7 @@ fn unknown_flag_is_misuse_and_shows_help() {
     );
 }
 
-/// A clean project clears every stage and exits 0 with the all-passed summary.
+/// A clean project with no `tests/Main.ipe` clears every stage and exits 0.
 /// Gated on `IPE_E2E=1` because the build stage invokes `cargo` and needs the
 /// Ipê runtime — kept out of the default fast, offline test run.
 #[test]
@@ -124,6 +125,7 @@ fn clean_project_passes_every_stage() -> TestResult {
     std::fs::copy(fixture("clean.ipe"), &src)?;
 
     let (ok, stdout, stderr) = run_ipe(&["verify", &src.to_string_lossy()])?;
+    let _ = std::fs::remove_dir_all(&dir);
     assert!(
         ok,
         "a clean project must pass every stage, got stderr:\n{stderr}"
@@ -132,8 +134,73 @@ fn clean_project_passes_every_stage() -> TestResult {
         stdout.contains("format passed")
             && stdout.contains("type-check passed")
             && stdout.contains("build passed")
-            && stdout.contains("all 3 stages passed"),
+            && stdout.contains("test passed")
+            && stdout.contains("all 4 stages passed"),
         "every stage must be reported as passed, got stdout:\n{stdout}"
+    );
+    Ok(())
+}
+
+/// A project with a passing `tests/Main.ipe` test suite clears the test stage.
+/// Gated on `IPE_E2E=1` — the test stage invokes `cargo` and needs the runtime.
+#[test]
+fn project_with_passing_tests_clears_the_test_stage() -> TestResult {
+    if std::env::var("IPE_E2E").is_err() {
+        eprintln!("skipping: set IPE_E2E=1 to run the test-stage E2E");
+        return Ok(());
+    }
+    // Set up a project dir with Main.ipe + tests/Main.ipe (all tests pass).
+    let dir = std::env::temp_dir().join(format!("ipe_verify_tests_pass_{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("tests"))?;
+    std::fs::copy(fixture("clean.ipe"), dir.join("Main.ipe"))?;
+    std::fs::copy(
+        fixture("tests_pass.ipe"),
+        dir.join("tests").join("Main.ipe"),
+    )?;
+
+    let (ok, stdout, stderr) = run_ipe(&["verify", &dir.join("Main.ipe").to_string_lossy()])?;
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        ok,
+        "a project with all-passing tests must exit 0, got stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("test passed"),
+        "the test stage must be reported as passed, got stdout:\n{stdout}"
+    );
+    Ok(())
+}
+
+/// A project with a failing `tests/Main.ipe` test suite fails the test stage
+/// and exits non-zero, after the build stage has already passed.
+/// Gated on `IPE_E2E=1` — the test stage invokes `cargo` and needs the runtime.
+#[test]
+fn project_with_failing_tests_fails_the_test_stage() -> TestResult {
+    if std::env::var("IPE_E2E").is_err() {
+        eprintln!("skipping: set IPE_E2E=1 to run the test-stage E2E");
+        return Ok(());
+    }
+    let dir = std::env::temp_dir().join(format!("ipe_verify_tests_fail_{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("tests"))?;
+    std::fs::copy(fixture("clean.ipe"), dir.join("Main.ipe"))?;
+    std::fs::copy(
+        fixture("tests_fail.ipe"),
+        dir.join("tests").join("Main.ipe"),
+    )?;
+
+    let (ok, stdout, stderr) = run_ipe(&["verify", &dir.join("Main.ipe").to_string_lossy()])?;
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        !ok,
+        "a project with failing tests must exit non-zero, got stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("build passed") && stdout.contains("test failed"),
+        "build must pass and test must fail, got stdout:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("the test stage failed"),
+        "the test stage's failure must be reported, got stderr:\n{stderr}"
     );
     Ok(())
 }
