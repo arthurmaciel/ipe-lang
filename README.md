@@ -58,6 +58,7 @@ main =
 ```sh
 ipe run src/Main.ipe        # compile + run in one step
 ipe check src/Main.ipe      # type-check only — no build, no run
+ipe verify                  # the whole project gate: format, type-check, build
 ```
 
 Prefer building from source? 

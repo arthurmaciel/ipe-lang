@@ -1,0 +1,13 @@
+module Main exposing (main)
+
+import Ipe.String as String
+
+
+greeting : String -> String
+greeting name =
+    String.toUpper name
+
+
+main : Int
+main =
+    greeting "world"
