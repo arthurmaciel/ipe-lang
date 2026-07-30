@@ -725,6 +725,10 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::EmailSesConfig => "SesConfig",
         IrType::EmailSmtpConfig => "SmtpConfig",
         IrType::EmailProvider => "EmailProvider",
+        // Typed-key newtypes.
+        IrType::CryptoKey => "Key",
+        IrType::CryptoMac => "Mac",
+        IrType::EmailAddress => "EmailAddress",
     }
 }
 

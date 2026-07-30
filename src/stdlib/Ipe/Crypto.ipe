@@ -7,6 +7,9 @@
 --     random nonce on every call; the nonce is prepended to the
 --     ciphertext so `decrypt` can recover it.
 --   * Key/secret material is never logged.
+--   * Typed variants (`Key`, `Mac`) enforce role at compile time.
+--     A `Key` can only be constructed at explicit parse boundaries;
+--     passing a `Mac` where a `Key` is expected is a compile error.
 module Ipe.Crypto exposing
     ( sha256, sha512, sha1, md5
     , hmacSha256, hmacSha512
@@ -16,6 +19,20 @@ module Ipe.Crypto exposing
     , chacha20Encrypt, chacha20Decrypt
     , aesKeyFromPassword, chachaKeyFromPassword
     , randomBytes, randomToken
+    -- Typed newtypes (additive — existing String-typed functions unchanged)
+    , Key
+    , Mac
+    , keyFromString
+    , keyFromBytes
+    , macToHex
+    , hmacSha256WithKey
+    , hmacSha512WithKey
+    , aesGcmEncryptKey
+    , aesGcmDecryptKey
+    , chacha20EncryptKey
+    , chacha20DecryptKey
+    , aesKeyFromPasswordKey
+    , chachaKeyFromPasswordKey
     )
 
 
@@ -92,3 +109,75 @@ randomBytes = Ffi.kernel "Crypto_randomBytes"
 
 randomToken : Int -> Task Error String
 randomToken = Ffi.kernel "Crypto_randomToken"
+
+
+-- ── Typed newtypes ────────────────────────────────────────────────────────────
+--
+-- `Key` and `Mac` are opaque types backed by runtime newtypes in
+-- `ipe_runtime::crypto`.  They enforce role at the type level:
+-- passing a `Mac` where a `Key` is expected is a compile error.
+-- Key material never appears in logs (Debug redacts to "<key>").
+
+-- | An opaque cryptographic key.  Construct only via `keyFromString`
+-- or `keyFromBytes`; never forge from a plain string.
+type Key = Key
+
+-- | An opaque message authentication code (HMAC output).  Inspect via
+-- `macToHex`; never compare with `==` (use `constantTimeEqual` on the
+-- hex representation instead, or use a typed constant-time check).
+type Mac = Mac
+
+-- | Parse a hex-encoded or raw string into a `Key`.  Returns
+-- `Nothing` if the byte length is wrong for any supported algorithm.
+keyFromString : String -> Maybe Key
+keyFromString = Ffi.kernel "Key_fromString"
+
+-- | Parse raw bytes (as Ipe `String`/`Bytes`) into a `Key`.
+keyFromBytes : String -> Maybe Key
+keyFromBytes = Ffi.kernel "Key_fromBytes"
+
+-- | Render a `Mac` as a lowercase hex string for storage or display.
+macToHex : Mac -> String
+macToHex = Ffi.kernel "Mac_toHex"
+
+
+-- ── Typed HMAC ───────────────────────────────────────────────────────────────
+
+-- | `hmacSha256WithKey key message` — produce a typed `Mac`.
+-- Use this instead of `hmacSha256` when you hold a `Key`.
+hmacSha256WithKey : Key -> String -> Mac
+hmacSha256WithKey = Ffi.kernel "Crypto_hmacSha256WithKey"
+
+-- | `hmacSha512WithKey key message` — produce a typed `Mac`.
+hmacSha512WithKey : Key -> String -> Mac
+hmacSha512WithKey = Ffi.kernel "Crypto_hmacSha512WithKey"
+
+
+-- ── Typed AEAD ───────────────────────────────────────────────────────────────
+
+-- | `aesGcmEncryptKey key plaintext` — AES-256-GCM encrypt with a typed `Key`.
+aesGcmEncryptKey : Key -> String -> Result Error String
+aesGcmEncryptKey = Ffi.kernel "Crypto_aesGcmEncryptKey"
+
+-- | `aesGcmDecryptKey key ciphertext` — AES-256-GCM decrypt with a typed `Key`.
+aesGcmDecryptKey : Key -> String -> Result Error String
+aesGcmDecryptKey = Ffi.kernel "Crypto_aesGcmDecryptKey"
+
+-- | `chacha20EncryptKey key plaintext` — ChaCha20-Poly1305 encrypt with a typed `Key`.
+chacha20EncryptKey : Key -> String -> Result Error String
+chacha20EncryptKey = Ffi.kernel "Crypto_chacha20EncryptKey"
+
+-- | `chacha20DecryptKey key ciphertext` — ChaCha20-Poly1305 decrypt with a typed `Key`.
+chacha20DecryptKey : Key -> String -> Result Error String
+chacha20DecryptKey = Ffi.kernel "Crypto_chacha20DecryptKey"
+
+
+-- ── Typed key derivation ──────────────────────────────────────────────────────
+
+-- | Derive an AES-256 `Key` from a password + salt string.
+aesKeyFromPasswordKey : String -> String -> Key
+aesKeyFromPasswordKey = Ffi.kernel "Crypto_aesKeyFromPasswordKey"
+
+-- | Derive a ChaCha20 `Key` from a password + salt string.
+chachaKeyFromPasswordKey : String -> String -> Key
+chachaKeyFromPasswordKey = Ffi.kernel "Crypto_chachaKeyFromPasswordKey"

@@ -551,6 +551,21 @@ struct Builtins {
     // `SesConfig` / `SmtpConfig` record shapes are folded by the lowerer via
     // field-name string constants (`ipe_lower`), not through a kernel scheme, so
     // no interned field symbols for them are needed here.
+    // ── Ipe.Crypto typed-key newtypes ──────────────────────────────────────
+    /// `"Key"` — opaque role-typed crypto key (`ipe_runtime::crypto::Key`).
+    /// The ONLY constructor is `Key.fromString`/`Key.fromBytes`; no implicit
+    /// `String` coercion. Lowered to `IrType::CryptoKey`.
+    crypto_key: Symbol,
+    /// `"Mac"` — opaque role-typed MAC output (`ipe_runtime::crypto::Mac`).
+    /// Produced exclusively by `hmacSha256WithKey`/`hmacSha512WithKey`; extracted
+    /// via `Mac.toHex`.  Lowered to `IrType::CryptoMac`.
+    crypto_mac: Symbol,
+    // ── Ipe.Email.EmailAddress ──────────────────────────────────────────────
+    /// `"EmailAddress"` — opaque validated email address
+    /// (`ipe_runtime::email::EmailAddress`).  The ONLY constructor is
+    /// `EmailAddress.parse : String -> Maybe EmailAddress`; extracted via
+    /// `EmailAddress.toString`.  Lowered to `IrType::EmailAddress`.
+    email_address: Symbol,
 }
 
 impl Builtins {
@@ -757,6 +772,11 @@ impl Builtins {
             jwt_algorithm: interner.intern("Algorithm")?,
             // ── Ipe.Decimal opaque type constructor ──────────────────────────────
             decimal: interner.intern("Decimal")?,
+            // ── Ipe.Crypto typed-key newtypes ────────────────────────────────────
+            crypto_key: interner.intern("Key")?,
+            crypto_mac: interner.intern("Mac")?,
+            // ── Ipe.Email.EmailAddress ────────────────────────────────────────────
+            email_address: interner.intern("EmailAddress")?,
         })
     }
 
@@ -3981,6 +4001,31 @@ impl<'a> Builder<'a> {
             name: self.builtins.email_provider,
             args: Vec::new(),
         };
+        // `Key` — opaque role-typed crypto key (`ipe_runtime::crypto::Key`).
+        // The ONLY constructor is `Key.fromString`/`Key.fromBytes`; no implicit
+        // `String` coercion.  Lowered to `IrType::CryptoKey`.
+        let crypto_key = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.crypto_key,
+            args: Vec::new(),
+        };
+        // `Mac` — opaque role-typed MAC output (`ipe_runtime::crypto::Mac`).
+        // Produced exclusively by the `*WithKey` kernels; extracted via `Mac.toHex`.
+        // Lowered to `IrType::CryptoMac`.
+        let crypto_mac = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.crypto_mac,
+            args: Vec::new(),
+        };
+        // `EmailAddress` — opaque validated email address
+        // (`ipe_runtime::email::EmailAddress`).  The ONLY constructor is
+        // `EmailAddress.parse`; extracted via `EmailAddress.toString`.
+        // Lowered to `IrType::EmailAddress`.
+        let email_address = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.email_address,
+            args: Vec::new(),
+        };
         // `EmailMessage` — closed 9-field record (runtime
         // `ipe_runtime::email::EmailMessage`). The lowerer folds a value of this
         // exact shape to the nominal `IrType::EmailMessage` so a
@@ -6683,6 +6728,51 @@ impl<'a> Builder<'a> {
                 fun(email_message_rec(), task(string())),
             ),
 
+            // ── Ipe.Crypto typed-key newtypes ────────────────────────────────────
+            // Construction boundaries — parse-don't-validate:
+            //   fromString : String -> Key
+            //   fromBytes  : String -> Key
+            // Extraction boundary:
+            //   Mac.toHex  : Mac -> String
+            K::CryptoKeyFromString => fun(string(), crypto_key()),
+            K::CryptoKeyFromBytes => fun(string(), crypto_key()),
+            K::CryptoMacToHex => fun(crypto_mac(), string()),
+            // Typed HMAC variants — Key replaces the bare String role parameter;
+            // Mac replaces the bare String return:
+            //   hmacSha256WithKey : Key -> String -> Mac
+            //   hmacSha512WithKey : Key -> String -> Mac
+            K::CryptoHmacSha256WithKey => fun(crypto_key(), fun(string(), crypto_mac())),
+            K::CryptoHmacSha512WithKey => fun(crypto_key(), fun(string(), crypto_mac())),
+            // Typed key-derivation — same inputs, typed Key output:
+            //   aesKeyFromPasswordKey   : String -> String -> Key
+            //   chachaKeyFromPasswordKey: String -> String -> Key
+            K::CryptoAesKeyFromPasswordKey => fun(string(), fun(string(), crypto_key())),
+            K::CryptoChachaKeyFromPasswordKey => fun(string(), fun(string(), crypto_key())),
+            // Typed AEAD variants — Key replaces bare String key role:
+            //   aesGcmEncryptKey  : Key -> String -> Result Error String
+            //   aesGcmDecryptKey  : Key -> String -> Result Error String
+            //   chacha20EncryptKey: Key -> String -> Result Error String
+            //   chacha20DecryptKey: Key -> String -> Result Error String
+            K::CryptoAesGcmEncryptKey => {
+                fun(crypto_key(), fun(string(), result(error_ty(), string())))
+            }
+            K::CryptoAesGcmDecryptKey => {
+                fun(crypto_key(), fun(string(), result(error_ty(), string())))
+            }
+            K::CryptoChacha20EncryptKey => {
+                fun(crypto_key(), fun(string(), result(error_ty(), string())))
+            }
+            K::CryptoChacha20DecryptKey => {
+                fun(crypto_key(), fun(string(), result(error_ty(), string())))
+            }
+
+            // ── Ipe.Email.EmailAddress ────────────────────────────────────────────
+            // parse-don't-validate boundary — invalid addresses surface as Nothing:
+            //   parse    : String -> Maybe EmailAddress
+            //   toString : EmailAddress -> String
+            K::EmailAddressParse => fun(string(), maybe(email_address())),
+            K::EmailAddressToString => fun(email_address(), string()),
+
             // ── Ui.link ──────────────────────────────────────────────────────────
             // link : List (Attribute msg) -> { url : String, label : Element msg }
             //      -> Element msg
@@ -8838,6 +8928,21 @@ mod registry_phase_c_tests {
             K::ConfigLoadFromFile,
             // ── Ipe.Email (1) ──────────────────────────────────────────
             K::EmailSend,
+            // ── Ipe.Crypto typed-key newtypes (11) ─────────────────────
+            K::CryptoKeyFromString,
+            K::CryptoKeyFromBytes,
+            K::CryptoMacToHex,
+            K::CryptoHmacSha256WithKey,
+            K::CryptoHmacSha512WithKey,
+            K::CryptoAesKeyFromPasswordKey,
+            K::CryptoChachaKeyFromPasswordKey,
+            K::CryptoAesGcmEncryptKey,
+            K::CryptoAesGcmDecryptKey,
+            K::CryptoChacha20EncryptKey,
+            K::CryptoChacha20DecryptKey,
+            // ── Ipe.Email.EmailAddress (2) ──────────────────────────────
+            K::EmailAddressParse,
+            K::EmailAddressToString,
             // ── Ipe.PubSub (2) ─────────────────────────────────────
             // Runtime exists, emit arm present (`pubsub_publish::<_, IpeError>`),
             // scheme `String -> a -> Task Error Int`.

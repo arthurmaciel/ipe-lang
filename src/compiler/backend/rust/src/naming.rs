@@ -952,6 +952,21 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::ConfigLoadFromFile => "config_load_from_file",
         // ── Ipe.Email ───────────────────────────────────────────────────
         KernelFn::EmailSend => "email_send",
+        // ── Ipe.Crypto typed-key newtypes ───────────────────────────────
+        KernelFn::CryptoKeyFromString => "crypto_key_from_string",
+        KernelFn::CryptoKeyFromBytes => "crypto_key_from_bytes",
+        KernelFn::CryptoMacToHex => "crypto_mac_to_hex",
+        KernelFn::CryptoHmacSha256WithKey => "crypto_hmac_sha256_key",
+        KernelFn::CryptoHmacSha512WithKey => "crypto_hmac_sha512_key",
+        KernelFn::CryptoAesKeyFromPasswordKey => "crypto_aes_key_from_password_key",
+        KernelFn::CryptoChachaKeyFromPasswordKey => "crypto_chacha_key_from_password_key",
+        KernelFn::CryptoAesGcmEncryptKey => "crypto_aes_gcm_encrypt_key",
+        KernelFn::CryptoAesGcmDecryptKey => "crypto_aes_gcm_decrypt_key",
+        KernelFn::CryptoChacha20EncryptKey => "crypto_chacha20_encrypt_key",
+        KernelFn::CryptoChacha20DecryptKey => "crypto_chacha20_decrypt_key",
+        // ── Ipe.Email.EmailAddress ───────────────────────────────────────
+        KernelFn::EmailAddressParse => "email_address_parse",
+        KernelFn::EmailAddressToString => "email_address_to_string",
         // ── TEA Cmd / Sub / Time kernels (wired) ────────────────────────
         KernelFn::CmdNone => "cmd_none",
         KernelFn::CmdBatch => "cmd_batch",

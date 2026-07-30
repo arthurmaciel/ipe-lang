@@ -1692,6 +1692,43 @@ pub enum StdlibKernel {
     // ADT / record aliases fold to those nominal runtime types).
     /// `Email.send : EmailProvider -> EmailMessage -> Task Error String`.
     EmailSend,
+
+    // ── Ipe.Crypto typed-key newtypes ─────────────────────────────────
+    // Additive Layer-3 API that wraps raw `String` keys / MACs in opaque
+    // role-typed newtypes.  The existing bare-`String` kernels remain unchanged
+    // (backward-compatible); these new kernels carry `Key`/`Mac` runtime
+    // types from `ipe_runtime::crypto`.  All are Pure (no side-effect).
+    /// `Key.fromString : String -> Key` — the ONLY constructor; parse boundary.
+    CryptoKeyFromString,
+    /// `Key.fromBytes : String -> Key` — construction boundary for byte-string callers.
+    CryptoKeyFromBytes,
+    /// `Mac.toHex : Mac -> String` — the single extraction boundary for MAC output.
+    CryptoMacToHex,
+    /// `Crypto.hmacSha256WithKey : Key -> String -> Mac` — typed HMAC-SHA256.
+    CryptoHmacSha256WithKey,
+    /// `Crypto.hmacSha512WithKey : Key -> String -> Mac` — typed HMAC-SHA512.
+    CryptoHmacSha512WithKey,
+    /// `Crypto.aesKeyFromPasswordKey : String -> String -> Key` — typed key derivation.
+    CryptoAesKeyFromPasswordKey,
+    /// `Crypto.chachaKeyFromPasswordKey : String -> String -> Key` — typed key derivation.
+    CryptoChachaKeyFromPasswordKey,
+    /// `Crypto.aesGcmEncryptKey : Key -> String -> Result Error String` — typed AEAD encrypt.
+    CryptoAesGcmEncryptKey,
+    /// `Crypto.aesGcmDecryptKey : Key -> String -> Result Error String` — typed AEAD decrypt.
+    CryptoAesGcmDecryptKey,
+    /// `Crypto.chacha20EncryptKey : Key -> String -> Result Error String` — typed AEAD encrypt.
+    CryptoChacha20EncryptKey,
+    /// `Crypto.chacha20DecryptKey : Key -> String -> Result Error String` — typed AEAD decrypt.
+    CryptoChacha20DecryptKey,
+
+    // ── Ipe.Email.EmailAddress — typed parse-don't-validate boundary ───
+    // Additive API: `EmailAddress.parse` is the only constructor; downstream
+    // code never sees the raw `String`.  `EmailAddress.toString` is the single
+    // extraction boundary.  Both are Pure.
+    /// `EmailAddress.parse : String -> Maybe EmailAddress` — parse boundary.
+    EmailAddressParse,
+    /// `EmailAddress.toString : EmailAddress -> String` — single extraction boundary.
+    EmailAddressToString,
 }
 
 impl StdlibKernel {
@@ -3169,6 +3206,75 @@ impl StdlibKernel {
             // Alias `Email_send` splits to qualifier `Email` + name `send`; the
             // emit column is the runtime fn `ipe_runtime::email::email_send`.
             Self::EmailSend => d("Email", "send", 2, Pure, "email_send"),
+            // ── Ipe.Crypto typed-key newtypes ─────────────────────────
+            Self::CryptoKeyFromString => d("Key", "fromString", 1, Pure, "crypto_key_from_string"),
+            Self::CryptoKeyFromBytes => d("Key", "fromBytes", 1, Pure, "crypto_key_from_bytes"),
+            Self::CryptoMacToHex => d("Mac", "toHex", 1, Pure, "crypto_mac_to_hex"),
+            Self::CryptoHmacSha256WithKey => d(
+                "Crypto",
+                "hmacSha256WithKey",
+                2,
+                Pure,
+                "crypto_hmac_sha256_key",
+            ),
+            Self::CryptoHmacSha512WithKey => d(
+                "Crypto",
+                "hmacSha512WithKey",
+                2,
+                Pure,
+                "crypto_hmac_sha512_key",
+            ),
+            Self::CryptoAesKeyFromPasswordKey => d(
+                "Crypto",
+                "aesKeyFromPasswordKey",
+                2,
+                Pure,
+                "crypto_aes_key_from_password_key",
+            ),
+            Self::CryptoChachaKeyFromPasswordKey => d(
+                "Crypto",
+                "chachaKeyFromPasswordKey",
+                2,
+                Pure,
+                "crypto_chacha_key_from_password_key",
+            ),
+            Self::CryptoAesGcmEncryptKey => d(
+                "Crypto",
+                "aesGcmEncryptKey",
+                2,
+                Pure,
+                "crypto_aes_gcm_encrypt_key",
+            ),
+            Self::CryptoAesGcmDecryptKey => d(
+                "Crypto",
+                "aesGcmDecryptKey",
+                2,
+                Pure,
+                "crypto_aes_gcm_decrypt_key",
+            ),
+            Self::CryptoChacha20EncryptKey => d(
+                "Crypto",
+                "chacha20EncryptKey",
+                2,
+                Pure,
+                "crypto_chacha20_encrypt_key",
+            ),
+            Self::CryptoChacha20DecryptKey => d(
+                "Crypto",
+                "chacha20DecryptKey",
+                2,
+                Pure,
+                "crypto_chacha20_decrypt_key",
+            ),
+            // ── Ipe.Email.EmailAddress ─────────────────────────────────
+            Self::EmailAddressParse => d("EmailAddress", "parse", 1, Pure, "email_address_parse"),
+            Self::EmailAddressToString => d(
+                "EmailAddress",
+                "toString",
+                1,
+                Pure,
+                "email_address_to_string",
+            ),
         }
     }
 
@@ -4248,6 +4354,21 @@ impl StdlibKernel {
         Self::ConfigLoadFromFile,
         // ── Ipe.Email ─────────────────────────────────────────────────
         Self::EmailSend,
+        // ── Ipe.Crypto typed-key newtypes ─────────────────────────────
+        Self::CryptoKeyFromString,
+        Self::CryptoKeyFromBytes,
+        Self::CryptoMacToHex,
+        Self::CryptoHmacSha256WithKey,
+        Self::CryptoHmacSha512WithKey,
+        Self::CryptoAesKeyFromPasswordKey,
+        Self::CryptoChachaKeyFromPasswordKey,
+        Self::CryptoAesGcmEncryptKey,
+        Self::CryptoAesGcmDecryptKey,
+        Self::CryptoChacha20EncryptKey,
+        Self::CryptoChacha20DecryptKey,
+        // ── Ipe.Email.EmailAddress ─────────────────────────────────────
+        Self::EmailAddressParse,
+        Self::EmailAddressToString,
     ];
 
     // ── Classification predicates (moved from ipe_ir::KernelFn) ─────────────
@@ -5372,7 +5493,22 @@ impl StdlibKernel {
             // `HttpMethodFromString` / `HttpMethodToString` are pure converters —
             // no network or I/O side-effect, capability = None.
             | Self::HttpMethodFromString
-            | Self::HttpMethodToString => None,
+            | Self::HttpMethodToString
+            // ── Ipe.Crypto typed-key newtypes ─────────────────────────
+            | Self::CryptoKeyFromString
+            | Self::CryptoKeyFromBytes
+            | Self::CryptoMacToHex
+            | Self::CryptoHmacSha256WithKey
+            | Self::CryptoHmacSha512WithKey
+            | Self::CryptoAesKeyFromPasswordKey
+            | Self::CryptoChachaKeyFromPasswordKey
+            | Self::CryptoAesGcmEncryptKey
+            | Self::CryptoAesGcmDecryptKey
+            | Self::CryptoChacha20EncryptKey
+            | Self::CryptoChacha20DecryptKey
+            // ── Ipe.Email.EmailAddress ─────────────────────────────────
+            | Self::EmailAddressParse
+            | Self::EmailAddressToString => None,
         }
     }
 

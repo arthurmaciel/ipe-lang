@@ -1268,7 +1268,11 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::EmailAttachment
         | IrType::EmailSesConfig
         | IrType::EmailSmtpConfig
-        | IrType::EmailProvider => false,
+        | IrType::EmailProvider
+        // Typed-key newtypes — opaque scalar wrappers, no embedded function.
+        | IrType::CryptoKey
+        | IrType::CryptoMac
+        | IrType::EmailAddress => false,
         // `WebRoute page` carries the page type it builds — recurse (the
         // route's own builder closure is runtime-internal, not a Ipê `Fn`).
         IrType::WebRoute(page) => ir_contains_fun(page),
@@ -1388,6 +1392,10 @@ fn clone_class(interner: &Interner, t: &IrType) -> CloneClass {
         | IrType::EmailSesConfig
         | IrType::EmailSmtpConfig
         | IrType::EmailProvider
+        // Typed-key newtypes are `Clone` (no `Copy` — carry heap-allocated Strings).
+        | IrType::CryptoKey
+        | IrType::CryptoMac
+        | IrType::EmailAddress
         // The promoted `Arc<dyn Fn>` carrier is `Clone` (a refcount bump), so a
         // `SharedFun` slot is `CloneOk` — this is what lets a composite carrying
         // it become clonable and so reusable.
@@ -4137,7 +4145,11 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         | IrType::EmailAttachment
         | IrType::EmailSesConfig
         | IrType::EmailSmtpConfig
-        | IrType::EmailProvider => false,
+        | IrType::EmailProvider
+        // Typed-key newtypes are non-parametric — no type var.
+        | IrType::CryptoKey
+        | IrType::CryptoMac
+        | IrType::EmailAddress => false,
     }
 }
 
@@ -9219,6 +9231,15 @@ impl<'a> Lowerer<'a> {
                 // `Regex` is `Ipe.Regex`'s opaque compiled-pattern handle.
                 // Backed by `ipe_runtime::regex_kernel::Regex`.
                 "Regex" => Ok(IrType::Regex),
+                // `Key` is `Ipe.Crypto`'s opaque role-typed crypto key.
+                // Backed by `ipe_runtime::crypto::Key`.
+                "Key" => Ok(IrType::CryptoKey),
+                // `Mac` is `Ipe.Crypto`'s opaque role-typed HMAC output.
+                // Backed by `ipe_runtime::crypto::Mac`.
+                "Mac" => Ok(IrType::CryptoMac),
+                // `EmailAddress` is `Ipe.Email`'s opaque validated address.
+                // Backed by `ipe_runtime::email::EmailAddress`.
+                "EmailAddress" => Ok(IrType::EmailAddress),
                 "String" => Ok(IrType::Str),
                 // `Error` is Ipê's fixed error-channel type — backed by the real
                 // `ipe_runtime::error::IpeError` ADT, no
@@ -10234,6 +10255,15 @@ impl<'a> Lowerer<'a> {
                 // `Regex` is `Ipe.Regex`'s opaque compiled-pattern handle,
                 // backed by `ipe_runtime::regex_kernel::Regex`.
                 "Regex" => Ok(IrType::Regex),
+                // `Key` is `Ipe.Crypto`'s opaque role-typed crypto key.
+                // Backed by `ipe_runtime::crypto::Key`.
+                "Key" => Ok(IrType::CryptoKey),
+                // `Mac` is `Ipe.Crypto`'s opaque role-typed HMAC output.
+                // Backed by `ipe_runtime::crypto::Mac`.
+                "Mac" => Ok(IrType::CryptoMac),
+                // `EmailAddress` is `Ipe.Email`'s opaque validated address.
+                // Backed by `ipe_runtime::email::EmailAddress`.
+                "EmailAddress" => Ok(IrType::EmailAddress),
                 "String" => Ok(IrType::Str),
                 // `Error` — backed by the real `ipe_runtime::error::IpeError` ADT
                 // no longer merged with `String`. Lambda
@@ -15035,6 +15065,24 @@ impl<'a> Lowerer<'a> {
             ) => Ok(2),
             // Ipe.Email — `send : EmailProvider -> EmailMessage -> Task Error String`.
             Callee::Kernel(KernelFn::EmailSend) => Ok(2),
+            // Ipe.Crypto typed-key newtypes — arity per their Ipê signatures.
+            Callee::Kernel(
+                KernelFn::CryptoKeyFromString
+                | KernelFn::CryptoKeyFromBytes
+                | KernelFn::CryptoMacToHex
+                | KernelFn::EmailAddressParse
+                | KernelFn::EmailAddressToString,
+            ) => Ok(1),
+            Callee::Kernel(
+                KernelFn::CryptoHmacSha256WithKey
+                | KernelFn::CryptoHmacSha512WithKey
+                | KernelFn::CryptoAesKeyFromPasswordKey
+                | KernelFn::CryptoChachaKeyFromPasswordKey
+                | KernelFn::CryptoAesGcmEncryptKey
+                | KernelFn::CryptoAesGcmDecryptKey
+                | KernelFn::CryptoChacha20EncryptKey
+                | KernelFn::CryptoChacha20DecryptKey,
+            ) => Ok(2),
             Callee::Func(id) => {
                 let idx = usize::try_from(id.as_raw()).unwrap_or(usize::MAX);
                 let def = self.m.defs.get(idx).ok_or_else(|| {
@@ -18066,7 +18114,11 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::EmailAttachment
         | IrType::EmailSesConfig
         | IrType::EmailSmtpConfig
-        | IrType::EmailProvider => {}
+        | IrType::EmailProvider
+        // Typed-key newtypes are non-parametric — no generic syms.
+        | IrType::CryptoKey
+        | IrType::CryptoMac
+        | IrType::EmailAddress => {}
     }
 }
 
@@ -18401,6 +18453,23 @@ mod tests {
         KernelFn::EnvPublic,
         // Ipe.Email
         KernelFn::EmailSend,
+        // Ipe.Crypto typed-key newtypes — compiled-source Layer-3 module; every
+        // kernel is reached exclusively through the `Ffi.kernel "Crypto_*"` alias
+        // fast-path, never a legacy `QUALIFIERS` entry.
+        KernelFn::CryptoKeyFromString,
+        KernelFn::CryptoKeyFromBytes,
+        KernelFn::CryptoMacToHex,
+        KernelFn::CryptoHmacSha256WithKey,
+        KernelFn::CryptoHmacSha512WithKey,
+        KernelFn::CryptoAesKeyFromPasswordKey,
+        KernelFn::CryptoChachaKeyFromPasswordKey,
+        KernelFn::CryptoAesGcmEncryptKey,
+        KernelFn::CryptoAesGcmDecryptKey,
+        KernelFn::CryptoChacha20EncryptKey,
+        KernelFn::CryptoChacha20DecryptKey,
+        // Ipe.Email.EmailAddress — compiled-source Layer-3 module.
+        KernelFn::EmailAddressParse,
+        KernelFn::EmailAddressToString,
         // Ipe.Money — compiled-source Layer-3 module; every kernel is reached
         // exclusively through the `Ffi.kernel "Money_*"` alias fast-path (the
         // `Money` qualifier is a compiled-source module name, not a legacy

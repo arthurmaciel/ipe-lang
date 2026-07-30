@@ -259,6 +259,10 @@ fn ir_type_name_at(interner: &Interner, ty: &IrType, depth: u16) -> String {
         IrType::EmailSesConfig => "SesConfig".to_owned(),
         IrType::EmailSmtpConfig => "SmtpConfig".to_owned(),
         IrType::EmailProvider => "EmailProvider".to_owned(),
+        // Typed-key newtypes (surface names as the Ipê author sees).
+        IrType::CryptoKey => "Key".to_owned(),
+        IrType::CryptoMac => "Mac".to_owned(),
+        IrType::EmailAddress => "EmailAddress".to_owned(),
     }
 }
 
@@ -1344,6 +1348,20 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::MoneyGetRate => "Money.getRate",
         KernelFn::MoneyHasRate => "Money.hasRate",
         KernelFn::MoneyClearRates => "Money.clearRates",
+        // Typed-key newtypes.
+        KernelFn::CryptoKeyFromString => "Key.fromString",
+        KernelFn::CryptoKeyFromBytes => "Key.fromBytes",
+        KernelFn::CryptoMacToHex => "Mac.toHex",
+        KernelFn::CryptoHmacSha256WithKey => "Crypto.hmacSha256WithKey",
+        KernelFn::CryptoHmacSha512WithKey => "Crypto.hmacSha512WithKey",
+        KernelFn::CryptoAesKeyFromPasswordKey => "Crypto.aesKeyFromPasswordKey",
+        KernelFn::CryptoChachaKeyFromPasswordKey => "Crypto.chachaKeyFromPasswordKey",
+        KernelFn::CryptoAesGcmEncryptKey => "Crypto.aesGcmEncryptKey",
+        KernelFn::CryptoAesGcmDecryptKey => "Crypto.aesGcmDecryptKey",
+        KernelFn::CryptoChacha20EncryptKey => "Crypto.chacha20EncryptKey",
+        KernelFn::CryptoChacha20DecryptKey => "Crypto.chacha20DecryptKey",
+        KernelFn::EmailAddressParse => "EmailAddress.parse",
+        KernelFn::EmailAddressToString => "EmailAddress.toString",
     }
 }
 

@@ -1632,7 +1632,11 @@ fn collect_record_shapes(
         | IrType::EmailAttachment
         | IrType::EmailSesConfig
         | IrType::EmailSmtpConfig
-        | IrType::EmailProvider => {}
+        | IrType::EmailProvider
+        // Typed-key newtypes are opaque scalar wrappers — no record shape.
+        | IrType::CryptoKey
+        | IrType::CryptoMac
+        | IrType::EmailAddress => {}
         // `WebRoute page` is page-parametric — descend in case the page type
         // carries a nested record shape.
         IrType::WebRoute(page) => {
@@ -1787,7 +1791,11 @@ fn type_reaches_enum(
         | IrType::EmailAttachment
         | IrType::EmailSesConfig
         | IrType::EmailSmtpConfig
-        | IrType::EmailProvider => false,
+        | IrType::EmailProvider
+        // Typed-key newtypes are monomorphic opaque wrappers — no enum edge.
+        | IrType::CryptoKey
+        | IrType::CryptoMac
+        | IrType::EmailAddress => false,
         // `Route<Page>` stores its `not_found`/built pages by value — a page
         // type reaching `target` through a route is a genuine size edge.
         IrType::WebRoute(page) => type_reaches_enum(page, target, enums, visited),
@@ -1875,7 +1883,12 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::EmailAttachment
         | IrType::EmailSesConfig
         | IrType::EmailSmtpConfig
-        | IrType::EmailProvider => false,
+        | IrType::EmailProvider
+        // Typed security newtypes are monomorphic opaque wrappers — no generic
+        // parameters.
+        | IrType::CryptoKey
+        | IrType::CryptoMac
+        | IrType::EmailAddress => false,
         // `WebRoute page` is parametric on `page`; check if it carries a
         // generic.
         IrType::WebRoute(page) => contains_generic(page),
@@ -1988,7 +2001,11 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::EmailAttachment
         | IrType::EmailSesConfig
         | IrType::EmailSmtpConfig
-        | IrType::EmailProvider => {}
+        | IrType::EmailProvider
+        // Typed security newtypes are monomorphic opaque wrappers — no generics.
+        | IrType::CryptoKey
+        | IrType::CryptoMac
+        | IrType::EmailAddress => {}
         // `WebRoute page` may carry generic parameters through `page`.
         IrType::WebRoute(page) => collect_generics(page, out),
         // `Ui { ctor, msg }` may carry generic parameters through `msg`.
@@ -2315,7 +2332,11 @@ fn match_template(
         | IrType::EmailAttachment
         | IrType::EmailSesConfig
         | IrType::EmailSmtpConfig
-        | IrType::EmailProvider => {
+        | IrType::EmailProvider
+        // Typed security newtypes are monomorphic opaque leaves — must equal exactly.
+        | IrType::CryptoKey
+        | IrType::CryptoMac
+        | IrType::EmailAddress => {
             if template == concrete {
                 Ok(())
             } else {

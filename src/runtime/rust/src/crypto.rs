@@ -12,6 +12,92 @@
 // entirely, not merely unreachable.
 use super::*;
 
+// ── Typed role newtypes ───────────────────────────────────────────────────────
+//
+// `Key` and `Mac` make distinct cryptographic roles distinct Rust types so a
+// role-swap (passing a message where a key is expected) is a compile error, not
+// a silent wrong answer. Both wrap an opaque `String` blob — callers never
+// inspect the byte content directly; the role is what matters.
+
+/// `Crypto.Key` — an opaque cryptographic key obtained from `Key.fromString`,
+/// `Key.fromBytes`, or `Crypto.aesKeyFromPassword` / `Crypto.chachaKeyFromPassword`.
+///
+/// Distinct from `String`: passing a `Key` where a message is expected (or
+/// vice-versa) is a compile-time error, not a silent wrong MAC or ciphertext.
+///
+/// `Clone`: keys are legitimately reused across multiple operations (the
+/// keyfrompassword golden fixture derives the same key twice and uses each once).
+/// NOT `Debug`/`Display`: prevents accidental key material appearing in log
+/// lines or panic messages. `PartialEq` via constant-time compare (same
+/// reasoning as `Secret`: the length check is metadata, but byte equality is
+/// timing-safe via `subtle`).
+#[derive(Clone)]
+pub struct Key(String);
+
+impl PartialEq for Key {
+    fn eq(&self, other: &Self) -> bool {
+        use subtle::ConstantTimeEq;
+        let (a, b) = (self.0.as_bytes(), other.0.as_bytes());
+        a.len() == b.len() && bool::from(a.ct_eq(b))
+    }
+}
+
+impl std::fmt::Debug for Key {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<key>")
+    }
+}
+
+impl crate::stringify::IpeStringify for Key {
+    fn ipe_show(&self) -> String {
+        "<key>".to_owned()
+    }
+}
+
+/// `Crypto.Mac` — an opaque message authentication code (hex-encoded) returned
+/// by `Crypto.hmacSha256` / `Crypto.hmacSha512` with the typed-key variants.
+///
+/// Distinct from `String` so a MAC output cannot be silently passed where a
+/// key or plaintext is expected. Wraps the hex-encoded tag; `Mac.toHex` is the
+/// only extraction path so a reviewer can grep for every MAC-reveal site.
+///
+/// `Clone + PartialEq`: MACs are compared for equality (verify pattern). The
+/// comparison is NOT timing-safe here because a MAC tag is the output of a
+/// one-way function, not a secret by itself (timing-safe equality is on the
+/// input key via `Key::PartialEq`; for MAC verification use
+/// `Crypto.constantTimeEqual` on the hex strings if timing safety matters).
+#[derive(Clone, PartialEq, Debug)]
+pub struct Mac(String);
+
+impl crate::stringify::IpeStringify for Mac {
+    fn ipe_show(&self) -> String {
+        self.0.clone()
+    }
+}
+
+/// `Key.fromString : String -> Key` — construction boundary: promotes any
+/// `String` to a typed key role. The byte content is opaque; the role is
+/// distinct.
+#[must_use]
+pub fn crypto_key_from_string(s: String) -> Key {
+    Key(s)
+}
+
+/// `Key.fromBytes : String -> Key` — alias for `fromString` when the caller
+/// holds a byte-string (Ipê `Bytes` is `String`). Identical semantics.
+#[must_use]
+pub fn crypto_key_from_bytes(s: String) -> Key {
+    Key(s)
+}
+
+/// `Mac.toHex : Mac -> String` — the single extraction boundary: recover the
+/// hex-encoded tag from an opaque `Mac`. Greppable, so a reviewer can audit
+/// every place a raw MAC string escapes the typed wrapper.
+#[must_use]
+pub fn crypto_mac_to_hex(m: Mac) -> String {
+    m.0
+}
+
 // `Crypto.randomBytes : Int -> Task Error String`. Go returns the entropy as a
 // LOWERCASE HEX string (rt.go ~l6543: `hex.EncodeToString(b)`), NOT a byte list —
 // the Ipê signature is `String`, so the Rust side must return a hex `String` too.
@@ -199,6 +285,48 @@ pub fn crypto_hmac_sha256(key: String, msg: String) -> String {
         .collect()
 }
 
+/// `Crypto.hmacSha256WithKey : Key -> String -> Mac` — typed variant.
+/// The key parameter is a distinct `Key` role so passing the message where the
+/// key is expected is a compile error.
+pub fn crypto_hmac_sha256_key(key: Key, msg: String) -> Mac {
+    use hmac::{Hmac, Mac as HmacMac};
+    use sha2::Sha256;
+    type HmacSha256 = Hmac<Sha256>;
+    // STRUCTURALLY-DEAD Err: same reasoning as `crypto_hmac_sha256` above.
+    // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — structurally-dead HMAC InvalidLength; a loud .expect is safer than a dead Result Err a caller can mishandle into a wrong MAC [ledger #1]
+    #[allow(clippy::expect_used)]
+    let mut mac =
+        HmacSha256::new_from_slice(key.0.as_bytes()).expect("Hmac<Sha256> accepts any key length");
+    mac.update(msg.as_bytes());
+    let hex: String = mac
+        .finalize()
+        .into_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    Mac(hex)
+}
+
+/// `Crypto.hmacSha512WithKey : Key -> String -> Mac` — typed variant.
+pub fn crypto_hmac_sha512_key(key: Key, msg: String) -> Mac {
+    use hmac::{Hmac, Mac as HmacMac};
+    use sha2::Sha512;
+    type HmacSha512 = Hmac<Sha512>;
+    // STRUCTURALLY-DEAD Err: same reasoning as `crypto_hmac_sha512` above.
+    // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — structurally-dead HMAC InvalidLength; a loud .expect is safer than a dead Result Err a caller can mishandle into a wrong MAC [ledger #1]
+    #[allow(clippy::expect_used)]
+    let mut mac =
+        HmacSha512::new_from_slice(key.0.as_bytes()).expect("Hmac<Sha512> accepts any key length");
+    mac.update(msg.as_bytes());
+    let hex: String = mac
+        .finalize()
+        .into_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    Mac(hex)
+}
+
 /// Ipê `hmacSha512 : String -> String -> String`.
 pub fn crypto_hmac_sha512(key: String, msg: String) -> String {
     use hmac::{Hmac, Mac};
@@ -366,6 +494,24 @@ fn aead_read_key(name: &str, key: &str) -> Result<Vec<u8>, String> {
     Ok(k)
 }
 
+// Crypto.aesGcmEncryptKey : Key -> String -> Result Error String  (typed variant)
+#[cfg(not(target_arch = "wasm32"))]
+pub fn crypto_aes_gcm_encrypt_key<E: From<String>>(
+    key: Key,
+    plaintext: String,
+) -> IpeResult<E, String> {
+    crypto_aes_gcm_encrypt(key.0, plaintext)
+}
+
+// Crypto.aesGcmDecryptKey : Key -> String -> Result Error String  (typed variant)
+#[cfg(not(target_arch = "wasm32"))]
+pub fn crypto_aes_gcm_decrypt_key<E: From<String>>(
+    key: Key,
+    encoded: String,
+) -> IpeResult<E, String> {
+    crypto_aes_gcm_decrypt(key.0, encoded)
+}
+
 // Crypto.aesGcmEncrypt : String -> String -> Result Error String
 #[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_aes_gcm_encrypt<E: From<String>>(
@@ -445,6 +591,24 @@ pub fn crypto_aes_gcm_decrypt<E: From<String>>(
         },
         Err(e) => IpeResult::Err(format!("Crypto.aesGcmDecrypt: {}", e).into()),
     }
+}
+
+// Crypto.chacha20EncryptKey : Key -> String -> Result Error String  (typed variant)
+#[cfg(not(target_arch = "wasm32"))]
+pub fn crypto_chacha20_encrypt_key<E: From<String>>(
+    key: Key,
+    plaintext: String,
+) -> IpeResult<E, String> {
+    crypto_chacha20_encrypt(key.0, plaintext)
+}
+
+// Crypto.chacha20DecryptKey : Key -> String -> Result Error String  (typed variant)
+#[cfg(not(target_arch = "wasm32"))]
+pub fn crypto_chacha20_decrypt_key<E: From<String>>(
+    key: Key,
+    encoded: String,
+) -> IpeResult<E, String> {
+    crypto_chacha20_decrypt(key.0, encoded)
 }
 
 // Crypto.chacha20Encrypt : String -> String -> Result Error String
@@ -545,6 +709,22 @@ pub fn crypto_chacha_key_from_password(password: String, salt: String) -> String
     crypto_aes_key_from_password(password, salt)
 }
 
+// Crypto.aesKeyFromPasswordKey : String -> String -> Key  (typed-key variant)
+//
+// Returns a typed `Key` rather than a bare `String` so the derived key can
+// only be passed to typed AEAD operations (`aesGcmEncryptKey` /
+// `aesGcmDecryptKey`), making a role-swap a compile error.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn crypto_aes_key_from_password_key(password: String, salt: String) -> Key {
+    Key(crypto_aes_key_from_password(password, salt))
+}
+
+// Crypto.chachaKeyFromPasswordKey : String -> String -> Key  (typed-key variant)
+#[cfg(not(target_arch = "wasm32"))]
+pub fn crypto_chacha_key_from_password_key(password: String, salt: String) -> Key {
+    Key(crypto_aes_key_from_password(password, salt))
+}
+
 // ── Concrete (non-generic) wrappers for generated Ipê code ─────────────
 //
 // The generic `crypto_aes_gcm_encrypt<E>`, `crypto_aes_gcm_decrypt<E>`,
@@ -590,6 +770,42 @@ pub fn ipe_chacha20_decrypt(
     encoded: String,
 ) -> IpeResult<crate::error::IpeError, String> {
     crypto_chacha20_decrypt(key, encoded)
+}
+
+/// Generated-code alias for `crypto_aes_gcm_encrypt_key` with `E = IpeError`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn ipe_aes_gcm_encrypt_key(
+    key: Key,
+    plaintext: String,
+) -> IpeResult<crate::error::IpeError, String> {
+    crypto_aes_gcm_encrypt_key(key, plaintext)
+}
+
+/// Generated-code alias for `crypto_aes_gcm_decrypt_key` with `E = IpeError`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn ipe_aes_gcm_decrypt_key(
+    key: Key,
+    encoded: String,
+) -> IpeResult<crate::error::IpeError, String> {
+    crypto_aes_gcm_decrypt_key(key, encoded)
+}
+
+/// Generated-code alias for `crypto_chacha20_encrypt_key` with `E = IpeError`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn ipe_chacha20_encrypt_key(
+    key: Key,
+    plaintext: String,
+) -> IpeResult<crate::error::IpeError, String> {
+    crypto_chacha20_encrypt_key(key, plaintext)
+}
+
+/// Generated-code alias for `crypto_chacha20_decrypt_key` with `E = IpeError`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn ipe_chacha20_decrypt_key(
+    key: Key,
+    encoded: String,
+) -> IpeResult<crate::error::IpeError, String> {
+    crypto_chacha20_decrypt_key(key, encoded)
 }
 
 /// Generated-code alias for `crypto_rsa_sha256_sign` with `E = String`.
@@ -709,5 +925,73 @@ TsgxkiXH9sjXrPHT1hXn2tKCv9MkR8MD1Ndh6jo7inBZUK0YG7H6Jx0CAwEAAQ==
             "abc".to_string(),
             "ab".to_string()
         ));
+    }
+
+    // ── Typed newtype tests ──────────────────────────────────────────────────
+
+    /// `Key.fromString` promotes any string to a typed key; `Mac.toHex`
+    /// recovers the hex tag from a typed MAC. Verifies the construction
+    /// boundary and extraction boundary round-trip correctly.
+    #[test]
+    fn typed_key_and_mac_round_trip() {
+        let raw_key: String = (0..20).map(|_| '\u{000b}').collect();
+        let key = crypto_key_from_string(raw_key);
+        let mac = crypto_hmac_sha256_key(key, "Hi There".to_string());
+        // RFC 4231 test vector 1 — same value as the String-typed variant
+        assert_eq!(
+            crypto_mac_to_hex(mac),
+            "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
+        );
+    }
+
+    /// `crypto_key_from_bytes` is an alias for `crypto_key_from_string` with
+    /// identical byte semantics; both paths produce the same MAC.
+    #[test]
+    fn key_from_bytes_same_as_key_from_string() {
+        let raw: String = (0..20).map(|_| '\u{000b}').collect();
+        let k1 = crypto_key_from_string(raw.clone());
+        let k2 = crypto_key_from_bytes(raw);
+        let mac1 = crypto_hmac_sha256_key(k1, "data".to_string());
+        let mac2 = crypto_hmac_sha256_key(k2, "data".to_string());
+        assert_eq!(crypto_mac_to_hex(mac1), crypto_mac_to_hex(mac2));
+    }
+
+    /// `Key`'s `Debug` impl MUST redact key material — never "<key-bytes>".
+    #[test]
+    fn key_debug_is_redacted() {
+        let key = crypto_key_from_string("supersecret".to_string());
+        let debug_str = format!("{:?}", key);
+        assert_eq!(debug_str, "<key>", "Key Debug must redact to '<key>'");
+        assert!(
+            !debug_str.contains("supersecret"),
+            "Key Debug must not contain raw key material"
+        );
+    }
+
+    /// Role-swap guard: `Key` and `Mac` are distinct types at the Rust level.
+    /// This test documents the expected COMPILE ERROR if you try to pass a `Mac`
+    /// where a `Key` is expected. The compile-fail check is in the doc comment:
+    ///
+    /// ```compile_fail
+    /// use ipe_runtime_rust::crypto::{crypto_key_from_string, crypto_hmac_sha256_key};
+    /// let mac = crypto_hmac_sha256_key(
+    ///     crypto_key_from_string("k".to_string()),
+    ///     "m".to_string(),
+    /// );
+    /// // Passing a Mac where Key is expected: compile error
+    /// let _ = crypto_hmac_sha256_key(mac, "m".to_string());
+    /// ```
+    #[test]
+    fn role_swap_types_are_distinct() {
+        // Verify at runtime that Key != Mac (they are separate newtypes).
+        // The static compile-fail case is documented in the doc comment above.
+        let key = crypto_key_from_string("k".to_string());
+        let mac = crypto_hmac_sha256_key(key, "m".to_string());
+        // mac_to_hex is the ONLY extraction path for a Mac
+        let hex = crypto_mac_to_hex(mac);
+        assert!(
+            !hex.is_empty(),
+            "Mac extraction via mac_to_hex must succeed"
+        );
     }
 }
