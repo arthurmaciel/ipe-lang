@@ -227,6 +227,19 @@ it is evaluated once, on first use, and every later reference sees that same
 result — so `apiKey` reads the environment a single time regardless of how many
 call sites use it.
 
+**`Process.run` runs a child process with NO shell** — the arguments are a
+direct `argv` vector, never `sh -c`, so no argument can be reinterpreted as
+shell syntax (no command injection). It succeeds with the child's captured
+stdout and fails with a typed `Error` on a non-zero exit or spawn failure.
+Server-only (`subprocess` capability): default-denied under `--target wasm`.
+
+```elm
+main : Task Error ()
+main =
+    Process.run "printf" [ "%s", "hello" ]
+        |> Task.andThen (\out -> Io.println ("got: " ++ out))
+```
+
 **Result/Task bridges:**
 
 | Helper | Type |

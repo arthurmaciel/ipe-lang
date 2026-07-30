@@ -158,6 +158,31 @@ fn path_builds_and_runs() {
     seal_module("path", PATH_MAIN, "c.txt /a/b .txt ABS");
 }
 
+// ── Ipe.Process — subprocess execution (no shell) ──────────────────
+// `Process.run` runs `printf %s SEALED` with a DIRECT argv (never `sh -c`),
+// captures its stdout, and prints it. A resolution/scheme/emit regression
+// fails at `_resolves_and_emits`; the seal runs the child and asserts stdout.
+
+const PROCESS_MAIN: &str = "module Main exposing (main)\n\
+    import Ipe.Prelude exposing (..)\n\
+    import Ipe.Task as Task\n\
+    import Ipe.Io as Io\n\
+    import Ipe.Process as Process\n\n\
+    run : Task Error String\n\
+    run = Process.run \"printf\" [ \"%s\", \"SEALED\" ]\n\n\
+    main =\n\
+    \x20   Task.andThen (\\out -> Io.println out) run\n";
+
+#[test]
+fn process_resolves_and_emits() {
+    let _ = compile_module_probe("process", PROCESS_MAIN);
+}
+
+#[test]
+fn process_builds_and_runs() {
+    seal_module("process", PROCESS_MAIN, "SEALED");
+}
+
 // ── Ipe.Pure — point-free Uuid kernel aliases ─────
 // The whole module failed to type-check because `uuidV4Kernel : Task Error
 // String` mis-annotated the `Uuid_v4` kernel (real scheme `() -> Task Error

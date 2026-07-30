@@ -13919,6 +13919,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::FileAppend
                 | KernelFn::FileCopy
                 | KernelFn::FileRename
+                // ── Process arity-2 ─────────────────────────────────────
+                // `ProcessRun` : String -> List String -> Task Error String
+                | KernelFn::ProcessRun
                 // ── Http arity-2 ────────────────────────────────────────
                 // `HttpPost` : String -> String -> Task Error HttpResponse
                 // `HttpWithMethod` / `HttpWithTimeout` / `HttpWithBody` /
@@ -15562,6 +15565,7 @@ impl<'a> Lowerer<'a> {
                     ("File", "copy") => Ok(Callee::Kernel(KernelFn::FileCopy)),
                     ("File", "rename") => Ok(Callee::Kernel(KernelFn::FileRename)),
                     ("File", "delete") => Ok(Callee::Kernel(KernelFn::FileDelete)),
+                    ("Process", "run") => Ok(Callee::Kernel(KernelFn::ProcessRun)),
                     // ── Http kernels ────────────────────────────────────
                     ("Http", "get") => Ok(Callee::Kernel(KernelFn::HttpGet)),
                     ("Http", "post") => Ok(Callee::Kernel(KernelFn::HttpPost)),
