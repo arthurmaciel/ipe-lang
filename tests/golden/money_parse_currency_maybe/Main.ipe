@@ -1,0 +1,21 @@
+module Main exposing (main)
+import Ipe.Io as Io
+import Ipe.Money as Money exposing (Currency(..))
+
+-- Proves parseCurrency : String -> Maybe Currency.
+-- Known code yields Just; unrecognised code yields Nothing — never a silent default.
+
+showResult : Maybe Currency -> String
+showResult m =
+    case m of
+        Just c -> "Just " ++ Money.currencyCode c
+        Nothing -> "Nothing"
+
+main =
+    Io.println
+        (showResult (Money.parseCurrency "USD")
+            ++ "\n"
+            ++ showResult (Money.parseCurrency "BOGUS")
+            ++ "\n"
+            ++ showResult (Money.parseCurrency "")
+        )

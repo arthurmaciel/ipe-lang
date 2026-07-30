@@ -27,6 +27,7 @@ import Ipe.Ffi as Ffi
 import Ipe.List as List
 import Ipe.Error as Error exposing (Error)
 import Ipe.Decimal as Dec exposing (Decimal)
+import Ipe.String as String
 
 
 -- ─── Currency enum ────────────────────────────────────────────────
@@ -220,68 +221,72 @@ isKnownCode code =
     isKnownCurrencyForCode code
 
 
-parseCurrency : String -> Currency
+-- | Parse an ISO 4217 currency code string into a `Currency`.
+-- Returns `Nothing` for any unrecognised code — the caller must handle
+-- the absent case explicitly. Use `CurrencyRaw` directly when you need
+-- a passthrough for codes outside the known set.
+parseCurrency : String -> Maybe Currency
 parseCurrency code =
     case String.toUpper (String.trim code) of
-        "USD" -> USD
-        "EUR" -> EUR
-        "GBP" -> GBP
-        "JPY" -> JPY
-        "CHF" -> CHF
-        "AUD" -> AUD
-        "CAD" -> CAD
-        "NZD" -> NZD
-        "SEK" -> SEK
-        "NOK" -> NOK
-        "DKK" -> DKK
-        "CNY" -> CNY
-        "HKD" -> HKD
-        "SGD" -> SGD
-        "KRW" -> KRW
-        "TWD" -> TWD
-        "INR" -> INR
-        "THB" -> THB
-        "MYR" -> MYR
-        "IDR" -> IDR
-        "PHP" -> PHP
-        "VND" -> VND
-        "BRL" -> BRL
-        "MXN" -> MXN
-        "ARS" -> ARS
-        "CLP" -> CLP
-        "ZAR" -> ZAR
-        "TRY" -> TRY
-        "RUB" -> RUB
-        "UAH" -> UAH
-        "PLN" -> PLN
-        "CZK" -> CZK
-        "HUF" -> HUF
-        "RON" -> RON
-        "BGN" -> BGN
-        "AED" -> AED
-        "SAR" -> SAR
-        "QAR" -> QAR
-        "KWD" -> KWD
-        "BHD" -> BHD
-        "OMR" -> OMR
-        "JOD" -> JOD
-        "ILS" -> ILS
-        "EGP" -> EGP
-        "NGN" -> NGN
-        "KES" -> KES
-        "GHS" -> GHS
-        "MAD" -> MAD
-        "TND" -> TND
-        "DZD" -> DZD
-        "PKR" -> PKR
-        "BDT" -> BDT
-        "LKR" -> LKR
-        "NPR" -> NPR
-        "BTC" -> BTC
-        "ETH" -> ETH
-        "USDT" -> USDT
-        "USDC" -> USDC
-        other -> CurrencyRaw other
+        "USD" -> Just USD
+        "EUR" -> Just EUR
+        "GBP" -> Just GBP
+        "JPY" -> Just JPY
+        "CHF" -> Just CHF
+        "AUD" -> Just AUD
+        "CAD" -> Just CAD
+        "NZD" -> Just NZD
+        "SEK" -> Just SEK
+        "NOK" -> Just NOK
+        "DKK" -> Just DKK
+        "CNY" -> Just CNY
+        "HKD" -> Just HKD
+        "SGD" -> Just SGD
+        "KRW" -> Just KRW
+        "TWD" -> Just TWD
+        "INR" -> Just INR
+        "THB" -> Just THB
+        "MYR" -> Just MYR
+        "IDR" -> Just IDR
+        "PHP" -> Just PHP
+        "VND" -> Just VND
+        "BRL" -> Just BRL
+        "MXN" -> Just MXN
+        "ARS" -> Just ARS
+        "CLP" -> Just CLP
+        "ZAR" -> Just ZAR
+        "TRY" -> Just TRY
+        "RUB" -> Just RUB
+        "UAH" -> Just UAH
+        "PLN" -> Just PLN
+        "CZK" -> Just CZK
+        "HUF" -> Just HUF
+        "RON" -> Just RON
+        "BGN" -> Just BGN
+        "AED" -> Just AED
+        "SAR" -> Just SAR
+        "QAR" -> Just QAR
+        "KWD" -> Just KWD
+        "BHD" -> Just BHD
+        "OMR" -> Just OMR
+        "JOD" -> Just JOD
+        "ILS" -> Just ILS
+        "EGP" -> Just EGP
+        "NGN" -> Just NGN
+        "KES" -> Just KES
+        "GHS" -> Just GHS
+        "MAD" -> Just MAD
+        "TND" -> Just TND
+        "DZD" -> Just DZD
+        "PKR" -> Just PKR
+        "BDT" -> Just BDT
+        "LKR" -> Just LKR
+        "NPR" -> Just NPR
+        "BTC" -> Just BTC
+        "ETH" -> Just ETH
+        "USDT" -> Just USDT
+        "USDC" -> Just USDC
+        _ -> Nothing
 
 
 -- ─── Arithmetic (currency-checked) ────────────────────────────────
