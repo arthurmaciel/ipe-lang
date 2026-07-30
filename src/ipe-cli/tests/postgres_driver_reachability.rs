@@ -35,7 +35,7 @@ import Ipe.Task
 main =
     Task.andThen
         (\\conn ->
-            Db.execRaw conn \"CREATE TABLE t (id INTEGER)\"
+            Db.unsafeExecRaw conn \"CREATE TABLE t (id INTEGER)\"
         )
         (Db.open \"sqlite\" \"sqlite::memory:\")
 ";

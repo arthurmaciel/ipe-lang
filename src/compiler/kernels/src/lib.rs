@@ -2344,7 +2344,7 @@ impl StdlibKernel {
             Self::DbConnect => d("Db", "connect", 1, Db, "db_connect"),
             Self::DbOpen => d("Db", "open", 2, Db, "db_open"),
             Self::DbClose => d("Db", "close", 1, Db, "db_close"),
-            Self::DbExecRaw => d("Db", "execRaw", 2, Db, "db_exec_raw"),
+            Self::DbExecRaw => d("Db", "unsafeExecRaw", 2, Db, "db_exec_raw"),
             Self::DbExec => d("Db", "exec", 3, Db, "db_exec_params"),
             Self::DbQuery => d("Db", "query", 3, Db, "db_query_params"),
             Self::DbQueryDecode => d("Db", "queryDecode", 4, Db, "db_query_decode_params"),

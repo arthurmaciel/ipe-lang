@@ -19,7 +19,7 @@ main =
                 (\txconn ->
                     let
                         _ =
-                            Db.execRaw txconn
+                            Db.unsafeExecRaw txconn
                                 "CREATE TABLE tags (id INTEGER, label TEXT)"
 
                         _ =

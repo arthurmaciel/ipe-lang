@@ -1192,7 +1192,7 @@ impl Env {
                     "connect",
                     "open",
                     "close",
-                    "execRaw",
+                    "unsafeExecRaw",
                     "exec",
                     "query",
                     "queryDecode",

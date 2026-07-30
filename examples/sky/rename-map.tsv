@@ -41,6 +41,11 @@ Std.Live.	Ipe.Web.
 Std.Live	Ipe.Web
 Std.Webview	Ipe.WebView
 
+# ── Std.Db.execRaw -> Ipe.Db.unsafeExecRaw  (the raw-SQL escape hatch is renamed
+#    to mark the SQL-injection surface; longest-prefix wins binds this member
+#    rewrite before the broad Std. -> Ipe. row below).
+Std.Db.execRaw	Ipe.Db.unsafeExecRaw
+
 # ── Std.* -> Ipe.*  (Log, Ui, Ui.*, Web, Web.Head, Db, Money, Console, Cmd, Sub,
 #    Time, Css, Csv, Cache, PubSub, Decimal, Html, Html.*, WebView, Auth, ...)
 Std.	Ipe.
