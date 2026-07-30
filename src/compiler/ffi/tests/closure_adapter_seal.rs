@@ -72,7 +72,7 @@ fn closure_adapter_emits_a_wrapper_for_both_return_shapes() {
     );
     assert!(res.contains("-> ApplyFnClosure {"), "{res}");
     assert!(
-        res.contains("Err(_) => Err(str_err(\"foreign closure panicked\"))"),
+        res.contains("Err(__p) => Err(ipe_error_from_panic(\"foreign closure panicked\", __p))"),
         "{res}"
     );
     // The catch_unwind boundary is sound only under panic=unwind. The emitted
@@ -140,13 +140,18 @@ fn closure_adapter_builds_and_runs() {
     )
     .expect("Cargo.toml");
 
-    // A minimal stand-in for the runtime glue the emitted Result arm names
-    // (`str_err`, `IpeError`). `Total` needs none of this.
+    // A minimal stand-in for the runtime glue the emitted arms name
+    // (`str_err`, `IpeError`, the panic funnel). The `Total` arm names only
+    // `note_foreign_panic` before its abort.
     let main_rs = format!(
         r#"// Minimal runtime glue the emitted Result adapter references.
 #[derive(Debug)]
 pub struct IpeError(String);
 pub fn str_err<E: From<String>>(s: &str) -> E {{ s.to_string().into() }}
+pub fn ipe_error_from_panic<E: From<String>>(c: &str, _p: Box<dyn std::any::Any + Send>) -> E {{ c.to_string().into() }}
+pub fn note_foreign_panic(_c: &str, _p: Box<dyn std::any::Any + Send>) -> String {{ String::new() }}
+pub fn note_foreign_error<T: std::fmt::Debug>(_e: T) -> String {{ String::new() }}
+pub fn ipe_error_from_foreign<T: std::fmt::Debug, E: From<String>>(_e: T) -> E {{ "external operation failed".to_string().into() }}
 impl From<String> for IpeError {{ fn from(s: String) -> Self {{ IpeError(s) }} }}
 
 // A tiny "crate" fn that takes the boxed closure and calls it — the exact

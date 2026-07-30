@@ -797,14 +797,14 @@ fn render_generic_wrapper(base_name: &str, g: &GenericFn) -> String {
             lines.push(format!(
                 "    match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(move || \
                  {body_call})) {{ Ok(Ok(v)) => ok_res({ok_lift}), Ok(Err(e)) => \
-                 IpeResult::Err(ipe_error_from_foreign(e)), Err(_) => \
-                 IpeResult::Err(str_err(\"{panic_msg}\")) }}"
+                 IpeResult::Err(ipe_error_from_foreign(e)), Err(__p) => \
+                 IpeResult::Err(ipe_error_from_panic(\"{panic_msg}\", __p)) }}"
             ));
         } else {
             lines.push(format!(
                 "    match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(move || \
-                 {body_call})) {{ Ok(v) => ok_res({ok_lift}), Err(_) => \
-                 IpeResult::Err(str_err(\"{panic_msg}\")) }}"
+                 {body_call})) {{ Ok(v) => ok_res({ok_lift}), Err(__p) => \
+                 IpeResult::Err(ipe_error_from_panic(\"{panic_msg}\", __p)) }}"
             ));
         }
         lines
@@ -1214,7 +1214,7 @@ mod tests {
         let expected = "\
 // [ffi-generic] box1_make <a>\n\
 pub fn box1_make<A: ::std::hash::Hash + ::std::cmp::Eq>(arg0: A) -> IpeResult<IpeError, ::box1::Box1<A>> {\n    \
-match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(move || ::box1::Box1::<A>::make(arg0))) { Ok(v) => ok_res(v), Err(_) => IpeResult::Err(str_err(\"foreign call panicked\")) }\n\
+match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(move || ::box1::Box1::<A>::make(arg0))) { Ok(v) => ok_res(v), Err(__p) => IpeResult::Err(ipe_error_from_panic(\"foreign call panicked\", __p)) }\n\
 }\n";
         assert_eq!(w.source, expected);
     }
@@ -1260,7 +1260,7 @@ match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(move || ::box1::
         // The closure-carrying body names the likely panic origin.
         assert!(
             w.source
-                .contains("str_err(\"an Ipê closure passed to FFI panicked\")"),
+                .contains("ipe_error_from_panic(\"an Ipê closure passed to FFI panicked\", __p)"),
             "{}",
             w.source
         );

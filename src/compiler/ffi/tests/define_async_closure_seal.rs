@@ -81,7 +81,8 @@ fn async_result_adapter_emits_spawned_await_containment() {
     // through the JoinError arm. Both to Err — never abort, never fabricate.
     assert!(
         out.contains(
-            "Err(_) => return Box::pin(async move { Err(str_err(\"foreign closure panicked\")) })"
+            "let __e = ipe_error_from_panic(\"foreign closure panicked\", __p); \
+             return Box::pin(async move { Err(__e) });"
         ),
         "{out}"
     );
@@ -161,6 +162,10 @@ use std::future::Future;
 #[derive(Debug)]
 pub struct IpeError(String);
 pub fn str_err<E: From<String>>(s: &str) -> E {{ s.to_string().into() }}
+pub fn ipe_error_from_panic<E: From<String>>(c: &str, _p: Box<dyn std::any::Any + Send>) -> E {{ c.to_string().into() }}
+pub fn note_foreign_panic(_c: &str, _p: Box<dyn std::any::Any + Send>) -> String {{ String::new() }}
+pub fn note_foreign_error<T: std::fmt::Debug>(_e: T) -> String {{ String::new() }}
+pub fn ipe_error_from_foreign<T: std::fmt::Debug, E: From<String>>(_e: T) -> E {{ "external operation failed".to_string().into() }}
 impl From<String> for IpeError {{ fn from(s: String) -> Self {{ IpeError(s) }} }}
 
 // The cancel guard the emitted async adapter arms around its spawned task: its

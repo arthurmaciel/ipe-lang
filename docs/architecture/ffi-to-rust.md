@@ -353,7 +353,11 @@ typed `Err`.** Two disclosed exceptions bound the claim honestly: (a) a sync
 *total*-return define closure has no error channel, so a panic in the
 supplied Ipê function is converted to a deliberate loud
 `std::process::abort()` — a visible crash attributed at the boundary, chosen
-over laundering the panic into a fabricated value; (b) foreign code that
+over laundering the panic into a fabricated value (the same no-error-channel
+rule contains an opaque-typed field getter, the one accessor whose `.clone()`
+runs the crate's own `Clone` impl: its caught panic funnel-logs and aborts
+rather than unwind into app-level recovery over half-broken foreign state);
+(b) foreign code that
 *itself* calls `process::abort`/`process::exit` (or installs its own panic
 machinery) terminates without unwinding — no `catch_unwind` can intercept a
 non-unwinding exit, and no design that stays in safe Rust can. Everything
