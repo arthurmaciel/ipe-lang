@@ -977,12 +977,6 @@ impl Env {
                     "chachaKeyFromPasswordKey",
                 ],
             ),
-            // `Ipe.Crypto.Key` — opaque key newtype; construction boundary (§6.11).
-            ("Key", &["fromString", "fromBytes"]),
-            // `Ipe.Crypto.Mac` — opaque MAC newtype; extraction boundary (§6.11).
-            ("Mac", &["toHex"]),
-            // `Ipe.Email.EmailAddress` — opaque address newtype; parse boundary (§6.11).
-            ("EmailAddress", &["parse", "toString"]),
             // `Ipe.Uuid` — UUID generation and parsing.
             // `v4` and `v7` are arity-0 (bare value); `parse` is arity-1.
             ("Uuid", &["v4", "v7", "parse"]),
