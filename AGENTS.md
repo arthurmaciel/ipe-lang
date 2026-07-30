@@ -976,6 +976,13 @@ publicEnv = ["API_BASE_URL"]   # default-deny allowlist; rejects IPE_*/secret-pa
 optLevel  = "z"
 ```
 
+When `mode` is `"spa"` or `"hydrate"` (any value other than `"off"` or absent),
+the compiler infers the wasm target: `ipe build` is equivalent to
+`ipe build --target wasm` without an explicit flag. Precedence (highest first):
+`--target wasm` CLI flag > `IPE_TARGET=wasm` env > `[wasm].mode` in `ipe.toml` >
+default native. `mode = "off"` or an absent `[wasm]` section keeps the native
+default.
+
 `publicEnv` is a default-deny allowlist gated by a secret-name denylist
 (`*_SECRET`/`*_TOKEN`/`*_KEY`/`*_PASSWORD`/`DATABASE_URL`/the `IPE_*`
 namespace) enforced at `ipe.toml` PARSE time — listing `IPE_AUTH_TOKEN_SECRET`
