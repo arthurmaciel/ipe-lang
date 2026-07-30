@@ -2946,7 +2946,7 @@ fn run_check(rest: &[String]) -> Result<(), CliError> {
     };
     let entry = resolve_analysis_entry(&arg)?;
     typecheck_entry_via_graph(&entry)?;
-    println!("ok");
+    print!("{}", style::frame(&style::gutter("ok")));
     Ok(())
 }
 

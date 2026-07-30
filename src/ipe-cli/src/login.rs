@@ -44,9 +44,20 @@ pub fn run_login(rest: &[String]) -> Result<(), CliError> {
         None => run_device_flow(),
         Some("--status") if rest.len() == 1 => {
             if let Some(path) = existing_token_path() {
-                println!("logged in — token stored at {}", path.display());
+                print!(
+                    "{}",
+                    crate::style::frame(&crate::style::gutter(&format!(
+                        "logged in — token stored at {}",
+                        path.display()
+                    )))
+                );
             } else {
-                println!("not logged in — run `ipe login` to authorize");
+                print!(
+                    "{}",
+                    crate::style::frame(&crate::style::gutter(
+                        "not logged in — run `ipe login` to authorize"
+                    ))
+                );
             }
             Ok(())
         }
@@ -71,16 +82,27 @@ pub fn stored_token() -> Option<String> {
 fn run_device_flow() -> Result<(), CliError> {
     let device = request_device_code()?;
 
-    println!("To authorize ipe, visit:\n    {}", device.verification_uri);
-    println!("and enter the code:  {}\n", device.user_code);
+    print!(
+        "{}",
+        crate::style::frame(&crate::style::gutter(&format!(
+            "To authorize ipe, visit:\n  {}\nand enter the code:  {}",
+            device.verification_uri, device.user_code
+        )))
+    );
     if open_in_browser(&device.verification_uri) {
-        println!("(opened your browser)");
+        eprintln!("{}", crate::style::gutter("(opened your browser)"));
     }
-    println!("Waiting for authorization …");
+    eprintln!("{}", crate::style::gutter("Waiting for authorization …"));
 
     let token = poll_for_token(&device)?;
     let path = store_token(&token)?;
-    println!("Logged in. Token stored at {}", path.display());
+    print!(
+        "{}",
+        crate::style::frame(&crate::style::gutter(&format!(
+            "Logged in. Token stored at {}",
+            path.display()
+        )))
+    );
     Ok(())
 }
 
@@ -241,12 +263,21 @@ fn store_token(token: &str) -> Result<PathBuf, CliError> {
 /// Remove the stored token.
 fn logout() -> Result<(), CliError> {
     let Some(path) = token_path().filter(|p| p.exists()) else {
-        println!("not logged in — nothing to remove");
+        print!(
+            "{}",
+            crate::style::frame(&crate::style::gutter("not logged in — nothing to remove"))
+        );
         return Ok(());
     };
     std::fs::remove_file(&path)
         .map_err(|e| login_error(&format!("could not remove {}: {e}", path.display())))?;
-    println!("logged out — removed {}", path.display());
+    print!(
+        "{}",
+        crate::style::frame(&crate::style::gutter(&format!(
+            "logged out — removed {}",
+            path.display()
+        )))
+    );
     Ok(())
 }
 

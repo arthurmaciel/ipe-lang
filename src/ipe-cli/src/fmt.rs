@@ -150,7 +150,10 @@ fn run_fmt_inplace(path: Option<&str>, check: bool) -> Result<(), CliError> {
             }
         } else if formatted != src {
             crate::write_atomic(file, &formatted)?;
-            println!("formatted {}", file.display());
+            eprintln!(
+                "{}",
+                crate::style::gutter(&format!("formatted {}", file.display()))
+            );
         }
     }
 
