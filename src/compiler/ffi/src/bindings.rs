@@ -1981,11 +1981,13 @@ fn field_get_lines(cx: &WrapperCx<'_>) -> Vec<String> {
     } else {
         format!("{projection}.clone()")
     };
-    // A foreign nominal in the field type (absolutized to a `::crate::` path)
-    // means the `.clone()` dispatches into the crate's own `Clone` impl —
-    // foreign code, so it needs the panic boundary. Scalar / `String`-family
-    // fields resolve to bare std names and run none.
-    let clone_runs_foreign_code = !is_copy_rust(raw_ty) && inner.contains("::");
+    // A field access runs foreign code exactly when its `.clone()` can
+    // dispatch into the crate's own `Clone` impl; such a body needs the panic
+    // boundary. The classification is POSITIVE and fail-closed: only a type
+    // proven std-owned all the way down (scalars, `String`, `Vec`/`Option`
+    // over the same set) stays bare — anything unrecognised, qualified or
+    // not, gets the boundary.
+    let clone_runs_foreign_code = !is_copy_rust(raw_ty) && !std_owned_field_ty(raw_ty);
     let body = if clone_runs_foreign_code {
         format!(
             "    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {})) \
@@ -2004,6 +2006,21 @@ fn field_get_lines(cx: &WrapperCx<'_>) -> Vec<String> {
         body,
         "}".to_owned(),
     ]
+}
+
+/// Whether a field's Rust type is std-owned all the way down — Copy scalars,
+/// `String`/`str`, and `Vec`/`Option` recursively over the same set — so its
+/// `.clone()` provably runs no foreign code. Anything unrecognised is NOT
+/// std-owned; the caller then applies the panic boundary (fail-closed).
+fn std_owned_field_ty(raw: &str) -> bool {
+    let t = raw.trim();
+    if is_copy_rust(t) || matches!(t, "String" | "str" | "&str") {
+        return true;
+    }
+    if let Some(inner) = strip_generic1("Vec", t).or_else(|| strip_generic1("Option", t)) {
+        return std_owned_field_ty(inner);
+    }
+    false
 }
 
 /// Struct-field setter: a NEW receiver with one field replaced — Ipê
@@ -3253,6 +3270,28 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
                  channel)\", __p); std::process::abort(); } }"
             ),
             "{out}"
+        );
+    }
+
+    #[test]
+    fn an_unqualified_opaque_field_getter_still_gets_the_boundary() {
+        // Fail-closed classification: a field type that is not provably
+        // std-owned gets the panic boundary even when its rustType arrives
+        // unqualified (no `::crate::` path to key off).
+        let pkg = semver_pkg(&json!([{
+            "name": "build_field",
+            "params": [{"name": "self", "type": "Version", "ipeType": "Version", "rustType": "&Version"}],
+            "results": [{"name": "", "type": "BuildMetadata", "rustType": "BuildMetadata"}],
+            "effect": "pure",
+            "recvType": "Version",
+            "recvRustType": "semver::Version",
+            "methodName": "build",
+            "isField": true
+        }]));
+        let out = emit_bindings(&pkg);
+        assert!(
+            out.contains("note_foreign_panic(\"foreign `Clone` panicked in field getter"),
+            "an unrecognised field type must not slip past the boundary:\n{out}"
         );
     }
 
