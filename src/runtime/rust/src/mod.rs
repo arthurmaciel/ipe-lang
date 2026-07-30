@@ -364,6 +364,14 @@ pub use set::*;
 pub mod string;
 pub use string::*;
 
+// `Ipe.Locale` — opaque BCP-47 locale handle + locale-aware case mapping.
+// The `Locale` struct and `locale_from_tag`/`locale_to_tag`/
+// `string_to_upper_in`/`string_to_lower_in` fns are always present (the struct
+// is a plain `String` newtype with no optional dep); the ICU4X parsing and
+// case-mapping bodies activate under `--features locale`.
+pub mod locale;
+pub use locale::*;
+
 pub mod basics;
 pub use basics::*;
 

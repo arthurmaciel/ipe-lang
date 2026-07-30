@@ -344,6 +344,10 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         // `Ipe.Url`'s opaque validated URL — fully-qualified to avoid ambiguity
         // with any user-defined `Url` type.
         IrType::Url => "ipe_runtime::url::Url".to_owned(),
+        // `Locale` is fully-qualified to avoid ambiguity with any user-defined
+        // `Locale` type; the runtime module is always compiled (the struct is a
+        // plain newtype; ICU4X parse/case bodies activate under `--features locale`).
+        IrType::Locale => "ipe_runtime::locale::Locale".to_owned(),
         // Ipe.Ui / Ipe.Html parametric types.  Use fully-qualified Rust paths
         // (T2 soundness: `Attribute` exists in BOTH Ipe.Ui and Ipe.Html namespaces;
         // qualified paths keep them unambiguous and prevent glob-import shadowing).
