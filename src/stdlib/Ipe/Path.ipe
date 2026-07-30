@@ -1,27 +1,50 @@
--- | Ipe.Path — pure filesystem-path helpers (Layer 3 Ipe source).
+-- | Ipe.Path — typed, validated filesystem paths (Layer 3 Ipe source).
 --
--- Operate on `String` paths without touching the filesystem.  Use
--- `Ipe.File` for the effectful side (read / write / exists).
+-- `Path` is opaque: the ONLY way to build one is `fromString`, which
+-- normalises the path and REJECTS a NUL byte or a `..` traversal escape.
+-- Because a `Path` is validated at construction, the helpers (`base` / `dir`
+-- / `ext` / `isAbsolute`) and every `Ipe.File` entry point take a `Path`, not
+-- a raw `String` — an unvalidated string can never reach a filesystem syscall.
+-- Use `Ipe.File` for the effectful side (read / write / exists).
 module Ipe.Path exposing
-    ( base, dir, ext
+    ( Path
+    , fromString, toString
+    , base, dir, ext
     , isAbsolute
     )
 
 
 import Ipe.Ffi as Ffi
+import Ipe.Error exposing (Error)
 
 
-base : String -> String
+-- | `fromString raw` — the parse-don't-validate seal: the only `Path`
+-- constructor. Normalises separators and returns `Err` when `raw` contains a
+-- NUL byte or escapes its root via `..`; otherwise `Ok` the cleaned `Path`.
+fromString : String -> Result Error Path
+fromString = Ffi.kernel "Path_fromString"
+
+
+-- | `toString path` — recover the cleaned path string.
+toString : Path -> String
+toString = Ffi.kernel "Path_toString"
+
+
+-- | `base path` — the final path component.
+base : Path -> String
 base = Ffi.kernel "Path_base"
 
 
-dir : String -> String
+-- | `dir path` — everything but the final component.
+dir : Path -> String
 dir = Ffi.kernel "Path_dir"
 
 
-ext : String -> String
+-- | `ext path` — the file extension (with the dot), or "".
+ext : Path -> String
 ext = Ffi.kernel "Path_ext"
 
 
-isAbsolute : String -> Bool
+-- | `isAbsolute path` — does the path start from the root?
+isAbsolute : Path -> Bool
 isAbsolute = Ffi.kernel "Path_isAbsolute"

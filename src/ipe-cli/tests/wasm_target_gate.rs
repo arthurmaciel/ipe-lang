@@ -133,10 +133,13 @@ fn server_only_kernel_fails_at_compile_time() {
         "module Main exposing (main)\n\
          import Ipe.Prelude exposing (..)\n\
          import Ipe.File as File\n\
+         import Ipe.Path as Path\n\
          import Ipe.Task as Task\n\
          \n\
          main =\n\
-         \x20   File.readFile \"/etc/passwd\"\n",
+         \x20   case Path.fromString \"/etc/passwd\" of\n\
+         \x20       Ok p -> File.readFile p\n\
+         \x20       Err e -> Task.fail e\n",
     );
     let out = dir.join("out");
     let err = build_wasm(&entry, &out).expect_err("File.readFile must be denied under wasm");
@@ -219,10 +222,14 @@ fn transitive_server_import_fails_naming_the_exact_chain() {
         "module Data exposing (load)\n\
          import Ipe.Prelude exposing (..)\n\
          import Ipe.File as File\n\
+         import Ipe.Path as Path\n\
          import Ipe.Task as Task\n\
          \n\
          load : Task Error String\n\
-         load = File.readFile \"/etc/passwd\"\n",
+         load =\n\
+         \x20   case Path.fromString \"/etc/passwd\" of\n\
+         \x20       Ok p -> File.readFile p\n\
+         \x20       Err e -> Task.fail e\n",
     )
     .expect("write Data.ipe");
     std::fs::write(
@@ -358,10 +365,13 @@ fn server_only_kernel_still_builds_natively() {
         "module Main exposing (main)\n\
          import Ipe.Prelude exposing (..)\n\
          import Ipe.File as File\n\
+         import Ipe.Path as Path\n\
          import Ipe.Task as Task\n\
          \n\
          main =\n\
-         \x20   File.readFile \"/etc/passwd\"\n",
+         \x20   case Path.fromString \"/etc/passwd\" of\n\
+         \x20       Ok p -> File.readFile p\n\
+         \x20       Err e -> Task.fail e\n",
     );
     let out = dir.join("out");
     let runtime = ipe::resolve_runtime().expect("runtime must resolve");

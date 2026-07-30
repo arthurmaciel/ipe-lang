@@ -1,23 +1,112 @@
-// Path kernel stubs — pure string manipulation, no filesystem I/O.
-// All functions are total (never panic, no Task wrapper):
-//   base, dir, ext : String -> String
-//   isAbsolute     : String -> Bool
-//
-// These are FAITHFUL ports of Go's `path/filepath` (Unix semantics, separator
-// `/`) rather than thin wrappers over Rust's `std::path` — `std::path` is
-// OS-tagged and diverges from Go on trailing slashes, repeated separators, and
-// dotfiles (`std::path::Path::extension(".bashrc")` → None, Go's
-// `filepath.Ext(".bashrc")` → ".bashrc"). The Rust backend's Go≡Rust equivalence
-// target runs on Linux, where Go's filepath uses `/`, so we implement Unix
-// filepath exactly. (Audit finding: correctness/parity.)
-//
-// Routing (Kernel.hs fallthrough — all map cleanly via toSnakeCase):
-//   ("Path", "base")       / ("Ipe.Path", "base")       -> "path_base"
-//   ("Path", "dir")        / ("Ipe.Path", "dir")        -> "path_dir"
-//   ("Path", "ext")        / ("Ipe.Path", "ext")        -> "path_ext"
-//   ("Path", "isAbsolute") / ("Ipe.Path", "isAbsolute") -> "path_is_absolute"
+//! `Ipe.Path` — a typed, opaque filesystem path.
+//!
+//! The ONLY way to obtain a `Path` is through [`path_from_string`] (the
+//! parse-don't-validate seal): it normalises the path lexically and REJECTS
+//! the two byte-level primitives that make a raw `String` path a traversal /
+//! injection surface:
+//!
+//! * a NUL byte (`\0`) — a C-string terminator that truncates the path at the
+//!   syscall boundary, so `"safe.txt\0../../etc/passwd"` reaches the kernel as
+//!   `"safe.txt"` on one code path and the full string on another (a classic
+//!   poisoned-NUL bypass); and
+//! * a traversal escape — a relative path whose `..` elements climb ABOVE the
+//!   directory it is resolved against (cleaned form is `..` or begins `../`).
+//!   A rooted path cannot escape (`Clean` already stops `..` at `/`), so it is
+//!   allowed; a relative path that stays at or below its base is allowed.
+//!
+//! Because every `Path` is validated at construction, the pure helpers
+//! ([`path_base`] / [`path_dir`] / [`path_ext`] / [`path_is_absolute`]) and the
+//! `Ipe.File` kernels take a `Path` and never re-validate — the type is the
+//! proof. [`path_to_string`] is the single un-parse back to the raw `String`.
+//!
+//! The lexical engine (`clean`) is a faithful port of Go `path/filepath`
+//! (Unix, separator `/`) rather than a wrapper over `std::path`, which is
+//! OS-tagged and diverges from Go on trailing slashes, repeated separators, and
+//! dotfiles. The Rust backend's equivalence target runs on Linux, so Unix
+//! `filepath` semantics are implemented exactly.
+
+use super::IpeResult;
 
 const SEP: u8 = b'/';
+
+/// `Ipe.Path`'s opaque, validated newtype. See the module doc for the
+/// construction contract. The wrapped `String` is always the lexically-cleaned,
+/// NUL-free, non-escaping form produced by [`path_from_string`].
+///
+/// `Clone` is derived (a `Path` may be stored and passed to more than one
+/// kernel). `Debug` / `PartialEq` / `Eq` are derived and safe: a `Path` is not
+/// a secret, so printing or comparing the cleaned string leaks nothing the
+/// caller did not already hand in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Path(String);
+
+impl super::stringify::IpeStringify for Path {
+    /// Backs Ipê's `toString` / interpolation on a `Path`: the cleaned path
+    /// string. Identical to [`path_to_string`].
+    fn ipe_show(&self) -> String {
+        self.0.clone()
+    }
+}
+
+/// `Ipe.Path.fromString : String -> Result Error Path` — THE seal. The only
+/// public constructor: every `Path` value in a Ipê program traces back to one
+/// of these calls, so a reviewer can `grep` this one symbol to audit every
+/// place a raw string becomes a typed path.
+///
+/// Fails closed (`Err`) on a NUL byte or a traversal escape; succeeds with the
+/// lexically-cleaned form otherwise. The empty string cleans to `"."` (the
+/// current directory), matching Go `filepath.Clean("")`.
+#[must_use]
+pub fn path_from_string<E: From<String>>(s: String) -> IpeResult<E, Path> {
+    if s.as_bytes().contains(&0) {
+        return IpeResult::Err(
+            "Ipe.Path: path contains a NUL byte (a syscall-boundary truncation / traversal risk)"
+                .to_string()
+                .into(),
+        );
+    }
+    let cleaned = clean(&s);
+    if escapes_root(&cleaned) {
+        return IpeResult::Err(
+            format!(
+                "Ipe.Path: path escapes its root via `..` traversal: {s:?} (cleaned: {cleaned:?})"
+            )
+            .into(),
+        );
+    }
+    IpeResult::Ok(Path(cleaned))
+}
+
+/// `Ipe.Path.toString : Path -> String` — THE single un-parse: recover the
+/// cleaned path string. Consumes the `Path` (the typed proof is spent when the
+/// raw string comes back out).
+#[must_use]
+pub fn path_to_string(p: Path) -> String {
+    p.0
+}
+
+/// Borrow the cleaned path string. For the `Ipe.File` kernel boundary, which
+/// needs the `&str` to hand to `std::fs`.
+impl Path {
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Consume into the owned cleaned string (for kernels that need `String`).
+    #[must_use]
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+/// Does a CLEANED, relative path climb above its base? True when the whole
+/// path is `..` or it begins with `../` — the two shapes `clean` leaves when a
+/// relative path's leading `..`s could not be resolved away. A rooted path
+/// (begins `/`) can never escape: `clean` stops `..` at the root.
+fn escapes_root(cleaned: &str) -> bool {
+    cleaned == ".." || cleaned.starts_with("../")
+}
 
 /// Faithful port of Go `path/filepath.Clean` (Unix). Lexically simplifies a
 /// path: collapses repeated `/`, resolves `.`/`..` elements, drops a trailing
@@ -92,11 +181,12 @@ fn clean(path: &str) -> String {
     String::from_utf8(out).unwrap_or_else(|_| ".".to_string())
 }
 
-/// `Ipe.Path.base : String -> String` — Go `filepath.Base` (Unix).
+/// `Ipe.Path.base : Path -> String` — Go `filepath.Base` (Unix).
 /// "" → "."; all-slashes → "/"; else the final element with trailing slashes
 /// stripped.
 #[must_use]
-pub fn path_base(path: String) -> String {
+pub fn path_base(p: Path) -> String {
+    let path = p.0;
     if path.is_empty() {
         return ".".to_string();
     }
@@ -120,11 +210,12 @@ pub fn path_base(path: String) -> String {
     stripped.get(i..).unwrap_or("").to_string()
 }
 
-/// `Ipe.Path.dir : String -> String` — Go `filepath.Dir` (Unix).
+/// `Ipe.Path.dir : Path -> String` — Go `filepath.Dir` (Unix).
 /// All but the last element, then `Clean`ed: "" / "foo" → "."; "/" → "/";
 /// "/foo/bar" → "/foo"; "/foo/" → "/foo"; "a//b" → "a".
 #[must_use]
-pub fn path_dir(path: String) -> String {
+pub fn path_dir(p: Path) -> String {
+    let path = p.0;
     let b = path.as_bytes();
     let mut i = b.len();
     while i > 0 && b.get(i - 1).copied() != Some(SEP) {
@@ -135,11 +226,12 @@ pub fn path_dir(path: String) -> String {
     clean(path.get(..i).unwrap_or(""))
 }
 
-/// `Ipe.Path.ext : String -> String` — Go `filepath.Ext` (Unix).
+/// `Ipe.Path.ext : Path -> String` — Go `filepath.Ext` (Unix).
 /// The suffix from the LAST `.` in the final path element (including the dot),
 /// or "" when the final element has no dot. `filepath.Ext(".bashrc")` → ".bashrc".
 #[must_use]
-pub fn path_ext(path: String) -> String {
+pub fn path_ext(p: Path) -> String {
+    let path = p.0;
     let b = path.as_bytes();
     let mut i = b.len();
     while i > 0 {
@@ -153,106 +245,130 @@ pub fn path_ext(path: String) -> String {
     String::new()
 }
 
-/// `Ipe.Path.isAbsolute : String -> Bool` — Go `filepath.IsAbs` (Unix):
+/// `Ipe.Path.isAbsolute : Path -> Bool` — Go `filepath.IsAbs` (Unix):
 /// an absolute path begins with `/`.
 #[must_use]
-pub fn path_is_absolute(path: String) -> bool {
-    path.as_bytes().first() == Some(&SEP)
+pub fn path_is_absolute(p: Path) -> bool {
+    p.0.as_bytes().first() == Some(&SEP)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn base_empty() {
-        assert_eq!(path_base(String::new()), ".");
+    fn mk(s: &str) -> Path {
+        match path_from_string::<String>(s.to_string()) {
+            IpeResult::Ok(p) => p,
+            IpeResult::Err(e) => panic!("expected {s:?} to be a valid Path, got Err: {e}"),
+        }
     }
+
+    // ── construction: the seal validates ────────────────────────────────────
+
+    #[test]
+    fn empty_cleans_to_dot() {
+        assert_eq!(path_to_string(mk("")), ".");
+    }
+
+    #[test]
+    fn plain_relative_is_accepted() {
+        assert_eq!(path_to_string(mk("src/Main.ipe")), "src/Main.ipe");
+    }
+
+    #[test]
+    fn repeated_separators_collapse() {
+        assert_eq!(path_to_string(mk("a//b///c")), "a/b/c");
+    }
+
+    #[test]
+    fn interior_dotdot_that_stays_in_bounds_is_accepted() {
+        // "a/b/../c" resolves to "a/c" — never climbs above the base.
+        assert_eq!(path_to_string(mk("a/b/../c")), "a/c");
+    }
+
+    #[test]
+    fn rooted_dotdot_cannot_escape_and_is_accepted() {
+        // Go `Clean` stops `..` at the root, so a rooted path is always safe.
+        assert_eq!(path_to_string(mk("/a/../../b")), "/b");
+    }
+
+    // ── construction: the seal rejects ──────────────────────────────────────
+
+    #[test]
+    fn nul_byte_is_rejected() {
+        let r: IpeResult<String, Path> = path_from_string("safe.txt\0../../etc/passwd".to_string());
+        assert!(matches!(r, IpeResult::Err(_)), "a NUL byte must be rejected");
+    }
+
+    #[test]
+    fn leading_dotdot_escape_is_rejected() {
+        let r: IpeResult<String, Path> = path_from_string("../secret".to_string());
+        assert!(
+            matches!(r, IpeResult::Err(_)),
+            "a relative path that climbs above its base must be rejected"
+        );
+    }
+
+    #[test]
+    fn dotdot_that_resolves_to_escape_is_rejected() {
+        // "a/../../etc" cleans to "../etc" — escapes the base.
+        let r: IpeResult<String, Path> = path_from_string("a/../../etc".to_string());
+        assert!(
+            matches!(r, IpeResult::Err(_)),
+            "a path whose cleaned form escapes the base must be rejected"
+        );
+    }
+
+    #[test]
+    fn bare_dotdot_is_rejected() {
+        let r: IpeResult<String, Path> = path_from_string("..".to_string());
+        assert!(matches!(r, IpeResult::Err(_)), "bare `..` escapes the base");
+    }
+
+    // ── pure helpers over a validated Path ──────────────────────────────────
 
     #[test]
     fn base_filename() {
-        assert_eq!(path_base("/foo/bar.txt".to_string()), "bar.txt");
-    }
-
-    #[test]
-    fn base_no_dir() {
-        assert_eq!(path_base("hello.ipe".to_string()), "hello.ipe");
-    }
-
-    #[test]
-    fn base_trailing_slash() {
-        // Go: filepath.Base("/foo/") = "foo"
-        assert_eq!(path_base("/foo/".to_string()), "foo");
+        assert_eq!(path_base(mk("/foo/bar.txt")), "bar.txt");
     }
 
     #[test]
     fn base_root() {
-        // Go: filepath.Base("/") = "/"
-        assert_eq!(path_base("/".to_string()), "/");
-    }
-
-    #[test]
-    fn dir_empty() {
-        assert_eq!(path_dir(String::new()), ".");
+        assert_eq!(path_base(mk("/")), "/");
     }
 
     #[test]
     fn dir_with_parent() {
-        assert_eq!(path_dir("/foo/bar.txt".to_string()), "/foo");
+        assert_eq!(path_dir(mk("/foo/bar.txt")), "/foo");
     }
 
     #[test]
     fn dir_bare_name() {
-        assert_eq!(path_dir("hello.ipe".to_string()), ".");
-    }
-
-    #[test]
-    fn dir_trailing_slash() {
-        // Go: filepath.Dir("/foo/") = "/foo"
-        assert_eq!(path_dir("/foo/".to_string()), "/foo");
-    }
-
-    #[test]
-    fn dir_double_separator() {
-        // Go: filepath.Dir("a//b") = "a"  (Clean collapses the repeat)
-        assert_eq!(path_dir("a//b".to_string()), "a");
-    }
-
-    #[test]
-    fn dir_root() {
-        // Go: filepath.Dir("/") = "/"
-        assert_eq!(path_dir("/".to_string()), "/");
+        assert_eq!(path_dir(mk("hello.ipe")), ".");
     }
 
     #[test]
     fn ext_present() {
-        assert_eq!(path_ext("/foo/bar.txt".to_string()), ".txt");
-    }
-
-    #[test]
-    fn ext_absent() {
-        assert_eq!(path_ext("/foo/bar".to_string()), "");
+        assert_eq!(path_ext(mk("/foo/bar.txt")), ".txt");
     }
 
     #[test]
     fn ext_dotfile() {
-        // Go: filepath.Ext(".bashrc") = ".bashrc"
-        assert_eq!(path_ext(".bashrc".to_string()), ".bashrc");
+        assert_eq!(path_ext(mk(".bashrc")), ".bashrc");
     }
 
     #[test]
     fn ext_multiple_dots() {
-        // Go: filepath.Ext("a.b.c") = ".c"
-        assert_eq!(path_ext("a.b.c".to_string()), ".c");
+        assert_eq!(path_ext(mk("a.b.c")), ".c");
     }
 
     #[test]
     fn is_absolute_true() {
-        assert!(path_is_absolute("/usr/bin".to_string()));
+        assert!(path_is_absolute(mk("/usr/bin")));
     }
 
     #[test]
     fn is_absolute_false() {
-        assert!(!path_is_absolute("relative/path".to_string()));
+        assert!(!path_is_absolute(mk("relative/path")));
     }
 }

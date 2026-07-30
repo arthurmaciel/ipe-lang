@@ -1239,8 +1239,10 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::TypeInfo
         // `SqlFragment` is an opaque query-building value — no embedded function.
         // `Secret` is an opaque sealed string wrapper — no embedded function.
+        // `Path` is an opaque validated string wrapper — no embedded function.
         | IrType::SqlFragment
         | IrType::Secret
+        | IrType::Path
         // Cache config / stats + Csv document are plain data records — no
         // function.
         | IrType::CacheCfg
@@ -1328,6 +1330,8 @@ fn clone_class(interner: &Interner, t: &IrType) -> CloneClass {
         // heap-allocated `String` + `Vec<SqlParam>`).
         // `Secret` is `#[derive(Clone)]` (no Copy — carries a heap-allocated
         // `String`; hand-written `PartialEq`, not derived — see its own doc).
+        // `Path` is `#[derive(Clone)]` (no Copy — carries a heap-allocated
+        // cleaned `String`; `PartialEq`/`Eq` derived — a path is not a secret).
         // The nominal error-payload types derive Clone (not Copy — each
         // carries heap-allocated `String`s; SEAL fix).
         // Runtime-verified Clone server/http opaques (audited):
@@ -1348,6 +1352,7 @@ fn clone_class(interner: &Interner, t: &IrType) -> CloneClass {
         | IrType::TypeInfo
         | IrType::SqlFragment
         | IrType::Secret
+        | IrType::Path
         | IrType::ServerRequest
         | IrType::ServerResponse
         | IrType::ServerRoute
@@ -4101,6 +4106,7 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         | IrType::TypeInfo
         | IrType::SqlFragment
         | IrType::Secret
+        | IrType::Path
         // Cache config / stats + Csv document are non-parametric — mention no
         // type var.
         | IrType::CacheCfg
@@ -9185,6 +9191,9 @@ impl<'a> Lowerer<'a> {
                 // `Secret` is `Ipe.Secret`'s opaque sealed secret-string
                 // type. Backed by `ipe_runtime::secret::Secret`.
                 "Secret" => Ok(IrType::Secret),
+                // `Path` is `Ipe.Path`'s opaque validated filesystem-path
+                // type. Backed by `ipe_runtime::path::Path`.
+                "Path" => Ok(IrType::Path),
                 "String" => Ok(IrType::Str),
                 // `Error` is Ipê's fixed error-channel type — backed by the real
                 // `ipe_runtime::error::IpeError` ADT, no
@@ -10191,6 +10200,9 @@ impl<'a> Lowerer<'a> {
                 // representation — the JWT key material gets the same sealed
                 // no-stringify treatment.
                 "Secret" | "Algorithm" => Ok(IrType::Secret),
+                // `Path` is `Ipe.Path`'s opaque validated filesystem-path
+                // type. Backed by `ipe_runtime::path::Path`.
+                "Path" => Ok(IrType::Path),
                 "String" => Ok(IrType::Str),
                 // `Error` — backed by the real `ipe_runtime::error::IpeError` ADT
                 // no longer merged with `String`. Lambda
@@ -14900,9 +14912,12 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::RegexSplit,
             ) => Ok(2),
             Callee::Kernel(KernelFn::RegexReplace) => Ok(3),
-            // ── Ipe.Path — all four are `String -> _` (arity 1). ───
+            // ── Ipe.Path — all six are unary (arity 1): `fromString`/`toString`
+            // plus the four `Path -> _` helpers. ───
             Callee::Kernel(
-                KernelFn::PathBase
+                KernelFn::PathFromString
+                | KernelFn::PathToString
+                | KernelFn::PathBase
                 | KernelFn::PathDir
                 | KernelFn::PathExt
                 | KernelFn::PathIsAbsolute,
@@ -17985,6 +18000,7 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::WebReq
         | IrType::SqlFragment
         | IrType::Secret
+        | IrType::Path
         // Cache config / stats + Csv document are non-parametric — no generic
         // syms.
         | IrType::CacheCfg
@@ -18254,6 +18270,8 @@ mod tests {
         KernelFn::RegexReplace,
         KernelFn::RegexSplit,
         // Ipe.Path
+        KernelFn::PathFromString,
+        KernelFn::PathToString,
         KernelFn::PathBase,
         KernelFn::PathDir,
         KernelFn::PathExt,

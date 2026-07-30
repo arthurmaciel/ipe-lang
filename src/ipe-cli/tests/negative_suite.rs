@@ -648,7 +648,12 @@ fn effect_secret_in_live_model() {
 fn wasm_server_only_kernel_rejected() {
     let src = format!(
         "{HEAD}import Ipe.File as File\n\
-         main =\n    File.readFile \"/etc/passwd\"\n"
+         import Ipe.Path as Path\n\
+         import Ipe.Task as Task\n\
+         main =\n\
+         \x20   case Path.fromString \"/etc/passwd\" of\n\
+         \x20       Ok p -> File.readFile p\n\
+         \x20       Err e -> Task.fail e\n"
     );
     assert_rejected_wasm("wasm_server_only_kernel", &src, "IPE-N0029");
 }
@@ -659,7 +664,12 @@ fn wasm_server_only_kernel_rejected() {
 fn wasm_server_only_kernel_native_ok() {
     let src = format!(
         "{HEAD}import Ipe.File as File\n\
-         main =\n    File.readFile \"/etc/passwd\"\n"
+         import Ipe.Path as Path\n\
+         import Ipe.Task as Task\n\
+         main =\n\
+         \x20   case Path.fromString \"/etc/passwd\" of\n\
+         \x20       Ok p -> File.readFile p\n\
+         \x20       Err e -> Task.fail e\n"
     );
     if let Outcome::Rejected(got) = compile("wasm_native_control", &src, Target::Native) {
         assert!(
