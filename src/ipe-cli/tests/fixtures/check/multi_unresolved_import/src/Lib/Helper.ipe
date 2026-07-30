@@ -1,0 +1,8 @@
+module Lib.Helper exposing (tag)
+
+-- a comment line so a mis-framed caret would land here, not on the import
+import Rust.Firestore as Fs exposing (FirestoreDb)
+
+tag : () -> String
+tag _ =
+    "helper"

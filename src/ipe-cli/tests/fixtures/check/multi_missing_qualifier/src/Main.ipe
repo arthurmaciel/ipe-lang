@@ -1,0 +1,8 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Lib.Calc as Calc
+
+main : Task ()
+main =
+    Io.println (Calc.label ())
