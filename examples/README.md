@@ -8,12 +8,12 @@ that builds with `ipe build` and targets the Rust backend.
 
 | Directory | Shape | What it demonstrates |
 |-----------|-------|----------------------|
-| `wasm-counter` | wasm/live | Basic TEA counter compiled to WebAssembly via `--target wasm`. The canonical "hello WASM" starting point. |
-| `wasm-effects` | wasm/live | `Sub.every` timer and `Cmd.perform` side-effects exercised end-to-end in a browser via the Cmd/Sub bridge (gloo-timers). |
-| `wasm-websocket` | wasm/live | `Ipe.WebSocket` client substitute: connect / onOpen / send / onMessage / close / onClose against a real WebSocket server in-browser. |
-| `wasm-env-public` | wasm/live | `Ipe.Env.public` build-time config embedding: an allowlisted `API_BASE_URL` variable injected at compile time and readable in WASM at run time. |
-| `wasm-spa` | wasm | SPA target: a pure-client single-page application with full TEA loop running in the browser. Uses `Live.app` which emits `wasm_app` under `--target wasm`. |
-| `wasm-hydration` | wasm | SSR hydration: server-side initial render (paint) followed by WASM client takeover. |
+| `wasm/counter` | wasm/live | Basic TEA counter compiled to WebAssembly via `--target wasm`. The canonical "hello WASM" starting point. |
+| `wasm/effects` | wasm/live | `Sub.every` timer and `Cmd.perform` side-effects exercised end-to-end in a browser via the Cmd/Sub bridge (gloo-timers). |
+| `wasm/websocket` | wasm/live | `Ipe.WebSocket` client substitute: connect / onOpen / send / onMessage / close / onClose against a real WebSocket server in-browser. |
+| `wasm/env-public` | wasm/live | `Ipe.Env.public` build-time config embedding: an allowlisted `API_BASE_URL` variable injected at compile time and readable in WASM at run time. |
+| `wasm/spa` | wasm | SPA target: a pure-client single-page application with full TEA loop running in the browser. Uses `Live.app` which emits `wasm_app` under `--target wasm`. |
+| `wasm/hydration` | wasm | SSR hydration: server-side initial render (paint) followed by WASM client takeover. |
 
 ## Shape demos
 
@@ -26,6 +26,17 @@ The per-shape demos linked from [`docs/shapes/`](../docs/shapes/) live under
 | `shapes/terminal/http-shell` | terminal | An HTTP query shell over `Terminal.appLines`: each stdin line like `get <url>` performs a real `Http.get` and prints the response status + body. |
 | `shapes/web/task-publish` | web | The top-level, Task-shaped `Ipe.PubSub.publish` (`String -> any -> Task Error Int`) fired from a `Ipe.Tea.Web` app's `update` via `Cmd.perform`, with the subscriber count routed back into the model. Shows the Task form composing where a broadcast bus runs. |
 | `shapes/program/release-preflight` | program | A plain-`main` batch program (no TEA loop): a release-preflight check run to completion. |
+
+## FFI examples
+
+Shim-free auto-FFI bindings against real crates.io crates, grouped under
+`ffi/`. These bind native GUI/ECS crates and are not part of the headless
+example sweep.
+
+| Directory | Binds | What it demonstrates |
+|-----------|-------|----------------------|
+| `ffi/bevy-game` | `bevy_ecs` | A headless ECS world tick over the shim-free auto-FFI: creates a `World`, threads it through real ECS maintenance operations, and reads the final entity count as observable state — every `World.*` call is a generated binding, zero hand-written Rust shims. |
+| `ffi/iced-counter` | `iced` | A binding spike mapping Iced's Elm architecture onto Ipê's TEA over the real `iced` crate: the `Model`/`Message` struct + enum bindings are emitted and forwarded; the `update`/`view` closure-to-run wiring is in progress. |
 
 ## Sky-derived examples
 
@@ -52,7 +63,7 @@ ipe build ipe.toml --out out/rust
 cargo run --manifest-path out/rust/Cargo.toml
 
 # Build a WASM example (outputs to out/rust/www/)
-cd examples/wasm-spa
+cd examples/wasm/spa
 ipe build ipe.toml --out out/rust --target wasm
 ```
 

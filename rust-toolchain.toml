@@ -4,6 +4,6 @@ channel = "stable"
 components = ["clippy", "rustfmt"]
 # `wasm32-unknown-unknown` is the in-browser compiler target: the `ipe-wasm`
 # frontend crate at `src/wasm` builds to it for the browser playground
-# (examples/wasm-language-playground). Declared here so every toolchain install
+# (examples/wasm/language-playground). Declared here so every toolchain install
 # — local and CI — has it available.
 targets = ["wasm32-unknown-unknown"]

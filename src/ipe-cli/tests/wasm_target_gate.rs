@@ -6,7 +6,7 @@
 //! manifest is the closed cdylib template: no tokio/axum/sqlx/reqwest, no
 //! `server`/`db`/`live` feature. The full browser proof (cargo build to
 //! `.wasm` + a Playwright interaction) lives in the examples flow
-//! (`examples/wasm-counter`).
+//! (`examples/wasm/counter`).
 
 use std::path::{Path, PathBuf};
 
@@ -255,7 +255,7 @@ fn hydrate_glue_type_name_matches_emitted_struct_and_compiles_for_wasm() {
     // Emit the REAL wasm-hydration example (single source of truth) with the
     // hydrate mode its `ipe.toml` declares.
     let entry =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/wasm-hydration/src/Main.ipe");
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/wasm/hydration/src/Main.ipe");
     let out = scratch("wasm_hydrate_seal").join("out");
     let options = BuildOptions {
         target: ipe_ir::Target::WasmClient,

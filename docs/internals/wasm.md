@@ -70,7 +70,7 @@ It never panics: every fallible step becomes a rendered outcome.
 
 ## The playground
 
-`examples/wasm-language-playground/` is a static page (`index.html`) that loads
+`examples/wasm/language-playground/` is a static page (`index.html`) that loads
 the wasm module and:
 
 - edits Ipê in an **ACE editor** (Haskell highlighting, the closest bundled mode);
@@ -85,7 +85,7 @@ Everything is client-side; the only network use is loading ACE from a CDN.
 
 ### Building it
 
-`examples/wasm-language-playground/build.sh` builds `ipe-wasm` for
+`examples/wasm/language-playground/build.sh` builds `ipe-wasm` for
 `wasm32-unknown-unknown` and runs `wasm-bindgen` (target `web`) into `pkg/`
 (a gitignored build artifact). The `.github/workflows/playground.yml` workflow
 rebuilds and headless-verifies the playground on any compiler change, and
