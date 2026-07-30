@@ -142,6 +142,10 @@ const RESERVED_BUILTIN_TYPES: &[&str] = &[
     // typed-`Err`-on-invalid-pattern guarantee cannot be defeated by a user
     // `type Regex` shadowing the built-in handle.
     "Regex",
+    // `Ipe.PubSub`'s phantom topic handle type — reserved so user code cannot
+    // define `type Topic` and silently bypass the lowerer's `Topic a → Str` arm.
+    // `PubSub.ipe` (EmbeddedStdlib) may declare it without penalty.
+    "Topic",
     "StreamId",
     "ChunkEvent",
     "Request",
@@ -362,7 +366,14 @@ const STDLIB_DEFINABLE_UI_TYPES: &[&str] = &[
 /// `type Decoder a = Decoder` declaration injects no competing enum. A
 /// [`ModuleOrigin::User`] module stays rejected (IPE-N0026), so the shared
 /// security-tier carrier cannot be shadowed by user code.
-const STDLIB_DEFINABLE_CARRIER_TYPES: &[&str] = &["Decoder"];
+const STDLIB_DEFINABLE_CARRIER_TYPES: &[&str] = &[
+    "Decoder",
+    // `Ipe.PubSub.Topic a` — phantom topic-handle type. Lowers to `Str` at
+    // runtime; EmbeddedStdlib (`Ipe.PubSub`) must declare it to put the name
+    // in its export set. User modules cannot shadow it (IPE-N0026 still
+    // applies to `ModuleOrigin::User`).
+    "Topic",
+];
 
 /// Reject a `type` / `type alias` whose name shadows a reserved built-in type
 /// constructor. See [`RESERVED_BUILTIN_TYPES`].

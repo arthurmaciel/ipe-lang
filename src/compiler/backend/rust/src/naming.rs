@@ -986,6 +986,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::SubSubscribeTopic => "sub_subscribe_topic",
         KernelFn::PubSubPublish => "pubsub_publish",
         KernelFn::PubSubPublishNoEcho => "pubsub_publish_no_echo",
+        KernelFn::PubSubTopic => "pubsub_topic",
         // ── Ipe.Http.Server kernels (wired) ─────────────────────────────────
         KernelFn::ServerGet => "server_get",
         KernelFn::ServerPost => "server_post",

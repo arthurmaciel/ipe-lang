@@ -872,6 +872,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::SubSubscribeTopic => "Sub.subscribeTopic",
         KernelFn::PubSubPublish => "PubSub.publish",
         KernelFn::PubSubPublishNoEcho => "PubSub.publishNoEcho",
+        KernelFn::PubSubTopic => "PubSub.topic",
         // Ipe.Http.Server kernels
         KernelFn::ServerGet => "Server.get",
         KernelFn::ServerPost => "Server.post",
