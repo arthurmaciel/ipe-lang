@@ -1086,10 +1086,10 @@ pub enum IrType {
     EmailMessage,
 
     /// `Ipe.Email`'s attachment record `{ filename : String, mimeType : String,
-    /// content : String }`. Renders as `ipe_runtime::email::EmailAttachment`
+    /// content : Bytes }`. Renders as `ipe_runtime::email::EmailAttachment`
     /// (the runtime type name differs from the Ipê alias `Attachment`; the
-    /// `content` field carries bytes as the `Bytes`-alias `String`). Folded like
-    /// [`IrType::EmailMessage`].
+    /// `content` field is `Bytes` = `Vec<u8>`, correct for arbitrary binary
+    /// attachment payloads). Folded like [`IrType::EmailMessage`].
     EmailAttachment,
 
     /// `Ipe.Email`'s SES config record `{ region : String, key : String,
