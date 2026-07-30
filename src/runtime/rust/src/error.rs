@@ -52,7 +52,7 @@ pub enum IpeErrorKind {
 impl IpeErrorKind {
     /// Renders the reference design's `"<Kind>: "` prefix (`Error.toString`,
     /// `"<Kind>: <message>"`).
-    const fn label(self) -> &'static str {
+    pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Io => "Io",
             Self::Network => "Network",
@@ -301,6 +301,25 @@ pub fn ipe_error_is_retryable(e: IpeError) -> bool {
 pub fn ipe_error_with_details(details: IpeErrorDetails, old: IpeError) -> IpeError {
     old.with_details(details)
 }
+/// `Error.kind : Error -> ErrorKind` — the classification carried by an error.
+#[must_use]
+pub fn ipe_error_kind(e: IpeError) -> IpeErrorKind {
+    let IpeError::Error(kind, _) = e;
+    kind
+}
+/// `Error.message : Error -> String` — the human-readable message, without the
+/// `"<Kind>: "` prefix `Error.toString` adds.
+#[must_use]
+pub fn ipe_error_message(e: IpeError) -> String {
+    let IpeError::Error(_, info) = e;
+    info.message
+}
+/// `Error.kindName : ErrorKind -> String` — the stable variant name (`"Io"`,
+/// `"Network"`, …), the same label `Error.toString` prefixes with.
+#[must_use]
+pub fn ipe_error_kind_name(kind: IpeErrorKind) -> String {
+    kind.label().to_owned()
+}
 
 // `Error.toString` routes through the shared Stringify-bounded mechanism
 // (any `Show`-obligated type, not an Error-specific kernel — see
@@ -402,6 +421,34 @@ mod tests {
             info.details,
             IpeMaybe::Just(IpeErrorDetails::HttpStatus(404))
         );
+    }
+
+    #[test]
+    fn kind_extracts_the_classification() {
+        assert_eq!(
+            ipe_error_kind(IpeError::io("x".to_owned())),
+            IpeErrorKind::Io
+        );
+        assert_eq!(ipe_error_kind(IpeError::timeout()), IpeErrorKind::Timeout);
+    }
+
+    #[test]
+    fn message_extracts_the_bare_message() {
+        assert_eq!(
+            ipe_error_message(IpeError::io("disk full".to_owned())),
+            "disk full"
+        );
+        assert_eq!(ipe_error_message(IpeError::not_found()), "not found");
+    }
+
+    #[test]
+    fn kind_name_renders_the_stable_label() {
+        assert_eq!(ipe_error_kind_name(IpeErrorKind::Io), "Io");
+        assert_eq!(
+            ipe_error_kind_name(IpeErrorKind::PermissionDenied),
+            "PermissionDenied"
+        );
+        assert_eq!(ipe_error_kind_name(IpeErrorKind::Unexpected), "Unexpected");
     }
 
     #[test]

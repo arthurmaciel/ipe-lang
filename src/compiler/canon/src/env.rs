@@ -716,6 +716,9 @@ impl Env {
                     "withMessage",
                     "isRetryable",
                     "withDetails",
+                    "kind",
+                    "message",
+                    "kindName",
                 ],
             ),
             // `Ipe.CssSafety` — the four Ipe.Css leaf security kernels:

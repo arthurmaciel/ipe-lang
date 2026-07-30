@@ -426,6 +426,9 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::ErrorWithMessage => "Error.withMessage",
         KernelFn::ErrorIsRetryable => "Error.isRetryable",
         KernelFn::ErrorWithDetails => "Error.withDetails",
+        KernelFn::ErrorKind => "Error.kind",
+        KernelFn::ErrorMessage => "Error.message",
+        KernelFn::ErrorKindName => "Error.kindName",
         // CssSafety (Ipe.CssSafety — Ipe.Css leaf security kernels)
         KernelFn::CssSafetySafeValue => "CssSafety.safeValue",
         KernelFn::CssSafetySafePropName => "CssSafety.safePropName",
