@@ -172,23 +172,44 @@ pub fn has_disguised_dotdot(path: &str) -> bool {
 ///
 /// Checks the path AFTER its volume
 /// prefix (a drive/UNC volume is itself the root and can never be escaped). True
-/// when that remainder is the whole `..` element or begins with a `..` element —
-/// the two shapes `clean_with` leaves when leading `..`s could not be resolved
-/// away. A rooted remainder (begins with a separator) can never escape:
-/// `clean_with` stops `..` at the root. Separator-aware so a Windows `..\`
-/// escape is caught exactly as a Unix `../` is.
+/// when that remainder's FIRST element is a `..` climb — the shape `clean_with`
+/// leaves when a leading `..` could not be resolved away. A rooted remainder
+/// (begins with a separator) can never escape: `clean_with` stops `..` at the
+/// root. Separator-aware so a Windows `..\` escape is caught exactly as a Unix
+/// `../` is.
+///
+/// # Two-layer defence
+///
+/// The primary check is the exact `..` token (the token `clean_with` scans and
+/// counts). As independent defence-in-depth, the FIRST element is ALSO rejected
+/// when it is a non-empty run made SOLELY of dots with length >= 2 (`..`, `...`,
+/// `....`, …): so even if a future `clean_with` change ever produced a glued-dot
+/// run — a single-point cleaner bug — this escape check would still catch it
+/// without relying on the cleaner. The two layers reject independently.
+///
+/// This over-rejects a legitimate top-level filename made solely of dots
+/// (e.g. `...` as a real filename). That is ACCEPTABLE — it fails closed, and
+/// matches the Windows `has_disguised_dotdot` behaviour, which already rejects
+/// the same all-dots family (Windows canonicalisation would alias it to `..`).
 #[must_use]
 pub fn escapes_root(cleaned: &str, windows: bool) -> bool {
     let vol = volume_name_len(cleaned, windows);
     let rest = cleaned.get(vol..).unwrap_or("");
     let rb = rest.as_bytes();
-    if rest == ".." {
+    // The FIRST element of the remainder: bytes up to the first separator.
+    let first = rb.split(|&c| is_sep(c, windows)).next().unwrap_or(&[]);
+    // Layer 1: the exact `..` climb token.
+    if first == b".." {
         return true;
     }
-    // begins with a `..` element: `..` then a separator.
-    rb.first().copied() == Some(b'.')
-        && rb.get(1).copied() == Some(b'.')
-        && rb.get(2).copied().is_some_and(|c| is_sep(c, windows))
+    // Layer 2 (defence-in-depth): any leading all-dots run of length >= 2. Even
+    // a glued `...`/`....` a broken cleaner might emit is caught here, without
+    // depending on the cleaner having split it back into discrete `..` tokens.
+    let all_dots = first.iter().all(|&c| c == b'.');
+    // Length >= 2: a second byte exists (guarded so a single `.` element, which
+    // is not a climb, is never rejected).
+    let two_or_more = first.get(1).is_some();
+    all_dots && two_or_more
 }
 
 /// Faithful port of Go `path/filepath.Clean`, driven by the chosen separator set.
@@ -417,5 +438,66 @@ mod tests {
         assert_eq!(volume_name_len("\\\\srv\\shr\\x", true), 9);
         assert_eq!(volume_name_len("relative\\x", true), 0);
         assert_eq!(volume_name_len("C:\\x", false), 0);
+    }
+
+    // ── escapes_root: two-layer defence against a leading all-dots element ─────
+
+    #[test]
+    fn escapes_root_rejects_exact_leading_dotdot() {
+        // Layer 1: the exact `..` token, whole or as a leading element.
+        for (regime, s) in [
+            (false, ".."),
+            (false, "../x"),
+            (true, ".."),
+            (true, "..\\x"),
+        ] {
+            assert!(
+                escapes_root(s, regime),
+                "leading `..` must escape ({s:?}, windows={regime})"
+            );
+        }
+    }
+
+    #[test]
+    fn escapes_root_rejects_leading_glued_dots() {
+        // Layer 2 (defence-in-depth): a leading all-dots run of length >= 2 is
+        // rejected DIRECTLY, without the cleaner having to split it into `..`
+        // tokens. These are the shapes a broken cleaner might glue together.
+        for (regime, s) in [
+            (false, "..."),
+            (false, "...."),
+            (false, ".../x"),
+            (false, "..../x"),
+            (true, "..."),
+            (true, "....\\x"),
+        ] {
+            assert!(
+                escapes_root(s, regime),
+                "leading glued-dot run must escape ({s:?}, windows={regime})"
+            );
+        }
+    }
+
+    #[test]
+    fn escapes_root_allows_in_bounds_and_dotted_names() {
+        // A single `.` is not a climb; a legitimate in-bounds cleaned path does
+        // not escape; and a name that has dots PLUS other chars (`..foo`) is a
+        // real filename, not an all-dots run, so it is NOT rejected.
+        for (regime, s) in [
+            (false, "a/b"),
+            (false, "."),
+            (false, "..foo"),
+            (false, "..foo/bar"),
+            (false, "foo.."),
+            (true, "..foo\\bar"),
+        ] {
+            assert!(
+                !escapes_root(s, regime),
+                "in-bounds / dotted-name path must NOT escape ({s:?}, windows={regime})"
+            );
+        }
+        // `a/../b` resolves in-bounds and does not escape after cleaning.
+        assert_eq!(clean_with("a/../b", false), "b");
+        assert!(!escapes_root(&clean_with("a/../b", false), false));
     }
 }
