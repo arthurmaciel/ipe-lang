@@ -10,6 +10,13 @@ name = "ipe_runtime_rust"
 path = "src/mod.rs"
 
 [dependencies]
+# Lexical path validation (clean / escapes_root / volume_name_len / disguise
+# scan) lives in this crate's OWN `src/path_core.rs` sibling module, NOT an
+# extern crate — so it vendors automatically with `mod ipe_runtime` into every
+# emitted app (an extern crate would not survive that source-copy). The
+# compiler's `path "…"` gate shares the SAME file via the `ipe_path_core` crate,
+# which `include!`s `src/path_core.rs`, so the runtime seal and the compile-time
+# gate cannot drift.
 tokio = { version = "1", features = ["full"], optional = true }
 serde_json = { version = "1", optional = true }
 jsonwebtoken = { version = "9", optional = true }

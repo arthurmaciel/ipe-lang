@@ -524,6 +524,11 @@ fn push_expr(
             out.push_str(s);
             out.push('"');
         }
+        ipe_syntax::Expr_::PathLit(s) => {
+            out.push_str("path \"");
+            out.push_str(s);
+            out.push('"');
+        }
         ipe_syntax::Expr_::MultilineStr { raw: s, .. } => {
             out.push_str("\"\"\"");
             out.push_str(s);

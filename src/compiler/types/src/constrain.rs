@@ -1855,6 +1855,15 @@ impl<'a> Builder<'a> {
         })
     }
 
+    fn path_var(&mut self) -> DResult<VarId> {
+        let name = self.builtins.path;
+        self.structure(FlatType::Con {
+            module: Vec::new(),
+            name,
+            args: Vec::new(),
+        })
+    }
+
     /// Mint a fresh super-typed flexible variable carrying `bounds` — a value
     /// the body has constrained to a Ipê super-type (numeric / ordered /
     /// equatable) but not yet to a concrete type. It pins to any matching type,
@@ -3150,6 +3159,7 @@ impl<'a> Builder<'a> {
             canon::Expr_::Int(_) => self.super_var(TyBounds::add(), span)?,
             canon::Expr_::Float(_) => self.float_var()?,
             canon::Expr_::Str(_) => self.string_var()?,
+            canon::Expr_::PathLit(_) => self.path_var()?,
             canon::Expr_::Char(_) => self.char_var()?,
             canon::Expr_::Unit => self.structure(FlatType::Unit)?,
             canon::Expr_::VarLocal(s) => match local.get(s) {
