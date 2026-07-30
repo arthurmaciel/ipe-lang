@@ -21,6 +21,13 @@ fromString : String -> Result Error Path
 - Everything else succeeds with the lexically-cleaned path (repeated `/`
   collapsed, `.`/`..` resolved, trailing `/` dropped).
 
+`Path` is a *lexical* guard, not a jail: it also allows absolute paths
+(`/etc/passwd` is a valid `Path`) and does not follow symlinks. Confining a
+program to a subtree — and deciding whether it may touch the filesystem at all
+— is the job of [capabilities](capabilities.md), not of this constructor. What
+`Path` closes is the raw-string traversal / NUL-injection hole at the type
+boundary.
+
 Because a `Path` can only exist after that check, nothing downstream re-validates
 — the type is the proof. The pure helpers all take a `Path`:
 

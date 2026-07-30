@@ -24,8 +24,37 @@
 //! OS-tagged and diverges from Go on trailing slashes, repeated separators, and
 //! dotfiles. The Rust backend's equivalence target runs on Linux, so Unix
 //! `filepath` semantics are implemented exactly.
+//!
+//! # Trust model — what `Path` does and does NOT guarantee
+//!
+//! `Path` is a LEXICAL guard, not a jail. It guarantees the string contains no
+//! NUL byte and does not `..`-escape *lexically*. It deliberately does NOT:
+//! * forbid ABSOLUTE paths — `/etc/passwd` is a valid `Path`. Confining a
+//!   program to a subtree is the job of the runtime capability jail (whether a
+//!   program may touch the filesystem AT ALL is the `Filesystem` capability),
+//!   not of this lexical constructor.
+//! * resolve or forbid SYMLINKS — a validated `Path` may still point through a
+//!   symlink that leaves any intended root. Symlink containment is an OS/jail
+//!   concern (`openat2(RESOLVE_BENEATH)` / a chroot), out of lexical scope.
+//!
+//! In short: `Path` closes the raw-string traversal/NUL-injection hole at the
+//! type boundary; it is not a substitute for the capability jail's authority
+//! decision about which paths a program is allowed to reach.
 
 use super::IpeResult;
+
+// `clean` and the traversal check are Unix-only: the sole separator is `/`, and
+// a `\` or a `C:`/UNC prefix is treated as ordinary path bytes (a literal
+// filename), NOT a separator. On Windows that would be unsound — `..\..\x`
+// would slip past the `..`-element check — so fail the build loudly rather than
+// silently ship a bypassable path validator. The Rust backend's equivalence
+// target is Linux; a Windows target would need a Windows-aware `clean`.
+#[cfg(windows)]
+compile_error!(
+    "ipe_runtime::path is Unix-only (separator `/`); its traversal check would \
+     be bypassable on Windows (`\\`, drive letters, UNC). Port `clean` before \
+     targeting Windows."
+);
 
 const SEP: u8 = b'/';
 
