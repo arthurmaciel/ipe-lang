@@ -557,8 +557,9 @@ fn is_csv_doc_canon_shape(fields: &mut [(&str, &canon::Type)], interner: &Intern
 // take (mirror of the `CsvDoc` / `CacheCfg` folds). Each shape is matched on
 // field NAMES *and* field TYPES so an unrelated same-arity record does not fold.
 
-/// `Attachment` — sorted field NAMES `{ content, filename, mimeType }`, all
-/// `String`. Folds to `IrType::EmailAttachment`.
+/// `Attachment` — sorted field NAMES `{ content, filename, mimeType }`:
+/// `content : Bytes`, `filename : String`, `mimeType : String`.
+/// Folds to `IrType::EmailAttachment`.
 const EMAIL_ATTACHMENT_FIELDS: &[&str] = &["content", "filename", "mimeType"];
 
 /// `SesConfig` — sorted field NAMES `{ key, region, secret }`, all `String`.
@@ -595,9 +596,27 @@ fn canon_ty_is_string(ty: &canon::Type, interner: &Interner) -> bool {
         if home.is_empty() && args.is_empty() && interner.resolve(*name) == Some("String"))
 }
 
+/// Is `ty` the `Ipe.Bytes` primitive (`Vec<u8>` on Rust)?
+///
+/// `Bytes` is imported from `Ipe.Bytes` (non-empty module path), so this
+/// predicate does NOT require an empty module — it matches any `Con` whose
+/// name is `"Bytes"` with no type arguments.  This mirrors the lowerer's
+/// `ir_type_from_ty` arm that maps `"Bytes" => IrType::Bytes` regardless of
+/// module.
+fn ty_is_bytes(ty: &Ty, interner: &Interner) -> bool {
+    matches!(ty, Ty::Con { name, args, .. }
+        if args.is_empty() && interner.resolve(*name) == Some("Bytes"))
+}
+
+/// The [`canon::Type`] twin of [`ty_is_bytes`].
+fn canon_ty_is_bytes(ty: &canon::Type, interner: &Interner) -> bool {
+    matches!(ty, canon::Type::Con { name, args, .. }
+        if args.is_empty() && interner.resolve(*name) == Some("Bytes"))
+}
+
 /// Does `fields` match an all-`String` record whose sorted field NAMES equal
-/// `expected`? Sorts `fields` in place. Used for the `Attachment` / `SesConfig`
-/// shapes (both all-`String`).
+/// `expected`? Sorts `fields` in place. Used for the `SesConfig` shape
+/// (all-`String`).
 fn is_all_string_record_shape(
     fields: &mut [(&str, &Ty)],
     expected: &[&str],
@@ -660,9 +679,10 @@ fn is_email_smtp_canon_shape(fields: &mut [(&str, &canon::Type)], interner: &Int
 
 /// Does `fields` match the 9-field `EmailMessage` shape (NAMES + TYPES)? Sorts
 /// `fields` in place. The `attachments` element is checked to be a `List` of a
-/// record whose own shape is the `Attachment` shape (all-`String`
-/// `{ content, filename, mimeType }`); the `to`/`cc`/`bcc` are `List String`;
-/// the remaining five are `String`.
+/// record whose own shape is the `Attachment` shape (`{ content : Bytes,
+/// filename : String, mimeType : String }`); the `to`/`cc`/`bcc` are `List
+/// String`; the remaining five (`from`/`htmlBody`/`replyTo`/`subject`/
+/// `textBody`) are `String`.
 fn is_email_message_shape(fields: &mut [(&str, &Ty)], interner: &Interner) -> bool {
     if fields.len() != EMAIL_MESSAGE_FIELDS.len() {
         return false;
@@ -703,6 +723,50 @@ fn is_email_message_canon_shape(fields: &mut [(&str, &canon::Type)], interner: &
     })
 }
 
+/// Does `fields` match the `Attachment` shape — `{ content : Bytes, filename :
+/// String, mimeType : String }` (sorted: content, filename, mimeType)?
+///
+/// `content` is `Bytes` (`Vec<u8>`); the other two are `String`. Sorts `fields`
+/// in place. Used by `ty_is_list_of_attachment`.
+fn is_email_attachment_shape(fields: &mut [(&str, &Ty)], interner: &Interner) -> bool {
+    if fields.len() != EMAIL_ATTACHMENT_FIELDS.len() {
+        return false;
+    }
+    fields.sort_unstable_by_key(|(name, _)| *name);
+    // Sorted order: content, filename, mimeType.
+    matches!(
+        fields,
+        [(cn, ct), (fn_, ft), (mn, mt)]
+            if *cn == "content"
+                && *fn_ == "filename"
+                && *mn == "mimeType"
+                && ty_is_bytes(ct, interner)
+                && ty_is_string(ft, interner)
+                && ty_is_string(mt, interner)
+    )
+}
+
+/// The [`canon::Type`] twin of [`is_email_attachment_shape`].
+fn is_email_attachment_canon_shape(
+    fields: &mut [(&str, &canon::Type)],
+    interner: &Interner,
+) -> bool {
+    if fields.len() != EMAIL_ATTACHMENT_FIELDS.len() {
+        return false;
+    }
+    fields.sort_unstable_by_key(|(name, _)| *name);
+    matches!(
+        fields,
+        [(cn, ct), (fn_, ft), (mn, mt)]
+            if *cn == "content"
+                && *fn_ == "filename"
+                && *mn == "mimeType"
+                && canon_ty_is_bytes(ct, interner)
+                && canon_ty_is_string(ft, interner)
+                && canon_ty_is_string(mt, interner)
+    )
+}
+
 /// Is `ty` a `List <Attachment-shaped record>`?
 fn ty_is_list_of_attachment(ty: &Ty, interner: &Interner) -> bool {
     match ty {
@@ -715,7 +779,7 @@ fn ty_is_list_of_attachment(ty: &Ty, interner: &Interner) -> bool {
                         .iter()
                         .filter_map(|(s, t)| interner.resolve(*s).map(|n| (n, t)))
                         .collect();
-                    is_all_string_record_shape(&mut fs, EMAIL_ATTACHMENT_FIELDS, interner)
+                    is_email_attachment_shape(&mut fs, interner)
                 }
                 _ => false,
             }
@@ -736,7 +800,7 @@ fn canon_ty_is_list_of_attachment(ty: &canon::Type, interner: &Interner) -> bool
                         .iter()
                         .filter_map(|(s, t)| interner.resolve(*s).map(|n| (n, t)))
                         .collect();
-                    is_all_string_canon_record_shape(&mut fs, EMAIL_ATTACHMENT_FIELDS, interner)
+                    is_email_attachment_canon_shape(&mut fs, interner)
                 }
                 _ => false,
             }
@@ -9784,11 +9848,7 @@ impl<'a> Lowerer<'a> {
                 if is_email_smtp_canon_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::EmailSmtpConfig);
                 }
-                if is_all_string_canon_record_shape(
-                    &mut named_fields,
-                    EMAIL_ATTACHMENT_FIELDS,
-                    self.interner,
-                ) {
+                if is_email_attachment_canon_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::EmailAttachment);
                 }
                 if is_all_string_canon_record_shape(
@@ -10837,11 +10897,7 @@ impl<'a> Lowerer<'a> {
                 if is_email_smtp_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::EmailSmtpConfig);
                 }
-                if is_all_string_record_shape(
-                    &mut named_fields,
-                    EMAIL_ATTACHMENT_FIELDS,
-                    self.interner,
-                ) {
+                if is_email_attachment_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::EmailAttachment);
                 }
                 if is_all_string_record_shape(&mut named_fields, EMAIL_SES_FIELDS, self.interner) {
