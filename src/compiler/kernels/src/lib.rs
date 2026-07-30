@@ -6556,16 +6556,16 @@ impl StdlibKernel {
             // compile to wasm32 as part of the runtime floor.
             KernelClass::Ui => true,
             // `Web.app` gains a browser denotation via the runtime `wasm`
-            // sink (`wasm_app`). Routed apps (`Web.route` / the routed
-            // branch) stay out until the client router lands — tagging the
-            // route kernel now would emit `Route::new` against a runtime
-            // module the wasm crate does not vendor (a SEAL breach).
+            // sink (`wasm_app` / `wasm_app_routed`). `Web.route` constructs a
+            // `Route<Page>` via `ipe_runtime::web::route::Route::new` — the
+            // `web::route` module is pure (no tokio/axum) and is vendored into
+            // the wasm project's `pub mod web { pub mod route; }` submodule.
             // `PubSub.publish` / `publishNoEcho` are `class = Web` (Task-shaped,
             // not TEA-loop) and route through the in-tab broker (`wasm::pubsub`),
             // the same M4 Cmd/Sub browser-effects bridge the TEA-side pub/sub uses.
             KernelClass::Web => matches!(
                 self,
-                Self::WebApp | Self::PubSubPublish | Self::PubSubPublishNoEcho
+                Self::WebApp | Self::WebRoute | Self::PubSubPublish | Self::PubSubPublishNoEcho
             ),
             // TEA wiring the wasm scheduler drives today. `Cmd.perform` runs
             // on the browser microtask queue; `Sub.every`/`Time.every` run on
@@ -6807,7 +6807,6 @@ mod tests {
             StdlibKernel::IoReadLine,
             StdlibKernel::TaskPerform,
             StdlibKernel::WebRenderStatic,
-            StdlibKernel::WebRoute,
             // Crypto: only the entropy pair (`randomBytes`/`randomToken`) has
             // a wasm substitute; hashing/AEAD/RSA stay denied (M4 scope cut,
             // NOT a qualifier-wide allow — see `wasm_client_available`).
@@ -6822,7 +6821,7 @@ mod tests {
         }
         // The floor + the headline render surface + the M4 Cmd/Sub browser
         // effects bridge (Log/Random/Http/WebSocket substitutes, timers,
-        // in-tab pub/sub).
+        // in-tab pub/sub) + client-side router.
         for allowed in [
             StdlibKernel::StringFromInt,
             StdlibKernel::ListMap,
@@ -6834,6 +6833,7 @@ mod tests {
             StdlibKernel::HtmlDiv,
             StdlibKernel::CssSafetySafeValue,
             StdlibKernel::WebApp,
+            StdlibKernel::WebRoute,
             StdlibKernel::CmdNone,
             StdlibKernel::CmdPerform,
             StdlibKernel::SubNone,

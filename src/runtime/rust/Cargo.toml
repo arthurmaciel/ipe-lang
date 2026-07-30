@@ -156,6 +156,9 @@ web-sys = { version = "0.3", optional = true, features = [
     "CloseEvent",
     "ErrorEvent",
     "BinaryType",
+    # Client-side routing: History API + popstate event.
+    "PopStateEvent",
+    "History",
 ] }
 console_error_panic_hook = { version = "0.1", optional = true }
 

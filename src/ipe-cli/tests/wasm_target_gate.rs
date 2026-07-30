@@ -110,6 +110,8 @@ fn pure_ui_app_emits_wasm_project() {
     }
     assert!(mod_rs.contains("pub mod wasm;"), "{mod_rs}");
     assert!(mod_rs.contains("pub mod task;"), "{mod_rs}");
+    // The pure routing module is present (shared with the server; no tokio/axum).
+    assert!(mod_rs.contains("pub mod route"), "{mod_rs}");
     // The static browser shell is emitted beside the crate.
     assert!(out.join("www/index.html").is_file());
     assert!(out.join("www/boot.js").is_file());
@@ -118,6 +120,82 @@ fn pure_ui_app_emits_wasm_project() {
     assert!(
         !index.contains(" 'unsafe-eval'"),
         "no bare JS unsafe-eval token:\n{index}"
+    );
+}
+
+/// A routed `Web.app` (Model has a `page` field, `routes` non-empty) emits
+/// `wasm_app_routed` under `--target wasm`. The emitted manifest must have the
+/// same closed cdylib shape as the non-routed app, and the emitted `main.rs`
+/// must call `wasm_app_routed`, not `wasm_app`.
+#[test]
+fn routed_web_app_emits_wasm_app_routed() {
+    let dir = scratch("wasm_gate_routed");
+    let entry = write_entry(
+        &dir.join("srcdir"),
+        "module Main exposing (main)\n\
+         import Ipe.Prelude exposing (..)\n\
+         import Ipe.String as String\n\
+         import Ipe.Tea.Web exposing (app, route)\n\
+         import Ipe.Cmd as Cmd\n\
+         import Ipe.Sub as Sub\n\
+         import Ipe.Ui as Ui\n\
+         \n\
+         type Page = Home | About\n\
+         type Msg = NoOp\n\
+         type alias Model = { page : Page, count : Int }\n\
+         \n\
+         init : a -> ( Model, Cmd Msg )\n\
+         init _req = ( { page = Home, count = 0 }, Cmd.none )\n\
+         \n\
+         update : Msg -> Model -> ( Model, Cmd Msg )\n\
+         update msg model =\n\
+         \x20   case msg of\n\
+         \x20       NoOp -> ( model, Cmd.none )\n\
+         \n\
+         subscriptions : Model -> Sub Msg\n\
+         subscriptions _model = Sub.none\n\
+         \n\
+         view : Model -> Element Msg\n\
+         view _model = Ui.text \"hello\"\n\
+         \n\
+         main =\n\
+         \x20   app\n\
+         \x20       { init = init\n\
+         \x20       , update = update\n\
+         \x20       , view = view\n\
+         \x20       , subscriptions = subscriptions\n\
+         \x20       , routes = [ route \"/\" Home, route \"/about\" About ]\n\
+         \x20       , notFound = Home\n\
+         \x20       }\n",
+    );
+    let out = dir.join("out");
+    build_wasm(&entry, &out).expect("routed Web.app must build under --target wasm");
+
+    let manifest = std::fs::read_to_string(out.join("Cargo.toml")).expect("emitted manifest");
+    assert!(manifest.contains("crate-type = [\"cdylib\"]"), "{manifest}");
+    assert!(manifest.contains("wasm-bindgen"), "{manifest}");
+    for absent in ["tokio", "axum", "sqlx", "reqwest", "rustls"] {
+        assert!(
+            !manifest.contains(absent),
+            "wasm manifest must not link `{absent}`:\n{manifest}"
+        );
+    }
+
+    let main_rs = std::fs::read_to_string(out.join("src/main.rs")).expect("emitted main.rs");
+    assert!(
+        main_rs.contains("wasm_app_routed"),
+        "a routed wasm app must call `wasm_app_routed`, got:\n{main_rs}"
+    );
+    assert!(
+        !main_rs.contains("WasmRoutedApp"),
+        "routed wasm app must not emit a WasmRoutedApp error:\n{main_rs}"
+    );
+
+    let mod_rs =
+        std::fs::read_to_string(out.join("src/ipe_runtime/mod.rs")).expect("emitted mod.rs");
+    assert!(
+        mod_rs.contains("pub mod route"),
+        "wasm runtime mod.rs must expose `route` for `Route::new`:\n{mod_rs}"
     );
 }
 

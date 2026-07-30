@@ -21,8 +21,10 @@
 //! `Sub.every`/`Time.every` (via `subs::SubManager`, `gloo-timers`) and
 //! `Cmd.publish`/`PubSub.publish`/`Sub.subscribeTopic` (via `pubsub`, an
 //! in-tab broker) are the M4 Cmd/Sub browser bridge — see each submodule's
-//! doc comment. Routed Web apps stay out of scope (M5's client-entry
-//! reachability closure + router).
+//! doc comment. Client-side routing (`wasm_app_routed`) uses the browser
+//! History API: `popstate` events drive URL → page transitions via the
+//! same `route::match_routes` the server uses — one algorithm, two entry
+//! points.
 
 #![allow(clippy::type_complexity)] // TEA fn-quadruples are inherent here
 
@@ -79,6 +81,9 @@ pub fn run_start<E: std::fmt::Debug + 'static>(task: IpeTask<E, ()>) {
 /// `Web.app` compiled for the browser: mount into `document.body`, then run
 /// the update→diff→patch loop locally. Session stores do not exist client-side;
 /// `init` receives a `WebReq` synthesised from `location` + `document.cookie`.
+///
+/// For routed apps (`Web.app { …, routes, notFound }` with a `page` field in
+/// the Model) see [`wasm_app_routed`].
 pub fn wasm_app<E, Model, Msg, FInit, FUpdate, FView, FSubs>(
     init: FInit,
     update: FUpdate,
@@ -148,6 +153,58 @@ where
     })
 }
 
+/// `Web.app { …, routes, notFound }` with a `page` field compiled for the
+/// browser. Mirrors `web_app_routed` on the server, but session-free: the
+/// model lives in the tab, URLs are matched client-side, and navigation uses
+/// the History API.
+///
+/// URL → page resolution uses the same `route::match_routes` the server uses
+/// (one algorithm, two entry points). On every `popstate` event the router
+/// applies `set_page(matched_page, current_model)` → new model, then runs the
+/// normal view→diff→patch cycle — no `update` call is involved, matching the
+/// server's per-request `init`/`set_page` flow.
+///
+/// `init` receives a `WebReq` synthesised from `location` + cookies, the same
+/// shape `wasm_app` uses.
+pub fn wasm_app_routed<E, Model, Msg, Page, FInit, FUpdate, FView, FSubs, FSetPage>(
+    init: FInit,
+    update: FUpdate,
+    view: FView,
+    subscriptions: FSubs,
+    routes: Vec<crate::web::route::Route<Page>>,
+    not_found: Page,
+    set_page: FSetPage,
+) -> IpeTask<E, ()>
+where
+    E: From<String> + 'static,
+    Model: Clone + 'static,
+    Msg: Clone + 'static,
+    Page: Clone + 'static,
+    FInit: Fn(WebReq) -> (Model, IpeCmd<Msg>) + 'static,
+    FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + 'static,
+    FView: Fn(Model) -> Html<Msg> + 'static,
+    FSubs: Fn(Model) -> IpeSub<Msg> + 'static,
+    FSetPage: Fn(Page, Model) -> Model + 'static,
+{
+    Box::pin(async move {
+        match mount_app_routed(
+            init,
+            update,
+            view,
+            subscriptions,
+            routes,
+            not_found,
+            set_page,
+        ) {
+            Ok(()) => IpeResult::Ok(()),
+            Err(e) => {
+                console_fatal("MountFailed", &e);
+                IpeResult::Err(E::from(e))
+            }
+        }
+    })
+}
+
 thread_local! {
     /// Distinct origin token per mounted app instance — the wasm analogue of
     /// a Web session's sid, used ONLY to scope `Cmd.publish`/`PubSub.publish`
@@ -178,6 +235,14 @@ struct App<Model, Msg> {
     submgr: RefCell<subs::SubManager<Msg>>,
     /// This mount instance's `Cmd.publish`/`Sub.subscribeTopic` origin token.
     origin: String,
+    /// Client-side router: maps a URL path to a new model (present only for
+    /// routed apps). Called on `popstate` events — applies `set_page` over the
+    /// matched route without going through `update`. Returns `None` when the
+    /// path does not match any declared route — the current model and DOM are
+    /// left unchanged, matching the server's `matches_any` unrouted-GET guard
+    /// (`web::route::matches_any`; prevents handler-index orphaning on noise
+    /// paths like `/favicon.ico`).
+    router: Option<Box<dyn Fn(&str, Model) -> Option<Model>>>,
 }
 
 /// Recompute `subscriptions(model)` and hand it to the `SubManager`, wrapped
@@ -233,6 +298,7 @@ where
         subscriptions: Box::new(subscriptions),
         submgr: RefCell::new(subs::SubManager::new()),
         origin: next_instance_origin(),
+        router: None,
     });
 
     attach_delegated_listeners(&body, &app)?;
@@ -305,6 +371,7 @@ where
         subscriptions: Box::new(subscriptions),
         submgr: RefCell::new(subs::SubManager::new()),
         origin: next_instance_origin(),
+        router: None,
     });
 
     attach_delegated_listeners(&body, &app)?;
@@ -312,6 +379,153 @@ where
     // The first user interaction triggers the normal update→diff→patch cycle.
     resync_subscriptions(&app);
     Ok(())
+}
+
+/// Mount a routed `Web.app` in the browser. Identical to `mount_app` except:
+/// 1. The initial model's `page` field is set by routing the current URL.
+/// 2. A `popstate` listener is installed so back/forward navigation re-routes
+///    the URL → model without going through `update`.
+fn mount_app_routed<Model, Msg, Page, FInit, FUpdate, FView, FSubs, FSetPage>(
+    init: FInit,
+    update: FUpdate,
+    view: FView,
+    subscriptions: FSubs,
+    routes: Vec<crate::web::route::Route<Page>>,
+    not_found: Page,
+    set_page: FSetPage,
+) -> Result<(), String>
+where
+    Model: Clone + 'static,
+    Msg: Clone + 'static,
+    Page: Clone + 'static,
+    FInit: Fn(WebReq) -> (Model, IpeCmd<Msg>) + 'static,
+    FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + 'static,
+    FView: Fn(Model) -> Html<Msg> + 'static,
+    FSubs: Fn(Model) -> IpeSub<Msg> + 'static,
+    FSetPage: Fn(Page, Model) -> Model + 'static,
+{
+    use crate::web::route::{match_routes, matches_any};
+
+    let document = document()?;
+    let body: web_sys::HtmlElement = document.body().ok_or("document has no <body>")?;
+
+    let req = synthesize_req(&document)?;
+    let initial_path = req.path.clone();
+
+    // Seed the model from `init`, then immediately apply the current URL so the
+    // `page` field reflects the browser's address bar before the first render.
+    // This mirrors the server's per-request `set_page(match_routes(…), init_model)` call.
+    let (init_model, cmd0) = init(req);
+    let initial_page = match_routes(&routes, &not_found, &initial_path);
+    let model = set_page(initial_page, init_model);
+
+    let mut tree = view(model.clone());
+    assign_ipe_ids(&mut tree, ROOT_IPE_ID);
+    body.set_inner_html(&render_html(&tree));
+
+    let index = build_index(&tree);
+
+    // Shared router closure: maps a URL path → new model, or `None` when the
+    // path does not match any declared route.
+    //
+    // The `matches_any` guard before `match_routes` is the browser-client
+    // analogue of the server's `isBrowserNoisePath` / `matches_any` guard in
+    // `web_app_routed` (live.go parity): a popstate to an unrouted path (e.g.
+    // `/favicon.ico`) must not re-route the model to `not_found` and rebuild
+    // the handler index — that would orphan every handler on the page the
+    // browser is actually showing, silently breaking all subsequent events.
+    let routes_rc = Rc::new(routes);
+    let not_found_rc = Rc::new(not_found);
+    let set_page_rc = Rc::new(set_page);
+    let router: Box<dyn Fn(&str, Model) -> Option<Model>> = {
+        let routes = Rc::clone(&routes_rc);
+        let not_found = Rc::clone(&not_found_rc);
+        let set_page = Rc::clone(&set_page_rc);
+        Box::new(move |path: &str, m: Model| {
+            if !matches_any(&routes, path) {
+                return None;
+            }
+            let page = match_routes(&routes, &not_found, path);
+            Some((set_page)(page, m))
+        })
+    };
+
+    let app = Rc::new(App {
+        model: RefCell::new(model),
+        tree: RefCell::new(tree),
+        index: RefCell::new(index),
+        queue: RefCell::new(VecDeque::new()),
+        frame_scheduled: Cell::new(false),
+        update: Box::new(update),
+        view: Box::new(view),
+        subscriptions: Box::new(subscriptions),
+        submgr: RefCell::new(subs::SubManager::new()),
+        origin: next_instance_origin(),
+        router: Some(router),
+    });
+
+    attach_delegated_listeners(&body, &app)?;
+    attach_popstate_listener(&app)?;
+    run_cmd(&app, cmd0);
+    resync_subscriptions(&app);
+    Ok(())
+}
+
+/// Install a `popstate` listener on `window` so back/forward navigation
+/// re-routes the new URL into the app's model without going through `update`.
+fn attach_popstate_listener<Model, Msg>(app: &Rc<App<Model, Msg>>) -> Result<(), String>
+where
+    Model: Clone + 'static,
+    Msg: Clone + 'static,
+{
+    let window = web_sys::window().ok_or("no window")?;
+    let app = Rc::clone(app);
+    let closure =
+        Closure::<dyn Fn(web_sys::PopStateEvent)>::new(move |_ev: web_sys::PopStateEvent| {
+            let path = web_sys::window()
+                .and_then(|w| w.location().pathname().ok())
+                .unwrap_or_else(|| "/".to_owned());
+            navigate_to(&app, &path);
+        });
+    window
+        .add_event_listener_with_callback("popstate", closure.as_ref().unchecked_ref())
+        .map_err(|e| format!("addEventListener(popstate) failed: {e:?}"))?;
+    // The listener lives for the whole app lifetime.
+    closure.forget();
+    Ok(())
+}
+
+/// Apply a client-side navigation: route `path` → new model via the app's
+/// router closure, then run a view→diff→patch cycle. No `update` is called —
+/// the router directly replaces the `page` field in the model, matching the
+/// server's per-request `set_page` call.
+///
+/// Returns early (no DOM mutation) when the router returns `None`, which means
+/// the path does not match any declared route — unrouted popstate events (e.g.
+/// a browser extension pushing `/favicon.ico`) must not rebuild the handler
+/// index from the `notFound` view and orphan the live page's handlers.
+fn navigate_to<Model, Msg>(app: &Rc<App<Model, Msg>>, path: &str)
+where
+    Model: Clone + 'static,
+    Msg: Clone + 'static,
+{
+    let Some(router) = app.router.as_ref() else {
+        return;
+    };
+    let current = app.model.borrow().clone();
+    let Some(new_model) = (router)(path, current) else {
+        return;
+    };
+    *app.model.borrow_mut() = new_model.clone();
+
+    let mut new_tree = (app.view)(new_model);
+    assign_ipe_ids(&mut new_tree, ROOT_IPE_ID);
+    let patches = diff(&app.tree.borrow(), &new_tree);
+    apply_patches(&patches);
+    *app.index.borrow_mut() = build_index(&new_tree);
+    *app.tree.borrow_mut() = new_tree;
+
+    resync_subscriptions(app);
 }
 
 fn document() -> Result<web_sys::Document, String> {
