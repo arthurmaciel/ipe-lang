@@ -1,0 +1,31 @@
+module Main exposing (main, tests)
+
+-- Exercises the Ipe.Error inspector surface through Ipe.Test: construct
+-- classified errors, inspect their kind/message, render a kind name, and
+-- assert an expected kind with `Test.expectErr`. Three passing tests, so the
+-- emitted binary prints "3 passed, 0 failed (3 total)" and exits 0.
+
+import Ipe.Error as Error exposing (Error)
+import Ipe.Test as Test exposing (Test)
+
+
+main =
+    Test.runMain tests
+
+
+tests : List Test
+tests =
+    [ Test.suite "inspect"
+        [ Test.test "kind name" (\_ -> Test.equal "Io" (Test.kindName (Error.kind (Error.io "disk full"))))
+        , Test.test "message" (\_ -> Test.equal "disk full" (Error.message (Error.io "disk full")))
+        ]
+    , Test.suite "expectErr"
+        [ Test.test "network" (\_ -> Test.expectErr Network (failing (Error.network "down")))
+        ]
+    ]
+
+
+-- A task-free `Result` producer: every call fails with the given error.
+failing : Error -> Result Error ()
+failing e =
+    Err e

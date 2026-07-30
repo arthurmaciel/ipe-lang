@@ -13735,6 +13735,11 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ErrorToString
                 // `Error.isRetryable : Error -> Bool`
                 | KernelFn::ErrorIsRetryable
+                // Inspectors: `kind : Error -> ErrorKind`, `message : Error ->
+                // String`, `kindName : ErrorKind -> String`
+                | KernelFn::ErrorKind
+                | KernelFn::ErrorMessage
+                | KernelFn::ErrorKindName
                 // ── CssSafety arity-1 (Ipe.Css leaf kernels) ─────────────
                 // `safeValue`/`safePropName`/`safeSelector : String -> Maybe String`
                 // `stripStyleClose : String -> String`
@@ -15227,6 +15232,9 @@ impl<'a> Lowerer<'a> {
                     ("Error", "withMessage") => Ok(Callee::Kernel(KernelFn::ErrorWithMessage)),
                     ("Error", "isRetryable") => Ok(Callee::Kernel(KernelFn::ErrorIsRetryable)),
                     ("Error", "withDetails") => Ok(Callee::Kernel(KernelFn::ErrorWithDetails)),
+                    ("Error", "kind") => Ok(Callee::Kernel(KernelFn::ErrorKind)),
+                    ("Error", "message") => Ok(Callee::Kernel(KernelFn::ErrorMessage)),
+                    ("Error", "kindName") => Ok(Callee::Kernel(KernelFn::ErrorKindName)),
                     // ── CssSafety kernels (Ipe.CssSafety — Ipe.Css leaf
                     //    security kernels) ──────────────────────────────
                     ("CssSafety", "safeValue") => Ok(Callee::Kernel(KernelFn::CssSafetySafeValue)),

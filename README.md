@@ -84,7 +84,8 @@ cargo build --release<img width="512" height="512" alt="android-chrome-512x512" 
   `case`, immutable data. No `null`, no runtime exceptions.
 - **Sky's batteries-included runtime** — Live applications (SSR + real-time), typed HTTP, 
   SQL databases, auth, email, cache, pub/sub, and WebSockets, all behind a
-  single `Task Error a` effect boundary.
+  single `Task Error a` effect boundary. `Error` is a typed, classified value
+  you construct and inspect — see [Errors](docs/error-handling.md).
 - **Rust compiler** — the compiler itself is written in Rust: fast, parallel,
   memory-safe.
 - **Rust backend** — emits readable Rust.

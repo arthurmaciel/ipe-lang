@@ -308,6 +308,11 @@ pub enum StdlibKernel {
     // Modifier: `ErrorDetails -> Error -> Error`
     // (attaches the `ErrorDetails` union to `ErrorInfo.details`).
     ErrorWithDetails,
+    // Inspectors: extract the kind (`Error -> ErrorKind`), the bare message
+    // (`Error -> String`), and a kind's stable label (`ErrorKind -> String`).
+    ErrorKind,
+    ErrorMessage,
+    ErrorKindName,
     // ── CssSafety (Ipe.CssSafety — Ipe.Css leaf security kernels) ───
     // The FOUR primitive leaf shims over the audited `css_safety` policy that the
     // compiled-source `Ipe.Css` funnels every free-string entry through (PARSE,
@@ -1857,6 +1862,9 @@ impl StdlibKernel {
             Self::ErrorWithMessage => d("Error", "withMessage", 2, Pure, "ipe_error_with_message"),
             Self::ErrorIsRetryable => d("Error", "isRetryable", 1, Pure, "ipe_error_is_retryable"),
             Self::ErrorWithDetails => d("Error", "withDetails", 2, Pure, "ipe_error_with_details"),
+            Self::ErrorKind => d("Error", "kind", 1, Pure, "ipe_error_kind"),
+            Self::ErrorMessage => d("Error", "message", 1, Pure, "ipe_error_message"),
+            Self::ErrorKindName => d("Error", "kindName", 1, Pure, "ipe_error_kind_name"),
             // ── CssSafety (Ipe.CssSafety — Ipe.Css leaf kernels) ────
             // The `emit` symbols are the bare runtime fn names re-exported at the
             // `ipe_runtime` root (`pub use css::*`): `safe_value` /
@@ -3290,6 +3298,9 @@ impl StdlibKernel {
         Self::ErrorWithMessage,
         Self::ErrorIsRetryable,
         Self::ErrorWithDetails,
+        Self::ErrorKind,
+        Self::ErrorMessage,
+        Self::ErrorKindName,
         // CssSafety (Ipe.CssSafety — Ipe.Css leaf security kernels)
         Self::CssSafetySafeValue,
         Self::CssSafetySafePropName,
@@ -4614,6 +4625,9 @@ impl StdlibKernel {
             | Self::ErrorWithMessage
             | Self::ErrorIsRetryable
             | Self::ErrorWithDetails
+            | Self::ErrorKind
+            | Self::ErrorMessage
+            | Self::ErrorKindName
             | Self::CssSafetySafeValue
             | Self::CssSafetySafePropName
             | Self::CssSafetySafeSelector
