@@ -82,6 +82,15 @@ const PATH: &str = include_str!("../Ipe/Path.ipe");
 /// [`COMPILED_STD_MODULES`] (NOT `MODULES`) so its body is actually compiled;
 /// NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
 const REGEX: &str = include_str!("../Ipe/Regex.ipe");
+/// `Ipe.Url` — typed, validated URLs, compiled-source Layer-3.
+///
+/// The members are point-free `Ffi.kernel "Url_*"` aliases resolved by the
+/// kernel-alias mechanism (`ipe_canon::resolve::detect_kernel_alias`) to the
+/// pure `UrlFromString`/`UrlScheme`/… `StdlibKernel` variants (runtime:
+/// `ipe_runtime::url::*`). Registered in [`COMPILED_STD_MODULES`] (NOT
+/// `MODULES`) so its body is actually compiled; NOT in
+/// `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
+const URL: &str = include_str!("../Ipe/Url.ipe");
 
 /// `Ipe.Markdown` — markdown → `Ipe.Ui` Element renderer, compiled-source
 /// Layer-3.
@@ -576,6 +585,12 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Markdown",
         source: STD_MARKDOWN,
+    },
+    // Ipe.Url — Layer-3 source, `Ffi.kernel "Url_*"` aliases route to the
+    // registered pure `Url*` kernels (`ipe_runtime::url::*`).
+    CompiledStdModule {
+        dotted: "Ipe.Url",
+        source: URL,
     },
 ];
 
