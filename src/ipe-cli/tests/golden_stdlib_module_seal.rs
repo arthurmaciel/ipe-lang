@@ -533,3 +533,66 @@ fn config_resolves_and_emits() {
 fn config_builds_and_runs() {
     seal_module("config", CONFIG_MAIN, "CONFIG:h:5:1:hi:j");
 }
+
+// ── Ipe.Markdown ───────────────────────────────────────────────────────────
+// Exercises both exported functions:
+//   * `Markdown.render` — multi-block document (heading + bold span in a para).
+//   * `Markdown.renderInline` — single inline line with a code span.
+//
+// The output is `Element msg`, not a `String`, so we pipe through
+// `Html.htmlRender (Ui.layout [] …)` and `Io.println` — the same pattern the
+// `golden_stdui_grid_seal` uses.  The `_resolves_and_emits` test asserts ipe
+// exit 0 (no IPE-N0004 / N0028 regression).  The `_builds_and_runs` seal
+// asserts cargo exit 0 AND that the rendered HTML carries the expected
+// structural markers (heading text, bold styling, code-span styling).
+
+const MARKDOWN_MAIN: &str = "module Main exposing (main)\n\
+    import Ipe.Prelude exposing (..)\n\
+    import Ipe.Io as Io\n\
+    import Ipe.Html as Html\n\
+    import Ipe.Ui as Ui\n\
+    import Ipe.Markdown as Markdown\n\n\
+    doc : String\n\
+    doc = \"# Hello\\n\\nThis is **bold** text.\"\n\n\
+    inline : String\n\
+    inline = \"Use `render` for blocks\"\n\n\
+    main =\n\
+    \x20   let\n\
+    \x20       blockEl  = Markdown.render doc\n\
+    \x20       inlineEl = Markdown.renderInline inline\n\
+    \x20       page = Ui.column [] [ blockEl, inlineEl ]\n\
+    \x20   in\n\
+    \x20   Io.println (Html.htmlRender (Ui.layout [] page))\n";
+
+#[test]
+fn markdown_resolves_and_emits() {
+    let _ = compile_module_probe("markdown", MARKDOWN_MAIN);
+}
+
+#[test]
+fn markdown_builds_and_runs() {
+    if !e2e_enabled() {
+        return;
+    }
+    let Some(dir) = compile_module_probe("markdown_e2e", MARKDOWN_MAIN) else {
+        return;
+    };
+    let out = support::build_and_run_emitted("markdown", &dir);
+    assert_eq!(
+        out.exit_code,
+        Some(0),
+        "emitted `markdown` crate must build + run cleanly, got exit {:?}",
+        out.exit_code
+    );
+    // The rendered HTML must carry the heading text and bold styling.
+    assert!(
+        out.stdout.contains("Hello"),
+        "rendered HTML must contain heading text 'Hello':\n{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout.contains("font-weight"),
+        "rendered HTML must carry bold styling (font-weight) for **bold**:\n{}",
+        out.stdout
+    );
+}

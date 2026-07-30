@@ -15,4 +15,5 @@ see the [shape guides](../shapes/README.md); this book is about the language.
 - [Filesystem: `Ipe.Path` and `Ipe.File`](filesystem.md) — paths are a typed,
   traversal-checked value, not raw strings.
 - [Views: Ui, Html, and Css](ui.md) — the `Ipe.Ui`, `Ipe.Html`, and `Ipe.Css`
-  view vocabularies and how they intermix.
+  view vocabularies and how they intermix. Includes `Ipe.Markdown` — render
+  markdown to `Element msg` (safe for untrusted input).
