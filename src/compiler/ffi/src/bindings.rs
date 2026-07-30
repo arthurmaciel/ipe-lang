@@ -1638,32 +1638,37 @@ fn closure_per_call_body(ret: &ClosureRet, call: &str, wrapper: &str) -> Vec<Str
     match ret {
         ClosureRet::Total(_) => vec![format!(
             "        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {call})) \
-             {{ Ok(v) => v, Err(_) => {{ \
-             eprintln!(\"ipe_ffi: Ipê closure `{wrapper}` panicked; aborting \
-             (total return has no error channel)\"); std::process::abort(); }} }}"
+             {{ Ok(v) => v, Err(__p) => {{ \
+             note_foreign_panic(\"Ipê closure `{wrapper}` panicked; aborting \
+             (total return has no error channel)\", __p); std::process::abort(); }} }}"
         )],
         ClosureRet::Result(_) => vec![format!(
             "        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {call})) \
-             {{ Ok(inner) => inner, Err(_) => Err(str_err(\"foreign closure panicked\")) }}"
+             {{ Ok(inner) => inner, Err(__p) => Err(ipe_error_from_panic(\"foreign closure panicked\", __p)) }}"
         )],
         ClosureRet::Option(_) => vec![format!(
             "        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {call})) \
-             {{ Ok(inner) => inner, Err(_) => None }}"
+             {{ Ok(inner) => inner, Err(__p) => {{ note_foreign_panic(\"foreign closure panicked\", __p); None }} }}"
         )],
         ClosureRet::AsyncResult(_) | ClosureRet::AsyncOption(_) => {
             let (prod_fold, join_fold) = if matches!(ret, ClosureRet::AsyncResult(_)) {
                 (
-                    "Box::pin(async move { Err(str_err(\"foreign closure panicked\")) })",
-                    "Err(str_err(\"foreign closure panicked\"))",
+                    "{ let __e = ipe_error_from_panic(\"foreign closure panicked\", __p); \
+                     return Box::pin(async move { Err(__e) }); }",
+                    "Err(ipe_error_from_foreign(__join))",
                 )
             } else {
-                ("Box::pin(async move { None })", "None")
+                (
+                    "{ note_foreign_panic(\"foreign closure panicked\", __p); \
+                     return Box::pin(async move { None }); }",
+                    "{ note_foreign_error(__join); None }",
+                )
             };
             vec![
                 format!(
                     "        let __fut = match std::panic::catch_unwind(\
                      std::panic::AssertUnwindSafe(move || {call})) \
-                     {{ Ok(f) => f, Err(_) => return {prod_fold} }};"
+                     {{ Ok(f) => f, Err(__p) => {prod_fold} }};"
                 ),
                 "        Box::pin(async move {".to_owned(),
                 "            let __handle = tokio::task::spawn(__fut);".to_owned(),
@@ -1671,7 +1676,7 @@ fn closure_per_call_body(ret: &ClosureRet, call: &str, wrapper: &str) -> Vec<Str
                 "            let __joined = __handle.await;".to_owned(),
                 "            __guard.defuse();".to_owned(),
                 format!(
-                    "            match __joined {{ Ok(inner) => inner, Err(_) => {join_fold} }}"
+                    "            match __joined {{ Ok(inner) => inner, Err(__join) => {join_fold} }}"
                 ),
                 "        })".to_owned(),
             ]
@@ -1864,7 +1869,7 @@ fn plain_lines(cx: &WrapperCx<'_>) -> Vec<String> {
         format!(
             "match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {{ \
              arg0.{method}({own_thread_args}); arg0 }})) \
-             {{ Ok(r) => ok_res(r), Err(_) => IpeResult::Err(str_err(\"foreign call panicked\")) }}"
+             {{ Ok(r) => ok_res(r), Err(__p) => IpeResult::Err(ipe_error_from_panic(\"foreign call panicked\", __p)) }}"
         )
     } else if thread_recv {
         // By-borrow reader: the closure owns `arg0`, calls the borrowing method,
@@ -1875,13 +1880,13 @@ fn plain_lines(cx: &WrapperCx<'_>) -> Vec<String> {
             Effect::Fallible => format!(
                 "match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {{ let __r = {call}; (__r, arg0) }})) \
                  {{ Ok((Ok(v), recv)) => ok_res(({}, recv)), Ok((Err(e), _)) => IpeResult::Err(ipe_error_from_foreign(e)), \
-                 Err(_) => IpeResult::Err(str_err(\"foreign call panicked\")) }}",
+                 Err(__p) => IpeResult::Err(ipe_error_from_panic(\"foreign call panicked\", __p)) }}",
                 ret_coerce("v")
             ),
             // Pure (and, defensively, any non-fallible non-effectful shape).
             _ => format!(
                 "match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {{ let __r = {call}; (__r, arg0) }})) \
-                 {{ Ok((v, recv)) => ok_res(({}, recv)), Err(_) => IpeResult::Err(str_err(\"foreign call panicked\")) }}",
+                 {{ Ok((v, recv)) => ok_res(({}, recv)), Err(__p) => IpeResult::Err(ipe_error_from_panic(\"foreign call panicked\", __p)) }}",
                 ret_coerce("v")
             ),
         }
@@ -1921,12 +1926,12 @@ fn plain_lines(cx: &WrapperCx<'_>) -> Vec<String> {
             Effect::Fallible => format!(
                 "match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {call})) \
                  {{ Ok(Ok(v)) => ok_res({}), Ok(Err(e)) => IpeResult::Err(ipe_error_from_foreign(e)), \
-                 Err(_) => IpeResult::Err(str_err(\"foreign call panicked\")) }}",
+                 Err(__p) => IpeResult::Err(ipe_error_from_panic(\"foreign call panicked\", __p)) }}",
                 ret_coerce("v")
             ),
             Effect::Pure => format!(
                 "match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {})) \
-                 {{ Ok(v) => ok_res(v), Err(_) => IpeResult::Err(str_err(\"foreign call panicked\")) }}",
+                 {{ Ok(v) => ok_res(v), Err(__p) => IpeResult::Err(ipe_error_from_panic(\"foreign call panicked\", __p)) }}",
                 ret_coerce(&call)
             ),
         }
@@ -1945,9 +1950,17 @@ fn plain_lines(cx: &WrapperCx<'_>) -> Vec<String> {
     out
 }
 
-/// Struct-field getter: infallible by construction — the inspector gated the
-/// field type to the closed eligible set, so the projection/`.clone()` is
-/// total and the wrapper returns the bare field type.
+/// Struct-field getter: the projection/`.clone()` over the closed eligible
+/// field set, returning the bare field type.
+///
+/// An OPAQUE-typed field is the one shape here whose `.clone()` runs foreign
+/// code (the crate's own `Clone` impl), so that body executes inside
+/// `catch_unwind`; the bare return has no error channel, so a caught foreign
+/// panic funnel-logs and aborts — the same sanctioned no-error-channel
+/// response as a total-return closure, never a laundered value and never an
+/// unwind that some unrelated recovery layer could absorb over half-broken
+/// foreign state. Scalar/`String`-family fields stay bare: their access runs
+/// no foreign code, so they are infallible by construction.
 fn field_get_lines(cx: &WrapperCx<'_>) -> Vec<String> {
     let f = cx.f;
     let recv_rust = cx.resolve_recv();
@@ -1968,12 +1981,46 @@ fn field_get_lines(cx: &WrapperCx<'_>) -> Vec<String> {
     } else {
         format!("{projection}.clone()")
     };
+    // A field access runs foreign code exactly when its `.clone()` can
+    // dispatch into the crate's own `Clone` impl; such a body needs the panic
+    // boundary. The classification is POSITIVE and fail-closed: only a type
+    // proven std-owned all the way down (scalars, `String`, `Vec`/`Option`
+    // over the same set) stays bare — anything unrecognised, qualified or
+    // not, gets the boundary.
+    let clone_runs_foreign_code = !is_copy_rust(raw_ty) && !std_owned_field_ty(raw_ty);
+    let body = if clone_runs_foreign_code {
+        format!(
+            "    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {})) \
+             {{ Ok(v) => v, Err(__p) => {{ \
+             note_foreign_panic(\"foreign `Clone` panicked in field getter `{}`; aborting \
+             (field getter has no error channel)\", __p); std::process::abort(); }} }}",
+            co(&access),
+            cx.rust_name
+        )
+    } else {
+        format!("    {}", co(&access))
+    };
     vec![
         format!("// [field] {}", cx.label),
         format!("pub fn {}(arg0: {recv_rust}) -> {inner} {{", cx.rust_name),
-        format!("    {}", co(&access)),
+        body,
         "}".to_owned(),
     ]
+}
+
+/// Whether a field's Rust type is std-owned all the way down — Copy scalars,
+/// `String`/`str`, and `Vec`/`Option` recursively over the same set — so its
+/// `.clone()` provably runs no foreign code. Anything unrecognised is NOT
+/// std-owned; the caller then applies the panic boundary (fail-closed).
+fn std_owned_field_ty(raw: &str) -> bool {
+    let t = raw.trim();
+    if is_copy_rust(t) || matches!(t, "String" | "str" | "&str") {
+        return true;
+    }
+    if let Some(inner) = strip_generic1("Vec", t).or_else(|| strip_generic1("Option", t)) {
+        return std_owned_field_ty(inner);
+    }
+    false
 }
 
 /// Struct-field setter: a NEW receiver with one field replaced — Ipê
@@ -2430,7 +2477,7 @@ use std::collections::HashMap;
 // IPE-FFI-WRAPPER BEGIN parse
 // [fallible] Rust_Semver_parse
 pub fn semver_parse(arg0: String) -> IpeResult<IpeError, Version> {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || ::semver::parse(arg0.as_ref()))) { Ok(Ok(v)) => ok_res(v), Ok(Err(e)) => IpeResult::Err(ipe_error_from_foreign(e)), Err(_) => IpeResult::Err(str_err("foreign call panicked")) }
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || ::semver::parse(arg0.as_ref()))) { Ok(Ok(v)) => ok_res(v), Ok(Err(e)) => IpeResult::Err(ipe_error_from_foreign(e)), Err(__p) => IpeResult::Err(ipe_error_from_panic("foreign call panicked", __p)) }
 }
 // IPE-FFI-WRAPPER END
 // IPE-FFI-WRAPPER BEGIN major_field_from_version
@@ -2501,7 +2548,9 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
         assert!(out.contains("-> UpdateFnClosure {"), "{out}");
         // A fallible return folds a panic to Err — never aborts.
         assert!(
-            out.contains("Err(_) => Err(str_err(\"foreign closure panicked\"))"),
+            out.contains(
+                "Err(__p) => Err(ipe_error_from_panic(\"foreign closure panicked\", __p))"
+            ),
             "{out}"
         );
         assert!(!out.contains("std::process::abort()"), "{out}");
@@ -2518,7 +2567,12 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
             "{out}"
         );
         assert!(out.contains("-> UpdateFnClosure {"), "{out}");
-        assert!(out.contains("Err(_) => None"), "{out}");
+        assert!(
+            out.contains(
+                "Err(__p) => { note_foreign_panic(\"foreign closure panicked\", __p); None }"
+            ),
+            "{out}"
+        );
         assert!(!out.contains("std::process::abort()"), "{out}");
     }
 
@@ -2551,9 +2605,18 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
             "{out}"
         );
         assert!(out.contains("__guard.defuse();"), "{out}");
-        // Both panic sites fold to Err — never abort, never fabricate.
+        // Both panic sites fold to Err — never abort, never fabricate: a
+        // production-panic funnels the caught payload; a poll-panic funnels
+        // the JoinError.
         assert!(
-            out.contains("Err(_) => Err(str_err(\"foreign closure panicked\"))"),
+            out.contains(
+                "let __e = ipe_error_from_panic(\"foreign closure panicked\", __p); \
+                 return Box::pin(async move { Err(__e) });"
+            ),
+            "{out}"
+        );
+        assert!(
+            out.contains("Err(__join) => Err(ipe_error_from_foreign(__join))"),
             "{out}"
         );
         assert!(!out.contains("std::process::abort()"), "{out}");
@@ -2575,11 +2638,17 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
         assert!(out.contains("tokio::task::spawn(__fut)"), "{out}");
         // A production-panic and a poll-panic both fold to None.
         assert!(
-            out.contains("Err(_) => return Box::pin(async move { None })"),
+            out.contains(
+                "Err(__p) => { note_foreign_panic(\"foreign closure panicked\", __p); \
+                 return Box::pin(async move { None }); }"
+            ),
             "{out}"
         );
         assert!(
-            out.contains("match __joined { Ok(inner) => inner, Err(_) => None }"),
+            out.contains(
+                "match __joined { Ok(inner) => inner, \
+                 Err(__join) => { note_foreign_error(__join); None } }"
+            ),
             "{out}"
         );
     }
@@ -2646,7 +2715,9 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
             "the received box names the in-module `Counter`; the return is the handle:\n{out}"
         );
         assert!(
-            out.contains("Err(_) => Err(str_err(\"foreign closure panicked\"))"),
+            out.contains(
+                "Err(__p) => Err(ipe_error_from_panic(\"foreign closure panicked\", __p))"
+            ),
             "{out}"
         );
     }
@@ -2676,7 +2747,12 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
             ),
             "the received box absolutizes the opaque return:\n{out}"
         );
-        assert!(out.contains("Err(_) => None"), "{out}");
+        assert!(
+            out.contains(
+                "Err(__p) => { note_foreign_panic(\"foreign closure panicked\", __p); None }"
+            ),
+            "{out}"
+        );
     }
 
     #[test]
@@ -2883,7 +2959,7 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
         );
         assert!(
             out.contains(
-                "match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || arg0.to_string())) { Ok(v) => ok_res(v), Err(_) => IpeResult::Err(str_err(\"foreign call panicked\")) }"
+                "match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || arg0.to_string())) { Ok(v) => ok_res(v), Err(__p) => IpeResult::Err(ipe_error_from_panic(\"foreign call panicked\", __p)) }"
             ),
             "{out}"
         );
@@ -2973,7 +3049,7 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
         let out = emit_bindings(&pkg);
         assert!(
             out.contains(
-                "match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || { arg0.insert(arg1); arg0 })) { Ok(r) => ok_res(r), Err(_) => IpeResult::Err(str_err(\"foreign call panicked\")) }"
+                "match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || { arg0.insert(arg1); arg0 })) { Ok(r) => ok_res(r), Err(__p) => IpeResult::Err(ipe_error_from_panic(\"foreign call panicked\", __p)) }"
             ),
             "{out}"
         );
@@ -3157,6 +3233,87 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
         assert!(
             out.contains(
                 "{ let (t0, t1) = ::geo::bounds(); ((t0).min(i64::MAX as u64) as i64, (t1) as i64) }"
+            ),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn an_opaque_field_getter_contains_the_foreign_clone() {
+        // A non-Copy opaque field's `.clone()` dispatches into the crate's own
+        // `Clone` impl — foreign code — so the getter body runs under
+        // catch_unwind and a caught panic funnel-logs then aborts (the bare
+        // return has no error channel).
+        let pkg = semver_pkg(&json!([{
+            "name": "build_field",
+            "params": [{"name": "self", "type": "Version", "ipeType": "Version", "rustType": "&Version"}],
+            "results": [{"name": "", "type": "BuildMetadata", "rustType": "semver::BuildMetadata"}],
+            "effect": "pure",
+            "recvType": "Version",
+            "recvRustType": "semver::Version",
+            "methodName": "build",
+            "isField": true
+        }]));
+        let out = emit_bindings(&pkg);
+        assert!(
+            out.contains(
+                "pub fn semver_build_field_from_version(arg0: ::semver::Version) -> ::semver::BuildMetadata {"
+            ),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || \
+                 arg0.build.clone())) { Ok(v) => v, Err(__p) => { \
+                 note_foreign_panic(\"foreign `Clone` panicked in field getter \
+                 `semver_build_field_from_version`; aborting (field getter has no error \
+                 channel)\", __p); std::process::abort(); } }"
+            ),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn an_unqualified_opaque_field_getter_still_gets_the_boundary() {
+        // Fail-closed classification: a field type that is not provably
+        // std-owned gets the panic boundary even when its rustType arrives
+        // unqualified (no `::crate::` path to key off).
+        let pkg = semver_pkg(&json!([{
+            "name": "build_field",
+            "params": [{"name": "self", "type": "Version", "ipeType": "Version", "rustType": "&Version"}],
+            "results": [{"name": "", "type": "BuildMetadata", "rustType": "BuildMetadata"}],
+            "effect": "pure",
+            "recvType": "Version",
+            "recvRustType": "semver::Version",
+            "methodName": "build",
+            "isField": true
+        }]));
+        let out = emit_bindings(&pkg);
+        assert!(
+            out.contains("note_foreign_panic(\"foreign `Clone` panicked in field getter"),
+            "an unrecognised field type must not slip past the boundary:\n{out}"
+        );
+    }
+
+    #[test]
+    fn a_std_field_getter_stays_bare() {
+        // A `String` field's `.clone()` runs no foreign code, so the getter
+        // keeps its bare, boundary-free body.
+        let pkg = semver_pkg(&json!([{
+            "name": "pre_field",
+            "params": [{"name": "self", "type": "Version", "ipeType": "Version", "rustType": "&Version"}],
+            "results": [{"name": "", "type": "String", "rustType": "String"}],
+            "effect": "pure",
+            "recvType": "Version",
+            "recvRustType": "semver::Version",
+            "methodName": "pre",
+            "isField": true
+        }]));
+        let out = emit_bindings(&pkg);
+        assert!(
+            out.contains(
+                "pub fn semver_pre_field_from_version(arg0: ::semver::Version) -> String {\n    \
+                 arg0.pre.clone()\n}"
             ),
             "{out}"
         );
