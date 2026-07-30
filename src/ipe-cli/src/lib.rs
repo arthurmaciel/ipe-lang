@@ -1857,6 +1857,10 @@ fn discover_manifest(entry_path: &Path) -> Result<Option<PathBuf>, CliError> {
 /// into a typed plan (or a typed refusal — no artifact), run the toolchain
 /// preflight, and surface the mimalloc opt-in notice. Shared by `build` and
 /// `run`; resolved ONCE before any compilation starts.
+///
+/// `IPE_TARGET=wasm` is a wasm-target axis signal (resolved by
+/// [`resolve_wasm_target`]) and is NOT a static-link triple; it is stripped
+/// here so it never reaches the musl-triple gate in [`build_plan::resolve`].
 fn resolve_static_plan(
     cli_layer: build_plan::StaticRequestLayer,
     manifest: Option<&Path>,
@@ -1865,7 +1869,11 @@ fn resolve_static_plan(
         Some(m) => project::parse_manifest(m)?.static_request,
         None => build_plan::StaticRequestLayer::default(),
     };
-    let merged = cli_layer.or(build_plan::env_layer()?).or(toml_layer);
+    let mut env = build_plan::env_layer()?;
+    if env.target.as_deref() == Some("wasm") {
+        env.target = None;
+    }
+    let merged = cli_layer.or(env).or(toml_layer);
     let static_plan = build_plan::resolve(&merged)?;
     if let Some(plan) = &static_plan {
         build_plan::preflight(plan)?;
@@ -1882,6 +1890,20 @@ fn resolve_static_plan(
         }
     }
     Ok(static_plan)
+}
+
+/// Resolve the wasm-vs-native target with the three-tier precedence chain:
+/// CLI flag (`--target wasm`) > `IPE_TARGET=wasm` env > `[wasm].mode` in
+/// `ipe.toml` > default native.
+///
+/// `cli_wasm` carries the parsed `--target wasm` flag from `BuildMode::Emit`.
+/// `wasm_config` is `None` when there is no manifest (sibling-discovery build).
+///
+/// Returns `true` when the resolved target is `WasmClient`.
+fn resolve_wasm_target(cli_wasm: bool, wasm_config: Option<&project::WasmConfig>) -> bool {
+    cli_wasm
+        || std::env::var("IPE_TARGET").ok().as_deref() == Some("wasm")
+        || wasm_config.is_some_and(project::WasmConfig::implies_wasm_target)
 }
 
 /// `ipe build [<path>]` — compile a program to a native or WebAssembly artifact.
@@ -1929,6 +1951,18 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
     //      the Haskell driver's `Graph.discoverModulesMulti srcRoot entryPath`
     //      call in `Ipe.Build.Compile.hs`.
     let manifest = discover_manifest(&entry_path)?;
+
+    // Parse the manifest early to read [wasm].mode for target inference.
+    // build_project_with_options re-parses it later to fill in publicEnv /
+    // hydrate-mode; the double parse is acceptable (manifests are small).
+    let manifest_wasm: Option<project::WasmConfig> = manifest
+        .as_deref()
+        .map(project::parse_manifest)
+        .transpose()?
+        .map(|m| m.wasm);
+
+    // Precedence: CLI --target wasm > IPE_TARGET=wasm > [wasm].mode != "off".
+    let wasm_target = resolve_wasm_target(wasm_target, manifest_wasm.as_ref());
 
     let static_plan = resolve_static_plan(cli_layer, manifest.as_deref())?;
     let options = BuildOptions {
@@ -2159,13 +2193,29 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
 
     // --- Step 1: ipe compile → emit the Rust project ---
     let manifest = discover_manifest(&entry_path)?;
+
+    // Parse the manifest early to read [wasm].mode for target inference.
+    let manifest_wasm: Option<project::WasmConfig> = manifest
+        .as_deref()
+        .map(project::parse_manifest)
+        .transpose()?
+        .map(|m| m.wasm);
+
+    // When the project declares [wasm].mode != "off", or IPE_TARGET=wasm is
+    // set, treat `ipe run` as a wasm build-and-bundle (no native binary to
+    // exec). A plain `ipe run` in a non-wasm project stays native.
+    let wasm_target = resolve_wasm_target(false, manifest_wasm.as_ref());
+
     let static_plan = resolve_static_plan(cli_layer, manifest.as_deref())?;
-    // `ipe run` builds and executes a native process; a browser bundle has no
-    // native entry to run, so this path is always the native target. `ipe run`
-    // is a DEVELOPMENT execution, so `Debug.*` is allowed (production = false).
+    // `ipe run` is a DEVELOPMENT execution, so `Debug.*` is allowed
+    // (production = false).
     let options = BuildOptions {
         static_plan,
-        target: ipe_ir::Target::Native,
+        target: if wasm_target {
+            ipe_ir::Target::WasmClient
+        } else {
+            ipe_ir::Target::Native
+        },
         wasm_public_env: Vec::new(),
         wasm_hydrate_mode: false,
         production: false,
@@ -2182,6 +2232,13 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
         },
         |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
     )?;
+
+    // A wasm project has no native binary to run; `ipe run` for a wasm
+    // project produces the browser bundle (same post-emit step as
+    // `ipe build --target wasm`) and returns, skipping the native exec steps.
+    if wasm_target {
+        return bundle_wasm(&out_dir);
+    }
 
     // --- Step 2: cargo build the emitted project ---
     // CWD = the emitted crate dir, so the generated `.cargo/config.toml`
@@ -4730,5 +4787,82 @@ main =
         );
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    // ── [wasm].mode target inference ─────────────────────────────────────────
+
+    fn wasm_config(mode: Option<&str>) -> project::WasmConfig {
+        project::WasmConfig {
+            mode: mode.map(str::to_owned),
+            ..Default::default()
+        }
+    }
+
+    /// `[wasm] mode = "spa"` with no CLI flag → inferred `WasmClient`.
+    #[test]
+    fn wasm_mode_spa_infers_wasm_target() {
+        let cfg = wasm_config(Some("spa"));
+        assert!(
+            resolve_wasm_target(false, Some(&cfg)),
+            "spa mode must infer wasm target"
+        );
+    }
+
+    /// `[wasm] mode = "hydrate"` with no CLI flag → inferred `WasmClient`.
+    #[test]
+    fn wasm_mode_hydrate_infers_wasm_target() {
+        let cfg = wasm_config(Some("hydrate"));
+        assert!(
+            resolve_wasm_target(false, Some(&cfg)),
+            "hydrate mode must infer wasm target"
+        );
+    }
+
+    /// `[wasm] mode = "off"` → native (explicit opt-out).
+    #[test]
+    fn wasm_mode_off_does_not_infer_wasm_target() {
+        let cfg = wasm_config(Some("off"));
+        assert!(
+            !resolve_wasm_target(false, Some(&cfg)),
+            "off mode must not infer wasm target"
+        );
+    }
+
+    /// No `[wasm]` section (None config) → native default.
+    #[test]
+    fn no_wasm_config_defaults_to_native_target() {
+        assert!(
+            !resolve_wasm_target(false, None),
+            "absent [wasm] section must default to native"
+        );
+    }
+
+    /// `mode = None` (section present but no mode key) → native.
+    #[test]
+    fn wasm_config_absent_mode_key_defaults_to_native_target() {
+        let cfg = wasm_config(None);
+        assert!(
+            !resolve_wasm_target(false, Some(&cfg)),
+            "absent mode key must default to native"
+        );
+    }
+
+    /// CLI `--target wasm` (`cli_wasm` = true) wins even when no manifest.
+    #[test]
+    fn cli_flag_overrides_absent_manifest_to_wasm() {
+        assert!(
+            resolve_wasm_target(true, None),
+            "cli flag must win over absent manifest"
+        );
+    }
+
+    /// CLI `--target wasm` wins even if the manifest says off (highest precedence).
+    #[test]
+    fn cli_flag_wins_over_mode_off() {
+        let cfg = wasm_config(Some("off"));
+        assert!(
+            resolve_wasm_target(true, Some(&cfg)),
+            "explicit cli --target wasm must win over mode=off"
+        );
     }
 }
