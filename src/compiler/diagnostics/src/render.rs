@@ -620,8 +620,9 @@ fn type_label(msg: &TypeError) -> Option<String> {
                 .collect::<Vec<_>>()
                 .join(", ");
             Some(format!(
-                "this `_` covers {listed} — consider listing each constructor \
-                 explicitly so a new variant forces an update here"
+                "this arm absorbs {listed} — handle each constructor explicitly, \
+                 so adding a variant forces an update here instead of falling \
+                 through silently"
             ))
         }
         TypeError::RoutedAppMissingPageField { route_count } => Some(format!(

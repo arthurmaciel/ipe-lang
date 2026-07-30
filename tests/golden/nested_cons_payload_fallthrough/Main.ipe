@@ -4,17 +4,20 @@ import Ipe.Io as Io
 import Ipe.String
 
 -- #158 Class-4 item C, THE decisive soundness test: `Just []` is a valid value
--- of `Maybe (List Int)` that must FALL THROUGH the `Just (h :: t)` arm to the
--- wildcard fallback — printing `0`, never panicking. The guard-based lowering
--- (an `if list.len() >= 1` arm guard) is what makes the fall-through sound
--- (a "bind + panic-on-mismatch" prelude would be unsound here).
+-- of `Maybe (List Int)`. The inner `case` over the list payload routes `[]` to
+-- its own arm — printing `0`, never panicking — while `h :: t` binds the head.
 f : Maybe (List Int) -> Int
 f m =
     case m of
-        Just (h :: t) ->
-            h
+        Just xs ->
+            case xs of
+                h :: t ->
+                    h
 
-        _ ->
+                [] ->
+                    0
+
+        Nothing ->
             0
 
 

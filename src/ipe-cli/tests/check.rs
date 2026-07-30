@@ -192,6 +192,76 @@ fn check_caret_matches_build_for_missing_qualifier_in_dependency() -> TestResult
     Ok(())
 }
 
+/// FAIL-CLOSED at the compile boundary: a `case` over a closed union with a
+/// top-level catch-all (`_ ->`) that absorbs a named constructor must make
+/// `ipe check` exit NON-ZERO with the rendered IPE-T0018 error. A mere printed
+/// warning that still exits 0 would be fail-open — the exact silent-accept this
+/// diagnostic exists to prevent.
+#[test]
+fn closed_union_catch_all_fails_check_nonzero() -> TestResult {
+    let (ok, _, stderr) = run_ipe(&[
+        "check",
+        &fixture("closed_union_catch_all.ipe").to_string_lossy(),
+    ])?;
+    assert!(
+        !ok,
+        "a closed-union catch-all must exit non-zero (fail-closed), got success"
+    );
+    assert!(
+        stderr.contains("IPE-T0018"),
+        "the rendered IPE-T0018 error must be shown, got:\n{stderr}"
+    );
+    Ok(())
+}
+
+/// FAIL-CLOSED, no artifact: the same closed-union catch-all through `ipe build`
+/// must exit non-zero and write NO emitted crate. The entry is copied into a
+/// fresh directory so any `out/` emission would be unmistakable. This proves the
+/// error stops the pipeline before code generation, not merely at print time.
+#[test]
+fn closed_union_catch_all_build_emits_no_crate() -> TestResult {
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        // No resolvable runtime in this environment; the compile-time error
+        // fires before any runtime is read, and the `check` test above already
+        // pins the non-zero exit. Skip the build-artifact assertion.
+        return Ok(());
+    };
+    let dir = std::env::temp_dir().join(format!(
+        "ipe_t0018_no_emit_{}_{}",
+        std::process::id(),
+        "closed_union"
+    ));
+    std::fs::create_dir_all(&dir)?;
+    let src = dir.join("Main.ipe");
+    std::fs::copy(fixture("closed_union_catch_all.ipe"), &src)?;
+    let out_dir = dir.join("out");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_ipe"))
+        .args(["build", &src.to_string_lossy()])
+        .arg("--out")
+        .arg(&out_dir)
+        .env("IPE_RUNTIME_DIR", &runtime)
+        .output()?;
+    let ok = output.status.success();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let main_rs_present = out_dir.join("src").join("main.rs").exists();
+    std::fs::remove_dir_all(&dir)?;
+
+    assert!(
+        !ok,
+        "a closed-union catch-all build must exit non-zero, got success:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("IPE-T0018"),
+        "the build must render IPE-T0018, got:\n{stderr}"
+    );
+    assert!(
+        !main_rs_present,
+        "a failed compile must emit NO crate (no src/main.rs)"
+    );
+    Ok(())
+}
+
 #[test]
 fn check_help_page_names_the_command() -> TestResult {
     let (ok, stdout, _) = run_ipe(&["check", "--help"])?;

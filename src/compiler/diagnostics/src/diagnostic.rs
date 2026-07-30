@@ -648,11 +648,14 @@ pub enum TypeError {
     /// emitted panic arm, no `DoS`/500 surface). The offending sub-pattern's span
     /// rides on the wrapping [`Diagnostic::Type`]. [IPE-T0015]
     RefutablePatternParameter,
-    /// A wildcard `_` arm in a `case` over a FINITE, CLOSED ADT (or `Bool` /
-    /// `List`) where the compiler knows every remaining constructor. Listing them
-    /// explicitly is safer: adding a new variant to the type will then force an
-    /// update at this match site, preventing a silent fall-through. (Warning.)
-    /// `constructors` names each remaining variant in declaration order. [IPE-T0018]
+    /// A top-level catch-all (`_` or a bare variable) in a `case` over a FINITE,
+    /// CLOSED, user-evolvable union (a `Head::Adt` — a user `type` or a Prelude
+    /// built-in like `Maybe` / `Result`) where the catch-all absorbs a
+    /// constructor no earlier arm named. Each remaining variant must be handled
+    /// explicitly so that adding a new variant forces an update at this match
+    /// site instead of falling through silently. (Error.) `Bool`, `List`, and
+    /// open domains are excluded by the pass and never produce this diagnostic.
+    /// `constructors` names each absorbed variant in declaration order. [IPE-T0018]
     WildcardCoversKnownConstructors { constructors: Box<[Box<str>]> },
     /// An **or-pattern** `p1 | p2 | …` whose alternatives do not all bind the
     /// **same set of variable names**. The arm body reads a binder without
@@ -1108,9 +1111,13 @@ impl Diagnostic {
             Self::Parse { .. } | Self::Name { .. } | Self::Lower { .. } => Severity::Error,
             Self::Type { msg, .. } => match msg {
                 TypeError::RedundantCaseBranch { .. }
-                | TypeError::WildcardCoversKnownConstructors { .. }
                 | TypeError::RoutedAppMissingPageField { .. } => Severity::Warning,
-                TypeError::Mismatch
+                // A catch-all over a closed, user-evolvable union is an error:
+                // it lets a future variant fall through silently. Scoped to
+                // `Head::Adt` in the exhaustiveness pass (Bool/List/open types
+                // never produce this diagnostic).
+                TypeError::WildcardCoversKnownConstructors { .. }
+                | TypeError::Mismatch
                 | TypeError::BudgetExceeded
                 | TypeError::TypeMismatch { .. }
                 | TypeError::InfiniteType { .. }

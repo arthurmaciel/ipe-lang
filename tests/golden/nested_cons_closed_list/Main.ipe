@@ -3,17 +3,23 @@ module Main exposing (main)
 import Ipe.Io as Io
 import Ipe.String
 
--- #158 Class-4 item C: a CLOSED list literal nested in a constructor payload
--- (`Just [a, b]`). Lowers to an EXACT-length guard (`.len() == 2`) plus indexed
--- head-element bindings. A `Just [1]` (wrong length) falls through to the
--- wildcard, so this exercises both the exact-match and the fall-through path.
+-- #158 Class-4 item C: a `Just`-wrapped list matched by a CLOSED list literal
+-- (`[a, b]`) in an inner `case` over the payload — an exact-length match plus
+-- indexed head bindings. A `Just [1]` (wrong length) falls through to the inner
+-- `_` list arm, so this exercises both the exact-match and the fall-through
+-- path, while the outer `Maybe` match names each constructor explicitly.
 f : Maybe (List Int) -> Int
 f m =
     case m of
-        Just [ a, b ] ->
-            a + b
+        Just xs ->
+            case xs of
+                [ a, b ] ->
+                    a + b
 
-        _ ->
+                _ ->
+                    0
+
+        Nothing ->
             0
 
 

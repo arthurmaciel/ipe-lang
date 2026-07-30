@@ -2,19 +2,23 @@ module Main exposing (main)
 
 import Ipe.Io as Io
 
--- #158 C2 string-literal ctor-payload desugaring (depth 1, direct arg):
--- `Just "live"` desugars to a fresh `String` binder in that ctor-arg slot plus
--- an arm-level equality guard (`binder == "live"`) — Rust cannot literal-match
--- a `&str` pattern against the owned `String` ctor FIELD directly. Positive
--- control for the depth-2 fail-closed gate in
--- `nested_strlit_two_levels_gated` (same file, adjacent test).
+-- #158 C2 string-literal payload matching: a `Just`-wrapped string, matched by
+-- the literal `"live"` in an inner `case` over the payload (String is an open
+-- type, so its `_` fallback is not a closed-union catch-all). The outer `Maybe`
+-- match names each constructor explicitly. Positive control for the depth-2
+-- fail-closed gate in `nested_strlit_two_levels_gated` (adjacent test).
 f : Maybe String -> String
 f m =
     case m of
-        Just "live" ->
-            "live"
+        Just s ->
+            case s of
+                "live" ->
+                    "live"
 
-        _ ->
+                _ ->
+                    "other"
+
+        Nothing ->
             "other"
 
 

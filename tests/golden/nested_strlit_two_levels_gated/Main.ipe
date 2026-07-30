@@ -22,7 +22,10 @@ f nested =
         Just (Just "x") ->
             "matched"
 
-        _ ->
+        Nothing ->
+            "other"
+
+        Just _ ->
             "other"
 
 

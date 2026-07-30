@@ -6,13 +6,13 @@ import Ipe.List
 -- Minimal repro for the `24-tui-kitchen-sink` SEAL violation: `ipec build`
 -- exits 0 but the emitted crate fails `cargo build` with two INDEPENDENT
 -- E0308 errors, both on the entry-point shape `main = case <Maybe String
--- scrutinee> of Just "literal" -> task; _ -> task`.
+-- scrutinee> of Just s -> (case s of "literal" -> task; _ -> task); Nothing ->
+-- task`.
 --
--- Defect 1 — string-literal ctor-payload sub-pattern: `Just "live"` lowered
--- the nested literal straight to a bare `Pat::Str`, emitted as
--- `IpeMaybe::Just("live")`. Rust cannot match a `&str` literal pattern
--- against an owned `String` ctor field (E0308: expected `String`, found
--- `&str`).
+-- Defect 1 — string-literal payload matching: matching the payload string must
+-- not emit a bare `&str` literal pattern against the owned `String` ctor field
+-- (`IpeMaybe::Just("live")`, an E0308: expected `String`, found `&str`). The
+-- inner `case` over the unwrapped `String` matches it via `.as_str()`.
 --
 -- Defect 2 — entry-point task elision only recognised a FLAT
 -- `main = task` body. A `case`-branched body where EVERY arm returns a
@@ -26,8 +26,13 @@ mode =
 
 main =
     case mode of
-        Just "live" ->
-            Io.println "live mode"
+        Just s ->
+            case s of
+                "live" ->
+                    Io.println "live mode"
 
-        _ ->
+                _ ->
+                    Io.println "default mode"
+
+        Nothing ->
             Io.println "default mode"
