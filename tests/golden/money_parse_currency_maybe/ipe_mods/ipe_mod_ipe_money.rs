@@ -254,7 +254,64 @@ pub(crate) fn user_ipe_money_currency_name(c: IpeMoneyCurrency) -> String {
 pub(crate) fn user_ipe_money_known_currency(c: IpeMoneyCurrency) -> bool {
     match c {
         IpeMoneyCurrency::CurrencyRaw(_) => false,
-        _ => true,
+        IpeMoneyCurrency::USD
+        | IpeMoneyCurrency::EUR
+        | IpeMoneyCurrency::GBP
+        | IpeMoneyCurrency::JPY
+        | IpeMoneyCurrency::CHF
+        | IpeMoneyCurrency::AUD
+        | IpeMoneyCurrency::CAD
+        | IpeMoneyCurrency::NZD
+        | IpeMoneyCurrency::SEK
+        | IpeMoneyCurrency::NOK
+        | IpeMoneyCurrency::DKK
+        | IpeMoneyCurrency::CNY
+        | IpeMoneyCurrency::HKD
+        | IpeMoneyCurrency::SGD
+        | IpeMoneyCurrency::KRW
+        | IpeMoneyCurrency::TWD
+        | IpeMoneyCurrency::INR
+        | IpeMoneyCurrency::THB
+        | IpeMoneyCurrency::MYR
+        | IpeMoneyCurrency::IDR
+        | IpeMoneyCurrency::PHP
+        | IpeMoneyCurrency::VND
+        | IpeMoneyCurrency::BRL
+        | IpeMoneyCurrency::MXN
+        | IpeMoneyCurrency::ARS
+        | IpeMoneyCurrency::CLP
+        | IpeMoneyCurrency::ZAR
+        | IpeMoneyCurrency::TRY
+        | IpeMoneyCurrency::RUB
+        | IpeMoneyCurrency::UAH
+        | IpeMoneyCurrency::PLN
+        | IpeMoneyCurrency::CZK
+        | IpeMoneyCurrency::HUF
+        | IpeMoneyCurrency::RON
+        | IpeMoneyCurrency::BGN
+        | IpeMoneyCurrency::AED
+        | IpeMoneyCurrency::SAR
+        | IpeMoneyCurrency::QAR
+        | IpeMoneyCurrency::KWD
+        | IpeMoneyCurrency::BHD
+        | IpeMoneyCurrency::OMR
+        | IpeMoneyCurrency::JOD
+        | IpeMoneyCurrency::ILS
+        | IpeMoneyCurrency::EGP
+        | IpeMoneyCurrency::NGN
+        | IpeMoneyCurrency::KES
+        | IpeMoneyCurrency::GHS
+        | IpeMoneyCurrency::MAD
+        | IpeMoneyCurrency::TND
+        | IpeMoneyCurrency::DZD
+        | IpeMoneyCurrency::PKR
+        | IpeMoneyCurrency::BDT
+        | IpeMoneyCurrency::LKR
+        | IpeMoneyCurrency::NPR
+        | IpeMoneyCurrency::BTC
+        | IpeMoneyCurrency::ETH
+        | IpeMoneyCurrency::USDT
+        | IpeMoneyCurrency::USDC => true,
     }
 }
 pub(crate) fn user_ipe_money_is_known_code(code: String) -> bool {

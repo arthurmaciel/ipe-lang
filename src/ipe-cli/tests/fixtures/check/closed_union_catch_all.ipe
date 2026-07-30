@@ -1,0 +1,21 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+
+type Color
+    = Red
+    | Green
+    | Blue
+
+name : Color -> String
+name c =
+    case c of
+        Red ->
+            "red"
+
+        _ ->
+            "other"
+
+main : Task ()
+main =
+    Io.println (name Red)

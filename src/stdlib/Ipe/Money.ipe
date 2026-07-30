@@ -199,14 +199,21 @@ currencyName c =
 
 
 -- | True for every named Currency variant (USD, JPY, BTC, …).
--- False ONLY for `CurrencyRaw _`.
+-- False ONLY for `CurrencyRaw _`. The named variants are enumerated as one
+-- or-pattern so adding a Currency variant forces an update here instead of
+-- silently reporting as known.
 knownCurrency : Currency -> Bool
 knownCurrency c =
     case c of
         CurrencyRaw _ ->
             False
 
-        _ ->
+        USD | EUR | GBP | JPY | CHF | AUD | CAD | NZD | SEK | NOK | DKK |
+            CNY | HKD | SGD | KRW | TWD | INR | THB | MYR | IDR | PHP | VND |
+            BRL | MXN | ARS | CLP | ZAR | TRY | RUB | UAH | PLN | CZK | HUF |
+            RON | BGN | AED | SAR | QAR | KWD | BHD | OMR | JOD | ILS | EGP |
+            NGN | KES | GHS | MAD | TND | DZD | PKR | BDT | LKR | NPR | BTC |
+            ETH | USDT | USDC ->
             True
 
 

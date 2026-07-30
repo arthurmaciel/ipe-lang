@@ -112,8 +112,12 @@ pub struct SolvedTypes {
     /// generic parameter.
     pub bounds: BTreeMap<(Vec<Symbol>, Symbol), BTreeMap<Symbol, TyBounds>>,
     /// Non-fatal diagnostics collected during type-checking (e.g. IPE-T0011
-    /// `RedundantCaseBranch`). These are [`Severity::Warning`] findings: callers
-    /// MUST print them but MUST NOT treat them as compilation failures.
+    /// `RedundantCaseBranch`, IPE-L0124). Every diagnostic reaching this field
+    /// is [`Severity::Warning`]: callers MUST print them but MUST NOT treat them
+    /// as compilation failures. Error-severity diagnostics collected during the
+    /// same passes (IPE-T0018 over a closed union) never reach here — [`infer`]
+    /// converts any collected `Severity::Error` into a returned `Err` before
+    /// building this value, so a `SolvedTypes` witnesses a program that compiles.
     pub warnings: Vec<Diagnostic>,
     /// Per-typed-binding map from union-find representative id to annotation
     /// variable symbol, keyed by `(home, def_name)`.
@@ -449,9 +453,13 @@ fn infer_core(
         &generated.route_witness_checks
     ));
 
-    // Non-fatal diagnostics collected during the post-solve deferred passes and
-    // the exhaustiveness pass. All are `Severity::Warning`: callers MUST print
-    // them but MUST NOT treat them as compilation failures.
+    // Diagnostics collected during the post-solve deferred passes and the
+    // exhaustiveness pass. Most are `Severity::Warning` (IPE-L0124, IPE-T0011)
+    // and stay in `SolvedTypes::warnings` for the caller to print. The
+    // exhaustiveness pass may also collect a `Severity::Error` (IPE-T0018 over a
+    // closed union); those are partitioned out below and promoted to a returned
+    // `Err`, so the collected channel that survives into `SolvedTypes` carries
+    // only warnings.
     let mut warnings: Vec<Diagnostic> = Vec::new();
 
     // For routed `Web.app` calls: if the now-settled Model type has a `page`
@@ -474,10 +482,27 @@ fn infer_core(
     // End-of-checking exhaustiveness + redundancy pass. Running it here — after
     // the solver settles — makes the lowerer's `Match::new` exhaustiveness
     // contract a genuinely unreachable compiler-bug case.
-    // Redundant-branch warnings (IPE-T0011) are collected rather than returned
-    // as errors — they are Severity::Warning and must not abort compilation.
-    // They join the same `warnings` sink already carrying any IPE-L0124.
+    // The pass collects into `warnings` rather than early-returning on the first
+    // finding, so all offending sites are reported in one run. IPE-T0011 is a
+    // Warning and must not abort; IPE-T0018 over a closed union is an Error.
+    // IPE-T0010 (non-exhaustive) still early-returns `Err` from inside the pass.
     lift!(exhaust::check(m, &dep_unions, interner, &mut warnings));
+
+    // Fail-closed promotion: a diagnostic collected above is only a compilation
+    // failure if it is Error-severity. Partition the sink — Warning-severity
+    // diagnostics ride on in `SolvedTypes::warnings`; the first Error-severity
+    // diagnostic (IPE-T0018 over a closed union) is returned as `Err`, failing
+    // compilation. Without this, an Error pushed onto `warnings` would render
+    // but the program would still compile — the exact silent-accept this feature
+    // exists to prevent. All Error sites are already collected; returning the
+    // first still reports every warning-severity finding and fails the build.
+    let first_error = warnings
+        .iter()
+        .position(|d| d.severity() == ipe_diagnostics::Severity::Error);
+    if let Some(idx) = first_error {
+        let err = warnings.swap_remove(idx);
+        return Err((err, Vec::new()));
+    }
 
     // Scoped solve only: reify every exported UNTYPED binding's promoted
     // scheme for the module's typed interface. Must run HERE — after the
@@ -3368,13 +3393,15 @@ mod tests {
     // IPE-T0018: wildcard covers known constructors
     // -----------------------------------------------------------------------
 
-    /// A wildcard arm that swallows a NAMED remaining constructor of a closed ADT
-    /// must produce exactly one IPE-T0018 warning; `infer` must still return Ok
-    /// (it is a warning, not an error).
+    /// FAIL-CLOSED PROOF: a catch-all arm that absorbs a NAMED remaining
+    /// constructor of a closed ADT must make `infer` FAIL (return `Err`), not
+    /// merely collect a diagnostic into `warnings`. This asserts the promotion
+    /// at the compile boundary — the crux that keeps the feature from failing
+    /// open (a diagnostic that renders but still compiles).
     #[test]
-    fn wildcard_covering_known_ctor_emits_t0018_warning() {
+    fn wildcard_covering_known_ctor_fails_compilation() {
         // `Color` has three constructors; only `Red` is named — `_` silently
-        // covers `Green` and `Blue`. The lint must fire naming both.
+        // absorbs `Green` and `Blue`. Compilation must FAIL naming both.
         let src = "module Main exposing (main)\n\
                    import Ipe.Prelude exposing (..)\n\
                    type Color = Red | Green | Blue\n\
@@ -3387,39 +3414,82 @@ mod tests {
             return;
         };
         let r = infer(&m, &mut i);
-        let types = r.expect("wildcard-covers-known-ctors is a warning (IPE-T0018), not an error");
-        let t0018: Vec<_> = types
-            .warnings
-            .iter()
-            .filter(|w| {
-                matches!(
-                    w,
-                    Diagnostic::Type {
-                        msg: TypeError::WildcardCoversKnownConstructors { .. },
-                        ..
-                    }
-                )
-            })
-            .collect();
-        assert_eq!(
-            t0018.len(),
-            1,
-            "expected exactly one IPE-T0018 warning, got {:?}",
-            types.warnings
+        let err = r.expect_err(
+            "a closed-union catch-all must FAIL compilation (not just warn) — \
+             this is the fail-closed boundary",
         );
-        if let Some(Diagnostic::Type {
+        // The failure must be Error-severity IPE-T0018 naming the absorbed ctors.
+        assert_eq!(
+            err.severity(),
+            ipe_diagnostics::Severity::Error,
+            "IPE-T0018 over a closed union must be Error-severity"
+        );
+        assert!(
+            matches!(
+                &err,
+                Diagnostic::Type {
+                    msg: TypeError::WildcardCoversKnownConstructors { .. },
+                    ..
+                }
+            ),
+            "expected IPE-T0018 WildcardCoversKnownConstructors, got {err:?}"
+        );
+        if let Diagnostic::Type {
             msg: TypeError::WildcardCoversKnownConstructors { constructors },
             ..
-        }) = t0018.first().copied()
+        } = &err
         {
             let names: Vec<&str> = constructors.iter().map(AsRef::as_ref).collect();
-            // The remaining constructors are `Green` and `Blue` (in declaration order).
             assert_eq!(
                 names,
                 vec!["Green", "Blue"],
-                "lint must name the covered ctors"
+                "the error must name the absorbed ctors in declaration order"
             );
         }
+    }
+
+    /// FAIL-CLOSED, MULTI-SITE: a module with more than one closed-union
+    /// catch-all still FAILS compilation. The pass collects every offending site
+    /// before the promotion (better UX than aborting on the first), and the
+    /// promotion returns an Error so the build genuinely fails. This guards
+    /// against a plumbing regression that would push the Error onto the
+    /// warnings-only channel and silently compile.
+    #[test]
+    fn multiple_closed_union_catch_alls_fail_compilation() {
+        // Two functions, each with its own closed-union catch-all.
+        let src = "module Main exposing (main)\n\
+                   import Ipe.Prelude exposing (..)\n\
+                   type Color = Red | Green | Blue\n\
+                   name : Color -> String\n\
+                   name c =\n        case c of\n\
+                   \x20           Red -> \"red\"\n\
+                   \x20           _ -> \"other\"\n\
+                   toMaybe : Color -> Maybe Int\n\
+                   toMaybe c =\n        case c of\n\
+                   \x20           Green -> Just 1\n\
+                   \x20           _ -> Nothing\n\
+                   main =\n    Io.println (String.fromInt 0)\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        let err =
+            r.expect_err("a module with multiple closed-union catch-alls must FAIL compilation");
+        assert_eq!(
+            err.severity(),
+            ipe_diagnostics::Severity::Error,
+            "the returned diagnostic must be Error-severity"
+        );
+        assert!(
+            matches!(
+                err,
+                Diagnostic::Type {
+                    msg: TypeError::WildcardCoversKnownConstructors { .. },
+                    ..
+                }
+            ),
+            "the failure must be an IPE-T0018 error, got {err:?}"
+        );
     }
 
     /// A `case` with a wildcard arm where the arms before it cover ALL constructors

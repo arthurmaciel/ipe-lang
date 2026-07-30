@@ -4,18 +4,22 @@ import Ipe.Io as Io
 import Ipe.List
 import Ipe.String
 
--- #158 Class-4 item C, Repro 1: a cons sub-pattern nested inside a constructor
--- payload (`Just (h :: t)`). Used to fail-closed with IPE-L0116 because a
--- `Vec<T>` enum FIELD cannot be slice-pattern-matched inline. Now it lowers to
--- a fresh `Vec` binder + an arm-level length guard (`.len() >= 1`), with `h`
--- recovered by indexing and `t` by `List.drop`.
+-- #158 Class-4 item C, Repro 1: a `Just`-wrapped list, discriminated by an
+-- inner `case` over the list payload. The outer `case` handles each `Maybe`
+-- constructor explicitly (no closed-union catch-all), and the inner `case xs`
+-- over `List` splits `h :: t` from `[]`.
 f : Maybe (List Int) -> Int
 f m =
     case m of
-        Just (h :: t) ->
-            h
+        Just xs ->
+            case xs of
+                h :: t ->
+                    h
 
-        _ ->
+                [] ->
+                    0
+
+        Nothing ->
             0
 
 
