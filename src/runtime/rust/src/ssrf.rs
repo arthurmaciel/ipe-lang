@@ -8,12 +8,17 @@
 //! semantics. The reqwest-coupled `ssrf_apply` (it takes a `reqwest::ClientBuilder`)
 //! stays in `http_client.rs` and imports the helpers below.
 //!
-//! ## SSRF protection (opt-in)
+//! ## SSRF protection
 //!
-//! Set `IPE_HTTP_DENY_PRIVATE=1` (or `on` / `true`) to block requests whose
-//! resolved host is loopback, RFC-1918 private, link-local, unique-local (ULA),
-//! unspecified, or v4-mapped-private. OFF by default so dev against `localhost`
-//! keeps working.
+//! Blocks requests whose resolved host is loopback, RFC-1918 private,
+//! link-local, unique-local (ULA), unspecified, or v4-mapped-private.
+//! The guard is **default-ON in production, default-OFF in dev**:
+//!
+//! * `IPE_HTTP_DENY_PRIVATE` set to a truthy value (`1`/`on`/`true`) → ON.
+//! * `IPE_HTTP_DENY_PRIVATE` set to anything else → OFF (explicit opt-out).
+//! * `IPE_HTTP_DENY_PRIVATE` unset → follows the production gate
+//!   (`production_from_env`): ON in production, OFF in dev so localhost
+//!   development keeps working.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 use url::Url;
