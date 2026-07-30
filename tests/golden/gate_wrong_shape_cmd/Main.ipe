@@ -1,15 +1,13 @@
 module Main exposing (main)
 
-import Ipe.Tea.Terminal as Terminal
-import Ipe.Tea.Terminal.Cmd as Cmd
-import Ipe.Tea.Terminal.Sub as Sub
+-- Cross-shape Cmd/Sub gate (IPE-N0035): this is a Terminal app (its `main` calls
+-- `Terminal.appLines`), but it imports the Web shape's `Cmd`. `Cmd` is
+-- shape-specific and reached through the app's own shape, so the wrong-shape
+-- import fails closed here, before any Rust is generated.
 
--- A mis-arity `Cmd` ANNOTATION (`Cmd` takes exactly one message type) used to
--- ICE (IPE-I0001) via ir_type_from_canon's catch-all. It now fails closed with
--- the clean IPE-T0016, symmetric with the Task gate.
-f : Cmd Int Bool -> Int
-f _ =
-    0
+import Ipe.Tea.Terminal as Terminal
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Terminal.Sub as Sub
 
 type Msg
     = GotLine String
@@ -19,7 +17,7 @@ type alias Model =
 
 init : () -> ( Model, Cmd Msg )
 init _unit =
-    ( { n = f Cmd.none }, Cmd.none )
+    ( { n = 0 }, Cmd.none )
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update _msg model =

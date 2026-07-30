@@ -22,8 +22,8 @@ import Ipe.Tea.Terminal as Terminal
 import Ipe.File as File
 import Ipe.Path as Path
 import Ipe.Task as Task
-import Ipe.Cmd as Cmd
-import Ipe.Sub as Sub
+import Ipe.Tea.Terminal.Cmd as Cmd
+import Ipe.Tea.Terminal.Sub as Sub
 import Ipe.List as List
 import Ipe.Ui as Ui
 import Ipe.Ui exposing (Element)

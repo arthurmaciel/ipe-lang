@@ -31,8 +31,8 @@ import Ipe.System as System
 import Ipe.Task as Task
 import Ipe.Tui as Tui
 import Ipe.Web as Live
-import Ipe.Cmd as Cmd
-import Ipe.Sub as Sub
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Ui exposing (Element)
 import Ipe.Ui.Background as Background

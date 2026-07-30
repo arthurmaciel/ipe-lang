@@ -10,8 +10,8 @@ import Ipe.Task as Task
 import Ipe.Html as Html
 import Ipe.Io as Io
 import Ipe.Live as Live
-import Ipe.Cmd as Cmd
-import Ipe.Sub as Sub
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
 import Ipe.Time as Time
 import State exposing (..)
 import Lib.Db as Db

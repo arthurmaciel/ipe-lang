@@ -290,6 +290,94 @@ fn add_import_quick_fix_sorts_among_existing_imports() {
     );
 }
 
+/// IPE-N0035 quick-fix: a Terminal app importing the Web shape's `Cmd` yields a
+/// "Change import to `Ipe.Tea.Terminal.Cmd`" code action whose edit, once
+/// applied, repoints the import to the app's shape and clears the diagnostic
+/// (SEAL — the program compiles), leaving the `as Cmd` binding untouched.
+#[test]
+fn wrong_shape_cmd_quick_fix_repoints_the_import_and_clears_the_diagnostic() {
+    let src = "module Main exposing (main)\n\n\
+        import Ipe.Tea.Terminal as Terminal\n\
+        import Ipe.Tea.Web.Cmd as Cmd\n\
+        import Ipe.Tea.Terminal.Sub as Sub\n\n\
+        init _u = ( { n = 0 }, Cmd.none )\n\
+        update _m model = ( model, Cmd.none )\n\
+        view _m = \"ok\"\n\
+        subscriptions _m = Sub.none\n\
+        onLine l = l\n\
+        main =\n    \
+            Terminal.appLines { init = init, update = update, view = view, subscriptions = subscriptions, onLine = onLine }\n";
+    let mut db = IpeDatabase::new();
+    let entry = file(&db, &["Main"], src);
+    let root = root_of(&db, &[(&["Main"], entry)]);
+
+    // The real compiler diagnostic must be IPE-N0035.
+    let all = collect(&db, root, entry);
+    let main = diags_for(&all, &["Main"]);
+    let diag = main
+        .diagnostics
+        .iter()
+        .find(|d| d.code().as_str() == "IPE-N0035")
+        .expect("an IPE-N0035 diagnostic");
+    let lsp_diag = to_lsp(diag, src, PositionEncoding::Utf16);
+
+    let uri = Url::from_file_path("/fake/Main.ipe").expect("uri");
+    let range = Range {
+        start: lsp_diag.range.start,
+        end: lsp_diag.range.end,
+    };
+    let actions = code_actions(
+        DbView {
+            db: &db,
+            root,
+            entry,
+        },
+        &["Main".to_owned()],
+        &uri,
+        range,
+        std::slice::from_ref(&lsp_diag),
+        src,
+        PositionEncoding::Utf16,
+    );
+    let action = actions
+        .into_iter()
+        .find_map(|a| match a {
+            CodeActionOrCommand::CodeAction(action) => Some(action),
+            CodeActionOrCommand::Command(_) => None,
+        })
+        .expect("one CodeAction for IPE-N0035");
+    assert_eq!(action.title, "Change import to Ipe.Tea.Terminal.Cmd");
+    let edit = action
+        .edit
+        .as_ref()
+        .and_then(|e| e.changes.as_ref())
+        .and_then(|c| c.values().next())
+        .and_then(|v| v.first())
+        .expect("edit present");
+
+    // SEAL: applying the edit repoints the import (keeping `as Cmd`) and the
+    // module compiles — N0035 is gone.
+    let fixed = apply_edit(src, edit);
+    assert!(
+        fixed.contains("import Ipe.Tea.Terminal.Cmd as Cmd"),
+        "the fixed source repoints to the Terminal shape, keeping the alias: {fixed:?}"
+    );
+    assert!(
+        !fixed.contains("Ipe.Tea.Web.Cmd"),
+        "the wrong-shape import is gone: {fixed:?}"
+    );
+    assert!(ipe_db::set_text_if_changed(&mut db, entry, &fixed));
+    let all = collect(&db, root, entry);
+    assert!(
+        !diags_for(&all, &["Main"])
+            .diagnostics
+            .iter()
+            .any(|d| d.code().as_str() == "IPE-N0035"),
+        "after applying the quick-fix the wrong-shape diagnostic is gone, got {:?}",
+        diags_for(&all, &["Main"]).diagnostics
+    );
+}
+
 #[test]
 fn edit_converges_error_then_clean() {
     let mut db = IpeDatabase::new();

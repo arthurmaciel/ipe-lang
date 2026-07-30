@@ -9,9 +9,9 @@ module Main exposing (main)
 -- mandatory per CLAUDE.md Limitation #17.
 
 import Ipe.Prelude exposing (..)
-import Ipe.Cmd as Cmd
+import Ipe.Tea.Web.Cmd as Cmd
 import Ipe.Web exposing (app, route)
-import Ipe.Sub as Sub
+import Ipe.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Ui exposing (Element)
 import Ipe.Ui.Background as Background

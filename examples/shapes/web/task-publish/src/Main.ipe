@@ -24,8 +24,8 @@ module Main exposing (main)
 import Ipe.Tea.Web as Web
 import Ipe.PubSub as PubSub
 import Ipe.Ui as Ui
-import Ipe.Cmd as Cmd
-import Ipe.Sub as Sub
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
 import Ipe.String as String
 
 

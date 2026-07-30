@@ -1,14 +1,51 @@
 module Main exposing (main)
-import Ipe.Io as Io
-import Ipe.Cmd
-import Ipe.Task
 
--- M5c: Cmd.perform construct-only gate.
--- Constructs a Cmd.perform value and discards it; confirms type+emit+link
--- soundness for the TEA wiring without a dispatch loop.
+-- Cmd.perform construct gate: an `init` command built with `Cmd.perform`
+-- confirms type+emit+link soundness for the TEA wiring. `Terminal.appLines`
+-- renders `view` once at stdin EOF and exits 0.
+
+import Ipe.Tea.Terminal as Terminal
+import Ipe.Tea.Terminal.Cmd as Cmd
+import Ipe.Tea.Terminal.Sub as Sub
+import Ipe.Task as Task
+
+type Msg
+    = Performed
+    | GotLine String
+
+type alias Model =
+    { done : Bool }
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { done = False }, Cmd.perform (Task.succeed 1) (\_result -> Performed) )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Performed ->
+            ( { model | done = True }, Cmd.none )
+
+        GotLine _line ->
+            ( model, Cmd.none )
+
+view : Model -> String
+view _model =
+    "ok"
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+onLine : String -> Msg
+onLine line =
+    GotLine line
 
 main =
-    let
-        _ = Cmd.perform (Task.succeed 1) (\r -> 0)
-    in
-    Io.println "ok"
+    Terminal.appLines
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , onLine = onLine
+        }

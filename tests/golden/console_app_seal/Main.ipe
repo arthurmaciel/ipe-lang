@@ -4,9 +4,9 @@ module Main exposing (main)
 -- Expected: ipec-0 AND cargo-0 on the emitted project.
 
 import Ipe.Tea.Terminal as Terminal
-import Ipe.Cmd
+import Ipe.Tea.Terminal.Cmd
 import Ipe.String
-import Ipe.Sub
+import Ipe.Tea.Terminal.Sub
 
 type Msg = GotLine String
 
