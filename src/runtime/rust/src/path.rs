@@ -44,6 +44,10 @@
 //! decision about which paths a program is allowed to reach.
 
 use super::IpeResult;
+// The lexical validation algorithm lives once in `ipe_path_core` (shared with
+// the compiler's `path "…"` gate); this module drives it with the HOST
+// separator regime so the runtime seal stays target-specific.
+use ipe_path_core::{clean_with, escapes_root, has_disguised_dotdot, has_nul};
 
 // The platform separator set the lexical engine treats as element boundaries.
 // Unix: `/` alone. Windows: BOTH `\` and `/` — Windows accepts either at the
@@ -89,7 +93,7 @@ impl super::stringify::IpeStringify for Path {
 /// matching Go `filepath.Clean("")`.
 #[must_use]
 pub fn path_from_string<E: From<String>>(s: String) -> IpeResult<E, Path> {
-    if s.as_bytes().contains(&0) {
+    if has_nul(&s) {
         return IpeResult::Err(
             "Ipe.Path: path contains a NUL byte (a syscall-boundary truncation / traversal risk)"
                 .to_string()
@@ -160,211 +164,13 @@ impl Path {
     }
 }
 
-/// Is byte `c` an element separator under the active separator set? Unix honours
-/// only `/`; Windows ALSO honours `\`, because Windows accepts either at a
-/// syscall — so both must count, or the un-honoured one smuggles a `..` past the
-/// traversal scan.
-fn is_sep(c: u8, windows: bool) -> bool {
-    c == b'/' || (windows && c == b'\\')
-}
-
-/// Length in bytes of the leading VOLUME name of `path` under Windows rules
-/// (`0` on Unix, where no path element is ever consumed as a volume). Ported
-/// from Go `path/filepath.volumeNameLen`. Recognised prefixes:
-/// * `\\?\…` / `\\.\…` — verbatim / device namespaces (consume up to the next
-///   separator after the namespace tag);
-/// * `\\server\share` — a UNC root (both the server and the share component);
-/// * `C:` — a drive designator (two bytes).
-///
-/// The volume is copied through `clean` untouched and is the floor the `..`
-/// scan can never pop below — so `..` can neither delete a drive letter nor
-/// climb out of a UNC share.
-fn volume_name_len(path: &str, windows: bool) -> usize {
-    if !windows {
-        return 0;
-    }
-    let b = path.as_bytes();
-    let n = b.len();
-    let at = |i: usize| -> Option<u8> { b.get(i).copied() };
-    // `C:` drive designator: an ASCII letter followed by a colon.
-    if at(0).is_some_and(|c| c.is_ascii_alphabetic()) && at(1) == Some(b':') {
-        return 2;
-    }
-    // UNC / device / verbatim: `\\` or `//` (any mix) followed by a component.
-    if n >= 2
-        && at(0).is_some_and(|c| is_sep(c, windows))
-        && at(1).is_some_and(|c| is_sep(c, windows))
-    {
-        // Skip the first component (server, or `?`/`.` namespace tag).
-        let mut i = 2usize;
-        while i < n && !at(i).is_some_and(|c| is_sep(c, windows)) {
-            i += 1;
-        }
-        if i == n {
-            // `\\server` with no trailing separator — whole string is the volume.
-            return n;
-        }
-        // Consume the single separator, then the second component (the share).
-        i += 1;
-        while i < n && !at(i).is_some_and(|c| is_sep(c, windows)) {
-            i += 1;
-        }
-        return i;
-    }
-    0
-}
-
-/// Could a path element alias to the `..` parent token once Windows applies its
-/// filename canonicalisation? Windows strips trailing dots and spaces, so `".. "`
-/// and `".. . "` name the parent directory — yet the lexical `..` scan, which
-/// matches only the exact `..` token, would treat them as ordinary filenames and
-/// miss the climb. Fail closed on any element that is made up SOLELY of dots and
-/// spaces and carries at least two dots (`..`, `.. `, `. .`, `...`, ` .. `, …):
-/// none is a legitimate filename, and each can canonicalise to `..`. Scanned
-/// over the Windows separator set (`\` and `/`).
-///
-/// The exact `..` token is deliberately EXCLUDED here — the lexical scan already
-/// counts it and `escapes_root` rejects any that climb out — so an in-bounds
-/// `a\..\b` still resolves instead of being false-rejected.
-fn has_disguised_dotdot(path: &str) -> bool {
-    let windows = true;
-    path.as_bytes().split(|&c| is_sep(c, windows)).any(|elem| {
-        if elem == b".." {
-            return false;
-        }
-        let only_dots_and_spaces = elem.iter().all(|&c| c == b'.' || c == b' ');
-        let dot_count = elem.iter().filter(|&&c| c == b'.').count();
-        only_dots_and_spaces && dot_count >= 2
-    })
-}
-
-/// Does a CLEANED path climb above its root? Checks the path AFTER its volume
-/// prefix (a drive/UNC volume is itself the root and can never be escaped). True
-/// when that remainder is the whole `..` element or begins with a `..` element —
-/// the two shapes `clean` leaves when leading `..`s could not be resolved away.
-/// A rooted remainder (begins with a separator) can never escape: `clean` stops
-/// `..` at the root. Separator-aware so a Windows `..\` escape is caught exactly
-/// as a Unix `../` is.
-fn escapes_root(cleaned: &str, windows: bool) -> bool {
-    let vol = volume_name_len(cleaned, windows);
-    let rest = cleaned.get(vol..).unwrap_or("");
-    let rb = rest.as_bytes();
-    if rest == ".." {
-        return true;
-    }
-    // begins with a `..` element: `..` then a separator.
-    rb.first().copied() == Some(b'.')
-        && rb.get(1).copied() == Some(b'.')
-        && rb.get(2).copied().is_some_and(|c| is_sep(c, windows))
-}
-
-/// Faithful port of Go `path/filepath.Clean`, driven by the platform separator
-/// set. Lexically simplifies a path: collapses repeated separators, resolves
-/// `.`/`..` elements, drops a trailing separator (except a root), normalises
-/// every input separator to the platform `SEP`, and preserves a leading Windows
-/// volume prefix (drive / UNC) that the `..` scan can never pop below. Pure byte
-/// work — multi-byte UTF-8 path elements are copied intact (their bytes are
-/// never a separator or ASCII `.`), so the result is valid UTF-8.
+/// Lexically clean `path` under the HOST separator regime (Unix `/`, or the
+/// Windows `\`/`/` set with volume-prefix parsing on a Windows build). Thin
+/// wrapper over the shared [`ipe_path_core::clean_with`] so the runtime and the
+/// compiler's `path "…"` gate clean identically. Used by the pure helpers
+/// ([`path_dir`]) that re-clean a derived substring.
 fn clean(path: &str) -> String {
     clean_with(path, WINDOWS)
-}
-
-/// The host-independent cleaner. `windows == true` selects the Windows
-/// separator set (`\` and `/`) plus volume-prefix parsing; `false` is Unix
-/// (`/` only, no volume). Split out so both branches are unit-testable on any
-/// host — the Windows traversal defences are proven on Linux CI, not left to a
-/// Windows-only build.
-fn clean_with(path: &str, windows: bool) -> String {
-    if path.is_empty() {
-        return ".".to_string();
-    }
-    let b = path.as_bytes();
-    let n = b.len();
-    // Total byte access (no `[]` indexing — clippy::indexing_slicing / no-panic
-    // gate). Out-of-range reads as `None`, never panics.
-    let at = |i: usize| -> Option<u8> { b.get(i).copied() };
-    let sep = if windows { b'\\' } else { b'/' };
-
-    let vol = volume_name_len(path, windows);
-    let mut out: Vec<u8> = Vec::with_capacity(n + 1);
-    // Copy the volume prefix through verbatim, normalising its separators (a UNC
-    // `//server/share` becomes `\\server\share`). The `..` scan's floor,
-    // `dotdot`, is anchored past it, so `..` can never delete or climb out of a
-    // drive/UNC root.
-    for i in 0..vol {
-        match at(i) {
-            Some(c) if is_sep(c, windows) => out.push(sep),
-            Some(c) => out.push(c),
-            None => {}
-        }
-    }
-    // Width of the emitted volume prefix. The relative-part separator decisions
-    // floor here (0 for a Unix/relative path), so consecutive leading `..`s stay
-    // separated (`../..`, never a glued `....` that `escapes_root` would miss).
-    let volw = out.len();
-    let mut r = vol;
-    // A path is rooted when the byte just after the volume is a separator. A
-    // BARE drive (`C:` with no following separator) is drive-RELATIVE, not
-    // rooted — so `C:..\x` keeps its leading `..` and is rejected as an escape,
-    // never silently resolved against the drive root.
-    let rooted = at(vol).is_some_and(|c| is_sep(c, windows));
-    // `dotdot` is the index in `out` past which leading `..`s have been written
-    // (for a relative path) or past the volume + root separator — popping never
-    // crosses it.
-    let mut dotdot = out.len();
-    if rooted {
-        out.push(sep);
-        r += 1;
-        dotdot = out.len();
-    }
-    while r < n {
-        if at(r).is_some_and(|c| is_sep(c, windows)) {
-            // empty path element → skip
-            r += 1;
-        } else if at(r) == Some(b'.')
-            && (r + 1 == n || at(r + 1).is_some_and(|c| is_sep(c, windows)))
-        {
-            // `.` element → skip
-            r += 1;
-        } else if at(r) == Some(b'.')
-            && at(r + 1) == Some(b'.')
-            && (r + 2 == n || at(r + 2).is_some_and(|c| is_sep(c, windows)))
-        {
-            // `..` element → back up
-            r += 2;
-            if out.len() > dotdot {
-                // pop the last element
-                let mut w = out.len() - 1;
-                while w > dotdot && !out.get(w).copied().is_some_and(|c| c == sep) {
-                    w -= 1;
-                }
-                out.truncate(w);
-            } else if !rooted {
-                // cannot back up → keep the `..`
-                if out.len() > volw {
-                    out.push(sep);
-                }
-                out.push(b'.');
-                out.push(b'.');
-                dotdot = out.len();
-            }
-        } else {
-            // real path element → append a separator (if needed) then the element
-            if (rooted && out.len() != dotdot) || (!rooted && out.len() != volw) {
-                out.push(sep);
-            }
-            while r < n && !at(r).is_some_and(|c| is_sep(c, windows)) {
-                if let Some(c) = at(r) {
-                    out.push(c);
-                }
-                r += 1;
-            }
-        }
-    }
-    if out.is_empty() {
-        return ".".to_string();
-    }
-    String::from_utf8(out).unwrap_or_else(|_| ".".to_string())
 }
 
 /// `Ipe.Path.base : Path -> String` — Go `filepath.Base` (Unix).
@@ -441,6 +247,8 @@ pub fn path_is_absolute(p: Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Exercised only by the Windows volume-prefix tests below.
+    use ipe_path_core::volume_name_len;
 
     fn mk(s: &str) -> Path {
         match path_from_string::<String>(s.to_string()) {
@@ -728,5 +536,78 @@ mod tests {
     #[test]
     fn win_nul_byte_still_rejected() {
         assert!(!win_seal_accepts("safe.txt\0..\\..\\Windows"));
+    }
+
+    // ── SSOT differential: compile-time gate ⊆ runtime seal on BOTH targets ────
+    //    `ipe_path_core::validate` (the all-targets compile-time gate) must NEVER
+    //    accept a string that either target's runtime `path_from_string` seal
+    //    would reject — otherwise a validated `path "…"` literal could traverse
+    //    at runtime on some target. Both seals share this crate's primitives, so
+    //    this test is the guard that keeps the compile-time gate at least as
+    //    strict as the runtime on every host.
+
+    /// The runtime seal's accept decision for a given target regime — the exact
+    /// predicate `path_from_string` applies (NUL + Windows disguise + escape),
+    /// with the separator regime fixed by `windows` rather than the host.
+    fn runtime_seal_accepts(s: &str, windows: bool) -> bool {
+        if has_nul(s) {
+            return false;
+        }
+        if windows && has_disguised_dotdot(s) {
+            return false;
+        }
+        !escapes_root(&clean_with(s, windows), windows)
+    }
+
+    /// A corpus over `{a . / \ : NUL C 1 space}` up to length 4 — every byte
+    /// that participates in a separator, a `.`/`..` element, a drive prefix, a
+    /// NUL truncation, or the disguise scan.
+    fn corpus() -> Vec<String> {
+        const ALPHABET: [char; 9] = ['a', '.', '/', '\\', ':', '\0', 'C', '1', ' '];
+        let mut out = vec![String::new()];
+        let mut frontier = vec![String::new()];
+        for _ in 0..4 {
+            let mut next = Vec::new();
+            for prefix in &frontier {
+                for c in ALPHABET {
+                    let mut s = prefix.clone();
+                    s.push(c);
+                    next.push(s);
+                }
+            }
+            out.extend(next.iter().cloned());
+            frontier = next;
+        }
+        out
+    }
+
+    #[test]
+    fn test_mirrors_runtime() {
+        for s in corpus() {
+            if ipe_path_core::validate(&s).is_ok() {
+                assert!(
+                    runtime_seal_accepts(&s, false),
+                    "compile-time gate accepted {s:?} but the Unix runtime seal rejects it"
+                );
+                assert!(
+                    runtime_seal_accepts(&s, true),
+                    "compile-time gate accepted {s:?} but the Windows runtime seal rejects it"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn compile_time_gate_rejects_the_windows_traversal_vectors() {
+        // The specific vectors from the finding: each is a Unix-clean no-op yet a
+        // traversal on a Windows target, so the all-targets compile-time gate
+        // must reject every one.
+        for vector in ["..\\secret", "C:..\\x", ".. \\x", "...", "a\\..\\..\\b"] {
+            assert_eq!(
+                ipe_path_core::validate(vector),
+                Err("traversal"),
+                "compile-time gate must reject the Windows traversal vector {vector:?}"
+            );
+        }
     }
 }

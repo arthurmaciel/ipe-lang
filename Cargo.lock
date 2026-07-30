@@ -2038,6 +2038,7 @@ dependencies = [
  "gloo-timers",
  "hex",
  "hmac",
+ "ipe_path_core",
  "js-sys",
  "jsonwebtoken",
  "lettre",
@@ -2153,6 +2154,9 @@ dependencies = [
 [[package]]
 name = "ipe_diagnostics"
 version = "0.1.24"
+dependencies = [
+ "ipe_path_core",
+]
 
 [[package]]
 name = "ipe_ffi"
@@ -2240,6 +2244,10 @@ dependencies = [
  "ipe_intern",
  "ipe_syntax",
 ]
+
+[[package]]
+name = "ipe_path_core"
+version = "0.1.24"
 
 [[package]]
 name = "ipe_sandbox"
