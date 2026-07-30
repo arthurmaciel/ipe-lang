@@ -242,10 +242,13 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 }
 
 pub fn main_bigger() -> bool {
-    (2.5 > 1.5)
+    static CELL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    CELL.get_or_init(|| (2.5 > 1.5)).clone()
 }
 pub fn main_chosen() -> f64 {
-    (if crate::main_bigger() { 1500.0 } else { 0.02 })
+    static CELL: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+    CELL.get_or_init(|| (if crate::main_bigger() { 1500.0 } else { 0.02 }))
+        .clone()
 }
 pub fn ipe_main() -> IpeTask<()> {
     io_println(string_from_float(crate::main_chosen()))

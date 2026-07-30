@@ -242,10 +242,12 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 }
 
 pub fn main_small() -> f64 {
-    0.00001
+    static CELL: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+    CELL.get_or_init(|| 0.00001).clone()
 }
 pub fn main_large() -> f64 {
-    1000000000000000000000.0
+    static CELL: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+    CELL.get_or_init(|| 1000000000000000000000.0).clone()
 }
 pub fn ipe_main() -> IpeTask<()> {
     io_println(format!(

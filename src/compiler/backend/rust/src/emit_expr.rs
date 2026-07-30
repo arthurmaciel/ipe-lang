@@ -8762,8 +8762,81 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     // in the param's `BoundSet` — the generic clause just renders the BoundSet.
     let generic_clause = render_fn_generics(func, ret_is_task);
 
+    // A zero-parameter top-level binding is a CAF (constant applicative form) — a
+    // shared VALUE, not a function. Ipê (like Elm) evaluates it once and shares
+    // the result; emitting the body inline re-evaluates it on every reference,
+    // which reallocates a fresh value per use and, for a binding whose body
+    // reads live runtime state, can observe a different value each time. Emit the
+    // body behind a lazily-initialised, thread-safe cell so first use evaluates
+    // it exactly once and every later use returns a clone of that one value.
+    //
+    // The gate is deliberately conservative (fail closed): a static cell requires
+    // the value type to be `Sync + Send + Clone + 'static`, and the closure must
+    // capture nothing type-parametric, so the wrapper applies only to a
+    // monomorphic CAF whose return type is a plain shareable data type
+    // ([`is_share_once_safe`]). `ipe_main` is excluded — the epilogue's
+    // `block_on(ipe_main())` needs a fresh future each call. Every other binding
+    // keeps the direct inline emission.
+    let is_caf = func.params.is_empty()
+        && func.type_params.is_empty()
+        && name != "ipe_main"
+        && is_share_once_safe(ret_ty);
+    let body = if is_caf {
+        format!(
+            "static CELL: std::sync::OnceLock<{ret}> = std::sync::OnceLock::new();\n    \
+             CELL.get_or_init(|| {{ {body} }}).clone()"
+        )
+    } else {
+        body
+    };
+
     let signature = render_fn_signature(&name, &generic_clause, &params, &ret);
     Ok(format!("{signature} {{\n    {body}\n}}\n"))
+}
+
+/// Is `ty` a value type that a top-level CAF may share through a `static`
+/// [`std::sync::OnceLock`] cell — i.e. unconditionally `Clone + Send + Sync +
+/// 'static`?
+///
+/// A function-local `static OnceLock<T>` requires `T: Sync`, `get_or_init`
+/// stores the value for the process lifetime (`'static`), and the emitted fn
+/// returns `T` by value so the shared value must be `Clone`. This recognises
+/// only the plain immutable data core plus structural composites built from it —
+/// every leaf whose Rust rendering is known to satisfy all three bounds. It
+/// fails closed: any effectful, opaque-handle, function-carrying, task, or
+/// type-parametric leaf makes the whole type ineligible, so the caller keeps the
+/// direct inline emission for that binding. A `Box<dyn Fn>` carrier
+/// ([`IrType::Fun`]/[`IrType::FnOnceChain`]) is neither `Sync` nor `Clone`; an
+/// [`IrType::Task`] future is single-poll and not `Sync`; an
+/// [`IrType::Generic`] cannot appear in a `static` type at all.
+fn is_share_once_safe(ty: &IrType) -> bool {
+    match ty {
+        IrType::Int
+        | IrType::Float
+        | IrType::Bool
+        | IrType::Str
+        | IrType::Char
+        | IrType::Unit
+        | IrType::Bytes => true,
+        IrType::Maybe(inner) | IrType::List(inner) | IrType::Set(inner) => {
+            is_share_once_safe(inner)
+        }
+        IrType::Result(a, b) | IrType::Dict(a, b) => is_share_once_safe(a) && is_share_once_safe(b),
+        IrType::Tuple(items) => items.iter().all(is_share_once_safe),
+        // A closed record carries its whole field-type set, so recursing over it
+        // is complete: a field holding a `Box<dyn Fn>` (`Fun`) or any other
+        // non-shareable leaf makes the record ineligible.
+        IrType::Record(fields) => fields.values().all(is_share_once_safe),
+        // Everything else keeps the direct inline emission — Task/Cmd/Sub futures
+        // and command descriptors, `Box<dyn Fn>` function carriers, opaque runtime
+        // handles (Db, Decoder, server/web/UI/websocket types), the
+        // Json/Decimal/Order/Error family, and `Generic` type variables. A user
+        // `Enum` is excluded too: its `IrType` exposes only the type ARGUMENTS,
+        // not the variant field types, so a variant carrying a `Box<dyn Fn>`
+        // (neither `Send`/`Sync` nor `Clone`) cannot be ruled out from the type
+        // alone — the conservative choice is to leave every enum-typed CAF inline.
+        _ => false,
+    }
 }
 
 /// Render a function signature `pub fn NAME<GEN>(PARAMS) -> RET`, laid out to the
