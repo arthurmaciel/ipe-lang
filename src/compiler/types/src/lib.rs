@@ -3559,6 +3559,126 @@ mod tests {
         );
     }
 
+    /// A `case` over `Bool` (`True -> …; _ -> …`) must NOT emit IPE-T0018.
+    /// `Bool` is closed but its variant set is frozen by the language — no user
+    /// adds a variant — so a catch-all is a safe idiom, not an evolution hazard.
+    #[test]
+    fn wildcard_on_bool_does_not_emit_t0018() {
+        let src = "module Main exposing (main)\n\
+                   import Ipe.Prelude exposing (..)\n\
+                   label : Bool -> String\n\
+                   label b =\n        case b of\n\
+                   \x20           True -> \"yes\"\n\
+                   \x20           _ -> \"no\"\n\
+                   main =\n    Io.println (String.fromInt 0)\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        let types = r.expect("wildcard on Bool must type-check");
+        let t0018 = types
+            .warnings
+            .iter()
+            .filter(|w| {
+                matches!(
+                    w,
+                    Diagnostic::Type {
+                        msg: TypeError::WildcardCoversKnownConstructors { .. },
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(
+            t0018, 0,
+            "a wildcard over Bool must not emit IPE-T0018 (Bool is excluded)"
+        );
+    }
+
+    /// A `case` over `List` (`[] -> …; _ -> …`) must NOT emit IPE-T0018. `List`
+    /// is closed (`Nil | Cons`) but its variant set is frozen, and `_` meaning
+    /// "cons" is a ubiquitous safe idiom.
+    #[test]
+    fn wildcard_on_list_does_not_emit_t0018() {
+        let src = "module Main exposing (main)\n\
+                   import Ipe.Prelude exposing (..)\n\
+                   isEmpty : List Int -> String\n\
+                   isEmpty xs =\n        case xs of\n\
+                   \x20           [] -> \"empty\"\n\
+                   \x20           _ -> \"non-empty\"\n\
+                   main =\n    Io.println (String.fromInt 0)\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        let types = r.expect("wildcard on List must type-check");
+        let t0018 = types
+            .warnings
+            .iter()
+            .filter(|w| {
+                matches!(
+                    w,
+                    Diagnostic::Type {
+                        msg: TypeError::WildcardCoversKnownConstructors { .. },
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(
+            t0018, 0,
+            "a wildcard over List must not emit IPE-T0018 (List is excluded)"
+        );
+    }
+
+    /// Documented-limitation guard (design condition C1): a `case c of _ -> …`
+    /// whose ONLY arm is a bare catch-all over a closed union does NOT fire
+    /// IPE-T0018. The pass is column-driven — with no earlier constructor arm,
+    /// `heads_before` is empty and the union is never identified from the
+    /// pattern column. This is a known evolution-safety gap (a bare `_ ->`
+    /// swallows ALL variants and escapes the rule); closing it needs the solved
+    /// scrutinee `Ty` threaded into the pass. If this test ever starts firing
+    /// T0018, the gap has been closed — update the explain page's limitation
+    /// note accordingly. It must NEVER be claimed that closed-union catch-alls
+    /// are universally rejected.
+    #[test]
+    fn bare_wildcard_only_case_over_closed_union_is_a_documented_gap() {
+        let src = "module Main exposing (main)\n\
+                   import Ipe.Prelude exposing (..)\n\
+                   type Color = Red | Green | Blue\n\
+                   name : Color -> String\n\
+                   name c =\n        case c of\n\
+                   \x20           _ -> \"other\"\n\
+                   main =\n    Io.println (String.fromInt 0)\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        // The gap means this compiles clean today (no error, no T0018).
+        let types = r.expect(
+            "a bare `_ ->`-only case over a closed union is a documented gap: it \
+             compiles (does NOT fire IPE-T0018) because the pass is column-driven",
+        );
+        let t0018 = types
+            .warnings
+            .iter()
+            .filter(|w| {
+                matches!(
+                    w,
+                    Diagnostic::Type {
+                        msg: TypeError::WildcardCoversKnownConstructors { .. },
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(
+            t0018, 0,
+            "documented gap: a bare `_ ->`-only closed-union case does not yet \
+             fire IPE-T0018 (column-driven pass); see explain/IPE-T0018.md"
+        );
+    }
+
     /// Regression against the IPE-T0011 false-positive class (the ex10-shaped
     /// bug): a `case` whose arms cover every constructor of a closed union
     /// EXACTLY ONCE — no trailing `_`, no redundant arm — must emit ZERO
