@@ -374,6 +374,19 @@ fn security_html_unsafe_raw_compiles() {
     assert_compiles("security_html_unsafe_raw", src);
 }
 
+/// SECURITY (untouched bridge): `Ui.html` — the typed `Html msg -> Element msg`
+/// bridge — is NOT a raw-string hole and stays fully working. It carries a
+/// typed tree built from the escaped `Html.text` path, so tightening the raw
+/// surface leaves the typed bridge intact.
+#[test]
+fn security_ui_html_typed_bridge_compiles() {
+    let src = "module Main exposing (main)\n\
+               import Ipe.Ui as Ui\n\
+               import Ipe.Html as Html\n\
+               main = Ui.html (Html.text \"hello\")\n";
+    assert_compiles("security_ui_html_bridge", src);
+}
+
 /// The same top-level value defined twice.
 #[test]
 fn canon_duplicate_value() {
