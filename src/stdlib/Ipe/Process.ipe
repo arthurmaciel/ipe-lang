@@ -1,0 +1,28 @@
+-- | Ipe.Process — run child processes with NO shell.
+--
+-- `Process.run cmd argv` executes `cmd` with `argv` as a direct argument
+-- vector — the arguments are NEVER passed through `sh -c`, so a
+-- caller-controlled string can never be reinterpreted as shell syntax
+-- (no command injection). Success yields the child's stdout; a non-zero
+-- exit or a spawn failure is a typed `Error` carrying the exit code and the
+-- child's stderr.
+--
+-- This is a server-only capability (`subprocess`): it is DEFAULT-DENIED under
+-- `--target wasm` (a browser bundle has no process surface), and a program
+-- that runs a child process is tagged with the `subprocess` capability so a
+-- sandbox can isolate it.
+module Ipe.Process exposing
+    ( run
+    )
+
+
+import Ipe.Ffi as Ffi
+import Ipe.Error exposing (Error)
+
+
+-- | `run cmd argv` — run `cmd` with the argument vector `argv`, no shell.
+-- Succeeds with the child's captured stdout (bounded to guard memory);
+-- fails with a typed `Error` on a non-zero exit or a spawn failure.
+run : String -> List String -> Task Error String
+run =
+    Ffi.kernel "Process_run"

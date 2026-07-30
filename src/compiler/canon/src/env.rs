@@ -78,6 +78,7 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "System"], "System"),
     (&["Ipe", "Random"], "Random"),
     (&["Ipe", "File"], "File"),
+    (&["Ipe", "Process"], "Process"),
     (&["Ipe", "Http"], "Http"),
     // NOTE — `Ipe.Path` and `Ipe.Regex` are DELIBERATELY
     // absent here. They are COMPILED-SOURCE Layer-3 modules (registered in
@@ -1087,6 +1088,10 @@ impl Env {
                     "delete",
                 ],
             ),
+            // `Ipe.Process` — subprocess execution with NO shell. `run` is an
+            // effect kernel (`String -> List String -> Task Error String`); a
+            // server-only capability (`subprocess`), default-denied under wasm.
+            ("Process", &["run"]),
             // `Ipe.Http` — outbound HTTP client.
             // `get` / `post` / `request` are effect kernels (Task Error
             // HttpResponse); `parseQuery` is a pure kernel (String -> Dict

@@ -798,6 +798,8 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::FileCopy => "file_copy",
         KernelFn::FileRename => "file_rename",
         KernelFn::FileDelete => "file_delete",
+        // ── Process kernels ───────────────────────────────────────────
+        KernelFn::ProcessRun => "process_run",
         // ── Http kernels ──────────────────────────────────────────────
         // `HttpParseQuery` maps to `http_parse_query` (pure, no E type).
         // `HttpGet` / `HttpPost` / `HttpRequest` emit through `emit_http_call`

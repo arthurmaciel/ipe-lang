@@ -695,6 +695,8 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::FileCopy => "File.copy",
         KernelFn::FileRename => "File.rename",
         KernelFn::FileDelete => "File.delete",
+        // ── Process kernels ───────────────────────────────────────────
+        KernelFn::ProcessRun => "Process.run",
         // ── Http kernels ──────────────────────────────────────────────
         KernelFn::HttpGet => "Http.get",
         KernelFn::HttpPost => "Http.post",
