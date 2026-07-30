@@ -61,29 +61,73 @@ pub fn str_err<E: From<String>>(s: &str) -> E {
 /// `impl From<String> for IpeCoreErrorError` so both arms of the fallible match
 /// resolve to the same `IpeResult<E, A>`. Total — no unwrap/index/panic.
 pub fn ipe_error_from_foreign<ForeignE: std::fmt::Debug, E: From<String>>(e: ForeignE) -> E {
-    let err_id = short_err_id();
-    log_foreign_error(&err_id, &format!("{e:?}"));
+    let err_id = note_foreign_error(e);
     format!("external operation failed (ref {err_id})").into()
 }
 
-/// [B8] Server-log a foreign FFI error's raw `Debug` detail under a correlation
-/// id, honouring `IPE_LOG_FORMAT=json`. The detail is for OPERATORS ONLY — it can
-/// carry secrets / PII / internal paths from a transport error — so it goes to
-/// the SERVER LOG (stderr), never to the Ipê-visible message. Mirrors the
-/// `classify_and_log_panic` log shape (kind `ForeignError`). Total — no
+/// Funnel-log a foreign error's raw `Debug` under a fresh correlation id and
+/// return the id. The direct entry for wrapper arms with NO error channel (a
+/// `Maybe`-fold, for example) that must still surface the failure to operators;
+/// `ipe_error_from_foreign` builds its Ipê-visible message on top of this.
+/// Total — no unwrap/index/panic.
+pub fn note_foreign_error<ForeignE: std::fmt::Debug>(e: ForeignE) -> String {
+    let err_id = short_err_id();
+    log_foreign_kind("ForeignError", &err_id, &format!("{e:?}"));
+    err_id
+}
+
+/// Convert a CAUGHT foreign panic payload into the project's error type —
+/// REDACTED, same funnel as `ipe_error_from_foreign`.
+///
+/// The `catch_unwind` FFI wrapper arms hand the payload here. Its text is
+/// foreign-controlled (it can carry secrets / PII / internal paths exactly like
+/// a foreign error's `Debug`), so it is logged SERVER-SIDE only; the Ipê-visible
+/// value is `context` — an emitter-owned constant such as
+/// `"foreign call panicked"` — plus the correlation id, never the payload.
+/// Total — no unwrap/index/panic.
+pub fn ipe_error_from_panic<E: From<String>>(
+    context: &str,
+    payload: Box<dyn std::any::Any + Send>,
+) -> E {
+    let err_id = note_foreign_panic(context, payload);
+    format!("{context} (ref {err_id})").into()
+}
+
+/// Funnel-log a caught foreign panic payload under a fresh correlation id and
+/// return the id. The direct entry for wrapper arms with NO error channel (a
+/// `Maybe`-fold, a total-return abort site); `ipe_error_from_panic` builds its
+/// Ipê-visible message on top of this.
+///
+/// The payload is dropped inside its own `catch_unwind` guard: the payload is a
+/// foreign value whose `Drop` may itself panic, and that panic must not
+/// re-escape the boundary the caller just closed. Total — no
+/// unwrap/index/panic of its own.
+pub fn note_foreign_panic(context: &str, payload: Box<dyn std::any::Any + Send>) -> String {
+    let err_id = short_err_id();
+    let detail = panic_payload_message(payload.as_ref());
+    log_foreign_kind("ForeignPanic", &err_id, &format!("{context}: {detail}"));
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(payload)));
+    err_id
+}
+
+/// [B8] Server-log a foreign FFI failure's raw detail under a correlation id,
+/// honouring `IPE_LOG_FORMAT=json`. The detail is for OPERATORS ONLY — it can
+/// carry secrets / PII / internal paths from a transport error or a panic
+/// message — so it goes to the SERVER LOG (stderr), never to the Ipê-visible
+/// message. Mirrors the `classify_and_log_panic` log shape. Total — no
 /// unwrap/index/panic.
-fn log_foreign_error(err_id: &str, detail: &str) {
+fn log_foreign_kind(kind: &str, err_id: &str, detail: &str) {
     let json =
         crate::system::read_env_var("IPE_LOG_FORMAT").is_ok_and(|v| v.eq_ignore_ascii_case("json"));
     if json {
         eprintln!(
-            "{{\"level\":\"error\",\"kind\":\"ForeignError\",\"errId\":\"{}\",\"message\":\"{}\"}}",
+            "{{\"level\":\"error\",\"kind\":\"{kind}\",\"errId\":\"{}\",\"message\":\"{}\"}}",
             err_id,
             crate::telemetry::json_escape(detail)
         );
     } else {
         eprintln!(
-            "[error] ForeignError (ref {err_id}): {}",
+            "[error] {kind} (ref {err_id}): {}",
             scrub_log_controls(detail)
         );
     }
@@ -809,6 +853,19 @@ fn classify_panic(msg: &str) -> &'static str {
     }
 }
 
+/// A panic payload's human-readable message: the standard `&str` / `String`
+/// payload downcasts, with a fixed fallback for any other payload type.
+/// Total — no unwrap/index/panic.
+fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "panic".to_string()
+    }
+}
+
 /// 8 hex chars (4 bytes) of correlation id — derives from the wall-clock
 /// sub-second component so two panics in one process don't collide. Total: a
 /// clock read failure falls back to `0`.
@@ -834,13 +891,7 @@ fn short_err_id() -> String {
 ///    500 carrying ONLY the errId, never the message — so a panic message that
 ///    happens to contain a secret / PII / internal path is never sent to a client).
 pub fn classify_and_log_panic(payload: &(dyn std::any::Any + Send)) -> String {
-    let msg = if let Some(s) = payload.downcast_ref::<&str>() {
-        (*s).to_string()
-    } else if let Some(s) = payload.downcast_ref::<String>() {
-        s.clone()
-    } else {
-        "panic".to_string()
-    };
+    let msg = panic_payload_message(payload);
     let kind = classify_panic(&msg);
     let err_id = short_err_id();
     let json =
@@ -1177,6 +1228,60 @@ mod tests {
         assert!(
             id.chars().all(|c| c.is_ascii_hexdigit()),
             "id must be hex — got: {id:?}"
+        );
+    }
+
+    #[test]
+    fn panic_payload_redacts_secret_from_ipe_message() {
+        // A foreign panic message is foreign-controlled free text — it must be
+        // funnel-redacted exactly like a foreign error's Debug.
+        let payload: Box<dyn std::any::Any + Send> =
+            Box::new("token=sk_live_SUPERSECRET_KEY".to_string());
+        let msg: String = ipe_error_from_panic("foreign call panicked", payload);
+        assert!(
+            !msg.contains("SUPERSECRET") && !msg.contains("token"),
+            "the panic payload must NOT reach the Ipe-visible message — got: {msg:?}"
+        );
+        assert!(
+            msg.starts_with("foreign call panicked (ref ") && msg.ends_with(')'),
+            "the Ipe-visible message is the emitter-owned context + correlation id — got: {msg:?}"
+        );
+        let id = msg
+            .trim_start_matches("foreign call panicked (ref ")
+            .trim_end_matches(')');
+        assert_eq!(id.len(), 8, "correlation id is 8 hex chars — got: {id:?}");
+        assert!(
+            id.chars().all(|c| c.is_ascii_hexdigit()),
+            "id must be hex — got: {id:?}"
+        );
+    }
+
+    #[test]
+    fn a_panicking_payload_drop_is_contained() {
+        // A foreign panic payload can be an arbitrary type whose Drop panics;
+        // disposing of it inside the funnel must not re-open the boundary the
+        // wrapper just closed.
+        struct PanicsOnDrop;
+        impl Drop for PanicsOnDrop {
+            fn drop(&mut self) {
+                // Only the funnel's guarded drop may run this.
+                if !std::thread::panicking() {
+                    panic!("drop bomb");
+                }
+            }
+        }
+        let payload: Box<dyn std::any::Any + Send> = Box::new(PanicsOnDrop);
+        let id = note_foreign_panic("foreign call panicked", payload);
+        assert_eq!(id.len(), 8, "the funnel survives a panicking payload Drop");
+    }
+
+    #[test]
+    fn non_string_panic_payload_falls_back_to_fixed_message() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new(42_u32);
+        let msg: String = ipe_error_from_panic("foreign closure panicked", payload);
+        assert!(
+            msg.starts_with("foreign closure panicked (ref "),
+            "a non-string payload still yields the generic context message — got: {msg:?}"
         );
     }
 

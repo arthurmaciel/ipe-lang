@@ -226,6 +226,10 @@ pub enum IpeResult<E, T> {{ Ok(T), Err(E) }}
 pub struct IpeError(String);
 pub fn ok_res<T>(t: T) -> IpeResult<IpeError, T> {{ IpeResult::Ok(t) }}
 pub fn str_err(s: &str) -> IpeError {{ IpeError(s.to_string()) }}
+pub fn ipe_error_from_panic(c: &str, _p: Box<dyn std::any::Any + Send>) -> IpeError {{ IpeError(c.to_string()) }}
+pub fn note_foreign_panic(_c: &str, _p: Box<dyn std::any::Any + Send>) -> String {{ String::new() }}
+pub fn note_foreign_error<T: std::fmt::Debug>(_e: T) -> String {{ String::new() }}
+pub fn ipe_error_from_foreign<T: std::fmt::Debug>(_e: T) -> IpeError {{ IpeError("external operation failed".to_string()) }}
 
 {aliases}
 
