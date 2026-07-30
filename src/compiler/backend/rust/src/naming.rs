@@ -901,6 +901,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::SecretRedacted => "secret_redacted",
         // ── Ipe.Regex kernels (pure; ungated runtime re-export) ────
         // Names MUST match `ipe_runtime::regex_kernel::*` exactly.
+        KernelFn::RegexCompile => "regex_compile",
         KernelFn::RegexMatch => "regex_match",
         KernelFn::RegexFind => "regex_find",
         KernelFn::RegexFindAll => "regex_find_all",

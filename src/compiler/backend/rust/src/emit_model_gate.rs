@@ -257,6 +257,9 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         | IrType::StreamWriter
         // `HttpRequest` is an opaque handle — not a valid Model leaf.
         | IrType::HttpRequest
+        // `Regex` is an opaque compiled-pattern handle (not serde) — not a
+        // valid Model leaf.
+        | IrType::Regex
         // `WsHandle` / `WsServerCfg` are opaque handles — not valid Model leaves.
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg

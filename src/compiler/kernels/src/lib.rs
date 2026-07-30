@@ -1515,15 +1515,19 @@ pub enum StdlibKernel {
     // (`ipe_runtime::regex_kernel::*`) are re-exported ungated — no feature gate
     // and no `project.rs` thread needed (the emitted `mod.rs` declares
     // `regex_kernel` unconditionally, deps always present).
-    /// `Regex.match : String -> String -> Bool` — does the pattern match anywhere?
+    /// `Regex.compile : String -> Result Error Regex` — parse a pattern ONCE
+    /// into the opaque `Regex` handle; an invalid pattern is a typed `Err`,
+    /// never a silent no-match.
+    RegexCompile,
+    /// `Regex.match : Regex -> String -> Bool` — does the pattern match anywhere?
     RegexMatch,
-    /// `Regex.find : String -> String -> Maybe String` — first match, if any.
+    /// `Regex.find : Regex -> String -> Maybe String` — first match, if any.
     RegexFind,
-    /// `Regex.findAll : String -> String -> List String` — every match, in order.
+    /// `Regex.findAll : Regex -> String -> List String` — every match, in order.
     RegexFindAll,
-    /// `Regex.replace : String -> String -> String -> String` — replace every match.
+    /// `Regex.replace : Regex -> String -> String -> String` — replace every match.
     RegexReplace,
-    /// `Regex.split : String -> String -> List String` — split on every match.
+    /// `Regex.split : Regex -> String -> List String` — split on every match.
     RegexSplit,
 
     // ── Ipe.Path — typed, validated filesystem paths ───────────────────
@@ -3033,7 +3037,9 @@ impl StdlibKernel {
             // ── Ipe.Regex ────────────────────────────────────────
             // Runtime names MUST match `ipe_runtime::regex_kernel::*` exactly
             // (note `regex_find_all`). Class `Pure` — the kernels are total/pure
-            // (no effect); the HM scheme carries no `Task`.
+            // (no effect); the HM scheme carries no `Task`. `compile` parses the
+            // pattern once; every operation then takes the compiled `Regex`.
+            Self::RegexCompile => d("Regex", "compile", 1, Pure, "regex_compile"),
             Self::RegexMatch => d("Regex", "match", 2, Pure, "regex_match"),
             Self::RegexFind => d("Regex", "find", 2, Pure, "regex_find"),
             Self::RegexFindAll => d("Regex", "findAll", 2, Pure, "regex_find_all"),
@@ -4161,6 +4167,7 @@ impl StdlibKernel {
         Self::SecretReveal,
         Self::SecretRedacted,
         // ── Ipe.Regex ────────────────────────────────────────────
+        Self::RegexCompile,
         Self::RegexMatch,
         Self::RegexFind,
         Self::RegexFindAll,
@@ -5290,6 +5297,7 @@ impl StdlibKernel {
             | Self::SecretFromString
             | Self::SecretReveal
             | Self::SecretRedacted
+            | Self::RegexCompile
             | Self::RegexMatch
             | Self::RegexFind
             | Self::RegexFindAll

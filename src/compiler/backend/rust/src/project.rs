@@ -1642,6 +1642,7 @@ fn ir_type_contains_non_serde(ty: &IrType) -> bool {
         | IrType::ServerCookie
         | IrType::StreamWriter
         | IrType::HttpRequest
+        | IrType::Regex
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
         | IrType::WebReq

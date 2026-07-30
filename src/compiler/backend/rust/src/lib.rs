@@ -1581,6 +1581,8 @@ fn collect_record_shapes(
         | IrType::StreamWriter
         // `HttpRequest` is an opaque handle — no record shape.
         | IrType::HttpRequest
+        // `Regex` is an opaque compiled-pattern handle — no record shape.
+        | IrType::Regex
         // `WsHandle` / `WsServerCfg` are opaque handles — no record shape.
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
@@ -1727,6 +1729,8 @@ fn type_reaches_enum(
         | IrType::StreamWriter
         // `HttpRequest` is a pointer-sized opaque handle — no size cycle.
         | IrType::HttpRequest
+        // `Regex` is a pointer-sized opaque handle — no size cycle.
+        | IrType::Regex
         // `WsHandle` / `WsServerCfg` are opaque handles — no size cycle.
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
@@ -1820,6 +1824,8 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::StreamWriter
         // `HttpRequest` is monomorphic — no generic parameters.
         | IrType::HttpRequest
+        // `Regex` is a monomorphic opaque handle — no generic parameters.
+        | IrType::Regex
         // `WsHandle` / `WsServerCfg` are monomorphic — no generic parameters.
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
@@ -1930,6 +1936,8 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::StreamWriter
         // `HttpRequest` is monomorphic — no generics to collect.
         | IrType::HttpRequest
+        // `Regex` is a monomorphic opaque handle — no generics to collect.
+        | IrType::Regex
         // `WsHandle` / `WsServerCfg` are monomorphic — no generics to collect.
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
@@ -2253,6 +2261,8 @@ fn match_template(
         | IrType::StreamWriter
         // `HttpRequest` is a monomorphic opaque handle.
         | IrType::HttpRequest
+        // `Regex` is a monomorphic opaque handle.
+        | IrType::Regex
         // `WsHandle` / `WsServerCfg` are monomorphic opaque handles.
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
