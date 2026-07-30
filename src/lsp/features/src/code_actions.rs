@@ -14,6 +14,9 @@
 //! - `IPE-N0034` (standard-library module used without importing it): "Add
 //!   import `Ipe.X`" — insert the named `import Ipe.X` line into the module's
 //!   import block, alphabetically among the existing imports.
+//! - `IPE-N0035` (a shape-scoped `Cmd` / `Sub` imported from the wrong shape):
+//!   "Change import to `Ipe.Tea.<Shape>.Cmd`" — repoint the offending import to
+//!   the app's own shape, in place, leaving the `as Alias` binding untouched.
 //!
 //! The provider is deliberately conservative: it only acts on codes it can
 //! fix with a single-hunk text edit that it can prove correct. Unknown codes
@@ -110,6 +113,15 @@ pub fn code_actions(
                 // to add (`add `import Ipe.X` to use it`); we insert it in the
                 // module's import block, sorted among the existing imports.
                 if let Some(action) = add_import_action(view, module, uri, diag, text, encoding) {
+                    actions.push(CodeActionOrCommand::CodeAction(action));
+                }
+            }
+            "IPE-N0035" => {
+                // A shape-scoped `Cmd` / `Sub` imported from the wrong shape —
+                // repoint the offending import to the app's own shape. The
+                // diagnostic names both the wrong (`Ipe.Tea.Web.Cmd`) and correct
+                // (`Ipe.Tea.Terminal.Cmd`) module paths.
+                if let Some(action) = repoint_shape_import_action(diag, uri, text, encoding) {
                     actions.push(CodeActionOrCommand::CodeAction(action));
                 }
             }
@@ -346,6 +358,77 @@ fn add_import_action(
         disabled: None,
         data: None,
     })
+}
+
+/// Quick-fix that repoints an offending `Ipe.Tea.<WrongShape>.{Cmd,Sub}` import
+/// to the app's own shape, named by an IPE-N0035 diagnostic.
+///
+/// The message backtick-quotes both the wrong module path (first quoted token)
+/// and the correct one (the quoted token before `instead`). The offending import
+/// occupies the diagnostic's line, so the fix replaces the wrong path text with
+/// the correct one in place, leaving the `as Alias` binding untouched.
+fn repoint_shape_import_action(
+    diag: &Diagnostic,
+    uri: &Url,
+    text: &str,
+    encoding: PositionEncoding,
+) -> Option<CodeAction> {
+    let (wrong, correct) = shape_paths_from_message(&diag.message)?;
+
+    // The import line is the one the diagnostic points at. Replace the wrong
+    // module path with the correct one wherever it appears on that line — the
+    // path is a unique token there (the alias differs), so a single replace is
+    // exact.
+    let line = diag.range.start.line as usize;
+    let (line_start, line_end) = line_byte_range(text, line);
+    let line_text = text.get(line_start..line_end)?;
+    let col = line_text.find(&wrong)?;
+    let start_byte = line_start + col;
+    let end_byte = start_byte + wrong.len();
+
+    let start = offset_to_position(text, start_byte, encoding);
+    let end = offset_to_position(text, end_byte, encoding);
+    let edit = TextEdit {
+        range: Range { start, end },
+        new_text: correct.clone(),
+    };
+    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+    changes.insert(uri.clone(), vec![edit]);
+    Some(CodeAction {
+        title: format!("Change import to {correct}"),
+        kind: Some(CodeActionKind::QUICKFIX),
+        diagnostics: Some(vec![diag.clone()]),
+        edit: Some(WorkspaceEdit {
+            changes: Some(changes),
+            document_changes: None,
+            change_annotations: None,
+        }),
+        command: None,
+        is_preferred: Some(true),
+        disabled: None,
+        data: None,
+    })
+}
+
+/// Lift the (wrong, correct) `Ipe.Tea.<Shape>.{Cmd,Sub}` module paths out of an
+/// IPE-N0035 message. The message quotes the wrong path first and the correct
+/// path last (the one preceding `instead`); both begin `Ipe.Tea.`. Returns
+/// `None` if the message does not carry two such quoted paths, so a reworded
+/// diagnostic simply produces no action.
+fn shape_paths_from_message(message: &str) -> Option<(String, String)> {
+    let quoted: Vec<&str> = message
+        .split('`')
+        // Every ODD-indexed split segment is the content between a backtick pair.
+        .skip(1)
+        .step_by(2)
+        .filter(|s| s.starts_with("Ipe.Tea.") && (s.ends_with(".Cmd") || s.ends_with(".Sub")))
+        .collect();
+    let wrong = (*quoted.first()?).to_owned();
+    let correct = (*quoted.last()?).to_owned();
+    if wrong == correct {
+        return None;
+    }
+    Some((wrong, correct))
 }
 
 /// Lift the `Ipe.X` module path out of an IPE-N0034 message.

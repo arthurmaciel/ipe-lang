@@ -17,17 +17,18 @@ pub use code::{
     IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127, IPE_L0128, IPE_L0129,
     IPE_L0130, IPE_L0131, IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003, IPE_N0004, IPE_N0005,
     IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023,
-    IPE_N0024, IPE_N0025, IPE_N0026, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011,
-    IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0020, IPE_P0021,
-    IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062,
-    IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013,
-    IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, ISSUE_TRACKER_URL, Severity, explain_page, title,
+    IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0033, IPE_N0035, IPE_P0001, IPE_P0002, IPE_P0003,
+    IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017,
+    IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060,
+    IPE_P0061, IPE_P0062, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011,
+    IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, ISSUE_TRACKER_URL, Severity,
+    explain_page, title,
 };
 pub use diagnostic::{
-    AliasExpansionKind, AppShape, Applicability, CaseDefect, Construct, DResult, Diagnostic,
-    Expected, ExpectedSet, ExposingDefect, Feature, HOF_KERNEL_RESULT_CLASS, HeaderDefect,
-    HelpLine, Hint, IfDefect, LetDefect, LowerError, ModelLeaf, NameError, ParseError, SpanRole,
-    Suggestion, TokenKind, TyDoc, TypeDeclDefect, TypeError,
+    AliasExpansionKind, AppShape, Applicability, CaseDefect, CmdSubShapeMismatch, Construct,
+    DResult, Diagnostic, Expected, ExpectedSet, ExposingDefect, Feature, HOF_KERNEL_RESULT_CLASS,
+    HeaderDefect, HelpLine, Hint, IfDefect, LetDefect, LowerError, ModelLeaf, NameError,
+    ParseError, SpanRole, Suggestion, TokenKind, TyDoc, TypeDeclDefect, TypeError,
 };
 pub use render::{plain_message, render, render_ty};
 pub use span::{Located, Span};

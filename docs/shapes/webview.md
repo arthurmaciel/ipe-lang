@@ -27,8 +27,8 @@ module Main exposing (main)
 
 import Ipe.String as String
 import Ipe.Tea.WebView as WebView
-import Ipe.Cmd as Cmd
-import Ipe.Sub as Sub
+import Ipe.Tea.WebView.Cmd as Cmd
+import Ipe.Tea.WebView.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Ui.Font as Font
 

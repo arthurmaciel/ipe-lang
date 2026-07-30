@@ -38,8 +38,8 @@ module Main exposing (main)
 import Ipe.String as String
 import Ipe.System as System
 import Ipe.Tea.Terminal as Terminal
-import Ipe.Cmd as Cmd
-import Ipe.Sub as Sub
+import Ipe.Tea.Terminal.Cmd as Cmd
+import Ipe.Tea.Terminal.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Ui exposing (Element)
 import Ipe.Ui.Font as Font
@@ -187,8 +187,8 @@ module Main exposing (main)
 import Ipe.String as String
 import Ipe.System as System
 import Ipe.Tea.Terminal exposing (appLines)
-import Ipe.Cmd as Cmd
-import Ipe.Sub as Sub
+import Ipe.Tea.Terminal.Cmd as Cmd
+import Ipe.Tea.Terminal.Sub as Sub
 
 
 type Command
@@ -346,8 +346,8 @@ Here it paints a small grid inside an otherwise-structured view:
 module Main exposing (main)
 
 import Ipe.Tea.Terminal as Terminal
-import Ipe.Cmd as Cmd
-import Ipe.Sub as Sub
+import Ipe.Tea.Terminal.Cmd as Cmd
+import Ipe.Tea.Terminal.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Ui exposing (Element)
 

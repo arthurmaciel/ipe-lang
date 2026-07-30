@@ -2,14 +2,14 @@ module Main exposing (main)
 
 import Ipe.Prelude exposing (..)
 import Ipe.String as String
-import Ipe.Cmd as Cmd
+import Ipe.Tea.Web.Cmd as Cmd
 import Ipe.Css exposing (..)
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onClick)
 import Ipe.Web exposing (app, route)
 import Ipe.Log as Log
-import Ipe.Sub as Sub
+import Ipe.Tea.Web.Sub as Sub
 
 -- MULTI-TIER CONSOLE SHOWCASE
 --

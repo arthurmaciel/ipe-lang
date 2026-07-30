@@ -5,7 +5,7 @@ import Ipe.String as String
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onClick)
-import Ipe.Cmd as Cmd
+import Ipe.Tea.Web.Cmd as Cmd
 
 -- ============================================================
 -- Counter -- A reusable counter component for Sky.Live
