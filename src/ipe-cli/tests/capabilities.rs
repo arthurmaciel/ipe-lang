@@ -92,22 +92,19 @@ fn verify_rejects_overdeclared() {
     assert!(r.is_err(), "an over-declaration must be rejected");
 }
 
-/// Acceptance over a real `examples/*` app with known effects: the
-/// `02-go-stdlib` program makes an HTTP call (`Http.get`) and reads the clock
-/// (`Time.now` / `Time.timeString`), and uses no other effect — so its inferred
-/// capability set is exactly `{network, clock}`. Any drift here is a
-/// mis-classified tag, caught against a real program rather than a fixture.
+/// Acceptance test: a program using both `Http.get` (network) and `Time.now`
+/// (clock) must report exactly `{network, clock}`. Any drift is a mis-classified
+/// tag, caught against a real program rather than a minimal fixture.
 #[test]
-fn acceptance_go_stdlib_example_infers_network_and_clock() -> TestResult {
-    let example = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../examples/sky/ipe/02-go-stdlib/src/Main.ipe");
+fn acceptance_http_and_clock_example_infers_network_and_clock() -> TestResult {
+    let example = fixture("uses_http_and_clock.ipe");
     let (ok, stdout) = run_ipe(&["capabilities", "--plain", &example.to_string_lossy()])?;
     assert!(ok, "capabilities must exit 0 on the example");
     let reported: BTreeSet<&str> = stdout.split_whitespace().collect();
     assert_eq!(
         reported,
         BTreeSet::from(["network", "clock"]),
-        "unexpected capability set for 02-go-stdlib, got:\n{stdout}"
+        "unexpected capability set for uses_http_and_clock, got:\n{stdout}"
     );
 
     // The library verifier agrees with the reported set exactly.

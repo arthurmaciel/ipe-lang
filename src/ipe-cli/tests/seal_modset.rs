@@ -102,13 +102,12 @@ const LIVE_RENDER_STATIC: &str = "module Main exposing (main)\n\
     import Ipe.Prelude exposing (..)\n\
     import Ipe.Tea.Web as Web\n\
     import Ipe.Html as Html\n\
-    import Ipe.Task as Task\n\
     type alias Model = { title : String }\n\
     viewStatic : Model -> Html msg\n\
     viewStatic model =\n    \
         Html.node \"div\" [] [ Html.text model.title ]\n\
     main =\n    \
-        Web.renderStatic viewStatic { title = \"hi\" } |> Task.run\n";
+        Web.renderStatic viewStatic { title = \"hi\" }\n";
 
 /// `HttpStream.chunks` where the `StreamId` arrives as a parameter (no `open`
 /// in the module set). `sub_subscribe_stream` + `IpeStreamId` live in

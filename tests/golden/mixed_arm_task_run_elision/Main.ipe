@@ -1,33 +1,16 @@
 module Main exposing (main)
 
 import Ipe.Error as Error
-import Ipe.Task as Task
-import Ipe.Io as Io
 import Ipe.String
 
--- Adversarial-review sibling gap (Finding B) of the case-branched entry-point
--- Task.run elision (`tui_entry_case_taskrun`, same BACKLOG "24-tui-kitchen-
--- sink" row): a `case`-dispatched `ipe_main` where SOME tail leaves call
--- `Task.run` and OTHER tail leaves are a plain `Result`-typed expression —
--- the realistic validate-then-run idiom (`Err e -> Err e; Ok cfg -> app cfg
--- |> Task.run`).
+-- Adversarial-review sibling gap: a `case`-dispatched `ipe_main` where every
+-- arm produces a `Result`-typed expression — the realistic validate-then-run
+-- idiom where `main` returns `Result Error a`.
 --
--- `elide_task_run_tail` correctly DECLINES to elide here (a partial elision
--- would leave some arms Task-shaped and others Result-shaped, which cannot
--- render as one Rust `match` of a single type) — but nothing else made the
--- crate compile: `ipe_main`'s declared return type stayed `IpeResult<E, A>`
--- while the `fn main` epilogue's `block_on(ipe_main())` unconditionally
--- requires `IpeTask<A>` (E0308: expected `Pin<Box<dyn Future…>>`, found
--- `IpeResult<…>`) — the identical failure mode as the original bug, despite
--- `ipec build` exiting 0.
---
--- Closed by widening `emit_func`'s `ipe_main_wrap` fallback (previously only
--- `func.ret == Unit`) to also cover `func.ret == Result(_, A)` with elision
--- declined: the body already evaluates synchronously to one uniform
--- `Result e a` (Task.run blocks in place; the non-Task arm is a bare Result
--- value), so it wraps in `task_from_result({ <original body> })` — an
--- ALREADY-RESOLVED `IpeTask<a>` carrying the body's actual computed value,
--- not a discarded one.
+-- `emit_func`'s `ipe_main_wrap` fallback covers `func.ret == Result(_, A)`:
+-- the body evaluates synchronously to a uniform `Result e a` and is wrapped
+-- in `task_from_result({ <original body> })` — an ALREADY-RESOLVED
+-- `IpeTask<a>` carrying the body's actual computed value, not a discarded one.
 validate : Int -> Result Error Int
 validate n =
     if n < 0 then
@@ -43,4 +26,4 @@ main =
             Err e
 
         Ok cfg ->
-            Io.println ("validated " ++ String.fromInt cfg) |> Task.run
+            Ok cfg

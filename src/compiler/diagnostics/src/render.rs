@@ -421,6 +421,7 @@ fn parse_label(msg: &ParseError) -> Option<String> {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn name_label(msg: &NameError) -> Option<String> {
     match msg {
         NameError::ValueNotFound { .. } => Some("not found in scope".to_string()),
@@ -509,6 +510,21 @@ fn name_label(msg: &NameError) -> Option<String> {
              is a {} app; import `{}` instead",
             m.imported, m.imported_shape, m.app_shape, m.expected
         )),
+        NameError::RemovedSurface {
+            qualifier,
+            name,
+            replacement,
+        } => {
+            if replacement.is_empty() {
+                Some(format!(
+                    "`{qualifier}.{name}` has been removed from the Ipê surface"
+                ))
+            } else {
+                Some(format!(
+                    "`{qualifier}.{name}` has been removed; use `{replacement}` instead"
+                ))
+            }
+        }
         NameError::Unknown => None,
     }
 }

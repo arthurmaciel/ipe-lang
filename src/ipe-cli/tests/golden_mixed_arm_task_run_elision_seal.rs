@@ -1,28 +1,13 @@
-//! Regression for adversarial-review Finding B — a sibling gap of the
-//! `tui_entry_case_taskrun` SEAL fix (`golden_tui_entry_case_seal.rs`, same
-//! BACKLOG "24-tui-kitchen-sink" row) one hop past that fix's scope: a
-//! `case`-dispatched `ipe_main` where SOME tail leaves call `Task.run` and
-//! OTHER tail leaves are a plain `Result`-typed expression with no `Task.run`
-//! at all (the realistic validate-then-run idiom, `Err e -> Err e; Ok cfg ->
-//! app cfg |> Task.run`).
+//! Regression for adversarial-review Finding B: a `case`-dispatched `ipe_main`
+//! where every arm produces a `Result`-typed expression (the validate-then-run
+//! idiom, `Err e -> Err e; Ok cfg -> Ok cfg`).
 //!
-//! `elide_task_run_tail` correctly DECLINES to elide this shape (a partial
-//! elision would leave some arms `Task`-shaped and others `Result`-shaped,
-//! which cannot render as one Rust `match` of a single type — genuinely
-//! all-or-nothing) — and otherwise nothing makes the crate compile:
-//! `ipe_main` keeps its declared `IpeResult<E, A>` return type while the
-//! `fn main` epilogue's `block_on(ipe_main())` unconditionally requires
-//! `IpeTask<A>` (E0308: expected `Pin<Box<dyn Future…>>`, found
-//! `IpeResult<…>`) — `ipe build` exit 0, `cargo build` fail.
-//!
-//! So `emit_func`'s `ipe_main_wrap` fallback (which fires for `func.ret ==
-//! Unit`) also covers `func.ret == Result(_, A)`
-//! with elision declined: the body already evaluates synchronously to one
-//! uniform `Result e a` (`Task.run` blocks in place; the non-Task arm is a
-//! bare `Result` value), so it wraps in `task_from_result({ <original body>
-//! })` — an ALREADY-RESOLVED `IpeTask<A>` carrying the body's actual computed
-//! `Ok`/`Err`, not a discarded one (contrast the sibling `Unit`-return wrap,
-//! which discards the body's value and always returns `task_succeed(())`).
+//! `emit_func`'s `ipe_main_wrap` fallback covers `func.ret == Result(_, A)`:
+//! the body evaluates synchronously to a uniform `Result e a` and wraps in
+//! `task_from_result({ <original body> })` — an ALREADY-RESOLVED `IpeTask<A>`
+//! carrying the body's actual computed `Ok`/`Err`, not a discarded one
+//! (contrast the sibling `Unit`-return wrap, which always returns
+//! `task_succeed(())`).
 //!
 //! Same DEFAULT-gate structure as `golden_tui_entry_case_seal.rs`: the first
 //! two tests inspect the emitted `src/main.rs` text (no cargo build) so they
@@ -83,10 +68,9 @@ fn mixed_arm_entry_point_wraps_to_ipetask() {
 
     assert!(
         main_rs.contains("fn ipe_main() -> IpeTask<"),
-        "ipe_main must return IpeTask<…> even when its case arms MIX \
-         Task.run calls with plain Result expressions — the \
-         block_on(ipe_main()) epilogue requires a Task, not a Result. Got \
-         signature region:\n{}",
+        "ipe_main must return IpeTask<…> when its case arms all return \
+         Result expressions — the block_on(ipe_main()) epilogue requires \
+         a Task, not a Result. Got signature region:\n{}",
         main_rs
             .lines()
             .filter(|l| l.contains("ipe_main") || l.contains("IpeTask") || l.contains("IpeResult"))

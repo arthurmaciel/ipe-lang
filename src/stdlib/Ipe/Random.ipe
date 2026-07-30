@@ -41,11 +41,11 @@ float : Float -> Float -> Task Error Float
 float = Ffi.kernel "Random_float"
 
 
--- | Alias for `int` with a more obvious name when used in pipelines:
---
---     Random.range 1 6 |> Task.run
---
+-- | Alias for `int` with a more obvious name when used in pipelines.
 -- Identical semantics to `int` (inclusive on both ends).
+--
+--     Random.range 1 6
+--         |> Task.andThen (\n -> Io.println (String.fromInt n))
 range : Int -> Int -> Task Error Int
 range lo hi = int lo hi
 

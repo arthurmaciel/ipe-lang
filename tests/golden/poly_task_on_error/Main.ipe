@@ -28,10 +28,5 @@ wrap label task =
 
 
 main =
-    let
-        ok =
-            wrap "test" (Task.succeed "hello")
-        _ =
-            Task.run ok
-    in
-        Io.println "ok"
+    wrap "test" (Task.succeed "hello")
+        |> Task.andThen (\_ -> Io.println "ok")

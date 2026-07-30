@@ -3440,6 +3440,38 @@ fn resolve_qual_var(
     env: &Env,
     interner: &Interner,
 ) -> DResult<canon::Expr_> {
+    // Removed-surface gate (IPE-N0036): bindings intentionally dropped from
+    // the Ipê surface are intercepted here before any catalog lookup, so the
+    // user gets a clear migration diagnostic rather than "no such member".
+    // Checked ahead of the import gate since the surface binding is gone
+    // regardless of whether the module was imported.
+    if interner.resolve(qualifier) == Some("Task") {
+        match interner.resolve(name) {
+            Some("run") => {
+                return Err(Diagnostic::Name {
+                    span,
+                    msg: NameError::RemovedSurface {
+                        qualifier: "Task".into(),
+                        name: "run".into(),
+                        // The entry boundary auto-runs a Task-typed `main`;
+                        // mid-flow forcing can use `Task.andThen` chains.
+                        replacement: "".into(),
+                    },
+                });
+            }
+            Some("perform") => {
+                return Err(Diagnostic::Name {
+                    span,
+                    msg: NameError::RemovedSurface {
+                        qualifier: "Task".into(),
+                        name: "perform".into(),
+                        replacement: "Task.attempt".into(),
+                    },
+                });
+            }
+            _ => {}
+        }
+    }
     // Tier-C import gate (ADR 0047): a known stdlib qualifier used WITHOUT its
     // import is the teachable must-import diagnostic (IPE-N0034), naming the exact
     // `Ipe.*` module to add — NOT a silent resolve against the pre-installed

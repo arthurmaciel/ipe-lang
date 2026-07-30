@@ -1,18 +1,12 @@
 module Main exposing (main)
 
-import Ipe.Task as Task
 import Ipe.Io as Io
 import Ipe.List
 
--- Minimal repro for the `24-tui-kitchen-sink` SEAL violation (BACKLOG "Sweep
--- to green" row): `ipec build` exits 0 but the emitted crate fails `cargo
--- build` with two INDEPENDENT E0308 errors, both on the entry-point shape
--- `main = case <Maybe String scrutinee> of Just "literal" -> task |>
--- Task.run; _ -> task |> Task.run` (the Ipe.Terminal `argv`-dispatch idiom:
--- `case List.head argsList of Just "live" -> Web.app {...} |> Task.run; _
--- -> Terminal.appScreen {...} |> Task.run`, minimised down to plain
--- `Io.println`/`Task` calls so the fixture needs no Ipe.Terminal / Ipe.Web
--- dependency).
+-- Minimal repro for the `24-tui-kitchen-sink` SEAL violation: `ipec build`
+-- exits 0 but the emitted crate fails `cargo build` with two INDEPENDENT
+-- E0308 errors, both on the entry-point shape `main = case <Maybe String
+-- scrutinee> of Just "literal" -> task; _ -> task`.
 --
 -- Defect 1 — string-literal ctor-payload sub-pattern: `Just "live"` lowered
 -- the nested literal straight to a bare `Pat::Str`, emitted as
@@ -20,11 +14,10 @@ import Ipe.List
 -- against an owned `String` ctor field (E0308: expected `String`, found
 -- `&str`).
 --
--- Defect 2 — entry-point `Task.run` tail elision only recognised a FLAT
--- `main = task |> Task.run` body (`Call(TaskRun, [inner])` as the WHOLE
--- function body). A `case`-branched body where EVERY arm tail-calls
--- `Task.run` left `ipe_main` emitted as returning `IpeResult<E, A>` while
--- the `fn main` epilogue's `block_on(ipe_main())` requires `IpeTask<A>`
+-- Defect 2 — entry-point task elision only recognised a FLAT
+-- `main = task` body. A `case`-branched body where EVERY arm returns a
+-- `Task` left `ipe_main` emitted as returning `IpeResult<E, A>` while the
+-- `fn main` epilogue's `block_on(ipe_main())` requires `IpeTask<A>`
 -- (E0308: expected `Pin<Box<dyn Future…>>`, found `IpeResult<...>`).
 mode : Maybe String
 mode =
@@ -34,7 +27,7 @@ mode =
 main =
     case mode of
         Just "live" ->
-            Io.println "live mode" |> Task.run
+            Io.println "live mode"
 
         _ ->
-            Io.println "default mode" |> Task.run
+            Io.println "default mode"
