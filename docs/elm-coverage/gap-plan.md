@@ -164,12 +164,15 @@ until a concrete binary-format consumer appears.
 
 ---
 
-## P3 — Regex options/handle (`Ipe/Regex.ipe`)
+## P3 — Regex options/match record (`Ipe/Regex.ipe`)
 
-Add a compiled `Regex` handle (compile-once via `fromString`/`fromStringWith`),
-an `Options` record, and count-limited `findAtMost`/`replaceAtMost`/`splitAtMost`.
-Low priority; the current `match`/`find`/`findAll`/`replace`/`split` covers the
-common path.
+The compiled `Regex` handle shipped: `compile : String -> Result Error Regex`
+parses a pattern once (an invalid pattern is a typed `Err`), and
+`match`/`find`/`findAll`/`replace`/`split` take the compiled handle. Still
+additive-and-optional: a `fromStringWith`/`Options` record, a richer `Match`
+record (capture groups + indices), and count-limited
+`findAtMost`/`replaceAtMost`/`splitAtMost`. Low priority; the current surface
+covers the common path.
 
 ---
 

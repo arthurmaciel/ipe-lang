@@ -1001,6 +1001,18 @@ pub enum IrType {
     /// secret). The `Ipe.File` kernels take a `Path`, not a `String`, so
     /// construction is the single validated boundary.
     Path,
+    /// `Ipe.Regex`'s opaque compiled-pattern handle. A `Regex` is built ONLY
+    /// through `Regex.compile : String -> Result Error Regex`, which turns an
+    /// invalid pattern into a typed `Err` rather than a silent no-match.
+    ///
+    /// Renders as `ipe_runtime::regex_kernel::Regex` (a newtype over an
+    /// `Arc`-shared `regex::Regex`). `Clone` only: `regex::Regex` is neither
+    /// `PartialEq`/`Eq`/`Hash`/`Ord` nor serde, so — like [`IrType::HttpRequest`]
+    /// and the other opaque handles — a `Regex` is non-derivable-for-equality
+    /// and not serde (a `Ipe.Web` Model field of type `Regex` is a compile-time
+    /// rejection, never a silent wrong behaviour). `Debug` prints the source
+    /// pattern, backing `toString` via the runtime's `Debug`-based fallback.
+    Regex,
 
     /// `Ipe.Cache`'s configuration record `{ maxEntries : Int, ttlMs : Int,
     /// maxBytes : Int }`. Renders as `ipe_runtime::cache::CacheCfg`.
@@ -1269,6 +1281,9 @@ pub fn ir_type_is_derivable(
         | IrType::StreamWriter
         // `HttpRequest` is an opaque handle — not fully derivable.
         | IrType::HttpRequest
+        // `Regex` is an opaque compiled-pattern handle — Clone + Debug but the
+        // inner `regex::Regex` has no PartialEq, so not fully derivable.
+        | IrType::Regex
         // `WsHandle` / `WsServerCfg` are opaque handles — not fully derivable.
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
@@ -1397,6 +1412,9 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         | IrType::StreamWriter
         // `HttpRequest` is an opaque handle; not serde.
         | IrType::HttpRequest
+        // `Regex` is an opaque compiled-pattern handle; `regex::Regex` is not
+        // serde, so a `Regex` never round-trips through a session store.
+        | IrType::Regex
         // `SqlFragment` is a query-building value, never persisted to a Live
         // session store — derivable (see `ir_type_is_derivable`) but not serde.
         | IrType::SqlFragment
@@ -1520,6 +1538,8 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         | IrType::ServerCookie
         | IrType::StreamWriter
         | IrType::HttpRequest
+        // `Regex` wraps an `Arc<regex::Regex>` — clone is a refcount bump.
+        | IrType::Regex
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
         | IrType::UiPlain(_)

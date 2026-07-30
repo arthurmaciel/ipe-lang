@@ -153,6 +153,7 @@ const TAG_EMAIL_SMTP_CONFIG: u8 = 53;
 const TAG_EMAIL_PROVIDER: u8 = 54;
 const TAG_SHARED_FUN: u8 = 55;
 const TAG_PATH: u8 = 56;
+const TAG_REGEX: u8 = 57;
 /// Fuel exhaustion marker — distinct from every variant tag.
 const TAG_FUEL_EXHAUSTED: u8 = 0xFF;
 
@@ -199,6 +200,7 @@ fn hash_ty(ctx: &EmitCtx, ty: &IrType, h: &mut Sha256, fuel: u32) -> DResult<()>
         IrType::SqlFragment => h.update([TAG_SQL_FRAGMENT]),
         IrType::Secret => h.update([TAG_SECRET]),
         IrType::Path => h.update([TAG_PATH]),
+        IrType::Regex => h.update([TAG_REGEX]),
         IrType::CacheCfg => h.update([TAG_CACHE_CFG]),
         IrType::CacheStats => h.update([TAG_CACHE_STATS]),
         IrType::CsvDoc => h.update([TAG_CSV_DOC]),

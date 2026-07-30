@@ -1216,6 +1216,8 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::StreamWriter
         // `HttpRequest` is an opaque handle — not a function type.
         | IrType::HttpRequest
+        // `Regex` is an opaque compiled-pattern handle — not a function type.
+        | IrType::Regex
         // `WsHandle` / `WsServerCfg` are opaque handles — not function types.
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
@@ -1358,6 +1360,8 @@ fn clone_class(interner: &Interner, t: &IrType) -> CloneClass {
         | IrType::ServerRoute
         | IrType::ServerCookie
         | IrType::HttpRequest
+        // `Regex` is `#[derive(Clone)]` (no Copy — wraps an `Arc<regex::Regex>`).
+        | IrType::Regex
         | IrType::WebSocketServerCfg
         // Cache config / stats + Csv document runtime structs are `Clone` (no
         // `Copy`).
@@ -4092,6 +4096,7 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         | IrType::ServerCookie
         | IrType::StreamWriter
         | IrType::HttpRequest
+        | IrType::Regex
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
         | IrType::UiPlain(_)
@@ -9194,6 +9199,9 @@ impl<'a> Lowerer<'a> {
                 // `Path` is `Ipe.Path`'s opaque validated filesystem-path
                 // type. Backed by `ipe_runtime::path::Path`.
                 "Path" => Ok(IrType::Path),
+                // `Regex` is `Ipe.Regex`'s opaque compiled-pattern handle.
+                // Backed by `ipe_runtime::regex_kernel::Regex`.
+                "Regex" => Ok(IrType::Regex),
                 "String" => Ok(IrType::Str),
                 // `Error` is Ipê's fixed error-channel type — backed by the real
                 // `ipe_runtime::error::IpeError` ADT, no
@@ -10203,6 +10211,9 @@ impl<'a> Lowerer<'a> {
                 // `Path` is `Ipe.Path`'s opaque validated filesystem-path
                 // type. Backed by `ipe_runtime::path::Path`.
                 "Path" => Ok(IrType::Path),
+                // `Regex` is `Ipe.Regex`'s opaque compiled-pattern handle,
+                // backed by `ipe_runtime::regex_kernel::Regex`.
+                "Regex" => Ok(IrType::Regex),
                 "String" => Ok(IrType::Str),
                 // `Error` — backed by the real `ipe_runtime::error::IpeError` ADT
                 // no longer merged with `String`. Lambda
@@ -12181,6 +12192,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DecDiv
                 | KernelFn::DecMod
                 | KernelFn::PathFromString
+                | KernelFn::RegexCompile
         ) {
             return CallPin::None;
         }
@@ -12278,14 +12290,16 @@ impl<'a> Lowerer<'a> {
             // `decimal_div` / `decimal_mod` share the same
             // `<E: From<String>>` shape and the same erased-error ambiguity as
             // `decimal_from_string` (e.g. `ipe_test_err (Dec.div a zero)`).
-            // `Path.fromString : String -> Result Error Path` shares the runtime
-            // `path_from_string<E: From<String>>` shape and the same erased-error
-            // E0283 as `decimal_from_string` when the `Err` arm is discarded —
-            // pin `::<IpeError>` to restore inference without changing behaviour.
+            // `Path.fromString : String -> Result Error Path` and
+            // `Regex.compile : String -> Result Error Regex` share the runtime
+            // `<E: From<String>>` shape and the same erased-error E0283 as
+            // `decimal_from_string` when the `Err` arm is discarded — pin
+            // `::<IpeError>` to restore inference without changing behaviour.
             KernelFn::DecFromString
             | KernelFn::DecDiv
             | KernelFn::DecMod
-            | KernelFn::PathFromString => match ty {
+            | KernelFn::PathFromString
+            | KernelFn::RegexCompile => match ty {
                 Ty::Con { name, .. } if self.interner.resolve(*name) == Some("Result") => {
                     CallPin::ErrIpeError
                 }
@@ -14911,8 +14925,10 @@ impl<'a> Lowerer<'a> {
                 KernelFn::SecretFromString | KernelFn::SecretReveal | KernelFn::SecretRedacted,
             ) => Ok(1),
             // ── Ipe.Regex ─────────────────────────────────────────
-            // `match`/`find`/`findAll`/`split : String -> String -> _` (arity 2);
-            // `replace : String -> String -> String -> String` (arity 3).
+            // `compile : String -> Result Error Regex` (arity 1);
+            // `match`/`find`/`findAll`/`split : Regex -> String -> _` (arity 2);
+            // `replace : Regex -> String -> String -> String` (arity 3).
+            Callee::Kernel(KernelFn::RegexCompile) => Ok(1),
             Callee::Kernel(
                 KernelFn::RegexMatch
                 | KernelFn::RegexFind
@@ -18001,6 +18017,7 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::ServerCookie
         | IrType::StreamWriter
         | IrType::HttpRequest
+        | IrType::Regex
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
         | IrType::UiPlain(_)
@@ -18272,6 +18289,7 @@ mod tests {
         KernelFn::PubSubPublish,
         KernelFn::PubSubPublishNoEcho,
         // Ipe.Regex
+        KernelFn::RegexCompile,
         KernelFn::RegexMatch,
         KernelFn::RegexFind,
         KernelFn::RegexFindAll,

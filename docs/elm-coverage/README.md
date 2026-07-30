@@ -229,15 +229,18 @@ book's [filesystem chapter](../language/filesystem.md).
 ### 3.8 `elm/regex` → `Ipe.Regex`
 
 Elm 0.19 **de-blessed** `elm/regex` (steering users to `elm/parser`). Ipê keeps
-regex first-class but reshapes the surface: `match`/`find`/`findAll`/`replace`/
-`split` (vs Elm's `fromString`/`contains`/`find`/`replace`/`split` with a
-`Regex`/`Match`/`Options` type + `*AtMost` variants).
+regex first-class and, like Elm, compiles a pattern once into an opaque `Regex`:
+`compile : String -> Result Error Regex` is the sole construction boundary, so an
+invalid pattern is a typed `Err` — never a silent no-match. The operations then
+take the compiled handle: `match`/`find`/`findAll`/`replace`/`split` (vs Elm's
+`fromString`/`contains`/`find`/`replace`/`split` with a `Regex`/`Match`/`Options`
+type + `*AtMost` variants).
 
-- **Missing / different:** the explicit `Regex`/`Match`/`Options` types,
-  `fromStringWith` options, and the `findAtMost`/`replaceAtMost`/`splitAtMost`
-  count-limited variants.
-- **Justification:** a compiled-once `Regex` handle + count limits are reasonable
-  additions; filed as low priority.
+- **Missing / different:** the `Match` record (capture groups, indices) and
+  `Options` type, `fromStringWith` options, and the
+  `findAtMost`/`replaceAtMost`/`splitAtMost` count-limited variants.
+- **Justification:** the compiled-once `Regex` handle matches Elm; count limits
+  and a richer `Match` are reasonable additions, filed as low priority.
 
 ### 3.9 `elm/parser` — missing
 

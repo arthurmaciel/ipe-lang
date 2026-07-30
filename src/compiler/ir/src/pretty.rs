@@ -152,6 +152,8 @@ fn ir_type_name_at(interner: &Interner, ty: &IrType, depth: u16) -> String {
         IrType::StreamWriter => "StreamWriter".to_owned(),
         // HTTP request handle (opaque, structural record folded to this variant).
         IrType::HttpRequest => "HttpRequest".to_owned(),
+        // Ipe.Regex compiled-pattern handle (opaque).
+        IrType::Regex => "Regex".to_owned(),
         // Ipe.Http.Server.WebSocket opaque handles.
         IrType::WebSocketServer => "WebSocketServer".to_owned(),
         IrType::WebSocketServerCfg => "WebSocketServerCfg".to_owned(),
@@ -779,6 +781,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::SecretReveal => "Secret.reveal",
         KernelFn::SecretRedacted => "Secret.redacted",
         // Ipe.Regex
+        KernelFn::RegexCompile => "Regex.compile",
         KernelFn::RegexMatch => "Regex.match",
         KernelFn::RegexFind => "Regex.find",
         KernelFn::RegexFindAll => "Regex.findAll",

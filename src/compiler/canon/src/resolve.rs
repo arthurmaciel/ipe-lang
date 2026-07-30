@@ -138,6 +138,10 @@ const RESERVED_BUILTIN_TYPES: &[&str] = &[
     // same reason: a security-tier type (the traversal/NUL-rejection boundary)
     // must not be shadowable by user code.
     "Path",
+    // `Ipe.Regex`'s opaque compiled-pattern type — reserved so `Regex.compile`'s
+    // typed-`Err`-on-invalid-pattern guarantee cannot be defeated by a user
+    // `type Regex` shadowing the built-in handle.
+    "Regex",
     "StreamId",
     "ChunkEvent",
     "Request",

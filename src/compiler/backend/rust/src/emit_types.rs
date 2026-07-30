@@ -188,6 +188,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::SqlFragment => "ipe_runtime::db::SqlFragment".to_owned(),
         IrType::Secret => "ipe_runtime::secret::Secret".to_owned(),
         IrType::Path => "ipe_runtime::path::Path".to_owned(),
+        IrType::Regex => "ipe_runtime::regex_kernel::Regex".to_owned(),
         IrType::Int => "i64".to_owned(),
         IrType::Float => "f64".to_owned(),
         IrType::Bool => "bool".to_owned(),
