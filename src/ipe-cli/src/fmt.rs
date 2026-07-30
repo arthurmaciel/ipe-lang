@@ -1160,7 +1160,7 @@ impl Printer<'_> {
             Expr_::Int(n) => n.to_string(),
             Expr_::Float(f) => format_float(*f),
             Expr_::Str(s) => format!("\"{}\"", escape_str(s)),
-            Expr_::MultilineStr(s) => format!("\"\"\"{s}\"\"\""),
+            Expr_::MultilineStr { raw, .. } => format!("\"\"\"{raw}\"\"\""),
             Expr_::Char(c) => format!("'{c}'"),
             Expr_::Unit => "()".to_owned(),
             Expr_::Call(head, args) => self.call(head, args, indent, e.span),
@@ -1251,7 +1251,7 @@ impl Printer<'_> {
             )
         };
         let first_is_block =
-            |a: &Expr| matches!(&a.value, Expr_::MultilineStr(s) if s.contains('\n'));
+            |a: &Expr| matches!(&a.value, Expr_::MultilineStr { raw, .. } if raw.contains('\n'));
         let later_block = |tail: &[Expr]| {
             tail.iter()
                 .any(|a| has_layout_newline(&self.expr_atom(a, indent + 1)))
@@ -1285,7 +1285,7 @@ impl Printer<'_> {
         // visible content on its first physical line (`interpolate """head\n…"""`).
         // One that opens with a newline (`"""\n…`) — or any string literal that is
         // a single line — drops to its own indented line instead.
-        if let Expr_::MultilineStr(s) = &a.value {
+        if let Expr_::MultilineStr { raw: s, .. } = &a.value {
             // A triple-quoted string hugs the function line only when its first
             // physical line opens with visible, non-whitespace content
             // (`"""head…`). One that opens with a newline (`"""\n…`) or with
@@ -1630,7 +1630,7 @@ fn has_layout_newline(s: &str) -> bool {
 /// drops to its own indented line. Other joinable first arguments (names, empty
 /// collections) are short and always fit.
 fn head_line_fits(head_s: &str, first: &Expr, indent: usize) -> bool {
-    let Expr_::MultilineStr(s) = &first.value else {
+    let Expr_::MultilineStr { raw: s, .. } = &first.value else {
         return true;
     };
     let first_content = s.split_once('\n').map_or(s.as_str(), |(f, _)| f);

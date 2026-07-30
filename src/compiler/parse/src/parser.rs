@@ -121,7 +121,7 @@ const fn tok_kind(t: &Tok) -> TokenKind {
         Tok::Ident(_) => TokenKind::Ident,
         Tok::Int(_) => TokenKind::Int,
         Tok::Float(_) => TokenKind::Float,
-        Tok::Str(_) | Tok::TripleStr(_) => TokenKind::Str,
+        Tok::Str(_) | Tok::TripleStr { .. } => TokenKind::Str,
         Tok::Char(_) => TokenKind::Char,
     }
 }
@@ -1105,7 +1105,7 @@ impl<'a> Parser<'a> {
                 | Tok::Int(_)
                 | Tok::Float(_)
                 | Tok::Str(_)
-                | Tok::TripleStr(_)
+                | Tok::TripleStr { .. }
                 | Tok::Char(_)
                 | Tok::Ident(_)
                 // A leading `.field` begins a first-class accessor atom, so
@@ -1237,7 +1237,13 @@ impl<'a> Parser<'a> {
             // Triple-quoted strings carry raw content; the canonicaliser desugars
             // `{{expr}}` interpolation at name-resolution time. Mirrors the Haskell
             // parser's `MultiLine str -> return (Src.MultilineStr str)` arm.
-            Tok::TripleStr(s) => Ok(Located::new(tok.span, Expr_::MultilineStr(s.clone()))),
+            Tok::TripleStr { raw, anchor } => Ok(Located::new(
+                tok.span,
+                Expr_::MultilineStr {
+                    raw: raw.clone(),
+                    anchor: *anchor,
+                },
+            )),
             Tok::Char(c) => Ok(Located::new(tok.span, Expr_::Char(c.clone()))),
             Tok::Minus => self.parse_negative_literal(tok.span, threshold, depth),
             Tok::Ident(text) => {
@@ -2362,9 +2368,14 @@ impl<'a> Parser<'a> {
             // is unsound to match on (Rust forbids float patterns), so a
             // `Tok::Float` falls through to the fail-closed catch-all below.
             Tok::Int(n) => Ok(Located::new(tok.span, Pattern_::PInt(*n))),
-            Tok::Str(s) | Tok::TripleStr(s) => {
-                Ok(Located::new(tok.span, Pattern_::PStr(s.clone())))
-            }
+            Tok::Str(s) => Ok(Located::new(tok.span, Pattern_::PStr(s.clone()))),
+            // A triple-quoted string in pattern position matches the same
+            // margin-stripped value its expression form produces, so the strip
+            // is applied here too (patterns carry no interpolation to desugar).
+            Tok::TripleStr { raw, anchor } => Ok(Located::new(
+                tok.span,
+                Pattern_::PStr(ipe_syntax::strip_anchor_margin(raw, *anchor)),
+            )),
             Tok::Char(c) => Ok(Located::new(tok.span, Pattern_::PChar(c.clone()))),
             // A negative integer literal pattern `-3`. The `-` lexes as
             // [`Tok::Minus`]; the digit must follow immediately. Anything else
@@ -2500,7 +2511,7 @@ impl<'a> Parser<'a> {
                     | Tok::Ident(_)
                     | Tok::Int(_)
                     | Tok::Str(_)
-                    | Tok::TripleStr(_)
+                    | Tok::TripleStr { .. }
                     | Tok::Char(_)
                     | Tok::Minus)
             )

@@ -7,7 +7,7 @@ mod ast;
 
 pub use ast::{
     Ctor, Exposed, Exposing, Expr, Expr_, Import, LetBinding, Module, Pattern, Pattern_, Privacy,
-    TypeAlias, TypeAnnotation, Union, Value,
+    TypeAlias, TypeAnnotation, Union, Value, strip_anchor_margin,
 };
 
 #[cfg(test)]

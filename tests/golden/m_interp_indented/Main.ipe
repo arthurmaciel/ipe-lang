@@ -1,0 +1,18 @@
+module Main exposing (main)
+
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+main =
+    let
+        tag = "o"
+        count = 54
+        msg =
+            """
+            item={{tag}}
+            count={{String.fromInt count}}
+            done
+            """
+    in
+    Io.println msg

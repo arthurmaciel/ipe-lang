@@ -3002,7 +3002,9 @@ fn canonicalise_expr(e: &src::Expr, env: &Env, interner: &mut Interner) -> DResu
         // Triple-quoted strings: desugar `{{expr}}` interpolation into a `++`
         // chain at canonicalise time. Mirrors `Ipe.Canonicalise.Expression.hs`
         // line 42 (`Src.MultilineStr s -> desugarMultiline env s`).
-        src::Expr_::MultilineStr(s) => desugar_multiline(s, span, env, interner)?,
+        src::Expr_::MultilineStr { raw, anchor } => {
+            desugar_multiline(raw, *anchor, span, env, interner)?
+        }
         src::Expr_::Char(c) => canon::Expr_::Char(c.clone()),
         src::Expr_::Unit => canon::Expr_::Unit,
         src::Expr_::VarLocal(name) => resolve_var(*name, span, env, interner)?,
@@ -4548,11 +4550,19 @@ fn resolve_simple_interp_ref(
 /// `Ipe.Canonicalise.Expression.desugarMultiline`.
 fn desugar_multiline(
     raw: &str,
+    anchor: u32,
     span: Span,
     env: &Env,
     interner: &mut Interner,
 ) -> DResult<canon::Expr_> {
-    let chunks = split_interpolation(raw);
+    // Strip the source indentation margin before splitting, so the runtime
+    // value drops the leading whitespace the author used to lay the block out.
+    // The strip removes only leading whitespace (never a `{{`/`}}` marker or its
+    // body), so every interpolation expression is extracted from the same text
+    // it would have been without a margin — sub-spans and the node span are
+    // unchanged.
+    let stripped = src::strip_anchor_margin(raw, anchor);
+    let chunks = split_interpolation(&stripped);
     // Build one canonical expression per chunk.
     let mut parts: Vec<canon::Expr> = Vec::with_capacity(chunks.len());
     for chunk in chunks {

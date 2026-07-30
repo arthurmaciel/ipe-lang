@@ -697,6 +697,37 @@ only to pre-empt mis-listing (see AGENTS.md "Agent learnings").
 
 ---
 
+### B26 — Triple-quoted string value strips its source indentation margin
+- **Ipê:** a triple-quoted `"""…"""` value drops the source indentation using an
+  anchor column. The anchor column A is the source column of the first
+  non-whitespace character; the canonicaliser removes up to `A - 1` leading
+  whitespace characters from every physical line after the first, and drops one
+  newline immediately after the opening `"""`. Only whitespace is removed, never
+  past a line's content. The reference carries the raw body verbatim, including
+  every column of source indentation.
+- **Ipê:** an indented block
+  ```elm
+  report =
+      """
+      total={{count}}
+      done
+      """
+  ```
+  yields `"total={{count}}\ndone\n"`; the reference yields
+  `"\n      total={{count}}\n      done\n      "`.
+- **Rationale:** the margin is source layout, not data. Carrying it forces the
+  author to either break indentation or post-process the value; anchoring on the
+  first content column removes the layout deterministically (fixed from the
+  opening line, not a min-common-margin scan) while leaving `{{expr}}`
+  interpolation sub-spans and diagnostic offsets intact — only leading whitespace
+  is touched. Reference: lexer anchor in `src/compiler/parse/src/lexer.rs`
+  (`lex_triple_string`), strip in `ipe_syntax::strip_anchor_margin`, applied by
+  `desugar_multiline` in `src/compiler/canon/src/resolve.rs`.
+- **Divergence:** `divergence:` — Ipê follows a different target (layout-stripped
+  value) than the reference's raw-body carry.
+
+---
+
 ## 3. Architectural divergences (compiler + runtime structure)
 
 These are structural consequences of porting a Haskell compiler that emits
@@ -1135,7 +1166,10 @@ API-shape review):
   `result_and_map_fn_payload`,
   `and_map_untyped_double_forwarder_arity1`). B23 is pure
   under-acceptance, not a Go-sanctioned divergence, so it adds no entries
-  to this count. B16/B17 goldens pending.
+  to this count. B16/B17 goldens pending. B24 (prescriptive TEA `init`) and
+  B25 (JWT 32-byte secret floor) are later behavioral entries. B26 is the
+  triple-quoted anchor-column margin strip (output-changing for indented
+  blocks); its regression coverage is the `m_interp_indented` golden.
 - **Architectural divergences:** 18 (A1–A18). A8 and A13 are reference-ahead on
   completeness. A15–A17 are seal-gate entries. A18 is the WS phantom-`msg`
   type-var entry added with task #127.

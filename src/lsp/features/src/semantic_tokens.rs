@@ -399,7 +399,7 @@ fn push_expr_tokens(
             push_span(raw, expr.span, TT_NUMBER);
         }
         ipe_syntax::Expr_::Str(_)
-        | ipe_syntax::Expr_::MultilineStr(_)
+        | ipe_syntax::Expr_::MultilineStr { .. }
         | ipe_syntax::Expr_::Char(_) => {
             push_span(raw, expr.span, TT_STRING);
         }
