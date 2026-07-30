@@ -524,7 +524,7 @@ fn push_expr(
             out.push_str(s);
             out.push('"');
         }
-        ipe_syntax::Expr_::MultilineStr(s) => {
+        ipe_syntax::Expr_::MultilineStr { raw: s, .. } => {
             out.push_str("\"\"\"");
             out.push_str(s);
             out.push_str("\"\"\"");

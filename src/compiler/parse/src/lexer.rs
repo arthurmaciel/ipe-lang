@@ -111,12 +111,21 @@ pub enum Tok {
     /// UNESCAPED value (escape sequences such as `\n` / `\"` are resolved here),
     /// so downstream stages see the runtime string verbatim.
     Str(String),
-    /// A triple-quoted string literal `"""..."""`. The carried [`String`] is the
-    /// RAW content — escape sequences (`\n`, `\\`) and `{{expr}}` interpolation
-    /// markers are NOT resolved here; the canonicaliser handles them downstream,
-    /// mirroring `Ipe.Parse.String.findTripleClose` which performs no escape
-    /// resolution. Mirrors the Haskell compiler's `Src.MultilineStr`.
-    TripleStr(String),
+    /// A triple-quoted string literal `"""..."""`.
+    ///
+    /// `raw` is the RAW content — escape sequences (`\n`, `\\`) and `{{expr}}`
+    /// interpolation markers are NOT resolved here; the canonicaliser handles
+    /// them downstream.
+    ///
+    /// `anchor` is the 1-based source column of the first non-whitespace content
+    /// character (the anchor column A). The canonicaliser strips up to `A - 1`
+    /// leading whitespace characters from every physical line after the first,
+    /// so an indented `"""…"""` block does not carry its source margin into the
+    /// runtime value.
+    TripleStr {
+        raw: String,
+        anchor: u32,
+    },
     /// A character literal `'a'`. The carried [`String`] is the single UNESCAPED
     /// character's text (exactly one `char`), so `'\n'` carries a one-character
     /// newline string. The backend renders it as a Rust `char` literal.
@@ -486,9 +495,18 @@ fn lex_string(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
 /// canonicaliser (mirroring `Ipe.Parse.String.findTripleClose` in the Haskell
 /// reference, which performs no escape resolution).
 ///
+/// The anchor column A is the source column of the first non-whitespace content
+/// character. The lexer's `col` cursor tracks the current source column; a
+/// newline resets it to column 1 in [`Lexer::advance`], so the column recorded
+/// at the first character that is neither a newline nor leading indentation is
+/// A. The margin the canonicaliser strips is exactly this indentation, so
+/// leading spaces and tabs are skipped when locating A. A body that is only
+/// whitespace (or empty) anchors at column 1, which strips nothing downstream.
+///
 /// Reaching end of input before `"""` is [`ParseError::UnterminatedString`].
 fn lex_triple_string(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
     let mut value = String::new();
+    let mut anchor: Option<u32> = None;
     loop {
         match lx.peek() {
             None => {
@@ -506,13 +524,20 @@ fn lex_triple_string(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
                     lx.advance(); // consume first `"`  of `"""`
                     lx.advance(); // consume second `"` of `"""`
                     lx.advance(); // consume third `"`  of `"""`
-                    return Ok(Tok::TripleStr(value));
+                    return Ok(Tok::TripleStr {
+                        raw: value,
+                        anchor: anchor.unwrap_or(1),
+                    });
                 }
-                // Not a closing triple — this `"` is literal content.
+                // A literal `"` is content, so it fixes the anchor.
+                anchor.get_or_insert(lx.col);
                 value.push('"');
                 lx.advance();
             }
             Some(c) => {
+                if c != '\n' && c != '\r' && c != ' ' && c != '\t' {
+                    anchor.get_or_insert(lx.col);
+                }
                 value.push(c);
                 lx.advance();
             }
