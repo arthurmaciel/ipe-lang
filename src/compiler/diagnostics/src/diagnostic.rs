@@ -514,12 +514,20 @@ pub enum NameError {
     /// closed here. `imported` is the offending import path; `imported_shape` and
     /// `app_shape` name the two shapes; `expected` is the correct import path for
     /// the app's shape. [IPE-N0035]
-    WrongShapeCmdSub {
-        imported: Box<str>,
-        imported_shape: Box<str>,
-        app_shape: Box<str>,
-        expected: Box<str>,
-    },
+    WrongShapeCmdSub(Box<CmdSubShapeMismatch>),
+}
+
+/// The four names IPE-N0035 reports.
+///
+/// Boxed inside [`NameError::WrongShapeCmdSub`] so `NameError` (and thus
+/// [`Diagnostic`]) stays under clippy's `result_large_err` threshold on the
+/// `Result<_, Diagnostic>` hot paths.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CmdSubShapeMismatch {
+    pub imported: Box<str>,
+    pub imported_shape: Box<str>,
+    pub app_shape: Box<str>,
+    pub expected: Box<str>,
 }
 
 /// Which expansion budget was exhausted, reported as part of
@@ -1179,7 +1187,7 @@ const fn name_code(msg: &NameError) -> Code {
         NameError::BuiltinTypeArity { .. } => IPE_N0031,
         NameError::TypeExpansionTooDeep { .. } => IPE_N0032,
         NameError::ProgramImportsTeaShape { .. } => IPE_N0033,
-        NameError::WrongShapeCmdSub { .. } => IPE_N0035,
+        NameError::WrongShapeCmdSub(..) => IPE_N0035,
     }
 }
 
@@ -1320,8 +1328,12 @@ fn name_help(msg: &NameError, span: Span) -> Vec<HelpLine> {
             span: *first,
             role: SpanRole::FirstDefinition,
         }],
-        NameError::WrongShapeCmdSub { expected, .. } => vec![HelpLine::Note(
-            format!("this app's shape reaches `Cmd` / `Sub` through `{expected}`").into_boxed_str(),
+        NameError::WrongShapeCmdSub(m) => vec![HelpLine::Note(
+            format!(
+                "this app's shape reaches `Cmd` / `Sub` through `{}`",
+                m.expected
+            )
+            .into_boxed_str(),
         )],
         NameError::Unknown
         | NameError::AliasArity { .. }

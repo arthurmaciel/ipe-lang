@@ -4,7 +4,8 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use ipe_diagnostics::{
-    AliasExpansionKind, DResult, Diagnostic, Located, NameError, Span, TypeError,
+    AliasExpansionKind, CmdSubShapeMismatch, DResult, Diagnostic, Located, NameError, Span,
+    TypeError,
 };
 use ipe_intern::{Interner, Symbol};
 use ipe_kernels::StdlibKernel;
@@ -1178,12 +1179,12 @@ fn check_cross_shape_cmd_sub_gate(
         let leaf_name = if *leaf == cmd_sym { "Cmd" } else { "Sub" };
         return Err(Diagnostic::Name {
             span: imp.name.span,
-            msg: NameError::WrongShapeCmdSub {
+            msg: NameError::WrongShapeCmdSub(Box::new(CmdSubShapeMismatch {
                 imported: format!("Ipe.Tea.{imported_shape}.{leaf_name}").into_boxed_str(),
                 imported_shape: imported_shape.into(),
                 app_shape: app_shape.into(),
                 expected: format!("Ipe.Tea.{app_shape}.{leaf_name}").into_boxed_str(),
-            },
+            })),
         });
     }
     Ok(())

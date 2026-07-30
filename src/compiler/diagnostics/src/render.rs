@@ -482,14 +482,10 @@ fn name_label(msg: &NameError) -> Option<String> {
              `Terminal.appLines` / `WebView.app`), or drop the `{module}` import \
              if this is a Program"
         )),
-        NameError::WrongShapeCmdSub {
-            imported,
-            imported_shape,
-            app_shape,
-            expected,
-        } => Some(format!(
-            "`{imported}` is the {imported_shape} shape's `Cmd` / `Sub`, but this \
-             is a {app_shape} app; import `{expected}` instead"
+        NameError::WrongShapeCmdSub(m) => Some(format!(
+            "`{}` is the {} shape's `Cmd` / `Sub`, but this \
+             is a {} app; import `{}` instead",
+            m.imported, m.imported_shape, m.app_shape, m.expected
         )),
         NameError::Unknown => None,
     }
