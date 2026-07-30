@@ -263,6 +263,7 @@ fn ir_type_name_at(interner: &Interner, ty: &IrType, depth: u16) -> String {
         IrType::CryptoKey => "Key".to_owned(),
         IrType::CryptoMac => "Mac".to_owned(),
         IrType::EmailAddress => "EmailAddress".to_owned(),
+        IrType::Url => "Url".to_owned(),
     }
 }
 

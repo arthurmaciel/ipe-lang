@@ -299,6 +299,11 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         // rejected by `admissible()` (via `ir_type_is_serde` = `false`) and
         // this arm names it in the resulting IPE-L0120.
         | IrType::Path
+        // `Url` is a request-boundary value, not serde — same classification as
+        // `Path`: a Web Model field of type `Url` is rejected by `admissible()`
+        // (via `ir_type_is_serde` = `false`) and this arm names it in the
+        // resulting IPE-L0120.
+        | IrType::Url
         // `Order` is a plain three-variant data enum — an admissible leaf.
         // `Decimal` is a Copy newtype — an admissible leaf.
         // `ErrorKind`/`Error`/`ErrorDetails` and the nominal error-payload

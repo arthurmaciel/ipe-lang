@@ -967,6 +967,16 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // ── Ipe.Email.EmailAddress ───────────────────────────────────────
         KernelFn::EmailAddressParse => "email_address_parse",
         KernelFn::EmailAddressToString => "email_address_to_string",
+        // ── Ipe.Url ──────────────────────────────────────────────────────
+        KernelFn::UrlFromString => "url_from_string",
+        KernelFn::UrlToString => "url_to_string",
+        KernelFn::UrlScheme => "url_scheme",
+        KernelFn::UrlHost => "url_host",
+        KernelFn::UrlPort => "url_port",
+        KernelFn::UrlPath => "url_path",
+        KernelFn::UrlQuery => "url_query",
+        KernelFn::UrlFragment => "url_fragment",
+        KernelFn::UrlBuildQuery => "url_build_query",
         // ── TEA Cmd / Sub / Time kernels (wired) ────────────────────────
         KernelFn::CmdNone => "cmd_none",
         KernelFn::CmdBatch => "cmd_batch",

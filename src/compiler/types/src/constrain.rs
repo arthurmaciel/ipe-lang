@@ -566,6 +566,12 @@ struct Builtins {
     /// `EmailAddress.parse : String -> Maybe EmailAddress`; extracted via
     /// `EmailAddress.toString`.  Lowered to `IrType::EmailAddress`.
     email_address: Symbol,
+    // ── Ipe.Url ─────────────────────────────────────────────────────────────
+    /// `"Url"` — `Ipe.Url`'s opaque validated URL type (`ipe_runtime::url::Url`).
+    /// The ONLY constructor is `Url.fromString : String -> Result Error Url`;
+    /// extracted via `Url.toString`. Zero type arguments. Lowered to
+    /// `IrType::Url`.
+    url: Symbol,
     // ── Ipe.PubSub.Topic ───────────────────────────────────────────────────
     /// `"Topic"` — the phantom topic-handle type constructor `Topic a`.
     /// Erases to `String` at runtime (`ir_type_from_ty` maps `Topic a → Str`).
@@ -784,6 +790,8 @@ impl Builtins {
             crypto_mac: interner.intern("Mac")?,
             // ── Ipe.Email.EmailAddress ────────────────────────────────────────────
             email_address: interner.intern("EmailAddress")?,
+            // ── Ipe.Url ───────────────────────────────────────────────────────────
+            url: interner.intern("Url")?,
             // ── Ipe.PubSub.Topic ────────────────────────────────────────────────
             topic_con: interner.intern("Topic")?,
         })
@@ -4053,6 +4061,14 @@ impl<'a> Builder<'a> {
             name: self.builtins.email_address,
             args: Vec::new(),
         };
+        // `Url` — `Ipe.Url`'s opaque validated URL type
+        // (`ipe_runtime::url::Url`). The ONLY constructor is `Url.fromString`;
+        // extracted via `Url.toString`. Lowered to `IrType::Url`.
+        let url = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.url,
+            args: Vec::new(),
+        };
         // `EmailMessage` — closed 9-field record (runtime
         // `ipe_runtime::email::EmailMessage`). The lowerer folds a value of this
         // exact shape to the nominal `IrType::EmailMessage` so a
@@ -6803,6 +6819,28 @@ impl<'a> Builder<'a> {
             K::EmailAddressParse => fun(string(), maybe(email_address())),
             K::EmailAddressToString => fun(email_address(), string()),
 
+            // ── Ipe.Url ───────────────────────────────────────────────────────────
+            // parse-don't-validate boundary — an unparseable / relative URL
+            // surfaces as `Err`, never a silent accept:
+            //   fromString : String -> Result Error Url
+            //   toString   : Url -> String
+            //   scheme     : Url -> String
+            //   host       : Url -> Maybe String
+            //   port       : Url -> Maybe Int
+            //   path       : Url -> String
+            //   query      : Url -> Maybe String
+            //   fragment   : Url -> Maybe String
+            //   buildQuery : List (String, String) -> String  (percent-encoding)
+            K::UrlFromString => fun(string(), result(error_ty(), url())),
+            K::UrlToString => fun(url(), string()),
+            K::UrlScheme => fun(url(), string()),
+            K::UrlHost => fun(url(), maybe(string())),
+            K::UrlPort => fun(url(), maybe(int())),
+            K::UrlPath => fun(url(), string()),
+            K::UrlQuery => fun(url(), maybe(string())),
+            K::UrlFragment => fun(url(), maybe(string())),
+            K::UrlBuildQuery => fun(list(tuple2(string(), string())), string()),
+
             // ── Ui.link ──────────────────────────────────────────────────────────
             // link : List (Attribute msg) -> { url : String, label : Element msg }
             //      -> Element msg
@@ -8976,6 +9014,16 @@ mod registry_phase_c_tests {
             // ── Ipe.Email.EmailAddress (2) ──────────────────────────────
             K::EmailAddressParse,
             K::EmailAddressToString,
+            // ── Ipe.Url (9) ─────────────────────────────────────────
+            K::UrlFromString,
+            K::UrlToString,
+            K::UrlScheme,
+            K::UrlHost,
+            K::UrlPort,
+            K::UrlPath,
+            K::UrlQuery,
+            K::UrlFragment,
+            K::UrlBuildQuery,
             // ── Ipe.PubSub (2) ─────────────────────────────────────
             // Runtime exists, emit arm present (`pubsub_publish::<_, IpeError>`),
             // scheme `String -> a -> Task Error Int`.

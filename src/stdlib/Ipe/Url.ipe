@@ -1,0 +1,75 @@
+-- | Ipe.Url — typed, validated URLs (Layer 3 Ipe source).
+--
+-- `Url` is opaque: the ONLY way to build one is `fromString`, which parses the
+-- raw string (the SAME parser the runtime SSRF guard uses) and REJECTS a
+-- scheme-less / relative / unparseable string. Because a `Url` is validated at
+-- construction, the accessors (`scheme` / `host` / `port` / `path` / `query` /
+-- `fragment`) take a `Url`, not a raw `String` — a scheme-confused or
+-- unparseable URL can never reach an outbound request.
+--
+-- `Url.buildQuery` is the injection-safe query-string builder: it
+-- percent-encodes every key and value, so a caller cannot forget to encode a
+-- metacharacter (`&` / `=` / space / `#`) and split off a new parameter.
+module Ipe.Url exposing
+    ( Url
+    , fromString, toString
+    , scheme, host, port, path, query, fragment
+    , buildQuery
+    )
+
+
+import Ipe.Ffi as Ffi
+import Ipe.Error exposing (Error)
+import Ipe.Maybe exposing (Maybe)
+
+
+-- | `fromString raw` — the parse-don't-validate seal: the only `Url`
+-- constructor. Returns `Err` when `raw` is not a syntactically valid ABSOLUTE
+-- URL (a relative reference, a scheme-less host, or otherwise unparseable);
+-- otherwise `Ok` the parsed `Url`.
+fromString : String -> Result Error Url
+fromString = Ffi.kernel "Url_fromString"
+
+
+-- | `toString url` — recover the serialized URL string.
+toString : Url -> String
+toString = Ffi.kernel "Url_toString"
+
+
+-- | `scheme url` — the URL's scheme (`"https"`, `"http"`, …), always present.
+scheme : Url -> String
+scheme = Ffi.kernel "Url_scheme"
+
+
+-- | `host url` — the host component, or `Nothing` for a hostless scheme
+-- (e.g. `mailto:`).
+host : Url -> Maybe String
+host = Ffi.kernel "Url_host"
+
+
+-- | `port url` — the port with the scheme's known default applied
+-- (`https://x` → `443`), or `Nothing`.
+port : Url -> Maybe Int
+port = Ffi.kernel "Url_port"
+
+
+-- | `path url` — the path component.
+path : Url -> String
+path = Ffi.kernel "Url_path"
+
+
+-- | `query url` — the raw query string (without the leading `?`), or `Nothing`.
+query : Url -> Maybe String
+query = Ffi.kernel "Url_query"
+
+
+-- | `fragment url` — the fragment (without the leading `#`), or `Nothing`.
+fragment : Url -> Maybe String
+fragment = Ffi.kernel "Url_fragment"
+
+
+-- | `buildQuery pairs` — the injection-safe query-string builder. Every key and
+-- value is percent-encoded, so a metacharacter in a value cannot split off a
+-- new parameter. Returns the encoded string without a leading `?`.
+buildQuery : List ( String, String ) -> String
+buildQuery = Ffi.kernel "Url_buildQuery"

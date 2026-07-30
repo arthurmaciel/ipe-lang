@@ -33,9 +33,12 @@ serde_yaml = { version = "0.9", optional = true }
 axum = { version = "0.7", features = ["ws"], optional = true }
 tower-http = { version = "0.5", features = ["fs", "catch-panic"], optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "stream"], optional = true }
-# `url`: direct dep for the reqwest-free `ssrf` module (reqwest re-exports this
-# exact crate as `reqwest::Url`). Resolves to the same lockfile node as reqwest's.
-url = { version = "2", optional = true }
+# `url`: NON-optional. Backs the always-compiled `Ipe.Url` typed-URL module
+# (`url.rs`, the parse-don't-validate seal + `form_urlencoded` query builder),
+# same posture as the always-present `path.rs`. Also the reqwest-free `ssrf`
+# module's parser (reqwest re-exports this exact crate as `reqwest::Url`), so it
+# resolves to the same lockfile node as reqwest's — no extra dependency.
+url = { version = "2" }
 lettre = { version = "0.11", default-features = false, features = ["builder", "hostname", "smtp-transport", "pool", "tokio1", "tokio1-rustls-tls"], optional = true }
 # `rustls-tls-webpki-roots`: enables `MaybeTlsStream::Rustls` so `wss://`
 # connections use the same rustls backend as reqwest/sqlx/lettre — no native
@@ -178,18 +181,19 @@ tui = ["unicode-width", "crossterm", "tokio"]
 webview = ["wry", "tao", "web"]
 config = ["json", "toml", "serde_yaml"]
 server = ["tokio", "axum", "tower-http", "futures-util"]
-# `url`: the reqwest-free `ssrf` module parses URLs via the `url` crate (which
-# reqwest re-exports as `reqwest::Url`). Pulled by both http_client and
-# websocket_client so the SSRF validators are available to each.
-http_client = ["tokio", "reqwest", "futures-util", "url"]
+# The reqwest-free `ssrf` module parses URLs via the `url` crate (which reqwest
+# re-exports as `reqwest::Url`); `url` is now a NON-optional base dependency (see
+# its `[dependencies]` entry), so it needs no feature entry here.
+http_client = ["tokio", "reqwest", "futures-util"]
 # `http_client`: email.rs reuses `http_client::ssrf_apply` for outbound-request
 # SSRF hardening; ws_client.rs reuses `http_client::ssrf_validate_url` +
 # `ssrf_pinned_ws_addr`. Both need the http_client module present.
 email = ["tokio", "reqwest", "lettre", "serde_json", "sha2", "http_client"]
-# ws needs ONLY the reqwest-free ssrf validators (via `url`), NOT the reqwest
-# HTTP client — so it pulls `url`, not `http_client`. (Was `http_client` in
-# batch-19; option B factored the validators into the reqwest-free `ssrf` module.)
-websocket_client = ["tokio", "tokio-tungstenite", "futures-util", "url"]
+# ws needs ONLY the reqwest-free ssrf validators (which use `url`, a NON-optional
+# base dep), NOT the reqwest HTTP client — so it does not pull `http_client`.
+# (Was `http_client` in batch-19; option B factored the validators into the
+# reqwest-free `ssrf` module.)
+websocket_client = ["tokio", "tokio-tungstenite", "futures-util"]
 # `aes-gcm` (CSRF cookie AEAD — web/csrf.rs) + `sha2` (client-JS SRI integrity
 # hash — web/mod.rs) are used by always-compiled-under-web code. Generated Web
 # projects get them via the always-on `crypto` default; the standalone `web`

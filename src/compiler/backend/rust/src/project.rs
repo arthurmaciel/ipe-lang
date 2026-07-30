@@ -333,6 +333,7 @@ pub mod stringify;
 pub mod system;
 pub mod telemetry;
 pub mod time;
+pub mod url;
 pub mod uuid_kernel;
 pub mod css_safety;
 pub mod css;
@@ -1651,6 +1652,9 @@ fn ir_type_contains_non_serde(ty: &IrType) -> bool {
         | IrType::WebRoute(_)
         | IrType::Secret
         | IrType::Path
+        // `Url` is a non-serde request-boundary value (like `Path`) — a `Url` in
+        // a HydrationState record is rejected.
+        | IrType::Url
         | IrType::SqlFragment
         | IrType::CacheCfg
         | IrType::CacheStats

@@ -1733,6 +1733,33 @@ pub enum StdlibKernel {
     EmailAddressParse,
     /// `EmailAddress.toString : EmailAddress -> String` — single extraction boundary.
     EmailAddressToString,
+
+    // ── Ipe.Url — typed, validated URLs (parse-don't-validate) ─────────────
+    // Pure, total kernels routed via the compiled-source `Ipe.Url` Layer-3
+    // surface + `Ffi.kernel "Url_*"` aliases. `Url` is an opaque, validated
+    // type: the ONLY constructor is `UrlFromString` (the parse seal that rejects
+    // a scheme-less / unparseable string); the accessors take a `Url`, never a
+    // raw `String`. Runtime fns live in `ipe_runtime::url::*`.
+    /// `Url.fromString : String -> Result Error Url` — THE seal; the only
+    /// constructor. An unparseable / relative URL is a typed `Err`.
+    UrlFromString,
+    /// `Url.toString : Url -> String` — THE un-parse; recover the URL string.
+    UrlToString,
+    /// `Url.scheme : Url -> String` — the URL's scheme (always present).
+    UrlScheme,
+    /// `Url.host : Url -> Maybe String` — the host, or `Nothing` (hostless scheme).
+    UrlHost,
+    /// `Url.port : Url -> Maybe Int` — port (scheme default applied), or `Nothing`.
+    UrlPort,
+    /// `Url.path : Url -> String` — the path component.
+    UrlPath,
+    /// `Url.query : Url -> Maybe String` — the raw query (no `?`), or `Nothing`.
+    UrlQuery,
+    /// `Url.fragment : Url -> Maybe String` — the fragment (no `#`), or `Nothing`.
+    UrlFragment,
+    /// `Url.buildQuery : List (String, String) -> String` — the injection-safe
+    /// query-string builder; every key/value is percent-encoded.
+    UrlBuildQuery,
 }
 
 impl StdlibKernel {
@@ -3282,6 +3309,16 @@ impl StdlibKernel {
                 Pure,
                 "email_address_to_string",
             ),
+            // ── Ipe.Url ────────────────────────────────────────────────
+            Self::UrlFromString => d("Url", "fromString", 1, Pure, "url_from_string"),
+            Self::UrlToString => d("Url", "toString", 1, Pure, "url_to_string"),
+            Self::UrlScheme => d("Url", "scheme", 1, Pure, "url_scheme"),
+            Self::UrlHost => d("Url", "host", 1, Pure, "url_host"),
+            Self::UrlPort => d("Url", "port", 1, Pure, "url_port"),
+            Self::UrlPath => d("Url", "path", 1, Pure, "url_path"),
+            Self::UrlQuery => d("Url", "query", 1, Pure, "url_query"),
+            Self::UrlFragment => d("Url", "fragment", 1, Pure, "url_fragment"),
+            Self::UrlBuildQuery => d("Url", "buildQuery", 1, Pure, "url_build_query"),
         }
     }
 
@@ -4378,6 +4415,16 @@ impl StdlibKernel {
         // ── Ipe.Email.EmailAddress ─────────────────────────────────────
         Self::EmailAddressParse,
         Self::EmailAddressToString,
+        // ── Ipe.Url ────────────────────────────────────────────────────
+        Self::UrlFromString,
+        Self::UrlToString,
+        Self::UrlScheme,
+        Self::UrlHost,
+        Self::UrlPort,
+        Self::UrlPath,
+        Self::UrlQuery,
+        Self::UrlFragment,
+        Self::UrlBuildQuery,
     ];
 
     // ── Classification predicates (moved from ipe_ir::KernelFn) ─────────────
@@ -5518,7 +5565,17 @@ impl StdlibKernel {
             | Self::CryptoChacha20DecryptKey
             // ── Ipe.Email.EmailAddress ─────────────────────────────────
             | Self::EmailAddressParse
-            | Self::EmailAddressToString => None,
+            | Self::EmailAddressToString
+            // ── Ipe.Url — pure parse/accessor/builder kernels, no I/O side-effect.
+            | Self::UrlFromString
+            | Self::UrlToString
+            | Self::UrlScheme
+            | Self::UrlHost
+            | Self::UrlPort
+            | Self::UrlPath
+            | Self::UrlQuery
+            | Self::UrlFragment
+            | Self::UrlBuildQuery => None,
         }
     }
 
