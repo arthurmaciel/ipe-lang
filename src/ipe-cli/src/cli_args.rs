@@ -94,6 +94,35 @@ pub fn split_format<'a>(
     Ok((format.unwrap_or_default(), positional))
 }
 
+/// Parse a command whose only argument is an optional single positional path.
+///
+/// At most one non-flag token, no options. Returns the positional when present,
+/// `None` when the tail is empty (the caller supplies its own default).
+///
+/// # Errors
+/// [`CliError::UsageOwned`] on any flag (this command takes none) or a second
+/// positional — never a silently-ignored token.
+pub fn single_positional<'a>(
+    rest: &'a [String],
+    command: &str,
+) -> Result<Option<&'a str>, CliError> {
+    let mut positional: Option<&'a str> = None;
+    for arg in rest {
+        if arg.starts_with('-') {
+            return Err(CliError::UsageOwned(format!(
+                "ipe {command}: unexpected option `{arg}`"
+            )));
+        }
+        if positional.is_some() {
+            return Err(CliError::UsageOwned(format!(
+                "ipe {command}: unexpected extra argument `{arg}`"
+            )));
+        }
+        positional = Some(arg);
+    }
+    Ok(positional)
+}
+
 /// Set a value option that may appear at most once, rejecting a duplicate with a
 /// specific message rather than silently overwriting the earlier value.
 ///

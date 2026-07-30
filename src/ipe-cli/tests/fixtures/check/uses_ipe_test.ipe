@@ -1,0 +1,17 @@
+module Main exposing (main, tests)
+
+-- Imports `Ipe.Test`, a compiled-source stdlib module that declares its own
+-- `Test` type. `ipe check` must inject that module's source (the injection-aware
+-- graph) and type-check it — a bare single-module path fails name resolution.
+import Ipe.Io as Io
+import Ipe.Test as Test exposing (Test)
+
+tests : Test
+tests =
+    Test.suite "arithmetic"
+        [ Test.test "adds" (\_ -> Test.equal 4 (2 + 2))
+        ]
+
+main : Task ()
+main =
+    Io.println "checked"

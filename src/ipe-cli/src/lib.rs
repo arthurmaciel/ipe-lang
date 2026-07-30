@@ -1632,6 +1632,7 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
             with_help_on_misuse("upgrade-agents", init::run_upgrade_agents(rest))
         }
         Some((cmd, rest)) if cmd == "build" => with_help_on_misuse("build", run_build(rest)),
+        Some((cmd, rest)) if cmd == "check" => with_help_on_misuse("check", run_check(rest)),
         Some((cmd, rest)) if cmd == "run" => with_help_on_misuse("run", run_run(rest)),
         Some((cmd, rest)) if cmd == "exec" => with_help_on_misuse("exec", run_exec(rest)),
         Some((cmd, rest)) if cmd == "watch" => with_help_on_misuse("watch", run_watch(rest)),
@@ -2583,6 +2584,47 @@ pub(crate) fn lower_entry(entry: &Path) -> Result<ipe_ir::Program, CliError> {
 fn lower_entry_via_graph(
     entry: &Path,
 ) -> Result<(ipe_db::IpeDatabase, std::sync::Arc<ipe_ir::Program>), CliError> {
+    let graph = build_source_graph(entry)?;
+    ipe_db::lower_program(&graph.db, graph.source_root, graph.entry_file)
+        .map_err(|(diag, _home)| graph.pipeline_err(entry, diag))
+        .map(|program| (graph.db, program))
+}
+
+/// The salsa inputs one analysis needs: the owning database, the whole-program
+/// source root, and the entry module's [`ipe_db::SourceFile`] handle — the
+/// product of sibling discovery + compiled-source stdlib injection shared by
+/// every single-entry analysis path.
+struct SourceGraph {
+    db: ipe_db::IpeDatabase,
+    source_root: ipe_db::SourceRoot,
+    entry_file: ipe_db::SourceFile,
+    /// The entry module's source text, so a rejecting query can blame it.
+    entry_src: String,
+}
+
+impl SourceGraph {
+    /// Frame a rejecting query's diagnostic against the entry file — the shared
+    /// [`CliError::Pipeline`] mapping every graph analysis uses.
+    fn pipeline_err(&self, entry: &Path, diag: Diagnostic) -> CliError {
+        CliError::Pipeline {
+            file: entry.to_path_buf(),
+            src: self.entry_src.clone(),
+            diag,
+        }
+    }
+}
+
+/// Build the injection-aware whole-program source graph for a single `.ipe`
+/// entry: discover its siblings, inject the compiled-source stdlib closure, and
+/// create the salsa source root. Shared by [`lower_entry_via_graph`] and
+/// [`typecheck_entry_via_graph`] so the build, capabilities, `--emit-ir`, and
+/// `check` surfaces all resolve the same module set — a compiled-source stdlib
+/// import (e.g. `Ipe.Test`) resolves identically across every one.
+///
+/// # Errors
+/// [`CliError::Pipeline`] when the entry does not parse; [`CliError::Io`] on any
+/// filesystem failure; [`CliError::Usage`] if the entry is not in the built map.
+fn build_source_graph(entry: &Path) -> Result<SourceGraph, CliError> {
     let mut collected = collect_entry_and_siblings(entry)?;
     let injected =
         project::inject_compiled_std_closure(&mut collected.sources, &mut collected.discovered);
@@ -2597,18 +2639,33 @@ fn lower_entry_via_graph(
     else {
         return Err(CliError::Usage("internal: entry module not in source map"));
     };
+    let entry_src = collected
+        .sources
+        .get(&collected.entry_module_path)
+        .map(|(_, s)| s.clone())
+        .unwrap_or_default();
 
-    ipe_db::lower_program(&db, source_root, entry_file)
-        .map_err(|(diag, _home)| CliError::Pipeline {
-            file: entry.to_path_buf(),
-            src: collected
-                .sources
-                .get(&collected.entry_module_path)
-                .map(|(_, s)| s.clone())
-                .unwrap_or_default(),
-            diag,
-        })
-        .map(|program| (db, program))
+    Ok(SourceGraph {
+        db,
+        source_root,
+        entry_file,
+        entry_src,
+    })
+}
+
+/// Type-check a single `.ipe` entry through the SAME injection-aware
+/// source-graph pipeline the build path uses, stopping at type-checking: it
+/// demands the `typecheck` query (parse → canon → link → HM infer) and never
+/// lowers to IR or emits Rust. This is what `ipe check` runs.
+///
+/// # Errors
+/// [`CliError::Pipeline`] carrying the first compiler diagnostic;
+/// [`CliError::Io`] when a source file cannot be read.
+fn typecheck_entry_via_graph(entry: &Path) -> Result<(), CliError> {
+    let graph = build_source_graph(entry)?;
+    ipe_db::typecheck(&graph.db, graph.source_root, graph.entry_file)
+        .map(|_| ())
+        .map_err(|(diag, _home)| graph.pipeline_err(entry, diag))
 }
 
 /// `ipe capabilities <entry.ipe>` — print the program's inferred security
@@ -2633,6 +2690,46 @@ fn run_package(rest: &[String]) -> Result<(), CliError> {
             "usage: ipe package <audit|publish> [<path>]",
         )),
     }
+}
+
+/// Resolve a `check`/analysis `<path>` argument to the entry `.ipe` file the
+/// source-graph pipeline reads. Same argument convention as `ipe build`:
+///
+/// 1. a directory → its `ipe.toml`'s `src`-root `Main.ipe`;
+/// 2. an `ipe.toml` → that manifest's `src`-root `Main.ipe`;
+/// 3. a `.ipe` file → itself.
+///
+/// A project's entry module is always `Main` (`project` module doc), so the
+/// entry file is `<src_root>/Main.ipe`.
+///
+/// # Errors
+/// [`CliError::Usage`] for a directory with no `ipe.toml`; the manifest's own
+/// parse errors otherwise.
+fn resolve_analysis_entry(path: &Path) -> Result<PathBuf, CliError> {
+    let manifest = discover_manifest(path)?;
+    match manifest {
+        Some(m) => {
+            let parsed = project::parse_manifest(&m)?;
+            Ok(parsed.src_root.join("Main.ipe"))
+        }
+        None => Ok(path.to_path_buf()),
+    }
+}
+
+/// `ipe check [<path>]` — type-check a program and stop. Runs the same
+/// injection-aware source graph `ipe build` uses, but demands only the
+/// `typecheck` query: no IR lowering, no Rust emission, nothing written. Exits
+/// 0 with a terse `ok` when the program type-checks, or non-zero carrying the
+/// first rendered diagnostic when it does not.
+fn run_check(rest: &[String]) -> Result<(), CliError> {
+    let arg = match cli_args::single_positional(rest, "check")? {
+        Some(e) => PathBuf::from(e),
+        None => PathBuf::from(default_entry()?),
+    };
+    let entry = resolve_analysis_entry(&arg)?;
+    typecheck_entry_via_graph(&entry)?;
+    println!("ok");
+    Ok(())
 }
 
 fn run_capabilities(rest: &[String]) -> Result<(), CliError> {
