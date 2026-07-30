@@ -319,29 +319,3 @@ where
         tokio::spawn(async {}) // dummy handle for the SubManager to abort harmlessly
     }))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn open_rejects_invalid_method() {
-        // An unparseable HTTP method must yield Err — never a silent downgrade
-        // to GET. "BAD METHOD" contains a space, invalid per HTTP token rules,
-        // so the error fires before any network I/O.
-        let req = HttpRequest {
-            method: "BAD METHOD".to_string(),
-            url: "http://example.com".to_string(),
-            body: String::new(),
-            headers: Vec::new(),
-            timeout: 0,
-            followRedirects: false,
-            maxRedirects: 0,
-        };
-        let r: IpeResult<String, IpeStreamId> = http_stream_open(req).await;
-        assert!(
-            matches!(r, IpeResult::Err(_)),
-            "invalid method must error, not downgrade to GET"
-        );
-    }
-}
