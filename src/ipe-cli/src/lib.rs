@@ -3355,6 +3355,51 @@ mod tests {
         assert!(tree.contains("main"), "tree names the `main` func:\n{tree}");
     }
 
+    /// A program importing a compiled-source stdlib module that defines its own
+    /// types (`Ipe.Test`) must resolve its qualified members through the CLI
+    /// analysis path (`ipe build --emit-ir` / `ipe capabilities`), exactly as it
+    /// does through a real `ipe build`. Both share the injection-aware
+    /// source-graph pipeline: the analysis path once ran a bare single-module
+    /// lower that never injected the closure, so `Test.runMain` / `Test.equal`
+    /// failed with IPE-N0004 "unknown module `Test`" here while the build
+    /// succeeded. This pins the CLI<->build parity for compiled-source-with-types
+    /// modules so the divergence cannot return.
+    #[test]
+    fn emit_ir_resolves_compiled_source_stdlib_with_own_types() {
+        let entry = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("tests")
+            .join("golden")
+            .join("test_summary_line_219")
+            .join("Main.ipe");
+        let tree = emit_ir_text(&entry);
+        assert!(
+            tree.is_ok(),
+            "emit-ir must resolve `Ipe.Test` (no IPE-N0004): {:?}",
+            tree.as_ref().err()
+        );
+        let Ok(tree) = tree else { return };
+        // The injected compiled-source module's OWN types + members are present
+        // — proof the closure was injected, not merely that the diagnostic was
+        // silenced.
+        assert!(
+            tree.contains("type TestResult"),
+            "injected `Ipe.Test` types must appear in the IR:\n{tree}"
+        );
+        assert!(
+            tree.contains("runMain"),
+            "`Test.runMain` must resolve to the injected member:\n{tree}"
+        );
+
+        // The same source-graph pipeline backs `ipe capabilities` via
+        // `lower_entry`; it must resolve identically (a pure test program).
+        assert!(
+            lower_entry(&entry).is_ok(),
+            "lower_entry (capabilities path) must resolve `Ipe.Test` too"
+        );
+    }
+
     #[test]
     fn machine_applicable_suggestion_is_collected_and_applied() {
         let src = "main = lenght";
