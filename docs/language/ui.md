@@ -141,17 +141,25 @@ Html.render : Html msg -> String
 ```
 
 `Html.render` walks a `Html msg` tree and returns the serialized HTML string.
-(`Html.toString` is an alias.) Under [Web](../shapes/web.md), the same idea is
-available as a `Task`:
+(`Html.toString` is an alias.) Its effectful sibling writes that HTML as a
+`Task`:
 
 ```ipe
-Web.renderStatic : (Model -> Html Msg) -> Model -> Task Error ()
+Html.renderStatic : (Model -> Html Msg) -> Model -> Task Error ()
 ```
 
-`Web.renderStatic` applies a `view` to a `Model` and writes the rendered HTML —
-no TEA loop, no `update`, no subscriptions. This is the bridge that lets a plain
-[Program](../shapes/program.md#views-as-data-static-rendering) build and emit a view
-without adopting an app shape.
+`Html.renderStatic` applies a `view` to a `Model` and writes the rendered HTML —
+no TEA loop, no `update`, no subscriptions. It is shape-neutral (it lives in
+`Ipe.Html`, not under any `Ipe.Tea.*` shape), so a plain
+[Program](../shapes/program.md#views-as-data-static-rendering) can build and emit
+a view without adopting an app shape:
+
+```ipe
+import Ipe.Html as Html
+
+main =
+    Html.renderStatic view model
+```
 
 ## `Ipe.Markdown` — markdown to `Element msg`
 

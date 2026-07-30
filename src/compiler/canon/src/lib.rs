@@ -2832,6 +2832,40 @@ mod tests {
     }
 
     #[test]
+    fn render_static_resolves_under_ipe_html_qualifier() {
+        // `renderStatic` is the shape-neutral static-render bridge — it lives
+        // under `Ipe.Html`, next to `render`, NOT under any `Ipe.Tea.*` shape.
+        let src = "module Main exposing (main)\n\
+                   import Ipe.Html as Html\n\n\
+                   main = Html.renderStatic\n";
+        let Some((m, i)) = canon_src(src) else {
+            assert!(false_marker(), "Html.renderStatic must canonicalise");
+            return;
+        };
+        assert_main_is_kernel(&m, &i, "Html", "renderStatic");
+    }
+
+    #[test]
+    fn program_using_render_static_is_not_a_tea_app() {
+        // ADR 0048: a module is a TEA app iff it imports something under
+        // `Ipe.Tea.*`. A plain Program renders a static view with
+        // `Html.renderStatic` and imports only the shape-neutral `Ipe.Html`, so
+        // it must canonicalise cleanly — never rejected as a Program-importing-
+        // a-shape contradiction (IPE-N0033).
+        let src = "module Main exposing (main)\n\
+                   import Ipe.Prelude exposing (..)\n\
+                   import Ipe.Html as Html\n\
+                   viewStatic model =\n    \
+                       Html.node \"div\" [] [ Html.text model.title ]\n\
+                   main =\n    \
+                       Html.renderStatic viewStatic { title = \"hi\" }\n";
+        assert!(
+            canon_err(src).is_none(),
+            "a Program using Html.renderStatic must not trip the TEA-import gate"
+        );
+    }
+
+    #[test]
     fn stdlib_exposing_println_resolves_unqualified() {
         // `import Ipe.Io exposing (println)` → bare `println` resolves via the
         // exposing path to `VarKernel { module: Io, name: println }`.

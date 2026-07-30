@@ -67,7 +67,7 @@ This supersedes the shape layout recorded in ADR 0048 (which introduced the
 - The shape surface is smaller and uniform: four shapes, one structured entry
   each, escapes as nodes. A reader learns one entry per shape and one escape
   node per medium.
-- `Web.app`, `Web.appRouted`, `Web.renderStatic`, `WebView.app`, and `Program`
+- `Web.app`, `Web.appRouted`, `Html.renderStatic`, `WebView.app`, and `Program`
   keep their behavior. The per-shape emitters are re-pointed to the renamed
   kernel variants (`TerminalAppScreen`, `TerminalAppLines`), not rewritten.
 - The raw-cell terminal escape, `Ui.cells`, is the follow-on that completes the
