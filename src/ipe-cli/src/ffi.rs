@@ -1043,10 +1043,13 @@ fn install_wrapper(
 
     if !assume_yes {
         use std::io::Write as _;
-        println!(
-            "About to COMPILE a local wrapper crate `{}` at {} (inside the isolation jail).",
-            krate.as_str(),
-            abs_str
+        eprintln!(
+            "{}",
+            crate::style::gutter(&format!(
+                "About to COMPILE a local wrapper crate `{}` at {} (inside the isolation jail).",
+                krate.as_str(),
+                abs_str
+            ))
         );
         print!("Continue? [y/N] ");
         let _ = std::io::stdout().flush();
@@ -1483,9 +1486,9 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
 
     if !assume_yes {
         use std::io::Write as _;
-        println!(
+        eprintln!(
             "{}",
-            ipe_ffi::driver::trust_summary(spec.name(), "", None, 0)
+            crate::style::gutter(&ipe_ffi::driver::trust_summary(spec.name(), "", None, 0))
         );
         print!("[y/N] ");
         let _ = std::io::stdout().flush();
@@ -1511,7 +1514,10 @@ pub fn run_remove(rest: &[String]) -> Result<(), CliError> {
     cache
         .remove_package(&slug)
         .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
-    println!("removed `{raw}`");
+    print!(
+        "{}",
+        crate::style::frame(&crate::style::gutter(&format!("removed `{raw}`")))
+    );
     Ok(())
 }
 
@@ -1547,7 +1553,12 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
     let deps = rust_dependencies_from_manifest(&text);
     let wrapper = rust_wrapper_from_manifest(&text);
     if deps.is_empty() && wrapper.is_none() {
-        println!("ipe install: no [rust.dependencies] or [rust.wrapper] entries");
+        print!(
+            "{}",
+            crate::style::frame(&crate::style::gutter(
+                "ipe install: no [rust.dependencies] or [rust.wrapper] entries"
+            ))
+        );
         return Ok(());
     }
     let cache = FfiCache::at_project_root(Path::new("."));
@@ -1566,14 +1577,14 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
     if !assume_yes {
         use std::io::Write as _;
         let names: Vec<&str> = deps.iter().map(|d| d.name.as_str()).collect();
-        println!(
-            "About to fetch and COMPILE untrusted code for {} crate(s): {}",
-            names.len(),
-            names.join(", ")
-        );
-        println!(
-            "Compiling runs each crate's build scripts and proc-macros (inside the \
-             isolation jail)."
+        eprintln!(
+            "{}",
+            crate::style::gutter(&format!(
+                "About to fetch and COMPILE untrusted code for {} crate(s): {}\n\
+                 Compiling runs each crate's build scripts and proc-macros (inside the isolation jail).",
+                names.len(),
+                names.join(", ")
+            ))
         );
         print!("Continue? [y/N] ");
         let _ = std::io::stdout().flush();
@@ -1656,13 +1667,16 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
         let (pkg, paths) = ipe_ffi::driver::install_from_inspection(&cache, &merged)
             .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
         let iface = ipe_ffi::interface::crate_interface(&pkg);
-        println!(
-            "added `{}` v{}: {} bindings ({} skipped) -> {}",
-            pkg.name(),
-            pkg.version(),
-            iface.bindings.len(),
-            iface.skipped.len(),
-            paths.interface.display()
+        eprintln!(
+            "{}",
+            crate::style::gutter(&format!(
+                "added `{}` v{}: {} bindings ({} skipped) -> {}",
+                pkg.name(),
+                pkg.version(),
+                iface.bindings.len(),
+                iface.skipped.len(),
+                paths.interface.display()
+            ))
         );
     }
     Ok(())

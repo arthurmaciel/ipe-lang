@@ -376,6 +376,91 @@ fn upgrade_bad_flag_shows_help() {
     );
 }
 
+// ---- check success output --------------------------------------------------
+
+/// `ipe check` on a well-typed program exits 0 and prints a guttered `ok`
+/// confirmation — the human success line must not be flush-left.
+#[test]
+fn check_success_output_is_guttered_and_framed() {
+    // Use the examples tree as a known well-typed source so no fixture is needed.
+    let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/sky/ipe/01-hello-world/src/Main.ipe");
+    // Only run when the example exists (CI always has it; a sparse checkout may not).
+    if !entry.is_file() {
+        return;
+    }
+    let r = run(&["check", &entry.to_string_lossy()]);
+    assert!(
+        r.ok,
+        "check on a well-typed program must exit 0; stderr: {}",
+        r.stderr
+    );
+    // The success `ok` must be framed (leading newline) and guttered.
+    assert!(
+        r.stdout.starts_with('\n'),
+        "check ok output must open with a newline: {:?}",
+        r.stdout
+    );
+    for line in r.stdout.lines().filter(|l| !l.trim().is_empty()) {
+        assert!(
+            line.starts_with("  "),
+            "check ok output must be guttered, got: {line:?}"
+        );
+    }
+}
+
+// ---- login --status output -------------------------------------------------
+
+/// `ipe login --status` when no token is stored must print a guttered
+/// "not logged in" message — not flush-left prose.
+#[test]
+fn login_status_not_logged_in_is_guttered() {
+    // Run with a temp HOME so no stored token is found.
+    let tmp = std::env::temp_dir().join(format!(
+        "ipe-login-status-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos())
+    ));
+    std::fs::create_dir_all(&tmp).expect("create temp HOME");
+    let r = match std::process::Command::new(env!("CARGO_BIN_EXE_ipe"))
+        .args(["login", "--status"])
+        .env("NO_COLOR", "1")
+        .env("HOME", &tmp)
+        .env_remove("XDG_CONFIG_HOME")
+        .output()
+    {
+        Ok(o) => Run {
+            ok: o.status.success(),
+            stdout: String::from_utf8_lossy(&o.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&o.stderr).into_owned(),
+        },
+        Err(e) => Run {
+            ok: false,
+            stdout: String::new(),
+            stderr: format!("spawn failed: {e}"),
+        },
+    };
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(r.ok, "login --status must exit 0; stderr: {}", r.stderr);
+    assert!(
+        r.stdout.contains("not logged in"),
+        "login --status must report the not-logged-in state; got: {:?}",
+        r.stdout
+    );
+    for line in r.stdout.lines().filter(|l| !l.trim().is_empty()) {
+        assert!(
+            line.starts_with("  "),
+            "login --status output must be guttered, got: {line:?}"
+        );
+    }
+    assert!(
+        r.stdout.starts_with('\n'),
+        "login --status must open with a newline"
+    );
+}
+
 /// `CliError::UpgradeNoPrebuilt` must render as a self-contained diagnostic
 /// — no `--help` page, no `ipe: ` prefix — because it is an operational
 /// failure (the release exists but the CI artifacts are still uploading), not
