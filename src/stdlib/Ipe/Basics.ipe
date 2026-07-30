@@ -1,11 +1,8 @@
--- | Ipe.Basics — non-numeric basics.
+-- | Ipe.Basics — non-numeric basics, the implicit prelude.
 --
--- v0.13 Layer 3 / Phase B4: Ipe source for the trivially-
--- non-recursive basics.  Numeric primitives (add/sub/mul/div,
--- negate, abs, sqrt, modBy) stay kernel-anchored — they're Go
--- primitives.  `toString` / `compare` stay kernel because they
--- need polymorphic dispatch via reflect that's hard to express
--- in Ipe source without `Ipe.Ffi.call`.
+-- Each binding routes to its runtime kernel via `Ffi.kernel`. `clamp` is
+-- polymorphic over any comparable type; the type-checker's `Comparable`
+-- obligation rejects a function or record argument before it monomorphises.
 module Ipe.Basics exposing
     ( identity
     , always
@@ -16,34 +13,28 @@ module Ipe.Basics exposing
     )
 
 
-identity x =
-    x
+import Ipe.Ffi as Ffi
 
 
-always x _ =
-    x
+identity : a -> a
+identity = Ffi.kernel "Basics_identity"
 
 
-not b =
-    case b of
-        True -> False
-        False -> True
+always : a -> b -> a
+always = Ffi.kernel "Basics_always"
 
 
-fst t =
-    case t of
-        (a, _) -> a
+not : Bool -> Bool
+not = Ffi.kernel "Basics_not"
 
 
-snd t =
-    case t of
-        (_, b) -> b
+fst : ( a, b ) -> a
+fst = Ffi.kernel "Basics_fst"
 
 
-clamp lo hi x =
-    if x < lo then
-        lo
-    else if x > hi then
-        hi
-    else
-        x
+snd : ( a, b ) -> b
+snd = Ffi.kernel "Basics_snd"
+
+
+clamp : a -> a -> a -> a
+clamp = Ffi.kernel "Basics_clamp"
