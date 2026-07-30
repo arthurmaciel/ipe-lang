@@ -3733,6 +3733,12 @@ impl<'a> Builder<'a> {
             name: self.builtins.error,
             args: Vec::new(),
         };
+        // `ErrorKind` is a zero-argument constructor (the 11-variant kind union).
+        let errorkind_ty = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.errorkind,
+            args: Vec::new(),
+        };
         // `ErrorDetails` is a zero-argument constructor.
         let errordetails_ty = || Ty::Con {
             module: Vec::new(),
@@ -6338,6 +6344,13 @@ impl<'a> Builder<'a> {
             K::ErrorWithMessage => fun(string(), fun(error_ty(), error_ty())),
             K::ErrorIsRetryable => fun(error_ty(), bool_ty()),
             K::ErrorWithDetails => fun(errordetails_ty(), fun(error_ty(), error_ty())),
+            //    Inspectors: `kind : Error -> ErrorKind` and `message : Error ->
+            //    String` destructure a live error; `kindName : ErrorKind ->
+            //    String` renders a kind's stable label (the same label
+            //    `Error.toString` prefixes with).
+            K::ErrorKind => fun(error_ty(), errorkind_ty()),
+            K::ErrorMessage => fun(error_ty(), string()),
+            K::ErrorKindName => fun(errorkind_ty(), string()),
 
             // ── Ipe.CssSafety (4 — Ipe.Css leaf security kernels) ──
             //    The three parsers are `String -> Maybe String` (`None` => the
@@ -8032,7 +8045,8 @@ mod registry_phase_c_tests {
             K::CharIsAlphaNum,
             K::CharIsHexDigit,
             K::CharIsOctDigit,
-            // Error (13 — Ipe.Error minimal `Error = String` slice)
+            // Error (18 — Ipe.Error real `Error ErrorKind ErrorInfo` ADT:
+            // constructors, modifiers, render, classification, inspectors)
             K::ErrorUnexpected,
             K::ErrorInvalidInput,
             K::ErrorIo,
@@ -8048,6 +8062,9 @@ mod registry_phase_c_tests {
             K::ErrorWithMessage,
             K::ErrorIsRetryable,
             K::ErrorWithDetails,
+            K::ErrorKind,
+            K::ErrorMessage,
+            K::ErrorKindName,
             // CssSafety (4 — Ipe.Css leaf security kernels). Each is a hole
             // (`kernel_ty` has no CssSafety arm → `Ty::Var(u32::MAX)`) unless
             // schemed above; the three parsers are `String -> Maybe String`,
