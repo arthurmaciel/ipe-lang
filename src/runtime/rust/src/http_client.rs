@@ -57,18 +57,96 @@ pub struct HttpResponse {
     pub headers: HashMap<String, String>,
 }
 
+/// Closed set of HTTP methods — the Rust mirror of the `HttpMethod` ADT in
+/// `Ipe.Http`.  Variant names match the Ipê constructors verbatim so emitted
+/// match arms (`HttpMethod::Get`, `HttpMethod::Post`, …) resolve through the
+/// `pub use http_client::*` glob in the generated `mod.rs`.
+///
+/// Conversions to/from reqwest `Method` happen at the request executor
+/// boundary (`method_to_reqwest`) — never at every call site.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HttpMethod {
+    Get,
+    Post,
+    Put,
+    Delete,
+    Patch,
+    Head,
+    Options,
+}
+
+impl HttpMethod {
+    /// Convert to the canonical uppercase ASCII string.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HttpMethod::Get => "GET",
+            HttpMethod::Post => "POST",
+            HttpMethod::Put => "PUT",
+            HttpMethod::Delete => "DELETE",
+            HttpMethod::Patch => "PATCH",
+            HttpMethod::Head => "HEAD",
+            HttpMethod::Options => "OPTIONS",
+        }
+    }
+
+    /// Parse from a string (case-insensitive).  Returns `None` for any
+    /// unrecognised verb — the parse-don't-validate boundary.
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_ascii_uppercase().as_str() {
+            "GET" => Some(HttpMethod::Get),
+            "POST" => Some(HttpMethod::Post),
+            "PUT" => Some(HttpMethod::Put),
+            "DELETE" => Some(HttpMethod::Delete),
+            "PATCH" => Some(HttpMethod::Patch),
+            "HEAD" => Some(HttpMethod::Head),
+            "OPTIONS" => Some(HttpMethod::Options),
+            _ => None,
+        }
+    }
+}
+
+/// Convert an `HttpMethod` to a reqwest `Method`.  Infallible: every ADT
+/// variant maps to a well-known reqwest method constant.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn method_to_reqwest(m: HttpMethod) -> reqwest::Method {
+    match m {
+        HttpMethod::Get => reqwest::Method::GET,
+        HttpMethod::Post => reqwest::Method::POST,
+        HttpMethod::Put => reqwest::Method::PUT,
+        HttpMethod::Delete => reqwest::Method::DELETE,
+        HttpMethod::Patch => reqwest::Method::PATCH,
+        HttpMethod::Head => reqwest::Method::HEAD,
+        HttpMethod::Options => reqwest::Method::OPTIONS,
+    }
+}
+
 /// Ipe.Http.HttpRequest — built in Ipê (defaultRequest + with* updates),
 /// so every field is pub for external struct-literal construction.
 #[allow(non_snake_case)]
 #[derive(Clone, Debug)]
 pub struct HttpRequest {
-    pub method: String,
+    pub method: HttpMethod,
     pub url: String,
     pub body: String,
     pub headers: Vec<(String, String)>,
     pub timeout: i64,
     pub followRedirects: bool,
     pub maxRedirects: i64,
+}
+
+/// `Http.methodFromString : String -> Maybe HttpMethod` — the typed parse
+/// boundary for inbound method strings.  Returns `Just` for the seven
+/// standard verbs (case-insensitive), `Nothing` for anything else.
+pub fn http_method_from_string(s: String) -> crate::core::IpeMaybe<HttpMethod> {
+    match HttpMethod::from_str(&s) {
+        Some(m) => crate::core::IpeMaybe::Just(m),
+        None => crate::core::IpeMaybe::Nothing,
+    }
+}
+
+/// `Http.methodToString : HttpMethod -> String` — canonical uppercase string.
+pub fn http_method_to_string(m: HttpMethod) -> String {
+    m.as_str().to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -273,12 +351,7 @@ async fn do_request<E: From<String> + Send + 'static>(
         Ok(c) => c,
         Err(e) => return IpeResult::Err(format!("http: client build failed: {}", e).into()),
     };
-    let method = match reqwest::Method::from_bytes(req.method.to_uppercase().as_bytes()) {
-        Ok(m) => m,
-        Err(_) => {
-            return IpeResult::Err(format!("http: invalid method {:?}", req.method).into());
-        }
-    };
+    let method = method_to_reqwest(req.method);
     let mut rb = client.request(method, &req.url);
     for (k, v) in &req.headers {
         rb = rb.header(k.as_str(), v.as_str());
@@ -396,7 +469,7 @@ async fn read_body_capped<E: From<String> + Send + 'static>(
 #[cfg(not(target_arch = "wasm32"))]
 pub fn http_get<E: From<String> + Send + 'static>(url: String) -> IpeTask<E, HttpResponse> {
     Box::pin(do_request(HttpRequest {
-        method: "GET".to_string(),
+        method: HttpMethod::Get,
         url,
         body: String::new(),
         headers: Vec::new(),
@@ -413,7 +486,7 @@ pub fn http_post<E: From<String> + Send + 'static>(
     body: String,
 ) -> IpeTask<E, HttpResponse> {
     Box::pin(do_request(HttpRequest {
-        method: "POST".to_string(),
+        method: HttpMethod::Post,
         url,
         body,
         headers: Vec::new(),
@@ -514,7 +587,7 @@ async fn do_fetch<E: From<String> + 'static>(req: HttpRequest) -> IpeResult<E, H
     }
 
     let init = web_sys::RequestInit::new();
-    init.set_method(&req.method);
+    init.set_method(req.method.as_str());
     init.set_headers(&headers);
     init.set_mode(web_sys::RequestMode::Cors);
     init.set_redirect(if req.followRedirects {
@@ -610,7 +683,7 @@ async fn do_fetch<E: From<String> + 'static>(req: HttpRequest) -> IpeResult<E, H
 #[cfg(target_arch = "wasm32")]
 pub fn http_get<E: From<String> + 'static>(url: String) -> IpeTask<E, HttpResponse> {
     Box::pin(do_fetch(HttpRequest {
-        method: "GET".to_string(),
+        method: HttpMethod::Get,
         url,
         body: String::new(),
         headers: Vec::new(),
@@ -624,7 +697,7 @@ pub fn http_get<E: From<String> + 'static>(url: String) -> IpeTask<E, HttpRespon
 #[cfg(target_arch = "wasm32")]
 pub fn http_post<E: From<String> + 'static>(url: String, body: String) -> IpeTask<E, HttpResponse> {
     Box::pin(do_fetch(HttpRequest {
-        method: "POST".to_string(),
+        method: HttpMethod::Post,
         url,
         body,
         headers: Vec::new(),

@@ -1602,6 +1602,7 @@ fn ir_type_contains_non_serde(ty: &IrType) -> bool {
         | IrType::Bytes
         | IrType::Json
         | IrType::Order
+        | IrType::HttpMethod
         | IrType::Decimal
         | IrType::Error
         | IrType::ErrorKind

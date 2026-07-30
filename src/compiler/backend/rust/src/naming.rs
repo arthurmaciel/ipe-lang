@@ -821,6 +821,8 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::HttpWithUrl => "http_with_url",
         KernelFn::HttpWithFollowRedirects => "http_with_follow_redirects",
         KernelFn::HttpWithMaxRedirects => "http_with_max_redirects",
+        KernelFn::HttpMethodFromString => "http_method_from_string",
+        KernelFn::HttpMethodToString => "http_method_to_string",
         // ── Db kernels ─────────────────────────────────────────────
         // `DbExec`/`DbQuery`/`DbQueryDecode` → `db_exec_params` / `db_query_params` /
         // `db_query_decode_params`.  The Ipê surface type is polymorphic
@@ -1584,6 +1586,14 @@ mod tests {
         assert_eq!(
             kernel_name(KernelFn::HttpWithMaxRedirects),
             "http_with_max_redirects"
+        );
+        assert_eq!(
+            kernel_name(KernelFn::HttpMethodFromString),
+            "http_method_from_string"
+        );
+        assert_eq!(
+            kernel_name(KernelFn::HttpMethodToString),
+            "http_method_to_string"
         );
     }
 

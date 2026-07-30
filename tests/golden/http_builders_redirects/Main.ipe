@@ -19,7 +19,7 @@ import Ipe.String
 --   3
 
 
-printReq : { body : String, followRedirects : Bool, headers : List ( String, String ), maxRedirects : Int, method : String, timeout : Int, url : String } -> String
+printReq : { body : String, followRedirects : Bool, headers : List ( String, String ), maxRedirects : Int, method : Http.HttpMethod, timeout : Int, url : String } -> String
 printReq req =
     String.join "\n"
         [ req.url

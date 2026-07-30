@@ -301,6 +301,7 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         // derive serde — admissible leaves (e.g. a Model's `historyError :
         // Maybe Error` field).
         | IrType::Order
+        | IrType::HttpMethod
         | IrType::Decimal
         | IrType::ErrorKind
         | IrType::Error
