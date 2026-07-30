@@ -354,3 +354,69 @@ fn upgrade_dry_run_is_guttered_and_framed() {
         "upgrade --dry-run must name the command it would run"
     );
 }
+
+// ---- upgrade no-prebuilt-binary error rendering ----------------------------
+
+/// A genuine CLI misuse (`ipe upgrade --bad-flag`) must print the `upgrade`
+/// command's `--help` page — a bad flag IS misuse, so help is appropriate.
+#[test]
+fn upgrade_bad_flag_shows_help() {
+    let r = run(&["upgrade", "--bad-flag"]);
+    assert!(!r.ok, "a bad upgrade flag must exit non-zero");
+    // The help page for `upgrade` must appear on stderr.
+    assert!(
+        r.stderr.contains("upgrade"),
+        "bad upgrade flag must print upgrade help; stderr: {}",
+        r.stderr
+    );
+    assert!(
+        r.stderr.contains("--dry-run") || r.stderr.contains("Options"),
+        "bad upgrade flag must include options/help text; stderr: {}",
+        r.stderr
+    );
+}
+
+/// `CliError::UpgradeNoPrebuilt` must render as a self-contained diagnostic
+/// — no `--help` page, no `ipe: ` prefix — because it is an operational
+/// failure (the release exists but the CI artifacts are still uploading), not
+/// CLI misuse.
+#[test]
+fn upgrade_no_prebuilt_renders_message_without_help() {
+    let err = ipe::CliError::UpgradeNoPrebuilt {
+        version: "v9.9.9".to_owned(),
+        platform: "linux-x64".to_owned(),
+    };
+    let msg = err.to_string();
+    // The message names the version and platform.
+    assert!(
+        msg.contains("v9.9.9"),
+        "UpgradeNoPrebuilt message must name the version; got: {msg:?}"
+    );
+    assert!(
+        msg.contains("linux-x64"),
+        "UpgradeNoPrebuilt message must name the platform; got: {msg:?}"
+    );
+    // The message includes the "still being generated" hint.
+    assert!(
+        msg.contains("still being generated"),
+        "UpgradeNoPrebuilt message must include the generation hint; got: {msg:?}"
+    );
+    // The message points at building from source.
+    assert!(
+        msg.contains("cargo install"),
+        "UpgradeNoPrebuilt message must point at cargo install; got: {msg:?}"
+    );
+    // The error MUST NOT contain the `--help` / options block that misuse shows.
+    assert!(
+        !msg.contains("--dry-run") && !msg.contains("Options:"),
+        "UpgradeNoPrebuilt must not include the --help options page; got: {msg:?}"
+    );
+    // Every non-blank line must be guttered (2-space indent) — same as all
+    // other human-facing output.
+    for line in msg.lines().filter(|l| !l.trim().is_empty()) {
+        assert!(
+            line.starts_with("  "),
+            "UpgradeNoPrebuilt message must be guttered; got line: {line:?}"
+        );
+    }
+}

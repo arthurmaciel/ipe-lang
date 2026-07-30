@@ -41,6 +41,19 @@ die() {
   exit 1
 }
 
+# die_no_prebuilt TAG PLAT CPU — exits 2, a distinct code the `ipe upgrade`
+# wrapper uses to show the "still being generated" message instead of generic
+# failure text. Exit 2 (not 1) signals "no prebuilt binary" specifically.
+die_no_prebuilt() {
+  _tag="$1"; _plat="$2"; _cpu="$3"
+  printf '\n  %s%s%s No prebuilt binary for %s on %s-%s.\n' \
+    "$C_BOLD" "$C_RED" "$C_RESET" "$_tag" "$_plat" "$_cpu" >&2
+  printf '      Possibly the binaries for that version are still being generated.\n' >&2
+  printf '      If you prefer, build from source:\n' >&2
+  printf '          cargo install --git https://github.com/%s ipe\n' "$REPO" >&2
+  exit 2
+}
+
 banner() {
   printf '\n  %s%sIpê language%s %s- %s%s\n\n' \
     "$C_BOLD" "$C_YELLOW" "$C_RESET" "$C_DIM" "$1" "$C_RESET" >&2
@@ -262,11 +275,7 @@ fi
 
 # ── Bail out when no binary is available ────────────────────────────
 if [ "$have_bin" != 1 ]; then
-  if [ "$cargo_ok" = 1 ]; then
-    die "No prebuilt binary for $tag on $plat-$cpu. Build from source: cargo install --git https://github.com/$REPO ipe"
-  else
-    die "No prebuilt binary for $tag on $plat-$cpu. Install Rust first, then build from source."
-  fi
+  die_no_prebuilt "$tag" "$plat" "$cpu"
 fi
 
 # ── Download the binary with a friendly progress display ─────────────────────
