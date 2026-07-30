@@ -1113,6 +1113,33 @@ pub enum IrType {
     /// matching route directly onto the runtime enum. Mirrors the reference's
     /// `runtimeOpaqueTypes` `RPubUseAlias` for `EmailProvider`.
     EmailProvider,
+
+    // ── Ipe.Crypto typed-key newtypes ─────────────────────────────────────
+    /// Opaque role-typed crypto key (`ipe_runtime::crypto::Key`).
+    ///
+    /// The ONLY construction boundary is `Key.fromString`/`Key.fromBytes`;
+    /// no implicit `String` coercion.  `PartialEq` is constant-time
+    /// (`subtle::ConstantTimeEq`); `Debug` renders `"<key>"` — the wrapped
+    /// material is never observable outside the construction boundary.
+    /// Non-serde (a `Key` must never round-trip through a session store).
+    CryptoKey,
+
+    /// Opaque role-typed HMAC output (`ipe_runtime::crypto::Mac`).
+    ///
+    /// Produced exclusively by `hmacSha256WithKey` / `hmacSha512WithKey`.
+    /// Extracted via `Mac.toHex` — the single greppable extraction boundary.
+    /// `PartialEq` is safe (a MAC hex string is not secret); `Clone` + `Debug`.
+    /// Non-serde.
+    CryptoMac,
+
+    // ── Ipe.Email.EmailAddress ─────────────────────────────────────────────
+    /// Opaque validated email address (`ipe_runtime::email::EmailAddress`).
+    ///
+    /// The ONLY constructor is `EmailAddress.parse : String -> Maybe
+    /// EmailAddress`, which rejects invalid addresses at the boundary —
+    /// downstream code never sees the unvalidated `String`.  Extracted via
+    /// `EmailAddress.toString`.  `Clone` + `PartialEq` + `Debug`; non-serde.
+    EmailAddress,
 }
 
 /// Tag enum for the message-parametric `Ipe.Ui` / `Ipe.Html` types.
@@ -1257,6 +1284,13 @@ pub fn ir_type_is_derivable(
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
         | IrType::CsvDoc
+        // `CryptoKey` derives Clone; PartialEq is constant-time (hand-written);
+        // Debug renders "<key>" (hand-written) — same posture as Secret.
+        | IrType::CryptoKey
+        // `CryptoMac` derives Clone+PartialEq+Debug — fully derivable.
+        | IrType::CryptoMac
+        // `EmailAddress` derives Clone+PartialEq+Debug — fully derivable.
+        | IrType::EmailAddress
         | IrType::Generic(_)
         | IrType::UiPlain(_) => true,
         // The fully-derivable Ipe.Ui / Ipe.Html carriers vs the two Clone-only
@@ -1465,6 +1499,14 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
         | IrType::WebReq
+        // Typed-key newtypes must NEVER round-trip through serde — a `Key`
+        // in a Web Model session store would be a secret-material leak; a
+        // `Mac` in a session store is unnecessary exposure; an `EmailAddress`
+        // in a session store is fine in principle but the runtime type carries
+        // no serde derive (additive expansion is straightforward when needed).
+        | IrType::CryptoKey
+        | IrType::CryptoMac
+        | IrType::EmailAddress
         // `Route<Page>` holds an `Arc<dyn Fn>` builder — never derivable/serde
         // regardless of its page argument.
         | IrType::WebRoute(_) => false,
@@ -1568,6 +1610,10 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         | IrType::EmailSesConfig
         | IrType::EmailSmtpConfig
         | IrType::EmailProvider
+        // Typed-key newtype carriers: all derive / hand-write `Clone`.
+        | IrType::CryptoKey
+        | IrType::CryptoMac
+        | IrType::EmailAddress
         // The promoted `Arc<dyn Fn>` fn carrier: `Arc` is `Clone` (a refcount
         // bump), so a `SharedFun` slot never poisons its enclosing composite.
         | IrType::SharedFun(_, _) => true,

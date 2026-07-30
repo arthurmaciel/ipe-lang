@@ -51,6 +51,10 @@ module Ipe.Email exposing
     , withAttachment
     , withReplyTo
     , send
+    -- Typed address newtype (additive — existing String fields unchanged)
+    , EmailAddress
+    , parseAddress
+    , addressToString
     )
 
 
@@ -252,3 +256,24 @@ withSmtpPass pass cfg =
 -- recipient, etc.).
 send : EmailProvider -> EmailMessage -> Task Error String
 send = Ffi.kernel "Email_send"
+
+
+-- ── Typed address newtype ──────────────────────────────────────────────────────
+--
+-- `EmailAddress` is an opaque type that can only be constructed via
+-- `parseAddress`.  An unparseable address surface as `Nothing`, never
+-- a silent accept.  Existing `EmailMessage` fields remain `String` for
+-- backward compatibility; use `addressToString` to convert before
+-- passing to a message builder.
+
+-- | An opaque, validated email address.  Construct only via `parseAddress`.
+type EmailAddress = EmailAddress
+
+-- | Parse-don't-validate: attempt to parse a string as an RFC 5322 address.
+-- Returns `Nothing` if the string is not a valid address; never silently accepts.
+parseAddress : String -> Maybe EmailAddress
+parseAddress = Ffi.kernel "EmailAddress_parse"
+
+-- | Render an `EmailAddress` back to its canonical string form.
+addressToString : EmailAddress -> String
+addressToString = Ffi.kernel "EmailAddress_toString"

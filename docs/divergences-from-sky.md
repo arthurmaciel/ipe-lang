@@ -1900,3 +1900,31 @@ issue; implementation not started.
   currency-code boundary. An unrecognised code is an absent value, not a
   coerced `CurrencyRaw` that silently produces a wrong-currency `Money` value.
   Proven by golden `money_parse_currency_maybe`.
+### 6.11 Typed security newtypes for `Ipe.Crypto` and `Ipe.Email` — ADDITIVE EXTENSION
+
+The reference treats all crypto keys, MACs, and email addresses as plain
+`String` values. Ipê adds opaque role-typed wrappers that make a role swap
+(e.g. passing a MAC where a key is expected) a compile-time error.
+
+**`Ipe.Crypto`:** `Key` and `Mac` are opaque types. The only `Key` constructors
+are `Key.fromString` and `Key.fromBytes` (the parse-don't-validate boundary).
+The only MAC extraction path is `Mac.toHex`. Typed HMAC variants
+(`hmacSha256WithKey`, `hmacSha512WithKey`) and typed AEAD variants
+(`aesGcmEncryptKey`, `aesGcmDecryptKey`, `chacha20EncryptKey`,
+`chacha20DecryptKey`) are additive — existing `String`-typed functions are
+unchanged and continue to work. `Key` material never appears in logs
+(Debug redacts to `"<key>"`); `Key` and `Mac` never round-trip through serde
+(non-serde IrType).
+
+**`Ipe.Email`:** `EmailAddress` is an opaque type. The single constructor is
+`parseAddress : String -> Maybe EmailAddress` (parse-don't-validate); an
+unparseable address is `Nothing`, never a silent accept. `addressToString`
+is the only extraction path. Existing `EmailMessage` fields (`from`, `to`,
+`cc`, `bcc`, `replyTo`) remain `String` for backward compatibility; the
+typed boundary is opt-in for new code. `EmailAddress` never round-trips
+through serde.
+
+**Oracle parity:** The reference has no equivalent typed wrappers; these are
+Ipê additions. The existing `String`-typed functions keep full Go-oracle parity.
+The additive typed variants produce identical byte output (HMAC/AEAD values are
+algorithm outputs, independent of wrapper types).

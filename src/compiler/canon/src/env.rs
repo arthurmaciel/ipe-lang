@@ -945,6 +945,7 @@ impl Env {
                 &["required", "optional", "custom", "requiredAt"],
             ),
             // `Ipe.Crypto` — hashes / HMAC / RSA / AEAD / key-derivation / random.
+            // String-typed surface (backward-compat) + typed-key variants (§6.11).
             (
                 "Crypto",
                 &[
@@ -965,8 +966,23 @@ impl Env {
                     "chachaKeyFromPassword",
                     "randomBytes",
                     "randomToken",
+                    // typed-key variants (additive, §6.11)
+                    "hmacSha256WithKey",
+                    "hmacSha512WithKey",
+                    "aesGcmEncryptKey",
+                    "aesGcmDecryptKey",
+                    "chacha20EncryptKey",
+                    "chacha20DecryptKey",
+                    "aesKeyFromPasswordKey",
+                    "chachaKeyFromPasswordKey",
                 ],
             ),
+            // `Ipe.Crypto.Key` — opaque key newtype; construction boundary (§6.11).
+            ("Key", &["fromString", "fromBytes"]),
+            // `Ipe.Crypto.Mac` — opaque MAC newtype; extraction boundary (§6.11).
+            ("Mac", &["toHex"]),
+            // `Ipe.Email.EmailAddress` — opaque address newtype; parse boundary (§6.11).
+            ("EmailAddress", &["parse", "toString"]),
             // `Ipe.Uuid` — UUID generation and parsing.
             // `v4` and `v7` are arity-0 (bare value); `parse` is arity-1.
             ("Uuid", &["v4", "v7", "parse"]),

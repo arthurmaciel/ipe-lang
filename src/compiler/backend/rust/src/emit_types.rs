@@ -336,6 +336,11 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::EmailSesConfig => "SesConfig".to_owned(),
         IrType::EmailSmtpConfig => "SmtpConfig".to_owned(),
         IrType::EmailProvider => "EmailProvider".to_owned(),
+        // Typed-key newtypes — fully-qualified to avoid ambiguity with any
+        // user-defined `Key`/`Mac`/`EmailAddress` types.
+        IrType::CryptoKey => "ipe_runtime::crypto::Key".to_owned(),
+        IrType::CryptoMac => "ipe_runtime::crypto::Mac".to_owned(),
+        IrType::EmailAddress => "ipe_runtime::email::EmailAddress".to_owned(),
         // Ipe.Ui / Ipe.Html parametric types.  Use fully-qualified Rust paths
         // (T2 soundness: `Attribute` exists in BOTH Ipe.Ui and Ipe.Html namespaces;
         // qualified paths keep them unambiguous and prevent glob-import shadowing).
