@@ -78,7 +78,7 @@ import Ipe.Io
     let ipe_diagnostics::Diagnostic::Name {
         msg: ipe_diagnostics::NameError::DuplicateQualifier { qualifier, .. },
         ..
-    } = diag
+    } = &**diag
     else {
         assert!(
             false_marker(),
