@@ -59,12 +59,14 @@ pub fn has_nul(s: &str) -> bool {
 /// Returns `Err("nul")` for a NUL byte, or `Err("traversal")` for any `..`
 /// escape (either separator regime) or Windows dot/space disguise.
 ///
-/// # Examples (not runnable — illustrative only)
+/// # Examples (illustrative only — `text`, not a compiled doctest)
 ///
-///     validate("src/Main.ipe")   // Ok("src/Main.ipe")
-///     validate("../etc/passwd")  // Err("traversal")
-///     validate("..\\secret")     // Err("traversal") — Windows separator
-///     validate("a\0b")           // Err("nul")
+/// ```text
+/// validate("src/Main.ipe")   // Ok("src/Main.ipe")
+/// validate("../etc/passwd")  // Err("traversal")
+/// validate("..\secret")      // Err("traversal") — Windows separator
+/// validate("a\0b")           // Err("nul")
+/// ```
 pub fn validate(s: &str) -> Result<String, &'static str> {
     if has_nul(s) {
         return Err("nul");
