@@ -27,11 +27,6 @@
 //! for `rustfmt`'s trailing comma on a broken delimited list (`f(a, b, c,)`),
 //! which the legacy string emitter never emits.
 
-// The Doc IR and renderer are the P0 deliverable; the emit_expr.rs builders that
-// consume them land in P1. Until then the constructors and the SEAL leaf oracle
-// are exercised only by the P0 tests, so their non-test uses are pending.
-#![allow(dead_code, reason = "consumed by the P1 emit_expr.rs Doc builders")]
-
 use std::borrow::Cow;
 
 /// A layout document. Rendered by [`crate::render::render`].
@@ -53,6 +48,7 @@ pub enum Doc {
     /// A zero-width soft break candidate: empty when flat, a newline plus indent
     /// when broken. Used where flat layout wants no space (e.g. before a closing
     /// delimiter on a call arg list).
+    #[expect(dead_code, reason = "reserved for zero-width break sites not yet emitted")]
     Softline,
     /// An unconditional break: always a newline plus the current indent, whether
     /// or not any enclosing group is flat. Its presence anywhere inside a group
@@ -67,6 +63,7 @@ pub enum Doc {
     /// NOT a token the legacy string emitter produces. A `Softline`-guarded `,`
     /// cannot express this: it would show the comma flat too. Never a break point
     /// itself (it introduces no newline), so it never forces a group broken.
+    #[expect(dead_code, reason = "reserved for trailing-comma-on-break sites not yet emitted")]
     IfBroken(Cow<'static, str>),
     /// Indent the inner document by `n` columns relative to the current indent.
     /// Used non-accumulating (`Nest(4, ...)`) for block bodies and arg lists.
@@ -321,6 +318,7 @@ impl Doc {
     }
 
     /// A break-conditional static token (renders only when its group breaks).
+    #[expect(dead_code, reason = "reserved for trailing-comma-on-break sites not yet emitted")]
     pub const fn if_broken(s: &'static str) -> Self {
         Self::IfBroken(Cow::Borrowed(s))
     }

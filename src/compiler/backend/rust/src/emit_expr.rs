@@ -14,8 +14,10 @@ use ipe_ir::{
 };
 
 use crate::EmitCtx;
+use crate::doc::Doc;
 use crate::emit_types::{GenericScope, render_type};
 use crate::naming::kernel_name;
+use crate::render::{RenderConfig, render_seeded};
 
 /// The deepest expression nesting the backend will descend before failing fast.
 ///
@@ -8980,9 +8982,10 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
         && name != "ipe_main"
         && is_share_once_safe(ret_ty);
     let body = if is_caf {
+        let call_line = emit_caf_get_or_init(ctx, body_expr, generics)?;
         format!(
             "static CELL: std::sync::OnceLock<{ret}> = std::sync::OnceLock::new();\n    \
-             CELL.get_or_init(|| {{ {body} }}).clone()"
+             {call_line}"
         )
     } else {
         body
@@ -9105,6 +9108,40 @@ fn render_fn_signature(name: &str, generic_clause: &str, params: &[String], ret:
     out
 }
 
+/// Render the CAF `CELL.get_or_init(|| body).clone()` line with the native Doc
+/// path, so the closure body's braces are elided when the line fits the width —
+/// matching `rustfmt`'s closure-body rule (`move |_| expr` when it fits, `move |_|
+/// { … }` when it breaks). The returned string has no leading whitespace; it is
+/// spliced after the `\n    ` the caller writes.
+///
+/// [`Doc::BraceBody`] carries the closure body's braces as SEAL-visible leaves
+/// (the string emitter always writes `|| { body }`) but omits them from the render
+/// when the body fits flat — matching the golden's `|| expr` form exactly. The
+/// outer [`Doc::CallArgs`] tests the full `CELL.get_or_init(|| body).clone()` line
+/// against `max_width` (100) and `fn_call_width` (60) before choosing flat.
+fn emit_caf_get_or_init(
+    ctx: &EmitCtx,
+    body_expr: &Expr,
+    generics: GenericScope,
+) -> DResult<String> {
+    let body_doc = crate::emit_doc::build_doc(ctx, body_expr, 1, 0, generics)?;
+    // `|| BraceBody(body)` — the single closure argument. `BraceBody` renders
+    // the body WITHOUT braces when it fits flat, and WITH braces on a new line
+    // when it does not, matching `rustfmt`'s closure body layout.
+    let closure_arg = Doc::concat(vec![Doc::text("|| "), Doc::brace_body(body_doc)]);
+    // `CELL.get_or_init(closure).clone()` — a single-argument function call.
+    let call = Doc::call_args(
+        Doc::text("CELL.get_or_init("),
+        vec![closure_arg],
+        Doc::text(").clone()"),
+        // A function-call argument list keeps a trailing comma when it breaks.
+        true,
+    );
+    // Seeded at column 4 (fn-body indent) so the fit test measures from the
+    // position where the line starts in the emitted file.
+    Ok(render_seeded(&call, RenderConfig::default(), 4, 4))
+}
+
 /// Render a value body expression to the exact bytes a `rustfmt`-formatted
 /// function body carries, laid out by the native [`crate::emit_doc::build_doc`] +
 /// [`crate::render::render_seeded`] path instead of the flat string emitter.
@@ -9120,12 +9157,7 @@ fn render_fn_signature(name: &str, generic_clause: &str, params: &[String], ret:
 /// indent 1, IR depth 0.
 fn emit_body_native(ctx: &EmitCtx, body_expr: &Expr, generics: GenericScope) -> DResult<String> {
     let doc = crate::emit_doc::build_doc(ctx, body_expr, 1, 0, generics)?;
-    Ok(crate::render::render_seeded(
-        &doc,
-        crate::render::RenderConfig::default(),
-        4,
-        4,
-    ))
+    Ok(render_seeded(&doc, RenderConfig::default(), 4, 4))
 }
 
 /// Render a function's generic clause `<T1, T2: <bounds>, ..>` — one entry per
