@@ -36,7 +36,7 @@ exclude = ["tools/panic-scan"]
 
 [workspace.package]
 edition = "2024"
-version = "0.1.23" # x-release-please-version
+version = "0.1.24" # x-release-please-version
 license = "Apache-2.0"
 
 # THE SSOT for the workspace clippy policy. Every `cargo clippy` — in CI and in

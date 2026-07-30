@@ -10,6 +10,15 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.24](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.23...ipe-v0.1.24) (2026-07-30)
+
+
+### Features
+
+* **cli:** add `ipe check` — type-check a project without build or run ([#346](https://github.com/arthurmaciel/ipe-lang/issues/346)) ([2a1010e](https://github.com/arthurmaciel/ipe-lang/commit/2a1010e2e100eb39712d3564c883a6a76ab29d3d))
+* **lexer,canon:** strip source indentation margin from triple-quoted strings via anchor column ([#324](https://github.com/arthurmaciel/ipe-lang/issues/324)) ([70346bb](https://github.com/arthurmaciel/ipe-lang/commit/70346bb45ecab1004253655f37bf8f2c4b03affe))
+* **stdlib:** Ipe.Process.run — no-shell subprocess execution, WasmClient-denied ([#316](https://github.com/arthurmaciel/ipe-lang/issues/316)) ([#336](https://github.com/arthurmaciel/ipe-lang/issues/336)) ([89198e5](https://github.com/arthurmaciel/ipe-lang/commit/89198e50548f410a71e67cf2c25b3f59e3c27287))
+
 ## [0.1.23](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.22...ipe-v0.1.23) (2026-07-30)
 
 
