@@ -18,16 +18,20 @@ greeting =
     """
 ```
 
-Inside the delimiters everything is **literal content, preserved verbatim** —
-including newlines, leading indentation, and a lone `"` or a pair `""` (only the
-exact sequence `"""` closes the string). This is what makes triple-quoted
-strings the right tool for embedded HTML, SQL, or any text with its own quoting.
+Inside the delimiters the body is **literal content** — newlines, and a lone `"`
+or a pair `""` (only the exact sequence `"""` closes the string) — with one
+layout transform: **source indentation is stripped to the anchor column**, and a
+single newline right after the opening `"""` is dropped (see
+[Indentation](#indentation-is-stripped-to-the-anchor-column) below). This is what
+makes triple-quoted strings the right tool for embedded HTML, SQL, or any text
+with its own quoting.
 
-The lexer captures the raw body without resolving anything; the canonicaliser
-then does two things to it, in this order:
+The lexer captures the raw body and its anchor column; the canonicaliser then
+does three things to it, in this order:
 
-1. splits the body on `{{` … `}}` interpolation markers, and
-2. resolves the two backslash escapes below.
+1. strips the indentation margin (and drops the leading newline),
+2. splits the body on `{{` … `}}` interpolation markers, and
+3. resolves the two backslash escapes below.
 
 ### Interpolation — `{{expr}}`
 
@@ -83,10 +87,30 @@ doc =
 -- ⇒ "Write {{name}} to interpolate the variable name."
 ```
 
-### Indentation is preserved
+### Indentation is stripped to the anchor column
 
-The body is stored exactly as written: leading whitespace on each line is part
-of the string. Ipê does **not** strip a common left margin or drop a leading
-newline — a triple-quoted string is the literal text between the delimiters. If
-you want a block without the source indentation, keep the content
-left-anchored.
+Source indentation does not leak into the value. The **anchor column** A is the
+column of the first non-whitespace character of the body. Every physical line
+*after the opening-delimiter line* has up to A−1 leading whitespace characters
+(spaces or tabs) removed — never past its content, so a line indented less than
+A−1 keeps all of its content and a content character is never dropped. One
+newline immediately after the opening `"""` is also dropped, and a left-anchored
+(column-1) block is unchanged.
+
+```ipe
+tag = "o"
+count = 54
+
+message =
+    """
+    item={{tag}}
+    count={{String.fromInt count}}
+    done
+    """
+-- ⇒ "item=o\ncount=54\ndone\n"
+```
+
+The source margin — the indentation shared with the opening `"""` — comes off
+every content line, so the block starts flush-left. Indentation *beyond* the
+anchor is kept (only the margin up to A−1 is removed), and a content character
+is never consumed.
