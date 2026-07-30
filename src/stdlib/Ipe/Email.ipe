@@ -60,11 +60,7 @@ module Ipe.Email exposing
 
 import Ipe.Ffi as Ffi
 import Ipe.Error exposing (Error)
-
-
--- `Attachment.content` carries arbitrary bytes; we type it as
--- `String` so callers can pass `File.readFileBytes` output
--- directly.  Ipe.Bytes is an alias over String anyway.
+import Ipe.Bytes exposing (Bytes)
 
 
 -- | A single email message.
@@ -85,12 +81,13 @@ type alias EmailMessage =
     }
 
 
--- | A file attachment.  `content` carries the raw bytes — type is
--- `String` (Ipe.Bytes alias).
+-- | A file attachment.  `content` carries the raw bytes as `Bytes`
+-- (`Vec<u8>` on Rust).  Use `Bytes.fromString` for text content or
+-- `File.readFileBytes` for binary files.
 type alias Attachment =
     { filename : String
     , mimeType : String
-    , content : String
+    , content : Bytes
     }
 
 
@@ -173,13 +170,13 @@ withReplyTo addr msg =
 
 
 -- | `defaultAttachment "report.pdf"` — Attachment named with empty
--- mime type + empty content.  Pair with `withMimeType` + `withContent`
+-- mime type + empty byte content.  Pair with `withMimeType` + `withContent`
 -- (or pass `File.readFileBytes` output directly to `withContent`).
 defaultAttachment : String -> Attachment
 defaultAttachment filename =
     { filename = filename
     , mimeType = ""
-    , content = ""
+    , content = Bytes.empty
     }
 
 
@@ -190,7 +187,7 @@ withMimeType mime att =
 
 
 -- | `withContent bytes att` — replace the attachment body bytes.
-withContent : String -> Attachment -> Attachment
+withContent : Bytes -> Attachment -> Attachment
 withContent bytes att =
     { att | content = bytes }
 

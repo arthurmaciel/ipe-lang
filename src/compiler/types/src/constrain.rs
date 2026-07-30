@@ -4088,7 +4088,7 @@ impl<'a> Builder<'a> {
             let mut att = BTreeMap::new();
             att.insert(self.builtins.email_f_filename, string());
             att.insert(self.builtins.email_f_mime_type, string());
-            att.insert(self.builtins.email_f_content, string());
+            att.insert(self.builtins.email_f_content, bytes());
             m.insert(
                 self.builtins.email_f_attachments,
                 list(Ty::Record(att, RowTail::Closed)),

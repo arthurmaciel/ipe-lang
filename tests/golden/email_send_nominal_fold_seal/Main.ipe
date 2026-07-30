@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Ipe.Task as Task
 import Ipe.Email as Email
+import Ipe.Bytes as Bytes
 import Ipe.Io as Io
 
 -- SEAL fixture for backlog #210 "Ipe.Email family": a typed `EmailMessage`
@@ -39,7 +40,7 @@ main =
                 |> Email.withAttachment
                     (Email.defaultAttachment "note.txt"
                         |> Email.withMimeType "text/plain"
-                        |> Email.withContent "body bytes"
+                        |> Email.withContent (Bytes.fromString "body bytes")
                     )
     in
     Email.send provider message
