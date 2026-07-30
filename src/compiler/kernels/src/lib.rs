@@ -2453,7 +2453,7 @@ impl StdlibKernel {
             // `Ipe.PubSub` is the Task-shaped top-level publish surface — NOT
             // TEA-loop machinery. `class = Web` because its runtime symbols live
             // in `ipe_runtime::live::pubsub` (the Web/live module), the same home
-            // as `Web.renderStatic`; it is excluded from `is_tea()` so it never
+            // as `Html.renderStatic`; it is excluded from `is_tea()` so it never
             // pulls in the `Cmd`/`Sub` (`tea` module) aliases. `Ipe.PubSub` is a
             // compiled-source module, so `Ipe.PubSub.publish` resolves through its
             // `Ffi.kernel "PubSub_publish"` alias to this `("PubSub", "publish")`
@@ -2728,7 +2728,13 @@ impl StdlibKernel {
             Self::WebApp => d("Web", "app", 1, Web, "web_app"),
             Self::WebAppRouted => d("Web", "appRouted", 1, Web, "web_app_routed"),
             Self::WebRoute => d("Web", "route", 2, Web, "web_route"),
-            Self::WebRenderStatic => d("Web", "renderStatic", 2, Web, "web_render_static"),
+            // `Ipe.Html.renderStatic` is a shape-neutral static-render bridge, NOT
+            // a TEA entry: it renders a `view` once to HTML and returns a `Task`, so
+            // it lives under `Ipe.Html` next to `render`. `class = Web` because its
+            // runtime symbols live in the Web/live module (`web_render_static`); it
+            // stays out of `is_tea()`, so a Program using it never pulls in the
+            // `Cmd`/`Sub` loop aliases.
+            Self::WebRenderStatic => d("Html", "renderStatic", 2, Web, "web_render_static"),
             // ── Ipe.Terminal app-entry kernels ───────────────────────────
             Self::TerminalAppScreen => d("Terminal", "appScreen", 1, Terminal, "tui_app_ui"),
             // ── Ipe.WebView app-entry kernel ─────────────────────────────

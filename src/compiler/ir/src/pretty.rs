@@ -916,7 +916,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::WebApp => "Web.app",
         KernelFn::WebAppRouted => "Web.appRouted",
         KernelFn::WebRoute => "Web.route",
-        KernelFn::WebRenderStatic => "Web.renderStatic",
+        KernelFn::WebRenderStatic => "Html.renderStatic",
         // ── Ipe.Terminal app-entry kernels ───────────────────────────────
         KernelFn::TerminalAppScreen => "Terminal.appScreen",
         // ── Ipe.WebView app-entry kernel ─────────────────────────────────

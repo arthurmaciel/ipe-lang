@@ -90,10 +90,11 @@ Turn a tree into a string with `Html.render`:
 Html.render : Html msg -> String
 ```
 
-or, as an effect, write it out with `Web.renderStatic`:
+or, as an effect, write it out with `Html.renderStatic` — its shape-neutral
+sibling. A Program renders a static view without importing any app shape:
 
 ```ipe
-Web.renderStatic : (Model -> Html Msg) -> Model -> Task Error ()
+Html.renderStatic : (Model -> Html Msg) -> Model -> Task Error ()
 ```
 
 ```ipe

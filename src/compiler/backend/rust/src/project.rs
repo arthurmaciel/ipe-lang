@@ -1455,7 +1455,7 @@ fn assemble_project_files(
         //   • `uses_webview` → `webview.rs` (`use super::tea::{IpeCmd, IpeSub}`).
         // These imports are unconditional in the runtime source (not feature-gated),
         // so a live/tui/webview program with no explicit `Cmd`/`Sub` kernel (e.g.
-        // `Web.renderStatic` from a CLI) still needs `tea`. Guarded as ONE union so
+        // `Html.renderStatic` from a CLI) still needs `tea`. Guarded as ONE union so
         // a program hitting several paths emits `pub mod tea;` exactly once (E0428).
         // This is the transitive-closure invariant: any module a declared module
         // depends on MUST itself be declared (same rule as `http_header`).

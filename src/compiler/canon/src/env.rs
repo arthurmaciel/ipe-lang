@@ -1535,11 +1535,15 @@ impl Env {
             // ── Ipe.Html — typed HTML element / text surface ─────────────────────
             // `render` / `escapeHtml` / `escapeAttr` / `attrToString` are render
             // kernels; all element-builder names create `Html msg` values.
+            // `renderStatic` is the effectful sibling of `render`: it renders a
+            // `view` once to HTML and returns a `Task` — shape-neutral, so a plain
+            // Program uses it without importing any `Ipe.Tea.*` shape (ADR 0048).
             (
                 "Html",
                 &[
                     // render kernels
                     "render",
+                    "renderStatic",
                     "toString",
                     "escapeHtml",
                     "escapeAttr",
@@ -1685,7 +1689,7 @@ impl Env {
                 ],
             ),
             // ── Ipe.Web app-entry kernels ────────────────────────────────────────
-            ("Web", &["app", "appRouted", "route", "renderStatic"]),
+            ("Web", &["app", "appRouted", "route"]),
             // ── Ipe.Terminal app-entry kernels ───────────────────────────────────
             // `appScreen` (full screen, `onKey`) and `appLines` (line stream,
             // `onLine`) — one terminal TEA shape, two drive axes.
