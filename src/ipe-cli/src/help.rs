@@ -120,6 +120,13 @@ const COMMANDS: &[Command] = &[
         options: &[],
     },
     Command {
+        name: "verify",
+        summary: "Run the whole project gate: format, type-check, then build.",
+        args: "[<path>]",
+        args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
+        options: &[],
+    },
+    Command {
         name: "run",
         summary: "Compile a program and run the resulting binary.",
         args: "[<path>]",
@@ -405,6 +412,7 @@ const SECTIONS: &[Section] = &[
             "upgrade-agents",
             "build",
             "check",
+            "verify",
             "run",
             "watch",
             "fix",

@@ -173,6 +173,17 @@ pub enum CliError {
         /// The specific reason for the misuse (e.g. an unknown flag).
         reason: String,
     },
+    /// A stage of `ipe verify` failed. Carries the stage name and the stage's
+    /// own already-rendered report. Like [`Self::DocCoverage`], this is a
+    /// legitimate gate result — the `verify` invocation was valid and the
+    /// underlying check ran correctly — so it exits non-zero with the report
+    /// alone and never the `verify` command's `--help` page.
+    VerifyFailed {
+        /// The failing stage (e.g. `format`).
+        stage: &'static str,
+        /// The stage's rendered failure report, printed as-is.
+        report: String,
+    },
 }
 
 impl From<api_surface::DiffError> for CliError {
@@ -270,6 +281,10 @@ impl std::fmt::Display for CliError {
                 let page = help::command(command, &std::io::stderr())
                     .unwrap_or_else(|| help::top_level(&std::io::stderr()));
                 f.write_str(page.trim_end_matches('\n'))
+            }
+            Self::VerifyFailed { stage, report } => {
+                writeln!(f, "verify: the {stage} stage failed")?;
+                f.write_str(report.trim_end_matches('\n'))
             }
         }
     }
@@ -1695,6 +1710,7 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
         }
         Some((cmd, rest)) if cmd == "build" => with_help_on_misuse("build", run_build(rest)),
         Some((cmd, rest)) if cmd == "check" => with_help_on_misuse("check", run_check(rest)),
+        Some((cmd, rest)) if cmd == "verify" => with_help_on_misuse("verify", run_verify(rest)),
         Some((cmd, rest)) if cmd == "run" => with_help_on_misuse("run", run_run(rest)),
         Some((cmd, rest)) if cmd == "exec" => with_help_on_misuse("exec", run_exec(rest)),
         Some((cmd, rest)) if cmd == "watch" => with_help_on_misuse("watch", run_watch(rest)),
@@ -2852,6 +2868,116 @@ fn run_check(rest: &[String]) -> Result<(), CliError> {
     let entry = resolve_analysis_entry(&arg)?;
     typecheck_entry_via_graph(&entry)?;
     println!("ok");
+    Ok(())
+}
+
+/// A single `ipe verify` stage: run the underlying check over an optional
+/// `<path>` (the current project when `None`), returning its own error on
+/// failure.
+type VerifyStage = fn(Option<&str>) -> Result<(), CliError>;
+
+/// The ordered stages `ipe verify` runs, each composing the same code path its
+/// standalone command uses. The order is the cheapest, most localised check
+/// first: a formatting scan reads source only; a type-check parses and infers
+/// but emits nothing; a build compiles all the way to an artifact.
+const VERIFY_STAGES: &[(&str, VerifyStage)] = &[
+    ("format", verify_fmt),
+    ("type-check", verify_check),
+    ("build", verify_build),
+];
+
+/// Stage 1: the formatting scan — `ipe fmt --check` over `<path>` (the current
+/// directory when none is given), reporting unformatted files without rewriting.
+fn verify_fmt(path: Option<&str>) -> Result<(), CliError> {
+    let mut rest: Vec<String> = Vec::new();
+    if let Some(p) = path {
+        rest.push(p.to_owned());
+    }
+    rest.push("--check".to_owned());
+    fmt::run_fmt(&rest)
+}
+
+/// Stage 2: the type-check — the same source-graph pipeline as `ipe check`.
+fn verify_check(path: Option<&str>) -> Result<(), CliError> {
+    run_check(&path.map(str::to_owned).into_iter().collect::<Vec<_>>())
+}
+
+/// Stage 3: the build — the same compilation as `ipe build`.
+fn verify_build(path: Option<&str>) -> Result<(), CliError> {
+    run_build(&path.map(str::to_owned).into_iter().collect::<Vec<_>>())
+}
+
+/// `ipe verify [<path>]` — the one-command project gate.
+///
+/// Runs the project's checks in order — format, type-check, build — stopping at
+/// the first failure. Each stage composes the same code path its standalone
+/// command uses (`ipe fmt --check`, `ipe check`, `ipe build`), so `verify` is a
+/// faithful union of them, never a second implementation. `<path>` defaults to
+/// the current project.
+///
+/// The test stage (`Ipe.Test`) is not yet wired in — there is no project-level
+/// test runner command to compose — and is tracked as a follow-up.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] on an unexpected option or extra argument. Otherwise
+/// the first failing stage's own error, which carries its diagnostic and drives
+/// the non-zero exit; a clean run exits 0.
+fn run_verify(rest: &[String]) -> Result<(), CliError> {
+    let path = cli_args::single_positional(rest, "verify")?;
+    let p = style::Palette::for_stream(&std::io::stdout());
+
+    for (index, (name, stage)) in VERIFY_STAGES.iter().enumerate() {
+        let step = index + 1;
+        print!(
+            "{}",
+            style::gutter(&format!(
+                "{}{} stage {step}/{}: {name}{}\n",
+                p.yellow,
+                style::glyph::STEP,
+                VERIFY_STAGES.len(),
+                p.reset,
+            ))
+        );
+        if let Err(err) = stage(path) {
+            print!(
+                "{}",
+                style::gutter(&format!(
+                    "{}{} {name} failed{}\n",
+                    p.red,
+                    style::glyph::FAIL,
+                    p.reset,
+                ))
+            );
+            // The stage ran correctly and reported a real failure — a gate
+            // result, not a misuse of `verify`. Rewrap it as [`VerifyFailed`] so
+            // the stage's own rendered report is shown alone, never the `verify`
+            // `--help` page a raw usage error would trigger.
+            return Err(CliError::VerifyFailed {
+                stage: name,
+                report: err.to_string(),
+            });
+        }
+        print!(
+            "{}",
+            style::gutter(&format!(
+                "{}{} {name} passed{}\n",
+                p.green,
+                style::glyph::OK,
+                p.reset,
+            ))
+        );
+    }
+
+    print!(
+        "{}",
+        style::frame(&style::gutter(&format!(
+            "{}{} all {} stages passed{}",
+            p.green,
+            style::glyph::OK,
+            VERIFY_STAGES.len(),
+            p.reset,
+        )))
+    );
     Ok(())
 }
 
