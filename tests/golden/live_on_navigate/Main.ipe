@@ -1,0 +1,69 @@
+module Main exposing (main)
+
+-- Routed Web.app that OWNS navigation in `update` via the optional
+-- `onNavigate : page -> msg` cfg field.  Every URL-driven route change becomes
+-- the `Navigate p` Msg, which the runtime dispatches through `update` — the new
+-- page reaches the model only through the author's own `update` arm, never a
+-- runtime-internal `page`-field mutation.
+--
+-- The absent-field counterpart (`live_let_bound_routes`) reconciles the page by
+-- the implicit desugaring instead; the two fixtures pin both sides of the
+-- explicit-in-config navigation form.
+
+import Ipe.Tea.Web as Web
+import Ipe.Ui as Ui
+import Ipe.Tea.Web.Cmd
+import Ipe.String
+import Ipe.Tea.Web.Sub
+
+type Page
+    = CounterPage
+    | AboutPage
+
+type Msg
+    = Increment
+    | Navigate Page
+
+type alias Model =
+    { page : Page
+    , count : Int
+    }
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { page = CounterPage, count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+        Navigate p ->
+            ( { model | page = p, count = model.count + 1 }, Cmd.none )
+
+view : Model -> Element Msg
+view model =
+    Ui.column []
+        [ Ui.text (String.fromInt model.count)
+        ]
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+routeTable =
+    [ Web.route "/" CounterPage
+    , Web.route "/about" AboutPage
+    ]
+
+main =
+    Web.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = routeTable
+        , notFound = CounterPage
+        , onNavigate = Navigate
+        }

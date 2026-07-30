@@ -372,26 +372,7 @@ fn emit_web_app_inner(
         crate::emit_model_gate::check_admissible_msg(ctx, msg_ty, ipe_diagnostics::AppShape::Web)?;
     }
 
-    // H24: the compile-time Model schema tag, computed from the SAME
-    // recovered Model type the admissibility gate just checked. The session
-    // store rejects a persisted checkpoint whose tag differs BEFORE
-    // deserializing it. An unrecoverable `view` shape (the gate's documented
-    // fail-open residual) gets the all-zero sentinel: every same-sentinel
-    // checkpoint is treated as same-schema — exactly the pre-tag behaviour
-    // for those shapes, never a new rejection.
-    let schema_tag: [u8; 32] = match crate::emit_model_gate::model_ty_of_view(view_e) {
-        Some(model_ty) => crate::emit_model_schema::model_schema_tag(ctx, model_ty)?,
-        None => [0u8; 32],
-    };
-    let tag_bytes = schema_tag
-        .iter()
-        .map(|b| format!("0x{b:02x}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    // Declared as a block-local const at the call site (the one place it is
-    // used); the byte value is the whole point — the identifier just keeps
-    // the emitted call arg readable.
-    let tag_const = format!("const IPE_LIVE_MODEL_SCHEMA_TAG: [u8; 32] = [{tag_bytes}];");
+    let tag_const = schema_tag_const(ctx, view_e)?;
 
     let init_s = emit_web_fn(ctx, init_e, indent, child, generics)?;
     let update_s = emit_web_fn(ctx, update_e, indent, child, generics)?;
@@ -417,10 +398,16 @@ fn emit_web_app_inner(
             let not_found_s = emit_expr_at(ctx, not_found_e, indent, child, generics)?;
             let model_ty_s = render_type(ctx, model_ty, generics)?;
             let page_ty_s = render_type(ctx, page_ty, generics)?;
-            let set_page = format!(
-                "move |__page: {page_ty_s}, __model: {model_ty_s}| \
-                 {model_ty_s} {{ page: __page, ..__model }}"
-            );
+            let set_page = set_page_closure(
+                ctx,
+                fields,
+                update_e,
+                &page_ty_s,
+                &model_ty_s,
+                indent,
+                child,
+                generics,
+            )?;
             return Ok(Some(format!(
                 "ipe_runtime::wasm::wasm_app_routed(\
                  {init_s}, \
@@ -456,14 +443,16 @@ fn emit_web_app_inner(
         let not_found_s = emit_expr_at(ctx, not_found_e, indent, child, generics)?;
         let model_ty_s = render_type(ctx, model_ty, generics)?;
         let page_ty_s = render_type(ctx, page_ty, generics)?;
-        // `set_page` mirrors ExprEmitter.hs:1721-1733: a Rust closure that
-        // updates the `page` field of the Model using struct-update syntax.
-        // The field identifier "page" needs no keyword-mangling ("page" is not
-        // a Rust reserved word).
-        let set_page = format!(
-            "move |__page: {page_ty_s}, __model: {model_ty_s}| \
-             {model_ty_s} {{ page: __page, ..__model }}"
-        );
+        let set_page = set_page_closure(
+            ctx,
+            fields,
+            update_e,
+            &page_ty_s,
+            &model_ty_s,
+            indent,
+            child,
+            generics,
+        )?;
         return Ok(Some(format!(
             "{{ {tag_const} \
              ipe_runtime::web::web_app_routed(\
@@ -593,6 +582,86 @@ fn routed_page_field<'a>(ctx: &EmitCtx, view_e: &'a Expr) -> Option<(&'a IrType,
     None
 }
 
+/// Build the `const IPE_LIVE_MODEL_SCHEMA_TAG: [u8; 32] = [...]` declaration the
+/// routed/non-routed `web_app*` call carries as its final argument.
+///
+/// H24: the tag is computed from the SAME recovered Model type the
+/// admissibility gate checked, so the session store can reject a persisted
+/// checkpoint whose tag differs BEFORE deserializing it. An unrecoverable
+/// `view` shape (the gate's documented fail-open residual) gets the all-zero
+/// sentinel: every same-sentinel checkpoint is treated as same-schema — exactly
+/// the pre-tag behaviour for those shapes, never a new rejection.
+fn schema_tag_const(ctx: &EmitCtx, view_e: &Expr) -> DResult<String> {
+    let schema_tag: [u8; 32] = match crate::emit_model_gate::model_ty_of_view(view_e) {
+        Some(model_ty) => crate::emit_model_schema::model_schema_tag(ctx, model_ty)?,
+        None => [0u8; 32],
+    };
+    let tag_bytes = schema_tag
+        .iter()
+        .map(|b| format!("0x{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    // The byte value is the whole point — the identifier just keeps the emitted
+    // call arg readable at its single use site.
+    Ok(format!(
+        "const IPE_LIVE_MODEL_SCHEMA_TAG: [u8; 32] = [{tag_bytes}];"
+    ))
+}
+
+/// Build the `set_page : Fn(Page, Model) -> Model` closure passed to the routed
+/// runtime entry, which the runtime calls to reconcile the model to the page a
+/// URL matched.
+///
+/// The URL-driven navigation event flows through the app's `update` exactly when
+/// the cfg supplies an `onNavigate : page -> msg` field — the explicit-in-config
+/// navigation form:
+///
+/// * **`onNavigate` present** — the matched page becomes a `Msg` via the
+///   supplied handler, and that `Msg` is dispatched through `update`:
+///   `move |page, model| { let (m, _cmd) = update(onNavigate(page), model); m }`.
+///   The app owns navigation — the new page reaches the model only through the
+///   `update` arm the author writes for the `onNavigate`-produced `Msg`. The
+///   `update` command is discarded here (URL reconcile is a synchronous
+///   model-only step, mirroring the implicit form's `Cmd.none`).
+///
+/// * **`onNavigate` absent** — the implicit `\p -> __SetPage p` desugaring whose
+///   `update` arm is `({ model | page = p }, Cmd.none)`: the runtime writes the
+///   matched page straight into the model's `page` field via struct update. This
+///   is the historical magic-page behaviour, reproduced byte-for-byte.
+#[allow(clippy::too_many_arguments)]
+fn set_page_closure(
+    ctx: &EmitCtx,
+    fields: &[(ipe_intern::Symbol, Expr)],
+    update_e: &Expr,
+    page_ty_s: &str,
+    model_ty_s: &str,
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<String> {
+    match lookup_optional_field(ctx, fields, "onNavigate")? {
+        // Explicit-in-config navigation: the matched page is turned into a Msg
+        // and dispatched through `update`, so the author owns the page
+        // transition in `update` rather than the runtime mutating `page`.
+        Some(on_navigate_e) => {
+            let update_s = emit_web_fn(ctx, update_e, indent, child, generics)?;
+            let on_navigate_s = emit_web_fn(ctx, on_navigate_e, indent, child, generics)?;
+            Ok(format!(
+                "{{ let __update = {update_s}; let __on_navigate = {on_navigate_s}; \
+                 move |__page: {page_ty_s}, __model: {model_ty_s}| {{ \
+                 let (__next, _cmd) = (__update)((__on_navigate)(__page), __model); __next }} }}"
+            ))
+        }
+        // The absent-field desugaring: struct-update the `page` field directly.
+        // Byte-identical to the historical magic-page emission — never change
+        // this string without re-baselining every routed-live golden.
+        None => Ok(format!(
+            "move |__page: {page_ty_s}, __model: {model_ty_s}| \
+             {model_ty_s} {{ page: __page, ..__model }}"
+        )),
+    }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Emit a cfg-field expression for `web_app` / `web_app_routed`.
@@ -675,6 +744,26 @@ fn lookup_field<'f>(
                 .join(", ")
         ),
     })
+}
+
+/// Find an OPTIONAL cfg field by its Ipê source name, returning `None` when the
+/// field is absent rather than failing.
+///
+/// The Live cfg record is row-open (constrain.rs `K::WebApp` scheme): optional
+/// fields such as `onNavigate` are absorbed by the row tail and may be omitted.
+/// A field whose Ipê name cannot be resolved is skipped — it can never be the
+/// name being looked up.
+fn lookup_optional_field<'f>(
+    ctx: &EmitCtx,
+    fields: &'f [(ipe_intern::Symbol, Expr)],
+    name: &str,
+) -> DResult<Option<&'f Expr>> {
+    for (sym, expr) in fields {
+        if ctx.resolve_ident(*sym)? == name {
+            return Ok(Some(expr));
+        }
+    }
+    Ok(None)
 }
 
 /// A short, user-facing display name for an [`IrType`] used in diagnostic
