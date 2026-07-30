@@ -358,8 +358,24 @@ annotations + record update, and identical core syntax (pipelines, cons, lambdas
 `modBy`) match Elm's `Basics` exposure; the import surface *around* them is
 stricter (see §6, ADR 0047).
 
-One **planned** language divergence is filed separately: closed-union `case`
-refusing catch-all arms (tracked as a GitHub issue).
+A **shipped** language divergence refuses a catch-all arm — a wildcard `_` or a
+bare variable binder — in a `case` whose scrutinee is a **closed, finite-variant
+union** (a user `type`, or a Prelude built-in like `Maybe` / `Result`) when the
+catch-all absorbs at least one constructor no earlier arm named. Elm accepts such
+a catch-all silently, so after a variant is added to a union, every `case` that
+handled the old variants with a trailing `_ ->` keeps compiling and the new
+variant inherits the catch-all's behaviour with no signal. Ipê rejects it
+(IPE-T0018, an error): a silently-swallowed new variant is a *representable wrong
+state*, and the fundamental rule is to make invalid states unrepresentable. The
+safe outcome is the default; the permissive outcome is opt-in through an
+`ipe fix` expansion into per-constructor arms and (staged behind the directive
+engine) a per-site `-- @allow(open-case) <reason>` escape hatch — fail-closed by
+construction. `Bool`, `List`, and the open domains (`Int` / `Float` / `Char` /
+`String`) keep the catch-all: their variant sets are frozen or infinite, so the
+evolution-safety argument does not apply. The rule is judged from the pattern
+column, so a bare `_ ->`-only `case` over a closed union is not yet flagged (a
+known limitation, not a guarantee). Run `ipe explain IPE-T0018` for the full
+rationale.
 
 One **shipped** syntax extension goes beyond Elm's `case…of`: **or-patterns**
 (`|` alternatives), e.g. `Up | Down -> "vertical"` and, with shared bindings,

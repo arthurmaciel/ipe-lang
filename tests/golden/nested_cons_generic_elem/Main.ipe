@@ -4,17 +4,23 @@ import Ipe.Io as Io
 import Ipe.List
 import Ipe.String
 
--- #158: a nested-cons payload whose element type flows through a GENERIC
+-- #158: a `Just`-wrapped list whose element type flows through a GENERIC
 -- function parameter (`firstOr : b -> Maybe (List b) -> b`). The backend emits
--- the enclosing function with a `T: Clone` bound, so the head-element
--- `.clone()` + `List.drop` are sound — this shape is ACCEPTED and runs.
+-- the enclosing function with a `T: Clone` bound, so the head-element clone is
+-- sound — this shape is ACCEPTED and runs. The inner `case` over the list
+-- payload keeps the outer `Maybe` match free of a closed-union catch-all.
 firstOr : b -> Maybe (List b) -> b
 firstOr dflt m =
     case m of
-        Just (h :: t) ->
-            h
+        Just xs ->
+            case xs of
+                h :: t ->
+                    h
 
-        _ ->
+                [] ->
+                    dflt
+
+        Nothing ->
             dflt
 
 

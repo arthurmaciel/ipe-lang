@@ -629,20 +629,22 @@ fn check_case(
 
     // Wildcard-covers-known-constructors lint (IPE-T0018): the case is
     // exhaustive, but a wildcard / variable arm swallows constructors a finite
-    // closed ADT (or `Bool` / `List`) could name explicitly. Warn so adding a
-    // new variant later surfaces at this match site rather than falling through
-    // silently.
+    // closed union (a user `type` or a Prelude built-in ADT) could name
+    // explicitly. Adding a variant to that union later must surface at this
+    // match site rather than falling through silently.
     //
     // The lint fires when:
     // * a top-level arm is a wildcard (`_`) or variable binder,
     // * the arms before it introduced at least one named constructor of a
-    //   CLOSED type into the column (an ADT, `Bool`, or `List`), AND
+    //   closed `Head::Adt` union into the column, AND
     // * the remaining constructors are all named (not a bare `_` witness) —
     //   meaning the type is finite and its full signature is known.
     //
-    // Open types (`Int`, `Char`, `String`) and tuples (always complete) do
-    // not trigger the lint because their "remaining" set is either unbounded or
-    // empty, so a wildcard is the correct spelling.
+    // `Bool` (`Head::Bool`) and `List` (`Head::Nil` / `Head::Cons`) are closed
+    // but excluded: their variant sets are frozen, so a catch-all over them is
+    // a safe idiom. Open types (`Int`, `Char`, `String`) and tuples (always
+    // complete) never fire because their "remaining" set is either unbounded /
+    // a bare wildcard or empty.
     for info in wildcard_arm_info {
         let Some((span, heads_before)) = info else {
             continue;
@@ -652,6 +654,19 @@ fn check_case(
         // exhaustiveness cannot be judged (no heads → unknown type, or a type
         // the user wrote a wildcard-only case for).
         if heads_before.is_empty() {
+            continue;
+        }
+        // Restrict the lint to CLOSED, USER-EVOLVABLE unions — the `Head::Adt`
+        // heads (a user `type` or a Prelude built-in union carried in the
+        // exhaustiveness signatures). `Bool` (`Head::Bool`) and `List`
+        // (`Head::Nil` / `Head::Cons`) are closed too, but their variant sets
+        // are frozen by the language: no one adds a variant to them, so a
+        // catch-all over them is a safe idiom, not an evolution hazard. Open
+        // literal heads (`Int` / `Char` / `String`) never reach here (their
+        // `remaining` set is a bare wildcard). The solver pins the scrutinee
+        // type before this pass, so every head in one column shares one type;
+        // inspecting the first head fixes the column's union identity.
+        if !matches!(heads_before.first(), Some(Head::Adt(..))) {
             continue;
         }
         // `missing_heads` tells us what constructors the wildcard covers.

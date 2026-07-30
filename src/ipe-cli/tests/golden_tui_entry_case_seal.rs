@@ -4,12 +4,11 @@
 //! The `tui_entry_case_taskrun` fixture minimises both defects to plain
 //! `Io.println` calls so this test needs no Ipe.Terminal / Ipe.Web dependency.
 //!
-//! Defect 1: a string-literal ctor-payload sub-pattern (`Just "live"`)
-//! lowered straight to a bare `Pat::Str`, emitted as
-//! `IpeMaybe::Just("live")` — Rust rejects a `&str` literal pattern against
-//! an owned `String` ctor field. Fixed by desugaring a direct `PStr` ctor-arg
-//! into a fresh `String` binder plus an arm guard (`binder == "live"`),
-//! mirroring the C2 nested-cons-in-ctor-payload desugaring.
+//! Defect 1: matching a payload string. Emitting a bare `&str` literal PATTERN
+//! against an owned `String` ctor field (`IpeMaybe::Just("live") =>`) is an
+//! E0308 (expected `String`, found `&str`). The fixture unwraps the `Maybe`
+//! (`Just s`) and matches the payload `String` in an inner `case` via
+//! `.as_str()`, so no bare `&str` ctor-field pattern is emitted.
 //!
 //! Defect 2: the entry-point task elision in `emit_func`
 //! (`ipe_backend_rust::emit_expr`) only recognised a FLAT body. A
@@ -62,10 +61,11 @@ fn built_main_rs(root: &Path, out: &Path) -> (Result<(), ipe::CliError>, Option<
     (built, main_rs)
 }
 
-/// Defect 1 pin: the fixture must be ACCEPTED (ipe exit 0) and the emitted
-/// `IpeMaybe::Just` arm must bind a fresh variable guarded by `== "live"`,
-/// never re-emit the bare `&str` literal pattern `IpeMaybe::Just("live")`
-/// that `cargo` rejects against the owned `String` payload.
+/// Defect 1 pin: the fixture must be ACCEPTED (ipe exit 0) and the payload
+/// string must be matched against the UNWRAPPED `String` (via `.as_str()`),
+/// never as a bare `&str` literal pattern against the owned `String` ctor field
+/// (`IpeMaybe::Just("live") =>`) that `cargo` rejects (E0308: expected String,
+/// found &str).
 #[test]
 fn nested_str_literal_ctor_payload_does_not_emit_bare_str_pattern() {
     let root = repo_root();
@@ -80,10 +80,10 @@ fn nested_str_literal_ctor_payload_does_not_emit_bare_str_pattern() {
     };
 
     assert!(
-        !main_rs.contains("IpeMaybe::Just(\"live\")"),
-        "a bare `&str` literal pattern against an owned `String` ctor field \
-         is a cargo-reject (E0308: expected String, found &str) — the nested \
-         `PStr` ctor-arg must desugar to a fresh binder + guard.\n\
+        !main_rs.contains("IpeMaybe::Just(\"live\") =>"),
+        "a bare `&str` literal PATTERN against an owned `String` ctor field \
+         is a cargo-reject (E0308: expected String, found &str) — the payload \
+         string must be matched against the unwrapped `String`.\n\
          --- match arm lines ---\n{}",
         main_rs
             .lines()
@@ -92,12 +92,14 @@ fn nested_str_literal_ctor_payload_does_not_emit_bare_str_pattern() {
             .join("\n")
     );
     assert!(
-        main_rs.contains("== \"live\".to_string()") || main_rs.contains("== \"live\""),
-        "expected a synthesised `== \"live\"` arm guard recovering the \
-         desugared string-literal ctor payload; got:\n{}",
+        main_rs.contains(".as_str()") && main_rs.contains("\"live\" =>"),
+        "expected the payload string matched via `.as_str()` with a `\"live\" =>` \
+         arm; got:\n{}",
         main_rs
             .lines()
-            .filter(|l| l.contains("IpeMaybe::Just") || l.contains("\"live\""))
+            .filter(|l| l.contains("IpeMaybe::Just")
+                || l.contains("\"live\"")
+                || l.contains("as_str"))
             .collect::<Vec<_>>()
             .join("\n")
     );

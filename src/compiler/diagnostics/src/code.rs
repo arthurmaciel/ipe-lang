@@ -395,7 +395,7 @@ pub fn title(c: Code) -> &'static str {
             "async carrier (`Task`/`Cmd`/`Sub`) applied to the wrong number of type arguments"
         }
         IPE_T0017 => "built-in type cannot be updated with record syntax",
-        IPE_T0018 => "wildcard arm swallows constructors a finite type could name",
+        IPE_T0018 => "this catch-all arm hides constructors of a closed union",
         IPE_T0019 => "each alternative of an or-pattern must bind the same variables",
         IPE_L0100 => "pattern kind not supported yet",
         IPE_L0101 => "operator not supported yet",
