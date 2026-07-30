@@ -3,10 +3,6 @@
 -- A port of the Haskell-backend `ipe-stdlib/Ipe/Test.ipe`.
 --
 -- SIMPLIFICATIONS vs the reference:
---  - `expectErrorKind` / `kindName` OMITTED: they require `Error` /
---    `ErrorKind` ADT constructors which are not yet accessible from
---    compiled-source (Ipe.Error is currently a kernel qualifier,
---    not a compiled-source module). Tracked as a separate backlog item.
 --  - `filterMap` replaced by `concatMap` (both semantically equivalent
 --    for this use-case; the stdlib does not yet export `filterMap`).
 --  - `summarise` is a pure function (no IO). All IO lives in `runMain`.
@@ -21,12 +17,14 @@ module Ipe.Test exposing
     , test, suite
     , pass, fail
     , equal, notEqual
-    , ok, err
+    , ok, err, expectErr
     , isTrue, isFalse
+    , kindName
     , run, runWithPrefix, summarise, runMain
     )
 
 
+import Ipe.Error as Error exposing (Error, ErrorKind)
 import Ipe.Ffi as Ffi
 import Ipe.List as List
 import Ipe.String as String
@@ -107,6 +105,42 @@ err result =
 
         Ok v ->
             Failed ("expected Err but got Ok " ++ errorToString v)
+
+
+-- | Render an `ErrorKind` as its stable variant name (`"Io"`, `"Network"`, …).
+kindName : ErrorKind -> String
+kindName =
+    Error.kindName
+
+
+-- | Pass when `result` is an `Err` classified as `expected`. Reports the actual
+-- kind (or the unexpected `Ok`) on failure.
+expectErr : ErrorKind -> Result Error a -> TestResult
+expectErr expected result =
+    case result of
+        Err e ->
+            let
+                actual =
+                    Error.kind e
+            in
+            if actual == expected then
+                Passed
+
+            else
+                Failed
+                    ("expected Err "
+                        ++ kindName expected
+                        ++ " but got Err "
+                        ++ kindName actual
+                    )
+
+        Ok v ->
+            Failed
+                ("expected Err "
+                    ++ kindName expected
+                    ++ " but got Ok "
+                    ++ errorToString v
+                )
 
 
 isTrue : Bool -> TestResult
