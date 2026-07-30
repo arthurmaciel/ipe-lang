@@ -14,7 +14,8 @@ fn main() -> ExitCode {
             err @ (ipe::CliError::UnknownCommand { .. }
             | ipe::CliError::CommandUsage { .. }
             | ipe::CliError::DocCoverage(_)
-            | ipe::CliError::VerifyFailed { .. }),
+            | ipe::CliError::VerifyFailed { .. }
+            | ipe::CliError::UpgradeNoPrebuilt { .. }),
         ) => {
             eprintln!("{err}");
             ExitCode::FAILURE

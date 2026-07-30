@@ -184,6 +184,17 @@ pub enum CliError {
         /// The stage's rendered failure report, printed as-is.
         report: String,
     },
+    /// `ipe upgrade` could not find a prebuilt binary for the requested version
+    /// and platform. This is a transient operational failure — the release was
+    /// tagged but the CI build artifacts are still being generated — NOT a
+    /// command-line misuse. Exits non-zero with the friendly message alone and
+    /// never the `upgrade` command's `--help` page.
+    UpgradeNoPrebuilt {
+        /// The release version tag (e.g. `v0.1.24`).
+        version: String,
+        /// The platform–architecture pair (e.g. `linux-x64`).
+        platform: String,
+    },
 }
 
 impl From<api_surface::DiffError> for CliError {
@@ -285,6 +296,17 @@ impl std::fmt::Display for CliError {
             Self::VerifyFailed { stage, report } => {
                 writeln!(f, "verify: the {stage} stage failed")?;
                 f.write_str(report.trim_end_matches('\n'))
+            }
+            Self::UpgradeNoPrebuilt { version, platform } => {
+                use crate::style::{GUTTER, glyph};
+                write!(
+                    f,
+                    "{GUTTER}{} No prebuilt binary for {version} on {platform}.\n\
+                     {GUTTER}    Possibly the binaries for that version are still being generated.\n\
+                     {GUTTER}    If you prefer, build from source:\n\
+                     {GUTTER}        cargo install --git https://github.com/arthurmaciel/ipe-lang ipe",
+                    glyph::FAIL
+                )
             }
         }
     }
@@ -3087,9 +3109,16 @@ const INSTALL_SH_URL: &str =
 /// Requires `sh` and `curl` (a POSIX host); `--dry-run` prints the command
 /// without running it.
 ///
+/// The installer exits with code 2 when it finds no prebuilt binary for the
+/// requested version and platform (a transient condition — the release was
+/// tagged but CI is still building the artifacts). That distinct code lets the
+/// wrapper surface a clear, actionable message rather than a generic failure.
+///
 /// # Errors
-/// [`CliError::UsageOwned`] on an unexpected argument, a non-POSIX host, or when
-/// the installer cannot be launched or exits non-zero.
+/// [`CliError::UsageOwned`] on an unexpected argument or a non-POSIX host.
+/// [`CliError::UpgradeNoPrebuilt`] when the installer exits 2 (no binary yet).
+/// [`CliError::UsageOwned`] when the installer cannot be launched or exits with
+/// any other non-zero code.
 pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
     let mut dry_run = false;
     for arg in rest {
@@ -3133,12 +3162,41 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
                 "upgrade: cannot launch the installer (needs `sh` and `curl`): {e}"
             ))
         })?;
-    if !status.success() {
-        return Err(CliError::UsageOwned(
-            "upgrade: the installer exited non-zero — nothing was changed".to_owned(),
-        ));
+    if status.success() {
+        return Ok(());
     }
-    Ok(())
+    // Exit code 2: the installer found no prebuilt binary for the requested
+    // version and platform. Report it as a typed, operational failure — NOT
+    // misuse — so the caller skips the `--help` page.
+    if status.code() == Some(2) {
+        // The installer already printed the platform/version details; supply
+        // the same fields the Display impl needs so the Rust-side message is
+        // self-contained regardless of whether the script output was captured.
+        let os = std::env::consts::OS;
+        let arch = std::env::consts::ARCH;
+        let platform = format!(
+            "{}-{}",
+            match os {
+                "linux" => "linux",
+                "macos" => "darwin",
+                "freebsd" => "freebsd",
+                "windows" => "windows",
+                other => other,
+            },
+            match arch {
+                "x86_64" => "x64",
+                "aarch64" => "arm64",
+                other => other,
+            }
+        );
+        // The version is not known here (the installer resolves it); use the
+        // running binary's version as the best available proxy.
+        let version = format!("v{}", env!("CARGO_PKG_VERSION"));
+        return Err(CliError::UpgradeNoPrebuilt { version, platform });
+    }
+    Err(CliError::UsageOwned(
+        "upgrade: the installer exited non-zero — nothing was changed".to_owned(),
+    ))
 }
 
 /// Render the ipe version in the requested [`OutputFormat`].
