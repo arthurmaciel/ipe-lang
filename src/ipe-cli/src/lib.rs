@@ -3793,7 +3793,7 @@ mod tests {
         let index = code_index();
         let lines = index.lines().count();
         assert_eq!(lines, ALL_CODES.len(), "one line per code");
-        assert_eq!(ALL_CODES.len(), 112, "taxonomy is 112 codes");
+        assert_eq!(ALL_CODES.len(), 114, "taxonomy is 114 codes");
         assert!(
             index.contains("IPE-T0001  type mismatch"),
             "index pairs code with title"
