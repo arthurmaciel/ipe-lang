@@ -23,7 +23,7 @@ use crate::code::{
     IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041,
     IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_P0063, IPE_T0001, IPE_T0002, IPE_T0003,
     IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016,
-    IPE_T0017, IPE_T0019, Severity,
+    IPE_T0017, IPE_T0018, IPE_T0019, Severity,
 };
 use crate::span::Span;
 
@@ -640,6 +640,12 @@ pub enum TypeError {
     /// emitted panic arm, no `DoS`/500 surface). The offending sub-pattern's span
     /// rides on the wrapping [`Diagnostic::Type`]. [IPE-T0015]
     RefutablePatternParameter,
+    /// A wildcard `_` arm in a `case` over a FINITE, CLOSED ADT (or `Bool` /
+    /// `List`) where the compiler knows every remaining constructor. Listing them
+    /// explicitly is safer: adding a new variant to the type will then force an
+    /// update at this match site, preventing a silent fall-through. (Warning.)
+    /// `constructors` names each remaining variant in declaration order. [IPE-T0018]
+    WildcardCoversKnownConstructors { constructors: Box<[Box<str>]> },
     /// An **or-pattern** `p1 | p2 | …` whose alternatives do not all bind the
     /// **same set of variable names**. The arm body reads a binder without
     /// knowing which alternative matched, so every name it might read must be
@@ -1094,6 +1100,7 @@ impl Diagnostic {
             Self::Parse { .. } | Self::Name { .. } | Self::Lower { .. } => Severity::Error,
             Self::Type { msg, .. } => match msg {
                 TypeError::RedundantCaseBranch { .. }
+                | TypeError::WildcardCoversKnownConstructors { .. }
                 | TypeError::RoutedAppMissingPageField { .. } => Severity::Warning,
                 TypeError::Mismatch
                 | TypeError::BudgetExceeded
@@ -1209,6 +1216,7 @@ const fn type_code(msg: &TypeError) -> Code {
         TypeError::TooManyParameters { .. } => IPE_T0004,
         TypeError::NonExhaustiveCase { .. } => IPE_T0010,
         TypeError::RedundantCaseBranch { .. } => IPE_T0011,
+        TypeError::WildcardCoversKnownConstructors { .. } => IPE_T0018,
         TypeError::RoutedAppMissingPageField { .. } => IPE_L0124,
         TypeError::NoSuchField { .. } => IPE_T0012,
         TypeError::BuiltinRecordUpdate { .. } => IPE_T0017,
@@ -1408,6 +1416,10 @@ fn type_help(msg: &TypeError) -> Vec<HelpLine> {
             )
             .into_boxed_str(),
         )],
+        TypeError::WildcardCoversKnownConstructors { constructors } => constructors
+            .iter()
+            .map(|c| HelpLine::MissingConstructor(c.clone()))
+            .collect(),
         TypeError::Mismatch
         | TypeError::InfiniteType { .. }
         | TypeError::TooManyParameters { .. }

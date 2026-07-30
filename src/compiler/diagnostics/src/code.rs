@@ -181,10 +181,11 @@ pub const IPE_T0015: Code = Code("IPE-T0015");
 pub const IPE_T0016: Code = Code("IPE-T0016");
 /// a record update on a nominal builtin type (readable fields, no update form)
 pub const IPE_T0017: Code = Code("IPE-T0017");
+/// a wildcard arm swallows constructors a finite ADT could name explicitly
+pub const IPE_T0018: Code = Code("IPE-T0018");
 /// each alternative of an or-pattern must bind the same variables
 ///
-/// T0018 is reserved by the closed-union catch-all design for the open-case
-/// lint, so or-patterns take T0019.
+/// T0018 is now the closed-union catch-all lint; or-patterns keep T0019.
 pub const IPE_T0019: Code = Code("IPE-T0019");
 
 // ---------------------------------------------------------------------------
@@ -392,6 +393,7 @@ pub fn title(c: Code) -> &'static str {
             "async carrier (`Task`/`Cmd`/`Sub`) applied to the wrong number of type arguments"
         }
         IPE_T0017 => "built-in type cannot be updated with record syntax",
+        IPE_T0018 => "wildcard arm swallows constructors a finite type could name",
         IPE_T0019 => "each alternative of an or-pattern must bind the same variables",
         IPE_L0100 => "pattern kind not supported yet",
         IPE_L0101 => "operator not supported yet",
@@ -529,6 +531,7 @@ fn front_end_explain_page(c: Code) -> Option<&'static str> {
         IPE_T0015 => Some(include_str!("../explain/IPE-T0015.md")),
         IPE_T0016 => Some(include_str!("../explain/IPE-T0016.md")),
         IPE_T0017 => Some(include_str!("../explain/IPE-T0017.md")),
+        IPE_T0018 => Some(include_str!("../explain/IPE-T0018.md")),
         IPE_T0019 => Some(include_str!("../explain/IPE-T0019.md")),
         _ => None,
     }
@@ -607,7 +610,7 @@ pub const ALL_CODES: &[Code] = &[
     IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027,
     IPE_N0028, IPE_N0029, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035, IPE_T0001,
     IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014,
-    IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0019, IPE_L0100, IPE_L0101, IPE_L0102, IPE_L0103,
+    IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018, IPE_T0019, IPE_L0100, IPE_L0101, IPE_L0102, IPE_L0103,
     IPE_L0104, IPE_L0105, IPE_L0106, IPE_L0107, IPE_L0108, IPE_L0110, IPE_L0111, IPE_L0112,
     IPE_L0113, IPE_L0114, IPE_L0115, IPE_L0116, IPE_L0117, IPE_L0118, IPE_L0119, IPE_L0120,
     IPE_L0121, IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127, IPE_L0128,

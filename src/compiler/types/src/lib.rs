@@ -3364,6 +3364,202 @@ mod tests {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // IPE-T0018: wildcard covers known constructors
+    // -----------------------------------------------------------------------
+
+    /// A wildcard arm that swallows a NAMED remaining constructor of a closed ADT
+    /// must produce exactly one IPE-T0018 warning; `infer` must still return Ok
+    /// (it is a warning, not an error).
+    #[test]
+    fn wildcard_covering_known_ctor_emits_t0018_warning() {
+        // `Color` has three constructors; only `Red` is named — `_` silently
+        // covers `Green` and `Blue`. The lint must fire naming both.
+        let src = "module Main exposing (main)\n\
+                   import Ipe.Prelude exposing (..)\n\
+                   type Color = Red | Green | Blue\n\
+                   name : Color -> String\n\
+                   name c =\n        case c of\n\
+                   \x20           Red -> \"red\"\n\
+                   \x20           _ -> \"other\"\n\
+                   main =\n    Io.println (String.fromInt 0)\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        let types = r.expect("wildcard-covers-known-ctors is a warning (IPE-T0018), not an error");
+        let t0018: Vec<_> = types
+            .warnings
+            .iter()
+            .filter(|w| {
+                matches!(
+                    w,
+                    Diagnostic::Type {
+                        msg: TypeError::WildcardCoversKnownConstructors { .. },
+                        ..
+                    }
+                )
+            })
+            .collect();
+        assert_eq!(
+            t0018.len(),
+            1,
+            "expected exactly one IPE-T0018 warning, got {:?}",
+            types.warnings
+        );
+        if let Diagnostic::Type {
+            msg: TypeError::WildcardCoversKnownConstructors { constructors },
+            ..
+        } = t0018[0]
+        {
+            let names: Vec<&str> = constructors.iter().map(AsRef::as_ref).collect();
+            // The remaining constructors are `Green` and `Blue` (in declaration order).
+            assert_eq!(
+                names,
+                vec!["Green", "Blue"],
+                "lint must name the covered ctors"
+            );
+        }
+    }
+
+    /// A `case` with a wildcard arm where the arms before it cover ALL constructors
+    /// of the type — making the wildcard redundant — must NOT emit IPE-T0018
+    /// (the wildcard is already flagged IPE-T0011 as redundant; double-warning
+    /// would be confusing). This also guards the no-warn boundary when the
+    /// wildcard covers zero remaining constructors of a closed type.
+    #[test]
+    fn wildcard_after_all_ctors_explicit_emits_only_t0011_not_t0018() {
+        // `Red`, `Green`, `Blue` are all named; `_` is fully redundant.
+        // IPE-T0011 should fire; IPE-T0018 must NOT.
+        let src = "module Main exposing (main)\n\
+                   import Ipe.Prelude exposing (..)\n\
+                   type Color = Red | Green | Blue\n\
+                   name : Color -> String\n\
+                   name c =\n        case c of\n\
+                   \x20           Red -> \"red\"\n\
+                   \x20           Green -> \"green\"\n\
+                   \x20           Blue -> \"blue\"\n\
+                   \x20           _ -> \"other\"\n\
+                   main =\n    Io.println (String.fromInt 0)\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        let types = r.expect("fully-covered wildcard is a warning (IPE-T0011), not an error");
+        let t0018: Vec<_> = types
+            .warnings
+            .iter()
+            .filter(|w| {
+                matches!(
+                    w,
+                    Diagnostic::Type {
+                        msg: TypeError::WildcardCoversKnownConstructors { .. },
+                        ..
+                    }
+                )
+            })
+            .collect();
+        assert!(
+            t0018.is_empty(),
+            "a fully-redundant wildcard must NOT emit IPE-T0018, got {t0018:?}"
+        );
+        // The redundant-branch warning must still fire.
+        let t0011: Vec<_> = types
+            .warnings
+            .iter()
+            .filter(|w| {
+                matches!(
+                    w,
+                    Diagnostic::Type {
+                        msg: TypeError::RedundantCaseBranch { .. },
+                        ..
+                    }
+                )
+            })
+            .collect();
+        assert_eq!(
+            t0011.len(),
+            1,
+            "redundant wildcard must emit exactly one IPE-T0011"
+        );
+    }
+
+    /// A `case` over a closed ADT where every constructor is listed explicitly
+    /// (no wildcard) must emit NEITHER IPE-T0018 NOR any other warning.
+    #[test]
+    fn fully_explicit_case_emits_no_t0018() {
+        // Every constructor named; no wildcard at all.
+        let src = "module Main exposing (main)\n\
+                   import Ipe.Prelude exposing (..)\n\
+                   type Color = Red | Green | Blue\n\
+                   name : Color -> String\n\
+                   name c =\n        case c of\n\
+                   \x20           Red -> \"red\"\n\
+                   \x20           Green -> \"green\"\n\
+                   \x20           Blue -> \"blue\"\n\
+                   main =\n    Io.println (String.fromInt 0)\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        let types = r.expect("exhaustive explicit case must type-check");
+        let t0018: Vec<_> = types
+            .warnings
+            .iter()
+            .filter(|w| {
+                matches!(
+                    w,
+                    Diagnostic::Type {
+                        msg: TypeError::WildcardCoversKnownConstructors { .. },
+                        ..
+                    }
+                )
+            })
+            .collect();
+        assert!(
+            t0018.is_empty(),
+            "a fully explicit case must emit no IPE-T0018, got {t0018:?}"
+        );
+    }
+
+    /// A `case` over an OPEN type (`Int`) with a wildcard must NOT emit IPE-T0018
+    /// — the remaining set is infinite and un-nameable, so the wildcard is the
+    /// correct and only viable spelling.
+    #[test]
+    fn wildcard_on_open_type_int_does_not_emit_t0018() {
+        // Only a few literals are named; `_` is needed for the open remainder.
+        let src = "module Main exposing (main)\n\
+                   import Ipe.Prelude exposing (..)\n\
+                   describe : Int -> String\n\
+                   describe n =\n        case n of\n\
+                   \x20           0 -> \"zero\"\n\
+                   \x20           1 -> \"one\"\n\
+                   \x20           _ -> \"other\"\n\
+                   main =\n    Io.println (String.fromInt 0)\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        let types = r.expect("wildcard on Int must type-check");
+        let t0018: Vec<_> = types
+            .warnings
+            .iter()
+            .filter(|w| {
+                matches!(
+                    w,
+                    Diagnostic::Type {
+                        msg: TypeError::WildcardCoversKnownConstructors { .. },
+                        ..
+                    }
+                )
+            })
+            .collect();
+        assert!(
+            t0018.is_empty(),
+            "a wildcard on an open type (Int) must not emit IPE-T0018, got {t0018:?}"
+        );
+    }
+
     /// Regression against the IPE-T0011 false-positive class (the ex10-shaped
     /// bug): a `case` whose arms cover every constructor of a closed union
     /// EXACTLY ONCE — no trailing `_`, no redundant arm — must emit ZERO
