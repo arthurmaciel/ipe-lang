@@ -84,21 +84,21 @@ endsWith = Ffi.kernel "String_endsWith"
 --
 -- Equivalent to `\\haystack needle -> contains needle haystack`.
 containsIn : String -> String -> Bool
-containsIn haystack needle = contains needle haystack
+containsIn = Ffi.kernel "String_containsIn"
 
 
 -- | Haystack-first companion to `startsWith`.
 --
 --     "/api/users" |> String.startsWithIn "/api"  -- True
 startsWithIn : String -> String -> Bool
-startsWithIn haystack prefix = startsWith prefix haystack
+startsWithIn = Ffi.kernel "String_startsWithIn"
 
 
 -- | Haystack-first companion to `endsWith`.
 --
 --     "image.png" |> String.endsWithIn ".png"  -- True
 endsWithIn : String -> String -> Bool
-endsWithIn haystack suffix = endsWith suffix haystack
+endsWithIn = Ffi.kernel "String_endsWithIn"
 
 
 isEmail : String -> Bool
