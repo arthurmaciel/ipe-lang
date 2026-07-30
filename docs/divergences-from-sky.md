@@ -1882,3 +1882,21 @@ smells (`Task String` errors, Float-money, password-`onInput`,
 `data-sky-eval`). Capability-only divergence: lint never changes what the
 compiler accepts, so Go-oracle parity is unaffected. Tracked as a GitHub
 issue; implementation not started.
+
+### B-ParseCurrency — `Ipe.Money.parseCurrency` returns `Maybe Currency`, not a silent `CurrencyRaw` default
+
+- **Reference:** Sky's `Money.parseCurrency : String -> Currency` falls through
+  to `CurrencyRaw other` for any unrecognised code, silently wrapping the
+  bad input in a valid-looking `Currency` value. An invalid ISO 4217 code
+  produces a `CurrencyRaw "BOGUS"` that passes all downstream checks and
+  formats without error — a silent soundness footgun for monetary amounts.
+- **Ipê design:** `parseCurrency : String -> Maybe Currency`. Known codes
+  return `Just <variant>`; any unrecognised code returns `Nothing`. The
+  caller must handle the absent case explicitly. `Money.parseCurrency "USD"`
+  returns `Just USD`; `Money.parseCurrency "BOGUS"` returns `Nothing`. Use
+  `CurrencyRaw` directly when a passthrough for out-of-table codes is
+  intentional.
+- **Sanctioned:** `sanctioned:` — parse-don't-validate applied to the
+  currency-code boundary. An unrecognised code is an absent value, not a
+  coerced `CurrencyRaw` that silently produces a wrong-currency `Money` value.
+  Proven by golden `money_parse_currency_maybe`.
