@@ -733,51 +733,6 @@ fn wasm_server_only_kernel_native_ok() {
     }
 }
 
-/// A routed `Web.app` (Model with a `page` field + a non-empty `routes` list)
-/// under `--target wasm` must be rejected at target-gate time. The routing
-/// path names a server-only kernel that has no wasm denotation, so the earlier
-/// canon-stage target gate (IPE-N0029) fires before the emit-stage routed-app
-/// gate (IPE-L0129) — either way, no Rust is emitted (THE SEAL). IPE-L0129 is
-/// the emit-stage fallback reserved for a routed app whose kernels are all
-/// wasm-safe. Source shape mirrors the proven `wasm_target_gate` green fixture
-/// (top-level decls at column 0; `\x20`-led body indentation).
-#[test]
-fn wasm_routed_app_rejected() {
-    let src = "module Main exposing (main)\n\
-         import Ipe.Prelude exposing (..)\n\
-         import Ipe.Tea.Web exposing (app, route)\n\
-         import Ipe.Cmd as Cmd\n\
-         import Ipe.Sub as Sub\n\
-         import Ipe.Ui as Ui\n\
-         \n\
-         type Page = HomePage\n\
-         type Msg = Noop\n\
-         type alias Model = { page : Page }\n\
-         \n\
-         init : a -> ( Model, Cmd Msg )\n\
-         init _req = ( { page = HomePage }, Cmd.none )\n\
-         \n\
-         update : Msg -> Model -> ( Model, Cmd Msg )\n\
-         update _msg model = ( model, Cmd.none )\n\
-         \n\
-         subscriptions : Model -> Sub Msg\n\
-         subscriptions _model = Sub.none\n\
-         \n\
-         view : Model -> Element Msg\n\
-         view _model = Ui.text \"hi\"\n\
-         \n\
-         main =\n\
-         \x20   app\n\
-         \x20       { init = init\n\
-         \x20       , update = update\n\
-         \x20       , view = view\n\
-         \x20       , subscriptions = subscriptions\n\
-         \x20       , routes = [ route \"/\" HomePage ]\n\
-         \x20       , notFound = HomePage\n\
-         \x20       }\n";
-    assert_rejected_wasm("wasm_routed_app", src, "IPE-N0029");
-}
-
 // ===========================================================================
 // Lowering / not-yet-supported — IPE-L####
 // ===========================================================================

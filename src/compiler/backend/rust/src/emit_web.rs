@@ -405,14 +405,33 @@ fn emit_web_app_inner(
     let subs_s = emit_web_fn(ctx, subs_e, indent, child, generics)?;
 
     // Browser target: the same cfg drives the client sink. No session store
-    // (the model lives in the tab), so no store args and no schema tag. The
-    // routed shape needs the client-side router — fail closed until it lands.
+    // (the model lives in the tab), so no store args and no schema tag.
     if ctx.target == ipe_ir::Target::WasmClient {
-        if routed_page_field(ctx, view_e).is_some() {
-            return Err(Diagnostic::Lower {
-                span: Span::DUMMY,
-                msg: LowerError::Unsupported(ipe_diagnostics::Feature::WasmRoutedApp),
-            });
+        if let Some((model_ty, page_ty)) = routed_page_field(ctx, view_e) {
+            // Routed app: emit `wasm_app_routed` with routes, notFound, and
+            // a generated `set_page` closure. The History-API `popstate`
+            // listener is installed by the runtime entry point.
+            let routes_e = lookup_field(ctx, fields, "routes")?;
+            let not_found_e = lookup_field(ctx, fields, "notFound")?;
+            let routes_s = emit_expr_at(ctx, routes_e, indent, child, generics)?;
+            let not_found_s = emit_expr_at(ctx, not_found_e, indent, child, generics)?;
+            let model_ty_s = render_type(ctx, model_ty, generics)?;
+            let page_ty_s = render_type(ctx, page_ty, generics)?;
+            let set_page = format!(
+                "move |__page: {page_ty_s}, __model: {model_ty_s}| \
+                 {model_ty_s} {{ page: __page, ..__model }}"
+            );
+            return Ok(Some(format!(
+                "ipe_runtime::wasm::wasm_app_routed(\
+                 {init_s}, \
+                 {update_s}, \
+                 {view_s}, \
+                 {subs_s}, \
+                 {routes_s}, \
+                 {not_found_s}, \
+                 {set_page}\
+                 )"
+            )));
         }
         return Ok(Some(format!(
             "ipe_runtime::wasm::wasm_app({init_s}, {update_s}, {view_s}, {subs_s})"
