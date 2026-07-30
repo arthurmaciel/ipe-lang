@@ -255,16 +255,24 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 }
 
 pub fn main_tuple_parts() -> i64 {
-    ({
-        let (a, b) = (40, 2);
-        (a + b)
+    static CELL: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+    CELL.get_or_init(|| {
+        ({
+            let (a, b) = (40, 2);
+            (a + b)
+        })
     })
+    .clone()
 }
 pub fn main_record_part() -> i64 {
-    ({
-        let RecX { x, .. } = RecX { x: 42 };
-        x
+    static CELL: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+    CELL.get_or_init(|| {
+        ({
+            let RecX { x, .. } = RecX { x: 42 };
+            x
+        })
     })
+    .clone()
 }
 pub fn ipe_main() -> IpeTask<()> {
     io_println(string_from_int(

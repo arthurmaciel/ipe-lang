@@ -206,6 +206,11 @@ apiKey =
     System.getenv "OPENAI_KEY" |> Task.run |> Result.withDefault ""
 ```
 
+Such a zero-parameter top-level binding is a shared **value**, not a function:
+it is evaluated once, on first use, and every later reference sees that same
+result — so `apiKey` reads the environment a single time regardless of how many
+call sites use it.
+
 **Result/Task bridges:**
 
 | Helper | Type |
