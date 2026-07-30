@@ -537,12 +537,14 @@ jobs:
   # is unit-tested host-independently; exercising it live needs a mounted
   # FAT/exFAT volume a hosted image does not provide (a self-hosted runner axis).
   #
-  # This job does NOT run the audit-layer `audit_native` E2E: the audit's Tier-2
-  # probe wrapper is a POSIX shell fixture driven through a `/usr/bin/env … /bin/sh`
-  # invocation prefix, and the Windows jail runs `payload[0]` directly through
-  # `CreateProcessW` (no shell). A Windows-native probe wrapper is needed before
-  # the audit can certify `windows-x64`, so Windows stays refuse-to-certify in the
-  # audit layer; this job proves only the Windows `build_in_jail` deny behaviour.
+  # This job ALSO runs the audit-layer `audit_native` E2E: the reconciler drives
+  # the Windows `build_in_jail` through `JailProbeRunner` with a Windows-NATIVE
+  # probe wrapper (tests/fixtures/admission/untrusted-build.ps1), invoked as
+  # `powershell.exe -File ... -Tier2Axis <axis> ... -- <untrusted build>`
+  # (PowerShell is the `CreateProcessW`-invokable interpreter, so the jail runs it
+  # directly -- no shell). It certifies a benign package as `windows-x64` and
+  # rejects a used-but-undeclared axis, so Windows is a real certifying platform
+  # in the audit layer, not only a build-jail deny proof.
   windows-tier2:
     name: windows-tier2 (Job Object + AppContainer — the real Windows build-jail proof)
     runs-on: windows-2022
@@ -593,6 +595,18 @@ jobs:
         env:
           IPE_E2E: "1"
         run: cargo nextest run -p ipe_sandbox --test build_jail_windows_e2e --profile ci
+
+      # The real reconciler through the real Windows build jail (the audit-layer
+      # certify path): the reconciler drives build_in_jail via JailProbeRunner
+      # with the Windows-native PowerShell probe wrapper. A used-but-undeclared
+      # axis rejects naming the axis, and a benign package declaring exactly its
+      # axes certifies as windows-x64 (the certify+reject the macos/freebsd jobs
+      # prove on their platforms). IPE_E2E=1 arms the real jailed runs.
+      - name: audit_native E2E through the real Windows jail
+        env:
+          IPE_E2E: "1"
+          IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
+        run: cargo nextest run -p ipe --test audit_native --profile ci
 
   # ─── FreeBSD Tier-2 BUILD-jail proof (the returning build jail, ADR 0051) ────
   # FreeBSD's differential-confinement half: a REAL proof of the FreeBSD returning
