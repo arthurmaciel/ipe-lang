@@ -1760,6 +1760,19 @@ pub enum StdlibKernel {
     /// `Url.buildQuery : List (String, String) -> String` — the injection-safe
     /// query-string builder; every key/value is percent-encoded.
     UrlBuildQuery,
+    // ── Ipe.Locale — opaque BCP-47 locale handle ─────────────────────────
+    // Parse-don't-validate: `Locale.fromTag` is the only constructor; an invalid
+    // BCP-47 tag is `Nothing`, never a silent default.  `Locale.toTag` is the
+    // single extraction boundary.  `String.toUpperIn`/`toLowerIn` are the
+    // locale-aware case-mapping kernels.  All four are Pure.
+    /// `Locale.fromTag : String -> Maybe Locale` — BCP-47 parse boundary.
+    LocaleFromTag,
+    /// `Locale.toTag : Locale -> String` — recover the BCP-47 tag.
+    LocaleToTag,
+    /// `String.toUpperIn : Locale -> String -> String` — locale-correct upper-case.
+    StringToUpperIn,
+    /// `String.toLowerIn : Locale -> String -> String` — locale-correct lower-case.
+    StringToLowerIn,
 }
 
 impl StdlibKernel {
@@ -3319,6 +3332,13 @@ impl StdlibKernel {
             Self::UrlQuery => d("Url", "query", 1, Pure, "url_query"),
             Self::UrlFragment => d("Url", "fragment", 1, Pure, "url_fragment"),
             Self::UrlBuildQuery => d("Url", "buildQuery", 1, Pure, "url_build_query"),
+            // ── Ipe.Locale ──────────────────────────────────────────────
+            Self::LocaleFromTag => d("Locale", "fromTag", 1, Pure, "locale_from_tag"),
+            Self::LocaleToTag => d("Locale", "toTag", 1, Pure, "locale_to_tag"),
+            // `toUpperIn`/`toLowerIn` live in the `String` qualifier (arity 2:
+            // `Locale -> String -> String`) and route to the `locale` module.
+            Self::StringToUpperIn => d("String", "toUpperIn", 2, Pure, "string_to_upper_in"),
+            Self::StringToLowerIn => d("String", "toLowerIn", 2, Pure, "string_to_lower_in"),
         }
     }
 
@@ -4425,6 +4445,11 @@ impl StdlibKernel {
         Self::UrlQuery,
         Self::UrlFragment,
         Self::UrlBuildQuery,
+        // ── Ipe.Locale ─────────────────────────────────────────────────
+        Self::LocaleFromTag,
+        Self::LocaleToTag,
+        Self::StringToUpperIn,
+        Self::StringToLowerIn,
     ];
 
     // ── Classification predicates (moved from ipe_ir::KernelFn) ─────────────
@@ -5575,7 +5600,12 @@ impl StdlibKernel {
             | Self::UrlPath
             | Self::UrlQuery
             | Self::UrlFragment
-            | Self::UrlBuildQuery => None,
+            | Self::UrlBuildQuery
+            // ── Ipe.Locale — pure BCP-47 parse + locale-aware case mapping ──
+            | Self::LocaleFromTag
+            | Self::LocaleToTag
+            | Self::StringToUpperIn
+            | Self::StringToLowerIn => None,
         }
     }
 
@@ -6568,6 +6598,16 @@ impl StdlibKernel {
                     | Self::SubSubscribeWebSocket
             ),
             KernelClass::Pure => {
+                // `StringToUpperIn` / `StringToLowerIn` require ICU4X
+                // `icu_casemap` which has no wasm32 build in the current feature
+                // graph.  Their qualifier is `"String"` which appears in the
+                // wasm-allowed qualifier set below, so they must be explicitly
+                // excluded first before the qualifier-wide allow fires.
+                // `LocaleFromTag` / `LocaleToTag` carry qualifier `"Locale"` which
+                // is NOT in the set — they are already denied by the catch-all.
+                if matches!(self, Self::StringToUpperIn | Self::StringToLowerIn) {
+                    return false;
+                }
                 // Pure families whose runtime modules are in the proven wasm
                 // floor (no host I/O, no tokio, no un-shimmed entropy) OR
                 // whose M4 browser substitute has landed:

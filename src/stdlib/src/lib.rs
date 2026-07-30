@@ -458,6 +458,19 @@ const STD_PUBSUB: &str = include_str!("../Ipe/PubSub.ipe");
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_TRACE: &str = include_str!("../Ipe/Trace.ipe");
 
+/// `Ipe.Locale` — opaque BCP-47 locale handle + locale-aware case mapping.
+///
+/// `Locale.fromTag`/`Locale.toTag` route through `Ffi.kernel "Locale_*"` aliases
+/// resolved by the kernel-alias mechanism to the registered
+/// `LocaleFromTag`/`LocaleToTag` `StdlibKernel` variants
+/// (`ipe_runtime::locale::*`).  `String.toUpperIn`/`toLowerIn` route to the
+/// registered `StringToUpperIn`/`StringToLowerIn` variants likewise.
+/// Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in
+/// `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
+/// The runtime `locale` feature is required; programs that never import this
+/// module pay no ICU4X dependency cost.
+const LOCALE: &str = include_str!("../Ipe/Locale.ipe");
+
 /// `Ipe.Ui.Events` — pure Ipê re-exports of `Ipe.Ui` event helpers (compiled source).
 ///
 /// Pure Ipê; no Ffi.kernel calls.  RESOLVES (ipe-0 AND cargo-0): the
@@ -591,6 +604,15 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Url",
         source: URL,
+    // Ipe.Locale — opaque BCP-47 locale handle + locale-aware case mapping.
+    // `Locale.fromTag`/`Locale.toTag` resolve via `Ffi.kernel "Locale_*"`;
+    // `String.toUpperIn`/`toLowerIn` resolve via `Ffi.kernel "String_toUpperIn"`
+    // / `"String_toLowerIn"`.  The runtime module is `ipe_runtime::locale::*`
+    // (feature `locale`).  Disjoint from `STDLIB_MODULE_QUALIFIERS` (no
+    // `"Locale"` entry there), so the invariant holds.
+    CompiledStdModule {
+        dotted: "Ipe.Locale",
+        source: LOCALE,
     },
 ];
 

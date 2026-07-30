@@ -1275,7 +1275,8 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         // Typed-key newtypes — opaque scalar wrappers, no embedded function.
         | IrType::CryptoKey
         | IrType::CryptoMac
-        | IrType::EmailAddress => false,
+        | IrType::EmailAddress
+        | IrType::Locale => false,
         // `WebRoute page` carries the page type it builds — recurse (the
         // route's own builder closure is runtime-internal, not a Ipê `Fn`).
         IrType::WebRoute(page) => ir_contains_fun(page),
@@ -1402,6 +1403,8 @@ fn clone_class(interner: &Interner, t: &IrType) -> CloneClass {
         | IrType::CryptoKey
         | IrType::CryptoMac
         | IrType::EmailAddress
+        // `Locale` wraps a `String` — `Clone` but not `Copy`.
+        | IrType::Locale
         // The promoted `Arc<dyn Fn>` carrier is `Clone` (a refcount bump), so a
         // `SharedFun` slot is `CloneOk` — this is what lets a composite carrying
         // it become clonable and so reusable.
@@ -4170,7 +4173,9 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         // Typed-key newtypes are non-parametric — no type var.
         | IrType::CryptoKey
         | IrType::CryptoMac
-        | IrType::EmailAddress => false,
+        | IrType::EmailAddress
+        // `Locale` is non-parametric — no type var.
+        | IrType::Locale => false,
     }
 }
 
@@ -9276,6 +9281,9 @@ impl<'a> Lowerer<'a> {
                 // `Url` is `Ipe.Url`'s opaque validated URL type.
                 // Backed by `ipe_runtime::url::Url`.
                 "Url" => Ok(IrType::Url),
+                // `Locale` is `Ipe.Locale`'s opaque BCP-47 locale handle.
+                // Backed by `ipe_runtime::locale::Locale`.
+                "Locale" => Ok(IrType::Locale),
                 // `Topic a` is `Ipe.PubSub`'s phantom topic-handle type.
                 // The type parameter `a` exists only at type-check time; at runtime
                 // a topic is just the name string.  Erase to `Str` unconditionally.
@@ -10307,6 +10315,9 @@ impl<'a> Lowerer<'a> {
                 // `Url` is `Ipe.Url`'s opaque validated URL type.
                 // Backed by `ipe_runtime::url::Url`.
                 "Url" => Ok(IrType::Url),
+                // `Locale` is `Ipe.Locale`'s opaque BCP-47 locale handle.
+                // Backed by `ipe_runtime::locale::Locale`.
+                "Locale" => Ok(IrType::Locale),
                 // `Topic a` is `Ipe.PubSub`'s phantom topic-handle type.
                 // The type parameter `a` exists only at type-check time; at runtime
                 // a topic is just the name string.  Erase to `Str` unconditionally.
@@ -15141,8 +15152,13 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::CryptoKeyFromBytes
                 | KernelFn::CryptoMacToHex
                 | KernelFn::EmailAddressParse
-                | KernelFn::EmailAddressToString,
+                | KernelFn::EmailAddressToString
+                // `Locale.fromTag`/`Locale.toTag` are arity-1.
+                | KernelFn::LocaleFromTag
+                | KernelFn::LocaleToTag,
             ) => Ok(1),
+            // `String.toUpperIn`/`toLowerIn` are arity-2.
+            Callee::Kernel(KernelFn::StringToUpperIn | KernelFn::StringToLowerIn) => Ok(2),
             Callee::Kernel(
                 KernelFn::CryptoHmacSha256WithKey
                 | KernelFn::CryptoHmacSha512WithKey
@@ -15323,6 +15339,9 @@ impl<'a> Lowerer<'a> {
                     ("String", "foldr") => Ok(Callee::Kernel(KernelFn::StringFoldr)),
                     ("String", "any") => Ok(Callee::Kernel(KernelFn::StringAny)),
                     ("String", "all") => Ok(Callee::Kernel(KernelFn::StringAll)),
+                    // ── Locale-aware String kernels (arity 2) ──────────────
+                    ("String", "toUpperIn") => Ok(Callee::Kernel(KernelFn::StringToUpperIn)),
+                    ("String", "toLowerIn") => Ok(Callee::Kernel(KernelFn::StringToLowerIn)),
                     // ── Char kernels ───────────────────────────────────────
                     ("Char", "isAlpha") => Ok(Callee::Kernel(KernelFn::CharIsAlpha)),
                     ("Char", "isDigit") => Ok(Callee::Kernel(KernelFn::CharIsDigit)),
@@ -18196,7 +18215,9 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         // Typed-key newtypes are non-parametric — no generic syms.
         | IrType::CryptoKey
         | IrType::CryptoMac
-        | IrType::EmailAddress => {}
+        | IrType::EmailAddress
+        // `Locale` is non-parametric — no generic syms.
+        | IrType::Locale => {}
     }
 }
 
@@ -18559,6 +18580,14 @@ mod tests {
         // Ipe.Email.EmailAddress — compiled-source Layer-3 module.
         KernelFn::EmailAddressParse,
         KernelFn::EmailAddressToString,
+        // Ipe.Locale — compiled-source Layer-3 module; `Locale.fromTag`/
+        // `Locale.toTag` route via `Ffi.kernel "Locale_*"` aliases, and
+        // `String.toUpperIn`/`toLowerIn` route via the `String` qualifier
+        // string-match arms already added to `lower_callee`.
+        KernelFn::LocaleFromTag,
+        KernelFn::LocaleToTag,
+        KernelFn::StringToUpperIn,
+        KernelFn::StringToLowerIn,
         // Ipe.Money — compiled-source Layer-3 module; every kernel is reached
         // exclusively through the `Ffi.kernel "Money_*"` alias fast-path (the
         // `Money` qualifier is a compiled-source module name, not a legacy

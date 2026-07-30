@@ -1669,7 +1669,9 @@ fn ir_type_contains_non_serde(ty: &IrType) -> bool {
         // HydrationState record is rejected.
         | IrType::CryptoKey
         | IrType::CryptoMac
-        | IrType::EmailAddress => true,
+        | IrType::EmailAddress
+        // `Locale` — not serde; rejected in a HydrationState record.
+        | IrType::Locale => true,
     }
 }
 

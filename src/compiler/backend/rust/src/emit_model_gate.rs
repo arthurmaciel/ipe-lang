@@ -284,6 +284,8 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         | IrType::CryptoKey
         | IrType::CryptoMac
         | IrType::EmailAddress
+        // `Locale` is not serde — a transient runtime value, not a session datum.
+        | IrType::Locale
         // `SqlFragment` is a query-building value, never
         // persisted to a Web session store — not a valid Model leaf.
         | IrType::SqlFragment

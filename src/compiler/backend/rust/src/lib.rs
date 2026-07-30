@@ -1497,6 +1497,60 @@ impl<'a> EmitCtx<'a> {
     }
 }
 
+/// True when `ty` is a monomorphic leaf that carries no record shape of its own
+/// and requires no recursion. Used to short-circuit [`collect_record_shapes`].
+const fn ir_type_is_record_shape_leaf(ty: &IrType) -> bool {
+    matches!(
+        ty,
+        IrType::Int
+            | IrType::Float
+            | IrType::Bool
+            | IrType::Str
+            | IrType::Char
+            | IrType::Unit
+            | IrType::Bytes
+            | IrType::Json
+            | IrType::Db
+            | IrType::ServerRequest
+            | IrType::ServerResponse
+            | IrType::ServerRoute
+            | IrType::ServerCookie
+            | IrType::StreamWriter
+            | IrType::HttpRequest
+            | IrType::Regex
+            | IrType::WebSocketServer
+            | IrType::WebSocketServerCfg
+            | IrType::Generic(_)
+            | IrType::UiPlain(_)
+            | IrType::WebReq
+            | IrType::Order
+            | IrType::HttpMethod
+            | IrType::Decimal
+            | IrType::ErrorKind
+            | IrType::Error
+            | IrType::ErrorDetails
+            | IrType::ErrorInfo
+            | IrType::PanicInfo
+            | IrType::TypeInfo
+            | IrType::SqlFragment
+            | IrType::Secret
+            | IrType::Path
+            | IrType::CacheCfg
+            | IrType::WebSocketClientCfg
+            | IrType::CacheStats
+            | IrType::CsvDoc
+            | IrType::EmailMessage
+            | IrType::EmailAttachment
+            | IrType::EmailSesConfig
+            | IrType::EmailSmtpConfig
+            | IrType::EmailProvider
+            | IrType::CryptoKey
+            | IrType::CryptoMac
+            | IrType::EmailAddress
+            | IrType::Locale
+    )
+}
+
 /// Walk a type, recording every distinct CLOSED record shape it contains
 /// (recursing through tuples and nested records). A shape is keyed by its sorted
 /// field-name set; the value accumulates each DISTINCT `(field name, type)` list
@@ -1512,6 +1566,9 @@ fn collect_record_shapes(
     ty: &IrType,
     shapes: &mut BTreeMap<Vec<String>, ShapeOccurrences>,
 ) -> DResult<()> {
+    if ir_type_is_record_shape_leaf(ty) {
+        return Ok(());
+    }
     match ty {
         IrType::Tuple(elems) => {
             for elem in elems {
@@ -1533,8 +1590,7 @@ fn collect_record_shapes(
                 entry.push(fields);
             }
         }
-        // A function type (`Fun` / `Arc`-carried `SharedFun` / curried
-        // `FnOnceChain`) contributes no struct of its own, but its param/return
+        // A function type contributes no struct of its own, but its param/return
         // types may carry record shapes (e.g. a callback over a record).
         IrType::Fun(params, ret)
         | IrType::SharedFun(params, ret)
@@ -1545,28 +1601,18 @@ fn collect_record_shapes(
             collect_record_shapes(interner, ret, shapes)?;
         }
         IrType::Enum { args, .. } => {
-            // An enum carries no struct of its own, but its type arguments may
-            // (e.g. `Maybe { x : Int }`).
             for arg in args {
                 collect_record_shapes(interner, arg, shapes)?;
             }
         }
-        // `Maybe a` / `List a` / `Set a` carry no struct of their own, but their
-        // element type may (`Maybe { x : Int }`).
         IrType::Maybe(elem) | IrType::List(elem) | IrType::Set(elem) => {
             collect_record_shapes(interner, elem, shapes)?;
         }
-        // `Result e a` / `Dict k v` — descend into both element types.
         IrType::Result(a, b) | IrType::Dict(a, b) => {
             collect_record_shapes(interner, a, shapes)?;
             collect_record_shapes(interner, b, shapes)?;
         }
-        // `Decoder<T>`, `IpeTask<E,A>`, `IpeCmd<M>`, `IpeSub<M>` are opaque
-        // aliases; descend into the inner type for any nested record shape.
-        IrType::Decoder(inner)
-        | IrType::Task(inner)
-        | IrType::Cmd(inner)
-        | IrType::Sub(inner) => {
+        IrType::Decoder(inner) | IrType::Task(inner) | IrType::Cmd(inner) | IrType::Sub(inner) => {
             collect_record_shapes(interner, inner, shapes)?;
         }
         IrType::Int
@@ -1633,7 +1679,9 @@ fn collect_record_shapes(
         // Typed-key newtypes are opaque scalar wrappers — no record shape.
         | IrType::CryptoKey
         | IrType::CryptoMac
-        | IrType::EmailAddress => {}
+        | IrType::EmailAddress
+        // `Locale` is an opaque BCP-47 handle — no record shape.
+        | IrType::Locale => {}
         // `WebRoute page` is page-parametric — descend in case the page type
         // carries a nested record shape.
         IrType::WebRoute(page) => collect_record_shapes(interner, page, shapes)?,
@@ -1790,7 +1838,9 @@ fn type_reaches_enum(
         // Typed-key newtypes are monomorphic opaque wrappers — no enum edge.
         | IrType::CryptoKey
         | IrType::CryptoMac
-        | IrType::EmailAddress => false,
+        | IrType::EmailAddress
+        // `Locale` is a monomorphic opaque handle — no enum edge.
+        | IrType::Locale => false,
         // `Route<Page>` stores its `not_found`/built pages by value — a page
         // type reaching `target` through a route is a genuine size edge.
         IrType::WebRoute(page) => type_reaches_enum(page, target, enums, visited),
@@ -1885,7 +1935,9 @@ fn contains_generic(ty: &IrType) -> bool {
         // parameters.
         | IrType::CryptoKey
         | IrType::CryptoMac
-        | IrType::EmailAddress => false,
+        | IrType::EmailAddress
+        // `Locale` is monomorphic — no generic parameters.
+        | IrType::Locale => false,
         // `WebRoute page` is parametric on `page`; check if it carries a
         // generic.
         IrType::WebRoute(page) => contains_generic(page),
@@ -2004,7 +2056,9 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         // Typed security newtypes are monomorphic opaque wrappers — no generics.
         | IrType::CryptoKey
         | IrType::CryptoMac
-        | IrType::EmailAddress => {}
+        | IrType::EmailAddress
+        // `Locale` is monomorphic — no generics to collect.
+        | IrType::Locale => {}
         // `WebRoute page` may carry generic parameters through `page`.
         IrType::WebRoute(page) => collect_generics(page, out),
         // `Ui { ctor, msg }` may carry generic parameters through `msg`.
@@ -2335,9 +2389,11 @@ fn match_template(
         | IrType::EmailSmtpConfig
         | IrType::EmailProvider
         // Typed security newtypes are monomorphic opaque leaves — must equal exactly.
+        // `Locale` is a monomorphic opaque leaf.
         | IrType::CryptoKey
         | IrType::CryptoMac
-        | IrType::EmailAddress => {
+        | IrType::EmailAddress
+        | IrType::Locale => {
             if template == concrete {
                 Ok(())
             } else {

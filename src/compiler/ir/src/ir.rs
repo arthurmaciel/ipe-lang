@@ -1155,6 +1155,16 @@ pub enum IrType {
     /// (a `Url` in a `Ipe.Web` Model field is a compile-time rejection, never a
     /// silent wrong behaviour — same posture as `Path`/`Regex`).
     Url,
+    // ── Ipe.Locale ─────────────────────────────────────────────────────────
+    /// Opaque validated BCP-47 locale handle (`ipe_runtime::locale::Locale`).
+    ///
+    /// The ONLY constructor is `Locale.fromTag : String -> Maybe Locale`, which
+    /// rejects invalid BCP-47 tags at the boundary — an invalid tag is a typed
+    /// absence (`Nothing`), never a silent fallback.  Extracted via
+    /// `Locale.toTag : Locale -> String`.  `Clone` + `PartialEq` + `Debug`;
+    /// non-serde (a `Locale` is a transient runtime value, not a session-store
+    /// datum).  Model-schema tag: 62.
+    Locale,
 }
 
 /// Tag enum for the message-parametric `Ipe.Ui` / `Ipe.Html` types.
@@ -1308,6 +1318,8 @@ pub fn ir_type_is_derivable(
         | IrType::CryptoMac
         // `EmailAddress` derives Clone+PartialEq+Debug — fully derivable.
         | IrType::EmailAddress
+        // `Locale` derives Clone+PartialEq+Debug — fully derivable.
+        | IrType::Locale
         | IrType::Generic(_)
         | IrType::UiPlain(_) => true,
         // The fully-derivable Ipe.Ui / Ipe.Html carriers vs the two Clone-only
@@ -1530,6 +1542,9 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         | IrType::CryptoKey
         | IrType::CryptoMac
         | IrType::EmailAddress
+        // `Locale` is a transient runtime value, not a session datum; the
+        // runtime type carries no serde derive.
+        | IrType::Locale
         // `Route<Page>` holds an `Arc<dyn Fn>` builder — never derivable/serde
         // regardless of its page argument.
         | IrType::WebRoute(_) => false,
@@ -1639,6 +1654,8 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         | IrType::CryptoKey
         | IrType::CryptoMac
         | IrType::EmailAddress
+        // `Locale` wraps a `String` — derives `Clone`.
+        | IrType::Locale
         // The promoted `Arc<dyn Fn>` fn carrier: `Arc` is `Clone` (a refcount
         // bump), so a `SharedFun` slot never poisons its enclosing composite.
         | IrType::SharedFun(_, _) => true,

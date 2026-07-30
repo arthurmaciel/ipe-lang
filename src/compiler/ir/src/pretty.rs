@@ -264,6 +264,7 @@ fn ir_type_name_at(interner: &Interner, ty: &IrType, depth: u16) -> String {
         IrType::CryptoMac => "Mac".to_owned(),
         IrType::EmailAddress => "EmailAddress".to_owned(),
         IrType::Url => "Url".to_owned(),
+        IrType::Locale => "Locale".to_owned(),
     }
 }
 
@@ -1373,6 +1374,10 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::UrlQuery => "Url.query",
         KernelFn::UrlFragment => "Url.fragment",
         KernelFn::UrlBuildQuery => "Url.buildQuery",
+        KernelFn::LocaleFromTag => "Locale.fromTag",
+        KernelFn::LocaleToTag => "Locale.toTag",
+        KernelFn::StringToUpperIn => "String.toUpperIn",
+        KernelFn::StringToLowerIn => "String.toLowerIn",
     }
 }
 
