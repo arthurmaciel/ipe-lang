@@ -92,7 +92,7 @@ pub fn scan_identifier_words(src: &str) -> Option<std::collections::BTreeSet<Str
                     words.insert(segment.to_owned());
                 }
             }
-            lexer::Tok::TripleStr(raw) => {
+            lexer::Tok::TripleStr { raw, .. } => {
                 // `{{expr}}` interpolation bodies are canonicalised as real
                 // expressions; collect their identifier-shaped words.
                 let mut rest = raw.as_str();
@@ -123,7 +123,7 @@ pub fn scan_identifier_words(src: &str) -> Option<std::collections::BTreeSet<Str
 #[allow(clippy::indexing_slicing)]
 mod tests {
     use super::*;
-    use ipe_syntax::{Exposed, Exposing, Expr_, Pattern_, TypeAnnotation, Value};
+    use ipe_syntax::{Exposed, Exposing, Expr, Expr_, Pattern_, TypeAnnotation, Value};
 
     const GOLDEN: &str = include_str!("../../../../tests/golden/basics/Main.ipe");
 
@@ -2412,7 +2412,10 @@ mod tests {
         assert_eq!(toks.len(), 1, "must produce exactly one token");
         assert_eq!(
             toks.first().map(|t| t.kind.clone()),
-            Some(Tok::TripleStr(r#"<div class="card"></div>"#.to_owned())),
+            Some(Tok::TripleStr {
+                raw: r#"<div class="card"></div>"#.to_owned(),
+                anchor: 4,
+            }),
             "content including embedded quote is preserved verbatim"
         );
     }
@@ -2428,7 +2431,10 @@ mod tests {
         assert_eq!(toks.len(), 1);
         assert_eq!(
             toks.first().map(|t| t.kind.clone()),
-            Some(Tok::TripleStr("before\"\"after".to_owned())),
+            Some(Tok::TripleStr {
+                raw: "before\"\"after".to_owned(),
+                anchor: 4,
+            }),
         );
     }
 
@@ -2443,7 +2449,10 @@ mod tests {
         assert_eq!(toks.len(), 1);
         assert_eq!(
             toks.first().map(|t| t.kind.clone()),
-            Some(Tok::TripleStr("hello {{name}}!".to_owned())),
+            Some(Tok::TripleStr {
+                raw: "hello {{name}}!".to_owned(),
+                anchor: 4,
+            }),
         );
     }
 
@@ -2457,7 +2466,10 @@ mod tests {
         assert_eq!(toks.len(), 1);
         assert_eq!(
             toks.first().map(|t| t.kind.clone()),
-            Some(Tok::TripleStr(r"price: \{{amount}}".to_owned())),
+            Some(Tok::TripleStr {
+                raw: r"price: \{{amount}}".to_owned(),
+                anchor: 4,
+            }),
         );
     }
 
@@ -2472,7 +2484,10 @@ mod tests {
         assert_eq!(toks.len(), 1);
         assert_eq!(
             toks.first().map(|t| t.kind.clone()),
-            Some(Tok::TripleStr("a\\\\b".to_owned())),
+            Some(Tok::TripleStr {
+                raw: "a\\\\b".to_owned(),
+                anchor: 4,
+            }),
         );
     }
 
@@ -2485,7 +2500,79 @@ mod tests {
         assert_eq!(toks.len(), 1);
         assert_eq!(
             toks.first().map(|t| t.kind.clone()),
-            Some(Tok::TripleStr("line one\nline two\nline three".to_owned())),
+            Some(Tok::TripleStr {
+                raw: "line one\nline two\nline three".to_owned(),
+                anchor: 4,
+            }),
+        );
+    }
+
+    /// The anchor column A is the source column of the first non-newline content
+    /// character. For an indented block opened with `"""` immediately followed
+    /// by a newline, A is the indentation of the first content line — later
+    /// lines are stripped up to `A - 1` downstream in the canonicaliser.
+    #[test]
+    fn indented_triple_string_records_anchor_column() {
+        use lexer::{Tok, lex};
+        // The `"""` opens at column 9; a newline follows, then `hello` at column
+        // 9 of line 2 (eight leading spaces). The anchor is that column, 9.
+        let src = "        \"\"\"\n        hello\n        world\"\"\"";
+        let toks = lex(src).expect("indented triple string must lex");
+        let kind = toks.first().map(|t| t.kind.clone());
+        assert_eq!(
+            kind,
+            Some(Tok::TripleStr {
+                raw: "\n        hello\n        world".to_owned(),
+                anchor: 9,
+            }),
+            "raw body is verbatim; anchor is the first content column"
+        );
+    }
+
+    /// Locate the first `MultilineStr` node anywhere in an expression tree.
+    fn find_multiline(e: &Expr) -> Option<&Expr> {
+        match &e.value {
+            Expr_::MultilineStr { .. } => Some(e),
+            Expr_::Call(f, args) => {
+                find_multiline(f).or_else(|| args.iter().find_map(find_multiline))
+            }
+            Expr_::Let(binds, body) => binds
+                .iter()
+                .find_map(|b| find_multiline(&b.body))
+                .or_else(|| find_multiline(body)),
+            _ => None,
+        }
+    }
+
+    /// Span integrity: the `MultilineStr` node's span still covers the exact
+    /// `"""…"""` source token, including its `{{expr}}` interpolation, even for
+    /// an indented block. The margin strip is a value-only transform applied
+    /// later (in the canonicaliser); it never moves this node span, so a
+    /// diagnostic keyed on the span still points at the source token.
+    #[test]
+    fn indented_multiline_node_span_covers_source_token() {
+        let src = format!(
+            "{HDR}main =\n    let\n        msg =\n            \"\"\"\n            value={{{{name}}}}\n            \"\"\"\n    in\n    msg\n"
+        );
+        let mut i = Interner::new();
+        let m = parse_module(&src, &mut i).expect("indented multiline must parse");
+
+        let node = m
+            .values
+            .iter()
+            .find_map(|v| find_multiline(&v.value.body))
+            .expect("a MultilineStr node must be present");
+
+        let lo = node.span.lo as usize;
+        let hi = node.span.hi as usize;
+        let slice = &src[lo..hi];
+        assert!(
+            slice.starts_with("\"\"\"") && slice.ends_with("\"\"\""),
+            "node span must bracket the `\"\"\"…\"\"\"` token, got {slice:?}"
+        );
+        assert!(
+            slice.contains("{{name}}"),
+            "the interpolation sub-text stays inside the node span, got {slice:?}"
         );
     }
 
@@ -2555,7 +2642,10 @@ mod tests {
         assert_eq!(toks.len(), 1);
         assert_eq!(
             toks.first().map(|t| t.kind.clone()),
-            Some(Tok::TripleStr(String::new()))
+            Some(Tok::TripleStr {
+                raw: String::new(),
+                anchor: 1,
+            })
         );
     }
 

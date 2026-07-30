@@ -48,6 +48,22 @@ ship Mustache/Handlebars/shell-script placeholders downstream without Ipê
 hijacking. `\\` collapses to single literal backslash; other `\X`
 sequences preserved verbatim (regex `\d+`, paths `\test`, etc).
 
+**Indentation (anchor column).** The value drops the source margin, so an
+indented block reads as its content, not its layout. The anchor column A is the
+column of the first non-whitespace character; every line after the first has up
+to `A - 1` leading whitespace characters removed, and a newline immediately
+after the opening `"""` is dropped. Only whitespace is removed, and never past a
+line's content, so a line indented less than the margin keeps all its content.
+
+```elm
+report =
+    """
+    total={{count}}
+    done
+    """
+-- value: "total={{count}}\ndone\n" (no leading spaces, no leading newline)
+```
+
 ### Auto-import: three tiers (ADR 0047)
 
 Two tiers are ambient — in scope with no `import`; a third requires an explicit
