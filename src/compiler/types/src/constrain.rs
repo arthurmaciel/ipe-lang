@@ -241,15 +241,12 @@ struct Builtins {
     /// `"Secret"` — `Ipe.Secret`'s opaque, sealed secret-string wrapper
     /// type.
     secret: Symbol,
-<<<<<<< HEAD
     /// `"Path"` — `Ipe.Path`'s opaque, validated filesystem-path type.
     path: Symbol,
-=======
     /// `"Regex"` — `Ipe.Regex`'s opaque compiled-pattern handle. Built ONLY by
     /// `Regex.compile : String -> Result Error Regex`. Zero type arguments.
     /// Lowered to `IrType::Regex`.
     regex: Symbol,
->>>>>>> dc635019 (feat(regex): compiled Regex type + Regex.compile — invalid patterns are typed Err)
     // ── SqlValue constructor name symbols ─────────────────────────────────────
     sql_string: Symbol,
     sql_int: Symbol,
@@ -618,11 +615,8 @@ impl Builtins {
             sqlfield: interner.intern("SqlField")?,
             sqlfragment: interner.intern("SqlFragment")?,
             secret: interner.intern("Secret")?,
-<<<<<<< HEAD
             path: interner.intern("Path")?,
-=======
             regex: interner.intern("Regex")?,
->>>>>>> dc635019 (feat(regex): compiled Regex type + Regex.compile — invalid patterns are typed Err)
             sql_string: interner.intern("SqlString")?,
             sql_int: interner.intern("SqlInt")?,
             sql_float: interner.intern("SqlFloat")?,
@@ -3833,17 +3827,16 @@ impl<'a> Builder<'a> {
             name: self.builtins.secret,
             args: Vec::new(),
         };
-<<<<<<< HEAD
         // `Path` — `Ipe.Path`'s opaque validated filesystem-path type.
         let path = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.path,
-=======
+            args: Vec::new(),
+        };
         // `Regex` — `Ipe.Regex`'s opaque compiled-pattern handle.
         let regex = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.regex,
->>>>>>> dc635019 (feat(regex): compiled Regex type + Regex.compile — invalid patterns are typed Err)
             args: Vec::new(),
         };
         let req = || Ty::Con {

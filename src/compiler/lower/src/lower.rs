@@ -9196,15 +9196,12 @@ impl<'a> Lowerer<'a> {
                 // `Secret` is `Ipe.Secret`'s opaque sealed secret-string
                 // type. Backed by `ipe_runtime::secret::Secret`.
                 "Secret" => Ok(IrType::Secret),
-<<<<<<< HEAD
                 // `Path` is `Ipe.Path`'s opaque validated filesystem-path
                 // type. Backed by `ipe_runtime::path::Path`.
                 "Path" => Ok(IrType::Path),
-=======
                 // `Regex` is `Ipe.Regex`'s opaque compiled-pattern handle.
                 // Backed by `ipe_runtime::regex_kernel::Regex`.
                 "Regex" => Ok(IrType::Regex),
->>>>>>> dc635019 (feat(regex): compiled Regex type + Regex.compile — invalid patterns are typed Err)
                 "String" => Ok(IrType::Str),
                 // `Error` is Ipê's fixed error-channel type — backed by the real
                 // `ipe_runtime::error::IpeError` ADT, no
@@ -10211,15 +10208,12 @@ impl<'a> Lowerer<'a> {
                 // representation — the JWT key material gets the same sealed
                 // no-stringify treatment.
                 "Secret" | "Algorithm" => Ok(IrType::Secret),
-<<<<<<< HEAD
                 // `Path` is `Ipe.Path`'s opaque validated filesystem-path
                 // type. Backed by `ipe_runtime::path::Path`.
                 "Path" => Ok(IrType::Path),
-=======
                 // `Regex` is `Ipe.Regex`'s opaque compiled-pattern handle,
                 // backed by `ipe_runtime::regex_kernel::Regex`.
                 "Regex" => Ok(IrType::Regex),
->>>>>>> dc635019 (feat(regex): compiled Regex type + Regex.compile — invalid patterns are typed Err)
                 "String" => Ok(IrType::Str),
                 // `Error` — backed by the real `ipe_runtime::error::IpeError` ADT
                 // no longer merged with `String`. Lambda
@@ -12197,11 +12191,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DecFromString
                 | KernelFn::DecDiv
                 | KernelFn::DecMod
-<<<<<<< HEAD
                 | KernelFn::PathFromString
-=======
                 | KernelFn::RegexCompile
->>>>>>> dc635019 (feat(regex): compiled Regex type + Regex.compile — invalid patterns are typed Err)
         ) {
             return CallPin::None;
         }
@@ -12299,25 +12290,16 @@ impl<'a> Lowerer<'a> {
             // `decimal_div` / `decimal_mod` share the same
             // `<E: From<String>>` shape and the same erased-error ambiguity as
             // `decimal_from_string` (e.g. `ipe_test_err (Dec.div a zero)`).
-<<<<<<< HEAD
-            // `Path.fromString : String -> Result Error Path` shares the runtime
-            // `path_from_string<E: From<String>>` shape and the same erased-error
-            // E0283 as `decimal_from_string` when the `Err` arm is discarded —
-            // pin `::<IpeError>` to restore inference without changing behaviour.
+            // `Path.fromString : String -> Result Error Path` and
+            // `Regex.compile : String -> Result Error Regex` share the runtime
+            // `<E: From<String>>` shape and the same erased-error E0283 as
+            // `decimal_from_string` when the `Err` arm is discarded — pin
+            // `::<IpeError>` to restore inference without changing behaviour.
             KernelFn::DecFromString
             | KernelFn::DecDiv
             | KernelFn::DecMod
-            | KernelFn::PathFromString => match ty {
-=======
-            // `Regex.compile : String -> Result Error Regex` shares the exact
-            // `<E: From<String>>` erased-error ambiguity: the solver resolves
-            // `e` to `Error`, but rustc cannot back-infer it once the `Err` arm
-            // is discarded, so pin `::<IpeError>`.
-            KernelFn::DecFromString
-            | KernelFn::DecDiv
-            | KernelFn::DecMod
+            | KernelFn::PathFromString
             | KernelFn::RegexCompile => match ty {
->>>>>>> dc635019 (feat(regex): compiled Regex type + Regex.compile — invalid patterns are typed Err)
                 Ty::Con { name, .. } if self.interner.resolve(*name) == Some("Result") => {
                     CallPin::ErrIpeError
                 }
@@ -18307,6 +18289,7 @@ mod tests {
         KernelFn::PubSubPublish,
         KernelFn::PubSubPublishNoEcho,
         // Ipe.Regex
+        KernelFn::RegexCompile,
         KernelFn::RegexMatch,
         KernelFn::RegexFind,
         KernelFn::RegexFindAll,

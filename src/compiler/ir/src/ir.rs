@@ -989,7 +989,6 @@ pub enum IrType {
     /// `ipe_runtime::secret`'s module doc for the full design.
     Secret,
 
-<<<<<<< HEAD
     /// `Ipe.Path`'s opaque, validated filesystem-path type — "paths are
     /// typed, never a raw `String`": a `Path` can only be built through
     /// `Path.fromString`, which normalises the path and REJECTS a NUL byte or a
@@ -1002,7 +1001,6 @@ pub enum IrType {
     /// secret). The `Ipe.File` kernels take a `Path`, not a `String`, so
     /// construction is the single validated boundary.
     Path,
-=======
     /// `Ipe.Regex`'s opaque compiled-pattern handle. A `Regex` is built ONLY
     /// through `Regex.compile : String -> Result Error Regex`, which turns an
     /// invalid pattern into a typed `Err` rather than a silent no-match.
@@ -1015,7 +1013,6 @@ pub enum IrType {
     /// rejection, never a silent wrong behaviour). `Debug` prints the source
     /// pattern, backing `toString` via the runtime's `Debug`-based fallback.
     Regex,
->>>>>>> dc635019 (feat(regex): compiled Regex type + Regex.compile — invalid patterns are typed Err)
 
     /// `Ipe.Cache`'s configuration record `{ maxEntries : Int, ttlMs : Int,
     /// maxBytes : Int }`. Renders as `ipe_runtime::cache::CacheCfg`.
