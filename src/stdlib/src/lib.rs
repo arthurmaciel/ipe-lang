@@ -604,6 +604,7 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Url",
         source: URL,
+    },
     // Ipe.Locale — opaque BCP-47 locale handle + locale-aware case mapping.
     // `Locale.fromTag`/`Locale.toTag` resolve via `Ffi.kernel "Locale_*"`;
     // `String.toUpperIn`/`toLowerIn` resolve via `Ffi.kernel "String_toUpperIn"`
