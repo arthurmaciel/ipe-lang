@@ -19,6 +19,6 @@ Web, WebView, and `Terminal.appScreen` share the same `Ipe.Ui` view code, so one
 `view : Model -> Element Msg` renders on web, desktop, and terminal. Raw escapes
 are nodes inside that one view — `Ui.html` for direct DOM under the web shapes.
 
-See [Views: Ui, Html, and Css](../ui.md) for the view vocabularies (`Ipe.Ui`,
+See [Views: Ui, Html, and Css](../language/ui.md) for the view vocabularies (`Ipe.Ui`,
 `Ipe.Html`, `Ipe.Css`), how to intermix them, each shape's exact `view` type, and
 static rendering.

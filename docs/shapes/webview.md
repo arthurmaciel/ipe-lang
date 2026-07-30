@@ -14,7 +14,7 @@ shipping a web stack. The `Model` is kept in memory as a plain value.
 `view : Model -> Element Msg` — the same portable `Ipe.Ui` view as
 [Web](web.md) and [Terminal](terminal.md); the framework applies `Ui.layout`
 internally to render it into the window (see
-[Views: Ui, Html, and Css](../ui.md)).
+[Views: Ui, Html, and Css](../language/ui.md)).
 
 For direct DOM control, author it with `Ipe.Html` and drop it into the `Element`
 view through the `Ui.html : Html msg -> Element msg` node (the same raw-HTML

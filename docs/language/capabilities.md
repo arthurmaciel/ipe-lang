@@ -78,7 +78,7 @@ inference. Ipê handles this without a blind spot:
   the under-declaration).
 
 How native Rust is bound — and how its capabilities are established — is covered by
-the FFI subsystem ([ADR 0033](adr/0033-ipe-rust-ffi-subsystem.md)). Two extensions
+the FFI subsystem ([ADR 0033](../adr/0033-ipe-rust-ffi-subsystem.md)). Two extensions
 are planned and tracked as GitHub issues: a declarative `provide.*` type-creation
 surface (whose shapes stay capability-inferable) and an author-supplied
 wrapper-crate tier (which declares capabilities, is inference-checked, and is
@@ -123,4 +123,4 @@ trade for native speed; a VM-based runtime would bound these for free.
 
 - The package-level trust model — how capabilities feed the package index, the
   install-time consent flow, and the supply-chain gate — is decided in
-  [ADR 0044](adr/0044-package-coordination-manifest-index-gate.md).
+  [ADR 0044](../adr/0044-package-coordination-manifest-index-gate.md).

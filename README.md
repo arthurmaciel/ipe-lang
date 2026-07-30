@@ -85,7 +85,7 @@ cargo build --release<img width="512" height="512" alt="android-chrome-512x512" 
 - **Sky's batteries-included runtime** — Live applications (SSR + real-time), typed HTTP, 
   SQL databases, auth, email, cache, pub/sub, and WebSockets, all behind a
   single `Task Error a` effect boundary. `Error` is a typed, classified value
-  you construct and inspect — see [Errors](docs/error-handling.md).
+  you construct and inspect — see [Errors](docs/language/error-handling.md).
 - **Rust compiler** — the compiler itself is written in Rust: fast, parallel,
   memory-safe.
 - **Rust backend** — emits readable Rust.
@@ -117,8 +117,11 @@ See [`docs/shapes/`](docs/shapes/README.md) for a guide to each shape, and
 
 Views are built from two vocabularies — the portable `Ipe.Ui` layout language
 and the raw-DOM `Ipe.Html` — plus the security-gated `Ipe.Css`. See
-[Views: Ui, Html, and Css](docs/ui.md) for how they relate, how to intermix
+[Views: Ui, Html, and Css](docs/language/ui.md) for how they relate, how to intermix
 them, and static rendering.
+
+For the details of the language itself — strings, errors, capabilities, and
+views — see [`docs/language/`](docs/language/README.md), the language book.
 
 ## Capabilities
 
@@ -139,7 +142,7 @@ a new effectful kernel gains the matching capability automatically. `native-ffi`
 appears whenever the program crosses into `Rust.` code, which is opaque to the
 inference and the one place effects can escape the model.
 
-See [**Capabilities**](docs/capabilities.md) for the full model — the eight
+See [**Capabilities**](docs/language/capabilities.md) for the full model — the eight
 capabilities, how inference works, and how native code declares and is sandboxed.
 Every command is human-friendly by default; data commands take `--plain` and
 `--json` for scripts — see [**CLI output**](docs/cli-output.md).

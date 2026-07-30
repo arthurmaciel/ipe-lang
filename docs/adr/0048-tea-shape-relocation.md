@@ -174,7 +174,7 @@ types shape-agnostic and top-level.**
   `Ipe.Web` / `Ipe.WebView` / `Ipe.Tui` / `Ipe.Console` shape modules, or the
   bare `Ipe.Cmd` / `Ipe.Sub`, must be migrated to the `Ipe.Tea.*` imports and
   regenerated. The tracked Sky mirror under `examples/sky/` is out of scope and
-  is not touched. Docs that describe the shapes (`docs/shapes/*.md`, `docs/ui.md`)
+  is not touched. Docs that describe the shapes (`docs/shapes/*.md`, `docs/language/ui.md`)
   and the Elm ledger must be updated.
 
 - **Staged implementation.** The change is filed as a staged implementation issue
