@@ -187,7 +187,11 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::TypeInfo => "ipe_runtime::error::IpeTypeInfo".to_owned(),
         IrType::SqlFragment => "ipe_runtime::db::SqlFragment".to_owned(),
         IrType::Secret => "ipe_runtime::secret::Secret".to_owned(),
+<<<<<<< HEAD
         IrType::Path => "ipe_runtime::path::Path".to_owned(),
+=======
+        IrType::Regex => "ipe_runtime::regex_kernel::Regex".to_owned(),
+>>>>>>> dc635019 (feat(regex): compiled Regex type + Regex.compile — invalid patterns are typed Err)
         IrType::Int => "i64".to_owned(),
         IrType::Float => "f64".to_owned(),
         IrType::Bool => "bool".to_owned(),

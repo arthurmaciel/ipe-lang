@@ -241,8 +241,15 @@ struct Builtins {
     /// `"Secret"` — `Ipe.Secret`'s opaque, sealed secret-string wrapper
     /// type.
     secret: Symbol,
+<<<<<<< HEAD
     /// `"Path"` — `Ipe.Path`'s opaque, validated filesystem-path type.
     path: Symbol,
+=======
+    /// `"Regex"` — `Ipe.Regex`'s opaque compiled-pattern handle. Built ONLY by
+    /// `Regex.compile : String -> Result Error Regex`. Zero type arguments.
+    /// Lowered to `IrType::Regex`.
+    regex: Symbol,
+>>>>>>> dc635019 (feat(regex): compiled Regex type + Regex.compile — invalid patterns are typed Err)
     // ── SqlValue constructor name symbols ─────────────────────────────────────
     sql_string: Symbol,
     sql_int: Symbol,
@@ -611,7 +618,11 @@ impl Builtins {
             sqlfield: interner.intern("SqlField")?,
             sqlfragment: interner.intern("SqlFragment")?,
             secret: interner.intern("Secret")?,
+<<<<<<< HEAD
             path: interner.intern("Path")?,
+=======
+            regex: interner.intern("Regex")?,
+>>>>>>> dc635019 (feat(regex): compiled Regex type + Regex.compile — invalid patterns are typed Err)
             sql_string: interner.intern("SqlString")?,
             sql_int: interner.intern("SqlInt")?,
             sql_float: interner.intern("SqlFloat")?,
@@ -3822,10 +3833,17 @@ impl<'a> Builder<'a> {
             name: self.builtins.secret,
             args: Vec::new(),
         };
+<<<<<<< HEAD
         // `Path` — `Ipe.Path`'s opaque validated filesystem-path type.
         let path = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.path,
+=======
+        // `Regex` — `Ipe.Regex`'s opaque compiled-pattern handle.
+        let regex = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.regex,
+>>>>>>> dc635019 (feat(regex): compiled Regex type + Regex.compile — invalid patterns are typed Err)
             args: Vec::new(),
         };
         let req = || Ty::Con {
@@ -6576,17 +6594,21 @@ impl<'a> Builder<'a> {
             // `render_env_public_rs`); every other key is `Nothing`.
             K::EnvPublic => fun(string(), maybe(string())),
 
-            // ── Ipe.Regex (5 kernels) ────────────────────────────────
-            // Concrete, monomorphic schemes (no type vars): RE2 helpers over
-            // `String`. `match` returns `Bool`; `find` a `Maybe String`;
-            // `findAll`/`split` a `List String`; `replace` is arity-3
-            // `String -> String -> String -> String`. Runtime is total/pure
-            // (`ipe_runtime::regex_kernel::*`, re-exported ungated).
-            K::RegexMatch => fun(string(), fun(string(), bool_ty())),
-            K::RegexFind => fun(string(), fun(string(), maybe(string()))),
-            K::RegexFindAll => fun(string(), fun(string(), list(string()))),
-            K::RegexReplace => fun(string(), fun(string(), fun(string(), string()))),
-            K::RegexSplit => fun(string(), fun(string(), list(string()))),
+            // ── Ipe.Regex (6 kernels) ────────────────────────────────
+            // Concrete, monomorphic schemes (no type vars). `compile` parses a
+            // pattern String ONCE into the opaque `Regex` handle, surfacing an
+            // invalid pattern as a typed `Err` (`String -> Result Error Regex`).
+            // Every operation then takes the compiled `Regex`: `match` returns
+            // `Bool`; `find` a `Maybe String`; `findAll`/`split` a `List
+            // String`; `replace` is `Regex -> String -> String -> String`.
+            // Runtime is total/pure (`ipe_runtime::regex_kernel::*`,
+            // re-exported ungated).
+            K::RegexCompile => fun(string(), result(error_ty(), regex())),
+            K::RegexMatch => fun(regex(), fun(string(), bool_ty())),
+            K::RegexFind => fun(regex(), fun(string(), maybe(string()))),
+            K::RegexFindAll => fun(regex(), fun(string(), list(string()))),
+            K::RegexReplace => fun(regex(), fun(string(), fun(string(), string()))),
+            K::RegexSplit => fun(regex(), fun(string(), list(string()))),
 
             // ── Ipe.Path (6 kernels) ─────────────────────────────────
             // `Path` is opaque and validated. `fromString` (the seal) parses a
@@ -8737,7 +8759,8 @@ mod registry_phase_c_tests {
             K::SecretFromString,
             K::SecretReveal,
             K::SecretRedacted,
-            // ── Ipe.Regex (5) ─────────────────────────────────────
+            // ── Ipe.Regex (6) ─────────────────────────────────────
+            K::RegexCompile,
             K::RegexMatch,
             K::RegexFind,
             K::RegexFindAll,

@@ -134,10 +134,17 @@ const RESERVED_BUILTIN_TYPES: &[&str] = &[
     // reserved for the same reason as `SqlFragment`: a security-tier type
     // must not be shadowable by user code.
     "Secret",
+<<<<<<< HEAD
     // `Ipe.Path`'s opaque validated filesystem-path type — reserved for the
     // same reason: a security-tier type (the traversal/NUL-rejection boundary)
     // must not be shadowable by user code.
     "Path",
+=======
+    // `Ipe.Regex`'s opaque compiled-pattern type — reserved so `Regex.compile`'s
+    // typed-`Err`-on-invalid-pattern guarantee cannot be defeated by a user
+    // `type Regex` shadowing the built-in handle.
+    "Regex",
+>>>>>>> dc635019 (feat(regex): compiled Regex type + Regex.compile — invalid patterns are typed Err)
     "StreamId",
     "ChunkEvent",
     "Request",

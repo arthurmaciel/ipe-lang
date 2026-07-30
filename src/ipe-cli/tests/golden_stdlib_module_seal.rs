@@ -108,23 +108,37 @@ fn seal_module(slug: &str, main: &str, expected: &str) {
 const REGEX_MAIN: &str = "module Main exposing (main)\n\
     import Ipe.Prelude exposing (..)\n\
     import Ipe.Io as Io\n\
+    import Ipe.String as String\n\
     import Ipe.Regex as Regex\n\n\
-import Ipe.String
+    digits : Result Error Regex\n\
+    digits = Regex.compile \"\\\\d+\"\n\n\
     hit : String\n\
-    hit = if Regex.match \"\\\\d+\" \"a1\" then \"MATCH\" else \"NOMATCH\"\n\n\
-    miss : String\n\
-    miss = if Regex.match \"(\" \"x\" then \"MATCH\" else \"NOMATCH\"\n\n\
+    hit = case digits of\n\
+    \x20   Ok re -> if Regex.match re \"a1\" then \"MATCH\" else \"NOMATCH\"\n\
+    \x20   Err _ -> \"COMPILE-ERR\"\n\n\
+    invalid : String\n\
+    invalid = case Regex.compile \"(\" of\n\
+    \x20   Ok _ -> \"COMPILED\"\n\
+    \x20   Err _ -> \"INVALID\"\n\n\
     sub : String\n\
-    sub = Regex.replace \"\\\\d\" \"#\" \"a1b2\"\n\n\
+    sub = case Regex.compile \"\\\\d\" of\n\
+    \x20   Ok re -> Regex.replace re \"#\" \"a1b2\"\n\
+    \x20   Err _ -> \"-\"\n\n\
     firstDigits : String\n\
-    firstDigits = case Regex.find \"\\\\d+\" \"abc42\" of\n\
-    \x20   Just d -> d\n\
-    \x20   Nothing -> \"-\"\n\n\
+    firstDigits = case digits of\n\
+    \x20   Ok re -> (case Regex.find re \"abc42\" of\n\
+    \x20       Just d -> d\n\
+    \x20       Nothing -> \"-\")\n\
+    \x20   Err _ -> \"-\"\n\n\
     allDigits : String\n\
-    allDigits = String.join \",\" (Regex.findAll \"\\\\d\" \"a1b2c3\")\n\n\
+    allDigits = case Regex.compile \"\\\\d\" of\n\
+    \x20   Ok re -> String.join \",\" (Regex.findAll re \"a1b2c3\")\n\
+    \x20   Err _ -> \"-\"\n\n\
     parts : String\n\
-    parts = String.join \"|\" (Regex.split \",\" \"a,b,c\")\n\n\
-    main = Io.println (hit ++ \" \" ++ miss ++ \" \" ++ sub ++ \" \" ++ firstDigits ++ \" \" ++ allDigits ++ \" \" ++ parts)\n";
+    parts = case Regex.compile \",\" of\n\
+    \x20   Ok re -> String.join \"|\" (Regex.split re \"a,b,c\")\n\
+    \x20   Err _ -> \"-\"\n\n\
+    main = Io.println (hit ++ \" \" ++ invalid ++ \" \" ++ sub ++ \" \" ++ firstDigits ++ \" \" ++ allDigits ++ \" \" ++ parts)\n";
 
 #[test]
 fn regex_resolves_and_emits() {
@@ -133,9 +147,9 @@ fn regex_resolves_and_emits() {
 
 #[test]
 fn regex_builds_and_runs() {
-    // hit=MATCH, invalid pattern is total → NOMATCH, sub=a#b#, first=42,
-    // all=1,2,3, parts=a|b|c.
-    seal_module("regex", REGEX_MAIN, "MATCH NOMATCH a#b# 42 1,2,3 a|b|c");
+    // hit=MATCH; the invalid pattern `(` surfaces as a typed Err → INVALID
+    // (NOT a silent NOMATCH); sub=a#b#, first=42, all=1,2,3, parts=a|b|c.
+    seal_module("regex", REGEX_MAIN, "MATCH INVALID a#b# 42 1,2,3 a|b|c");
 }
 
 // ── Ipe.Path ──────────────────────────────────────────────────────

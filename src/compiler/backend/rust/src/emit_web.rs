@@ -713,7 +713,11 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::TypeInfo => "TypeInfo",
         IrType::SqlFragment => "SqlFragment",
         IrType::Secret => "Secret",
+<<<<<<< HEAD
         IrType::Path => "Path",
+=======
+        IrType::Regex => "Regex",
+>>>>>>> dc635019 (feat(regex): compiled Regex type + Regex.compile — invalid patterns are typed Err)
         IrType::CacheCfg => "CacheCfg",
         IrType::CacheStats => "CacheStats",
         IrType::CsvDoc => "Csv",
