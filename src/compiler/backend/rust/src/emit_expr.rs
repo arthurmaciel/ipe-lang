@@ -8197,6 +8197,28 @@ fn emit_update(
     ))
 }
 
+/// Lay a match-arm rebind `prelude` out one statement per line at `indent`.
+///
+/// The prelude is a run of `let …; ` binder-rebind statements the clone-split
+/// helpers build joined by `"; "`; `rustfmt` puts each on its own line. Split on
+/// the separator, re-indent each, and return the block (with its trailing
+/// newline) — a trailing empty segment is skipped.
+fn tail_arm_prelude_lines(prelude: &str, indent: usize) -> DResult<String> {
+    let pad = indent_of(indent);
+    let mut out = String::new();
+    for stmt in prelude.split_inclusive("; ") {
+        let stmt = stmt.trim_end();
+        if stmt.is_empty() {
+            continue;
+        }
+        writeln!(out, "{pad}{stmt}").map_err(|e| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::tail_arm_prelude_lines",
+            detail: format!("writing TCO arm prelude failed: {e}"),
+        })?;
+    }
+    Ok(out)
+}
+
 /// Emit an `Expr` in TAIL/STATEMENT context — the interior of a `TailLoop`'s
 /// `loop { … }`. Every path ends in either a `return <expr>;` (a leaf
 /// tail position) or a `continue;` (a `TailRecur` jump), so the `loop` types as
@@ -8244,7 +8266,7 @@ fn emit_expr_tail(
                 let inner = if prelude.is_empty() {
                     body
                 } else {
-                    format!("{}{prelude}\n{body}", indent_of(indent + 2))
+                    format!("{}{body}", tail_arm_prelude_lines(&prelude, indent + 2)?)
                 };
                 // Same `if <guard>` fall-through as the value-context emitter: the
                 // list-length arm guard and the synthesized `as_str()` string-
@@ -8838,6 +8860,17 @@ fn ipe_main_wrap_decision(
 /// `: <bounds>` clause at its position. The body is an expression rendered
 /// at indentation level 1; the closing brace sits at column 0.
 pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
+    emit_func_vis(ctx, func, "pub fn ")
+}
+
+/// Emit a whole function item with the given visibility prefix (`"pub fn "` for
+/// the single-file layout, `"pub(crate) fn "` for a split `IpeModule` file where
+/// the item lives inside a `mod` block). The prefix is threaded through to
+/// [`render_fn_signature`] so the signature's flat-vs-broken width decision
+/// measures against the prefix the emitted line actually carries — the
+/// `pub(crate)` form is seven columns wider than `pub`, so a borderline signature
+/// breaks under one and not the other.
+pub fn emit_func_vis(ctx: &EmitCtx, func: &Func, vis_prefix: &str) -> DResult<String> {
     let name = ctx.func_name(func.id)?.to_owned();
 
     // ── Entry-point Task.run elision ──────────────────────────────────────────
@@ -8991,7 +9024,7 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
         body
     };
 
-    let signature = render_fn_signature(&name, &generic_clause, &params, &ret);
+    let signature = render_fn_signature(vis_prefix, &name, &generic_clause, &params, &ret);
     Ok(format!("{signature} {{\n    {body}\n}}\n"))
 }
 
@@ -9060,13 +9093,26 @@ fn is_share_once_safe(ty: &IrType) -> bool {
 /// The ` {` the caller appends is included in every fit test (rustfmt measures the
 /// opening brace as part of the line), so the flat/broken decision matches the
 /// formatter's own boundary — verified flat at width 100, broken at 101.
-fn render_fn_signature(name: &str, generic_clause: &str, params: &[String], ret: &str) -> String {
+fn render_fn_signature(
+    vis_prefix: &str,
+    name: &str,
+    generic_clause: &str,
+    params: &[String],
+    ret: &str,
+) -> String {
     // `rustfmt` `max_width`; `BRACE` is the trailing ` {` the caller appends after
     // the return type, which rustfmt counts as part of the signature line.
+    //
+    // `vis_prefix` is the leading `pub fn ` / `pub(crate) fn ` the signature carries
+    // BEFORE the name. It is threaded here — rather than prepended by the caller — so
+    // the flat-vs-broken width decision measures against the SAME prefix the emitted
+    // line carries: a split-module `pub(crate) fn ` is seven columns wider than the
+    // single-file `pub fn `, so a signature that fits flat under `pub fn ` may still
+    // overflow under `pub(crate) fn ` and must break.
     const MAX_WIDTH: usize = 100;
     const BRACE: usize = 2;
     let flat = format!(
-        "pub fn {name}{generic_clause}({}) -> {ret}",
+        "{vis_prefix}{name}{generic_clause}({}) -> {ret}",
         params.join(", ")
     );
     if flat.len() + BRACE <= MAX_WIDTH {
@@ -9079,7 +9125,7 @@ fn render_fn_signature(name: &str, generic_clause: &str, params: &[String], ret:
     // single angle-bracketed generic can wrap; anything else (or a return type whose
     // opening line still overflows) stays on the one line `rustfmt` cannot shorten.
     if params.is_empty() {
-        let open = format!("pub fn {name}{generic_clause}() -> ");
+        let open = format!("{vis_prefix}{name}{generic_clause}() -> ");
         if let Some(wrapped) = wrap_return_type(&open, ret) {
             return wrapped;
         }
@@ -9087,7 +9133,7 @@ fn render_fn_signature(name: &str, generic_clause: &str, params: &[String], ret:
     }
 
     // The `pub fn NAME<GEN>(` opening line, with generics still flat.
-    let params_open = format!("pub fn {name}{generic_clause}(");
+    let params_open = format!("{vis_prefix}{name}{generic_clause}(");
     let broken_params = || {
         let mut out = String::new();
         for p in params {
@@ -9110,7 +9156,7 @@ fn render_fn_signature(name: &str, generic_clause: &str, params: &[String], ret:
         .strip_prefix('<')
         .and_then(|s| s.strip_suffix('>'))
         .unwrap_or(generic_clause);
-    let mut out = format!("pub fn {name}<");
+    let mut out = format!("{vis_prefix}{name}<");
     for g in inner.split(", ") {
         out.push_str("\n    ");
         out.push_str(g);

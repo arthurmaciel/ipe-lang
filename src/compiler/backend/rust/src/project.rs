@@ -1734,7 +1734,15 @@ pub fn emit_module_file(ctx: &EmitCtx, program: &Program, home: &RustFileId) -> 
             out.push_str(&pub_crate_item(&emit_enum(ctx, def)?));
         }
         for &func in funcs {
-            out.push_str(&pub_crate_item(&emit_func(ctx, func)?));
+            // `pub(crate) fn ` is emitted directly (not by rewriting a rendered
+            // `pub fn `) so the signature's width decision already accounts for the
+            // wider prefix — a borderline signature breaks here that would stay flat
+            // in the single-file `pub fn ` layout.
+            out.push_str(&crate::emit_expr::emit_func_vis(
+                ctx,
+                func,
+                "pub(crate) fn ",
+            )?);
         }
     }
 
@@ -1851,23 +1859,22 @@ pub fn assemble_split_manifest(
     assemble_project_files(ctx, rust_sources)
 }
 
-/// Narrow a rendered top-level item's leading `pub ` visibility to
-/// `pub(crate) `, for emission inside a `mod` block (design doc §2.1).
+/// Narrow a rendered enum's leading `pub ` visibility to `pub(crate) `, for
+/// emission inside a `mod` block (design doc §2.1).
 ///
-/// `emit_enum`/`emit_func` render user items with a bare `pub ` prefix (a
-/// top-level `main.rs` declaration). Inside a per-module `mod` file the crate
-/// root re-exports them via a glob barrel, so `pub(crate)` is both sufficient
-/// and correct. Operates on the FIRST `pub enum `/`pub fn ` occurrence only —
-/// an enum's trailing `impl … IpeStringify` block carries no `pub`, and a
-/// rendered item's declaration keyword is always at its head (or immediately
-/// after a leading `#[derive(...)]` line for an enum) — so this narrows
-/// exactly the one declaration keyword, never a substring inside a body.
+/// `emit_enum` renders a user enum with a bare `pub ` prefix (a top-level
+/// `main.rs` declaration). Inside a per-module `mod` file the crate root
+/// re-exports it via a glob barrel, so `pub(crate)` is both sufficient and
+/// correct. Functions instead receive their `pub(crate) fn ` prefix directly
+/// from [`crate::emit_expr::emit_func_vis`] (so their signature width decision
+/// sees the wider prefix), so only the enum declaration keyword is narrowed
+/// here. Operates on the FIRST `pub enum ` occurrence only — an enum's trailing
+/// `impl … IpeStringify` block carries no `pub`, and the declaration keyword is
+/// always at the head (or immediately after a leading `#[derive(...)]` line) —
+/// so this narrows exactly that one keyword, never a substring inside a body.
 fn pub_crate_item(rendered: &str) -> String {
     if let Some(rest) = rendered.strip_prefix("pub enum ") {
         return format!("pub(crate) enum {rest}");
-    }
-    if let Some(rest) = rendered.strip_prefix("pub fn ") {
-        return format!("pub(crate) fn {rest}");
     }
     // An enum whose derivability gate emitted a `#[derive(...)]` line before
     // `pub enum` — narrow the first `\npub enum ` after that attribute.

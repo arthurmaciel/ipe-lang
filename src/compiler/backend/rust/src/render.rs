@@ -686,11 +686,18 @@ fn render_match_arm_tail(
         out.push(',');
         return;
     }
-    // A delimited body that fits single-line on its own line at `indent + 4` is
-    // block-wrapped rather than delimiter-broken; a control body is always wrapped.
-    let block_wrap = control
-        || (!has_hard_break(body)
-            && fits_single_line(body, cfg.no_reserve(), indent + 4, indent + 4));
+    // rustfmt decides an overflowing arm body in three tiers (see
+    // `emit_types::render_stringify_enum_arm`): a CONTROL body is always
+    // brace-wrapped; a delimited CALL/MACRO body whose ARGUMENT TEXT fits
+    // `fn_call_width` is brace-wrapped onto its own line (rustfmt prefers the whole
+    // body single-line over breaking its delimiters); and a delimited body whose
+    // argument text exceeds `fn_call_width` breaks in place inside its own
+    // delimiters (comma kept). The gate is the argument-text width against
+    // `fn_call_width`, NOT the whole body against `max_width` — a body that fits
+    // `max_width` at `indent + 4` but whose args exceed 60 columns still breaks in
+    // place. A non-delimited body (chain, `if`/`else`) has no argument list to gate,
+    // so it falls back to the single-line-at-`indent + 4` test.
+    let block_wrap = control || (!has_hard_break(body) && body_block_wraps(body, cfg, indent));
     if block_wrap {
         out.push('{');
         render_at(
@@ -710,6 +717,40 @@ fn render_match_arm_tail(
         render_at(body, cfg, indent, start_col, false, out);
         out.push(',');
     }
+}
+
+/// Whether an overflowing, non-control match-arm `body` is brace-wrapped onto its
+/// own line (`Pat => { body }`) rather than broken in place inside its own
+/// delimiters (`Pat => f(\n …\n),`).
+///
+/// For a delimited CALL/CTOR/MACRO body the decision is `rustfmt`'s
+/// `fn_call_width` gate: the body's ARGUMENT TEXT (the span between its
+/// delimiters, seeing through a single-argument combinable wrapper) is
+/// brace-wrapped when it fits `fn_call_width` and delimiter-broken when it does
+/// not. A body with no argument list of its own (a chain, an `if`/`else`) has no
+/// such gate, so it falls back to whether the whole body fits single-line on its
+/// own line at `indent + 4`.
+fn body_block_wraps(body: &Doc, cfg: RenderConfig, indent: usize) -> bool {
+    // See through a `Group` wrapper to the delimited construct it lays out.
+    let inner = match body {
+        Doc::Group(g) => g.as_ref(),
+        other => other,
+    };
+    if let Doc::CallArgs { open, elems, .. } = inner {
+        // Measure the argument text width: the flat span from just after the
+        // opening delimiter to just before the closing one, seeing through a
+        // single-argument combinable wrapper to the innermost combinable's own
+        // argument span (`innermost_args_width`). The absolute column is
+        // irrelevant to a width, so measure from column 0.
+        let mut scratch = String::new();
+        render_at(open, cfg, indent + 4, 0, true, &mut scratch);
+        let open_end = current_col(&scratch);
+        render_flat_elems(elems, cfg, indent + 4, &mut scratch);
+        let elems_end = current_col(&scratch);
+        let args_width = innermost_args_width(elems, open_end, elems_end);
+        return args_width <= FN_CALL_WIDTH;
+    }
+    fits_single_line(body, cfg.no_reserve(), indent + 4, indent + 4)
 }
 
 /// Render an assignment with `rustfmt`'s dedicated RHS-break layout axis. See

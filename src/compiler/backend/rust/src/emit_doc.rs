@@ -1623,8 +1623,19 @@ fn build_match(
         };
         arm_docs.push(Doc::concat(vec![Doc::HardLine, head, tail]));
     }
+    // The `match <scrut> {` head keeps the opening brace glued when the whole line
+    // fits `max_width`; when `match <scrut> {` overflows, `rustfmt` drops the `{`
+    // onto its own line at the `match` keyword's indent (`match <scrut>\n{`) — the
+    // scrutinee itself is never broken. A `Group` over `match <scrut>` + a `Line` +
+    // `{` reproduces exactly that: the `Line` is a space when the head fits flat and
+    // a newline-plus-indent when it does not.
+    let head = Doc::group(Doc::concat(vec![
+        Doc::owned(format!("match {scrut}")),
+        Doc::Line,
+        Doc::text("{"),
+    ]));
     Ok(Doc::concat(vec![
-        Doc::owned(format!("match {scrut} {{")),
+        head,
         Doc::nest(4, Doc::concat(arm_docs)),
         Doc::HardLine,
         Doc::text("}"),
