@@ -180,9 +180,13 @@ fn serve_binds_a_free_port_and_serves_the_index() -> io::Result<()> {
         .take()
         .ok_or_else(|| io::Error::other("serve produced no stdout handle"))?;
     let mut lines = BufReader::new(stdout).lines();
+    // The announce is framed (a leading blank line + a 2-space gutter), so scan
+    // for the line carrying the URL rather than assuming it is the first line.
     let announce = lines
-        .next()
-        .ok_or_else(|| io::Error::other("serve printed no URL"))??;
+        .by_ref()
+        .map_while(Result::ok)
+        .find(|l| l.contains("http://"))
+        .ok_or_else(|| io::Error::other("serve printed no URL"))?;
 
     // Extract `127.0.0.1:<port>` from the announce line.
     let addr = announce
