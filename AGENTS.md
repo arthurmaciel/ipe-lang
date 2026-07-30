@@ -1050,7 +1050,7 @@ ipe build|run … --static           # fully-static musl single binary (dlmalloc
                                    #  <auto|system|dlmalloc|talc|mimalloc>
                                    #  --allow-slow-allocator)
 ipe watch src/Main.ipe             # file-watch rebuild + restart
-ipe check src/Main.ipe             # type-check + build
+ipe check src/Main.ipe             # type-check only — no build, no run, no emit
 ipe fmt src/Main.ipe               # opinionated formatter (run after editing .ipe/.ipei)
 ipe test tests/MyTest.ipe          # Ipe.Test runner
 ipe db status                      # Ipe.Db migrations: applied / pending / drift
@@ -1077,5 +1077,7 @@ ipe --version
 cd examples/sky/ipe/01-hello-world && ipe build src/Main.ipe
 ```
 
-`ipe check` ≡ `ipe build` (both invoke Rust build on emitted code). Run
-`ipe fmt` after editing `.ipe`/`.ipei` files (formatter idempotent).
+`ipe check` runs the same pipeline as `ipe build` up through type-checking,
+then stops — it emits no Rust and runs no `cargo`, so it is the fastest way to
+ask "does this program type-check?". Run `ipe fmt` after editing
+`.ipe`/`.ipei` files (formatter idempotent).

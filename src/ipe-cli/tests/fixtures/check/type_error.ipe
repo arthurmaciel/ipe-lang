@@ -1,0 +1,10 @@
+module Main exposing (main)
+
+import Ipe.String as String
+import Ipe.Io as Io
+
+-- `String.toUpper` expects a String, but this passes an Int: a type error
+-- the checker must reject.
+main : Task ()
+main =
+    Io.println (String.toUpper 42)
