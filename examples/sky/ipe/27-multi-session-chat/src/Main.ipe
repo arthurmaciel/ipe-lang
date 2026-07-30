@@ -108,7 +108,7 @@ loadRoomHistory room =
     let
         result =
             Task.run
-                (Db.query
+                (Db.unsafeQuery
                     dbConn
                     "SELECT author, text, at FROM messages WHERE room = ? ORDER BY id ASC LIMIT 200"
                     [ room ])
@@ -124,9 +124,9 @@ loadRoomHistory room =
 
 rowToMessage : Dict String String -> ChatMessage
 rowToMessage row =
-    { author = Db.getString "author" row
-    , text = Db.getString "text" row
-    , at = Db.getString "at" row
+    { author = Db.unsafeGetString "author" row
+    , text = Db.unsafeGetString "text" row
+    , at = Db.unsafeGetString "at" row
     }
 
 
@@ -154,13 +154,13 @@ roomTopic room =
 -- `any`. Subscribers receive it as `any` and decode it back to the
 -- application shape via the toMsg callback. We carry the payload as
 -- a `Dict String String` (see SendMessage in update) so the
--- subscriber side just reads fields back via Db.getString (which is
+-- subscriber side just reads fields back via Db.unsafeGetString (which is
 -- a Dict-shaped accessor in disguise).
 decodeChatMessage : any -> ChatMessage
 decodeChatMessage payload =
-    { author = Db.getString "author" payload
-    , text = Db.getString "text" payload
-    , at = Db.getString "at" payload
+    { author = Db.unsafeGetString "author" payload
+    , text = Db.unsafeGetString "text" payload
+    , at = Db.unsafeGetString "at" payload
     }
 
 
@@ -173,7 +173,7 @@ init : any -> ( Model, Cmd Msg )
 init req =
     let
         _ = initSchema
-        path = Db.getString "path" req
+        path = Db.unsafeGetString "path" req
         slug = roomSlugFromPath path
         startPage =
             if slug == "" then

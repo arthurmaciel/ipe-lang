@@ -46,6 +46,20 @@ Std.Webview	Ipe.WebView
 #    rewrite before the broad Std. -> Ipe. row below).
 Std.Db.execRaw	Ipe.Db.unsafeExecRaw
 
+# ── Std.Db.{query,getString,getInt,getBool,getField} -> Ipe.Db.unsafe*  (the
+#    stringly row-read surface is renamed to mark the schema-drift surface; the
+#    typed Db.queryDecode + Db.Decode.* path is the unmarked default. Std.Db.query
+#    binds before Std.Db.queryDecode because the transform is longest-prefix-wins
+#    and queryDecode is left untouched, so the query row is listed with a trailing
+#    boundary in mind — queryDecode never matches Std.Db.query as a prefix here
+#    because the map keys are whole qualified values, not substrings).
+Std.Db.queryDecode	Ipe.Db.queryDecode
+Std.Db.query	Ipe.Db.unsafeQuery
+Std.Db.getString	Ipe.Db.unsafeGetString
+Std.Db.getInt	Ipe.Db.unsafeGetInt
+Std.Db.getBool	Ipe.Db.unsafeGetBool
+Std.Db.getField	Ipe.Db.unsafeGetField
+
 # ── Std.* -> Ipe.*  (Log, Ui, Ui.*, Web, Web.Head, Db, Money, Console, Cmd, Sub,
 #    Time, Css, Csv, Cache, PubSub, Decimal, Html, Html.*, WebView, Auth, ...)
 Std.	Ipe.

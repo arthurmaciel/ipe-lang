@@ -11,12 +11,12 @@ import Ipe.Db as Db
 
 -- Run a query ONLY if it is a SELECT/WITH statement.
 -- Rejects INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE etc.
--- Db.query is now Task — we force with Task.run because the caller
+-- Db.unsafeQuery is now Task — we force with Task.run because the caller
 -- uses the result synchronously inside the safe-query gate.
 runReadOnly : Db -> String -> List String -> Result Error (List (Dict String String))
 runReadOnly dbConn query params =
     if isSelectOnly query then
-        Task.run (Db.query dbConn query params)
+        Task.run (Db.unsafeQuery dbConn query params)
 
     else
         let

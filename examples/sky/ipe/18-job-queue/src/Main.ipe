@@ -173,7 +173,7 @@ loadHistory : Task Error (List Snapshot)
 loadHistory =
     let
         selectRecent db =
-            Db.query
+            Db.unsafeQuery
                 db
                 "SELECT ok, failed, total, ts FROM snapshots ORDER BY ts DESC LIMIT 5"
                 []

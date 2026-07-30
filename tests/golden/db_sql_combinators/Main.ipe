@@ -80,10 +80,10 @@ main =
                                         (\nullMatched ->
                                             let
                                                 names =
-                                                    List.map (\r -> Db.getString "name" r) matched
+                                                    List.map (\r -> Db.unsafeGetString "name" r) matched
 
                                                 nullNames =
-                                                    List.map (\r -> Db.getString "name" r) nullMatched
+                                                    List.map (\r -> Db.unsafeGetString "name" r) nullMatched
 
                                                 summary =
                                                     String.join "," names

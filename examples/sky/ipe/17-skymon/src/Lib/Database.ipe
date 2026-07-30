@@ -32,15 +32,15 @@ conn =
 
 
 getField field row =
-    Db.getField field row
+    Db.unsafeGetField field row
 
 
 getInt field row =
-    Db.getInt field row
+    Db.unsafeGetInt field row
 
 
 getBool field row =
-    Db.getBool field row
+    Db.unsafeGetBool field row
 
 
 -- Typed boundary: returns Result Error (). Callers in `update` MUST
@@ -57,7 +57,7 @@ exec queryStr args =
 
 -- Typed boundary: returns Result Error (List Row).
 query queryStr args =
-    Task.run (Db.query conn queryStr args)
+    Task.run (Db.unsafeQuery conn queryStr args)
 
 
 -- Legacy logging fallback helpers. Prefer `query` / `exec` at update

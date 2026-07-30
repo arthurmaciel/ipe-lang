@@ -35,10 +35,10 @@ main =
                                 (\rows ->
                                     Io.println
                                         (String.join ","
-                                            (List.map (\r -> Db.getString "msg" r) rows)
+                                            (List.map (\r -> Db.unsafeGetString "msg" r) rows)
                                         )
                                 )
-                                (Db.query conn
+                                (Db.unsafeQuery conn
                                     "SELECT msg FROM log ORDER BY msg"
                                     []
                                 )

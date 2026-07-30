@@ -46,7 +46,7 @@ getOrCreateCart userId =
         case Db.getDoc "carts" cartId of
 
             Ok (Just cart) ->
-                if Db.getField "state" cart == "ongoing" then
+                if Db.unsafeGetField "state" cart == "ongoing" then
                     Ok cart
 
                 else
@@ -111,32 +111,32 @@ getCartItems cartId =
 
 enrichCartItem item =
     let
-        productId = Db.getField "product_id" item
+        productId = Db.unsafeGetField "product_id" item
     in
         case Db.getDoc "products" productId of
 
             Ok (Just product) ->
                 Dict.insert
                     "title"
-                    (Db.getField "title" product)
+                    (Db.unsafeGetField "title" product)
                     (Dict.insert
                         "summary"
-                        (Db.getField "summary" product)
+                        (Db.unsafeGetField "summary" product)
                         (Dict.insert
                             "price_amount"
-                            (Db.getField "price_amount" product)
+                            (Db.unsafeGetField "price_amount" product)
                             (Dict.insert
                                 "price_currency"
-                                (Db.getField "price_currency" product)
+                                (Db.unsafeGetField "price_currency" product)
                                 (Dict.insert
                                     "price_discount"
-                                    (Db.getField "price_discount" product)
+                                    (Db.unsafeGetField "price_discount" product)
                                     (Dict.insert
                                         "price_tax"
-                                        (Db.getField "price_tax" product)
+                                        (Db.unsafeGetField "price_tax" product)
                                         (Dict.insert
                                             "stock"
-                                            (Db.getField "stock" product)
+                                            (Db.unsafeGetField "stock" product)
                                             item))))))
 
             _ ->
@@ -150,7 +150,7 @@ getCartWithItems cartId =
             case cartResult of
 
                 Ok (Just c) ->
-                    getCartItems (Db.getField "id" c)
+                    getCartItems (Db.unsafeGetField "id" c)
 
                 _ ->
                     []
@@ -165,16 +165,16 @@ addItem cartId productId quantity =
             Db.queryWhereOrLog "Cart.addItem" "cart_items" "cart_id" "==" cartId
         matchingItems =
             List.filter
-                (\item -> Db.getField "product_id" item == productId)
+                (\item -> Db.unsafeGetField "product_id" item == productId)
                 existingItems
     in
         case List.head matchingItems of
 
             Just existing ->
                 let
-                    existingQty = Db.getInt "quantity" existing
+                    existingQty = Db.unsafeGetInt "quantity" existing
                     newQty = existingQty + quantity
-                    itemId = Db.getField "id" existing
+                    itemId = Db.unsafeGetField "id" existing
                     updatedItem =
                         Dict.insert "quantity" (Db.intVal newQty) existing
                     _ = Db.setDoc "cart_items" itemId updatedItem
@@ -211,7 +211,7 @@ updateItemQty itemId quantity =
                     updatedItem =
                         Dict.insert "quantity" (Db.intVal quantity) item
                     _ = Db.setDoc "cart_items" itemId updatedItem
-                    _ = recalculateTotal (Db.getField "cart_id" item)
+                    _ = recalculateTotal (Db.unsafeGetField "cart_id" item)
                 in
                     Ok ()
 
@@ -225,7 +225,7 @@ removeItem itemId =
 
         Ok (Just item) ->
             let
-                cartId = Db.getField "cart_id" item
+                cartId = Db.unsafeGetField "cart_id" item
                 _ = Db.deleteDoc "cart_items" itemId
             in
                 if cartId /= "" then
@@ -248,9 +248,9 @@ recalculateTotal cartId =
             List.foldl
                 (\item acc ->
                     let
-                        price = Db.getInt "price_amount" item
-                        discount = Db.getInt "price_discount" item
-                        qty = Db.getInt "quantity" item
+                        price = Db.unsafeGetInt "price_amount" item
+                        discount = Db.unsafeGetInt "price_discount" item
+                        qty = Db.unsafeGetInt "quantity" item
                         effectivePrice = price - discount
                         itemTotal =
                             if effectivePrice > 0 then
@@ -266,7 +266,7 @@ recalculateTotal cartId =
             case List.head items of
 
                 Just item ->
-                    Db.getField "price_currency" item
+                    Db.unsafeGetField "price_currency" item
 
                 Nothing ->
                     "GBP"
@@ -501,15 +501,15 @@ getAllOrders =
 
 enrichOrderWithUser order =
     let
-        ownerId = Db.getField "owner_id" order
+        ownerId = Db.unsafeGetField "owner_id" order
     in
         case Db.getDoc "users" ownerId of
 
             Ok (Just user) ->
                 Dict.insert
                     "user_name"
-                    (Db.getField "name" user)
-                    (Dict.insert "user_email" (Db.getField "email" user) order)
+                    (Db.unsafeGetField "name" user)
+                    (Dict.insert "user_email" (Db.unsafeGetField "email" user) order)
 
             _ ->
                 order

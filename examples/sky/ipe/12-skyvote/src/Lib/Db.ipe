@@ -46,7 +46,7 @@ exec queryStr args =
 
 
 query queryStr args =
-    Task.run (Db.query dbConn queryStr args)
+    Task.run (Db.unsafeQuery dbConn queryStr args)
 
 
 -- Missing columns in a row dict are a Sky-side schema mismatch, not a
