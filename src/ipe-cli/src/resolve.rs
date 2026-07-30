@@ -137,9 +137,17 @@ pub fn resolve_and_remove(project_root: &Path, name: &str) -> Result<(), CliErro
     let was_locked = lock.remove(name);
     lock.write(project_root)?;
     if was_locked {
-        println!("Removed `{name}`.");
+        print!(
+            "{}",
+            crate::style::frame(&crate::style::gutter(&format!("Removed `{name}`.")))
+        );
     } else {
-        println!("`{name}` was not a dependency; nothing to remove.");
+        print!(
+            "{}",
+            crate::style::frame(&crate::style::gutter(&format!(
+                "`{name}` was not a dependency; nothing to remove."
+            )))
+        );
     }
     Ok(())
 }
@@ -353,13 +361,22 @@ fn write_records(
 
 /// Print the resolved version and its capability set for consent.
 fn report_added(name: &str, version: &str, capabilities: &std::collections::BTreeSet<Capability>) {
-    print!("{}", added_report(name, version, capabilities));
+    print!(
+        "{}",
+        crate::style::frame(&crate::style::gutter(&added_report(
+            name,
+            version,
+            capabilities
+        )))
+    );
 }
 
 /// The `ipe add` consent report: the resolved version, the capability set, and —
 /// loud — a warning when the package uses `native-ffi` (it crosses into opaque
 /// native code, the one capability inference cannot see past). A pure function of
 /// its inputs so the exact wording is testable.
+///
+/// Returns unindented body text; the caller applies the 2-space gutter.
 fn added_report(
     name: &str,
     version: &str,
@@ -368,15 +385,15 @@ fn added_report(
     use std::fmt::Write as _;
     let mut out = format!("Added `{name}` {version}.\n");
     if capabilities.is_empty() {
-        out.push_str("  capabilities: none\n");
+        out.push_str("capabilities: none\n");
     } else {
         let names: Vec<&str> = capabilities.iter().map(|c| c.as_str()).collect();
-        let _ = writeln!(out, "  capabilities: {}", names.join(", "));
+        let _ = writeln!(out, "capabilities: {}", names.join(", "));
     }
     if capabilities.contains(&Capability::NativeFfi) {
         let _ = writeln!(
             out,
-            "  WARNING: `{name}` uses native FFI (`native-ffi`) — it runs native code whose \
+            "WARNING: `{name}` uses native FFI (`native-ffi`) — it runs native code whose \
              true capabilities cannot be inferred from Ipê. Review its source before trusting it."
         );
     }

@@ -112,3 +112,55 @@ fn installer_mirrors_the_status_glyphs_it_uses() {
         );
     }
 }
+
+/// The GUTTER (2 spaces) must lead every human banner/success/footer line in
+/// the installer. These three lines are the ones the install experience presents
+/// to the user as a "frame"; a 4-space regression here made them visually
+/// inconsistent with the CLI's guttered output.
+///
+/// The assertions check the rendered indent prefix in the `printf` call, not a
+/// parsed AST — a character-level match is enough to catch a width regression
+/// (4 spaces vs 2 spaces) without reimplementing a shell parser.
+#[test]
+fn installer_banner_success_and_footer_use_the_two_space_gutter() {
+    let script = install_script();
+    let gutter = style::GUTTER;
+
+    // The step() and done_() helpers each lead with exactly the GUTTER before
+    // their status glyph. The format strings are `'  %s•%s …'` and `'  %s✓%s …'`
+    // — two spaces then the colour escape placeholder then the glyph.
+    let step_prefix = format!("'{gutter}%s{}", style::glyph::STEP);
+    assert!(
+        script.contains(&step_prefix),
+        "install.sh step() must use the {}-space GUTTER before the glyph; \
+         expected prefix `{step_prefix}` in script",
+        gutter.len()
+    );
+
+    let done_prefix = format!("'{gutter}%s{}", style::glyph::OK);
+    assert!(
+        script.contains(&done_prefix),
+        "install.sh done_() must use the {}-space GUTTER before the glyph; \
+         expected prefix `{done_prefix}` in script",
+        gutter.len()
+    );
+
+    // The success banner and the "report bugs" footer both start with `\n  …`
+    // (a leading newline then the GUTTER). Check the exact prefix so a width
+    // change (4 spaces instead of 2) fails this assertion.
+    let banner_prefix = format!("\\n{gutter}Ipê");
+    assert!(
+        script.contains(&banner_prefix),
+        "install.sh success banner must be indented by the {}-space GUTTER; \
+         expected `{banner_prefix}` in script",
+        gutter.len()
+    );
+
+    let footer_prefix = format!("\\n{gutter}If you find any bugs");
+    assert!(
+        script.contains(&footer_prefix),
+        "install.sh report-bugs footer must be indented by the {}-space GUTTER; \
+         expected `{footer_prefix}` in script",
+        gutter.len()
+    );
+}

@@ -1296,11 +1296,14 @@ fn generate(path: &Path, out: &Path, write_format: WriteFormat) -> Result<(), Cl
         std::fs::write(&file_path, contents).map_err(|e| crate::io_err(&file_path, e))?;
     }
 
-    println!(
-        "documented {} module{} to {}",
-        docs.modules.len(),
-        if docs.modules.len() == 1 { "" } else { "s" },
-        out.display()
+    print!(
+        "{}",
+        crate::style::frame(&crate::style::gutter(&format!(
+            "documented {} module{} to {}",
+            docs.modules.len(),
+            if docs.modules.len() == 1 { "" } else { "s" },
+            out.display()
+        )))
     );
     Ok(())
 }
@@ -1342,7 +1345,12 @@ fn check(path: &Path) -> Result<(), CliError> {
     }
 
     if gaps.is_empty() {
-        println!("all {exposed} exposed binding(s) are documented");
+        print!(
+            "{}",
+            crate::style::frame(&crate::style::gutter(&format!(
+                "all {exposed} exposed binding(s) are documented"
+            )))
+        );
         return Ok(());
     }
 
@@ -1762,7 +1770,12 @@ fn serve(path: &Path, port: Option<u16>) -> Result<(), CliError> {
         .map_err(|e| crate::io_err(Path::new(&addr), e))?;
 
     let url = format!("http://{bound}/");
-    println!("serving docs at {url} (read-only, loopback; Ctrl-C to stop)");
+    print!(
+        "{}",
+        crate::style::frame(&crate::style::gutter(&format!(
+            "serving docs at {url} (read-only, loopback; Ctrl-C to stop)"
+        )))
+    );
     // A headless caller (CI, a test, a remote shell) opts out of the browser pop
     // with `IPE_DOC_NO_OPEN`; the URL is already printed, so the preview stays
     // reachable.
