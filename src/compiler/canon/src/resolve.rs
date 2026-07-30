@@ -706,9 +706,12 @@ pub fn canonicalise_module_in_project(
         // this module in topological order.
         let dep = *deps.get(dep_path).ok_or_else(|| {
             let name = path_to_dot_string(interner, dep_path);
-            // Offer did-you-mean over the caller-supplied known-module universe
-            // (strings only — never intern on this path).
-            let sugg: Box<[Box<str>]> = known_modules.iter().cloned().collect();
+            // Did-you-mean over the caller-supplied known-module universe, ranked
+            // and capped through the SAME helper every other site uses (strings
+            // only — never intern on this path). An unrelated import
+            // (`Rust.Firestore` against the project's own modules) is beyond the
+            // edit-distance ceiling, so it yields none rather than the whole list.
+            let sugg = rank_suggestions(&name, known_modules.iter().map(Box::as_ref));
             Diagnostic::Name {
                 span: import.name.span,
                 msg: NameError::ModuleNotFound {
@@ -4244,9 +4247,21 @@ fn suggestions(
     let Some(typo_str) = interner.resolve(typo) else {
         return Box::new([]);
     };
+    rank_suggestions(typo_str, candidates.filter_map(|c| interner.resolve(c)))
+}
+
+/// The `(Levenshtein, name)`-ranked, edit-distance-capped, `MAX_SUGGESTIONS`-capped
+/// "did you mean" list over string candidates — the single ranking every
+/// suggestion site shares.
+///
+/// Symbol-keyed sites reach it through [`suggestions`]; the IPE-N0020
+/// module-not-found site (whose candidate universe is dot-joined module-path
+/// strings that must never be interned) calls it directly. Sharing this keeps an
+/// unrelated name (`Rust.Firestore` against a project's modules) yielding few or
+/// none everywhere, rather than one site dumping the whole universe unranked.
+fn rank_suggestions<'a>(typo: &str, candidates: impl Iterator<Item = &'a str>) -> Box<[Box<str>]> {
     let mut scored: Vec<(usize, Box<str>)> = candidates
-        .filter_map(|c| interner.resolve(c))
-        .map(|name| (levenshtein(typo_str, name), Box::<str>::from(name)))
+        .map(|name| (levenshtein(typo, name), Box::<str>::from(name)))
         .filter(|(d, _)| *d > 0 && *d <= SUGGESTION_MAX_DISTANCE)
         .collect();
     // (distance, name) is a total order; `Box<str>` compares lexicographically.
@@ -4782,5 +4797,55 @@ mod alias_ctor_gate_tests {
         let a = sym(&mut i, "a");
         assert!(!field_type_nonderivable(&i, &canon::Type::Var(a)));
         assert!(!field_type_nonderivable(&i, &canon::Type::Unit));
+    }
+}
+
+#[cfg(test)]
+mod suggestion_ranking_tests {
+    //! [`rank_suggestions`] — the single ranking every did-you-mean site shares,
+    //! including the IPE-N0020 module-not-found candidate universe (which is why
+    //! an unrelated import cannot dump every project module as a "did you mean").
+
+    use super::{MAX_SUGGESTIONS, rank_suggestions};
+
+    #[test]
+    fn unrelated_name_yields_none() {
+        // A project's own modules against a wholly unrelated import: every
+        // candidate is beyond the edit-distance ceiling, so none is offered —
+        // never the whole unranked module list.
+        let modules = [
+            "Lib.Auth",
+            "Lib.Cart",
+            "Lib.Db",
+            "Page.Home",
+            "Page.Product",
+            "State",
+            "Ui.Layout",
+        ];
+        let got = rank_suggestions("Rust.Firestore", modules.into_iter());
+        assert!(
+            got.is_empty(),
+            "an unrelated name must yield no suggestions, got: {got:?}"
+        );
+    }
+
+    #[test]
+    fn near_misses_are_ranked_and_capped_at_max() {
+        // More close candidates than the cap: the list is capped at
+        // `MAX_SUGGESTIONS`, closest-first.
+        let modules = ["Foo", "Food", "Fool", "Foot", "Fond"];
+        let got = rank_suggestions("Foo", modules.into_iter());
+        assert!(
+            got.len() <= MAX_SUGGESTIONS,
+            "must cap at MAX_SUGGESTIONS ({MAX_SUGGESTIONS}), got {}: {got:?}",
+            got.len()
+        );
+        assert!(!got.is_empty(), "genuine near-misses must be offered");
+        // The exact-match candidate (`Foo`, distance 0) is excluded — a
+        // suggestion identical to the typed name is noise.
+        assert!(
+            !got.iter().any(|s| s.as_ref() == "Foo"),
+            "distance-0 self must not be suggested, got: {got:?}"
+        );
     }
 }

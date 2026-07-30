@@ -1,0 +1,8 @@
+module Lib.Calc exposing (label)
+
+import Ipe.String as String
+
+-- Math is referenced below but never imported
+label : () -> String
+label _ =
+    String.fromInt (Math.abs 3)
