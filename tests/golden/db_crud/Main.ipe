@@ -16,7 +16,7 @@ main =
                 (\txconn ->
                     let
                         _ =
-                            Db.execRaw txconn
+                            Db.unsafeExecRaw txconn
                                 "CREATE TABLE fruits (id TEXT PRIMARY KEY, name TEXT, qty TEXT)"
 
                         _ =

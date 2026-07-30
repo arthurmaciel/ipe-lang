@@ -38,7 +38,7 @@ seedAndCount =
                 (\txconn ->
                     let
                         _ =
-                            Db.execRaw txconn
+                            Db.unsafeExecRaw txconn
                                 "CREATE TABLE widgets (name TEXT, qty INTEGER)"
 
                         _ =
