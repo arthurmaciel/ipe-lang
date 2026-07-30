@@ -122,16 +122,9 @@ pub fn http_stream_open<E: From<String> + Send + 'static>(
             Ok(c) => c,
             Err(e) => return IpeResult::Err(format!("http.stream.open: client: {}", e).into()),
         };
-        // An unparseable/invalid HTTP method must ERROR, not silently downgrade
-        // to GET (which would issue a request the caller never asked for).
-        let method = match reqwest::Method::from_bytes(req.method.to_uppercase().as_bytes()) {
-            Ok(m) => m,
-            Err(_) => {
-                return IpeResult::Err(
-                    format!("http.stream.open: invalid HTTP method: {}", req.method).into(),
-                );
-            }
-        };
+        // `HttpMethod` is an ADT — every variant maps to a known reqwest
+        // constant (no runtime failure possible here).
+        let method = crate::http_client::method_to_reqwest(req.method);
         let mut rb = client.request(method, &req.url);
         for (k, v) in &req.headers {
             rb = rb.header(k.as_str(), v.as_str());

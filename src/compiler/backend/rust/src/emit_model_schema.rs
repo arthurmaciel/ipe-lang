@@ -154,6 +154,7 @@ const TAG_EMAIL_PROVIDER: u8 = 54;
 const TAG_SHARED_FUN: u8 = 55;
 const TAG_PATH: u8 = 56;
 const TAG_REGEX: u8 = 57;
+const TAG_HTTP_METHOD: u8 = 58;
 /// Fuel exhaustion marker — distinct from every variant tag.
 const TAG_FUEL_EXHAUSTED: u8 = 0xFF;
 
@@ -190,6 +191,7 @@ fn hash_ty(ctx: &EmitCtx, ty: &IrType, h: &mut Sha256, fuel: u32) -> DResult<()>
         IrType::WebSocketServerCfg => h.update([TAG_WEBSOCKET_SERVER_CFG]),
         IrType::WebReq => h.update([TAG_LIVE_REQ]),
         IrType::Order => h.update([TAG_ORDER]),
+        IrType::HttpMethod => h.update([TAG_HTTP_METHOD]),
         IrType::Decimal => h.update([TAG_DECIMAL]),
         IrType::ErrorKind => h.update([TAG_ERROR_KIND]),
         IrType::Error => h.update([TAG_ERROR]),

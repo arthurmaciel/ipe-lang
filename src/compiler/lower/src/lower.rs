@@ -144,6 +144,10 @@ enum HttpFieldTy {
     StrPairList,
     /// `Dict String String`.
     StrStrDict,
+    /// The `HttpMethod` ADT (`Get | Post | Put | Delete | Patch | Head | Options`).
+    /// Matched as a zero-argument `Ty::Con` whose name resolves to `"HttpMethod"` —
+    /// analogous to `Bool`/`Int` builtins, with no module path (empty `module`).
+    HttpMethodAdt,
 }
 
 /// The canonical `HttpRequest` record shape as `(field name, expected field
@@ -182,7 +186,7 @@ const HTTP_REQUEST_FIELD_TYPES: &[(&str, HttpFieldTy)] = &[
     ("followRedirects", HttpFieldTy::Bool),
     ("headers", HttpFieldTy::StrPairList),
     ("maxRedirects", HttpFieldTy::Int),
-    ("method", HttpFieldTy::Str),
+    ("method", HttpFieldTy::HttpMethodAdt),
     ("timeout", HttpFieldTy::Int),
     ("url", HttpFieldTy::Str),
 ];
@@ -274,6 +278,9 @@ fn ty_matches_http_field(ty: &Ty, expected: HttpFieldTy, interner: &Interner) ->
                             && ty_matches_http_field(v, HttpFieldTy::Str, interner)
                 )
         }
+        (HttpFieldTy::HttpMethodAdt, Ty::Con { module, name, args }) => {
+            module.is_empty() && args.is_empty() && interner.resolve(*name) == Some("HttpMethod")
+        }
         _ => false,
     }
 }
@@ -321,6 +328,9 @@ fn canon_ty_matches_http_field(
                         if canon_ty_matches_http_field(k, HttpFieldTy::Str, interner)
                             && canon_ty_matches_http_field(v, HttpFieldTy::Str, interner)
                 )
+        }
+        (HttpFieldTy::HttpMethodAdt, canon::Type::Con { home, name, args }) => {
+            home.is_empty() && args.is_empty() && interner.resolve(*name) == Some("HttpMethod")
         }
         _ => false,
     }
@@ -1227,11 +1237,13 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::UiPlain(_)
         | IrType::WebReq
         // `Order` (LT/EQ/GT) is a primitive leaf — no embedded function.
+        // `HttpMethod` is a closed 7-variant unit ADT — no embedded function.
         // `Decimal` is a Copy newtype — no embedded function.
         // `ErrorKind`/`Error`/`ErrorDetails` and the nominal error-payload
         // leaves (`ErrorInfo`/`PanicInfo`/`TypeInfo`, SEAL fix)
         // are leaves — no embedded function.
         | IrType::Order
+        | IrType::HttpMethod
         | IrType::Decimal
         | IrType::ErrorKind
         | IrType::Error
@@ -1318,6 +1330,7 @@ fn clone_class(interner: &Interner, t: &IrType) -> CloneClass {
         | IrType::Char
         | IrType::Unit
         | IrType::Order
+        | IrType::HttpMethod
         | IrType::Decimal
         | IrType::ErrorKind
         | IrType::StreamWriter
@@ -4102,6 +4115,7 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         | IrType::UiPlain(_)
         | IrType::WebReq
         | IrType::Order
+        | IrType::HttpMethod
         | IrType::Decimal
         | IrType::ErrorKind
         | IrType::Error
@@ -9187,6 +9201,9 @@ impl<'a> Lowerer<'a> {
                 // `Order` is the built-in three-way comparison result type.
                 // Backed by `ipe_runtime::IpeOrder` (repr(u8) enum: LT/EQ/GT).
                 "Order" => Ok(IrType::Order),
+                // `HttpMethod` is the closed ADT for HTTP verbs.
+                // Backed by `ipe_runtime::HttpMethod` (7 unit variants).
+                "HttpMethod" => Ok(IrType::HttpMethod),
                 // `Decimal` is the Ipe.Decimal arbitrary-precision type.
                 // Backed by `ipe_runtime::decimal::Decimal` (rust_decimal newtype).
                 "Decimal" => Ok(IrType::Decimal),
@@ -10196,6 +10213,9 @@ impl<'a> Lowerer<'a> {
                 // `Order` is the built-in three-way comparison result type.
                 // Backed by `ipe_runtime::IpeOrder` (repr(u8) enum: LT/EQ/GT).
                 "Order" => Ok(IrType::Order),
+                // `HttpMethod` is the closed ADT for HTTP verbs.
+                // Backed by `ipe_runtime::HttpMethod` (7 unit variants).
+                "HttpMethod" => Ok(IrType::HttpMethod),
                 // `Decimal` is the Ipe.Decimal arbitrary-precision type.
                 // Backed by `ipe_runtime::decimal::Decimal` (rust_decimal newtype).
                 "Decimal" => Ok(IrType::Decimal),
@@ -13710,10 +13730,14 @@ impl<'a> Lowerer<'a> {
                 // `HttpRequest` : HttpRequest -> Task Error HttpResponse
                 // `HttpParseQuery` : String -> Dict String String (pure)
                 // `HttpDefaultRequest` : String -> HttpRequest (pure builder)
+                // `HttpMethodFromString` : String -> Maybe HttpMethod (pure, parse boundary)
+                // `HttpMethodToString` : HttpMethod -> String (pure)
                 | KernelFn::HttpGet
                 | KernelFn::HttpRequest
                 | KernelFn::HttpParseQuery
                 | KernelFn::HttpDefaultRequest
+                | KernelFn::HttpMethodFromString
+                | KernelFn::HttpMethodToString
                 // ── Db arity-1 ───────────────────────────────────────
                 // `DbConnect : () -> Task Error Db` — takes unit
                 | KernelFn::DbConnect
@@ -15622,6 +15646,10 @@ impl<'a> Lowerer<'a> {
                     ("Http", "withMaxRedirects") => {
                         Ok(Callee::Kernel(KernelFn::HttpWithMaxRedirects))
                     }
+                    ("Http", "methodFromString") => {
+                        Ok(Callee::Kernel(KernelFn::HttpMethodFromString))
+                    }
+                    ("Http", "methodToString") => Ok(Callee::Kernel(KernelFn::HttpMethodToString)),
                     // ── Db kernels ──────────────────────────────────
                     // ── Sql kernels (SqlFragment combinators) ──────────
                     ("Sql", "column") => Ok(Callee::Kernel(KernelFn::SqlColumn)),
@@ -18003,6 +18031,7 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::Json
         | IrType::Db
         | IrType::Order
+        | IrType::HttpMethod
         | IrType::ErrorKind
         | IrType::Error
         | IrType::ErrorDetails

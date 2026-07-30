@@ -1475,6 +1475,13 @@ impl<'a> EmitCtx<'a> {
             // scope via `pub use ipe_runtime::email::*`. A user's own
             // `type EmailProvider` DOES get an `EnumDef` and short-circuits above.
             Some("EmailProvider") => Some("EmailProvider"),
+            // `HttpMethod` is backed by `ipe_runtime::HttpMethod` — a
+            // closed 7-variant unit enum (`Get`/`Post`/`Put`/`Delete`/
+            // `Patch`/`Head`/`Options`). Constructor names match Ipê
+            // verbatim: `HttpMethod::Get`, `HttpMethod::Post`, etc.
+            // Its `EnumDef` is suppressed in `ipe_lower`, so construction
+            // and pattern-matching route through this arm.
+            Some("HttpMethod") => Some("HttpMethod"),
             _ => None,
         }
     }
@@ -1593,8 +1600,10 @@ fn collect_record_shapes(
         | IrType::UiPlain(_)
         | IrType::WebReq
         // `Order` (LT/EQ/GT) is a primitive leaf — no record shape.
+        // `HttpMethod` is a closed 7-variant ADT — no record shape.
         // `Decimal` is a Copy newtype — no record shape.
         | IrType::Order
+        | IrType::HttpMethod
         | IrType::Decimal
         | IrType::ErrorKind
         | IrType::Error
@@ -1746,8 +1755,10 @@ fn type_reaches_enum(
         | IrType::UiPlain(_)
         | IrType::WebReq
         // `Order` is a primitive value — no cycle risk.
+        // `HttpMethod` is a closed 7-variant ADT — no cycle risk.
         // `Decimal` is a Copy newtype — no cycle risk.
         | IrType::Order
+        | IrType::HttpMethod
         | IrType::Decimal
         | IrType::ErrorKind
         | IrType::Error
@@ -1834,8 +1845,10 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::UiPlain(_)
         | IrType::WebReq
         // `Order` is monomorphic — no generic parameters.
+        // `HttpMethod` is monomorphic — no generic parameters.
         // `Decimal` is monomorphic — no generic parameters.
         | IrType::Order
+        | IrType::HttpMethod
         | IrType::Decimal
         | IrType::ErrorKind
         | IrType::Error
@@ -1946,8 +1959,10 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::UiPlain(_)
         | IrType::WebReq
         // `Order` is monomorphic — no generics to collect.
+        // `HttpMethod` is monomorphic — no generics to collect.
         // `Decimal` is monomorphic — no generics to collect.
         | IrType::Order
+        | IrType::HttpMethod
         | IrType::Decimal
         | IrType::ErrorKind
         | IrType::Error
@@ -2271,8 +2286,10 @@ fn match_template(
         | IrType::UiPlain(_)
         | IrType::WebReq
         // `Order` is a monomorphic leaf — must equal exactly.
+        // `HttpMethod` is a monomorphic leaf — must equal exactly.
         // `Decimal` is a monomorphic leaf — must equal exactly.
         | IrType::Order
+        | IrType::HttpMethod
         | IrType::Decimal
         | IrType::ErrorKind
         | IrType::Error

@@ -235,6 +235,7 @@ fn ir_type_name_at(interner: &Interner, ty: &IrType, depth: u16) -> String {
             parts.join(" -> ")
         }
         IrType::Order => "Order".to_owned(),
+        IrType::HttpMethod => "HttpMethod".to_owned(),
         IrType::Decimal => "Decimal".to_owned(),
         IrType::ErrorKind => "ErrorKind".to_owned(),
         IrType::Error => "Error".to_owned(),
@@ -713,6 +714,8 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::HttpWithUrl => "Http.withUrl",
         KernelFn::HttpWithFollowRedirects => "Http.withFollowRedirects",
         KernelFn::HttpWithMaxRedirects => "Http.withMaxRedirects",
+        KernelFn::HttpMethodFromString => "Http.methodFromString",
+        KernelFn::HttpMethodToString => "Http.methodToString",
         // ── Db kernels ──────────────────────────────────────────────
         KernelFn::DbConnect => "Db.connect",
         KernelFn::DbOpen => "Db.open",

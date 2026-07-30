@@ -99,6 +99,7 @@ const fn ir_type_is_definitely_copy(ty: &IrType) -> bool {
             | IrType::Char
             | IrType::Unit
             | IrType::Order
+            | IrType::HttpMethod
             | IrType::Decimal
             | IrType::ErrorKind
             | IrType::StreamWriter
@@ -1254,7 +1255,8 @@ fn emit_http_builder_call(
     // entirely.
     match k {
         KernelFn::HttpDefaultRequest => {
-            // defaultRequest : String -> HttpRequest  — inline struct literal
+            // defaultRequest : String -> HttpRequest  — inline struct literal.
+            // `method` defaults to the `Get` constructor of the `HttpMethod` ADT.
             let url = args.first().ok_or_else(|| Diagnostic::CompilerBug {
                 where_: "ipe_backend_rust::emit_http_builder_call",
                 detail: "HttpDefaultRequest expects 1 argument (url)".to_owned(),
@@ -1263,11 +1265,11 @@ fn emit_http_builder_call(
             Ok(Some(format!(
                 "ipe_runtime::HttpRequest {{ body: String::new(), followRedirects: true, \
                  headers: Vec::new(), maxRedirects: 10i64, \
-                 method: \"GET\".to_string(), timeout: 30000i64, url: {url_s} }}"
+                 method: ipe_runtime::HttpMethod::Get, timeout: 30000i64, url: {url_s} }}"
             )))
         }
         KernelFn::HttpWithMethod => {
-            // withMethod : String -> HttpRequest -> HttpRequest
+            // withMethod : HttpMethod -> HttpRequest -> HttpRequest
             let m = args.first().ok_or_else(|| Diagnostic::CompilerBug {
                 where_: "ipe_backend_rust::emit_http_builder_call",
                 detail: "HttpWithMethod expects 2 arguments (method, req)".to_owned(),

@@ -704,6 +704,7 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::WebReq => "WebReq",
         IrType::WebRoute(_) => "WebRoute",
         IrType::Order => "Order",
+        IrType::HttpMethod => "HttpMethod",
         IrType::Decimal => "Decimal",
         IrType::ErrorKind => "ErrorKind",
         IrType::Error => "Error",
