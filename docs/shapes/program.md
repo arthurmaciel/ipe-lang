@@ -121,7 +121,7 @@ There is no runtime loop here, so **event handlers are inert**: an `onClick` on 
 statically rendered node has nothing to dispatch to. A Program builds static
 trees (an `Html Never`-style tree with no live messages); the tags, attributes,
 and text render, but interactivity needs an app shape. See
-[Views: Ui, Html, and Css](../ui.md) for the full vocabulary and the
+[Views: Ui, Html, and Css](../language/ui.md) for the full vocabulary and the
 `Ui.html` / `Ui.layout` bridges.
 
 ## Example

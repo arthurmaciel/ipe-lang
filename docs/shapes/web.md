@@ -17,7 +17,7 @@ URL routing. The view type is `view : Model -> Element Msg` — the portable
 [Terminal](terminal.md). The framework applies `Ui.layout` internally to turn
 that `Element` into the DOM, so a Web view is the same shape as a Terminal view
 and switching between the two is a one-line change of the imported shape (see
-[Views: Ui, Html, and Css](../ui.md)).
+[Views: Ui, Html, and Css](../language/ui.md)).
 
 When you need direct DOM control — a tag or attribute `Ipe.Ui` does not
 expose — author it with `Ipe.Html` and drop it into the `Element` view through

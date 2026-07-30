@@ -117,7 +117,7 @@ See [`docs/shapes/`](docs/shapes/README.md) for a guide to each shape, and
 
 Views are built from two vocabularies — the portable `Ipe.Ui` layout language
 and the raw-DOM `Ipe.Html` — plus the security-gated `Ipe.Css`. See
-[Views: Ui, Html, and Css](docs/ui.md) for how they relate, how to intermix
+[Views: Ui, Html, and Css](docs/language/ui.md) for how they relate, how to intermix
 them, and static rendering.
 
 ## Capabilities
