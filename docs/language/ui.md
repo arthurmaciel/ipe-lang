@@ -153,6 +153,41 @@ no TEA loop, no `update`, no subscriptions. This is the bridge that lets a plain
 [Program](../shapes/program.md#views-as-data-static-rendering) build and emit a view
 without adopting an app shape.
 
+## `Ipe.Markdown` — markdown to `Element msg`
+
+`Ipe.Markdown` is a pure Ipê compiled-source module that parses a markdown
+string and produces a typed `Element msg` tree — no HTML string round-trip,
+no raw-DOM output, no sanitiser needed. All output routes through `Ipe.Ui`
+constructors, so user-supplied markdown cannot inject scripts or event
+handlers into the DOM.
+
+```ipe
+Markdown.render       : String -> Element msg
+Markdown.renderInline : String -> Element msg
+```
+
+`render` handles multi-block documents (headings, paragraphs, fenced code
+blocks, bullet and ordered lists, tables, horizontal rules, inline bold /
+italic / code / links). `renderInline` handles a single line of inline
+markup and is useful inside an existing paragraph context.
+
+```ipe
+import Ipe.Markdown as Markdown
+import Ipe.Ui as Ui
+
+view : Model -> Element Msg
+view model =
+    Ui.column [ Ui.spacing 16 ]
+        [ Markdown.render model.readmeText
+        , Markdown.renderInline "Use `render` for full documents."
+        ]
+```
+
+The supported inline delimiters (`**bold**`, `*italic*`, `` `code` ``,
+`[text](url)`) are parsed without regex — a linear char-by-char scan with
+graceful degradation on malformed input (an unmatched `*` is emitted as
+literal text rather than discarded or panicking).
+
 ## Per-shape `view` types
 
 The graphical shapes — Web, WebView, and `Terminal.appScreen` — share ONE `view`
