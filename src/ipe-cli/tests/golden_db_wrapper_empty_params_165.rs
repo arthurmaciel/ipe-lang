@@ -52,13 +52,13 @@
 //! 3-module project, mirroring `examples/17-ipemon`'s actual
 //! `Lib.Database`/`Lib.Alerts`/`Lib.Monitors` cross-module shape:
 //!
-//! - `Lib1.ipe` — `queryOrLog` / `execOrLog`, the unannotated wrapper
-//!   functions around `Db.query` / `Db.exec`.
-//! - `Lib2.ipe` — calls `Lib1.execOrLog` with a `List SqlValue` (typed
+//! - `Lib1.ipe` — `withConn`, `query`, `exec`: unannotated wrappers around
+//!   `Db.open` / `Db.query` / `Db.exec`; connection threaded explicitly.
+//! - `Lib2.ipe` — calls `Lib1.exec` with a `List SqlValue` (typed
 //!   mixed-param path).
-//! - `Main.ipe` — calls `Lib1.execOrLog` with BOTH the empty list `[]` (the
+//! - `Main.ipe` — calls `Lib1.exec` with BOTH the empty list `[]` (the
 //!   trigger, twice — a DDL statement and a no-bind-params `DELETE`)
-//!   AND a non-empty `List SqlValue`, then `Lib1.queryOrLog` with `[]` to
+//!   AND a non-empty `List SqlValue`, then `Lib1.query` with `[]` to
 //!   read the rows back. `args` stays `List SqlValue` at every non-empty
 //!   call site (across BOTH `Lib2` and `Main`) so the fixture isolates the
 //!   ONE variable this is actually about — empty vs. non-empty — rather

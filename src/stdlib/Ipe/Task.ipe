@@ -14,7 +14,6 @@ module Ipe.Task exposing
     , fromResult, andThenResult
     , sequence, parallel
     , lazy
-    , run
     , RetryPolicy
     , linearBackoff, exponentialBackoff
     , withJitter
@@ -99,12 +98,6 @@ parallel = Ffi.kernel "Task_parallel"
 
 lazy : (() -> Task Error a) -> Task Error a
 lazy = Ffi.kernel "Task_lazy"
-
-
--- ── Execution ────────────────────────────────────────────────────────────────
-
-run : Task Error a -> Result Error a
-run = Ffi.kernel "Task_run"
 
 
 -- ── Retry policy ─────────────────────────────────────────────────────────────

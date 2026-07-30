@@ -4085,15 +4085,10 @@ import Ipe.Error as Error exposing (Error)
 import Ipe.Io as Io
 
 main =
-    let
-        result =
-            Task.run
-                (Task.fail (Error.unexpected \"intentional\")
-                    |> Task.andThen (\\_ -> Task.succeed \"unreachable\"))
-    in
-        case result of
-            Ok val -> Io.println val
-            Err e  -> Io.println (Error.toString e)
+    Task.fail (Error.unexpected \"intentional\")
+        |> Task.andThen (\\_ -> Task.succeed \"unreachable\")
+        |> Task.andThen Io.println
+        |> Task.onError (\\e -> Io.println (Error.toString e))
 ";
 
         let runtime = resolve_runtime();
@@ -4122,34 +4117,19 @@ main =
     // Regression: Task.run elision — ipe_main must return IpeTask<A>
     // -----------------------------------------------------------------------
 
-    /// Regression for the `Task.run` elision in `emit_func`.
-    ///
-    /// `main = someTask |> Task.run` lowers to:
-    ///   `func.ret  = IrType::Result(Error, A)`
-    ///   `func.body = Call(TaskRun, [inner])`
-    /// Emitting `task_run(inner)` from `emit_func` returns `IpeResult<E, A>`,
-    /// but the epilogue calls `block_on(ipe_main())`, which requires
-    /// `IpeTask<A>` — an `E0308 mismatched types` Rust compile error.
-    ///
-    /// So the emitter detects the `Call(TaskRun|TaskPerform, [inner])` body in
-    /// `ipe_main`, emits `inner` directly, and rewrites the return type from
-    /// `Result(Error, A)` → `Task(A)`.
-    ///
-    /// This test verifies that the emitted `src/main.rs` contains
-    /// `fn ipe_main() -> IpeTask<` and does NOT contain `task_run(` at the
-    /// `ipe_main` definition site.
+    /// `main` returning a `Task` directly must emit `fn ipe_main() -> IpeTask<`
+    /// (the shape the `block_on(ipe_main())` epilogue requires), never
+    /// `IpeResult<…>`. The internal `TaskRun` kernel is the auto-run mechanism
+    /// at the entry boundary; the surface `Task.run` binding is gone.
     #[test]
     fn task_run_main_emits_ipetask_not_iperesult() {
-        // A minimal Ipe.Console-style program: main = task |> Task.run
-        // A shape prone to E0308 in the emitted Rust.
         const SRC: &str = "\
 module Main exposing (main)
 import Ipe.Prelude exposing (..)
-import Ipe.Task as Task
 import Ipe.Io as Io
 
 main =
-    Io.println \"hello from task run\" |> Task.run
+    Io.println \"hello from main task\"
 ";
 
         let runtime = resolve_runtime();
@@ -4166,9 +4146,8 @@ main =
 
         let out = dir.join("out");
         let built = build(&entry, &out, &runtime);
-        assert!(built.is_ok(), "Task.run main must compile: {built:?}");
+        assert!(built.is_ok(), "task-returning main must compile: {built:?}");
 
-        // Read the emitted main.rs and verify the signature.
         let main_rs = out.join("src").join("main.rs");
         let emitted = fs::read_to_string(&main_rs).expect("emitted main.rs must exist after build");
 
@@ -4185,7 +4164,7 @@ main =
         );
         assert!(
             !emitted.contains("fn ipe_main() -> IpeResult"),
-            "ipe_main must NOT return IpeResult (Task.run elision missing)"
+            "ipe_main must NOT return IpeResult"
         );
 
         let _ = fs::remove_dir_all(&dir);

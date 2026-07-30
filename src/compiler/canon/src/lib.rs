@@ -3442,4 +3442,39 @@ mod tests {
             );
         }
     }
+
+    /// `Task.run` and `Task.perform` are removed from the Ipê surface.
+    /// Any use of either must produce `IPE-N0036` (`RemovedSurface`), not a
+    /// successful resolution.
+    #[test]
+    fn task_run_and_perform_emit_removed_surface_diagnostic() {
+        for (src, removed_name) in [
+            (
+                "module Main exposing (main)\n\
+                 import Ipe.Task as Task\n\
+                 import Ipe.Io as Io\n\
+                 main = Io.println \"hi\" |> Task.run\n",
+                "run",
+            ),
+            (
+                "module Main exposing (main)\n\
+                 import Ipe.Task as Task\n\
+                 import Ipe.Io as Io\n\
+                 main = Task.perform (Io.println \"hi\")\n",
+                "perform",
+            ),
+        ] {
+            let diag = canon_err(src);
+            assert!(
+                matches!(
+                    diag,
+                    Some(Diagnostic::Name {
+                        msg: NameError::RemovedSurface { ref name, .. },
+                        ..
+                    }) if name.as_ref() == removed_name
+                ),
+                "`Task.{removed_name}` must produce IPE-N0036 RemovedSurface; got: {diag:?}"
+            );
+        }
+    }
 }

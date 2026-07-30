@@ -1,38 +1,31 @@
 //! Regression for a `24-tui-kitchen-sink` SEAL violation: `ipe build` exits 0
-//! on the Ipe.Terminal `argv`-dispatch entry-point idiom (`main = case List.head
-//! argsList of Just "live" -> Web.app {...} |> Task.run; _ -> Terminal.appScreen
-//! {...} |> Task.run`) while the emitted crate fails `cargo build` with two
-//! INDEPENDENT E0308 errors.
-//! The `tui_entry_case_taskrun` fixture minimises both defects down to plain
-//! `println`/`Task` calls so this test needs no Ipe.Tui / Ipe.Web
-//! dependency.
+//! on a case-branched entry-point while the emitted crate fails `cargo build`
+//! with two INDEPENDENT E0308 errors.
+//! The `tui_entry_case_taskrun` fixture minimises both defects to plain
+//! `Io.println` calls so this test needs no Ipe.Terminal / Ipe.Web dependency.
 //!
 //! Defect 1: a string-literal ctor-payload sub-pattern (`Just "live"`)
 //! lowered straight to a bare `Pat::Str`, emitted as
 //! `IpeMaybe::Just("live")` — Rust rejects a `&str` literal pattern against
 //! an owned `String` ctor field. Fixed by desugaring a direct `PStr` ctor-arg
 //! into a fresh `String` binder plus an arm guard (`binder == "live"`),
-//! mirroring the existingthe C2 nested-cons-in-ctor-payload desugaring.
+//! mirroring the C2 nested-cons-in-ctor-payload desugaring.
 //!
-//! Defect 2: the entry-point `Task.run` elision in `emit_func`
-//! (`ipe_backend_rust::emit_expr`) only recognised a FLAT `main = task |>
-//! Task.run` body (`func.body` itself a `Call(TaskRun, [inner])`). A
-//! `case`-branched body where EVERY arm tail-calls `Task.run` left
-//! `ipe_main` returning `IpeResult<E, A>` while the `fn main` epilogue's
+//! Defect 2: the entry-point task elision in `emit_func`
+//! (`ipe_backend_rust::emit_expr`) only recognised a FLAT body. A
+//! `case`-branched body where EVERY arm returns a `Task` left `ipe_main`
+//! returning `IpeResult<E, A>` while the `fn main` epilogue's
 //! `block_on(ipe_main())` requires `IpeTask<A>`. Fixed by recursing the
-//! elision through `Match` / `If` / `Let` / `Destructure` tail positions —
-//! elision only fires when EVERY leaf in tail position is a `Task.run` /
-//! `Task.perform` call, so a partially-elided (mismatched-type) body can
-//! never be produced.
+//! elision through `Match` / `If` / `Let` / `Destructure` tail positions.
 //!
 //! ## Why the emit-only assertions run in the DEFAULT gate
 //!
-//! `IPE_E2E`-gated tests do not run in the default `cargo nextest` gate —
-//! documented BACKLOG blind spot ("Gate blind spot" row). This file's first
-//! two tests inspect the emitted `src/main.rs` text (no cargo build) so they
-//! run in the DEFAULT gate and pin the regression even when `IPE_E2E` is
-//! unset; the third test is the `IPE_E2E`-gated cargo-build-and-run proof
-//! that the emitted crate actually compiles AND prints the right thing.
+//! `IPE_E2E`-gated tests do not run in the default `cargo nextest` gate.
+//! This file's first two tests inspect the emitted `src/main.rs` text (no
+//! cargo build) so they run in the DEFAULT gate and pin the regression even
+//! when `IPE_E2E` is unset; the third test is the `IPE_E2E`-gated
+//! cargo-build-and-run proof that the emitted crate actually compiles AND
+//! prints the right thing.
 
 use std::path::{Path, PathBuf};
 
@@ -110,9 +103,9 @@ fn nested_str_literal_ctor_payload_does_not_emit_bare_str_pattern() {
     );
 }
 
-/// Defect 2 pin: `ipe_main` must return `IpeTask<…>` (the elided shape the
+/// Defect 2 pin: `ipe_main` must return `IpeTask<…>` (the shape the
 /// `block_on(ipe_main())` epilogue requires), never `IpeResult<…>` — even
-/// though the body is a `case`, not a flat `task |> Task.run` call.
+/// though the body is a `case`, not a flat Task body.
 #[test]
 fn case_branched_entry_point_elides_task_run_to_ipetask() {
     let root = repo_root();
@@ -129,7 +122,7 @@ fn case_branched_entry_point_elides_task_run_to_ipetask() {
     assert!(
         main_rs.contains("fn ipe_main() -> IpeTask<"),
         "ipe_main must return IpeTask<…> even when its body is a `case` \
-         whose every arm tail-calls Task.run — the block_on(ipe_main()) \
+         whose every arm returns a Task — the block_on(ipe_main()) \
          epilogue requires a Task, not a Result. Got signature region:\n{}",
         main_rs
             .lines()

@@ -1032,8 +1032,6 @@ impl Env {
                     "andThenResult",
                     "sequence",
                     "parallel",
-                    "run",
-                    "perform",
                     "lazy",
                     // retry surface
                     "retryWith",

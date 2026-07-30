@@ -43,16 +43,10 @@ failingTask =
 
 
 main =
-    let
-        okResult =
-            withErrorReporting "op.ok" (Task.succeed "hello") |> Task.run
-
-        failResult =
-            withErrorReporting "op.fail" failingTask |> Task.run
-    in
-        case ( okResult, failResult ) of
-            ( Ok v, Err e ) ->
-                Io.println (v ++ " | " ++ Error.toString e)
-
-            _ ->
-                Io.println "unexpected"
+    withErrorReporting "op.ok" (Task.succeed "hello")
+        |> Task.andThen
+            (\v ->
+                withErrorReporting "op.fail" failingTask
+                    |> Task.andThen (\_ -> Io.println "unexpected")
+                    |> Task.onError (\e -> Io.println (v ++ " | " ++ Error.toString e))
+            )

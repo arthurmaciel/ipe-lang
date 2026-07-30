@@ -20,8 +20,13 @@ import Ipe.Error as Error exposing (Error)
 import Ipe.Io as Io
 
 
--- Shape 1 & 2: wildcard lambda inside a task chain.
-runPipeline =
+-- Shape 3: named helper — same PAnything binder, different spelling.
+ignore : a -> Task Error String
+ignore _ =
+    Task.succeed "ignored"
+
+
+main =
     let
         ok =
             Task.succeed "done"
@@ -31,28 +36,15 @@ runPipeline =
             Task.fail (Error.unexpected "intentional")
                 |> Task.andThen (\_ -> Task.succeed "unreachable")
     in
-    ( Task.run ok, Task.run err )
-
-
--- Shape 3: named helper — same PAnything binder, different spelling.
-ignore : a -> Task Error String
-ignore _ =
-    Task.succeed "ignored"
-
-
-main =
-    let
-        ( okResult, errResult ) = runPipeline
-        _ =
-            case okResult of
-                Ok v  -> Io.println ("ok: " ++ v)
-                Err e -> Io.println ("ok-path error: " ++ Error.toString e)
-        _ =
-            case errResult of
-                Ok _  -> Io.println "err-path should not reach Ok"
-                Err e -> Io.println ("err: " ++ Error.toString e)
-        ignoreResult = Task.run (ignore 42)
-    in
-        case ignoreResult of
-            Ok v  -> Io.println ("ignore: " ++ v)
-            Err e -> Io.println ("ignore error: " ++ Error.toString e)
+    Task.sequence
+        [ ok
+            |> Task.andThen (\v -> Io.println ("ok: " ++ v))
+            |> Task.onError (\e -> Io.println ("ok-path error: " ++ Error.toString e))
+        , err
+            |> Task.andThen (\_ -> Io.println "err-path should not reach Ok")
+            |> Task.onError (\e -> Io.println ("err: " ++ Error.toString e))
+        , ignore 42
+            |> Task.andThen (\v -> Io.println ("ignore: " ++ v))
+            |> Task.onError (\e -> Io.println ("ignore error: " ++ Error.toString e))
+        ]
+        |> Task.andThen (\_ -> Task.succeed ())

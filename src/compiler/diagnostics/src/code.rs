@@ -152,6 +152,8 @@ pub const IPE_N0033: Code = Code("IPE-N0033");
 pub const IPE_N0034: Code = Code("IPE-N0034");
 /// a TEA app imports another shape's `Cmd` / `Sub` re-export module
 pub const IPE_N0035: Code = Code("IPE-N0035");
+/// a removed surface binding is used; `ipe fix` can migrate the call site
+pub const IPE_N0036: Code = Code("IPE-N0036");
 
 // ---------------------------------------------------------------------------
 // Type (IPE-T####)

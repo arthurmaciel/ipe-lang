@@ -1,0 +1,22 @@
+module Main exposing (main)
+
+import Ipe.Http as Http
+import Ipe.Time as Time
+import Ipe.Task as Task
+import Ipe.Io as Io
+import Ipe.String as String
+
+main : Task ()
+main =
+    Time.now ()
+        |> Task.andThen
+            (\t ->
+                Http.get "https://httpbin.org/get"
+                    |> Task.andThen
+                        (\resp ->
+                            Io.println
+                                (Time.timeString t
+                                    ++ " body length: "
+                                    ++ String.fromInt (String.length resp.body))
+                        )
+            )
