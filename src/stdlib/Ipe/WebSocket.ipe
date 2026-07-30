@@ -77,10 +77,10 @@ type WebSocket
 -- | One incoming frame from the peer.
 --
 --   * `Text String` — UTF-8 text frame.
---   * `Binary String` — raw bytes (Ipe.Bytes alias = String).
+--   * `Binary Bytes` — raw byte frame (`Vec<u8>` on Rust).
 type WebSocketMessage
     = Text String
-    | Binary String
+    | Binary Bytes
 
 
 -- | A WebSocket close code.  Either one of the standard symbolic

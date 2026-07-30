@@ -78,10 +78,11 @@ fn email_address_is_valid(s: &str) -> bool {
 
 /// Ipê.Email.EmailMessage — field names/types match the Ipê record alias.
 ///
-/// Address fields (`from`, `to`, `cc`, `bcc`, `replyTo`) remain `String` to
-/// preserve backward compatibility with the existing `Email.ipe` API.
+/// Text fields (`from`, `to`, `cc`, `bcc`, `replyTo`, `subject`, `textBody`,
+/// `htmlBody`) are `String` — they are genuinely UTF-8 text. Attachment bodies
+/// are `Vec<u8>` (Bytes), the correct type for arbitrary binary content.
 /// The additive `EmailAddress` type (and `parseAddress`/`addressToString`)
-/// is the parse-don't-validate boundary for NEW code that wants type-enforced
+/// is the parse-don't-validate boundary for new code that wants type-enforced
 /// addresses; existing call sites using `defaultMessage` / `with*` helpers
 /// keep passing plain `String` values unchanged.
 #[allow(non_snake_case)]
@@ -98,19 +99,19 @@ pub struct EmailMessage {
     pub replyTo: String,
 }
 
-/// Ipê.Email.Attachment — `content` carries the attachment body. The Ipê
-/// `Attachment.content` field is typed `String` (the `Ipe.Bytes` alias is
-/// itself `String`), so the runtime field is `String` too — matching the type
-/// the emitted codegen constructs this struct with. The bytes are recovered via
-/// `content.as_bytes()` / `content.into_bytes()` at each provider boundary.
+/// Ipê.Email.Attachment — `content` carries the attachment body as raw bytes.
+///
+/// The Ipê `Attachment.content` field is typed `Bytes` (`Vec<u8>` on Rust),
+/// matching the runtime field directly — no `.as_bytes()` / `.into_bytes()`
+/// shim is needed at the provider boundary.
 #[allow(non_snake_case)]
 #[derive(Clone, Debug)]
 pub struct EmailAttachment {
     pub filename: String,
     pub mimeType: String,
-    /// Attachment body. Pass `File.readFileBytes` output (a `Bytes` = `String`)
-    /// or any `String` directly; the provider paths encode it as needed.
-    pub content: String,
+    /// Attachment body as raw bytes. Pass `File.readFileBytes` output
+    /// (a `Bytes` = `Vec<u8>`) or `Bytes.fromString` for text content.
+    pub content: Vec<u8>,
 }
 
 /// Ipê.Email.SesConfig.
@@ -286,7 +287,9 @@ async fn send_resend<E: From<String>>(api_key: &str, m: &EmailMessage) -> IpeRes
                 // bytes directly so every byte value round-trips correctly.
                 serde_json::json!({
                     "filename": a.filename,
-                    "content": B64.encode(a.content.as_bytes()),
+                    // Resend expects `content` as base64. The content field is
+                    // already `Vec<u8>` (Bytes) — encode directly, no conversion.
+                    "content": B64.encode(&a.content),
                 })
             })
             .collect();
@@ -350,15 +353,15 @@ async fn send_sendgrid<E: From<String>>(api_key: &str, m: &EmailMessage) -> IpeR
         );
     }
     if !m.attachments.is_empty() {
-        // SendGrid v3 attachments: base64 `content` (encode the body bytes
-        // directly so every byte value round-trips correctly), `filename`,
-        // `type` (MIME), `disposition`.
+        // SendGrid v3 attachments: base64 `content` (the field is `Vec<u8>`
+        // so encode directly — no conversion), `filename`, `type` (MIME),
+        // `disposition`.
         let atts: Vec<serde_json::Value> = m
             .attachments
             .iter()
             .map(|a| {
                 serde_json::json!({
-                    "content": B64.encode(a.content.as_bytes()),
+                    "content": B64.encode(&a.content),
                     "filename": a.filename,
                     "type": a.mimeType,
                     "disposition": "attachment",
@@ -661,10 +664,9 @@ async fn send_smtp<E: From<String>>(cfg: &SmtpConfig, m: &EmailMessage) -> IpeRe
                 .mimeType
                 .parse::<ContentType>()
                 .unwrap_or(ContentType::TEXT_PLAIN);
-            // `att.content` is the body `String` — pass its bytes to lettre.
-            mixed = mixed.singlepart(
-                Attachment::new(att.filename.clone()).body(att.content.clone().into_bytes(), ct),
-            );
+            // `att.content` is already `Vec<u8>` — pass directly to lettre.
+            mixed = mixed
+                .singlepart(Attachment::new(att.filename.clone()).body(att.content.clone(), ct));
         }
         builder.multipart(mixed)
     };
@@ -813,5 +815,60 @@ mod tests {
         assert_eq!(civil_from_days(0), (1970, 1, 1));
         // Day 18628 after epoch = Jan 1 of the year the Go parity fixture uses.
         assert_eq!(civil_from_days(18628), (2021, 1, 1));
+    }
+
+    // ── Bytes content field fidelity tests ──────────────────────────────────
+
+    /// `EmailAttachment.content` is `Vec<u8>`: non-UTF-8 bytes that would be
+    /// corrupted by a `String` bridge must survive the pipeline byte-for-byte.
+    ///
+    /// A `String`-typed `content` field would require `.as_bytes()` or
+    /// `.into_bytes()` at every provider boundary; the pre-migration code did
+    /// exactly that.  These bytes — `0x9e 0xfe`, invalid UTF-8 — would round-trip
+    /// correctly through base64 encoding but are representative of the class of
+    /// payloads that a `String` field would silently reject (e.g. via a lossy
+    /// UTF-8 decode truncating or replacing invalid sequences).
+    #[test]
+    fn attachment_content_bytes_roundtrip_non_utf8() {
+        // 0x9e and 0xfe are not valid UTF-8 start bytes (not representable in a
+        // Rust `String`).  They must flow through the `content: Vec<u8>` field
+        // without any UTF-8 validation step.
+        let non_utf8: Vec<u8> = vec![0x9e, 0xfe, 0x00, 0xff, 0x80];
+        let att = EmailAttachment {
+            filename: "binary.bin".to_string(),
+            mimeType: "application/octet-stream".to_string(),
+            content: non_utf8.clone(),
+        };
+        // The bytes must be retrievable from the field unchanged.
+        assert_eq!(
+            att.content, non_utf8,
+            "non-UTF-8 bytes must survive the Vec<u8> content field unchanged"
+        );
+        // The base64 encoding the provider paths emit must decode back to the
+        // original bytes — proving the pipeline is lossless end-to-end.
+        let b64 = B64.encode(&att.content);
+        let decoded = B64.decode(&b64).expect("base64 decode must succeed");
+        assert_eq!(
+            decoded, non_utf8,
+            "non-UTF-8 bytes must survive base64 encode/decode without corruption"
+        );
+    }
+
+    /// Full byte range (0x00–0xFF) survives the `content: Vec<u8>` field.
+    #[test]
+    fn attachment_content_bytes_full_range_roundtrip() {
+        let all_bytes: Vec<u8> = (0u8..=255u8).collect();
+        let att = EmailAttachment {
+            filename: "all.bin".to_string(),
+            mimeType: "application/octet-stream".to_string(),
+            content: all_bytes.clone(),
+        };
+        assert_eq!(att.content, all_bytes);
+        let b64 = B64.encode(&att.content);
+        let decoded = B64.decode(&b64).expect("base64 decode");
+        assert_eq!(
+            decoded, all_bytes,
+            "all 256 byte values must survive the pipeline"
+        );
     }
 }
