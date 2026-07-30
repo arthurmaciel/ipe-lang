@@ -1140,6 +1140,21 @@ pub enum IrType {
     /// downstream code never sees the unvalidated `String`.  Extracted via
     /// `EmailAddress.toString`.  `Clone` + `PartialEq` + `Debug`; non-serde.
     EmailAddress,
+
+    // ── Ipe.Url ────────────────────────────────────────────────────────────
+    /// `Ipe.Url`'s opaque, validated URL type — "URLs are typed, never a raw
+    /// `String`". A `Url` can only be built through `Url.fromString : String ->
+    /// Result Error Url`, which parses with the `url` crate (the SAME parser the
+    /// SSRF guard uses) and REJECTS a scheme-less / relative / unparseable
+    /// string, so an unvalidated URL can never reach an outbound request. This
+    /// closes the raw-`String`-URL scheme-confusion surface at the type
+    /// boundary.
+    ///
+    /// Renders as `ipe_runtime::url::Url` (a newtype over `url::Url`). `Clone` +
+    /// `Debug` + `PartialEq` + `Eq` are safe (a URL is not a secret); non-serde
+    /// (a `Url` in a `Ipe.Web` Model field is a compile-time rejection, never a
+    /// silent wrong behaviour — same posture as `Path`/`Regex`).
+    Url,
 }
 
 /// Tag enum for the message-parametric `Ipe.Ui` / `Ipe.Html` types.
@@ -1278,6 +1293,8 @@ pub fn ir_type_is_derivable(
         | IrType::Secret
         // `Path` derives Clone+Debug+PartialEq+Eq (a validated string newtype).
         | IrType::Path
+        // `Url` derives Clone+Debug+PartialEq+Eq (a newtype over `url::Url`).
+        | IrType::Url
         // Cache config / stats + Csv document runtime structs derive
         // Clone+Debug+PartialEq.
         | IrType::CacheCfg
@@ -1479,6 +1496,12 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         // rather than a mismatch at emit — a filesystem path has no place in a
         // client-hydrated session Model.
         | IrType::Path
+        // `Url` is a request-boundary value, not a serialisable Model field —
+        // derivable but NOT serde (the runtime `ipe_runtime::url::Url` has no
+        // serde impl), so a `Ipe.Web` Model field of type `Url` is a
+        // compile-time IPE-L0120 rather than a mismatch at emit, same posture
+        // as `Path`.
+        | IrType::Url
         // Cache config / stats + Csv document are kernel-boundary data records
         // — derivable (see `ir_type_is_derivable`) but never persisted to a
         // session store, so not serde (the runtime structs carry no serde
@@ -1588,6 +1611,8 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         | IrType::SqlFragment
         | IrType::Secret
         | IrType::Path
+        // `Url` is a newtype over `url::Url` — clone is a String clone.
+        | IrType::Url
         | IrType::Db
         | IrType::ServerRequest
         | IrType::ServerResponse

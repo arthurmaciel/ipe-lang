@@ -114,6 +114,9 @@ pub mod path_core;
 pub mod path;
 pub use path::*;
 
+pub mod url;
+pub use url::*;
+
 #[cfg(feature = "db")]
 pub mod db;
 #[cfg(feature = "json")]

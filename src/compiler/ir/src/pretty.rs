@@ -263,6 +263,7 @@ fn ir_type_name_at(interner: &Interner, ty: &IrType, depth: u16) -> String {
         IrType::CryptoKey => "Key".to_owned(),
         IrType::CryptoMac => "Mac".to_owned(),
         IrType::EmailAddress => "EmailAddress".to_owned(),
+        IrType::Url => "Url".to_owned(),
     }
 }
 
@@ -1363,6 +1364,15 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::CryptoChacha20DecryptKey => "Crypto.chacha20DecryptKey",
         KernelFn::EmailAddressParse => "EmailAddress.parse",
         KernelFn::EmailAddressToString => "EmailAddress.toString",
+        KernelFn::UrlFromString => "Url.fromString",
+        KernelFn::UrlToString => "Url.toString",
+        KernelFn::UrlScheme => "Url.scheme",
+        KernelFn::UrlHost => "Url.host",
+        KernelFn::UrlPort => "Url.port",
+        KernelFn::UrlPath => "Url.path",
+        KernelFn::UrlQuery => "Url.query",
+        KernelFn::UrlFragment => "Url.fragment",
+        KernelFn::UrlBuildQuery => "Url.buildQuery",
     }
 }
 

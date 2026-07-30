@@ -142,6 +142,10 @@ const RESERVED_BUILTIN_TYPES: &[&str] = &[
     // typed-`Err`-on-invalid-pattern guarantee cannot be defeated by a user
     // `type Regex` shadowing the built-in handle.
     "Regex",
+    // `Ipe.Url`'s opaque validated URL type — reserved for the same reason: a
+    // security-tier type (the scheme/SSRF parse boundary) must not be
+    // shadowable by user code defeating `Url.fromString`'s parse guarantee.
+    "Url",
     // `Ipe.PubSub`'s phantom topic handle type — reserved so user code cannot
     // define `type Topic` and silently bypass the lowerer's `Topic a → Str` arm.
     // `PubSub.ipe` (EmbeddedStdlib) may declare it without penalty.

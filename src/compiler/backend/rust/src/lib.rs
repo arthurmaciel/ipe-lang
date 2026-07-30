@@ -1613,21 +1613,18 @@ fn collect_record_shapes(
         | IrType::ErrorInfo
         | IrType::PanicInfo
         | IrType::TypeInfo
-        // `SqlFragment` is an opaque query-building value — no
-        // record shape.
-        // `Secret` is an opaque sealed string wrapper — no
-        // record shape.
+        // `SqlFragment`/`Secret`/`Path`/`Url` are opaque wrappers — no record shape.
         | IrType::SqlFragment
         | IrType::Secret
         | IrType::Path
+        | IrType::Url
         // Cache config / stats + Csv document are folded to nominal runtime
         // structs — no structural record shape to synthesise.
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
         | IrType::CsvDoc
-        // Ipe.Email records + provider ADT are folded to nominal runtime
-        // structs — no structural record shape to synthesise.
+        // Ipe.Email records + provider ADT fold to nominal runtime structs — no shape.
         | IrType::EmailMessage
         | IrType::EmailAttachment
         | IrType::EmailSesConfig
@@ -1639,14 +1636,10 @@ fn collect_record_shapes(
         | IrType::EmailAddress => {}
         // `WebRoute page` is page-parametric — descend in case the page type
         // carries a nested record shape.
-        IrType::WebRoute(page) => {
-            collect_record_shapes(interner, page, shapes)?;
-        }
+        IrType::WebRoute(page) => collect_record_shapes(interner, page, shapes)?,
         // `Ui { ctor, msg }` is a msg-parametric wrapper — descend into
         // `msg` in case it carries a nested record (e.g. `Element { x : Int }`).
-        IrType::Ui { msg, .. } => {
-            collect_record_shapes(interner, msg, shapes)?;
-        }
+        IrType::Ui { msg, .. } => collect_record_shapes(interner, msg, shapes)?,
     }
     Ok(())
 }
@@ -1779,6 +1772,8 @@ fn type_reaches_enum(
         | IrType::SqlFragment
         | IrType::Secret
         | IrType::Path
+        // `Url` is a monomorphic opaque wrapper — no reachable enum edge.
+        | IrType::Url
         // Cache config / stats + Csv document are monomorphic runtime structs
         // — no reachable enum edge to `target`.
         | IrType::CacheCfg
@@ -1871,6 +1866,8 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::SqlFragment
         | IrType::Secret
         | IrType::Path
+        // `Url` is a monomorphic opaque wrapper — no generic parameters.
+        | IrType::Url
         // Cache config / stats + Csv document are monomorphic — no generic
         // parameters.
         | IrType::CacheCfg
@@ -1990,6 +1987,8 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::SqlFragment
         | IrType::Secret
         | IrType::Path
+        // `Url` is a monomorphic opaque wrapper — no generics to collect.
+        | IrType::Url
         // Cache config / stats + Csv document are monomorphic — no generics to
         // collect.
         | IrType::CacheCfg
@@ -2321,6 +2320,8 @@ fn match_template(
         | IrType::SqlFragment
         | IrType::Secret
         | IrType::Path
+        // `Url` is a monomorphic opaque leaf — must equal exactly.
+        | IrType::Url
         // Cache config / stats + Csv document are monomorphic runtime-struct
         // leaves.
         | IrType::CacheCfg

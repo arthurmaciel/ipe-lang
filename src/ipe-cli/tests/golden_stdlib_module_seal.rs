@@ -179,6 +179,39 @@ fn path_builds_and_runs() {
     seal_module("path", PATH_MAIN, "c.txt /a/b .txt ABS");
 }
 
+// ── Ipe.Url — typed, validated URLs (parse-don't-validate) ─────────
+// A valid URL parses and its typed accessors read back; an unparseable /
+// relative URL surfaces as a typed `Err` (NOT a silent accept); the builder
+// percent-encodes a value carrying `&`/` ` so it cannot split off a new query
+// parameter (an injection).
+const URL_MAIN: &str = "module Main exposing (main)\n\
+    import Ipe.Prelude exposing (..)\n\
+    import Ipe.Io as Io\n\
+    import Ipe.Url as Url\n\n\
+    scheme : String\n\
+    scheme = case Url.fromString \"https://example.com:8443/a?q=1\" of\n\
+    \x20   Ok u -> Url.scheme u\n\
+    \x20   Err _ -> \"URL_ERR\"\n\n\
+    invalid : String\n\
+    invalid = case Url.fromString \"/just/a/path\" of\n\
+    \x20   Ok _ -> \"ACCEPTED\"\n\
+    \x20   Err _ -> \"REJECTED\"\n\n\
+    query : String\n\
+    query = Url.buildQuery [ ( \"q\", \"a b&c\" ) ]\n\n\
+    main = Io.println (scheme ++ \" \" ++ invalid ++ \" \" ++ query)\n";
+
+#[test]
+fn url_resolves_and_emits() {
+    let _ = compile_module_probe("url", URL_MAIN);
+}
+
+#[test]
+fn url_builds_and_runs() {
+    // scheme=https; the relative URL is a typed Err → REJECTED (never a silent
+    // accept); the builder encodes `&` and ` ` so the value stays one param.
+    seal_module("url", URL_MAIN, "https REJECTED q=a+b%26c");
+}
+
 // ── Ipe.Process — subprocess execution (no shell) ──────────────────
 // `Process.run` runs `printf %s SEALED` with a DIRECT argv (never `sh -c`),
 // captures its stdout, and prints it. A resolution/scheme/emit regression

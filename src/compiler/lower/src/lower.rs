@@ -1255,9 +1255,11 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         // `SqlFragment` is an opaque query-building value — no embedded function.
         // `Secret` is an opaque sealed string wrapper — no embedded function.
         // `Path` is an opaque validated string wrapper — no embedded function.
+        // `Url` is an opaque validated URL wrapper — no embedded function.
         | IrType::SqlFragment
         | IrType::Secret
         | IrType::Path
+        | IrType::Url
         // Cache config / stats + Csv document are plain data records — no
         // function.
         | IrType::CacheCfg
@@ -1373,6 +1375,9 @@ fn clone_class(interner: &Interner, t: &IrType) -> CloneClass {
         | IrType::SqlFragment
         | IrType::Secret
         | IrType::Path
+        // `Url` is `#[derive(Clone)]` (no Copy — a newtype over `url::Url`,
+        // itself a heap-`String`-backed type; `PartialEq`/`Eq` derived).
+        | IrType::Url
         | IrType::ServerRequest
         | IrType::ServerResponse
         | IrType::ServerRoute
@@ -4148,6 +4153,8 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         | IrType::SqlFragment
         | IrType::Secret
         | IrType::Path
+        // `Url` is non-parametric — mentions no type var.
+        | IrType::Url
         // Cache config / stats + Csv document are non-parametric — mention no
         // type var.
         | IrType::CacheCfg
@@ -9266,6 +9273,9 @@ impl<'a> Lowerer<'a> {
                 // `EmailAddress` is `Ipe.Email`'s opaque validated address.
                 // Backed by `ipe_runtime::email::EmailAddress`.
                 "EmailAddress" => Ok(IrType::EmailAddress),
+                // `Url` is `Ipe.Url`'s opaque validated URL type.
+                // Backed by `ipe_runtime::url::Url`.
+                "Url" => Ok(IrType::Url),
                 // `Topic a` is `Ipe.PubSub`'s phantom topic-handle type.
                 // The type parameter `a` exists only at type-check time; at runtime
                 // a topic is just the name string.  Erase to `Str` unconditionally.
@@ -10294,6 +10304,9 @@ impl<'a> Lowerer<'a> {
                 // `EmailAddress` is `Ipe.Email`'s opaque validated address.
                 // Backed by `ipe_runtime::email::EmailAddress`.
                 "EmailAddress" => Ok(IrType::EmailAddress),
+                // `Url` is `Ipe.Url`'s opaque validated URL type.
+                // Backed by `ipe_runtime::url::Url`.
+                "Url" => Ok(IrType::Url),
                 // `Topic a` is `Ipe.PubSub`'s phantom topic-handle type.
                 // The type parameter `a` exists only at type-check time; at runtime
                 // a topic is just the name string.  Erase to `Str` unconditionally.
@@ -12280,6 +12293,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DecMod
                 | KernelFn::PathFromString
                 | KernelFn::RegexCompile
+                | KernelFn::UrlFromString
         ) {
             return CallPin::None;
         }
@@ -12386,7 +12400,10 @@ impl<'a> Lowerer<'a> {
             | KernelFn::DecDiv
             | KernelFn::DecMod
             | KernelFn::PathFromString
-            | KernelFn::RegexCompile => match ty {
+            | KernelFn::RegexCompile
+            // `Url.fromString : String -> Result Error Url` shares the same
+            // `<E: From<String>>` runtime shape and erased-error E0283.
+            | KernelFn::UrlFromString => match ty {
                 Ty::Con { name, .. } if self.interner.resolve(*name) == Some("Result") => {
                     CallPin::ErrIpeError
                 }
@@ -15039,6 +15056,19 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::PathDir
                 | KernelFn::PathExt
                 | KernelFn::PathIsAbsolute,
+            ) => Ok(1),
+            // ── Ipe.Url — all nine are unary (arity 1): `fromString`/`toString`
+            // + the six `Url -> _` accessors + `buildQuery : List _ -> String`.
+            Callee::Kernel(
+                KernelFn::UrlFromString
+                | KernelFn::UrlToString
+                | KernelFn::UrlScheme
+                | KernelFn::UrlHost
+                | KernelFn::UrlPort
+                | KernelFn::UrlPath
+                | KernelFn::UrlQuery
+                | KernelFn::UrlFragment
+                | KernelFn::UrlBuildQuery,
             ) => Ok(1),
             // ── Ipe.Trace — `span : String -> Task -> Task` (arity 2);
             // `event : String -> Task ()` (1); `attr : String -> String -> Task ()` (2).
@@ -18149,6 +18179,8 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::SqlFragment
         | IrType::Secret
         | IrType::Path
+        // `Url` is non-parametric — no generic syms.
+        | IrType::Url
         // Cache config / stats + Csv document are non-parametric — no generic
         // syms.
         | IrType::CacheCfg
@@ -18430,6 +18462,16 @@ mod tests {
         KernelFn::PathDir,
         KernelFn::PathExt,
         KernelFn::PathIsAbsolute,
+        // Ipe.Url
+        KernelFn::UrlFromString,
+        KernelFn::UrlToString,
+        KernelFn::UrlScheme,
+        KernelFn::UrlHost,
+        KernelFn::UrlPort,
+        KernelFn::UrlPath,
+        KernelFn::UrlQuery,
+        KernelFn::UrlFragment,
+        KernelFn::UrlBuildQuery,
         // Ipe.Trace
         KernelFn::TraceSpan,
         KernelFn::TraceEvent,
