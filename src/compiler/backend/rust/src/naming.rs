@@ -977,6 +977,11 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::UrlQuery => "url_query",
         KernelFn::UrlFragment => "url_fragment",
         KernelFn::UrlBuildQuery => "url_build_query",
+        // ── Ipe.Locale ───────────────────────────────────────────────────
+        KernelFn::LocaleFromTag => "locale_from_tag",
+        KernelFn::LocaleToTag => "locale_to_tag",
+        KernelFn::StringToUpperIn => "string_to_upper_in",
+        KernelFn::StringToLowerIn => "string_to_lower_in",
         // ── TEA Cmd / Sub / Time kernels (wired) ────────────────────────
         KernelFn::CmdNone => "cmd_none",
         KernelFn::CmdBatch => "cmd_batch",

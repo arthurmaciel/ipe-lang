@@ -19,6 +19,7 @@ module Ipe.String exposing
     , join, split, replace, slice, dropLeft, dropRight
     , toInt, toFloat
     , toUpper, toLower, trim, trimStart, trimEnd
+    , toUpperIn, toLowerIn
     , reverse, append, concat
     , contains, startsWith, endsWith
     , containsIn, startsWithIn, endsWithIn
@@ -136,6 +137,35 @@ toLower = Ffi.kernel "String_toLower"
 
 casefold : String -> String
 casefold = Ffi.kernel "String_casefold"
+
+
+-- | `toUpperIn locale s` — locale-correct upper-case conversion.
+--
+-- For most scripts this matches `toUpper`.  The motivating difference is
+-- Turkish/Azerbaijani: `toUpperIn tr "i"` yields `"İ"` (capital dotted I,
+-- U+0130), whereas `toUpper "i"` yields `"I"`.  Construct `locale` via
+-- `Locale.fromTag`; an invalid tag produces `Nothing` at the parse
+-- boundary so it can never reach this function.
+--
+-- Requires the `locale` runtime feature; programs that never call this
+-- function pay no dependency cost.
+--
+--     import Ipe.Locale as Locale
+--
+--     case Locale.fromTag "tr" of
+--         Just tr -> String.toUpperIn tr "istanbul"
+--         Nothing -> String.toUpper "istanbul"
+--
+toUpperIn : Locale -> String -> String
+toUpperIn = Ffi.kernel "String_toUpperIn"
+
+
+-- | `toLowerIn locale s` — locale-correct lower-case conversion.
+--
+-- The motivating difference is Turkish/Azerbaijani: `toLowerIn tr "I"` yields
+-- `"ı"` (dotless i, U+0131), whereas `toLower "I"` yields `"i"`.
+toLowerIn : Locale -> String -> String
+toLowerIn = Ffi.kernel "String_toLowerIn"
 
 
 trim : String -> String

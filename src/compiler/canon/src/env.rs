@@ -564,6 +564,8 @@ impl Env {
                     "isEmpty",
                     "toUpper",
                     "toLower",
+                    "toUpperIn",
+                    "toLowerIn",
                     "casefold",
                     "trim",
                     "trimStart",

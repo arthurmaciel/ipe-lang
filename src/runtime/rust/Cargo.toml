@@ -83,6 +83,11 @@ chrono = "0.4"
 chrono-tz = "0.10"
 rust_decimal = { version = "1", features = ["serde"] }
 bcrypt = { version = "0.17", optional = true }
+# `icu_casemap`: locale-aware case mapping (`String.toUpperIn`/`toLowerIn`).
+# Feature-gated so programs that never use locale-aware case pay nothing.
+# Uses ICU4X compiled-data bundling — no separate data-provider call needed.
+icu_casemap = { version = "2.2", optional = true }
+icu_locale_core = { version = "2.2", optional = true }
 async-trait = { version = "0.1", optional = true }
 unicode-width = { version = "0.1", optional = true }
 crossterm = { version = "0.28", optional = true }
@@ -157,6 +162,10 @@ console_error_panic_hook = { version = "0.1", optional = true }
 [features]
 default = []
 async = ["tokio"]
+# Locale-aware case mapping (`String.toUpperIn`/`toLowerIn`/`Locale.fromTag`).
+# Programs that never import `Ipe.Locale` pay nothing — the ICU4X casemap +
+# locale-core deps are entirely absent from the default feature graph.
+locale = ["dep:icu_casemap", "dep:icu_locale_core"]
 json = ["serde_json", "jsonwebtoken"]
 # `sha2` is required by `db_migrate_apply` (the `_ipe_migrations` ledger stores a
 # sha256-hex checksum per migration — a cross-backend DB contract that must match

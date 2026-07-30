@@ -572,6 +572,12 @@ struct Builtins {
     /// extracted via `Url.toString`. Zero type arguments. Lowered to
     /// `IrType::Url`.
     url: Symbol,
+    // ── Ipe.Locale ─────────────────────────────────────────────────────────
+    /// `"Locale"` — opaque BCP-47 locale handle (`ipe_runtime::locale::Locale`).
+    /// The ONLY constructor is `Locale.fromTag : String -> Maybe Locale`;
+    /// extracted via `Locale.toTag : Locale -> String`.  Lowered to
+    /// `IrType::Locale`.
+    locale: Symbol,
     // ── Ipe.PubSub.Topic ───────────────────────────────────────────────────
     /// `"Topic"` — the phantom topic-handle type constructor `Topic a`.
     /// Erases to `String` at runtime (`ir_type_from_ty` maps `Topic a → Str`).
@@ -792,6 +798,8 @@ impl Builtins {
             email_address: interner.intern("EmailAddress")?,
             // ── Ipe.Url ───────────────────────────────────────────────────────────
             url: interner.intern("Url")?,
+            // ── Ipe.Locale ───────────────────────────────────────────────────────
+            locale: interner.intern("Locale")?,
             // ── Ipe.PubSub.Topic ────────────────────────────────────────────────
             topic_con: interner.intern("Topic")?,
         })
@@ -4069,6 +4077,15 @@ impl<'a> Builder<'a> {
             name: self.builtins.url,
             args: Vec::new(),
         };
+        // `Locale` — opaque BCP-47 locale handle
+        // (`ipe_runtime::locale::Locale`).  The ONLY constructor is
+        // `Locale.fromTag`; extracted via `Locale.toTag`.
+        // Lowered to `IrType::Locale`.
+        let locale = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.locale,
+            args: Vec::new(),
+        };
         // `EmailMessage` — closed 9-field record (runtime
         // `ipe_runtime::email::EmailMessage`). The lowerer folds a value of this
         // exact shape to the nominal `IrType::EmailMessage` so a
@@ -6818,6 +6835,12 @@ impl<'a> Builder<'a> {
             //   toString : EmailAddress -> String
             K::EmailAddressParse => fun(string(), maybe(email_address())),
             K::EmailAddressToString => fun(email_address(), string()),
+            // ── Ipe.Locale ──────────────────────────────────────────────
+            K::LocaleFromTag => fun(string(), maybe(locale())),
+            K::LocaleToTag => fun(locale(), string()),
+            // `toUpperIn`/`toLowerIn`: `Locale -> String -> String`
+            K::StringToUpperIn => fun(locale(), fun(string(), string())),
+            K::StringToLowerIn => fun(locale(), fun(string(), string())),
 
             // ── Ipe.Url ───────────────────────────────────────────────────────────
             // parse-don't-validate boundary — an unparseable / relative URL
@@ -9024,6 +9047,11 @@ mod registry_phase_c_tests {
             K::UrlQuery,
             K::UrlFragment,
             K::UrlBuildQuery,
+            // ── Ipe.Locale (4) ──────────────────────────────────────────
+            K::LocaleFromTag,
+            K::LocaleToTag,
+            K::StringToUpperIn,
+            K::StringToLowerIn,
             // ── Ipe.PubSub (2) ─────────────────────────────────────
             // Runtime exists, emit arm present (`pubsub_publish::<_, IpeError>`),
             // scheme `String -> a -> Task Error Int`.

@@ -159,6 +159,7 @@ const TAG_CRYPTO_KEY: u8 = 59;
 const TAG_CRYPTO_MAC: u8 = 60;
 const TAG_EMAIL_ADDRESS: u8 = 61;
 const TAG_URL: u8 = 62;
+const TAG_LOCALE: u8 = 63;
 /// Fuel exhaustion marker — distinct from every variant tag.
 const TAG_FUEL_EXHAUSTED: u8 = 0xFF;
 
@@ -221,6 +222,8 @@ fn hash_ty(ctx: &EmitCtx, ty: &IrType, h: &mut Sha256, fuel: u32) -> DResult<()>
         IrType::CryptoMac => h.update([TAG_CRYPTO_MAC]),
         IrType::EmailAddress => h.update([TAG_EMAIL_ADDRESS]),
         IrType::Url => h.update([TAG_URL]),
+        // `Locale` — non-serde opaque handle; present for exhaustiveness.
+        IrType::Locale => h.update([TAG_LOCALE]),
 
         IrType::Task(inner) => {
             h.update([TAG_TASK]);
