@@ -83,6 +83,18 @@ const PATH: &str = include_str!("../Ipe/Path.ipe");
 /// NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
 const REGEX: &str = include_str!("../Ipe/Regex.ipe");
 
+/// `Ipe.Markdown` — markdown → `Ipe.Ui` Element renderer, compiled-source
+/// Layer-3.
+///
+/// Pure Ipê source; no `Ffi.kernel` calls. The entire renderer (block
+/// parser + inline span parser + `Ui.*` tree builder) is expressed in Ipê.
+/// Output routes exclusively through typed `Ipe.Ui` constructors so no raw
+/// HTML, scripts, or event handlers can reach the DOM — safe to feed
+/// untrusted markdown without an extra sanitisation step.
+///
+/// NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
+const STD_MARKDOWN: &str = include_str!("../Ipe/Markdown.ipe");
+
 /// Every embedded `Ipe` module, keyed by its dotted import name.
 ///
 /// `Ipe.Prelude` is intentionally absent here: it is not a source file but a
@@ -559,6 +571,11 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Path",
         source: PATH,
+    },
+    // Ipe.Markdown — pure Ipê markdown→Ui renderer; no kernel calls.
+    CompiledStdModule {
+        dotted: "Ipe.Markdown",
+        source: STD_MARKDOWN,
     },
 ];
 
