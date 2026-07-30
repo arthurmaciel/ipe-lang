@@ -935,6 +935,7 @@ fn clear_let_bound_task_fail_pins(expr: Expr) -> Expr {
         | Expr::Bool(_)
         | Expr::Float(_)
         | Expr::Str(_)
+        | Expr::PathLit(_)
         | Expr::Char(_)
         | Expr::Unit
         | Expr::Var(_)
@@ -1667,6 +1668,7 @@ fn canon_collect_free_locals(
         | canon::Expr_::Int(_)
         | canon::Expr_::Float(_)
         | canon::Expr_::Str(_)
+        | canon::Expr_::PathLit(_)
         | canon::Expr_::Char(_)
         | canon::Expr_::Unit => {}
     }
@@ -1725,6 +1727,7 @@ fn rewrite_captured_clones(
         | Expr::Float(_)
         | Expr::Bool(_)
         | Expr::Str(_)
+        | Expr::PathLit(_)
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => Ok(expr),
@@ -2322,6 +2325,7 @@ fn lambda_body_refs_sym(sym: Symbol, expr: &Expr) -> bool {
         | Expr::Bool(_)
         | Expr::Float(_)
         | Expr::Str(_)
+        | Expr::PathLit(_)
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => false,
@@ -2467,6 +2471,7 @@ fn collect_lambda_capture_depths(sym: Symbol, expr: &Expr, cur_depth: u32, depth
         | Expr::Bool(_)
         | Expr::Float(_)
         | Expr::Str(_)
+        | Expr::PathLit(_)
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => {}
@@ -2630,6 +2635,7 @@ fn flows_into_sync_kernel_call(sym: Symbol, expr: &Expr) -> bool {
         | Expr::Bool(_)
         | Expr::Float(_)
         | Expr::Str(_)
+        | Expr::PathLit(_)
         | Expr::Char(_)
         | Expr::Unit
         | Expr::Var(_)
@@ -2709,6 +2715,7 @@ fn branch_value_leaf_reads_sym(name: Symbol, branch: &Expr) -> bool {
         | Expr::Bool(_)
         | Expr::Float(_)
         | Expr::Str(_)
+        | Expr::PathLit(_)
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. }
@@ -2912,6 +2919,7 @@ fn unify_group_value_leaves(
         | Expr::Bool(_)
         | Expr::Float(_)
         | Expr::Str(_)
+        | Expr::PathLit(_)
         | Expr::Char(_)
         | Expr::Unit
         | Expr::BinOp { .. }
@@ -2965,6 +2973,7 @@ fn promote_unification_sibling_lambdas(
         | Expr::Bool(_)
         | Expr::Float(_)
         | Expr::Str(_)
+        | Expr::PathLit(_)
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => Ok(expr),
@@ -3277,6 +3286,7 @@ fn sym_referenced_directly(sym: Symbol, expr: &Expr) -> bool {
         | Expr::Bool(_)
         | Expr::Float(_)
         | Expr::Str(_)
+        | Expr::PathLit(_)
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => false,
@@ -3328,6 +3338,7 @@ fn force_shared_capture_clones(sym: Symbol, expr: Expr) -> Expr {
         | Expr::Bool(_)
         | Expr::Float(_)
         | Expr::Str(_)
+        | Expr::PathLit(_)
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => expr,
@@ -3698,6 +3709,7 @@ fn find_first_varlocal_span(sym: Symbol, body: &canon::Expr) -> Option<Span> {
         | canon::Expr_::Int(_)
         | canon::Expr_::Float(_)
         | canon::Expr_::Str(_)
+        | canon::Expr_::PathLit(_)
         | canon::Expr_::Char(_)
         | canon::Expr_::Unit => None,
         // Compound forms — recurse left-to-right.
@@ -3867,6 +3879,7 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
         | Expr::Bool(_)
         | Expr::Float(_)
         | Expr::Str(_)
+        | Expr::PathLit(_)
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => 0,
@@ -4044,6 +4057,7 @@ fn body_calls_kernel_on_param(
         | Expr::Bool(_)
         | Expr::Float(_)
         | Expr::Str(_)
+        | Expr::PathLit(_)
         | Expr::Char(_)
         | Expr::Unit
         | Expr::Var(_)
@@ -4227,6 +4241,7 @@ fn body_boxes_generic_callback(tv: Symbol, expr: &Expr) -> bool {
         | Expr::Bool(_)
         | Expr::Float(_)
         | Expr::Str(_)
+        | Expr::PathLit(_)
         | Expr::Char(_)
         | Expr::Unit
         | Expr::Var(_)
@@ -4450,6 +4465,7 @@ fn count_fn_value_uses(sym: Symbol, expr: &Expr) -> usize {
         | Expr::Bool(_)
         | Expr::Float(_)
         | Expr::Str(_)
+        | Expr::PathLit(_)
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => 0,
@@ -4782,6 +4798,7 @@ fn fn_value_read_flags_walk(sym: Symbol, expr: &Expr, depth: u32, flags: &mut Fn
         | Expr::Bool(_)
         | Expr::Float(_)
         | Expr::Str(_)
+        | Expr::PathLit(_)
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => {}
@@ -4890,6 +4907,7 @@ fn shim_fn_value_reads(
         | Expr::Bool(_)
         | Expr::Float(_)
         | Expr::Str(_)
+        | Expr::PathLit(_)
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => Ok(expr),
@@ -5209,6 +5227,7 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
         | Expr::Bool(_)
         | Expr::Float(_)
         | Expr::Str(_)
+        | Expr::PathLit(_)
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => expr,
@@ -5649,6 +5668,7 @@ fn count_self_calls(
         | Expr::Bool(_)
         | Expr::Float(_)
         | Expr::Str(_)
+        | Expr::PathLit(_)
         | Expr::Char(_)
         | Expr::Unit
         | Expr::Var(_)
@@ -5987,6 +6007,7 @@ fn scan_kernel_usage(expr: &Expr, usage: &mut KernelUsage) {
         | Expr::Bool(_)
         | Expr::Float(_)
         | Expr::Str(_)
+        | Expr::PathLit(_)
         | Expr::Char(_)
         | Expr::Unit
         | Expr::CloneVar(_)
@@ -6086,6 +6107,7 @@ fn rewrite_var_free_occurrences(
         | Expr::Float(_)
         | Expr::Bool(_)
         | Expr::Str(_)
+        | Expr::PathLit(_)
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => expr,
@@ -7071,6 +7093,7 @@ pub fn count_destructure_param_sites(m: &canon::Module) -> usize {
             | canon::Expr_::Int(_)
             | canon::Expr_::Float(_)
             | canon::Expr_::Str(_)
+            | canon::Expr_::PathLit(_)
             | canon::Expr_::Char(_)
             | canon::Expr_::Unit => 0,
         }
@@ -7202,6 +7225,7 @@ pub fn count_destructure_thunk_sites(m: &canon::Module) -> usize {
             | canon::Expr_::Int(_)
             | canon::Expr_::Float(_)
             | canon::Expr_::Str(_)
+            | canon::Expr_::PathLit(_)
             | canon::Expr_::Char(_)
             | canon::Expr_::Unit => 0,
         }
@@ -7285,6 +7309,7 @@ pub fn count_nested_cons_payload_sites(m: &canon::Module) -> usize {
             | canon::Expr_::Int(_)
             | canon::Expr_::Float(_)
             | canon::Expr_::Str(_)
+            | canon::Expr_::PathLit(_)
             | canon::Expr_::Char(_)
             | canon::Expr_::Unit => 0,
         }
@@ -7370,6 +7395,7 @@ pub fn count_nested_strlit_payload_sites(m: &canon::Module) -> usize {
             | canon::Expr_::Int(_)
             | canon::Expr_::Float(_)
             | canon::Expr_::Str(_)
+            | canon::Expr_::PathLit(_)
             | canon::Expr_::Char(_)
             | canon::Expr_::Unit => 0,
         }
@@ -11294,6 +11320,9 @@ impl<'a> Lowerer<'a> {
             }
             canon::Expr_::Float(f) => Ok(Expr::Float(*f)),
             canon::Expr_::Str(s) => Ok(Expr::Str(s.clone())),
+            // A compile-time-validated `path "…"` literal: the cleaned string
+            // was proven valid by the canonicaliser; lower directly to PathLit.
+            canon::Expr_::PathLit(cleaned) => Ok(Expr::PathLit(cleaned.clone())),
             canon::Expr_::Char(c) => Ok(Expr::Char(c.clone())),
             canon::Expr_::Unit => Ok(Expr::Unit),
             canon::Expr_::VarLocal(s) => Ok(Expr::Var(*s)),

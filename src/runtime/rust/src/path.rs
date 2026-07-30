@@ -129,6 +129,22 @@ pub fn path_to_string(p: Path) -> String {
     p.0
 }
 
+/// Construct an already-validated `Path` from a pre-cleaned string.
+///
+/// Only the compiler's code generator calls this — exclusively at sites where
+/// a `path "…"` literal has already been validated and cleaned at compile time.
+/// Never expose this function to user Ipê source or use it outside generated
+/// code: it bypasses the parse-don't-validate seal in [`path_from_string`].
+///
+/// The string MUST have come from [`path_from_string`]'s cleaned output (NUL-
+/// free, non-escaping); the compiler enforces this at compile time before
+/// emitting a call here, so no runtime re-check is needed.
+#[must_use]
+#[doc(hidden)]
+pub fn path_literal(cleaned: String) -> Path {
+    Path(cleaned)
+}
+
 /// Borrow the cleaned path string. For the `Ipe.File` kernel boundary, which
 /// needs the `&str` to hand to `std::fs`.
 impl Path {

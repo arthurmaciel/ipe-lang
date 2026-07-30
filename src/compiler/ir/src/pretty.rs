@@ -1685,6 +1685,7 @@ fn write_expr_at(out: &mut String, expr: &Expr, interner: &Interner, level: usiz
         Expr::Bool(b) => line(out, level, &format!("Bool {b}")),
         Expr::Float(f) => line(out, level, &format!("Float {f}")),
         Expr::Str(s) => line(out, level, &format!("Str {s:?}")),
+        Expr::PathLit(s) => line(out, level, &format!("PathLit {s:?}")),
         Expr::Char(c) => line(out, level, &format!("Char '{c}'")),
         Expr::Unit => line(out, level, "Unit"),
         Expr::Var(sym) => line(out, level, &format!("Var {}", sym_name(interner, *sym))),

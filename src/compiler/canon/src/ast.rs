@@ -156,6 +156,17 @@ pub enum Expr_ {
     Str(String),
     /// A character literal `'a'` — carries its single unescaped character's text.
     Char(String),
+    /// A `path "…"` compile-time-validated path literal. The carried [`String`]
+    /// is the CLEANED, NUL-free, non-escaping form that [`path_literal`] can
+    /// safely accept at runtime without re-validation.
+    ///
+    /// The canonicaliser validates the raw source string with
+    /// [`ipe_runtime::path::validate_path_literal`] and stores the cleaned result
+    /// here; an invalid string is a compile error (IPE-P0063) emitted before
+    /// this node is ever constructed.
+    ///
+    /// [`path_literal`]: ipe_runtime::path::path_literal
+    PathLit(String),
     /// The unit value `()` — the sole inhabitant of the unit type. Introduces no
     /// bindings and resolves no names.
     Unit,
