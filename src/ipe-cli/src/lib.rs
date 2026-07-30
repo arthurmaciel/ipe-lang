@@ -3861,6 +3861,38 @@ mod tests {
         );
     }
 
+    /// A compiled-source stdlib module that imports a kernel stdlib module inside
+    /// its own body must not fire IPE-N0034 on those imports.  `Ipe.Money`
+    /// imports `Ipe.String` (a kernel module) and uses `String.*` members
+    /// throughout; the Tier-C import gate must see those imports as satisfied
+    /// when the embedded source is injected and canonicalised.
+    ///
+    /// The `money_parse_currency_maybe` golden exercises `Money.currencyCode`
+    /// (which calls `String.*` internally), making it the ideal witness.
+    #[test]
+    fn compiled_source_stdlib_own_imports_resolve_no_n0034() {
+        let entry = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("tests")
+            .join("golden")
+            .join("money_parse_currency_maybe")
+            .join("Main.ipe");
+        let tree = emit_ir_text(&entry);
+        assert!(
+            tree.is_ok(),
+            "emit-ir must resolve `Ipe.Money` (no IPE-N0034 inside the embedded module): {:?}",
+            tree.as_ref().err()
+        );
+        let Ok(tree) = tree else { return };
+        // The injected module's types must appear — proof the closure was injected,
+        // not merely that the diagnostic was silenced at a shallower stage.
+        assert!(
+            tree.contains("Money") || tree.contains("currency"),
+            "injected `Ipe.Money` members must appear in the IR:\n{tree}"
+        );
+    }
+
     #[test]
     fn machine_applicable_suggestion_is_collected_and_applied() {
         let src = "main = lenght";
