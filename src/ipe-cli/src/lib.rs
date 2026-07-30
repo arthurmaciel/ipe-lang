@@ -418,6 +418,47 @@ pub fn build_with_sibling_discovery_with_options(
     runtime_dir: &Path,
     options: BuildOptions,
 ) -> Result<(), CliError> {
+    let collected = collect_entry_and_siblings(entry)?;
+
+    // No ipe.toml on this path either (sibling discovery is the "no manifest
+    // found" fallback) — default to sqlite, same rationale as `build`.
+    compile_modules(
+        collected.sources,
+        collected.discovered,
+        &collected.entry_module_path,
+        out_dir,
+        runtime_dir,
+        entry,
+        ipe_backend_rust::DbDriver::Sqlite,
+        options,
+    )
+}
+
+/// The entry file and every sibling `.ipe` module discovered in its source
+/// directory, ready to feed the shared compile core.
+struct CollectedSources {
+    sources: BTreeMap<Vec<String>, (PathBuf, String)>,
+    discovered: Vec<project::DiscoveredModule>,
+    entry_module_path: Vec<String>,
+}
+
+/// Collect the entry module plus every sibling `.ipe` file in its source
+/// directory, reading each source once.
+///
+/// This is the file-path shorthand's source-collection step, shared by the
+/// build path ([`build_with_sibling_discovery_with_options`]) and the
+/// single-entry analysis paths ([`lower_entry`], [`emit_ir_text`]) so all
+/// three see the SAME module set — a program that imports a compiled-source
+/// stdlib module resolves identically whether it is built or merely analysed.
+/// It is the equivalent of `Graph.discoverModulesMulti [srcRoot] entryPath` in
+/// `Ipe.Build.Compile.hs`; the compiled-source stdlib closure is injected
+/// downstream (in [`compile_modules_observed`] / [`lower_entry_via_graph`]),
+/// not here, so the injection routine stays single-sourced.
+///
+/// # Errors
+/// [`CliError::Pipeline`] when the entry does not parse; [`CliError::Io`] on
+/// any filesystem failure reading a discovered module.
+fn collect_entry_and_siblings(entry: &Path) -> Result<CollectedSources, CliError> {
     let source = fs::read_to_string(entry).map_err(|e| io_err(entry, e))?;
     let pipeline_err = |diag: Diagnostic| CliError::Pipeline {
         file: entry.to_path_buf(),
@@ -441,9 +482,7 @@ pub fn build_with_sibling_discovery_with_options(
         .filter(|p| p.is_dir())
         .unwrap_or_else(|| Path::new("."));
 
-    // Discover ALL .ipe files in the source root (recursively). This is the
-    // equivalent of `Graph.discoverModulesMulti [srcRoot] entryPath` in
-    // `Ipe.Build.Compile.hs`.
+    // Discover ALL .ipe files in the source root (recursively).
     let mut discovered = project::discover_modules(src_root)?;
 
     // Ensure the entry itself is always in the discovered set, even when its
@@ -473,18 +512,11 @@ pub fn build_with_sibling_discovery_with_options(
         }
     }
 
-    // No ipe.toml on this path either (sibling discovery is the "no manifest
-    // found" fallback) — default to sqlite, same rationale as `build`.
-    compile_modules(
+    Ok(CollectedSources {
         sources,
         discovered,
-        &entry_module_path,
-        out_dir,
-        runtime_dir,
-        entry,
-        ipe_backend_rust::DbDriver::Sqlite,
-        options,
-    )
+        entry_module_path,
+    })
 }
 
 /// Walk up the directory tree from a `.ipe` file's parent, looking for a
@@ -2512,21 +2544,8 @@ fn levenshtein(a: &str, b: &str) -> usize {
 /// Returns [`CliError::Pipeline`] when the compiler rejects the program, or
 /// [`CliError::Io`] when the entry file cannot be read.
 pub fn emit_ir_text(entry: &Path) -> Result<String, CliError> {
-    let source = fs::read_to_string(entry).map_err(|e| io_err(entry, e))?;
-    let pipeline_err = |diag: Diagnostic| CliError::Pipeline {
-        file: entry.to_path_buf(),
-        src: source.clone(),
-        diag,
-    };
-
-    let mut interner = Interner::new();
-    let module = ipe_parse::parse_module(&source, &mut interner).map_err(&pipeline_err)?;
-    let canonical = ipe_canon::canonicalise(&module, &mut interner).map_err(&pipeline_err)?;
-    let types = ipe_types::infer(&canonical, &mut interner).map_err(&pipeline_err)?;
-    // Single-module IR dump: this path has one source file, so the home carried
-    // by the lowering error is redundant — drop it and blame the entry file.
-    let program = ipe_lower::lower(&canonical, &types, &mut interner)
-        .map_err(|(diag, _home)| pipeline_err(diag))?;
+    let (db, program) = lower_entry_via_graph(entry)?;
+    let interner = ipe_db::Db::interner(&db).lock();
     Ok(ipe_ir::pretty(&program, &interner))
 }
 
@@ -2542,17 +2561,54 @@ pub fn emit_ir_text(entry: &Path) -> Result<String, CliError> {
 /// [`CliError::Pipeline`] when the compiler rejects the program;
 /// [`CliError::Io`] when the entry file cannot be read.
 pub(crate) fn lower_entry(entry: &Path) -> Result<ipe_ir::Program, CliError> {
-    let source = fs::read_to_string(entry).map_err(|e| io_err(entry, e))?;
-    let pipeline_err = |diag: Diagnostic| CliError::Pipeline {
-        file: entry.to_path_buf(),
-        src: source.clone(),
-        diag,
+    let (_db, program) = lower_entry_via_graph(entry)?;
+    Ok((*program).clone())
+}
+
+/// Lower a single `.ipe` entry through the SAME injection-aware source-graph
+/// pipeline the build path uses, returning the owning database (its interner
+/// backs any downstream `ipe_ir::pretty`) and the lowered program.
+///
+/// This routes through sibling discovery + compiled-source stdlib injection +
+/// the salsa `lower_program` query rather than a bare single-module
+/// parse→canon→infer→lower. Without injection an entry importing a
+/// compiled-source stdlib module (e.g. `Ipe.Test`) fails name resolution with
+/// IPE-N0004 even though a real `ipe build` of the same program succeeds — the
+/// analysis surfaces (`ipe capabilities`, `ipe build --emit-ir`) must resolve
+/// such a module identically to the build.
+///
+/// # Errors
+/// [`CliError::Pipeline`] carrying the first compiler diagnostic;
+/// [`CliError::Io`] when a source file cannot be read.
+fn lower_entry_via_graph(
+    entry: &Path,
+) -> Result<(ipe_db::IpeDatabase, std::sync::Arc<ipe_ir::Program>), CliError> {
+    let mut collected = collect_entry_and_siblings(entry)?;
+    let injected =
+        project::inject_compiled_std_closure(&mut collected.sources, &mut collected.discovered);
+    let ffi_injected = std::collections::BTreeSet::new();
+
+    let db = ipe_db::IpeDatabase::new();
+    let source_root = create_source_root(&db, &collected.sources, &injected, &ffi_injected);
+    let Some(entry_file) = source_root
+        .files(&db)
+        .get(&collected.entry_module_path)
+        .copied()
+    else {
+        return Err(CliError::Usage("internal: entry module not in source map"));
     };
-    let mut interner = Interner::new();
-    let module = ipe_parse::parse_module(&source, &mut interner).map_err(&pipeline_err)?;
-    let canonical = ipe_canon::canonicalise(&module, &mut interner).map_err(&pipeline_err)?;
-    let types = ipe_types::infer(&canonical, &mut interner).map_err(&pipeline_err)?;
-    ipe_lower::lower(&canonical, &types, &mut interner).map_err(|(diag, _home)| pipeline_err(diag))
+
+    ipe_db::lower_program(&db, source_root, entry_file)
+        .map_err(|(diag, _home)| CliError::Pipeline {
+            file: entry.to_path_buf(),
+            src: collected
+                .sources
+                .get(&collected.entry_module_path)
+                .map(|(_, s)| s.clone())
+                .unwrap_or_default(),
+            diag,
+        })
+        .map(|program| (db, program))
 }
 
 /// `ipe capabilities <entry.ipe>` — print the program's inferred security
@@ -3297,6 +3353,51 @@ mod tests {
             "tree roots at `program`:\n{tree}"
         );
         assert!(tree.contains("main"), "tree names the `main` func:\n{tree}");
+    }
+
+    /// A program importing a compiled-source stdlib module that defines its own
+    /// types (`Ipe.Test`) must resolve its qualified members through the CLI
+    /// analysis path (`ipe build --emit-ir` / `ipe capabilities`), exactly as it
+    /// does through a real `ipe build`. Both share the injection-aware
+    /// source-graph pipeline: the analysis path once ran a bare single-module
+    /// lower that never injected the closure, so `Test.runMain` / `Test.equal`
+    /// failed with IPE-N0004 "unknown module `Test`" here while the build
+    /// succeeded. This pins the CLI<->build parity for compiled-source-with-types
+    /// modules so the divergence cannot return.
+    #[test]
+    fn emit_ir_resolves_compiled_source_stdlib_with_own_types() {
+        let entry = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("tests")
+            .join("golden")
+            .join("test_summary_line_219")
+            .join("Main.ipe");
+        let tree = emit_ir_text(&entry);
+        assert!(
+            tree.is_ok(),
+            "emit-ir must resolve `Ipe.Test` (no IPE-N0004): {:?}",
+            tree.as_ref().err()
+        );
+        let Ok(tree) = tree else { return };
+        // The injected compiled-source module's OWN types + members are present
+        // — proof the closure was injected, not merely that the diagnostic was
+        // silenced.
+        assert!(
+            tree.contains("type TestResult"),
+            "injected `Ipe.Test` types must appear in the IR:\n{tree}"
+        );
+        assert!(
+            tree.contains("runMain"),
+            "`Test.runMain` must resolve to the injected member:\n{tree}"
+        );
+
+        // The same source-graph pipeline backs `ipe capabilities` via
+        // `lower_entry`; it must resolve identically (a pure test program).
+        assert!(
+            lower_entry(&entry).is_ok(),
+            "lower_entry (capabilities path) must resolve `Ipe.Test` too"
+        );
     }
 
     #[test]
