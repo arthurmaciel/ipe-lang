@@ -134,6 +134,7 @@ mod tests {
 
     // ── Locale.fromTag parse boundary ────────────────────────────────────────
 
+    #[cfg(feature = "locale")]
     #[test]
     fn locale_from_valid_tag_is_just() {
         assert!(matches!(
@@ -168,6 +169,7 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "locale")]
     #[test]
     fn locale_round_trip() {
         if let IpeMaybe::Just(loc) = locale_from_tag("en-US".to_owned()) {
