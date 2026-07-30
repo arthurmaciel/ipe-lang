@@ -130,26 +130,10 @@ where the whole TEA loop runs in WebAssembly. See the WASM examples under
 
 A Web app can broadcast a payload on a named topic to every session subscribed
 to it. The bus is in-process: it lives in the running Web/live runtime, so a
-publish reaches every session in the same process. There are two surfaces, in
-two homes, differing only by whether you want a `Task` or a `Cmd`.
+publish reaches every session in the same process.
 
-**`Ipe.PubSub.publish` — the top-level, Task-shaped surface.**
-
-```text
-Ipe.PubSub.publish        : String -> any -> Task Error Int
-Ipe.PubSub.publishNoEcho  : String -> any -> Task Error Int
-```
-
-`publish topic payload` resolves to the number of subscribers that received the
-broadcast. Because it is a `Task`, it composes anywhere a `Task` does — inside
-an `update` via `Cmd.perform`, or wherever else you hold a `Task`. Callable from
-any context, but the broadcast bus only exists while a Web/live app is running
-in the process, so a publish outside one resolves to `Err` (a plain CLI process
-has no bus). It is *not* TEA-loop machinery — it lives at the top level and does
-not mark a module a TEA app. The [`task-publish`](../../examples/shapes/web/task-publish/)
-example fires it from a Web app's `update`.
-
-**`Ipe.Tea.Web.PubSub` — the Web-shape-scoped, Cmd/Sub-shaped surface.**
+`Ipe.Tea.Web.PubSub` is the Web shape's pub/sub surface — the `Cmd`/`Sub` form
+that plugs straight into the managed loop:
 
 ```text
 Ipe.Tea.Web.PubSub.publish         : String -> any -> Cmd msg
@@ -157,11 +141,20 @@ Ipe.Tea.Web.PubSub.publishNoEcho   : String -> any -> Cmd msg
 Ipe.Tea.Web.PubSub.subscribeTopic  : String -> (any -> msg) -> Sub msg
 ```
 
-Reach for this when you are already inside the managed loop and want a `Cmd` or
-`Sub` directly: `publish` returns a `Cmd msg` to hand back from `update`, and
-`subscribeTopic` returns a `Sub msg` to declare in `subscriptions`. These are
-TEA-loop forms, so importing `Ipe.Tea.Web.PubSub` marks the module a TEA app
-(the same [Program/TEA gate](program.md) every `Ipe.Tea.*` import applies).
+`publish` returns a `Cmd msg` to hand back from `update`, and `subscribeTopic`
+returns a `Sub msg` to declare in `subscriptions` — so broadcasting on a topic
+and listening on one are ordinary TEA wiring, with no `Task` plumbing. Importing
+`Ipe.Tea.Web.PubSub` marks the module a TEA app (the same
+[Program/TEA gate](program.md) every `Ipe.Tea.*` import applies).
 
 `publishNoEcho` sets the broker's skip-origin bit: the publishing session's own
 subscription is suppressed. `publish` echoes by default.
+
+**Escape hatch — publishing from a `Task` pipeline.** To publish from outside
+the loop — inside a `Task` chain, or from a plain Program — reach for the
+top-level `Ipe.PubSub` instead: `publish : String -> any -> Task Error Int` (and
+`publishNoEcho`) resolve to the number of subscribers reached. Being a `Task`,
+it composes anywhere a `Task` does and does not mark a module a TEA app; the bus
+only exists while a Web/live app runs, so a publish with none running resolves
+to `Err`. The [`task-publish`](../../examples/shapes/web/task-publish/) example
+fires it from a Web app's `update` via `Cmd.perform`.
