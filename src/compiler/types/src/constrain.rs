@@ -4681,6 +4681,10 @@ impl<'a> Builder<'a> {
             K::RandomFloat => fun(float(), fun(float(), task(float()))),
             K::RandomChoice => fun(list(var(0)), task(var(0))),
 
+            // ── Process ──
+            // `run : String -> List String -> Task Error String`
+            K::ProcessRun => fun(string(), fun(list(string()), task(string()))),
+
             // ── File (remaining) ──
             K::FileReadDir => fun(string(), task(list(string()))),
             K::FileReadFileLimit => fun(string(), fun(int(), task(string()))),
@@ -8537,6 +8541,8 @@ mod registry_phase_c_tests {
             K::WebSocketClose,
             K::WebSocketCloseWithCode,
             K::SubSubscribeWebSocket,
+            // ── Ipe.Process — subprocess execution (no shell) ──
+            K::ProcessRun,
             // ── Ipe.Env — build-time-embedded public config ──
             K::EnvPublic,
             // ── Ipe.Ui.Region — all 8 landmark/live-region attrs ──

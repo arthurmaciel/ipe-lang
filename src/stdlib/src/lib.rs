@@ -62,6 +62,8 @@ const RANDOM: &str = include_str!("../Ipe/Random.ipe");
 const FILE: &str = include_str!("../Ipe/File.ipe");
 /// `Ipe.Http` — outbound HTTP client kernels + pure builders.
 const HTTP: &str = include_str!("../Ipe/Http.ipe");
+/// `Ipe.Process` — subprocess execution (no shell) effect kernels.
+const PROCESS: &str = include_str!("../Ipe/Process.ipe");
 
 /// `Ipe.Path` — pure filesystem-path helpers, compiled-source Layer-3.
 ///
@@ -158,6 +160,10 @@ pub const MODULES: &[StdModule] = &[
     StdModule {
         name: "Ipe.Http",
         source: HTTP,
+    },
+    StdModule {
+        name: "Ipe.Process",
+        source: PROCESS,
     },
 ];
 

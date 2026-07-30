@@ -659,6 +659,8 @@ pub enum StdlibKernel {
     FileCopy,
     FileRename,
     FileDelete,
+    // ── Process ───────────────────────────────────────────────────────────────
+    ProcessRun,
     // ── Http ────────────────────────────────────────────────────────────────
     HttpGet,
     HttpPost,
@@ -2239,6 +2241,8 @@ impl StdlibKernel {
             Self::FileCopy => d("File", "copy", 2, Pure, "file_copy"),
             Self::FileRename => d("File", "rename", 2, Pure, "file_rename"),
             Self::FileDelete => d("File", "delete", 1, Pure, "file_delete"),
+            // ── Process ───────────────────────────────────────────────────────
+            Self::ProcessRun => d("Process", "run", 2, Pure, "process_run"),
             // ── Http ────────────────────────────────────────────────────────
             Self::HttpGet => d("Http", "get", 1, Pure, "http_get"),
             Self::HttpPost => d("Http", "post", 2, Pure, "http_post"),
@@ -3578,6 +3582,8 @@ impl StdlibKernel {
         Self::FileCopy,
         Self::FileRename,
         Self::FileDelete,
+        // Process
+        Self::ProcessRun,
         // Http
         Self::HttpGet,
         Self::HttpPost,
@@ -4474,6 +4480,7 @@ impl StdlibKernel {
             | Self::SystemGetenvBool
             | Self::SystemSetenv
             | Self::SystemUnsetenv => Some(Capability::Env),
+            Self::ProcessRun => Some(Capability::Subprocess),
             Self::TimeNow
             | Self::TimeSleep
             | Self::TimeUnixMillis
@@ -6505,6 +6512,7 @@ mod tests {
             StdlibKernel::DbQuery,
             StdlibKernel::DbConnect,
             StdlibKernel::FileReadFile,
+            StdlibKernel::ProcessRun,
             StdlibKernel::SystemGetenv,
             StdlibKernel::SystemExit,
             StdlibKernel::ServerListen,

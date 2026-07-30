@@ -135,44 +135,183 @@ where
     f()
 }
 
-fn process_run_sync(cmd: &str, args: &[String]) -> Result<std::process::Output, String> {
-    std::process::Command::new(cmd)
+/// The default combined-output capture ceiling (16 MiB), overridable via
+/// `IPE_PROCESS_OUTPUT_MAX` (bytes). A subprocess is a caller-chosen program
+/// that may write without bound (or be attacker-influenced); an uncapped
+/// `Command::output()` buffers ALL of it in memory and can OOM the host. Reading
+/// past the ceiling is an `Err`, never a silent truncation of a returned success
+/// value.
+fn process_output_ceiling() -> u64 {
+    read_env_var("IPE_PROCESS_OUTPUT_MAX")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(16 * 1024 * 1024)
+}
+
+/// The captured result of a subprocess: its combined stdout+stderr (bounded)
+/// and whether it exited successfully. `status` is the display form of the exit
+/// status so the sync helper needs no `std::process` types in its signature.
+struct ProcessCapture {
+    combined: Vec<u8>,
+    success: bool,
+    status: String,
+}
+
+/// RAII owner of a spawned child: guarantees the child is reaped on EVERY exit
+/// path (early `?` return, panic, or normal completion). `std::process::Child`'s
+/// `Drop` does NOT kill or reap, so without this a read error or a bail would
+/// leak a running, unreaped child (a zombie in a long-lived server). `wait()`
+/// takes ownership so the destructor becomes a no-op once the caller has reaped
+/// the child itself on the success path.
+struct ChildGuard(Option<std::process::Child>);
+
+impl ChildGuard {
+    fn get_mut(&mut self) -> Option<&mut std::process::Child> {
+        self.0.as_mut()
+    }
+
+    /// Reap the child ourselves, taking it out of the guard so `Drop` does
+    /// nothing. Returns the exit status.
+    fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        match self.0.take() {
+            Some(mut c) => c.wait(),
+            None => Err(std::io::Error::other("child already reaped")),
+        }
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        if let Some(mut c) = self.0.take() {
+            // The child is still owned here => it was NOT reaped on a normal
+            // path (an error/bail/panic left it running). Kill then reap so no
+            // subprocess is left running and no zombie accumulates.
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
+}
+
+/// Read up to `limit` bytes from `reader` on a dedicated thread. Draining each
+/// pipe on its OWN thread avoids the sequential-drain deadlock: a child that
+/// fills one pipe's kernel buffer while blocking on the other cannot wedge the
+/// capture, because both pipes are drained concurrently. The `take(limit)` bound
+/// caps peak per-stream allocation regardless of how much the child writes.
+/// `limit` is a per-call value (`cap + 1`) passed by ownership, so concurrent
+/// `process_run` calls never share or clobber it.
+fn spawn_capture_thread<R>(
+    reader: Option<R>,
+    limit: u64,
+) -> std::thread::JoinHandle<std::io::Result<Vec<u8>>>
+where
+    R: std::io::Read + Send + 'static,
+{
+    std::thread::spawn(move || {
+        use std::io::Read as _;
+        let mut buf = Vec::new();
+        if let Some(reader) = reader {
+            reader.take(limit).read_to_end(&mut buf)?;
+        }
+        Ok::<_, std::io::Error>(buf)
+    })
+}
+
+/// Spawn `cmd args` with NO shell (direct argv), capturing combined
+/// stdout+stderr under `cap`. stdout and stderr are drained on SEPARATE threads
+/// (no sequential-drain pipe deadlock), each bounded by `take(cap + 1)`; the
+/// combined result over `cap` is an `Err`, never an unbounded allocation.
+/// `stdin` is closed (`Stdio::null`) so a child reading stdin gets EOF and
+/// cannot block the capture. The child is reaped on every exit path via
+/// [`ChildGuard`].
+fn process_run_sync(cmd: &str, args: &[String], cap: u64) -> Result<ProcessCapture, String> {
+    use std::process::{Command, Stdio};
+
+    let child = Command::new(cmd)
         .args(args)
-        .output()
-        .map_err(|e| format!("{cmd}: {e}"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("{cmd}: {e}"))?;
+    let mut guard = ChildGuard(Some(child));
+
+    // Per-stream read bound; passed by value to each capture thread (no shared
+    // global, so concurrent `process_run` calls cannot clobber one another).
+    let limit = cap.saturating_add(1);
+
+    // Take the pipe handles so each thread owns its reader; a `?` before the
+    // joins still reaps the child via `guard`'s `Drop`.
+    let (stdout, stderr) = {
+        let c = guard
+            .get_mut()
+            .ok_or_else(|| format!("{cmd}: child unexpectedly reaped"))?;
+        (c.stdout.take(), c.stderr.take())
+    };
+    let out_handle = spawn_capture_thread(stdout, limit);
+    let err_handle = spawn_capture_thread(stderr, limit);
+
+    // A thread panic (e.g. OOM in the reader) surfaces as an `Err`, never a
+    // propagated panic; `guard` still reaps the child on the `?` return.
+    let mut combined = out_handle
+        .join()
+        .map_err(|_| format!("{cmd}: stdout capture thread panicked"))?
+        .map_err(|e| format!("{cmd}: {e}"))?;
+    let stderr_bytes = err_handle
+        .join()
+        .map_err(|_| format!("{cmd}: stderr capture thread panicked"))?
+        .map_err(|e| format!("{cmd}: {e}"))?;
+    // Combined = stdout then stderr (callers usually treat it as `2>&1`).
+    combined.extend_from_slice(&stderr_bytes);
+
+    if combined.len() as u64 > cap {
+        // `guard`'s `Drop` kills + reaps the still-running child on this bail.
+        return Err(format!(
+            "{cmd}: output exceeds the {cap}-byte capture ceiling \
+             (raise IPE_PROCESS_OUTPUT_MAX)"
+        ));
+    }
+
+    let status = guard.wait().map_err(|e| format!("{cmd}: {e}"))?;
+    Ok(ProcessCapture {
+        combined,
+        success: status.success(),
+        status: format!("{status}"),
+    })
 }
 
 /// `Ipe.Process.run : String -> List String -> Task Error String` — run a
-/// subprocess, returning its combined stdout+stderr. Mirrors Go's `Process_run`
-/// (`exec.Command` + `CombinedOutput`): a non-zero exit or a spawn failure is
-/// `Err` carrying the captured output + the error; a clean exit is `Ok(output)`.
-/// Total — every failure maps to `Err`, never a panic.
+/// subprocess with NO shell (the arguments are a direct `argv` vector, never
+/// passed to `sh -c`, so a caller-controlled argument can never be reinterpreted
+/// as shell syntax — no command injection). Returns the child's combined
+/// stdout+stderr on a clean exit; a non-zero exit or a spawn failure is `Err`
+/// carrying the captured output + the status. Total — every failure maps to
+/// `Err`, never a panic.
 ///
-/// SECURITY: `Process.run` is an intentional Ipê stdlib effect (Task-tier,
-/// parity with the Go backend) — no more permissive than Go's. Sandboxing
-/// untrusted Ipê source (e.g. blocking the `Process.` module) is the calling
-/// application's responsibility, exactly as on Go.
+/// SECURITY: `Process.run` is a server-only capability (`subprocess`):
+/// default-denied under `--target wasm`, and a program that reaches it is tagged
+/// with the `subprocess` capability so a sandbox can isolate it. Captured output
+/// is bounded (`process_output_ceiling`) so an unbounded-output child cannot OOM
+/// the host. Sandboxing which programs may be spawned is the calling
+/// application's responsibility.
 ///
-/// The actual `Command::output()` wait is offloaded via `run_blocking`
-/// (see the module-level doc comment above) so a long-running subprocess
-/// can't stall the tokio worker thread polling this future.
+/// The blocking spawn+wait is offloaded via `run_blocking` (see the module-level
+/// doc comment above) so a long-running subprocess can't stall the tokio worker
+/// thread polling this future.
 #[must_use]
 pub fn process_run<E: Send + From<String> + 'static>(
     cmd: String,
     args: Vec<String>,
 ) -> IpeTask<E, String> {
     Box::pin(async move {
-        // `process_run_sync` already folds `cmd` into its `Err` string (spawn
-        // failure), so the outer `Err` arm (a `run_blocking` `JoinError`,
-        // i.e. the blocking task panicked) doesn't need `cmd` — it's moved
-        // into the closure below.
-        match run_blocking(move || process_run_sync(&cmd, &args)).await {
+        let cap = process_output_ceiling();
+        // `process_run_sync` folds `cmd` into every `Err` string, so the outer
+        // `Err` arm (a `run_blocking` `JoinError`, i.e. the blocking task
+        // panicked) doesn't need `cmd` — it's moved into the closure.
+        match run_blocking(move || process_run_sync(&cmd, &args, cap)).await {
             Ok(out) => {
-                // Go's CombinedOutput: stdout then stderr (callers usually `2>&1`).
-                let mut combined = out.stdout;
-                combined.extend_from_slice(&out.stderr);
-                let text = String::from_utf8_lossy(&combined).into_owned();
-                if out.status.success() {
+                let text = String::from_utf8_lossy(&out.combined).into_owned();
+                if out.success {
                     ok_res(text)
                 } else {
                     // Cap the captured output folded into the Err string: large /
@@ -477,6 +616,80 @@ mod process_run_tests {
         let res: IpeResult<String, String> =
             block(process_run::<String>("false".to_string(), vec![]));
         assert!(matches!(res, IpeResult::Err(_)));
+    }
+
+    /// No-shell proof: an argument containing shell metacharacters is passed
+    /// literally as an argv element, never evaluated by `sh -c`. `printf %s`
+    /// echoes it verbatim; a shell would have run the `; touch <marker>` clause
+    /// (creating the file) and would NOT echo the clause back verbatim.
+    #[test]
+    fn args_are_literal_no_shell_interpretation() {
+        let marker = std::env::temp_dir().join(format!("ipe_noshell_{}", std::process::id()));
+        let _ = std::fs::remove_file(&marker);
+        let payload = format!("; touch {} ; echo pwned", marker.display());
+        let res: IpeResult<String, String> = block(process_run::<String>(
+            "printf".to_string(),
+            vec!["%s".to_string(), payload.clone()],
+        ));
+        let marker_created = marker.exists();
+        let _ = std::fs::remove_file(&marker);
+        match res {
+            IpeResult::Ok(s) => {
+                // The whole payload is echoed back verbatim (one argv element),
+                // proving no `sh -c` split it on `;`.
+                assert_eq!(s, payload, "argv must be passed literally (no shell)");
+            }
+            IpeResult::Err(e) => panic!("unexpected Err: {e}"),
+        }
+        assert!(
+            !marker_created,
+            "the `; touch` clause ran — argv was evaluated by a shell (injection)"
+        );
+    }
+
+    /// Deadlock regression: a child that writes a LOT to BOTH stdout and stderr
+    /// (each well past a 64 KiB pipe buffer) must complete, not wedge. The
+    /// sequential stdout-then-stderr drain would deadlock here — the child
+    /// blocks on a full stderr pipe while we drain stdout, and vice versa. The
+    /// concurrent per-stream capture threads make this terminate.
+    #[test]
+    fn large_stdout_and_stderr_does_not_deadlock() {
+        // `sh` is the program under test (invoked as an argv vector, not via
+        // this kernel's own shell — there is none): it writes ~512 KiB to each
+        // stream, far exceeding the ~64 KiB kernel pipe buffer.
+        let script = "yes ABCDEFGH | head -c 524288; yes abcdefgh | head -c 524288 >&2";
+        let res: IpeResult<String, String> = block(process_run::<String>(
+            "sh".to_string(),
+            vec!["-c".to_string(), script.to_string()],
+        ));
+        match res {
+            IpeResult::Ok(s) => assert_eq!(
+                s.len(),
+                524288 * 2,
+                "combined output must be both streams in full"
+            ),
+            IpeResult::Err(e) => panic!("large dual-stream output must not deadlock/err: {e}"),
+        }
+    }
+
+    /// DoS guard: a subprocess whose combined output exceeds the capture
+    /// ceiling must `Err`, never buffer it all and OOM the host, and never
+    /// silently truncate a returned success value.
+    #[test]
+    fn output_over_ceiling_errs() {
+        // SAFETY: test-only env mutation; `set_var`/`remove_var` are `unsafe` in
+        // Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::set_var("IPE_PROCESS_OUTPUT_MAX", "8") };
+        let res: IpeResult<String, String> = block(process_run::<String>(
+            "printf".to_string(),
+            vec!["%s".to_string(), "x".repeat(64)],
+        ));
+        // SAFETY: test-only env mutation; see above.
+        unsafe { std::env::remove_var("IPE_PROCESS_OUTPUT_MAX") };
+        assert!(
+            matches!(res, IpeResult::Err(_)),
+            "64 bytes of output under an 8-byte ceiling must Err, not OOM/truncate"
+        );
     }
 }
 

@@ -150,6 +150,58 @@ fn server_only_kernel_fails_at_compile_time() {
     );
 }
 
+/// `Ipe.Process` is a server-only subprocess capability: naming `Process.run`
+/// under `--target wasm` is a compile error (IPE-N0029), so no browser bundle
+/// can ever spawn a child process and no cargo-time failure can occur (THE
+/// SEAL). Sibling of `server_only_kernel_fails_at_compile_time` for the new
+/// subprocess axis.
+#[test]
+#[allow(clippy::panic)] // test assertion: a non-pipeline error variant IS the failure
+fn process_run_is_denied_under_wasm() {
+    let dir = scratch("wasm_gate_process_red");
+    let entry = write_entry(
+        &dir.join("srcdir"),
+        "module Main exposing (main)\n\
+         import Ipe.Prelude exposing (..)\n\
+         import Ipe.Process as Process\n\
+         import Ipe.Task as Task\n\
+         \n\
+         main =\n\
+         \x20   Process.run \"ls\" []\n",
+    );
+    let out = dir.join("out");
+    let err = build_wasm(&entry, &out).expect_err("Process.run must be denied under wasm");
+    let CliError::Pipeline { diag, .. } = err else {
+        panic!("expected a pipeline diagnostic, got: {err:?}");
+    };
+    let rendered = format!("{diag:?}");
+    assert!(
+        rendered.contains("ServerOnlyKernelForWasm"),
+        "expected IPE-N0029 ServerOnlyKernelForWasm, got: {rendered}"
+    );
+}
+
+/// The same subprocess program builds cleanly for the native target — the gate
+/// is target-keyed, not a global restriction.
+#[test]
+fn process_run_still_builds_natively() {
+    let dir = scratch("wasm_gate_process_native_ok");
+    let entry = write_entry(
+        &dir.join("srcdir"),
+        "module Main exposing (main)\n\
+         import Ipe.Prelude exposing (..)\n\
+         import Ipe.Process as Process\n\
+         import Ipe.Task as Task\n\
+         \n\
+         main =\n\
+         \x20   Process.run \"ls\" []\n",
+    );
+    let out = dir.join("out");
+    let runtime = ipe::resolve_runtime().expect("runtime must resolve");
+    ipe::build_with_options(&entry, &out, &runtime, BuildOptions::default())
+        .expect("native build of Process.run must stay green");
+}
+
 /// M5 Layer 2 (IPE-N0030): a client entry that transitively imports a
 /// server-classified module (never names the server kernel itself) fails
 /// with the EXACT import chain — `Main(client) -> View(shared) ->
