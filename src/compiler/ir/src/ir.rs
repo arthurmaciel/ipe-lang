@@ -894,6 +894,17 @@ pub enum IrType {
     /// pattern matching without a range-check.
     Order,
 
+    /// `Ipe.Http.HttpMethod` — the closed ADT for HTTP verbs.
+    ///
+    /// Renders as `ipe_runtime::HttpMethod` (a `#[derive(Clone, Copy, Debug,
+    /// PartialEq, Eq)]` enum with seven variants: `Get / Post / Put / Delete /
+    /// Patch / Head / Options`).  Constructors emit as
+    /// `ipe_runtime::HttpMethod::Get` etc. via the `builtin_runtime_enum` path
+    /// — no synthetic `EnumDef` is injected.  The lowerer registers `HttpMethod`
+    /// as a pre-interned nominal (like `Order` / `Decimal`) so any `Ty::Con`
+    /// with name `"HttpMethod"` and empty module path folds to this variant.
+    HttpMethod,
+
     /// `Ipe.Decimal` — arbitrary-precision decimal arithmetic.
     ///
     /// Renders as `ipe_runtime::decimal::Decimal` (newtype around
@@ -1228,6 +1239,7 @@ pub fn ir_type_is_derivable(
         // (constant-time equality, always-redacting Debug — see its own doc)
         // — fully derivable, not serde (see `ir_type_is_serde`).
         | IrType::Order
+        | IrType::HttpMethod
         | IrType::Decimal
         | IrType::ErrorKind
         | IrType::Error
@@ -1377,7 +1389,9 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         // Model's `historyError : Maybe Error` field). The nominal payload
         // types `IpeErrorInfo`/`IpePanicInfo`/`IpeTypeInfo` derive serde for
         // the same reason (they ride inside `Error`; SEAL fix).
+        // `HttpMethod` derives serde (unit-variant enum, maps to/from string).
         | IrType::Order
+        | IrType::HttpMethod
         | IrType::Decimal
         | IrType::ErrorKind
         | IrType::Error
@@ -1521,6 +1535,7 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         | IrType::Bytes
         | IrType::Json
         | IrType::Order
+        | IrType::HttpMethod
         | IrType::Decimal
         | IrType::ErrorKind
         | IrType::Error

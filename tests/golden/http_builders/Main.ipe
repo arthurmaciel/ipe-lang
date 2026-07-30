@@ -1,6 +1,6 @@
 module Main exposing (main)
 
-import Ipe.Http as Http
+import Ipe.Http as Http exposing (HttpMethod(..))
 import Ipe.Io as Io
 import Ipe.List
 import Ipe.String
@@ -10,6 +10,8 @@ import Ipe.String
 -- Http.withTimeout / Http.withHeader / Http.withBody all resolve through the
 -- kernel dispatch path and produce a correctly-shaped HttpRequest record.
 -- withHeader PREPENDS (latest-added first) — B:2 appears before A:1.
+-- `method` is now the `HttpMethod` ADT; `Http.methodToString` converts it to
+-- the canonical uppercase string for printing.
 
 
 headerStr : ( String, String ) -> String
@@ -18,9 +20,9 @@ headerStr pair =
         ( k, v ) -> k ++ ":" ++ v
 
 
-printReq : { body : String, followRedirects : Bool, headers : List ( String, String ), maxRedirects : Int, method : String, timeout : Int, url : String } -> String
+printReq : { body : String, followRedirects : Bool, headers : List ( String, String ), maxRedirects : Int, method : Http.HttpMethod, timeout : Int, url : String } -> String
 printReq req =
-    String.join "\n" [ req.method, req.url, String.fromInt req.timeout, req.body, String.join "," (List.map headerStr req.headers) ]
+    String.join "\n" [ Http.methodToString req.method, req.url, String.fromInt req.timeout, req.body, String.join "," (List.map headerStr req.headers) ]
 
 
 main =
@@ -30,5 +32,5 @@ main =
                 (Http.withHeader "B" "2"
                     (Http.withHeader "A" "1"
                         (Http.withTimeout 5000
-                            (Http.withMethod "POST"
+                            (Http.withMethod Http.Post
                                 (Http.defaultRequest "http://example.com")))))))

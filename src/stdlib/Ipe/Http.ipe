@@ -1,11 +1,17 @@
 -- | Ipe.Http — outbound HTTP client (Layer 3 Ipe source, M5b).
 --
 -- `get` / `post` / `request` are effects (Task Error HttpResponse). The
--- runtime (`ipe_runtime::http_client`) is the PARSE boundary: it parses
--- the method (reqwest `Method::from_bytes`), the URL, enforces the SSRF
--- guard, body cap, timeout floor, and error redaction. These records are
--- transport DTOs carried to that boundary; downstream code MUST NOT
--- re-validate.
+-- runtime (`ipe_runtime::http_client`) is the PARSE boundary: it validates
+-- the URL, enforces the SSRF guard, body cap, timeout floor, and error
+-- redaction. These records are transport DTOs carried to that boundary;
+-- downstream code MUST NOT re-validate.
+--
+-- `HttpMethod` is a closed ADT — make-invalid-states-unrepresentable for
+-- HTTP verbs. `methodFromString` is the single typed parse boundary for
+-- inbound method strings (e.g. parsed from a server request line);
+-- `methodToString` recovers the canonical uppercase string for logging or
+-- forwarding. Unknown verbs surface as `Nothing` at the parse boundary,
+-- never as a silent default.
 --
 -- `parseQuery` is pure: trims a leading `?`, splits on `&`/`=`,
 -- percent-decodes, first-key-wins, returns a `Dict String String` (no
@@ -16,10 +22,13 @@
 -- reference compiler's Ipe.Http.ipe behaviour — latest-added header
 -- is first in the list.
 module Ipe.Http exposing
-    ( HttpRequest
+    ( HttpMethod(..)
+    , HttpRequest
     , HttpResponse
     , defaultRequest
     , get
+    , methodFromString
+    , methodToString
     , parseQuery
     , post
     , request
@@ -35,9 +44,23 @@ module Ipe.Http exposing
 
 import Ipe.Dict exposing (Dict)
 import Ipe.Ffi as Ffi
+import Ipe.Maybe exposing (Maybe)
 
 
 -- ── Types ─────────────────────────────────────────────────────────────────────
+
+
+-- | Closed set of HTTP methods.  Use constructors directly in client code;
+-- use `methodFromString` only at inbound parse boundaries (e.g. routing
+-- layers that receive a raw method string from the network).
+type HttpMethod
+    = Get
+    | Post
+    | Put
+    | Delete
+    | Patch
+    | Head
+    | Options
 
 
 type alias HttpResponse =
@@ -45,7 +68,7 @@ type alias HttpResponse =
 
 
 type alias HttpRequest =
-    { method : String
+    { method : HttpMethod
     , url : String
     , body : String
     , headers : List ( String, String )
@@ -78,12 +101,32 @@ parseQuery =
     Ffi.kernel "Http_parseQuery"
 
 
+-- ── HttpMethod helpers ────────────────────────────────────────────────────────
+
+
+-- | `methodFromString s` — the single typed parse boundary for inbound method
+-- strings.  Returns `Just` the matching constructor for the seven standard
+-- verbs (case-insensitive); returns `Nothing` for any unrecognised string.
+-- Never silently defaults.
+methodFromString : String -> Maybe HttpMethod
+methodFromString =
+    Ffi.kernel "Http_methodFromString"
+
+
+-- | `methodToString m` — the canonical uppercase string for `m`
+-- (e.g. `Get` → `"GET"`).  Use for logging or forwarding; the request
+-- runtime converts `HttpMethod` to the reqwest `Method` internally.
+methodToString : HttpMethod -> String
+methodToString =
+    Ffi.kernel "Http_methodToString"
+
+
 -- ── Pure builders ─────────────────────────────────────────────────────────────
 
 
 defaultRequest : String -> HttpRequest
 defaultRequest url =
-    { method = "GET"
+    { method = Get
     , url = url
     , body = ""
     , headers = []
@@ -93,7 +136,7 @@ defaultRequest url =
     }
 
 
-withMethod : String -> HttpRequest -> HttpRequest
+withMethod : HttpMethod -> HttpRequest -> HttpRequest
 withMethod m req =
     { req | method = m }
 

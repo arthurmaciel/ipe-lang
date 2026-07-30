@@ -214,6 +214,8 @@ struct Builtins {
     http_f_status: Symbol,
     /// `"method"` — `HttpRequest` only.
     http_f_method: Symbol,
+    /// `"HttpMethod"` — the `Ipe.Http.HttpMethod` ADT type constructor.
+    http_method: Symbol,
     /// `"url"` — `HttpRequest` only.
     http_f_url: Symbol,
     /// `"timeout"` — `HttpRequest` only.
@@ -605,6 +607,7 @@ impl Builtins {
             migration_f_name: interner.intern("name")?,
             migration_f_sql: interner.intern("sql")?,
             http_f_method: interner.intern("method")?,
+            http_method: interner.intern("HttpMethod")?,
             http_f_url: interner.intern("url")?,
             http_f_timeout: interner.intern("timeout")?,
             http_f_follow_redirects: interner.intern("followRedirects")?,
@@ -2476,6 +2479,7 @@ impl<'a> Builder<'a> {
                     let string = || mk(self.builtins.string);
                     let int = || mk(self.builtins.int);
                     let bool_ty = || mk(self.builtins.bool);
+                    let http_method_ty = || mk(self.builtins.http_method);
                     let list = |t: Ty| Ty::Con {
                         module: Vec::new(),
                         name: self.builtins.list,
@@ -2489,7 +2493,7 @@ impl<'a> Builder<'a> {
                         list(Ty::Tuple(vec![string(), string()])),
                     );
                     req_fields.insert(self.builtins.http_f_max_redirects, int());
-                    req_fields.insert(self.builtins.http_f_method, string());
+                    req_fields.insert(self.builtins.http_f_method, http_method_ty());
                     req_fields.insert(self.builtins.http_f_timeout, int());
                     req_fields.insert(self.builtins.http_f_url, string());
                     Ok(Ty::Record(req_fields, RowTail::Closed))
@@ -4140,7 +4144,19 @@ impl<'a> Builder<'a> {
             resp_fields.insert(self.builtins.http_f_status, int());
             Ty::Record(resp_fields, RowTail::Closed)
         };
+        // `HttpMethod` — the closed ADT (`Get | Post | Put | Delete | Patch |
+        // Head | Options`).  Like `Order` and `Decimal`, it is known to the
+        // type system as a zero-argument constructor with an empty module path
+        // (builtins-like treatment; the Ipê source defines it in `Ipe.Http`
+        // but the compiler folds it as a pre-interned nominal, analogous to
+        // how `Order` is defined in `Ipe.Basics` but treated as a builtin here).
+        let http_method_ty = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.http_method,
+            args: Vec::new(),
+        };
         // `HttpRequest = { body, followRedirects, headers, maxRedirects, method, timeout, url }`
+        // `method` is now `HttpMethod` (ADT), not `String`.
         let http_request = || {
             let mut req_fields = BTreeMap::new();
             req_fields.insert(self.builtins.http_f_body, string());
@@ -4150,7 +4166,7 @@ impl<'a> Builder<'a> {
                 list(tuple2(string(), string())),
             );
             req_fields.insert(self.builtins.http_f_max_redirects, int());
-            req_fields.insert(self.builtins.http_f_method, string());
+            req_fields.insert(self.builtins.http_f_method, http_method_ty());
             req_fields.insert(self.builtins.http_f_timeout, int());
             req_fields.insert(self.builtins.http_f_url, string());
             Ty::Record(req_fields, RowTail::Closed)
@@ -4723,7 +4739,9 @@ impl<'a> Builder<'a> {
             K::HttpRequest => fun(http_request(), task(http_response())),
             K::HttpParseQuery => fun(string(), dict(string(), string())),
             K::HttpDefaultRequest => fun(string(), http_request()),
-            K::HttpWithMethod => fun(string(), fun(http_request(), http_request())),
+            K::HttpWithMethod => fun(http_method_ty(), fun(http_request(), http_request())),
+            K::HttpMethodFromString => fun(string(), maybe(http_method_ty())),
+            K::HttpMethodToString => fun(http_method_ty(), string()),
             K::HttpWithTimeout => fun(int(), fun(http_request(), http_request())),
             K::HttpWithBody => fun(string(), fun(http_request(), http_request())),
             K::HttpWithHeader => fun(string(), fun(string(), fun(http_request(), http_request()))),

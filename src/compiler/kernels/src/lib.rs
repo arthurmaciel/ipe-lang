@@ -680,6 +680,11 @@ pub enum StdlibKernel {
     /// `Http.withMaxRedirects : Int -> HttpRequest -> HttpRequest` — pure
     /// builder (Go parity).
     HttpWithMaxRedirects,
+    /// `Http.methodFromString : String -> Maybe HttpMethod` — typed parse
+    /// boundary; `Nothing` for unrecognised verbs.
+    HttpMethodFromString,
+    /// `Http.methodToString : HttpMethod -> String` — canonical uppercase string.
+    HttpMethodToString,
     // ── Db ──────────────────────────────────────────────────────────────────
     DbConnect,
     DbOpen,
@@ -2284,6 +2289,16 @@ impl StdlibKernel {
                 Pure,
                 "http_with_max_redirects",
             ),
+            Self::HttpMethodFromString => d(
+                "Http",
+                "methodFromString",
+                1,
+                Pure,
+                "http_method_from_string",
+            ),
+            Self::HttpMethodToString => {
+                d("Http", "methodToString", 1, Pure, "http_method_to_string")
+            }
             // ── Db ──────────────────────────────────────────────────────────
             Self::DbConnect => d("Db", "connect", 1, Db, "db_connect"),
             Self::DbOpen => d("Db", "open", 2, Db, "db_open"),
@@ -5353,7 +5368,11 @@ impl StdlibKernel {
             | Self::ConfigDict
             | Self::ConfigDecodeToml
             | Self::ConfigDecodeYaml
-            | Self::ConfigDecodeJson => None,
+            | Self::ConfigDecodeJson
+            // `HttpMethodFromString` / `HttpMethodToString` are pure converters —
+            // no network or I/O side-effect, capability = None.
+            | Self::HttpMethodFromString
+            | Self::HttpMethodToString => None,
         }
     }
 
