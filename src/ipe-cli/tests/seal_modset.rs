@@ -77,8 +77,9 @@ const CMD_PUBLISH: &str = "module Main exposing (main)\n\
     import Ipe.Prelude exposing (..)\n\
     import Ipe.Cmd as Cmd\n\
     import Ipe.Io as Io\n\
+    import Ipe.PubSub as PubSub\n\
     pubCmd : Cmd msg\n\
-    pubCmd = Cmd.publish \"topic\" \"hello\"\n\
+    pubCmd = Cmd.publish (PubSub.topic \"topic\") \"hello\"\n\
     main = Io.println \"cmdpublish\"\n";
 
 /// `Sub.subscribeTopic` with no Web kernel. `sub_subscribe_topic` lives in
@@ -87,9 +88,10 @@ const SUB_SUBSCRIBE: &str = "module Main exposing (main)\n\
     import Ipe.Prelude exposing (..)\n\
     import Ipe.Sub as Sub\n\
     import Ipe.Io as Io\n\
+    import Ipe.PubSub as PubSub\n\
     type Msg = Got String\n\
     subFor : Sub Msg\n\
-    subFor = Sub.subscribeTopic \"topic\" Got\n\
+    subFor = Sub.subscribeTopic (PubSub.topic \"topic\") Got\n\
     main = Io.println \"subtopic\"\n";
 
 /// `Web.renderStatic` from a CLI `main` (web WITHOUT any TEA/server kernel).

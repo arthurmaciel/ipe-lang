@@ -6249,6 +6249,14 @@ pub fn emit_expr_at(
                 {
                     return Ok(result);
                 }
+                // `PubSub.topic : String -> Topic a` erases to the identity
+                // function at runtime — `Topic a` lowers to `Str`, so the
+                // call emits as the argument directly (no Rust runtime call needed).
+                if matches!(callee, Callee::Kernel(KernelFn::PubSubTopic))
+                    && let [name_arg] = args.as_slice()
+                {
+                    return emit_expr_at(ctx, name_arg, indent, child, generics);
+                }
                 // Dict.get borrows semantics: the runtime takes the HashMap by
                 // value, but Ipê dicts are persistent — the same dict binding may
                 // be passed to multiple Dict.get calls in one let-chain (e.g.

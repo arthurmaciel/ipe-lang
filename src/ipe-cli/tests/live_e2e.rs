@@ -861,9 +861,12 @@ fn live_routed_app_build_only() -> Result<(), BoxError> {
 /// diagnostic.
 ///
 /// Kernels exercised:
-/// - `Cmd.publish : String -> Dict String String -> Cmd msg`
-/// - `Sub.subscribeTopic : String -> (Dict String String -> msg) -> Sub msg`
+/// - `Cmd.publish : Topic a -> a -> Cmd msg`
+/// - `Sub.subscribeTopic : Topic a -> (a -> msg) -> Sub msg`
 ///   (exercised here as the natural pair to `Cmd.publish`)
+///
+/// Both publisher and subscriber share `chatTopic : Topic (Dict String String)`,
+/// enforcing payload-type agreement at compile time.
 ///
 /// A successful `ipe` + `cargo build` is the assertion.  Without pub/sub
 /// wiring the compiler would emit a `CompilerBug` diagnostic on `Cmd.publish`
@@ -886,6 +889,7 @@ import Ipe.String
 import Ipe.List
 import Ipe.Dict
 import Ipe.Maybe
+import Ipe.PubSub as PubSub exposing (Topic)
 
 type Msg
     = BroadcastMsg (Dict String String)
@@ -896,9 +900,9 @@ type alias Model =
     , received : List String
     }
 
-chatTopic : String
+chatTopic : Topic (Dict String String)
 chatTopic =
-    "chat"
+    PubSub.topic "chat"
 
 init : a -> ( Model, Cmd Msg )
 init _req =
@@ -966,10 +970,11 @@ fn live_pubsub_cmd_publish_and_sub_subscribe_topic_build_only() -> Result<(), Bo
 /// Regression: `Cmd.publish` / `Cmd.publishNoEcho` must accept a record payload
 /// (or any Ipê value), not only `Dict String String`.
 ///
-/// The constrain scheme is `String -> any -> Cmd msg` (var(1) for payload),
-/// matching the reference runtime which is generic in T. A narrower `String ->
-/// Dict String String -> Cmd msg` scheme would reject publishing `{ count :
-/// Int, name : String }` with IPE-T0001 (type mismatch).
+/// The constrain scheme is `Topic a -> a -> Cmd msg` (var(1) for payload),
+/// matching the reference runtime which is generic in T. A narrower scheme
+/// would reject publishing `{ count : Int, name : String }` with IPE-T0001
+/// (type mismatch).  The `Topic a` handle binds the publisher and subscriber
+/// to the same payload type `a` at compile time.
 ///
 /// This test also asserts `cargo build` succeeds — verifying the re-export
 /// (`cmd_publish`, `cmd_publish_no_echo` in `RUNTIME_MOD_RS_LIVE_APPEND`) is
@@ -982,6 +987,7 @@ import Ipe.Cmd
 import Ipe.Sub
 import Ipe.String
 import Ipe.List
+import Ipe.PubSub as PubSub exposing (Topic)
 
 type alias CartItem =
     { count : Int
@@ -996,9 +1002,9 @@ type alias Model =
     { items : List CartItem
     }
 
-cartTopic : String
+cartTopic : Topic CartItem
 cartTopic =
-    "cart"
+    PubSub.topic "cart"
 
 init : a -> ( Model, Cmd Msg )
 init _req =
