@@ -29,7 +29,7 @@
 
 use super::IpeResult;
 use crate::core::IpeMaybe;
-use url::{form_urlencoded, Url as UrlCrate};
+use url::{Url as UrlCrate, form_urlencoded};
 
 /// `Ipe.Url`'s opaque, validated newtype. See the module doc for the
 /// construction contract. The wrapped `url::Url` is always an absolute,
@@ -163,7 +163,10 @@ mod tests {
     fn valid_url_parses_and_exposes_typed_components() {
         let u = parse("https://user@example.com:8443/a/b?q=1#frag");
         assert_eq!(url_scheme(u.clone()), "https");
-        assert_eq!(url_host(u.clone()), IpeMaybe::Just("example.com".to_string()));
+        assert_eq!(
+            url_host(u.clone()),
+            IpeMaybe::Just("example.com".to_string())
+        );
         assert_eq!(url_port(u.clone()), IpeMaybe::Just(8443));
         assert_eq!(url_path(u.clone()), "/a/b");
         assert_eq!(url_query(u.clone()), IpeMaybe::Just("q=1".to_string()));

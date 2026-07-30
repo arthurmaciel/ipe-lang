@@ -585,6 +585,7 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Markdown",
         source: STD_MARKDOWN,
+    },
     // Ipe.Url — Layer-3 source, `Ffi.kernel "Url_*"` aliases route to the
     // registered pure `Url*` kernels (`ipe_runtime::url::*`).
     CompiledStdModule {

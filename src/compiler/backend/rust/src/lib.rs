@@ -1613,14 +1613,10 @@ fn collect_record_shapes(
         | IrType::ErrorInfo
         | IrType::PanicInfo
         | IrType::TypeInfo
-        // `SqlFragment` is an opaque query-building value — no
-        // record shape.
-        // `Secret` is an opaque sealed string wrapper — no
-        // record shape.
+        // `SqlFragment`/`Secret`/`Path`/`Url` are opaque wrappers — no record shape.
         | IrType::SqlFragment
         | IrType::Secret
         | IrType::Path
-        // `Url` is an opaque validated URL wrapper — no record shape.
         | IrType::Url
         // Cache config / stats + Csv document are folded to nominal runtime
         // structs — no structural record shape to synthesise.
@@ -1628,8 +1624,7 @@ fn collect_record_shapes(
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
         | IrType::CsvDoc
-        // Ipe.Email records + provider ADT are folded to nominal runtime
-        // structs — no structural record shape to synthesise.
+        // Ipe.Email records + provider ADT fold to nominal runtime structs — no shape.
         | IrType::EmailMessage
         | IrType::EmailAttachment
         | IrType::EmailSesConfig
@@ -1641,14 +1636,10 @@ fn collect_record_shapes(
         | IrType::EmailAddress => {}
         // `WebRoute page` is page-parametric — descend in case the page type
         // carries a nested record shape.
-        IrType::WebRoute(page) => {
-            collect_record_shapes(interner, page, shapes)?;
-        }
+        IrType::WebRoute(page) => collect_record_shapes(interner, page, shapes)?,
         // `Ui { ctor, msg }` is a msg-parametric wrapper — descend into
         // `msg` in case it carries a nested record (e.g. `Element { x : Int }`).
-        IrType::Ui { msg, .. } => {
-            collect_record_shapes(interner, msg, shapes)?;
-        }
+        IrType::Ui { msg, .. } => collect_record_shapes(interner, msg, shapes)?,
     }
     Ok(())
 }
