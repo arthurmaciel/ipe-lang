@@ -862,6 +862,158 @@ pub fn create_source_root(
     ipe_db::SourceRoot::new(db, file_handles)
 }
 
+/// Intern each module path in `sources` to build the module-home →
+/// `(file, src)` blame map every span-attribution step reads. The lookups run
+/// against symbols `canonicalize` already interned, so this cannot append a new
+/// symbol and cannot perturb interning order (the golden byte-identity SEAL).
+fn home_to_source_map(
+    interner: &ipe_db::SharedInterner,
+    sources: &BTreeMap<Vec<String>, (PathBuf, String)>,
+) -> BTreeMap<Vec<ipe_intern::Symbol>, (PathBuf, String)> {
+    let mut guard = interner.lock();
+    let mut map = BTreeMap::new();
+    for (str_path, (file, src)) in sources {
+        let sym_path: Result<Vec<_>, _> = str_path.iter().map(|s| guard.intern(s)).collect();
+        if let Ok(sym_path) = sym_path {
+            map.insert(sym_path, (file.clone(), src.clone()));
+        }
+    }
+    map
+}
+
+/// Map a diagnostic span (byte offsets into its *home* module's source) to the
+/// `(file, src)` pair that source is rendered against.
+///
+/// Every span in a def's body is a byte offset into that def's home module —
+/// preserved across `link`. Among all defs whose `body_span` contains the
+/// target span, prefer the one whose `body_span.lo` is *closest* to `span.lo`
+/// (the def starting nearest the failing expression); width is the secondary
+/// tiebreaker (narrower body wins on a tie). Union constructor spans live in
+/// the union's home byte-namespace, outside any def body, so they are scanned
+/// too — without this a `lower_enum` error (IPE-L0102 / IPE-L0114) would fall
+/// back to the entry file at a coincidental byte offset.
+///
+/// The closest-lo criterion is what keeps this from picking a numerically
+/// narrower def in a *different* module (a different byte namespace): same-module
+/// defs share a byte namespace, so the intended def almost always has the
+/// smaller distance from its own `lo`. Falls back to `entry` when no def or
+/// constructor encloses the span (e.g. a `CompilerBug` with `Span::DUMMY`).
+fn source_for_span_in_linked(
+    linked: &ipe_canon::ast::Module,
+    home_to_source: &BTreeMap<Vec<ipe_intern::Symbol>, (PathBuf, String)>,
+    entry: &(PathBuf, String),
+    span: ipe_diagnostics::Span,
+) -> (PathBuf, String) {
+    if span == ipe_diagnostics::Span::DUMMY {
+        return entry.clone();
+    }
+    // (lo_dist, width, home)
+    let mut best: Option<(u32, u32, &[ipe_intern::Symbol])> = None;
+    for def in &linked.defs {
+        let body_span = match def {
+            ipe_canon::ast::Def::Untyped { body, .. } | ipe_canon::ast::Def::Typed { body, .. } => {
+                body.span
+            }
+        };
+        if body_span.lo <= span.lo && span.hi <= body_span.hi {
+            let lo_dist = span.lo.saturating_sub(body_span.lo);
+            let width = body_span.hi.saturating_sub(body_span.lo);
+            if best.is_none_or(|(prev_dist, prev_w, _)| {
+                lo_dist < prev_dist || (lo_dist == prev_dist && width < prev_w)
+            }) {
+                best = Some((lo_dist, width, def.home()));
+            }
+        }
+    }
+    for union in &linked.unions {
+        for ctor in &union.ctors {
+            if ctor.span.lo <= span.lo && span.hi <= ctor.span.hi {
+                let lo_dist = span.lo.saturating_sub(ctor.span.lo);
+                let width = ctor.span.hi.saturating_sub(ctor.span.lo);
+                if best.is_none_or(|(prev_dist, prev_w, _)| {
+                    lo_dist < prev_dist || (lo_dist == prev_dist && width < prev_w)
+                }) {
+                    best = Some((lo_dist, width, union.home.as_slice()));
+                }
+            }
+        }
+    }
+    best.and_then(|(_, _, home)| home_to_source.get(home))
+        .cloned()
+        .unwrap_or_else(|| entry.clone())
+}
+
+/// Attribute a `(diag, home)` query error to the source file that OWNS it.
+///
+/// A non-empty `home` resolves DIRECTLY via `home_to_source` (O(log N), exact);
+/// an empty home (homeless backend/emit error, or a non-solver error) falls
+/// back to the byte-offset heuristic over the linked program. This is the
+/// single attribution rule every post-link pipeline error shares, so `ipe build`
+/// and `ipe check` frame the identical diagnostic against the identical source.
+fn attribute_post_link_error(
+    linked: &ipe_canon::ast::Module,
+    home_to_source: &BTreeMap<Vec<ipe_intern::Symbol>, (PathBuf, String)>,
+    entry: &(PathBuf, String),
+    diag: Diagnostic,
+    home: &[ipe_intern::Symbol],
+) -> CliError {
+    let (file, src) = if home.is_empty() {
+        source_for_span_in_linked(linked, home_to_source, entry, diag_span(&diag))
+    } else {
+        home_to_source.get(home).cloned().unwrap_or_else(|| {
+            source_for_span_in_linked(linked, home_to_source, entry, diag_span(&diag))
+        })
+    };
+    CliError::Pipeline { file, src, diag }
+}
+
+/// Demand `canonicalize` for every module in dep-first order, attributing a
+/// canon error (e.g. IPE-N0020 module-not-found) to the source file of the
+/// module that produced it. A canon error fires *before* `link`, so there is no
+/// linked program to run the byte-offset heuristic against; the module whose
+/// `canonicalize` fails IS the owner, so blaming that module's `(path, src)` is
+/// exact.
+///
+/// On the build path these demands are the memoized inputs `linked_program`
+/// re-uses; running the loop here first (also on the `check`/analysis paths)
+/// makes a canon-error diagnostic frame against its own file on every surface.
+///
+/// # Errors
+/// [`CliError::Pipeline`] carrying the first module's canon error;
+/// [`CliError::Usage`] if a topo-ordered module is absent from the source map.
+fn attribute_canon_errors(
+    db: &ipe_db::IpeDatabase,
+    source_root: ipe_db::SourceRoot,
+    sources: &BTreeMap<Vec<String>, (PathBuf, String)>,
+    entry_file: ipe_db::SourceFile,
+    blame_path: &Path,
+) -> Result<(), CliError> {
+    let topo =
+        ipe_db::topo_order(db, source_root, entry_file).map_err(|diag| CliError::Pipeline {
+            file: blame_path.to_path_buf(),
+            src: String::new(),
+            diag,
+        })?;
+    for mod_path in topo.iter() {
+        let Some((path, src)) = sources.get(mod_path) else {
+            return Err(CliError::Usage(
+                "internal: module in topo order not in source map",
+            ));
+        };
+        let Some(file_handle) = source_root.files(db).get(mod_path).copied() else {
+            return Err(CliError::Usage(
+                "internal: module in topo order not in source map",
+            ));
+        };
+        ipe_db::canonicalize(db, source_root, file_handle).map_err(|diag| CliError::Pipeline {
+            file: path.clone(),
+            src: src.clone(),
+            diag,
+        })?;
+    }
+    Ok(())
+}
+
 /// The in-memory compile core over an already-populated database.
 ///
 /// topo order → per-module canonicalisation (memoized, blame-attributed) →
@@ -901,45 +1053,12 @@ pub fn compile_prepared(
         return Err(CliError::Usage("internal: entry module not in source map"));
     };
 
-    // Dep-first module order (memoized; cycle = N0021, blamed on the
-    // caller-supplied blame path since no single file owns a cycle).
-    let topo =
-        ipe_db::topo_order(db, source_root, entry_file).map_err(|diag| CliError::Pipeline {
-            file: blame_path.to_path_buf(),
-            src: String::new(),
-            diag: Box::new(diag),
-        })?;
-
-    // Canonicalise each module in dep-first order through the salsa query
-    // graph. Each `canonicalize` demand runs
-    // parse → resolve_imports → module_interface(dep) → canon; demanding in
-    // topo order keeps every dep memoized before its importers ask for it,
-    // so the interning sequence — and therefore emitted bytes — is
-    // deterministic across runs (golden-suite-enforced). This loop exists for
-    // BLAME attribution (a module's own diagnostic renders against its own
-    // file); `linked_program` below re-demands the same memos.
-    for mod_path in topo.iter() {
-        let Some((path, src)) = sources.get(mod_path) else {
-            return Err(CliError::Usage(
-                "internal: module in topo order not in source map",
-            ));
-        };
-        let Some(file_handle) = source_root.files(db).get(mod_path).copied() else {
-            return Err(CliError::Usage(
-                "internal: module in topo order not in source map",
-            ));
-        };
-
-        // Memoized canonicalisation (locks the shared interner internally —
-        // no guard may be live here). A dep's own diagnostic never surfaces
-        // here mis-blamed: deps precede the module in topo order, so a red
-        // dep already errored at its own iteration with its own file.
-        ipe_db::canonicalize(db, source_root, file_handle).map_err(|diag| CliError::Pipeline {
-            file: path.clone(),
-            src: src.clone(),
-            diag: Box::new(diag),
-        })?;
-    }
+    // Canonicalise each module in dep-first order, attributing a canon error
+    // (e.g. IPE-N0020) to its own module's file — the SAME blame loop the
+    // `check`/analysis surfaces reuse (`attribute_canon_errors`), so a
+    // canon-error diagnostic frames against its own file on every surface.
+    // `linked_program` below re-demands these memos.
+    attribute_canon_errors(db, source_root, sources, entry_file, blame_path)?;
 
     // Link → infer → lower → emit on the merged module. Blame link/lower/emit
     // errors on the entry file; infer errors and warnings are attributed to the
@@ -977,91 +1096,23 @@ pub fn compile_prepared(
         fresh_avoid.extend(ipe_db::identifier_words(db, *file).iter().cloned());
     }
 
-    // Short lock scope: set the fresh-name avoid-set (must happen before
-    // `lower_program` may execute below) and build the module-home →
-    // (file, src) blame map by interning each String module-path
-    // segment — lookups against symbols `canonicalize` already interned, so
-    // this cannot append a new symbol and cannot perturb interning order.
-    // The guard is dropped before any further salsa query is demanded: the
-    // interner mutex is not reentrant, and `typecheck`/`lower_program` each
-    // take their own lock internally (see `ipe_db::typecheck`).
-    let home_to_source: BTreeMap<Vec<ipe_intern::Symbol>, (PathBuf, String)> = {
+    // Set the fresh-name avoid-set (must happen before `lower_program` may
+    // execute below). Short lock scope: the guard is dropped before any further
+    // salsa query is demanded — the interner mutex is not reentrant, and
+    // `typecheck`/`lower_program` each take their own lock internally.
+    {
         let mut interner = shared_interner.lock();
         interner.set_fresh_avoid(fresh_avoid);
-        let mut map = BTreeMap::new();
-        for (str_path, (file, src)) in sources {
-            let sym_path: Result<Vec<_>, _> = str_path.iter().map(|s| interner.intern(s)).collect();
-            if let Ok(sym_path) = sym_path {
-                map.insert(sym_path, (file.clone(), src.clone()));
-            }
-        }
-        // The guard's last consumer was the loop above; release it before
-        // returning the map (clippy::significant_drop_tightening).
-        drop(interner);
-        map
-    };
+    }
 
-    // Given a diagnostic span, find the most tightly enclosing def in `linked`
-    // and return that def's (file, src).  Defs preserve their original `home`
-    // after link; every span in a def's body is a byte offset into that home
-    // module's source.  Falls back to the entry file when no def encloses the
-    // span (e.g. a CompilerBug with `Span::DUMMY`).
-    // `source_for_span` maps a compiler-internal Span (byte offsets into its
-    // *home module*'s source) to the (path, source) pair for error display.
-    //
-    // Heuristic: among all defs whose body_span *contains* the target span,
-    // prefer the one whose `body_span.lo` is *closest* to `span.lo` (i.e. the
-    // def that starts nearest to the failing expression).  Width is used as a
-    // secondary tiebreaker — narrower body wins when distances are equal.
-    //
-    // This is strictly better than the prior "narrowest body wins" approach,
-    // which could pick a short def from a *different module* (different byte
-    // namespace) that happened to be numerically narrower, producing a
-    // misattributed error location.  The closest-lo criterion naturally
-    // selects the def in the same file because same-module defs share a byte
-    // namespace; across modules, the intended def almost always has a smaller
-    // distance from its own `lo`.
+    // The module-home → (file, src) blame map, and the span-attribution helper
+    // built on it — the SAME resolution the `check`/analysis surfaces reuse (via
+    // `attribute_post_link_error`), so every surface frames a given diagnostic
+    // against the identical source.
+    let home_to_source = home_to_source_map(&shared_interner, sources);
+    let entry = (entry_src_path.clone(), entry_src.clone());
     let source_for_span = |span: ipe_diagnostics::Span| -> (PathBuf, String) {
-        if span == ipe_diagnostics::Span::DUMMY {
-            return (entry_src_path.clone(), entry_src.clone());
-        }
-        // (lo_dist, width, home)
-        let mut best: Option<(u32, u32, &[ipe_intern::Symbol])> = None;
-        for def in &linked.defs {
-            let body_span = match def {
-                ipe_canon::ast::Def::Untyped { body, .. }
-                | ipe_canon::ast::Def::Typed { body, .. } => body.span,
-            };
-            if body_span.lo <= span.lo && span.hi <= body_span.hi {
-                let lo_dist = span.lo.saturating_sub(body_span.lo);
-                let width = body_span.hi.saturating_sub(body_span.lo);
-                if best.is_none_or(|(prev_dist, prev_w, _)| {
-                    lo_dist < prev_dist || (lo_dist == prev_dist && width < prev_w)
-                }) {
-                    best = Some((lo_dist, width, def.home()));
-                }
-            }
-        }
-        // Union ctor spans live in the union's home byte-namespace, outside any
-        // def body — without this they fall back to the entry file and render
-        // at a coincidental byte offset in Main.ipe (the misattribution class
-        // for IPE-L0102 / IPE-L0114 and other `lower_enum` errors).
-        for union in &linked.unions {
-            for ctor in &union.ctors {
-                if ctor.span.lo <= span.lo && span.hi <= ctor.span.hi {
-                    let lo_dist = span.lo.saturating_sub(ctor.span.lo);
-                    let width = ctor.span.hi.saturating_sub(ctor.span.lo);
-                    if best.is_none_or(|(prev_dist, prev_w, _)| {
-                        lo_dist < prev_dist || (lo_dist == prev_dist && width < prev_w)
-                    }) {
-                        best = Some((lo_dist, width, union.home.as_slice()));
-                    }
-                }
-            }
-        }
-        best.and_then(|(_, _, home)| home_to_source.get(home))
-            .cloned()
-            .unwrap_or_else(|| (entry_src_path.clone(), entry_src.clone()))
+        source_for_span_in_linked(linked, &home_to_source, &entry, span)
     };
 
     // Layer-2 wasm security gate (IPE-N0030, M5): the client entry's
@@ -1128,20 +1179,7 @@ pub fn compile_prepared(
     // skippable on a warm no-op rebuild. No interner guard is held across
     // this demand — the query takes its own lock internally.
     let types = ipe_db::typecheck(db, source_root, entry_file).map_err(|(diag, home)| {
-        let span = diag_span(&diag);
-        let (file, src) = if home.is_empty() {
-            source_for_span(span)
-        } else {
-            home_to_source
-                .get(&home)
-                .cloned()
-                .unwrap_or_else(|| source_for_span(span))
-        };
-        CliError::Pipeline {
-            file,
-            src,
-            diag: Box::new(diag),
-        }
+        attribute_post_link_error(linked, &home_to_source, &entry, diag, &home)
     })?;
     // Print non-fatal warnings (e.g. IPE-T0011 RedundantCaseBranch) to stderr.
     // These are Severity::Warning: the build continues and exit code stays 0.
@@ -1167,19 +1205,7 @@ pub fn compile_prepared(
     // error) falls back to the byte-offset heuristic `source_for_span`.
     let span_attributed_err =
         |(diag, home): (ipe_diagnostics::Diagnostic, Vec<ipe_intern::Symbol>)| {
-            let (file, src) = if home.is_empty() {
-                source_for_span(diag_span(&diag))
-            } else {
-                home_to_source
-                    .get(&home)
-                    .cloned()
-                    .unwrap_or_else(|| source_for_span(diag_span(&diag)))
-            };
-            CliError::Pipeline {
-                file,
-                src,
-                diag: Box::new(diag),
-            }
+            attribute_post_link_error(linked, &home_to_source, &entry, diag, &home)
         };
     // `ipe_db::program_metadata` — the whole-program DCE-reachability seam
     // over `lower_program`.
@@ -2617,9 +2643,10 @@ fn lower_entry_via_graph(
     entry: &Path,
 ) -> Result<(ipe_db::IpeDatabase, std::sync::Arc<ipe_ir::Program>), CliError> {
     let graph = build_source_graph(entry)?;
-    ipe_db::lower_program(&graph.db, graph.source_root, graph.entry_file)
-        .map_err(|(diag, _home)| graph.pipeline_err(entry, diag))
-        .map(|program| (graph.db, program))
+    let program = graph.run_attributed(entry, |db, root, file| {
+        ipe_db::lower_program(db, root, file)
+    })?;
+    Ok((graph.db, program))
 }
 
 /// The salsa inputs one analysis needs: the owning database, the whole-program
@@ -2630,19 +2657,79 @@ struct SourceGraph {
     db: ipe_db::IpeDatabase,
     source_root: ipe_db::SourceRoot,
     entry_file: ipe_db::SourceFile,
-    /// The entry module's source text, so a rejecting query can blame it.
-    entry_src: String,
+    /// The whole module set (path → (file, src)) — every module a diagnostic
+    /// span may index into, so a rejecting query can be framed against the
+    /// source that OWNS the span rather than the entry file (the caret bug).
+    sources: BTreeMap<Vec<String>, (PathBuf, String)>,
+    /// The entry module's dotted path — its `(file, src)` is the fallback frame
+    /// for a homeless / dummy-span diagnostic.
+    entry_module_path: Vec<String>,
 }
 
 impl SourceGraph {
-    /// Frame a rejecting query's diagnostic against the entry file — the shared
-    /// [`CliError::Pipeline`] mapping every graph analysis uses.
-    fn pipeline_err(&self, entry: &Path, diag: Diagnostic) -> CliError {
-        CliError::Pipeline {
-            file: entry.to_path_buf(),
-            src: self.entry_src.clone(),
-            diag: Box::new(diag),
-        }
+    /// Run the per-module canonicalisation blame loop, then map a rejecting
+    /// query's `(diag, home)` to the source file that OWNS it — the SAME
+    /// attribution the build path uses (`attribute_canon_errors` +
+    /// `attribute_post_link_error`), so `ipe check` and every other analysis
+    /// surface frame a given diagnostic against the identical source as
+    /// `ipe build`.
+    ///
+    /// A canon error (e.g. IPE-N0020) surfaces from the blame loop already
+    /// framed against its own module; only a post-link error reaches the
+    /// `run_query` closure, where its `home` (or the byte-offset heuristic over
+    /// the linked program) selects the owning source.
+    ///
+    /// # Errors
+    /// [`CliError::Pipeline`] carrying the first compiler diagnostic; the query
+    /// closure's own error otherwise.
+    fn run_attributed<T>(
+        &self,
+        blame_path: &Path,
+        run_query: impl FnOnce(
+            &ipe_db::IpeDatabase,
+            ipe_db::SourceRoot,
+            ipe_db::SourceFile,
+        ) -> Result<T, (Diagnostic, Vec<ipe_intern::Symbol>)>,
+    ) -> Result<T, CliError> {
+        attribute_canon_errors(
+            &self.db,
+            self.source_root,
+            &self.sources,
+            self.entry_file,
+            blame_path,
+        )?;
+        run_query(&self.db, self.source_root, self.entry_file).map_err(|(diag, home)| {
+            // Canon succeeded, so the linked program exists; use it for the
+            // byte-offset fallback when `home` is empty. A link failure here
+            // (empty home, no linked program) frames against the entry file.
+            let entry = self
+                .sources
+                .get(&self.entry_module_path)
+                .cloned()
+                .unwrap_or_else(|| (blame_path.to_path_buf(), String::new()));
+            let interner = ipe_db::Db::interner(&self.db).clone();
+            let home_to_source = home_to_source_map(&interner, &self.sources);
+            match ipe_db::linked_program(&self.db, self.source_root, self.entry_file) {
+                Ok(linked) => {
+                    attribute_post_link_error(&linked.module, &home_to_source, &entry, diag, &home)
+                }
+                Err(link_diag) => {
+                    // A link error has no linked program to scan; frame the
+                    // ORIGINAL query diagnostic (not the link error) against the
+                    // home module if known, else the entry file.
+                    let (file, src) = if home.is_empty() {
+                        entry
+                    } else {
+                        home_to_source.get(&home).cloned().unwrap_or(entry)
+                    };
+                    // `link_diag` is discarded: the query's own diagnostic is the
+                    // one the user asked about; a link error would already have
+                    // surfaced from the canon blame loop or a build.
+                    let _ = link_diag;
+                    CliError::Pipeline { file, src, diag }
+                }
+            }
+        })
     }
 }
 
@@ -2671,17 +2758,13 @@ fn build_source_graph(entry: &Path) -> Result<SourceGraph, CliError> {
     else {
         return Err(CliError::Usage("internal: entry module not in source map"));
     };
-    let entry_src = collected
-        .sources
-        .get(&collected.entry_module_path)
-        .map(|(_, s)| s.clone())
-        .unwrap_or_default();
 
     Ok(SourceGraph {
         db,
         source_root,
         entry_file,
-        entry_src,
+        sources: collected.sources,
+        entry_module_path: collected.entry_module_path,
     })
 }
 
@@ -2695,9 +2778,9 @@ fn build_source_graph(entry: &Path) -> Result<SourceGraph, CliError> {
 /// [`CliError::Io`] when a source file cannot be read.
 fn typecheck_entry_via_graph(entry: &Path) -> Result<(), CliError> {
     let graph = build_source_graph(entry)?;
-    ipe_db::typecheck(&graph.db, graph.source_root, graph.entry_file)
+    graph
+        .run_attributed(entry, |db, root, file| ipe_db::typecheck(db, root, file))
         .map(|_| ())
-        .map_err(|(diag, _home)| graph.pipeline_err(entry, diag))
 }
 
 /// `ipe capabilities <entry.ipe>` — print the program's inferred security

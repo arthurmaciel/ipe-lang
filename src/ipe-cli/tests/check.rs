@@ -91,6 +91,107 @@ fn check_writes_no_emitted_project() -> TestResult {
     Ok(())
 }
 
+/// The location line (`--> file:line:col`) and the caret/underline line of the
+/// FIRST diagnostic in a rendered report — the two things a reader's eye lands
+/// on. `None` if the report has no snippet band.
+fn location_and_caret(report: &str) -> Option<(String, String)> {
+    let mut lines = report.lines();
+    let loc = lines.find(|l| l.trim_start().starts_with("--> "))?;
+    // The caret line is the underline row: it carries `^` glyphs after the `|`.
+    let caret = lines.find(|l| l.contains('^'))?;
+    Some((loc.trim().to_owned(), caret.to_owned()))
+}
+
+/// Run `ipe build` on a fixture entry, returning its combined stderr. Skips the
+/// caller's assertions (returns `None`) when no runtime tree is resolvable in
+/// this environment — the diagnostic under test fires at compile time, before
+/// any runtime is read, so a resolvable runtime is only needed to get `build`
+/// as far as the compiler.
+fn build_stderr(entry: &Path) -> Option<String> {
+    let runtime = ipe::resolve_runtime().ok()?;
+    let out = Command::new(env!("CARGO_BIN_EXE_ipe"))
+        .args(["build", &entry.to_string_lossy()])
+        .arg("--out")
+        .arg(std::env::temp_dir().join(format!("ipe_caret_build_{}", std::process::id())))
+        .env("IPE_RUNTIME_DIR", &runtime)
+        .output()
+        .ok()?;
+    Some(String::from_utf8_lossy(&out.stderr).into_owned())
+}
+
+/// `ipe check` must frame an unresolved-import diagnostic against the DEPENDENCY
+/// module that owns it, with the caret under the real import token — identical
+/// to `ipe build`. The fixture's error lives in `src/Lib/Helper.ipe`, one line
+/// below a comment; a report framed against the entry file (the caret bug) would
+/// point at an unrelated `src/Main.ipe` line instead.
+#[test]
+fn check_caret_matches_build_for_unresolved_import_in_dependency() -> TestResult {
+    let entry = fixture("multi_unresolved_import/src/Main.ipe");
+    let (ok, _, check_err) = run_ipe(&["check", &entry.to_string_lossy()])?;
+    assert!(!ok, "an unresolved import must exit non-zero");
+    assert!(
+        check_err.contains("IPE-N0020") && check_err.contains("Lib/Helper.ipe"),
+        "check must blame the dependency module, got:\n{check_err}"
+    );
+    let (loc, caret) = location_and_caret(&check_err)
+        .ok_or_else(|| format!("check report has no snippet band:\n{check_err}"))?;
+    assert!(
+        loc.contains("Lib/Helper.ipe:4:8"),
+        "caret must land on the import line in the dependency, got location `{loc}`"
+    );
+    assert!(
+        caret.contains("^^^^^^^^^^^^^^"),
+        "the caret must underline `Rust.Firestore`, got:\n{caret}"
+    );
+
+    if let Some(build_err) = build_stderr(&entry) {
+        let build_lc = location_and_caret(&build_err)
+            .ok_or_else(|| format!("build report has no snippet band:\n{build_err}"))?;
+        assert_eq!(
+            (loc, caret),
+            build_lc,
+            "check and build must produce the identical caret"
+        );
+    }
+    Ok(())
+}
+
+/// `ipe check` must frame a stdlib-qualifier-without-import diagnostic against
+/// the dependency module that owns it, caret under the qualifier — identical to
+/// `ipe build`. The fixture uses `Math.abs` in `src/Lib/Calc.ipe` without
+/// importing `Ipe.Math`.
+#[test]
+fn check_caret_matches_build_for_missing_qualifier_in_dependency() -> TestResult {
+    let entry = fixture("multi_missing_qualifier/src/Main.ipe");
+    let (ok, _, check_err) = run_ipe(&["check", &entry.to_string_lossy()])?;
+    assert!(!ok, "an unimported stdlib qualifier must exit non-zero");
+    assert!(
+        check_err.contains("IPE-N0034") && check_err.contains("Lib/Calc.ipe"),
+        "check must blame the dependency module, got:\n{check_err}"
+    );
+    let (loc, caret) = location_and_caret(&check_err)
+        .ok_or_else(|| format!("check report has no snippet band:\n{check_err}"))?;
+    assert!(
+        loc.contains("Lib/Calc.ipe:8:21"),
+        "caret must land on the `Math` usage in the dependency, got location `{loc}`"
+    );
+    assert!(
+        caret.contains("^^^^^^^^"),
+        "the caret must underline `Math`, got:\n{caret}"
+    );
+
+    if let Some(build_err) = build_stderr(&entry) {
+        let build_lc = location_and_caret(&build_err)
+            .ok_or_else(|| format!("build report has no snippet band:\n{build_err}"))?;
+        assert_eq!(
+            (loc, caret),
+            build_lc,
+            "check and build must produce the identical caret"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn check_help_page_names_the_command() -> TestResult {
     let (ok, stdout, _) = run_ipe(&["check", "--help"])?;
