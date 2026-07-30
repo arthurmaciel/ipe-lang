@@ -229,14 +229,18 @@ fn diff_eprint(label: &str, original: &str, formatted: &str) {
 /// Map a [`FmtError`] onto the driver's [`CliError`] channel.
 fn fmt_err_to_cli(file: &Path, e: FmtError) -> CliError {
     match e {
-        FmtError::Parse { file, src, diag } => CliError::Pipeline { file, src, diag },
+        FmtError::Parse { file, src, diag } => CliError::Pipeline {
+            file,
+            src,
+            diag: Box::new(diag),
+        },
         FmtError::RoundTrip { detail, .. } => CliError::Pipeline {
             file: file.to_path_buf(),
             src: String::new(),
-            diag: Diagnostic::CompilerBug {
+            diag: Box::new(Diagnostic::CompilerBug {
                 where_: "ipe fmt",
                 detail,
-            },
+            }),
         },
     }
 }

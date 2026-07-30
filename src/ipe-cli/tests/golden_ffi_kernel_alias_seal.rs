@@ -83,7 +83,7 @@ fn unknown_kernel_alias_is_rejected_at_compile_time() {
                 function,
             },
         ..
-    } = diag
+    } = &**diag
     else {
         assert!(
             false_marker(),
@@ -122,17 +122,19 @@ fn malformed_kernel_alias_string_is_rejected() {
     let _ = fs::remove_dir_all(&out);
 
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
-    assert!(
-        matches!(
-            built,
-            Err(ipe::CliError::Pipeline {
-                diag: ipe_diagnostics::Diagnostic::Name {
+    let is_unknown_kernel_alias = matches!(
+        &built,
+        Err(ipe::CliError::Pipeline { diag, .. })
+            if matches!(
+                &**diag,
+                ipe_diagnostics::Diagnostic::Name {
                     msg: ipe_diagnostics::NameError::UnknownKernelAlias { .. },
                     ..
-                },
-                ..
-            })
-        ),
+                }
+            )
+    );
+    assert!(
+        is_unknown_kernel_alias,
         "a `_`-less alias string must fail closed with IPE-N0028: {built:?}"
     );
 }
