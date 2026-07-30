@@ -297,7 +297,10 @@ mod tests {
     #[test]
     fn nul_byte_is_rejected() {
         let r: IpeResult<String, Path> = path_from_string("safe.txt\0../../etc/passwd".to_string());
-        assert!(matches!(r, IpeResult::Err(_)), "a NUL byte must be rejected");
+        assert!(
+            matches!(r, IpeResult::Err(_)),
+            "a NUL byte must be rejected"
+        );
     }
 
     #[test]

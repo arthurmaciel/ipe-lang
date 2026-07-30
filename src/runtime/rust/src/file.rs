@@ -242,9 +242,7 @@ fn file_read_file_bytes_sync(path: &str) -> Result<Vec<i64>, String> {
 /// `readFileLimit`'s TOCTOU close, commit 706f026). For text content with
 /// guaranteed UTF-8, prefer `readFile` / `readFileLimit`.
 #[must_use]
-pub fn file_read_file_bytes<E: Send + From<String> + 'static>(
-    path: Path,
-) -> IpeTask<E, Vec<i64>> {
+pub fn file_read_file_bytes<E: Send + From<String> + 'static>(path: Path) -> IpeTask<E, Vec<i64>> {
     let path = path.into_string();
     Box::pin(async move {
         match run_blocking(move || file_read_file_bytes_sync(&path)).await {
@@ -515,8 +513,7 @@ mod read_ceiling_tests {
         std::fs::write(&p, vec![b'x'; 8192]).unwrap();
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::set_var("IPE_FILE_READ_MAX", "1024") };
-        let res: IpeResult<String, String> =
-            block(file_read_file(tp(&p)));
+        let res: IpeResult<String, String> = block(file_read_file(tp(&p)));
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::remove_var("IPE_FILE_READ_MAX") };
         let _ = std::fs::remove_file(&p);
@@ -530,8 +527,7 @@ mod read_ceiling_tests {
     fn read_file_under_ceiling_ok() {
         let p = std::env::temp_dir().join(format!("ipe_rc_ok_{}.txt", std::process::id()));
         std::fs::write(&p, b"hello").unwrap();
-        let res: IpeResult<String, String> =
-            block(file_read_file(tp(&p)));
+        let res: IpeResult<String, String> = block(file_read_file(tp(&p)));
         let _ = std::fs::remove_file(&p);
         match res {
             IpeResult::Ok(s) => assert_eq!(s, "hello"),
@@ -556,8 +552,7 @@ mod read_file_limit_tests {
     fn under_limit_reads_full_content() {
         let p = std::env::temp_dir().join(format!("ipe_rfl_under_{}.txt", std::process::id()));
         std::fs::write(&p, b"hello world").unwrap();
-        let res: IpeResult<String, String> =
-            block(file_read_file_limit(tp(&p), 1024));
+        let res: IpeResult<String, String> = block(file_read_file_limit(tp(&p), 1024));
         let _ = std::fs::remove_file(&p);
         match res {
             IpeResult::Ok(s) => assert_eq!(s, "hello world"),
@@ -573,8 +568,7 @@ mod read_file_limit_tests {
         let p = std::env::temp_dir().join(format!("ipe_rfl_exact_{}.txt", std::process::id()));
         let content = vec![b'a'; 16];
         std::fs::write(&p, &content).unwrap();
-        let res: IpeResult<String, String> =
-            block(file_read_file_limit(tp(&p), 16));
+        let res: IpeResult<String, String> = block(file_read_file_limit(tp(&p), 16));
         let _ = std::fs::remove_file(&p);
         match res {
             IpeResult::Ok(s) => assert_eq!(s.len(), 16),
@@ -591,8 +585,7 @@ mod read_file_limit_tests {
     fn over_limit_by_one_byte_errs() {
         let p = std::env::temp_dir().join(format!("ipe_rfl_over_{}.txt", std::process::id()));
         std::fs::write(&p, vec![b'a'; 17]).unwrap();
-        let res: IpeResult<String, String> =
-            block(file_read_file_limit(tp(&p), 16));
+        let res: IpeResult<String, String> = block(file_read_file_limit(tp(&p), 16));
         let _ = std::fs::remove_file(&p);
         assert!(
             matches!(res, IpeResult::Err(_)),
@@ -605,8 +598,7 @@ mod read_file_limit_tests {
     fn non_positive_limit_uses_default_cap() {
         let p = std::env::temp_dir().join(format!("ipe_rfl_default_{}.txt", std::process::id()));
         std::fs::write(&p, b"small").unwrap();
-        let res: IpeResult<String, String> =
-            block(file_read_file_limit(tp(&p), 0));
+        let res: IpeResult<String, String> = block(file_read_file_limit(tp(&p), 0));
         let _ = std::fs::remove_file(&p);
         match res {
             IpeResult::Ok(s) => assert_eq!(s, "small"),
@@ -637,8 +629,7 @@ mod read_file_bytes_tests {
     fn under_cap_reads_full_content() {
         let p = std::env::temp_dir().join(format!("ipe_rfb_under_{}.bin", std::process::id()));
         std::fs::write(&p, [1u8, 2, 3, 255, 0]).unwrap();
-        let res: IpeResult<String, Vec<i64>> =
-            block(file_read_file_bytes(tp(&p)));
+        let res: IpeResult<String, Vec<i64>> = block(file_read_file_bytes(tp(&p)));
         let _ = std::fs::remove_file(&p);
         match res {
             IpeResult::Ok(v) => assert_eq!(v, vec![1, 2, 3, 255, 0]),
@@ -653,8 +644,7 @@ mod read_file_bytes_tests {
     fn exactly_at_cap_is_ok() {
         let p = std::env::temp_dir().join(format!("ipe_rfb_exact_{}.bin", std::process::id()));
         std::fs::write(&p, vec![7u8; DEFAULT_CAP]).unwrap();
-        let res: IpeResult<String, Vec<i64>> =
-            block(file_read_file_bytes(tp(&p)));
+        let res: IpeResult<String, Vec<i64>> = block(file_read_file_bytes(tp(&p)));
         let _ = std::fs::remove_file(&p);
         match res {
             IpeResult::Ok(v) => assert_eq!(v.len(), DEFAULT_CAP),
@@ -672,8 +662,7 @@ mod read_file_bytes_tests {
     fn over_cap_by_one_byte_errs() {
         let p = std::env::temp_dir().join(format!("ipe_rfb_over_{}.bin", std::process::id()));
         std::fs::write(&p, vec![7u8; DEFAULT_CAP + 1]).unwrap();
-        let res: IpeResult<String, Vec<i64>> =
-            block(file_read_file_bytes(tp(&p)));
+        let res: IpeResult<String, Vec<i64>> = block(file_read_file_bytes(tp(&p)));
         let _ = std::fs::remove_file(&p);
         assert!(
             matches!(res, IpeResult::Err(_)),
