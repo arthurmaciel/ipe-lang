@@ -4992,12 +4992,12 @@ fn emit_ui_call(
             )))
         }
 
-        // `Html.raw : String -> Html msg`
+        // `Html.unsafeRaw : String -> Html msg`
         KernelFn::HtmlRawNode => {
             let [s_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::HtmlRawNode",
-                    detail: format!("Html.raw requires 1 argument, got {}", args.len()),
+                    detail: format!("Html.unsafeRaw requires 1 argument, got {}", args.len()),
                 });
             };
             let s = emit_expr_at(ctx, s_e, indent, child, generics)?;

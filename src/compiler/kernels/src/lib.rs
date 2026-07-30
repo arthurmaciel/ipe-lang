@@ -2570,7 +2570,7 @@ impl StdlibKernel {
             Self::FontItalic => d("Font", "italic", 0, Ui, "ui_font_italic_"),
             // ── Html element builders ────────────────────────────────────
             Self::HtmlTextNode => d("Html", "text", 1, Ui, "html_text_node_"),
-            Self::HtmlRawNode => d("Html", "raw", 1, Ui, "html_raw_node_"),
+            Self::HtmlRawNode => d("Html", "unsafeRaw", 1, Ui, "html_raw_node_"),
             Self::HtmlNode => d("Html", "node", 3, Ui, "html_node_"),
             Self::HtmlVoidNode => d("Html", "voidNode", 2, Ui, "html_node_"),
             Self::HtmlDoctype => d("Html", "doctype", 1, Ui, "html_doctype_"),
