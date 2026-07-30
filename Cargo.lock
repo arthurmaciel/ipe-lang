@@ -2038,7 +2038,6 @@ dependencies = [
  "gloo-timers",
  "hex",
  "hmac",
- "ipe_path_core",
  "js-sys",
  "jsonwebtoken",
  "lettre",

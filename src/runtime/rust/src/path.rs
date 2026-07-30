@@ -44,10 +44,13 @@
 //! decision about which paths a program is allowed to reach.
 
 use super::IpeResult;
-// The lexical validation algorithm lives once in `ipe_path_core` (shared with
-// the compiler's `path "…"` gate); this module drives it with the HOST
-// separator regime so the runtime seal stays target-specific.
-use ipe_path_core::{clean_with, escapes_root, has_disguised_dotdot, has_nul};
+// The lexical validation algorithm lives once in the sibling `path_core` module
+// (shared with the compiler's `path "…"` gate, which `include!`s the SAME
+// `path_core.rs` file via the `ipe_path_core` crate); this module drives it with
+// the HOST separator regime so the runtime seal stays target-specific. A sibling
+// module (not an extern crate) so it resolves both in the workspace AND when the
+// runtime is vendored as `mod ipe_runtime` into an emitted app.
+use super::path_core::{clean_with, escapes_root, has_disguised_dotdot, has_nul};
 
 // The platform separator set the lexical engine treats as element boundaries.
 // Unix: `/` alone. Windows: BOTH `\` and `/` — Windows accepts either at the
@@ -166,7 +169,7 @@ impl Path {
 
 /// Lexically clean `path` under the HOST separator regime (Unix `/`, or the
 /// Windows `\`/`/` set with volume-prefix parsing on a Windows build). Thin
-/// wrapper over the shared [`ipe_path_core::clean_with`] so the runtime and the
+/// wrapper over the shared [`super::path_core::clean_with`] so the runtime and the
 /// compiler's `path "…"` gate clean identically. Used by the pure helpers
 /// ([`path_dir`]) that re-clean a derived substring.
 fn clean(path: &str) -> String {
@@ -248,7 +251,7 @@ pub fn path_is_absolute(p: Path) -> bool {
 mod tests {
     use super::*;
     // Exercised only by the Windows volume-prefix tests below.
-    use ipe_path_core::volume_name_len;
+    use super::super::path_core::volume_name_len;
 
     fn mk(s: &str) -> Path {
         match path_from_string::<String>(s.to_string()) {
@@ -584,7 +587,7 @@ mod tests {
     #[test]
     fn test_mirrors_runtime() {
         for s in corpus() {
-            if ipe_path_core::validate(&s).is_ok() {
+            if super::super::path_core::validate(&s).is_ok() {
                 assert!(
                     runtime_seal_accepts(&s, false),
                     "compile-time gate accepted {s:?} but the Unix runtime seal rejects it"
@@ -604,7 +607,7 @@ mod tests {
         // must reject every one.
         for vector in ["..\\secret", "C:..\\x", ".. \\x", "...", "a\\..\\..\\b"] {
             assert_eq!(
-                ipe_path_core::validate(vector),
+                super::super::path_core::validate(vector),
                 Err("traversal"),
                 "compile-time gate must reject the Windows traversal vector {vector:?}"
             );
