@@ -9073,6 +9073,19 @@ fn render_fn_signature(name: &str, generic_clause: &str, params: &[String], ret:
         return flat;
     }
 
+    // A zero-parameter signature never breaks its empty `()` — `rustfmt` keeps
+    // `NAME() -> ` glued and instead wraps the RETURN TYPE at its outermost angle
+    // brackets: `NAME() -> Ptr<\n    Inner,\n>`. Only a return type that is itself a
+    // single angle-bracketed generic can wrap; anything else (or a return type whose
+    // opening line still overflows) stays on the one line `rustfmt` cannot shorten.
+    if params.is_empty() {
+        let open = format!("pub fn {name}{generic_clause}() -> ");
+        if let Some(wrapped) = wrap_return_type(&open, ret) {
+            return wrapped;
+        }
+        return format!("{open}{ret}");
+    }
+
     // The `pub fn NAME<GEN>(` opening line, with generics still flat.
     let params_open = format!("pub fn {name}{generic_clause}(");
     let broken_params = || {
@@ -9108,6 +9121,36 @@ fn render_fn_signature(name: &str, generic_clause: &str, params: &[String], ret:
     out
 }
 
+/// Wrap a zero-parameter signature's RETURN TYPE at its outermost angle brackets when
+/// the flat `open` + `ret` line overflows, matching `rustfmt`: `NAME() -> Ptr<\n
+/// Inner,\n>`. Returns `None` when the return type is not a single top-level
+/// angle-bracketed generic (`Ptr<…>` with the `<` after a path and the matching `>`
+/// at the end) — `rustfmt` has no shorter layout for such a type, so the caller keeps
+/// the flat line. The `Inner` is placed at one indent step with a trailing comma and
+/// the `>` dedented to column 0, the same one-per-line break the params path uses.
+fn wrap_return_type(open: &str, ret: &str) -> Option<String> {
+    const MAX_WIDTH: usize = 100;
+    const BRACE: usize = 2;
+    if open.len() + ret.len() + BRACE <= MAX_WIDTH {
+        return None;
+    }
+    // A single top-level generic: `Head<Inner>` where the first `<` opens the sole
+    // bracket group and the matching `>` is the final character. A leading `Box<` /
+    // `Decoder<` head with the whole remainder as one `Inner` argument.
+    let lt = ret.find('<')?;
+    if !ret.ends_with('>') {
+        return None;
+    }
+    let head = &ret[..lt];
+    let inner = &ret[lt + 1..ret.len() - 1];
+    // The head must be a plain path (no earlier bracket / comma), and the wrapped
+    // opening line `NAME() -> Head<` must itself fit; otherwise no shortening applies.
+    if head.contains([',', '<', '>', '(', ')']) || open.len() + head.len() + 1 + BRACE > MAX_WIDTH {
+        return None;
+    }
+    Some(format!("{open}{head}<\n    {inner},\n>"))
+}
+
 /// Render the CAF `CELL.get_or_init(|| body).clone()` line with the native Doc
 /// path, so the closure body's braces are elided when the line fits the width —
 /// matching `rustfmt`'s closure-body rule (`move |_| expr` when it fits, `move |_|
@@ -9129,14 +9172,21 @@ fn emit_caf_get_or_init(
     // the body WITHOUT braces when it fits flat, and WITH braces on a new line
     // when it does not, matching `rustfmt`'s closure body layout.
     let closure_arg = Doc::concat(vec![Doc::text("|| "), Doc::brace_body(body_doc)]);
-    // `CELL.get_or_init(closure).clone()` — a single-argument function call.
-    let call = Doc::call_args(
+    // `CELL.get_or_init(closure)` — a single-argument function call whose sole
+    // closure argument `rustfmt` combines onto the call head: `get_or_init(|| {`
+    // on one line, the body broken inside, `})` at the call's indent, no trailing
+    // comma.
+    let receiver = Doc::call_args(
         Doc::text("CELL.get_or_init("),
         vec![closure_arg],
-        Doc::text(").clone()"),
+        Doc::text(")"),
         // A function-call argument list keeps a trailing comma when it breaks.
         true,
     );
+    // `.clone()` glued when the receiver stays single-line, dropped onto its own
+    // line at the call's indent when the receiver's closure body broke — `rustfmt`'s
+    // method-chain layout after a multiline receiver.
+    let call = Doc::method_chain(receiver, Doc::text(".clone()"));
     // Seeded at column 4 (fn-body indent) so the fit test measures from the
     // position where the line starts in the emitted file.
     Ok(render_seeded(&call, RenderConfig::default(), 4, 4))

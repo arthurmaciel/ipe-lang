@@ -2776,7 +2776,9 @@ impl {sv} {{
             Self::SqlTime(v) => ipe_runtime::db::SqlParam::Int(v),
             Self::SqlDecimal(v) => ipe_runtime::db::SqlParam::Text(v),
             Self::SqlMoney(v) => ipe_runtime::db::SqlParam::Text(v),
-            Self::SqlNull(inner) => ipe_runtime::db::SqlParam::Null(Box::new(inner.into_sql_param())),
+            Self::SqlNull(inner) => {{
+                ipe_runtime::db::SqlParam::Null(Box::new(inner.into_sql_param()))
+            }}
         }}
     }}
 }}

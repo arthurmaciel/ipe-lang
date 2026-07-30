@@ -48,7 +48,12 @@ pub enum Doc {
     /// A zero-width soft break candidate: empty when flat, a newline plus indent
     /// when broken. Used where flat layout wants no space (e.g. before a closing
     /// delimiter on a call arg list).
-    #[expect(dead_code, reason = "reserved for zero-width break sites not yet emitted")]
+    // Dead only in the production build: the P0 render tests construct it, so the
+    // expectation is scoped to `not(test)` where it genuinely never appears.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "reserved for zero-width break sites not yet emitted")
+    )]
     Softline,
     /// An unconditional break: always a newline plus the current indent, whether
     /// or not any enclosing group is flat. Its presence anywhere inside a group
@@ -63,7 +68,10 @@ pub enum Doc {
     /// NOT a token the legacy string emitter produces. A `Softline`-guarded `,`
     /// cannot express this: it would show the comma flat too. Never a break point
     /// itself (it introduces no newline), so it never forces a group broken.
-    #[expect(dead_code, reason = "reserved for trailing-comma-on-break sites not yet emitted")]
+    #[expect(
+        dead_code,
+        reason = "reserved for trailing-comma-on-break sites not yet emitted"
+    )]
     IfBroken(Cow<'static, str>),
     /// Indent the inner document by `n` columns relative to the current indent.
     /// Used non-accumulating (`Nest(4, ...)`) for block bodies and arg lists.
@@ -278,6 +286,26 @@ pub enum Doc {
         /// The inner document whose leading `(` makes the wrapping parens redundant.
         inner: Box<Self>,
     },
+    /// A trailing `.method(…)` applied to a receiver, laid out with `rustfmt`'s
+    /// method-chain rule keyed off whether the receiver is BLOCK-SHAPED. When the
+    /// `receiver` renders as a plain single-line non-brace expression, the method
+    /// glues inline (`get_or_init(|| (a / b)).clone()`). When the `receiver` is
+    /// block-shaped — its rendered form spans multiple lines OR carries a brace block
+    /// `{ … }` (a closure body / `if` / `match` / statement block) — `rustfmt` drops
+    /// the method onto its OWN line at the receiver's begin-line indent
+    /// (`recv…\n})\n.method()` or `recv…{…}\n.method()`), even when the whole line
+    /// would fit. The break decision is a function of the receiver's own layout,
+    /// independent of any enclosing group.
+    ///
+    /// SEAL accounting: `receiver` and `method` are both leaves (the string emitter
+    /// writes `recv.method()` with no break); the newline is pure whitespace and
+    /// normalizes away, so the leaf sequence is identical in both layouts.
+    MethodChain {
+        /// The receiver document whose closing-line kind drives the method's break.
+        receiver: Box<Self>,
+        /// The trailing `.method(…)` text, including the leading dot.
+        method: Box<Self>,
+    },
 }
 
 /// One operand of a [`Doc::Chain`], with the operator that precedes it (if any).
@@ -318,7 +346,10 @@ impl Doc {
     }
 
     /// A break-conditional static token (renders only when its group breaks).
-    #[expect(dead_code, reason = "reserved for trailing-comma-on-break sites not yet emitted")]
+    #[expect(
+        dead_code,
+        reason = "reserved for trailing-comma-on-break sites not yet emitted"
+    )]
     pub const fn if_broken(s: &'static str) -> Self {
         Self::IfBroken(Cow::Borrowed(s))
     }
@@ -387,6 +418,15 @@ impl Doc {
     pub fn elidable_paren(inner: Self) -> Self {
         Self::ElidableParen {
             inner: Box::new(inner),
+        }
+    }
+
+    /// A trailing `.method(…)` on `receiver`, dropped to its own line when the
+    /// receiver renders multiline. See [`Doc::MethodChain`].
+    pub fn method_chain(receiver: Self, method: Self) -> Self {
+        Self::MethodChain {
+            receiver: Box::new(receiver),
+            method: Box::new(method),
         }
     }
 
@@ -503,6 +543,13 @@ impl Doc {
                 out.push('(');
                 inner.collect_leaves(out);
                 out.push(')');
+            }
+            // `receiver.method(…)` with no break — the string emitter writes them
+            // adjacent, and the method-on-its-own-line layout is pure whitespace
+            // (SEAL-invisible), so both layouts normalize to the same leaves.
+            Self::MethodChain { receiver, method } => {
+                receiver.collect_leaves(out);
+                method.collect_leaves(out);
             }
         }
     }
