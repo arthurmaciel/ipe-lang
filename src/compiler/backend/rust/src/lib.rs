@@ -1608,6 +1608,7 @@ fn collect_record_shapes(
         // record shape.
         | IrType::SqlFragment
         | IrType::Secret
+        | IrType::Path
         // Cache config / stats + Csv document are folded to nominal runtime
         // structs — no structural record shape to synthesise.
         | IrType::CacheCfg
@@ -1758,6 +1759,7 @@ fn type_reaches_enum(
         // size-cycle risk.
         | IrType::SqlFragment
         | IrType::Secret
+        | IrType::Path
         // Cache config / stats + Csv document are monomorphic runtime structs
         // — no reachable enum edge to `target`.
         | IrType::CacheCfg
@@ -1841,6 +1843,7 @@ fn contains_generic(ty: &IrType) -> bool {
         // `Secret` is monomorphic — no generic parameters.
         | IrType::SqlFragment
         | IrType::Secret
+        | IrType::Path
         // Cache config / stats + Csv document are monomorphic — no generic
         // parameters.
         | IrType::CacheCfg
@@ -1950,6 +1953,7 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         // `Secret` is monomorphic — no generics to collect.
         | IrType::SqlFragment
         | IrType::Secret
+        | IrType::Path
         // Cache config / stats + Csv document are monomorphic — no generics to
         // collect.
         | IrType::CacheCfg
@@ -2272,6 +2276,7 @@ fn match_template(
         // `Secret` is a monomorphic opaque leaf.
         | IrType::SqlFragment
         | IrType::Secret
+        | IrType::Path
         // Cache config / stats + Csv document are monomorphic runtime-struct
         // leaves.
         | IrType::CacheCfg

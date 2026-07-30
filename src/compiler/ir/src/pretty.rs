@@ -242,6 +242,7 @@ fn ir_type_name_at(interner: &Interner, ty: &IrType, depth: u16) -> String {
         IrType::TypeInfo => "TypeInfo".to_owned(),
         IrType::SqlFragment => "SqlFragment".to_owned(),
         IrType::Secret => "Secret".to_owned(),
+        IrType::Path => "Path".to_owned(),
         // Ipe.Cache config / stats records.
         IrType::CacheCfg => "CacheCfg".to_owned(),
         IrType::CacheStats => "CacheStats".to_owned(),
@@ -784,6 +785,8 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::RegexReplace => "Regex.replace",
         KernelFn::RegexSplit => "Regex.split",
         // Ipe.Path
+        KernelFn::PathFromString => "Path.fromString",
+        KernelFn::PathToString => "Path.toString",
         KernelFn::PathBase => "Path.base",
         KernelFn::PathDir => "Path.dir",
         KernelFn::PathExt => "Path.ext",

@@ -130,6 +130,10 @@ const RESERVED_BUILTIN_TYPES: &[&str] = &[
     // reserved for the same reason as `SqlFragment`: a security-tier type
     // must not be shadowable by user code.
     "Secret",
+    // `Ipe.Path`'s opaque validated filesystem-path type — reserved for the
+    // same reason: a security-tier type (the traversal/NUL-rejection boundary)
+    // must not be shadowable by user code.
+    "Path",
     "StreamId",
     "ChunkEvent",
     "Request",

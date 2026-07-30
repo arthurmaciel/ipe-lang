@@ -12,5 +12,7 @@ see the [shape guides](../shapes/README.md); this book is about the language.
   pattern-matchable `Error` at every `Task` boundary.
 - [Capabilities](capabilities.md) — what a program is allowed to do, inferred
   from its code with nothing to declare.
+- [Filesystem: `Ipe.Path` and `Ipe.File`](filesystem.md) — paths are a typed,
+  traversal-checked value, not raw strings.
 - [Views: Ui, Html, and Css](ui.md) — the `Ipe.Ui`, `Ipe.Html`, and `Ipe.Css`
   view vocabularies and how they intermix.

@@ -116,13 +116,13 @@ pub fn random_float(lo: f64, hi: f64) -> IpeTask<f64> {
 pub fn random_choice(items: Vec<String>) -> IpeTask<String> {
     ipe_runtime::random::random_choice(items)
 }
-pub fn file_read_file(path: String) -> IpeTask<String> {
+pub fn file_read_file(path: ipe_runtime::path::Path) -> IpeTask<String> {
     ipe_runtime::file::file_read_file(path)
 }
-pub fn file_write_file(path: String, content: String) -> IpeTask<()> {
+pub fn file_write_file(path: ipe_runtime::path::Path, content: String) -> IpeTask<()> {
     ipe_runtime::file::file_write_file(path, content)
 }
-pub fn file_delete(path: String) -> IpeTask<()> {
+pub fn file_delete(path: ipe_runtime::path::Path) -> IpeTask<()> {
     ipe_runtime::file::file_delete(path)
 }
 // ── Task combinators (M5a) ─────────────────────────────────────────────────
@@ -213,28 +213,28 @@ pub fn system_exit(code: i64) -> ! {
     ipe_runtime::system::system_exit(code)
 }
 // ── File kernels (M5a) ─────────────────────────────────────────────────────
-pub fn file_exists(path: String) -> IpeTask<bool> {
+pub fn file_exists(path: ipe_runtime::path::Path) -> IpeTask<bool> {
     ipe_runtime::file::file_exists(path)
 }
-pub fn file_remove(path: String) -> IpeTask<()> {
+pub fn file_remove(path: ipe_runtime::path::Path) -> IpeTask<()> {
     ipe_runtime::file::file_remove(path)
 }
-pub fn file_mkdir_all(path: String) -> IpeTask<()> {
+pub fn file_mkdir_all(path: ipe_runtime::path::Path) -> IpeTask<()> {
     ipe_runtime::file::file_mkdir_all(path)
 }
-pub fn file_read_file_limit(path: String, limit: i64) -> IpeTask<String> {
+pub fn file_read_file_limit(path: ipe_runtime::path::Path, limit: i64) -> IpeTask<String> {
     ipe_runtime::file::file_read_file_limit(path, limit)
 }
-pub fn file_read_file_bytes(path: String) -> IpeTask<Vec<i64>> {
+pub fn file_read_file_bytes(path: ipe_runtime::path::Path) -> IpeTask<Vec<i64>> {
     ipe_runtime::file::file_read_file_bytes(path)
 }
-pub fn file_append(path: String, content: String) -> IpeTask<()> {
+pub fn file_append(path: ipe_runtime::path::Path, content: String) -> IpeTask<()> {
     ipe_runtime::file::file_append(path, content)
 }
-pub fn file_read_dir(path: String) -> IpeTask<Vec<String>> {
+pub fn file_read_dir(path: ipe_runtime::path::Path) -> IpeTask<Vec<String>> {
     ipe_runtime::file::file_read_dir(path)
 }
-pub fn file_is_dir(path: String) -> IpeTask<bool> {
+pub fn file_is_dir(path: ipe_runtime::path::Path) -> IpeTask<bool> {
     ipe_runtime::file::file_is_dir(path)
 }
 pub fn file_temp_file(prefix: String) -> IpeTask<String> {
@@ -243,10 +243,10 @@ pub fn file_temp_file(prefix: String) -> IpeTask<String> {
 pub fn file_temp_dir(prefix: String) -> IpeTask<String> {
     ipe_runtime::file::file_temp_dir(prefix)
 }
-pub fn file_copy(src: String, dst: String) -> IpeTask<()> {
+pub fn file_copy(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -> IpeTask<()> {
     ipe_runtime::file::file_copy(src, dst)
 }
-pub fn file_rename(src: String, dst: String) -> IpeTask<()> {
+pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -> IpeTask<()> {
     ipe_runtime::file::file_rename(src, dst)
 }
 pub fn crypto_random_bytes(n: i64) -> IpeTask<String> {

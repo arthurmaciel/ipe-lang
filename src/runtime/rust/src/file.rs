@@ -1,4 +1,13 @@
 // File kernel stubs — generic over E.
+//
+// Every path argument is a typed [`crate::path::Path`], not a raw `String`:
+// the `Ipe.File` surface is sealed so a caller CANNOT reach a filesystem
+// syscall with an unvalidated string. Construction (and the traversal / NUL
+// rejection that guards it) lives once in `path::path_from_string`; each kernel
+// here unwraps the already-validated `Path` to its cleaned string via
+// `.into_string()` and proceeds — it never re-validates, because the type is
+// the proof.
+use super::path::Path;
 use super::{IpeResult, IpeTask, from_u8_slice, ok_res, str_err};
 
 // ── shared blocking-pool helper ───────────────────────────────────────
@@ -82,7 +91,8 @@ fn file_read_file_sync(path: &str, cap: u64) -> Result<String, String> {
 }
 
 #[must_use]
-pub fn file_read_file<E: Send + From<String> + 'static>(path: String) -> IpeTask<E, String> {
+pub fn file_read_file<E: Send + From<String> + 'static>(path: Path) -> IpeTask<E, String> {
+    let path = path.into_string();
     Box::pin(async move {
         let cap = file_read_ceiling();
         match run_blocking(move || file_read_file_sync(&path, cap)).await {
@@ -98,9 +108,10 @@ fn file_write_file_sync(path: &str, content: &str) -> Result<(), String> {
 
 #[must_use]
 pub fn file_write_file<E: Send + From<String> + 'static>(
-    path: String,
+    path: Path,
     content: String,
 ) -> IpeTask<E, ()> {
+    let path = path.into_string();
     Box::pin(async move {
         match run_blocking(move || file_write_file_sync(&path, &content)).await {
             Ok(()) => ok_res(()),
@@ -110,7 +121,8 @@ pub fn file_write_file<E: Send + From<String> + 'static>(
 }
 
 #[must_use]
-pub fn file_exists<E: Send + 'static>(path: String) -> IpeTask<E, bool> {
+pub fn file_exists<E: Send + 'static>(path: Path) -> IpeTask<E, bool> {
+    let path = path.into_string();
     Box::pin(async move {
         // Infallible closure — `run_blocking`'s `Err` arm is unreachable here
         // (kept `Result`-shaped only to satisfy the shared helper's bound), so
@@ -127,7 +139,7 @@ pub fn file_exists<E: Send + 'static>(path: String) -> IpeTask<E, bool> {
 /// Alias of `file_remove` (the `remove` contract). Kept as a public name for
 /// ABI stability; delegates so the two never drift.
 #[must_use]
-pub fn file_delete<E: Send + From<String> + 'static>(path: String) -> IpeTask<E, ()> {
+pub fn file_delete<E: Send + From<String> + 'static>(path: Path) -> IpeTask<E, ()> {
     file_remove(path)
 }
 
@@ -139,7 +151,8 @@ fn file_mkdir_all_sync(path: &str) -> Result<(), String> {
 /// and every missing parent (mkdir -p). Already-exists is `Ok` (matching
 /// `std::fs::create_dir_all`); a real I/O failure is `Err`.
 #[must_use]
-pub fn file_mkdir_all<E: Send + From<String> + 'static>(path: String) -> IpeTask<E, ()> {
+pub fn file_mkdir_all<E: Send + From<String> + 'static>(path: Path) -> IpeTask<E, ()> {
+    let path = path.into_string();
     Box::pin(async move {
         match run_blocking(move || file_mkdir_all_sync(&path)).await {
             Ok(()) => ok_res(()),
@@ -183,9 +196,10 @@ fn file_read_file_limit_sync(path: &str, cap: u64) -> Result<String, String> {
 /// sequence, so there is nothing left to race against.
 #[must_use]
 pub fn file_read_file_limit<E: Send + From<String> + 'static>(
-    path: String,
+    path: Path,
     limit: i64,
 ) -> IpeTask<E, String> {
+    let path = path.into_string();
     let cap: u64 = if limit > 0 {
         limit as u64
     } else {
@@ -228,9 +242,8 @@ fn file_read_file_bytes_sync(path: &str) -> Result<Vec<i64>, String> {
 /// `readFileLimit`'s TOCTOU close, commit 706f026). For text content with
 /// guaranteed UTF-8, prefer `readFile` / `readFileLimit`.
 #[must_use]
-pub fn file_read_file_bytes<E: Send + From<String> + 'static>(
-    path: String,
-) -> IpeTask<E, Vec<i64>> {
+pub fn file_read_file_bytes<E: Send + From<String> + 'static>(path: Path) -> IpeTask<E, Vec<i64>> {
+    let path = path.into_string();
     Box::pin(async move {
         match run_blocking(move || file_read_file_bytes_sync(&path)).await {
             Ok(v) => ok_res(v),
@@ -256,9 +269,10 @@ fn file_append_sync(path: &str, content: &str) -> Result<(), String> {
 /// Mirrors Go's `os.OpenFile(…, O_APPEND|O_CREATE|O_WRONLY, 0644)`.
 #[must_use]
 pub fn file_append<E: Send + From<String> + 'static>(
-    path: String,
+    path: Path,
     content: String,
 ) -> IpeTask<E, ()> {
+    let path = path.into_string();
     Box::pin(async move {
         match run_blocking(move || file_append_sync(&path, &content)).await {
             Ok(()) => ok_res(()),
@@ -277,7 +291,8 @@ fn file_remove_sync(path: &str) -> Result<(), String> {
 /// Remove the file at `path`. Returns `Err` on any I/O failure (including
 /// "not found"). Mirrors Go's `os.Remove`.
 #[must_use]
-pub fn file_remove<E: Send + From<String> + 'static>(path: String) -> IpeTask<E, ()> {
+pub fn file_remove<E: Send + From<String> + 'static>(path: Path) -> IpeTask<E, ()> {
+    let path = path.into_string();
     Box::pin(async move {
         match run_blocking(move || file_remove_sync(&path)).await {
             Ok(()) => ok_res(()),
@@ -306,7 +321,8 @@ fn file_read_dir_sync(path: &str) -> Result<Vec<String>, String> {
 /// Return the names (not full paths) of all entries in the directory at
 /// `path`, in filesystem order. Mirrors Go's `os.ReadDir` → `e.Name()`.
 #[must_use]
-pub fn file_read_dir<E: Send + From<String> + 'static>(path: String) -> IpeTask<E, Vec<String>> {
+pub fn file_read_dir<E: Send + From<String> + 'static>(path: Path) -> IpeTask<E, Vec<String>> {
+    let path = path.into_string();
     Box::pin(async move {
         match run_blocking(move || file_read_dir_sync(&path)).await {
             Ok(names) => ok_res(names),
@@ -320,7 +336,8 @@ pub fn file_read_dir<E: Send + From<String> + 'static>(path: String) -> IpeTask<
 /// it exists and is not a directory, and `Ok(false)` (not `Err`) when the path
 /// does not exist — matching Go's shape (`os.Stat` error → `false`).
 #[must_use]
-pub fn file_is_dir<E: Send + 'static>(path: String) -> IpeTask<E, bool> {
+pub fn file_is_dir<E: Send + 'static>(path: Path) -> IpeTask<E, bool> {
+    let path = path.into_string();
     Box::pin(async move {
         // Same infallible-closure shape as `file_exists` above.
         let is_dir = run_blocking(move || Ok(std::fs::metadata(&path).is_ok_and(|m| m.is_dir())))
@@ -437,7 +454,8 @@ fn file_copy_sync(src: &str, dst: &str) -> Result<(), String> {
 /// Copy the file at `src` to `dst`, creating or overwriting `dst`.
 /// Mirrors Go's `io.Copy(out, in)` pattern.
 #[must_use]
-pub fn file_copy<E: Send + From<String> + 'static>(src: String, dst: String) -> IpeTask<E, ()> {
+pub fn file_copy<E: Send + From<String> + 'static>(src: Path, dst: Path) -> IpeTask<E, ()> {
+    let (src, dst) = (src.into_string(), dst.into_string());
     Box::pin(async move {
         match run_blocking(move || file_copy_sync(&src, &dst)).await {
             Ok(()) => ok_res(()),
@@ -454,13 +472,25 @@ fn file_rename_sync(src: &str, dst: &str) -> Result<(), String> {
 /// Rename (move) the file or directory at `src` to `dst`.
 /// Mirrors Go's `os.Rename`.
 #[must_use]
-pub fn file_rename<E: Send + From<String> + 'static>(src: String, dst: String) -> IpeTask<E, ()> {
+pub fn file_rename<E: Send + From<String> + 'static>(src: Path, dst: Path) -> IpeTask<E, ()> {
+    let (src, dst) = (src.into_string(), dst.into_string());
     Box::pin(async move {
         match run_blocking(move || file_rename_sync(&src, &dst)).await {
             Ok(()) => ok_res(()),
             Err(e) => IpeResult::Err(str_err(&e)),
         }
     })
+}
+
+/// Test-only: seal an absolute `std::path::Path` (always a rooted, non-escaping
+/// path) into an `Ipe.Path`. Kernel call sites now take a typed `Path`, so the
+/// tests construct one through the same validated seal a real program uses.
+#[cfg(test)]
+fn tp(p: &std::path::Path) -> Path {
+    match super::path::path_from_string::<String>(p.to_string_lossy().into_owned()) {
+        IpeResult::Ok(path) => path,
+        IpeResult::Err(e) => panic!("test temp path failed Path validation: {e}"),
+    }
 }
 
 #[cfg(test)]
@@ -483,8 +513,7 @@ mod read_ceiling_tests {
         std::fs::write(&p, vec![b'x'; 8192]).unwrap();
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::set_var("IPE_FILE_READ_MAX", "1024") };
-        let res: IpeResult<String, String> =
-            block(file_read_file(p.to_string_lossy().into_owned()));
+        let res: IpeResult<String, String> = block(file_read_file(tp(&p)));
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::remove_var("IPE_FILE_READ_MAX") };
         let _ = std::fs::remove_file(&p);
@@ -498,8 +527,7 @@ mod read_ceiling_tests {
     fn read_file_under_ceiling_ok() {
         let p = std::env::temp_dir().join(format!("ipe_rc_ok_{}.txt", std::process::id()));
         std::fs::write(&p, b"hello").unwrap();
-        let res: IpeResult<String, String> =
-            block(file_read_file(p.to_string_lossy().into_owned()));
+        let res: IpeResult<String, String> = block(file_read_file(tp(&p)));
         let _ = std::fs::remove_file(&p);
         match res {
             IpeResult::Ok(s) => assert_eq!(s, "hello"),
@@ -524,8 +552,7 @@ mod read_file_limit_tests {
     fn under_limit_reads_full_content() {
         let p = std::env::temp_dir().join(format!("ipe_rfl_under_{}.txt", std::process::id()));
         std::fs::write(&p, b"hello world").unwrap();
-        let res: IpeResult<String, String> =
-            block(file_read_file_limit(p.to_string_lossy().into_owned(), 1024));
+        let res: IpeResult<String, String> = block(file_read_file_limit(tp(&p), 1024));
         let _ = std::fs::remove_file(&p);
         match res {
             IpeResult::Ok(s) => assert_eq!(s, "hello world"),
@@ -541,8 +568,7 @@ mod read_file_limit_tests {
         let p = std::env::temp_dir().join(format!("ipe_rfl_exact_{}.txt", std::process::id()));
         let content = vec![b'a'; 16];
         std::fs::write(&p, &content).unwrap();
-        let res: IpeResult<String, String> =
-            block(file_read_file_limit(p.to_string_lossy().into_owned(), 16));
+        let res: IpeResult<String, String> = block(file_read_file_limit(tp(&p), 16));
         let _ = std::fs::remove_file(&p);
         match res {
             IpeResult::Ok(s) => assert_eq!(s.len(), 16),
@@ -559,8 +585,7 @@ mod read_file_limit_tests {
     fn over_limit_by_one_byte_errs() {
         let p = std::env::temp_dir().join(format!("ipe_rfl_over_{}.txt", std::process::id()));
         std::fs::write(&p, vec![b'a'; 17]).unwrap();
-        let res: IpeResult<String, String> =
-            block(file_read_file_limit(p.to_string_lossy().into_owned(), 16));
+        let res: IpeResult<String, String> = block(file_read_file_limit(tp(&p), 16));
         let _ = std::fs::remove_file(&p);
         assert!(
             matches!(res, IpeResult::Err(_)),
@@ -573,8 +598,7 @@ mod read_file_limit_tests {
     fn non_positive_limit_uses_default_cap() {
         let p = std::env::temp_dir().join(format!("ipe_rfl_default_{}.txt", std::process::id()));
         std::fs::write(&p, b"small").unwrap();
-        let res: IpeResult<String, String> =
-            block(file_read_file_limit(p.to_string_lossy().into_owned(), 0));
+        let res: IpeResult<String, String> = block(file_read_file_limit(tp(&p), 0));
         let _ = std::fs::remove_file(&p);
         match res {
             IpeResult::Ok(s) => assert_eq!(s, "small"),
@@ -605,8 +629,7 @@ mod read_file_bytes_tests {
     fn under_cap_reads_full_content() {
         let p = std::env::temp_dir().join(format!("ipe_rfb_under_{}.bin", std::process::id()));
         std::fs::write(&p, [1u8, 2, 3, 255, 0]).unwrap();
-        let res: IpeResult<String, Vec<i64>> =
-            block(file_read_file_bytes(p.to_string_lossy().into_owned()));
+        let res: IpeResult<String, Vec<i64>> = block(file_read_file_bytes(tp(&p)));
         let _ = std::fs::remove_file(&p);
         match res {
             IpeResult::Ok(v) => assert_eq!(v, vec![1, 2, 3, 255, 0]),
@@ -621,8 +644,7 @@ mod read_file_bytes_tests {
     fn exactly_at_cap_is_ok() {
         let p = std::env::temp_dir().join(format!("ipe_rfb_exact_{}.bin", std::process::id()));
         std::fs::write(&p, vec![7u8; DEFAULT_CAP]).unwrap();
-        let res: IpeResult<String, Vec<i64>> =
-            block(file_read_file_bytes(p.to_string_lossy().into_owned()));
+        let res: IpeResult<String, Vec<i64>> = block(file_read_file_bytes(tp(&p)));
         let _ = std::fs::remove_file(&p);
         match res {
             IpeResult::Ok(v) => assert_eq!(v.len(), DEFAULT_CAP),
@@ -640,8 +662,7 @@ mod read_file_bytes_tests {
     fn over_cap_by_one_byte_errs() {
         let p = std::env::temp_dir().join(format!("ipe_rfb_over_{}.bin", std::process::id()));
         std::fs::write(&p, vec![7u8; DEFAULT_CAP + 1]).unwrap();
-        let res: IpeResult<String, Vec<i64>> =
-            block(file_read_file_bytes(p.to_string_lossy().into_owned()));
+        let res: IpeResult<String, Vec<i64>> = block(file_read_file_bytes(tp(&p)));
         let _ = std::fs::remove_file(&p);
         assert!(
             matches!(res, IpeResult::Err(_)),
@@ -681,7 +702,7 @@ mod spawn_blocking_tests {
         std::fs::write(&p, vec![b'x'; 64 * 1024 * 1024]).unwrap(); // 64 MiB
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::set_var("IPE_FILE_READ_MAX", (128 * 1024 * 1024).to_string()) };
-        let path = p.to_string_lossy().into_owned();
+        let path = super::tp(&p);
 
         let ticks = rt.block_on(async move {
             let counter = Arc::new(AtomicU64::new(0));
@@ -723,7 +744,7 @@ mod spawn_blocking_tests {
             "ipe_spawn_blocking_write_probe_{}.txt",
             std::process::id()
         ));
-        let path = p.to_string_lossy().into_owned();
+        let path = super::tp(&p);
         let content = "x".repeat(64 * 1024 * 1024); // 64 MiB
 
         let ticks = rt.block_on(async move {

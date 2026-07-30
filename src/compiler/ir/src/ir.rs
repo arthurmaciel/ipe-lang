@@ -989,6 +989,19 @@ pub enum IrType {
     /// `ipe_runtime::secret`'s module doc for the full design.
     Secret,
 
+    /// `Ipe.Path`'s opaque, validated filesystem-path type — "paths are
+    /// typed, never a raw `String`": a `Path` can only be built through
+    /// `Path.fromString`, which normalises the path and REJECTS a NUL byte or a
+    /// `..` traversal escape, so an unvalidated string can never reach a
+    /// filesystem syscall. This closes the raw-`String`-path injection surface
+    /// (the Haskell `FilePath = String` anti-pattern).
+    ///
+    /// Renders as `ipe_runtime::path::Path` (a `#[derive(Clone)]` newtype around
+    /// a cleaned `String`; `Debug`/`PartialEq`/`Eq` are safe — a path is not a
+    /// secret). The `Ipe.File` kernels take a `Path`, not a `String`, so
+    /// construction is the single validated boundary.
+    Path,
+
     /// `Ipe.Cache`'s configuration record `{ maxEntries : Int, ttlMs : Int,
     /// maxBytes : Int }`. Renders as `ipe_runtime::cache::CacheCfg`.
     ///
@@ -1212,6 +1225,8 @@ pub fn ir_type_is_derivable(
         | IrType::TypeInfo
         | IrType::SqlFragment
         | IrType::Secret
+        // `Path` derives Clone+Debug+PartialEq+Eq (a validated string newtype).
+        | IrType::Path
         // Cache config / stats + Csv document runtime structs derive
         // Clone+Debug+PartialEq.
         | IrType::CacheCfg
@@ -1391,6 +1406,13 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         // field of type `Secret` a compile-time IPE-L0120, not a session-store
         // leak.
         | IrType::Secret
+        // `Path` is a filesystem-boundary value, not a serialisable Model
+        // field — derivable (see `ir_type_is_derivable`) but NOT serde. The
+        // runtime `ipe_runtime::path::Path` deliberately has no serde impl, so
+        // a `Ipe.Web` Model field of type `Path` is a compile-time IPE-L0120
+        // rather than a mismatch at emit — a filesystem path has no place in a
+        // client-hydrated session Model.
+        | IrType::Path
         // Cache config / stats + Csv document are kernel-boundary data records
         // — derivable (see `ir_type_is_derivable`) but never persisted to a
         // session store, so not serde (the runtime structs carry no serde
@@ -1490,6 +1512,7 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         | IrType::TypeInfo
         | IrType::SqlFragment
         | IrType::Secret
+        | IrType::Path
         | IrType::Db
         | IrType::ServerRequest
         | IrType::ServerResponse

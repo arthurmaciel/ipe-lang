@@ -908,6 +908,8 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::RegexSplit => "regex_split",
         // ── Ipe.Path kernels (pure; ungated runtime re-export) ─────
         // Names MUST match `ipe_runtime::path::*` exactly.
+        KernelFn::PathFromString => "path_from_string",
+        KernelFn::PathToString => "path_to_string",
         KernelFn::PathBase => "path_base",
         KernelFn::PathDir => "path_dir",
         KernelFn::PathExt => "path_ext",

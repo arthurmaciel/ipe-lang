@@ -20,6 +20,7 @@ import Ipe.String as String
 import Ipe.System as System
 import Ipe.Tea.Terminal as Terminal
 import Ipe.File as File
+import Ipe.Path as Path
 import Ipe.Task as Task
 import Ipe.Cmd as Cmd
 import Ipe.Sub as Sub
@@ -60,8 +61,22 @@ dumpLimit =
 init : () -> ( Model, Cmd Msg )
 init _unit =
     ( { entries = [], selected = 0, status = "reading .", bytes = [] }
-    , Task.attempt Listed (File.readDir ".")
+    , Task.attempt Listed (readDir ".")
     )
+
+
+-- | Validate a raw string into a `Path` (rejecting `..` escapes / NUL bytes),
+-- then list that directory. The validation failure and any I/O failure share
+-- the one `Task Error _` error channel.
+readDir : String -> Task Error (List String)
+readDir raw =
+    Task.andThen File.readDir (Task.fromResult (Path.fromString raw))
+
+
+-- | Same seal-then-act bridge for reading a selected file's bytes.
+readBytes : String -> Task Error (List Int)
+readBytes raw =
+    Task.andThen File.readFileBytes (Task.fromResult (Path.fromString raw))
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -97,7 +112,7 @@ update msg model =
             case selectedName model of
                 Just name ->
                     ( { model | status = "opening " ++ name ++ " ..." }
-                    , Task.attempt Opened (File.readFileBytes name)
+                    , Task.attempt Opened (readBytes name)
                     )
 
                 Nothing ->

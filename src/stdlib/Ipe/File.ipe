@@ -1,5 +1,10 @@
 -- | Ipe.File -- filesystem I/O (Layer 3 Ipe source).
 --
+-- Every path argument is a typed `Ipe.Path.Path`, not a raw `String`: build
+-- one with `Path.fromString` (which rejects `..` traversal escapes and NUL
+-- bytes) before handing it to any function here, so an unvalidated string can
+-- never reach a filesystem syscall.
+--
 -- Every function is effectful (touches the disk) so the return is
 -- always `Task Error _`.
 module Ipe.File exposing
@@ -13,24 +18,25 @@ module Ipe.File exposing
 
 import Ipe.Ffi as Ffi
 import Ipe.Error exposing (Error)
+import Ipe.Path exposing (Path)
 
 
 -- Read
 
 
-readFile : String -> Task Error String
+readFile : Path -> Task Error String
 readFile = Ffi.kernel "File_readFile"
 
 
 -- | `readFileLimit path maxBytes` -- read at most `maxBytes` from
 -- the file.  Useful to cap memory on untrusted-size inputs.
-readFileLimit : String -> Int -> Task Error String
+readFileLimit : Path -> Int -> Task Error String
 readFileLimit = Ffi.kernel "File_readFileLimit"
 
 
 -- | Read raw bytes as a list of Int.  Use for binary content
 -- (images, encrypted blobs); use `readFile` for UTF-8 text.
-readFileBytes : String -> Task Error (List Int)
+readFileBytes : Path -> Task Error (List Int)
 readFileBytes = Ffi.kernel "File_readFileBytes"
 
 
@@ -38,24 +44,24 @@ readFileBytes = Ffi.kernel "File_readFileBytes"
 
 
 -- | `writeFile path content` -- overwrites the file.
-writeFile : String -> String -> Task Error ()
+writeFile : Path -> String -> Task Error ()
 writeFile = Ffi.kernel "File_writeFile"
 
 
 -- | `append path content` -- appends to the end of the file
 -- (creates it if absent).
-append : String -> String -> Task Error ()
+append : Path -> String -> Task Error ()
 append = Ffi.kernel "File_append"
 
 
 -- Existence + removal
 
 
-exists : String -> Task Error Bool
+exists : Path -> Task Error Bool
 exists = Ffi.kernel "File_exists"
 
 
-remove : String -> Task Error ()
+remove : Path -> Task Error ()
 remove = Ffi.kernel "File_remove"
 
 
@@ -64,15 +70,15 @@ remove = Ffi.kernel "File_remove"
 
 -- | `mkdirAll path` -- like `mkdir -p`.  Creates every intermediate
 -- directory that doesn't exist.
-mkdirAll : String -> Task Error ()
+mkdirAll : Path -> Task Error ()
 mkdirAll = Ffi.kernel "File_mkdirAll"
 
 
-readDir : String -> Task Error (List String)
+readDir : Path -> Task Error (List String)
 readDir = Ffi.kernel "File_readDir"
 
 
-isDir : String -> Task Error Bool
+isDir : Path -> Task Error Bool
 isDir = Ffi.kernel "File_isDir"
 
 
@@ -80,21 +86,23 @@ isDir = Ffi.kernel "File_isDir"
 
 
 -- | `tempFile prefix` -- create a uniquely-named file in the system
--- temp dir.  Returns the absolute path.
+-- temp dir.  `prefix` is a filename prefix (not a path), so it stays a
+-- `String`.  Returns the absolute path.
 tempFile : String -> Task Error String
 tempFile = Ffi.kernel "File_tempFile"
 
 
 -- | `tempDir prefix` -- create a uniquely-named directory in the
--- system temp dir.  Returns the absolute path.  Caller is
--- responsible for `remove`-ing the directory when done.
+-- system temp dir.  `prefix` is a filename prefix (not a path).  Returns
+-- the absolute path.  Caller is responsible for `remove`-ing the directory
+-- when done.
 tempDir : String -> Task Error String
 tempDir = Ffi.kernel "File_tempDir"
 
 
-copy : String -> String -> Task Error ()
+copy : Path -> Path -> Task Error ()
 copy = Ffi.kernel "File_copy"
 
 
-rename : String -> String -> Task Error ()
+rename : Path -> Path -> Task Error ()
 rename = Ffi.kernel "File_rename"

@@ -215,7 +215,10 @@ a byte-buffer value with **codec helpers** (`fromString`/`toString`, `fromHex`/
 Elm's `File` is a **browser** upload/download model (`File.Select.file`,
 `File.Download.string`, `toUrl`). Ipê's `Ipe.File` is a **native filesystem**:
 `readFile`/`writeFile`/`append`/`exists`/`remove`/`mkdirAll`/`readDir`/`isDir`/
-`tempFile`/`tempDir`/`copy`/`rename`, all `Task Error a`.
+`tempFile`/`tempDir`/`copy`/`rename`, all `Task Error a`. Every path argument is
+a typed `Ipe.Path.Path` (built by `Path.fromString`, which rejects `..`
+traversal escapes and NUL bytes), never a raw `String` — see the language
+book's [filesystem chapter](../language/filesystem.md).
 
 - **Justification:** the browser `File`/`Select`/`Download` model is
   target-specific (see §4 exclusions). The native filesystem is the correct
