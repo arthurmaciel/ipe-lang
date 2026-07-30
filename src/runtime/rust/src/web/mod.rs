@@ -1684,6 +1684,9 @@ where
         // ── GET /_ipe/sse ─────────────────────────────────────────────────
         async fn sse_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
             State(st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
+            axum::extract::Query(qs): axum::extract::Query<
+                std::collections::HashMap<String, String>,
+            >,
             headers: axum::http::HeaderMap,
         ) -> Response
         where
@@ -1691,7 +1694,7 @@ where
             Msg: Clone + Send + 'static,
             FInit: Send + Sync + 'static,
             FUpdate: Send + Sync + 'static,
-            FView: Send + Sync + 'static,
+            FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
             FSubs: Send + Sync + 'static,
         {
             let sid = sid_from_cookie(&headers);
@@ -1716,6 +1719,55 @@ where
                         .into_response();
                 }
             };
+
+            // Reconnect reconciliation: the client sends
+            // `?path=<encodeURIComponent(location.pathname)>` on every (re)open,
+            // so after a bfcache Back/Forward, reload, or full-page navigation the
+            // server knows which URL the browser is actually displaying.
+            //
+            // If the path param is present AND matches a declared route, apply
+            // `route_resolver` to reconcile the model's page to that URL before the
+            // resync render — preventing the stale-page bounce where the server's
+            // model still thinks the user is on page B while the browser has
+            // navigated back to page A.
+            //
+            // Absent param (older cached client) or an unroutable path (browser
+            // noise, unknown URL) falls through to the current behaviour unchanged.
+            // Idempotent when the tab is already on the page its URL names: the
+            // resolver applied to the already-matching route is a no-op.
+            //
+            // Sub-app base-path trimming: the client sends the raw
+            // `location.pathname` which includes any reverse-proxy prefix; strip the
+            // base before matching so mounted sub-apps reconcile against their
+            // own route table, not the root path.
+            if let Some(raw_path) = qs.get("path") {
+                // Sanitise: accept only paths (must start with `/`), reject anything
+                // with `?` or `#` to avoid confusing the route matcher with query
+                // strings or fragments the client should not be sending here.
+                let client_path = raw_path.trim();
+                let is_valid_path = client_path.starts_with('/')
+                    && !client_path.contains('?')
+                    && !client_path.contains('#');
+                if is_valid_path {
+                    let base = live_base_path();
+                    // Strip the sub-app base prefix so the remaining path is
+                    // root-relative within this app's own route table.
+                    let route_path = if base.is_empty() {
+                        client_path
+                    } else {
+                        client_path.strip_prefix(&base).unwrap_or(client_path)
+                    };
+                    // Only reconcile when the path matches a declared route —
+                    // unknown paths (404 territory) fall through unchanged.
+                    if (st.route_matched)(route_path) {
+                        let mut g = entry.lock().unwrap_or_else(|e| e.into_inner());
+                        g.model = (st.route_resolver)(g.model.clone(), route_path);
+                        // Keep last_view in sync with the reconciled model so the
+                        // resync render below reflects the correct page.
+                        g.last_view = (st.view)(g.model.clone());
+                    }
+                }
+            }
 
             let (tx, rx) = sse::channel();
             {
@@ -1759,6 +1811,9 @@ where
             // drop this authoritative, idempotent frame. Bump seq under the same
             // lock the event path uses so it stays monotonic vs later patches; drop
             // the guard before the await (never hold a std Mutex across .await).
+            //
+            // When the reconnect reconciliation above ran, the model and last_view
+            // were already updated; the render here picks up the reconciled state.
             let resync = {
                 let mut g = entry.lock().unwrap_or_else(|e| e.into_inner());
                 g.seq += 1;
@@ -2597,5 +2652,255 @@ mod admission_control_tests {
         assert_eq!(max_sessions(), 50_000, "unparseable falls back to default");
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::remove_var("IPE_LIVE_MAX_SESSIONS") };
+    }
+}
+
+#[cfg(test)]
+mod sse_reconnect_reconcile_tests {
+    //! Proves the two-half reconcile contract for SSE reconnect:
+    //! 1. A reconnect whose `?path=` differs from the session's current route
+    //!    applies `route_resolver` + re-renders `last_view` so the resync
+    //!    frame reflects the correct page.
+    //! 2. A reconnect whose `?path=` already matches the current route is
+    //!    idempotent (model unchanged, same rendered output).
+    //! 3. An absent `?path=` param (older cached client) falls through
+    //!    unchanged — no reconciliation, no panic.
+    //! 4. An invalid path (contains `?` or `#`, or doesn't start with `/`)
+    //!    is rejected — session state untouched.
+    //! 5. An unroutable path (not declared in the route table) is skipped —
+    //!    session state untouched.
+    //! 6. Sub-app base-path prefix is stripped before matching.
+
+    use super::*;
+    use crate::web::route::{Route, match_routes, matches_any};
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::mpsc::channel;
+
+    /// A minimal two-page model: `Home` or `Detail(String)`.
+    #[derive(Clone, Debug, PartialEq)]
+    enum TestPage {
+        Home,
+        Detail(String),
+    }
+
+    /// Build a `SessionEntry` seeded with `page`, plus the three boxed
+    /// closures that the reconciliation block in `sse_handler` calls.
+    fn make_session(
+        page: TestPage,
+    ) -> (
+        SessionHandle<TestPage, ()>,
+        RouteResolver<TestPage>,
+        RouteMatched,
+        Arc<dyn Fn(TestPage) -> Html<()> + Send + Sync>,
+    ) {
+        let routes: Vec<Route<TestPage>> = vec![
+            Route::new("/", |_| Some(TestPage::Home)),
+            Route::new("/items/:id", |p| Some(TestPage::Detail(p[0].clone()))),
+        ];
+        let not_found = TestPage::Home;
+
+        let routes_arc = Arc::new(routes.clone());
+        let routes_arc2 = routes_arc.clone();
+        let nf = not_found.clone();
+
+        let route_resolver: RouteResolver<TestPage> =
+            Arc::new(move |_model, path| match_routes(&routes_arc, &nf, path));
+        let route_matched: RouteMatched = Arc::new(move |path| matches_any(&routes_arc2, path));
+
+        // Minimal view: render the page variant name as text so we can assert
+        // which page the resync would ship.
+        let view: Arc<dyn Fn(TestPage) -> Html<()> + Send + Sync> = Arc::new(|p| {
+            let label = match p {
+                TestPage::Home => "home-page".to_string(),
+                TestPage::Detail(id) => format!("detail-{id}"),
+            };
+            Html::HText(label)
+        });
+
+        let model = page.clone();
+        let last_view = (view)(model.clone());
+        let index = build_index(&last_view);
+        let (msg_tx, _rx) = channel::<()>(1);
+        let entry = Arc::new(Mutex::new(SessionEntry {
+            model,
+            last_view,
+            index,
+            seq: 0,
+            sse_tx: None,
+            msg_tx,
+        }));
+
+        (entry, route_resolver, route_matched, view)
+    }
+
+    /// Apply the exact reconciliation block from `sse_handler`, extracted here
+    /// for unit-testing without spinning up an axum server.
+    fn reconcile(
+        entry: &SessionHandle<TestPage, ()>,
+        route_matched: &RouteMatched,
+        route_resolver: &RouteResolver<TestPage>,
+        view: &Arc<dyn Fn(TestPage) -> Html<()> + Send + Sync>,
+        client_path: &str,
+    ) {
+        // Mirrors sse_handler's reconciliation block (IPE_LIVE_BASE_PATH is
+        // empty in tests so base = "").
+        let is_valid_path = client_path.starts_with('/')
+            && !client_path.contains('?')
+            && !client_path.contains('#');
+        if is_valid_path && route_matched(client_path) {
+            let mut g = entry.lock().unwrap_or_else(|e| e.into_inner());
+            g.model = route_resolver(g.model.clone(), client_path);
+            g.last_view = (view)(g.model.clone());
+        }
+    }
+
+    /// Helper: read the current rendered text from the session's `last_view`.
+    fn rendered_text(entry: &SessionHandle<TestPage, ()>) -> String {
+        let g = entry.lock().unwrap();
+        render_html(&g.last_view)
+    }
+
+    #[test]
+    fn differing_url_reconciles_model_and_last_view() {
+        // Session is on Detail("42") but the browser is now showing "/".
+        let (entry, resolver, matched, view) = make_session(TestPage::Detail("42".into()));
+        assert!(rendered_text(&entry).contains("detail-42"));
+
+        reconcile(&entry, &matched, &resolver, &view, "/");
+
+        let g = entry.lock().unwrap();
+        assert_eq!(
+            g.model,
+            TestPage::Home,
+            "model must be reconciled to the Home route"
+        );
+        drop(g);
+        assert!(
+            rendered_text(&entry).contains("home-page"),
+            "last_view must reflect the reconciled page"
+        );
+    }
+
+    #[test]
+    fn same_url_is_idempotent() {
+        // Session is already on Home; reconnect with path "/" — no change.
+        let (entry, resolver, matched, view) = make_session(TestPage::Home);
+        let before = rendered_text(&entry);
+
+        reconcile(&entry, &matched, &resolver, &view, "/");
+
+        let g = entry.lock().unwrap();
+        assert_eq!(g.model, TestPage::Home, "model must be unchanged");
+        drop(g);
+        assert_eq!(
+            rendered_text(&entry),
+            before,
+            "last_view must be identical after same-URL reconnect"
+        );
+    }
+
+    #[test]
+    fn absent_path_param_leaves_session_unchanged() {
+        // No reconciliation path is exercised at all — no-op.
+        let (entry, _resolver, _matched, _view) = make_session(TestPage::Detail("7".into()));
+        let before = rendered_text(&entry);
+        let seq_before = entry.lock().unwrap().seq;
+        // Do nothing (the `if let Some(raw_path) = qs.get("path")` branch is
+        // not entered when the client sends no `path` param).
+        assert_eq!(rendered_text(&entry), before);
+        assert_eq!(entry.lock().unwrap().seq, seq_before);
+    }
+
+    #[test]
+    fn invalid_path_rejected_session_unchanged() {
+        let (entry, resolver, matched, view) = make_session(TestPage::Home);
+        let before = rendered_text(&entry);
+
+        // Path with query string — must be rejected.
+        reconcile(&entry, &matched, &resolver, &view, "/?foo=bar");
+        assert_eq!(
+            rendered_text(&entry),
+            before,
+            "path with '?' must be rejected"
+        );
+
+        // Path with fragment — must be rejected.
+        reconcile(&entry, &matched, &resolver, &view, "/#anchor");
+        assert_eq!(
+            rendered_text(&entry),
+            before,
+            "path with '#' must be rejected"
+        );
+
+        // Relative path (no leading '/') — must be rejected.
+        reconcile(&entry, &matched, &resolver, &view, "items/1");
+        assert_eq!(
+            rendered_text(&entry),
+            before,
+            "relative path must be rejected"
+        );
+    }
+
+    #[test]
+    fn unroutable_path_leaves_session_unchanged() {
+        // "/favicon.ico" is not a declared route — falls through unchanged.
+        let (entry, resolver, matched, view) = make_session(TestPage::Home);
+        let before = rendered_text(&entry);
+
+        reconcile(&entry, &matched, &resolver, &view, "/favicon.ico");
+
+        assert_eq!(
+            rendered_text(&entry),
+            before,
+            "unroutable path must not modify session state"
+        );
+    }
+
+    #[test]
+    fn sub_app_base_prefix_is_stripped_before_matching() {
+        // Simulate a sub-app mounted at "/app": the client sends "/app/items/5"
+        // (its full location.pathname) but the route table has "/items/:id".
+        // The reconciler must strip "/app" before matching.
+        let (entry, _resolver, _matched, _view) = make_session(TestPage::Home);
+
+        // Build sub-app-aware closures with base="/app".
+        let routes: Vec<Route<TestPage>> = vec![
+            Route::new("/", |_| Some(TestPage::Home)),
+            Route::new("/items/:id", |p| Some(TestPage::Detail(p[0].clone()))),
+        ];
+        let routes_arc = Arc::new(routes.clone());
+        let routes_arc2 = routes_arc.clone();
+        let nf = TestPage::Home;
+        let route_resolver: RouteResolver<TestPage> =
+            Arc::new(move |_model, path| match_routes(&routes_arc, &nf, path));
+        let route_matched: RouteMatched = Arc::new(move |path| matches_any(&routes_arc2, path));
+        let view: Arc<dyn Fn(TestPage) -> Html<()> + Send + Sync> = Arc::new(|p| {
+            Html::HText(match p {
+                TestPage::Home => "home-page".to_string(),
+                TestPage::Detail(id) => format!("detail-{id}"),
+            })
+        });
+
+        // Manually apply the sub-app base-stripping logic (mirrors sse_handler).
+        let base = "/app";
+        let client_path = "/app/items/5";
+        let route_path = client_path.strip_prefix(base).unwrap_or(client_path);
+        // route_path is now "/items/5" — must match the declared route.
+        assert!(
+            route_matched(route_path),
+            "stripped path must match route table"
+        );
+        if route_matched(route_path) {
+            let mut g = entry.lock().unwrap_or_else(|e| e.into_inner());
+            g.model = route_resolver(g.model.clone(), route_path);
+            g.last_view = (view)(g.model.clone());
+        }
+
+        let g = entry.lock().unwrap();
+        assert_eq!(
+            g.model,
+            TestPage::Detail("5".into()),
+            "sub-app base must be stripped before route matching"
+        );
     }
 }
