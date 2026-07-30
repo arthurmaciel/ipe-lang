@@ -155,6 +155,9 @@ const TAG_SHARED_FUN: u8 = 55;
 const TAG_PATH: u8 = 56;
 const TAG_REGEX: u8 = 57;
 const TAG_HTTP_METHOD: u8 = 58;
+const TAG_CRYPTO_KEY: u8 = 59;
+const TAG_CRYPTO_MAC: u8 = 60;
+const TAG_EMAIL_ADDRESS: u8 = 61;
 /// Fuel exhaustion marker — distinct from every variant tag.
 const TAG_FUEL_EXHAUSTED: u8 = 0xFF;
 
@@ -212,6 +215,10 @@ fn hash_ty(ctx: &EmitCtx, ty: &IrType, h: &mut Sha256, fuel: u32) -> DResult<()>
         IrType::EmailSesConfig => h.update([TAG_EMAIL_SES_CONFIG]),
         IrType::EmailSmtpConfig => h.update([TAG_EMAIL_SMTP_CONFIG]),
         IrType::EmailProvider => h.update([TAG_EMAIL_PROVIDER]),
+        // Typed-key newtypes — non-serde but present for exhaustiveness.
+        IrType::CryptoKey => h.update([TAG_CRYPTO_KEY]),
+        IrType::CryptoMac => h.update([TAG_CRYPTO_MAC]),
+        IrType::EmailAddress => h.update([TAG_EMAIL_ADDRESS]),
 
         IrType::Task(inner) => {
             h.update([TAG_TASK]);

@@ -945,6 +945,7 @@ impl Env {
                 &["required", "optional", "custom", "requiredAt"],
             ),
             // `Ipe.Crypto` — hashes / HMAC / RSA / AEAD / key-derivation / random.
+            // String-typed surface (backward-compat) + typed-key variants (§6.11).
             (
                 "Crypto",
                 &[
@@ -965,6 +966,15 @@ impl Env {
                     "chachaKeyFromPassword",
                     "randomBytes",
                     "randomToken",
+                    // typed-key variants (additive, §6.11)
+                    "hmacSha256WithKey",
+                    "hmacSha512WithKey",
+                    "aesGcmEncryptKey",
+                    "aesGcmDecryptKey",
+                    "chacha20EncryptKey",
+                    "chacha20DecryptKey",
+                    "aesKeyFromPasswordKey",
+                    "chachaKeyFromPasswordKey",
                 ],
             ),
             // `Ipe.Uuid` — UUID generation and parsing.

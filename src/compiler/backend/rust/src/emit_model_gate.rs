@@ -279,6 +279,11 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         | IrType::EmailSesConfig
         | IrType::EmailSmtpConfig
         | IrType::EmailProvider
+        // Typed-key newtypes are not serde — a `Key`/`Mac`/`EmailAddress` in a
+        // Web Model would be a compile-time IPE-L0120.
+        | IrType::CryptoKey
+        | IrType::CryptoMac
+        | IrType::EmailAddress
         // `SqlFragment` is a query-building value, never
         // persisted to a Web session store — not a valid Model leaf.
         | IrType::SqlFragment

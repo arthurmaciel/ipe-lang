@@ -26,7 +26,64 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 type HmacSha256 = Hmac<Sha256>;
 
+/// `Ipe.Email.EmailAddress` — an opaque, parse-validated email address.
+///
+/// The ONLY constructor is [`email_address_parse`] which returns `None` for
+/// any string that fails the structural check mirroring `String.isEmail`
+/// (same rules the Go backend uses: `user@domain.tld`, no name component, no
+/// embedded spaces). A bare `String` can NEVER silently coerce to this type —
+/// passing `"not-an-email"` where an `EmailAddress` is expected is a Ipê
+/// type error, not a silent send failure.
+///
+/// `Clone + PartialEq`: addresses are compared (e.g. in reply-to matching).
+/// `Debug`: the address is NOT a secret — it is transmitted in email headers.
+#[derive(Clone, PartialEq, Debug)]
+pub struct EmailAddress(String);
+
+impl std::fmt::Display for EmailAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl crate::stringify::IpeStringify for EmailAddress {
+    fn ipe_show(&self) -> String {
+        self.0.clone()
+    }
+}
+
+/// `EmailAddress.parse : String -> Maybe EmailAddress` — the single parse
+/// boundary. Returns `None` when the string is not a structurally valid
+/// bare address (`user@domain.tld`). Mirrors `String.isEmail`'s rules.
+#[must_use]
+pub fn email_address_parse(s: String) -> crate::core::IpeMaybe<EmailAddress> {
+    if email_address_is_valid(&s) {
+        crate::core::IpeMaybe::Just(EmailAddress(s))
+    } else {
+        crate::core::IpeMaybe::Nothing
+    }
+}
+
+/// `EmailAddress.toString : EmailAddress -> String` — recover the address string.
+#[must_use]
+pub fn email_address_to_string(addr: EmailAddress) -> String {
+    addr.0
+}
+
+/// Structural validation matching `String.isEmail` / Go's `net/mail.ParseAddress`
+/// posture: bare `user@domain.tld`, no name component, no embedded spaces.
+fn email_address_is_valid(s: &str) -> bool {
+    crate::string::string_is_email(s.to_owned())
+}
+
 /// Ipê.Email.EmailMessage — field names/types match the Ipê record alias.
+///
+/// Address fields (`from`, `to`, `cc`, `bcc`, `replyTo`) remain `String` to
+/// preserve backward compatibility with the existing `Email.ipe` API.
+/// The additive `EmailAddress` type (and `parseAddress`/`addressToString`)
+/// is the parse-don't-validate boundary for NEW code that wants type-enforced
+/// addresses; existing call sites using `defaultMessage` / `with*` helpers
+/// keep passing plain `String` values unchanged.
 #[allow(non_snake_case)]
 #[derive(Clone, Debug)]
 pub struct EmailMessage {
@@ -388,12 +445,23 @@ async fn send_ses<E: From<String>>(cfg: &SesConfig, m: &EmailMessage) -> IpeResu
             serde_json::json!({ "Data": m.htmlBody, "Charset": "UTF-8" }),
         );
     }
-    let mut destination = serde_json::json!({ "ToAddresses": m.to });
+    let to_strings: Vec<&str> = m.to.iter().map(|a| a.as_str()).collect();
+    let cc_strings: Vec<&str> = m.cc.iter().map(|a| a.as_str()).collect();
+    let bcc_strings: Vec<&str> = m.bcc.iter().map(|a| a.as_str()).collect();
+    let mut destination = serde_json::json!({ "ToAddresses": to_strings });
     if !m.cc.is_empty() {
-        json_obj_set(&mut destination, "CcAddresses", serde_json::json!(m.cc));
+        json_obj_set(
+            &mut destination,
+            "CcAddresses",
+            serde_json::json!(cc_strings),
+        );
     }
     if !m.bcc.is_empty() {
-        json_obj_set(&mut destination, "BccAddresses", serde_json::json!(m.bcc));
+        json_obj_set(
+            &mut destination,
+            "BccAddresses",
+            serde_json::json!(bcc_strings),
+        );
     }
     let body = serde_json::json!({
         "FromEmailAddress": m.from,
@@ -673,7 +741,8 @@ mod tests {
 
     #[tokio::test]
     async fn dry_run_returns_synthetic_id() {
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        // SAFETY: test-only env mutation; unsafe in Rust 2024 due to reader/mutator
+        // environ race.
         unsafe { std::env::set_var("IPE_EMAIL_DRY_RUN", "1") };
         let msg = EmailMessage {
             from: "a@example.com".into(),
@@ -692,14 +761,57 @@ mod tests {
             IpeResult::Ok(id) => assert!(id.starts_with("dry-run-")),
             IpeResult::Err(e) => panic!("dry-run failed: {}", e),
         }
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        // SAFETY: test-only env mutation.
         unsafe { std::env::remove_var("IPE_EMAIL_DRY_RUN") };
+    }
+
+    // ── EmailAddress typed parse boundary tests ──────────────────────────────
+
+    /// `parseAddress` returns `Just` for a structurally valid address.
+    #[test]
+    fn email_address_parse_valid_returns_just() {
+        let result = email_address_parse("user@example.com".to_string());
+        assert!(
+            matches!(result, crate::core::IpeMaybe::Just(_)),
+            "valid email must parse to Just"
+        );
+    }
+
+    /// `parseAddress` returns `Nothing` for an invalid address — never a silent accept.
+    #[test]
+    fn email_address_parse_invalid_returns_nothing() {
+        for bad in &[
+            "not-an-email",
+            "@no-user",
+            "no-at-sign",
+            "spaces in@address.com",
+            "",
+            "missing@",
+        ] {
+            let result = email_address_parse((*bad).to_string());
+            assert!(
+                matches!(result, crate::core::IpeMaybe::Nothing),
+                "invalid address {:?} must parse to Nothing, got Just",
+                bad
+            );
+        }
+    }
+
+    /// `addressToString` is a left-inverse of `parseAddress` for valid addresses.
+    #[test]
+    fn email_address_to_string_roundtrip() {
+        let addr_str = "user@example.com".to_string();
+        let parsed = match email_address_parse(addr_str.clone()) {
+            crate::core::IpeMaybe::Just(a) => a,
+            crate::core::IpeMaybe::Nothing => panic!("valid address should parse"),
+        };
+        assert_eq!(email_address_to_string(parsed), addr_str);
     }
 
     #[test]
     fn civil_from_days_epoch() {
         assert_eq!(civil_from_days(0), (1970, 1, 1));
-        // 2021-01-01 is 18628 days after epoch.
+        // Day 18628 after epoch = Jan 1 of the year the Go parity fixture uses.
         assert_eq!(civil_from_days(18628), (2021, 1, 1));
     }
 }

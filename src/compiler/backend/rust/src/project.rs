@@ -1659,7 +1659,12 @@ fn ir_type_contains_non_serde(ty: &IrType) -> bool {
         | IrType::EmailAttachment
         | IrType::EmailSesConfig
         | IrType::EmailSmtpConfig
-        | IrType::EmailProvider => true,
+        | IrType::EmailProvider
+        // Typed-key newtypes — not serde; a Key/Mac/EmailAddress in a
+        // HydrationState record is rejected.
+        | IrType::CryptoKey
+        | IrType::CryptoMac
+        | IrType::EmailAddress => true,
     }
 }
 
