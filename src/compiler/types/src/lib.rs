@@ -3407,10 +3407,10 @@ mod tests {
             "expected exactly one IPE-T0018 warning, got {:?}",
             types.warnings
         );
-        if let Diagnostic::Type {
+        if let Some(Diagnostic::Type {
             msg: TypeError::WildcardCoversKnownConstructors { constructors },
             ..
-        } = t0018[0]
+        }) = t0018.first().copied()
         {
             let names: Vec<&str> = constructors.iter().map(AsRef::as_ref).collect();
             // The remaining constructors are `Green` and `Blue` (in declaration order).
@@ -3464,7 +3464,7 @@ mod tests {
             "a fully-redundant wildcard must NOT emit IPE-T0018, got {t0018:?}"
         );
         // The redundant-branch warning must still fire.
-        let t0011: Vec<_> = types
+        let t0011 = types
             .warnings
             .iter()
             .filter(|w| {
@@ -3476,10 +3476,9 @@ mod tests {
                     }
                 )
             })
-            .collect();
+            .count();
         assert_eq!(
-            t0011.len(),
-            1,
+            t0011, 1,
             "redundant wildcard must emit exactly one IPE-T0011"
         );
     }
