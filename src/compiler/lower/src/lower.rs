@@ -9848,11 +9848,7 @@ impl<'a> Lowerer<'a> {
                 if is_email_smtp_canon_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::EmailSmtpConfig);
                 }
-                if is_all_string_canon_record_shape(
-                    &mut named_fields,
-                    EMAIL_ATTACHMENT_FIELDS,
-                    self.interner,
-                ) {
+                if is_email_attachment_canon_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::EmailAttachment);
                 }
                 if is_all_string_canon_record_shape(
@@ -10901,11 +10897,7 @@ impl<'a> Lowerer<'a> {
                 if is_email_smtp_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::EmailSmtpConfig);
                 }
-                if is_all_string_record_shape(
-                    &mut named_fields,
-                    EMAIL_ATTACHMENT_FIELDS,
-                    self.interner,
-                ) {
+                if is_email_attachment_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::EmailAttachment);
                 }
                 if is_all_string_record_shape(&mut named_fields, EMAIL_SES_FIELDS, self.interner) {
