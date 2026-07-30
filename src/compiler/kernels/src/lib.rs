@@ -3725,8 +3725,6 @@ impl StdlibKernel {
         Self::TaskAndThenResult,
         Self::TaskSequence,
         Self::TaskParallel,
-        Self::TaskRun,
-        Self::TaskPerform,
         Self::TaskLazy,
         Self::TaskRetryWith,
         Self::TaskLinearBackoff,

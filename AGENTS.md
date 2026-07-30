@@ -120,10 +120,10 @@ Ask one focused question per ambiguity; no guess heroically.
 | Web app (forms, real-time, UI state)     | **Ipe.Tea.Web**        | `Web.app cfg`                      | HTTP-first; SSE patches; sessions + cookies + routing built in. |
 | HTTP / JSON API (no browser UI)          | **Ipe.Http.Server**| `Server.listen 8000 [...]`         | Routes + middleware (CORS / rate-limit / logging / basic-auth). |
 | Multi-tenant SaaS / dashboard            | **Ipe.Tea.Web + auth-app gate** | `Web.app { consoleAuth = … }` | Tenant scope enforced at SQL layer. |
-| Background job / cron worker             | **Program** (plain `main`) | `main = Task.run scheduledWork`    | No UI loop; `Task.parallel` for fan-out. |
+| Background job / cron worker             | **Program** (plain `main`) | `main = scheduledWork`             | No UI loop; `Task.parallel` for fan-out. |
 | Line-oriented interactive tool           | **Ipe.Tea.Terminal**   | `Terminal.appLines cfg`            | Managed stdin-driven TEA loop (init/update/view/onLine). |
 | Terminal UI (TUI)                        | **Ipe.Tea.Terminal**   | `Terminal.appScreen cfg`           | Same `Element` view as Ipe.Tea.Web. |
-| One-shot CLI tool                        | **Program** (plain `main`) | `main = Task.run cliCmd`           | Argparse via `System.args`. |
+| One-shot CLI tool                        | **Program** (plain `main`) | `main = cliCmd`                    | Argparse via `System.args`. |
 | Desktop app                              | **Ipe.Tea.WebView**    | `WebView.app cfg`                  | macOS today; Linux / Windows later. |
 | WebSocket-driven feed                    | **Ipe.Http.Server.WebSocket** | `Server.upgrade req` | Bidirectional. |
 | Server-sent stream (LLM tokens, SSE)     | **Ipe.Http.Server.Stream** | `Server.Stream.emit` | Mirror of `Ipe.Http.Stream`. |
@@ -214,12 +214,21 @@ in
     continue
 ```
 
-Top-level module bindings of Task-typed values still require explicit
-`Task.run`:
+Top-level module bindings of Task-typed values are evaluated lazily on first
+use. A binding that needs a `Result` must use `Task.attempt` or run inside a
+`Task.andThen` chain. (Illustrative Ipê source — not a shell command.)
 
 ```elm
+-- preferred: keep it Task-typed, force at the call site
+apiKey : Task Error String
 apiKey =
-    System.getenv "OPENAI_KEY" |> Task.run |> Result.withDefault ""
+    System.getenv "OPENAI_KEY"
+
+-- at the use site, within a Task chain:
+main =
+    apiKey
+        |> Task.andThen (\key -> doSomethingWith key)
+        |> Task.onError (\_ -> doSomethingWith "default")
 ```
 
 Such a zero-parameter top-level binding is a shared **value**, not a function:
@@ -259,7 +268,7 @@ entry boundary (CLI `main`, `Cmd.perform`, HTTP handler return) executes them.
 2. `Log.errorWith op [ "errId", errId, "error", Error.toString e ]` — server-side structured log.
 3. `Task.fail (Error.unexpected ("Operation failed (ref " ++ errId ++ ")"))` — user-facing message.
 
-Per app shape: CLI → `Task.run … |> Task.onError reportError`;
+Per app shape: CLI → `… |> Task.onError reportError` (return the Task directly from `main`);
 Ipe.Http.Server → `Task.onError` recovers to 4xx/5xx Response;
 Ipe.Tea.Web → `Cmd.perform task ResultMsg`, dispatch updates
 `notification` / `historyError` in Model.
@@ -885,7 +894,7 @@ type alias Cfg model msg =
     , canvasHeight  : Int                              -- default 720
     }
 
-main = Terminal.appScreen cfg |> Task.run
+main = Terminal.appScreen cfg
 ```
 
 **Logical-pixel canvas** — `canvasWidth × canvasHeight` defines design
@@ -946,7 +955,7 @@ instance); `Log.*` goes to `console.{log,error}`; `Random.int`/`float`/
 `succeed`/`fail`/`sequence` all work (the pure future-combinator half of
 `Task.*`). CORS/timeout/connect failures surface as `Task.fail`, never a
 trap. Server-only effects (`Db.*`, `File.*`, `Auth.*`, `System.getenv`,
-`Server.*`, `Task.run`/`parallel`/`retryWith`, …) have NO wasm denotation —
+`Server.*`, `Task.parallel`/`retryWith`, …) have NO wasm denotation —
 naming one is IPE-N0029 at compile time; route them through a native server
 and call it over HTTP. Public, non-secret build-time config reaches the
 browser through `Ipe.Env.public` (see `[wasm].publicEnv` below) —

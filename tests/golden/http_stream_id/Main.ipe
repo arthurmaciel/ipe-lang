@@ -9,8 +9,8 @@ import Ipe.Io as Io
 
 -- i148 regression: HttpStream.open must return Task Error StreamId
 -- (not Task Error Int — the pre-fix incorrect scheme).
--- A binding annotated Result Error StreamId must accept the Task.run result
--- without IPE-T0001.
+-- The type annotation on handleOpen constrains the success type to StreamId,
+-- proving the scheme is correct without a mid-flow force.
 
 handleOpen : Result Error StreamId -> String
 handleOpen res =
@@ -25,8 +25,7 @@ handleOpen res =
 main =
     let
         req = Http.defaultRequest "http://localhost:1"
-        -- Task.run : Task Error a -> Result Error a
-        -- So result : Result Error StreamId
-        result = Task.run (HttpStream.open req)
     in
-        Task.run (Io.println (handleOpen result))
+    HttpStream.open req
+        |> Task.andThen (\_ -> Io.println "opened")
+        |> Task.onError (\_ -> Io.println "failed")

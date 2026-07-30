@@ -46,6 +46,9 @@ float = Ffi.kernel "Random_float"
 --     Random.range 1 6 |> Task.run
 --
 -- Identical semantics to `int` (inclusive on both ends).
+--
+--     Random.range 1 6
+--         |> Task.andThen (\n -> Io.println (String.fromInt n))
 range : Int -> Int -> Task Error Int
 range lo hi = int lo hi
 

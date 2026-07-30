@@ -89,30 +89,18 @@ decJunkIsErr =
             False
 
 
--- `Task.fail` whose phantom success is discarded (run then matched).
-taskFailIsErr : Bool
-taskFailIsErr =
-    case Task.run (Task.fail (Error.unexpected "boom")) of
-        Err _ ->
-            True
-
-        Ok _ ->
-            False
-
-
 main =
     let
-        flags =
+        pureFlags =
             [ headEmpty
             , tailEmpty
             , isEmptyEmpty
             , mapErrorDiscard
             , decJunkIsErr
-            , taskFailIsErr
             ]
 
         allTrue =
-            List.all (\b -> b) flags
+            List.all (\b -> b) pureFlags
 
         verdict =
             if allTrue then
@@ -126,4 +114,7 @@ main =
                 ++ "," ++ String.fromInt dictKeysEmpty
                 ++ "," ++ String.fromInt setEmptyCount
     in
-    Io.println (verdict ++ " " ++ counts)
+    -- `Task.fail` whose phantom success is discarded; err branch proves Err.
+    Task.fail (Error.unexpected "boom")
+        |> Task.andThen (\_ -> Io.println "FAIL taskFail")
+        |> Task.onError (\_ -> Io.println (verdict ++ " " ++ counts))

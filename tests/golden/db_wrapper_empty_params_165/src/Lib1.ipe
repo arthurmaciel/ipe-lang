@@ -1,72 +1,30 @@
-module Lib1 exposing (queryOrLog, execOrLog)
+module Lib1 exposing (withConn, query, exec)
 
-import Ipe.System as System
 import Ipe.Db
-import Ipe.Task
+import Ipe.Task as Task
 
 
--- BACKLOG #165 regression: a Ipe-defined WRAPPER function around `Db.exec` /
--- `Db.query` (never the kernel called directly) forwards its own polymorphic
--- `args : List a` parameter straight into the kernel's params position —
--- exactly `examples/17-ipemon`'s `Lib.Database.exec` / `.query` /
--- `.execOrLog` / `.queryOrLog` shape, including the module-level MEMOIZED
--- `conn` binding (closed over by `exec`/`query`, never threaded as a
--- parameter — matching the real fixture and sidestepping the orthogonal
--- multi-use-`Db`-lambda-parameter clone gap a threaded `conn` parameter
--- would hit).
+-- Regression: a wrapper function around `Db.exec` / `Db.query` forwards its
+-- own polymorphic `args : List a` parameter straight into the kernel's params
+-- position — exactly the `examples/17-ipemon` `Lib.Database` shape.
 --
 -- Called cross-module (from `Lib2` AND `Main`, both with a `List SqlValue`
--- `args`, AND with the empty list `[]`), so `args`'s type variable is
+-- `args` AND with the empty list `[]`), so `args`'s type variable is
 -- exercised across module boundaries exactly like the production bug.
 --
--- Before the #165 fix, calling either wrapper with an EMPTY list (`[]`, no
--- bind parameters — the DDL statement and the no-bind-params SELECT below)
--- left:
---
---   * the wrapper's OWN emitted Rust generic with no
---     `Into<ipe_runtime::db::SqlParam>` bound — so its body's `Db.exec`/
---     `Db.query` projection (`.map(SqlParam::from)`) failed `cargo build`
---     with E0277 ("the trait bound `SqlParam: From<T1>` is not satisfied");
---   * the empty-list call SITE with a bare, ambiguous `Vec::new()` argument —
---     E0283 ("type annotations needed").
---
--- `ipec` accepted the program (exit 0) while `cargo build` on the emitted
--- Rust rejected it — a ipec-accepts/cargo-rejects SEAL violation.
-conn =
-    case Task.run (Db.open "sqlite" "/tmp/ipe_db_wrapper_empty_params_165_golden.db") of
-        Ok c ->
-            c
-
-        Err e ->
-            System.exit 1
+-- The fix ensured the wrapper's emitted Rust generic carries the required
+-- `Into<ipe_runtime::db::SqlParam>` bound and the empty-list call site is
+-- not left ambiguous (E0277 / E0283 were the pre-fix cargo failures).
+query conn queryStr args =
+    Db.query conn queryStr args
 
 
-query queryStr args =
-    Task.run (Db.query conn queryStr args)
+exec conn queryStr args =
+    Db.exec conn queryStr args
+        |> Task.andThen (\_ -> Task.succeed ())
 
 
-exec queryStr args =
-    case Task.run (Db.exec conn queryStr args) of
-        Ok _ ->
-            Ok ()
-
-        Err e ->
-            Err e
-
-
-queryOrLog label queryStr args =
-    case query queryStr args of
-        Ok rows ->
-            rows
-
-        Err e ->
-            []
-
-
-execOrLog label queryStr args =
-    case exec queryStr args of
-        Ok _ ->
-            ()
-
-        Err e ->
-            ()
+-- Open a connection, run `f conn`, then close it.
+withConn f =
+    Db.open "sqlite" "/tmp/ipe_db_wrapper_empty_params_165_golden.db"
+        |> Task.andThen f

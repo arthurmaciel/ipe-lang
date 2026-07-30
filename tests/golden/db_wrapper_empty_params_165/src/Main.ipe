@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.Task as Task
 import Lib1
 import Lib2
 import Ipe.Db
@@ -8,56 +9,35 @@ import Ipe.List
 import Ipe.String
 
 
--- BACKLOG #165 regression (see `Lib1.ipe` for the full incident writeup).
--- File-backed SQLite DB (`Lib1.conn`) so every pool connection shares the
--- same persisted database; `CREATE TABLE IF NOT EXISTS` + `DELETE FROM`
--- keeps re-runs idempotent.
---
--- Exercises `Lib1.execOrLog` / `Lib1.queryOrLog` cross-module (from `Lib2`
--- AND `Main`) at BOTH the empty list `[]` (the exact #165 trigger — DDL and
--- a no-bind-params SELECT) and a non-empty `List SqlValue` (the typed
--- mixed-param path). `args` stays `List SqlValue` at every non-empty call
--- site so the fixture isolates the ONE variable #165 is actually about:
--- empty vs. non-empty, not cross-call-site type diversity (a separate,
--- already-covered concern — `tests/golden/db_poly_params`).
+-- Regression: a wrapper around `Db.exec` / `Db.query` forwards its
+-- polymorphic `args : List a` parameter into the kernel — exercised
+-- cross-module at both empty `[]` (the regression trigger) and non-empty
+-- `List SqlValue` (the typed mixed-param path).
 --
 -- Expected output: "gadget,widget" (two rows, ordered by name).
 main =
-    let
-        -- (a) empty params — the #165 trigger.
-        _ =
-            Lib1.execOrLog
-                "Main.setup"
-                "CREATE TABLE IF NOT EXISTS items (id TEXT, name TEXT)"
-                []
-
-        _ =
-            Lib1.execOrLog
-                "Main.reset"
-                "DELETE FROM items"
-                []
-
-        -- List SqlValue, via Lib2 (cross-module).
-        _ =
-            Lib2.insertWidget
-
-        -- List SqlValue, called directly from Main (not through Lib2) —
-        -- proves `args` is genuinely reusable across DIFFERENT cross-module
-        -- call sites, not just Lib2's.
-        _ =
-            Lib1.execOrLog
-                "Main.insertGadget"
-                "INSERT INTO items (id, name) VALUES (?, ?)"
-                [ SqlString "2", SqlString "gadget" ]
-
-        -- (a) again — the SAME empty-params shape reading back.
-        rows =
-            Lib1.queryOrLog
-                "Main.getItems"
-                "SELECT name FROM items ORDER BY name"
-                []
-    in
-    Io.println
-        (String.join ","
-            (List.map (\row -> Db.getString "name" row) rows)
+    Lib1.withConn
+        (\conn ->
+            -- (a) empty params — the regression trigger.
+            Lib1.exec conn "CREATE TABLE IF NOT EXISTS items (id TEXT, name TEXT)" []
+                |> Task.andThen (\_ -> Lib1.exec conn "DELETE FROM items" [])
+                -- List SqlValue via Lib2 (cross-module).
+                |> Task.andThen (\_ -> Lib2.insertWidget conn)
+                -- List SqlValue directly from Main.
+                |> Task.andThen
+                    (\_ ->
+                        Lib1.exec conn
+                            "INSERT INTO items (id, name) VALUES (?, ?)"
+                            [ SqlString "2", SqlString "gadget" ]
+                    )
+                -- (a) again — empty-params SELECT reading back.
+                |> Task.andThen
+                    (\_ -> Lib1.query conn "SELECT name FROM items ORDER BY name" [])
+                |> Task.andThen
+                    (\rows ->
+                        Io.println
+                            (String.join ","
+                                (List.map (\row -> Db.getString "name" row) rows)
+                            )
+                    )
         )

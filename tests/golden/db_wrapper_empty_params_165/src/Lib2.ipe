@@ -3,11 +3,9 @@ module Lib2 exposing (insertWidget)
 import Lib1
 
 
--- Calls `Lib1.execOrLog` with a `List SqlValue` (the typed mixed-param
--- path), cross-module — matches `examples/17-ipemon`'s `Lib.Alerts` /
--- `Lib.Monitors` calling into `Lib.Database`.
-insertWidget =
-    Lib1.execOrLog
-        "Lib2.insertWidget"
+-- Calls `Lib1.exec` with a `List SqlValue` (the typed mixed-param path),
+-- cross-module — exercises the wrapper's polymorphic `args` across modules.
+insertWidget conn =
+    Lib1.exec conn
         "INSERT INTO items (id, name) VALUES (?, ?)"
         [ SqlString "1", SqlString "widget" ]

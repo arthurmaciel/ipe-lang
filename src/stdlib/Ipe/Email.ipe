@@ -25,8 +25,8 @@
 --             }
 --             |> Email.withTextBody "Hello, world!"
 --
---     Email.send provider msg
---         |> Task.run
+--     main =
+--         Email.send provider msg
 module Ipe.Email exposing
     ( EmailMessage
     , Attachment
