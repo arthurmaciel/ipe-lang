@@ -1546,7 +1546,7 @@ impl Env {
                     "attrToString",
                     // text / raw nodes
                     "text",
-                    "raw",
+                    "unsafeRaw",
                     // generic builder
                     "node",
                     "voidNode",

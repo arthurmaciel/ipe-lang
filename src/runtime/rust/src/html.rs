@@ -12,6 +12,8 @@ pub enum Html<M> {
     /// Text node (HTML-escaped on render) — matches Ipê's `HText s`.
     HText(String),
     /// Raw, un-escaped HTML — trusted pre-rendered content only; caller sanitises.
+    /// Reachable from Ipê ONLY through the explicitly-marked `Html.unsafeRaw`
+    /// surface (never a plain `Html.raw`), so every raw-injection site is named.
     /// Matches Ipê's `HRaw s`.
     HRaw(String),
 }

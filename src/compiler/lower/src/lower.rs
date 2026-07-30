@@ -15931,7 +15931,13 @@ impl<'a> Lowerer<'a> {
                     ("Font", "italic") => Ok(Callee::Kernel(KernelFn::FontItalic)),
                     // ── Html element builders ─────────────────────────────
                     ("Html", "text") => Ok(Callee::Kernel(KernelFn::HtmlTextNode)),
-                    ("Html", "raw") => Ok(Callee::Kernel(KernelFn::HtmlRawNode)),
+                    // `unsafeRaw : String -> Html msg` injects an un-escaped
+                    // String verbatim into the HTML — an XSS vector. The name
+                    // carries the `unsafe` prefix (Db.unsafeFindWhere precedent)
+                    // so every raw-injection site is greppable and never looks
+                    // safe as a plain `Html.raw`. User content must use
+                    // `Html.text` (escaped by construction) instead.
+                    ("Html", "unsafeRaw") => Ok(Callee::Kernel(KernelFn::HtmlRawNode)),
                     // `styleNode : List Attr -> String -> Html msg` is arity-2 —
                     // its own kernel, NOT folded into the arity-3 `HtmlNode`. The
                     // dedicated kernel close-tag-neutralises the CSS body (F7).

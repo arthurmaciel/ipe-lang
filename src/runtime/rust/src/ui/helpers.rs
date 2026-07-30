@@ -549,7 +549,10 @@ pub fn html_text_node_<M>(s: String) -> Html<M> {
     Html::HText(s)
 }
 
-/// `Html.raw : String -> Html msg`
+/// `Html.unsafeRaw : String -> Html msg` — injects an un-escaped String
+/// verbatim as HTML. The `unsafe` prefix names the XSS risk at the Ipê surface
+/// so raw injection is greppable and never looks safe; user content goes
+/// through `html_text_node_` (escaped by construction) instead.
 #[must_use]
 pub fn html_raw_node_<M>(s: String) -> Html<M> {
     Html::HRaw(s)
