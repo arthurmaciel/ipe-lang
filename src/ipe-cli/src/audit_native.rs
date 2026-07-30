@@ -47,15 +47,15 @@ use crate::audit::{Check, Rejection};
 /// under `jail(8)` — so a certify names exactly the platform whose jail actually
 /// ran, never another.
 ///
-/// Windows is deliberately NOT a certifying platform here even though its
-/// returning `build_in_jail` arm landed: the Tier-2 probe wrapper is a POSIX
-/// shell fixture driven through a `/usr/bin/env … /bin/sh` invocation prefix
-/// (see [`JailProbeRunner`]), which the Windows jail — running `payload[0]`
-/// directly through `CreateProcessW`, no shell — cannot execute. Windows Tier-2
-/// certification needs a Windows-native probe wrapper and invocation prefix, a
-/// design change beyond a `cfg`-gate promotion, so Windows stays refuse-to-
-/// certify in the audit layer (its `build_in_jail` deny behaviour is still proven
-/// by the `windows-tier2` CI job's `build_jail_windows_e2e` red-canary).
+/// Windows certifies through a Windows-NATIVE probe wrapper: the Windows jail
+/// runs `payload[0]` directly through `CreateProcessW` (no shell), so instead of
+/// the POSIX `/usr/bin/env … /bin/sh` invocation prefix + `.sh` fixture, the
+/// Windows arm drives `powershell.exe -File untrusted-build.ps1` (PowerShell is
+/// the `CreateProcessW`-invokable interpreter) with the SAME wrapper-owned
+/// per-axis exit contract (see [`JailProbeRunner`]). Its `build_in_jail` deny
+/// behaviour is proven by the `windows-tier2` CI job's `build_jail_windows_e2e`
+/// red-canary; the audit-layer certify path runs the `audit_native` E2E through
+/// that same jail.
 ///
 /// Off a wired host it is the generic `unwired` sentinel; the `cfg`-gated
 /// `native_tier2_on_platform` there refuses to certify before this is ever used
@@ -75,13 +75,20 @@ pub const CERTIFIED_PLATFORM: &str = "macos-arm64";
 #[cfg(target_os = "freebsd")]
 pub const CERTIFIED_PLATFORM: &str = "freebsd-x64";
 
-/// The unwired-host sentinel (see [`CERTIFIED_PLATFORM`]) — this includes Windows,
-/// whose returning build jail exists but whose Tier-2 probe wrapper is not yet
-/// Windows-native (see [`CERTIFIED_PLATFORM`]'s note).
+/// The Windows wired-platform name (see [`CERTIFIED_PLATFORM`]) — the Job
+/// Object plus `AppContainer` returning build jail, driven via the
+/// Windows-native PowerShell probe wrapper.
+#[cfg(target_os = "windows")]
+pub const CERTIFIED_PLATFORM: &str = "windows-x64";
+
+/// The unwired-host sentinel (see [`CERTIFIED_PLATFORM`]); the `cfg`-gated
+/// `native_tier2_on_platform` there refuses to certify before this is ever used
+/// as an admit label, so it can never appear on a passing line.
 #[cfg(not(any(
     all(target_os = "linux", target_arch = "x86_64"),
     target_os = "macos",
-    target_os = "freebsd"
+    target_os = "freebsd",
+    target_os = "windows"
 )))]
 pub const CERTIFIED_PLATFORM: &str = "unwired";
 
@@ -187,9 +194,36 @@ impl ProbePayload {
         wrapper: &Path,
         untrusted_build: &[OsString],
     ) -> Self {
-        let mut argv = Vec::with_capacity(invocation_prefix.len() + 1 + untrusted_build.len());
+        Self::wrapper_owned_with_flags(invocation_prefix, wrapper, &[], untrusted_build)
+    }
+
+    /// Build a payload with `wrapper_flags` between the exit-owning `wrapper` and
+    /// the strictly-subordinate `untrusted_build` tail.
+    ///
+    /// The wrapper's own configuration flags (e.g. the Windows PowerShell probe's
+    /// `-Tier2Axis <axis> -ScratchDir <dir> …` named parameters, terminated by
+    /// `--`) sit AFTER the wrapper and BEFORE the untrusted build — so the wrapper
+    /// still strictly precedes the untrusted build (the child-of-wrapper rule
+    /// holds), and the flags are the trusted, wrapper-authored config, never the
+    /// untrusted package's argv. The untrusted build remains the final tail the
+    /// wrapper runs as its child, so it can never own the exit the decoder reads.
+    ///
+    /// On platforms whose jail scrubs the child environment to a fixed allowlist
+    /// (Windows), this is how per-run config reaches the wrapper: through the
+    /// command line (which flows through `CreateProcessW`), never the environment.
+    #[must_use]
+    pub fn wrapper_owned_with_flags(
+        invocation_prefix: &[OsString],
+        wrapper: &Path,
+        wrapper_flags: &[OsString],
+        untrusted_build: &[OsString],
+    ) -> Self {
+        let mut argv = Vec::with_capacity(
+            invocation_prefix.len() + 1 + wrapper_flags.len() + untrusted_build.len(),
+        );
         argv.extend(invocation_prefix.iter().cloned());
         argv.push(wrapper.as_os_str().to_owned());
+        argv.extend(wrapper_flags.iter().cloned());
         argv.extend(untrusted_build.iter().cloned());
         Self { argv }
     }
@@ -220,7 +254,8 @@ impl ProbePayload {
 #[cfg(any(
     all(target_os = "linux", target_arch = "x86_64"),
     target_os = "macos",
-    target_os = "freebsd"
+    target_os = "freebsd",
+    target_os = "windows"
 ))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProbeExercise {
@@ -235,7 +270,8 @@ pub enum ProbeExercise {
 #[cfg(any(
     all(target_os = "linux", target_arch = "x86_64"),
     target_os = "macos",
-    target_os = "freebsd"
+    target_os = "freebsd",
+    target_os = "windows"
 ))]
 impl ProbeExercise {
     /// A real untrusted build over a non-empty `argv`, or `None` when `argv` is
@@ -671,12 +707,12 @@ pub fn native_tier2(audit: &NativeAudit) -> Result<Tier2Outcome, CliError> {
 /// jail is built from, or a sandbox-unavailable reject.
 ///
 /// On `Linux/x86_64` the primitives are `bwrap` + `prlimit` (the runtime jail's
-/// tools). On macOS the primitive is `sandbox-exec`, on FreeBSD it is `jail(8)` —
-/// the matching [`ipe_sandbox::build_jail::build_in_jail`] arm finds and drives
-/// it itself, so the `RunJailTools` fields are unused there; this only confirms
-/// the primitive exists so an absent one is a sandbox-unavailable reject, never a
-/// silent skip. (Windows is not a certifying platform in the audit layer — its
-/// Tier-2 probe wrapper is not yet Windows-native — so it has no arm here.)
+/// tools). On macOS the primitive is `sandbox-exec`, on FreeBSD it is `jail(8)`,
+/// on Windows it is `powershell.exe` (the `CreateProcessW`-invokable probe
+/// interpreter) — the matching [`ipe_sandbox::build_jail::build_in_jail`] arm
+/// finds and drives its confinement itself, so the `RunJailTools` fields are
+/// unused there; this only confirms the primitive exists so an absent one is a
+/// sandbox-unavailable reject, never a silent skip.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn establish_jail_tools() -> Result<RunJailTools, CliError> {
     let caps = ipe_sandbox::probe();
@@ -747,8 +783,38 @@ fn establish_jail_tools() -> Result<RunJailTools, CliError> {
     })
 }
 
+/// Windows: confirm `powershell.exe` exists (the `CreateProcessW`-invokable
+/// interpreter the Windows `build_in_jail` runs as `payload[0]`, driving the
+/// native `.ps1` probe wrapper). The Windows jail builds its Job Object +
+/// `AppContainer` confinement itself and reads no `RunJailTools` fields, so — as
+/// on macOS/FreeBSD — a present-primitive placeholder is returned; an absent
+/// PowerShell is a sandbox-unavailable reject, never a silent skip.
+///
+/// The Job Object / `AppContainer` constructibility is confirmed by
+/// `build_in_jail` itself (a failure there is folded into
+/// `JailOutcome::Unavailable` → a sandbox-unavailable reject), so confirming the
+/// probe interpreter here cannot let an unconfined build proceed.
+#[cfg(target_os = "windows")]
+fn establish_jail_tools() -> Result<RunJailTools, CliError> {
+    let Some(powershell) = which_on_path("powershell.exe") else {
+        return Err(CliError::PackageAudit(sandbox_unavailable(
+            &RunJailDefect::PrimitiveUnavailable {
+                missing: vec!["powershell.exe"],
+            },
+        )));
+    };
+    // The Windows jail ignores these fields (it builds the Job Object +
+    // AppContainer itself); the placeholder only carries the confirmed primitive
+    // so the value is honest.
+    Ok(RunJailTools {
+        bwrap: powershell.clone(),
+        prlimit: powershell,
+        timeout: None,
+    })
+}
+
 /// Resolve a program name to an absolute path on `PATH`, or `None` if absent.
-#[cfg(any(target_os = "macos", target_os = "freebsd"))]
+#[cfg(any(target_os = "macos", target_os = "freebsd", target_os = "windows"))]
 fn which_on_path(bin: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
@@ -756,18 +822,21 @@ fn which_on_path(bin: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-/// A wired platform where Tier-2 can certify (`Linux/x86_64`, macOS, or FreeBSD):
-/// gather survivors, emit the probe, establish the jail, reconcile, and construct
-/// the SINGLE `Certified`. The body is platform-agnostic — it drives
+/// A wired platform where Tier-2 can certify (`Linux/x86_64`, macOS, FreeBSD, or
+/// Windows): gather survivors, emit the probe, establish the jail, reconcile, and
+/// construct the SINGLE `Certified`. The body is platform-agnostic — it drives
 /// `build_in_jail` through [`JailProbeRunner`] and names this host's own
-/// [`CERTIFIED_PLATFORM`] — so promoting a POSIX-shell platform (like FreeBSD) is
-/// a `cfg`-gate change plus a tool-confirm arm, never a second certify path.
-/// (Windows needs more: a Windows-native probe wrapper, since the invocation
-/// prefix is a `/bin/sh` shell — see [`CERTIFIED_PLATFORM`].)
+/// [`CERTIFIED_PLATFORM`] — so promoting a platform is a `cfg`-gate change plus a
+/// tool-confirm arm, never a second certify path. [`JailProbeRunner`] builds the
+/// platform-native invocation itself (a `/usr/bin/env … /bin/sh` prefix + `.sh`
+/// wrapper on POSIX, a `powershell.exe -File` prefix + `.ps1` wrapper on Windows,
+/// since the Windows jail runs `payload[0]` directly through `CreateProcessW`),
+/// so both drive the SAME reconciler.
 #[cfg(any(
     all(target_os = "linux", target_arch = "x86_64"),
     target_os = "macos",
-    target_os = "freebsd"
+    target_os = "freebsd",
+    target_os = "windows"
 ))]
 fn native_tier2_on_platform(audit: &NativeAudit) -> Result<Tier2Outcome, CliError> {
     // 1. The DCE-survivor surface. Empty ⇒ un-exercisable ⇒ reject (never a
@@ -793,8 +862,14 @@ fn native_tier2_on_platform(audit: &NativeAudit) -> Result<Tier2Outcome, CliErro
     let tools = establish_jail_tools()?;
 
     // The wrapper the jail runs must be readable inside the scratch; copy the
-    // trusted fixture in (it owns the per-axis exit contract).
-    let wrapper = scratch.join("untrusted-build.sh");
+    // trusted fixture in (it owns the per-axis exit contract). Keep the fixture's
+    // own file name so its extension is preserved — `.ps1` on Windows (PowerShell
+    // resolves the wrapper by extension), `.sh` elsewhere.
+    let wrapper_name = audit.probe_fixture.file_name().map_or_else(
+        || OsString::from("untrusted-build"),
+        std::ffi::OsStr::to_owned,
+    );
+    let wrapper = scratch.join(wrapper_name);
     std::fs::copy(&audit.probe_fixture, &wrapper).map_err(|e| CliError::Io {
         path: wrapper.clone(),
         source: e,
@@ -837,7 +912,8 @@ fn native_tier2_on_platform(audit: &NativeAudit) -> Result<Tier2Outcome, CliErro
     // Reached only when: the package is native-bearing (checked above), the
     // survivor surface was non-empty, the exercise was a REAL non-empty untrusted
     // build (`runner.is_real_build()`), the host is a wired platform (this `cfg`:
-    // linux-x86_64, macOS, or FreeBSD), and the reconciler returned `Ok(())`
+    // linux-x86_64, macOS, FreeBSD, or Windows), and the reconciler returned
+    // `Ok(())`
     // (declared-scoped `Clean` + no removable-and-unreached axis). `platform`
     // names exactly this host's wired jail (`CERTIFIED_PLATFORM`), so a certify
     // never claims a platform whose jail did not run. Any weaker condition
@@ -860,7 +936,8 @@ fn native_tier2_on_platform(audit: &NativeAudit) -> Result<Tier2Outcome, CliErro
 #[cfg(not(any(
     all(target_os = "linux", target_arch = "x86_64"),
     target_os = "macos",
-    target_os = "freebsd"
+    target_os = "freebsd",
+    target_os = "windows"
 )))]
 fn native_tier2_on_platform(_audit: &NativeAudit) -> Result<Tier2Outcome, CliError> {
     Err(CliError::PackageAudit(Rejection {
@@ -879,7 +956,8 @@ fn native_tier2_on_platform(_audit: &NativeAudit) -> Result<Tier2Outcome, CliErr
 #[cfg(any(
     all(target_os = "linux", target_arch = "x86_64"),
     target_os = "macos",
-    target_os = "freebsd"
+    target_os = "freebsd",
+    target_os = "windows"
 ))]
 fn probe_scratch_dir(root: &Path) -> PathBuf {
     let slug: String = root
@@ -906,7 +984,8 @@ fn probe_scratch_dir(root: &Path) -> PathBuf {
 #[cfg(any(
     all(target_os = "linux", target_arch = "x86_64"),
     target_os = "macos",
-    target_os = "freebsd"
+    target_os = "freebsd",
+    target_os = "windows"
 ))]
 fn gather_survivor_paths(root: &Path) -> Result<Vec<String>, CliError> {
     let cache_root = root.join(".ipe/cache/ffi/rust");
@@ -972,7 +1051,8 @@ fn gather_survivor_paths(root: &Path) -> Result<Vec<String>, CliError> {
 #[cfg(any(
     all(target_os = "linux", target_arch = "x86_64"),
     target_os = "macos",
-    target_os = "freebsd"
+    target_os = "freebsd",
+    target_os = "windows"
 ))]
 fn emit_probe_and_build_argv(
     emitted_dir: &Path,
@@ -1059,6 +1139,18 @@ pub fn default_ro_binds() -> Vec<PathBuf> {
     .collect()
 }
 
+/// Windows: the jail reads no read-only tool binds, so the bind set is empty.
+///
+/// The Job Object plus `AppContainer` grants reach by ACL-ing the scratch and
+/// working-tree, not by binding host tool paths past a tmpfs mask (there is no
+/// tmpfs mask on Windows). The `powershell.exe` interpreter resolves through the
+/// scrubbed `PATH`/`SystemRoot` the jail re-exports.
+#[cfg(target_os = "windows")]
+#[must_use]
+pub const fn default_ro_binds() -> Vec<PathBuf> {
+    Vec::new()
+}
+
 /// The read-only toolchain binds a real `cargo build` needs inside the jail.
 ///
 /// The Cargo home (`~/.cargo` or `$CARGO_HOME` — the `cargo`/`rustc` shims and the
@@ -1093,10 +1185,27 @@ pub fn toolchain_ro_binds() -> Vec<PathBuf> {
     .collect()
 }
 
+/// Windows: the jail reads no read-only tool binds, so the toolchain bind set is
+/// empty.
+///
+/// A real Windows `cargo build` reaches its toolchain through the ACL-granted
+/// scratch and the jail's scrubbed `PATH` (see [`default_ro_binds`]), not host
+/// path binds.
+#[cfg(target_os = "windows")]
+#[must_use]
+pub const fn toolchain_ro_binds() -> Vec<PathBuf> {
+    Vec::new()
+}
+
 /// The Cargo/Rustup home env the jailed `cargo build` needs to resolve its
 /// toolchain: `CARGO_HOME`, `RUSTUP_HOME`, and `HOME` (the shims' fallback). Only
 /// present, existing homes are returned; the wrapper sets them in the payload's
 /// own env, never the process-global environment.
+///
+/// POSIX-only: the Windows probe payload carries no toolchain-home assignments
+/// (the Windows jail's own env scrub provides `SystemRoot`/`PATH`/`TMP`, and a
+/// real Windows Tier-2 build allowlists the homes through the declared `env`
+/// axis), so this is not compiled on Windows.
 #[cfg(any(
     all(target_os = "linux", target_arch = "x86_64"),
     target_os = "macos",
@@ -1128,7 +1237,8 @@ fn cargo_home_env() -> Vec<(String, std::ffi::OsString)> {
 #[cfg(any(
     all(target_os = "linux", target_arch = "x86_64"),
     target_os = "macos",
-    target_os = "freebsd"
+    target_os = "freebsd",
+    target_os = "windows"
 ))]
 fn absolute_cargo() -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
@@ -1149,7 +1259,8 @@ fn absolute_cargo() -> Option<PathBuf> {
 #[cfg(any(
     all(target_os = "linux", target_arch = "x86_64"),
     target_os = "macos",
-    target_os = "freebsd"
+    target_os = "freebsd",
+    target_os = "windows"
 ))]
 pub struct JailProbeRunner<'a> {
     tools: &'a RunJailTools,
@@ -1172,7 +1283,8 @@ pub struct JailProbeRunner<'a> {
 #[cfg(any(
     all(target_os = "linux", target_arch = "x86_64"),
     target_os = "macos",
-    target_os = "freebsd"
+    target_os = "freebsd",
+    target_os = "windows"
 ))]
 impl<'a> JailProbeRunner<'a> {
     /// Build a jail-backed runner over an established set of jail `tools`, the
@@ -1214,7 +1326,8 @@ impl<'a> JailProbeRunner<'a> {
 #[cfg(any(
     all(target_os = "linux", target_arch = "x86_64"),
     target_os = "macos",
-    target_os = "freebsd"
+    target_os = "freebsd",
+    target_os = "windows"
 ))]
 impl ProbeRunner for JailProbeRunner<'_> {
     fn run(&self, profile: &SandboxProfile, withheld: Option<TightenableAxis>) -> JailOutcome {
@@ -1247,6 +1360,37 @@ impl ProbeRunner for JailProbeRunner<'_> {
         // under a filesystem-withholding one, making the axis differentially
         // observable.
         let escape = self.working_tree.join("tier2-escape-probe");
+        // Build the platform-native wrapper payload (POSIX `/bin/sh` vs Windows
+        // `powershell.exe -File`), both enforcing the child-of-wrapper rule.
+        let payload = self.probe_payload(axis_sel.as_os_str(), &escape);
+        ipe_sandbox::build_jail::build_in_jail(
+            self.tools,
+            profile,
+            &self.scoped_tmp,
+            &self.working_tree,
+            &self.ro_binds,
+            payload.argv(),
+        )
+    }
+}
+
+// The POSIX (`/bin/sh`) and Windows (`powershell.exe`) wrapper-payload builders.
+// Both enforce the child-of-wrapper rule via `ProbePayload`; they differ only in
+// how per-run config reaches the wrapper — env assignments through
+// `/usr/bin/env` on POSIX (whose `--clearenv` jail re-exports them via the
+// payload), named parameters on the command line on Windows (whose jail scrubs
+// the child environment to a fixed allowlist, so config must travel through
+// argv, which flows through `CreateProcessW`).
+
+#[cfg(any(
+    all(target_os = "linux", target_arch = "x86_64"),
+    target_os = "macos",
+    target_os = "freebsd"
+))]
+impl JailProbeRunner<'_> {
+    /// The POSIX payload: `env PROBE_MODE=tier2 TIER2_AXIS=… SCRATCH_DIR=…
+    /// ESCAPE_PATH=… [toolchain homes] /bin/sh <wrapper.sh> <untrusted tail>`.
+    fn probe_payload(&self, axis_sel: &std::ffi::OsStr, escape: &Path) -> ProbePayload {
         // The fixed, trusted, exit-transparent launcher: `env NAME=VALUE … /bin/sh`
         // runs the wrapper under a scrubbed environment (per-run config travels
         // through the payload, never the process-global environment). It
@@ -1254,7 +1398,7 @@ impl ProbeRunner for JailProbeRunner<'_> {
         let mut invocation_prefix = vec![
             OsString::from("/usr/bin/env"),
             OsString::from("PROBE_MODE=tier2"),
-            assignment("TIER2_AXIS", axis_sel.as_os_str()),
+            assignment("TIER2_AXIS", axis_sel),
             assignment("SCRATCH_DIR", self.scoped_tmp.as_os_str()),
             assignment("ESCAPE_PATH", escape.as_os_str()),
         ];
@@ -1273,15 +1417,57 @@ impl ProbeRunner for JailProbeRunner<'_> {
         // The wrapper script owns the exit contract; the untrusted build is a
         // strictly subordinate tail it runs as its child (ProbePayload enforces
         // the ordering). The untrusted build can never own the exit.
-        let payload =
-            ProbePayload::wrapper_owned(&invocation_prefix, &self.wrapper, self.exercise.tail());
-        ipe_sandbox::build_jail::build_in_jail(
-            self.tools,
-            profile,
-            &self.scoped_tmp,
-            &self.working_tree,
-            &self.ro_binds,
-            payload.argv(),
+        ProbePayload::wrapper_owned(&invocation_prefix, &self.wrapper, self.exercise.tail())
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl JailProbeRunner<'_> {
+    /// The Windows payload: `powershell.exe -NoProfile -NonInteractive -File
+    /// <wrapper.ps1> -Tier2Axis <axis> -ScratchDir <scratch> -EscapePath <escape>
+    /// -- <untrusted tail>`.
+    ///
+    /// PowerShell is `payload[0]` — the `CreateProcessW`-invokable interpreter the
+    /// Windows jail runs directly (no shell). The wrapper's config travels as
+    /// NAMED PARAMETERS between the wrapper and the `--` terminator (the untrusted
+    /// build follows `--`, captured in the wrapper's `$args`): the Windows jail
+    /// scrubs the child environment to a fixed allowlist, so env-carried config
+    /// would be dropped or require widening the `env` axis. `ProbePayload`'s
+    /// wrapper-flags constructor keeps the wrapper strictly before the untrusted
+    /// tail, so the child-of-wrapper rule holds — the untrusted build can never
+    /// own the exit the decoder reads.
+    ///
+    /// The toolchain homes a real `cargo build` needs (`CARGO_HOME`/`RUSTUP_HOME`)
+    /// are NOT injected here: the Windows jail's own env scrub carries `SystemRoot`
+    /// / `PATH` / `TMP` / `TEMP`, and a real Windows Tier-2 build would allowlist
+    /// the toolchain homes through the declared `env` axis. The wrapper-probe-only
+    /// and offline-probe shapes the CI E2E exercises need none.
+    fn probe_payload(&self, axis_sel: &std::ffi::OsStr, escape: &Path) -> ProbePayload {
+        let invocation_prefix = vec![
+            self.tools.bwrap.clone().into_os_string(),
+            OsString::from("-NoProfile"),
+            OsString::from("-NonInteractive"),
+            OsString::from("-ExecutionPolicy"),
+            OsString::from("Bypass"),
+            OsString::from("-File"),
+        ];
+        // The wrapper's own trusted config, as named parameters, terminated by
+        // `--` so the untrusted build tail is captured in `$args`, never parsed as
+        // a wrapper parameter.
+        let wrapper_flags = vec![
+            OsString::from("-Tier2Axis"),
+            axis_sel.to_owned(),
+            OsString::from("-ScratchDir"),
+            self.scoped_tmp.as_os_str().to_owned(),
+            OsString::from("-EscapePath"),
+            escape.as_os_str().to_owned(),
+            OsString::from("--"),
+        ];
+        ProbePayload::wrapper_owned_with_flags(
+            &invocation_prefix,
+            &self.wrapper,
+            &wrapper_flags,
+            self.exercise.tail(),
         )
     }
 }
@@ -1293,7 +1479,8 @@ impl ProbeRunner for JailProbeRunner<'_> {
 #[cfg(any(
     all(target_os = "linux", target_arch = "x86_64"),
     target_os = "macos",
-    target_os = "freebsd"
+    target_os = "freebsd",
+    target_os = "windows"
 ))]
 fn exercised_selector(exercised: &[TightenableAxis]) -> Option<&'static str> {
     let net = exercised.contains(&TightenableAxis::Network);
@@ -1308,6 +1495,9 @@ fn exercised_selector(exercised: &[TightenableAxis]) -> Option<&'static str> {
 
 /// Build a single `NAME=VALUE` token for `env(1)`. The value is an `OsStr` so a
 /// scratch path with non-UTF-8 bytes survives without a lossy round-trip.
+///
+/// POSIX-only: the Windows probe payload carries config as named command-line
+/// parameters, not `env(1)` assignments, so this is not compiled on Windows.
 #[cfg(any(
     all(target_os = "linux", target_arch = "x86_64"),
     target_os = "macos",
@@ -1581,6 +1771,43 @@ mod tests {
         assert!(
             wrapper_idx < cargo_idx,
             "the wrapper must precede the untrusted build: {argv:?}"
+        );
+    }
+
+    #[test]
+    fn wrapper_flags_sit_between_the_wrapper_and_the_untrusted_build() {
+        // The Windows-shaped payload: the wrapper's OWN trusted config flags
+        // (`-Tier2Axis … --`) sit AFTER the wrapper and BEFORE the untrusted build,
+        // so the wrapper still strictly precedes the untrusted tail (child-of-
+        // wrapper holds) and the flags are never the untrusted package's argv.
+        let prefix = vec![OsString::from("powershell.exe"), OsString::from("-File")];
+        let wrapper = PathBuf::from("C:/probe/untrusted-build.ps1");
+        let flags = vec![
+            OsString::from("-Tier2Axis"),
+            OsString::from("network"),
+            OsString::from("--"),
+        ];
+        let untrusted = vec![OsString::from("cargo"), OsString::from("build")];
+        let payload = ProbePayload::wrapper_owned_with_flags(&prefix, &wrapper, &flags, &untrusted);
+        let argv = payload.argv();
+        // The trusted prefix is argv[0], never the untrusted build.
+        assert_eq!(argv.first(), Some(&OsString::from("powershell.exe")));
+        assert_eq!(argv.last(), Some(&OsString::from("build")));
+        let idx = |needle: &str| {
+            argv.iter()
+                .position(|a| a == &OsString::from(needle))
+                .expect("token present in the payload argv")
+        };
+        let wrapper_idx = idx("C:/probe/untrusted-build.ps1");
+        let axis_idx = idx("-Tier2Axis");
+        let sep_idx = idx("--");
+        let cargo_idx = idx("cargo");
+        // wrapper < flags < `--` < untrusted build: the ordering the child-of-
+        // wrapper invariant depends on, so an untrusted token can never bind a
+        // wrapper parameter nor own the exit.
+        assert!(
+            wrapper_idx < axis_idx && axis_idx < sep_idx && sep_idx < cargo_idx,
+            "wrapper, then flags, then `--`, then the untrusted build: {argv:?}"
         );
     }
 }
