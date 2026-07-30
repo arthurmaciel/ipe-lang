@@ -1526,17 +1526,27 @@ pub enum StdlibKernel {
     /// `Regex.split : String -> String -> List String` — split on every match.
     RegexSplit,
 
-    // ── Ipe.Path — pure filesystem-path helpers ───────────────────
+    // ── Ipe.Path — typed, validated filesystem paths ───────────────────
     // Pure, total kernels routed via the compiled-source `Ipe.Path`
     // Layer-3 surface + `Ffi.kernel "Path_*"` aliases. Runtime fns
     // (`ipe_runtime::path::*`) are re-exported ungated (same posture as Regex).
-    /// `Path.base : String -> String` — final path component.
+    // `Path` is an opaque, validated type: the ONLY constructor is
+    // `PathFromString` (the parse-don't-validate seal that rejects NUL bytes
+    // and `..` traversal escapes); the helpers take a `Path`, never a raw
+    // `String`.
+    /// `Path.fromString : String -> Result Error Path` — THE seal; the only
+    /// constructor. Normalises the path and rejects NUL / traversal escapes.
+    PathFromString,
+    /// `Path.toString : Path -> String` — THE un-parse; recover the cleaned
+    /// path string.
+    PathToString,
+    /// `Path.base : Path -> String` — final path component.
     PathBase,
-    /// `Path.dir : String -> String` — everything but the final component.
+    /// `Path.dir : Path -> String` — everything but the final component.
     PathDir,
-    /// `Path.ext : String -> String` — file extension (with the dot), or empty.
+    /// `Path.ext : Path -> String` — file extension (with the dot), or empty.
     PathExt,
-    /// `Path.isAbsolute : String -> Bool` — does the path start from the root?
+    /// `Path.isAbsolute : Path -> Bool` — does the path start from the root?
     PathIsAbsolute,
 
     // ── Ipe.Trace — opt-in tracing spans ──────────────────────────────
@@ -3032,6 +3042,8 @@ impl StdlibKernel {
             // ── Ipe.Path ─────────────────────────────────────────
             // Runtime names MUST match `ipe_runtime::path::*` exactly
             // (`path_is_absolute`). Pure/total, no effect.
+            Self::PathFromString => d("Path", "fromString", 1, Pure, "path_from_string"),
+            Self::PathToString => d("Path", "toString", 1, Pure, "path_to_string"),
             Self::PathBase => d("Path", "base", 1, Pure, "path_base"),
             Self::PathDir => d("Path", "dir", 1, Pure, "path_dir"),
             Self::PathExt => d("Path", "ext", 1, Pure, "path_ext"),
@@ -4155,6 +4167,8 @@ impl StdlibKernel {
         Self::RegexReplace,
         Self::RegexSplit,
         // ── Ipe.Path ─────────────────────────────────────────────
+        Self::PathFromString,
+        Self::PathToString,
         Self::PathBase,
         Self::PathDir,
         Self::PathExt,
@@ -5281,6 +5295,8 @@ impl StdlibKernel {
             | Self::RegexFindAll
             | Self::RegexReplace
             | Self::RegexSplit
+            | Self::PathFromString
+            | Self::PathToString
             | Self::PathBase
             | Self::PathDir
             | Self::PathExt

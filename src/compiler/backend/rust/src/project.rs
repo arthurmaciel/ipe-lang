@@ -1647,6 +1647,7 @@ fn ir_type_contains_non_serde(ty: &IrType) -> bool {
         | IrType::WebReq
         | IrType::WebRoute(_)
         | IrType::Secret
+        | IrType::Path
         | IrType::SqlFragment
         | IrType::CacheCfg
         | IrType::CacheStats

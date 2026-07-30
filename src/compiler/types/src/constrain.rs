@@ -241,6 +241,8 @@ struct Builtins {
     /// `"Secret"` — `Ipe.Secret`'s opaque, sealed secret-string wrapper
     /// type.
     secret: Symbol,
+    /// `"Path"` — `Ipe.Path`'s opaque, validated filesystem-path type.
+    path: Symbol,
     // ── SqlValue constructor name symbols ─────────────────────────────────────
     sql_string: Symbol,
     sql_int: Symbol,
@@ -609,6 +611,7 @@ impl Builtins {
             sqlfield: interner.intern("SqlField")?,
             sqlfragment: interner.intern("SqlFragment")?,
             secret: interner.intern("Secret")?,
+            path: interner.intern("Path")?,
             sql_string: interner.intern("SqlString")?,
             sql_int: interner.intern("SqlInt")?,
             sql_float: interner.intern("SqlFloat")?,
@@ -3819,6 +3822,12 @@ impl<'a> Builder<'a> {
             name: self.builtins.secret,
             args: Vec::new(),
         };
+        // `Path` — `Ipe.Path`'s opaque validated filesystem-path type.
+        let path = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.path,
+            args: Vec::new(),
+        };
         let req = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.server_request,
@@ -4637,10 +4646,10 @@ impl<'a> Builder<'a> {
             | K::IoWriteStderr
             | K::IoPrintln
             | K::IoEprintln
-            | K::FileRemove
-            | K::FileMkdirAll
-            | K::FileDelete
             | K::SystemUnsetenv => fun(string(), task_unit()),
+            // File path-consuming `Path -> Task ()` kernels (typed path, not
+            // a raw `String` — construction is the validated boundary).
+            K::FileRemove | K::FileMkdirAll | K::FileDelete => fun(path(), task_unit()),
             // () -> Task String
             K::IoReadLine | K::SystemCwd => fun(Ty::Unit, task(string())),
             // ── Debug (dev-only) ──
@@ -4662,18 +4671,25 @@ impl<'a> Builder<'a> {
             K::TimeEvery => fun(int(), fun(var(0), sub(var(0)))),
 
             // ── System ──
-            K::SystemGetenv | K::FileReadFile | K::FileTempFile | K::FileTempDir => {
-                fun(string(), task(string()))
-            }
+            // `getenv` takes an env-var NAME (String); `tempFile`/`tempDir`
+            // take a filename PREFIX (String, sanitised in the runtime), so
+            // these stay `String -> Task String` — they do not consume a path.
+            K::SystemGetenv | K::FileTempFile | K::FileTempDir => fun(string(), task(string())),
+            // `readFile` consumes a validated `Path`.
+            K::FileReadFile => fun(path(), task(string())),
             K::SystemGetenvOr => fun(string(), fun(string(), string())),
             K::SystemArgs => fun(Ty::Unit, task(list(string()))),
             K::SystemLoadEnv => fun(Ty::Unit, task_unit()),
-            K::SystemSetenv | K::FileWriteFile | K::FileAppend | K::FileCopy | K::FileRename => {
-                fun(string(), fun(string(), task_unit()))
-            }
+            K::SystemSetenv => fun(string(), fun(string(), task_unit())),
+            // `writeFile`/`append` take a `Path` then the content `String`.
+            K::FileWriteFile | K::FileAppend => fun(path(), fun(string(), task_unit())),
+            // `copy`/`rename` take two `Path`s (source then destination).
+            K::FileCopy | K::FileRename => fun(path(), fun(path(), task_unit())),
             K::SystemGetArg => fun(int(), task(maybe(string()))),
             K::SystemGetenvInt => fun(string(), task(int())),
-            K::SystemGetenvBool | K::FileExists | K::FileIsDir => fun(string(), task(bool_ty())),
+            K::SystemGetenvBool => fun(string(), task(bool_ty())),
+            // `exists`/`isDir` query a validated `Path`.
+            K::FileExists | K::FileIsDir => fun(path(), task(bool_ty())),
             K::SystemExit => fun(int(), var(0)),
 
             // ── Random ──
@@ -4685,10 +4701,10 @@ impl<'a> Builder<'a> {
             // `run : String -> List String -> Task Error String`
             K::ProcessRun => fun(string(), fun(list(string()), task(string()))),
 
-            // ── File (remaining) ──
-            K::FileReadDir => fun(string(), task(list(string()))),
-            K::FileReadFileLimit => fun(string(), fun(int(), task(string()))),
-            K::FileReadFileBytes => fun(string(), task(list(int()))),
+            // ── File (remaining) — all consume a validated `Path` ──
+            K::FileReadDir => fun(path(), task(list(string()))),
+            K::FileReadFileLimit => fun(path(), fun(int(), task(string()))),
+            K::FileReadFileBytes => fun(path(), task(list(int()))),
 
             // ── Http ──
             K::HttpGet => fun(string(), task(http_response())),
@@ -6572,14 +6588,19 @@ impl<'a> Builder<'a> {
             K::RegexReplace => fun(string(), fun(string(), fun(string(), string()))),
             K::RegexSplit => fun(string(), fun(string(), list(string()))),
 
-            // ── Ipe.Path (4 kernels) ─────────────────────────────────
-            // Pure path helpers over `String`. `base`/`dir`/`ext` return
-            // `String`; `isAbsolute` returns `Bool`. Runtime total/pure
+            // ── Ipe.Path (6 kernels) ─────────────────────────────────
+            // `Path` is opaque and validated. `fromString` (the seal) parses a
+            // raw `String` into `Result Error Path` — rejecting NUL / traversal
+            // escapes at construction; `toString` unwraps back to `String`. The
+            // helpers `base`/`dir`/`ext` take a `Path` and return `String`;
+            // `isAbsolute` takes a `Path` and returns `Bool`. Runtime total/pure
             // (`ipe_runtime::path::*`, re-exported ungated).
-            K::PathBase => fun(string(), string()),
-            K::PathDir => fun(string(), string()),
-            K::PathExt => fun(string(), string()),
-            K::PathIsAbsolute => fun(string(), bool_ty()),
+            K::PathFromString => fun(string(), result(error_ty(), path())),
+            K::PathToString => fun(path(), string()),
+            K::PathBase => fun(path(), string()),
+            K::PathDir => fun(path(), string()),
+            K::PathExt => fun(path(), string()),
+            K::PathIsAbsolute => fun(path(), bool_ty()),
 
             // ── Ipe.Trace (3 kernels) ─────────────────────────────────────
             // `span : String -> Task a -> Task a` — the wrapped Task's value flows
@@ -8722,7 +8743,9 @@ mod registry_phase_c_tests {
             K::RegexFindAll,
             K::RegexReplace,
             K::RegexSplit,
-            // ── Ipe.Path (4) ──────────────────────────────────────
+            // ── Ipe.Path (6) ──────────────────────────────────────
+            K::PathFromString,
+            K::PathToString,
             K::PathBase,
             K::PathDir,
             K::PathExt,

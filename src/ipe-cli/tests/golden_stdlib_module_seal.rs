@@ -144,9 +144,16 @@ const PATH_MAIN: &str = "module Main exposing (main)\n\
     import Ipe.Prelude exposing (..)\n\
     import Ipe.Io as Io\n\
     import Ipe.Path as Path\n\n\
-    abs : String\n\
-    abs = if Path.isAbsolute \"/a/b\" then \"ABS\" else \"REL\"\n\n\
-    main = Io.println (Path.base \"/a/b/c.txt\" ++ \" \" ++ Path.dir \"/a/b/c.txt\" ++ \" \" ++ Path.ext \"/a/b/c.txt\" ++ \" \" ++ abs)\n";
+    render : Path.Path -> Path.Path -> String\n\
+    render dirP fileP =\n\
+    \x20   let\n\
+    \x20       abs = if Path.isAbsolute dirP then \"ABS\" else \"REL\"\n\
+    \x20   in\n\
+    \x20   Path.base fileP ++ \" \" ++ Path.dir fileP ++ \" \" ++ Path.ext fileP ++ \" \" ++ abs\n\n\
+    main =\n\
+    \x20   case (Path.fromString \"/a/b\", Path.fromString \"/a/b/c.txt\") of\n\
+    \x20       (Ok dirP, Ok fileP) -> Io.println (render dirP fileP)\n\
+    \x20       _ -> Io.println \"PATH_ERR\"\n";
 
 #[test]
 fn path_resolves_and_emits() {

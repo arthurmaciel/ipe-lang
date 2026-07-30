@@ -713,6 +713,7 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::TypeInfo => "TypeInfo",
         IrType::SqlFragment => "SqlFragment",
         IrType::Secret => "Secret",
+        IrType::Path => "Path",
         IrType::CacheCfg => "CacheCfg",
         IrType::CacheStats => "CacheStats",
         IrType::CsvDoc => "Csv",
