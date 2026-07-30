@@ -18,12 +18,12 @@ use crate::code::{
     IPE_L0130, IPE_L0131, IPE_L0132, IPE_L0140, IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003,
     IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021,
     IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029,
-    IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_P0001, IPE_P0002, IPE_P0003,
-    IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017,
-    IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050,
-    IPE_P0060, IPE_P0061, IPE_P0062, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010,
-    IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0019,
-    Severity,
+    IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035, IPE_P0001, IPE_P0002,
+    IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016,
+    IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041,
+    IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004,
+    IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017,
+    IPE_T0019, Severity,
 };
 use crate::span::Span;
 
@@ -506,6 +506,20 @@ pub enum NameError {
     /// contradiction rejected here. `module` is the offending `Ipe.Tea.*` import
     /// path. [IPE-N0033]
     ProgramImportsTeaShape { module: Box<str> },
+    /// A TEA app imports another shape's `Cmd` / `Sub` re-export module. `Cmd`
+    /// and `Sub` are shape-specific and reached through the app's own shape
+    /// (`Ipe.Tea.Web.Cmd` in a `Web` app, `Ipe.Tea.Terminal.Sub` in a `Terminal`
+    /// app, …). The app's shape is proven from its entry kernel; a `Cmd` / `Sub`
+    /// import from a different shape has no denotation in this app and fails
+    /// closed here. `imported` is the offending import path; `imported_shape` and
+    /// `app_shape` name the two shapes; `expected` is the correct import path for
+    /// the app's shape. [IPE-N0035]
+    WrongShapeCmdSub {
+        imported: Box<str>,
+        imported_shape: Box<str>,
+        app_shape: Box<str>,
+        expected: Box<str>,
+    },
 }
 
 /// Which expansion budget was exhausted, reported as part of
@@ -1165,6 +1179,7 @@ const fn name_code(msg: &NameError) -> Code {
         NameError::BuiltinTypeArity { .. } => IPE_N0031,
         NameError::TypeExpansionTooDeep { .. } => IPE_N0032,
         NameError::ProgramImportsTeaShape { .. } => IPE_N0033,
+        NameError::WrongShapeCmdSub { .. } => IPE_N0035,
     }
 }
 
@@ -1305,6 +1320,9 @@ fn name_help(msg: &NameError, span: Span) -> Vec<HelpLine> {
             span: *first,
             role: SpanRole::FirstDefinition,
         }],
+        NameError::WrongShapeCmdSub { expected, .. } => vec![HelpLine::Note(
+            format!("this app's shape reaches `Cmd` / `Sub` through `{expected}`").into_boxed_str(),
+        )],
         NameError::Unknown
         | NameError::AliasArity { .. }
         | NameError::BuiltinTypeArity { .. }

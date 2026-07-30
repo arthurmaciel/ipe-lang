@@ -1,15 +1,54 @@
 module Main exposing (main)
-import Ipe.Io as Io
-import Ipe.Cmd
-import Ipe.Task
 
--- M5c: Cmd.none / Cmd.batch construct-only gate.
--- Constructs Cmd values and discards them; confirms that Cmd.none infers
--- its msg type from a sibling Cmd.perform in the same batch.
+-- Cmd.none / Cmd.batch construct gate: an `init` command built with
+-- `Cmd.batch [Cmd.perform …, Cmd.none]` confirms that `Cmd.none` infers its
+-- `msg` type from the sibling `Cmd.perform`. `Terminal.appLines` renders `view`
+-- once at stdin EOF and exits 0.
+
+import Ipe.Tea.Terminal as Terminal
+import Ipe.Tea.Terminal.Cmd as Cmd
+import Ipe.Tea.Terminal.Sub as Sub
+import Ipe.Task as Task
+
+type Msg
+    = Performed
+    | GotLine String
+
+type alias Model =
+    { done : Bool }
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { done = False }
+    , Cmd.batch [ Cmd.perform (Task.succeed 1) (\_result -> Performed), Cmd.none ]
+    )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Performed ->
+            ( { model | done = True }, Cmd.none )
+
+        GotLine _line ->
+            ( model, Cmd.none )
+
+view : Model -> String
+view _model =
+    "ok"
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+onLine : String -> Msg
+onLine line =
+    GotLine line
 
 main =
-    let
-        c = Cmd.perform (Task.succeed 1) (\r -> 0)
-        _ = Cmd.batch [c, Cmd.none]
-    in
-    Io.println "ok"
+    Terminal.appLines
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , onLine = onLine
+        }

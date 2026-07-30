@@ -1,14 +1,51 @@
 module Main exposing (main)
-import Ipe.Io as Io
-import Ipe.Sub
 
--- M5c: Sub.none / Sub.batch / Sub.every construct-only gate.
--- Constructs Sub values and discards them; confirms that Sub.none infers its
--- msg type from a sibling Sub.every in the same batch.
+-- Sub.none / Sub.batch / Sub.every construct gate: a `subscriptions` built with
+-- `Sub.batch [Sub.none, Sub.every …]` confirms that `Sub.none` infers its `msg`
+-- type from the sibling `Sub.every`. `Terminal.appLines` renders `view` once at
+-- stdin EOF and exits 0.
+
+import Ipe.Tea.Terminal as Terminal
+import Ipe.Tea.Terminal.Cmd as Cmd
+import Ipe.Tea.Terminal.Sub as Sub
+
+type Msg
+    = Tick
+    | GotLine String
+
+type alias Model =
+    { ticks : Int }
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { ticks = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Tick ->
+            ( { model | ticks = model.ticks + 1 }, Cmd.none )
+
+        GotLine _line ->
+            ( model, Cmd.none )
+
+view : Model -> String
+view _model =
+    "ok"
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.batch [ Sub.none, Sub.every 500 Tick ]
+
+onLine : String -> Msg
+onLine line =
+    GotLine line
 
 main =
-    let
-        _ = Sub.every 1000 0
-        _ = Sub.batch [Sub.none, Sub.every 500 1]
-    in
-    Io.println "ok"
+    Terminal.appLines
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , onLine = onLine
+        }

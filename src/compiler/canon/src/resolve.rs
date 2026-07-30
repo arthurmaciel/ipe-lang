@@ -31,14 +31,17 @@ const SUGGESTION_MAX_DISTANCE: usize = 2;
 /// individually-parser-capped-at-256 bodies into a single call depth that
 /// grows with the chain length, independent of the total node count (the chain
 /// produces only O(n) nodes). Empirically, a debug-profile build overflows the
-/// default thread stack somewhere between depth 350 and 600; this cap is set
-/// at the same order of magnitude as the parser's own proven-safe `MAX_DEPTH`
-/// (256) to stay well inside that cliff in every build profile and
-/// thread-stack configuration.
+/// default 2 MiB thread stack as low as depth ~256 — and exactly where depends
+/// on the compiled frame layout, which shifts with unrelated edits elsewhere in
+/// the crate. The cap is therefore set with comfortable headroom below that
+/// cliff (rather than at it), so the `IPE-N0032` guard fires deterministically
+/// in every build profile, thread-stack configuration, and code layout — never
+/// a native stack overflow. A chain this deep is already pathological; the
+/// margin buys stack safety at no real expressiveness cost.
 ///
 /// Checked first inside [`canonicalise_type`] because it is the cheap,
 /// profile-independent stack-safety guard.
-const TYPE_EXPANSION_DEPTH_LIMIT: u32 = 256;
+const TYPE_EXPANSION_DEPTH_LIMIT: u32 = 128;
 
 /// Per-annotation node budget for [`canonicalise_type`]'s alias expansion.
 ///
@@ -901,6 +904,7 @@ pub fn canonicalise_module_in_project(
     // USER modules are subject to the Program/TEA distinction.
     if origin == ModuleOrigin::User {
         check_program_tea_import_gate(m, &canon_mod, interner)?;
+        check_cross_shape_cmd_sub_gate(m, &canon_mod, interner)?;
     }
 
     Ok((canon_mod, exports))
@@ -1076,6 +1080,113 @@ fn main_head_is_tea_entry(body: &canon::Expr, interner: &Interner) -> bool {
             _ => return false,
         }
     }
+}
+
+/// The TEA shape a `main` proves from its entry kernel: the third segment of the
+/// `Ipe.Tea.<Shape>` path a user imports `Cmd` / `Sub` from. `Terminal`'s two
+/// drive axes (`appScreen` / `appLines`) share the one `Terminal` shape name, so
+/// both map here to `"Terminal"`.
+///
+/// Returns `None` when `main` is not a shape-entry app — the cross-shape gate
+/// then does not apply (a plain-`main` Program importing `Ipe.Tea.*` is already
+/// rejected by IPE-N0033).
+fn app_shape_name(body: &canon::Expr, interner: &Interner) -> Option<&'static str> {
+    let mut node = body;
+    loop {
+        match &node.value {
+            canon::Expr_::Call(callee, _) => node = callee,
+            canon::Expr_::Lambda(_, inner) | canon::Expr_::Let(_, inner) => node = inner,
+            canon::Expr_::VarKernel { module, name, .. } => {
+                let (m, n) = (interner.resolve(*module)?, interner.resolve(*name)?);
+                return TEA_APP_ENTRIES
+                    .iter()
+                    .find(|(em, en)| *em == m && *en == n)
+                    .map(|(shape, _)| *shape);
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// IPE-N0035: reject a TEA app that imports another shape's `Cmd` / `Sub`.
+///
+/// `Cmd` / `Sub` are shape-specific and re-exported per shape under
+/// `Ipe.Tea.<Shape>.{Cmd,Sub}`. The app's shape is proven from its entry kernel
+/// (`Web.app` / `WebView.app` / `Terminal.app*`); an imported
+/// `Ipe.Tea.<OtherShape>.{Cmd,Sub}` has no denotation in this app and fails
+/// closed here, naming the correct import path for the app's own shape.
+///
+/// Applies only to TEA apps (a proven shape entry). A plain-`main` Program that
+/// imports any `Ipe.Tea.*` path — a shape-scoped `Cmd` / `Sub` included — is
+/// already the IPE-N0033 contradiction, so this gate never needs to fire there.
+///
+/// # Errors
+/// [`Diagnostic::Name`] (IPE-N0035) at the offending import span.
+fn check_cross_shape_cmd_sub_gate(
+    m: &src::Module,
+    canon_mod: &canon::Module,
+    interner: &Interner,
+) -> DResult<()> {
+    let Some(tea_ipe) = interner.lookup("Ipe").zip(interner.lookup("Tea")) else {
+        return Ok(());
+    };
+    let (ipe_sym, tea_sym) = tea_ipe;
+    let (Some(cmd_sym), Some(sub_sym)) = (interner.lookup("Cmd"), interner.lookup("Sub")) else {
+        // Neither `Cmd` nor `Sub` interned → no shape-scoped module can be named.
+        return Ok(());
+    };
+
+    // The app's shape, proven from `main`'s entry kernel. A non-app `main` (no
+    // shape entry) leaves this `None`; the gate then does not apply.
+    let main_sym = interner.lookup("main");
+    let app_shape = main_sym.and_then(|main_sym| {
+        canon_mod
+            .defs
+            .iter()
+            .find(|d| d.name().value == main_sym)
+            .and_then(|d| {
+                let body = match d {
+                    canon::Def::Untyped { body, .. } | canon::Def::Typed { body, .. } => body,
+                };
+                app_shape_name(body, interner)
+            })
+    });
+    let Some(app_shape) = app_shape else {
+        return Ok(());
+    };
+    let Some(app_shape_sym) = interner.lookup(app_shape) else {
+        return Ok(());
+    };
+
+    for imp in &m.imports {
+        // `Ipe.Tea.<Shape>.{Cmd,Sub}`: exactly four segments, `Ipe . Tea . Shape . Cmd|Sub`.
+        let [first, second, shape, leaf] = imp.name.value.as_slice() else {
+            continue;
+        };
+        if *first != ipe_sym || *second != tea_sym {
+            continue;
+        }
+        if *leaf != cmd_sym && *leaf != sub_sym {
+            continue;
+        }
+        if *shape == app_shape_sym {
+            continue; // the app's own shape — admissible.
+        }
+        let Some(imported_shape) = interner.resolve(*shape) else {
+            continue;
+        };
+        let leaf_name = if *leaf == cmd_sym { "Cmd" } else { "Sub" };
+        return Err(Diagnostic::Name {
+            span: imp.name.span,
+            msg: NameError::WrongShapeCmdSub {
+                imported: format!("Ipe.Tea.{imported_shape}.{leaf_name}").into_boxed_str(),
+                imported_shape: imported_shape.into(),
+                app_shape: app_shape.into(),
+                expected: format!("Ipe.Tea.{app_shape}.{leaf_name}").into_boxed_str(),
+            },
+        });
+    }
+    Ok(())
 }
 
 /// Register user import aliases for stdlib (`Ipê.*` / `Ipe.*`) modules.

@@ -1073,6 +1073,12 @@ mod tests {
         // Primary qualifiers are the bare short-names (no `.`) plus the sole
         // dotted canonical `Db.Decode`; the other dotted `qual_vars` keys are the
         // inline-qualifier convenience aliases (`Ipe.Html`, …), not import targets.
+        //
+        // The canonical `Cmd` / `Sub` kernel qualifiers are internal-only: they
+        // back the shape-scoped re-export modules (`Ipe.Tea.Web.Cmd`, …) but are
+        // themselves not user-importable, so they deliberately carry no import
+        // path. Users reach `Cmd` / `Sub` through a shape, which does have one.
+        const INTERNAL_ONLY_QUALIFIERS: &[&str] = &["Cmd", "Sub"];
         let mut i = Interner::new();
         let home = vec![i.intern("Main").expect("intern Main")];
         let env = Env::initial(home, &mut i).expect("build env");
@@ -1082,6 +1088,9 @@ mod tests {
             .collect();
         for &key in env.qual_vars.keys() {
             let Some(name) = i.resolve(key) else { continue };
+            if INTERNAL_ONLY_QUALIFIERS.contains(&name) {
+                continue;
+            }
             let is_primary = !name.contains('.') || name == "Db.Decode";
             if is_primary {
                 assert!(

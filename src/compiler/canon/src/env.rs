@@ -94,8 +94,12 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Http", "RateLimit"], "RateLimit"),
     // ── Ipe.* modules ───────────────────────────────────────────────────────
     (&["Ipe", "Log"], "Log"),
-    (&["Ipe", "Cmd"], "Cmd"),
-    (&["Ipe", "Sub"], "Sub"),
+    // `Ipe.Cmd` / `Ipe.Sub` are DELIBERATELY absent: the canonical `Cmd` / `Sub`
+    // kernel qualifiers are compiler/runtime internals, not user-importable
+    // modules. `Cmd` / `Sub` are shape-specific, so user code reaches them
+    // through the shape-scoped re-export modules below (`Ipe.Tea.Web.Cmd`,
+    // `Ipe.Tea.Terminal.Sub`, …). A user `import Ipe.Cmd` names no known stdlib
+    // path and fails closed with the ordinary `UnknownModule` diagnostic.
     (&["Ipe", "Db"], "Db"),
     (&["Ipe", "Db", "Decode"], "Db.Decode"),
     (&["Ipe", "Db", "Sql"], "Sql"), // SqlFragment builder
@@ -126,6 +130,18 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     // they are TEA-loop machinery and importing this path marks the module a TEA
     // app (IPE-N0033). Its members re-export the canonical `Cmd` / `Sub` kernels.
     (&["Ipe", "Tea", "Web", "PubSub"], "TeaWebPubSub"),
+    // ── Shape-scoped `Cmd` / `Sub` re-export modules ─────────────────────────
+    // `Cmd` / `Sub` are shape-specific: each TEA shape re-exports the canonical
+    // `Cmd` / `Sub` kernels under its own `Ipe.Tea.<Shape>.{Cmd,Sub}` path.
+    // Importing one marks the module a TEA app (IPE-N0033), and referencing a
+    // shape whose `Cmd` / `Sub` does not match the app entry kernel fails closed
+    // (IPE-N0035). The canonical `Cmd` / `Sub` qualifiers stay internal.
+    (&["Ipe", "Tea", "Web", "Cmd"], "TeaWebCmd"),
+    (&["Ipe", "Tea", "Web", "Sub"], "TeaWebSub"),
+    (&["Ipe", "Tea", "Terminal", "Cmd"], "TeaTerminalCmd"),
+    (&["Ipe", "Tea", "Terminal", "Sub"], "TeaTerminalSub"),
+    (&["Ipe", "Tea", "WebView", "Cmd"], "TeaWebViewCmd"),
+    (&["Ipe", "Tea", "WebView", "Sub"], "TeaWebViewSub"),
     // ── Effect stdlib modules ───────────────────────────────────────────────
     (&["Ipe", "Auth"], "Auth"),
     (&["Ipe", "Auth"], "Auth"),
@@ -1787,6 +1803,24 @@ impl Env {
             ("TeaWebPubSub", "subscribeTopic", "Sub", "subscribeTopic"),
         ];
 
+        // ── Shape-scoped `Cmd` / `Sub` re-exports ─────────────────────────────
+        // Each TEA shape re-exports the whole canonical `Cmd` / `Sub` member set
+        // under its own qualifier. Cloning the canonical member map keeps every
+        // `VarHome::Kernel` carrying the CANONICAL module + name symbols, so the
+        // lowerer's `("Cmd", …)` / `("Sub", …)` match arms fire unchanged — only
+        // the resolution qualifier differs. Which shapes may reach which
+        // qualifier is enforced separately by the cross-shape admissibility gate
+        // (IPE-N0035); this table only makes the members resolvable.
+        const SHAPE_SCOPED_CMD_SUB: &[(&str, &str)] = &[
+            // (shape-scoped qualifier, canonical qualifier)
+            ("TeaWebCmd", "Cmd"),
+            ("TeaWebSub", "Sub"),
+            ("TeaTerminalCmd", "Cmd"),
+            ("TeaTerminalSub", "Sub"),
+            ("TeaWebViewCmd", "Cmd"),
+            ("TeaWebViewSub", "Sub"),
+        ];
+
         // ── Qualifier module aliases (Ipe.X / Ipê.X → short canonical) ────────
         // Clones every entry from the canonical qualifier's member map into the
         // alias qualifier key. Because each entry already holds
@@ -1903,6 +1937,22 @@ impl Env {
                 .entry(new_qual_sym)
                 .or_default()
                 .insert(member_sym, home);
+        }
+
+        for (shape_qual, canonical) in SHAPE_SCOPED_CMD_SUB {
+            let shape_qual_sym = interner.intern(shape_qual)?;
+            let canonical_sym = interner.intern(canonical)?;
+            // Clone the canonical `Cmd` / `Sub` member map wholesale. Each cloned
+            // `VarHome::Kernel` keeps the CANONICAL module + name, so a later
+            // `Alias.member` resolves to the same `VarKernel` a canonical
+            // reference would — the lowerer is unaffected. `.cloned()` releases
+            // the shared borrow before the mutable `entry` borrow.
+            if let Some(canonical_members) = self.qual_vars.get(&canonical_sym).cloned() {
+                Rc::make_mut(&mut self.qual_vars)
+                    .entry(shape_qual_sym)
+                    .or_default()
+                    .extend(canonical_members);
+            }
         }
 
         for (alias, canonical) in QUALIFIER_ALIASES {

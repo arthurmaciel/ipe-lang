@@ -1,12 +1,14 @@
 module Main exposing (main)
-import Ipe.Io as Io
-import Ipe.Cmd
 
--- M5c under-determined-msg gate (IPE-L0102).
--- `Cmd.none` is used in isolation: nothing in the expression tree anchors the
--- `msg` type parameter.  The HM solver leaves `msg` as a free type variable,
--- so the emitter cannot produce inferrable Rust (`IpeCmd<_>` is ambiguous).
--- ipec must exit 1 with IPE-L0102 before generating any Rust project.
+import Ipe.Io as Io
+import Ipe.Tea.Terminal.Cmd as Cmd
+
+-- `Cmd` is shape-scoped, so importing a shape's `Cmd` marks a module a TEA app.
+-- This module has a plain `main` (a Program), so reaching for `Cmd.none` here is
+-- a Program-importing-a-shape contradiction, rejected with IPE-N0033 before any
+-- Rust is generated. The old free-`msg` `Cmd.none` a Program used to express (an
+-- ambiguous `IpeCmd<_>` the emitter could not lower) is unreachable by
+-- construction now — a Program can no longer name `Cmd` at all.
 main =
     let
         _ = Cmd.none
