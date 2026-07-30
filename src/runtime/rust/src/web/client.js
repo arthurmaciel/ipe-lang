@@ -1310,7 +1310,13 @@ function __ipeOpenSSE() {
   __ipeForcedClose = false;
   __ipeHelloOk = false;
   __ipeOpenAt = 0;
-  __ipeSSE = new EventSource(__ipeBase + "/_ipe/sse");
+  // Carry the tab's current path on every (re)open so the server can reconcile
+  // the model's route with the URL the browser is actually showing (bfcache
+  // Back/Forward, reload, full-page navigation). Re-read location.pathname here
+  // (not at module load) so a bfcache restore — which sets a new pathname before
+  // reopening the SSE — sends the restored page's path, not the previous one.
+  var ssePath = __ipeBase + "/_ipe/sse?path=" + encodeURIComponent(location.pathname);
+  __ipeSSE = new EventSource(ssePath);
   __ipeSSE.addEventListener("hello", function(e) {
     // Handshake received — we know we hit a real Ipe.Live v2 server,
     // not a proxy that intercepted with a generic 200. Anything
