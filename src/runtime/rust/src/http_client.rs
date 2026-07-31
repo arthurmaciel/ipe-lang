@@ -91,6 +91,9 @@ impl HttpMethod {
 
     /// Parse from a string (case-insensitive).  Returns `None` for any
     /// unrecognised verb — the parse-don't-validate boundary.
+    // Named `from_str` for call-site readability; it returns `Option<Self>`, not
+    // `FromStr`'s `Result`, so it deliberately does not implement that trait.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_ascii_uppercase().as_str() {
             "GET" => Some(HttpMethod::Get),
