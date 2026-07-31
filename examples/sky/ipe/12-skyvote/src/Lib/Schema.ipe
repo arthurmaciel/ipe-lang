@@ -1,6 +1,5 @@
 module Lib.Schema exposing (initDb)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 import Lib.Db as Db
 import Ipe.Error as Error exposing (Error)

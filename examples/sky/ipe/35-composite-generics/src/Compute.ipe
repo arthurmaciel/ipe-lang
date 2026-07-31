@@ -10,7 +10,6 @@ module Compute exposing (..)
 --   * String.toUpper / replace / slice
 --   * Dict (typed Int key + String key) and Set
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.List as List
 import Ipe.Maybe as Maybe

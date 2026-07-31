@@ -1,6 +1,5 @@
 module Lib.Translation exposing (t, tCategory, tCartState, tCurrency, tCurrencySymbol)
 
-import Ipe.Prelude exposing (..)
 
 
 -- ══════════════════════════════════════════════════════

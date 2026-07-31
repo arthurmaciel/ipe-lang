@@ -42,7 +42,7 @@ pub fn inject_compiled_std_closure(
         }
         let Some(embedded) = ipe_stdlib::compiled_std_source_segments(&path) else {
             // Not a compiled-source module (e.g. a kernel import like
-            // `Ipe.Prelude` inside an embedded source): leave it
+            // `Ipe.String` inside an embedded source): leave it
             // kernel-resolved.
             continue;
         };

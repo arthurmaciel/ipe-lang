@@ -196,7 +196,6 @@ base_record() {
     cat <<'EOF'
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Log exposing (println)
 
 type alias Point =
@@ -221,7 +220,6 @@ base_arith() {
     cat <<'EOF'
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Log exposing (println)
 
 main =
@@ -240,7 +238,6 @@ base_string_ops() {
     cat <<'EOF'
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Log exposing (println)
 
 main =
@@ -259,7 +256,6 @@ base_if_expr() {
     cat <<'EOF'
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Log exposing (println)
 
 main =
@@ -281,7 +277,6 @@ base_maybe_usage() {
     cat <<'EOF'
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Log exposing (println)
 
 safeDiv : Int -> Int -> Maybe Int
@@ -307,7 +302,6 @@ base_adt_exhaustive() {
     cat <<'EOF'
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Log exposing (println)
 
 type Shape
@@ -339,7 +333,6 @@ mutant_undef_field() {
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Log exposing (println)
 
 type alias Point =
@@ -361,7 +354,6 @@ mutant_undef_var() {
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Log exposing (println)
 
 main =
@@ -381,7 +373,6 @@ mutant_unknown_member() {
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Log exposing (println)
 
 main =
@@ -400,7 +391,6 @@ mutant_type_mismatch_strlen() {
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Log exposing (println)
 
 main =
@@ -416,7 +406,6 @@ mutant_type_mismatch_if() {
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Log exposing (println)
 
 main =
@@ -435,7 +424,6 @@ mutant_ctor_arity() {
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Log exposing (println)
 
 main =
@@ -456,7 +444,6 @@ mutant_nonexhaustive_case() {
     cat <<'EOF'
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Log exposing (println)
 
 type Shape
@@ -489,7 +476,6 @@ mutant_same_module_2type() {
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Log exposing (println)
 
 ident x = x
@@ -513,14 +499,12 @@ mutant_cross_module_bad_inst() {
     cat > "$libdst" <<'EOF'
 module Lib exposing (inc)
 
-import Ipe.Prelude exposing (..)
 
 inc n = n + 1
 EOF
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Lib
 import Ipe.Log exposing (println)
 

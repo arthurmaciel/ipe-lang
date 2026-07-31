@@ -96,7 +96,10 @@ automatically.
   and B. A reader knows every name that can appear unqualified without an
   import, and the import list enumerates everything else.
 - The compiler owns one canonical implicit module, `Ipe.Basics`, scoped to the
-  Tier-A set; the old `Ipe.Prelude` alias is retired.
+  Tier-A set. `Ipe.Prelude` is **removed** entirely — not kept as a
+  backward-compatible alias. `import Ipe.Prelude` no longer resolves; Tier-A and
+  Tier-B are ambient, so nothing is lost. There are no external users to keep an
+  alias for.
 - Tier C's strictness is only tolerable *with* the LSP add-import action; that
   action is part of this decision, though it may ship as a later stage than the
   resolver change.

@@ -1,6 +1,5 @@
 module Ui.Styles exposing (globalStyles)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Css exposing (..)
 
 

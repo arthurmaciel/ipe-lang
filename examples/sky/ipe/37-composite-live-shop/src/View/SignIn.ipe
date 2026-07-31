@@ -1,6 +1,5 @@
 module View.SignIn exposing (signInView)
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.Ui as Ui
 import Ipe.Ui exposing (Element)

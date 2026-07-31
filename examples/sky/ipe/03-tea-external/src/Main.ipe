@@ -1,6 +1,5 @@
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Result as Result
 import Ipe.Task as Task
 import Ipe.Crypto as Crypto

@@ -6,7 +6,6 @@ module Auth exposing (hashPassword, verifyPassword, mintToken, verifyBearer, cla
 -- alternative (Jwt.encode / Jwt.decode) so a regression in either
 -- surface lands here.
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.Result as Result
 import Ipe.Error as Error exposing (Error)

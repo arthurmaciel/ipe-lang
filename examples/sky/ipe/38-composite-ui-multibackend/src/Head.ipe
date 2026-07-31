@@ -4,7 +4,6 @@ module Head exposing (headFor)
 -- cfg is row-open — Tui.app and Webview.app don't see it. So this
 -- module is imported ONLY by the Live branch of Main.sky.
 
-import Ipe.Prelude exposing (..)
 import Ipe.Html exposing (Html)
 import Ipe.Web.Head as Head
 import State exposing (..)

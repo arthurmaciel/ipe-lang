@@ -1,6 +1,5 @@
 module Ui.Charts exposing (sparkline, statusBar)
 
-import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.String as String
 import Ipe.Html exposing (..)

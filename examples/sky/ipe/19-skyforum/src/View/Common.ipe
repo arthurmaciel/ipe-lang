@@ -4,7 +4,6 @@ module View.Common exposing (..)
 -- plus two low-level click helpers (clickable for inline links,
 -- navButton for chrome buttons).
 
-import Ipe.Prelude exposing (..)
 import Ipe.Ui as Ui
 import Ipe.Ui exposing (Element)
 import Ipe.Ui.Background as Background

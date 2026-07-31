@@ -1,6 +1,5 @@
 module Head exposing (headFor)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Html exposing (Html)
 import Ipe.Web.Head as Head
 import State exposing (..)

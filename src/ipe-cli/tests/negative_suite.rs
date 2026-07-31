@@ -171,7 +171,7 @@ fn assert_compiles(name: &str, source: &str) {
 }
 
 // A minimal well-formed prelude preamble reused across fixtures.
-const HEAD: &str = "module Main exposing (main)\nimport Ipe.Prelude exposing (..)\n";
+const HEAD: &str = "module Main exposing (main)\n";
 
 // ===========================================================================
 // Parse — IPE-P####
@@ -660,7 +660,6 @@ fn effect_secret_concat_rejected() {
 #[test]
 fn effect_secret_in_live_model() {
     let src = "module Main exposing (main)\n\
-         import Ipe.Prelude exposing (..)\n\
          import Ipe.Secret as Secret\n\
          import Ipe.Tea.Web exposing (app)\n\
          import Ipe.Cmd as Cmd\n\
@@ -763,7 +762,6 @@ fn lower_float_set_element() {
 #[test]
 fn lower_let_bound_app_cfg() {
     let src = "module Main exposing (main)\n\
-         import Ipe.Prelude exposing (..)\n\
          import Ipe.Tea.Web exposing (app)\n\
          import Ipe.Cmd as Cmd\n\
          import Ipe.Sub as Sub\n\

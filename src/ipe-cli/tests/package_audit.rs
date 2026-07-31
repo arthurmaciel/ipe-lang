@@ -215,7 +215,7 @@ import Ipe.Io
     .expect("write Main");
     std::fs::write(
         pkg.join("src").join("Lib.ipe"),
-        "module Lib exposing (double)\n\nimport Ipe.Prelude exposing (..)\n\n\n\
+        "module Lib exposing (double)\n\n\n\n\
 import Ipe.String
          double : Int -> String\ndouble n =\n\x20   String.fromInt (n + n)\n",
     )
@@ -226,7 +226,7 @@ import Ipe.String
     let index = published_predecessor_index(
         "semver-pkg",
         "0.1.0",
-        "module Lib exposing (double)\n\nimport Ipe.Prelude exposing (..)\n\n\n\
+        "module Lib exposing (double)\n\n\n\n\
          double : Int -> Int\ndouble n =\n\x20   n + n\n",
         "module Main exposing (main)\n\nimport Ipe.Io as Io\n\n\
 import Ipe.Io

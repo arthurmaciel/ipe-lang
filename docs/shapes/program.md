@@ -100,7 +100,6 @@ Html.renderStatic : (Model -> Html Msg) -> Model -> Task Error ()
 ```ipe
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Html as Html
 import Ipe.Html.Attributes as Attr
 import Ipe.Io as Io

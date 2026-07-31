@@ -236,7 +236,6 @@ fn sources_of(pairs: &[(&[&str], &str)]) -> UserSources {
 }
 
 const MAIN_V1: &str = "module Main exposing (main)\n\
-     import Ipe.Prelude exposing (..)\n\
      import Lib.Util exposing (bump)\n\n\
      main = Io.println (String.fromInt (bump 41))\n";
 // Annotated export → engageable closed interface.
@@ -251,12 +250,10 @@ const UTIL_UNANNOTATED: &str = "module Lib.Util exposing (bump)\n\nbump x = x + 
 const UTIL_FLIPPED: &str =
     "module Lib.Util exposing (bump)\n\nbump : String -> String\nbump s = s ++ \"!\"\n";
 const MAIN_FLIPPED: &str = "module Main exposing (main)\n\
-     import Ipe.Prelude exposing (..)\n\
      import Lib.Util exposing (bump)\n\n\
      main = Io.println (bump \"x\")\n";
 const EXTRA_MOD: &str = "module Lib.Extra exposing (offset)\n\noffset : Int\noffset = 100\n";
 const MAIN_WITH_EXTRA: &str = "module Main exposing (main)\n\
-     import Ipe.Prelude exposing (..)\n\
      import Lib.Util exposing (bump)\n\
      import Lib.Extra exposing (offset)\n\n\
      main = Io.println (String.fromInt (bump offset))\n";

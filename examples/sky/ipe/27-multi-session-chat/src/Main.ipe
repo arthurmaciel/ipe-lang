@@ -19,7 +19,6 @@ module Main exposing (main)
 -- See `docs/skylive/pubsub.md` for the user-facing tutorial and
 -- `docs/skylive/pubsub-design.md` for the architecture write-up.
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.List as List
 import Ipe.Dict as Dict

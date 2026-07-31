@@ -6,7 +6,6 @@ module CompositeServerTest exposing (main, tests)
 -- (Db / Server.listen / PubSub) get coverage via the boot probe in
 -- README — these tests cover everything that doesn't need a runtime.
 
-import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.String as String
 import Ipe.Result as Result

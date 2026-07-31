@@ -1,6 +1,5 @@
 module Lib.Notes exposing (createNote, updateNote, deleteNote, getNotes, getNote)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Maybe exposing (..)
 import Ipe.List as List
 import Ipe.Error as Error exposing (Error)

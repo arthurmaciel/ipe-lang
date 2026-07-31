@@ -16,7 +16,6 @@ Then type:
     q     quit (or Ctrl-D)
 -}
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.System as System
 import Ipe.Task as Task

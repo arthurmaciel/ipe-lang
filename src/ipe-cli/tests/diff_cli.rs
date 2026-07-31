@@ -34,7 +34,6 @@ fn write_lib(pkg: &Path, source: &str) {
 
 const V1: &str = r"module Lib exposing (double)
 
-import Ipe.Prelude exposing (..)
 
 
 double : Int -> Int
@@ -45,7 +44,6 @@ double n =
 // A breaking change: `double`'s type changed.
 const V2_BREAKING: &str = r"module Lib exposing (double)
 
-import Ipe.Prelude exposing (..)
 import Ipe.String
 
 
@@ -57,7 +55,6 @@ double n =
 // A compatible change: a new exposed value added.
 const V2_COMPATIBLE: &str = r"module Lib exposing (double, triple)
 
-import Ipe.Prelude exposing (..)
 
 
 double : Int -> Int

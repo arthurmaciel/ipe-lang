@@ -4,7 +4,6 @@ module State exposing (..)
 -- type-checker stays well below the heap-exhaustion limit (CLAUDE.md
 -- Limitation #17): the heavy unification load is in the per-View
 -- modules.
-import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.Maybe as Maybe
 import Ipe.String as String

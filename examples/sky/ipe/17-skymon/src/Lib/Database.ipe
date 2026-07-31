@@ -1,6 +1,5 @@
 module Lib.Database exposing (conn, getField, getInt, getBool, exec, query, queryOrLog, execOrLog)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Maybe as Maybe
 import Ipe.Dict as Dict
 import Ipe.System as System

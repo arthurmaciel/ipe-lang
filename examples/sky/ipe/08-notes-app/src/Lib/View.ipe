@@ -12,7 +12,6 @@ module Lib.View exposing
     , errorPage
     )
 
-import Ipe.Prelude exposing (..)
 import Ipe.Maybe as Maybe
 import Ipe.List as List
 import Ipe.Dict as Dict

@@ -1,6 +1,5 @@
 module View.Common exposing (..)
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.ToString as ToString
 import Ipe.Ui as Ui

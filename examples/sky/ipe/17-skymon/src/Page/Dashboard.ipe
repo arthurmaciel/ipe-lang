@@ -1,6 +1,5 @@
 module Page.Dashboard exposing (viewDashboard)
 
-import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.String as String
 import Ipe.Html exposing (..)

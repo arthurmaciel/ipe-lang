@@ -397,7 +397,7 @@ impl<'a> Parser<'a> {
         Ok(Located::new(tok.span, segs))
     }
 
-    /// A dotted import name, e.g. `Ipe.Prelude`.
+    /// A dotted import name, e.g. `Ipe.String`.
     fn parse_dotted_name(&mut self) -> DResult<Located<Vec<Symbol>>> {
         let tok = self.bump(Construct::ModuleHeader)?;
         match &tok.kind {

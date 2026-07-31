@@ -1,6 +1,5 @@
 module Chess.Piece exposing (..)
 
-import Ipe.Prelude exposing (..)
 
 type alias Piece =
     { kind : Kind

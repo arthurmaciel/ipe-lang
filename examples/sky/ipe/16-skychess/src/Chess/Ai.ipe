@@ -2,7 +2,6 @@ module Chess.Ai exposing (bestMove)
 
 -- Pick the best move using 2-ply minimax (look 1 move ahead for each side).
 
-import Ipe.Prelude exposing (..)
 import Ipe.Dict as Dict
 import Ipe.List as List
 import Ipe.Maybe as Maybe

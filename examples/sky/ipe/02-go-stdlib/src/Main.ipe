@@ -2,7 +2,6 @@ module Main exposing (main)
 
 import Ipe.Crypto as Crypto
 import Ipe.Http as Http
-import Ipe.Prelude exposing (..)
 import Ipe.Result as Result
 import Ipe.String as String
 import Ipe.Task as Task

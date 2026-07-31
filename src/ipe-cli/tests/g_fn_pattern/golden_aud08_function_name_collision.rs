@@ -57,21 +57,18 @@ fn distinct_functions_folding_to_the_same_rust_name_are_rejected() {
             (
                 "ZuiBorder.ipe",
                 "module ZuiBorder exposing (rounded)\n\
-                 import Ipe.Prelude exposing (..)\n\n\
                  rounded : Int -> Int\n\
                  rounded x = x\n",
             ),
             (
                 "Zui.ipe",
                 "module Zui exposing (borderRounded)\n\
-                 import Ipe.Prelude exposing (..)\n\n\
                  borderRounded : Int -> Int\n\
                  borderRounded x = x + 1\n",
             ),
             (
                 "Main.ipe",
                 "module Main exposing (main)\n\
-                 import Ipe.Prelude exposing (..)\n\
                  import Ipe.Io as Io\n\
                  import Ipe.String\n\
                  import ZuiBorder\n\
@@ -131,14 +128,12 @@ fn distinct_functions_with_distinct_rust_names_are_accepted() {
             (
                 "Lib.ipe",
                 "module Lib exposing (helper)\n\
-                 import Ipe.Prelude exposing (..)\n\n\
                  helper : Int -> Int\n\
                  helper x = x\n",
             ),
             (
                 "Main.ipe",
                 "module Main exposing (main)\n\
-                 import Ipe.Prelude exposing (..)\n\
                  import Ipe.Io as Io\n\
                  import Lib\n\n\
 import Ipe.String

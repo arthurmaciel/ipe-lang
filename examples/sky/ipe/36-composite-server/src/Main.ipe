@@ -13,7 +13,6 @@ module Main exposing (main)
 --   IPE_COMPOSITE_DB      — sqlite path; default ./composite-server.db
 --   IPE_COMPOSITE_PORT    — server port; default 8000
 
-import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.String as String
 import Ipe.Task as Task

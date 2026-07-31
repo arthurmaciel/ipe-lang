@@ -7,7 +7,6 @@ module Lib.AuthHandlers exposing
     , handleSignOut
     )
 
-import Ipe.Prelude exposing (..)
 import Ipe.Result as Result
 import Ipe.Maybe exposing (..)
 import Ipe.String as String

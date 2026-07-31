@@ -6,7 +6,6 @@ module Page.Admin exposing
     , viewAdminOrder
     )
 
-import Ipe.Prelude exposing (..)
 import Ipe.Maybe as Maybe
 import Ipe.List as List
 import Ipe.String as String

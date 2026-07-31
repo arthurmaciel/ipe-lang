@@ -7,7 +7,6 @@ module Report exposing (..)
 --   * Encoding.base64Encode / hexEncode / urlEncode
 --   * Math.round / abs
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.List as List
 import Ipe.Maybe as Maybe

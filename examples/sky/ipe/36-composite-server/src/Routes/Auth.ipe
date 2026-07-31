@@ -10,7 +10,6 @@ module Routes.Auth exposing (handleRegister, handleLogin, credentialsDecoder)
 --   * Sky.Core.Crypto.randomToken (for the user's request id audit log)
 --   * Std.Log.errorWith for structured failures
 
-import Ipe.Prelude exposing (..)
 import Ipe.Dict as Dict
 import Ipe.String as String
 import Ipe.Maybe as Maybe

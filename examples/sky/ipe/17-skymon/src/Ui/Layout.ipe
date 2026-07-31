@@ -1,6 +1,5 @@
 module Ui.Layout exposing (page)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Maybe as Maybe
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
