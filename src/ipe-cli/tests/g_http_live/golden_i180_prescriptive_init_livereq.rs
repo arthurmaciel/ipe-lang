@@ -44,7 +44,7 @@ init req = ( { page = HomePage, path = req.path }, Cmd.none )
 update : Msg -> Model -> ( Model, Cmd Msg )
 update _msg model = ( model, Cmd.none )
 view : Model -> any
-view model = Ui.layout [] (Ui.text model.path)
+view model = Ui.text model.path
 subscriptions : Model -> Sub Msg
 subscriptions _model = Sub.none
 main =
@@ -71,7 +71,7 @@ init _ = ( { page = HomePage }, Cmd.none )
 update : Msg -> Model -> ( Model, Cmd Msg )
 update _msg model = ( model, Cmd.none )
 view : Model -> any
-view _model = Ui.layout [] (Ui.text "hi")
+view _model = Ui.text "hi"
 subscriptions : Model -> Sub Msg
 subscriptions _model = Sub.none
 main =
