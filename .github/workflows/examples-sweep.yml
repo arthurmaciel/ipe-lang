@@ -201,6 +201,7 @@ jobs:
         run: |
           set +e +o pipefail
           HIST="$HOME/.cache/ipe/examples-sweep"
+          # shellcheck disable=SC2012  # names are timestamped (no odd chars); ls -t is the intent
           table="$(ls -t "$HIST"/sweep-*.table 2>/dev/null | head -1)"
           verdict="$(grep -h '=== VERDICT:' "$HIST"/run-*.log 2>/dev/null | tail -1 | sed 's/^=== //; s/ ===.*$//')"
           {
@@ -228,19 +229,35 @@ jobs:
             ~/.cache/ipe/examples-sweep/*.log
           if-no-files-found: warn
 
-  # ── Windows (Git Bash) — BUILD-only, CLI shapes ──────────────────────────────
-  # Scope: ipe build + cargo build of the cli-shaped examples. RUN is skipped
-  # on all shapes (requires curl/python3/flock on PATH — flock has no Windows
-  # equivalent in Git Bash, so scripts/examples-sweep.sh exits 2 on Windows;
-  # the full sweep script cannot run there). TUI and Webview are additionally
-  # scoped out: TUI needs ConPTY/node-pty (not yet wired), Webview needs
-  # WebView2/Edge which is present on windows-latest but requires a display
-  # (exercise_webview in checks.sh does handle Windows, but without the sweep
-  # harness it is not exercised here). This job proves the BUILD path works on
-  # Windows (MSVC toolchain, path separators, cargo invocation) for cli shapes.
-  # Non-gating (continue-on-error: true) during build-out.
+  # ── Windows (Git Bash) — the SAME sweep harness, informational ───────────────
+  # Reuses scripts/examples-sweep.sh under Git Bash (`shell: bash` — Git Bash
+  # ships with windows-latest), NOT a native-PowerShell reimplementation: a second
+  # harness would be a second source of truth and a silent-divergence vector. The
+  # harness was made Git-Bash-portable at three points (all Windows-conditional,
+  # Linux/macOS behaviour unchanged): env.sh resolves `ipe.exe`, checks.sh's
+  # resolve_bin resolves `ipe-app.exe`, and examples-sweep.sh degrades `flock` to
+  # a no-op when it is absent (Git Bash has none) — sound because a lone CI sweep
+  # has no contender for the shared CARGO_TARGET_DIR the lock guards.
+  #
+  # PER-SHAPE COVERAGE ON THIS RUNNER (driven by the harness itself, so it can
+  # never silently pass a shape it did not actually exercise):
+  #   cli      — RUN (pure console).
+  #   server   — RUN (curl loopback probe; tokio/axum/rustls are portable).
+  #   live     — RUN as a boot/serve check (no browser round-trip: no Playwright
+  #              browsers are installed here).
+  #   webview  — RUN, no xvfb, no-panic gate (WebView2 preinstalled on the runner);
+  #              a webview example whose emitted crate does not link `wry`/`tao`
+  #              cargo-fails LOUD rather than faking a green.
+  #   tui      — SKIP inside the sweep: the emitted Tui.app needs a real console
+  #              and Git-Bash CI has no ConPTY (exercise_tui in checks.sh emits a
+  #              windows SKIP row). Real Windows TUI-render coverage belongs to the
+  #              runtime `element_to_cells` pure-fn unit lane, not this sweep.
+  #   wasm     — n/a: the upstream Sky mirror set contains no [wasm] example.
+  #
+  # Non-gating (continue-on-error: true) while the compiler is reaching example
+  # parity — matches how the ubuntu/macOS jobs are introduced; flip alongside them.
   examples-sweep-windows:
-    name: examples-sweep (windows — BUILD-only, cli shapes)
+    name: examples-sweep (windows — Git Bash harness, informational)
     runs-on: windows-latest
     continue-on-error: true
     defaults:
@@ -249,9 +266,12 @@ jobs:
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/ipe-target
       IPE_NO_SCCACHE: '1'
+      IPE_SWEEP_FORCE: '1'
+      IPE_AUTH_TOKEN_SECRET: ipe-ci-sweep-test-secret-0123456789-abcdef
+      IPE_SWEEP_BUILD_TIMEOUT: '900'
+      IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
       CARGO_HTTP_MULTIPLEXING: 'false'
       CARGO_NET_RETRY: '5'
-      REPO: ${{ github.workspace }}
 
     steps:
       - uses: actions/checkout@v7
@@ -275,22 +295,51 @@ jobs:
       - name: Build ipe
         run: cargo build --release -p ipe
 
-      # BUILD-only proof for the two deterministic cli examples (no flock, no
-      # RUN). This exercises the Windows cargo invocation, path handling, and
-      # MSVC link path without needing the full sweep harness.
-      - name: BUILD cli examples (hello-world, json)
-        env:
-          IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
+      # Pre-warm the runtime dep tree so the first example's cargo build reuses
+      # compiled deps instead of cold-compiling the world and blowing the ceiling.
+      - name: Pre-warm runtime deps
+        run: cargo build -p ipe-runtime-rust || cargo build --workspace || true
+
+      # The SAME harness the ubuntu/macOS jobs run — mirror (curl+tar, both in Git
+      # Bash) + BUILD (ipe.exe + cargo) + per-shape RUN. flock no-ops here; ipe.exe
+      # / ipe-app.exe resolve via the Windows-conditional paths in env.sh/checks.sh.
+      - name: Run examples sweep (mirror + BUILD + RUN)
+        run: bash scripts/examples-sweep.sh
+
+      # Per-OS job summary: the BUILD·RUN table inline on the run page. always()
+      # so it renders even on a RED verdict. COSMETIC — never fails the job.
+      - name: Job summary (sweep table)
+        if: always()
         run: |
-          set -euo pipefail
-          IPE="$CARGO_TARGET_DIR/release/ipe.exe"
-          for ex in examples/sky/ipe/01-hello-world examples/sky/ipe/06-json; do
-            echo "=== BUILD $ex ==="
-            cd "$REPO/$ex"
-            "$IPE" build ipe.toml --out out/rust
-            cargo build --manifest-path out/rust/Cargo.toml
-            cd "$REPO"
-          done
+          set +e +o pipefail
+          HIST="$HOME/.cache/ipe/examples-sweep"
+          # shellcheck disable=SC2012  # names are timestamped (no odd chars); ls -t is the intent
+          table="$(ls -t "$HIST"/sweep-*.table 2>/dev/null | head -1)"
+          verdict="$(grep -h '=== VERDICT:' "$HIST"/run-*.log 2>/dev/null | tail -1 | sed 's/^=== //; s/ ===.*$//')"
+          {
+            echo "## examples-sweep — windows-latest (Git Bash)"
+            echo
+            echo "_Upstream-mirror parity under Git Bash: does ipe build + run the real (patched) upstream examples on Windows?_"
+            echo
+            [ -n "$verdict" ] && { echo "**${verdict}**"; echo; }
+            if [ -n "$table" ] && [ -f "$table" ]; then
+              echo '```'; cat "$table"; echo '```'
+            else
+              echo "_No sweep table found (see the \"Run examples sweep\" step log)._"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
+      - name: Upload sweep scoreboard
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: examples-sweep-windows-latest
+          path: |
+            ~/.cache/ipe/examples-sweep/sweep-*.table
+            ~/.cache/ipe/examples-sweep/warnings-*.tsv
+            ~/.cache/ipe/examples-sweep/*.log
+          if-no-files-found: warn
 
   # ── FreeBSD (vmactions VM on ubuntu host) — BUILD-only ───────────────────────
   # Scope: ipe build + cargo build inside a FreeBSD VM. RUN is skipped (no
