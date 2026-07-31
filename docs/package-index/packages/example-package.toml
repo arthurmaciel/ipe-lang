@@ -1,0 +1,20 @@
+# A complete, valid index entry. `ipe package validate-entry` accepts this file.
+# It is a schema example, not a real published package — the `source`/`rev`/
+# `sha256` are illustrative placeholders. In the hosted index, entries under
+# packages/ are produced by merged `ipe package publish` pull requests.
+name = "example-package"
+publisher = "arthurmaciel"
+
+[[version]]
+version = "1.0.0"
+source = "https://github.com/arthurmaciel/example-package"
+rev = "9f2c7b1e0a4d5c6f8b2a1e3d4c5b6a7f8e9d0c1b"
+sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+capabilities = []
+
+[[version]]
+version = "1.1.0"
+source = "https://github.com/arthurmaciel/example-package"
+rev = "1a2b3c4d5e6f70819a2b3c4d5e6f70819a2b3c4d"
+sha256 = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+capabilities = ["network", "clock"]

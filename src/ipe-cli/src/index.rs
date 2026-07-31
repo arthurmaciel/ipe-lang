@@ -85,6 +85,43 @@ pub fn read_entry(index_root: &Path, name: &str) -> Result<IndexEntry, CliError>
     parse_entry(name, &text)
 }
 
+/// Validate a single `packages/<name>.toml` entry file by its own path, the way
+/// the index repository's admission CI checks a submitted entry.
+///
+/// The package name is the file stem (the schema's authoritative name), so the
+/// file `packages/http-extras.toml` is validated as package `http-extras`. This
+/// is the same parse [`read_entry`] runs, reused so the validator and the reader
+/// can never disagree about what a well-formed entry is: a version that parses
+/// here is a version the resolver will later accept.
+///
+/// Fail-closed: any parse failure (a bad version, a missing per-version field,
+/// an unknown capability, an absent `publisher`, or zero `[[version]]` blocks)
+/// is a hard error, never a warning. Structure only — the source pin and the
+/// package gate are the admission CI's fetch and `ipe package audit` steps, not
+/// this offline check.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] when `path` has no `.toml` file-stem to name the
+/// package; [`CliError::Io`] when the file cannot be read; [`CliError::Resolve`]
+/// when the entry is malformed.
+pub fn validate_entry_file(path: &Path) -> Result<IndexEntry, CliError> {
+    let name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            CliError::UsageOwned(format!(
+                "{} is not a `packages/<name>.toml` entry file — the file stem names the package",
+                path.display()
+            ))
+        })?;
+    let text = std::fs::read_to_string(path).map_err(|e| CliError::Io {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
+    parse_entry(name, &text)
+}
+
 /// Resolve the highest published version satisfying `req`.
 ///
 /// # Errors
@@ -372,6 +409,58 @@ mod tests {
         )
         .expect("write entry");
         let err = read_entry(&root, "nohash").unwrap_err();
+        assert!(format!("{err}").contains("sha256"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn validate_entry_file_accepts_a_well_formed_entry() {
+        // The admission-CI validator names the package by the file stem and
+        // parses it exactly as the resolver would.
+        use super::validate_entry_file;
+        let root = temp_dir("validate-ok");
+        write_fixture_index(&root, "http-extras", &["1.0.0", "1.2.0"]);
+        let entry = validate_entry_file(&root.join("packages").join("http-extras.toml"))
+            .expect("well-formed entry validates");
+        assert_eq!(entry.name, "http-extras");
+        assert_eq!(entry.versions.len(), 2);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn validate_entry_file_rejects_an_unknown_capability() {
+        use super::validate_entry_file;
+        let root = temp_dir("validate-bad-cap");
+        let packages = root.join("packages");
+        std::fs::create_dir_all(&packages).expect("packages dir");
+        let path = packages.join("weird.toml");
+        std::fs::write(
+            &path,
+            "publisher = \"tester\"\n\n[[version]]\nversion = \"1.0.0\"\n\
+             source = \"https://example.invalid/weird\"\nrev = \"ab\"\nsha256 = \"00\"\n\
+             capabilities = [\"telepathy\"]\n",
+        )
+        .expect("write entry");
+        let err = validate_entry_file(&path).unwrap_err();
+        assert!(format!("{err}").contains("telepathy"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn validate_entry_file_rejects_a_missing_field() {
+        use super::validate_entry_file;
+        let root = temp_dir("validate-missing");
+        let packages = root.join("packages");
+        std::fs::create_dir_all(&packages).expect("packages dir");
+        let path = packages.join("nohash.toml");
+        // No `sha256` — the integrity anchor is mandatory, so validation rejects.
+        std::fs::write(
+            &path,
+            "publisher = \"tester\"\n\n[[version]]\nversion = \"1.0.0\"\n\
+             source = \"https://example.invalid/nohash\"\nrev = \"ab\"\n",
+        )
+        .expect("write entry");
+        let err = validate_entry_file(&path).unwrap_err();
         assert!(format!("{err}").contains("sha256"));
         let _ = std::fs::remove_dir_all(&root);
     }

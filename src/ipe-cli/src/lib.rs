@@ -2925,13 +2925,60 @@ fn run_package(rest: &[String]) -> Result<(), CliError> {
     match rest.split_first() {
         Some((sub, tail)) if sub == "audit" => audit::run_audit(tail),
         Some((sub, tail)) if sub == "publish" => publish::run_publish(tail),
+        Some((sub, tail)) if sub == "validate-entry" => run_validate_entry(tail),
         Some((sub, _)) => Err(CliError::UsageOwned(format!(
-            "ipe package: unknown subcommand `{sub}` (expected `audit` or `publish`)"
+            "ipe package: unknown subcommand `{sub}` (expected `audit`, `publish`, or \
+             `validate-entry`)"
         ))),
         None => Err(CliError::Usage(
-            "usage: ipe package <audit|publish> [<path>]",
+            "usage: ipe package <audit|publish|validate-entry> [<path>]",
         )),
     }
+}
+
+/// `ipe package validate-entry <packages/<name>.toml>` — validate one curated
+/// index entry file against the entry schema, fail-closed.
+///
+/// The index repository's admission CI runs this on a submitted entry as its
+/// cheap structural gate before the source-pin and `ipe package audit` steps: it
+/// reuses the resolver's own parser ([`index::validate_entry_file`]), so a file
+/// that validates here is exactly a file the resolver will later read. On success
+/// it prints the package name and every version it parsed; on any malformed field
+/// it exits non-zero with the parser's diagnostic.
+///
+/// # Errors
+/// [`CliError::Usage`] when no entry file is given; [`CliError::UsageOwned`] on a
+/// bad path or an extra argument; the parser's [`CliError::Resolve`] /
+/// [`CliError::Io`] when the entry is malformed or unreadable.
+fn run_validate_entry(rest: &[String]) -> Result<(), CliError> {
+    let path = match rest {
+        [one] => PathBuf::from(one),
+        [] => {
+            return Err(CliError::Usage(
+                "usage: ipe package validate-entry <packages/<name>.toml>",
+            ));
+        }
+        _ => {
+            return Err(CliError::UsageOwned(
+                "ipe package validate-entry: expected a single entry-file path".to_owned(),
+            ));
+        }
+    };
+    let entry = index::validate_entry_file(&path)?;
+    let versions: Vec<String> = entry
+        .versions
+        .iter()
+        .map(|v| v.version.to_string())
+        .collect();
+    let body = format!(
+        "entry ok: {} (publisher {}) — {} version(s): {}",
+        entry.name,
+        entry.publisher,
+        versions.len(),
+        versions.join(", ")
+    );
+    print!("{}", style::frame(&style::gutter(&body)));
+    Ok(())
 }
 
 /// Resolve a `check`/analysis `<path>` argument to the entry `.ipe` file the
