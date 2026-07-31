@@ -1066,6 +1066,7 @@ impl Env {
                 "Io",
                 &[
                     "readLine",
+                    "readSecret",
                     "writeStdout",
                     "writeStderr",
                     "println",

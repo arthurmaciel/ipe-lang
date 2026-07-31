@@ -671,6 +671,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::TaskWithKind => "Task.withKind",
         // ── Io kernels ──────────────────────────────────────────────────
         KernelFn::IoReadLine => "Io.readLine",
+        KernelFn::IoReadSecret => "Io.readSecret",
         KernelFn::IoWriteStdout => "Io.writeStdout",
         KernelFn::IoWriteStderr => "Io.writeStderr",
         KernelFn::IoPrintln => "Io.println",
