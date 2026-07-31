@@ -55,7 +55,7 @@ fn resolve_runtime() -> Option<PathBuf> {
 /// `uses_ffi` is excluded: it appends `mod ffi;` to `main.rs` (not to
 /// `ipe_runtime/mod.rs`) and requires FFI emission inputs the body-free emit
 /// here cannot supply — it is orthogonal to the runtime-module closure.
-const FLAG_COUNT: usize = 13;
+const FLAG_COUNT: usize = 14;
 
 #[allow(clippy::similar_names)] // `uses_ui` / `uses_tui` are intentionally alike
 fn module_for_mask(name: ipe_intern::Symbol, mask: u16) -> Module {
@@ -84,6 +84,7 @@ fn module_for_mask(name: ipe_intern::Symbol, mask: u16) -> Module {
         uses_env_public: f(10),
         uses_http: f(11),
         uses_config: f(12),
+        uses_compression: f(13),
         uses_debug: false,
         uses_ffi: false,
     }

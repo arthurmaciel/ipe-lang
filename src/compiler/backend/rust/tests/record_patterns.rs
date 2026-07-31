@@ -61,6 +61,7 @@ fn program(name: Symbol, funcs: Vec<Func>, entry: Option<FuncId>) -> Program {
             uses_server: false,
             uses_http: false,
             uses_config: false,
+            uses_compression: false,
             uses_ui: false,
             uses_web: false,
             uses_tui: false,

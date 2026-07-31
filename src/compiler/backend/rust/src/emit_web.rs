@@ -947,6 +947,7 @@ mod schema_tag_tests {
                 uses_server: false,
                 uses_http: false,
                 uses_config: false,
+                uses_compression: false,
                 uses_ui: false,
                 uses_web: true,
                 uses_tui: false,
