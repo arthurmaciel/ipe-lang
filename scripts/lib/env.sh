@@ -68,19 +68,24 @@ export REPO
 # target FIRST, then the in-repo target/ (the layout on a checkout WITHOUT a
 # global target-dir), then PATH. Release is preferred over debug (faster sweep).
 # IPE_BIN honoured verbatim if the caller pre-set it.
+# On Windows the cargo artifact is `ipe.exe`; elsewhere it is `ipe`. `_exe` is
+# the suffix to probe for so the same loop resolves either.
+_exe=""
+case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*|Windows_NT) _exe=".exe" ;; esac
 if [ -z "${IPE_BIN:-}" ]; then
   for _cand in \
-    "$CARGO_TARGET_DIR/release/ipe" \
-    "$CARGO_TARGET_DIR/debug/ipe" \
-    "$REPO/target/release/ipe" \
-    "$REPO/target/debug/ipe"; do
+    "$CARGO_TARGET_DIR/release/ipe$_exe" \
+    "$CARGO_TARGET_DIR/debug/ipe$_exe" \
+    "$REPO/target/release/ipe$_exe" \
+    "$REPO/target/debug/ipe$_exe"; do
     if [ -x "$_cand" ]; then IPE_BIN="$_cand"; break; fi
   done
   # Last resort: a ipe on PATH.
   [ -z "${IPE_BIN:-}" ] && command -v ipe >/dev/null 2>&1 && IPE_BIN="$(command -v ipe)"
   unset _cand
 fi
-export IPE_BIN="${IPE_BIN:-$CARGO_TARGET_DIR/release/ipe}"
+export IPE_BIN="${IPE_BIN:-$CARGO_TARGET_DIR/release/ipe$_exe}"
+unset _exe
 
 # ── Vendored runtime dir (ipe --runtime) ────────────────────────────────────
 # ipe's build vendors the runtime module tree into each emitted crate. Left
