@@ -8,9 +8,12 @@
 //!    spawned foreign task — aborts the inner task when the wrapper future is
 //!    dropped before completion (`Task.parallel` early-cancel), so a
 //!    cancelled foreign call cannot keep producing side effects.
+//! 3. A poll-time panic inside the spawned foreign future surfaces as the
+//!    wrapper's typed `Err` through the join-error arm and the redacting
+//!    foreign-error funnel — never a process abort, never a silent hang.
 #![cfg(feature = "tokio")]
 
-use ipe_runtime_rust::{AbortOnDrop, IpeResult, IpeTask, block_on, ok_res};
+use ipe_runtime_rust::{AbortOnDrop, IpeResult, IpeTask, block_on, ipe_error_from_foreign, ok_res};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -84,6 +87,47 @@ fn abort_on_drop_cancels_the_spawned_foreign_task() {
         matches!(outcome, IpeResult::Ok(false)),
         "the aborted foreign task must not produce its side effect: {outcome:?}"
     );
+}
+
+#[test]
+fn panicking_spawned_foreign_task_folds_to_a_typed_err() {
+    // The emitted async wrapper's join-error arm: a panic at poll time inside
+    // the spawned foreign future becomes a `JoinError`, folded to the redacted
+    // funnel message (generic text + correlation id) — the raw panic payload
+    // never rides the Ipê-visible error value.
+    let wrapper: IpeTask<String, i64> = Box::pin(async move {
+        let handle: tokio::task::JoinHandle<i64> =
+            tokio::task::spawn(async move { panic!("foreign poll-time panic") });
+        let guard = AbortOnDrop::new(handle.abort_handle());
+        let joined = handle.await;
+        guard.defuse();
+        match joined {
+            Ok(v) => ok_res(v),
+            Err(join_err) => IpeResult::Err(ipe_error_from_foreign(join_err)),
+        }
+    });
+    match block_on(wrapper) {
+        IpeResult::Err(e) => assert!(
+            e.starts_with("external operation failed (ref "),
+            "join error must fold to the redacted funnel message: {e}"
+        ),
+        IpeResult::Ok(v) => panic!("expected a typed Err, got Ok({v})"),
+    }
+}
+
+#[test]
+fn entry_future_panic_folds_through_the_funnel() {
+    // A panic in the entry future itself (outside any spawned foreign task —
+    // e.g. a wrapper prelude) is join-mapped by `block_on` to a typed `Err`
+    // carrying the funnel correlation id, never an unwind out of the entry.
+    let entry: IpeTask<String, i64> = Box::pin(async { panic!("entry poll panic") });
+    match block_on(entry) {
+        IpeResult::Err(e) => assert!(
+            e.starts_with("async task panicked (ref "),
+            "entry panic must fold to the funnel message: {e}"
+        ),
+        IpeResult::Ok(v) => panic!("expected a typed Err, got Ok({v})"),
+    }
 }
 
 #[test]
