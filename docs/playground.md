@@ -45,7 +45,7 @@ The server needs three environment variables:
 ```sh
 export IPE_BIN="$(pwd)/target/release/ipe"
 export IPE_RUNTIME_DIR="$(pwd)/src/runtime/rust/src"
-export IPE_PLAYGROUND_STATIC_DIR="$(pwd)/src/playground/www"
+export IPE_PLAYGROUND_STATIC_DIR="$(pwd)/examples/wasm/language-playground/server/www"
 
 ./target/release/ipe-playground
 # Listening on 0.0.0.0:3000
@@ -129,7 +129,7 @@ writable mount and is deleted after the request.
 
 Every build and run of user-derived code is confined by `ipe_sandbox`. The
 enforcing knob for each control (proven by the tests in
-`src/playground/tests/sandbox_security.rs`):
+`examples/wasm/language-playground/server/tests/sandbox_security.rs`):
 
 | Control | Enforcer | Proving test |
 |---|---|---|
