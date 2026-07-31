@@ -1,0 +1,56 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.Error
+import Ipe.List
+import Ipe.Maybe
+import Ipe.Result
+import Ipe.String
+
+
+-- Soundness fixture for the tail-recursive rewrite of `Result.combine` /
+-- `Maybe.combine`. A 500k-element all-success input must collect in constant
+-- native stack; the old recurse-then-cons body used one frame per element and
+-- SIGABRTs under a capped stack long before completing.
+--
+-- The printed value is the collected length, so the fixture proves the
+-- collection is value-correct (every element survived) as well as
+-- non-crashing.
+
+
+bigResult : Result Error (List Int)
+bigResult =
+    Result.combine (List.map Ok (List.range 1 500000))
+
+
+bigMaybe : Maybe (List Int)
+bigMaybe =
+    Maybe.combine (List.map Just (List.range 1 500000))
+
+
+resultLen : Result Error (List Int) -> Int
+resultLen r =
+    case r of
+        Ok xs ->
+            List.length xs
+
+        Err _ ->
+            0 - 1
+
+
+maybeLen : Maybe (List Int) -> Int
+maybeLen m =
+    case m of
+        Just xs ->
+            List.length xs
+
+        Nothing ->
+            0 - 1
+
+
+main =
+    let
+        _ =
+            Io.println (String.fromInt (resultLen bigResult))
+    in
+    Io.println (String.fromInt (maybeLen bigMaybe))

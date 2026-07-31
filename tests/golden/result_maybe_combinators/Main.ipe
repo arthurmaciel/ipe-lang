@@ -117,6 +117,25 @@ m5err =
     Result.map5 combine5 (okInt 1) (okInt 2) (okInt 3) errInt (okInt 5)
 
 
+-- Long-input stress: `combine` must be tail-recursive, so a 100k-element
+-- all-success input collects in constant stack instead of overflowing.
+-- `sumL` folds the collected list to a single checksum so the assertion
+-- stays compact while still proving every element survived in order.
+sumL : List Int -> Int
+sumL xs =
+    List.foldl (\x a -> x + a) 0 xs
+
+
+bigOk : Result Error (List Int)
+bigOk =
+    Result.combine (List.map Ok (List.range 1 100000))
+
+
+bigJust : Maybe (List Int)
+bigJust =
+    Maybe.combine (List.map Just (List.range 1 100000))
+
+
 showR : Result Error Int -> String
 showR r =
     case r of
@@ -152,6 +171,28 @@ showML m =
     case m of
         Just xs ->
             "[" ++ String.join "," (List.map String.fromInt xs) ++ "]"
+
+        Nothing ->
+            "nothing"
+
+
+-- Compact `length:sum` summary of a collected list — proves the long-input
+-- `combine` collected every element in order without overflowing the stack.
+showRSummary : Result Error (List Int) -> String
+showRSummary r =
+    case r of
+        Ok xs ->
+            String.fromInt (List.length xs) ++ ":" ++ String.fromInt (sumL xs)
+
+        Err _ ->
+            "ERR"
+
+
+showMSummary : Maybe (List Int) -> String
+showMSummary m =
+    case m of
+        Just xs ->
+            String.fromInt (List.length xs) ++ ":" ++ String.fromInt (sumL xs)
 
         Nothing ->
             "nothing"
@@ -197,5 +238,11 @@ main =
 
         _ =
             Io.println (showR m5err)
+
+        _ =
+            Io.println (showRSummary bigOk)
+
+        _ =
+            Io.println (showMSummary bigJust)
     in
     Io.println "done"

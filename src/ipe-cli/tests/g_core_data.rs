@@ -16,6 +16,8 @@ mod golden_bool_literal_patterns;
 mod golden_char_pattern;
 #[path = "g_core_data/golden_char_predicates.rs"]
 mod golden_char_predicates;
+#[path = "g_core_data/golden_combine_cps.rs"]
+mod golden_combine_cps;
 #[path = "g_core_data/golden_comparable.rs"]
 mod golden_comparable;
 #[path = "g_core_data/golden_dict_fills.rs"]
