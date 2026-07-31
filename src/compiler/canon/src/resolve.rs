@@ -146,6 +146,18 @@ const RESERVED_BUILTIN_TYPES: &[&str] = &[
     // security-tier type (the scheme/SSRF parse boundary) must not be
     // shadowable by user code defeating `Url.fromString`'s parse guarantee.
     "Url",
+    // The JS-interop visual-widget boundary type. A binding typed
+    // `CustomElement down up` names, in its two concrete type parameters, the
+    // sealed down-state and up-event that cross the Ipê↔JS seam — every value
+    // is decoded on the way in / encoded on the way out, never an untyped blob.
+    // Reserved so user code cannot declare its own `type CustomElement …` and
+    // smuggle an untyped widget past the seal: the reservation is what makes the
+    // typed boundary the ONLY spelling of the boundary (Security #1, fail-closed
+    // by construction). Until the widget transport's runtime denotation ships,
+    // any USE of the name is rejected outright in `canonicalise_type`
+    // (IPE-N0037) — before its type arguments are ever inspected — so the boundary
+    // is simply closed rather than half-emittable.
+    "CustomElement",
     // `Ipe.PubSub`'s phantom topic handle type — reserved so user code cannot
     // define `type Topic` and silently bypass the lowerer's `Topic a → Str` arm.
     // `PubSub.ipe` (EmbeddedStdlib) may declare it without penalty.
@@ -240,6 +252,13 @@ const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
     "PanicInfo",
     "TypeInfo",
     "ErrorInfo",
+    // `CustomElement down up` — the JS-widget boundary type (reserved in
+    // `RESERVED_BUILTIN_TYPES`). Registered here too so a bare annotation
+    // `codeEditor : CustomElement EditorState EditorEvent` resolves to the
+    // empty-home sentinel rather than IPE-N0002; the annotation is then
+    // rejected fail-closed at `canonicalise_type` (IPE-N0037) until the widget
+    // transport's runtime denotation ships.
+    "CustomElement",
 ];
 
 /// Kernel-implicit built-in type names that are globally in scope in
@@ -4116,6 +4135,28 @@ fn canonicalise_type(
                         name: name_str(ctx.interner, name)?,
                         expected,
                         found: can_args.len(),
+                    },
+                });
+            }
+            // The `CustomElement down up` JS-widget boundary type is RESERVED
+            // and resolvable, but its runtime denotation — the generated glue and
+            // the DOM-patch node family — is not shipped yet. An annotation naming
+            // it must fail CLOSED here, at the single canon site that carries a
+            // span, rather than resolve to a `Con` that reaches the lowerer's
+            // catch-all and ICEs (IPE-I0001), or silently type-check to an untyped
+            // hole. Checked on the NAME regardless of home: the name is reserved
+            // against every origin (no module — not even trusted stdlib, see the
+            // exemption sets — may define or export it), so a qualified spelling
+            // (`Dep.CustomElement`) is as illegitimate as the bare one and must
+            // not slip past a home gate into a build-time ICE. User DEFINITION of
+            // the name is already rejected earlier (IPE-N0026). The two-parameter
+            // down/up seal is reported in the message so the diagnostic teaches
+            // the intended shape.
+            if ctx.interner.resolve(name) == Some("CustomElement") {
+                return Err(Diagnostic::Name {
+                    span: ctx.ann_span,
+                    msg: NameError::UnsupportedBoundaryType {
+                        name: name_str(ctx.interner, name)?,
                     },
                 });
             }
