@@ -4,7 +4,6 @@ module State exposing (..)
 -- per-module HM heap stays well below Limitation #17's heap-exhaustion
 -- limit; the heavy unification load lives in the per-View modules.
 
-import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.String as String
 

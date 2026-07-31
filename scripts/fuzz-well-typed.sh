@@ -147,7 +147,6 @@ template_arith() {
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Log exposing (println)
 
 main =
@@ -160,7 +159,6 @@ template_strconcat() {
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Log exposing (println)
 
 main =
@@ -173,7 +171,6 @@ template_listmap() {
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Log exposing (println)
 
 main =
@@ -186,7 +183,6 @@ template_maybechain() {
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Log exposing (println)
 
 main =
@@ -199,7 +195,6 @@ template_resultpipeline() {
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Log exposing (println)
 
 main =
@@ -212,7 +207,6 @@ template_paramrecord() {
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Log exposing (println)
 
 type alias Box a =
@@ -241,7 +235,6 @@ template_adt_case() {
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Log exposing (println)
 
 type Color
@@ -269,7 +262,6 @@ template_let_poly() {
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Log exposing (println)
 
 main =
@@ -290,7 +282,6 @@ template_higher_order() {
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.String as String
 import Ipe.Log exposing (println)
@@ -315,7 +306,6 @@ template_record_update() {
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Log exposing (println)
 
 type alias Point =
@@ -337,7 +327,6 @@ template_tuple() {
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Log exposing (println)
 
 main =
@@ -357,7 +346,6 @@ template_recursion() {
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.Log exposing (println)
 
@@ -379,7 +367,6 @@ template_if_nested_let() {
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Log exposing (println)
 
 main =
@@ -406,7 +393,6 @@ template_pipeline() {
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.Log exposing (println)
 
@@ -429,7 +415,6 @@ template_dict_ops() {
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Dict as Dict
 import Ipe.Maybe as Maybe
 import Ipe.Log exposing (println)
@@ -452,7 +437,6 @@ template_set_ops() {
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Set as Set
 import Ipe.Log exposing (println)
 
@@ -475,7 +459,6 @@ template_maybe_andmap() {
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Maybe as Maybe
 import Ipe.Log exposing (println)
 
@@ -497,7 +480,6 @@ template_result_map2() {
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Result as Result
 import Ipe.Log exposing (println)
 
@@ -523,7 +505,6 @@ template_multiline_interp() {
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.Log exposing (println)
 
@@ -554,7 +535,6 @@ template_mm_2type_reuse() {
     cat > "$libdst" <<EOF
 module Lib exposing (ident)
 
-import Ipe.Prelude exposing (..)
 
 -- Untyped on purpose: the boundary-scheme promotion must generalize this
 -- def at the module boundary so each importer use instantiates it fresh.
@@ -563,7 +543,6 @@ EOF
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Lib exposing (ident)
 import Ipe.Log exposing (println)
 
@@ -580,7 +559,6 @@ template_mm_value_binding() {
     cat > "$libdst" <<EOF
 module Lib exposing (empty)
 
-import Ipe.Prelude exposing (..)
 
 -- Untyped value binding: promoted to a scheme at the boundary; importers
 -- may use it as List Int AND List String.
@@ -589,7 +567,6 @@ EOF
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Lib
 import Ipe.Log exposing (println)
 
@@ -610,7 +587,6 @@ template_mm_number_helper() {
     cat > "$libdst" <<EOF
 module Lib exposing (plus)
 
-import Ipe.Prelude exposing (..)
 
 -- Untyped Number-bounded helper. Single-type cross-module use is accepted;
 -- Int+Float dual use is D2-rejected by design (see class1 spec).
@@ -619,7 +595,6 @@ EOF
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Lib
 import Ipe.Log exposing (println)
 
@@ -636,7 +611,6 @@ template_mm_recursive_pair() {
     cat > "$libdst" <<EOF
 module Lib exposing (evenLen, oddLen)
 
-import Ipe.Prelude exposing (..)
 
 -- Mutually-recursive untyped pair, polymorphic in the element type. The
 -- boundary promotion must generalize the GROUP so importers can use it at
@@ -654,7 +628,6 @@ EOF
     cat <<EOF
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Lib
 import Ipe.Log exposing (println)
 
@@ -911,7 +884,6 @@ run_tp_demo() {
     cat > "$tp_dir/src/Main.ipe" <<'EOF'
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Log exposing (println)
 
 main =

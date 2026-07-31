@@ -1,6 +1,5 @@
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Result as Result
 import Ipe.Io as Io
 import Fyne.Io.Fyne.V2 as Fyne

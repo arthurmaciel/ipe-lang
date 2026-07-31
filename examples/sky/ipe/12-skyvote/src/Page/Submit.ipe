@@ -1,6 +1,5 @@
 module Page.Submit exposing (viewSubmit)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onClick, onInput, onSubmit, onChange)

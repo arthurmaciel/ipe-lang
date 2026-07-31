@@ -1,6 +1,5 @@
 module Page.Product exposing (viewProduct)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Maybe exposing (..)
 import Ipe.List as List
 import Ipe.String as String

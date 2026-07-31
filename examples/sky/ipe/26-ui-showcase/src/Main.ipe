@@ -1,6 +1,5 @@
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.Web as Live
 import Ipe.Ui as Ui exposing (Element)

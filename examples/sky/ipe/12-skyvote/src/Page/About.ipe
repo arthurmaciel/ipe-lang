@@ -1,6 +1,5 @@
 module Page.About exposing (viewAbout)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import State exposing (..)

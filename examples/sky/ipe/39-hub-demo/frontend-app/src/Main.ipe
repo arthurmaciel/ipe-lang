@@ -9,7 +9,6 @@ module Main exposing (main)
 -- Overview), emit a page-view log line carrying a path and a
 -- pseudo-random session id.
 
-import Ipe.Prelude exposing (..)
 import Ipe.Random as Random
 import Ipe.Task as Task
 import Ipe.Tea.Web.Cmd as Cmd

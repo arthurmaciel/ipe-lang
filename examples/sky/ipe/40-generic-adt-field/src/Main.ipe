@@ -12,7 +12,6 @@ module Main exposing (main)
 -- (`rt.AsInt`) or `go build` rejects the uncoerced `any` in the
 -- `int` return slot.
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.Io as Io
 

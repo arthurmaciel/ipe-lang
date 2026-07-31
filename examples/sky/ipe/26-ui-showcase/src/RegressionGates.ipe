@@ -21,7 +21,6 @@ module RegressionGates exposing (cases)
 --   4. Aspect-ratio + grid — placeholders for #379 (aspectRatio +
 --      content-aware grid tracks).
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.Html as Html
 import Ipe.Html.Attributes as Attr

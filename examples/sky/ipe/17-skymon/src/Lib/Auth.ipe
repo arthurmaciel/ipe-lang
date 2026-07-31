@@ -1,6 +1,5 @@
 module Lib.Auth exposing (..)
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.Dict as Dict
 import Ipe.Result as Result

@@ -1,6 +1,5 @@
 module Page.Static exposing (viewPrivacyPolicy, viewTerms, viewNotFound, placeholder)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Html as Html
 import Ipe.Ui as Ui
 import Ipe.Ui exposing (Element)

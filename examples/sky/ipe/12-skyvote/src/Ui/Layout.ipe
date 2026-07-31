@@ -1,6 +1,5 @@
 module Ui.Layout exposing (page, pageWithAuth)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Maybe exposing (..)
 import Ipe.String as String
 import Ipe.Html exposing (..)

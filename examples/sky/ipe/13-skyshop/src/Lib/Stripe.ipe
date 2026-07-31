@@ -8,7 +8,6 @@ module Lib.Stripe exposing (createCheckoutSession, verifyPayment, deductStock, C
 -- currency codes with a USD fallback — a recorded over-restriction vs the full
 -- ISO table.
 
-import Ipe.Prelude exposing (..)
 import Ipe.Maybe as Maybe exposing (..)
 import Ipe.Result as Result
 import Ipe.Task as Task

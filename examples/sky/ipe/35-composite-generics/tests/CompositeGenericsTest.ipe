@@ -4,7 +4,6 @@ module CompositeGenericsTest exposing (main, tests)
 -- module in src/ so a regression anywhere in the State / Decode /
 -- Compute / Report chain shows up here.
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.List as List
 import Ipe.Dict as Dict

@@ -9,7 +9,6 @@ module Routes.Todos exposing (handleList, handleCreate, handleDelete, todoCreate
 --     return)
 --   * Sky.Core.Crypto.randomToken (per-todo id)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Dict as Dict
 import Ipe.List as List
 import Ipe.Maybe as Maybe

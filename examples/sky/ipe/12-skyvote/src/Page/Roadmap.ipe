@@ -1,6 +1,5 @@
 module Page.Roadmap exposing (viewRoadmap)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Result as Result
 import Ipe.List as List
 import Ipe.String as String

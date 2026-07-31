@@ -15,7 +15,6 @@ module Main exposing (main)
 -- external services. This keeps the example focused on the view
 -- layer (Std.Ui) and the TEA wiring (init/update/view), not on
 -- persistence or auth correctness.
-import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.Maybe as Maybe
 import Ipe.String as String

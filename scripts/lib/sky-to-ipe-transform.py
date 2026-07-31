@@ -12,6 +12,12 @@ rewritten together (an exposed bare `println` -> `Io.println`; a `Log.println`
 alias call -> `Io.println`). A `Std.Log` import used only for its remaining
 members (infoWith/errorWith/…) is left to the ordinary prefix rename (-> Ipe.Log).
 
+A REMOVED-MODULE pass then drops import lines for modules Ipê no longer has:
+Sky's open `import Sky.Core.Prelude exposing (..)` becomes `Ipe.Prelude` under
+the prefix rename, but Ipê auto-imports its Tier-A `Ipe.Basics` surface (ADR
+0047), so `Ipe.Prelude` does not exist and the line is deleted rather than
+emitted as an unresolvable import.
+
 The one hard rule: rewrite CODE only, never a string literal or a comment. Sky
 example prose ("Sky.Live Counter", the "Std.Ui showcase" label, a window title)
 must stay byte-identical — both because a syntactic patch may not change program
@@ -453,6 +459,32 @@ def _retarget_alias_import(text: str, src_mod: str, dst_mod: str, dst_alias: str
     return "\n".join(out_lines)
 
 
+# ── Removed-module import drop (Ipe.Prelude) ──────────────────────────────────
+# Ipê has no `Ipe.Prelude` module: its Tier-A (`Ipe.Basics`) surface is
+# auto-imported (ADR 0047), so an open `import Ipe.Prelude exposing (..)` is
+# meaningless — there is nothing to bring into scope, and the module does not
+# resolve. Upstream Sky opens `Sky.Core.Prelude`, which the prefix rename turns
+# into `Ipe.Prelude`; that line is then dropped entirely rather than emitted as an
+# unresolvable import. Runs AFTER the prefix rename so it sees the `Ipe.` form.
+_REMOVED_IMPORT_MODULES: frozenset[str] = frozenset({"Ipe.Prelude"})
+
+
+def drop_removed_imports(text: str) -> str:
+    """Delete `import <M> …` lines for modules Ipê no longer has (`Ipe.Prelude`).
+
+    Imports live at the start of a line, never inside a string or comment, so the
+    scan is line-oriented. Only whole-module-path matches are dropped, so a longer
+    path that merely starts with the name (there is none today) is untouched.
+    """
+    out_lines: list[str] = []
+    for line in text.split("\n"):
+        stripped = line.lstrip()
+        if stripped.startswith("import ") and _import_module(stripped) in _REMOVED_IMPORT_MODULES:
+            continue
+        out_lines.append(line)
+    return "\n".join(out_lines)
+
+
 def prefix_bare_imports(text: str, bare: frozenset[str]) -> str:
     """Prefix `import <Name>` -> `import Ipe.<Name>` for bare stdlib modules.
 
@@ -513,7 +545,7 @@ def main(argv: list[str]) -> int:
             text = fh.read()
         originals[path] = text
         transformed[path] = prefix_bare_imports(
-            transform(apply_member_moves(text), pairs), bare
+            drop_removed_imports(transform(apply_member_moves(text), pairs)), bare
         )
 
     # Phase 2 — shape-scoped Cmd/Sub re-home across the whole example. The shape

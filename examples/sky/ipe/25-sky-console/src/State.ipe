@@ -4,7 +4,6 @@ module State exposing (..)
 -- type-checker stays well below the heap-exhaustion limit
 -- (CLAUDE.md Limitation #17).
 
-import Ipe.Prelude exposing (..)
 
 -- ─── Tabs ────────────────────────────────────────────────────────
 -- The console has 5 tabs. Active tab is part of Model so navigation

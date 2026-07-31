@@ -8,7 +8,6 @@ module Server exposing (run)
 -- The composite intentionally calls every middleware once so the
 -- regression set catches a misregistered kernel sig.
 
-import Ipe.Prelude exposing (..)
 import Ipe.Dict as Dict
 import Ipe.String as String
 import Ipe.Task as Task

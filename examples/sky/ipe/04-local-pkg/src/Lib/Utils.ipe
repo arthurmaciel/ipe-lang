@@ -1,6 +1,5 @@
 module Lib.Utils exposing (add, formatMessage)
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 
 

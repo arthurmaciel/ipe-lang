@@ -6,7 +6,6 @@ module State exposing (..)
 -- Limitation #17's heap-exhaustion limit. The heavy Std.Ui unification
 -- load lives in the View module.
 
-import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.String as String
 

@@ -2,7 +2,6 @@
 -- parametric `Zipper a` defined in a sibling module and used here.
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.Io as Io
 import Zipper exposing (Zipper)

@@ -1,6 +1,5 @@
 module Lib.Schema exposing (initDb)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
 import Ipe.Db as Db
 import Lib.Database exposing (conn)

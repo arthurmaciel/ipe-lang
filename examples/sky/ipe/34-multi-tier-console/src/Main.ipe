@@ -1,6 +1,5 @@
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.Tea.Web.Cmd as Cmd
 import Ipe.Css exposing (..)

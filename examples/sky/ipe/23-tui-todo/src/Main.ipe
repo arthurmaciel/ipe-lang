@@ -22,7 +22,6 @@ Keys:
   Ctrl-C             — quit
 -}
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.List as List
 import Ipe.System as System

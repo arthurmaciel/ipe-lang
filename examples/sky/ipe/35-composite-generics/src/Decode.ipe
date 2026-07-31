@@ -7,7 +7,6 @@ module Decode exposing (..)
 --   * Result.combine
 --   * Maybe and Result combinators
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.List as List
 import Ipe.Maybe as Maybe

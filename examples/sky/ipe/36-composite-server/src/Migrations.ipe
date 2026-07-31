@@ -4,7 +4,6 @@ module Migrations exposing (all)
 -- One migration per logical change; checksums of the SQL body are
 -- guarded by `Db.migrate` so an edit-after-apply is rejected.
 
-import Ipe.Prelude exposing (..)
 import Ipe.Db as Db
 
 

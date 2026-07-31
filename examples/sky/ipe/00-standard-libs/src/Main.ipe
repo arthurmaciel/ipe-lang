@@ -6,7 +6,6 @@ module Main exposing (main, tests)
 -- helper. Grouped by module via Test.suite. `main` exits 0 iff
 -- every assertion passes.
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.List as List
 import Ipe.Dict as Dict

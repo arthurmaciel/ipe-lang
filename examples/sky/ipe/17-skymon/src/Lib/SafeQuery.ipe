@@ -1,6 +1,5 @@
 module Lib.SafeQuery exposing (runReadOnly, isSelectOnly)
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.Result as Result
 import Ipe.Dict as Dict
