@@ -517,6 +517,22 @@ pub(crate) struct EmitCtx<'a> {
     /// too: their runtime modules (`http_stream`, the `web` telemetry exporters,
     /// `email`) call into `http_client`.
     pub(crate) uses_http: bool,
+    /// `true` when the program uses at least one `Ipe.Config` decoder that emits
+    /// into the `config_decode` runtime module (`Config.decodeToml` /
+    /// `decodeYaml` / `decodeJson` / `loadFromFile`, or the `config_decode`-own
+    /// `nullable` / `maybe` / `dict`). When set,
+    /// [`crate::project::assemble_project_files`]:
+    ///
+    /// * declares `pub mod config_decode; pub use config_decode::*;` in the
+    ///   emitted `ipe_runtime/mod.rs`;
+    /// * adds the `toml` + `serde_yaml` dependencies to the emitted `Cargo.toml`.
+    ///
+    /// The JSON-backed `Config.*` combinators (`string` / `field` / `map` / …)
+    /// emit into the always-on `json` module, so a program that only decodes
+    /// JSON never sets this and pulls neither crate. `config_decode` is a leaf
+    /// module — no other runtime surface reaches it — so no other `uses_*` flag
+    /// forces it on.
+    pub(crate) uses_config: bool,
     /// `true` when the program uses at least one `Ipe.Ui` / `Ipe.Html` kernel.
     /// When set, [`crate::project::emit_program`] appends
     /// `pub mod ui;` to the emitted `ipe_runtime/mod.rs`.
@@ -1119,6 +1135,10 @@ impl<'a> EmitCtx<'a> {
         // detect outbound Ipe.Http client usage (gates `http_client` + reqwest).
         let uses_http = program.modules.iter().any(|m| m.uses_http);
 
+        // detect Ipe.Config TOML/YAML decoder usage (gates `config_decode` +
+        // `toml` + `serde_yaml`).
+        let uses_config = program.modules.iter().any(|m| m.uses_config);
+
         // detect Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.WebView usage.
         let (uses_ui, uses_web, uses_tui, uses_webview) = (
             program.modules.iter().any(|m| m.uses_ui),
@@ -1151,6 +1171,7 @@ impl<'a> EmitCtx<'a> {
             uses_tea,
             uses_server,
             uses_http,
+            uses_config,
             uses_ui,
             uses_web,
             uses_tui,
@@ -2881,6 +2902,7 @@ mod record_struct_namespace_tests {
                 uses_tea: false,
                 uses_server: false,
                 uses_http: false,
+                uses_config: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
@@ -2960,6 +2982,7 @@ mod record_struct_namespace_tests {
                 uses_tea: false,
                 uses_server: false,
                 uses_http: false,
+                uses_config: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
