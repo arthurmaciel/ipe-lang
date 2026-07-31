@@ -244,7 +244,7 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
     ipe_runtime::http_client::http_parse_query(raw)
 }
 
-pub fn main_apply(f: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static>, x: i64) -> i64 {
+pub fn main_apply<FN0: Fn(i64) -> i64 + Send + Sync + 'static>(f: FN0, x: i64) -> i64 {
     (f)(x)
 }
 pub fn main_compose2(f: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static>, a: i64, b: i64) -> i64 {

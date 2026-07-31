@@ -639,6 +639,13 @@ pub(crate) struct EmitCtx<'a> {
     enum_clone: BTreeMap<(ModPath, Symbol), bool>,
     /// Function id → Rust function name (e.g. `update` → `main_update`).
     func_names: BTreeMap<FuncId, String>,
+    /// Function id → the 0-based indices of its parameters whose `Box<dyn Fn>`
+    /// carrier was monomorphized to a `FN{i}: Fn(..)` generic
+    /// ([`crate::emit_expr::impl_fn_param_indices`]). The call-site emitter reads
+    /// this to pass the caller's closure UNBOXED into those positions, realising
+    /// the inlined `impl Fn` fast path rather than a wasted heap allocation. A
+    /// function with no such params carries no entry (the common case).
+    impl_fn_params: BTreeMap<FuncId, Vec<usize>>,
     /// Every distinct record shape synthesised for the program, in emission
     /// order (sorted by field-name set).
     record_structs: Vec<RecordStruct>,
@@ -703,6 +710,7 @@ impl<'a> EmitCtx<'a> {
         let mut variant_fields: BTreeMap<(ModPath, Symbol, Symbol), Vec<IrType>> = BTreeMap::new();
         let mut enum_variants: BTreeMap<(ModPath, Symbol), VariantList> = BTreeMap::new();
         let mut func_names = BTreeMap::new();
+        let mut impl_fn_params: BTreeMap<FuncId, Vec<usize>> = BTreeMap::new();
         for module in &program.modules {
             let segs = module
                 .name
@@ -819,6 +827,15 @@ impl<'a> EmitCtx<'a> {
                     });
                 }
                 func_names.insert(func.id, rust_name);
+                // Record which of this function's `Fn`-typed params were
+                // monomorphized to `impl Fn` so the call-site emitter passes the
+                // caller's closure unboxed into exactly those positions. Computed
+                // ONCE here (from the same `Func`) so signature and call site can
+                // never disagree on the carrier.
+                let idxs = crate::emit_expr::impl_fn_param_indices(func);
+                if !idxs.is_empty() {
+                    impl_fn_params.insert(func.id, idxs);
+                }
             }
         }
 
@@ -1137,6 +1154,7 @@ impl<'a> EmitCtx<'a> {
             enum_serde,
             enum_clone,
             func_names,
+            impl_fn_params,
             record_structs,
             record_by_fieldset,
         };
@@ -1714,6 +1732,16 @@ impl<'a> EmitCtx<'a> {
                 where_: "ipe_backend_rust::EmitCtx::func_name",
                 detail: format!("no Rust name for function id {}", id.as_raw()),
             })
+    }
+
+    /// Was the 0-based parameter `idx` of function `id` monomorphized to an
+    /// `impl Fn` generic (so a call site passes its closure argument UNBOXED)?
+    /// `false` for a call to any function that took no such param — the common
+    /// case, and every kernel / FFI callee (which are not user `Func`s).
+    pub(crate) fn call_arg_is_impl_fn(&self, id: FuncId, idx: usize) -> bool {
+        self.impl_fn_params
+            .get(&id)
+            .is_some_and(|idxs| idxs.contains(&idx))
     }
 }
 
