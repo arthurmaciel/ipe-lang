@@ -14,6 +14,7 @@ that builds with `ipe build` and targets the Rust backend.
 | `wasm/env-public` | wasm/live | `Ipe.Env.public` build-time config embedding: an allowlisted `API_BASE_URL` variable injected at compile time and readable in WASM at run time. |
 | `wasm/spa` | wasm | SPA target: a pure-client single-page application with full TEA loop running in the browser. Uses `Web.app` which emits `wasm_app` under `--target wasm`. |
 | `wasm/hydration` | wasm | SSR hydration: server-side initial render (paint) followed by WASM client takeover. |
+| `wasm/language-playground` | n/a (`ipe-wasm`) | The Ipê compiler frontend (parse → typecheck → lower → emit) compiled to WebAssembly: an ACE editor whose contents are compiled to Rust in the browser as you type, showing the emitted Rust or the diagnostics. Static, fully client-side; built via its own `build.sh` (not `ipe build`). See its `README.md`. |
 
 ## Shape demos
 

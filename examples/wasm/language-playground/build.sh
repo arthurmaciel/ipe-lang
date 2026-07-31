@@ -25,6 +25,9 @@ wasm-bindgen \
   --out-name ipe_wasm \
   "$wasm_in"
 
-echo "Done. Serve this directory over HTTP, e.g.:"
-echo "  python3 -m http.server --directory \"$here\" 8080"
-echo "then open http://localhost:8080/"
+echo "Done. Serve this directory over HTTP with any static file server, e.g.:"
+echo "  npx serve \"$here\""
+echo "or"
+echo "  miniserve \"$here\""
+echo "then open the URL it prints (the module + WASM must be fetched over HTTP,"
+echo "not file://)."
