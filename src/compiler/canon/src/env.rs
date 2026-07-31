@@ -52,6 +52,7 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Result"], "Result"),
     (&["Ipe", "Error"], "Error"),
     (&["Ipe", "Math"], "Math"),
+    (&["Ipe", "Bitwise"], "Bitwise"),
     (&["Ipe", "Dict"], "Dict"),
     (&["Ipe", "Set"], "Set"),
     (&["Ipe", "Bytes"], "Bytes"),
@@ -825,6 +826,19 @@ impl Env {
                     "remainder",
                 ],
             ),
+            // `Ipe.Bitwise` — Int-only bitwise ops (elm/core Bitwise parity).
+            (
+                "Bitwise",
+                &[
+                    "and",
+                    "or",
+                    "xor",
+                    "complement",
+                    "shiftLeftBy",
+                    "shiftRightBy",
+                    "shiftRightZfBy",
+                ],
+            ),
             (
                 "Basics",
                 &[
@@ -1092,7 +1106,12 @@ impl Env {
                 ],
             ),
             // `Ipe.Random` — random effects.
-            ("Random", &["int", "float", "choice"]),
+            // `seededIntRaw`/`seededFloatRaw` are the pure deterministic
+            // primitives the compiled-source `Ipe.Random.Generator` builds on.
+            (
+                "Random",
+                &["int", "float", "choice", "seededIntRaw", "seededFloatRaw"],
+            ),
             // `Ipe.File` — file effects.
             (
                 "File",

@@ -404,6 +404,21 @@ pub enum StdlibKernel {
     MathAtan2,
     MathMod,
     MathRemainder,
+    // ── Bitwise ───────────────────────────────────────────────────────────────
+    BitwiseAnd,
+    BitwiseOr,
+    BitwiseXor,
+    BitwiseComplement,
+    BitwiseShiftLeftBy,
+    BitwiseShiftRightBy,
+    BitwiseShiftRightZfBy,
+    // ── Random seeded (deterministic Generator primitives) ────────────────────
+    /// `Random.seededIntRaw : Int -> Int -> Int -> (Int, Int)` — pure seeded
+    /// draw, `(value, nextSeed)`. Backs the `Ipe.Random.Generator` `int` primitive.
+    RandomSeededInt,
+    /// `Random.seededFloatRaw : Int -> (Float, Int)` — pure seeded unit draw in
+    /// `[0, 1)`, `(value, nextSeed)`. Backs the Generator `float` primitive.
+    RandomSeededFloat,
     // ── Dict ────────────────────────────────────────────────────────────────
     DictEmpty,
     DictIsEmpty,
@@ -2049,6 +2064,21 @@ impl StdlibKernel {
             Self::MathAtan2 => d("Math", "atan2", 2, Pure, "math_atan2"),
             Self::MathMod => d("Math", "mod", 2, Pure, "math_mod"),
             Self::MathRemainder => d("Math", "remainder", 2, Pure, "math_remainder"),
+            // ── Bitwise ──────────────────────────────────────────────────────
+            Self::BitwiseAnd => d("Bitwise", "and", 2, Pure, "bitwise_and"),
+            Self::BitwiseOr => d("Bitwise", "or", 2, Pure, "bitwise_or"),
+            Self::BitwiseXor => d("Bitwise", "xor", 2, Pure, "bitwise_xor"),
+            Self::BitwiseComplement => d("Bitwise", "complement", 1, Pure, "bitwise_complement"),
+            Self::BitwiseShiftLeftBy => d("Bitwise", "shiftLeftBy", 2, Pure, "bitwise_shift_left_by"),
+            Self::BitwiseShiftRightBy => {
+                d("Bitwise", "shiftRightBy", 2, Pure, "bitwise_shift_right_by")
+            }
+            Self::BitwiseShiftRightZfBy => {
+                d("Bitwise", "shiftRightZfBy", 2, Pure, "bitwise_shift_right_zf_by")
+            }
+            // ── Random seeded (Generator primitives) ─────────────────────────
+            Self::RandomSeededInt => d("Random", "seededIntRaw", 3, Pure, "random_seeded_int"),
+            Self::RandomSeededFloat => d("Random", "seededFloatRaw", 1, Pure, "random_seeded_float"),
             // ── Dict ────────────────────────────────────────────────────────
             Self::DictEmpty => d("Dict", "empty", 0, Pure, "dict_empty"),
             Self::DictIsEmpty => d("Dict", "isEmpty", 1, Pure, "dict_is_empty"),
@@ -3583,6 +3613,14 @@ impl StdlibKernel {
         Self::MathAtan2,
         Self::MathMod,
         Self::MathRemainder,
+        // Bitwise
+        Self::BitwiseAnd,
+        Self::BitwiseOr,
+        Self::BitwiseXor,
+        Self::BitwiseComplement,
+        Self::BitwiseShiftLeftBy,
+        Self::BitwiseShiftRightBy,
+        Self::BitwiseShiftRightZfBy,
         // Dict
         Self::DictEmpty,
         Self::DictIsEmpty,
@@ -3773,6 +3811,8 @@ impl StdlibKernel {
         Self::RandomInt,
         Self::RandomFloat,
         Self::RandomChoice,
+        Self::RandomSeededInt,
+        Self::RandomSeededFloat,
         // File
         Self::FileReadFile,
         Self::FileWriteFile,
@@ -4942,6 +4982,18 @@ impl StdlibKernel {
             | Self::MathAtan2
             | Self::MathMod
             | Self::MathRemainder
+            | Self::BitwiseAnd
+            | Self::BitwiseOr
+            | Self::BitwiseXor
+            | Self::BitwiseComplement
+            | Self::BitwiseShiftLeftBy
+            | Self::BitwiseShiftRightBy
+            | Self::BitwiseShiftRightZfBy
+            // Seeded Random draws are PURE/deterministic (no entropy), so they
+            // carry no `Random` capability — unlike the entropy-backed
+            // `RandomInt`/`RandomFloat`/`RandomChoice` above.
+            | Self::RandomSeededInt
+            | Self::RandomSeededFloat
             | Self::DictEmpty
             | Self::DictIsEmpty
             | Self::DictSize

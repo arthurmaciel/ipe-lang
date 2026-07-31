@@ -1,0 +1,48 @@
+module Main exposing (main)
+
+-- Exercises the three elm-coverage stdlib additions end-to-end:
+--   * Ipe.Bitwise         — kernel-qualified Int bitwise ops
+--   * Ipe.Tuple           — pure compiled-source pair helpers
+--   * Ipe.Random.Generator — compiled-source seeded, reproducible generators
+import Ipe.Bitwise as Bitwise
+import Ipe.Tuple as Tuple
+import Ipe.Random.Generator as Gen
+import Ipe.String as String
+import Ipe.List as List
+import Ipe.Io as Io
+
+
+main : Task Error ()
+main =
+    let
+        -- Bitwise: build a flag set, then clear the low bit.
+        flags =
+            Bitwise.or (Bitwise.shiftLeftBy 2 1) 1
+
+        cleared =
+            Bitwise.and flags (Bitwise.complement 1)
+
+        -- Tuple: transform both components of a pair.
+        p =
+            Tuple.mapBoth (\x -> x + 1) (\y -> y * 2) ( 3, 4 )
+
+        -- Generator: a seeded roll, then a mapped and a listed draw. The same
+        -- seed always reproduces the same values.
+        ( roll, s1 ) =
+            Gen.int 1 6 (Gen.initialSeed 42)
+
+        ( doubled, _ ) =
+            Gen.map (\n -> n * 2) (Gen.int 1 6) s1
+
+        ( sample, _ ) =
+            Gen.listOf 3 (Gen.int 0 9) (Gen.initialSeed 7)
+    in
+    Io.println
+        (String.fromInt cleared
+            ++ " "
+            ++ String.fromInt (Tuple.first p)
+            ++ " "
+            ++ String.fromInt (Tuple.second p)
+            ++ " "
+            ++ String.fromInt (roll + doubled + List.length sample)
+        )

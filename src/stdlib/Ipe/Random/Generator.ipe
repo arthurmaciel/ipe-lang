@@ -1,0 +1,153 @@
+-- | Ipe.Random.Generator — composable, seeded, reproducible random
+-- generators (elm/random `Generator` in spirit).
+--
+-- A `Generator a` is a pure step from a `Seed` to a value and the next
+-- seed.  Given the same starting seed a generator produces the same
+-- sequence across runs — use it for tests and content generation where
+-- reproducibility matters.  For entropy-backed one-shot draws use the
+-- Task-tier `Ipe.Random` surface (`Random.int` / `Random.float`) instead.
+--
+-- Divergence from elm/random (recorded in `docs/divergences-from-elm.md`):
+-- the combinators are SEED-EXPLICIT — they take the current `Seed` and
+-- return `( value, nextSeed )` directly (a fused `map … |> step`) rather
+-- than returning a deferred `Generator`.  Elm's point-free
+-- `Generator`-returning form needs closures that capture polymorphic
+-- generator values, which the Rust backend cannot yet box (`Send + Sync`
+-- bound on `Box<dyn Fn>`; see IPE-L0126).  The seed-explicit form is total,
+-- lowers cleanly, and threads the seed with the same reproducibility.
+module Ipe.Random.Generator exposing
+    ( Generator, Seed
+    , initialSeed
+    , int, float
+    , map, map2, map3, andThen
+    , listOf, pair
+    )
+
+
+import Ipe.List as List
+import Ipe.Random as Random
+
+
+-- | Opaque PRNG state, threaded through every draw.
+type Seed
+    = Seed Int
+
+
+-- | A recipe for a random value of type `a`: a pure step from one seed to a
+-- value and the next seed.  Base generators (`int`, `float`) have this shape;
+-- the combinators consume a generator and a seed eagerly.
+type alias Generator a =
+    Seed -> ( a, Seed )
+
+
+-- | Construct a starting seed from an `Int`.  Identical inputs reproduce
+-- identical sequences.
+initialSeed : Int -> Seed
+initialSeed n =
+    Seed n
+
+
+-- | Uniform integer generator over `[lo, hi]`, inclusive on both ends.
+--
+--     Random.Generator.int 1 6 (Random.Generator.initialSeed 42)
+int : Int -> Int -> Generator Int
+int lo hi =
+    \seed ->
+        case seed of
+
+            Seed n ->
+                case Random.seededIntRaw n lo hi of
+
+                    ( v, next ) ->
+                        ( v, Seed next )
+
+
+-- | Uniform float generator over `[lo, hi)` (lo inclusive, hi exclusive).
+float : Float -> Float -> Generator Float
+float lo hi =
+    \seed ->
+        case seed of
+
+            Seed n ->
+                case Random.seededFloatRaw n of
+
+                    ( unit, next ) ->
+                        ( lo + unit * (hi - lo), Seed next )
+
+
+-- | Draw from a generator and transform the value.
+--
+--     map (\n -> n * 2) (int 1 6) seed
+map : (a -> b) -> Generator a -> Seed -> ( b, Seed )
+map f gen seed =
+    case gen seed of
+
+        ( a, next ) ->
+            ( f a, next )
+
+
+-- | Draw from two generators in turn and combine their values.
+map2 : (a -> b -> c) -> Generator a -> Generator b -> Seed -> ( c, Seed )
+map2 f genA genB seed =
+    case genA seed of
+
+        ( a, s1 ) ->
+            case genB s1 of
+
+                ( b, s2 ) ->
+                    ( f a b, s2 )
+
+
+-- | Draw from three generators in turn and combine their values.
+map3 : (a -> b -> c -> d) -> Generator a -> Generator b -> Generator c -> Seed -> ( d, Seed )
+map3 f genA genB genC seed =
+    case genA seed of
+
+        ( a, s1 ) ->
+            case genB s1 of
+
+                ( b, s2 ) ->
+                    case genC s2 of
+
+                        ( c, s3 ) ->
+                            ( f a b c, s3 )
+
+
+-- | Draw a value, then use it to choose the next generator to draw from.
+andThen : (a -> Generator b) -> Generator a -> Seed -> ( b, Seed )
+andThen f gen seed =
+    case gen seed of
+
+        ( a, next ) ->
+            (f a) next
+
+
+-- | Draw a list of `n` values from a generator.  A non-positive `n` yields
+-- the empty list.
+listOf : Int -> Generator a -> Seed -> ( List a, Seed )
+listOf n gen seed =
+    listHelp n gen seed []
+
+
+listHelp : Int -> Generator a -> Seed -> List a -> ( List a, Seed )
+listHelp n gen seed acc =
+    if n <= 0 then
+        ( List.reverse acc, seed )
+
+    else
+        case gen seed of
+
+            ( a, next ) ->
+                listHelp (n - 1) gen next (a :: acc)
+
+
+-- | Draw a pair, one component from each generator.
+pair : Generator a -> Generator b -> Seed -> ( ( a, b ), Seed )
+pair genA genB seed =
+    case genA seed of
+
+        ( a, s1 ) ->
+            case genB s1 of
+
+                ( b, s2 ) ->
+                    ( ( a, b ), s2 )

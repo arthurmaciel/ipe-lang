@@ -13865,6 +13865,11 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::SystemExit
                 // ── Random arity-1 ──────────────────────────────────────
                 | KernelFn::RandomChoice
+                // `seededFloatRaw : Int -> (Float, Int)` — pure seeded draw
+                | KernelFn::RandomSeededFloat
+                // ── Bitwise arity-1 ─────────────────────────────────────
+                // `complement : Int -> Int`
+                | KernelFn::BitwiseComplement
                 // ── File arity-1 ────────────────────────────────────────
                 | KernelFn::FileReadFile
                 | KernelFn::FileExists
@@ -14030,6 +14035,13 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::MaybeAndMap
                 | KernelFn::MathMin
                 | KernelFn::MathMax
+                // ── Bitwise arity-2 (Int -> Int -> Int) ──────────────
+                | KernelFn::BitwiseAnd
+                | KernelFn::BitwiseOr
+                | KernelFn::BitwiseXor
+                | KernelFn::BitwiseShiftLeftBy
+                | KernelFn::BitwiseShiftRightBy
+                | KernelFn::BitwiseShiftRightZfBy
                 // ── Basics numerics — arity 2 ────────────────────────
                 | KernelFn::BasicsMin
                 | KernelFn::BasicsMax
@@ -14226,6 +14238,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::StringFoldl
                 | KernelFn::StringFoldr
                 | KernelFn::BasicsClamp
+                // `seededIntRaw : Int -> Int -> Int -> (Int, Int)` — pure seeded draw
+                | KernelFn::RandomSeededInt
                 | KernelFn::ListFoldl
                 | KernelFn::ListFoldr
                 // ── Set arity-3 ──────────────────────────────────────────────

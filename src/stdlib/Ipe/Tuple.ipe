@@ -1,0 +1,72 @@
+-- | Ipe.Tuple — helpers for 2-tuples (pairs).
+--
+-- Pure Ipê source, compiled through the ordinary pipeline; mirrors
+-- elm/core `Tuple`.  A pair is written `( a, b )`.
+module Ipe.Tuple exposing
+    ( first, second
+    , pair
+    , mapFirst, mapSecond, mapBoth
+    )
+
+
+-- | Extract the first component of a pair.
+--
+--     Tuple.first ( 3, 4 ) == 3
+first : ( a, b ) -> a
+first p =
+    case p of
+
+        ( a, _ ) ->
+            a
+
+
+-- | Extract the second component of a pair.
+--
+--     Tuple.second ( 3, 4 ) == 4
+second : ( a, b ) -> b
+second p =
+    case p of
+
+        ( _, b ) ->
+            b
+
+
+-- | Build a pair from its two components.
+--
+--     Tuple.pair 3 4 == ( 3, 4 )
+pair : a -> b -> ( a, b )
+pair a b =
+    ( a, b )
+
+
+-- | Transform the first component of a pair.
+--
+--     Tuple.mapFirst negate ( 3, 4 ) == ( -3, 4 )
+mapFirst : (a -> x) -> ( a, b ) -> ( x, b )
+mapFirst f p =
+    case p of
+
+        ( a, b ) ->
+            ( f a, b )
+
+
+-- | Transform the second component of a pair.
+--
+--     Tuple.mapSecond negate ( 3, 4 ) == ( 3, -4 )
+mapSecond : (b -> y) -> ( a, b ) -> ( a, y )
+mapSecond f p =
+    case p of
+
+        ( a, b ) ->
+            ( a, f b )
+
+
+-- | Transform both components of a pair, each with its own function.
+--
+--     Tuple.mapBoth negate negate ( 3, 4 ) == ( -3, -4 )
+mapBoth : (a -> x) -> (b -> y) -> ( a, b ) -> ( x, y )
+mapBoth f g p =
+    case p of
+
+        ( a, b ) ->
+            ( f a, g b )

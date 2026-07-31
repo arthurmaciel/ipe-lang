@@ -46,6 +46,8 @@ const SET: &str = include_str!("../Ipe/Set.ipe");
 const BYTES: &str = include_str!("../Ipe/Bytes.ipe");
 /// `Ipe.Crypto` — hashes / HMAC / RSA / AEAD / key-derivation / random.
 const CRYPTO: &str = include_str!("../Ipe/Crypto.ipe");
+/// `Ipe.Bitwise` — Int-only bitwise operations (kernel-qualified surface).
+const BITWISE: &str = include_str!("../Ipe/Bitwise.ipe");
 /// `Ipe.Task` — Task combinator surface.
 const TASK: &str = include_str!("../Ipe/Task.ipe");
 /// `Ipe.Io` — standard-I/O effect kernels.
@@ -151,6 +153,10 @@ pub const MODULES: &[StdModule] = &[
         source: CRYPTO,
     },
     StdModule {
+        name: "Ipe.Bitwise",
+        source: BITWISE,
+    },
+    StdModule {
         name: "Ipe.Task",
         source: TASK,
     },
@@ -232,6 +238,25 @@ pub struct CompiledStdModule {
 /// `Ipe.Palette` — a Std-namespace module that defines `Shade`
 /// and pattern-matches its own constructors in `toHex`.
 const PALETTE: &str = include_str!("../Ipe/Palette.ipe");
+
+/// `Ipe.Tuple` — pure pair helpers (elm/core `Tuple` parity).
+///
+/// Pure Ipê source; no `Ffi.kernel` calls — every helper pattern-matches or
+/// builds a 2-tuple.  Not in `STDLIB_MODULE_QUALIFIERS` so the disjointness
+/// invariant holds.
+const TUPLE: &str = include_str!("../Ipe/Tuple.ipe");
+
+/// `Ipe.Random.Generator` — composable, seeded, reproducible random
+/// generators (elm/random `Generator` parity).
+///
+/// Pure Ipê source: defines the `Seed` union + a `Generator` type alias and
+/// builds every combinator over the seeded primitives it draws through
+/// `Ffi.kernel "Random_seededIntRaw"` / `"Random_seededFloatRaw"` (the pure
+/// `RandomSeededInt`/`RandomSeededFloat` kernels, `ipe_runtime::random::*`).
+/// The `Ipe.Random` KERNEL qualifier owns those primitives; this
+/// compiled-source module is the DISTINCT `Ipe.Random.Generator` path, so the
+/// disjointness invariant holds.
+const RANDOM_GENERATOR: &str = include_str!("../Ipe/Random/Generator.ipe");
 
 /// `Ipe.Css` — the typed stylesheet DSL, compiled pure Ipê source: it
 /// defines AND pattern-matches its own `CssProp` / `CssRule` / `Length` /
@@ -489,6 +514,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Palette",
         source: PALETTE,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Tuple",
+        source: TUPLE,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Random.Generator",
+        source: RANDOM_GENERATOR,
     },
     CompiledStdModule {
         dotted: "Ipe.Css",
