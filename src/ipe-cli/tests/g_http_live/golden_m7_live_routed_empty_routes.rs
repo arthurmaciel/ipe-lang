@@ -10,7 +10,7 @@
 //! (Int) would type as ipe-Ok, and the emitted `set_page` closure (`__page:
 //! Page, __model: Model`) would be rejected by cargo with E0308.
 //!
-//! A post-solve `RoutedLiveCheck` closes the hole:
+//! A post-solve `RoutedWebCheck` closes the hole:
 //! * If the settled Model type has a `page` field → routed app → unify
 //!   `notFound`'s type with `Model.page`'s type → IPE-T0001 on mismatch.
 //! * If Model has no `page` field → non-routed app → no check.

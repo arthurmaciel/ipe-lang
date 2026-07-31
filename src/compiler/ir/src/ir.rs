@@ -1492,7 +1492,7 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         // `Regex` is an opaque compiled-pattern handle; `regex::Regex` is not
         // serde, so a `Regex` never round-trips through a session store.
         | IrType::Regex
-        // `SqlFragment` is a query-building value, never persisted to a Live
+        // `SqlFragment` is a query-building value, never persisted to a Web
         // session store — derivable (see `ir_type_is_derivable`) but not serde.
         | IrType::SqlFragment
         // `Secret` must NEVER round-trip through serde (session store, JSON

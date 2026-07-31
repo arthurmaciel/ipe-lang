@@ -349,7 +349,7 @@ const STD_UI_TRANSFORM: &str = include_str!("../Ipe/Ui/Transform.ipe");
 /// (`KernelFn::UiAnimateRaw`, `String -> String -> String -> Bool -> Attribute`)
 /// that constructs `AttrAnimation name shorthand keyframes respect`, rendered
 /// by `src/runtime/rust/src/ui/render.rs` (inline `animation:` property) and
-/// injected as an `@keyframes` block by `live::style_inject::build_anim`.
+/// injected as an `@keyframes` block by `web::style_inject::build_anim`.
 /// Ported from `../ipe/ipe-stdlib/Std/Ui/Animation.ipe`; the reference's
 /// `import Ipe.Ui exposing (animateRaw)` is qualified to `Ui.animateRaw`
 /// (mirrors the `Ipe.Ui.Transition` port's `Ui.transitionRaw` call).

@@ -1,6 +1,6 @@
 //! Emission for `Ipe.Web` / `Ipe.Web` app-entry kernels.
 //!
-//! Wires three of the four Live kernels:
+//! Wires three of the four Web kernels:
 //!
 //! * [`KernelFn::WebApp`] — `Web.app cfg` → `ipe_runtime::web::web_app(…)`
 //!   for single-page apps, or `web_app_routed(…)` when the Model carries a
@@ -143,7 +143,7 @@ pub fn emit_web_call(
             )))
         }
 
-        // Any non-Live kernel variant: let the standard path handle it.
+        // Any non-Web kernel variant: let the standard path handle it.
         _ => Ok(None),
     }
 }
@@ -465,7 +465,7 @@ fn emit_web_app_inner(
              {set_page}, \
              ::std::env::var(\"IPE_LIVE_STORE\").unwrap_or_else(|_| \"memory\".to_string()), \
              ::std::env::var(\"IPE_LIVE_STORE_PATH\").unwrap_or_else(|_| ::std::string::String::new()), \
-             IPE_LIVE_MODEL_SCHEMA_TAG\
+             IPE_WEB_MODEL_SCHEMA_TAG\
              ) }}"
         )));
     }
@@ -484,7 +484,7 @@ fn emit_web_app_inner(
          {subs_s}, \
          ::std::env::var(\"IPE_LIVE_STORE\").unwrap_or_else(|_| \"memory\".to_string()), \
          ::std::env::var(\"IPE_LIVE_STORE_PATH\").unwrap_or_else(|_| ::std::string::String::new()), \
-         IPE_LIVE_MODEL_SCHEMA_TAG\
+         IPE_WEB_MODEL_SCHEMA_TAG\
          ) }}"
     )))
 }
@@ -567,7 +567,7 @@ fn builder_fn_params(e: &Expr) -> Option<Vec<&IrType>> {
 /// structurally recovered (treated as "unrouted" — never false-blocks a
 /// well-formed program, mirrors the same "cannot prove inadmissible" policy
 /// as `emit_model_gate`).  Sharing `model_ty_of_view` with the Model gate
-/// keeps the type-tier `RoutedLiveCheck` and this emit-tier detection in
+/// keeps the type-tier `RoutedWebCheck` and this emit-tier detection in
 /// agreement on every cfg-field shape the gate can see.
 fn routed_page_field<'a>(ctx: &EmitCtx, view_e: &'a Expr) -> Option<(&'a IrType, &'a IrType)> {
     let model_ty = crate::emit_model_gate::model_ty_of_view(view_e)?;
@@ -582,7 +582,7 @@ fn routed_page_field<'a>(ctx: &EmitCtx, view_e: &'a Expr) -> Option<(&'a IrType,
     None
 }
 
-/// Build the `const IPE_LIVE_MODEL_SCHEMA_TAG: [u8; 32] = [...]` declaration the
+/// Build the `const IPE_WEB_MODEL_SCHEMA_TAG: [u8; 32] = [...]` declaration the
 /// routed/non-routed `web_app*` call carries as its final argument.
 ///
 /// H24: the tag is computed from the SAME recovered Model type the
@@ -604,7 +604,7 @@ fn schema_tag_const(ctx: &EmitCtx, view_e: &Expr) -> DResult<String> {
     // The byte value is the whole point — the identifier just keeps the emitted
     // call arg readable at its single use site.
     Ok(format!(
-        "const IPE_LIVE_MODEL_SCHEMA_TAG: [u8; 32] = [{tag_bytes}];"
+        "const IPE_WEB_MODEL_SCHEMA_TAG: [u8; 32] = [{tag_bytes}];"
     ))
 }
 
@@ -749,7 +749,7 @@ fn lookup_field<'f>(
 /// Find an OPTIONAL cfg field by its Ipê source name, returning `None` when the
 /// field is absent rather than failing.
 ///
-/// The Live cfg record is row-open (constrain.rs `K::WebApp` scheme): optional
+/// The Web cfg record is row-open (constrain.rs `K::WebApp` scheme): optional
 /// fields such as `onNavigate` are absorbed by the row tail and may be omitted.
 /// A field whose Ipê name cannot be resolved is skipped — it can never be the
 /// name being looked up.
@@ -875,7 +875,7 @@ mod schema_tag_tests {
     /// The `{ init, update, view, subscriptions }` config record a single-page
     /// TEA program passes to `web_app`, over the given `model` type. `syms` are
     /// the field symbols in declaration order (init, update, view, subscriptions).
-    fn single_page_live_cfg(model: &IrType, syms: [ipe_intern::Symbol; 4]) -> Expr {
+    fn single_page_web_cfg(model: &IrType, syms: [ipe_intern::Symbol; 4]) -> Expr {
         let [init_sym, update_sym, view_sym, subs_sym] = syms;
         let cmd_int = || IrType::Cmd(Box::new(IrType::Int));
         let pair = || IrType::Tuple(vec![model.clone(), cmd_int()]);
@@ -918,12 +918,12 @@ mod schema_tag_tests {
     }
 
     /// The emitted `web_app(...)` call carries the compile-time Model schema
-    /// tag: a `const IPE_LIVE_MODEL_SCHEMA_TAG: [u8; 32] = [...]` declaration
+    /// tag: a `const IPE_WEB_MODEL_SCHEMA_TAG: [u8; 32] = [...]` declaration
     /// plus that identifier as the call's new final argument (H24 — the
     /// session store rejects a checkpoint whose tag differs BEFORE
     /// deserializing it).
     #[test]
-    fn live_app_emits_schema_tag_const_and_final_argument() -> DResult<()> {
+    fn web_app_emits_schema_tag_const_and_final_argument() -> DResult<()> {
         let mut interner = Interner::new();
         let init_fn = fn_item(&mut interner, 0, "init")?;
         let update_fn = fn_item(&mut interner, 1, "update")?;
@@ -970,7 +970,7 @@ mod schema_tag_tests {
 
         // Model = { count : Int } (no `page` field → the single-page branch).
         let model = IrType::Record(BTreeMap::from([(count, IrType::Int)]));
-        let cfg = single_page_live_cfg(&model, [init_sym, update_sym, view_sym, subs_sym]);
+        let cfg = single_page_web_cfg(&model, [init_sym, update_sym, view_sym, subs_sym]);
 
         let out = super::emit_web_call(
             &ctx,
@@ -983,11 +983,11 @@ mod schema_tag_tests {
         .expect("WebApp must emit");
 
         assert!(
-            out.contains("const IPE_LIVE_MODEL_SCHEMA_TAG: [u8; 32] = ["),
+            out.contains("const IPE_WEB_MODEL_SCHEMA_TAG: [u8; 32] = ["),
             "the emission must declare the schema-tag const, got:\n{out}"
         );
         assert!(
-            out.contains("IPE_LIVE_MODEL_SCHEMA_TAG)"),
+            out.contains("IPE_WEB_MODEL_SCHEMA_TAG)"),
             "the emitted web_app call must pass the tag identifier as its \
              final argument, got:\n{out}"
         );

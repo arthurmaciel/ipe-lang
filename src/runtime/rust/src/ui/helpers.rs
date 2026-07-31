@@ -807,7 +807,7 @@ pub fn ui_grid_tracks_raw_<M>(cols: String, rows: String) -> Attribute<M> {
 /// <fill>`, without the leading name token), the `@keyframes` BODY (built by
 /// `Ipe.Ui.Animation.buildKeyframesBody`), and a respect-`prefers-reduced-motion`
 /// flag. Mirrors `ui_transition_raw_`. The live style-injection pass
-/// (`live::style_inject::build_anim`) auto-suffixes `name` with the element's
+/// (`web::style_inject::build_anim`) auto-suffixes `name` with the element's
 /// ipe-id (so two `"fadeIn"`s with different keyframes don't collide), gates the
 /// rule behind `@media (prefers-reduced-motion: no-preference)` when `respect =
 /// True`, and validates the keyframes body through `sink_safe_keyframes_body`.
@@ -1273,7 +1273,7 @@ pub fn ui_form_<M: Clone>(attrs: Vec<Attribute<M>>, children: Vec<Element<M>>) -
 /// signature at the codegen call site (never type-erased at runtime). The
 /// Ipe.Web dispatch layer (`HandlerIndex::resolve_form`) decodes the wire
 /// `FormData` into `T` via a re-encoded x-www-form-urlencoded round trip
-/// (`live::form::decode_form_or_warn` — type-directed per-field coercion, NOT
+/// (`web::form::decode_form_or_warn` — type-directed per-field coercion, NOT
 /// a JSON path), matching the Go backend's `json.Unmarshal` semantics at the
 /// record-shape level (case-insensitive field-name match, missing field ⇒
 /// zero value). `F: Fn(T) -> M + Send + Sync + 'static` is a strictly
@@ -1390,7 +1390,7 @@ pub fn ui_behind_<M: Clone>(elem: Element<M>) -> Attribute<M> {
 // attrs child` and `breakpointToQuery` is the identity under this typing,
 // `ui_breakpoint_` delegates to `ui_media_query_` — both emit the
 // `data-ipe-mq-q` / `data-ipe-mq-rules` marker pair consumed by
-// `live::style_inject::build_mq` into a ipe-id-scoped
+// `web::style_inject::build_mq` into a ipe-id-scoped
 // `<style data-ipe-mq="<sid>">@media <q> { [ipe-id="<sid>"] { <rules> } }</style>`
 // block.  (See docs/adr/0019-ui-mediaquery-safe-boundary.md.)
 
@@ -1486,7 +1486,7 @@ pub fn ui_disabled_() -> PseudoClass {
 /// etc.) build on this exact primitive on the `../ipe` reference; mirrored
 /// here so both paths render through the identical collector + the
 /// `data-ipe-pc-rules` marker consumed by
-/// `ipe_runtime::live::style_inject::build_pc`.
+/// `ipe_runtime::web::style_inject::build_pc`.
 #[must_use]
 pub fn ui_on_pseudo_<M: Clone>(pc: PseudoClass, attrs: Vec<Attribute<M>>) -> Attribute<M> {
     Attribute::AttrPseudoRule(pc, super::render::build_style_string(&attrs))
@@ -1501,7 +1501,7 @@ pub fn ui_on_pseudo_<M: Clone>(pc: PseudoClass, attrs: Vec<Attribute<M>>) -> Att
 /// `style=""` path and `Ui.onPseudo`, so every value-as-data attr inherits
 /// the `SafeCssValue` gate) marker pair.  The Ipe.Web / Ipe.WebView render
 /// pipelines consume the markers post-`assign_ipe_ids` via
-/// `live::style_inject::apply_style_injections` (`build_mq`), emitting a
+/// `web::style_inject::apply_style_injections` (`build_mq`), emitting a
 /// ipe-id-scoped `<style data-ipe-mq="<sid>">@media <q> {
 /// [ipe-id="<sid>"] { <rules> } }</style>` child — two media queries on the
 /// same page cannot cross-contaminate because each rule is keyed to its own
@@ -1514,7 +1514,7 @@ pub fn ui_on_pseudo_<M: Clone>(pc: PseudoClass, attrs: Vec<Attribute<M>>) -> Att
 /// the gate (ruleset/declaration breakout `{ } ;`, `</` close-tag, `/*`
 /// comment, `@import`, script sinks, or any CSS-hex-escaped spelling of
 /// those) drops the ENTIRE media-query styling: the wrapper `<div>` is still
-/// emitted (stable DOM shape for the Live diff) but carries no marker attrs,
+/// emitted (stable DOM shape for the Web diff) but carries no marker attrs,
 /// so no `<style>` block is ever built.  `build_mq`'s `strip_style_close` at
 /// the sink stays as defence-in-depth, not the primary gate.
 #[must_use]

@@ -129,18 +129,18 @@ pub(crate) fn broker<T: Clone + Send + 'static>() -> Arc<Broker<T>> {
 
 // ─── Web-running flag (for PubSub.publish's Unavailable) ───────────────────
 
-static LIVE_RUNNING: AtomicBool = AtomicBool::new(false);
+static WEB_RUNNING: AtomicBool = AtomicBool::new(false);
 
-/// Called by `serve_live` once the router is built, just before the TCP bind.
+/// Called by `serve_web` once the router is built, just before the TCP bind.
 /// After this point `PubSub.publish` tasks succeed (the flag is write-once and
 /// never reset). A publish racing startup before this fires gets a single
 /// retry-able `Unavailable` — benign for fire-and-forget pub/sub.
-pub fn mark_live_running() {
-    LIVE_RUNNING.store(true, Ordering::Release);
+pub fn mark_web_running() {
+    WEB_RUNNING.store(true, Ordering::Release);
 }
 
-fn live_running() -> bool {
-    LIVE_RUNNING.load(Ordering::Acquire)
+fn web_running() -> bool {
+    WEB_RUNNING.load(Ordering::Acquire)
 }
 
 /// `PubSub.publish topic payload : Task Error Int` — callable from any context
@@ -153,7 +153,7 @@ where
     E: From<String> + Send + 'static,
 {
     Box::pin(async move {
-        if !live_running() {
+        if !web_running() {
             return IpeResult::Err(E::from(
                 "PubSub.publish: no Web.app running in this process".to_string(),
             ));
@@ -169,7 +169,7 @@ where
     E: From<String> + Send + 'static,
 {
     Box::pin(async move {
-        if !live_running() {
+        if !web_running() {
             return IpeResult::Err(E::from(
                 "PubSub.publishNoEcho: no Web.app running in this process".to_string(),
             ));
@@ -337,8 +337,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pubsub_publish_errs_without_live_app() {
-        // LIVE_RUNNING starts false; no serve_live runs in a unit test.
+    async fn pubsub_publish_errs_without_web_app() {
+        // WEB_RUNNING starts false; no serve_web runs in a unit test.
         let t: IpeTask<String, i64> = pubsub_publish::<u8, String>("t".to_string(), 1);
         match t.await {
             IpeResult::Err(e) => assert!(e.contains("no Web.app")),
@@ -347,7 +347,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pubsub_publish_no_echo_errs_without_live_app() {
+    async fn pubsub_publish_no_echo_errs_without_web_app() {
         let t: IpeTask<String, i64> = pubsub_publish_no_echo::<u8, String>("t".to_string(), 1);
         match t.await {
             IpeResult::Err(e) => assert!(e.contains("no Web.app")),

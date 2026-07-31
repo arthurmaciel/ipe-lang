@@ -643,43 +643,43 @@ only to pre-empt mis-listing (see AGENTS.md "Agent learnings").
   prints `EO`) and the fuzzer (`scripts/fuzz-well-typed.sh --seed 31348`, now
   green).
 
-### B24 — Prescriptive TEA `init` signature (Live → `LiveReq`; Tui/Webview → `()`) (#180)
+### B24 — Prescriptive TEA `init` signature (Web → `WebReq`; Tui/Webview → `()`) (#180)
 - **Reference:** `upstream:src/Sky/Type/Constrain/Expression.hs:2665-2695` leaves
-  `Live.app`'s `init` argument a **free type var** (`req`), and models the
+  `Web.app`'s `init` argument a **free type var** (`req`), and models the
   request as a heterogeneous `map[string]any` accessed via `Dict.get "path"
   req`. It does this for a Go-runtime reason (keep the untyped map compatible
   with any inferred shape; return-only TVar defaulting collapses it to
   `rt.SkyValue` for examples that never touch `req`).
 - **Ipê is prescriptive:** the `init` field is **pinned per app shape** — 
-  `Live.app` requires `init : LiveReq -> (Model, Cmd Msg)`, and
+  `Web.app` requires `init : WebReq -> (Model, Cmd Msg)`, and
   `Tui.app`/`Tui.program`/`Webview.app` require `init : () -> (Model, Cmd Msg)`.
-  A mismatch (`init : {} ->` on Live, or `init : LiveReq ->` on Tui) is a clear
-  compile-time IPE-T0001 (`expected LiveReq, found {}` / `expected (), found
-  LiveReq`) at the `init` cfg field, not a raw unification failure and not a
-  deferred `cargo` break. A `Live.app` init that declares polymorphic `init : a
-  -> …` unifies `a` to `LiveReq` automatically (unchanged for the canonical
+  A mismatch (`init : {} ->` on Web, or `init : WebReq ->` on Tui) is a clear
+  compile-time IPE-T0001 (`expected WebReq, found {}` / `expected (), found
+  WebReq`) at the `init` cfg field, not a raw unification failure and not a
+  deferred `cargo` break. A `Web.app` init that declares polymorphic `init : a
+  -> …` unifies `a` to `WebReq` automatically (unchanged for the canonical
   corpus examples 09/10/37).
-- **`LiveReq` is a typed opaque record, not a heterogeneous map.** Ipê's runtime
-  carries `sky_runtime::live::LiveReq` as a concrete struct (`path`/`query`/
+- **`WebReq` is a typed opaque record, not a heterogeneous map.** Ipê's runtime
+  carries `sky_runtime::web::WebReq` as a concrete struct (`path`/`query`/
   `method : String`; `params`/`headers`/`cookies : Dict String String`).
-  `req.path` is ordinary field access: `LiveReq` stays an opaque nullary `Con`
+  `req.path` is ordinary field access: `WebReq` stays an opaque nullary `Con`
   at the type level (so no bare record literal can masquerade as the runtime
   struct — the same make-invalid-states-unrepresentable posture as the opaque
   server `Request`), but its fixed field set is READABLE via the deferred
-  `FieldAccess` pass (`LiveReqFields`, mirroring `RequestFields`). A field access
+  `FieldAccess` pass (`WebReqFields`, mirroring `RequestFields`). A field access
   lowers to `(req).<field>.clone()` reading the struct directly — no synthesised
-  record. Record UPDATE on a `LiveReq` is rejected (IPE-T0017), exactly like
+  record. Record UPDATE on a `WebReq` is rejected (IPE-T0017), exactly like
   `Request`.
 - **Rationale:** ambient input (env/args/cwd) is reached through `System.*` from
   anywhere; `init`'s argument carries ONLY genuine per-invocation context with
-  no ambient accessor — `LiveReq` for Live (a session is born from one specific
+  no ambient accessor — `WebReq` for Web (a session is born from one specific
   HTTP request; there is no `System.currentRequest`), nothing for Tui/Webview.
   Elm needs `flags` as an init arg only because a browser sandboxes JS; Ipê runs
   natively with a real `System` API, so `flags`-as-init-arg is redundant. Being
   prescriptive is both more Elm-`Browser.application`-faithful and
   make-invalid-states-unrepresentable — the reference's free-tvar rationale
   (untyped `map[string]any` compat) simply does not transfer to a typed
-  `LiveReq`. **Sanctioned:** yes — stricter direction (rejects only ill-shaped
+  `WebReq`. **Sanctioned:** yes — stricter direction (rejects only ill-shaped
   `init`s the reference would silently default), no soundness hole. Full design:
   `docs/architecture/tea-shape-matrix-and-init-design-2026-07-13.md`.
 
@@ -797,7 +797,7 @@ completeness.*
 **#195 refinement (2026-07-14) — decoder-payload function values are Send-only,
 matching the runtime.** The uniform `IrType::Fun` → `Box<dyn Fn + Send + Sync>`
 rendering is retained for callback PARAMETERS (which may forward into a shared
-`Arc<dyn Fn + Send + Sync>` UI/Live event slot via `arc_callback_wrap`, the
+`Arc<dyn Fn + Send + Sync>` UI/Web event slot via `arc_callback_wrap`, the
 load-bearing #184 path), BUT a function value that is the PAYLOAD of a decoder
 (`Decoder (a -> b)` — the accumulator of a `succeed Ctor |> required …` pipeline,
 or a `succeed (partiallyApplied x)`) now renders as the Send-ONLY curry chain
@@ -890,9 +890,9 @@ fail to round-trip or are carried as `any`, but the compiler accepts them
 silently).
 
 Ipê's Rust runtime imposes **static trait bounds** on both type parameters:
-`live_app<Model, Msg>` requires
+`web_app<Model, Msg>` requires
 `Model: serde::Serialize + DeserializeOwned + Clone + PartialEq + Send + Sync`
-and `Msg: Clone + Send + Sync + Debug` (`runtime/src/sky_runtime/live/mod.rs`).
+and `Msg: Clone + Send + Sync + Debug` (`runtime/src/sky_runtime/web/mod.rs`).
 A Model or Msg that carries a function, `Cmd`, `Sub`, `Task`, or `Decoder` does
 not satisfy these bounds, so the emitted Rust fails `cargo build`. Because
 `ipe` exit-0 MUST imply `cargo` exit-0 (the seal), the backend adds explicit
@@ -904,7 +904,7 @@ admissibility gates:
 - **#94 ✅ shipped (landed, corrected 2026-07-09):** `check_admissible_msg` in
   `emit_model_gate.rs:105` — gates Msg at `ipe` using `ir_type_is_derivable`
   for all three app shapes (NOT serde — Html is derivable and thus admissible
-  as a Live Msg payload, unlike Live Model), called from `emit_live.rs:349` /
+  as a Web Msg payload, unlike Web Model), called from `emit_web.rs:349` /
   `emit_tui.rs:182` / `emit_webview.rs:137`. Emits `IPE-L0125`
   (`InadmissibleAppMsg`) — NOT the originally-planned `IPE-L0121`, which was
   reassigned in the interim to the unrelated `JsonDec.succeed` curry-arity
@@ -922,9 +922,9 @@ Gates at `ipe` convert the `cargo`-fail class into a clear user diagnostic.
 See `docs/architecture/seal-gates-msg-lambda-view-design.md §4`.
 
 ### A16 — App cfg must be an inline record literal (IPE-L0119)
-The reference Go backend accepts any expression as the `Live.app` / `Tui.app` /
+The reference Go backend accepts any expression as the `Web.app` / `Tui.app` /
 `Webview.app` cfg argument, including a let-bound variable
-(`let cfg = { … } in Live.app cfg`). Ipê's backend reads the cfg's fields
+(`let cfg = { … } in Web.app cfg`). Ipê's backend reads the cfg's fields
 (`init`, `update`, `view`, `subscriptions`, …) directly from the structural
 record at the call site; a non-literal argument (a `Var`, a pipe result, a
 function call) cannot be field-indexed at lower time, so it is rejected with
@@ -934,7 +934,7 @@ function call) cannot be field-indexed at lower time, so it is rejected with
 the cfg record at lower time to emit the correct `live_app` call; a variable
 reference loses the field structure. The reference's Go backend reconstructs the
 cfg at runtime via reflection; Ipê does not have that escape hatch.
-*Verified:* `code.rs:196`, `explain/IPE-L0119.md`, `emit_live.rs` (lookup_field).
+*Verified:* `code.rs:196`, `explain/IPE-L0119.md`, `emit_web.rs` (lookup_field).
 *Note:* let-bound-cfg support (`[feature: let-bound-app-cfg]` in the explain
 page) is a tracked future item — not a permanent limitation.
 
@@ -1216,15 +1216,15 @@ API-shape review):
   from Ipê. If a specific Ipê-runtime divergence exists under this label, re-file
   with a concrete file:line cite.
 
-- **Live.route non-String payload (#106) — PORT, not a divergence.**
-  `routed-live-app-design.md` classifies `Live.route : String -> page ->
-  LiveRoute` typing (#106) as "✅ done (Port — matches upstream Sky)." The latent
-  E0308 for non-String page constructor payloads (`emit_live.rs:135`) is a
+- **Web.route non-String payload (#106) — PORT, not a divergence.**
+  `routed-live-app-design.md` classifies `Web.route : String -> page ->
+  WebRoute` typing (#106) as "✅ done (Port — matches upstream Sky)." The latent
+  E0308 for non-String page constructor payloads (`emit_web.rs:135`) is a
   known bug to fix, not a sanctioned divergence. Not added to the ledger.
 
 ### B-route-param — Routed page-constructor payload typing (#108)
 
-- **Differs:** `emit_live_call::LiveRoute`'s partial-ctor branch emits a
+- **Differs:** `emit_live_call::WebRoute`'s partial-ctor branch emits a
   type-directed `params.get(i)` conversion expression per constructor payload
   field. Sky's Haskell reference (`ExprEmitter.hs:1823`) and the Go backend
   both unconditionally emit `params.get(i).cloned().unwrap_or_default()` (a
@@ -1250,7 +1250,7 @@ API-shape review):
   so a decode failure falls through to `not_found` rather than silently landing
   on a zero-value page. `match_routes` calls the builder and treats `None` as a
   pattern-level miss — identical to how an arity mismatch is handled.
-- **Sanctioned:** yes (`sanctioned:`). References: `emit_live.rs::route_param_get`,
+- **Sanctioned:** yes (`sanctioned:`). References: `emit_web.rs::route_param_get`,
   `live/route.rs::Route::build`, `live/route.rs::match_routes`.
 
 
@@ -1449,7 +1449,7 @@ API-shape review):
   applied to SQL WHERE-clause construction); no Go counterpart exists for
   `Sql.*` / `Db.findWhere` / `Db.deleteWhere` (`oracle_divergence = true` on
   every new golden). `SqlFragment` is `Clone + PartialEq` (derivable) but
-  deliberately NOT `serde` (never persisted to a Live session store); its
+  deliberately NOT `serde` (never persisted to a Web session store); its
   hand-written `Debug` shows SQL text + bind COUNT only, never bind VALUES.
   Reference: `runtime/src/sky_runtime/db.rs` (`SqlFragment` + `sql_*`
   combinators + `db_find_where`/`db_delete_where`), `crates/sky_kernels/src/
@@ -1490,9 +1490,9 @@ API-shape review):
   enforcement section); no Go counterpart type exists (`oracle_divergence =
   true` on every new golden). `Secret` is `Clone + PartialEq` (derivable) but
   deliberately NOT `serde` — this is ALSO the mechanism that makes a
-  `Ipe.Live` Model field of type `Secret` a compile-time `IPE-L0120`
+  `Ipe.Web` Model field of type `Secret` a compile-time `IPE-L0120`
   (never a session-store leak): `ir_type_is_serde(Secret) = false` gates the
-  Live Model exactly like it gates `SqlFragment`. A record containing a
+  Web Model exactly like it gates `SqlFragment`. A record containing a
   `Secret` field stays fully `Clone`/`Debug`/`==` (the #45/#70
   derive-blast-radius class `SqlFragment` already closed — marking a leaf
   merely non-serde, never non-derivable). Reference:
@@ -1758,7 +1758,7 @@ site-builder):
   the HTML-escaping / no-eval / no-XSS guarantees even when
   producing-not-serving; ANSI generation must sanitize control bytes.
 - **Standalone TEA engine** — make the TEA runtime a backend-agnostic engine;
-  Live / TUI / Webview become transports/drivers plugged into it. Enables the
+  Web / TUI / Webview become transports/drivers plugged into it. Enables the
   hot-reload host (which owns the `Model` and swaps `update`/`view`).
 
 All three are research/deferred until the mirror/parity machinery is proven;
@@ -1822,7 +1822,7 @@ effort, low risk.
 
 ### 6.7 Time-travel debugger for live apps (dev-only)
 
-Elm-style debugger for TEA/live apps (Live + Webview + Tui): record the Msg
+Elm-style debugger for TEA/live apps (Web + Webview + Tui): record the Msg
 history, step back/forward, inspect the Model at each step, import/export
 sessions. **Dev mode only** (off in production — no overhead, no surface).
 Future: simulate Model-value edits + replay forward, Msg injection,
@@ -1922,3 +1922,28 @@ through serde.
 Ipê additions. The existing `String`-typed functions keep full Go-oracle parity.
 The additive typed variants produce identical byte output (HMAC/AEAD values are
 algorithm outputs, independent of wrapper types).
+
+### B-WebShapeName — Web shape renamed from the Sky-era `Live` name (emitted observability surface)
+
+The web app shape was historically named `Live` (the Sky/Go `("Live","app")`
+surface). Ipê's user-facing surface is `Ipe.Tea.Web` (`Web.app`/`Web.route`), and
+the shape's typed `init` request is `WebReq`. The remaining runtime, kernel, and
+observability names that still carried `Live` were renamed to `Web` so the whole
+surface is consistent under one name.
+
+**Emitted-output effects (deliberate, not byte-preserving):**
+- **Prometheus metric names** change `ipe_live_*` → `ipe_web_*`
+  (`ipe_web_requests_total`, `ipe_web_sse_drops_total`, `ipe_web_sse_connections_total`,
+  `ipe_web_sessions_active`, `ipe_web_errors_total`, `ipe_web_request_seconds`,
+  `ipe_web_msg_seconds`, `ipe_web_msg_total`). This intentionally sheds Go-metric-name
+  parity — the reference emitted `sky_live_*`-family names.
+- **Protocol marker header** changes `X-Ipe-Live: 1` → `X-Ipe-Web: 1` (server and the
+  bundled JS client renamed in lockstep; the header is an internal server↔client
+  marker, not an external contract).
+
+**Sanctioned:** yes — a naming-consistency rename with no soundness impact. The
+`ipe` compiler's own byte-diff goldens are unaffected (emitted programs reach the
+runtime through re-exports; no golden `main.rs` embeds these names). The model
+schema-tag domain-separator const is renamed (`IPE_WEB_MODEL_SCHEMA_TAG`,
+`WEB_MODEL_SCHEMA_WIRE_VERSION`); its string value is unchanged so persisted
+session checkpoints stay compatible.

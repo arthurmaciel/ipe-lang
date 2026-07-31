@@ -18,7 +18,7 @@ Establish the invariant with an empirical proof matrix plus mechanized gates,
 pinning the four mechanisms that keep records pinned: (1) open-record unification
 (faithful to the reference's `unifyRecords`); (2) deferred field access (subset
 patterns/access legal by construction); (3) open-record kernel schemes mirrored
-from stdlib (Live cfg); (4) monomorphic env pinning (unannotated bindings pin on
+from stdlib (Web cfg); (4) monomorphic env pinning (unannotated bindings pin on
 first concrete use). Five regression fixtures gate the invariant, including two
 *rejection* fixtures (`row_poly_two_supersets_neg`, closed-superset) that act as
 the ADR-0008 tripwire.

@@ -14,11 +14,11 @@ only handled named `FuncValue`s.
 
 ## Decision
 
-- **The Msg predicate is `ir_type_is_derivable` for Live, Tui, AND Webview — not
-  serde.** Only the Live *Model* is persisted to the session store; Msg is
+- **The Msg predicate is `ir_type_is_derivable` for Web, Tui, AND Webview — not
+  serde.** Only the Web *Model* is persisted to the session store; Msg is
   transient (dispatched over channels, never serialised). This asymmetry is
-  correct and must be preserved: Html is admissible in a Live *Msg* (it is
-  `Clone`) but inadmissible in a Live *Model* (no `Serialize`/`DeserializeOwned`).
+  correct and must be preserved: Html is admissible in a Web *Msg* (it is
+  `Clone`) but inadmissible in a Web *Model* (no `Serialize`/`DeserializeOwned`).
 - **Recover Msg from `update`'s first parameter**, where it appears directly —
   not from `view`'s return, where it is nested inside `Html<Msg>`.
 - **Introduce one lambda-aware extractor `fn_param_ty(e, idx)`** used by both the
@@ -29,7 +29,7 @@ only handled named `FuncValue`s.
   simultaneously closing the lambda-view bypass.
 
 Rejected alternatives: gating only at `cargo` level (leaves the seal hole open);
-using `ir_type_is_serde` for Msg (false-rejects admissible Live Msgs carrying
+using `ir_type_is_serde` for Msg (false-rejects admissible Web Msgs carrying
 Html/Element/Color); recovering Msg from `view`'s return (Msg is nested inside
 `Html<Msg>` — `update`'s first param is the direct path).
 

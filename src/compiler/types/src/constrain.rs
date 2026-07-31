@@ -353,7 +353,7 @@ struct Builtins {
     web_req: Symbol,
     /// `"WebRoute"` — opaque route descriptor returned by `Web.route`.
     live_route_con: Symbol,
-    // ── Live cfg record field name symbols ───────────────────────────────────────
+    // ── Web cfg record field name symbols ───────────────────────────────────────
     /// `"init"` — the init field of the `Web.app` config record.
     live_f_init: Symbol,
     /// `"update"` — the update field of the `Web.app` config record.
@@ -1323,7 +1323,7 @@ pub struct Builder<'a> {
     /// Deferred record-update obligations, resolved after the main solve.
     record_updates: Vec<RecordUpdate>,
     /// Deferred routed-Web.app type checks, resolved after the main solve.
-    routed_live_checks: Vec<RoutedLiveCheck>,
+    routed_web_checks: Vec<RoutedWebCheck>,
     /// Deferred per-route page-witness checks (one per `Web.route` reference),
     /// resolved after the main solve, BEFORE the routed-Web.app checks.
     route_witness_checks: Vec<RouteWitnessCheck>,
@@ -1480,8 +1480,8 @@ pub struct RecordUpdate {
 /// constraint at build time (a conditional `{ page : var(2) | ρ }` projection
 /// would break every non-routed app whose Model has no `page` field).
 ///
-/// Instead, the constrain pass pushes one `RoutedLiveCheck` per `Web.app`
-/// call site and defers the gate to [`crate::resolve_routed_live_checks`],
+/// Instead, the constrain pass pushes one `RoutedWebCheck` per `Web.app`
+/// call site and defers the gate to [`crate::resolve_routed_web_checks`],
 /// which runs after the main solve when the Model type has settled:
 ///
 /// * If Model's settled type has a `page` field → this is a routed app →
@@ -1489,7 +1489,7 @@ pub struct RecordUpdate {
 ///   A mismatch produces IPE-T0001 here instead of a cargo E0308 / E0631
 ///   from the emitted `set_page` closure.
 /// * If Model has no `page` field → non-routed → no validation; passes.
-pub struct RoutedLiveCheck {
+pub struct RoutedWebCheck {
     /// `var(0)` from the `K::WebApp` scheme instantiation — the Model type.
     pub model_var: VarId,
     /// `var(2)` from the `K::WebApp` scheme instantiation — the `notFound` type.
@@ -1526,7 +1526,7 @@ pub struct RoutedLiveCheck {
 /// witnesses it with its result type, and a wrong-ADT constructor
 /// (`Web.route "/" Increment` in a `Page`-routed app) still fails unification
 /// with IPE-T0001 at this route's span.  Runs BEFORE
-/// [`crate::resolve_routed_live_checks`] so route constructors pin the page
+/// [`crate::resolve_routed_web_checks`] so route constructors pin the page
 /// variable before the `notFound ≟ Model.page` gate reads it.
 pub struct RouteWitnessCheck {
     /// `var(1)` from the `K::WebRoute` scheme instantiation — the route's
@@ -1558,9 +1558,9 @@ pub struct Generated {
     pub field_accesses: Vec<FieldAccess>,
     pub record_updates: Vec<RecordUpdate>,
     /// Deferred routed-Web.app checks, resolved after the main solve.
-    pub routed_live_checks: Vec<RoutedLiveCheck>,
+    pub routed_web_checks: Vec<RoutedWebCheck>,
     /// Deferred per-route page-witness checks, resolved after the main solve
-    /// (before `routed_live_checks`).
+    /// (before `routed_web_checks`).
     pub route_witness_checks: Vec<RouteWitnessCheck>,
     pub typed_rigids: Vec<PolyVarEntry>,
     pub scheme_apps: Vec<SchemeApp>,
@@ -1626,7 +1626,7 @@ impl<'a> Builder<'a> {
             untyped: BTreeMap::new(),  // (home, name) → VarId
             field_accesses: Vec::new(),
             record_updates: Vec::new(),
-            routed_live_checks: Vec::new(),
+            routed_web_checks: Vec::new(),
             route_witness_checks: Vec::new(),
             ctors: BTreeMap::new(),
             typed_rigids: Vec::new(),
@@ -1790,7 +1790,7 @@ impl<'a> Builder<'a> {
             untyped: builder.untyped,
             field_accesses: builder.field_accesses,
             record_updates: builder.record_updates,
-            routed_live_checks: builder.routed_live_checks,
+            routed_web_checks: builder.routed_web_checks,
             route_witness_checks: builder.route_witness_checks,
             typed_rigids: builder.typed_rigids,
             scheme_apps: builder.scheme_apps,
@@ -3067,7 +3067,7 @@ impl<'a> Builder<'a> {
                 }
                 return Ok(var);
             }
-            // `Web.app` — post-solve routed-Live check.
+            // `Web.app` — post-solve routed-Web check.
             //
             // The open-record cfg scheme for K::WebApp is shared by both routed
             // apps (Model has a `page : Page` field) and non-routed apps (Model
@@ -3078,7 +3078,7 @@ impl<'a> Builder<'a> {
             //
             // Instead: instantiate the scheme with `instantiate_tracked`, record
             // the Model var (var index 0) and notFound var (var index 2), then
-            // push a `RoutedLiveCheck` so `resolve_routed_live_checks` can run
+            // push a `RoutedWebCheck` so `resolve_routed_web_checks` can run
             // the gate after the HM solver settles.
             if matches!(k, StdlibKernel::WebApp) {
                 let ty = self.stdlib_scheme(k).ok_or(Diagnostic::Lower {
@@ -3087,7 +3087,7 @@ impl<'a> Builder<'a> {
                 })?;
                 let (var, vars) = self.instantiate_tracked(&ty)?;
                 if let (Some(&model_var), Some(&not_found_var)) = (vars.get(&0), vars.get(&2)) {
-                    self.routed_live_checks.push(RoutedLiveCheck {
+                    self.routed_web_checks.push(RoutedWebCheck {
                         model_var,
                         not_found_var,
                         span,
@@ -3102,7 +3102,7 @@ impl<'a> Builder<'a> {
             // page value (`Web.route "/" HomePage`) OR a params-consuming
             // constructor (`Web.route "/apps/:slug" AppDetailPage` — type
             // `String -> Page`).  That disjunction is not expressible as a
-            // plain HM constraint, so — like `RoutedLiveCheck` above — the
+            // plain HM constraint, so — like `RoutedWebCheck` above — the
             // relation is deferred: record both instantiated vars and push a
             // `RouteWitnessCheck`; `resolve_route_witness_checks` peels the
             // builder's settled leading arrows and unifies the resulting page
@@ -7368,7 +7368,7 @@ pub fn promote_untyped_boundaries(
         obligation_roots.insert(lift!(uf.find(rw.builder_var)));
         obligation_roots.insert(lift!(uf.find(rw.page_var)));
     }
-    for rl in &generated.routed_live_checks {
+    for rl in &generated.routed_web_checks {
         obligation_roots.insert(lift!(uf.find(rl.model_var)));
         obligation_roots.insert(lift!(uf.find(rl.not_found_var)));
     }
@@ -7830,7 +7830,7 @@ impl<'a> Builder<'a> {
             untyped: BTreeMap::new(),
             field_accesses: Vec::new(),
             record_updates: Vec::new(),
-            routed_live_checks: Vec::new(),
+            routed_web_checks: Vec::new(),
             route_witness_checks: Vec::new(),
             ctors: BTreeMap::new(),
             typed_rigids: Vec::new(),

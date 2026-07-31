@@ -121,7 +121,7 @@ fn wasm_manifest_excludes_axum_and_sqlx() {
 /// mentions the feature name (e.g. a `cfg(any(feature = "live", …))` prose
 /// line) does not trigger a false positive.
 #[test]
-fn wasm_manifest_excludes_server_db_live_features() {
+fn wasm_manifest_excludes_server_db_web_features() {
     let cargo_toml = emit_wasm_cargo_toml();
     // A feature is *declared* with `<name> = [` and *activated* as a dep via
     // `features = ["<name>"]` or the default list `default = ["…", "<name>"]`.

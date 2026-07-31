@@ -15,7 +15,7 @@
 //! INVARIANT (load-bearing): the variant names + field order MUST stay identical
 //! to `Ipe.Ui.ipe:39-190`. The opaque alias hides any drift from the Rust
 //! compiler, so a mismatch mis-renders at runtime rather than failing to build —
-//! the byte-identical-HTML regression on the Live backend is the safety net.
+//! the byte-identical-HTML regression on the Web backend is the safety net.
 
 use super::super::html::{Attribute as HtmlAttribute, Html};
 
@@ -72,7 +72,7 @@ pub enum PseudoClass {
 
 impl PseudoClass {
     /// Stable wire tag consumed by
-    /// `ipe_runtime::live::style_inject::pseudo_selector_for_tag` when
+    /// `ipe_runtime::web::style_inject::pseudo_selector_for_tag` when
     /// decoding the `data-ipe-pc-rules` marker attribute. MUST stay in
     /// lock-step with that function and with `pseudoClassTag` in
     /// `../ipe`'s `Ipe.Ui.ipe` (the shared wire-format contract).

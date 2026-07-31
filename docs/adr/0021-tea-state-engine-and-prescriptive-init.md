@@ -4,7 +4,7 @@ Status: Accepted
 
 ## Context
 
-Ipê carries a *typed* `LiveReq` as `init`'s argument, and the design needed a
+Ipê carries a *typed* `WebReq` as `init`'s argument, and the design needed a
 principled justification. Two deeper questions followed: what is TEA, and does
 `init` belong in every app shape?
 
@@ -16,9 +16,9 @@ data (`Cmd`/`Sub`). `view` is an *optional projection* of the Model, not part of
 TEA's core.** This lets CLI (`Task.run` pipeline) and Http.Server (`listen`
 router) be correct *non-TEA* shapes without forcing `init` onto them.
 
-For reactive shapes (Ipe.Live, Ipe.Tui, Ipe.Webview) `init` is mandatory, and
-its argument is **prescriptive, not inferred**: `init : LiveReq -> (Model, Cmd
-Msg)` for Live (per-session request context), `init : () -> (Model, Cmd Msg)`
+For reactive shapes (Ipe.Web, Ipe.Tui, Ipe.Webview) `init` is mandatory, and
+its argument is **prescriptive, not inferred**: `init : WebReq -> (Model, Cmd
+Msg)` for Web (per-session request context), `init : () -> (Model, Cmd Msg)`
 for Tui/Webview (no non-ambient per-invocation context). The **effects-authority
 rule:** `init`'s argument carries ONLY context that is specific to this init
 invocation AND not reachable through the ambient `System`/effects stdlib; all
@@ -26,7 +26,7 @@ ambient input (env, args, cwd) is reached via `System.*` from anywhere.
 
 Rejected alternatives:
 
-- **A free type variable for `init`'s argument** — Ipê's typed `LiveReq` makes a
+- **A free type variable for `init`'s argument** — Ipê's typed `WebReq` makes a
   permissive free-tvar inapplicable; being prescriptive is both more Elm-faithful
   and make-invalid-states-unrepresentable.
 - **The ocap model** (threading an `Env` capability through `init` exclusively,

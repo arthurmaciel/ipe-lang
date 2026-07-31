@@ -459,7 +459,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
             // `Send + Sync + 'static` bounds are required so closures can be
             // passed to Task combinators (`task_map`, `task_and_then`, etc.)
             // AND — crucially — so a callback-typed PARAMETER can be forwarded
-            // into the runtime's UI/Live event-callback slots, whose fields are
+            // into the runtime's UI/Web event-callback slots, whose fields are
             // `Arc<dyn Fn(_) -> _ + Send + Sync + 'static>` (see
             // `ipe_runtime::ui::element::Event`). Without `Sync` on this boxed
             // param, an emitted user fn generic over its Msg type

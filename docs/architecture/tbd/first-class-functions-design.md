@@ -300,7 +300,7 @@ mechanism, applied unconditionally on demand).
 ### 4.5 Effect/Task runtime interaction
 
 No runtime changes required. Task combinators consume boxed closures (an
-`Arc → Box` wrap at the frontier, or a direct call); UI/Live event slots are
+`Arc → Box` wrap at the frontier, or a direct call); UI/Web event slots are
 already `Arc<dyn Fn + Send + Sync + 'static>` — the same carrier, zero-cost.
 `Msg` values carrying functions (event-handler maps) are `Clone` via the
 hand-written tier, so the TEA update loop is unaffected. The `Send + Sync +

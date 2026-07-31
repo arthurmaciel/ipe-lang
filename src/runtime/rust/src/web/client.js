@@ -141,7 +141,7 @@ function __ipeHandleResponse(seq, ackInputs, applyFn, globalSeq) {
 }
 
 // ── Focus preservation via node identity ────────────────────
-// Ipe.Live renders subtrees via innerHTML replacement (both on JSON
+// Ipe.Web renders subtrees via innerHTML replacement (both on JSON
 // patches that carry p.html and on full-HTML navigations). Plain
 // innerHTML DESTROYS the focused input element — even though JS is
 // single-threaded, the browser's internal input-method editor (IME),
@@ -252,7 +252,7 @@ function __ipeReplaceHTMLPreservingFocus(container, newHTML) {
   // .querySelectorAll / .parentNode.replaceChild surface, so no
   // other changes are needed.
   //
-  // Repro before this fix: any Ipe.Live view that emits an HTML
+  // Repro before this fix: any Ipe.Web view that emits an HTML
   // patch at a ipe-id pointing at an <svg> element (the diff does
   // this whenever the SVG's children-count changes, or a child
   // tag/kind mismatches between renders) leaves the SVG with HTML-
@@ -378,7 +378,7 @@ function __ipePatch(t) {
 }
 
 // __ipeReviveScripts: browsers DO NOT execute <script> tags inserted
-// via innerHTML (or any HTML-string assignment). When Ipe.Live
+// via innerHTML (or any HTML-string assignment). When Ipe.Web
 // swaps the body via __ipeReplaceHTMLPreservingFocus (ipe-nav, full-
 // body patches) or applies an attribute/HTML patch via
 // __ipeApplyPatches, any <script src=...> or inline <script>
@@ -724,8 +724,8 @@ function __ipePostEvent(body) {
       // as transient — same retry path as a network failure.
       throw new Error("server " + r.status);
     }
-    // Reverse-proxy wedge detection: a real Ipe.Live response always
-    // carries X-Ipe-Live: 1. Without it, we're looking at a proxy-
+    // Reverse-proxy wedge detection: a real Ipe.Web response always
+    // carries X-Ipe-Web: 1. Without it, we're looking at a proxy-
     // rewritten response (e.g. some edges turn upstream 502 into 200
     // OK with an HTML error page). Applying that as a "patch" would
     // replace the user's DOM with the proxy's error page, so we refuse
@@ -736,7 +736,7 @@ function __ipePostEvent(body) {
     // with seq + patches, structurally indistinguishable from the
     // marked form, so accept it. HTML / text responses without the
     // marker are always rejected — those are the proxy-wedge shape.
-    var ipeMark = r.headers.get("X-Ipe-Live");
+    var ipeMark = r.headers.get("X-Ipe-Web");
     var ct = r.headers.get("Content-Type") || "";
     var isJson = ct.indexOf("application/json") >= 0;
     if (ipeMark !== "1" && !isJson) {
@@ -995,7 +995,7 @@ function __ipeBindEvents(root) {
 // replaceState. Works under strict CSP (no 'unsafe-eval') and has no
 // XSS surface (the value is a URL path, never executed).
 //
-// The element is intentionally NOT removed after running — Ipe.Live's
+// The element is intentionally NOT removed after running — Ipe.Web's
 // patches identify elements by ipe-id and look them up via
 // querySelector; removing the data-ipe-path element would orphan its
 // ipe-id, and the next attribute patch (when the path changes) would
@@ -1047,7 +1047,7 @@ function __ipeBindOne(root, eventName) {
   }
 }
 
-// Extract the args array for a DOM event following the legacy Ipe.Live
+// Extract the args array for a DOM event following the legacy Ipe.Web
 // convention:
 //   * click / focus / blur / mouse*    → []         (just the msg)
 //   * input / change                   → [value]    (typed input value)
@@ -1318,7 +1318,7 @@ function __ipeOpenSSE() {
   var ssePath = __ipeBase + "/_ipe/sse?path=" + encodeURIComponent(location.pathname);
   __ipeSSE = new EventSource(ssePath);
   __ipeSSE.addEventListener("hello", function(e) {
-    // Handshake received — we know we hit a real Ipe.Live v2 server,
+    // Handshake received — we know we hit a real Ipe.Web v2 server,
     // not a proxy that intercepted with a generic 200. Anything
     // before hello is suspect, so the connected-state flip happens
     // HERE, not on EventSource.open. Remember that THIS page's
@@ -1347,7 +1347,7 @@ function __ipeOpenSSE() {
   __ipeSSE.addEventListener("patch", function(e) {
     __ipeLastSseAt = Date.now();
     // Old servers (pre-handshake) only ever send "patch" events.
-    // A real patch is itself proof we're talking to a Ipe.Live server,
+    // A real patch is itself proof we're talking to a Ipe.Web server,
     // not a proxy-rewritten 200-OK, so treat first-patch-without-hello
     // as an implicit handshake. This keeps a new client from trapping
     // itself when a rolling deploy puts it in front of an old server.
@@ -1414,7 +1414,7 @@ function __ipeOpenSSE() {
   __ipeSSE.addEventListener("patches", function(e) {
     __ipeLastSseAt = Date.now();
     // Same implicit-handshake defence as the legacy patch listener:
-    // a real patches frame proves we're talking to a Ipe.Live server,
+    // a real patches frame proves we're talking to a Ipe.Web server,
     // so unstick the hello check even if the dedicated 'hello' event
     // got eaten by a misbehaving proxy.
     if (!__ipeHelloOk) {
@@ -1507,7 +1507,7 @@ function __ipeForceReopenSSE() {
   // wiping the persistent session), no amount of reopen retries can
   // recover the lost session — the only path forward is a full page
   // reload, which fires handleInitial and creates a fresh session.
-  // We probe with a fake POST: a 404 + X-Ipe-Live: 1 + body
+  // We probe with a fake POST: a 404 + X-Ipe-Web: 1 + body
   // containing "session not found" is the unambiguous signal that the
   // server is up but doesn't know our cookie. Anything else (network
   // error, 5xx, healthy 200) keeps the normal retry path engaged so
@@ -1532,7 +1532,7 @@ function __ipeForceReopenSSE() {
 // to read the server's reaction to our existing ipe_sid cookie. If
 // the server is up AND has lost our session (memory-store restart,
 // store-kind change, session TTL expiry), we get a 404 with the
-// X-Ipe-Live marker and a "session not found" body. That's the cue
+// X-Ipe-Web marker and a "session not found" body. That's the cue
 // to hard-reload — every reopen attempt would otherwise loop on the
 // same 404 forever.
 //
@@ -1556,7 +1556,7 @@ function __ipeProbeSessionLost() {
     credentials: "same-origin"
   }).then(function(r) {
     if (r.status !== 404) return;
-    if (r.headers.get("X-Ipe-Live") !== "1") return;
+    if (r.headers.get("X-Ipe-Web") !== "1") return;
     return r.text().then(function(body) {
       // Specifically "session not found" — distinguishes from
       // "handler not found" (which means the session is fine, just

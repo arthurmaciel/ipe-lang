@@ -21,7 +21,7 @@ module Main exposing (main)
 --      serving — no hand-rolled Ipe.Http.Server, no second
 --      process, no `webview_go` shim.
 --
---   2. The same Ipe source you'd write for a Ipe.Live page works
+--   2. The same Ipe source you'd write for a Ipe.Web page works
 --      for a Ipe.Webview desktop app — `Ipe.Html.script`,
 --      `Ipe.Html.link`, `Ipe.Html.node "canvas"`, etc all render
 --      identically.
@@ -29,7 +29,7 @@ module Main exposing (main)
 --   3. `<script>` tags in the rendered view bootstrap correctly
 --      (the runtime's __ipeReviveScripts shim revives them after
 --      the initial HTML lands in the document — same hardening
---      Ipe.Live uses).
+--      Ipe.Web uses).
 import Ipe.Webview as Webview
 import Ipe.Tea.WebView.Cmd as Cmd
 import Ipe.Tea.WebView.Sub as Sub
@@ -68,7 +68,7 @@ subscriptions _ =
 -- /static/style.css from the loopback http server that Ipe.Webview
 -- spawns when ipe.toml's `[live].static = "static"` is set.
 -- ═══════════════════════════════════════════════════════════════════
--- Webview's renderer expects the same Html-node tree shape Ipe.Live
+-- Webview's renderer expects the same Html-node tree shape Ipe.Web
 -- emits. We use raw Ipe.Html nodes (NOT Ipe.Ui's layout primitives)
 -- because the Three.js scene paints into a plain <div id="canvas-wrap">
 -- that the loaded JS bundle takes over — no Ipe.Ui layout machinery
