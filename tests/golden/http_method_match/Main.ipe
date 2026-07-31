@@ -1,0 +1,48 @@
+module Main exposing (main)
+
+import Ipe.Http as Http exposing (HttpMethod(..))
+import Ipe.Io as Io
+import Ipe.Maybe
+import Ipe.String
+
+
+-- Exercises the full HttpMethod ADT surface:
+--   * constructors as VALUES, both qualified (Http.Post) and unqualified (Get)
+--   * a TOTAL pattern match over every constructor (no wildcard)
+--   * Http.methodToString : HttpMethod -> String
+--   * Http.methodFromString : String -> Maybe HttpMethod (the parse boundary)
+--
+-- Idempotence check: methodFromString (methodToString m) == Just m for the
+-- round-tripped verb, so the two converters agree on the canonical spelling.
+
+
+-- | Whether the verb is expected to carry a request body.
+carriesBody : HttpMethod -> Bool
+carriesBody m =
+    case m of
+        Get -> False
+        Head -> False
+        Options -> False
+        Post -> True
+        Put -> True
+        Patch -> True
+        Delete -> False
+
+
+roundTrip : HttpMethod -> String
+roundTrip m =
+    case Http.methodFromString (Http.methodToString m) of
+        Just _ -> "ok"
+        Nothing -> "lost"
+
+
+main =
+    Io.println
+        (String.join "\n"
+            [ Http.methodToString Http.Post
+            , Http.methodToString Get
+            , if carriesBody Http.Put then "body" else "nobody"
+            , if carriesBody Get then "body" else "nobody"
+            , roundTrip Delete
+            ]
+        )

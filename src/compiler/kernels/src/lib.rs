@@ -3874,6 +3874,8 @@ impl StdlibKernel {
         Self::HttpWithUrl,
         Self::HttpWithFollowRedirects,
         Self::HttpWithMaxRedirects,
+        Self::HttpMethodFromString,
+        Self::HttpMethodToString,
         // Db
         Self::DbConnect,
         Self::DbOpen,
