@@ -10,8 +10,8 @@ use std::collections::BTreeMap;
 
 use ipe_canon::ast as canon;
 use ipe_diagnostics::{
-    Code, DResult, Diagnostic, Feature, IPE_L0101, IPE_L0102, IPE_L0107, IPE_L0108, IPE_L0114,
-    IPE_L0119, Located, LowerError, Span,
+    Code, DResult, Diagnostic, Feature, IPE_L0101, IPE_L0102, IPE_L0108, IPE_L0114, IPE_L0119,
+    Located, LowerError, Span,
 };
 use ipe_intern::{Interner, Symbol};
 use ipe_ir::{BoundSet, Callee, Expr, FuncId, IrType, KernelFn};
@@ -489,11 +489,12 @@ fn bare_function_reference_lowers_to_func_value() -> DResult<()> {
 }
 
 #[test]
-fn function_value_in_record_field_is_unsupported() -> DResult<()> {
-    // Storing a function value in a record field can't compile (a boxed `dyn Fn`
-    // satisfies none of the record struct's derived `Clone`/`Debug`/`PartialEq`),
-    // so it lowers to the IPE-L0107 first-class-function gap — blaming the field
-    // value's span — rather than emitting Rust that does not build.
+fn function_value_in_record_field_is_accepted() -> DResult<()> {
+    // Carrier normalization (Phase 1): a function value stored DIRECTLY in a
+    // record field is carried on the `Arc<dyn Fn>` carrier
+    // ([`IrType::SharedFun`]), so the synthesised struct gets a hand-written
+    // `Clone` and the field is storable — the literal lowers cleanly where it
+    // once tripped IPE-L0107.
     let mut i = Interner::new();
     let f = i.intern("f")?;
     let field = i.intern("step")?;
@@ -534,25 +535,24 @@ fn function_value_in_record_field_is_unsupported() -> DResult<()> {
         field_span,
         Ty::Fun(Box::new(con(int_name)), Box::new(con(int_name))),
     );
-    assert_unsupported(
-        run_with_regions(Vec::new(), vec![def], BTreeMap::new(), regions, &mut i),
-        Feature::FirstClassFunctions,
-        IPE_L0107,
-        field_span,
+    let res = run_with_regions(Vec::new(), vec![def], BTreeMap::new(), regions, &mut i);
+    assert!(
+        res.is_ok(),
+        "a function value directly in a record field must lower cleanly (Arc \
+         carrier), not trip the record-field function gate: {:?}",
+        res.err()
     );
     Ok(())
 }
 
 #[test]
-fn function_in_record_field_via_type_variable_is_unsupported() -> DResult<()> {
-    // The indirect first-class-function gap: a function value reaches a record
-    // field THROUGH a type variable. A generic `wrap : a -> { value : a }`
-    // applied as `wrap (\n -> n + 1)` produces a value whose SOLVED region type
-    // is `{ value : Int -> Int }` — but the field value at that site is not
-    // syntactically a function (it's a plain reference), so the per-field
-    // `reject_function_valued_field` gate cannot see it. Only the region-based
-    // gate catches it, and it must surface as the IPE-L0107 first-class gap
-    // (blaming the use-site span) rather than emitting Rust that does not build.
+fn function_in_record_field_via_type_variable_is_accepted() -> DResult<()> {
+    // Carrier normalization (Phase 1), indirect: a function value reaching a
+    // record field THROUGH a type variable. A generic `wrap : a -> { value : a }`
+    // applied as `wrap (\n -> n + 1)` produces a value whose SOLVED region type is
+    // `{ value : Int -> Int }`. The record's `Ty::Fun` field is the `Arc<dyn Fn>`
+    // carrier at every occurrence, so the value lowers cleanly where it once
+    // tripped IPE-L0107.
     let mut i = Interner::new();
     let boxed = i.intern("boxed")?;
     let value = i.intern("value")?;
@@ -585,11 +585,12 @@ fn function_in_record_field_via_type_variable_is_unsupported() -> DResult<()> {
         body_span,
         Ty::Record(record_fields, ipe_types::RowTail::Closed),
     );
-    assert_unsupported(
-        run_with_regions(Vec::new(), vec![def], BTreeMap::new(), regions, &mut i),
-        Feature::FirstClassFunctions,
-        IPE_L0107,
-        body_span,
+    let res = run_with_regions(Vec::new(), vec![def], BTreeMap::new(), regions, &mut i);
+    assert!(
+        res.is_ok(),
+        "a function reaching a record field through a type variable must lower \
+         cleanly (Arc carrier), not trip the record-field function gate: {:?}",
+        res.err()
     );
     Ok(())
 }
