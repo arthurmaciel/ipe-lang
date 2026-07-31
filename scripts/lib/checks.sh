@@ -98,26 +98,28 @@ scenario_for() {
 # fine. Probe the shared target first, then the per-example target. The ipe.toml
 # `name` is tried too (harmless first probe; ipe names the bin ipe-app regardless).
 resolve_bin() {
-  local d="$1" name b
+  local d="$1" name b exe=""
+  # On Windows the emitted binary is `ipe-app.exe`; elsewhere `ipe-app`.
+  [ "${IPE_HOST_OS:-}" = windows ] && exe=".exe"
   # Static sweep (IPE_SWEEP_STATIC=1): the artifact lives under the target
   # triple's subdir. NEVER fall through to the dynamic probes — a stale
   # dynamic ipe-app would silently substitute for the static one.
   if [ "${IPE_SWEEP_STATIC:-0}" = 1 ]; then
     local triple="${IPE_STATIC_TRIPLE:-x86_64-unknown-linux-musl}"
     for b in \
-      "$CARGO_TARGET_DIR/$triple/debug/ipe-app" \
-      "$d/out/rust/target/$triple/debug/ipe-app"; do
+      "$CARGO_TARGET_DIR/$triple/debug/ipe-app$exe" \
+      "$d/out/rust/target/$triple/debug/ipe-app$exe"; do
       [ -x "$b" ] && [ ! -d "$b" ] && { echo "$b"; return 0; }
     done
     return 1
   fi
   name="$(rg -No '^name\s*=\s*"([^"]+)"' -r '$1' "$d/ipe.toml" 2>/dev/null | head -1)"
   for b in \
-    "$CARGO_TARGET_DIR/debug/ipe-app" \
-    "$CARGO_TARGET_DIR/release/ipe-app" \
-    "$CARGO_TARGET_DIR/debug/$name" \
-    "$d/out/rust/target/debug/ipe-app" \
-    "$d/out/rust/target/debug/$name"; do
+    "$CARGO_TARGET_DIR/debug/ipe-app$exe" \
+    "$CARGO_TARGET_DIR/release/ipe-app$exe" \
+    "$CARGO_TARGET_DIR/debug/$name$exe" \
+    "$d/out/rust/target/debug/ipe-app$exe" \
+    "$d/out/rust/target/debug/$name$exe"; do
     [ -n "$b" ] && [ -x "$b" ] && [ ! -d "$b" ] && { echo "$b"; return 0; }
   done
   b="$(find "$CARGO_TARGET_DIR/debug" "$d/out/rust/target/debug" -maxdepth 1 -type f -executable 2>/dev/null \

@@ -68,7 +68,22 @@ if [ "$BUILD_ONLY" != 1 ]; then
   command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 required for free_port (set IPE_SWEEP_BUILD_ONLY=1)." >&2; exit 2; }
 fi
 command -v rg >/dev/null 2>&1 || { echo "ERROR: rg (ripgrep) required for the example-scope filter (is_out_of_scope). Install ripgrep." >&2; exit 2; }
-command -v flock >/dev/null 2>&1 || { echo "ERROR: flock required to serialize the shared-CARGO_TARGET_DIR build/run span. Install util-linux (Linux) / 'brew install flock' (macOS)." >&2; exit 2; }
+
+# ── flock: serialize the shared-CARGO_TARGET_DIR build/run span ──────────────
+# flock guards ONLY the case of two concurrent sweeps sharing one target dir
+# (a local convenience). A single CI sweep has no contender. Git Bash on
+# Windows ships no flock; rather than block the whole harness there, fall back
+# to a no-op lock wrapper when real flock is absent — correct because the
+# span it guards is uncontended in a lone sweep. Everywhere flock DOES exist
+# (Linux/macOS) the real serialization is unchanged.
+if command -v flock >/dev/null 2>&1; then
+  _sweep_flock() { flock "$@"; }
+  SWEEP_FLOCK_REAL=1
+else
+  _sweep_flock() { :; }   # no contender in a single sweep → no-op is sound
+  SWEEP_FLOCK_REAL=0
+  echo "NOTE: flock unavailable (e.g. Git Bash on Windows) — build/run span runs unserialized; sound for a single sweep, unsafe only for two concurrent sweeps sharing one CARGO_TARGET_DIR." >&2
+fi
 
 HIST="$HOME/.cache/ipe/examples-sweep"; mkdir -p "$HIST"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)-$$"
@@ -305,7 +320,11 @@ fi
 # build→resolve→run span per example so two concurrent sweeps sharing one target
 # dir interleave safely instead of racing on ipe-app.
 SWEEP_LOCK_FILE="$CARGO_TARGET_DIR/.examples-sweep-build.lock"
-exec {SWEEP_LOCK_FD}>"$SWEEP_LOCK_FILE"
+if [ "$SWEEP_FLOCK_REAL" = 1 ]; then
+  exec {SWEEP_LOCK_FD}>"$SWEEP_LOCK_FILE"
+else
+  SWEEP_LOCK_FD=-   # no-op flock ignores the fd; a placeholder keeps the calls uniform
+fi
 
 for d in "${EXAMPLES[@]}"; do
   n="$(basename "$d")"
@@ -338,12 +357,12 @@ for d in "${EXAMPLES[@]}"; do
 
   build_cell=""; run_cell="—"; note=""
 
-  flock -x "$SWEEP_LOCK_FD"
+  _sweep_flock -x "$SWEEP_LOCK_FD"
 
   if ! build_rust "$d" "$n"; then
     build_cell="$BUILD_CELL"; note="rust build failed (see $(basename "$(diag "$n" ipe.log)") / $(basename "$(diag "$n" cargo.log)"))"
     printf '%s\t%s\t%s\t%s\n' "$n" "$build_cell" "—" "$note" >>"$ROWS"
-    ( cd "$d" && rm -rf out .ipe .ipecache .ipedeps ); flock -u "$SWEEP_LOCK_FD"; continue
+    ( cd "$d" && rm -rf out .ipe .ipecache .ipedeps ); _sweep_flock -u "$SWEEP_LOCK_FD"; continue
   fi
   build_cell="ok"
   printf '%s\t%s\n' "$n" "${WARN_CELL:-0}" >>"$WARNS"
@@ -357,12 +376,12 @@ for d in "${EXAMPLES[@]}"; do
   if [ "$BUILD_ONLY" = 1 ] || [ -z "$rbin" ]; then
     [ -z "$rbin" ] && { run_cell="noserve"; note="no binary resolved after build"; }
     printf '%s\t%s\t%s\t%s\n' "$n" "$build_cell" "$run_cell" "$note" >>"$ROWS"
-    ( cd "$d" && rm -rf out .ipe .ipecache .ipedeps ); flock -u "$SWEEP_LOCK_FD"; continue
+    ( cd "$d" && rm -rf out .ipe .ipecache .ipedeps ); _sweep_flock -u "$SWEEP_LOCK_FD"; continue
   fi
 
   IFS=$'\t' read -r run_cell run_note < <(run_for "$n" "$shape" "$rbin")
 
-  flock -u "$SWEEP_LOCK_FD"
+  _sweep_flock -u "$SWEEP_LOCK_FD"
 
   note="$run_note"
   printf '%s\t%s\t%s\t%s\n' "$n" "$build_cell" "$run_cell" "$note" >>"$ROWS"
