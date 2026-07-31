@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use ipe::{BuildOptions, CliError, build_plan};
 use ipe_backend_rust::static_build::{
-    CARGO_CONFIG_MARKER, StaticAllocator, StaticPlan, StaticTriple,
+    CARGO_CONFIG_MARKER, CProfile, StaticAllocator, StaticPlan, StaticTriple,
 };
 
 mod support;
@@ -34,7 +34,9 @@ fn write_hello(dir: &Path) -> std::io::Result<PathBuf> {
 const fn dlmalloc_plan() -> StaticPlan {
     StaticPlan {
         triple: StaticTriple::X8664LinuxMusl,
-        allocator: StaticAllocator::Dlmalloc,
+        c_profile: CProfile::WithLibc {
+            allocator: StaticAllocator::Dlmalloc,
+        },
     }
 }
 
@@ -128,7 +130,9 @@ fn static_emit_mimalloc_optin_activates_mimalloc() {
     let statik = BuildOptions {
         static_plan: Some(StaticPlan {
             triple: StaticTriple::X8664LinuxMusl,
-            allocator: StaticAllocator::Mimalloc,
+            c_profile: CProfile::WithLibc {
+                allocator: StaticAllocator::Mimalloc,
+            },
         }),
         ..BuildOptions::default()
     };
@@ -227,6 +231,47 @@ fn cli_refusals_are_typed_and_artifact_free() {
     );
 }
 
+/// The C-free axis rejects its contradictions at the CLI boundary, before any
+/// compilation or filesystem write. `--cfree` with a C-requiring allocator is
+/// unrepresentable in a plan (the [`ipe_backend_rust::static_build::CProfile`]
+/// `CFree` variant carries no allocator field); `--cfree` alone is refused
+/// until the pure-Rust dependency swaps land, since the build would still pull
+/// C and honouring the flag would be a lie.
+#[test]
+fn cfree_contradictions_are_refused_at_the_cli_boundary() {
+    let err = ipe::run_cli(&[
+        "build".into(),
+        "NoSuch.ipe".into(),
+        "--static".into(),
+        "--cfree".into(),
+        "--allocator".into(),
+        "mimalloc".into(),
+    ])
+    .expect_err("mimalloc under --cfree must refuse");
+    assert!(
+        matches!(
+            err,
+            CliError::StaticRefusal(build_plan::Refusal::AllocatorRequiresC { .. })
+        ),
+        "wrong refusal: {err:?}"
+    );
+
+    let err = ipe::run_cli(&[
+        "build".into(),
+        "NoSuch.ipe".into(),
+        "--static".into(),
+        "--cfree".into(),
+    ])
+    .expect_err("--cfree must refuse until dep swaps land");
+    assert!(
+        matches!(
+            err,
+            CliError::StaticRefusal(build_plan::Refusal::CfreeNotYetWired)
+        ),
+        "wrong refusal: {err:?}"
+    );
+}
+
 /// The `run` subcommand carries the same static surface as `build` (one
 /// shared flag parser + resolver) — refusals fire identically, before any
 /// compilation or filesystem write.
@@ -291,6 +336,7 @@ fn ipe_toml_rust_section_parses_and_rejects_typos() {
             target: None,
             allocator: Some(build_plan::AllocatorChoice::Dlmalloc),
             allow_slow_allocator: Some(false),
+            c_free: None,
         }
     );
 
