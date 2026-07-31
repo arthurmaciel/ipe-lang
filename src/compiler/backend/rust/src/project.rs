@@ -309,6 +309,7 @@ pub mod web {
     pub mod route;
 }
 pub mod basics;
+pub mod bitwise;
 pub mod bytes;
 pub mod char_kernel;
 pub mod config;
@@ -351,6 +352,7 @@ pub mod ui;
 pub mod wasm;
 pub mod ws_client;
 pub use basics::*;
+pub use bitwise::*;
 pub use bytes::*;
 pub use char_kernel::*;
 pub use config::*;

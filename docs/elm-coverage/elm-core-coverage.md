@@ -37,12 +37,14 @@ registry.
 > concrete type, either from a Ipê-source body/annotation or from a matched
 > arm of `kernel_ty` in `src/compiler/types/src/constrain.rs`. `kernel_ty`'s
 > catch-all returns an unconstrained type variable, so a name that only hits
-> the fallback is treated as *not* usably typed. Notably, Ipê has **no**
-> `Array`, `Bitwise`, `Tuple`, `Debug`, `Process`, or `Platform` module, and
-> no `Order` or `Never` type; the numeric surface beyond the language
-> operators lives in `Ipe.Math` (typed in `kernel_ty` and registered in
-> `QUALIFIERS`, though not embedded as source); tuple helpers are
-> `Basics.fst`/`snd`; `Cmd`/`Sub` are `Ipe.Cmd`/`Ipe.Sub`.
+> the fallback is treated as *not* usably typed. Ipê ships `Ipe.Bitwise` and
+> `Ipe.Tuple` (full elm/core parity); it has **no** `Array`, `Debug`,
+> `Process`, or `Platform` module, and no `Order` or `Never` type. `Array` is a
+> sanctioned divergence (Ipê's `List` is a `Vec`, so it already has O(1)
+> index/length — see the `Array` section below). The numeric surface beyond the
+> language operators lives in `Ipe.Math` (typed in `kernel_ty` and registered in
+> `QUALIFIERS`, though not embedded as source); `Cmd`/`Sub` are
+> `Ipe.Cmd`/`Ipe.Sub`.
 
 ---
 
@@ -74,6 +76,15 @@ Fast immutable arrays with O(log n) indexed access.
 | `filter` | `(a -> Bool) -> Array a -> Array a` | ✗ |
 | `foldl` | `(a -> b -> b) -> b -> Array a -> b` | ✗ |
 | `foldr` | `(a -> b -> b) -> b -> Array a -> b` | ✗ |
+
+**Sanctioned divergence — `Array` is intentionally absent.** Elm's `Array`
+exists because Elm's `List` is a cons-cell linked list: index and length are
+O(n), so a second sequence type with O(log n) indexing is needed. Ipê's `List`
+lowers to a Rust `Vec`, which already gives O(1) index and length and amortised
+O(1) push — exactly what `Array` is for. A separate `Array` type would only
+re-create the "List vs Array, which do I reach for?" confusion without buying
+any asymptotic improvement. The rationale lives in
+[`../divergences-from-elm.md`](../divergences-from-elm.md).
 
 ---
 
@@ -159,17 +170,19 @@ core types. Everything here is exposed by default in every Elm module.
 
 ## Bitwise
 
-Bitwise operations on `Int`.
+Bitwise operations on `Int`. Ipê's `Int` is 64-bit (`complement` /
+`shiftRightZfBy` cover the full 64-bit width, not Elm's 32 — see
+[`../divergences-from-elm.md`](../divergences-from-elm.md)).
 
 | Function / Type | Signature | Ipê status |
 |---|---|---|
-| `and` | `Int -> Int -> Int` | ✗ |
-| `or` | `Int -> Int -> Int` | ✗ |
-| `xor` | `Int -> Int -> Int` | ✗ |
-| `complement` | `Int -> Int` | ✗ |
-| `shiftLeftBy` | `Int -> Int -> Int` | ✗ |
-| `shiftRightBy` | `Int -> Int -> Int` | ✗ |
-| `shiftRightZfBy` | `Int -> Int -> Int` | ✗ |
+| `and` | `Int -> Int -> Int` | ✓ (`Ipe.Bitwise.and`) |
+| `or` | `Int -> Int -> Int` | ✓ (`Ipe.Bitwise.or`) |
+| `xor` | `Int -> Int -> Int` | ✓ (`Ipe.Bitwise.xor`) |
+| `complement` | `Int -> Int` | ✓ (`Ipe.Bitwise.complement`) |
+| `shiftLeftBy` | `Int -> Int -> Int` | ✓ (`Ipe.Bitwise.shiftLeftBy`) |
+| `shiftRightBy` | `Int -> Int -> Int` | ✓ (`Ipe.Bitwise.shiftRightBy`) |
+| `shiftRightZfBy` | `Int -> Int -> Int` | ✓ (`Ipe.Bitwise.shiftRightZfBy`) |
 
 ---
 
@@ -526,12 +539,12 @@ Helpers for pairs.
 
 | Function / Type | Signature | Ipê status |
 |---|---|---|
-| `pair` | `a -> b -> ( a, b )` | ✗ (tuple literals only; no `Tuple` module) |
-| `first` | `( a, b ) -> a` | ~ (`Ipe.Basics.fst` — name differs) |
-| `second` | `( a, b ) -> b` | ~ (`Ipe.Basics.snd` — name differs) |
-| `mapFirst` | `(a -> x) -> ( a, b ) -> ( x, b )` | ✗ |
-| `mapSecond` | `(b -> y) -> ( a, b ) -> ( a, y )` | ✗ |
-| `mapBoth` | `(a -> x) -> (b -> y) -> ( a, b ) -> ( x, y )` | ✗ |
+| `pair` | `a -> b -> ( a, b )` | ✓ (`Ipe.Tuple.pair`) |
+| `first` | `( a, b ) -> a` | ✓ (`Ipe.Tuple.first`; also `Ipe.Basics.fst`) |
+| `second` | `( a, b ) -> b` | ✓ (`Ipe.Tuple.second`; also `Ipe.Basics.snd`) |
+| `mapFirst` | `(a -> x) -> ( a, b ) -> ( x, b )` | ✓ (`Ipe.Tuple.mapFirst`) |
+| `mapSecond` | `(b -> y) -> ( a, b ) -> ( a, y )` | ✓ (`Ipe.Tuple.mapSecond`) |
+| `mapBoth` | `(a -> x) -> (b -> y) -> ( a, b ) -> ( x, y )` | ✓ (`Ipe.Tuple.mapBoth`) |
 
 ---
 

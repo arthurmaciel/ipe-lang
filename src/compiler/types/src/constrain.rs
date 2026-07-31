@@ -4504,6 +4504,21 @@ impl<'a> Builder<'a> {
             // pre-check early-returns the bounded scheme).
             K::MathMin | K::MathMax => fun(var(0), fun(var(0), var(0))),
 
+            // ── Bitwise — Int-only, maps 1:1 to Rust integer ops ──
+            K::BitwiseAnd
+            | K::BitwiseOr
+            | K::BitwiseXor
+            | K::BitwiseShiftLeftBy
+            | K::BitwiseShiftRightBy
+            | K::BitwiseShiftRightZfBy => fun(int(), fun(int(), int())),
+            K::BitwiseComplement => fun(int(), int()),
+
+            // ── Random seeded (Generator primitives) — pure, reproducible ──
+            // seededIntRaw : Int -> Int -> Int -> (Int, Int)   (seed, lo, hi) → (value, nextSeed)
+            K::RandomSeededInt => fun(int(), fun(int(), fun(int(), tuple2(int(), int())))),
+            // seededFloatRaw : Int -> (Float, Int)             seed → (value, nextSeed)
+            K::RandomSeededFloat => fun(int(), tuple2(float(), int())),
+
             // ── Log ──
             // info/debug/warn/error : String -> Task Error (). The
             // *With variants (List (String, a) attrs) are Stringify-bounded and
@@ -8483,6 +8498,19 @@ mod registry_phase_c_tests {
             K::BasicsMax,
             K::BasicsCompare,
             // ── end Basics numerics ──────────────────────────────────
+            // Bitwise — Ipê-new (no legacy oracle); Int-only, runtime fns in
+            // `bitwise.rs`.
+            K::BitwiseAnd,
+            K::BitwiseOr,
+            K::BitwiseXor,
+            K::BitwiseComplement,
+            K::BitwiseShiftLeftBy,
+            K::BitwiseShiftRightBy,
+            K::BitwiseShiftRightZfBy,
+            // Random seeded (Generator primitives) — Ipê-new; pure/reproducible
+            // draws in `random.rs` (`random_seeded_int`/`random_seeded_float`).
+            K::RandomSeededInt,
+            K::RandomSeededFloat,
             // Result combinators that are first-schemed holes; `withDefault` /
             // `map` are the RELOCATED pair, these two are first-schemed.
             K::ResultAndThen,

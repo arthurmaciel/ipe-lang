@@ -13865,6 +13865,11 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::SystemExit
                 // ── Random arity-1 ──────────────────────────────────────
                 | KernelFn::RandomChoice
+                // `seededFloatRaw : Int -> (Float, Int)` — pure seeded draw
+                | KernelFn::RandomSeededFloat
+                // ── Bitwise arity-1 ─────────────────────────────────────
+                // `complement : Int -> Int`
+                | KernelFn::BitwiseComplement
                 // ── File arity-1 ────────────────────────────────────────
                 | KernelFn::FileReadFile
                 | KernelFn::FileExists
@@ -14030,6 +14035,13 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::MaybeAndMap
                 | KernelFn::MathMin
                 | KernelFn::MathMax
+                // ── Bitwise arity-2 (Int -> Int -> Int) ──────────────
+                | KernelFn::BitwiseAnd
+                | KernelFn::BitwiseOr
+                | KernelFn::BitwiseXor
+                | KernelFn::BitwiseShiftLeftBy
+                | KernelFn::BitwiseShiftRightBy
+                | KernelFn::BitwiseShiftRightZfBy
                 // ── Basics numerics — arity 2 ────────────────────────
                 | KernelFn::BasicsMin
                 | KernelFn::BasicsMax
@@ -14226,6 +14238,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::StringFoldl
                 | KernelFn::StringFoldr
                 | KernelFn::BasicsClamp
+                // `seededIntRaw : Int -> Int -> Int -> (Int, Int)` — pure seeded draw
+                | KernelFn::RandomSeededInt
                 | KernelFn::ListFoldl
                 | KernelFn::ListFoldr
                 // ── Set arity-3 ──────────────────────────────────────────────
@@ -15468,6 +15482,21 @@ impl<'a> Lowerer<'a> {
                     // `compare : comparable -> comparable -> Order`
                     ("Basics", "compare") => Ok(Callee::Kernel(KernelFn::BasicsCompare)),
                     // ── end Basics numerics ────────────────────────────
+                    // ── Bitwise ────────────────────────────────────────
+                    ("Bitwise", "and") => Ok(Callee::Kernel(KernelFn::BitwiseAnd)),
+                    ("Bitwise", "or") => Ok(Callee::Kernel(KernelFn::BitwiseOr)),
+                    ("Bitwise", "xor") => Ok(Callee::Kernel(KernelFn::BitwiseXor)),
+                    ("Bitwise", "complement") => Ok(Callee::Kernel(KernelFn::BitwiseComplement)),
+                    ("Bitwise", "shiftLeftBy") => Ok(Callee::Kernel(KernelFn::BitwiseShiftLeftBy)),
+                    ("Bitwise", "shiftRightBy") => {
+                        Ok(Callee::Kernel(KernelFn::BitwiseShiftRightBy))
+                    }
+                    ("Bitwise", "shiftRightZfBy") => {
+                        Ok(Callee::Kernel(KernelFn::BitwiseShiftRightZfBy))
+                    }
+                    // ── Random Generator primitives ────────────────────
+                    ("Random", "seededIntRaw") => Ok(Callee::Kernel(KernelFn::RandomSeededInt)),
+                    ("Random", "seededFloatRaw") => Ok(Callee::Kernel(KernelFn::RandomSeededFloat)),
                     // ── Error kernels (Ipe.Error — minimal `Error = String`
                     //    slice) ─────────────────────────────────────────
                     ("Error", "unexpected") => Ok(Callee::Kernel(KernelFn::ErrorUnexpected)),

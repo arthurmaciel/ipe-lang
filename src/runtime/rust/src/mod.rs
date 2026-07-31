@@ -356,6 +356,9 @@ pub use money::*;
 pub mod math;
 pub use math::*;
 
+pub mod bitwise;
+pub use bitwise::*;
+
 pub mod dict;
 pub use dict::*;
 pub mod set;
