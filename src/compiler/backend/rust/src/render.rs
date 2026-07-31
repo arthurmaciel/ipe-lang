@@ -953,10 +953,42 @@ fn render_assign(
     // trailer is charged against the first line only when the RHS does not break
     // internally (a single-line RHS carries the `;` on that one line).
     let rhs_indent = indent + CHAIN_BREAK_INDENT;
-    let rhs_break_head_w = flat_width_first_line(rhs, cfg, rhs_indent);
-    let rhs_breaks = rhs_flat_render_breaks(rhs, cfg, rhs_indent);
+    let rhs_break_render = probe_render(rhs, cfg, rhs_indent, rhs_indent);
+    let rhs_break_first = rhs_break_render
+        .split('\n')
+        .next()
+        .unwrap_or(&rhs_break_render);
+    let rhs_break_head_w = rhs_break_first.len().saturating_sub(rhs_indent);
+    let rhs_breaks = rhs_break_render.contains('\n');
     let rhs_break_trailer = if rhs_breaks { 0 } else { trailer };
-    if no_hard_break && rhs_indent + rhs_break_head_w + rhs_break_trailer <= cfg.max_width {
+
+    // `rustfmt`'s `choose_rhs` accepts the next-line placement only when the
+    // glued alternative is not strictly required:
+    //  - GLUE-UNVIABLE: the RHS head before its open delimiter (a call's callee)
+    //    does not fit the width remaining after `prefix` plus the trailer, so the
+    //    glued rewrite fails outright and the RHS always drops to the next line —
+    //    even with an over-wide body.
+    //  - TAIL-FITS: the glued rewrite is viable, so next-line placement must
+    //    prove itself better: no line of the RHS body carries content that alone
+    //    exceeds `max_width` — an unbreakable run no indent can ever fit (the
+    //    body `rustfmt` leaves as an over-wide raw snippet). Such a body makes
+    //    the next-line form no better than the glued one, and the glued form wins.
+    let glue_col = start_col + prefix_flat_w;
+    let glue_render = probe_render(rhs, cfg, indent, glue_col);
+    let glue_head = glue_render.split('\n').next().unwrap_or(&glue_render);
+    let glue_head_core_w = glue_head
+        .trim_end_matches(['(', '{', '['])
+        .len()
+        .saturating_sub(glue_col);
+    let glue_viable = glue_col + glue_head_core_w + trailer <= cfg.max_width;
+    let rhs_tail_fits = rhs_break_render
+        .split('\n')
+        .skip(1)
+        .all(|line| line.trim_start().len() <= cfg.max_width);
+    if no_hard_break
+        && rhs_indent + rhs_break_head_w + rhs_break_trailer <= cfg.max_width
+        && (!glue_viable || rhs_tail_fits)
+    {
         // `rustfmt` leaves no trailing space on the `= ` line, so trim it before
         // the newline (the prefix carries the flat-case space after `=`).
         trim_trailing_spaces(out);
@@ -1006,28 +1038,16 @@ fn flat_width(doc: &Doc, cfg: RenderConfig, start_col: usize, indent: usize) -> 
     scratch.split('\n').next().unwrap_or(&scratch).len()
 }
 
-/// Whether `doc`, rendered from `start_col` letting its own groups decide their
-/// internal breaks (non-flat), spans more than one line. `rustfmt`'s assignment
-/// RHS-break axis uses next-line placement only for a value that lands as ONE clean
-/// line at the RHS indent; a value that would still break its own delimiters there
-/// (a wide closure body) stays glued to `= ` and breaks in place instead.
-fn rhs_flat_render_breaks(doc: &Doc, cfg: RenderConfig, start_col: usize) -> bool {
+/// `doc` rendered from `start_col` at block indent `indent`, letting its own
+/// groups decide their internal breaks (non-flat), with `start_col` leading
+/// spaces so every line's length is an absolute column. The assignment axis
+/// measures its candidate layouts (glued head, next-line head, tail lines) on
+/// this probe without touching the real output buffer.
+fn probe_render(doc: &Doc, cfg: RenderConfig, indent: usize, start_col: usize) -> String {
     let mut scratch = String::new();
     push_indent(start_col, &mut scratch);
-    render_at(doc, cfg, start_col, start_col, false, &mut scratch);
-    scratch.contains('\n')
-}
-
-/// The width of `doc`'s FIRST line when rendered from `start_col` letting its own
-/// groups decide their internal breaks (non-flat) — the head that lands on the line
-/// the RHS starts on (`Box::new(` for a `Box::new(<multiline closure>)`). Used by the
-/// assignment axis to test whether the glued head or the next-line head fits.
-fn flat_width_first_line(doc: &Doc, cfg: RenderConfig, start_col: usize) -> usize {
-    let mut scratch = String::new();
-    push_indent(start_col, &mut scratch);
-    render_at(doc, cfg, start_col, start_col, false, &mut scratch);
-    let first = scratch.split('\n').next().unwrap_or(&scratch);
-    first.len().saturating_sub(start_col)
+    render_at(doc, cfg, indent, start_col, false, &mut scratch);
+    scratch
 }
 
 /// Whether `doc` contains a [`Doc::HardLine`] that is NOT enclosed in a nested
