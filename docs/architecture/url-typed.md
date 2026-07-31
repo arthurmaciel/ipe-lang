@@ -3,8 +3,8 @@
 `Ipe.Url` is one subsystem with three coherent facets over a single value:
 
 1. **the typed `Url`** — an opaque, parse-once absolute-URL value (shipped);
-2. **the routing parser** — combinators that match a typed `Url` into a typed
-   route value (planned);
+2. **the routing parser** — pure-data patterns that match a typed `Url` into
+   typed route captures (shipped as `Ipe.Url.Parser`);
 3. **the outbound-request boundary** — `Ipe.Http` request construction and the
    runtime SSRF guard, both consuming that same typed `Url` (planned).
 
@@ -67,57 +67,50 @@ inherits the seal's guarantees for free.
 
 ### Shape (compared to `elm/url`'s `Url.Parser`)
 
-The subsystem follows `elm/url`'s `Url.Parser` vocabulary so an author who
-knows Elm reads it without translation, and follows the same in-repo shape as
-the existing opaque-combinator precedent (`Ipe.Config`'s `Decoder`): an opaque
-carrier type constructed only through combinators.
+`Ipe.Url.Parser` follows `elm/url`'s `Url.Parser` path vocabulary so an author
+who knows Elm reads it without translation. It diverges in one structural way:
+a `Pattern` is **pure data**, not a function-carrying `Parser`, and the caller
+applies the route constructor. The reason is a Rust-backend limit — a router
+that threads a builder function through the parser (as `elm/url` does) cannot
+lower, because the backend stores a function value only in a union payload,
+never in a record field, never forwarded through a closure capture, and never as
+a non-`Clone` element of a `List` walked by value (which is exactly what a
+`oneOf` of builder-carrying alternatives would require). The full rationale is
+in `docs/divergences-from-elm.md`.
 
-Carrier and primitives (proposed surface — illustrative type signatures for the
-planned module, not yet-shipped code):
+Surface (shipped):
 
-- `Parser a` — opaque; a route matcher yielding a value of type `a` when it
-  matches, threaded so later segments can extend the value (`elm/url` threads a
-  continuation `a -> b`; the Ipê surface exposes the same composition without
-  leaking the state type).
-- `s : String -> Parser a` — match one exact static path segment.
-- `string : Parser (String -> a)` / `int : Parser (Int -> a)` — capture one
-  path segment as a typed value, contributing it to the route.
-- `(</>) : Parser a -> Parser b -> Parser` — sequence two path matchers.
-- `(<?>) : Parser a -> QueryParser b -> Parser` — attach a query matcher.
-- `oneOf : List (Parser a) -> Parser a` — first matching alternative wins; an
-  empty list matches nothing (fails closed).
-- `map : a -> Parser a -> Parser b` — build the typed route value from captures.
-- `fragmentParser : (Maybe String -> a) -> Parser a` — consume the fragment.
-- `parse : Parser a -> Url -> Maybe a` — run a parser against a typed `Url`,
-  yielding the route on a total match, `Nothing` otherwise.
+- `Pattern` — an opaque pure-data route pattern: an ordered list of segment
+  matchers plus the query keys to read. Composes and lists freely.
+- `s : String -> Pattern` — match one exact static path segment.
+- `string : Pattern` / `int : Pattern` — capture one path segment as a `String`
+  / `Int` (a non-integer segment fails `int`, fails closed).
+- `top : Pattern` — match the root; the identity of `slash`.
+- `slash : Pattern -> Pattern -> Pattern` — sequence two path patterns
+  (`elm/url`'s `</>`).
+- `withQuery : Pattern -> Query -> Pattern` (`elm/url`'s `<?>`) and
+  `query : String -> Query` — attach and name a query key.
+- `parse : Pattern -> Url -> Maybe Captures` — match a pattern against a typed
+  `Url`, yielding the ordered `Captures` on a total match, `Nothing` otherwise.
+- `Captures` + `firstString` / `firstInt` / `firstQuery` — the ordered captures
+  and the common single-capture readers; the caller applies its route
+  constructor in a `case` chain over `parse` results.
 
-A companion `Query` vocabulary (`string`, `int`, `enum`, `custom`) parses the
-already-typed query component. It reads the `Url`'s parsed query, never a raw
-string, so a query value is decoded once and consistently.
-
-The design keeps invalid states unrepresentable: `parse` returns `Maybe a`
-(total or no route — never a partial/ambiguous route), `oneOf []` matches
-nothing, and there is no wildcard route that silently swallows an unrecognised
-path. An unmatched `Url` is an explicit `Nothing` the caller must handle.
+The design keeps invalid states unrepresentable: `parse` returns `Maybe
+Captures` (a total match or none — never a partial/ambiguous match), and there
+is no wildcard that silently swallows an unrecognised path. An unmatched `Url`
+is an explicit `Nothing` the caller must handle. A caller expresses "first
+matching alternative wins" as an ordinary `case` chain over `parse` results.
 
 ### Backend lowering
 
-`Parser`/`Query` are an opaque ADT plus pure combinators, mirroring how
-`Ipe.Config.Decoder` is realised: a **compiled-source Ipê module** whose
-combinators are ordinary Ipê functions over an opaque carrier, so most of the
-surface needs no new kernels. Where a primitive genuinely needs the parsed
-`Url`'s components (segment iteration, query lookup), it consumes them through
-the **already-shipped** `Url` accessors — the split into path segments and
-query pairs happens once, over the typed value.
-
-If a path/query split primitive is cheaper or more faithful as a runtime
-kernel than as Ipê over the existing accessors, registering it means updating
-**all** anti-drift sites in lockstep (the kernel enum + `decl()` + `ALL`; the
-type-scheme table out of the unbacked bucket; the lower arity table; backend
-naming; IR pretty; stdlib module registration), so a resolved-but-unschemed
-kernel is a compile-time error, never a deferred cargo failure. Prefer the
-compiled-source combinator realisation; reach for a kernel only where the
-accessor-composition cannot express the primitive faithfully.
+`Ipe.Url.Parser` is a **compiled-source Ipê module** with **no new kernels and
+no stored function values**: `Pattern` / `Captures` are pure-data records and
+unions, and every combinator is an ordinary Ipê function over them. Matching
+consumes the parsed `Url`'s components through the **already-shipped** `Url`
+accessors (`path` / `query`) — the split into path segments and query pairs
+happens once, over the typed value. Because the whole module is pure data plus
+pure functions, it lowers cleanly with no anti-drift kernel-registration cost.
 
 The parser is the syntactic router; it never fetches. It therefore has **no**
 security boundary of its own beyond totality — a mismatched route surfaces as
@@ -218,13 +211,17 @@ vetted a *different* URL than the request hit. This design forecloses it:
 Ordered by what unblocks what. Each item lands behind the full gate and THE
 SEAL (`ipe build` exit 0 ⇒ emitted Rust `cargo build`s).
 
+**Shipped:**
+
+1. **Routing parser — pure-data patterns.** `Ipe.Url.Parser`: a compiled-source
+   Ipê module exposing the pure-data `Pattern` / `Captures` types and the
+   combinator surface (`s` / `int` / `string` / `slash` / `top` / `withQuery` /
+   `query` / `parse` / `firstString` / `firstInt` / `firstQuery`), realised over
+   the shipped `Url` accessors with no new kernels. Independent of the Http
+   facet.
+
 **Available now (the `Url` core is shipped; no blockers):**
 
-1. **Routing parser — carrier + pure combinators.** A compiled-source Ipê
-   module exposing the opaque `Parser`/`Query` ADT and the combinator surface,
-   realised over the shipped `Url` accessors (following the `Ipe.Config.Decoder`
-   precedent). Independent of the Http facet. If a path/query-split kernel is
-   needed, register it across all anti-drift sites; prefer accessor-composition.
 2. **Http request target — typed `Url` in.** Adapt `Ipe.Http` request
    construction so the primary path takes a typed `Url`, with a *marked*
    parse-at-the-boundary helper for raw strings and no unmarked stringly
@@ -244,15 +241,16 @@ coupling (they are the same boundary).
 
 ## Risks & open questions
 
-- **Parser state exposure.** `elm/url` threads a continuation type through the
-  parser. The Ipê surface should expose the composition without leaking the
-  internal state type in a signature an author must annotate; keep the carrier
-  opaque and pick combinator types that infer cleanly. *Open:* the exact typing
-  of `(</>)` / `map` so the state threads without an author-visible type
-  variable.
-- **Kernel vs compiled-source for the path/query split.** Faithfulness vs a new
-  kernel's anti-drift cost. *Resolution bias:* compiled-source over the existing
-  accessors unless a primitive cannot be expressed faithfully that way.
+- **Parser state exposure (resolved).** `elm/url` threads a continuation type
+  through the parser. Ipê could not lower that function-carrying `Parser` (a
+  builder function reaches a record field, a closure capture, or a
+  by-value-walked list — all rejected), so `Ipe.Url.Parser` uses a pure-data
+  `Pattern` and the caller applies the route constructor over `parse`'s
+  `Captures`. No author-visible state type is leaked; see
+  `docs/divergences-from-elm.md`.
+- **Kernel vs compiled-source for the path/query split (resolved).** The whole
+  module is compiled-source over the existing `Url` accessors — no kernel was
+  needed, so no anti-drift registration cost.
 - **Marked-stringly ergonomics.** The raw-string request helper must be
   *obviously* a parse boundary (returns `Result`), not a drop-in that tempts
   authors back to stringly targets. *Open:* naming and surface so the typed path

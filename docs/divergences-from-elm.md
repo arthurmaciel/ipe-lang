@@ -49,3 +49,37 @@ forwards a polymorphic value out of its body, or reuse a generic `Vec<a>` after
 a by-value runtime call — neither of which the current generic codegen can
 lower. The base generators (`int`, `float`) and the combinators above cover the
 composable seeded surface the seed primitives support.
+
+## `Ipe.Url.Parser` — named combinators and pure-data patterns
+
+elm/url's `Url.Parser` uses infix `</>` / `<?>` and threads a continuation
+FUNCTION through the parser (`Parser a b`, whose state carries a
+partially-applied route builder), with `map` / `oneOf` composing those
+function-carrying parsers. Ipê diverges on two points, both to satisfy the Rust
+backend's first-class-function limits while keeping identical *matching*
+semantics:
+
+- **Named combinators for the operators.** `</>` is `slash` and `<?>` is
+  `withQuery`, because Ipê has a fixed operator set and no custom-operator
+  declaration. `s` / `int` / `string` / `top` / `query` keep their elm/url
+  names.
+- **Pure-data patterns; the caller applies the route constructor.** A `Pattern`
+  here holds only data — an ordered list of segment matchers plus query keys —
+  so it composes, lists, and matches with no stored function value anywhere. It
+  has to: the backend stores a function value only in a union payload, never in
+  a record field (IPE-L0107), never forwarded through a closure capture
+  (IPE-L0126), and — the decisive one for a router — never as a non-`Clone`
+  element of a `List` walked by value (cons-destructuring a function-bearing
+  list emits a `.clone()` the function type cannot satisfy). A `oneOf` that
+  carried per-alternative *builder functions* in a list therefore cannot lower.
+  Instead, `parse : Pattern -> Url -> Maybe Captures` yields the ordered
+  captures on a total match, and the caller selects the alternative and applies
+  its route constructor in ordinary code — a `case` chain over `parse` results,
+  where a constructor is only ever CALLED, never stored. `parse` stays total
+  (`Maybe Captures`, no match is `Nothing`, no silent wildcard), and the capture
+  readers `firstString` / `firstInt` / `firstQuery` name the common single-
+  capture reads.
+
+The parser consumes the already-parsed `Url` through the shipped `Ipe.Url`
+accessors (`path` / `query`) — it splits path segments and query pairs once,
+over the typed value, and never re-parses a raw string.
