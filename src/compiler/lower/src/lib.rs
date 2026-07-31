@@ -79,16 +79,29 @@ pub fn lower(
     // Sizing: the most params ANY single eta-lambda introduces is the widest
     // partial-application gap = `callee_arity - args_supplied`. The callee may
     // be a KERNEL or CONSTRUCTOR (e.g. `List.map f` — arity-2 kernel, 1 arg,
-    // gap 1), not just a local def — so `max_def_arity` alone under-sizes the
-    // pool (it is 0 for a `main`-only program, yet `[1,2,3] |> List.map f`
-    // needs an eta param). Cover the widest callable arity; no stdlib function
-    // exceeds this ceiling, and `eta_expand_partial` fails closed (CompilerBug)
-    // if a gap ever did — never silently, never unsound.
+    // gap 1), not just a local def — so the widest local-def arity alone
+    // under-sizes the pool (it is 0 for a `main`-only program, yet
+    // `[1,2,3] |> List.map f` needs an eta param). Cover the widest callable
+    // arity; no stdlib function exceeds this ceiling, and `eta_expand_partial`
+    // fails closed (CompilerBug) if a gap ever did — never silently, never
+    // unsound.
+    // Sized by the per-module max arity (WP-3): the `eta_` / `cap_` pools name a
+    // symbol by its scope-LOCAL position, so the pool SIZE is byte-neutral — only
+    // the local index reaches the emitted names. `max_def_arity_per_module`
+    // equals the widest arity across the whole module, so this sizing is
+    // byte-identical, while removing the last whole-program input from these
+    // position-indexed pools.
     let eta_params = interner
-        .fresh_symbols("eta_", lower::max_def_arity(m).max(MAX_CALLEE_ARITY))
+        .fresh_symbols(
+            "eta_",
+            lower::max_def_arity_per_module(m).max(MAX_CALLEE_ARITY),
+        )
         .map_err(homeless)?;
     let cap_params = interner
-        .fresh_symbols("cap_", lower::max_def_arity(m).max(MAX_CALLEE_ARITY))
+        .fresh_symbols(
+            "cap_",
+            lower::max_def_arity_per_module(m).max(MAX_CALLEE_ARITY),
+        )
         .map_err(homeless)?;
     // A destructuring parameter (tuple / record / alias / wildcard) has no single
     // source name; the lowerer gives it a synthetic binder from this pool and
