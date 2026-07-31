@@ -2032,6 +2032,7 @@ name = "ipe-playground"
 version = "0.1.29"
 dependencies = [
  "axum",
+ "ipe_sandbox",
  "serde",
  "serde_json",
  "tempfile",

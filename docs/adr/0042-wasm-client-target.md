@@ -8,7 +8,8 @@ Accepted and implemented. The client-WASM target ships: the runtime sink lives
 under `src/runtime/rust/src/wasm/`, emission reuses `src/compiler/backend/rust`,
 and the effect gate is `src/compiler/canon/src/target_gate.rs` (`Target::WasmClient`).
 Server-compile playground delivery (the "B1" tier) ships alongside it
-(`src/playground/`); a fully-client in-browser interpreter is a tracked follow-up.
+(`examples/wasm/language-playground/server/`); a fully-client in-browser
+interpreter is a tracked follow-up.
 
 ## Context
 
