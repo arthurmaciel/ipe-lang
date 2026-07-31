@@ -626,6 +626,17 @@ pub(crate) struct EmitCtx<'a> {
     /// (upholds the SEAL). Whole-program so cross-module `IrType::Enum`
     /// references resolve soundly.
     enum_serde: BTreeMap<(ModPath, Symbol), bool>,
+    /// Enum type symbol → whether that user enum's rendered Rust type is `Clone`
+    /// (every variant payload field's carrier is `Clone`, including the promoted
+    /// `Arc<dyn Fn>` `SharedFun` slot). Computed by a monotone whole-program
+    /// fixpoint parallel to [`Self::enum_derivable`], through
+    /// [`ipe_ir::carrier_is_clone`] (a strictly WEAKER property — the `SharedFun`
+    /// carrier is `Clone` but not `Debug`/`PartialEq`). A `is_clone`-but-not-
+    /// `is_derivable` enum gets a HAND-WRITTEN `impl Clone` in [`emit_enum`]; the
+    /// property Phase 2's function-carrying enum payloads rely on to be
+    /// duplicable. `enum_is_derivable ⇒ enum_is_clone` (a `CDPeq` enum is
+    /// `Clone`), so the two Clone paths never both emit.
+    enum_clone: BTreeMap<(ModPath, Symbol), bool>,
     /// Function id → Rust function name (e.g. `update` → `main_update`).
     func_names: BTreeMap<FuncId, String>,
     /// Every distinct record shape synthesised for the program, in emission
@@ -635,6 +646,45 @@ pub(crate) struct EmitCtx<'a> {
     /// set is the canonical key: every `IrType::Record` and every record
     /// literal resolves to its struct through it.
     record_by_fieldset: BTreeMap<Vec<String>, usize>,
+}
+
+/// Is an enum variant payload field type `Clone`, consulting the whole-program
+/// enum-`Clone` fixpoint for referenced user enums?
+///
+/// Differs from the bare [`ipe_ir::carrier_is_clone`] leaf test in exactly two
+/// positions, matching how the derive machinery bounds a generic enum:
+///
+/// - A bare type variable ([`IrType::Generic`]) is treated as `Clone`: the
+///   emitted enum's hand-written `impl Clone` bounds every type parameter
+///   `T: Clone` (the derive would too), so a `T`-typed payload is duplicable at
+///   the generic frame. `carrier_is_clone` returns `false` for it (a bare `T`
+///   is not `Clone` without a bound), which is the right answer for a promotion
+///   test but the wrong one for the enum-decl derive test.
+/// - A referenced user enum ([`IrType::Enum`]) consults `enum_clone` (the
+///   fixpoint being computed) rather than blindly recursing its type args, so a
+///   mutually-referential enum's `Clone`-ness converges monotonically.
+fn enum_field_is_clone(ty: &IrType, enum_clone: &BTreeMap<(ModPath, Symbol), bool>) -> bool {
+    match ty {
+        // Bounded at the generic frame — `Clone` by the emitted `T: Clone` bound.
+        IrType::Generic(_) => true,
+        IrType::Enum { home, name, args } => {
+            enum_clone
+                .get(&(home.clone(), *name))
+                .copied()
+                .unwrap_or(true)
+                && args.iter().all(|a| enum_field_is_clone(a, enum_clone))
+        }
+        // Transparent carriers recurse; every leaf defers to `carrier_is_clone`.
+        IrType::Maybe(e) | IrType::List(e) | IrType::Set(e) => enum_field_is_clone(e, enum_clone),
+        IrType::Result(a, b) | IrType::Dict(a, b) => {
+            enum_field_is_clone(a, enum_clone) && enum_field_is_clone(b, enum_clone)
+        }
+        IrType::Tuple(es) => es.iter().all(|e| enum_field_is_clone(e, enum_clone)),
+        IrType::Record(fields) => fields.values().all(|f| enum_field_is_clone(f, enum_clone)),
+        IrType::Ui { msg, .. } => enum_field_is_clone(msg, enum_clone),
+        IrType::WebRoute(page) => enum_field_is_clone(page, enum_clone),
+        other => ipe_ir::carrier_is_clone(other),
+    }
 }
 
 impl<'a> EmitCtx<'a> {
@@ -894,6 +944,42 @@ impl<'a> EmitCtx<'a> {
             }
         }
 
+        // seal: whole-program enum-Clone fixpoint, computed identically to
+        // `enum_derivable` above but through `ipe_ir::carrier_is_clone` (whose
+        // OK leaf set is a strict SUPERSET — the `Arc<dyn Fn>` `SharedFun`
+        // carrier is `Clone` yet not `Debug`/`PartialEq`). Every user enum
+        // starts optimistic (Clone) and is monotonically demoted if a variant
+        // payload reaches a non-`Clone` leaf (a `Box<dyn Fn>` / `FnOnceChain` /
+        // opaque effect handle) or a (currently-estimated) non-`Clone` enum.
+        // Read by `emit_enum` to gate the hand-written `impl Clone` on a
+        // `Clone`-but-not-`CDPeq` enum (a function-carrying payload on the
+        // `SharedFun` carrier), the Phase-2 companion of the record `is_clone`
+        // tier.
+        let mut enum_clone: BTreeMap<(ModPath, Symbol), bool> =
+            enum_variants.keys().map(|k| (k.clone(), true)).collect();
+        loop {
+            let mut to_demote: Vec<(ModPath, Symbol)> = Vec::new();
+            {
+                for (key, variants) in &enum_variants {
+                    if !enum_clone.get(key).copied().unwrap_or(true) {
+                        continue;
+                    }
+                    let ok = variants.iter().all(|(_, fields)| {
+                        fields.iter().all(|f| enum_field_is_clone(f, &enum_clone))
+                    });
+                    if !ok {
+                        to_demote.push(key.clone());
+                    }
+                }
+            }
+            if to_demote.is_empty() {
+                break;
+            }
+            for s in to_demote {
+                enum_clone.insert(s, false);
+            }
+        }
+
         let mut record_structs = Vec::with_capacity(shapes.len());
         let mut record_by_fieldset = BTreeMap::new();
         let mut used_names: BTreeSet<String> = BTreeSet::new();
@@ -1049,6 +1135,7 @@ impl<'a> EmitCtx<'a> {
             enum_variants,
             enum_derivable,
             enum_serde,
+            enum_clone,
             func_names,
             record_structs,
             record_by_fieldset,
@@ -1190,6 +1277,18 @@ impl<'a> EmitCtx<'a> {
     /// bare enum name). Used by the Ipe.Web Model-admissibility gate.
     pub(crate) fn enum_is_serde(&self, home: &ModPath, sym: Symbol) -> bool {
         self.enum_serde
+            .get(&(home.clone(), sym))
+            .copied()
+            .unwrap_or(true)
+    }
+
+    /// Is user enum `sym`'s rendered Rust type `Clone` (every variant payload
+    /// carrier is `Clone`, including the promoted `Arc<dyn Fn>` `SharedFun`
+    /// slot)? Resolved from the whole-program Clone fixpoint at [`Self::build`].
+    /// A symbol that is not a user enum defaults to `true`. Read by [`emit_enum`]
+    /// to gate the hand-written `impl Clone` on a `Clone`-but-not-derivable enum.
+    pub(crate) fn enum_is_clone(&self, home: &ModPath, sym: Symbol) -> bool {
+        self.enum_clone
             .get(&(home.clone(), sym))
             .copied()
             .unwrap_or(true)

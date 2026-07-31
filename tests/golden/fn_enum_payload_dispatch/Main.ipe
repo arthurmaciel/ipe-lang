@@ -1,0 +1,37 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String
+
+
+-- A function stored in a user-enum variant payload: under carrier normalization
+-- the payload is the `Arc<dyn Fn>` carrier, so the enum is `Clone` and storable.
+-- Construct a variant carrying a lambda, `case`-match it, extract the function,
+-- and call it. The enum is cloned (`let dup = h`) to exercise the hand-written
+-- `impl Clone` — a `Box` carrier would fail closed at `cargo build` (E0599).
+type Handler a
+    = OnClick (Int -> a)
+    | Plain a
+
+
+runHandler : Handler Int -> Int -> Int
+runHandler h x =
+    case h of
+        OnClick f ->
+            f x
+
+        Plain v ->
+            v
+
+
+useTwice : Handler Int -> Int
+useTwice h =
+    let
+        dup =
+            h
+    in
+    runHandler h 3 + runHandler dup 4
+
+
+main =
+    Io.println (String.fromInt (useTwice (OnClick (\n -> n + 100))))

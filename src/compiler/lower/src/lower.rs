@@ -6824,6 +6824,30 @@ fn normalize_record_fun_carriers(ty: IrType) -> IrType {
     }
 }
 
+/// Flip a constructor-payload field type to the storage carrier: a function
+/// DIRECTLY in the payload becomes [`IrType::SharedFun`] (`Arc<dyn Fn>`) so the
+/// enum is `Clone`. A function reached through a nested RECORD under the payload
+/// takes the Phase-1 record flip ([`normalize_record_fun_carriers`]). A function
+/// under a nested COLLECTION/tuple stays on the `Box` carrier (still gated —
+/// Phase 3), so this only descends into positions Phase 1/2 already store.
+///
+/// This is the constructor-payload analogue of the record field flip: exactly
+/// `normalize_record_fun_carriers`'s `Fun → SharedFun` rule applied at the enum
+/// payload position instead of the record field position.
+fn normalize_enum_payload_fun_carrier(ty: IrType) -> IrType {
+    match ty {
+        // A function DIRECTLY in the payload: flip to the `Arc` carrier. Its own
+        // params/ret are direct positions and stay `Fun`.
+        IrType::Fun(ps, r) => IrType::SharedFun(ps, r),
+        // A record under the payload takes the Phase-1 record flip.
+        IrType::Record(_) => normalize_record_fun_carriers(ty),
+        // Every other payload shape (a bare leaf, a collection/tuple, another
+        // enum) is left as lowered: a collection-of-functions payload stays on
+        // the `Box` carrier and gated (Phase 3).
+        other => other,
+    }
+}
+
 /// Convert a record's function-valued FIELD VALUE to the `Arc<dyn Fn>` carrier
 /// so it constructs with `Arc::new`, matching the `SharedFun` struct field the
 /// type-side normalization produced. A top-level-function reference
@@ -8161,16 +8185,23 @@ impl<'a> Lowerer<'a> {
                     return Err(unsupported(ctor.span, Feature::Polymorphism));
                 }
                 let ir = self.ir_type_from_canon(arg, &type_params)?;
-                // a function-bearing payload field (`type Retryish e =
-                // RetryWhen (e -> Bool)`) is SOUND to declare — the
+                // Carrier normalization (Phase 2, enum payloads): a function
+                // DIRECTLY in a constructor payload is carried on the
+                // `Arc<dyn Fn>` carrier ([`IrType::SharedFun`]) so the enum is
+                // `Clone` (a hand-written `impl Clone` refcount-bumps every
+                // `SharedFun` slot). This is the type-side flip; the value-side
+                // companion promotes the fn-valued construction argument to the
+                // same carrier ([`promote_fn_field_value_carrier`] at the
+                // `Con`-ctor lowering). The two MUST agree or the emitted enum
+                // meets an `Arc`-vs-`Box` `E0308`.
+                //
+                // A function-bearing payload is SOUND to store: the
                 // derive-demotion fixpoint (`enum_is_derivable`,
                 // `ipe_backend_rust::emit_types`) drops the enum's
-                // `#[derive(Clone, Debug, PartialEq)]` whenever any field
-                // (transitively) embeds `IrType::Fun`, and the hand-written
-                // `IpeStringify` impl renders a non-derivable field as the
-                // `<fn>` placeholder instead of calling a derive. No gate
-                // needed at declaration time; see
-                // `docs/adr/0015-constructor-payload-functions-narrowed-gates.md`.
+                // `#[derive(Clone, Debug, PartialEq)]` whenever a field embeds a
+                // function, and the hand-written `IpeStringify` impl renders such
+                // a field as the `<fn>` placeholder.
+                let ir = normalize_enum_payload_fun_carrier(ir);
                 fields.push(ir);
             }
             variants.push(Variant {
@@ -12460,11 +12491,29 @@ impl<'a> Lowerer<'a> {
                             on_form: OnFormKind::NotForm,
                         });
                     }
+                    // Carrier normalization (value side, Phase 2 enum payloads):
+                    // a fn-valued argument to a USER-enum constructor fills a
+                    // payload field the type-side flip
+                    // ([`normalize_enum_payload_fun_carrier`]) stored on the
+                    // `Arc<dyn Fn>` carrier, so the argument constructs with
+                    // `Arc::new` to match. A built-in `Ok`/`Just`/`Err`/`Nothing`
+                    // routes to the runtime `IpeResult`/`IpeMaybe` enum, whose
+                    // generic payload is inferred from the argument (a `Box<dyn
+                    // Fn>` per `emit_lambda`'s trait-object pin) — left on the
+                    // `Box` carrier, unchanged.
+                    let args = if self.is_builtin_runtime_ctor(*name) {
+                        lowered_args
+                    } else {
+                        lowered_args
+                            .into_iter()
+                            .map(promote_fn_field_value_carrier)
+                            .collect()
+                    };
                     Ok(Expr::Ctor {
                         home: ctor_home,
                         ty: *type_name,
                         variant: *name,
-                        args: lowered_args,
+                        args,
                     })
                 } else {
                     // Partial ctor application: eta-expand into a closure that
@@ -15101,6 +15150,17 @@ impl<'a> Lowerer<'a> {
             }
             _ => false,
         }
+    }
+
+    /// Is `name` a built-in `Maybe` / `Result` constructor (`Just` / `Nothing` /
+    /// `Ok` / `Err`)? These route to the runtime `IpeMaybe` / `IpeResult` enums,
+    /// whose fn payloads stay on the `Box` carrier — so the value-side carrier
+    /// promotion for user-enum payloads must skip them.
+    fn is_builtin_runtime_ctor(&self, name: Symbol) -> bool {
+        name == self.builtins.just
+            || name == self.builtins.nothing
+            || name == self.builtins.ok
+            || name == self.builtins.err
     }
 
     /// The declared payload arity of a constructor. Name resolution guarantees
