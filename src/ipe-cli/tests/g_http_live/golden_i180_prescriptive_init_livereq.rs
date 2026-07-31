@@ -150,12 +150,24 @@ fn live_init_unit_is_rejected() {
 
 /// `IPE_E2E` tier: the `init : WebReq` project must cargo-build (isolated
 /// target dir) — the SEAL check that ipe-0 implies cargo-0.
+///
+/// Emits into a PRIVATE dir this test alone owns, so a sibling compile-only
+/// test re-emitting into `ok_out_dir()` in parallel can never delete rustc's
+/// working directory mid-build.
 #[test]
 fn live_init_reads_req_path_cargo_builds() {
     if std::env::var("IPE_E2E").is_err() {
         return;
     }
-    live_init_reads_req_path_field();
+    let out = std::env::temp_dir().join("i180_init_reads_req_path_e2e_out");
+    let Some(result) = compile(LIVE_INIT_READS_REQ_PATH, "reads_req_path_e2e", &out) else {
+        return;
+    };
+    assert!(
+        result.is_ok(),
+        "`init : WebReq -> …` reading `req.path` must be ipe-0, got: {:?}",
+        result.err(),
+    );
 
     let target = std::env::temp_dir()
         .join("i180")
@@ -163,7 +175,7 @@ fn live_init_reads_req_path_cargo_builds() {
     let build = std::process::Command::new("cargo")
         .arg("build")
         .env("CARGO_TARGET_DIR", &target)
-        .current_dir(ok_out_dir())
+        .current_dir(&out)
         .output()
         .expect("cargo must spawn");
     assert!(

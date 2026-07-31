@@ -28,22 +28,27 @@ fn repo_root() -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-/// Run the ipe pipeline on `tests/golden/live_let_bound_routes/Main.ipe`.
-/// Returns `None` when the embedded runtime is unavailable (skip).
-fn run_ipec() -> Option<Result<(), ipe::CliError>> {
+/// Run the ipe pipeline on `tests/golden/live_let_bound_routes/Main.ipe`,
+/// emitting into `out`. Returns `None` when the embedded runtime is
+/// unavailable (skip).
+fn run_ipec(out: &Path) -> Option<Result<(), ipe::CliError>> {
     let root = repo_root();
     let entry = root
         .join("tests")
         .join("golden")
         .join("live_let_bound_routes")
         .join("Main.ipe");
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m7_live_let_bound_routes_emit");
-    let _ = std::fs::remove_dir_all(&out);
+    let _ = std::fs::remove_dir_all(out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
         return None;
     };
-    Some(ipe::build(&entry, &out, &runtime))
+    Some(ipe::build(&entry, out, &runtime))
+}
+
+/// The emit dir shared by the compile-only assertions.
+fn compile_out() -> PathBuf {
+    PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m7_live_let_bound_routes_emit")
 }
 
 /// IPE-I0001 regression: a `Web.app` whose `routes` field references a
@@ -57,7 +62,7 @@ fn run_ipec() -> Option<Result<(), ipe::CliError>> {
 /// `Web.route`, not at the list-collection level.
 #[test]
 fn live_let_bound_routes_compiles_no_ice() {
-    let Some(result) = run_ipec() else {
+    let Some(result) = run_ipec(&compile_out()) else {
         return;
     };
     assert!(
@@ -80,11 +85,11 @@ fn live_let_bound_routes_compiles_no_ice() {
 /// in `routeTable`'s signature. Compile-only — always runs.
 #[test]
 fn live_let_bound_routes_renders_route_page() {
-    let Some(result) = run_ipec() else {
+    let out = compile_out();
+    let Some(result) = run_ipec(&out) else {
         return;
     };
     assert!(result.is_ok(), "must compile: {:?}", result.err());
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m7_live_let_bound_routes_emit");
     let main_rs = std::fs::read_to_string(out.join("src").join("main.rs"))
         .expect("emitted main.rs must exist");
     assert!(
@@ -102,11 +107,14 @@ fn live_let_bound_routes_cargo_builds() {
     if std::env::var("IPE_E2E").is_err() {
         return;
     }
-    let Some(result) = run_ipec() else {
+    // Emit into a PRIVATE dir this test alone owns, so a compile-only sibling
+    // re-emitting into `compile_out()` in parallel cannot delete rustc's
+    // working directory mid-build.
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m7_live_let_bound_routes_e2e_emit");
+    let Some(result) = run_ipec(&out) else {
         return;
     };
     assert!(result.is_ok(), "must compile: {:?}", result.err());
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m7_live_let_bound_routes_emit");
     let target = std::env::temp_dir().join("r4").join("m7_let_bound_routes");
     let build = std::process::Command::new("cargo")
         .arg("build")
