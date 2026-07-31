@@ -15,14 +15,6 @@
 //! ```
 
 use std::collections::{BTreeMap, BTreeSet};
-// `rustfmt` is spawned as a subprocess (see `run_rustfmt`), which is a native-
-// only path — a browser cannot spawn a process. On `wasm32` the fmt pass is
-// disabled (`rust_fmt_disabled`), so these imports and `run_rustfmt` are not
-// compiled there.
-#[cfg(not(target_arch = "wasm32"))]
-use std::io::Write;
-#[cfg(not(target_arch = "wasm32"))]
-use std::process::{Command, Stdio};
 
 use ipe_backend::{EmittedProject, RelPath};
 use ipe_diagnostics::{DResult, Diagnostic};
@@ -35,150 +27,6 @@ use crate::emit_types::{emit_enum, emit_record_struct};
 use crate::preamble::{epilogue, preamble};
 use crate::rust_file;
 use crate::rust_file::{Partitioned, RustFileId, partition_items};
-
-/// The Rust edition every emitted crate targets; passed to `rustfmt` so a piped
-/// format matches what `cargo fmt` produces when it reads the emitted
-/// `Cargo.toml`'s `edition = "2024"`.
-const EMITTED_EDITION: &str = "2024";
-
-/// Format every generated Rust source file in `files` in place, so the emitted
-/// crate is `cargo fmt --check`-clean. Only `src/**.rs` files the backend itself
-/// generated (`main.rs`, `ipe_mods/*.rs`, `ipe_runtime/mod.rs`, `config.rs`,
-/// `ffi.rs`) are formatted; the vendored runtime source (copied verbatim from
-/// the already-clean runtime tree) and non-Rust files (`Cargo.toml`, the wasm
-/// `www/` shell) are left untouched.
-///
-/// The backend concatenates fixed templates with genuinely-emitted expressions,
-/// which drift from `rustfmt`'s canonical form (line-length wrapping, `mod`/`use`
-/// ordering, blank-line collapsing) — matching those rules by construction would
-/// amount to reimplementing `rustfmt`, so the canonical formatter is the source
-/// of truth. Runs `rustfmt` over each file's bytes on stdin (no path argument, so
-/// it cannot recurse into `mod` files) with the emitted crate's edition and style
-/// edition, making the piped result byte-identical to `cargo fmt`.
-///
-/// Opting out (`IPE_RUST_FMT=0`) skips the pass entirely, for latency-sensitive
-/// callers that do not need canonical output — the `ipe watch` hot loop, whose
-/// only contract is that the emitted crate compiles and runs, not that it is
-/// `rustfmt`-clean. The golden byte-comparison and the example sweep leave the
-/// variable unset, so they always format.
-///
-/// # Errors
-///
-/// Returns a [`Diagnostic`] if `rustfmt` cannot be spawned (absent toolchain
-/// component), exits non-zero, or produces non-UTF-8 output. Formatting fails
-/// closed rather than shipping unformatted output: the emitted crate would then
-/// fail `cargo fmt --check`, and the byte-compared goldens would drift silently.
-fn format_generated_rust_files(files: &mut BTreeMap<RelPath, String>) -> DResult<()> {
-    if rust_fmt_disabled() {
-        return Ok(());
-    }
-    // Unreachable on `wasm32` (`rust_fmt_disabled` is always `true` there); the
-    // `run_rustfmt` subprocess path is not compiled for wasm.
-    #[cfg(not(target_arch = "wasm32"))]
-    for (path, text) in files.iter_mut() {
-        if !is_generated_rust_path(path.as_str()) {
-            continue;
-        }
-        *text = run_rustfmt(text)?;
-    }
-    Ok(())
-}
-
-/// Whether the post-emit `rustfmt` pass is disabled.
-///
-/// On `wasm32` (the in-browser compiler) it is ALWAYS disabled: `rustfmt` is a
-/// separate process, and a browser cannot spawn one. This is a platform
-/// limitation, not a correctness compromise — the emitted Rust is valid, just
-/// not canonically formatted. The playground shows source, it does not
-/// byte-compare against goldens.
-///
-/// Off `wasm32` it honours `IPE_RUST_FMT=0`; any other value (or unset) leaves
-/// formatting enabled, so the fmt-clean invariant the goldens and sweep depend
-/// on holds by default.
-fn rust_fmt_disabled() -> bool {
-    #[cfg(target_arch = "wasm32")]
-    {
-        true
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        std::env::var("IPE_RUST_FMT").is_ok_and(|v| v == "0")
-    }
-}
-
-/// A generated Rust source path the backend authored and must format: any `.rs`
-/// file under `src/`. The vendored `ipe_runtime` source files are copied over the
-/// top on disk by the driver and are already clean; the two the backend
-/// GENERATES (`mod.rs`, `config.rs`) are the only `ipe_runtime` entries in
-/// `files`.
-///
-/// Native only: its sole caller is the `rustfmt` loop, which is not compiled on
-/// `wasm32`.
-#[cfg(not(target_arch = "wasm32"))]
-fn is_generated_rust_path(rel: &str) -> bool {
-    rel.starts_with("src/")
-        && std::path::Path::new(rel)
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"))
-}
-
-/// Pipe `source` through `rustfmt` on stdin and return the formatted bytes.
-///
-/// Native only: spawns the `rustfmt` subprocess. On `wasm32` the fmt pass is
-/// disabled upstream (`rust_fmt_disabled` returns `true`), so this is never
-/// reached and is not compiled in.
-#[cfg(not(target_arch = "wasm32"))]
-fn run_rustfmt(source: &str) -> DResult<String> {
-    let fmt_bug = |detail: String| Diagnostic::CompilerBug {
-        where_: "ipe_backend_rust::project::run_rustfmt",
-        detail,
-    };
-
-    let child = Command::new("rustfmt")
-        .arg("--edition")
-        .arg(EMITTED_EDITION)
-        .arg("--style-edition")
-        .arg(EMITTED_EDITION)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn();
-    // `rustfmt` is an optional normalization pass — the emitter already produces
-    // well-formed, cargo-buildable Rust. When the component is absent (a machine
-    // without `rustfmt` installed), skip formatting and return the emitted source
-    // unchanged rather than failing the build; only a genuine spawn error remains
-    // a compiler bug.
-    let mut child = match child {
-        Ok(child) => child,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(source.to_owned()),
-        Err(e) => {
-            return Err(fmt_bug(format!(
-                "cannot spawn `rustfmt` (a pinned-toolchain component): {e}"
-            )));
-        }
-    };
-
-    child
-        .stdin
-        .take()
-        .ok_or_else(|| fmt_bug("rustfmt child stdin was not piped".to_owned()))?
-        .write_all(source.as_bytes())
-        .map_err(|e| fmt_bug(format!("cannot write source to rustfmt stdin: {e}")))?;
-
-    let output = child
-        .wait_with_output()
-        .map_err(|e| fmt_bug(format!("cannot read rustfmt output: {e}")))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(fmt_bug(format!(
-            "rustfmt exited {:?}: {}",
-            output.status.code(),
-            stderr.trim()
-        )));
-    }
-    String::from_utf8(output.stdout)
-        .map_err(|e| fmt_bug(format!("rustfmt produced non-UTF-8 output: {e}")))
-}
 
 /// The canonical emit template, embedded at compile time. The fixed
 /// runtime-bindings block (kernel wrappers) is an exact substring of it. This is
@@ -1346,7 +1194,6 @@ fn assemble_project_files(
             RelPath::new("www/boot.js")?,
             "import init from \"./pkg/ipe_app.js\";\ninit();\n".to_owned(),
         );
-        format_generated_rust_files(&mut files)?;
         return Ok(EmittedProject {
             files,
             cargo_toml: WASM_CARGO_TOML.to_owned(),
@@ -1590,7 +1437,6 @@ fn assemble_project_files(
             })?;
         main.push_str("\nmod ffi;\n");
     }
-    format_generated_rust_files(&mut files)?;
     Ok(EmittedProject { files, cargo_toml })
 }
 
@@ -1888,7 +1734,15 @@ pub fn emit_module_file(ctx: &EmitCtx, program: &Program, home: &RustFileId) -> 
             out.push_str(&pub_crate_item(&emit_enum(ctx, def)?));
         }
         for &func in funcs {
-            out.push_str(&pub_crate_item(&emit_func(ctx, func)?));
+            // `pub(crate) fn ` is emitted directly (not by rewriting a rendered
+            // `pub fn `) so the signature's width decision already accounts for the
+            // wider prefix — a borderline signature breaks here that would stay flat
+            // in the single-file `pub fn ` layout.
+            out.push_str(&crate::emit_expr::emit_func_vis(
+                ctx,
+                func,
+                "pub(crate) fn ",
+            )?);
         }
     }
 
@@ -2005,23 +1859,22 @@ pub fn assemble_split_manifest(
     assemble_project_files(ctx, rust_sources)
 }
 
-/// Narrow a rendered top-level item's leading `pub ` visibility to
-/// `pub(crate) `, for emission inside a `mod` block (design doc §2.1).
+/// Narrow a rendered enum's leading `pub ` visibility to `pub(crate) `, for
+/// emission inside a `mod` block (design doc §2.1).
 ///
-/// `emit_enum`/`emit_func` render user items with a bare `pub ` prefix (a
-/// top-level `main.rs` declaration). Inside a per-module `mod` file the crate
-/// root re-exports them via a glob barrel, so `pub(crate)` is both sufficient
-/// and correct. Operates on the FIRST `pub enum `/`pub fn ` occurrence only —
-/// an enum's trailing `impl … IpeStringify` block carries no `pub`, and a
-/// rendered item's declaration keyword is always at its head (or immediately
-/// after a leading `#[derive(...)]` line for an enum) — so this narrows
-/// exactly the one declaration keyword, never a substring inside a body.
+/// `emit_enum` renders a user enum with a bare `pub ` prefix (a top-level
+/// `main.rs` declaration). Inside a per-module `mod` file the crate root
+/// re-exports it via a glob barrel, so `pub(crate)` is both sufficient and
+/// correct. Functions instead receive their `pub(crate) fn ` prefix directly
+/// from [`crate::emit_expr::emit_func_vis`] (so their signature width decision
+/// sees the wider prefix), so only the enum declaration keyword is narrowed
+/// here. Operates on the FIRST `pub enum ` occurrence only — an enum's trailing
+/// `impl … IpeStringify` block carries no `pub`, and the declaration keyword is
+/// always at the head (or immediately after a leading `#[derive(...)]` line) —
+/// so this narrows exactly that one keyword, never a substring inside a body.
 fn pub_crate_item(rendered: &str) -> String {
     if let Some(rest) = rendered.strip_prefix("pub enum ") {
         return format!("pub(crate) enum {rest}");
-    }
-    if let Some(rest) = rendered.strip_prefix("pub fn ") {
-        return format!("pub(crate) fn {rest}");
     }
     // An enum whose derivability gate emitted a `#[derive(...)]` line before
     // `pub enum` — narrow the first `\npub enum ` after that attribute.
@@ -2930,7 +2783,9 @@ impl {sv} {{
             Self::SqlTime(v) => ipe_runtime::db::SqlParam::Int(v),
             Self::SqlDecimal(v) => ipe_runtime::db::SqlParam::Text(v),
             Self::SqlMoney(v) => ipe_runtime::db::SqlParam::Text(v),
-            Self::SqlNull(inner) => ipe_runtime::db::SqlParam::Null(Box::new(inner.into_sql_param())),
+            Self::SqlNull(inner) => {{
+                ipe_runtime::db::SqlParam::Null(Box::new(inner.into_sql_param()))
+            }}
         }}
     }}
 }}

@@ -40,6 +40,12 @@ pub struct RenderConfig {
     /// measured against the full width; the reserve applies only to the LAST line
     /// the construct shares with the enclosing delimiter).
     pub reserve: usize,
+    /// Set while rendering a block body that `rustfmt`'s `Shape`-width recursion gave
+    /// up on (see [`render_brace_body_broken`]'s SHAPE-BUDGET GIVE-UP). `rustfmt`
+    /// then keeps the whole body on its ORIGINAL single line — so even an
+    /// unconditional [`Doc::HardLine`] (a statement-block separator) lays out as a
+    /// single space here, inlining a `{ let x = …; x }` block onto the one line.
+    inline_hard: bool,
 }
 
 impl Default for RenderConfig {
@@ -47,6 +53,7 @@ impl Default for RenderConfig {
         Self {
             max_width: 100,
             reserve: 0,
+            inline_hard: false,
         }
     }
 }
@@ -159,8 +166,15 @@ fn render_at(
             }
         }
         Doc::HardLine => {
-            out.push('\n');
-            push_indent(indent, out);
+            // A given-up block body inlines onto its single original line: an
+            // unconditional break becomes a single space, so `{ let x = …; x }` lays
+            // out flat inside the braces `rustfmt` kept on one line.
+            if cfg.inline_hard {
+                out.push(' ');
+            } else {
+                out.push('\n');
+                push_indent(indent, out);
+            }
         }
         Doc::IfBroken(s) => {
             // Renders only when the nearest enclosing group broke (`!flat`) —
@@ -252,19 +266,203 @@ fn render_at(
         } => {
             render_type_bound(ptr_open, head, traits, close, cfg, indent, col, flat, out);
         }
-        Doc::ElidableParen { inner } => {
-            // Drop the redundant wrapping parens when `inner` already renders
-            // parenthesized (a doubled `(( … ))` collapses to `( … )`), matching
-            // `rustfmt`. The probe measures `inner`'s first rendered character.
-            if inner_renders_parenthesized(inner, cfg, eff_col(out, col), indent) {
-                render_at(inner, cfg, indent, col, flat, out);
-            } else {
-                out.push('(');
-                let c = current_col(out);
-                render_at(inner, cfg, indent, c, flat, out);
-                out.push(')');
+        Doc::ElidableParen { inner } => render_elidable_paren(inner, cfg, indent, col, flat, out),
+        Doc::OrPattern { alts } => render_or_pattern(alts, cfg, col, flat, out),
+        Doc::MethodChain { receiver, method } => {
+            render_method_chain(receiver, method, cfg, indent, col, flat, out);
+        }
+    }
+}
+
+/// The columns `rustfmt` reserves out of an arm's width before rewriting its
+/// pattern — the ` => {` that may follow the pattern on its line.
+const ARM_PATTERN_RESERVE: usize = 5;
+
+/// Render a [`Doc::OrPattern`]: the alternatives joined ` | ` when the flat run
+/// fits the arm-pattern width, else one alternative per line at the pattern's
+/// begin column, each subsequent line led by `| `.
+///
+/// The fit test is `rustfmt`'s own arm-pattern shape — `max_width` less
+/// [`ARM_PATTERN_RESERVE`] — measured against `cfg.max_width` directly rather
+/// than `cfg.margin()`: `rustfmt` builds the pattern's shape fresh from the
+/// arm's indent, so the reservation REPLACES the enclosing trailing-sibling
+/// reserve (the ` => ` text the arm concat carries) instead of stacking on it.
+fn render_or_pattern(
+    alts: &[std::borrow::Cow<'static, str>],
+    cfg: RenderConfig,
+    col: usize,
+    flat: bool,
+    out: &mut String,
+) {
+    let start_col = eff_col(out, col);
+    // Each ` | ` between two flat alternatives is 3 columns.
+    let flat_w: usize =
+        alts.iter().map(|a| a.len()).sum::<usize>() + 3 * alts.len().saturating_sub(1);
+    if flat || start_col + flat_w + ARM_PATTERN_RESERVE <= cfg.max_width {
+        for (i, alt) in alts.iter().enumerate() {
+            if i > 0 {
+                out.push_str(" | ");
+            }
+            out.push_str(alt);
+        }
+        return;
+    }
+    // Vertical: the pattern begins its arm's fresh line, so the begin-line
+    // indent is its start column — every subsequent alternative lands there
+    // behind a front-placed `| `.
+    let begin = current_line_indent(out).unwrap_or(start_col);
+    for (i, alt) in alts.iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
+            push_indent(begin, out);
+            out.push_str("| ");
+        }
+        out.push_str(alt);
+    }
+}
+
+/// Render a [`Doc::ElidableParen`]: drop the redundant wrapping parens when `inner`
+/// already renders parenthesized (a doubled `(( … ))` collapses to `( … )`), matching
+/// `rustfmt`; otherwise wrap `inner` in a `(` … `)` pair. The probe measures `inner`'s
+/// first rendered character.
+fn render_elidable_paren(
+    inner: &Doc,
+    cfg: RenderConfig,
+    indent: usize,
+    col: usize,
+    flat: bool,
+    out: &mut String,
+) {
+    if inner_renders_parenthesized(inner, cfg, eff_col(out, col), indent) {
+        render_at(inner, cfg, indent, col, flat, out);
+    } else {
+        out.push('(');
+        let c = current_col(out);
+        render_at(inner, cfg, indent, c, flat, out);
+        out.push(')');
+    }
+}
+
+/// Render a [`Doc::MethodChain`]: the `receiver`, then the trailing `.method(…)`
+/// glued inline for a simple receiver, or dropped onto its own line at the
+/// receiver's begin-line indent when the receiver is BLOCK-SHAPED — its rendered
+/// form spans multiple lines OR contains a brace block `{ … }` (a closure body /
+/// `if` / `match` / statement block). `rustfmt` keeps the method glued only to a
+/// receiver that is a plain single-line non-brace expression (`get_or_init(|| (a /
+/// b)).clone()`); a brace-carrying receiver breaks the method to its own line even
+/// when the whole line would still fit. See [`Doc::MethodChain`]. `col` is where the
+/// receiver's first character lands.
+fn render_method_chain(
+    receiver: &Doc,
+    method: &Doc,
+    cfg: RenderConfig,
+    indent: usize,
+    col: usize,
+    flat: bool,
+    out: &mut String,
+) {
+    // The method's own line aligns with the receiver's begin-line indent — the
+    // indentation of the line the receiver starts on. When the buffer is empty the
+    // receiver was seeded at `col` (its line's indent); otherwise read the current
+    // line's leading-space count, falling back to the block indent mid-line.
+    let begin_indent = if out.is_empty() {
+        col
+    } else {
+        current_line_indent(out).unwrap_or(indent)
+    };
+    // Probe the receiver to decide whether the method glues (a simple non-brace
+    // receiver) or breaks to its own line (a block-shaped receiver). The method
+    // reserves width against the receiver's last line ONLY when it glues; a broken
+    // method lands on a fresh line whose fit is measured separately.
+    // A flat enclosing layout forces the whole chain inline: the receiver and the
+    // trailing method glue on one line, no shape probe (`rustfmt` never breaks a
+    // method chain that its parent laid out flat).
+    if flat {
+        render_at(receiver, cfg, indent, col, true, out);
+        let c = current_col(out);
+        render_at(method, cfg, indent, c, true, out);
+        return;
+    }
+    let method_w = flat_leaf_len(method);
+    let start_col = eff_col(out, col);
+    let shape = receiver_shape(receiver, cfg, start_col, indent);
+    let recv_reserve = if shape == ReceiverShape::Plain {
+        method_w
+    } else {
+        0
+    };
+    render_at(
+        receiver,
+        cfg.with_reserve(cfg.reserve + recv_reserve),
+        indent,
+        col,
+        flat,
+        out,
+    );
+    // A MULTILINE receiver ends on a de-indented block-closing line (`})` at the
+    // begin-line indent), so the method attaches at that indent. A SINGLE-LINE
+    // brace-shaped receiver (`(if …)`) indents the broken method one chain step. A
+    // PLAIN receiver glues the method inline UNLESS the glued `receiver.method` would
+    // overflow the width — then `rustfmt` drops the method onto its own line one
+    // chain step in (`"long"\n    .to_string()`). The glue overflow is measured
+    // against the FULL `max_width` (the reserve was for the glued case; a broken
+    // method lands on a fresh line whose own fit the caller measures).
+    match shape {
+        ReceiverShape::Plain => {
+            // The flat case returned early above, so here the layout is broken: a
+            // glued `receiver.method` that overflows drops the method to its own line.
+            if current_col(out) + method_w > cfg.max_width {
+                out.push('\n');
+                push_indent(begin_indent + CHAIN_BREAK_INDENT, out);
             }
         }
+        ReceiverShape::Multiline => {
+            out.push('\n');
+            push_indent(begin_indent, out);
+        }
+        ReceiverShape::SingleLineBrace => {
+            out.push('\n');
+            push_indent(begin_indent + CHAIN_BREAK_INDENT, out);
+        }
+    }
+    let c = current_col(out);
+    render_at(method, cfg, indent, c, flat, out);
+}
+
+/// The layout shape of a [`Doc::MethodChain`] receiver, which drives whether its
+/// trailing method glues and, when broken, at what indent it lands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReceiverShape {
+    /// A single-line non-brace expression (`get_or_init(|| (a / b))`): the method
+    /// glues inline.
+    Plain,
+    /// A single-line receiver carrying a brace block (`get_or_init(|| (if … {…}))`):
+    /// the method breaks to its own line one chain step in.
+    SingleLineBrace,
+    /// A multiline receiver ending on a de-indented block-closing line (`})`): the
+    /// method breaks to its own line at the begin-line indent.
+    Multiline,
+}
+
+/// Classify a [`Doc::MethodChain`] receiver's layout shape. `rustfmt` glues the
+/// trailing method only to a [`ReceiverShape::Plain`] receiver; a brace-carrying one
+/// breaks the method to its own line — at the begin-line indent when the receiver is
+/// multiline, one chain step in when it is single-line. Probed by rendering the
+/// receiver from `start_col` with no method reserve and inspecting its bytes.
+fn receiver_shape(
+    receiver: &Doc,
+    cfg: RenderConfig,
+    start_col: usize,
+    indent: usize,
+) -> ReceiverShape {
+    let mut scratch = String::new();
+    render_at(receiver, cfg, indent, start_col, false, &mut scratch);
+    if scratch.contains('\n') {
+        ReceiverShape::Multiline
+    } else if scratch.contains('{') {
+        ReceiverShape::SingleLineBrace
+    } else {
+        ReceiverShape::Plain
     }
 }
 
@@ -513,11 +711,35 @@ fn render_brace_body(
     out: &mut String,
 ) {
     let start_col = eff_col(out, col);
+    // A given-up block body (`inline_hard`) reproduces the ORIGINAL single-line text,
+    // which the string emitter always writes WITH the closure braces (`move |_| {
+    // rest }`) — `rustfmt` never strips them in a rewrite it abandoned. Keep the
+    // braces, body inline.
+    if cfg.inline_hard {
+        out.push_str("{ ");
+        render_at(body, cfg, indent, current_col(out), true, out);
+        out.push_str(" }");
+        return;
+    }
     let body_flat = flat || (!has_hard_break(body) && fits(body, cfg, start_col, indent));
     if body_flat {
         render_at(body, cfg, indent, start_col, true, out);
         return;
     }
+    render_brace_body_broken(body, cfg, indent, start_col, out);
+}
+
+/// Render a [`Doc::BraceBody`] in its BROKEN braced form unconditionally: `{`, the
+/// body on its own line at one indent step, `}` dedented back. Used both by
+/// [`render_brace_body`] when the body does not fit flat and by the call-argument
+/// combine, which forces a block-like closure body broken even when it would fit.
+fn render_brace_body_broken(
+    body: &Doc,
+    cfg: RenderConfig,
+    indent: usize,
+    start_col: usize,
+    out: &mut String,
+) {
     out.push('{');
     render_at(
         &Doc::Nest(4, Box::new(Doc::HardLine)),
@@ -528,16 +750,106 @@ fn render_brace_body(
         out,
     );
     let c = current_col(out);
-    render_at(body, cfg, indent + 4, c, false, out);
+    // SHAPE-BUDGET GIVE-UP: at a deep indent the block body's own broken layout can
+    // place an UNBREAKABLE atomic leaf (a string literal / bare identifier that
+    // `rustfmt` cannot split) past `max_width`. `rustfmt`'s `Shape`-width recursion
+    // then abandons the broken rewrite and leaves the body on its ORIGINAL single
+    // line inside the braces (an overflowing but un-splittable line). Model this by
+    // rendering the body broken to a probe (whose OWN nested blocks already resolved
+    // their give-ups, so a nested give-up's long line is a sealed, breakable-shaped
+    // unit that does NOT count here) and checking for a fresh unbreakable-atom
+    // overflow. When found, render the body flat instead. Only the block boundary
+    // gives up; a nested call's give-up is decided by its own enclosing block, so
+    // the decision does not cascade up through breakable constructs.
+    if body_broken_forces_flat(body, cfg, indent + 4, c) {
+        // Keep the whole body on its original single line, inlining even statement-
+        // block `HardLine`s to a single space (`rustfmt`'s given-up rewrite).
+        let flat_cfg = RenderConfig {
+            inline_hard: true,
+            ..cfg
+        };
+        render_at(body, flat_cfg, indent + 4, c, true, out);
+    } else {
+        render_at(body, cfg, indent + 4, c, false, out);
+    }
     out.push('\n');
     push_indent(indent, out);
     out.push('}');
 }
 
+/// Whether a block body, rendered in its BROKEN form at `indent`, would place an
+/// UNBREAKABLE atomic leaf past `max_width` — the deep-indent case where `rustfmt`
+/// abandons the broken rewrite and keeps the body on its original single line.
+///
+/// The probe renders the body broken (nested blocks resolve their OWN give-ups
+/// first, so a sealed give-up line is a breakable-shaped call that does not count);
+/// then any resulting line that OVERFLOWS `max_width` AND is a single unbreakable
+/// atom (a bare string literal / identifier / type with no top-level break point)
+/// is the fresh give-up trigger. A breakable overflowing line (`f(…)`, a call whose
+/// own break `rustfmt` would still take) is NOT a trigger — it belongs to that
+/// construct's own layout, not this block's give-up.
+fn body_broken_forces_flat(body: &Doc, cfg: RenderConfig, indent: usize, start_col: usize) -> bool {
+    let mut probe = String::new();
+    push_indent(start_col, &mut probe);
+    render_at(body, cfg, indent, start_col, false, &mut probe);
+    probe
+        .split('\n')
+        .any(|line| line.len() > cfg.max_width && line_is_unbreakable_atom(line))
+}
+
+/// Whether a rendered line, trimmed of indentation, is a single UNBREAKABLE atom:
+/// a bare string literal or an identifier/path/type with no TOP-LEVEL break point —
+/// no `(` / `[` / `{` group opener and no top-level `, ` separator outside a string
+/// or bracket. Such a line cannot be split further, so an overflowing one is where
+/// `rustfmt`'s `Shape`-width recursion gives up. A breakable line (a call `f(…)`, a
+/// list, a `let … = …`) has a top-level opener/separator and is NOT an atom — its
+/// own layout, not this block's give-up, governs it.
+fn line_is_unbreakable_atom(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let mut in_str = false;
+    let mut escaped = false;
+    let mut depth: i32 = 0;
+    let mut prev = ' ';
+    for c in trimmed.chars() {
+        if in_str {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+            prev = c;
+            continue;
+        }
+        match c {
+            '"' => in_str = true,
+            // A group opener or a top-level separator is a break point, so the line
+            // is a breakable construct (a call / list / `let`), not a single atom. A
+            // top-level space between two non-delimiter tokens (`a b`, `x = y`) is a
+            // break point too.
+            '(' | '[' | '{' | ',' => return false,
+            ' ' if depth == 0 => return false,
+            '<' => depth += 1,
+            '>' if prev != '-' => depth -= 1,
+            _ => {}
+        }
+        prev = c;
+    }
+    true
+}
+
 /// Render a [`Doc::MatchArmTail`]: the body plus its trailing comma per `rustfmt`'s
-/// arm brace/comma rule. Inline `body,` when it fits; a broken CONTROL body is
-/// wrapped in synthesized braces (comma dropped); a broken DELIMITED-tail body
-/// breaks inside its own brackets (comma kept). A `HardLine` body always breaks.
+/// arm brace/comma rule. Inline `body,` when it fits. When it overflows: a CONTROL
+/// body is always wrapped in synthesized braces (comma dropped); a DELIMITED-tail
+/// body that stays SINGLE-LINE on its own line at one indent step is ALSO wrapped in
+/// a synthesized block (`rustfmt` prefers the whole body on its own line over
+/// breaking its delimiters, comma dropped), and only a delimited body that STILL
+/// overflows at that indent breaks inside its own brackets (comma kept). A
+/// `HardLine` body always breaks.
 fn render_match_arm_tail(
     body: &Doc,
     control: bool,
@@ -551,7 +863,21 @@ fn render_match_arm_tail(
     if body_flat {
         render_at(body, cfg, indent, start_col, true, out);
         out.push(',');
-    } else if control {
+        return;
+    }
+    // rustfmt decides an overflowing arm body in three tiers (see
+    // `emit_types::render_stringify_enum_arm`): a CONTROL body is always
+    // brace-wrapped; a delimited CALL/MACRO body whose ARGUMENT TEXT fits
+    // `fn_call_width` is brace-wrapped onto its own line (rustfmt prefers the whole
+    // body single-line over breaking its delimiters); and a delimited body whose
+    // argument text exceeds `fn_call_width` breaks in place inside its own
+    // delimiters (comma kept). The gate is the argument-text width against
+    // `fn_call_width`, NOT the whole body against `max_width` — a body that fits
+    // `max_width` at `indent + 4` but whose args exceed 60 columns still breaks in
+    // place. A non-delimited body (chain, `if`/`else`) has no argument list to gate,
+    // so it falls back to the single-line-at-`indent + 4` test.
+    let block_wrap = control || (!has_hard_break(body) && body_block_wraps(body, cfg, indent));
+    if block_wrap {
         out.push('{');
         render_at(
             &Doc::Nest(4, Box::new(Doc::HardLine)),
@@ -570,6 +896,40 @@ fn render_match_arm_tail(
         render_at(body, cfg, indent, start_col, false, out);
         out.push(',');
     }
+}
+
+/// Whether an overflowing, non-control match-arm `body` is brace-wrapped onto its
+/// own line (`Pat => { body }`) rather than broken in place inside its own
+/// delimiters (`Pat => f(\n …\n),`).
+///
+/// For a delimited CALL/CTOR/MACRO body the decision is `rustfmt`'s
+/// `fn_call_width` gate: the body's ARGUMENT TEXT (the span between its
+/// delimiters, seeing through a single-argument combinable wrapper) is
+/// brace-wrapped when it fits `fn_call_width` and delimiter-broken when it does
+/// not. A body with no argument list of its own (a chain, an `if`/`else`) has no
+/// such gate, so it falls back to whether the whole body fits single-line on its
+/// own line at `indent + 4`.
+fn body_block_wraps(body: &Doc, cfg: RenderConfig, indent: usize) -> bool {
+    // See through a `Group` wrapper to the delimited construct it lays out.
+    let inner = match body {
+        Doc::Group(g) => g.as_ref(),
+        other => other,
+    };
+    if let Doc::CallArgs { open, elems, .. } = inner {
+        // Measure the argument text width: the flat span from just after the
+        // opening delimiter to just before the closing one, seeing through a
+        // single-argument combinable wrapper to the innermost combinable's own
+        // argument span (`innermost_args_width`). The absolute column is
+        // irrelevant to a width, so measure from column 0.
+        let mut scratch = String::new();
+        render_at(open, cfg, indent + 4, 0, true, &mut scratch);
+        let open_end = current_col(&scratch);
+        render_flat_elems(elems, cfg, indent + 4, &mut scratch);
+        let elems_end = current_col(&scratch);
+        let args_width = innermost_args_width(elems, open_end, elems_end);
+        return args_width <= FN_CALL_WIDTH;
+    }
+    fits_single_line(body, cfg.no_reserve(), indent + 4, indent + 4)
 }
 
 /// Render an assignment with `rustfmt`'s dedicated RHS-break layout axis. See
@@ -641,9 +1001,42 @@ fn render_assign(
     // trailer is charged against the first line only when the RHS does not break
     // internally (a single-line RHS carries the `;` on that one line).
     let rhs_indent = indent + CHAIN_BREAK_INDENT;
-    let (rhs_first_line_w, rhs_breaks) = first_line_width(rhs, cfg, rhs_indent);
+    let rhs_break_render = probe_render(rhs, cfg, rhs_indent, rhs_indent);
+    let rhs_break_first = rhs_break_render
+        .split('\n')
+        .next()
+        .unwrap_or(&rhs_break_render);
+    let rhs_break_head_w = rhs_break_first.len().saturating_sub(rhs_indent);
+    let rhs_breaks = rhs_break_render.contains('\n');
     let rhs_break_trailer = if rhs_breaks { 0 } else { trailer };
-    if no_hard_break && rhs_indent + rhs_first_line_w + rhs_break_trailer <= cfg.max_width {
+
+    // `rustfmt`'s `choose_rhs` accepts the next-line placement only when the
+    // glued alternative is not strictly required:
+    //  - GLUE-UNVIABLE: the RHS head before its open delimiter (a call's callee)
+    //    does not fit the width remaining after `prefix` plus the trailer, so the
+    //    glued rewrite fails outright and the RHS always drops to the next line —
+    //    even with an over-wide body.
+    //  - TAIL-FITS: the glued rewrite is viable, so next-line placement must
+    //    prove itself better: no line of the RHS body carries content that alone
+    //    exceeds `max_width` — an unbreakable run no indent can ever fit (the
+    //    body `rustfmt` leaves as an over-wide raw snippet). Such a body makes
+    //    the next-line form no better than the glued one, and the glued form wins.
+    let glue_col = start_col + prefix_flat_w;
+    let glue_render = probe_render(rhs, cfg, indent, glue_col);
+    let glue_head = glue_render.split('\n').next().unwrap_or(&glue_render);
+    let glue_head_core_w = glue_head
+        .trim_end_matches(['(', '{', '['])
+        .len()
+        .saturating_sub(glue_col);
+    let glue_viable = glue_col + glue_head_core_w + trailer <= cfg.max_width;
+    let rhs_tail_fits = rhs_break_render
+        .split('\n')
+        .skip(1)
+        .all(|line| line.trim_start().len() <= cfg.max_width);
+    if no_hard_break
+        && rhs_indent + rhs_break_head_w + rhs_break_trailer <= cfg.max_width
+        && (!glue_viable || rhs_tail_fits)
+    {
         // `rustfmt` leaves no trailing space on the `= ` line, so trim it before
         // the newline (the prefix carries the flat-case space after `=`).
         trim_trailing_spaces(out);
@@ -693,19 +1086,16 @@ fn flat_width(doc: &Doc, cfg: RenderConfig, start_col: usize, indent: usize) -> 
     scratch.split('\n').next().unwrap_or(&scratch).len()
 }
 
-/// The column width of `doc`'s first line when rendered from `start_col` letting
-/// its own groups decide their internal breaks (non-flat), plus whether it broke
-/// onto more than one line. `rustfmt`'s assignment RHS-break test measures this
-/// first line: a value whose head fits at the RHS indent goes to the next line
-/// even when its body then breaks below (a wide closure body block).
-fn first_line_width(doc: &Doc, cfg: RenderConfig, start_col: usize) -> (usize, bool) {
+/// `doc` rendered from `start_col` at block indent `indent`, letting its own
+/// groups decide their internal breaks (non-flat), with `start_col` leading
+/// spaces so every line's length is an absolute column. The assignment axis
+/// measures its candidate layouts (glued head, next-line head, tail lines) on
+/// this probe without touching the real output buffer.
+fn probe_render(doc: &Doc, cfg: RenderConfig, indent: usize, start_col: usize) -> String {
     let mut scratch = String::new();
     push_indent(start_col, &mut scratch);
-    render_at(doc, cfg, start_col, start_col, false, &mut scratch);
-    let mut lines = scratch.split('\n');
-    let first = lines.next().unwrap_or(&scratch);
-    let breaks = lines.next().is_some();
-    (first.len().saturating_sub(start_col), breaks)
+    render_at(doc, cfg, indent, start_col, false, &mut scratch);
+    scratch
 }
 
 /// Whether `doc` contains a [`Doc::HardLine`] that is NOT enclosed in a nested
@@ -738,7 +1128,14 @@ fn has_hard_break(doc: &Doc) -> bool {
         | Doc::StructLit { .. }
         // A `TypeBound` decides its own angle-bracket break independently; it never
         // carries a `HardLine`.
-        | Doc::TypeBound { .. } => false,
+        | Doc::TypeBound { .. }
+        // A `MethodChain` decides its own layout independently (its receiver breaks
+        // its own delimiters, the method drops to its own line), so it hides its
+        // breaks like `CallArgs`.
+        | Doc::MethodChain { .. }
+        // An `OrPattern` decides its own flat-vs-vertical layout independently
+        // and carries only text alternatives — never a hard break.
+        | Doc::OrPattern { .. } => false,
         Doc::Concat(docs) => docs.iter().any(has_hard_break),
         // `Nest` is pure indentation and `ElidableParen` pure wrapping: each forwards
         // its break behavior to its inner (a paren-block carries the statement
@@ -959,6 +1356,35 @@ fn render_call_args(
         return;
     }
 
+    render_call_args_broken(
+        open,
+        elems,
+        close,
+        trailing_comma,
+        cfg,
+        indent,
+        start_col,
+        out,
+    );
+}
+
+/// The broken layout of a [`Doc::CallArgs`]: the multiline-open glue, the last-
+/// argument combine, or the one-per-line break, in `rustfmt`'s order. Split out of
+/// [`render_call_args`] so the flat-fallback give-up can probe it before committing.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "renderer threads open/close/col/indent"
+)]
+fn render_call_args_broken(
+    open: &Doc,
+    elems: &[Doc],
+    close: &Doc,
+    trailing_comma: bool,
+    cfg: RenderConfig,
+    indent: usize,
+    start_col: usize,
+    out: &mut String,
+) {
     // MULTILINE-OPEN GLUE: the `open` itself renders multi-line — a `(func)(args)`
     // whose `func` is a `({ … })` block that breaks — but the flat argument list
     // fits on the open's LAST line. `rustfmt` glues `(args)` onto the block's closing
@@ -1116,6 +1542,17 @@ fn call_args_flat_fits(
     }
     if start_col + scratch.len() > cfg.max_width {
         return false;
+    }
+    // A sole BLOCK-LIKE argument (a `move |…|` / `|…|` closure or a brace block,
+    // possibly behind a `Box::new(` wrapper) is `rustfmt`'s `overflow_delimited_expr`:
+    // it is NOT gated by `fn_call_width`. Its flat form holds whenever the whole line
+    // fits `max_width` (checked above) and stays single-line (`{ body }` inline) — so
+    // `Box::new(move |x| { short_body })` stays on one line even though its argument
+    // text exceeds 60 columns, breaking only when the line itself overflows.
+    if let [only] = elems
+        && is_block_like(only)
+    {
+        return true;
     }
     // `fn_call_width`: an argument list wider than 60 columns breaks even when the
     // whole line still fits `max_width`. The argument text is the span from just
@@ -1391,15 +1828,20 @@ fn render_forced_break(
         // `overflow_delimited_expr` opens a block-like argument's body rather than
         // keeping it flat, even when the flat body alone would fit.
         Doc::Concat(parts) => {
-            let is_closure = matches!(parts.first(), Some(Doc::Text(h)) if h.starts_with("move |"));
+            let is_closure = matches!(parts.first(), Some(Doc::Text(h)) if is_closure_head(h));
             let last = parts.len().saturating_sub(1);
             let mut inner_budget = budget;
             for (i, p) in parts.iter().enumerate() {
                 let c = eff_col(out, col);
                 if matches!(p, Doc::CallArgs { .. } | Doc::StructLit { .. }) {
                     render_forced_break(p, combine_base, inner_budget, cfg, indent, c, out);
-                } else if is_closure && i == last {
-                    // The closure's braced body block: force it broken.
+                } else if (is_closure && i == last) || matches!(p, Doc::BraceBody(_)) {
+                    // A closure body block, or a `BraceBody` inside a wrapper like
+                    // `Box::new(move |_| <body>)`: force it broken. `rustfmt`'s
+                    // `overflow_delimited_expr` opens a block-like argument's body onto
+                    // its own line rather than keeping it flat, even when the flat body
+                    // alone would fit — so the continuation closure of a broken
+                    // `task_and_then` always braces (`Box::new(move |_| {\n … })`).
                     render_group_broken(p, cfg, indent, c, out);
                 } else {
                     if let Doc::Text(_) = p {
@@ -1416,17 +1858,29 @@ fn render_forced_break(
     }
 }
 
-/// Render a closure's braced-block `Group` with its soft breaks FORCED — the body
-/// onto its own line at one indent step, matching `rustfmt`'s `overflow_delimited_expr`
-/// which opens a block-like argument even when its flat body would fit. A non-`Group`
-/// doc (a statement block already carrying `HardLine`s) falls back to the standard
-/// non-flat render, which breaks it anyway.
+/// Render a closure's braced body block with its braces/soft breaks FORCED — the
+/// body onto its own line at one indent step, matching `rustfmt`'s
+/// `overflow_delimited_expr` which opens a block-like argument even when its flat
+/// body would fit. A `Group` body has its soft breaks forced; a `BraceBody` body is
+/// forced to its braced multiline form (a `move |…| -> R ` closure carries a `Group`
+/// body, a bare `|…| ` closure carries a `BraceBody`). Any other doc (a statement
+/// block already carrying `HardLine`s) falls back to the standard non-flat render,
+/// which breaks it anyway.
 fn render_group_broken(doc: &Doc, cfg: RenderConfig, indent: usize, col: usize, out: &mut String) {
-    if let Doc::Group(inner) = doc {
-        let start_col = eff_col(out, col);
-        render_at(inner, cfg, indent, start_col, false, out);
-    } else {
-        render_at(doc, cfg, indent, col, false, out);
+    match doc {
+        Doc::Group(inner) => {
+            let start_col = eff_col(out, col);
+            render_at(inner, cfg, indent, start_col, false, out);
+        }
+        // A `BraceBody` closure body forced to its braced multiline form: the `|…| `
+        // CAF closure body (a statement block) is opened here exactly as the
+        // `move |…| -> R` closure's `Group` body is, so the combine glues the head
+        // and breaks the body in place.
+        Doc::BraceBody(body) => {
+            let start_col = eff_col(out, col);
+            render_brace_body_broken(body, cfg, indent, start_col, out);
+        }
+        _ => render_at(doc, cfg, indent, col, false, out),
     }
 }
 
@@ -1465,10 +1919,18 @@ fn shrink_budget(parent: usize, open: &Doc) -> usize {
     FN_CALL_WIDTH.min(parent.saturating_sub(flat_leaf_len(open)))
 }
 
-/// Whether `doc` is a BLOCK-LIKE argument — a `move |…|` closure or a brace block
-/// `{ … }` — that `rustfmt`'s `overflow_delimited_expr` always glues onto the call
-/// head (breaking only its own body), rather than breaking the call one-per-line to
-/// give the argument its own line. A `Box::new(<block-like>)` wrapper counts (the
+/// Whether `head` is a closure's parameter-list head — a `move |…| ` capturing
+/// closure or a bare `|…| ` closure — that `rustfmt` glues a call head onto, letting
+/// only the closure body break. Both open the same block-like layout; the sole
+/// difference is the `move` capture keyword.
+fn is_closure_head(head: &str) -> bool {
+    head.starts_with("move |") || head == "|| "
+}
+
+/// Whether `doc` is a BLOCK-LIKE argument — a `|…|` / `move |…|` closure or a brace
+/// block `{ … }` — that `rustfmt`'s `overflow_delimited_expr` always glues onto the
+/// call head (breaking only its own body), rather than breaking the call one-per-line
+/// to give the argument its own line. A `Box::new(<block-like>)` wrapper counts (the
 /// wrapper glues and the inner block breaks). Distinct from [`is_glue_shape`], which
 /// also admits nested calls / macros / tuples that DO get their own line when they
 /// fit flat within the shared budget.
@@ -1477,9 +1939,9 @@ fn is_block_like(doc: &Doc) -> bool {
         Doc::BraceBody(_) => true,
         Doc::Group(inner) => is_block_like(inner),
         Doc::Concat(parts) => match parts.first() {
-            // A `move |…| -> R ` closure head, or a brace block `{ … }` that is not a
-            // `({` paren-wrapped statement block.
-            Some(Doc::Text(head)) if head.starts_with("move |") => true,
+            // A `|…| ` / `move |…| ` closure head, or a brace block `{ … }` that is
+            // not a `({` paren-wrapped statement block.
+            Some(Doc::Text(head)) if is_closure_head(head) => true,
             Some(Doc::Text(head)) if head.ends_with('{') && !head.starts_with('(') => true,
             // A `Box::new(<block-like>)` / `Some(<block-like>)` wrapper.
             Some(Doc::Text(head)) if head.ends_with('(') && !head.contains('{') => {
@@ -1504,10 +1966,10 @@ fn is_glue_shape(doc: &Doc) -> bool {
         Doc::CallArgs { .. } | Doc::StructLit { .. } => true,
         Doc::Group(inner) => is_glue_shape(inner),
         Doc::Concat(parts) => match parts.first() {
-            // A `move |…| -> R ` closure head followed by its braced body — a
+            // A `|…| ` / `move |…| ` closure head followed by its braced body — a
             // block-like expression `rustfmt` glues a wrapper's `(` onto, letting the
             // closure body break in place while the head stays on the wrapper's line.
-            Some(Doc::Text(head)) if head.starts_with("move |") => true,
+            Some(Doc::Text(head)) if is_closure_head(head) => true,
             // A brace block `{ … }` (closure body / statement block) or a struct
             // literal `Name { … }` — a `{`-terminated head that is NOT a `({`
             // paren-wrapped statement block (which `rustfmt` does NOT combine).
@@ -2309,5 +2771,51 @@ mod p0_tests {
         // The broken render carries a trailing comma the leaves do not — exactly the
         // documented SEAL-invisible divergence, mirroring `Doc::IfBroken`.
         assert!(render(&doc, RenderConfig::default()).contains("_y,\n)"));
+    }
+
+    #[test]
+    fn caf_closure_combines_and_method_drops_to_own_line() {
+        // The CAF shape `CELL.get_or_init(|| { … }).clone()`: `rustfmt` combines the
+        // sole closure argument onto the call head (`get_or_init(|| {` on one line,
+        // no trailing comma, `})` at the call indent) and drops the trailing
+        // `.clone()` onto its OWN line at the call's indent when the closure body
+        // broke. The body here is forced multiline (a statement block).
+        let body = Doc::concat(vec![
+            Doc::text("{"),
+            Doc::nest(
+                4,
+                Doc::concat(vec![
+                    Doc::HardLine,
+                    Doc::text("let (a, b) = (1, 2);"),
+                    Doc::HardLine,
+                    Doc::text("(a + b)"),
+                ]),
+            ),
+            Doc::HardLine,
+            Doc::text("}"),
+        ]);
+        let closure = Doc::concat(vec![Doc::text("|| "), Doc::brace_body(body)]);
+        let receiver = Doc::call_args(
+            Doc::text("CELL.get_or_init("),
+            vec![closure],
+            Doc::text(")"),
+            true,
+        );
+        let doc = Doc::method_chain(receiver, Doc::text(".clone()"));
+        let got = render_seeded(&doc, RenderConfig::default(), 4, 4);
+        // The closure combines onto the call head, and `.clone()` sits on its own
+        // line at the call indent after the multiline receiver's `})` closing line.
+        assert!(
+            got.starts_with("CELL.get_or_init(|| {\n"),
+            "closure should combine onto the call head:\n{got}"
+        );
+        assert!(
+            got.ends_with("\n    })\n    .clone()"),
+            "`.clone()` should sit on its own line at the call indent:\n{got}"
+        );
+        // SEAL: the normalized leaves carry `.clone()` glued to the receiver's
+        // closing `)` (no break), so the method-on-its-own-line layout is invisible
+        // to the leaf sequence.
+        assert!(doc.normalized_leaves().ends_with(").clone()"));
     }
 }
