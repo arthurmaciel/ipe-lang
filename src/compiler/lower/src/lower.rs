@@ -6938,6 +6938,16 @@ pub struct BuiltinCtors {
     pub ed_http_status: Symbol,
     pub ed_json_decode: Symbol,
     pub ed_custom: Symbol,
+    // ── HttpMethod ADT ──────────────────────────────────
+    // `HttpMethod` has 7 nullary verb constructors.
+    pub http_method: Symbol,
+    pub hm_get: Symbol,
+    pub hm_post: Symbol,
+    pub hm_put: Symbol,
+    pub hm_delete: Symbol,
+    pub hm_patch: Symbol,
+    pub hm_head: Symbol,
+    pub hm_options: Symbol,
 }
 
 /// The widest parameter-pattern count across the module's top-level bindings —
@@ -7534,7 +7544,30 @@ impl<'a> Lowerer<'a> {
         ctor_arity.insert((prelude_home.clone(), builtins.ed_type_mismatch), 1); // TypeMismatch(TypeInfo)
         ctor_arity.insert((prelude_home.clone(), builtins.ed_http_status), 1); // HttpStatus(Int)
         ctor_arity.insert((prelude_home.clone(), builtins.ed_json_decode), 1); // JsonDecode(String)
-        ctor_arity.insert((prelude_home, builtins.ed_custom), 1); // Custom(String), final move
+        ctor_arity.insert((prelude_home.clone(), builtins.ed_custom), 1); // Custom(String)
+        // ── HttpMethod ADT ─────────────────────────────────
+        // 7 nullary HTTP-verb constructors. Prelude built-in (no user `type`),
+        // reachable through `Ipe.Http`; seeding here lets `case m of Get -> …`
+        // validate and `Http.Post` lower as a saturated nullary construction.
+        enum_variants.insert(
+            (prelude_home.clone(), builtins.http_method),
+            vec![
+                builtins.hm_get,
+                builtins.hm_post,
+                builtins.hm_put,
+                builtins.hm_delete,
+                builtins.hm_patch,
+                builtins.hm_head,
+                builtins.hm_options,
+            ],
+        );
+        ctor_arity.insert((prelude_home.clone(), builtins.hm_get), 0);
+        ctor_arity.insert((prelude_home.clone(), builtins.hm_post), 0);
+        ctor_arity.insert((prelude_home.clone(), builtins.hm_put), 0);
+        ctor_arity.insert((prelude_home.clone(), builtins.hm_delete), 0);
+        ctor_arity.insert((prelude_home.clone(), builtins.hm_patch), 0);
+        ctor_arity.insert((prelude_home.clone(), builtins.hm_head), 0);
+        ctor_arity.insert((prelude_home, builtins.hm_options), 0); // final move
 
         Self {
             m,
@@ -18232,6 +18265,7 @@ mod tests {
     /// `docs/adr/0009-kernel-registry-single-source-and-sealed-match.md`
     /// Item 3, Step 1: "Reuse the exact `BuiltinCtors` construction ...
     /// verbatim — do not hand-roll a second copy").
+    #[allow(clippy::too_many_lines)] // straight-line interning of every built-in ctor name
     fn build_test_builtin_ctors(interner: &mut Interner) -> BuiltinCtors {
         // BuiltinCtor names (required by Lowerer::new to seed enum_variants).
         let maybe = interner.intern("Maybe").unwrap();
@@ -18279,6 +18313,15 @@ mod tests {
         let ed_http_status = interner.intern("HttpStatus").unwrap();
         let ed_json_decode = interner.intern("JsonDecode").unwrap();
         let ed_custom = interner.intern("Custom").unwrap();
+        // ── HttpMethod ADT ─────────────────────────
+        let http_method = interner.intern("HttpMethod").unwrap();
+        let hm_get = interner.intern("Get").unwrap();
+        let hm_post = interner.intern("Post").unwrap();
+        let hm_put = interner.intern("Put").unwrap();
+        let hm_delete = interner.intern("Delete").unwrap();
+        let hm_patch = interner.intern("Patch").unwrap();
+        let hm_head = interner.intern("Head").unwrap();
+        let hm_options = interner.intern("Options").unwrap();
 
         BuiltinCtors {
             maybe,
@@ -18326,6 +18369,15 @@ mod tests {
             ed_http_status,
             ed_json_decode,
             ed_custom,
+            // ── HttpMethod ─────────────────────────
+            http_method,
+            hm_get,
+            hm_post,
+            hm_put,
+            hm_delete,
+            hm_patch,
+            hm_head,
+            hm_options,
         }
     }
 

@@ -8242,6 +8242,9 @@ mod registry_phase_c_tests {
     const FIRST_SCHEMED: &[StdlibKernel] = {
         use StdlibKernel as K;
         &[
+            // Http method ADT accessors (Ipê-new, no legacy oracle).
+            K::HttpMethodFromString,
+            K::HttpMethodToString,
             // String (33 — beyond the relocated `fromInt`/`fromFloat`)
             K::StringLength,
             K::StringIsEmpty,

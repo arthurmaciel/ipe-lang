@@ -193,6 +193,14 @@ pub fn lower(
         ed_http_status: interner.intern("HttpStatus").map_err(homeless)?,
         ed_json_decode: interner.intern("JsonDecode").map_err(homeless)?,
         ed_custom: interner.intern("Custom").map_err(homeless)?,
+        http_method: interner.intern("HttpMethod").map_err(homeless)?,
+        hm_get: interner.intern("Get").map_err(homeless)?,
+        hm_post: interner.intern("Post").map_err(homeless)?,
+        hm_put: interner.intern("Put").map_err(homeless)?,
+        hm_delete: interner.intern("Delete").map_err(homeless)?,
+        hm_patch: interner.intern("Patch").map_err(homeless)?,
+        hm_head: interner.intern("Head").map_err(homeless)?,
+        hm_options: interner.intern("Options").map_err(homeless)?,
     };
     lower::Lowerer::new(
         m,
