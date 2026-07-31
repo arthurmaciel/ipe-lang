@@ -1,19 +1,26 @@
-//! Fn-value-reuse COMPOSITE promotion — relaxing the composite side of the
-//! fail-closed IPE-L0127 / IPE-L0107 gates for a reused record-of-functions.
+//! Function values in record fields — the `SharedFun` carrier under carrier
+//! normalization (Phase 1).
 //!
-//! A closed anon record whose fields include function values, reused as a value
-//! (each field read is a non-call use of the whole record), is promoted by
-//! flipping its function slots from the `Box<dyn Fn>` carrier to the `Clone`
-//! `Arc<dyn Fn>` carrier ([`ipe_ir::IrType::SharedFun`]). The whole struct then
-//! derives a hand-written `Clone`, so the N-1 last-use clone rewrite makes it
-//! move-safe. The promotion fires ONLY under a whole-value containment +
-//! whole-clonable precondition; every shape outside it stays fail-closed.
+//! A record whose fields include function values carries those slots on the
+//! `Clone` `Arc<dyn Fn>` carrier ([`ipe_ir::IrType::SharedFun`]) — always, as a
+//! total function of the record's shape. The whole struct then gets a
+//! hand-written `Clone`, so the N-1 last-use clone rewrite makes it move-safe.
+//! The record is storable regardless of whether it escapes; a record that also
+//! carries a non-`Clone` field (`Task`) still fails closed on reuse.
 //!
 //! | Fixture | Shape | Outcome |
 //! |---|---|---|
-//! | `fn_record_reuse_promoted` | record of two functions + data, reused | promoted; builds + prints `len: 8` |
-//! | `fn_record_reuse_escapes` | that record RETURNED from a function | fail-closed IPE-L0107 (not contained) |
+//! | `fn_record_reuse_promoted` | record of two functions + data, reused | stored; builds + prints `len: 8` |
+//! | `fn_record_reuse_escapes` | that record RETURNED from a function | stored; builds + prints `12` |
 //! | `fn_record_reuse_mixed` | fn field + `Task` field, reused | fail-closed IPE-L0127 (not whole-clonable) |
+//!
+//! Carrier normalization (Phase 1) makes a function in a record field always the
+//! `Arc<dyn Fn>` carrier — a total function of the record's shape, not a
+//! containment-gated promotion. So the escaping record (returned from `mk`) now
+//! stores and reuses soundly: every occurrence of its shape agrees on `Arc` by
+//! construction, with no frontier a `Box`-carried sibling could reach. The mixed
+//! record still fails closed — its `Task` field is not `Clone`, so the whole
+//! record cannot be, independent of the fn-slot carrier.
 //!
 //! A `Send`-not-`Sync` capture control is covered by the carrier-transparency
 //! argument, not a distinct fixture: the emitted `Box`/`Arc` carrier already
@@ -109,10 +116,29 @@ fn record_of_functions_reuse_end_to_end() {
 }
 
 #[test]
-fn escaping_record_of_functions_stays_fail_closed() {
-    // The record is returned from `mk`, so it is not contained; the escaping
-    // literal is rejected as a first-class-function record field (IPE-L0107).
-    assert_fail_closed("fn_record_reuse_escapes", ipe_diagnostics::IPE_L0107);
+fn escaping_record_of_functions_builds() {
+    // The record is returned from `mk`. Under carrier normalization its fn field
+    // is the `Arc<dyn Fn>` carrier at every occurrence, so the escaping value
+    // stores and reuses soundly — builds where it once failed closed (IPE-L0107).
+    let root = repo_root();
+    let entry = entry_of(&root, "fn_record_reuse_escapes");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("fn_record_reuse_escapes_build");
+    let _ = std::fs::remove_dir_all(&out);
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return;
+    };
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "escaping record must build: {:?}",
+        built.err()
+    );
+}
+
+#[test]
+fn escaping_record_of_functions_end_to_end() {
+    // `useMk (mk 3)` = `c.f c.n + c.f c.n` = `(3+3)+(3+3)` = `12`.
+    assert_e2e_prints("fn_record_reuse_escapes", "12\n");
 }
 
 #[test]

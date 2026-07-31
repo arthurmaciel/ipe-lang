@@ -32,6 +32,8 @@ mod golden_error_expect_err_288;
 mod golden_error_nominal_payload;
 #[path = "g_fn_pattern/golden_firstclass.rs"]
 mod golden_firstclass;
+#[path = "g_fn_pattern/golden_fn_record_field.rs"]
+mod golden_fn_record_field;
 #[path = "g_fn_pattern/golden_function_field_gate.rs"]
 mod golden_function_field_gate;
 #[path = "g_fn_pattern/golden_function_payload_gate.rs"]
