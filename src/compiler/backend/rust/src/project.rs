@@ -495,6 +495,22 @@ const RUNTIME_MOD_RS_HTTP_CLIENT_APPEND: &str = "pub mod http_client;\npub use h
 /// module (`dead_code`).
 const RUNTIME_MOD_RS_SSRF_APPEND: &str = "mod ssrf;\n";
 
+// ── Ipe.Config — TOML/YAML decoders ─────────────────────────────────────────
+
+/// Lines appended to `ipe_runtime/mod.rs` when the program uses an `Ipe.Config`
+/// decoder that reaches the `config_decode` runtime module.
+///
+/// `config_decode.rs` (the `Config.decodeToml` / `decodeYaml` / `decodeJson` /
+/// `loadFromFile` front-ends plus the `nullable` / `maybe` / `dict`
+/// combinators) is vendored into every emitted crate but declared only on
+/// demand — it is the sole consumer of the `toml` and `serde_yaml` crates,
+/// which [`config_cargo_toml`] adds under the same condition. It is a leaf
+/// module (no other runtime surface calls into it), so it is declared exactly
+/// when the program reaches it directly, and never forced on transitively. The
+/// always-on `config` module (the `Ipe.Config` environment-variable surface)
+/// stays unconditional and is unaffected.
+const RUNTIME_MOD_RS_CONFIG_APPEND: &str = "pub mod config_decode;\npub use config_decode::*;\n";
+
 // ── Shared transitive dep: http_header ──────────────────────────────────────
 //
 // `http_header.rs` (a dependency-free leaf exposing `canonical_header`) is part
@@ -1364,6 +1380,17 @@ fn assemble_project_files(
     } else {
         cargo_toml
     };
+    // Ipe.Config TOML/YAML decoders (`toml` + `serde_yaml`): pulled in only when
+    // the program reaches the `config_decode` runtime module (`Config.decodeToml`
+    // / `decodeYaml` / `decodeJson` / `loadFromFile`, or `nullable` / `maybe` /
+    // `dict`). Both crates are leaves — a JSON-only or non-Config program pulls
+    // neither. `config_decode` is not reached by any other surface, so the flag
+    // alone gates it.
+    let cargo_toml = if ctx.uses_config {
+        config_cargo_toml(&cargo_toml)?
+    } else {
+        cargo_toml
+    };
     // TEA runtime: `tea.rs` drives its event loop over a `tokio::sync::mpsc`
     // channel, so any program that pulls the `tea` module needs tokio's `"sync"`
     // feature. The union mirrors the `tea` mod.rs append below (a `Cmd`/`Sub`
@@ -1409,6 +1436,14 @@ fn assemble_project_files(
         }
         if uses_http_client || ctx.uses_websocket {
             mod_rs.push_str(RUNTIME_MOD_RS_SSRF_APPEND);
+        }
+        // Ipe.Config TOML/YAML decoders. `config_decode` (the sole consumer of
+        // the `toml` + `serde_yaml` crates) is declared when the program reaches
+        // it directly — it is a leaf module no other surface calls into. A
+        // program that only reads env vars (`config`) or decodes JSON keeps it
+        // absent, dropping both crates.
+        if ctx.uses_config {
+            mod_rs.push_str(RUNTIME_MOD_RS_CONFIG_APPEND);
         }
         // `tea` must be declared whenever any included module's `use crate::tea`
         // closure references it — NOT only when user code names a TEA kernel
@@ -2723,6 +2758,46 @@ fn email_cargo_toml(base: &str) -> DResult<String> {
     let mut result = String::with_capacity(base.len() + lettre_dep.len());
     result.push_str(base.get(..anchor_pos).unwrap_or(""));
     result.push_str(&lettre_dep);
+    result.push_str(base.get(anchor_pos..).unwrap_or(""));
+    Ok(result)
+}
+
+/// Build the config-decoder-enabled `Cargo.toml` by appending the `toml` and
+/// `serde_yaml` dependencies before `[profile.dev]`.
+///
+/// `config_decode.rs` (the vendored `Ipe.Config` TOML/YAML front-ends) is the
+/// sole consumer of these two crates: `Config.decodeToml` parses with `toml`,
+/// `Config.decodeYaml` with `serde_yaml`, and `Config.loadFromFile` dispatches
+/// to either by file extension. Both are leaf dependencies (nothing else in the
+/// base manifest pulls them), so gating them here keeps a program that never
+/// touches the TOML/YAML surface — including a JSON-only `Config` program, whose
+/// combinators emit into the always-on `json` module — free of both crates.
+///
+/// The versions come from the [`crate_specs`] SSOT (drift-guarded against
+/// `runtime/Cargo.toml`).
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] if the `[profile.dev]` anchor is absent —
+/// a golden-drift invariant violation (fail-loud, never a silent no-op).
+fn config_cargo_toml(base: &str) -> DResult<String> {
+    const PROFILE_ANCHOR: &str = "[profile.dev]";
+    let deps = format!(
+        "{} = \"{}\"\n{} = \"{}\"\n\n",
+        crate_specs::TOML.name,
+        crate_specs::TOML.version,
+        crate_specs::SERDE_YAML.name,
+        crate_specs::SERDE_YAML.version,
+    );
+    let anchor_pos = base
+        .find(PROFILE_ANCHOR)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::config_cargo_toml",
+            detail: format!("Cargo.toml anchor {PROFILE_ANCHOR:?} not found — golden drifted"),
+        })?;
+    let mut result = String::with_capacity(base.len() + deps.len());
+    result.push_str(base.get(..anchor_pos).unwrap_or(""));
+    result.push_str(&deps);
     result.push_str(base.get(anchor_pos..).unwrap_or(""));
     Ok(result)
 }

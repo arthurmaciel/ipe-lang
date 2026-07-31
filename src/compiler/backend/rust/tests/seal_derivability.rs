@@ -47,6 +47,7 @@ fn program_with_web(
             uses_tea: false,
             uses_server: false,
             uses_http: false,
+            uses_config: false,
             uses_ui: uses_web,
             uses_web,
             uses_tui: false,

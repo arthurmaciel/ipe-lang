@@ -5854,6 +5854,37 @@ impl StdlibKernel {
         )
     }
 
+    /// `true` when this variant emits a symbol that lives in the `config_decode`
+    /// runtime module — the format front-ends (`Config.decodeToml` /
+    /// `decodeYaml` / `decodeJson` / `loadFromFile`) and the three
+    /// `config_decode`-own combinators (`Config.nullable` / `maybe` / `dict`).
+    ///
+    /// `config_decode` is the sole consumer of the `toml` and `serde_yaml`
+    /// crates (`decodeToml` / `decodeYaml`, and `loadFromFile` which dispatches
+    /// to both by file extension). Used by `ipe_lower` to detect `uses_config`
+    /// and by the backend to declare `config_decode` in the emitted
+    /// `ipe_runtime/mod.rs` and add `toml` + `serde_yaml` to the emitted
+    /// manifest.
+    ///
+    /// The rest of the `Ipe.Config` surface (`string` / `int` / `field` / `map`
+    /// / `oneOf` / …) is NOT here: those combinators emit the shared
+    /// `json_decode_*` / `decode_*` symbols that live in the always-on `json`
+    /// module, so a program using only them pulls neither `config_decode` nor
+    /// the `toml` / `serde_yaml` crates.
+    #[must_use]
+    pub const fn is_config(self) -> bool {
+        matches!(
+            self,
+            Self::ConfigNullable
+                | Self::ConfigMaybe
+                | Self::ConfigDict
+                | Self::ConfigDecodeToml
+                | Self::ConfigDecodeYaml
+                | Self::ConfigDecodeJson
+                | Self::ConfigLoadFromFile
+        )
+    }
+
     /// `true` when this variant belongs to the `Ipe.Auth` kernel family
     /// (`Ipe.Auth.hashPassword` / `verifyPassword` / `signToken` / `verifyToken` /
     /// `register` / `login` / `setRole` and companions).
@@ -6938,6 +6969,39 @@ mod tests {
                     k.decl().emit
                 );
             }
+        }
+    }
+
+    /// Every `Ipe.Config` kernel whose emitted symbol lives in the
+    /// `config_decode` runtime module MUST be reported by `is_config()` — that
+    /// predicate gates declaring `config_decode` and linking `toml` +
+    /// `serde_yaml`. The residency test is content-addressed: a `config_decode`
+    /// symbol is exactly one whose emit name starts with `config_`
+    /// (`config_nullable` / `config_maybe` / `config_dict` / `config_decode_*` /
+    /// `config_load_from_file`). The remaining `Config.*` combinators emit the
+    /// shared `json_decode_*` / `decode_*` symbols in the always-on `json`
+    /// module and must NOT be `is_config()` — gating on them would pull `toml` /
+    /// `serde_yaml` into a program that only decodes JSON. Both directions are
+    /// asserted, so a new `Config.*` kernel added on either side of the split
+    /// fails this test the instant its emit symbol and predicate disagree.
+    #[test]
+    fn config_predicate_tracks_config_decode_residency() {
+        for k in StdlibKernel::ALL {
+            let decl = k.decl();
+            if decl.qualifier != "Config" {
+                continue;
+            }
+            let lives_in_config_decode = decl.emit.starts_with("config_");
+            assert_eq!(
+                k.is_config(),
+                lives_in_config_decode,
+                "{k:?} emits `{}`: is_config()={} but config_decode residency={} — \
+                 the emitted crate would either fail to declare config_decode (E0433) \
+                 or pull toml/serde_yaml into a JSON-only program",
+                decl.emit,
+                k.is_config(),
+                lives_in_config_decode,
+            );
         }
     }
 

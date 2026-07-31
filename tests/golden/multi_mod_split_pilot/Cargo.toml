@@ -53,8 +53,6 @@ csv = "1"
 jsonwebtoken = "9"
 uuid = { version = "1", features = ["v4", "v7"] }
 bcrypt = "0.17"
-toml = "0.8"
-serde_yaml = "0.9"
 url = "2"
 futures-util = "0.3"
 

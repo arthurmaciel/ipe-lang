@@ -5932,6 +5932,11 @@ struct KernelUsage {
     /// and the pure request/method builders) — gates the `http_client` runtime
     /// module and the `reqwest` dependency.
     http: bool,
+    /// Any `Ipe.Config` decoder emitting into `config_decode` (`decodeToml` /
+    /// `decodeYaml` / `decodeJson` / `loadFromFile`, or `nullable` / `maybe` /
+    /// `dict`) — gates the `config_decode` runtime module and the `toml` +
+    /// `serde_yaml` dependencies.
+    config: bool,
     /// Any Ipe.Ui render kernel.
     ui: bool,
     /// Any Ipe.Css (Ipe.CssSafety) leaf kernel — independent of
@@ -5986,6 +5991,7 @@ impl KernelUsage {
             && self.tea
             && self.server
             && self.http
+            && self.config
             && self.ui
             && self.css
             && self.auth
@@ -6011,6 +6017,7 @@ impl KernelUsage {
         self.tea |= k.is_tea();
         self.server |= k.is_server();
         self.http |= k.is_http_client();
+        self.config |= k.is_config();
         self.ui |= k.is_ui();
         self.css |= k.is_css();
         self.auth |= k.is_auth();
@@ -7946,6 +7953,17 @@ impl<'a> Lowerer<'a> {
                     || f.params.iter().any(|(_, t)| ir_type_mentions_http(t))
             });
 
+        // detect `Ipe.Config` TOML/YAML decoder usage — any kernel emitting into
+        // the `config_decode` runtime module (`Config.decodeToml` / `decodeYaml`
+        // / `decodeJson` / `loadFromFile`, or the `config_decode`-own `nullable`
+        // / `maybe` / `dict`). The backend uses this flag to declare
+        // `config_decode` in the emitted `ipe_runtime/mod.rs` and add the `toml`
+        // + `serde_yaml` dependencies. No type-mention guard is needed: Config
+        // carries no runtime-owned opaque type across function signatures (it
+        // reuses the `json` module's `Decoder`), so a call site is the only way
+        // to reach `config_decode`.
+        let uses_config = kernel_usage.config;
+
         // detect Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.WebView usage.
         // TUI runtime files (tui/app.rs, tui/layout.rs, tui/focus.rs) import
         // `super::super::ui` and `super::super::html` unconditionally, so
@@ -7998,6 +8016,7 @@ impl<'a> Lowerer<'a> {
             uses_tea,
             uses_server,
             uses_http,
+            uses_config,
             uses_ui,
             uses_web,
             uses_tui,

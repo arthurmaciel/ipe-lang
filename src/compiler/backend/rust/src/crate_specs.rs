@@ -75,6 +75,14 @@ pub const REQWEST: CrateSpec = CrateSpec {
     name: "reqwest",
     version: "0.12",
 };
+pub const TOML: CrateSpec = CrateSpec {
+    name: "toml",
+    version: "0.8",
+};
+pub const SERDE_YAML: CrateSpec = CrateSpec {
+    name: "serde_yaml",
+    version: "0.9",
+};
 
 /// Every spec emitted by the surgery functions, for drift-test iteration.
 ///
@@ -96,6 +104,8 @@ pub const ALL: &[CrateSpec] = &[
     TOKIO_TUNGSTENITE,
     LETTRE,
     REQWEST,
+    TOML,
+    SERDE_YAML,
 ];
 
 #[cfg(test)]
@@ -112,7 +122,7 @@ mod tests {
             assert!(!spec.name.is_empty(), "empty crate name in ALL");
             assert!(!spec.version.is_empty(), "empty version for {}", spec.name);
         }
-        assert_eq!(ALL.len(), 14, "expected 14 surgery-emitted crate specs");
+        assert_eq!(ALL.len(), 16, "expected 16 surgery-emitted crate specs");
     }
 
     /// Extract the version from a Cargo dependency value: `"0.4"` or
