@@ -1,0 +1,30 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String
+
+
+-- A dispatch-table record of functions: a value whose fields are the operations.
+-- Under carrier normalization every fn field is the `Arc<dyn Fn>` carrier, so the
+-- record is `Clone` and storable — read a field out and call it, and reuse the
+-- whole table.
+type alias Ops =
+    { add : Int -> Int
+    , mul : Int -> Int
+    }
+
+
+ops : Ops
+ops =
+    { add = \n -> n + 10
+    , mul = \n -> n * 3
+    }
+
+
+run : Ops -> Int -> Int
+run table x =
+    table.add x + table.mul x
+
+
+main =
+    Io.println (String.fromInt (run ops 4))
