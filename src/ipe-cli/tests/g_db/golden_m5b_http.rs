@@ -110,6 +110,19 @@ fn http_builders() {
     assert_runs_and_matches_oracle("http_builders");
 }
 
+// ── HttpMethod ADT surface: value + total pattern match + converters ──────────
+
+/// Exercises the full `HttpMethod` surface that the ADT rewrite (`#343`)
+/// introduced: constructors as values (qualified `Http.Post` and unqualified
+/// `Get`), a TOTAL `case` over every constructor with no wildcard,
+/// `Http.methodToString`, and the `Http.methodFromString` parse boundary
+/// round-trip. Locks the resolve → exhaustiveness → lower → emit path for the
+/// closed verb union.
+#[test]
+fn http_method_match() {
+    assert_runs_and_matches_oracle("http_method_match");
+}
+
 // ── HttpResponse record literal + field access ────────────────────────────────
 
 /// Construct `{ status = 200, body = "ok", headers = Dict.fromList […] }`

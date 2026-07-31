@@ -413,18 +413,29 @@ impl Env {
         // built-in type's interned symbol so downstream stages recognise it.
         for union in crate::builtins::BUILTIN_UNIONS {
             let type_name = interner.intern(union.type_name)?;
+            // A built-in union whose constructors are ALSO reachable qualified
+            // through a kernel-qualifier module (e.g. `Http.Post`) names that
+            // qualifier; `None` means unqualified-only like `Just`/`Ok`.
+            let qualifier = union
+                .qualified_home
+                .map(|q| interner.intern(q))
+                .transpose()?;
             for &(name, index, arity) in union.ctors {
                 let name = interner.intern(name)?;
-                Rc::make_mut(&mut self.ctors).insert(
+                let ctor_home = CtorHome {
+                    home: Vec::new(),
+                    type_name,
                     name,
-                    CtorHome {
-                        home: Vec::new(),
-                        type_name,
-                        name,
-                        index,
-                        arity,
-                    },
-                );
+                    index,
+                    arity,
+                };
+                Rc::make_mut(&mut self.ctors).insert(name, ctor_home.clone());
+                if let Some(qsym) = qualifier {
+                    Rc::make_mut(&mut self.qual_ctors)
+                        .entry(qsym)
+                        .or_default()
+                        .insert(name, ctor_home);
+                }
             }
         }
         Ok(())
@@ -1164,6 +1175,8 @@ impl Env {
                     "withFollowRedirects",
                     "withMaxRedirects",
                     "parseQuery",
+                    "methodToString",
+                    "methodFromString",
                 ],
             ),
             // ── TEA Cmd / Sub kernels ───────────────────────────────────────────

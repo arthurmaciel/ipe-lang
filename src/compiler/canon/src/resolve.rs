@@ -164,6 +164,11 @@ const RESERVED_BUILTIN_TYPES: &[&str] = &[
     "Topic",
     "StreamId",
     "ChunkEvent",
+    // `Ipe.Http`'s closed HTTP-verb ADT. Reserved because it drives
+    // exhaustiveness (`exhaust_union`) and lowers to a fixed
+    // `IrType::HttpMethod` enum; a user `type HttpMethod` would be hijacked by
+    // the bare-name lowerer arm and mis-lower.
+    "HttpMethod",
     "Request",
     "Response",
     "Route",

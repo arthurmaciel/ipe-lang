@@ -39,6 +39,11 @@ pub struct BuiltinUnion {
     /// boolean-literal path, so it needs constructor resolution in canon but no
     /// `ctor_to_union` / `union_ctors` entry in exhaust.
     pub exhaust_union: bool,
+    /// The kernel-qualifier module through which these constructors are ALSO
+    /// reachable qualified (e.g. `Some("Http")` lets `Http.Post` resolve as a
+    /// value). `None` for the ambient-only unions (`Just`/`Ok`/`LT`/…), which
+    /// resolve unqualified only.
+    pub qualified_home: Option<&'static str>,
 }
 
 /// Every Prelude built-in union that resolves without a `type` declaration. The
@@ -48,21 +53,25 @@ pub const BUILTIN_UNIONS: &[BuiltinUnion] = &[
         type_name: "Bool",
         ctors: &[("True", 0, 0), ("False", 1, 0)],
         exhaust_union: false,
+        qualified_home: None,
     },
     BuiltinUnion {
         type_name: "Maybe",
         ctors: &[("Just", 0, 1), ("Nothing", 1, 0)],
         exhaust_union: true,
+        qualified_home: None,
     },
     BuiltinUnion {
         type_name: "Result",
         ctors: &[("Ok", 0, 1), ("Err", 1, 1)],
         exhaust_union: true,
+        qualified_home: None,
     },
     BuiltinUnion {
         type_name: "Order",
         ctors: &[("LT", 0, 0), ("EQ", 1, 0), ("GT", 2, 0)],
         exhaust_union: true,
+        qualified_home: None,
     },
     // ── SqlValue variants ──────────────────────────────────────────────────
     // Index order matches the `StdDbSqlValue` enum emitted by the backend and
@@ -81,22 +90,45 @@ pub const BUILTIN_UNIONS: &[BuiltinUnion] = &[
             ("SqlNull", 8, 1),
         ],
         exhaust_union: true,
+        qualified_home: None,
     },
     BuiltinUnion {
         type_name: "SqlField",
         ctors: &[("SetField", 0, 1), ("OmitField", 1, 0)],
         exhaust_union: true,
+        qualified_home: None,
     },
     // ── ChunkEvent / StreamId (Ipe.Http.Stream) ────────────────────────────
     BuiltinUnion {
         type_name: "ChunkEvent",
         ctors: &[("Chunk", 0, 1), ("Done", 1, 0), ("Errored", 2, 1)],
         exhaust_union: true,
+        qualified_home: None,
     },
     BuiltinUnion {
         type_name: "StreamId",
         ctors: &[("StreamId", 0, 1)],
         exhaust_union: true,
+        qualified_home: None,
+    },
+    // ── HttpMethod (Ipe.Http) ──────────────────────────────────────────────
+    // The closed set of HTTP verbs — make-invalid-states-unrepresentable for
+    // the request method. `Http.methodToString` recovers the canonical
+    // uppercase string; `Http.methodFromString` is the inbound parse boundary.
+    // Index order matches the `HttpMethod` enum in `ipe_runtime::http_client`.
+    BuiltinUnion {
+        type_name: "HttpMethod",
+        ctors: &[
+            ("Get", 0, 0),
+            ("Post", 1, 0),
+            ("Put", 2, 0),
+            ("Delete", 3, 0),
+            ("Patch", 4, 0),
+            ("Head", 5, 0),
+            ("Options", 6, 0),
+        ],
+        exhaust_union: true,
+        qualified_home: Some("Http"),
     },
     // ── Error / ErrorKind / ErrorDetails ───────────────────────────────────
     // `Error : ErrorKind -> ErrorInfo -> Error` — arity 2. The sole constructor
@@ -105,6 +137,7 @@ pub const BUILTIN_UNIONS: &[BuiltinUnion] = &[
         type_name: "Error",
         ctors: &[("Error", 0, 2)],
         exhaust_union: true,
+        qualified_home: None,
     },
     // `ErrorKind` — 11 nullary constructors.
     BuiltinUnion {
@@ -123,6 +156,7 @@ pub const BUILTIN_UNIONS: &[BuiltinUnion] = &[
             ("Unexpected", 10, 0),
         ],
         exhaust_union: true,
+        qualified_home: None,
     },
     // `ErrorDetails` — the 5-variant enrichment union carried on
     // `ErrorInfo.details : Maybe ErrorDetails`. Index order matches
@@ -138,6 +172,7 @@ pub const BUILTIN_UNIONS: &[BuiltinUnion] = &[
             ("Custom", 4, 1),
         ],
         exhaust_union: true,
+        qualified_home: None,
     },
 ];
 
