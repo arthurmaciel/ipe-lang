@@ -35,6 +35,7 @@ const fn dlmalloc_plan() -> StaticPlan {
     StaticPlan {
         triple: StaticTriple::X8664LinuxMusl,
         allocator: StaticAllocator::Dlmalloc,
+        c_free: false,
     }
 }
 
@@ -129,6 +130,7 @@ fn static_emit_mimalloc_optin_activates_mimalloc() {
         static_plan: Some(StaticPlan {
             triple: StaticTriple::X8664LinuxMusl,
             allocator: StaticAllocator::Mimalloc,
+            c_free: false,
         }),
         ..BuildOptions::default()
     };
@@ -291,8 +293,17 @@ fn ipe_toml_rust_section_parses_and_rejects_typos() {
             target: None,
             allocator: Some(build_plan::AllocatorChoice::Dlmalloc),
             allow_slow_allocator: Some(false),
+            c_free: None,
         }
     );
+
+    std::fs::write(
+        &manifest_path,
+        "name = \"p\"\n[rust]\nstatic = true\ncFree = true\n",
+    )
+    .expect("write ipe.toml with cFree");
+    let parsed = ipe::project::parse_manifest(&manifest_path).expect("parse cFree");
+    assert_eq!(parsed.static_request.c_free, Some(true));
 
     std::fs::write(
         &manifest_path,

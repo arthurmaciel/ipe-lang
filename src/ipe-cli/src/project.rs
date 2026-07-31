@@ -295,6 +295,7 @@ struct RawManifest {
     rust_target: Option<String>,
     rust_allocator: Option<String>,
     rust_allow_slow: Option<String>,
+    rust_cfree: Option<String>,
     wasm_mode: Option<String>,
     wasm_entry: Option<String>,
     wasm_mount: Option<String>,
@@ -345,6 +346,7 @@ fn scan_raw_manifest(text: &str) -> Result<RawManifest, CliError> {
             ("[rust]", "target") => raw.rust_target = Some(val.to_owned()),
             ("[rust]", "allocator") => raw.rust_allocator = Some(val.to_owned()),
             ("[rust]", "allowSlowAllocator") => raw.rust_allow_slow = Some(val.to_owned()),
+            ("[rust]", "cFree") => raw.rust_cfree = Some(val.to_owned()),
             ("[wasm]", "mode") => raw.wasm_mode = Some(val.to_owned()),
             ("[wasm]", "entry") => raw.wasm_entry = Some(val.to_owned()),
             ("[wasm]", "mount") => raw.wasm_mount = Some(val.to_owned()),
@@ -466,6 +468,10 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
         allow_slow_allocator: raw
             .rust_allow_slow
             .map(|v| crate::build_plan::parse_bool("ipe.toml: [rust] allowSlowAllocator", &v))
+            .transpose()?,
+        c_free: raw
+            .rust_cfree
+            .map(|v| crate::build_plan::parse_bool("ipe.toml: [rust] cFree", &v))
             .transpose()?,
     };
 

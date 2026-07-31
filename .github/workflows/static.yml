@@ -145,19 +145,17 @@ jobs:
           if-no-files-found: warn
 
   # ─── aarch64 static gate ───────────────────────────────────────────────────
-  # Requires: `aarch64-unknown-linux-musl` rustup target + a musl-capable
-  # AArch64 C linker. On ubuntu-24.04-arm (native ARM64 runner) install
-  # `musl-tools`; on x86_64 runners use `gcc-aarch64-linux-gnu` +
-  # `musl-cross` (or the musl.cc `aarch64-linux-musl-gcc` tarball).
-  # Cross-run verification uses `qemu-user-static`.
-  #
-  # BLOCKED-PENDING-TOOLCHAIN: this job is wired but marked allow-failure
-  # until we confirm a musl-capable aarch64 linker is available on the runner.
-  # Remove `continue-on-error` once the toolchain is confirmed green.
+  # Native ARM64 runner (ubuntu-24.04-arm): the emitted crate is built for
+  # `aarch64-unknown-linux-musl` on real hardware and run natively — no QEMU
+  # fidelity gap, so allocator/TLS behaviour is proven on the actual target.
+  # `musl-tools` supplies the musl-libc headers the C units (zstd, ring) need;
+  # the final link goes through the bundled `rust-lld` self-contained path
+  # (pinned in the emitted `.cargo/config.toml`), so no scarce
+  # `aarch64-linux-musl-gcc` is required. A blocking post-merge gate, symmetric
+  # with linux-static-x64.
   linux-static-arm64:
     name: linux-static-arm64 (dlmalloc)
-    runs-on: ubuntu-latest
-    continue-on-error: true
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
 
     env:
@@ -174,14 +172,13 @@ jobs:
         with:
           targets: aarch64-unknown-linux-musl
 
-      # musl-capable AArch64 C linker + QEMU for cross-run verification.
-      # Toolchain: gcc-aarch64-linux-gnu provides the cross-assembler/linker;
-      # musl-tools provides musl-libc headers; qemu-user-static enables
-      # transparent execution of aarch64 binaries on x86_64.
-      - name: Install aarch64 musl C toolchain + QEMU
+      # musl-libc headers for the C units (zstd, ring); the final link uses the
+      # bundled rust-lld self-contained path, so no aarch64 musl gcc is needed.
+      # bubblewrap + util-linux supply the jail primitives `ipe run` needs.
+      - name: Install musl headers and jail primitives
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu musl-tools qemu-user-static
+          sudo apt-get install -y musl-tools bubblewrap util-linux
 
       - name: Cache cargo target
         uses: actions/cache@v6
@@ -203,21 +200,21 @@ jobs:
             --static --target aarch64-unknown-linux-musl --allocator dlmalloc
           cd out/rust
           cargo build --release --target "$STATIC_TRIPLE"
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
-          CC_aarch64_unknown_linux_musl: aarch64-linux-gnu-gcc
 
-      - name: Assert static-ness (file)
+      - name: Assert static-ness (file + ldd)
         run: |
           BIN="$CARGO_TARGET_DIR/$STATIC_TRIPLE/release/ipe-app"
           file "$BIN"
           file "$BIN" | grep -Eq 'static-pie linked|statically linked|ELF 64-bit LSB.*static'
+          LDD_OUT="$(ldd "$BIN" 2>&1 || true)"
+          echo "$LDD_OUT"
+          echo "$LDD_OUT" | grep -Eq 'statically linked|not a dynamic executable'
 
-      - name: Run via QEMU
+      - name: Run natively (aarch64)
         run: |
           BIN="$CARGO_TARGET_DIR/$STATIC_TRIPLE/release/ipe-app"
-          OUT="$(qemu-aarch64-static "$BIN")"
-          echo "qemu output: $OUT"
+          OUT="$("$BIN")"
+          echo "native output: $OUT"
           echo "$OUT" | grep -q 'Hello from Sky!'
 
       - name: Upload frozen-deps manifest (arm64)

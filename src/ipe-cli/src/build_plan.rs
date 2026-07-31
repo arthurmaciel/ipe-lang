@@ -69,6 +69,9 @@ pub struct StaticRequestLayer {
     /// `--allow-slow-allocator` / `[rust] allowSlowAllocator` — the second
     /// key of the two-key musl-malloc-cliff acknowledgment.
     pub allow_slow_allocator: Option<bool>,
+    /// `--cfree` / `IPE_CFREE` / `[rust] cFree` — the C-free build axis,
+    /// orthogonal to the triple and the allocator.
+    pub c_free: Option<bool>,
 }
 
 impl StaticRequestLayer {
@@ -80,6 +83,7 @@ impl StaticRequestLayer {
             target: self.target.or(weaker.target),
             allocator: self.allocator.or(weaker.allocator),
             allow_slow_allocator: self.allow_slow_allocator.or(weaker.allow_slow_allocator),
+            c_free: self.c_free.or(weaker.c_free),
         }
     }
 }
@@ -99,11 +103,16 @@ pub fn env_layer() -> Result<StaticRequestLayer, Refusal> {
         Ok(v) => Some(AllocatorChoice::parse(&v)?),
         Err(_) => None,
     };
+    let c_free = match std::env::var("IPE_CFREE") {
+        Ok(v) => Some(parse_bool("IPE_CFREE", &v)?),
+        Err(_) => None,
+    };
     Ok(StaticRequestLayer {
         static_build,
         target,
         allocator,
         allow_slow_allocator: None,
+        c_free,
     })
 }
 
@@ -151,6 +160,15 @@ pub enum Refusal {
     /// The dependency graph carries C compile units (`zstd`, `ring`) and no
     /// musl-capable C compiler is reachable.
     MuslCCompilerMissing { triple: &'static str },
+    /// `mimalloc` was requested alongside `--cfree`: mimalloc vendors and
+    /// links C, so it is unrepresentable in a C-free plan.
+    MimallocUnderCfree,
+    /// `--cfree` was requested, but the dependency-graph swaps that make the
+    /// build actually C-free (a pure-Rust rustls provider for `ring`, a
+    /// pure-Rust path for `zstd`) have not landed. The plan axis exists; the
+    /// build would still pull C, so honouring the flag would be a lie —
+    /// refused until those swaps are wired.
+    CfreeNotYetWired,
     /// A boolean request value (env var or `ipe.toml` key) is malformed.
     InvalidBool { source: &'static str, got: String },
 }
@@ -203,6 +221,16 @@ impl fmt::Display for Refusal {
                  set CC_{}",
                 triple.replace('-', "_")
             ),
+            Self::MimallocUnderCfree => write!(
+                f,
+                "--allocator mimalloc cannot combine with --cfree: mimalloc vendors and links C. \
+                 Drop --cfree, or use the dlmalloc default (pure Rust)"
+            ),
+            Self::CfreeNotYetWired => write!(
+                f,
+                "--cfree is not wired yet: the pure-Rust dependency swaps that make the build \
+                 link no C have not landed, so the build would still pull C. Drop --cfree"
+            ),
             Self::InvalidBool { source, got } => {
                 write!(f, "{source}: expected true/false/1/0, got {got:?}")
             }
@@ -242,10 +270,15 @@ pub fn resolve(merged: &StaticRequestLayer) -> Result<Option<StaticPlan>, Refusa
         }
     };
 
+    let c_free = merged.c_free.unwrap_or(false);
+
     let allocator = match merged.allocator.unwrap_or_default() {
         // AUTO on a musl-static target resolves to dlmalloc: pure Rust,
         // clears the musl-malloc cliff.
         AllocatorChoice::Auto | AllocatorChoice::Dlmalloc => StaticAllocator::Dlmalloc,
+        // mimalloc vendors and links C; it cannot exist in a C-free plan.
+        // Refuse here rather than emit a manifest that would pull C.
+        AllocatorChoice::Mimalloc if c_free => return Err(Refusal::MimallocUnderCfree),
         AllocatorChoice::Mimalloc => StaticAllocator::Mimalloc,
         AllocatorChoice::System => {
             if merged.allow_slow_allocator.unwrap_or(false) {
@@ -257,16 +290,37 @@ pub fn resolve(merged: &StaticRequestLayer) -> Result<Option<StaticPlan>, Refusa
         AllocatorChoice::Talc => return Err(Refusal::TalcRequiresArenaDesign),
     };
 
-    Ok(Some(StaticPlan { triple, allocator }))
+    // The C-free plan axis is wired end to end (flag → layer → plan →
+    // preflight-skip), but the dependency-graph swaps that make the build
+    // actually link no C are a follow-up. Until they land, honouring `--cfree`
+    // would emit a C-carrying manifest while skipping the C-compiler preflight
+    // — a build that lies about its promise and then fails at link time.
+    // Refuse loudly instead. (The mimalloc-under-cfree conflict above is a more
+    // specific, more actionable refusal, so it is reported first.)
+    if c_free {
+        return Err(Refusal::CfreeNotYetWired);
+    }
+
+    Ok(Some(StaticPlan {
+        triple,
+        allocator,
+        c_free,
+    }))
 }
 
 /// Toolchain preflight for a resolved static plan.
 ///
-/// The target's std must be installed and — because the emitted dependency
-/// graph carries C compile units unconditionally today — a musl-capable C
-/// compiler must be reachable. Runs before the compile pipeline so the
-/// failure is an actionable refusal, not a cryptic cargo error minutes
-/// later.
+/// The target's std must be installed and — unless the plan is C-free —
+/// a C compiler that targets the plan's triple must be reachable, because the
+/// default emitted dependency graph carries C compile units (`zstd`, `ring`).
+/// Runs before the compile pipeline so the failure is an actionable refusal,
+/// not a cryptic cargo error minutes later.
+///
+/// The probed compiler names are derived from the plan's triple
+/// ([`StaticTriple::cc_candidates`]) so an aarch64 static build does not probe
+/// x86_64-only compiler names (which would spuriously pass or fail depending
+/// on host tooling). Under a C-free plan the C-compiler check is skipped
+/// entirely — there is no C unit to compile.
 ///
 /// Fail-soft when `rustup` itself is absent (non-rustup toolchains may well
 /// have the target); the C-compiler check honours the standard `CC_*` /
@@ -279,8 +333,11 @@ pub fn preflight(plan: &StaticPlan) -> Result<(), Refusal> {
     let cc_present = std::env::var_os(format!("CC_{}", plan.triple.as_str().replace('-', "_")))
         .is_some()
         || std::env::var_os("TARGET_CC").is_some()
-        || binary_on_path("x86_64-linux-musl-gcc")
-        || binary_on_path("musl-gcc");
+        || plan
+            .triple
+            .cc_candidates()
+            .iter()
+            .any(|name| binary_on_path(name));
     preflight_with(plan, installed.as_deref(), cc_present)
 }
 
@@ -288,14 +345,16 @@ pub fn preflight(plan: &StaticPlan) -> Result<(), Refusal> {
 ///
 /// The toolchain observations are injected as data so the gates are
 /// unit-testable without a rustup installation. `installed` = `None` means
-/// rustup is absent (fail-soft: skip the check).
+/// rustup is absent (fail-soft: skip the check). `c_cc_present` is ignored
+/// when the plan is C-free — the C units it would satisfy are not in the
+/// graph.
 ///
 /// # Errors
 /// [`Refusal::TargetNotInstalled`] / [`Refusal::MuslCCompilerMissing`].
 pub fn preflight_with(
     plan: &StaticPlan,
     installed: Option<&[String]>,
-    musl_cc_present: bool,
+    c_cc_present: bool,
 ) -> Result<(), Refusal> {
     if let Some(targets) = installed
         && !targets.iter().any(|t| t == plan.triple.as_str())
@@ -304,7 +363,7 @@ pub fn preflight_with(
             triple: plan.triple.as_str(),
         });
     }
-    if !musl_cc_present {
+    if !plan.c_free && !c_cc_present {
         return Err(Refusal::MuslCCompilerMissing {
             triple: plan.triple.as_str(),
         });
@@ -350,6 +409,7 @@ mod tests {
             target: target.map(str::to_owned),
             allocator,
             allow_slow_allocator: ack,
+            c_free: None,
         }
     }
 
@@ -387,6 +447,7 @@ mod tests {
             Ok(Some(StaticPlan {
                 triple: StaticTriple::X8664LinuxMusl,
                 allocator: StaticAllocator::Dlmalloc,
+                c_free: false,
             }))
         );
     }
@@ -468,6 +529,7 @@ mod tests {
             Ok(Some(StaticPlan {
                 triple: StaticTriple::X8664LinuxMusl,
                 allocator: StaticAllocator::System,
+                c_free: false,
             }))
         );
     }
@@ -492,7 +554,33 @@ mod tests {
             Ok(Some(StaticPlan {
                 triple: StaticTriple::X8664LinuxMusl,
                 allocator: StaticAllocator::Mimalloc,
+                c_free: false,
             }))
+        );
+    }
+
+    #[test]
+    fn cfree_is_refused_until_the_dep_swaps_land() {
+        // The plan axis is wired, but honouring --cfree before the pure-Rust
+        // dependency swaps land would emit a C-carrying build that skips the
+        // C-compiler preflight — refused loudly, never silently degraded.
+        assert_eq!(
+            resolve(&StaticRequestLayer {
+                static_build: Some(true),
+                c_free: Some(true),
+                ..StaticRequestLayer::default()
+            }),
+            Err(Refusal::CfreeNotYetWired)
+        );
+        // mimalloc under --cfree is the more specific conflict, reported first.
+        assert_eq!(
+            resolve(&StaticRequestLayer {
+                static_build: Some(true),
+                allocator: Some(AllocatorChoice::Mimalloc),
+                c_free: Some(true),
+                ..StaticRequestLayer::default()
+            }),
+            Err(Refusal::MimallocUnderCfree)
         );
     }
 
@@ -535,6 +623,7 @@ mod tests {
         let plan = StaticPlan {
             triple: StaticTriple::X8664LinuxMusl,
             allocator: StaticAllocator::Dlmalloc,
+            c_free: false,
         };
         let musl = "x86_64-unknown-linux-musl".to_owned();
         let gnu = "x86_64-unknown-linux-gnu".to_owned();
@@ -550,5 +639,28 @@ mod tests {
         // rustup absent → fail-soft on the target check, cc still gated.
         assert!(preflight_with(&plan, None, true).is_ok());
         assert!(preflight_with(&plan, None, false).is_err());
+    }
+
+    #[test]
+    fn preflight_skips_cc_probe_under_cfree() {
+        // A C-free plan has no C unit to compile, so a missing C compiler is
+        // not a refusal — only the target-installed check still applies.
+        let plan = StaticPlan {
+            triple: StaticTriple::Aarch64LinuxMusl,
+            allocator: StaticAllocator::Dlmalloc,
+            c_free: true,
+        };
+        let musl = "aarch64-unknown-linux-musl".to_owned();
+        assert!(preflight_with(&plan, Some(&[musl]), false).is_ok());
+        assert!(preflight_with(&plan, None, false).is_ok());
+        // The target check is still enforced under C-free.
+        assert!(matches!(
+            preflight_with(
+                &plan,
+                Some(&["x86_64-unknown-linux-musl".to_owned()]),
+                false
+            ),
+            Err(Refusal::TargetNotInstalled { .. })
+        ));
     }
 }

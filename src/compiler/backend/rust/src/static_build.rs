@@ -77,6 +77,27 @@ impl StaticTriple {
     /// Every supported triple, for refusal messages.
     pub const SUPPORTED: &'static [&'static str] =
         &["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"];
+
+    /// C-compiler executable names the toolchain preflight probes on `PATH`
+    /// for this triple, most-specific first.
+    ///
+    /// The default emitted graph carries C compile units (`zstd`, `ring`), so
+    /// a static build that keeps them needs a C compiler that targets this
+    /// triple. The names are architecture-specific: an `x86_64` host's
+    /// `x86_64-linux-musl-gcc` cannot compile for aarch64, so probing it for an
+    /// aarch64 plan would spuriously pass (or, when absent, spuriously trip
+    /// [`crate::static_build`]'s missing-compiler refusal). aarch64 also
+    /// accepts the widely-packaged GNU cross-compiler (`aarch64-linux-gnu-gcc`)
+    /// because the bundled `rust-lld` self-contained link path supplies the
+    /// musl startup objects, so only the C units — not the final link — need a
+    /// cross toolchain.
+    #[must_use]
+    pub const fn cc_candidates(self) -> &'static [&'static str] {
+        match self {
+            Self::X8664LinuxMusl => &["x86_64-linux-musl-gcc", "musl-gcc"],
+            Self::Aarch64LinuxMusl => &["aarch64-linux-musl-gcc", "aarch64-linux-gnu-gcc"],
+        }
+    }
 }
 
 /// The allocator linked into a static artifact.
@@ -117,6 +138,14 @@ impl StaticAllocator {
 pub struct StaticPlan {
     pub triple: StaticTriple,
     pub allocator: StaticAllocator,
+    /// The C-free build axis (`--cfree` / `[rust] cFree`), orthogonal to the
+    /// triple and to the allocator. When set, the emitted crate is intended to
+    /// link no C: the toolchain preflight skips the C-compiler probe entirely
+    /// (its whole reason — the `zstd`/`ring` C units — is gone under this
+    /// path). The dependency-graph swaps that make the build actually C-free
+    /// are a follow-up; this flag is the plan axis they hang off, and a false
+    /// value is the current (C-carrying) default.
+    pub c_free: bool,
 }
 
 /// First line of every generated `.cargo/config.toml`.
@@ -339,6 +368,7 @@ mod tests {
         let cfg = cargo_config(&StaticPlan {
             triple: StaticTriple::X8664LinuxMusl,
             allocator: StaticAllocator::Dlmalloc,
+            c_free: false,
         });
         assert!(cfg.starts_with(CARGO_CONFIG_MARKER));
         assert!(cfg.contains("[target.x86_64-unknown-linux-musl]"));
@@ -369,10 +399,26 @@ mod tests {
     }
 
     #[test]
+    fn cc_candidates_are_triple_specific() {
+        // x86_64 probes its own musl compilers; it must NOT list an aarch64
+        // name, and aarch64 must NOT list the x86_64 name — a host with only
+        // the wrong-arch compiler must not spuriously pass the preflight.
+        let x64 = StaticTriple::X8664LinuxMusl.cc_candidates();
+        let arm = StaticTriple::Aarch64LinuxMusl.cc_candidates();
+        assert!(x64.contains(&"x86_64-linux-musl-gcc"));
+        assert!(x64.contains(&"musl-gcc"));
+        assert!(!x64.iter().any(|c| c.contains("aarch64")));
+        assert!(arm.contains(&"aarch64-linux-musl-gcc"));
+        assert!(arm.contains(&"aarch64-linux-gnu-gcc"));
+        assert!(!arm.iter().any(|c| c.starts_with("x86_64")));
+    }
+
+    #[test]
     fn aarch64_musl_cargo_config_pins_crt_static() {
         let cfg = cargo_config(&StaticPlan {
             triple: StaticTriple::Aarch64LinuxMusl,
             allocator: StaticAllocator::Dlmalloc,
+            c_free: false,
         });
         assert!(cfg.starts_with(CARGO_CONFIG_MARKER));
         assert!(cfg.contains("[target.aarch64-unknown-linux-musl]"));
