@@ -136,6 +136,126 @@ impl TransparentType {
             Self::Struct { name, .. } | Self::Enum { name, .. } => name,
         }
     }
+
+    /// The validated Rust path the conversion glue references.
+    #[must_use]
+    pub const fn rust_path(&self) -> &IdentPath {
+        match self {
+            Self::Struct { rust_path, .. } | Self::Enum { rust_path, .. } => rust_path,
+        }
+    }
+
+    /// Decode one entry of the `transparentTypes` projection
+    /// ([`crate::emit::transparent_type_json`]) back through the SAME
+    /// validating newtypes the classification uses — a hand-edited projection
+    /// can only yield a well-formed shape or a refusal, never an unvalidated
+    /// name reaching emitted code.
+    ///
+    /// # Errors
+    ///
+    /// A message naming the malformed field.
+    pub fn from_projection_json(v: &serde_json::Value) -> Result<Self, String> {
+        let str_field = |key: &str| -> Result<&str, String> {
+            v.get(key)
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| format!("transparent type entry missing string `{key}`"))
+        };
+        let name = RustIdent::parse(str_field("name")?)
+            .map_err(|_| "transparent type name is not a legal identifier".to_owned())?;
+        let rust_path = IdentPath::parse(str_field("rustPath")?)
+            .map_err(|_| "transparent type rustPath is not a legal identifier path".to_owned())?;
+        let member = |m: &serde_json::Value| -> Result<ForeignMember, String> {
+            let get = |key: &str| -> Result<&str, String> {
+                m.get(key)
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| format!("transparent member missing string `{key}`"))
+            };
+            let name = RustIdent::parse(get("name")?)
+                .map_err(|_| "transparent member name is not a legal identifier".to_owned())?;
+            let carrier = carrier_from_surface(get("carrier")?)?;
+            Ok(ForeignMember { name, carrier })
+        };
+        let members = |key: &str, of: &serde_json::Value| -> Result<Vec<ForeignMember>, String> {
+            of.get(key)
+                .and_then(serde_json::Value::as_array)
+                .ok_or_else(|| format!("transparent type entry missing array `{key}`"))?
+                .iter()
+                .map(member)
+                .collect()
+        };
+        match str_field("kind")? {
+            "struct" => Ok(Self::Struct {
+                name,
+                rust_path,
+                fields: members("fields", v)?,
+            }),
+            "enum" => {
+                let variants = v
+                    .get("variants")
+                    .and_then(serde_json::Value::as_array)
+                    .ok_or_else(|| "transparent enum entry missing array `variants`".to_owned())?
+                    .iter()
+                    .map(|entry| -> Result<ForeignVariant, String> {
+                        let get = |key: &str| -> Result<&str, String> {
+                            entry
+                                .get(key)
+                                .and_then(serde_json::Value::as_str)
+                                .ok_or_else(|| {
+                                    format!("transparent variant missing string `{key}`")
+                                })
+                        };
+                        let name = RustIdent::parse(get("name")?).map_err(|_| {
+                            "transparent variant name is not a legal identifier".to_owned()
+                        })?;
+                        let payload = match get("kind")? {
+                            "unit" => ForeignVariantPayload::Unit,
+                            "tuple" => ForeignVariantPayload::Tuple(
+                                entry
+                                    .get("carriers")
+                                    .and_then(serde_json::Value::as_array)
+                                    .ok_or_else(|| {
+                                        "tuple variant missing array `carriers`".to_owned()
+                                    })?
+                                    .iter()
+                                    .map(|c| {
+                                        c.as_str()
+                                            .ok_or_else(|| {
+                                                "tuple carrier is not a string".to_owned()
+                                            })
+                                            .and_then(carrier_from_surface)
+                                    })
+                                    .collect::<Result<Vec<_>, _>>()?,
+                            ),
+                            "struct" => ForeignVariantPayload::Struct(members("members", entry)?),
+                            other => return Err(format!("unknown variant kind {other:?}")),
+                        };
+                        Ok(ForeignVariant { name, payload })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Self::Enum {
+                    name,
+                    rust_path,
+                    variants,
+                })
+            }
+            other => Err(format!("unknown transparent type kind {other:?}")),
+        }
+    }
+}
+
+/// The [`ScalarCarrier`] for a stored Ipê carrier surface, refusing anything
+/// outside the closed identity set.
+fn carrier_from_surface(s: &str) -> Result<ScalarCarrier, String> {
+    match s {
+        "Int" => Ok(ScalarCarrier::Int),
+        "Float" => Ok(ScalarCarrier::Float),
+        "Bool" => Ok(ScalarCarrier::Bool),
+        "Char" => Ok(ScalarCarrier::Char),
+        "String" => Ok(ScalarCarrier::Str),
+        other => Err(format!(
+            "carrier {other:?} is outside the identity carrier set"
+        )),
+    }
 }
 
 /// One coverage row for a reported type that stays opaque: the nominal and
@@ -387,6 +507,21 @@ fn classify_one(w: &WireForeignType) -> Result<TransparentType, String> {
                 .iter()
                 .map(variant)
                 .collect::<Result<Vec<_>, _>>()?;
+            // A sole unit variant named like its type renders exactly the
+            // opaque-handle placeholder (`type N = N`), so the two module
+            // shapes could no longer be told apart downstream — the lowerer
+            // and the conversion glue would disagree on the representation.
+            // Refuse transparency; the opaque handle loses nothing here (a
+            // one-unit-variant enum carries no data).
+            if let [only] = variants.as_slice()
+                && only.payload == ForeignVariantPayload::Unit
+                && only.name.as_str() == name.as_str()
+            {
+                return Err(format!(
+                    "sole unit variant `{}` spells the opaque-handle placeholder declaration",
+                    only.name
+                ));
+            }
             Ok(TransparentType::Enum {
                 name,
                 rust_path,
@@ -548,6 +683,37 @@ mod tests {
             catalog.transparent
         );
         assert_eq!(catalog.opaque_reasons().len(), 11);
+    }
+
+    #[test]
+    fn placeholder_shaped_enum_stays_opaque() {
+        // `enum Marker { Marker }` would render `type Marker = Marker` — the
+        // opaque-handle placeholder spelling — so it must classify opaque.
+        let wire = decode_types(&serde_json::json!([
+            {"name": "Marker", "rustPath": "tm::Marker", "kind": "enum",
+             "variants": [{"name": "Marker", "kind": "unit"}]}
+        ]));
+        let catalog = ForeignTypeCatalog::classify(&wire);
+        assert!(catalog.transparent().is_empty());
+        assert!(
+            catalog
+                .opaque_reasons()
+                .iter()
+                .any(|r| r.name == "Marker" && r.reason.contains("placeholder")),
+            "{:?}",
+            catalog.opaque_reasons()
+        );
+        // A same-named unit variant among OTHERS is fine (no placeholder
+        // ambiguity — the declaration has more than one constructor).
+        let wire = decode_types(&serde_json::json!([
+            {"name": "Mode", "rustPath": "tm::Mode", "kind": "enum",
+             "variants": [
+                {"name": "Mode", "kind": "unit"},
+                {"name": "Alt", "kind": "unit"}
+             ]}
+        ]));
+        let catalog = ForeignTypeCatalog::classify(&wire);
+        assert!(catalog.transparent().contains_key("Mode"));
     }
 
     #[test]

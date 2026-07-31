@@ -151,6 +151,7 @@ pub fn assemble_emit(
         return Ok(None);
     }
     let mut foreign_types: BTreeMap<String, String> = BTreeMap::new();
+    let mut wrapper_glue: BTreeMap<String, ipe_backend_rust::FfiWrapperGlue> = BTreeMap::new();
     // The DIRECT FFI crates (registry names, `_`→`-` as the dep line renders them):
     // these are the crates the app links against and MUST be pinned exactly; a
     // version conflict on one of these is a genuine, unbuildable error.
@@ -177,6 +178,7 @@ pub fn assemble_emit(
         for (name, path) in &c.opaque_types {
             foreign_types.insert(format!("{}.{name}", c.module_name), path.clone());
         }
+        assemble_wrapper_glue(c, &mut wrapper_glue)?;
         // A `[rust.define.struct/enum]` type is DEFINED in the emitted
         // `_bindings.rs` (wrapped `pub mod <slug> { … } pub use <slug>::*;` in
         // `src/ffi.rs`), so it resolves at the crate-absolute path
@@ -250,7 +252,103 @@ pub fn assemble_emit(
         dep_lines,
         bindings_source,
         interface_modules: catalog.iter().map(|c| c.module_name.clone()).collect(),
+        wrapper_glue,
     }))
+}
+
+/// Assemble one crate's per-wrapper transparent conversion glue from the
+/// interface's structured positions + the crate's transparent shapes.
+///
+/// A referenced shape missing from the catalog is an internal invariant
+/// violation (the interface derived both), refused rather than emitted as a
+/// seam whose two sides disagree.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] naming the crate, binding, and missing shape.
+fn assemble_wrapper_glue(
+    c: &InstalledCrate,
+    wrapper_glue: &mut BTreeMap<String, ipe_backend_rust::FfiWrapperGlue>,
+) -> Result<(), CliError> {
+    for b in &c.bindings {
+        if b.transparent_params.iter().all(Option::is_none) && b.transparent_result.is_none() {
+            continue;
+        }
+        let glue_ty = |name: &str| -> Result<ipe_backend_rust::FfiGlueType, CliError> {
+            let t = c.transparent_types.get(name).ok_or_else(|| {
+                CliError::UsageOwned(format!(
+                    "installed FFI crate `{}` marks `{name}` transparent in binding \
+                     `{}` but carries no shape for it — re-run `ipe add`",
+                    c.slug, b.ref_name
+                ))
+            })?;
+            Ok(glue_type_of(&c.module_name, t))
+        };
+        let mut params = Vec::with_capacity(b.transparent_params.len());
+        for p in &b.transparent_params {
+            params.push(match p {
+                None => None,
+                Some(name) => Some(glue_ty(name)?),
+            });
+        }
+        let result = match &b.transparent_result {
+            None => None,
+            Some(r) => Some(ipe_backend_rust::FfiResultGlue {
+                in_result: r.in_result,
+                ty: glue_ty(&r.type_name)?,
+            }),
+        };
+        wrapper_glue.insert(
+            b.wrapper_ident.clone(),
+            ipe_backend_rust::FfiWrapperGlue { params, result },
+        );
+    }
+    Ok(())
+}
+
+/// One transparent shape in the backend's glue vocabulary. The foreign path
+/// absolutizes with a leading `::` (the wrapper spelling), and the union's
+/// app-side identity is the interface module + nominal, resolved by the
+/// backend against the enum the lowerer emitted.
+fn glue_type_of(
+    module_name: &str,
+    t: &ipe_ffi::transparency::TransparentType,
+) -> ipe_backend_rust::FfiGlueType {
+    use ipe_ffi::transparency::{ForeignVariantPayload, TransparentType};
+    let absolutize = |p: &str| -> String { format!("::{}", p.trim_start_matches(':')) };
+    match t {
+        TransparentType::Struct {
+            rust_path, fields, ..
+        } => ipe_backend_rust::FfiGlueType::Record {
+            rust_path: absolutize(rust_path.as_str()),
+            fields: fields.iter().map(|f| f.name.as_str().to_owned()).collect(),
+        },
+        TransparentType::Enum {
+            name,
+            rust_path,
+            variants,
+        } => ipe_backend_rust::FfiGlueType::Union {
+            module: module_name.split('.').map(str::to_owned).collect(),
+            name: name.as_str().to_owned(),
+            rust_path: absolutize(rust_path.as_str()),
+            variants: variants
+                .iter()
+                .map(|v| ipe_backend_rust::FfiGlueVariant {
+                    name: v.name.as_str().to_owned(),
+                    payload: match &v.payload {
+                        ForeignVariantPayload::Unit => ipe_backend_rust::FfiGluePayload::Unit,
+                        ForeignVariantPayload::Tuple(cs) => {
+                            ipe_backend_rust::FfiGluePayload::Tuple(cs.len())
+                        }
+                        ForeignVariantPayload::Struct(ms) => {
+                            ipe_backend_rust::FfiGluePayload::Struct(
+                                ms.iter().map(|m| m.name.as_str().to_owned()).collect(),
+                            )
+                        }
+                    },
+                })
+                .collect(),
+        },
+    }
 }
 
 /// Parse a generated dep line into `(name, version, features)`. Two shapes are
@@ -2903,6 +3001,7 @@ version = \"1\"
             opaque_types: BTreeMap::new(),
             opaque_type_ids: BTreeMap::new(),
             define_types: BTreeSet::new(),
+            transparent_types: BTreeMap::new(),
             bindings: Vec::new(),
             dep_versions: BTreeMap::new(),
             cargo_deps: vec![line.to_owned()],
@@ -2935,6 +3034,7 @@ version = \"1\"
             opaque_types: BTreeMap::new(),
             opaque_type_ids: BTreeMap::new(),
             define_types: BTreeSet::new(),
+            transparent_types: BTreeMap::new(),
             bindings: Vec::new(),
             dep_versions: BTreeMap::new(),
             cargo_deps: vec![line.to_owned()],
@@ -2974,6 +3074,7 @@ version = \"1\"
             opaque_types: BTreeMap::new(),
             opaque_type_ids: BTreeMap::new(),
             define_types: BTreeSet::new(),
+            transparent_types: BTreeMap::new(),
             bindings: Vec::new(),
             dep_versions: BTreeMap::new(),
             cargo_deps: lines.into_iter().map(str::to_owned).collect(),
@@ -3247,6 +3348,7 @@ version = \"1\"
                 .collect(),
             opaque_type_ids: BTreeMap::new(),
             define_types: define.iter().map(|n| (*n).to_owned()).collect(),
+            transparent_types: BTreeMap::new(),
             bindings: Vec::new(),
             dep_versions: BTreeMap::new(),
             cargo_deps: Vec::new(),

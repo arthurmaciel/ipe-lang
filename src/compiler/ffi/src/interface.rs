@@ -16,8 +16,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-use crate::emit::{opaque_names_in, wrapper_ipe_signature};
+use crate::emit::{opaque_names_in, transparent_type_decl, wrapper_ipe_signature};
 use crate::pkginfo::{FnInfo, PkgInfo};
+use crate::transparency::TransparentType;
 
 /// Ipê keywords that can never be a binding name in the generated module.
 const IPE_KEYWORDS: &[&str] = &[
@@ -36,6 +37,23 @@ pub struct InterfaceBinding {
     pub arity: usize,
     /// The full Ipê HM signature string.
     pub sig: String,
+    /// Per-parameter transparent-type nominal, aligned with the Ipê arity —
+    /// `Some(name)` marks a position whose value the backend converts between
+    /// the Ipê record/union and the foreign struct/enum at the call seam.
+    /// Empty when no transparent type occurs anywhere in the signature.
+    pub transparent_params: Vec<Option<String>>,
+    /// The result's transparent payload, when the binding returns one.
+    pub transparent_result: Option<TransparentResult>,
+}
+
+/// A binding result that carries a transparent foreign type: the nominal and
+/// whether it sits inside the fallibility wrapper (`Result Error T`) or bare.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransparentResult {
+    /// The transparent type's Ipê-visible nominal.
+    pub type_name: String,
+    /// `true` for a `Result Error T` result, `false` for a bare `T`.
+    pub in_result: bool,
 }
 
 /// A binding excluded from the interface, with the reason — surfaced in the
@@ -75,6 +93,15 @@ pub struct CrateInterface {
     /// downstream (`assemble_emit`) where the slug is; this set is the ground
     /// truth for WHICH names are define-defined so the two paths never blur.
     pub define_types: BTreeSet<String>,
+    /// The transparent foreign types this interface SURFACES, keyed by
+    /// Ipê-visible nominal: the classification's transparent set narrowed to
+    /// the names the interface admits (no collision with another surface, a
+    /// path consistent with the signatures) AND some admitted binding
+    /// references — an unreferenced transparent type is pruned here, never
+    /// carried dead into every downstream artifact. These names are excluded
+    /// from [`Self::opaque_types`]: a name is a record/union OR a handle,
+    /// never both.
+    pub transparent_types: BTreeMap<String, TransparentType>,
     /// The included bindings.
     pub bindings: Vec<InterfaceBinding>,
     /// The excluded bindings, with reasons.
@@ -283,6 +310,146 @@ fn valid_ipe_value_name(name: &str) -> bool {
         && !IPE_KEYWORDS.contains(&name)
 }
 
+/// The classification's transparent set narrowed to the names this interface
+/// may surface. Each exclusion is fail-closed and recorded: a name that
+/// collides with a reserved builtin, a poisoned nominal, or a fn-signature
+/// path that disagrees with the catalog's defining path falls back to the
+/// opaque handle (it stays in the ordinary opaque pipeline), never to a
+/// record/union whose conversion glue could name the wrong Rust type.
+fn admitted_transparent(
+    pkg: &PkgInfo,
+    path_map: &BTreeMap<String, String>,
+    poisoned: &BTreeSet<String>,
+    skipped: &mut Vec<SkippedBinding>,
+) -> BTreeMap<String, TransparentType> {
+    let mut out = BTreeMap::new();
+    for (name, t) in pkg.foreign_types().transparent() {
+        let drop = |reason: String, skipped: &mut Vec<SkippedBinding>| {
+            skipped.push(SkippedBinding {
+                ref_name: format!("type {name}"),
+                reason,
+            });
+        };
+        if ipe_canon::is_reserved_builtin_type_name(name) {
+            drop(
+                format!("transparent type `{name}` shadows an Ipê reserved builtin type"),
+                skipped,
+            );
+            continue;
+        }
+        if poisoned.contains(name) {
+            drop(
+                format!("transparent type `{name}` is claimed by two distinct Rust paths"),
+                skipped,
+            );
+            continue;
+        }
+        // The signatures resolve this nominal through `path_map`; the glue
+        // resolves it through the catalog's `rust_path`. They must be one
+        // path, or the record surface and the wrapper would name different
+        // Rust types (an E0308 the SEAL forbids).
+        if let Some(sig_path) = path_map.get(name)
+            && sig_path.trim_start_matches(':') != t.rust_path().as_str().trim_start_matches(':')
+        {
+            drop(
+                format!(
+                    "transparent type `{name}` resolves to `{sig_path}` in signatures but \
+                     `{}` in the type catalog",
+                    t.rust_path().as_str()
+                ),
+                skipped,
+            );
+            continue;
+        }
+        out.insert(name.clone(), t.clone());
+    }
+    out
+}
+
+/// Split an Ipê signature into its top-level ` -> ` segments, keeping any
+/// parenthesised region (a tuple, a grouped fn param) intact.
+fn split_top_level_arrows(sig: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut depth: i64 = 0;
+    for piece in sig.split(" -> ") {
+        let opens = piece.chars().filter(|c| *c == '(').count();
+        let closes = piece.chars().filter(|c| *c == ')').count();
+        if depth > 0 {
+            if let Some(last) = out.last_mut() {
+                last.push_str(" -> ");
+                last.push_str(piece);
+            }
+        } else {
+            out.push(piece.to_owned());
+        }
+        depth += i64::try_from(opens).unwrap_or(0) - i64::try_from(closes).unwrap_or(0);
+        depth = depth.max(0);
+    }
+    out
+}
+
+/// Where the admitted transparent types sit in one binding's signature.
+///
+/// The conversion glue covers a transparent type in exactly two positions: a
+/// whole parameter, and the result payload (bare or directly under the
+/// `Result Error` fallibility wrapper). Any other occurrence — a tuple or
+/// container component, a `Task` payload — is refused so the binding
+/// over-drops with a recorded reason instead of emitting a seam whose two
+/// sides disagree on the representation.
+fn transparent_positions(
+    sig: &str,
+    transparent: &BTreeMap<String, TransparentType>,
+) -> Result<(Vec<Option<String>>, Option<TransparentResult>), String> {
+    let occurs = |seg: &str| {
+        seg.split(|c: char| !c.is_alphanumeric() && c != '_')
+            .find(|tok| transparent.contains_key(*tok))
+            .map(str::to_owned)
+    };
+    if transparent.is_empty() || occurs(sig).is_none() {
+        return Ok((Vec::new(), None));
+    }
+    let segs = split_top_level_arrows(sig);
+    let Some((result_seg, param_segs)) = segs.split_last() else {
+        return Ok((Vec::new(), None));
+    };
+    let mut params = Vec::with_capacity(param_segs.len());
+    for seg in param_segs {
+        let seg = seg.trim();
+        if transparent.contains_key(seg) {
+            params.push(Some(seg.to_owned()));
+        } else if let Some(t) = occurs(seg) {
+            return Err(format!(
+                "transparent type `{t}` in a parameter position the conversion glue \
+                 does not cover yet"
+            ));
+        } else {
+            params.push(None);
+        }
+    }
+    let result_seg = result_seg.trim();
+    let result = if transparent.contains_key(result_seg) {
+        Some(TransparentResult {
+            type_name: result_seg.to_owned(),
+            in_result: false,
+        })
+    } else if let Some(rest) = result_seg.strip_prefix("Result Error ")
+        && transparent.contains_key(rest.trim())
+    {
+        Some(TransparentResult {
+            type_name: rest.trim().to_owned(),
+            in_result: true,
+        })
+    } else if let Some(t) = occurs(result_seg) {
+        return Err(format!(
+            "transparent type `{t}` in a result position the conversion glue does not \
+             cover yet"
+        ));
+    } else {
+        None
+    };
+    Ok((params, result))
+}
+
 /// `true` when an Ipê signature string contains a TUPLE — a parenthesised
 /// region with a top-level comma (`(Int, Int)`); `Maybe (List Int)` has no
 /// comma and stays clean.
@@ -312,7 +479,9 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
     let mut skipped: Vec<SkippedBinding> = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut used_opaques: BTreeSet<String> = BTreeSet::new();
+    let mut used_transparent: BTreeSet<String> = BTreeSet::new();
     let mut define_types: BTreeSet<String> = BTreeSet::new();
+    let admitted = admitted_transparent(pkg, &path_map, &poisoned, &mut skipped);
 
     for f in pkg.fns() {
         let ref_name = f.wrapper_ref_name();
@@ -355,6 +524,7 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
                     &ref_name,
                     sig,
                     &kernel_name,
+                    &admitted,
                     &mut bindings,
                     &mut skipped,
                     &mut seen,
@@ -399,6 +569,7 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
                 &ref_name,
                 def,
                 &kernel_name,
+                &admitted,
                 &mut bindings,
                 &mut skipped,
                 &mut seen,
@@ -411,6 +582,7 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
                 &ref_name,
                 def,
                 &kernel_name,
+                &admitted,
                 &mut bindings,
                 &mut skipped,
                 &mut seen,
@@ -461,13 +633,27 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
             );
             continue;
         }
+        // Where the admitted transparent types sit in this signature — or a
+        // recorded over-drop when one occurs in a position the conversion
+        // glue does not cover (a container/tuple component, a Task payload).
+        let (transparent_params, transparent_result) = match transparent_positions(&sig, &admitted)
+        {
+            Ok(positions) => positions,
+            Err(reason) => {
+                skip(&reason, &mut skipped);
+                continue;
+            }
+        };
         // The opaque foreign types the SIGNATURE would declare (`type X`) —
         // the ground truth for both the reserved-builtin collision gate and
         // the path-resolvability gate. Reading the final signature (not the
         // raw `rust_type`) catches an inspector `ipeType` override that maps a
         // generic head like `stripe::Response<…>` to the bare `Response`.
+        // An admitted transparent nominal is a record/union declaration, not
+        // an opaque handle, so it leaves the opaque pipeline here.
         let mut opaques = BTreeSet::new();
         opaque_names_in(&sig, &mut opaques);
+        opaques.retain(|n| !admitted.contains_key(n));
         if let Some(bad) = opaques
             .iter()
             .find(|n| ipe_canon::is_reserved_builtin_type_name(n))
@@ -500,11 +686,34 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
             continue;
         }
         used_opaques.extend(opaques);
+        used_transparent.extend(transparent_params.iter().flatten().cloned());
+        used_transparent.extend(transparent_result.iter().map(|r| r.type_name.clone()));
         bindings.push(InterfaceBinding {
             wrapper_ident: crate::naming::wrapper_fn_ident(&kernel_name, &ref_name),
             arity: f.params().len().max(1),
             sig,
             ref_name,
+            transparent_params,
+            transparent_result,
+        });
+    }
+
+    // Surface only the transparent types some admitted binding references —
+    // an unreferenced record/union would ride dead through every downstream
+    // artifact (interface module, emitted enum, glue map). The prune is
+    // recorded, so over-drop stays visible.
+    let mut transparent_types = admitted;
+    let unreferenced: Vec<String> = transparent_types
+        .keys()
+        .filter(|n| !used_transparent.contains(*n))
+        .cloned()
+        .collect();
+    for name in unreferenced {
+        transparent_types.remove(&name);
+        skipped.push(SkippedBinding {
+            ref_name: format!("type {name}"),
+            reason: "transparent type is referenced by no admitted binding — not surfaced"
+                .to_owned(),
         });
     }
 
@@ -526,6 +735,7 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
         &BTreeMap::new(),
         &opaque_types,
         &define_types,
+        &transparent_types,
         &bindings,
     );
     CrateInterface {
@@ -535,6 +745,7 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
         opaque_types,
         opaque_type_ids,
         define_types,
+        transparent_types,
         bindings,
         skipped,
     }
@@ -554,10 +765,12 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
 ///   reserved-builtin shadow or a collision with another define surface
 ///   (an admitted shadowing/colliding nominal is a silent-wrong-type or
 ///   duplicate-definition SEAL breach — refuse, never rename).
+#[allow(clippy::too_many_arguments)] // one linear admission plumbing set
 fn admit_struct_forwarder(
     ctor: &str,
     def: &crate::carrier::StructDef,
     kernel_name: &str,
+    transparent: &BTreeMap<String, TransparentType>,
     bindings: &mut Vec<InterfaceBinding>,
     skipped: &mut Vec<SkippedBinding>,
     seen: &mut BTreeSet<String>,
@@ -578,7 +791,7 @@ fn admit_struct_forwarder(
         });
         return;
     }
-    if let Err(reason) = claim_nominal("define.struct", type_name, define_types) {
+    if let Err(reason) = claim_nominal("define.struct", type_name, define_types, transparent) {
         skipped.push(SkippedBinding {
             ref_name: ctor.to_owned(),
             reason,
@@ -590,6 +803,8 @@ fn admit_struct_forwarder(
         arity: def.fields.len(),
         sig: def.forwarder_ipe_sig(),
         ref_name: ctor.to_owned(),
+        transparent_params: Vec::new(),
+        transparent_result: None,
     });
 }
 
@@ -608,10 +823,12 @@ fn admit_struct_forwarder(
 /// * a per-variant constructor name that is not a legal Ipê value identifier is
 ///   dropped INDIVIDUALLY (each variant name is independent), the rest kept;
 /// * a duplicate constructor name keeps the first.
+#[allow(clippy::too_many_arguments)] // one linear admission plumbing set
 fn admit_enum_forwarders(
     ref_name: &str,
     def: &crate::carrier::EnumDef,
     kernel_name: &str,
+    transparent: &BTreeMap<String, TransparentType>,
     bindings: &mut Vec<InterfaceBinding>,
     skipped: &mut Vec<SkippedBinding>,
     seen: &mut BTreeSet<String>,
@@ -622,7 +839,7 @@ fn admit_enum_forwarders(
     // collision with another define surface refuses the WHOLE entry fail-closed
     // — a variant forwarder must never point at an enum whose `type` was dropped.
     // An enum with no surviving variant un-claims the nominal at the tail.
-    if let Err(reason) = claim_nominal("define.enum", enum_name, define_types) {
+    if let Err(reason) = claim_nominal("define.enum", enum_name, define_types, transparent) {
         skipped.push(SkippedBinding {
             ref_name: ref_name.to_owned(),
             reason,
@@ -658,6 +875,8 @@ fn admit_enum_forwarders(
             arity: v.payload.len(),
             sig: v.forwarder_ipe_sig(enum_name),
             ref_name: variant_ref,
+            transparent_params: Vec::new(),
+            transparent_result: None,
         });
         any_admitted = true;
     }
@@ -688,10 +907,12 @@ fn admit_enum_forwarders(
 /// * the handle nominal routes through [`claim_nominal`], which refuses a
 ///   reserved-builtin shadow or a collision with any other define surface
 ///   (struct / enum / another closure adapter) fail-closed.
+#[allow(clippy::too_many_arguments)] // one linear admission plumbing set
 fn admit_closure_forwarder(
     ref_name: &str,
     sig: &crate::carrier::ClosureSig,
     kernel_name: &str,
+    transparent: &BTreeMap<String, TransparentType>,
     bindings: &mut Vec<InterfaceBinding>,
     skipped: &mut Vec<SkippedBinding>,
     seen: &mut BTreeSet<String>,
@@ -712,7 +933,8 @@ fn admit_closure_forwarder(
         });
         return;
     }
-    if let Err(reason) = claim_nominal("define.closure handle", &handle, define_types) {
+    if let Err(reason) = claim_nominal("define.closure handle", &handle, define_types, transparent)
+    {
         skipped.push(SkippedBinding {
             ref_name: ref_name.to_owned(),
             reason,
@@ -724,6 +946,8 @@ fn admit_closure_forwarder(
         arity: 1,
         sig: sig.forwarder_ipe_sig(&handle),
         ref_name: ref_name.to_owned(),
+        transparent_params: Vec::new(),
+        transparent_result: None,
     });
 }
 
@@ -748,10 +972,20 @@ fn claim_nominal(
     kind: &str,
     nominal: &str,
     define_types: &mut BTreeSet<String>,
+    transparent: &BTreeMap<String, TransparentType>,
 ) -> Result<(), String> {
     if ipe_canon::is_reserved_builtin_type_name(nominal) {
         return Err(format!(
             "{kind} type `{nominal}` shadows an Ipê reserved builtin type"
+        ));
+    }
+    // A define nominal colliding with an admitted transparent foreign type
+    // would declare the record/union AND the define type under one name in
+    // one module (E0428 / a silently-wrong type). The crate's own type wins;
+    // the author renames the define.
+    if transparent.contains_key(nominal) {
+        return Err(format!(
+            "{kind} type `{nominal}` collides with a transparent foreign type of the crate"
         ));
     }
     if !define_types.insert(nominal.to_owned()) {
@@ -766,7 +1000,9 @@ fn claim_nominal(
 ///
 /// Opaque types are exported WITHOUT `(..)` so their placeholder constructor
 /// never escapes the module; the lowerer additionally fails closed on any
-/// constructor use of a foreign union.
+/// constructor use of a foreign union. A transparent enum exports WITH `(..)`
+/// — its constructors ARE the surface — and a transparent struct exports its
+/// record alias name.
 ///
 /// `imports` (home module → type names) renders one
 /// `import <Home> exposing (T, …)` line per entry: the catalog unification
@@ -777,10 +1013,15 @@ pub fn render_module(
     imports: &BTreeMap<String, BTreeSet<String>>,
     opaque_types: &BTreeMap<String, String>,
     define_types: &BTreeSet<String>,
+    transparent_types: &BTreeMap<String, TransparentType>,
     bindings: &[InterfaceBinding],
 ) -> String {
     let mut exports: Vec<String> = opaque_types.keys().cloned().collect();
     exports.extend(define_types.iter().cloned());
+    exports.extend(transparent_types.values().map(|t| match t {
+        TransparentType::Struct { name, .. } => name.as_str().to_owned(),
+        TransparentType::Enum { name, .. } => format!("{name}(..)"),
+    }));
     exports.extend(bindings.iter().map(|b| b.ref_name.clone()));
     let mut out = format!("module {module_name} exposing ({})\n", exports.join(", "));
     for (home, names) in imports {
@@ -795,6 +1036,11 @@ pub fn render_module(
     for name in opaque_types.keys().chain(define_types.iter()) {
         // Writing into a String is infallible.
         let _ = write!(out, "\ntype {name} = {name}\n");
+    }
+    // A transparent foreign type declares its REAL shape: a record alias for a
+    // struct, a closed union for an enum — the representation axis surfaced.
+    for t in transparent_types.values() {
+        let _ = write!(out, "\n{}\n", transparent_type_decl(t));
     }
     for b in bindings {
         let args: Vec<String> = (0..b.arity).map(crate::naming::arg_name).collect();
@@ -1165,5 +1411,209 @@ mod tests {
             "{:?}",
             iface.skipped
         );
+    }
+
+    /// One-crate package with a transparent `Point` struct and `Shade` enum in
+    /// the type catalog, plus the given functions.
+    fn transparent_pkg(functions: &serde_json::Value) -> PkgInfo {
+        let doc = serde_json::json!({
+            "pkg": "tm", "name": "tm", "version": "0.1.0",
+            "functions": functions,
+            "errors": [],
+            "types": [
+                {"name": "Point", "rustPath": "tm::Point", "kind": "struct",
+                 "fields": [
+                    {"name": "x", "type": "Int", "rustType": "i64"},
+                    {"name": "y", "type": "Float", "rustType": "f64"}
+                 ]},
+                {"name": "Shade", "rustPath": "tm::Shade", "kind": "enum",
+                 "variants": [
+                    {"name": "On", "kind": "unit"},
+                    {"name": "Level", "kind": "tuple",
+                     "members": [{"name": "0", "type": "Int", "rustType": "i64"}]}
+                 ]}
+            ]
+        });
+        PkgInfo::decode_json(&doc.to_string()).expect("decodes")
+    }
+
+    #[test]
+    fn transparent_types_surface_as_record_alias_and_closed_union() {
+        let iface = crate_interface(&transparent_pkg(&serde_json::json!([
+            {"name": "shift",
+             "params": [{"name": "p", "type": "Point", "ipeType": "Point",
+                         "rustType": "tm::Point"}],
+             "results": [{"name": "", "type": "Shade", "rustType": "tm::Shade"}],
+             "effect": "pure"}
+        ])));
+        // Real declarations, exported — the union WITH its constructors.
+        assert!(
+            iface
+                .source
+                .contains("\ntype alias Point = { x : Int, y : Float }\n"),
+            "{}",
+            iface.source
+        );
+        assert!(
+            iface.source.contains("\ntype Shade = On | Level Int\n"),
+            "{}",
+            iface.source
+        );
+        assert!(
+            iface.source.contains("Point, Shade(..)"),
+            "{}",
+            iface.source
+        );
+        // Never opaque handles too: one name, one representation.
+        assert!(iface.opaque_types.is_empty(), "{:?}", iface.opaque_types);
+        assert_eq!(iface.transparent_types.len(), 2);
+        // The binding records where the conversions apply.
+        let b = iface.bindings.first().expect("shift admitted");
+        assert_eq!(b.transparent_params, vec![Some("Point".to_owned())]);
+        assert_eq!(
+            b.transparent_result,
+            Some(TransparentResult {
+                type_name: "Shade".to_owned(),
+                in_result: true,
+            })
+        );
+    }
+
+    #[test]
+    fn transparent_type_in_an_uncovered_position_over_drops_the_binding() {
+        // `Maybe Point` result: the conversion glue covers a bare param and a
+        // bare/Result-wrapped result only — anything else over-drops with a
+        // recorded reason instead of emitting a mis-wired seam.
+        let iface = crate_interface(&transparent_pkg(&serde_json::json!([
+            {"name": "find",
+             "params": [{"name": "q", "type": "&str", "ipeType": "String"}],
+             "results": [{"name": "", "type": "Maybe Point",
+                          "rustType": "Option<tm::Point>", "ipeType": "Maybe Point"}],
+             "effect": "pure"}
+        ])));
+        assert!(iface.bindings.is_empty(), "{:?}", iface.bindings);
+        assert!(
+            iface
+                .skipped
+                .iter()
+                .any(|s| s.ref_name == "find" && s.reason.contains("does not cover")),
+            "{:?}",
+            iface.skipped
+        );
+    }
+
+    #[test]
+    fn unreferenced_transparent_types_are_pruned_from_the_surface() {
+        // No admitted binding mentions Point or Shade — neither is declared,
+        // and the prune is recorded.
+        let iface = crate_interface(&transparent_pkg(&serde_json::json!([
+            {"name": "version",
+             "params": [],
+             "results": [{"name": "", "type": "String"}],
+             "effect": "pure"}
+        ])));
+        assert!(iface.transparent_types.is_empty());
+        assert!(
+            !iface.source.contains("type alias Point"),
+            "{}",
+            iface.source
+        );
+        assert!(!iface.source.contains("type Shade"), "{}", iface.source);
+        assert!(
+            iface.skipped.iter().any(|s| s.ref_name == "type Point"
+                && s.reason.contains("referenced by no admitted binding")),
+            "{:?}",
+            iface.skipped
+        );
+    }
+
+    #[test]
+    fn signature_path_disagreement_drops_transparency_to_the_opaque_baseline() {
+        // The fn signatures resolve `Point` at `other::Point` while the type
+        // catalog claims `tm::Point`: gluing would name the wrong Rust type,
+        // so transparency drops and the name stays an opaque handle.
+        let iface = crate_interface(&transparent_pkg(&serde_json::json!([
+            {"name": "shift",
+             "params": [{"name": "p", "type": "Point", "ipeType": "Point",
+                         "rustType": "other::Point"}],
+             "results": [{"name": "", "type": "Point", "rustType": "other::Point"}],
+             "effect": "pure"}
+        ])));
+        assert!(!iface.transparent_types.contains_key("Point"));
+        assert!(
+            iface.source.contains("\ntype Point = Point\n"),
+            "{}",
+            iface.source
+        );
+        assert_eq!(
+            iface.opaque_types.get("Point").map(String::as_str),
+            Some("::other::Point")
+        );
+        let b = iface
+            .bindings
+            .iter()
+            .find(|b| b.ref_name == "shift")
+            .expect("shift binds as opaque");
+        assert!(b.transparent_params.iter().all(Option::is_none));
+        assert!(b.transparent_result.is_none());
+        assert!(
+            iface
+                .skipped
+                .iter()
+                .any(|s| s.ref_name == "type Point" && s.reason.contains("resolves to")),
+            "{:?}",
+            iface.skipped
+        );
+    }
+
+    #[test]
+    fn define_nominal_colliding_with_a_transparent_type_is_refused() {
+        // A `[rust.define.struct]` claiming `Point` while the crate's own
+        // `Point` is transparent would declare two types under one nominal.
+        // The crate's type wins; the define entry is refused with a reason.
+        let doc = serde_json::json!({
+            "pkg": "tm", "name": "tm", "version": "0.1.0",
+            "functions": [
+                {"name": "shift",
+                 "params": [{"name": "p", "type": "Point", "ipeType": "Point",
+                             "rustType": "tm::Point"}],
+                 "results": [{"name": "", "type": "Point", "rustType": "tm::Point"}],
+                 "effect": "pure"},
+                {"name": "point_new", "effect": "pure", "isStructCtor": true,
+                 "structName": "Point",
+                 "structFields": [{ "name": "x", "type": "i64" }],
+                 "structDerives": []}
+            ],
+            "errors": [],
+            "types": [
+                {"name": "Point", "rustPath": "tm::Point", "kind": "struct",
+                 "fields": [{"name": "x", "type": "Int", "rustType": "i64"}]}
+            ]
+        });
+        let iface = crate_interface(&PkgInfo::decode_json(&doc.to_string()).expect("decodes"));
+        assert!(iface.transparent_types.contains_key("Point"));
+        assert!(!iface.define_types.contains("Point"));
+        assert!(
+            iface
+                .skipped
+                .iter()
+                .any(|s| s.ref_name == "point_new"
+                    && s.reason.contains("transparent foreign type")),
+            "{:?}",
+            iface.skipped
+        );
+    }
+
+    #[test]
+    fn top_level_arrow_split_keeps_parenthesised_groups_whole() {
+        assert_eq!(
+            split_top_level_arrows("Point -> Result Error Shade"),
+            vec!["Point".to_owned(), "Result Error Shade".to_owned()]
+        );
+        assert_eq!(
+            split_top_level_arrows("(Int -> Int) -> Point"),
+            vec!["(Int -> Int)".to_owned(), "Point".to_owned()]
+        );
+        assert_eq!(split_top_level_arrows("()"), vec!["()".to_owned()]);
     }
 }

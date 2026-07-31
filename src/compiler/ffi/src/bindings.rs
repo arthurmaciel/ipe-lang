@@ -3774,7 +3774,7 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
         let bindings = emit_bindings(&pkg);
         let kernel: serde_json::Value =
             serde_json::from_str(&crate::emit::emit_kernel_json(&pkg)).expect("valid JSON");
-        let ipei = crate::emit::emit_ipei(&pkg);
+        let ipei = crate::emit::emit_ipei(&pkg, &std::collections::BTreeMap::new());
         let functions = kernel
             .pointer("/functions")
             .and_then(serde_json::Value::as_array)

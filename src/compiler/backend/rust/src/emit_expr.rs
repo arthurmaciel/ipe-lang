@@ -979,6 +979,173 @@ pub fn callee_name(ctx: &EmitCtx, callee: &Callee) -> DResult<String> {
     }
 }
 
+/// Does this call target an FFI wrapper with transparent conversion glue?
+/// The doc builder keeps such calls as byte-carried leaves so the string
+/// emitter's glued rendering is the single source of the emitted text.
+pub fn ffi_call_has_glue(ctx: &EmitCtx, callee: &Callee) -> DResult<bool> {
+    if let Callee::Ffi { ident } = callee {
+        Ok(ctx.ffi_wrapper_glue(*ident)?.is_some())
+    } else {
+        Ok(false)
+    }
+}
+
+/// Emit a [`Callee::Ffi`] call through its transparent conversion glue.
+///
+/// Marked arguments convert Ipê→foreign inline; a glued result converts
+/// foreign→Ipê around the call — under the `IpeResult` Ok arm for a fallible
+/// wrapper, or over the bare value for an infallible accessor. Unmarked
+/// positions render exactly as the generic tail would.
+fn emit_ffi_glued_call(
+    ctx: &EmitCtx,
+    wrapper: Symbol,
+    glue: &crate::FfiWrapperGlue,
+    args: &[Expr],
+    indent: usize,
+    depth: u16,
+    generics: GenericScope,
+) -> DResult<String> {
+    let name = format!("crate::ffi::{}", ctx.resolve_ident(wrapper)?);
+    let mut parts = Vec::with_capacity(args.len());
+    for (i, arg) in args.iter().enumerate() {
+        let rendered = emit_expr_at(ctx, arg, indent, depth, generics)?;
+        match glue.params.get(i).and_then(Option::as_ref) {
+            None => parts.push(rendered),
+            Some(t) => parts.push(ffi_to_foreign(ctx, t, &rendered)?),
+        }
+    }
+    let call = format!("{name}({})", parts.join(", "));
+    let Some(result) = &glue.result else {
+        return Ok(call);
+    };
+    let conv = ffi_from_foreign(ctx, &result.ty, "__ipe_ffi_v")?;
+    if result.in_result {
+        Ok(format!(
+            "match {call} {{ IpeResult::Ok(__ipe_ffi_v) => IpeResult::Ok({conv}), \
+             IpeResult::Err(__ipe_ffi_e) => IpeResult::Err(__ipe_ffi_e) }}"
+        ))
+    } else {
+        Ok(format!("{{ let __ipe_ffi_v = {call}; {conv} }}"))
+    }
+}
+
+/// Render the Ipê→foreign conversion of `value` (a rendered expression) for
+/// one transparent type: a record moves field-for-field into the foreign
+/// struct literal; a union matches the app enum into the foreign enum.
+fn ffi_to_foreign(ctx: &EmitCtx, ty: &crate::FfiGlueType, value: &str) -> DResult<String> {
+    match ty {
+        crate::FfiGlueType::Record { rust_path, fields } => {
+            let moves: Vec<String> = fields
+                .iter()
+                .map(|f| format!("{f}: __ipe_ffi_r.{f}"))
+                .collect();
+            Ok(format!(
+                "{{ let __ipe_ffi_r = {value}; {rust_path} {{ {} }} }}",
+                moves.join(", ")
+            ))
+        }
+        crate::FfiGlueType::Union {
+            module,
+            name,
+            rust_path,
+            variants,
+        } => {
+            let app = ffi_union_app_name(ctx, module, name)?;
+            let arms: Vec<String> = variants
+                .iter()
+                .map(|v| ffi_union_arm(&app, rust_path, v, Direction::ToForeign))
+                .collect();
+            Ok(format!("match ({value}) {{ {} }}", arms.join(", ")))
+        }
+    }
+}
+
+/// Render the foreign→Ipê conversion of the bound variable `value` for one
+/// transparent type: a struct moves field-for-field into the synthesised
+/// record struct; an enum matches the foreign enum into the app enum.
+fn ffi_from_foreign(ctx: &EmitCtx, ty: &crate::FfiGlueType, value: &str) -> DResult<String> {
+    match ty {
+        crate::FfiGlueType::Record { fields, .. } => {
+            let rec = ctx.record_name_for_literal(fields)?;
+            let moves: Vec<String> = fields.iter().map(|f| format!("{f}: {value}.{f}")).collect();
+            Ok(format!("{rec} {{ {} }}", moves.join(", ")))
+        }
+        crate::FfiGlueType::Union {
+            module,
+            name,
+            rust_path,
+            variants,
+        } => {
+            let app = ffi_union_app_name(ctx, module, name)?;
+            let arms: Vec<String> = variants
+                .iter()
+                .map(|v| ffi_union_arm(&app, rust_path, v, Direction::FromForeign))
+                .collect();
+            Ok(format!("match {value} {{ {} }}", arms.join(", ")))
+        }
+    }
+}
+
+/// Which way a transparent-union match arm converts.
+#[derive(Clone, Copy)]
+enum Direction {
+    ToForeign,
+    FromForeign,
+}
+
+/// One `match` arm converting a transparent enum variant between the app
+/// enum (always tuple-shaped — the positional Ipê constructor surface) and
+/// the foreign enum (its declared unit/tuple/struct shape).
+fn ffi_union_arm(
+    app: &str,
+    rust_path: &str,
+    v: &crate::FfiGlueVariant,
+    direction: Direction,
+) -> String {
+    let vn = &v.name;
+    let binders: Vec<String> = match &v.payload {
+        crate::FfiGluePayload::Unit => Vec::new(),
+        crate::FfiGluePayload::Tuple(n) => (0..*n).map(|i| format!("__ipe_ffi_p{i}")).collect(),
+        crate::FfiGluePayload::Struct(members) => (0..members.len())
+            .map(|i| format!("__ipe_ffi_p{i}"))
+            .collect(),
+    };
+    // The app side is positional; the foreign side re-attaches struct-variant
+    // member names.
+    let app_side = if binders.is_empty() {
+        format!("{app}::{vn}")
+    } else {
+        format!("{app}::{vn}({})", binders.join(", "))
+    };
+    let foreign_side = match &v.payload {
+        crate::FfiGluePayload::Unit => format!("{rust_path}::{vn}"),
+        crate::FfiGluePayload::Tuple(_) => format!("{rust_path}::{vn}({})", binders.join(", ")),
+        crate::FfiGluePayload::Struct(members) => {
+            let named: Vec<String> = members
+                .iter()
+                .zip(&binders)
+                .map(|(m, b)| format!("{m}: {b}"))
+                .collect();
+            format!("{rust_path}::{vn} {{ {} }}", named.join(", "))
+        }
+    };
+    match direction {
+        Direction::ToForeign => format!("{app_side} => {foreign_side}"),
+        Direction::FromForeign => format!("{foreign_side} => {app_side}"),
+    }
+}
+
+/// The app-side Rust enum name for a transparent union, resolved through the
+/// registered `EnumDef` exactly as every other reference to it.
+fn ffi_union_app_name(ctx: &EmitCtx, module: &[String], name: &str) -> DResult<String> {
+    let mut segs = Vec::with_capacity(module.len());
+    for m in module {
+        segs.push(ctx.lookup_symbol(m)?);
+    }
+    let name_sym = ctx.lookup_symbol(name)?;
+    Ok(ctx.enum_name(&ipe_ir::ModPath(segs), name_sym)?.to_owned())
+}
+
 /// Whether a kernel's runtime function takes its two arguments in the OPPOSITE
 /// order to the Ipê call. The `Maybe` / `Result` mapping combinators are
 /// container-first in the runtime (`ipe_maybe_map(m, f)`) but function-first in
@@ -6281,6 +6448,16 @@ pub fn emit_expr_at(
                     let dict_s = emit_expr_at(ctx, dict_arg, indent, child, generics)?;
                     return Ok(format!("dict_get({key_s}, {dict_s}.clone())"));
                 }
+            }
+            // A transparent-typed FFI call converts at the seam: arguments
+            // the wrapper's glue map marks render as foreign struct/enum
+            // constructions, and a glued result converts back to the
+            // app-side record/union. Wrappers without glue fall through to
+            // the generic tail unchanged.
+            if let Callee::Ffi { ident } = callee
+                && let Some(glue) = ctx.ffi_wrapper_glue(*ident)?
+            {
+                return emit_ffi_glued_call(ctx, *ident, glue, args, indent, child, generics);
             }
             let name = callee_name(ctx, callee)?;
             // a polymorphic-kernel turbofish the lowerer set because the
