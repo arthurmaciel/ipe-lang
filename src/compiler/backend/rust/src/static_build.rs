@@ -77,6 +77,25 @@ impl StaticTriple {
     /// Every supported triple, for refusal messages.
     pub const SUPPORTED: &'static [&'static str] =
         &["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"];
+
+    /// C-compiler executable names the toolchain preflight probes on `PATH`
+    /// for this triple, most-specific first.
+    ///
+    /// A C-carrying static build (the default: the emitted graph pulls the
+    /// `zstd`/`ring` C units) needs a compiler that targets *this* triple. The
+    /// names are architecture-specific: an `x86_64` host's
+    /// `x86_64-linux-musl-gcc` cannot compile for aarch64, so probing it for an
+    /// aarch64 plan would spuriously pass. aarch64 also accepts the
+    /// widely-packaged GNU cross-compiler (`aarch64-linux-gnu-gcc`) because the
+    /// bundled `rust-lld` self-contained link path supplies the musl startup
+    /// objects — only the C units, not the final link, need the cross toolchain.
+    #[must_use]
+    pub const fn cc_candidates(self) -> &'static [&'static str] {
+        match self {
+            Self::X8664LinuxMusl => &["x86_64-linux-musl-gcc", "musl-gcc"],
+            Self::Aarch64LinuxMusl => &["aarch64-linux-musl-gcc", "aarch64-linux-gnu-gcc"],
+        }
+    }
 }
 
 /// The allocator linked into a static artifact.
@@ -111,12 +130,70 @@ impl StaticAllocator {
     }
 }
 
+/// Whether a static artifact is permitted to link C, and — only where it is —
+/// which allocator it carries.
+///
+/// This is make-invalid-states-unrepresentable applied to the C-free choice.
+/// A C-free build links no C library at all, so it can carry only the pure-Rust
+/// allocator; a C-requiring allocator (`Mimalloc`, which vendors and links C;
+/// `System`, which is the target libc's C malloc) is a contradiction there. By
+/// putting the allocator field *inside* [`Self::WithLibc`] and giving
+/// [`Self::CFree`] no allocator field, the pair `{c-free, mimalloc}` cannot be
+/// constructed — the contradiction is unrepresentable rather than guarded
+/// against at runtime. The CLI resolver parses the flag combination into this
+/// ADT once; downstream code receives only a valid profile, never a bool + an
+/// allocator to re-check.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CProfile {
+    /// The artifact links no C. Its allocator is necessarily the pure-Rust
+    /// dlmalloc; there is no allocator field because no other choice is C-free.
+    CFree,
+    /// The artifact may link C (the default). The allocator is chosen here —
+    /// the only place an allocator choice is offered.
+    WithLibc { allocator: StaticAllocator },
+}
+
+impl CProfile {
+    /// The allocator this profile links. C-free is always pure-Rust dlmalloc.
+    #[must_use]
+    pub const fn allocator(self) -> StaticAllocator {
+        match self {
+            Self::CFree => StaticAllocator::Dlmalloc,
+            Self::WithLibc { allocator } => allocator,
+        }
+    }
+
+    /// Whether the artifact is intended to link no C — the toolchain preflight
+    /// skips the C-compiler probe under this profile (its whole reason, the
+    /// `zstd`/`ring` C units, is gone).
+    #[must_use]
+    pub const fn is_c_free(self) -> bool {
+        matches!(self, Self::CFree)
+    }
+}
+
 /// A fully-resolved static build plan. Constructed only by the CLI's
 /// resolver; reaching the emitter means every refusal gate already passed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct StaticPlan {
     pub triple: StaticTriple,
-    pub allocator: StaticAllocator,
+    /// The C-linkage profile and (only where C is permitted) the allocator —
+    /// one field, so a C-free plan cannot carry a C-requiring allocator.
+    pub c_profile: CProfile,
+}
+
+impl StaticPlan {
+    /// The allocator the emitted crate links.
+    #[must_use]
+    pub const fn allocator(self) -> StaticAllocator {
+        self.c_profile.allocator()
+    }
+
+    /// Whether the plan links no C.
+    #[must_use]
+    pub const fn is_c_free(self) -> bool {
+        self.c_profile.is_c_free()
+    }
 }
 
 /// First line of every generated `.cargo/config.toml`.
@@ -246,7 +323,7 @@ pub fn manifest_is_webview(cargo_toml: &str) -> DResult<bool> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CARGO_CONFIG_MARKER, StaticAllocator, StaticPlan, StaticTriple, cargo_config,
+        CARGO_CONFIG_MARKER, CProfile, StaticAllocator, StaticPlan, StaticTriple, cargo_config,
         manifest_is_webview, staticize_manifest,
     };
     use ipe_diagnostics::DResult;
@@ -338,7 +415,9 @@ mod tests {
     fn cargo_config_pins_crt_static_and_nothing_else() {
         let cfg = cargo_config(&StaticPlan {
             triple: StaticTriple::X8664LinuxMusl,
-            allocator: StaticAllocator::Dlmalloc,
+            c_profile: CProfile::WithLibc {
+                allocator: StaticAllocator::Dlmalloc,
+            },
         });
         assert!(cfg.starts_with(CARGO_CONFIG_MARKER));
         assert!(cfg.contains("[target.x86_64-unknown-linux-musl]"));
@@ -369,10 +448,42 @@ mod tests {
     }
 
     #[test]
+    fn cc_candidates_are_triple_specific() {
+        // x86_64 probes its own musl compilers and must NOT list an aarch64
+        // name; aarch64 must NOT list the x86_64 name — a host carrying only
+        // the wrong-arch compiler must not spuriously pass the preflight.
+        let x64 = StaticTriple::X8664LinuxMusl.cc_candidates();
+        let arm = StaticTriple::Aarch64LinuxMusl.cc_candidates();
+        assert!(x64.contains(&"x86_64-linux-musl-gcc"));
+        assert!(x64.contains(&"musl-gcc"));
+        assert!(!x64.iter().any(|c| c.contains("aarch64")));
+        assert!(arm.contains(&"aarch64-linux-musl-gcc"));
+        assert!(arm.contains(&"aarch64-linux-gnu-gcc"));
+        assert!(!arm.iter().any(|c| c.starts_with("x86_64")));
+    }
+
+    #[test]
+    fn cfree_profile_forces_pure_rust_dlmalloc() {
+        // The C-free profile carries no allocator field; its effective
+        // allocator is pure-Rust dlmalloc, and no C-requiring allocator can be
+        // paired with it because the enum simply has no such shape.
+        assert_eq!(CProfile::CFree.allocator(), StaticAllocator::Dlmalloc);
+        assert!(CProfile::CFree.is_c_free());
+        assert!(
+            !CProfile::WithLibc {
+                allocator: StaticAllocator::Mimalloc
+            }
+            .is_c_free()
+        );
+    }
+
+    #[test]
     fn aarch64_musl_cargo_config_pins_crt_static() {
         let cfg = cargo_config(&StaticPlan {
             triple: StaticTriple::Aarch64LinuxMusl,
-            allocator: StaticAllocator::Dlmalloc,
+            c_profile: CProfile::WithLibc {
+                allocator: StaticAllocator::Dlmalloc,
+            },
         });
         assert!(cfg.starts_with(CARGO_CONFIG_MARKER));
         assert!(cfg.contains("[target.aarch64-unknown-linux-musl]"));
