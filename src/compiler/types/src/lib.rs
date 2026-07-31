@@ -34,6 +34,7 @@ mod unify;
 mod unionfind;
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -376,6 +377,12 @@ fn infer_core(
             .flat_map(|iface| iface.unions.iter())
             .collect()
     });
+    // The user enums whose definition embeds a function payload — consulted by
+    // every concrete equality / stringify obligation so a `==` / `toString` on a
+    // function-carrying enum fails closed (the payload arrow is invisible in a
+    // `Ty::Con`'s applied type arguments; see [`fn_embedding_enums`]).
+    let fn_enums = fn_embedding_enums(&m.unions, &dep_unions);
+    let enum_embeds_fn = |home: &[Symbol], name: Symbol| fn_enums.contains(&(home.to_vec(), name));
     let generated = match scoped {
         None => lift!(Builder::run(&mut uf, interner, m)),
         Some(ctx) => {
@@ -573,7 +580,7 @@ fn infer_core(
                     name: int_sym,
                     args: Vec::new(),
                 };
-                if !concrete_super_ok(interner, bounds, &int_ty) {
+                if !concrete_super_ok(interner, bounds, &int_ty, &enum_embeds_fn) {
                     return Err((
                         super_unsatisfied(interner, bounds, &int_ty, *span),
                         Vec::new(),
@@ -599,7 +606,7 @@ fn infer_core(
                     name: sqlvalue_sym,
                     args: Vec::new(),
                 };
-                if !concrete_super_ok(interner, bounds, &sqlvalue_ty) {
+                if !concrete_super_ok(interner, bounds, &sqlvalue_ty, &enum_embeds_fn) {
                     return Err((
                         super_unsatisfied(interner, bounds, &sqlvalue_ty, *span),
                         Vec::new(),
@@ -629,7 +636,7 @@ fn infer_core(
             // code `cargo` rejects.
             Content::Structure(_) => {
                 let ty = lift!(zonk(&mut uf, budget, root));
-                if !concrete_super_ok(interner, *orig_bounds, &ty) {
+                if !concrete_super_ok(interner, *orig_bounds, &ty, &enum_embeds_fn) {
                     return Err((
                         super_unsatisfied(interner, *orig_bounds, &ty, *span),
                         Vec::new(),
@@ -720,7 +727,8 @@ fn infer_core(
         budget,
         interner,
         bounds_for_apps,
-        &generated.scheme_apps
+        &generated.scheme_apps,
+        &enum_embeds_fn
     ));
 
     // Scoped solve only: assemble the module's typed interface — exported
@@ -826,6 +834,7 @@ fn check_scheme_applications(
     interner: &Interner,
     bounds: &BTreeMap<(Vec<Symbol>, Symbol), BTreeMap<Symbol, TyBounds>>,
     apps: &[SchemeApp],
+    enum_embeds_fn: &impl Fn(&[Symbol], Symbol) -> bool,
 ) -> DResult<()> {
     for app in apps {
         // (AUD-05) keyed by (home, name) — a bare-name lookup would check a
@@ -839,7 +848,7 @@ fn check_scheme_applications(
                 continue;
             };
             let ty = zonk(uf, budget, *fresh)?;
-            if !emitted_bound_satisfied(interner, *b, &ty) {
+            if !emitted_bound_satisfied(interner, *b, &ty, &enum_embeds_fn) {
                 return Err(super_unsatisfied(interner, *b, &ty, app.span));
             }
         }
@@ -856,7 +865,12 @@ fn check_scheme_applications(
 /// includes `String`, tuples, and enums. A non-concrete type (a bare variable
 /// the obligation escaped into) satisfies nothing — fail-closed, as cross-
 /// binding obligation propagation is not yet supported.
-fn emitted_bound_satisfied(interner: &Interner, bounds: TyBounds, ty: &Ty) -> bool {
+fn emitted_bound_satisfied(
+    interner: &Interner,
+    bounds: TyBounds,
+    ty: &Ty,
+    enum_embeds_fn: &impl Fn(&[Symbol], Symbol) -> bool,
+) -> bool {
     let prim = match ty {
         Ty::Con { module, name, args } if module.is_empty() && args.is_empty() => {
             interner.resolve(*name)
@@ -916,7 +930,7 @@ fn emitted_bound_satisfied(interner: &Interner, bounds: TyBounds, ty: &Ty) -> bo
     let sql_param_ok = matches!(prim, Some("Int" | "Float" | "String" | "Bool" | "SqlValue"));
     (!bounds.has_number() || number_ok)
         && (!bounds.has_ord() || ord_ok)
-        && (!bounds.has_eq() || ty_is_equatable(ty))
+        && (!bounds.has_eq() || ty_is_equatable(ty, enum_embeds_fn))
         && (!bounds.has_comparable_key() || key_ok)
         && (!bounds.has_append() || appendable_ok)
         && (!bounds.has_hof_kernel_result() || not_curried_ok)
@@ -931,7 +945,12 @@ fn emitted_bound_satisfied(interner: &Interner, bounds: TyBounds, ty: &Ty) -> bo
 /// the head check defers to here. `String` satisfies ordering (a direct
 /// `"a" > "b"` borrows its operands, needing no `Copy`), unlike the
 /// generic-emission gate [`emitted_bound_satisfied`].
-pub(crate) fn concrete_super_ok(interner: &Interner, bounds: TyBounds, ty: &Ty) -> bool {
+pub(crate) fn concrete_super_ok(
+    interner: &Interner,
+    bounds: TyBounds,
+    ty: &Ty,
+    enum_embeds_fn: &impl Fn(&[Symbol], Symbol) -> bool,
+) -> bool {
     let prim = match ty {
         Ty::Con { module, name, args } if module.is_empty() && args.is_empty() => {
             interner.resolve(*name)
@@ -957,12 +976,12 @@ pub(crate) fn concrete_super_ok(interner: &Interner, bounds: TyBounds, ty: &Ty) 
     // typing here; the Rust-backend `f64`-as-key reality is gated at lowering.
     (!bounds.has_number() || number_ok)
         && (!bounds.has_ord() || ord_ok)
-        && (!bounds.has_eq() || ty_is_equatable(ty))
+        && (!bounds.has_eq() || ty_is_equatable(ty, enum_embeds_fn))
         && (!bounds.has_comparable_key() || ord_ok)
         // Stringify (`toString` / `Log.*With`): showable iff it contains no
         // function anywhere — the SAME "no function nested" rule as equatable,
         // since every non-function type derives `IpeStringify`.
-        && (!bounds.has_show() || ty_is_equatable(ty))
+        && (!bounds.has_show() || ty_is_equatable(ty, enum_embeds_fn))
         && (!bounds.has_append() || appendable_ok)
         // See `emitted_bound_satisfied`'s matching comment — same
         // structurally-shallow, fail-closed-on-`Ty::Var` check, reused for
@@ -979,13 +998,64 @@ pub(crate) fn concrete_super_ok(interner: &Interner, bounds: TyBounds, ty: &Ty) 
 /// records, and enums all derive `PartialEq`; a function never does). A bare
 /// type variable is rejected (fail-closed): an equality obligation that escaped
 /// into an enclosing generic is not yet propagated across binding boundaries.
-fn ty_is_equatable(ty: &Ty) -> bool {
+/// Does canonical type `t` embed a function arrow anywhere — a direct `Lambda`,
+/// or one nested in a tuple / record / type-constructor argument?
+fn canon_type_embeds_lambda(t: &canon::Type) -> bool {
+    match t {
+        canon::Type::Lambda(_, _) => true,
+        canon::Type::Var(_) | canon::Type::Unit => false,
+        canon::Type::Tuple(elems) => elems.iter().any(canon_type_embeds_lambda),
+        canon::Type::Con { args, .. } => args.iter().any(canon_type_embeds_lambda),
+        canon::Type::Record(fields) => fields.iter().any(|(_, f)| canon_type_embeds_lambda(f)),
+        canon::Type::RecordOpen(_, fields) => {
+            fields.iter().any(|(_, f)| canon_type_embeds_lambda(f))
+        }
+    }
+}
+
+/// The `(home, name)` set of user enums whose DEFINITION embeds a function in
+/// any constructor payload (`type Handler a = OnClick (Int -> a) | Plain a`).
+///
+/// Such an enum is not `Equatable` / showable however it is applied: its payload
+/// arrow is invisible in a `Ty::Con`'s type arguments (which carry only applied
+/// type parameters), so the structural [`ty_is_equatable`] walk cannot see it
+/// without this out-of-band definition lookup. Consulted at every concrete
+/// equality / stringify obligation so a `==` / `toString` on a function-carrying
+/// enum fails closed (IPE-T0014) instead of emitting Rust that does not build.
+fn fn_embedding_enums(
+    module_unions: &[canon::Union],
+    dep_unions: &[&canon::Union],
+) -> BTreeSet<(Vec<Symbol>, Symbol)> {
+    module_unions
+        .iter()
+        .chain(dep_unions.iter().copied())
+        .filter(|u| {
+            u.ctors
+                .iter()
+                .any(|c| c.args.iter().any(canon_type_embeds_lambda))
+        })
+        .map(|u| (u.home.clone(), u.name))
+        .collect()
+}
+
+fn ty_is_equatable(ty: &Ty, enum_embeds_fn: &impl Fn(&[Symbol], Symbol) -> bool) -> bool {
     match ty {
         Ty::Var(_) | Ty::Fun(_, _) => false,
         Ty::Unit => true,
-        Ty::Tuple(elems) => elems.iter().all(ty_is_equatable),
-        Ty::Record(fields, _) => fields.values().all(ty_is_equatable),
-        Ty::Con { args, .. } => args.iter().all(ty_is_equatable),
+        Ty::Tuple(elems) => elems.iter().all(|e| ty_is_equatable(e, enum_embeds_fn)),
+        Ty::Record(fields, _) => fields.values().all(|f| ty_is_equatable(f, enum_embeds_fn)),
+        // A `Ty::Con` head names a user enum (or a builtin like `Maybe`) whose
+        // variant payloads are NOT in `args` — `args` carries only the applied
+        // type parameters. An enum whose DEFINITION embeds a function in a
+        // payload (`type Handler a = OnClick (Int -> a) | Plain a`) is therefore
+        // not equatable however it is applied, even though every `arg` is
+        // (`Handler Int`'s only arg is `Int`). Consult `enum_embeds_fn` on the
+        // head, then still recurse the args so a function reaching a type
+        // parameter (`Box (Int -> Int)` for `type Box a = Box a`) is caught too.
+        Ty::Con { module, name, args } => {
+            !enum_embeds_fn(module, *name)
+                && args.iter().all(|a| ty_is_equatable(a, enum_embeds_fn))
+        }
     }
 }
 
