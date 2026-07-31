@@ -1320,7 +1320,7 @@ fn write_emitted_project(
         if static_build::manifest_is_webview(&emitted.cargo_toml).map_err(backend_invariant_err)? {
             return Err(CliError::StaticRefusal(build_plan::Refusal::WebviewStatic));
         }
-        let cargo_toml = static_build::staticize_manifest(&emitted.cargo_toml, plan.allocator)
+        let cargo_toml = static_build::staticize_manifest(&emitted.cargo_toml, plan.allocator())
             .map_err(backend_invariant_err)?;
         manifest.insert(PathBuf::from("Cargo.toml"), cargo_toml);
         manifest.insert(
@@ -1877,7 +1877,7 @@ fn resolve_static_plan(
     let static_plan = build_plan::resolve(&merged)?;
     if let Some(plan) = &static_plan {
         build_plan::preflight(plan)?;
-        if plan.allocator == ipe_backend_rust::static_build::StaticAllocator::Mimalloc {
+        if plan.allocator() == ipe_backend_rust::static_build::StaticAllocator::Mimalloc {
             // The design's explicit opt-in notice: the C cost is acknowledged,
             // never silent.
             eprintln!(

@@ -182,6 +182,7 @@ struct StaticFlags {
     target: Option<String>,
     allocator: Option<AllocatorChoice>,
     allow_slow_allocator: bool,
+    c_free: bool,
 }
 
 impl StaticFlags {
@@ -213,6 +214,7 @@ impl StaticFlags {
                 set_once(&mut self.allocator, choice, "--allocator", command)?;
             }
             "--allow-slow-allocator" => self.allow_slow_allocator = true,
+            "--cfree" => self.c_free = true,
             _ => return Ok(false),
         }
         Ok(true)
@@ -225,6 +227,7 @@ impl StaticFlags {
             target: self.target,
             allocator: self.allocator,
             allow_slow_allocator: self.allow_slow_allocator.then_some(true),
+            c_free: self.c_free.then_some(true),
         }
     }
 }
@@ -277,9 +280,10 @@ pub struct BuildArgs {
 ///
 /// Rejects, at this single boundary: `--emit-ir` combined with any
 /// emit-affecting flag (`--out` / `--static` / `--target` / `--allocator` /
-/// `--allow-slow-allocator`); `--target wasm` combined with `--static` /
-/// `--allocator` / `--allow-slow-allocator` (native-only flags); a duplicate
-/// value flag; an allocator name outside the closed set; and an unknown flag.
+/// `--allow-slow-allocator` / `--cfree`); `--target wasm` combined with
+/// `--static` / `--allocator` / `--allow-slow-allocator` / `--cfree`
+/// (native-only flags); a duplicate value flag; an allocator name outside the
+/// closed set; and an unknown flag.
 ///
 /// # Errors
 /// [`CliError::Usage`] / [`CliError::UsageOwned`] naming the exact problem.
@@ -335,6 +339,11 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
             "--allow-slow-allocator is a native-target flag; it does not compose with --target wasm",
         ));
     }
+    if wasm && static_flags.c_free {
+        return Err(CliError::Usage(
+            "--cfree is a native-target flag; it does not compose with --target wasm",
+        ));
+    }
 
     let mode = if emit_ir {
         // `--emit-ir` stops before codegen, so every emit-affecting flag is
@@ -358,6 +367,9 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
             return Err(CliError::Usage(
                 "--emit-ir does not compose with --allow-slow-allocator",
             ));
+        }
+        if static_flags.c_free {
+            return Err(CliError::Usage("--emit-ir does not compose with --cfree"));
         }
         if production {
             return Err(CliError::Usage(

@@ -18,6 +18,10 @@
 #
 # Matrix: dlmalloc (the pure-Rust default) and mimalloc (the explicit C
 # opt-in — kept green so the acknowledged path cannot rot).
+#
+# Jobs also cover the aarch64-unknown-linux-musl static target (cross-built +
+# QEMU-run) and the C-free (`--cfree`) axis (fail-closed refusal proof until the
+# pure-Rust dependency swaps land).
 # ─────────────────────────────────────────────────────────────────────────────
 name: static
 
@@ -145,19 +149,16 @@ jobs:
           if-no-files-found: warn
 
   # ─── aarch64 static gate ───────────────────────────────────────────────────
-  # Requires: `aarch64-unknown-linux-musl` rustup target + a musl-capable
-  # AArch64 C linker. On ubuntu-24.04-arm (native ARM64 runner) install
-  # `musl-tools`; on x86_64 runners use `gcc-aarch64-linux-gnu` +
-  # `musl-cross` (or the musl.cc `aarch64-linux-musl-gcc` tarball).
+  # Cross-compiles the emitted example crate for aarch64-unknown-linux-musl from
+  # an x86_64 host. The emitted `.cargo/config.toml` pins the bundled `rust-lld`
+  # with `link-self-contained=yes`, so the musl startup objects come from rustup
+  # and only the C deps (zstd, ring) need a cross compiler — the widely-packaged
+  # `gcc-aarch64-linux-gnu` supplies it (the preflight's `cc_candidates` for this
+  # triple probe `aarch64-linux-musl-gcc` then `aarch64-linux-gnu-gcc`).
   # Cross-run verification uses `qemu-user-static`.
-  #
-  # BLOCKED-PENDING-TOOLCHAIN: this job is wired but marked allow-failure
-  # until we confirm a musl-capable aarch64 linker is available on the runner.
-  # Remove `continue-on-error` once the toolchain is confirmed green.
   linux-static-arm64:
     name: linux-static-arm64 (dlmalloc)
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 45
 
     env:
@@ -227,6 +228,61 @@ jobs:
           name: static-frozen-deps-arm64-dlmalloc
           path: examples/sky/ipe/01-hello-world/out/rust/Cargo.lock
           if-no-files-found: warn
+
+  # ─── C-free build axis gate ────────────────────────────────────────────────
+  # The `--cfree` axis models "link no C". Its ADT (`CProfile`) makes the
+  # contradiction {c-free, C-requiring-allocator} unrepresentable, and the
+  # resolver refuses `--cfree` until the pure-Rust dependency swaps (flate2/zstd
+  # codecs, a ring-free rustls provider) land — a build that still pulled C
+  # while skipping the C-compiler preflight would lie about its promise. Until
+  # those swaps land the gate is a FAIL-CLOSED proof: `--cfree` must refuse,
+  # artifact-free, and a C-requiring allocator under `--cfree` must refuse
+  # distinctly. When the swaps land this job grows the real emit + no-C build.
+  linux-cfree-gate:
+    name: linux-cfree-gate (refusal is fail-closed)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/ipe-lang-target
+      IPE_NO_SCCACHE: '1'
+      CARGO_HTTP_MULTIPLEXING: 'false'
+      CARGO_NET_RETRY: '5'
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo target
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ${{ github.workspace }}/.cache/ipe-lang-target
+          key: ${{ runner.os }}-cfree-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cfree-
+            ${{ runner.os }}-static-
+
+      - name: Build ipe
+        run: cargo build --release -p ipe
+
+      # The typed C-free refusals (the CProfile-contradiction test + the
+      # fail-closed CfreeNotYetWired test) live in the static_emit suite.
+      - name: C-free refusal gates
+        run: cargo test -p ipe --test static_emit -- cfree
+
+      # And the CLI itself refuses --cfree end to end, artifact-free.
+      - name: ipe build --static --cfree is refused
+        run: |
+          cd examples/sky/ipe/01-hello-world
+          if "$CARGO_TARGET_DIR/release/ipe" build ipe.toml --out out/cfree \
+               --static --cfree; then
+            echo "::error::--cfree must be refused until the pure-Rust dep swaps land"
+            exit 1
+          fi
+          test ! -e out/cfree/Cargo.toml || {
+            echo "::error::--cfree refusal must be artifact-free (no emitted crate)"; exit 1; }
 
   # ─── Windows static gate ───────────────────────────────────────────────────
   # `ipe build` on Windows emits a standard Cargo project; then `cargo build
