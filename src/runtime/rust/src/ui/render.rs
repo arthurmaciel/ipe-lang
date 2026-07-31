@@ -151,6 +151,20 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                     "__grid" => {
                         decl!("display:grid");
                     }
+                    "__paragraph" => {
+                        // A `Ui.paragraph` `<p>`: its element children flow as
+                        // inline runs, so the block itself needs no flex/grid —
+                        // but an explicit `display:block` keeps it a block box
+                        // even when nested inside another inline-block context.
+                        decl!("display:block");
+                    }
+                    "__inline" => {
+                        // Injected by `render_node_as` onto a `Ui.el` child of a
+                        // paragraph so its run flows inline with the surrounding
+                        // text instead of breaking onto its own line.
+                        decl!("display:inline-block");
+                        decl!("vertical-align:baseline");
+                    }
                     _ => {
                         // User-supplied CSS key+value.
                         // `SafeCssPropertyName` gates the key (charset policy);
@@ -514,6 +528,32 @@ fn render_element_depth<M: Clone>(elem: Element<M>, depth: usize) -> Html<M> {
 ///   {nearby overlays (position:absolute)}
 /// </{tag}>
 /// ```
+/// True when a node carries the `__paragraph` marker (`Ui.paragraph`), meaning
+/// its element children must flow inline rather than as block boxes.
+fn has_paragraph_marker<M>(attrs: &[Attribute<M>]) -> bool {
+    attrs
+        .iter()
+        .any(|a| matches!(a, Attribute::AttrStyle(k, _) if k == "__paragraph"))
+}
+
+/// Render one child of a `Ui.paragraph`. A bare `Ui.el` child
+/// (`Element::Node(NoDescription, …)`) becomes an inline `<span>` carrying the
+/// `__inline` marker, so its styled run (e.g. `Font.bold`) flows inline with the
+/// surrounding text and produces valid `<p>`-nestable markup. Every other child
+/// (text, `Ui.link`/`Ui.el`-with-explicit-tag, raw HTML) renders unchanged.
+fn render_paragraph_child<M: Clone>(child: Element<M>, depth: usize) -> Html<M> {
+    match child {
+        Element::Node(Description::NoDescription, mut attrs, kids) => {
+            attrs.insert(
+                0,
+                Attribute::AttrStyle("__inline".to_owned(), "true".to_owned()),
+            );
+            render_node_as("span", &attrs, kids, depth)
+        }
+        other => render_element_depth(other, depth),
+    }
+}
+
 fn render_node_as<M: Clone>(
     tag: &str,
     attrs: &[Attribute<M>],
@@ -528,11 +568,24 @@ fn render_node_as<M: Clone>(
         html_attrs.insert(0, HtmlAttribute::Attr("style".to_owned(), style_str));
     }
 
+    // A `Ui.paragraph` node's element children must flow inline: a bare
+    // `Ui.el` lowers to `Element::Node(NoDescription, …)` (a block `<div>`),
+    // which both breaks onto its own line and — as a `<div>` inside a `<p>` —
+    // is invalid HTML5 that a browser auto-closes the `<p>` around. Inside a
+    // paragraph, render each such child as an inline `<span>`.
+    let inside_paragraph = has_paragraph_marker(attrs);
+
     // Rendered children in source order, each one level deeper.
     let child_depth = depth.saturating_add(1);
     let mut html_kids: Vec<Html<M>> = kids
         .into_iter()
-        .map(|k| render_element_depth(k, child_depth))
+        .map(|k| {
+            if inside_paragraph {
+                render_paragraph_child(k, child_depth)
+            } else {
+                render_element_depth(k, child_depth)
+            }
+        })
         .collect();
 
     // Nearby overlays appended after the regular children (they are absolutely
@@ -1253,6 +1306,43 @@ mod tests {
                 panic!("expected AttrEvent(EventAttr(OnString(\"ipe-file\", _))), got {other:?}")
             }
         }
+    }
+
+    #[test]
+    fn paragraph_el_child_renders_inline_span_not_block_div() {
+        // Mirrors `Ipe.Markdown.renderInline "a **bold** word"`:
+        //   Ui.paragraph [] [ Ui.text "a "
+        //                    , Ui.el [ Font.bold ] (Ui.text "bold")
+        //                    , Ui.text " word" ]
+        // The bold `Ui.el` lowers to Element::Node(NoDescription, [FontWeight
+        // 700], [Text "bold"]). On the web backend it MUST render as an inline
+        // <span>, not a block <div>, so the bold run flows inline and the markup
+        // stays valid inside <p>.
+        let para: Element<TestMsg> = super::super::helpers::ui_paragraph_(
+            vec![],
+            vec![
+                Element::Text("a ".to_owned()),
+                super::super::helpers::ui_el_(
+                    vec![Attribute::AttrFontWeight(700)],
+                    Element::Text("bold".to_owned()),
+                ),
+                Element::Text(" word".to_owned()),
+            ],
+        );
+        let html = render_element(para);
+        let s = render_html(&html);
+        assert!(
+            s.contains("<span style=\"display:inline-block;vertical-align:baseline;font-weight:700\">bold</span>"),
+            "bold el child must render as an inline <span>: {s}"
+        );
+        assert!(
+            !s.contains("<div"),
+            "no block <div> may appear inside the paragraph: {s}"
+        );
+        assert!(
+            s.starts_with("<p"),
+            "the paragraph itself must render as <p>: {s}"
+        );
     }
 
     // RT-UI-001: depth cap — render_element must return (not abort/stack-overflow)
