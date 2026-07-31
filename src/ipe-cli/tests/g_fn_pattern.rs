@@ -74,5 +74,7 @@ mod golden_result_bridges;
 mod golden_task_attempt;
 #[path = "g_fn_pattern/golden_taskseq_reuse.rs"]
 mod golden_taskseq_reuse;
+#[path = "g_fn_pattern/golden_url_parser_combinators.rs"]
+mod golden_url_parser_combinators;
 #[path = "g_fn_pattern/golden_wildcard_lambda_pany.rs"]
 mod golden_wildcard_lambda_pany;
