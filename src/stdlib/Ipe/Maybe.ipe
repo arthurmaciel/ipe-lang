@@ -102,16 +102,32 @@ andMap ma mfn =
         Nothing -> Nothing
 
 
+-- | `combine maybes` — collect a list of Maybes into a Maybe of list,
+-- preserving order and short-circuiting on the first `Nothing`.
+--
+-- `combineHelp` walks the input tail-recursively, prepending each `Just`
+-- payload onto `acc` (reverse order) and returning `Nothing` immediately
+-- on the first miss.  At the empty base it flips `acc` via `reverseHelp`
+-- for the final left-to-right output.  The helper is a tail call, so
+-- `Ipe.Build.TailCallOpt` lowers it to a loop and a very long input runs
+-- in constant native stack.
 combine maybes =
+    combineHelp maybes []
+
+
+combineHelp maybes acc =
     case maybes of
-        [] -> Just []
+        [] -> Just (reverseHelp acc [])
         (m :: rest) ->
             case m of
-                Just x ->
-                    case combine rest of
-                        Just xs -> Just (x :: xs)
-                        Nothing -> Nothing
+                Just x -> combineHelp rest (x :: acc)
                 Nothing -> Nothing
+
+
+reverseHelp list acc =
+    case list of
+        [] -> acc
+        (x :: rest) -> reverseHelp rest (x :: acc)
 
 
 isJust m =
