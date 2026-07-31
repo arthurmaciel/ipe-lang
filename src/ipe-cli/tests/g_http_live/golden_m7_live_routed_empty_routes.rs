@@ -383,24 +383,31 @@ fn empty_routes_ok_out() -> PathBuf {
     PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m7_live_routed_empty_routes_ok_emit")
 }
 
+/// Compile the well-typed empty-routes golden into `out`; `None` (skip) when
+/// the runtime cannot be resolved.
+fn compile_empty_routes_ok(out: &Path) -> Option<Result<(), ipe::CliError>> {
+    let entry = repo_root()
+        .join("tests")
+        .join("golden")
+        .join("live_routed_empty_routes_ok")
+        .join("Main.ipe");
+    let _ = std::fs::remove_dir_all(out);
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return None;
+    };
+    Some(ipe::build(&entry, out, &runtime))
+}
+
 /// Well-typed routed app with `routes = []` → ipe MUST exit 0, and the
 /// emitted `main.rs` MUST render the page-parametrised `Route<MainPage>`
 /// (never a bare `Route`, which is the E0107 shape). Compile-only — always
 /// runs (no `IPE_E2E` gate).
 #[test]
 fn routed_empty_routes_well_typed_compiles_and_renders_route_page() {
-    let root = repo_root();
-    let entry = root
-        .join("tests")
-        .join("golden")
-        .join("live_routed_empty_routes_ok")
-        .join("Main.ipe");
     let out = empty_routes_ok_out();
-    let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = ipe::resolve_runtime() else {
+    let Some(result) = compile_empty_routes_ok(&out) else {
         return;
     };
-    let result = ipe::build(&entry, &out, &runtime);
     assert!(
         result.is_ok(),
         "#108 hole 1: well-typed empty-routes routed app must be ipe-0, got: {:?}",
@@ -428,11 +435,15 @@ fn routed_empty_routes_well_typed_cargo_builds() {
     if std::env::var("IPE_E2E").is_err() {
         return;
     }
-    // Ensure the emitted project exists (the compile-only test above may not
-    // have run in this process ordering).
-    routed_empty_routes_well_typed_compiles_and_renders_route_page();
-
-    let out = empty_routes_ok_out();
+    // Emit into a PRIVATE dir this test alone owns, so the compile-only sibling
+    // re-emitting into `empty_routes_ok_out()` in parallel cannot delete rustc's
+    // working directory mid-build.
+    let out =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m7_live_routed_empty_routes_ok_e2e_emit");
+    let Some(result) = compile_empty_routes_ok(&out) else {
+        return;
+    };
+    assert!(result.is_ok(), "must compile: {:?}", result.err());
     let target = std::env::temp_dir().join("r4").join("m7_empty_routes_ok");
     let build = std::process::Command::new("cargo")
         .arg("build")

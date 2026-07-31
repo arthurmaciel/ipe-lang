@@ -42,20 +42,19 @@ fn solo_out() -> PathBuf {
     PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m7_live_param_routes_emit")
 }
 
-/// Compile the on-disk solo golden (`tests/golden/live_param_routes`).
-/// Returns `None` (skip) when the embedded runtime cannot be resolved.
-fn compile_solo() -> Option<Result<(), CliError>> {
+/// Compile the on-disk solo golden (`tests/golden/live_param_routes`) into
+/// `out`. Returns `None` (skip) when the embedded runtime cannot be resolved.
+fn compile_solo_into(out: &Path) -> Option<Result<(), CliError>> {
     let entry = repo_root()
         .join("tests")
         .join("golden")
         .join("live_param_routes")
         .join("Main.ipe");
-    let out = solo_out();
-    let _ = std::fs::remove_dir_all(&out);
+    let _ = std::fs::remove_dir_all(out);
     let Ok(runtime) = ipe::resolve_runtime() else {
         return None;
     };
-    Some(ipe::build(&entry, &out, &runtime))
+    Some(ipe::build(&entry, out, &runtime))
 }
 
 /// Compile an inline source through the ipe pipeline (no cargo).
@@ -140,7 +139,7 @@ main =
 /// path). Compile-only — always runs.
 #[test]
 fn param_route_solo_compiles_and_emits_param_conversion() {
-    let Some(result) = compile_solo() else {
+    let Some(result) = compile_solo_into(&solo_out()) else {
         return;
     };
     assert!(
@@ -242,9 +241,19 @@ fn param_route_solo_cargo_builds_and_delivers_param() {
     if std::env::var("IPE_E2E").is_err() {
         return;
     }
-    param_route_solo_compiles_and_emits_param_conversion();
+    // Emit into a PRIVATE dir this test alone owns, so the compile-only sibling
+    // re-emitting into `solo_out()` in parallel cannot delete rustc's working
+    // directory mid-build.
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m7_live_param_routes_e2e_emit");
+    let Some(result) = compile_solo_into(&out) else {
+        return;
+    };
+    assert!(
+        result.is_ok(),
+        "a `:param` route with a payload-ctor builder must be ipe-0, got: {:?}",
+        result.err(),
+    );
 
-    let out = solo_out();
     let target = std::env::temp_dir().join("r4").join("m7_param_routes");
     let build = std::process::Command::new("cargo")
         .arg("build")
