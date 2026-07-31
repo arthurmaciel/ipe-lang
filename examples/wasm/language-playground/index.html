@@ -93,15 +93,16 @@
     main {
       flex: 1;
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: 1fr 1fr 1fr;
       min-height: 0;
     }
-    #editor-pane, #output-pane {
+    #editor-pane, #output-pane, #run-pane {
       display: flex;
       flex-direction: column;
       min-height: 0;
     }
     #editor-pane { border-right: 1px solid var(--border); }
+    #run-pane { border-left: 1px solid var(--border); }
     .pane-label {
       padding: 8px 12px;
       font-size: 0.75rem;
@@ -115,7 +116,7 @@
       gap: 8px;
     }
     #editor { flex: 1; min-height: 0; width: 100%; font-size: 14px; }
-    #output {
+    #output, #run-output {
       flex: 1;
       margin: 0;
       padding: 16px;
@@ -128,7 +129,8 @@
       white-space: pre-wrap;
       word-break: break-word;
     }
-    #output.err { color: var(--err); }
+    #output.err, #run-output.err { color: var(--err); }
+    #run-output.warn { color: var(--warn); }
     #status-bar {
       padding: 6px 12px;
       font-size: 0.75rem;
@@ -182,6 +184,10 @@
       <div class="pane-label"><span id="output-title">Emitted Rust</span></div>
       <pre id="output">Loading the in-browser compiler…</pre>
     </div>
+    <div id="run-pane">
+      <div class="pane-label"><span id="run-title">Program output</span></div>
+      <pre id="run-output">Press Run to build and execute the emitted Rust on the server (sandboxed).</pre>
+    </div>
   </main>
   <div id="status-bar">Initialising…</div>
 
@@ -194,8 +200,8 @@ import Ipe.String as String
 
 -- Edit this program: it compiles in your browser as you type.
 -- The Ipê frontend (parse -> typecheck -> lower -> emit) runs as WebAssembly
--- and shows the Rust it emits. (Turning that Rust into a binary needs cargo,
--- so running the program is not done in-browser.)
+-- and shows the Rust it emits. Press Run to send that emitted Rust to the
+-- playground server, which builds and runs it (sandboxed) and shows the output.
 
 double : Int -> Int
 double n = n * 2
@@ -210,6 +216,8 @@ main = greeting
     const statusBar = document.getElementById('status-bar');
     const output = document.getElementById('output');
     const outputTitle = document.getElementById('output-title');
+    const runOutput = document.getElementById('run-output');
+    const runTitle = document.getElementById('run-title');
     const themeSelect = document.getElementById('theme-select');
     const runBtn = document.getElementById('run-btn');
 
@@ -293,6 +301,10 @@ main = greeting
     // ---- Live, debounced compile ----
     let wasmReady = false;
     let timer = null;
+    // Run is enabled only while the last compile succeeded: the server runs the
+    // emitted Rust, so the button mirrors `compile()`'s ok state.
+    let compileOk = false;
+    let lastEmittedRust = '';
 
     function runCompile() {
       if (!wasmReady) return;
@@ -309,15 +321,20 @@ main = greeting
           return;
         }
         if (res.ok) {
+          compileOk = true;
+          lastEmittedRust = res.emitted_rust;
           output.className = '';
           outputTitle.textContent = 'Emitted Rust';
           output.textContent = res.emitted_rust;
+          runBtn.disabled = false;
           statusBar.className = 'ok';
-          statusBar.textContent = 'Compiled successfully — emitted Rust shown.';
+          statusBar.textContent = 'Compiled successfully — emitted Rust shown; Run is enabled.';
         } else {
+          compileOk = false;
           output.className = 'err';
           outputTitle.textContent = 'Diagnostics';
           output.textContent = res.diagnostics || '(no diagnostics)';
+          runBtn.disabled = true;
           statusBar.className = 'error';
           statusBar.textContent = 'Compile error — see diagnostics.';
         }
@@ -330,13 +347,14 @@ main = greeting
     }
     editor.session.on('change', scheduleCompile);
 
-    // ---- Run button: sandboxed server build + run ----
+    // ---- Run button: server build + run of the EMITTED RUST ----
     // The client-side WASM `compile()` shows the emitted Rust live as you type.
     // Turning that Rust into a running binary needs cargo, which cannot run in
-    // the browser — so Run POSTs the source to the playground server, which
-    // builds AND executes the emitted crate inside a hardened sandbox (no
-    // network, jailed filesystem, memory/CPU/fork/time caps) and returns the
-    // real stdout/stderr/exit/timing.
+    // the browser — so Run POSTs the emitted Rust (not the Ipê source) to the
+    // playground server, which builds AND executes it inside a hardened sandbox
+    // (no network, jailed filesystem, memory/CPU/fork/time caps — the sandbox
+    // lands with the jail-runner milestone) and returns a {ok,unsandboxed,
+    // output} transcript.
     //
     // The run server is separate from this static site. Point RUN_SERVER at it
     // (default: same origin — set when the static UI is served BY the run
@@ -348,67 +366,32 @@ main = greeting
     let running = false;
 
     function showRunResult(data) {
-      // Distinguish EACH terminal state (parse-don't-validate on the wire).
-      switch (data.status) {
-        case 'compile_error':
-          output.className = 'err';
-          outputTitle.textContent = 'Compile error';
-          output.textContent = data.diagnostics || '(no diagnostics)';
+      // Wire shape: { ok, unsandboxed, output } — the only states the server
+      // emits (build failure = ok:false with a Build transcript; success =
+      // ok:true with the Run transcript; unsandboxed only when the operator
+      // explicitly opted out with IPE_ALLOW_UNSANDBOXED).
+      if (data.ok) {
+        runOutput.className = data.unsandboxed ? 'warn' : '';
+        runTitle.textContent = 'Program output';
+        runOutput.textContent = data.output || '(no output)';
+        if (data.unsandboxed) {
           statusBar.className = 'error';
-          statusBar.textContent = 'Compile error — the program did not type-check.';
-          break;
-        case 'build_error':
-          output.className = 'err';
-          outputTitle.textContent = 'Build error';
-          output.textContent = data.diagnostics || '(no diagnostics)';
-          statusBar.className = 'error';
-          statusBar.textContent = 'Build error — the emitted crate failed to compile.';
-          break;
-        case 'ran': {
-          output.className = '';
-          outputTitle.textContent = 'Program output';
-          const parts = [];
-          if (data.stdout) parts.push(data.stdout);
-          if (data.stderr) parts.push('── stderr ──\n' + data.stderr);
-          output.textContent = parts.join('\n') || '(no output)';
-          const ok = data.exit_code === 0;
-          statusBar.className = ok ? 'ok' : 'error';
-          statusBar.textContent =
-            (ok ? 'Ran successfully' : 'Program exited with code ' + data.exit_code)
-            + ' — sandboxed, ' + data.elapsed_ms + ' ms.';
-          break;
+          statusBar.textContent = 'Ran WITHOUT the sandbox — the server operator opted out of isolation.';
+        } else {
+          statusBar.className = 'ok';
+          statusBar.textContent = 'Ran successfully on the server (sandboxed).';
         }
-        case 'timeout':
-          output.className = 'err';
-          outputTitle.textContent = 'Timed out';
-          output.textContent =
-            'The ' + data.phase + ' phase exceeded its ' + data.limit_secs
-            + ' s sandbox limit and was killed.';
-          statusBar.className = 'error';
-          statusBar.textContent = 'Killed by the sandbox time limit (' + data.phase + ').';
-          break;
-        case 'sandbox_refused':
-          output.className = 'err';
-          outputTitle.textContent = 'Sandbox refused';
-          output.textContent =
-            (data.reason || 'the server refused to run without a jail')
-            + '\n\nThe playground fails closed: it never builds or runs your program '
-            + 'without an isolation sandbox. The emitted Rust (left→right preview) is '
-            + 'still shown as you type.';
-          statusBar.className = 'error';
-          statusBar.textContent = 'Sandbox unavailable — run refused (fail-closed).';
-          break;
-        default:
-          output.className = 'err';
-          outputTitle.textContent = 'Unexpected response';
-          output.textContent = JSON.stringify(data, null, 2);
-          statusBar.className = 'error';
-          statusBar.textContent = 'Unexpected server response.';
+      } else {
+        runOutput.className = 'err';
+        runTitle.textContent = 'Run failed';
+        runOutput.textContent = data.output || '(no output from the server)';
+        statusBar.className = 'error';
+        statusBar.textContent = 'The server could not run the program.';
       }
     }
 
     async function runNow() {
-      if (running) return;
+      if (running || !compileOk) return;
       if (timer) { clearTimeout(timer); timer = null; }
       running = true;
       runBtn.disabled = true;
@@ -418,7 +401,7 @@ main = greeting
         const resp = await fetch(RUN_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ source: editor.getValue() }),
+          body: JSON.stringify({ rust: lastEmittedRust }),
         });
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const data = await resp.json();
@@ -432,7 +415,7 @@ main = greeting
         runCompile();
       } finally {
         running = false;
-        runBtn.disabled = false;
+        runBtn.disabled = !compileOk;
       }
     }
     runBtn.addEventListener('click', runNow);
@@ -449,11 +432,10 @@ main = greeting
       try {
         await init();
         wasmReady = true;
-        runBtn.disabled = false;
         statusBar.className = 'ok';
         statusBar.textContent =
           'Ready — emitted Rust shown live; press Run to build & run it (sandboxed) on the server.';
-        runCompile();
+        runCompile(); // enables Run iff the sample compiles
       } catch (e) {
         statusBar.className = 'error';
         statusBar.textContent = 'Failed to load the WASM compiler: ' + e;

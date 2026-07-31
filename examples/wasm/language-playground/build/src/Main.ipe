@@ -1,0 +1,142 @@
+module Main exposing (main)
+
+import Ipe.Error exposing (Error)
+import Ipe.Io as Io
+import Ipe.Json.Decode as Json
+import Ipe.Process as Process
+import Ipe.String as String
+import Ipe.System as System
+import Ipe.Task as Task
+
+
+-- Builds the in-browser Ipê compiler (the `ipe-wasm` crate) and generates the
+-- wasm-bindgen JS glue into examples/wasm/language-playground/pkg/, which
+-- index.html loads directly. Run with:  cd build && ipe run
+--
+-- Every observable step is a `Task Error a`; a missing tool exits non-zero
+-- with a styled install hint instead of a raw OS error.
+
+main : Task Error ()
+main =
+    build
+        |> Task.onError reportFailure
+
+
+build : Task Error ()
+build =
+    probeTool "git" "Install git: https://git-scm.com/downloads"
+        |> Task.andThen (\_ -> probeTool "cargo" "cargo ships with the Rust toolchain — install via rustup: https://rustup.rs")
+        |> Task.andThen (\_ -> probeTool "rustup" "Install rustup: https://rustup.rs")
+        |> Task.andThen (\_ -> probeTool "wasm-bindgen" "Install the wasm-bindgen CLI:  cargo install wasm-bindgen-cli --version 0.2.126")
+        |> Task.andThen (\_ -> repoRoot)
+        |> Task.andThen addWasmTarget
+        |> Task.andThen buildCrate
+        |> Task.andThen bindGen
+        |> Task.andThen done
+
+
+probeTool : String -> String -> Task Error String
+probeTool tool installHint =
+    Process.run tool [ "--version" ]
+        |> Task.onError (\_ -> missingTool tool installHint)
+
+
+missingTool : String -> String -> Task Error a
+missingTool tool installHint =
+    let
+        _ = Io.eprintln ""
+        _ = Io.eprintln (tool ++ " was not found on your PATH.")
+        _ = Io.eprintln installHint
+        _ = Io.eprintln ("Re-run this script once " ++ tool ++ " is installed.")
+    in
+        Task.succeed (System.exit 1)
+
+
+repoRoot : Task Error String
+repoRoot =
+    Process.run "git" [ "rev-parse", "--show-toplevel" ]
+        |> Task.map String.trim
+
+
+playgroundDir : String -> String
+playgroundDir root =
+    root ++ "/examples/wasm/language-playground"
+
+
+addWasmTarget : String -> Task Error String
+addWasmTarget root =
+    Process.run "rustup" [ "target", "add", "wasm32-unknown-unknown" ]
+        |> Task.map (\_ -> root)
+
+
+buildCrate : String -> Task Error String
+buildCrate root =
+    let
+        _ = Io.println "Building ipe-wasm for wasm32-unknown-unknown (release)…"
+    in
+        Process.run "cargo"
+            [ "build"
+            , "-p", "ipe-wasm"
+            , "--target", "wasm32-unknown-unknown"
+            , "--release"
+            , "--manifest-path", root ++ "/Cargo.toml"
+            ]
+            |> Task.map (\_ -> root)
+
+
+-- The emitted .wasm lands in cargo's resolved target dir. Ask cargo itself
+-- (`cargo metadata`): it applies CARGO_TARGET_DIR, a [build] target-dir in any
+-- cargo config file, and the workspace default in the same precedence cargo's
+-- own build uses — the script never guesses.
+wasmPath : String -> Task Error String
+wasmPath root =
+    Process.run "cargo"
+        [ "metadata", "--format-version", "1"
+        , "--manifest-path", root ++ "/Cargo.toml"
+        ]
+        |> Task.andThen
+            (\out ->
+                case Json.decodeString (Json.field "target_directory" Json.string) out of
+                    Ok dir ->
+                        Task.succeed (dir ++ "/wasm32-unknown-unknown/release/ipe_wasm.wasm")
+
+                    Err err ->
+                        Task.fail (Error.unexpected ("could not read cargo metadata: " ++ Error.toString err)))
+
+
+bindGen : String -> Task Error String
+bindGen root =
+    wasmPath root
+        |> Task.andThen
+            (\wasm ->
+                let
+                    _ = Io.println "Generating JS bindings with wasm-bindgen…"
+                in
+                    Process.run "wasm-bindgen"
+                        [ "--target", "web"
+                        , "--no-typescript"
+                        , "--out-dir", playgroundDir root ++ "/pkg"
+                        , "--out-name", "ipe_wasm"
+                        , wasm
+                        ]
+                        |> Task.map (\_ -> root))
+
+
+done : String -> Task Error ()
+done root =
+    let
+        _ = Io.println ""
+        _ = Io.println ("Done — pkg/ipe_wasm.js + pkg/ipe_wasm_bg.wasm generated under " ++ playgroundDir root ++ "/pkg")
+        _ = Io.println "Run the playground server:"
+        _ = Io.println ("  cd " ++ playgroundDir root ++ "/server && ipe run")
+    in
+        Task.succeed ()
+
+
+reportFailure : Error -> Task Error ()
+reportFailure err =
+    let
+        _ = Io.eprintln ""
+        _ = Io.eprintln ("Build failed: " ++ Error.toString err)
+    in
+        Task.succeed (System.exit 1)
