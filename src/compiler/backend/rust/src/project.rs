@@ -2092,10 +2092,14 @@ fn live_cargo_toml(base: &str) -> DResult<String> {
     // All consts must precede the first `let` — `items_after_statements` (pedantic).
     const DEFAULT_PREFIX: &str = "default = [";
     const PROFILE_ANCHOR: &str = "[profile.dev]";
-    // `async-trait` and `serde_urlencoded` are pulled by the runtime's `live`
-    // feature gate; the emitted project vendors the runtime source directly, so
-    // they must appear as explicit `[dependencies]` entries.
-    // `libc` is pulled by the runtime's `live` console-proxy (`libc::prctl`).
+    // `async-trait` is pulled by the runtime's `live` feature gate; the emitted
+    // project vendors the runtime source directly, so it must appear as an
+    // explicit `[dependencies]` entry.
+    // `libc` is NOT added here: the base manifest already declares it
+    // unconditionally under `[target.'cfg(unix)'.dependencies]` (the `Io.readSecret`
+    // termios path). The live console-proxy's `libc::prctl` is a `cfg(unix)` call,
+    // so that single cfg-gated declaration covers both needs — adding it again
+    // would emit a duplicate `libc` key and produce invalid TOML.
     // The `live` runtime mainline uses `tokio::signal` + `tokio::process`; the base
     // golden emits `net`+`sync` for the HTTP server, so add the two missing features.
     const TOKIO_NET_SYNC_FEATURES: &str = "\"time\", \"net\", \"sync\"]";
@@ -2117,15 +2121,14 @@ fn live_cargo_toml(base: &str) -> DResult<String> {
     const SQLX_SQLITE_FEATURES: &str = "features = [\"runtime-tokio-rustls\", \"sqlite\"]";
     const SQLX_POSTGRES_FEATURES: &str =
         "features = [\"runtime-tokio-rustls\", \"sqlite\", \"postgres\"]";
-    // Versions + names from the SSOT; these three are bare `name = "ver"` deps.
+    // Versions + names from the SSOT; this is a bare `name = "ver"` dep.
     // `serde_urlencoded` is NOT appended here: it is an unconditional base
-    // manifest dep now (`dom/form.rs` is always vendored).
+    // manifest dep now (`dom/form.rs` is always vendored). `libc` is NOT
+    // appended either — see the note above.
     let live_deps = format!(
-        "{} = \"{}\"\n{} = \"{}\"\n\n",
+        "{} = \"{}\"\n\n",
         crate_specs::ASYNC_TRAIT.name,
         crate_specs::ASYNC_TRAIT.version,
-        crate_specs::LIBC.name,
-        crate_specs::LIBC.version,
     );
 
     // Step 1 — promote the `live` feature.
@@ -2982,6 +2985,31 @@ mod tests {
         assert!(
             !out.contains("\"postgres\""),
             "a Web-only (no Db) manifest must NOT contain the postgres feature: {out}"
+        );
+    }
+
+    /// A live/web manifest must declare `libc` exactly once. The base template
+    /// already declares it under `[target.'cfg(unix)'.dependencies]` (the
+    /// `Io.readSecret` termios path); `live_cargo_toml` must not add a second
+    /// `libc` line, which would be a duplicate-key TOML error that fails
+    /// `cargo build` for any program that is both a live/web shape and pulls the
+    /// readSecret prelude.
+    #[test]
+    fn live_toml_declares_libc_once() {
+        let server_base = server_cargo_toml(CARGO_TOML).expect("server_cargo_toml must succeed");
+        let out =
+            live_cargo_toml(&server_base).expect("live_cargo_toml on non-db base must succeed");
+        let libc_lines = out
+            .lines()
+            .filter(|l| {
+                let t = l.trim_start();
+                t.starts_with("libc ") || t.starts_with("libc=")
+            })
+            .count();
+        assert_eq!(
+            libc_lines, 1,
+            "a live/web manifest must declare `libc` exactly once (base template \
+             cfg(unix) dep + no duplicate from live_cargo_toml):\n{out}"
         );
     }
 
