@@ -1,0 +1,28 @@
+module Main exposing (main)
+
+import Ipe.Http.Server as Server
+import Ipe.Http.Server exposing (Handler)
+import Ipe.Task as Task
+
+
+-- Serves the playground as an Ipê-native server (start from this directory:
+-- `cd server && ipe run`). The static roots are relative to the process cwd:
+-- ".." is the playground root (index.html) and "../pkg" the wasm bundle.
+-- POST /run accepts the EMITTED RUST (not Ipê source); the client-side WASM
+-- compiler produced it. Until the sandboxed jail-runner lands, /run returns
+-- ok:false with an explanatory transcript.
+
+main =
+    Server.listen
+        8000
+        [ Server.static "/" ".."
+        , Server.static "/pkg" "../pkg"
+        , Server.post "/run" handleRun
+        ]
+
+
+handleRun : Handler
+handleRun req =
+    Task.succeed
+        (Server.json
+            "{\"ok\":false,\"output\":\"Server-side running is not enabled yet: this build ships the in-browser compiler and the static server. Running programs lands with the sandboxed jail-runner.\"}")
