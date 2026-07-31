@@ -1494,6 +1494,87 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    fn transparent_define_json() -> String {
+        json!({
+            "pkg": "demo", "name": "demo", "version": "0.1.0",
+            "functions": [{
+                "name": "counter_new", "effect": "pure", "isStructCtor": true,
+                "structName": "Counter",
+                "structFields": [{ "name": "value", "type": "i64" }],
+                "structDerives": ["Clone"]
+            }],
+            "errors": []
+        })
+        .to_string()
+    }
+
+    /// A transparent DEFINE type survives the legacy (no `pkg.json`) load: the
+    /// consumer manifest's `transparentTypes` carries the shape (bare-nominal
+    /// `rustPath`, the define convention) and the constructor binding keeps its
+    /// result-conversion marker.
+    #[test]
+    fn legacy_transparent_define_round_trips_through_the_consumer_manifest() {
+        let tmp =
+            std::env::temp_dir().join(format!("ipe-ffi-define-legacy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let cache = FfiCache::at_project_root(&tmp);
+        let (_pkg, paths) =
+            install_from_inspection(&cache, &transparent_define_json()).expect("installs");
+        std::fs::remove_file(&paths.pkg_json).expect("drop pkg.json");
+        let catalog = load_catalog(cache.root()).expect("loads legacy layout");
+        let c = catalog.first().expect("one crate");
+        let t = c
+            .transparent_types
+            .get("Counter")
+            .expect("transparent define shape survives");
+        assert_eq!(t.rust_path().as_str(), "Counter", "bare define nominal");
+        assert!(c.define_types.is_empty(), "{:?}", c.define_types);
+        let b = c
+            .bindings
+            .iter()
+            .find(|b| b.ref_name == "counter_new")
+            .expect("constructor binding");
+        assert_eq!(
+            b.transparent_result.as_ref().map(|r| r.type_name.as_str()),
+            Some("Counter")
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A torn legacy projection whose interface text surfaces a define RECORD
+    /// (`type alias …`) while the consumer manifest lost `transparentTypes` is
+    /// refused, exactly like the torn transparent-union import — the glue the
+    /// backend assembles would be missing while the module still declares the
+    /// record as a native app type.
+    #[test]
+    fn legacy_torn_transparent_define_is_refused() {
+        let tmp = std::env::temp_dir().join(format!("ipe-ffi-torn-define-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let cache = FfiCache::at_project_root(&tmp);
+        let (_pkg, paths) =
+            install_from_inspection(&cache, &transparent_define_json()).expect("installs");
+        std::fs::remove_file(&paths.pkg_json).expect("drop pkg.json");
+        let consumer = std::fs::read_to_string(&paths.consumer).expect("readable");
+        let mut doc: serde_json::Value = serde_json::from_str(&consumer).expect("json");
+        if let Some(o) = doc.as_object_mut() {
+            o.remove("transparentTypes");
+            if let Some(bs) = o.get_mut("bindings").and_then(|b| b.as_array_mut()) {
+                for b in bs {
+                    if let Some(bo) = b.as_object_mut() {
+                        bo.remove("transparentResult");
+                    }
+                }
+            }
+        }
+        std::fs::write(&paths.consumer, serde_json::to_string_pretty(&doc).unwrap()).expect("w");
+        let result = load_catalog(cache.root());
+        assert!(
+            result.is_err(),
+            "torn transparent-define legacy cache must be refused"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     #[test]
     fn load_catalog_ignores_a_planted_bindings_file_and_re_derives() {
         let tmp = std::env::temp_dir().join(format!("ipe-ffi-plant-test-{}", std::process::id()));

@@ -153,8 +153,14 @@ fn a_handle_colliding_with_a_struct_nominal_is_refused_either_order() {
         "the refusal must record a collision reason:\n{:?}",
         iface.skipped
     );
-    // The nominal is registered exactly once (by the winning struct).
-    assert!(iface.define_types.contains("UpdateFnClosure"), "{iface:?}");
+    // The nominal is registered exactly once (by the winning struct, which —
+    // all-identity-carrier and referenced by no other define surface —
+    // surfaces as a transparent record).
+    assert!(
+        iface.transparent_types.contains_key("UpdateFnClosure"),
+        "{iface:?}"
+    );
+    assert!(!iface.define_types.contains("UpdateFnClosure"), "{iface:?}");
 }
 
 /// The load-bearing SEAL proof: under `IPE_E2E=1`, assemble the app-crate module
@@ -241,10 +247,10 @@ fn main() {{
     // HAND the handle to `run` — the loop drives on the Ipê closure.
     let model0 = crate::ffi::demo_counter_new(0);
     let messages = vec![
-        crate::ffi::demo_message_new_increment(),   // 0 -> 1
-        crate::ffi::demo_message_new_increment(),   // 1 -> 2
+        crate::ffi::demo_message_new_increment(()),   // 0 -> 1
+        crate::ffi::demo_message_new_increment(()),   // 1 -> 2
         crate::ffi::demo_message_new_set_value(40), // 2 -> 40
-        crate::ffi::demo_message_new_increment(),   // 40 -> 41
+        crate::ffi::demo_message_new_increment(()),   // 40 -> 41
     ];
     let final_model = run(model0, messages, update_handle);
 

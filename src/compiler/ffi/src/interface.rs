@@ -84,23 +84,36 @@ pub struct CrateInterface {
     /// path are the SAME Rust type and collapse to one Ipê nominal. A name
     /// absent here (older cache / no recoverable identity) never unifies.
     pub opaque_type_ids: BTreeMap<String, String>,
-    /// The nominal names this crate's `[rust.define.struct/enum]` decls DEFINE
-    /// (`Counter`, `Message`). Unlike [`Self::opaque_types`] — external crate
+    /// The nominal names this crate's define surfaces DEFINE **and surface as
+    /// opaque handles** (`type N = N`) — closure handles always, and any
+    /// `[rust.define.struct/enum]` type that does not qualify for the
+    /// transparent surface. Unlike [`Self::opaque_types`] — external crate
     /// types the inspector found at an absolute `::crate::Path` — a define type
     /// is DEFINED in the emitted `_bindings.rs` and lives at
     /// `crate::ffi::<slug>::<Name>`. The slug is not known here (the interface
     /// generator has only the `PkgInfo`), so the crate-local path is assembled
     /// downstream (`assemble_emit`) where the slug is; this set is the ground
-    /// truth for WHICH names are define-defined so the two paths never blur.
+    /// truth for WHICH names are define-defined so the two paths never blur. A
+    /// define type that surfaces transparently lives in
+    /// [`Self::transparent_types`] instead — a name is a record/union OR a
+    /// handle, never both.
     pub define_types: BTreeSet<String>,
-    /// The transparent foreign types this interface SURFACES, keyed by
-    /// Ipê-visible nominal: the classification's transparent set narrowed to
-    /// the names the interface admits (no collision with another surface, a
-    /// path consistent with the signatures) AND some admitted binding
-    /// references — an unreferenced transparent type is pruned here, never
-    /// carried dead into every downstream artifact. These names are excluded
-    /// from [`Self::opaque_types`]: a name is a record/union OR a handle,
-    /// never both.
+    /// The transparent types this interface SURFACES, keyed by Ipê-visible
+    /// nominal — both provenances of the representation axis:
+    ///
+    /// * imported crate types the classification decoded transparent, narrowed
+    ///   to the names the interface admits (no collision with another surface,
+    ///   a path consistent with the signatures) AND some admitted binding
+    ///   references — an unreferenced transparent import is pruned here, never
+    ///   carried dead into every downstream artifact;
+    /// * define-defined structs/enums whose every member is an identity
+    ///   carrier and which no other define surface holds opaquely — their
+    ///   `rust_path` is the BARE nominal (the define convention), resolved
+    ///   crate-locally downstream where the cache slug is known.
+    ///
+    /// These names are excluded from [`Self::opaque_types`] and
+    /// [`Self::define_types`]: a name is a record/union OR a handle, never
+    /// both.
     pub transparent_types: BTreeMap<String, TransparentType>,
     /// The included bindings.
     pub bindings: Vec<InterfaceBinding>,
@@ -481,6 +494,9 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
     let mut used_opaques: BTreeSet<String> = BTreeSet::new();
     let mut used_transparent: BTreeSet<String> = BTreeSet::new();
     let mut define_types: BTreeSet<String> = BTreeSet::new();
+    let mut claimed_defines: BTreeSet<String> = BTreeSet::new();
+    let mut define_transparent: BTreeMap<String, TransparentType> = BTreeMap::new();
+    let define_refs = define_referenced_nominals(pkg);
     let admitted = admitted_transparent(pkg, &path_map, &poisoned, &mut skipped);
 
     for f in pkg.fns() {
@@ -523,12 +539,19 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
                 admit_closure_forwarder(
                     &ref_name,
                     sig,
-                    &kernel_name,
-                    &admitted,
-                    &mut bindings,
-                    &mut skipped,
-                    &mut seen,
-                    &mut define_types,
+                    &mut DefineAdmission {
+                        kernel_name: &kernel_name,
+                        transparent_imports: &admitted,
+                        path_map: &path_map,
+                        poisoned: &poisoned,
+                        define_refs: &define_refs,
+                        bindings: &mut bindings,
+                        skipped: &mut skipped,
+                        seen: &mut seen,
+                        claimed: &mut claimed_defines,
+                        opaque_defines: &mut define_types,
+                        transparent_defines: &mut define_transparent,
+                    },
                 );
             } else {
                 skip(
@@ -568,12 +591,19 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
             admit_struct_forwarder(
                 &ref_name,
                 def,
-                &kernel_name,
-                &admitted,
-                &mut bindings,
-                &mut skipped,
-                &mut seen,
-                &mut define_types,
+                &mut DefineAdmission {
+                    kernel_name: &kernel_name,
+                    transparent_imports: &admitted,
+                    path_map: &path_map,
+                    poisoned: &poisoned,
+                    define_refs: &define_refs,
+                    bindings: &mut bindings,
+                    skipped: &mut skipped,
+                    seen: &mut seen,
+                    claimed: &mut claimed_defines,
+                    opaque_defines: &mut define_types,
+                    transparent_defines: &mut define_transparent,
+                },
             );
             continue;
         }
@@ -581,12 +611,19 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
             admit_enum_forwarders(
                 &ref_name,
                 def,
-                &kernel_name,
-                &admitted,
-                &mut bindings,
-                &mut skipped,
-                &mut seen,
-                &mut define_types,
+                &mut DefineAdmission {
+                    kernel_name: &kernel_name,
+                    transparent_imports: &admitted,
+                    path_map: &path_map,
+                    poisoned: &poisoned,
+                    define_refs: &define_refs,
+                    bindings: &mut bindings,
+                    skipped: &mut skipped,
+                    seen: &mut seen,
+                    claimed: &mut claimed_defines,
+                    opaque_defines: &mut define_types,
+                    transparent_defines: &mut define_transparent,
+                },
             );
             continue;
         }
@@ -716,6 +753,12 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
                 .to_owned(),
         });
     }
+    // Transparent DEFINE shapes join the surfaced set after the prune: a
+    // define record/union is referenced by its own constructor forwarders by
+    // construction, so the unreferenced-import prune never applies to it. Key
+    // collisions are impossible — the claim gate refused any define nominal an
+    // admitted transparent import already holds.
+    transparent_types.append(&mut define_transparent);
 
     let opaque_types: BTreeMap<String, String> = used_opaques
         .iter()
@@ -751,13 +794,160 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
     }
 }
 
+/// The shared context and sinks for admitting the define surfaces
+/// (`define.struct` / `define.enum` / `define.closure`).
+struct DefineAdmission<'a> {
+    /// Kernel-name prefix for wrapper identifiers.
+    kernel_name: &'a str,
+    /// The admitted transparent IMPORT set — a define nominal colliding with
+    /// one is refused (the crate's own type wins).
+    transparent_imports: &'a BTreeMap<String, TransparentType>,
+    /// Inspected foreign nominal → Rust path, and the ambiguous nominals —
+    /// a define nominal an inspected type also claims stays opaque.
+    path_map: &'a BTreeMap<String, String>,
+    poisoned: &'a BTreeSet<String>,
+    /// Nominals some define surface holds as an opaque carrier (a closure
+    /// signature, another define's field/payload) — those seams name the
+    /// defined Rust type directly, so the nominal must keep the opaque
+    /// representation.
+    define_refs: &'a BTreeSet<String>,
+    bindings: &'a mut Vec<InterfaceBinding>,
+    skipped: &'a mut Vec<SkippedBinding>,
+    seen: &'a mut BTreeSet<String>,
+    /// Every claimed define nominal, transparent or opaque — the E0428 gate.
+    claimed: &'a mut BTreeSet<String>,
+    /// Define nominals surfacing as opaque handles (`type N = N`).
+    opaque_defines: &'a mut BTreeSet<String>,
+    /// Define nominals surfacing as records/unions with conversion glue.
+    transparent_defines: &'a mut BTreeMap<String, TransparentType>,
+}
+
+impl DefineAdmission<'_> {
+    /// Record one skipped-binding row.
+    fn skip(&mut self, ref_name: &str, reason: String) {
+        self.skipped.push(SkippedBinding {
+            ref_name: ref_name.to_owned(),
+            reason,
+        });
+    }
+
+    /// The representation decision for one define struct/enum nominal: the
+    /// transparent shape when the definition qualifies AND no other surface
+    /// pins the nominal to the opaque representation, else the reason it stays
+    /// an opaque handle. Fail-closed: any doubt keeps the opaque default.
+    fn representation(
+        &self,
+        nominal: &str,
+        classify: impl FnOnce() -> Result<TransparentType, String>,
+    ) -> Result<TransparentType, String> {
+        if self.define_refs.contains(nominal) {
+            return Err(
+                "another define surface holds it as an opaque handle — a seam the \
+                 conversion glue does not cover"
+                    .to_owned(),
+            );
+        }
+        if self.path_map.contains_key(nominal) || self.poisoned.contains(nominal) {
+            return Err(
+                "an inspected foreign type of the crate claims the same nominal".to_owned(),
+            );
+        }
+        classify()
+    }
+
+    /// Apply the representation decision for a claimed define nominal:
+    /// register the transparent shape (returning the forwarders' result
+    /// conversion) or the opaque nominal (recording the reason so the
+    /// conservative fallback stays visible in the coverage ledger).
+    fn surface_define(
+        &mut self,
+        nominal: &str,
+        classify: impl FnOnce() -> Result<TransparentType, String>,
+    ) -> Option<TransparentResult> {
+        match self.representation(nominal, classify) {
+            Ok(t) => {
+                self.transparent_defines.insert(nominal.to_owned(), t);
+                Some(TransparentResult {
+                    type_name: nominal.to_owned(),
+                    in_result: false,
+                })
+            }
+            Err(reason) => {
+                self.opaque_defines.insert(nominal.to_owned());
+                self.skip(
+                    &format!("type {nominal}"),
+                    format!("define type surfaces as an opaque nominal: {reason}"),
+                );
+                None
+            }
+        }
+    }
+
+    /// Remove a claimed nominal from every registration (an enum whose every
+    /// variant forwarder dropped declares no reachable constructor).
+    fn unclaim(&mut self, nominal: &str) {
+        self.claimed.remove(nominal);
+        self.opaque_defines.remove(nominal);
+        self.transparent_defines.remove(nominal);
+    }
+}
+
+/// Every nominal a define surface references as an OPAQUE carrier: closure
+/// signature params/returns and define types' fields/payloads. A define type
+/// named here must keep the opaque-handle representation — the referencing
+/// wrapper's seam names the defined Rust type directly, a position the
+/// record/union conversion glue does not cover.
+fn define_referenced_nominals(pkg: &PkgInfo) -> BTreeSet<String> {
+    use crate::carrier::{Carrier, ClosureRet};
+    let mut out = BTreeSet::new();
+    let mut note = |c: &Carrier| {
+        if let Carrier::Opaque(id) = c {
+            out.insert(id.as_str().to_owned());
+        }
+    };
+    for f in pkg.fns() {
+        match f.shape() {
+            crate::pkginfo::FnShape::ClosureAdapter { sig } => {
+                for c in &sig.params {
+                    note(c);
+                }
+                match &sig.ret {
+                    ClosureRet::Total(_) => {}
+                    ClosureRet::Result(c)
+                    | ClosureRet::Option(c)
+                    | ClosureRet::AsyncResult(c)
+                    | ClosureRet::AsyncOption(c) => note(c),
+                }
+            }
+            crate::pkginfo::FnShape::StructCtor { def } => {
+                for (_, c) in &def.fields {
+                    note(c);
+                }
+            }
+            crate::pkginfo::FnShape::EnumDefCtor { def } => {
+                for v in &def.variants {
+                    for c in &v.payload {
+                        note(c);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// Admit a `define.struct` constructor as an Ipê forwarder, registering the
 /// struct's nominal as a define-defined type.
 ///
 /// The whole surface is synthesised from the parsed [`StructDef`]: the forwarder
 /// signature and arity come from the field carriers (the fn's own
 /// `params()`/`results()` are empty — it is a manifest entry), and the nominal is
-/// the struct's own name. Over-drops fail-closed:
+/// the struct's own name. An all-identity-carrier struct no other define surface
+/// references surfaces TRANSPARENT — a record alias plus result-conversion glue
+/// on the constructor, the same machinery a transparent import rides — while
+/// anything less keeps the opaque nominal with its reason recorded. Over-drops
+/// fail-closed:
 ///
 /// * a constructor name that is not a legal Ipê value identifier is dropped;
 /// * a duplicate constructor name keeps the first;
@@ -765,46 +955,44 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
 ///   reserved-builtin shadow or a collision with another define surface
 ///   (an admitted shadowing/colliding nominal is a silent-wrong-type or
 ///   duplicate-definition SEAL breach — refuse, never rename).
-#[allow(clippy::too_many_arguments)] // one linear admission plumbing set
-fn admit_struct_forwarder(
-    ctor: &str,
-    def: &crate::carrier::StructDef,
-    kernel_name: &str,
-    transparent: &BTreeMap<String, TransparentType>,
-    bindings: &mut Vec<InterfaceBinding>,
-    skipped: &mut Vec<SkippedBinding>,
-    seen: &mut BTreeSet<String>,
-    define_types: &mut BTreeSet<String>,
-) {
+fn admit_struct_forwarder(ctor: &str, def: &crate::carrier::StructDef, adm: &mut DefineAdmission) {
     let type_name = def.name.as_str();
     if !valid_ipe_value_name(ctor) {
-        skipped.push(SkippedBinding {
-            ref_name: ctor.to_owned(),
-            reason: "define.struct constructor name is not a legal Ipê identifier".to_owned(),
-        });
+        adm.skip(
+            ctor,
+            "define.struct constructor name is not a legal Ipê identifier".to_owned(),
+        );
         return;
     }
-    if !seen.insert(ctor.to_owned()) {
-        skipped.push(SkippedBinding {
-            ref_name: ctor.to_owned(),
-            reason: "duplicate binding name — first occurrence kept".to_owned(),
-        });
+    if !adm.seen.insert(ctor.to_owned()) {
+        adm.skip(
+            ctor,
+            "duplicate binding name — first occurrence kept".to_owned(),
+        );
         return;
     }
-    if let Err(reason) = claim_nominal("define.struct", type_name, define_types, transparent) {
-        skipped.push(SkippedBinding {
-            ref_name: ctor.to_owned(),
-            reason,
-        });
+    if let Err(reason) = claim_nominal(
+        "define.struct",
+        type_name,
+        adm.claimed,
+        adm.transparent_imports,
+    ) {
+        adm.skip(ctor, reason);
         return;
     }
-    bindings.push(InterfaceBinding {
-        wrapper_ident: crate::naming::wrapper_fn_ident(kernel_name, ctor),
-        arity: def.fields.len(),
+    let transparent_result = adm.surface_define(type_name, || {
+        crate::transparency::classify_define_struct(def)
+    });
+    adm.bindings.push(InterfaceBinding {
+        wrapper_ident: crate::naming::wrapper_fn_ident(adm.kernel_name, ctor),
+        // A fieldless struct's forwarder is a unary `() -> T` function (its
+        // wrapper takes the unit value), the same convention as a zero-param
+        // inspected binding.
+        arity: def.fields.len().max(1),
         sig: def.forwarder_ipe_sig(),
         ref_name: ctor.to_owned(),
         transparent_params: Vec::new(),
-        transparent_result: None,
+        transparent_result,
     });
 }
 
@@ -813,8 +1001,12 @@ fn admit_struct_forwarder(
 ///
 /// The enum is one Rust type; its N per-variant constructor fns all return that
 /// one nominal, so the nominal registers once and each variant forwarder differs
-/// only in its value-level `ref_name` (`<ctor>_<snake(variant)>`) and arity.
-/// Over-drops fail-closed:
+/// only in its value-level `ref_name` (`<ctor>_<snake(variant)>`) and arity. An
+/// all-identity-carrier enum no other define surface references surfaces
+/// TRANSPARENT — a closed union plus result-conversion glue on every variant
+/// forwarder, the same machinery a transparent import rides — while anything
+/// less keeps the opaque nominal with its reason recorded. Over-drops
+/// fail-closed:
 ///
 /// * the enum nominal routes through [`claim_nominal`] up-front, which refuses a
 ///   reserved-builtin shadow or a collision with another define surface,
@@ -823,29 +1015,23 @@ fn admit_struct_forwarder(
 /// * a per-variant constructor name that is not a legal Ipê value identifier is
 ///   dropped INDIVIDUALLY (each variant name is independent), the rest kept;
 /// * a duplicate constructor name keeps the first.
-#[allow(clippy::too_many_arguments)] // one linear admission plumbing set
-fn admit_enum_forwarders(
-    ref_name: &str,
-    def: &crate::carrier::EnumDef,
-    kernel_name: &str,
-    transparent: &BTreeMap<String, TransparentType>,
-    bindings: &mut Vec<InterfaceBinding>,
-    skipped: &mut Vec<SkippedBinding>,
-    seen: &mut BTreeSet<String>,
-    define_types: &mut BTreeSet<String>,
-) {
+fn admit_enum_forwarders(ref_name: &str, def: &crate::carrier::EnumDef, adm: &mut DefineAdmission) {
     let enum_name = def.name.as_str();
     // Claim the ONE shared nominal up-front so a reserved-builtin shadow or a
     // collision with another define surface refuses the WHOLE entry fail-closed
     // — a variant forwarder must never point at an enum whose `type` was dropped.
     // An enum with no surviving variant un-claims the nominal at the tail.
-    if let Err(reason) = claim_nominal("define.enum", enum_name, define_types, transparent) {
-        skipped.push(SkippedBinding {
-            ref_name: ref_name.to_owned(),
-            reason,
-        });
+    if let Err(reason) = claim_nominal(
+        "define.enum",
+        enum_name,
+        adm.claimed,
+        adm.transparent_imports,
+    ) {
+        adm.skip(ref_name, reason);
         return;
     }
+    let transparent_result =
+        adm.surface_define(enum_name, || crate::transparency::classify_define_enum(def));
     let mut any_admitted = false;
     for v in &def.variants {
         // The per-variant constructor `ref_name` — the SAME construction the
@@ -856,27 +1042,29 @@ fn admit_enum_forwarders(
             crate::naming::variant_snake(v.name.as_str())
         );
         if !valid_ipe_value_name(&variant_ref) {
-            skipped.push(SkippedBinding {
-                ref_name: variant_ref,
-                reason: "define.enum variant constructor name is not a legal Ipê identifier"
-                    .to_owned(),
-            });
+            adm.skip(
+                &variant_ref,
+                "define.enum variant constructor name is not a legal Ipê identifier".to_owned(),
+            );
             continue;
         }
-        if !seen.insert(variant_ref.clone()) {
-            skipped.push(SkippedBinding {
-                ref_name: variant_ref,
-                reason: "duplicate binding name — first occurrence kept".to_owned(),
-            });
+        if !adm.seen.insert(variant_ref.clone()) {
+            adm.skip(
+                &variant_ref,
+                "duplicate binding name — first occurrence kept".to_owned(),
+            );
             continue;
         }
-        bindings.push(InterfaceBinding {
-            wrapper_ident: crate::naming::wrapper_fn_ident(kernel_name, &variant_ref),
-            arity: v.payload.len(),
+        adm.bindings.push(InterfaceBinding {
+            wrapper_ident: crate::naming::wrapper_fn_ident(adm.kernel_name, &variant_ref),
+            // A unit variant's forwarder is a unary `() -> T` function (its
+            // wrapper takes the unit value), the same convention as a
+            // zero-param inspected binding.
+            arity: v.payload.len().max(1),
             sig: v.forwarder_ipe_sig(enum_name),
             ref_name: variant_ref,
             transparent_params: Vec::new(),
-            transparent_result: None,
+            transparent_result: transparent_result.clone(),
         });
         any_admitted = true;
     }
@@ -885,7 +1073,7 @@ fn admit_enum_forwarders(
     // so a bare `type` would be a dead opaque. Un-claim it otherwise (it was
     // claimed up-front for the fail-closed collision gate).
     if !any_admitted {
-        define_types.remove(enum_name);
+        adm.unclaim(enum_name);
     }
 }
 
@@ -907,42 +1095,40 @@ fn admit_enum_forwarders(
 /// * the handle nominal routes through [`claim_nominal`], which refuses a
 ///   reserved-builtin shadow or a collision with any other define surface
 ///   (struct / enum / another closure adapter) fail-closed.
-#[allow(clippy::too_many_arguments)] // one linear admission plumbing set
 fn admit_closure_forwarder(
     ref_name: &str,
     sig: &crate::carrier::ClosureSig,
-    kernel_name: &str,
-    transparent: &BTreeMap<String, TransparentType>,
-    bindings: &mut Vec<InterfaceBinding>,
-    skipped: &mut Vec<SkippedBinding>,
-    seen: &mut BTreeSet<String>,
-    define_types: &mut BTreeSet<String>,
+    adm: &mut DefineAdmission,
 ) {
     if !valid_ipe_value_name(ref_name) {
-        skipped.push(SkippedBinding {
-            ref_name: ref_name.to_owned(),
-            reason: "define.closure adapter name is not a legal Ipê identifier".to_owned(),
-        });
+        adm.skip(
+            ref_name,
+            "define.closure adapter name is not a legal Ipê identifier".to_owned(),
+        );
         return;
     }
     let handle = crate::naming::closure_handle_nominal(ref_name);
-    if !seen.insert(ref_name.to_owned()) {
-        skipped.push(SkippedBinding {
-            ref_name: ref_name.to_owned(),
-            reason: "duplicate binding name — first occurrence kept".to_owned(),
-        });
+    if !adm.seen.insert(ref_name.to_owned()) {
+        adm.skip(
+            ref_name,
+            "duplicate binding name — first occurrence kept".to_owned(),
+        );
         return;
     }
-    if let Err(reason) = claim_nominal("define.closure handle", &handle, define_types, transparent)
-    {
-        skipped.push(SkippedBinding {
-            ref_name: ref_name.to_owned(),
-            reason,
-        });
+    if let Err(reason) = claim_nominal(
+        "define.closure handle",
+        &handle,
+        adm.claimed,
+        adm.transparent_imports,
+    ) {
+        adm.skip(ref_name, reason);
         return;
     }
-    bindings.push(InterfaceBinding {
-        wrapper_ident: crate::naming::wrapper_fn_ident(kernel_name, ref_name),
+    // A boxed-closure handle is a sealed value by nature — it always keeps the
+    // opaque representation.
+    adm.opaque_defines.insert(handle.clone());
+    adm.bindings.push(InterfaceBinding {
+        wrapper_ident: crate::naming::wrapper_fn_ident(adm.kernel_name, ref_name),
         arity: 1,
         sig: sig.forwarder_ipe_sig(&handle),
         ref_name: ref_name.to_owned(),
@@ -966,12 +1152,13 @@ fn admit_closure_forwarder(
 ///   is a silent-wrong-type breach);
 /// * a nominal already claimed by another define surface is refused.
 ///
-/// Returns `Ok(())` with the nominal inserted, or `Err(reason)` naming the broken
-/// rule for the caller to record as a skip.
+/// Returns `Ok(())` with the nominal inserted into `claimed` (the caller then
+/// registers it opaque or transparent), or `Err(reason)` naming the broken rule
+/// for the caller to record as a skip.
 fn claim_nominal(
     kind: &str,
     nominal: &str,
-    define_types: &mut BTreeSet<String>,
+    claimed: &mut BTreeSet<String>,
     transparent: &BTreeMap<String, TransparentType>,
 ) -> Result<(), String> {
     if ipe_canon::is_reserved_builtin_type_name(nominal) {
@@ -988,7 +1175,7 @@ fn claim_nominal(
             "{kind} type `{nominal}` collides with a transparent foreign type of the crate"
         ));
     }
-    if !define_types.insert(nominal.to_owned()) {
+    if !claimed.insert(nominal.to_owned()) {
         return Err(format!(
             "{kind} type `{nominal}` collides with another define-defined nominal"
         ));
@@ -1045,10 +1232,10 @@ pub fn render_module(
     for b in bindings {
         let args: Vec<String> = (0..b.arity).map(crate::naming::arg_name).collect();
         let args_joined = args.join(" ");
-        // A nullary forwarder (a fieldless struct / unit enum variant) binds a
-        // zero-arg `Ffi.binding "<wrapper>"` — the emitted wrapper `pub fn` is
-        // itself zero-param, so forcing a spurious `arg0` here would be an arity
-        // mismatch the app crate cannot compile.
+        // An arity-0 binding only occurs in a legacy stored projection (every
+        // generated forwarder is at least unary — a zero-param foreign fn and
+        // a nullary define constructor both take the unit value). It renders
+        // the zero-arg shape its stored zero-param wrapper matches.
         if b.arity == 0 {
             let _ = write!(
                 out,
@@ -1284,17 +1471,20 @@ mod tests {
     }
 
     #[test]
-    fn define_struct_admits_a_forwarder_and_opaque_nominal() {
+    fn define_struct_admits_a_forwarder_and_a_transparent_record() {
         let iface = crate_interface(&struct_pkg(
             "counter_new",
             "Counter",
             &serde_json::json!([{ "name": "value", "type": "i64" }]),
         ));
+        // An all-identity-carrier define struct surfaces as a transparent
+        // record, not an opaque nominal.
         assert!(
-            iface.define_types.contains("Counter"),
+            iface.transparent_types.contains_key("Counter"),
             "{:?}",
             iface.skipped
         );
+        assert!(iface.define_types.is_empty(), "{:?}", iface.define_types);
         let b = iface
             .bindings
             .iter()
@@ -1304,9 +1494,19 @@ mod tests {
         assert_eq!(b.arity, 1);
         assert_eq!(b.sig, "Int -> Counter");
         assert_eq!(b.wrapper_ident, "demo_counter_new");
-        // The forwarder + the opaque nominal both render into the module.
+        // The constructor's foreign result converts through the record glue.
+        assert_eq!(
+            b.transparent_result,
+            Some(TransparentResult {
+                type_name: "Counter".to_owned(),
+                in_result: false
+            })
+        );
+        // The forwarder + the record alias both render into the module.
         assert!(
-            iface.source.contains("\ntype Counter = Counter\n"),
+            iface
+                .source
+                .contains("\ntype alias Counter = { value : Int }\n"),
             "{}",
             iface.source
         );
@@ -1320,20 +1520,134 @@ mod tests {
     }
 
     #[test]
-    fn define_struct_fieldless_is_a_nullary_forwarder() {
-        // A zero-field struct's constructor is nullary — the emitted `pub fn` is
-        // zero-param, so the forwarder must bind zero args (no spurious arg0).
+    fn define_struct_outside_the_identity_set_stays_an_opaque_nominal() {
+        // A `Bytes` field is a legal define carrier but outside the identity
+        // set the conversion glue moves — the type keeps the opaque handle,
+        // with the reason recorded.
+        let iface = crate_interface(&struct_pkg(
+            "blob_new",
+            "Blob",
+            &serde_json::json!([{ "name": "data", "type": "Bytes" }]),
+        ));
+        assert!(iface.define_types.contains("Blob"), "{:?}", iface.skipped);
+        assert!(iface.transparent_types.is_empty());
+        assert!(
+            iface.source.contains("\ntype Blob = Blob\n"),
+            "{}",
+            iface.source
+        );
+        let b = iface
+            .bindings
+            .iter()
+            .find(|b| b.ref_name == "blob_new")
+            .expect("blob_new admitted");
+        assert_eq!(b.transparent_result, None);
+        assert!(
+            iface.skipped.iter().any(|s| s.ref_name == "type Blob"
+                && s.reason.contains("outside the identity carrier set")),
+            "{:?}",
+            iface.skipped
+        );
+    }
+
+    #[test]
+    fn define_type_referenced_by_a_closure_stays_an_opaque_nominal() {
+        // The closure adapter's seam names the defined Rust type directly, so a
+        // define type a closure signature references must keep the opaque
+        // representation — a record surface would make the app-side function
+        // value's type disagree with the adapter's expected box type.
+        let doc = serde_json::json!({
+            "pkg": "demo", "name": "demo", "version": "0.1.0",
+            "functions": [
+                {
+                    "name": "counter_new", "effect": "pure", "isStructCtor": true,
+                    "structName": "Counter",
+                    "structFields": [{ "name": "value", "type": "i64" }],
+                    "structDerives": ["Clone"]
+                },
+                {
+                    "name": "step_fn", "effect": "pure", "isClosureAdapter": true,
+                    "closureSig":
+                        "Fn(Counter) -> Result<Counter, Error> + Send + Sync + 'static"
+                }
+            ],
+            "errors": []
+        });
+        let iface = crate_interface(&PkgInfo::decode_json(&doc.to_string()).expect("decodes"));
+        assert!(
+            iface.define_types.contains("Counter"),
+            "{:?}",
+            iface.skipped
+        );
+        assert!(!iface.transparent_types.contains_key("Counter"));
+        assert!(
+            iface
+                .skipped
+                .iter()
+                .any(|s| s.ref_name == "type Counter" && s.reason.contains("opaque handle")),
+            "{:?}",
+            iface.skipped
+        );
+    }
+
+    #[test]
+    fn define_type_sharing_an_inspected_nominal_stays_an_opaque_nominal() {
+        // A define struct named like an inspected foreign type of the crate
+        // must not surface a record under the shared nominal — the two are
+        // different Rust types.
+        let doc = serde_json::json!({
+            "pkg": "demo", "name": "demo", "version": "0.1.0",
+            "functions": [
+                {
+                    "name": "version_new", "effect": "pure", "isStructCtor": true,
+                    "structName": "Version",
+                    "structFields": [{ "name": "value", "type": "i64" }],
+                    "structDerives": ["Clone"]
+                },
+                {
+                    "name": "current",
+                    "params": [],
+                    "results": [{"name": "", "type": "Version",
+                                 "rustType": "demo::Version"}],
+                    "effect": "pure"
+                }
+            ],
+            "errors": []
+        });
+        let iface = crate_interface(&PkgInfo::decode_json(&doc.to_string()).expect("decodes"));
+        assert!(
+            iface.define_types.contains("Version"),
+            "{:?}",
+            iface.skipped
+        );
+        assert!(!iface.transparent_types.contains_key("Version"));
+        assert!(
+            iface.skipped.iter().any(
+                |s| s.ref_name == "type Version" && s.reason.contains("inspected foreign type")
+            ),
+            "{:?}",
+            iface.skipped
+        );
+    }
+
+    #[test]
+    fn define_struct_fieldless_is_a_unit_arg_forwarder() {
+        // A zero-field struct's constructor takes the unit value — the emitted
+        // `pub fn` has a `_: ()` param, matching the zero-param inspected
+        // convention — and the type stays an opaque nominal (an empty record
+        // surfaces nothing the handle does not).
         let iface = crate_interface(&struct_pkg("unit_new", "Unit", &serde_json::json!([])));
         let b = iface
             .bindings
             .iter()
             .find(|b| b.ref_name == "unit_new")
             .expect("unit_new admitted");
-        assert_eq!(b.arity, 0);
+        assert_eq!(b.arity, 1);
         assert_eq!(b.sig, "() -> Unit");
+        assert!(iface.define_types.contains("Unit"), "{:?}", iface.skipped);
         assert!(
             iface.source.contains(
-                "\nunit_new : () -> Unit\nunit_new =\n    Ffi.binding \"demo_unit_new\"\n"
+                "\nunit_new : () -> Unit\nunit_new arg0 =\n    Ffi.binding \"demo_unit_new\" arg0\n"
             ),
             "{}",
             iface.source
@@ -1350,21 +1664,27 @@ mod tests {
                 { "name": "SetValue", "payload": ["i64"] }
             ]),
         ));
-        // The enum nominal registers exactly once, not per-variant.
-        assert_eq!(
+        // An all-identity-carrier define enum surfaces as a transparent closed
+        // union, registered exactly once, not per-variant.
+        assert!(
+            iface.transparent_types.contains_key("Message"),
+            "{:?}",
+            iface.skipped
+        );
+        assert!(iface.define_types.is_empty(), "{:?}", iface.define_types);
+        assert!(
             iface
-                .define_types
-                .iter()
-                .filter(|n| *n == "Message")
-                .count(),
-            1
+                .source
+                .contains("\ntype Message = Increment | SetValue Int\n"),
+            "{}",
+            iface.source
         );
         let inc = iface
             .bindings
             .iter()
             .find(|b| b.ref_name == "message_new_increment")
             .expect("unit-variant forwarder");
-        assert_eq!(inc.arity, 0);
+        assert_eq!(inc.arity, 1);
         assert_eq!(inc.sig, "() -> Message");
         assert_eq!(inc.wrapper_ident, "demo_message_new_increment");
         let setv = iface
@@ -1374,10 +1694,21 @@ mod tests {
             .expect("payload-variant forwarder");
         assert_eq!(setv.arity, 1);
         assert_eq!(setv.sig, "Int -> Message");
-        // The unit variant binds zero args; the payload variant binds one.
+        // Every variant forwarder converts its foreign result through the
+        // union glue.
+        for b in [inc, setv] {
+            assert_eq!(
+                b.transparent_result,
+                Some(TransparentResult {
+                    type_name: "Message".to_owned(),
+                    in_result: false
+                })
+            );
+        }
+        // The unit variant binds the unit value; the payload variant its Int.
         assert!(
             iface.source.contains(
-                "\nmessage_new_increment : () -> Message\nmessage_new_increment =\n    Ffi.binding \"demo_message_new_increment\"\n"
+                "\nmessage_new_increment : () -> Message\nmessage_new_increment arg0 =\n    Ffi.binding \"demo_message_new_increment\" arg0\n"
             ),
             "{}",
             iface.source
