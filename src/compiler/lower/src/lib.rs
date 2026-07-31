@@ -85,7 +85,7 @@ pub fn lower(
     // arity; no stdlib function exceeds this ceiling, and `eta_expand_partial`
     // fails closed (CompilerBug) if a gap ever did — never silently, never
     // unsound.
-    // Sized by the per-module max arity (WP-3): the `eta_` / `cap_` pools name a
+    // Sized by the per-module max arity: the `eta_` / `cap_` pools name a
     // symbol by its scope-LOCAL position, so the pool SIZE is byte-neutral — only
     // the local index reaches the emitted names. `max_def_arity_per_module`
     // equals the widest arity across the whole module, so this sizing is

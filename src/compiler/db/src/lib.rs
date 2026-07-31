@@ -1027,7 +1027,7 @@ pub type LowerResult = Result<Arc<ipe_ir::Program>, (Diagnostic, Vec<Symbol>)>;
 /// precede it program-wide. A per-module lowering pass needs those pools
 /// restructured into a per-module allocation scheme (module-base offset + local
 /// index) that reproduces the whole-program numbering the golden-oracle SEAL
-/// pins — a recorded follow-up (WP-4), not done here. The position-indexed
+/// pins — not yet wired. The position-indexed
 /// `eta_` / `cap_` pools are already per-module-decoupled
 /// (`lower::max_def_arity_per_module`).
 #[salsa::tracked]

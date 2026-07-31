@@ -6976,7 +6976,7 @@ const fn def_arity(d: &canon::Def) -> usize {
 /// across modules — the most parameters any single eta-expanded partial
 /// application can need, expressed as a per-module quantity. Drives the
 /// position-indexed `eta_` / `cap_` pool sizing in [`crate::lower`] under the
-/// per-module lowering scheme (WP-3).
+/// per-module lowering scheme.
 ///
 /// This is numerically equal to the widest arity across the whole module (the
 /// max over the whole set is the max of the per-module maxima), so sizing the
@@ -19092,7 +19092,7 @@ mod tests {
         assert!(reject_foreign_handle_reuse(env, sym, &world_ty, &linear, span).is_ok());
     }
 
-    /// WP-3: the per-module eta/cap pool sizing must equal the whole-program
+    /// The per-module eta/cap pool sizing must equal the whole-program
     /// sizing exactly, even when the widest def lives in a NON-first module —
     /// the `link`-order shape a per-module lowering must reproduce byte-for-byte.
     #[test]
