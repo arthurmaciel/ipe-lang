@@ -37,6 +37,7 @@ pub mod publish;
 pub mod resolve;
 pub mod run_sandbox;
 pub mod style;
+pub mod toolchain;
 /// The embedded Ipê standard-library source now lives in the dependency-free
 /// [`ipe_stdlib`] leaf crate so the WebAssembly frontend can share one copy.
 /// Re-exported here so `crate::stdlib::…` call sites resolve unchanged.
@@ -195,6 +196,20 @@ pub enum CliError {
         /// The platform–architecture pair (e.g. `linux-x64`).
         platform: String,
     },
+    /// A command needed the Rust toolchain (`cargo`/`rustc`) to build, run, or
+    /// test a program, but `cargo` was not found. This is an environment
+    /// failure, not a command-line misuse — the invocation was valid; the host
+    /// is missing a prerequisite — so it exits non-zero with the friendly,
+    /// root-cause message alone and never the command's `--help` page. Carries
+    /// the typed [`toolchain::ToolchainMissing`] naming what the command was
+    /// doing and whether the toolchain is uninstalled or merely off the `PATH`.
+    ToolchainMissing(toolchain::ToolchainMissing),
+}
+
+impl From<toolchain::ToolchainMissing> for CliError {
+    fn from(missing: toolchain::ToolchainMissing) -> Self {
+        Self::ToolchainMissing(missing)
+    }
 }
 
 impl From<api_surface::DiffError> for CliError {
@@ -308,6 +323,9 @@ impl std::fmt::Display for CliError {
                     glyph::FAIL
                 )
             }
+            // The toolchain-missing message gutters and frames itself; it owns
+            // its rendering (see `toolchain::ToolchainMissing`'s `Display`).
+            Self::ToolchainMissing(missing) => write!(f, "{missing}"),
         }
     }
 }
@@ -1826,8 +1844,14 @@ fn run_watch(rest: &[String]) -> Result<(), CliError> {
         None => resolve_runtime()?,
     };
 
+    // Fail closed before the watch loop starts: `ipe watch` rebuilds with cargo
+    // on every change, so a missing toolchain is reported once, up front, with
+    // its root cause — not as a per-rebuild opaque spawn error.
+    let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::Watch)?;
+
     let mut opts = watch::WatchOptions::new(PathBuf::from(entry), out_dir, runtime_dir);
     opts.port = args.port;
+    opts.cargo_path = cargo_bin.path().to_path_buf();
     watch::run(&opts)
 }
 
@@ -2063,8 +2087,12 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
 /// # Errors
 /// [`CliError::UsageOwned`] when cargo or wasm-bindgen fails.
 fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
+    // Fail closed before the cross-compile: a missing toolchain becomes a clear
+    // root-cause message rather than an opaque OS spawn error.
+    let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::BundleWasm)?;
+
     // Step 1: compile to .wasm
-    let cargo_status = std::process::Command::new("cargo")
+    let cargo_status = std::process::Command::new(cargo_bin.path())
         .args(["build", "--target", "wasm32-unknown-unknown", "--release"])
         .current_dir(out_dir)
         .status()
@@ -2211,6 +2239,17 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
     // exec). A plain `ipe run` in a non-wasm project stays native.
     let wasm_target = resolve_wasm_target(false, manifest_wasm.as_ref());
 
+    // Fail closed before emitting: `ipe run` shells out to cargo to build the
+    // emitted project, so a missing toolchain is a clear root-cause error now,
+    // not an opaque OS spawn error after the (wasted) compile. The wasm branch
+    // delegates to `bundle_wasm`, which resolves cargo itself, so only the
+    // native branch resolves here — the resolved path is reused for its build.
+    let native_cargo = if wasm_target {
+        None
+    } else {
+        Some(toolchain::require_cargo(toolchain::ToolIntent::Run)?)
+    };
+
     let static_plan = resolve_static_plan(cli_layer, manifest.as_deref())?;
     // `ipe run` is a DEVELOPMENT execution, so `Debug.*` is allowed
     // (production = false).
@@ -2250,7 +2289,15 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
     // (`+crt-static` under a static plan) is discovered. The static plan
     // additionally selects the target triple explicitly — the config carries
     // only rustflags, never a `[build] target` pin.
-    let mut cargo = std::process::Command::new("cargo");
+    // `native_cargo` is `Some` on every path that reaches here: the wasm branch
+    // returned above, and the native branch resolved cargo before emitting. The
+    // fallback re-resolves rather than unwrapping so the toolchain error stays
+    // typed even if the branch invariant ever changes.
+    let cargo_bin = match native_cargo {
+        Some(bin) => bin,
+        None => toolchain::require_cargo(toolchain::ToolIntent::Run)?,
+    };
+    let mut cargo = std::process::Command::new(cargo_bin.path());
     cargo.arg("build").current_dir(&out_dir);
     if let Some(plan) = &static_plan {
         cargo.args(["--target", plan.triple.as_str()]);
@@ -3110,6 +3157,11 @@ fn verify_test(path: Option<&str>) -> Result<(), CliError> {
         return Ok(());
     }
 
+    // Fail closed before emitting: the test stage shells out to cargo to build
+    // the test runner, so a missing toolchain is reported with its root cause
+    // rather than an opaque OS spawn error.
+    let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::Test)?;
+
     let runtime_dir = resolve_runtime()?;
 
     // Emit into a unique temp directory so concurrent verify runs do not
@@ -3121,7 +3173,7 @@ fn verify_test(path: Option<&str>) -> Result<(), CliError> {
     build_with_sibling_discovery(&test_entry, &out_dir, &runtime_dir)?;
 
     // Compile the emitted Rust project.
-    let cargo_status = std::process::Command::new("cargo")
+    let cargo_status = std::process::Command::new(cargo_bin.path())
         .arg("build")
         .current_dir(&out_dir)
         .status()

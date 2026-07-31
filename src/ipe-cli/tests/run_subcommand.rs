@@ -137,3 +137,89 @@ fn run_subcommand_builds_and_executes_hello_program() {
     // Cleanup heavy cargo artifacts; leave src for post-mortem if needed.
     let _ = fs::remove_dir_all(out_dir.join("target"));
 }
+
+// ---------------------------------------------------------------------------
+// Toolchain-absence tests (unconditional — the whole point is NO cargo)
+// ---------------------------------------------------------------------------
+
+/// `ipe run <entry.ipe>` under a `PATH` with no `cargo`, and with `CARGO_HOME`
+/// and `HOME` pointed at empty directories so no install location is found,
+/// must fail with the friendly root-cause message — naming Rust/Cargo, why Ipê
+/// needs it, and the rustup fix — rather than the opaque OS spawn error.
+///
+/// This spawns the `ipe` binary as a child (so the Unix `exec` in `run_run`
+/// replaces the child, not the test runner) and requires no cargo, so it runs
+/// unconditionally.
+#[test]
+fn run_without_cargo_reports_the_missing_toolchain() {
+    const SRC: &str = "module Main exposing (main)\n\nimport Ipe.Io\n\nmain = Io.println \"hi\"\n";
+
+    // A runtime dir is needed to reach the toolchain check (which fires after
+    // emit). Skip when the repo tree is unavailable (CI without checkout).
+    let Ok(runtime_dir) = ipe::resolve_runtime() else {
+        return;
+    };
+
+    let dir = std::env::temp_dir().join("ipe_run_no_cargo_e2e");
+    let _ = fs::remove_dir_all(&dir);
+    let entry = dir.join("Main.ipe");
+    let empty_home = dir.join("empty-home");
+    let created = fs::create_dir_all(&empty_home).and_then(|()| fs::write(&entry, SRC));
+    assert!(created.is_ok(), "write source + empty home: {created:?}");
+
+    let ipe_bin = env!("CARGO_BIN_EXE_ipe");
+    // This path is baked at compile time; a nextest archive that ships the test
+    // to another host runs it where that path does not resolve. Skip there — the
+    // toolchain-resolution dispositions are covered by the unit tests in
+    // `toolchain.rs`; this end-to-end spawn only adds value where the binary is
+    // present.
+    if !std::path::Path::new(ipe_bin).exists() {
+        return;
+    }
+    // A minimal PATH with no cargo. `/nonexistent-ipe-cargo-probe` cannot hold
+    // any executable, so cargo is unresolvable on the PATH.
+    let cargoless_path = "/nonexistent-ipe-cargo-probe";
+    let out = std::process::Command::new(ipe_bin)
+        .args(["run", &entry.to_string_lossy(), "--out"])
+        .arg(dir.join("out"))
+        .env("PATH", cargoless_path)
+        .env("HOME", &empty_home)
+        .env("CARGO_HOME", empty_home.join("no-cargo"))
+        .env("IPE_RUNTIME_DIR", &runtime_dir)
+        .env("NO_COLOR", "1")
+        .output();
+    let Ok(out) = out else {
+        assert!(false_marker(), "failed to spawn ipe: {out:?}");
+        return;
+    };
+
+    assert!(
+        !out.status.success(),
+        "ipe run with no cargo must exit non-zero"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // Which disposition fires depends on the host: a machine with no Rust at
+    // all reports "not found"; a machine where Cargo is installed but off this
+    // scrubbed PATH reports "not on your PATH". Both name the root cause.
+    assert!(
+        stderr.contains("Rust and Cargo were not found") || stderr.contains("not on your PATH"),
+        "the missing-toolchain message must name the root cause, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("compile and run this program"),
+        "the message must name what `ipe run` was doing, got:\n{stderr}"
+    );
+    // Both dispositions end with an actionable fix: install via rustup, or add
+    // the existing Cargo to PATH.
+    assert!(
+        stderr.contains("rustup.rs") || stderr.contains("PATH"),
+        "the message must give an actionable fix, got:\n{stderr}"
+    );
+    // The opaque OS spawn error must NOT leak through.
+    assert!(
+        !stderr.contains("os error"),
+        "the raw OS spawn error must never surface, got:\n{stderr}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
