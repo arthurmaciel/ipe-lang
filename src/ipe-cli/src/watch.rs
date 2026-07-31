@@ -152,6 +152,11 @@ pub struct WatchOptions {
     pub port: u16,
     pub debounce: ipe_watch::DebounceConfig,
     pub restart_timeouts: ipe_watch::RestartTimeouts,
+    /// The resolved `cargo` executable each rebuild spawns. The CLI layer
+    /// resolves it once (fail-closed) before the loop starts and stores the
+    /// path here; the default is the bare name `cargo`, deferring to `PATH`
+    /// resolution for callers that do not pre-resolve.
+    pub cargo_path: PathBuf,
     /// Optional lifecycle observer — see [`WatchEvent`]. `None` on the CLI
     /// path.
     pub on_event: Option<Arc<dyn Fn(WatchEvent) + Send + Sync>>,
@@ -167,6 +172,7 @@ impl WatchOptions {
             port: 8000,
             debounce: ipe_watch::DebounceConfig::default(),
             restart_timeouts: ipe_watch::RestartTimeouts::default(),
+            cargo_path: PathBuf::from("cargo"),
             on_event: None,
         }
     }
@@ -917,7 +923,12 @@ fn run_inner(
                         } else {
                             eprintln!("{}", crate::style::gutter("[ipe watch] rebuilding…"));
                         }
-                        match spawn_cargo_build(&opts.out_dir, generation, evt_tx.clone()) {
+                        match spawn_cargo_build(
+                            &opts.cargo_path,
+                            &opts.out_dir,
+                            generation,
+                            evt_tx.clone(),
+                        ) {
                             Ok(child) => cargo_child = Some(child),
                             Err(e) => eprintln!(
                                 "{}",
@@ -1161,11 +1172,12 @@ const fn restart_outcome_kind(outcome: &ipe_watch::RestartOutcome) -> RestartOut
 /// # Errors
 /// An I/O error if the `cargo` process itself cannot be spawned.
 fn spawn_cargo_build(
+    cargo_path: &Path,
     out_dir: &Path,
     generation: u64,
     evt_tx: mpsc::Sender<OrchestratorEvent>,
 ) -> std::io::Result<Arc<std::sync::Mutex<Child>>> {
-    let mut cmd = Command::new("cargo");
+    let mut cmd = Command::new(cargo_path);
     cmd.arg("build")
         .arg("--message-format=json")
         .current_dir(out_dir)
