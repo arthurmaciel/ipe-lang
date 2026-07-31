@@ -460,6 +460,31 @@ mod tests {
         assert!(!err.is_empty());
     }
 
+    /// The redirect-hop re-validation floor. `ssrf_apply`'s redirect policy calls
+    /// `ssrf_check_url(attempt.url())` on EVERY hop before following it, so a
+    /// redirect whose `Location` points at an internal / loopback / link-local /
+    /// metadata address is blocked even though the FIRST hop was a safe public
+    /// URL — the initial validation is not trusted for later hops. This asserts
+    /// the exact function the policy invokes rejects each such hop target.
+    #[test]
+    fn redirect_hop_revalidation_blocks_internal_targets() {
+        for hop in [
+            "http://127.0.0.1/admin",             // loopback
+            "http://10.0.0.5/internal",           // RFC-1918 private
+            "http://169.254.169.254/latest/meta", // AWS IMDS link-local
+            "http://[::1]/",                      // v6 loopback
+            "http://192.168.1.1/",                // RFC-1918 private
+        ] {
+            let err = ssrf_check_url(hop)
+                .expect_err("a redirect hop to an internal address must be blocked");
+            assert!(err.contains("blocked"), "hop {hop:?} → got: {err}");
+        }
+        // A redirect hop with a non-http(s) scheme is blocked at the same floor.
+        let err = ssrf_check_url("ftp://example.com/x")
+            .expect_err("a non-http(s) redirect hop must be blocked");
+        assert!(err.contains("scheme"), "got: {err}");
+    }
+
     #[test]
     fn ssrf_check_url_allows_public_ip() {
         // 1.1.1.1 is public — should pass (no DNS needed for IP literals)

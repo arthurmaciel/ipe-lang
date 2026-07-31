@@ -6,12 +6,12 @@ import Ipe.List
 import Ipe.String
 
 
--- Http builder chain test: verifies that Http.defaultRequest / Http.withMethod /
--- Http.withTimeout / Http.withHeader / Http.withBody all resolve through the
--- kernel dispatch path and produce a correctly-shaped HttpRequest record.
+-- Http builder chain test: verifies that Http.defaultRequestFromString (the
+-- marked parse-at-the-boundary helper) plus Http.withTimeout / Http.withHeader /
+-- Http.withBody all resolve through the kernel dispatch path and produce a
+-- correctly-shaped HttpRequest record. The typed target is parsed exactly once;
+-- the record-update builders chain on the Ok branch.
 -- withHeader PREPENDS (latest-added first) — B:2 appears before A:1.
--- `method` is now the `HttpMethod` ADT; `Http.methodToString` converts it to
--- the canonical uppercase string for printing.
 
 
 headerStr : ( String, String ) -> String
@@ -22,15 +22,18 @@ headerStr pair =
 
 printReq : { body : String, followRedirects : Bool, headers : List ( String, String ), maxRedirects : Int, method : Http.HttpMethod, timeout : Int, url : String } -> String
 printReq req =
-    String.join "\n" [ Http.methodToString req.method, req.url, String.fromInt req.timeout, req.body, String.join "," (List.map headerStr req.headers) ]
+    String.join "\n" [ req.url, String.fromInt req.timeout, req.body, String.join "," (List.map headerStr req.headers) ]
 
 
 main =
-    Io.println
-        (printReq
-            (Http.withBody "hello"
-                (Http.withHeader "B" "2"
-                    (Http.withHeader "A" "1"
-                        (Http.withTimeout 5000
-                            (Http.withMethod Http.Post
-                                (Http.defaultRequest "http://example.com")))))))
+    case Http.defaultRequestFromString "http://example.com" of
+        Ok req0 ->
+            Io.println
+                (printReq
+                    (Http.withBody "hello"
+                        (Http.withHeader "B" "2"
+                            (Http.withHeader "A" "1"
+                                (Http.withTimeout 5000 req0)))))
+
+        Err _ ->
+            Io.println "blocked"

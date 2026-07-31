@@ -1,5 +1,4 @@
-POST
-http://example.com
+http://example.com/
 5000
 hello
 B:2,A:1

@@ -3,17 +3,19 @@ module Main exposing (main)
 import Ipe.Http as Http
 import Ipe.Io as Io
 import Ipe.String
+import Ipe.Url as Url
 
 
--- #33 §6.2 — the three Go-parity builders added on top of the M5b set:
+-- The three builders on top of the M5b set:
 -- Http.withUrl / Http.withFollowRedirects / Http.withMaxRedirects.
--- Each is a single-field record update on HttpRequest; the chain below
--- overrides every one of the defaultRequest values they own
+-- withFollowRedirects / withMaxRedirects are single-field record updates on
+-- HttpRequest; withUrl retargets to a typed Url and re-narrows the scheme to
+-- http/https (fail-closed), returning a Result. The chain below overrides
+-- every one of the defaultRequest values they own
 -- (url "http://example.com" -> "http://example.org",
 --  followRedirects True -> False, maxRedirects 10 -> 3).
 --
--- Expected output (hand-verified against the Go reference semantics —
--- record-update-only, no runtime behaviour):
+-- Expected output:
 --   http://example.org
 --   noredirect
 --   3
@@ -29,9 +31,22 @@ printReq req =
 
 
 main =
-    Io.println
-        (printReq
-            (Http.withMaxRedirects 3
-                (Http.withFollowRedirects False
-                    (Http.withUrl "http://example.org"
-                        (Http.defaultRequest "http://example.com")))))
+    case Http.defaultRequestFromString "http://example.com" of
+        Ok req0 ->
+            case Url.fromString "http://example.org" of
+                Ok target ->
+                    case Http.withUrl target req0 of
+                        Ok retargeted ->
+                            Io.println
+                                (printReq
+                                    (Http.withMaxRedirects 3
+                                        (Http.withFollowRedirects False retargeted)))
+
+                        Err _ ->
+                            Io.println "blocked"
+
+                Err _ ->
+                    Io.println "unparseable"
+
+        Err _ ->
+            Io.println "blocked"

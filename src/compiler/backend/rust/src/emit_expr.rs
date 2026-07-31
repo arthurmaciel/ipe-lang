@@ -1249,6 +1249,54 @@ pub fn call_has_kernel_special_case(
 ///
 /// Factored out of `emit_expr_at` to keep that function's stack frame
 /// small (matching the `emit_json_decoder_call` pattern).
+/// Emit the typed-target request builders — `Http.defaultRequest` (Url) /
+/// `Http.defaultRequestFromString` (String) / `Http.withUrl` (Url, req). Each
+/// returns `Result Error HttpRequest`; the error channel appears only in the
+/// result, so an explicit `::<IpeError>` turbofish anchors `E`. The
+/// fail-closed http/https scheme narrowing lives in the runtime fns these call.
+/// Returns `None` for any other callee.
+#[inline(never)]
+fn emit_http_typed_target_builder(
+    ctx: &EmitCtx,
+    callee: &Callee,
+    args: &[Expr],
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Option<String>> {
+    match callee {
+        Callee::Kernel(
+            k @ (KernelFn::HttpDefaultRequest | KernelFn::HttpDefaultRequestFromString),
+        ) => {
+            let arg = args.first().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "ipe_backend_rust::emit_http_typed_target_builder",
+                detail: "typed-target builder expects exactly 1 argument".to_owned(),
+            })?;
+            let arg_str = emit_expr_at(ctx, arg, indent, child, generics)?;
+            let name = kernel_name(*k);
+            Ok(Some(format!(
+                "ipe_runtime::http_client::{name}::<IpeError>({arg_str})"
+            )))
+        }
+        Callee::Kernel(KernelFn::HttpWithUrl) => {
+            let url = args.first().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "ipe_backend_rust::emit_http_typed_target_builder",
+                detail: "HttpWithUrl expects 2 arguments (url, req)".to_owned(),
+            })?;
+            let req = args.get(1).ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "ipe_backend_rust::emit_http_typed_target_builder",
+                detail: "HttpWithUrl expects 2 arguments (url, req)".to_owned(),
+            })?;
+            let url_str = emit_expr_at(ctx, url, indent, child, generics)?;
+            let req_str = emit_expr_at(ctx, req, indent, child, generics)?;
+            Ok(Some(format!(
+                "ipe_runtime::http_client::http_with_url::<IpeError>({url_str}, {req_str})"
+            )))
+        }
+        _ => Ok(None),
+    }
+}
+
 #[inline(never)]
 fn emit_http_call(
     ctx: &EmitCtx,
@@ -1258,7 +1306,19 @@ fn emit_http_call(
     child: u16,
     generics: GenericScope,
 ) -> DResult<Option<String>> {
-    // Only the three network kernels need special treatment.
+    // The three network kernels plus the three typed-target builders need
+    // special treatment: all carry an error channel that appears only in the
+    // `Result Error _` / `Task Error _` result, so Rust cannot infer the `E`
+    // type parameter when the `Err` arm is discarded. Each is emitted with an
+    // explicit `::<IpeError>` turbofish. The typed-target builders return a
+    // `Result Error HttpRequest` directly (no `task_map` wrapping), so they are
+    // handled by `emit_http_typed_target_builder` before the response-shaping
+    // network kernels below.
+    if let Some(emitted) =
+        emit_http_typed_target_builder(ctx, callee, args, indent, child, generics)?
+    {
+        return Ok(Some(emitted));
+    }
     let Callee::Kernel(k @ (KernelFn::HttpGet | KernelFn::HttpPost | KernelFn::HttpRequest)) =
         callee
     else {
@@ -1366,14 +1426,15 @@ fn emit_http_call(
 ///
 /// Returns `Some(emitted)` for the eight pure builder kernels:
 ///
-/// * **`HttpDefaultRequest url`** — emits a struct literal with sensible
-///   defaults: `method = "GET"`, `body = ""`, `headers = []`,
-///   `timeout = 30000`, `followRedirects = true`, `maxRedirects = 10`.
+/// The typed-target builders (`HttpDefaultRequest` /
+/// `HttpDefaultRequestFromString` / `HttpWithUrl`) are NOT handled here: they go
+/// through the standard call path to runtime fns that perform the fail-closed
+/// http/https scheme narrowing and return `Result Error HttpRequest`.
 ///
 /// * **`HttpWithMethod m req`**, **`HttpWithTimeout t req`**,
-///   **`HttpWithBody b req`**, **`HttpWithUrl u req`**,
+///   **`HttpWithBody b req`**,
 ///   **`HttpWithFollowRedirects f req`**, **`HttpWithMaxRedirects n req`**
-///   (last three: Go parity) — each emits a clone-and-reassign
+///   — each emits a clone-and-reassign
 ///   block
 ///   (`{ let mut __ipe_rec = (req).clone(); __ipe_rec.field = val; __ipe_rec }`)
 ///   matching the `emit_update` pattern so the source record is moved once.
@@ -1398,12 +1459,10 @@ fn emit_http_builder_call(
     generics: GenericScope,
 ) -> DResult<Option<String>> {
     let Callee::Kernel(
-        k @ (KernelFn::HttpDefaultRequest
-        | KernelFn::HttpWithMethod
+        k @ (KernelFn::HttpWithMethod
         | KernelFn::HttpWithTimeout
         | KernelFn::HttpWithBody
         | KernelFn::HttpWithHeader
-        | KernelFn::HttpWithUrl
         | KernelFn::HttpWithFollowRedirects
         | KernelFn::HttpWithMaxRedirects),
     ) = callee
@@ -1427,20 +1486,6 @@ fn emit_http_builder_call(
     // IPE-I0001. Emitting the fixed runtime type name removes the dependency
     // entirely.
     match k {
-        KernelFn::HttpDefaultRequest => {
-            // defaultRequest : String -> HttpRequest  — inline struct literal.
-            // `method` defaults to the `Get` constructor of the `HttpMethod` ADT.
-            let url = args.first().ok_or_else(|| Diagnostic::CompilerBug {
-                where_: "ipe_backend_rust::emit_http_builder_call",
-                detail: "HttpDefaultRequest expects 1 argument (url)".to_owned(),
-            })?;
-            let url_s = emit_expr_at(ctx, url, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::HttpRequest {{ body: String::new(), followRedirects: true, \
-                 headers: Vec::new(), maxRedirects: 10i64, \
-                 method: ipe_runtime::HttpMethod::Get, timeout: 30000i64, url: {url_s} }}"
-            )))
-        }
         KernelFn::HttpWithMethod => {
             // withMethod : HttpMethod -> HttpRequest -> HttpRequest
             let m = args.first().ok_or_else(|| Diagnostic::CompilerBug {
@@ -1490,23 +1535,6 @@ fn emit_http_builder_call(
             Ok(Some(format!(
                 "{{ let mut __ipe_rec = ({req_s}).clone(); \
                  __ipe_rec.body = {b_s}; __ipe_rec }}"
-            )))
-        }
-        KernelFn::HttpWithUrl => {
-            // withUrl : String -> HttpRequest -> HttpRequest
-            let u = args.first().ok_or_else(|| Diagnostic::CompilerBug {
-                where_: "ipe_backend_rust::emit_http_builder_call",
-                detail: "HttpWithUrl expects 2 arguments (url, req)".to_owned(),
-            })?;
-            let req = args.get(1).ok_or_else(|| Diagnostic::CompilerBug {
-                where_: "ipe_backend_rust::emit_http_builder_call",
-                detail: "HttpWithUrl expects 2 arguments (url, req)".to_owned(),
-            })?;
-            let u_s = emit_expr_at(ctx, u, indent, child, generics)?;
-            let req_s = emit_expr_at(ctx, req, indent, child, generics)?;
-            Ok(Some(format!(
-                "{{ let mut __ipe_rec = ({req_s}).clone(); \
-                 __ipe_rec.url = {u_s}; __ipe_rec }}"
             )))
         }
         KernelFn::HttpWithFollowRedirects => {
@@ -1567,9 +1595,10 @@ fn emit_http_builder_call(
             )))
         }
         // Unreachable: the guard at the top of this function constrains `k` to the
-        // eight variants matched above. The `_ =>` arm keeps Rust's exhaustiveness
-        // checker satisfied without introducing a catch-all over the full `KernelFn`
-        // set (which would violate the no-catch-all principle for the logic above).
+        // record-update builder variants matched above. The `_ =>` arm keeps Rust's
+        // exhaustiveness checker satisfied without introducing a catch-all over the
+        // full `KernelFn` set (which would violate the no-catch-all principle for
+        // the logic above).
         _ => Ok(None),
     }
 }

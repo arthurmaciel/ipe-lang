@@ -6,12 +6,31 @@
 -- redaction. These records are transport DTOs carried to that boundary;
 -- downstream code MUST NOT re-validate.
 --
+-- Request TARGETS are the typed `Ipe.Url.Url`, not a raw `String`. The
+-- primary constructor `defaultRequest` and the retarget setter `withUrl`
+-- take an already-sealed `Url` (parsed exactly once at `Url.fromString`) and
+-- narrow its scheme to `http`/`https` at THIS API layer, returning `Err` on
+-- any other scheme. The narrowing is fail-closed BY CONSTRUCTION: a
+-- builder-assembled request whose scheme is not `http(s)` cannot be built,
+-- so it is rejected even when the runtime SSRF guard is disabled in
+-- development — the runtime scheme allowlist is defence-in-depth, never the
+-- only line. `defaultRequestFromString` is the MARKED raw-string boundary:
+-- it runs `Url.fromString` and returns `Result`, so a raw string is an
+-- explicit parse-at-the-boundary, never a silent stringly default. There is
+-- no unmarked `String` request-target path.
+--
 -- `HttpMethod` is a closed ADT — make-invalid-states-unrepresentable for
 -- HTTP verbs. `methodFromString` is the single typed parse boundary for
 -- inbound method strings (e.g. parsed from a server request line);
 -- `methodToString` recovers the canonical uppercase string for logging or
 -- forwarding. Unknown verbs surface as `Nothing` at the parse boundary,
 -- never as a silent default.
+--
+-- Every function here is kernel-backed (resolved by qualifier to a
+-- `ipe_runtime::http_client` fn); the Ipê bodies below mirror that behaviour
+-- for reading, but the AUTHORITATIVE scheme-narrowing implementation is the
+-- runtime `narrow_http_scheme` the kernels call — the two cannot diverge
+-- because the kernel path, not these bodies, is what lowers.
 --
 -- `parseQuery` is pure: trims a leading `?`, splits on `&`/`=`,
 -- percent-decodes, first-key-wins, returns a `Dict String String` (no
@@ -26,6 +45,7 @@ module Ipe.Http exposing
     , HttpRequest
     , HttpResponse
     , defaultRequest
+    , defaultRequestFromString
     , get
     , methodFromString
     , methodToString
@@ -43,8 +63,10 @@ module Ipe.Http exposing
 
 
 import Ipe.Dict exposing (Dict)
+import Ipe.Error as Error exposing (Error)
 import Ipe.Ffi as Ffi
 import Ipe.Maybe exposing (Maybe)
+import Ipe.Url as Url exposing (Url)
 
 
 -- ── Types ─────────────────────────────────────────────────────────────────────
@@ -124,16 +146,69 @@ methodToString =
 -- ── Pure builders ─────────────────────────────────────────────────────────────
 
 
-defaultRequest : String -> HttpRequest
+-- | `narrowHttpScheme url` — the API-layer scheme narrowing (fail-closed).
+-- The typed `Url` legally carries ANY absolute scheme (`file:`, `ftp:` are
+-- valid `Url` values); this outbound-request surface accepts only `http` /
+-- `https`. Any other scheme is a typed `Err` here, at the API layer, so a
+-- builder-constructed request is safe-by-construction EVEN when the runtime
+-- SSRF guard is off in dev. `Url.scheme` reads the already-parsed scheme; no
+-- re-parse of a string.
+narrowHttpScheme : Url -> Result Error Url
+narrowHttpScheme url =
+    case Url.scheme url of
+        "http" ->
+            Ok url
+
+        "https" ->
+            Ok url
+
+        other ->
+            Err
+                (Error.invalidInput
+                    ("Http: blocked: scheme \""
+                        ++ other
+                        ++ "\" is not http/https"
+                    )
+                )
+
+
+-- | `defaultRequest url` — the primary request constructor. Takes an
+-- already-sealed typed `Url` (parsed once at `Url.fromString`), narrows its
+-- scheme to `http`/`https` at this API layer, and carries the single
+-- canonical serialization (`Url.toString`) as the transport target — the
+-- runtime never re-parses a fresh string to reconstruct it. Fails closed
+-- (`Err`) on any non-`http(s)` scheme. There is no unmarked `String` default.
+defaultRequest : Url -> Result Error HttpRequest
 defaultRequest url =
-    { method = Get
-    , url = url
-    , body = ""
-    , headers = []
-    , timeout = 30000
-    , followRedirects = True
-    , maxRedirects = 10
-    }
+    case narrowHttpScheme url of
+        Ok ok ->
+            Ok
+                { method = Get
+                , url = Url.toString ok
+                , body = ""
+                , headers = []
+                , timeout = 30000
+                , followRedirects = True
+                , maxRedirects = 10
+                }
+
+        Err e ->
+            Err e
+
+
+-- | `defaultRequestFromString raw` — the MARKED parse-at-the-boundary helper
+-- for a raw string target. It runs `Url.fromString` (the ONE parse of the
+-- string) and then the same scheme narrowing, returning `Result` so a raw
+-- string is an EXPLICIT parse boundary, never a silent stringly default. A
+-- relative / scheme-less / non-`http(s)` string is a typed `Err`.
+defaultRequestFromString : String -> Result Error HttpRequest
+defaultRequestFromString raw =
+    case Url.fromString raw of
+        Ok url ->
+            defaultRequest url
+
+        Err e ->
+            Err e
 
 
 withMethod : HttpMethod -> HttpRequest -> HttpRequest
@@ -150,9 +225,18 @@ withBody : String -> HttpRequest -> HttpRequest
 withBody b req =
     { req | body = b }
 
-withUrl : String -> HttpRequest -> HttpRequest
-withUrl u req =
-    { req | url = u }
+-- | `withUrl url req` — retarget an existing request to a typed `Url`. Like
+-- `defaultRequest`, it re-narrows the scheme to `http`/`https` at the API
+-- layer (fail-closed) and carries the single canonical serialization, so a
+-- retarget cannot smuggle a non-`http(s)` scheme past the guard-off dev path.
+withUrl : Url -> HttpRequest -> Result Error HttpRequest
+withUrl url req =
+    case narrowHttpScheme url of
+        Ok ok ->
+            Ok { req | url = Url.toString ok }
+
+        Err e ->
+            Err e
 
 withFollowRedirects : Bool -> HttpRequest -> HttpRequest
 withFollowRedirects f req =

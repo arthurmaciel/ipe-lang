@@ -725,6 +725,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::HttpRequest => "Http.request",
         KernelFn::HttpParseQuery => "Http.parseQuery",
         KernelFn::HttpDefaultRequest => "Http.defaultRequest",
+        KernelFn::HttpDefaultRequestFromString => "Http.defaultRequestFromString",
         KernelFn::HttpWithMethod => "Http.withMethod",
         KernelFn::HttpWithTimeout => "Http.withTimeout",
         KernelFn::HttpWithBody => "Http.withBody",

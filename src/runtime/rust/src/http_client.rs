@@ -150,6 +150,91 @@ pub fn http_method_to_string(m: HttpMethod) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Typed request-target builders — API-layer scheme narrowing (fail-closed)
+// ---------------------------------------------------------------------------
+//
+// The request target is the typed `crate::url::Url` (parsed exactly once at
+// `Url.fromString`), never a raw `String`. `http_default_request` and
+// `http_with_url` NARROW the scheme to http/https at THIS API layer and return
+// a `Result Error HttpRequest`, so a builder-constructed request whose scheme
+// is not http(s) cannot be assembled at all — it fails closed EVEN when the
+// runtime SSRF guard is disabled in dev (the runtime scheme allowlist is then
+// defence-in-depth, not the only line). The single canonical serialization
+// (`Url.toString`) is carried as the transport target; the runtime does not
+// re-parse a fresh string to reconstruct it.
+
+/// Narrow a typed `Url` to the http/https request surface. The typed `Url`
+/// legally carries any absolute scheme (`file:`, `ftp:` are valid `Url`
+/// values); this outbound surface accepts only `http`/`https`. Returns the
+/// URL's canonical serialization on success, or a blocked-scheme message on
+/// any other scheme. Reads the already-parsed scheme — no re-parse of a string.
+fn narrow_http_scheme(url: &crate::url::Url) -> Result<String, String> {
+    let scheme = crate::url::url_scheme(url.clone());
+    if scheme == "http" || scheme == "https" {
+        Ok(crate::url::url_to_string(url.clone()))
+    } else {
+        Err(format!(
+            "Http: blocked: scheme {scheme:?} is not http/https"
+        ))
+    }
+}
+
+/// Build an `HttpRequest` targeting `target` (the http/https canonical
+/// serialization). Shared by every typed-target builder so the defaults live
+/// in one place.
+fn http_request_with_target(target: String) -> HttpRequest {
+    HttpRequest {
+        method: HttpMethod::Get,
+        url: target,
+        body: String::new(),
+        headers: Vec::new(),
+        timeout: 30000,
+        followRedirects: true,
+        maxRedirects: 10,
+    }
+}
+
+/// `Http.defaultRequest : Url -> Result Error HttpRequest` — the primary
+/// request constructor. Takes an already-sealed typed `Url`, narrows its
+/// scheme to http/https at the API layer (fail-closed), and carries the single
+/// canonical serialization as the transport target.
+#[must_use]
+pub fn http_default_request<E: From<String>>(url: crate::url::Url) -> IpeResult<E, HttpRequest> {
+    match narrow_http_scheme(&url) {
+        Ok(target) => IpeResult::Ok(http_request_with_target(target)),
+        Err(msg) => IpeResult::Err(msg.into()),
+    }
+}
+
+/// `Http.defaultRequestFromString : String -> Result Error HttpRequest` — the
+/// MARKED parse-at-the-boundary helper for a raw string target. Runs the ONE
+/// parse of the string (`Url.fromString`) then the same scheme narrowing,
+/// returning `Result` so a raw string is an EXPLICIT parse boundary, never a
+/// silent stringly default.
+#[must_use]
+pub fn http_default_request_from_string<E: From<String>>(raw: String) -> IpeResult<E, HttpRequest> {
+    match crate::url::url_from_string::<String>(raw) {
+        IpeResult::Ok(url) => http_default_request(url),
+        IpeResult::Err(msg) => IpeResult::Err(msg.into()),
+    }
+}
+
+/// `Http.withUrl : Url -> HttpRequest -> Result Error HttpRequest` — retarget an
+/// existing request to a typed `Url`, re-narrowing the scheme to http/https at
+/// the API layer (fail-closed), so a retarget cannot smuggle a non-http(s)
+/// scheme past the guard-off dev path.
+#[must_use]
+pub fn http_with_url<E: From<String>>(
+    url: crate::url::Url,
+    req: HttpRequest,
+) -> IpeResult<E, HttpRequest> {
+    match narrow_http_scheme(&url) {
+        Ok(target) => IpeResult::Ok(HttpRequest { url: target, ..req }),
+        Err(msg) => IpeResult::Err(msg.into()),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // SSRF guard — reqwest client integration
 // ---------------------------------------------------------------------------
 // The reqwest-free validators (ssrf_check_url / resolve_first_non_private_addr /
@@ -756,4 +841,89 @@ mod tests {
         assert_eq!(q2.len(), 1);
     }
     // SSRF guard unit tests moved to `ssrf.rs` alongside the validators.
+
+    // ── Typed request-target builders — API-layer scheme narrowing ──────────
+    //
+    // These prove the fail-closed narrowing is enforced at the API layer, so a
+    // builder-constructed request whose scheme is not http(s) cannot be
+    // assembled REGARDLESS of the runtime SSRF guard (no env toggling here —
+    // the narrowing is unconditional).
+
+    fn seal(raw: &str) -> crate::url::Url {
+        match crate::url::url_from_string::<String>(raw.to_string()) {
+            IpeResult::Ok(u) => u,
+            IpeResult::Err(e) => panic!("expected {raw:?} to be a valid Url: {e}"),
+        }
+    }
+
+    #[test]
+    fn default_request_accepts_http_and_https() {
+        for raw in ["http://example.com/", "https://example.com:8443/a?q=1"] {
+            match http_default_request::<String>(seal(raw)) {
+                IpeResult::Ok(req) => assert_eq!(req.url, raw),
+                IpeResult::Err(e) => panic!("{raw:?} must build, got Err: {e}"),
+            }
+        }
+    }
+
+    #[test]
+    fn default_request_rejects_non_http_scheme_fail_closed() {
+        // `file:` / `ftp:` are valid `Url` values but must be rejected at the
+        // API layer, independent of the runtime SSRF guard.
+        for raw in [
+            "ftp://example.com/x",
+            "file:///etc/passwd",
+            "ws://example.com/",
+        ] {
+            match http_default_request::<String>(seal(raw)) {
+                IpeResult::Err(e) => assert!(
+                    e.contains("not http/https"),
+                    "{raw:?} must fail closed with a scheme message, got: {e}"
+                ),
+                IpeResult::Ok(_) => panic!("{raw:?} must NOT build — non-http(s) scheme"),
+            }
+        }
+    }
+
+    #[test]
+    fn default_request_from_string_is_the_marked_parse_boundary() {
+        // Ok on a valid http(s) string.
+        match http_default_request_from_string::<String>("https://example.com/".to_string()) {
+            IpeResult::Ok(req) => assert_eq!(req.url, "https://example.com/"),
+            IpeResult::Err(e) => panic!("valid https string must build, got: {e}"),
+        }
+        // A relative / scheme-less string fails at the parse seal.
+        match http_default_request_from_string::<String>("/just/a/path".to_string()) {
+            IpeResult::Err(_) => {}
+            IpeResult::Ok(_) => panic!("a relative reference must not build a request"),
+        }
+        // A syntactically valid but non-http(s) scheme fails at the narrowing.
+        match http_default_request_from_string::<String>("ftp://example.com/x".to_string()) {
+            IpeResult::Err(e) => assert!(e.contains("not http/https"), "got: {e}"),
+            IpeResult::Ok(_) => panic!("ftp must fail closed at the API layer"),
+        }
+    }
+
+    #[test]
+    fn with_url_retarget_re_narrows_scheme() {
+        let base = http_request_with_target("http://example.com/".to_string());
+        // Retarget to another http URL — Ok, url replaced, other fields kept.
+        let base_body = {
+            let mut b = base.clone();
+            b.body = "keep-me".to_string();
+            b
+        };
+        match http_with_url::<String>(seal("https://example.org/next"), base_body.clone()) {
+            IpeResult::Ok(req) => {
+                assert_eq!(req.url, "https://example.org/next");
+                assert_eq!(req.body, "keep-me", "non-url fields must be preserved");
+            }
+            IpeResult::Err(e) => panic!("http(s) retarget must succeed, got: {e}"),
+        }
+        // Retarget to a non-http(s) scheme — fail closed, at the API layer.
+        match http_with_url::<String>(seal("file:///etc/passwd"), base_body) {
+            IpeResult::Err(e) => assert!(e.contains("not http/https"), "got: {e}"),
+            IpeResult::Ok(_) => panic!("file: retarget must fail closed"),
+        }
+    }
 }
