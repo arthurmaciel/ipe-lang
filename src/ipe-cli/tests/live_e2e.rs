@@ -1282,6 +1282,7 @@ fn live_onsubmit_typed_record_dispatches_decoded_payload() -> Result<(), BoxErro
 const IPE_ONSUBMIT_BARE_MSG: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
+import Ipe.Ui as Ui
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onSubmit, onInput)
@@ -1492,6 +1493,7 @@ fn live_onsubmit_bare_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
 const IPE_ONSUBMIT_RECORD_LITERAL: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
+import Ipe.Ui as Ui
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onSubmit)
@@ -1544,6 +1546,7 @@ main =
 const IPE_ONSUBMIT_TUPLE_LITERAL: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
+import Ipe.Ui as Ui
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onSubmit)
@@ -1600,6 +1603,7 @@ main =
 const IPE_ONSUBMIT_LIST_LITERAL: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
+import Ipe.Ui as Ui
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onSubmit)
@@ -1735,6 +1739,7 @@ fn live_onsubmit_list_literal_build_only() -> Result<(), BoxError> {
 const IPE_ONSUBMIT_VAR_BOUND_MSG: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
+import Ipe.Ui as Ui
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onSubmit, onInput)
