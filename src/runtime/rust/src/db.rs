@@ -352,6 +352,24 @@ pub fn db_decode_string<E: From<String> + 'static>(col: String) -> Decoder<E, St
 /// (e.g. "42", "3.0" → 3). NULL → Err. Parse failure → Err.
 /// Matches Go's DbDec_int truthy table (int/int64/float64/string forms).
 pub fn db_decode_int<E: From<String> + 'static>(col: String) -> Decoder<E, i64> {
+    // Parse-don't-validate: a float source (JSON float or decimal string) is
+    // truncated toward zero to an `Int`, but a magnitude past the `i64` range is
+    // malformed input, not a value to silently saturate. Rust's `as` cast would
+    // clamp `1e30` to `i64::MAX` and report `Ok` — data loss presented as
+    // success. Reject it as a typed decode error instead (fail-closed).
+    fn float_to_i64_checked<E: From<String>>(col: &str, f: f64) -> IpeResult<E, i64> {
+        // `i64::MAX as f64` rounds up to 2^63, one past the representable range,
+        // so the upper bound is exclusive; `i64::MIN as f64` is exactly -2^63.
+        let truncated = f.trunc();
+        if truncated >= i64::MIN as f64 && truncated < 9_223_372_036_854_775_808.0 {
+            decode_ok(truncated as i64)
+        } else {
+            decode_err_str(format!(
+                "column {}: expected Int, {} is out of range for a 64-bit integer",
+                col, f
+            ))
+        }
+    }
     decode_field(
         col.clone(),
         Decoder::new(
@@ -359,7 +377,7 @@ pub fn db_decode_int<E: From<String> + 'static>(col: String) -> Decoder<E, i64> 
                 JsonVal::Number(n) => match n.as_i64() {
                     Some(i) => decode_ok(i),
                     None => match n.as_f64() {
-                        Some(f) => decode_ok(f as i64),
+                        Some(f) => float_to_i64_checked(&col, f),
                         None => decode_err_str(format!(
                             "column {}: expected Int, number out of range",
                             col
@@ -372,7 +390,7 @@ pub fn db_decode_int<E: From<String> + 'static>(col: String) -> Decoder<E, i64> 
                         return decode_ok(i);
                     }
                     if let Ok(f) = s.parse::<f64>() {
-                        return decode_ok(f as i64);
+                        return float_to_i64_checked(&col, f);
                     }
                     decode_err_str(format!("column {}: expected Int, got {:?}", col, s))
                 }
@@ -3451,6 +3469,39 @@ mod tests {
         match decoded_bool {
             IpeResult::Ok(v) => assert_eq!(v, vec![true]),
             _ => panic!("db_decode_bool decode failed"),
+        }
+    }
+
+    #[test]
+    fn db_decode_int_rejects_out_of_range_float() {
+        let dec = db_decode_int::<String>("n".to_string());
+
+        // In-range: a decimal string truncates toward zero, still Ok.
+        let in_range = serde_json::json!({ "n": "3.7" });
+        match (dec.run)(&in_range) {
+            IpeResult::Ok(i) => assert_eq!(i, 3),
+            IpeResult::Err(e) => panic!("in-range decode failed: {:?}", e),
+        }
+
+        // In-range: a JSON float that is integral and representable decodes.
+        let in_range_num = serde_json::json!({ "n": 42.0 });
+        match (db_decode_int::<String>("n".to_string()).run)(&in_range_num) {
+            IpeResult::Ok(i) => assert_eq!(i, 42),
+            IpeResult::Err(e) => panic!("in-range numeric decode failed: {:?}", e),
+        }
+
+        // Out-of-range: `1e30` past i64::MAX must REJECT, not saturate to i64::MAX.
+        let over = serde_json::json!({ "n": 1e30 });
+        match (db_decode_int::<String>("n".to_string()).run)(&over) {
+            IpeResult::Ok(i) => panic!("out-of-range float saturated to {i} instead of erroring"),
+            IpeResult::Err(_) => {}
+        }
+
+        // Out-of-range as a decimal string is rejected on the same path.
+        let over_str = serde_json::json!({ "n": "1e30" });
+        match (db_decode_int::<String>("n".to_string()).run)(&over_str) {
+            IpeResult::Ok(i) => panic!("out-of-range string saturated to {i} instead of erroring"),
+            IpeResult::Err(_) => {}
         }
     }
 
