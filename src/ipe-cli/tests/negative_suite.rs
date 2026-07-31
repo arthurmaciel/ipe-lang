@@ -455,6 +455,47 @@ fn canon_reserved_builtin_type_name() {
     assert_rejected("canon_reserved_builtin", &src, "IPE-N0026");
 }
 
+/// The JS-widget boundary type name `CustomElement` is reserved: a user
+/// `type CustomElement …` declaration must be rejected exactly like any other
+/// security-tier reserved builtin, so the typed seam cannot be shadowed by a
+/// user-forged untyped widget type.
+#[test]
+fn canon_custom_element_definition_reserved() {
+    let src = format!("{HEAD}type CustomElement d u = Ce\nmain = 1\n");
+    assert_rejected("canon_custom_element_def", &src, "IPE-N0026");
+}
+
+/// Using the reserved `CustomElement down up` boundary type in an annotation is
+/// rejected FAIL-CLOSED (IPE-N0037) until its runtime transport ships: the seam
+/// is not yet emittable, and there is deliberately no untyped fallback. This is
+/// the contrapositive of THE SEAL pointed at the JS boundary — a `CustomElement`
+/// annotation can never reach emission and pass an untyped value across it.
+#[test]
+fn canon_custom_element_use_fail_closed() {
+    let src = format!(
+        "{HEAD}editor : CustomElement Int String\n\
+         editor = editor\n\
+         main = 1\n"
+    );
+    assert_rejected("canon_custom_element_use", &src, "IPE-N0037");
+}
+
+/// A QUALIFIED spelling of the reserved boundary type (`D.CustomElement …`
+/// through an imported module) must fail closed with the same IPE-N0037 at
+/// check time — never slip past the boundary gate on its non-empty home into a
+/// build-time ICE. The name is reserved against every origin, so no qualifier
+/// can name a legitimate `CustomElement`.
+#[test]
+fn canon_custom_element_qualified_use_fail_closed() {
+    let src = format!(
+        "{HEAD}import Ipe.Dict as D\n\
+         editor : D.CustomElement Int String\n\
+         editor = editor\n\
+         main = 1\n"
+    );
+    assert_rejected("canon_custom_element_qualified", &src, "IPE-N0037");
+}
+
 /// Two imports registering the same qualifier for DIFFERENT sibling modules.
 /// The clash is only observable across a multi-file project (sibling
 /// discovery), so this uses the project harness rather than the single-file
