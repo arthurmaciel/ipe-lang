@@ -10,6 +10,20 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.27](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.26...ipe-v0.1.27) (2026-07-31)
+
+
+### Features
+
+* **doc:** local-first module grouping + searchable soft-dark HTML site ([#418](https://github.com/arthurmaciel/ipe-lang/issues/418)) ([b7f2953](https://github.com/arthurmaciel/ipe-lang/commit/b7f2953cef4885ed4c730c74ec89e6ec5f6ddc56))
+* **emit:** native formatter replaces the rustfmt subprocess — full byte-parity incl. or-patterns ([#278](https://github.com/arthurmaciel/ipe-lang/issues/278)) ([#415](https://github.com/arthurmaciel/ipe-lang/issues/415)) ([9de5efd](https://github.com/arthurmaciel/ipe-lang/commit/9de5efd2a742d90309cca691954eac6c76fd71fd))
+
+
+### Bug Fixes
+
+* **runtime/db:** Db.Decode int rejects out-of-range instead of saturating ([#420](https://github.com/arthurmaciel/ipe-lang/issues/420)) ([2f025d9](https://github.com/arthurmaciel/ipe-lang/commit/2f025d9786352f7314b376f2310588ff1604a1a4))
+* **stdlib:** tail-recursive Result.combine / Maybe.combine ([#419](https://github.com/arthurmaciel/ipe-lang/issues/419)) ([0eafc48](https://github.com/arthurmaciel/ipe-lang/commit/0eafc48759f6608bc13c37c6957189b04aa077b7))
+
 ## [0.1.26](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.25...ipe-v0.1.26) (2026-07-31)
 
 
