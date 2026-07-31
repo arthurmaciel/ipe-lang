@@ -185,7 +185,8 @@ pub fn build_doc(
         } if !args.is_empty()
             && !call_has_kernel_special_case(
                 ctx, callee, args, *on_form, indent, child, generics,
-            )? =>
+            )?
+            && !crate::emit_expr::ffi_call_has_glue(ctx, callee)? =>
         {
             build_generic_call(ctx, callee, args, *pin, indent, child, generics)
         }
