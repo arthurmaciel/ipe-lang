@@ -104,7 +104,6 @@ fn seal_module(slug: &str, main: &str, expected: &str) {
 // ── Ipe.Regex ─────────────────────────────────────────────────────
 
 const REGEX_MAIN: &str = "module Main exposing (main)\n\
-    import Ipe.Prelude exposing (..)\n\
     import Ipe.Io as Io\n\
     import Ipe.String as String\n\
     import Ipe.Regex as Regex\n\n\
@@ -153,7 +152,6 @@ fn regex_builds_and_runs() {
 // ── Ipe.Path ──────────────────────────────────────────────────────
 
 const PATH_MAIN: &str = "module Main exposing (main)\n\
-    import Ipe.Prelude exposing (..)\n\
     import Ipe.Io as Io\n\
     import Ipe.Path as Path\n\n\
     render : Path.Path -> Path.Path -> String\n\
@@ -183,7 +181,6 @@ fn path_builds_and_runs() {
 // percent-encodes a value carrying `&`/` ` so it cannot split off a new query
 // parameter (an injection).
 const URL_MAIN: &str = "module Main exposing (main)\n\
-    import Ipe.Prelude exposing (..)\n\
     import Ipe.Io as Io\n\
     import Ipe.Url as Url\n\n\
     scheme : String\n\
@@ -216,7 +213,6 @@ fn url_builds_and_runs() {
 // fails at `_resolves_and_emits`; the seal runs the child and asserts stdout.
 
 const PROCESS_MAIN: &str = "module Main exposing (main)\n\
-    import Ipe.Prelude exposing (..)\n\
     import Ipe.Task as Task\n\
     import Ipe.Io as Io\n\
     import Ipe.Process as Process\n\n\
@@ -243,7 +239,6 @@ fn process_builds_and_runs() {
 // (exit 0) via a fixed printed marker.
 
 const PURE_MAIN: &str = "module Main exposing (main)\n\
-    import Ipe.Prelude exposing (..)\n\
     import Ipe.Task as Task\n\
     import Ipe.Io as Io\n\
     import Ipe.Pure as Pure\n\n\
@@ -268,7 +263,6 @@ fn pure_builds_and_runs() {
 // ── Ipe.Trace ──────────────────────────────────────────────────────────
 
 const TRACE_MAIN: &str = "module Main exposing (main)\n\
-    import Ipe.Prelude exposing (..)\n\
     import Ipe.Task as Task\n\
     import Ipe.Io as Io\n\
     import Ipe.Trace as Trace\n\n\
@@ -295,7 +289,6 @@ fn trace_builds_and_runs() {
 // ── Ipe.Compression ────────────────────────────────────────────────────
 
 const COMPRESSION_MAIN: &str = "module Main exposing (main)\n\
-    import Ipe.Prelude exposing (..)\n\
     import Ipe.Task as Task\n\
     import Ipe.Bytes as Bytes\n\
     import Ipe.Io as Io\n\
@@ -321,7 +314,6 @@ fn compression_builds_and_runs() {
 // ── Ipe.Csv ────────────────────────────────────────────────────────────
 
 const CSV_MAIN: &str = "module Main exposing (main)\n\
-    import Ipe.Prelude exposing (..)\n\
     import Ipe.Io as Io\n\
     import Ipe.Csv as Csv\n\n\
 import Ipe.String
@@ -352,7 +344,6 @@ fn csv_builds_and_runs() {
 // runtime `cache_put`/`cache_get` require.
 
 const CACHE_MAIN: &str = "module Main exposing (main)\n\
-    import Ipe.Prelude exposing (..)\n\
     import Ipe.Task as Task\n\
     import Ipe.Io as Io\n\
     import Ipe.Cache as Cache\n\n\
@@ -389,7 +380,6 @@ fn cache_builds_and_runs() {
 // the program prints the marker.  The test asserts ipe-0 ⇒ cargo-0 ⇒ exit-0.
 
 const PUBSUB_MAIN: &str = "module Main exposing (main)\n\
-    import Ipe.Prelude exposing (..)\n\
     import Ipe.Task as Task\n\
     import Ipe.Json.Encode as JsonEnc\n\
     import Ipe.PubSub as PubSub\n\
@@ -421,7 +411,6 @@ fn pubsub_builds_and_runs() {
 // Must be rejected as IPE-T0001.
 
 const PUBSUB_TYPED_SHARED_TOPIC: &str = "module Main exposing (main)\n\
-    import Ipe.Prelude exposing (..)\n\
     import Ipe.Cmd as Cmd\n\
     import Ipe.Sub as Sub\n\
     import Ipe.PubSub as PubSub exposing (Topic)\n\
@@ -463,7 +452,6 @@ fn pubsub_typed_shared_topic_builds() {
 // the payload type on both sides, so `Int` (publish) and `String` (handler)
 // cannot unify → IPE-T0001.
 const PUBSUB_TOPIC_MISMATCH: &str = "module Main exposing (main)\n\
-    import Ipe.Prelude exposing (..)\n\
     import Ipe.Cmd as Cmd\n\
     import Ipe.Sub as Sub\n\
     import Ipe.PubSub as PubSub exposing (Topic)\n\
@@ -520,7 +508,6 @@ fn pubsub_topic_type_mismatch_is_rejected() {
 // §A8), not a Config-specific gap.
 
 const CONFIG_MAIN: &str = "module Main exposing (main)\n\
-    import Ipe.Prelude exposing (..)\n\
     import Ipe.Config as Config\n\
     import Ipe.Io as Io\n\n\
 import Ipe.List
@@ -578,7 +565,6 @@ fn config_builds_and_runs() {
 // structural markers (heading text, bold styling, code-span styling).
 
 const MARKDOWN_MAIN: &str = "module Main exposing (main)\n\
-    import Ipe.Prelude exposing (..)\n\
     import Ipe.Io as Io\n\
     import Ipe.Html as Html\n\
     import Ipe.Ui as Ui\n\

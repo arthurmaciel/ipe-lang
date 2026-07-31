@@ -32,7 +32,6 @@ fn write_module(pkg: &std::path::Path, name: &str, source: &str) {
 
 const LIB: &str = r"module Lib exposing (double, wrap)
 
-import Ipe.Prelude exposing (..)
 
 
 double : Int -> Int
@@ -83,7 +82,6 @@ fn source_order_does_not_affect_the_public_api() {
         "Lib",
         r"module Lib exposing (wrap, double)
 
-import Ipe.Prelude exposing (..)
 
 
 wrap : a -> List a
@@ -111,7 +109,6 @@ fn type_variable_spelling_does_not_affect_signatures() {
         "Lib",
         r"module Lib exposing (pair)
 
-import Ipe.Prelude exposing (..)
 
 
 pair : a -> b -> ( a, b )
@@ -124,7 +121,6 @@ pair x y =
         "Lib",
         r"module Lib exposing (pair)
 
-import Ipe.Prelude exposing (..)
 
 
 pair : x -> y -> ( x, y )
@@ -149,7 +145,6 @@ fn extracts_an_exposed_union_with_its_constructors() {
         "Lib",
         r"module Lib exposing (Shape(..), area)
 
-import Ipe.Prelude exposing (..)
 
 
 type Shape
@@ -192,7 +187,6 @@ fn a_package_that_does_not_typecheck_fails_closed() {
         "Lib",
         r"module Lib exposing (bad)
 
-import Ipe.Prelude exposing (..)
 
 
 bad : Int -> Int

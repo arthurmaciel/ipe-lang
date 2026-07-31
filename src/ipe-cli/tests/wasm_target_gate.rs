@@ -47,7 +47,6 @@ fn pure_ui_app_emits_wasm_project() {
     let entry = write_entry(
         &dir.join("srcdir"),
         "module Main exposing (main)\n\
-         import Ipe.Prelude exposing (..)\n\
          import Ipe.String as String\n\
          import Ipe.Tea.Web exposing (app)\n\
          import Ipe.Cmd as Cmd\n\
@@ -133,7 +132,6 @@ fn routed_web_app_emits_wasm_app_routed() {
     let entry = write_entry(
         &dir.join("srcdir"),
         "module Main exposing (main)\n\
-         import Ipe.Prelude exposing (..)\n\
          import Ipe.String as String\n\
          import Ipe.Tea.Web exposing (app, route)\n\
          import Ipe.Cmd as Cmd\n\
@@ -209,7 +207,6 @@ fn server_only_kernel_fails_at_compile_time() {
     let entry = write_entry(
         &dir.join("srcdir"),
         "module Main exposing (main)\n\
-         import Ipe.Prelude exposing (..)\n\
          import Ipe.File as File\n\
          import Ipe.Path as Path\n\
          import Ipe.Task as Task\n\
@@ -243,7 +240,6 @@ fn process_run_is_denied_under_wasm() {
     let entry = write_entry(
         &dir.join("srcdir"),
         "module Main exposing (main)\n\
-         import Ipe.Prelude exposing (..)\n\
          import Ipe.Process as Process\n\
          import Ipe.Task as Task\n\
          \n\
@@ -270,7 +266,6 @@ fn process_run_still_builds_natively() {
     let entry = write_entry(
         &dir.join("srcdir"),
         "module Main exposing (main)\n\
-         import Ipe.Prelude exposing (..)\n\
          import Ipe.Process as Process\n\
          import Ipe.Task as Task\n\
          \n\
@@ -298,7 +293,6 @@ fn transitive_server_import_fails_naming_the_exact_chain() {
     std::fs::write(
         srcdir.join("Data.ipe"),
         "module Data exposing (load)\n\
-         import Ipe.Prelude exposing (..)\n\
          import Ipe.File as File\n\
          import Ipe.Path as Path\n\
          import Ipe.Task as Task\n\
@@ -313,7 +307,6 @@ fn transitive_server_import_fails_naming_the_exact_chain() {
     std::fs::write(
         srcdir.join("View.ipe"),
         "module View exposing (label)\n\
-         import Ipe.Prelude exposing (..)\n\
          import Data exposing (load)\n\
          import Ipe.Task as Task\n\
          \n\
@@ -327,7 +320,6 @@ fn transitive_server_import_fails_naming_the_exact_chain() {
     let entry = write_entry(
         &srcdir,
         "module Main exposing (main)\n\
-         import Ipe.Prelude exposing (..)\n\
          import Ipe.Io as Io\n\
          import View exposing (label)\n\
          \n\
@@ -441,7 +433,6 @@ fn server_only_kernel_still_builds_natively() {
     let entry = write_entry(
         &dir.join("srcdir"),
         "module Main exposing (main)\n\
-         import Ipe.Prelude exposing (..)\n\
          import Ipe.File as File\n\
          import Ipe.Path as Path\n\
          import Ipe.Task as Task\n\

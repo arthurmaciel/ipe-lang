@@ -343,13 +343,11 @@ fn adversarial_two_syncs_one_demand() {
 const UTIL_ORIG: &str = "module Lib.Util exposing (bump)\n\nbump x = x + 1\n";
 const UTIL_TEMP_RENAME: &str = "module Lib.Util exposing (bumpTemp)\n\nbumpTemp x = x + 1\n";
 const MAIN_USES_UTIL: &str = "module Main exposing (main)\n\
-     import Ipe.Prelude exposing (..)\n\
      import Lib.Util exposing (bump)\n\n\
 import Ipe.Io
 import Ipe.String
      main = Io.println (String.fromInt (bump 41))\n";
 const MAIN_USES_UTIL_TEMP: &str = "module Main exposing (main)\n\
-     import Ipe.Prelude exposing (..)\n\
      import Lib.Util exposing (bumpTemp)\n\n\
 import Ipe.Io
 import Ipe.String

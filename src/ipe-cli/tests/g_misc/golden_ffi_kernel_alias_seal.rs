@@ -49,7 +49,6 @@ fn unknown_kernel_alias_is_rejected_at_compile_time() {
     let wrote = write_project(
         &tmp,
         "module Main exposing (main)\n\
-         import Ipe.Prelude exposing (..)\n\
          import Ipe.Io as Io\n\n\
          bogus : String -> String\n\
          bogus =\n\
@@ -108,7 +107,6 @@ fn malformed_kernel_alias_string_is_rejected() {
     let wrote = write_project(
         &tmp,
         "module Main exposing (main)\n\
-         import Ipe.Prelude exposing (..)\n\
          import Ipe.Io as Io\n\n\
          bogus : String -> String\n\
          bogus =\n\
@@ -152,7 +150,6 @@ fn registered_kernel_alias_resolves_and_builds() {
     let wrote = write_project(
         &tmp,
         "module Main exposing (main)\n\
-         import Ipe.Prelude exposing (..)\n\
          import Ipe.Io as Io\n\n\
          shout : String -> String\n\
          shout =\n\

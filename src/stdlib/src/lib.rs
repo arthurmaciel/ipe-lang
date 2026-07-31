@@ -7,11 +7,11 @@
 //! `ipe-stdlib` sources; embedding a copy (rather than `include_str!`-ing an
 //! out-of-repo path) keeps the build portable and the toolchain hermetic.
 //!
-//! `Ipe.Basics` is the canonical implicit module (ADR 0047). `Ipe.Prelude`
-//! resolves to the same `Basics` source as a retained backward-compatibility
-//! alias — first-party sources no longer name it. The source is ordinary Ipê:
-//! the same parser that reads user code reads it (the `parses` test proves it),
-//! so it is the substrate the import resolver compiles.
+//! `Ipe.Basics` is the canonical implicit module (ADR 0047): its Tier-A surface
+//! is auto-imported into every module. There is no `Ipe.Prelude` module — the
+//! old value-flooding alias is removed, so `import Ipe.Prelude` does not resolve.
+//! The source is ordinary Ipê: the same parser that reads user code reads it (the
+//! `parses` test proves it), so it is the substrate the import resolver compiles.
 #![forbid(unsafe_code)]
 
 /// One embedded standard-library module: its dotted name and its Ipê source.
@@ -107,10 +107,6 @@ const URL: &str = include_str!("../Ipe/Url.ipe");
 const STD_MARKDOWN: &str = include_str!("../Ipe/Markdown.ipe");
 
 /// Every embedded `Ipe` module, keyed by its dotted import name.
-///
-/// `Ipe.Prelude` is intentionally absent here: it is not a source file but a
-/// retained backward-compatibility alias for the canonical `Ipe.Basics`, so
-/// [`source`] maps it onto `Basics` rather than a distinct entry.
 pub const MODULES: &[StdModule] = &[
     StdModule {
         name: "Ipe.Basics",
@@ -196,14 +192,8 @@ pub const MODULES: &[StdModule] = &[
 
 /// The embedded Ipê source for a dotted `Ipe` module name, or `None` when
 /// the name is not one of the embedded modules.
-///
-/// `Ipe.Prelude` resolves to the `Basics` source as a retained
-/// backward-compatibility alias for the canonical `Ipe.Basics` (ADR 0047).
 #[must_use]
 pub fn source(module_name: &str) -> Option<&'static str> {
-    if module_name == "Ipe.Prelude" {
-        return Some(BASICS);
-    }
     MODULES
         .iter()
         .find(|m| m.name == module_name)
@@ -693,11 +683,12 @@ mod tests {
         }
     }
 
-    /// The `Ipe.Prelude` alias resolves to the `Basics` source.
+    /// `Ipe.Basics` resolves to its embedded source; the removed `Ipe.Prelude`
+    /// alias does not resolve to anything (no backward-compatible mapping).
     #[test]
-    fn prelude_aliases_basics() {
-        assert_eq!(source("Ipe.Prelude"), Some(BASICS));
+    fn basics_resolves_and_prelude_is_gone() {
         assert_eq!(source("Ipe.Basics"), Some(BASICS));
+        assert_eq!(source("Ipe.Prelude"), None);
     }
 
     /// An unknown `Ipe` module is not embedded.

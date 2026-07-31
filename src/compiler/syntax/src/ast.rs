@@ -65,7 +65,7 @@ pub enum Privacy {
 /// An `import` declaration.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Import {
-    /// Dotted module-name segments, e.g. `Ipe.Prelude`.
+    /// Dotted module-name segments, e.g. `Ipe.String`.
     pub name: Located<Vec<Symbol>>,
     /// Optional `as Alias`.
     pub alias: Option<Symbol>,

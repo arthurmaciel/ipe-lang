@@ -98,7 +98,6 @@ fn nonclone_handle_reused_fails_closed_before_cargo() {
     let wrote = write_project(
         &tmp,
         "module Main exposing (main)\n\
-         import Ipe.Prelude exposing (..)\n\
          import Ipe.Io as Io\n\
          import Ipe.Result as Result\n\
          import Ipe.String as String\n\
@@ -161,7 +160,6 @@ fn nonclone_handle_threaded_linearly_builds() {
     let wrote = write_project(
         &tmp,
         "module Main exposing (main)\n\
-         import Ipe.Prelude exposing (..)\n\
          import Ipe.Io as Io\n\
          import Ipe.Result as Result\n\
          import Ipe.String as String\n\

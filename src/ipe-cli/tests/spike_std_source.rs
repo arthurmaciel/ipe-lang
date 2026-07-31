@@ -34,7 +34,7 @@ fn spike_manifest() -> PathBuf {
 /// The compiled-source module resolves IDENTICALLY to a user module: the
 /// project builds (no IPE-N0020 / N0025), and the emitted Rust carries the
 /// Std-homed constructor + its case-match — the exact thing a kernel cannot do.
-/// Also proves the MIXED import set (kernel `Ipe.Prelude` + source
+/// Also proves the MIXED import set (kernel `Ipe.String` + source
 /// `Ipe.Palette`) both resolve.
 #[test]
 fn spike_project_builds_and_injects_compiled_source() {

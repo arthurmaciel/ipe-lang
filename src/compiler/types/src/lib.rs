@@ -2507,7 +2507,6 @@ mod tests {
         let main = (
             "Main",
             "module Main exposing (main)\n\n\
-             import Ipe.Prelude exposing (..)\n\
              import Lib1 exposing (ident)\n\
              import ModA exposing (useInt)\n\n\
              useBool : Bool\n\
@@ -2545,7 +2544,6 @@ mod tests {
         let main = (
             "Main",
             "module Main exposing (main)\n\n\
-             import Ipe.Prelude exposing (..)\n\
              import Lib1 exposing (empty)\n\
              import ModA exposing (ints)\n\n\
              bools : List Bool\n\
@@ -2572,7 +2570,6 @@ mod tests {
         let main = (
             "Main",
             "module Main exposing (main)\n\n\
-             import Ipe.Prelude exposing (..)\n\
              import Lib1 exposing (ident)\n\n\
              twice x =\n    ident (ident x)\n\n\
              useInt : Int\n\
@@ -2606,7 +2603,6 @@ mod tests {
         let main = (
             "Main",
             "module Main exposing (main)\n\n\
-             import Ipe.Prelude exposing (..)\n\
              import Lib1 exposing (isEven)\n\n\
              result : Bool\n\
              result =\n    isEven 4\n\n\
@@ -2639,7 +2635,6 @@ mod tests {
         let main = (
             "Main",
             "module Main exposing (main)\n\n\
-             import Ipe.Prelude exposing (..)\n\
              import Lib1 exposing (getName)\n\n\
              name : String\n\
              name =\n    getName { name = \"Ada\" }\n\n\
@@ -2672,7 +2667,6 @@ mod tests {
         let main = (
             "Main",
             "module Main exposing (main)\n\n\
-             import Ipe.Prelude exposing (..)\n\
              import Lib1 exposing (getName)\n\
              import ModA exposing (aName)\n\n\
              bName : String\n\
@@ -2712,7 +2706,6 @@ mod tests {
         let main = (
             "Main",
             "module Main exposing (main)\n\n\
-             import Ipe.Prelude exposing (..)\n\
              import Lib1 exposing (setName)\n\n\
              main =\n    Io.println ((setName { name = \"Ada\" } \"Bea\").name)\n",
         );
@@ -2766,7 +2759,6 @@ mod tests {
         let main = (
             "Main",
             "module Main exposing (main)\n\n\
-             import Ipe.Prelude exposing (..)\n\
              import Lib1 exposing (plus)\n\
              import ModA exposing (sumInt)\n\n\
              sumFloat : Float\n\
@@ -2791,7 +2783,6 @@ mod tests {
     #[test]
     fn rigid_contaminated_untyped_def_stays_unquantified() {
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    f : a -> a\n\
                    f x =\n    ident x\n\
                    ident y =\n    y\n\
@@ -2831,7 +2822,6 @@ mod tests {
     fn type_mismatch_carries_expected_and_found() {
         // `h : Int` but the body is a `Msg` constructor.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    type Msg = Increment | Decrement\n\
                    h : Int\n\
                    h = Increment\n\
@@ -2880,7 +2870,6 @@ mod tests {
         // declared parameter, not the actual argument, lands on unify's
         // *expected* side.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    main =\n    Task.fail \"plain string\"\n";
         let Some((m, mut i)) = canon_src(src) else {
             return;
@@ -2926,7 +2915,6 @@ mod tests {
         // (`String`, not an integer literal — a bare `5` is a polymorphic
         // Number var and would render as a type variable, not a Con.)
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    main =\n    let x = \"s\" in x 1\n";
         let Some((m, mut i)) = canon_src(src) else {
             return;
@@ -2970,7 +2958,6 @@ mod tests {
         // builtin has no user-writable record-update form. It must be the
         // dedicated `BuiltinRecordUpdate` (IPE-T0017) naming the type.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    import Ipe.Io as Io\n\
                    f : PanicInfo -> PanicInfo\n\
                    f p =\n    { p | message = \"x\" }\n\
@@ -3011,7 +2998,6 @@ mod tests {
         // A well-typed `if`: condition `Bool`, both branches `Int`, agreeing
         // with the `Int` return annotation.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    f : Int -> Int\n\
                    f n =\n    if n > 0 then n else 0\n\
                    main =\n    Io.println (String.fromInt (f 1))\n";
@@ -3035,7 +3021,6 @@ mod tests {
     fn if_condition_must_be_bool() {
         // `if n then …` with `n : Int` — the condition is not `Bool`.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    f : Int -> Int\n\
                    f n =\n    if n then 1 else 0\n\
                    main =\n    Io.println (String.fromInt (f 1))\n";
@@ -3060,7 +3045,6 @@ mod tests {
         // The `then` branch is `Int` and the `else` is a `Msg` constructor —
         // the two branches cannot unify.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    type Msg = Increment | Decrement\n\
                    f : Int -> Int\n\
                    f n =\n    if n > 0 then 1 else Increment\n\
@@ -3086,7 +3070,6 @@ mod tests {
         // `g : Int` but `g a = 0` binds a parameter the signature has no arrow
         // for.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    g : Int\n\
                    g a = 0\n\
                    main =\n    Io.println (String.fromInt 0)\n";
@@ -3119,7 +3102,6 @@ mod tests {
     fn non_exhaustive_case_lists_missing_constructors() {
         // The `case` covers only `Increment`; `Decrement` is missing.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    type Msg = Increment | Decrement\n\
                    f : Msg -> Int\n\
                    f msg =\n        case msg of\n            Increment -> 1\n\
@@ -3154,7 +3136,6 @@ mod tests {
         // `f (Just x) = x` — a constructor parameter is a refutable binding
         // position, rejected by the irrefutability gate BEFORE lowering.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    f : Maybe Int -> Int\n\
                    f (Just x) = x\n\
                    main =\n    Io.println (String.fromInt 0)\n";
@@ -3179,7 +3160,6 @@ mod tests {
         // `\(Just x) -> x` in argument position — the lambda-param sweep must
         // catch it too (the pre-existing Lambda arm dropped its params).
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    apply : (Maybe Int -> Int) -> Int\n\
                    apply f = f (Just 1)\n\
                    main =\n    Io.println (String.fromInt (apply (\\(Just x) -> x)))\n";
@@ -3204,7 +3184,6 @@ mod tests {
         // `f _ (a, b) = a + b` — a wildcard and a tuple param are both
         // irrefutable, so the gate lets them through (no false positive).
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    f : Int -> (Int, Int) -> Int\n\
                    f _ (a, b) = a + b\n\
                    main =\n    Io.println (String.fromInt (f 9 (1, 2)))\n";
@@ -3225,7 +3204,6 @@ mod tests {
         // `infer` must return `Ok` with the warning in `types.warnings`, NOT
         // return `Err`.  The compiler must not fail with exit 1 for a warning.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    type Msg = Increment | Decrement\n\
                    f : Msg -> Int\n\
                    f msg =\n        case msg of\n            Increment -> 1\n\
@@ -3268,7 +3246,6 @@ mod tests {
         // NO wildcard. Row expansion makes the matrix cover all three
         // constructors, so IPE-T0010 does NOT fire — the case type-checks.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    type Color = Red | Green | Blue\n\
                    name : Color -> Int\n\
                    name c =\n        case c of\n            Red | Green | Blue -> 1\n\
@@ -3289,7 +3266,6 @@ mod tests {
         // already covered → IPE-T0011 (Warning), but the arm stays reachable via
         // `Blue`, so the program still type-checks.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    type Color = Red | Green | Blue\n\
                    label : Color -> Int\n\
                    label c =\n        case c of\n\
@@ -3325,7 +3301,6 @@ mod tests {
     fn internally_redundant_or_pattern_is_flagged_t0011() {
         // `Red | Red` — the second alternative is not useful against the first.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    type Color = Red | Green | Blue\n\
                    f : Color -> Int\n\
                    f c =\n        case c of\n\
@@ -3361,7 +3336,6 @@ mod tests {
         // `Circle r | Dot -> r`: `r` is bound by the left alternative but not the
         // right. Canon rejects it fail-fast with IPE-T0019 (before types run).
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    type Shape = Circle Int | Dot\n\
                    bad : Shape -> Int\n\
                    bad s =\n        case s of\n            Circle r | Dot -> r\n\
@@ -3403,7 +3377,6 @@ mod tests {
         // `Color` has three constructors; only `Red` is named — `_` silently
         // absorbs `Green` and `Blue`. Compilation must FAIL naming both.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    type Color = Red | Green | Blue\n\
                    name : Color -> String\n\
                    name c =\n        case c of\n\
@@ -3458,7 +3431,6 @@ mod tests {
     fn multiple_closed_union_catch_alls_fail_compilation() {
         // Two functions, each with its own closed-union catch-all.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    type Color = Red | Green | Blue\n\
                    name : Color -> String\n\
                    name c =\n        case c of\n\
@@ -3502,7 +3474,6 @@ mod tests {
         // `Red`, `Green`, `Blue` are all named; `_` is fully redundant.
         // IPE-T0011 should fire; IPE-T0018 must NOT.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    type Color = Red | Green | Blue\n\
                    name : Color -> String\n\
                    name c =\n        case c of\n\
@@ -3559,7 +3530,6 @@ mod tests {
     fn fully_explicit_case_emits_no_t0018() {
         // Every constructor named; no wildcard at all.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    type Color = Red | Green | Blue\n\
                    name : Color -> String\n\
                    name c =\n        case c of\n\
@@ -3598,7 +3568,6 @@ mod tests {
     fn wildcard_on_open_type_int_does_not_emit_t0018() {
         // Only a few literals are named; `_` is needed for the open remainder.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    describe : Int -> String\n\
                    describe n =\n        case n of\n\
                    \x20           0 -> \"zero\"\n\
@@ -3635,7 +3604,6 @@ mod tests {
     #[test]
     fn wildcard_on_bool_does_not_emit_t0018() {
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    label : Bool -> String\n\
                    label b =\n        case b of\n\
                    \x20           True -> \"yes\"\n\
@@ -3671,7 +3639,6 @@ mod tests {
     #[test]
     fn wildcard_on_list_does_not_emit_t0018() {
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    isEmpty : List Int -> String\n\
                    isEmpty xs =\n        case xs of\n\
                    \x20           [] -> \"empty\"\n\
@@ -3714,7 +3681,6 @@ mod tests {
     #[test]
     fn bare_wildcard_only_case_over_closed_union_is_a_documented_gap() {
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    type Color = Red | Green | Blue\n\
                    name : Color -> String\n\
                    name c =\n        case c of\n\
@@ -3766,7 +3732,6 @@ mod tests {
         // the branch bodies in list literals (`[a, b]`) and calls (`f […]`) — the
         // exact shapes the false positive mis-blamed at "line 71 col 23".
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    type Msg = Increment | Decrement | Reset\n\
                    step : Msg -> Int -> Int\n\
                    step msg n =\n        case msg of\n\
@@ -3915,7 +3880,6 @@ mod tests {
         // non-exhaustive case naming the precise missing pattern `Som Non` —
         // BEFORE lowering, so the Rust backend never emits a non-exhaustive match.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    type Opt a = Som a | Non\n\
                    f : Opt (Opt Int) -> Int\n\
                    f o =\n        case o of\n            Som (Som x) -> x\n\
@@ -3956,7 +3920,6 @@ mod tests {
         // IPE-T0011 is Severity::Warning — infer must return Ok with the warning in
         // types.warnings, NOT return Err.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    type Opt a = Som a | Non\n\
                    f : Opt (Opt Int) -> Int\n\
                    f o =\n        case o of\n            Som x -> 1\n\
@@ -3997,7 +3960,6 @@ mod tests {
     fn nested_exhaustive_case_passes_the_check() {
         // Every nested possibility is covered: `Som (Som x)`, `Som Non`, `Non`.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    type Opt a = Som a | Non\n\
                    f : Opt (Opt Int) -> Int\n\
                    f o =\n        case o of\n            Som (Som x) -> x\n\
@@ -4019,7 +3981,6 @@ mod tests {
     fn self_application_is_an_infinite_type() {
         // `f x = x x` forces `a = a -> b`, tripping the occurs check.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    f x = x x\n\
                    main =\n    Io.println (String.fromInt 0)\n";
         let Some((m, mut i)) = canon_src(src) else {
@@ -4472,7 +4433,6 @@ mod tests {
     fn polymorphic_identity_generalises_to_one_var() {
         let opt = infer_env_ty(
             "module Main exposing (identity)\n\
-             import Ipe.Prelude exposing (..)\n\
              identity : a -> a\n\
              identity x =\n    x\n",
             "identity",
@@ -4495,7 +4455,6 @@ mod tests {
     #[test]
     fn polymorphic_identity_used_at_int_and_bool_both_unify() {
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    identity : a -> a\n\
                    identity x =\n    x\n\
                    useInt : Int\n\
@@ -4545,7 +4504,6 @@ mod tests {
     fn const_keeps_two_distinct_type_vars() {
         let opt = infer_env_ty(
             "module Main exposing (constant)\n\
-             import Ipe.Prelude exposing (..)\n\
              constant : a -> b -> a\n\
              constant x y =\n    x\n",
             "constant",
@@ -4568,7 +4526,6 @@ mod tests {
     fn higher_order_apply_infers_structurally() {
         let opt = infer_env_ty(
             "module Main exposing (apply)\n\
-             import Ipe.Prelude exposing (..)\n\
              apply : (a -> b) -> a -> b\n\
              apply f x =\n    f x\n",
             "apply",
@@ -4594,7 +4551,6 @@ mod tests {
     #[test]
     fn annotation_returning_a_different_var_is_rejected() {
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    bad : a -> b\n\
                    bad x =\n    x\n\
                    main =\n    Io.println (String.fromInt 0)\n";
@@ -4622,7 +4578,6 @@ mod tests {
     #[test]
     fn parametric_annotation_body_forcing_concrete_is_rejected() {
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    f : a -> a\n\
                    f x =\n    x + 1\n\
                    main =\n    Io.println (String.fromInt 0)\n";
@@ -4649,7 +4604,6 @@ mod tests {
     fn untyped_binding_reconstructs_and_generalises_arrow() {
         let opt = infer_env_ty(
             "module Main exposing (k)\n\
-             import Ipe.Prelude exposing (..)\n\
              k a b =\n    a\n",
             "k",
         );
@@ -4678,7 +4632,6 @@ mod tests {
         // seal via `Secret.fromString` (auto-qualified prelude module, no
         // import needed, same as `Uuid.v4`).
         let ok_src = "module Main exposing (main)\n\
-             import Ipe.Prelude exposing (..)\n\
              import Ipe.Auth as Auth\n\
              main =\n    Auth.signToken (Secret.fromString \"s\") (Dict.fromList [(\"sub\", \"x\")]) 3600\n";
         let Some((m, mut i)) = canon_src(ok_src) else {
@@ -4690,7 +4643,6 @@ mod tests {
         );
 
         let bad_src = "module Main exposing (main)\n\
-             import Ipe.Prelude exposing (..)\n\
              import Ipe.Auth as Auth\n\
              main =\n    Auth.signToken (Secret.fromString \"s\") { sub = \"x\" } 3600\n";
         let Some((m2, mut i2)) = canon_src(bad_src) else {
@@ -4718,7 +4670,6 @@ mod tests {
     #[test]
     fn untyped_polymorphic_use_at_two_types_is_rejected() {
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    ident x =\n    x\n\
                    useInt : Int\n\
                    useInt =\n    ident 5\n\
@@ -4756,7 +4707,6 @@ mod tests {
     #[test]
     fn number_generic_double_carries_add_bound() {
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    double : a -> a\n\
                    double x =\n    x + x\n\
                    main =\n    Io.println (String.fromInt (double 21))\n";
@@ -4781,7 +4731,6 @@ mod tests {
     #[test]
     fn comparable_generic_max_carries_ord_bound() {
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    maxOf : a -> a -> a\n\
                    maxOf p q =\n    if p > q then p else q\n\
                    main =\n    Io.println (String.fromInt (maxOf 3 7))\n";
@@ -4806,7 +4755,6 @@ mod tests {
     #[test]
     fn number_generic_used_at_int_and_float_checks() {
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    double : a -> a\n\
                    double x =\n    x + x\n\
                    doubleFloat : Float -> Float\n\
@@ -4826,7 +4774,6 @@ mod tests {
     #[test]
     fn number_generic_at_bool_is_super_type_unsatisfied() {
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    double : a -> a\n\
                    double x =\n    x + x\n\
                    doubleBool : Bool -> Bool\n\
@@ -4877,7 +4824,6 @@ mod tests {
     #[test]
     fn integer_literal_accepted_where_float_expected() {
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    toF : Float -> Float\n\
                    toF x =\n    x\n\
                    v : Float\n\
@@ -4898,7 +4844,6 @@ mod tests {
     #[test]
     fn float_literal_rejected_where_int_expected() {
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    toI : Int -> Int\n\
                    toI x =\n    x\n\
                    v : Int\n\
@@ -4921,7 +4866,6 @@ mod tests {
     #[test]
     fn literal_added_to_parametric_skolem_is_rejected() {
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    f : a -> a\n\
                    f x =\n    x + 1\n\
                    main =\n    Io.println (String.fromInt 0)\n";
@@ -5032,13 +4976,11 @@ mod tests {
         let lib = (
             "Lib1",
             "module Lib1 exposing (listLen)\n\n\
-             import Ipe.Prelude exposing (..)\n\n\
              listLen xs =\n    case xs of\n        [] -> 0\n        _ :: rest -> 1 + listLen rest\n",
         );
         let main = (
             "Main",
             "module Main exposing (main)\n\n\
-             import Ipe.Prelude exposing (..)\n\
              import Lib1 exposing (listLen)\n\n\
              main =\n    Io.println (String.fromInt (listLen [ 90, 35 ]))\n",
         );

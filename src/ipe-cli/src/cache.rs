@@ -574,13 +574,13 @@ mod tests {
             ),
         );
         sources.insert(
-            vec!["Std".to_owned(), "Prelude".to_owned()],
+            vec!["Ipe".to_owned(), "Basics".to_owned()],
             (
                 PathBuf::from("<embedded>"),
-                "module Ipe.Prelude exposing (x)\nx = 1\n".to_owned(),
+                "module Ipe.Basics exposing (x)\nx = 1\n".to_owned(),
             ),
         );
-        let injected = BTreeSet::from([vec!["Std".to_owned(), "Prelude".to_owned()]]);
+        let injected = BTreeSet::from([vec!["Ipe".to_owned(), "Basics".to_owned()]]);
         (sources, injected)
     }
 

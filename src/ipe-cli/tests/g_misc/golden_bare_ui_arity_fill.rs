@@ -24,7 +24,6 @@ use std::path::{Path, PathBuf};
 /// type to the concrete `Msg`, so the arity-filled inner `Html` return must
 /// solve to `Html<MainMsg>`.
 const BARE_HTML_VIEW_APP: &str = r#"module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import Ipe.Tea.WebView as WebView
 import Ipe.Cmd as Cmd
 import Ipe.Sub as Sub
@@ -64,7 +63,6 @@ main =
 /// polymorphic (a layout attribute carries no message), so the fill leaves the
 /// parameter inferred; both filled constructors sit on one path.
 const BARE_ATTRIBUTE_HELPER: &str = r#"module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import Ipe.Ui as Ui
 import Ipe.Task
 padAttr : Attribute
