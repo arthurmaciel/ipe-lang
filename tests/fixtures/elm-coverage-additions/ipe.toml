@@ -1,0 +1,5 @@
+name = "elm-coverage-additions"
+version = "0.1.0"
+
+[source]
+root = "src"

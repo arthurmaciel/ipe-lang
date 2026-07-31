@@ -560,6 +560,17 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::MathAtan2 => "math_atan2",
         KernelFn::MathMod => "math_mod",
         KernelFn::MathRemainder => "math_remainder",
+        // ── Bitwise kernels ─────────────────────────────────────────────────
+        KernelFn::BitwiseAnd => "bitwise_and",
+        KernelFn::BitwiseOr => "bitwise_or",
+        KernelFn::BitwiseXor => "bitwise_xor",
+        KernelFn::BitwiseComplement => "bitwise_complement",
+        KernelFn::BitwiseShiftLeftBy => "bitwise_shift_left_by",
+        KernelFn::BitwiseShiftRightBy => "bitwise_shift_right_by",
+        KernelFn::BitwiseShiftRightZfBy => "bitwise_shift_right_zf_by",
+        // ── Random seeded (Generator primitives) ────────────────────────────
+        KernelFn::RandomSeededInt => "random_seeded_int",
+        KernelFn::RandomSeededFloat => "random_seeded_float",
         KernelFn::ResultOkDefault => "ok_res",
         // ── Dict kernels ────────────────────────────────────────────────────
         KernelFn::DictEmpty => "dict_empty",
