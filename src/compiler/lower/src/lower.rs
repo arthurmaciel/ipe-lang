@@ -7758,7 +7758,10 @@ impl<'a> Lowerer<'a> {
             // equals its defining module, but the lowerer does not thread it here
             // and enum-shape errors are rare + already span-precise.
             let def = self.lower_enum(u).map_err(|d| (d, Vec::new()))?;
-            if self.is_cache_handle_union(u) || self.is_config_decoder_union(u) {
+            if self.is_cache_handle_union(u)
+                || self.is_config_decoder_union(u)
+                || self.is_pubsub_topic_union(u)
+            {
                 continue;
             }
             // A foreign OPAQUE type from an FFI interface module (`module
@@ -8165,6 +8168,25 @@ impl<'a> Lowerer<'a> {
                 u.home.as_slice(),
                 [a, b] if self.interner.resolve(*a) == Some("Ipe")
                     && self.interner.resolve(*b) == Some("Config")
+            )
+    }
+
+    /// is `u` the `Ipe.PubSub.Topic` phantom handle declaration — module
+    /// `["Ipe", "PubSub"]`, name `Topic`? `Ipe.PubSub` declares
+    /// `type Topic a = Topic` only to give the payload variable `a` a valid type
+    /// declaration; at runtime a `Topic a` erases to the bare topic-name string
+    /// (`IrType::Str`), which every `Topic a` annotation already lowers to via the
+    /// ABOVE-guard `Topic` arm. Skip its `EnumDef` so the backend never emits a
+    /// phantom-param `enum IpePubSubTopic<T1>` (E0392) — the nullary `Topic` ctor
+    /// is opaque (never constructed or matched in Ipê source; the handle IS a
+    /// `String`), so no enum is needed. Same shape as
+    /// [`Self::is_config_decoder_union`].
+    fn is_pubsub_topic_union(&self, u: &canon::Union) -> bool {
+        self.interner.resolve(u.name) == Some("Topic")
+            && matches!(
+                u.home.as_slice(),
+                [a, b] if self.interner.resolve(*a) == Some("Ipe")
+                    && self.interner.resolve(*b) == Some("PubSub")
             )
     }
 
