@@ -15482,6 +15482,21 @@ impl<'a> Lowerer<'a> {
                     // `compare : comparable -> comparable -> Order`
                     ("Basics", "compare") => Ok(Callee::Kernel(KernelFn::BasicsCompare)),
                     // ── end Basics numerics ────────────────────────────
+                    // ── Bitwise ────────────────────────────────────────
+                    ("Bitwise", "and") => Ok(Callee::Kernel(KernelFn::BitwiseAnd)),
+                    ("Bitwise", "or") => Ok(Callee::Kernel(KernelFn::BitwiseOr)),
+                    ("Bitwise", "xor") => Ok(Callee::Kernel(KernelFn::BitwiseXor)),
+                    ("Bitwise", "complement") => Ok(Callee::Kernel(KernelFn::BitwiseComplement)),
+                    ("Bitwise", "shiftLeftBy") => Ok(Callee::Kernel(KernelFn::BitwiseShiftLeftBy)),
+                    ("Bitwise", "shiftRightBy") => {
+                        Ok(Callee::Kernel(KernelFn::BitwiseShiftRightBy))
+                    }
+                    ("Bitwise", "shiftRightZfBy") => {
+                        Ok(Callee::Kernel(KernelFn::BitwiseShiftRightZfBy))
+                    }
+                    // ── Random Generator primitives ────────────────────
+                    ("Random", "seededIntRaw") => Ok(Callee::Kernel(KernelFn::RandomSeededInt)),
+                    ("Random", "seededFloatRaw") => Ok(Callee::Kernel(KernelFn::RandomSeededFloat)),
                     // ── Error kernels (Ipe.Error — minimal `Error = String`
                     //    slice) ─────────────────────────────────────────
                     ("Error", "unexpected") => Ok(Callee::Kernel(KernelFn::ErrorUnexpected)),

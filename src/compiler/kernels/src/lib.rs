@@ -2069,16 +2069,24 @@ impl StdlibKernel {
             Self::BitwiseOr => d("Bitwise", "or", 2, Pure, "bitwise_or"),
             Self::BitwiseXor => d("Bitwise", "xor", 2, Pure, "bitwise_xor"),
             Self::BitwiseComplement => d("Bitwise", "complement", 1, Pure, "bitwise_complement"),
-            Self::BitwiseShiftLeftBy => d("Bitwise", "shiftLeftBy", 2, Pure, "bitwise_shift_left_by"),
+            Self::BitwiseShiftLeftBy => {
+                d("Bitwise", "shiftLeftBy", 2, Pure, "bitwise_shift_left_by")
+            }
             Self::BitwiseShiftRightBy => {
                 d("Bitwise", "shiftRightBy", 2, Pure, "bitwise_shift_right_by")
             }
-            Self::BitwiseShiftRightZfBy => {
-                d("Bitwise", "shiftRightZfBy", 2, Pure, "bitwise_shift_right_zf_by")
-            }
+            Self::BitwiseShiftRightZfBy => d(
+                "Bitwise",
+                "shiftRightZfBy",
+                2,
+                Pure,
+                "bitwise_shift_right_zf_by",
+            ),
             // ── Random seeded (Generator primitives) ─────────────────────────
             Self::RandomSeededInt => d("Random", "seededIntRaw", 3, Pure, "random_seeded_int"),
-            Self::RandomSeededFloat => d("Random", "seededFloatRaw", 1, Pure, "random_seeded_float"),
+            Self::RandomSeededFloat => {
+                d("Random", "seededFloatRaw", 1, Pure, "random_seeded_float")
+            }
             // ── Dict ────────────────────────────────────────────────────────
             Self::DictEmpty => d("Dict", "empty", 0, Pure, "dict_empty"),
             Self::DictIsEmpty => d("Dict", "isEmpty", 1, Pure, "dict_is_empty"),
