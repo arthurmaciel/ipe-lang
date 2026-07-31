@@ -12,6 +12,8 @@ use std::process::Command;
 use ipe::diff::{Compatibility, RequiredBump, check_semver_bump};
 use semver::Version;
 
+mod support;
+
 /// A fresh temp package directory, unique per test.
 fn temp_pkg(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
@@ -104,7 +106,7 @@ fn cli_diff_reports_and_exits_zero() {
     write_lib(&old, V1);
     write_lib(&new, V2_COMPATIBLE);
 
-    let out = Command::new(env!("CARGO_BIN_EXE_ipe"))
+    let out = Command::new(support::ipe_bin())
         .arg("diff")
         .arg(&old)
         .arg(&new)
@@ -129,7 +131,7 @@ fn cli_diff_check_rejects_an_underbump() {
     write_lib(&old, V1);
     write_lib(&new, V2_BREAKING);
 
-    let out = Command::new(env!("CARGO_BIN_EXE_ipe"))
+    let out = Command::new(support::ipe_bin())
         .arg("diff")
         .arg(&old)
         .arg(&new)
@@ -156,7 +158,7 @@ fn cli_diff_check_accepts_a_sufficient_bump() {
     write_lib(&old, V1);
     write_lib(&new, V2_BREAKING);
 
-    let out = Command::new(env!("CARGO_BIN_EXE_ipe"))
+    let out = Command::new(support::ipe_bin())
         .arg("diff")
         .arg(&old)
         .arg(&new)

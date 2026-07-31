@@ -4,9 +4,11 @@
 
 use std::process::Command;
 
+mod support;
+
 /// Run `ipe <args>` with `NO_COLOR=1` and return `(exit_success, stdout, stderr)`.
 fn run(args: &[&str]) -> (bool, String, String) {
-    match Command::new(env!("CARGO_BIN_EXE_ipe"))
+    match Command::new(support::ipe_bin())
         .args(args)
         .env("NO_COLOR", "1")
         .output()

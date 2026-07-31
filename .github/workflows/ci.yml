@@ -23,6 +23,13 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  # Merge queue: when the repo's merge queue is enabled (a GitHub repo setting the
+  # user flips), each queued PR runs on a merge_group event with main + the PR
+  # merged in. The heavy matrix (e2e/miri/feature-combos/tier2 jails) fires here
+  # so it GATES landing per-merge — main stays provably green without paying the
+  # full matrix on every direct push. The gating jobs list `merge_group` in their
+  # `if:` alongside the non-pull_request (push/nightly) condition.
+  merge_group:
   schedule:
     - cron: '0 4 * * *'        # nightly full sweep (catches dep/upstream drift)
   workflow_dispatch: {}
@@ -36,13 +43,22 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
-  # Path filter for wasm-floor: on a PR it runs only when wasm-relevant files
-  # change; on push/schedule it always runs (see wasm-floor's `if:`). Keeps the
-  # wasm build OFF the always-required PR path for non-wasm changes.
+  # Path filters. On a PR each filter's output gates whether its dependent jobs
+  # run; on push/schedule the jobs always run (see each job's `if:`).
+  #   • wasm  — keeps the wasm build OFF the required PR path for non-wasm changes.
+  #   • code  — a conservative SUPERSET of every build input. When it is false a
+  #     PR touches only docs/prose that NO test reads at runtime, so `test`,
+  #     `clippy`, and `seal-smoke` are safe to skip. When in doubt it runs: the
+  #     filter lists all source/manifest/workflow paths, and the ONE prose-file
+  #     build-input gotcha `AGENTS.md` — it is `include_str!("../../../AGENTS.md")`
+  #     into ipe-cli's init.rs, and the `init_subcommand` test asserts on its
+  #     bytes, so a change to it MUST re-run the gates. (The explain/*.md
+  #     diagnostic pages live under src/** already, so they need no special case.)
   changes:
     runs-on: ubuntu-latest
     outputs:
       wasm: ${{ steps.filter.outputs.wasm }}
+      code: ${{ steps.filter.outputs.code }}
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v3
@@ -57,6 +73,19 @@ jobs:
               - 'crates/ipe_backend_rust/**'
               - '**/*wasm*'
               - '.github/workflows/ci.yml'
+            code:
+              - 'src/**'
+              - 'crates/**'
+              - 'runtime/**'
+              - 'tests/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '**/Cargo.toml'
+              - '.github/workflows/**'
+              # AGENTS.md is a BUILD input: include_str!'d into ipe-cli's init.rs
+              # and asserted by the init_subcommand test. Every other root *.md /
+              # docs/** / misc/** file is prose no test reads — safe to skip.
+              - 'AGENTS.md'
 
   # Fail-closed guard against clone bloat: a commit that tracks a build artifact
   # (a target/ directory, an .rlib/.rmeta/.o/.a/.so/.dylib/.wasm blob) or any file
@@ -82,6 +111,10 @@ jobs:
 
   clippy:
     runs-on: ubuntu-latest
+    needs: changes
+    # Change-gated: a docs-only PR (no code path in the `code` filter) skips
+    # clippy; it always runs on push/nightly/merge_group.
+    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -90,6 +123,20 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets --workspace -- -D warnings
+
+  # Fast fail-fast compile check. A non-compiling PR turns this red in ~a minute
+  # (no test link, no emit), so the expensive downstream jobs (seal-smoke and the
+  # push-only e2e/miri) never start behind broken code — they `needs: quick-check`.
+  # `test` deliberately does NOT gate on this: it runs in parallel for fastest
+  # feedback, and its own compile subsumes the check.
+  quick-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace
 
   # Guards the ipe-runtime-rust feature graph against silent coupling. The
   # workspace jobs above build the runtime with its DEFAULT features (`[]`), so
@@ -101,7 +148,7 @@ jobs:
   # `#[cfg(feature = "live")]`.
   runtime-feature-combos:
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'   # slow: push/nightly only, off the required PR gate
+    if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly, and merge_group (merge-time gate)
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -133,13 +180,23 @@ jobs:
       - run: cargo build -p ipe-runtime-rust --target wasm32-unknown-unknown
       - run: cargo build -p ipe-runtime-rust --target wasm32-unknown-unknown --features json
 
-  # The ~180 golden test binaries each statically link the full compiler rlib
-  # set. Two independent guards keep the link inside the runner's memory: the
+  # ── test: build-once, shard-run ──────────────────────────────────────────────
+  # The workspace's ~170 test binaries each statically link the full compiler
+  # rlib set, so the COMPILE dominates. `test-prep` compiles them exactly once
+  # (`nextest archive` → a self-contained archive of every test binary) and the
+  # `test-run` matrix downloads that archive and runs a disjoint partition on
+  # each of 4 runners — one compile, 4-way parallel run. The required gate is the
+  # `test` aggregation job below; branch protection lists `test`, which stays
+  # green only if every shard AND the doctest job passed.
+  #
+  # Two independent guards keep the per-binary link inside runner memory: the
   # root `[profile.test] debug = 0` (no debug-symbol table to relocate per
   # binary) and mold (a memory-frugal linker vs the default GNU `ld`, which OOMs
   # here as `ld terminated with signal 7 [Bus error]`).
-  test:
+  test-prep:
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
     steps:
@@ -149,8 +206,68 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
-      - run: cargo nextest run --workspace --profile ci   # E2E tests no-op without IPE_E2E
-      - run: cargo test --doc --workspace                 # nextest doesn't run doctests
+      # Compile every test binary ONCE into a self-contained archive.
+      - run: cargo nextest archive --workspace --archive-file nextest.tar.zst
+      - uses: actions/upload-artifact@v7
+        with:
+          name: nextest-archive
+          path: nextest.tar.zst
+          retention-days: 1
+      # Doctests can't be archived/partitioned by nextest, so they run here once
+      # against the just-warmed target (rustdoc drives them separately).
+      - run: cargo test --doc --workspace
+
+  test-run:
+    runs-on: ubuntu-latest
+    needs: test-prep
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@nextest
+      - uses: actions/download-artifact@v7
+        with:
+          name: nextest-archive
+      # Run this shard's disjoint partition from the prebuilt archive — no
+      # recompile. `--workspace-remap .` re-roots the archived paths at this
+      # checkout. E2E tests no-op without IPE_E2E.
+      - run: cargo nextest run --archive-file nextest.tar.zst --workspace-remap . --partition count:${{ matrix.shard }}/4 --profile ci
+
+  # Required aggregation gate for `test`: green only when every shard and the
+  # doctest job (in test-prep) passed. Branch protection lists this job, so a
+  # matrix expansion never silently drops a required check. The `always()` guard
+  # makes a skipped/failed dependency a FAILURE here, never a false green.
+  test:
+    runs-on: ubuntu-latest
+    needs: [changes, test-prep, test-run]
+    if: always()
+    steps:
+      - name: Gate on shard + doctest results
+        run: |
+          # A skipped `test-prep`/`test-run` is legitimate ONLY when the change
+          # gate deliberately skipped them (docs-only PR); in that case `test`
+          # passes vacuously. Any failure/cancellation is a hard stop.
+          prep='${{ needs.test-prep.result }}'
+          run='${{ needs.test-run.result }}'
+          code='${{ needs.changes.outputs.code }}'
+          event='${{ github.event_name }}'
+          if [ "$prep" = failure ] || [ "$prep" = cancelled ] \
+             || [ "$run" = failure ] || [ "$run" = cancelled ]; then
+            echo "test gate FAILED (test-prep=$prep test-run=$run)" >&2
+            exit 1
+          fi
+          if [ "$prep" = skipped ] && [ "$code" != true ] && [ "$event" = pull_request ]; then
+            echo "docs-only PR: no code paths changed, test suite skipped vacuously."
+            exit 0
+          fi
+          if [ "$prep" != success ] || [ "$run" != success ]; then
+            echo "test gate FAILED: expected all shards to succeed (test-prep=$prep test-run=$run)" >&2
+            exit 1
+          fi
+          echo "test gate PASSED (all shards + doctests green)."
 
   # SEAL smoke — the fast required proxy for THE SEAL. Build the compiler, then
   # take ONE small `cli` example end to end: `ipe build` → `cargo build` the
@@ -160,25 +277,54 @@ jobs:
   # the compiler emits a crate that no longer builds or runs — a hard stop.
   seal-smoke:
     runs-on: ubuntu-latest
+    needs: [changes, quick-check]
+    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
+      # One shared cargo target for the EMITTED crates (kept out of the default
+      # workspace target/ so the ipe compiler build above still caches normally):
+      # the runtime dep tree compiles into it once and later emitted builds go
+      # incremental instead of cold-building axum/tokio/serde per example.
+      IPE_SEAL_TARGET: ${{ github.workspace }}/.cache/seal-shared-target
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: rui314/setup-mold@v1
       - uses: mozilla-actions/sccache-action@v0.0.9
+      # Cache the shared emitted-crate target too (keyed on this job), so the
+      # runtime + its deps stay warm across runs and later emitted builds are
+      # incremental. The default workspace target is cached by the entry above.
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-directories: ${{ github.workspace }}/.cache/seal-shared-target
       - name: Build ipe
         run: cargo build --release -p ipe
+      # Pre-warm the shared emitted-crate target with the runtime + a trivial
+      # emitted crate BEFORE the per-example build below, so the cold runtime dep
+      # build lands once (and in cache) rather than on the tested hot path. Does
+      # not change WHAT is tested.
+      - name: Pre-warm the shared emitted-crate target (runtime + deps)
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/seal-shared-target
+        run: |
+          set -euo pipefail
+          IPE="$PWD/target/release/ipe"
+          WARM="$(mktemp -d)"
+          cd "$WARM"
+          "$IPE" build "$GITHUB_WORKSPACE/examples/sky/ipe/01-hello-world/ipe.toml" --out out/rust
+          cd out/rust
+          cargo build --release   # compiles the runtime dep tree into the shared target
       - name: Emit + build + run (examples/sky/ipe/01-hello-world)
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/seal-shared-target
         run: |
           set -euo pipefail
           IPE="$PWD/target/release/ipe"
           cd examples/sky/ipe/01-hello-world
           "$IPE" build ipe.toml --out out/rust
           cd out/rust
-          cargo build --release
+          cargo build --release   # incremental: deps already in the shared target
           OUT="$(cargo run --release --quiet)"
           echo "emitted-binary output: $OUT"
           # The mirror port preserves the upstream greeting string verbatim (the
@@ -203,7 +349,7 @@ jobs:
   # in sync with this job.
   runtime-full-features:
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'   # slow: push/nightly only, off the required PR gate
+    if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly, and merge_group (merge-time gate)
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -230,7 +376,10 @@ jobs:
   # `posix_spawn` is an unsupported foreign call under Miri.
   miri:
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'   # slow: push/nightly only, off the required PR gate
+    # Fail-fast: don't start the slow miri interpretation if the workspace does
+    # not even compile (quick-check is red). Only reachable off the PR path.
+    needs: [changes, quick-check]
+    if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly, and merge_group (merge-time gate)
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
@@ -264,7 +413,10 @@ jobs:
   # regression now fails CI as it should.
   e2e:
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'   # slow: push/nightly only (seal-smoke is the PR proxy)
+    # off the PR gate (seal-smoke is the PR proxy); runs on push, nightly, and
+    # merge_group (merge-time gate). Fail-fast on a non-compiling tree.
+    needs: [changes, quick-check]
+    if: github.event_name != 'pull_request'
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
     strategy:
@@ -276,8 +428,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: rui314/setup-mold@v1
       - uses: mozilla-actions/sccache-action@v0.0.9
+      # Cache the shared emitted-crate target across runs so the runtime dep tree
+      # (axum/tokio/sqlx/serde) stays warm and each shard's goldens link
+      # incrementally instead of cold-building it. Keyed per shard by rust-cache.
       - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@nextest
+        with:
+          cache-directories: ${{ github.workspace }}/.cache/oracle-shared-target
       # Reclaim runner disk before the E2E build: each emitted golden crate pulls
       # the full runtime dep tree (axum/tokio/sqlx/serde) into the shared target.
       - name: Free disk space
@@ -335,7 +491,7 @@ jobs:
   macos-tier2:
     name: macos-tier2 (sandbox-exec — the real macOS jail proof)
     runs-on: macos-latest
-    if: github.event_name != 'pull_request'   # slow: push/nightly only, off the required PR gate
+    if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly, and merge_group (merge-time gate)
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -400,7 +556,7 @@ jobs:
   macos-run-jail:
     name: macos-run-jail (sandbox-exec — the real macOS run-jail proof)
     runs-on: macos-latest
-    if: github.event_name != 'pull_request'   # slow: push/nightly only, off the required PR gate
+    if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly, and merge_group (merge-time gate)
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -461,7 +617,7 @@ jobs:
   windows-run-jail:
     name: windows-run-jail (Job Object + AppContainer — the real Windows run-jail proof)
     runs-on: windows-2022
-    if: github.event_name != 'pull_request'   # slow: push/nightly only, off the required PR gate
+    if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly, and merge_group (merge-time gate)
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -548,7 +704,7 @@ jobs:
   windows-tier2:
     name: windows-tier2 (Job Object + AppContainer — the real Windows build-jail proof)
     runs-on: windows-2022
-    if: github.event_name != 'pull_request'   # slow: push/nightly only, off the required PR gate
+    if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly, and merge_group (merge-time gate)
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
