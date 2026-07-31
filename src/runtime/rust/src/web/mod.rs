@@ -1466,7 +1466,22 @@ async fn serve_noise_from_static_root(path: &str) -> Option<axum::response::Resp
     }
     let candidate = std::path::Path::new(&dir).join(rel);
     let bytes = tokio::fs::read(&candidate).await.ok()?;
-    let mime = match rel.rsplit('.').next().unwrap_or("") {
+    let mime = static_noise_mime(rel.rsplit('.').next().unwrap_or(""));
+    Some(
+        (
+            axum::http::StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, mime)],
+            bytes,
+        )
+            .into_response(),
+    )
+}
+
+/// Content type for a browser-noise file served from the static root. The
+/// extensions here mirror what browsers actually probe at the origin root.
+/// Anything unknown falls back to octet-stream rather than guessing.
+fn static_noise_mime(ext: &str) -> &'static str {
+    match ext {
         "ico" => "image/x-icon",
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
@@ -1481,16 +1496,9 @@ async fn serve_noise_from_static_root(path: &str) -> Option<axum::response::Resp
         "woff" => "font/woff",
         "woff2" => "font/woff2",
         "ttf" => "font/ttf",
+        "wasm" => "application/wasm",
         _ => "application/octet-stream",
-    };
-    Some(
-        (
-            axum::http::StatusCode::OK,
-            [(axum::http::header::CONTENT_TYPE, mime)],
-            bytes,
-        )
-            .into_response(),
-    )
+    }
 }
 
 /// Shared server setup for `web_app` / `web_app_routed`: nested HTTP
@@ -2905,5 +2913,34 @@ mod sse_reconnect_reconcile_tests {
             TestPage::Detail("5".into()),
             "sub-app base must be stripped before route matching"
         );
+    }
+}
+
+#[cfg(test)]
+mod static_noise_mime_tests {
+    use super::static_noise_mime;
+
+    #[test]
+    fn known_browser_noise_extensions_map() {
+        assert_eq!(static_noise_mime("ico"), "image/x-icon");
+        assert_eq!(static_noise_mime("png"), "image/png");
+        assert_eq!(static_noise_mime("css"), "text/css; charset=utf-8");
+        assert_eq!(
+            static_noise_mime("js"),
+            "application/javascript; charset=utf-8"
+        );
+        assert_eq!(static_noise_mime("json"), "application/json");
+        assert_eq!(static_noise_mime("woff2"), "font/woff2");
+    }
+
+    #[test]
+    fn wasm_serves_as_application_wasm() {
+        assert_eq!(static_noise_mime("wasm"), "application/wasm");
+    }
+
+    #[test]
+    fn unknown_extension_falls_back_to_octet_stream() {
+        assert_eq!(static_noise_mime("dat"), "application/octet-stream");
+        assert_eq!(static_noise_mime(""), "application/octet-stream");
     }
 }
