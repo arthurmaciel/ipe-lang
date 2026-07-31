@@ -190,25 +190,47 @@ publish reaches every session in the same process.
 that plugs straight into the managed loop:
 
 ```text
-Ipe.Tea.Web.PubSub.publish         : String -> any -> Cmd msg
-Ipe.Tea.Web.PubSub.publishNoEcho   : String -> any -> Cmd msg
-Ipe.Tea.Web.PubSub.subscribeTopic  : String -> (any -> msg) -> Sub msg
+Ipe.Tea.Web.PubSub.publish        : Topic a -> a -> Cmd msg
+Ipe.Tea.Web.PubSub.publishNoEcho  : Topic a -> a -> Cmd msg
+Ipe.Tea.Web.PubSub.subscribeTopic : Topic a -> (a -> msg) -> Sub msg
 ```
 
-`publish` returns a `Cmd msg` to hand back from `update`, and `subscribeTopic`
-returns a `Sub msg` to declare in `subscriptions` — so broadcasting on a topic
-and listening on one are ordinary TEA wiring, with no `Task` plumbing. Importing
-`Ipe.Tea.Web.PubSub` marks the module a TEA app (the same
-[Program/TEA gate](program.md) every `Ipe.Tea.*` import applies).
+`Topic a` is a typed topic handle constructed with `PubSub.topic : String ->
+Topic a` from `Ipe.PubSub`. Sharing the same `Topic a` value between publisher
+and subscriber is how the compiler enforces payload-type agreement at compile
+time (`a` is the payload type; mismatches are a type error, not a runtime
+surprise).
 
-`publishNoEcho` sets the broker's skip-origin bit: the publishing session's own
-subscription is suppressed. `publish` echoes by default.
+`publish` returns a `Cmd msg` to hand back from `update`; `subscribeTopic`
+returns a `Sub msg` to declare in `subscriptions` — broadcasting and listening
+are ordinary TEA wiring with no `Task` plumbing:
+
+```ipe
+-- illustrative — not a standalone runnable program
+import Ipe.Tea.Web.PubSub as WebPubSub
+import Ipe.PubSub exposing (topic, Topic)
+
+chatTopic : Topic String
+chatTopic =
+    topic "chat"
+
+-- in update:
+--   ( model, WebPubSub.publish chatTopic model.draft )
+
+-- in subscriptions:
+--   WebPubSub.subscribeTopic chatTopic GotChat
+```
+
+Importing `Ipe.Tea.Web.PubSub` marks the module a TEA app (the same
+[Program/TEA gate](program.md) every `Ipe.Tea.*` import applies).
+`publishNoEcho` sets the broker's skip-origin bit so the publishing session's
+own subscription is suppressed; `publish` echoes by default.
 
 **Escape hatch — publishing from a `Task` pipeline.** To publish from outside
-the loop — inside a `Task` chain, or from a plain Program — reach for the
-top-level `Ipe.PubSub` instead: `publish : String -> any -> Task Error Int` (and
-`publishNoEcho`) resolve to the number of subscribers reached. Being a `Task`,
-it composes anywhere a `Task` does and does not mark a module a TEA app; the bus
-only exists while a Web/live app runs, so a publish with none running resolves
-to `Err`. The [`task-publish`](../../examples/shapes/web/task-publish/) example
-fires it from a Web app's `update` via `Cmd.perform`.
+the loop — inside a `Task` chain, or from a plain `Program` — reach for
+`Ipe.PubSub.publish : Topic a -> a -> Task Error Int` (and `publishNoEcho`)
+instead. Being a `Task`, it composes anywhere a `Task` does and does not mark a
+module a TEA app; the bus only exists while a Web/live app runs, so a publish
+with none running resolves to `Err`. The
+[`task-publish`](../../examples/shapes/web/task-publish/) example fires it from
+a Web app's `update` via `Cmd.perform`.
