@@ -199,13 +199,21 @@ manifest — never as Rust text in `.ipe` source:
   with an abort-on-drop guard so cancellation propagates and a poll panic
   folds through the join-error arm.
 
-Define-defined types currently surface to Ipê as opaque nominals plus
-forwarders. Under the representation axis this is the conservative subset:
-a define struct/enum whose members are all carriers is *definitionally*
-transparent, and the target model surfaces it as a record/union using the
-same conversion glue as transparent import (§2.3). One emission path then
-serves both directions of type traffic — imported and created types are the
-same machinery viewed from opposite ends.
+Under the representation axis a define struct/enum whose members are all
+identity carriers is *definitionally* transparent, and it surfaces as a
+record/union using the same conversion glue as transparent import (§2.3) —
+one emission path serves both directions of type traffic; imported and
+created types are the same machinery viewed from opposite ends. The
+transparent surface is fail-closed to the seams the glue covers: a define
+type another define surface holds as an opaque handle (a closure signature's
+parameter/return, another define's field/payload — seams whose generated
+Rust names the defined type directly), one whose nominal an inspected
+foreign type also claims, or one with a member outside the identity set
+(`Bytes`, an opaque handle) keeps the opaque-nominal-plus-forwarders
+surface, with the reason recorded. Constructor forwarders remain on a
+transparent define — smart constructors beside the record/union surface —
+converting their foreign result through the same seam glue. Closure handles
+are sealed values by nature and always stay opaque.
 
 ### Crate-coverage roadmap
 
@@ -464,7 +472,7 @@ panic-boundary  ──────────────┬──►  asserted
                               │        assertion-vs-PkgInfo check,
 async-breadth   (ready)       │        attributed shim-error mapping
                               │
-transparent-import (ready) ──►│──►  define-transparency unification
+transparent-import (shipped)─►│──►  define-transparency unification (shipped)
                               │        (shares record/union conversion glue)
 tier2-axis-reopen (per-axis, ─┘
    gated on run-jail arms)          ──►  crate-coverage roadmap (consumes all)
@@ -484,13 +492,16 @@ tier2-axis-reopen (per-axis, ─┘
 2. **async-breadth** — widen the async admission set until the storefront
    acceptance example is shim-free with used-set DCE. Independent of
    everything else; pure inspector/generator work.
-3. **transparent-import** — struct→record / enum→closed-union import with
-   both-direction conversion glue, the `#[non_exhaustive]`→opaque rule, and
-   the per-type decision recorded in the artifacts. Structurally ready (the
-   registry and interface emitters exist); it is the largest completeness
-   win per unit of new trusted surface (zero — it emits from decoded data).
-4. **define-transparency unification** — surface all-carrier define types as
-   records/unions through the same glue; requires transparent-import.
+3. **transparent-import** (shipped) — struct→record / enum→closed-union
+   import with both-direction conversion glue, the `#[non_exhaustive]`→opaque
+   rule, and the per-type decision recorded in the artifacts. Zero new
+   trusted surface — it emits from decoded data.
+4. **define-transparency unification** (shipped) — all-identity-carrier
+   define types surface as records/unions through the same glue, fail-closed
+   to the covered seams per §3; the conversion glue resolves a define type at
+   its crate-local `crate::ffi::<slug>::<Name>` definition. Residual breadth:
+   glue for a transparent define in a closure signature or another define's
+   member (those defines stay opaque today, reason recorded).
 5. **asserted-call** — `Rust.Ffi.call` + `Rust.Ffi.unsafe` + `ffi-raw`
    capability + the two-checker discipline of §5.2; requires panic-boundary
    (shims born wrapped) and the capability plumbing. A language-boundary

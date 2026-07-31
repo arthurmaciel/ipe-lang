@@ -281,7 +281,7 @@ fn assemble_wrapper_glue(
                     c.slug, b.ref_name
                 ))
             })?;
-            Ok(glue_type_of(&c.module_name, t))
+            Ok(glue_type_of(&c.module_name, &c.slug, t))
         };
         let mut params = Vec::with_capacity(b.transparent_params.len());
         for p in &b.transparent_params {
@@ -305,16 +305,26 @@ fn assemble_wrapper_glue(
     Ok(())
 }
 
-/// One transparent shape in the backend's glue vocabulary. The foreign path
-/// absolutizes with a leading `::` (the wrapper spelling), and the union's
-/// app-side identity is the interface module + nominal, resolved by the
-/// backend against the enum the lowerer emitted.
+/// One transparent shape in the backend's glue vocabulary. An imported crate
+/// type's path absolutizes with a leading `::` (the wrapper spelling); a
+/// define-defined type carries the BARE nominal (the define convention — the
+/// import classification refuses bare paths) and resolves crate-locally at
+/// `crate::ffi::<slug>::<Name>`, where its `_bindings.rs` definition lives.
+/// The union's app-side identity is the interface module + nominal, resolved
+/// by the backend against the enum the lowerer emitted.
 fn glue_type_of(
     module_name: &str,
+    slug: &str,
     t: &ipe_ffi::transparency::TransparentType,
 ) -> ipe_backend_rust::FfiGlueType {
     use ipe_ffi::transparency::{ForeignVariantPayload, TransparentType};
-    let absolutize = |p: &str| -> String { format!("::{}", p.trim_start_matches(':')) };
+    let absolutize = |p: &str| -> String {
+        if p.contains("::") {
+            format!("::{}", p.trim_start_matches(':'))
+        } else {
+            format!("crate::ffi::{slug}::{p}")
+        }
+    };
     match t {
         TransparentType::Struct {
             rust_path, fields, ..
@@ -3375,6 +3385,48 @@ version = \"1\"
                 .map(String::as_str),
             Some("crate::ffi::iced::Message")
         );
+    }
+
+    #[test]
+    fn a_transparent_define_glues_at_its_crate_local_path() {
+        // A transparent define shape carries the BARE nominal (the define
+        // convention); the assembled conversion glue must resolve it to the
+        // crate-local `crate::ffi::<slug>::<Name>` where its `_bindings.rs`
+        // definition lives — never an external `::Name`.
+        let mut c = crate_with_types("demo", &[], &[]);
+        let t = ipe_ffi::transparency::TransparentType::from_projection_json(&serde_json::json!({
+            "name": "Counter", "kind": "struct", "rustPath": "Counter",
+            "fields": [{"name": "value", "carrier": "Int"}]
+        }))
+        .expect("decodes");
+        c.transparent_types.insert("Counter".to_owned(), t);
+        c.bindings.push(ipe_ffi::interface::InterfaceBinding {
+            ref_name: "counter_new".to_owned(),
+            wrapper_ident: "Rust_demo_counter_new".to_owned(),
+            arity: 1,
+            sig: "Int -> Counter".to_owned(),
+            transparent_params: Vec::new(),
+            transparent_result: Some(ipe_ffi::interface::TransparentResult {
+                type_name: "Counter".to_owned(),
+                in_result: false,
+            }),
+        });
+        let emit = assemble_emit(&[c]).expect("emit ok").expect("emit present");
+        let glue = emit
+            .wrapper_glue
+            .get("Rust_demo_counter_new")
+            .expect("constructor glue assembled");
+        let result = glue.result.as_ref().expect("result conversion");
+        assert_eq!(
+            result.ty,
+            ipe_backend_rust::FfiGlueType::Record {
+                rust_path: "crate::ffi::demo::Counter".to_owned(),
+                fields: vec!["value".to_owned()],
+            }
+        );
+        // A transparent define is a native app type — never a foreign-path
+        // mapping.
+        assert!(!emit.foreign_types.contains_key("Rust.demo.Counter"));
     }
 
     #[test]

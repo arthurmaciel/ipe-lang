@@ -1717,12 +1717,19 @@ fn struct_ctor_lines(cx: &WrapperCx<'_>, def: &StructDef, opaques: &OpaqueResolv
     // param resolve below cannot fail here — but it is threaded through the same
     // resolver to keep the two type renderings identical by construction.
     let struct_name = def.name.as_str();
-    let mut params: Vec<String> = Vec::with_capacity(def.fields.len());
+    // A fieldless struct's constructor still takes the forwarder's unit value
+    // (`_: ()`), the same convention every zero-param inspected wrapper uses —
+    // the Ipê-side forwarder is a unary `() -> T` function, so its saturated
+    // call always passes one argument.
+    let mut params: Vec<String> = Vec::with_capacity(def.fields.len().max(1));
     for (j, (_, c)) in def.fields.iter().enumerate() {
         let Some(ty) = opaques.carrier_ty(c) else {
             return Vec::new();
         };
         params.push(format!("{}: {ty}", arg_name(j)));
+    }
+    if params.is_empty() {
+        params.push("_: ()".to_owned());
     }
     let assigns: Vec<String> = def
         .fields
@@ -1781,7 +1788,11 @@ fn enum_def_ctor_lines(cx: &WrapperCx<'_>, def: &EnumDef, opaques: &OpaqueResolv
         );
         out.push(String::new());
         if v.payload.is_empty() {
-            out.push(format!("pub fn {ctor}() -> {enum_name} {{"));
+            // A unit variant's constructor still takes the forwarder's unit
+            // value (`_: ()`), the same convention every zero-param inspected
+            // wrapper uses — the Ipê-side forwarder is a unary `() -> T`
+            // function, so its saturated call always passes one argument.
+            out.push(format!("pub fn {ctor}(_: ()) -> {enum_name} {{"));
             out.push(format!("    {enum_name}::{}", v.name.as_str()));
         } else {
             // The definition already established every opaque payload is
@@ -2909,7 +2920,7 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
         assert!(out.contains("    SetValue(i64),"), "{out}");
         // One constructor per variant, `<ctor>_<snake(variant)>`.
         assert!(
-            out.contains("pub fn semver_message_increment() -> Message {"),
+            out.contains("pub fn semver_message_increment(_: ()) -> Message {"),
             "{out}"
         );
         assert!(out.contains("Message::Increment"), "{out}");

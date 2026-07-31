@@ -121,7 +121,9 @@ pub enum FfiGlueType {
     /// A Rust struct surfacing as an Ipê record: the emitted app-side value
     /// is the synthesised record struct for `fields`.
     Record {
-        /// The absolute foreign path (`::tm::Point`).
+        /// The foreign path: absolute for an imported crate type
+        /// (`::tm::Point`), crate-local for a define-defined type
+        /// (`crate::ffi::<slug>::<Name>`).
         rust_path: String,
         /// The field names, in declaration order. Validated non-keyword
         /// lowercase identifiers, so the record-struct field ident and the
@@ -137,7 +139,9 @@ pub enum FfiGlueType {
         module: Vec<String>,
         /// The Ipê-visible nominal (`"Shade"`).
         name: String,
-        /// The absolute foreign path (`::tm::Shade`).
+        /// The foreign path: absolute for an imported crate type
+        /// (`::tm::Shade`), crate-local for a define-defined type
+        /// (`crate::ffi::<slug>::<Name>`).
         rust_path: String,
         /// The variant set, in declaration order.
         variants: Vec<FfiGlueVariant>,
