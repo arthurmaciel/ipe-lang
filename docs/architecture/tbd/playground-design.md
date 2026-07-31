@@ -310,7 +310,6 @@ independent — writing the several project files at once. Illustrative shape:
 ```elm
 module Runner exposing (runEmittedRust)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Crypto as Crypto
 import Ipe.Error as Error
 import Ipe.File as File
@@ -363,7 +362,6 @@ runEmittedRust rustProjectText =
 ```elm
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Http.Server as Server
 import Ipe.Http.Server exposing (Request, Response)
 import Ipe.Maybe as Maybe

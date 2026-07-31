@@ -68,7 +68,6 @@ channel:
 ```elm
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 import Ipe.String as String
 import Ipe.Path as Path
