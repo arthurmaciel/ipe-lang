@@ -525,6 +525,13 @@ fn name_label(msg: &NameError) -> Option<String> {
                 ))
             }
         }
+        NameError::UnsupportedBoundaryType { name } => Some(format!(
+            "`{name}` is a reserved Ipê↔JS boundary type, but its typed transport \
+             is not implemented yet, so an annotation naming it cannot be compiled. \
+             A `{name} down up` binding will name — in two concrete type parameters \
+             — the sealed down-state and up-event that cross the seam once the \
+             widget transport ships; there is no untyped fallback"
+        )),
         NameError::Unknown => None,
     }
 }
