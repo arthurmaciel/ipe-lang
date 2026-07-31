@@ -1407,6 +1407,14 @@ pub fn call_has_kernel_special_case(
     if matches!(callee, Callee::Kernel(KernelFn::DictGet)) {
         return Ok(true);
     }
+    // `PubSub.topic` is the identity function — `Topic a` erases to `Str`, so the
+    // call renders as its argument directly (the `KernelFn::PubSubTopic` arm in
+    // `emit_expr_at`). No `pubsub_topic` runtime fn exists to route the generic
+    // tail to; routing this through `leaf` keeps the erasure uniform across the
+    // direct-call and CAF/`OnceLock` paths.
+    if matches!(callee, Callee::Kernel(KernelFn::PubSubTopic)) {
+        return Ok(true);
+    }
     Ok(false)
 }
 
