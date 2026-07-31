@@ -72,10 +72,13 @@ where
     };
     // The spawned OS thread keeps the entry poll outside any runtime context
     // (a nested `block_on` inside a worker thread would panic) and lets a
-    // panicking future be `.join()`-mapped to `Err` instead of aborting.
+    // panicking future be `.join()`-mapped to `Err` instead of aborting. The
+    // caught payload routes through the redacting foreign-panic funnel: raw
+    // detail goes to the server log under a correlation id, and the typed
+    // Ipê error carries only the generic message plus that id.
     match std::thread::spawn(move || rt.block_on(future)).join() {
         Ok(r) => r,
-        Err(_) => IpeResult::Err("async task panicked".to_string().into()),
+        Err(payload) => IpeResult::Err(ipe_error_from_panic("async task panicked", payload)),
     }
 }
 
@@ -431,8 +434,10 @@ pub fn task_run<E: From<String> + Send + 'static, A: Send + 'static>(
 //
 // TOTALITY: no unwrap/expect/panic/indexing. A `JoinError` from `h.await` is a
 // panic inside the spawned task (we never `.await` a handle after issuing its
-// abort, so the cancelled-handle case is unreachable on this path); it is
-// mapped to the same `Err` the previous implementation surfaced.
+// abort, so the cancelled-handle case is unreachable on this path); its payload
+// routes through the redacting foreign-panic funnel — detail server-side under
+// a correlation id, a generic typed `Err` to Ipê. The cancelled arm stays
+// total via the foreign-error funnel rather than an unreachable assumption.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn task_parallel<E: From<String> + Send + 'static, A: Send + 'static>(
     tasks: Vec<IpeTask<E, A>>,
@@ -447,7 +452,12 @@ pub fn task_parallel<E: From<String> + Send + 'static, A: Send + 'static>(
         while let Some(h) = handles.pop_front() {
             let result = match h.await {
                 Ok(r) => r,
-                Err(_join_err) => IpeResult::Err("parallel task panicked".to_string().into()),
+                Err(join_err) => match join_err.try_into_panic() {
+                    Ok(payload) => {
+                        IpeResult::Err(ipe_error_from_panic("parallel task panicked", payload))
+                    }
+                    Err(join_err) => IpeResult::Err(ipe_error_from_foreign(join_err)),
+                },
             };
             match result {
                 IpeResult::Ok(a) => out.push(a),
@@ -931,6 +941,24 @@ mod parallel_abort_tests {
             4,
             "every Ok task ran to completion"
         );
+    }
+
+    #[tokio::test]
+    async fn panicked_parallel_task_folds_through_the_funnel() {
+        // A panic inside one spawned parallel task is a `JoinError` whose
+        // payload routes through the redacting funnel: the typed `Err` carries
+        // the generic message + correlation id, never the raw payload.
+        let tasks: Vec<IpeTask<String, i64>> = vec![
+            side_effect_task(Arc::new(AtomicU64::new(0)), 1, 0),
+            Box::pin(async { panic!("parallel poll panic") }),
+        ];
+        match task_parallel(tasks).await {
+            IpeResult::Err(e) => assert!(
+                e.starts_with("parallel task panicked (ref "),
+                "parallel panic must fold to the funnel message: {e}"
+            ),
+            IpeResult::Ok(v) => panic!("expected a typed Err, got Ok({v:?})"),
+        }
     }
 
     #[tokio::test]
