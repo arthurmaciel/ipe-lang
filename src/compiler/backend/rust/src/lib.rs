@@ -544,6 +544,18 @@ pub(crate) struct EmitCtx<'a> {
     /// `compression` is a leaf module — no other runtime surface reaches it — so
     /// no other `uses_*` flag forces it on.
     pub(crate) uses_compression: bool,
+    /// `true` when the program uses at least one `Ipe.Csv` kernel (`Csv.parse` /
+    /// `parseWithDelimiter` / `encode` / `encodeWithDelimiter` /
+    /// `parseStreamFromFile`) or a signature mentioning `CsvDoc`. When set,
+    /// [`crate::project::assemble_project_files`]:
+    ///
+    /// * declares `pub mod csv; pub use csv::*;` in the emitted
+    ///   `ipe_runtime/mod.rs`;
+    /// * adds the `csv` dependency to the emitted `Cargo.toml`.
+    ///
+    /// `csv` is a leaf module — no other runtime surface reaches it — so no other
+    /// `uses_*` flag forces it on.
+    pub(crate) uses_csv: bool,
     /// `true` when the program uses at least one `Ipe.Ui` / `Ipe.Html` kernel.
     /// When set, [`crate::project::emit_program`] appends
     /// `pub mod ui;` to the emitted `ipe_runtime/mod.rs`.
@@ -1153,6 +1165,9 @@ impl<'a> EmitCtx<'a> {
         // detect Ipe.Compression usage (gates `compression` + `flate2` + `zstd`).
         let uses_compression = program.modules.iter().any(|m| m.uses_compression);
 
+        // detect Ipe.Csv usage (gates `csv` module + `csv` crate).
+        let uses_csv = program.modules.iter().any(|m| m.uses_csv);
+
         // detect Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.WebView usage.
         let (uses_ui, uses_web, uses_tui, uses_webview) = (
             program.modules.iter().any(|m| m.uses_ui),
@@ -1187,6 +1202,7 @@ impl<'a> EmitCtx<'a> {
             uses_http,
             uses_config,
             uses_compression,
+            uses_csv,
             uses_ui,
             uses_web,
             uses_tui,
@@ -2919,6 +2935,7 @@ mod record_struct_namespace_tests {
                 uses_http: false,
                 uses_config: false,
                 uses_compression: false,
+                uses_csv: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
@@ -3000,6 +3017,7 @@ mod record_struct_namespace_tests {
                 uses_http: false,
                 uses_config: false,
                 uses_compression: false,
+                uses_csv: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,

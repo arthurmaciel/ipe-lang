@@ -5906,6 +5906,30 @@ impl StdlibKernel {
         )
     }
 
+    /// `true` when this variant belongs to the `Ipe.Csv` kernel family
+    /// (`Csv.parse` / `parseWithDelimiter` / `encode` / `encodeWithDelimiter` /
+    /// `parseStreamFromFile`).
+    ///
+    /// The `csv` runtime module is the sole consumer of the `csv` crate. Used by
+    /// `ipe_lower` to detect `uses_csv` and by the backend to declare `csv` in
+    /// the emitted `ipe_runtime/mod.rs` and add the `csv` dependency to the
+    /// emitted manifest. It is a leaf module — no other runtime surface calls
+    /// into it — so the flag (unioned with a `CsvDoc` type-mention guard: a bare
+    /// `{ header, rows }` record shape folds to `IrType::CsvDoc`, which emits a
+    /// bare `CsvDoc` reference resolved through the module's `pub use csv::*`
+    /// glob) gates it, never forced on transitively.
+    #[must_use]
+    pub const fn is_csv(self) -> bool {
+        matches!(
+            self,
+            Self::CsvParse
+                | Self::CsvParseWithDelimiter
+                | Self::CsvEncode
+                | Self::CsvEncodeWithDelimiter
+                | Self::CsvParseStreamFromFile
+        )
+    }
+
     /// `true` when this variant belongs to the `Ipe.Auth` kernel family
     /// (`Ipe.Auth.hashPassword` / `verifyPassword` / `signToken` / `verifyToken` /
     /// `register` / `login` / `setRole` and companions).
@@ -7044,6 +7068,28 @@ mod tests {
                  (E0433) or pull flate2/zstd into a program that never compresses",
                 k.is_compression(),
                 is_compression_qualifier,
+            );
+        }
+    }
+
+    /// Every `Ipe.Csv` kernel emits a symbol into the `csv` runtime module (the
+    /// sole consumer of the `csv` crate), so `qualifier == "Csv"` MUST imply
+    /// `is_csv()`, and no other qualifier may report `is_csv()`. Both directions
+    /// are asserted, so a new `Csv.*` kernel that the predicate forgets — or an
+    /// unrelated kernel wrongly claimed — fails this test the instant the two
+    /// disagree.
+    #[test]
+    fn csv_predicate_tracks_csv_qualifier() {
+        for k in StdlibKernel::ALL {
+            let is_csv_qualifier = k.decl().qualifier == "Csv";
+            assert_eq!(
+                k.is_csv(),
+                is_csv_qualifier,
+                "{k:?}: is_csv()={} but qualifier==\"Csv\" is {} — \
+                 the emitted crate would either fail to declare the csv module \
+                 (E0433) or pull the csv crate into a program that never parses CSV",
+                k.is_csv(),
+                is_csv_qualifier,
             );
         }
     }

@@ -525,6 +525,20 @@ const RUNTIME_MOD_RS_CONFIG_APPEND: &str = "pub mod config_decode;\npub use conf
 /// never forced on transitively.
 const RUNTIME_MOD_RS_COMPRESS_APPEND: &str = "pub mod compression;\npub use compression::*;\n";
 
+// ── Ipe.Csv — CSV parse/encode ──────────────────────────────────────────────
+
+/// Lines appended to `ipe_runtime/mod.rs` when the program uses an `Ipe.Csv`
+/// kernel (`Csv.parse` / `parseWithDelimiter` / `encode` / `encodeWithDelimiter`
+/// / `parseStreamFromFile`) or a signature mentioning `CsvDoc`.
+///
+/// `csv.rs` (the CSV parse/encode kernels plus the `CsvDoc` struct) is vendored
+/// into every emitted crate but declared only on demand — it is the sole
+/// consumer of the `csv` crate, which [`csv_cargo_toml`] adds under the same
+/// condition. It is a leaf module (no other runtime surface calls into it), so
+/// it is declared exactly when the program reaches it directly, and never forced
+/// on transitively.
+const RUNTIME_MOD_RS_CSV_APPEND: &str = "pub mod csv;\npub use csv::*;\n";
+
 // ── Shared transitive dep: http_header ──────────────────────────────────────
 //
 // `http_header.rs` (a dependency-free leaf exposing `canonical_header`) is part
@@ -1415,6 +1429,16 @@ fn assemble_project_files(
     } else {
         cargo_toml
     };
+    // Ipe.Csv (`csv`): pulled in only when the program reaches the `csv` runtime
+    // module (`Csv.parse` / `parseWithDelimiter` / `encode` / `encodeWithDelimiter`
+    // / `parseStreamFromFile`, or a signature mentioning the `CsvDoc` type). The
+    // crate is a leaf — a program that never parses CSV pulls it not. `csv` is
+    // not reached by any other surface, so the flag alone gates it.
+    let cargo_toml = if ctx.uses_csv {
+        csv_cargo_toml(&cargo_toml)?
+    } else {
+        cargo_toml
+    };
     // TEA runtime: `tea.rs` drives its event loop over a `tokio::sync::mpsc`
     // channel, so any program that pulls the `tea` module needs tokio's `"sync"`
     // feature. The union mirrors the `tea` mod.rs append below (a `Cmd`/`Sub`
@@ -1475,6 +1499,13 @@ fn assemble_project_files(
         // compresses keeps it absent, dropping both crates.
         if ctx.uses_compression {
             mod_rs.push_str(RUNTIME_MOD_RS_COMPRESS_APPEND);
+        }
+        // Ipe.Csv. `csv` (the sole consumer of the `csv` crate) is declared when
+        // the program reaches it directly — it is a leaf module no other surface
+        // calls into. A program that never parses CSV keeps it absent, dropping
+        // the crate.
+        if ctx.uses_csv {
+            mod_rs.push_str(RUNTIME_MOD_RS_CSV_APPEND);
         }
         // `tea` must be declared whenever any included module's `use crate::tea`
         // closure references it — NOT only when user code names a TEA kernel
@@ -2862,6 +2893,41 @@ fn compression_cargo_toml(base: &str) -> DResult<String> {
         .find(PROFILE_ANCHOR)
         .ok_or_else(|| Diagnostic::CompilerBug {
             where_: "ipe_backend_rust::project::compression_cargo_toml",
+            detail: format!("Cargo.toml anchor {PROFILE_ANCHOR:?} not found — golden drifted"),
+        })?;
+    let mut result = String::with_capacity(base.len() + deps.len());
+    result.push_str(base.get(..anchor_pos).unwrap_or(""));
+    result.push_str(&deps);
+    result.push_str(base.get(anchor_pos..).unwrap_or(""));
+    Ok(result)
+}
+
+/// Build the CSV-enabled `Cargo.toml` by appending the `csv` dependency before
+/// `[profile.dev]`.
+///
+/// `csv.rs` (the vendored `Ipe.Csv` parse/encode kernels plus the `CsvDoc`
+/// struct) is the sole consumer of the `csv` crate. It is a leaf dependency
+/// (nothing else in the base manifest pulls it), so gating it here keeps a
+/// program that never parses CSV free of the crate.
+///
+/// The version comes from the [`crate_specs`] SSOT (drift-guarded against
+/// `runtime/Cargo.toml`).
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] if the `[profile.dev]` anchor is absent —
+/// a golden-drift invariant violation (fail-loud, never a silent no-op).
+fn csv_cargo_toml(base: &str) -> DResult<String> {
+    const PROFILE_ANCHOR: &str = "[profile.dev]";
+    let deps = format!(
+        "{} = \"{}\"\n\n",
+        crate_specs::CSV.name,
+        crate_specs::CSV.version,
+    );
+    let anchor_pos = base
+        .find(PROFILE_ANCHOR)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::csv_cargo_toml",
             detail: format!("Cargo.toml anchor {PROFILE_ANCHOR:?} not found — golden drifted"),
         })?;
     let mut result = String::with_capacity(base.len() + deps.len());

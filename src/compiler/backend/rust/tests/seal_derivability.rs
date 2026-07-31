@@ -49,6 +49,7 @@ fn program_with_web(
             uses_http: false,
             uses_config: false,
             uses_compression: false,
+            uses_csv: false,
             uses_ui: uses_web,
             uses_web,
             uses_tui: false,
