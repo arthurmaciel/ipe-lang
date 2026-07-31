@@ -622,6 +622,11 @@ pub enum StdlibKernel {
     TaskWithKind,
     // ── Io ──────────────────────────────────────────────────────────────────
     IoReadLine,
+    /// `Io.readSecret : String -> Task Error String` — write a prompt, then read
+    /// one line from stdin with terminal echo suppressed (a password read). The
+    /// prior terminal mode is always restored, even on error. On a non-tty stdin
+    /// this degrades to a plain line read (no echo state to toggle).
+    IoReadSecret,
     IoWriteStdout,
     IoWriteStderr,
     /// `Io.println : String -> Task Error ()` — write message + newline to stdout.
@@ -2335,6 +2340,7 @@ impl StdlibKernel {
             Self::TaskWithKind => d("Task", "withKind", 2, Pure, "task_with_kind"),
             // ── Io ──────────────────────────────────────────────────────────
             Self::IoReadLine => d("Io", "readLine", 1, Pure, "io_read_line"),
+            Self::IoReadSecret => d("Io", "readSecret", 1, Pure, "io_read_secret"),
             Self::IoWriteStdout => d("Io", "writeStdout", 1, Pure, "io_write_stdout"),
             Self::IoWriteStderr => d("Io", "writeStderr", 1, Pure, "io_write_stderr"),
             Self::IoPrintln => d("Io", "println", 1, Pure, "io_println"),
@@ -3790,6 +3796,7 @@ impl StdlibKernel {
         Self::TaskWithKind,
         // Io
         Self::IoReadLine,
+        Self::IoReadSecret,
         Self::IoWriteStdout,
         Self::IoWriteStderr,
         Self::IoPrintln,
@@ -5148,6 +5155,7 @@ impl StdlibKernel {
             | Self::TaskWithBaseMs
             | Self::TaskWithKind
             | Self::IoReadLine
+            | Self::IoReadSecret
             | Self::IoWriteStdout
             | Self::IoWriteStderr
             | Self::IoPrintln

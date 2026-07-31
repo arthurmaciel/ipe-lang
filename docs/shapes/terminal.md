@@ -400,6 +400,43 @@ main =
 The [`file-browser`](../../examples/shapes/terminal/file-browser/) demo uses this
 to render a live hexdump of the selected file's bytes.
 
+## `Io.readSecret` — a password prompt
+
+`Io.readSecret : String -> Task Error String` writes a prompt, then reads one
+line from stdin with the terminal's echo turned off, so the typed characters do
+not appear on screen. The prior terminal mode is always restored afterwards —
+success, error, or interruption alike — so echo is never left disabled. When
+stdin is not a terminal (a pipe or redirect) there is nothing to hide, so it
+degrades to a plain line read.
+
+```ipe
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String as String
+import Ipe.Task as Task
+
+
+main : Task Error ()
+main =
+    Task.andThen
+        (\secret -> Io.println ("received a secret of length " ++ String.fromInt (String.length secret)))
+        (Io.readSecret "password: ")
+```
+
+Run it and type a password — the characters stay hidden while you type:
+
+```sh
+ipe run Main.ipe
+```
+
+Piping a scripted secret works too (the pipe is not a tty, so the input is read
+verbatim):
+
+```sh
+printf 'hunter2\n' | ipe run Main.ipe
+```
+
 ## Examples
 
 - [`examples/shapes/terminal/file-browser/`](../../examples/shapes/terminal/file-browser/)
