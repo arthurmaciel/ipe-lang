@@ -235,6 +235,65 @@ fn serve_binds_a_free_port_and_serves_the_index() -> io::Result<()> {
 }
 
 #[test]
+fn list_groups_project_modules_before_the_standard_library() -> io::Result<()> {
+    let pkg = documented_package("list_grouping")?;
+    let (ok, stdout, stderr) = run(&["doc", "--list", as_str(&pkg)]);
+    assert!(ok, "`ipe doc --list` must succeed:\n{stdout}\n{stderr}");
+
+    // Both labelled sections are present, project first.
+    let project = stdout
+        .find("Project modules")
+        .expect("a project-modules section label");
+    let stdlib = stdout
+        .find("Standard library")
+        .expect("a standard-library section label");
+    assert!(
+        project < stdlib,
+        "the project section comes before the standard library:\n{stdout}"
+    );
+
+    // The user's own module is listed under the project section, ahead of the
+    // stdlib section (so a stdlib module name appears only after the label).
+    let shapes = stdout.find("Shapes").expect("the project module is listed");
+    assert!(
+        shapes < stdlib,
+        "the project module sorts before the standard library:\n{stdout}"
+    );
+    Ok(())
+}
+
+#[test]
+fn generated_docs_json_is_local_first_and_tags_each_module_kind() -> io::Result<()> {
+    let pkg = documented_package("json_kind")?;
+    let out = pkg.join("out");
+    let (ok, stdout, stderr) = run(&["doc", as_str(&pkg), "--out", as_str(&out)]);
+    assert!(ok, "generate must succeed:\n{stdout}\n{stderr}");
+
+    let json = fs::read_to_string(out.join("docs.json"))?;
+    // Each module carries its group tag.
+    assert!(
+        json.contains("\"kind\": \"local\""),
+        "a local module is tagged:\n{json}"
+    );
+    assert!(
+        json.contains("\"kind\": \"stdlib\""),
+        "a stdlib module is tagged:\n{json}"
+    );
+    // The user's own module is serialized before the first stdlib module.
+    let local = json
+        .find("\"kind\": \"local\"")
+        .expect("a local-kind module");
+    let stdlib = json
+        .find("\"kind\": \"stdlib\"")
+        .expect("a stdlib-kind module");
+    assert!(
+        local < stdlib,
+        "the project module comes before the standard library:\n{json}"
+    );
+    Ok(())
+}
+
+#[test]
 fn check_passes_when_every_binding_is_documented() -> io::Result<()> {
     let pkg = documented_package("check_pass")?;
     let (ok, stdout, stderr) = run(&["doc", "check", as_str(&pkg)]);

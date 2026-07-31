@@ -246,6 +246,10 @@ module it belongs to. The machine-readable `docs.json` is the source of truth �
 one record per exposed module — and the per-module Markdown and the
 self-contained HTML site are both views over it.
 
+Your own project modules come first, under a **Project modules** heading, ahead
+of the **Standard library** — so you see your API before the stdlib. The HTML
+site is a soft-dark theme with a type-to-filter search box over the module list.
+
 ```
 $ ipe doc                          # write doc/ (docs.json + Markdown + HTML) for the current project
 $ ipe doc path/to/pkg --out site   # or a specific package, to a chosen directory
@@ -266,6 +270,7 @@ $ cat doc/docs.json
   "modules": [
     {
       "name": "Shapes",
+      "kind": "local",
       "comment": "Shapes — a tiny geometry library.",
       "unions": [ … ],
       "values": [

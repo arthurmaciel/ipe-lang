@@ -428,12 +428,42 @@ pub struct DocsJson {
     pub modules: Vec<ModuleDoc>,
 }
 
+/// Which group a documented module belongs to.
+///
+/// The doc listing presents `Local` modules first, under their own labelled
+/// section, so a reader sees their own API before the standard library.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModuleKind {
+    /// A module from the package being documented.
+    Local,
+    /// A bundled standard-library module.
+    Stdlib,
+}
+
+/// The section label for the user's own project modules, shared by every
+/// rendering (console listing and generated HTML) so the phrasing lives once.
+const LABEL_PROJECT: &str = "Project modules";
+
+/// The section label for the bundled standard library, shared by every
+/// rendering so the phrasing lives once.
+const LABEL_STDLIB: &str = "Standard library";
+
+/// The stable machine tag a `docs.json` consumer reads to group a module.
+const fn module_kind_tag(kind: ModuleKind) -> &'static str {
+    match kind {
+        ModuleKind::Local => "local",
+        ModuleKind::Stdlib => "stdlib",
+    }
+}
+
 /// One exposed module's documentation: its doc-comment plus its exposed unions
 /// and values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModuleDoc {
     /// The dotted module name (`Ipe.String`).
     pub name: String,
+    /// Whether this is a project module or a bundled stdlib module.
+    pub kind: ModuleKind,
     /// The module's own `-- |` header doc-comment, empty when it has none.
     pub comment: String,
     /// Exposed union types, in name order.
@@ -510,35 +540,26 @@ fn build_docs(path: &Path) -> Result<DocsJson, CliError> {
             .get(module_path)
             .map(|(_, src)| scan_doc_comments(src))
             .unwrap_or_default();
-        project_modules.push(module_doc(module_path, module_api, &comments));
+        project_modules.push(module_doc(
+            module_path,
+            module_api,
+            &comments,
+            ModuleKind::Local,
+        ));
     }
+    project_modules.sort_by(|a, b| a.name.cmp(&b.name));
 
     // Collect stdlib modules (both compiled-source and kernel-backed).
-    let stdlib = build_stdlib_docs();
+    let mut stdlib = build_stdlib_docs();
+    stdlib.sort_by(|a, b| a.name.cmp(&b.name));
 
-    // Merge: stdlib first (by name), then project (by name).
-    let mut modules = stdlib;
-    modules.extend(project_modules);
-    modules.sort_by(|a, b| a.name.cmp(&b.name));
-    // Remove duplicates: if a project module shadows a stdlib name, project wins.
-    modules.dedup_by(|later, earlier| {
-        if later.name == earlier.name {
-            // Keep later (which was project after sort if names were equal).
-            *earlier = std::mem::replace(
-                later,
-                ModuleDoc {
-                    name: String::new(),
-                    comment: String::new(),
-                    unions: Vec::new(),
-                    values: Vec::new(),
-                },
-            );
-            true
-        } else {
-            false
-        }
-    });
-    modules.retain(|m| !m.name.is_empty());
+    // A project module shadows a stdlib module of the same name — project wins.
+    let project_names: BTreeSet<&str> = project_modules.iter().map(|m| m.name.as_str()).collect();
+    stdlib.retain(|m| !project_names.contains(m.name.as_str()));
+
+    // Present the user's own modules first, then the standard library.
+    let mut modules = project_modules;
+    modules.extend(stdlib);
 
     Ok(DocsJson {
         version: DOCS_JSON_VERSION,
@@ -559,7 +580,12 @@ fn build_project_docs(path: &Path) -> Result<DocsJson, CliError> {
             .get(module_path)
             .map(|(_, src)| scan_doc_comments(src))
             .unwrap_or_default();
-        modules.push(module_doc(module_path, module_api, &comments));
+        modules.push(module_doc(
+            module_path,
+            module_api,
+            &comments,
+            ModuleKind::Local,
+        ));
     }
     Ok(DocsJson {
         version: DOCS_JSON_VERSION,
@@ -639,7 +665,12 @@ fn build_compiled_std_module_doc(segments: &[String], source: &str) -> Result<Mo
     let module_api = api.modules.get(segments).cloned().unwrap_or_default();
     let comments = scan_doc_comments(source);
     let segments_vec: Vec<String> = segments.to_vec();
-    Ok(module_doc(&segments_vec, &module_api, &comments))
+    Ok(module_doc(
+        &segments_vec,
+        &module_api,
+        &comments,
+        ModuleKind::Stdlib,
+    ))
 }
 
 /// Build [`ModuleDoc`]s for every kernel-qualifier stdlib module.
@@ -692,6 +723,7 @@ fn build_kernel_module_docs() -> Result<BTreeMap<String, ModuleDoc>, CliError> {
             module_path.clone(),
             ModuleDoc {
                 name: module_path,
+                kind: ModuleKind::Stdlib,
                 comment: String::new(),
                 unions: Vec::new(),
                 values,
@@ -724,22 +756,26 @@ fn list_modules(path: &Path, format: OutputFormat) {
         },
     );
 
-    let mut all: Vec<String> = stdlib;
-    for name in &project {
-        if !all.contains(name) {
-            all.push(name.clone());
-        }
-    }
-    all.sort();
+    // A project module shadows a stdlib module of the same name.
+    let mut project_names: Vec<String> = project;
+    project_names.sort();
+    let project_set: BTreeSet<&str> = project_names.iter().map(String::as_str).collect();
+    let stdlib_names: Vec<String> = stdlib
+        .into_iter()
+        .filter(|n| !project_set.contains(n.as_str()))
+        .collect();
+
+    // Present the user's own modules first, then the standard library.
+    let ordered: Vec<&String> = project_names.iter().chain(stdlib_names.iter()).collect();
 
     match format {
         OutputFormat::Plain => {
-            for name in &all {
+            for name in &ordered {
                 println!("{name}");
             }
         }
         OutputFormat::Json => {
-            let list = all
+            let list = ordered
                 .iter()
                 .map(|n| json_string(n))
                 .collect::<Vec<_>>()
@@ -747,8 +783,18 @@ fn list_modules(path: &Path, format: OutputFormat) {
             println!("{{\"modules\":[{list}]}}");
         }
         OutputFormat::Human => {
-            let mut body = format!("{GUTTER}stdlib + project modules ({}):\n\n", all.len());
-            for name in &all {
+            let mut body = String::new();
+            let _ = writeln!(body, "{GUTTER}{LABEL_PROJECT} ({}):\n", project_names.len());
+            if project_names.is_empty() {
+                let _ = writeln!(body, "{GUTTER}  (none)\n");
+            } else {
+                for name in &project_names {
+                    let _ = writeln!(body, "{GUTTER}  {name}");
+                }
+                body.push('\n');
+            }
+            let _ = writeln!(body, "{GUTTER}{LABEL_STDLIB} ({}):\n", stdlib_names.len());
+            for name in &stdlib_names {
                 let _ = writeln!(body, "{GUTTER}  {name}");
             }
             print!("{}", frame(body.trim_end_matches('\n')));
@@ -774,7 +820,7 @@ fn query_project_modules() -> Vec<ModuleDoc> {
                         .get(module_path)
                         .map(|(_, src)| scan_doc_comments(src))
                         .unwrap_or_default();
-                    module_doc(module_path, module_api, &comments)
+                    module_doc(module_path, module_api, &comments, ModuleKind::Local)
                 })
                 .collect()
         },
@@ -874,7 +920,12 @@ fn query_module(module_name: &str, format: OutputFormat) -> Result<(), CliError>
 
 /// Assemble one [`ModuleDoc`] from its checked API surface and its scanned
 /// doc-comments.
-fn module_doc(module_path: &ModulePath, api: &ModuleApi, comments: &DocComments) -> ModuleDoc {
+fn module_doc(
+    module_path: &ModulePath,
+    api: &ModuleApi,
+    comments: &DocComments,
+    kind: ModuleKind,
+) -> ModuleDoc {
     let unions = api
         .unions
         .iter()
@@ -892,6 +943,7 @@ fn module_doc(module_path: &ModulePath, api: &ModuleApi, comments: &DocComments)
         .collect();
     ModuleDoc {
         name: module_path.join("."),
+        kind,
         comment: comments.module.clone(),
         unions,
         values,
@@ -1397,6 +1449,11 @@ fn render_json(docs: &DocsJson) -> String {
 fn render_module_json(out: &mut String, module: &ModuleDoc, index: &AnchorIndex) {
     out.push_str("    {\n");
     let _ = writeln!(out, "      \"name\": {},", json_string(&module.name));
+    let _ = writeln!(
+        out,
+        "      \"kind\": {},",
+        json_string(module_kind_tag(module.kind))
+    );
     let _ = writeln!(out, "      \"comment\": {},", json_string(&module.comment));
 
     out.push_str("      \"unions\": [");
@@ -1588,21 +1645,74 @@ fn render_markdown(module: &ModuleDoc, index: &AnchorIndex) -> String {
 /// The bundled stylesheet the HTML site links, written once beside the pages so
 /// the site is self-contained and opens over `file://` with no network fetch.
 const STYLE_CSS: &str = "\
-:root { color-scheme: light dark; }
+:root {
+  color-scheme: dark;
+  --bg: #1e232b;
+  --surface: #262c36;
+  --fg: #d7dbe0;
+  --muted: #9aa2ad;
+  --accent: #f2e29a;
+  --accent-strong: #f7ecb0;
+  --border: #3a4150;
+}
 body {
   font: 16px/1.6 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-  margin: 0; padding: 2rem; max-width: 52rem; margin-inline: auto;
+  margin: 0; padding: 2rem; max-width: 60rem; margin-inline: auto;
+  background: var(--bg); color: var(--fg);
 }
-h1 { font-size: 1.6rem; } h2 { font-size: 1.2rem; margin-top: 2rem; }
-a { color: #2563eb; text-decoration: none; } a:hover { text-decoration: underline; }
+h1 { font-size: 1.6rem; color: var(--accent); }
+h2 { font-size: 1.2rem; margin-top: 2rem; color: var(--accent); }
+a { color: var(--accent); text-decoration: none; }
+a:hover, a:focus { color: var(--accent-strong); text-decoration: underline; }
 nav.crumb { margin-bottom: 1.5rem; font-size: 0.9rem; }
-ul.modules { list-style: none; padding: 0; }
-ul.modules li { margin: 0.3rem 0; }
-section.entry { border-top: 1px solid #8883; padding-top: 0.5rem; margin-top: 1.5rem; }
-section.entry h3 { margin: 0 0 0.3rem; font-size: 1.05rem; }
+input.filter {
+  width: 100%; box-sizing: border-box; margin: 0.5rem 0 1.5rem;
+  padding: 0.5rem 0.7rem; font-size: 1rem;
+  background: var(--surface); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 6px;
+}
+input.filter:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+section.group { margin-top: 1.5rem; }
+ul.modules {
+  list-style: none; padding: 0; margin: 0.5rem 0 0;
+  columns: 3 14rem; column-gap: 2rem;
+}
+ul.modules li { margin: 0.3rem 0; break-inside: avoid; }
+section.entry { border-top: 1px solid var(--border); padding-top: 0.5rem; margin-top: 1.5rem; }
+section.entry h3 { margin: 0 0 0.3rem; font-size: 1.05rem; color: var(--accent); }
 code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-pre.sig { background: #8881; padding: 0.4rem 0.6rem; border-radius: 4px; overflow-x: auto; }
-p.comment { margin: 0.4rem 0 0; }
+pre.sig {
+  background: var(--surface); padding: 0.4rem 0.6rem;
+  border-radius: 4px; overflow-x: auto; border: 1px solid var(--border);
+}
+p.comment { margin: 0.4rem 0 0; color: var(--muted); }
+@media (max-width: 40rem) { ul.modules { columns: 1; } }
+";
+
+/// The inline filter script bundled into the index page. It hides any module
+/// list item whose lowercased `data-name` does not contain the (lowercased)
+/// query, and collapses a section that ends up with no visible module. No
+/// external dependency — a single `input` listener over the static list.
+const FILTER_SCRIPT: &str = "\
+<script>
+(function () {
+  var box = document.getElementById('filter');
+  if (!box) return;
+  var items = Array.prototype.slice.call(document.querySelectorAll('li.module'));
+  var groups = Array.prototype.slice.call(document.querySelectorAll('section.group'));
+  box.addEventListener('input', function () {
+    var q = box.value.trim().toLowerCase();
+    items.forEach(function (li) {
+      var name = li.getAttribute('data-name') || '';
+      li.hidden = q !== '' && name.indexOf(q) === -1;
+    });
+    groups.forEach(function (sec) {
+      var any = sec.querySelectorAll('li.module:not([hidden])').length > 0;
+      sec.hidden = !any;
+    });
+  });
+})();
+</script>
 ";
 
 /// Escape the five characters an HTML text/attribute context requires, so a type
@@ -1654,19 +1764,46 @@ fn html_page(title: &str, body: &str) -> String {
     )
 }
 
-/// Render the index page — the package's module list, each linking to its page.
+/// Render the index page — the package's module list, project modules first
+/// under their labelled section, then the standard library, with a client-side
+/// filter box that hides non-matching entries as the reader types.
 fn render_html_index(docs: &DocsJson) -> String {
-    let mut body = String::from("<h1>API documentation</h1>\n<ul class=\"modules\">\n");
-    for module in &docs.modules {
+    let mut body = String::from("<h1>API documentation</h1>\n");
+    body.push_str(
+        "<input type=\"search\" id=\"filter\" class=\"filter\" \
+         placeholder=\"Filter modules\u{2026}\" aria-label=\"Filter modules\" \
+         autocomplete=\"off\">\n",
+    );
+
+    render_html_module_section(&mut body, docs, ModuleKind::Local, LABEL_PROJECT);
+    render_html_module_section(&mut body, docs, ModuleKind::Stdlib, LABEL_STDLIB);
+
+    body.push_str(FILTER_SCRIPT);
+    html_page("API documentation", &body)
+}
+
+/// Append one labelled module section (all modules of `kind`, already in name
+/// order) to the index body. A section with no modules is omitted.
+fn render_html_module_section(body: &mut String, docs: &DocsJson, kind: ModuleKind, label: &str) {
+    let group: Vec<&ModuleDoc> = docs.modules.iter().filter(|m| m.kind == kind).collect();
+    if group.is_empty() {
+        return;
+    }
+    let _ = writeln!(
+        body,
+        "<section class=\"group\"><h2>{}</h2>\n<ul class=\"modules\">",
+        html_escape(label)
+    );
+    for module in group {
         let _ = writeln!(
             body,
-            "<li><a href=\"{}.html\">{}</a></li>",
+            "<li class=\"module\" data-name=\"{}\"><a href=\"{}.html\">{}</a></li>",
+            html_escape(&module.name.to_lowercase()),
             html_escape(&module_stem(&module.name)),
             html_escape(&module.name)
         );
     }
-    body.push_str("</ul>\n");
-    html_page("API documentation", &body)
+    body.push_str("</ul></section>\n");
 }
 
 /// Render one module's page — its doc-comment, its exposed types and values,
@@ -2134,6 +2271,7 @@ mod tests {
     fn color_module() -> ModuleDoc {
         ModuleDoc {
             name: "M".to_owned(),
+            kind: ModuleKind::Local,
             comment: "A module.".to_owned(),
             unions: vec![UnionDoc {
                 name: "Color".to_owned(),
@@ -2238,6 +2376,20 @@ mod tests {
             idx.contains("href=\"M.html\">M</a>"),
             "lists the module: {idx}"
         );
+        // The filter box and its no-dependency inline script are present.
+        assert!(
+            idx.contains("<input type=\"search\" id=\"filter\""),
+            "the index carries a search box: {idx}"
+        );
+        assert!(
+            idx.contains("addEventListener('input'"),
+            "the inline filter script is bundled: {idx}"
+        );
+        // A local module lands under the project-modules section label.
+        assert!(
+            idx.contains(LABEL_PROJECT),
+            "the project section label is present: {idx}"
+        );
 
         let page = render_html_module(&module, &index);
         assert!(
@@ -2252,6 +2404,82 @@ mod tests {
             page.contains("<a href=\"M.html#Color\">M.Color</a>"),
             "the in-package type links: {page}"
         );
+    }
+
+    /// A minimal stdlib-kind module for ordering/labelling tests.
+    fn stdlib_module(name: &str) -> ModuleDoc {
+        ModuleDoc {
+            name: name.to_owned(),
+            kind: ModuleKind::Stdlib,
+            comment: String::new(),
+            unions: Vec::new(),
+            values: Vec::new(),
+        }
+    }
+
+    /// A minimal local-kind module for ordering/labelling tests.
+    fn local_module(name: &str) -> ModuleDoc {
+        ModuleDoc {
+            name: name.to_owned(),
+            kind: ModuleKind::Local,
+            comment: String::new(),
+            unions: Vec::new(),
+            values: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn html_index_groups_local_before_stdlib_with_section_labels() {
+        // Feed both kinds; the model is already local-first (build_docs order).
+        let docs = DocsJson {
+            version: DOCS_JSON_VERSION,
+            modules: vec![local_module("App"), stdlib_module("Ipe.List")],
+        };
+        let idx = render_html_index(&docs);
+
+        // Both section labels render.
+        assert!(idx.contains(LABEL_PROJECT), "project label: {idx}");
+        assert!(idx.contains(LABEL_STDLIB), "stdlib label: {idx}");
+        // The project section precedes the standard-library section.
+        let p = idx.find(LABEL_PROJECT).expect("project label present");
+        let s = idx.find(LABEL_STDLIB).expect("stdlib label present");
+        assert!(p < s, "project section comes first: {idx}");
+    }
+
+    #[test]
+    fn html_style_is_soft_dark_with_accent_and_multicolumn_module_list() {
+        // The accent custom property is defined once in :root.
+        assert!(STYLE_CSS.contains("--accent:"), "accent var: {STYLE_CSS}");
+        // The module index lays out in responsive multi-column form.
+        assert!(
+            STYLE_CSS.contains("columns:"),
+            "multi-column module list: {STYLE_CSS}"
+        );
+        // A soft dark background, not pure black.
+        assert!(
+            STYLE_CSS.contains("--bg:") && !STYLE_CSS.contains("--bg: #000"),
+            "soft (non-pure-black) background: {STYLE_CSS}"
+        );
+        // It collapses to one column on a narrow viewport.
+        assert!(
+            STYLE_CSS.contains("columns: 1"),
+            "collapses to one column when narrow: {STYLE_CSS}"
+        );
+    }
+
+    #[test]
+    fn json_records_the_module_kind() {
+        let docs = DocsJson {
+            version: DOCS_JSON_VERSION,
+            modules: vec![local_module("App"), stdlib_module("Ipe.List")],
+        };
+        let json = render_json(&docs);
+        assert!(json.contains("\"kind\": \"local\""), "{json}");
+        assert!(json.contains("\"kind\": \"stdlib\""), "{json}");
+        // Local precedes stdlib in the serialized order.
+        let l = json.find("\"kind\": \"local\"").expect("local kind");
+        let s = json.find("\"kind\": \"stdlib\"").expect("stdlib kind");
+        assert!(l < s, "the model is serialized local-first: {json}");
     }
 
     #[test]
