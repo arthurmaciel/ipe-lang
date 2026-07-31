@@ -56,12 +56,12 @@ fn define_enum_emits_a_definition_and_unit_constructors() {
     assert!(msg.contains("    Decrement,"), "{msg}");
     // One constructor per variant, `<ctor>_<snake(variant)>`.
     assert!(
-        msg.contains("pub fn demo_msg_increment() -> Message {"),
+        msg.contains("pub fn demo_msg_increment(_: ()) -> Message {"),
         "{msg}"
     );
     assert!(msg.contains("Message::Increment"), "{msg}");
     assert!(
-        msg.contains("pub fn demo_msg_decrement() -> Message {"),
+        msg.contains("pub fn demo_msg_decrement(_: ()) -> Message {"),
         "{msg}"
     );
 }
@@ -175,8 +175,8 @@ fn apply(m: &Message, acc: i64) -> i64 {{
 {msg}
 
 fn main() {{
-    let inc = demo_msg_increment();
-    let dec = demo_msg_decrement();
+    let inc = demo_msg_increment(());
+    let dec = demo_msg_decrement(());
     let set = demo_msg_set_value(40);
     // The derived `Clone` resolves; each variant constructs; the match folds.
     let inc2 = inc.clone();

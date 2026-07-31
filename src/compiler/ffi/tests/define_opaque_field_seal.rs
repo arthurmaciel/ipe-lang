@@ -378,7 +378,7 @@ fn main() {{
     // The opaque field: a Model holds a Counter (a nominal defined in the same
     // crate), built through the emitted constructors.
     let m0: Model = ffi::demo_model_new(ffi::demo_counter_new(10), 0);
-    let m1 = crate_update(m0.clone(), ffi::demo_message_increment());
+    let m1 = crate_update(m0.clone(), ffi::demo_message_increment(()));
     // The opaque payload: a Message variant CARRIES a Counter.
     let m2 = crate_update(m1, ffi::demo_message_set_counter(ffi::demo_counter_new(99)));
     assert_eq!(m0.counter.value, 10, "opaque field round-trips");

@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-use crate::carrier::ScalarCarrier;
+use crate::carrier::{Carrier, EnumDef, ScalarCarrier, StructDef};
 use crate::naming::{IdentPath, RustIdent};
 
 // ── wire layer ──────────────────────────────────────────────────────────────
@@ -475,6 +475,16 @@ fn classify_one(w: &WireForeignType) -> Result<TransparentType, String> {
     }
     let rust_path = IdentPath::parse(&w.rust_path)
         .map_err(|_| format!("Rust path {:?} is not a legal identifier path", w.rust_path))?;
+    // A bare (single-segment) Rust path is reserved for define-defined types,
+    // whose crate-local module path resolves downstream where the cache slug
+    // is known. An inspected crate type always carries its crate qualifier, so
+    // a bare import path is a malformed report, not a resolvable type.
+    if !rust_path.as_str().contains("::") {
+        return Err(format!(
+            "Rust path `{}` has no crate qualifier",
+            rust_path.as_str()
+        ));
+    }
     match w.kind.as_str() {
         "struct" => {
             if !w.variants.is_empty() {
@@ -530,6 +540,154 @@ fn classify_one(w: &WireForeignType) -> Result<TransparentType, String> {
         }
         other => Err(format!("unknown type kind {other:?}")),
     }
+}
+
+// ── define-defined types (the write side of the representation axis) ────────
+//
+// A `[[rust.define.struct/enum]]` type whose every member is an identity
+// carrier is definitionally transparent: Ipê authored the shape, so the same
+// record/union surface and conversion glue that serve a transparent IMPORT
+// serve it too. The classification below applies the SAME member gates the
+// import path uses; anything less than full qualification keeps the sound
+// opaque-nominal default, with the reason recorded for the coverage ledger.
+//
+// A define-defined type lives at `crate::ffi::<slug>::<Name>` in the emitted
+// app crate; the slug is unknown at this layer, so the recorded `rust_path`
+// is the BARE nominal — the established define convention — and the glue
+// assembler resolves it crate-locally where the slug is known. The import
+// classification refuses bare paths, so the two provenances cannot blur.
+
+/// The identity [`ScalarCarrier`] for a define member, or the refusal reason.
+///
+/// `Bytes` and opaque handles are outside the identity set the record/union
+/// conversion glue moves field-for-field, so they disqualify transparency
+/// (the member is still a legal OPAQUE define carrier).
+fn identity_scalar(context: &str, c: &Carrier) -> Result<ScalarCarrier, String> {
+    match c {
+        Carrier::Int => Ok(ScalarCarrier::Int),
+        Carrier::Float => Ok(ScalarCarrier::Float),
+        Carrier::Bool => Ok(ScalarCarrier::Bool),
+        Carrier::Char => Ok(ScalarCarrier::Char),
+        Carrier::Str => Ok(ScalarCarrier::Str),
+        Carrier::Bytes | Carrier::Opaque(_) => Err(format!(
+            "{context} type `{}` is outside the identity carrier set",
+            c.ipe_surface()
+        )),
+    }
+}
+
+/// Validate a define type's own nominal for the transparent surface.
+fn define_nominal(name: &RustIdent) -> Result<(), String> {
+    if !name.as_str().starts_with(|c: char| c.is_ascii_uppercase()) {
+        return Err(format!("type name `{name}` is not capitalized"));
+    }
+    if name.as_str() == "Self" {
+        return Err("type name `Self` is reserved".to_owned());
+    }
+    if crate::naming::IPE_BUILTIN_HEADS.contains(&name.as_str()) {
+        return Err(format!("type name `{name}` shadows an Ipê builtin type"));
+    }
+    Ok(())
+}
+
+/// Classify one `define.struct` for the transparent record surface:
+/// transparent when every fact affirmatively qualifies, else the reason it
+/// stays an opaque nominal.
+///
+/// # Errors
+///
+/// A message naming the first disqualifying fact.
+pub fn classify_define_struct(def: &StructDef) -> Result<TransparentType, String> {
+    define_nominal(&def.name)?;
+    if def.fields.is_empty() {
+        // An empty record surfaces nothing the opaque handle does not.
+        return Err("has no fields".to_owned());
+    }
+    let mut fields = Vec::with_capacity(def.fields.len());
+    for (fname, carrier) in &def.fields {
+        if !fname.as_str().starts_with(|c: char| c.is_ascii_lowercase()) {
+            return Err(format!(
+                "field `{fname}` is not lowercase-led (required of an Ipê record field)"
+            ));
+        }
+        if RESERVED_MEMBER_NAMES.contains(&fname.as_str()) {
+            return Err(format!("field `{fname}` is a reserved keyword"));
+        }
+        let carrier = identity_scalar(&format!("field `{fname}`"), carrier)?;
+        fields.push(ForeignMember {
+            name: fname.clone(),
+            carrier,
+        });
+    }
+    let rust_path = IdentPath::parse(def.name.as_str())
+        .map_err(|_| format!("nominal `{}` is not a legal path", def.name))?;
+    Ok(TransparentType::Struct {
+        name: def.name.clone(),
+        rust_path,
+        fields,
+    })
+}
+
+/// Classify one `define.enum` for the transparent closed-union surface:
+/// transparent when every fact affirmatively qualifies, else the reason it
+/// stays an opaque nominal.
+///
+/// # Errors
+///
+/// A message naming the first disqualifying fact.
+pub fn classify_define_enum(def: &EnumDef) -> Result<TransparentType, String> {
+    define_nominal(&def.name)?;
+    let mut variants = Vec::with_capacity(def.variants.len());
+    for v in &def.variants {
+        if !v
+            .name
+            .as_str()
+            .starts_with(|c: char| c.is_ascii_uppercase())
+        {
+            return Err(format!(
+                "variant `{}` is not capitalized (required of an Ipê union constructor)",
+                v.name
+            ));
+        }
+        if v.name.as_str() == "Self" {
+            return Err("variant name `Self` is reserved".to_owned());
+        }
+        let payload = if v.payload.is_empty() {
+            ForeignVariantPayload::Unit
+        } else {
+            let mut carriers = Vec::with_capacity(v.payload.len());
+            for (i, c) in v.payload.iter().enumerate() {
+                carriers.push(identity_scalar(
+                    &format!("variant `{}` slot {i}", v.name),
+                    c,
+                )?);
+            }
+            ForeignVariantPayload::Tuple(carriers)
+        };
+        variants.push(ForeignVariant {
+            name: v.name.clone(),
+            payload,
+        });
+    }
+    // A sole unit variant named like its type spells the opaque-handle
+    // placeholder declaration (`type N = N`) — the same ambiguity the import
+    // classification refuses, refused here for the same reason.
+    if let [only] = variants.as_slice()
+        && only.payload == ForeignVariantPayload::Unit
+        && only.name.as_str() == def.name.as_str()
+    {
+        return Err(format!(
+            "sole unit variant `{}` spells the opaque-handle placeholder declaration",
+            only.name
+        ));
+    }
+    let rust_path = IdentPath::parse(def.name.as_str())
+        .map_err(|_| format!("nominal `{}` is not a legal path", def.name))?;
+    Ok(TransparentType::Enum {
+        name: def.name.clone(),
+        rust_path,
+        variants,
+    })
 }
 
 #[cfg(test)]
@@ -714,6 +872,140 @@ mod tests {
         ]));
         let catalog = ForeignTypeCatalog::classify(&wire);
         assert!(catalog.transparent().contains_key("Mode"));
+    }
+
+    #[test]
+    fn bare_import_paths_stay_opaque() {
+        // A single-segment Rust path is reserved for define-defined types; an
+        // inspected report carrying one is malformed and must stay opaque.
+        let wire = decode_types(&serde_json::json!([
+            {"name": "Point", "rustPath": "Point", "kind": "struct",
+             "fields": [{"name": "x", "type": "Int", "rustType": "i64"}]}
+        ]));
+        let catalog = ForeignTypeCatalog::classify(&wire);
+        assert!(catalog.transparent().is_empty());
+        assert!(
+            catalog
+                .opaque_reasons()
+                .iter()
+                .any(|r| r.reason.contains("no crate qualifier")),
+            "{:?}",
+            catalog.opaque_reasons()
+        );
+    }
+
+    #[test]
+    fn qualifying_define_struct_and_enum_classify_transparent() {
+        let s = StructDef::parse(
+            "Counter",
+            &[
+                ("value".to_owned(), "i64".to_owned()),
+                ("label".to_owned(), "String".to_owned()),
+            ],
+            &["Clone".to_owned()],
+        )
+        .expect("parses");
+        let t = classify_define_struct(&s).expect("transparent");
+        let TransparentType::Struct {
+            rust_path, fields, ..
+        } = &t
+        else {
+            panic!("Counter must classify as a transparent struct");
+        };
+        assert_eq!(rust_path.as_str(), "Counter", "bare define nominal");
+        assert_eq!(
+            fields
+                .iter()
+                .map(|f| (f.name.as_str(), f.carrier))
+                .collect::<Vec<_>>(),
+            vec![("value", ScalarCarrier::Int), ("label", ScalarCarrier::Str)]
+        );
+
+        let e = EnumDef::parse(
+            "Message",
+            &[
+                ("Increment".to_owned(), vec![]),
+                ("SetValue".to_owned(), vec!["i64".to_owned()]),
+            ],
+            &[],
+        )
+        .expect("parses");
+        let t = classify_define_enum(&e).expect("transparent");
+        let TransparentType::Enum { variants, .. } = &t else {
+            panic!("Message must classify as a transparent enum");
+        };
+        assert_eq!(
+            variants.iter().map(|v| v.name.as_str()).collect::<Vec<_>>(),
+            vec!["Increment", "SetValue"]
+        );
+        assert_eq!(
+            variants.first().map(|v| &v.payload),
+            Some(&ForeignVariantPayload::Unit)
+        );
+        assert_eq!(
+            variants.get(1).map(|v| &v.payload),
+            Some(&ForeignVariantPayload::Tuple(vec![ScalarCarrier::Int]))
+        );
+    }
+
+    #[test]
+    fn disqualified_define_shapes_keep_the_opaque_default() {
+        // Bytes is a legal define carrier but outside the identity set.
+        let bytes = StructDef::parse("Blob", &[("data".to_owned(), "Bytes".to_owned())], &[])
+            .expect("parses");
+        assert!(
+            classify_define_struct(&bytes).is_err(),
+            "Bytes member must disqualify"
+        );
+        // An opaque handle field.
+        let opaque = StructDef::parse("Wrap", &[("inner".to_owned(), "Widget".to_owned())], &[])
+            .expect("parses");
+        assert!(
+            classify_define_struct(&opaque).is_err(),
+            "opaque member must disqualify"
+        );
+        // A fieldless struct surfaces nothing the handle does not.
+        let empty = StructDef::parse("Unit", &[], &[]).expect("parses");
+        assert!(classify_define_struct(&empty).is_err());
+        // A keyword field cannot be an Ipê record field.
+        let keyword =
+            StructDef::parse("Kw", &[("case".to_owned(), "i64".to_owned())], &[]).expect("parses");
+        assert!(classify_define_struct(&keyword).is_err());
+        // The placeholder-shaped enum spells the opaque-handle declaration.
+        let placeholder =
+            EnumDef::parse("Marker", &[("Marker".to_owned(), vec![])], &[]).expect("parses");
+        assert!(classify_define_enum(&placeholder).is_err());
+        // A builtin shadow.
+        let shadow = EnumDef::parse("Result", &[("Ok".to_owned(), vec![])], &[]).expect("parses");
+        assert!(classify_define_enum(&shadow).is_err());
+        // A reserved `Self` variant cannot render as a Rust constructor path.
+        let selfish = EnumDef::parse("Mode", &[("Self".to_owned(), vec![])], &[]).expect("parses");
+        assert!(classify_define_enum(&selfish).is_err());
+        // A Bytes payload disqualifies the enum.
+        let bytes_payload = EnumDef::parse(
+            "Packet",
+            &[("Data".to_owned(), vec!["Bytes".to_owned()])],
+            &[],
+        )
+        .expect("parses");
+        assert!(classify_define_enum(&bytes_payload).is_err());
+    }
+
+    #[test]
+    fn define_classification_round_trips_through_the_projection_decoder() {
+        let e = EnumDef::parse(
+            "Message",
+            &[
+                ("Increment".to_owned(), vec![]),
+                ("SetValue".to_owned(), vec!["i64".to_owned()]),
+            ],
+            &[],
+        )
+        .expect("parses");
+        let original = classify_define_enum(&e).expect("transparent");
+        let wire = crate::emit::transparent_type_json(&original);
+        let decoded = TransparentType::from_projection_json(&wire).expect("round-trips");
+        assert_eq!(decoded, original);
     }
 
     #[test]

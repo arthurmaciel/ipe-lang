@@ -3,10 +3,11 @@
 //! The earlier `define_struct_seal` / `define_enum_seal` fixtures prove the
 //! emitted `_bindings.rs` DEFINITION + constructors compile. This fixture proves
 //! the next link: the FFI interface admits those constructors as Ipê-callable
-//! FORWARDERS (an opaque nominal `type Counter` + a `counter_new` binding), and
-//! the emitted app-crate — the `src/ffi.rs` module tree the backend assembles —
-//! resolves the define type at its crate-absolute path `crate::ffi::<slug>::<T>`
-//! and CALLS every forwarder.
+//! FORWARDERS (an all-identity-carrier define surfaces transparently — a record
+//! alias / closed union with result-conversion glue — beside its `counter_new`
+//! binding), and the emitted app-crate — the `src/ffi.rs` module tree the
+//! backend assembles — resolves the define type at its crate-absolute path
+//! `crate::ffi::<slug>::<T>` and CALLS every forwarder.
 //!
 //! The keystone invariant is `ipe build ⇒ cargo build`. The interface-admission
 //! assertions run in the DEFAULT gate; the cargo build+run proof of the
@@ -47,38 +48,54 @@ fn counter_pkg() -> PkgInfo {
     PkgInfo::decode_json(&doc).expect("define surface decodes")
 }
 
-/// The interface admits an opaque nominal per define type and a forwarder per
-/// constructor, with arity + signature taken from the def (never the empty fn
-/// params). Default gate — no cargo.
+/// The interface surfaces each all-identity-carrier define type transparently
+/// (a record alias / closed union) and admits a forwarder per constructor,
+/// with arity + signature taken from the def (never the empty fn params) and
+/// the result conversion marked for the seam glue. Default gate — no cargo.
 #[test]
 fn forwarders_and_nominals_are_admitted() {
     let iface = crate_interface(&counter_pkg());
     assert!(
-        iface.define_types.contains("Counter"),
+        iface.transparent_types.contains_key("Counter"),
         "{:?}",
         iface.skipped
     );
     assert!(
-        iface.define_types.contains("Message"),
+        iface.transparent_types.contains_key("Message"),
         "{:?}",
         iface.skipped
     );
+    assert!(iface.define_types.is_empty(), "{:?}", iface.define_types);
 
     let by = |n: &str| iface.bindings.iter().find(|b| b.ref_name == n);
     let cn = by("counter_new").expect("counter_new forwarder");
     assert_eq!((cn.arity, cn.sig.as_str()), (1, "Int -> Counter"));
     let inc = by("message_new_increment").expect("unit-variant forwarder");
-    assert_eq!((inc.arity, inc.sig.as_str()), (0, "() -> Message"));
+    assert_eq!((inc.arity, inc.sig.as_str()), (1, "() -> Message"));
     let sv = by("message_new_set_value").expect("payload-variant forwarder");
     assert_eq!((sv.arity, sv.sig.as_str()), (1, "Int -> Message"));
+    for b in [cn, inc, sv] {
+        assert!(
+            b.transparent_result.is_some(),
+            "constructor `{}` must convert its foreign result through the glue",
+            b.ref_name
+        );
+    }
 
-    // The module renders both nominals and the (nullary + arity-1) forwarders.
+    // The module renders both transparent shapes and the (nullary + arity-1)
+    // forwarders.
     let src = &iface.source;
-    assert!(src.contains("\ntype Counter = Counter\n"), "{src}");
-    assert!(src.contains("\ntype Message = Message\n"), "{src}");
+    assert!(
+        src.contains("\ntype alias Counter = { value : Int }\n"),
+        "{src}"
+    );
+    assert!(
+        src.contains("\ntype Message = Increment | SetValue Int\n"),
+        "{src}"
+    );
     assert!(
         src.contains(
-            "\nmessage_new_increment : () -> Message\nmessage_new_increment =\n    Ffi.binding \"demo_message_new_increment\"\n"
+            "\nmessage_new_increment : () -> Message\nmessage_new_increment arg0 =\n    Ffi.binding \"demo_message_new_increment\" arg0\n"
         ),
         "{src}"
     );
@@ -122,7 +139,7 @@ fn apply(m: &crate::ffi::{slug}::Message, c: crate::ffi::{slug}::Counter) -> cra
 
 fn main() {{
     let c0: crate::ffi::{slug}::Counter = crate::ffi::demo_counter_new(0);
-    let inc = crate::ffi::demo_message_new_increment();
+    let inc = crate::ffi::demo_message_new_increment(());
     let set = crate::ffi::demo_message_new_set_value(40);
     let c1 = apply(&inc, c0.clone());
     let c2 = apply(&inc, c1);
