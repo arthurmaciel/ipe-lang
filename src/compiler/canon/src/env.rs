@@ -1155,6 +1155,7 @@ impl Env {
                     "post",
                     "request",
                     "defaultRequest",
+                    "defaultRequestFromString",
                     "withMethod",
                     "withHeader",
                     "withTimeout",

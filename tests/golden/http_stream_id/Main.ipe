@@ -23,9 +23,11 @@ handleOpen res =
 
 
 main =
-    let
-        req = Http.defaultRequest "http://localhost:1"
-    in
-    HttpStream.open req
-        |> Task.andThen (\_ -> Io.println "opened")
-        |> Task.onError (\_ -> Io.println "failed")
+    case Http.defaultRequestFromString "http://localhost:1" of
+        Ok req ->
+            HttpStream.open req
+                |> Task.andThen (\_ -> Io.println "opened")
+                |> Task.onError (\_ -> Io.println "failed")
+
+        Err _ ->
+            Io.println "failed"

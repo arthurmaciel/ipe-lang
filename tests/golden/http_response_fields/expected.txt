@@ -1,4 +1,4 @@
-http://example.com
+http://example.com/
 200
 ok
 1

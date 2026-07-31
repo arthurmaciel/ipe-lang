@@ -1,8 +1,10 @@
 module Main exposing (main)
 
 -- Exercises the real Http.* kernel surface:
--- * Http.defaultRequest proves the HttpRequest fieldset synthesises and the
---   url field is readable.
+-- * Http.defaultRequestFromString is the MARKED parse-at-the-boundary helper:
+--   it parses the raw string into a typed Url and narrows the scheme to
+--   http/https, returning a Result. The HttpRequest fieldset synthesises and
+--   the url field is readable off the Ok branch.
 -- * A local HttpResponse record literal (same {body, headers, status} shape
 --   the task_map targets) proves field access compiles for the response side.
 import Ipe.Http as Http
@@ -14,7 +16,13 @@ import Ipe.String
 
 main =
     let
-        req = Http.defaultRequest "http://example.com"
+        reqUrl =
+            case Http.defaultRequestFromString "http://example.com" of
+                Ok req ->
+                    req.url
+
+                Err _ ->
+                    "blocked"
 
         resp =
             { status = 200
@@ -26,7 +34,7 @@ main =
     in
     Io.println
         (String.join "\n"
-            [ req.url
+            [ reqUrl
             , String.fromInt resp.status
             , resp.body
             , headerVal

@@ -13714,13 +13714,15 @@ impl<'a> Lowerer<'a> {
                 // `HttpGet` : String -> Task Error HttpResponse
                 // `HttpRequest` : HttpRequest -> Task Error HttpResponse
                 // `HttpParseQuery` : String -> Dict String String (pure)
-                // `HttpDefaultRequest` : String -> HttpRequest (pure builder)
+                // `HttpDefaultRequest` : Url -> Result Error HttpRequest (pure builder, scheme-narrowed)
+                // `HttpDefaultRequestFromString` : String -> Result Error HttpRequest (pure, marked parse boundary)
                 // `HttpMethodFromString` : String -> Maybe HttpMethod (pure, parse boundary)
                 // `HttpMethodToString` : HttpMethod -> String (pure)
                 | KernelFn::HttpGet
                 | KernelFn::HttpRequest
                 | KernelFn::HttpParseQuery
                 | KernelFn::HttpDefaultRequest
+                | KernelFn::HttpDefaultRequestFromString
                 | KernelFn::HttpMethodFromString
                 | KernelFn::HttpMethodToString
                 // ── Db arity-1 ───────────────────────────────────────
@@ -15691,6 +15693,9 @@ impl<'a> Lowerer<'a> {
                     ("Http", "request") => Ok(Callee::Kernel(KernelFn::HttpRequest)),
                     ("Http", "parseQuery") => Ok(Callee::Kernel(KernelFn::HttpParseQuery)),
                     ("Http", "defaultRequest") => Ok(Callee::Kernel(KernelFn::HttpDefaultRequest)),
+                    ("Http", "defaultRequestFromString") => {
+                        Ok(Callee::Kernel(KernelFn::HttpDefaultRequestFromString))
+                    }
                     ("Http", "withMethod") => Ok(Callee::Kernel(KernelFn::HttpWithMethod)),
                     ("Http", "withTimeout") => Ok(Callee::Kernel(KernelFn::HttpWithTimeout)),
                     ("Http", "withBody") => Ok(Callee::Kernel(KernelFn::HttpWithBody)),
