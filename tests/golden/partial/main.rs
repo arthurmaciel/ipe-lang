@@ -247,7 +247,7 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 pub fn main_add(a: i64, b: i64) -> i64 {
     (a + b)
 }
-pub fn main_apply_twice(f: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static>, x: i64) -> i64 {
+pub fn main_apply_twice<FN0: Fn(i64) -> i64 + Send + Sync + 'static>(f: FN0, x: i64) -> i64 {
     (f)((f)(x))
 }
 pub fn main_over(a: i64) -> Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> {
@@ -270,11 +270,7 @@ pub fn ipe_main() -> IpeTask<()> {
                 let o = (crate::main_over(1))(2);
                 ({
                     let h = crate::main_apply_twice(
-                        {
-                            let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
-                                Box::new(move |eta_0: i64| -> i64 { crate::main_add(1, eta_0) });
-                            __ipe_fn
-                        },
+                        move |eta_0: i64| -> i64 { crate::main_add(1, eta_0) },
                         5,
                     );
                     io_println(string_from_int(((p + o) + h)))

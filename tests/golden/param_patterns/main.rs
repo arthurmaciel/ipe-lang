@@ -259,19 +259,19 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
     ipe_runtime::http_client::http_parse_query(raw)
 }
 
-pub fn main_apply_i(f: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static>, x: i64) -> i64 {
+pub fn main_apply_i<FN0: Fn(i64) -> i64 + Send + Sync + 'static>(f: FN0, x: i64) -> i64 {
     (f)(x)
 }
-pub fn main_apply_p(
-    f: Box<dyn Fn((i64, i64)) -> i64 + Send + Sync + 'static>,
+pub fn main_apply_p<FN0: Fn((i64, i64)) -> i64 + Send + Sync + 'static>(
+    f: FN0,
     p: (i64, i64),
 ) -> i64 {
     (f)(p)
 }
-pub fn main_apply_r(f: Box<dyn Fn(RecXY) -> i64 + Send + Sync + 'static>, r: RecXY) -> i64 {
+pub fn main_apply_r<FN0: Fn(RecXY) -> i64 + Send + Sync + 'static>(f: FN0, r: RecXY) -> i64 {
     (f)(r)
 }
-pub fn main_apply_m(f: Box<dyn Fn(i64, i64, (i64, i64)) -> i64 + Send + Sync + 'static>) -> i64 {
+pub fn main_apply_m<FN0: Fn(i64, i64, (i64, i64)) -> i64 + Send + Sync + 'static>(f: FN0) -> i64 {
     (f)(100, 3, (4, 5))
 }
 pub fn main_ignore_arg(arg_0: i64) -> i64 {
@@ -314,47 +314,32 @@ pub fn main_countdown(arg_4: (i64, i64)) -> i64 {
 }
 pub fn ipe_main() -> IpeTask<()> {
     io_println(string_from_int(
-        ((((((((crate::main_apply_i(
-            {
-                let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
-                    Box::new(move |arg_5: i64| -> i64 { 42 });
-                __ipe_fn
-            },
-            0,
-        ) + crate::main_apply_p(
-            {
-                let __ipe_fn: Box<dyn Fn((i64, i64)) -> i64 + Send + Sync + 'static> =
-                    Box::new(move |arg_6: (i64, i64)| -> i64 {
-                        ({
-                            let (a, b) = arg_6;
-                            (a + b)
-                        })
-                    });
-                __ipe_fn
-            },
-            (1, 2),
-        )) + crate::main_apply_r(
-            {
-                let __ipe_fn: Box<dyn Fn(RecXY) -> i64 + Send + Sync + 'static> =
-                    Box::new(move |arg_7: RecXY| -> i64 {
-                        ({
-                            let RecXY { x, y: _, .. } = arg_7;
-                            x
-                        })
-                    });
-                __ipe_fn
-            },
-            RecXY { x: 10, y: 5 },
-        )) + crate::main_apply_m({
-            let __ipe_fn: Box<dyn Fn(i64, i64, (i64, i64)) -> i64 + Send + Sync + 'static> =
-                Box::new(move |arg_8: i64, x: i64, arg_9: (i64, i64)| -> i64 {
+        ((((((((crate::main_apply_i(move |arg_5: i64| -> i64 { 42 }, 0)
+            + crate::main_apply_p(
+                move |arg_6: (i64, i64)| -> i64 {
                     ({
-                        let (a, b) = arg_9;
-                        ((x + a) + b)
+                        let (a, b) = arg_6;
+                        (a + b)
                     })
-                });
-            __ipe_fn
-        })) + crate::main_ignore_arg(99))
+                },
+                (1, 2),
+            ))
+            + crate::main_apply_r(
+                move |arg_7: RecXY| -> i64 {
+                    ({
+                        let RecXY { x, y: _, .. } = arg_7;
+                        x
+                    })
+                },
+                RecXY { x: 10, y: 5 },
+            ))
+            + crate::main_apply_m(move |arg_8: i64, x: i64, arg_9: (i64, i64)| -> i64 {
+                ({
+                    let (a, b) = arg_9;
+                    ((x + a) + b)
+                })
+            }))
+            + crate::main_ignore_arg(99))
             + crate::main_sum_pair((4, 5)))
             + crate::main_get_y(RecXY { x: 1, y: 8 }))
             + crate::main_first_of_alias((6, 7)))

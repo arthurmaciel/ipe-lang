@@ -244,7 +244,7 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
     ipe_runtime::http_client::http_parse_query(raw)
 }
 
-pub fn main_apply_twice(f: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static>, x: i64) -> i64 {
+pub fn main_apply_twice<FN0: Fn(i64) -> i64 + Send + Sync + 'static>(f: FN0, x: i64) -> i64 {
     (f)((f)(x))
 }
 pub fn main_inc(n: i64) -> i64 {
@@ -258,14 +258,7 @@ pub fn main_make_inc(base: i64) -> Box<dyn Fn(i64) -> i64 + Send + Sync + 'stati
 }
 pub fn ipe_main() -> IpeTask<()> {
     ({
-        let a = crate::main_apply_twice(
-            {
-                let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
-                    Box::new(move |n: i64| -> i64 { (n + 3) });
-                __ipe_fn
-            },
-            1,
-        );
+        let a = crate::main_apply_twice(move |n: i64| -> i64 { (n + 3) }, 1);
         ({
             let b = crate::main_apply_twice(
                 {

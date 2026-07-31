@@ -538,6 +538,190 @@ pub fn clone_targets_in_expr(expr: Expr, targets: &std::collections::BTreeSet<Sy
     targets.iter().fold(expr, |e, &t| clone_free_target(e, t))
 }
 
+/// Does `sym` — a function-typed binder — appear anywhere in `body` in a
+/// VALUE position (stored in data, passed as an argument, returned bare,
+/// captured by a closure), as opposed to only ever being the callee of a
+/// direct application `sym x`? A callee-only symbol can carry a monomorphized
+/// generic (`impl Fn`) carrier instead of the erased `Box<dyn Fn>`; any value
+/// use pins it to the concrete boxed type at that position, so the answer
+/// gates the direct-position monomorphization.
+///
+/// Local twin of `ipe_lower::count_fn_value_uses` (`> 0` ⟺ a value use exists),
+/// kept in this crate for the same one-way-IR reason as [`pat_binds_target`].
+/// The traversal is EXHAUSTIVE and fail-closed: the sole exemption is
+/// `sym` in direct-callee position of an [`Expr::Apply`]; every other
+/// occurrence — including inside a nested lambda, a [`Expr::FuncValue`], or any
+/// [`Expr`] variant not special-cased — is a value use, so an unrecognised
+/// shape conservatively reports `true` (keep `Box`).
+fn fn_binder_used_as_value(sym: Symbol, body: &Expr) -> bool {
+    match body {
+        Expr::Var(s) | Expr::CloneVar(s) => *s == sym,
+        // A lambda that references `sym` at all captures it BY VALUE into its
+        // closure environment — a value use. (Even a direct call `sym x` inside
+        // the lambda body first moves `sym` into the environment.)
+        Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
+            expr_refs_symbol(sym, body)
+        }
+        Expr::Let { name, value, body } => {
+            fn_binder_used_as_value(sym, value)
+                || (*name != sym && fn_binder_used_as_value(sym, body))
+        }
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
+            fn_binder_used_as_value(sym, value)
+                || (!pat_binds_target(binder, sym) && fn_binder_used_as_value(sym, body))
+        }
+        Expr::If { cond, then_, else_ } => {
+            fn_binder_used_as_value(sym, cond)
+                || fn_binder_used_as_value(sym, then_)
+                || fn_binder_used_as_value(sym, else_)
+        }
+        Expr::Match(m) => {
+            fn_binder_used_as_value(sym, m.scrutinee())
+                || m.arms().iter().any(|arm| {
+                    !pat_binds_target(&arm.pat, sym) && fn_binder_used_as_value(sym, &arm.body)
+                })
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            fn_binder_used_as_value(sym, lhs) || fn_binder_used_as_value(sym, rhs)
+        }
+        // A direct application `sym arg0 …`: the callee position is the ONE
+        // exemption — `sym` is invoked, not carried. Its arguments are still
+        // scanned (a self-passing `sym sym` is a value use through the arg).
+        Expr::Apply { func, args } => {
+            let callee_is_value = !matches!(func.as_ref(), Expr::Var(s) | Expr::CloneVar(s) if *s == sym)
+                && fn_binder_used_as_value(sym, func);
+            callee_is_value || args.iter().any(|a| fn_binder_used_as_value(sym, a))
+        }
+        Expr::Call { args, .. } | Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
+            args.iter().any(|a| fn_binder_used_as_value(sym, a))
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => {
+            items.iter().any(|e| fn_binder_used_as_value(sym, e))
+        }
+        Expr::Cons { head, tail } => {
+            fn_binder_used_as_value(sym, head) || fn_binder_used_as_value(sym, tail)
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            fn_binder_used_as_value(sym, list)
+        }
+        Expr::Record(fields) | Expr::Update { fields, .. } => {
+            fields.iter().any(|(_, e)| fn_binder_used_as_value(sym, e))
+        }
+        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+            fn_binder_used_as_value(sym, effect) || fn_binder_used_as_value(sym, rest)
+        }
+        Expr::TailLoop { params, body } => {
+            !params.iter().any(|(s, _)| *s == sym) && fn_binder_used_as_value(sym, body)
+        }
+        Expr::Access { record, .. } => fn_binder_used_as_value(sym, record),
+        // Leaves that cannot mention `sym`.
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        // A `FuncValue` names a TOP-LEVEL function / kernel as a value, never a
+        // local binder, so it can never be `sym`.
+        | Expr::FuncValue { .. } => false,
+    }
+}
+
+/// Does `sym` appear ANYWHERE (any position) in `expr`? Used to decide whether a
+/// nested lambda captures the function binder — any capture is a value use.
+fn expr_refs_symbol(sym: Symbol, expr: &Expr) -> bool {
+    match expr {
+        Expr::Var(s) | Expr::CloneVar(s) => *s == sym,
+        Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => expr_refs_symbol(sym, body),
+        Expr::Let { name, value, body } => {
+            expr_refs_symbol(sym, value) || (*name != sym && expr_refs_symbol(sym, body))
+        }
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
+            expr_refs_symbol(sym, value)
+                || (!pat_binds_target(binder, sym) && expr_refs_symbol(sym, body))
+        }
+        Expr::If { cond, then_, else_ } => {
+            expr_refs_symbol(sym, cond)
+                || expr_refs_symbol(sym, then_)
+                || expr_refs_symbol(sym, else_)
+        }
+        Expr::Match(m) => {
+            expr_refs_symbol(sym, m.scrutinee())
+                || m.arms()
+                    .iter()
+                    .any(|arm| !pat_binds_target(&arm.pat, sym) && expr_refs_symbol(sym, &arm.body))
+        }
+        Expr::BinOp { lhs, rhs, .. } => expr_refs_symbol(sym, lhs) || expr_refs_symbol(sym, rhs),
+        Expr::Apply { func, args } => {
+            expr_refs_symbol(sym, func) || args.iter().any(|a| expr_refs_symbol(sym, a))
+        }
+        Expr::Call { args, .. } | Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
+            args.iter().any(|a| expr_refs_symbol(sym, a))
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => {
+            items.iter().any(|e| expr_refs_symbol(sym, e))
+        }
+        Expr::Cons { head, tail } => expr_refs_symbol(sym, head) || expr_refs_symbol(sym, tail),
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            expr_refs_symbol(sym, list)
+        }
+        Expr::Record(fields) | Expr::Update { fields, .. } => {
+            fields.iter().any(|(_, e)| expr_refs_symbol(sym, e))
+        }
+        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+            expr_refs_symbol(sym, effect) || expr_refs_symbol(sym, rest)
+        }
+        Expr::TailLoop { params, body } => {
+            !params.iter().any(|(s, _)| *s == sym) && expr_refs_symbol(sym, body)
+        }
+        Expr::Access { record, .. } => expr_refs_symbol(sym, record),
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::FuncValue { .. } => false,
+    }
+}
+
+/// Is `ty` a plain first-class function type eligible for the direct-position
+/// `impl Fn` carrier? Excludes the runtime-carrier special shapes
+/// ([`render_type`]'s `ServerHandler` / `WsServerCfg` Arc arms, plus
+/// [`IrType::SharedFun`] and [`IrType::FnOnceChain`]), whose rendered types are
+/// NOT `Box<dyn Fn>` and must never be re-carriered here.
+fn is_plain_boxed_fun(ty: &IrType) -> bool {
+    matches!(ty, IrType::Fun(..)) && !wants_arc_ctor(ty)
+}
+
+/// The 0-based indices of `func`'s parameters that monomorphize from
+/// `Box<dyn Fn>` to a fresh generic `impl Fn` carrier: a plain boxed-`Fun`
+/// param ([`is_plain_boxed_fun`]) used ONLY as a direct callee in the body
+/// (never as a value — [`fn_binder_used_as_value`] is `false`). Any escape keeps
+/// the erased `Box` carrier. The result drives BOTH the signature emit
+/// ([`emit_func`]) and the call-site unboxing (`Callee::Func` in the call
+/// emitter), which read it through [`EmitCtx`] so the two halves never drift.
+pub fn impl_fn_param_indices(func: &Func) -> Vec<usize> {
+    func.params
+        .iter()
+        .enumerate()
+        .filter(|(_, (sym, ty))| {
+            is_plain_boxed_fun(ty) && !fn_binder_used_as_value(*sym, &func.body)
+        })
+        .map(|(i, _)| i)
+        .collect()
+}
+
 /// Shadow-aware scan of `expr` for a `let`-bound `target`'s free occurrences,
 /// used to gate [`Expr::Let`]'s multi-use inline decision. Returns
 /// `(var_count, has_clonevar)`:
@@ -6516,8 +6700,29 @@ pub fn emit_expr_at(
                 pin_turbofish
             };
             let mut parts = Vec::with_capacity(args.len());
-            for arg in args {
-                parts.push(emit_expr_at(ctx, arg, indent, child, generics)?);
+            for (i, arg) in args.iter().enumerate() {
+                // A `Fun` param this callee monomorphized to an `impl Fn`
+                // generic accepts the closure UNBOXED, so a lambda-literal
+                // argument skips the `Box::new(..)` wrapper and rustc inlines it
+                // (the direct-position perf win). Any NON-lambda argument (a
+                // `Var` holding a `Box<dyn Fn>`, a named function value, a
+                // partial application) is left as-is: those already produce a
+                // value that itself implements `Fn`, so it fills the generic
+                // slot with no change and no risk.
+                let unboxed = if let Callee::Func(id) = callee
+                    && ctx.call_arg_is_impl_fn(*id, i)
+                    && let Expr::Lambda { params, ret, body }
+                    | Expr::SharedLambda { params, ret, body } = arg
+                {
+                    Some(emit_lambda_unboxed(
+                        ctx, params, ret, body, indent, child, generics,
+                    )?)
+                } else {
+                    None
+                };
+                let rendered =
+                    unboxed.map_or_else(|| emit_expr_at(ctx, arg, indent, child, generics), Ok)?;
+                parts.push(rendered);
             }
             // A handful of Maybe/Result kernels take the container BEFORE the
             // function in the runtime (`ipe_maybe_map(m, f)`) whereas Ipê passes
@@ -8963,13 +9168,23 @@ pub fn emit_func_vis(ctx: &EmitCtx, func: &Func, vis_prefix: &str) -> DResult<St
 
     let ret_is_task = matches!(ret_ty, IrType::Task(_));
 
+    // Direct-position function-value monomorphization: a `Fun` param used only
+    // as a direct callee renders as a fresh generic `FN{i}` (declared with a
+    // `Fn(..) -> R + Send + Sync + 'static` bound in the generic clause) rather
+    // than the erased `Box<dyn Fn>`, so rustc monomorphizes and inlines the
+    // caller's concrete closure with zero heap allocation or vtable dispatch.
+    // The same index set drives the call-site unboxing, so a caller passes the
+    // bare closure into the generic slot.
+    let impl_fn_params = impl_fn_param_indices(func);
+
     let mut params = Vec::with_capacity(func.params.len());
-    for (param, ty) in &func.params {
-        params.push(format!(
-            "{}: {}",
-            ctx.emit_ident(*param)?,
+    for (i, (param, ty)) in func.params.iter().enumerate() {
+        let rendered = if impl_fn_params.contains(&i) {
+            impl_fn_generic_name(i)
+        } else {
             render_type(ctx, ty, generics)?
-        ));
+        };
+        params.push(format!("{}: {rendered}", ctx.emit_ident(*param)?));
     }
     let ret = render_type(ctx, ret_ty, generics)?;
 
@@ -9022,7 +9237,9 @@ pub fn emit_func_vis(ctx: &EmitCtx, func: &Func, vis_prefix: &str) -> DResult<St
     // the IpeRow bound (for a wildcard `any` param flowing into a
     // `Db.get*` accessor) is decided STRUCTURALLY at lowering time and carried
     // in the param's `BoundSet` — the generic clause just renders the BoundSet.
-    let generic_clause = render_fn_generics(func, ret_is_task);
+    // Any direct-position `Fn` params contribute their fresh `FN{i}: Fn(..)`
+    // generics, appended after the ordinary `T{n}` type variables.
+    let generic_clause = render_fn_generics(ctx, func, ret_is_task, &impl_fn_params, generics)?;
 
     // A zero-parameter top-level binding is a CAF (constant applicative form) — a
     // shared VALUE, not a function. Ipê (like Elm) evaluates it once and shares
@@ -9304,12 +9521,18 @@ fn emit_body_native(ctx: &EmitCtx, body_expr: &Expr, generics: GenericScope) -> 
 /// by the lowerer's structural IR walk (`ipe_lower`'s `apply_db_row_bounds` /
 /// `body_calls_db_get_on_param`), so this function simply renders whatever
 /// bounds each param carries.
-fn render_fn_generics(func: &Func, ret_is_task: bool) -> String {
-    if func.type_params.is_empty() {
-        return String::new();
+fn render_fn_generics(
+    ctx: &EmitCtx,
+    func: &Func,
+    ret_is_task: bool,
+    impl_fn_params: &[usize],
+    generics: GenericScope,
+) -> DResult<String> {
+    if func.type_params.is_empty() && impl_fn_params.is_empty() {
+        return Ok(String::new());
     }
 
-    let entries = func
+    let mut entries: Vec<String> = func
         .type_params
         .iter()
         .enumerate()
@@ -9326,12 +9549,14 @@ fn render_fn_generics(func: &Func, ret_is_task: bool) -> String {
             // type variable appears inside a first-class-function-value
             // parameter. A `Fun` / `FnOnceChain` param renders as
             // `Box<dyn Fn(..) -> R + Send + Sync + 'static>` (see
-            // `emit_types::render_type`), which pins EVERY type it mentions to
-            // `'static`; without a `T{n}: 'static` bound the boxed param — or an
-            // `Arc`-wrap of it into a UI/Web event slot (`arc_callback_wrap`) —
-            // is an E0310 (`T{n} may not live long enough`), the deeper layer of
-            // the `26-ui-showcase` seal break (a generic-over-Msg helper taking
-            // an `onEdit : String -> msg` callback and forwarding it into
+            // `emit_types::render_type`) — or, for a direct-call `Fun` param, as
+            // a `FN{i}: Fn(..) -> R + Send + Sync + 'static` generic — both of
+            // which pin EVERY type they mention to `'static`; without a
+            // `T{n}: 'static` bound the param — or an `Arc`-wrap of it into a
+            // UI/Web event slot (`arc_callback_wrap`) — is an E0310
+            // (`T{n} may not live long enough`), the deeper layer of the
+            // `26-ui-showcase` seal break (a generic-over-Msg helper taking an
+            // `onEdit : String -> msg` callback and forwarding it into
             // `input_multiline_`). Same `Send + 'static` treatment as the task
             // path, gated to exactly the vars that need it so pure
             // record/ADT-returning callers stay unconstrained.
@@ -9351,9 +9576,42 @@ fn render_fn_generics(func: &Func, ret_is_task: bool) -> String {
                 }
             }
         })
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("<{entries}>")
+        .collect();
+
+    // Fresh `FN{i}: Fn(P0, …) -> R + Send + Sync + 'static` generics for the
+    // direct-call `Fun` params monomorphized away from `Box<dyn Fn>`. The bound
+    // is the exact trait-object bound the `Box` carrier used (`render_type`'s
+    // `IrType::Fun` arm), so every capture the boxed form admitted the generic
+    // admits too, and forwarding the param into a runtime `Arc<dyn Fn + Send +
+    // Sync>` slot still type-checks.
+    for &idx in impl_fn_params {
+        let Some((_, IrType::Fun(params, ret))) = func.params.get(idx) else {
+            return Err(Diagnostic::CompilerBug {
+                where_: "ipe_backend_rust::render_fn_generics",
+                detail: "impl-Fn param index did not point at an IrType::Fun".to_owned(),
+            });
+        };
+        let mut parts = Vec::with_capacity(params.len());
+        for p in params {
+            parts.push(render_type(ctx, p, generics)?);
+        }
+        let ret_s = render_type(ctx, ret, generics)?;
+        entries.push(format!(
+            "{}: Fn({}) -> {ret_s} + Send + Sync + 'static",
+            impl_fn_generic_name(idx),
+            parts.join(", ")
+        ));
+    }
+
+    Ok(format!("<{}>", entries.join(", ")))
+}
+
+/// The fresh Rust generic name a direct-call `Fun` parameter at 0-based
+/// position `idx` monomorphizes to — `FN0`, `FN1`, … . The `FN` prefix cannot
+/// collide with the ordinary type variables (`T1`, `T2`, …) rendered from
+/// [`Func::type_params`].
+fn impl_fn_generic_name(idx: usize) -> String {
+    format!("FN{idx}")
 }
 
 /// `true` if the type variable `sym` appears anywhere inside a
