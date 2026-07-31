@@ -1,0 +1,605 @@
+//! The transparent-or-opaque representation decision — made ONCE, at decode.
+//!
+//! The inspector reports per-type structural FACTS (`types` in the inspection
+//! document): member lists, the `#[non_exhaustive]` fact, and a hidden-members
+//! fact. This module is the decode boundary that turns those facts into the
+//! per-type representation classification of the FFI design's representation
+//! axis: a type decodes **transparent** (a Rust struct surfaces as an Ipê
+//! record, a Rust enum as an Ipê closed union) only when every fact
+//! affirmatively qualifies — every member visible, every member type an exact
+//! identity carrier, every name a validated identifier, the member set a
+//! stable contract. Anything less keeps today's sound default: an **opaque**
+//! nominal handle, with the disqualifying reason recorded for the coverage
+//! ledger (over-drop is only honest when every drop names its reason).
+//!
+//! Fail-closed in both layers: the inspector reads detection failure as the
+//! disqualifying fact, and this decode refuses any entry it cannot fully
+//! validate — a forged or corrupted `types` entry can only ever produce an
+//! opaque type, never an unsound transparent one.
+
+use std::collections::BTreeMap;
+
+use serde::Deserialize;
+
+use crate::carrier::ScalarCarrier;
+use crate::naming::{IdentPath, RustIdent};
+
+// ── wire layer ──────────────────────────────────────────────────────────────
+
+/// One reported member on the wire: a struct field or a variant payload slot.
+#[derive(Debug, Deserialize)]
+pub(crate) struct WireTypeMember {
+    #[serde(default)]
+    name: String,
+    #[serde(default, rename = "type")]
+    ty: String,
+    #[serde(default, rename = "rustType")]
+    rust_type: String,
+}
+
+/// One reported enum variant on the wire.
+#[derive(Debug, Deserialize)]
+pub(crate) struct WireTypeVariant {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    members: Vec<WireTypeMember>,
+}
+
+/// One reported foreign type's structural facts on the wire.
+#[derive(Debug, Deserialize)]
+pub(crate) struct WireForeignType {
+    #[serde(default)]
+    name: String,
+    #[serde(default, rename = "rustPath")]
+    rust_path: String,
+    #[serde(default)]
+    kind: String,
+    #[serde(default, rename = "nonExhaustive")]
+    non_exhaustive: bool,
+    #[serde(default, rename = "hiddenMembers")]
+    hidden_members: bool,
+    #[serde(default)]
+    fields: Vec<WireTypeMember>,
+    #[serde(default)]
+    variants: Vec<WireTypeVariant>,
+}
+
+// ── domain layer ────────────────────────────────────────────────────────────
+
+/// A named member of a transparent foreign type: the Rust field name (also
+/// the Ipê record field name) and its identity carrier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForeignMember {
+    /// The validated member name.
+    pub name: RustIdent,
+    /// The member's scalar carrier — identical spelling on both sides of the
+    /// boundary, so conversion glue is a total field-for-field move.
+    pub carrier: ScalarCarrier,
+}
+
+/// The payload of one transparent enum variant.
+///
+/// Unit variants carry nothing, tuple variants carry positional carriers,
+/// struct variants named members — a members-on-unit or names-on-tuple
+/// confusion is unrepresentable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ForeignVariantPayload {
+    /// No payload.
+    Unit,
+    /// Positional payload carriers, in declaration order.
+    Tuple(Vec<ScalarCarrier>),
+    /// Named payload members, in declaration order.
+    Struct(Vec<ForeignMember>),
+}
+
+/// One variant of a transparent foreign enum.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForeignVariant {
+    /// The validated, capitalized variant name (also the Ipê union ctor).
+    pub name: RustIdent,
+    /// The validated payload shape.
+    pub payload: ForeignVariantPayload,
+}
+
+/// A foreign type that decoded transparent — the Ipê program sees its
+/// structure instead of holding a sealed handle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TransparentType {
+    /// A named-field Rust struct surfacing as an Ipê record.
+    Struct {
+        /// The validated, capitalized Ipê-visible nominal.
+        name: RustIdent,
+        /// The validated Rust path the conversion glue references.
+        rust_path: IdentPath,
+        /// The full field set, in declaration order.
+        fields: Vec<ForeignMember>,
+    },
+    /// A Rust enum surfacing as an Ipê closed union, exhaustiveness intact.
+    Enum {
+        /// The validated, capitalized Ipê-visible nominal.
+        name: RustIdent,
+        /// The validated Rust path the conversion glue references.
+        rust_path: IdentPath,
+        /// The full variant set, in declaration order.
+        variants: Vec<ForeignVariant>,
+    },
+}
+
+impl TransparentType {
+    /// The Ipê-visible nominal.
+    #[must_use]
+    pub const fn name(&self) -> &RustIdent {
+        match self {
+            Self::Struct { name, .. } | Self::Enum { name, .. } => name,
+        }
+    }
+}
+
+/// One coverage row for a reported type that stays opaque: the nominal and
+/// the disqualifying fact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpaqueTypeReason {
+    /// The Ipê-visible nominal as reported (unvalidated — display only).
+    pub name: String,
+    /// Why the type stays an opaque handle.
+    pub reason: String,
+}
+
+/// The decoded representation axis for one package: which reported types
+/// surface transparently, and why each remaining reported type stays opaque.
+///
+/// A type the inspector reported nothing for appears in neither list — it is
+/// opaque by default and was never a candidate.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ForeignTypeCatalog {
+    transparent: BTreeMap<String, TransparentType>,
+    opaque: Vec<OpaqueTypeReason>,
+}
+
+impl ForeignTypeCatalog {
+    /// The types that decoded transparent, keyed by Ipê-visible nominal.
+    #[must_use]
+    pub const fn transparent(&self) -> &BTreeMap<String, TransparentType> {
+        &self.transparent
+    }
+
+    /// The reported types that stay opaque, each with its reason.
+    #[must_use]
+    pub fn opaque_reasons(&self) -> &[OpaqueTypeReason] {
+        &self.opaque
+    }
+
+    /// Classify every reported type. Per-entry failure is never a package
+    /// failure: the entry falls back to opaque with its reason recorded.
+    pub(crate) fn classify(wire: &[WireForeignType]) -> Self {
+        let mut transparent: BTreeMap<String, TransparentType> = BTreeMap::new();
+        let mut opaque: Vec<OpaqueTypeReason> = Vec::new();
+        // Two entries claiming one nominal are ambiguous — neither may
+        // surface structure under that name.
+        let mut duplicated: Vec<String> = Vec::new();
+        for w in wire {
+            match classify_one(w) {
+                Ok(t) => {
+                    let key = t.name().as_str().to_owned();
+                    if transparent.insert(key.clone(), t).is_some() {
+                        duplicated.push(key);
+                    }
+                }
+                Err(reason) => opaque.push(OpaqueTypeReason {
+                    name: w.name.clone(),
+                    reason,
+                }),
+            }
+        }
+        for name in duplicated {
+            transparent.remove(&name);
+            opaque.push(OpaqueTypeReason {
+                reason: format!("two reported types claim the nominal `{name}`"),
+                name,
+            });
+        }
+        // The MIXED collision poisons too: a nominal claimed by one
+        // transparent entry and one refused-to-opaque entry (two same-leaf
+        // types from different modules, one qualifying) is the same Ipê-side
+        // ambiguity — the record and the opaque handle would share a name.
+        let mixed: Vec<String> = transparent
+            .keys()
+            .filter(|k| opaque.iter().any(|r| &r.name == *k))
+            .cloned()
+            .collect();
+        for name in mixed {
+            transparent.remove(&name);
+            opaque.push(OpaqueTypeReason {
+                reason: format!(
+                    "the nominal `{name}` is also claimed by a non-transparent reported type"
+                ),
+                name,
+            });
+        }
+        Self {
+            transparent,
+            opaque,
+        }
+    }
+}
+
+/// The identity-carrier pairs a transparent member may cross with: the Ipê
+/// spelling and the Rust spelling must BOTH match one closed pair, so the
+/// record surface and the conversion glue agree by construction and no
+/// coercion (saturating, narrowing, or otherwise) ever hides inside a
+/// transparent member.
+fn member_carrier(ipe: &str, rust: &str) -> Option<ScalarCarrier> {
+    match (ipe, rust) {
+        ("Int", "i64") => Some(ScalarCarrier::Int),
+        ("Float", "f64") => Some(ScalarCarrier::Float),
+        ("Bool", "bool") => Some(ScalarCarrier::Bool),
+        ("Char", "char") => Some(ScalarCarrier::Char),
+        ("String", "String") => Some(ScalarCarrier::Str),
+        _ => None,
+    }
+}
+
+/// Lowercase-led names that can never be a member name: every Rust keyword
+/// (a rendered `value.match` would not parse) and every Ipê keyword (the
+/// record field would not parse Ipê-side). [`RustIdent`] checks charset only,
+/// so the keyword gate lives here at the classification.
+const RESERVED_MEMBER_NAMES: &[&str] = &[
+    // Rust keywords (strict + reserved).
+    "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "crate",
+    "do", "dyn", "else", "enum", "extern", "false", "final", "fn", "for", "gen", "if", "impl",
+    "in", "let", "loop", "macro", "match", "mod", "move", "mut", "override", "priv", "pub", "ref",
+    "return", "self", "static", "struct", "super", "trait", "true", "try", "type", "typeof",
+    "unsafe", "unsized", "use", "virtual", "where", "while", "yield",
+    // Ipê keywords not already covered above.
+    "alias", "case", "exposing", "import", "module", "of", "port", "then",
+];
+
+/// Validate one named member (a struct field or a struct-variant member).
+fn named_member(context: &str, m: &WireTypeMember) -> Result<ForeignMember, String> {
+    let name = RustIdent::parse(&m.name).map_err(|_| {
+        format!(
+            "{context} member name {:?} is not a legal identifier",
+            m.name
+        )
+    })?;
+    if !name.as_str().starts_with(|c: char| c.is_ascii_lowercase()) {
+        return Err(format!(
+            "{context} member `{name}` is not lowercase-led (required of an Ipê record field)"
+        ));
+    }
+    if RESERVED_MEMBER_NAMES.contains(&name.as_str()) {
+        return Err(format!("{context} member `{name}` is a reserved keyword"));
+    }
+    let carrier = member_carrier(&m.ty, &m.rust_type).ok_or_else(|| {
+        format!(
+            "{context} member `{name}` type ({}, {}) is outside the identity carrier set",
+            m.ty, m.rust_type
+        )
+    })?;
+    Ok(ForeignMember { name, carrier })
+}
+
+/// Validate one enum variant against its declared kind.
+fn variant(v: &WireTypeVariant) -> Result<ForeignVariant, String> {
+    let name = RustIdent::parse(&v.name)
+        .map_err(|_| format!("variant name {:?} is not a legal identifier", v.name))?;
+    if !name.as_str().starts_with(|c: char| c.is_ascii_uppercase()) {
+        return Err(format!(
+            "variant `{name}` is not capitalized (required of an Ipê union constructor)"
+        ));
+    }
+    let context = format!("variant `{name}`");
+    let payload = match v.kind.as_str() {
+        "unit" => {
+            if !v.members.is_empty() {
+                return Err(format!("{context} is unit-kind but reports members"));
+            }
+            ForeignVariantPayload::Unit
+        }
+        "tuple" => {
+            let mut carriers = Vec::with_capacity(v.members.len());
+            for (i, m) in v.members.iter().enumerate() {
+                // A tuple slot's reported name is its decimal position; a
+                // mismatch means the member list is not in declaration order.
+                if m.name != i.to_string() {
+                    return Err(format!("{context} tuple slot {i} is misnamed {:?}", m.name));
+                }
+                let carrier = member_carrier(&m.ty, &m.rust_type).ok_or_else(|| {
+                    format!(
+                        "{context} slot {i} type ({}, {}) is outside the identity carrier set",
+                        m.ty, m.rust_type
+                    )
+                })?;
+                carriers.push(carrier);
+            }
+            if carriers.is_empty() {
+                return Err(format!("{context} is tuple-kind but reports no slots"));
+            }
+            ForeignVariantPayload::Tuple(carriers)
+        }
+        "struct" => {
+            if v.members.is_empty() {
+                return Err(format!("{context} is struct-kind but reports no members"));
+            }
+            let members = v
+                .members
+                .iter()
+                .map(|m| named_member(&context, m))
+                .collect::<Result<Vec<_>, _>>()?;
+            ForeignVariantPayload::Struct(members)
+        }
+        other => return Err(format!("{context} has unknown kind {other:?}")),
+    };
+    Ok(ForeignVariant { name, payload })
+}
+
+/// Classify one reported type: transparent when every fact affirmatively
+/// qualifies, else the disqualifying reason.
+fn classify_one(w: &WireForeignType) -> Result<TransparentType, String> {
+    if w.non_exhaustive {
+        return Err("#[non_exhaustive]: the member set is not a stable contract".to_owned());
+    }
+    if w.hidden_members {
+        return Err("has private, hidden, or unreportable members".to_owned());
+    }
+    let name = RustIdent::parse(&w.name)
+        .map_err(|_| format!("type name {:?} is not a legal identifier", w.name))?;
+    if !name.as_str().starts_with(|c: char| c.is_ascii_uppercase()) {
+        return Err(format!("type name `{name}` is not capitalized"));
+    }
+    if crate::naming::IPE_BUILTIN_HEADS.contains(&name.as_str()) {
+        return Err(format!("type name `{name}` shadows an Ipê builtin type"));
+    }
+    let rust_path = IdentPath::parse(&w.rust_path)
+        .map_err(|_| format!("Rust path {:?} is not a legal identifier path", w.rust_path))?;
+    match w.kind.as_str() {
+        "struct" => {
+            if !w.variants.is_empty() {
+                return Err("struct entry reports enum variants".to_owned());
+            }
+            if w.fields.is_empty() {
+                // An empty record surfaces nothing the opaque handle does not.
+                return Err("reports no fields".to_owned());
+            }
+            let fields = w
+                .fields
+                .iter()
+                .map(|m| named_member("field", m))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(TransparentType::Struct {
+                name,
+                rust_path,
+                fields,
+            })
+        }
+        "enum" => {
+            if !w.fields.is_empty() {
+                return Err("enum entry reports struct fields".to_owned());
+            }
+            if w.variants.is_empty() {
+                return Err("reports no variants".to_owned());
+            }
+            let variants = w
+                .variants
+                .iter()
+                .map(variant)
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(TransparentType::Enum {
+                name,
+                rust_path,
+                variants,
+            })
+        }
+        other => Err(format!("unknown type kind {other:?}")),
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::panic, reason = "test assertions")]
+mod tests {
+    use super::*;
+
+    fn decode_types(v: &serde_json::Value) -> Vec<WireForeignType> {
+        serde_json::from_value(v.clone()).expect("wire decode")
+    }
+
+    fn point_and_shade() -> serde_json::Value {
+        serde_json::json!([
+            {
+                "name": "Point",
+                "rustPath": "tm::Point",
+                "kind": "struct",
+                "fields": [
+                    {"name": "x", "type": "Int", "rustType": "i64"},
+                    {"name": "y", "type": "Float", "rustType": "f64"}
+                ]
+            },
+            {
+                "name": "Shade",
+                "rustPath": "tm::Shade",
+                "kind": "enum",
+                "variants": [
+                    {"name": "On", "kind": "unit"},
+                    {"name": "Level", "kind": "tuple",
+                     "members": [{"name": "0", "type": "Int", "rustType": "i64"}]},
+                    {"name": "Mix", "kind": "struct",
+                     "members": [{"name": "amount", "type": "Int", "rustType": "i64"}]}
+                ]
+            }
+        ])
+    }
+
+    #[test]
+    fn qualifying_struct_and_enum_decode_transparent() {
+        let catalog = ForeignTypeCatalog::classify(&decode_types(&point_and_shade()));
+        assert!(catalog.opaque_reasons().is_empty(), "{:?}", catalog.opaque);
+        let point = catalog.transparent().get("Point").expect("Point");
+        let TransparentType::Struct {
+            rust_path, fields, ..
+        } = point
+        else {
+            panic!("Point must be a transparent struct");
+        };
+        assert_eq!(rust_path.as_str(), "tm::Point");
+        let got: Vec<(&str, ScalarCarrier)> = fields
+            .iter()
+            .map(|f| (f.name.as_str(), f.carrier))
+            .collect();
+        assert_eq!(
+            got,
+            vec![("x", ScalarCarrier::Int), ("y", ScalarCarrier::Float)]
+        );
+        let shade = catalog.transparent().get("Shade").expect("Shade");
+        let TransparentType::Enum { variants, .. } = shade else {
+            panic!("Shade must be a transparent enum");
+        };
+        assert_eq!(
+            variants.iter().map(|v| v.name.as_str()).collect::<Vec<_>>(),
+            vec!["On", "Level", "Mix"]
+        );
+        assert_eq!(
+            variants.first().map(|v| &v.payload),
+            Some(&ForeignVariantPayload::Unit)
+        );
+        assert_eq!(
+            variants.get(1).map(|v| &v.payload),
+            Some(&ForeignVariantPayload::Tuple(vec![ScalarCarrier::Int]))
+        );
+    }
+
+    #[test]
+    fn non_exhaustive_and_hidden_members_stay_opaque() {
+        let wire = decode_types(&serde_json::json!([
+            {"name": "A", "rustPath": "tm::A", "kind": "struct", "nonExhaustive": true,
+             "fields": [{"name": "x", "type": "Int", "rustType": "i64"}]},
+            {"name": "B", "rustPath": "tm::B", "kind": "struct", "hiddenMembers": true,
+             "fields": [{"name": "x", "type": "Int", "rustType": "i64"}]}
+        ]));
+        let catalog = ForeignTypeCatalog::classify(&wire);
+        assert!(catalog.transparent().is_empty());
+        let reasons: Vec<&str> = catalog
+            .opaque_reasons()
+            .iter()
+            .map(|r| r.name.as_str())
+            .collect();
+        assert_eq!(reasons, vec!["A", "B"]);
+    }
+
+    #[test]
+    fn non_identity_carrier_members_stay_opaque() {
+        // A saturating pair (Int, u64), a mismatched spoof (String, i64), and
+        // a container are all outside the identity set.
+        for (ipe, rust) in [("Int", "u64"), ("String", "i64"), ("List Int", "Vec<i64>")] {
+            let wire = decode_types(&serde_json::json!([
+                {"name": "T", "rustPath": "tm::T", "kind": "struct",
+                 "fields": [{"name": "x", "type": ipe, "rustType": rust}]}
+            ]));
+            let catalog = ForeignTypeCatalog::classify(&wire);
+            assert!(
+                catalog.transparent().is_empty(),
+                "({ipe}, {rust}) must not decode transparent"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_names_and_paths_stay_opaque() {
+        let cases = serde_json::json!([
+            // Path injection.
+            {"name": "Evil", "rustPath": "tm::Evil; use std::process::Command",
+             "kind": "struct", "fields": [{"name": "x", "type": "Int", "rustType": "i64"}]},
+            // Builtin shadow.
+            {"name": "String", "rustPath": "tm::String", "kind": "struct",
+             "fields": [{"name": "x", "type": "Int", "rustType": "i64"}]},
+            // Keyword field.
+            {"name": "Kw", "rustPath": "tm::Kw", "kind": "struct",
+             "fields": [{"name": "type", "type": "Int", "rustType": "i64"}]},
+            // Lowercase type nominal.
+            {"name": "lower", "rustPath": "tm::lower", "kind": "struct",
+             "fields": [{"name": "x", "type": "Int", "rustType": "i64"}]},
+            // Unknown kind.
+            {"name": "Un", "rustPath": "tm::Un", "kind": "union",
+             "fields": [{"name": "x", "type": "Int", "rustType": "i64"}]},
+            // Capitalized variant required.
+            {"name": "E", "rustPath": "tm::E", "kind": "enum",
+             "variants": [{"name": "lower", "kind": "unit"}]},
+            // Tuple slot order must match declaration order.
+            {"name": "F", "rustPath": "tm::F", "kind": "enum",
+             "variants": [{"name": "V", "kind": "tuple",
+                "members": [{"name": "1", "type": "Int", "rustType": "i64"}]}]},
+            // Kind/member contradictions.
+            {"name": "G", "rustPath": "tm::G", "kind": "enum",
+             "variants": [{"name": "V", "kind": "unit",
+                "members": [{"name": "0", "type": "Int", "rustType": "i64"}]}]},
+            {"name": "H", "rustPath": "tm::H", "kind": "struct",
+             "fields": [{"name": "x", "type": "Int", "rustType": "i64"}],
+             "variants": [{"name": "V", "kind": "unit"}]},
+            // Empty member sets gain nothing over the opaque handle.
+            {"name": "I", "rustPath": "tm::I", "kind": "struct"},
+            {"name": "J", "rustPath": "tm::J", "kind": "enum"}
+        ]);
+        let catalog = ForeignTypeCatalog::classify(&decode_types(&cases));
+        assert!(
+            catalog.transparent().is_empty(),
+            "all malformed entries must stay opaque: {:?}",
+            catalog.transparent
+        );
+        assert_eq!(catalog.opaque_reasons().len(), 11);
+    }
+
+    #[test]
+    fn duplicate_nominals_poison_both_entries() {
+        let wire = decode_types(&serde_json::json!([
+            {"name": "Point", "rustPath": "tm::a::Point", "kind": "struct",
+             "fields": [{"name": "x", "type": "Int", "rustType": "i64"}]},
+            {"name": "Point", "rustPath": "tm::b::Point", "kind": "struct",
+             "fields": [{"name": "y", "type": "Int", "rustType": "i64"}]}
+        ]));
+        let catalog = ForeignTypeCatalog::classify(&wire);
+        assert!(
+            catalog.transparent().is_empty(),
+            "an ambiguous nominal must not surface structure"
+        );
+        assert!(
+            catalog
+                .opaque_reasons()
+                .iter()
+                .any(|r| r.name == "Point" && r.reason.contains("claim the nominal")),
+            "the ambiguity must be recorded"
+        );
+    }
+
+    #[test]
+    fn mixed_transparent_and_opaque_nominal_collision_poisons_the_transparent_claimant() {
+        // One qualifying `a::Point` plus one refused `b::Point` (hidden
+        // members): the record and the opaque handle would share the Ipê
+        // nominal, so the transparent claimant must fall back to opaque —
+        // regardless of report order.
+        let qualifying = serde_json::json!(
+            {"name": "Point", "rustPath": "tm::a::Point", "kind": "struct",
+             "fields": [{"name": "x", "type": "Int", "rustType": "i64"}]});
+        let refused = serde_json::json!(
+            {"name": "Point", "rustPath": "tm::b::Point", "kind": "struct",
+             "hiddenMembers": true});
+        for order in [
+            serde_json::json!([qualifying, refused]),
+            serde_json::json!([refused, qualifying]),
+        ] {
+            let catalog = ForeignTypeCatalog::classify(&decode_types(&order));
+            assert!(
+                catalog.transparent().is_empty(),
+                "a mixed nominal collision must not surface structure"
+            );
+            assert!(
+                catalog
+                    .opaque_reasons()
+                    .iter()
+                    .any(|r| r.name == "Point" && r.reason.contains("also claimed")),
+                "the mixed ambiguity must be recorded"
+            );
+        }
+    }
+}

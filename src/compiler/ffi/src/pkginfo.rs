@@ -130,6 +130,8 @@ struct WirePkgInfo {
     features: Vec<String>,
     #[serde(default, rename = "foreignTypeIds")]
     foreign_type_ids: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    types: Vec<crate::transparency::WireForeignType>,
     #[serde(default, rename = "wrapperPath")]
     wrapper_path: String,
 }
@@ -742,6 +744,11 @@ pub struct PkgInfo {
     /// validation are dropped at decode (no identity claim survives
     /// unvalidated; absence only disables unification, never soundness).
     foreign_type_ids: std::collections::BTreeMap<String, String>,
+    /// The decoded transparent-or-opaque representation axis: which reported
+    /// foreign types surface structurally (record / closed union) and why each
+    /// remaining reported type stays an opaque handle. Classified ONCE here at
+    /// the decode boundary; every emitter reads this same decision.
+    foreign_types: crate::transparency::ForeignTypeCatalog,
     /// The absolute path to the author-supplied wrapper crate this package was
     /// inspected from, or empty for an ordinary crates.io / git inspection. When
     /// set, the emitted app crate depends on the wrapper by `path` rather than a
@@ -836,6 +843,13 @@ impl PkgInfo {
     #[must_use]
     pub const fn foreign_type_ids(&self) -> &std::collections::BTreeMap<String, String> {
         &self.foreign_type_ids
+    }
+
+    /// The decoded transparent-or-opaque representation axis for this
+    /// package's reported foreign types.
+    #[must_use]
+    pub const fn foreign_types(&self) -> &crate::transparency::ForeignTypeCatalog {
+        &self.foreign_types
     }
 
     /// The absolute wrapper-crate path this package was inspected from, or empty
@@ -1410,6 +1424,9 @@ impl TryFrom<WirePkgInfo> for PkgInfo {
                 defect,
             }
         })?;
+        // The representation axis: classification failure of one entry is an
+        // opaque fallback recorded in the catalog, never a package failure.
+        let foreign_types = crate::transparency::ForeignTypeCatalog::classify(&w.types);
         Ok(Self {
             pkg_path,
             name,
@@ -1421,6 +1438,7 @@ impl TryFrom<WirePkgInfo> for PkgInfo {
             transitive_deps,
             features,
             foreign_type_ids,
+            foreign_types,
             wrapper_path,
             dropped,
         })
@@ -1449,6 +1467,42 @@ mod tests {
             "functions": functions,
             "errors": []
         })
+    }
+
+    #[test]
+    fn types_wire_key_decodes_the_representation_axis() {
+        let pkg = decode(&json!({
+            "pkg": "tm",
+            "name": "tm",
+            "version": "0.1.0",
+            "functions": [],
+            "errors": [],
+            "types": [
+                {"name": "Point", "rustPath": "tm::Point", "kind": "struct",
+                 "fields": [{"name": "x", "type": "Int", "rustType": "i64"}]},
+                {"name": "Sealed", "rustPath": "tm::Sealed", "kind": "struct",
+                 "hiddenMembers": true}
+            ]
+        }))
+        .expect("decodes");
+        assert!(
+            pkg.foreign_types().transparent().contains_key("Point"),
+            "a fully-qualifying reported struct decodes transparent"
+        );
+        assert_eq!(
+            pkg.foreign_types()
+                .opaque_reasons()
+                .iter()
+                .map(|r| r.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Sealed"],
+            "a hidden-members type stays opaque with its reason recorded"
+        );
+        // A document with no `types` key (every existing cache) decodes to an
+        // empty catalog — nothing surfaces transparently by default.
+        let bare = decode(&base_pkg(&json!([]))).expect("decodes");
+        assert!(bare.foreign_types().transparent().is_empty());
+        assert!(bare.foreign_types().opaque_reasons().is_empty());
     }
 
     #[test]
