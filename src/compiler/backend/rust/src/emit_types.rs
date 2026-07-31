@@ -198,11 +198,15 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::Unit => "()".to_owned(),
         IrType::Task(inner) => format!("IpeTask<{}>", render_type(ctx, inner, generics)?),
         IrType::Enum { home, name, args } => {
-            // A foreign opaque FFI type renders as its REAL Rust path — its
+            // A foreign OPAQUE FFI type renders as its REAL Rust path — its
             // placeholder union is never emitted as an enum ([`ipe_lower`]
-            // skips `Rust.*`-home unions), so the bare enum name would dangle.
+            // skips opaque `Rust.*`-home unions), so the bare enum name would
+            // dangle. A TRANSPARENT import HAS a registered `EnumDef` (the
+            // lowerer emitted its declaration) and renders as that app enum
+            // through the ordinary path below — its values are native, and
+            // the wrapper seam converts them.
             // Opaque foreign types are non-generic by construction.
-            if ctx.is_foreign_interface_home(home) {
+            if ctx.is_foreign_interface_home(home) && !ctx.has_enum_def(home, *name) {
                 if !args.is_empty() {
                     return Err(Diagnostic::CompilerBug {
                         where_: "ipe_backend_rust::render_type",

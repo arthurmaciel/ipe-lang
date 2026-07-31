@@ -212,10 +212,10 @@ pub fn opaque_names_in(sig: &str, out: &mut BTreeSet<String>) {
 /// stay in the catalog for the conversion glue — the Ipê constructor surface
 /// is positional, mirroring how Ipê union constructors apply).
 ///
-/// Not yet consumed by [`emit_ipei`] or the interface emitter: the interface
-/// artifacts and the wrapper glue cut over to the transparent representation
-/// TOGETHER, so no artifact ever declares a record the wrappers still treat
-/// as an opaque handle.
+/// Consumed by [`emit_ipei`] and the interface emitter for the SAME admitted
+/// set ([`crate::interface::CrateInterface::transparent_types`]), so no
+/// artifact ever declares a record the wrappers still treat as an opaque
+/// handle.
 #[must_use]
 pub fn transparent_type_decl(t: &TransparentType) -> String {
     match t {
@@ -253,11 +253,16 @@ pub fn transparent_type_decl(t: &TransparentType) -> String {
 
 /// Emit the `.ipei` type-environment seed.
 ///
-/// Contains the module header, one nominal opaque-type declaration per
-/// referenced foreign type (so the seed is complete — a `Ty::Con` no module
-/// declares would dangle), and one HM signature per binding.
+/// Contains the module header, one declaration per referenced foreign type
+/// (so the seed is complete — a `Ty::Con` no module declares would dangle),
+/// and one HM signature per binding. A name in `transparent` (the interface's
+/// admitted set, so the two projections cannot disagree) declares its real
+/// record/union shape; every other foreign name stays a nominal opaque.
 #[must_use]
-pub fn emit_ipei(pkg: &PkgInfo) -> String {
+pub fn emit_ipei(
+    pkg: &PkgInfo,
+    transparent: &std::collections::BTreeMap<String, TransparentType>,
+) -> String {
     use std::fmt::Write;
     let module = crate::naming::rust_module_name(pkg.pkg_path());
     let mut out = format!("module {module} exposing (..)\n\n");
@@ -272,7 +277,11 @@ pub fn emit_ipei(pkg: &PkgInfo) -> String {
     }
     for name in &opaque {
         // Writing into a String is infallible.
-        let _ = writeln!(out, "type {name}");
+        if let Some(t) = transparent.get(name) {
+            let _ = writeln!(out, "{}", transparent_type_decl(t));
+        } else {
+            let _ = writeln!(out, "type {name}");
+        }
     }
     if !opaque.is_empty() {
         out.push('\n');
@@ -281,6 +290,87 @@ pub fn emit_ipei(pkg: &PkgInfo) -> String {
         let _ = writeln!(out, "{name} : {sig}");
     }
     out
+}
+
+/// The `kernel.json` / `consumer.json` wire form of the per-type decision.
+///
+/// Every transparent type with its full member vocabulary, and every
+/// reported-but-opaque type with its reason. `None` when the inspection
+/// reported no types at all, so a package without a `types` section keeps
+/// byte-identical artifacts.
+#[must_use]
+pub fn foreign_types_json(
+    catalog: &crate::transparency::ForeignTypeCatalog,
+) -> Option<serde_json::Value> {
+    if catalog.transparent().is_empty() && catalog.opaque_reasons().is_empty() {
+        return None;
+    }
+    let transparent: Vec<serde_json::Value> = catalog
+        .transparent()
+        .values()
+        .map(transparent_type_json)
+        .collect();
+    let opaque: Vec<serde_json::Value> = catalog
+        .opaque_reasons()
+        .iter()
+        .map(|r| serde_json::json!({ "name": r.name, "reason": r.reason }))
+        .collect();
+    Some(serde_json::json!({ "transparent": transparent, "opaque": opaque }))
+}
+
+/// One transparent type's wire form.
+///
+/// Members carry their Ipê carrier surface (`Int`, `Float`, …) — the
+/// identity-pair rule means the Rust spelling is recoverable from it, so one
+/// spelling is stored, never two to drift.
+#[must_use]
+pub fn transparent_type_json(t: &TransparentType) -> serde_json::Value {
+    let member = |m: &crate::transparency::ForeignMember| serde_json::json!({ "name": m.name.as_str(), "carrier": m.carrier.ipe_surface() });
+    match t {
+        TransparentType::Struct {
+            name,
+            rust_path,
+            fields,
+        } => serde_json::json!({
+            "name": name.as_str(),
+            "kind": "struct",
+            "rustPath": rust_path.as_str(),
+            "fields": fields.iter().map(member).collect::<Vec<_>>(),
+        }),
+        TransparentType::Enum {
+            name,
+            rust_path,
+            variants,
+        } => {
+            let vs: Vec<serde_json::Value> = variants
+                .iter()
+                .map(|v| match &v.payload {
+                    ForeignVariantPayload::Unit => {
+                        serde_json::json!({ "name": v.name.as_str(), "kind": "unit" })
+                    }
+                    ForeignVariantPayload::Tuple(carriers) => serde_json::json!({
+                        "name": v.name.as_str(),
+                        "kind": "tuple",
+                        "carriers": carriers
+                            .iter()
+                            .map(|c| c.ipe_surface())
+                            .collect::<Vec<_>>(),
+                    }),
+                    ForeignVariantPayload::Struct(members) => serde_json::json!({
+                        "name": v.name.as_str(),
+                        "kind": "struct",
+                        "members": members.iter().map(member).collect::<Vec<_>>(),
+                    }),
+                })
+                .collect();
+            serde_json::json!({
+                "name": name.as_str(),
+                "kind": "enum",
+                "rustPath": rust_path.as_str(),
+                "variants": vs,
+            })
+        }
+    }
 }
 
 /// Emit `kernel.json`.
@@ -337,6 +427,12 @@ pub fn emit_kernel_json(pkg: &PkgInfo) -> String {
     if !pkg.features().is_empty() {
         let features: Vec<&str> = pkg.features().iter().map(FeatureName::as_str).collect();
         doc.insert("features".into(), serde_json::json!(features));
+    }
+    // The per-type representation decision, verbatim from the decode-time
+    // classification: every transparent shape and every reported-but-opaque
+    // type with its reason. Absent when the inspection reported no types.
+    if let Some(types) = foreign_types_json(pkg.foreign_types()) {
+        doc.insert("types".into(), types);
     }
     let mut text = serde_json::to_string_pretty(&serde_json::Value::Object(doc))
         .unwrap_or_else(|_| "{}".to_owned());
@@ -540,7 +636,7 @@ mod tests {
     #[test]
     fn ipei_seed_declares_every_opaque_type_and_every_binding() {
         let pkg = semver_pkg();
-        let ipei = emit_ipei(&pkg);
+        let ipei = emit_ipei(&pkg, &std::collections::BTreeMap::new());
         let expected = "module Rust.Semver exposing (..)\n\n\
                         type Version\n\n\
                         parse : String -> Result Error Version\n\
@@ -577,7 +673,7 @@ mod tests {
             ]
         );
         // The .ipei and kernel.json signatures are the SAME string per fn.
-        let ipei = emit_ipei(&pkg);
+        let ipei = emit_ipei(&pkg, &std::collections::BTreeMap::new());
         for f in functions {
             let name = f
                 .pointer("/name")
@@ -597,6 +693,103 @@ mod tests {
             Some(&"semver".into())
         );
         assert_eq!(doc.pointer("/features/0"), Some(&"std".into()));
+    }
+
+    #[test]
+    fn kernel_json_carries_the_per_type_decision() {
+        let pkg = PkgInfo::decode_json(
+            &serde_json::json!({
+                "pkg": "tm", "name": "tm", "version": "0.1.0",
+                "functions": [],
+                "errors": [],
+                "types": [
+                    {"name": "Point", "rustPath": "tm::Point", "kind": "struct",
+                     "fields": [{"name": "x", "type": "Int", "rustType": "i64"}]},
+                    {"name": "Sealed", "rustPath": "tm::Sealed", "kind": "struct",
+                     "hiddenMembers": true}
+                ]
+            })
+            .to_string(),
+        )
+        .expect("decodes");
+        let doc: serde_json::Value =
+            serde_json::from_str(&emit_kernel_json(&pkg)).expect("valid JSON");
+        assert_eq!(
+            doc.pointer("/types/transparent/0/name"),
+            Some(&"Point".into())
+        );
+        assert_eq!(
+            doc.pointer("/types/transparent/0/rustPath"),
+            Some(&"tm::Point".into())
+        );
+        assert_eq!(doc.pointer("/types/opaque/0/name"), Some(&"Sealed".into()));
+        assert!(
+            doc.pointer("/types/opaque/0/reason")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|r| r.contains("hidden")),
+            "{doc}"
+        );
+        // A package reporting no types keeps a byte-stable artifact (no key).
+        let bare: serde_json::Value =
+            serde_json::from_str(&emit_kernel_json(&semver_pkg())).expect("valid JSON");
+        assert!(bare.get("types").is_none());
+    }
+
+    #[test]
+    fn transparent_type_json_round_trips_through_the_projection_decoder() {
+        let pkg = PkgInfo::decode_json(
+            &serde_json::json!({
+                "pkg": "tm", "name": "tm", "version": "0.1.0",
+                "functions": [],
+                "errors": [],
+                "types": [
+                    {"name": "Shade", "rustPath": "tm::Shade", "kind": "enum",
+                     "variants": [
+                        {"name": "On", "kind": "unit"},
+                        {"name": "Level", "kind": "tuple",
+                         "members": [{"name": "0", "type": "Int", "rustType": "i64"}]},
+                        {"name": "Mix", "kind": "struct",
+                         "members": [{"name": "amount", "type": "Int", "rustType": "i64"}]}
+                     ]}
+                ]
+            })
+            .to_string(),
+        )
+        .expect("decodes");
+        let original = pkg
+            .foreign_types()
+            .transparent()
+            .get("Shade")
+            .expect("transparent");
+        let wire = transparent_type_json(original);
+        let decoded = TransparentType::from_projection_json(&wire).expect("round-trips");
+        assert_eq!(&decoded, original);
+    }
+
+    #[test]
+    fn ipei_seed_declares_transparent_shapes() {
+        let pkg = PkgInfo::decode_json(
+            &serde_json::json!({
+                "pkg": "tm", "name": "tm", "version": "0.1.0",
+                "functions": [
+                    {"name": "shift",
+                     "params": [{"name": "p", "type": "Point", "ipeType": "Point",
+                                 "rustType": "tm::Point"}],
+                     "results": [{"name": "", "type": "Point", "rustType": "tm::Point"}],
+                     "effect": "pure"}
+                ],
+                "errors": [],
+                "types": [
+                    {"name": "Point", "rustPath": "tm::Point", "kind": "struct",
+                     "fields": [{"name": "x", "type": "Int", "rustType": "i64"}]}
+                ]
+            })
+            .to_string(),
+        )
+        .expect("decodes");
+        let ipei = emit_ipei(&pkg, pkg.foreign_types().transparent());
+        assert!(ipei.contains("type alias Point = { x : Int }"), "{ipei}");
+        assert!(!ipei.contains("type Point\n"), "{ipei}");
     }
 
     #[test]

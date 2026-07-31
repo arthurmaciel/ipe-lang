@@ -83,6 +83,89 @@ pub struct FfiEmit {
     /// used-set shake may slice (user modules are never listed here, so a
     /// user fn can never be shaken).
     pub interface_modules: Vec<String>,
+    /// Per-wrapper conversion glue for TRANSPARENT foreign types, keyed by
+    /// the `_bindings.rs` wrapper fn identifier (the [`ipe_ir::Callee::Ffi`]
+    /// ident). A wrapper absent here passes every value through unchanged —
+    /// the opaque-handle baseline.
+    pub wrapper_glue: BTreeMap<String, FfiWrapperGlue>,
+}
+
+/// Where one FFI wrapper's transparent conversions apply: which argument
+/// positions convert Ipê→foreign, and whether the result converts back.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FfiWrapperGlue {
+    /// One entry per Ipê argument position; `Some` marks a transparent value
+    /// the call site converts to the foreign type.
+    pub params: Vec<Option<FfiGlueType>>,
+    /// The result conversion, when the wrapper returns a transparent type.
+    pub result: Option<FfiResultGlue>,
+}
+
+/// A transparent result and where it sits in the wrapper's return type.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FfiResultGlue {
+    /// `true` when the foreign value is the Ok payload of the wrapper's
+    /// `IpeResult<IpeError, T>`; `false` for a bare `T` (infallible accessor).
+    pub in_result: bool,
+    /// The transparent shape to convert from.
+    pub ty: FfiGlueType,
+}
+
+/// One transparent foreign type's conversion shape.
+///
+/// Enough to name both sides of the seam and move every member across.
+/// Members are identity carriers by classification, so no coercion ever hides
+/// inside a conversion — each field/payload is a plain move.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FfiGlueType {
+    /// A Rust struct surfacing as an Ipê record: the emitted app-side value
+    /// is the synthesised record struct for `fields`.
+    Record {
+        /// The absolute foreign path (`::tm::Point`).
+        rust_path: String,
+        /// The field names, in declaration order. Validated non-keyword
+        /// lowercase identifiers, so the record-struct field ident and the
+        /// foreign field ident are both the name itself.
+        fields: Vec<String>,
+    },
+    /// A Rust enum surfacing as an Ipê closed union: the emitted app-side
+    /// value is the enum the lowerer emitted for the interface module's
+    /// union declaration.
+    Union {
+        /// The interface module segments (`["Rust", "Tm"]`) — the app enum's
+        /// home, resolved through the interner at emission.
+        module: Vec<String>,
+        /// The Ipê-visible nominal (`"Shade"`).
+        name: String,
+        /// The absolute foreign path (`::tm::Shade`).
+        rust_path: String,
+        /// The variant set, in declaration order.
+        variants: Vec<FfiGlueVariant>,
+    },
+}
+
+/// One variant of a transparent enum, as the conversion glue renders it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FfiGlueVariant {
+    /// The variant name — identical on both sides by classification.
+    pub name: String,
+    /// The payload shape.
+    pub payload: FfiGluePayload,
+}
+
+/// A transparent enum variant's payload shape.
+///
+/// The app-side enum is always positional (tuple) — the Ipê union constructor
+/// surface — while the foreign side keeps its declared shape, so a
+/// struct-variant conversion re-attaches the member names.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FfiGluePayload {
+    /// No payload.
+    Unit,
+    /// `n` positional carriers.
+    Tuple(usize),
+    /// Named members, in declaration order.
+    Struct(Vec<String>),
 }
 
 /// The Rust code-generation backend.
@@ -1043,6 +1126,40 @@ impl<'a> EmitCtx<'a> {
                     "foreign opaque type `{key}` has no Rust path in the FFI emission \
                      inputs — the driver must supply every installed crate's opaque map"
                 ),
+            })
+    }
+
+    /// The conversion glue for an FFI wrapper ident, when the driver supplied
+    /// any — `None` for the opaque-handle baseline (no conversion at the call).
+    pub(crate) fn ffi_wrapper_glue(&self, ident: Symbol) -> DResult<Option<&FfiWrapperGlue>> {
+        let Some(ffi) = self.ffi.as_ref() else {
+            return Ok(None);
+        };
+        let name = self.resolve_ident(ident)?;
+        Ok(ffi.wrapper_glue.get(name))
+    }
+
+    /// Is a real `EnumDef` registered for `(home, name)`? A `Rust.*`-home
+    /// enum with one is a TRANSPARENT FFI import (the lowerer emitted its
+    /// declaration); without one it is an opaque handle rendered at its
+    /// foreign path.
+    pub(crate) fn has_enum_def(&self, home: &ModPath, name: Symbol) -> bool {
+        self.enum_names.contains_key(&(home.clone(), name))
+    }
+
+    /// Resolve an already-interned identifier string back to its [`Symbol`].
+    ///
+    /// # Errors
+    ///
+    /// [`Diagnostic::CompilerBug`] when the string was never interned — the
+    /// glue's names come from the injected interface module source, so a miss
+    /// is an internal invariant violation, surfaced rather than mis-emitted.
+    pub(crate) fn lookup_symbol(&self, s: &str) -> DResult<Symbol> {
+        self.interner
+            .lookup(s)
+            .ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "ipe_backend_rust::EmitCtx::lookup_symbol",
+                detail: format!("identifier `{s}` from the FFI glue map was never interned"),
             })
     }
 

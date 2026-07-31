@@ -1389,7 +1389,24 @@ fn enum_home_is_ffi_foreign(interner: &Interner, home: &ModPath) -> bool {
         .is_some_and(|s| s == "Rust")
 }
 
-fn clone_class(interner: &Interner, t: &IrType) -> CloneClass {
+/// The clone-classification context: the interner plus the `Rust.*`-home
+/// unions that are TRANSPARENT FFI imports. A transparent union lowers to a
+/// real app enum (deriving `Clone` like any user enum); only the REMAINING
+/// `Rust.*`-home enums are opaque handles onto real foreign types.
+#[derive(Clone, Copy)]
+struct CloneEnv<'a> {
+    interner: &'a Interner,
+    transparent_ffi: &'a BTreeSet<(ModPath, Symbol)>,
+}
+
+/// Is `(home, name)` an OPAQUE FFI foreign handle — a `Rust.*`-home enum that
+/// is not a transparent import?
+fn enum_is_opaque_ffi_handle(env: CloneEnv<'_>, home: &ModPath, name: Symbol) -> bool {
+    enum_home_is_ffi_foreign(env.interner, home)
+        && !env.transparent_ffi.contains(&(home.clone(), name))
+}
+
+fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
     match t {
         // Scalars — primitive Copy types.
         // `Decimal` is `#[derive(Copy)]` — treat as CopyLeaf.
@@ -1491,29 +1508,31 @@ fn clone_class(interner: &Interner, t: &IrType) -> CloneClass {
         // is `Copy`. Use `clone_class_named_composite` to floor `CopyLeaf` → `CloneOk`
         // so T5 inserts `.clone()` for multi-use bindings (e.g. `Vec<i64>`).
         IrType::Maybe(elem) | IrType::List(elem) | IrType::Set(elem) => {
-            clone_class_named_composite(interner, std::iter::once(elem.as_ref()))
+            clone_class_named_composite(env, std::iter::once(elem.as_ref()))
         }
         IrType::Result(e, a) | IrType::Dict(e, a) => {
-            clone_class_named_composite(interner, [e.as_ref(), a.as_ref()].into_iter())
+            clone_class_named_composite(env, [e.as_ref(), a.as_ref()].into_iter())
         }
-        IrType::Tuple(elems) => clone_class_composite(interner, elems.iter()),
+        IrType::Tuple(elems) => clone_class_composite(env, elems.iter()),
         // Named types: emitted Rust struct/enum derives `Clone` but NOT `Copy`.
         // A CopyLeaf payload (e.g. all-Int record, no-arg enum) does NOT make the
         // wrapper `Copy` — bare capture would move it on first closure call → E0525.
         // Floor to CloneOk so the rewrite inserts `.clone()` per call.
-        IrType::Record(fields) => clone_class_named_composite(interner, fields.values()),
-        // An FFI foreign-interface opaque handle (`Rust.*` home) is the real
-        // foreign Rust type; its `Clone`-ness is the foreign crate's decision,
-        // not Ipe's, so it is NonClone here — a duplicating `.clone()` on a
-        // non-`Clone` foreign type (e.g. `bevy_ecs::World`) would be cargo E0599
-        // after `ipe` exit 0 (a SEAL break). A user enum keeps deriving `Clone`.
-        IrType::Enum { home, .. } if enum_home_is_ffi_foreign(interner, home) => {
+        IrType::Record(fields) => clone_class_named_composite(env, fields.values()),
+        // An FFI foreign-interface opaque handle (a `Rust.*` home with no
+        // transparent import) is the real foreign Rust type; its `Clone`-ness
+        // is the foreign crate's decision, not Ipe's, so it is NonClone here —
+        // a duplicating `.clone()` on a non-`Clone` foreign type (e.g.
+        // `bevy_ecs::World`) would be cargo E0599 after `ipe` exit 0 (a SEAL
+        // break). A TRANSPARENT import lowers to a real app enum and takes the
+        // ordinary named-composite class below, like any user enum.
+        IrType::Enum { home, name, .. } if enum_is_opaque_ffi_handle(env, home, *name) => {
             CloneClass::NonClone
         }
-        IrType::Enum { args, .. } => clone_class_named_composite(interner, args.iter()),
+        IrType::Enum { args, .. } => clone_class_named_composite(env, args.iter()),
         // Ui{msg} / WebRoute(page) — recurse on the message/page type-param.
-        IrType::Ui { msg, .. } => clone_class_composite(interner, std::iter::once(msg.as_ref())),
-        IrType::WebRoute(page) => clone_class_composite(interner, std::iter::once(page.as_ref())),
+        IrType::Ui { msg, .. } => clone_class_composite(env, std::iter::once(msg.as_ref())),
+        IrType::WebRoute(page) => clone_class_composite(env, std::iter::once(page.as_ref())),
     }
 }
 
@@ -1540,18 +1559,17 @@ fn clone_class(interner: &Interner, t: &IrType) -> CloneClass {
 /// A bare `Generic` param already makes [`reject_fn_value_reuse`] a
 /// no-op (`ir_contains_fun(Generic) == false`), so admitting it here loses no
 /// diagnostic — it only closes the silent double-move.
-fn param_is_multiuse_clonable(interner: &Interner, ir_ty: &IrType) -> bool {
-    matches!(clone_class(interner, ir_ty), CloneClass::CloneOk)
-        || matches!(ir_ty, IrType::Generic(_))
+fn param_is_multiuse_clonable(env: CloneEnv<'_>, ir_ty: &IrType) -> bool {
+    matches!(clone_class(env, ir_ty), CloneClass::CloneOk) || matches!(ir_ty, IrType::Generic(_))
 }
 
 fn clone_class_composite<'a>(
-    interner: &Interner,
+    env: CloneEnv<'_>,
     parts: impl Iterator<Item = &'a IrType>,
 ) -> CloneClass {
     let mut any_clone_ok = false;
     for p in parts {
-        match clone_class(interner, p) {
+        match clone_class(env, p) {
             CloneClass::NonClone => return CloneClass::NonClone,
             CloneClass::CloneOk => any_clone_ok = true,
             CloneClass::CopyLeaf => {}
@@ -1574,10 +1592,10 @@ fn clone_class_composite<'a>(
 /// ensures the rewrite inserts `.clone()` per call — safe because the wrapper
 /// derives `Clone`.
 fn clone_class_named_composite<'a>(
-    interner: &Interner,
+    env: CloneEnv<'_>,
     parts: impl Iterator<Item = &'a IrType>,
 ) -> CloneClass {
-    match clone_class_composite(interner, parts) {
+    match clone_class_composite(env, parts) {
         CloneClass::NonClone => CloneClass::NonClone,
         // CopyLeaf is only valid for Rust primitive types that implement `Copy`.
         // Named structs and enums never derive `Copy` (derive macro doesn't emit it),
@@ -4612,30 +4630,30 @@ fn count_fn_value_uses_apply(sym: Symbol, func: &Expr, args: &[Expr]) -> usize {
 /// non-fn-carrying / `CloneOk` types, so calling it for every ineligible binder
 /// is safe — a `CopyLeaf` scalar or wildcard binder is a no-op).
 fn apply_move_ownership(
-    interner: &Interner,
+    env: CloneEnv<'_>,
     sym: Symbol,
     ir_ty: &IrType,
     scope: Expr,
     span: Span,
 ) -> DResult<Expr> {
-    if param_is_multiuse_clonable(interner, ir_ty) {
+    if param_is_multiuse_clonable(env, ir_ty) {
         let mut remaining = count_var_uses(sym, &scope);
         Ok(rewrite_multiuse_clones(sym, &mut remaining, scope))
     } else {
-        reject_foreign_handle_reuse(interner, sym, ir_ty, &scope, span)?;
-        reject_fn_value_reuse(interner, sym, ir_ty, &scope, span)?;
+        reject_foreign_handle_reuse(env, sym, ir_ty, &scope, span)?;
+        reject_fn_value_reuse(env, sym, ir_ty, &scope, span)?;
         Ok(scope)
     }
 }
 
 fn reject_fn_value_reuse(
-    interner: &Interner,
+    env: CloneEnv<'_>,
     sym: Symbol,
     ir_ty: &IrType,
     body: &Expr,
     span: Span,
 ) -> DResult<()> {
-    if !ir_contains_fun(ir_ty) || !matches!(clone_class(interner, ir_ty), CloneClass::NonClone) {
+    if !ir_contains_fun(ir_ty) || !matches!(clone_class(env, ir_ty), CloneClass::NonClone) {
         return Ok(());
     }
     if count_fn_value_uses(sym, body) > 1 {
@@ -4655,13 +4673,13 @@ fn reject_fn_value_reuse(
 /// chain (each consumes and returns it) and stays linear; only a genuine reuse
 /// of the same binding is rejected.
 fn reject_foreign_handle_reuse(
-    interner: &Interner,
+    env: CloneEnv<'_>,
     sym: Symbol,
     ir_ty: &IrType,
     body: &Expr,
     span: Span,
 ) -> DResult<()> {
-    if !ir_type_has_ffi_foreign_handle(interner, ir_ty) {
+    if !ir_type_has_ffi_foreign_handle(env, ir_ty) {
         return Ok(());
     }
     if count_var_uses(sym, body) > 1 {
@@ -4674,29 +4692,24 @@ fn reject_foreign_handle_reuse(
 /// [`IrType::Enum`]) anywhere — bare, or inside a `Maybe`/`Result`/tuple/record/
 /// user-enum payload? Such a handle is non-`Clone` by the foreign crate's
 /// decision, so a duplicating rewrite on it is unsound.
-fn ir_type_has_ffi_foreign_handle(interner: &Interner, ty: &IrType) -> bool {
+fn ir_type_has_ffi_foreign_handle(env: CloneEnv<'_>, ty: &IrType) -> bool {
     match ty {
-        IrType::Enum { home, args, .. } => {
-            enum_home_is_ffi_foreign(interner, home)
-                || args
-                    .iter()
-                    .any(|a| ir_type_has_ffi_foreign_handle(interner, a))
+        IrType::Enum { home, name, args } => {
+            enum_is_opaque_ffi_handle(env, home, *name)
+                || args.iter().any(|a| ir_type_has_ffi_foreign_handle(env, a))
         }
         IrType::Maybe(e) | IrType::List(e) | IrType::Set(e) => {
-            ir_type_has_ffi_foreign_handle(interner, e)
+            ir_type_has_ffi_foreign_handle(env, e)
         }
         IrType::Result(a, b) | IrType::Dict(a, b) => {
-            ir_type_has_ffi_foreign_handle(interner, a)
-                || ir_type_has_ffi_foreign_handle(interner, b)
+            ir_type_has_ffi_foreign_handle(env, a) || ir_type_has_ffi_foreign_handle(env, b)
         }
-        IrType::Tuple(es) => es
-            .iter()
-            .any(|e| ir_type_has_ffi_foreign_handle(interner, e)),
+        IrType::Tuple(es) => es.iter().any(|e| ir_type_has_ffi_foreign_handle(env, e)),
         IrType::Record(fields) => fields
             .values()
-            .any(|e| ir_type_has_ffi_foreign_handle(interner, e)),
-        IrType::Ui { msg, .. } => ir_type_has_ffi_foreign_handle(interner, msg),
-        IrType::WebRoute(page) => ir_type_has_ffi_foreign_handle(interner, page),
+            .any(|e| ir_type_has_ffi_foreign_handle(env, e)),
+        IrType::Ui { msg, .. } => ir_type_has_ffi_foreign_handle(env, msg),
+        IrType::WebRoute(page) => ir_type_has_ffi_foreign_handle(env, page),
         _ => false,
     }
 }
@@ -6584,6 +6597,18 @@ pub struct Lowerer<'a> {
     /// `(home, ctor name)` so two same-short-named types whose constructors share a
     /// name but differ in arity do not collapse.
     ctor_arity: BTreeMap<(ModPath, Symbol), usize>,
+    /// The `Rust.*`-home unions that are TRANSPARENT FFI imports — a real
+    /// record/union declaration from a driver-generated interface module, not
+    /// the opaque `type N = N` placeholder (whose shape — one nullary ctor
+    /// spelling the type name — the classification refuses for transparent
+    /// enums, so the two are distinguishable by construction). Members lower
+    /// to ordinary app enums; only the REMAINING `Rust.*`-home enums are
+    /// opaque handles for the clone/ctor gates.
+    transparent_ffi_unions: BTreeSet<(ModPath, Symbol)>,
+    /// The constructors of those transparent unions, keyed `(home, ctor)` —
+    /// the one `Rust.*` constructor set a user program may legitimately
+    /// construct and match.
+    transparent_ffi_ctors: BTreeSet<(ModPath, Symbol)>,
     /// Pre-minted, collision-free parameter names for eta-expanding a partial
     /// application into a boxed closure. Sized in [`crate::lower`] to the widest
     /// function arity in the module — an eta-lambda introduces at most that many
@@ -7536,6 +7561,8 @@ impl<'a> Lowerer<'a> {
 
         let mut enum_variants = BTreeMap::new();
         let mut ctor_arity = BTreeMap::new();
+        let mut transparent_ffi_unions = BTreeSet::new();
+        let mut transparent_ffi_ctors = BTreeSet::new();
         for union in &m.unions {
             // Key by the union's HOME `(home, name)` so same-short-named types from
             // different source modules keep distinct variant/arity entries.
@@ -7546,6 +7573,26 @@ impl<'a> Lowerer<'a> {
             );
             for ctor in &union.ctors {
                 ctor_arity.insert((uhome.clone(), ctor.name), ctor.arity);
+            }
+            // A `Rust.*`-home union that is NOT the opaque-handle placeholder
+            // (one nullary ctor spelling the type name) is a transparent FFI
+            // import: it lowers to a real app enum, and its constructors are
+            // constructible/matchable like any user enum's.
+            let rust_home = union
+                .home
+                .first()
+                .and_then(|s| interner.resolve(*s))
+                .is_some_and(|s| s == "Rust");
+            let placeholder = union.ctors.len() == 1
+                && union
+                    .ctors
+                    .first()
+                    .is_some_and(|c| c.name == union.name && c.arity == 0);
+            if rust_home && !placeholder {
+                transparent_ffi_unions.insert((uhome.clone(), union.name));
+                for ctor in &union.ctors {
+                    transparent_ffi_ctors.insert((uhome.clone(), ctor.name));
+                }
             }
         }
         // Seed the built-in `Maybe` / `Result` variant sets + payload arities so
@@ -7680,6 +7727,8 @@ impl<'a> Lowerer<'a> {
             func_ids,
             enum_variants,
             ctor_arity,
+            transparent_ffi_unions,
+            transparent_ffi_ctors,
             eta_params,
             cap_params,
             param_binders,
@@ -7849,13 +7898,20 @@ impl<'a> Lowerer<'a> {
             if self.is_cache_handle_union(u) || self.is_config_decoder_union(u) {
                 continue;
             }
-            // A foreign opaque type from an FFI interface module (`module
+            // A foreign OPAQUE type from an FFI interface module (`module
             // Rust.<Crate>` — the `Rust.*` home is origin-reserved at canon).
             // Its values ARE the real foreign Rust type (`::semver::Version`);
             // emitting the placeholder union as a Rust enum would collide with
             // every wrapper signature (E0308). The backend renders its uses
-            // via the crate's opaque-type path map instead.
-            if self.is_foreign_interface_union(u) {
+            // via the crate's opaque-type path map instead. A TRANSPARENT
+            // union (a real closed-union declaration, never the placeholder
+            // shape) falls through and lowers to an app enum — its values are
+            // native Ipê values, converted at the wrapper seam.
+            if self.is_foreign_interface_union(u)
+                && !self
+                    .transparent_ffi_unions
+                    .contains(&(ModPath(u.home.clone()), u.name))
+            {
                 continue;
             }
             // `Ipe.Email`'s `type EmailProvider` is backed by the runtime enum
@@ -8220,6 +8276,14 @@ impl<'a> Lowerer<'a> {
         home.first()
             .and_then(|s| self.interner.resolve(*s))
             .is_some_and(|s| s == "Rust")
+    }
+
+    /// The clone-classification context for this module.
+    const fn clone_env(&self) -> CloneEnv<'_> {
+        CloneEnv {
+            interner: self.interner,
+            transparent_ffi: &self.transparent_ffi_unions,
+        }
     }
 
     /// is `u` the `Ipe.Config.Decoder` opaque carrier re-declaration —
@@ -9953,7 +10017,7 @@ impl<'a> Lowerer<'a> {
                 self.deferred_fun_captures.borrow_mut().insert(sym, span);
                 continue;
             }
-            match ir_ty.as_ref().map(|t| clone_class(self.interner, t)) {
+            match ir_ty.as_ref().map(|t| clone_class(self.clone_env(), t)) {
                 Some(CloneClass::CloneOk) => {
                     clone_set.insert(sym);
                 }
@@ -10037,7 +10101,7 @@ impl<'a> Lowerer<'a> {
                     body: Box::new(disciplined),
                 });
             }
-            return apply_move_ownership(self.interner, sym, ir_ty, body, span);
+            return apply_move_ownership(self.clone_env(), sym, ir_ty, body, span);
         }
         if let Some(capture_span) = deferred_capture {
             // A capture site saw `sym` as a pure `Fun`, the param's own type
@@ -10045,7 +10109,7 @@ impl<'a> Lowerer<'a> {
             // bare `Box` capture.
             return Err(unsupported(capture_span, Feature::NonCloneCapture));
         }
-        apply_move_ownership(self.interner, sym, ir_ty, body, span)
+        apply_move_ownership(self.clone_env(), sym, ir_ty, body, span)
     }
 
     /// Lower an anonymous function `\p0 p1 ... -> body` into [`Expr::Lambda`].
@@ -12871,7 +12935,7 @@ impl<'a> Lowerer<'a> {
             .take(supplied)
             .map(|slot_ty| {
                 match self.ir_type_from_ty(slot_ty, call_span) {
-                    Ok(ir_ty) => Some(clone_class(self.interner, &ir_ty)),
+                    Ok(ir_ty) => Some(clone_class(self.clone_env(), &ir_ty)),
                     // T7b: ir_type_from_ty failed, but the slot's top-level type
                     // IS a function arrow.  The failure is from a nested Ty::Var
                     // (e.g. the polymorphic result type `a` in `Task Error a`).
@@ -13102,7 +13166,7 @@ impl<'a> Lowerer<'a> {
             .iter()
             .take(supplied)
             .map(|slot_ty| match self.ir_type_from_ty(slot_ty, call_span) {
-                Ok(ir_ty) => Some(clone_class(self.interner, &ir_ty)),
+                Ok(ir_ty) => Some(clone_class(self.clone_env(), &ir_ty)),
                 Err(_) if matches!(slot_ty, Ty::Fun(_, _)) => Some(CloneClass::NonClone),
                 Err(_) => None,
             })
@@ -13246,7 +13310,7 @@ impl<'a> Lowerer<'a> {
                 self.ir_type_from_ty(slot_ty, call_span)
                     .ok()
                     .as_ref()
-                    .map(|t| clone_class(self.interner, t))
+                    .map(|t| clone_class(self.clone_env(), t))
             })
             .collect();
         let mut hoisted: Vec<(Symbol, Expr)> = Vec::new();
@@ -13544,7 +13608,7 @@ impl<'a> Lowerer<'a> {
             .unwrap_or(&[])
             .iter()
             .map(|slot_ty| match self.ir_type_from_ty(slot_ty, call_span) {
-                Ok(ir_ty) => Some(clone_class(self.interner, &ir_ty)),
+                Ok(ir_ty) => Some(clone_class(self.clone_env(), &ir_ty)),
                 Err(_) if matches!(slot_ty, Ty::Fun(_, _)) => Some(CloneClass::NonClone),
                 Err(_) => None,
             })
@@ -15276,12 +15340,16 @@ impl<'a> Lowerer<'a> {
     /// every `VarCtor` / ctor pattern names a declared constructor, so a miss is a
     /// violated invariant rather than user error.
     fn ctor_arity_of(&self, home: &ModPath, name: Symbol) -> DResult<usize> {
-        // A foreign opaque type's placeholder constructor is never exported
+        // A foreign OPAQUE type's placeholder constructor is never exported
         // (the FFI interface module exposes the type WITHOUT `(..)`), so a
         // construction reaching lowering means the export gate leaked — fail
         // closed rather than emit a reference to an enum that is never
-        // declared (the foreign type is the real `::crate::Type`).
-        if self.is_foreign_interface_home(&home.0) {
+        // declared (the foreign type is the real `::crate::Type`). A
+        // TRANSPARENT union's constructors are the one `Rust.*` set a program
+        // constructs legitimately — those proceed to the ordinary lookup.
+        if self.is_foreign_interface_home(&home.0)
+            && !self.transparent_ffi_ctors.contains(&(home.clone(), name))
+        {
             return Err(bug(
                 "ipe_lower::ctor_arity_of",
                 "constructor of a foreign opaque FFI type reached lowering — \
@@ -17084,7 +17152,7 @@ impl<'a> Lowerer<'a> {
                     && let Ok(comp_ir_ty) = self.ir_type_from_ty(ty, span)
                 {
                     disciplined_body = apply_move_ownership(
-                        self.interner,
+                        self.clone_env(),
                         *sym,
                         &comp_ir_ty,
                         disciplined_body,
@@ -17107,7 +17175,7 @@ impl<'a> Lowerer<'a> {
             let mut clone_set: BTreeSet<Symbol> = BTreeSet::new();
             let mut noncl_set: BTreeSet<Symbol> = BTreeSet::new();
             for (sym, ir_ty) in captures {
-                match ir_ty.as_ref().map(|t| clone_class(self.interner, t)) {
+                match ir_ty.as_ref().map(|t| clone_class(self.clone_env(), t)) {
                     Some(CloneClass::CloneOk) => {
                         clone_set.insert(sym);
                     }
@@ -17178,7 +17246,7 @@ impl<'a> Lowerer<'a> {
                         .insert(sym, b.body.span);
                     continue;
                 }
-                match ir_ty.as_ref().map(|t| clone_class(self.interner, t)) {
+                match ir_ty.as_ref().map(|t| clone_class(self.clone_env(), t)) {
                     Some(CloneClass::CloneOk) => {
                         clone_set.insert(sym);
                     }
@@ -17304,7 +17372,7 @@ impl<'a> Lowerer<'a> {
                         // `Arc`-promotion path below (`needs_shared_capture` /
                         // `flows_into_sync_kernel_call`) is orthogonal and
                         // untouched.
-                        apply_move_ownership(self.interner, name, ir_ty, acc, b.body.span)?
+                        apply_move_ownership(self.clone_env(), name, ir_ty, acc, b.body.span)?
                     } else {
                         acc
                     }
@@ -17636,7 +17704,7 @@ impl<'a> Lowerer<'a> {
                         && let Ok(ir_ty) = self.ir_type_from_ty(ty, span)
                     {
                         arm_body =
-                            apply_move_ownership(self.interner, sym, &ir_ty, arm_body, span)?;
+                            apply_move_ownership(self.clone_env(), sym, &ir_ty, arm_body, span)?;
                     }
                 }
 
@@ -18311,7 +18379,7 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use ipe_canon::ast as canon;
     use ipe_diagnostics::{Located, Span};
@@ -18908,7 +18976,7 @@ mod tests {
     fn carrier_clone_authority_agrees_with_clone_class() {
         use ipe_ir::{IrType, carrier_is_clone};
 
-        use super::{CloneClass, clone_class};
+        use super::{CloneClass, CloneEnv, clone_class};
 
         // The shared authority agreement is checked on non-FFI types (an FFI
         // foreign-interface `Enum` is intentionally NonClone in `clone_class`
@@ -18916,6 +18984,11 @@ mod tests {
         // promotion path `carrier_is_clone` guards, so no drift). An empty
         // interner suffices: no sample carries a `Rust.*` home.
         let interner = Interner::new();
+        let transparent = BTreeSet::new();
+        let env = CloneEnv {
+            interner: &interner,
+            transparent_ffi: &transparent,
+        };
         let fun = IrType::Fun(vec![IrType::Int], Box::new(IrType::Int));
         let samples: Vec<IrType> = vec![
             IrType::Int,
@@ -18936,7 +19009,7 @@ mod tests {
         for ty in &samples {
             assert_eq!(
                 carrier_is_clone(ty),
-                clone_class(&interner, ty) != CloneClass::NonClone,
+                clone_class(env, ty) != CloneClass::NonClone,
                 "carrier_is_clone / clone_class drift on {ty:?}"
             );
         }
@@ -18952,8 +19025,8 @@ mod tests {
         use ipe_ir::{IrType, ModPath};
 
         use super::{
-            CloneClass, clone_class, enum_home_is_ffi_foreign, ir_type_has_ffi_foreign_handle,
-            param_is_multiuse_clonable,
+            CloneClass, CloneEnv, clone_class, enum_home_is_ffi_foreign,
+            ir_type_has_ffi_foreign_handle, param_is_multiuse_clonable,
         };
 
         let mut interner = Interner::new();
@@ -18963,6 +19036,11 @@ mod tests {
         let app = interner.intern("App").expect("intern");
         let user_ctor_home = interner.intern("Main").expect("intern");
         let user_enum = interner.intern("Color").expect("intern");
+        let transparent = BTreeSet::new();
+        let env = CloneEnv {
+            interner: &interner,
+            transparent_ffi: &transparent,
+        };
 
         let ffi_home = ModPath(vec![rust, bevy]);
         let world_ty = IrType::Enum {
@@ -18984,25 +19062,25 @@ mod tests {
         ));
 
         // The FFI handle is NonClone bare AND when nested in a carrier.
-        assert_eq!(clone_class(&interner, &world_ty), CloneClass::NonClone);
+        assert_eq!(clone_class(env, &world_ty), CloneClass::NonClone);
         assert_eq!(
             clone_class(
-                &interner,
+                env,
                 &IrType::Result(Box::new(IrType::Error), Box::new(world_ty.clone()))
             ),
             CloneClass::NonClone
         );
-        assert!(!param_is_multiuse_clonable(&interner, &world_ty));
-        assert!(ir_type_has_ffi_foreign_handle(&interner, &world_ty));
+        assert!(!param_is_multiuse_clonable(env, &world_ty));
+        assert!(ir_type_has_ffi_foreign_handle(env, &world_ty));
         assert!(ir_type_has_ffi_foreign_handle(
-            &interner,
-            &IrType::Maybe(Box::new(world_ty))
+            env,
+            &IrType::Maybe(Box::new(world_ty.clone()))
         ));
 
         // A real user enum keeps deriving Clone and is multi-use clonable.
-        assert_eq!(clone_class(&interner, &user_ty), CloneClass::CloneOk);
-        assert!(param_is_multiuse_clonable(&interner, &user_ty));
-        assert!(!ir_type_has_ffi_foreign_handle(&interner, &user_ty));
+        assert_eq!(clone_class(env, &user_ty), CloneClass::CloneOk);
+        assert!(param_is_multiuse_clonable(env, &user_ty));
+        assert!(!ir_type_has_ffi_foreign_handle(env, &user_ty));
 
         // A second FFI-type name (`App`) under the same `Rust.*` home is equally
         // NonClone — the gate keys on the home, not the type name.
@@ -19011,7 +19089,22 @@ mod tests {
             name: app,
             args: vec![],
         };
-        assert_eq!(clone_class(&interner, &app_ty), CloneClass::NonClone);
+        assert_eq!(clone_class(env, &app_ty), CloneClass::NonClone);
+
+        // A TRANSPARENT import under the same `Rust.*` home is a real app
+        // enum: CloneOk (it derives `Clone`), multi-use clonable, and never
+        // an opaque handle for the linearity gate.
+        let mut transparent_world = BTreeSet::new();
+        transparent_world.insert((ModPath(vec![rust, bevy]), world));
+        let env_t = CloneEnv {
+            interner: &interner,
+            transparent_ffi: &transparent_world,
+        };
+        assert_eq!(clone_class(env_t, &world_ty), CloneClass::CloneOk);
+        assert!(param_is_multiuse_clonable(env_t, &world_ty));
+        assert!(!ir_type_has_ffi_foreign_handle(env_t, &world_ty));
+        // The sibling opaque name under the same home stays NonClone.
+        assert_eq!(clone_class(env_t, &app_ty), CloneClass::NonClone);
     }
 
     /// SEAL: reusing an FFI foreign opaque handle in two value-consuming
@@ -19022,7 +19115,7 @@ mod tests {
         use ipe_diagnostics::Feature;
         use ipe_ir::{Expr, IrType, ModPath};
 
-        use super::{reject_foreign_handle_reuse, unsupported};
+        use super::{CloneEnv, reject_foreign_handle_reuse, unsupported};
 
         let mut interner = Interner::new();
         let rust = interner.intern("Rust").expect("intern");
@@ -19030,6 +19123,11 @@ mod tests {
         let world = interner.intern("World").expect("intern");
         let sym = interner.intern("world").expect("intern");
         let span = Span::DUMMY;
+        let transparent = BTreeSet::new();
+        let env = CloneEnv {
+            interner: &interner,
+            transparent_ffi: &transparent,
+        };
 
         let world_ty = IrType::Enum {
             home: ModPath(vec![rust, bevy]),
@@ -19039,12 +19137,12 @@ mod tests {
 
         // Reuse: `sym` appears twice → fail closed with IPE-L0130.
         let reused = Expr::Tuple(vec![Expr::Var(sym), Expr::Var(sym)]);
-        let err = reject_foreign_handle_reuse(&interner, sym, &world_ty, &reused, span)
+        let err = reject_foreign_handle_reuse(env, sym, &world_ty, &reused, span)
             .expect_err("reused FFI handle must be rejected");
         assert_eq!(err, unsupported(span, Feature::ForeignHandleReuse));
 
         // Linear (single) use: accepted.
         let linear = Expr::Var(sym);
-        assert!(reject_foreign_handle_reuse(&interner, sym, &world_ty, &linear, span).is_ok());
+        assert!(reject_foreign_handle_reuse(env, sym, &world_ty, &linear, span).is_ok());
     }
 }

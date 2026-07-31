@@ -272,6 +272,7 @@ pub fn unify_foreign_nominals(catalog: &mut [InstalledCrate]) -> UnifyReport {
                 member_imports,
                 &c.opaque_types,
                 &c.define_types,
+                &c.transparent_types,
                 &c.bindings,
             );
         }
@@ -305,6 +306,8 @@ mod tests {
                 wrapper_ident: format!("K_{name}"),
                 arity: 1,
                 sig: (*sig).to_owned(),
+                transparent_params: Vec::new(),
+                transparent_result: None,
             })
             .collect();
         let slug = module.to_lowercase().replace('.', "_");
@@ -316,6 +319,7 @@ mod tests {
             opaque_types,
             opaque_type_ids,
             define_types: std::collections::BTreeSet::new(),
+            transparent_types: std::collections::BTreeMap::new(),
             cargo_deps: vec![],
             bindings,
             wrapper_idents: std::collections::BTreeSet::new(),

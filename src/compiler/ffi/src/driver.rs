@@ -483,7 +483,10 @@ impl FfiCache {
         let iface = crate::interface::crate_interface(pkg);
         let consumer_json = emit_consumer_json(pkg, &iface)?;
         let writes: [(&Path, String); 7] = [
-            (&paths.ipei, crate::emit::emit_ipei(pkg)),
+            (
+                &paths.ipei,
+                crate::emit::emit_ipei(pkg, &iface.transparent_types),
+            ),
             (&paths.kernel_json, crate::emit::emit_kernel_json(pkg)),
             (&paths.bindings, crate::bindings::emit_bindings(pkg)),
             (&paths.coverage, emit_coverage(pkg, &iface.skipped)),
@@ -573,15 +576,32 @@ pub fn emit_consumer_json(
         .bindings
         .iter()
         .map(|b| {
-            serde_json::json!({
-                "refName": b.ref_name,
-                "wrapperIdent": b.wrapper_ident,
-                "arity": b.arity,
-                "sig": b.sig,
-            })
+            let mut o = serde_json::Map::new();
+            o.insert("refName".into(), b.ref_name.clone().into());
+            o.insert("wrapperIdent".into(), b.wrapper_ident.clone().into());
+            o.insert("arity".into(), b.arity.into());
+            o.insert("sig".into(), b.sig.clone().into());
+            if b.transparent_params.iter().any(Option::is_some) {
+                o.insert(
+                    "transparentParams".into(),
+                    serde_json::json!(b.transparent_params),
+                );
+            }
+            if let Some(r) = &b.transparent_result {
+                o.insert(
+                    "transparentResult".into(),
+                    serde_json::json!({ "typeName": r.type_name, "inResult": r.in_result }),
+                );
+            }
+            serde_json::Value::Object(o)
         })
         .collect();
-    let doc = serde_json::json!({
+    let transparent: Vec<serde_json::Value> = iface
+        .transparent_types
+        .values()
+        .map(crate::emit::transparent_type_json)
+        .collect();
+    let mut doc = serde_json::json!({
         "moduleName": iface.module_name,
         "kernelName": iface.kernel_name,
         "opaqueTypes": iface.opaque_types,
@@ -590,6 +610,11 @@ pub fn emit_consumer_json(
         "cargoDeps": cargo_dep_lines(pkg)?,
         "bindings": bindings,
     });
+    if !transparent.is_empty()
+        && let Some(map) = doc.as_object_mut()
+    {
+        map.insert("transparentTypes".into(), serde_json::json!(transparent));
+    }
     let mut text = serde_json::to_string_pretty(&doc).unwrap_or_else(|_| "{}".to_owned());
     text.push('\n');
     Ok(text)
@@ -620,6 +645,11 @@ pub struct InstalledCrate {
     /// renders their `foreign_types` path crate-locally rather than as an
     /// external `::crate::Path`.
     pub define_types: BTreeSet<String>,
+    /// The transparent foreign types the interface surfaces (see
+    /// [`crate::interface::CrateInterface::transparent_types`]) — the shapes
+    /// the backend's conversion glue is assembled from. Empty for a legacy
+    /// cache, whose interface text predates transparency.
+    pub transparent_types: std::collections::BTreeMap<String, crate::transparency::TransparentType>,
     /// Pinned `[dependencies]` lines.
     pub cargo_deps: Vec<String>,
     /// The structured interface bindings (name, wrapper, arity, signature) —
@@ -736,6 +766,7 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
                 opaque_types: iface.opaque_types,
                 opaque_type_ids: iface.opaque_type_ids,
                 define_types: iface.define_types,
+                transparent_types: iface.transparent_types,
                 cargo_deps: cargo_dep_lines(&pkg)?,
                 bindings: iface.bindings,
                 wrapper_idents,
@@ -791,6 +822,43 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
                     .collect()
             })
             .unwrap_or_default();
+        let transparent_types: std::collections::BTreeMap<
+            String,
+            crate::transparency::TransparentType,
+        > = match doc.get("transparentTypes") {
+            None => std::collections::BTreeMap::new(),
+            Some(v) => {
+                let entries = v
+                    .as_array()
+                    .ok_or_else(|| malformed("`transparentTypes` is not an array".to_owned()))?;
+                let mut out = std::collections::BTreeMap::new();
+                for entry in entries {
+                    let t = crate::transparency::TransparentType::from_projection_json(entry)
+                        .map_err(malformed)?;
+                    out.insert(t.name().as_str().to_owned(), t);
+                }
+                out
+            }
+        };
+        // Fail-closed cross-check: an interface text that surfaces a
+        // transparent shape — a record alias (`type alias …`) or a closed
+        // union (exported WITH `(..)`, a marker the opaque `type N = N`
+        // placeholder and every `define` nominal never carry) — must come
+        // with the structured shapes, or the glue the backend assembles from
+        // them would be missing while the module still declares the
+        // record/union as a native app type. The lowerer keys transparency on
+        // this module TEXT, so it would emit an app enum the wrapper's foreign
+        // result never converts to (an E0308 the SEAL forbids). A torn or
+        // hand-edited projection pair, refused rather than mis-wired.
+        let surfaces_transparent =
+            interface_source.contains("\ntype alias ") || interface_source.contains("(..)");
+        if transparent_types.is_empty() && surfaces_transparent {
+            return Err(malformed(
+                "interface module surfaces a transparent record/union but the manifest \
+                 carries no `transparentTypes` — re-run `ipe add` to regenerate the cache"
+                    .to_owned(),
+            ));
+        }
         let bindings: Vec<crate::interface::InterfaceBinding> = doc
             .get("bindings")
             .and_then(serde_json::Value::as_array)
@@ -798,6 +866,22 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
                 a.iter()
                     .filter_map(|b| {
                         let get = |k: &str| b.get(k).and_then(serde_json::Value::as_str);
+                        let transparent_params: Vec<Option<String>> = b
+                            .get("transparentParams")
+                            .and_then(serde_json::Value::as_array)
+                            .map(|ps| ps.iter().map(|p| p.as_str().map(str::to_owned)).collect())
+                            .unwrap_or_default();
+                        let transparent_result = b.get("transparentResult").and_then(|r| {
+                            Some(crate::interface::TransparentResult {
+                                type_name: r
+                                    .get("typeName")
+                                    .and_then(serde_json::Value::as_str)?
+                                    .to_owned(),
+                                in_result: r
+                                    .get("inResult")
+                                    .and_then(serde_json::Value::as_bool)?,
+                            })
+                        });
                         Some(crate::interface::InterfaceBinding {
                             ref_name: get("refName")?.to_owned(),
                             wrapper_ident: get("wrapperIdent")?.to_owned(),
@@ -806,6 +890,8 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
                             )
                             .ok()?,
                             sig: get("sig")?.to_owned(),
+                            transparent_params,
+                            transparent_result,
                         })
                     })
                     .collect()
@@ -834,6 +920,7 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
             opaque_types,
             opaque_type_ids,
             define_types,
+            transparent_types,
             cargo_deps,
             bindings,
             wrapper_idents,
@@ -878,6 +965,25 @@ pub fn emit_coverage(
         out.push_str("| Binding | Reason |\n|---|---|\n");
         for s in interface_skips {
             let _ = writeln!(out, "| {} | {} |", s.ref_name, s.reason);
+        }
+    }
+    let types = pkg.foreign_types();
+    if !types.transparent().is_empty() || !types.opaque_reasons().is_empty() {
+        out.push_str("\n## Foreign types — the per-type representation decision\n\n");
+        out.push_str("| Type | Representation | Why |\n|---|---|---|\n");
+        for t in types.transparent().values() {
+            let repr = match t {
+                crate::transparency::TransparentType::Struct { .. } => "transparent record",
+                crate::transparency::TransparentType::Enum { .. } => "transparent closed union",
+            };
+            let _ = writeln!(
+                out,
+                "| {} | {repr} | every member an identity carrier, member set a stable contract |",
+                t.name()
+            );
+        }
+        for r in types.opaque_reasons() {
+            let _ = writeln!(out, "| {} | opaque handle | {} |", r.name, r.reason);
         }
     }
     if !pkg.notes().is_empty() {
@@ -1321,6 +1427,69 @@ mod tests {
         assert_eq!(
             c.bindings_source, stored,
             "legacy path serves the stored text"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    fn transparent_enum_json() -> String {
+        json!({
+            "pkg": "tm", "name": "tm", "version": "0.1.0",
+            "functions": [
+                {"name": "mk",
+                 "params": [{"name": "n", "type": "Int", "ipeType": "Int", "rustType": "i64"}],
+                 "results": [{"name": "", "type": "Shade", "rustType": "tm::Shade"}],
+                 "effect": "pure"}
+            ],
+            "errors": [],
+            "types": [
+                {"name": "Shade", "rustPath": "tm::Shade", "kind": "enum",
+                 "variants": [
+                    {"name": "On", "kind": "unit"},
+                    {"name": "Level", "kind": "tuple",
+                     "members": [{"name": "0", "type": "Int", "rustType": "i64"}]}
+                 ]}
+            ]
+        })
+        .to_string()
+    }
+
+    /// A torn legacy projection pair (no `pkg.json`) whose interface text still
+    /// surfaces a transparent CLOSED UNION (`type X = … (..)` export) while the
+    /// consumer manifest has had `transparentTypes` + the binding markers
+    /// stripped must be REFUSED. The lowerer keys transparency on the module
+    /// text, so admitting it would emit a native app enum the wrapper's foreign
+    /// result never converts to — an E0308 after `ipe` exit 0.
+    #[test]
+    fn legacy_torn_transparent_union_is_refused() {
+        let tmp = std::env::temp_dir().join(format!("ipe-ffi-torn-enum-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let cache = FfiCache::at_project_root(&tmp);
+        let (_pkg, paths) =
+            install_from_inspection(&cache, &transparent_enum_json()).expect("installs");
+        std::fs::remove_file(&paths.pkg_json).expect("drop pkg.json");
+        let consumer = std::fs::read_to_string(&paths.consumer).expect("readable");
+        let mut doc: serde_json::Value = serde_json::from_str(&consumer).expect("json");
+        if let Some(o) = doc.as_object_mut() {
+            o.remove("transparentTypes");
+            if let Some(bs) = o.get_mut("bindings").and_then(|b| b.as_array_mut()) {
+                for b in bs {
+                    if let Some(bo) = b.as_object_mut() {
+                        bo.remove("transparentParams");
+                        bo.remove("transparentResult");
+                    }
+                }
+            }
+        }
+        std::fs::write(&paths.consumer, serde_json::to_string_pretty(&doc).unwrap()).expect("w");
+        let result = load_catalog(cache.root());
+        assert!(
+            result.is_err(),
+            "torn transparent-union legacy cache must be refused, got: {:?}",
+            result.map(|c| c.first().map(|x| x
+                .transparent_types
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()))
         );
         let _ = std::fs::remove_dir_all(&tmp);
     }
