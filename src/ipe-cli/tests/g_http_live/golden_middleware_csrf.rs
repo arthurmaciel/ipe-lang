@@ -19,26 +19,26 @@ fn out_dir() -> PathBuf {
     std::env::temp_dir().join("ipec_m6_middleware_csrf")
 }
 
-/// Compile the fixture; `None` (skip) when the runtime cannot be resolved.
-fn compile() -> Option<Result<(), ipe::CliError>> {
+/// Compile the fixture into `out`; `None` (skip) when the runtime cannot be
+/// resolved.
+fn compile(out: &Path) -> Option<Result<(), ipe::CliError>> {
     let entry = repo_root()
         .join("tests")
         .join("golden")
         .join("middleware_csrf")
         .join("Main.ipe");
-    let out = out_dir();
-    let _ = std::fs::remove_dir_all(&out);
+    let _ = std::fs::remove_dir_all(out);
     let Ok(runtime) = ipe::resolve_runtime() else {
         return None;
     };
-    Some(ipe::build(&entry, &out, &runtime))
+    Some(ipe::build(&entry, out, &runtime))
 }
 
 /// A `Server.post` route wrapped in `Middleware.withCsrf` must be ipe-0 and
 /// emit `middleware_with_csrf(...)` wrapping the handler.
 #[test]
 fn middleware_with_csrf_emits_wrapped_handler() {
-    let Some(result) = compile() else {
+    let Some(result) = compile(&out_dir()) else {
         return;
     };
     assert!(
@@ -62,13 +62,24 @@ fn middleware_with_csrf_cargo_builds() {
     if std::env::var("IPE_E2E").is_err() {
         return;
     }
-    middleware_with_csrf_emits_wrapped_handler();
+    // Emit into a PRIVATE dir this test alone owns, so the compile-only sibling
+    // re-emitting into `out_dir()` in parallel cannot delete rustc's working
+    // directory mid-build.
+    let out = std::env::temp_dir().join("ipec_m6_middleware_csrf_e2e");
+    let Some(result) = compile(&out) else {
+        return;
+    };
+    assert!(
+        result.is_ok(),
+        "Middleware.withCsrf-wrapped route must be ipe-0, got: {:?}",
+        result.err(),
+    );
 
     let target = std::env::temp_dir().join("r63").join("middleware_csrf");
     let build = std::process::Command::new("cargo")
         .arg("build")
         .env("CARGO_TARGET_DIR", &target)
-        .current_dir(out_dir())
+        .current_dir(&out)
         .output()
         .expect("cargo must spawn");
     assert!(
