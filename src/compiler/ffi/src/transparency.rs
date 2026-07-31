@@ -201,6 +201,24 @@ impl ForeignTypeCatalog {
                 name,
             });
         }
+        // The MIXED collision poisons too: a nominal claimed by one
+        // transparent entry and one refused-to-opaque entry (two same-leaf
+        // types from different modules, one qualifying) is the same Ipê-side
+        // ambiguity — the record and the opaque handle would share a name.
+        let mixed: Vec<String> = transparent
+            .keys()
+            .filter(|k| opaque.iter().any(|r| &r.name == *k))
+            .cloned()
+            .collect();
+        for name in mixed {
+            transparent.remove(&name);
+            opaque.push(OpaqueTypeReason {
+                reason: format!(
+                    "the nominal `{name}` is also claimed by a non-transparent reported type"
+                ),
+                name,
+            });
+        }
         Self {
             transparent,
             opaque,
@@ -552,5 +570,36 @@ mod tests {
                 .any(|r| r.name == "Point" && r.reason.contains("claim the nominal")),
             "the ambiguity must be recorded"
         );
+    }
+
+    #[test]
+    fn mixed_transparent_and_opaque_nominal_collision_poisons_the_transparent_claimant() {
+        // One qualifying `a::Point` plus one refused `b::Point` (hidden
+        // members): the record and the opaque handle would share the Ipê
+        // nominal, so the transparent claimant must fall back to opaque —
+        // regardless of report order.
+        let qualifying = serde_json::json!(
+            {"name": "Point", "rustPath": "tm::a::Point", "kind": "struct",
+             "fields": [{"name": "x", "type": "Int", "rustType": "i64"}]});
+        let refused = serde_json::json!(
+            {"name": "Point", "rustPath": "tm::b::Point", "kind": "struct",
+             "hiddenMembers": true});
+        for order in [
+            serde_json::json!([qualifying, refused]),
+            serde_json::json!([refused, qualifying]),
+        ] {
+            let catalog = ForeignTypeCatalog::classify(&decode_types(&order));
+            assert!(
+                catalog.transparent().is_empty(),
+                "a mixed nominal collision must not surface structure"
+            );
+            assert!(
+                catalog
+                    .opaque_reasons()
+                    .iter()
+                    .any(|r| r.name == "Point" && r.reason.contains("also claimed")),
+                "the mixed ambiguity must be recorded"
+            );
+        }
     }
 }
