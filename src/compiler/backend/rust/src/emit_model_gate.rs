@@ -41,7 +41,7 @@ use crate::EmitCtx;
 /// lambda-`view` path (a lambda `view` returns its Model here rather than
 /// `None`, so it is not silently skipped), and (c) the routed-vs-non-routed
 /// emit branch (`emit_web::routed_page_field`), keeping the type-tier
-/// `RoutedLiveCheck` and the emit-tier detection in agreement on lambda-shaped
+/// `RoutedWebCheck` and the emit-tier detection in agreement on lambda-shaped
 /// cfg fields.
 #[must_use]
 pub fn fn_param_ty(e: &Expr, idx: usize) -> Option<&IrType> {
@@ -105,7 +105,7 @@ pub fn msg_ty_of_update(update_e: &Expr) -> Option<&IrType> {
 /// the message is self-contained.
 pub fn check_admissible_msg(ctx: &EmitCtx, msg_ty: &IrType, app: AppShape) -> DResult<()> {
     // Msg admissibility is always derivable (Clone + Debug + PartialEq),
-    // regardless of the app shape. Live needs Send+Sync+Debug+'static;
+    // regardless of the app shape. Web needs Send+Sync+Debug+'static;
     // Tui/Webview need Clone+Send+'static. The derivable predicate is strictly
     // stronger than "Clone only" and covers both. Crucially, this is NOT serde,
     // so Html-carrying Msg (derivable but not serde) is accepted here.

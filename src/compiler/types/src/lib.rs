@@ -49,7 +49,7 @@ pub use solve::{BUDGET_ENV, Budget, DEFAULT_SOLVER_BUDGET};
 pub use ty::{RowTail, Ty, TyBounds, is_solver_var, tag_solver_var, untag_solver_var};
 
 use constrain::{
-    Builder, FieldAccess, RecordUpdate, RouteWitnessCheck, RoutedLiveCheck, SchemeApp,
+    Builder, FieldAccess, RecordUpdate, RouteWitnessCheck, RoutedWebCheck, SchemeApp,
     promote_untyped_boundaries, reify_scheme, zonk,
 };
 use solve::solve_attributed;
@@ -450,7 +450,7 @@ fn infer_core(
     // relates its builder argument's settled type to the route's page type —
     // a nullary builder witnesses the page directly, a params-consuming
     // constructor (`String -> Page`) witnesses it with its result type.  Must
-    // run BEFORE `resolve_routed_live_checks` so route constructors pin the
+    // run BEFORE `resolve_routed_web_checks` so route constructors pin the
     // page variable before the `notFound ≟ Model.page` gate reads it.  See
     // the `RouteWitnessCheck` doc comment for the full rationale.
     lift!(resolve_route_witness_checks(
@@ -474,13 +474,13 @@ fn infer_core(
     // apps (Model has no `page` field) are silently skipped — UNLESS the app
     // declared a non-empty `routes` list, in which case the routes are ignored
     // and we emit the IPE-L0124 warning (usually a mis-named `page` field). See
-    // the `RoutedLiveCheck` doc comment for the full rationale.
+    // the `RoutedWebCheck` doc comment for the full rationale.
     let has_routes = !generated.route_witness_checks.is_empty();
-    lift!(resolve_routed_live_checks(
+    lift!(resolve_routed_web_checks(
         &mut uf,
         budget,
         interner,
-        &generated.routed_live_checks,
+        &generated.routed_web_checks,
         has_routes,
         generated.route_witness_checks.len(),
         &mut warnings,
@@ -1869,11 +1869,11 @@ fn resolve_route_witness_checks(
 /// The detection criterion (`page` field presence) mirrors `emit_web.rs`'s
 /// `routed_page_field` helper: both agree on what "routed" means, ensuring the
 /// type-check gate and the emit gate fire on exactly the same programs.
-fn resolve_routed_live_checks(
+fn resolve_routed_web_checks(
     uf: &mut UnionFind<Content>,
     budget: &mut Budget,
     interner: &Interner,
-    checks: &[RoutedLiveCheck],
+    checks: &[RoutedWebCheck],
     has_routes: bool,
     route_count: usize,
     warnings: &mut Vec<Diagnostic>,
@@ -3843,7 +3843,7 @@ mod tests {
     /// program still type-checks (Go's `applyRoute` no-ops the same shape); the
     /// warning flags the likely mis-named routed-page field.
     ///
-    /// Exercises `resolve_routed_live_checks` directly with a hand-built
+    /// Exercises `resolve_routed_web_checks` directly with a hand-built
     /// non-routed Model record (a single `count` field, no `page`) and
     /// `has_routes = true`.
     #[test]
@@ -3865,13 +3865,13 @@ mod tests {
             .expect("fresh model var");
         let not_found_var = uf.fresh(Content::Flex).expect("fresh notFound var");
 
-        let check = RoutedLiveCheck {
+        let check = RoutedWebCheck {
             model_var,
             not_found_var,
             span: Span::DUMMY,
         };
         let mut warnings: Vec<Diagnostic> = Vec::new();
-        resolve_routed_live_checks(
+        resolve_routed_web_checks(
             &mut uf,
             &mut budget,
             &interner,
@@ -3921,13 +3921,13 @@ mod tests {
             .expect("fresh model var");
         let not_found_var = uf.fresh(Content::Flex).expect("fresh notFound var");
 
-        let check = RoutedLiveCheck {
+        let check = RoutedWebCheck {
             model_var,
             not_found_var,
             span: Span::DUMMY,
         };
         let mut warnings: Vec<Diagnostic> = Vec::new();
-        resolve_routed_live_checks(
+        resolve_routed_web_checks(
             &mut uf,
             &mut budget,
             &interner,

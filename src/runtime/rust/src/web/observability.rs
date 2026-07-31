@@ -5,7 +5,7 @@
 //! - `GET /_ipe/readyz`   — readiness probe, `{"status":"ready"}` (200) or
 //!   `{"status":"draining"}` (503) once shutdown is signalled.
 //! - `GET /_ipe/buildinfo`— commit / builtAt / ipeVersion JSON.
-//! - `GET /_ipe/metrics`  — Prometheus text: `ipe_live_requests_total`.
+//! - `GET /_ipe/metrics`  — Prometheus text: `ipe_web_requests_total`.
 //!
 //! Requests are counted by the `track` middleware layer. No panic vectors: every
 //! handler returns a static or counter-derived body; nothing can fail.
@@ -64,10 +64,10 @@ pub async fn buildinfo() -> impl IntoResponse {
 pub async fn metrics() -> impl IntoResponse {
     // The whole exposition comes from the labeled registry (Go parity:
     // prometheus.go's WriteProm) — active sessions, SSE connections, 5xx errors,
-    // request-latency histogram, AND `ipe_live_requests_total{method,status}`
+    // request-latency histogram, AND `ipe_web_requests_total{method,status}`
     // written per request by the `track` middleware below. `write_prom` emits
     // exactly one #HELP/#TYPE per metric name, so there is NO hand-printed
-    // unlabeled `ipe_live_requests_total` line here: a second, unlabeled series
+    // unlabeled `ipe_web_requests_total` line here: a second, unlabeled series
     // under the same name would mean a duplicate #HELP/#TYPE block, which makes
     // a Prometheus scraper reject the entire exposition.
     let body = crate::telemetry::write_prom();
@@ -108,17 +108,17 @@ pub async fn track(
     // telemetry, not its own page renders.
     if !is_internal_path(&path) && !is_sub_app() {
         let dur_us = start.elapsed().as_micros().min(u64::MAX as u128) as u64;
-        // Request-latency histogram (Go parity: Observe ipe_live_request_seconds).
+        // Request-latency histogram (Go parity: Observe ipe_web_request_seconds).
         // UNLABELED on purpose — labeling by the raw path would be an unbounded-
         // cardinality memory-DoS (the registry never evicts); Go labels by a
         // bounded route template, which the Rust middleware doesn't have here.
         super::super::telemetry::metric_observe(
-            "ipe_live_request_seconds",
+            "ipe_web_request_seconds",
             &[],
             dur_us as f64 / 1_000_000.0,
         );
         // Labeled request counter (Go parity: prometheus.go's
-        // ipe_live_requests_total{method,route,status}). We keep Go's two
+        // ipe_web_requests_total{method,route,status}). We keep Go's two
         // BOUNDED labels — `method` normalised to a closed set, and the full
         // numeric `status` (bounded by the HTTP spec) — but DROP Go's `route`
         // label: it is derived from the raw request path, an attacker-
@@ -128,7 +128,7 @@ pub async fn track(
         // HTTP permits arbitrary extension-method tokens.
         let status_str = status.to_string();
         super::super::telemetry::metric_inc(
-            "ipe_live_requests_total",
+            "ipe_web_requests_total",
             &[
                 ("method", normalize_method(&method)),
                 ("status", &status_str),
@@ -152,7 +152,7 @@ pub async fn track(
 }
 
 /// Map an HTTP method token to one of a CLOSED set of labels, so the
-/// `ipe_live_requests_total{method=…}` series can never explode in cardinality.
+/// `ipe_web_requests_total{method=…}` series can never explode in cardinality.
 /// HTTP permits arbitrary extension-method tokens and `req.method()` preserves
 /// the on-wire bytes verbatim, so without this an attacker could mint an
 /// unbounded number of distinct `method` label values against a registry that
@@ -278,14 +278,14 @@ mod tests {
         // bounded labels appear. Substring-only assertions keep this
         // order-independent against the process-global registry.
         crate::telemetry::metric_inc(
-            "ipe_live_requests_total",
+            "ipe_web_requests_total",
             &[("method", "GET"), ("status", "200")],
             1,
         );
         let r = metrics().await.into_response();
         assert_eq!(r.status(), StatusCode::OK);
         let b = body_string(r).await;
-        assert!(b.contains("ipe_live_requests_total"), "{b}");
+        assert!(b.contains("ipe_web_requests_total"), "{b}");
         assert!(b.contains("method=\"GET\""), "{b}");
         assert!(b.contains("status=\"200\""), "{b}");
     }
@@ -375,7 +375,7 @@ mod tests {
         // Go parity: the converted 500 returns through `track` normally, so the
         // request is counted with status="500" (not skipped via an unwind).
         let m = crate::telemetry::write_prom();
-        assert!(m.contains("ipe_live_requests_total"), "{m}");
+        assert!(m.contains("ipe_web_requests_total"), "{m}");
         assert!(m.contains("status=\"500\""), "{m}");
     }
 

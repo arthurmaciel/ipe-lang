@@ -104,7 +104,7 @@ pub fn emit_webview_call(
 ///
 /// # Function-field emission
 ///
-/// Same discipline as `emit_live_app_inner` / `emit_tui_inner`: named `fn` items
+/// Same discipline as `emit_web_app_inner` / `emit_tui_inner`: named `fn` items
 /// are emitted via `emit_webview_fn` (raw identifier) to satisfy
 /// `Send + Sync + 'static` via the blanket impl. A `Box<dyn Fn>` does not carry
 /// these bounds without explicit annotation.
@@ -209,7 +209,7 @@ fn emit_webview_app_inner(
 
 /// Emit a cfg-field expression for a Webview app-entry kernel.
 ///
-/// Mirrors `emit_live_fn` (`emit_web.rs`) and `emit_tui_fn` (`emit_tui.rs`)
+/// Mirrors `emit_web_fn` (`emit_web.rs`) and `emit_tui_fn` (`emit_tui.rs`)
 /// exactly: for a named function reference ([`Expr::FuncValue`]), emits the raw
 /// callee name (e.g. `Main_init`) rather than a boxed closure. A named function
 /// item satisfies `Fn(…) + Send + Sync + 'static` via the compiler's blanket impl.

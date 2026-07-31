@@ -1,10 +1,10 @@
 Status: Accepted
 
-# 0020. Html/Ui/Live kernels are schemed only when three arity sources agree
+# 0020. Html/Ui/Web kernels are schemed only when three arity sources agree
 
 ## Context
 
-43 kernels in the Ipe.Html / Ipe.Ui / Ipe.Live rendering family were typed as
+43 kernels in the Ipe.Html / Ipe.Ui / Ipe.Web rendering family were typed as
 `Ty::Var(u32::MAX)` — the fallback hole that lets a call slip past the
 type-checker and fail at `cargo`. Closing them requires a correct
 `stdlib_scheme` arm per kernel, and the scheme's arrow-count must agree with the
@@ -21,14 +21,14 @@ Seven node kernels (`Html.div/span/a/button/p/input/img`) are **blocked**: the
 registry `decl().arity` is off by one while the runtime and lowerer agree; the
 derived schemes are correct, so only the registry is corrected (a one-line
 per-kernel fix, restoring `arrow-count == decl().arity == callee_arity`).
-`Live.appRouted` is a special case — not a simple curried arrow but a closed
+`Web.appRouted` is a special case — not a simple curried arrow but a closed
 record of 9 fields under one Ipê-level arity — and needs an explicit decision
 (dedicated closed-record arm vs. exclude as `REACHABLE_BUT_UNLOWERED`) before
 enrollment.
 
 Rejected alternatives: scheming the seven node kernels without fixing the
 registry (ships incorrect `decl().arity`, violating the tripwire), or leaving
-`Live.appRouted` untyped (advertises a kernel the lowerer refuses — fail-closed
+`Web.appRouted` untyped (advertises a kernel the lowerer refuses — fail-closed
 but inconsistent).
 
 ## Consequences

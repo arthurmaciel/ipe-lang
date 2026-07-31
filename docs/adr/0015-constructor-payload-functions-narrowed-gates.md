@@ -25,7 +25,7 @@ Replace the blanket construction ban with two narrower fail-closed gates:
 The construction lift is sound because (a) runtime enums have bounded generic
 derives, (b) concrete user enums drop auto-derives when non-derivable (the
 derive-demotion fixpoint), and (c) upstream obligations (`==`, `toString`, serde,
-Live Model) are already guarded upstream of lowering (the type-checker's
+Web Model) are already guarded upstream of lowering (the type-checker's
 `ty_is_equatable` rejection, the Model gate, `ir_type_is_serde` poisoning).
 
 Rejected alternatives:

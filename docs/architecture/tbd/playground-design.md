@@ -636,7 +636,7 @@ sandbox CI matrix (§D).
 1. **`Ipe.Process` — does not exist.** Greenfield; this is the module the plan
    builds. No `src/stdlib/Ipe/Process.ipe`, no `Process_*` kernels. (Confirmed: no
    `Process` `.ipe` module anywhere in `src/stdlib/`.)
-2. **No `Ipe.Tea.Web` / `Ipe.Live` server surface.** The task brief assumed a
+2. **No `Ipe.Tea.Web` / `Ipe.Web` server surface.** The task brief assumed a
    `Sky.Live` port. Ipê has no `Live` app surface; the correct and fully-shipped
    surface is **`Ipe.Http.Server`** (`Server.listen`, `Server.get/post`,
    `Server.body`, `Server.text/json/html/withStatus/withHeader/redirect`). This

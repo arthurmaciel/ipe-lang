@@ -940,7 +940,7 @@ const fn feature_label(f: Feature) -> &'static str {
              `String` element / key instead. Divergence from Ipe, rationale: \
              Rust backend capability [feature: float-keyed-collection]"
         }
-        Feature::RoutedLiveApp => {
+        Feature::RoutedWebApp => {
             "`Web.appRouted` is not yet wired on the Rust backend — \
              use the non-routed `Web.app` \
              { init, update, view, subscriptions } form for now \

@@ -11,7 +11,7 @@
 //!
 //! The fix types the builder with its own variable and relates it to the page
 //! by a deferred per-route witness (`RouteWitnessCheck`, resolved post-solve
-//! like `RoutedLiveCheck`): peel the builder's settled leading arrows, unify
+//! like `RoutedWebCheck`): peel the builder's settled leading arrows, unify
 //! the result with the page. Nullary routes witness the page directly; param
 //! constructors witness it with their result; wrong-ADT constructors still
 //! fail with IPE-T0001.

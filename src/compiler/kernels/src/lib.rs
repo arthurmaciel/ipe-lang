@@ -52,7 +52,7 @@ pub enum KernelClass {
 /// feature-modules per `uses_*` flag. A kernel's emit [`KernelClass`] drives its
 /// codegen dispatch, but is NOT the same fact as "which vendored module defines
 /// the symbol I emit": `Cmd.publish` is `class = Tea` yet its `cmd_publish`
-/// symbol lives in `live::pubsub`; `HttpStream.chunks` is `class = Pure` yet its
+/// symbol lives in `web::pubsub`; `HttpStream.chunks` is `class = Pure` yet its
 /// `sub_subscribe_stream` symbol lives in `http_stream`. When those two facts
 /// diverge, the module the symbol needs must be declared independently of the
 /// class — otherwise `ipe` accepts the program (exit 0) but the emitted crate
@@ -1135,9 +1135,9 @@ pub enum StdlibKernel {
     /// cover the common cases via `Ui.breakpoint`). Wraps `child` in a
     /// marker-carrying `<div>` (`data-ipe-mq-q` = the query, gated through
     /// `SafeCssMediaQuery`; `data-ipe-mq-rules` = the attrs folded through
-    /// the shared `build_style_string` collector). The Live / Webview render
+    /// the shared `build_style_string` collector). The Web / Webview render
     /// pipelines consume the markers via
-    /// `live::style_inject::apply_style_injections` (`build_mq`) into a
+    /// `web::style_inject::apply_style_injections` (`build_mq`) into a
     /// ipe-id-scoped `<style data-ipe-mq="<sid>">@media <q> {
     /// [ipe-id="<sid>"] { <rules> } }</style>` block. See
     /// `docs/adr/0019-ui-mediaquery-safe-boundary.md`.
@@ -2510,7 +2510,7 @@ impl StdlibKernel {
             Self::SubSubscribeTopic => d("Sub", "subscribeTopic", 2, Tea, "sub_subscribe_topic"),
             // `Ipe.PubSub` is the Task-shaped top-level publish surface — NOT
             // TEA-loop machinery. `class = Web` because its runtime symbols live
-            // in `ipe_runtime::live::pubsub` (the Web/live module), the same home
+            // in `ipe_runtime::web::pubsub` (the web module), the same home
             // as `Html.renderStatic`; it is excluded from `is_tea()` so it never
             // pulls in the `Cmd`/`Sub` (`tea` module) aliases. `Ipe.PubSub` is a
             // compiled-source module, so `Ipe.PubSub.publish` resolves through its
@@ -2789,7 +2789,7 @@ impl StdlibKernel {
             // `Ipe.Html.renderStatic` is a shape-neutral static-render bridge, NOT
             // a TEA entry: it renders a `view` once to HTML and returns a `Task`, so
             // it lives under `Ipe.Html` next to `render`. `class = Web` because its
-            // runtime symbols live in the Web/live module (`web_render_static`); it
+            // runtime symbols live in the web module (`web_render_static`); it
             // stays out of `is_tea()`, so a Program using it never pulls in the
             // `Cmd`/`Sub` loop aliases.
             Self::WebRenderStatic => d("Html", "renderStatic", 2, Web, "web_render_static"),
@@ -4623,7 +4623,7 @@ impl StdlibKernel {
         match self {
             // `cmd_publish` / `cmd_publish_no_echo` / `sub_subscribe_topic` are
             // `class = Tea` (they dispatch through the standard TEA emit path) but
-            // their runtime symbols are defined ONLY in `ipe_runtime::live::pubsub`
+            // their runtime symbols are defined ONLY in `ipe_runtime::web::pubsub`
             // — the `live` module. Without this the `live` append never fires and
             // the emitted `main.rs` references undefined `cmd_publish` (E0425).
             Self::CmdPublish | Self::CmdPublishNoEcho | Self::SubSubscribeTopic => {
@@ -4635,7 +4635,7 @@ impl StdlibKernel {
             // SSOT: every kernel whose emitted symbol diverges from its class's
             // module home is listed, whether or not a parallel predicate already
             // covers it. (`class = Web`'s home is the `web` module; the symbols
-            // live in its `live::pubsub` submodule, gated by the `live` feature.)
+            // live in its `web::pubsub` submodule, gated by the `web` feature.)
             Self::PubSubPublish | Self::PubSubPublishNoEcho => Some(RuntimeModule::Web),
             // `HttpStream.chunks` is `class = Pure` but emits `sub_subscribe_stream`
             // and the `IpeStreamId` type, both defined in `ipe_runtime::http_stream`
@@ -6520,7 +6520,7 @@ impl StdlibKernel {
                 | Self::WebRenderStatic
                 // The Task-shaped `PubSub.publish` / `publishNoEcho` are not
                 // app-entry kernels, but they share the `web` module: their
-                // symbols live in `ipe_runtime::live::pubsub` (gated by the `live`
+                // symbols live in `ipe_runtime::web::pubsub` (gated by the `web`
                 // Cargo feature). A program that uses either — even without a
                 // Web.app — must have the `live` feature enabled so
                 // `pubsub_publish` / `pubsub_publish_no_echo` are in scope.
@@ -7026,26 +7026,26 @@ mod tests {
 
     /// `PubSub.publish` / `publishNoEcho` have `class = Tea` and their emitted
     /// symbols (`pubsub_publish`, `pubsub_publish_no_echo`) live in
-    /// `ipe_runtime::live::pubsub` — the `live` feature-module.  This test is
+    /// `ipe_runtime::web::pubsub` — the `web` feature-module.  This test is
     /// the SSOT invariant: `required_runtime_module` MUST return
     /// `Some(RuntimeModule::Web)` for both so that any future code path relying
     /// solely on this function (rather than `is_web`) cannot silently omit the
     /// `live` append and produce an E0425 at `cargo build` time.
     #[test]
-    fn pubsub_kernels_require_live_module() {
+    fn pubsub_kernels_require_web_module() {
         use super::RuntimeModule;
 
         assert_eq!(
             StdlibKernel::PubSubPublish.required_runtime_module(),
             Some(RuntimeModule::Web),
             "PubSubPublish must map to RuntimeModule::Web — \
-             pubsub_publish is defined in ipe_runtime::live::pubsub"
+             pubsub_publish is defined in ipe_runtime::web::pubsub"
         );
         assert_eq!(
             StdlibKernel::PubSubPublishNoEcho.required_runtime_module(),
             Some(RuntimeModule::Web),
             "PubSubPublishNoEcho must map to RuntimeModule::Web — \
-             pubsub_publish_no_echo is defined in ipe_runtime::live::pubsub"
+             pubsub_publish_no_echo is defined in ipe_runtime::web::pubsub"
         );
     }
 }

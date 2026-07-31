@@ -5869,7 +5869,7 @@ pub mod tco_analysis {
 
 // ── Kernel-family presence detection (one traversal) ────────────────────────
 
-/// Outcome of [`Lowerer::intercept_live_kernel_call`].
+/// Outcome of [`Lowerer::intercept_web_kernel_call`].
 enum Intercepted {
     /// The call was intercepted and fully lowered.
     Done(Expr),
@@ -5988,7 +5988,7 @@ impl KernelUsage {
         self.env_public |= matches!(k, KernelFn::EnvPublic);
         self.debug |= k.is_dev_only();
         // A kernel whose emitted symbol lives in a feature-module its emit-class
-        // does not pull in (e.g. `Cmd.publish`'s `cmd_publish` in `live::pubsub`,
+        // does not pull in (e.g. `Cmd.publish`'s `cmd_publish` in `web::pubsub`,
         // `HttpStream.chunks`'s `sub_subscribe_stream` in `http_stream`) forces
         // that module here — decoupled from the `is_*` emit-dispatch predicates so
         // the module-set stays closed without perturbing codegen routing.
@@ -8323,7 +8323,7 @@ impl<'a> Lowerer<'a> {
                     // (init/update/view/subscriptions); emitting a Rust struct
                     // for it would need `Box<dyn Fn>` fields, which cannot
                     // derive `Clone`/`Debug`/`PartialEq`.  The cfg record is
-                    // consumed structurally by `emit_live_app_inner` (never
+                    // consumed structurally by `emit_web_app_inner` (never
                     // materialised as a runtime value), so its IR struct is
                     // not needed.
                     //
@@ -11945,7 +11945,7 @@ impl<'a> Lowerer<'a> {
     /// — the canonical `:param` route shape) lowers to a zero-arg
     /// [`Expr::Ctor`] carrier instead of tripping the general
     /// `Feature::CtorAsFunction` gate: in this one position the constructor is
-    /// never a first-class function value — `emit_live_call::WebRoute` folds
+    /// never a first-class function value — `emit_web_call::WebRoute` folds
     /// it into the route's builder closure, applying one type-directed
     /// `params.get(i)` conversion per declared payload field.
     ///
@@ -11986,7 +11986,7 @@ impl<'a> Lowerer<'a> {
         self.reject_float_keyed_collection(call_span)?;
 
         // App-entry / Web.route intercepts — see the helper.
-        match self.intercept_live_kernel_call(callee, args)? {
+        match self.intercept_web_kernel_call(callee, args)? {
             Intercepted::Done(e) => Ok(e),
             Intercepted::Fallthrough(peeked) => {
                 self.lower_call_uniform(callee, args, call_span, peeked)
@@ -12002,7 +12002,7 @@ impl<'a> Lowerer<'a> {
     /// path. `lower_callee` is a pure symbol-table lookup (no side effects);
     /// a fall-through carries the already-resolved [`Callee`] so the uniform
     /// path doesn't re-run the large dispatch.
-    fn intercept_live_kernel_call(
+    fn intercept_web_kernel_call(
         &self,
         callee: &canon::Expr,
         args: &[canon::Expr],
@@ -12137,7 +12137,7 @@ impl<'a> Lowerer<'a> {
                 // reference (`Feature::CtorAsFunction`) because a general
                 // first-class constructor value is unsupported — but in THIS
                 // position the constructor never becomes a first-class
-                // function: `emit_live_call::WebRoute` compiles it into the
+                // function: `emit_web_call::WebRoute` compiles it into the
                 // route's `move |params| Ctor(param0, …)` builder closure (the
                 // `route_param_get` type-directed conversion path).  Lower it
                 // directly to a zero-arg `Expr::Ctor` carrier, mirroring the
@@ -12166,7 +12166,7 @@ impl<'a> Lowerer<'a> {
     /// The uniform (non-intercepted) call lowering: lower every argument with
     /// [`Self::lower_expr`], then dispatch on the callee shape.
     ///
-    /// `peeked` is the callee [`Self::intercept_live_kernel_call`] already
+    /// `peeked` is the callee [`Self::intercept_web_kernel_call`] already
     /// resolved for a `VarKernel`/`VarTopLevel` callee (or `None` for every
     /// other callee shape) — reused here instead of re-running the large
     /// `lower_callee` dispatch per call.
@@ -14855,7 +14855,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiBreakpoint
                 // `Ui.mediaQuery : String -> List (Attribute msg) -> Element msg -> Element msg`
                 // Raw-query escape hatch — marker-carrying wrapper consumed by
-                // live::style_inject::build_mq (see ui_media_query_).
+                // web::style_inject::build_mq (see ui_media_query_).
                 | KernelFn::UiMediaQuery,
             ) => Ok(3),
             // Arity 4: `Ui.rgba r g b a`, `Ui.animateRaw name shorthand kf respect`.

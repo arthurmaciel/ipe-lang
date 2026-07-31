@@ -219,7 +219,7 @@ fn crate_root_dep(line: &str, supers_to_root: usize) -> Option<String> {
         return None;
     }
     // A module DEPENDENCY reaches INTO a module: `crate::tea::{…}` /
-    // `crate::live::pubsub`. A bare `use crate::IpeMaybe;` (no trailing `::`)
+    // `crate::web::pubsub`. A bare `use crate::IpeMaybe;` (no trailing `::`)
     // imports an ITEM re-exported at the crate root via the `mod.rs` glob
     // (`pub use <mod>::*`), not a module — it needs no separate declaration.
     match rest.strip_prefix(&seg) {
@@ -272,7 +272,7 @@ fn emitted_modset_is_closed_over_every_flag_combo() {
 /// level: a `uses_web` shape must declare `tea` (web/pubsub `use crate::tea`),
 /// and a `uses_server` shape must declare both `tea` and `http_stream`.
 #[test]
-fn live_shape_declares_tea() {
+fn web_shape_declares_tea() {
     let mut interner = Interner::new();
     let main = interner.intern("Main").expect("intern Main");
     // uses_web only (bit 3).

@@ -47,7 +47,7 @@ pub struct IpeStreamId(pub i64);
 /// Variant names match the Ipê constructors verbatim so codegen's match arms
 /// (`ChunkEvent::Chunk(s)` / `::Done` / `::Errored(e)`) resolve through the
 /// `pub type` alias the bridge emits.
-// Serde derives: a Live `Msg` may carry a `ChunkEvent` payload, and Live
+// Serde derives: a Web `Msg` may carry a `ChunkEvent` payload, and Web
 // messages round-trip through the session store (serde boundary). The derive
 // bounds require `E: Serialize/Deserialize`, which holds for both inhabitants
 // (`String` and `IpeError`).

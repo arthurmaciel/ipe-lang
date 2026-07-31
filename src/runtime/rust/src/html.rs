@@ -170,7 +170,7 @@ pub fn render_html<M>(node: &Html<M>) -> String {
 /// further: a truncated render is strictly better than a process abort, and no
 /// legitimate UI nests anywhere near this deep.
 ///
-/// `pub(crate)` so the render and diff walkers in the same Live data path
+/// `pub(crate)` so the render and diff walkers in the same Web data path
 /// (`ui/render.rs`, `dom/diff.rs`) share the identical ceiling — one constant,
 /// no drift.
 pub(crate) const MAX_HTML_DEPTH: usize = 1024;

@@ -2617,7 +2617,7 @@ mod tests {
     // other key; absent -> "" (total).
     #[cfg(feature = "web")]
     #[test]
-    fn ipe_row_livereq_named_fields_and_dicts() {
+    fn ipe_row_webreq_named_fields_and_dicts() {
         let mut params: HashMap<String, String> = HashMap::new();
         params.insert("slug".into(), "general".into());
         let mut cookies: HashMap<String, String> = HashMap::new();

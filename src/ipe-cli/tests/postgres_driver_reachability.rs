@@ -99,8 +99,8 @@ fn postgres_driver_selects_postgres_config_template() {
     assert!(
         cargo_toml.contains(r#"features = ["runtime-tokio-rustls", "sqlite", "postgres"]"#),
         "driver = \"postgres\" must enable the postgres sqlx feature in Cargo.toml \
-         IN ADDITION TO sqlite (the always-emitted telemetry_spill/live::hub/ \
-         live::store runtime modules hardcode SqlitePool independently of the \
+         IN ADDITION TO sqlite (the always-emitted telemetry_spill/web::hub/ \
+         web::store runtime modules hardcode SqlitePool independently of the \
          app's [database] driver choice — dropping sqlite here was the \
          compile-time gap that made Postgres structurally unreachable, closed \
          2026-07-10 after an independent review caught a cargo-build failure \

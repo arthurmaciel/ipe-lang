@@ -508,7 +508,7 @@ pub(crate) struct EmitCtx<'a> {
     /// `true` when the program uses at least one `Ipe.Web` / `Ipe.Web`
     /// app-entry kernel.  When set, the emitted project gains the `"live"`
     /// Cargo feature, serde derives on all emitted types, and
-    /// `ipe_runtime::live` wired into the runtime module set.
+    /// `ipe_runtime::web` wired into the runtime module set.
     pub(crate) uses_web: bool,
     /// `true` when the program uses at least one `Ipe.Tui` / `Ipe.Tui`
     /// app-entry kernel.  When set, the emitted project gains the `"tui"`

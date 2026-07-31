@@ -345,7 +345,7 @@ pub fn record_request(status: u16) {
     REQUESTS_TOTAL.fetch_add(1, Ordering::Relaxed);
     if status >= 500 {
         ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed);
-        metric_inc("ipe_live_errors_total", &[], 1);
+        metric_inc("ipe_web_errors_total", &[], 1);
     }
 }
 
@@ -492,7 +492,7 @@ pub fn metric_observe(name: &str, labels: &[(&str, &str)], v: f64) {
 }
 
 /// Extract the BOUNDED variant name from a `Debug` value, for use as a
-/// low-cardinality metric label (e.g. `ipe_live_msg_seconds{name}` — Go parity
+/// low-cardinality metric label (e.g. `ipe_web_msg_seconds{name}` — Go parity
 /// with `msg_logging.go`). Returns ONLY the leading Rust-identifier characters of
 /// the `{:?}` rendering — the enum variant name — and NEVER any payload field.
 ///
@@ -584,14 +584,14 @@ fn prom_type_token(v: &MetricValue) -> &'static str {
 /// can't contradict each other.
 fn metric_help(name: &str) -> &'static str {
     match name {
-        "ipe_live_requests_total" => "Total HTTP requests served, by method and status.",
-        "ipe_live_sse_drops_total" => "SSE patches dropped due to a full per-session buffer.",
-        "ipe_live_sse_connections_total" => "Total SSE connections opened.",
-        "ipe_live_sessions_active" => "Currently-active Ipe.Web sessions.",
-        "ipe_live_errors_total" => "Total responses with a 5xx status.",
-        "ipe_live_request_seconds" => "HTTP request latency in seconds.",
-        "ipe_live_msg_seconds" => "Msg-handling latency in seconds, by Msg variant name.",
-        "ipe_live_msg_total" => "Total Msgs handled, by variant name, outcome, and noop.",
+        "ipe_web_requests_total" => "Total HTTP requests served, by method and status.",
+        "ipe_web_sse_drops_total" => "SSE patches dropped due to a full per-session buffer.",
+        "ipe_web_sse_connections_total" => "Total SSE connections opened.",
+        "ipe_web_sessions_active" => "Currently-active Ipe.Web sessions.",
+        "ipe_web_errors_total" => "Total responses with a 5xx status.",
+        "ipe_web_request_seconds" => "HTTP request latency in seconds.",
+        "ipe_web_msg_seconds" => "Msg-handling latency in seconds, by Msg variant name.",
+        "ipe_web_msg_total" => "Total Msgs handled, by variant name, outcome, and noop.",
         _ => "Ipe runtime metric.",
     }
 }

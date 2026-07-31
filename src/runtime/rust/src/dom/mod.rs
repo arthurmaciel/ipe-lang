@@ -3,8 +3,8 @@
 //!
 //! These are pure over `crate::html` (no tokio, no server dependency) and are
 //! shared by every patch consumer: the Ipe.Web SSE wire, the Webview IPC
-//! bridge, and the browser-WASM client sink. `live::mod` re-exports them so
-//! existing `live::diff::Patch`-style paths stay valid.
+//! bridge, and the browser-WASM client sink. `web::mod` re-exports them so
+//! existing `web::diff::Patch`-style paths stay valid.
 
 pub mod diff;
 pub use diff::*;

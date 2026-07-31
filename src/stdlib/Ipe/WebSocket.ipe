@@ -38,7 +38,7 @@
 -- (30 s).  The bounded read channel (64 frames) provides
 -- per-socket backpressure to the upstream when the user's update
 -- loop falls behind — Ipe.Web's existing
--- `ipe_live_sse_drops_total` covers spillover.
+-- `ipe_web_sse_drops_total` covers spillover.
 --
 -- See `examples/33-websocket-echo` for the canonical pattern.
 module Ipe.WebSocket exposing

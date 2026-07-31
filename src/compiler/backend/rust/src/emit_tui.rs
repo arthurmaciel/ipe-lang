@@ -112,7 +112,7 @@ pub fn emit_tui_call(
 ///
 /// # Function-field emission
 ///
-/// Same discipline as `emit_live_app_inner`: named `fn` items are emitted via
+/// Same discipline as `emit_web_app_inner`: named `fn` items are emitted via
 /// `emit_tui_fn` (raw identifier), which satisfies `Send + Sync + 'static` via
 /// the blanket impl.  A `Box<dyn Fn>` (from the fallback `emit_expr_at` path)
 /// does NOT carry these bounds without explicit annotation.
@@ -145,7 +145,7 @@ fn emit_tui_inner(
     }
 
     // seal: gate the Msg type against `tui_app`'s Clone+Send bound.
-    // Same derivable predicate as Live — Msg is never persisted.
+    // Same derivable predicate as Web — Msg is never persisted.
     if let Some(msg_ty) = crate::emit_model_gate::msg_ty_of_update(update_e) {
         crate::emit_model_gate::check_admissible_msg(
             ctx,
@@ -315,7 +315,7 @@ fn on_key_struct_literal(
 
 /// Emit a cfg-field expression for a Tui app-entry kernel.
 ///
-/// Mirrors `emit_live_fn` in `emit_web.rs` exactly: for a named function
+/// Mirrors `emit_web_fn` in `emit_web.rs` exactly: for a named function
 /// reference ([`Expr::FuncValue`]), emits the raw callee name (e.g.
 /// `Main_on_key`) rather than a boxed closure.  A named function item satisfies
 /// `Fn(…) + Send + Sync + 'static` via the compiler's blanket impl; a

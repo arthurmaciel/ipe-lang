@@ -43,7 +43,7 @@ below are stated as engineering trade-offs, not corrections.
 | `elm/html` | No counterpart; replaced by `Ipe.Ui` (elm-ui-derived) | **excluded** — §4 |
 | `elm/svg` | No counterpart | **excluded** — §4 |
 | `elm/virtual-dom` | Internal to the runtimes, not a user surface | **excluded** — §4 |
-| `elm/browser` | No counterpart; replaced by `Ipe.Live` / `Ipe.Tui` / `Ipe.Webview` | **excluded** — §4 |
+| `elm/browser` | No counterpart; replaced by `Ipe.Web` / `Ipe.Tui` / `Ipe.Webview` | **excluded** — §4 |
 
 Headline `elm/core` count (from [`elm-core-coverage.md`](elm-core-coverage.md),
 264 exposed values across 17 modules): **185 present · 15 diverged · 61 missing ·
@@ -191,7 +191,7 @@ Only query-string parsing (`Http.parseQuery`) exists. The whole `Url` value type
 `Url.Builder` (typed URL construction), `Url.Parser` (the `</>`/`<?>` routing
 combinators), and `Url.Parser.Query` are absent.
 
-- **Justification for what's missing:** Ipê's routing is server-side (`Ipe.Live`
+- **Justification for what's missing:** Ipê's routing is server-side (`Ipe.Web`
   path handling, `data-ipe-path`), so the client-side `Browser.application` URL
   model is less load-bearing — but a typed `Url` + builder is genuinely useful for
   the HTTP **client** and is a real gap. Filed.
@@ -259,8 +259,8 @@ target-specific to Elm's sandboxed browser client and is covered — where relev
 | Elm surface | Why excluded | Ipê equivalent, if any |
 |---|---|---|
 | `elm/html`, `elm/svg` | Direct DOM/SVG node construction is a client-render concern. Ipê never emits a client VDOM program authored in HTML nodes. | `Ipe.Ui` (elm-ui-derived `row`/`column`/`el`), server-rendered to inline-styled HTML / ANSI / webview |
-| `elm/virtual-dom` | The VNode/diff layer is a runtime internal, not a user API. | Internal to `Ipe.Live`/`Ipe.Tui`/`Ipe.Webview`; users never call it |
-| `elm/browser` (`Browser.application`/`document`/`element`/`sandbox`, `Browser.Dom`, `Browser.Events`, `Browser.Navigation`) | Program entry + DOM/focus/viewport/nav are browser-runtime concepts. | `Ipe.Live.app` / `Ipe.Tui.app` / `Ipe.Webview.app` are the entry points; navigation is server-side `data-ipe-path` |
+| `elm/virtual-dom` | The VNode/diff layer is a runtime internal, not a user API. | Internal to `Ipe.Web`/`Ipe.Tui`/`Ipe.Webview`; users never call it |
+| `elm/browser` (`Browser.application`/`document`/`element`/`sandbox`, `Browser.Dom`, `Browser.Events`, `Browser.Navigation`) | Program entry + DOM/focus/viewport/nav are browser-runtime concepts. | `Ipe.Web.app` / `Ipe.Tui.app` / `Ipe.Webview.app` are the entry points; navigation is server-side `data-ipe-path` |
 | `Platform.worker`, `Platform.sendToApp`/`sendToSelf`, `Router` | User-defined effect managers are an Elm kernel-package privilege that does not exist in Ipê (which binds native effects via FFI + `Task`). | `Ffi.kernel` + the `Task` effect stdlib |
 | `Process.spawn`/`kill`, `ProcessId` | Elm's green-thread handles are a runtime-scheduler surface. | Concurrency is `Task.parallel` / `Cmd`; `Process.sleep` is `Time.sleep` |
 | `File.Select`/`File.Download`, `File.toUrl` | Browser upload/download. | Native `Ipe.File`; a select/download shim may return with WASM/webview |
@@ -313,7 +313,7 @@ These are not per-value gaps but whole-model choices; they explain why several
   test-enforced. There is no `Never` type, so `Task Never a` and `Basics.never`
   have no analogue.
 - **Server-driven TEA.** `init`/`update`/`view` run on the **server**; the browser
-  receives HTML on load and VNode-diff patches over SSE (`Ipe.Live`), ANSI cells
+  receives HTML on load and VNode-diff patches over SSE (`Ipe.Web`), ANSI cells
   (`Ipe.Tui`), or a native webview (`Ipe.Webview`). This is why `elm/browser` is
   excluded rather than reshaped.
 - **Native stdlib with no Elm-core counterpart.** `Ipe.Db`, `Ipe.Auth`,

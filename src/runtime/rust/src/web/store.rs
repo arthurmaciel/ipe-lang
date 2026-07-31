@@ -16,11 +16,11 @@ use std::time::{Duration, Instant};
 
 /// Wire-format epoch for the Model schema tag (H24). Must equal the
 /// backend's `emit_model_schema::WIRE_EPOCH` — the epoch is folded into the
-/// compile-time `IPE_LIVE_MODEL_SCHEMA_TAG` each generated Ipe.Web binary
+/// compile-time `IPE_WEB_MODEL_SCHEMA_TAG` each generated Ipe.Web binary
 /// carries. Bumped ONLY when the tag framing / blob encoding itself changes
 /// shape (domain-separation convention), never for a Model change — the
 /// Model's own shape is covered by the structural half of the hash.
-pub const LIVE_MODEL_SCHEMA_WIRE_VERSION: &str = "ipe-live-model-schema-v1";
+pub const WEB_MODEL_SCHEMA_WIRE_VERSION: &str = "ipe-live-model-schema-v1";
 
 /// Encode one Model checkpoint as `base64(schema_tag(32) ++ bincode(model))`
 /// — self-contained (tag travels inside the blob), TEXT-column-safe on every
@@ -67,7 +67,7 @@ pub type SessionHandle<Model, Msg> = Arc<Mutex<SessionEntry<Model, Msg>>>;
 /// = a model decoded from a persistent checkpoint (the caller hydrates: spawn a
 /// fresh driver seeded with this model). Memory stores only ever return `Web`.
 pub enum StoreHit<Model, Msg> {
-    Live(SessionHandle<Model, Msg>),
+    Web(SessionHandle<Model, Msg>),
     Cold(Model),
 }
 
@@ -93,14 +93,14 @@ pub trait SessionStore<Model, Msg>: Send + Sync {
     /// simply hasn't touched yet) has no SSE connection in THIS process to
     /// push anything to, so it is out of scope for what this method is for.
     /// Returns handles directly (not bare sids) — the caller
-    /// (`push_reload_to_live_sessions`) needs each handle's `sse_tx` and
+    /// (`push_reload_to_web_sessions`) needs each handle's `sse_tx` and
     /// would otherwise have to re-`get()` every id, opening a TOCTOU-ish gap
     /// where a session evicted between the enumerate and the re-fetch is
     /// silently skipped OR (worse) touches its TTL a second time for no
     /// reason. No default body (unlike `sweep`) — every backend has an
     /// opinion; a future backend without an in-process cache must make an
     /// explicit, reviewed choice, not silently inherit a possibly-wrong one.
-    async fn live_sessions(&self) -> Vec<SessionHandle<Model, Msg>>;
+    async fn web_sessions(&self) -> Vec<SessionHandle<Model, Msg>>;
 }
 
 // ─── Memory store — default; in-process, lost on restart (Go memoryStore) ────
@@ -132,7 +132,7 @@ impl<Model: Send + 'static, Msg: Send + 'static> SessionStore<Model, Msg>
         let mut w = self.sessions.write().unwrap_or_else(|e| e.into_inner());
         w.get_mut(sid).map(|(h, seen)| {
             *seen = Instant::now(); // touch — keep active sessions alive
-            StoreHit::Live(h.clone())
+            StoreHit::Web(h.clone())
         })
     }
     async fn set(&self, sid: &str, handle: SessionHandle<Model, Msg>) {
@@ -155,7 +155,7 @@ impl<Model: Send + 'static, Msg: Send + 'static> SessionStore<Model, Msg>
             .unwrap_or_else(|e| e.into_inner())
             .retain(|_, (_, seen)| now.duration_since(*seen) <= ttl);
     }
-    async fn live_sessions(&self) -> Vec<SessionHandle<Model, Msg>> {
+    async fn web_sessions(&self) -> Vec<SessionHandle<Model, Msg>> {
         self.sessions
             .read()
             .unwrap_or_else(|e| e.into_inner())
@@ -243,7 +243,7 @@ where
                 .bind(sid)
                 .execute(&self.pool)
                 .await;
-            return Some(StoreHit::Live(h));
+            return Some(StoreHit::Web(h));
         }
         // Cold: decode the persisted model checkpoint (post-restart / other
         // replica). The blob is self-contained (base64(tag ++ bincode)); the
@@ -323,7 +323,7 @@ where
             .unwrap_or_else(|e| e.into_inner())
             .retain(|_, (_, seen)| now.duration_since(*seen) <= ttl);
     }
-    async fn live_sessions(&self) -> Vec<SessionHandle<Model, Msg>> {
+    async fn web_sessions(&self) -> Vec<SessionHandle<Model, Msg>> {
         self.mem_cache
             .read()
             .unwrap_or_else(|e| e.into_inner())
@@ -396,7 +396,7 @@ where
                 .bind(sid)
                 .execute(&self.pool)
                 .await;
-            return Some(StoreHit::Live(h));
+            return Some(StoreHit::Web(h));
         }
         // Self-contained framed blob — see SqliteStore::get. The legacy
         // schema_tag COLUMN is still written (NOT NULL) but no longer read.
@@ -470,7 +470,7 @@ where
             .unwrap_or_else(|e| e.into_inner())
             .retain(|_, (_, seen)| now.duration_since(*seen) <= ttl);
     }
-    async fn live_sessions(&self) -> Vec<SessionHandle<Model, Msg>> {
+    async fn web_sessions(&self) -> Vec<SessionHandle<Model, Msg>> {
         self.mem_cache
             .read()
             .unwrap_or_else(|e| e.into_inner())
@@ -549,7 +549,7 @@ where
         if let Some(h) = cached {
             // Touch native TTL so an active session doesn't expire mid-conversation.
             let _: Result<(), _> = conn.expire(redis_key(sid), self.ttl_secs as i64).await;
-            return Some(StoreHit::Live(h));
+            return Some(StoreHit::Web(h));
         }
         // The session HASH's blob field is the self-contained framed
         // checkpoint (see SqliteStore::get); a pre-HASH string key errs
@@ -615,7 +615,7 @@ where
             .unwrap_or_else(|e| e.into_inner())
             .retain(|_, (_, seen)| now.duration_since(*seen) <= ttl);
     }
-    async fn live_sessions(&self) -> Vec<SessionHandle<Model, Msg>> {
+    async fn web_sessions(&self) -> Vec<SessionHandle<Model, Msg>> {
         self.mem_cache
             .read()
             .unwrap_or_else(|e| e.into_inner())
@@ -787,7 +787,7 @@ mod tests {
         let s: MemoryStore<(), ()> = MemoryStore::new(Duration::from_secs(60));
         assert!(s.get("a").await.is_none());
         s.set("a", handle()).await;
-        assert!(matches!(s.get("a").await, Some(StoreHit::Live(_))));
+        assert!(matches!(s.get("a").await, Some(StoreHit::Web(_))));
         s.delete("a").await;
         assert!(s.get("a").await.is_none());
     }
@@ -825,8 +825,8 @@ mod tests {
                 .await
                 .unwrap();
             s.set("s1", handle_i32(42)).await;
-            // same-process get is a Live cache hit
-            assert!(matches!(s.get("s1").await, Some(StoreHit::Live(_))));
+            // same-process get is a Web cache hit
+            assert!(matches!(s.get("s1").await, Some(StoreHit::Web(_))));
         }
         {
             // "restart": new store, empty mem-cache → decodes the checkpoint
@@ -975,7 +975,7 @@ mod tests {
                     .unwrap();
             s.delete(&sid).await;
             s.set(&sid, handle_i32(7)).await;
-            assert!(matches!(s.get(&sid).await, Some(StoreHit::Live(_))));
+            assert!(matches!(s.get(&sid).await, Some(StoreHit::Web(_))));
         }
         {
             let s: PostgresStore<i32, ()> =
@@ -1004,7 +1004,7 @@ mod tests {
                 .unwrap();
             s.delete(&sid).await;
             s.set(&sid, handle_i32(9)).await;
-            assert!(matches!(s.get(&sid).await, Some(StoreHit::Live(_))));
+            assert!(matches!(s.get(&sid).await, Some(StoreHit::Web(_))));
         }
         {
             let s: RedisStore<i32, ()> = RedisStore::new(&url, Duration::from_secs(60), TEST_TAG)
@@ -1018,17 +1018,17 @@ mod tests {
         }
     }
 
-    /// `live_sessions()` lists exactly the locally-live handles: empty on a
+    /// `web_sessions()` lists exactly the locally-live handles: empty on a
     /// fresh store, grows with `set()`, shrinks with `delete()`.
     #[tokio::test]
-    async fn memory_store_live_sessions_lists_only_locally_cached_handles() {
+    async fn memory_store_web_sessions_lists_only_locally_cached_handles() {
         let s: MemoryStore<(), ()> = MemoryStore::new(Duration::from_secs(60));
-        assert!(s.live_sessions().await.is_empty());
+        assert!(s.web_sessions().await.is_empty());
         s.set("a", handle()).await;
         s.set("b", handle()).await;
-        assert_eq!(s.live_sessions().await.len(), 2);
+        assert_eq!(s.web_sessions().await.len(), 2);
         s.delete("a").await;
-        assert_eq!(s.live_sessions().await.len(), 1);
+        assert_eq!(s.web_sessions().await.len(), 1);
     }
 
     /// A persisted row with NO in-process handle (another replica's session,
@@ -1036,8 +1036,8 @@ mod tests {
     /// locally-`set()` one is returned.
     #[cfg(feature = "db")]
     #[tokio::test]
-    async fn sqlite_store_live_sessions_excludes_cold_rows() {
-        let path = std::env::temp_dir().join(format!("ipetest_lives_{}.db", std::process::id()));
+    async fn sqlite_store_web_sessions_excludes_cold_rows() {
+        let path = std::env::temp_dir().join(format!("ipetest_webs_{}.db", std::process::id()));
         let p = path.to_str().unwrap();
         let _ = std::fs::remove_file(p);
         let s: SqliteStore<i32, ()> = SqliteStore::new(p, Duration::from_secs(60), TEST_TAG)
@@ -1054,9 +1054,9 @@ mod tests {
         .execute(&s.pool)
         .await
         .unwrap();
-        s.set("live_sid", handle_i32(42)).await;
+        s.set("web_sid", handle_i32(42)).await;
 
-        let live = s.live_sessions().await;
+        let live = s.web_sessions().await;
         assert_eq!(
             live.len(),
             1,
@@ -1234,17 +1234,17 @@ mod tests {
     /// Postgres mirror of the cold-row exclusion — `IPE_TEST_PG_URL`-gated.
     #[cfg(feature = "db")]
     #[tokio::test]
-    async fn postgres_store_live_sessions_excludes_cold_rows() {
+    async fn postgres_store_web_sessions_excludes_cold_rows() {
         let Ok(url) = std::env::var("IPE_TEST_PG_URL") else {
             return;
         };
         let cold_sid = format!("pgtest_cold_{}", std::process::id());
-        let live_sid = format!("pgtest_live_{}", std::process::id());
+        let web_sid = format!("pgtest_web_{}", std::process::id());
         let s: PostgresStore<i32, ()> = PostgresStore::new(&url, Duration::from_secs(60), TEST_TAG)
             .await
             .unwrap();
         s.delete(&cold_sid).await;
-        s.delete(&live_sid).await;
+        s.delete(&web_sid).await;
         sqlx::query(
             "INSERT INTO ipe_sessions (sid, blob, last_seen, schema_tag) \
              VALUES ($1, $2, $3, $4)",
@@ -1256,26 +1256,26 @@ mod tests {
         .execute(&s.pool)
         .await
         .unwrap();
-        s.set(&live_sid, handle_i32(42)).await;
-        assert_eq!(s.live_sessions().await.len(), 1);
+        s.set(&web_sid, handle_i32(42)).await;
+        assert_eq!(s.web_sessions().await.len(), 1);
         s.delete(&cold_sid).await;
-        s.delete(&live_sid).await;
+        s.delete(&web_sid).await;
     }
 
     /// Redis mirror of the cold-row exclusion — `IPE_TEST_REDIS_URL`-gated.
     #[cfg(feature = "redis_store")]
     #[tokio::test]
-    async fn redis_store_live_sessions_excludes_cold_rows() {
+    async fn redis_store_web_sessions_excludes_cold_rows() {
         let Ok(url) = std::env::var("IPE_TEST_REDIS_URL") else {
             return;
         };
         let cold_sid = format!("redistest_cold_{}", std::process::id());
-        let live_sid = format!("redistest_live_{}", std::process::id());
+        let web_sid = format!("redistest_web_{}", std::process::id());
         let s: RedisStore<i32, ()> = RedisStore::new(&url, Duration::from_secs(60), TEST_TAG)
             .await
             .unwrap();
         s.delete(&cold_sid).await;
-        s.delete(&live_sid).await;
+        s.delete(&web_sid).await;
         // Cross-replica cold row: HASH written directly, no mem_cache entry.
         let mut conn = s.conn.clone();
         let _: () = redis::cmd("HSET")
@@ -1287,10 +1287,10 @@ mod tests {
             .query_async(&mut conn)
             .await
             .unwrap();
-        s.set(&live_sid, handle_i32(42)).await;
-        assert_eq!(s.live_sessions().await.len(), 1);
+        s.set(&web_sid, handle_i32(42)).await;
+        assert_eq!(s.web_sessions().await.len(), 1);
         s.delete(&cold_sid).await;
-        s.delete(&live_sid).await;
+        s.delete(&web_sid).await;
     }
 
     #[tokio::test]

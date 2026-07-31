@@ -1,38 +1,38 @@
 Status: Accepted
 
-# 0003. Routed Live.app is one open-record surface with an emit-time branch
+# 0003. Routed Web.app is one open-record surface with an emit-time branch
 
 ## Context
 
-The canonical Ipe.Live entry point is:
+The canonical Ipe.Web entry point is:
 
 ```elm
 main =
-    Live.app
+    Web.app
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [ route "/" HomePage, route "/apps/:slug" AppDetailPage ]
         , notFound = HomePage
         }
 ```
 
-An earlier design rejected this with IPE-T0001 because `Live.app`'s cfg was
+An earlier design rejected this with IPE-T0001 because `Web.app`'s cfg was
 typed as a **closed 4-field record** `{ init, update, view, subscriptions }` and
 the record unifier required **identical field sets** — there was no row variable
 to absorb `routes` / `notFound` (let alone `head` / `consoleAuth` / `guard` /
-`status`). Worse, a **separate `Live.appRouted` kernel**
-(`KernelFn::LiveAppRouted`, `Feature::RoutedLiveApp`, gate IPE-L0118) had been
+`status`). Worse, a **separate `Web.appRouted` kernel**
+(`KernelFn::WebAppRouted`, `Feature::RoutedWebApp`, gate IPE-L0118) had been
 invented; the corpus never calls it, so the routed gate at `lower.rs:3305` was
 effectively dead code.
 
-The correct design has exactly one `Live.app` surface — no separate `appRouted`
+The correct design has exactly one `Web.app` surface — no separate `appRouted`
 at the type level. The code is the source of truth for the *how*; this ADR
 records the *why*.
 
 ## Decision
 
-**One `Live.app` surface, branched at emit time — no `appRouted` kernel.**
+**One `Web.app` surface, branched at emit time — no `appRouted` kernel.**
 
-- The `Live.app` cfg is an **open row-polymorphic record** with six fields typed
+- The `Web.app` cfg is an **open row-polymorphic record** with six fields typed
   (`init, update, view, subscriptions, routes, notFound`) plus an `appExt` row
   variable, unified by an open-record rule (faithful port of the reference's row
   var). `routes`/`notFound` are always present (required fields) but are simply
@@ -43,7 +43,7 @@ records the *why*.
   closure); if no → emit `live_app` (four TEA callbacks, routes/notFound
   dropped). There is **no `appRouted` kernel** anywhere in the reference — only
   `live_app` / `live_app_routed` at the Rust-emitter + runtime layer, driven by
-  one `Live.app` surface. `LiveAppRouted`/`RoutedLiveApp`/IPE-L0118 are
+  one `Web.app` surface. `WebAppRouted`/`RoutedWebApp`/IPE-L0118 are
   vestigial (kept as a defensive alias or deleted).
 
 This retires the invented `appRouted` divergence.
@@ -54,7 +54,7 @@ Three adversarial holes were closed to keep `ipe` exit-0 ⇒ `cargo` exit-0:
 parametric `IrType::LiveRoute(page)` renders `Route<Page>` (not a bare `Route`,
 which was E0107); lambda-view routed detection goes through the shared
 `fn_param_ty` (a lambda `view` was silently emitted non-routed); and a per-route
-page witness replaced the shared-var `Live.route` scheme that false-blocked
+page witness replaced the shared-var `Web.route` scheme that false-blocked
 `:param` routes.
 
 ## Consequences
@@ -88,7 +88,7 @@ mismatch at compile time), recorded in `docs/divergences-from-sky.md`.
 
 ### Invariant that must keep holding
 
-There is exactly one `Live.app` surface; routed-vs-single-page is a *codegen*
+There is exactly one `Web.app` surface; routed-vs-single-page is a *codegen*
 decision recovered from the solved Model type (`page` field present), never a
 separate kernel or type. Any future cfg field (`head`, `consoleAuth`, `guard`,
 `status`) is absorbed by the `appExt` row variable — do not reintroduce a closed
