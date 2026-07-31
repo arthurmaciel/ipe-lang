@@ -1925,7 +1925,12 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
     // IR-dump path carries no options to drop.
     let (out, wasm_target, cli_layer) = match args.mode {
         cli_args::BuildMode::EmitIr => {
-            let tree = emit_ir_text(&entry_path)?;
+            // `--emit-ir` reads a single entry file, so route a directory / bare
+            // `.` project root to its entry `.ipe` — the same convention the
+            // analysis surfaces use — rather than handing the directory straight
+            // to the source reader (which would fail with a raw "Is a directory").
+            let ir_entry = resolve_analysis_entry(&entry_path)?;
+            let tree = emit_ir_text(&ir_entry)?;
             print!("{tree}");
             return Ok(());
         }
@@ -2554,7 +2559,7 @@ fn run_explain(rest: &[String]) -> Result<(), CliError> {
 ///   `cut -f1` yields the codes and `grep`/`awk` slice the table.
 /// - `--json`: `{"codes": [{"code": "IPE-…", "title": "…"}, …]}`, a stable array
 ///   of `{code, title}` objects in taxonomy order.
-fn render_code_index(format: cli_args::OutputFormat, _stream: &impl std::io::IsTerminal) -> String {
+fn render_code_index(format: cli_args::OutputFormat, stream: &impl std::io::IsTerminal) -> String {
     use std::fmt::Write as _;
 
     use cli_args::OutputFormat::{Human, Json, Plain};
@@ -2573,7 +2578,26 @@ fn render_code_index(format: cli_args::OutputFormat, _stream: &impl std::io::IsT
                 .collect();
             format!("{{\"codes\":[{}]}}\n", rows.join(","))
         }
-        Human => style::gutter(&code_index()),
+        Human => {
+            let p = style::Palette::for_stream(stream);
+            let mut body = String::new();
+            let _ = writeln!(
+                body,
+                "{}Diagnostic codes{} — run {}ipe explain <CODE>{} for the full teaching page:\n",
+                p.bold, p.reset, p.yellow, p.reset,
+            );
+            for &c in ALL_CODES {
+                let _ = writeln!(
+                    body,
+                    "  {}{}{}  {}",
+                    p.yellow,
+                    c.as_str(),
+                    p.reset,
+                    title(c),
+                );
+            }
+            style::frame(&style::gutter(&body))
+        }
     }
 }
 
@@ -2937,8 +2961,8 @@ fn resolve_analysis_entry(path: &Path) -> Result<PathBuf, CliError> {
 /// `ipe check [<path>]` — type-check a program and stop. Runs the same
 /// injection-aware source graph `ipe build` uses, but demands only the
 /// `typecheck` query: no IR lowering, no Rust emission, nothing written. Exits
-/// 0 with a terse `ok` when the program type-checks, or non-zero carrying the
-/// first rendered diagnostic when it does not.
+/// 0 with a friendly framed success line when the program type-checks, or
+/// non-zero carrying the first rendered diagnostic when it does not.
 fn run_check(rest: &[String]) -> Result<(), CliError> {
     let arg = match cli_args::single_positional(rest, "check")? {
         Some(e) => PathBuf::from(e),
@@ -2946,7 +2970,16 @@ fn run_check(rest: &[String]) -> Result<(), CliError> {
     };
     let entry = resolve_analysis_entry(&arg)?;
     typecheck_entry_via_graph(&entry)?;
-    print!("{}", style::frame(&style::gutter("ok")));
+    let p = style::Palette::for_stream(&std::io::stdout());
+    print!(
+        "{}",
+        style::frame(&style::gutter(&format!(
+            "{}{} No type errors — this program type-checks.{}",
+            p.green,
+            style::glyph::OK,
+            p.reset,
+        )))
+    );
     Ok(())
 }
 
@@ -3156,10 +3189,15 @@ fn run_verify(rest: &[String]) -> Result<(), CliError> {
 
 fn run_capabilities(rest: &[String]) -> Result<(), CliError> {
     let (format, positional) = cli_args::split_format(rest, "capabilities")?;
-    let entry = match positional.first() {
+    let arg = match positional.first() {
         Some(e) => PathBuf::from(e),
         None => PathBuf::from(default_entry()?),
     };
+    // Route a directory / `ipe.toml` / project-root `.` to its entry `.ipe` file,
+    // the same argument convention `ipe check` uses. Without this a bare
+    // `ipe capabilities` in a project dir passes `.` straight to the reader and
+    // fails with a raw "Is a directory" io error.
+    let entry = resolve_analysis_entry(&arg)?;
     let program = lower_entry(&entry)?;
     let caps = ipe_lower::program_capabilities(&program);
     let names: Vec<&'static str> = caps.iter().map(|c| c.as_str()).collect();

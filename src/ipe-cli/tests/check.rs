@@ -1,7 +1,8 @@
 //! `ipe check` — type-check a program with no build, no run, no emit.
 //!
-//! Exit 0 with a terse `ok` when the program type-checks; non-zero with the
-//! rendered diagnostic on any parse/canon/type error. A program importing a
+//! Exit 0 with a friendly framed success line when the program type-checks;
+//! non-zero with the rendered diagnostic on any parse/canon/type error. A
+//! program importing a
 //! compiled-source stdlib module (`Ipe.Test`) resolves through the same
 //! injection-aware source graph the build path uses.
 
@@ -34,7 +35,15 @@ fn run_ipe(args: &[&str]) -> Result<(bool, String, String), Box<dyn Error>> {
 fn well_typed_program_exits_zero_with_ok() -> TestResult {
     let (ok, stdout, _) = run_ipe(&["check", &fixture("well_typed.ipe").to_string_lossy()])?;
     assert!(ok, "a well-typed program must exit 0");
-    assert_eq!(stdout.trim(), "ok");
+    assert!(
+        stdout.contains("type-checks"),
+        "a clean check prints a friendly success message, got:\n{stdout}"
+    );
+    // The human default is framed: a blank line opens and closes the block.
+    assert!(
+        stdout.starts_with('\n') && stdout.ends_with('\n'),
+        "check success must be framed with top/bottom blank lines, got:\n{stdout:?}"
+    );
     Ok(())
 }
 
@@ -61,7 +70,10 @@ fn program_using_ipe_test_resolves_and_type_checks() -> TestResult {
         ok,
         "an Ipe.Test-using program must type-check, got stderr:\n{stderr}"
     );
-    assert_eq!(stdout.trim(), "ok");
+    assert!(
+        stdout.contains("type-checks"),
+        "a clean check prints a friendly success message, got:\n{stdout}"
+    );
     Ok(())
 }
 

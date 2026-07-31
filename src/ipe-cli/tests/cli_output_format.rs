@@ -136,7 +136,133 @@ fn capabilities_json_is_a_stable_object() {
     );
 }
 
+/// Regression: `ipe capabilities` with no positional, run inside a project
+/// directory (an `ipe.toml` present), must resolve the project's entry `.ipe`
+/// rather than trying to read the directory itself. The prior bug surfaced as a
+/// raw `io error at .: Is a directory` because the bare `.` default was passed
+/// straight to the source reader instead of through the same directory→entry
+/// resolution `ipe check` uses.
+#[test]
+fn capabilities_in_a_project_dir_resolves_the_entry() {
+    // A known-valid example project (an `ipe.toml` + `src/Main.ipe`). Run
+    // `capabilities` with NO positional and the project dir as the working
+    // directory, exactly as the bug report did.
+    let proj =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/sky/ipe/01-hello-world");
+    // Only run when the example exists (CI always has it; a sparse checkout may not).
+    if !proj.join("ipe.toml").is_file() {
+        return;
+    }
+    let r = match Command::new(env!("CARGO_BIN_EXE_ipe"))
+        .arg("capabilities")
+        .current_dir(&proj)
+        .env("NO_COLOR", "1")
+        .output()
+    {
+        Ok(o) => Run {
+            ok: o.status.success(),
+            stdout: String::from_utf8_lossy(&o.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&o.stderr).into_owned(),
+        },
+        Err(e) => Run {
+            ok: false,
+            stdout: String::new(),
+            stderr: format!("spawn failed: {e}"),
+        },
+    };
+    assert!(
+        r.ok,
+        "capabilities in a project dir must succeed; stderr: {}",
+        r.stderr
+    );
+    // The prior bug surfaced as this raw io error; it must not recur.
+    assert!(
+        !r.stderr.contains("Is a directory"),
+        "the directory-read bug must not recur; stderr: {}",
+        r.stderr
+    );
+    // The human report is framed (opens with a blank line) and names capabilities
+    // (either the "pure" line or the "security capabilit…" heading).
+    assert!(
+        r.stdout.starts_with('\n')
+            && (r.stdout.contains("pure") || r.stdout.contains("security capabilit")),
+        "capabilities in a project dir must render the framed human report, got: {:?}",
+        r.stdout
+    );
+}
+
+/// Regression sibling of the capabilities bug: `ipe build --emit-ir` with no
+/// positional, run inside a project dir, must resolve the project's entry `.ipe`
+/// (a directory / bare `.` default routed to its `Main.ipe`) rather than reading
+/// the directory itself and failing with a raw "Is a directory" io error.
+#[test]
+fn emit_ir_in_a_project_dir_resolves_the_entry() {
+    let proj =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/sky/ipe/01-hello-world");
+    if !proj.join("ipe.toml").is_file() {
+        return;
+    }
+    let r = match Command::new(env!("CARGO_BIN_EXE_ipe"))
+        .args(["build", "--emit-ir"])
+        .current_dir(&proj)
+        .env("NO_COLOR", "1")
+        .output()
+    {
+        Ok(o) => Run {
+            ok: o.status.success(),
+            stdout: String::from_utf8_lossy(&o.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&o.stderr).into_owned(),
+        },
+        Err(e) => Run {
+            ok: false,
+            stdout: String::new(),
+            stderr: format!("spawn failed: {e}"),
+        },
+    };
+    assert!(
+        r.ok,
+        "emit-ir in a project dir must succeed; stderr: {}",
+        r.stderr
+    );
+    assert!(
+        !r.stderr.contains("Is a directory"),
+        "the directory-read bug must not recur; stderr: {}",
+        r.stderr
+    );
+    // The IR dump is machine output: flush-left, unframed, and it names the
+    // lowered program tree.
+    assert!(
+        r.stdout.starts_with("program"),
+        "emit-ir must print the lowered IR tree, got: {:?}",
+        &r.stdout[..r.stdout.len().min(40)]
+    );
+}
+
 // ---- explain (the code list) ----------------------------------------------
+
+/// The `explain` code list's human default is framed (a blank line opens and
+/// closes) and guttered — a browsable page, not the flush `--plain` dump.
+#[test]
+fn explain_list_human_default_is_framed_and_guttered() {
+    let r = run(&["explain"]);
+    assert!(r.ok);
+    assert!(
+        r.stdout.starts_with('\n') && r.stdout.ends_with('\n'),
+        "the human code list must be framed, got: {:?}",
+        &r.stdout[..r.stdout.len().min(40)]
+    );
+    for line in r.stdout.lines().filter(|l| !l.trim().is_empty()) {
+        assert!(
+            line.starts_with("  "),
+            "the human code list must be guttered, got: {line:?}"
+        );
+    }
+    // The list still carries the codes themselves.
+    assert!(
+        r.stdout.contains("IPE-"),
+        "the human code list must list the diagnostic codes"
+    );
+}
 
 #[test]
 fn explain_list_plain_is_tab_separated_flush_left() {
@@ -378,8 +504,8 @@ fn upgrade_bad_flag_shows_help() {
 
 // ---- check success output --------------------------------------------------
 
-/// `ipe check` on a well-typed program exits 0 and prints a guttered `ok`
-/// confirmation — the human success line must not be flush-left.
+/// `ipe check` on a well-typed program exits 0 and prints a guttered, framed
+/// success confirmation — the human success line must not be flush-left.
 #[test]
 fn check_success_output_is_guttered_and_framed() {
     // Use the examples tree as a known well-typed source so no fixture is needed.
