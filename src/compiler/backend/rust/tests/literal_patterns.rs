@@ -170,6 +170,7 @@ fn tag_program(interner: &mut Interner, payload: Pat) -> DResult<Program> {
             uses_server: false,
             uses_http: false,
             uses_config: false,
+            uses_compression: false,
             uses_ui: false,
             uses_web: false,
             uses_tui: false,
@@ -255,6 +256,7 @@ fn str_literal_subpattern_renders_and_escapes() -> DResult<()> {
 /// The `Wrap` alias program: `f w = case w of MkWrap (x as y) -> y`. The `x as y`
 /// alias renders `y @ x` and the whole match stays exhaustive (a binder matches
 /// anything), so the emitted crate builds and runs.
+#[allow(clippy::too_many_lines)] // fixture builder — length is the enumerated IR it constructs
 fn alias_program(interner: &mut Interner) -> DResult<(Program, Symbol, Symbol)> {
     let main_mod = interner.intern("Main")?;
     let wrap = interner.intern("Wrap")?;
@@ -346,6 +348,7 @@ fn alias_program(interner: &mut Interner) -> DResult<(Program, Symbol, Symbol)> 
                 uses_server: false,
                 uses_http: false,
                 uses_config: false,
+                uses_compression: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,

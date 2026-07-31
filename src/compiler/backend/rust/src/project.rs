@@ -511,6 +511,20 @@ const RUNTIME_MOD_RS_SSRF_APPEND: &str = "mod ssrf;\n";
 /// stays unconditional and is unaffected.
 const RUNTIME_MOD_RS_CONFIG_APPEND: &str = "pub mod config_decode;\npub use config_decode::*;\n";
 
+// ── Ipe.Compression — gzip/zstd ─────────────────────────────────────────────
+
+/// Lines appended to `ipe_runtime/mod.rs` when the program uses an
+/// `Ipe.Compression` kernel (`Compression.gzip` / `gunzip` / `zstdCompress` /
+/// `zstdDecompress`).
+///
+/// `compression.rs` (the gzip/zstd byte-buffer kernels) is vendored into every
+/// emitted crate but declared only on demand — it is the sole consumer of the
+/// `flate2` and `zstd` crates, which [`compression_cargo_toml`] adds under the
+/// same condition. It is a leaf module (no other runtime surface calls into
+/// it), so it is declared exactly when the program reaches it directly, and
+/// never forced on transitively.
+const RUNTIME_MOD_RS_COMPRESS_APPEND: &str = "pub mod compression;\npub use compression::*;\n";
+
 // ── Shared transitive dep: http_header ──────────────────────────────────────
 //
 // `http_header.rs` (a dependency-free leaf exposing `canonical_header`) is part
@@ -1391,6 +1405,16 @@ fn assemble_project_files(
     } else {
         cargo_toml
     };
+    // Ipe.Compression (`flate2` + `zstd`): pulled in only when the program
+    // reaches the `compression` runtime module (`Compression.gzip` / `gunzip` /
+    // `zstdCompress` / `zstdDecompress`). Both crates are leaves — a program that
+    // never compresses pulls neither. `compression` is not reached by any other
+    // surface, so the flag alone gates it.
+    let cargo_toml = if ctx.uses_compression {
+        compression_cargo_toml(&cargo_toml)?
+    } else {
+        cargo_toml
+    };
     // TEA runtime: `tea.rs` drives its event loop over a `tokio::sync::mpsc`
     // channel, so any program that pulls the `tea` module needs tokio's `"sync"`
     // feature. The union mirrors the `tea` mod.rs append below (a `Cmd`/`Sub`
@@ -1444,6 +1468,13 @@ fn assemble_project_files(
         // absent, dropping both crates.
         if ctx.uses_config {
             mod_rs.push_str(RUNTIME_MOD_RS_CONFIG_APPEND);
+        }
+        // Ipe.Compression. `compression` (the sole consumer of the `flate2` +
+        // `zstd` crates) is declared when the program reaches it directly — it is
+        // a leaf module no other surface calls into. A program that never
+        // compresses keeps it absent, dropping both crates.
+        if ctx.uses_compression {
+            mod_rs.push_str(RUNTIME_MOD_RS_COMPRESS_APPEND);
         }
         // `tea` must be declared whenever any included module's `use crate::tea`
         // closure references it — NOT only when user code names a TEA kernel
@@ -2793,6 +2824,44 @@ fn config_cargo_toml(base: &str) -> DResult<String> {
         .find(PROFILE_ANCHOR)
         .ok_or_else(|| Diagnostic::CompilerBug {
             where_: "ipe_backend_rust::project::config_cargo_toml",
+            detail: format!("Cargo.toml anchor {PROFILE_ANCHOR:?} not found — golden drifted"),
+        })?;
+    let mut result = String::with_capacity(base.len() + deps.len());
+    result.push_str(base.get(..anchor_pos).unwrap_or(""));
+    result.push_str(&deps);
+    result.push_str(base.get(anchor_pos..).unwrap_or(""));
+    Ok(result)
+}
+
+/// Build the compression-enabled `Cargo.toml` by appending the `flate2` and
+/// `zstd` dependencies before `[profile.dev]`.
+///
+/// `compression.rs` (the vendored `Ipe.Compression` gzip/zstd kernels) is the
+/// sole consumer of these two crates: `Compression.gzip` / `gunzip` go through
+/// `flate2`, `Compression.zstdCompress` / `zstdDecompress` through `zstd`. Both
+/// are leaf dependencies (nothing else in the base manifest pulls them), so
+/// gating them here keeps a program that never compresses free of both crates.
+///
+/// The versions come from the [`crate_specs`] SSOT (drift-guarded against
+/// `runtime/Cargo.toml`).
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] if the `[profile.dev]` anchor is absent —
+/// a golden-drift invariant violation (fail-loud, never a silent no-op).
+fn compression_cargo_toml(base: &str) -> DResult<String> {
+    const PROFILE_ANCHOR: &str = "[profile.dev]";
+    let deps = format!(
+        "{} = \"{}\"\n{} = \"{}\"\n\n",
+        crate_specs::FLATE2.name,
+        crate_specs::FLATE2.version,
+        crate_specs::ZSTD.name,
+        crate_specs::ZSTD.version,
+    );
+    let anchor_pos = base
+        .find(PROFILE_ANCHOR)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::compression_cargo_toml",
             detail: format!("Cargo.toml anchor {PROFILE_ANCHOR:?} not found — golden drifted"),
         })?;
     let mut result = String::with_capacity(base.len() + deps.len());

@@ -533,6 +533,17 @@ pub(crate) struct EmitCtx<'a> {
     /// module — no other runtime surface reaches it — so no other `uses_*` flag
     /// forces it on.
     pub(crate) uses_config: bool,
+    /// `true` when the program uses at least one `Ipe.Compression` kernel
+    /// (`Compression.gzip` / `gunzip` / `zstdCompress` / `zstdDecompress`). When
+    /// set, [`crate::project::assemble_project_files`]:
+    ///
+    /// * declares `pub mod compression; pub use compression::*;` in the emitted
+    ///   `ipe_runtime/mod.rs`;
+    /// * adds the `flate2` + `zstd` dependencies to the emitted `Cargo.toml`.
+    ///
+    /// `compression` is a leaf module — no other runtime surface reaches it — so
+    /// no other `uses_*` flag forces it on.
+    pub(crate) uses_compression: bool,
     /// `true` when the program uses at least one `Ipe.Ui` / `Ipe.Html` kernel.
     /// When set, [`crate::project::emit_program`] appends
     /// `pub mod ui;` to the emitted `ipe_runtime/mod.rs`.
@@ -1139,6 +1150,9 @@ impl<'a> EmitCtx<'a> {
         // `toml` + `serde_yaml`).
         let uses_config = program.modules.iter().any(|m| m.uses_config);
 
+        // detect Ipe.Compression usage (gates `compression` + `flate2` + `zstd`).
+        let uses_compression = program.modules.iter().any(|m| m.uses_compression);
+
         // detect Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.WebView usage.
         let (uses_ui, uses_web, uses_tui, uses_webview) = (
             program.modules.iter().any(|m| m.uses_ui),
@@ -1172,6 +1186,7 @@ impl<'a> EmitCtx<'a> {
             uses_server,
             uses_http,
             uses_config,
+            uses_compression,
             uses_ui,
             uses_web,
             uses_tui,
@@ -2903,6 +2918,7 @@ mod record_struct_namespace_tests {
                 uses_server: false,
                 uses_http: false,
                 uses_config: false,
+                uses_compression: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
@@ -2983,6 +2999,7 @@ mod record_struct_namespace_tests {
                 uses_server: false,
                 uses_http: false,
                 uses_config: false,
+                uses_compression: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,

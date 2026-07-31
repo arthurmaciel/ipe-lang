@@ -48,6 +48,7 @@ fn program_with_web(
             uses_server: false,
             uses_http: false,
             uses_config: false,
+            uses_compression: false,
             uses_ui: uses_web,
             uses_web,
             uses_tui: false,
