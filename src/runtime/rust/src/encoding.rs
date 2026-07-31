@@ -188,6 +188,46 @@ pub fn ipe_encoding_hex_decode(s: String) -> IpeResult<crate::error::IpeError, S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    // Round-trip properties over ARBITRARY Unicode strings, co-located with the
+    // kernels whose doc comments promise `decode (encode s) == Ok s` for every
+    // `String s`. The example tests below pin a few fixed strings; these cover
+    // the whole `String` domain — the regression class they guard is a decode
+    // that stops being the exact inverse of its encoder for some input the
+    // fixed cases miss. Concretely, a "fast" rewrite to Latin-1 byte coercion
+    // (`c as u8`) truncates every codepoint > 255, so it would still pass the
+    // ASCII fixed tests yet map distinct inputs to the same bytes and fail
+    // round-trip for any non-Latin-1 char — the credential-confusion hazard the
+    // `base64_no_collision_above_255` test warns about, promoted to a universal.
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        #[test]
+        fn base64_roundtrip_any_string(s in ".*") {
+            let decoded: IpeResult<String, String> = base64_decode(base64_encode(s.clone()));
+            prop_assert_eq!(decoded, IpeResult::Ok(s));
+        }
+
+        #[test]
+        fn hex_roundtrip_any_string(s in ".*") {
+            let decoded: IpeResult<String, String> =
+                encoding_hex_decode(encoding_hex_encode(s.clone()));
+            prop_assert_eq!(decoded, IpeResult::Ok(s));
+        }
+
+        // `url_encode`/`url_decode` must round-trip despite the `%20` -> `+`
+        // rewrite: a literal `+`, space, and `%` are the ambiguous bytes, and the
+        // encoder resolves them by emitting `%2B` for a literal `+` before the
+        // swap. Any input that already contains `+`/space/`%` is exactly where a
+        // naive `+`<->space swap breaks, so covering the full `String` domain
+        // pins that the two are honest inverses.
+        #[test]
+        fn url_roundtrip_any_string(s in ".*") {
+            let decoded: IpeResult<String, String> = url_decode(url_encode(s.clone()));
+            prop_assert_eq!(decoded, IpeResult::Ok(s));
+        }
+    }
 
     #[test]
     fn test_base64_roundtrip() {
